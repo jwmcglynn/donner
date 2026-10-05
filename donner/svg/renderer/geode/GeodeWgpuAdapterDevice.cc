@@ -1138,10 +1138,7 @@ GeodeRuntimeDevice CreateGpuDeviceOver(std::shared_ptr<GeodeGpuRoot> root) {
   if (root->capabilities().backend == GpuBackendKind::Browser) {
     return GeodeRuntimeDevice{.device = CreateBrowserDeviceOver(*root)};
   }
-  auto adapter = std::make_unique<GeodeWgpuAdapterDevice>(std::move(root));
-  GeodeWgpuAdapterDevice* const transitionalAdapter = adapter.get();
-  return GeodeRuntimeDevice{.device = std::move(adapter),
-                            .transitionalAdapter = transitionalAdapter};
+  return GeodeRuntimeDevice{.device = std::make_unique<GeodeWgpuAdapterDevice>(std::move(root))};
 }
 
 namespace {
@@ -1483,15 +1480,6 @@ void GeodeWgpuAdapterDevice::onPollBackend() {
   (void)pollSuspending(false);
 }
 
-void GeodeWgpuAdapterDevice::pollForSerialCompletion() {
-  root_->device().poll(true, nullptr);
-  const std::chrono::milliseconds pollCost{
-      serialWaitPollCostMsForTesting_.load(std::memory_order_relaxed)};
-  if (pollCost.count() > 0) {
-    std::this_thread::sleep_for(pollCost);
-  }
-}
-
 bool GeodeWgpuAdapterDevice::onWaitForSerial(uint64_t serial, double timeoutSeconds) {
   return waitForSerialBounded(serial, timeoutSeconds, LossOnTimeout::Declare);
 }
@@ -1501,11 +1489,8 @@ bool GeodeWgpuAdapterDevice::waitForSerialBounded(uint64_t serial, double timeou
   const auto start = std::chrono::steady_clock::now();
   const auto deadline = start + std::chrono::duration_cast<std::chrono::steady_clock::duration>(
                                     std::chrono::duration<double>(timeoutSeconds));
-  // Bounded like GeodeDevice's queue drain: poll(true) blocks until pending work progresses
-  // (yielding through Asyncify on Emscripten), so iterations are cheap when idle. The checks run
-  // once more after the last poll, so a wait whose last poll carried it past its deadline ends as
-  // any wait that spent its budget polling does.
-  for (int pollIter = 0;; ++pollIter) {
+  CompletionState& state = *completionState_;
+  for (;;) {
     if (completedSerial() >= serial) {
       return true;
     }
@@ -1517,45 +1502,16 @@ bool GeodeWgpuAdapterDevice::waitForSerialBounded(uint64_t serial, double timeou
     if (std::chrono::steady_clock::now() >= deadline) {
       return giveUpOnSerialWait(start, timeoutSeconds, onTimeout);
     }
-    if (pollIter == serialWaitPollBound_) {
-      break;
-    }
-    pollForSerialCompletion();
-  }
-  // The poll cap with budget left. Polls that return at once without the work completing
-  // mean another context's poll, on another thread, collected this wait's completion callback and
-  // has not run it yet, or a driver that does not block in poll. Neither says the device stopped
-  // answering, so the rest of the budget is spent waiting for the completion to be delivered.
-#ifdef __EMSCRIPTEN__
-  // A browser thread cannot block for a callback that only its own event loop would deliver.
-  return completedSerial() >= serial;
-#else
-  return waitForDeliveredCompletion(serial, deadline);
-#endif
-}
-
-bool GeodeWgpuAdapterDevice::waitForDeliveredCompletion(
-    uint64_t serial, std::chrono::steady_clock::time_point deadline) {
-  CompletionState& state = *completionState_;
-  for (;;) {
-    {
-      std::unique_lock lock(state.mutex);
-      if (state.progressed.wait_until(
-              lock,
-              std::min(deadline, std::chrono::steady_clock::now() + kDeliveredCompletionSlice),
-              [&] { return completedSerial() >= serial; })) {
-        return true;
-      }
-    }
-    if (isLost()) {
-      return false;
-    }
-    if (std::chrono::steady_clock::now() >= deadline) {
-      // Nothing is declared: polls that returned at once observed nothing about the device.
-      return false;
-    }
-    // Outside the lock, because the callbacks this runs complete through it.
+    // Never a blocking poll: one that waits for pending work cannot be interrupted at the
+    // deadline, so a stalled submission would hold the caller in the driver indefinitely. A
+    // nonblocking poll runs whatever completion callbacks are ready, outside the lock because
+    // they complete through it, and the rest of the slice waits for a completion another
+    // thread's poll delivers.
     root_->device().poll(false, nullptr);
+    std::unique_lock lock(state.mutex);
+    state.progressed.wait_until(
+        lock, std::min(deadline, std::chrono::steady_clock::now() + kSerialWaitSlice),
+        [&] { return completedSerial() >= serial; });
   }
 }
 
@@ -2999,10 +2955,8 @@ gpu::Status GeodeWgpuAdapterDevice::encodeCommand(EncodingState& state,
       command);
 }
 
-void GeodeWgpuAdapterDevice::holdSubmittedWorkForTesting(uint64_t completedSerialCeiling,
-                                                         std::chrono::milliseconds pollCost) {
+void GeodeWgpuAdapterDevice::holdSubmittedWorkForTesting(uint64_t completedSerialCeiling) {
   completedSerialCeiling_.store(completedSerialCeiling, std::memory_order_relaxed);
-  serialWaitPollCostMsForTesting_.store(pollCost.count(), std::memory_order_relaxed);
   completionState_->notifyProgress();
 }
 

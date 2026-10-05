@@ -3,9 +3,10 @@
  * WASM bridge for Donner SVG renderer - Geode (WebGPU) backend.
  *
  * Provides the same C ABI as `wasm_bridge.cc` but uses `RendererGeode`
- * directly. The build selects either the transitional adapter or the Donner browser GPU
- * runtime; the browser-selected variant links its JavaScript bridge. ASYNCIFY is needed because
- * device creation and `takeSnapshot()` readback yield to the browser event loop.
+ * directly, rendering through the Donner browser GPU runtime (the module requires the
+ * `//donner/svg/renderer/geode:browser_backend` build setting) and linking that runtime's
+ * JavaScript bridge. ASYNCIFY is needed because device creation and `takeSnapshot()` readback
+ * yield to the browser event loop.
  */
 
 #include <cstddef>

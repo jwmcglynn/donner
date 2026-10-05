@@ -282,10 +282,6 @@ std::shared_ptr<GeodeGpuRoot> AdoptNativeVulkanRoot(
 struct GeodeRuntimeDevice {
   /// The device, or null when none could be opened.
   std::unique_ptr<gpu::Device> device;
-  /// \ref device named as the transitional adapter when the root selected that backend, and null
-  /// on a native backend. Recorded where the device is built, so no caller converts a runtime
-  /// device back to a concrete type it cannot check.
-  GeodeWgpuAdapterDevice* transitionalAdapter = nullptr;
 };
 
 /**
@@ -441,20 +437,13 @@ public:
    * Makes this device behave like one that accepted work and stopped retiring it.
    *
    * Test seam: a healthy device completes everything in microseconds, so the bounded waits and
-   * their deadlines are otherwise unreachable. Both knobs describe real driver shapes, and the
-   * waits must tell them apart: a driver that blocks in poll spends the wait's budget, while one
-   * that returns from poll at once exhausts the wait's poll bound first and then waits for a
-   * completion to be delivered. Lifting the ceiling, from any thread, delivers the held
-   * completions the way a callback does, waking a wait that is waiting for them.
+   * their deadlines are otherwise unreachable. Lifting the ceiling, from any thread, delivers the
+   * held completions the way a callback does, waking a wait that is waiting for them.
    *
    * @param completedSerialCeiling Highest serial \ref completedSerial may report;
    *   \ref kNoCompletedSerialCeiling restores what the backend reports.
-   * @param pollCost Wall time each poll inside a serial wait costs on top of the backend's own,
-   *   standing in for a poll that blocks until pending work progresses. Zero leaves the
-   *   backend's poll timing alone.
    */
-  void holdSubmittedWorkForTesting(uint64_t completedSerialCeiling,
-                                   std::chrono::milliseconds pollCost);
+  void holdSubmittedWorkForTesting(uint64_t completedSerialCeiling);
 
   /// Ceiling value that leaves \ref completedSerial reporting what the backend reports.
   static constexpr uint64_t kNoCompletedSerialCeiling = std::numeric_limits<uint64_t>::max();
@@ -465,13 +454,6 @@ public:
   ///
   /// @param seconds Budget in seconds.
   void setTeardownDrainBudgetForTesting(double seconds) { teardownDrainSeconds_ = seconds; }
-
-  /// Polls a serial wait makes before it stops polling, in place of \ref kMaxSerialWaitPolls.
-  /// Lowered by tests so a wait reaches its poll bound on a poll that also carries it past its
-  /// deadline, which twenty thousand polls cannot do deterministically. Test seam.
-  ///
-  /// @param polls Poll bound for this device's later serial waits.
-  void setSerialWaitPollBoundForTesting(int polls) { serialWaitPollBound_ = polls; }
 
   /**
    * TEMPORARY escape hatch (deleted with the presentation migration): registers an
@@ -567,16 +549,10 @@ private:
    */
   wgpu::Texture liveBackendTexture(const gpu::Texture& texture) const;
 
-  /// Polls \ref waitForSerialBounded makes before it stops polling and waits for a completion to
-  /// be delivered instead. A poll that returns at once without the work completing means another
-  /// thread's poll collected the completion callback and has yet to run it, or a driver that does
-  /// not block in poll; either way repeating it only spins a core. It is not a deadline, and
-  /// reaching it with the budget unspent says nothing about the device.
-  static constexpr int kMaxSerialWaitPolls = 20000;
-
-  /// Longest a wait past its poll bound sleeps before checking again for a loss, which is not
-  /// signalled, and polling once without blocking in case nothing else is driving the queue.
-  static constexpr std::chrono::milliseconds kDeliveredCompletionSlice{1};
+  /// Longest a serial wait rests between nonblocking polls before checking again for a loss,
+  /// which is not signalled, and polling again in case nothing else is driving the queue. A
+  /// delivered completion wakes the wait at once.
+  static constexpr std::chrono::milliseconds kSerialWaitSlice{1};
 
   /// Whether a wait that spends its whole budget without the work retiring declares the backend
   /// root lost.
@@ -589,30 +565,16 @@ private:
     Tolerate,
   };
 
-  /// Drives \ref pollForSerialCompletion until \ref completedSerial reaches \p serial, the
-  /// device is lost, or the budget elapses. Past the poll bound above, and only with budget left,
-  /// it stops polling in a loop and waits for the completion to be delivered
-  /// (\ref waitForDeliveredCompletion). A wait whose last poll carries it past its deadline has
-  /// spent its budget polling, so it ends as any such wait does.
+  /// Polls the backend without blocking, resting up to \ref kSerialWaitSlice between polls for a
+  /// delivered completion, until \ref completedSerial reaches \p serial, the device is lost, or
+  /// the budget elapses. No poll blocks, so the wait always ends at its deadline even when a
+  /// submission has stalled in the driver.
   ///
   /// @param serial Submission serial to wait for.
   /// @param timeoutSeconds Longest to wait, in seconds.
-  /// @param onTimeout What a wait that spends its whole budget polling publishes.
+  /// @param onTimeout What a wait that spends its whole budget publishes.
   /// @return True once this device has completed \p serial.
   bool waitForSerialBounded(uint64_t serial, double timeoutSeconds, LossOnTimeout onTimeout);
-
-  /**
-   * The rest of a serial wait whose polls stopped blocking before its work completed: waits for
-   * the completion callback to be delivered, by whichever thread's poll collected it, until
-   * \p deadline. A deadline that passes here declares nothing, because polls that return at once
-   * observed nothing about whether the device is still answering.
-   *
-   * @param serial Submission serial to wait for.
-   * @param deadline When the wait's budget runs out.
-   * @return True once this device has completed \p serial; false on a lost device or at the
-   *   deadline.
-   */
-  bool waitForDeliveredCompletion(uint64_t serial, std::chrono::steady_clock::time_point deadline);
 
   /// Ends a serial wait that observed no completion, declaring the backend root lost when the
   /// wait had a real budget to spend.
@@ -626,20 +588,8 @@ private:
   bool giveUpOnSerialWait(std::chrono::steady_clock::time_point start, double timeoutSeconds,
                           LossOnTimeout onTimeout);
 
-  /// One iteration of \ref onWaitForSerial's wait: lets the backend block until pending work
-  /// progresses, plus whatever extra cost \ref holdSubmittedWorkForTesting gave that poll.
-  void pollForSerialCompletion();
-
   /// Highest serial \ref completedSerial may report; see \ref holdSubmittedWorkForTesting.
   std::atomic<uint64_t> completedSerialCeiling_{kNoCompletedSerialCeiling};
-
-  /// Wall time each poll inside a serial wait costs on top of the backend's own, in milliseconds;
-  /// see \ref holdSubmittedWorkForTesting.
-  std::atomic<std::chrono::milliseconds::rep> serialWaitPollCostMsForTesting_{0};
-
-  /// Polls a serial wait makes before it stops polling; see
-  /// \ref setSerialWaitPollBoundForTesting.
-  int serialWaitPollBound_ = kMaxSerialWaitPolls;
 
   /// Budget \ref ~GeodeWgpuAdapterDevice spends draining submitted work. Generous: a healthy
   /// device drains in microseconds, so it only trips on a driver that has effectively hung, and

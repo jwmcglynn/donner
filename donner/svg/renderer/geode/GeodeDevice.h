@@ -1,6 +1,6 @@
 #pragma once
 /// @file
-/// Logical rendering context over a selected native, browser, or test-reference GPU device.
+/// Logical rendering context over a selected GPU runtime device.
 
 #include <algorithm>
 #include <atomic>
@@ -50,7 +50,6 @@ class GeodeMaskPipeline;
 class GeodeFilterEngine;
 class GeodeGpuRoot;
 struct GeodeRuntimeDevice;
-class GeodeWgpuAdapterDevice;
 class GeodeSnapshotReadbackPipeline;
 
 /**
@@ -240,9 +239,6 @@ public:
   /// sharing by asserting this count stays flat across repeated operations.
   static int headlessCreationCountForTesting();
 
-  /// Number of retained transitional-reference loss callbacks; zero for native devices.
-  static std::size_t outstandingDeviceLostCallbacksForTesting();
-
   /// Destructor releases logical resources before their runtime device and selected root. Teardown
   /// waits are bounded; a declared loss skips further waits into the failed device.
   ~GeodeDevice();
@@ -265,16 +261,17 @@ public:
   /**
    * Wait, bounded, for all submitted GPU work to complete.
    *
-   * Native backends wait for this context's last submitted serial, rather than asking whether a
-   * shared queue is momentarily empty. The explicit Linux test reference uses a bounded adapter
-   * poll; the browser's imported-device path performs one yielding poll. A timeout declares the
-   * device lost, and later waits return immediately.
+   * Waits through this context's runtime device for its last submitted serial, rather than asking
+   * whether a queue shared with other contexts is momentarily empty. A timeout declares the device
+   * lost, attributed to the queue-idle wait, and later waits return immediately. A runtime device
+   * that declares that loss itself when its own bounded wait expires reports it as `DeviceLost`
+   * rather than `TimedOut`.
    *
    * @param timeout Wait budget; defaults to the shared generous bound.
    * @return `Complete` when the queue drained, `TimedOut` when the deadline
-   *   expired (the device is now marked lost), `DeviceLost` when the device
-   *   was already lost and no wait was performed, or, on a native backend,
-   *   when a loss was declared while the wait was running.
+   *   expired (the device is now marked lost), or `DeviceLost` when the device
+   *   was already lost and no wait was performed, or a loss was declared while
+   *   the wait was running.
    */
   GpuWaitResult waitForQueueIdle(std::chrono::milliseconds timeout = kDefaultGpuWaitTimeout) const;
 
@@ -388,7 +385,9 @@ public:
     return physicalDevice_->lostState();
   }
 
-  /// Opaque lifetime token shared by logical contexts over the same native physical root.
+  /// Shared owner of the selected backend root and the runtime device the first context over it
+  /// renders through, retained by every logical context over that root. Pass it to
+  /// \ref CreateOverPhysicalDeviceOwner for a sibling context with a runtime device of its own.
   std::shared_ptr<GeodePhysicalDeviceOwner> physicalDeviceOwner() const { return physicalDevice_; }
 
   /// Render-target texture format, chosen by the caller or defaulted to RGBA8Unorm.
@@ -835,15 +834,6 @@ public:
   /// of naming the concrete backend type.
   gpu::Device& runtimeDevice() const UTILS_LIFETIME_BOUND;
 
-#ifdef DONNER_GEODE_WGPU_REFERENCE
-  /// Whether this context renders through the transitional adapter, so \ref adapterDevice names
-  /// a device. Available only to the explicit Linux resvg reference configuration.
-  bool hasTransitionalAdapter() const;
-
-  /// Transitional adapter used by the Linux resvg reference, never by a native product context.
-  GeodeWgpuAdapterDevice& adapterDevice() const UTILS_LIFETIME_BOUND;
-#endif
-
   /// The recording context Geode's encoders record a frame against: this device's GPU runtime
   /// device, its shared bind-slot resources, and its counter sinks. Wired once with the shared
   /// pipelines and owned here, so it lives exactly as long as this device does.
@@ -926,13 +916,10 @@ private:
    * @param runtimeDevice Runtime device to render through; either the owner's root device, which
    *   the context created together with the owner takes, or one of its own from
    *   \ref GeodePhysicalDeviceOwner::createLogicalDevice.
-   * @param transitionalAdapter \p runtimeDevice named as the transitional adapter, as
-   *   \ref CreateGpuDeviceOver recorded it; null on a native backend.
    * @param ownedRuntimeDevice Non-null when \p runtimeDevice is this context's own, so the
    *   context releases it; null when it is the owner's.
    */
   GeodeDevice(std::shared_ptr<GeodePhysicalDeviceOwner> physicalDevice, gpu::Device& runtimeDevice,
-              GeodeWgpuAdapterDevice* transitionalAdapter,
               std::unique_ptr<gpu::Device> ownedRuntimeDevice);
 
   /// Builds a logical context with a runtime device of its own over \p physicalDevice's root.
@@ -942,7 +929,7 @@ private:
       std::shared_ptr<GeodePhysicalDeviceOwner> physicalDevice);
 
   /// Creates the shared bind-slot resources through the GPU runtime and wires \ref gpuContext.
-  /// Runs with the shared pipelines, once the adapter exists.
+  /// Runs with the shared pipelines, once the runtime device exists.
   void initSharedBindSlotResources();
 
   void initSharedPipelines();
@@ -966,11 +953,6 @@ private:
   /// null once construction has finished, and kept out of \ref impl_ so teardown can still drain
   /// the queue after the logical resources are gone.
   gpu::Device* runtimeDevice_ = nullptr;
-
-  /// \ref runtimeDevice_ named by its concrete type when this context renders through the
-  /// transitional adapter, and null on a native backend, where the operations that accessor
-  /// exists for have no wgpu object to reach.
-  GeodeWgpuAdapterDevice* transitionalAdapter_ = nullptr;
 
   struct Impl;
   std::unique_ptr<Impl> impl_;

@@ -83,13 +83,19 @@ TEST(GeodeNativeRoot, SurfaceExtensionsRequirePresentationSelection) {
   EXPECT_THAT(resolved.error().message, HasSubstr("Vulkan instance extensions"));
 }
 
+TEST(GeodeNativeRoot, WgpuNamesNoNativeBackend) {
+  const gpu::Result<GpuBackendKind> resolved = ResolveGpuBackendKind({}, "wgpu", std::nullopt);
+  ASSERT_TRUE(resolved.hasError()) << "\"wgpu\" resolved to " << resolved.result();
+  EXPECT_THAT(resolved.error().message, HasSubstr("accepted values: metal, vulkan"));
+}
+
 TEST(GeodeNativeRootDeathTest, ExplicitWgpuRequestCannotFallBackToNative) {
   EXPECT_DEATH(
       {
         setenv("DONNER_GPU_BACKEND", "wgpu", 1);
         (void)SelectGpuRoot({});
       },
-      "unavailable in this native build");
+      "DONNER_GPU_BACKEND=wgpu names no GPU backend");
 }
 
 }  // namespace

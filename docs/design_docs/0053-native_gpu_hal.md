@@ -85,7 +85,7 @@ browser runtime in WebAssembly.
 - A native Metal root reports the device's own limits and drains its queue with a bounded wait for
   the last submitted serial, and a Metal device reports failed work as the loss of the root it
   shares. Contexts hold the runtime device and count what it accepts and releases through its
-  observer; the adapter accessor resolves only on the adapter.
+  observer.
 - On Linux, a native Vulkan root reports its physical device's own limits without opening a
   second device for the query. Runtime devices over one selected root share its instance, logical
   device, graphics queue and loss condition, while each keeps its own handles and serials.

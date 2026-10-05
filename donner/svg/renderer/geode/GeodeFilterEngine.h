@@ -314,7 +314,7 @@ struct FilterExecutionMemory {
  */
 class GeodeFilterEngine {
 public:
-  /// @param device The Geode device (owns wgpu::Device + queue).
+  /// @param device The Geode context whose runtime device the engine records and submits through.
   /// @param verbose If true, emit one-shot warnings for unsupported primitives.
   explicit GeodeFilterEngine(GeodeDevice& device, bool verbose = false);
 

@@ -86,7 +86,6 @@ GeodeGpuRoot::GeodeGpuRoot(GeodeGpuRootCapabilities capabilities,
 
 std::string_view GpuBackendKindName(GpuBackendKind kind) {
   switch (kind) {
-    case GpuBackendKind::TransitionalWgpu: return "transitional wgpu adapter";
     case GpuBackendKind::NativeMetal: return "native Metal";
     case GpuBackendKind::NativeVulkan: return "native Vulkan";
     case GpuBackendKind::Browser: return "browser";
@@ -114,9 +113,6 @@ gpu::Result<GpuBackendKind> ResolveGpuBackendKind(const GpuRootSelection& option
   }
   if (!request.empty()) {
     using namespace std::string_view_literals;
-    if (StringUtils::EqualsLowercase(request, "wgpu"sv)) {
-      return GpuBackendKind::TransitionalWgpu;
-    }
     if (StringUtils::EqualsLowercase(request, "metal"sv)) {
       return GpuBackendKind::NativeMetal;
     }
@@ -125,10 +121,11 @@ gpu::Result<GpuBackendKind> ResolveGpuBackendKind(const GpuRootSelection& option
     }
     return gpu::GpuError{gpu::GpuErrorType::InvalidDescriptor,
                          std::format("DONNER_GPU_BACKEND={} names no GPU backend; accepted values: "
-                                     "wgpu, metal, vulkan",
+                                     "metal, vulkan",
                                      request)};
   }
-  return buildDefault.value_or(GpuBackendKind::TransitionalWgpu);
+  // The browser device is the only one a WebAssembly build can select.
+  return buildDefault.value_or(GpuBackendKind::Browser);
 }
 
 std::shared_ptr<GeodeGpuRoot> SelectGpuRoot(const GpuRootSelection& options) {
@@ -181,14 +178,6 @@ GeodeRuntimeDevice CreateGpuDeviceOver(std::shared_ptr<GeodeGpuRoot> root) {
     return {};
   }
   return GeodeRuntimeDevice{.device = std::move(device).result()};
-}
-
-std::size_t OutstandingSelectionInstances() {
-  return 0;
-}
-
-std::size_t OutstandingDeviceLostCallbacks() {
-  return 0;
 }
 
 }  // namespace donner::geode

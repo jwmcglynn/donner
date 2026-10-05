@@ -393,8 +393,9 @@ struct FilterResourceArena {
       return;
     }
 #ifdef __EMSCRIPTEN__
-    // The browser implementation of waitForQueueIdle only yields once; it cannot prove that
-    // accepted work stopped referencing this arena's backing.
+    // The browser backend does not wait for the queue here: a queue wait there hands this
+    // thread's event loop to the browser from inside filter execution. Declaring the device lost
+    // instead guarantees that no later work relies on this arena's backing.
     device_.markDeviceLost("failed browser filter execution has unproven accepted work");
 #else
     if (device_.waitForQueueIdle() == GpuWaitResult::Complete) {
