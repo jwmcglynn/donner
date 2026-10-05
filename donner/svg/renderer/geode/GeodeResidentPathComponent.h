@@ -353,14 +353,6 @@ public:
     return kNone;
   }
 
-  /// Borrowed handle of the newest buffer (batches bind sub-ranges of it).
-  gpu::BufferRef newestBuffer() const {
-    return chunks_.empty() ? gpu::BufferRef() : gpu::BufferRef(chunks_.back().buffer);
-  }
-
-  /// Bytes currently in use in the newest buffer.
-  uint64_t newestBufferUsedBytes() const { return usedBytes_; }
-
   /// Total live bytes across all buffers (resident-bytes accounting).
   uint64_t liveBytes() const {
     uint64_t total = 0;

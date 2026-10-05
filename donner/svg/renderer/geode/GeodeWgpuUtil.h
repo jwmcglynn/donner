@@ -17,8 +17,6 @@
 /// acquire calls. The vendored `webgpu.hpp` objects are typed raw handles, not
 /// owning smart handles.
 
-#include <atomic>
-#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <string_view>
@@ -132,16 +130,10 @@ public:
   /// True when a non-null handle is owned.
   [[nodiscard]] explicit operator bool() const noexcept { return static_cast<bool>(handle_); }
 
-  /// Number of explicit backing-destroy calls made by this handle specialization.
-  [[nodiscard]] static uint64_t backingDestroyCountForTesting() noexcept {
-    return backingDestroyCount_.load(std::memory_order_relaxed);
-  }
-
   /// Explicitly destroy the backing resource, then release and clear its owned handle.
   void destroyBackingAndReset() noexcept {
     if (handle_) {
       handle_.destroy();
-      backingDestroyCount_.fetch_add(1, std::memory_order_relaxed);
     }
     reset();
   }
@@ -160,7 +152,6 @@ public:
   }
 
 private:
-  static inline std::atomic<uint64_t> backingDestroyCount_{0};
   Handle handle_;
 };
 

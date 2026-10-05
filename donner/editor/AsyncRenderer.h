@@ -832,12 +832,6 @@ public:
     geometryDebugOverlay_.store(enabled, std::memory_order_release);
   }
 
-  /// Mirror of the current overlay state. UI reads this to render the
-  /// correct check state in the View menu without racing the worker.
-  [[nodiscard]] bool geometryDebugOverlayEnabled() const {
-    return geometryDebugOverlay_.load(std::memory_order_acquire);
-  }
-
   /// Number of times the worker has called `CompositorController::resetAllLayers()`
   /// since construction. Tests use this to assert that frame-version mutations
   /// do not masquerade as document replacements.

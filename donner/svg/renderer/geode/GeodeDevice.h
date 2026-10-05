@@ -781,12 +781,6 @@ public:
     return residentBytesGauge_ ? residentBytesGauge_->load(std::memory_order_relaxed) : 0;
   }
 
-  /**
-   * Whether the driver supports GPU timestamp queries. Always false
-   * today - reserved for future work.
-   */
-  bool supportsTimestamps() const { return false; }
-
   /// True when the active native backend is Vulkan (Intel Arc hardware or Mesa
   /// lavapipe software). GeodeFilterEngine uses this to force inter-pass
   /// serialization that eliminates a nondeterministic cross-submit

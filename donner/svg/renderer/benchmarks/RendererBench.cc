@@ -501,7 +501,6 @@ int main(int argc, char* argv[]) {
   // -- Header --
   std::printf("=== Geode Renderer Benchmark ===\n");
   std::printf("backend=RendererGeode (WebGPU/Slug)\n");
-  std::printf("timestamps=%s\n", sharedDevice->supportsTimestamps() ? "enabled" : "unsupported");
   std::printf("iterations=%d  warmup=%d\n\n", cfg.iterations, cfg.warmup);
 
   // -- Run workloads --
@@ -525,7 +524,8 @@ int main(int argc, char* argv[]) {
     std::printf("  Mutating:  %s\n", ps.mutation);
     printPhase("Mut-Draw:", ps.mutatedDraw);
     printPhase("Mut-Settled:", ps.mutatedSettled);
-    if (sharedDevice->supportsTimestamps()) {
+    // Zero until the renderer reports GPU timestamps.
+    if (ps.gpuRenderPass.max > 0.0 || ps.gpuTotal.max > 0.0) {
       printPhase("GPU-RP:", ps.gpuRenderPass);
       printPhase("GPU-Tot:", ps.gpuTotal);
     }

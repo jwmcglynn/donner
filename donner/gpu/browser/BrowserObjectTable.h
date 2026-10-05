@@ -143,9 +143,6 @@ public:
    */
   std::vector<std::pair<BrowserObjectKind, BrowserObjectId>> takeAll();
 
-  /// Identifier the next \ref insert will mint, for tests that pin the never-reused property.
-  BrowserObjectId nextIdForTest() const { return nextId_; }
-
 private:
   /// Per-kind slot storage; each vector is indexed by runtime slot index and holds
   /// \ref kNoBrowserObject for a slot with no live object.
