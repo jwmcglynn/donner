@@ -64,6 +64,11 @@ type ProbeGlobal = typeof globalThis & {
     calls: number;
     waits: number;
   };
+  __donnerSurfaceFrameProbeLateCompletion?: {
+    promise: Promise<void>;
+    release: () => void;
+    claimed: boolean;
+  };
 };
 
 // Runs inside each worker. Everything it needs is defined in the body because
@@ -245,13 +250,19 @@ function installInWorker(): boolean {
   GPUQueue.prototype.onSubmittedWorkDone = function(this: GPUQueue) {
     const gpuPromise = onSubmittedWorkDone.call(this);
     const hold = scope.__donnerSurfaceFrameProbeCompletionHold;
+    const late = scope.__donnerSurfaceFrameProbeLateCompletion;
     const isCanvasCompletion = this === scope.__donnerSurfaceFrameProbeQueue
       && pendingCanvasSubmit > 0;
     // A controlled test can delay the app's completion signal after real GPU
     // completion. Ordinary observation returns the original promise unchanged.
-    const promise = isCanvasCompletion && hold !== undefined
-      ? gpuPromise.then(() => hold.promise)
-      : gpuPromise;
+    let promise = gpuPromise;
+    if (isCanvasCompletion && late !== undefined && !late.claimed) {
+      late.claimed = true;
+      promise = promise.then(() => late.promise);
+    }
+    if (isCanvasCompletion && hold !== undefined) {
+      promise = promise.then(() => hold.promise);
+    }
     if (isCanvasCompletion) {
       if (hold !== undefined) ++hold.calls;
       scope.__donnerSurfaceFrameProbeCompletion = {
@@ -499,6 +510,44 @@ export async function holdCanvasCompletionForTest(
       });
       if (released !== true) {
         throw new Error("could not release the required canvas completion owner");
+      }
+    },
+  };
+}
+
+/**
+ * Delay the app's next canvas completion in \p owner until released, independently of any
+ * completion hold. A frame submitted before a hold is armed is not held by it, so this models such
+ * a frame completing only after the hold is in place.
+ */
+export async function delayNextCanvasCompletionForTest(
+  owner: Worker,
+): Promise<{ release: () => Promise<void> }> {
+  const [armed] = await evaluateInWorkers([owner], () => {
+    const scope = globalThis as ProbeGlobal;
+    let release!: () => void;
+    const promise = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    scope.__donnerSurfaceFrameProbeLateCompletion = { promise, release, claimed: false };
+    return true;
+  });
+  if (armed !== true) {
+    throw new Error("could not arm the late canvas completion");
+  }
+  let released = false;
+  return {
+    release: async () => {
+      if (released) return;
+      released = true;
+      const [done] = await evaluateInWorkers([owner], () => {
+        const scope = globalThis as ProbeGlobal;
+        scope.__donnerSurfaceFrameProbeLateCompletion?.release();
+        delete scope.__donnerSurfaceFrameProbeLateCompletion;
+        return true;
+      });
+      if (done !== true) {
+        throw new Error("could not release the late canvas completion");
       }
     },
   };

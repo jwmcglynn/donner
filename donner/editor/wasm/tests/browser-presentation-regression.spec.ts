@@ -34,6 +34,7 @@ import { waitForAppliedPointer } from "./gesture-streams";
 import { compareOverlayBitmap, type OverlayBitmapComparison } from "./overlay-bitmap-compare";
 import { cropCapturedPng, normalizeOverlayGeneration, overlayGenerationMask } from "./png-crop";
 import {
+  delayNextCanvasCompletionForTest,
   findCanvasOwnerWorker,
   holdCanvasCompletionForTest,
   installSurfaceFrameProbe,
@@ -3078,11 +3079,9 @@ test("failure-only WebGPU readback makes no request on a visible Basic Shapes lo
   expect(failures).toEqual([]);
 });
 
-test("coalesced UI frames do not consume diagnostic capture retries", async ({ browserName, page }) => {
-  test.skip(
-    browserName === "chromium",
-    "Quarantined: a pre-hold frame can free a queue slot (#1667)",
-  );
+test("coalesced UI frames do not consume diagnostic capture retries", async ({ page }) => {
+  // EditorWindow admits a UI frame for presentation only while fewer than this many are in flight.
+  const queueCapacity = 3;
   const failures = await openEditor(page, false, true);
   expect(await installSurfaceFrameProbe(page)).toBeGreaterThan(0);
   await page.evaluate(() => {
@@ -3092,7 +3091,6 @@ test("coalesced UI frames do not consume diagnostic capture retries", async ({ b
   const owner = await findCanvasOwnerWorker(page);
   expect(owner).not.toBeNull();
   if (owner === null) return;
-  const hold = await holdCanvasCompletionForTest(page, [owner]);
   const wakeFrame = async () => {
     const before = await page.evaluate(() => {
       window.__donnerEditorFrameRequested = true;
@@ -3103,15 +3101,28 @@ test("coalesced UI frames do not consume diagnostic capture retries", async ({ b
       intervals: [16, 25, 50],
     }).toBeGreaterThan(before);
   };
+  const queueStats = () => page.evaluate(() => window.__donnerPresentationQueueStats);
+  const waitForFullQueue = () =>
+    expect.poll(async () => (await queueStats())?.framesInFlight, {
+      timeout: scaledMs(1000),
+      intervals: [16, 25, 50],
+    }).toBe(queueCapacity);
+  // The hold covers only canvas completions requested after it is armed. Keep one frame submitted
+  // before it in flight, as a busy runner can.
+  const lateCompletion = await delayNextCanvasCompletionForTest(owner);
+  let hold: Awaited<ReturnType<typeof holdCanvasCompletionForTest>> | undefined;
+  const errors: unknown[] = [];
   try {
-    for (let i = 0; i < 3; ++i) await wakeFrame();
-    await expect.poll(
-      () => page.evaluate(() => window.__donnerPresentationQueueStats?.framesInFlight),
-      {
-        timeout: scaledMs(1000),
-        intervals: [16, 25, 50],
-      },
-    ).toBe(3);
+    await wakeFrame();
+    hold = await holdCanvasCompletionForTest(page, [owner]);
+    for (let i = 0; i < queueCapacity; ++i) await wakeFrame();
+    await waitForFullQueue();
+    // Each frame here submits one canvas completion, so held completions count held frames.
+    expect(
+      await hold.observedCalls(),
+      `every in-flight UI frame must be held: ${JSON.stringify(await queueStats())}`,
+    ).toBeGreaterThanOrEqual(queueCapacity);
+    await lateCompletion.release();
     const beforeFailures = await page.evaluate(() =>
       window.__donnerWgpuReadbackCaptureFailures ?? 0
     );
@@ -3129,7 +3140,7 @@ test("coalesced UI frames do not consume diagnostic capture retries", async ({ b
       Buffer.from(JSON.stringify(deferred, null, 2)),
       "application/json",
     );
-    expect(deferred.queue?.framesInFlight).toBe(3);
+    expect(deferred.queue?.framesInFlight).toBe(queueCapacity);
     expect(deferred.queue?.coalescedFrames ?? 0).toBeGreaterThan(0);
     expect(deferred.failed, JSON.stringify(deferred)).toBe(beforeFailures);
     expect(deferred.completed).toBeLessThan(request);
@@ -3142,8 +3153,20 @@ test("coalesced UI frames do not consume diagnostic capture retries", async ({ b
       beforeFailures,
     );
     expect(failures).toEqual([]);
+  } catch (error) {
+    errors.push(error);
   } finally {
-    await hold.release(owner);
+    for (const release of [() => lateCompletion.release(), () => hold?.release(owner)]) {
+      try {
+        await release();
+      } catch (cleanupError) {
+        errors.push(cleanupError);
+      }
+    }
+  }
+  if (errors.length === 1) throw errors[0];
+  if (errors.length > 1) {
+    throw new AggregateError(errors, "coalesced capture case and cleanup failed");
   }
 });
 
