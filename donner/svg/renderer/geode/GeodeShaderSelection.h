@@ -1,86 +1,52 @@
 #pragma once
 /// @file
-/// Selects the shader projection a device consumes from a family's linked artifacts.
+/// Selects the shader projection a device consumes from a family's linked artifact.
 
 #include <string_view>
 
 #include "donner/base/Utils.h"
 #include "donner/gpu/Device.h"
 #include "donner/gpu/shader/CompiledShader.h"
-
-/**
- * The platform-native artifact of \p family, or null on a build that links none.
- *
- * Only the platforms with a native device link the native artifacts, so the native accessors
- * have no definition in the WebAssembly package and must not be named there. The caller includes
- * the family's own program header; this only names the accessor.
- *
- * @param family Program name, as in `SlugFill` for `SlugFillShader` and `SlugFillNativeShader`.
- */
-#if (defined(__APPLE__) || defined(__linux__)) && !defined(__EMSCRIPTEN__)
-#define DONNER_GEODE_NATIVE_SHADER(family) \
-  (&::donner::gpu::shader::programs::family##NativeShader())
-#else
-#define DONNER_GEODE_NATIVE_SHADER(family) (nullptr)
-#endif
-
-/**
- * Names one family's two linked artifacts as an adjacent `wgslShader, nativeShader` argument pair.
- *
- * The family token is written once, so a call site cannot pair one family's authored WGSL with
- * another family's native artifact. Expands to two arguments, so it is usable only where a
- * function takes them adjacently and in that order, and it must not be passed to another macro,
- * where the comma would split arguments. The caller includes the family's own program header;
- * this only names the accessors.
- *
- * @param family Program name, as in `SlugFill` for `SlugFillShader` and `SlugFillNativeShader`.
- */
-#define DONNER_GEODE_SHADER_ARTIFACTS(family) \
-  ::donner::gpu::shader::programs::family##Shader(), DONNER_GEODE_NATIVE_SHADER(family)
+#include "donner/gpu/shader/LinkedProjection.h"
 
 namespace donner::geode {
 
 /**
- * Selects one family's projection for \p device: the platform-native artifact for a Metal or
- * Vulkan device, and the authored WGSL artifact for every other device.
+ * Selects one family's projection for \p device from the artifact this build links for it, named
+ * with `DONNER_LINKED_SHADER_ARTIFACT`.
  *
- * A build that links no native artifact passes a null \p nativeShader, so a native device there
- * selects a view whose projection is empty. \ref donner::gpu::Device::createShaderModule
- * "gpu::Device::createShaderModule" refuses that descriptor rather than compiling nothing, which
- * keeps the mismatch fail-closed.
+ * A native build links only the platform-native projection, which its Metal or Vulkan device
+ * consumes; the WebAssembly package links only the authored WGSL its browser device consumes. A
+ * test device that consumes another projection receives the one a test-only library registered,
+ * and otherwise an artifact that carries nothing in its kind, which
+ * \ref donner::gpu::Device::createShaderModule "gpu::Device::createShaderModule" refuses rather
+ * than compiling nothing. See \ref donner::gpu::shader::SelectLinkedProjection
+ * "gpu::shader::SelectLinkedProjection".
  *
- * Callers that also derive bindings, entry points or workgroup shapes from reflection must read
- * them from the returned view, so source and interface always come from the same artifact.
+ * Every projection of a family shares one reflected interface, so bindings, entry points and
+ * workgroup shapes may be read from either the returned view or \p linked.
  *
  * @param device Device whose source kind selects the projection.
- * @param wgslShader Authored WGSL artifact.
- * @param nativeShader Platform-native artifact, or null when this build links none.
+ * @param linked The family's linked artifact.
  * @return The artifact view to build a descriptor from.
  */
 inline const gpu::shader::CompiledShaderView& SelectShaderProjection(
-    const gpu::Device& device,
-    const gpu::shader::CompiledShaderView& wgslShader UTILS_LIFETIME_BOUND,
-    const gpu::shader::CompiledShaderView* nativeShader UTILS_LIFETIME_BOUND) {
-  if (device.shaderSourceKind() == gpu::ShaderSourceKind::Wgsl || nativeShader == nullptr) {
-    return wgslShader;
-  }
-  return *nativeShader;
+    const gpu::Device& device, const gpu::shader::CompiledShaderView& linked UTILS_LIFETIME_BOUND) {
+  return gpu::shader::SelectLinkedProjection(device.shaderSourceKind(), linked);
 }
 
 /**
  * Creates one family's shader module from the projection \p device consumes.
  *
  * @param device GPU device receiving the prevalidated source and metadata.
- * @param wgslShader Authored WGSL artifact.
- * @param nativeShader Platform-native artifact, or null when this build links none.
+ * @param linked The family's linked artifact, named with `DONNER_LINKED_SHADER_ARTIFACT`.
  * @param label Diagnostic shader label.
  * @return Shader module or creation error.
  */
 inline gpu::Result<gpu::ShaderModule> CreateShaderModule(
-    gpu::Device& device, const gpu::shader::CompiledShaderView& wgslShader,
-    const gpu::shader::CompiledShaderView* nativeShader, std::string_view label) {
+    gpu::Device& device, const gpu::shader::CompiledShaderView& linked, std::string_view label) {
   return device.createShaderModule(gpu::shader::MakeShaderDescriptor(
-      SelectShaderProjection(device, wgslShader, nativeShader), device.shaderSourceKind(), label));
+      SelectShaderProjection(device, linked), device.shaderSourceKind(), label));
 }
 
 }  // namespace donner::geode

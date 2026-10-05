@@ -7,6 +7,7 @@
 #include <memory>
 #include <vector>
 
+#include "donner/gpu/shader/LinkedProjection.h"
 #include "donner/gpu/tests/SlugFillScene.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
 #include "donner/svg/renderer/geode/GeodeShaderSelection.h"
@@ -42,7 +43,7 @@ TEST(GeodeShaders, SlugFillReferenceEvenOdd) {
   ASSERT_NE(device, nullptr);
   gpu::Device& runtime = device->runtimeDevice();
   gpu::tests::CheckSlugFill(
-      runtime, SelectShaderProjection(runtime, DONNER_GEODE_SHADER_ARTIFACTS(SlugFill)),
+      runtime, SelectShaderProjection(runtime, DONNER_LINKED_SHADER_ARTIFACT(SlugFill)),
       [&](const gpu::Buffer& b) { return ReadSlugBuffer(runtime, b); },
       gpu::tests::slug_fill_scene::Case::EvenOdd);
 }
@@ -51,7 +52,7 @@ TEST(GeodeShaders, SlugFillReferenceLinearGradient) {
   ASSERT_NE(device, nullptr);
   gpu::Device& runtime = device->runtimeDevice();
   gpu::tests::CheckSlugFill(
-      runtime, SelectShaderProjection(runtime, DONNER_GEODE_SHADER_ARTIFACTS(SlugFill)),
+      runtime, SelectShaderProjection(runtime, DONNER_LINKED_SHADER_ARTIFACT(SlugFill)),
       [&](const gpu::Buffer& b) { return ReadSlugBuffer(runtime, b); },
       gpu::tests::slug_fill_scene::Case::LinearGradient);
 }

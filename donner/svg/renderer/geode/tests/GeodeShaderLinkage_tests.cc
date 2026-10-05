@@ -11,7 +11,30 @@
 #include <string_view>
 
 #include "donner/gpu/Device.h"
+#include "donner/gpu/shader/CompiledShader.h"
+#include "donner/gpu/shader/LinkedProjection.h"
+#include "donner/gpu/shader/programs/ColorSpaceConvert.h"
+#include "donner/gpu/shader/programs/ComponentTransfer.h"
+#include "donner/gpu/shader/programs/Composite.h"
+#include "donner/gpu/shader/programs/ConvolveMatrix.h"
+#include "donner/gpu/shader/programs/DiffuseLighting.h"
+#include "donner/gpu/shader/programs/DisplacementMap.h"
+#include "donner/gpu/shader/programs/DropShadow.h"
+#include "donner/gpu/shader/programs/FilterBlend.h"
+#include "donner/gpu/shader/programs/FilterColorMatrix.h"
+#include "donner/gpu/shader/programs/FilterImage.h"
+#include "donner/gpu/shader/programs/FilterResolve.h"
+#include "donner/gpu/shader/programs/Flood.h"
+#include "donner/gpu/shader/programs/GaussianBlur.h"
+#include "donner/gpu/shader/programs/Merge.h"
+#include "donner/gpu/shader/programs/Morphology.h"
+#include "donner/gpu/shader/programs/Offset.h"
+#include "donner/gpu/shader/programs/SpecularLighting.h"
+#include "donner/gpu/shader/programs/SubregionClip.h"
+#include "donner/gpu/shader/programs/Tile.h"
+#include "donner/gpu/shader/programs/Turbulence.h"
 #include "donner/gpu/tests/GpuTestUtils.h"
+#include "donner/svg/renderer/geode/GeodeFilterEngine.h"
 #include "donner/svg/renderer/geode/GeodePipeline.h"
 #include "donner/svg/renderer/geode/GeodeShaders.h"
 #include "donner/svg/renderer/geode/tests/ProjectionCapturingDevice.h"
@@ -28,13 +51,8 @@ using testing::IsTrue;
 using testing::Not;
 using tests::ProjectionCapturingDevice;
 
-/// The projection a native device on this platform consumes.
-constexpr gpu::ShaderSourceKind kPlatformNativeKind =
-#if defined(__APPLE__)
-    gpu::ShaderSourceKind::Msl;
-#else
-    gpu::ShaderSourceKind::Spirv;
-#endif
+/// The projection a native device on this platform consumes, which is the one this build links.
+constexpr gpu::ShaderSourceKind kPlatformNativeKind = gpu::shader::kLinkedShaderSourceKind;
 
 /// Matches a descriptor that carries a non-empty projection of the platform's native kind.
 MATCHER(CarriesANativeProjection, "carries a non-empty platform-native projection") {
@@ -91,6 +109,69 @@ TEST_P(GeodeShaderLinkageTests, NativeDeviceReceivesThePlatformProjection) {
   EXPECT_THAT(GetParam().create(device), gpu::HasResult());
 
   EXPECT_THAT(device.lastDescriptor(), CarriesANativeProjection());
+}
+
+/// One compute family the filter engine builds a reflected program for, by its linked artifact.
+struct FilterProgramCase {
+  std::string_view name;                               //!< Test case name and program label.
+  const gpu::shader::CompiledShaderView& (*linked)();  //!< The artifact this build links.
+};
+
+/// Prints the family name. @param os Output stream. @param program Case to print.
+std::ostream& operator<<(std::ostream& os, const FilterProgramCase& program) {
+  return os << program.name;
+}
+
+/// Every compute family the filter engine builds a program for.
+const FilterProgramCase kFilterPrograms[] = {
+    {"GaussianBlur", &gpu::shader::programs::GaussianBlurNativeShader},
+    {"Offset", &gpu::shader::programs::OffsetNativeShader},
+    {"FilterColorMatrix", &gpu::shader::programs::FilterColorMatrixNativeShader},
+    {"Flood", &gpu::shader::programs::FloodNativeShader},
+    {"Merge", &gpu::shader::programs::MergeNativeShader},
+    {"Composite", &gpu::shader::programs::CompositeNativeShader},
+    {"FilterBlend", &gpu::shader::programs::FilterBlendNativeShader},
+    {"Morphology", &gpu::shader::programs::MorphologyNativeShader},
+    {"ComponentTransfer", &gpu::shader::programs::ComponentTransferNativeShader},
+    {"ConvolveMatrix", &gpu::shader::programs::ConvolveMatrixNativeShader},
+    {"Turbulence", &gpu::shader::programs::TurbulenceNativeShader},
+    {"DisplacementMap", &gpu::shader::programs::DisplacementMapNativeShader},
+    {"DiffuseLighting", &gpu::shader::programs::DiffuseLightingNativeShader},
+    {"SpecularLighting", &gpu::shader::programs::SpecularLightingNativeShader},
+    {"DropShadow", &gpu::shader::programs::DropShadowNativeShader},
+    {"FilterImage", &gpu::shader::programs::FilterImageNativeShader},
+    {"Tile", &gpu::shader::programs::TileNativeShader},
+    {"SubregionClip", &gpu::shader::programs::SubregionClipNativeShader},
+    {"FilterResolve", &gpu::shader::programs::FilterResolveNativeShader},
+    {"ColorSpaceConvert", &gpu::shader::programs::ColorSpaceConvertNativeShader},
+};
+
+class GeodeFilterProgramLinkageTests : public testing::TestWithParam<FilterProgramCase> {};
+
+INSTANTIATE_TEST_SUITE_P(Programs, GeodeFilterProgramLinkageTests,
+                         testing::ValuesIn(kFilterPrograms),
+                         [](const testing::TestParamInfo<FilterProgramCase>& info) {
+                           return std::string(info.param.name);
+                         });
+
+TEST_P(GeodeFilterProgramLinkageTests, WgslDeviceBuildsNoProgramBecauseTheBuildLinksNoWgsl) {
+  ProjectionCapturingDevice device(gpu::ShaderSourceKind::Wgsl);
+
+  const RuntimeComputeProgram program =
+      CreateReflectedProgram(device, GetParam().linked(), GetParam().name);
+
+  EXPECT_THAT(program.shaderModule.isValid(), IsFalse());
+  EXPECT_THAT(program.pipeline.isValid(), IsFalse());
+}
+
+TEST_P(GeodeFilterProgramLinkageTests, NativeDeviceReceivesThePlatformProjection) {
+  ProjectionCapturingDevice device(kPlatformNativeKind);
+
+  const RuntimeComputeProgram program =
+      CreateReflectedProgram(device, GetParam().linked(), GetParam().name);
+
+  EXPECT_THAT(device.lastDescriptor(), CarriesANativeProjection());
+  EXPECT_THAT(program.pipeline.isValid(), IsTrue());
 }
 
 TEST(GeodeSnapshotReadbackLinkageTests, WgslDeviceIsRefusedBecauseTheBuildLinksNoWgsl) {

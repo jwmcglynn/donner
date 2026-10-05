@@ -39,10 +39,14 @@ the owning artifact alive while a view is used. Text views carry an explicit len
 promise a trailing NUL.
 
 The `Projection` template argument is required. Production code selects exactly the representation
-its consumer uses. The Geode adapter links WGSL-only artifacts. Native Metal and Vulkan consumers
-link separate artifact libraries with MSL-only and SPIR-V-only data respectively; their getters have
-distinct names so an application can intentionally use more than one backend without symbol
-collisions. Test controls spell `Projection::All` explicitly.
+its consumer uses. Each family has a WGSL-only artifact library and a platform-native one, MSL-only
+on Apple platforms and SPIR-V-only on Linux; their getters have distinct names so a test binary can
+link both without symbol collisions. A production library links only the one its devices consume,
+through `linked_shader_artifacts` in `donner/gpu/shader/shader_families.bzl`, and names it in C++
+with `DONNER_LINKED_SHADER_ARTIFACT`: native products link the native projection and no WGSL, and
+the WebAssembly package links the WGSL projection only. A native test whose device consumes WGSL
+links the test-only `//donner/gpu/shader:wgsl_alternate_projections`, which registers each family's
+WGSL for `gpu::shader::SelectLinkedProjection`. Test controls spell `Projection::All` explicitly.
 
 Unused projection arrays have zero elements in the owning artifact. Neither a runtime selector nor
 linker dead stripping decides whether to retain them. The compiler frontend and emitters are used

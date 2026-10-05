@@ -1,6 +1,7 @@
 """CPU draw-path benchmark using the shipped Geode fill pipeline."""
 
 load("//build_defs:rules.bzl", "donner_cc_test", "donner_multi_transitioned_test")
+load("//donner/gpu/shader:shader_families.bzl", "wgsl_alternate_projections_for_tests")
 
 _GEODE_ONLY = select({
     "//donner/svg/renderer/geode:geode_enabled": [],
@@ -10,10 +11,11 @@ _GEODE_ONLY = select({
 _BENCH_DEPS = [
     "//donner/gpu",
     "//donner/gpu:recording_device",
+    "//donner/gpu/shader:linked_projection",
     "//donner/gpu/shader:slug_fill_api",
     "//donner/svg/renderer/geode:geode_device",
     "@com_google_gtest//:gtest_main",
-]
+] + wgsl_alternate_projections_for_tests()  # The recording device consumes WGSL.
 
 donner_cc_test(
     name = "draw_cpu_benchmark_impl_correctness",

@@ -2,6 +2,10 @@
 /// Projection selection for every production Geode shader module: the Slug and image-blit
 /// module creators, the filter engine's reflected compute programs, and the snapshot readback
 /// pipeline.
+///
+/// Production code names only the projection this build links. This test links the test-only
+/// WGSL alternates, so a device consuming WGSL still receives each family's authored WGSL;
+/// `GeodeShaderLinkage_tests.cc` covers the same creators without them.
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
@@ -14,6 +18,7 @@
 
 #include "donner/gpu/Device.h"
 #include "donner/gpu/shader/CompiledShader.h"
+#include "donner/gpu/shader/LinkedProjection.h"
 #include "donner/gpu/shader/programs/ColorSpaceConvert.h"
 #include "donner/gpu/shader/programs/ComponentTransfer.h"
 #include "donner/gpu/shader/programs/Composite.h"
@@ -61,12 +66,7 @@ using tests::ProjectionCapturingDevice;
 
 /// The projection a native device on this platform consumes. The native artifacts this build
 /// links carry exactly this one.
-constexpr gpu::ShaderSourceKind kPlatformNativeKind =
-#if defined(__APPLE__)
-    gpu::ShaderSourceKind::Msl;
-#else
-    gpu::ShaderSourceKind::Spirv;
-#endif
+constexpr gpu::ShaderSourceKind kPlatformNativeKind = gpu::shader::kLinkedShaderSourceKind;
 
 /// The native projection no artifact this build links carries, so a device reporting it must be
 /// refused rather than handed an empty source.
@@ -116,7 +116,8 @@ MATCHER_P(CarriesTheAuthoredWgslOf, artifact, "carries the authored WGSL of the 
       arg, result_listener);
 }
 
-/// One production family: the creator under test and the two artifacts it selects between.
+/// One production family: the creator under test, the artifact the build links for it, and the
+/// authored WGSL the test-only alternates supply.
 struct FamilyCase {
   std::string_view name;                                   //!< Test case name.
   gpu::Result<gpu::ShaderModule> (*create)(gpu::Device&);  //!< Module creator under test.
@@ -239,7 +240,7 @@ TEST_P(GeodeFilterProgramProjectionTests, WgslDeviceReceivesTheAuthoredWgsl) {
   ProjectionCapturingDevice device(gpu::ShaderSourceKind::Wgsl);
 
   const RuntimeComputeProgram program =
-      CreateReflectedProgram(device, GetParam().wgsl(), &GetParam().native(), GetParam().name);
+      CreateReflectedProgram(device, GetParam().native(), GetParam().name);
 
   EXPECT_THAT(device.lastDescriptor(), CarriesTheAuthoredWgslOf(GetParam().wgsl()));
   EXPECT_THAT(program.pipeline.isValid(), IsTrue());
@@ -249,7 +250,7 @@ TEST_P(GeodeFilterProgramProjectionTests, NativeDeviceReceivesThePlatformProject
   ProjectionCapturingDevice device(kPlatformNativeKind);
 
   const RuntimeComputeProgram program =
-      CreateReflectedProgram(device, GetParam().wgsl(), &GetParam().native(), GetParam().name);
+      CreateReflectedProgram(device, GetParam().native(), GetParam().name);
 
   EXPECT_THAT(device.lastDescriptor(), CarriesTheNativeProjectionOf(GetParam().native()));
   EXPECT_THAT(program.pipeline.isValid(), IsTrue());
@@ -259,7 +260,7 @@ TEST_P(GeodeFilterProgramProjectionTests, SourceKindTheLinkedArtifactLacksBuilds
   ProjectionCapturingDevice device(kUnlinkedNativeKind);
 
   const RuntimeComputeProgram program =
-      CreateReflectedProgram(device, GetParam().wgsl(), &GetParam().native(), GetParam().name);
+      CreateReflectedProgram(device, GetParam().native(), GetParam().name);
 
   EXPECT_THAT(program.shaderModule.isValid(), IsFalse());
   EXPECT_THAT(program.pipeline.isValid(), IsFalse());

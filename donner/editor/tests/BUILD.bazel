@@ -11,6 +11,7 @@ load(
     donner_perf_cc_test = "editor_perf_cc_test",
 )
 load("//donner/editor:editor_product_dependency_tests.bzl", "editor_product_dependency_tests")
+load("//donner/gpu/shader:shader_families.bzl", "wgsl_alternate_projections_for_tests")
 
 exports_files(
     [
@@ -1405,7 +1406,7 @@ donner_cc_test(
         "//donner/gpu:gpu_test_utils",
         "//donner/gpu:recording_device",
         "@com_google_gtest//:gtest_main",
-    ],
+    ] + wgsl_alternate_projections_for_tests(),  # The recording device consumes WGSL.
 )
 
 # UI texture registrations: the opaque identifier UI draw data carries, the

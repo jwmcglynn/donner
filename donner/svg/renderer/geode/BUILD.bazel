@@ -23,9 +23,9 @@ load(
     "GEODE_ENCODER_SHADER_FAMILIES",
     "GEODE_MODULE_SHADER_FAMILIES",
     "SLUG_SHADER_FAMILIES",
-    "native_shader_artifacts",
+    "linked_shader_artifacts",
     "shader_apis",
-    "shader_artifacts",
+    "wgsl_alternate_projections_for_tests",
 )
 
 exports_files(
@@ -392,9 +392,9 @@ donner_cc_library(
                "//donner/base",
                "//donner/gpu",
                "//donner/gpu/shader:compiled_shader",
+               "//donner/gpu/shader:linked_projection",
            ] + shader_apis(CHECKERBOARD_SHADER_FAMILIES) +
-           shader_artifacts(CHECKERBOARD_SHADER_FAMILIES) +
-           native_shader_artifacts(CHECKERBOARD_SHADER_FAMILIES),
+           linked_shader_artifacts(CHECKERBOARD_SHADER_FAMILIES),
 )
 
 # Adopts runtime devices a source opens as a Geode root. Internal to this package: the test-only
@@ -452,6 +452,7 @@ _GEODE_DEVICE_COMMON_DEPS = ([
                                  "//donner/base:asyncify_suspend_probe",
                                  "//donner/gpu",
                                  "//donner/gpu/shader:lighting_params",
+                                 "//donner/gpu/shader:linked_projection",
                                  "//donner/svg/components/filter:components",
                                  "//donner/svg/renderer:pixel_format_utils",
                              ] + select({
@@ -459,8 +460,7 @@ _GEODE_DEVICE_COMMON_DEPS = ([
                                  "@platforms//os:linux": ["//donner/gpu/vulkan:vulkan_device"],
                                  "//conditions:default": [],
                              }) + shader_apis(GEODE_DEVICE_SHADER_FAMILIES) +
-                             shader_artifacts(GEODE_DEVICE_SHADER_FAMILIES) +
-                             native_shader_artifacts(GEODE_DEVICE_SHADER_FAMILIES))
+                             linked_shader_artifacts(GEODE_DEVICE_SHADER_FAMILIES))
 
 _GEODE_DEVICE_NATIVE_LINKOPTS = select({
     "@platforms//os:linux": [
@@ -538,6 +538,7 @@ donner_cc_library(
         ":geode_wgpu_util",
         "//donner/base",
         "//donner/gpu",
+        "//donner/gpu/shader:wgsl_alternate_projections",
         "//third_party/webgpu-cpp:wgpu_native_reference_runtime",
     ],
 )
@@ -621,7 +622,7 @@ donner_cc_test(
         "@platforms//os:macos": ["//donner/gpu/metal:metal_device"],
         "@platforms//os:linux": ["//donner/gpu/vulkan:vulkan_device"],
         "//conditions:default": [],
-    }),
+    }) + wgsl_alternate_projections_for_tests(),
 )
 
 donner_multi_transitioned_test(
@@ -669,6 +670,7 @@ donner_cc_library(
         "//donner/base",
         "//donner/gpu",
         "//donner/gpu/shader:compiled_shader",
+        "//donner/gpu/shader:linked_projection",
     ],
 )
 
@@ -682,9 +684,9 @@ donner_cc_library(
                ":geode_shader_selection",
                "//donner/base",
                "//donner/gpu",
+               "//donner/gpu/shader:linked_projection",
            ] + shader_apis(GEODE_MODULE_SHADER_FAMILIES) +
-           shader_artifacts(GEODE_MODULE_SHADER_FAMILIES) +
-           native_shader_artifacts(GEODE_MODULE_SHADER_FAMILIES),
+           linked_shader_artifacts(GEODE_MODULE_SHADER_FAMILIES),
 )
 
 donner_cc_test(
@@ -699,9 +701,9 @@ donner_cc_test(
                ":geode_shaders",
                "//donner/base:gtest_timeout_main",
                "//donner/gpu:slug_fill_scene",
+               "//donner/gpu/shader:linked_projection",
            ] + shader_apis(SLUG_SHADER_FAMILIES) +
-           shader_artifacts(SLUG_SHADER_FAMILIES) +
-           native_shader_artifacts(SLUG_SHADER_FAMILIES),
+           linked_shader_artifacts(SLUG_SHADER_FAMILIES),
 )
 
 donner_multi_transitioned_test(
@@ -734,7 +736,8 @@ donner_cc_test(
         "//donner/gpu",
         "//donner/gpu:gpu_test_utils",
         "//donner/gpu/shader:compiled_shader",
-    ] + shader_apis(GEODE_DEVICE_SHADER_FAMILIES),
+        "//donner/gpu/shader:linked_projection",
+    ] + shader_apis(GEODE_DEVICE_SHADER_FAMILIES) + wgsl_alternate_projections_for_tests(),
 )
 
 # Selection runs against a fake device, so no GPU is opened.
@@ -758,7 +761,9 @@ donner_cc_test(
         "//donner/base:gtest_timeout_main",
         "//donner/gpu",
         "//donner/gpu:gpu_test_utils",
-    ],
+        "//donner/gpu/shader:compiled_shader",
+        "//donner/gpu/shader:linked_projection",
+    ] + shader_apis(GEODE_DEVICE_SHADER_FAMILIES),
 )
 
 donner_multi_transitioned_test(
@@ -785,7 +790,8 @@ donner_cc_library(
         ":geode_device_api",
         "//donner/base",
         "//donner/gpu/shader:image_blit_api",
-    ],
+        "//donner/gpu/shader:linked_projection",
+    ] + linked_shader_artifacts(["image_blit"]),
 )
 
 donner_cc_library(
@@ -810,12 +816,12 @@ donner_cc_library(
                ":geode_texture_encoder",
                "//donner/base",
                "//donner/css",
+               "//donner/gpu/shader:linked_projection",
                "//donner/svg/core",
                "//donner/svg/renderer:pixel_format_utils",
                "//donner/svg/resources:image_resource",
            ] + shader_apis(GEODE_ENCODER_SHADER_FAMILIES) +
-           shader_artifacts(GEODE_ENCODER_SHADER_FAMILIES) +
-           native_shader_artifacts(GEODE_ENCODER_SHADER_FAMILIES),
+           linked_shader_artifacts(GEODE_ENCODER_SHADER_FAMILIES),
 )
 
 donner_cc_test(
@@ -1014,7 +1020,7 @@ donner_cc_test(
         "//donner/gpu:recording_device",
         "//donner/svg/renderer:renderer_geode",
         "//donner/svg/renderer:renderer_interface",
-    ],
+    ] + wgsl_alternate_projections_for_tests(),
 )
 
 donner_multi_transitioned_test(
@@ -1047,7 +1053,7 @@ donner_cc_test(
         "//donner/gpu:recording_device",
         "//donner/svg/renderer:renderer_geode",
         "//donner/svg/renderer:renderer_interface",
-    ],
+    ] + wgsl_alternate_projections_for_tests(),
 )
 
 donner_multi_transitioned_test(

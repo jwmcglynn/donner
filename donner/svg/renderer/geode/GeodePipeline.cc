@@ -8,6 +8,7 @@
 
 #include "donner/base/Utils.h"
 #include "donner/gpu/shader/CompiledShader.h"
+#include "donner/gpu/shader/LinkedProjection.h"
 #include "donner/gpu/shader/programs/SlugFill.h"
 #include "donner/gpu/shader/programs/SlugGradient.h"
 #include "donner/gpu/shader/programs/SlugMask.h"
@@ -44,7 +45,7 @@ gpu::BlendState PremultipliedSourceOverBlend() {
 
 GeodePipeline::GeodePipeline(gpu::Device& device, gpu::TextureFormat colorFormat)
     : device_(&device), colorFormat_(colorFormat) {
-  const auto& shader = gpu::shader::programs::SlugFillShader();
+  const auto& shader = DONNER_LINKED_SHADER_ARTIFACT(SlugFill);
   const auto entries = gpu::shader::MakeBindingLayout(shader);
   bindGroupLayout_ = UnwrapOrAbort(
       device.createBindGroupLayout(gpu::BindGroupLayoutDescriptor{"GeodeSlugFillBGL", entries}),
@@ -82,7 +83,7 @@ const gpu::RenderPipeline& GeodePipeline::batchedPipeline() const {
     // module, same blending - differing only in the entry points that read
     // paint and geometry from each instance's record. Built on first use
     // because only a cross-entity batch needs it.
-    const auto& shader = gpu::shader::programs::SlugFillShader();
+    const auto& shader = DONNER_LINKED_SHADER_ARTIFACT(SlugFill);
     batchedPipeline_ = buildPipeline("GeodeSlugFillBatched", shader.entryPoints[1].name.view(),
                                      shader.entryPoints[3].name.view());
   }
@@ -95,7 +96,7 @@ const gpu::RenderPipeline& GeodePipeline::batchedPipeline() const {
 
 GeodeGradientPipeline::GeodeGradientPipeline(gpu::Device& device, gpu::TextureFormat colorFormat)
     : colorFormat_(colorFormat) {
-  const auto& shader = gpu::shader::programs::SlugGradientShader();
+  const auto& shader = DONNER_LINKED_SHADER_ARTIFACT(SlugGradient);
   const auto entries = gpu::shader::MakeBindingLayout(shader);
   bindGroupLayout_ = UnwrapOrAbort(
       device.createBindGroupLayout(gpu::BindGroupLayoutDescriptor{"GeodeSlugGradientBGL", entries}),
@@ -123,7 +124,7 @@ GeodeGradientPipeline::GeodeGradientPipeline(gpu::Device& device, gpu::TextureFo
 // ============================================================================
 
 GeodeMaskPipeline::GeodeMaskPipeline(gpu::Device& device) {
-  const auto& shader = gpu::shader::programs::SlugMaskShader();
+  const auto& shader = DONNER_LINKED_SHADER_ARTIFACT(SlugMask);
   const auto entries = gpu::shader::MakeBindingLayout(shader);
   bindGroupLayout_ = UnwrapOrAbort(
       device.createBindGroupLayout(gpu::BindGroupLayoutDescriptor{"GeodeSlugMaskBGL", entries}),
@@ -157,7 +158,7 @@ GeodeMaskPipeline::GeodeMaskPipeline(gpu::Device& device) {
 
 GeodeSnapshotReadbackPipeline::GeodeSnapshotReadbackPipeline(gpu::Device& device) {
   const gpu::shader::CompiledShaderView& shader =
-      SelectShaderProjection(device, DONNER_GEODE_SHADER_ARTIFACTS(SnapshotUnpremultiply));
+      SelectShaderProjection(device, DONNER_LINKED_SHADER_ARTIFACT(SnapshotUnpremultiply));
   const gpu::shader::ShaderResource* input = shader.resource("inputTexture");
   const gpu::shader::ShaderResource* output = shader.resource("outputTexture");
   if (input == nullptr || output == nullptr || shader.entryPoints.size() != 1 ||

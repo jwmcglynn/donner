@@ -8,7 +8,7 @@ Geode's renderer services are backend-neutral. Still open: removal of the transi
 remaining dependencies, real Safari/WebKit and physical iOS qualification of the browser editor,
 and acceptance of one integrated revision ([Next Steps](#next-steps)).\
 **Created:** 2026-07-05\
-**Updated:** 2026-10-03\
+**Updated:** 2026-10-05\
 **Author:** Claude Fable 5.1\
 **Drafted by:** GPT-5.6 Sol
 
@@ -870,11 +870,20 @@ after shader selection, resources, mapping, UI, and platform presentation work t
 
 Production shaders are authored as inline WGSL and compiled by Donner's C++20 `consteval` compiler
 into frozen artifacts during the ordinary C++ build ([WGSL shader compilation](../wgsl_compiler.md)).
-Each artifact library retains exactly the projection its consumer uses: the WebGPU adapter links
-WGSL-only artifacts, native Apple consumers link MSL-only artifacts, native Linux consumers link
-SPIR-V-only artifacts, and all-projection artifacts are test controls. Linked-binary isolation
-probes prove that a production artifact carries no other projection; the absence of compiler and
-emitter symbols from application binaries is part of the audit acceptance below.
+Each artifact library retains exactly one projection, and each production library links exactly
+the one its devices consume (`linked_shader_artifacts`, named in C++ with
+`DONNER_LINKED_SHADER_ARTIFACT`): native Apple products link MSL-only artifacts, native Linux
+products link SPIR-V-only artifacts, and the WebAssembly package links WGSL-only artifacts. No
+native product links the authored WGSL of any family. A native test whose device consumes WGSL,
+such as a recording device or the Linux wgpu-native resvg reference, links the test-only
+`//donner/gpu/shader:wgsl_alternate_projections`, which supplies those projections; all-projection
+artifacts are test controls. Linked-binary isolation probes prove that a production artifact
+carries no other projection, and
+`//donner/gpu/shader/artifact_tests:geode_linkage_isolation_tests` proves that the artifact set
+`linked_shader_artifacts` selects for every production family carries no WGSL. Configured audits
+on the native editor and renderer prove the product edges: neither reaches any WGSL artifact. The
+absence of compiler and emitter symbols from application binaries is part of the audit acceptance
+below.
 The compiler implements a documented v1 profile of WGSL; source outside the profile fails C++
 compilation with a named diagnostic, and there is no runtime parser, generator or fallback.
 

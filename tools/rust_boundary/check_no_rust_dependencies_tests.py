@@ -789,7 +789,7 @@ class LinuxGpuOracleArchiveTest(unittest.TestCase):
                 '    visibility = ["//donner/gpu/baseline:__pkg__", '
                 '"//donner/svg/renderer/tests:__pkg__"],\n'
                 '    deps = [":geode_device", ":geode_runtime_device_source", ":geode_wgpu_util", '
-                '"//donner/base", "//donner/gpu", '
+                '"//donner/base", "//donner/gpu", "//donner/gpu/shader:wgsl_alternate_projections", '
                 '"//third_party/webgpu-cpp:wgpu_native_reference_runtime"],\n)\n'
                 'configured_dependency_audit_test(\n    name = "native_audit",\n'
                 '    forbidden = ["//third_party/webgpu-cpp:wgpu_native_reference_runtime"],\n)\n'

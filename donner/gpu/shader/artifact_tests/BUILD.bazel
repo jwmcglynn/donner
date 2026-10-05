@@ -2,10 +2,9 @@ load("@rules_python//python:defs.bzl", "py_test")
 load("//build_defs:rules.bzl", "donner_cc_binary")
 load(
     "//donner/gpu/shader:shader_families.bzl",
-    "GEODE_SHADER_FAMILIES",
-    "native_shader_artifacts",
+    "PRODUCTION_SHADER_FAMILIES",
+    "linked_shader_artifacts",
     "shader_apis",
-    "shader_artifacts",
 )
 
 _NATIVE = select({
@@ -1848,6 +1847,76 @@ py_test(
     target_compatible_with = _NATIVE,
 )
 
+donner_cc_binary(
+    name = "ui_draw_wgsl_probe",
+    testonly = 1,
+    srcs = ["UiDrawWgslProbe.cc"],
+    target_compatible_with = _NATIVE,
+    deps = [
+        "//donner/gpu/shader:ui_draw_api",
+        "//donner/gpu/shader:ui_draw_artifact",
+    ],
+)
+
+py_test(
+    name = "ui_draw_wgsl_isolation_tests",
+    srcs = ["inspect_projection_binary.py"],
+    args = [
+        "--family=ui_draw",
+        "--binary=$(rootpath :ui_draw_wgsl_probe)",
+    ] + _FORMAT + ["--wgsl"],
+    data = [":ui_draw_wgsl_probe"],
+    main = "inspect_projection_binary.py",
+    target_compatible_with = _NATIVE,
+)
+
+donner_cc_binary(
+    name = "ui_draw_native_probe",
+    testonly = 1,
+    srcs = ["UiDrawNativeProbe.cc"],
+    target_compatible_with = _NATIVE,
+    deps = [
+        "//donner/gpu/shader:ui_draw_api",
+        "//donner/gpu/shader:ui_draw_native_artifact",
+    ],
+)
+
+py_test(
+    name = "ui_draw_native_isolation_tests",
+    srcs = ["inspect_projection_binary.py"],
+    args = [
+        "--family=ui_draw",
+        "--binary=$(rootpath :ui_draw_native_probe)",
+    ] + _FORMAT + _NATIVE_FLAGS,
+    data = [":ui_draw_native_probe"],
+    main = "inspect_projection_binary.py",
+    target_compatible_with = _NATIVE,
+)
+
+donner_cc_binary(
+    name = "ui_draw_all_probe",
+    testonly = 1,
+    srcs = ["UiDrawAllProbe.cc"],
+    target_compatible_with = _NATIVE,
+    deps = ["//donner/gpu/shader:ui_draw_source"],
+)
+
+py_test(
+    name = "ui_draw_all_isolation_tests",
+    srcs = ["inspect_projection_binary.py"],
+    args = [
+        "--family=ui_draw",
+        "--binary=$(rootpath :ui_draw_all_probe)",
+    ] + _FORMAT + [
+        "--wgsl",
+        "--msl",
+        "--spirv",
+    ],
+    data = [":ui_draw_all_probe"],
+    main = "inspect_projection_binary.py",
+    target_compatible_with = _NATIVE,
+)
+
 # Payload-marker key for the families whose probe name differs from their target name.
 _MARKER_KEYS = {
     "convolve_matrix": "convolve",
@@ -1855,8 +1924,8 @@ _MARKER_KEYS = {
     "slug_mask": "slug",
 }
 
-# Links what the production Geode libraries link: the authored WGSL artifact and the
-# platform-native artifact of every family they reach.
+# Links what the native production libraries link: only the platform-native artifact of every
+# family they reach. The test asserts that payload is present and no family's authored WGSL is.
 donner_cc_binary(
     name = "geode_linkage_probe",
     testonly = 1,
@@ -1864,9 +1933,10 @@ donner_cc_binary(
     target_compatible_with = _NATIVE,
     deps = [
                "//donner/gpu/shader:compiled_shader",
-           ] + shader_apis(GEODE_SHADER_FAMILIES) +
-           shader_artifacts(GEODE_SHADER_FAMILIES) +
-           native_shader_artifacts(GEODE_SHADER_FAMILIES),
+               "//donner/gpu/shader:linked_projection",
+               "//donner/gpu/shader:production_shader_families",
+           ] + shader_apis(PRODUCTION_SHADER_FAMILIES) +
+           linked_shader_artifacts(PRODUCTION_SHADER_FAMILIES),
 )
 
 py_test(
@@ -1876,8 +1946,8 @@ py_test(
         "--binary=$(rootpath :geode_linkage_probe)",
     ] + [
         "--family=" + _MARKER_KEYS.get(family, family)
-        for family in GEODE_SHADER_FAMILIES
-    ] + _FORMAT + ["--wgsl"] + _NATIVE_FLAGS,
+        for family in PRODUCTION_SHADER_FAMILIES
+    ] + _FORMAT + _NATIVE_FLAGS,
     data = [":geode_linkage_probe"],
     main = "inspect_projection_binary.py",
     target_compatible_with = _NATIVE,

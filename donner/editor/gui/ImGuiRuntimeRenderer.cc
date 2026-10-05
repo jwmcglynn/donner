@@ -13,6 +13,7 @@
 #include "donner/gpu/CommandEncoder.h"
 #include "donner/gpu/Device.h"
 #include "donner/gpu/shader/CompiledShader.h"
+#include "donner/gpu/shader/LinkedProjection.h"
 #include "donner/gpu/shader/programs/UiDraw.h"
 
 namespace donner::editor {
@@ -28,16 +29,12 @@ static_assert(offsetof(ImDrawVert, uv) == 8);
 static_assert(offsetof(ImDrawVert, col) == 16);
 static_assert(sizeof(ImDrawIdx) == 2, "indices are bound as 16-bit and drawn with a base vertex");
 
-/// The UI draw projection \p device consumes. The transitional adapter takes WGSL; native Metal
-/// and Vulkan devices take their own projection, which the browser package never links.
+/// The UI draw projection \p device consumes, selected from the one this build links: the native
+/// projection in a native build and the authored WGSL in the browser package.
 /// @param device Device the pipelines are created on.
 const gpu::shader::CompiledShaderView& SelectUiDrawShader(const gpu::Device& device) {
-#if (defined(__APPLE__) || defined(__linux__)) && !defined(__EMSCRIPTEN__)
-  if (device.shaderSourceKind() != gpu::ShaderSourceKind::Wgsl) {
-    return gpu::shader::programs::UiDrawNativeShader();
-  }
-#endif
-  return gpu::shader::programs::UiDrawShader();
+  return gpu::shader::SelectLinkedProjection(device.shaderSourceKind(),
+                                             DONNER_LINKED_SHADER_ARTIFACT(UiDraw));
 }
 
 /// Vertex layout of the UI draw vertices, matching the authored attribute locations.

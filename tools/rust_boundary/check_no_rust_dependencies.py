@@ -759,11 +759,13 @@ GEODE_ORACLE_VISIBILITY = {
     ),
 }
 # The reference supplies runtime devices to the production Geode context: it compiles only its own
-# source and links the production device, never a second copy of the production sources.
+# source and links the production device, never a second copy of the production sources. It
+# consumes WGSL, which a native production library does not link, so it also links the test-only
+# WGSL alternates of the production shader families.
 GEODE_ORACLE_REFERENCE_SRCS = ("GeodeWgpuAdapterDevice.cc",)
 GEODE_ORACLE_REFERENCE_DEPS = (
     ":geode_device", ":geode_runtime_device_source", ":geode_wgpu_util", "//donner/base",
-    "//donner/gpu", GEODE_ORACLE_RUNTIME,
+    "//donner/gpu", "//donner/gpu/shader:wgsl_alternate_projections", GEODE_ORACLE_RUNTIME,
 )
 
 

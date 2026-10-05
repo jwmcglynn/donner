@@ -2,6 +2,13 @@ load("@aspect_rules_js//js:defs.bzl", "js_test")
 load("//build_defs:dep_audit.bzl", "configured_dependency_audit_test", "forbidden_transitive_dep_test")
 load("//build_defs:rules.bzl", "donner_cc_binary", "donner_cc_library", "donner_cc_test", "donner_multi_transitioned_test")
 load("//build_defs:visibility.bzl", "donner_internal_visibility")
+load(
+    ":shader_families.bzl",
+    "PRODUCTION_SHADER_FAMILIES",
+    "native_shader_artifacts",
+    "shader_apis",
+    "shader_artifacts",
+)
 
 # The CI workflow contract checks that every browser test here carries its scheduling tag.
 exports_files(
@@ -17,6 +24,96 @@ donner_cc_library(
     deps = [
         "//donner/base",
         "//donner/gpu:descriptors",
+    ],
+)
+
+_NATIVE_ONLY = select({
+    "@platforms//os:macos": [],
+    "@platforms//os:linux": [],
+    "//conditions:default": ["@platforms//:incompatible"],
+})
+
+# Selects the view a device builds a module from, given the one artifact per family a build links.
+donner_cc_library(
+    name = "linked_projection",
+    srcs = ["LinkedProjection.cc"],
+    hdrs = ["LinkedProjection.h"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":compiled_shader",
+        "//donner/base",
+        "//donner/gpu:descriptors",
+    ],
+)
+
+# Registration of alternates. Test-only, so no production target can register one.
+donner_cc_library(
+    name = "linked_projection_testing",
+    testonly = 1,
+    hdrs = ["LinkedProjectionTesting.h"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":compiled_shader",
+        ":linked_projection",
+        "//donner/gpu:descriptors",
+    ],
+)
+
+donner_cc_test(
+    name = "linked_projection_tests",
+    srcs = [
+        "tests/CompiledShaderViewPrinter.h",
+        "tests/LinkedProjection_tests.cc",
+    ],
+    deps = [
+        ":compiled_shader",
+        ":linked_projection",
+        ":linked_projection_testing",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+# The program name and header of every family a production library links.
+donner_cc_library(
+    name = "production_shader_families",
+    testonly = 1,
+    hdrs = ["ProductionShaderFamilies.h"],
+    visibility = donner_internal_visibility(),
+    deps = shader_apis(PRODUCTION_SHADER_FAMILIES),
+)
+
+# Supplies the authored WGSL of every production family to native tests whose device consumes
+# WGSL. Native production libraries link only their platform's projection, so this is test-only and
+# no shipped native binary carries WGSL. Linked whole, because it registers from a static
+# initializer that nothing references.
+donner_cc_library(
+    name = "wgsl_alternate_projections",
+    testonly = 1,
+    srcs = ["WgslAlternateProjections.cc"],
+    target_compatible_with = _NATIVE_ONLY,
+    visibility = donner_internal_visibility(),
+    deps = [
+               ":linked_projection_testing",
+               ":production_shader_families",
+           ] + shader_artifacts(PRODUCTION_SHADER_FAMILIES) +
+           native_shader_artifacts(PRODUCTION_SHADER_FAMILIES),
+    alwayslink = True,
+)
+
+donner_cc_test(
+    name = "wgsl_alternate_projections_tests",
+    srcs = [
+        "tests/CompiledShaderViewPrinter.h",
+        "tests/WgslAlternateProjections_tests.cc",
+    ],
+    env = {"DONNER_PRODUCTION_SHADER_FAMILIES": ",".join(PRODUCTION_SHADER_FAMILIES)},
+    target_compatible_with = _NATIVE_ONLY,
+    deps = [
+        ":compiled_shader",
+        ":linked_projection",
+        ":production_shader_families",
+        ":wgsl_alternate_projections",
+        "@com_google_gtest//:gtest_main",
     ],
 )
 

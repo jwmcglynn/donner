@@ -6,7 +6,7 @@
 
 namespace donner::gpu::shader::programs {
 
-/// Projection consumed by the Geode backend.
+/// Projection of the authored WGSL artifact, which the browser device consumes.
 inline constexpr wgsl::Projection kGaussianBlurGeodeProjection = wgsl::Projection::Wgsl;
 
 #if !defined(__EMSCRIPTEN__) && (defined(__APPLE__) || defined(__linux__) || defined(_WIN32))
