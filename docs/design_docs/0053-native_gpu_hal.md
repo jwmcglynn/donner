@@ -242,7 +242,12 @@ commits and their fixes together in a focused reviewable change.
       [cutover acceptance](#cutover-acceptance) gates.
 - [ ] Shader profile additions follow the compiler's rules: a construct the v1 profile rejects is
       added to the compiler with tests across all three projections rather than worked around, and
-      the UI renderer's shaders are authored as WGSL sources under the same contract.
+      the UI renderer's shaders are authored as WGSL sources under the same contract. The UI draw
+      program is authored WGSL compiled into frozen artifacts, and the bit-shift operators joined
+      the profile with WGSL, MSL and SPIR-V tests, replacing the division workarounds in the UI
+      vertex color unpack and the snapshot half-alpha term. Besides the identifier renames the
+      profile's naming rules force (see the compiler guide), one production spelling, feImage's
+      `0.33333334f`, stands in for f32 constant folding (#1636).
 
 ### Snapshot and target identity
 

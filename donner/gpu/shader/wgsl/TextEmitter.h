@@ -864,6 +864,11 @@ private:
     constexpr std::string_view kOperators[] = {
         "+", "-", "*", "/", "%", "<", "<=", ">", ">=", "==", "!=", "&&", "||", "&"};
     const uint32_t op = node.payload;
+    if (op == static_cast<uint32_t>(BinaryOp::ShiftLeft) ||
+        op == static_cast<uint32_t>(BinaryOp::ShiftRight)) {
+      emitShift(node, static_cast<BinaryOp>(op));
+      return;
+    }
     if (op >= sizeof(kOperators) / sizeof(kOperators[0])) {
       error_ = TextEmitError::InvalidModule;
       return;
@@ -882,6 +887,51 @@ private:
     character(' ');
     expression(node.operands[1]);
     character(')');
+  }
+
+  /// Emits a shift with WGSL's semantics. WGSL takes a runtime amount modulo the 32-bit width
+  /// while MSL leaves an amount at or above it undefined, so a computed amount is masked; a
+  /// literal amount is validated below 32. MSL also leaves a negative or overflowing signed left
+  /// shift undefined, so an i32 shifts left as uint bits. An i32 shifts right arithmetically.
+  /// @param node Shift node. @param op ShiftLeft or ShiftRight.
+  constexpr void emitShift(const Expression& node, BinaryOp op) {
+    if (node.operandCount != 2 || !validId(node.operands[0], module_.expressionCount) ||
+        !validId(node.operands[1], module_.expressionCount)) {
+      error_ = TextEmitError::InvalidArenaReference;
+      return;
+    }
+    const bool asUnsigned = op == BinaryOp::ShiftLeft && node.type.kind == TypeKind::I32;
+    Type unsignedType = node.type;
+    unsignedType.kind = TypeKind::U32;
+    if (asUnsigned) {
+      text("as_type<");
+      type(node.type);
+      text(">(");
+    }
+    character('(');
+    if (asUnsigned) {
+      emitUnsignedOperand(node, 0, unsignedType);
+    } else {
+      expression(node.operands[0]);
+    }
+    text(op == BinaryOp::ShiftLeft ? " << " : " >> ");
+    if (module_.expressions[node.operands[1]].kind == ExpressionKind::Literal) {
+      expression(node.operands[1]);
+    } else {
+      character('(');
+      expression(node.operands[1]);
+      text(" & ");
+      if (unsignedType.lanes == 1) {
+        text("31u");
+      } else {
+        vectorConstant(unsignedType, "31u");
+      }
+      character(')');
+    }
+    character(')');
+    if (asUnsigned) {
+      character(')');
+    }
   }
 
   constexpr void emitRuntimeArrayIndex(const Expression& node, const Type& array) {

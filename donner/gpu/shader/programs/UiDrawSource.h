@@ -18,13 +18,13 @@ struct vs_main_Output {
 }
 
 // The vertex color arrives as one packed u32 because the runtime's vertex formats are float or
-// u32 only. Unpacking uses division and masking: the shader profile has no shift operator.
+// u32 only.
 @vertex
 fn vs_main(@location(0) position: vec2<f32>, @location(1) uv: vec2<f32>, @location(2) packed_color: u32) -> vs_main_Output {
   let red = (packed_color & 255u);
-  let green = ((packed_color / 256u) & 255u);
-  let blue = ((packed_color / 65536u) & 255u);
-  let alpha = ((packed_color / 16777216u) & 255u);
+  let green = ((packed_color >> 8u) & 255u);
+  let blue = ((packed_color >> 16u) & 255u);
+  let alpha = (packed_color >> 24u);
   let channels = vec4<f32>(f32(red), f32(green), f32(blue), f32(alpha));
   let color = (channels / vec4<f32>(255f, 255f, 255f, 255f));
   let clip_position = (params.clip_from_logical * vec4<f32>(position.x, position.y, 0f, 1f));

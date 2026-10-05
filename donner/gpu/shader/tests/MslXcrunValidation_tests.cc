@@ -250,6 +250,12 @@ TEST(MslXcrunValidation, EmittedSnapshotUnpremultiplyComputeCompilesWithMetalCom
                                   "snapshot_unpremultiply_mutated");
 }
 
+TEST(MslXcrunValidation, ShiftOperatorsCompileWithMetalCompiler) {
+  DONNER_REQUIRE_EXTERNAL_TOOL(kMetalCompilerToolName, FindMetalCompilerUnavailableReason());
+  // Masked scalar and vector amounts and signed left shifts through uint bits.
+  ExpectCompilesWithMetalCompiler(tests::ShiftOperatorsAllProjections().msl, "shift_operators");
+}
+
 TEST(MslXcrunValidation, EmittedBoolVectorReductionsCompileWithMetalCompiler) {
   DONNER_REQUIRE_EXTERNAL_TOOL(kMetalCompilerToolName, FindMetalCompilerUnavailableReason());
   // `all` reaches no shipping program, so without this the compiler would never see it and a

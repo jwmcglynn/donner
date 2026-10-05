@@ -417,6 +417,12 @@ TEST(SpirvValValidation, EmittedSnapshotUnpremultiplyComputePassesVulkan11Valida
                                  "snapshot_unpremultiply_mutated.spv");
 }
 
+TEST(SpirvValValidation, ShiftOperatorsPassVulkan11Validation) {
+  // OpShiftLeftLogical and OpShiftRightArithmetic on scalars and vectors, with masked amounts.
+  ExpectWordsValidateForVulkan11(SpirvVal(), tests::ShiftOperatorsAllProjections().spirv,
+                                 "shift_operators.spv");
+}
+
 TEST(SpirvValValidation, EmittedBoolVectorReductionsPassVulkan11Validation) {
   // OpAll reaches no shipping program, so this is the only place the validator confirms its
   // encoding and that its result type is a scalar bool rather than the vector it reduced.
