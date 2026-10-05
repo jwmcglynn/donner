@@ -4325,7 +4325,9 @@ TEST(EditorShellTest, GeodeSilhouetteSettledLayersSelectionStillDragsSelectedSha
 
 TEST(EditorShellTest, DragMutationWaitsForQueuedRenderToConsumeItsDocument) {
   gui::EditorWindow window = MakeHiddenWindow();
-  ASSERT_THAT(window.valid(), testing::IsTrue());
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
   EditorShell shell(window, OptionsWithSource(kInitialSvg, "initial.svg"));
   ASSERT_THAT(shell.valid(), testing::IsTrue());
   EditorShellTestAccess::ConfigureViewport(shell, Box2d::FromXYWH(0.0, 0.0, 120.0, 80.0));
@@ -4365,7 +4367,9 @@ TEST(EditorShellTest, DragMutationWaitsForQueuedRenderToConsumeItsDocument) {
 
 TEST(EditorShellTest, CoalescedFinalPointerAndReleaseCommitTheFinalPoseAndUndo) {
   gui::EditorWindow window = MakeHiddenWindow();
-  ASSERT_TRUE(window.valid());
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
   EditorShell shell(window, OptionsWithSource(kInitialSvg, "coalesced-release.svg"));
   ASSERT_TRUE(shell.valid());
   EditorShellTestAccess::ConfigureViewport(shell, Box2d::FromXYWH(0, 0, 120, 80));

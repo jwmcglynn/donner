@@ -463,7 +463,9 @@ TEST(RenderPanePresenterVisualReproTest, FailedPaintUploadRetainsVisibleFrameAnd
       .offscreenContentScale = 1.0,
       .enableFramebufferReadback = true,
   });
-  ASSERT_TRUE(window.valid());
+  if (!window.valid()) {
+    GTEST_SKIP() << "Hidden editor window is unavailable on this host";
+  }
   GlTextureCache textures(PresentationDevice(window));
   textures.initialize();
   ASSERT_TRUE(textures.uploadComposited(MakePreview(false)));
@@ -554,7 +556,9 @@ TEST(RenderPanePresenterVisualReproTest, PaintUploadPreservesForeignUnpackStateA
       .offscreen = true,
       .offscreenContentScale = 1.0,
   });
-  ASSERT_TRUE(window.valid());
+  if (!window.valid()) {
+    GTEST_SKIP() << "Hidden editor window is unavailable on this host";
+  }
   GlTextureCache textures(PresentationDevice(window));
   textures.initialize();
   ASSERT_TRUE(textures.uploadComposited(MakePreview(false)));
