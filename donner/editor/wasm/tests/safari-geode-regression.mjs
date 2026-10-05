@@ -368,10 +368,11 @@ function assertThumbnailDiagnostic(state, initialDeviceState) {
   );
   // A thumbnail whose catalog font is still loading completes as FontsPending and is requested
   // again once the font arrives (Text and Style waits for Inter), so attempts may exceed five, as
-  // the Playwright smoke suite allows. Every attempt must still have started and completed.
+  // the Playwright smoke suite allows; more than one retry per card is a retry storm. Every attempt
+  // must still have started and completed.
   assert.ok(
-    thumbnails.requested >= 5,
-    `expected at least five thumbnail requests, got ${thumbnails.requested}`,
+    thumbnails.requested >= 5 && thumbnails.requested <= 10,
+    `expected five to ten thumbnail requests, got ${thumbnails.requested}`,
   );
   assert.equal(thumbnails.started, thumbnails.requested, "a thumbnail request never started");
   assert.equal(thumbnails.completed, thumbnails.started, "a thumbnail attempt never completed");
@@ -867,10 +868,12 @@ async function runRegression(driver, editorUrl, result) {
           sampledAtMs: Date.now(),
           signature,
         });
-        // Layer thumbnails are GPU texture snapshots; bitmaps remain only as a fallback.
-        const thumbnailsReady = Number(layers.rowCount || 0) > 0
+        // Every visible row has resolved to a GPU texture snapshot or a CPU bitmap fallback; the
+        // checks after the baseline require all of them to be snapshots.
+        const thumbnailsReady = Number(layers.rowCount || 0) > 1
           && Number(layers.deferredCount || 0) === 0
-          && (Number(layers.textureSnapshotCount || 0) > 0 || Number(layers.bitmapCount || 0) > 0);
+          && Number(layers.textureSnapshotCount || 0) + Number(layers.bitmapCount || 0)
+            === Number(layers.rowCount || 0);
         if (!thumbnailsReady) {
           previousResourceSignature = "";
           stableResourceSamples = 0;
@@ -888,6 +891,18 @@ async function runRegression(driver, editorUrl, result) {
       500,
     );
     result.memoryBaselineScreenshot = await capture(driver, "03b-memory-baseline");
+    // Geode keeps every layer thumbnail GPU-resident, as the Playwright smoke suite requires.
+    const baselineLayers = result.memoryBaseline.layerThumbnails;
+    assert.equal(baselineLayers.bitmapCount, 0, "layer thumbnails fell back to CPU bitmaps");
+    assert.equal(
+      baselineLayers.textureSnapshotCount,
+      baselineLayers.rowCount,
+      "not every layer thumbnail is a GPU texture snapshot",
+    );
+    assert.ok(
+      baselineLayers.textureCount >= baselineLayers.textureSnapshotCount,
+      "layer thumbnail snapshots have no backing textures",
+    );
     result.memoryWebContentProcess = await poll(
       "Safari automation WebContent process",
       async () => {
