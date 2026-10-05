@@ -141,7 +141,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          node donner/editor/wasm/tests/latency-gates.mjs bazel-testlogs/donner/editor/wasm/tests/browser_responsiveness_perf_test/test.log >> "$GITHUB_STEP_SUMMARY"
+          node donner/editor/wasm/tests/latency-gate-summary.mjs bazel-testlogs/donner/editor/wasm/tests/browser_responsiveness_perf_test/test.log >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload perf test failure artifacts
         if: failure() && steps.perf.outcome == 'failure'

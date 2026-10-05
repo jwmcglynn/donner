@@ -4,9 +4,6 @@
 // DONNER_BROWSER_LATENCY_GATES=report, which only the GitHub-hosted macOS Perf job does: the gates
 // miss their targets on that runner (#1666), so that job reports them without failing.
 
-import fs from "node:fs";
-import { pathToFileURL } from "node:url";
-
 /** Environment variable that selects whether a gate miss fails the run. */
 export const kLatencyGatesEnv = "DONNER_BROWSER_LATENCY_GATES";
 
@@ -93,13 +90,4 @@ export function latencyGateSummary(log) {
     ...rows,
     "",
   ].join("\n");
-}
-
-// `node latency-gates.mjs <test.log>` prints the summary of that log, or of nothing when it is
-// missing because the test did not run.
-if (process.argv[1] && import.meta.url === pathToFileURL(fs.realpathSync(process.argv[1])).href) {
-  const file = process.argv[2];
-  process.stdout.write(
-    latencyGateSummary(file && fs.existsSync(file) ? fs.readFileSync(file, "utf8") : ""),
-  );
 }
