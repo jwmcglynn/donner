@@ -530,16 +530,6 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
                     self.assertEqual(0, result.returncode, result.stderr)
                     self.assertEqual(expected, output.read_text())
 
-    def test_coverage_does_not_expand_ci_config_twice(self):
-        """The coverage command inherits its CI config from the runner rc."""
-        flag_line = re.search(
-            r'^\s*DONNER_COVERAGE_BAZEL_FLAGS: "([^"]*)"$',
-            self.coverage,
-            re.MULTILINE,
-        )
-        self.assertIsNotNone(flag_line)
-        self.assertNotIn("--config=ci", flag_line.group(1))
-
     def test_pr_test_lanes_exclude_manual_targets_at_the_command_line(self):
         """Runner bazelrcs cannot re-enable opt-in tests during full fallbacks."""
         self.assertIn("test:ci --test_tag_filters=-manual,-perf", self.bazelrc)
@@ -683,8 +673,8 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         """The all-skipped path must not name a file it did not write.
 
         `bazel coverage` legitimately produces no report when every selected
-        target is incompatible with the lane's platform: nothing was measured,
-        and the lane is satisfied. That path used to exit the script's inner
+        target is incompatible with the host platform: nothing was measured.
+        That path used to exit the script's inner
         subshell with 0, after which the tail of the script unconditionally
         announced "Filtered coverage report saved to .../filtered_report.dat".
         The upload step believed it, looked for that exact path with
@@ -705,35 +695,53 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
             "the report announcement is not guarded by the skip marker",
         )
 
-    def test_every_coverage_report_consumer_honours_a_legitimate_skip(self):
-        """Discovered, not listed: anything reading the report must be gated.
+    def test_coverage_workflow_treats_a_missing_report_as_a_failure(self):
+        """The complete-tree run must upload a baseline or fail.
 
-        The report outcome is published as a step output and, for the
-        cross-job handoff, as a job output. Every consumer of
-        filtered_report.dat gates on one of them, so a legitimate skip cannot
-        fail a lane by looking for a file that was correctly never written.
+        tools/coverage.sh may legitimately write no report when every explicit
+        label is incompatible with the host. On the coverage workflow, which
+        always selects the complete product tree, that outcome would mean a
+        classification regression, and honouring it as a skip would end a
+        nightly run green with no baseline uploaded. So the skip marker fails
+        the build, and no report consumer is conditional on a report outcome.
         """
+        jobs = dict(self._coverage_jobs())
+        build = jobs["build"]
+        generate = build[build.index("        name: Generate coverage\n"):]
+        generate = generate[: generate.index("\n      - ")]
+        guard_start = generate.index("          if [[ -f coverage-report/coverage_skipped ]]; then")
+        guard_end = generate.index("          fi\n", guard_start) + len("          fi\n")
+        self.assertLess(generate.index("tools/coverage.sh"), guard_start)
+        guard = "set -euo pipefail\n" + textwrap.dedent(generate[guard_start:guard_end])
+        with tempfile.TemporaryDirectory() as directory:
+            for skipped, expected in ((False, 0), (True, 1)):
+                with self.subTest(skipped=skipped):
+                    report_dir = Path(directory) / "coverage-report"
+                    report_dir.mkdir(exist_ok=True)
+                    marker = report_dir / "coverage_skipped"
+                    if skipped:
+                        marker.write_text("all_skipped\n", encoding="utf-8")
+                    result = subprocess.run(
+                        ["bash", "-c", guard], cwd=directory, capture_output=True,
+                        text=True, check=False,
+                    )
+                    self.assertEqual(expected, result.returncode, result.stdout + result.stderr)
+
+        self.assertNotIn("report_written", self.coverage)
         consumers = []
         for job_name, job_body in self._coverage_jobs():
-            job_gated = re.search(
-                r"^    if: .*report_written", job_body, re.MULTILINE
-            ) is not None
-            for step_name, step_body in self._steps(job_body):
-                if "filtered_report.dat" not in step_body:
-                    continue
-                consumers.append("%s / %s" % (job_name, step_name))
-                self.assertTrue(
-                    job_gated
-                    or "outputs.report_written == 'true'" in step_body,
-                    "step %r in job %r consumes the coverage report without "
-                    "honouring the report-written outcome" % (step_name, job_name),
-                )
+            for step_body in re.split(r"^      - ", job_body, flags=re.MULTILINE)[1:]:
+                step_name = step_body.partition("\n")[0]
+                if "filtered_report.dat" in step_body or "report_artifact_id" in step_body:
+                    consumers.append("%s / %s" % (job_name, step_name))
+                    self.assertNotRegex(
+                        step_body, r"(?m)^        if: ",
+                        "step %r in job %r can be skipped although the report "
+                        "must exist" % (step_name, job_name),
+                    )
         self.assertGreaterEqual(
-            len(consumers),
-            3,
-            "consumer discovery matched %r, which is fewer than exist; the "
-            "match is stale and this test is no longer checking anything"
-            % (consumers,),
+            len(consumers), 3,
+            "consumer discovery matched %r, which is fewer than exist" % (consumers,),
         )
 
     def test_failed_hosted_coverage_retains_test_failure_artifacts(self):
@@ -742,9 +750,6 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         self.assertIn("if: failure() && steps.coverage.outcome == 'failure'", step)
         self.assertIn("uses: ./.github/actions/upload-bazel-test-artifacts", step)
         self.assertIn("name: coverage-test-failure-${{ github.job }}", step)
-        self.assertNotIn(
-            "uses: ./.github/actions/upload-bazel-test-artifacts", jobs["coverage-self-hosted"]
-        )
 
     def test_coverage_excludes_all_opt_in_test_tags(self):
         """Coverage must not run manual/perf tests through its own override."""
@@ -755,14 +760,6 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         self.assertEqual(
             {"-fuzz_target", "-lint", "-manual", "-perf", "-ci-remote-gpu"},
             set(match.group(1).split(",")),
-        )
-        query_match = re.search(
-            r'attr\("tags", "[^"]*\(([^)]+)\)[^"]*"', self.coverage
-        )
-        self.assertIsNotNone(query_match)
-        self.assertEqual(
-            {tag.removeprefix("-") for tag in match.group(1).split(",")},
-            set(query_match.group(1).split("|")),
         )
 
     def test_every_change_based_test_step_handles_an_empty_selection(self):

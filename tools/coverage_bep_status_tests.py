@@ -189,50 +189,12 @@ class ClassifyTest(unittest.TestCase):
         self.assertNotIn("private", stdout.getvalue())
         self.assertNotIn("secret", stdout.getvalue())
 
-    def test_diagnostic_upload_gate_rejects_stale_types_and_unsafe_content(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            timing = root / "timing.txt"
-            summary = root / "failure-summary.json"
-            timing.write_text("start=100\nbazel_coverage_done=200\n")
-            self.assertTrue(status.validate_diagnostics(root))
-            valid = status.failure_context([], 34)
-            summary.write_text(json.dumps(valid))
-            self.assertTrue(status.validate_diagnostics(root))
-            for code, name in (
-                    (999, None), (999, "REMOTE_ERROR"), (34, None),
-                    (34, {"secret": "/runner/path"}), (34, ["REMOTE_ERROR"])):
-                with self.subTest(code=code, name=name):
-                    invalid = {**valid, "processExitCode": code, "processExitName": name}
-                    summary.write_text(json.dumps(invalid))
-                    self.assertFalse(status.validate_diagnostics(root))
-            invalid_signal = {**valid, "remoteLogObservations": ["token=secret"]}
-            summary.write_text(json.dumps(invalid_signal))
-            self.assertFalse(status.validate_diagnostics(root))
-            wrong_status = {**valid, "processExitCode": 3,
-                            "processExitName": "TESTS_FAILED",
-                            "remoteLogObservations": ["GRPC_UNAVAILABLE"]}
-            summary.write_text(json.dumps(wrong_status))
-            self.assertFalse(status.validate_diagnostics(root))
-            all_signals = {**valid,
-                           "remoteLogObservations": sorted(status._REMOTE_LOG_OBSERVATIONS)}
-            encoded = json.dumps(all_signals)
-            self.assertLessEqual(len(encoded), 1024)
-            summary.write_text(encoded)
-            self.assertTrue(status.validate_diagnostics(root))
-            summary.write_text('{"privatePath":"/runner/token=secret"}')
-            self.assertFalse(status.validate_diagnostics(root))
-            summary.unlink()
-            summary.mkdir()
-            (summary / "raw.log").write_text("token=secret")
-            self.assertFalse(status.validate_diagnostics(root))
-            summary.rename(root / "retained")
-            timing.write_text("token=secret\n")
-            self.assertFalse(status.validate_diagnostics(root))
-            timing.unlink()
-            timing.mkdir()
-            (timing / "raw.log").write_text("token=secret")
-            self.assertFalse(status.validate_diagnostics(root))
+    def test_failure_context_with_every_observation_fits_the_printed_bound(self):
+        # tools/coverage.sh prints the context only when it is one line of at
+        # most 1024 characters; the largest allowlisted context must fit.
+        context = {**status.failure_context([], 34),
+                   "remoteLogObservations": sorted(status._REMOTE_LOG_OBSERVATIONS)}
+        self.assertLessEqual(len(json.dumps(context)), 1024)
 
     def test_remote_error_log_tail_emits_only_fixed_observations(self):
         with tempfile.TemporaryDirectory() as directory:

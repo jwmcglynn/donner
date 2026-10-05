@@ -35,7 +35,6 @@ py_test(
     data = [
         ":rules.bzl",
         "//:.bazelrc",
-        "//:.github/workflows/coverage.yml",
         "//:.github/workflows/main.yml",
     ],
 )

@@ -12,7 +12,7 @@ Input:
     {
       "capacity": 4,
       "me": 42,
-      "pool": ["linux-self-hosted", "coverage-self-hosted"],
+      "pool": ["linux-self-hosted"],
       "runs": [
         {"id": 41, "jobs": {"jobs": [{"name": "...", "status": "..."}]}},
         {"id": 40, "jobs": null}

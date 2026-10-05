@@ -12,7 +12,6 @@ class GeodeTestSchedulingTest(unittest.TestCase):
         cls.bazelrc = (runfiles / ".bazelrc").read_text()
         cls.rules = (runfiles / "build_defs/rules.bzl").read_text()
         cls.main_workflow = (runfiles / ".github/workflows/main.yml").read_text()
-        cls.coverage_workflow = (runfiles / ".github/workflows/coverage.yml").read_text()
 
     def test_linux_suite_keeps_hardware_adapter_enabled(self):
         self.assertNotIn(
@@ -71,21 +70,12 @@ class GeodeTestSchedulingTest(unittest.TestCase):
             "--test_tag_filters=-manual,-perf,-local-gpu-isolated",
             remote_job,
         )
-        self.assertIn("--strategy=TestRunner=remote", self.coverage_workflow)
-        self.assertIn("--remote_local_fallback=false", self.coverage_workflow)
-        self.assertIn("-local-gpu-isolated", self.coverage_workflow)
         self.assertNotIn("mapfile -t TARGETS", remote_job)
-        self.assertNotIn("mapfile -t TARGETS", self.coverage_workflow)
         self.assertIn(
             'if ! mapped_targets="$(python3 tools/ci_remote_gpu_targets.py',
             remote_job,
         )
-        self.assertIn(
-            'if ! mapped_targets="$(python3 tools/ci_remote_gpu_targets.py',
-            self.coverage_workflow,
-        )
         self.assertEqual(2, remote_job.count('if [[ -z "${'))
-        self.assertIn('if [[ -z "${mapped_targets// /}" ]]; then', self.coverage_workflow)
 
     def test_remote_target_mapping_blocks_propagate_failure_and_empty_output(self):
         remote_job = self.main_workflow.split("  linux-self-hosted:\n", 1)[1]
@@ -97,13 +87,6 @@ class GeodeTestSchedulingTest(unittest.TestCase):
                 'TARGETS="$mapped_targets"',
                 'TARGETS="//donner/editor/tests:rnr_replay_tests_geode"',
                 'printf "%s\\n" "$TARGETS"',
-            ),
-            (
-                "coverage",
-                self.coverage_workflow,
-                'read -r -a TARGETS <<< "$mapped_targets"',
-                'TARGETS=("//donner/editor/tests:rnr_replay_tests_geode")',
-                'printf "%s\\n" "${TARGETS[@]}"',
             ),
         ]
         fake_mapper = r"""

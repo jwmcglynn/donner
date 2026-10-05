@@ -209,50 +209,39 @@ def _file_coverage(metrics: LcovMetrics, universe: list[dict[str, object]]) -> l
     ]
 
 
-def _selection_scope(
-    *,
-    reason: str,
-    patterns: str,
-    expected_pattern_count: int,
-    event: str,
-    ref: str,
-    revision: str,
-) -> tuple[list[str], str]:
+_COMPLETE_TREE = ["//donner/..."]
+_MAIN_EVENTS = frozenset({"schedule", "workflow_dispatch"})
+
+
+def _selection(*, patterns: str, event: str, ref: str, revision: str) -> list[str]:
+    """Return the selected patterns after proving the run is a complete main baseline.
+
+    Coverage runs only on main, nightly or by manual dispatch, and every upload is
+    the project baseline. Anything else fails closed rather than producing a
+    report that could be read as project coverage.
+    """
     selected = patterns.split()
     if not selected or any(not _PATTERN.fullmatch(pattern) for pattern in selected):
         raise CoverageProofError("coverage target selection contains an invalid pattern")
-    if len(selected) != expected_pattern_count:
-        raise CoverageProofError("coverage target selection count does not match its pattern list")
-    if not re.fullmatch(r"[a-z_]+", reason):
-        raise CoverageProofError("coverage target selection has an invalid reason")
     if not re.fullmatch(r"[A-Za-z0-9_./-]+", ref) or not _REVISION.fullmatch(revision):
         raise CoverageProofError("coverage run has an invalid source identity")
-
-    on_main = ref == "refs/heads/main" and event in {"push", "workflow_dispatch"}
-    if on_main and (reason != "non_pr" or selected != ["//donner/..."]):
-        raise CoverageProofError("main coverage selected less than the complete product target tree")
-    return selected, "complete-main" if on_main else "partial-pr"
+    if ref != "refs/heads/main" or event not in _MAIN_EVENTS:
+        raise CoverageProofError("coverage run is not a scheduled or dispatched main run")
+    if selected != _COMPLETE_TREE:
+        raise CoverageProofError("main coverage must select exactly the complete product target tree")
+    return selected
 
 
 def make_proof(
     *,
     bep: Path,
     report: Path,
-    reason: str,
     patterns: str,
-    expected_pattern_count: int,
     event: str,
     ref: str,
     revision: str,
 ) -> dict[str, object]:
-    selected, scope = _selection_scope(
-        reason=reason,
-        patterns=patterns,
-        expected_pattern_count=expected_pattern_count,
-        event=event,
-        ref=ref,
-        revision=revision,
-    )
+    selected = _selection(patterns=patterns, event=event, ref=ref, revision=revision)
 
     universe = _line_universe(report)
     tests, skipped = test_statuses(bep)
@@ -266,13 +255,12 @@ def make_proof(
         raise CoverageProofError("filtered LCOV universe does not match its coverage counters")
 
     return {
-        "schema": 1,
-        "scope": scope,
+        "schema": 2,
+        "scope": "complete-main",
         "revision": revision,
         "ref": ref,
         "event": event,
         "selection": {
-            "reason": reason,
             "patterns": selected,
             "pattern_count": len(selected),
         },
@@ -300,20 +288,13 @@ def summary_markdown(proof: dict[str, object]) -> str:
     selection = proof["selection"]
     report = proof["report"]
     tests = proof["test_counts"]
-    complete = proof["scope"] == "complete-main"
-    label = "Complete main baseline" if complete else "Partial PR coverage for patch annotation"
-    scope_note = (
-        "This report covers the complete selected product tree."
-        if complete
-        else "This selected-subset report is not a project coverage percentage."
-    )
     return "\n".join(
         [
             "## Coverage run proof",
             "",
-            f"**{label}.** {scope_note}",
-            f"Source revision: `{proof['revision']}`",
-            f"Selection reason: `{selection['reason']}`; patterns ({selection['pattern_count']}): "
+            "**Complete main baseline.** This report covers the complete selected product tree.",
+            f"Source revision: `{proof['revision']}` ({proof['event']})",
+            f"Patterns ({selection['pattern_count']}): "
             + ", ".join(f"`{pattern}`" for pattern in selection["patterns"]),
             f"BEP test summaries: {len(proof['test_statuses'])} "
             f"(passed {tests.get('PASSED', 0)}, flaky {tests.get('FLAKY', 0)}); "
@@ -346,9 +327,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--bep", type=Path, required=True)
     parser.add_argument("--report", type=Path, required=True)
-    parser.add_argument("--reason", required=True)
     parser.add_argument("--patterns", required=True)
-    parser.add_argument("--expected-pattern-count", type=int, required=True)
     parser.add_argument("--event", required=True)
     parser.add_argument("--ref", required=True)
     parser.add_argument("--revision", required=True)
@@ -359,9 +338,7 @@ def main(argv: list[str] | None = None) -> int:
         proof = make_proof(
             bep=args.bep,
             report=args.report,
-            reason=args.reason,
             patterns=args.patterns,
-            expected_pattern_count=args.expected_pattern_count,
             event=args.event,
             ref=args.ref,
             revision=args.revision,

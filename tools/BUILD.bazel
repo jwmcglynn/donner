@@ -115,24 +115,6 @@ py_test(
 )
 
 py_test(
-    name = "coverage_instrumentable_targets_tests",
-    size = "small",
-    srcs = [
-        "coverage_instrumentable_targets.py",
-        "coverage_instrumentable_targets_tests.py",
-    ],
-)
-
-py_test(
-    name = "coverage_variant_trim_tests",
-    size = "small",
-    srcs = [
-        "coverage_variant_trim.py",
-        "coverage_variant_trim_tests.py",
-    ],
-)
-
-py_test(
     name = "filter_coverage_tests",
     size = "small",
     srcs = [
@@ -367,23 +349,12 @@ py_test(
 )
 
 py_test(
-    name = "coverage_selection_decision_tests",
+    name = "coverage_workflow_tests",
     size = "small",
-    srcs = ["coverage_selection_decision_tests.py"],
+    srcs = ["coverage_workflow_tests.py"],
     data = [
-        "coverage_instrumentable_targets.py",
-        "//:.github/workflows/coverage.yml",
-    ],
-    deps = ["@rules_python//python/runfiles"],
-)
-
-py_test(
-    name = "coverage_lane_routing_tests",
-    size = "small",
-    srcs = ["coverage_lane_routing_tests.py"],
-    data = [
-        "//:.github/workflows/coverage.yml",
         "//:codecov.yml",
+        "//:github_action_definitions",
     ],
     deps = ["@rules_python//python/runfiles"],
 )
@@ -404,10 +375,7 @@ py_test(
     name = "ci_runner_routing_tests",
     size = "small",
     srcs = ["ci_runner_routing_tests.py"],
-    data = [
-        "//:.github/workflows/coverage.yml",
-        "//:.github/workflows/main.yml",
-    ],
+    data = ["//:.github/workflows/main.yml"],
     deps = ["@rules_python//python/runfiles"],
 )
 
@@ -418,7 +386,6 @@ py_test(
     data = [
         "//:.github/actions/re-turnstile/action.yml",
         "//:.github/actions/re-turnstile/admission.py",
-        "//:.github/workflows/coverage.yml",
         "//:.github/workflows/main.yml",
     ],
     deps = ["@rules_python//python/runfiles"],
@@ -431,7 +398,6 @@ py_test(
     data = [
         "//:.bazelrc",
         "//:.bazelversion",
-        "//:.github/workflows/coverage.yml",
     ],
     deps = ["@rules_python//python/runfiles"],
 )

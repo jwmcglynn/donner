@@ -299,7 +299,7 @@ UPDATE_GOLDEN_IMAGES_DIR=$(bazel info workspace) bazel run //donner/svg/renderer
 
 - Format: `clang-format -i` (`git clang-format` for pending changes) for C++, `dprint` for TS/JSON/Markdown (line width 100, indent 2), `buildifier` for Bazel files. Don't format `third_party/` or `external/`. Doc-only changes skip formatting and builds.
 - Generated docs: `tools/doxygen.sh` → `generated-doxygen/html/`. Coverage: `tools/coverage.sh`.
-- Coverage CI intentionally runs only on `main` pushes and `workflow_dispatch`; PRs get Codecov patch coverage without rerunning the full coverage workflow.
+- Coverage CI (`coverage.yml`) runs nightly and on manual dispatch, on `main` only, and uploads the complete-tree report to Codecov as the project baseline. Pull requests get no coverage run and no Codecov patch status or comment; run `tools/coverage.sh` locally to measure a change. A failed Codecov upload is retried by re-running only the `upload-coverage` job.
 - IDE false positives (`entt.hpp` not found, unknown `Registry`) are from missing Bazel context — verify with `bazel build`.
 - **LLM quiet mode**: `LLM=1` suppresses verbose renderer test output (pixel dumps, terminal previews, SVG echoes). Set in `.bazelrc`. Re-enable with `DONNER_RENDERER_TEST_VERBOSE=1`. In-repo Claude/Codex settings set `LLM=1` by default.
 

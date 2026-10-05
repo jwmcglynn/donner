@@ -53,7 +53,7 @@ class WorkflowTargetsTest(unittest.TestCase):
 
     def test_required_pr_workflows_admit_stacked_base_branches(self):
         resolver = runfiles.Create()
-        workflows = ("main.yml", "coverage.yml", "cmake.yml", "lint.yml", "sanitizers-pr.yml")
+        workflows = ("main.yml", "cmake.yml", "lint.yml", "sanitizers-pr.yml")
         for workflow in workflows:
             with self.subTest(workflow=workflow):
                 source = Path(resolver.Rlocation(f"donner/.github/workflows/{workflow}"))

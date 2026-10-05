@@ -14,10 +14,13 @@ import unittest
 from python.runfiles import runfiles
 
 _LINUX_LANE = "linux-self-hosted"
-_COVERAGE_LANE = "coverage-self-hosted"
-_POOL = [_LINUX_LANE, _COVERAGE_LANE]
+# The admission rules support several lanes sharing one pool. The workflows
+# currently gate one lane; a fabricated second lane exercises the shared-pool
+# rules.
+_OTHER_LANE = "other-self-hosted"
+_POOL = [_LINUX_LANE, _OTHER_LANE]
 
-# Four runner machines, so four concurrent pool jobs in any lane mix.
+# Four runner machines, so four concurrent pool jobs.
 _EXPECTED_CAPACITY = "4"
 
 
@@ -70,7 +73,7 @@ class PoolStateTests(unittest.TestCase):
         self.assertEqual(admission.pool_state(payload, _POOL), admission.ACTIVE)
 
     def test_queued_pool_job_is_pending(self):
-        payload = _jobs((_COVERAGE_LANE, "queued"))
+        payload = _jobs((_OTHER_LANE, "queued"))
         self.assertEqual(admission.pool_state(payload, _POOL), admission.PENDING)
 
     def test_run_without_a_pool_job_yet_is_absent(self):
@@ -78,11 +81,11 @@ class PoolStateTests(unittest.TestCase):
         self.assertEqual(admission.pool_state(payload, _POOL), admission.ABSENT)
 
     def test_finished_and_skipped_pool_jobs_are_clear(self):
-        payload = _jobs((_LINUX_LANE, "completed"), (_COVERAGE_LANE, "completed"))
+        payload = _jobs((_LINUX_LANE, "completed"), (_OTHER_LANE, "completed"))
         self.assertEqual(admission.pool_state(payload, _POOL), admission.CLEAR)
 
     def test_executing_outranks_queued_within_one_run(self):
-        payload = _jobs((_LINUX_LANE, "queued"), (_COVERAGE_LANE, "in_progress"))
+        payload = _jobs((_LINUX_LANE, "queued"), (_OTHER_LANE, "in_progress"))
         self.assertEqual(admission.pool_state(payload, _POOL), admission.ACTIVE)
 
     def test_unreadable_jobs_payload_counts_as_active(self):
@@ -103,7 +106,7 @@ class AdmissionTests(unittest.TestCase):
         # pool is shared, so a fourth job of either lane still fits.
         runs = [
             _run(10, _jobs((_LINUX_LANE, "in_progress"))),
-            _run(11, _jobs((_COVERAGE_LANE, "in_progress"))),
+            _run(11, _jobs((_OTHER_LANE, "in_progress"))),
             _run(12, _jobs((_LINUX_LANE, "in_progress"))),
         ]
         decision = _decide(100, runs)
@@ -124,9 +127,9 @@ class AdmissionTests(unittest.TestCase):
         # burst admit a fifth run inside one poll interval.
         runs = [
             _run(10, _jobs((_LINUX_LANE, "in_progress"))),
-            _run(11, _jobs((_COVERAGE_LANE, "in_progress"))),
+            _run(11, _jobs((_OTHER_LANE, "in_progress"))),
             _run(12, _jobs((_LINUX_LANE, "in_progress"))),
-            _run(13, _jobs((_COVERAGE_LANE, "queued"))),
+            _run(13, _jobs((_OTHER_LANE, "queued"))),
         ]
         decision = _decide(100, runs)
         self.assertEqual(decision["occupancy"], 4)
@@ -145,7 +148,7 @@ class AdmissionTests(unittest.TestCase):
     def test_finished_older_runs_release_their_slots(self):
         runs = [
             _run(10, _jobs((_LINUX_LANE, "completed"))),
-            _run(11, _jobs((_COVERAGE_LANE, "completed"))),
+            _run(11, _jobs((_OTHER_LANE, "completed"))),
             _run(12, _jobs((_LINUX_LANE, "in_progress"))),
         ]
         decision = _decide(100, runs)
@@ -164,23 +167,23 @@ class AdmissionTests(unittest.TestCase):
         runs = [
             _run(10 + index, _jobs((_LINUX_LANE, "in_progress"))) for index in range(3)
         ]
-        runs.append(_run(200, _jobs((_COVERAGE_LANE, "in_progress"))))
+        runs.append(_run(200, _jobs((_OTHER_LANE, "in_progress"))))
         self.assertFalse(_decide(100, runs)["admit"])
 
     def test_own_run_is_never_its_own_blocker(self):
-        runs = [_run(100, _jobs((_COVERAGE_LANE, "queued")))]
+        runs = [_run(100, _jobs((_OTHER_LANE, "queued")))]
         self.assertEqual(_decide(100, runs)["occupancy"], 0)
 
     def test_queue_admits_exactly_capacity_and_drains_in_order(self):
         # Six runs arrive at once. Each evaluates itself against the same
         # world, and exactly the four oldest are admitted.
         waiting = [10, 11, 12, 13, 14, 15]
-        world = [_run(run_id, _jobs((_COVERAGE_LANE, "queued"))) for run_id in waiting]
+        world = [_run(run_id, _jobs((_OTHER_LANE, "queued"))) for run_id in waiting]
         admitted = [run_id for run_id in waiting if _decide(run_id, world)["admit"]]
         self.assertEqual(admitted, [10, 11, 12, 13])
 
         # The oldest finishes; the next waiter, and only it, moves up.
-        world[0] = _run(10, _jobs((_COVERAGE_LANE, "completed")))
+        world[0] = _run(10, _jobs((_OTHER_LANE, "completed")))
         admitted = [
             run_id for run_id in waiting[1:] if _decide(run_id, world)["admit"]
         ]
@@ -194,7 +197,7 @@ class AdmissionTests(unittest.TestCase):
     def test_blockers_are_reported_oldest_first(self):
         runs = [
             _run(12, _jobs((_LINUX_LANE, "in_progress"))),
-            _run(10, _jobs((_COVERAGE_LANE, "queued"))),
+            _run(10, _jobs((_OTHER_LANE, "queued"))),
         ]
         decision = _decide(100, runs, capacity=1)
         self.assertEqual(decision["blockers"], ["10 (pending)", "12 (active)"])
@@ -216,14 +219,11 @@ class WorkflowResolutionTests(unittest.TestCase):
 
 
 class TurnstileWiringTests(unittest.TestCase):
-    """The rules only help if both lanes actually share one pool."""
+    """The rules only help if the self-hosted lane is actually gated by them."""
 
     def setUp(self):
         self.action = _read("donner/.github/actions/re-turnstile/action.yml")
-        self.workflows = {
-            "main.yml": _read("donner/.github/workflows/main.yml"),
-            "coverage.yml": _read("donner/.github/workflows/coverage.yml"),
-        }
+        self.workflows = {"main.yml": _read("donner/.github/workflows/main.yml")}
 
     def _turnstile_usages(self, text):
         """Every `uses: ./.github/actions/re-turnstile` block's `with:` body."""
@@ -233,23 +233,14 @@ class TurnstileWiringTests(unittest.TestCase):
         )
         return [match.group("with") for match in pattern.finditer(text)]
 
-    def test_every_usage_shares_the_same_pool_and_capacity(self):
-        usages = [
-            usage
-            for text in self.workflows.values()
-            for usage in self._turnstile_usages(text)
-        ]
-        self.assertEqual(len(usages), 2, "expected one turnstile per self-hosted lane")
-        for usage in usages:
-            for lane in _POOL:
-                self.assertIn(lane, usage)
-            self.assertRegex(usage, r"capacity:\s*\"?" + _EXPECTED_CAPACITY)
-            self.assertIn("main.yml", usage)
-            self.assertIn("coverage.yml", usage)
-
-    def test_each_workflow_gates_its_own_lane(self):
-        self.assertIn("lane: " + _LINUX_LANE, self.workflows["main.yml"])
-        self.assertIn("lane: " + _COVERAGE_LANE, self.workflows["coverage.yml"])
+    def test_the_linux_lane_is_gated_by_a_fleet_sized_pool(self):
+        usages = self._turnstile_usages(self.workflows["main.yml"])
+        self.assertEqual(len(usages), 1, "expected one turnstile for the self-hosted lane")
+        (usage,) = usages
+        self.assertRegex(usage, r"(?m)^\s+lane: " + _LINUX_LANE + r"$")
+        self.assertRegex(usage, r"(?m)^\s+pool: " + _LINUX_LANE + r"$")
+        self.assertRegex(usage, r"(?m)^\s+pool-workflows: main\.yml$")
+        self.assertRegex(usage, r"capacity:\s*\"?" + _EXPECTED_CAPACITY)
 
     def _job_body(self, text, job):
         match = re.search(
@@ -259,8 +250,8 @@ class TurnstileWiringTests(unittest.TestCase):
         return match.group(1)
 
     def test_wait_runs_on_a_hosted_prerequisite_job(self):
-        # Waiting on the constrained pool itself deadlocks the queue. Both
-        # turnstile jobs must stay on hosted runners.
+        # Waiting on the constrained pool itself deadlocks the queue. The
+        # turnstile job must stay on a hosted runner.
         for name, text in self.workflows.items():
             for match in re.finditer(
                 r"^  ([a-z0-9-]+turnstile):\n(.*?)(?=^  \S)", text, re.S | re.M
@@ -272,9 +263,8 @@ class TurnstileWiringTests(unittest.TestCase):
         # the self-clogging behavior the turnstile exists to avoid. The
         # workflow-level group that dedupes superseded PR pushes is a different
         # mechanism and stays.
-        for job, name in ((_LINUX_LANE, "main.yml"), (_COVERAGE_LANE, "coverage.yml")):
-            body = self._job_body(self.workflows[name], job)
-            self.assertNotIn("concurrency:", body, job)
+        body = self._job_body(self.workflows["main.yml"], _LINUX_LANE)
+        self.assertNotIn("concurrency:", body)
 
     def test_fail_open_and_api_retry_properties_are_kept(self):
         self.assertIn("proceeding (fail-open)", self.action)

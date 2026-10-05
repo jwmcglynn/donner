@@ -4,9 +4,9 @@
 empty report would report full coverage of nothing. That guard is right for the
 usual causes (a build error, a crashed test, a cancelled run), but it also fires
 on a legitimate case: every selected target is `target_compatible_with` a
-platform this lane does not run on, so Bazel skips them all and there is nothing
-to measure. A pull request that only touches such a target hits this on every
-run and can never go green.
+platform this host does not run, so Bazel skips them all and there is nothing
+to measure. Explicit labels naming only such targets hit this on every run and
+could never succeed.
 
 This module reads the build event protocol stream and separates those cases, so
 the shell script keeps failing closed except when the stream positively shows
@@ -287,111 +287,6 @@ def failure_context(lines, process_status):
         if detail is not None:
             result["failureCategory"], result["failureCode"] = detail
     return result
-
-
-
-_FAILURE_CONTEXT_KEYS = frozenset({
-    "schemaVersion", "processExitCode", "processExitName", "bepStatus",
-    "bepExitCode", "failureCategory", "failureCode", "abortReasons",
-    "remoteLogObservations",
-})
-_TIMING_PHASES = ("start", "bazel_coverage_done", "filter_done", "end")
-
-
-def _valid_exit_pair(code, name):
-    if code == "unavailable" and name == "unavailable":
-        return True
-    return (type(code) is int and code in _EXIT_NAMES
-            and isinstance(name, str) and _EXIT_NAMES[code] == name)
-
-
-def _valid_context_codes(value):
-    category = value["failureCategory"]
-    code = value["failureCode"]
-    if not isinstance(category, str) or not isinstance(code, str):
-        return False
-    if category == "unavailable":
-        return code == "unavailable"
-    return (value["processExitCode"] == 34
-            and code in _REMOTE_FAILURE_CODES.get(category, ()))
-
-
-def _valid_abort_reasons(reasons):
-    return (isinstance(reasons, list) and len(reasons) <= len(_DIAGNOSTIC_ABORT_REASONS)
-            and all(isinstance(reason, str) and reason in _DIAGNOSTIC_ABORT_REASONS
-                    for reason in reasons) and reasons == sorted(set(reasons)))
-
-
-def _valid_remote_log_observations(observations, process_status):
-    return (isinstance(observations, list)
-            and len(observations) <= len(_REMOTE_LOG_OBSERVATIONS)
-            and all(isinstance(item, str) and item in _REMOTE_LOG_OBSERVATIONS
-                    for item in observations)
-            and observations == sorted(set(observations))
-            and (process_status == 34 or not observations))
-
-
-def _valid_failure_context(value):
-    if not isinstance(value, dict) or set(value) != _FAILURE_CONTEXT_KEYS:
-        return False
-    if type(value["schemaVersion"]) is not int or value["schemaVersion"] != 1:
-        return False
-    if not _valid_exit_pair(value["processExitCode"], value["processExitName"]):
-        return False
-    if not isinstance(value["bepStatus"], str) or value["bepStatus"] not in {
-            "missing", "malformed", "mismatch", "finished"}:
-        return False
-    if not isinstance(value["bepExitCode"], str) or value["bepExitCode"] not in (
-            set(_EXIT_NAMES.values()) | {"unavailable"}):
-        return False
-    return (_valid_context_codes(value)
-            and _valid_abort_reasons(value["abortReasons"])
-            and _valid_remote_log_observations(
-                value["remoteLogObservations"], value["processExitCode"]))
-
-
-def _bounded_regular_text(path, limit):
-    try:
-        if path.is_symlink() or not path.is_file():
-            return None
-        with path.open("r", encoding="utf-8") as stream:
-            value = stream.read(limit + 1)
-        return value if len(value) <= limit else None
-    except (OSError, UnicodeError):
-        return None
-
-
-def _valid_timing(value):
-    if value is None:
-        return False
-    lines = value.splitlines(keepends=True)
-    if not lines or len(lines) > len(_TIMING_PHASES):
-        return False
-    for phase, line in zip(_TIMING_PHASES, lines):
-        prefix = phase + "="
-        if not line.startswith(prefix) or not line.endswith("\n"):
-            return False
-        digits = line[len(prefix):-1]
-        if not digits.isascii() or not digits.isdigit() or not 1 <= len(digits) <= 12:
-            return False
-    return True
-
-
-def validate_diagnostics(directory):
-    """Allow the workflow to upload only fresh, fixed-schema regular files."""
-    timing = _bounded_regular_text(directory / "timing.txt", 128)
-    if not _valid_timing(timing):
-        return False
-    summary_path = directory / "failure-summary.json"
-    if not summary_path.exists() and not summary_path.is_symlink():
-        return True
-    summary = _bounded_regular_text(summary_path, 1024)
-    if summary is None:
-        return False
-    try:
-        return _valid_failure_context(json.loads(summary))
-    except (ValueError, RecursionError):
-        return False
 
 
 def classify(lines):
@@ -715,8 +610,6 @@ def _cli_mode(argv):
         return "classify"
     if len(argv) == 3 and argv[1] == "--failures":
         return "failures"
-    if len(argv) == 3 and argv[1] == "--validate-diagnostics":
-        return "validate_diagnostics"
     if len(argv) == 4 and argv[1] == "--test-cases":
         return "test_cases"
     if len(argv) in (4, 5) and argv[1] == "--failure-context":
@@ -760,8 +653,6 @@ def main(argv):
             "usage: coverage_bep_status.py [--failures|--test-cases|--failure-context] "
             "<bep.json> [bazel-testlogs|process-status] [private-log]\n")
         return 2
-    if mode == "validate_diagnostics":
-        return 0 if validate_diagnostics(Path(argv[2])) else 1
     extra = argv[3] if mode == "test_cases" else _cli_process_status(argv, mode)
     bep_path = argv[2] if mode in {"test_cases", "context"} else argv[-1]
     try:

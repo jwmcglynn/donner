@@ -67,10 +67,8 @@ class CoverageRunProofTest(unittest.TestCase):
         arguments = {
             "bep": self.bep,
             "report": self.report,
-            "reason": "non_pr",
             "patterns": "//donner/...",
-            "expected_pattern_count": 1,
-            "event": "push",
+            "event": "schedule",
             "ref": "refs/heads/main",
             "revision": _REVISION,
         }
@@ -83,10 +81,8 @@ class CoverageRunProofTest(unittest.TestCase):
             status = proof.main([
                 "--bep", str(self.bep),
                 "--report", str(self.report),
-                "--reason", "non_pr",
                 "--patterns", "//donner/...",
-                "--expected-pattern-count", "1",
-                "--event", "push",
+                "--event", "schedule",
                 "--ref", "refs/heads/main",
                 "--revision", _REVISION,
                 "--output", str(self.root / "coverage-proof.json"),
@@ -95,10 +91,10 @@ class CoverageRunProofTest(unittest.TestCase):
 
     def test_complete_main_proof_retains_status_and_line_universe_without_uris(self):
         result = self.make_proof()
+        self.assertEqual(result["schema"], 2)
         self.assertEqual(result["scope"], "complete-main")
-        self.assertEqual(result["selection"], {
-            "reason": "non_pr", "patterns": ["//donner/..."], "pattern_count": 1
-        })
+        self.assertEqual(result["event"], "schedule")
+        self.assertEqual(result["selection"], {"patterns": ["//donner/..."], "pattern_count": 1})
         self.assertEqual(result["test_statuses"], [
             {"label": _LABEL, "configuration": "abc123", "status": "PASSED"}
         ])
@@ -129,17 +125,27 @@ class CoverageRunProofTest(unittest.TestCase):
         self.assertNotIn(_SECRET_URI, json.dumps(result))
         self.assertIn("Complete main baseline", proof.summary_markdown(result))
 
-    def test_pull_request_report_is_explicitly_partial(self):
-        result = self.make_proof(
-            reason="bazel_diff",
-            patterns="//donner/base:base_tests",
-            event="pull_request",
-            ref="refs/pull/123/merge",
+    def test_scheduled_and_dispatched_main_runs_are_complete_baselines(self):
+        for event in ("schedule", "workflow_dispatch"):
+            with self.subTest(event=event):
+                result = self.make_proof(event=event)
+                self.assertEqual(
+                    (result["scope"], result["event"], result["ref"]),
+                    ("complete-main", event, "refs/heads/main"),
+                )
+
+    def test_rejects_runs_that_are_not_a_scheduled_or_dispatched_main_run(self):
+        """Every upload is the project baseline, so no other run may produce one."""
+        cases = (
+            {"event": "pull_request", "ref": "refs/pull/123/merge"},
+            {"event": "push", "ref": "refs/heads/main"},
+            {"event": "workflow_dispatch", "ref": "refs/heads/feature"},
+            {"event": "schedule", "ref": "refs/heads/feature"},
         )
-        self.assertEqual(result["scope"], "partial-pr")
-        self.assertIn(
-            "not a project coverage percentage", proof.summary_markdown(result)
-        )
+        for changes in cases:
+            with self.subTest(**changes):
+                with self.assertRaisesRegex(ValueError, "not a scheduled or dispatched main run"):
+                    self.make_proof(**changes)
 
     def test_rejects_incomplete_or_failed_bep(self):
         self.write_bep(complete=False)
@@ -149,11 +155,15 @@ class CoverageRunProofTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "failed or incomplete"):
             self.make_proof()
 
-    def test_rejects_partial_main_selection_and_unmatched_pattern_count(self):
-        with self.assertRaisesRegex(ValueError, "complete product target tree"):
-            self.make_proof(reason="coverage_smoke", patterns="//donner/base/...")
-        with self.assertRaisesRegex(ValueError, "count does not match"):
-            self.make_proof(expected_pattern_count=2)
+    def test_rejects_any_selection_other_than_the_complete_product_tree(self):
+        for patterns in ("//donner/base/...", "//donner/... //tools/...", "//..."):
+            with self.subTest(patterns=patterns):
+                with self.assertRaisesRegex(
+                    ValueError, "must select exactly the complete product target tree"
+                ):
+                    self.make_proof(patterns=patterns)
+        with self.assertRaisesRegex(ValueError, "invalid pattern"):
+            self.make_proof(patterns="")
 
     def test_rejects_private_lcov_paths_and_unsafe_labels(self):
         self.report.write_text(
@@ -180,10 +190,8 @@ class CoverageRunProofTest(unittest.TestCase):
         status = proof.main([
             "--bep", str(self.bep),
             "--report", str(self.report),
-            "--reason", "non_pr",
             "--patterns", "//donner/...",
-            "--expected-pattern-count", "1",
-            "--event", "push",
+            "--event", "workflow_dispatch",
             "--ref", "refs/heads/main",
             "--revision", _REVISION,
             "--output", str(artifact),

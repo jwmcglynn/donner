@@ -9,13 +9,13 @@ description: >-
   repository's own workflow runs via the Actions API and mutates nothing.
 
 
-  Several lanes may share one pool. The runner fleet has four machines, so the
-  pool is sized four and the lanes mix and match: any combination of Linux CI
-  and coverage jobs may hold the four slots, instead of one slot per lane which
-  capped the whole fleet at two. The accepted tradeoff is that up to four
-  concurrent CI jobs share the remote-execution backend; interactive
-  development use of that backend still outranks CI, which is why the pool is
-  capped well below what the fleet could otherwise submit.
+  Several lanes, from several workflows, may share one pool: any mix of their
+  jobs may hold its slots, so one lane's burst cannot leave capacity idle that
+  another lane could use. The caller sizes the pool to the runner fleet. The
+  accepted tradeoff is that that many concurrent CI jobs share the
+  remote-execution backend; interactive development use of that backend still
+  outranks CI, which is why the pool is capped well below what the fleet could
+  otherwise submit.
 
 
   Admission counts a run as holding a slot from the moment its pool job exists,
@@ -47,8 +47,8 @@ inputs:
     default: ""
   pool-workflows:
     description: >-
-      Whitespace-separated workflow file names (for example "main.yml
-      coverage.yml") whose runs can hold pool slots. Only these workflows are
+      Whitespace-separated workflow file names (for example "main.yml")
+      whose runs can hold pool slots. Only these workflows are
       enumerated, so a run of an unrelated workflow is never mistaken for a
       pool run that is still initializing. Defaults to this run's own workflow.
     required: false

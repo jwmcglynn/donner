@@ -1,821 +1,51 @@
 name: Coverage
 
-# Runs coverage on: main merges (the Codecov baseline), PR pushes (INCREMENTAL:
-# only the changed code's affected targets, so Codecov can still patch-annotate),
-# and on-demand via workflow_dispatch.
+# Measures line and branch coverage of the complete product tree on main and
+# uploads it to Codecov as the project baseline (the `unittests` flag).
 #
-# Codecov's patch-coverage signal ("X% of changed lines covered") requires the
-# PR head's own coverage upload measured against the main-branch baseline, so we
-# cannot simply drop the pull_request trigger. But the FULL instrumented re-run
-# on every PR was the single worst violator of the 15-minute PR CI budget: the
-# A 40-run CI speed profile measured it at ~21 min median with a 3.3 h tail,
-# ~99% of that being one instrumented re-run of tests CI already runs, whose
-# only unique output is the Codecov patch percentage.
+# Coverage runs nightly and on manual dispatch only. It is the most expensive
+# workflow in the repository, and its result ends in a third-party upload:
+# running it on every pull request and main push let an outage of that service
+# turn unrelated changes red. Pull requests therefore get no coverage run, no
+# Codecov upload and no patch-coverage status or comment (codecov.yml turns
+# both off). Their tests still run uninstrumented in main.yml.
 #
-# So PR coverage is scoped to the affected-target subset via the same bazel-diff
-# mechanism as CI (see determine-targets below); the patch annotation survives
-# on the subset that actually changed. When the diff cannot be scoped to a
-# genuine subset (infra/toolchain changes, bazel-diff failure, missing/empty diff),
-# the reason resolves to a FULL //... target set: running that on a PR is exactly
-# the 21-min re-run we are eliminating, so the PR coverage jobs SKIP instead --
-# the main-push baseline already covers those lines. Only the affected subset
-# (fallback_reason == bazel_diff), the cheap smoke subset for coverage/reporting
-# tooling changes (coverage_smoke), and the explicit ci:full-test opt-in still
-# produce PR coverage. A documentation-only PR uses the established
-# no-instrumentable route because no changed file can contribute executable
-# lines to an LCOV report.
-#
-# Two more skips, both about a genuine incremental subset that has nothing a
-# coverage run could measure. Running anyway builds an empty or absent LCOV
-# report and trips check_lcov_report.py's "no executable line data" guard or the
-# "report was not generated" guard -- a deterministic red no rerun can clear.
-#
-#   * A subset with no TEST target (fallback_reason == no_test_targets):
-#     coverage data comes only from tests that run, and `bazel coverage` reports
-#     an empty test set as an error. Bazel itself is asked which affected
-#     targets are tests, minus the tags the coverage command filters out.
-#   * A subset whose final target list holds nothing HOST-instrumentable
-#     (fallback_reason == no_instrumentable_targets): docs-only, shell/python
-#     tooling, filegroup/flag-only changes, and also anything that is
-#     target_compatible_with a platform this lane does not run, which
-#     `coverage --skip_incompatible_explicit_targets` silently drops.
-#
-# Documentation-only changes are identified before graph analysis from the
-# repository's docs tree and Markdown files. Mixed documentation/tooling
-# changes retain smoke coverage, and any source change proceeds to bazel-diff.
-# Every other no-test/no-instrumentable decision comes from Bazel's own answers
-# (target KINDS from a query, host compatibility from a cquery) and fails
-# closed: any query, filtering, or classifier error runs coverage with the
-# guard intact. The graph-based instrumentability decision is taken exactly
-# once, on the FINAL target list after every narrowing step, because three
-# separate production failures came from guards that each judged a different,
-# wider set than the one coverage actually ran; see the block in
-# determine-targets for that history. Future readers: do not silently re-add a
-# full instrumented PR coverage run, and do not add a fourth graph guard at a
-# fourth pipeline stage -- extend the single decision instead.
+# Every run measures main. A scheduled run always checks out the default
+# branch; a manual dispatch from any other ref fails at its first step rather
+# than uploading a branch report under the main baseline flag.
 on:
-  push:
-    branches: [main]
-  pull_request:
-  workflow_dispatch: # Re-run on demand (e.g. before final merge)
+  schedule:
+    # After the other nightly workflows (06:00 fuzz, 07:00 sanitizers, 07:18
+    # editor Wasm, 07:30 perf, 07:45 hosted nightly; all UTC).
+    - cron: "15 8 * * *"
+  workflow_dispatch:
 
 permissions:
   contents: read
-  pull-requests: read
-  actions: read
 
-concurrency:
-  group: ${{ github.event_name == 'pull_request' && format('pr-{0}-{1}', github.workflow, github.event.pull_request.number) || format('push-{0}-{1}', github.workflow, github.run_id) }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
-
-# A workflow run is made up of one or more jobs that can run sequentially or in parallel
-#
-# Self-hosted coverage uses the same gate as native CI: an enabled
-# SELFHOSTED_LINUX_RUNNER switch admits only same-repository operator PRs.
-# Main coverage and untrusted PR coverage run on hosted Ubuntu. The Codecov
-# upload remains a hosted handoff so its secret stays off the runner.
 jobs:
-  determine-targets:
-    runs-on: ubuntu-24.04
-    if: ${{ github.ref == 'refs/heads/main' || github.event_name == 'pull_request' }}
-    env:
-      BAZEL_DIFF_TAG: "v18.1.0"
-      BAZEL_DIFF_SHA256: "eadec6d0ca0991de78bd9e063bfed993a359ed3bc60e507818077c300b6f58e0"
-      FULL_COVERAGE_TARGETS: "//donner/..."
-      SMOKE_COVERAGE_TARGETS: "//donner/base/..."
-    outputs:
-      fallback: ${{ steps.determine.outputs.fallback }}
-      fallback_reason: ${{ steps.determine.outputs.fallback_reason }}
-      runs_coverage: ${{ steps.determine.outputs.runs_coverage }}
-      targets: ${{ steps.determine.outputs.targets }}
-      target_count: ${{ steps.determine.outputs.target_count }}
-      use_self_hosted_linux: ${{ steps.determine.outputs.use_self_hosted_linux }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-
-      - name: Setup Java
-        uses: actions/setup-java@v5
-        with:
-          distribution: temurin
-          java-version: "17"
-
-      - name: Setup Bazel
-        uses: bazel-contrib/setup-bazel@0.19.0
-        with:
-          bazelisk-cache: true
-          repository-cache: true
-          external-cache: true
-          cache-save: false
-
-      # Transient release-CDN failures (dropped connections, 5xx) have failed
-      # this job outright and cost whole CI round trips. Retry the download as
-      # a whole with backoff, and let curl retry inside each attempt too.
-      - name: Download bazel-diff
-        if: github.event_name == 'pull_request'
-        shell: bash
-        run: |
-          set -euo pipefail
-          url="https://github.com/Tinder/bazel-diff/releases/download/${BAZEL_DIFF_TAG}/bazel-diff_deploy.jar"
-          out="$RUNNER_TEMP/bazel-diff.jar"
-          for delay in 2 4 8 16 0; do
-            if curl -fsSL --retry 4 --retry-delay 2 --retry-all-errors \
-                --connect-timeout 15 --max-time 300 -o "$out" "$url" \
-                && [[ -s "$out" ]]; then
-              if printf '%s  %s\n' "$BAZEL_DIFF_SHA256" "$out" \
-                  | sha256sum --check --status; then
-                exit 0
-              fi
-              echo "bazel-diff digest mismatch for ${BAZEL_DIFF_TAG}; refusing artifact." >&2
-            fi
-            rm -f "$out"
-            if [[ "$delay" -eq 0 ]]; then
-              break
-            fi
-            echo "bazel-diff download failed; retrying in ${delay}s." >&2
-            sleep "$delay"
-          done
-          echo "error: bazel-diff download failed after 5 attempts." >&2
-          exit 1
-
-      - id: pr-meta
-        name: Extract PR base SHA for hash caching
-        if: github.event_name == 'pull_request'
-        shell: bash
-        run: |
-          set -euo pipefail
-          echo "base_sha=$(python3 -c 'import json, os; print(json.load(open(os.environ["GITHUB_EVENT_PATH"], encoding="utf-8")).get("pull_request", {}).get("base", {}).get("sha", ""))')" >> "$GITHUB_OUTPUT"
-
-      # Shares the cache convention (and main-push pre-warm) with main.yml's
-      # determine-targets: base hashes are keyed by (bazel-diff version,
-      # base SHA) and skip half the bazel-diff work on a hit.
-      - name: Cache bazel-diff base hashes
-        if: github.event_name == 'pull_request' && steps.pr-meta.outputs.base_sha != ''
-        uses: actions/cache@v6
-        with:
-          path: ~/.cache/bazel-diff-base-hashes/${{ steps.pr-meta.outputs.base_sha }}.json
-          key: bazel-diff-base-hashes-tt-${{ env.BAZEL_DIFF_TAG }}-${{ steps.pr-meta.outputs.base_sha }}
-
-      - id: determine
-        name: Determine coverage targets
-        shell: bash
-        env:
-          ACTOR: ${{ github.actor }}
-          EVENT_NAME: ${{ github.event_name }}
-          REPOSITORY: ${{ github.repository }}
-          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
-          SELFHOSTED_LINUX_RUNNER: ${{ vars.SELFHOSTED_LINUX_RUNNER }}
-        run: |
-          set -euo pipefail
-
-          diagnostics_dir="$RUNNER_TEMP/coverage-target-selection"
-          mkdir -p "$diagnostics_dir"
-
-          is_renovate="$(
-            python3 - <<'PY'
-          import json
-          import os
-
-          event = json.load(open(os.environ["GITHUB_EVENT_PATH"], encoding="utf-8"))
-          paths = [
-              ("sender", "login"),
-              ("pull_request", "user", "login"),
-              ("head_commit", "author", "username"),
-              ("head_commit", "author", "name"),
-              ("head_commit", "author", "email"),
-              ("head_commit", "committer", "username"),
-              ("head_commit", "committer", "name"),
-              ("head_commit", "committer", "email"),
-              ("pusher", "name"),
-              ("pusher", "email"),
-          ]
-
-          values = []
-          for path in paths:
-              value = event
-              for key in path:
-                  if not isinstance(value, dict):
-                      value = None
-                      break
-                  value = value.get(key)
-              if value:
-                  values.append(str(value))
-
-          print("true" if any("renovate" in value.lower() for value in values) else "false")
-          PY
-          )"
-
-          pr_fields="$(
-            python3 - <<'PY'
-          import json
-          import os
-
-          event = json.load(open(os.environ["GITHUB_EVENT_PATH"], encoding="utf-8"))
-          pr = event.get("pull_request") or {}
-          fields = (
-              (pr.get("user") or {}).get("login", ""),
-              ((pr.get("head") or {}).get("repo") or {}).get("full_name", ""),
-              ((pr.get("base") or {}).get("repo") or {}).get("full_name", ""),
-          )
-          print("\x1f".join(fields))
-          PY
-          )"
-          IFS=$'\x1f' read -r pr_author pr_head_repo pr_base_repo <<< "$pr_fields"
-
-          use_self_hosted_linux=false
-          if [[ "$EVENT_NAME" == "pull_request" && "$REPOSITORY" == "jwmcglynn/donner" &&
-                "$ACTOR" == "jwmcglynn" && "$TRIGGERING_ACTOR" == "jwmcglynn" &&
-                "$pr_author" == "jwmcglynn" && "$pr_head_repo" == "$REPOSITORY" &&
-                "$pr_base_repo" == "$REPOSITORY" &&
-                "$is_renovate" != "true" && "$SELFHOSTED_LINUX_RUNNER" == "true" ]]; then
-            use_self_hosted_linux=true
-          fi
-          echo "use_self_hosted_linux=$use_self_hosted_linux" >> "$GITHUB_OUTPUT"
-          echo "coverage_runner event=$EVENT_NAME self_hosted_linux:$use_self_hosted_linux renovate:$is_renovate pr_author:$pr_author head_repo:$pr_head_repo"
-
-          # Single source of truth for "does a coverage lane actually run?".
-          #
-          # This used to be duplicated as an `if:` expression on each coverage
-          # job, which let the two halves disagree: a reason could mean "cover
-          # everything" here while every job's gate read it as "skip". That is
-          # not hypothetical - `build_defs/*` did exactly that, and the result
-          # was zero coverage on the changes most able to move coverage. The
-          # jobs now gate on `runs_coverage` alone, so the emitting side and the
-          # consuming side cannot drift apart again.
-          #
-          # `no_instrumentable_targets` is the one reason that legitimately
-          # means "nothing to do": the affected set contains no instrumentable
-          # C/C++ at all, so there is nothing a coverage run could measure.
-          # tools/coverage_lane_routing.py pins this table and asserts every
-          # reason emitted by this workflow appears in it.
-          coverage_lane_runs() {
-            local fallback="$1"
-            local reason="$2"
-
-            # Non-PR events (main pushes) always run: that baseline is what
-            # lets PR-side fallbacks be skipped at all.
-            if [[ "$EVENT_NAME" != "pull_request" ]]; then
-              echo true
-              return
-            fi
-            if [[ "$reason" == "no_instrumentable_targets" ]]; then
-              echo false
-              return
-            fi
-            # A genuine incremental subset, the cheap smoke subset, and an
-            # explicit opt-in all run on a PR. Everything else is a full
-            # fallback whose baseline is the main-push run.
-            if [[ "$fallback" == "false" || "$reason" == "coverage_smoke" || "$reason" == "full_test_label" ]]; then
-              echo true
-              return
-            fi
-            echo false
-          }
-
-          emit_targets() {
-            local fallback="$1"
-            local reason="$2"
-            local targets="$3"
-            local count
-            count="$(wc -w <<< "$targets" | tr -d ' ')"
-            local runs
-            runs="$(coverage_lane_runs "$fallback" "$reason")"
-
-            # A non-empty target set that no lane will consume is the exact
-            # shape of the bug this routing replaced. Say so in the log rather
-            # than leaving a run that looks green because it did nothing.
-            if [[ "$runs" == "false" && "$count" != "0" ]]; then
-              echo "::notice::Coverage skipped on this PR (reason=$reason); the main-push baseline covers these $count target(s)."
-            fi
-
-            {
-              echo "fallback=$fallback"
-              echo "fallback_reason=$reason"
-              echo "targets=$targets"
-              echo "target_count=$count"
-              echo "runs_coverage=$runs"
-            } >> "$GITHUB_OUTPUT"
-
-            {
-              echo "fallback=$fallback"
-              echo "fallback_reason=$reason"
-              echo "target_count=$count"
-              echo "runs_coverage=$runs"
-              echo
-              echo "$targets" | tr ' ' '\n'
-            } > "$diagnostics_dir/summary.txt"
-          }
-
-          if [[ "$EVENT_NAME" != "pull_request" ]]; then
-            echo "Non-PR event; using full coverage target set."
-            emit_targets true non_pr "$FULL_COVERAGE_TARGETS"
-            exit 0
-          fi
-
-          eval "$(
-            python3 -c 'import json, os, shlex; event = json.load(open(os.environ["GITHUB_EVENT_PATH"], encoding="utf-8")); pr = event.get("pull_request", {}); labels = [label.get("name", "") for label in pr.get("labels", [])]; values = {"BASE_SHA": pr.get("base", {}).get("sha", ""), "HEAD_SHA": pr.get("head", {}).get("sha", ""), "FORCE_FULL_TEST": "true" if "ci:full-test" in labels else "false"}; print("\n".join(f"{key}={shlex.quote(value)}" for key, value in values.items()))'
-          )"
-
-          if [[ -z "$BASE_SHA" || -z "$HEAD_SHA" ]]; then
-            echo "Missing PR base/head SHA; using full coverage target set."
-            emit_targets true missing_pr_sha "$FULL_COVERAGE_TARGETS"
-            exit 0
-          fi
-
-          if [[ "$FORCE_FULL_TEST" == "true" ]]; then
-            echo "ci:full-test label present; using full coverage target set."
-            emit_targets true full_test_label "$FULL_COVERAGE_TARGETS"
-            exit 0
-          fi
-
-          # Diff from the merge-base, not the base tip. The event payload's
-          # base.sha is the base branch's CURRENT tip, so a two-dot diff
-          # attributes post-fork drift on main (e.g. a workflow file merged
-          # after this branch forked) to the PR, tripping the infra detector
-          # and forcing a spurious full //... fallback. Merge-base semantics
-          # sees only branch-side changes. Fail closed: if merge-base cannot
-          # be computed, keep the base-tip diff (over-inclusion only ever
-          # widens to the fallback path, never skips it).
-          if diff_base="$(git merge-base "$BASE_SHA" "$HEAD_SHA")"; then
-            echo "Using merge-base $diff_base as diff basis."
-          else
-            echo "git merge-base failed; using base tip $BASE_SHA as diff basis."
-            diff_base="$BASE_SHA"
-          fi
-          changed_files="$(git diff --name-only "$diff_base" "$HEAD_SHA")"
-          printf "%s\n" "$changed_files" > "$diagnostics_dir/changed-files.txt"
-
-          if [[ -z "$changed_files" ]]; then
-            echo "No changed files detected; using full coverage target set."
-            emit_targets true no_changed_files "$FULL_COVERAGE_TARGETS"
-            exit 0
-          fi
-
-          should_fallback=false
-          fallback_reason=""
-          docs_only=true
-          smoke_only=true
-          while IFS= read -r path; do
-            [[ -z "$path" ]] && continue
-            case "$path" in
-              # A root Bazel pin change changes analysis and action semantics
-              # for every target, and bazel-diff cannot model that: it hashes
-              # the graph these files DEFINE, so a version pin moving under it
-              # is exactly the case its impact analysis cannot see. Let the
-              # main-push package-pattern baseline validate those.
-              #
-              # `build_defs/*` and `.bazelrc` are deliberately NOT in this list.
-              # bazel-diff hashes .bzl files transitively (that is what
-              # `--includeTargetType` is for), so a rules.bzl change yields a
-              # genuine, correct affected set rather than an unbounded one. They
-              # used to escalate here, and the escalation composed with the
-              # job gate below into a coverage HOLE: this step emitted
-              # `fallback=true, reason=infra_change` meaning "cover everything",
-              # both coverage jobs gate on
-              # `fallback == 'false' || coverage_smoke || full_test_label`, and
-              # so a full fallback on a PR resolved to running NOTHING. "Run
-              # everything" silently became "run nothing" on precisely the
-              # changes most likely to alter coverage. The objection recorded
-              # here about host-incompatible labels is answered by
-              # `coverage --skip_incompatible_explicit_targets` in .bazelrc,
-              # which was added after this comment was written.
-              MODULE.bazel|.bazelversion|WORKSPACE|WORKSPACE.*|third_party/bazel/*)
-                echo "Root Bazel pin change requires full coverage: $path"
-                should_fallback=true
-                fallback_reason="infra_change"
-                break
-                ;;
-            esac
-
-            case "$path" in
-              docs/*|*.md)
-                ;;
-              *)
-                docs_only=false
-                ;;
-            esac
-
-            case "$path" in
-              .bazelrc|.github/workflows/*|.github/actions/*|docs/*|*.md|tools/binary_size.sh|tools/build_docs.sh|tools/coverage.sh|tools/filter_coverage.py|tools/filter_coverage_tests.py|tools/lcov_metrics.py|tools/lcov_metrics_tests.py|tools/generate_build_report.py|tools/generate_build_report_tests.py|tools/coverage_instrumentable_targets.py|tools/coverage_instrumentable_targets_tests.py|tools/coverage_variant_trim.py|tools/coverage_variant_trim_tests.py|tools/coverage_selection_decision_tests.py)
-                ;;
-              *)
-                smoke_only=false
-                ;;
-            esac
-          done <<< "$changed_files"
-
-          if [[ "$should_fallback" == "true" ]]; then
-            emit_targets true "$fallback_reason" "$FULL_COVERAGE_TARGETS"
-            exit 0
-          fi
-
-          if [[ "$docs_only" == "true" ]]; then
-            echo "Documentation-only change; skipping coverage because no changed file is instrumentable."
-            emit_targets true no_instrumentable_targets ""
-            exit 0
-          fi
-
-          if [[ "$smoke_only" == "true" ]]; then
-            echo "Coverage/reporting/tooling-only change; using smoke coverage target set."
-            emit_targets true coverage_smoke "$SMOKE_COVERAGE_TARGETS"
-            exit 0
-          fi
-
-          work_dir="$(mktemp -d)"
-          base_dir="$work_dir/base"
-          head_dir="$work_dir/head"
-          cleanup() {
-            git worktree remove --force "$base_dir" 2>/dev/null || true
-            git worktree remove --force "$head_dir" 2>/dev/null || true
-            rm -rf "$work_dir"
-          }
-          trap cleanup EXIT
-
-          # Hash the current base TIP against the PR's MERGE commit (the
-          # workspace checkout, refs/pull/N/merge), not against HEAD_SHA.
-          # Hashing base-tip vs HEAD_SHA attributes post-fork drift on main to
-          # the PR, inflating the affected set on any branch that has not
-          # rebased (measured up to 126x over-inclusion). In the
-          # tip-vs-merge comparison, drift is
-          # present on BOTH sides, so unchanged-by-the-PR targets hash
-          # identically and drop out; and because the merge graph is the one
-          # hashed, reverse dependencies that exist ONLY in the merge (a dep
-          # edge added on main after the fork onto code this PR touches) are
-          # still caught - the coverage job builds this same merge ref.
-          # Fail closed: if the workspace is not a merge commit (e.g. a
-          # checkout override), it IS the PR head and this degrades to exactly
-          # the old base-tip-vs-head comparison.
-          merge_sha="$(git rev-parse HEAD)"
-          if ! git worktree add --detach "$head_dir" "$merge_sha"; then
-            echo "Failed to check out PR merge commit; using full coverage target set."
-            emit_targets true head_checkout_failed "$FULL_COVERAGE_TARGETS"
-            exit 0
-          fi
-
-          cached_base="$HOME/.cache/bazel-diff-base-hashes/$BASE_SHA.json"
-          if [[ -s "$cached_base" ]]; then
-            echo "Using cached bazel-diff base hashes for $BASE_SHA."
-            cp "$cached_base" "$work_dir/base-hashes.json"
-          else
-            if ! git worktree add --detach "$base_dir" "$BASE_SHA"; then
-              echo "Failed to check out PR base; using full coverage target set."
-              emit_targets true base_checkout_failed "$FULL_COVERAGE_TARGETS"
-              exit 0
-            fi
-
-            if ! java -jar "$RUNNER_TEMP/bazel-diff.jar" generate-hashes \
-            --includeTargetType \
-              -w "$base_dir" \
-              -b bazelisk \
-              "$work_dir/base-hashes.json"; then
-              echo "bazel-diff failed while hashing base; using full coverage target set."
-              emit_targets true base_hash_failed "$FULL_COVERAGE_TARGETS"
-              exit 0
-            fi
-
-            # Save for subsequent pushes to this PR (post-job cache step).
-            mkdir -p "$(dirname "$cached_base")"
-            cp "$work_dir/base-hashes.json" "$cached_base"
-          fi
-
-          if ! java -jar "$RUNNER_TEMP/bazel-diff.jar" generate-hashes \
-            --includeTargetType \
-            -w "$head_dir" \
-            -b bazelisk \
-            "$work_dir/head-hashes.json"; then
-            echo "bazel-diff failed while hashing head; using full coverage target set."
-            emit_targets true head_hash_failed "$FULL_COVERAGE_TARGETS"
-            exit 0
-          fi
-
-          if ! java -jar "$RUNNER_TEMP/bazel-diff.jar" get-impacted-targets \
-            -tt Rule \
-            -w "$head_dir" \
-            -b bazelisk \
-            -sh "$work_dir/base-hashes.json" \
-            -fh "$work_dir/head-hashes.json" \
-            -o "$work_dir/affected.txt"; then
-            echo "bazel-diff failed while determining impacted targets; using full coverage target set."
-            emit_targets true impacted_targets_failed "$FULL_COVERAGE_TARGETS"
-            exit 0
-          fi
-
-          cp "$work_dir/affected.txt" "$diagnostics_dir/affected-targets.txt"
-
-          affected="$(
-            python3 -c 'import pathlib, sys; labels = [line.strip() for line in pathlib.Path(sys.argv[1]).read_text(encoding="utf-8").splitlines() if line.strip()]; print(" ".join(labels))' "$work_dir/affected.txt"
-          )"
-
-          if [[ -z "$affected" ]]; then
-            echo "bazel-diff produced no affected targets; using full coverage target set."
-            emit_targets true no_affected_targets "$FULL_COVERAGE_TARGETS"
-            exit 0
-          fi
-
-          # ---------------------------------------------------------------
-          # Narrow to the FINAL coverage target list, then decide ONCE on it.
-          #
-          # This used to be three separate guards bolted on at three different
-          # points of the pipeline, and each one answered a question about a
-          # different set than the one coverage would actually run. Three
-          # production failures came out of that, all with the same ending: a
-          # subset sailed through the gates, `bazel coverage` dropped or found
-          # nothing to measure, and the lane died on an empty/absent report
-          # that no rerun could clear.
-          #
-          #   1. A subset whose surviving tests were only a py_test passed an
-          #      instrumentability check taken on the PRE-narrowing set, where
-          #      a manual-tagged cc_test (which the coverage command's
-          #      --test_tag_filters then removed) made it look instrumentable.
-          #   2. A subset of macOS-only Metal cc_tests passed a
-          #      host-compatibility recheck that was scoped to cc_binary-only
-          #      sets, on the assumption that a cc_test is always host code;
-          #      --skip_incompatible_explicit_targets dropped them all on the
-          #      Linux lane.
-          #   3. A subset of two macOS-only playwright wrapper tests passed
-          #      BOTH of the fixes for 1 and 2, because the two fixes ran on
-          #      two different sets and neither ran both criteria on the final
-          #      one. The kind query reported `js_test` (an unknown kind, which
-          #      fails open to instrumentable by design) plus a
-          #      `directory_path` __entry_point helper. The host-compatibility
-          #      cquery ran and was CORRECT - both js_tests came back
-          #      incompatible - but it was applied to the pre-narrowing set,
-          #      where the host-compatible non-test helper kept
-          #      instrumentable_present true. The later surviving-set recheck
-          #      then re-asked only the KIND question about the two js_tests
-          #      and threw the host-compatibility answer away.
-          #
-          # The lesson is not "add a fourth guard". It is that a decision is
-          # only sound on the set it is about. So: narrow first (tests only ->
-          # tag-filtered -> variant-trimmed), then ask both questions - rule
-          # kind AND host compatibility - about exactly that list, in one
-          # place, with the host-compatibility cquery run unconditionally
-          # rather than gated on a partial earlier verdict.
-          #
-          # Fail-closed for skipping, fail-open for running, exactly as the
-          # three guards individually intended: any query, filtering, or
-          # classifier failure keeps the coverage run with the guard intact.
-          # Only a positively proven all-non-instrumentable-or-host-
-          # incompatible final list skips, and it skips with the established
-          # `no_instrumentable_targets` reason.
-          # ---------------------------------------------------------------
-
-          # The alias-resolved affected set, shared by the test-presence query
-          # and by the final decision. Resolve aliases to their `actual`
-          # targets before classifying: an alias can point at an instrumentable
-          # cc_* target (for example the default alias donner_variant_cc_test
-          # emits, whose actual is a cc_test), so an alias-only affected set
-          # must be judged by what it resolves to, not by the `alias` kind. An
-          # alias that cannot be resolved stays an `alias` kind and the
-          # classifier treats it as instrumentable (fail closed).
-          # Keep it single-quoted: `$a` is a bazel query variable, not a shell
-          # one.
-          # shellcheck disable=SC2016
-          resolved_expr="$(printf 'let a = set(%s) in ($a - kind("^alias rule$", $a)) + labels("actual", kind("^alias rule$", $a))' "$(tr '\n' ' ' < "$work_dir/affected.txt")")"
-          kind_query_file="$work_dir/affected-query.txt"
-          printf '%s\n' "$resolved_expr" > "$kind_query_file"
-          label_kind_file="$work_dir/affected-label-kind.txt"
-          kind_query_ok=true
-          if ( cd "$head_dir" && bazelisk query --query_file="$kind_query_file" \
-              --output label_kind --keep_going ) > "$label_kind_file" 2> "$diagnostics_dir/kind-query.log"; then
-            cp "$label_kind_file" "$diagnostics_dir/affected-label-kind.txt"
-          else
-            kind_query_ok=false
-            echo "Kind query failed; running coverage on affected subset (guard intact)."
-            cat "$diagnostics_dir/kind-query.log" || true
-          fi
-
-          # Narrowing 1: tests only, minus the tags the coverage command itself
-          # filters out. Instrumentable code is not enough: coverage data comes
-          # only from tests that RUN, so a subset holding a library or tool
-          # whose test reverse dependencies are not in the set has nothing to
-          # measure, and `bazel coverage` reports that empty test set as an
-          # error and writes no report. Ask bazel which affected targets are
-          # tests, so test_suite expansion and rule kinds this workflow does not
-          # enumerate are handled by definition rather than by a name heuristic,
-          # and subtract the tags the coverage command filters out
-          # (--test_tag_filters=-fuzz_target,-lint,-manual,-perf,-ci-remote-gpu
-          # in .bazelrc),
-          # because a subset whose only tests carry those tags leaves the
-          # coverage run with the very empty test set this narrowing exists to
-          # keep it out of. `attr` matches its pattern against the string form
-          # of the tag LIST ("[fuzz_target, manual]"), not against each element,
-          # so the tag names are bracketed by the list punctuation rather than
-          # anchored with ^$. Fail closed: a query failure keeps the wider set
-          # and the coverage run.
-          if [[ "$kind_query_ok" == "true" ]]; then
-            test_query_file="$work_dir/affected-tests-query.txt"
-            printf 'tests(%s) except attr("tags", "[\[ ](fuzz_target|lint|manual|perf|ci-remote-gpu)[,\]]", tests(%s))\n' \
-              "$resolved_expr" "$resolved_expr" > "$test_query_file"
-            affected_tests_file="$work_dir/affected-tests.txt"
-            if ( cd "$head_dir" && bazelisk query --query_file="$test_query_file" \
-                --keep_going ) > "$affected_tests_file" 2> "$diagnostics_dir/test-query.log"; then
-              cp "$affected_tests_file" "$diagnostics_dir/affected-tests.txt"
-              if [[ ! -s "$affected_tests_file" ]]; then
-                echo "Affected subset contains no test targets; skipping PR coverage."
-                emit_targets true no_test_targets ""
-                exit 0
-              fi
-              affected="$(
-                python3 -c 'import pathlib, sys; labels = [line.strip() for line in pathlib.Path(sys.argv[1]).read_text(encoding="utf-8").splitlines() if line.strip()]; print(" ".join(labels))' "$affected_tests_file"
-              )"
-            else
-              echo "Test-presence query failed; running coverage on affected subset (guard intact)."
-              cat "$diagnostics_dir/test-query.log" || true
-            fi
-          fi
-
-          # Representative-variant trim (narrowing 2):
-          # PR patch coverage runs one representative variant per test - the
-          # base/default target - and drops generated variant wrappers only
-          # when their ordinary base or named representative is in the set.
-          # The wrappers
-          # compile the SAME sources under different backend/feature flags, so
-          # for patch coverage they are redundant parameterizations whose
-          # unique signal (backend/feature-gated lines) stays covered by the
-          # main-push FULL multi-variant baseline. Only targets whose rule
-          # kind (from the label_kind query above) is the generated
-          # _donner_multi_transitioned_test wrapper are ever dropped, so
-          # handwritten targets that merely share the suffix (e.g. a
-          # cc_library named renderer_geode) are untouched. Fail closed: tool
-          # failure, a failed kind query, or an unknown kind keeps the
-          # untrimmed set / target; variant-only targets (no base or named
-          # representative sibling) are never dropped. The full contract is in
-          # tools/coverage_variant_trim.py.
-          # Intentional word splitting: each Bazel label becomes one line.
-          # shellcheck disable=SC2086
-          printf '%s\n' $affected > "$work_dir/affected-pretrim.txt"
-          if trimmed="$(python3 tools/coverage_variant_trim.py \
-              --affected-file "$work_dir/affected-pretrim.txt" \
-              --label-kind-file "$label_kind_file" \
-              --dropped-out "$diagnostics_dir/variant-trim-dropped.txt" 2> "$diagnostics_dir/variant-trim.log")"; then
-            cat "$diagnostics_dir/variant-trim.log" || true
-            if [[ -n "$trimmed" ]]; then
-              affected="$(tr '\n' ' ' <<< "$trimmed" | sed 's/ $//')"
-            else
-              echo "Variant trim produced an empty set; keeping untrimmed affected set (guard intact)."
-            fi
-          else
-            echo "Variant trim tool errored; keeping untrimmed affected set (guard intact)."
-            cat "$diagnostics_dir/variant-trim.log" || true
-          fi
-
-          # The single decision point. Prints `skip` only when the final list is
-          # PROVEN to have nothing a coverage run could measure; prints `run`
-          # for every other outcome, including every failure. Progress goes to
-          # stderr so stdout carries the verdict alone.
-          #
-          # "Instrumentable" means HOST-instrumentable. A wasm bridge shim is a
-          # plain cc_binary by kind, a platform-gated backend test is a plain
-          # cc_test, and an unknown wrapper kind is conservatively retained.
-          # Any of them can be target_compatible_with a platform this lane does
-          # not run, and
-          # `coverage --skip_incompatible_explicit_targets` (set in --config=ci)
-          # then silently drops it from the build so the run produces an empty
-          # report. So the cquery runs on the whole final list, always, and its
-          # answer is handed to the same classifier call that judges kinds.
-          # Diagnostics: final-label-kind.txt plus final-targets.txt name
-          # exactly what was classified.
-          # BEGIN coverage final-list decision (extracted by tools/coverage_selection_decision_tests.py)
-          coverage_final_decision() {
-            local final_file="$1"
-            local scratch_dir="$2"
-            local diag_dir="$3"
-            local repo_dir="$4"
-
-            local compat_file="$scratch_dir/host-compat.txt"
-            local incompatible_file="$scratch_dir/host-incompatible.txt"
-            local final_kinds_file="$scratch_dir/final-label-kind.txt"
-            : > "$incompatible_file"
-            local labels
-            labels="$(tr '\n' ' ' < "$final_file")"
-            # tests() can expand a test_suite into members absent from the earlier affected-set
-            # kind query. Classify the final runnable list itself, or missing kinds force an
-            # empty C++ coverage run for host-compatible analysis and scripting tests.
-            if ( cd "$repo_dir" && bazelisk query "set($labels)" \
-                --output=label_kind --keep_going \
-                ) > "$final_kinds_file" 2> "$diag_dir/final-kind-query.log"; then
-              cp "$final_kinds_file" "$diag_dir/final-label-kind.txt" || true
-            else
-              echo "Final rule-kind query failed; running coverage (guard intact)." >&2
-              cat "$diag_dir/final-kind-query.log" >&2 || true
-              echo run
-              return
-            fi
-            # A transitioned test can wrap C++ or a generated dependency audit.
-            # Exempt only a shell test whose sole source is the configured-audit
-            # checker and which has no data or deps to execute. Unknown shell
-            # wrappers still keep C++ coverage enabled.
-            local wrapped_audits_file="$scratch_dir/wrapped-dependency-audits.txt"
-            : > "$wrapped_audits_file"
-            local wrapper dep_kind_line dep_label src_kind_line data_kind_line deps_kind_line
-            while IFS= read -r wrapper; do
-              if ! dep_kind_line="$(
-                cd "$repo_dir" && bazelisk query "labels(dep, $wrapper)" \
-                  --output=label_kind 2>> "$diag_dir/wrapper-dep-kind-query.log"
-              )"; then
-                continue
-              fi
-              if [[ "$dep_kind_line" != "sh_test rule //"* ||
-                    "$dep_kind_line" == *$'\n'* ]]; then
-                continue
-              fi
-              dep_label="${dep_kind_line#sh_test rule }"
-              if src_kind_line="$(
-                  cd "$repo_dir" && bazelisk query "labels(srcs, $dep_label)" \
-                    --output=label_kind 2>> "$diag_dir/wrapper-dep-kind-query.log"
-                )" && data_kind_line="$(
-                  cd "$repo_dir" && bazelisk query "labels(data, $dep_label)" \
-                    --output=label_kind 2>> "$diag_dir/wrapper-dep-kind-query.log"
-                )" && deps_kind_line="$(
-                  cd "$repo_dir" && bazelisk query "labels(deps, $dep_label)" \
-                    --output=label_kind 2>> "$diag_dir/wrapper-dep-kind-query.log"
-                )" && [[ "$src_kind_line" == "_configured_dependency_audit rule //"* &&
-                       "$src_kind_line" != *$'\n'* &&
-                       -z "$data_kind_line" && -z "$deps_kind_line" ]]; then
-                printf '%s\n' "$wrapper" >> "$wrapped_audits_file"
-              fi
-            done < <(awk '$1 == "_donner_multi_transitioned_test" && $2 == "rule" {print $3}' \
-              "$final_kinds_file")
-            cp "$wrapped_audits_file" "$diag_dir/wrapped-dependency-audits.txt" || true
-            if ( cd "$repo_dir" && bazelisk cquery "set($labels)" \
-                --output=starlark \
-                --starlark:expr='"{} {}".format(target.label, "HOST_INCOMPATIBLE" if "IncompatiblePlatformProvider" in providers(target) else "HOST_COMPATIBLE")' \
-                ) > "$compat_file" 2> "$diag_dir/compat-query.log"; then
-              cp "$compat_file" "$diag_dir/host-compat.txt" || true
-              grep ' HOST_INCOMPATIBLE$' "$compat_file" \
-                | sed 's/ HOST_INCOMPATIBLE$//' > "$incompatible_file" || true
-              cp "$incompatible_file" "$diag_dir/host-incompatible.txt" || true
-            else
-              echo "Host-compatibility cquery failed; running coverage (guard intact)." >&2
-              cat "$diag_dir/compat-query.log" >&2 || true
-              echo run
-              return
-            fi
-
-            local decision
-            if ! decision="$(python3 tools/coverage_instrumentable_targets.py \
-                --label-kind-file "$final_kinds_file" \
-                --restrict-to-file "$final_file" \
-                --host-incompatible-file "$incompatible_file" \
-                --wrapped-dependency-audits-file "$wrapped_audits_file" \
-                2>> "$diag_dir/instrumentability.log")"; then
-              echo "Final-list instrumentability decision errored; running coverage (guard intact)." >&2
-              tail -n 5 "$diag_dir/instrumentability.log" >&2 || true
-              echo run
-              return
-            fi
-            if [[ "$decision" == "instrumentable_present=false" ]]; then
-              echo skip
-              return
-            fi
-            echo run
-          }
-          # END coverage final-list decision
-
-          final_file="$work_dir/final-targets.txt"
-          # Intentional word splitting: each Bazel label becomes one line.
-          # shellcheck disable=SC2086
-          printf '%s\n' $affected > "$final_file"
-          cp "$final_file" "$diagnostics_dir/final-targets.txt"
-          if [[ "$kind_query_ok" == "true" ]]; then
-            final_decision="$(coverage_final_decision \
-              "$final_file" "$work_dir" "$diagnostics_dir" "$head_dir")"
-            cat "$diagnostics_dir/instrumentability.log" 2> /dev/null || true
-            if [[ "$final_decision" == "skip" ]]; then
-              echo "Final coverage target list has nothing host-instrumentable to measure; skipping PR coverage."
-              emit_targets true no_instrumentable_targets ""
-              exit 0
-            fi
-            echo "Final coverage target list includes host-instrumentable targets; running coverage."
-          fi
-
-          emit_targets false bazel_diff "$affected"
-
-      - name: Upload target selection artifact
-        uses: actions/upload-artifact@v7
-        if: always()
-        with:
-          name: coverage-target-selection-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/coverage-target-selection
-          if-no-files-found: ignore
-          retention-days: 3
-
+  # Produces the report and hands it to upload-coverage as an artifact. The
+  # Codecov upload lives in that separate job so a failed upload can be re-run
+  # on its own ("Re-run failed jobs") in seconds with the report this job
+  # already produced, instead of repeating the whole instrumented build.
   build:
     runs-on: ubuntu-24.04
-    needs: determine-targets
-    # Hosted PR coverage fallback for untrusted actors, self-hosted
-    # unavailability, or ci:full-test fanout. On PRs it runs ONLY when the target
-    # set is a genuine incremental subset (fallback == false => bazel_diff), the
-    # cheap smoke subset, or an explicit ci:full-test opt-in. A full //... fallback
-    # on a PR (infra change, bazel-diff failure, empty diff) is SKIPPED here -- the
-    # main-push baseline covers those lines under the 15-minute PR budget.
-    if: ${{ needs.determine-targets.outputs.use_self_hosted_linux != 'true' && needs.determine-targets.outputs.runs_coverage == 'true' }}
+    env:
+      # The complete product tree. GPU implementation files enter the report
+      # as SVG and editor dependencies, so their owning tests must run too; an
+      # enumerated package list once silently omitted the entire GPU suite.
+      COVERAGE_TARGETS: "//donner/..."
+    outputs:
+      report_artifact_id: ${{ steps.upload_report.outputs.artifact-id }}
 
     steps:
+      - name: Require main
+        if: github.ref != 'refs/heads/main'
+        shell: bash
+        run: |
+          echo "::error::Coverage measures the main baseline; dispatch it on main, not $GITHUB_REF."
+          exit 1
+
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
@@ -859,7 +89,7 @@ jobs:
           # disk cache duplicates enough of that data to fill hosted runners.
           repository-cache: true
           external-cache: true
-          cache-save: ${{ github.ref == 'refs/heads/main' }}
+          cache-save: true
 
       - name: Install system dependencies
         run: |
@@ -874,14 +104,9 @@ jobs:
       - id: coverage
         name: Generate coverage
         shell: bash
-        env:
-          COVERAGE_SELECTION_REASON: ${{ needs.determine-targets.outputs.fallback_reason }}
-          COVERAGE_SELECTION_PATTERNS: ${{ needs.determine-targets.outputs.targets }}
-          COVERAGE_SELECTION_COUNT: ${{ needs.determine-targets.outputs.target_count }}
         run: |
           set -euo pipefail
-          read -r -a TARGETS <<< "$COVERAGE_SELECTION_PATTERNS"
-          echo "Coverage target selection: reason=$COVERAGE_SELECTION_REASON count=$COVERAGE_SELECTION_COUNT"
+          read -r -a TARGETS <<< "$COVERAGE_TARGETS"
           printf "Coverage targets:\n"
           printf "  %s\n" "${TARGETS[@]}"
           echo "::group::Disk before coverage"
@@ -892,34 +117,25 @@ jobs:
           df -h / "$GITHUB_WORKSPACE" "$RUNNER_TEMP"
           echo "::endgroup::"
 
-          # Publish the report outcome so every consumer of the coverage
-          # artifact honours a legitimate skip. tools/coverage.sh writes this
-          # marker when the build event stream proves every selected target was
-          # dropped as incompatible with this lane's platform: there is no
-          # report, the lane is satisfied, and the upload steps below must not
-          # fail looking for a file that was correctly never written.
+          # tools/coverage.sh exits 0 without a report when every selected
+          # target was skipped as incompatible with the host platform. That is
+          # a legitimate local outcome for explicit labels, but the complete
+          # product tree on this runner always has compatible tests, so here it
+          # means a classification regression. Fail rather than finish green
+          # with no baseline uploaded.
           if [[ -f coverage-report/coverage_skipped ]]; then
-            echo "report_written=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::Coverage produced no report: every selected target was skipped as incompatible with this lane's platform. The coverage uploads are skipped."
-          else
-            echo "report_written=true" >> "$GITHUB_OUTPUT"
+            echo "::error::Coverage produced no report: every selected target was skipped as incompatible with this runner. The complete product tree must produce a report."
+            exit 1
           fi
 
       - name: Generate coverage proof
-        if: steps.coverage.outputs.report_written == 'true'
         shell: bash
-        env:
-          COVERAGE_SELECTION_REASON: ${{ needs.determine-targets.outputs.fallback_reason }}
-          COVERAGE_SELECTION_PATTERNS: ${{ needs.determine-targets.outputs.targets }}
-          COVERAGE_SELECTION_COUNT: ${{ needs.determine-targets.outputs.target_count }}
         run: |
           set -euo pipefail
           python3 tools/coverage_run_proof.py \
             --bep coverage-report/bep.json \
             --report coverage-report/filtered_report.dat \
-            --reason "$COVERAGE_SELECTION_REASON" \
-            --patterns "$COVERAGE_SELECTION_PATTERNS" \
-            --expected-pattern-count "$COVERAGE_SELECTION_COUNT" \
+            --patterns "$COVERAGE_TARGETS" \
             --event "$GITHUB_EVENT_NAME" --ref "$GITHUB_REF" --revision "$GITHUB_SHA" \
             --output coverage-report/coverage-proof.json \
             --step-summary "$GITHUB_STEP_SUMMARY"
@@ -940,7 +156,6 @@ jobs:
           if-no-files-found: ignore
 
       - name: Upload coverage proof
-        if: steps.coverage.outputs.report_written == 'true'
         uses: actions/upload-artifact@v7
         with:
           name: coverage-proof-${{ github.job }}-${{ github.run_attempt }}
@@ -948,280 +163,45 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-      - name: Upload coverage to Codecov
-        if: steps.coverage.outputs.report_written == 'true'
-        uses: codecov/codecov-action@v7
-        with:
-          token: ${{ secrets.CODECOV_TOKEN }}
-          files: ./coverage-report/filtered_report.dat
-          disable_search: true
-          flags: ${{ github.ref == 'refs/heads/main' && 'unittests' || 'pr-incremental' }}
-          fail_ci_if_error: true
-          verbose: false
-
-  # Wait for a self-hosted pool slot on a hosted runner so queued older work can
-  # still acquire the constrained self-hosted runner pool. Waiting inside the
-  # heavy job can deadlock when newer runs occupy every runner while the oldest
-  # lane remains queued.
-  #
-  # Coverage shares one pool with CI's Linux lane, sized to the runner fleet,
-  # instead of holding a private slot. A per-lane slot made coverage a 1-wide
-  # FIFO: a burst of coverage runs serialized into a multi-hour backlog while
-  # the rest of the fleet sat idle because no Linux work was queued.
-  coverage-self-hosted-turnstile:
-    runs-on: ubuntu-24.04
-    needs: determine-targets
-    if: ${{ needs.determine-targets.outputs.use_self_hosted_linux == 'true' && needs.determine-targets.outputs.runs_coverage == 'true' }}
-    timeout-minutes: 165
-    steps:
-      - name: Checkout turnstile action
-        uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-
-      - name: Wait for coverage self-hosted lane
-        uses: ./.github/actions/re-turnstile
-        with:
-          lane: coverage-self-hosted
-          pool: linux-self-hosted coverage-self-hosted
-          pool-workflows: main.yml coverage.yml
-          capacity: "4"
-          token: ${{ github.token }}
-          timeout-minutes: "150"
-
-  coverage-self-hosted:
-    runs-on: [self-hosted, linux, arm64]
-    needs: [determine-targets, coverage-self-hosted-turnstile]
-    # here on PRs, plus explicit ci:full-test opt-ins. A full //... fallback is
-    # skipped on PRs (the hosted main-push baseline covers it). This lane
-    # runs selected coverage only for trusted operator PRs.
-    if: ${{ needs.determine-targets.outputs.use_self_hosted_linux == 'true' && needs.determine-targets.outputs.runs_coverage == 'true' }}
-    # Coverage healthy median is ~21 min. This budget starts only after the
-    # hosted turnstile admits this job, so queued work does not consume it or
-    # occupy the constrained self-hosted runner pool.
-    # RE-degradation fast-fail is unchanged and lives at the Bazel layer (no
-    # local fallback + --remote_timeout=60s below), so a dead/degraded backend
-    # still fails in about a minute regardless of this backstop; the CPU-capped
-    # 2-3 h local re-run cannot recur because local fallback is disabled.
-    timeout-minutes: 210
-    outputs:
-      report_written: ${{ steps.coverage.outputs.report_written }}
-    # Admission control on the shared remote-execution backend. Both
-    # self-hosted lanes execute on a backend that an interactive development
-    # host also uses with priority, so unbounded concurrent instrumented builds
-    # oversubscribe it and crawl into the timeout (measured). Admission is
-    # enforced by the hosted re-turnstile prerequisite above, NOT by a GitHub
-    # concurrency group. A concurrency group caps the queue at one pending run
-    # and cancels any older pending run when a third concurrent run arrives, so
-    # a parallel-PR burst drops pending runs and self-clogs. The turnstile instead
-    # holds each run until its turn, FIFO, so N concurrent runs all execute in
-    # submission order and none are cancelled.
-    #
-    # The bound is a POOL shared with CI's linux-self-hosted lane, sized to the
-    # runner fleet, not one slot per lane. Per-lane slots capped the fleet at
-    # two jobs and made a coverage burst serialize behind itself while Linux
-    # capacity sat idle. Any mix of Linux and coverage jobs may hold the pool's
-    # slots; the ceiling on backend demand is the pool size, which is what the
-    # oversubscription measurement actually constrains.
-    env:
-      # RE-availability SLA: do NOT fall back to local execution when remote
-      # execution is unavailable or degraded. A CPU-capped self-hosted runner
-      # executing an instrumented coverage build
-      # locally is exactly the measured 2-3 h tail; fast-fail and let the
-      # wedge-watch + rerun handle RE recovery instead. --remote_timeout
-      # stays at 60s (not 5s): a healthy-but-busy endpoint can legitimately take
-      # >5s to accept large coverage uploads under a multi-job burst (observed
-      # 2026-07-02 as DEADLINE_EXCEEDED upload failures); 60s fails fast enough
-      # on a dead endpoint while tolerating a loaded one.
-      BAZEL_SELF_HOSTED_REMOTE_FALLBACK_FLAGS: "--strategy=TestRunner=remote --remote_local_fallback=false --incompatible_remote_local_fallback_for_remote_cache=false --remote_timeout=60s"
-      # The runner-owned Bazel rc already maps the `coverage` command to
-      # `--config=ci`. Do not repeat that config here: a repeated expansion
-      # duplicates its remote execution properties and Bazel rejects the
-      # command before analysis. The `fetch` command below still needs its
-      # explicit config because it does not inherit `coverage` options.
-      DONNER_COVERAGE_BAZEL_FLAGS: "--strategy=TestRunner=remote --remote_local_fallback=false --incompatible_remote_local_fallback_for_remote_cache=false --remote_timeout=60s --test_tag_filters=-fuzz_target,-lint,-manual,-perf,-local-gpu-isolated"
-
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-
-      - name: Sync Bazel toolchain
-        # Keep this in sync with CI's self-hosted Linux cleanup (main.yml).
-        # Surgically reset ONLY @local_config_cc (stale NixOS include paths)
-        # instead of `bazelisk clean --expunge`, which also wiped the
-        # persistent LLVM toolchain and forced a ~5-minute re-fetch every run.
-        shell: bash
-        run: |
-          set -euo pipefail
-          output_base=$(bazelisk info output_base)
-          bazelisk shutdown
-          find "$output_base/external" -maxdepth 1 -name '*local_config_cc*' \
-            -print -exec rm -rf {} + 2>/dev/null || true
-
-      - name: Fetch Bazel LLVM toolchain
-        shell: bash
-        env:
-          COVERAGE_SELECTION_PATTERNS: ${{ needs.determine-targets.outputs.targets }}
-          COVERAGE_SELECTION_REASON: ${{ needs.determine-targets.outputs.fallback_reason }}
-          COVERAGE_SELECTION_COUNT: ${{ needs.determine-targets.outputs.target_count }}
-        run: |
-          set -euo pipefail
-          read -r -a TARGETS <<< "$COVERAGE_SELECTION_PATTERNS"
-          echo "Coverage target selection: reason=$COVERAGE_SELECTION_REASON count=$COVERAGE_SELECTION_COUNT"
-          printf "Coverage targets:\n"
-          printf "  %s\n" "${TARGETS[@]}"
-
-          fetch_llvm() {
-            bazelisk fetch --config=ci --config=latest_llvm "${TARGETS[@]}"
-          }
-
-          cleanup_partial_llvm_fetch() {
-            local output_base
-            output_base=$(bazelisk info output_base 2>/dev/null || true)
-            bazelisk shutdown || true
-
-            echo "::group::Bazel disk state before LLVM fetch retry"
-            df -h /var/cache/bazel "$GITHUB_WORKSPACE" || true
-            if [[ -n "$output_base" && -d "$output_base/external" ]]; then
-              du -sh "$output_base"/external/*llvm_toolchain_linux_aarch64_llvm* 2>/dev/null || true
-            fi
-            echo "::endgroup::"
-
-            if [[ -n "$output_base" && -d "$output_base/external" ]]; then
-              find "$output_base/external" -maxdepth 1 -name '*llvm_toolchain_linux_aarch64_llvm*' \
-                -print -exec rm -rf {} + 2>/dev/null || true
-            fi
-          }
-
-          if ! fetch_llvm; then
-            cleanup_partial_llvm_fetch
-            fetch_llvm
-          fi
-          # NOTE: no `bazelisk shutdown` — Generate coverage reuses this
-          # server's loading/analysis instead of paying a fresh JVM start.
-
-      - id: coverage
-        name: Generate coverage
-        shell: bash
-        env:
-          COVERAGE_SELECTION_REASON: ${{ needs.determine-targets.outputs.fallback_reason }}
-          COVERAGE_SELECTION_PATTERNS: ${{ needs.determine-targets.outputs.targets }}
-        run: |
-          set -euo pipefail
-          export DONNER_CI_DIAGNOSTICS_DIR
-          DONNER_CI_DIAGNOSTICS_DIR="$(mktemp -d "$RUNNER_TEMP/donner-ci-diagnostics.XXXXXX")"
-          echo "DONNER_CI_DIAGNOSTICS_DIR=$DONNER_CI_DIAGNOSTICS_DIR" >> "$GITHUB_ENV"
-          echo "diagnostics_dir=$DONNER_CI_DIAGNOSTICS_DIR" >> "$GITHUB_OUTPUT"
-          read -r -a TARGETS <<< "$COVERAGE_SELECTION_PATTERNS"
-          if ! mapped_targets="$(python3 tools/ci_remote_gpu_targets.py "${TARGETS[@]}")"; then
-            echo "::error::Failed to select remote GPU coverage targets."
-            exit 1
-          fi
-          if [[ -z "${mapped_targets// /}" ]]; then
-            echo "::error::Remote GPU coverage target selection is empty."
-            exit 1
-          fi
-          read -r -a TARGETS <<< "$mapped_targets"
-          echo "executed_targets=$mapped_targets" >> "$GITHUB_OUTPUT"
-          echo "executed_target_count=${#TARGETS[@]}" >> "$GITHUB_OUTPUT"
-          echo "Coverage target selection: reason=$COVERAGE_SELECTION_REASON count=${#TARGETS[@]}"
-          tools/coverage.sh --quiet --no-html "${TARGETS[@]}"
-
-          # Publish the report outcome so every consumer of the coverage
-          # artifact honours a legitimate skip. tools/coverage.sh writes this
-          # marker when the build event stream proves every selected target was
-          # dropped as incompatible with this lane's platform: there is no
-          # report, the lane is satisfied, and the upload steps below must not
-          # fail looking for a file that was correctly never written.
-          if [[ -f coverage-report/coverage_skipped ]]; then
-            echo "report_written=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::Coverage produced no report: every selected target was skipped as incompatible with this lane's platform. The coverage uploads are skipped."
-          else
-            echo "report_written=true" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Generate coverage proof
-        if: steps.coverage.outputs.report_written == 'true'
-        shell: bash
-        env:
-          COVERAGE_SELECTION_REASON: ${{ needs.determine-targets.outputs.fallback_reason }}
-          COVERAGE_EXECUTED_PATTERNS: ${{ steps.coverage.outputs.executed_targets }}
-          COVERAGE_EXECUTED_COUNT: ${{ steps.coverage.outputs.executed_target_count }}
-        run: |
-          set -euo pipefail
-          python3 tools/coverage_run_proof.py \
-            --bep "$DONNER_CI_DIAGNOSTICS_DIR/coverage/bep.json" \
-            --report coverage-report/filtered_report.dat \
-            --reason "$COVERAGE_SELECTION_REASON" \
-            --patterns "$COVERAGE_EXECUTED_PATTERNS" \
-            --expected-pattern-count "$COVERAGE_EXECUTED_COUNT" \
-            --event "$GITHUB_EVENT_NAME" --ref "$GITHUB_REF" --revision "$GITHUB_SHA" \
-            --output coverage-report/coverage-proof.json \
-            --step-summary "$GITHUB_STEP_SUMMARY"
-
-      # if-no-files-found stays `error`: gated on report_written, a missing
-      # report here is a real defect, not a legitimate skip.
-      - name: Upload coverage artifact
-        if: steps.coverage.outputs.report_written == 'true'
+      # The handoff to upload-coverage, which downloads it by the artifact id
+      # this step outputs, never by name. A re-run of only the upload job
+      # reuses this job's outputs and so fetches the exact report this attempt
+      # built, and a later attempt that uploads its own report hands over its
+      # own id. The upload action refuses a second artifact with the same name
+      # in a run unless told to overwrite; whether an earlier attempt's
+      # artifact counts is not documented, so this is the job's last step: an
+      # attempt that fails before it has uploaded nothing under this name.
+      # if-no-files-found stays `error`: every earlier step succeeded, so a
+      # missing report is a real defect. Three days lets a re-run of the upload
+      # outlast a short outage of the upload service; the next nightly run
+      # supersedes it.
+      - id: upload_report
+        name: Upload coverage report
         uses: actions/upload-artifact@v7
         with:
-          name: self-hosted-coverage-report
+          name: coverage-report
           path: coverage-report/filtered_report.dat
           if-no-files-found: error
-          retention-days: 1
-
-      - name: Upload coverage proof
-        if: steps.coverage.outputs.report_written == 'true'
-        uses: actions/upload-artifact@v7
-        with:
-          name: coverage-proof-${{ github.job }}-${{ github.run_attempt }}
-          path: coverage-report/coverage-proof.json
-          if-no-files-found: error
-          retention-days: 30
-
-      - id: check_coverage_diagnostics
-        name: Check coverage diagnostics
-        if: always() && steps.coverage.outputs.diagnostics_dir != ''
-        shell: bash
-        run: |
-          if python3 tools/coverage_bep_status.py --validate-diagnostics \
-              "${{ steps.coverage.outputs.diagnostics_dir }}/coverage"; then
-            echo "safe=true" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Upload coverage diagnostics
-        if: always() && steps.check_coverage_diagnostics.outputs.safe == 'true'
-        uses: actions/upload-artifact@v7
-        with:
-          name: ci-diagnostics-${{ github.job }}-${{ github.run_attempt }}
-          # Raw BEP, profiles, and coverage logs can carry runner filesystem
-          # paths. Retain only numeric timing and allowlisted failure fields.
-          path: |
-            ${{ steps.coverage.outputs.diagnostics_dir }}/coverage/timing.txt
-            ${{ steps.coverage.outputs.diagnostics_dir }}/coverage/failure-summary.json
           retention-days: 3
-          if-no-files-found: ignore
 
-  upload-self-hosted-coverage:
-    needs: [determine-targets, coverage-self-hosted]
+  upload-coverage:
+    needs: build
     runs-on: ubuntu-24.04
-    # Mirrors coverage-self-hosted's gate so the upload skips whenever the
-    # self-hosted coverage job skips or fails (full-fallback PRs produce no
-    # artifact), and also when that job ran but legitimately produced no report
-    # (every selected target incompatible with its platform). Without the
-    # second condition this job downloads an artifact that was never uploaded.
-    if: ${{ needs.coverage-self-hosted.result == 'success' && needs.coverage-self-hosted.outputs.report_written == 'true' }}
+    # Runs only after a successful build, which always ends by uploading the
+    # report; a failed or cancelled build skips this job. An upload failure
+    # still fails the workflow run.
 
     steps:
+      # The Codecov uploader maps report paths onto the repository's tracked
+      # files, so it needs the source tree that produced the report.
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
 
-      - name: Download coverage artifact
+      - name: Download coverage report
         uses: actions/download-artifact@v8
         with:
-          name: self-hosted-coverage-report
+          artifact-ids: ${{ needs.build.outputs.report_artifact_id }}
           path: coverage-report
 
       - name: Upload coverage to Codecov
@@ -1230,6 +210,6 @@ jobs:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: ./coverage-report/filtered_report.dat
           disable_search: true
-          flags: ${{ github.ref == 'refs/heads/main' && 'unittests' || 'pr-incremental' }}
+          flags: unittests
           fail_ci_if_error: true
           verbose: false
