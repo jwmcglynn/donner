@@ -286,6 +286,26 @@ export async function supervise(executable, args, options = {}) {
   return { ...receipt(), exit, reportFile };
 }
 
+/**
+ * What the browser host offers a headed browser, for the run log: on macOS, whether this user has
+ * a GUI session that a browser could be launched into. Null on other platforms.
+ * @param {{ platform?: string, launchctl?: string, uid?: number }} options
+ * @returns {{ uid: number, guiNamespaceAvailable: boolean } | null}
+ */
+export function browserHostCapability({
+  platform = process.platform,
+  launchctl = "/bin/launchctl",
+  uid = process.getuid(),
+} = {}) {
+  if (platform !== "darwin") return null;
+  let guiNamespaceAvailable = false;
+  try {
+    execFileSync(launchctl, ["print", `gui/${uid}`], { stdio: "ignore", timeout: 1000 });
+    guiNamespaceAvailable = true;
+  } catch {}
+  return { uid, guiNamespaceAvailable };
+}
+
 if (process.argv[1] && import.meta.url === pathToFileURL(fs.realpathSync(process.argv[1])).href) {
   const executable = process.env.DONNER_WATCHDOG_DRIVER;
   if (!executable) throw new Error("DONNER_WATCHDOG_DRIVER is required");
@@ -298,19 +318,8 @@ if (process.argv[1] && import.meta.url === pathToFileURL(fs.realpathSync(process
     `--config=${path.resolve(config)}`,
     ...process.argv.slice(2),
   ];
-  if (process.platform === "darwin") {
-    let guiNamespaceAvailable = false;
-    try {
-      execFileSync("/bin/launchctl", ["print", `gui/${process.getuid()}`], {
-        stdio: "ignore",
-        timeout: 1000,
-      });
-      guiNamespaceAvailable = true;
-    } catch {}
-    console.log(
-      `browser host capability ${JSON.stringify({ uid: process.getuid(), guiNamespaceAvailable })}`,
-    );
-  }
+  const capability = browserHostCapability();
+  if (capability) console.log(`browser host capability ${JSON.stringify(capability)}`);
   const result = await supervise(path.resolve(executable), args);
   process.exitCode = result.reason ? 1 : (result.exit.code ?? 1);
 }
