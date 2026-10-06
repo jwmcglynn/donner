@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Three overlapping axis-aligned translucent rectangles: source-over blending of premultiplied color. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+  <g transform="matrix(0.94 0 0 0.94 8 8)">
+    <path fill="#ff000060"
+          d="M 32 32 L 160 32 L 160 160 L 32 160 Z"/>
+    <path fill="#00ff0060"
+          d="M 96 64 L 224 64 L 224 192 L 96 192 Z"/>
+    <path fill="#0000ff60"
+          d="M 64 96 L 192 96 L 192 224 L 64 224 Z"/>
+  </g>
+</svg>

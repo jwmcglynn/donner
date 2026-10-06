@@ -769,6 +769,7 @@ donner_cc_test(
     target_compatible_with = renderer_backend_compatible_with(["geode"]),
     deps = [
         ":image_comparison_test_fixture",
+        ":renderer_test_backend",
         "//donner/base",
         "//donner/base:gtest_timeout_main",
         "//donner/svg/parser",

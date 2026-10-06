@@ -535,6 +535,42 @@ TEST(GeodePathEncoder, NonRepresentableCoordinatesReportRejectedOutcome) {
   EXPECT_TRUE(encoded.rejected());
 }
 
+TEST(GeodePathEncoder, InputsThatEncloseNoAreaAreEmptyRatherThanRejected) {
+  const Path loneMove = PathBuilder().moveTo({64.0, 64.0}).build();
+  const Path zeroAreaSliver = PathBuilder()
+                                  .moveTo({32.0, 200.0})
+                                  .lineTo({200.0, 200.0})
+                                  .lineTo({32.0, 200.0})
+                                  .closePath()
+                                  .build();
+  for (const Path& path : {Path(), loneMove, zeroAreaSliver}) {
+    const EncodedPath encoded = GeodePathEncoder::encode(path, FillRule::NonZero);
+    EXPECT_EQ(encoded.outcome, EncodedPath::Outcome::Empty) << path;
+    EXPECT_TRUE(encoded.empty()) << path;
+  }
+}
+
+TEST(GeodePathEncoder, CoordinatesPastTheFloatRangeAreRejected) {
+  const double largest = std::numeric_limits<double>::max();
+  const Path largestTriangle = PathBuilder()
+                                   .moveTo({0.0, 0.0})
+                                   .lineTo({largest, 0.0})
+                                   .lineTo({0.0, largest})
+                                   .closePath()
+                                   .build();
+  const Path infiniteVertex = PathBuilder()
+                                  .moveTo({0.0, 0.0})
+                                  .lineTo({std::numeric_limits<double>::infinity(), 32.0})
+                                  .lineTo({32.0, 32.0})
+                                  .closePath()
+                                  .build();
+  for (const Path& path : {largestTriangle, infiniteVertex}) {
+    const EncodedPath encoded = GeodePathEncoder::encode(path, FillRule::NonZero);
+    EXPECT_EQ(encoded.outcome, EncodedPath::Outcome::Rejected);
+    EXPECT_TRUE(encoded.empty());
+  }
+}
+
 TEST(GeodePathEncoder, EncodedGeometryItemLimitRejectsBeforeRetainingVectors) {
   const Path path = PathBuilder().addRect(Box2d({0, 0}, {100, 100})).build();
   const EncodedPath encoded =

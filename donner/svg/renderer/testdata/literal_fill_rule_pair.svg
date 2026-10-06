@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Two overlapping self-intersecting hexagrams, non-zero against even-odd. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+  <g transform="matrix(0.94 0 0 0.94 8 8)">
+    <path fill="#dc3c14c8"
+          d="M 24 40 L 120 40 L 40 176 L 88 24 L 136 176 L 24 88 Z"/>
+    <path fill="#145adcc8" fill-rule="evenodd"
+          d="M 120 80 L 216 80 L 136 216 L 184 64 L 232 216 L 120 128 Z"/>
+  </g>
+</svg>

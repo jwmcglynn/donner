@@ -1,12 +1,16 @@
 #include <gtest/gtest.h>
 
+#include <cstddef>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <string>
+#include <string_view>
 
 #include "donner/base/ParseWarningSink.h"
 #include "donner/svg/parser/SVGParser.h"
 #include "donner/svg/renderer/tests/ImageComparisonTestFixture.h"
+#include "donner/svg/renderer/tests/RendererTestBackend.h"
 
 /**
  * @file
@@ -159,6 +163,90 @@ TEST_F(RendererGeodeGoldenTests, Edzample) {
   compareWithGeodeGolden("donner/svg/renderer/testdata/Edzample_Anim3.svg",
                          "donner/svg/renderer/testdata/golden/Edzample_Anim3.png",
                          ImageComparisonParams::WithThreshold(0.1f));
+}
+
+// ----------------------------------------------------------------------------
+// Literal-geometry fill scenes. Each is a 256x256 document of filled paths
+// under one non-unit view transform, authored from literal coordinates, with
+// one golden per scene captured from Geode and shared by every GPU: the
+// tolerance absorbs the edge-coverage differences between adapters, while a
+// wrong fold, blend or band lookup still fails.
+// ----------------------------------------------------------------------------
+
+/// Fewer visible pixels than this in a literal-fill scene means its paths drew
+/// nothing; each scene covers several times this area.
+constexpr size_t kMinimumLiteralFillVisiblePixels = 4096;
+
+/// One golden per scene, compared with pixelmatch's default threshold and a
+/// small budget. Measured against the goldens, Mesa lavapipe and a discrete
+/// Vulkan GPU leave no pixel over this threshold in any scene, and earlier
+/// captures of the scenes on five further adapters (another Apple GPU
+/// generation, a virtual Metal device and other lavapipe builds) leave at most 3;
+/// a wrong fill rule or color moves more than a thousand.
+ImageComparisonParams literalFillParams() {
+  return ImageComparisonParams::WithThreshold(0.02f, 10);
+}
+
+/// Counts pixels with nonzero alpha.
+size_t CountVisiblePixels(const RendererBitmap& bitmap) {
+  size_t visible = 0;
+  for (int y = 0; y < bitmap.dimensions.y; ++y) {
+    const uint8_t* row = bitmap.pixels.data() + static_cast<size_t>(y) * bitmap.rowBytes;
+    for (int x = 0; x < bitmap.dimensions.x; ++x) {
+      visible += row[static_cast<size_t>(x) * 4u + 3u] != 0 ? 1u : 0u;
+    }
+  }
+  return visible;
+}
+
+class RendererGeodeLiteralFillTests : public RendererGeodeGoldenTests {
+protected:
+  /// Compares the scene against its golden, then checks that a live render of
+  /// it draws, so a golden regenerated from a blank render cannot pass.
+  void compareLiteralFill(std::string_view scene) {
+    const std::string svg =
+        "donner/svg/renderer/testdata/literal_fill_" + std::string(scene) + ".svg";
+    const std::string golden =
+        "donner/svg/renderer/testdata/golden/literal_fill_" + std::string(scene) + ".png";
+    compareWithGeodeGolden(svg.c_str(), golden.c_str(), literalFillParams());
+
+    SVGDocument document = loadSVG(svg.c_str());
+    const RendererBitmap rendered = RenderDocumentWithBackend(document, RendererBackend::Geode);
+    ASSERT_FALSE(rendered.empty());
+    EXPECT_GE(CountVisiblePixels(rendered), kMinimumLiteralFillVisiblePixels)
+        << scene << " drew (almost) nothing";
+  }
+};
+
+/// A translucent quadratic circle, a self-intersecting even-odd star and an
+/// opaque cubic blob overlapping both: quadratic and cubic coverage, the
+/// even-odd fold, and source-over blending of premultiplied color.
+TEST_F(RendererGeodeLiteralFillTests, Solid) {
+  compareLiteralFill("solid");
+}
+
+/// Two overlapping self-intersecting hexagrams, non-zero against even-odd, so
+/// both winding folds are pinned on the same geometry.
+TEST_F(RendererGeodeLiteralFillTests, RulePair) {
+  compareLiteralFill("rule_pair");
+}
+
+/// Three overlapping axis-aligned translucent rectangles: almost every pixel is
+/// fully covered, so a difference here is a blending difference, not coverage.
+TEST_F(RendererGeodeLiteralFillTests, AlphaStack) {
+  compareLiteralFill("alpha_stack");
+}
+
+/// Cubic loops whose extrema fall inside their segments on both axes, so the
+/// monotone split happens mid-segment on both rays.
+TEST_F(RendererGeodeLiteralFillTests, CubicExtrema) {
+  compareLiteralFill("cubic_extrema");
+}
+
+/// A 24-segment quadratic zigzag whose curves cross every horizontal band but
+/// few vertical ones, exercising the band lookup on a lopsided grid.
+TEST_F(RendererGeodeLiteralFillTests, BandGrid) {
+  compareLiteralFill("band_grid");
 }
 
 // ----------------------------------------------------------------------------
