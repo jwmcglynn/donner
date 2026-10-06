@@ -576,10 +576,11 @@ bool RunGlRnrReplay(const GlRnrReplayOptions& options, GlRnrReplayResult* result
   // canvas-commit throttle and raster-settle window read a clock, and on the steady clock an
   // unpaced replay crosses them on whichever frame the host happens to reach in time, so the
   // same recording can post a render one frame later on a faster host. Read recorded frame time.
+  const bool recordedTimeScheduling = ShouldDrainWorkerBeforeFrame(options.workerScheduling);
   const std::chrono::steady_clock::time_point replayClockEpoch = std::chrono::steady_clock::now();
   const auto replayClockNow =
       std::make_shared<std::chrono::steady_clock::time_point>(replayClockEpoch);
-  if (ShouldDrainWorkerBeforeFrame(options.workerScheduling)) {
+  if (recordedTimeScheduling) {
     shell.setSchedulingClockForReplay([replayClockNow] { return *replayClockNow; });
   }
 
@@ -604,9 +605,11 @@ bool RunGlRnrReplay(const GlRnrReplayOptions& options, GlRnrReplayResult* result
     if (options.maxFrame.has_value() && frame.index > *options.maxFrame) {
       break;
     }
-    *replayClockNow =
-        replayClockEpoch + std::chrono::duration_cast<std::chrono::steady_clock::duration>(
-                               std::chrono::duration<double>(frame.timestampSeconds));
+    if (recordedTimeScheduling) {
+      *replayClockNow =
+          replayClockEpoch + std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                                 std::chrono::duration<double>(frame.timestampSeconds));
+    }
     if (!executionBudget.reserveFrame(framePixels)) {
       return SetError(error, "replay execution frame budget exceeded before frame " +
                                  std::to_string(frame.index));

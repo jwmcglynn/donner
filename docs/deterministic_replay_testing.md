@@ -30,6 +30,11 @@ Guarantees callers can rely on:
 - **Both worker states are reproducible.** `DrainEachFrame` models a caught-up
   worker (each render lands one frame after its request); `HoldFramesBehind(n)`
   models a worker held a fixed number of frames behind.
+- **Scheduling windows run on recorded time.** In both deterministic modes the
+  render coordinator's scheduling windows (canvas-commit throttle, raster-settle
+  window, pixel-capture commit wake, nothing-to-present retry pacing) read each
+  frame's recorded `timestampSeconds`, so they close on the same frame however
+  fast the host runs the replay.
 - **All waits are bounded.** A stuck worker fails the replay with the blocking
   worker state; it can never hang CI.
 
@@ -51,6 +56,12 @@ near the bottom (`maybeRequestRender`).
   result is withheld for `n` poll attempts; during that window the editor's
   existing `isBusy()` checks observe the worker as busy, exactly as a slow render
   would. Releasing the gate lands the old result on a deterministic frame.
+- **Recorded-time scheduling clock**. In the deterministic modes the harness
+  installs `EditorShell::setSchedulingClockForReplay` before the first frame and
+  sets it to each frame's recorded `timestampSeconds`. Without it, an unpaced
+  replay crosses the 120 ms canvas-commit throttle and raster-settle window on
+  whichever frame the host reaches in time, so a faster host posts the same render
+  a frame later. `Realtime` keeps the steady clock.
 - **Content-only capture**. `EditorShell::setContentOnlyCaptureForNextFrameForReplay`
   suppresses non-document render-pane presentation for the readback frame
   (overlay texture, frame graph, selection/reference chips, pen preview, tool
@@ -144,8 +155,12 @@ cause false flakes; the raw diagnostics remain available for failure output.
   behavior; the real worker runs free against wall-clock.
 - Every replay wait must be bounded by a deadline and report the worker state that
   blocked it.
-- `DrainEachFrame` may only change *when* staged results become visible, never
-  which frames request renders or the drag/presentation state machine.
+- The deterministic modes may change only *when* staged results become visible
+  and which clock the scheduling windows read (recorded frame time); they must not
+  otherwise change which frames request renders or the drag/presentation state
+  machine.
+- Synthesized multi-frame replays must advance `timestampSeconds`; a constant
+  timestamp never closes a scheduling window.
 - `HoldFramesBehind` must preserve `maybeRequestRender` semantics: a withheld
   result looks exactly like a slow in-flight render to the editor.
 - Content-only capture is a presenter/readback mode: it must not clear overlay
@@ -156,8 +171,9 @@ cause false flakes; the raw diagnostics remain available for failure output.
 ## Limitations and Future Extensions
 
 - This is not a general virtual clock for the whole editor. It controls the
-  dominant nondeterministic input (worker landing) plus the canvas-commit throttle
-  that the affected tests touch; ImGui animation timing is not virtualized.
+  dominant nondeterministic input (worker landing) and the render coordinator's
+  scheduling windows. ImGui frame time already comes from each frame's recorded
+  `deltaMs`; other wall-clock reads (cost timing, save deadlines) stay real.
 - Geode GPU replay targets require a working GPU; they are validated on CI (one
   Intel Arc + Mesa configuration hits an environmental failure, issue #542).
 - Recording per-render virtual durations into the `.rnr` format is deferred unless

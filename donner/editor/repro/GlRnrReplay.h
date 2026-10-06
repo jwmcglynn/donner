@@ -21,7 +21,9 @@ namespace donner::editor::repro {
 /// Worker scheduling mode for deterministic GL replay tests.
 ///
 /// Both deterministic modes also run the render coordinator's scheduling windows (canvas-commit
-/// throttle, raster settle, retry pacing) on recorded frame time instead of the steady clock.
+/// throttle, raster settle, retry pacing) on recorded frame time instead of the steady clock. That
+/// clock reads each frame's `timestampSeconds`, so a synthesized multi-frame replay must advance
+/// it.
 enum class GlRnrReplayWorkerScheduling {
   Realtime,          //!< Preserve normal wall-clock worker scheduling.
   DrainEachFrame,    //!< Wait for active worker renders before each frame poll.

@@ -1308,25 +1308,59 @@ TEST(RenderCoordinatorTest, CanvasCommitThrottleRunsOnTheSchedulingClock) {
     ASSERT_FALSE(coordinator.asyncRenderer().isBusy());
   };
 
-  requestAndSettle();
+  ASSERT_NO_FATAL_FAILURE(requestAndSettle());
   const Vector2i firstCanvas = app.document().document().canvasSize();
-  ASSERT_EQ(firstCanvas, viewport.desiredCanvasSize()) << "the first canvas commits at once";
+  ASSERT_EQ(firstCanvas, viewport.desiredCanvasSize())
+      << "the initial canvas already matches the viewport";
 
   viewport.zoomAround(2.0, viewport.paneCenter());
   ASSERT_NE(viewport.desiredCanvasSize(), firstCanvas);
-  requestAndSettle();
+  ASSERT_NO_FATAL_FAILURE(requestAndSettle());
   EXPECT_EQ(app.document().document().canvasSize(), firstCanvas)
       << "a changed canvas size waits for the commit throttle";
 
   RenderCoordinatorTestAccess::advanceFakeSchedulingClock(std::chrono::milliseconds(119));
-  requestAndSettle();
+  ASSERT_NO_FATAL_FAILURE(requestAndSettle());
   EXPECT_EQ(app.document().document().canvasSize(), firstCanvas)
       << "119 ms on the scheduling clock is still inside the throttle";
 
   RenderCoordinatorTestAccess::advanceFakeSchedulingClock(std::chrono::milliseconds(1));
-  requestAndSettle();
+  ASSERT_NO_FATAL_FAILURE(requestAndSettle());
   EXPECT_EQ(app.document().document().canvasSize(), viewport.desiredCanvasSize())
       << "the throttle elapses on the scheduling clock, whatever the steady clock says";
+}
+
+// The idle loop wakes for a pending pixel-capture canvas commit; that wake must count down on the
+// same scheduling clock as the throttle it waits for.
+TEST(RenderCoordinatorTest, PixelCaptureCanvasCommitWakeRunsOnTheSchedulingClock) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kTwoRectSvg));
+  RenderCoordinator coordinator;
+  SelectTool selectTool;
+  RenderCoordinatorTestAccess::useFakeSchedulingClock(coordinator);
+  coordinator.setDocumentPixelCaptureEnabled(true);
+  ViewportState viewport = MakeViewport(app);
+  const auto requestAndSettle = [&] {
+    coordinator.maybeRequestRender(app, selectTool, viewport, /*textures=*/nullptr);
+    coordinator.asyncRenderer().cancelInFlight();
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (coordinator.asyncRenderer().isBusy() && std::chrono::steady_clock::now() < deadline) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    ASSERT_FALSE(coordinator.asyncRenderer().isBusy());
+  };
+
+  ASSERT_NO_FATAL_FAILURE(requestAndSettle());
+  viewport.zoomAround(2.0, viewport.paneCenter());
+  ASSERT_NO_FATAL_FAILURE(requestAndSettle());
+  EXPECT_THAT(coordinator.nextPixelCaptureCanvasCommitWakeSeconds(),
+              ::testing::Optional(::testing::FloatNear(0.120f, 1e-4f)))
+      << "the wake is the whole throttle away";
+
+  RenderCoordinatorTestAccess::advanceFakeSchedulingClock(std::chrono::milliseconds(119));
+  EXPECT_THAT(coordinator.nextPixelCaptureCanvasCommitWakeSeconds(),
+              ::testing::Optional(::testing::FloatNear(0.001f, 1e-4f)))
+      << "the wake counts down on the scheduling clock, whatever the steady clock says";
 }
 
 TEST(RenderCoordinatorTest, HeldDragWithoutPromotedTileRendersChangedDocumentVersion) {

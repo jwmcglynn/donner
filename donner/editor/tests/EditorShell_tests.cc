@@ -1491,7 +1491,7 @@ public:
 
   static void SetExpiredEyedropperCanvasCommitWake(EditorShell& shell) {
     shell.renderCoordinator_.pixelCaptureCanvasCommitDue_ =
-        std::chrono::steady_clock::now() - std::chrono::milliseconds(1);
+        shell.renderCoordinator_.schedulingNow() - std::chrono::milliseconds(1);
   }
 
   static bool EyedropperCanvasCommitWakePending(const EditorShell& shell) {

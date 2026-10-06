@@ -274,6 +274,8 @@ public:
    * throttle, the raster-viewport settle window, the pixel-capture commit wake and the
    * nothing-to-present retry pacing. A deterministic replay drives it from recorded frame time so
    * those windows close on the same frame on every run, however fast the host runs the frames.
+   * Install it before the coordinator schedules anything: time points already recorded on one
+   * clock are not rebased onto the other.
    *
    * @param clock Clock to read, or an empty function to restore the steady clock.
    */
