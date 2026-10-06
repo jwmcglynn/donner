@@ -9,7 +9,13 @@ import {
   type InitialBlueFrameState,
 } from "./basic-shapes-capture-gate";
 import { installBrowserStallDiagnostics } from "./browser-stall-diagnostics";
-import { installFailureCanvasEvidence } from "./failure-canvas-evidence";
+import {
+  armFailureCanvasEvidence,
+  captureFailureCanvasEvidence,
+  type EvidencePage,
+  installFailureCanvasEvidence,
+  kFailureEvidenceBudgetMs,
+} from "./failure-canvas-evidence";
 import {
   captureEditorPage,
   captureSplashPresentationFrame,
@@ -50,11 +56,7 @@ import {
 } from "./surface-frame-probe";
 
 installBrowserStallDiagnostics(test);
-// Both cases are quarantined in Firefox by #1634; keep a canvas readback when either fails.
-installFailureCanvasEvidence(test, [
-  "Geode Wasm View overlays render tile metadata and sparse Slug triangle edges",
-  "Firefox keeps the dragged shape and its selection outline in every drag frame",
-]);
+installFailureCanvasEvidence(test);
 
 // CI's GitHub-hosted macOS job sets this to skip the cases quarantined for that job only
 // (#1691, #1702); every other lane and local runs still run them.
@@ -2500,6 +2502,26 @@ test("a frame account read that throws records the account as unavailable", asyn
   }
 });
 
+test("failure canvas evidence stays within its bound when the page never answers", async () => {
+  const silentPage: EvidencePage = {
+    evaluate: () => new Promise<never>(() => {}),
+    screenshot: () => new Promise<never>(() => {}),
+  } as unknown as EvidencePage;
+  const stepMs = 50;
+  const startedAt = Date.now();
+  await captureFailureCanvasEvidence(silentPage, test.info(), stepMs);
+  const elapsedMs = Date.now() - startedAt;
+  // The state read and the screenshot each time out; the readback is skipped because the page did
+  // not answer the state read, so the capture costs two steps here and never more than three.
+  expect(elapsedMs).toBeLessThan(3 * stepMs + 500);
+  expect(kFailureEvidenceBudgetMs).toBeLessThanOrEqual(15_000);
+  const recordPath = test.info().outputPath("failure-canvas-evidence.json");
+  const record = JSON.parse(await readFile(recordPath, "utf8"));
+  expect(record.presentation).toBe("timeout");
+  expect(record.screenshot).toEqual({ error: "timeout" });
+  expect(record.readback).toEqual({ skipped: "the page did not answer the state read" });
+});
+
 test("a frame account read that never settles records the account as unavailable", async () => {
   const result = await recordCanvasAccountForTest(() =>
     new Promise<CanvasCaptureEvidence>(() => {})
@@ -2723,6 +2745,7 @@ test("Geode Wasm View overlays render tile metadata and sparse Slug triangle edg
     browserName === "firefox" && quarantineStillSkips(),
     "Quarantined: Firefox can capture a blank editor page (#1634)",
   );
+  armFailureCanvasEvidence(page, test.info());
   const failures = await openEditor(page, "overlay");
   const captureSentinelExpected = browserName === "firefox";
   if (captureSentinelExpected) await installCaptureSentinel(page);
@@ -3272,6 +3295,7 @@ test("Firefox keeps the dragged shape and its selection outline in every drag fr
     browserName === "firefox" && quarantineStillSkips(),
     "Quarantined: Firefox can capture a blank editor page (#1634)",
   );
+  armFailureCanvasEvidence(page, test.info());
   const failures = await openEditor(page, false, true);
   await installCaptureSentinel(page);
   const { documentClip: probeRegion, captureClip, blueRect: blueCss } = await openBasicShapes(

@@ -173,8 +173,11 @@ jobs:
 
       # The report-only lane never fails the job, so its outcome reaches the
       # reader through the job summary and its evidence through its own upload.
+      # Neither step may fail the job either: a scheduled run that passed the
+      # regular lanes stays usable as a release candidate source.
       - name: Summarize quarantined cases
         if: ${{ !cancelled() && github.event_name == 'schedule' }}
+        continue-on-error: true
         shell: bash
         run: |
           set -euo pipefail
@@ -182,6 +185,7 @@ jobs:
 
       - name: Upload quarantined case evidence
         if: ${{ !cancelled() && github.event_name == 'schedule' }}
+        continue-on-error: true
         uses: actions/upload-artifact@v7
         with:
           name: editor-wasm-quarantine-report-${{ github.run_id }}-${{ github.run_attempt }}

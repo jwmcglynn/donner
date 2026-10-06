@@ -21,6 +21,11 @@
 #                                  playwright.composited-firefox.config.js
 #   5. composited-chromium         playwright.composited-chromium.config.js
 #
+# Only when DONNER_BROWSER_QUARANTINE_REPORT_LANE=1 (the scheduled Editor WASM
+# run), a report-only lane follows: firefox-quarantine-report runs the Firefox
+# cases quarantined by #1634 with their quarantine lifted, and its exit code
+# never changes this script's.
+#
 # Differences from the raw workflow shell it replaces, both deliberate:
 #   * Lanes no longer fail fast. Every lane runs, each lane's exit code is
 #     echoed, and the script exits nonzero if any lane failed. One run reports
@@ -41,6 +46,8 @@
 #   DONNER_BAZEL_FLAGS       Extra bazel flags, word-split, applied before any
 #                            flags passed as script arguments.
 #   DONNER_KEEP_TEMP=1       Do not delete the temp directory on exit.
+#   DONNER_BROWSER_QUARANTINE_REPORT_LANE=1
+#                            Add the report-only lane described above.
 
 set -euo pipefail
 
@@ -318,6 +325,9 @@ archive_lane_results() {
 lane_names=()
 lane_codes=()
 overall_status=0
+# Only the report-only lane may lift a quarantine, and it sets this for its own
+# command; an inherited value must not lift it in the regular lanes.
+unset DONNER_BROWSER_QUARANTINE_REPORT
 
 run_lane() {
   local name="$1"
@@ -378,13 +388,14 @@ readonly kQuarantineReportDir="${repo_root}/${kFailureArchiveDir}/${kQuarantineR
 report_lane_code=""
 if [[ "${DONNER_BROWSER_QUARANTINE_REPORT_LANE:-}" == "1" ]]; then
   log "LANE ${kQuarantineReportLane} (report only)"
-  mkdir -p "${kQuarantineReportDir}"
+  mkdir -p "${kQuarantineReportDir}" || echo "warning: could not create ${kQuarantineReportDir}"
   report_lane_code=0
   DONNER_BROWSER_QUARANTINE_REPORT=report \
     DONNER_QUARANTINE_REPORT_JSON="${kQuarantineReportDir}/quarantine-report.json" \
     bash donner/editor/wasm/tests/run_tests.sh --headed \
     --config=playwright.quarantine-report.config.js || report_lane_code=$?
-  archive_lane_results "${kQuarantineReportLane}"
+  archive_lane_results "${kQuarantineReportLane}" \
+    || echo "warning: could not archive the ${kQuarantineReportLane} results"
   echo "LANE ${kQuarantineReportLane} exit code: ${report_lane_code} (report only)"
 fi
 

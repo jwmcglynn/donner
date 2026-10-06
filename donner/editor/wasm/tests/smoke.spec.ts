@@ -6,7 +6,7 @@ import {
   hasPresentedBasicShapesHostFrame,
 } from "./basic-shapes-capture-gate";
 import { installBrowserStallDiagnostics } from "./browser-stall-diagnostics";
-import { installFailureCanvasEvidence } from "./failure-canvas-evidence";
+import { armFailureCanvasEvidence, installFailureCanvasEvidence } from "./failure-canvas-evidence";
 import {
   type CanvasColorStats,
   captureEditorPage,
@@ -24,10 +24,7 @@ import { quarantineStillSkips } from "./quarantine-report.mjs";
 import { holdCanvasCompletionForTest, installSurfaceFrameProbe } from "./surface-frame-probe";
 
 installBrowserStallDiagnostics(test);
-// Quarantined in Firefox by #1634; keep a canvas readback when it fails.
-installFailureCanvasEvidence(test, [
-  "Firefox keeps Basic Shapes resize pixels and outline synchronized",
-]);
+installFailureCanvasEvidence(test);
 
 // CI's GitHub-hosted macOS job sets this to skip the cases quarantined for that job only
 // (#1691, #1702); every other lane and local runs still run them.
@@ -1822,6 +1819,7 @@ test("Firefox keeps Basic Shapes resize pixels and outline synchronized", async 
     browserName === "firefox" && quarantineStillSkips(),
     "Quarantined: Firefox can capture a blank editor page (#1634)",
   );
+  armFailureCanvasEvidence(page, test.info());
   const fatalMessages = await openEditor(page, { postInitializationDwellMs: 0 });
   expect(await installSurfaceFrameProbe(page), "no worker could observe canvas submissions")
     .toBeGreaterThan(0);

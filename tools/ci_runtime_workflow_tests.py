@@ -316,7 +316,7 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         # quarantine, so a quarantined case can neither block a merge nor turn main red.
         resolver = runfiles.Create()
         workflows = Path(resolver.Rlocation("donner/.github/workflows/main.yml")).parent
-        editor = (workflows / "editor_wasm.yml").read_text(encoding="utf-8")
+        editor = self.editor_wasm
         gate = ("          DONNER_BROWSER_QUARANTINE_REPORT_LANE: "
                 "${{ github.event_name == 'schedule' && '1' || '0' }}\n")
         self.assertIn(gate, editor)
@@ -324,7 +324,8 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         schedule_only = "        if: ${{ !cancelled() && github.event_name == 'schedule' }}\n"
         self.assertEqual(editor.count(schedule_only), 2)
         for step in ("Summarize quarantined cases", "Upload quarantined case evidence"):
-            self.assertIn("      - name: %s\n%s" % (step, schedule_only), editor, step)
+            self.assertIn("      - name: %s\n%s        continue-on-error: true\n"
+                          % (step, schedule_only), editor, step)
         others = [path for path in sorted(workflows.glob("*.y*ml"))
                   if path.name != "editor_wasm.yml"]
         self.assertGreater(len(others), 5)

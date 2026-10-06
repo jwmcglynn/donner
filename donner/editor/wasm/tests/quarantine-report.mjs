@@ -51,14 +51,34 @@ function firstLine(text) {
 }
 
 function markdownCell(text) {
-  return text.replaceAll("|", "\\|").replaceAll("`", "'");
+  return text.replaceAll("|", "\\|").replaceAll("`", "'").replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;");
+}
+
+function caseOutcome(entry) {
+  const results = entry.results ?? [];
+  const last = results.at(-1);
+  if (last === undefined) return { outcome: "not run", detail: "" };
+  if (last.status === "passed") return { outcome: "passed", detail: "" };
+  if (last.status === "skipped") {
+    return { outcome: "skipped", detail: "unexpected in report mode: is the quarantine lifted?" };
+  }
+  const error = (last.errors ?? [])[0] ?? last.error;
+  const attachments = (last.attachments ?? []).map((attachment) => attachment.name);
+  const detail = [
+    firstLine(error?.message),
+    attachments.length > 0 ? `evidence: ${attachments.join(", ")}` : "",
+  ].filter((part) => part !== "").join("; ");
+  return { outcome: `${last.status} (reported)`, detail };
 }
 
 /**
  * Summarize a Playwright JSON report of the report-only lane as Markdown for the job summary.
  *
- * Every case is listed with its outcome: "passed", "failed (reported)" with the first line of its
- * first error and the names of its attachments, "skipped", or another Playwright status verbatim.
+ * Every case is listed with its outcome: "passed"; "<status> (reported)" with the first line of
+ * its first error and the names of its attachments; "skipped", which report mode should never
+ * produce; or "not run" when the lane ended before the case started. Run-level errors, such as the
+ * lane's global timeout, follow the table.
  *
  * @param {object | null} report Parsed Playwright JSON report, or null when the lane wrote none.
  * @returns {string}
@@ -70,27 +90,15 @@ export function quarantineReportSummary(report) {
   }
   const tests = [];
   for (const suite of report.suites ?? []) collectTests(suite, tests);
-  if (tests.length === 0) return `${heading}The report-only lane ran no cases.\n`;
+  const runErrors = (report.errors ?? []).map((error) => firstLine(error?.message))
+    .filter((line) => line !== "");
+  const errorLines = runErrors.map((line) => `Run error: ${markdownCell(line)}\n`).join("");
+  if (tests.length === 0) return `${heading}The report-only lane ran no cases.\n${errorLines}`;
   const rows = tests.map(({ title, file, entry }) => {
-    const results = entry.results ?? [];
-    const last = results.at(-1);
-    const status = last?.status ?? entry.status ?? "not run";
-    let outcome = status;
-    let detail = "";
-    if (status === "passed") {
-      outcome = "passed";
-    } else if (status === "skipped") {
-      outcome = "skipped";
-    } else if (last !== undefined) {
-      outcome = `${status} (reported)`;
-      const error = (last.errors ?? [])[0] ?? last.error;
-      const attachments = (last.attachments ?? []).map((attachment) => attachment.name);
-      detail = [
-        firstLine(error?.message),
-        attachments.length > 0 ? `evidence: ${attachments.join(", ")}` : "",
-      ].filter((part) => part !== "").join("; ");
-    }
-    return `| ${markdownCell(title)} | ${markdownCell(file)} | ${outcome} | ${markdownCell(detail)} |`;
+    const { outcome, detail } = caseOutcome(entry);
+    const cells = [markdownCell(title), markdownCell(file), outcome, markdownCell(detail)];
+    return `| ${cells.join(" | ")} |`;
   });
-  return `${heading}| Case | Spec | Outcome | Detail |\n| --- | --- | --- | --- |\n${rows.join("\n")}\n`;
+  const table = "| Case | Spec | Outcome | Detail |\n| --- | --- | --- | --- |\n";
+  return `${heading}${table}${rows.join("\n")}\n${errorLines === "" ? "" : `\n${errorLines}`}`;
 }

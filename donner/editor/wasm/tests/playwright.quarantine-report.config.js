@@ -24,15 +24,25 @@ const kReportLaneBudgetMs = 6 * 60_000;
 
 module.exports = defineConfig({
   ...compatibility,
+  // Only the two specs that hold the quarantined cases.
+  testMatch: ["smoke.spec.ts", "browser-presentation-regression.spec.ts"],
   globalTimeout: kReportLaneBudgetMs,
   reporter: [
     ["list"],
-    ["json", { outputFile: process.env.DONNER_QUARANTINE_REPORT_JSON ?? "quarantine-report.json" }],
+    [
+      "json",
+      {
+        outputFile: process.env.DONNER_QUARANTINE_REPORT_JSON
+          ?? "playwright-failures/firefox-quarantine-report/quarantine-report.json",
+      },
+    ],
   ],
   projects: [
     {
       ...firefox,
-      name: "firefox-quarantine-report",
+      // Keep the Firefox project's name: the overlays case resolves its golden by project name
+      // (basic-shapes-compositor-tile-overlay-firefox-geode-resize-darwin.png).
+      name: firefox.name,
       grep: kQuarantinedFirefoxCases,
     },
   ],
