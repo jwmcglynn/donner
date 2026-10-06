@@ -11,7 +11,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { drain, loadLibrary, until } from "./bridge-library-harness.mjs";
+import { createDevice, drain, loadLibrary, until } from "./bridge-library-harness.mjs";
 
 // Logical-device handles. The runtime mints them and never reuses one; the library only keys its
 // state by them.
@@ -659,4 +659,158 @@ test("completion progress is coalesced across logical devices and stops on loss"
   bridge.entryPoints.donner_gpu_completed_serial(kFirst);
   bridge.entryPoints.donner_gpu_completed_serial(99);
   assert.equal(submitted.length, 4, "lost and foreign devices must not request progress");
+});
+
+// The acquisition trace is observation only: one console line per settled step, the time it took,
+// and whether the requester had already let the request go, so a CI log can tell a slow browser
+// from one that never answers.
+const kTracePrefix = "[Geode/browser/gpu-trace]";
+
+/** A clock that advances by `stepMs` on every read. */
+function steppingClock(stepMs) {
+  let now = 0;
+  return () => (now += stepMs);
+}
+
+/** setTimeout and clearTimeout stand-ins that record what the library schedules. */
+function recordingTimers() {
+  const scheduled = [];
+  const timers = {
+    setTimeout: (callback, delayMs) => {
+      const timer = { callback, delayMs, cleared: false, unrefed: false };
+      timer.unref = () => {
+        timer.unrefed = true;
+        return timer;
+      };
+      scheduled.push(timer);
+      return timer;
+    },
+    clearTimeout: (timer) => {
+      if (timer) timer.cleared = true;
+    },
+  };
+  return { scheduled, timers };
+}
+
+/** An adapter that reports `info` and hands out a stub device once `release()` is called. */
+function heldAdapter(info) {
+  let release;
+  const released = new Promise((resolve) => {
+    release = resolve;
+  });
+  return {
+    release: () => release(),
+    adapter: {
+      info,
+      requestDevice: async () => {
+        await released;
+        return createDevice().device;
+      },
+    },
+  };
+}
+
+function traceLines(bridge) {
+  return bridge.consoleInfo.filter((line) => line.startsWith(kTracePrefix));
+}
+
+test("a settled device request traces its adapter, readiness and elapsed time", async () => {
+  const { scheduled, timers } = recordingTimers();
+  const held = heldAdapter({
+    vendor: "apple",
+    architecture: "metal-3",
+    device: "",
+    description: "Apple M1 (virtual)",
+    isFallbackAdapter: false,
+  });
+  held.release();
+  const bridge = loadLibrary({
+    nowForTesting: steppingClock(5),
+    timersForTesting: timers,
+    requestAdapterForTesting: async () => held.adapter,
+  });
+  await beginReady(bridge, kFirst);
+  const trace = traceLines(bridge);
+  assert.equal(trace.length, 2, trace.join("\n"));
+  assert.match(
+    trace[0],
+    new RegExp(
+      "^\\[Geode/browser/gpu-trace\\] step=adapter outcome=ready vendor=apple"
+        + " architecture=metal-3 device= description=Apple_M1_virtual_ fallback=0 elapsed_ms=\\d+$",
+    ),
+  );
+  assert.match(
+    trace[1],
+    /^\[Geode\/browser\/gpu-trace\] step=device outcome=ready elapsed_ms=\d+$/,
+  );
+  assert.equal(scheduled.length, 1, "one still-pending timer per request");
+  assert.equal(scheduled[0].delayMs, 60000);
+  assert.ok(scheduled[0].unrefed, "the still-pending timer must never hold a process open");
+  assert.ok(scheduled[0].cleared, "a settled request must clear its still-pending timer");
+  assert.deepEqual(bridge.consoleErrors, []);
+});
+
+test("a device that arrives after its request was let go is traced as late", async () => {
+  const held = heldAdapter({ vendor: "", architecture: "", device: "", description: "" });
+  const bridge = loadLibrary({ requestAdapterForTesting: async () => held.adapter });
+  const { entryPoints, state } = bridge;
+  assert.equal(entryPoints.donner_gpu_begin_device_request(kFirst), state.kSuccess);
+  await drain();
+  entryPoints.donner_gpu_release_device(kFirst);
+  held.release();
+  await until(() => traceLines(bridge).length === 2, "a traced late device");
+  assert.match(
+    traceLines(bridge)[1],
+    /^\[Geode\/browser\/gpu-trace\] step=device outcome=ready elapsed_ms=\d+ late=1$/,
+  );
+  assert.equal(state.device, null, "tracing must not change what a late device does");
+});
+
+test("a request still unanswered after a minute is traced once", async () => {
+  const { scheduled, timers } = recordingTimers();
+  const bridge = loadLibrary({
+    timersForTesting: timers,
+    requestAdapterForTesting: () => new Promise(() => {}),
+  });
+  const { entryPoints, state } = bridge;
+  assert.equal(entryPoints.donner_gpu_begin_device_request(kFirst), state.kSuccess);
+  assert.equal(scheduled.length, 1);
+  scheduled[0].callback();
+  assert.deepEqual(
+    traceLines(bridge).map((line) => line.replace(/ elapsed_ms=\d+/, "")),
+    ["[Geode/browser/gpu-trace] step=request outcome=still_pending"],
+  );
+  assert.equal(entryPoints.donner_gpu_device_request_state(kFirst), state.kRequestPending);
+});
+
+test("a console or timer that refuses the trace changes nothing about the request", async () => {
+  const bridge = loadLibrary({
+    timersForTesting: {
+      setTimeout: () => {
+        throw new Error("no timers here");
+      },
+    },
+  });
+  bridge.consoleInfo.push = () => {
+    throw new Error("no console here");
+  };
+  await beginReady(bridge, kFirst);
+  assert.equal(bridge.state.device, bridge.device);
+});
+
+test("a lost device is traced with the reason the browser gave", async () => {
+  const bridge = loadLibrary();
+  await beginReady(bridge, kFirst);
+  bridge.lose({ reason: "unknown", message: "GPU process exited" });
+  const losses = () => traceLines(bridge).filter((line) => line.includes("outcome=lost"));
+  await until(() => losses().length === 1, "a traced loss");
+  assert.equal(
+    losses()[0],
+    "[Geode/browser/gpu-trace] step=device outcome=lost reason=unknown"
+      + " message=\"GPU process exited\"",
+  );
+  // The specs treat some console text as a failure; a trace line must never match it.
+  for (const line of traceLines(bridge)) {
+    assert.doesNotMatch(line, /device lost|^\[Geode\/browser\/acquire\]/i, line);
+  }
 });
