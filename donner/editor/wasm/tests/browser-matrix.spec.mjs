@@ -1032,3 +1032,51 @@ test("only the two tracked responsiveness checks go through the completion check
     "the drag input check must run through the helper",
   );
 });
+
+test("hosted macOS quarantines read only the hosted job's switch and name their issue", () => {
+  const definition = "const kHostedMacosQuarantine = "
+    + "process.env.DONNER_HOSTED_MACOS_QUARANTINE === \"1\";";
+  const quarantined = [
+    ["smoke.spec.ts", "welcome picker paints before asynchronously rendering real SVG thumbnails",
+      "#1702"],
+    ["smoke.spec.ts", "production Geode wasm presents visible editor pixels after held canvas GPU"
+      + " completion", "#1691"],
+    ["browser-presentation-regression.spec.ts",
+      "Basic Shapes gated setup reaches visible pixels in the browser journey", "#1702"],
+  ];
+  for (const spec of new Set(quarantined.map(([file]) => file))) {
+    const source = readFileSync(path.join(testDirectory, spec), "utf8");
+    assert.equal(source.split(definition).length - 1, 1, `${spec} defines the switch once`);
+    assert.equal(
+      source.split("DONNER_HOSTED_MACOS_QUARANTINE").length - 1,
+      1,
+      `${spec} reads the switch only through kHostedMacosQuarantine`,
+    );
+    const uses = source.split("    kHostedMacosQuarantine,\n").length - 1;
+    assert.equal(uses, quarantined.filter(([file]) => file === spec).length, spec);
+  }
+  for (const [spec, title, issue] of quarantined) {
+    const source = readFileSync(path.join(testDirectory, spec), "utf8");
+    const start = source.indexOf(`\ntest("${title}"`);
+    assert.notEqual(start, -1, title);
+    const body = source.slice(start, source.indexOf("\ntest(", start + 1));
+    const skip = body.indexOf("    kHostedMacosQuarantine,\n");
+    assert.notEqual(skip, -1, `${title} must be skipped only by the hosted switch`);
+    assert.match(body.slice(skip, skip + 200), new RegExp(`\\(${issue}\\)",`), title);
+    assert.ok(skip < body.indexOf("await openEditor("), `${title} must skip before any work`);
+  }
+  // Nothing else may set or read the switch: a BUILD env entry or an export in the browser CI
+  // script would quarantine every lane, including self-hosted and local runs.
+  const scanned = /\.(?:[cm]?js|ts|json|bazel)$/;
+  const readers = readdirSync(testDirectory)
+    .filter((name) => name !== "browser-matrix.spec.mjs" && scanned.test(name))
+    .filter((name) =>
+      readFileSync(path.join(testDirectory, name), "utf8")
+        .includes("DONNER_HOSTED_MACOS_QUARANTINE")
+    );
+  assert.deepEqual(readers.sort(), ["browser-presentation-regression.spec.ts", "smoke.spec.ts"]);
+  assert.doesNotMatch(
+    readFileSync(path.join(repositoryRoot, "tools/run-browser-ci.sh"), "utf8"),
+    /HOSTED_MACOS_QUARANTINE/,
+  );
+});

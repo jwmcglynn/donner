@@ -1094,6 +1094,13 @@ jobs:
       # records host load, memory and process call graphs, so only this ephemeral hosted
       # job sets it; a persistent self-hosted runner never publishes them.
       BROWSER_STALL_TEST_FLAGS: "--test_env=DONNER_BROWSER_STALL_DIAGNOSTICS=1"
+      # Skips the browser cases quarantined for this hosted job only (#1691, #1702): their
+      # GPU work can miss its budget on this runner. Every other lane still runs them. Both
+      # gating test steps carry it, so their test environments stay identical and Bazel keeps
+      # its analysis cache between them. The advisory GPU comparisons deliberately run without
+      # it: they never set the job's outcome, and a failing session there is the evidence
+      # those issues need.
+      HOSTED_MACOS_QUARANTINE_TEST_FLAGS: "--test_env=DONNER_HOSTED_MACOS_QUARANTINE=1"
       # Exercise the Geode editor configuration through transitioned wrappers, which
       # locate declared shared libraries consistently on clean workers.
       GEODE_EDITOR_TARGETS: >-
@@ -1207,6 +1214,7 @@ jobs:
           # Tests that launch a browser run in the next step instead.
           tools/ci_bazel_test.sh bazelisk test --config=ci --test_output=errors \
             --test_tag_filters=-manual,-perf,-requires_metal_toolchain,-ci-remote-gpu,-launches-browser \
+            $HOSTED_MACOS_QUARANTINE_TEST_FLAGS \
             $BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS $BROWSER_STALL_TEST_FLAGS $TARGETS
         # Deterministic fuzzer corpus replay remains in this Bazel suite. Sanitizer-backed mutation
         # runs nightly or on demand in `.github/workflows/fuzz.yml`.
@@ -1235,6 +1243,7 @@ jobs:
           tools/ci_bazel_test.sh bazelisk test --config=ci --test_output=errors \
             --local_test_jobs=1 \
             --test_tag_filters=launches-browser,-manual,-perf,-requires_metal_toolchain,-ci-remote-gpu \
+            $HOSTED_MACOS_QUARANTINE_TEST_FLAGS \
             $BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS $BROWSER_STALL_TEST_FLAGS $TARGETS
 
       - name: Test (Geode editor lane)
