@@ -16,10 +16,13 @@ through the public \ref donner::svg::Renderer API.
 
 `//donner/svg/renderer:renderer_geode` itself is public, and `RendererGeode.h` declares the
 shared-context constructor `RendererGeode(std::shared_ptr<geode::GeodeDevice>)` and
-`setTargetTexture(const gpu::Texture&)`. The targets that define the types they take,
-`//donner/svg/renderer/geode:geode_device` and the `//donner/gpu` package's libraries, are visible
-only inside the repository, so a target outside Donner cannot depend on them to build those
-arguments. That visibility, not the public header, keeps the seam internal.
+`setTargetTexture(const gpu::Texture&)`. The targets that define the types they take are
+visible only inside the repository: `//donner/svg/renderer/geode:geode_device_api`, which owns
+`GeodeDevice.h`, `//donner/svg/renderer/geode:geode_device`, and the `//donner/gpu` package's
+libraries. That visibility keeps a target outside Donner from depending on them. Donner's
+`.bazelrc` disables `layering_check`, so visibility does not stop a dependent of `renderer_geode`
+from reaching their headers; the seam is internal because of the v0.8 decision together with that
+visibility rule.
 
 ## Layers {#GpuRuntimeLayers}
 

@@ -1180,14 +1180,13 @@ the candidate with the reference revision `7a7fb1eb` on the same host and config
 - **Metal `renderer_bench`, five cells.** Measured at `d5d3a771` on the same Apple silicon Mac:
   Ret-Settled p95 rose on `simple_shapes` (+79%), `moderate_paths` (+44%), `lion` (+51%) and
   `gradient_grid` (+55%), and `simple_shapes` Settled p95 rose 11.5%; every p50 improved. Traces
-  of each frame's commit, GPU start and GPU end show that in the slowest tenth of samples the frame
-  starts on the GPU 0.2 to 0.5 ms late (`simple_shapes` kernel-to-GPU-start p50 0.067 ms, 0.458 ms
-  in the slow tenth), concentrated where the GPU had been idle for under 0.2 ms before the commit,
-  while the completion-handler hop stays at about 0.05 ms. The tail is attributed to Apple GPU
-  idle-to-active latency. Lengthening the idle gap with a spin before the retained draw (outside
-  its timing) shrinks the tail (`simple_shapes` p95 0.746 to 0.583 ms), and the reference binary
-  grows a similar tail when given a 300 us gap, so the effect follows the GPU idle gap rather than
-  Donner's wait.
+  show the slow tenth of frames start late on the GPU: `simple_shapes` commit-to-GPU-start p50 is
+  0.067 ms, and 0.458 ms in the slow tenth. The completion-handler hop is constant at about
+  0.05 ms. The tail tracks the GPU idle gap before the retained frame's commit, not Donner's wait:
+  a spin before the retained draw, outside its timing, changes it in both binaries. The
+  candidate's `simple_shapes` p95 falls from 0.746 to 0.583 ms with a 700 us spin, and the
+  reference's rises from 0.391 to 0.678 ms with a 300 us spin. The tail is attributed to Apple GPU
+  idle-to-active latency.
 - **Discrete Vulkan GPU, one cell.** Measured at `d5d3a771` with the emitter change from
   [#1704](https://github.com/jwmcglynn/donner/pull/1704) applied, `moderate_paths` Ret-Settled p50
   is 9.1% slower. The cost is the C library allocator in the readback snapshot copy: with glibc's
