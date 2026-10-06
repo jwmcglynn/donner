@@ -703,8 +703,23 @@ test("real Safari memory gate clicks Donner Splash and dwells for five minutes",
   );
   assert.match(
     harness,
-    /result\.memoryDwell\.length >= kMemoryDwellMs \/ kMemorySampleIntervalMs/,
+    /sampleTimes\.at\(-1\) - sampleTimes\[0\] >= kMemoryDwellMs - 2 \* kMemorySampleIntervalMs/,
     "the gate must prove its sampler stayed alive throughout the five-minute dwell",
+  );
+  assert.match(
+    harness,
+    /Math\.max\(\.\.\.sampleGaps\) <= 3 \* kMemorySampleIntervalMs/,
+    "the gate must prove its sampler never stalled during the dwell",
+  );
+  assert.match(
+    harness,
+    /dwellRss\.at\(-1\) <= Math\.min\(\.\.\.dwellRss\) \+ 128 \* 1024 \* 1024/,
+    "the gate must reject WebContent RSS growth across the dwell",
+  );
+  assert.match(
+    harness,
+    /baselineLayers\.bitmapCount, 0[\s\S]*baselineLayers\.textureSnapshotCount,\s*baselineLayers\.rowCount/,
+    "the memory baseline must require GPU-resident layer thumbnails",
   );
   assert.match(
     harness,
