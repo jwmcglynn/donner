@@ -312,8 +312,10 @@ archive_lane_results() {
   if [[ ! -d "${kResultsDir}" ]] || [[ -z "$(ls -A "${kResultsDir}" 2>/dev/null)" ]]; then
     return 0
   fi
-  mkdir -p "${kFailureArchiveDir}/${name}"
-  cp -R "${kResultsDir}/." "${kFailureArchiveDir}/${name}/"
+  # Each step returns its own failure: callers may run this on the left of `||`, where `set -e`
+  # no longer stops at a failed command.
+  mkdir -p "${kFailureArchiveDir}/${name}" || return 1
+  cp -R "${kResultsDir}/." "${kFailureArchiveDir}/${name}/" || return 1
   echo "Archived ${name} Playwright results to ${kFailureArchiveDir}/${name}"
 }
 

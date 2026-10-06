@@ -1288,7 +1288,7 @@ test("the quarantine report summary records a forced failure with its evidence",
       ],
     }],
   });
-  assert.match(unfinished, /\| a &lt;case&gt; \| smoke\.spec\.ts \| not run \|  \|/);
+  assert.match(unfinished, /\| a &lt;case&gt; \| smoke\.spec\.ts \| not run \| {2}\|/);
   assert.match(
     unfinished,
     /\| still quarantined \| smoke\.spec\.ts \| skipped \| unexpected in report mode/,
@@ -1420,5 +1420,38 @@ test("only a report-only lane lifts the Firefox quarantine, and it never fails t
     const quarantine = body.indexOf("(#1634)");
     const armed = body.indexOf("armFailureCanvasEvidence(page, test.info());");
     assert.ok(quarantine !== -1 && armed > quarantine && armed - quarantine < 80, title);
+  }
+});
+
+test("a report-lane archive that cannot copy warns instead of passing silently", () => {
+  const script = readFileSync(path.join(repositoryRoot, "tools/run-browser-ci.sh"), "utf8");
+  const archive = /\narchive_lane_results\(\) \{\n[\s\S]*?\n\}\n/.exec(script)?.[0];
+  assert.ok(archive, "the browser CI script must define archive_lane_results");
+  const callPattern =
+    /\n {2}archive_lane_results "\$\{kQuarantineReportLane\}" \\\n {4}\|\| echo "[^"\n]*"\n/;
+  const call = callPattern.exec(script)?.[0];
+  assert.ok(call, "the report lane must warn when its archive fails");
+  const scratch = mkdtempSync(path.join(tmpdir(), "archive-lane-"));
+  try {
+    const results = path.join(scratch, "test-results");
+    mkdirSync(results);
+    writeFileSync(path.join(results, "failure-canvas-readback.png"), "evidence");
+    // A file where the archive directory belongs makes both mkdir and cp fail.
+    const archiveRoot = path.join(scratch, "playwright-failures");
+    writeFileSync(archiveRoot, "not a directory");
+    const output = execFileSync("bash", ["-c", [
+      "set -euo pipefail",
+      `kResultsDir=${JSON.stringify(results)}`,
+      `kFailureArchiveDir=${JSON.stringify(archiveRoot)}`,
+      "kQuarantineReportLane=firefox-quarantine-report",
+      archive,
+      call,
+      "echo lane-finished",
+    ].join("\n")], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+    assert.match(output, /warning: could not archive the firefox-quarantine-report results/);
+    assert.doesNotMatch(output, /Archived firefox-quarantine-report/);
+    assert.match(output, /lane-finished/, "a failed archive must not stop the script");
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
   }
 });
