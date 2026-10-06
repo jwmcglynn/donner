@@ -3,6 +3,7 @@
 #include <utility>
 
 #include "donner/gpu/shader/CompiledShader.h"
+#include "donner/gpu/shader/LinkedProjection.h"
 #include "donner/gpu/shader/programs/Checkerboard.h"
 #include "donner/svg/renderer/geode/GeodeShaderSelection.h"
 
@@ -10,12 +11,10 @@ namespace donner::geode {
 
 namespace {
 
-/// The checkerboard projection \p device consumes. The adapter device takes WGSL; native Metal
-/// and Vulkan devices exercise this same class through their own projection, which the
-/// WebAssembly package never links.
+/// The checkerboard projection \p device consumes, selected from the one this build links.
 /// @param device Device the pipeline is created on.
 const gpu::shader::CompiledShaderView& SelectCheckerboardShader(const gpu::Device& device) {
-  return SelectShaderProjection(device, DONNER_GEODE_SHADER_ARTIFACTS(Checkerboard));
+  return SelectShaderProjection(device, DONNER_LINKED_SHADER_ARTIFACT(Checkerboard));
 }
 
 /// True when \p shader exposes the vertex/fragment pair and its uniform block.

@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "donner/gpu/Device.h"
+#include "donner/gpu/shader/LinkedProjection.h"
 #include "donner/gpu/shader/programs/ImageBlit.h"
 #include "donner/svg/renderer/geode/GeodeImagePipeline.h"
 
@@ -221,7 +222,7 @@ void GeodeTextureEncoder::drawTexturedQuad(
     return;
   }
 
-  const auto& shader = gpu::shader::programs::ImageBlitShader();
+  const auto& shader = DONNER_LINKED_SHADER_ARTIFACT(ImageBlit);
   gpu::Result<gpu::BindGroup> bindGroupResult = device.createBindGroup(gpu::BindGroupDescriptor{
       "GeodeImageBlitBindGroup",
       pipeline.bindGroupLayout(),

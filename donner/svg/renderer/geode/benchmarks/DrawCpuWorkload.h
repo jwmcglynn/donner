@@ -16,6 +16,7 @@
 #include "donner/gpu/CommandEncoder.h"
 #include "donner/gpu/Device.h"
 #include "donner/gpu/DeviceObserver.h"
+#include "donner/gpu/shader/LinkedProjection.h"
 #include "donner/gpu/shader/programs/SlugFill.h"
 #include "donner/svg/renderer/geode/GeodePipeline.h"
 
@@ -180,7 +181,7 @@ private:
   }
 
   bool createBuffersAndUpload() {
-    const gpu::shader::CompiledShaderView& shader = gpu::shader::programs::SlugFillShader();
+    const gpu::shader::CompiledShaderView& shader = DONNER_LINKED_SHADER_ARTIFACT(SlugFill);
     if (shader.resources.size() != 11) {
       ADD_FAILURE() << "SlugFill resource count drifted: " << shader.resources.size();
       return false;
@@ -233,7 +234,7 @@ private:
   }
 
   bool createBindGroup() {
-    const gpu::shader::CompiledShaderView& shader = gpu::shader::programs::SlugFillShader();
+    const gpu::shader::CompiledShaderView& shader = DONNER_LINKED_SHADER_ARTIFACT(SlugFill);
     std::vector<gpu::BindGroupEntry> entries;
     entries.reserve(shader.resources.size());
     for (const gpu::shader::ShaderResource& resource : shader.resources) {

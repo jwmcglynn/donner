@@ -46,6 +46,7 @@ PAYLOAD_MARKERS = {
     "drop_shadow": (b"struct DropShadowParams", b"donner_msl_member_color"),
     "filter_image": (b"struct ImageParams", b"donner_msl_member_m00"),
     "diffuse_lighting": (b"fn spotLightFactor(", b"donner_msl_member_coneAngleRad"),
+    "ui_draw": (b"fn fs_premultiplied_alpha(", b"donner_msl_member_clip_from_logical"),
 }
 
 

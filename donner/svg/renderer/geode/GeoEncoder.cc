@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "donner/gpu/Device.h"
+#include "donner/gpu/shader/LinkedProjection.h"
 #include "donner/gpu/shader/programs/SlugFill.h"
 #include "donner/gpu/shader/programs/SlugGradient.h"
 #include "donner/gpu/shader/programs/SlugMask.h"
@@ -73,7 +74,7 @@ static_assert(kStorageDummyBytes % sizeof(uint32_t) == 0,
 using Uniforms = gpu::shader::programs::SlugFillParams;
 
 uint32_t FillBinding(std::string_view name) {
-  const auto* resource = gpu::shader::programs::SlugFillShader().resource(name);
+  const auto* resource = DONNER_LINKED_SHADER_ARTIFACT(SlugFill).resource(name);
   UTILS_RELEASE_ASSERT(resource);
   return resource->binding;
 }
@@ -197,7 +198,7 @@ static_assert(offsetof(EncodedPath::Band, curveCount) ==
 /// Returns a binding from the verified process-lifetime gradient interface.
 /// @param name Authored resource name.
 uint32_t GradientBinding(std::string_view name) {
-  const auto* resource = gpu::shader::programs::SlugGradientShader().resource(name);
+  const auto* resource = DONNER_LINKED_SHADER_ARTIFACT(SlugGradient).resource(name);
   UTILS_RELEASE_ASSERT(resource != nullptr);
   return resource->binding;
 }
@@ -1612,7 +1613,7 @@ void GeoEncoder::fillPathIntoMask(const Path& path, FillRule rule,
       impl_->allocInArena(impl_->uniformArena, &u, sizeof(u), kUniformOffsetAlignment);
 
   static const auto kBindings = [] {
-    const auto& shader = gpu::shader::programs::SlugMaskShader();
+    const auto& shader = DONNER_LINKED_SHADER_ARTIFACT(SlugMask);
     return std::array{
         shader.resource("uniforms")->binding,      shader.resource("bands")->binding,
         shader.resource("curveData")->binding,     shader.resource("clipMaskTexture")->binding,

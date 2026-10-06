@@ -21,6 +21,7 @@
 #include "donner/base/Utils.h"
 #include "donner/gpu/CommandEncoder.h"
 #include "donner/gpu/shader/CompiledShader.h"
+#include "donner/gpu/shader/LinkedProjection.h"
 #include "donner/gpu/shader/programs/ColorSpaceConvert.h"
 #include "donner/gpu/shader/programs/ComponentTransfer.h"
 #include "donner/gpu/shader/programs/Composite.h"
@@ -891,41 +892,37 @@ bool HasSingleComputeEntry(const gpu::shader::CompiledShaderView& shader) {
 
 /// Creates an output/parameter program with no sampled input, such as feFlood.
 /// @param runtime Device receiving the selected precompiled projection.
-/// @param wgslShader Authored WGSL artifact. @param nativeShader Platform-native artifact, or
-/// null when this build links none. @param label Diagnostic program label.
-RuntimeComputeProgram CreateReflectedOutputProgram(
-    gpu::Device& runtime, const gpu::shader::CompiledShaderView& wgslShader,
-    const gpu::shader::CompiledShaderView* nativeShader, std::string_view label) {
-  const gpu::shader::CompiledShaderView& shader =
-      SelectShaderProjection(runtime, wgslShader, nativeShader);
+/// @param linked The family's linked artifact. @param label Diagnostic program label.
+RuntimeComputeProgram CreateReflectedOutputProgram(gpu::Device& runtime,
+                                                   const gpu::shader::CompiledShaderView& linked,
+                                                   std::string_view label) {
+  const gpu::shader::CompiledShaderView& shader = SelectShaderProjection(runtime, linked);
   const auto* output = shader.resource("outputTexture");
   const auto* params = shader.resource("params");
   if (!output || !params) {
     return {};
   }
-  RuntimeComputeProgram result = CreateReflectedProgram(runtime, wgslShader, nativeShader, label);
+  RuntimeComputeProgram result = CreateReflectedProgram(runtime, linked, label);
   result.inputOutputParameterBindings = {UINT32_MAX, output->binding, params->binding};
   return result;
 }
 
 /// Creates a source/output/parameter program using its compiled resource interface.
 /// @param runtime Device receiving the selected precompiled projection.
-/// @param wgslShader Authored WGSL artifact. @param nativeShader Platform-native artifact, or
-/// null when this build links none. @param label Diagnostic program label.
+/// @param linked The family's linked artifact. @param label Diagnostic program label.
 /// @param inputName Authored name of the single sampled input.
-RuntimeComputeProgram CreateReflectedFilterProgram(
-    gpu::Device& runtime, const gpu::shader::CompiledShaderView& wgslShader,
-    const gpu::shader::CompiledShaderView* nativeShader, std::string_view label,
-    std::string_view inputName = "inputTexture") {
-  const gpu::shader::CompiledShaderView& shader =
-      SelectShaderProjection(runtime, wgslShader, nativeShader);
+RuntimeComputeProgram CreateReflectedFilterProgram(gpu::Device& runtime,
+                                                   const gpu::shader::CompiledShaderView& linked,
+                                                   std::string_view label,
+                                                   std::string_view inputName = "inputTexture") {
+  const gpu::shader::CompiledShaderView& shader = SelectShaderProjection(runtime, linked);
   const auto* input = shader.resource(inputName);
   const auto* output = shader.resource("outputTexture");
   const auto* params = shader.resource("params");
   if (!input || !output || !params) {
     return {};
   }
-  RuntimeComputeProgram result = CreateReflectedProgram(runtime, wgslShader, nativeShader, label);
+  RuntimeComputeProgram result = CreateReflectedProgram(runtime, linked, label);
   result.inputOutputParameterBindings = {input->binding, output->binding, params->binding};
   if (const auto* table = shader.resource("transferTable")) {
     if (table->type != gpu::BindingType::ReadOnlyStorageBuffer) {
@@ -946,15 +943,12 @@ struct TwoInputNames {
 
 /// Creates a two-input program using its reflected resources and compute interface.
 /// @param runtime Device receiving the selected precompiled projection.
-/// @param wgslShader Authored WGSL artifact. @param nativeShader Platform-native artifact, or
-/// null when this build links none. @param label Diagnostic program label.
+/// @param linked The family's linked artifact. @param label Diagnostic program label.
 /// @param names Authored resource names to resolve.
-RuntimeComputeProgram CreateReflectedTwoInputProgram(
-    gpu::Device& runtime, const gpu::shader::CompiledShaderView& wgslShader,
-    const gpu::shader::CompiledShaderView* nativeShader, std::string_view label,
-    TwoInputNames names) {
-  const gpu::shader::CompiledShaderView& shader =
-      SelectShaderProjection(runtime, wgslShader, nativeShader);
+RuntimeComputeProgram CreateReflectedTwoInputProgram(gpu::Device& runtime,
+                                                     const gpu::shader::CompiledShaderView& linked,
+                                                     std::string_view label, TwoInputNames names) {
+  const gpu::shader::CompiledShaderView& shader = SelectShaderProjection(runtime, linked);
   const auto* source = shader.resource(names.source);
   const auto* backdrop = shader.resource(names.backdrop);
   const auto* output = shader.resource(names.output);
@@ -962,7 +956,7 @@ RuntimeComputeProgram CreateReflectedTwoInputProgram(
   if (!source || !backdrop || !output || (!names.params.empty() && !params)) {
     return {};
   }
-  RuntimeComputeProgram result = CreateReflectedProgram(runtime, wgslShader, nativeShader, label);
+  RuntimeComputeProgram result = CreateReflectedProgram(runtime, linked, label);
   result.twoInputBindings = {source->binding, backdrop->binding, output->binding,
                              params ? params->binding : UINT32_MAX};
   return result;
@@ -1309,11 +1303,9 @@ std::optional<ComponentTransferData> BuildComponentTransferData(
 }  // namespace
 
 RuntimeComputeProgram CreateReflectedProgram(gpu::Device& runtime,
-                                             const gpu::shader::CompiledShaderView& wgslShader,
-                                             const gpu::shader::CompiledShaderView* nativeShader,
+                                             const gpu::shader::CompiledShaderView& linked,
                                              std::string_view label) {
-  const gpu::shader::CompiledShaderView& shader =
-      SelectShaderProjection(runtime, wgslShader, nativeShader);
+  const gpu::shader::CompiledShaderView& shader = SelectShaderProjection(runtime, linked);
   if (!HasSingleComputeEntry(shader)) {
     return {};
   }
@@ -1327,50 +1319,50 @@ GeodeFilterEngine::GeodeFilterEngine(GeodeDevice& device, bool verbose)
   // Every program is built from its precompiled artifact; binding slots and workgroup shapes
   // come from reflection, so a shader edit that changes them cannot desynchronize the host.
   gpu::Device& runtime = device_.runtimeDevice();
-  blurProgram_ = CreateReflectedFilterProgram(runtime, DONNER_GEODE_SHADER_ARTIFACTS(GaussianBlur),
+  blurProgram_ = CreateReflectedFilterProgram(runtime, DONNER_LINKED_SHADER_ARTIFACT(GaussianBlur),
                                               "GaussianBlur");
   offsetProgram_ =
-      CreateReflectedFilterProgram(runtime, DONNER_GEODE_SHADER_ARTIFACTS(Offset), "Offset");
+      CreateReflectedFilterProgram(runtime, DONNER_LINKED_SHADER_ARTIFACT(Offset), "Offset");
   colorMatrixProgram_ = CreateReflectedFilterProgram(
-      runtime, DONNER_GEODE_SHADER_ARTIFACTS(FilterColorMatrix), "FilterColorMatrix");
+      runtime, DONNER_LINKED_SHADER_ARTIFACT(FilterColorMatrix), "FilterColorMatrix");
   floodProgram_ =
-      CreateReflectedOutputProgram(runtime, DONNER_GEODE_SHADER_ARTIFACTS(Flood), "Flood");
+      CreateReflectedOutputProgram(runtime, DONNER_LINKED_SHADER_ARTIFACT(Flood), "Flood");
   mergeProgram_ =
-      CreateReflectedTwoInputProgram(runtime, DONNER_GEODE_SHADER_ARTIFACTS(Merge), "Merge",
+      CreateReflectedTwoInputProgram(runtime, DONNER_LINKED_SHADER_ARTIFACT(Merge), "Merge",
                                      {"sourceTexture", "destinationTexture", "outputTexture", ""});
   compositeProgram_ =
-      CreateReflectedTwoInputProgram(runtime, DONNER_GEODE_SHADER_ARTIFACTS(Composite), "Composite",
+      CreateReflectedTwoInputProgram(runtime, DONNER_LINKED_SHADER_ARTIFACT(Composite), "Composite",
                                      {"sourceTexture", "destinationTexture"});
   blendProgram_ =
-      CreateReflectedTwoInputProgram(runtime, DONNER_GEODE_SHADER_ARTIFACTS(FilterBlend),
+      CreateReflectedTwoInputProgram(runtime, DONNER_LINKED_SHADER_ARTIFACT(FilterBlend),
                                      "FilterBlend", {"in1_tex", "in2_tex", "output_tex"});
   morphologyProgram_ = CreateReflectedFilterProgram(
-      runtime, DONNER_GEODE_SHADER_ARTIFACTS(Morphology), "Morphology");
+      runtime, DONNER_LINKED_SHADER_ARTIFACT(Morphology), "Morphology");
   componentTransferProgram_ = CreateReflectedFilterProgram(
-      runtime, DONNER_GEODE_SHADER_ARTIFACTS(ComponentTransfer), "ComponentTransfer");
+      runtime, DONNER_LINKED_SHADER_ARTIFACT(ComponentTransfer), "ComponentTransfer");
   convolveMatrixProgram_ = CreateReflectedFilterProgram(
-      runtime, DONNER_GEODE_SHADER_ARTIFACTS(ConvolveMatrix), "ConvolveMatrix");
+      runtime, DONNER_LINKED_SHADER_ARTIFACT(ConvolveMatrix), "ConvolveMatrix");
   turbulenceProgram_ =
-      CreateReflectedProgram(runtime, DONNER_GEODE_SHADER_ARTIFACTS(Turbulence), "Turbulence");
+      CreateReflectedProgram(runtime, DONNER_LINKED_SHADER_ARTIFACT(Turbulence), "Turbulence");
   displacementMapProgram_ =
-      CreateReflectedTwoInputProgram(runtime, DONNER_GEODE_SHADER_ARTIFACTS(DisplacementMap),
+      CreateReflectedTwoInputProgram(runtime, DONNER_LINKED_SHADER_ARTIFACT(DisplacementMap),
                                      "DisplacementMap", {"sourceTexture", "mapTexture"});
   diffuseLightingProgram_ = CreateReflectedFilterProgram(
-      runtime, DONNER_GEODE_SHADER_ARTIFACTS(DiffuseLighting), "DiffuseLighting");
+      runtime, DONNER_LINKED_SHADER_ARTIFACT(DiffuseLighting), "DiffuseLighting");
   specularLightingProgram_ = CreateReflectedFilterProgram(
-      runtime, DONNER_GEODE_SHADER_ARTIFACTS(SpecularLighting), "SpecularLighting");
+      runtime, DONNER_LINKED_SHADER_ARTIFACT(SpecularLighting), "SpecularLighting");
   dropShadowProgram_ =
-      CreateReflectedTwoInputProgram(runtime, DONNER_GEODE_SHADER_ARTIFACTS(DropShadow),
+      CreateReflectedTwoInputProgram(runtime, DONNER_LINKED_SHADER_ARTIFACT(DropShadow),
                                      "DropShadow", {"sourceTexture", "blurredTexture"});
-  imageProgram_ = CreateReflectedFilterProgram(runtime, DONNER_GEODE_SHADER_ARTIFACTS(FilterImage),
+  imageProgram_ = CreateReflectedFilterProgram(runtime, DONNER_LINKED_SHADER_ARTIFACT(FilterImage),
                                                "FilterImage", "imageTexture");
-  tileProgram_ = CreateReflectedFilterProgram(runtime, DONNER_GEODE_SHADER_ARTIFACTS(Tile), "Tile");
+  tileProgram_ = CreateReflectedFilterProgram(runtime, DONNER_LINKED_SHADER_ARTIFACT(Tile), "Tile");
   subregionClipProgram_ = CreateReflectedFilterProgram(
-      runtime, DONNER_GEODE_SHADER_ARTIFACTS(SubregionClip), "SubregionClip");
+      runtime, DONNER_LINKED_SHADER_ARTIFACT(SubregionClip), "SubregionClip");
   filterResolveProgram_ = CreateReflectedFilterProgram(
-      runtime, DONNER_GEODE_SHADER_ARTIFACTS(FilterResolve), "FilterResolve");
+      runtime, DONNER_LINKED_SHADER_ARTIFACT(FilterResolve), "FilterResolve");
   colorSpaceConvertProgram_ = CreateReflectedFilterProgram(
-      runtime, DONNER_GEODE_SHADER_ARTIFACTS(ColorSpaceConvert), "ColorSpaceConvert");
+      runtime, DONNER_LINKED_SHADER_ARTIFACT(ColorSpaceConvert), "ColorSpaceConvert");
 
   // The transfer table is immutable process data shared by resolve and color-space conversion.
   {
@@ -3075,7 +3067,7 @@ FilterTexture GeodeFilterEngine::applyTurbulence(
   if (outputView == nullptr || paramsSlot.buffer == nullptr || tablesSlot.buffer == nullptr) {
     return {};
   }
-  const auto& shader = gpu::shader::programs::TurbulenceShader();
+  const auto& shader = DONNER_LINKED_SHADER_ARTIFACT(Turbulence);
   const gpu::BindGroup* bindGroup = arena.createRuntimeBindGroup(
       turbulenceProgram_.bindGroupLayout,
       {{shader.resource("outputTexture")->binding, gpu::TextureViewBinding{*outputView}},

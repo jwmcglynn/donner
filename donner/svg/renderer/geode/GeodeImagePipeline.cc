@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "donner/base/Utils.h"
+#include "donner/gpu/shader/LinkedProjection.h"
 #include "donner/gpu/shader/programs/ImageBlit.h"
 #include "donner/svg/renderer/geode/GeodeShaders.h"
 
@@ -27,7 +28,7 @@ T UnwrapOrAbort(gpu::Result<T>&& result, const char* what) {
 
 GeodeImagePipeline::GeodeImagePipeline(gpu::Device& device, gpu::TextureFormat colorFormat)
     : colorFormat_(colorFormat) {
-  const auto& shader = gpu::shader::programs::ImageBlitShader();
+  const auto& shader = DONNER_LINKED_SHADER_ARTIFACT(ImageBlit);
   const auto entries = gpu::shader::MakeBindingLayout(shader);
   bindGroupLayout_ = UnwrapOrAbort(
       device.createBindGroupLayout(gpu::BindGroupLayoutDescriptor{"GeodeImageBlitBGL", entries}),
