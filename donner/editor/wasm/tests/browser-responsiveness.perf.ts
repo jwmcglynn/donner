@@ -18,7 +18,11 @@ import {
   latencyGateMode,
   runCompletionCheck,
 } from "./latency-gates.mjs";
-import { presentedDragSummary } from "./presented-frame-samples.mjs";
+import {
+  kHeldDragPresentationBounds,
+  presentedDragFailures,
+  presentedDragSummary,
+} from "./presented-frame-samples.mjs";
 import { showsSplashDocument, splashDPoint } from "./splash-aim.mjs";
 
 interface Diagnostics extends Window {
@@ -1336,6 +1340,7 @@ async function startPresentedFrameSampler(page: Page) {
       if (queue && sampler.samples.length < 4096) {
         sampler.samples.push({
           t: performance.now(),
+          frameId: Number(queue.frameId),
           completedSerial: Number(queue.completedSerial),
           submittedSerial: Number(queue.submittedSerial),
           pointerX: Number(queue.pointerX),
@@ -1527,10 +1532,10 @@ test.describe("UI presentation diagnosis", () => {
           expect(presented, "the held drag must finish its input stream").toBeDefined();
           expect(presented!.activeSamples, "frames sampled during the drag")
             .toBeGreaterThanOrEqual(process.env.CI ? 12 : 16);
-          expect(presented!.completedFrames, "frames presented during the drag")
-            .toBeGreaterThanOrEqual(12);
-          expect(presented!.travelFraction, "presented frames must follow the dragged pointer")
-            .toBeGreaterThanOrEqual(0.15);
+          expect(
+            presentedDragFailures(presented!, kHeldDragPresentationBounds),
+            "presented frames must keep completing and follow the dragged pointer",
+          ).toEqual([]);
         }
       } finally {
         stopHeartbeat?.();
