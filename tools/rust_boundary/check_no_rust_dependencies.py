@@ -923,18 +923,29 @@ def _resolve_label(value: str, package: str) -> str | None:
     return None
 
 
-def _is_chain_label(label: str) -> bool:
-    """True for a pinned chain rule, a target its macro generates, or an archive label.
+# The targets each pinned macro kind generates, named after the rule: an audit's checker, a
+# transitioned test's remote-CI wrapper, and a cc test's implicit `.stripped` and `.dwp` outputs
+# plus its build-variant wrappers (`_VARIANT_SPECS` in build_defs/rules.bzl), each of which may
+# carry its own remote-CI wrapper. Plain rules generate nothing.
+_CC_TEST_VARIANTS = ("tiny", "text_full", "geode")
+GENERATED_TARGET_SUFFIXES = {
+    "configured_dependency_audit_test": ("_checker",),
+    "donner_multi_transitioned_test": ("_ci_remote",),
+    "donner_cc_test": (".stripped", ".dwp") + tuple(
+        f"_{variant}{remote}" for variant in _CC_TEST_VARIANTS for remote in ("", "_ci_remote")
+    ),
+}
 
-    Donner's test and audit macros name what they generate after the rule, as in an audit's
-    `_checker`; the wrapper package's plain rules generate nothing.
-    """
+
+def _is_chain_label(label: str) -> bool:
+    """True for a pinned chain rule, a target its macro generates, or an archive label."""
     if label in REFERENCE_CHAIN_LABELS or ARCHIVE_LABEL_RE.fullmatch(label):
         return True
     package, _, name = label.partition(":")
     return any(
-        path != ARCHIVE_RUNTIME and package == f"//{_package(path)}" and
-        name.startswith(rule + "_")
+        package == f"//{_package(path)}" and
+        any(name == rule + suffix
+            for suffix in GENERATED_TARGET_SUFFIXES.get(REFERENCE_CHAIN_RULES[path][rule], ()))
         for path, rule in REFERENCE_CHAIN_LABELS.values()
     )
 

@@ -57,8 +57,10 @@ scopes and the verifier enforces the boundary of each:
   runtime, the two Geode reference leaves, the resvg comparison's libraries,
   test, wrapper and audit, and the CI `test_suite` that selects them. Every
   string literal a Starlark build file names outside dependency-audit metadata
-  is read as a label in that file's package; one that resolves to a pinned rule
-  or to an archive may appear only in that rule's own declaration. So any other
+  is read as a label in that file's package; one that resolves to a pinned rule,
+  to a target a pinned macro generates (an audit's `_checker`, a transitioned
+  test's `_ci_remote`, a cc test's `.stripped` and `.dwp` outputs and variant
+  wrappers) or to an archive may appear only in that rule's own declaration. So any other
   rule, in those files or elsewhere, that names the chain fails, as does a
   pinned rule that disappears or changes kind. A label assembled from pieces is
   not read. Bazel visibility narrows the wrapper, the Geode leaves and the
