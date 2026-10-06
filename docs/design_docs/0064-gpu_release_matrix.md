@@ -134,9 +134,10 @@ Notes:
 - Validation layers are the load-bearing gate for the explicit-synchronization work Vulkan needs.
   Enabling them is a prerequisite for the Vulkan cutover, not a follow-up to it.
 - The software-adapter frozen pixel row cannot gain an environment. A software Vulkan record has
-  to come from the wgpu-native reference renderer, which no longer renders the frozen corpus, so a
-  lane whose lavapipe changes version or architecture fails closed with a diagnostic capture
-  instead of onboarding the new rasterizer (`donner/gpu/baseline/README.md`).
+  to come from the wgpu-native reference renderer, which does not render the frozen corpus, and
+  `//donner/gpu/baseline:baseline_counters_tests` rejects any other. A lane whose lavapipe changes
+  version or architecture therefore fails `//donner/gpu/baseline:baseline_pixels_tests` with a
+  diagnostic capture instead of onboarding the new rasterizer (`donner/gpu/baseline/README.md`).
 
 ## Browser WebGPU
 

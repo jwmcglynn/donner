@@ -111,13 +111,12 @@ records what produced them, not a second hash of them.
 ## Maintaining the frozen records
 
 The pixel records are closed. Every committed adapter directory was rendered by the wgpu-native
-Geode path, and nothing in the tree renders that path any more: the only remaining wgpu-native
-consumer is the Linux resvg comparison, which renders resvg scenes rather than this corpus. The
-manual wgpu-native re-capture tool that produced the ARM64 software Vulkan record was retired once
-that record was committed. From now on:
+Geode path, and nothing in the tree renders this corpus through that path: the only wgpu-native
+consumer is the Linux resvg comparison, which renders resvg scenes. The records are maintained as
+follows:
 
 - Committed PNGs and their `capture_provenance.txt` are never regenerated or hand-edited. A
-  provenance header can name a capture target that no longer exists; it records what produced the
+  provenance header can name a capture target that is not in the tree; it records what produced the
   bytes, not a command to run.
 - Scenes that capture pixels are fixed with them. Adding, removing, or changing one would leave
   every committed environment without a matching record and no way to render one. Counter-only

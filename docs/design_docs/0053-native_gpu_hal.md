@@ -914,8 +914,10 @@ positive audit requires its selected test-only wrapper and archive chain. The ex
 copying the implementation or its internal tests. Record requirements, specifications, algorithm
 choices, verification targets and SDK/tool inputs for each implementation change. Keep transition
 reference pixels/counters as test data; remove legacy production callers as they migrate. The
-frozen-baseline pixel records are closed: their manual wgpu-native re-capture tool is retired, and
-`donner/gpu/baseline/README.md` states how the records are maintained.
+frozen-baseline pixel records are closed and maintained as `donner/gpu/baseline/README.md`
+describes. `//donner/gpu/baseline:baseline_counters_tests` rejects a software Vulkan record that
+does not name the wgpu-native renderer, and `//donner/gpu/baseline:baseline_pixels_tests` fails on
+an automated lane whose adapter has no record.
 
 The no-Rust requirement applies to production build and artifact closure. No shipped artifact
 or non-test closure may fetch/invoke Rust tooling or depend on a Rust-built GPU library. The explicit
