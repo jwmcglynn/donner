@@ -1095,7 +1095,10 @@ jobs:
       # job sets it; a persistent self-hosted runner never publishes them.
       BROWSER_STALL_TEST_FLAGS: "--test_env=DONNER_BROWSER_STALL_DIAGNOSTICS=1"
       # Skips the browser cases quarantined for this hosted job only (#1691, #1702): their
-      # GPU work can miss its budget on this runner. Every other lane still runs them.
+      # GPU work can miss its budget on this runner. Every other lane still runs them. Every
+      # Bazel test invocation in this job carries it, so their test environments stay identical
+      # and Bazel keeps its analysis cache between steps; the advisory GPU comparisons skip the
+      # quarantined cases too until they are re-enabled.
       HOSTED_MACOS_QUARANTINE_TEST_FLAGS: "--test_env=DONNER_HOSTED_MACOS_QUARANTINE=1"
       # Exercise the Geode editor configuration through transitioned wrappers, which
       # locate declared shared libraries consistently on clean workers.

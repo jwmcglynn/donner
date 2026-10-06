@@ -1063,5 +1063,20 @@ test("hosted macOS quarantines read only the hosted job's switch and name their 
     const skip = body.indexOf("    kHostedMacosQuarantine,\n");
     assert.notEqual(skip, -1, `${title} must be skipped only by the hosted switch`);
     assert.match(body.slice(skip, skip + 200), new RegExp(`\\(${issue}\\)",`), title);
+    assert.ok(skip < body.indexOf("await openEditor("), `${title} must skip before any work`);
   }
+  // Nothing else may set or read the switch: a BUILD env entry or an export in the browser CI
+  // script would quarantine every lane, including self-hosted and local runs.
+  const scanned = /\.(?:[cm]?js|ts|json|bazel)$/;
+  const readers = readdirSync(testDirectory)
+    .filter((name) => name !== "browser-matrix.spec.mjs" && scanned.test(name))
+    .filter((name) =>
+      readFileSync(path.join(testDirectory, name), "utf8")
+        .includes("DONNER_HOSTED_MACOS_QUARANTINE")
+    );
+  assert.deepEqual(readers.sort(), ["browser-presentation-regression.spec.ts", "smoke.spec.ts"]);
+  assert.doesNotMatch(
+    readFileSync(path.join(repositoryRoot, "tools/run-browser-ci.sh"), "utf8"),
+    /HOSTED_MACOS_QUARANTINE/,
+  );
 });
