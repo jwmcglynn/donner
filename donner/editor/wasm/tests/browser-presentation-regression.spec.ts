@@ -48,6 +48,10 @@ import {
 
 installBrowserStallDiagnostics(test);
 
+// CI's GitHub-hosted macOS job sets this to skip the cases quarantined for that job only
+// (#1691, #1702); every other lane and local runs still run them.
+const kHostedMacosQuarantine = process.env.DONNER_HOSTED_MACOS_QUARANTINE === "1";
+
 declare global {
   interface Window {
     __donnerBackend?: string;
@@ -1660,6 +1664,10 @@ test("Basic Shapes pre-capture gate reads app scalars without layout observation
 
 test("Basic Shapes gated setup reaches visible pixels in the browser journey", async ({ browserName, page }) => {
   test.skip(browserName !== "chromium", "remote Chromium controlled setup journey");
+  test.skip(
+    kHostedMacosQuarantine,
+    "Quarantined in the hosted macOS CI job: offscreen thumbnails can miss the budget (#1702)",
+  );
   const failures = await openEditor(page);
   const { blueRect } = await openBasicShapes(page, false, true);
   expect(blueRect.pixels).toBeGreaterThan(500);

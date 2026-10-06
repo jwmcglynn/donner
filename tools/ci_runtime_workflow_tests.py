@@ -275,6 +275,34 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
             self.assertNotIn("BROWSER_STALL", path.read_text(encoding="utf-8"), path.name)
         self.assertNotIn("BROWSER_STALL", self.bazelrc)
 
+    def test_hosted_macos_quarantine_is_set_only_by_the_hosted_job(self):
+        # The hosted macOS job skips browser cases quarantined for that runner alone (#1691,
+        # #1702). Every other lane and local runs must keep running them, so nothing else may
+        # set the switch.
+        switch = "--test_env=DONNER_HOSTED_MACOS_QUARANTINE=1"
+        hosted = self._job_body("macos")
+        self.assertIn('      HOSTED_MACOS_QUARANTINE_TEST_FLAGS: "%s"\n' % switch, hosted)
+        steps = ("Test", "Test (browser targets)", "Compare browser GPU tests (serial)",
+                 "Compare browser GPU tests (parallel)")
+        for step in steps:
+            body = self._step_body(hosted, step)
+            self.assertIn("$BROWSER_STALL_TEST_FLAGS", body, step)
+            self.assertIn("$HOSTED_MACOS_QUARANTINE_TEST_FLAGS", body, step)
+        self.assertEqual(self.main.count("DONNER_HOSTED_MACOS_QUARANTINE"), 1)
+        self.assertEqual(self.main.count("HOSTED_MACOS_QUARANTINE_TEST_FLAGS"), 1 + len(steps))
+        for job in ("macos-self-hosted", "linux", "linux-self-hosted"):
+            self.assertNotIn("HOSTED_MACOS_QUARANTINE", self._job_body(job), job)
+        resolver = runfiles.Create()
+        workflows = Path(resolver.Rlocation("donner/.github/workflows/main.yml")).parent
+        others = [path for path in sorted(workflows.glob("*.y*ml")) if path.name != "main.yml"]
+        self.assertGreater(len(others), 5)
+        actions = sorted((workflows.parent / "actions").glob("*/action.y*ml"))
+        self.assertGreater(len(actions), 3)
+        for path in others + actions:
+            self.assertNotIn("HOSTED_MACOS_QUARANTINE", path.read_text(encoding="utf-8"),
+                             path.name)
+        self.assertNotIn("HOSTED_MACOS_QUARANTINE", self.bazelrc)
+
     def test_browser_stall_system_log_slices_only_well_formed_windows(self):
         collect = self._step_body(self._job_body("macos"), "Collect browser stall system log")
         script = textwrap.dedent(collect.split("run: |\n", 1)[1])

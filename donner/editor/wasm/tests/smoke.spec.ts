@@ -22,6 +22,10 @@ import { holdCanvasCompletionForTest, installSurfaceFrameProbe } from "./surface
 
 installBrowserStallDiagnostics(test);
 
+// CI's GitHub-hosted macOS job sets this to skip the cases quarantined for that job only
+// (#1691, #1702); every other lane and local runs still run them.
+const kHostedMacosQuarantine = process.env.DONNER_HOSTED_MACOS_QUARANTINE === "1";
+
 declare global {
   interface Window {
     __catalogFetchErrors?: { message: string; globalReceiver: boolean }[];
@@ -712,6 +716,10 @@ test("welcome picker does not render a hidden document", async ({ page }) => {
 });
 
 test("welcome picker paints before asynchronously rendering real SVG thumbnails", async ({ page }) => {
+  test.skip(
+    kHostedMacosQuarantine,
+    "Quarantined in the hosted macOS CI job: offscreen thumbnails can miss the budget (#1702)",
+  );
   const fatalMessages = await openEditor(page, {
     postInitializationDwellMs: 0,
     wgpuReadbackStats: kBackend === "geode",
@@ -1592,6 +1600,10 @@ test("browser presents the first Basic Shapes drag frame within the interaction 
 
 test("production Geode wasm presents visible editor pixels after held canvas GPU completion", async ({ browserName, page }, testInfo) => {
   test.skip(browserName !== "chromium" || kBackend !== "geode", "controlled browser GPU gate");
+  test.skip(
+    kHostedMacosQuarantine,
+    "Quarantined in the hosted macOS CI job: the GPU device request can miss its window (#1691)",
+  );
   const fatalMessages = await openEditor(page, { postInitializationDwellMs: 0 });
   expect(await installSurfaceFrameProbe(page)).toBeGreaterThan(0);
   const hold = await holdCanvasCompletionForTest(page);
