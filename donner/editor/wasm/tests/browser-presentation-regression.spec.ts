@@ -9,6 +9,7 @@ import {
   type InitialBlueFrameState,
 } from "./basic-shapes-capture-gate";
 import { installBrowserStallDiagnostics } from "./browser-stall-diagnostics";
+import { installFailureCanvasEvidence } from "./failure-canvas-evidence";
 import {
   captureEditorPage,
   captureSplashPresentationFrame,
@@ -34,6 +35,7 @@ import { waitForAppliedPointer } from "./gesture-streams";
 import { echoGpuSessionConsole } from "./gpu-session-console";
 import { compareOverlayBitmap, type OverlayBitmapComparison } from "./overlay-bitmap-compare";
 import { cropCapturedPng, normalizeOverlayGeneration, overlayGenerationMask } from "./png-crop";
+import { quarantineStillSkips } from "./quarantine-report.mjs";
 import {
   delayNextCanvasCompletionForTest,
   findCanvasOwnerWorker,
@@ -48,6 +50,11 @@ import {
 } from "./surface-frame-probe";
 
 installBrowserStallDiagnostics(test);
+// Both cases are quarantined in Firefox by #1634; keep a canvas readback when either fails.
+installFailureCanvasEvidence(test, [
+  "Geode Wasm View overlays render tile metadata and sparse Slug triangle edges",
+  "Firefox keeps the dragged shape and its selection outline in every drag frame",
+]);
 
 // CI's GitHub-hosted macOS job sets this to skip the cases quarantined for that job only
 // (#1691, #1702); every other lane and local runs still run them.
@@ -2713,7 +2720,7 @@ test("browser overlay control stays disabled after a normal editor frame", async
 
 test("Geode Wasm View overlays render tile metadata and sparse Slug triangle edges", async ({ browserName, page }) => {
   test.skip(
-    browserName === "firefox",
+    browserName === "firefox" && quarantineStillSkips(),
     "Quarantined: Firefox can capture a blank editor page (#1634)",
   );
   const failures = await openEditor(page, "overlay");
@@ -3262,7 +3269,7 @@ test("Firefox keeps the dragged shape and its selection outline in every drag fr
   // forward.
   test.skip(browserName !== "firefox", "Firefox Geode regression");
   test.skip(
-    browserName === "firefox",
+    browserName === "firefox" && quarantineStillSkips(),
     "Quarantined: Firefox can capture a blank editor page (#1634)",
   );
   const failures = await openEditor(page, false, true);

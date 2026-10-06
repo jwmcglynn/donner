@@ -367,6 +367,27 @@ run_lane "composited-chromium" \
   bash donner/editor/wasm/tests/run_tests.sh --headed \
   --config=playwright.composited-chromium.config.js
 
+# Report-only lane for the Firefox cases quarantined by #1634. Only the scheduled
+# Editor WASM run sets DONNER_BROWSER_QUARANTINE_REPORT_LANE=1. The lane lifts the
+# quarantine for its own command, keeps its evidence beside the other lanes', and
+# writes a JSON report the workflow summarizes, but its exit code never fails the
+# job: pull request and push runs keep the quarantine, so main stays green while
+# the nightly run keeps collecting evidence.
+readonly kQuarantineReportLane="firefox-quarantine-report"
+readonly kQuarantineReportDir="${repo_root}/${kFailureArchiveDir}/${kQuarantineReportLane}"
+report_lane_code=""
+if [[ "${DONNER_BROWSER_QUARANTINE_REPORT_LANE:-}" == "1" ]]; then
+  log "LANE ${kQuarantineReportLane} (report only)"
+  mkdir -p "${kQuarantineReportDir}"
+  report_lane_code=0
+  DONNER_BROWSER_QUARANTINE_REPORT=report \
+    DONNER_QUARANTINE_REPORT_JSON="${kQuarantineReportDir}/quarantine-report.json" \
+    bash donner/editor/wasm/tests/run_tests.sh --headed \
+    --config=playwright.quarantine-report.config.js || report_lane_code=$?
+  archive_lane_results "${kQuarantineReportLane}"
+  echo "LANE ${kQuarantineReportLane} exit code: ${report_lane_code} (report only)"
+fi
+
 # ---------------------------------------------------------------------------
 # 6. Summary
 # ---------------------------------------------------------------------------
@@ -379,6 +400,9 @@ while [[ "${lane_index}" -lt "${#lane_names[@]}" ]]; do
   printf '%-34s %s\n' "${lane_names[${lane_index}]}" "${lane_codes[${lane_index}]}"
   lane_index=$((lane_index + 1))
 done
+if [[ -n "${report_lane_code}" ]]; then
+  printf '%-34s %s\n' "${kQuarantineReportLane}" "${report_lane_code} (report only)"
+fi
 
 if [[ "${overall_status}" -ne 0 ]]; then
   echo ""

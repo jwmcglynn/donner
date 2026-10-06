@@ -1204,3 +1204,145 @@ test("the editor-opening specs echo the GPU acquisition trace into the test log"
     assert.match(source, /\n {2}echoGpuSessionConsole\(page\);\n/, spec);
   }
 });
+
+test("quarantine mode defaults to skipping and accepts only skip or report", async () => {
+  const quarantine = await import("./quarantine-report.mjs");
+  const variable = quarantine.kQuarantineReportEnv;
+  assert.equal(variable, "DONNER_BROWSER_QUARANTINE_REPORT");
+  assert.equal(quarantine.quarantineMode({}), "skip");
+  assert.equal(quarantine.quarantineMode({ [variable]: "" }), "skip");
+  assert.equal(quarantine.quarantineMode({ [variable]: "skip" }), "skip");
+  assert.equal(quarantine.quarantineMode({ [variable]: "report" }), "report");
+  assert.equal(quarantine.quarantineStillSkips({}), true);
+  assert.equal(quarantine.quarantineStillSkips({ [variable]: "report" }), false);
+  assert.throws(() => quarantine.quarantineMode({ [variable]: "1" }), /"skip" or "report"/);
+});
+
+test("the quarantine report summary records a forced failure with its evidence", async () => {
+  const { quarantineReportSummary } = await import("./quarantine-report.mjs");
+  const report = {
+    suites: [{
+      file: "smoke.spec.ts",
+      specs: [{
+        title: "Firefox keeps Basic Shapes resize pixels and outline synchronized",
+        file: "smoke.spec.ts",
+        tests: [{ results: [{ status: "passed", errors: [], attachments: [] }] }],
+      }],
+      suites: [{
+        file: "browser-presentation-regression.spec.ts",
+        specs: [{
+          title: "Firefox keeps the dragged shape and its selection outline in every drag frame",
+          file: "browser-presentation-regression.spec.ts",
+          tests: [{
+            results: [{
+              status: "failed",
+              errors: [{ message: "\nError: forced | failure\n    at frame 3" }],
+              attachments: [
+                { name: "failure-page-screenshot" },
+                { name: "failure-canvas-readback" },
+                { name: "failure-canvas-evidence" },
+              ],
+            }],
+          }],
+        }, {
+          title: "Geode Wasm View overlays render tile metadata and sparse Slug triangle edges",
+          file: "browser-presentation-regression.spec.ts",
+          tests: [{ results: [{ status: "timedOut", errors: [{ message: "Test timeout" }] }] }],
+        }],
+      }],
+    }],
+  };
+  const summary = quarantineReportSummary(report);
+  assert.match(summary, /^### Quarantined cases \(report only\)\n/);
+  const row = (title) => summary.split("\n").find((line) => line.startsWith(`| ${title} |`));
+  assert.equal(
+    row("Firefox keeps Basic Shapes resize pixels and outline synchronized"),
+    "| Firefox keeps Basic Shapes resize pixels and outline synchronized | smoke.spec.ts"
+      + " | passed |  |",
+  );
+  assert.equal(
+    row("Firefox keeps the dragged shape and its selection outline in every drag frame"),
+    "| Firefox keeps the dragged shape and its selection outline in every drag frame"
+      + " | browser-presentation-regression.spec.ts | failed (reported)"
+      + " | Error: forced \\| failure; evidence: failure-page-screenshot,"
+      + " failure-canvas-readback, failure-canvas-evidence |",
+  );
+  assert.match(
+    row("Geode Wasm View overlays render tile metadata and sparse Slug triangle edges"),
+    /\| timedOut \(reported\) \| Test timeout \|$/,
+  );
+  assert.match(quarantineReportSummary(null), /wrote no results/);
+  assert.match(quarantineReportSummary({ suites: [] }), /ran no cases/);
+});
+
+test("only a report-only lane lifts the Firefox quarantine, and it never fails the job", () => {
+  const config = require("./playwright.quarantine-report.config.js");
+  assert.equal(config.projects.length, 1);
+  const [project] = config.projects;
+  assert.equal(project.name, "firefox-quarantine-report");
+  assert.equal(project.use.browserName, "firefox");
+  const titles = [
+    "Geode Wasm View overlays render tile metadata and sparse Slug triangle edges",
+    "Firefox keeps Basic Shapes resize pixels and outline synchronized",
+    "Firefox keeps the dragged shape and its selection outline in every drag frame",
+  ];
+  assert.equal(project.grep.length, titles.length);
+  for (const title of titles) {
+    assert.ok(project.grep.some((pattern) => pattern.test(title)), title);
+  }
+  assert.ok(config.globalTimeout > 0 && config.globalTimeout <= 6 * 60_000,
+    "the report lane must stay within a few minutes of the nightly job");
+  assert.deepEqual(config.reporter.map(([name]) => name), ["list", "json"]);
+
+  const browserCi = readFileSync(path.join(repositoryRoot, "tools/run-browser-ci.sh"), "utf8");
+  const normalized = browserCi.replace(/\\\s*\n\s*/g, " ").replace(/\s+/g, " ");
+  assert.equal(
+    browserCi.split("DONNER_BROWSER_QUARANTINE_REPORT=report").length - 1,
+    1,
+    "only the report lane may lift the quarantine",
+  );
+  const gate = normalized.indexOf(
+    "if [[ \"${DONNER_BROWSER_QUARANTINE_REPORT_LANE:-}\" == \"1\" ]]; then",
+  );
+  assert.notEqual(gate, -1, "the report lane must be gated on the workflow's schedule-only flag");
+  const lane = normalized.slice(gate, normalized.indexOf(" fi ", gate));
+  assert.ok(
+    lane.includes(
+      "DONNER_BROWSER_QUARANTINE_REPORT=report"
+        + " DONNER_QUARANTINE_REPORT_JSON=\"${kQuarantineReportDir}/quarantine-report.json\""
+        + " bash donner/editor/wasm/tests/run_tests.sh --headed"
+        + " --config=playwright.quarantine-report.config.js || report_lane_code=$?",
+    ),
+    "the report lane must lift the quarantine for its own command only",
+  );
+  assert.doesNotMatch(lane, /overall_status|run_lane /, "the report lane must not fail the job");
+  assert.match(lane, /archive_lane_results "\$\{kQuarantineReportLane\}"/);
+
+  const workflow = readFileSync(
+    path.join(repositoryRoot, ".github/workflows/editor_wasm.yml"),
+    "utf8",
+  );
+  assert.ok(
+    workflow.includes(
+      "node donner/editor/wasm/tests/quarantine-report-summary.mjs"
+        + " donner/editor/wasm/tests/playwright-failures/firefox-quarantine-report"
+        + "/quarantine-report.json >> \"$GITHUB_STEP_SUMMARY\"",
+    ),
+    "the scheduled run must summarize the report lane",
+  );
+  assert.match(
+    workflow,
+    /path: donner\/editor\/wasm\/tests\/playwright-failures\/firefox-quarantine-report\n/,
+  );
+
+  const specs = [["smoke.spec.ts", 1], ["browser-presentation-regression.spec.ts", 2]];
+  for (const [spec, count] of specs) {
+    const source = readFileSync(path.join(testDirectory, spec), "utf8");
+    const quarantines = source.split(
+      "browserName === \"firefox\" && quarantineStillSkips(),\n"
+      + "    \"Quarantined: Firefox can capture a blank editor page (#1634)\",",
+    ).length - 1;
+    assert.equal(quarantines, count, `${spec} must lift its #1634 quarantine only in report mode`);
+    assert.match(source, /installFailureCanvasEvidence\(test, \[/);
+  }
+});
