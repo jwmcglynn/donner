@@ -1072,3 +1072,38 @@ test("responsiveness cases wait for the splash to be displayed before using it",
   );
   assert.equal(spec.split("await waitForSplashDisplayed(page);").length - 1, 3);
 });
+
+test("a presented-frame drag summary counts frames and travel in the input window", async () => {
+  const { presentedDragSummary } = await import("./presented-frame-samples.mjs");
+  const stream = { firstInputAt: 100, lastInputAt: 200, start: { x: 442, y: 596 },
+    end: { x: 322, y: 524 } };
+  const sample = (t, completedSerial, step, inputRepresented = true) => ({
+    t,
+    completedSerial,
+    pointerX: 442 - 120 * step,
+    pointerY: 596 - 72 * step,
+    inputRepresented,
+  });
+  const summary = presentedDragSummary([
+    sample(50, 10, 0),
+    sample(100, 12, 0),
+    sample(150, 20, 0.25),
+    sample(180, 30, 0.5, false),
+    sample(200, 31, 0.4),
+    sample(250, 40, 1),
+  ], stream);
+  assert.equal(summary.activeSamples, 4, "only samples inside the input window count");
+  assert.equal(summary.completedFrames, 19);
+  // The unrepresented sample's position does not count, and travel is measured along the drag.
+  assert.ok(Math.abs(summary.travelFraction - 0.4) < 1e-9, String(summary.travelFraction));
+
+  const stalled = presentedDragSummary([sample(120, 5, 0), sample(190, 5, 0)], stream);
+  assert.deepEqual(
+    [stalled.activeSamples, stalled.completedFrames, stalled.travelFraction],
+    [2, 0, 0],
+    "a stalled presentation neither advances nor travels",
+  );
+  const backwards = presentedDragSummary([sample(150, 1, -0.5)], stream);
+  assert.equal(backwards.travelFraction, 0, "travel against the drag does not count");
+  assert.equal(presentedDragSummary([], stream).activeSamples, 0);
+});
