@@ -215,9 +215,12 @@ codebase consistent and portable.
   The rule dates from the retired wgpu-native adapter, which retained every pipeline it built:
   per-frame or per-renderer construction leaked ~100 KB each until the driver's
   `maxMemoryAllocationCount` tripped (Mesa lavapipe) or the process hung progressively (Mesa
-  llvmpipe). See issue #575 for the incident history. `build_defs/check_banned_patterns.py` flags
-  `.createRenderPipeline` / `.createComputePipeline` calls outside those files. If you need a new
-  pipeline class, add ownership to `GeodeDevice::Impl` and expose it through a `GeodeDevice`
+  llvmpipe). See issue #575 for the incident history. The banned-pattern check in
+  `build_defs/check_banned_patterns.py` matches only `.`-qualified calls
+  (`device.createRenderPipeline` / `device.createComputePipeline`, not calls through `->`), and
+  exempts those four files, the Linux test-only reference device `GeodeWgpuAdapterDevice.cc`,
+  `GeoEncoder_tests.cc`, `GeodeShaders_tests.cc` and everything under `donner/gpu/`. If you need a
+  new pipeline class, add ownership to `GeodeDevice::Impl` and expose it through a `GeodeDevice`
   accessor.
 
 ## Tests

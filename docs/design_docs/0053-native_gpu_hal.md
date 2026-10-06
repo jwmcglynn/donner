@@ -1179,15 +1179,19 @@ the candidate with the reference revision `7a7fb1eb` on the same host and config
   [#1712](https://github.com/jwmcglynn/donner/issues/1712) tracks it.
 - **Metal `renderer_bench`, five cells.** Measured at `d5d3a771` on the same Apple silicon Mac:
   Ret-Settled p95 rose on `simple_shapes` (+79%), `moderate_paths` (+44%), `lion` (+51%) and
-  `gradient_grid` (+55%), and `simple_shapes` Settled p95 rose 11.5%; every p50 improved. The cause
-  is Apple GPU idle-to-active latency: a frame committed after a short GPU idle gap starts late on
-  the GPU. Lengthening the idle gap with a spin before the retained draw (outside its timing)
-  shrinks the tail (`simple_shapes` p95 0.746 to 0.583 ms), and the reference binary grows a similar
-  tail when given a 300 us gap, so the effect follows the GPU idle gap rather than Donner's wait.
-- **Discrete Vulkan GPU, one cell.** With [#1704](https://github.com/jwmcglynn/donner/pull/1704),
-  `moderate_paths` Ret-Settled p50 is 9.1% slower. The cost is the C library allocator in the
-  readback snapshot copy: with glibc's mmap and trim thresholds pinned, all 18 cells are inside the
-  rule. Lavapipe passes all 18 cells.
+  `gradient_grid` (+55%), and `simple_shapes` Settled p95 rose 11.5%; every p50 improved. Traces
+  of each frame's commit, GPU start and GPU end show that in the slowest tenth of samples the frame
+  starts on the GPU 0.2 to 0.5 ms late (`simple_shapes` kernel-to-GPU-start p50 0.067 ms, 0.458 ms
+  in the slow tenth), concentrated where the GPU had been idle for under 0.2 ms before the commit,
+  while the completion-handler hop stays at about 0.05 ms. The tail is attributed to Apple GPU
+  idle-to-active latency. Lengthening the idle gap with a spin before the retained draw (outside
+  its timing) shrinks the tail (`simple_shapes` p95 0.746 to 0.583 ms), and the reference binary
+  grows a similar tail when given a 300 us gap, so the effect follows the GPU idle gap rather than
+  Donner's wait.
+- **Discrete Vulkan GPU, one cell.** Measured at `d5d3a771` with the emitter change from
+  [#1704](https://github.com/jwmcglynn/donner/pull/1704) applied, `moderate_paths` Ret-Settled p50
+  is 9.1% slower. The cost is the C library allocator in the readback snapshot copy: with glibc's
+  mmap and trim thresholds pinned, all 18 cells are inside the rule. Lavapipe passes all 18 cells.
 
 ## Platform Cutover Decisions
 
@@ -1201,8 +1205,10 @@ cutover:
   the editor, the in-tree embed example and Donner's own tests. The
   [native embedding guide](../guides/embedding_geode.md) documents that internal seam.
 - **Vulkan suballocation.** Not needed. On a discrete Vulkan GPU, physical residency equals the
-  logical allocation accounting plus one frame of transient textures, so each buffer keeps one
-  dedicated allocation behind `VulkanBufferAllocator.h`.
+  logical allocation accounting plus one frame of transient textures, so each buffer keeps its own
+  allocation behind the `BufferSuballocator` seam in `VulkanBufferAllocator.h`. The code ties any
+  future suballocator to the driver's limit on how many allocations may exist at once, to be
+  written only when measurement shows that limit is the binding constraint.
 
 ## Related Designs
 

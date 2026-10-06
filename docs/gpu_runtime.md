@@ -14,6 +14,13 @@ embedding surface beyond internal callers: the editor, the in-tree
 runtime and Geode device targets to Donner's packages and `//examples`. Applications render
 through the public \ref donner::svg::Renderer API.
 
+`//donner/svg/renderer:renderer_geode` itself is public, and `RendererGeode.h` declares the
+shared-context constructor `RendererGeode(std::shared_ptr<geode::GeodeDevice>)` and
+`setTargetTexture(const gpu::Texture&)`. The targets that define the types they take,
+`//donner/svg/renderer/geode:geode_device` and the `//donner/gpu` package's libraries, are visible
+only inside the repository, so a target outside Donner cannot depend on them to build those
+arguments. That visibility, not the public header, keeps the seam internal.
+
 ## Layers {#GpuRuntimeLayers}
 
 ```mermaid
@@ -88,17 +95,21 @@ flowchart TD
 
 ### Textures {#GpuRuntimeTextures}
 
-A runtime device names a texture in one of four roles:
+A runtime device names a texture in one of three roles:
 
-| Role               | Created by                          | Owner of the allocation                                    | Ends                                                                                                      |
-| ------------------ | ----------------------------------- | ---------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
-| Owned texture      | `Device::createTexture()`           | The device that created it                                 | The handle is destroyed; the allocation goes once its last submission completes and no export holds it    |
-| Registration       | `Device::registerTexture()`         | The producer; the consumer holds a read-only alias         | The consumer releases it; its hold on the allocation drops after the consumer's last submission naming it |
-| Acquired frame     | `Device::acquireCurrentTexture()`   | The surface                                                | `presentSurface()`, `abandonCurrentTexture()` or a reconfiguration invalidates it                         |
-| Host render target | `RendererGeode::setTargetTexture()` | The caller; the renderer keeps only the texture's identity | `clearTargetTexture()`; the texture must stay live from `beginFrame()` through `endFrame()`               |
+| Role           | Created by                        | Owner of the allocation                            | Ends                                                                                                      |
+| -------------- | --------------------------------- | -------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| Owned texture  | `Device::createTexture()`         | The device that created it                         | The handle is destroyed; the allocation goes once its last submission completes and no export holds it    |
+| Registration   | `Device::registerTexture()`       | The producer; the consumer holds a read-only alias | The consumer releases it; its hold on the allocation drops after the consumer's last submission naming it |
+| Acquired frame | `Device::acquireCurrentTexture()` | The surface                                        | `presentSurface()`, `abandonCurrentTexture()` or a reconfiguration invalidates it                         |
 
 `Device::ownsTextureBacking()` is true only for an owned texture, so a caller can never free
 memory a surface or another device still owns.
+
+A host render target is a `RendererGeode` role over one of these, not a fourth kind of texture:
+`RendererGeode::setTargetTexture()` takes an owned texture or an acquired frame of the renderer's
+own device and keeps only its identity, for every frame until `clearTargetTexture()`. The caller
+keeps the texture live from `beginFrame()` through `endFrame()`.
 
 Cross-device registration has a producer half and a consumer half.
 `Device::exportTexture()` runs on the producer's thread and returns a `gpu::TextureExport`: an
@@ -137,11 +148,23 @@ tracks that handoff as an open transport defect, not as the intended data path.
 ### Uploads and mappings {#GpuRuntimeUploads}
 
 - Queue writes (`Device::writeBuffer()`, `Device::writeTexture()`) never change bytes an already
-  submitted command still reads. A write to a resource an earlier submission still uses is staged
-  in bounded host storage and flushed at the start of the next submission. Metal's staging budget
-  defaults to `gpu::kMaxBufferByteSize` (1 GiB), Vulkan's pending and in-flight payloads share
-  1 GiB, and both backends accept at most 16,384 pending writes. A write past either limit fails
-  with `GpuErrorType::LimitExceeded` and changes nothing.
+  submitted command still reads. What happens to a write into a resource that an earlier
+  submission still uses depends on the write and the backend:
+  - A buffer write whose offset and size are multiples of four bytes is queued in bounded host
+    storage, on Metal and Vulkan, and copied at the start of the next submission. Metal also
+    queues writes to a busy texture this way. Metal's queued and in-flight writes share a staging
+    budget that defaults to `gpu::kMaxBufferByteSize` (1 GiB); on Vulkan the same 1 GiB budget
+    covers queued buffer writes. Both backends accept at most 16,384 pending writes, and a write
+    past either limit fails with `GpuErrorType::LimitExceeded` without being queued.
+  - An unaligned write to a busy buffer waits for the buffer's last submission until the queue has
+    made no progress for five seconds. If the wait gives up, the write fails without changing the
+    buffer: with `GpuErrorType::InvalidState`, or on Vulkan with `GpuErrorType::DeviceLost` when
+    another device over the root declared the loss.
+  - Vulkan's `writeTexture()` always stages the texels in a transient buffer and submits a fenced
+    upload that it waits for before returning. The wait gives up after 60 seconds without queue
+    progress (`kUploadStallTimeout` in `VulkanDevice.cc`) with `GpuErrorType::InvalidState`. A
+    root declared lost before or during the upload fails it with `GpuErrorType::DeviceLost`,
+    unless the device has already recorded an error of its own.
 - `Device::mapBufferAsync()` returns a `gpu::BufferMapping`. A buffer carries one mapping at a time,
   and a mapping is not ownership: destroying the buffer invalidates it. `mappedBytes()` is readable
   only after `waitForMapping()` or `pollMapping()` reports it ready, and only until
@@ -181,11 +204,26 @@ Tear down in the reverse order of construction:
    root. The physical owner, holding the root and the first context's runtime device, goes with the
    last context. In WebAssembly builds the destructor does not wait; the browser device goes with
    the last runtime device over it.
-5. Release the host's platform objects. On Linux, call `destroyExternalSurface()` before
-   destroying the window; on macOS the Metal layer belongs to its view.
+5. Release the host's platform objects. On Linux the host keeps its own `VulkanSharedRoot`
+   reference through step 4, so the native root outlives the contexts, and calls
+   `VulkanSharedRoot::destroyExternalSurface()` before destroying the window, as the embed
+   example's `RetireNativeEmbedSurface()` does. On macOS the Metal layer belongs to its view.
 
-Once a root is lost, every teardown wait returns at once. Teardown then leaks rather than blocking a
-thread on a driver that stopped answering.
+Teardown on a lost root depends on the backend:
+
+- `GeodeDevice::waitForQueueIdle()` returns at once, and so does the Metal backend's teardown
+  drain. Metal retains every resource a committed command buffer references until that command
+  buffer completes, so the device releases its own references without waiting.
+- Vulkan teardown frees nothing native until a fence proves the work that used it complete. Only
+  a signalled fence, or the driver's `VK_ERROR_DEVICE_LOST`, counts as proof, and the wait does not
+  end because the root was declared lost. Each outstanding fence gets up to five seconds without
+  queue progress (`kTeardownStallTimeout`), counted from the queue's last progress, or a fixed
+  five seconds after a submission whose completion is unknown. The swapchain proves its own
+  submissions the same way.
+- When Vulkan cannot prove completion, as after a hang the driver never reported, the device's
+  whole native graph is retained until process exit. The backend logs
+  `[donner::gpu::vulkan] shutdown incomplete; Vulkan disabled until restart`, and every later
+  Vulkan root or device creation fails until the process restarts.
 
 ## Backends {#GpuRuntimeBackends}
 
@@ -206,9 +244,12 @@ Each product links only the shader projection its devices consume; see
 - **Vulkan.** Vulkan 1.1 core with classic render passes and per-submission fences; presentation
   also needs the swapchain-maintenance extension. A root lock spans barrier recording through
   queue submission, so devices over one root never encode from a stale image layout. Each buffer
-  gets one dedicated allocation behind `VulkanBufferAllocator.h`. The maintainer decided that
-  suballocation is not needed: on a discrete GPU, physical residency equals the logical allocation
-  accounting plus one frame of transient textures.
+  gets its own `VkDeviceMemory` allocation behind the `BufferSuballocator` seam in
+  `VulkanBufferAllocator.h`. The code ties any future suballocating implementation to the driver's
+  limit on how many allocations may exist at once, and leaves it until measurement shows that limit
+  is the binding constraint. The maintainer decided that suballocation is not needed: on a
+  discrete GPU, physical residency equals the logical allocation accounting plus one frame of
+  transient textures.
 - **Browser.** `donner/gpu/browser` expresses validated operations to `navigator.gpu` through
   `library_donner_gpu.js`. Browser objects are named by identifiers that are never reused, and both
   sides check each identifier's kind and owner. A browser shows a canvas frame from its own frame
@@ -222,7 +263,8 @@ Each product links only the shader projection its devices consume; see
 
 Native builds (`donner/svg/renderer/geode/GeodeNativeRoot.h`) resolve the backend in this order:
 
-1. `GpuRootSelection::backend`, when the caller names one. `DONNER_GPU_BACKEND` is then not read.
+1. `GpuRootSelection::backend`, when the caller names one. `DONNER_GPU_BACKEND` is still read,
+   but then ignored, even when its value names no backend.
 2. `DONNER_GPU_BACKEND`: `metal` or `vulkan`, in any letter case.
 3. The platform default, when the variable is unset or empty: native Metal on macOS and native
    Vulkan on Linux.
@@ -307,15 +349,20 @@ It is declared in one of two ways:
   already-hung device never relabels a driver-reported loss.
 
 The declaring call runs every `gpu::DeviceLossRelease` registered on the condition, releasing work
-held behind waits that only the lost root could satisfy, and logs once:
-`[gpu] Device declared lost: <reason>`. Always declare through these functions, or through
-`GeodeDevice::markDeviceLost()` and `markDeviceLostAfterWaitTimeout()`; storing the flag directly
-skips the releases and the attribution.
+held behind waits that only the lost root could satisfy, and returns true. Neither function logs.
+Donner's own callers log once, through `gpu::LogDeclaredDeviceLoss()`, when their call is the one
+that set the condition: `[gpu] Device declared lost: <reason>`. `GeodeDevice::markDeviceLost()`
+and `markDeviceLostAfterWaitTimeout()` declare and log together. A host that calls
+`DeclareDeviceLost()` directly prints nothing unless it also calls `LogDeclaredDeviceLoss()`.
+Always declare through one of these functions; storing the flag directly skips the releases and
+the attribution.
 
 On a lost root:
 
-- Serial waits, mapping waits and teardown drains end at once; mappings report loss before
-  readiness.
+- Serial waits and mapping waits end at once; mappings report loss before readiness.
+  `GeodeDevice::waitForQueueIdle()` and the Metal teardown drain also return at once, but Vulkan
+  teardown still waits to prove its fences complete (see
+  [Retirement order](#GpuRuntimeRetirement)).
 - Metal hands out no frame, and an acquire or present reports `SurfaceStatus::DeviceLost`. A Vulkan
   driver's `VK_ERROR_DEVICE_LOST` from acquire or present maps to the same status.
 - On Vulkan, a texture upload, and a buffer write that has to wait for its buffer, return
@@ -329,20 +376,23 @@ On a lost root:
 Nothing recovers a lost root. Recovery means a new root and new contexts:
 `CreateOverPhysicalDeviceOwner()` refuses a lost owner, and the headless cache discards lost
 contexts. A browser worker asks for a new `GPUDevice` only after every runtime device over the lost
-one is released.
+one is released. On Vulkan a new root works only if the lost root's teardown proved its work
+complete; otherwise Vulkan stays disabled until the process restarts (see
+[Retirement order](#GpuRuntimeRetirement)).
 
 ### Bounded GPU waits {#GpuRuntimeBoundedWaits}
 
 The runtime's contract (`donner/gpu/DeviceLost.h`) is that no thread Donner relies on blocks on
 the GPU without a bound: a hung device surfaces as a declared loss instead of a hung process. The
 Vulkan backend's drain after a lost submission is the documented exception: it has no Donner
-deadline, and the Vulkan specification requires it to return. A wait whose bound exists to detect a
-hung device
-measures time without progress, not the time its whole backlog takes: a serial completes only
-after everything queued ahead of it, so a fixed budget would declare a slow device that is still
-working lost. `gpu::Device::waitForSerialUnlessStalled()` gives up only once
-`gpu::Device::lastProgress()` is the bound in the past, and has no total limit while work keeps
-completing. The default bound is `geode::kDefaultGpuWaitTimeout`, five seconds.
+deadline, and the Vulkan specification requires it to return.
+
+A wait whose bound exists to detect a hung device measures time without progress, not the time
+its whole backlog takes: a serial completes only after everything queued ahead of it, so a fixed
+budget would declare a slow device that is still working lost.
+`gpu::Device::waitForSerialUnlessStalled()` gives up only once `gpu::Device::lastProgress()` is
+the bound in the past, and has no total limit while work keeps completing. The default bound is
+`geode::kDefaultGpuWaitTimeout`, five seconds; the Vulkan texture upload allows 60 seconds.
 
 | Backend            | Progress                                                                                                                                                                     |
 | ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -360,8 +410,10 @@ Waits judged by progress:
 - Metal: a present's wait for its frame's work, which declares the loss at `Present`; the teardown
   drain; an unaligned write's wait for its busy buffer; and the wait for room under the 512 command
   buffer backstop, which also gives up after sixty seconds in all.
-- Vulkan: a host access to a busy buffer, a texture upload, the proof of completion at teardown
-  and the swapchain's waits for its own submissions.
+- Vulkan: a host access to a busy buffer, a texture upload (bounded at 60 seconds), the proof of
+  completion at teardown and the swapchain's waits for its own submissions. The teardown proofs
+  and the swapchain's waits do not end when the root is declared lost (see
+  [Retirement order](#GpuRuntimeRetirement)).
 - The editor: UI submission admission, where a frame times out only once it is five seconds old
   and the device has also made no progress for five seconds
   (`PresentationSubmissionQueue::kCompletionDeadline`), declaring the loss at `QueueIdle`; and the
@@ -402,8 +454,9 @@ The editor applies this through `AcquirePresentationFrame()` and `SurfaceFrameAc
   and pipelines rebuilt for its format.
 - A surface that reports the device lost is released, and the editor declares its framebuffer
   context lost so every renderer over the root sees the same condition.
-- The browser's event-driven frame loop stops re-arming after three consecutive surface failures,
-  and at once for a lost device, so a surface that cannot recover never turns into a busy loop.
+- The browser's event-driven frame loop re-arms itself at most three times in a row after a
+  surface failure and stops at the fourth consecutive failure, or at once for a lost device, so a
+  surface that cannot recover never turns into a busy loop.
 
 ### Browser device acquisition {#GpuRuntimeBrowserAcquisition}
 
@@ -434,11 +487,15 @@ Each failure is logged as one fixed-format line,
 | `context_failed`        | The device was ready, but the runtime device over it could not be built. |
 | `construction_failed`   | A Geode context could not be built over the selected root.               |
 
-The browser smoke suite (`donner/editor/wasm/tests/smoke.spec.ts`) accepts only these lines, and
-CI runs a serial browser GPU comparison when a browser test log contains
-`stage=selection outcome=deadline_pending`. WebGPU errors that no call can return, such as a
-validation error in recorded work, are logged to the console as
-`[Geode/browser] Uncaptured error: <message>`.
+The browser smoke suite (`donner/editor/wasm/tests/smoke.spec.ts`) records only lines in this
+format and reports any other line with the prefix as an invalid marker. In the main CI workflow's
+macOS job, after the test or browser-test step fails, or on a pull request labelled
+`ci:browser-gpu-diagnostics`, a step checks the browser test logs. It runs a serial browser GPU
+comparison when the label is set, or when a log contains `stage=selection outcome=deadline_pending`
+or a browser stall-diagnostics deadline.
+
+WebGPU errors that no call can return, such as a validation error in recorded work, are logged to
+the console as `[Geode/browser] Uncaptured error: <message>`.
 
 ### Validation layers {#GpuRuntimeValidation}
 

@@ -13,8 +13,9 @@ through the public \ref donner::svg::Renderer API. The
 [GPU runtime reference](../gpu_runtime.md) covers the ownership, backend and
 failure-mode contracts this guide relies on.
 
-The code blocks below are fragments of `examples/geode_embed.cc`, which is the
-compiled and complete version; they leave out its error reporting.
+The code blocks below are condensed from `examples/geode_embed.cc`, which is the
+compiled and complete version. They leave out its error reporting, and the frame
+block drops the example's check of the status `presentSurface()` returns.
 
 Build the example with Geode enabled:
 
@@ -158,8 +159,10 @@ presenting, because presentation invalidates the frame's handle.
 `SurfaceStatus::Outdated` calls for reconfiguration before another acquire.
 `Timeout` can be retried; `Lost` and `DeviceLost` stop this fixed-window
 example. A host that discards an acquired frame calls
-`device.abandonCurrentTexture(surface)` before retrying. The example handles
-these statuses in its frame loop.
+`device.abandonCurrentTexture(surface)` before retrying. `presentSurface()`
+reports a status too: the example stops on an error, `Lost` or `DeviceLost`,
+and reconfigures on `Outdated`. The example handles these statuses in its frame
+loop.
 
 ## Device loss {#EmbeddingGeodeDeviceLoss}
 
@@ -168,7 +171,9 @@ declare that state lost when their driver reports loss, and a bounded GPU wait
 declares it when the work it waits behind stops making progress. If the host
 receives a separate loss notification, retain the root's shared loss state for
 the callback and call `donner::gpu::DeclareDeviceLost(*lossState)`. Setting the
-flag directly would skip registered release callbacks. See
+flag directly would skip registered release callbacks. `DeclareDeviceLost` does
+not log; when it returns true, call `donner::gpu::LogDeclaredDeviceLoss()` if the
+loss should appear in the log. See
 [Device loss](../gpu_runtime.md#GpuRuntimeDeviceLoss) and
 [Bounded GPU waits](../gpu_runtime.md#GpuRuntimeBoundedWaits) for what a lost
 root does and which waits declare it.
