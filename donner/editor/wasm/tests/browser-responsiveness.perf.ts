@@ -18,6 +18,7 @@ import {
   latencyGateMode,
   runCompletionCheck,
 } from "./latency-gates.mjs";
+import { presentedDragSummary } from "./presented-frame-samples.mjs";
 import { showsSplashDocument, splashDPoint } from "./splash-aim.mjs";
 
 interface Diagnostics extends Window {
@@ -1319,15 +1320,54 @@ test(
   },
 );
 
+// Samples, once per page animation frame, what the editor publishes after each presented frame. It
+// reads no pixels: see presented-frame-samples.mjs.
+async function startPresentedFrameSampler(page: Page) {
+  await page.evaluate(() => {
+    const w = window as unknown as {
+      __donnerPresentedFrameSampler?: { running: boolean; samples: unknown[] };
+      __donnerPresentationQueueStats?: Record<string, unknown>;
+    };
+    const sampler = { running: true, samples: [] as unknown[] };
+    w.__donnerPresentedFrameSampler = sampler;
+    const tick = () => {
+      if (!sampler.running) return;
+      const queue = w.__donnerPresentationQueueStats;
+      if (queue && sampler.samples.length < 4096) {
+        sampler.samples.push({
+          t: performance.now(),
+          completedSerial: Number(queue.completedSerial),
+          submittedSerial: Number(queue.submittedSerial),
+          pointerX: Number(queue.pointerX),
+          pointerY: Number(queue.pointerY),
+          inputRepresented: queue.inputRepresented === true,
+        });
+      }
+      requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+  });
+}
+
+async function stopPresentedFrameSampler(page: Page) {
+  return await page.evaluate(() => {
+    const sampler = (window as unknown as {
+      __donnerPresentedFrameSampler?: { running: boolean; samples: unknown[] };
+    }).__donnerPresentedFrameSampler;
+    if (!sampler) return [];
+    sampler.running = false;
+    return sampler.samples;
+  }) as Parameters<typeof presentedDragSummary>[0];
+}
+
 test.describe("UI presentation diagnosis", () => {
   test.use({ viewport: { width: 1600, height: 900 }, deviceScaleFactor: 1 });
   test(
     "held drag advances UI submissions while composited pixels are sampled",
     async ({ page, browser, browserName }, info) => {
-      test.skip(
-        browserName === "firefox",
-        "Quarantined: Firefox stalls until the watchdog fires (#1668)",
-      );
+      // Firefox observes the drag through the editor's presented-frame statistics rather than by
+      // reading the canvas back every frame, which stalled it on the hosted runner (#1668).
+      const pixelProbe = browserName !== "firefox";
       const report: Record<string, unknown> = {
         browser: info.project.name,
         version: browser.version(),
@@ -1378,19 +1418,24 @@ test.describe("UI presentation diagnosis", () => {
         await page.waitForTimeout(800);
         report.before = await snapshot(page, true);
         checkpoint("sampling held drag");
-        await installCompositedProbe(page, {
-          sampleRegionCss: { x: start.x - 200, y: start.y - 130, width: 245, height: 175 },
-          sampleWidth: 96,
-          sampleHeight: 96,
-          minColorAlpha: 64,
-          minColorSpread: 60,
-        });
-        await startCompositedProbe(page);
+        if (pixelProbe) {
+          await installCompositedProbe(page, {
+            sampleRegionCss: { x: start.x - 200, y: start.y - 130, width: 245, height: 175 },
+            sampleWidth: 96,
+            sampleHeight: 96,
+            minColorAlpha: 64,
+            minColorSpread: 60,
+          });
+          await startCompositedProbe(page);
+        } else {
+          await startPresentedFrameSampler(page);
+        }
         let stream:
           | { dispatchTimes: number[]; dispatchPoints: { x: number; y: number }[] }
           | undefined;
         let usableSamples = 0;
         let drawFraction = 0;
+        let presented: ReturnType<typeof presentedDragSummary> | undefined;
         try {
           stream = await page.evaluate(async (start) => {
             const canvas = document.querySelector("canvas#canvas")!;
@@ -1427,19 +1472,33 @@ test.describe("UI presentation diagnosis", () => {
             return { dispatchTimes, dispatchPoints };
           }, start);
         } finally {
-          const result = await stopCompositedProbe(page, info, stream ?? null);
-          if (stream !== undefined) {
-            const firstInput = stream.dispatchTimes[0];
-            const lastInput = stream.dispatchTimes.at(-1)!;
-            const active = result.samples.filter((sample) =>
-              sample.t >= firstInput && sample.t <= lastInput
-            );
-            usableSamples = active.length;
-            drawFraction = active.filter((sample) => sample.drawOk).length
-              / Math.max(1, active.length);
-            report.motion = contentMotionFraction(active);
-            report.activeSamples = usableSamples;
-            report.drawFraction = drawFraction;
+          if (pixelProbe) {
+            const result = await stopCompositedProbe(page, info, stream ?? null);
+            if (stream !== undefined) {
+              const firstInput = stream.dispatchTimes[0];
+              const lastInput = stream.dispatchTimes.at(-1)!;
+              const active = result.samples.filter((sample) =>
+                sample.t >= firstInput && sample.t <= lastInput
+              );
+              usableSamples = active.length;
+              drawFraction = active.filter((sample) => sample.drawOk).length
+                / Math.max(1, active.length);
+              report.motion = contentMotionFraction(active);
+              report.activeSamples = usableSamples;
+              report.drawFraction = drawFraction;
+            }
+          } else {
+            const samples = await stopPresentedFrameSampler(page);
+            await attachJson(info, "presented-frame-samples", { stream: stream ?? null, samples });
+            if (stream !== undefined) {
+              presented = presentedDragSummary(samples, {
+                firstInputAt: stream.dispatchTimes[0],
+                lastInputAt: stream.dispatchTimes.at(-1)!,
+                start,
+                end: stream.dispatchPoints.at(-1)!,
+              });
+              report.presented = presented;
+            }
           }
           await attachJson(info, "ui-presentation-collected", report);
           let timer: ReturnType<typeof setTimeout> | undefined;
@@ -1459,10 +1518,20 @@ test.describe("UI presentation diagnosis", () => {
             report.memory = { unavailable: "watchdog resource sample unavailable" };
           }
         }
-        expect(usableSamples).toBeGreaterThanOrEqual(process.env.CI ? 12 : 16);
-        expect(drawFraction).toBeGreaterThan(0.8);
-        const motion = report.motion as ReturnType<typeof contentMotionFraction>;
-        expect(motion.fraction).toBeGreaterThanOrEqual(0.15);
+        if (pixelProbe) {
+          expect(usableSamples).toBeGreaterThanOrEqual(process.env.CI ? 12 : 16);
+          expect(drawFraction).toBeGreaterThan(0.8);
+          const motion = report.motion as ReturnType<typeof contentMotionFraction>;
+          expect(motion.fraction).toBeGreaterThanOrEqual(0.15);
+        } else {
+          expect(presented, "the held drag must finish its input stream").toBeDefined();
+          expect(presented!.activeSamples, "frames sampled during the drag")
+            .toBeGreaterThanOrEqual(process.env.CI ? 12 : 16);
+          expect(presented!.completedFrames, "frames presented during the drag")
+            .toBeGreaterThanOrEqual(12);
+          expect(presented!.travelFraction, "presented frames must follow the dragged pointer")
+            .toBeGreaterThanOrEqual(0.15);
+        }
       } finally {
         stopHeartbeat?.();
         await attachJson(info, "ui-presentation-diagnosis", report);

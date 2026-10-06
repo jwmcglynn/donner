@@ -189,6 +189,7 @@ playwright_bin.playwright_test(
         "playwright.config.js",
         "playwright.responsiveness.bazel.config.js",
         "prepare-browser-archives.js",
+        "presented-frame-samples.mjs",
         "remote-webserver.mjs",
         "splash-aim.mjs",
         ":node_modules/@playwright/test",
