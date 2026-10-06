@@ -1061,3 +1061,14 @@ test("the D aim waits for the splash, not for the previous document's viewport",
   assert.equal(showsSplashDocument(undefined), false);
   assert.equal(showsSplashDocument({ ...kSplashViewport, zoom: 0 }), false);
 });
+
+test("responsiveness cases wait for the splash to be displayed before using it", () => {
+  const spec = readFileSync(path.join(testDirectory, "browser-responsiveness.perf.ts"), "utf8");
+  // The sample attribute changes before the editor displays the splash, and an idle wait taken
+  // then can finish on the previous document (#1683).
+  assert.doesNotMatch(
+    spec,
+    /"data-active-sample-id",\s*"donner-splash",\s*\);\s*(?:checkpoint\([^)]*\);\s*)?await waitForIdle\(page\);/,
+  );
+  assert.equal(spec.split("await waitForSplashDisplayed(page);").length - 1, 3);
+});
