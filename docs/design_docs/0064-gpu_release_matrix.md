@@ -2,14 +2,15 @@
 
 **Status:** Design\
 **Author:** Claude Opus 5\
-**Created:** 2026-08-24
+**Created:** 2026-08-24\
+**Updated:** 2026-10-05
 
 ## Summary
 
 [0053: Native GPU runtime](0053-native_gpu_hal.md) makes a platform native only when it passes a
 per-platform cutover gate, and two of the inputs to that gate did not exist: the list of
-platform-and-driver combinations a release is actually blocked on, and a measured binary-size
-budget for the runtime. This document supplies both.
+platform-and-driver combinations a release is actually blocked on, and measured binary-size
+budgets for the shipped products. This document supplies both.
 
 The matrix below is derived from the lanes and targets in this repository, not from intent. Every
 row says which of three things is true today: the combination is exercised by a CI lane, it is
@@ -23,17 +24,17 @@ the ones it has not gotten to: an uncovered target is a gap, a non-target is not
 - One table per API that a reader can check against the workflows and BUILD files.
 - Coverage labels that describe execution, not compilation: a lane that builds a configuration and
   runs nothing is not coverage.
-- Measured binary sizes for the GPU runtime, with the command that produced them, replacing the
-  0.3-0.5 MB estimate 0053 explicitly refuses to accept unmeasured.
+- Measured linked sizes for the shipped native products and the editor Wasm package, with the
+  command that produces them.
 - Budget numbers a cutover can be gated on, with enough headroom to absorb intended growth and not
   so much that they stop catching the regression they exist for.
 
 ## Non-Goals
 
-- Changing what CI runs. This document records the surface; closing its gaps is separate work with
-  its own hardware and lane decisions.
-- Changing the editor Wasm size budgets in `donner/editor/wasm/BUILD.bazel`. Those gate the browser
-  product today and are retuned by the changes that move them.
+- Closing the matrix's coverage gaps. This document records the surface; closing a gap is separate
+  work with its own hardware and lane decisions. The one gate it adds is the native size check.
+- Owning the editor Wasm size budgets. They live in `donner/editor/wasm/BUILD.bazel`, gate the
+  browser product, and are retuned there; this document records them.
 - Choosing which physical GPUs to buy. The matrix states which combinations are unqualified; the
   decision about which of them become release-blocking is an open question below.
 
@@ -178,116 +179,90 @@ gap.
 
 ## Binary-size budgets
 
-### What was measured
+### What is measured
 
-`-c opt -Os` with function and data sections, macOS arm64, at revision
-`e1fc7cdb2925464a39eed7b2b29fa1d2475426c6`:
+The native budgets are stated against the shipped products as linked: the macOS editor, the Linux
+editor, and the GPU command-line render tool, `//examples:svg_to_png` built with Geode.
+`//tools/ci:shipped_editor` and `//tools/ci:shipped_svg_to_png` build each one in the configuration
+it ships in: optimized (`-c opt`), with the Geode renderer, without the Tracy profiler client that
+development builds link, and with the default text tier. The editor applies its own full text tier
+on top, as it does in every build.
+
+`tools/ci/native_linked_size.py` measures a product as the program its executable maps from the
+file, split into read-only bytes (code, constants, unwind tables) and writable initialized data.
+For an ELF executable that is the allocated program sections, split by the write flag; for a
+Mach-O executable it is the sections of the `__TEXT` segment and of the data segments.
+Dynamic-linking metadata (ELF symbol, string, hash, version and relocation tables, which Mach-O
+keeps in `__LINKEDIT`), notes, debug information and zero-filled sections are excluded, so the
+figure follows the program the linker kept rather than how the file was stripped or linked. Both
+products link Donner and its dependencies statically; only system libraries are dynamic.
 
 ```sh
-bazel build --config=macos-binary-size --config=geode \
-  //donner/gpu:gpu //donner/gpu/shader:shader //donner/gpu/shader:programs \
-  //donner/gpu/metal:metal_device //donner/gpu/vulkan:vulkan_device
-llvm-size bazel-bin/donner/gpu/libgpu.a          # and each other archive
+bazel build //tools/ci:shipped_editor //tools/ci:shipped_svg_to_png
+python3 tools/ci/native_linked_size.py \
+  --product=editor="$(bazel cquery --output=files //tools/ci:shipped_editor)" \
+  --product=svg_to_png="$(bazel cquery --output=files //tools/ci:shipped_svg_to_png)" \
+  --budget=editor=<bytes> --budget=svg_to_png=<bytes>
 ```
 
-`llvm-size` reports `__TEXT` and `__DATA` per archive member; the figures below are their sum,
-which excludes the debug information the archive also carries. The tree has no size target for a
-native GPU artifact, because there is no binary that links the runtime without also linking the
-dependency it replaces, so the archive is the measurable unit today.
+`bazel test //tools/ci:native_linked_size_budget_test` runs the same check with the committed
+budgets and prints one `native-linked-size` line per product.
 
-| Archive                             | `__TEXT` | `__DATA` | Code + data |
-| ----------------------------------- | -------- | -------- | ----------- |
-| `//donner/gpu:gpu`                  | 285,328  | 1,600    | 286,928     |
-| `//donner/gpu/shader:shader`        | 594,879  | 4,184    | 599,063     |
-| `//donner/gpu/shader:programs`      | 93,937   | 120      | 94,057      |
-| `//donner/gpu/metal:metal_device`   | 83,121   | 344      | 83,465      |
-| `//donner/gpu/vulkan:vulkan_device` | 154,666  | 392      | 155,058     |
+### Budgets
 
-The shader archive splits into an IR core and three independent emitters, and a shipped
-configuration needs one emitter, so the split matters more than the total:
+Each budget is about 10% over the product measured in the shipped configuration by the lane
+that enforces it, rounded up to a thousand bytes. Read-only includes the shader artifacts.
 
-| Component                                                          | Code + data |
-| ------------------------------------------------------------------ | ----------- |
-| Shader IR core (types, layout, module, expressions, serialization) | 349,192     |
-| MSL emitter                                                        | 86,407      |
-| SPIR-V emitter                                                     | 88,954      |
-| WGSL emitter                                                       | 74,510      |
+| Product      | Platform     | Read-only  | Writable  | Total      | Budget     |
+| ------------ | ------------ | ---------- | --------- | ---------- | ---------- |
+| Editor       | macOS arm64  | 9,876,158  | 2,563,940 | 12,440,098 | 13,685,000 |
+| `svg_to_png` | macOS arm64  | 3,738,603  | 167,984   | 3,906,587  | 4,298,000  |
+| Editor       | Linux x86_64 | PENDING    | PENDING   | PENDING    | PENDING    |
+| `svg_to_png` | Linux x86_64 | PENDING    | PENDING   | PENDING    | PENDING    |
+| Editor       | Linux arm64  | 11,195,371 | 2,534,096 | 13,729,467 | Not gated  |
+| `svg_to_png` | Linux arm64  | 4,716,219  | 144,000   | 4,860,219  | Not gated  |
 
-### Measured per-platform totals
+The Linux arm64 figures are a reference measurement with the hermetic LLVM toolchain
+(`--config=latest_llvm`); no lane builds the optimized products there, so the gate does not
+apply to that platform. Neither product links the runtime shader emitters
+(`//donner/gpu/shader:msl_emitter`, `:spirv_emitter`, `:wgsl_emitter`) or
+`//donner/gpu:recording_device`: shader artifacts are compiled during constant evaluation, and all
+four libraries are `testonly`, so Bazel analysis rejects them in either product.
 
-Runtime core plus the IR, one emitter, the shader programs, and one backend:
+### Where it is enforced
 
-| Configuration                  | Measured code + data | Approx. |
-| ------------------------------ | -------------------- | ------- |
-| Metal                          | 900,049              | 879 KiB |
-| Vulkan                         | 974,189              | 951 KiB |
-| Browser bridge (no bridge yet) | 804,687              | 786 KiB |
+`//tools/ci:native_linked_size_budget_test` checks both products against the budgets for the
+platform it runs on. It is tagged `perf` and `perf_linux`, so the nightly Perf workflow builds and
+runs it in its macOS arm64 and Linux x86_64 jobs, which already build with `-c opt`. It is also
+tagged `manual`, so `bazel test //...` does not build the optimized products. No pull-request lane
+builds the editor or `svg_to_png` in the shipped configuration, so the gate is **Scheduled**: a
+regression lands before it fires. Gating pull requests would cost an optimized editor build per
+run on each native lane.
 
-This is roughly twice the 0.3-0.5 MB the original design guessed at, which is the reason 0053
-refused to accept that number without measurement.
+### Editor Wasm
 
-### Editor Wasm, measured at the same revision
-
-The browser product is the one GPU-carrying artifact that already ships and already has enforced
-budgets. Measured with the gate that enforces them, so the numbers and the gate cannot drift:
+The browser product is enforced by `//donner/editor/wasm:wasm_geode_package_size_tests` in the
+Editor Wasm workflow. Measured with the gate that enforces it:
 
 ```sh
 bazel test --config=editor-wasm --test_output=all \
   //donner/editor/wasm:wasm_geode_package_size_tests
 ```
 
-| Metric                     | Measured   | Committed budget | Headroom |
-| -------------------------- | ---------- | ---------------- | -------- |
-| `editor.wasm` raw          | 13,315,235 | 13,449,000       | 133,765  |
-| `editor.wasm` gzip         | 5,237,458  | 5,290,000        | 52,542   |
-| `editor.js` raw            | 175,205    | 176,600          | 1,395    |
-| `editor.js` gzip           | 49,318     | 49,710           | 392      |
-| Package raw                | 13,531,996 | 13,668,000       | 136,004  |
-| Largest Wasm function body | 28,417     | 46,000           | 17,583   |
-| Passive data segments      | 3          | 64               | 61       |
+The size ceilings are about 10% over the measured package, rounded up.
 
-These budgets are left exactly as they are. The two JavaScript gates are the tight ones, at 0.8%
-and 0.8% of headroom, which is the margin they were deliberately retuned to; the change that grows
-the glue retunes them, as every previous one did.
+| Metric                     | Measured   | Ceiling    |
+| -------------------------- | ---------- | ---------- |
+| `editor.wasm` raw          | 9,771,416  | 10,749,000 |
+| `editor.wasm` gzip         | 3,228,485  | 3,552,000  |
+| `editor.js` raw            | 180,129    | 198,200    |
+| `editor.js` gzip           | 49,630     | 54,600     |
+| Package raw                | 11,831,400 | 13,015,000 |
+| Largest Wasm function body | 33,047     | 46,000     |
+| Passive data segments      | 3          | 64         |
 
-The comparison worth keeping in view: the whole native GPU runtime measures under a megabyte of
-code and data, against a browser package of 13.5 MB raw and 5.2 MB compressed. Removing the
-current dependency and adding the runtime is not a size problem for the browser product; the
-budgets below exist to keep it from becoming one.
-
-### Proposed cutover budgets
-
-The measured figure is a pre-link upper bound: the archives are built with function and data
-sections and the platform linker discards what a given artifact does not reach, so a linked
-artifact's contribution is smaller. A budget stated against the archive is therefore conservative
-in the safe direction, and it is measurable today, which a post-link figure is not until an
-artifact exists that links the runtime alone.
-
-| Gate                                | Budget    | Basis                                                                |
-| ----------------------------------- | --------- | -------------------------------------------------------------------- |
-| Metal runtime, code + data          | 990,000   | 10% over the measured 900,049                                        |
-| Vulkan runtime, code + data         | 1,072,000 | 10% over the measured 974,189                                        |
-| Browser bridge runtime, code + data | 1,000,000 | 804,687 measured with no bridge implementation, leaving room for one |
-| Shader IR core, code + data         | 384,000   | 10% over the measured 349,192                                        |
-| Any single emitter, code + data     | 98,000    | 10% over the largest measured emitter                                |
-
-Ten percent, rather than the one percent the editor Wasm gates use, because these components are
-still being written: the Wasm budgets sit above a finished artifact and exist to catch incidental
-growth, while these sit above a runtime whose backends are partially implemented. Tighten each one
-to a one percent margin when its platform reaches cutover, at which point the gate should also
-move to the linked artifact.
-
-Deliberately not proposed: a budget on the shipped editor Wasm package. That artifact already has
-committed budgets that the changes moving it retune, and adding a second gate over the same bytes
-would only produce two numbers to keep in sync.
-
-### One measured lever
-
-`RecordingDevice` is 61,995 bytes of code inside the runtime core, or roughly a fifth of it. It is
-the deterministic capture backend, and it is linked into every configuration that links the
-runtime. If the shipped product does not need to record command streams, excluding it is the
-single largest available reduction to the core, and it should be decided before the budgets above
-are tightened rather than after.
+The function-body and data-segment limits are structural limits and are not scaled with the
+package.
 
 ## Verification
 
@@ -297,12 +272,10 @@ are tightened rather than after.
 | Frozen pixels are reproducible on a baselined adapter    | `//donner/gpu/baseline:baseline_pixels_tests`        |
 | A frozen baseline names the revision it came from        | `//donner/gpu/baseline:baseline_counters_tests`      |
 | The editor Wasm package fits its budgets                 | `//donner/editor/wasm:wasm_geode_package_size_tests` |
-| The native runtime fits the budgets above                | **Nothing yet.** See the open question below.        |
+| The shipped native products fit the budgets above        | `//tools/ci:native_linked_size_budget_test`          |
 
-The last row is the honest state: the numbers above are recorded measurements and proposed
-budgets, not an enforced gate. Making them a gate needs a size target over the archives or, better,
-over a linked artifact once one exists. Until then a reader should treat the budgets as a review
-checklist item, not as an invariant.
+The native gate is **Scheduled**: it runs in the nightly Perf workflow, so a regression lands
+before it fires.
 
 ## Open questions
 
@@ -311,10 +284,6 @@ checklist item, not as an invariant.
 - Whether the per-platform pixel gate is stated as identity per GPU generation, or as a
   structural-counter gate plus a bounded per-generation pixel comparison. The measured
   cross-generation difference makes the first option a per-generation baseline obligation.
-- Whether the shader emitters are runtime code at all in a shipped configuration, or whether the
-  emitted artifacts are produced at build time and the emitters are dropped from the product. That
-  choice moves roughly 435 KiB and changes every budget above.
-- Whether `RecordingDevice` ships.
 
 ## Related Designs
 

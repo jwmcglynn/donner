@@ -1,3 +1,5 @@
+load(":shipped_product.bzl", "shipped_product")
+
 package(default_visibility = ["//visibility:public"])
 
 exports_files([
@@ -190,4 +192,84 @@ test_suite(
         "//donner/editor/wasm/tests:chromium_remote_smoke",
         "//donner/editor/wasm/tests:standalone_geode_browser_renderer_test",
     ],
+)
+
+py_test(
+    name = "native_linked_size_tests",
+    size = "small",
+    srcs = [
+        "native_linked_size.py",
+        "native_linked_size_tests.py",
+    ],
+    main = "native_linked_size_tests.py",
+)
+
+# The shipped native products, built optimized with Geode and without the Tracy profiler client.
+shipped_product(
+    name = "shipped_editor",
+    testonly = True,
+    product = "//donner/editor:editor_binary",
+    tags = ["manual"],
+)
+
+shipped_product(
+    name = "shipped_svg_to_png",
+    testonly = True,
+    product = "//examples:svg_to_png",
+    tags = ["manual"],
+)
+
+config_setting(
+    name = "macos_arm64",
+    constraint_values = [
+        "@platforms//os:macos",
+        "@platforms//cpu:aarch64",
+    ],
+)
+
+config_setting(
+    name = "linux_x86_64",
+    constraint_values = [
+        "@platforms//os:linux",
+        "@platforms//cpu:x86_64",
+    ],
+)
+
+# Linked-size budgets for the shipped native products, about 10% over the sizes measured on each
+# platform in the shipped configuration (docs/design_docs/0064-gpu_release_matrix.md). The nightly
+# Perf workflow builds and enforces them on its macOS arm64 and Linux x86_64 runners; no
+# pull-request lane builds these products in the shipped configuration.
+py_test(
+    name = "native_linked_size_budget_test",
+    size = "small",
+    srcs = ["native_linked_size.py"],
+    args = [
+        "--product=editor=$(rootpath :shipped_editor)",
+        "--product=svg_to_png=$(rootpath :shipped_svg_to_png)",
+    ] + select({
+        ":macos_arm64": [
+            "--budget=editor=13685000",
+            "--budget=svg_to_png=4298000",
+        ],
+        ":linux_x86_64": [
+            "--budget=editor=15103000",
+            "--budget=svg_to_png=5347000",
+        ],
+        "//conditions:default": [],
+    }),
+    data = [
+        ":shipped_editor",
+        ":shipped_svg_to_png",
+    ],
+    main = "native_linked_size.py",
+    tags = [
+        "manual",
+        "perf",
+        "perf_linux",
+    ],
+    target_compatible_with = select({
+        ":macos_arm64": [],
+        ":linux_x86_64": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
 )
