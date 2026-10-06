@@ -2066,8 +2066,9 @@ DrawingViewportLayout ComputeDrawingViewportLayout(const Vector2d& contentOrigin
 }
 
 // Regression for the "scale is wrong, clicks land on the background" bug in
-// the editor's main loop. Mirrors exactly the sequence main.cc runs each
-// frame:
+// the editor's main loop. Replays the per-frame sequence the editor ran when
+// the bug was found, with the pane layout reproduced locally above (the editor
+// now maps the pane through `ViewportState`):
 //   1. Load a document whose intrinsic viewBox differs from the editor pane.
 //   2. Set the canvas size to the pane size (the renderer draws a
 //      pane-sized bitmap that the user sees).
