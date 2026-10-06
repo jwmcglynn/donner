@@ -64,7 +64,7 @@ The scope is everything inside the render pane window in `donner/editor/main.cc`
   - [ ] Route the async render request, the overlay re-render, the `AddImage` call, and click handling through `viewport.documentToScreen` / `viewport.screenToDocument` exclusively.
   - [ ] Delete the obsolete `lastRenderedZoom`, `lastRenderedCanvasSize` mismatch handling, and the `displayScale` math.
   - [ ] Eliminate the 1-frame overlay-after-drag delay. The overlay re-render block consumes the post-`flushFrame` document state in the same frame the drag mutation lands, by running *after* `flushFrame` and gating on the document's frame version number — see *Drag pipeline* below.
-  - [ ] Update `EditorAppTest.CenterClickOnPaneHitsCenterOfDocumentViewBox` and the existing ViewportGeometry tests to construct `ViewportState` directly.
+  - [ ] Update `EditorAppTest.CenterClickOnPaneHitsCenterOfDocumentViewBox` to construct `ViewportState` directly.
 - [ ] **Milestone 3: End-to-end pinning + drag smoothness**
   - [ ] Add headless click-math tests that drive `EditorApp` + `ViewportState` together: load donner_splash.svg, apply each combination of (zoom, pan, dpr), assert hit-test results match expected element ids at known screen positions.
   - [ ] Add headless drag-smoothness regression: simulate N consecutive `onMouseMove` events with linearly increasing positions, assert that the element's transform after each frame matches the expected linear progression with no skipped or duplicated frames.
