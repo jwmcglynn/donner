@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <deque>
+#include <functional>
 #include <future>
 #include <memory>
 #include <mutex>
@@ -366,6 +367,16 @@ public:
   /// Async renderer access for replay harnesses.
   [[nodiscard]] AsyncRenderer& asyncRendererForReplay() {
     return renderCoordinator_.asyncRenderer();
+  }
+
+  /**
+   * Drive the render coordinator's scheduling windows from a replay clock instead of the steady
+   * clock, so a deterministic replay crosses them on the same frame on every run.
+   *
+   * @param clock Replay clock to read, or an empty function to restore the steady clock.
+   */
+  void setSchedulingClockForReplay(std::function<std::chrono::steady_clock::time_point()> clock) {
+    renderCoordinator_.setSchedulingClockForTesting(std::move(clock));
   }
 
   /**

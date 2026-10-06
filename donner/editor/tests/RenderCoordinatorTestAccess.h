@@ -81,32 +81,35 @@ struct RenderCoordinatorTestAccess {
     coordinator.documentPixelCapture_ = DocumentPixelCapture{.identity = identity};
     coordinator.requestedPixelCapture_ = identity;
     coordinator.pendingCanvasSize_ = viewport.rasterViewport().semanticCanvasSizePx;
-    coordinator.pendingCanvasSizeSince_ = std::chrono::steady_clock::now();
+    coordinator.pendingCanvasSizeSince_ = coordinator.schedulingNow();
   }
 
   static void keepCanvasCommitPending(RenderCoordinator& coordinator) {
-    coordinator.pendingCanvasSizeSince_ = std::chrono::steady_clock::now() + std::chrono::hours(1);
+    coordinator.pendingCanvasSizeSince_ = coordinator.schedulingNow() + std::chrono::hours(1);
   }
 
   static void makeCanvasCommitDue(RenderCoordinator& coordinator) {
     coordinator.pendingCanvasSizeSince_ =
-        std::chrono::steady_clock::now() - std::chrono::milliseconds(200);
+        coordinator.schedulingNow() - std::chrono::milliseconds(200);
   }
 
   static void makeRasterViewportSettled(RenderCoordinator& coordinator) {
     coordinator.pendingRasterViewportSince_ =
-        std::chrono::steady_clock::now() - std::chrono::milliseconds(200);
+        coordinator.schedulingNow() - std::chrono::milliseconds(200);
   }
 
-  /// Replaces the steady clock that paces nothing-to-present retries with one the test advances.
-  static void useFakeRetryClock(RenderCoordinator& coordinator) {
-    fakeRetryNow = std::chrono::steady_clock::time_point{} + std::chrono::hours(1);
-    coordinator.nothingToPresentRetryClockForTesting_ = &FakeRetryNow;
+  /// Replaces the coordinator's scheduling clock (retry pacing and the canvas-commit and
+  /// raster-settle windows) with one the test advances.
+  static void useFakeSchedulingClock(RenderCoordinator& coordinator) {
+    fakeSchedulingNow = std::chrono::steady_clock::time_point{} + std::chrono::hours(1);
+    coordinator.setSchedulingClockForTesting(&FakeSchedulingNow);
   }
 
-  static void advanceFakeRetryClock(std::chrono::milliseconds step) { fakeRetryNow += step; }
+  static void advanceFakeSchedulingClock(std::chrono::milliseconds step) {
+    fakeSchedulingNow += step;
+  }
 
-  static std::chrono::steady_clock::time_point FakeRetryNow() { return fakeRetryNow; }
+  static std::chrono::steady_clock::time_point FakeSchedulingNow() { return fakeSchedulingNow; }
 
   static bool rejectPreparedResult(RenderCoordinator& coordinator, RenderResult& result,
                                    EditorApp& app, GlTextureCache& textures) {
@@ -151,7 +154,7 @@ struct RenderCoordinatorTestAccess {
     return coordinator.hasMatchingPendingOverview(result, app);
   }
 
-  static inline std::chrono::steady_clock::time_point fakeRetryNow{};
+  static inline std::chrono::steady_clock::time_point fakeSchedulingNow{};
 
   static std::optional<std::uint64_t> requestedCommitGeneration(
       const RenderCoordinator& coordinator) {

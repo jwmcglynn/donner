@@ -850,12 +850,12 @@ std::optional<float> RenderCoordinator::nextNothingToPresentRetryWakeSeconds() c
   if (renderWorker_.asyncRenderer.isBusy()) {
     return std::nullopt;
   }
-  return nothingToPresentRetry_.secondsUntilRetry(nothingToPresentRetryNow());
+  return nothingToPresentRetry_.secondsUntilRetry(schedulingNow());
 }
 
-std::chrono::steady_clock::time_point RenderCoordinator::nothingToPresentRetryNow() const {
-  return nothingToPresentRetryClockForTesting_ != nullptr ? nothingToPresentRetryClockForTesting_()
-                                                          : std::chrono::steady_clock::now();
+std::chrono::steady_clock::time_point RenderCoordinator::schedulingNow() const {
+  return schedulingClockForTesting_ ? schedulingClockForTesting_()
+                                    : std::chrono::steady_clock::now();
 }
 
 void RenderCoordinator::noteResultWithNothingToPresent(const std::optional<RenderResult>& result) {
@@ -873,8 +873,7 @@ void RenderCoordinator::noteResultWithNothingToPresent(const std::optional<Rende
     };
     selectedPrewarmRecoveryPending_ = true;
   }
-  if (!fromLastPost ||
-      !nothingToPresentRetry_.noteFailure(*lastPostedAttempt_, nothingToPresentRetryNow())) {
+  if (!fromLastPost || !nothingToPresentRetry_.noteFailure(*lastPostedAttempt_, schedulingNow())) {
     rejectPixelCaptureResult(result);
     return;
   }
@@ -946,7 +945,7 @@ std::optional<float> RenderCoordinator::nextPixelCaptureCanvasCommitWakeSeconds(
       renderWorker_.asyncRenderer.isBusy()) {
     return std::nullopt;
   }
-  const auto remaining = *pixelCaptureCanvasCommitDue_ - std::chrono::steady_clock::now();
+  const auto remaining = *pixelCaptureCanvasCommitDue_ - schedulingNow();
   return std::max(0.0f, std::chrono::duration<float>(remaining).count());
 }
 
@@ -1395,7 +1394,7 @@ void RenderCoordinator::updateFrameRepairStatus(
     if (acceptedRepairAttempt_.has_value() && outcome.failure != FramePresentationFailure::None &&
         resources->capture()->identity().captureId != lastRejectedRepairCapture_) {
       lastRejectedRepairCapture_ = resources->capture()->identity().captureId;
-      nothingToPresentRetry_.noteFailure(*acceptedRepairAttempt_, nothingToPresentRetryNow());
+      nothingToPresentRetry_.noteFailure(*acceptedRepairAttempt_, schedulingNow());
     }
   } else {
     pendingRepair_.reset();
@@ -1683,7 +1682,7 @@ void RenderCoordinator::rejectPreparedPresentation(FramePresentationFailure fail
   adoptionFailure_ = failure;
   presentationNeedsRender_ = true;
   if (lastPostedAttempt_.has_value()) {
-    nothingToPresentRetry_.noteFailure(*lastPostedAttempt_, nothingToPresentRetryNow());
+    nothingToPresentRetry_.noteFailure(*lastPostedAttempt_, schedulingNow());
   }
 }
 
@@ -1822,7 +1821,7 @@ bool RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectToo
   // Compare desired size against the live document size. Document replacement
   // can reset the stored canvas size, and LayoutSystem readback can round by a
   // pixel, so a separate last-set tracker is not authoritative here.
-  const auto now = std::chrono::steady_clock::now();
+  const auto now = schedulingNow();
   if (pendingCanvasSize_ != desiredCanvasSize) {
     pendingCanvasSize_ = desiredCanvasSize;
     pendingCanvasSizeSince_ = now;
@@ -1954,7 +1953,7 @@ bool RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectToo
       app.document().documentGeneration(), currentVersion, requestRasterViewport,
       requestOverviewInfill, prewarmEntity, schedule.dragPreview, presentationEpoch_);
   attempt.repair = pendingRepair_;
-  if (!nothingToPresentRetry_.mayPost(attempt, nothingToPresentRetryNow())) {
+  if (!nothingToPresentRetry_.mayPost(attempt, schedulingNow())) {
     return false;
   }
 
