@@ -5,7 +5,7 @@
 #include "donner/gpu/shader/wgsl/Compiler.h"
 
 namespace donner::gpu::shader::wgsl::tests {
-/// Tests nested reads and direct member extraction from guarded structure loads.
+/// Tests nested reads and direct member extraction from clamped structure loads.
 inline constexpr SourceText kStorageArraySource{R"wgsl(
 struct Params { vertices: array<vec4f, 4>, }
 struct Band { start: u32, count: u32, }

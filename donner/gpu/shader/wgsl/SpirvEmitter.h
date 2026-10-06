@@ -184,8 +184,20 @@ private:
       if (binding.kind == BindingKind::ReadOnlyStorage) {
         annotations_.instruction(71, bindingIds_[i], 24);
       }
+      if (binding.type.kind == TypeKind::Array && binding.type.arrayCount == 0) {
+        arrayLengthIds_[i] = id();
+        declarations_.instruction(59, pointerType(typeId(Type{TypeKind::U32}), 6),
+                                  arrayLengthIds_[i], 6);
+      }
     }
   }
+
+  /// Stores the length of every runtime-sized array the entry point reads, directly or through
+  /// helpers, into that array's private length variable. The length cannot change during an
+  /// invocation, so it is queried once here rather than at every read. Call in the entry block
+  /// after its function-storage variables, which SPIR-V requires first.
+  /// @param function Entry point being emitted.
+  constexpr void storeArrayLengths(const Function& function);
 
   constexpr uint32_t arrayBlockType(Type type) {
     const uint32_t array = typeId(type);
@@ -675,6 +687,7 @@ private:
     label(id());
     declareVariables(function.firstStatement);
     if (function.stage != Stage::None) {
+      storeArrayLengths(function);
       loadEntryParameters(function);
     }
     emitBlock(function.firstStatement);
@@ -911,6 +924,8 @@ private:
   std::array<FunctionTypeRecord, ModuleLimits::kMaxFunctions> functionTypes_{};
   uint16_t functionTypeCount_ = 0;
   std::array<uint32_t, ModuleLimits::kMaxBindings> bindingIds_{};
+  /// Private variable holding a runtime-sized array binding's length, or zero for other bindings.
+  std::array<uint32_t, ModuleLimits::kMaxBindings> arrayLengthIds_{};
   std::array<uint32_t, ModuleLimits::kMaxFunctions> functionIds_{};
   std::array<uint32_t, ModuleLimits::kMaxInterfaceVariables> interfaceIds_{};
   std::array<uint32_t, ModuleLimits::kMaxSymbols> symbolValues_{};
@@ -958,6 +973,16 @@ constexpr uint32_t Emitter::indexedPointer(const Expression& node, uint32_t& sto
   return result;
 }
 
+constexpr void Emitter::storeArrayLengths(const Function& function) {
+  for (uint16_t i = 0; i < module_.bindingCount; ++i) {
+    if (arrayLengthIds_[i] == 0 || !(function.resourceMask & (uint32_t(1) << i))) {
+      continue;
+    }
+    const uint32_t length = operation(68, Type{TypeKind::U32}, bindingIds_[i], 0);
+    functions_.instruction(62, arrayLengthIds_[i], length);
+  }
+}
+
 constexpr uint32_t Emitter::emitRuntimeArrayIndex(const Expression& node) {
   const Expression& base = module_.expressions[node.operands[0]];
   if (base.kind != ExpressionKind::Symbol || base.payload >= module_.symbolCount) {
@@ -976,26 +1001,19 @@ constexpr uint32_t Emitter::emitRuntimeArrayIndex(const Expression& node) {
     index = extended(42, indexType, index, constant(indexType, 0));
     index = operation(124, integer, index);
   }
-  const uint32_t count = operation(68, integer, bindingIds_[symbol.bindingId], 0);
-  const uint32_t nonempty = operation(171, Type{TypeKind::Bool}, count, constant(integer, 0));
-  const uint32_t readLabel = id(), emptyLabel = id(), mergeLabel = id();
-  functions_.instruction(247, mergeLabel, 0);
-  functions_.instruction(250, nonempty, readLabel, emptyLabel);
-  label(readLabel);
+  const uint32_t lengthId = arrayLengthIds_[symbol.bindingId];
+  if (lengthId == 0) {
+    fail(SpirvEmitError::InvalidNode);
+    return 0;
+  }
+  // The array is never empty here; see EmitSpirv.
+  const uint32_t count = operation(61, integer, lengthId);
   const uint32_t last = operation(130, integer, count, constant(integer, 1));
   const uint32_t bounded = extended(38, integer, index, last);
   const uint32_t pointer = id();
   functions_.instruction(65, pointerType(typeId(node.type), 12), pointer,
                          bindingIds_[symbol.bindingId], constant(integer, 0), bounded);
-  const uint32_t loaded = operation(61, node.type, pointer);
-  const uint32_t readBlock = currentBlock_;
-  branch(mergeLabel);
-  label(emptyLabel);
-  const uint32_t zero = constant(node.type, 0);
-  const uint32_t emptyBlock = currentBlock_;
-  branch(mergeLabel);
-  label(mergeLabel);
-  return operation(245, node.type, loaded, readBlock, zero, emptyBlock);
+  return operation(61, node.type, pointer);
 }
 
 constexpr uint32_t Emitter::emitExpression(ArenaId index) {
@@ -1715,6 +1733,13 @@ constexpr void Emitter::emitStatement(const Statement& node) {
 }  // namespace spirv_detail
 
 /// Emits SPIR-V 1.3 for Vulkan 1.1 from a successfully validated module.
+///
+/// A read of a runtime-sized storage array clamps its index to the binding's last element, as the
+/// MSL projection does. Each entry point queries the length of every such array it reads once, at
+/// its start, rather than at every read. The runtime refuses a draw or dispatch whose bound range
+/// holds less than one element of a runtime array the pipeline reads, and generated modules always
+/// supply those requirements, so a read never meets an empty array; one that did would read with
+/// an unclamped index, which the device's robust buffer access bounds.
 /// @param module Immutable validated module. @param output Caller-owned word sink.
 constexpr SpirvEmitResult EmitSpirv(const Module& module, SpirvSink& output) {
   output.size = 0;
