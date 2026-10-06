@@ -73,7 +73,7 @@ jobs:
           node-version: '24'
 
       - name: Generate the candidate BCR entry without publishing
-        uses: bazel-contrib/publish-to-bcr@v1.5.0
+        uses: bazel-contrib/publish-to-bcr@v1.5.1
         with:
           tag: v${{ steps.archive.outputs.version }}
           module-version: ${{ steps.archive.outputs.version }}
