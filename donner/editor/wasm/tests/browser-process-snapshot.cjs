@@ -122,3 +122,23 @@ exports.processRows = function processRows({
   checkBudget();
   return rows;
 };
+
+/**
+ * Process listings tried before a caller treats the tree as unmeasurable: a loaded host can make
+ * one listing slow or fail.
+ */
+exports.kListingAttempts = 3;
+
+/**
+ * Calls \p list until it succeeds, at most \p attempts times, and rethrows the last failure.
+ * Callers that act on the rows still fail closed when no listing succeeds.
+ */
+exports.listWithRetries = function listWithRetries(list, attempts = exports.kListingAttempts) {
+  for (let attempt = 1;; ++attempt) {
+    try {
+      return list();
+    } catch (error) {
+      if (attempt >= attempts) throw error;
+    }
+  }
+};

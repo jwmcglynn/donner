@@ -684,6 +684,7 @@ test("unknown and expired negative targets never forward a process-group signal"
         if (name === "./browser-process-snapshot.cjs") {
           return {
             processRows: () => [{ pid: 27, ppid: 26, pgid: 20, start: "same-start" }],
+            listWithRetries: (list) => list(),
           };
         }
         throw new Error(`unexpected fixture dependency: ${name}`);

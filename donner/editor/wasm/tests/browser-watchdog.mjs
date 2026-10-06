@@ -1,13 +1,9 @@
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { processRows } from "./browser-process-snapshot.cjs";
+import { kListingAttempts, listWithRetries, processRows } from "./browser-process-snapshot.cjs";
 export { processRows };
-
-// A loaded host can make one process listing slow or fail, so the final cleanup checks try this
-// many listings before they treat the group as unverifiable.
-const kCleanupListingAttempts = 3;
 
 export function descendants(rows, rootPid) {
   const selected = new Set([rootPid]);
@@ -230,6 +226,10 @@ export async function supervise(executable, args, options = {}) {
     clearInterval(monitor);
     terminateGroup();
     await anchorExited;
+    const unverifiable = (failure) => {
+      reportingError ??= failure;
+      reason ??= `test process cleanup verification unavailable: ${failure}`;
+    };
     // Group cleanup is independent of process enumeration and artifact writing.
     const listProcesses = options.cleanupProcesses ?? processRows;
     const pause = () => new Promise((resolve) => setTimeout(resolve, 10));
@@ -251,9 +251,8 @@ export async function supervise(executable, args, options = {}) {
             break;
           }
         } catch (listingError) {
-          if (++failedGroupListings === kCleanupListingAttempts) {
-            reportingError ??= `group enumeration failed: ${listingError.message}`;
-            reason ??= "test process cleanup verification unavailable";
+          if (++failedGroupListings === kListingAttempts) {
+            unverifiable(`group enumeration failed: ${listingError.message}`);
             break;
           }
         }
@@ -261,18 +260,11 @@ export async function supervise(executable, args, options = {}) {
       await pause();
     }
     let survivors = null;
-    for (let attempt = 1; survivors === null; ++attempt) {
-      try {
-        survivors = listProcesses().filter((row) => owned.get(row.pid) === row.start)
-          .map((row) => row.pid);
-      } catch (error) {
-        if (attempt === kCleanupListingAttempts) {
-          reportingError ??= `survivor enumeration failed: ${error.message}`;
-          reason ??= "test process cleanup verification unavailable";
-          break;
-        }
-        await pause();
-      }
+    try {
+      survivors = listWithRetries(listProcesses).filter((row) => owned.get(row.pid) === row.start)
+        .map((row) => row.pid);
+    } catch (error) {
+      unverifiable(`survivor enumeration failed: ${error.message}`);
     }
     cleanup = { groupGone, survivors };
     if (!groupGone || survivors === null || survivors.length) {
