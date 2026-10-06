@@ -170,10 +170,7 @@ test("malformed Linux process identity fails closed", () => {
   assert.throws(() => processRows({ platform: "linux", procRoot }), /unreadable process identity/);
 });
 
-test("normal exit preserves status and bounded evidence", {
-  skip: process.platform === "darwin"
-    && "Quarantined: one slow process sample stops the run (#1669)",
-}, async () => {
+test("normal exit preserves status and bounded evidence", async () => {
   const result = await supervise(process.execPath, [
     "-e",
     "setTimeout(() => process.exit(17), 100)",
@@ -312,12 +309,32 @@ test("process measurement failure does not prevent termination", async () => {
   const result = await supervise(process.execPath, ["-e", "while(true){}"], {
     outputDir: directory(),
     intervalMs: 20,
+    heartbeatLimitMs: 200,
     sampleProcesses: () => {
       throw new Error("simulated ps failure");
     },
   });
-  assert.match(result.reason, /measurement failed/);
+  assert.match(result.reason, /measurement failed: simulated ps failure/);
   assert.deepEqual(result.cleanup, { groupGone: true, survivors: [] });
+});
+test("one failed process sample does not stop a healthy run", async () => {
+  // A loaded host can make one `ps` call exceed its timeout.
+  let calls = 0;
+  const result = await supervise(process.execPath, [
+    "-e",
+    "setTimeout(() => process.exit(17), 300)",
+  ], {
+    outputDir: directory(),
+    intervalMs: 20,
+    sampleProcesses: () => {
+      if (++calls === 1) throw new Error("simulated ps timeout");
+      return processRows();
+    },
+  });
+  assert.equal(result.reason, null);
+  assert.equal(result.exit.code, 17);
+  assert.equal(result.measurementFailures[0]?.error, "simulated ps timeout");
+  assert.ok(result.samples.length > 0, "sampling must resume after the failed sample");
 });
 
 test("supervisor termination kills its owned group before returning", async () => {
@@ -479,7 +496,7 @@ test("termination is issued once even when the stop and exit paths both run", as
   }
 });
 
-test("a denied signal-zero probe verifies absence through process enumeration", async () => {
+async function superviseWithDeniedGroupProbe(options) {
   const original = process.kill;
   process.kill = function(pid, signal) {
     if (pid < 0 && signal === 0) {
@@ -490,15 +507,39 @@ test("a denied signal-zero probe verifies absence through process enumeration", 
     return original.call(this, pid, signal);
   };
   try {
-    const result = await supervise(process.execPath, ["-e", "process.exit(0)"], {
+    return await supervise(process.execPath, ["-e", "process.exit(0)"], {
       outputDir: directory(),
       intervalMs: 20,
+      ...options,
     });
-    assert.equal(result.reason, null);
-    assert.deepEqual(result.cleanup, { groupGone: true, survivors: [] });
   } finally {
     process.kill = original;
   }
+}
+test("a denied signal-zero probe verifies absence through process enumeration", async () => {
+  const result = await superviseWithDeniedGroupProbe();
+  assert.equal(result.reason, null);
+  assert.deepEqual(result.cleanup, { groupGone: true, survivors: [] });
+});
+test("a denied signal-zero probe survives one failed process listing", async () => {
+  let calls = 0;
+  const result = await superviseWithDeniedGroupProbe({
+    cleanupProcesses: () => {
+      if (++calls === 1) throw new Error("simulated ps timeout");
+      return processRows();
+    },
+  });
+  assert.equal(result.reason, null);
+  assert.deepEqual(result.cleanup, { groupGone: true, survivors: [] });
+});
+test("a denied signal-zero probe without any process listing fails closed", async () => {
+  const result = await superviseWithDeniedGroupProbe({
+    cleanupProcesses: () => {
+      throw new Error("simulated ps failure");
+    },
+  });
+  assert.notEqual(result.reason, null);
+  assert.deepEqual(result.cleanup, { groupGone: false, survivors: null });
 });
 
 test("a rejected worker diagnostic remains unavailable for known GPU ownership", async () => {
@@ -572,6 +613,19 @@ test("final cleanup enumeration failure cannot report success", async () => {
   });
   assert.notEqual(result.reason, null);
   assert.equal(result.cleanup.survivors, null);
+});
+test("one failed final cleanup enumeration is retried", async () => {
+  let calls = 0;
+  const result = await supervise(process.execPath, ["-e", "process.exit(0)"], {
+    outputDir: directory(),
+    intervalMs: 5000,
+    cleanupProcesses: () => {
+      if (++calls === 1) throw new Error("simulated ps timeout");
+      return processRows();
+    },
+  });
+  assert.equal(result.reason, null);
+  assert.deepEqual(result.cleanup, { groupGone: true, survivors: [] });
 });
 test("final receipt failure cannot report success", async () => {
   const result = await supervise(process.execPath, ["-e", "process.exit(0)"], {

@@ -5,6 +5,10 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { processRows } from "./browser-process-snapshot.cjs";
 export { processRows };
 
+// A loaded host can make one process listing slow or fail, so the final cleanup checks try this
+// many listings before they treat the group as unverifiable.
+const kCleanupListingAttempts = 3;
+
 export function descendants(rows, rootPid) {
   const selected = new Set([rootPid]);
   let changed = true;
@@ -49,6 +53,8 @@ export async function supervise(executable, args, options = {}) {
   const startedAt = Date.now();
   const owned = new Map();
   const samples = [];
+  const measurementFailures = [];
+  let lastMeasuredAtMs = 0;
   let rootIdentity;
   let reason = null;
   let reportingError = null;
@@ -68,6 +74,7 @@ export async function supervise(executable, args, options = {}) {
     peakRssBytes,
     memoryLimit,
     samples,
+    measurementFailures,
     cleanup,
   });
   const writeReceipt = options.writeReceipt ?? (() => {
@@ -127,7 +134,19 @@ export async function supervise(executable, args, options = {}) {
   });
   const sample = () => {
     try {
-      const rows = sampleProcesses();
+      let rows;
+      try {
+        rows = sampleProcesses();
+      } catch (error) {
+        // A loaded host can make one process listing slow or fail. Keep the run going until the
+        // tree has gone unmeasured for longer than the heartbeat limit.
+        const atMs = Date.now() - startedAt;
+        measurementFailures.push({ atMs, error: error.message.slice(0, 200) });
+        if (measurementFailures.length > 16) measurementFailures.shift();
+        if (atMs - lastMeasuredAtMs > heartbeatLimitMs) throw error;
+        return;
+      }
+      lastMeasuredAtMs = Date.now() - startedAt;
       const root = rows.find((row) => row.pid === anchor.pid);
       if (rootIdentity && root?.start !== rootIdentity) {
         throw new Error("watchdog anchor identity changed");
@@ -212,30 +231,48 @@ export async function supervise(executable, args, options = {}) {
     terminateGroup();
     await anchorExited;
     // Group cleanup is independent of process enumeration and artifact writing.
+    const listProcesses = options.cleanupProcesses ?? processRows;
+    const pause = () => new Promise((resolve) => setTimeout(resolve, 10));
     let groupGone = false;
+    let failedGroupListings = 0;
     for (let attempt = 0; attempt < 100; ++attempt) {
       try {
         process.kill(-anchor.pid, 0);
       } catch (error) {
-        if (
-          error.code === "ESRCH"
-          || (error.code === "EPERM" && ownedGroup(processRows(), anchor.pid).length === 0)
-        ) {
+        if (error.code === "ESRCH") {
           groupGone = true;
           break;
         }
         if (error.code !== "EPERM") throw error;
+        // A denied probe needs a process listing to show that the group is gone.
+        try {
+          if (ownedGroup(listProcesses(), anchor.pid).length === 0) {
+            groupGone = true;
+            break;
+          }
+        } catch (listingError) {
+          if (++failedGroupListings === kCleanupListingAttempts) {
+            reportingError ??= `group enumeration failed: ${listingError.message}`;
+            reason ??= "test process cleanup verification unavailable";
+            break;
+          }
+        }
       }
-      await new Promise((resolve) => setTimeout(resolve, 10));
+      await pause();
     }
     let survivors = null;
-    try {
-      survivors = (options.cleanupProcesses ?? processRows)().filter((row) =>
-        owned.get(row.pid) === row.start
-      ).map((row) => row.pid);
-    } catch (error) {
-      reportingError ??= `survivor enumeration failed: ${error.message}`;
-      reason ??= "test process cleanup verification unavailable";
+    for (let attempt = 1; survivors === null; ++attempt) {
+      try {
+        survivors = listProcesses().filter((row) => owned.get(row.pid) === row.start)
+          .map((row) => row.pid);
+      } catch (error) {
+        if (attempt === kCleanupListingAttempts) {
+          reportingError ??= `survivor enumeration failed: ${error.message}`;
+          reason ??= "test process cleanup verification unavailable";
+          break;
+        }
+        await pause();
+      }
     }
     cleanup = { groupGone, survivors };
     if (!groupGone || survivors === null || survivors.length) {
