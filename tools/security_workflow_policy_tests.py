@@ -343,6 +343,52 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         self.assertIn("donner-bcr-qualified-${{ github.run_attempt }}", preflight)
         self.assertIn("tools.bcr_source qualify", preflight)
 
+    def test_bcr_cli_artifacts_stay_bound_to_one_attempt_with_a_rerun_explanation(self):
+        # The CLI artifacts are bound to the attempt that built them, which the release path
+        # pins. A rerun of only failed jobs that carries a passed CLI build over cannot find
+        # them, so each consumer explains that all jobs must be rerun.
+        preflight = self.supply_chain_files[".github/workflows/bcr_preflight.yml"]
+        for job_name in ("attest-artifacts", "qualify"):
+            job = preflight.split("\n  %s:\n" % job_name, 1)[1].split("\n  qualify:\n", 1)[0]
+            downloads = []
+            for step_id, platform in (("cli-linux-artifact", "linux-x86-64"),
+                                      ("cli-macos-artifact", "darwin-arm64")):
+                download = (
+                    "      - id: %s\n"
+                    "        uses: actions/download-artifact@v8\n"
+                    "        with:\n"
+                    "          name: donner-svg-%s-${{ needs.prepare.outputs.source_commit }}"
+                    "-${{ github.run_attempt }}\n" % (step_id, platform)
+                )
+                self.assertEqual(job.count(download), 1, "%s %s" % (job_name, step_id))
+                downloads.append(job.index(download))
+            explain_at = job.index("      - name: Explain missing CLI artifacts\n")
+            self.assertLess(max(downloads), explain_at, job_name)
+            explain = _step_body(job, "Explain missing CLI artifacts")
+            self.assertIn(
+                "if: failure() && (steps.cli-linux-artifact.outcome == 'failure'"
+                " || steps.cli-macos-artifact.outcome == 'failure')",
+                explain,
+                job_name,
+            )
+            # A download can also fail for transient reasons, so the explanation is conditional,
+            # and the attempt reaches the script through the environment, not an expression.
+            self.assertIn("RUN_ATTEMPT: ${{ github.run_attempt }}", explain, job_name)
+            script = explain.split("        run: |\n", 1)[1]
+            self.assertNotIn("${{", script, job_name)
+            self.assertIn('if [ "$RUN_ATTEMPT" -gt 1 ]; then', script, job_name)
+            for message in (
+                "If the download error above is 'Artifact not found', this attempt reran only"
+                " failed jobs, and the CLI artifacts are bound to the attempt that built them;"
+                " rerun all jobs.",
+                "Otherwise the download failed for another reason; see the error above and the"
+                " GitHub status page before rerunning.",
+            ):
+                self.assertIn(message, script, job_name)
+            self.assertLess(
+                script.index("rerun all jobs."), script.index("Otherwise the download"), job_name)
+            self.assertIn("exit 1", script, job_name)
+
     def _bcr_consumer_audit(self, preflight):
         """The consumer job, its audit step, the step's run body, query and audit call."""
         consumer = preflight.split("\n  consumer:\n", 1)[1].split("\n  cli-linux:\n", 1)[0]

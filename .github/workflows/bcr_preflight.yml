@@ -256,14 +256,27 @@ jobs:
         with:
           name: ${{ needs.prepare.outputs.source_artifact }}
           path: ${{ runner.temp }}/donner-bcr/source
-      - uses: actions/download-artifact@v8
+      # The CLI artifacts are bound to the attempt that built them; the release path pins that.
+      - id: cli-linux-artifact
+        uses: actions/download-artifact@v8
         with:
           name: donner-svg-linux-x86-64-${{ needs.prepare.outputs.source_commit }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/donner-bcr/cli-linux
-      - uses: actions/download-artifact@v8
+      - id: cli-macos-artifact
+        uses: actions/download-artifact@v8
         with:
           name: donner-svg-darwin-arm64-${{ needs.prepare.outputs.source_commit }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/donner-bcr/cli-macos
+      - name: Explain missing CLI artifacts
+        if: failure() && (steps.cli-linux-artifact.outcome == 'failure' || steps.cli-macos-artifact.outcome == 'failure')
+        env:
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          if [ "$RUN_ATTEMPT" -gt 1 ]; then
+            echo "::error::If the download error above is 'Artifact not found', this attempt reran only failed jobs, and the CLI artifacts are bound to the attempt that built them; rerun all jobs."
+          fi
+          echo "::error::Otherwise the download failed for another reason; see the error above and the GitHub status page before rerunning."
+          exit 1
       - name: Verify the exact preflight source and CLI bytes
         run: |
           python3 -B -m tools.bcr_source verify \
@@ -297,14 +310,27 @@ jobs:
         with:
           name: ${{ needs.prepare.outputs.source_artifact }}
           path: ${{ runner.temp }}/donner-bcr/artifacts
-      - uses: actions/download-artifact@v8
+      # The CLI artifacts are bound to the attempt that built them; the release path pins that.
+      - id: cli-linux-artifact
+        uses: actions/download-artifact@v8
         with:
           name: donner-svg-linux-x86-64-${{ needs.prepare.outputs.source_commit }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/donner-bcr/cli-linux
-      - uses: actions/download-artifact@v8
+      - id: cli-macos-artifact
+        uses: actions/download-artifact@v8
         with:
           name: donner-svg-darwin-arm64-${{ needs.prepare.outputs.source_commit }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/donner-bcr/cli-macos
+      - name: Explain missing CLI artifacts
+        if: failure() && (steps.cli-linux-artifact.outcome == 'failure' || steps.cli-macos-artifact.outcome == 'failure')
+        env:
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          if [ "$RUN_ATTEMPT" -gt 1 ]; then
+            echo "::error::If the download error above is 'Artifact not found', this attempt reran only failed jobs, and the CLI artifacts are bound to the attempt that built them; rerun all jobs."
+          fi
+          echo "::error::Otherwise the download failed for another reason; see the error above and the GitHub status page before rerunning."
+          exit 1
       - name: Verify both CLI artifacts from this preflight attempt
         run: |
           python3 -B -m tools.release_cli verify \
