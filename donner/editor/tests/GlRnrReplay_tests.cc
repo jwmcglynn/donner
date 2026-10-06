@@ -3748,6 +3748,13 @@ TEST(GlRnrReplayTest, GeodeDragZoomRebuildsDonnerDPathAndBoundsEveryPresentedFra
 }
 
 TEST(GlRnrReplayTest, GeodeZoomThenDragKeepsDonnerDOverlayLockedToPresentedContent) {
+#if defined(__APPLE__)
+  if (UsesGeodePresentation()) {
+    GTEST_SKIP() << "Quarantined on macOS Geode: the overlay intermittently records no drag "
+                    "transform on a drag frame (#1694).";
+  }
+#endif
+
   const std::filesystem::path outputDir =
       DiagnosticOutputDir() / "gl_geode_zoom_then_drag_d_lockstep";
   const std::optional<std::filesystem::path> rnrPath =
