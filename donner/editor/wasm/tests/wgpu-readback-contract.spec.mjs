@@ -274,35 +274,46 @@ test("failure-only browser readback installs with no seeded request", () => {
 });
 
 test("diagnostic readback requests remain pending until a capture completes", () => {
-  const peek = source.match(
-    /EM_JS\(int, PeekWgpuReadbackRequest, \(\), \{([\s\S]*?)\n\}\);/,
-  );
-  assert.ok(peek, "expected a non-consuming diagnostic request probe");
-  assert.match(peek[1], /__donnerWgpuReadbackCompleted/);
-  assert.doesNotMatch(peek[1], /__donnerWgpuReadbackCompleted'\]\s*=/);
-
-  assert.doesNotMatch(source, /ConsumeWgpuReadbackRequest/);
-  assert.match(source, /__donnerWgpuReadbackCaptureStarts/);
-  assert.match(source, /__donnerWgpuReadbackCaptureCompletions/);
   assert.match(
     source,
-    /PublishWgpuReadbackStats[\s\S]*__donnerWgpuReadbackCompleted'\]\s*=\s*Math\.max/,
+    /int PeekWgpuReadbackRequest\(\) \{\s*return whole_app_worker::PeekReadbackRequest\(\);/,
+  );
+  const peek = workerBridgeSource.match(/int PeekReadbackRequest\(\) \{([\s\S]*?)\n\}/);
+  assert.ok(peek, "expected a non-consuming diagnostic request probe");
+  assert.match(peek[1], /readbackCompletedId/);
+  assert.doesNotMatch(peek[1], /StoreRelaxed|\.store\(|exchange\(/);
+
+  assert.doesNotMatch(source, /ConsumeWgpuReadbackRequest/);
+  assert.match(workerBridgeSource, /__donnerWgpuReadbackCaptureStarts/);
+  assert.match(workerBridgeSource, /__donnerWgpuReadbackCaptureCompletions/);
+  assert.match(
+    workerBridgeSource,
+    /PublishReadbackStats[\s\S]*__donnerWgpuReadbackCompleted'\]\s*=\s*Math\.max/,
   );
 });
 
 test("diagnostic readback requests wake the event-driven main loop", () => {
-  const requestHook = source.match(
+  const requestHook = workerBridgeSource.match(
     /window\['__donnerRequestWgpuReadback'\]\s*=\s*function\(\)\s*\{([\s\S]*?)\n\s*\};/,
   );
   assert.ok(requestHook, "expected the explicit diagnostic request hook");
+  // The app thread's frame loop consumes the shared-memory frame request, not the page flag.
+  assert.match(requestHook[1], /HEAP32\[i32 \+ 2\] = 1/);
   assert.match(requestHook[1], /__donnerEditorFrameRequested'\]\s*=\s*true/);
 
-  const pendingWake = source.match(
-    /EM_JS\(void, WakeWasmEditorForPendingWgpuReadback, \(\), \{([\s\S]*?)\n\}\);/,
+  assert.match(
+    source,
+    /void WakeWasmEditorForPendingWgpuReadback\(\) \{\s*whole_app_worker::WakeForPendingReadback\(\);/,
+  );
+  const pendingWake = workerBridgeSource.match(
+    /void WakeForPendingReadback\(\) \{([\s\S]*?)\n\}/,
   );
   assert.ok(pendingWake, "expected a completion-boundary pending-request wake");
-  assert.match(pendingWake[1], /request\s*>\s*completed/);
-  assert.match(pendingWake[1], /__donnerEditorFrameRequested'\]\s*=\s*true/);
+  assert.match(
+    pendingWake[1],
+    /LoadRelaxed\(mirror\.readbackRequestId\)\s*>\s*LoadRelaxed\(mirror\.readbackCompletedId\)/,
+  );
+  assert.match(pendingWake[1], /StoreRelaxed\(mirror\.frameRequested, 1\)/);
   assert.match(
     source,
     /inFlight->store\(false,[\s\S]*WakeWasmEditorForPendingWgpuReadback\(\)/,
@@ -350,10 +361,10 @@ test("diagnostic readback requests wake the event-driven main loop", () => {
 });
 
 test("failed diagnostic maps terminate after bounded retries", () => {
-  assert.match(source, /__donnerWgpuReadbackCaptureFailures/);
+  assert.match(workerBridgeSource, /__donnerWgpuReadbackCaptureFailures/);
   assert.match(
-    source,
-    /PublishWgpuReadbackFailure[\s\S]*__donnerWgpuReadbackCompleted'\]\s*=\s*Math\.max/,
+    workerBridgeSource,
+    /PublishReadbackFailure[\s\S]*__donnerWgpuReadbackCompleted'\]\s*=\s*Math\.max/,
   );
   assert.match(
     source,

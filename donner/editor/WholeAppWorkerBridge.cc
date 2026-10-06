@@ -271,8 +271,9 @@ void Install() {
         const requestFrame = function() {
           HEAP32[i32 + 2] = 1;
         };
-        // Same capture-phase window listener set the shipping build installs;
-        // see InitializeWasmEditorFrameScheduling in donner/editor/main.cc.
+        // Capture at window scope: worker canvases and transient DOM overlays
+        // can be the event target even though GLFW routes the interaction to
+        // the editor canvas.
         for (const eventName of([
                'mousedown',
                'mouseup',

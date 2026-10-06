@@ -241,7 +241,7 @@ RENDERING_BREAKDOWN: tuple[FeatureDefinition, ...] = (
         label="Renderer API and contracts",
         description=(
             "Public renderer facade, backend selection glue, interface contracts, "
-            "gradients, and stroke params"
+            "and stroke params"
         ),
         patterns=(
             "donner/svg/renderer/Renderer.cc",
@@ -250,7 +250,6 @@ RENDERING_BREAKDOWN: tuple[FeatureDefinition, ...] = (
             "donner/svg/renderer/RendererInterface.h",
             "donner/svg/renderer/RendererInternal.h",
             "donner/svg/renderer/RendererTinySkiaBackend.cc",
-            "donner/svg/renderer/ResolvedGradient.*",
             "donner/svg/renderer/StrokeParams.h",
             "donner/svg/renderer/tests/RendererPublicApi_tests.cc",
             "donner/svg/renderer/tests/Renderer_tests.cc",

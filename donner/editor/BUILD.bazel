@@ -89,15 +89,6 @@ donner_cc_library(
     }),
 )
 
-donner_cc_library(
-    name = "viewport_geometry",
-    srcs = ["ViewportGeometry.cc"],
-    hdrs = ["ViewportGeometry.h"],
-    deps = [
-        "//donner/base",
-    ],
-)
-
 # Single source of truth for the editor render pane's screen↔document
 # coordinate mapping, including zoom, pan, DPR, and the focal-point-preserving
 # zoom math.

@@ -72,9 +72,6 @@ struct Type {
   /// Returns the scalar/vector/structure element type of an array, or a pointer's pointee.
   constexpr Type elementType() const { return Type{elementKind, elementLanes, structId}; }
 
-  /// Returns whether this is a function-address-space pointer.
-  constexpr bool isPointer() const { return kind == TypeKind::Pointer; }
-
   /// Returns whether a storage texture's format belongs to this compiler profile.
   constexpr bool hasSupportedStorageFormat() const {
     return storageFormat == StorageTextureFormat::Rgba32Float ||

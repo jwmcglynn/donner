@@ -395,28 +395,18 @@ py_test(
         "12100000",
         "--expected-js-property",
         "__donnerLastScrollEvent",
-        # SHIP BLOCKER, tracked with the deferred WebKit decision: the WebGPU diagnostic
-        # readback surface is NOT in this package.
-        #
-        # `__donnerWgpuReadbackStats`, `__donnerRequestWgpuReadback`,
-        # `__donnerWgpuReadbackCaptureStarts`,
-        # `__donnerWgpuReadbackCaptureCompletions` and
-        # `__donnerWgpuReadbackCaptureFailures` were gated here until the
-        # single-canvas build became the default. Their emitters live in the
-        # `#else` arm of `DONNER_EDITOR_WHOLE_APP_WORKER` in
-        # `donner/editor/gui/EditorWindow.cc`; the whole-app arm stubs
-        # `WgpuReadbackStatsEnabled()` to `false` because the diagnostic reads
-        # the page URL and publishes a page-side handshake, and the app pthread
-        # has no `window`. That stub was correct for a flagged experiment and is
-        # a capability regression for the shipping package.
-        #
-        # These entries are removed rather than left red so the gate keeps
-        # describing what the package actually contains. Restore them in the
-        # same change that ports the diagnostic onto the whole-app bridge (the
-        # `MAIN_THREAD_ASYNC_EM_ASM` / shared-memory mirror pattern the other
-        # `__donner*` probes already use, see
-        # `donner/editor/WholeAppWorkerBridge.h`). Do not ship without it: the
-        # browser pixel suites read this surface.
+        # The WebGPU readback diagnostic the browser pixel suites read, published by
+        # `donner/editor/WholeAppWorkerBridge.cc`.
+        "--expected-js-property",
+        "__donnerWgpuReadbackStats",
+        "--expected-js-property",
+        "__donnerRequestWgpuReadback",
+        "--expected-js-property",
+        "__donnerWgpuReadbackCaptureStarts",
+        "--expected-js-property",
+        "__donnerWgpuReadbackCaptureCompletions",
+        "--expected-js-property",
+        "__donnerWgpuReadbackCaptureFailures",
         "--expected-js-property",
         "__donnerMainLoopRenderedFrames",
         "--expected-js-property",

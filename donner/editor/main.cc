@@ -17,7 +17,6 @@
 #include "donner/editor/WholeAppWorkerBridge.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
 
-#ifdef DONNER_EDITOR_WHOLE_APP_WORKER
 // The app pthread's JS context has no `window`, so the frame-scheduling flag,
 // the frame-loop probe surface, and the pinch policy publication all route
 // through the main-thread bridge instead of `EM_JS`. `callbacks` is counted
@@ -26,19 +25,10 @@ namespace {
 int g_pendingFrameLoopCallbacks = 0;
 }  // namespace
 
-void InitializeWasmEditorFrameScheduling() {
-  // Already installed at the top of main(), before anything could call an
-  // EM_JS body that assumes a browser main-thread JS context.
-}
-
 bool ConsumeBrowserEditorFrameRequest() {
   ++g_pendingFrameLoopCallbacks;
   return donner::editor::whole_app_worker::ConsumeFrameRequest();
 }
-
-void MarkWasmEditorFrameRendered() {}
-
-void EnsureWasmFrameLoopStats() {}
 
 void RecordWasmFrameLoopSample(int triggerBits, double frameMs) {
   donner::editor::whole_app_worker::RecordFrameSample(triggerBits, frameMs,
@@ -49,115 +39,6 @@ void RecordWasmFrameLoopSample(int triggerBits, double frameMs) {
 void PublishWasmPinchZoomPolicy(double wheelDeltaPerLnScale) {
   donner::editor::whole_app_worker::PublishPinchZoomPolicy(wheelDeltaPerLnScale);
 }
-#else
-
-// clang-format off: every EM_JS body below is JavaScript, which clang-format reformats as C++ -
-// it has already split a `===` into `== =`, which is a SyntaxError the browser reports only when
-// the arm is built.
-EM_JS(void, InitializeWasmEditorFrameScheduling, (), {
-  window['__donnerEditorFrameRequested'] = true;
-  window['__donnerMainLoopRenderedFrames'] = 0;
-  const requestFrame = function() {
-    window['__donnerEditorFrameRequested'] = true;
-  };
-  // Capture at window scope: direct worker canvases and transient DOM overlays can be the event
-  // target even though GLFW ultimately routes the interaction to the editor canvas.
-  for (const eventName of['mousedown', 'mouseup', 'mousemove', 'pointerdown', 'pointerup',
-                          'pointermove', 'pointercancel', 'pointerenter', 'pointerleave', 'wheel',
-                          'contextmenu', 'keydown', 'keyup', 'compositionstart',
-                          'compositionupdate', 'compositionend', 'beforeinput', 'input', 'paste',
-                          'resize', 'focus', 'blur']) {
-    window.addEventListener(eventName, requestFrame, {capture : true, passive : true});
-  }
-  document.addEventListener('visibilitychange', requestFrame, {capture : true, passive : true});
-});
-
-EM_JS(bool, ConsumeBrowserEditorFrameRequest, (), {
-  const requested = Boolean(window['__donnerEditorFrameRequested']);
-  window['__donnerEditorFrameRequested'] = false;
-  // Counted here rather than from its own call: this already runs on every animation-frame
-  // callback, including the ones the editor declines, so an idle page pays no extra boundary
-  // crossing for the probe.
-  const stats = window['__donnerFrameLoopStats'];
-  if (stats) {
-    stats['callbacks'] = (stats['callbacks'] | 0) + 1;
-  }
-  return requested;
-});
-
-EM_JS(void, MarkWasmEditorFrameRendered, (), {
-  window['__donnerMainLoopRenderedFrames'] =
-      Number(window['__donnerMainLoopRenderedFrames'] || 0) + 1;
-});
-
-// Per-frame main-loop probe. Browser suites read `__donnerFrameLoopStats` to assert that frames
-// only run when something asked for one - `callbacks` counts the animation-frame ticks the loop
-// declined - and the perf lane reads `uiFrameMsSamples` to compute the frame cost distribution.
-// Every recorded frame is a full UI frame, so that sample array covers all of them.
-//
-// Every property is quoted: the Wasm package is minified with Closure, which renames unquoted
-// object members and would leave the browser suites reading `undefined`. The sample array is
-// capped so a long session cannot grow the page heap without bound.
-EM_JS(void, EnsureWasmFrameLoopStats, (), {
-  if (!window['__donnerFrameLoopStats']) {
-    window['__donnerFrameLoopStats'] = {
-      'callbacks' : 0,
-      'renderedFrames' : 0,
-      'inputTriggeredFrames' : 0,
-      'workerTriggeredFrames' : 0,
-      'timerTriggeredFrames' : 0,
-      'workerOnlyFrames' : 0,
-      'uiFrameMsSamples' : [],
-    };
-  }
-});
-
-EM_JS(void, RecordWasmFrameLoopSample, (int triggerBits, double frameMs), {
-  const stats = window['__donnerFrameLoopStats'];
-  if (!stats) {
-    return;
-  }
-
-  stats['renderedFrames'] = (stats['renderedFrames'] | 0) + 1;
-  if (triggerBits & 1) {
-    stats['workerTriggeredFrames'] = (stats['workerTriggeredFrames'] | 0) + 1;
-  }
-  if (triggerBits & 2) {
-    stats['inputTriggeredFrames'] = (stats['inputTriggeredFrames'] | 0) + 1;
-  }
-  if (triggerBits & 4) {
-    stats['timerTriggeredFrames'] = (stats['timerTriggeredFrames'] | 0) + 1;
-  }
-  if (triggerBits == 1) {
-    stats['workerOnlyFrames'] = (stats['workerOnlyFrames'] | 0) + 1;
-  }
-  const kMaxSamples = 4096;
-  if (stats['uiFrameMsSamples'].length < kMaxSamples) {
-    stats['uiFrameMsSamples'].push(frameMs);
-  }
-  // Page-clock time of the latest frame's sample, so probes can measure
-  // result-to-frame handoffs from product timestamps rather than from their
-  // own poll scheduling.
-  stats['lastFrameAtMs'] = performance.now();
-  // Each worker result publishes a fresh stats object with no 'presentedAtMs';
-  // the first frame sample after it is the end of the frame that consumed the
-  // result. Stamp it exactly once so probes can pair the two product
-  // timestamps.
-  const workerStats = window['__donnerWorkerStats'];
-  if (workerStats && workerStats['presentedAtMs'] === undefined) {
-    workerStats['presentedAtMs'] = performance.now();
-  }
-});
-
-// Publish the C++-owned pinch policy so the page's WebKit gesture bridge
-// synthesizes wheel deltas calibrated against the same zoom-step model the
-// classifier uses. See donner/editor/PinchZoomPolicy.h for the derivation; the
-// bootstrap keeps a numeric fallback for the window between page load and
-// runtime initialization.
-EM_JS(void, PublishWasmPinchZoomPolicy, (double wheelDeltaPerLnScale),
-      { window['__donnerPinchWheelDeltaPerLnScale'] = wheelDeltaPerLnScale; });
-// clang-format on
-#endif  // DONNER_EDITOR_WHOLE_APP_WORKER
 #else
 #include "donner/base/FailureSignalHandler.h"
 #endif
@@ -325,7 +206,6 @@ void RunWasmEditorFrame(void* userdata) {
   // run existed purely because the document had its own canvas.
   state->renderFrame(*state->window, *state->shell);
   RecordWasmFrameLoopSample(triggerBits, emscripten_get_now() - frameStartMs);
-  MarkWasmEditorFrameRendered();
   if (const std::optional<float> wakeSeconds = state->shell->nextIdleWakeSeconds()) {
     state->nextIdleWakeAtMs = emscripten_get_now() + std::max(0.0f, *wakeSeconds) * 1000.0;
   } else {
@@ -443,21 +323,14 @@ int main(int argc, char** argv) {
 
 #ifdef __EMSCRIPTEN__
   auto* loopState = new WasmEditorLoopState{std::move(window), std::move(shell), std::nullopt};
-  InitializeWasmEditorFrameScheduling();
-  EnsureWasmFrameLoopStats();
   PublishWasmPinchZoomPolicy(donner::editor::PinchWheelDeltaPerLnScale());
   // The browser presents the WebGPU canvas when the requestAnimationFrame callback returns.
-#ifdef DONNER_EDITOR_WHOLE_APP_WORKER
   // `main()` runs on a worker here. Emscripten's rAF scheduler silently
   // degrades to a setTimeout emulation when the worker global has no
   // `requestAnimationFrame`, which is not vsync-aligned, so the driver probes
   // for it and installs a proxied main-thread rAF pump where it is missing.
   donner::BeginSuspendFrame();
   donner::editor::whole_app_worker::InstallFrameDriver(&RunWasmEditorFrame, loopState);
-#else
-  emscripten_set_main_loop_arg(&RunWasmEditorFrame, loopState, /*fps=*/0,
-                               /*simulateInfiniteLoop=*/true);
-#endif
 #else
   while (!window->shouldClose()) {
     RunEditorFrame(*window, *shell);

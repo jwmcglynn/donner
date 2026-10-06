@@ -172,9 +172,6 @@ public:
   /// WebGPU guarantees at least 8,192, which stands in when the browser reports no limit.
   uint32_t maxTextureDimension2D() const;
 
-  /// The bridge this device speaks to the browser through. Test accessor.
-  BrowserBridge& bridgeForTest() { return *bridge_; }
-
   /// Number of browser objects this device currently owns. Test accessor, for the teardown and
   /// slot-reuse contracts.
   size_t liveObjectCountForTest() const { return objects_.liveCount(); }

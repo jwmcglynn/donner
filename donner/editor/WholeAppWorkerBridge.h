@@ -1,13 +1,13 @@
 #pragma once
 /// @file
-/// Main-thread bridges for the single-canvas architecture whole-app-worker build.
+/// Main-thread bridges for the browser editor, which is built as a whole-app worker.
 ///
 /// In that build `main()` runs on a pthread (Emscripten `PROXY_TO_PTHREAD`) and
 /// the single `#canvas` is transferred to it as an `OffscreenCanvas`. `EM_JS`
-/// bodies run in the JS context of the *calling* thread, so every `window`,
-/// `document`, and `navigator` reference in the shipping editor's `EM_JS`
-/// probes evaluates in a `DedicatedWorkerGlobalScope` where those globals do
-/// not exist. This header owns the replacements.
+/// bodies run in the JS context of the *calling* thread, so a `window`,
+/// `document`, or `navigator` reference in an `EM_JS` body would evaluate in a
+/// `DedicatedWorkerGlobalScope` where those globals do not exist. This header
+/// owns every browser-page seam the editor uses instead.
 ///
 /// Two mechanisms, chosen per seam by how often it is read:
 ///
@@ -24,7 +24,7 @@
 ///   blocking the app thread.
 ///
 /// Nothing here is compiled unless `DONNER_EDITOR_WHOLE_APP_WORKER` is defined,
-/// so the shipping package is unaffected.
+/// which the browser editor build always defines.
 
 #ifdef DONNER_EDITOR_WHOLE_APP_WORKER
 
@@ -51,29 +51,21 @@ void RequestCatalogFont(uint32_t session, std::string_view contentId, uint64_t r
 void UninstallCatalogFonts(uint32_t session);
 
 /**
- * Give the app pthread's JS context the `window` and `document` globals the
- * editor's `EM_JS` probe bodies assume.
+ * Give the app pthread's JS context stand-in `window` and `document` globals.
  *
- * STUB, and the largest known gap in this build. About thirty `EM_JS`
- * bodies across the editor publish diagnostics onto `window.__donner*` or poke
- * DOM elements; on the app thread those globals do not exist and the first such
- * call throws `ReferenceError: window is not defined`, killing the thread.
- * Rather than convert every one of them to a proxied bridge for an experiment,
- * this installs a worker-local stand-in so they run harmlessly.
+ * Without them, any `window` or `document` access on the app thread throws
+ * `ReferenceError: window is not defined` and kills the thread. The stand-in
+ * makes such an access harmless, but what it writes lands on the worker's own
+ * global and is NOT readable from the page. Every `window.__donner*` probe and
+ * page attribute the browser suites read is therefore published to the browser
+ * main thread instead: by this bridge, and through main-thread `EM_ASM` calls
+ * elsewhere, such as in `EditorShell.cc` and `RenderCoordinator.cc`. Query
+ * parameters such as `?wgpuReadbackStats` are read on the main thread too (see
+ * \ref Install).
  *
- * Consequence: those probes land on the worker's own global and are NOT
- * readable from the page. The probes this build's exit criteria depend on are
- * explicitly bridged instead (see the rest of this header) and DO reach the
- * page. Probes known to be worker-local in this build: `__donnerWorkerStats`,
- * `__donnerSampleThumbnailStats`, `__donnerInteractionStats`,
- * `__donnerLayerThumbnailStats`, `__donnerPresentationResourceStats`,
- * `__donnerActiveSampleStats`, and the `data-active-sample-id` canvas
- * attribute. Query-param features (`?wgpuReadbackStats`,
- * `?workerSurfaceDiagnostic`) read an empty search string and stay off.
- *
- * CSS cursors are NOT in that set: a cursor is state the user sees, not a
- * probe, so RotateCursorSet keeps its registry and its writes on the browser
- * main thread rather than routing them through the stand-in below. Its
+ * CSS cursors follow the same rule: a cursor is state the user sees, so
+ * RotateCursorSet keeps its registry and its writes on the browser main thread
+ * rather than routing them through the stand-in below. Its
  * `__donnerBrowserCursorStats` therefore reaches the page as well.
  *
  * Must run before any other editor code on the app thread. Cheap and
@@ -103,9 +95,9 @@ void Install();
 /// Backing-store width the transferred canvas should have, resizing the
 /// `OffscreenCanvas` to match when the CSS size or device pixel ratio moved.
 ///
-/// The shipping build lets emscripten-glfw size the canvas from the main
-/// thread. That path throws on a transferred canvas, so the app thread owns
-/// sizing here instead, through `emscripten_set_canvas_element_size`.
+/// emscripten-glfw's main-thread canvas sizing throws on a transferred canvas,
+/// so the app thread owns sizing here instead, through
+/// `emscripten_set_canvas_element_size`.
 [[nodiscard]] int CanvasBackingWidth();
 
 /// Backing-store height the transferred canvas should have. See
@@ -115,9 +107,9 @@ void Install();
 /// Take the pending "a DOM event asked for a frame" flag, clearing it.
 [[nodiscard]] bool ConsumeFrameRequest();
 
-/// Whether the last wheel event on the canvas carried Ctrl or Meta. Mirrors the
-/// shipping build's `__donnerWheelModifierCapture` shadow, which exists because
-/// the browser reports a trackpad pinch as a Ctrl-flagged wheel.
+/// Whether the last wheel event on the canvas carried Ctrl or Meta. The
+/// shadow exists because the browser reports a trackpad pinch as a
+/// Ctrl-flagged wheel.
 [[nodiscard]] bool ZoomModifierHeld();
 
 /// Publish one frame-loop sample onto the page's `__donnerFrameLoopStats`.
@@ -215,10 +207,10 @@ void NotifyFirstFramePresented(int headlessDeviceCreations);
 /// browser suites.
 void RecordScrollDebug(bool zoomModifierHeld, double xoffset, double yoffset, bool physicalKeyHeld);
 
-/// WebGPU readback diagnostic handshake. Same page contract as the pre-worker
-/// build (wgpuReadbackStats URL parameter, window counters, explicit requests);
-/// the request/completed ids additionally ride the shared-memory mirror so the
-/// app thread polls without a main-thread round trip.
+/// WebGPU readback diagnostic handshake: the wgpuReadbackStats URL parameter,
+/// window counters and explicit requests. The request/completed ids also ride
+/// the shared-memory mirror so the app thread polls without a main-thread round
+/// trip.
 [[nodiscard]] bool ReadbackStatsEnabled();
 [[nodiscard]] int PeekReadbackRequest();
 void WakeForPendingReadback();
