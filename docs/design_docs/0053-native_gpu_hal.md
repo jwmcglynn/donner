@@ -795,8 +795,10 @@ acceptance of the Linux editor, with the rest of the cutover, is under
       configured dependency audits live beside native, editor, embed and browser product roots;
       their required labels prevent vacuous passes, and an injected aliased dependency proves the
       failure path. The Linux oracle has a positive selected-closure audit for its exact test-only
-      wrapper and architecture-specific archive. Generated CMake rejects both Rust toolchain
-      commands and install rules until install artifacts have their own scanner.
+      wrapper and architecture-specific archive, and the lexical verifier pins the complete set of
+      first-party rules that may name a label in that chain, so a new build rule naming one fails.
+      Generated CMake rejects both Rust toolchain commands and install rules until install
+      artifacts have their own scanner.
 
 ### Remaining GPU audit acceptance
 
@@ -924,7 +926,8 @@ Do not copy, translate or vendor implementation code or internal tests from `wgp
 `testonly` resvg GeodeGolden comparison backend as a black box. The final configured graph must
 have no edge from the runtime, shader tooling outside that test, macOS, Wasm, editor, other CI
 targets or shipped artifacts to that reference. The lexical verifier checks static visibility,
-compatibility, fetch structure and checksums. Ordinary Bazel configured dependency audits reject
+compatibility, fetch structure and checksums, and pins the complete set of first-party rules that
+may name a target reaching the archive. Ordinary Bazel configured dependency audits reject
 the reference package from native, editor, embed and browser products, while the Linux oracle's
 positive audit requires its selected test-only wrapper and archive chain. The exception does not permit
 copying the implementation or its internal tests. Record requirements, specifications, algorithm
@@ -1153,7 +1156,8 @@ The exact integrated candidate must satisfy all applicable platform gates:
   browser-profile simulation alone does not establish physical-device coverage.
 - Production consumers, configured dependency/link queries and artifact scans satisfy the
   runtime and no-Rust boundaries. The concrete adapter and Rust-built GPU libraries have no
-  production consumers; only the pinned Linux `testonly` resvg reference may reach wgpu-native.
+  production consumers; only the pinned Linux `testonly` resvg reference may reach wgpu-native,
+  and the lexical verifier pins that reference's complete consumer set.
   `//tools/rust_boundary:check_no_rust_dependencies_tests`, the blocking lexical verifier and
   configured Bazel dependency audits reject every unexpected archive or production edge, with an
   injected-edge regression.

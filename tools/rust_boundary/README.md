@@ -52,9 +52,21 @@ scopes and the verifier enforces the boundary of each:
   release assets and reviewed SHA-256 pins for the sole resvg comparison lane.
   The verifier checks the fetch rule, root module names, Linux-only overlay,
   test-only wrapper alias chain, and resvg test consumer as one narrow declared
-  boundary. The full tracked-tree scan also fails if any of these five files
-  disappears. The Linux oracle's configured dependency audit proves the
-  selected test root actually reaches that archive.
+  boundary. It also pins the complete set of first-party rules the archive is
+  reachable from: the wrapper's `webgpu_cpp`, two aliases and reference
+  runtime, the two Geode reference leaves, the resvg comparison's libraries,
+  test, wrapper and audit, and the CI `test_suite` that selects them. Every
+  string literal a Starlark build file names outside dependency-audit metadata
+  is read as a label in that file's package; one that resolves to a pinned rule
+  or to an archive may appear only in that rule's own declaration. So any other
+  rule, in those files or elsewhere, that names the chain fails, as does a
+  pinned rule that disappears or changes kind. A label assembled from pieces is
+  not read. Bazel visibility narrows the wrapper, the Geode leaves and the
+  comparison's libraries, but the archive repositories and `//tools/ci` are
+  publicly visible, so for those hops this check is the only guard. The
+  full tracked-tree scan also fails if any of these boundary files disappears.
+  The Linux oracle's configured dependency audit proves the selected test root
+  actually reaches that archive.
 
 The visibility check reads the raw file and fails closed on anything it cannot
 parse as a literal list of quoted labels, a comment included: a comment

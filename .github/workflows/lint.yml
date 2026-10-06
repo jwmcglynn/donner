@@ -99,7 +99,7 @@ jobs:
       - name: Check design document provenance
         run: python3 tools/check_design_doc_provenance.py
 
-      - name: No-Rust-dependency verifier (blocking except wgpu-native archives)
+      - name: No-Rust-dependency verifier (blocking)
         run: python3 tools/rust_boundary/check_no_rust_dependencies.py --blocking default
 
   cmake-validate:

@@ -1,5 +1,5 @@
 load("@aspect_rules_js//js:defs.bzl", "js_test")
-load("//build_defs:dep_audit.bzl", "configured_dependency_audit_test", "forbidden_transitive_dep_test")
+load("//build_defs:dep_audit.bzl", "configured_dependency_audit_test")
 load("//build_defs:rules.bzl", "donner_cc_binary", "donner_cc_library", "donner_cc_test", "donner_multi_transitioned_test")
 load("//build_defs:visibility.bzl", "donner_internal_visibility")
 load(
@@ -1017,9 +1017,15 @@ js_test(
     ],
 )
 
-forbidden_transitive_dep_test(
-    name = "wgsl_browser_no_webgpu_wrapper_test",
-    forbidden = "//third_party/webgpu-cpp:webgpu_cpp",
+# Configured, so the audit checks the suite's real dependency closure without loading the closure of
+# the wrapper it forbids.
+configured_dependency_audit_test(
+    name = "wgsl_browser_no_webgpu_wrapper_audit_test",
+    forbidden_packages = ["//third_party/webgpu-cpp"],
+    required = [
+        "//donner/gpu/shader:math_primitive_fixture",
+        "//donner/gpu/shader:shipped_wgsl_manifest",
+    ],
     target = "//donner/gpu/shader:wgsl_chromium_compilation_tests",
 )
 
@@ -1047,9 +1053,12 @@ js_test(
     ],
 )
 
-forbidden_transitive_dep_test(
-    name = "slug_endpoint_browser_no_webgpu_wrapper_test",
-    forbidden = "//third_party/webgpu-cpp:webgpu_cpp",
+# Configured, so the audit checks the suite's real dependency closure without loading the closure of
+# the wrapper it forbids.
+configured_dependency_audit_test(
+    name = "slug_endpoint_browser_no_webgpu_wrapper_audit_test",
+    forbidden_packages = ["//third_party/webgpu-cpp"],
+    required = ["//donner/gpu/shader:slug_endpoint_wgsl_fixture"],
     target = "//donner/gpu/shader:slug_endpoint_chromium_tests",
 )
 
