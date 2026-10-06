@@ -324,8 +324,11 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         schedule_only = "        if: ${{ !cancelled() && github.event_name == 'schedule' }}\n"
         self.assertEqual(editor.count(schedule_only), 2)
         for step in ("Summarize quarantined cases", "Upload quarantined case evidence"):
-            self.assertIn("      - name: %s\n%s        continue-on-error: true\n"
-                          % (step, schedule_only), editor, step)
+            self.assertIn("      - name: %s\n%s" % (step, schedule_only), editor, step)
+        summary = self._step_body(editor, "Summarize quarantined cases")
+        self.assertIn('|| echo "::warning::Could not summarize the quarantined cases"', summary)
+        self.assertIn("if-no-files-found: warn",
+                      self._step_body(editor, "Upload quarantined case evidence"))
         others = [path for path in sorted(workflows.glob("*.y*ml"))
                   if path.name != "editor_wasm.yml"]
         self.assertGreater(len(others), 5)

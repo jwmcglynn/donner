@@ -1372,7 +1372,7 @@ test("only a report-only lane lifts the Firefox quarantine, and it never fails t
   assert.match(lane, /archive_lane_results "\$\{kQuarantineReportLane\}" \|\| echo/);
   // The lane's code is only ever printed: it never reaches overall_status or the exit.
   for (const line of browserCi.split("\n").filter((text) => text.includes("report_lane_code"))) {
-    assert.doesNotMatch(line, /overall_status|exit /, line);
+    assert.doesNotMatch(line, /overall_status|^\s*exit\b/, line);
   }
   assert.match(browserCi, /\nexit "\$\{overall_status\}"\n$/);
   assert.ok(
