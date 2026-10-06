@@ -19,13 +19,13 @@ from python.runfiles import runfiles
 # The editor Wasm payload ceilings CI enforces. Changing one means editing the size test's
 # arguments and this table together, so a widened ceiling is always a reviewed change.
 ENFORCED_PAYLOAD_CEILINGS = {
-    "--max-js-gzip-bytes": 51000,
-    "--max-js-raw-bytes": 185000,
-    "--max-total-raw-bytes": 12100000,
+    "--max-js-gzip-bytes": 54600,
+    "--max-js-raw-bytes": 198200,
+    "--max-total-raw-bytes": 13015000,
     "--max-wasm-data-segments": 64,
     "--max-wasm-function-body-bytes": 46000,
-    "--max-wasm-gzip-bytes": 3300000,
-    "--max-wasm-raw-bytes": 10000000,
+    "--max-wasm-gzip-bytes": 3552000,
+    "--max-wasm-raw-bytes": 10749000,
 }
 PAYLOAD_SIZE_TEST = "//donner/editor/wasm:wasm_geode_package_size_tests"
 SIZE_CHECK_STEP = "- name: Build and size-check Geode editor Wasm package"

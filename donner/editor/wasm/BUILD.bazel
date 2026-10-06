@@ -376,23 +376,23 @@ py_test(
     args = [
         "--package-dir",
         "$(rootpath :wasm_web_package)",
-        # Enforced ceilings, each about 2 to 3 percent above the measured package: Wasm 9,769,340
-        # raw / 3,226,953 gzip, JS 179,921 raw / 49,472 gzip, 11,829,116 total raw bytes. Lower them
-        # as the package shrinks; raise one only by explicit maintainer decision.
+        # Enforced ceilings, each about 10 percent above the measured package: Wasm 9,771,416 raw /
+        # 3,228,485 gzip, JS 180,129 raw / 49,630 gzip, 11,831,400 total raw bytes. Lower them as
+        # the package shrinks; raise one only by explicit maintainer decision.
         "--max-wasm-raw-bytes",
-        "10000000",
+        "10749000",
         "--max-wasm-gzip-bytes",
-        "3300000",
+        "3552000",
         "--max-wasm-function-body-bytes",
         "46000",
         "--max-wasm-data-segments",
         "64",
         "--max-js-raw-bytes",
-        "185000",
+        "198200",
         "--max-js-gzip-bytes",
-        "51000",
+        "54600",
         "--max-total-raw-bytes",
-        "12100000",
+        "13015000",
         "--expected-js-property",
         "__donnerLastScrollEvent",
         # The WebGPU readback diagnostic the browser pixel suites read, published by

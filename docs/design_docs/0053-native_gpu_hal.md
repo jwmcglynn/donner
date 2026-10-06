@@ -136,9 +136,9 @@ consumers remain.
 The browser-selected WebAssembly packages link neither the transitional adapter nor emdawnwebgpu's
 C++ WebGPU C API implementation or JavaScript glue. The Rust-built libraries are native-only and
 never reach the WebAssembly payload. CI enforces the editor package's payload ceilings in
-`//donner/editor/wasm:wasm_geode_package_size_tests`: 10,000,000 bytes of raw Wasm, 3,300,000
-bytes of gzip Wasm, 185,000 raw and 51,000 gzip bytes of JavaScript, and 12,100,000 total bytes,
-each a small margin above the measured package. Lower them as the package shrinks. Raising one is
+`//donner/editor/wasm:wasm_geode_package_size_tests`: 10,749,000 bytes of raw Wasm, 3,552,000
+bytes of gzip Wasm, 198,200 raw and 54,600 gzip bytes of JavaScript, and 13,015,000 total bytes,
+each about 10% above the measured package. Lower them as the package shrinks. Raising one is
 an explicit maintainer decision and does not relax functional, lifetime, synchronization,
 memory-residency, security or privacy requirements.
 

@@ -19,6 +19,8 @@ donner_cc_binary(
         "codeql_default",
         "codeql_text_full",
     ],
+    # The shipped-configuration size budget measures this tool as the GPU command-line product.
+    visibility = ["//tools/ci:__pkg__"],
     deps = [
         "//donner/base",
         "@donner",
