@@ -267,7 +267,7 @@ before it fires.
 
 ## Decisions
 
-- Release-blocking GPUs (maintainer, 2026-10-05): Apple silicon Metal, a discrete Vulkan GPU and
+- Release-blocking GPUs (maintainer decision): Apple silicon Metal, a discrete Vulkan GPU and
   lavapipe are mandatory; every other physical GPU and driver combination is best-effort. This
   answers the question 0053 asked. The tables above still describe which lanes run each
   combination.

@@ -139,9 +139,14 @@ of released textures that a token or registration still holds are reported by
   uploader that keeps an oversized allocation across payloads re-points the snapshot with
   `setDimensions()`.
 - `takeSnapshot()` and `takeSnapshotInterruptibly()` read pixels back to the CPU on a separate
-  readback context over the same root, so a capture never touches the producer's handle tables or
-  serials. A capture has a total budget of 10 seconds (`geode::kReadbackMapTimeout`) and can be
-  cancelled. A borrowed surface frame reads back as an empty bitmap because its export is refused.
+  readback context over the same root, so the copy and its mapping never touch the producer's
+  handle tables or serials. Capturing an adopted `RendererGeodeTextureSnapshot` uses the export
+  taken at adoption and does not touch the producing device at all. Capturing a live
+  `RendererGeode` first exports its current target through the renderer's own runtime device,
+  which reads that device's texture table, so it must run on the thread that owns that device. A
+  capture has a total budget of 10 seconds (`geode::kReadbackMapTimeout`) and can be cancelled. A
+  renderer whose target is a borrowed surface frame reads back as an empty bitmap because the
+  frame's export is refused.
 
 Explicit captures are CPU consumers by design. Ordinary native composition and presentation keep
 pixels on the GPU. The browser editor currently moves document pixels from its raster worker to
@@ -250,9 +255,10 @@ Each product links only the shader projection its devices consume; see
   gets its own `VkDeviceMemory` allocation behind the `BufferSuballocator` seam in
   `VulkanBufferAllocator.h`. The code ties any future suballocating implementation to the driver's
   limit on how many allocations may exist at once, and leaves it until measurement shows that limit
-  is the binding constraint. The maintainer decided that suballocation is not needed: on a
-  discrete GPU, physical residency equals the logical allocation accounting plus one frame of
-  transient textures.
+  is the binding constraint. The maintainer decided that suballocation is not needed. A residency
+  measurement of the integrated candidate on a discrete GPU observed physical residency equal to
+  the logical allocation accounting plus one frame of transient textures; no CI target measures
+  Vulkan residency, so that is an observation, not an enforced guarantee.
 - **Browser.** `donner/gpu/browser` expresses validated operations to `navigator.gpu` through
   `library_donner_gpu.js`. Browser objects are named by identifiers that are never reused, and both
   sides check each identifier's kind and owner. A browser shows a canvas frame from its own frame
@@ -309,7 +315,7 @@ them `GeodeNativeRoot.UnnamedBackendUsesTheNativePlatformDefault`,
 
 ### GPU qualification matrix {#GpuRuntimeMatrix}
 
-The maintainer decided the GPU matrix on 2026-10-05:
+The maintainer decided the GPU matrix:
 
 - **Mandatory:** Apple silicon Metal, a discrete Vulkan GPU, and lavapipe (Mesa's software Vulkan
   driver).
@@ -397,11 +403,11 @@ budget would declare a slow device that is still working lost.
 the bound in the past, and has no total limit while work keeps completing. The default bound is
 `geode::kDefaultGpuWaitTimeout`, five seconds; the Vulkan texture upload allows 60 seconds.
 
-| Backend            | Progress                                                                                                                                                                     |
-| ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Metal              | A command buffer of the device completing, work committed to an idle device, and, while a submission waits on another device's work, that device's progress.                 |
-| Vulkan             | Every command buffer ends by setting an event; the shared queue progresses whenever any device over the root sees one set. Work submitted to an idle queue starts the clock. |
-| Browser, recording | No progress is reported, so a stall-bounded wait bounds the whole wait instead.                                                                                              |
+| Backend            | Progress                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Metal              | A command buffer of the device completing, work committed to an idle device, and, while a submission waits on another device's work, that device's progress.                                                                                                                                                                                                                                                                                            |
+| Vulkan             | Each command buffer a `VulkanDevice` records from a submitted command stream ends by setting an event, and the shared queue progresses whenever any device over the root sees one set. A texture upload or a swapchain's frame handover sets no event; submitted while no tracked work is outstanding, it starts the clock, so a wait for it is timed from its submission, or from the last event seen ahead of it, and is not refreshed while it runs. |
+| Browser, recording | No progress is reported, so a stall-bounded wait bounds the whole wait instead.                                                                                                                                                                                                                                                                                                                                                                         |
 
 The unit of progress is one command buffer, so a single command buffer that runs longer than the
 bound is indistinguishable from a hang.

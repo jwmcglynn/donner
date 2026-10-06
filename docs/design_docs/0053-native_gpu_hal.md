@@ -1170,32 +1170,21 @@ The exact integrated candidate must satisfy all applicable platform gates:
 
 ### Accepted performance exceptions
 
-The maintainer accepted these exceptions to the frame-time criterion on 2026-10-06. Each compares
-the candidate with the reference revision `7a7fb1eb` on the same host and configuration.
+The maintainer accepts these cells as exceptions to the frame-time criterion. The measurements,
+revisions and causal experiments are in the linked issues.
 
-- **Chromium editor input-to-frame p95.** Measured at `d5d3a771` on an otherwise idle machine:
-  cold-pointer p95 rose from 18.3 ms to 30.3 ms (+65%), cold-zoom p95 by 46% and warm-pointer p95
-  by 41%, while p50 improved in every phase. The cause has not been bisected;
-  [#1712](https://github.com/jwmcglynn/donner/issues/1712) tracks it.
-- **Metal `renderer_bench`, five cells.** Measured at `d5d3a771` on the same Apple silicon Mac:
-  Ret-Settled p95 rose on `simple_shapes` (+79%), `moderate_paths` (+44%), `lion` (+51%) and
-  `gradient_grid` (+55%), and `simple_shapes` Settled p95 rose 11.5%; every p50 improved. Traces
-  show the slow tenth of frames start late on the GPU: `simple_shapes` commit-to-GPU-start p50 is
-  0.067 ms, and 0.458 ms in the slow tenth. The completion-handler hop is constant at about
-  0.05 ms. The tail tracks the GPU idle gap before the retained frame's commit, not Donner's wait:
-  a spin before the retained draw, outside its timing, changes it in both binaries. The
-  candidate's `simple_shapes` p95 falls from 0.746 to 0.583 ms with a 700 us spin, and the
-  reference's rises from 0.391 to 0.678 ms with a 300 us spin. The tail is attributed to Apple GPU
-  idle-to-active latency.
-- **Discrete Vulkan GPU, one cell.** Measured at `d5d3a771` with the emitter change from
-  [#1704](https://github.com/jwmcglynn/donner/pull/1704) applied, `moderate_paths` Ret-Settled p50
-  is 9.1% slower. The cost is the C library allocator in the readback snapshot copy: with glibc's
-  mmap and trim thresholds pinned, all 18 cells are inside the rule. Lavapipe passes all 18 cells.
+- **Chromium editor input-to-frame p95** in the cold-pointer, cold-zoom and warm-pointer phases;
+  the cause is not yet established ([#1712](https://github.com/jwmcglynn/donner/issues/1712)).
+- **Metal `renderer_bench` p95, five cells**: Ret-Settled on `simple_shapes`, `moderate_paths`,
+  `lion` and `gradient_grid`, and Settled on `simple_shapes`; attributed to Apple GPU
+  idle-to-active latency ([#1716](https://github.com/jwmcglynn/donner/issues/1716)).
+- **Discrete Vulkan GPU `renderer_bench` p50, one cell**: Ret-Settled on `moderate_paths`; caused
+  by the C library allocator in the readback snapshot copy
+  ([#1716](https://github.com/jwmcglynn/donner/issues/1716)).
 
 ## Platform Cutover Decisions
 
-On 2026-10-05 the maintainer decided the three questions this design had left open for platform
-cutover:
+The maintainer decided the three questions this design had left open for platform cutover:
 
 - **Qualification matrix.** Apple silicon Metal, a discrete Vulkan GPU and lavapipe are mandatory;
   every other physical GPU and driver combination is best-effort.
@@ -1203,11 +1192,13 @@ cutover:
 - **Native embedding surface.** v0.8 exposes no native embedding surface beyond internal callers:
   the editor, the in-tree embed example and Donner's own tests. The
   [native embedding guide](../guides/embedding_geode.md) documents that internal seam.
-- **Vulkan suballocation.** Not needed. On a discrete Vulkan GPU, physical residency equals the
-  logical allocation accounting plus one frame of transient textures, so each buffer keeps its own
-  allocation behind the `BufferSuballocator` seam in `VulkanBufferAllocator.h`. The code ties any
-  future suballocator to the driver's limit on how many allocations may exist at once, to be
-  written only when measurement shows that limit is the binding constraint.
+- **Vulkan suballocation.** Not needed. Each buffer keeps its own allocation behind the
+  `BufferSuballocator` seam in `VulkanBufferAllocator.h`, and the code reserves a suballocator for
+  when measurement shows that the driver's limit on how many allocations may exist at once is the
+  binding constraint. A residency measurement of the integrated candidate on a discrete Vulkan GPU
+  observed physical residency equal to the logical allocation accounting plus one frame of
+  transient textures. No CI target measures Vulkan residency, so that is an observation, not an
+  enforced guarantee.
 
 ## Related Designs
 
