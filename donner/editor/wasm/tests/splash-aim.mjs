@@ -6,7 +6,7 @@
  * displayed: the sample attribute changes and the editor goes idle while the viewport the editor
  * publishes still describes the previous document. An aim taken then lands elsewhere (#1683).
  *
- * Plain JavaScript without `import.meta` or top-level `await`, so Playwright can load it from a
+ * Plain JavaScript with no module-only features beyond `export`, so Playwright can load it from a
  * TypeScript spec.
  */
 
