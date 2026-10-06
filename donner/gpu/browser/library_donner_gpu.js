@@ -257,14 +257,7 @@ var LibraryDonnerGpu = {
       }
     },
 
-    // Observation only. Each step of a browser device request that settles writes one console line
-    // under kTracePrefix: what it settled to, how long it took, and `late=1` when the requester had
-    // already let the request go (for example after its settle deadline). If the device has neither
-    // arrived nor been refused after kTraceStillPendingMs, one `still_pending` line follows. A CI
-    // log can then tell a slow browser from one that never answers. Nothing here changes the
-    // request, its outcome, or how long anything waits: every hook swallows its own faults, the
-    // timer is cleared once the request settles and never holds a process open, and a console or
-    // clock that refuses a line is ignored.
+    // The acquisition trace is observation only: it must never change a request or its outcome.
     kTracePrefix: '[Geode/browser/gpu-trace]',
     // Past GeodeBrowserRoot's 10 s device settle window (kBrowserDeviceSettleSeconds), and inside
     // the life of a browser test that hit it, so a request the editor gave up on still says
