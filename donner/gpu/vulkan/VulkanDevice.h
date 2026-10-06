@@ -59,12 +59,6 @@ public:
   /// Largest 2D texture dimension reported by this root's physical device.
   uint32_t maxTextureDimension2D() const;
 
-  /// Owning copy of the selected physical device's Vulkan-reported name. Empty if unavailable.
-  std::string adapterName() const;
-
-  /// Vulkan-reported physical device type, using baseline provenance names.
-  std::string adapterType() const;
-
   /// Sticky loss condition shared by every runtime device opened over this root.
   const std::shared_ptr<DeviceLostState>& lostState() const;
 
@@ -150,7 +144,7 @@ std::vector<const char*> SelectPresentationExtensionsForTest(
  * Targets Vulkan 1.1 core only: classic VkRenderPass + VkFramebuffer (no dynamic rendering),
  * per-submission VkFence completion tracking, and the core negative-viewport-height feature
  * (VK_KHR_maintenance1, promoted to 1.1) to present WebGPU clip-space semantics - identical
- * SPIR-V positions land on identical pixels as the wgpu baseline. Presentation additionally
+ * SPIR-V positions land on the same pixels as in WebGPU clip space. Presentation additionally
  * requires swapchain maintenance1 and its matching instance extension dependencies. The headless
  * path needs no device extension; \ref CreateWithTimelineSemaphoreForTest optionally requests
  * VK_KHR_timeline_semaphore so a test can hold a submission open.

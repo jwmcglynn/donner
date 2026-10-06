@@ -12,9 +12,9 @@
 /// reports the same green as a lane that exercised the protection, so on an automated lane this
 /// fails closed instead, naming the capability and the marker that identified the lane.
 ///
-/// Checks the same automated-lane markers as donner/gpu/baseline/FrozenBaselinePolicy.h, by
-/// calling the single definition in donner/base/tests/ContinuousIntegrationMarkers.h rather than
-/// keeping a copy: that policy delegates to the same functions.
+/// Checks the automated-lane markers through the single definition in
+/// donner/base/tests/ContinuousIntegrationMarkers.h rather than keeping a copy, as the GPU device
+/// and external-tool gates do.
 
 #include <gtest/gtest.h>
 
@@ -27,20 +27,7 @@
 namespace donner::tests {
 
 /// What a run should do when the environment capability it needs is unavailable.
-enum class MissingEnvironmentCapabilityDisposition {
-  Skip,        //!< Report the case as skipped, naming the capability that is unavailable.
-  FailClosed,  //!< Fail: skipping here would silently retire the case that checks it.
-};
-
-/// Streams the disposition name. @param os Stream. @param disposition Value. @return `os`.
-inline std::ostream& operator<<(std::ostream& os,
-                                MissingEnvironmentCapabilityDisposition disposition) {
-  switch (disposition) {
-    case MissingEnvironmentCapabilityDisposition::Skip: return os << "Skip";
-    case MissingEnvironmentCapabilityDisposition::FailClosed: return os << "FailClosed";
-  }
-  return os << "MissingEnvironmentCapabilityDisposition(unknown)";
-}
+using MissingEnvironmentCapabilityDisposition = MissingRequirementDisposition;
 
 /**
  * The disposition for a run whose needed environment capability is unavailable.
@@ -50,8 +37,7 @@ inline std::ostream& operator<<(std::ostream& os,
  */
 inline MissingEnvironmentCapabilityDisposition DispositionForMissingEnvironmentCapability(
     bool underContinuousIntegration) {
-  return underContinuousIntegration ? MissingEnvironmentCapabilityDisposition::FailClosed
-                                    : MissingEnvironmentCapabilityDisposition::Skip;
+  return DispositionForMissingRequirement(underContinuousIntegration);
 }
 
 /**

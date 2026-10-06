@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Cubic loops whose extrema fall inside segments on both axes. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+  <g transform="matrix(0.94 0 0 0.94 8 8)">
+    <path fill="#288cc8"
+          d="M 48 128 C 48 16 208 16 208 128 C 208 240 48 240 48 128 Z"/>
+    <path fill="#fadc28dc" fill-rule="evenodd"
+          d="M 128 72 C 24 96 232 160 128 184 C 96 160 160 96 128 72 Z"/>
+  </g>
+</svg>

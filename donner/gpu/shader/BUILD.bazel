@@ -657,7 +657,6 @@ donner_cc_library(
     visibility = donner_internal_visibility(),
     deps = [
         "//donner/base:base_test_utils",
-        "//donner/gpu/baseline:frozen_baseline_policy",
         "@com_google_gtest//:gtest",
     ],
 )
@@ -691,7 +690,7 @@ donner_cc_test(
     # Bazel scrubs the test environment, so the automated-lane markers have to be named here or
     # the fail-closed rule can never see one and the gate quietly keeps skipping.
     env_inherit = [
-        "DONNER_BASELINE_REQUIRE_FROZEN_ADAPTER",
+        "DONNER_AUTOMATED_LANE",
         "GITHUB_ACTIONS",
     ],
     tags = ["requires_metal_toolchain"],

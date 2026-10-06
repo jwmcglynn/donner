@@ -1,14 +1,12 @@
 #pragma once
 /// @file
-/// The frozen-baseline scene shared by the baseline capture tool and the per-backend solid-fill
-/// tests.
+/// The solid-fill scene shared by the Metal and Vulkan solid-fill tests, which render it through
+/// donner::gpu with the shader IR's emitted MSL or SPIR-V.
 ///
-/// All consumers must render IDENTICAL inputs: the capture tool renders this scene through the
-/// current production renderer as a black box and commits the PNG; the Metal test renders the
-/// same scene through donner::gpu + the MSL emitter and compares pixels against that PNG; the
-/// Vulkan test renders it through donner::gpu + the SPIR-V emitter and compares against an
-/// in-process production render of the same scene. Only Donner-owned, deterministic content
-/// appears here.
+/// Its geometry, colors and view transform are the ones in
+/// `donner/svg/renderer/testdata/literal_fill_solid.svg`, so both tests compare against that
+/// document's golden, which the renderer's Geode golden tests also check. Only Donner-owned,
+/// deterministic content appears here.
 
 #include <array>
 #include <cstddef>
@@ -27,11 +25,11 @@
 
 namespace donner::gpu::tests {
 
-/// Baseline render target size in pixels (square RGBA8, transparent background).
-inline constexpr uint32_t kBaselineSize = 256;
+/// Render target size in pixels (square RGBA8, transparent background).
+inline constexpr uint32_t kSolidFillSize = 256;
 
-/// One filled path of the baseline scene.
-struct BaselinePathSpec {
+/// One filled path of the scene.
+struct SolidFillPathSpec {
   Path path;        //!< Path geometry in scene space.
   css::RGBA color;  //!< Solid fill color (not premultiplied).
   FillRule rule;    //!< Fill rule.
@@ -39,7 +37,7 @@ struct BaselinePathSpec {
 
 /// View transform applied to every path: a translate plus a non-unit scale so coverage math is
 /// exercised away from the identity.
-inline Transform2d BaselinePixelFromScene() {
+inline Transform2d SolidFillPixelFromScene() {
   return Transform2d::Scale(0.94) * Transform2d::Translate(8.0, 8.0);
 }
 
@@ -50,8 +48,8 @@ inline Transform2d BaselinePixelFromScene() {
 /// radius 46, controls at radius / cos(pi/8) so each quadratic's midpoint touches the circle) and
 /// are literals here on purpose. Evaluating them with `std::cos`/`std::sin` at runtime would make
 /// the scene's geometry depend on the host math library, whose last bit is not specified, and the
-/// frozen counters derived from this path are compared for exact equality across platforms.
-inline BaselinePathSpec BaselineCircle() {
+/// literal coordinates are what the scene's SVG document repeats.
+inline SolidFillPathSpec SolidFillCircle() {
   /// Control point followed by end point for one of the eight quadratic segments.
   struct QuadSegment {
     Vector2d control;
@@ -74,7 +72,7 @@ inline BaselinePathSpec BaselineCircle() {
     builder.quadTo(segment.control, segment.end);
   }
   builder.closePath();
-  return BaselinePathSpec{builder.build(), css::RGBA(255, 0, 0, 128), FillRule::NonZero};
+  return SolidFillPathSpec{builder.build(), css::RGBA(255, 0, 0, 128), FillRule::NonZero};
 }
 
 /// (b) A self-intersecting five-point star; semi-transparent blue, even-odd fill (exercises the
@@ -83,7 +81,7 @@ inline BaselinePathSpec BaselineCircle() {
 /// The vertices were transcribed once from the parametric form (center (170, 90), radius 62,
 /// angles stepping by 144 degrees from straight up, so every second vertex of a pentagon is
 /// connected) and are literals here for the same reason the circle's are.
-inline BaselinePathSpec BaselineStar() {
+inline SolidFillPathSpec SolidFillStar() {
   static constexpr std::array<Vector2d, 5> kVertices = {{
       {170.0, 28.0},
       {206.44268564213334, 140.15905365124675},
@@ -98,12 +96,12 @@ inline BaselinePathSpec BaselineStar() {
     builder.lineTo(kVertices[i]);
   }
   builder.closePath();
-  return BaselinePathSpec{builder.build(), css::RGBA(40, 80, 255, 150), FillRule::EvenOdd};
+  return SolidFillPathSpec{builder.build(), css::RGBA(40, 80, 255, 150), FillRule::EvenOdd};
 }
 
 /// (c) A curvy cubic blob overlapping both other shapes; opaque green, non-zero fill
 /// (exercises premultiplied source-over blending on top of (a) and (b)).
-inline BaselinePathSpec BaselineBlob() {
+inline SolidFillPathSpec SolidFillBlob() {
   PathBuilder builder;
   builder.moveTo(Vector2d(60.0, 150.0));
   builder.curveTo(Vector2d(40.0, 110.0), Vector2d(120.0, 96.0), Vector2d(150.0, 128.0));
@@ -111,15 +109,15 @@ inline BaselinePathSpec BaselineBlob() {
   builder.curveTo(Vector2d(212.0, 222.0), Vector2d(140.0, 236.0), Vector2d(116.0, 210.0));
   builder.curveTo(Vector2d(76.0, 226.0), Vector2d(48.0, 190.0), Vector2d(60.0, 150.0));
   builder.closePath();
-  return BaselinePathSpec{builder.build(), css::RGBA(24, 160, 60, 255), FillRule::NonZero};
+  return SolidFillPathSpec{builder.build(), css::RGBA(24, 160, 60, 255), FillRule::NonZero};
 }
 
 /// The full scene, in draw order.
-inline std::vector<BaselinePathSpec> BaselineScenePaths() {
-  std::vector<BaselinePathSpec> paths;
-  paths.push_back(BaselineCircle());
-  paths.push_back(BaselineStar());
-  paths.push_back(BaselineBlob());
+inline std::vector<SolidFillPathSpec> SolidFillScenePaths() {
+  std::vector<SolidFillPathSpec> paths;
+  paths.push_back(SolidFillCircle());
+  paths.push_back(SolidFillStar());
+  paths.push_back(SolidFillBlob());
   return paths;
 }
 
@@ -215,8 +213,8 @@ static_assert(sizeof(SolidFillUniforms) == 384, "SolidFillUniforms must match th
 /// @param pixelFromScene Scene-to-pixel transform.
 /// @param out16 Receives sixteen column-major floats.
 inline void BuildSolidFillMvp(const Transform2d& pixelFromScene, float* out16) {
-  const double sx = 2.0 / static_cast<double>(kBaselineSize);
-  const double sy = -2.0 / static_cast<double>(kBaselineSize);
+  const double sx = 2.0 / static_cast<double>(kSolidFillSize);
+  const double sy = -2.0 / static_cast<double>(kSolidFillSize);
   const double a = pixelFromScene.data[0];
   const double b = pixelFromScene.data[1];
   const double c = pixelFromScene.data[2];

@@ -62,15 +62,6 @@ constexpr std::chrono::milliseconds kBusyBufferAccessStallTimeout{5000};
 /// no progress, before it gives up proving the work complete.
 constexpr std::chrono::milliseconds kTeardownStallTimeout{5000};
 
-const char* AdapterTypeName(VkPhysicalDeviceType type) {
-  switch (type) {
-    case VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU: return "DiscreteGPU";
-    case VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU: return "IntegratedGPU";
-    case VK_PHYSICAL_DEVICE_TYPE_CPU: return "CPU";
-    default: return "Unknown";
-  }
-}
-
 /// Only these submission errors guarantee that resources and synchronization are unchanged.
 bool SubmissionWasRejected(VkResult result) {
   return result == VK_ERROR_OUT_OF_HOST_MEMORY || result == VK_ERROR_OUT_OF_DEVICE_MEMORY;
@@ -1169,8 +1160,6 @@ struct VulkanSharedRoot::Impl {
   uint32_t queueFamilyIndex = 0;
   VkPhysicalDeviceMemoryProperties memoryProperties = {};
   uint32_t maxTextureDimension2D = 0;
-  std::string adapterName;
-  std::string adapterType;
   bool fullDrawIndexUint32 = false;
   bool debugMessengerAvailable = false;
   bool presentationEnabled = false;
@@ -1258,14 +1247,6 @@ VulkanSharedRoot::VulkanSharedRoot(std::unique_ptr<Impl> impl) : impl_(std::move
 VulkanSharedRoot::~VulkanSharedRoot() = default;
 uint32_t VulkanSharedRoot::maxTextureDimension2D() const {
   return impl_->maxTextureDimension2D;
-}
-
-std::string VulkanSharedRoot::adapterName() const {
-  return impl_->adapterName;
-}
-
-std::string VulkanSharedRoot::adapterType() const {
-  return impl_->adapterType;
 }
 
 const std::shared_ptr<DeviceLostState>& VulkanSharedRoot::lostState() const {
@@ -2848,8 +2829,6 @@ std::shared_ptr<VulkanSharedRoot> VulkanDevice::CompletePresentationRoot(
   api.vkGetPhysicalDeviceMemoryProperties(physicalDevice, &native->memoryProperties);
   VkPhysicalDeviceProperties properties = {};
   api.vkGetPhysicalDeviceProperties(physicalDevice, &properties);
-  native->adapterName = properties.deviceName;
-  native->adapterType = AdapterTypeName(properties.deviceType);
   native->maxTextureDimension2D =
       std::min(properties.limits.maxImageDimension2D, kMaxTextureDimension);
   native->instance = setup.instance;
@@ -2922,8 +2901,6 @@ std::shared_ptr<VulkanSharedRoot> VulkanDevice::CreateRootImpl(
   api.vkGetPhysicalDeviceMemoryProperties(native->physicalDevice, &native->memoryProperties);
   VkPhysicalDeviceProperties properties = {};
   api.vkGetPhysicalDeviceProperties(native->physicalDevice, &properties);
-  native->adapterName = properties.deviceName;
-  native->adapterType = AdapterTypeName(properties.deviceType);
   native->maxTextureDimension2D =
       std::min(properties.limits.maxImageDimension2D, kMaxTextureDimension);
   return std::shared_ptr<VulkanSharedRoot>(new VulkanSharedRoot(std::move(native)));

@@ -201,6 +201,7 @@ donner_perf_sensitive_cc_library(
     hdrs = ["PixelFormatUtils.h"],
     visibility = [
         "//donner/editor:__subpackages__",
+        "//donner/gpu:__pkg__",
         "//donner/svg:__subpackages__",
     ],
     deps = [],
@@ -266,9 +267,6 @@ donner_cc_library(
     hdrs = ["RendererImageIO.h"],
     visibility = [
         "//donner/editor:__subpackages__",
-        # //donner/gpu: the frozen-baseline capture tool and the Vulkan
-        # solid-fill test write PNGs through the shared image IO helper.
-        "//donner/gpu:__subpackages__",
         "//donner/svg/renderer:__subpackages__",
         "//tools/mcp-servers/editor-control:__pkg__",
     ],

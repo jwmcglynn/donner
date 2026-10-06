@@ -52,7 +52,7 @@ TEST(EnvironmentCapabilityGateTests, AnAutomatedLaneFailsAndStopsTheCase) {
 
 TEST(EnvironmentCapabilityGateTests, ADeveloperMachineSkipsAndStopsTheCase) {
   const ScopedEnvironmentVariable githubActions("GITHUB_ACTIONS", nullptr);
-  const ScopedEnvironmentVariable donnerOverride("DONNER_BASELINE_REQUIRE_FROZEN_ADAPTER", nullptr);
+  const ScopedEnvironmentVariable donnerOverride("DONNER_AUTOMATED_LANE", nullptr);
 
   bool reachedEnd = false;
   // Intercepted rather than allowed to land, so this case reports its assertions instead of
@@ -78,7 +78,7 @@ TEST(EnvironmentCapabilityGateTests, ADeveloperMachineSkipsAndStopsTheCase) {
 
 TEST(EnvironmentCapabilityGateTests, TheHostedRunnerMarkerSelectsTheFailClosedDisposition) {
   const ScopedEnvironmentVariable githubActions("GITHUB_ACTIONS", "true");
-  const ScopedEnvironmentVariable donnerOverride("DONNER_BASELINE_REQUIRE_FROZEN_ADAPTER", nullptr);
+  const ScopedEnvironmentVariable donnerOverride("DONNER_AUTOMATED_LANE", nullptr);
 
   EXPECT_TRUE(RunningUnderContinuousIntegration());
   EXPECT_THAT(DispositionForMissingEnvironmentCapability(RunningUnderContinuousIntegration()),
@@ -88,15 +88,15 @@ TEST(EnvironmentCapabilityGateTests, TheHostedRunnerMarkerSelectsTheFailClosedDi
 
 TEST(EnvironmentCapabilityGateTests, TheExplicitOverrideSelectsTheFailClosedDisposition) {
   const ScopedEnvironmentVariable githubActions("GITHUB_ACTIONS", nullptr);
-  const ScopedEnvironmentVariable donnerOverride("DONNER_BASELINE_REQUIRE_FROZEN_ADAPTER", "1");
+  const ScopedEnvironmentVariable donnerOverride("DONNER_AUTOMATED_LANE", "1");
 
   EXPECT_TRUE(RunningUnderContinuousIntegration());
-  EXPECT_THAT(FirstContinuousIntegrationMarkerSet(), Eq("DONNER_BASELINE_REQUIRE_FROZEN_ADAPTER"));
+  EXPECT_THAT(FirstContinuousIntegrationMarkerSet(), Eq("DONNER_AUTOMATED_LANE"));
 }
 
 TEST(EnvironmentCapabilityGateTests, NoMarkerMeansNoAutomatedLane) {
   const ScopedEnvironmentVariable githubActions("GITHUB_ACTIONS", nullptr);
-  const ScopedEnvironmentVariable donnerOverride("DONNER_BASELINE_REQUIRE_FROZEN_ADAPTER", nullptr);
+  const ScopedEnvironmentVariable donnerOverride("DONNER_AUTOMATED_LANE", nullptr);
 
   EXPECT_FALSE(RunningUnderContinuousIntegration());
   EXPECT_THAT(DispositionForMissingEnvironmentCapability(RunningUnderContinuousIntegration()),
@@ -106,7 +106,7 @@ TEST(EnvironmentCapabilityGateTests, NoMarkerMeansNoAutomatedLane) {
 
 TEST(EnvironmentCapabilityGateTests, AnEmptyMarkerDoesNotCountAsAnAutomatedLane) {
   const ScopedEnvironmentVariable githubActions("GITHUB_ACTIONS", "");
-  const ScopedEnvironmentVariable donnerOverride("DONNER_BASELINE_REQUIRE_FROZEN_ADAPTER", nullptr);
+  const ScopedEnvironmentVariable donnerOverride("DONNER_AUTOMATED_LANE", nullptr);
 
   EXPECT_FALSE(RunningUnderContinuousIntegration());
 }

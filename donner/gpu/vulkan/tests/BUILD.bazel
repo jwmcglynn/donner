@@ -1,13 +1,13 @@
 load("//build_defs:rules.bzl", "donner_cc_library", "donner_cc_test", "donner_multi_transitioned_test")
 load("//build_defs:visibility.bzl", "donner_internal_visibility")
 
-# The Vulkan solid-fill test renders the shared baseline scene
-# through donner::gpu + the emitted SPIR-V and compares it against an
-# independent in-process Geode render of the identical scene through native Vulkan
-# (the frozen-baseline pattern executed per-device, valid on software Vulkan
-# and physical GPUs alike). Opaque texels must match exactly; partially
-# covered ones may differ by one least-significant bit, which is the two
-# pipelines quantizing float results to 8-bit unorm independently.
+# The Vulkan solid-fill test renders the shared solid-fill scene through
+# donner::gpu + the emitted SPIR-V and compares it against an independent
+# in-process Geode render of the identical scene through native Vulkan, valid on
+# software Vulkan and physical GPUs alike. Opaque texels must match exactly;
+# partially covered ones may differ by one least-significant bit, which is the
+# two pipelines quantizing float results to 8-bit unorm independently. It also
+# compares its render against the renderer's golden for the same scene.
 #
 # Linux-only: this is the one platform where both halves execute through the
 # Vulkan loader. The Geode half needs the geode configuration, so the test is wrapped
@@ -46,20 +46,6 @@ donner_cc_test(
 )
 
 donner_cc_test(
-    name = "vulkan_adapter_identity_tests",
-    srcs = ["VulkanAdapterIdentity_tests.cc"],
-    env = {
-        "DONNER_REQUIRE_VULKAN": "1",
-        "XDG_RUNTIME_DIR": "/tmp",
-    },
-    target_compatible_with = ["@platforms//os:linux"],
-    deps = [
-        "//donner/gpu/vulkan:vulkan_device",
-        "@com_google_gtest//:gtest_main",
-    ],
-)
-
-donner_cc_test(
     name = "vulkan_solid_fill_tests_impl",
     srcs = ["VulkanSolidFill_tests.cc"],
     # A missing Vulkan driver must be a red test in CI, never a silent skip:
@@ -87,8 +73,9 @@ donner_cc_test(
         "//donner/base:gtest_timeout_main",
         "//donner/editor/tests:bitmap_golden_compare",
         "//donner/gpu",
-        "//donner/gpu:baseline_scene",
         "//donner/gpu:checkerboard_pixel_tests",
+        "//donner/gpu:solid_fill_golden",
+        "//donner/gpu:solid_fill_scene",
         "//donner/gpu:submission_order_scene",
         "//donner/gpu:vertex_input_scene",
         "//donner/gpu/shader",
@@ -97,7 +84,6 @@ donner_cc_test(
         "//donner/gpu/shader:programs",
         "//donner/gpu/shader:spirv_emitter",
         "//donner/gpu/vulkan:vulkan_device",
-        "//donner/svg/renderer:renderer_image_io",
         "//donner/svg/renderer/geode:geo_encoder",
         "//donner/svg/renderer/geode:geode_device",
         "//donner/svg/renderer/geode:geode_path_encoder",

@@ -786,8 +786,7 @@ class LinuxGpuOracleArchiveTest(unittest.TestCase):
                 '    testonly = 1,\n'
                 '    srcs = ["GeodeWgpuAdapterDevice.cc"],\n'
                 '    target_compatible_with = ["@platforms//os:linux"],\n'
-                '    visibility = ["//donner/gpu/baseline:__pkg__", '
-                '"//donner/svg/renderer/tests:__pkg__"],\n'
+                '    visibility = ["//donner/svg/renderer/tests:__pkg__"],\n'
                 '    deps = [":geode_device", ":geode_runtime_device_source", ":geode_wgpu_util", '
                 '"//donner/base", "//donner/gpu", "//donner/gpu/shader:wgsl_alternate_projections", '
                 '"//third_party/webgpu-cpp:wgpu_native_reference_runtime"],\n)\n'
@@ -998,7 +997,7 @@ class LinuxGpuOracleArchiveTest(unittest.TestCase):
         files = self.allowed_files()
         path = "donner/svg/renderer/geode/BUILD.bazel"
         files[path] = files[path].replace(
-            '"//donner/gpu/baseline:__pkg__"',
+            '"//donner/svg/renderer/tests:__pkg__"',
             '"//donner:__subpackages__"',
         )
         self.assertIn("rust-built-archive", categories(verifier.check(files, SCOPES)))

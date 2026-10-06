@@ -407,7 +407,7 @@ class MetalEvidenceTest(unittest.TestCase):
             "--test_env=MTL_SHADER_VALIDATION_ENABLE_ERROR_REPORTING=1",
             "--test_env=MTL_SHADER_VALIDATION_ABORT_ON_FAULT=1",
             "--test_env=MTL_SHADER_VALIDATION_REPORT_TO_STDERR=1",
-            "--test_env=DONNER_BASELINE_REQUIRE_FROZEN_ADAPTER=1",
+            "--test_env=DONNER_AUTOMATED_LANE=1",
             "--test_env=MTL_SHADER_VALIDATION_DEFAULT_STATE=all",
             "--test_env=MTL_SHADER_VALIDATION_DISABLE_PIPELINES=",
             "--test_env=MTL_SHADER_VALIDATION_ENABLE_PIPELINES=",

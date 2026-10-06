@@ -1382,13 +1382,6 @@ Result<MetalDevice::NativeTextureUsage> MetalDevice::textureUsageForTest(
   }
 }
 
-std::string MetalDevice::adapterName() const {
-  @autoreleasepool {
-    NSString* name = [impl_->device name];
-    return name != nil ? std::string([name UTF8String]) : std::string();
-  }
-}
-
 std::string MetalDevice::lastErrorForTest() const {
   CompletionState& state = *impl_->completionState;
   std::lock_guard<std::mutex> lock(state.mutex);

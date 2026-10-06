@@ -105,6 +105,14 @@ donner_cc_test(
     ],
 )
 
+# The tolerance every comparison against a literal-fill golden uses.
+donner_cc_library(
+    name = "literal_fill_golden_tolerance",
+    testonly = 1,
+    hdrs = ["LiteralFillGoldenTolerance.h"],
+    visibility = ["//donner/gpu:__pkg__"],
+)
+
 donner_cc_library(
     name = "renderer_image_test_utils",
     testonly = 1,
@@ -116,6 +124,7 @@ donner_cc_library(
     ],
     visibility = [
         "//donner/editor/tests:__pkg__",
+        "//donner/gpu:__pkg__",
         "//donner/svg:__subpackages__",
     ],
     deps = [
@@ -303,7 +312,7 @@ donner_cc_test(
     # the symlink-resolution fail-closed rule can never see one and the case keeps skipping into
     # a green report.
     env_inherit = [
-        "DONNER_BASELINE_REQUIRE_FROZEN_ADAPTER",
+        "DONNER_AUTOMATED_LANE",
         "GITHUB_ACTIONS",
     ],
     deps = [
@@ -769,6 +778,8 @@ donner_cc_test(
     target_compatible_with = renderer_backend_compatible_with(["geode"]),
     deps = [
         ":image_comparison_test_fixture",
+        ":literal_fill_golden_tolerance",
+        ":renderer_test_backend",
         "//donner/base",
         "//donner/base:gtest_timeout_main",
         "//donner/svg/parser",

@@ -296,7 +296,7 @@ class ClassifyTest(unittest.TestCase):
 
     def test_allowlisted_cases_emit_only_validated_identifiers(self):
         golden = "//donner/svg/renderer/tests:renderer_geode_golden_tests"
-        baseline = "//donner/gpu/baseline:baseline_pixels_tests"
+        color_matrix = "//donner/gpu/vulkan/tests:vulkan_color_matrix_tests"
         xml = (
             '<testsuites failures="2" errors="0" secret="/private/root/secret">'
             '<testsuite name="RendererGeodeGoldenTests">'
@@ -309,14 +309,14 @@ class ClassifyTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "bazel-testlogs"
             write_gpu_xml(root, golden, xml)
-            write_gpu_xml(root, baseline, (
-                '<testsuites failures="1"><testcase classname="BaselinePixelsTests" '
+            write_gpu_xml(root, color_matrix, (
+                '<testsuites failures="1"><testcase classname="VulkanColorMatrixTests" '
                 'name="PixelParity"><failure message="secret" /></testcase></testsuites>'
             ))
             result = status.allowlisted_failure_cases(
-                failed_gpu_events(golden) + failed_gpu_events(baseline), root)
+                failed_gpu_events(golden) + failed_gpu_events(color_matrix), root)
         self.assertEqual(result["case_names_unavailable"], 0)
-        self.assertEqual([item["target"] for item in result["targets"]], [baseline, golden])
+        self.assertEqual([item["target"] for item in result["targets"]], [color_matrix, golden])
         self.assertEqual(result["targets"][1]["failedCases"], [
             "RendererGeodeGoldenTests.Lion", "RendererGeodeGoldenTests.PatternSolid",
         ])
@@ -389,10 +389,10 @@ class ClassifyTest(unittest.TestCase):
                 failed_gpu_events(golden) + [passed_summary], root))
             events = sum((failed_gpu_events(label) for label in labels), [])
             result = status.allowlisted_failure_cases(events, root)
-        self.assertEqual(len(result["targets"]), 3)
-        self.assertEqual([len(item["failedCases"]) for item in result["targets"]], [20, 10, 0])
-        self.assertEqual(sum(item["failedCaseCount"] for item in result["targets"]), 69)
-        self.assertEqual(result["omittedCases"], 39)
+        self.assertEqual(len(result["targets"]), 2)
+        self.assertEqual([len(item["failedCases"]) for item in result["targets"]], [20, 10])
+        self.assertEqual(sum(item["failedCaseCount"] for item in result["targets"]), 46)
+        self.assertEqual(result["omittedCases"], 16)
         self.assertEqual(result["case_names_unavailable"], 0)
         self.assertIsNone(status.allowlisted_failure_cases(
             failed_gpu_events("//untrusted:target"), Path("/nonexistent")))

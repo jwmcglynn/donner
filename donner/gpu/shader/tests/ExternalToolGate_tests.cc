@@ -31,8 +31,9 @@ void RunGate(const std::string& unavailableReason, bool* reachedEnd) {
 }
 
 TEST(ExternalToolGateTests, TheSkipMessageNamesTheToolAndWhatTheProbeFound) {
-  const std::string message = MissingExternalToolMessage(
-      kToolName, "missing Metal Toolchain", "", baseline::MissingComparisonDisposition::Skip);
+  const std::string message =
+      MissingExternalToolMessage(kToolName, "missing Metal Toolchain", "",
+                                 ::donner::tests::MissingRequirementDisposition::Skip);
 
   EXPECT_THAT(message, HasSubstr(kToolName));
   EXPECT_THAT(message, HasSubstr("missing Metal Toolchain"));
@@ -42,7 +43,7 @@ TEST(ExternalToolGateTests, TheSkipMessageNamesTheToolAndWhatTheProbeFound) {
 TEST(ExternalToolGateTests, TheFailureMessageNamesTheToolTheLaneAndTheRemedy) {
   const std::string message =
       MissingExternalToolMessage(kToolName, "missing Metal Toolchain", "GITHUB_ACTIONS",
-                                 baseline::MissingComparisonDisposition::FailClosed);
+                                 ::donner::tests::MissingRequirementDisposition::FailClosed);
 
   EXPECT_THAT(message, HasSubstr(kToolName));
   EXPECT_THAT(message, HasSubstr("missing Metal Toolchain"));
@@ -52,8 +53,9 @@ TEST(ExternalToolGateTests, TheFailureMessageNamesTheToolTheLaneAndTheRemedy) {
 }
 
 TEST(ExternalToolGateTests, AFailureWithNoMarkerStillExplainsItself) {
-  const std::string message = MissingExternalToolMessage(
-      kToolName, "missing Metal Toolchain", "", baseline::MissingComparisonDisposition::FailClosed);
+  const std::string message =
+      MissingExternalToolMessage(kToolName, "missing Metal Toolchain", "",
+                                 ::donner::tests::MissingRequirementDisposition::FailClosed);
 
   EXPECT_THAT(message, HasSubstr(kToolName));
   EXPECT_THAT(message, HasSubstr("Failing rather than skipping"));
@@ -81,7 +83,7 @@ TEST(ExternalToolGateTests, AnAutomatedLaneFailsAndStopsTheCase) {
 
 TEST(ExternalToolGateTests, ADeveloperMachineSkipsAndStopsTheCase) {
   const ScopedEnvironmentVariable githubActions("GITHUB_ACTIONS", nullptr);
-  const ScopedEnvironmentVariable donnerOverride("DONNER_BASELINE_REQUIRE_FROZEN_ADAPTER", nullptr);
+  const ScopedEnvironmentVariable donnerOverride("DONNER_AUTOMATED_LANE", nullptr);
 
   bool reachedEnd = false;
   // Intercepted rather than allowed to land, so this case reports its assertions instead of

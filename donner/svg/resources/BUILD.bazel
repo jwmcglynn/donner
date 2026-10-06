@@ -330,7 +330,7 @@ donner_cc_test(
     # the symlink-escape fail-closed rule can never see one and the case keeps skipping into a
     # green report.
     env_inherit = [
-        "DONNER_BASELINE_REQUIRE_FROZEN_ADAPTER",
+        "DONNER_AUTOMATED_LANE",
         "GITHUB_ACTIONS",
     ],
     # Variant lanes (doc 0031 M2.3): tiny / text_full / geode
