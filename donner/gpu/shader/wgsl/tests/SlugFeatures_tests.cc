@@ -2,9 +2,11 @@
 #include <gtest/gtest.h>
 
 #include <array>
+#include <span>
 #include <string>
 
 #include "donner/gpu/shader/wgsl/Compiler.h"
+#include "donner/gpu/shader/wgsl/tests/ProjectionTestSupport.h"
 
 namespace donner::gpu::shader::wgsl {
 namespace {
@@ -52,12 +54,11 @@ TEST(SlugFeatures, EntryPointsPrecedeEveryExecutionMode) {
   SpirvSink sink{words.data(), uint32_t(words.size())};
   ASSERT_EQ(EmitSpirv(parsed.module, sink).error, SpirvEmitError::None);
   bool modes = false;
-  for (uint32_t i = 5; i < sink.size; i += words[i] >> 16) {
-    ASSERT_GT(words[i] >> 16, 0u);
-    if ((words[i] & 65535u) == 16u) {
+  for (const uint32_t opcode : tests::Opcodes(std::span(words.data(), sink.size))) {
+    if (opcode == 16u) {
       modes = true;
     }
-    if ((words[i] & 65535u) == 15u) {
+    if (opcode == 15u) {
       EXPECT_THAT(modes, testing::IsFalse());
     }
   }

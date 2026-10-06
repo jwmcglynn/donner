@@ -1,14 +1,22 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <array>
+#include <cstddef>
+#include <cstdint>
+#include <ostream>
+#include <span>
 #include <string>
 #include <string_view>
+#include <utility>
+#include <vector>
 
 #include "donner/gpu/shader/wgsl/Compiler.h"
 #include "donner/gpu/shader/wgsl/tests/GraphicsArtifact.h"
 #include "donner/gpu/shader/wgsl/tests/GraphicsSource.h"
 #include "donner/gpu/shader/wgsl/tests/MatrixSource.h"
+#include "donner/gpu/shader/wgsl/tests/ProjectionTestSupport.h"
 #include "donner/gpu/shader/wgsl/tests/StorageArraySource.h"
 
 namespace donner::gpu::shader::wgsl {
@@ -150,6 +158,94 @@ TEST(GraphicsCompiler, StorageArrayOrdinaryEmissionMatchesFrozenArtifact) {
   SpirvSink binary{words.data(), uint32_t(words.size())};
   ASSERT_TRUE(EmitSpirv(parsed.module, binary).isSuccess());
   EXPECT_THAT(std::span(words.data(), binary.size), testing::ElementsAreArray(shader.spirv));
+}
+
+/// What a SPIR-V function is: a helper, or the entry point of a shader stage.
+enum class SpirvFunctionKind { Helper, VertexEntry, FragmentEntry, OtherEntry };
+
+/// Ostream output operator for \ref SpirvFunctionKind, e.g. `VertexEntry`.
+/// @param os Output stream. @param value Value to output.
+std::ostream& operator<<(std::ostream& os, SpirvFunctionKind value) {
+  switch (value) {
+    case SpirvFunctionKind::Helper: return os << "Helper";
+    case SpirvFunctionKind::VertexEntry: return os << "VertexEntry";
+    case SpirvFunctionKind::FragmentEntry: return os << "FragmentEntry";
+    case SpirvFunctionKind::OtherEntry: return os << "OtherEntry";
+  }
+  return os << "Unknown";
+}
+
+/// Opcode counts of one function in a SPIR-V module.
+struct SpirvFunctionOpcodes {
+  uint32_t id = 0;                                     //!< Result id of the function.
+  SpirvFunctionKind kind = SpirvFunctionKind::Helper;  //!< Helper or entry point.
+  size_t arrayLengths = 0;                             //!< OpArrayLength instructions in it.
+  size_t phis = 0;                                     //!< OpPhi instructions in it.
+
+  /// Ostream output operator, for failure messages.
+  /// @param os Output stream. @param value Value to output.
+  friend std::ostream& operator<<(std::ostream& os, const SpirvFunctionOpcodes& value) {
+    return os << "{%" << value.id << " " << value.kind << ", OpArrayLength=" << value.arrayLengths
+              << ", OpPhi=" << value.phis << "}";
+  }
+};
+
+/// The kind of entry point a SPIR-V execution model makes a function.
+/// @param executionModel The OpEntryPoint's execution model.
+SpirvFunctionKind EntryKind(uint32_t executionModel) {
+  switch (executionModel) {
+    case 0: return SpirvFunctionKind::VertexEntry;
+    case 4: return SpirvFunctionKind::FragmentEntry;
+    default: return SpirvFunctionKind::OtherEntry;
+  }
+}
+
+/// Counts, per function of a SPIR-V module in emission order, its array length queries and phis.
+/// @param words The module.
+std::vector<SpirvFunctionOpcodes> CountFunctionOpcodes(std::span<const uint32_t> words) {
+  constexpr uint32_t kOpEntryPoint = 15;
+  constexpr uint32_t kOpFunction = 54;
+  constexpr uint32_t kOpArrayLength = 68;
+  constexpr uint32_t kOpPhi = 245;
+  std::vector<std::pair<uint32_t, SpirvFunctionKind>> entryPoints;
+  std::vector<SpirvFunctionOpcodes> functions;
+  for (const tests::SpirvInstruction& instruction : tests::Instructions(words)) {
+    const std::vector<uint32_t>& operands = instruction.operands;
+    if (instruction.opcode == kOpEntryPoint && operands.size() >= 2) {
+      // Execution model, then the function id.
+      entryPoints.emplace_back(operands[1], EntryKind(operands[0]));
+    } else if (instruction.opcode == kOpFunction && operands.size() >= 2) {
+      // Result type, then the result id.
+      const auto entry = std::ranges::find(entryPoints, operands[1],
+                                           &std::pair<uint32_t, SpirvFunctionKind>::first);
+      functions.push_back(
+          {.id = operands[1],
+           .kind = entry != entryPoints.end() ? entry->second : SpirvFunctionKind::Helper});
+    } else if (!functions.empty()) {
+      functions.back().arrayLengths += instruction.opcode == kOpArrayLength ? 1 : 0;
+      functions.back().phis += instruction.opcode == kOpPhi ? 1 : 0;
+    }
+  }
+  return functions;
+}
+
+TEST(GraphicsCompiler, SpirvQueriesEachRuntimeArrayLengthOncePerInvocation) {
+  using testing::AllOf;
+  using testing::ElementsAre;
+  using testing::Field;
+  const auto function = [](SpirvFunctionKind kind, size_t arrayLengths) {
+    return AllOf(Field("kind", &SpirvFunctionOpcodes::kind, kind),
+                 Field("arrayLengths", &SpirvFunctionOpcodes::arrayLengths, arrayLengths),
+                 Field("phis", &SpirvFunctionOpcodes::phis, size_t{0}));
+  };
+  // read_value reads bands twice and indices and values once; only fs_main calls it. The source has
+  // no short-circuit operator or texture load, so a phi could only come from a guarded read.
+  EXPECT_THAT(CountFunctionOpcodes(tests::StorageArrayShader().spirv),
+              ElementsAre(function(SpirvFunctionKind::Helper, 0),
+                          function(SpirvFunctionKind::VertexEntry, 0),
+                          function(SpirvFunctionKind::FragmentEntry, 3)))
+      << "each entry point should query the length of every runtime array it reads once, and no "
+         "other function should query one";
 }
 
 TEST(GraphicsCompiler, RejectsUnsupportedArrayUsesAndConstantNegativeIndices) {

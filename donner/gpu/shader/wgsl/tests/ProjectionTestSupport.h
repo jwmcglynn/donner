@@ -3,8 +3,12 @@
 /// Helpers for WGSL compiler tests that check diagnostics, folded constants and the WGSL, MSL and
 /// SPIR-V projections of small modules.
 
+#include <gtest/gtest.h>
+
+#include <cstddef>
 #include <cstdint>
 #include <ostream>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -139,17 +143,36 @@ inline std::vector<uint32_t> Spirv(std::string_view source) {
   return words;
 }
 
-/// Returns the opcode of every instruction after the SPIR-V header, in order.
+/// One SPIR-V instruction.
+struct SpirvInstruction {
+  uint32_t opcode = 0;             //!< Opcode, from the low half of the first word.
+  std::vector<uint32_t> operands;  //!< The words after the first.
+};
+
+/// Returns every instruction after the SPIR-V header, in order. An instruction whose word count is
+/// zero or runs past the end fails the current test and ends the walk.
 /// @param words A complete SPIR-V module, or none.
-inline std::vector<uint32_t> Opcodes(const std::vector<uint32_t>& words) {
-  std::vector<uint32_t> opcodes;
+inline std::vector<SpirvInstruction> Instructions(std::span<const uint32_t> words) {
+  std::vector<SpirvInstruction> instructions;
   for (size_t i = 5; i < words.size();) {
     const uint32_t wordCount = words[i] >> 16;
-    if (wordCount == 0) {
+    if (wordCount == 0 || wordCount > words.size() - i) {
+      ADD_FAILURE() << "malformed SPIR-V instruction at word " << i;
       break;
     }
-    opcodes.push_back(words[i] & 0xffffu);
+    const std::span<const uint32_t> operands = words.subspan(i + 1, wordCount - 1);
+    instructions.push_back({words[i] & 0xffffu, {operands.begin(), operands.end()}});
     i += wordCount;
+  }
+  return instructions;
+}
+
+/// Returns the opcode of every instruction after the SPIR-V header, in order.
+/// @param words A complete SPIR-V module, or none.
+inline std::vector<uint32_t> Opcodes(std::span<const uint32_t> words) {
+  std::vector<uint32_t> opcodes;
+  for (const SpirvInstruction& instruction : Instructions(words)) {
+    opcodes.push_back(instruction.opcode);
   }
   return opcodes;
 }
