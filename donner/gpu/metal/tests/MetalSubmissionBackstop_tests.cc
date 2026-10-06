@@ -2,6 +2,7 @@
 /// The Metal backend's backstop on command buffers in flight: a submission that would leave more
 /// than \ref donner::gpu::metal::MetalDevice::kMaxCommandBuffersInFlight uncompleted waits for
 /// room, gives up on a GPU that stops completing work, and never blocks inside the native queue.
+/// A serial wait that gives up only on a stall judges it on the same progress clock.
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
@@ -88,12 +89,6 @@ void SubmitEmptyWorkUnlessLost(MetalDevice& device) {
   if (commandBuffer.hasResult()) {
     (void)device.submit(std::move(commandBuffer).result());
   }
-}
-
-/// Milliseconds from \p start to \p end. @param start Start time. @param end End time.
-int64_t MillisecondsBetween(std::chrono::steady_clock::time_point start,
-                            std::chrono::steady_clock::time_point end) {
-  return std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
 }
 
 /// What a submission run on a worker thread reported.
@@ -404,6 +399,15 @@ protected:
     return texture;
   }
 
+  /// Lets the paused producer's command buffers run one at a time, \p interval apart, from a
+  /// thread of their own: \p releases of them.
+  /// @param releases How many to let run. @param interval Time between releases.
+  PacedSteps releaseProducer(int releases, std::chrono::milliseconds interval) {
+    return PacedSteps(releases, interval, [this](int released) {
+      producer_->releasePausedCommandBuffersForTest(static_cast<uint64_t>(released));
+    });
+  }
+
   /// Fills the consumer's backstop with full-size submissions whose first command buffer reads
   /// \p source, so each of them waits on the GPU for the producer to render it.
   /// @param source Consumer's registration of the producer's texture.
@@ -476,6 +480,74 @@ TEST_F(MetalSubmissionBackstopProducerTest, AProducerThatKeepsCompletingKeepsACo
       << "the consumer did not wait longer than its stall bound, so this case measured nothing";
   EXPECT_FALSE(device_->isLost()) << "a wait behind a progressing producer declared a loss";
   EXPECT_THAT(device_->commandBufferRoomWaitsForTest(), Eq(1u));
+}
+
+/// Submits one consumer submission whose command buffer reads \p source, so it waits on the GPU
+/// for the producer to render it. @param device Consumer. @param source Its registration.
+/// @return The submission's serial.
+uint64_t SubmitReadOf(MetalDevice& device, const Texture& source) {
+  const Buffer readback = GetResultOrFail(device.createBuffer(
+      BufferDescriptor{"readback", 1024, BufferUsage::CopyDst | BufferUsage::MapRead}));
+  std::unique_ptr<CommandEncoder> encoder = GetResultOrFail(device.createCommandEncoder());
+  EXPECT_THAT(encoder->copyTextureToBuffer(TexelCopyTextureInfo{source}, readback,
+                                           TexelCopyBufferLayout{0, 256, 4}, Extent2d{64, 4}),
+              IsOk());
+  return GetResultOrFail(device.submit(GetResultOrFail(encoder->finish())));
+}
+
+/// A serial wait judges a stall on the backstop's progress clock: a consumer whose work is held
+/// behind a producer that keeps completing command buffers is waited out, even though the
+/// consumer itself completes nothing for longer than the stall bound.
+TEST_F(MetalSubmissionBackstopProducerTest,
+       ASerialWaitBehindAProducerThatKeepsCompletingOutlastsItsStallBound) {
+  constexpr std::chrono::milliseconds kStallBound{700};
+  constexpr std::chrono::milliseconds kReleaseInterval{80};
+  constexpr uint64_t kEarlier = 10;
+  const Texture target = pausedProducerTexture(kEarlier);
+  const Texture source =
+      GetResultOrFail(device_->registerTexture(GetResultOrFail(producer_->exportTexture(target))));
+  const uint64_t serial = SubmitReadOf(*device_, source);
+
+  PacedSteps release = releaseProducer(static_cast<int>(kEarlier + 1), kReleaseInterval);
+  const SerialWaitResult waited = device_->waitForSerialUnlessStalled(serial, kStallBound);
+  release.join();
+  ASSERT_THAT(release, KeptPaceWithin(kStallBound));
+
+  EXPECT_THAT(waited.end, Eq(SerialWaitEnd::Completed))
+      << "a wait behind a producer that kept completing gave up: " << waited;
+  EXPECT_THAT(waited.waited.count(), Ge(kStallBound.count()))
+      << "the consumer's work completed within the stall bound, so this case measured nothing";
+  EXPECT_FALSE(device_->isLost());
+}
+
+/// A serial wait behind a producer that stops completing gives up within the stall bound of the
+/// producer's last progress, and declares nothing: what a stall means is the caller's decision.
+TEST_F(MetalSubmissionBackstopProducerTest,
+       ASerialWaitBehindAProducerThatStopsEndsWithinItsStallBound) {
+  constexpr std::chrono::milliseconds kStallBound{500};
+  constexpr std::chrono::milliseconds kReleaseInterval{80};
+  constexpr uint64_t kEarlier = 10;
+  constexpr uint64_t kReleased = 3;
+  const Texture target = pausedProducerTexture(kEarlier);
+  const Texture source =
+      GetResultOrFail(device_->registerTexture(GetResultOrFail(producer_->exportTexture(target))));
+  const uint64_t serial = SubmitReadOf(*device_, source);
+
+  PacedSteps release = releaseProducer(static_cast<int>(kReleased), kReleaseInterval);
+  const SerialWaitResult waited = device_->waitForSerialUnlessStalled(serial, kStallBound);
+  const auto endedAt = std::chrono::steady_clock::now();
+  release.join();
+  ASSERT_THAT(release, KeptPaceWithin(kStallBound));
+
+  // The wait cannot have seen the last progress before its release began, so the lower bound is
+  // measured from there, and the upper bound from when the release returned.
+  EXPECT_THAT(waited.end, Eq(SerialWaitEnd::Stalled)) << waited;
+  EXPECT_THAT(MillisecondsBetween(release.lastStepStart(), endedAt), Ge(kStallBound.count()))
+      << "the wait gave up while the producer was still completing work";
+  EXPECT_THAT(MillisecondsBetween(release.lastStepEnd(), endedAt), Lt(kStallBound.count() + 1000))
+      << "the wait outlived its stall bound after the producer stopped";
+  EXPECT_FALSE(device_->isLost()) << "the serial wait declared a loss itself";
+  producer_->releasePausedCommandBuffersForTest(kReleaseAll);
 }
 
 /// Once the producer completes the work a consumer's submissions wait for, the producer's later

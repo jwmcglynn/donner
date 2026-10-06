@@ -32,12 +32,14 @@ donner_cc_library(
         "VulkanBufferAllocator.cc",
         "VulkanDevice.cc",
         "VulkanLoader.cc",
+        "VulkanQueueProgress.cc",
         "VulkanSwapchain.cc",
     ],
     hdrs = [
         "VulkanBufferAllocator.h",
         "VulkanDevice.h",
         "VulkanLoader.h",
+        "VulkanQueueProgress.h",
         "VulkanSwapchain.h",
     ],
     # The loader library is opened with dlopen at runtime; libdl provides that on the platforms

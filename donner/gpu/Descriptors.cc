@@ -254,6 +254,19 @@ std::ostream& operator<<(std::ostream& os, MapWaitKind value) {
   return os << "Unknown";
 }
 
+std::ostream& operator<<(std::ostream& os, SerialWaitEnd value) {
+  switch (value) {
+    case SerialWaitEnd::Completed: return os << "Completed";
+    case SerialWaitEnd::Stalled: return os << "Stalled";
+    case SerialWaitEnd::Failed: return os << "Failed";
+  }
+  return os << "Unknown";
+}
+
+std::ostream& operator<<(std::ostream& os, const SerialWaitResult& value) {
+  return os << "{" << value.end << ", " << value.waited.count() << " ms}";
+}
+
 std::ostream& operator<<(std::ostream& os, const MapSliceReport& value) {
   return os << "{" << value.state << ", " << value.waitKind << "}";
 }

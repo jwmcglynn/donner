@@ -18,6 +18,7 @@
 #include "donner/gpu/DeviceLost.h"
 #include "donner/gpu/GpuResult.h"
 #include "donner/gpu/vulkan/VulkanLoader.h"
+#include "donner/gpu/vulkan/VulkanQueueProgress.h"
 #include "donner/gpu/vulkan/VulkanResourceState.h"
 
 namespace donner::gpu::vulkan {
@@ -56,6 +57,9 @@ struct VulkanSurfaceContext {
   std::shared_ptr<VulkanSurfaceLifetime> lifetime;   //!< Shared owner-retention state.
   std::mutex* queueMutex = nullptr;  //!< Shared VkQueue call lock; null for fake test contexts.
   std::shared_ptr<DeviceLostState> rootLoss;  //!< Shared loss condition of the owning root.
+  /// Progress of the shared queue, which the swapchain's fence waits measure a stall by; null for
+  /// fake test contexts, whose waits bound their whole duration.
+  VulkanQueueProgress* queueProgress = nullptr;
 };
 
 /// The stage an acquisition wait applies to, and therefore the earliest stage at which a frame
@@ -285,6 +289,16 @@ private:
   /// Publishes a driver-reported loss on the shared root after the caller records any native
   /// ownership it must retain. @param result Native result. @param reason Diagnostic if lost.
   void declareDeviceLoss(VkResult result, const char* reason) const;
+
+  /// Waits for every one of \p fences, fences of this swapchain's own submissions, while the
+  /// queue they are on keeps making progress; see \ref WaitForFencesWhileQueueProgresses.
+  /// @param fences Fences to wait for. @return Native result of the wait's last step.
+  VkResult waitForOwnFences(std::span<const VkFence> fences) const;
+
+  /// Waits for one of \ref presentFences_ for a fixed budget: the presentation engine signals it,
+  /// so the queue's progress cannot tell a slow present from a hung one.
+  /// @param fence Present fence to wait for. @return Native result of the wait.
+  VkResult waitForPresentFenceWithFixedBudget(VkFence fence) const;
 
   /// One submission this swapchain made on the caller's behalf, awaiting its fence.
   struct PendingSubmission {

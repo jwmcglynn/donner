@@ -3714,6 +3714,29 @@ TEST(EditorWindowPolicyTest, SubmissionCompletionHasAFiniteDeadlineAndReleasesCo
   EXPECT_EQ(queue.completed().serial, 2u);
 }
 
+/// A UI frame's work completes only after everything queued ahead of it, so an overdue frame
+/// behind a device that is still finishing work is slow, not hung: it times out only once the
+/// device has also gone the deadline without progress.
+TEST(EditorWindowPolicyTest, AnOverdueFrameBehindADeviceStillMakingProgressIsNotTimedOut) {
+  using Queue = internal::PresentationSubmissionQueue;
+  Queue queue;
+  const auto submittedAt = Queue::Clock::time_point{};
+  queue.submitted({.serial = 1, .submittedAt = submittedAt});
+  const auto overdue = submittedAt + Queue::kCompletionDeadline + std::chrono::seconds(10);
+
+  EXPECT_EQ(queue.observe(0, overdue, overdue - std::chrono::milliseconds(100)),
+            Queue::Admission::Ready)
+      << "the device progressed 100 ms ago, so the frame is behind work that is still running";
+  EXPECT_EQ(queue.observe(0, overdue, overdue - Queue::kCompletionDeadline),
+            Queue::Admission::TimedOut)
+      << "the device has gone the whole deadline without progress";
+  EXPECT_EQ(queue.observe(0, submittedAt + std::chrono::seconds(1), Queue::Clock::time_point{}),
+            Queue::Admission::Ready)
+      << "a frame younger than the deadline is not timed out, whatever the device's progress";
+  EXPECT_EQ(queue.observe(0, overdue, std::nullopt), Queue::Admission::TimedOut)
+      << "a device that does not track progress gives the frame's age alone the deadline";
+}
+
 #ifdef DONNER_EDITOR_WGPU
 TEST(EditorWindowTest, PendingGpuCompletionCoalescesUiFramesAtThree) {
   EditorWindow window(EditorWindowOptions{.title = "Pending GPU frame test",

@@ -10,6 +10,10 @@ void ExportedTextureBacking::releaseBackingNow() const {}
 
 SubmissionCompletion::~SubmissionCompletion() = default;
 
+std::optional<std::chrono::steady_clock::time_point> SubmissionCompletion::lastProgress() const {
+  return std::nullopt;
+}
+
 std::ostream& operator<<(std::ostream& os, SourceOrdering value) {
   switch (value) {
     case SourceOrdering::SharedQueue: return os << "SharedQueue";

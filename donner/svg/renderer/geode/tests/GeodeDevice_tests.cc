@@ -40,6 +40,7 @@
 
 namespace donner::geode {
 
+using gpu::MillisecondsBetween;
 using svg::test::RgbaEq;
 using testing::ElementsAreArray;
 using testing::Eq;
@@ -375,6 +376,131 @@ int64_t MillisecondsSince(std::chrono::steady_clock::time_point start) {
       .count();
 }
 
+#if defined(__APPLE__) || defined(__linux__)
+
+/// Submits \p count empty command buffers as one submission, as a frame that splits submits the
+/// command buffers it has collected.
+/// @param runtime Device to submit to. @param count Command buffers in the submission.
+/// @return The submission's serial, or zero when it failed.
+uint64_t SubmitEmptyCommandBuffers(gpu::Device& runtime, size_t count) {
+  std::vector<gpu::CommandBuffer> commandBuffers;
+  for (size_t i = 0; i < count; ++i) {
+    gpu::Result<std::unique_ptr<gpu::CommandEncoder>> encoder = runtime.createCommandEncoder();
+    if (encoder.hasError()) {
+      return 0;
+    }
+    gpu::Result<gpu::CommandBuffer> commands = encoder.result()->finish();
+    if (commands.hasError()) {
+      return 0;
+    }
+    commandBuffers.push_back(std::move(commands).result());
+  }
+  gpu::Result<uint64_t> serial = runtime.submit(commandBuffers);
+  return serial.hasError() ? 0 : serial.result();
+}
+
+/// Lets \p runtime's paused command buffers run one at a time from a thread of its own, at a
+/// steady pace, as a slow GPU finishes a long backlog: \p releases of them, \p interval apart.
+/// @tparam PausableDevice Runtime device with the submission pause test seam.
+/// @param runtime Device whose paused command buffers to release.
+/// @param releases How many to release. @param interval Time between releases.
+template <typename PausableDevice>
+gpu::PacedSteps PacedRelease(PausableDevice& runtime, int releases,
+                             std::chrono::milliseconds interval) {
+  return gpu::PacedSteps(releases, interval, [&runtime](int released) {
+    runtime.releasePausedCommandBuffersForTest(static_cast<uint64_t>(released));
+  });
+}
+
+/// The queue-idle bound the backlog cases pass, and how often their GPU finishes a command
+/// buffer. A release four times slower than intended still keeps the backlog progressing within
+/// the bound, so a loaded host does not turn progress into a stall.
+constexpr std::chrono::milliseconds kBacklogStallBound(600);
+constexpr std::chrono::milliseconds kBacklogReleaseInterval(100);
+/// Command buffers in the backlog: as many as one split of a frame submits at once.
+constexpr size_t kBacklogCommandBuffers = 16;
+
+/**
+ * A slow device working through a backlog longer than the bound is not hung: the drain waits it
+ * out and declares nothing. The last submission holds as many command buffers as a frame split
+ * submits, and they finish one every \ref kBacklogReleaseInterval, so the whole backlog takes
+ * well over twice \ref kBacklogStallBound while never going that long without progress. A drain
+ * that gives the whole backlog the bound gives up partway through and declares a device that is
+ * still working lost.
+ */
+template <typename PausableDevice>
+void ExpectQueueIdleWaitsOutABacklogThatKeepsProgressing(GeodeDevice& context,
+                                                         PausableDevice& runtime) {
+  ASSERT_THAT(runtime.pauseSubmissionsForTest(), gpu::IsOk());
+  const uint64_t submitted = SubmitEmptyCommandBuffers(runtime, kBacklogCommandBuffers);
+  ASSERT_THAT(submitted, testing::Gt(0u));
+
+  const auto start = std::chrono::steady_clock::now();
+  gpu::PacedSteps release =
+      PacedRelease(runtime, static_cast<int>(kBacklogCommandBuffers), kBacklogReleaseInterval);
+  const GpuWaitResult result = context.waitForQueueIdle(kBacklogStallBound);
+  const int64_t elapsedMs = MillisecondsSince(start);
+  release.join();
+  ASSERT_THAT(release, gpu::KeptPaceWithin(kBacklogStallBound));
+
+  EXPECT_THAT(result, Eq(GpuWaitResult::Complete))
+      << "the device finished a command buffer every " << kBacklogReleaseInterval.count()
+      << " ms, yet the drain gave up after " << elapsedMs << " ms";
+  EXPECT_THAT(runtime.completedSerial(), Ge(submitted));
+  EXPECT_THAT(elapsedMs, testing::Gt(kBacklogStallBound.count()))
+      << "the backlog finished within the bound, so this case did not wait longer than it";
+  EXPECT_FALSE(context.isDeviceLost()) << "a slow device that kept progressing was declared lost";
+  EXPECT_THAT(context.consumeReadbackStats().timedOutWaitSite, Eq(GpuWaitSite::None));
+  runtime.resumeSubmissionsForTest();
+}
+
+/**
+ * A backlog that progresses for longer than the bound and then stops is a hung device, caught
+ * within the bound of its last progress. The device finishes half of the last submission's
+ * command buffers, one every \ref kBacklogReleaseInterval, then nothing more. The drain must not
+ * declare the loss while the device is still finishing work, which a drain that gives the whole
+ * backlog the bound does, and must declare it within the bound once progress stops.
+ */
+template <typename PausableDevice>
+void ExpectQueueIdleDeclaresTheLossOnceTheBacklogStopsProgressing(GeodeDevice& context,
+                                                                  PausableDevice& runtime) {
+  ASSERT_THAT(runtime.pauseSubmissionsForTest(), gpu::IsOk());
+  const uint64_t submitted = SubmitEmptyCommandBuffers(runtime, kBacklogCommandBuffers);
+  ASSERT_THAT(submitted, testing::Gt(0u));
+
+  const auto start = std::chrono::steady_clock::now();
+  gpu::PacedSteps release =
+      PacedRelease(runtime, static_cast<int>(kBacklogCommandBuffers / 2), kBacklogReleaseInterval);
+  const GpuWaitResult result = context.waitForQueueIdle(kBacklogStallBound);
+  const auto declaredAt = std::chrono::steady_clock::now();
+  release.join();
+  ASSERT_THAT(release, gpu::KeptPaceWithin(kBacklogStallBound));
+  const int64_t progressedForMs = MillisecondsBetween(start, release.lastStepStart());
+  ASSERT_THAT(progressedForMs, testing::Gt(kBacklogStallBound.count()))
+      << "the device stopped progressing within the bound, so this case cannot tell a stall "
+         "from a backlog";
+
+  EXPECT_THAT(result, Eq(GpuWaitResult::TimedOut))
+      << "the device stopped finishing command buffers, so the drain must give up";
+  EXPECT_THAT(runtime.completedSerial(), Lt(submitted))
+      << "the stalled submission retired anyway, so this case observed no stall";
+  // The drain cannot have seen the last progress before the release began, so the lower bound is
+  // measured from there, and the upper bound from when the release returned.
+  EXPECT_THAT(MillisecondsBetween(release.lastStepStart(), declaredAt),
+              Ge(kBacklogStallBound.count()))
+      << "the drain declared the loss " << MillisecondsBetween(start, declaredAt)
+      << " ms in, while the device was still finishing command buffers (it progressed for "
+      << progressedForMs << " ms)";
+  EXPECT_THAT(MillisecondsBetween(release.lastStepEnd(), declaredAt),
+              Lt(kBacklogStallBound.count() + 1500))
+      << "the drain outlived the bound after the device stopped progressing";
+  EXPECT_TRUE(context.isDeviceLost()) << "a drain that saw the device stop must publish the loss";
+  EXPECT_THAT(context.consumeReadbackStats().timedOutWaitSite, Eq(GpuWaitSite::QueueIdle));
+  runtime.resumeSubmissionsForTest();
+}
+
+#endif  // defined(__APPLE__) || defined(__linux__)
+
 #if defined(__APPLE__)
 
 /// Why a native Metal case could not start: the host has no Metal device to select.
@@ -434,19 +560,20 @@ TEST(GeodeNativeMetalRoot, ReportsTheTextureLimitItsDeviceReports) {
 /// A native backend has no poll that reports an empty queue: the queue is idle exactly when the
 /// last submission has retired. Held work is the case that tells a real wait apart from one that
 /// returns early, and the bound is what keeps a driver that stopped answering from costing more
-/// than one deadline. Spending the budget is the observation the wait was there to make, so it is
-/// published as a loss attributed to the queue drain, as the transitional adapter's drain does.
+/// than one deadline. The held work never progresses, so the bound runs from its commit to an
+/// idle device. Reaching it is the observation the wait was there to make, so it is published as
+/// a loss attributed to the queue drain, as the transitional adapter's drain does.
 TEST(GeodeNativeMetalRoot, QueueIdleOnHeldWorkSpendsItsBudgetThenDeclaresTheLoss) {
   std::unique_ptr<GeodeDevice> context = CreateNativeMetalContext();
   ASSERT_THAT(context, NotNull()) << kNoMetalDevice;
   // The root selected the native backend, so its runtime device is the Metal device.
   auto& metal = static_cast<gpu::metal::MetalDevice&>(context->runtimeDevice());
   ASSERT_THAT(metal.pauseSubmissionsForTest(), gpu::IsOk());
+  constexpr std::chrono::milliseconds kBudget(200);
+  const auto start = std::chrono::steady_clock::now();
   const uint64_t submitted = SubmitEmptyCommandBuffer(metal);
   ASSERT_THAT(submitted, testing::Gt(0u));
 
-  constexpr std::chrono::milliseconds kBudget(200);
-  const auto start = std::chrono::steady_clock::now();
   const GpuWaitResult result = context->waitForQueueIdle(kBudget);
   const int64_t elapsedMs = MillisecondsSince(start);
 
@@ -526,6 +653,20 @@ TEST(GeodeNativeMetalRoot, QueueIdleReportsALossDeclaredDuringTheWait) {
       << "the drain must not attribute a loss it did not observe to its own deadline";
 
   metal.resumeSubmissionsForTest();
+}
+
+TEST(GeodeNativeMetalRoot, QueueIdleWaitsOutABacklogThatKeepsProgressing) {
+  std::unique_ptr<GeodeDevice> context = CreateNativeMetalContext();
+  ASSERT_THAT(context, NotNull()) << kNoMetalDevice;
+  ExpectQueueIdleWaitsOutABacklogThatKeepsProgressing(
+      *context, static_cast<gpu::metal::MetalDevice&>(context->runtimeDevice()));
+}
+
+TEST(GeodeNativeMetalRoot, QueueIdleDeclaresTheLossOnceTheBacklogStopsProgressing) {
+  std::unique_ptr<GeodeDevice> context = CreateNativeMetalContext();
+  ASSERT_THAT(context, NotNull()) << kNoMetalDevice;
+  ExpectQueueIdleDeclaresTheLossOnceTheBacklogStopsProgressing(
+      *context, static_cast<gpu::metal::MetalDevice&>(context->runtimeDevice()));
 }
 
 #endif  // defined(__APPLE__)
@@ -792,6 +933,47 @@ TEST(GeodeNativeVulkanRoot, QueueIdleReportsADriverReportedLossWithoutATimeout) 
   EXPECT_TRUE(sibling.device->isLost()) << "the loss belongs to the root, not to one device";
   EXPECT_THAT(context->consumeReadbackStats().timedOutWaitSite, Eq(GpuWaitSite::None))
       << "the driver reported this loss; the drain must not attribute it to its own deadline";
+}
+
+/// A context over a native Vulkan root with timeline semaphores enabled, which the test seam that
+/// holds command buffers needs.
+std::unique_ptr<GeodeDevice> CreateGatedVulkanContext() {
+  auto loss = std::make_shared<gpu::DeviceLostState>();
+  std::shared_ptr<gpu::vulkan::VulkanSharedRoot> native =
+      gpu::vulkan::VulkanDevice::CreateSharedRootWithTimelineSemaphoreForTest(loss);
+  if (native == nullptr) {
+    return nullptr;
+  }
+  std::shared_ptr<GeodeGpuRoot> root = AdoptNativeVulkanRoot(native, loss);
+  if (root == nullptr) {
+    return nullptr;
+  }
+  return GeodeDevice::CreateOverSelectedRoot(std::move(root), gpu::TextureFormat::RGBA8Unorm);
+}
+
+/// Why a case that holds Vulkan command buffers is skipped on a device without the test-only
+/// extension: VK_KHR_timeline_semaphore is optional on a conforming Vulkan 1.1 driver.
+constexpr const char* kNoQueueGate =
+    "Device lacks VK_KHR_timeline_semaphore; holding command buffers needs it";
+
+TEST(GeodeNativeVulkanRoot, QueueIdleWaitsOutABacklogThatKeepsProgressing) {
+  std::unique_ptr<GeodeDevice> context = CreateGatedVulkanContext();
+  if (context == nullptr) {
+    ASSERT_THAT(CreateNativeVulkanContext(), NotNull()) << kNoVulkanDevice;
+    GTEST_SKIP() << kNoQueueGate;
+  }
+  ExpectQueueIdleWaitsOutABacklogThatKeepsProgressing(
+      *context, static_cast<gpu::vulkan::VulkanDevice&>(context->runtimeDevice()));
+}
+
+TEST(GeodeNativeVulkanRoot, QueueIdleDeclaresTheLossOnceTheBacklogStopsProgressing) {
+  std::unique_ptr<GeodeDevice> context = CreateGatedVulkanContext();
+  if (context == nullptr) {
+    ASSERT_THAT(CreateNativeVulkanContext(), NotNull()) << kNoVulkanDevice;
+    GTEST_SKIP() << kNoQueueGate;
+  }
+  ExpectQueueIdleDeclaresTheLossOnceTheBacklogStopsProgressing(
+      *context, static_cast<gpu::vulkan::VulkanDevice&>(context->runtimeDevice()));
 }
 
 #endif  // defined(__linux__)

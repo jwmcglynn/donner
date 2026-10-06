@@ -100,25 +100,6 @@ void DestroyPooledReadbackBuffer(gpu::Device* device, gpu::Buffer& buffer) {
   (void)destroyed;  // A pooled buffer is always live; a stale handle is already gone.
 }
 
-struct QueueIdleWait {
-  GpuWaitResult result;
-  std::chrono::milliseconds elapsed;
-};
-
-/// Waits for this context's last submission, retaining the measured wait on timeout.
-QueueIdleWait WaitForLastSubmittedSerial(gpu::Device& device, std::chrono::milliseconds timeout) {
-  const auto start = std::chrono::steady_clock::now();
-  if (device.waitForSerial(device.lastSubmittedSerial(),
-                           std::chrono::duration<double>(timeout).count())) {
-    return {GpuWaitResult::Complete, std::chrono::milliseconds{0}};
-  }
-  if (device.isLost()) {
-    return {GpuWaitResult::DeviceLost, std::chrono::milliseconds{0}};
-  }
-  return {GpuWaitResult::TimedOut, std::chrono::duration_cast<std::chrono::milliseconds>(
-                                       std::chrono::steady_clock::now() - start)};
-}
-
 }  // namespace
 
 /// Context-local pipelines, runtime tables, counters, and retirement state.
@@ -346,7 +327,7 @@ void GeodeDevice::markDeviceLostAfterWaitTimeout(GpuWaitSite site,
   }
 }
 
-GpuWaitResult GeodeDevice::waitForQueueIdle(std::chrono::milliseconds timeout) const {
+GpuWaitResult GeodeDevice::waitForQueueIdle(std::chrono::milliseconds stallBound) const {
   if (isDeviceLost()) {
     return GpuWaitResult::DeviceLost;
   }
@@ -364,13 +345,23 @@ GpuWaitResult GeodeDevice::waitForQueueIdle(std::chrono::milliseconds timeout) c
     return GpuWaitResult::Complete;
   }
   // Every runtime device reports completion from its own submissions, so the queue is idle for
-  // this context exactly when its last submission has retired.
-  const QueueIdleWait wait = WaitForLastSubmittedSerial(*runtimeDevice_, timeout);
-  if (wait.result == GpuWaitResult::TimedOut) {
-    markDeviceLostAfterWaitTimeout(GpuWaitSite::QueueIdle, wait.elapsed,
-                                   "GPU queue did not go idle within the bounded wait deadline");
+  // this context exactly when its last submission has retired. That submission waits behind
+  // everything queued ahead of it, so the wait gives up only when that work stops progressing.
+  const gpu::SerialWaitResult wait =
+      runtimeDevice_->waitForSerialUnlessStalled(runtimeDevice_->lastSubmittedSerial(), stallBound);
+  if (wait.end == gpu::SerialWaitEnd::Completed) {
+    return GpuWaitResult::Complete;
   }
-  return wait.result;
+  if (isDeviceLost()) {
+    return GpuWaitResult::DeviceLost;
+  }
+  // A backend failure that leaves the serial unable to complete is a queue that will never go
+  // idle either, so it is declared the same way as a stall.
+  markDeviceLostAfterWaitTimeout(GpuWaitSite::QueueIdle, wait.waited,
+                                 wait.end == gpu::SerialWaitEnd::Stalled
+                                     ? "GPU queue made no progress within the bounded wait deadline"
+                                     : "GPU queue failed before going idle");
+  return GpuWaitResult::TimedOut;
 }
 
 void GeodeDevice::recordReadback(bool usedTimedWaitAny, int pollIterations) {
@@ -563,23 +554,22 @@ gpu::Result<gpu::Texture> RegisterOrderedTexture(gpu::Device& consumer,
   if (registered.hasError()) {
     return registered;
   }
-  const auto waitStart = std::chrono::steady_clock::now();
-  if (consumer.waitForTextureSource(registered.result(),
-                                    std::chrono::duration<double>(bound).count())) {
+  const gpu::SerialWaitResult waited =
+      consumer.waitForTextureSourceUnlessStalled(registered.result(), bound);
+  if (waited.end == gpu::SerialWaitEnd::Completed) {
     return registered;
   }
-  const auto waited = std::chrono::steady_clock::now() - waitStart;
-  // The source wait gives up early only on loss or a producer failure, and those belong to the
-  // device they happened to. Only a wait that spent its whole bound is this consumer's evidence
-  // of a hang, and the measured wait is what it reports.
-  if (consumer.isLost() || waited < bound) {
+  // The source wait fails on loss or a producer failure, and those belong to the device they
+  // happened to. Only a producer that stopped progressing for the whole bound is this consumer's
+  // evidence of a hang, and the measured wait is what it reports.
+  if (consumer.isLost() || waited.end != gpu::SerialWaitEnd::Stalled) {
     return gpu::GpuError{gpu::GpuErrorType::DeviceLost,
                          "a registered texture's producer failed or one of the two devices is "
                          "lost"};
   }
   consumer.markLostAfterWaitTimeout(
-      GpuWaitSite::QueueIdle, std::chrono::duration_cast<std::chrono::milliseconds>(waited),
-      "the work producing a registered texture did not complete within the bounded wait");
+      GpuWaitSite::QueueIdle, waited.waited,
+      "the work producing a registered texture made no progress within the bounded wait");
   return gpu::GpuError{gpu::GpuErrorType::DeviceLost,
                        "the work producing a registered texture did not complete"};
 }

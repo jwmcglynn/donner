@@ -23,10 +23,12 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <concepts>
 #include <cstdint>
 #include <deque>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <ostream>
 #include <string>
 #include <string_view>
@@ -498,10 +500,14 @@ public:
   using Clock = std::chrono::steady_clock;
   /// Whether another UI frame may be submitted.
   enum class Admission {
-    Ready,     //!< Fewer than three submissions are pending and none has timed out.
-    Busy,      //!< At least three submissions are pending and none has timed out.
-    TimedOut,  //!< The oldest pending submission has waited at least five seconds.
+    Ready,  //!< Fewer than three submissions are pending and none has timed out.
+    Busy,   //!< At least three submissions are pending and none has timed out.
+    /// The oldest pending submission has waited at least \ref kCompletionDeadline, and the work
+    /// it waits behind has made no progress for that long either.
+    TimedOut,
   };
+  /// How long the oldest pending submission may stay unfinished while the device makes no progress.
+  static constexpr std::chrono::seconds kCompletionDeadline{5};
   /// Ostream output operator, e.g. `Busy`.
   /// @param os Output stream.
   /// @param admission Value to output.
@@ -533,19 +539,33 @@ public:
     std::uint64_t serial;          //!< Highest completed submission serial observed.
     Clock::time_point observedAt;  //!< When the completion was observed.
   };
-  /// Observe completion before admitting a frame; a stopped queue reaches a finite deadline.
-  Admission observe(std::uint64_t completedSerial, Clock::time_point now) {
+  /**
+   * Observe completion before admitting a frame; a stopped queue reaches a finite deadline.
+   *
+   * A frame's work completes only after everything queued ahead of it, so an old frame behind a
+   * device that is still finishing work is slow, not stopped: it times out only once the device
+   * has also made no progress for \ref kCompletionDeadline.
+   *
+   * @param completedSerial Highest submission serial the device has completed.
+   * @param now Current time.
+   * @param lastProgress When the device last made progress, or nothing when it does not track
+   *   progress, in which case the oldest frame's age alone reaches the deadline.
+   */
+  Admission observe(std::uint64_t completedSerial, Clock::time_point now,
+                    std::optional<Clock::time_point> lastProgress = std::nullopt) {
     while (!pending_.empty() && pending_.front().serial <= completedSerial) {
       completed_ = pending_.front();
       pending_.pop_front();
     }
-    if (!pending_.empty() && now - pending_.front().submittedAt >= std::chrono::seconds(5)) {
+    if (!pending_.empty() && now - pending_.front().submittedAt >= kCompletionDeadline &&
+        (!lastProgress.has_value() || now - *lastProgress >= kCompletionDeadline)) {
       return Admission::TimedOut;
     }
     return pending_.size() < 3 ? Admission::Ready : Admission::Busy;
   }
   /// Recheck an expired submission using a bounded completion query.
   template <typename CompletionProbe>
+    requires std::invocable<CompletionProbe&>
   Admission observe(std::uint64_t completedSerial, Clock::time_point now,
                     CompletionProbe&& confirmCompletion) {
     const Admission admission = observe(completedSerial, now);
@@ -918,12 +938,12 @@ public:
 
   /**
    * Test seam: bounds how long \ref donner::editor::gui::EditorWindow::endFrameAndReadPixels
-   * "endFrameAndReadPixels" waits for its readback map, in place of the editor's readback bound, so
-   * a case can reach the bound without spending it. A map that outlasts the bound declares the
-   * framebuffer device lost either way.
+   * "endFrameAndReadPixels" waits for its readback map while the device makes no progress, in
+   * place of the editor's readback bound, so a case can reach the bound without spending it. A map
+   * whose work stops progressing for the bound declares the framebuffer device lost either way.
    *
-   * @param budget Longest the map may take. Clamped to the editor's bound; zero or less restores
-   *   it.
+   * @param budget Longest the map may wait without progress. Clamped to the editor's bound; zero
+   *   or less restores it.
    */
   void setFramebufferReadbackBudgetForTesting(std::chrono::milliseconds budget);
 #if defined(__linux__) && !defined(__EMSCRIPTEN__)

@@ -5,11 +5,10 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
-#include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <functional>
 #include <memory>
-#include <thread>
 #include <utility>
 
 #include "donner/gpu/CommandEncoder.h"
@@ -38,44 +37,11 @@ constexpr std::chrono::milliseconds kWakeSlack{1000};
 /// buffer completes and one when its serial is published, plus one spurious wakeup.
 constexpr uint64_t kMaxLooks = 4;
 
-/// Milliseconds from \p from to \p to. @param from Start. @param to End.
-int64_t MillisecondsBetween(std::chrono::steady_clock::time_point from,
-                            std::chrono::steady_clock::time_point to) {
-  return std::chrono::duration_cast<std::chrono::milliseconds>(to - from).count();
+/// Lets held work complete through \p release on a thread of its own once \ref kHeldFor has
+/// passed; \ref PacedSteps::lastStepStart is when. @param release What lets the work complete.
+PacedSteps ReleaseAfterHold(std::function<void()> release) {
+  return PacedSteps(1, kHeldFor, [release = std::move(release)](int) { release(); });
 }
-
-/// Runs \p release on a thread of its own once \ref kHeldFor has passed, and records when.
-class DelayedRelease {
-public:
-  /// @param release What lets the held work complete.
-  template <typename Release>
-  explicit DelayedRelease(Release release)
-      : thread_([this, release] {
-          std::this_thread::sleep_for(kHeldFor);
-          releasedAtTicks_.store(std::chrono::steady_clock::now().time_since_epoch().count(),
-                                 std::memory_order_release);
-          release();
-        }) {}
-
-  ~DelayedRelease() { join(); }
-
-  /// Waits for the release to have run.
-  void join() {
-    if (thread_.joinable()) {
-      thread_.join();
-    }
-  }
-
-  /// When the release ran. Call after \ref join.
-  std::chrono::steady_clock::time_point releasedAt() const {
-    return std::chrono::steady_clock::time_point(
-        std::chrono::steady_clock::duration(releasedAtTicks_.load(std::memory_order_acquire)));
-  }
-
-private:
-  std::atomic<std::chrono::steady_clock::rep> releasedAtTicks_{0};
-  std::thread thread_;
-};
 
 class MetalSerialWaitTest : public testing::Test {
 protected:
@@ -103,16 +69,17 @@ TEST_F(MetalSerialWaitTest, AWaitForHeldWorkLooksOnlyWhenCompletionStateChanges)
   const uint64_t serial = submitEmptyWork();
 
   const uint64_t looksBefore = device_->serialWaitLooksForTest();
-  DelayedRelease releaser([this] { device_->releasePausedCommandBuffersForTest(1); });
+  PacedSteps releaser =
+      ReleaseAfterHold([this] { device_->releasePausedCommandBuffersForTest(1); });
   const bool completed = device_->waitForSerial(serial, /*timeoutSeconds=*/5.0);
   const auto returnedAt = std::chrono::steady_clock::now();
   releaser.join();
   const uint64_t looks = device_->serialWaitLooksForTest() - looksBefore;
 
   EXPECT_THAT(completed, IsTrue());
-  EXPECT_THAT(MillisecondsBetween(releaser.releasedAt(), returnedAt), Ge(0))
+  EXPECT_THAT(MillisecondsBetween(releaser.lastStepStart(), returnedAt), Ge(0))
       << "the wait returned before its work was released";
-  EXPECT_THAT(MillisecondsBetween(releaser.releasedAt(), returnedAt), Lt(kWakeSlack.count()))
+  EXPECT_THAT(MillisecondsBetween(releaser.lastStepStart(), returnedAt), Lt(kWakeSlack.count()))
       << "the wait slept toward its budget after its work completed";
   EXPECT_THAT(looks, Le(kMaxLooks)) << "the wait looked at the completion state " << looks
                                     << " times while its work was held for " << kHeldFor.count()
@@ -129,15 +96,15 @@ TEST_F(MetalSerialWaitTest, PublishingTheSerialWakesTheWait) {
   ASSERT_THAT(device_->waitForCompletionHandlersForTest(1, /*timeoutSeconds=*/5.0), IsTrue())
       << "the command buffer's completion handler never ran";
 
-  DelayedRelease publisher([this] { device_->releaseHeldCompletionForTest(); });
+  PacedSteps publisher = ReleaseAfterHold([this] { device_->releaseHeldCompletionForTest(); });
   const bool completed = device_->waitForSerial(serial, /*timeoutSeconds=*/5.0);
   const auto returnedAt = std::chrono::steady_clock::now();
   publisher.join();
 
   EXPECT_THAT(completed, IsTrue());
-  EXPECT_THAT(MillisecondsBetween(publisher.releasedAt(), returnedAt), Ge(0))
+  EXPECT_THAT(MillisecondsBetween(publisher.lastStepStart(), returnedAt), Ge(0))
       << "the wait returned before its serial was published";
-  EXPECT_THAT(MillisecondsBetween(publisher.releasedAt(), returnedAt), Lt(kWakeSlack.count()))
+  EXPECT_THAT(MillisecondsBetween(publisher.lastStepStart(), returnedAt), Lt(kWakeSlack.count()))
       << "publishing the serial did not wake the wait, which slept toward its budget";
 }
 

@@ -158,10 +158,11 @@ std::vector<const char*> SelectPresentationExtensionsForTest(
  * Every buffer lives in HOST_VISIBLE | HOST_COHERENT memory and stays persistently mapped.
  * Idle queue writes copy directly. Four-byte-aligned writes to busy buffers copy their payload
  * into a bounded queue, flushed in order before the next ordinary submission, including empty
- * command streams. Unaligned writes wait up to five seconds for that buffer's prior submission;
- * timeout refuses the write without changing its bytes. Pending and in-flight write payloads
- * share a 1 GiB budget, and at most 16,384 distinct ranges may be pending. Identical ranges
- * coalesce at the newest write's position, preserving overlap order.
+ * command streams. Unaligned writes wait for that buffer's prior submission until the queue
+ * has made no progress for five seconds, which refuses the write without changing its bytes.
+ * Pending and in-flight write payloads share a 1 GiB budget, and at most 16,384 distinct ranges
+ * may be pending. Identical ranges coalesce at the newest write's position, preserving overlap
+ * order.
  *
  * Readback waits for the buffer's last use before reading mapped memory; a timeout or device
  * error returns an error without copying any bytes. Queued writes become visible after the
@@ -175,6 +176,17 @@ std::vector<const char*> SelectPresentationExtensionsForTest(
  * device-lost result from the driver declares that condition, as a backend-reported loss, before
  * the error is latched; serial waits, texture uploads and mappings end as soon as any device over
  * the root has declared it.
+ *
+ * Every wait whose bound exists to detect a hung device judges a stall by the progress of the
+ * queue its work is on, never by a budget for the whole backlog ahead of that work: the serial
+ * wait \ref Device::waitForSerialUnlessStalled, a host access to a busy buffer, a texture upload
+ * and the proof of completion at teardown. Each command buffer ends by setting an event, and the
+ * queue progresses whenever one is seen set, including those of other devices over the root,
+ * whose work runs ahead on the same queue (see \ref VulkanQueueProgress). A slow device that keeps
+ * finishing command buffers is never cut off, however long its backlog, and one that stops is
+ * caught within the bound of when its last progress was seen. A swapchain's wait for a present to
+ * finish, which the presentation engine signals, and the proof at teardown after a submission
+ * whose completion is unknown keep a fixed budget.
  *
  * Several runtime devices can open over one \ref VulkanSharedRoot (\ref CreateOverSharedRoot).
  * An owned texture exported from one registers on another as a read-only alias of the same
@@ -544,6 +556,22 @@ public:
   /// @param hook Called on the waiting thread.
   void setFenceWaitStepHookForTest(std::function<void()> hook);
 
+  /// Holds every command buffer submitted from now on, each waiting for its own turn in
+  /// submission order until \ref releasePausedCommandBuffersForTest lets it run, so a test can let
+  /// one submission's command buffers run a few at a time. Each held command buffer goes to the
+  /// queue as a submission of its own, and the last of them carries the submission's fence. Needs
+  /// timeline semaphore support, as on a device from \ref CreateWithTimelineSemaphoreForTest or
+  /// over a root from \ref CreateSharedRootWithTimelineSemaphoreForTest.
+  Status pauseSubmissionsForTest();
+
+  /// Lets the first \p count command buffers submitted since \ref pauseSubmissionsForTest run and
+  /// keeps the rest held. Callable from any thread while the device's own thread waits.
+  /// @param count Command buffers to let run, counted from the first one submitted while paused.
+  void releasePausedCommandBuffersForTest(uint64_t count);
+
+  /// Lets every held command buffer run and stops holding new ones. Safe when no pause is active.
+  void resumeSubmissionsForTest();
+
   /// Makes the next acquisition on the surface at \p surfaceSlotIndex report the swapchain as
   /// out of date, so its rebuild-and-retry path runs. Test seam; see the swapchain's own note for
   /// why a headless surface needs one.
@@ -631,6 +659,23 @@ protected:
    * @param timeoutSeconds Longest to wait, in seconds.
    */
   bool onWaitForSerial(uint64_t serial, double timeoutSeconds) override;
+
+  /**
+   * Waits for the fence of the submission covering \p serial while the queue shared by every
+   * device over this root keeps making progress (see \ref VulkanQueueProgress): the work ahead of
+   * the serial includes other devices' work, so their command buffers finishing counts too.
+   *
+   * @param serial Submission serial to wait for.
+   * @param stallBound Longest the queue may go without progress.
+   */
+  SerialWaitResult onWaitForSerialUnlessStalled(uint64_t serial,
+                                                std::chrono::milliseconds stallBound) override;
+
+  /// When the queue shared by every device over this root was last seen to make progress: a
+  /// command buffer finishing, or work submitted while no tracked work was outstanding. Progress is
+  /// timed when it is first seen, which this call also looks for; see \ref VulkanQueueProgress.
+  std::optional<std::chrono::steady_clock::time_point> onLastProgress() override;
+
   Result<std::span<const uint8_t>> onMappedBytes(uint32_t mappingSlotIndex) const override;
   void onUnmapBuffer(uint32_t mappingSlotIndex) override;
 

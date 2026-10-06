@@ -8,6 +8,7 @@
 /// \ref donner::gpu::Device operations, which fail closed on malformed input.
 
 #include <array>
+#include <chrono>
 #include <cstdint>
 #include <optional>
 #include <ostream>
@@ -260,6 +261,25 @@ struct MapWaitParams {
   double timeoutSeconds = 0.0;  //!< Total wait budget. Must be greater than zero.
 };
 
+/// How a wait for a submission serial that gives up only on a stall ended; see
+/// \ref donner::gpu::Device::waitForSerialUnlessStalled.
+enum class SerialWaitEnd : uint8_t {
+  Completed,  //!< The device completed the serial.
+  Stalled,    //!< The work the serial waits behind made no progress for the stall bound.
+  Failed,     //!< The root is lost, or the backend failed so the serial can never complete.
+};
+
+/// How a wait for a submission serial ended, and how long it ran.
+struct SerialWaitResult {
+  SerialWaitEnd end = SerialWaitEnd::Failed;  //!< How the wait ended.
+  /// Wall time the wait spent. It can be far longer than the stall bound: a wait that keeps
+  /// seeing progress runs for as long as the work ahead of its serial takes.
+  std::chrono::milliseconds waited{0};
+
+  /// Equality comparison. @param other Result to compare against.
+  bool operator==(const SerialWaitResult& other) const = default;
+};
+
 /// Shader stage visibility flags for bindings. Combinable with `|`.
 enum class ShaderStage : uint32_t {
   None = 0,           //!< No stage; invalid for bind group layout entries.
@@ -440,6 +460,11 @@ std::ostream& operator<<(std::ostream& os, MapSliceState value);
 std::ostream& operator<<(std::ostream& os, MapWaitOutcome value);
 /// Ostream output operator. @param os Output stream. @param value Value to output.
 std::ostream& operator<<(std::ostream& os, MapWaitKind value);
+/// Ostream output operator. @param os Output stream. @param value Value to output.
+std::ostream& operator<<(std::ostream& os, SerialWaitEnd value);
+/// Ostream output operator, e.g. `{Stalled, 5003 ms}`.
+/// @param os Output stream. @param value Value to output.
+std::ostream& operator<<(std::ostream& os, const SerialWaitResult& value);
 /// Ostream output operator, e.g. `{Pending, Polled}`.
 /// @param os Output stream. @param value Value to output.
 std::ostream& operator<<(std::ostream& os, const MapSliceReport& value);

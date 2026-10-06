@@ -111,6 +111,12 @@ namespace donner::gpu::metal {
  * device's own work in turn waits on a third device, the third device's completions do not count,
  * so a chain that progresses only at its far end for longer than the stall bound declares the loss.
  *
+ * Every other wait that exists to detect a hung GPU judges a stall on that same progress clock
+ * rather than giving the whole backlog a fixed budget: \ref Device::waitForSerialUnlessStalled,
+ * the drain at teardown, a present's wait for its frame's work and an unaligned write's wait for
+ * its busy buffer. A slow device that keeps completing work is never cut off, however long its
+ * backlog, and a device that stops completing it is caught within the bound.
+ *
  * The header is pure C++ (Objective-C state lives behind a pimpl) so it is includable from C++
  * tests; the implementation is Objective-C++.
  */
@@ -177,8 +183,9 @@ public:
    *   detected, and a test forces the non-unified path to cover it on unified hardware.
    * @param uploadStagingByteBudget Maximum combined queued and in-flight logical payload bytes.
    *   Zero is invalid and returns nullptr. Each individual batch also fits \ref kMaxBufferByteSize.
-   * @param unalignedWriteTimeout Maximum CPU wait for an unaligned write to a busy buffer.
-   *   Must be between zero and five seconds; invalid budgets return nullptr.
+   * @param unalignedWriteTimeout Longest an unaligned write to a busy buffer waits while the
+   *   work ahead of it makes no progress. Must be between zero and five seconds; invalid bounds
+   *   return nullptr.
    * @param lostState Loss condition to share with every other device selected over the same
    *   backend, or null for a private one only this device can set. The device reports it through
    *   \ref Device::isLost; the loss is declared by whoever observes it, such as a failed command
@@ -256,10 +263,10 @@ public:
   /// callable from any thread while the device's own thread waits.
   void releaseHeldCompletionForTest();
 
-  /// Bounds how long a present waits for its frame's work, in place of the five seconds it
-  /// otherwise allows, so a case reaches the bound without spending it, and before the system's
-  /// own timeout ends a command buffer that makes no progress.
-  /// @param timeout Longest a present waits; zero or less restores the default.
+  /// Bounds how long a present's wait for its frame's work may go without progress, in place of
+  /// the five seconds it otherwise allows, so a case reaches the bound without spending it, and
+  /// before the system's own timeout ends a command buffer that makes no progress.
+  /// @param timeout Longest the wait sees no progress; zero or less restores the default.
   void setPresentCompletionTimeoutForTest(std::chrono::milliseconds timeout);
 
   /// Bounds how long a submission waits for room among the command buffers in flight while
@@ -417,6 +424,23 @@ protected:
    * @param timeoutSeconds Longest to wait, in seconds.
    */
   bool onWaitForSerial(uint64_t serial, double timeoutSeconds) override;
+
+  /**
+   * Waits for \p serial on the progress clock the backstop on work in flight uses: the wait gives
+   * up once neither this device nor a producer its uncompleted work waits on has made progress
+   * for \p stallBound, measured from that progress. Woken by every command buffer that completes,
+   * every serial published and a declared loss.
+   *
+   * @param serial Submission serial to wait for.
+   * @param stallBound Longest the work may go without progress.
+   */
+  SerialWaitResult onWaitForSerialUnlessStalled(uint64_t serial,
+                                                std::chrono::milliseconds stallBound) override;
+
+  /// The latest progress of this device and of the producers its uncompleted submissions wait
+  /// on, as the backstop on work in flight measures it.
+  std::optional<std::chrono::steady_clock::time_point> onLastProgress() override;
+
   Result<std::span<const uint8_t>> onMappedBytes(uint32_t mappingSlotIndex) const override;
   void onUnmapBuffer(uint32_t mappingSlotIndex) override;
 

@@ -24,6 +24,7 @@
 #include <cstring>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -2014,6 +2015,29 @@ TEST_F(VulkanSurfaceTest, PresentsAFrameNothingDrewInto) {
   SurfaceTexture next = unwrap(device_->acquireCurrentTexture(surface), "acquireCurrentTexture");
   EXPECT_TRUE(next.texture.isValid());
   EXPECT_THAT(device_->abandonCurrentTexture(surface), IsOk());
+  EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
+}
+
+/// A frame's handover to presentation is work on the shared queue that sets no progress event.
+/// On a queue with nothing tracked outstanding it still starts the progress clock that waits for
+/// it are judged by; otherwise, on a root that sat idle for longer than such a wait's bound, the
+/// wait would be judged stalled at once.
+TEST_F(VulkanSurfaceTest, AFrameHandoverToAnIdleQueueStartsTheProgressClock) {
+  const Surface surface = configuredSurface();
+  SurfaceTexture frame = unwrap(device_->acquireCurrentTexture(surface), "acquireCurrentTexture");
+  ASSERT_TRUE(frame.texture.isValid());
+
+  // Nothing has been submitted, so the queue's last progress predates this point, and the present
+  // below submits only the handover.
+  std::this_thread::sleep_for(std::chrono::milliseconds(50));
+  const std::chrono::steady_clock::time_point beforePresent = std::chrono::steady_clock::now();
+  EXPECT_EQ(unwrap(device_->presentSurface(surface), "presentSurface"), SurfaceStatus::Success);
+
+  const std::optional<std::chrono::steady_clock::time_point> progressAt = device_->lastProgress();
+  ASSERT_THAT(progressAt, testing::Optional(testing::_));
+  EXPECT_THAT(*progressAt, testing::Ge(beforePresent))
+      << "after a frame handover to an idle queue, its last progress is still "
+      << MillisecondsBetween(*progressAt, beforePresent) << " ms before the present";
   EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
 }
 
