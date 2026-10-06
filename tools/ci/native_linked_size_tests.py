@@ -22,10 +22,13 @@ SHT_PROGBITS = 1
 SHT_SYMTAB = 2
 SHT_STRTAB = 3
 SHT_RELA = 4
+SHT_DYNAMIC = 6
 SHT_NOTE = 7
 SHT_NOBITS = 8
 SHT_DYNSYM = 11
 SHT_INIT_ARRAY = 14
+SHT_FINI_ARRAY = 15
+SHT_PREINIT_ARRAY = 16
 SHT_RELR = 19
 SHT_GNU_HASH = 0x6FFFFFF6
 SHT_GNU_VERSYM = 0x6FFFFFFF
@@ -94,6 +97,9 @@ class MeasureElfTest(unittest.TestCase):
             (SHT_PROGBITS, SHF_ALLOC | SHF_EXECINSTR, 1000),  # .text
             (SHT_UNWIND, SHF_ALLOC, 70),                       # .eh_frame on x86-64
             (SHT_INIT_ARRAY, SHF_ALLOC | SHF_WRITE, 8),        # .init_array
+            (SHT_FINI_ARRAY, SHF_ALLOC | SHF_WRITE, 16),       # .fini_array
+            (SHT_PREINIT_ARRAY, SHF_ALLOC | SHF_WRITE, 32),    # .preinit_array
+            (SHT_DYNAMIC, SHF_ALLOC | SHF_WRITE, 800),         # .dynamic
             (SHT_DYNSYM, SHF_ALLOC, 100),                      # .dynsym
             (SHT_STRTAB, SHF_ALLOC, 200),                      # .dynstr
             (SHT_GNU_HASH, SHF_ALLOC, 300),                    # .gnu.hash
@@ -102,7 +108,7 @@ class MeasureElfTest(unittest.TestCase):
             (SHT_RELR, SHF_ALLOC, 600),                        # .relr.dyn
             (SHT_NOTE, SHF_ALLOC, 700),                        # .note.gnu.build-id
         ]))
-        self.assertEqual(measured, size.LinkedSize(read_only=1070, writable=8))
+        self.assertEqual(measured, size.LinkedSize(read_only=1070, writable=56))
 
     def test_reads_an_extended_section_count(self):
         sections = [(SHT_PROGBITS, SHF_ALLOC, 10)] * 3
@@ -145,10 +151,12 @@ class MeasureMachOTest(unittest.TestCase):
             ("__TEXT", [(0x0, 100)]),
             None,  # LC_UUID between segments
             ("__AUTH_CONST", [(0x0, 7)]),
+            ("__AUTH", [(0x0, 100)]),
+            ("__DATA_DIRTY", [(0x0, 200)]),
             # __bss with attribute bits set, and __thread_bss.
             ("__DATA", [(0x0, 20), (0x80000001, 3000), (0x12, 64)]),
         ]))
-        self.assertEqual(measured, size.LinkedSize(read_only=100, writable=27))
+        self.assertEqual(measured, size.LinkedSize(read_only=100, writable=327))
 
     def test_refuses_a_truncated_load_command(self):
         with self.assertRaisesRegex(ValueError, "truncated"):

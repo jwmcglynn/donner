@@ -215,10 +215,10 @@ that enforces it, rounded up to a thousand bytes. Read-only includes the shader 
 
 | Product      | Platform     | Read-only  | Writable  | Total      | Budget     |
 | ------------ | ------------ | ---------- | --------- | ---------- | ---------- |
-| Editor       | macOS arm64  | 9,876,158  | 2,563,940 | 12,440,098 | 13,685,000 |
-| `svg_to_png` | macOS arm64  | 3,738,603  | 167,984   | 3,906,587  | 4,298,000  |
-| Editor       | Linux x86_64 | PENDING    | PENDING   | PENDING    | PENDING    |
-| `svg_to_png` | Linux x86_64 | PENDING    | PENDING   | PENDING    | PENDING    |
+| Editor       | macOS arm64  | 9,676,731  | 2,563,916 | 12,240,647 | 13,465,000 |
+| `svg_to_png` | macOS arm64  | 3,684,628  | 168,000   | 3,852,628  | 4,238,000  |
+| Editor       | Linux x86_64 | 11,681,667 | 2,494,368 | 14,176,035 | 15,594,000 |
+| `svg_to_png` | Linux x86_64 | 4,766,843  | 113,800   | 4,880,643  | 5,369,000  |
 | Editor       | Linux arm64  | 11,195,371 | 2,534,096 | 13,729,467 | Not gated  |
 | `svg_to_png` | Linux arm64  | 4,716,219  | 144,000   | 4,860,219  | Not gated  |
 

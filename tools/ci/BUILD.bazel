@@ -248,12 +248,12 @@ py_test(
         "--product=svg_to_png=$(rootpath :shipped_svg_to_png)",
     ] + select({
         ":macos_arm64": [
-            "--budget=editor=13685000",
-            "--budget=svg_to_png=4298000",
+            "--budget=editor=13465000",
+            "--budget=svg_to_png=4238000",
         ],
         ":linux_x86_64": [
-            "--budget=editor=15103000",
-            "--budget=svg_to_png=5347000",
+            "--budget=editor=15594000",
+            "--budget=svg_to_png=5369000",
         ],
         "//conditions:default": [],
     }),
