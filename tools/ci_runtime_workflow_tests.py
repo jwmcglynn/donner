@@ -283,12 +283,18 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         switch = "--test_env=DONNER_HOSTED_MACOS_QUARANTINE=1"
         hosted = self._job_body("macos")
         self.assertIn('      HOSTED_MACOS_QUARANTINE_TEST_FLAGS: "%s"\n' % switch, hosted)
-        steps = ("Test", "Test (browser targets)", "Compare browser GPU tests (serial)",
-                 "Compare browser GPU tests (parallel)")
+        steps = ("Test", "Test (browser targets)")
         for step in steps:
             body = self._step_body(hosted, step)
             self.assertIn("$BROWSER_STALL_TEST_FLAGS", body, step)
             self.assertIn("$HOSTED_MACOS_QUARANTINE_TEST_FLAGS", body, step)
+        # The advisory comparisons never set the job's outcome and exist to diagnose exactly
+        # these failures, so they keep running the quarantined cases.
+        for mode in ("serial", "parallel"):
+            step = "Compare browser GPU tests (%s)" % mode
+            body = self._step_body(hosted, step)
+            self.assertIn("continue-on-error: true", body, step)
+            self.assertNotIn("HOSTED_MACOS_QUARANTINE", body, step)
         self.assertEqual(self.main.count("DONNER_HOSTED_MACOS_QUARANTINE"), 1)
         self.assertEqual(self.main.count("HOSTED_MACOS_QUARANTINE_TEST_FLAGS"), 1 + len(steps))
         for job in ("macos-self-hosted", "linux", "linux-self-hosted"):
