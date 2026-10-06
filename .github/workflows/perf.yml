@@ -63,9 +63,13 @@ jobs:
             # The interaction latency gates miss their targets on this hosted runner (#1666), so
             # this job records them without failing on a miss. Every other run enforces them.
             latency_gates: report
+            # Likewise two tracked checks of the same case, each only in the browser it fails in,
+            # until their fixes (#1675, #1676).
+            completion_checks: report
           - os: ubuntu-24.04
             target_tag: perf_linux
             latency_gates: enforce
+            completion_checks: enforce
     runs-on: ${{ matrix.os }}
     needs: gatekeeper
     if: needs.gatekeeper.outputs.should_run == 'true'
@@ -134,6 +138,7 @@ jobs:
             --build_tag_filters="$TARGET_TAG" \
             --test_tag_filters="$TARGET_TAG" \
             --test_env=DONNER_BROWSER_LATENCY_GATES=${{ matrix.latency_gates }} \
+            --test_env=DONNER_BROWSER_COMPLETION_CHECKS=${{ matrix.completion_checks }} \
             ${{ steps.discover.outputs.targets }}
 
       - name: Summarize interaction latency gates
