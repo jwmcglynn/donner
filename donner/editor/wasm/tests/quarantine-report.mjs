@@ -6,8 +6,8 @@
  * quarantine for one report-only lane: the cases run, each outcome is recorded in the job summary
  * and the evidence is uploaded, and a failure never fails the job.
  *
- * This module is loaded both by Playwright specs (as CommonJS) and by node:test, so it must not
- * use `import.meta`; the summary command lives in quarantine-report-summary.mjs.
+ * Playwright loads this module as CommonJS for the specs, so it holds no module-only syntax; the
+ * summary command lives in quarantine-report-summary.mjs.
  */
 
 /** Selects whether quarantined cases are skipped ("skip", the default) or run ("report"). */
