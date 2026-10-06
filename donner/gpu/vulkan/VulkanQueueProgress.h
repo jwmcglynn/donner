@@ -97,7 +97,9 @@ private:
   std::chrono::steady_clock::time_point lastProgress_;  //!< When the queue last made progress.
 };
 
-/// How \ref WaitForFencesWhileQueueProgresses ended.
+/// How a fence wait bounded by queue progress ended, as
+/// \ref donner::gpu::vulkan::WaitForFencesWhileQueueProgresses "WaitForFencesWhileQueueProgresses"
+/// reports it.
 enum class FenceProgressWaitEnd : uint8_t {
   Signalled,  //!< Every fence signalled.
   Stalled,    //!< The queue made no progress for the bound.
@@ -120,8 +122,9 @@ struct FenceProgressWait {
  *
  * The bound runs from the queue's last progress, which can predate the wait, so a new wait on a
  * queue that was already seen to stop does not restart it; progress no one had looked for yet is
- * timed by this wait's first look (see \ref VulkanQueueProgress). Without a progress record the
- * whole wait is bounded by \p stallBound instead. Waits in steps of at most 10 ms, looking for
+ * timed by this wait's first look (see
+ * \ref donner::gpu::vulkan::VulkanQueueProgress "VulkanQueueProgress"). Without a progress record
+ * the whole wait is bounded by \p stallBound instead. Waits in steps of at most 10 ms, looking for
  * progress and for a loss declared over the root between them; with neither to look for, it waits
  * once for the whole bound. Records nothing: each caller decides what its outcome means.
  *

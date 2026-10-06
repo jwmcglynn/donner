@@ -83,12 +83,13 @@ struct RuntimeComputeProgram {
  * Creates the compute program of one shader family from the projection \p runtime consumes.
  *
  * \p linked is the one artifact of the family this build links, named with
- * `DONNER_LINKED_SHADER_ARTIFACT`; \ref SelectShaderProjection picks the view \p runtime consumes
- * from it, and a device consuming a projection the build does not carry fails closed at module
- * creation. The shader module descriptor and the group-zero binding layout are both derived from
- * the selected artifact, so the source a device compiles and the interface the host binds against
- * always come from the same compiled program. A family that does not expose exactly one
- * two-dimensional compute entry point yields a program with null handles, which a dispatch
+ * `DONNER_LINKED_SHADER_ARTIFACT`;
+ * \ref donner::geode::SelectShaderProjection "SelectShaderProjection" picks the view \p runtime
+ * consumes from it, and a device consuming a projection the build does not carry fails closed at
+ * module creation. The shader module descriptor and the group-zero binding layout are both
+ * derived from the selected artifact, so the source a device compiles and the interface the host
+ * binds against always come from the same compiled program. A family that does not expose exactly
+ * one two-dimensional compute entry point yields a program with null handles, which a dispatch
  * refuses.
  *
  * @param runtime Device receiving the selected precompiled projection.

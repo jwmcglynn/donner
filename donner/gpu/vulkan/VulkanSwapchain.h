@@ -57,8 +57,10 @@ struct VulkanSurfaceContext {
   std::shared_ptr<VulkanSurfaceLifetime> lifetime;   //!< Shared owner-retention state.
   std::mutex* queueMutex = nullptr;  //!< Shared VkQueue call lock; null for fake test contexts.
   std::shared_ptr<DeviceLostState> rootLoss;  //!< Shared loss condition of the owning root.
-  /// Progress of the shared queue, which the swapchain's fence waits measure a stall by; null for
-  /// fake test contexts, whose waits bound their whole duration.
+
+  /// Progress of the shared queue. The swapchain's waits for its own submissions measure a stall
+  /// by it, and each frame handover the queue accepts is noted on it, so a handover to an idle
+  /// queue starts its clock. Null for fake test contexts, whose waits bound their whole duration.
   VulkanQueueProgress* queueProgress = nullptr;
 };
 
