@@ -3,12 +3,13 @@ import type { Page } from "@playwright/test";
 /**
  * The browser GPU library's acquisition trace (`library_donner_gpu.js`): one line per settled step
  * of a device request, with its elapsed time, `late=1` when the editor had already given up on it,
- * a `still_pending` line when nothing settled within a minute, and a line when a device is lost.
+ * a `still_pending` line when the device has neither arrived nor been refused 15 s after the
+ * request began, and a line when a device is lost.
  */
 export const kGpuTracePrefix = "[Geode/browser/gpu-trace]";
 
 /** Bound on echoed lines per page, so a looping failure cannot flood the test log. */
-const kMaxEchoedLinesPerPage = 32;
+const kMaxEchoedLinesPerPage = 64;
 
 const echoingPages = new WeakSet<Page>();
 

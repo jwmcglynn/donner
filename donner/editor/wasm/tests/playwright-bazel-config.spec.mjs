@@ -85,8 +85,12 @@ test("Bazel browser launch preserves caller environment and launch options", (t)
   assert.equal(config.use.viewport.width, 100);
 });
 
-test("Chromium writes its own log, GPU-process errors included, into the test outputs", (t) => {
+test("only the hosted job's Chromium writes its own log into the test outputs", (t) => {
   const { temporary, environment, baseConfig } = fixture(t);
+  const quiet = evaluateConfig("playwright.bazel.config.js", baseConfig, environment, temporary);
+  assert.deepEqual(Array.from(quiet.use.launchOptions.args), ["--existing-launch-argument"]);
+
+  environment.DONNER_BROWSER_STALL_DIAGNOSTICS = "1";
   const config = evaluateConfig("playwright.bazel.config.js", baseConfig, environment, temporary);
   const args = Array.from(config.use.launchOptions.args);
   assert.equal(args.length, 3, args.join(" "));

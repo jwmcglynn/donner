@@ -744,7 +744,7 @@ test("a settled device request traces its adapter, readiness and elapsed time", 
     /^\[Geode\/browser\/gpu-trace\] step=device outcome=ready elapsed_ms=\d+$/,
   );
   assert.equal(scheduled.length, 1, "one still-pending timer per request");
-  assert.equal(scheduled[0].delayMs, 60000);
+  assert.equal(scheduled[0].delayMs, 15000);
   assert.ok(scheduled[0].unrefed, "the still-pending timer must never hold a process open");
   assert.ok(scheduled[0].cleared, "a settled request must clear its still-pending timer");
   assert.deepEqual(bridge.consoleErrors, []);
@@ -766,7 +766,7 @@ test("a device that arrives after its request was let go is traced as late", asy
   assert.equal(state.device, null, "tracing must not change what a late device does");
 });
 
-test("a request still unanswered after a minute is traced once", async () => {
+test("a request still unanswered past the editor's settle window is traced once", async () => {
   const { scheduled, timers } = recordingTimers();
   const bridge = loadLibrary({
     timersForTesting: timers,
@@ -804,13 +804,32 @@ test("a lost device is traced with the reason the browser gave", async () => {
   bridge.lose({ reason: "unknown", message: "GPU process exited" });
   const losses = () => traceLines(bridge).filter((line) => line.includes("outcome=lost"));
   await until(() => losses().length === 1, "a traced loss");
-  assert.equal(
-    losses()[0],
-    "[Geode/browser/gpu-trace] step=device outcome=lost reason=unknown"
-      + " message=\"GPU process exited\"",
-  );
+  // The free-text message stays in the recorded loss reason; the line carries only the token.
+  assert.equal(losses()[0], "[Geode/browser/gpu-trace] step=device outcome=lost reason=unknown");
   // The specs treat some console text as a failure; a trace line must never match it.
   for (const line of traceLines(bridge)) {
     assert.doesNotMatch(line, /device lost|^\[Geode\/browser\/acquire\]/i, line);
   }
+});
+
+test("a timer or adapter that faults inside the trace leaves the request alone", async () => {
+  const faultingTimers = {
+    setTimeout: () => ({}),
+    clearTimeout: () => {
+      throw new Error("no clearing here");
+    },
+  };
+  const timerBridge = loadLibrary({ timersForTesting: faultingTimers });
+  await beginReady(timerBridge, kFirst);
+  assert.equal(timerBridge.state.device, timerBridge.device);
+
+  const faultingAdapter = {
+    get info() {
+      throw new Error("no adapter info here");
+    },
+    requestDevice: async () => createDevice().device,
+  };
+  const adapterBridge = loadLibrary({ requestAdapterForTesting: async () => faultingAdapter });
+  await beginReady(adapterBridge, kFirst);
+  assert.notEqual(adapterBridge.state.device, null);
 });

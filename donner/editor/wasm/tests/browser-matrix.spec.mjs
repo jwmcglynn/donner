@@ -1189,15 +1189,18 @@ test("the editor-opening specs echo the GPU acquisition trace into the test log"
   const prefix = /kTracePrefix: '(\[Geode\/browser\/gpu-trace\])'/.exec(library)?.[1];
   assert.equal(prefix, "[Geode/browser/gpu-trace]");
   assert.ok(helper.includes(`export const kGpuTracePrefix = "${prefix}";`));
-  // A trace line must never read as the acquisition failures the smoke spec treats as fatal.
+  // A trace line must never read as the acquisition failures the smoke spec treats as fatal, nor
+  // as the "[Geode/browser]" lines the backend-selection spec refuses.
   assert.ok(!prefix.startsWith("[Geode/browser/acquire]"));
+  assert.ok(!prefix.includes("[Geode/browser]"));
   for (const spec of [
     "smoke.spec.ts",
     "browser-presentation-regression.spec.ts",
     "browser-responsiveness.perf.ts",
   ]) {
     const source = readFileSync(path.join(testDirectory, spec), "utf8");
-    assert.match(source, /import \{ echoGpuSessionConsole \} from "\.\/gpu-session-console";/, spec);
+    const helperImport = /import \{ echoGpuSessionConsole \} from "\.\/gpu-session-console";/;
+    assert.match(source, helperImport, spec);
     assert.match(source, /\n {2}echoGpuSessionConsole\(page\);\n/, spec);
   }
 });
