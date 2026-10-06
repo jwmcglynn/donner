@@ -18,6 +18,7 @@ import {
   type ScreenshotTimeoutStage,
 } from "./canvas-color-stats";
 import { waitForAppliedPointer } from "./gesture-streams";
+import { echoGpuSessionConsole } from "./gpu-session-console";
 import { holdCanvasCompletionForTest, installSurfaceFrameProbe } from "./surface-frame-probe";
 
 installBrowserStallDiagnostics(test);
@@ -370,6 +371,7 @@ async function openEditor(page: Page, options: OpenEditorOptions = {}): Promise<
     console.error(`browser fatal: ${boundedMessage}`);
   };
 
+  echoGpuSessionConsole(page);
   page.on("console", (message) => {
     const text = message.text();
     if (text.startsWith(kGpuAcquisitionPrefix)) {

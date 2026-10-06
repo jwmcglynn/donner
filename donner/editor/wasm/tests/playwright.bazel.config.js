@@ -34,6 +34,14 @@ module.exports = {
     ...baseConfig.use,
     launchOptions: {
       ...baseConfig.use.launchOptions,
+      // Chromium's own log, including GPU-process errors, goes with the test outputs rather than
+      // the console: a session whose GPU work never arrives keeps that record in its artifacts.
+      // One file per Playwright worker process, which launches its own browser.
+      args: [
+        ...(baseConfig.use.launchOptions.args ?? []),
+        "--enable-logging",
+        `--log-file=${path.join(outputRoot, `chromium-${process.pid}.log`)}`,
+      ],
       env: {
         ...(baseConfig.use.launchOptions.env ?? process.env),
         BREAKPAD_DUMP_LOCATION: crashDirectory,
