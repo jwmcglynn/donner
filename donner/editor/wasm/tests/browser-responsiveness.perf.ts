@@ -1372,7 +1372,7 @@ test.describe("UI presentation diagnosis", () => {
     async ({ page, browser, browserName }, info) => {
       // Firefox observes the drag through the editor's presented-frame statistics rather than by
       // reading the canvas back every frame, which stalled it on the hosted runner (#1668).
-      const pixelProbe = browserName !== "firefox";
+      const pixelProbe = browserName !== "firefox" || process.env.DIAG_FORCE_PIXEL_PROBE === "1";
       const report: Record<string, unknown> = {
         browser: info.project.name,
         version: browser.version(),

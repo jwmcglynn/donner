@@ -66,10 +66,6 @@ jobs:
             # Likewise two tracked checks of the same case, each only in the browser it fails in,
             # until their fixes (#1675, #1676).
             completion_checks: report
-          - os: ubuntu-24.04
-            target_tag: perf_linux
-            latency_gates: enforce
-            completion_checks: enforce
     runs-on: ${{ matrix.os }}
     needs: gatekeeper
     if: needs.gatekeeper.outputs.should_run == 'true'
@@ -129,17 +125,42 @@ jobs:
         env:
           TARGET_TAG: ${{ matrix.target_tag }}
         run: |
-          # -c opt: budgets assume production-speed codegen, not fastbuild's default.
-          # Successful test output carries the measured nanoseconds per draw.
-          bazelisk test \
-            --config=ci \
-            -c opt \
-            --test_output=all \
-            --build_tag_filters="$TARGET_TAG" \
-            --test_tag_filters="$TARGET_TAG" \
-            --test_env=DONNER_BROWSER_LATENCY_GATES=${{ matrix.latency_gates }} \
-            --test_env=DONNER_BROWSER_COMPLETION_CHECKS=${{ matrix.completion_checks }} \
-            ${{ steps.discover.outputs.targets }}
+          # Diagnostic only: the Firefox held-drag case observed by per-frame pixel readback (the
+          # old path, forced) and by presented-frame statistics, six serialized runs each.
+          status=0
+          for mode in pixel stats; do
+            force=0
+            [[ "$mode" == "pixel" ]] && force=1
+            echo "::group::held drag in Firefox, $mode"
+            bazelisk test \
+              --config=ci \
+              -c opt \
+              --build_tag_filters=perf \
+              --test_tag_filters=perf \
+              --experimental_ui_max_stdouterr_bytes=8000000 \
+              --test_output=all \
+              --nocache_test_results \
+              --runs_per_test=6 \
+              --local_test_jobs=1 \
+              --test_env=DIAG_FORCE_PIXEL_PROBE="$force" \
+              '--test_arg=--grep=held drag advances' \
+              --test_arg=--project=firefox \
+              //donner/editor/wasm/tests:browser_responsiveness_perf_test || status=1
+            echo "::endgroup::"
+            mkdir -p "$RUNNER_TEMP/heldrag/$mode"
+            cp -RL bazel-testlogs/donner/editor/wasm/tests/browser_responsiveness_perf_test/. \
+              "$RUNNER_TEMP/heldrag/$mode/" || true
+          done
+          exit $status
+
+      - name: Upload held-drag diagnostic logs
+        if: ${{ !cancelled() && steps.perf.outcome != 'skipped' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: heldrag-diagnostic-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/heldrag
+          if-no-files-found: warn
+          retention-days: 7
 
       - name: Summarize interaction latency gates
         if: ${{ !cancelled() && matrix.target_tag == 'perf' && steps.perf.outcome != 'skipped' }}
