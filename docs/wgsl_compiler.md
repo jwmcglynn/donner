@@ -247,7 +247,7 @@ acceptance cases use the platform-only artifact to render a rectangle with fract
 edges, binary coverage, nested clip values, both winding rules, and deliberately shorter declared
 buffer ranges than the underlying allocations. They use the existing strict bitmap comparator.
 These cases are the execution gate for the mask, not a claim that every supported platform has
-already passed. The adapter pipeline reads entry names and binding slots from the frozen interface.
+already passed. `GeodeMaskPipeline` reads entry names and binding slots from the frozen interface.
 The Slug and image-blit targets' positive Clang evaluator budgets are emitted in CMake only for Clang/AppleClang;
 other compilers retain their own evaluator defaults.
 
@@ -506,7 +506,7 @@ controls change bindings, entry names and feBlend's workgroup to 4x2 on a 7x5 ou
 
 The last fifteen production programs moved from IR builders and build-time generated descriptor
 headers to authored sources under the same contract as the earlier families. Each family has a
-WGSL-only artifact for the WebGPU adapter, a native-only artifact, an all-projection test control,
+WGSL-only artifact for WebGPU consumers, a native-only artifact, an all-projection test control,
 a mutation control that renumbers every binding, renames the entry points and, for compute, changes
 the workgroup to 4x2, and three linked isolation probes. Host parameter layouts live next to the
 artifact accessors (`FloodParams`, `CompositeParams` with `CompositeOperator`,

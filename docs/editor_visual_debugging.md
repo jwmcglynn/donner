@@ -20,15 +20,15 @@ older transform than for fresh chrome to drift away from stale document pixels.
 Visual editor bugs usually cross several layers. Treat each layer as a separate
 test boundary.
 
-| Layer              | What It Owns                                                      | Typical Bugs                                                                   | Useful Proof                                               |
-| ------------------ | ----------------------------------------------------------------- | ------------------------------------------------------------------------------ | ---------------------------------------------------------- |
-| Input and viewport | Mouse state, pan, zoom, DPR, pane geometry                        | Wrong document point, resize race, zoom focal drift                            | `.rnr` frame data and viewport diagnostics                 |
-| DOM and selection  | Mutations, drag preview, selection bounds                         | Overlay lags live DOM, stale hit-test bounds                                   | active drag diagnostics, selection label, source writeback |
-| Compositor         | Layer segmentation, cached raster payloads, compose offsets       | Old element pops back, filtered layer offset, stale canvas epoch               | compositor state, tile metadata, pixel crop comparisons    |
-| Async renderer     | Worker scheduling, cancellation, result publication               | Late result wins, rejected result leaves side effects                          | `RenderCoordinator` tests and frame history                |
-| Texture cache      | GL/WGPU texture ownership and tile reuse                          | metadata-only tile aliases wrong payload, retired WGPU snapshot dies too early | `GlTextureCache` unit tests and texture handle diagnostics |
-| Presenter          | Tile rectangle mapping and overlay composition                    | right texture at wrong rect, overlay/current viewport mismatch                 | `PresentedFrameComposer` tests and captured frames         |
-| ImGui/backend      | `ImTextureID`, bind groups, command buffers, framebuffer readback | raw handle reused, stale bind group, wrong texture through correct quad        | WGPU backend audit plus replay screenshots                 |
+| Layer              | What It Owns                                                                    | Typical Bugs                                                                     | Useful Proof                                                                 |
+| ------------------ | ------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| Input and viewport | Mouse state, pan, zoom, DPR, pane geometry                                      | Wrong document point, resize race, zoom focal drift                              | `.rnr` frame data and viewport diagnostics                                   |
+| DOM and selection  | Mutations, drag preview, selection bounds                                       | Overlay lags live DOM, stale hit-test bounds                                     | active drag diagnostics, selection label, source writeback                   |
+| Compositor         | Layer segmentation, cached raster payloads, compose offsets                     | Old element pops back, filtered layer offset, stale canvas epoch                 | compositor state, tile metadata, pixel crop comparisons                      |
+| Async renderer     | Worker scheduling, cancellation, result publication                             | Late result wins, rejected result leaves side effects                            | `RenderCoordinator` tests and frame history                                  |
+| Texture cache      | GL or GPU runtime texture ownership and tile reuse                              | metadata-only tile aliases wrong payload, retired GPU snapshot dies too early    | `GlTextureCache` unit tests and texture handle diagnostics                   |
+| Presenter          | Tile rectangle mapping and overlay composition                                  | right texture at wrong rect, overlay/current viewport mismatch                   | `PresentedFrameComposer` tests and captured frames                           |
+| ImGui/backend      | `UiTextureId` registrations, bind groups, command buffers, framebuffer readback | stale texture registration, stale bind group, wrong texture through correct quad | `ImGuiRuntimeRenderer` and `UiTextureRegistry` audit plus replay screenshots |
 
 ## Repro Workflow
 
@@ -112,10 +112,11 @@ Use it for:
 - capturing exact frames to PNG,
 - replaying with a known SVG override,
 - cropping to the document canvas,
-- enabling test-only WGPU framebuffer readback,
+- enabling test-only Geode framebuffer readback,
 - exporting per-frame diagnostics for assertions or manual inspection.
 
-The production Geode editor still presents direct WGPU textures. Framebuffer
+The production Geode editor draws through the GPU runtime: renderer snapshots
+and uploaded tiles reach ImGui as runtime texture registrations. Framebuffer
 readback is a replay/test tool, not a production fallback.
 
 ### Pixel Comparisons
@@ -242,10 +243,10 @@ Check:
 
 - duplicate live texture handles across tile IDs,
 - metadata-only tile reuse against cached texture identity,
-- WGPU snapshot lifetime after replacement,
-- ImGui WGPU bind-group caching by raw `ImTextureID`,
-- whether a released `WGPUTextureView` handle can be reused for a different
-  snapshot.
+- GPU snapshot lifetime after replacement,
+- the per-registration bind groups `ImGuiRuntimeRenderer` caches,
+- whether a retired `UiTextureId` registration is still drawn after its slot
+  holds a different snapshot (the registry's generation check should refuse it).
 
 Useful proof:
 
@@ -302,11 +303,14 @@ Use this sequence for new bugs:
 - **Metadata-only tile aliasing:** a tile update without payload could reuse a
   cached texture with insufficient identity. Fix at `GlTextureCache`: require
   kind, generation, texture dimensions, and raster canvas size to match.
-- **WGPU texture-view reuse:** ImGui WGPU cached bind groups by raw
-  `WGPUTextureView`/`ImTextureID`, while `GlTextureCache` released retired
-  snapshots by upload churn. Fix at the WGPU presentation boundary: age retired
-  snapshots by UI frame and evict the ImGui bind group before releasing a
-  texture view.
+- **Texture-view reuse (retired WebGPU adapter):** the former ImGui WebGPU
+  backend cached bind groups by raw texture-view handle, while `GlTextureCache`
+  released retired snapshots by upload churn. The fix aged retired snapshots by
+  UI frame and evicted the bind group before releasing the view. The runtime UI
+  renderer keeps both rules: `GlTextureCache` ages retired snapshots by
+  presentation frame, and `ImGuiRuntimeRenderer::advanceFrame()` drops a
+  registration's cached bind group when it releases the registration, whose
+  generation-checked `UiTextureId` cannot name a later snapshot.
 - **Filtered layer compose offset:** filtered content could be recomposed with a
   stale source/offset after drag. Fix at the compositor/source-sync layer and
   protect with cropped replay comparisons.

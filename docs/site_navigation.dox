@@ -59,6 +59,7 @@ kept separate from project-internal developer notes, design history, tooling, an
 - \subpage DataFormats
 - \subpage FilterEffectsGuide
 - \subpage CompileTimeMap
+- \subpage GpuRuntime
 - \subpage EmbeddingGeode
 */
 

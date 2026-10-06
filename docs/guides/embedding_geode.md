@@ -1,9 +1,20 @@
 # Embedding Geode in a native host {#EmbeddingGeode}
 
 This guide is for Donner developers integrating Geode with a macOS or Linux
-window. The in-tree [GLFW example](../../examples/geode_embed.cc) shows the
+window. The in-tree \ref geode_embed.cc "GLFW example" shows the
 current native runtime boundary. The host owns the window and its platform
 surface; Geode owns a rendering context over the selected Metal or Vulkan root.
+
+This is an internal seam, not a supported external API. For v0.8 the maintainer
+decided that Donner exposes no native embedding surface beyond internal callers:
+the editor, this example and Donner's own tests. Bazel visibility keeps the GPU
+runtime and Geode device targets inside the repository, and applications render
+through the public \ref donner::svg::Renderer API. The
+[GPU runtime reference](../gpu_runtime.md) covers the ownership, backend and
+failure-mode contracts this guide relies on.
+
+The code blocks below are fragments of `examples/geode_embed.cc`, which is the
+compiled and complete version; they leave out its error reporting.
 
 Build the example with Geode enabled:
 
@@ -50,8 +61,8 @@ that presentation path.
 ## Select for the actual window {#EmbeddingGeodeSelection}
 
 Create a GLFW window with `GLFW_NO_API` before selecting a GPU root. The
-[platform helper](../../examples/geode_embed_surface.h) returns both the root
-and the native handle that the runtime surface will present to:
+\ref geode_embed_surface.h "platform helper" returns both the root and the
+native handle that the runtime surface will present to:
 
 ```cpp
 donner::example::NativeEmbedSurface native =
@@ -140,8 +151,9 @@ if (acquired.hasResult() &&
 
 The acquired texture is borrowed from the surface. Do not release its backing,
 reuse its handle after presentation, or give its handle to another runtime
-device. `RendererGeode::setTargetTexture()` keeps its identity only for the
-frame; `clearTargetTexture()` removes that identity before presentation.
+device. `RendererGeode::setTargetTexture()` keeps only the texture's identity,
+and keeps it for every later frame until `clearTargetTexture()`. Clear it before
+presenting, because presentation invalidates the frame's handle.
 
 `SurfaceStatus::Outdated` calls for reconfiguration before another acquire.
 `Timeout` can be retried; `Lost` and `DeviceLost` stop this fixed-window
@@ -152,10 +164,14 @@ these statuses in its frame loop.
 ## Device loss {#EmbeddingGeodeDeviceLoss}
 
 Logical contexts over one root share its `DeviceLostState`. Runtime backends
-declare that state lost when their driver reports loss. If the host receives a
-separate loss notification, retain the root's shared loss state for the callback
-and call `donner::gpu::DeclareDeviceLost(*lossState)`. Setting the flag directly
-would skip registered release callbacks.
+declare that state lost when their driver reports loss, and a bounded GPU wait
+declares it when the work it waits behind stops making progress. If the host
+receives a separate loss notification, retain the root's shared loss state for
+the callback and call `donner::gpu::DeclareDeviceLost(*lossState)`. Setting the
+flag directly would skip registered release callbacks. See
+[Device loss](../gpu_runtime.md#GpuRuntimeDeviceLoss) and
+[Bounded GPU waits](../gpu_runtime.md#GpuRuntimeBoundedWaits) for what a lost
+root does and which waits declare it.
 
 Stop submitting work after loss and retire the surface and contexts in the
 order below. A loss notification is not proof that GPU work has completed.
@@ -175,3 +191,8 @@ If Vulkan cannot prove retirement, the example retains the native surface,
 root, and GLFW window until process exit and reports the failure. Destroying
 the window in that state could invalidate a surface the driver still uses.
 The Metal layer remains owned by its Cocoa view until the GLFW window closes.
+
+## Related {#EmbeddingGeodeRelated}
+
+- [GPU runtime reference](../gpu_runtime.md)
+- [Design 0053: native GPU runtime](../design_docs/0053-native_gpu_hal.md)

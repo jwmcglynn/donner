@@ -8,7 +8,7 @@ Geode's renderer services are backend-neutral. Still open: removal of the transi
 remaining dependencies, real Safari/WebKit and physical iOS qualification of the browser editor,
 and acceptance of one integrated revision ([Next Steps](#next-steps)).\
 **Created:** 2026-07-05\
-**Updated:** 2026-10-05\
+**Updated:** 2026-10-06\
 **Author:** Claude Fable 5.1\
 **Drafted by:** GPT-5.6 Sol
 
@@ -1146,7 +1146,8 @@ The exact integrated candidate must satisfy all applicable platform gates:
   DPR2 workloads fit the existing working-set caps and physical residency is measured separately.
 - Same-host/configuration frame time is no worse than 5% at the median and 10% at p95 against the
   agreed reference corpus unless a quality/size tradeoff is explicitly accepted. Add enforcing
-  performance targets where this comparison is not yet automated.
+  performance targets where this comparison is not yet automated. The accepted exceptions are
+  listed under [Accepted performance exceptions](#accepted-performance-exceptions).
 - Native and Wasm artifacts meet the measured budgets in the GPU matrix and editor build rules;
   comparable clean/incremental build and startup measurements accompany the cutover.
 - Browser presentation qualifies on Chromium, WebKit, and the agreed physical iOS matrix. Device or
@@ -1164,13 +1165,43 @@ The exact integrated candidate must satisfy all applicable platform gates:
   or high findings.
 - Required tests and checks execute successfully on the candidate, and actionable RHI/GPU review
   findings are resolved. Publish the ownership, embedding, backend and failure-mode documentation
-  that the integrated implementation supports.
+  that the integrated implementation supports: the [GPU runtime reference](../gpu_runtime.md) and
+  the [native embedding guide](../guides/embedding_geode.md).
 
-## Decisions Needed Before Platform Cutover
+### Accepted performance exceptions
 
-- Which physical GPU/driver combinations are mandatory versus best-effort in the qualification matrix?
-- What trusted native embedding surface is exposed after cutover, if any, beyond internal callers?
-- Which actual Vulkan allocation patterns justify suballocation, based on the residency measurements?
+The maintainer accepted these exceptions to the frame-time criterion on 2026-10-06. Each compares
+the candidate with the reference revision `7a7fb1eb` on the same host and configuration.
+
+- **Chromium editor input-to-frame p95.** Measured at `d5d3a771` on an otherwise idle machine:
+  cold-pointer p95 rose from 18.3 ms to 30.3 ms (+65%), cold-zoom p95 by 46% and warm-pointer p95
+  by 41%, while p50 improved in every phase. The cause has not been bisected;
+  [#1712](https://github.com/jwmcglynn/donner/issues/1712) tracks it.
+- **Metal `renderer_bench`, five cells.** Measured at `d5d3a771` on the same Apple silicon Mac:
+  Ret-Settled p95 rose on `simple_shapes` (+79%), `moderate_paths` (+44%), `lion` (+51%) and
+  `gradient_grid` (+55%), and `simple_shapes` Settled p95 rose 11.5%; every p50 improved. The cause
+  is Apple GPU idle-to-active latency: a frame committed after a short GPU idle gap starts late on
+  the GPU. A spin before the retained draw closes the gap, and the reference binary grows the same
+  tail when it is given the same gap.
+- **Discrete Vulkan GPU, one cell.** With [#1704](https://github.com/jwmcglynn/donner/pull/1704),
+  `moderate_paths` Ret-Settled p50 is 9.1% slower. The cost is the C library allocator in the
+  readback snapshot copy: with glibc's mmap and trim thresholds pinned, all 18 cells are inside the
+  rule. Lavapipe passes all 18 cells.
+
+## Platform Cutover Decisions
+
+On 2026-10-05 the maintainer decided the three questions this design had left open for platform
+cutover:
+
+- **Qualification matrix.** Apple silicon Metal, a discrete Vulkan GPU and lavapipe are mandatory;
+  every other physical GPU and driver combination is best-effort.
+  [0064](0064-gpu_release_matrix.md) records which lanes exercise each combination.
+- **Native embedding surface.** v0.8 exposes no native embedding surface beyond internal callers:
+  the editor, the in-tree embed example and Donner's own tests. The
+  [native embedding guide](../guides/embedding_geode.md) documents that internal seam.
+- **Vulkan suballocation.** Not needed. On a discrete Vulkan GPU, physical residency equals the
+  logical allocation accounting plus one frame of transient textures, so each buffer keeps one
+  dedicated allocation behind `VulkanBufferAllocator.h`.
 
 ## Related Designs
 
@@ -1181,3 +1212,5 @@ The exact integrated candidate must satisfy all applicable platform gates:
 - [0043: Deterministic replay testing](0043-deterministic_replay_testing.md)
 - [0064: GPU release matrix and binary-size budgets](0064-gpu_release_matrix.md)
 - [WGSL shader compilation](../wgsl_compiler.md)
+- [GPU runtime reference](../gpu_runtime.md)
+- [Embedding Geode in a native host](../guides/embedding_geode.md)

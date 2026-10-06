@@ -3,7 +3,7 @@
 **Status:** Design\
 **Author:** Claude Opus 5\
 **Created:** 2026-08-24\
-**Updated:** 2026-10-05
+**Updated:** 2026-10-06
 
 ## Summary
 
@@ -36,7 +36,7 @@ the ones it has not gotten to: an uncovered target is a gap, a non-target is not
 - Owning the editor Wasm size budgets. They live in `donner/editor/wasm/BUILD.bazel`, gate the
   browser product, and are retuned there; this document records them.
 - Choosing which physical GPUs to buy. The matrix states which combinations are unqualified; the
-  decision about which of them become release-blocking is an open question below.
+  decision about which of them are release-blocking is recorded under Decisions below.
 
 ## Coverage vocabulary
 
@@ -265,10 +265,12 @@ package.
 The native gate is **Scheduled**: it runs in the nightly Perf workflow, so a regression lands
 before it fires.
 
-## Open questions
+## Decisions
 
-- Which physical GPUs are release-blocking rather than best-effort. 0053 asks this and the matrix
-  above makes the cost of each answer concrete: today the count is zero.
+- Release-blocking GPUs (maintainer, 2026-10-05): Apple silicon Metal, a discrete Vulkan GPU and
+  lavapipe are mandatory; every other physical GPU and driver combination is best-effort. This
+  answers the question 0053 asked. The tables above still describe which lanes run each
+  combination.
 
 ## Related Designs
 

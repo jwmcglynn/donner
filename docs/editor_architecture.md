@@ -329,13 +329,17 @@ registry and uploads CPU bitmap tiles through the GPU runtime; the OpenGL build 
 uses GL textures. `RenderPanePresenter` draws cached tiles through the ImGui draw list;
 editor chrome (selection outlines, marquee, handles) is drawn by `OverlayRenderer` or
 an immediate ImGui overlay. `svg::Renderer` resolves at build time to tiny-skia
-(software) or Geode (GPU, `DONNER_EDITOR_WGPU`); the shipped `editor` target uses Geode.
+(software) or Geode (GPU); the shipped `editor` target uses Geode. Editor code compiled
+for Geode is guarded by `DONNER_EDITOR_WGPU`, a macro that keeps its historical name; it
+selects the Donner GPU runtime, not the retired wgpu adapter.
 
 The editor settles a presentable surface's format before its UI and renderer pipelines
 are created. Geode presents through Metal on macOS, Vulkan on Linux, and WebGPU in Wasm.
 Native windows provide a Metal layer or GLFW Vulkan surface, and the Wasm host supplies a
 transferred canvas. The editor's UI and framebuffer contexts share the selected physical
-owner. Explicit offscreen render targets serve headless and replay paths.
+owner. Explicit offscreen render targets serve headless and replay paths. See the
+[GPU runtime reference](gpu_runtime.md) for context ownership, backend selection and how
+the editor behaves when the GPU fails.
 
 During an active transform, `SelectTool` exposes gesture-owned bounds and transform
 state. `OverlayRenderer` builds combined bounds and handles directly from that
