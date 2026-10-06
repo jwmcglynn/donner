@@ -2,8 +2,8 @@
 
 This backend is gated behind a build flag so default builds do not pull in the
 GPU runtime at all. Geode is the editor's default renderer. Native macOS and
-Linux use Donner's Metal and Vulkan devices. Explicit Linux test-only comparisons
-and frozen-corpus capture retain the pinned wgpu-native reference implementation.
+Linux use Donner's Metal and Vulkan devices. Only the explicit Linux test-only resvg
+comparison retains the pinned wgpu-native reference implementation.
 
 To enable:
 
@@ -173,8 +173,8 @@ donner_cc_library(
     name = "geode_path_encoder",
     srcs = ["GeodePathEncoder.cc"],
     hdrs = ["GeodePathEncoder.h"],
-    # //donner/gpu: the Metal and Vulkan solid-fill tests encode the
-    # frozen-baseline paths with the same banding the production path uses.
+    # //donner/gpu: the Metal and Vulkan solid-fill tests encode their scene's
+    # paths with the same banding the production path uses.
     # GeodePathEncoder is pure CPU path math with no GPU dependency.
     visibility = [
         "//donner/gpu:__subpackages__",
@@ -514,8 +514,8 @@ donner_cc_library(
     }),
 )
 
-# The wgpu-native reference the Linux resvg comparison and frozen-corpus reference capture render
-# the production Geode context through. It supplies runtime devices to an adopted root and never
+# The wgpu-native reference the Linux resvg comparison renders the production Geode context
+# through. It supplies runtime devices to an adopted root and never
 # recompiles the production sources. This rule is testonly and cannot enter an ordinary product's
 # dependency graph.
 donner_cc_library(
@@ -528,10 +528,7 @@ donner_cc_library(
     ],
     defines = ["DONNER_GEODE_WGPU_REFERENCE=1"],
     target_compatible_with = _GEODE_ONLY + ["@platforms//os:linux"],
-    visibility = [
-        "//donner/gpu/baseline:__pkg__",
-        "//donner/svg/renderer/tests:__pkg__",
-    ],
+    visibility = ["//donner/svg/renderer/tests:__pkg__"],
     deps = [
         ":geode_device",
         ":geode_runtime_device_source",
@@ -802,8 +799,8 @@ donner_cc_library(
         "GeodeBufferPool.h",
     ],
     target_compatible_with = _GEODE_ONLY,
-    # //donner/gpu: the frozen-baseline capture tool and the Vulkan vertical
-    # slice test render through GeoEncoder as a black box.
+    # //donner/gpu: the Vulkan solid-fill test renders through GeoEncoder as a
+    # black box.
     visibility = [
         "//donner/gpu:__subpackages__",
         "//donner/svg/renderer:__subpackages__",
@@ -1133,7 +1130,7 @@ donner_cc_test(
     # The gate fails closed on an automated lane rather than skipping, so the lane markers have to
     # reach the test through Bazel's scrubbed environment.
     env_inherit = [
-        "DONNER_BASELINE_REQUIRE_FROZEN_ADAPTER",
+        "DONNER_AUTOMATED_LANE",
         "GITHUB_ACTIONS",
     ],
     target_compatible_with = _GEODE_ONLY + select({

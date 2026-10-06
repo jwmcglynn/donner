@@ -81,13 +81,32 @@ donner_cc_library(
     ],
 )
 
-# The frozen-baseline scene shared by the black-box capture tool and the Metal
-# and Vulkan solid-fill tests, which all consume identical inputs from this
-# header.
+# Compares a solid-fill render against the renderer's golden for the same
+# scene, with the tolerance the renderer's Geode golden tests use.
 donner_cc_library(
-    name = "baseline_scene",
+    name = "solid_fill_golden",
     testonly = 1,
-    hdrs = ["tests/BaselineScene.h"],
+    srcs = ["tests/SolidFillGolden.cc"],
+    hdrs = ["tests/SolidFillGolden.h"],
+    data = ["//donner/svg/renderer/testdata"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        "//donner/base",
+        "//donner/editor/tests:bitmap_golden_compare",
+        "//donner/svg/renderer:pixel_format_utils",
+        "//donner/svg/renderer:renderer_interface",
+        "//donner/svg/renderer/tests:literal_fill_golden_tolerance",
+        "//donner/svg/renderer/tests:renderer_image_test_utils",
+        "@com_google_gtest//:gtest",
+    ],
+)
+
+# The solid-fill scene the Metal and Vulkan solid-fill tests render, matching
+# the renderer's literal_fill_solid.svg golden scene.
+donner_cc_library(
+    name = "solid_fill_scene",
+    testonly = 1,
+    hdrs = ["tests/SolidFillScene.h"],
     visibility = donner_internal_visibility(),
     deps = [
         "//donner/base",

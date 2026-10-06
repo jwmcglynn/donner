@@ -23,8 +23,8 @@ namespace donner::gpu::shader::programs {
  *
  * Entry points are named `vs_main` / `fs_main`; struct-typed WGSL stage IO is flattened to
  * annotated parameters/outputs with identical locations and builtins, and `.rgba` swizzles are
- * transliterated to `.xyzw`. The Metal solid-fill test compares pixels against a frozen
- * baseline rendered by the original WGSL shader, so behavior-affecting constructs must remain
+ * transliterated to `.xyzw`. The Metal and Vulkan solid-fill tests compare their renders against
+ * the renderer's `literal_fill_solid` golden, so behavior-affecting constructs must remain
  * semantically identical.
  */
 ShaderResult<IrModule> BuildSolidFillModule();

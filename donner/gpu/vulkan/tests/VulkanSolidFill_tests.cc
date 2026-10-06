@@ -1,16 +1,14 @@
 /// @file
-/// The Vulkan solid-fill test: renders the shared baseline scene through
+/// The Vulkan solid-fill test: renders the shared solid-fill scene through
 /// donner::gpu::vulkan::VulkanDevice with the SPIR-V emitted from the solid-fill IR program,
 /// renders the IDENTICAL scene through the production Geode path on native Vulkan in the same
-/// process (GeodeDevice + GeoEncoder, exactly like the baseline capture tool), and compares
-/// the two renders with the blessed pixelmatch comparator at strict identity.
+/// process (GeodeDevice + GeoEncoder), and compares the two renders within 8-bit quantization. It
+/// also compares its render against the renderer's golden for the same scene
+/// (`literal_fill_solid.png`) within the cross-driver tolerance the Geode golden tests use.
 ///
-/// Why a same-process A/B instead of a committed PNG: this is the frozen-baseline pattern
-/// executed per-device. Both halves run on the same physical (or software) Vulkan
-/// implementation, so the identity gate stays valid on the CI default (Mesa lavapipe software
-/// Vulkan) and on physical-GPU remote-execution workers alike, without one committed PNG having
-/// to match every rasterizer. The Geode render is also written to TEST_UNDECLARED_OUTPUTS_DIR so
-/// any run can freeze a device-specific PNG artifact.
+/// The same-process A/B is the strict check: both halves run on the same Vulkan implementation,
+/// so they must agree to the last bit apart from quantization, on software and hardware drivers
+/// alike. The golden comparison ties the result to what every other backend draws.
 ///
 /// The geometry, uniforms, and draw sequence mirror the production encoder's fillPath data flow
 /// exactly, matching MetalSolidFill_tests.cc: GeodePathEncoder banding, the same clip-space MVP
@@ -38,12 +36,12 @@
 #include "donner/gpu/shader/SpirvEmitter.h"
 #include "donner/gpu/shader/programs/SolidFill.h"
 #include "donner/gpu/shader/tests/CompiledCheckerboard.h"
-#include "donner/gpu/tests/BaselineScene.h"
 #include "donner/gpu/tests/CheckerboardPixelTests.h"
+#include "donner/gpu/tests/SolidFillGolden.h"
+#include "donner/gpu/tests/SolidFillScene.h"
 #include "donner/gpu/tests/SubmissionOrderScene.h"
 #include "donner/gpu/tests/VertexInputScene.h"
 #include "donner/gpu/vulkan/VulkanDevice.h"
-#include "donner/svg/renderer/RendererImageIO.h"
 #include "donner/svg/renderer/geode/GeoEncoder.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
 #include "donner/svg/renderer/geode/GeodeImagePipeline.h"
@@ -56,29 +54,27 @@ namespace donner::gpu::vulkan::tests {
 namespace {
 
 using geode::EncodedPath;
-using gpu::tests::BaselinePathSpec;
-using gpu::tests::BaselinePixelFromScene;
-using gpu::tests::BaselineScenePaths;
 using gpu::tests::BuildIdentity4x4;
 using gpu::tests::BuildSolidFillMvp;
 using gpu::tests::ExpandLegacyAxis;
-using gpu::tests::kBaselineSize;
+using gpu::tests::kSolidFillSize;
 using gpu::tests::LegacyAxis;
 using gpu::tests::LegacyBand;
+using gpu::tests::SolidFillPathSpec;
+using gpu::tests::SolidFillPixelFromScene;
+using gpu::tests::SolidFillScenePaths;
 using gpu::tests::SolidFillUniforms;
 using gpu::tests::WriteBoundingPolygon;
 using gpu::tests::WritePixelMapping;
 
-constexpr uint32_t kBytesPerRow = kBaselineSize * 4;  // 1024; already 256-byte aligned.
+constexpr uint32_t kBytesPerRow = kSolidFillSize * 4;  // 1024; already 256-byte aligned.
 
 /// C++ mirror of the shader's 288-byte Uniforms struct (layout anchored by the shader IR layout
 /// tests; field order matches slug_fill/the solid-fill IR program).
 
-/// Renders the shared baseline scene through the production Geode path as a black box (the same
-/// flow //donner/gpu/baseline:capture_baselines uses: native GeodeDevice + GeoEncoder + runtime
-/// readback) and returns the RGBA8 pixels, or
-/// empty on failure.
-std::optional<std::vector<uint8_t>> RenderNativeGeodeBaseline() {
+/// Renders the shared solid-fill scene through the production Geode path as a black box (native
+/// GeodeDevice + GeoEncoder + runtime readback) and returns the RGBA8 pixels, or empty on failure.
+std::optional<std::vector<uint8_t>> RenderNativeGeodeScene() {
   geode::GpuRootSelection selection;
   selection.label = "VulkanSolidFillProductionReference";
   selection.backend = geode::GpuBackendKind::NativeVulkan;
@@ -96,43 +92,31 @@ std::optional<std::vector<uint8_t>> RenderNativeGeodeBaseline() {
   geode::GeodeGradientPipeline& gradientPipeline = device->gradientPipeline();
   geode::GeodeImagePipeline& imagePipeline = device->imagePipeline();
 
-  gpu::Result<gpu::Texture> target = device->runtimeDevice().createTexture(gpu::TextureDescriptor{
-      "VulkanSolidFillBaselineTarget", gpu::Extent2d{kBaselineSize, kBaselineSize},
-      gpu::TextureFormat::RGBA8Unorm,
-      gpu::TextureUsage::RenderAttachment | gpu::TextureUsage::CopySrc});
+  gpu::Result<gpu::Texture> target = device->runtimeDevice().createTexture(
+      gpu::TextureDescriptor{"VulkanSolidFillTarget", gpu::Extent2d{kSolidFillSize, kSolidFillSize},
+                             gpu::TextureFormat::RGBA8Unorm,
+                             gpu::TextureUsage::RenderAttachment | gpu::TextureUsage::CopySrc});
   if (target.hasError()) {
     return std::nullopt;
   }
 
   {
     geode::GeoEncoder encoder(*device, pipeline, gradientPipeline, imagePipeline, target.result(),
-                              gpu::Extent2d{kBaselineSize, kBaselineSize});
+                              gpu::Extent2d{kSolidFillSize, kSolidFillSize});
     encoder.clear(css::RGBA(0, 0, 0, 0));  // Transparent background.
-    encoder.setTransform(BaselinePixelFromScene());
-    for (const BaselinePathSpec& spec : BaselineScenePaths()) {
+    encoder.setTransform(SolidFillPixelFromScene());
+    for (const SolidFillPathSpec& spec : SolidFillScenePaths()) {
       encoder.fillPath(spec.path, spec.color, spec.rule);
     }
     encoder.finish();
   }
 
   gpu::Result<std::vector<uint8_t>> pixels = geode::ReadTexturePixels(
-      device->runtimeDevice(), target.result(), gpu::Extent2d{kBaselineSize, kBaselineSize});
+      device->runtimeDevice(), target.result(), gpu::Extent2d{kSolidFillSize, kSolidFillSize});
   if (pixels.hasError()) {
     return std::nullopt;
   }
   return std::move(pixels).result();
-}
-
-/// Writes \p pixels as a PNG artifact under TEST_UNDECLARED_OUTPUTS_DIR (best-effort) so any
-/// run can freeze a device-specific baseline PNG.
-void WriteUndeclaredOutputPng(const std::vector<uint8_t>& pixels, const char* fileName) {
-  const char* outputsDir = std::getenv("TEST_UNDECLARED_OUTPUTS_DIR");
-  if (outputsDir == nullptr) {
-    return;
-  }
-  const std::string path = std::string(outputsDir) + "/" + fileName;
-  svg::RendererImageIO::writeRgbaPixelsToPngFile(path.c_str(), pixels, kBaselineSize, kBaselineSize,
-                                                 kBaselineSize);
 }
 
 /// A storage buffer plus the byte size it was created with, so bind groups can bind the FULL
@@ -375,10 +359,9 @@ void ExpectRendersMatchWithinQuantization(const svg::RendererBitmap& actual,
 // Keep the historical case identity for qualification reports across the reference cutover.
 TEST_F(VulkanSolidFillTest, MatchesProductionWgpuRender) {
   // ----- Independent production Geode render through native Vulkan -----
-  std::optional<std::vector<uint8_t>> productionPixels = RenderNativeGeodeBaseline();
+  std::optional<std::vector<uint8_t>> productionPixels = RenderNativeGeodeScene();
   ASSERT_TRUE(productionPixels.has_value())
-      << "The production Geode path could not render the baseline scene on native Vulkan";
-  WriteUndeclaredOutputPng(*productionPixels, "geode_solid_fill_baseline.png");
+      << "The production Geode path could not render the solid-fill scene on native Vulkan";
 
   // ----- Shader module and pipeline from the emitted SPIR-V -----
   shader::ShaderResult<shader::IrModule> irModule = shader::programs::BuildSolidFillModule();
@@ -432,13 +415,13 @@ TEST_F(VulkanSolidFillTest, MatchesProductionWgpuRender) {
   // ----- Render target, readback, dummies, identity instance transform -----
   Texture target =
       unwrap(device_->createTexture(TextureDescriptor{
-                 "target", Extent2d{kBaselineSize, kBaselineSize}, TextureFormat::RGBA8Unorm,
+                 "target", Extent2d{kSolidFillSize, kSolidFillSize}, TextureFormat::RGBA8Unorm,
                  TextureUsage::RenderAttachment | TextureUsage::CopySrc}),
              "createTexture target");
   TextureView targetView = unwrap(
       device_->createTextureView(target, TextureViewDescriptor{"targetView"}), "createTextureView");
   Buffer readback =
-      unwrap(device_->createBuffer(BufferDescriptor{"readback", kBytesPerRow * kBaselineSize,
+      unwrap(device_->createBuffer(BufferDescriptor{"readback", kBytesPerRow * kSolidFillSize,
                                                     BufferUsage::CopyDst | BufferUsage::MapRead}),
              "createBuffer readback");
 
@@ -469,9 +452,9 @@ TEST_F(VulkanSolidFillTest, MatchesProductionWgpuRender) {
       storageBuffer("instanceTransforms", &identityTransform, sizeof(identityTransform));
 
   // ----- Per-path geometry, uniforms, and bind groups (the production fillPath data flow) ----
-  const Transform2d pixelFromScene = BaselinePixelFromScene();
+  const Transform2d pixelFromScene = SolidFillPixelFromScene();
   std::vector<PathDraw> draws;
-  for (const BaselinePathSpec& spec : BaselineScenePaths()) {
+  for (const SolidFillPathSpec& spec : SolidFillScenePaths()) {
     const EncodedPath encoded = geode::GeodePathEncoder::encode(spec.path, spec.rule);
     ASSERT_GE(encoded.boundingVertexCount, 3u);
     LegacyAxis horizontal;
@@ -501,8 +484,8 @@ TEST_F(VulkanSolidFillTest, MatchesProductionWgpuRender) {
     BuildSolidFillMvp(pixelFromScene, uniforms.mvp);
     WritePixelMapping(pixelFromScene, uniforms);
     BuildIdentity4x4(uniforms.patternFromPath);
-    uniforms.viewport[0] = static_cast<float>(kBaselineSize);
-    uniforms.viewport[1] = static_cast<float>(kBaselineSize);
+    uniforms.viewport[0] = static_cast<float>(kSolidFillSize);
+    uniforms.viewport[1] = static_cast<float>(kSolidFillSize);
     uniforms.tileSize[0] = 1.0f;
     uniforms.tileSize[1] = 1.0f;
     const float alpha = spec.color.a / 255.0f;
@@ -557,7 +540,7 @@ TEST_F(VulkanSolidFillTest, MatchesProductionWgpuRender) {
   std::unique_ptr<CommandEncoder> encoder =
       unwrap(device_->createCommandEncoder(), "createCommandEncoder");
   Result<RenderPassEncoder*> passResult = encoder->beginRenderPass(RenderPassDescriptor{
-      "baselinePass",
+      "solidFillPass",
       {RenderPassColorAttachment{targetView, LoadOp::Clear, StoreOp::Store, {0, 0, 0, 0}}}});
   ASSERT_FALSE(passResult.hasError()) << passResult.error();
   RenderPassEncoder* pass = passResult.result();
@@ -572,9 +555,10 @@ TEST_F(VulkanSolidFillTest, MatchesProductionWgpuRender) {
   }
   const Status endStatus = pass->end();
   ASSERT_FALSE(endStatus.hasError()) << endStatus.error();
-  const Status copyStatus = encoder->copyTextureToBuffer(
-      TexelCopyTextureInfo{target}, readback, TexelCopyBufferLayout{0, kBytesPerRow, kBaselineSize},
-      Extent2d{kBaselineSize, kBaselineSize});
+  const Status copyStatus =
+      encoder->copyTextureToBuffer(TexelCopyTextureInfo{target}, readback,
+                                   TexelCopyBufferLayout{0, kBytesPerRow, kSolidFillSize},
+                                   Extent2d{kSolidFillSize, kSolidFillSize});
   ASSERT_FALSE(copyStatus.hasError()) << copyStatus.error();
 
   Result<CommandBuffer> commands = encoder->finish();
@@ -592,18 +576,20 @@ TEST_F(VulkanSolidFillTest, MatchesProductionWgpuRender) {
   ASSERT_FALSE(pixels.hasError()) << pixels.error();
 
   svg::RendererBitmap actual;
-  actual.dimensions = Vector2i(static_cast<int>(kBaselineSize), static_cast<int>(kBaselineSize));
+  actual.dimensions = Vector2i(static_cast<int>(kSolidFillSize), static_cast<int>(kSolidFillSize));
   actual.pixels = std::move(pixels).result();
   actual.rowBytes = kBytesPerRow;
   actual.alphaType = svg::AlphaType::Premultiplied;
 
   svg::RendererBitmap expected;
-  expected.dimensions = Vector2i(static_cast<int>(kBaselineSize), static_cast<int>(kBaselineSize));
+  expected.dimensions =
+      Vector2i(static_cast<int>(kSolidFillSize), static_cast<int>(kSolidFillSize));
   expected.pixels = std::move(*productionPixels);
   expected.rowBytes = kBytesPerRow;
   expected.alphaType = svg::AlphaType::Premultiplied;
 
   ExpectRendersMatchWithinQuantization(actual, expected);
+  gpu::tests::ExpectMatchesSolidFillGolden(actual, "vulkan_solid_fill_golden");
 }
 
 TEST_F(VulkanSolidFillTest, VertexAndInstanceOffsetsSelectTheExpectedPixels) {

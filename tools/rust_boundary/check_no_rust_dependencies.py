@@ -754,9 +754,7 @@ def _archive_consumer_findings(path: str, text: str) -> list[Finding]:
 GEODE_ORACLE_RUNTIME = "//third_party/webgpu-cpp:wgpu_native_reference_runtime"
 GEODE_ORACLE_VISIBILITY = {
     "geode_wgpu_util": ("//visibility:private",),
-    "geode_device_wgpu_reference_linux": (
-        "//donner/gpu/baseline:__pkg__", "//donner/svg/renderer/tests:__pkg__",
-    ),
+    "geode_device_wgpu_reference_linux": ("//donner/svg/renderer/tests:__pkg__",),
 }
 # The reference supplies runtime devices to the production Geode context: it compiles only its own
 # source and links the production device, never a second copy of the production sources. It

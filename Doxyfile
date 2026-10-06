@@ -1064,13 +1064,12 @@ EXCLUDE               += donner/gpu/shader/wgsl/Number.h \
                          donner/gpu/shader/wgsl/SpirvEmitter.h \
                          donner/gpu/shader/wgsl/TextEmitter.h
 
-# BaselineCorpus is test-only capture input; AllocationTracker is opt-in benchmark
-# instrumentation that replaces allocation operators. SlugFillArtifactValidation
-# is a package-private compile-time assertion helper used by shader compilation.
-# None exposes a production library interface. Only these three files are
-# excluded; the public shader, editor and GPU headers they test stay documented.
-EXCLUDE               += donner/gpu/baseline/BaselineCorpus.h \
-                         donner/svg/renderer/benchmarks/AllocationTracker.h \
+# AllocationTracker is opt-in benchmark instrumentation that replaces allocation
+# operators. SlugFillArtifactValidation is a package-private compile-time
+# assertion helper used by shader compilation. Neither exposes a production
+# library interface. Only these two files are excluded; the public shader,
+# editor and GPU headers they test stay documented.
+EXCLUDE               += donner/svg/renderer/benchmarks/AllocationTracker.h \
                          donner/gpu/shader/programs/SlugFillArtifactValidation.h
 
 # The EXCLUDE_SYMLINKS tag can be used to select whether or not files or

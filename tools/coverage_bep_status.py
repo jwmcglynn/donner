@@ -44,8 +44,6 @@ _FAILED_TEST_STATUSES = {
 _FAILED_ABORT_REASONS = {"LOADING_FAILURE", "ANALYSIS_FAILURE"}
 _MAX_FAILURE_LABELS = 20
 _GTEST_XML_BY_LABEL = {
-    "//donner/gpu/baseline:baseline_pixels_tests":
-        Path("donner/gpu/baseline/baseline_pixels_tests/test.xml"),
     "//donner/gpu/vulkan/tests:vulkan_color_matrix_tests":
         Path("donner/gpu/vulkan/tests/vulkan_color_matrix_tests/test.xml"),
     "//donner/svg/renderer/tests:renderer_geode_golden_tests":

@@ -1,8 +1,9 @@
 /// @file
-/// The Metal solid-fill test: renders the shared baseline scene
-/// through donner::gpu::metal::MetalDevice with the MSL emitted from the solid-fill IR program,
-/// and compares pixels against the frozen baseline captured from the current production
-/// renderer.
+/// The Metal solid-fill test: renders the shared solid-fill scene through
+/// donner::gpu::metal::MetalDevice with the MSL emitted from the solid-fill IR program, and
+/// compares pixels against the renderer's golden for the same scene
+/// (`literal_fill_solid.png`, which the Geode golden tests also check) within the same
+/// cross-driver tolerance.
 ///
 /// The geometry, uniforms, and draw sequence follow the production encoder's fillPath data flow:
 /// GeodePathEncoder banding, the same clip-space MVP construction (pixel -> clip with the Y flip
@@ -19,20 +20,14 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
-#include <filesystem>
 #include <memory>
 #include <optional>
 #include <span>
-#include <string_view>
-#include <system_error>
 #include <utility>
 #include <vector>
 
 #include "donner/base/Transform.h"
-#include "donner/base/tests/Runfiles.h"
-#include "donner/editor/tests/BitmapGoldenCompare.h"
 #include "donner/gpu/CommandEncoder.h"
-#include "donner/gpu/baseline/FrozenBaselinePolicy.h"
 #include "donner/gpu/metal/MetalDevice.h"
 #include "donner/gpu/metal/tests/MetalDeviceGate.h"
 #include "donner/gpu/shader/ModuleInterface.h"
@@ -40,8 +35,9 @@
 #include "donner/gpu/shader/programs/SolidFill.h"
 #include "donner/gpu/shader/tests/CompiledCheckerboard.h"
 #include "donner/gpu/shader/tests/StageIoTestModules.h"
-#include "donner/gpu/tests/BaselineScene.h"
 #include "donner/gpu/tests/CheckerboardPixelTests.h"
+#include "donner/gpu/tests/SolidFillGolden.h"
+#include "donner/gpu/tests/SolidFillScene.h"
 #include "donner/gpu/tests/SubmissionOrderScene.h"
 #include "donner/gpu/tests/VertexInputScene.h"
 #include "donner/svg/renderer/geode/GeodeCheckerboardPipeline.h"
@@ -53,20 +49,20 @@ namespace donner::gpu::metal::tests {
 namespace {
 
 using geode::EncodedPath;
-using gpu::tests::BaselinePathSpec;
-using gpu::tests::BaselinePixelFromScene;
-using gpu::tests::BaselineScenePaths;
 using gpu::tests::BuildIdentity4x4;
 using gpu::tests::BuildSolidFillMvp;
 using gpu::tests::ExpandLegacyAxis;
-using gpu::tests::kBaselineSize;
+using gpu::tests::kSolidFillSize;
 using gpu::tests::LegacyAxis;
 using gpu::tests::LegacyBand;
+using gpu::tests::SolidFillPathSpec;
+using gpu::tests::SolidFillPixelFromScene;
+using gpu::tests::SolidFillScenePaths;
 using gpu::tests::SolidFillUniforms;
 using gpu::tests::WriteBoundingPolygon;
 using gpu::tests::WritePixelMapping;
 
-constexpr uint32_t kBytesPerRow = kBaselineSize * 4;  // 1024; already 256-byte aligned.
+constexpr uint32_t kBytesPerRow = kSolidFillSize * 4;  // 1024; already 256-byte aligned.
 
 /// C++ mirror of the shader's 288-byte Uniforms struct (layout anchored by the shader IR layout
 /// tests; field order matches slug_fill/the solid-fill IR program).
@@ -79,9 +75,6 @@ struct SizedBuffer {
   Buffer buffer;           //!< The storage buffer.
   uint64_t sizeBytes = 0;  //!< Byte size the buffer was created with.
 };
-
-/// Where the frozen per-adapter baselines live in the runfiles tree.
-constexpr const char* kBaselinesRunfileDir = "donner/gpu/baseline/baselines";
 
 /// One path's GPU resources.
 struct PathDraw {
@@ -100,39 +93,9 @@ class MetalSolidFillTest : public testing::Test {
 protected:
   void SetUp() override {
     device_ = MetalDevice::Create();
-    // Same rule the frozen pixel gate uses: a lane that selected this target and then created no
-    // device has disabled the comparison, and reporting that as a pass hides it.
+    // A lane that selected this target and then created no device has disabled the comparison,
+    // and reporting that as a pass hides it.
     DONNER_REQUIRE_METAL_DEVICE(device_, "the Metal solid-fill tests");
-  }
-
-  /**
-   * Runfiles path of the frozen baseline filed for \p adapterName, or empty when no directory
-   * matches.
-   *
-   * Two GPUs running the same shaders round a covered edge texel differently, so the frozen
-   * pixels are filed one directory per adapter and this test resolves its own. Sharing the
-   * corpus rather than keeping a second copy of the same bytes is deliberate: a private golden is
-   * what let this test drift away from the renderer it exists to validate.
-   *
-   * The lookup deliberately does NOT live in SetUp. The baseline is an input to the pixel
-   * comparison and to nothing else in this fixture; gating every case on it would let a corpus
-   * that has not caught up with new hardware take unrelated regressions down with it, red on an
-   * automated lane and silent locally.
-   *
-   * @param adapterName Adapter to resolve a baseline for.
-   * @return The runfiles path, or an empty string when this adapter has no committed baseline.
-   */
-  static std::string baselinePathFor(std::string_view adapterName) {
-    const std::string path = std::string(kBaselinesRunfileDir) + "/" +
-                             baseline::AdapterSlug(adapterName, "Metal") +
-                             "/solid_fill_baseline.png";
-    // Rlocation composes a path without looking for the file, so the existence test has to be
-    // explicit. Returning a path for an adapter with no committed directory would walk straight
-    // past the unbaselined rule and fail later as a golden that would not open, which reports a
-    // missing baseline as a pixel mismatch.
-    std::error_code error;
-    return std::filesystem::exists(Runfiles::instance().Rlocation(path), error) ? path
-                                                                                : std::string();
   }
 
   /// Unwraps an RHI result, failing the test on error.
@@ -186,16 +149,6 @@ TEST_F(MetalSolidFillTest, CheckerboardPipelineUsesSelectedNativeDevice) {
 }
 
 TEST_F(MetalSolidFillTest, ReadBackBufferRejectsStaleHandleAfterSlotReuse) {
-  // This case must run on any adapter, including one the corpus has no baseline for: it compares
-  // no pixels, and gating it on the corpus would let hardware the baselines have not caught up
-  // with hide a real buffer regression - red on an automated lane, silent everywhere else.
-  //
-  // Two things hold that. Structurally, SetUp resolves no baseline and this fixture stores none,
-  // so nothing but the pixel case can be gated on one. And the unbaselined branch is reachable
-  // rather than dead: an adapter name no directory can match comes back empty here, which is only
-  // true because the resolver tests for the file rather than trusting a composed runfiles path.
-  EXPECT_TRUE(baselinePathFor("no adapter is named this").empty());
-
   // The readback helper must validate the handle's generation: after destroy + recreate the
   // freed slot is reused, and a stale handle must fail closed instead of reading the wrong
   // buffer.
@@ -312,24 +265,7 @@ TEST_F(MetalSolidFillTest, EmittedMslForAPositionOnlyFragmentEntryCompilesOnTheD
       << msl.result();
 }
 
-TEST_F(MetalSolidFillTest, MatchesFrozenBaseline) {
-  // ----- The frozen baseline for this run's adapter -----
-  const std::string goldenPath = baselinePathFor(device_->adapterName());
-  if (goldenPath.empty()) {
-    const baseline::MissingComparisonDisposition disposition =
-        baseline::DispositionForUnbaselinedAdapter(baseline::RunningUnderContinuousIntegration());
-    const std::string message = baseline::UnbaselinedAdapterMessage(
-        device_->adapterName(), "Metal", baseline::AdapterSlug(device_->adapterName(), "Metal"),
-        /*capturedPath=*/"",
-        "this test renders through donner::gpu, not the production path the baselines come "
-        "from; capture one with //donner/gpu/baseline:capture_baselines",
-        disposition);
-    if (disposition == baseline::MissingComparisonDisposition::FailClosed) {
-      FAIL() << message;
-    }
-    GTEST_SKIP() << message;
-  }
-
+TEST_F(MetalSolidFillTest, MatchesTheSharedGolden) {
   // ----- Shader module and pipeline from the emitted MSL -----
   shader::ShaderResult<shader::IrModule> irModule = shader::programs::BuildSolidFillModule();
   ASSERT_FALSE(irModule.hasError()) << irModule.error();
@@ -384,13 +320,13 @@ TEST_F(MetalSolidFillTest, MatchesFrozenBaseline) {
   // ----- Render target, readback, dummies, identity instance transform -----
   Texture target =
       unwrap(device_->createTexture(TextureDescriptor{
-                 "target", Extent2d{kBaselineSize, kBaselineSize}, TextureFormat::RGBA8Unorm,
+                 "target", Extent2d{kSolidFillSize, kSolidFillSize}, TextureFormat::RGBA8Unorm,
                  TextureUsage::RenderAttachment | TextureUsage::CopySrc}),
              "createTexture target");
   TextureView targetView = unwrap(
       device_->createTextureView(target, TextureViewDescriptor{"targetView"}), "createTextureView");
   Buffer readback =
-      unwrap(device_->createBuffer(BufferDescriptor{"readback", kBytesPerRow * kBaselineSize,
+      unwrap(device_->createBuffer(BufferDescriptor{"readback", kBytesPerRow * kSolidFillSize,
                                                     BufferUsage::CopyDst | BufferUsage::MapRead}),
              "createBuffer readback");
 
@@ -421,9 +357,9 @@ TEST_F(MetalSolidFillTest, MatchesFrozenBaseline) {
       storageBuffer("instanceTransforms", &identityTransform, sizeof(identityTransform));
 
   // ----- Per-path geometry, uniforms, and bind groups (the production fillPath data flow) ----
-  const Transform2d pixelFromScene = BaselinePixelFromScene();
+  const Transform2d pixelFromScene = SolidFillPixelFromScene();
   std::vector<PathDraw> draws;
-  for (const BaselinePathSpec& spec : BaselineScenePaths()) {
+  for (const SolidFillPathSpec& spec : SolidFillScenePaths()) {
     const EncodedPath encoded = geode::GeodePathEncoder::encode(spec.path, spec.rule);
     ASSERT_GE(encoded.boundingVertexCount, 3u);
     LegacyAxis horizontal;
@@ -453,8 +389,8 @@ TEST_F(MetalSolidFillTest, MatchesFrozenBaseline) {
     BuildSolidFillMvp(pixelFromScene, uniforms.mvp);
     WritePixelMapping(pixelFromScene, uniforms);
     BuildIdentity4x4(uniforms.patternFromPath);
-    uniforms.viewport[0] = static_cast<float>(kBaselineSize);
-    uniforms.viewport[1] = static_cast<float>(kBaselineSize);
+    uniforms.viewport[0] = static_cast<float>(kSolidFillSize);
+    uniforms.viewport[1] = static_cast<float>(kSolidFillSize);
     uniforms.tileSize[0] = 1.0f;
     uniforms.tileSize[1] = 1.0f;
     const float alpha = spec.color.a / 255.0f;
@@ -509,7 +445,7 @@ TEST_F(MetalSolidFillTest, MatchesFrozenBaseline) {
   std::unique_ptr<CommandEncoder> encoder =
       unwrap(device_->createCommandEncoder(), "createCommandEncoder");
   Result<RenderPassEncoder*> passResult = encoder->beginRenderPass(RenderPassDescriptor{
-      "baselinePass",
+      "solidFillPass",
       {RenderPassColorAttachment{targetView, LoadOp::Clear, StoreOp::Store, {0, 0, 0, 0}}}});
   ASSERT_FALSE(passResult.hasError()) << passResult.error();
   RenderPassEncoder* pass = passResult.result();
@@ -524,9 +460,10 @@ TEST_F(MetalSolidFillTest, MatchesFrozenBaseline) {
   }
   const Status endStatus = pass->end();
   ASSERT_FALSE(endStatus.hasError()) << endStatus.error();
-  const Status copyStatus = encoder->copyTextureToBuffer(
-      TexelCopyTextureInfo{target}, readback, TexelCopyBufferLayout{0, kBytesPerRow, kBaselineSize},
-      Extent2d{kBaselineSize, kBaselineSize});
+  const Status copyStatus =
+      encoder->copyTextureToBuffer(TexelCopyTextureInfo{target}, readback,
+                                   TexelCopyBufferLayout{0, kBytesPerRow, kSolidFillSize},
+                                   Extent2d{kSolidFillSize, kSolidFillSize});
   ASSERT_FALSE(copyStatus.hasError()) << copyStatus.error();
 
   Result<CommandBuffer> commands = encoder->finish();
@@ -539,20 +476,17 @@ TEST_F(MetalSolidFillTest, MatchesFrozenBaseline) {
       << "Command buffer did not complete cleanly: " << device_->lastErrorForTest();
   EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
 
-  // ----- Pixel comparison against the frozen baseline -----
+  // ----- Pixel comparison against the shared golden -----
   Result<std::vector<uint8_t>> pixels = device_->readBackBuffer(readback);
   ASSERT_FALSE(pixels.hasError()) << pixels.error();
 
   svg::RendererBitmap bitmap;
-  bitmap.dimensions = Vector2i(static_cast<int>(kBaselineSize), static_cast<int>(kBaselineSize));
+  bitmap.dimensions = Vector2i(static_cast<int>(kSolidFillSize), static_cast<int>(kSolidFillSize));
   bitmap.pixels = std::move(pixels).result();
   bitmap.rowBytes = kBytesPerRow;
   bitmap.alphaType = svg::AlphaType::Premultiplied;
 
-  // Strict identity: the Metal render must reproduce the frozen baseline byte-for-byte (zero
-  // mismatched pixels, anti-aliased pixels included).
-  editor::tests::CompareBitmapToGolden(bitmap, goldenPath, "metal_solid_fill",
-                                       editor::tests::PixelmatchIdentityParams());
+  gpu::tests::ExpectMatchesSolidFillGolden(bitmap, "metal_solid_fill_golden");
 }
 
 TEST_F(MetalSolidFillTest, VertexAndInstanceOffsetsSelectTheExpectedPixels) {

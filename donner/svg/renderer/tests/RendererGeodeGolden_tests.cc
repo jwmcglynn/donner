@@ -10,6 +10,7 @@
 #include "donner/base/ParseWarningSink.h"
 #include "donner/svg/parser/SVGParser.h"
 #include "donner/svg/renderer/tests/ImageComparisonTestFixture.h"
+#include "donner/svg/renderer/tests/LiteralFillGoldenTolerance.h"
 #include "donner/svg/renderer/tests/RendererTestBackend.h"
 
 /**
@@ -177,14 +178,10 @@ TEST_F(RendererGeodeGoldenTests, Edzample) {
 /// nothing; each scene covers several times this area.
 constexpr size_t kMinimumLiteralFillVisiblePixels = 4096;
 
-/// One golden per scene, compared with pixelmatch's default threshold and a
-/// small budget. Measured against the goldens, Mesa lavapipe and a discrete
-/// Vulkan GPU leave no pixel over this threshold in any scene, and earlier
-/// captures of the scenes on five further adapters (another Apple GPU
-/// generation, a virtual Metal device and other lavapipe builds) leave at most 3;
-/// a wrong fill rule or color moves more than a thousand.
+/// One golden per scene, compared with the tolerance every literal-fill comparison shares.
 ImageComparisonParams literalFillParams() {
-  return ImageComparisonParams::WithThreshold(0.02f, 10);
+  return ImageComparisonParams::WithThreshold(tests::kLiteralFillGoldenThreshold,
+                                              tests::kLiteralFillGoldenMaxMismatchedPixels);
 }
 
 /// Counts pixels with nonzero alpha.
@@ -209,6 +206,9 @@ protected:
     const std::string golden =
         "donner/svg/renderer/testdata/golden/literal_fill_" + std::string(scene) + ".png";
     compareWithGeodeGolden(svg.c_str(), golden.c_str(), literalFillParams());
+    if (HasFatalFailure() || IsSkipped()) {
+      return;
+    }
 
     SVGDocument document = loadSVG(svg.c_str());
     const RendererBitmap rendered = RenderDocumentWithBackend(document, RendererBackend::Geode);

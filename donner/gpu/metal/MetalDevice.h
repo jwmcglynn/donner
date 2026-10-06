@@ -335,11 +335,6 @@ public:
   /// completion handler, or an empty string if none occurred. Test/diagnostic accessor.
   std::string lastErrorForTest() const;
 
-  /// Name the Metal driver reports for the underlying device, for example `Apple M1 Pro`. Two
-  /// GPUs running the same shaders can round a covered edge texel differently, so anything
-  /// comparing this backend's pixels against a committed record has to know which one it is on.
-  std::string adapterName() const;
-
 protected:
   /// Identifies the `MTLDevice` this device records against, so a sibling device over the same
   /// `MTLDevice` can register its textures.

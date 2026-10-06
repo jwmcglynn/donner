@@ -50,10 +50,10 @@ was chosen. A change with no nontrivial algorithm says so.
 Name each test target and case that establishes the behavior. A behavior with no test is not
 established.
 
-### Frozen-baseline comparison
+### Golden-image comparison
 
-If the change alters rendered output, structural counters, or public error outcomes, name the
-frozen baselines it was compared against and the result. See `donner/gpu/baseline/README.md`.
+If the change alters rendered output or public error outcomes, name the golden-image tests it was
+checked against, such as `//donner/svg/renderer/tests:renderer_geode_golden_tests`, and the result.
 
 ### Third-party headers, tools, and SDKs used
 

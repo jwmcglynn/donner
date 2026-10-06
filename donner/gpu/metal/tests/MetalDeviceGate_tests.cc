@@ -49,7 +49,7 @@ TEST(MetalDeviceGateTests, AnAutomatedLaneFailsAndStopsTheCase) {
 
 TEST(MetalDeviceGateTests, ADeveloperMachineSkipsAndStopsTheCase) {
   const ScopedEnvironmentVariable githubActions("GITHUB_ACTIONS", nullptr);
-  const ScopedEnvironmentVariable donnerOverride("DONNER_BASELINE_REQUIRE_FROZEN_ADAPTER", nullptr);
+  const ScopedEnvironmentVariable donnerOverride("DONNER_AUTOMATED_LANE", nullptr);
 
   bool reachedEnd = false;
   // Intercepted rather than allowed to land, so this case reports its assertions instead of

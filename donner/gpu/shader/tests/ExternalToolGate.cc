@@ -5,12 +5,12 @@ namespace donner::gpu::shader {
 std::string MissingExternalToolMessage(std::string_view toolName,
                                        std::string_view unavailableReason,
                                        std::string_view laneMarker,
-                                       baseline::MissingComparisonDisposition disposition) {
+                                       ::donner::tests::MissingRequirementDisposition disposition) {
   std::string message(toolName);
   message += " is unavailable: ";
   message += unavailableReason;
 
-  if (disposition == baseline::MissingComparisonDisposition::FailClosed) {
+  if (disposition == ::donner::tests::MissingRequirementDisposition::FailClosed) {
     message +=
         "\nFailing rather than skipping: this lane selected the target, and gtest reports a "
         "run whose every case skipped as a pass, so skipping here would report success "

@@ -13,7 +13,6 @@
 #include <string_view>
 
 #include "donner/base/tests/ContinuousIntegrationMarkers.h"
-#include "donner/gpu/baseline/FrozenBaselinePolicy.h"
 
 namespace donner::gpu::shader {
 
@@ -30,7 +29,7 @@ namespace donner::gpu::shader {
 std::string MissingExternalToolMessage(std::string_view toolName,
                                        std::string_view unavailableReason,
                                        std::string_view laneMarker,
-                                       baseline::MissingComparisonDisposition disposition);
+                                       ::donner::tests::MissingRequirementDisposition disposition);
 
 }  // namespace donner::gpu::shader
 
@@ -44,21 +43,20 @@ std::string MissingExternalToolMessage(std::string_view toolName,
  * @param toolName Tool the suite drives, named the way a person would install it.
  * @param unavailableReason What the probe found, empty when the tool is usable.
  */
-#define DONNER_REQUIRE_EXTERNAL_TOOL(toolName, unavailableReason)                               \
-  do {                                                                                          \
-    const std::string donnerToolReason = (unavailableReason);                                   \
-    if (!donnerToolReason.empty()) {                                                            \
-      const ::donner::gpu::baseline::MissingComparisonDisposition donnerToolDisposition =       \
-          ::donner::gpu::baseline::DispositionForMissingAdapter(                                \
-              ::donner::tests::RunningUnderContinuousIntegration());                            \
-      const std::string donnerToolMessage = ::donner::gpu::shader::MissingExternalToolMessage(  \
-          (toolName), donnerToolReason, ::donner::tests::FirstContinuousIntegrationMarkerSet(), \
-          donnerToolDisposition);                                                               \
-      if (donnerToolDisposition ==                                                              \
-          ::donner::gpu::baseline::MissingComparisonDisposition::FailClosed) {                  \
-        ADD_FAILURE() << donnerToolMessage;                                                     \
-        return;                                                                                 \
-      }                                                                                         \
-      GTEST_SKIP() << donnerToolMessage;                                                        \
-    }                                                                                           \
+#define DONNER_REQUIRE_EXTERNAL_TOOL(toolName, unavailableReason)                                \
+  do {                                                                                           \
+    const std::string donnerToolReason = (unavailableReason);                                    \
+    if (!donnerToolReason.empty()) {                                                             \
+      const ::donner::tests::MissingRequirementDisposition donnerToolDisposition =               \
+          ::donner::tests::DispositionForMissingRequirement(                                     \
+              ::donner::tests::RunningUnderContinuousIntegration());                             \
+      const std::string donnerToolMessage = ::donner::gpu::shader::MissingExternalToolMessage(   \
+          (toolName), donnerToolReason, ::donner::tests::FirstContinuousIntegrationMarkerSet(),  \
+          donnerToolDisposition);                                                                \
+      if (donnerToolDisposition == ::donner::tests::MissingRequirementDisposition::FailClosed) { \
+        ADD_FAILURE() << donnerToolMessage;                                                      \
+        return;                                                                                  \
+      }                                                                                          \
+      GTEST_SKIP() << donnerToolMessage;                                                         \
+    }                                                                                            \
   } while (false)
