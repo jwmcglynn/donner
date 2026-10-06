@@ -243,6 +243,19 @@ async function waitForIdle(page: Page) {
   }).toEqual(expect.objectContaining({ pendingClick: false, workerBusy: false }));
 }
 
+// Opening a sample is observable before the editor displays it: the sample attribute changes, and
+// the editor can report idle while it still publishes the previous document's viewport and has not
+// started the new document's first render. A click then races that render and can select nothing
+// (#1683). So this waits until the published viewport is the splash, and then until the editor is
+// idle on it.
+async function waitForSplashDisplayed(page: Page) {
+  await expect.poll(async () => showsSplashDocument((await snapshot(page)).viewport), {
+    timeout: 15000,
+    message: "the editor must display the Donner splash",
+  }).toBe(true);
+  await waitForIdle(page);
+}
+
 // The aim maps a document point through the published viewport, so it waits until that viewport
 // describes the splash (see splash-aim.mjs), and fails rather than clicks if applying the move
 // changed the layout under it.
@@ -966,7 +979,7 @@ test(
         "data-active-sample-id",
         "donner-splash",
       );
-      await waitForIdle(page);
+      await waitForSplashDisplayed(page);
       let point = await zoomSplashForDrag(page);
       const beforeSelection = await snapshot(page);
       await dispatchPointer(page, point, true);
@@ -1085,7 +1098,7 @@ test(
         "data-active-sample-id",
         "donner-splash",
       );
-      await waitForIdle(page);
+      await waitForSplashDisplayed(page);
       await waitForResourceIdle(page);
       const baseline = monitoredMemory();
       const idleFrames = (await snapshot(page)).frameLoop!.renderedFrames;
@@ -1354,7 +1367,7 @@ test.describe("UI presentation diagnosis", () => {
           "donner-splash",
         );
         checkpoint("waiting for Donner document");
-        await waitForIdle(page);
+        await waitForSplashDisplayed(page);
         const start = await aimAtSplashD(page);
         checkpoint("selecting D");
         await dispatchPointer(page, start, true);
