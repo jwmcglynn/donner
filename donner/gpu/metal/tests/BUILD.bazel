@@ -558,6 +558,28 @@ donner_cc_test(
     ],
 )
 
+# A serial wait sleeps until the device's completion state changes instead of rechecking it on a
+# timer.
+donner_cc_test(
+    name = "metal_serial_wait_tests",
+    srcs = ["MetalSerialWait_tests.cc"],
+    env = _METAL_API_VALIDATION_ENV,
+    # Bazel scrubs the test environment, so the automated-lane markers have to be named here or
+    # the no-device rule can never see one and this test keeps skipping into a green report.
+    env_inherit = [
+        "DONNER_BASELINE_REQUIRE_FROZEN_ADAPTER",
+        "GITHUB_ACTIONS",
+    ],
+    target_compatible_with = ["@platforms//os:macos"],
+    deps = [
+        ":metal_device_gate",
+        "//donner/gpu",
+        "//donner/gpu:gpu_test_utils",
+        "//donner/gpu/metal:metal_device",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
 donner_cc_test(
     name = "metal_device_loss_tests",
     srcs = ["MetalDeviceLoss_tests.cc"],

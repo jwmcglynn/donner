@@ -275,8 +275,9 @@ struct CompletionState final : DeviceLossRelease {
   /// last completed, or when work was committed to an idle device. Written under
   /// \ref watermarkMutex; atomic so that a device whose work waits on this one can read it.
   std::atomic<std::chrono::steady_clock::rep> lastProgressTicks{0};
-  /// Notified under \ref watermarkMutex whenever a command buffer completes or the root is
-  /// declared lost, which is what a submission waiting for room waits on.
+  /// Notified under \ref watermarkMutex whenever a command buffer completes, the completed serial
+  /// advances or the root is declared lost, which is what a submission waiting for room and a
+  /// wait for a serial sleep on.
   std::condition_variable completionAdvanced;
 
   /// Records the current time as this device's last progress. Requires \ref watermarkMutex.
@@ -422,6 +423,8 @@ void PublishCompletion(CompletionState& state, uint64_t serial, NSError* executi
       }
       state.completedSerial.store(completed, std::memory_order_release);
       state.signalCompletionLocked(completed);
+      // Wakes a serial wait, which ends once the completed serial reaches its own.
+      state.completionAdvanced.notify_all();
     }
   }
 
@@ -894,6 +897,8 @@ struct MetalDevice::Impl {
   double submissionWaitCapSeconds = kSubmissionWaitCapSeconds;
   /// Submissions that waited for room; see \ref MetalDevice::commandBufferRoomWaitsForTest.
   std::atomic<uint64_t> commandBufferRoomWaits{0};
+  /// Looks serial waits took at completion state; see \ref MetalDevice::serialWaitLooksForTest.
+  std::atomic<uint64_t> serialWaitLooks{0};
 
   /// Whether resources are built for unified memory; decides every storage mode below.
   bool unifiedMemory = true;
@@ -1135,6 +1140,10 @@ uint64_t MetalDevice::commandBufferRoomWaitsForTest() const {
   return impl_->commandBufferRoomWaits.load(std::memory_order_acquire);
 }
 
+uint64_t MetalDevice::serialWaitLooksForTest() const {
+  return impl_->serialWaitLooks.load(std::memory_order_acquire);
+}
+
 uint64_t MetalDevice::commandBuffersInFlightForTest() const {
   CompletionState& state = *impl_->completionState;
   std::lock_guard<std::mutex> lock(state.watermarkMutex);
@@ -1206,8 +1215,12 @@ bool MetalDevice::onWaitForSerial(uint64_t serial, double timeoutSeconds) {
   const auto deadline = std::chrono::steady_clock::now() +
                         std::chrono::duration_cast<std::chrono::steady_clock::duration>(
                             std::chrono::duration<double>(timeoutSeconds));
-  const CompletionState& state = *impl_->completionState;
+  CompletionState& state = *impl_->completionState;
+  // Each change that can end the wait notifies under this lock: a serial published, or a loss
+  // declared over the root, which a failure always declares before it sets the error flag.
+  std::unique_lock<std::mutex> lock(state.watermarkMutex);
   for (;;) {
+    impl_->serialWaitLooks.fetch_add(1, std::memory_order_release);
     // Completion is read before the error flag: a handler publishes a failure before it advances
     // the serial, so a serial seen complete here brings its failure with it, and failed work can
     // never read as finished.
@@ -1226,7 +1239,7 @@ bool MetalDevice::onWaitForSerial(uint64_t serial, double timeoutSeconds) {
     if (std::chrono::steady_clock::now() >= deadline) {
       return false;
     }
-    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    state.completionAdvanced.wait_until(lock, deadline);
   }
 }
 
@@ -2946,10 +2959,14 @@ public:
   uint64_t completedSubmissionSerial() const override { return device_.completedSerial(); }
 
   MapWaitKind waitForSubmission(uint64_t serial, double sliceSeconds) override {
-    // Metal signals completion by running a handler on its own thread, so the wait underneath
-    // rechecks the counter that handler advances rather than blocking on a signal of its own.
+    if (device_.completedSerial() >= serial) {
+      // Already done, so the wait below would return without blocking on anything; saying it used
+      // a completion signal would credit the statistics with a wait that never happened.
+      return MapWaitKind::Polled;
+    }
+    // The serial wait sleeps until the completion handler publishes the serial.
     (void)device_.waitForSerial(serial, sliceSeconds);
-    return MapWaitKind::Polled;
+    return MapWaitKind::CompletionEvent;
   }
 
   bool deviceLost() const override {

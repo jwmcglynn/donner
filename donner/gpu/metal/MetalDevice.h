@@ -252,7 +252,8 @@ public:
   void holdNextCompletionForTest();
 
   /// Publishes the completion \ref holdNextCompletionForTest parked, from the calling thread, or
-  /// lets it publish normally when its handler has not run yet. Safe when nothing is held.
+  /// lets it publish normally when its handler has not run yet. Safe when nothing is held, and
+  /// callable from any thread while the device's own thread waits.
   void releaseHeldCompletionForTest();
 
   /// Bounds how long a present waits for its frame's work, in place of the five seconds it
@@ -279,6 +280,11 @@ public:
   /// Command buffers committed and not yet completed, as the backstop counts them. Test
   /// accessor, readable from any thread.
   [[nodiscard]] uint64_t commandBuffersInFlightForTest() const;
+
+  /// How many times serial waits on this device have looked at its completion state, so a case
+  /// can tell a wait that looks only when that state changes from one that keeps checking. Test
+  /// accessor, readable from any thread.
+  [[nodiscard]] uint64_t serialWaitLooksForTest() const;
 
   /// Waits until \p count submissions have had all their completion handlers run on this device,
   /// parked ones included. Test seam for ordering completions deterministically.
@@ -402,10 +408,10 @@ protected:
   MapSliceReport onWaitMappingSlice(uint32_t mappingSlotIndex, double sliceSeconds) override;
 
   /**
-   * Polls the completion counter until it reaches \p serial, the budget runs out, or a completed
-   * command buffer reports an execution error (see \ref lastErrorForTest). Completion handlers
-   * run on a Metal-internal thread, so rechecking a counter is enough and keeps this backend free
-   * of extra synchronization primitives.
+   * Sleeps until the completion counter reaches \p serial, the budget runs out, a completed
+   * command buffer reports an execution error (see \ref lastErrorForTest), or the root is
+   * declared lost. Completion handlers run on a Metal-internal thread and wake the wait each time
+   * a command buffer completes or a serial is published, so it returns as soon as the work does.
    *
    * @param serial Submission serial to wait for.
    * @param timeoutSeconds Longest to wait, in seconds.
