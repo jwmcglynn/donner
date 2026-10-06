@@ -1,5 +1,5 @@
 name: Upload Bazel test artifacts
-description: Collect Bazel test logs and undeclared outputs for failed CI jobs.
+description: Collect Bazel test logs and undeclared outputs from a CI job.
 
 inputs:
   name:
