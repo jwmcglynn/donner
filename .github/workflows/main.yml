@@ -1210,7 +1210,8 @@ jobs:
           # Tests that launch a browser run in the next step instead.
           tools/ci_bazel_test.sh bazelisk test --config=ci --test_output=errors \
             --test_tag_filters=-manual,-perf,-requires_metal_toolchain,-ci-remote-gpu,-launches-browser \
-            $BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS $BROWSER_STALL_TEST_FLAGS $HOSTED_MACOS_QUARANTINE_TEST_FLAGS $TARGETS
+            $HOSTED_MACOS_QUARANTINE_TEST_FLAGS \
+            $BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS $BROWSER_STALL_TEST_FLAGS $TARGETS
         # Deterministic fuzzer corpus replay remains in this Bazel suite. Sanitizer-backed mutation
         # runs nightly or on demand in `.github/workflows/fuzz.yml`.
 
@@ -1238,7 +1239,8 @@ jobs:
           tools/ci_bazel_test.sh bazelisk test --config=ci --test_output=errors \
             --local_test_jobs=1 \
             --test_tag_filters=launches-browser,-manual,-perf,-requires_metal_toolchain,-ci-remote-gpu \
-            $BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS $BROWSER_STALL_TEST_FLAGS $HOSTED_MACOS_QUARANTINE_TEST_FLAGS $TARGETS
+            $HOSTED_MACOS_QUARANTINE_TEST_FLAGS \
+            $BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS $BROWSER_STALL_TEST_FLAGS $TARGETS
 
       - name: Test (Geode editor lane)
         id: geode_test
@@ -1340,8 +1342,9 @@ jobs:
           bazelisk test --config=ci --test_output=errors --nocache_test_results \
             --flaky_test_attempts=1 --runs_per_test=1 --local_test_jobs=1 --keep_going \
             --build_event_json_file="${RUNNER_TEMP}/browser-gpu-serial.bep.json" \
+            $HOSTED_MACOS_QUARANTINE_TEST_FLAGS \
             $BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS $BROWSER_STALL_TEST_FLAGS \
-            $HOSTED_MACOS_QUARANTINE_TEST_FLAGS //tools/ci:browser_gpu_comparison || bazel_status=$?
+            //tools/ci:browser_gpu_comparison || bazel_status=$?
           report_status=0
           python3 tools/browser_gpu_test_summary.py \
             "${RUNNER_TEMP}/browser-gpu-serial.bep.json" \
@@ -1367,8 +1370,9 @@ jobs:
           bazelisk test --config=ci --test_output=errors --nocache_test_results \
             --flaky_test_attempts=1 --runs_per_test=1 --local_test_jobs=4 --keep_going \
             --build_event_json_file="${RUNNER_TEMP}/browser-gpu-parallel.bep.json" \
+            $HOSTED_MACOS_QUARANTINE_TEST_FLAGS \
             $BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS $BROWSER_STALL_TEST_FLAGS \
-            $HOSTED_MACOS_QUARANTINE_TEST_FLAGS //tools/ci:browser_gpu_comparison || bazel_status=$?
+            //tools/ci:browser_gpu_comparison || bazel_status=$?
           report_status=0
           python3 tools/browser_gpu_test_summary.py \
             "${RUNNER_TEMP}/browser-gpu-parallel.bep.json" \

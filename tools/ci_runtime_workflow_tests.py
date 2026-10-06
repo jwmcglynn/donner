@@ -139,7 +139,8 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         hosted = self._job_body("macos")
         environment = os.environ.copy()
         environment.update(RUNNER_TEMP=".", BAZEL_MACOS_BUILD_FLAGS="",
-                           BAZEL_MACOS_TEST_FLAGS="", BROWSER_STALL_TEST_FLAGS="")
+                           BAZEL_MACOS_TEST_FLAGS="", BROWSER_STALL_TEST_FLAGS="",
+                           HOSTED_MACOS_QUARANTINE_TEST_FLAGS="")
         prefix = "bazelisk() { return 3; }; python3() { echo summary-ran; return 0; };\n"
         for mode in ("serial", "parallel"):
             body = self._step_body(hosted, "Compare browser GPU tests (%s)" % mode)
