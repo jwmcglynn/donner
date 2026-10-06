@@ -6211,7 +6211,7 @@ TEST(RenderCoordinatorTest, NothingToPresentKeepsThePresentedFrameUntilARenderPr
     GTEST_SKIP() << "Geode-only presentation regression: TinySkia test path lacks a GL context "
                     "for composited texture upload.";
   }
-  RenderCoordinatorTestAccess::useFakeRetryClock(coordinator);
+  RenderCoordinatorTestAccess::useFakeSchedulingClock(coordinator);
   const auto runFrame = [&] {
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
     while (coordinator.asyncRenderer().isBusy() && std::chrono::steady_clock::now() < deadline) {
@@ -6256,7 +6256,8 @@ TEST(RenderCoordinatorTest, NothingToPresentKeepsThePresentedFrameUntilARenderPr
   EXPECT_EQ(coordinator.nothingToPresentResultTotalForDiagnostics(), 1u);
 
   coordinator.asyncRenderer().setWithholdCompositorTilesForTesting(false);
-  RenderCoordinatorTestAccess::advanceFakeRetryClock(NothingToPresentRetry::kRetryDelays.front());
+  RenderCoordinatorTestAccess::advanceFakeSchedulingClock(
+      NothingToPresentRetry::kRetryDelays.front());
   EXPECT_EQ(presentCurrentVersion(), editedVersion)
       << "once the renderer produces tiles again, the owed version presents";
 }
@@ -6654,7 +6655,7 @@ TEST(RenderCoordinatorTest, ZoomedPaintUsesCompletedOverviewWhenDetailedRenderFa
   if (!coordinator.renderer().requiresTextureSnapshotPresentation()) {
     GTEST_SKIP() << "Requires native texture presentation";
   }
-  RenderCoordinatorTestAccess::useFakeRetryClock(coordinator);
+  RenderCoordinatorTestAccess::useFakeSchedulingClock(coordinator);
   const auto render = [&]() {
     if (!coordinator.maybeRequestRender(app, selectTool, viewport, &textures)) {
       return false;
@@ -6685,7 +6686,8 @@ TEST(RenderCoordinatorTest, ZoomedPaintUsesCompletedOverviewWhenDetailedRenderFa
   EXPECT_GT(coordinator.nothingToPresentResultTotalForDiagnostics(), 0u);
 
   coordinator.asyncRenderer().setWithholdCompositorTilesForTesting(false);
-  RenderCoordinatorTestAccess::advanceFakeRetryClock(NothingToPresentRetry::kRetryDelays.front());
+  RenderCoordinatorTestAccess::advanceFakeSchedulingClock(
+      NothingToPresentRetry::kRetryDelays.front());
   ASSERT_TRUE(render());
   EXPECT_TRUE(textures.activeTilesViewportBounded())
       << "Publishing the overview must still permit a detailed render when the worker recovers; "

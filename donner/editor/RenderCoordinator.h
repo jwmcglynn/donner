@@ -269,6 +269,19 @@ public:
   [[nodiscard]] AsyncRenderer& asyncRenderer() { return renderWorker_.asyncRenderer; }
   /// Return the background render worker.
   [[nodiscard]] const AsyncRenderer& asyncRenderer() const { return renderWorker_.asyncRenderer; }
+  /**
+   * Replace the steady clock behind the coordinator's scheduling windows: the canvas-size commit
+   * throttle, the raster-viewport settle window, the pixel-capture commit wake and the
+   * nothing-to-present retry pacing. A deterministic replay drives it from recorded frame time so
+   * those windows close on the same frame on every run, however fast the host runs the frames.
+   * Install it before the coordinator schedules anything: time points already recorded on one
+   * clock are not rebased onto the other.
+   *
+   * @param clock Clock to read, or an empty function to restore the steady clock.
+   */
+  void setSchedulingClockForTesting(std::function<std::chrono::steady_clock::time_point()> clock) {
+    schedulingClockForTesting_ = std::move(clock);
+  }
   /// Expose the renderer owned by the worker bundle.
   [[nodiscard]] svg::Renderer& renderer() { return renderWorker_.renderer; }
   /// Return cached selection bounds and their document versions.
@@ -525,7 +538,8 @@ private:
       std::uint64_t documentGeneration, Entity selectedEntity, std::uint64_t version,
       const EditorRasterViewport& visibleRaster) const;
   void noteSelectedPromotionAvailability(const RenderResult& result);
-  [[nodiscard]] std::chrono::steady_clock::time_point nothingToPresentRetryNow() const;
+  /// Current time for scheduling decisions; see \ref setSchedulingClockForTesting.
+  [[nodiscard]] std::chrono::steady_clock::time_point schedulingNow() const;
   void acceptPixelCaptureResult(RenderResult& result, const EditorApp& app,
                                 const ViewportState& viewport);
   [[nodiscard]] bool preparePixelCaptureRequest(const EditorApp& app, const ViewportState& viewport,
@@ -678,8 +692,8 @@ private:
   NothingToPresentRetry nothingToPresentRetry_;
   /// Cumulative count of worker results that had nothing to present.
   std::uint64_t nothingToPresentResultTotal_ = 0;
-  /// Test-only replacement for the steady clock that paces \ref nothingToPresentRetry_.
-  std::chrono::steady_clock::time_point (*nothingToPresentRetryClockForTesting_)() = nullptr;
+  /// Test-only replacement for the steady clock behind \ref schedulingNow.
+  std::function<std::chrono::steady_clock::time_point()> schedulingClockForTesting_;
   bool documentPixelCaptureEnabled_ = false;
   bool captureUnavailable_ = false;
   std::uint64_t documentPixelCaptureSessionId_ = 0;

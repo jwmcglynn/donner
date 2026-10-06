@@ -1288,6 +1288,81 @@ TEST(RenderCoordinatorTest, MaybeRequestRenderDispatchesWithoutTextureCache) {
   EXPECT_EQ(app.document().document().canvasSize(), viewport.desiredCanvasSize());
 }
 
+// A deterministic replay drives the coordinator's scheduling clock from recorded frame time, so a
+// canvas-size change must wait on that clock, not on the steady clock: otherwise a faster host
+// commits the canvas, and posts the renders that depend on it, on a different replay frame.
+TEST(RenderCoordinatorTest, CanvasCommitThrottleRunsOnTheSchedulingClock) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kTwoRectSvg));
+  RenderCoordinator coordinator;
+  SelectTool selectTool;
+  RenderCoordinatorTestAccess::useFakeSchedulingClock(coordinator);
+  ViewportState viewport = MakeViewport(app);
+  const auto requestAndSettle = [&] {
+    coordinator.maybeRequestRender(app, selectTool, viewport, /*textures=*/nullptr);
+    coordinator.asyncRenderer().cancelInFlight();
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (coordinator.asyncRenderer().isBusy() && std::chrono::steady_clock::now() < deadline) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    ASSERT_FALSE(coordinator.asyncRenderer().isBusy());
+  };
+
+  ASSERT_NO_FATAL_FAILURE(requestAndSettle());
+  const Vector2i firstCanvas = app.document().document().canvasSize();
+  ASSERT_EQ(firstCanvas, viewport.desiredCanvasSize())
+      << "the initial canvas already matches the viewport";
+
+  viewport.zoomAround(2.0, viewport.paneCenter());
+  ASSERT_NE(viewport.desiredCanvasSize(), firstCanvas);
+  ASSERT_NO_FATAL_FAILURE(requestAndSettle());
+  EXPECT_EQ(app.document().document().canvasSize(), firstCanvas)
+      << "a changed canvas size waits for the commit throttle";
+
+  RenderCoordinatorTestAccess::advanceFakeSchedulingClock(std::chrono::milliseconds(119));
+  ASSERT_NO_FATAL_FAILURE(requestAndSettle());
+  EXPECT_EQ(app.document().document().canvasSize(), firstCanvas)
+      << "119 ms on the scheduling clock is still inside the throttle";
+
+  RenderCoordinatorTestAccess::advanceFakeSchedulingClock(std::chrono::milliseconds(1));
+  ASSERT_NO_FATAL_FAILURE(requestAndSettle());
+  EXPECT_EQ(app.document().document().canvasSize(), viewport.desiredCanvasSize())
+      << "the throttle elapses on the scheduling clock, whatever the steady clock says";
+}
+
+// The idle loop wakes for a pending pixel-capture canvas commit; that wake must count down on the
+// same scheduling clock as the throttle it waits for.
+TEST(RenderCoordinatorTest, PixelCaptureCanvasCommitWakeRunsOnTheSchedulingClock) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kTwoRectSvg));
+  RenderCoordinator coordinator;
+  SelectTool selectTool;
+  RenderCoordinatorTestAccess::useFakeSchedulingClock(coordinator);
+  coordinator.setDocumentPixelCaptureEnabled(true);
+  ViewportState viewport = MakeViewport(app);
+  const auto requestAndSettle = [&] {
+    coordinator.maybeRequestRender(app, selectTool, viewport, /*textures=*/nullptr);
+    coordinator.asyncRenderer().cancelInFlight();
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (coordinator.asyncRenderer().isBusy() && std::chrono::steady_clock::now() < deadline) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    ASSERT_FALSE(coordinator.asyncRenderer().isBusy());
+  };
+
+  ASSERT_NO_FATAL_FAILURE(requestAndSettle());
+  viewport.zoomAround(2.0, viewport.paneCenter());
+  ASSERT_NO_FATAL_FAILURE(requestAndSettle());
+  EXPECT_THAT(coordinator.nextPixelCaptureCanvasCommitWakeSeconds(),
+              ::testing::Optional(::testing::FloatNear(0.120f, 1e-4f)))
+      << "the wake is the whole throttle away";
+
+  RenderCoordinatorTestAccess::advanceFakeSchedulingClock(std::chrono::milliseconds(119));
+  EXPECT_THAT(coordinator.nextPixelCaptureCanvasCommitWakeSeconds(),
+              ::testing::Optional(::testing::FloatNear(0.001f, 1e-4f)))
+      << "the wake counts down on the scheduling clock, whatever the steady clock says";
+}
+
 TEST(RenderCoordinatorTest, HeldDragWithoutPromotedTileRendersChangedDocumentVersion) {
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(kTwoRectSvg));
@@ -1463,7 +1538,7 @@ TEST(RenderCoordinatorTest, RenderWithNothingToPresentIsNotRepostedEveryFrame) {
   GlTextureCache textures;
   SelectTool selectTool;
   const ViewportState viewport = MakeViewport(app);
-  RenderCoordinatorTestAccess::useFakeRetryClock(coordinator);
+  RenderCoordinatorTestAccess::useFakeSchedulingClock(coordinator);
   coordinator.asyncRenderer().setWithholdCompositorTilesForTesting(true);
 
   const int posted = CountPostedRenders(coordinator, app, selectTool, viewport, textures, 10);
@@ -1477,11 +1552,11 @@ TEST(RenderCoordinatorTest, RenderWithNothingToPresentIsNotRepostedEveryFrame) {
       << "the idle loop must wake for the retry without input";
 
   for (const std::chrono::milliseconds delay : NothingToPresentRetry::kRetryDelays) {
-    RenderCoordinatorTestAccess::advanceFakeRetryClock(delay);
+    RenderCoordinatorTestAccess::advanceFakeSchedulingClock(delay);
     EXPECT_EQ(CountPostedRenders(coordinator, app, selectTool, viewport, textures, 10), 1)
         << "one retry once " << delay.count() << " ms have passed";
   }
-  RenderCoordinatorTestAccess::advanceFakeRetryClock(std::chrono::minutes(1));
+  RenderCoordinatorTestAccess::advanceFakeSchedulingClock(std::chrono::minutes(1));
   EXPECT_EQ(CountPostedRenders(coordinator, app, selectTool, viewport, textures, 10), 0)
       << "after the last retry fails, the identical request waits until something changes";
   EXPECT_EQ(coordinator.nextNothingToPresentRetryWakeSeconds(), std::nullopt);
@@ -1515,7 +1590,7 @@ TEST(RenderCoordinatorTest, FailedSelectedOverdrawRetriesVisibleRasterAfterRetry
   ASSERT_GT(viewport.selectedPrewarmRasterViewport().outputSizePx.x, visibleRaster.outputSizePx.x);
 
   RenderCoordinator coordinator;
-  RenderCoordinatorTestAccess::useFakeRetryClock(coordinator);
+  RenderCoordinatorTestAccess::useFakeSchedulingClock(coordinator);
   const std::uint64_t generation = app.document().documentGeneration();
   const std::uint64_t version = app.document().currentFrameVersion();
   const Entity selectedEntity = target->unsafeEntityHandle().entity();
@@ -1562,11 +1637,11 @@ TEST(RenderCoordinatorTest, PresentationRefreshIsPostedAfterRetriesRunOut) {
   GlTextureCache textures;
   SelectTool selectTool;
   const ViewportState viewport = MakeViewport(app);
-  RenderCoordinatorTestAccess::useFakeRetryClock(coordinator);
+  RenderCoordinatorTestAccess::useFakeSchedulingClock(coordinator);
   coordinator.asyncRenderer().setWithholdCompositorTilesForTesting(true);
   ASSERT_EQ(CountPostedRenders(coordinator, app, selectTool, viewport, textures, 10), 1);
   for (const std::chrono::milliseconds delay : NothingToPresentRetry::kRetryDelays) {
-    RenderCoordinatorTestAccess::advanceFakeRetryClock(delay);
+    RenderCoordinatorTestAccess::advanceFakeSchedulingClock(delay);
     ASSERT_EQ(CountPostedRenders(coordinator, app, selectTool, viewport, textures, 10), 1);
   }
   ASSERT_EQ(CountPostedRenders(coordinator, app, selectTool, viewport, textures, 10), 0)
@@ -1587,13 +1662,14 @@ TEST(RenderCoordinatorTest, DueRetryDoesNotKeepTheIdleLoopAwake) {
   GlTextureCache textures;
   SelectTool selectTool;
   const ViewportState viewport = MakeViewport(app);
-  RenderCoordinatorTestAccess::useFakeRetryClock(coordinator);
+  RenderCoordinatorTestAccess::useFakeSchedulingClock(coordinator);
   coordinator.asyncRenderer().setWithholdCompositorTilesForTesting(true);
   ASSERT_EQ(CountPostedRenders(coordinator, app, selectTool, viewport, textures, 10), 1);
   ASSERT_THAT(coordinator.nextNothingToPresentRetryWakeSeconds(),
               ::testing::Optional(::testing::FloatNear(0.1f, 1e-4f)));
 
-  RenderCoordinatorTestAccess::advanceFakeRetryClock(NothingToPresentRetry::kRetryDelays.front());
+  RenderCoordinatorTestAccess::advanceFakeSchedulingClock(
+      NothingToPresentRetry::kRetryDelays.front());
   coordinator.pollRenderResult(app, viewport, textures);
   EXPECT_EQ(coordinator.nextNothingToPresentRetryWakeSeconds(), std::nullopt)
       << "a due retry must not ask the idle loop to wake again";
@@ -1610,7 +1686,7 @@ TEST(RenderCoordinatorTest, NothingToPresentRetryStartsOverForANewVersionOrDocum
   GlTextureCache textures;
   SelectTool selectTool;
   const ViewportState viewport = MakeViewport(app);
-  RenderCoordinatorTestAccess::useFakeRetryClock(coordinator);
+  RenderCoordinatorTestAccess::useFakeSchedulingClock(coordinator);
   coordinator.asyncRenderer().setWithholdCompositorTilesForTesting(true);
   ASSERT_EQ(CountPostedRenders(coordinator, app, selectTool, viewport, textures, 10), 1);
 
@@ -1635,7 +1711,7 @@ TEST(RenderCoordinatorTest, PixelCaptureWithNothingToPresentIsNotRepostedEveryFr
   GlTextureCache textures;
   SelectTool selectTool;
   const ViewportState viewport = MakeViewport(app);
-  RenderCoordinatorTestAccess::useFakeRetryClock(coordinator);
+  RenderCoordinatorTestAccess::useFakeSchedulingClock(coordinator);
   coordinator.asyncRenderer().setWithholdCompositorTilesForTesting(true);
   coordinator.setDocumentPixelCaptureEnabled(true);
 
@@ -1647,12 +1723,12 @@ TEST(RenderCoordinatorTest, PixelCaptureWithNothingToPresentIsNotRepostedEveryFr
       << "a retry is still scheduled, so the capture is not given up yet";
 
   for (const std::chrono::milliseconds delay : NothingToPresentRetry::kRetryDelays) {
-    RenderCoordinatorTestAccess::advanceFakeRetryClock(delay);
+    RenderCoordinatorTestAccess::advanceFakeSchedulingClock(delay);
     EXPECT_EQ(CountPostedRenders(coordinator, app, selectTool, viewport, textures, 10), 1);
   }
   EXPECT_TRUE(coordinator.documentPixelCaptureUnavailable())
       << "after the last retry fails, the picker reports the capture unavailable";
-  RenderCoordinatorTestAccess::advanceFakeRetryClock(std::chrono::minutes(1));
+  RenderCoordinatorTestAccess::advanceFakeSchedulingClock(std::chrono::minutes(1));
   EXPECT_EQ(CountPostedRenders(coordinator, app, selectTool, viewport, textures, 10), 0)
       << "an unavailable capture is not requested again for the same document and viewport";
 }
@@ -1663,7 +1739,7 @@ TEST(RenderCoordinatorTest, RejectedCaptureHasBoundedRetriesWithoutConfiguration
   ASSERT_TRUE(app.loadFromString(kTwoRectSvg));
   RenderCoordinator coordinator;
   GlTextureCache textures;
-  RenderCoordinatorTestAccess::useFakeRetryClock(coordinator);
+  RenderCoordinatorTestAccess::useFakeSchedulingClock(coordinator);
   RenderResult result;
   result.documentGeneration = app.document().documentGeneration();
   result.version = app.document().currentFrameVersion();
@@ -1677,7 +1753,7 @@ TEST(RenderCoordinatorTest, RejectedCaptureHasBoundedRetriesWithoutConfiguration
         testing::Optional(testing::FloatNear(std::chrono::duration<float>(delay).count(), 1e-4f)));
     EXPECT_FALSE(coordinator.presentationRefreshPending())
         << "a rejected capture is repair work, not a renderer-setting invalidation";
-    RenderCoordinatorTestAccess::advanceFakeRetryClock(delay);
+    RenderCoordinatorTestAccess::advanceFakeSchedulingClock(delay);
   }
   EXPECT_FALSE(
       RenderCoordinatorTestAccess::rejectPreparedResult(coordinator, result, app, textures));

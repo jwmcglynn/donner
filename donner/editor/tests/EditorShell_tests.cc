@@ -1491,7 +1491,7 @@ public:
 
   static void SetExpiredEyedropperCanvasCommitWake(EditorShell& shell) {
     shell.renderCoordinator_.pixelCaptureCanvasCommitDue_ =
-        std::chrono::steady_clock::now() - std::chrono::milliseconds(1);
+        shell.renderCoordinator_.schedulingNow() - std::chrono::milliseconds(1);
   }
 
   static bool EyedropperCanvasCommitWakePending(const EditorShell& shell) {
@@ -2123,7 +2123,7 @@ TEST(EditorShellTest, NothingToPresentRetriesPostFromIdleFrames) {
   EditorShell shell(window, OptionsWithSource(kInitialSvg));
   ASSERT_TRUE(shell.valid());
   RenderCoordinator& coordinator = EditorShellTestAccess::Coordinator(shell);
-  RenderCoordinatorTestAccess::useFakeRetryClock(coordinator);
+  RenderCoordinatorTestAccess::useFakeSchedulingClock(coordinator);
   coordinator.asyncRenderer().setWithholdCompositorTilesForTesting(true);
 
   // Idle frames only: no input, no document edit. The worker finishes each render before the next
@@ -2144,12 +2144,12 @@ TEST(EditorShellTest, NothingToPresentRetriesPostFromIdleFrames) {
 
   std::uint64_t expected = settled;
   for (const std::chrono::milliseconds delay : NothingToPresentRetry::kRetryDelays) {
-    RenderCoordinatorTestAccess::advanceFakeRetryClock(delay);
+    RenderCoordinatorTestAccess::advanceFakeSchedulingClock(delay);
     ++expected;
     EXPECT_EQ(runIdleFrames(10), expected)
         << "the retry due after " << delay.count() << " ms must post from an idle frame";
   }
-  RenderCoordinatorTestAccess::advanceFakeRetryClock(std::chrono::minutes(1));
+  RenderCoordinatorTestAccess::advanceFakeSchedulingClock(std::chrono::minutes(1));
   EXPECT_EQ(runIdleFrames(10), expected) << "after the last retry, idle frames post nothing";
   EXPECT_EQ(coordinator.nextNothingToPresentRetryWakeSeconds(), std::nullopt);
 }
@@ -2164,7 +2164,7 @@ TEST(EditorShellTest, DueNothingToPresentRetryWaitsForTheSamplePickerWithoutWaki
   EditorShell shell(window, OptionsWithSource(kInitialSvg));
   ASSERT_TRUE(shell.valid());
   RenderCoordinator& coordinator = EditorShellTestAccess::Coordinator(shell);
-  RenderCoordinatorTestAccess::useFakeRetryClock(coordinator);
+  RenderCoordinatorTestAccess::useFakeSchedulingClock(coordinator);
   coordinator.asyncRenderer().setWithholdCompositorTilesForTesting(true);
   const auto runIdleFrames = [&](int frames) {
     for (int frame = 0; frame < frames; ++frame) {
@@ -2179,7 +2179,8 @@ TEST(EditorShellTest, DueNothingToPresentRetryWaitsForTheSamplePickerWithoutWaki
   ASSERT_GE(settled, 1u);
 
   EditorShellTestAccess::SetShowSamplePicker(shell, true);
-  RenderCoordinatorTestAccess::advanceFakeRetryClock(NothingToPresentRetry::kRetryDelays.front());
+  RenderCoordinatorTestAccess::advanceFakeSchedulingClock(
+      NothingToPresentRetry::kRetryDelays.front());
   EXPECT_EQ(runIdleFrames(10), settled) << "the picker covers the canvas, so nothing renders";
   EXPECT_EQ(coordinator.nextNothingToPresentRetryWakeSeconds(), std::nullopt)
       << "a due retry that cannot post must not keep the idle loop awake";
