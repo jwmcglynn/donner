@@ -18,6 +18,7 @@ import {
   latencyGateMode,
   runCompletionCheck,
 } from "./latency-gates.mjs";
+import { showsSplashDocument, splashDPoint } from "./splash-aim.mjs";
 
 interface Diagnostics extends Window {
   __donnerBackend?: string;
@@ -242,12 +243,16 @@ async function waitForIdle(page: Page) {
   }).toEqual(expect.objectContaining({ pendingClick: false, workerBusy: false }));
 }
 
+// The aim maps a document point through the published viewport, so it waits until that viewport
+// describes the splash (see splash-aim.mjs), and fails rather than clicks if applying the move
+// changed the layout under it.
 async function aimAtSplashD(page: Page) {
+  await expect.poll(async () => showsSplashDocument((await snapshot(page)).viewport), {
+    timeout: 15000,
+    message: "the editor must display the Donner splash before the D can be aimed at",
+  }).toBe(true);
   const viewport = (await snapshot(page)).viewport!;
-  const point = {
-    x: Math.round(viewport.documentX + viewport.documentWidth * 282 / 892),
-    y: Math.round(viewport.documentY + viewport.documentHeight * 390 / 512),
-  };
+  const point = splashDPoint(viewport);
   expect(point.x).toBeGreaterThan(viewport.paneX);
   expect(point.x).toBeLessThan(viewport.paneX + viewport.paneWidth);
   expect(point.y).toBeGreaterThan(viewport.paneY);
@@ -257,6 +262,11 @@ async function aimAtSplashD(page: Page) {
     timeout: 10000,
     message: "the D aiming move must be applied before a press or zoom",
   }).toEqual(expect.objectContaining({ pointerX: point.x, pointerY: point.y }));
+  const applied = (await snapshot(page)).viewport!;
+  expect(
+    splashDPoint(applied),
+    `the layout moved under the D aim: ${JSON.stringify({ aimedAt: viewport, applied })}`,
+  ).toEqual(point);
   return point;
 }
 
