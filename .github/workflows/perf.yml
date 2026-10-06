@@ -125,12 +125,11 @@ jobs:
         env:
           TARGET_TAG: ${{ matrix.target_tag }}
         run: |
-          # Diagnostic only: the Firefox held-drag case observed by per-frame pixel readback (the
-          # old path, forced) and by presented-frame statistics, six serialized runs each.
+          # Diagnostic only: the Firefox held-drag case observed by presented-frame statistics,
+          # counted by presentation frame id, six serialized runs.
           status=0
-          for mode in pixel stats; do
+          for mode in stats; do
             force=0
-            [[ "$mode" == "pixel" ]] && force=1
             echo "::group::held drag in Firefox, $mode"
             bazelisk test \
               --config=ci \
