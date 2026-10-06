@@ -189,9 +189,13 @@ existing device buffer-requirement contract. Nested/member runtime arrays, array
 
 Metal reads the existing reserved table of exact declared buffer lengths, converts bytes to element
 counts using the reflected stride, and guards empty/clamped reads. SPIR-V emits buffer-block
-wrappers, `OpArrayLength` and guarded value loads. A structure member is extracted from the guarded
-loaded value, so member access cannot bypass the empty-array guard. The shared storage fixture
-covers nested reads, direct structure-member reads and fixed uniform vector arrays.
+wrappers; each entry point stores the `OpArrayLength` of every runtime array it reads in a private
+variable once, and each read clamps its index to the last element without a branch. The device
+refuses a draw or dispatch whose bound range holds less than one element of a runtime array the
+pipeline reads, and generated modules always supply those requirements, so a SPIR-V read never
+meets an empty array. A structure member is extracted from the clamped loaded value, so member
+access cannot bypass the clamp. The shared storage fixture covers nested reads, direct
+structure-member reads and fixed uniform vector arrays.
 
 ## Validation
 
