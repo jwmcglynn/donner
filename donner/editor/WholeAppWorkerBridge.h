@@ -58,9 +58,10 @@ void UninstallCatalogFonts(uint32_t session);
  * makes such an access harmless, but what it writes lands on the worker's own
  * global and is NOT readable from the page. Every `window.__donner*` probe and
  * page attribute the browser suites read is therefore published to the browser
- * main thread instead: by this bridge, and through `MAIN_THREAD_ASYNC_EM_ASM` in
- * `EditorShell.cc` and `RenderCoordinator.cc`. Query parameters such as
- * `?wgpuReadbackStats` are read on the main thread too (see \ref Install).
+ * main thread instead: by this bridge, and through main-thread `EM_ASM` calls
+ * elsewhere, such as in `EditorShell.cc` and `RenderCoordinator.cc`. Query
+ * parameters such as `?wgpuReadbackStats` are read on the main thread too (see
+ * \ref Install).
  *
  * CSS cursors follow the same rule: a cursor is state the user sees, so
  * RotateCursorSet keeps its registry and its writes on the browser main thread
