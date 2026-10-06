@@ -235,10 +235,10 @@ config_setting(
     ],
 )
 
-# Linked-size budgets for the shipped native products, about 10% over the sizes measured on each
-# platform in the shipped configuration (docs/design_docs/0064-gpu_release_matrix.md). The nightly
-# Perf workflow builds and enforces them on its macOS arm64 and Linux x86_64 runners; no
-# pull-request lane builds these products in the shipped configuration.
+# Linked-size budgets for the shipped native products, each about 10% over the size the nightly
+# Perf workflow measured for that product on that platform in the shipped configuration. That
+# workflow builds and enforces them on its macOS arm64 and Linux x86_64 runners; no pull-request
+# lane builds these products in the shipped configuration.
 py_test(
     name = "native_linked_size_budget_test",
     size = "small",

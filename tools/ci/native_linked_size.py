@@ -174,8 +174,7 @@ def check(products: dict[str, Path], budgets: dict[str, int]) -> list[str]:
         if size.total > limit:
             failures.append(
                 f"{name}: {size.total} bytes exceeds its {limit}-byte budget by "
-                f"{size.total - limit} bytes (budgets: //tools/ci:native_linked_size_budget_test "
-                "and docs/design_docs/0064-gpu_release_matrix.md)"
+                f"{size.total - limit} bytes (budgets: //tools/ci:native_linked_size_budget_test)"
             )
     return failures
 
