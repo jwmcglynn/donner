@@ -5,7 +5,9 @@ const originalKill = process.kill;
 const children = new Map();
 const group = Number(process.env.DONNER_WATCHDOG_GROUP);
 if (!Number.isSafeInteger(group) || group <= 0) throw new Error("missing watchdog group");
-const { processRows: rows } = require("./browser-process-snapshot.cjs");
+const { listWithRetries, processRows } = require("./browser-process-snapshot.cjs");
+// One failed process listing must not fail the driver; one that never succeeds still throws.
+const rows = () => listWithRetries(processRows);
 function track(child) {
   const identity = rows().find((row) => row.pid === child.pid);
   if (identity) {

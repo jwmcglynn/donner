@@ -1,13 +1,21 @@
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
+import { fileURLToPath } from "node:url";
 import vm from "node:vm";
 import { startApplicationHeartbeat } from "./browser-application-heartbeat.mjs";
 import { resourceQueuesAreQuiescent } from "./browser-resource-quiescence.mjs";
-import { descendants, ownedGroup, processRows, supervise } from "./browser-watchdog.mjs";
+import {
+  browserHostCapability,
+  descendants,
+  ownedGroup,
+  processRows,
+  supervise,
+} from "./browser-watchdog.mjs";
 
 const directory = () =>
   fs.mkdtempSync(path.join(process.env.TEST_TMPDIR ?? os.tmpdir(), "watchdog-"));
@@ -538,7 +546,10 @@ test("a denied signal-zero probe without any process listing fails closed", asyn
       throw new Error("simulated ps failure");
     },
   });
-  assert.notEqual(result.reason, null);
+  assert.match(
+    result.reason,
+    /cleanup verification unavailable: group enumeration failed: simulated/,
+  );
   assert.deepEqual(result.cleanup, { groupGone: false, survivors: null });
 });
 
@@ -599,7 +610,7 @@ test("normal Playwright webserver teardown succeeds under supervision", async ()
     intervalMs: 20,
     deadlineMs: 8000,
   });
-  assert.equal(result.reason, null);
+  assert.equal(result.reason, null, `reporting error: ${result.reportingError}`);
   assert.equal(result.exit.code, 0);
   assert.deepEqual(result.cleanup, { groupGone: true, survivors: [] });
 });
@@ -611,7 +622,12 @@ test("final cleanup enumeration failure cannot report success", async () => {
       throw new Error("simulated final verification unavailable");
     },
   });
-  assert.notEqual(result.reason, null);
+  // The reason names the failed listing, so a run that fails this way says why.
+  assert.equal(
+    result.reason,
+    "test process cleanup verification unavailable: "
+      + "survivor enumeration failed: simulated final verification unavailable",
+  );
   assert.equal(result.cleanup.survivors, null);
 });
 test("one failed final cleanup enumeration is retried", async () => {
@@ -668,6 +684,7 @@ test("unknown and expired negative targets never forward a process-group signal"
         if (name === "./browser-process-snapshot.cjs") {
           return {
             processRows: () => [{ pid: 27, ppid: 26, pgid: 20, start: "same-start" }],
+            listWithRetries: (list) => list(),
           };
         }
         throw new Error(`unexpected fixture dependency: ${name}`);
@@ -693,4 +710,84 @@ test("resource quiescence requires explicit completed presentation telemetry", (
   assert.equal(resourceQueuesAreQuiescent([surface], undefined), false);
   assert.equal(resourceQueuesAreQuiescent([surface], 1), false);
   assert.equal(resourceQueuesAreQuiescent([surface], 0), true);
+});
+
+test("the browser host capability reports what launchctl answers", () => {
+  // Stand-in launchctl commands; a CI executor may not provide /usr/bin/true or /usr/bin/false.
+  const scripts = directory();
+  const launchctl = (status) => {
+    const file = path.join(scripts, `launchctl-${status}`);
+    fs.writeFileSync(file, `#!/bin/sh\nexit ${status}\n`, { mode: 0o755 });
+    return file;
+  };
+  const capability = (status) =>
+    browserHostCapability({ platform: "darwin", launchctl: launchctl(status), uid: 501 });
+  assert.deepEqual(capability(0), { uid: 501, guiNamespaceAvailable: true });
+  assert.deepEqual(capability(1), { uid: 501, guiNamespaceAvailable: false });
+  assert.equal(browserHostCapability({ platform: "linux" }), null);
+});
+
+// Runs `script` under the driver preload in its own process group, with the process listing
+// failing on the listed call numbers ("all" fails every call).
+function runUnderDriverPreload(script, failingListings) {
+  const testDir = fileURLToPath(new URL(".", import.meta.url));
+  const stub = path.join(directory(), "failing-listing.cjs");
+  fs.writeFileSync(
+    stub,
+    `const snapshot = require(${
+      JSON.stringify(path.join(testDir, "browser-process-snapshot.cjs"))
+    });
+const list = snapshot.processRows;
+const failing = ${JSON.stringify(failingListings)};
+let calls = 0;
+snapshot.processRows = (...args) => {
+  ++calls;
+  if (failing === "all" || failing.includes(calls)) throw new Error("simulated ps timeout");
+  return list(...args);
+};
+process.env.DONNER_WATCHDOG_GROUP = String(process.pid);
+`,
+  );
+  const preload = path.join(testDir, "browser-watchdog-child.cjs");
+  return new Promise((resolve) => {
+    const child = spawn(process.execPath, ["-r", stub, "-r", preload, "-e", script], {
+      detached: true,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let output = "";
+    child.stdout.on("data", (chunk) => output += chunk);
+    child.stderr.on("data", (chunk) => output += chunk);
+    child.once("exit", () => {
+      // A failed run can leave its own child behind in the group.
+      try {
+        process.kill(-child.pid, "SIGKILL");
+      } catch (error) {
+        if (error.code !== "ESRCH") throw error;
+      }
+    });
+    // Output can still arrive after "exit"; "close" follows the last of it.
+    child.once("close", (code) => resolve({ code, output }));
+  });
+}
+const kSpawnAndStop = `
+const { spawn } = require("node:child_process");
+const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"]);
+child.once("exit", (code, signal) => { console.log("child " + signal); process.exit(0); });
+setTimeout(() => process.kill(-child.pid, "SIGTERM"), 100);
+setTimeout(() => process.exit(3), 5000);
+`;
+test("the driver preload tracks a spawned child through one failed process listing", async () => {
+  const result = await runUnderDriverPreload(kSpawnAndStop, [1]);
+  assert.equal(result.code, 0, result.output);
+  assert.match(result.output, /child SIGTERM/);
+});
+test("the driver preload signals a child group through one failed process listing", async () => {
+  const result = await runUnderDriverPreload(kSpawnAndStop, [2]);
+  assert.equal(result.code, 0, result.output);
+  assert.match(result.output, /child SIGTERM/);
+});
+test("the driver preload still fails when no process listing succeeds", async () => {
+  const result = await runUnderDriverPreload(kSpawnAndStop, "all");
+  assert.notEqual(result.code, 0);
+  assert.match(result.output, /simulated ps timeout/);
 });

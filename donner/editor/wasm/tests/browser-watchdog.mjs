@@ -1,13 +1,9 @@
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { processRows } from "./browser-process-snapshot.cjs";
+import { kListingAttempts, listWithRetries, processRows } from "./browser-process-snapshot.cjs";
 export { processRows };
-
-// A loaded host can make one process listing slow or fail, so the final cleanup checks try this
-// many listings before they treat the group as unverifiable.
-const kCleanupListingAttempts = 3;
 
 export function descendants(rows, rootPid) {
   const selected = new Set([rootPid]);
@@ -230,6 +226,10 @@ export async function supervise(executable, args, options = {}) {
     clearInterval(monitor);
     terminateGroup();
     await anchorExited;
+    const unverifiable = (failure) => {
+      reportingError ??= failure;
+      reason ??= `test process cleanup verification unavailable: ${failure}`;
+    };
     // Group cleanup is independent of process enumeration and artifact writing.
     const listProcesses = options.cleanupProcesses ?? processRows;
     const pause = () => new Promise((resolve) => setTimeout(resolve, 10));
@@ -251,9 +251,8 @@ export async function supervise(executable, args, options = {}) {
             break;
           }
         } catch (listingError) {
-          if (++failedGroupListings === kCleanupListingAttempts) {
-            reportingError ??= `group enumeration failed: ${listingError.message}`;
-            reason ??= "test process cleanup verification unavailable";
+          if (++failedGroupListings === kListingAttempts) {
+            unverifiable(`group enumeration failed: ${listingError.message}`);
             break;
           }
         }
@@ -261,18 +260,11 @@ export async function supervise(executable, args, options = {}) {
       await pause();
     }
     let survivors = null;
-    for (let attempt = 1; survivors === null; ++attempt) {
-      try {
-        survivors = listProcesses().filter((row) => owned.get(row.pid) === row.start)
-          .map((row) => row.pid);
-      } catch (error) {
-        if (attempt === kCleanupListingAttempts) {
-          reportingError ??= `survivor enumeration failed: ${error.message}`;
-          reason ??= "test process cleanup verification unavailable";
-          break;
-        }
-        await pause();
-      }
+    try {
+      survivors = listWithRetries(listProcesses).filter((row) => owned.get(row.pid) === row.start)
+        .map((row) => row.pid);
+    } catch (error) {
+      unverifiable(`survivor enumeration failed: ${error.message}`);
     }
     cleanup = { groupGone, survivors };
     if (!groupGone || survivors === null || survivors.length) {
@@ -284,6 +276,26 @@ export async function supervise(executable, args, options = {}) {
     if (reportingError) reason ??= "watchdog final reporting failed";
   }
   return { ...receipt(), exit, reportFile };
+}
+
+/**
+ * What the browser host offers a headed browser, for the run log: on macOS, whether this user has
+ * a GUI session that a browser could be launched into. Null on other platforms.
+ * @param {{ platform?: string, launchctl?: string, uid?: number }} options
+ * @returns {{ uid: number, guiNamespaceAvailable: boolean } | null}
+ */
+export function browserHostCapability({
+  platform = process.platform,
+  launchctl = "/bin/launchctl",
+  uid = process.getuid(),
+} = {}) {
+  if (platform !== "darwin") return null;
+  let guiNamespaceAvailable = false;
+  try {
+    execFileSync(launchctl, ["print", `gui/${uid}`], { stdio: "ignore", timeout: 1000 });
+    guiNamespaceAvailable = true;
+  } catch {}
+  return { uid, guiNamespaceAvailable };
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(fs.realpathSync(process.argv[1])).href) {
@@ -298,19 +310,8 @@ if (process.argv[1] && import.meta.url === pathToFileURL(fs.realpathSync(process
     `--config=${path.resolve(config)}`,
     ...process.argv.slice(2),
   ];
-  if (process.platform === "darwin") {
-    let guiNamespaceAvailable = false;
-    try {
-      execFileSync("/bin/launchctl", ["print", `gui/${process.getuid()}`], {
-        stdio: "ignore",
-        timeout: 1000,
-      });
-      guiNamespaceAvailable = true;
-    } catch {}
-    console.log(
-      `browser host capability ${JSON.stringify({ uid: process.getuid(), guiNamespaceAvailable })}`,
-    );
-  }
+  const capability = browserHostCapability();
+  if (capability) console.log(`browser host capability ${JSON.stringify(capability)}`);
   const result = await supervise(path.resolve(executable), args);
   process.exitCode = result.reason ? 1 : (result.exit.code ?? 1);
 }
