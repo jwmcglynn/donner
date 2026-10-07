@@ -17,6 +17,8 @@ void RegisterBrowserGpuOwner();
  * @param operation Callback that must not allocate, lock, yield, or call arbitrary C++ code.
  * @param context Caller-owned data, valid until the operation completes.
  * @param kind Diagnostic category; it does not affect dispatch.
+ * Inline notification work stops starting callbacks after 32 calls or 2 ms of callback CPU;
+ * a later owner pulse renews that budget. A running callback is not preempted.
  * A failed dispatch or expired deadline terminates the module rather than leaving borrowed data
  * reachable by a delayed callback. The owner remains alive until all clients are destroyed.
  */

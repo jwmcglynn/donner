@@ -43,7 +43,13 @@ constexpr std::size_t kOtherOperations = 15;
 constexpr std::size_t kOwnershipQueries = 16;
 constexpr std::size_t kDeviceLossQueries = 17;
 constexpr std::size_t kCompletionQueries = 18;
-std::array<std::atomic<uint32_t>, 19> gOwnerWaitStats{};
+constexpr std::size_t kInlineDispatches = 19;
+constexpr std::size_t kTotalInlineUs = 20;
+constexpr std::size_t kMaximumInlineCallbackUs = 21;
+constexpr std::size_t kMaximumInlineEpochCalls = 22;
+constexpr std::size_t kPulses = 23;
+constexpr std::size_t kPulseDispatches = 24;
+std::array<std::atomic<uint32_t>, 25> gOwnerWaitStats{};
 static_assert(sizeof(std::atomic<uint32_t>) == sizeof(uint32_t));
 static_assert(std::atomic<uint32_t>::is_always_lock_free);
 thread_local bool gProcessingOwnerWait = false;
@@ -53,6 +59,10 @@ BrowserGpuTaskQueue gReady;
 bool gProcessingBatch = false;
 bool gPulseScheduled = false;
 bool gCanvasFrameActive = false;
+constexpr std::size_t kMaximumInlineCalls = 32;
+constexpr double kMaximumInlineMs = 2.0;
+std::size_t gInlineCalls = 0;
+double gInlineMs = 0.0;
 
 // clang-format off
 EM_JS(void, ScheduleGpuPulse, (), {
@@ -95,7 +105,7 @@ std::size_t OperationCounter(BrowserGpuOperationKind kind) {
   std::abort();
 }
 
-void ExecuteReadyBatch() {
+std::size_t ExecuteReadyBatch() {
   const double started = emscripten_get_now();
   const std::size_t count = gReady.executeBatch();
   if (count) {
@@ -108,6 +118,26 @@ void ExecuteReadyBatch() {
   if (!gReady.empty()) {
     SchedulePulse();
   }
+  return count;
+}
+
+void TryInlineDispatch(bool wasEmpty) {
+  if (!wasEmpty || gProcessingBatch || gCanvasFrameActive || gInlineCalls >= kMaximumInlineCalls ||
+      gInlineMs >= kMaximumInlineMs) {
+    return;
+  }
+  gProcessingBatch = true;
+  const double started = emscripten_get_now();
+  // The FIFO held only this request; reentrant requests stay in the next detached batch.
+  const std::size_t count = ExecuteReadyBatch();
+  const double elapsedMs = emscripten_get_now() - started;
+  gInlineCalls += count;
+  gInlineMs += elapsedMs;
+  gOwnerWaitStats[kInlineDispatches].fetch_add(count, std::memory_order_relaxed);
+  AddSaturatingMicros(kTotalInlineUs, elapsedMs * 1000.0);
+  RecordMaximum(kMaximumInlineCallbackUs, elapsedMs * 1000.0);
+  RecordMaximum(kMaximumInlineEpochCalls, static_cast<double>(gInlineCalls));
+  gProcessingBatch = false;
 }
 
 struct OwnerRequest {
@@ -167,8 +197,11 @@ void EnqueueRequest(void* context) {
   auto& request = *static_cast<OwnerRequest*>(context);
   request.task.callback = &Invoke;
   request.task.context = &request;
+  const bool wasEmpty = gReady.empty();
   gReady.enqueue(request.task);
+  // Keep this future pulse even if inline work empties the FIFO: only it renews the budget.
   SchedulePulse();
+  TryInlineDispatch(wasEmpty);
 }
 #endif
 }  // namespace
@@ -186,8 +219,12 @@ extern "C" EMSCRIPTEN_KEEPALIVE void donner_browser_gpu_pulse() {
     SchedulePulse();
     return;
   }
+  gInlineCalls = 0;
+  gInlineMs = 0.0;
+  gOwnerWaitStats[kPulses].fetch_add(1, std::memory_order_relaxed);
   gProcessingBatch = true;
-  ExecuteReadyBatch();
+  const std::size_t count = ExecuteReadyBatch();
+  gOwnerWaitStats[kPulseDispatches].fetch_add(count, std::memory_order_relaxed);
   gProcessingBatch = false;
 #endif
 }
@@ -242,8 +279,15 @@ void RegisterBrowserGpuOwner() {
       'ownershipQueries': Atomics.load(HEAPU32, index + 16),
       'deviceLossQueries': Atomics.load(HEAPU32, index + 17),
       'completionQueries': Atomics.load(HEAPU32, index + 18),
+      'inlineDispatches': Atomics.load(HEAPU32, index + 19),
+      'totalInlineMs': Atomics.load(HEAPU32, index + 20) / 1000,
+      'maximumInlineCallbackMs': Atomics.load(HEAPU32, index + 21) / 1000,
+      'maximumInlineEpochCalls': Atomics.load(HEAPU32, index + 22),
+      'pulses': Atomics.load(HEAPU32, index + 23),
+      'pulseDispatches': Atomics.load(HEAPU32, index + 24),
       'timingSaturated': Atomics.load(HEAPU32, index + 10) === 4294967295 ||
-                         Atomics.load(HEAPU32, index + 11) === 4294967295,
+                         Atomics.load(HEAPU32, index + 11) === 4294967295 ||
+                         Atomics.load(HEAPU32, index + 20) === 4294967295,
     });
   }, gOwnerWaitStats.data());
   // clang-format on
@@ -262,7 +306,7 @@ void RunOnBrowserGpuOwner(void (*operation)(void*), void* context,
     OwnerRequest request{operation, context, {}, {}};
     gOwnerWaitStats[kRequested].fetch_add(1, std::memory_order_relaxed);
     gOwnerWaitStats[OperationCounter(kind)].fetch_add(1, std::memory_order_relaxed);
-    // Notifications cannot release callers, so the SDK's drain cannot grow with repeated requests.
+    // The inline budget bounds repeated requests within the SDK's otherwise unbounded drain.
     if (!emscripten_proxy_async(gNotificationQueue, owner, &EnqueueRequest, &request)) {
       std::abort();
     }

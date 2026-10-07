@@ -4215,6 +4215,107 @@ test("proxied animation frames keep at most one outstanding callback", async ({ 
   expect(failures).toEqual([]);
 });
 
+test("GPU dispatch progresses while owner pulses are delayed", async ({ page }) => {
+  const failures = await openEditor(page);
+  const { captureClip, blueRect } = await openBasicShapes(page);
+  const press = {
+    x: captureClip.x + (blueRect.minX + blueRect.maxX) / 2,
+    y: captureClip.y + (blueRect.minY + blueRect.maxY) / 2,
+  };
+  await page.mouse.move(press.x, press.y);
+  await waitForAppliedPointer(page, press, {
+    message: "delayed pulse selection",
+    timeoutMs: scaledMs(4_000),
+  });
+  await waitForPressReadiness(page, "delayed pulse selection");
+  const beforeResults = await page.evaluate(() =>
+    window.__donnerWorkerStats?.completedResults || 0
+  );
+  const owner = await Promise.any(
+    page.workers().map(async (worker) => {
+      const installed = await boundFailureDiagnostic(
+        worker.evaluate(() => {
+          const scope = globalThis as typeof globalThis & {
+            __donnerGpuOwner?: boolean;
+            __donnerGpuPulsePort?: MessagePort;
+            __donnerPulseDelayProbe?: { sent: number; delivered: number; restore: () => void };
+          };
+          const port = scope.__donnerGpuPulsePort;
+          if (!scope.__donnerGpuOwner || !port) return false;
+          const original = port.postMessage.bind(port);
+          const probe = {
+            sent: 0,
+            delivered: 0,
+            restore: () => {
+              port.postMessage = original;
+            },
+          };
+          port.postMessage = (message: unknown) => {
+            ++probe.sent;
+            setTimeout(() => {
+              ++probe.delivered;
+              original(message);
+            }, 100);
+          };
+          scope.__donnerPulseDelayProbe = probe;
+          return true;
+        }),
+        1000,
+      );
+      if (!installed) throw new Error("GPU owner pulse port unavailable");
+      return worker;
+    }),
+  );
+  const before = await readGpuOwnerDispatchStats(page);
+  const startedAtMs = performance.now();
+  let after: Awaited<ReturnType<typeof readGpuOwnerDispatchStats>> = null;
+  let probe: { sent: number; delivered: number } | null = null;
+  try {
+    await page.mouse.down();
+    await expect.poll(() => readPressSelectionState(page), {
+      message: "selection prewarm must progress without one pulse delay per GPU request",
+      timeout: scaledMs(2_000),
+      intervals: [16, 25, 50, 100],
+    }).toEqual({ completedResults: beforeResults + 1, selectedCount: 1 });
+  } finally {
+    after = await readGpuOwnerDispatchStats(page);
+    probe = await boundFailureDiagnostic(
+      owner.evaluate(() => {
+        const scope = globalThis as typeof globalThis & {
+          __donnerPulseDelayProbe?: { sent: number; delivered: number; restore: () => void };
+        };
+        const probe = scope.__donnerPulseDelayProbe;
+        probe?.restore();
+        delete scope.__donnerPulseDelayProbe;
+        return probe ? { sent: probe.sent, delivered: probe.delivered } : null;
+      }),
+      1000,
+    );
+    console.log(
+      "[delayed-owner-pulses]",
+      JSON.stringify({ before, after, probe, elapsedMs: performance.now() - startedAtMs }),
+    );
+    await page.mouse.up();
+  }
+  expect(probe?.delivered).toBeGreaterThan(0);
+  type DispatchStats = {
+    inlineDispatches: number;
+    dispatches: number;
+    pulses: number;
+    maximumInlineEpochCalls: number;
+  };
+  const initial = before?.stats as DispatchStats;
+  const final = after?.stats as DispatchStats;
+  expect(initial).toBeTruthy();
+  expect(final).toBeTruthy();
+  expect(final.pulses - initial.pulses, "delayed owner pulse callbacks must actually execute")
+    .toBeGreaterThan(0);
+  expect(final.inlineDispatches - initial.inlineDispatches, "inline work must explain progress")
+    .toBeGreaterThan(Math.max(32, final.dispatches - initial.dispatches));
+  expect(final.maximumInlineEpochCalls).toBeLessThanOrEqual(32);
+  expect(failures).toEqual([]);
+});
+
 async function readGpuOwnerDispatchStats(page: Page) {
   return Promise.any(
     page.workers().map(async (worker) => {
@@ -5195,6 +5296,7 @@ test("WebGPU eyedropper copies translucent document alpha, not checkerboard alph
   await page.keyboard.up("a");
   await page.keyboard.up("Control");
   await retainEyedropperPng("eyedropper-alpha-source-before-paste.png", await page.screenshot());
+  console.log("[alpha-paste-install]", performance.now() - bodyStartedAtMs);
   await page.evaluate(() => {
     window.__donnerTestPasteEventStats = { count: 0, lastTextLength: -1 };
     window.addEventListener("paste", (event) => {
@@ -5218,6 +5320,11 @@ test("WebGPU eyedropper copies translucent document alpha, not checkerboard alph
       }),
     );
   }, fixture);
+  console.log(
+    "[alpha-paste-dispatched]",
+    performance.now() - bodyStartedAtMs,
+    await page.evaluate(() => window.__donnerTestPasteEventStats),
+  );
   await expect.poll(() =>
     page.evaluate(() => {
       const stats = window.__donnerTestPasteEventStats;
