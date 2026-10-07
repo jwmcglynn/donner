@@ -806,7 +806,7 @@ public:
       case PresentationProgress::Failed: return os << "Failed";
     }
     return os << "PresentationProgress(" << static_cast<int>(progress) << ")";
-  };
+  }
 
   /// Poll deferred GPU work without constructing another UI frame. Called on the window owner.
   PresentationProgress pollDeferredPresentation();
