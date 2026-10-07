@@ -34,8 +34,9 @@ root, and pass a runtime texture as the renderer's target. The maintained
 [native embedding guide](../guides/embedding_geode.md) and
 [GLFW example](../../examples/geode_embed.cc) give the API, surface retirement order, and a
 bounded one-frame presentation smoke. The [editor architecture](../editor_architecture.md)
-describes the product caller. Design 0053 defines ownership, backend selection, test-only
-reference containment, and cutover acceptance.
+describes the product caller. The [GPU runtime reference](../gpu_runtime.md) defines ownership
+and backend selection; Design 0053 records test-only reference containment and the cutover
+acceptance.
 
 The Geode resvg suite uses the same reviewed scene goldens and pixelmatch rules as the native
 backend lanes. Relevant tests include
