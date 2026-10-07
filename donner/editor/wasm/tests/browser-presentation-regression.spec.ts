@@ -4229,16 +4229,36 @@ async function pinchZoom(
 }
 
 type CompletedZoomState = {
-  queue: Window["__donnerPresentationQueueStats"];
-  viewport: Window["__donnerViewportStats"];
+  queue?: Pick<
+    NonNullable<Window["__donnerPresentationQueueStats"]>,
+    "captureId" | "inputRepresented" | "deviceLost" | "viewportZoom"
+  >;
+  viewport?: Pick<ViewportStats, "zoom">;
+  host?: Pick<NonNullable<Window["__donnerHostFrameTiming"]>, "lastSurfacePresented">;
 };
 
 function completedFrameMatchesCamera(state: CompletedZoomState): boolean {
-  if (!state.queue || !state.viewport) return false;
-  return state.queue.captureId > 0 && state.queue.inputRepresented
-    && state.queue.deviceLost !== true
+  if (!state.queue || !state.viewport || !state.host?.lastSurfacePresented) return false;
+  // Canvas-size commits change scene revision while retained tiles still cover the new camera.
+  return state.queue.captureId > 0 && state.queue.deviceLost !== true
     && Math.abs(state.queue.viewportZoom - state.viewport.zoom) < 0.001;
 }
+
+test("zoom camera completion accepts retained scenes but rejects failed presentation", () => {
+  const state: CompletedZoomState = {
+    queue: { captureId: 14, inputRepresented: false, viewportZoom: 3.375 },
+    viewport: { zoom: 3.375 },
+    host: { lastSurfacePresented: true },
+  };
+  expect(completedFrameMatchesCamera(state)).toBe(true);
+  expect(completedFrameMatchesCamera({ ...state, host: { lastSurfacePresented: false } }))
+    .toBe(false);
+  expect(completedFrameMatchesCamera({ ...state, viewport: { zoom: 5.0625 } })).toBe(false);
+  expect(completedFrameMatchesCamera({ ...state, queue: { ...state.queue!, deviceLost: true } }))
+    .toBe(false);
+  expect(completedFrameMatchesCamera({ ...state, queue: { ...state.queue!, captureId: 0 } }))
+    .toBe(false);
+});
 
 /** A completed UI frame can redraw retained GPU tiles without a new worker raster. */
 async function pinchZoomAndAwaitPresentation(
@@ -4253,7 +4273,6 @@ async function pinchZoomAndAwaitPresentation(
     zoom: window.__donnerViewportStats?.zoom,
   }));
   await pinchZoom(page, at, deltaY);
-  let loggedIncompleteScene = false;
   await expect.poll(async () => {
     const current = await page.evaluate(() => ({
       queue: window.__donnerPresentationQueueStats,
@@ -4264,13 +4283,6 @@ async function pinchZoomAndAwaitPresentation(
       overlay: window.__donnerOverlayStats,
       host: window.__donnerHostFrameTiming,
     }));
-    if (!loggedIncompleteScene && current.queue?.inputRepresented === false
-      && current.queue.completedSerial > before.serial && current.queue.frameId > before.frameId
-      && current.queue.viewportZoom === current.viewport?.zoom
-      && current.viewport.zoom !== before.zoom) {
-      loggedIncompleteScene = true;
-      console.log(`zoom-incomplete-scene ${JSON.stringify({ context, ...current })}`);
-    }
     const reached = completedFrameMatchesCamera(current)
       && current.queue!.completedSerial > before.serial && current.queue!.frameId > before.frameId
       && current.viewport!.zoom !== before.zoom;
