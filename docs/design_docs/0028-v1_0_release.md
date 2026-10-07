@@ -470,8 +470,12 @@ v1.0 adds three major new trust boundaries beyond v0.5's parser / renderer surfa
   IPC boundary, and validation strategy before implementation.
 - **Native GPU runtime.** Donner owns descriptor validation, resource lifetime, synchronization,
   device loss, memory budgets, generated shader artifacts, and native embedding handles. Design
-  [0053](0053-native_gpu_hal.md) owns the threat model, validation layers, fuzzing, provenance, and
-  driver qualification.
+  0053's original text sets the runtime's threat model and provenance requirements
+  ([security and reliability](https://github.com/jwmcglynn/donner/blob/e1016864514efc5bf3eb7c8a74d1f7572bb3f4c6/docs/design_docs/0053-native_gpu_hal.md#security-and-reliability),
+  [clean-room and dependency requirements](https://github.com/jwmcglynn/donner/blob/e1016864514efc5bf3eb7c8a74d1f7572bb3f4c6/docs/design_docs/0053-native_gpu_hal.md#clean-room-and-dependency-requirements)); the
+  [GPU runtime reference](../gpu_runtime.md) documents its validation layers and trust
+  boundaries, and [0064](0064-gpu_release_matrix.md) records driver qualification and the Geode
+  fuzzing lanes.
 Donner's global invariant — "must safely handle untrusted input and must never crash" — extends
 unchanged across the scripting and editor-sandbox boundaries. Phase 12 (Security pass) is the
 verification step.

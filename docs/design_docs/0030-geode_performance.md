@@ -45,8 +45,8 @@ algorithm.
 ## Non-Goals
 
 - Re-implementing Slug or changing the compiled shader ABI.
-- Changing native GPU backend selection or the Linux-only test reference;
-  [Design 0053](0053-native_gpu_hal.md) owns those boundaries.
+- Changing native GPU backend selection or the Linux-only test reference; the
+  [GPU runtime reference](../gpu_runtime.md) describes those boundaries.
 - Changing the anti-aliasing scheme. Geode renders analytic dual-ray
   coverage at one sample per pixel on every adapter (0041); AA work is
   out of scope here.
@@ -665,7 +665,8 @@ Before each milestone is marked done:
 ## Dependencies
 
 - No new external deps. Uses Donner's GPU runtime buffer and bind-group APIs;
-  Design 0053 owns backend selection and test-only reference containment.
+  the [GPU runtime reference](../gpu_runtime.md) describes backend selection and test-only
+  reference containment.
 - ECS dirty-flag plumbing comes from `0005-incremental_invalidation.md`;
   Milestone 2 depends on that system being online for path entities.
   If 0005's path-level invalidation isn't wired up yet, Milestone 2

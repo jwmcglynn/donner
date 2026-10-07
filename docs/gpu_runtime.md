@@ -5,8 +5,9 @@
 This reference is for Donner developers working on Geode, the editor, or the GPU runtime under
 `donner/gpu/`. It states who owns each GPU object, how a backend is chosen on each platform, and
 what the runtime does when the GPU fails. The [native embedding guide](guides/embedding_geode.md)
-walks through the same contracts from a windowed host, and
-[design 0053](design_docs/0053-native_gpu_hal.md) records how the runtime got here.
+walks through the same contracts from a windowed host.
+[Design 0053](design_docs/0053-native_gpu_hal.md) summarizes the cutover that produced the runtime,
+and its [original text](https://github.com/jwmcglynn/donner/blob/e1016864514efc5bf3eb7c8a74d1f7572bb3f4c6/docs/design_docs/0053-native_gpu_hal.md) records how the runtime got here.
 
 The runtime is internal to Donner. For v0.8 the maintainer decided that there is no native
 embedding surface beyond internal callers: the editor, the in-tree
@@ -342,9 +343,9 @@ The enforced limits, such as 16,384 texels a side and 1 GiB per buffer, are in
 `donner/gpu/GpuLimits.h`.
 
 Untrusted SVG controls geometry, images, filter graphs, dimensions and repetition. It never
-supplies native handles, shader source or command streams: every shader is compiled at build time,
-browser object identifiers come from a space that is never reused, and UI draw data names textures
-by generation-checked `UiTextureId` values.
+supplies native handles, shader source or command streams: every shader is a frozen artifact that
+Donner's compiler produced at build time, browser object identifiers come from a space that is
+never reused, and UI draw data names textures by generation-checked `UiTextureId` values.
 
 ### Device loss {#GpuRuntimeDeviceLoss}
 

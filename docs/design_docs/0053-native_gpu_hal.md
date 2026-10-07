@@ -15,17 +15,23 @@ current documentation; the full design is in Git history.\
 `donner::gpu` is an original C++20 runtime between Geode and editor rendering and the platform
 GPU. It validates resources and handle lifetimes, records commands, submits work, maps buffers and
 presents frames, with backends for Metal, Vulkan and the browser's `navigator.gpu`. It is not a
-WebGPU C ABI. Every production shader is authored as WGSL and compiled during C++ constant
-evaluation into the WGSL, MSL or SPIR-V projection its product links, so no shader text is parsed
-at run time.
+WebGPU C ABI. Every production shader is authored as WGSL, and Donner's own compiler turns it
+during C++ constant evaluation into the frozen WGSL, MSL or SPIR-V projection its product links;
+that compiler never runs at run time. When a shader module is created, Metal compiles the frozen
+MSL text and the browser compiles the frozen WGSL text, while Vulkan takes the SPIR-V words.
 
 Each platform defaults to its own backend, and a requested backend the host cannot provide fails
 closed. Runtime devices over one selected root share its native device and loss state while
 keeping their own handles and serials, and a texture of one runtime device reaches another only
-through export and registration. Waits that detect a hung device declare it lost once it stops
-making progress, except two Vulkan waits whose progress the queue cannot judge. The one remaining
-wgpu-native consumer is a checksum-pinned, Linux-only, test-only resvg comparison reference; the
-lexical no-Rust verifier and the configured dependency audits keep it out of every product.
+through export and registration. Waits that detect a hung device measure time without progress
+rather than the time a whole backlog takes, except two Vulkan waits whose progress the queue cannot
+judge. Geode's queue-idle drain, a Metal present, Metal's wait for room under its command-buffer
+backstop, the editor's UI submission admission and framebuffer readback, and the cross-context
+registration helper declare the device lost when progress stops; the other waits, such as a host
+access to a busy buffer, a texture upload and the Metal teardown drain, give up without declaring a
+loss. The one remaining wgpu-native consumer is a checksum-pinned, Linux-only, test-only resvg
+comparison reference; the lexical no-Rust verifier and the configured dependency audits keep it out
+of every product.
 
 ## Documentation
 
@@ -41,8 +47,9 @@ lexical no-Rust verifier and the configured dependency audits keep it out of eve
 
 The cutover was qualified on one integrated revision against gates for pixels, validation, bounded
 resources, frame time, artifact size, dependency closure and an independent security and
-implementation-provenance review; [#1413](https://github.com/jwmcglynn/donner/issues/1413) links
-the evidence for each gate. That review found no critical or high findings
+implementation-provenance review; the pull request that closes
+[#1413](https://github.com/jwmcglynn/donner/issues/1413) records the evidence for each gate. That
+review found no critical or high findings
 ([summary](https://github.com/jwmcglynn/donner/issues/1413#issuecomment-6029592835)), and changes
 made after the revision it covered fall to the v0.8 release-candidate review in
 [#1422](https://github.com/jwmcglynn/donner/issues/1422).
@@ -78,7 +85,9 @@ The maintainer decided:
   native names, removing feBlend's rename.
 - [#1718](https://github.com/jwmcglynn/donner/issues/1718): account the renderer's GPU working set
   byte for byte, publish the worker renderer's resource statistics in the browser editor, and
-  measure the WebAssembly and thumbnail working sets against their caps.
+  measure DPR2 thumbnail workloads against the 256 MiB native and 128 MiB WebAssembly working-set
+  caps and DPR2 filter workloads in the browser editor against the 128 MiB cap, keeping them under
+  their caps with the measured peaks recorded on the issue.
 - [#1697](https://github.com/jwmcglynn/donner/issues/1697): keep a 64-frame overlapped zoom-8
   drain on Metal from tripping the system GPU timeout.
 - [#1719](https://github.com/jwmcglynn/donner/issues/1719): find why a discrete Vulkan GPU's

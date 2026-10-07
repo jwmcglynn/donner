@@ -24,8 +24,9 @@ The renderer is selected with `--config=geode`; TinySkia remains the default CPU
 
 Native rendering uses Metal on macOS and Vulkan on Linux. The browser editor uses the browser
 GPU runtime. The Linux resvg comparison target keeps a checksum-pinned wgpu-native reference as
-test-only evidence; that reference is not a native embedding API. The final dependency and
-platform gates are tracked in Design 0053.
+test-only evidence; that reference is not a native embedding API. Design 0053's
+[cutover acceptance](0053-native_gpu_hal.md#cutover-acceptance) records the final dependency and
+platform gates.
 
 ## Current developer contract
 
