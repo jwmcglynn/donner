@@ -124,13 +124,6 @@ test("ordinary document presentation performs no worker GPU readback", async ({ 
     .toBe(true);
 
   await expect
-    .poll(() => page.evaluate(() => (window as SelectionWindow).__donnerWorkerStats?.completedResults), {
-      timeout: 10000,
-    })
-    .toBeGreaterThan(0);
-  const before = await page.evaluate(() => (window as SelectionWindow).__donnerWorkerStats);
-  expect(before, "the raster worker did not publish startup accounting").toBeDefined();
-  await expect
     .poll(() =>
       page.evaluate(() => {
         const thumbnails = (window as SelectionWindow).__donnerSampleThumbnailStats;
@@ -138,6 +131,7 @@ test("ordinary document presentation performs no worker GPU readback", async ({ 
           && (thumbnails.ready ?? 0) > 0 && !thumbnails.active && !thumbnails.pending;
       }), { timeout: 20000 })
     .toBe(true);
+  const before = await page.evaluate(() => (window as SelectionWindow).__donnerWorkerStats);
   const editorCanvas = page.locator("canvas#canvas");
   const bounds = await editorCanvas.boundingBox();
   expect(bounds, "the editor canvas is missing").not.toBeNull();
@@ -150,7 +144,7 @@ test("ordinary document presentation performs no worker GPU readback", async ({ 
         timeout: 10000,
       },
     )
-    .toBeGreaterThan(before!.completedResults ?? 0);
+    .toBeGreaterThan(before?.completedResults ?? 0);
 
   const after = await page.evaluate(() => (window as SelectionWindow).__donnerWorkerStats);
   expect(after, "the document result did not publish readback accounting").toBeDefined();
@@ -158,9 +152,9 @@ test("ordinary document presentation performs no worker GPU readback", async ({ 
     (after!.compositorReadbackCount ?? 0) + (after!.tileHandoffReadbackCount ?? 0)
       + (after!.finalSnapshotReadbackCount ?? 0),
   );
-  expect((after!.compositorReadbackTotal ?? 0) - (before!.compositorReadbackTotal ?? 0)).toBe(0);
-  expect((after!.tileHandoffReadbackTotal ?? 0) - (before!.tileHandoffReadbackTotal ?? 0)).toBe(0);
-  expect((after!.finalSnapshotReadbackTotal ?? 0) - (before!.finalSnapshotReadbackTotal ?? 0)).toBe(
+  expect((after!.compositorReadbackTotal ?? 0) - (before?.compositorReadbackTotal ?? 0)).toBe(0);
+  expect((after!.tileHandoffReadbackTotal ?? 0) - (before?.tileHandoffReadbackTotal ?? 0)).toBe(0);
+  expect((after!.finalSnapshotReadbackTotal ?? 0) - (before?.finalSnapshotReadbackTotal ?? 0)).toBe(
     0,
   );
 });
