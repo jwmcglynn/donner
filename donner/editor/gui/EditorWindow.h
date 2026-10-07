@@ -240,7 +240,7 @@ public:
 
   /// Hands the acquired frame to the platform. Does nothing when no frame is held, so the frame
   /// loop can present unconditionally on its way out.
-  virtual void present() = 0;
+  [[nodiscard]] virtual bool present() = 0;
 
   /// Releases the acquired frame without showing it, for a frame the caller decided not to draw.
   virtual void abandon() = 0;
@@ -321,7 +321,7 @@ public:
 
   bool configure(int width, int height) override;
   AcquiredFrame acquire() override;
-  void present() override;
+  [[nodiscard]] bool present() override;
   void abandon() override;
   void shutdown() override;
   gpu::TextureFormat format() const override;

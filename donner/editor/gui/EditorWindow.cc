@@ -957,23 +957,18 @@ void RuntimePresentationSurface::forceSurfaceLossForTesting() {
 }
 #endif
 
-void RuntimePresentationSurface::present() {
+bool RuntimePresentationSurface::present() {
   if (!hasAcquiredFrame_) {
-    return;
+    return false;
   }
-  // The frame stops being this surface's either way: the platform owns it once it has been handed
-  // over, whether or not the handoff reported success.
   hasAcquiredFrame_ = false;
-#ifdef __EMSCRIPTEN__
-  // The browser shows its canvas from its own frame loop.
-  (void)device_->abandonCurrentTexture(surface_);
-#else
-  if (gpu::Result<gpu::SurfaceStatus> presented = device_->presentSurface(surface_);
-      presented.hasError()) {
+  gpu::Result<gpu::SurfaceStatus> presented = device_->presentSurface(surface_);
+  if (presented.hasError()) {
     std::fprintf(stderr, "EditorWindow: could not present the frame: %s\n",
                  presented.error().toString().c_str());
+    return false;
   }
-#endif
+  return presented.result() == gpu::SurfaceStatus::Success;
 }
 
 void RuntimePresentationSurface::abandon() {
@@ -1190,18 +1185,23 @@ class SurfacePresentGuard {
 public:
   /// @param surface Surface holding this frame, or null when there is nothing to present.
   explicit SurfacePresentGuard(PresentationSurface* surface) : surface_(surface) {}
-  ~SurfacePresentGuard() { present(); }
+  ~SurfacePresentGuard() {
+    if (surface_ != nullptr) {
+      surface_->abandon();
+    }
+  }
 
   SurfacePresentGuard(const SurfacePresentGuard&) = delete;
   SurfacePresentGuard& operator=(const SurfacePresentGuard&) = delete;
 
   /// Presents the frame in flight, once.
-  void present() {
+  bool present() {
     if (surface_ == nullptr) {
-      return;
+      return true;
     }
-    surface_->present();
+    const bool presented = surface_->present();
     surface_ = nullptr;
+    return presented;
   }
 
 private:
@@ -2977,7 +2977,14 @@ void EditorWindow::endFrameImpl(svg::RendererBitmap* readback) {
 #endif
   {
     const auto presentStart = std::chrono::steady_clock::now();
-    presentGuard.present();
+    if (!presentGuard.present()) {
+#ifdef __EMSCRIPTEN__
+      surfaceFailureKind = wgpuState_->framebufferGeodeDevice->isDeviceLost()
+                               ? internal::WgpuSurfaceFailureKind::Fatal
+                               : internal::WgpuSurfaceFailureKind::OutdatedOrLost;
+#endif
+      return;
+    }
     surfacePresented = surfaceAcquired;
     timing.presentMs = ElapsedMs(presentStart);
   }

@@ -177,7 +177,7 @@ test("an alpha mode this protocol assigns no code is refused before the canvas i
   assert.equal(canvas.width, 0);
 });
 
-test("a frame is taken from the canvas and abandoning it gives the identifier back", async () => {
+test("a frame alias holds GPU backing and abandoning it does not present", async () => {
   const { bridge, canvas, id } = await surfaceBridge();
   assert.equal(
     configure(bridge, id, { width: 8, height: 8 }, bridge.state.kAlphaModeOpaque),
@@ -191,7 +191,7 @@ test("a frame is taken from the canvas and abandoning it gives the identifier ba
   );
   assert.equal(bridge.read(status), bridge.state.kSurfaceSuccess);
   assert.equal(bridge.objects(kDevice).get(2).kind, bridge.state.kTexture);
-  assert.equal(canvas.context.frames, 1);
+  assert.equal(canvas.context.frames, 0);
 
   assert.equal(
     bridge.entryPoints.donner_gpu_abandon_current_texture(kDevice, id),
@@ -351,4 +351,65 @@ test("a lost device refuses another frame but still takes back the one it handed
     bridge.state.kSuccess,
   );
   assert.equal(bridge.objects(kDevice).size, 0);
+});
+
+test("presentation acquires and GPU-copies the complete backing in one call", async () => {
+  const { bridge, canvas, id } = await surfaceBridge();
+  assert.equal(
+    configure(bridge, id, { width: 8, height: 8 }, bridge.state.kAlphaModePremultiplied),
+    bridge.state.kSuccess,
+  );
+  const status = bridge.outParameter();
+  assert.equal(
+    bridge.entryPoints.donner_gpu_acquire_current_texture(kDevice, id, 2, status),
+    bridge.state.kSuccess,
+  );
+  const backing = bridge.objects(kDevice).get(2).object;
+  assert.equal(canvas.context.frames, 0);
+  assert.equal(
+    bridge.entryPoints.donner_gpu_present_surface(kDevice, id, status),
+    bridge.state.kSuccess,
+  );
+  assert.equal(bridge.read(status), bridge.state.kSurfaceSuccess);
+  assert.equal(canvas.context.frames, 1);
+  assert.equal(bridge.device.queue.lastSubmission[0].copies[0].source.texture, backing);
+  assert.equal(bridge.state.readbackCopies, 0);
+  assert.equal(bridge.state.cpuTextureWrites, 0);
+  assert.equal(bridge.state.surfaceCopies, 1);
+  assert.equal(bridge.objects(kDevice).has(2), false);
+  assert.equal(backing.destroyed, false);
+});
+
+test("a refused canvas copy is not reported as a presented frame", async () => {
+  const { bridge, id } = await surfaceBridge();
+  assert.equal(
+    configure(bridge, id, { width: 8, height: 8 }, bridge.state.kAlphaModeOpaque),
+    bridge.state.kSuccess,
+  );
+  const status = bridge.outParameter();
+  bridge.entryPoints.donner_gpu_acquire_current_texture(kDevice, id, 2, status);
+  bridge.device.queue.submit = () => {
+    throw new Error("submission refused");
+  };
+  assert.equal(
+    bridge.entryPoints.donner_gpu_present_surface(kDevice, id, status),
+    bridge.state.kSuccess,
+  );
+  assert.equal(bridge.read(status), bridge.state.kSurfaceLost);
+  assert.equal(bridge.state.surfaceCopies, 0);
+  assert.equal(bridge.objects(kDevice).has(2), false);
+});
+
+test("resize retires the previous GPU backing and all old frame identifiers", async () => {
+  const { bridge, id } = await surfaceBridge();
+  configure(bridge, id, { width: 8, height: 8 }, bridge.state.kAlphaModeOpaque);
+  const status = bridge.outParameter();
+  bridge.entryPoints.donner_gpu_acquire_current_texture(kDevice, id, 2, status);
+  const backing = bridge.objects(kDevice).get(2).object;
+  configure(bridge, id, { width: 16, height: 12 }, bridge.state.kAlphaModeOpaque);
+  assert.equal(backing.destroyed, true);
+  assert.equal(bridge.objects(kDevice).has(2), false);
+  assert.equal(bridge.state.debugStatistics().surfaceBackingBytes, 16 * 12 * 4);
+  bridge.entryPoints.donner_gpu_destroy_object(kDevice, bridge.state.kSurface, id);
+  assert.equal(bridge.state.debugStatistics().surfaceBackingBytes, 0);
 });

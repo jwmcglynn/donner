@@ -893,6 +893,14 @@ public:
     return created;
   }
 
+  BridgeStatus presentSurface(BrowserObjectId surfaceId, SurfaceStatus& status) override {
+    const BridgeStatus result = operate(std::format("presentSurface surface={}", surfaceId),
+                                        BrowserObjectKind::Surface, surfaceId);
+    status = result == BridgeStatus::Success ? SurfaceStatus::Success : SurfaceStatus::Lost;
+    releaseFrame(surfaceId);
+    return result;
+  }
+
   BridgeStatus abandonCurrentTexture(BrowserObjectId surfaceId) override {
     // Handing a frame back is a release, so a lost device takes it: the browser side refuses work
     // on one but not releases, and refusing here would leave the canvas holding a frame for a

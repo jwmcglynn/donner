@@ -15,6 +15,7 @@
 
 #include "donner/base/AsyncifySuspendProbe.h"
 #include "donner/editor/WholeAppWorkerBridge.h"
+#include "donner/gpu/browser/BrowserGpuOwner.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
 
 // The app pthread's JS context has no `window`, so the frame-scheduling flag,
@@ -224,6 +225,10 @@ int main(int argc, char** argv) {
   // before anything is constructed.
   donner::editor::whole_app_worker::InstallWorkerGlobalShim();
   donner::editor::whole_app_worker::Install();
+  if (!donner::gpu::browser::StartBrowserGpuOwner("#canvas")) {
+    std::cerr << "Editor GPU service worker failed to start" << std::endl;
+    std::abort();
+  }
 #endif
 #ifndef __EMSCRIPTEN__
   donner::InstallFailureSignalHandler();

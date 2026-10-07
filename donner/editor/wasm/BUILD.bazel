@@ -33,6 +33,7 @@ _EDITOR_WASM_BINARY_DEPS = [
     "//donner/editor:editor_splash",
     "//donner/editor:pinch_zoom_policy",
     "//donner/editor/gui:editor_window",
+    "//donner/gpu/browser:emscripten_browser_bridge",
 ]
 
 # Fixed size of the editor's Wasm linear memory. See the `INITIAL_MEMORY` /
@@ -100,21 +101,10 @@ _EDITOR_LINKOPTS = [
     "-sBINARYEN_EXTRA_PASSES=--skip-pass=memory-packing,--one-caller-inline-max-function-size=400,--inline-max-combined-binary-size=196608",
     "-pthread",
     "-sEXIT_RUNTIME=0",
-    # the single-canvas architecture: the whole application - ImGui UI and Geode document
-    # rendering - runs on one app pthread that owns the single transferred
-    # `#canvas`. `main()` moves off the browser main thread, which is reduced
-    # to an event forwarder and a page-chrome host.
+    # CPU UI and raster work run on separate pthreads; the GPU service owns the single canvas.
     "-sPROXY_TO_PTHREAD",
-    # Emscripten's default already lists `#canvas`; state it so the
-    # single-canvas contract is visible at the link line.
-    "-sOFFSCREENCANVASES_TO_PTHREAD=#canvas",
-    # Two pre-warmed pool workers: the app pthread that `PROXY_TO_PTHREAD`
-    # moves `main()` onto, plus `AsyncRenderer`'s persistent raster
-    # `std::thread`. The unified architecture keeps that raster thread (it
-    # produces CPU tiles the app thread uploads once per generation), so a
-    # one-slot pool would make the browser main thread pay a synchronous
-    # worker spawn the first time a document rasterizes.
-    "-sPTHREAD_POOL_SIZE=2",
+    "-sOFFSCREENCANVASES_TO_PTHREAD=",
+    "-sPTHREAD_POOL_SIZE=3",
     "-sSTACK_SIZE=1048576",
     "-sUSE_PTHREADS=1",
     "-sENVIRONMENT=web,worker",

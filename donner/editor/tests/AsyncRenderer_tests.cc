@@ -245,41 +245,34 @@ TEST(AsyncRendererTileTransportTest, GpuReceiverKeepsTextureWithoutReadback) {
   auto original = std::make_shared<TileTransportTexture>();
   std::shared_ptr<const svg::RendererTextureSnapshot> texture = original;
   svg::RendererBitmap bitmap;
-  EXPECT_TRUE(PrepareTilePayloadForPresentation(true, bitmap, texture, {}));
+  EXPECT_TRUE(CanPresentTilePayload(true, bitmap, texture, {}));
   EXPECT_THAT(texture, ::testing::Eq(original));
   EXPECT_THAT(original->captures, ::testing::Eq(0));
   EXPECT_TRUE(bitmap.empty());
 }
 
-TEST(AsyncRendererTileTransportTest, CpuReceiverReadsOneChangedTile) {
+TEST(AsyncRendererTileTransportTest, CpuReceiverRefusesGpuTextureWithoutReadback) {
   auto original = std::make_shared<TileTransportTexture>();
   std::shared_ptr<const svg::RendererTextureSnapshot> texture = original;
   svg::RendererBitmap bitmap;
-  EXPECT_TRUE(PrepareTilePayloadForPresentation(false, bitmap, texture, {}));
-  EXPECT_THAT(texture, ::testing::Eq(nullptr));
-  EXPECT_THAT(original->captures, ::testing::Eq(1));
-  EXPECT_THAT(bitmap.dimensions, ::testing::Eq(Vector2i(1, 1)));
-  EXPECT_FALSE(bitmap.empty());
-  EXPECT_TRUE(PrepareTilePayloadForPresentation(false, bitmap, texture, {}));
-  EXPECT_THAT(original->captures, ::testing::Eq(1));
+  EXPECT_FALSE(CanPresentTilePayload(false, bitmap, texture, {}));
+  EXPECT_THAT(texture, ::testing::Eq(original));
+  EXPECT_THAT(original->captures, ::testing::Eq(0));
+  EXPECT_TRUE(bitmap.empty());
 }
 
-TEST(AsyncRendererTileTransportTest, FailedCaptureKeepsLeaseAndRefusesPayload) {
-  auto original = std::make_shared<TileTransportTexture>();
-  original->failCapture = true;
-  std::shared_ptr<const svg::RendererTextureSnapshot> texture = original;
-  svg::RendererBitmap bitmap;
-  EXPECT_FALSE(PrepareTilePayloadForPresentation(false, bitmap, texture, {}));
-  EXPECT_THAT(texture, ::testing::Eq(original));
-  EXPECT_THAT(original->captures, ::testing::Eq(1));
-  EXPECT_TRUE(bitmap.empty());
+TEST(AsyncRendererTileTransportTest, GpuReceiverRefusesCpuFallback) {
+  std::shared_ptr<const svg::RendererTextureSnapshot> texture;
+  const svg::RendererBitmap bitmap = svg::tests::MockRendererInterface::makeDummyBitmap();
+  EXPECT_FALSE(CanPresentTilePayload(true, bitmap, texture, {}));
+  EXPECT_TRUE(CanPresentTilePayload(false, bitmap, texture, {}));
 }
 
 TEST(AsyncRendererTileTransportTest, CancelledCaptureDoesNotReadback) {
   auto original = std::make_shared<TileTransportTexture>();
   std::shared_ptr<const svg::RendererTextureSnapshot> texture = original;
   svg::RendererBitmap bitmap;
-  EXPECT_FALSE(PrepareTilePayloadForPresentation(false, bitmap, texture, []() { return true; }));
+  EXPECT_FALSE(CanPresentTilePayload(false, bitmap, texture, []() { return true; }));
   EXPECT_THAT(texture, ::testing::Eq(original));
   EXPECT_THAT(original->captures, ::testing::Eq(0));
   EXPECT_TRUE(bitmap.empty());
@@ -288,7 +281,7 @@ TEST(AsyncRendererTileTransportTest, CancelledCaptureDoesNotReadback) {
 TEST(AsyncRendererTileTransportTest, MetadataOnlyNeedsNoPayloadWork) {
   std::shared_ptr<const svg::RendererTextureSnapshot> texture;
   svg::RendererBitmap bitmap;
-  EXPECT_TRUE(PrepareTilePayloadForPresentation(false, bitmap, texture, {}));
+  EXPECT_TRUE(CanPresentTilePayload(false, bitmap, texture, {}));
   EXPECT_THAT(texture, ::testing::Eq(nullptr));
   EXPECT_TRUE(bitmap.empty());
 }
@@ -7354,44 +7347,13 @@ TEST(RenderCoordinatorTest, FullCanvasPreviewCanStretchAcrossCanvasEpochs) {
   EXPECT_TRUE(ShouldPresentCompositedPreviewForViewport(preview, Vector2i(1896, 1088)));
 }
 
-// When the full-canvas GPU texture cannot be allocated, the worker keeps the
-// frame presentable by capturing a CPU snapshot instead of aborting, and it
-// reports that it did so.
-TEST(AsyncRendererTest, FullCanvasTextureAllocationFailureFallsBackToCpuSnapshot) {
+TEST(AsyncRendererTest, FullCanvasTextureAllocationFailureNeverReadsBack) {
   ::testing::NiceMock<svg::tests::MockRendererInterface> renderer;
-  ON_CALL(renderer, takeTextureSnapshot())
-      .WillByDefault(::testing::Return(std::shared_ptr<const svg::RendererTextureSnapshot>{}));
-  ON_CALL(renderer, takeSnapshot()).WillByDefault([]() {
-    return svg::tests::MockRendererInterface::makeDummyBitmap();
-  });
-
-  PresentationSnapshotPlan plan;
-  plan.captureTextureSnapshot = true;
-  svg::RendererBitmap bitmap;
-  std::shared_ptr<const svg::RendererTextureSnapshot> texture;
-  const bool fellBack = CaptureFullCanvasTextureSnapshot(renderer, plan, bitmap, texture);
-
-  EXPECT_THAT(fellBack, ::testing::IsTrue());
-  EXPECT_THAT(texture, ::testing::IsNull());
-  EXPECT_THAT(bitmap.dimensions, ::testing::Eq(Vector2i(1, 1)));
-}
-
-// A plan that already captures a CPU snapshot does not capture a second one
-// when the texture allocation fails.
-TEST(AsyncRendererTest, FullCanvasTextureFallbackDoesNotDuplicateCpuSnapshot) {
-  ::testing::NiceMock<svg::tests::MockRendererInterface> renderer;
-  ON_CALL(renderer, takeTextureSnapshot())
-      .WillByDefault(::testing::Return(std::shared_ptr<const svg::RendererTextureSnapshot>{}));
+  EXPECT_CALL(renderer, takeTextureSnapshot())
+      .WillOnce(::testing::Return(std::shared_ptr<const svg::RendererTextureSnapshot>{}));
   EXPECT_CALL(renderer, takeSnapshot()).Times(0);
-
-  PresentationSnapshotPlan plan;
-  plan.captureTextureSnapshot = true;
-  plan.captureCpuSnapshot = true;
-  svg::RendererBitmap bitmap;
   std::shared_ptr<const svg::RendererTextureSnapshot> texture;
-  const bool fellBack = CaptureFullCanvasTextureSnapshot(renderer, plan, bitmap, texture);
-
-  EXPECT_THAT(fellBack, ::testing::IsTrue());
+  EXPECT_TRUE(CaptureFullCanvasTextureSnapshot(renderer, texture));
   EXPECT_THAT(texture, ::testing::IsNull());
 }
 
@@ -7409,11 +7371,8 @@ TEST(AsyncRendererTest, FullCanvasTextureCaptureSuccessReportsNoFallback) {
       .WillByDefault(::testing::Return(std::make_shared<FakeTexture>()));
   EXPECT_CALL(renderer, takeSnapshot()).Times(0);
 
-  PresentationSnapshotPlan plan;
-  plan.captureTextureSnapshot = true;
-  svg::RendererBitmap bitmap;
   std::shared_ptr<const svg::RendererTextureSnapshot> texture;
-  const bool fellBack = CaptureFullCanvasTextureSnapshot(renderer, plan, bitmap, texture);
+  const bool fellBack = CaptureFullCanvasTextureSnapshot(renderer, texture);
 
   EXPECT_THAT(fellBack, ::testing::IsFalse());
   EXPECT_THAT(texture, ::testing::NotNull());

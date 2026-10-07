@@ -18,16 +18,11 @@ if (kExpectedHeadlessBackend !== "browser" && kExpectedHeadlessBackend !== "tran
 }
 const kExpectsBrowserBackend = kExpectedHeadlessBackend === "browser";
 
-// How the raster worker waited for its readbacks, which only its own results publish. The browser
-// backend reports a mapping ready only when it looks again after handing the thread over, which
-// the published stats call a device poll; the transitional adapter's WebAssembly path waits on a
-// completion event, which they call a timed wait.
-const kExpectedRasterWorkerWait = kExpectsBrowserBackend ? "device-poll" : "timed-wait-any";
-
 const baseUrl = process.env.DONNER_WASM_BASE_URL || "http://127.0.0.1:8000";
 
 type WorkerStats = {
   completedResults?: number;
+  acceptedForPresentation?: boolean;
   readbackCount?: number;
   readbackWaitStrategy?: string;
   compositorReadbackCount?: number;
@@ -40,7 +35,6 @@ type WorkerStats = {
 type SelectionWindow = Window & {
   __donnerFirstFramePresented?: boolean;
   __donnerWorkerStats?: WorkerStats;
-  __donnerGpuImageTransportReady?: { app: boolean; raster: boolean };
   __donnerSampleThumbnailStats?: {
     completed?: number;
     ready?: number;
@@ -87,9 +81,7 @@ test("the raster worker selects the backend its package was built for", async ({
     expect(lines.filter((line) => line.includes(kBrowserCanvasRuntimeSurface))).toEqual([]);
   }
 
-  // The line names the backend some selection in the page took, which could be any headless
-  // renderer. Opening a document makes the raster worker read back, and the stats only its results
-  // publish show which backend that readback went through.
+  // Opening a document exercises the raster client of the shared GPU owner.
   await expectSampleThumbnailsToSettle(page, {
     message: "the sample picker's thumbnail lane never drained",
     timeout: 20000,
@@ -99,19 +91,13 @@ test("the raster worker selects the backend its package was built for", async ({
   expect(bounds, "the editor canvas is missing").not.toBeNull();
   await page.mouse.click(bounds!.x + bounds!.width * 0.76, bounds!.y + 282);
   await expect(editorCanvas).toHaveAttribute("data-active-sample-id", "basic-shapes");
-  await expect
-    .poll(
-      () =>
-        page.evaluate(() => (window as SelectionWindow).__donnerWorkerStats?.readbackCount ?? 0),
-      { message: "the raster worker published no readback", timeout: 10000 },
-    )
-    .toBeGreaterThan(0);
-  expect(
-    await page.evaluate(() =>
-      (window as SelectionWindow).__donnerWorkerStats?.readbackWaitStrategy
-    ),
-    "the raster worker read back through another backend than its package was built for",
-  ).toBe(kExpectedRasterWorkerWait);
+  await expect.poll(
+    () =>
+      page.evaluate(() => (window as SelectionWindow).__donnerWorkerStats?.acceptedForPresentation),
+    { timeout: 10000 },
+  ).toBe(true);
+  expect(await page.evaluate(() => (window as SelectionWindow).__donnerWorkerStats?.readbackCount))
+    .toBe(0);
 
   expect(
     lines.filter((line) => line.includes(kBrowserBackendFailure)),
@@ -123,26 +109,12 @@ test("the raster worker selects the backend its package was built for", async ({
 test("ordinary document presentation performs no worker GPU readback", async ({ page }) => {
   test.skip(!kExpectsBrowserBackend, "GPU transport requires the browser backend");
   test.setTimeout(60000);
-  const transportErrors: string[] = [];
-  page.on("console", (message) => {
-    if (message.text().includes("worker: received unknown command")) {
-      transportErrors.push(message.text());
-    }
-  });
   await page.goto(`${baseUrl}/index.html`, { waitUntil: "domcontentloaded" });
   await expect
     .poll(() => page.evaluate(() => (window as SelectionWindow).__donnerFirstFramePresented), {
       timeout: 30000,
     })
     .toBe(true);
-  await expect
-    .poll(() =>
-      page.evaluate(() => {
-        const transport = (window as SelectionWindow).__donnerGpuImageTransportReady;
-        return transport?.app && transport?.raster;
-      }), { timeout: 10000 })
-    .toBe(true);
-  expect(transportErrors).toEqual([]);
 
   await expect
     .poll(() =>
@@ -152,6 +124,28 @@ test("ordinary document presentation performs no worker GPU readback", async ({ 
           && (thumbnails.ready ?? 0) > 0 && !thumbnails.active && !thumbnails.pending;
       }), { timeout: 20000 })
     .toBe(true);
+  const gpuOwner = await Promise.any(
+    page.workers().map(async (worker) => {
+      const ownsGpu = await worker.evaluate(() =>
+        Boolean(
+          (globalThis as typeof globalThis & { __donnerGpuServiceOwner?: boolean })
+            .__donnerGpuServiceOwner,
+        )
+      );
+      if (!ownsGpu) throw new Error("not the GPU owner");
+      return worker;
+    }),
+  );
+  const rawBefore = await gpuOwner.evaluate(() => {
+    const state = globalThis as typeof globalThis & {
+      __donnerReadGpuObjectStats: () => {
+        readbackCopies: number;
+        cpuTextureWrites: number;
+        surfaceCopies: number;
+      };
+    };
+    return state.__donnerReadGpuObjectStats();
+  });
   const before = await page.evaluate(() => (window as SelectionWindow).__donnerWorkerStats);
   const editorCanvas = page.locator("canvas#canvas");
   const bounds = await editorCanvas.boundingBox();
@@ -167,8 +161,29 @@ test("ordinary document presentation performs no worker GPU readback", async ({ 
     )
     .toBeGreaterThan(before?.completedResults ?? 0);
 
+  await expect.poll(
+    () =>
+      page.evaluate(() => (window as SelectionWindow).__donnerWorkerStats?.acceptedForPresentation),
+    { timeout: 10000 },
+  ).toBe(true);
   const after = await page.evaluate(() => (window as SelectionWindow).__donnerWorkerStats);
+  const rawAfter = await gpuOwner.evaluate(() => {
+    const state = globalThis as typeof globalThis & {
+      __donnerReadGpuObjectStats: () => {
+        readbackCopies: number;
+        cpuTextureWrites: number;
+        surfaceCopies: number;
+      };
+    };
+    return state.__donnerReadGpuObjectStats();
+  });
+  expect(rawAfter.readbackCopies).toBe(rawBefore.readbackCopies);
+  expect(rawAfter.cpuTextureWrites).toBe(rawBefore.cpuTextureWrites);
+  expect(rawAfter.surfaceCopies).toBeGreaterThan(rawBefore.surfaceCopies);
   expect(after, "the document result did not publish readback accounting").toBeDefined();
+  expect(after!.compositorReadbackTotal).toBeDefined();
+  expect(after!.tileHandoffReadbackTotal).toBeDefined();
+  expect(after!.finalSnapshotReadbackTotal).toBeDefined();
   expect(after!.readbackCount).toBe(
     (after!.compositorReadbackCount ?? 0) + (after!.tileHandoffReadbackCount ?? 0)
       + (after!.finalSnapshotReadbackCount ?? 0),

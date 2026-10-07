@@ -124,6 +124,9 @@ var LibraryDonnerGpu = {
     // Map from share identifier to the texture it holds; see donner_gpu_share_texture.
     shares: null,
     nextShare: 1,
+    readbackCopies: 0,
+    cpuTextureWrites: 0,
+    surfaceCopies: 0,
 
     // The protocol table, in the order BrowserWireCodes.cc builds it. This is the artifact the two
     // halves agree on: donner_gpu_check_protocol compares it element by element against the C++
@@ -164,12 +167,17 @@ var LibraryDonnerGpu = {
 
     debugStatistics: function() {
       var statistics = { 'objects': 0, 'textures': 0, 'textureBytes': 0, 'bufferBytes': 0,
-        'pendingSubmissions': 0, 'shares': DonnerGpu.shares.size, 'sharedTextureTailBytes': 0 };
+        'pendingSubmissions': 0, 'shares': DonnerGpu.shares.size, 'sharedTextureTailBytes': 0,
+        'surfaceBackingBytes': 0, 'readbackCopies': DonnerGpu.readbackCopies,
+        'cpuTextureWrites': DonnerGpu.cpuTextureWrites, 'surfaceCopies': DonnerGpu.surfaceCopies };
       DonnerGpu.logical.forEach(function(record) {
         statistics['objects'] += record.objects.size;
         statistics['pendingSubmissions'] += record.pendingSubmissions || 0;
         record.objects.forEach(function(entry) {
-          if (entry.alias) return;
+          if (entry.alias || entry.frame) return;
+          if (entry.kind === DonnerGpu.kSurface && entry.object.backing) {
+            statistics['surfaceBackingBytes'] += entry.object.width * entry.object.height * 4;
+          }
           if (entry.kind === DonnerGpu.kTexture) {
             statistics['textures'] += 1;
             statistics['textureBytes'] += entry.allocationBytes || 0;
@@ -753,6 +761,10 @@ var LibraryDonnerGpu = {
     // leaving it configured would keep a device the caller has finished with attached to the page.
     releaseSurface: function(record, surface) {
       DonnerGpu.releaseFrame(record, surface);
+      if (surface.backing) {
+        surface.backing.destroy();
+        surface.backing = null;
+      }
       surface.context.unconfigure();
     },
 
@@ -1448,6 +1460,7 @@ var LibraryDonnerGpu = {
       return DonnerGpu.refusalFor(record, DonnerGpu.kTexture, textureId);
     }
     return DonnerGpu.perform(record, function() {
+      DonnerGpu.cpuTextureWrites += 1;
       DonnerGpu.queue.writeTexture(
         { texture: texture, origin: { x: destinationX, y: destinationY, z: 0 } },
         HEAPU8.subarray(data, data + byteCount),
@@ -1723,6 +1736,7 @@ var LibraryDonnerGpu = {
       return DonnerGpu.kFailed;
     }
     return DonnerGpu.perform(record, function() {
+      DonnerGpu.readbackCopies += 1;
       record.encoder.copyTextureToBuffer(
         { texture: texture },
         { buffer: buffer, offset: layoutOffsetBytes, bytesPerRow: bytesPerRow,
@@ -1936,7 +1950,7 @@ var LibraryDonnerGpu = {
         return null;
       }
       globalThis['__donnerApplicationGpuSurfaceWorker'] = true;
-      return { canvas: canvas, context: context, frame: null };
+      return { canvas: canvas, context: context, frame: null, backing: null, width: 0, height: 0 };
     });
   },
 
@@ -1985,15 +1999,27 @@ var LibraryDonnerGpu = {
       return DonnerGpu.kFailed;
     }
     return DonnerGpu.perform(record, function() {
+      DonnerGpu.releaseFrame(record, surface);
+      if (surface.backing) {
+        surface.backing.destroy();
+        surface.backing = null;
+      }
       surface.canvas.width = width;
       surface.canvas.height = height;
       surface.context.configure({
         device: DonnerGpu.device,
         format: format,
-        usage: DonnerGpu.textureUsage(usageBits),
+        usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_DST,
         alphaMode: alphaMode,
       });
-      DonnerGpu.releaseFrame(record, surface);
+      surface.backing = DonnerGpu.device.createTexture({
+        label: 'DonnerSurfaceFrame',
+        size: { width: width, height: height },
+        format: format,
+        usage: DonnerGpu.textureUsage(usageBits) | GPUTextureUsage.COPY_SRC,
+      });
+      surface.width = width;
+      surface.height = height;
     });
   },
 
@@ -2008,18 +2034,9 @@ var LibraryDonnerGpu = {
     if (status !== DonnerGpu.kSuccess) {
       return status;
     }
-    var texture;
-    try {
-      texture = surface.context.getCurrentTexture();
-    } catch (e) {
-      // A canvas whose context has gone away reports itself lost; a new surface is the recovery,
-      // which is what Lost tells the caller.
-      HEAPU32[surfaceStatusCode >> 2] = DonnerGpu.kSurfaceLost;
-      return DonnerGpu.kSuccess;
-    }
+    var texture = surface.backing;
     if (!texture) {
-      // No frame is available right now; retrying is the recovery, which is what Timeout says.
-      HEAPU32[surfaceStatusCode >> 2] = DonnerGpu.kSurfaceTimeout;
+      HEAPU32[surfaceStatusCode >> 2] = DonnerGpu.kSurfaceLost;
       return DonnerGpu.kSuccess;
     }
     if (surface.frame !== null) {
@@ -2035,6 +2052,45 @@ var LibraryDonnerGpu = {
     record.objects.get(textureId).frame = true;
     surface.frame = textureId;
     HEAPU32[surfaceStatusCode >> 2] = DonnerGpu.kSurfaceSuccess;
+    return DonnerGpu.kSuccess;
+  },
+
+  donner_gpu_present_surface__deps: ['$DonnerGpu'],
+  donner_gpu_present_surface: function(handle, surfaceId, surfaceStatusCode) {
+    var record = DonnerGpu.logicalFor(handle);
+    var surface = DonnerGpu.lookup(record, DonnerGpu.kSurface, surfaceId);
+    if (surface === null) {
+      return DonnerGpu.refusalFor(record, DonnerGpu.kSurface, surfaceId);
+    }
+    var status = DonnerGpu.guard(record);
+    if (status !== DonnerGpu.kSuccess) {
+      return status;
+    }
+    if (surface.frame === null || surface.backing === null) {
+      return DonnerGpu.kFailed;
+    }
+    HEAPU32[surfaceStatusCode >> 2] = DonnerGpu.kSurfaceLost;
+    try {
+      var target = surface.context.getCurrentTexture();
+      var encoder = DonnerGpu.device.createCommandEncoder({ label: 'DonnerPresentFrame' });
+      encoder.copyTextureToTexture({ texture: surface.backing }, { texture: target },
+                                    { width: surface.width, height: surface.height });
+      DonnerGpu.queue.submit([encoder.finish()]);
+      record.pendingSubmissions = (record.pendingSubmissions || 0) + 1;
+      DonnerGpu.queue.onSubmittedWorkDone().then(function() {
+        record.pendingSubmissions -= 1;
+      }, function() {
+        record.pendingSubmissions -= 1;
+        DonnerGpu.lost = true;
+        DonnerGpu.lostReason = 'canvas presentation completion failed';
+      });
+      DonnerGpu.surfaceCopies += 1;
+      HEAPU32[surfaceStatusCode >> 2] = DonnerGpu.kSurfaceSuccess;
+    } catch (error) {
+      HEAPU32[surfaceStatusCode >> 2] = DonnerGpu.kSurfaceLost;
+    } finally {
+      DonnerGpu.releaseFrame(record, surface);
+    }
     return DonnerGpu.kSuccess;
   },
 

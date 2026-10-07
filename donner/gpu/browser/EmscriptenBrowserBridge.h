@@ -4,6 +4,7 @@
 /// browser.
 
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <memory>
 #include <vector>
@@ -135,9 +136,18 @@ public:
                                 uint32_t width, uint32_t height, uint32_t alphaModeCode) override;
   BridgeStatus acquireCurrentTexture(BrowserObjectId surfaceId, BrowserObjectId textureId,
                                      SurfaceStatus& status) override;
+  BridgeStatus presentSurface(BrowserObjectId surfaceId, SurfaceStatus& status) override;
   BridgeStatus abandonCurrentTexture(BrowserObjectId surfaceId) override;
 
 private:
+  struct PendingCommand {
+    const char* operation;
+    std::function<BridgeStatus()> execute;
+  };
+  BridgeStatus queueCommand(const char* operation, std::function<BridgeStatus()> command);
+  BridgeStatus flushCommands();
+  std::vector<PendingCommand> pendingCommands_;
+
   /// The handle this bridge names its logical device by in every library call.
   uint32_t logicalDevice_;
 

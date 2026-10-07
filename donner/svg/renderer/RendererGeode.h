@@ -571,19 +571,8 @@ public:
   /// Geode composes offscreen snapshots on the same device without reading pixels back.
   [[nodiscard]] bool supportsTextureSnapshotCompositing() const override { return true; }
 
-  /// Legacy presentation policy for callers that directly sample retained GPU textures.
-  ///
-  /// The browser presenter currently receives CPU bitmaps because its device belongs to another
-  /// worker. This is unresolved transport debt, not a restriction on same-worker GPU composition
-  /// or permission to add readback fallbacks. Compositor payloads use
-  /// supportsTextureSnapshotCompositing(), which remains true on the browser backend.
-  [[nodiscard]] bool requiresTextureSnapshotPresentation() const override {
-#ifdef __EMSCRIPTEN__
-    return false;
-#else
-    return true;
-#endif
-  }
+  /// GPU frames stay as texture snapshots. Browser clients share one GPU owner and queue.
+  [[nodiscard]] bool requiresTextureSnapshotPresentation() const override { return true; }
 
 private:
   RendererGeode(std::shared_ptr<geode::GeodeDevice> device, bool verbose,

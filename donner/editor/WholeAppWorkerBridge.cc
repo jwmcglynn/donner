@@ -135,6 +135,7 @@ EM_JS(void, InstallWorkerGlobalShimImpl, (), {
     return;  // Running on the main thread; the real globals are present.
   }
 
+  globalThis['__donnerApplicationWorker'] = true;
   const noop = function() {};
   const emptyRect = function() {
     return {x : 0, y : 0, left : 0, top : 0, right : 0, bottom : 0, width : 0, height : 0};
@@ -556,7 +557,7 @@ void SyncCanvasBackingSize() {
   }
   g_appliedBackingWidth = width;
   g_appliedBackingHeight = height;
-  emscripten_set_canvas_element_size("#canvas", width, height);
+  // The GPU owner applies the backing size when it configures the presentation surface.
 }
 
 }  // namespace

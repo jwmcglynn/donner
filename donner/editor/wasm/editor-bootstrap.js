@@ -368,45 +368,6 @@ var Module = {
   },
 };
 
-const donnerGpuImageWorkers = new Map();
-let donnerGpuImageGeneration = 0;
-window.__donnerGpuImageTransportReady = { generation: 0, app: false, raster: false };
-Module.registerDonnerGpuImageWorker = function(role, pthreadKey) {
-  if (
-    (role !== 1 && role !== 2) || !Number.isInteger(pthreadKey) || pthreadKey <= 0
-    || typeof PThread === "undefined"
-  ) {
-    return;
-  }
-  const worker = PThread.pthreads[pthreadKey];
-  if (!worker) {
-    return;
-  }
-  donnerGpuImageWorkers.set(role, worker);
-  if (donnerGpuImageWorkers.size !== 2) {
-    return;
-  }
-  const channel = new MessageChannel();
-  const generation = ++donnerGpuImageGeneration;
-  window.__donnerGpuImageTransportReady = { generation, app: false, raster: false };
-  donnerGpuImageWorkers.get(1).postMessage(
-    { cmd: "donnerGpuImagePort", target: "setimmediate", generation, port: channel.port1 },
-    [channel.port1],
-  );
-  donnerGpuImageWorkers.get(2).postMessage(
-    { cmd: "donnerGpuImagePort", target: "setimmediate", generation, port: channel.port2 },
-    [channel.port2],
-  );
-};
-Module.donnerGpuImageTransportReady = function(role, generation) {
-  const ready = window.__donnerGpuImageTransportReady;
-  if (!ready || ready.generation !== generation) {
-    return;
-  }
-  if (role === 1) ready.app = true;
-  if (role === 2) ready.raster = true;
-};
-
 canvas.addEventListener("contextmenu", function(event) {
   event.preventDefault();
 });

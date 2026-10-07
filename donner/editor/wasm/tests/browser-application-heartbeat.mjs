@@ -13,12 +13,12 @@ export async function startApplicationHeartbeat(
       const ownsSurface = await Promise.race([
         worker.evaluate(() =>
           Boolean(
-            globalThis.__donnerApplicationGpuSurfaceWorker,
+            globalThis.__donnerApplicationWorker,
           )
         ),
         new Promise((resolve) => setTimeout(() => resolve(false), 1000)),
       ]);
-      if (!ownsSurface) throw new Error("worker does not own the presented canvas");
+      if (!ownsSurface) throw new Error("worker does not run the editor application");
       return worker;
     }),
   );

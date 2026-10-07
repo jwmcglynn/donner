@@ -74,8 +74,15 @@ function createTexture(descriptor) {
 /** A command encoder that finishes into a buffer naming what was recorded on it. */
 function createCommandEncoder() {
   return {
+    copies: [],
+    copyTextureToTexture(source, destination, size) {
+      if (source.texture.destroyed || destination.texture.destroyed) {
+        throw new Error("copy references a destroyed texture");
+      }
+      this.copies.push({ source, destination, size });
+    },
     finish() {
-      return { finished: true };
+      return { finished: true, copies: this.copies };
     },
   };
 }
@@ -93,8 +100,9 @@ export function createDevice() {
   const queue = {
     submissions: 0,
     writes: 0,
-    submit() {
+    submit(buffers) {
       this.submissions += 1;
+      this.lastSubmission = [...buffers];
     },
     writeBuffer() {
       this.writes += 1;

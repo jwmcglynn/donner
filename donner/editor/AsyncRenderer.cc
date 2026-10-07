@@ -14,7 +14,6 @@
 
 #include "donner/base/MemoryAttribution.h"
 #include "donner/base/Utils.h"
-#include "donner/editor/BrowserImageTransport.h"
 #include "donner/editor/OverlayRenderer.h"
 #ifndef __EMSCRIPTEN__
 #include "donner/editor/TextToOutlines.h"
@@ -150,7 +149,7 @@ RenderResult::CompositedPreview BuildFullCanvasCompositedPreview(
   tile.kind = RenderResult::CompositedTile::Kind::Segment;
   tile.id = "full-canvas";
   tile.generation = generation;
-  tile.bitmap = bitmap;
+  tile.bitmap = textureSnapshot == nullptr ? bitmap : svg::RendererBitmap{};
   tile.textureSnapshot = std::move(textureSnapshot);
   tile.canvasOffsetDoc = rasterViewport.documentRect.topLeft - documentViewBox.topLeft;
   const Vector2i payloadDims =
@@ -406,11 +405,9 @@ private:
 
 // Captures the full-canvas texture for a result and counts an allocation failure.
 void CaptureFullCanvasTextureForResult(svg::RendererInterface& renderer,
-                                       const PresentationSnapshotPlan& plan,
-                                       svg::RendererBitmap& bitmap,
                                        std::shared_ptr<const svg::RendererTextureSnapshot>& texture,
                                        int& allocationFailureCount) {
-  if (CaptureFullCanvasTextureSnapshot(renderer, plan, bitmap, texture)) {
+  if (CaptureFullCanvasTextureSnapshot(renderer, texture)) {
     ++allocationFailureCount;
   }
 }
@@ -430,7 +427,7 @@ void CaptureFrameSnapshotsForResult(svg::RendererInterface& renderer,
     bitmap = renderer.takeSnapshotInterruptibly(shouldCancel);
   }
   if (plan.captureTextureSnapshot && !(shouldCancel && shouldCancel())) {
-    CaptureFullCanvasTextureForResult(renderer, plan, bitmap, texture,
+    CaptureFullCanvasTextureForResult(renderer, texture,
                                       timing.fullCanvasTextureAllocationFailureCount);
   }
 }
@@ -466,35 +463,21 @@ bool CanUseFullCanvasPresentation(bool hasCompositor, bool overviewInfillOnly,
 
 }  // namespace
 
-bool PrepareTilePayloadForPresentation(bool requiresTexturePresentation,
-                                       svg::RendererBitmap& bitmap,
-                                       std::shared_ptr<const svg::RendererTextureSnapshot>& texture,
-                                       const std::function<bool()>& shouldCancel) {
-  if (requiresTexturePresentation || texture == nullptr) {
-    return true;
-  }
-  svg::RendererBitmap captured = texture->takeSnapshotInterruptibly(shouldCancel);
-  if (captured.empty()) {
+bool CanPresentTilePayload(bool requiresTexturePresentation, const svg::RendererBitmap& bitmap,
+                           const std::shared_ptr<const svg::RendererTextureSnapshot>& texture,
+                           const std::function<bool()>& shouldCancel) {
+  if (shouldCancel && shouldCancel()) {
     return false;
   }
-  bitmap = std::move(captured);
-  texture.reset();
-  return true;
+  return requiresTexturePresentation ? texture != nullptr || bitmap.empty() : texture == nullptr;
 }
 
 bool CaptureFullCanvasTextureSnapshot(
-    svg::RendererInterface& renderer, const PresentationSnapshotPlan& plan,
-    svg::RendererBitmap& bitmap, std::shared_ptr<const svg::RendererTextureSnapshot>& texture) {
+    svg::RendererInterface& renderer,
+    std::shared_ptr<const svg::RendererTextureSnapshot>& texture) {
   ZoneScopedN("Renderer::takeTextureSnapshot");
   texture = renderer.takeTextureSnapshot();
-  if (texture != nullptr) {
-    return false;
-  }
-  if (!plan.captureCpuSnapshot) {
-    ZoneScopedN("Renderer::takeSnapshot (texture-fallback)");
-    bitmap = renderer.takeSnapshot();
-  }
-  return true;
+  return texture == nullptr;
 }
 
 PresentationSnapshotPlan ChoosePresentationSnapshotPlan(bool hasCompositedPreview,
@@ -538,7 +521,6 @@ void AsyncRenderer::start() {
   if (thread_.joinable()) {
     return;
   }
-  RegisterBrowserImageTransportWorker(false);
   thread_ = std::thread([this] { workerLoop(); });
 }
 
@@ -1099,7 +1081,6 @@ void AsyncRenderer::workerLoop() {
   // Emscripten's WebGPU object table is per-worker. Construct and use the
   // renderer on this pthread so wgpu handles never cross JS worker boundaries.
   svg::Renderer workerRenderer;
-  RegisterBrowserImageTransportWorker(true);
 #endif
   std::unique_ptr<svg::RendererInterface> sampleThumbnailRenderer;
   svg::RendererInterface* sampleThumbnailRendererRoot = nullptr;
@@ -1794,9 +1775,9 @@ void AsyncRenderer::workerLoop() {
         if (!metadataOnly) {
           tile.bitmap = std::move(ct.bitmap);
           tile.textureSnapshot = std::move(ct.textureSnapshot);
-          if (!PrepareTilePayloadForPresentation(
-                  requestRenderer.requiresTextureSnapshotPresentation(), tile.bitmap,
-                  tile.textureSnapshot, [this]() { return cancelRender_.isCancelled(); })) {
+          if (!CanPresentTilePayload(requestRenderer.requiresTextureSnapshotPresentation(),
+                                     tile.bitmap, tile.textureSnapshot,
+                                     [this]() { return cancelRender_.isCancelled(); })) {
             return std::nullopt;
           }
         }
@@ -1987,7 +1968,10 @@ void AsyncRenderer::workerLoop() {
     ApplyReadbackTimingStats(workerTiming, compositorReadbackStats, handoffReadbackStats,
                              finalReadbackStats);
     noteGpuWaitOutcome(finalReadbackStats);
-    if (!compositedPreview.has_value() && (!bitmap.empty() || fullCanvasTexture != nullptr)) {
+    const bool hasFullCanvasPresentation = requestRenderer.requiresTextureSnapshotPresentation()
+                                               ? fullCanvasTexture != nullptr
+                                               : !bitmap.empty();
+    if (!compositedPreview.has_value() && hasFullCanvasPresentation) {
       UTILS_RELEASE_ASSERT_MSG(
           fullCanvasPresentationAllowed,
           "A non-Off editor render produced no compositor tiles. Refusing monolithic full-canvas "

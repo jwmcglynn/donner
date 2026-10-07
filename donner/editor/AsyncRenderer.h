@@ -243,38 +243,24 @@ struct PresentationSnapshotPlan {
     bool hasCompositedPreview, bool fullCanvasPresentationAllowed,
     bool requiresTextureSnapshotPresentation, bool captureCpuSnapshot);
 
-/**
- * Capture the full-canvas texture snapshot for a render result. When the renderer cannot
- * allocate the texture, a CPU snapshot is captured instead (unless `plan` already captured one)
- * so the frame stays presentable.
- *
+/** Capture GPU presentation backing without a CPU fallback.
  * @param renderer Worker renderer that just finished the frame.
- * @param plan Snapshot plan for the result; `captureTextureSnapshot` must be set.
- * @param bitmap Receives the CPU snapshot when allocation failed and the plan had none.
- * @param texture Receives the texture snapshot, or null when allocation failed.
- * @return True when the texture allocation failed, whether or not this call captured the CPU
- *   snapshot itself.
+ * @param texture Receives the texture, or null on failure; presentation retains its prior frame.
+ * @return True when capture failed.
  */
 [[nodiscard]] bool CaptureFullCanvasTextureSnapshot(
-    svg::RendererInterface& renderer, const PresentationSnapshotPlan& plan,
-    svg::RendererBitmap& bitmap, std::shared_ptr<const svg::RendererTextureSnapshot>& texture);
+    svg::RendererInterface& renderer, std::shared_ptr<const svg::RendererTextureSnapshot>& texture);
 
-/**
- * Prepare one changed tile payload for the receiving presentation device.
- *
- * GPU composition retains textures independently of cross-thread frame transport. A receiver
- * requiring textures keeps the lease; a CPU receiver captures it only after the document lock has
- * been released. Metadata-only tiles and existing bitmaps need no work.
- *
- * @param requiresTexturePresentation True when the receiver can sample the worker's texture.
- * @param bitmap Receives CPU pixels when the receiver cannot sample the texture.
- * @param texture Texture lease; cleared only after a successful CPU capture.
- * @param shouldCancel Cancellation predicate for the bounded capture.
- * @return False when the required capture failed or was cancelled.
+/** Check whether a tile can reach its receiver without changing its storage kind.
+ * @param requiresTexturePresentation Whether rendered pixels must remain on the GPU.
+ * @param bitmap CPU payload from a software renderer, or empty for a GPU or metadata-only tile.
+ * @param texture GPU payload, or null for a software or metadata-only tile.
+ * @param shouldCancel Cancellation predicate for the presentation handoff.
+ * @return False for cancellation or a payload requiring GPU readback or CPU upload.
  */
-[[nodiscard]] bool PrepareTilePayloadForPresentation(
-    bool requiresTexturePresentation, svg::RendererBitmap& bitmap,
-    std::shared_ptr<const svg::RendererTextureSnapshot>& texture,
+[[nodiscard]] bool CanPresentTilePayload(
+    bool requiresTexturePresentation, const svg::RendererBitmap& bitmap,
+    const std::shared_ptr<const svg::RendererTextureSnapshot>& texture,
     const std::function<bool()>& shouldCancel);
 
 /// Attribution of one worker-to-UI handoff, in milliseconds.
@@ -358,8 +344,7 @@ struct RenderResult {
     svg::GpuWaitTimeoutSite timedOutWaitSite = svg::GpuWaitTimeoutSite::None;
     /// Wall time that wait spent before giving up, in milliseconds.
     int timedOutWaitMs = 0;
-    /// Full-canvas texture captures whose GPU texture could not be allocated. The worker then
-    /// used a CPU snapshot (captured here unless the plan already captured one).
+    /// Failed full-canvas GPU captures. The previous usable presentation is retained.
     int fullCanvasTextureAllocationFailureCount = 0;
     /// True when the iteration produced nothing to present: no compositor tile, and no
     /// full-canvas payload where one is permitted. The result then carries neither a preview nor a

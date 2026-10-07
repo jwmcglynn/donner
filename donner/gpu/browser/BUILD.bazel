@@ -44,8 +44,14 @@ donner_cc_library(
 # `--js-library=$(execpath //donner/gpu/browser:library_donner_gpu.js)`.
 donner_cc_library(
     name = "emscripten_browser_bridge",
-    srcs = ["EmscriptenBrowserBridge.cc"],
-    hdrs = ["EmscriptenBrowserBridge.h"],
+    srcs = [
+        "BrowserGpuOwner.cc",
+        "EmscriptenBrowserBridge.cc",
+    ],
+    hdrs = [
+        "BrowserGpuOwner.h",
+        "EmscriptenBrowserBridge.h",
+    ],
     target_compatible_with = select({
         "@platforms//cpu:wasm32": [],
         "@platforms//cpu:wasm64": [],
