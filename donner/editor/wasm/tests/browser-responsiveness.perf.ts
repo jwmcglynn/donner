@@ -11,6 +11,7 @@ import {
 } from "./composited-probe";
 import { stopCompositedProbe } from "./composited-probe-evidence.mjs";
 import { inspectGpuImageTransfer } from "./gpu-image-transfer-canary";
+import { echoGpuSessionConsole } from "./gpu-session-console";
 import {
   checkLatencyGate,
   completionCheckMode,
@@ -24,6 +25,11 @@ import {
   presentedDragSummary,
 } from "./presented-frame-samples.mjs";
 import { showsSplashDocument, splashDPoint } from "./splash-aim.mjs";
+
+// Every case here opens the editor; echo its GPU acquisition trace into the test log.
+test.beforeEach(({ page }) => {
+  echoGpuSessionConsole(page);
+});
 
 interface Diagnostics extends Window {
   __donnerBackend?: string;

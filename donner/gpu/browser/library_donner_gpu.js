@@ -257,6 +257,91 @@ var LibraryDonnerGpu = {
       }
     },
 
+    // The acquisition trace is observation only: it must never change a request or its outcome.
+    kTracePrefix: '[Geode/browser/gpu-trace]',
+    // Past GeodeBrowserRoot's 10 s device settle window (kBrowserDeviceSettleSeconds), and inside
+    // the life of a browser test that hit it, so a request the editor gave up on still says
+    // whether the browser ever answered.
+    kTraceStillPendingMs: 15000,
+
+    // Plain token for one field of a trace line.
+    traceToken: function(value) {
+      return String(value === undefined || value === null ? '' : value)
+        .replace(/[^A-Za-z0-9._-]+/g, '_').slice(0, 64);
+    },
+
+    // What the browser reports about `adapter`, reduced to plain tokens for one log line.
+    traceAdapterFields: function(adapter) {
+      var token = DonnerGpu.traceToken;
+      var info = adapter && adapter.info ? adapter.info : null;
+      var fallback = info && info.isFallbackAdapter !== undefined
+        ? info.isFallbackAdapter
+        : adapter && adapter.isFallbackAdapter;
+      return ' vendor=' + token(info && info.vendor) + ' architecture=' +
+             token(info && info.architecture) + ' device=' + token(info && info.device) +
+             ' description=' + token(info && info.description) + ' fallback=' +
+             (fallback ? 1 : 0);
+    },
+
+    // Runs `step` with `value`, swallowing anything it throws: a trace fault must never reach the
+    // request it observes.
+    traceGuarded: function(step) {
+      return function(value) {
+        try {
+          step(value);
+        } catch (ignored) {
+          // Observation only.
+        }
+      };
+    },
+
+    beginRequestTrace: function(generation) {
+      var startedAt = 0;
+      var timer = null;
+      try {
+        startedAt = performance.now();
+      } catch (ignored) {
+        startedAt = 0;
+      }
+      var write = function(fields) {
+        console.info(DonnerGpu.kTracePrefix + ' ' + fields + ' elapsed_ms=' +
+                     Math.round(performance.now() - startedAt) +
+                     (generation !== DonnerGpu.requestGeneration ? ' late=1' : ''));
+      };
+      var stopTimer = function() {
+        var pending = timer;
+        timer = null;
+        if (pending !== null) {
+          clearTimeout(pending);
+        }
+      };
+      try {
+        timer = setTimeout(DonnerGpu.traceGuarded(function() {
+          timer = null;
+          write('step=request outcome=still_pending');
+        }), DonnerGpu.kTraceStillPendingMs);
+        if (timer && typeof timer.unref === 'function') {
+          timer.unref();
+        }
+      } catch (ignored) {
+        timer = null;
+      }
+      return {
+        adapter: DonnerGpu.traceGuarded(function(adapter) {
+          write('step=adapter outcome=' + (adapter ? 'ready' : 'null') +
+                (adapter ? DonnerGpu.traceAdapterFields(adapter) : ''));
+        }),
+        device: DonnerGpu.traceGuarded(function(device) {
+          stopTimer();
+          write('step=device outcome=' + (device ? 'ready' : 'null'));
+        }),
+        failed: DonnerGpu.traceGuarded(function(failure) {
+          stopTimer();
+          write('step=request outcome=' + failure);
+        }),
+      };
+    },
+
     // Asks the browser for this worker's device and installs it when it arrives, unless the device
     // it was asked for has been let go by then.
     requestBrowserDevice: function() {
@@ -271,8 +356,15 @@ var LibraryDonnerGpu = {
         DonnerGpu.requestState = DonnerGpu.kRequestFailed;
         return;
       }
+      var trace = { adapter: function() {}, device: function() {}, failed: function() {} };
+      try {
+        trace = DonnerGpu.beginRequestTrace(generation);
+      } catch (ignored) {
+        // Observation only: the request goes on without its trace.
+      }
       Promise.resolve(adapterRequest)
         .then(function(adapter) {
+          trace.adapter(adapter);
           if (!adapter) {
             failure = 'adapter_null';
             throw new Error();
@@ -281,6 +373,7 @@ var LibraryDonnerGpu = {
           return adapter.requestDevice();
         })
         .then(function(device) {
+          trace.device(device);
           if (!device) {
             throw new Error();
           }
@@ -290,6 +383,7 @@ var LibraryDonnerGpu = {
           }
         })
         .catch(function() {
+          trace.failed(failure);
           if (generation === DonnerGpu.requestGeneration) {
             DonnerGpu.requestError = failure;
             DonnerGpu.requestState = DonnerGpu.kRequestFailed;
@@ -314,6 +408,12 @@ var LibraryDonnerGpu = {
         if (DonnerGpu.device === device) {
           DonnerGpu.lost = true;
           DonnerGpu.lostReason = String(info.reason) + ': ' + String(info.message);
+          // The browser's free-text message stays in lostReason, which the runtime reports; the
+          // trace line carries only the reason token, so no message can read as a failure pattern.
+          DonnerGpu.traceGuarded(function() {
+            console.info(DonnerGpu.kTracePrefix + ' step=device outcome=lost reason=' +
+                         DonnerGpu.traceToken(info && info.reason));
+          })();
         }
       });
       DonnerGpu.requestState = DonnerGpu.kRequestReady;

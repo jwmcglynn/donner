@@ -18,7 +18,7 @@ function evaluateConfig(filename, baseConfig, environment, temporary) {
       specifier.startsWith("./playwright.")
         ? (baseConfig[specifier] ?? baseConfig)
         : require(specifier),
-    process: { env: environment, cwd: () => temporary, execPath: process.execPath },
+    process: { env: environment, cwd: () => temporary, execPath: process.execPath, pid: 4242 },
   };
   vm.runInNewContext(readFileSync(path.join(directory, filename), "utf8"), context, {
     filename,
@@ -81,8 +81,24 @@ test("Bazel browser launch preserves caller environment and launch options", (t)
   assert.equal(config.use.launchOptions.env?.HOME, environment.HOME);
   assert.equal(config.use.launchOptions.env?.CALLER_SETTING, "preserved");
   assert.equal(config.use.launchOptions.timeout, 1234);
-  assert.deepEqual(Array.from(config.use.launchOptions.args), ["--existing-launch-argument"]);
+  assert.equal(Array.from(config.use.launchOptions.args)[0], "--existing-launch-argument");
   assert.equal(config.use.viewport.width, 100);
+});
+
+test("only the hosted job's Chromium writes its own log into the test outputs", (t) => {
+  const { temporary, environment, baseConfig } = fixture(t);
+  const quiet = evaluateConfig("playwright.bazel.config.js", baseConfig, environment, temporary);
+  assert.deepEqual(Array.from(quiet.use.launchOptions.args), ["--existing-launch-argument"]);
+
+  environment.DONNER_BROWSER_STALL_DIAGNOSTICS = "1";
+  const config = evaluateConfig("playwright.bazel.config.js", baseConfig, environment, temporary);
+  const args = Array.from(config.use.launchOptions.args);
+  assert.equal(args.length, 3, args.join(" "));
+  assert.equal(args[1], "--enable-logging");
+  const logFile = args[2].replace(/^--log-file=/, "");
+  assert.notEqual(logFile, args[2], "the third argument must name the log file");
+  assert.equal(path.dirname(logFile), environment.TEST_UNDECLARED_OUTPUTS_DIR);
+  assert.equal(path.basename(logFile), "chromium-4242.log", "one log per worker process");
 });
 
 test("Explicit launch environments retain their filtering", (t) => {

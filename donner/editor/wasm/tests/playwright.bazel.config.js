@@ -34,6 +34,19 @@ module.exports = {
     ...baseConfig.use,
     launchOptions: {
       ...baseConfig.use.launchOptions,
+      // In the ephemeral hosted job only (the one that enables the stall recorder), Chromium's own
+      // log, GPU-process errors included, goes with the test outputs: a session whose GPU work
+      // never arrives keeps that record in its artifacts. A persistent self-hosted runner never
+      // publishes it. One file per Playwright worker process, which launches its own browser.
+      args: [
+        ...(baseConfig.use.launchOptions.args ?? []),
+        ...(process.env.DONNER_BROWSER_STALL_DIAGNOSTICS === "1"
+          ? [
+            "--enable-logging",
+            `--log-file=${path.join(outputRoot, `chromium-${process.pid}.log`)}`,
+          ]
+          : []),
+      ],
       env: {
         ...(baseConfig.use.launchOptions.env ?? process.env),
         BREAKPAD_DUMP_LOCATION: crashDirectory,

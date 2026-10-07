@@ -31,6 +31,7 @@ import {
   type SplashToneCensus,
 } from "./canvas-color-stats";
 import { waitForAppliedPointer } from "./gesture-streams";
+import { echoGpuSessionConsole } from "./gpu-session-console";
 import { compareOverlayBitmap, type OverlayBitmapComparison } from "./overlay-bitmap-compare";
 import { cropCapturedPng, normalizeOverlayGeneration, overlayGenerationMask } from "./png-crop";
 import {
@@ -1182,6 +1183,7 @@ async function openEditor(
   failureReadback = false,
 ): Promise<string[]> {
   const failures: string[] = [];
+  echoGpuSessionConsole(page);
   page.on("console", (message) => {
     if (
       /Failed to wake Wasm renderer pthread|Wasm renderer pthread wake rejected|Aborted|RuntimeError|UTILS_RELEASE_ASSERT/i

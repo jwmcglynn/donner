@@ -162,6 +162,7 @@ export function loadLibrary({
   requestAdapterForTesting,
   navigatorGpuAvailable = true,
   nowForTesting = () => performance.now(),
+  timersForTesting = null,
 } = {}) {
   const heap = new ArrayBuffer(64 * 1024);
   const bytes = new Uint8Array(heap);
@@ -179,11 +180,14 @@ export function loadLibrary({
   const handedOut = [];
   let adapterRequests = 0;
   const consoleErrors = [];
+  const consoleInfo = [];
   const sandbox = {
     performance: { now: nowForTesting },
     console: {
       error: (...parts) => consoleErrors.push(parts.map(String).join(" ")),
+      info: (...parts) => consoleInfo.push(parts.map(String).join(" ")),
     },
+    ...(timersForTesting ?? {}),
     HEAPU8: bytes,
     HEAPU32: words,
     UTF8ToString(pointer, byteCount) {
@@ -265,6 +269,8 @@ export function loadLibrary({
     },
     /** Every line the library wrote to the console as an error, in order. */
     consoleErrors,
+    /** Every line the library wrote to the console as information, in order. */
+    consoleInfo,
     /** Reports the device handed out last lost, with `info` as the browser's reason. */
     lose(info) {
       assert.ok(handedOut.length > 0, "no device has been handed out to lose");
