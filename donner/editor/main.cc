@@ -166,8 +166,15 @@ void RunWasmEditorFrame(void* userdata) {
     return;
   }
   if (state->window->shouldClose()) {
+#ifdef DONNER_EDITOR_WHOLE_APP_WORKER
+    donner::editor::whole_app_worker::StopFrameDriver();
+#else
     emscripten_cancel_main_loop();
+#endif
     delete state;
+#ifdef DONNER_EDITOR_WHOLE_APP_WORKER
+    donner::gpu::browser::StopBrowserGpuOwner();
+#endif
     return;
   }
 

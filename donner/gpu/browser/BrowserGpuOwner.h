@@ -30,9 +30,12 @@ void RunOnBrowserGpuOwner(Function&& operation) {
 /// Whether the calling thread is the registered browser GPU owner.
 [[nodiscard]] bool IsBrowserGpuOwnerThread();
 
-/// Drain nonblocking GPU commands while the owner is in a runtime wait.
+/// Process one bounded batch of GPU commands while the owner is in a runtime wait.
 /// The editor's futex adapter calls this between finite wait slices; it does not run JS promises.
 void ProcessBrowserGpuOwnerWait();
+
+/// Stop delivery on the owner after every client has joined and released its resources.
+void StopBrowserGpuOwner();
 
 /// Whether this module has registered a shared browser GPU owner.
 [[nodiscard]] bool UsesBrowserGpuOwner();

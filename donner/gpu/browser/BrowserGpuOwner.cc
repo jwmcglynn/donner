@@ -10,6 +10,8 @@
 #include <cstdint>
 #include <cstdlib>
 #include <limits>
+
+#include "donner/gpu/browser/BrowserGpuTaskQueue.h"
 #ifdef __EMSCRIPTEN_PTHREADS__
 #include <emscripten/proxying.h>
 #include <emscripten/threading.h>
@@ -27,15 +29,58 @@ constexpr std::size_t kRequested = 3;
 constexpr std::size_t kStarted = 4;
 constexpr std::size_t kFinished = 5;
 constexpr std::size_t kMaximumDispatchWaitUs = 6;
-std::array<std::atomic<uint32_t>, 7> gOwnerWaitStats{};
+constexpr std::size_t kBatches = 7;
+constexpr std::size_t kMaximumBatchSize = 8;
+constexpr std::size_t kMaximumBatchUs = 9;
+std::array<std::atomic<uint32_t>, 10> gOwnerWaitStats{};
 static_assert(sizeof(std::atomic<uint32_t>) == sizeof(uint32_t));
 static_assert(std::atomic<uint32_t>::is_always_lock_free);
 thread_local bool gProcessingOwnerWait = false;
+// The queue outlives SDK notification messages, including those pending at owner shutdown.
+em_proxying_queue* gNotificationQueue = nullptr;
+BrowserGpuTaskQueue gReady;
+bool gProcessingBatch = false;
+bool gPulseScheduled = false;
+
+// clang-format off
+EM_JS(void, ScheduleGpuPulse, (), {
+  globalThis['__donnerGpuPulsePort'].postMessage(0);
+});
+// clang-format on
+
+void SchedulePulse() {
+  if (!gPulseScheduled) {
+    gPulseScheduled = true;
+    ScheduleGpuPulse();
+  }
+}
+
+void RecordMaximum(std::size_t index, double value) {
+  const auto bounded = static_cast<uint32_t>(
+      std::clamp(value, 0.0, static_cast<double>(std::numeric_limits<uint32_t>::max())));
+  auto& maximum = gOwnerWaitStats[index];
+  maximum.store(std::max(maximum.load(std::memory_order_relaxed), bounded),
+                std::memory_order_relaxed);
+}
+
+void ExecuteReadyBatch() {
+  const double started = emscripten_get_now();
+  const std::size_t count = gReady.executeBatch();
+  if (count) {
+    gOwnerWaitStats[kBatches].fetch_add(1, std::memory_order_relaxed);
+    RecordMaximum(kMaximumBatchSize, static_cast<double>(count));
+    RecordMaximum(kMaximumBatchUs, (emscripten_get_now() - started) * 1000.0);
+  }
+  if (!gReady.empty()) {
+    SchedulePulse();
+  }
+}
 
 struct OwnerRequest {
   void (*operation)(void*);
   void* context;
   std::atomic<int> complete{0};
+  BrowserGpuTask task;
 };
 
 void Invoke(void* context) {
@@ -50,8 +95,31 @@ void Invoke(void* context) {
   // This release is the callback's final access to the caller-owned request.
   request.complete.store(1, std::memory_order_release);
 }
+void EnqueueRequest(void* context) {
+  auto& request = *static_cast<OwnerRequest*>(context);
+  request.task.callback = &Invoke;
+  request.task.context = &request;
+  gReady.enqueue(request.task);
+  SchedulePulse();
+}
 #endif
 }  // namespace
+
+extern "C" EMSCRIPTEN_KEEPALIVE void donner_browser_gpu_pulse() {
+#ifdef __EMSCRIPTEN_PTHREADS__
+  if (!IsBrowserGpuOwnerThread()) {
+    return;
+  }
+  gPulseScheduled = false;
+  if (gProcessingBatch) {
+    SchedulePulse();
+    return;
+  }
+  gProcessingBatch = true;
+  ExecuteReadyBatch();
+  gProcessingBatch = false;
+#endif
+}
 
 void RegisterBrowserGpuOwner() {
 #ifdef __EMSCRIPTEN_PTHREADS__
@@ -60,15 +128,27 @@ void RegisterBrowserGpuOwner() {
       !pthread_equal(expected, pthread_self())) {
     std::abort();
   }
-  // Allocate the owner's queue before any client can hold an application lock while dispatching.
-  if (!emscripten_proxy_async(
-          emscripten_proxy_get_system_queue(), pthread_self(), [](void*) {}, nullptr)) {
+  // Prewarm notifications before clients can hold application locks while dispatching.
+  if (!gNotificationQueue) {
+    gNotificationQueue = em_proxying_queue_create();
+  }
+  if (!gNotificationQueue ||
+      !emscripten_proxy_async(gNotificationQueue, pthread_self(), [](void*) {}, nullptr)) {
     std::abort();
   }
-  emscripten_proxy_execute_queue(emscripten_proxy_get_system_queue());
+  emscripten_proxy_execute_queue(gNotificationQueue);
   // clang-format off
   EM_ASM({
     globalThis['__donnerGpuOwner'] = true;
+    const channel = new MessageChannel();
+    channel.port1.onmessage = () => _donner_browser_gpu_pulse();
+    globalThis['__donnerGpuPulsePort'] = channel.port2;
+    globalThis['__donnerCloseGpuPulse'] = () => {
+      channel.port1.onmessage = null;
+      channel.port1.close();
+      channel.port2.close();
+      delete globalThis['__donnerGpuPulsePort'];
+    };
     const index = Number($0) / 4;
     globalThis['__donnerReadGpuOwnerWaitStats'] = () => ({
       'pumps': Atomics.load(HEAPU32, index),
@@ -78,6 +158,9 @@ void RegisterBrowserGpuOwner() {
       'started': Atomics.load(HEAPU32, index + 4),
       'finished': Atomics.load(HEAPU32, index + 5),
       'maximumDispatchWaitMs': Atomics.load(HEAPU32, index + 6) / 1000,
+      'batches': Atomics.load(HEAPU32, index + 7),
+      'maximumBatchSize': Atomics.load(HEAPU32, index + 8),
+      'maximumBatchMs': Atomics.load(HEAPU32, index + 9) / 1000,
     });
   }, gOwnerWaitStats.data());
   // clang-format on
@@ -88,10 +171,10 @@ void RunOnBrowserGpuOwner(void (*operation)(void*), void* context) {
 #ifdef __EMSCRIPTEN_PTHREADS__
   const pthread_t owner = gOwner.load(std::memory_order_acquire);
   if (owner && !pthread_equal(owner, pthread_self())) {
-    OwnerRequest request{operation, context};
+    OwnerRequest request{operation, context, {}, {}};
     gOwnerWaitStats[kRequested].fetch_add(1, std::memory_order_relaxed);
-    // The editor wait adapter services this queue; callbacks only call nonblocking JS primitives.
-    if (!emscripten_proxy_async(emscripten_proxy_get_system_queue(), owner, &Invoke, &request)) {
+    // Notifications cannot release callers, so the SDK's drain cannot grow with repeated requests.
+    if (!emscripten_proxy_async(gNotificationQueue, owner, &EnqueueRequest, &request)) {
       std::abort();
     }
     const double deadlineMs = emscripten_get_now() + 10000.0;
@@ -127,19 +210,31 @@ bool IsBrowserGpuOwnerThread() {
 
 void ProcessBrowserGpuOwnerWait() {
 #ifdef __EMSCRIPTEN_PTHREADS__
-  if (gProcessingOwnerWait || !IsBrowserGpuOwnerThread()) {
+  if (gProcessingBatch || !IsBrowserGpuOwnerThread()) {
     return;
   }
+  gProcessingBatch = true;
   gProcessingOwnerWait = true;
   gOwnerWaitStats[kPumpCount].fetch_add(1, std::memory_order_relaxed);
   const double started = emscripten_get_now();
-  emscripten_proxy_execute_queue(emscripten_proxy_get_system_queue());
-  const double elapsedUs = std::clamp((emscripten_get_now() - started) * 1000.0, 0.0,
-                                      static_cast<double>(std::numeric_limits<uint32_t>::max()));
-  const uint32_t maximum = gOwnerWaitStats[kMaximumPumpUs].load(std::memory_order_relaxed);
-  gOwnerWaitStats[kMaximumPumpUs].store(std::max(maximum, static_cast<uint32_t>(elapsedUs)),
-                                        std::memory_order_relaxed);
+  emscripten_proxy_execute_queue(gNotificationQueue);
+  ExecuteReadyBatch();
+  RecordMaximum(kMaximumPumpUs, (emscripten_get_now() - started) * 1000.0);
   gProcessingOwnerWait = false;
+  gProcessingBatch = false;
+#endif
+}
+
+void StopBrowserGpuOwner() {
+#ifdef __EMSCRIPTEN_PTHREADS__
+  if (!IsBrowserGpuOwnerThread() || gProcessingBatch || !gReady.empty() ||
+      gOwnerWaitStats[kRequested].load() != gOwnerWaitStats[kFinished].load()) {
+    std::abort();
+  }
+  // All clients have joined and released resources before the pulse ports close.
+  EM_ASM({ globalThis['__donnerCloseGpuPulse'](); });
+  gPulseScheduled = false;
+  gOwner.store(pthread_t{}, std::memory_order_release);
 #endif
 }
 

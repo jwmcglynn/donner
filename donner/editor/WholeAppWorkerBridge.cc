@@ -23,6 +23,7 @@
 #include "donner/base/AsyncifySuspendProbe.h"
 #include "donner/base/HeapSizeHistogram.h"
 #include "donner/base/MemoryAttribution.h"
+#include "donner/editor/FrameCallbackAdmission.h"
 #include "donner/svg/resources/CatalogEncodedFontStore.h"
 
 namespace donner::editor::whole_app_worker {
@@ -593,7 +594,7 @@ struct FrameDriverState {
   pthread_t appThread{};
   em_proxying_queue* proxyQueue = nullptr;
   FrameDriver driver = FrameDriver::SetTimeoutFallback;
-  std::atomic<std::uint32_t> pendingFrames{0};
+  FrameCallbackAdmission admission;
   std::atomic<std::uint32_t> peakPendingFrames{0};
 
   double lastTickMs = 0.0;
@@ -624,42 +625,52 @@ void RecordTick() {
   ++state.ticks;
 }
 
-/// Frame entry point for the worker-rAF arm: Emscripten's main loop calls this
-/// once per animation frame on the app thread.
-void RunDrivenFrame(void* userData) {
-  RecordTick();
+/// Every scheduled callback carries a generation, never the lifetime-limited editor pointer.
+void RunDrivenFrame(void* token) {
   FrameDriverState& state = Driver();
-  if (state.frameFn != nullptr) {
-    state.frameFn(userData);
+  const auto generation = static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(token));
+  if (state.admission.isCurrent(generation)) {
+    RecordTick();
+    state.frameFn(state.userData);
   }
 }
 
-/// Frame entry point for the proxied arm, run on the app thread out of the
-/// proxying queue after the browser main thread's rAF posted it.
-void RunProxiedFrame(void* /*unused*/) {
+void RunProxiedFrame(void* token) {
   FrameDriverState& state = Driver();
-  RunDrivenFrame(state.userData);
-  state.pendingFrames.fetch_sub(1, std::memory_order_relaxed);
+  RunDrivenFrame(token);
+  state.admission.complete(static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(token)));
+}
+
+void ScheduleProxiedFrame(void* token) {
+  FrameDriverState& state = Driver();
+  const auto generation = static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(token));
+  if (state.admission.isCurrent(generation)) {
+    // Rendering inside the SDK's unbounded queue drain can starve GPU notifications.
+    emscripten_async_call(&RunProxiedFrame, token, 0);
+  } else {
+    state.admission.complete(generation);
+  }
 }
 
 }  // namespace
 
-// Called from the browser main thread's rAF loop. Runs on the main thread (the
-// wasm module is shared), and its only job is to hand one task per vsync to the
-// app thread's proxying queue, which wakes that thread's event loop.
-extern "C" EMSCRIPTEN_KEEPALIVE void donner_whole_app_vsync_tick() {
+/// Browser main-thread tick. Returns false to retire an obsolete main-thread rAF loop.
+extern "C" EMSCRIPTEN_KEEPALIVE bool donner_whole_app_vsync_tick(std::uint32_t generation) {
   FrameDriverState& state = Driver();
-  if (state.proxyQueue == nullptr) {
-    return;
+  if (!generation) {
+    generation = state.admission.generation();
   }
-  const std::uint32_t pending = state.pendingFrames.fetch_add(1, std::memory_order_relaxed) + 1;
-  std::uint32_t peak = state.peakPendingFrames.load(std::memory_order_relaxed);
-  while (peak < pending &&
-         !state.peakPendingFrames.compare_exchange_weak(peak, pending, std::memory_order_relaxed)) {
+  if (!state.admission.isCurrent(generation)) {
+    return false;
   }
-  if (!emscripten_proxy_async(state.proxyQueue, state.appThread, &RunProxiedFrame, nullptr)) {
-    state.pendingFrames.fetch_sub(1, std::memory_order_relaxed);
+  if (state.proxyQueue && state.admission.acquire(generation)) {
+    state.peakPendingFrames.store(1, std::memory_order_relaxed);
+    void* token = reinterpret_cast<void*>(static_cast<std::uintptr_t>(generation));
+    if (!emscripten_proxy_async(state.proxyQueue, state.appThread, &ScheduleProxiedFrame, token)) {
+      state.admission.complete(generation);
+    }
   }
+  return true;
 }
 
 extern "C" EMSCRIPTEN_KEEPALIVE std::uint32_t donner_whole_app_vsync_peak_pending() {
@@ -680,6 +691,8 @@ FrameDriver InstallFrameDriver(void (*frameFn)(void*), void* userData) {
   state.frameFn = frameFn;
   state.userData = userData;
   state.appThread = pthread_self();
+  const std::uint32_t generation = state.admission.start();
+  void* token = reinterpret_cast<void*>(static_cast<std::uintptr_t>(generation));
 
   // clang-format off
   const bool forceProxiedFrames = MAIN_THREAD_EM_ASM_INT({
@@ -693,7 +706,7 @@ FrameDriver InstallFrameDriver(void (*frameFn)(void*), void* userData) {
     // clang-format off
     MAIN_THREAD_ASYNC_EM_ASM({ window['__donnerFrameDriver'] = 'worker-raf'; });
     // clang-format on
-    emscripten_set_main_loop_arg(&RunDrivenFrame, userData, /*fps=*/0,
+    emscripten_set_main_loop_arg(&RunDrivenFrame, token, /*fps=*/0,
                                  /*simulateInfiniteLoop=*/true);
     return state.driver;
   }
@@ -702,13 +715,15 @@ FrameDriver InstallFrameDriver(void (*frameFn)(void*), void* userData) {
   // emulation that is not vsync-aligned and is subject to the nested-timer
   // clamp. Drive from the browser main thread's rAF instead and pay one
   // postMessage per frame (measured at ~40 microseconds).
-  state.proxyQueue = em_proxying_queue_create();
+  if (!state.proxyQueue) {
+    state.proxyQueue = em_proxying_queue_create();
+  }
   if (state.proxyQueue == nullptr) {
     state.driver = FrameDriver::SetTimeoutFallback;
     // clang-format off
     MAIN_THREAD_ASYNC_EM_ASM({ window['__donnerFrameDriver'] = 'set-timeout'; });
     // clang-format on
-    emscripten_set_main_loop_arg(&RunDrivenFrame, userData, /*fps=*/0,
+    emscripten_set_main_loop_arg(&RunDrivenFrame, token, /*fps=*/0,
                                  /*simulateInfiniteLoop=*/true);
     return state.driver;
   }
@@ -717,18 +732,26 @@ FrameDriver InstallFrameDriver(void (*frameFn)(void*), void* userData) {
   // clang-format off
   MAIN_THREAD_ASYNC_EM_ASM({
     window['__donnerFrameDriver'] = 'proxied-main-raf';
+    const generation = $0;
     const tick = function() {
-      _donner_whole_app_vsync_tick();
-      requestAnimationFrame(tick);
+      if (_donner_whole_app_vsync_tick(generation)) requestAnimationFrame(tick);
     };
     requestAnimationFrame(tick);
-  });
+  }, generation);
   // clang-format on
   // The app thread must keep returning to its event loop so the proxying queue
   // drains; `emscripten_exit_with_live_runtime` does exactly that without
   // installing a second scheduler that would double-drive the frame.
   emscripten_exit_with_live_runtime();
   return state.driver;
+}
+
+void StopFrameDriver() {
+  FrameDriverState& state = Driver();
+  state.admission.stop();
+  state.frameFn = nullptr;
+  state.userData = nullptr;
+  emscripten_cancel_main_loop();
 }
 
 FrameTickStats TickStats() {

@@ -150,10 +150,14 @@ enum class FrameDriver : int {
 ///
 /// Call instead of `emscripten_set_main_loop_arg`: on the worker-rAF arm this
 /// installs exactly that main loop, and on the proxied arm it installs a
-/// main-thread rAF pump that hands one task per vsync to @p frameFn on the
-/// calling thread. @p frameFn must be safe to re-enter-guard itself; the driver
-/// does not serialize.
+/// main-thread rAF pump coalescing ticks until the scheduled frame completes.
+/// Rendering runs outside the proxy queue drain. @p frameFn must guard re-entry on the worker-rAF
+/// arm, where a synchronous proxied call may deliver another callback.
 FrameDriver InstallFrameDriver(void (*frameFn)(void*), void* userData);
+
+/// Invalidate queued frame callbacks before destroying their editor state. Called on the app
+/// thread.
+void StopFrameDriver();
 
 /// Interval statistics for the frame driver's ticks, in milliseconds.
 struct FrameTickStats {
