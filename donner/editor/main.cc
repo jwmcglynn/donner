@@ -155,6 +155,26 @@ struct WasmEditorLoopState {
   RenderFrameCallback renderFrame = &RunEditorFrame;
 };
 
+/// Protect an active canvas frame from nested editor callbacks and asynchronous GPU batches.
+class WasmFrameScope {
+public:
+  explicit WasmFrameScope(WasmEditorLoopState& state) : state_(state) {
+    state_.frameActive = true;
+    donner::gpu::browser::SetBrowserGpuOwnerFrameActive(true);
+  }
+
+  ~WasmFrameScope() {
+    donner::gpu::browser::SetBrowserGpuOwnerFrameActive(false);
+    state_.frameActive = false;
+  }
+
+  WasmFrameScope(const WasmFrameScope&) = delete;
+  WasmFrameScope& operator=(const WasmFrameScope&) = delete;
+
+private:
+  WasmEditorLoopState& state_;
+};
+
 void RunWasmEditorFrame(void* userdata) {
   auto* state = static_cast<WasmEditorLoopState*>(userdata);
   // Synchronous browser calls proxied from the pthread can let WebKit service
@@ -178,6 +198,7 @@ void RunWasmEditorFrame(void* userdata) {
     return;
   }
 
+  WasmFrameScope frameScope(*state);
   const double nowMs = emscripten_get_now();
   const bool editorRequested = state->window->consumeWasmFrameRequest();
   // Input that has arrived but not been presented is its own wake source.
@@ -198,15 +219,12 @@ void RunWasmEditorFrame(void* userdata) {
   const bool timerDue = state->nextIdleWakeAtMs.has_value() && nowMs >= *state->nextIdleWakeAtMs;
   if (!editorRequested && !browserRequested && !timerDue) {
     // Idle completion confirmation can yield to the browser and deliver another scheduler callback.
-    state->frameActive = true;
     state->window->pollIdleGpu();
-    state->frameActive = false;
     return;
   }
   const int triggerBits =
       (editorRequested ? 1 : 0) | (browserRequested ? 2 : 0) | (timerDue ? 4 : 0);
 
-  state->frameActive = true;
   const double frameStartMs = emscripten_get_now();
   // Every frame is a full frame. The document and the UI are composited by Geode into the same
   // canvas in the same pass, so there is no frame whose only work lives elsewhere: skipping the
@@ -219,7 +237,6 @@ void RunWasmEditorFrame(void* userdata) {
   } else {
     state->nextIdleWakeAtMs.reset();
   }
-  state->frameActive = false;
 }
 #endif
 

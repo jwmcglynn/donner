@@ -22,6 +22,7 @@ namespace donner::gpu::browser {
 namespace {
 #ifdef __EMSCRIPTEN_PTHREADS__
 std::atomic<pthread_t> gOwner{};
+std::atomic<bool> gStopped{false};
 constexpr std::size_t kPumpCount = 0;
 constexpr std::size_t kDispatchCount = 1;
 constexpr std::size_t kMaximumPumpUs = 2;
@@ -41,6 +42,7 @@ em_proxying_queue* gNotificationQueue = nullptr;
 BrowserGpuTaskQueue gReady;
 bool gProcessingBatch = false;
 bool gPulseScheduled = false;
+bool gFrameActive = false;
 
 // clang-format off
 EM_JS(void, ScheduleGpuPulse, (), {
@@ -49,7 +51,7 @@ EM_JS(void, ScheduleGpuPulse, (), {
 // clang-format on
 
 void SchedulePulse() {
-  if (!gPulseScheduled) {
+  if (!gPulseScheduled && !gFrameActive) {
     gPulseScheduled = true;
     ScheduleGpuPulse();
   }
@@ -95,6 +97,7 @@ void Invoke(void* context) {
   // This release is the callback's final access to the caller-owned request.
   request.complete.store(1, std::memory_order_release);
 }
+
 void EnqueueRequest(void* context) {
   auto& request = *static_cast<OwnerRequest*>(context);
   request.task.callback = &Invoke;
@@ -111,6 +114,9 @@ extern "C" EMSCRIPTEN_KEEPALIVE void donner_browser_gpu_pulse() {
     return;
   }
   gPulseScheduled = false;
+  if (gFrameActive) {
+    return;
+  }
   if (gProcessingBatch) {
     SchedulePulse();
     return;
@@ -124,8 +130,8 @@ extern "C" EMSCRIPTEN_KEEPALIVE void donner_browser_gpu_pulse() {
 void RegisterBrowserGpuOwner() {
 #ifdef __EMSCRIPTEN_PTHREADS__
   pthread_t expected{};
-  if (!gOwner.compare_exchange_strong(expected, pthread_self()) &&
-      !pthread_equal(expected, pthread_self())) {
+  if (gStopped.load(std::memory_order_acquire) ||
+      !gOwner.compare_exchange_strong(expected, pthread_self())) {
     std::abort();
   }
   // Prewarm notifications before clients can hold application locks while dispatching.
@@ -148,6 +154,7 @@ void RegisterBrowserGpuOwner() {
       channel.port1.close();
       channel.port2.close();
       delete globalThis['__donnerGpuPulsePort'];
+      globalThis['__donnerGpuOwner'] = false;
     };
     const index = Number($0) / 4;
     globalThis['__donnerReadGpuOwnerWaitStats'] = () => ({
@@ -169,6 +176,9 @@ void RegisterBrowserGpuOwner() {
 
 void RunOnBrowserGpuOwner(void (*operation)(void*), void* context) {
 #ifdef __EMSCRIPTEN_PTHREADS__
+  if (gStopped.load(std::memory_order_acquire)) {
+    std::abort();
+  }
   const pthread_t owner = gOwner.load(std::memory_order_acquire);
   if (owner && !pthread_equal(owner, pthread_self())) {
     OwnerRequest request{operation, context, {}, {}};
@@ -202,7 +212,7 @@ void RunOnBrowserGpuOwner(void (*operation)(void*), void* context) {
 bool IsBrowserGpuOwnerThread() {
 #ifdef __EMSCRIPTEN_PTHREADS__
   const pthread_t owner = gOwner.load(std::memory_order_acquire);
-  return owner && pthread_equal(owner, pthread_self());
+  return !gStopped.load(std::memory_order_acquire) && owner && pthread_equal(owner, pthread_self());
 #else
   return false;
 #endif
@@ -225,16 +235,28 @@ void ProcessBrowserGpuOwnerWait() {
 #endif
 }
 
+void SetBrowserGpuOwnerFrameActive([[maybe_unused]] bool active) {
+#ifdef __EMSCRIPTEN_PTHREADS__
+  if (!IsBrowserGpuOwnerThread() || gFrameActive == active) {
+    std::abort();
+  }
+  gFrameActive = active;
+  if (!active && !gReady.empty()) {
+    SchedulePulse();
+  }
+#endif
+}
+
 void StopBrowserGpuOwner() {
 #ifdef __EMSCRIPTEN_PTHREADS__
-  if (!IsBrowserGpuOwnerThread() || gProcessingBatch || !gReady.empty() ||
+  if (!IsBrowserGpuOwnerThread() || gProcessingBatch || gFrameActive || !gReady.empty() ||
       gOwnerWaitStats[kRequested].load() != gOwnerWaitStats[kFinished].load()) {
     std::abort();
   }
   // All clients have joined and released resources before the pulse ports close.
   EM_ASM({ globalThis['__donnerCloseGpuPulse'](); });
   gPulseScheduled = false;
-  gOwner.store(pthread_t{}, std::memory_order_release);
+  gStopped.store(true, std::memory_order_release);
 #endif
 }
 

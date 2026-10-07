@@ -4157,6 +4157,27 @@ test("proxied animation frames keep at most one outstanding callback", async ({ 
   await expect.poll(() => page.evaluate(() => window.__donnerMainLoopRenderedFrames ?? 0))
     .toBeGreaterThan(before);
   await openBasicShapes(page);
+  const owners = await Promise.all(
+    page.workers().map((worker) =>
+      worker.evaluate(() => {
+        const scope = globalThis as typeof globalThis & {
+          __donnerReadGpuOwnerWaitStats?: () => {
+            batches: number;
+            maximumBatchSize: number;
+            maximumBatchMs: number;
+            requested: number;
+            started: number;
+            finished: number;
+          };
+        };
+        return scope.__donnerReadGpuOwnerWaitStats?.() ?? null;
+      })
+    ),
+  );
+  const owner = owners.find((stats) => stats !== null);
+  expect(owner?.batches).toBeGreaterThan(0);
+  expect(owner?.maximumBatchSize).toBeGreaterThan(0);
+  console.log("[proxied-frame-batches]", JSON.stringify(owner));
   expect(failures).toEqual([]);
 });
 
