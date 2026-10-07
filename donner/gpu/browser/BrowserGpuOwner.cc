@@ -2,10 +2,14 @@
 
 #include <emscripten/emscripten.h>
 
+#include <algorithm>
+#include <array>
 #include <atomic>
 #include <climits>
+#include <cstddef>
 #include <cstdint>
 #include <cstdlib>
+#include <limits>
 #ifdef __EMSCRIPTEN_PTHREADS__
 #include <emscripten/proxying.h>
 #include <emscripten/threading.h>
@@ -16,7 +20,12 @@ namespace donner::gpu::browser {
 namespace {
 #ifdef __EMSCRIPTEN_PTHREADS__
 std::atomic<pthread_t> gOwner{};
-std::atomic<uint32_t> gOwnerWaitPumps{0};
+constexpr std::size_t kPumpCount = 0;
+constexpr std::size_t kDispatchCount = 1;
+constexpr std::size_t kMaximumPumpUs = 2;
+std::array<std::atomic<uint32_t>, 3> gOwnerWaitStats{};
+static_assert(sizeof(std::atomic<uint32_t>) == sizeof(uint32_t));
+static_assert(std::atomic<uint32_t>::is_always_lock_free);
 thread_local bool gProcessingOwnerWait = false;
 
 struct OwnerRequest {
@@ -27,6 +36,9 @@ struct OwnerRequest {
 
 void Invoke(void* context) {
   auto& request = *static_cast<OwnerRequest*>(context);
+  if (gProcessingOwnerWait) {
+    gOwnerWaitStats[kDispatchCount].fetch_add(1, std::memory_order_relaxed);
+  }
   request.operation(request.context);
   emscripten_futex_wake(&request.complete, INT_MAX);
   // This release is the callback's final access to the caller-owned request.
@@ -52,8 +64,12 @@ void RegisterBrowserGpuOwner() {
   EM_ASM({
     globalThis['__donnerGpuOwner'] = true;
     const index = Number($0) / 4;
-    globalThis['__donnerReadGpuOwnerWaitPumps'] = () => Atomics.load(HEAPU32, index);
-  }, &gOwnerWaitPumps);
+    globalThis['__donnerReadGpuOwnerWaitStats'] = () => ({
+      'pumps': Atomics.load(HEAPU32, index),
+      'dispatches': Atomics.load(HEAPU32, index + 1),
+      'maximumPumpMs': Atomics.load(HEAPU32, index + 2) / 1000,
+    });
+  }, gOwnerWaitStats.data());
   // clang-format on
 #endif
 }
@@ -98,8 +114,14 @@ void ProcessBrowserGpuOwnerWait() {
     return;
   }
   gProcessingOwnerWait = true;
-  gOwnerWaitPumps.fetch_add(1, std::memory_order_relaxed);
+  gOwnerWaitStats[kPumpCount].fetch_add(1, std::memory_order_relaxed);
+  const double started = emscripten_get_now();
   emscripten_proxy_execute_queue(emscripten_proxy_get_system_queue());
+  const double elapsedUs = std::clamp((emscripten_get_now() - started) * 1000.0, 0.0,
+                                      static_cast<double>(std::numeric_limits<uint32_t>::max()));
+  const uint32_t maximum = gOwnerWaitStats[kMaximumPumpUs].load(std::memory_order_relaxed);
+  gOwnerWaitStats[kMaximumPumpUs].store(std::max(maximum, static_cast<uint32_t>(elapsedUs)),
+                                        std::memory_order_relaxed);
   gProcessingOwnerWait = false;
 #endif
 }

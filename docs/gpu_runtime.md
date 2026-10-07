@@ -495,8 +495,11 @@ device; later clients reuse it, and the last client releases it.
 The editor's `BrowserGpuOwnerWait` adapter drains that queue between one-millisecond futex wait
 slices on the registered app owner. Emscripten's automatic queue processing only covers the main
 runtime thread; `PROXY_TO_PTHREAD` does not give the app pthread that role. Other threads keep the
-original wait implementation. The adapter preserves the caller's total deadline and propagates
-non-timeout outcomes. The queue is initialized before raster clients start. Callbacks must not allocate or lock C++ state, yield,
+original wait implementation. The adapter checks the caller's absolute deadline before starting
+another queue drain, bounds each remaining wait slice, and propagates non-timeout outcomes. An already running browser
+callback is not preempted and can finish after that deadline; the wait probe records its maximum
+queue drain duration and counts GPU callbacks actually executed inside a wait. The queue is
+initialized before raster clients start. Callbacks must not allocate or lock C++ state, yield,
 wait for another caller, or wait for a Promise. Prepared command batches contain at most 1024
 operations; the first refusal stops replay before submission. A ten-second dispatch deadline
 terminates the module instead of returning borrowed memory to a queued callback. Descriptor

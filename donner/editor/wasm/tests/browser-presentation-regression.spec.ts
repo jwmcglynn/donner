@@ -4589,21 +4589,25 @@ test("WebGPU toolbar eyedropper gives new SVG text the sampled Donner fill", asy
     selectedText: "SVG",
     selectedStyle: expect.stringContaining(expectedFill),
   }));
-  const waitPumps = await Promise.any(
+  const waitStats = await Promise.any(
     page.workers().map(async (worker) => {
-      const count = await worker.evaluate(() => {
+      const observation = await worker.evaluate(() => {
         const scope = globalThis as typeof globalThis & {
-          __donnerReadGpuOwnerWaitPumps?: () => number;
+          __donnerReadGpuOwnerWaitStats?: () => {
+            pumps: number;
+            dispatches: number;
+            maximumPumpMs: number;
+          };
         };
-        return scope.__donnerReadGpuOwnerWaitPumps?.() ?? null;
+        return scope.__donnerReadGpuOwnerWaitStats?.() ?? null;
       });
-      if (count === null) throw new Error("not the registered GPU owner");
-      return count;
+      if (observation === null) throw new Error("not the registered GPU owner");
+      return observation;
     }),
   );
-  expect(waitPumps, "the canvas owner must service GPU requests inside libc waits").toBeGreaterThan(
-    0,
-  );
+  console.log(`GPU dispatch during owner waits: ${JSON.stringify(waitStats)}`);
+  expect(waitStats.dispatches, "GPU requests must execute while the app owner is in a libc wait")
+    .toBeGreaterThan(0);
   const beforeEscapeFrame = await page.evaluate(() => window.__donnerMainLoopRenderedFrames ?? 0);
   await page.keyboard.down("Escape");
   await expectBrowserKeyFrame(page, beforeEscapeFrame, "Escape must wake a browser editor frame");

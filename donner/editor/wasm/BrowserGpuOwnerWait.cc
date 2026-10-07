@@ -22,6 +22,9 @@ int WaitWithGpuProgress(volatile void* address, uint32_t value, double maximumWa
   // Match the runtime thread's one-millisecond slices; idle browser event loops do not enter here.
   constexpr double kWaitSliceMs = 1.0;
   while (true) {
+    if (emscripten_get_now() >= deadline) {
+      return __real_emscripten_futex_wait(address, value, 0.0);
+    }
     donner::gpu::browser::ProcessBrowserGpuOwnerWait();
     const double remaining = std::max(0.0, deadline - emscripten_get_now());
     const int result =
