@@ -1193,6 +1193,7 @@ async function openEditor(
   page: Page,
   testControl: false | "overlay" | "eyedropper" = false,
   failureReadback = false,
+  frameDriver: false | "proxied-main-raf" = false,
 ): Promise<string[]> {
   const failures: string[] = [];
   echoGpuSessionConsole(page);
@@ -1210,6 +1211,7 @@ async function openEditor(
   consoleFailuresByPage.set(page, failures);
 
   const editorUrl = new URL(kBaseUrl);
+  if (frameDriver) editorUrl.searchParams.set("frameDriver", frameDriver);
   if (testControl) {
     editorUrl.searchParams.set("testControl", testControl);
   }
@@ -4135,6 +4137,29 @@ test("Firefox never exposes the checkerboard while dragging a Splash letter", as
   expect(failures).toEqual([]);
 });
 
+test("proxied animation frames keep at most one outstanding callback", async ({ page }) => {
+  const failures = await openEditor(page, false, false, "proxied-main-raf");
+  const before = await page.evaluate(() => window.__donnerMainLoopRenderedFrames ?? 0);
+  const observation = await page.evaluate(() => {
+    const state = window as Window & { __donnerFrameDriver?: string };
+    const module = window.Module as unknown as {
+      _donner_whole_app_vsync_tick: () => void;
+      _donner_whole_app_vsync_peak_pending: () => number;
+    };
+    window.__donnerEditorFrameRequested = true;
+    for (let tick = 0; tick < 1024; ++tick) module._donner_whole_app_vsync_tick();
+    return {
+      driver: state.__donnerFrameDriver,
+      peakPending: module._donner_whole_app_vsync_peak_pending(),
+    };
+  });
+  expect(observation).toEqual({ driver: "proxied-main-raf", peakPending: 1 });
+  await expect.poll(() => page.evaluate(() => window.__donnerMainLoopRenderedFrames ?? 0))
+    .toBeGreaterThan(before);
+  await openBasicShapes(page);
+  expect(failures).toEqual([]);
+});
+
 async function captureRasterDispatchFailure(page: Page): Promise<void> {
   const owners = await Promise.all(
     page.workers().map(async (worker, index) => ({
@@ -4159,6 +4184,7 @@ async function captureRasterDispatchFailure(page: Page): Promise<void> {
   const state = await boundFailureDiagnostic(
     page.evaluate(() => ({
       raster: (window as Window & { __donnerRasterWorkState?: unknown }).__donnerRasterWorkState,
+      driver: (window as Window & { __donnerFrameDriver?: string }).__donnerFrameDriver,
       worker: window.__donnerWorkerStats,
       interaction: window.__donnerInteractionStats,
       presentation: window.__donnerPresentationQueueStats,
@@ -4197,12 +4223,16 @@ test("WebKit Geode survives a burst of drag wakeups without fatal errors", async
     message: "the sample thumbnail lane must drain before Basic Shapes replaces it",
     timeout: scaledMs(20_000),
   });
-  const beforeSample = await page.evaluate(() => window.__donnerWorkerStats?.completedResults || 0);
+  const beforeSample = await page.evaluate(() => ({
+    completedResults: window.__donnerWorkerStats?.completedResults || 0,
+    driver: (window as Window & { __donnerFrameDriver?: string }).__donnerFrameDriver,
+  }));
+  console.log(`WebKit frame driver: ${beforeSample.driver}`);
   await page.mouse.click(editorBounds.x + editorBounds.width * 0.76, editorBounds.y + 282);
   await expect(editorCanvas).toHaveAttribute("data-active-sample-id", "basic-shapes");
   await expectWorkerResultsToReach(
     page,
-    (completedResults) => completedResults > beforeSample,
+    (completedResults) => completedResults > beforeSample.completedResults,
     {
       message: "expected Basic Shapes to finish presenting before the WebKit drag burst",
       timeout: scaledMs(2_000),

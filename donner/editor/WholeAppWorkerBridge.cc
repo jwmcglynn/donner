@@ -593,6 +593,8 @@ struct FrameDriverState {
   pthread_t appThread{};
   em_proxying_queue* proxyQueue = nullptr;
   FrameDriver driver = FrameDriver::SetTimeoutFallback;
+  std::atomic<std::uint32_t> pendingFrames{0};
+  std::atomic<std::uint32_t> peakPendingFrames{0};
 
   double lastTickMs = 0.0;
   std::uint64_t ticks = 0;
@@ -637,6 +639,7 @@ void RunDrivenFrame(void* userData) {
 void RunProxiedFrame(void* /*unused*/) {
   FrameDriverState& state = Driver();
   RunDrivenFrame(state.userData);
+  state.pendingFrames.fetch_sub(1, std::memory_order_relaxed);
 }
 
 }  // namespace
@@ -649,7 +652,18 @@ extern "C" EMSCRIPTEN_KEEPALIVE void donner_whole_app_vsync_tick() {
   if (state.proxyQueue == nullptr) {
     return;
   }
-  emscripten_proxy_async(state.proxyQueue, state.appThread, &RunProxiedFrame, nullptr);
+  const std::uint32_t pending = state.pendingFrames.fetch_add(1, std::memory_order_relaxed) + 1;
+  std::uint32_t peak = state.peakPendingFrames.load(std::memory_order_relaxed);
+  while (peak < pending &&
+         !state.peakPendingFrames.compare_exchange_weak(peak, pending, std::memory_order_relaxed)) {
+  }
+  if (!emscripten_proxy_async(state.proxyQueue, state.appThread, &RunProxiedFrame, nullptr)) {
+    state.pendingFrames.fetch_sub(1, std::memory_order_relaxed);
+  }
+}
+
+extern "C" EMSCRIPTEN_KEEPALIVE std::uint32_t donner_whole_app_vsync_peak_pending() {
+  return Driver().peakPendingFrames.load(std::memory_order_relaxed);
 }
 
 // clang-format off
@@ -667,7 +681,10 @@ FrameDriver InstallFrameDriver(void (*frameFn)(void*), void* userData) {
   state.userData = userData;
   state.appThread = pthread_self();
 
-  if (WorkerRequestAnimationFrameAvailable()) {
+  const bool forceProxiedFrames = MAIN_THREAD_EM_ASM_INT({
+    return new URLSearchParams(window.location.search).get('frameDriver') == = 'proxied-main-raf';
+  });
+  if (!forceProxiedFrames && WorkerRequestAnimationFrameAvailable()) {
     // Emscripten's `fps == 0` path selects EM_TIMING_RAF, whose scheduler calls
     // `globalThis.requestAnimationFrame` when it exists. Nothing else to do.
     state.driver = FrameDriver::WorkerRequestAnimationFrame;
