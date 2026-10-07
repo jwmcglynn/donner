@@ -638,7 +638,9 @@ void RunDrivenFrame(void* token) {
 
 void CompleteProxiedFrame(std::uint32_t generation) {
   FrameDriverState& state = Driver();
-  state.pendingFrames.fetch_sub(1, std::memory_order_relaxed);
+  if (state.pendingFrames.fetch_sub(1, std::memory_order_relaxed) == 0) {
+    std::abort();
+  }
   state.admission.complete(generation);
 }
 
