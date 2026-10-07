@@ -681,9 +681,11 @@ FrameDriver InstallFrameDriver(void (*frameFn)(void*), void* userData) {
   state.userData = userData;
   state.appThread = pthread_self();
 
+  // clang-format off
   const bool forceProxiedFrames = MAIN_THREAD_EM_ASM_INT({
-    return new URLSearchParams(window.location.search).get('frameDriver') == = 'proxied-main-raf';
+    return new URLSearchParams(window.location.search).get('frameDriver') === 'proxied-main-raf';
   });
+  // clang-format on
   if (!forceProxiedFrames && WorkerRequestAnimationFrameAvailable()) {
     // Emscripten's `fps == 0` path selects EM_TIMING_RAF, whose scheduler calls
     // `globalThis.requestAnimationFrame` when it exists. Nothing else to do.
