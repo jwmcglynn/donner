@@ -1,9 +1,9 @@
 # Design 0017: Geode GPU Renderer
 
 **Status:** Implemented. Geode is Donner's GPU renderer for dynamic SVG documents. The native
-Metal/Vulkan and browser runtime cutover is described in [Design 0053](0053-native_gpu_hal.md);
-its final cross-platform acceptance remains open there. This page preserves the design number and
-points to the current implementation documentation.
+Metal/Vulkan and browser runtime cutover is described in [Design 0053](0053-native_gpu_hal.md),
+which records its cross-platform acceptance. This page preserves the design number and points to
+the current implementation documentation.
 
 **Author:** Jeff McGlynn
 
@@ -13,7 +13,7 @@ points to the current implementation documentation.
 
 **Created:** 2026-04-07
 
-**Last updated:** 2026-09-25
+**Last updated:** 2026-10-06
 
 ## What shipped
 

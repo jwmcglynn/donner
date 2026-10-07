@@ -1,12 +1,14 @@
 # Design: Donner Native GPU Runtime and Rust-Independent Build
 
-**Status:** Implementing. Each platform defaults to its own runtime: native Metal on macOS and
-native Vulkan on Linux, for Geode and the displayed editor, and the browser runtime for the editor
-and standalone Geode WebAssembly packages. Native Metal and Vulkan qualification of the Geode,
-renderer and editor suites is complete, the browser editor's hosted Chromium suites pass, and
-Geode's renderer services are backend-neutral. Still open: removal of the transitional adapter's
-remaining dependencies, real Safari/WebKit and physical iOS qualification of the browser editor,
-and acceptance of one integrated revision ([Next Steps](#next-steps)).\
+**Status:** Implemented. Geode and the editor render and present through Donner's GPU runtime on
+every platform: native Metal on macOS, native Vulkan on Linux, and the browser runtime for the
+editor and standalone Geode WebAssembly packages. No production build or shipped artifact contains
+the transitional adapter or a Rust-built GPU library; only the pinned Linux test-only resvg
+reference reaches wgpu-native. The integrated revision meets the
+[cutover acceptance](#cutover-acceptance) gates except the DPR2 working-set item, which has no
+recorded result yet; the accepted exceptions and post-cutover follow-ups are under
+[Next Steps](#next-steps), and the [GPU runtime reference](../gpu_runtime.md) documents the
+shipped contracts.\
 **Created:** 2026-07-05\
 **Updated:** 2026-10-06\
 **Author:** Claude Fable 5.1\
@@ -16,9 +18,8 @@ and acceptance of one integrated revision ([Next Steps](#next-steps)).\
 
 Donner's GPU runtime is the interface between Geode/editor rendering and Metal, Vulkan, or browser
 WebGPU. Production rendering and presentation run through it on every platform, and its drawing,
-mapping, upload and presentation operations are implemented on each backend. The remaining work is
-to remove the transitional WebGPU implementation's remaining dependencies and qualify the
-integrated result against the cutover gates.
+mapping, upload and presentation operations are implemented on each backend. The transitional
+WebGPU implementation is gone from every production closure.
 A pinned Linux test-only wgpu-native backend remains as a black-box resvg pixel comparison oracle;
 it does not validate Donner's browser bridge.
 
@@ -65,12 +66,11 @@ embed-example roots in this tree exclude WebGPU-C++ and wgpu-native. The two che
 archives are exposed through test-only Linux targets, and macOS archive fetches and aliases are
 removed.
 
-Still open, and separate from that qualification: removal of the transitional adapter's remaining
-dependencies
-([Device ownership and dependency closure](#device-ownership-and-dependency-closure)), real
-Safari/WebKit and physical iOS qualification of the browser editor
-([Browser bridge](#browser-bridge)), and acceptance of one integrated revision against the cutover
-gates ([Remaining GPU audit acceptance](#remaining-gpu-audit-acceptance)).
+Beyond that qualification, the transitional adapter's production dependencies are removed
+([Device ownership and dependency closure](#device-ownership-and-dependency-closure)), the browser
+editor is qualified on Chromium, WebKit and real Safari ([Browser bridge](#browser-bridge)), and
+the integrated revision's acceptance against the cutover gates is recorded under
+[Remaining GPU audit acceptance](#remaining-gpu-audit-acceptance).
 
 ### Native parity
 
@@ -124,14 +124,15 @@ the same cases pass and skip, with the same logged reasons, as on the transition
 each image comparison differs from its reference by the same pixel count on both. Native Vulkan
 passes the Geode and renderer parity suites on lavapipe and a discrete GPU. The browser editor
 presents through the runtime when Browser is selected, and the served and shipped editor packages
-select it. Its hosted Chromium suites pass; real Safari/WebKit and physical iOS qualification remain
-([#1410](https://github.com/jwmcglynn/donner/issues/1410)). A native wgpu reference is not
-browser-backend evidence.
+select it. Its hosted Chromium and WebKit suites pass, and real Safari passes the Safari regression
+gate ([#1410](https://github.com/jwmcglynn/donner/issues/1410)); physical iOS is outside the v0.8
+qualification matrix ([Platform Cutover Decisions](#platform-cutover-decisions)). A native wgpu
+reference is not browser-backend evidence.
 
 The shared fill, gradient, mask, image, snapshot, checkerboard, texture-cache, and compositor-debug
 paths use their reviewed runtime resource boundaries. Linux editor presentation uses native Vulkan;
-the browser editor canvas and diagnostic readback use the selected runtime. Native adapter
-consumers remain.
+the browser editor canvas and diagnostic readback use the selected runtime. Only the Linux
+test-only resvg reference consumes the transitional adapter.
 
 The browser-selected WebAssembly packages link neither the transitional adapter nor emdawnwebgpu's
 C++ WebGPU C API implementation or JavaScript glue. The Rust-built libraries are native-only and
@@ -163,29 +164,52 @@ memory-residency, security or privacy requirements.
   bridge or complete production editor presentation works.
 - Supporting user-supplied shaders or a public command-stream deserializer.
 - Replacing SVG traversal, Slug coverage, or the compositor with a second rendering engine.
-- Adding Windows or a native iOS host to this cutover; physical browser iOS qualification remains
-  part of the browser presentation matrix.
+- Adding Windows or a native iOS host to this cutover, or qualifying the browser editor on physical
+  iOS devices, which the maintainer left out of the v0.8 matrix
+  ([Platform Cutover Decisions](#platform-cutover-decisions)).
 - Expanding this plan into unrelated editor features or a project-wide release/audit backlog.
 - Deleting the isolated tiny-skia Rust cross-validation fixture or inert upstream reference source.
   Their containment requirements are described below.
 
 ## Next Steps
 
-1. Remove the transitional WebGPU implementation's remaining dependencies, retaining only the
-   Linux test-only resvg comparison backend
-   ([#1412](https://github.com/jwmcglynn/donner/issues/1412)).
-2. Qualify the browser editor on real Safari/WebKit and the agreed physical iOS matrix; its hosted
-   Chromium suites already pass ([#1410](https://github.com/jwmcglynn/donner/issues/1410)).
-3. Qualify one integrated revision against the [cutover acceptance](#cutover-acceptance) gates:
-   native and browser pixels, validation, memory and residency, performance, startup, build and
-   artifact size, and independent security and provenance review
-   ([#1413](https://github.com/jwmcglynn/donner/issues/1413)).
+1. Record a result for the DPR2 working-set item, the one cutover gate without one
+   ([Remaining GPU audit acceptance](#remaining-gpu-audit-acceptance)).
+
+These follow-ups are outside the cutover gates:
+
+- Accept the valid WGSL that two shader identifier renames work around: a function-scope name that
+  shadows a module-scope one ([#1647](https://github.com/jwmcglynn/donner/issues/1647)) and an
+  entry name reserved in MSL ([#1648](https://github.com/jwmcglynn/donner/issues/1648)).
+- Account the renderer's GPU working set byte for byte, and publish the worker renderer's resource
+  statistics in the browser editor ([#1718](https://github.com/jwmcglynn/donner/issues/1718)).
+- Drain 64 overlapped zoom-8 frames without losing the device: on Metal the system GPU timeout
+  fails a command buffer ([#1697](https://github.com/jwmcglynn/donner/issues/1697)), and a
+  discrete Vulkan GPU's driver has reported the device lost (TODO before PR: tracking issue).
+- Bring the accepted performance exceptions inside the frame-time rule
+  ([#1712](https://github.com/jwmcglynn/donner/issues/1712),
+  [#1716](https://github.com/jwmcglynn/donner/issues/1716)).
+- Fix the intermittent hosted browser-lane failures
+  ([#1634](https://github.com/jwmcglynn/donner/issues/1634),
+  [#1643](https://github.com/jwmcglynn/donner/issues/1643),
+  [#1683](https://github.com/jwmcglynn/donner/issues/1683),
+  [#1691](https://github.com/jwmcglynn/donner/issues/1691),
+  [#1702](https://github.com/jwmcglynn/donner/issues/1702)); each case CI quarantines names its
+  issue.
+- Restore or remove the editor suspend statistics that lost their producer with the reference
+  adapter ([#1642](https://github.com/jwmcglynn/donner/issues/1642)).
+- Move document pixels between browser workers without CPU bitmaps, the transport defect recorded
+  under [Cross-device texture registration](#cross-device-texture-registration) (TODO before PR:
+  tracking issue).
+- Qualify the browser editor on a physical iPhone, outside the v0.8 matrix, in the browser
+  interaction pass ([#1420](https://github.com/jwmcglynn/donner/issues/1420)).
 
 ## Implementation Plan
 
-Checked items identify integrated capabilities; unchecked items still require implementation or
-qualification. A backend-only test does not close a production migration item. Keep regression
-commits and their fixes together in a focused reviewable change.
+Checked items are integrated and qualified. The unchecked shader profile item is a post-cutover
+follow-up, and the unchecked DPR2 working-set item still needs a recorded result. A backend-only
+test does not close a production migration item. Keep regression commits and their fixes together
+in a focused reviewable change.
 
 ### Native drawing
 
@@ -230,25 +254,30 @@ commits and their fixes together in a focused reviewable change.
       projection is present and the other platform projection is absent;
       `//donner/svg/renderer/geode:geode_shader_projection_tests` covers per-device selection and
       refusal of unavailable projections. The linkage capability is complete; end-to-end native
-      production pixel acceptance remains the separate item below.
-- [ ] Qualify each family through the selected native backend with strict pixel acceptance:
+      production pixel acceptance is the separate item below.
+- [x] Qualify each family through the selected native backend with strict pixel acceptance:
       resvg filter cases, chained filters, fractional alpha, nonzero subregions, refusal paths and
-      DPR2. The native Metal and Vulkan execution suites establish per-shader correctness; they do
-      not close this item on their own. Native artifact linkage and projection selection are
-      merged, and production roots select the native backend on every native platform; this item
-      closes when the integrated pixel matrix passes under the
-      [cutover acceptance](#cutover-acceptance) gates.
-- [ ] Shader profile additions follow the compiler's rules: a construct the v1 profile rejects is
-      added to the compiler with tests across all three projections rather than worked around, and
-      the UI renderer's shaders are authored as WGSL sources under the same contract. The UI draw
-      program is authored WGSL compiled into frozen artifacts, and the bit-shift operators joined
-      the profile with WGSL, MSL and SPIR-V tests, replacing the division workarounds in the UI
-      vertex color unpack and the snapshot half-alpha term, and f32 constant expressions fold, so
-      feImage writes its weight as `1f / 3f`. Two identifier renames still stand in for valid WGSL
-      the profile rejects (see the compiler guide): the gradient local `linear_parameter`, because a
-      function-scope name may not shadow a module-scope one (#1647), and feBlend's `cs_main`,
-      because an entry name reserved in MSL is rejected rather than mapped to a native name
-      (#1648). This item stays open until the compiler accepts both.
+      DPR2. CI runs this matrix on native Vulkan over lavapipe on Linux and on native Metal on
+      macOS. `//donner/svg/renderer/tests:resvg_test_suite_geode` checks the resvg filter cases
+      against the reviewed goldens; `//donner/gpu/shader:filter_compositing_parity_tests` compares
+      chained filters, fractional-alpha and offset subregions, a refused filter and a DPR2
+      full-viewport composite with the CPU renderer at pixelmatch identity; and
+      `//donner/svg/renderer/geode:geode_filter_engine_tests` covers refused tile surfaces and
+      invalid admitted plans. The Geode and renderer suites also pass natively on a discrete Vulkan
+      GPU outside CI ([Native parity](#native-parity)).
+- [ ] Post-cutover follow-up, outside the cutover gates. Shader profile additions follow the
+      compiler's rules: a construct the v1 profile rejects is added to the compiler with tests
+      across all three projections rather than worked around, and the UI renderer's shaders are
+      authored as WGSL sources under the same contract. The UI draw program is authored WGSL
+      compiled into frozen artifacts, and the bit-shift operators joined the profile with WGSL, MSL
+      and SPIR-V tests, replacing the division workarounds in the UI vertex color unpack and the
+      snapshot half-alpha term, and f32 constant expressions fold, so feImage writes its weight as
+      `1f / 3f`. Two identifier renames still stand in for valid WGSL the profile rejects (see the
+      compiler guide): the gradient local `linear_parameter`, because a function-scope name may not
+      shadow a module-scope one ([#1647](https://github.com/jwmcglynn/donner/issues/1647)), and
+      feBlend's `cs_main`, because an entry name reserved in MSL is rejected rather than mapped to a
+      native name ([#1648](https://github.com/jwmcglynn/donner/issues/1648)). This item stays open
+      until the compiler accepts both.
 
 ### Snapshot and target identity
 
@@ -423,11 +452,11 @@ Loss:
 
 Backends:
 
-| Backend              | Registration                                      | Reason                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| -------------------- | ------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Transitional adapter | Implemented; one shared queue orders it           | Re-expresses the adapter's existing sibling registration; stale and foreign refusals keep their error types.                                                                                                                                                                                                                                                                                                            |
-| Metal                | Implemented; device-side shared-event wait        | Separate command queues per runtime device over one `MTLDevice`.                                                                                                                                                                                                                                                                                                                                                        |
-| Vulkan               | Owned images implemented; acquired frames refused | A shared `VkDevice` and queue, reference-counted native image and shared committed layout state support sibling aliases; `//donner/gpu/vulkan/tests:vulkan_texture_registration_tests` enforces owned-image registration. The swapchain can recycle an acquired frame at present, so export returns `Unsupported`; `//donner/gpu/vulkan/tests:vulkan_surface_tests` enforces that refusal.                              |
+| Backend              | Registration                                      | Reason                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| -------------------- | ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Transitional adapter | Implemented; one shared queue orders it           | Re-expresses the adapter's existing sibling registration; stale and foreign refusals keep their error types.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| Metal                | Implemented; device-side shared-event wait        | Separate command queues per runtime device over one `MTLDevice`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| Vulkan               | Owned images implemented; acquired frames refused | A shared `VkDevice` and queue, reference-counted native image and shared committed layout state support sibling aliases; `//donner/gpu/vulkan/tests:vulkan_texture_registration_tests` enforces owned-image registration. The swapchain can recycle an acquired frame at present, so export returns `Unsupported`; `//donner/gpu/vulkan/tests:vulkan_surface_tests` enforces that refusal.                                                                                                                                                                                                             |
 | Browser              | Implemented; one shared queue orders it           | Snapshot capture opens a second runtime device over the same browser device on the producer's thread. Every runtime device in a worker runs over that worker's one `GPUDevice` and its queue, so a registration is a read-only alias of the same `GPUTexture`, ordered by submission order. This registration contract covers same-worker GPU aliases. Direct texture handles do not cross workers. The editor currently hands pixels between workers through CPU bitmaps; that is an unresolved transport defect, not a restriction on GPU composition or a qualified GPU-resident presentation path. |
 
 On Vulkan, producer, export and consumer records retain one reference-counted native image
@@ -481,8 +510,8 @@ reads. `//donner/gpu/vulkan/tests:vulkan_surface_tests` checks the acquired-fram
 and checks exact capture pixels without a manual backend override. The native suite passes with
 Khronos synchronization validation on lavapipe; focused registration and snapshot cases pass on
 Intel Vulkan. The concurrent case also passes under ThreadSanitizer. The Geode/renderer variants and Geode
-package pass on lavapipe and Intel Arc under validation. Root-lock performance and final integrated
-gates remain open.
+package pass on lavapipe and Intel Arc under validation. The integrated frame-time comparison under
+[Cutover Acceptance](#cutover-acceptance) covers the root lock's cost.
 
 ### Resource plumbing and uploads
 
@@ -696,8 +725,8 @@ acceptance of the Linux editor, with the rest of the cutover, is under
       compiling Geode pipelines, and create a second logical UI context over that physical owner.
       Copy/map explicit diagnostic pixels and poll idle completions through `gpu::Device`, with
       bounded retries and no frame held during a diagnostic mapping wait. The selected Chromium
-      editor's boot, pixels, presentation and catalog diagnostics pass in hosted CI; real
-      Safari/WebKit and physical iOS qualification remain under the item below.
+      editor's boot, pixels, presentation and catalog diagnostics pass in hosted CI; WebKit and
+      real Safari qualification is the item below.
 - [x] Select the browser runtime for the served and shipped editor package. The editor transition
       and `--config=editor-wasm` select Browser; configured audits check both roots. Production
       Chromium boot, pixels, presentation and catalog lanes pass.
@@ -709,12 +738,18 @@ acceptance of the Linux editor, with the rest of the cutover, is under
       negative fixtures in `//build_defs:configured_link_input_audit_negative_tests` prove that a
       forbidden linker input or option fails the audit. The compiled WGSL projections remain
       trusted build input.
-- [ ] Qualify the complete browser editor path on Chromium, WebKit and the agreed physical iOS
-      matrix. Hosted Chromium is complete: the editor's Chromium browser suites pass in CI. Real
-      Safari/WebKit and the physical iOS matrix remain
-      ([#1410](https://github.com/jwmcglynn/donner/issues/1410)). The Linux resvg test reference
-      retains its separately isolated, test-only WebGPU-C++ API wrapper; native production
-      dependency removal remains a separate gate.
+- [x] Qualify the complete browser editor path on Chromium, WebKit and the agreed physical iOS
+      matrix. The Editor WASM workflow's Playwright lanes run the editor's Chromium suites and its
+      WebKit Geode carousel project on relevant pull requests and nightly; the cases quarantined
+      in the hosted macOS CI job name their issues
+      ([#1691](https://github.com/jwmcglynn/donner/issues/1691),
+      [#1702](https://github.com/jwmcglynn/donner/issues/1702)). Real Safari passes the SafariDriver
+      regression gate, `donner/editor/wasm/tests/safari-geode-regression.mjs`, against a pinned
+      package built from main; [#1681](https://github.com/jwmcglynn/donner/pull/1681) brought the
+      gate to the editor's current presentation contracts
+      ([#1410](https://github.com/jwmcglynn/donner/issues/1410)). The agreed physical iOS matrix is
+      empty for v0.8 ([Platform Cutover Decisions](#platform-cutover-decisions)). The Linux resvg
+      test reference retains its separately isolated, test-only WebGPU-C++ API wrapper.
 
 ### Device ownership and dependency closure
 
@@ -780,16 +815,24 @@ acceptance of the Linux editor, with the rest of the cutover, is under
       `//donner/gpu/shader:slug_endpoint_chromium_tests` executes the 24 migrated endpoint cases
       and an invalid-WGSL control. Browser editor pixels and physical-device qualification remain
       separate gates.
-- [ ] Remove the transitional adapter, `wgpu-native` archives/overlays, WebGPU-C++ headers,
+- [x] Remove the transitional adapter, `wgpu-native` archives/overlays, WebGPU-C++ headers,
       obsolete rules and orphaned code from every production and non-test closure. Preserve only
       the two pinned Linux archives and API wrapper needed by the resvg comparison target. The
-      source graph now separates its `testonly`, Linux-compatible targets from native products and
-      removes macOS archive fetches/aliases; the generated lock matches the reviewed Linux SHA-256
-      values. Production Geode sources no longer name the adapter, and the comparison renders the
-      production context and renderer through it rather than test-only recompilations of them;
+      source graph separates its `testonly`, Linux-compatible targets from native products and
+      removes macOS archive fetches/aliases
+      ([#1574](https://github.com/jwmcglynn/donner/pull/1574)); the generated lock matches the
+      reviewed Linux SHA-256 values. Production Geode sources no longer name the adapter, and the
+      comparison renders the production context and renderer through it rather than test-only
+      recompilations of them;
       `//donner/svg/renderer/geode:geode_production_source_boundary_tests` and the comparison's
-      configured dependency audit enforce both. Complete Linux oracle execution and hosted
-      acceptance before closing this item.
+      configured dependency audit enforce both
+      ([#1412](https://github.com/jwmcglynn/donner/issues/1412)). Code no build reaches after the
+      cutover and the frozen pre-cutover baseline record are removed
+      ([#1690](https://github.com/jwmcglynn/donner/pull/1690),
+      [#1698](https://github.com/jwmcglynn/donner/pull/1698)), and the lexical verifier pins every
+      first-party rule that may name a target in the reference chain
+      ([#1699](https://github.com/jwmcglynn/donner/pull/1699)). CI runs the Linux oracle,
+      `//tools/ci:linux_wgpu_resvg_reference`, for relevant Linux changes.
 - [x] Make unexpected Rust-built archives and production dependency edges blocking. The lexical
       verifier enforces source, fetch, checksum, visibility and CMake-source boundaries. Bazel
       configured dependency audits live beside native, editor, embed and browser product roots;
@@ -802,23 +845,65 @@ acceptance of the Linux editor, with the rest of the cutover, is under
 
 ### Remaining GPU audit acceptance
 
-- [ ] Inspect the integrated source/dependency graph for concrete adapter access, raw handles outside
+- [x] Inspect the integrated source/dependency graph for concrete adapter access, raw handles outside
       backend boundaries, duplicate ownership, shader compiler or emitter symbols in application
-      binaries, and dead code.
-- [ ] Compare logical allocation accounting with actual CPU RAM/GPU residency for pending uploads,
+      binaries, and dead code. An independent security and implementation-provenance review of the
+      integrated runtime found no critical or high findings. CI enforces the boundaries it checked:
+      `//donner/svg/renderer/geode:geode_production_source_boundary_tests` keeps the adapter out of
+      production Geode sources; the configured dependency audits on the native, editor, embed and
+      browser roots and `//tools/rust_boundary:check_no_rust_dependencies_tests` reject the
+      reference chain and Rust-built archives; and the WGSL compiler runs only during constant
+      evaluation while its typed-IR emitters are `testonly`, so no production target links them.
+      Code that no build reaches is removed
+      ([#1690](https://github.com/jwmcglynn/donner/pull/1690)).
+- [x] Compare logical allocation accounting with actual CPU RAM/GPU residency for pending uploads,
       scratch, parameter storage, cached textures, and deferred retirement under overlapping frames.
+      A Metal device drains its own autorelease pools, so a thread without one does not keep each
+      frame's resources resident ([#1655](https://github.com/jwmcglynn/donner/pull/1655)), and it
+      bounds its command buffers in flight
+      ([#1672](https://github.com/jwmcglynn/donner/pull/1672));
+      `//donner/gpu/metal/tests:metal_working_set_tests` and
+      `//donner/gpu/metal/tests:metal_submission_backstop_tests` enforce both. On a discrete Vulkan
+      GPU, physical residency matched logical accounting plus one frame of uncounted transient
+      textures ([Platform Cutover Decisions](#platform-cutover-decisions)). Byte-for-byte
+      accounting is the post-cutover follow-up
+      [#1718](https://github.com/jwmcglynn/donner/issues/1718).
 - [ ] Verify representative DPR2 filter/thumbnail workloads under the existing 128 MiB Wasm and
       256 MiB native working-set caps. Investigate regressions rather than raising the caps.
-- [ ] Run paired rendering/overlap, startup, clean/incremental build, and artifact-size measurements
+      The caps are `kMaximumFilterFrameBytes` in `donner/svg/components/filter/FilterGraph.h`,
+      which the per-frame filter budget enforces by refusing work past it
+      (`FilterGraphExecutorTest.RejectsNestedCaptureMemoryBeforeAllocation` in
+      `//donner/svg/renderer/tests:filter_graph_executor_tests`). On the native backends CI checks
+      DPR2 filter workloads against the 128 MiB cap:
+      `GeodeFilterEngineTest.Dpr2PlanChargesAllTileWorkUnderTheWasmMemoryCap` and
+      `LargeBlurHalosUseBoundedStripsAtHighDprZoom` in
+      `//donner/svg/renderer/geode:geode_filter_engine_tests`, and
+      `FilterChainPrecision.Dpr2FullViewportCompositingFitsTheExistingMemoryCap` in
+      `//donner/gpu/shader:filter_compositing_parity_tests`. No result is recorded for DPR2
+      thumbnail workloads or for the WebAssembly build, whose page cannot yet read the worker
+      renderer's filter statistics ([#1718](https://github.com/jwmcglynn/donner/issues/1718)).
+      (TODO before PR: record the result, or the maintainer's disposition.)
+- [x] Run paired rendering/overlap, startup, clean/incremental build, and artifact-size measurements
       on the same host and configuration; qualify the exact integrated candidate against the gates
-      below and resolve actionable review findings.
-- [ ] Bound every wait that detects a hung device by its lack of progress rather than by the time
+      below and resolve actionable review findings. Frame time meets the cutover rule except the
+      cells under [Accepted performance exceptions](#accepted-performance-exceptions). Artifact
+      sizes are enforced against linked-artifact budgets:
+      `//donner/editor/wasm:wasm_geode_package_size_tests` for the editor Wasm package and the
+      nightly `//tools/ci:native_linked_size_budget_test` for the shipped native products
+      ([#1692](https://github.com/jwmcglynn/donner/pull/1692)). The maintainer accepted the
+      clean-build cost. (TODO before PR: startup and incremental-build disposition.) The
+      integrated candidate is `main` at `e1016864`; its push CI and the next scheduled nightly runs
+      are the qualification evidence. (TODO before PR: confirm the candidate and add the run
+      links.)
+- [x] Bound every wait that detects a hung device by its lack of progress rather than by the time
       its whole backlog takes ([#1680](https://github.com/jwmcglynn/donner/issues/1680)); see
-      [Bounded GPU waits](#bounded-gpu-waits). The memory and DPR2 gate found zoom-8 splash frames
-      declared lost on lavapipe at the Vulkan frame split while lavapipe was still completing work.
-      The losses the same gate recorded when 64 overlapped zoom-8 frames drain on Metal and on a
-      discrete Vulkan GPU are not this wait: the system's GPU timeout failed a command buffer on
-      Metal, and the Vulkan driver reported the device lost. They remain open.
+      [Bounded GPU waits](#bounded-gpu-waits). `//donner/svg/renderer/geode:geode_device_tests`
+      enforces it on both native backends
+      ([#1686](https://github.com/jwmcglynn/donner/pull/1686)). Two losses recorded when 64
+      overlapped zoom-8 frames drain are not this wait and are post-cutover follow-ups: the
+      system's GPU timeout fails a command buffer on Metal
+      ([#1697](https://github.com/jwmcglynn/donner/issues/1697)), and a discrete Vulkan GPU's
+      driver has reported the device lost (TODO before PR: tracking issue).
 
 ## Proposed Architecture
 
@@ -1047,10 +1132,9 @@ and physical-hardware observations are evidence with their stated limits, not un
 
 Extend existing targets where they own the changed behavior. The native mapping, Metal/Vulkan
 surface and browser backend targets own their merged hooks. The Linux editor window targets run in
-hosted Linux CI, and the browser editor's hosted Chromium suites pass; real Safari/WebKit and
-physical iOS browser gates, wrapper removal and integrated acceptance remain active. GPU operation,
-shader, and editor behavior is owned by the executable backend, shader, renderer, and browser tests
-below.
+hosted Linux CI, the browser editor's hosted Chromium and WebKit suites pass, and real Safari
+passes its manual regression gate. GPU operation, shader, and editor behavior is owned by the
+executable backend, shader, renderer, and browser tests below.
 
 | Contract / remaining work                                      | Owning verification                                                                                                                                                                                                                                                                                                                                                               |
 | -------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -1191,7 +1275,9 @@ revisions and causal experiments are in the linked issues.
 The maintainer decided the three questions this design had left open for platform cutover:
 
 - **Qualification matrix.** Apple silicon Metal, a discrete Vulkan GPU and lavapipe are mandatory;
-  every other physical GPU and driver combination is best-effort.
+  every other physical GPU and driver combination is best-effort. The browser editor qualifies on
+  Chromium, Playwright's WebKit and real Safari; physical iOS is not part of the v0.8 matrix
+  ([#1410](https://github.com/jwmcglynn/donner/issues/1410)).
   [0064](0064-gpu_release_matrix.md) records which lanes exercise each combination.
 - **Native embedding surface.** v0.8 exposes no native embedding surface beyond internal callers:
   the editor, the in-tree embed example and Donner's own tests. The

@@ -321,8 +321,9 @@ The maintainer decided the GPU matrix:
   driver).
 - **Best-effort:** every other GPU and driver combination.
 
-Browser presentation is qualified separately, on Chromium, WebKit and physical iOS, under the
-[cutover acceptance](design_docs/0053-native_gpu_hal.md#cutover-acceptance) gates.
+Browser presentation is qualified separately, on Chromium, WebKit and real Safari, under the
+[cutover acceptance](design_docs/0053-native_gpu_hal.md#cutover-acceptance) gates; physical iOS is
+not part of the v0.8 matrix.
 [Design 0064](design_docs/0064-gpu_release_matrix.md) records which CI lanes exercise each
 combination.
 

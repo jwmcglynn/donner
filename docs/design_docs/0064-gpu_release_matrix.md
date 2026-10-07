@@ -136,7 +136,7 @@ Notes:
 | Safari (the shipping browser)        | macOS        | **Dev-host**     | A regression script exists; no workflow invokes it    |
 | Any browser                          | Linux        | **None**         | The pixel-presenting smoke target is macOS-arm64 only |
 | Any browser                          | Windows      | **Out of scope** | Windows is not a target platform                      |
-| Mobile Safari                        | iOS / iPadOS | **None**         | 0053 requires physical iOS presentation checks        |
+| Mobile Safari                        | iOS / iPadOS | **None**         | Not in the v0.8 qualification matrix                  |
 
 Notes:
 
@@ -159,7 +159,7 @@ gap.
    a lane edit.
 2. Vulkan validation layers. The synchronization model 0053 calls its load-bearing subsystem has
    no validation gate.
-3. Physical iOS presentation.
+3. Physical iOS presentation, which the maintainer left out of the v0.8 matrix.
 4. More than one Apple GPU generation per change.
 5. Geode through CMake. The CMake lanes build the CPU backend on both platforms, while the README
    describes both backends as selectable. 0053 requires CMake to gain equivalent native GPU targets
