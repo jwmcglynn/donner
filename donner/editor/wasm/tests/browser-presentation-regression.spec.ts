@@ -4135,10 +4135,42 @@ test("Firefox never exposes the checkerboard while dragging a Splash letter", as
   expect(failures).toEqual([]);
 });
 
+async function captureRasterDispatchFailure(page: Page): Promise<void> {
+  const owners = await Promise.all(
+    page.workers().map((worker) =>
+      boundFailureDiagnostic(
+        worker.evaluate(() => {
+          const read = (globalThis as typeof globalThis & {
+            __donnerReadGpuOwnerWaitStats?: () => unknown;
+          }).__donnerReadGpuOwnerWaitStats;
+          return read?.() ?? null;
+        }),
+        1000,
+      )
+    ),
+  );
+  const state = await boundFailureDiagnostic(
+    page.evaluate(() => ({
+      raster: (window as Window & { __donnerRasterWorkState?: unknown }).__donnerRasterWorkState,
+      worker: window.__donnerWorkerStats,
+      interaction: window.__donnerInteractionStats,
+      presentation: window.__donnerPresentationQueueStats,
+    })),
+    1000,
+  );
+  const evidence = { owners, state, errors: consoleFailuresByPage.get(page) ?? [] };
+  console.log(`raster-dispatch-failure ${JSON.stringify(evidence)}`);
+  await boundFailureDiagnostic(
+    attachEvidenceFile("raster-dispatch-failure", JSON.stringify(evidence), "application/json"),
+    1000,
+  );
+}
+
 test("WebKit Geode survives a burst of drag wakeups without fatal errors", async ({ browserName, page }) => {
   test.skip(browserName !== "webkit", "WebKit Geode regression");
   // The thumbnail settle below comes on top of a cold browser start; see the comment there.
   test.slow();
+  armFailureCanvasEvidence(page, test.info());
   const failures = await openEditor(page);
   expect(await page.evaluate(() => window.__donnerBackend)).toBe("geode");
 
@@ -4191,7 +4223,10 @@ test("WebKit Geode survives a burst of drag wakeups without fatal errors", async
       message: "expected WebKit to complete a render after the drag wakeup burst",
       timeout: scaledMs(2_000),
     },
-  );
+  ).catch(async (error) => {
+    await captureRasterDispatchFailure(page);
+    throw error;
+  });
   expect(failures).toEqual([]);
 });
 
@@ -4622,6 +4657,9 @@ test("WebGPU toolbar eyedropper gives new SVG text the sampled Donner fill", asy
             pumps: number;
             dispatches: number;
             maximumPumpMs: number;
+            requested: number;
+            started: number;
+            finished: number;
           };
         };
         return scope.__donnerReadGpuOwnerWaitStats?.() ?? null;
@@ -4633,6 +4671,9 @@ test("WebGPU toolbar eyedropper gives new SVG text the sampled Donner fill", asy
   console.log(`GPU dispatch during owner waits: ${JSON.stringify(waitStats)}`);
   expect(waitStats.dispatches, "GPU requests must execute while the app owner is in a libc wait")
     .toBeGreaterThan(0);
+  expect(waitStats.requested).toBeGreaterThanOrEqual(waitStats.started);
+  expect(waitStats.started).toBeGreaterThanOrEqual(waitStats.finished);
+  expect(waitStats.finished).toBeGreaterThanOrEqual(waitStats.dispatches);
   const beforeEscapeFrame = await page.evaluate(() => window.__donnerMainLoopRenderedFrames ?? 0);
   await page.keyboard.down("Escape");
   await expectBrowserKeyFrame(page, beforeEscapeFrame, "Escape must wake a browser editor frame");

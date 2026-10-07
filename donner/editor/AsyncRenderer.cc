@@ -1011,6 +1011,33 @@ void AsyncRenderer::waitForReplayDocumentAccess(std::unique_lock<std::mutex>& lo
   });
 }
 
+namespace {
+enum class RasterWorkPhase {
+  IdleMaintenance,
+  WarmupAccess,
+  Warmup,
+  Thumbnail,
+  RenderSetup,
+  DocumentAccess,
+  Rendering,
+  Publishing
+};
+
+void PublishRasterWorkPhase(RasterWorkPhase phase) {
+#ifdef __EMSCRIPTEN__
+  // clang-format off
+  MAIN_THREAD_ASYNC_EM_ASM({
+    const phases = ['idle-maintenance', 'warmup-document-access', 'warmup', 'thumbnail',
+                    'render-setup', 'render-document-access', 'rendering', 'publishing'];
+    window['__donnerRasterWorkState'] = ({'phase': phases[$0], 'atMs': performance.now()});
+  }, static_cast<int>(phase));
+  // clang-format on
+#else
+  (void)phase;
+#endif
+}
+}  // namespace
+
 void AsyncRenderer::workerLoop() {
 #if defined(__EMSCRIPTEN__)
   // C++ renderer state belongs to this worker; browser GPU primitives run on the app owner.
@@ -1020,6 +1047,7 @@ void AsyncRenderer::workerLoop() {
   svg::RendererInterface* sampleThumbnailRendererRoot = nullptr;
 
   while (true) {
+    PublishRasterWorkPhase(RasterWorkPhase::IdleMaintenance);
     std::optional<RenderRequest> requestStorage;
     std::optional<SampleThumbnailRenderRequest> sampleThumbnailStorage;
     bool runCompositorWarmup = false;
@@ -1083,7 +1111,9 @@ void AsyncRenderer::workerLoop() {
           !cancelCompositorWarmup_.isCancelled()) {
         svg::SVGDocument& warmupDocument = *compositorDocument_;
         std::optional<svg::DocumentWriteAccess> documentAccess;
+        PublishRasterWorkPhase(RasterWorkPhase::WarmupAccess);
         documentAccess.emplace(warmupDocument.writeAccess());
+        PublishRasterWorkPhase(RasterWorkPhase::Warmup);
         (void)compositor_->warmPendingFirstFrameCaches(cancelCompositorWarmup_);
       }
 
@@ -1107,6 +1137,7 @@ void AsyncRenderer::workerLoop() {
     }
 
     if (sampleThumbnailStorage.has_value()) {
+      PublishRasterWorkPhase(RasterWorkPhase::Thumbnail);
       svg::RendererInterface* offscreenRenderer = nullptr;
 #if defined(__EMSCRIPTEN__)
       if (sampleThumbnailRenderer == nullptr || sampleThumbnailRendererRoot != &workerRenderer) {
@@ -1202,6 +1233,7 @@ void AsyncRenderer::workerLoop() {
       continue;
     }
 
+    PublishRasterWorkPhase(RasterWorkPhase::RenderSetup);
     assert(requestStorage.has_value());
     RenderRequest& request = *requestStorage;
     const auto workerDequeuedAt = std::chrono::steady_clock::now();
@@ -1253,7 +1285,9 @@ void AsyncRenderer::workerLoop() {
     // holds a write guard across document-reading work and releases it via releaseDocumentAccess()
     // before every mutex_ section below to avoid a lock-order inversion.
     std::optional<svg::DocumentWriteAccess> documentAccess;
+    PublishRasterWorkPhase(RasterWorkPhase::DocumentAccess);
     documentAccess.emplace(requestDocument.writeAccess());
+    PublishRasterWorkPhase(RasterWorkPhase::Rendering);
     const auto documentLockAcquiredAt = std::chrono::steady_clock::now();
     const auto releaseDocumentAccess = [&]() {
       workerTiming.documentWriteLockMs = elapsedSince(documentLockAcquiredAt);
@@ -1863,6 +1897,7 @@ void AsyncRenderer::workerLoop() {
       continue;
     }
 
+    PublishRasterWorkPhase(RasterWorkPhase::Publishing);
     const svg::RendererReadbackStats compositorReadbackStats =
         requestRenderer.consumeReadbackStats();
     noteGpuWaitOutcome(compositorReadbackStats);

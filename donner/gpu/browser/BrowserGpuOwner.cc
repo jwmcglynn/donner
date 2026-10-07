@@ -23,7 +23,11 @@ std::atomic<pthread_t> gOwner{};
 constexpr std::size_t kPumpCount = 0;
 constexpr std::size_t kDispatchCount = 1;
 constexpr std::size_t kMaximumPumpUs = 2;
-std::array<std::atomic<uint32_t>, 3> gOwnerWaitStats{};
+constexpr std::size_t kRequested = 3;
+constexpr std::size_t kStarted = 4;
+constexpr std::size_t kFinished = 5;
+constexpr std::size_t kMaximumDispatchWaitUs = 6;
+std::array<std::atomic<uint32_t>, 7> gOwnerWaitStats{};
 static_assert(sizeof(std::atomic<uint32_t>) == sizeof(uint32_t));
 static_assert(std::atomic<uint32_t>::is_always_lock_free);
 thread_local bool gProcessingOwnerWait = false;
@@ -36,10 +40,12 @@ struct OwnerRequest {
 
 void Invoke(void* context) {
   auto& request = *static_cast<OwnerRequest*>(context);
+  gOwnerWaitStats[kStarted].fetch_add(1, std::memory_order_relaxed);
   if (gProcessingOwnerWait) {
     gOwnerWaitStats[kDispatchCount].fetch_add(1, std::memory_order_relaxed);
   }
   request.operation(request.context);
+  gOwnerWaitStats[kFinished].fetch_add(1, std::memory_order_relaxed);
   emscripten_futex_wake(&request.complete, INT_MAX);
   // This release is the callback's final access to the caller-owned request.
   request.complete.store(1, std::memory_order_release);
@@ -68,6 +74,10 @@ void RegisterBrowserGpuOwner() {
       'pumps': Atomics.load(HEAPU32, index),
       'dispatches': Atomics.load(HEAPU32, index + 1),
       'maximumPumpMs': Atomics.load(HEAPU32, index + 2) / 1000,
+      'requested': Atomics.load(HEAPU32, index + 3),
+      'started': Atomics.load(HEAPU32, index + 4),
+      'finished': Atomics.load(HEAPU32, index + 5),
+      'maximumDispatchWaitMs': Atomics.load(HEAPU32, index + 6) / 1000,
     });
   }, gOwnerWaitStats.data());
   // clang-format on
@@ -79,6 +89,7 @@ void RunOnBrowserGpuOwner(void (*operation)(void*), void* context) {
   const pthread_t owner = gOwner.load(std::memory_order_acquire);
   if (owner && !pthread_equal(owner, pthread_self())) {
     OwnerRequest request{operation, context};
+    gOwnerWaitStats[kRequested].fetch_add(1, std::memory_order_relaxed);
     // The editor wait adapter services this queue; callbacks only call nonblocking JS primitives.
     if (!emscripten_proxy_async(emscripten_proxy_get_system_queue(), owner, &Invoke, &request)) {
       std::abort();
@@ -86,6 +97,12 @@ void RunOnBrowserGpuOwner(void (*operation)(void*), void* context) {
     const double deadlineMs = emscripten_get_now() + 10000.0;
     while (request.complete.load(std::memory_order_acquire) == 0) {
       const double remainingMs = deadlineMs - emscripten_get_now();
+      const uint32_t waitedUs =
+          static_cast<uint32_t>(std::clamp((10000.0 - remainingMs) * 1000.0, 0.0, 10000000.0));
+      auto& maximumWait = gOwnerWaitStats[kMaximumDispatchWaitUs];
+      uint32_t previous = maximumWait.load(std::memory_order_relaxed);
+      while (previous < waitedUs &&
+             !maximumWait.compare_exchange_weak(previous, waitedUs, std::memory_order_relaxed)) {}
       if (remainingMs <= 0.0) {
         // Returning would leave the owner's callback holding borrowed caller memory.
         std::abort();
