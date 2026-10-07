@@ -451,6 +451,9 @@ void ApplyReadbackTimingStats(RenderResult::WorkerTimingBreakdown& timing,
                               const svg::RendererReadbackStats& compositor,
                               const svg::RendererReadbackStats& presentation) {
   timing.readbackCount = compositor.count + presentation.count;
+  UTILS_RELEASE_ASSERT_MSG(presentation.count >= timing.tileHandoffReadbackCount,
+                           "Tile handoff readbacks exceed presentation readbacks");
+  timing.finalSnapshotReadbackCount = presentation.count - timing.tileHandoffReadbackCount;
   timing.readbackPollIterations = compositor.pollIterations + presentation.pollIterations;
   timing.usedTimedWaitAny = compositor.usedTimedWaitAny || presentation.usedTimedWaitAny;
   timing.deviceLost = compositor.deviceLost || presentation.deviceLost;

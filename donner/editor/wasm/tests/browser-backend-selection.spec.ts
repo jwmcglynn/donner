@@ -30,6 +30,12 @@ type WorkerStats = {
   completedResults?: number;
   readbackCount?: number;
   readbackWaitStrategy?: string;
+  compositorReadbackCount?: number;
+  tileHandoffReadbackCount?: number;
+  finalSnapshotReadbackCount?: number;
+  compositorReadbackTotal?: number;
+  tileHandoffReadbackTotal?: number;
+  finalSnapshotReadbackTotal?: number;
 };
 type SelectionWindow = Window & {
   __donnerFirstFramePresented?: boolean;
@@ -105,4 +111,56 @@ test("the raster worker selects the backend its package was built for", async ({
     "the browser backend reported a failure",
   ).toEqual([]);
   expect(errors, "the page threw").toEqual([]);
+});
+
+test("ordinary document presentation performs no worker GPU readback", async ({ page }) => {
+  test.skip(!kExpectsBrowserBackend, "GPU transport requires the browser backend");
+  test.setTimeout(60000);
+  await page.goto(`${baseUrl}/index.html`, { waitUntil: "domcontentloaded" });
+  await expect
+    .poll(() => page.evaluate(() => (window as SelectionWindow).__donnerFirstFramePresented), {
+      timeout: 30000,
+    })
+    .toBe(true);
+
+  await expect
+    .poll(() => page.evaluate(() => (window as SelectionWindow).__donnerWorkerStats?.completedResults), {
+      timeout: 10000,
+    })
+    .toBeGreaterThan(0);
+  const before = await page.evaluate(() => (window as SelectionWindow).__donnerWorkerStats);
+  expect(before, "the raster worker did not publish startup accounting").toBeDefined();
+  await expect
+    .poll(() =>
+      page.evaluate(() => {
+        const thumbnails = (window as SelectionWindow).__donnerSampleThumbnailStats;
+        return !!thumbnails && (thumbnails.completed ?? 0) > 0
+          && (thumbnails.ready ?? 0) > 0 && !thumbnails.active && !thumbnails.pending;
+      }), { timeout: 20000 })
+    .toBe(true);
+  const editorCanvas = page.locator("canvas#canvas");
+  const bounds = await editorCanvas.boundingBox();
+  expect(bounds, "the editor canvas is missing").not.toBeNull();
+  await page.mouse.click(bounds!.x + bounds!.width * 0.76, bounds!.y + 282);
+  await expect(editorCanvas).toHaveAttribute("data-active-sample-id", "basic-shapes");
+  await expect
+    .poll(
+      () => page.evaluate(() => (window as SelectionWindow).__donnerWorkerStats?.completedResults),
+      {
+        timeout: 10000,
+      },
+    )
+    .toBeGreaterThan(before!.completedResults ?? 0);
+
+  const after = await page.evaluate(() => (window as SelectionWindow).__donnerWorkerStats);
+  expect(after, "the document result did not publish readback accounting").toBeDefined();
+  expect(after!.readbackCount).toBe(
+    (after!.compositorReadbackCount ?? 0) + (after!.tileHandoffReadbackCount ?? 0)
+      + (after!.finalSnapshotReadbackCount ?? 0),
+  );
+  expect((after!.compositorReadbackTotal ?? 0) - (before!.compositorReadbackTotal ?? 0)).toBe(0);
+  expect((after!.tileHandoffReadbackTotal ?? 0) - (before!.tileHandoffReadbackTotal ?? 0)).toBe(0);
+  expect((after!.finalSnapshotReadbackTotal ?? 0) - (before!.finalSnapshotReadbackTotal ?? 0)).toBe(
+    0,
+  );
 });

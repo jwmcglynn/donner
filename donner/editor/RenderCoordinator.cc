@@ -63,7 +63,7 @@ void PublishWorkerTimingStats(
     const RenderResult& result, const EditorApp& app,
     const svg::compositor::CompositorController::RenderFrameStats& compositorStats) {
   const auto& timing = result.workerTiming;
-  constexpr std::size_t kValueCount = 37;
+  constexpr std::size_t kValueCount = 38;
   static double buffer[kValueCount];
   const double values[kValueCount] = {
       result.workerMs,
@@ -102,7 +102,8 @@ void PublishWorkerTimingStats(
       timing.documentWriteLockMs,
       static_cast<double>(result.presentationRepairReason),
       static_cast<double>(timing.compositorReadbackCount),
-      static_cast<double>(timing.tileHandoffReadbackCount)};
+      static_cast<double>(timing.tileHandoffReadbackCount),
+      static_cast<double>(timing.finalSnapshotReadbackCount)};
   std::copy(std::begin(values), std::end(values), std::begin(buffer));
   // clang-format off: EM_JS and EM_ASM bodies are JavaScript, which clang-format rewrites
   // as C++ - it has already split a `===` into `== =` elsewhere in the editor, a SyntaxError
@@ -160,6 +161,16 @@ void PublishWorkerTimingStats(
         stats['presentationRepairReason'] = heap[b + 34];
         stats['compositorReadbackCount'] = heap[b + 35];
         stats['tileHandoffReadbackCount'] = heap[b + 36];
+        stats['finalSnapshotReadbackCount'] = heap[b + 37];
+        stats['compositorReadbackTotal'] =
+            (previous ? previous['compositorReadbackTotal'] || 0 : 0) +
+            stats['compositorReadbackCount'];
+        stats['tileHandoffReadbackTotal'] =
+            (previous ? previous['tileHandoffReadbackTotal'] || 0 : 0) +
+            stats['tileHandoffReadbackCount'];
+        stats['finalSnapshotReadbackTotal'] =
+            (previous ? previous['finalSnapshotReadbackTotal'] || 0 : 0) +
+            stats['finalSnapshotReadbackCount'];
         stats['nothingToPresentTotal'] = (previous ? previous['nothingToPresentTotal'] || 0 : 0) +
                                          (stats['nothingToPresent'] ? 1 : 0);
         stats['publishReason'] = 'render-result';
