@@ -345,7 +345,7 @@ void PublishSampleThumbnailStats(int requested, int started, int completed, int 
                                  int pending, int active, int resultReady,
                                  int foregroundHandoffWaits, int firstAttemptCompleted,
                                  int offscreenRendererConstructionStarts,
-                                 int offscreenRendererConstructionBlocked) {
+                                 int offscreenRendererConstructionBlocked, int drained) {
   // clang-format off
   MAIN_THREAD_ASYNC_EM_ASM(
       {
@@ -380,11 +380,12 @@ void PublishSampleThumbnailStats(int requested, int started, int completed, int 
           'firstAttemptCompleted' : Boolean($9),
           'offscreenRendererConstructionStarts' : $10,
           'offscreenRendererConstructionBlocked' : Boolean($11),
+          'drained' : Boolean($12),
         });
       },
       requested, started, completed, rendered, ready, pending, active, resultReady,
       foregroundHandoffWaits, firstAttemptCompleted, offscreenRendererConstructionStarts,
-      offscreenRendererConstructionBlocked);
+      offscreenRendererConstructionBlocked, drained);
   // clang-format on
 }
 
@@ -5394,8 +5395,24 @@ void EditorShell::publishSampleThumbnailStats() const {
       stats.pending ? 1 : 0, stats.active ? 1 : 0, stats.resultReady ? 1 : 0,
       static_cast<int>(stats.foregroundHandoffWaits), stats.firstAttemptCompleted ? 1 : 0,
       static_cast<int>(stats.offscreenRendererConstructionStarts),
-      stats.offscreenRendererConstructionBlocked ? 1 : 0);
+      stats.offscreenRendererConstructionBlocked ? 1 : 0,
+      sampleThumbnailLaneDrained(stats) ? 1 : 0);
 #endif
+}
+
+// The picker has nothing left to ask the worker for: every sample it shows has a finished
+// thumbnail attempt, and no attempt is queued, running, or waiting to be polled. The counters
+// alone cannot say this. Between two attempts the lane reads idle for part of a frame (the result
+// is polled before the same frame requests the next sample), and a thumbnail set aside for a font
+// load is idle until its retry. A newly visible sample or a later font identity change reopens it.
+bool EditorShell::sampleThumbnailLaneDrained(const SampleThumbnailRenderStats& stats) const {
+  if (!showSamplePicker_ || visibleSamplePreviewIndices_.empty() || sampleThumbnailInFlightIndex_ ||
+      stats.pending || stats.active || stats.resultReady) {
+    return false;
+  }
+  return std::ranges::all_of(visibleSamplePreviewIndices_, [this](std::size_t index) {
+    return finishedSamplePreviewIndices_.contains(index) && !waitingSamplePreviews_.contains(index);
+  });
 }
 
 void EditorShell::requestCatalogFonts(std::span<const svg::FontFaceDependency> dependencies,

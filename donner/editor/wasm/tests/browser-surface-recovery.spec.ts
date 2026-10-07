@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 import { captureSplashPresentationFrame, type CssRegion } from "./canvas-color-stats";
+import { expectSampleThumbnailsToSettle } from "./sample-thumbnail-settle";
 import {
   findCanvasOwnerWorker,
   installSurfaceFrameProbe,
@@ -68,6 +69,12 @@ test("Firefox restores the Splash canvas after transient surface loss", async ({
   const bounds = await canvas.boundingBox();
   expect(bounds).not.toBeNull();
   if (bounds === null) throw new Error("editor canvas is missing");
+  // Surface recovery is the subject here, so the Splash render's deadline below must not absorb
+  // the picker's first-use thumbnail work.
+  await expectSampleThumbnailsToSettle(page, {
+    message: "the sample thumbnail lane must drain before Donner Splash replaces it",
+    timeout: scaledMs(20_000),
+  });
   const before = await page.evaluate(() => {
     const state = window as Window & {
       __donnerWorkerStats?: { completedResults: number };

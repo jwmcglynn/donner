@@ -31,6 +31,19 @@ const presentationRegressionSource = await readFile(
   new URL("./browser-presentation-regression.spec.ts", import.meta.url),
   "utf8",
 );
+const surfaceRecoverySource = await readFile(
+  new URL("./browser-surface-recovery.spec.ts", import.meta.url),
+  "utf8",
+);
+const sampleThumbnailSettleSource = await readFile(
+  new URL("./sample-thumbnail-settle.ts", import.meta.url),
+  "utf8",
+);
+const smokeSource = await readFile(new URL("./smoke.spec.ts", import.meta.url), "utf8");
+const backendSelectionSource = await readFile(
+  new URL("./browser-backend-selection.spec.ts", import.meta.url),
+  "utf8",
+);
 const compositedDragSource = await readFile(
   new URL("./composited-drag-invariants.spec.ts", import.meta.url),
   "utf8",
@@ -71,6 +84,13 @@ function extractAsyncFunction(sourceText, functionName) {
     ? sourceText.length
     : start + signature.length + nextFunction;
   return sourceText.slice(start, end);
+}
+
+function extractTest(sourceText, title) {
+  const start = sourceText.indexOf(`\ntest("${title}"`);
+  assert.ok(start >= 0, `expected the test "${title}"`);
+  const next = sourceText.indexOf("\ntest(", start + 1);
+  return sourceText.slice(start, next < 0 ? sourceText.length : next);
 }
 
 function extractBrowserLibraryFunction(name, nextName, bridge) {
@@ -598,53 +618,110 @@ test("the composited drag sample gate waits for the document worker, not sidebar
   assert.doesNotMatch(helper, /__donnerLayerThumbnailStats/);
 });
 
-test("the composited drag gate does not cancel first-use offscreen WebGPU work", () => {
-  const helperStart = compositedDragSource.indexOf("async function openDonnerSplash(");
-  const helperEnd = compositedDragSource.indexOf("* The Donner_D left stem", helperStart);
-  assert.ok(helperStart >= 0 && helperEnd > helperStart, "expected the Splash open helper");
-  const helper = compositedDragSource.slice(helperStart, helperEnd);
-
-  const thumbnailPrecondition = helper.indexOf("__donnerSampleThumbnailStats");
-  const sampleClick = helper.indexOf("page.mouse.click");
-  assert.ok(
-    thumbnailPrecondition >= 0 && thumbnailPrecondition < sampleClick,
-    "the Firefox drag gate must let first-use offscreen rendering settle before replacing it",
-  );
-  assert.match(helper, /completed\s*>\s*0/);
-  assert.match(helper, /\(stats\.ready\s*\?\?\s*0\)\s*>\s*0/);
-  assert.match(helper, /!stats\.active/);
-  assert.match(helper, /!stats\.pending/);
-  assert.match(helper.slice(0, sampleClick), /timeout:\s*scaledMs\(20_000\)/);
-});
-
-test("the composited viewport sample gate waits for settled thumbnails and the document worker", () => {
+test("the composited viewport sample gate waits for the document worker", () => {
   const helper = extractAsyncFunction(compositedViewportSource, "openDonnerSplash");
-  const sampleClick = helper.indexOf("page.mouse.click");
-  const thumbnailPrecondition = helper.indexOf("__donnerSampleThumbnailStats");
-  assert.ok(
-    thumbnailPrecondition >= 0 && thumbnailPrecondition < sampleClick,
-    "viewport gestures must not replace an active first-use thumbnail render",
-  );
   assert.match(helper, /__donnerWorkerStats/);
   assert.match(helper, /acceptedForPresentation === true/);
   assert.match(helper, /typeof worker\.presentedAtMs === "number"/);
   assert.doesNotMatch(helper, /__donnerLayerThumbnailStats/);
 });
 
-test("shared Basic Shapes visual gates settle first-use thumbnails before replacement", () => {
-  const helper = extractAsyncFunction(presentationRegressionSource, "openBasicShapes");
-
-  const thumbnailPrecondition = helper.indexOf("__donnerSampleThumbnailStats");
-  const sampleClick = helper.indexOf("page.mouse.click");
-  assert.ok(
-    thumbnailPrecondition >= 0 && thumbnailPrecondition < sampleClick,
-    "visual-only gates must not replace a first-use thumbnail render before it settles",
+test("the sample picker publishes whether its thumbnail lane has drained", () => {
+  const bodyOf = (signature) => {
+    const start = editorShellSource.indexOf(signature);
+    assert.ok(start >= 0, `expected ${signature}`);
+    return editorShellSource.slice(start, editorShellSource.indexOf("\n}\n", start));
+  };
+  const publisher = bodyOf("void EditorShell::publishSampleThumbnailStats() const {");
+  assert.match(publisher, /sampleThumbnailLaneDrained\(stats\) \? 1 : 0/);
+  assert.match(editorShellSource, /'drained' : Boolean\(\$12\)/);
+  // Every visible sample finished and none set aside for a font: the idle counters alone also read
+  // idle between two attempts and while a font-blocked thumbnail waits for its retry.
+  const drained = bodyOf(
+    "bool EditorShell::sampleThumbnailLaneDrained(const SampleThumbnailRenderStats& stats) const {",
   );
-  assert.match(helper, /completed\s*>\s*0/);
+  for (
+    const condition of [
+      /!showSamplePicker_/,
+      /visibleSamplePreviewIndices_\.empty\(\)/,
+      /sampleThumbnailInFlightIndex_/,
+      /stats\.pending/,
+      /stats\.active/,
+      /stats\.resultReady/,
+      /finishedSamplePreviewIndices_\.contains\(index\)/,
+      /!waitingSamplePreviews_\.contains\(index\)/,
+    ]
+  ) {
+    assert.match(drained, condition, `the drained flag must require ${condition}`);
+  }
+});
+
+test("the shared sample thumbnail gate waits for a drained thumbnail lane", () => {
+  const helper = extractAsyncFunction(
+    sampleThumbnailSettleSource,
+    "expectSampleThumbnailsToSettle",
+  );
+  assert.match(helper, /__donnerSampleThumbnailStats/);
+  assert.match(helper, /stats\.drained === true/);
+  assert.match(helper, /\(stats\.completed\s*\?\?\s*0\)\s*>\s*0/);
   assert.match(helper, /\(stats\.ready\s*\?\?\s*0\)\s*>\s*0/);
   assert.match(helper, /!stats\.active/);
   assert.match(helper, /!stats\.pending/);
-  assert.match(helper.slice(0, sampleClick), /timeout:\s*scaledMs\(20_000\)/);
+  assert.match(helper, /!stats\.resultReady/);
+  // A lane that never drains has to say whether the worker behind it is healthy.
+  for (const field of ["completedResults", "deviceLost", "gpuWaitTimeoutSite", "publishReason"]) {
+    assert.match(helper, new RegExp(`${field}: worker\\?\\.${field}`), `must print ${field}`);
+  }
+  // As with the worker-health gate, `toEqual` is what prints the whole thumbnail snapshot when the
+  // lane never goes idle; `toMatchObject` would print only the flag.
+  assert.match(helper, /\.toEqual\(expect\.objectContaining\(\{ settled: true \}\)\)/);
+  assert.doesNotMatch(helper, /toMatchObject/);
+});
+
+test("sample loads that do not test the thumbnail handoff settle thumbnails first", () => {
+  const gates = [
+    ["openBasicShapes", extractAsyncFunction(presentationRegressionSource, "openBasicShapes")],
+    ["openDonnerSplash", extractAsyncFunction(presentationRegressionSource, "openDonnerSplash")],
+    ...[
+      "Geode crown face paints at each held pointer position before release",
+      "WebKit Geode survives a burst of drag wakeups without fatal errors",
+    ].map((title) => [title, extractTest(presentationRegressionSource, title)]),
+    ...["Firefox restores the Splash canvas after transient surface loss"]
+      .map((title) => [title, extractTest(surfaceRecoverySource, title)]),
+    ...["Firefox keeps Basic Shapes resize pixels and outline synchronized"]
+      .map((title) => [title, extractTest(smokeSource, title)]),
+    ...["the raster worker selects the backend its package was built for"]
+      .map((title) => [title, extractTest(backendSelectionSource, title)]),
+    ...[
+      ["composited openDonnerSplash", compositedViewportSource, "openDonnerSplash"],
+      ["composited drag openDonnerSplash", compositedDragSource, "openDonnerSplash"],
+      ["composited drag openBasicShapes", compositedDragSource, "openBasicShapes"],
+    ].map(([name, source, helper]) => [name, extractAsyncFunction(source, helper)]),
+  ];
+  for (const [name, body] of gates) {
+    const settle = body.indexOf("await expectSampleThumbnailsToSettle(page, {");
+    const sampleClick = body.indexOf("page.mouse.click");
+    assert.ok(
+      settle >= 0 && settle < sampleClick,
+      `${name} must not replace a first-use thumbnail render before it settles`,
+    );
+    assert.match(body.slice(settle, sampleClick), /timeout:\s*(?:scaledMs\(20_000\)|20000)/, name);
+  }
+  for (
+    const spec of [
+      presentationRegressionSource,
+      surfaceRecoverySource,
+      smokeSource,
+      backendSelectionSource,
+      compositedViewportSource,
+      compositedDragSource,
+    ]
+  ) {
+    assert.match(
+      spec,
+      /^import \{ expectSampleThumbnailsToSettle \} from "\.\/sample-thumbnail-settle";$/m,
+    );
+  }
 });
 
 test("browser GPU startup owns one bounded request and shared logical roots", () => {

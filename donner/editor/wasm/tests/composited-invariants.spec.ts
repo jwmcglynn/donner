@@ -13,6 +13,7 @@ import {
   visibleDocumentRegion,
 } from "./composited-probe";
 import { burstZoomStorm, panStream, pinchStream } from "./gesture-streams";
+import { expectSampleThumbnailsToSettle } from "./sample-thumbnail-settle";
 
 /**
  * Composited-output invariants for the editor's single-canvas presentation.
@@ -111,26 +112,10 @@ async function openDonnerSplash(page: Page): Promise<{
     throw new Error("editor canvas is missing");
   }
   // Replacing first-use offscreen work can stall the foreground render on loaded browsers.
-  await expect.poll(() =>
-    page.evaluate(() => {
-      const stats = (window as unknown as {
-        __donnerSampleThumbnailStats?: {
-          completed?: number;
-          ready?: number;
-          active?: boolean;
-          pending?: boolean;
-        };
-      }).__donnerSampleThumbnailStats;
-      return {
-        settled: !!stats && (stats.completed ?? 0) > 0 && (stats.ready ?? 0) > 0
-          && !stats.active && !stats.pending,
-        sampleThumbnail: stats ?? null,
-      };
-    }), {
-    message: "the first offscreen thumbnail must settle before the viewport sample replaces it",
+  await expectSampleThumbnailsToSettle(page, {
+    message: "the sample thumbnail lane must drain before the viewport sample replaces it",
     timeout: scaledMs(20_000),
-    intervals: [16, 25, 50, 100],
-  }).toEqual(expect.objectContaining({ settled: true }));
+  });
   const beforeSampleResults = await page.evaluate(() =>
     (window as unknown as { __donnerWorkerStats?: { completedResults?: number } })
       .__donnerWorkerStats?.completedResults ?? 0

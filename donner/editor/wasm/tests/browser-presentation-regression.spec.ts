@@ -42,6 +42,7 @@ import { echoGpuSessionConsole } from "./gpu-session-console";
 import { compareOverlayBitmap, type OverlayBitmapComparison } from "./overlay-bitmap-compare";
 import { cropCapturedPng, normalizeOverlayGeneration, overlayGenerationMask } from "./png-crop";
 import { quarantineStillSkips } from "./quarantine-report.mjs";
+import { expectSampleThumbnailsToSettle } from "./sample-thumbnail-settle";
 import {
   delayNextCanvasCompletionForTest,
   findCanvasOwnerWorker,
@@ -1905,25 +1906,13 @@ async function openBasicShapes(
   }
 
   // These callers measure overlays and presentation pixels, not the thumbnail-to-foreground
-  // scheduler transition. The dedicated Firefox handoff regression below forces that collision
-  // deterministically. Let first-use offscreen WebGPU work settle here so a visual oracle cannot
-  // spend its entire deadline on an unrelated thumbnail cancellation.
-  await expect
-    .poll(
-      () =>
-        page.evaluate(() => {
-          const stats = window.__donnerSampleThumbnailStats;
-          if (!stats) return false;
-          const completed = stats.completed ?? 0;
-          return completed > 0 && (stats.ready ?? 0) > 0 && !stats.active && !stats.pending;
-        }),
-      {
-        message: "the first offscreen thumbnail must settle before a visual sample replaces it",
-        timeout: scaledMs(20_000),
-        intervals: [16, 25, 50, 100],
-      },
-    )
-    .toBe(true);
+  // scheduler transition. The dedicated Firefox handoff regression in smoke.spec.ts forces that
+  // collision deterministically. Let first-use offscreen WebGPU work settle here so a visual
+  // oracle cannot spend its entire deadline on an unrelated thumbnail cancellation.
+  await expectSampleThumbnailsToSettle(page, {
+    message: "the sample thumbnail lane must drain before a visual sample replaces it",
+    timeout: scaledMs(20_000),
+  });
   const firefox = page.context().browser()?.browserType().name() === "firefox";
   const fullPage = firefox || forceGpuGateForTest;
   const gateCanvasGpu = fullPage;
@@ -3513,6 +3502,10 @@ test("Geode crown face paints at each held pointer position before release", asy
   if (canvasBounds === null) {
     return;
   }
+  await expectSampleThumbnailsToSettle(page, {
+    message: "the sample thumbnail lane must drain before Geode Splash replaces it",
+    timeout: scaledMs(20_000),
+  });
   const resultsBeforeSample = await page.evaluate(() =>
     window.__donnerWorkerStats?.completedResults ?? 0
   );
@@ -4142,6 +4135,8 @@ test("Firefox never exposes the checkerboard while dragging a Splash letter", as
 
 test("WebKit Geode survives a burst of drag wakeups without fatal errors", async ({ browserName, page }) => {
   test.skip(browserName !== "webkit", "WebKit Geode regression");
+  // The thumbnail settle below comes on top of a cold browser start; see the comment there.
+  test.slow();
   const failures = await openEditor(page);
   expect(await page.evaluate(() => window.__donnerBackend)).toBe("geode");
 
@@ -4152,6 +4147,15 @@ test("WebKit Geode survives a burst of drag wakeups without fatal errors", async
     return;
   }
 
+  // The burst is the subject here, not the thumbnail-to-document handoff. In a cold browser the
+  // sample picker is still rendering its first thumbnails when the editor comes up, and a click
+  // then queues the Basic Shapes render behind them: one CI run spent the whole Basic Shapes
+  // budget with no document result and the first thumbnail still in flight. Waiting for the
+  // thumbnails first leaves that budget to the Basic Shapes render alone.
+  await expectSampleThumbnailsToSettle(page, {
+    message: "the sample thumbnail lane must drain before Basic Shapes replaces it",
+    timeout: scaledMs(20_000),
+  });
   const beforeSample = await page.evaluate(() => window.__donnerWorkerStats?.completedResults || 0);
   await page.mouse.click(editorBounds.x + editorBounds.width * 0.76, editorBounds.y + 282);
   await expect(editorCanvas).toHaveAttribute("data-active-sample-id", "basic-shapes");
@@ -4303,6 +4307,12 @@ async function openDonnerSplash(page: Page): Promise<{
   if (editorBounds === null) {
     throw new Error("editor canvas is missing");
   }
+  // None of this helper's callers is about the thumbnail-to-document handoff, so the Splash
+  // render's deadline below must not absorb the picker's first-use thumbnail work.
+  await expectSampleThumbnailsToSettle(page, {
+    message: "the sample thumbnail lane must drain before Donner Splash replaces it",
+    timeout: scaledMs(20_000),
+  });
   const before = await page.evaluate(() => ({
     completedResults: window.__donnerWorkerStats?.completedResults || 0,
     renderedFrames: window.__donnerMainLoopRenderedFrames || 0,
