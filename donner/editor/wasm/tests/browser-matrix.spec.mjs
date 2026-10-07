@@ -458,11 +458,13 @@ test("CI discovers Firefox, WebKit, and real Safari compatibility regressions", 
     "smoke.spec.ts",
     "browser-presentation-regression.spec.ts",
     "browser-surface-recovery.spec.ts",
+    "browser-backend-selection.spec.ts",
   ]);
 
   const firefox = projects.get("firefox-geode-resize");
   assert.ok(firefox, "missing Firefox Geode resize project");
   assert.equal(firefox.use.browserName, "firefox");
+  assert.match(String(firefox.grep), /ordinary document presentation stays on the GPU/);
   assert.match(
     String(firefox.grep),
     /Firefox keeps Basic Shapes resize pixels and outline synchronized/,
