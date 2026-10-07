@@ -426,7 +426,6 @@ test("worker stats carry the GPU wait outcome that ended the frame", () => {
   // When the worker rendered nothing, the poll keeps presenting the previous frame; the page must
   // still be able to tell that iteration from one that presented.
   assert.match(publisher[0], /stats\['nothingToPresent'\] = heap\[b \+ 32\] > 0/);
-  assert.match(publisher[0], /stats\['nothingToPresentTotal'\] =/);
 
   // The site names are what a failing run prints, so they are part of the
   // contract rather than an implementation detail.
@@ -478,7 +477,18 @@ test("worker acceptance requires the fresh render identity and no old presentati
   const heap = new Float64Array(count);
   const released = [];
   heap.set([11, 22, 33, 44, 0], 26);
-  const window = { __donnerWorkerStats: { completedResults: 8, presentedAtMs: 100 } };
+  heap[32] = 1;
+  heap.set([2, 3, 4, 5, 6], 35);
+  const window = {
+    __donnerWorkerStats: {
+      completedResults: 8,
+      presentedAtMs: 100,
+      compositorReadbackTotal: 10,
+      bitmapPayloadTileTotal: 3,
+      texturePayloadTileTotal: 4,
+      nothingToPresentTotal: 5,
+    },
+  };
   publishTiming(
     window,
     0,
@@ -495,6 +505,14 @@ test("worker acceptance requires the fresh render identity and no old presentati
   assert.deepEqual(released, [0], "the asynchronous publication frees its owned buffer once");
   const stats = window.__donnerWorkerStats;
   assert.equal(stats.completedResults, 9);
+  assert.deepEqual([
+    stats.compositorReadbackTotal,
+    stats.tileHandoffReadbackTotal,
+    stats.finalSnapshotReadbackTotal,
+    stats.bitmapPayloadTileTotal,
+    stats.texturePayloadTileTotal,
+    stats.nothingToPresentTotal,
+  ], [12, 3, 4, 8, 10, 6]);
   assert.equal(stats.acceptedForPresentation, false);
   assert.equal(stats.presentedAtMs, undefined);
   assert.deepEqual([

@@ -140,7 +140,21 @@ async function installTransferProbe(owner: Worker) {
 }
 
 class GpuAccountingProbe {
-  constructor(private page: Page, readonly owner: Worker) {}
+  private lastObservation: unknown;
+
+  constructor(private page: Page, readonly owner: Worker, private info: TestInfo) {}
+
+  async saveFailureEvidence() {
+    const output = this.info.outputPath("gpu-residency-failure.json");
+    writeFileSync(
+      output,
+      JSON.stringify(this.lastObservation ?? { observationsUnavailable: true }),
+    );
+    await this.info.attach("gpu-residency-failure", {
+      path: output,
+      contentType: "application/json",
+    });
+  }
 
   readGpu(): Promise<GpuStats> {
     return this.owner.evaluate(() =>
@@ -155,21 +169,27 @@ class GpuAccountingProbe {
 
   async readIdle(readbackOffset?: number): Promise<Accounting> {
     let result: Accounting | undefined;
-    await expect.poll(async () => {
-      const first = await this.readPreview();
-      const raw = await this.readGpu();
-      const preview = await this.readPreview();
-      if (!idlePreviewMatches(first, preview) || raw.pendingSubmissions !== 0) return false;
-      if (
-        readbackOffset !== undefined
-        && raw.readbackCopies - preview.explicitPreviewReadbackTotal! !== readbackOffset
-      ) return false;
-      result = { raw, preview };
-      return true;
-    }, {
-      timeout: 15000,
-      message: "GPU readbacks must reconcile with a fresh idle auxiliary snapshot",
-    }).toBe(true);
+    try {
+      await expect.poll(async () => {
+        const first = await this.readPreview();
+        const raw = await this.readGpu();
+        const preview = await this.readPreview();
+        this.lastObservation = { first, raw, preview, readbackOffset };
+        if (!idlePreviewMatches(first, preview) || raw.pendingSubmissions !== 0) return false;
+        if (
+          readbackOffset !== undefined
+          && raw.readbackCopies - preview.explicitPreviewReadbackTotal! !== readbackOffset
+        ) return false;
+        result = { raw, preview };
+        return true;
+      }, {
+        timeout: 15000,
+        message: "GPU readbacks must reconcile with a fresh idle auxiliary snapshot",
+      }).toBe(true);
+    } catch (error) {
+      await this.saveFailureEvidence();
+      throw error;
+    }
     return result!;
   }
 
@@ -317,7 +337,7 @@ export async function checkDocumentGpuResidency(
   await openEditor(page, onReady);
   const owner = await findGpuOwner(page);
   await installTransferProbe(owner);
-  const probe = new GpuAccountingProbe(page, owner);
+  const probe = new GpuAccountingProbe(page, owner, info);
   const { raw: rawBefore, preview: beforePreview } = await probe.readIdle();
   const readbackOffset = rawBefore.readbackCopies - beforePreview.explicitPreviewReadbackTotal!;
   const before = await readWorkerStats(page);
