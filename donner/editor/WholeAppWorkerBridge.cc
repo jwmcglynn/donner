@@ -557,7 +557,7 @@ void SyncCanvasBackingSize() {
   }
   g_appliedBackingWidth = width;
   g_appliedBackingHeight = height;
-  // The GPU owner applies the backing size when it configures the presentation surface.
+  emscripten_set_canvas_element_size("#canvas", width, height);
 }
 
 }  // namespace
@@ -1143,7 +1143,9 @@ void RecordFrameSample(int triggerBits, double frameMs, int callbacks) {
         // once. Probes read the pair to measure how promptly a completed
         // result reached the canvas without racing their own poll cadence.
         const workerStats = window['__donnerWorkerStats'];
-        if (workerStats && Object.is(workerStats['presentedAtMs'], undefined)) {
+        if (workerStats && workerStats['acceptedForPresentation'] &&
+            window['__donnerHostFrameTiming']?.['lastSurfacePresented'] &&
+            Object.is(workerStats['presentedAtMs'], undefined)) {
           workerStats['presentedAtMs'] = performance.now();
         }
         window['__donnerMainLoopRenderedFrames'] =

@@ -225,10 +225,7 @@ int main(int argc, char** argv) {
   // before anything is constructed.
   donner::editor::whole_app_worker::InstallWorkerGlobalShim();
   donner::editor::whole_app_worker::Install();
-  if (!donner::gpu::browser::StartBrowserGpuOwner("#canvas")) {
-    std::cerr << "Editor GPU service worker failed to start" << std::endl;
-    std::abort();
-  }
+  donner::gpu::browser::RegisterBrowserGpuOwner();
 #endif
 #ifndef __EMSCRIPTEN__
   donner::InstallFailureSignalHandler();

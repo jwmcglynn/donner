@@ -1,25 +1,33 @@
 #pragma once
 /// @file
-/// Dispatches browser GPU operations to the editor's canvas-owning worker.
+/// Dispatches browser GPU primitives to the editor's canvas-owning application thread.
 
-#include <functional>
+#include <type_traits>
 
 namespace donner::gpu::browser {
 
-/** Start the process-lifetime GPU owner before creating any browser GPU device.
- * @param canvasSelector Canvas to transfer to the owner, or an empty string for headless use.
- * @return True after the owner is ready, false if startup failed or exceeded its deadline.
- */
-[[nodiscard]] bool StartBrowserGpuOwner(const char* canvasSelector);
+/// Register the calling application thread before creating any browser GPU devices or workers.
+void RegisterBrowserGpuOwner();
 
-/** Execute an operation synchronously on the browser GPU owner.
- * A standalone module that did not start a shared owner executes on the calling thread.
- * @param operation Bounded, nonblocking browser API work; it must not yield or wait for a client.
- * @return False when the configured owner is unavailable or its dispatch failed.
+/** Execute bounded browser work synchronously on the registered owner.
+ * Without a registered owner, standalone modules execute on the calling thread.
+ * @param operation Callback that must not allocate, lock, yield, or call arbitrary C++ code.
+ * @param context Caller-owned data, valid until the operation completes.
+ * A failed dispatch or expired deadline terminates the module rather than leaving borrowed data
+ * reachable by a delayed callback. The owner remains alive until all clients are destroyed.
  */
-[[nodiscard]] bool RunOnBrowserGpuOwner(const std::function<void()>& operation);
+void RunOnBrowserGpuOwner(void (*operation)(void*), void* context);
 
-/// Whether this module has configured a shared browser GPU owner.
+/** Invoke a stack-owned callback without allocating a type-erased function.
+ * @param operation Nonblocking browser primitive or prepared bounded command batch.
+ */
+template <typename Function>
+void RunOnBrowserGpuOwner(Function&& operation) {
+  using Callback = std::remove_reference_t<Function>;
+  RunOnBrowserGpuOwner([](void* context) { (*static_cast<Callback*>(context))(); }, &operation);
+}
+
+/// Whether this module has registered a shared browser GPU owner.
 [[nodiscard]] bool UsesBrowserGpuOwner();
 
 }  // namespace donner::gpu::browser

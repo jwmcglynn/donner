@@ -62,83 +62,6 @@ std::vector<svg::FontFaceDependency> UnresolvedFontDependencies(const svg::SVGDo
   return document.renderedFontDependencies();
 }
 
-// ---------------------------------------------------------------------------
-// WEBKIT BITMAP BRIDGE - RETAINED PENDING THE DEFERRED WEBKIT DECISION
-//
-// `DONNER_WASM_WORKER_SURFACE` is defined by no build configuration, so nothing
-// below is compiled anywhere. It is the complete C++ dependency list of the
-// WebKit bitmap bridge - the two alternating document-canvas selectors, the
-// worker-canvas selector, the mode probe, and the three ImageBitmap handoff
-// entry points - held out of the single-canvas architecture deletion series so
-// the retire-or-rebuild decision for WebKit is made against the real code
-// rather than a changelog.
-//
-// This block is NOT a supported configuration and must not be revived as-is:
-// it presents into a second DOM canvas, which the "no CSS in presentation"
-// invariant forbids. That decision either deletes it (see the series' optional
-// bridge-deletion patch, which does exactly that and nothing else) or rebuilds
-// an ImageBitmap handoff against the single canvas. Retained-but-unused code is
-// not an outcome.
-// ---------------------------------------------------------------------------
-#ifdef DONNER_WASM_WORKER_SURFACE
-constexpr const char* kDirectWorkerDocumentCanvasSelector = "#donner-document-canvas";
-constexpr const char* kDirectWorkerDocumentBackCanvasSelector = "#donner-document-canvas-back";
-constexpr const char* kDirectWorkerDocumentCanvasSelectors =
-    "#donner-document-canvas,#donner-document-canvas-back";
-constexpr const char* kBitmapWorkerDocumentCanvasSelector = "#donner-worker-document-canvas";
-
-// clang-format off: every EM_JS body below is JavaScript, which clang-format reformats as C++
-// and can silently corrupt - it has split a `===` into `== =` in another file, a SyntaxError the
-// browser only reports once that arm is built.
-EM_JS(int, UseBitmapWorkerSurfaceBridge, (),
-      { return globalThis['__donnerWorkerSurfaceMode'] == 'bitmap-bridge' ? 1 : 0; });
-
-EM_JS(int, StageWorkerDocumentBitmap,
-      (const char* selector, int width, int height, double frameToken, int surfaceSlot), {
-        try {
-          const canvasTarget = findCanvasEventTarget(UTF8ToString(selector));
-          const canvas = canvasTarget && (canvasTarget['offscreenCanvas'] || canvasTarget);
-          if (!canvas || typeof canvas.transferToImageBitmap != 'function') {
-            Module['printErr'](
-                'Donner bitmap bridge: transferred canvas cannot create an ImageBitmap');
-            return 0;
-          }
-          const bitmap = canvas.transferToImageBitmap();
-          postMessage({
-            'cmd' : 'callHandler',
-            'handler' : 'stageDonnerDocumentBitmap',
-            'args' : [ frameToken, surfaceSlot, bitmap, width, height ],
-          },
-                      [bitmap]);
-          return 1;
-        } catch (error) {
-          Module['printErr']('Donner bitmap bridge failed: ' + error);
-          return 0;
-        }
-      });
-
-EM_JS(void, CommitWorkerDocumentBitmap, (double frameToken, int surfaceSlot), {
-  if (typeof Module['commitDonnerDocumentBitmap'] == 'function') {
-    Module['commitDonnerDocumentBitmap'](frameToken, surfaceSlot);
-  }
-});
-
-EM_JS(void, DiscardWorkerDocumentBitmap, (double frameToken), {
-  if (typeof document != 'undefined') {
-    if (typeof Module['discardDonnerDocumentBitmap'] == 'function') {
-      Module['discardDonnerDocumentBitmap'](frameToken);
-    }
-    return;
-  }
-  postMessage({
-    'cmd' : 'callHandler',
-    'handler' : 'discardDonnerDocumentBitmap',
-    'args' : [frameToken],
-  });
-});
-// clang-format on
-#endif  // DONNER_WASM_WORKER_SURFACE
-
 RenderResult::CompositedPreview BuildFullCanvasCompositedPreview(
     const Box2d& documentViewBox, const svg::RendererBitmap& bitmap,
     std::shared_ptr<const svg::RendererTextureSnapshot> textureSnapshot, std::uint64_t generation,
@@ -521,7 +444,11 @@ void AsyncRenderer::start() {
   if (thread_.joinable()) {
     return;
   }
-  thread_ = std::thread([this] { workerLoop(); });
+  workerExited_.store(false, std::memory_order_release);
+  thread_ = std::thread([this] {
+    workerLoop();
+    workerExited_.store(true, std::memory_order_release);
+  });
 }
 
 AsyncRenderer::~AsyncRenderer() {
@@ -552,6 +479,14 @@ void AsyncRenderer::shutdown() {
     cv_.notify_all();
   }
   if (thread_.joinable()) {
+#ifdef __EMSCRIPTEN__
+    // The app owns GPU promises used by explicit worker captures and device initialization.
+    const double deadlineMs = emscripten_get_now() + 30000.0;
+    while (!workerExited_.load(std::memory_order_acquire)) {
+      UTILS_RELEASE_ASSERT(emscripten_get_now() < deadlineMs);
+      emscripten_sleep(1);
+    }
+#endif
     thread_.join();
   }
 }

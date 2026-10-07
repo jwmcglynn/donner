@@ -101,10 +101,10 @@ _EDITOR_LINKOPTS = [
     "-sBINARYEN_EXTRA_PASSES=--skip-pass=memory-packing,--one-caller-inline-max-function-size=400,--inline-max-combined-binary-size=196608",
     "-pthread",
     "-sEXIT_RUNTIME=0",
-    # CPU UI and raster work run on separate pthreads; the GPU service owns the single canvas.
+    # The app thread owns the canvas and all GPU objects; raster workers dispatch commands to it.
     "-sPROXY_TO_PTHREAD",
-    "-sOFFSCREENCANVASES_TO_PTHREAD=",
-    "-sPTHREAD_POOL_SIZE=3",
+    "-sOFFSCREENCANVASES_TO_PTHREAD=#canvas",
+    "-sPTHREAD_POOL_SIZE=2",
     "-sSTACK_SIZE=1048576",
     "-sUSE_PTHREADS=1",
     "-sENVIRONMENT=web,worker",

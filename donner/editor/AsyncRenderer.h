@@ -980,6 +980,7 @@ private:
   void finishSampleThumbnailRendererCreation();
 
   std::thread thread_;
+  std::atomic<bool> workerExited_{true};
   mutable std::mutex mutex_;
   std::uint64_t nextCaptureId_ = 1;
   std::condition_variable cv_;

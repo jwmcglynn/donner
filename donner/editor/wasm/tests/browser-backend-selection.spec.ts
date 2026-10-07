@@ -23,6 +23,7 @@ const baseUrl = process.env.DONNER_WASM_BASE_URL || "http://127.0.0.1:8000";
 type WorkerStats = {
   completedResults?: number;
   acceptedForPresentation?: boolean;
+  presentedAtMs?: number;
   readbackCount?: number;
   readbackWaitStrategy?: string;
   compositorReadbackCount?: number;
@@ -93,7 +94,7 @@ test("the raster worker selects the backend its package was built for", async ({
   await expect(editorCanvas).toHaveAttribute("data-active-sample-id", "basic-shapes");
   await expect.poll(
     () =>
-      page.evaluate(() => (window as SelectionWindow).__donnerWorkerStats?.acceptedForPresentation),
+      page.evaluate(() => Boolean((window as SelectionWindow).__donnerWorkerStats?.presentedAtMs)),
     { timeout: 10000 },
   ).toBe(true);
   expect(await page.evaluate(() => (window as SelectionWindow).__donnerWorkerStats?.readbackCount))
@@ -128,8 +129,8 @@ test("ordinary document presentation performs no worker GPU readback", async ({ 
     page.workers().map(async (worker) => {
       const ownsGpu = await worker.evaluate(() =>
         Boolean(
-          (globalThis as typeof globalThis & { __donnerGpuServiceOwner?: boolean })
-            .__donnerGpuServiceOwner,
+          (globalThis as typeof globalThis & { __donnerGpuOwner?: boolean })
+            .__donnerGpuOwner,
         )
       );
       if (!ownsGpu) throw new Error("not the GPU owner");
@@ -141,7 +142,7 @@ test("ordinary document presentation performs no worker GPU readback", async ({ 
       __donnerReadGpuObjectStats: () => {
         readbackCopies: number;
         cpuTextureWrites: number;
-        surfaceCopies: number;
+        surfacePresents: number;
       };
     };
     return state.__donnerReadGpuObjectStats();
@@ -163,7 +164,7 @@ test("ordinary document presentation performs no worker GPU readback", async ({ 
 
   await expect.poll(
     () =>
-      page.evaluate(() => (window as SelectionWindow).__donnerWorkerStats?.acceptedForPresentation),
+      page.evaluate(() => Boolean((window as SelectionWindow).__donnerWorkerStats?.presentedAtMs)),
     { timeout: 10000 },
   ).toBe(true);
   const after = await page.evaluate(() => (window as SelectionWindow).__donnerWorkerStats);
@@ -172,14 +173,14 @@ test("ordinary document presentation performs no worker GPU readback", async ({ 
       __donnerReadGpuObjectStats: () => {
         readbackCopies: number;
         cpuTextureWrites: number;
-        surfaceCopies: number;
+        surfacePresents: number;
       };
     };
     return state.__donnerReadGpuObjectStats();
   });
   expect(rawAfter.readbackCopies).toBe(rawBefore.readbackCopies);
   expect(rawAfter.cpuTextureWrites).toBe(rawBefore.cpuTextureWrites);
-  expect(rawAfter.surfaceCopies).toBeGreaterThan(rawBefore.surfaceCopies);
+  expect(rawAfter.surfacePresents).toBeGreaterThan(rawBefore.surfacePresents);
   expect(after, "the document result did not publish readback accounting").toBeDefined();
   expect(after!.compositorReadbackTotal).toBeDefined();
   expect(after!.tileHandoffReadbackTotal).toBeDefined();

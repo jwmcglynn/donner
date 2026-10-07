@@ -1580,10 +1580,6 @@ Result<BackendTextureExport> BrowserDevice::onExportTexture(uint32_t slotIndex) 
   if (Status status = checkUsable(kOperation); status.hasError()) {
     return std::move(status).error();
   }
-  if (isAcquiredFrame(slotIndex)) {
-    return Err(GpuErrorType::Unsupported,
-               "exportTexture: surface frames cannot be retained beyond presentation");
-  }
   Result<BrowserObjectId> textureId = objectFor(BrowserObjectKind::Texture, slotIndex, kOperation);
   if (textureId.hasError()) {
     return std::move(textureId).error();

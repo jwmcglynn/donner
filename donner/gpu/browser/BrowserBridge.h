@@ -542,7 +542,7 @@ public:
   virtual BridgeStatus acquireCurrentTexture(BrowserObjectId surfaceId, BrowserObjectId textureId,
                                              SurfaceStatus& status) = 0;
 
-  /// Copies the acquired GPU frame into the canvas and submits it in one owner task.
+  /// Finishes the acquired canvas frame for implicit browser presentation.
   /// @param surfaceId Surface holding the frame. @param status Receives the presentation outcome.
   virtual BridgeStatus presentSurface(BrowserObjectId surfaceId, SurfaceStatus& status) = 0;
 
