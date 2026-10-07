@@ -227,6 +227,9 @@ donner_cc_test(
 
 donner_cc_test(
     name = "compositor_geode_splash_tests",
+    # Runs in the hosted macOS Geode editor lane, whose paravirtual GPU is several times slower
+    # than local hardware.
+    size = "medium",
     srcs = ["CompositorGeodeSplash_tests.cc"],
     data = [
         "//:donner_splash.svg",
