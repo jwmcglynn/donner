@@ -171,20 +171,8 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
       assert(sampleMeasurement.pointAtArcLength(sampleMeasurement.pathLength() * 0.5).valid);
     }
 
-    PathBuilder builder;
-    for (std::size_t i = 0; i < 512; ++i) {
-      builder.moveTo({1000.0, 0.0})
-          .curveTo({1000.0, 552.2847498}, {552.2847498, 1000.0}, {0.0, 1000.0});
-    }
-    const Path path = builder.build();
-    const Path::MeasuredPath measured = path.measure();
-    assert(!measured.valid());
-    assert(measured.measurementWorkUnits() == Path::kMaximumGeometryQueryWork);
-    assert(measured.segmentCount() == 0);
-    assert(std::isinf(path.pathLength()));
-    assert(!path.isInside({2000.0, 2000.0}));
-    assert(!path.isOnPath({2000.0, 2000.0}, 0.001));
-
+    // The aggregate work ceiling is tested in Path_tests; saturating it with measure() and
+    // pathLength() would cost every corpus replay and soak about 0.9 s unoptimized.
     const Path slowStart = PathBuilder().moveTo({0, 0}).curveTo({0, 0}, {0, 0}, {10, 0}).build();
     const Path slowEnd = PathBuilder().moveTo({0, 0}).curveTo({10, 0}, {10, 0}, {10, 0}).build();
     assert(std::abs(slowStart.measure().pointAtArcLength(5.0).point.x - 5.0) <= 0.001);

@@ -300,6 +300,13 @@ donner_cc_fuzzer(
         "tests/Path_fuzzer.cc",
     ],
     corpus = "tests/path_corpus",
+    # One input may run measure(), pathLength() and pointAtArcLength(), and each can spend the whole
+    # Path::kMaximumGeometryQueryWork budget. A 54-byte mutated input takes 0.87 s and a 4 KB input
+    # 1.26 s in the unoptimized fastbuild fuzzer build on an idle core; a starved four-vCPU CI
+    # runner stretched the same work past 3 s. libFuzzer reports a hung input 10 to 16 s after it
+    # starts, so a hang at the end of the 30 s fuzz-soak budget still fails by about 46 s (51 s if
+    # the timeout report stalls), inside the 60 s test limit.
+    per_input_timeout_seconds = 10,
     tags = ["fuzz_ubsan"],
     deps = [
         ":base",
