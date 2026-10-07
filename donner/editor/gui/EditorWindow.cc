@@ -11,6 +11,7 @@
 
 #include "GLFW/emscripten_glfw3.h"
 #include "donner/editor/WholeAppWorkerBridge.h"
+#include "donner/gpu/browser/BrowserGpuOwner.h"
 #elif defined(DONNER_EDITOR_WGPU)
 #if defined(__APPLE__)
 #include "donner/editor/gui/EditorMetalLayer.h"
@@ -2273,6 +2274,11 @@ bool EditorWindow::admitFrameSubmission(bool requestedReadback) {
   if (!ready) {
     presentationWasDeferred_ = true;
     ++coalescedPresentationFrames_;
+#ifdef DONNER_EDITOR_WHOLE_APP_WORKER
+    if (!wgpuState_->framebufferGeodeDevice->isDeviceLost()) {
+      whole_app_worker::RequestPresentationProgress();
+    }
+#endif
     return false;
   }
   presentationWasDeferred_ = false;
@@ -2376,9 +2382,44 @@ void EditorWindow::pollIdleGpu() {
     if (observePresentationCompletion() && presentationWasDeferred_) {
       presentationWasDeferred_ = false;
       wakeEventLoop();
+#ifdef DONNER_EDITOR_WHOLE_APP_WORKER
+      whole_app_worker::RequestFrame();
+#endif
     }
   }
 #endif
+}
+
+EditorWindow::PresentationProgress EditorWindow::pollDeferredPresentation() {
+#ifdef DONNER_EDITOR_WGPU
+  if (presentationWasDeferred_) {
+    if (wgpuState_ == nullptr || wgpuState_->framebufferGeodeDevice == nullptr ||
+        wgpuState_->framebufferGeodeDevice->isDeviceLost()) {
+      return PresentationProgress::Failed;
+    }
+    auto& device = wgpuState_->framebufferGeodeDevice->runtimeDevice();
+    device.poll();
+    const auto completed = presentationCompletionProbeForTesting_
+                               ? presentationCompletionProbeForTesting_()
+                               : device.completedSerial();
+    const auto now = std::chrono::steady_clock::now();
+#ifdef __EMSCRIPTEN__
+    const auto admission = presentationSubmissions_.observe(completed, now);
+#else
+    const auto admission = presentationSubmissions_.observe(completed, now, device.lastProgress());
+#endif
+    switch (admission) {
+      case internal::PresentationSubmissionQueue::Admission::Ready:
+        return PresentationProgress::Ready;
+      case internal::PresentationSubmissionQueue::Admission::Busy:
+        return PresentationProgress::Pending;
+      case internal::PresentationSubmissionQueue::Admission::TimedOut:
+        // Only the actual frame performs the bounded confirmation or marks device loss.
+        return PresentationProgress::Deadline;
+    }
+  }
+#endif
+  return PresentationProgress::Idle;
 }
 
 bool EditorWindow::hasIdleGpuWork() const {
@@ -2799,6 +2840,16 @@ Vector2i RenderFrameDrawData([[maybe_unused]] GLFWwindow* window, EditorWindowFr
 }
 
 #ifdef DONNER_EDITOR_WGPU
+#ifdef DONNER_EDITOR_WHOLE_APP_WORKER
+/// Defer raw worker GPU batches only while the canvas acquisition is live.
+struct BrowserCanvasFrameScope {
+  BrowserCanvasFrameScope() { gpu::browser::SetBrowserGpuOwnerCanvasFrameActive(true); }
+  ~BrowserCanvasFrameScope() { gpu::browser::SetBrowserGpuOwnerCanvasFrameActive(false); }
+  BrowserCanvasFrameScope(const BrowserCanvasFrameScope&) = delete;
+  BrowserCanvasFrameScope& operator=(const BrowserCanvasFrameScope&) = delete;
+};
+#endif
+
 /// Computes the scale between this frame's ImGui coordinates and its actual framebuffer.
 /// @param size Actual framebuffer extent in pixels.
 Vector2d FramebufferFromLogicalScale(Vector2i size) {
@@ -2989,6 +3040,9 @@ struct EditorWindow::GpuFrameSubmission {
     if (!prepare()) {
       return;
     }
+#ifdef DONNER_EDITOR_WHOLE_APP_WORKER
+    BrowserCanvasFrameScope canvasScope;
+#endif
     auto& state = *window.wgpuState_;
     auto& device = state.framebufferGeodeDevice->runtimeDevice();
     bool fullFramePresented = false;

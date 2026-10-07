@@ -589,14 +589,17 @@ namespace {
 constexpr std::size_t kTickSampleCapacity = 2048;
 
 struct FrameDriverState {
-  void (*frameFn)(void*) = nullptr;
+  void (*frameFn)(void*, bool) = nullptr;
   bool (*canRunFrame)(void*) = nullptr;
+  bool (*pollPresentation)(void*) = nullptr;
   void* userData = nullptr;
   pthread_t appThread{};
   em_proxying_queue* proxyQueue = nullptr;
   FrameDriver driver = FrameDriver::SetTimeoutFallback;
   FrameCallbackAdmission admission;
   FrameCallbackAdmission eventAdmission;
+  FrameCallbackAdmission progressAdmission;
+  double progressDeadlineMs = 0;
   std::atomic<std::uint32_t> wakeSerial{0};
   bool eventDeferred = false;
   std::atomic<std::uint32_t> pendingFrames{0};
@@ -630,6 +633,25 @@ void RecordTick() {
   ++state.ticks;
 }
 
+void RunPresentationProgress(void* token) {
+  FrameDriverState& state = Driver();
+  const auto generation = static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(token));
+  if (!state.progressAdmission.isCurrent(generation)) {
+    state.progressAdmission.complete(generation);
+    return;
+  }
+  if (emscripten_get_now() >= state.progressDeadlineMs) {
+    state.progressAdmission.complete(generation);
+    RequestFrame();
+    return;
+  }
+  if (state.pollPresentation(state.userData) && state.progressAdmission.isCurrent(generation)) {
+    emscripten_async_call(&RunPresentationProgress, token, 8);
+  } else {
+    state.progressAdmission.complete(generation);
+  }
+}
+
 void QueueEventFrame(std::uint32_t generation);
 
 void RunEventFrame(void* token) {
@@ -644,7 +666,7 @@ void RunEventFrame(void* token) {
     return;
   }
   const std::uint32_t serial = state.wakeSerial.load(std::memory_order_acquire);
-  state.frameFn(state.userData);
+  state.frameFn(state.userData, true);
   state.eventAdmission.complete(generation);
   if (state.eventAdmission.isCurrent(generation) &&
       state.wakeSerial.load(std::memory_order_acquire) != serial) {
@@ -678,7 +700,7 @@ void RunDrivenFrame(void* token) {
   const auto generation = static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(token));
   if (state.admission.isCurrent(generation)) {
     RecordTick();
-    state.frameFn(state.userData);
+    state.frameFn(state.userData, false);
     NotifyFrameFinished();
   }
 }
@@ -745,10 +767,12 @@ bool WorkerRequestAnimationFrameAvailable() {
   return WorkerRequestAnimationFrameAvailableImpl();
 }
 
-FrameDriver InstallFrameDriver(void (*frameFn)(void*), void* userData, bool (*canRunFrame)(void*)) {
+FrameDriver InstallFrameDriver(void (*frameFn)(void*, bool), void* userData,
+                               bool (*canRunFrame)(void*), bool (*pollPresentation)(void*)) {
   FrameDriverState& state = Driver();
   state.frameFn = frameFn;
   state.canRunFrame = canRunFrame;
+  state.pollPresentation = pollPresentation;
   state.userData = userData;
   state.appThread = pthread_self();
   if (!state.proxyQueue) {
@@ -768,6 +792,7 @@ FrameDriver InstallFrameDriver(void (*frameFn)(void*), void* userData, bool (*ca
   // clang-format on
   const std::uint32_t generation = state.admission.start();
   (void)state.eventAdmission.start();
+  (void)state.progressAdmission.start();
   state.eventDeferred = false;
   void* token = reinterpret_cast<void*>(static_cast<std::uintptr_t>(generation));
   if (!forceProxiedFrames && WorkerRequestAnimationFrameAvailable()) {
@@ -823,6 +848,23 @@ void RequestFrame() {
   }
 }
 
+void RequestPresentationProgress() {
+  FrameDriverState& state = Driver();
+  const std::uint32_t generation = state.progressAdmission.generation();
+  if (!generation) {
+    return;
+  }
+  if (!pthread_equal(state.appThread, pthread_self())) {
+    std::abort();
+  }
+  if (state.progressAdmission.acquire(generation)) {
+    // The original submission age remains authoritative; a busy UI cannot grow this timer forever.
+    state.progressDeadlineMs = emscripten_get_now() + 5500.0;
+    void* token = reinterpret_cast<void*>(static_cast<std::uintptr_t>(generation));
+    emscripten_async_call(&RunPresentationProgress, token, 8);
+  }
+}
+
 void NotifyFrameFinished() {
   FrameDriverState& state = Driver();
   const std::uint32_t generation = state.eventAdmission.generation();
@@ -837,6 +879,8 @@ void StopFrameDriver() {
   FrameDriverState& state = Driver();
   state.admission.stop();
   state.eventAdmission.stop();
+  state.progressAdmission.stop();
+  state.pollPresentation = nullptr;
   state.eventDeferred = false;
   state.canRunFrame = nullptr;
   state.frameFn = nullptr;

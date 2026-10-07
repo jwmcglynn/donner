@@ -52,7 +52,7 @@ em_proxying_queue* gNotificationQueue = nullptr;
 BrowserGpuTaskQueue gReady;
 bool gProcessingBatch = false;
 bool gPulseScheduled = false;
-bool gFrameActive = false;
+bool gCanvasFrameActive = false;
 
 // clang-format off
 EM_JS(void, ScheduleGpuPulse, (), {
@@ -61,7 +61,7 @@ EM_JS(void, ScheduleGpuPulse, (), {
 // clang-format on
 
 void SchedulePulse() {
-  if (!gPulseScheduled && !gFrameActive) {
+  if (!gPulseScheduled && !gCanvasFrameActive) {
     gPulseScheduled = true;
     ScheduleGpuPulse();
   }
@@ -146,7 +146,7 @@ extern "C" EMSCRIPTEN_KEEPALIVE void donner_browser_gpu_pulse() {
     return;
   }
   gPulseScheduled = false;
-  if (gFrameActive) {
+  if (gCanvasFrameActive) {
     return;
   }
   if (gProcessingBatch) {
@@ -303,12 +303,12 @@ bool IsBrowserGpuOwnerDispatchActive() {
 #endif
 }
 
-void SetBrowserGpuOwnerFrameActive([[maybe_unused]] bool active) {
+void SetBrowserGpuOwnerCanvasFrameActive([[maybe_unused]] bool active) {
 #ifdef __EMSCRIPTEN_PTHREADS__
-  if (!IsBrowserGpuOwnerThread() || gFrameActive == active || (active && gProcessingBatch)) {
+  if (!IsBrowserGpuOwnerThread() || gCanvasFrameActive == active || (active && gProcessingBatch)) {
     std::abort();
   }
-  gFrameActive = active;
+  gCanvasFrameActive = active;
   if (!active && !gReady.empty()) {
     SchedulePulse();
   }
@@ -317,7 +317,7 @@ void SetBrowserGpuOwnerFrameActive([[maybe_unused]] bool active) {
 
 void StopBrowserGpuOwner() {
 #ifdef __EMSCRIPTEN_PTHREADS__
-  if (!IsBrowserGpuOwnerThread() || gProcessingBatch || gFrameActive || !gReady.empty() ||
+  if (!IsBrowserGpuOwnerThread() || gProcessingBatch || gCanvasFrameActive || !gReady.empty() ||
       gOwnerWaitStats[kRequested].load() != gOwnerWaitStats[kFinished].load()) {
     std::abort();
   }

@@ -45,9 +45,10 @@ void ProcessBrowserGpuOwnerWait();
 /// Whether this owner is already executing a GPU batch; nested editor frames must defer.
 [[nodiscard]] bool IsBrowserGpuOwnerDispatchActive();
 
-/// Defer asynchronous command batches during an editor frame. Futex dependency progress is allowed.
+/// Defer asynchronous command batches across canvas acquisition, drawing and retirement.
+/// Idle and pre-acquisition waits may service GPU work; futex dependency progress is also allowed.
 /// @param active True on frame entry, false on exit; called only by the owner, without nesting.
-void SetBrowserGpuOwnerFrameActive(bool active);
+void SetBrowserGpuOwnerCanvasFrameActive(bool active);
 
 /// Stop delivery on the owner after every client has joined and released its resources.
 /// This is terminal: later GPU calls fail closed instead of reverting to standalone dispatch.

@@ -97,6 +97,7 @@ donner_cc_library(
             ":ui_texture_registration",
             ":ui_texture_registry",
             "//donner/gpu",
+            "//donner/gpu/browser:emscripten_browser_bridge",
             "//donner/svg/renderer/geode:geode_device",
             "//donner/svg/renderer/geode:geode_gpu_wait",
             "//third_party/emscripten-glfw",

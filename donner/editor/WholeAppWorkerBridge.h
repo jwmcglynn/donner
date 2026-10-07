@@ -154,12 +154,20 @@ enum class FrameDriver : int {
 /// Rendering runs outside the proxy queue drain. @p frameFn must guard re-entry on the worker-rAF
 /// arm, where a synchronous proxied call may deliver another callback.
 /// @param canRunFrame Owner-thread readiness guard; false while an editor frame or GPU batch runs.
-FrameDriver InstallFrameDriver(void (*frameFn)(void*), void* userData, bool (*canRunFrame)(void*));
+/// @param frameFn Frame body; its second argument forces a frame for an event wake.
+/// @param userData Borrowed owner state, invalidated by StopFrameDriver before destruction.
+/// @param pollPresentation Cheap owner progress poll, returning true while a retry remains pending.
+FrameDriver InstallFrameDriver(void (*frameFn)(void*, bool), void* userData,
+                               bool (*canRunFrame)(void*), bool (*pollPresentation)(void*));
 
 /// Request an event frame for a raster-worker state change, independently of delayed browser rAF.
 /// Safe from any thread, including before installation and after shutdown. Ordinary UI/animation
 /// wakes keep using the rAF-paced request flag; this is not a self-driven animation loop.
 void RequestFrame();
+
+/// Start one bounded progress timer for a frame denied a presentation slot. Owner-thread only.
+/// Polls do not draw and preserve the submission queue's original completion deadline.
+void RequestPresentationProgress();
 
 /// Resume one deferred event frame after the owner exits its active frame. Owner-thread only.
 void NotifyFrameFinished();

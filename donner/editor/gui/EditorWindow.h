@@ -787,6 +787,12 @@ public:
   /// The render worker maintains its own context on that worker thread.
   void pollIdleGpu();
 
+  /// Outcome of maintaining a frame deferred by the presentation submission limit.
+  enum class PresentationProgress { Idle, Pending, Ready, Deadline, Failed };
+
+  /// Poll deferred GPU work without constructing another UI frame. Called on the window owner.
+  PresentationProgress pollDeferredPresentation();
+
   /// Whether a completion timer should wake this event loop for another cheap idle poll.
   [[nodiscard]] bool hasIdleGpuWork() const;
 

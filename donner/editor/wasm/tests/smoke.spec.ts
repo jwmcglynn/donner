@@ -1764,7 +1764,7 @@ test(
     const applicationOwner = await findProbedCanvasApplicationWorker(page);
     expect(applicationOwner, "the canvas owner must have the completion probe installed").not
       .toBeNull();
-    const hold = await holdCanvasCompletionForTest(page, [applicationOwner!]);
+    let hold: Awaited<ReturnType<typeof holdCanvasCompletionForTest>> | null = null;
     let requiredOwner: Worker | null = null;
     let releaseSucceeded = false;
     const captureErrors: unknown[] = [];
@@ -1792,14 +1792,28 @@ test(
           completedCaptureId: window.__donnerPresentationQueueStats?.captureId ?? 0,
           completedInputRepresented:
             window.__donnerPresentationQueueStats?.inputRepresented === true,
+          framesInFlight: window.__donnerPresentationQueueStats?.framesInFlight ?? null,
+          completedSerial: window.__donnerPresentationQueueStats?.completedSerial ?? null,
+          submittedSerial: window.__donnerPresentationQueueStats?.submittedSerial ?? null,
         }));
       await expect.poll(
         async () => hasPresentedBasicShapesHostFrame(await readState(), before.results),
         { timeout: scaledMs(5_000) },
       ).toBe(true);
+      await expect.poll(async () => {
+        const state = await readState();
+        return hasPresentedBasicShapesHostFrame(state, before.results) && state.framesInFlight === 0
+          && state.completedSerial === state.submittedSerial;
+      }, { timeout: scaledMs(5_000) }).toBe(true);
       const readyState = await readState();
       expect(readyState.renderedFrames).toBeGreaterThan(before.frames);
-      await expect.poll(hold.observedCalls).toBeGreaterThan(0);
+      // Hold a fresh document frame, not welcome frames that can occupy all presentation slots.
+      const completionHold = await holdCanvasCompletionForTest(page, [applicationOwner!]);
+      hold = completionHold;
+      await page.evaluate(() => {
+        window.__donnerEditorFrameRequested = true;
+      });
+      await expect.poll(completionHold.observedCalls).toBeGreaterThan(0);
 
       let screenshots = 0;
       let settled = false;
@@ -1820,14 +1834,14 @@ test(
       });
       // Wait until this exact gate is entered, or a bypass starts the capture.
       // A page round trip alone can finish before worker-owner discovery.
-      await expect.poll(async () => screenshots > 0 || (await hold.enteredWaits()) > 0, {
+      await expect.poll(async () => screenshots > 0 || (await completionHold.enteredWaits()) > 0, {
         timeout: scaledMs(5_000),
       }).toBe(true);
       expect(screenshots).toBe(0);
       expect(settled).toBe(false);
       expect(requiredOwner).not.toBeNull();
       if (requiredOwner === null) throw new Error("the held canvas owner was not identified");
-      await hold.release(requiredOwner);
+      await completionHold.release(requiredOwner);
       releaseSucceeded = true;
       const capture = await gatedCapture;
       expect(capture).not.toBeNull();
@@ -1878,9 +1892,9 @@ test(
     } catch (error) {
       captureErrors.push(error);
     } finally {
-      if (!releaseSucceeded && requiredOwner !== null) {
+      if (!releaseSucceeded && hold !== null) {
         try {
-          await hold.release(requiredOwner);
+          await hold.release(requiredOwner ?? applicationOwner!);
         } catch (cleanupError) {
           captureErrors.push(cleanupError);
         }

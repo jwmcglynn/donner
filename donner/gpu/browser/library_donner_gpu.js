@@ -127,6 +127,8 @@ var LibraryDonnerGpu = {
     readbackCopies: 0,
     cpuTextureWrites: 0,
     surfacePresents: 0,
+    completionProgressKicks: 0,
+    completionProgressKickMs: 0,
 
     // The protocol table, in the order BrowserWireCodes.cc builds it. This is the artifact the two
     // halves agree on: donner_gpu_check_protocol compares it element by element against the C++
@@ -245,6 +247,8 @@ var LibraryDonnerGpu = {
         "readbackCopies": DonnerGpu.readbackCopies,
         "cpuTextureWrites": DonnerGpu.cpuTextureWrites,
         "surfacePresents": DonnerGpu.surfacePresents,
+        "completionProgressKicks": DonnerGpu.completionProgressKicks,
+        "completionProgressKickMs": DonnerGpu.completionProgressKickMs,
       };
       DonnerGpu.logical.forEach(function(record) {
         statistics["objects"] += record.objects.size;
@@ -298,7 +302,13 @@ var LibraryDonnerGpu = {
       }
       DonnerGpu.lastCompletionProgressAtMs = now;
       DonnerGpu.perform(record, function() {
-        DonnerGpu.queue.submit([]);
+        var startedAt = performance.now();
+        DonnerGpu.completionProgressKicks += 1;
+        try {
+          DonnerGpu.queue.submit([]);
+        } finally {
+          DonnerGpu.completionProgressKickMs += performance.now() - startedAt;
+        }
       });
     },
 

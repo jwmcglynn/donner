@@ -3758,6 +3758,7 @@ TEST(EditorWindowTest, PendingGpuCompletionCoalescesUiFramesAtThree) {
   ASSERT_NE(window.geodeFramebufferDevice(), nullptr);
   std::uint64_t completed = 0;
   window.setPresentationCompletionProbeForTesting([&] { return completed; });
+  EXPECT_EQ(window.pollDeferredPresentation(), EditorWindow::PresentationProgress::Idle);
   int documentDraws = 0;
   window.setWgpuUnderlayRenderCallback(
       [&](const EditorWindowWgpuRenderTarget&) { ++documentDraws; });
@@ -3766,10 +3767,17 @@ TEST(EditorWindowTest, PendingGpuCompletionCoalescesUiFramesAtThree) {
     window.endFrame();
   }
   EXPECT_EQ(documentDraws, 3) << "the fourth UI frame must not allocate or submit more GPU work";
+  EXPECT_EQ(window.pollDeferredPresentation(), EditorWindow::PresentationProgress::Pending);
+  EXPECT_EQ(documentDraws, 3) << "the progress probe must not construct a UI frame";
   completed = std::numeric_limits<std::uint64_t>::max();
+  EXPECT_EQ(window.pollDeferredPresentation(), EditorWindow::PresentationProgress::Ready);
+  EXPECT_EQ(window.pollDeferredPresentation(), EditorWindow::PresentationProgress::Ready)
+      << "readiness stays owed until a frame actually admits";
+  EXPECT_EQ(documentDraws, 3);
   window.beginFrame();
   window.endFrame();
   EXPECT_EQ(documentDraws, 4) << "the newest frame must resume as soon as completion permits";
+  EXPECT_EQ(window.pollDeferredPresentation(), EditorWindow::PresentationProgress::Idle);
 }
 
 TEST(EditorWindowTest, APublishedManifestRetainsItsUiRegistrationUntilItsLastOwnerLeaves) {
