@@ -22,10 +22,10 @@ at run time.
 Each platform defaults to its own backend, and a requested backend the host cannot provide fails
 closed. Runtime devices over one selected root share its native device and loss state while
 keeping their own handles and serials, and a texture of one runtime device reaches another only
-through export and registration. Waits that detect a hung device declare it lost only once the
-device stops making progress. The one remaining wgpu-native consumer is a checksum-pinned,
-Linux-only, test-only resvg comparison reference; the lexical no-Rust verifier and the configured
-dependency audits keep it out of every product.
+through export and registration. Waits that detect a hung device declare it lost once it stops
+making progress, except two Vulkan waits whose progress the queue cannot judge. The one remaining
+wgpu-native consumer is a checksum-pinned, Linux-only, test-only resvg comparison reference; the
+lexical no-Rust verifier and the configured dependency audits keep it out of every product.
 
 ## Documentation
 
