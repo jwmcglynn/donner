@@ -13,7 +13,7 @@ playwright_bin.playwright_test(
         "test",
         "$(rootpath :smoke.spec.ts)",
         "--config=$(rootpath :playwright.bazel.config.js)",
-        "--grep=production Geode wasm presents visible editor pixels|carousel loads",
+        "--grep=production.Geode.wasm.presents.visible.editor.pixels|carousel.loads",
     ],
     copy_data_to_bin = False,
     data = [
