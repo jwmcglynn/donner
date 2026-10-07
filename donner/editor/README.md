@@ -43,7 +43,7 @@ run against an isolated source snapshot and are applied only after revision vali
 
 ## Building
 
-### Desktop (default - Geode/WebGPU backend)
+### Desktop (default - Geode on native Metal or Vulkan)
 
 ```sh
 bazel build //donner/editor
@@ -71,7 +71,7 @@ bazel build //donner/editor:editor_impl
 `editor_impl` is the untransitioned implementation target and inherits the
 command-line renderer backend. It is primarily useful for backend debugging.
 
-### WASM (default - Geode/WebGPU backend)
+### WASM (default - Geode on browser WebGPU)
 
 ```sh
 bazel build --config=editor-wasm //donner/editor/wasm:wasm
@@ -87,17 +87,19 @@ Geode by default. No runtime flags or C++ code branches are needed:
 
 | Target / config               | Backend                             |
 | ----------------------------- | ----------------------------------- |
-| `//donner/editor`             | Geode - WebGPU + Slug               |
+| `//donner/editor`             | Geode - native Metal or Vulkan      |
 | `--config=editor-wasm`        | Geode - browser WebGPU              |
 | `//donner/editor:editor_impl` | Inherits command-line renderer flag |
 
 Desktop presentation is also selected at build time:
 
-- Geode uses a GLFW `GLFW_NO_API` WebGPU host. `RendererGeode` exports
-  `RendererGeodeTextureSnapshot` payloads, and the editor presents their
-  `WGPUTextureView`s directly through ImGui WGPU. Normal Geode editor
-  presentation intentionally does not fall back to `takeSnapshot()` or GL
-  texture upload.
+- Geode uses a GLFW `GLFW_NO_API` window that presents through the Donner GPU
+  runtime: a Metal layer on macOS and a Vulkan surface on Linux. `RendererGeode`
+  exports `RendererGeodeTextureSnapshot` payloads, and the editor registers them
+  with its UI texture registry and draws them directly through the runtime ImGui
+  renderer. Normal Geode editor presentation intentionally does not fall back to
+  `takeSnapshot()` or GL texture upload. See the
+  [GPU runtime reference](../../docs/gpu_runtime.md).
 - TinySkia debugging builds use the existing GLFW OpenGL host. Renderer outputs
   are CPU `RendererBitmap` payloads that `GlTextureCache` uploads to GL textures.
 

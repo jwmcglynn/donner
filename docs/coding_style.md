@@ -208,15 +208,20 @@ codebase consistent and portable.
 - **Avoid typographic punctuation in source**: use ASCII hyphens and quotes instead of smart
   hyphens, em dashes, en dashes, and smart quotes. Use ordinary ASCII whitespace in source files;
   spell intentional Unicode whitespace in literals with escaped code points.
-- **No new `wgpu::Device::createRenderPipeline` / `createComputePipeline` calls**: the GPU
-  runtime retains every pipeline it ever constructs internally, and polling the device does not
-  drain the pending-destroy queue for pipelines. Per-frame or per-renderer construction silently
-  leaks ~100 KB each until the driver's `maxMemoryAllocationCount` trips (Mesa lavapipe panics on
-  the next texture allocation) or the process hangs progressively (Mesa llvmpipe). See issue #575
-  for the incident history. All Geode pipelines must be owned by `GeodeDevice` and shared across
-  renderers; `GeodePipeline.cc`, `GeodeImagePipeline.cc`, and `GeodeFilterEngine.cc` are the only
-  files that may call these APIs. If you need a new pipeline class, add ownership to
-  `GeodeDevice::Impl` and expose it through a `GeodeDevice` accessor.
+- **Construct Geode pipelines only in the pipeline classes `GeodeDevice` owns**: production Geode
+  code calls `gpu::Device::createRenderPipeline` / `createComputePipeline` only in
+  `GeodePipeline.cc`, `GeodeImagePipeline.cc`, `GeodeFilterEngine.cc`, and
+  `GeodeCheckerboardPipeline.cc`, so every renderer that shares a context reuses one compiled set.
+  The rule dates from the retired wgpu-native adapter, which retained every pipeline it built:
+  per-frame or per-renderer construction leaked ~100 KB each until the driver's
+  `maxMemoryAllocationCount` tripped (Mesa lavapipe) or the process hung progressively (Mesa
+  llvmpipe). See issue #575 for the incident history. The banned-pattern check in
+  `build_defs/check_banned_patterns.py` matches only `.`-qualified calls
+  (`device.createRenderPipeline` / `device.createComputePipeline`, not calls through `->`), and
+  exempts those four files, the Linux test-only reference device `GeodeWgpuAdapterDevice.cc`,
+  `GeoEncoder_tests.cc`, `GeodeShaders_tests.cc` and everything under `donner/gpu/`. If you need a
+  new pipeline class, add ownership to `GeodeDevice::Impl` and expose it through a `GeodeDevice`
+  accessor.
 
 ## Tests
 

@@ -29,6 +29,15 @@
 #define DONNER_LINKED_SHADER_SOURCE_KIND Wgsl
 #endif
 
+/**
+ * \def DONNER_LINKED_SHADER_SOURCE_KIND
+ * The `ShaderSourceKind` enumerator of the projection \ref DONNER_LINKED_SHADER_ARTIFACT names in
+ * this build: `Msl` in a native Apple build, `Spirv` in a native Linux build, and `Wgsl` in every
+ * other build, the WebAssembly package among them. It exists only to define
+ * \ref donner::gpu::shader::kLinkedShaderSourceKind "kLinkedShaderSourceKind" and is undefined
+ * right after, so no other code can name it.
+ */
+
 namespace donner::gpu::shader {
 
 /// Source kind of the artifacts \ref DONNER_LINKED_SHADER_ARTIFACT names in this build.

@@ -226,10 +226,10 @@ can be reopened through File > Open Sample and dismissed to reveal the current d
 
 Document replacement requested from the sample surface is deferred to the next orchestration frame.
 The shell waits for the renderer to become idle and detaches any prior direct-presentation callback
-before releasing old WebGPU resources. This ordering prevents the prior frame callback from
-retaining presentation handles across document replacement. If the document or source buffer has
-unsaved edits, replacement stops at an explicit Discard and Load confirmation; Cancel leaves both
-the current document and pending source text untouched.
+before releasing old GPU presentation resources. This ordering prevents the prior frame callback
+from retaining presentation handles across document replacement. If the document or source buffer
+has unsaved edits, replacement stops at an explicit Discard and Load confirmation; Cancel leaves
+both the current document and pending source text untouched.
 
 ## Verification
 

@@ -47,7 +47,7 @@ that every agent inherits.
 | **CSSBot** | `donner::css` parser, selectors, cascade, `PropertyRegistry`, `StyleSystem` | Selector parsing bugs, specificity/inheritance questions, how presentation attributes interact with CSS in SVG2 |
 | **DesignReviewBot** | Design docs under `docs/design_docs/` | Before a design moves from draft to implementing; periodic scope-drift checks during implementation |
 | **DuckBot** | Big-picture brainstorming, Donner's innovation registry | You're stuck on *what* to build, not *how* — architectural reframes, "is there a cleverer way?" |
-| **GeodeBot** | Geode GPU backend (WebGPU/Dawn, Slug, WGSL), `RendererGeode`, `--config=geode` | Geode architecture questions, `enable_geode` gating, adding or editing shaders |
+| **GeodeBot** | Geode GPU backend (Metal, Vulkan and browser WebGPU runtime, Slug, WGSL), `RendererGeode`, `--config=geode` | Geode architecture questions, `enable_geode` gating, adding or editing shaders |
 | **MiscBot** | Cross-cutting refactors, multi-PR initiatives | Planning a background project, breaking work into reviewable chunks; delegates to domain bots for depth |
 | **ParserBot** | `donner::xml`, `donner::svg::parser`, `donner::css::parser`, fuzzer discipline, diagnostics | Parser bugs, fuzzer crashes, error-message quality, designing a new parser |
 | **PerfBot** | Frame-budget discipline, profiling, allocation/hot-path analysis | Perf regressions, animation smoothness, "is this fast enough for 60/120fps?" |

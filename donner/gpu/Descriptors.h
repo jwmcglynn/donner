@@ -272,6 +272,7 @@ enum class SerialWaitEnd : uint8_t {
 /// How a wait for a submission serial ended, and how long it ran.
 struct SerialWaitResult {
   SerialWaitEnd end = SerialWaitEnd::Failed;  //!< How the wait ended.
+
   /// Wall time the wait spent. It can be far longer than the stall bound: a wait that keeps
   /// seeing progress runs for as long as the work ahead of its serial takes.
   std::chrono::milliseconds waited{0};
