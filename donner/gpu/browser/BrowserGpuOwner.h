@@ -34,6 +34,9 @@ void RunOnBrowserGpuOwner(Function&& operation) {
 /// The editor's futex adapter calls this between finite wait slices; it does not run JS promises.
 void ProcessBrowserGpuOwnerWait();
 
+/// Whether this owner is already executing a GPU batch; nested editor frames must defer.
+[[nodiscard]] bool IsBrowserGpuOwnerDispatchActive();
+
 /// Defer asynchronous command batches during an editor frame. Futex dependency progress is allowed.
 /// @param active True on frame entry, false on exit; called only by the owner, without nesting.
 void SetBrowserGpuOwnerFrameActive(bool active);

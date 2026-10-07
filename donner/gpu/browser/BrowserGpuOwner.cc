@@ -235,9 +235,17 @@ void ProcessBrowserGpuOwnerWait() {
 #endif
 }
 
+bool IsBrowserGpuOwnerDispatchActive() {
+#ifdef __EMSCRIPTEN_PTHREADS__
+  return IsBrowserGpuOwnerThread() && gProcessingBatch;
+#else
+  return false;
+#endif
+}
+
 void SetBrowserGpuOwnerFrameActive([[maybe_unused]] bool active) {
 #ifdef __EMSCRIPTEN_PTHREADS__
-  if (!IsBrowserGpuOwnerThread() || gFrameActive == active) {
+  if (!IsBrowserGpuOwnerThread() || gFrameActive == active || (active && gProcessingBatch)) {
     std::abort();
   }
   gFrameActive = active;

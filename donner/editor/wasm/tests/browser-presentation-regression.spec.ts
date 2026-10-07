@@ -4157,10 +4157,11 @@ test("proxied animation frames keep at most one outstanding callback", async ({ 
   await expect.poll(() => page.evaluate(() => window.__donnerMainLoopRenderedFrames ?? 0))
     .toBeGreaterThan(before);
   await openBasicShapes(page);
-  const owners = await Promise.all(
-    page.workers().map((worker) =>
-      worker.evaluate(() => {
+  const owner = await Promise.any(
+    page.workers().map(async (worker) => {
+      const observation = await boundFailureDiagnostic(worker.evaluate(() => {
         const scope = globalThis as typeof globalThis & {
+          __donnerGpuOwner?: boolean;
           __donnerReadGpuOwnerWaitStats?: () => {
             batches: number;
             maximumBatchSize: number;
@@ -4170,11 +4171,12 @@ test("proxied animation frames keep at most one outstanding callback", async ({ 
             finished: number;
           };
         };
-        return scope.__donnerReadGpuOwnerWaitStats?.() ?? null;
-      })
-    ),
+        return scope.__donnerGpuOwner ? scope.__donnerReadGpuOwnerWaitStats?.() ?? null : null;
+      }));
+      if (observation === null) throw new Error("GPU owner did not answer the bounded probe");
+      return observation;
+    }),
   );
-  const owner = owners.find((stats) => stats !== null);
   expect(owner?.batches).toBeGreaterThan(0);
   expect(owner?.maximumBatchSize).toBeGreaterThan(0);
   console.log("[proxied-frame-batches]", JSON.stringify(owner));

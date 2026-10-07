@@ -182,7 +182,7 @@ void RunWasmEditorFrame(void* userdata) {
   // A nested frame would call ImGui::NewFrame() twice without an intervening
   // Render() and recurse until the JS stack overflows. Drop that callback; the
   // active frame will finish and the browser will schedule the next one.
-  if (state->frameActive) {
+  if (state->frameActive || donner::gpu::browser::IsBrowserGpuOwnerDispatchActive()) {
     return;
   }
   if (state->window->shouldClose()) {
