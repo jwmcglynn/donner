@@ -5023,6 +5023,7 @@ function pastedSourceReady(
 }
 
 test("WebGPU eyedropper copies translucent document alpha, not checkerboard alpha", async ({ page }) => {
+  const bodyStartedAtMs = performance.now();
   armFailureCanvasEvidence(page, test.info());
   const failures = await openEditor(page, "eyedropper");
   await openDonnerSplash(page);
@@ -5186,7 +5187,7 @@ test("WebGPU eyedropper copies translucent document alpha, not checkerboard alph
   };
   console.log(`alpha-reset-start ${
     JSON.stringify({
-      elapsedMs: Date.now() - test.info().startTime.getTime(),
+      bodyElapsedMs: performance.now() - bodyStartedAtMs,
       resetZoom,
       viewport: offscreenViewport,
     })
