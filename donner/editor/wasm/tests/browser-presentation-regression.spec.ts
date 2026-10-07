@@ -3792,6 +3792,7 @@ test("Firefox host counters record a refused surface frame and later recovery", 
 test("Firefox never exposes the checkerboard while dragging a Splash letter", async ({ browserName, page }) => {
   test.skip(browserName !== "firefox", "Firefox Geode regression");
   const caseStartedAtMs = performance.now();
+  armFailureCanvasEvidence(page, test.info());
   const failures = await openEditor(page);
   // Open through the shared helper so the sample's first document render has to
   // complete before anything is measured. Clicking the picker and going straight
@@ -3856,16 +3857,37 @@ test("Firefox never exposes the checkerboard while dragging a Splash letter", as
   // happened to be there, and the letter never moved - which every assertion
   // below then confirmed against byte-identical bounds.
   const dragStart = splashDocumentToPage(viewport, kSplashLetterD.stemPress);
+  const phaseTimes: Record<string, number> = {
+    beforePointerMs: performance.now() - caseStartedAtMs,
+  };
   await page.mouse.move(dragStart.x, dragStart.y);
   await waitForAppliedPointer(page, dragStart, {
     message: "Splash drag press",
     timeoutMs: scaledMs(4_000),
   });
+  phaseTimes.pointerAppliedMs = performance.now() - caseStartedAtMs;
   await waitForPressReadiness(page, "Splash drag press");
+  phaseTimes.pressReadyMs = performance.now() - caseStartedAtMs;
   const resultsBeforePress = await page.evaluate(
     () => window.__donnerWorkerStats?.completedResults || 0,
   );
+  console.log(`firefox-prepress-checkpoint ${
+    JSON.stringify({
+      phaseTimes,
+      dragStart,
+      originalViewport: viewport,
+      current: await boundFailureDiagnostic(page.evaluate(() => ({
+        viewport: window.__donnerViewportStats,
+        interaction: window.__donnerInteractionStats,
+        worker: window.__donnerWorkerStats,
+        thumbnails: window.__donnerSampleThumbnailStats,
+        presentation: window.__donnerPresentationQueueStats,
+        overlay: window.__donnerOverlayStats,
+      }))),
+    })
+  }`);
   await page.mouse.down();
+  phaseTimes.pointerDownMs = performance.now() - caseStartedAtMs;
   // The press selects the letter, which schedules exactly one prewarm render of
   // the selected layer; the drag baseline is taken once that has landed so the
   // first step does not read it as a mid-drag raster.
@@ -3876,7 +3898,13 @@ test("Firefox never exposes the checkerboard while dragging a Splash letter", as
       timeout: scaledMs(2_000),
       intervals: [16, 25, 50, 100],
     })
-    .toEqual({ completedResults: resultsDuringDrag, selectedCount: 1 });
+    .toEqual({ completedResults: resultsDuringDrag, selectedCount: 1 })
+    .catch(async (error) => {
+      phaseTimes.failedMs = performance.now() - caseStartedAtMs;
+      console.log(`firefox-press-failure-phases ${JSON.stringify(phaseTimes)}`);
+      await captureRasterDispatchFailure(page);
+      throw error;
+    });
 
   // One selected element is not yet proof that it is the RIGHT element: a press
   // that misses the letter and lands on the artboard behind it also reports
@@ -4211,6 +4239,11 @@ async function captureRasterDispatchFailure(page: Page): Promise<void> {
       worker: window.__donnerWorkerStats,
       interaction: window.__donnerInteractionStats,
       presentation: window.__donnerPresentationQueueStats,
+      thumbnails: window.__donnerSampleThumbnailStats,
+      viewport: window.__donnerViewportStats,
+      overlay: window.__donnerOverlayStats,
+      frames: window.__donnerFrameLoopStats,
+      host: window.__donnerHostFrameTiming,
     })),
     1000,
   );

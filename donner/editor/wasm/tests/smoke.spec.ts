@@ -1222,6 +1222,31 @@ test("Firefox hands a blocked thumbnail renderer to a foreground sample load", a
   expect(fatalMessages).toEqual([]);
 });
 
+async function readCarouselFrameDiagnostics(page: Page) {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      page.evaluate(() => {
+        const state = window as unknown as Record<string, unknown>;
+        return Object.fromEntries([
+          "__donnerFrameLoopStats",
+          "__donnerHostFrameTiming",
+          "__donnerFrameTickStats",
+          "__donnerAsyncifySuspendStats",
+          "__donnerSampleThumbnailStats",
+          "__donnerPresentationQueueStats",
+          "__donnerRasterWorkState",
+        ].map((name) => [name, state[name] ?? null]));
+      }).catch(() => null),
+      new Promise<null>((resolve) => {
+        timer = setTimeout(() => resolve(null), 2000);
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
 for (
   const sample of [
     { id: "donner-splash", name: "Donner Splash", xFraction: 0.24, y: 282 },
@@ -1330,6 +1355,11 @@ for (
       const workerBusy = await page
         .evaluate(() => window.__donnerInteractionStats?.workerBusy)
         .catch(() => undefined);
+      console.log(
+        `carousel-frame-diagnostics sample=${sample.id} ${
+          JSON.stringify(await readCarouselFrameDiagnostics(page))
+        }`,
+      );
       console.log(
         `carousel-presentation sample=${sample.id} timings=${JSON.stringify(phaseTimings)} worker=${
           JSON.stringify(completedWorkerStats)
