@@ -4253,11 +4253,24 @@ async function pinchZoomAndAwaitPresentation(
     zoom: window.__donnerViewportStats?.zoom,
   }));
   await pinchZoom(page, at, deltaY);
+  let loggedIncompleteScene = false;
   await expect.poll(async () => {
     const current = await page.evaluate(() => ({
       queue: window.__donnerPresentationQueueStats,
       viewport: window.__donnerViewportStats,
+      repair: (window as Window & { __donnerPresentationRepairStats?: unknown })
+        .__donnerPresentationRepairStats,
+      raster: window.__donnerWorkerStats,
+      overlay: window.__donnerOverlayStats,
+      host: window.__donnerHostFrameTiming,
     }));
+    if (!loggedIncompleteScene && current.queue?.inputRepresented === false
+      && current.queue.completedSerial > before.serial && current.queue.frameId > before.frameId
+      && current.queue.viewportZoom === current.viewport?.zoom
+      && current.viewport.zoom !== before.zoom) {
+      loggedIncompleteScene = true;
+      console.log(`zoom-incomplete-scene ${JSON.stringify({ context, ...current })}`);
+    }
     const reached = completedFrameMatchesCamera(current)
       && current.queue!.completedSerial > before.serial && current.queue!.frameId > before.frameId
       && current.viewport!.zoom !== before.zoom;
@@ -5429,6 +5442,7 @@ test("the Splash coverage probe counts editor background, not document pixels", 
 });
 
 test("a zoom storm never uncovers the editor background under the Donner Splash", async ({ page }) => {
+  armFailureCanvasEvidence(page, test.info());
   // The per-test budget is the one deadline in this suite that does not scale
   // with the runner. Every bound inside the storm does: eight bounded settles
   // of `scaledMs(1_000)`, each of which may spend another such deadline
