@@ -5241,11 +5241,113 @@ function pastedSourceReady(
     && snapshot.acceptedForPresentation && snapshot.hasPresentedAtMs;
 }
 
+async function focusSourceEditor(page: Page): Promise<void> {
+  const sourcePoint = { x: 120, y: 180 };
+  await page.mouse.move(sourcePoint.x, sourcePoint.y);
+  await waitForAppliedPointer(page, sourcePoint, {
+    message: "source editor focus point",
+    timeoutMs: scaledMs(4_000),
+  });
+  const deadline = Date.now() + scaledMs(4_000);
+  const remainingMs = () => Math.max(1, deadline - Date.now());
+  await expect.poll(
+    () => page.evaluate(() => window.__donnerEyedropperShortcutProbe?.current.mouseLeftDown),
+    { timeout: remainingMs() },
+  ).toBe(false);
+  const beforeDown = await page.evaluate(() =>
+    window.__donnerEyedropperShortcutProbe?.current.frameNumber ?? -1
+  );
+  await page.mouse.down();
+  try {
+    await expect.poll(() =>
+      page.evaluate((before) => {
+        const gate = window.__donnerEyedropperShortcutProbe?.current;
+        return { down: gate?.mouseLeftDown, newFrame: (gate?.frameNumber ?? -1) > before };
+      }, beforeDown), {
+      message: "the source focus press must reach the app's live input probe",
+      timeout: remainingMs(),
+    }).toEqual({ down: true, newFrame: true });
+    const downFrame = await page.evaluate(() => {
+      window.__donnerEditorFrameRequested = true;
+      return window.__donnerEyedropperShortcutProbe?.current.frameNumber ?? -1;
+    });
+    // The shortcut probe precedes Source rendering, so focus becomes observable next frame.
+    await expect.poll(() =>
+      page.evaluate((before) => {
+        const gate = window.__donnerEyedropperShortcutProbe?.current;
+        return {
+          focused: gate?.sourcePaneFocused,
+          down: gate?.mouseLeftDown,
+          newFrame: (gate?.frameNumber ?? -1) > before,
+        };
+      }, downFrame), {
+      message: "source editor must own keyboard focus before replacing its text",
+      timeout: remainingMs(),
+    }).toEqual({ focused: true, down: true, newFrame: true });
+  } finally {
+    await page.mouse.up();
+  }
+}
+
+test("source focus uses live input while the document snapshot is stale", async ({ page }) => {
+  const failures = await openEditor(page, "eyedropper");
+  await openBasicShapes(page);
+  await clickAppliedPoint(page, { x: 16, y: 180 }, "reveal source before the stale snapshot probe");
+  await expect.poll(() => page.evaluate(() => window.__donnerViewportStats?.paneX ?? 0))
+    .toBeGreaterThan(500);
+  await page.evaluate(() => {
+    const key = "__donnerEyedropperTestState";
+    const descriptor = Object.getOwnPropertyDescriptor(window, key);
+    const snapshot = window.__donnerEyedropperTestState;
+    if (!descriptor || !snapshot || snapshot.sourcePaneFocused) {
+      throw new Error("expected an unfocused source snapshot before the press");
+    }
+    let latest = snapshot;
+    // The document publisher skips busy frames; hold its previous snapshot through this press.
+    Object.defineProperty(window, key, {
+      configurable: true,
+      get: () => snapshot,
+      set: (value) => {
+        latest = value;
+      },
+    });
+    (window as Window & { __donnerRestoreSourceSnapshot?: () => void })
+      .__donnerRestoreSourceSnapshot = () =>
+        Object.defineProperty(window, key, {
+          ...descriptor,
+          value: latest,
+        });
+  });
+  try {
+    await focusSourceEditor(page);
+    expect(
+      await page.evaluate(() => ({
+        staleFocus: window.__donnerEyedropperTestState?.sourcePaneFocused,
+        liveFocus: window.__donnerEyedropperShortcutProbe?.current.sourcePaneFocused,
+      })),
+    ).toEqual({ staleFocus: false, liveFocus: true });
+  } finally {
+    const observation = await page.evaluate(() => {
+      const state = window as Window & { __donnerRestoreSourceSnapshot?: () => void };
+      const observation = {
+        staleFocus: window.__donnerEyedropperTestState?.sourcePaneFocused,
+        live: window.__donnerEyedropperShortcutProbe?.current,
+      };
+      state.__donnerRestoreSourceSnapshot?.();
+      delete state.__donnerRestoreSourceSnapshot;
+      return observation;
+    });
+    console.log("[stale-source-focus]", JSON.stringify(observation));
+    await page.mouse.up();
+  }
+  expect(failures).toEqual([]);
+});
+
 test("WebGPU eyedropper copies translucent document alpha, not checkerboard alpha", async ({ page }) => {
   const bodyStartedAtMs = performance.now();
   armFailureCanvasEvidence(page, test.info());
   const failures = await openEditor(page, "eyedropper");
-  await openDonnerSplash(page);
+  await openBasicShapes(page);
   const revealRail = { x: 16, y: 180 };
   await clickAppliedPoint(page, revealRail, "show the hidden source pane through its reveal rail");
   await expect.poll(() => page.evaluate(() => window.__donnerViewportStats?.paneX ?? 0), {
@@ -5258,26 +5360,9 @@ test("WebGPU eyedropper copies translucent document alpha, not checkerboard alph
   expect(beforeDocumentGeneration).toBeGreaterThanOrEqual(0);
   const fixture = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"128\" height=\"128\" "
     + "viewBox=\"0 0 128 128\"><rect width=\"128\" height=\"128\" fill=\"#ff000080\"/></svg>";
-  const sourcePoint = { x: 120, y: 180 };
-  await page.mouse.move(sourcePoint.x, sourcePoint.y);
-  await waitForAppliedPointer(page, sourcePoint, {
-    message: "source editor focus point",
-    timeoutMs: scaledMs(4_000),
-  });
-  const beforeSourceFocusFrame = await page.evaluate(() =>
-    window.__donnerMainLoopRenderedFrames ?? 0
-  );
-  await page.mouse.down();
-  await expect.poll(() => page.evaluate(() => window.__donnerMainLoopRenderedFrames ?? 0))
-    .toBeGreaterThan(beforeSourceFocusFrame);
-  await page.mouse.up();
-  await expect.poll(
-    () => page.evaluate(() => window.__donnerEyedropperTestState?.sourcePaneFocused),
-    {
-      message: "source editor must own keyboard focus before replacing its text",
-      timeout: scaledMs(4_000),
-    },
-  ).toBe(true);
+  console.log("[alpha-source-focus-start]", performance.now() - bodyStartedAtMs);
+  await focusSourceEditor(page);
+  console.log("[alpha-source-focus-done]", performance.now() - bodyStartedAtMs);
   await page.keyboard.down("Control");
   await page.keyboard.down("a");
   await expect.poll(() =>
@@ -5410,6 +5495,14 @@ test("WebGPU eyedropper copies translucent document alpha, not checkerboard alph
     x: offscreenViewport.paneX + 34,
     y: offscreenViewport.paneY + offscreenViewport.paneHeight - 24,
   };
+  const beforeResetOffset = Math.hypot(
+    offscreenViewport.documentX + offscreenViewport.documentWidth / 2
+      - (offscreenViewport.paneX + offscreenViewport.paneWidth / 2),
+    offscreenViewport.documentY + offscreenViewport.documentHeight / 2
+      - (offscreenViewport.paneY + offscreenViewport.paneHeight / 2),
+  );
+  expect(beforeResetOffset, "replacement must preserve an offset for the 100% control to repair")
+    .toBeGreaterThan(8);
   console.log(`alpha-reset-start ${
     JSON.stringify({
       bodyElapsedMs: performance.now() - bodyStartedAtMs,
@@ -5417,6 +5510,7 @@ test("WebGPU eyedropper copies translucent document alpha, not checkerboard alph
       viewport: offscreenViewport,
     })
   }`);
+  const beforeResetFrame = await page.evaluate(() => window.__donnerMainLoopRenderedFrames ?? 0);
   await clickAppliedPoint(page, resetZoom, "center the replacement SVG with the 100% control");
   await expect.poll(async () => {
     const state = await page.evaluate(() => ({
@@ -5424,16 +5518,21 @@ test("WebGPU eyedropper copies translucent document alpha, not checkerboard alph
       interaction: window.__donnerInteractionStats,
       queue: window.__donnerPresentationQueueStats,
       shortcut: window.__donnerEyedropperShortcutProbe,
+      frames: window.__donnerMainLoopRenderedFrames ?? 0,
     }));
     const current = state.viewport;
     if (!current) return { ...state, resetZoom, ready: false };
     const x = current.documentX + current.documentWidth / 2;
     const y = current.documentY + current.documentHeight / 2;
-    const ready = x >= current.paneX && x < current.paneX + current.paneWidth
-      && y >= current.paneY && y < current.paneY + current.paneHeight;
-    return { ...state, resetZoom, ready };
+    const centerOffset = Math.hypot(
+      x - (current.paneX + current.paneWidth / 2),
+      y - (current.paneY + current.paneHeight / 2),
+    );
+    const ready = state.frames > beforeResetFrame && centerOffset < 1
+      && Math.abs(current.zoom - 1) < 0.001;
+    return { ...state, resetZoom, centerOffset, ready };
   }, {
-    message: "the new SVG document center must be inside the render pane after reset",
+    message: "the 100% control must center the replacement SVG in the render pane",
     timeout: scaledMs(4_000),
   }).toEqual(expect.objectContaining({ ready: true }));
   await waitForBrowserComposite(page);
