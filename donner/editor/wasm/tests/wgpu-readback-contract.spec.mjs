@@ -466,16 +466,33 @@ test("worker acceptance requires the fresh render identity and no old presentati
     "window",
     "$0",
     "$1",
+    "$2",
     "HEAPF64",
+    "_free",
     "UTF8ToString",
     "performance",
     body(timingPublisher[0]),
   );
   const publishAccepted = new Function("window", "$0", "$1", "$2", body(acceptedPublisher[0]));
-  const heap = new Float64Array(31);
+  const count = Number(/kValueCount = (\d+)/.exec(timingPublisher[0])[1]);
+  const heap = new Float64Array(count);
+  const released = [];
   heap.set([11, 22, 33, 44, 0], 26);
   const window = { __donnerWorkerStats: { completedResults: 8, presentedAtMs: 100 } };
-  publishTiming(window, 0, 0, heap, () => "none", { now: () => 200 });
+  publishTiming(
+    window,
+    0,
+    0,
+    count,
+    heap,
+    (pointer) => {
+      released.push(pointer);
+      heap.fill(99);
+    },
+    () => "none",
+    { now: () => 200 },
+  );
+  assert.deepEqual(released, [0], "the asynchronous publication frees its owned buffer once");
   const stats = window.__donnerWorkerStats;
   assert.equal(stats.completedResults, 9);
   assert.equal(stats.acceptedForPresentation, false);

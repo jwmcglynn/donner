@@ -157,9 +157,9 @@ void PublishWorkerTimingStats(
           'readbackCount',
           'readbackPollIterations'
         ]);
-        const previous = window['__donnerWorkerStats'];
+        const previous = window['__donnerWorkerStats'] || ({});
         const stats = ({
-          'completedResults' : previous ? previous['completedResults'] + 1 : 1,
+          'completedResults' : (previous['completedResults'] || 0) + 1,
           'publishedAtMs' : performance.now(),
           'acceptedForPresentation' : false,
         });
@@ -184,21 +184,17 @@ void PublishWorkerTimingStats(
         stats['finalSnapshotReadbackCount'] = heap[b + 37];
         stats['bitmapPayloadTileCount'] = heap[b + 38];
         stats['texturePayloadTileCount'] = heap[b + 39];
-        stats['bitmapPayloadTileTotal'] =
-            (previous ? previous['bitmapPayloadTileTotal'] || 0 : 0) + stats['bitmapPayloadTileCount'];
-        stats['texturePayloadTileTotal'] =
-            (previous ? previous['texturePayloadTileTotal'] || 0 : 0) + stats['texturePayloadTileCount'];
-        stats['compositorReadbackTotal'] =
-            (previous ? previous['compositorReadbackTotal'] || 0 : 0) +
-            stats['compositorReadbackCount'];
-        stats['tileHandoffReadbackTotal'] =
-            (previous ? previous['tileHandoffReadbackTotal'] || 0 : 0) +
-            stats['tileHandoffReadbackCount'];
-        stats['finalSnapshotReadbackTotal'] =
-            (previous ? previous['finalSnapshotReadbackTotal'] || 0 : 0) +
-            stats['finalSnapshotReadbackCount'];
-        stats['nothingToPresentTotal'] = (previous ? previous['nothingToPresentTotal'] || 0 : 0) +
-                                         (stats['nothingToPresent'] ? 1 : 0);
+        const totals = ([
+          [ 'bitmapPayloadTileTotal', 'bitmapPayloadTileCount' ],
+          [ 'texturePayloadTileTotal', 'texturePayloadTileCount' ],
+          [ 'compositorReadbackTotal', 'compositorReadbackCount' ],
+          [ 'tileHandoffReadbackTotal', 'tileHandoffReadbackCount' ],
+          [ 'finalSnapshotReadbackTotal', 'finalSnapshotReadbackCount' ],
+          [ 'nothingToPresentTotal', 'nothingToPresent' ],
+        ]);
+        for (const [total, count] of totals) {
+          stats[total] = Number(previous[total] || 0) + Number(stats[count]);
+        }
         stats['publishReason'] = 'render-result';
         window['__donnerWorkerStats'] = stats;
       },
