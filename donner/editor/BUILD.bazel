@@ -589,10 +589,17 @@ donner_cc_library(
 )
 
 donner_cc_library(
+    name = "browser_image_transport",
+    srcs = ["BrowserImageTransport.cc"],
+    hdrs = ["BrowserImageTransport.h"],
+)
+
+donner_cc_library(
     name = "async_renderer",
     srcs = ["AsyncRenderer.cc"],
     hdrs = ["AsyncRenderer.h"],
     deps = [
+        ":browser_image_transport",
         ":captured_presentation",
         ":composited_rendering_mode",
         ":overlay_renderer",

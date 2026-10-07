@@ -40,6 +40,13 @@ type WorkerStats = {
 type SelectionWindow = Window & {
   __donnerFirstFramePresented?: boolean;
   __donnerWorkerStats?: WorkerStats;
+  __donnerGpuImageTransportReady?: { app: boolean; raster: boolean };
+  __donnerSampleThumbnailStats?: {
+    completed?: number;
+    ready?: number;
+    active?: boolean;
+    pending?: boolean;
+  };
 };
 
 // The layout the Basic Shapes card is placed in below.
@@ -116,12 +123,26 @@ test("the raster worker selects the backend its package was built for", async ({
 test("ordinary document presentation performs no worker GPU readback", async ({ page }) => {
   test.skip(!kExpectsBrowserBackend, "GPU transport requires the browser backend");
   test.setTimeout(60000);
+  const transportErrors: string[] = [];
+  page.on("console", (message) => {
+    if (message.text().includes("worker: received unknown command")) {
+      transportErrors.push(message.text());
+    }
+  });
   await page.goto(`${baseUrl}/index.html`, { waitUntil: "domcontentloaded" });
   await expect
     .poll(() => page.evaluate(() => (window as SelectionWindow).__donnerFirstFramePresented), {
       timeout: 30000,
     })
     .toBe(true);
+  await expect
+    .poll(() =>
+      page.evaluate(() => {
+        const transport = (window as SelectionWindow).__donnerGpuImageTransportReady;
+        return transport?.app && transport?.raster;
+      }), { timeout: 10000 })
+    .toBe(true);
+  expect(transportErrors).toEqual([]);
 
   await expect
     .poll(() =>

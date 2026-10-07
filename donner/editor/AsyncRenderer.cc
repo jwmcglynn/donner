@@ -14,6 +14,7 @@
 
 #include "donner/base/MemoryAttribution.h"
 #include "donner/base/Utils.h"
+#include "donner/editor/BrowserImageTransport.h"
 #include "donner/editor/OverlayRenderer.h"
 #ifndef __EMSCRIPTEN__
 #include "donner/editor/TextToOutlines.h"
@@ -537,6 +538,7 @@ void AsyncRenderer::start() {
   if (thread_.joinable()) {
     return;
   }
+  RegisterBrowserImageTransportWorker(false);
   thread_ = std::thread([this] { workerLoop(); });
 }
 
@@ -1097,6 +1099,7 @@ void AsyncRenderer::workerLoop() {
   // Emscripten's WebGPU object table is per-worker. Construct and use the
   // renderer on this pthread so wgpu handles never cross JS worker boundaries.
   svg::Renderer workerRenderer;
+  RegisterBrowserImageTransportWorker(true);
 #endif
   std::unique_ptr<svg::RendererInterface> sampleThumbnailRenderer;
   svg::RendererInterface* sampleThumbnailRendererRoot = nullptr;
