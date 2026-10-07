@@ -5023,6 +5023,7 @@ function pastedSourceReady(
 }
 
 test("WebGPU eyedropper copies translucent document alpha, not checkerboard alpha", async ({ page }) => {
+  armFailureCanvasEvidence(page, test.info());
   const failures = await openEditor(page, "eyedropper");
   await openDonnerSplash(page);
   const revealRail = { x: 16, y: 180 };
@@ -5185,15 +5186,23 @@ test("WebGPU eyedropper copies translucent document alpha, not checkerboard alph
   };
   await clickAppliedPoint(page, resetZoom, "center the replacement SVG with the 100% control");
   await expect.poll(async () => {
-    const current = await readViewportStats(page);
+    const state = await page.evaluate(() => ({
+      viewport: window.__donnerViewportStats,
+      interaction: window.__donnerInteractionStats,
+      queue: window.__donnerPresentationQueueStats,
+      shortcut: window.__donnerEyedropperShortcutProbe,
+    }));
+    const current = state.viewport;
+    if (!current) return { ...state, resetZoom, ready: false };
     const x = current.documentX + current.documentWidth / 2;
     const y = current.documentY + current.documentHeight / 2;
-    return x >= current.paneX && x < current.paneX + current.paneWidth
+    const ready = x >= current.paneX && x < current.paneX + current.paneWidth
       && y >= current.paneY && y < current.paneY + current.paneHeight;
+    return { ...state, resetZoom, ready };
   }, {
     message: "the new SVG document center must be inside the render pane after reset",
     timeout: scaledMs(4_000),
-  }).toBe(true);
+  }).toEqual(expect.objectContaining({ ready: true }));
   await waitForBrowserComposite(page);
   const viewport = await readViewportStats(page);
   const center = {
