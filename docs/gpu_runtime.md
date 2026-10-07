@@ -161,6 +161,9 @@ cross workers, and presentation adds no intermediate framebuffer copy.
 compositor/handoff/final-capture accounting for an ordinary document. The worker's published
 bitmap/texture payload counts distinguish GPU resources from CPU tiles. CPU-authored images and
 font atlases remain legitimate uploads; bounded screenshot/export captures remain explicit reads.
+The sample/font-preview lane requests CPU outputs separately. Its `explicitPreviewReadbackTotal`
+counts actual capture calls, including cancelled captures. The browser gate reconciles the raw
+readback delta with that explicit lane and requires zero document-stage readbacks and bitmap tiles.
 
 ### Uploads and mappings {#GpuRuntimeUploads}
 

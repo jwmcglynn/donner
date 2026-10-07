@@ -507,6 +507,8 @@ struct SampleThumbnailRenderResult {
 
 /// Observable state and monotonic counters for the bounded sample-thumbnail lane.
 struct SampleThumbnailRenderStats {
+  /// Actual GPU readbacks for explicitly requested CPU sample/font preview outputs.
+  std::uint64_t readbackCount = 0;
   /// Requests accepted into the thumbnail lane.
   std::uint64_t requested = 0;
   /// Attempts started on the worker.

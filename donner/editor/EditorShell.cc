@@ -345,7 +345,8 @@ void PublishSampleThumbnailStats(int requested, int started, int completed, int 
                                  int pending, int active, int resultReady,
                                  int foregroundHandoffWaits, int firstAttemptCompleted,
                                  int offscreenRendererConstructionStarts,
-                                 int offscreenRendererConstructionBlocked, int drained) {
+                                 int offscreenRendererConstructionBlocked, int drained,
+                                 int readbackCount) {
   // clang-format off
   MAIN_THREAD_ASYNC_EM_ASM(
       {
@@ -381,11 +382,12 @@ void PublishSampleThumbnailStats(int requested, int started, int completed, int 
           'offscreenRendererConstructionStarts' : $10,
           'offscreenRendererConstructionBlocked' : Boolean($11),
           'drained' : Boolean($12),
+          'explicitPreviewReadbackTotal' : $13,
         });
       },
       requested, started, completed, rendered, ready, pending, active, resultReady,
       foregroundHandoffWaits, firstAttemptCompleted, offscreenRendererConstructionStarts,
-      offscreenRendererConstructionBlocked, drained);
+      offscreenRendererConstructionBlocked, drained, readbackCount);
   // clang-format on
 }
 
@@ -5396,7 +5398,7 @@ void EditorShell::publishSampleThumbnailStats() const {
       static_cast<int>(stats.foregroundHandoffWaits), stats.firstAttemptCompleted ? 1 : 0,
       static_cast<int>(stats.offscreenRendererConstructionStarts),
       stats.offscreenRendererConstructionBlocked ? 1 : 0,
-      sampleThumbnailLaneDrained(stats) ? 1 : 0);
+      sampleThumbnailLaneDrained(stats) ? 1 : 0, static_cast<int>(stats.readbackCount));
 #endif
 }
 
@@ -5605,6 +5607,7 @@ void EditorShell::adoptCatalogFontResources() {
 void EditorShell::pollAuxiliaryPreviewResult() {
   if (auto result = renderCoordinator_.asyncRenderer().pollSampleThumbnailResult()) {
     handleAuxiliaryPreviewResult(std::move(*result));
+    publishSampleThumbnailStats();
   }
 }
 

@@ -1,4 +1,5 @@
 import { expect, type Page, type TestInfo } from "@playwright/test";
+import { writeFileSync } from "node:fs";
 import { readEditorPixelBoundsFromPng } from "./canvas-color-stats";
 
 type WorkerStats = {
@@ -26,7 +27,10 @@ export type SelectionWindow = Window & {
     zoom: number;
   };
   __donnerWorkerStats?: WorkerStats;
+  __donnerPresentationQueueStats?: { inputRepresented: boolean; viewportZoom: number };
+  __donnerInteractionStats?: { pendingClick: boolean; workerBusy: boolean };
   __donnerSampleThumbnailStats?: {
+    explicitPreviewReadbackTotal?: number;
     completed?: number;
     ready?: number;
     active?: boolean;
@@ -70,6 +74,35 @@ export async function checkDocumentGpuResidency(
       return worker;
     }),
   );
+  await gpuOwner.evaluate(() => {
+    const scope = globalThis as typeof globalThis & { __donnerResidencyTransfers?: unknown[] };
+    const transfers: unknown[] = [];
+    scope.__donnerResidencyTransfers = transfers;
+    const copy = GPUCommandEncoder.prototype.copyTextureToBuffer;
+    GPUCommandEncoder.prototype.copyTextureToBuffer = function(source, destination, size) {
+      if (transfers.length < 32) {
+        transfers.push({
+          kind: "readback",
+          width: source.texture.width,
+          height: source.texture.height,
+          size,
+        });
+      }
+      return copy.call(this, source, destination, size);
+    };
+    const write = GPUQueue.prototype.writeTexture;
+    GPUQueue.prototype.writeTexture = function(destination, bytes, layout, size) {
+      if (transfers.length < 32) {
+        transfers.push({
+          kind: "upload",
+          width: destination.texture.width,
+          height: destination.texture.height,
+          size,
+        });
+      }
+      return write.call(this, destination, bytes, layout, size);
+    };
+  });
   const rawBefore = await gpuOwner.evaluate(() => {
     const state = globalThis as typeof globalThis & {
       __donnerReadGpuObjectStats: () => {
@@ -80,6 +113,9 @@ export async function checkDocumentGpuResidency(
     };
     return state.__donnerReadGpuObjectStats();
   });
+  const beforePreview = await page.evaluate(() =>
+    (window as SelectionWindow).__donnerSampleThumbnailStats!
+  );
   const before = await page.evaluate(() => (window as SelectionWindow).__donnerWorkerStats);
   const editorCanvas = page.locator("canvas#canvas");
   const bounds = await editorCanvas.boundingBox();
@@ -100,6 +136,9 @@ export async function checkDocumentGpuResidency(
       page.evaluate(() => Boolean((window as SelectionWindow).__donnerWorkerStats?.presentedAtMs)),
     { timeout: 10000 },
   ).toBe(true);
+  const afterPreview = await page.evaluate(() =>
+    (window as SelectionWindow).__donnerSampleThumbnailStats!
+  );
   const after = await page.evaluate(() => (window as SelectionWindow).__donnerWorkerStats);
   const rawAfter = await gpuOwner.evaluate(() => {
     const state = globalThis as typeof globalThis & {
@@ -111,7 +150,9 @@ export async function checkDocumentGpuResidency(
     };
     return state.__donnerReadGpuObjectStats();
   });
-  expect(rawAfter.readbackCopies).toBe(rawBefore.readbackCopies);
+  expect(rawAfter.readbackCopies - rawBefore.readbackCopies).toBe(
+    afterPreview.explicitPreviewReadbackTotal! - beforePreview.explicitPreviewReadbackTotal!,
+  );
   expect(rawAfter.surfacePresents).toBeGreaterThan(rawBefore.surfacePresents);
   expect(after, "the document result did not publish readback accounting").toBeDefined();
   expect(after!.bitmapPayloadTileTotal).toBe(before?.bitmapPayloadTileTotal ?? 0);
@@ -138,6 +179,20 @@ export async function checkDocumentGpuResidency(
     () => page.evaluate(() => (window as SelectionWindow).__donnerViewportStats?.paneWidth),
     { timeout: 10000 },
   ).not.toBe(priorViewport.paneWidth);
+  await expect.poll(
+    () =>
+      gpuOwner.evaluate(() =>
+        (globalThis as typeof globalThis & {
+          __donnerReadGpuObjectStats: () => Record<string, number>;
+        })
+          .__donnerReadGpuObjectStats().surfacePresents
+      ),
+    { timeout: 10000 },
+  ).toBeGreaterThan(rawAfter.surfacePresents);
+  const afterResizePresents = await gpuOwner.evaluate(() =>
+    (globalThis as typeof globalThis & { __donnerReadGpuObjectStats: () => Record<string, number> })
+      .__donnerReadGpuObjectStats().surfacePresents
+  );
   const viewport = await page.evaluate(() => (window as SelectionWindow).__donnerViewportStats!);
   await page.mouse.move(
     viewport.paneX + viewport.paneWidth * 0.5,
@@ -172,13 +227,68 @@ export async function checkDocumentGpuResidency(
           .__donnerReadGpuObjectStats().surfacePresents
       ),
     { timeout: 10000 },
-  ).toBeGreaterThan(rawAfter.surfacePresents);
+  ).toBeGreaterThan(afterResizePresents);
+  await expect.poll(() =>
+    page.evaluate(() => {
+      const state = window as SelectionWindow;
+      const completed = state.__donnerPresentationQueueStats;
+      const viewport = state.__donnerViewportStats;
+      return completed?.inputRepresented && viewport
+        && Math.abs(completed.viewportZoom - viewport.zoom) < 0.001;
+    }), { timeout: 15000 }).toBe(true);
+  await expect.poll(
+    () => page.evaluate(() => (window as SelectionWindow).__donnerInteractionStats),
+    { timeout: 15000 },
+  ).toEqual(expect.objectContaining({ pendingClick: false, workerBusy: false }));
+  await expect.poll(
+    () =>
+      gpuOwner.evaluate(() =>
+        (globalThis as typeof globalThis & {
+          __donnerReadGpuObjectStats: () => Record<string, number>;
+        })
+          .__donnerReadGpuObjectStats().pendingSubmissions
+      ),
+    { timeout: 15000 },
+  ).toBe(0);
+  await expect.poll(
+    () => page.evaluate(() => (window as SelectionWindow).__donnerSampleThumbnailStats),
+    { timeout: 15000 },
+  ).toEqual(expect.objectContaining({ active: false, pending: false, resultReady: false }));
+  const finalPreview = await page.evaluate(() =>
+    (window as SelectionWindow).__donnerSampleThumbnailStats!
+  );
   const finalRaw = await gpuOwner.evaluate(() =>
     (globalThis as typeof globalThis & { __donnerReadGpuObjectStats: () => Record<string, number> })
       .__donnerReadGpuObjectStats()
   );
   const finalStats = await page.evaluate(() => (window as SelectionWindow).__donnerWorkerStats!);
-  expect(finalRaw.readbackCopies).toBe(rawBefore.readbackCopies);
+  const transfers = await gpuOwner.evaluate(() =>
+    (globalThis as typeof globalThis & { __donnerResidencyTransfers?: unknown[] })
+      .__donnerResidencyTransfers
+  );
+  const accountingPath = info.outputPath("gpu-residency-accounting.json");
+  writeFileSync(
+    accountingPath,
+    JSON.stringify({
+      rawBefore,
+      rawAfter,
+      finalRaw,
+      before,
+      after,
+      finalStats,
+      beforePreview,
+      afterPreview,
+      finalPreview,
+      transfers,
+    }),
+  );
+  await info.attach("gpu-residency-accounting", {
+    path: accountingPath,
+    contentType: "application/json",
+  });
+  expect(finalRaw.readbackCopies - rawBefore.readbackCopies, JSON.stringify(transfers)).toBe(
+    finalPreview.explicitPreviewReadbackTotal! - beforePreview.explicitPreviewReadbackTotal!,
+  );
   expect(finalRaw.cpuTextureWrites).toBe(rawAfter.cpuTextureWrites);
   expect(finalStats.bitmapPayloadTileTotal).toBe(before?.bitmapPayloadTileTotal ?? 0);
   expect(finalStats.compositorReadbackTotal).toBe(before?.compositorReadbackTotal ?? 0);
@@ -194,11 +304,9 @@ export async function checkDocumentGpuResidency(
     width: pane.paneWidth,
     height: pane.paneHeight,
   }, { minX: 0, minY: 0, maxX: pane.paneWidth, maxY: pane.paneHeight });
-  await info.attach("gpu-resident-document", { body: image, contentType: "image/png" });
-  await info.attach("gpu-residency-accounting", {
-    contentType: "application/json",
-    body: JSON.stringify({ rawBefore, rawAfter, finalRaw, before, after, finalStats, blue }),
-  });
+  const imagePath = info.outputPath("gpu-resident-document.png");
+  writeFileSync(imagePath, image);
+  await info.attach("gpu-resident-document", { path: imagePath, contentType: "image/png" });
   expect(blue?.pixels, "the GPU-resident Basic Shapes document must be visible").toBeGreaterThan(
     100,
   );

@@ -1153,6 +1153,7 @@ void AsyncRenderer::workerLoop() {
       finishSampleThumbnailRendererCreation();
 
       SampleThumbnailRenderResult result;
+      svg::RendererReadbackStats previewReadbackStats;
       if (offscreenRenderer == nullptr) {
         result.kind = sampleThumbnailStorage->kind;
         result.key = sampleThumbnailStorage->key;
@@ -1163,8 +1164,10 @@ void AsyncRenderer::workerLoop() {
         const std::chrono::milliseconds delay(
             sampleThumbnailRenderDelayMsForTesting_.load(std::memory_order_acquire));
         const ScopedFrameResourceScope resourceScope(*sampleThumbnailRendererRoot);
+        (void)offscreenRenderer->consumeReadbackStats();
         result = RenderSampleThumbnail(std::move(*sampleThumbnailStorage), *offscreenRenderer,
                                        cancelSampleThumbnail_, delay);
+        previewReadbackStats = offscreenRenderer->consumeReadbackStats();
       }
 
       std::function<void()> wake;
@@ -1172,6 +1175,7 @@ void AsyncRenderer::workerLoop() {
       {
         std::lock_guard<std::mutex> lock(mutex_);
         sampleThumbnailActive_ = false;
+        sampleThumbnailCounters_.readbackCount += previewReadbackStats.count;
         if (!std::holds_alternative<ShutdownState>(workerState_)) {
           ++sampleThumbnailCounters_.completed;
           if (discardActiveSampleThumbnailResult_) {
