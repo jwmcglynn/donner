@@ -1180,7 +1180,7 @@ PresentationFrameOutcome AcquirePresentationFrame(
   return outcome;
 }
 
-/// Presents whatever frame is still in flight when the frame loop leaves, however it leaves.
+/// Presents a complete frame explicitly and abandons the acquisition on every early exit.
 class SurfacePresentGuard {
 public:
   /// @param surface Surface holding this frame, or null when there is nothing to present.
@@ -2760,39 +2760,12 @@ void EditorWindow::endFrameGl(svg::RendererBitmap* readback, int displayW, int d
 }
 #endif
 
-void EditorWindow::endFrameImpl(svg::RendererBitmap* readback) {
-  ZoneScopedN("EditorWindow::endFrame");
-  EditorWindowFrameTiming timing;
-  const auto endFrameStart = std::chrono::steady_clock::now();
-  bool surfaceAcquired = false;
-  // Only the complete-draw path sets this. SurfacePresentGuard may hand back a partial frame
-  // during an early return, which is deliberately not counted as a completed presentation.
-  bool surfacePresented = false;
-  struct TimingCommit {
-    EditorWindowFrameTiming* destination;
-    EditorWindowFrameTiming* timing;
-    std::chrono::steady_clock::time_point start;
-    bool* surfaceAcquired;
-    bool* surfacePresented;
+namespace {
 
-    ~TimingCommit() {
-      timing->endFrameMs = ElapsedMs(start);
-      *destination = *timing;
-#if defined(__EMSCRIPTEN__) && defined(DONNER_EDITOR_WHOLE_APP_WORKER)
-      whole_app_worker::PublishHostFrameTiming(
-          timing->endFrameMs, timing->imguiRenderMs, timing->surfaceAcquireMs, timing->underlayMs,
-          timing->imguiDrawMs, timing->directMs, timing->readbackMs, timing->presentMs,
-          *surfaceAcquired, *surfacePresented);
-#endif
-    }
-  };
-  TimingCommit timingCommit{
-      .destination = &lastEndFrameTiming_,
-      .timing = &timing,
-      .start = endFrameStart,
-      .surfaceAcquired = &surfaceAcquired,
-      .surfacePresented = &surfacePresented,
-  };
+/// Flattens UI draw data and returns the current framebuffer extent.
+/// @param window Native window, unused when the browser owns the canvas.
+/// @param timing Receives UI preparation timing and vertex count.
+Vector2i RenderFrameDrawData([[maybe_unused]] GLFWwindow* window, EditorWindowFrameTiming& timing) {
   {
     ZoneScopedN("ImGui::Render");
     const auto imguiRenderStart = std::chrono::steady_clock::now();
@@ -2820,185 +2793,280 @@ void EditorWindow::endFrameImpl(svg::RendererBitmap* readback) {
   displayW = CanvasPixelWidth();
   displayH = CanvasPixelHeight();
 #else
-  glfwGetFramebufferSize(window_, &displayW, &displayH);
+  glfwGetFramebufferSize(window, &displayW, &displayH);
 #endif
+  return Vector2i(displayW, displayH);
+}
+
 #ifdef DONNER_EDITOR_WGPU
-  Vector2d framebufferFromLogicalScale(1.0, 1.0);
-  if (const ImDrawData* drawData = ImGui::GetDrawData();
-      drawData != nullptr && drawData->DisplaySize.x > 0.0f && drawData->DisplaySize.y > 0.0f) {
-    framebufferFromLogicalScale = Vector2d(static_cast<double>(displayW) / drawData->DisplaySize.x,
-                                           static_cast<double>(displayH) / drawData->DisplaySize.y);
+/// Computes the scale between this frame's ImGui coordinates and its actual framebuffer.
+/// @param size Actual framebuffer extent in pixels.
+Vector2d FramebufferFromLogicalScale(Vector2i size) {
+  const ImDrawData* data = ImGui::GetDrawData();
+  if (data != nullptr && data->DisplaySize.x > 0.0f && data->DisplaySize.y > 0.0f) {
+    return Vector2d(static_cast<double>(size.x) / data->DisplaySize.x,
+                    static_cast<double>(size.y) / data->DisplaySize.y);
   }
-  svg::RendererBitmap* targetReadback = readback;
-#if defined(__EMSCRIPTEN__) && defined(DONNER_EDITOR_WGPU)
-  const bool publishSmokeReadbackStats = WgpuReadbackStatsEnabled();
-  bool requestAsyncSmokeReadback = false;
-  const int smokeReadbackRequestId =
-      targetReadback == nullptr && publishSmokeReadbackStats ? PeekWgpuReadbackRequest() : 0;
+  return Vector2d(1.0, 1.0);
+}
 #endif
-  if (targetReadback != nullptr) {
-    *targetReadback = svg::RendererBitmap{};
+
+}  // namespace
+
+#ifdef DONNER_EDITOR_WGPU
+/// Owns one frame's acquisition, diagnostic setup and retry state until drawing finishes.
+struct EditorWindow::GpuFrameSubmission {
+  EditorWindow& window;
+  Vector2i size;
+  EditorWindowFrameTiming& timing;
+  svg::RendererBitmap* readback;
+  bool& surfaceAcquired;
+  bool& surfacePresented;
+  bool admitted = false;
+  bool completed = false;
+#ifdef __EMSCRIPTEN__
+  bool publishSmokeStats = false;
+  bool requestSmokeReadback = false;
+  int smokeRequestId = 0;
+  bool smokeHandedOff = true;
+  internal::WgpuSurfaceFailureKind failure = internal::WgpuSurfaceFailureKind::Setup;
+  std::optional<AsyncSmokeReadbackSetupAttempt> smokeSetup{};
+#endif
+
+  ~GpuFrameSubmission() {
+#ifdef __EMSCRIPTEN__
+    smokeSetup.reset();
+    if (!admitted) {
+      return;
+    }
+    auto& state = *window.wgpuState_;
+    if (completed) {
+      state.consecutiveSurfaceFrameFailures = 0;
+      return;
+    }
+    const auto decision =
+        internal::WgpuSurfaceRetryDecisionFor(failure, state.consecutiveSurfaceFrameFailures);
+    if (decision.reconfigure) {
+      state.configuredWidth = 0;
+      state.configuredHeight = 0;
+    }
+    if (decision.requestFrame) {
+      ++state.consecutiveSurfaceFrameFailures;
+      window.wakeEventLoop();
+    }
+#endif
   }
-  if (!hasUsableFrameTarget(displayW, displayH)) {
-#if defined(__EMSCRIPTEN__) && defined(DONNER_EDITOR_WGPU)
-    // No usable WGPU frame target remains, including after a terminal device loss. Complete this
-    // diagnostic request as a terminal failure rather than rearming an impossible capture.
-    if (smokeReadbackRequestId > 0) {
-      PublishWgpuReadbackFailure(smokeReadbackRequestId);
+
+  /// Clears caller-owned output and identifies an explicit browser diagnostic request.
+  void initializeReadback() {
+    if (readback != nullptr) {
+      *readback = svg::RendererBitmap{};
+    }
+#ifdef __EMSCRIPTEN__
+    publishSmokeStats = WgpuReadbackStatsEnabled();
+    if (readback == nullptr && publishSmokeStats) {
+      smokeRequestId = PeekWgpuReadbackRequest();
+    }
+#endif
+  }
+
+  /// Completes a diagnostic request that has no viable rendering target.
+  void failUnavailableReadback() {
+#ifdef __EMSCRIPTEN__
+    if (smokeRequestId > 0) {
+      PublishWgpuReadbackFailure(smokeRequestId);
       WakeWasmEditorForPendingWgpuReadback();
     }
 #endif
-    return;
   }
-  // A coalesced UI frame has not attempted surface setup or diagnostic capture.
-  if (!admitFrameSubmission(targetReadback != nullptr)) {
-    return;
-  }
-#if defined(__EMSCRIPTEN__) && defined(DONNER_EDITOR_WGPU)
-  bool surfaceFrameCompleted = false;
-  internal::WgpuSurfaceFailureKind surfaceFailureKind = internal::WgpuSurfaceFailureKind::Setup;
-  struct WasmSurfaceFrameRetryGuard {
-    EditorWindow* window = nullptr;
-    WgpuState* state = nullptr;
-    bool* completed = nullptr;
-    internal::WgpuSurfaceFailureKind* failure = nullptr;
 
-    ~WasmSurfaceFrameRetryGuard() {
-      if (*completed) {
-        state->consecutiveSurfaceFrameFailures = 0;
-        return;
-      }
-      const internal::WgpuSurfaceRetryDecision decision =
-          internal::WgpuSurfaceRetryDecisionFor(*failure, state->consecutiveSurfaceFrameFailures);
-      if (decision.reconfigure) {
-        state->configuredWidth = 0;
-        state->configuredHeight = 0;
-      }
-      if (decision.requestFrame) {
-        ++state->consecutiveSurfaceFrameFailures;
-        window->wakeEventLoop();
-      }
-    }
-  } wasmSurfaceFrameRetryGuard{
-      .window = this,
-      .state = wgpuState_.get(),
-      .completed = &surfaceFrameCompleted,
-      .failure = &surfaceFailureKind,
-  };
-
-  if (smokeReadbackRequestId > 0) {
-    if (wgpuState_->smokeReadbackInFlight->load(std::memory_order_acquire)) {
-      // The in-flight callback owns the pending-request wake at this point.
-    } else {
-      requestAsyncSmokeReadback = true;
-    }
-  }
-  bool smokeReadbackHandedOffToMapCallback = !requestAsyncSmokeReadback;
-  AsyncSmokeReadbackSetupAttempt asyncSmokeReadbackSetupAttempt{
-      .requestId = smokeReadbackRequestId,
-      .handedOffToMapCallback = &smokeReadbackHandedOffToMapCallback,
-      .alive = wgpuState_->smokeReadbackAlive,
-      .consecutiveFailures = wgpuState_->smokeReadbackConsecutiveFailures,
-  };
+  /// Arms failure reporting until a requested asynchronous capture owns its completion callback.
+  void prepareSmokeReadback() {
+#ifdef __EMSCRIPTEN__
+    auto& state = *window.wgpuState_;
+    requestSmokeReadback =
+        smokeRequestId > 0 && !state.smokeReadbackInFlight->load(std::memory_order_acquire);
+    smokeHandedOff = !requestSmokeReadback;
+    auto& setup = smokeSetup.emplace();
+    setup.requestId = smokeRequestId;
+    setup.handedOffToMapCallback = &smokeHandedOff;
+    setup.alive = state.smokeReadbackAlive;
+    setup.consecutiveFailures = state.smokeReadbackConsecutiveFailures;
 #endif
-  if (!configureFrameTarget(displayW, displayH)) {
-    return;
   }
-  auto& submissionDevice = wgpuState_->framebufferGeodeDevice->runtimeDevice();
-  bool fullFramePresented = false;
-  SubmissionFenceCommit submissionFenceCommit{
-      .device = submissionDevice,
-      .queue = presentationSubmissions_,
-      .beforeSerial = submissionDevice.lastSubmittedSerial(),
-      .stamp = presentationInputStamp_,
-      .fullFramePresented = fullFramePresented};
-  submissionFenceCommit.stamp.submittedAt = std::chrono::steady_clock::now();
 
-  // Holds this frame's acquisition for as long as the frame is being drawn; presenting it below
-  // ends the acquisition and leaves this handle stale.
-  gpu::Texture acquiredFrame;
-  if (wgpuState_->presentationRequired) {
-    gpu::SurfaceStatus acquireStatus = gpu::SurfaceStatus::Success;
-    acquiredFrame = acquirePresentationFrame(displayW, displayH, timing, acquireStatus);
+  /// Admits the frame before configuring its surface or attempting any diagnostic capture.
+  bool prepare() {
+    initializeReadback();
+    if (!window.hasUsableFrameTarget(size.x, size.y)) {
+      failUnavailableReadback();
+      return false;
+    }
+    if (!window.admitFrameSubmission(readback != nullptr)) {
+      return false;
+    }
+    admitted = true;
+    prepareSmokeReadback();
+    return window.configureFrameTarget(size.x, size.y);
+  }
+
+  /// Acquires a window frame, leaving an offscreen target alone when no surface is required.
+  /// @param acquiredFrame Receives the surface acquisition owned by the draw scope.
+  bool acquireTarget(gpu::Texture& acquiredFrame) {
+    if (!window.wgpuState_->presentationRequired) {
+      return true;
+    }
+    gpu::SurfaceStatus status = gpu::SurfaceStatus::Success;
+    acquiredFrame = window.acquirePresentationFrame(size.x, size.y, timing, status);
     if (!acquiredFrame.isValid()) {
-#if defined(__EMSCRIPTEN__) && defined(DONNER_EDITOR_WGPU)
-      surfaceFailureKind = internal::WgpuSurfaceFailureKindFor(acquireStatus);
+#ifdef __EMSCRIPTEN__
+      failure = internal::WgpuSurfaceFailureKindFor(status);
 #endif
-      return;
+      return false;
     }
     surfaceAcquired = true;
+    return true;
   }
-  // Whichever of the two holds this frame's target keeps it alive for exactly as long as the
-  // frame below draws into it, so everything downstream names it rather than owning it.
-  const gpu::Texture& frameTarget =
-      wgpuState_->presentationRequired ? acquiredFrame : wgpuState_->offscreenTexture;
-  internal::SurfacePresentGuard presentGuard(wgpuState_->presentation.get());
-  const bool canReadBack = SurfaceUsageSupportsReadback(wgpuState_->surfaceUsage);
-  const uint32_t readbackWidth = static_cast<uint32_t>(displayW);
-  const uint32_t readbackHeight = static_cast<uint32_t>(displayH);
 
-  const bool hasUnderlayRenderCallback = static_cast<bool>(wgpuUnderlayRenderCallback_);
-  const bool hasDirectRenderCallback = static_cast<bool>(wgpuDirectRenderCallback_);
-  const bool hasPreImGuiFramebufferContent = hasUnderlayRenderCallback || hasDirectRenderCallback;
-  if (!drawFrameBelowUi(frameTarget, Vector2i(displayW, displayH), framebufferFromLogicalScale,
-                        hasUnderlayRenderCallback, hasDirectRenderCallback, timing)) {
-    return;
-  }
-  if (!recordFrameUi(frameTarget, Vector2i(displayW, displayH), hasPreImGuiFramebufferContent,
-                     timing)) {
-    return;
-  }
-  if (targetReadback != nullptr && canReadBack) {
-    const uint32_t readbackBytesPerRow = AlignTextureCopyBytesPerRow(readbackWidth * 4u);
-    const uint64_t readbackBufferSize =
-        static_cast<uint64_t>(readbackBytesPerRow) * static_cast<uint64_t>(readbackHeight);
-    gpu::Result<gpu::Buffer> readbackBuffer =
-        wgpuState_->framebufferGeodeDevice->runtimeDevice().createBuffer(
-            gpu::BufferDescriptor{"EditorWindowSurfaceReadback", readbackBufferSize,
-                                  gpu::BufferUsage::CopyDst | gpu::BufferUsage::MapRead});
-    if (readbackBuffer.hasResult() &&
-        recordFrameReadback(frameTarget, readbackBuffer.result(), readbackWidth, readbackHeight,
-                            readbackBytesPerRow, timing)) {
-      readFrameReadback(readbackBuffer.result(), readbackBufferSize, readbackWidth, readbackHeight,
-                        readbackBytesPerRow, targetReadback, timing);
-    }
-  }
-#if defined(__EMSCRIPTEN__) && defined(DONNER_EDITOR_WGPU)
-  if (StartRequestedSmokeReadback(
-          requestAsyncSmokeReadback, canReadBack, wgpuState_->framebufferGeodeDevice, frameTarget,
-          readbackWidth, readbackHeight, wgpuState_->surfaceFormat, wgpuState_->readbackBudget,
-          smokeReadbackRequestId, wgpuState_->smokeReadbackInFlight, wgpuState_->smokeReadbackAlive,
-          wgpuState_->smokeReadbackConsecutiveFailures, timing)) {
-    smokeReadbackHandedOffToMapCallback = true;
-  }
-  if (publishSmokeReadbackStats && targetReadback != nullptr && !targetReadback->empty()) {
-    PublishWgpuReadbackStatsForSmokeTests(*targetReadback);
-  }
-#endif
-  {
-    const auto presentStart = std::chrono::steady_clock::now();
-    if (!presentGuard.present()) {
-#ifdef __EMSCRIPTEN__
-      surfaceFailureKind = wgpuState_->framebufferGeodeDevice->isDeviceLost()
-                               ? internal::WgpuSurfaceFailureKind::Fatal
-                               : internal::WgpuSurfaceFailureKind::OutdatedOrLost;
-#endif
+  /// Copies and maps a caller-requested CPU output; ordinary presentation never enters this path.
+  /// @param target The acquired frame or the window's offscreen texture.
+  void captureCpuOutput(const gpu::Texture& target) {
+    if (readback == nullptr || !SurfaceUsageSupportsReadback(window.wgpuState_->surfaceUsage)) {
       return;
     }
-    surfacePresented = surfaceAcquired;
-    timing.presentMs = ElapsedMs(presentStart);
+    const auto width = static_cast<uint32_t>(size.x);
+    const auto height = static_cast<uint32_t>(size.y);
+    const uint32_t bytesPerRow = AlignTextureCopyBytesPerRow(width * 4u);
+    const uint64_t bufferSize = static_cast<uint64_t>(bytesPerRow) * height;
+    auto buffer = window.wgpuState_->framebufferGeodeDevice->runtimeDevice().createBuffer(
+        gpu::BufferDescriptor{"EditorWindowSurfaceReadback", bufferSize,
+                              gpu::BufferUsage::CopyDst | gpu::BufferUsage::MapRead});
+    if (buffer.hasResult() &&
+        window.recordFrameReadback(target, buffer.result(), width, height, bytesPerRow, timing)) {
+      window.readFrameReadback(buffer.result(), bufferSize, width, height, bytesPerRow, readback,
+                               timing);
+    }
   }
-  fullFramePresented = true;
 
-#else
-  endFrameGl(readback, displayW, displayH, timing);
-#endif
+  /// Starts the optional diagnostic copy, retaining its completion state beyond this frame.
+  /// @param target The acquired frame or the window's offscreen texture.
+  void captureSmokeOutput([[maybe_unused]] const gpu::Texture& target) {
 #ifdef __EMSCRIPTEN__
-  // Keep the HTML loading surface visible until a real editor frame has reached the browser
-  // presentation path. Runtime initialization alone precedes this point by several seconds on a
-  // cold load.
-  PublishFirstPresentedFrame(geode::GeodeDevice::headlessCreationCountForTesting());
-  surfaceFrameCompleted = true;
+    auto& state = *window.wgpuState_;
+    if (StartRequestedSmokeReadback(
+            requestSmokeReadback, SurfaceUsageSupportsReadback(state.surfaceUsage),
+            state.framebufferGeodeDevice, target, static_cast<uint32_t>(size.x),
+            static_cast<uint32_t>(size.y), state.surfaceFormat, state.readbackBudget,
+            smokeRequestId, state.smokeReadbackInFlight, state.smokeReadbackAlive,
+            state.smokeReadbackConsecutiveFailures, timing)) {
+      smokeHandedOff = true;
+    }
+    if (publishSmokeStats && readback != nullptr && !readback->empty()) {
+      PublishWgpuReadbackStatsForSmokeTests(*readback);
+    }
+#endif
+  }
+
+  /// Presents only a fully drawn frame and records failure for the bounded browser retry policy.
+  /// @param guard Owns the current surface acquisition.
+  bool present(internal::SurfacePresentGuard& guard) {
+    const auto start = std::chrono::steady_clock::now();
+    if (!guard.present()) {
+#ifdef __EMSCRIPTEN__
+      failure = window.wgpuState_->framebufferGeodeDevice->isDeviceLost()
+                    ? internal::WgpuSurfaceFailureKind::Fatal
+                    : internal::WgpuSurfaceFailureKind::OutdatedOrLost;
+#endif
+      return false;
+    }
+    surfacePresented = surfaceAcquired;
+    timing.presentMs = ElapsedMs(start);
+    return true;
+  }
+
+  /// Draws document content and UI directly into the frame target, then presents it.
+  void draw() {
+    if (!prepare()) {
+      return;
+    }
+    auto& state = *window.wgpuState_;
+    auto& device = state.framebufferGeodeDevice->runtimeDevice();
+    bool fullFramePresented = false;
+    SubmissionFenceCommit fence{.device = device,
+                                .queue = window.presentationSubmissions_,
+                                .beforeSerial = device.lastSubmittedSerial(),
+                                .stamp = window.presentationInputStamp_,
+                                .fullFramePresented = fullFramePresented};
+    fence.stamp.submittedAt = std::chrono::steady_clock::now();
+    gpu::Texture acquiredFrame;
+    if (!acquireTarget(acquiredFrame)) {
+      return;
+    }
+    const gpu::Texture& target =
+        state.presentationRequired ? acquiredFrame : state.offscreenTexture;
+    internal::SurfacePresentGuard guard(state.presentation.get());
+    const bool hasUnderlay = static_cast<bool>(window.wgpuUnderlayRenderCallback_);
+    const bool hasDirect = static_cast<bool>(window.wgpuDirectRenderCallback_);
+    if (!window.drawFrameBelowUi(target, size, FramebufferFromLogicalScale(size), hasUnderlay,
+                                 hasDirect, timing)) {
+      return;
+    }
+    if (!window.recordFrameUi(target, size, hasUnderlay || hasDirect, timing)) {
+      return;
+    }
+    captureCpuOutput(target);
+    captureSmokeOutput(target);
+    if (!present(guard)) {
+      return;
+    }
+    fullFramePresented = true;
+#ifdef __EMSCRIPTEN__
+    PublishFirstPresentedFrame(geode::GeodeDevice::headlessCreationCountForTesting());
+#endif
+    completed = true;
+  }
+};
+#endif
+
+void EditorWindow::endFrameImpl(svg::RendererBitmap* readback) {
+  ZoneScopedN("EditorWindow::endFrame");
+  EditorWindowFrameTiming timing;
+  const auto endFrameStart = std::chrono::steady_clock::now();
+  bool surfaceAcquired = false;
+  // Only the complete-draw path sets this; early exits abandon their acquired frame.
+  bool surfacePresented = false;
+  struct TimingCommit {
+    EditorWindowFrameTiming* destination;
+    EditorWindowFrameTiming* timing;
+    std::chrono::steady_clock::time_point start;
+    bool* surfaceAcquired;
+    bool* surfacePresented;
+
+    ~TimingCommit() {
+      timing->endFrameMs = ElapsedMs(start);
+      *destination = *timing;
+#if defined(__EMSCRIPTEN__) && defined(DONNER_EDITOR_WHOLE_APP_WORKER)
+      whole_app_worker::PublishHostFrameTiming(
+          timing->endFrameMs, timing->imguiRenderMs, timing->surfaceAcquireMs, timing->underlayMs,
+          timing->imguiDrawMs, timing->directMs, timing->readbackMs, timing->presentMs,
+          *surfaceAcquired, *surfacePresented);
+#endif
+    }
+  };
+  TimingCommit timingCommit{
+      .destination = &lastEndFrameTiming_,
+      .timing = &timing,
+      .start = endFrameStart,
+      .surfaceAcquired = &surfaceAcquired,
+      .surfacePresented = &surfacePresented,
+  };
+  const Vector2i framebufferSize = RenderFrameDrawData(window_, timing);
+#ifdef DONNER_EDITOR_WGPU
+  GpuFrameSubmission frame{*this,    framebufferSize, timing,
+                           readback, surfaceAcquired, surfacePresented};
+  frame.draw();
+#else
+  endFrameGl(readback, framebufferSize.x, framebufferSize.y, timing);
 #endif
 }
 

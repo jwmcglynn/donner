@@ -954,6 +954,9 @@ public:
 
 private:
   struct WgpuState;
+#ifdef DONNER_EDITOR_WGPU
+  struct GpuFrameSubmission;
+#endif
 
   /// Releases the native window and its process-wide GLFW claim after GPU surface retirement.
   void closeWindow();
