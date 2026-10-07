@@ -1,5 +1,7 @@
 import { expect, type Page, type TestInfo } from "@playwright/test";
-import { writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { readFileSync, writeFileSync } from "node:fs";
+import path from "node:path";
 import { readEditorPixelBoundsFromPng } from "./canvas-color-stats";
 
 type WorkerStats = {
@@ -31,6 +33,8 @@ export type SelectionWindow = Window & {
   __donnerInteractionStats?: { pendingClick: boolean; workerBusy: boolean };
   __donnerSampleThumbnailStats?: {
     explicitPreviewReadbackTotal?: number;
+    publicationGeneration?: number;
+    resultReady?: boolean;
     completed?: number;
     ready?: number;
     active?: boolean;
@@ -103,20 +107,49 @@ export async function checkDocumentGpuResidency(
       return write.call(this, destination, bytes, layout, size);
     };
   });
-  const rawBefore = await gpuOwner.evaluate(() => {
-    const state = globalThis as typeof globalThis & {
-      __donnerReadGpuObjectStats: () => {
-        readbackCopies: number;
-        cpuTextureWrites: number;
-        surfacePresents: number;
-      };
-    };
-    return state.__donnerReadGpuObjectStats();
-  });
-  const beforePreview = await page.evaluate(() =>
-    (window as SelectionWindow).__donnerSampleThumbnailStats!
-  );
+  const readIdleAccounting = async (readbackOffset?: number) => {
+    let result: {
+      raw: Record<string, number>;
+      preview: NonNullable<SelectionWindow["__donnerSampleThumbnailStats"]>;
+    } | undefined;
+    await expect.poll(async () => {
+      const first = await page.evaluate(() =>
+        (window as SelectionWindow).__donnerSampleThumbnailStats!
+      );
+      const raw = await gpuOwner.evaluate(() =>
+        (globalThis as typeof globalThis & {
+          __donnerReadGpuObjectStats: () => Record<string, number>;
+        })
+          .__donnerReadGpuObjectStats()
+      );
+      const preview = await page.evaluate(() =>
+        (window as SelectionWindow).__donnerSampleThumbnailStats!
+      );
+      if (
+        !first || !preview || first.publicationGeneration !== preview.publicationGeneration
+        || preview.active || preview.pending || preview.resultReady || raw.pendingSubmissions !== 0
+        || preview.explicitPreviewReadbackTotal === undefined
+      ) return false;
+      if (
+        readbackOffset !== undefined
+        && raw.readbackCopies - preview.explicitPreviewReadbackTotal !== readbackOffset
+      ) return false;
+      result = { raw, preview };
+      return true;
+    }, {
+      timeout: 15000,
+      message: "GPU readbacks must reconcile with a fresh idle auxiliary snapshot",
+    }).toBe(true);
+    return result!;
+  };
+  const { raw: rawBefore, preview: beforePreview } = await readIdleAccounting();
+  const readbackOffset = rawBefore.readbackCopies - beforePreview.explicitPreviewReadbackTotal!;
   const before = await page.evaluate(() => (window as SelectionWindow).__donnerWorkerStats);
+  expect(before?.compositorReadbackTotal ?? 0).toBe(0);
+  expect(before?.tileHandoffReadbackTotal ?? 0).toBe(0);
+  expect(before?.finalSnapshotReadbackTotal ?? 0).toBe(0);
+  expect(before?.bitmapPayloadTileTotal ?? 0).toBe(0);
+
   const editorCanvas = page.locator("canvas#canvas");
   const bounds = await editorCanvas.boundingBox();
   expect(bounds, "the editor canvas is missing").not.toBeNull();
@@ -136,23 +169,8 @@ export async function checkDocumentGpuResidency(
       page.evaluate(() => Boolean((window as SelectionWindow).__donnerWorkerStats?.presentedAtMs)),
     { timeout: 10000 },
   ).toBe(true);
-  const afterPreview = await page.evaluate(() =>
-    (window as SelectionWindow).__donnerSampleThumbnailStats!
-  );
+  const { raw: rawAfter, preview: afterPreview } = await readIdleAccounting(readbackOffset);
   const after = await page.evaluate(() => (window as SelectionWindow).__donnerWorkerStats);
-  const rawAfter = await gpuOwner.evaluate(() => {
-    const state = globalThis as typeof globalThis & {
-      __donnerReadGpuObjectStats: () => {
-        readbackCopies: number;
-        cpuTextureWrites: number;
-        surfacePresents: number;
-      };
-    };
-    return state.__donnerReadGpuObjectStats();
-  });
-  expect(rawAfter.readbackCopies - rawBefore.readbackCopies).toBe(
-    afterPreview.explicitPreviewReadbackTotal! - beforePreview.explicitPreviewReadbackTotal!,
-  );
   expect(rawAfter.surfacePresents).toBeGreaterThan(rawBefore.surfacePresents);
   expect(after, "the document result did not publish readback accounting").toBeDefined();
   expect(after!.bitmapPayloadTileTotal).toBe(before?.bitmapPayloadTileTotal ?? 0);
@@ -254,13 +272,7 @@ export async function checkDocumentGpuResidency(
     () => page.evaluate(() => (window as SelectionWindow).__donnerSampleThumbnailStats),
     { timeout: 15000 },
   ).toEqual(expect.objectContaining({ active: false, pending: false, resultReady: false }));
-  const finalPreview = await page.evaluate(() =>
-    (window as SelectionWindow).__donnerSampleThumbnailStats!
-  );
-  const finalRaw = await gpuOwner.evaluate(() =>
-    (globalThis as typeof globalThis & { __donnerReadGpuObjectStats: () => Record<string, number> })
-      .__donnerReadGpuObjectStats()
-  );
+  const { raw: finalRaw, preview: finalPreview } = await readIdleAccounting(readbackOffset);
   const finalStats = await page.evaluate(() => (window as SelectionWindow).__donnerWorkerStats!);
   const transfers = await gpuOwner.evaluate(() =>
     (globalThis as typeof globalThis & { __donnerResidencyTransfers?: unknown[] })
@@ -270,6 +282,19 @@ export async function checkDocumentGpuResidency(
   writeFileSync(
     accountingPath,
     JSON.stringify({
+      browser: page.context().browser()?.version(),
+      project: info.project.name,
+      devicePixelRatio: await page.evaluate(() => devicePixelRatio),
+      packageHashes: Object.fromEntries(
+        ["wasm", "js"].map((
+          extension,
+        ) => [
+          extension,
+          createHash("sha256").update(
+            readFileSync(path.join(process.env.DONNER_WASM_PACKAGE_DIR!, `editor.${extension}`)),
+          ).digest("hex"),
+        ]),
+      ),
       rawBefore,
       rawAfter,
       finalRaw,

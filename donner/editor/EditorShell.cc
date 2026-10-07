@@ -5963,6 +5963,7 @@ void EditorShell::advanceFontPreviewGeneration() {
     pendingFontPreviews_.push_front(std::move(family));
     sampleThumbnailRetryPending_ = true;
   }
+  publishSampleThumbnailStats();
 }
 
 void EditorShell::trimFontPreviewMemory() {
@@ -8086,9 +8087,7 @@ void EditorShell::revealSourceRange(SourceByteRange byteRange) {
 void EditorShell::prepareFrame() {
   const ScopedHeapDelta inputHeapDelta(MemoryStage::AppInput);
   pollAuxiliaryPreviewResult();
-  if (showSamplePicker_) {
-    publishSampleThumbnailStats();
-  }
+  publishSampleThumbnailStats();
 }
 
 #ifndef __EMSCRIPTEN__

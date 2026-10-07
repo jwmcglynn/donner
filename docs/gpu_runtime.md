@@ -151,7 +151,7 @@ section.
   renderer whose target is a borrowed surface frame reads back as an empty bitmap because the
   frame's export is refused.
 
-Explicit captures are CPU consumers by design. Ordinary GPU composition and presentation retain
+Explicit captures are CPU consumers by design. Ordinary document composition and presentation retain
 pixels on the GPU on every platform. Browser raster workers publish resource identities; the
 application thread owns the textures and canvas and uses the desktop compositor to draw tiles
 directly into the acquired backbuffer. No per-tile browser objects, ImageBitmaps or pixel bytes
@@ -161,7 +161,8 @@ cross workers, and presentation adds no intermediate framebuffer copy.
 compositor/handoff/final-capture accounting for an ordinary document. The worker's published
 bitmap/texture payload counts distinguish GPU resources from CPU tiles. CPU-authored images and
 font atlases remain legitimate uploads; bounded screenshot/export captures remain explicit reads.
-The sample/font-preview lane requests CPU outputs separately. Its `explicitPreviewReadbackTotal`
+The existing sample/font-preview lane still produces CPU thumbnail bitmaps. This separate path
+is measured here; it is not evidence that the whole browser UI is GPU resident. Its `explicitPreviewReadbackTotal`
 counts actual capture calls, including cancelled captures. The browser gate reconciles the raw
 readback delta with that explicit lane and requires zero document-stage readbacks and bitmap tiles.
 
