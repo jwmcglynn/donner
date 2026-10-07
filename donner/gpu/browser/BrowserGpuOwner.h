@@ -6,6 +6,9 @@
 
 namespace donner::gpu::browser {
 
+/// Bounded dispatch categories used to distinguish state queries from other browser primitives.
+enum class BrowserGpuOperationKind { Other, OwnershipQuery, DeviceLossQuery, CompletionQuery };
+
 /// Register the calling application thread before creating any browser GPU devices or workers.
 void RegisterBrowserGpuOwner();
 
@@ -13,18 +16,23 @@ void RegisterBrowserGpuOwner();
  * Without a registered owner, standalone modules execute on the calling thread.
  * @param operation Callback that must not allocate, lock, yield, or call arbitrary C++ code.
  * @param context Caller-owned data, valid until the operation completes.
+ * @param kind Diagnostic category; it does not affect dispatch.
  * A failed dispatch or expired deadline terminates the module rather than leaving borrowed data
  * reachable by a delayed callback. The owner remains alive until all clients are destroyed.
  */
-void RunOnBrowserGpuOwner(void (*operation)(void*), void* context);
+void RunOnBrowserGpuOwner(void (*operation)(void*), void* context,
+                          BrowserGpuOperationKind kind = BrowserGpuOperationKind::Other);
 
 /** Invoke a stack-owned callback without allocating a type-erased function.
  * @param operation Nonblocking browser primitive or prepared bounded command batch.
+ * @param kind Diagnostic category; it does not affect dispatch.
  */
 template <typename Function>
-void RunOnBrowserGpuOwner(Function&& operation) {
+void RunOnBrowserGpuOwner(Function&& operation,
+                          BrowserGpuOperationKind kind = BrowserGpuOperationKind::Other) {
   using Callback = std::remove_reference_t<Function>;
-  RunOnBrowserGpuOwner([](void* context) { (*static_cast<Callback*>(context))(); }, &operation);
+  RunOnBrowserGpuOwner([](void* context) { (*static_cast<Callback*>(context))(); }, &operation,
+                       kind);
 }
 
 /// Whether the calling thread is the registered browser GPU owner.

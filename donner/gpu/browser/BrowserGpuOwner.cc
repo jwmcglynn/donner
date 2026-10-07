@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <cerrno>
 #include <climits>
 #include <cstddef>
 #include <cstdint>
@@ -33,7 +34,16 @@ constexpr std::size_t kMaximumDispatchWaitUs = 6;
 constexpr std::size_t kBatches = 7;
 constexpr std::size_t kMaximumBatchSize = 8;
 constexpr std::size_t kMaximumBatchUs = 9;
-std::array<std::atomic<uint32_t>, 10> gOwnerWaitStats{};
+constexpr std::size_t kTotalDispatchWaitUs = 10;
+constexpr std::size_t kTotalBatchUs = 11;
+constexpr std::size_t kFutexTimeouts = 12;
+constexpr std::size_t kWakeBeforeCompletion = 13;
+constexpr std::size_t kPostWakeTimeouts = 14;
+constexpr std::size_t kOtherOperations = 15;
+constexpr std::size_t kOwnershipQueries = 16;
+constexpr std::size_t kDeviceLossQueries = 17;
+constexpr std::size_t kCompletionQueries = 18;
+std::array<std::atomic<uint32_t>, 19> gOwnerWaitStats{};
 static_assert(sizeof(std::atomic<uint32_t>) == sizeof(uint32_t));
 static_assert(std::atomic<uint32_t>::is_always_lock_free);
 thread_local bool gProcessingOwnerWait = false;
@@ -65,13 +75,35 @@ void RecordMaximum(std::size_t index, double value) {
                 std::memory_order_relaxed);
 }
 
+void AddSaturatingMicros(std::size_t index, double value) {
+  const auto increment = static_cast<uint32_t>(
+      std::clamp(value, 0.0, static_cast<double>(std::numeric_limits<uint32_t>::max())));
+  auto& total = gOwnerWaitStats[index];
+  uint32_t previous = total.load(std::memory_order_relaxed);
+  while (!total.compare_exchange_weak(
+      previous, previous + std::min(increment, std::numeric_limits<uint32_t>::max() - previous),
+      std::memory_order_relaxed)) {}
+}
+
+std::size_t OperationCounter(BrowserGpuOperationKind kind) {
+  switch (kind) {
+    case BrowserGpuOperationKind::OwnershipQuery: return kOwnershipQueries;
+    case BrowserGpuOperationKind::DeviceLossQuery: return kDeviceLossQueries;
+    case BrowserGpuOperationKind::CompletionQuery: return kCompletionQueries;
+    case BrowserGpuOperationKind::Other: return kOtherOperations;
+  }
+  std::abort();
+}
+
 void ExecuteReadyBatch() {
   const double started = emscripten_get_now();
   const std::size_t count = gReady.executeBatch();
   if (count) {
     gOwnerWaitStats[kBatches].fetch_add(1, std::memory_order_relaxed);
     RecordMaximum(kMaximumBatchSize, static_cast<double>(count));
-    RecordMaximum(kMaximumBatchUs, (emscripten_get_now() - started) * 1000.0);
+    const double elapsedUs = (emscripten_get_now() - started) * 1000.0;
+    RecordMaximum(kMaximumBatchUs, elapsedUs);
+    AddSaturatingMicros(kTotalBatchUs, elapsedUs);
   }
   if (!gReady.empty()) {
     SchedulePulse();
@@ -168,26 +200,41 @@ void RegisterBrowserGpuOwner() {
       'batches': Atomics.load(HEAPU32, index + 7),
       'maximumBatchSize': Atomics.load(HEAPU32, index + 8),
       'maximumBatchMs': Atomics.load(HEAPU32, index + 9) / 1000,
+      'totalDispatchWaitMs': Atomics.load(HEAPU32, index + 10) / 1000,
+      'totalBatchMs': Atomics.load(HEAPU32, index + 11) / 1000,
+      'futexTimeouts': Atomics.load(HEAPU32, index + 12),
+      'wakeBeforeCompletion': Atomics.load(HEAPU32, index + 13),
+      'postWakeTimeouts': Atomics.load(HEAPU32, index + 14),
+      'otherOperations': Atomics.load(HEAPU32, index + 15),
+      'ownershipQueries': Atomics.load(HEAPU32, index + 16),
+      'deviceLossQueries': Atomics.load(HEAPU32, index + 17),
+      'completionQueries': Atomics.load(HEAPU32, index + 18),
+      'timingSaturated': Atomics.load(HEAPU32, index + 10) === 4294967295 ||
+                         Atomics.load(HEAPU32, index + 11) === 4294967295,
     });
   }, gOwnerWaitStats.data());
   // clang-format on
 #endif
 }
 
-void RunOnBrowserGpuOwner(void (*operation)(void*), void* context) {
+void RunOnBrowserGpuOwner(void (*operation)(void*), void* context,
+                          [[maybe_unused]] BrowserGpuOperationKind kind) {
 #ifdef __EMSCRIPTEN_PTHREADS__
   if (gStopped.load(std::memory_order_acquire)) {
     std::abort();
   }
   const pthread_t owner = gOwner.load(std::memory_order_acquire);
   if (owner && !pthread_equal(owner, pthread_self())) {
+    const double requestStartedMs = emscripten_get_now();
     OwnerRequest request{operation, context, {}, {}};
     gOwnerWaitStats[kRequested].fetch_add(1, std::memory_order_relaxed);
+    gOwnerWaitStats[OperationCounter(kind)].fetch_add(1, std::memory_order_relaxed);
     // Notifications cannot release callers, so the SDK's drain cannot grow with repeated requests.
     if (!emscripten_proxy_async(gNotificationQueue, owner, &EnqueueRequest, &request)) {
       std::abort();
     }
     const double deadlineMs = emscripten_get_now() + 10000.0;
+    bool wokeBeforeCompletion = false;
     while (request.complete.load(std::memory_order_acquire) == 0) {
       const double remainingMs = deadlineMs - emscripten_get_now();
       const uint32_t waitedUs =
@@ -201,8 +248,21 @@ void RunOnBrowserGpuOwner(void (*operation)(void*), void* context) {
         std::abort();
       }
       // Recheck within one millisecond if the final store raced the preceding wake.
-      emscripten_futex_wait(&request.complete, 0, remainingMs < 1.0 ? remainingMs : 1.0);
+      const int waitResult =
+          emscripten_futex_wait(&request.complete, 0, remainingMs < 1.0 ? remainingMs : 1.0);
+      const bool complete = request.complete.load(std::memory_order_acquire) != 0;
+      if (waitResult == -ETIMEDOUT) {
+        gOwnerWaitStats[kFutexTimeouts].fetch_add(1, std::memory_order_relaxed);
+        if (wokeBeforeCompletion && complete) {
+          gOwnerWaitStats[kPostWakeTimeouts].fetch_add(1, std::memory_order_relaxed);
+        }
+      }
+      wokeBeforeCompletion = waitResult == 0 && !complete;
+      if (wokeBeforeCompletion) {
+        gOwnerWaitStats[kWakeBeforeCompletion].fetch_add(1, std::memory_order_relaxed);
+      }
     }
+    AddSaturatingMicros(kTotalDispatchWaitUs, (emscripten_get_now() - requestStartedMs) * 1000.0);
     return;
   }
 #endif

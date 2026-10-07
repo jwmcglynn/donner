@@ -3871,9 +3871,11 @@ test("Firefox never exposes the checkerboard while dragging a Splash letter", as
   const resultsBeforePress = await page.evaluate(
     () => window.__donnerWorkerStats?.completedResults || 0,
   );
+  const dispatchBeforePress = await readGpuOwnerDispatchStats(page);
   console.log(`firefox-prepress-checkpoint ${
     JSON.stringify({
       phaseTimes,
+      dispatchBeforePress,
       dragStart,
       originalViewport: viewport,
       current: await boundFailureDiagnostic(page.evaluate(() => ({
@@ -3883,6 +3885,8 @@ test("Firefox never exposes the checkerboard while dragging a Splash letter", as
         thumbnails: window.__donnerSampleThumbnailStats,
         presentation: window.__donnerPresentationQueueStats,
         overlay: window.__donnerOverlayStats,
+        frames: window.__donnerFrameLoopStats,
+        host: window.__donnerHostFrameTiming,
       }))),
     })
   }`);
@@ -4211,6 +4215,26 @@ test("proxied animation frames keep at most one outstanding callback", async ({ 
   expect(failures).toEqual([]);
 });
 
+async function readGpuOwnerDispatchStats(page: Page) {
+  return Promise.any(
+    page.workers().map(async (worker) => {
+      const result = await boundFailureDiagnostic(
+        worker.evaluate(() => {
+          const scope = globalThis as typeof globalThis & {
+            __donnerReadGpuOwnerWaitStats?: () => unknown;
+          };
+          return scope.__donnerReadGpuOwnerWaitStats
+            ? { sampledAtMs: performance.now(), stats: scope.__donnerReadGpuOwnerWaitStats() }
+            : null;
+        }),
+        1000,
+      );
+      if (result === null) throw new Error("GPU owner probe unavailable");
+      return result;
+    }),
+  ).catch(() => null);
+}
+
 async function captureRasterDispatchFailure(page: Page): Promise<void> {
   const owners = await Promise.all(
     page.workers().map(async (worker, index) => ({
@@ -4235,6 +4259,7 @@ async function captureRasterDispatchFailure(page: Page): Promise<void> {
   const state = await boundFailureDiagnostic(
     page.evaluate(() => ({
       raster: (window as Window & { __donnerRasterWorkState?: unknown }).__donnerRasterWorkState,
+      phases: (window as Window & { __donnerRasterWorkPhases?: unknown }).__donnerRasterWorkPhases,
       driver: (window as Window & { __donnerFrameDriver?: string }).__donnerFrameDriver,
       worker: window.__donnerWorkerStats,
       interaction: window.__donnerInteractionStats,

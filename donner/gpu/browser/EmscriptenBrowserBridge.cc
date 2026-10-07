@@ -182,11 +182,26 @@ namespace {
 template <auto Function, typename... Args>
 auto CallBrowserGpu(Args... args) -> decltype(Function(args...)) {
   using Result = decltype(Function(args...));
+  constexpr BrowserGpuOperationKind kind = [] {
+    if constexpr (std::is_same_v<decltype(Function), decltype(&donner_gpu_owns_device)>) {
+      if constexpr (Function == &donner_gpu_owns_device) {
+        return BrowserGpuOperationKind::OwnershipQuery;
+      } else if constexpr (Function == &donner_gpu_is_device_lost) {
+        return BrowserGpuOperationKind::DeviceLossQuery;
+      }
+    }
+    if constexpr (std::is_same_v<decltype(Function), decltype(&donner_gpu_completed_serial)>) {
+      if constexpr (Function == &donner_gpu_completed_serial) {
+        return BrowserGpuOperationKind::CompletionQuery;
+      }
+    }
+    return BrowserGpuOperationKind::Other;
+  }();
   if constexpr (std::is_void_v<Result>) {
-    RunOnBrowserGpuOwner([&] { Function(args...); });
+    RunOnBrowserGpuOwner([&] { Function(args...); }, kind);
   } else {
     Result result{};
-    RunOnBrowserGpuOwner([&] { result = Function(args...); });
+    RunOnBrowserGpuOwner([&] { result = Function(args...); }, kind);
     return result;
   }
 }

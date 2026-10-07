@@ -1029,7 +1029,11 @@ void PublishRasterWorkPhase(RasterWorkPhase phase) {
   MAIN_THREAD_ASYNC_EM_ASM({
     const phases = (['idle-maintenance', 'warmup-document-access', 'warmup', 'thumbnail',
                     'render-setup', 'render-document-access', 'rendering', 'publishing']);
-    window['__donnerRasterWorkState'] = ({'phase': phases[$0], 'publishedAtMs': performance.now()});
+    const state = ({'phase': phases[$0], 'publishedAtMs': performance.now()});
+    window['__donnerRasterWorkState'] = state;
+    const history = window['__donnerRasterWorkPhases'] || (window['__donnerRasterWorkPhases'] = []);
+    history.push(state);
+    if (history.length > 32) history.shift();
   }, static_cast<int>(phase));
   // clang-format on
 #else
