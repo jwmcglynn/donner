@@ -2843,10 +2843,21 @@ Vector2i RenderFrameDrawData([[maybe_unused]] GLFWwindow* window, EditorWindowFr
 #ifdef DONNER_EDITOR_WHOLE_APP_WORKER
 /// Defer raw worker GPU batches only while the canvas acquisition is live.
 struct BrowserCanvasFrameScope {
-  BrowserCanvasFrameScope() { gpu::browser::SetBrowserGpuOwnerCanvasFrameActive(true); }
-  ~BrowserCanvasFrameScope() { gpu::browser::SetBrowserGpuOwnerCanvasFrameActive(false); }
+  explicit BrowserCanvasFrameScope(bool active) : active_(active) {
+    if (active_) {
+      gpu::browser::SetBrowserGpuOwnerCanvasFrameActive(true);
+    }
+  }
+  ~BrowserCanvasFrameScope() {
+    if (active_) {
+      gpu::browser::SetBrowserGpuOwnerCanvasFrameActive(false);
+    }
+  }
   BrowserCanvasFrameScope(const BrowserCanvasFrameScope&) = delete;
   BrowserCanvasFrameScope& operator=(const BrowserCanvasFrameScope&) = delete;
+
+private:
+  bool active_;
 };
 #endif
 
@@ -3041,7 +3052,7 @@ struct EditorWindow::GpuFrameSubmission {
       return;
     }
 #ifdef DONNER_EDITOR_WHOLE_APP_WORKER
-    BrowserCanvasFrameScope canvasScope;
+    BrowserCanvasFrameScope canvasScope(window.wgpuState_->presentationRequired);
 #endif
     auto& state = *window.wgpuState_;
     auto& device = state.framebufferGeodeDevice->runtimeDevice();

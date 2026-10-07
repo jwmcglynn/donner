@@ -117,6 +117,39 @@ struct OwnerRequest {
   BrowserGpuTask task;
 };
 
+void WaitForRequest(OwnerRequest& request, double requestStartedMs) {
+  const double deadlineMs = emscripten_get_now() + 10000.0;
+  bool wokeBeforeCompletion = false;
+  while (request.complete.load(std::memory_order_acquire) == 0) {
+    const double remainingMs = deadlineMs - emscripten_get_now();
+    const uint32_t waitedUs =
+        static_cast<uint32_t>(std::clamp((10000.0 - remainingMs) * 1000.0, 0.0, 10000000.0));
+    auto& maximumWait = gOwnerWaitStats[kMaximumDispatchWaitUs];
+    uint32_t previous = maximumWait.load(std::memory_order_relaxed);
+    while (previous < waitedUs &&
+           !maximumWait.compare_exchange_weak(previous, waitedUs, std::memory_order_relaxed)) {}
+    if (remainingMs <= 0.0) {
+      // Returning would leave the owner's callback holding borrowed caller memory.
+      std::abort();
+    }
+    // Recheck within one millisecond if the final store raced the preceding wake.
+    const int waitResult =
+        emscripten_futex_wait(&request.complete, 0, remainingMs < 1.0 ? remainingMs : 1.0);
+    const bool complete = request.complete.load(std::memory_order_acquire) != 0;
+    if (waitResult == -ETIMEDOUT) {
+      gOwnerWaitStats[kFutexTimeouts].fetch_add(1, std::memory_order_relaxed);
+      if (wokeBeforeCompletion && complete) {
+        gOwnerWaitStats[kPostWakeTimeouts].fetch_add(1, std::memory_order_relaxed);
+      }
+    }
+    wokeBeforeCompletion = waitResult == 0 && !complete;
+    if (wokeBeforeCompletion) {
+      gOwnerWaitStats[kWakeBeforeCompletion].fetch_add(1, std::memory_order_relaxed);
+    }
+  }
+  AddSaturatingMicros(kTotalDispatchWaitUs, (emscripten_get_now() - requestStartedMs) * 1000.0);
+}
+
 void Invoke(void* context) {
   auto& request = *static_cast<OwnerRequest*>(context);
   gOwnerWaitStats[kStarted].fetch_add(1, std::memory_order_relaxed);
@@ -233,36 +266,7 @@ void RunOnBrowserGpuOwner(void (*operation)(void*), void* context,
     if (!emscripten_proxy_async(gNotificationQueue, owner, &EnqueueRequest, &request)) {
       std::abort();
     }
-    const double deadlineMs = emscripten_get_now() + 10000.0;
-    bool wokeBeforeCompletion = false;
-    while (request.complete.load(std::memory_order_acquire) == 0) {
-      const double remainingMs = deadlineMs - emscripten_get_now();
-      const uint32_t waitedUs =
-          static_cast<uint32_t>(std::clamp((10000.0 - remainingMs) * 1000.0, 0.0, 10000000.0));
-      auto& maximumWait = gOwnerWaitStats[kMaximumDispatchWaitUs];
-      uint32_t previous = maximumWait.load(std::memory_order_relaxed);
-      while (previous < waitedUs &&
-             !maximumWait.compare_exchange_weak(previous, waitedUs, std::memory_order_relaxed)) {}
-      if (remainingMs <= 0.0) {
-        // Returning would leave the owner's callback holding borrowed caller memory.
-        std::abort();
-      }
-      // Recheck within one millisecond if the final store raced the preceding wake.
-      const int waitResult =
-          emscripten_futex_wait(&request.complete, 0, remainingMs < 1.0 ? remainingMs : 1.0);
-      const bool complete = request.complete.load(std::memory_order_acquire) != 0;
-      if (waitResult == -ETIMEDOUT) {
-        gOwnerWaitStats[kFutexTimeouts].fetch_add(1, std::memory_order_relaxed);
-        if (wokeBeforeCompletion && complete) {
-          gOwnerWaitStats[kPostWakeTimeouts].fetch_add(1, std::memory_order_relaxed);
-        }
-      }
-      wokeBeforeCompletion = waitResult == 0 && !complete;
-      if (wokeBeforeCompletion) {
-        gOwnerWaitStats[kWakeBeforeCompletion].fetch_add(1, std::memory_order_relaxed);
-      }
-    }
-    AddSaturatingMicros(kTotalDispatchWaitUs, (emscripten_get_now() - requestStartedMs) * 1000.0);
+    WaitForRequest(request, requestStartedMs);
     return;
   }
 #endif
