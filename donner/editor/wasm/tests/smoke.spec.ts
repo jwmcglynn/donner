@@ -1299,6 +1299,11 @@ for (
     }
 
     if ("delayWorkerRafMs" in sample) {
+      expect(
+        await page.evaluate(() =>
+          (window as Window & { __donnerFrameDriver?: string }).__donnerFrameDriver
+        ),
+      ).toBe("worker-raf");
       await delayWorkerAnimationFrames(page, sample.delayWorkerRafMs);
     }
     const deviceCreationsBeforeClick = await page.evaluate(
@@ -1401,6 +1406,15 @@ for (
           JSON.stringify(completedWorkerStats)
         } last=${JSON.stringify(lastPresentationState)} workerBusy=${JSON.stringify(workerBusy)}`,
       );
+    }
+    if ("delayWorkerRafMs" in sample) {
+      expect(completedWorkerStats?.workerMs).toBeLessThan(presentationHandoffDeadlineMs);
+      await expect.poll(() =>
+        page.evaluate(() =>
+          (window as Window & { __donnerFrameTickStats?: { maxMs: number } })
+            .__donnerFrameTickStats?.maxMs ?? 0
+        )
+      ).toBeGreaterThanOrEqual(sample.delayWorkerRafMs);
     }
     expect(phaseTimings.presentedMs).toBeDefined();
     expect(phaseTimings.completedMs).toBeDefined();

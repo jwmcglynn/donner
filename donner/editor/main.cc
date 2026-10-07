@@ -155,6 +155,11 @@ struct WasmEditorLoopState {
   RenderFrameCallback renderFrame = &RunEditorFrame;
 };
 
+bool CanRunWasmEditorFrame(void* userdata) {
+  const auto* state = static_cast<WasmEditorLoopState*>(userdata);
+  return !state->frameActive && !donner::gpu::browser::IsBrowserGpuOwnerDispatchActive();
+}
+
 /// Protect an active canvas frame from nested editor callbacks and asynchronous GPU batches.
 class WasmFrameScope {
 public:
@@ -166,6 +171,9 @@ public:
   ~WasmFrameScope() {
     donner::gpu::browser::SetBrowserGpuOwnerFrameActive(false);
     state_.frameActive = false;
+#ifdef DONNER_EDITOR_WHOLE_APP_WORKER
+    donner::editor::whole_app_worker::NotifyFrameFinished();
+#endif
   }
 
   WasmFrameScope(const WasmFrameScope&) = delete;
@@ -182,7 +190,7 @@ void RunWasmEditorFrame(void* userdata) {
   // A nested frame would call ImGui::NewFrame() twice without an intervening
   // Render() and recurse until the JS stack overflows. Drop that callback; the
   // active frame will finish and the browser will schedule the next one.
-  if (state->frameActive || donner::gpu::browser::IsBrowserGpuOwnerDispatchActive()) {
+  if (!CanRunWasmEditorFrame(userdata)) {
     return;
   }
   if (state->window->shouldClose()) {
@@ -356,7 +364,8 @@ int main(int argc, char** argv) {
   // `requestAnimationFrame`, which is not vsync-aligned, so the driver probes
   // for it and installs a proxied main-thread rAF pump where it is missing.
   donner::BeginSuspendFrame();
-  donner::editor::whole_app_worker::InstallFrameDriver(&RunWasmEditorFrame, loopState);
+  donner::editor::whole_app_worker::InstallFrameDriver(&RunWasmEditorFrame, loopState,
+                                                       &CanRunWasmEditorFrame);
 #else
   while (!window->shouldClose()) {
     RunEditorFrame(*window, *shell);

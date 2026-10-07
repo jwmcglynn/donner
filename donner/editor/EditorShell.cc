@@ -1646,8 +1646,12 @@ EditorShell::EditorShell(gui::EditorWindow& window, EditorShellOptions options)
   // directly, not `this`: EditorWindow is required to outlive EditorShell, and shutdown detaches
   // then joins this callback before shell member teardown begins.
   gui::EditorWindow* const wakeWindow = &window_;
-  renderCoordinator_.asyncRenderer().setWakeCallback(
-      [wakeWindow]() { wakeWindow->wakeEventLoop(); });
+  renderCoordinator_.asyncRenderer().setWakeCallback([wakeWindow]() {
+    wakeWindow->wakeEventLoop();
+#ifdef DONNER_EDITOR_WHOLE_APP_WORKER
+    whole_app_worker::RequestFrame();
+#endif
+  });
   ConfigureNativeGpuIdleMaintenance(renderCoordinator_.asyncRenderer(), window_.geodeDevice());
 #ifndef __EMSCRIPTEN__
   if (options_.reproOutputPath.has_value()) {

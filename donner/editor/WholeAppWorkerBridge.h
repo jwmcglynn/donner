@@ -153,7 +153,16 @@ enum class FrameDriver : int {
 /// main-thread rAF pump coalescing ticks until the scheduled frame completes.
 /// Rendering runs outside the proxy queue drain. @p frameFn must guard re-entry on the worker-rAF
 /// arm, where a synchronous proxied call may deliver another callback.
-FrameDriver InstallFrameDriver(void (*frameFn)(void*), void* userData);
+/// @param canRunFrame Owner-thread readiness guard; false while an editor frame or GPU batch runs.
+FrameDriver InstallFrameDriver(void (*frameFn)(void*), void* userData, bool (*canRunFrame)(void*));
+
+/// Request an event frame for a raster-worker state change, independently of delayed browser rAF.
+/// Safe from any thread, including before installation and after shutdown. Ordinary UI/animation
+/// wakes keep using the rAF-paced request flag; this is not a self-driven animation loop.
+void RequestFrame();
+
+/// Resume one deferred event frame after the owner exits its active frame. Owner-thread only.
+void NotifyFrameFinished();
 
 /// Invalidate queued frame callbacks before destroying their editor state. Called on the app
 /// thread.

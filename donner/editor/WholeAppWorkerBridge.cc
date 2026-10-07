@@ -590,11 +590,15 @@ constexpr std::size_t kTickSampleCapacity = 2048;
 
 struct FrameDriverState {
   void (*frameFn)(void*) = nullptr;
+  bool (*canRunFrame)(void*) = nullptr;
   void* userData = nullptr;
   pthread_t appThread{};
   em_proxying_queue* proxyQueue = nullptr;
   FrameDriver driver = FrameDriver::SetTimeoutFallback;
   FrameCallbackAdmission admission;
+  FrameCallbackAdmission eventAdmission;
+  std::atomic<std::uint32_t> wakeSerial{0};
+  bool eventDeferred = false;
   std::atomic<std::uint32_t> pendingFrames{0};
   std::atomic<std::uint32_t> peakPendingFrames{0};
 
@@ -626,6 +630,48 @@ void RecordTick() {
   ++state.ticks;
 }
 
+void QueueEventFrame(std::uint32_t generation);
+
+void RunEventFrame(void* token) {
+  FrameDriverState& state = Driver();
+  const auto generation = static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(token));
+  if (!state.eventAdmission.isCurrent(generation)) {
+    state.eventAdmission.complete(generation);
+    return;
+  }
+  if (!state.canRunFrame(state.userData)) {
+    state.eventDeferred = true;
+    return;
+  }
+  const std::uint32_t serial = state.wakeSerial.load(std::memory_order_acquire);
+  state.frameFn(state.userData);
+  state.eventAdmission.complete(generation);
+  if (state.eventAdmission.isCurrent(generation) &&
+      state.wakeSerial.load(std::memory_order_acquire) != serial) {
+    QueueEventFrame(generation);
+  }
+}
+
+void ScheduleEventFrame(void* token) {
+  FrameDriverState& state = Driver();
+  const auto generation = static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(token));
+  if (state.eventAdmission.isCurrent(generation)) {
+    emscripten_async_call(&RunEventFrame, token, 0);
+  } else {
+    state.eventAdmission.complete(generation);
+  }
+}
+
+void QueueEventFrame(std::uint32_t generation) {
+  FrameDriverState& state = Driver();
+  if (state.proxyQueue && state.eventAdmission.acquire(generation)) {
+    void* token = reinterpret_cast<void*>(static_cast<std::uintptr_t>(generation));
+    if (!emscripten_proxy_async(state.proxyQueue, state.appThread, &ScheduleEventFrame, token)) {
+      state.eventAdmission.complete(generation);
+    }
+  }
+}
+
 /// Every scheduled callback carries a generation, never the lifetime-limited editor pointer.
 void RunDrivenFrame(void* token) {
   FrameDriverState& state = Driver();
@@ -633,6 +679,7 @@ void RunDrivenFrame(void* token) {
   if (state.admission.isCurrent(generation)) {
     RecordTick();
     state.frameFn(state.userData);
+    NotifyFrameFinished();
   }
 }
 
@@ -698,19 +745,31 @@ bool WorkerRequestAnimationFrameAvailable() {
   return WorkerRequestAnimationFrameAvailableImpl();
 }
 
-FrameDriver InstallFrameDriver(void (*frameFn)(void*), void* userData) {
+FrameDriver InstallFrameDriver(void (*frameFn)(void*), void* userData, bool (*canRunFrame)(void*)) {
   FrameDriverState& state = Driver();
   state.frameFn = frameFn;
+  state.canRunFrame = canRunFrame;
   state.userData = userData;
   state.appThread = pthread_self();
-  const std::uint32_t generation = state.admission.start();
-  void* token = reinterpret_cast<void*>(static_cast<std::uintptr_t>(generation));
+  if (!state.proxyQueue) {
+    state.proxyQueue = em_proxying_queue_create();
+  }
+  if (state.proxyQueue) {
+    if (!emscripten_proxy_async(state.proxyQueue, state.appThread, [](void*) {}, nullptr)) {
+      std::abort();
+    }
+    emscripten_proxy_execute_queue(state.proxyQueue);
+  }
 
   // clang-format off
   const bool forceProxiedFrames = MAIN_THREAD_EM_ASM_INT({
     return new URLSearchParams(window.location.search).get('frameDriver') === 'proxied-main-raf';
   });
   // clang-format on
+  const std::uint32_t generation = state.admission.start();
+  (void)state.eventAdmission.start();
+  state.eventDeferred = false;
+  void* token = reinterpret_cast<void*>(static_cast<std::uintptr_t>(generation));
   if (!forceProxiedFrames && WorkerRequestAnimationFrameAvailable()) {
     // Emscripten's `fps == 0` path selects EM_TIMING_RAF, whose scheduler calls
     // `globalThis.requestAnimationFrame` when it exists. Nothing else to do.
@@ -727,9 +786,6 @@ FrameDriver InstallFrameDriver(void (*frameFn)(void*), void* userData) {
   // emulation that is not vsync-aligned and is subject to the nested-timer
   // clamp. Drive from the browser main thread's rAF instead and pay one
   // postMessage per frame (measured at ~40 microseconds).
-  if (!state.proxyQueue) {
-    state.proxyQueue = em_proxying_queue_create();
-  }
   if (state.proxyQueue == nullptr) {
     state.driver = FrameDriver::SetTimeoutFallback;
     // clang-format off
@@ -758,9 +814,31 @@ FrameDriver InstallFrameDriver(void (*frameFn)(void*), void* userData) {
   return state.driver;
 }
 
+void RequestFrame() {
+  FrameDriverState& state = Driver();
+  const std::uint32_t generation = state.eventAdmission.generation();
+  if (generation) {
+    state.wakeSerial.fetch_add(1, std::memory_order_release);
+    QueueEventFrame(generation);
+  }
+}
+
+void NotifyFrameFinished() {
+  FrameDriverState& state = Driver();
+  const std::uint32_t generation = state.eventAdmission.generation();
+  if (state.eventDeferred && generation && state.canRunFrame(state.userData)) {
+    state.eventDeferred = false;
+    void* token = reinterpret_cast<void*>(static_cast<std::uintptr_t>(generation));
+    emscripten_async_call(&RunEventFrame, token, 0);
+  }
+}
+
 void StopFrameDriver() {
   FrameDriverState& state = Driver();
   state.admission.stop();
+  state.eventAdmission.stop();
+  state.eventDeferred = false;
+  state.canRunFrame = nullptr;
   state.frameFn = nullptr;
   state.userData = nullptr;
   emscripten_cancel_main_loop();
