@@ -6,7 +6,6 @@ import {
   hasPresentedBasicShapesHostFrame,
 } from "./basic-shapes-capture-gate";
 import { installBrowserStallDiagnostics } from "./browser-stall-diagnostics";
-import { armFailureCanvasEvidence, installFailureCanvasEvidence } from "./failure-canvas-evidence";
 import {
   type CanvasColorStats,
   captureEditorPage,
@@ -18,11 +17,16 @@ import {
   readTextStyleGlyphStats,
   type ScreenshotTimeoutStage,
 } from "./canvas-color-stats";
+import { armFailureCanvasEvidence, installFailureCanvasEvidence } from "./failure-canvas-evidence";
 import { waitForAppliedPointer } from "./gesture-streams";
 import { echoGpuSessionConsole } from "./gpu-session-console";
 import { quarantineStillSkips } from "./quarantine-report.mjs";
 import { expectSampleThumbnailsToSettle } from "./sample-thumbnail-settle";
-import { holdCanvasCompletionForTest, installSurfaceFrameProbe } from "./surface-frame-probe";
+import {
+  findProbedCanvasApplicationWorker,
+  holdCanvasCompletionForTest,
+  installSurfaceFrameProbe,
+} from "./surface-frame-probe";
 
 installBrowserStallDiagnostics(test);
 installFailureCanvasEvidence(test);
@@ -459,7 +463,8 @@ async function readWgpuDiagnosticOutcome(page: Page) {
 }
 
 function hasSuccessfulDiagnosticRequest(
-  state: Awaited<ReturnType<typeof readWgpuDiagnosticOutcome>>, request: number,
+  state: Awaited<ReturnType<typeof readWgpuDiagnosticOutcome>>,
+  request: number,
 ): boolean {
   return request > 0 && state.completed >= request && state.successfulRequest >= request
     && state.lastFailedRequest < request;
@@ -473,7 +478,8 @@ async function waitForSuccessfulWgpuDiagnostic(page: Page, request: number): Pro
       return state.completed;
     }, {
       message: "expected a terminal post-load WGPU diagnostic outcome for the Layers panel",
-      timeout: scaledMs(5000), intervals: [16, 25, 50, 100],
+      timeout: scaledMs(5000),
+      intervals: [16, 25, 50, 100],
     }).toBeGreaterThanOrEqual(request);
     expect(hasSuccessfulDiagnosticRequest(state, request), JSON.stringify({ request, ...state }))
       .toBe(true);
@@ -481,7 +487,8 @@ async function waitForSuccessfulWgpuDiagnostic(page: Page, request: number): Pro
     const path = test.info().outputPath(`wgpu-diagnostic-request-${request}.json`);
     await writeFile(path, JSON.stringify({ request, ...state }, null, 2));
     await test.info().attach(`wgpu-diagnostic-request-${request}`, {
-      path, contentType: "application/json",
+      path,
+      contentType: "application/json",
     });
   }
 }
@@ -1664,215 +1671,222 @@ test("browser presents the first Basic Shapes drag frame within the interaction 
   expect(fatalMessages).toEqual([]);
 });
 
-test("production Geode wasm presents visible editor pixels after held canvas GPU completion", async ({ browserName, page }, testInfo) => {
-  test.skip(browserName !== "chromium" || kBackend !== "geode", "controlled browser GPU gate");
-  test.skip(
-    kHostedMacosQuarantine,
-    "Quarantined in the hosted macOS CI job: the GPU device request can miss its window (#1691)",
-  );
-  const fatalMessages = await openEditor(page, { postInitializationDwellMs: 0 });
-  expect(await installSurfaceFrameProbe(page)).toBeGreaterThan(0);
-  const hold = await holdCanvasCompletionForTest(page);
-  let requiredOwner: Worker | null = null;
-  let releaseSucceeded = false;
-  const captureErrors: unknown[] = [];
-  try {
-    const canvas = page.locator("canvas#canvas");
-    const bounds = await canvas.boundingBox();
-    expect(bounds).not.toBeNull();
-    if (bounds === null) throw new Error("the canvas bounds are unavailable");
-    const before = await page.evaluate(() => ({
-      results: window.__donnerWorkerStats?.completedResults ?? 0,
-      frames: window.__donnerMainLoopRenderedFrames ?? 0,
-    }));
-    await page.mouse.click(bounds.x + bounds.width * 0.76, bounds.y + 282);
-    const readState = () =>
-      page.evaluate(() => ({
-        sampleId: window.__donnerActiveSampleStats?.sampleId ?? null,
-        completedResults: window.__donnerWorkerStats?.completedResults ?? 0,
-        presentedAtMs: window.__donnerWorkerStats?.presentedAtMs ?? null,
-        renderedFrames: window.__donnerMainLoopRenderedFrames ?? 0,
-        hostFrames: window.__donnerHostFrameTiming?.frames ?? null,
-        hostPresented: window.__donnerHostFrameTiming?.lastSurfacePresented === true,
-        frameId: window.__donnerOverlayStats?.frameId ?? 0,
-        captureId: window.__donnerOverlayStats?.captureId ?? 0,
-        completedFrameId: window.__donnerPresentationQueueStats?.frameId ?? 0,
-        completedCaptureId: window.__donnerPresentationQueueStats?.captureId ?? 0,
-        completedInputRepresented: window.__donnerPresentationQueueStats?.inputRepresented === true,
+test(
+  "production Geode wasm presents visible editor pixels after held canvas GPU completion",
+  async ({ browserName, page }, testInfo) => {
+    test.skip(browserName !== "chromium" || kBackend !== "geode", "controlled browser GPU gate");
+    test.skip(
+      kHostedMacosQuarantine,
+      "Quarantined in the hosted macOS CI job: the GPU device request can miss its window (#1691)",
+    );
+    const fatalMessages = await openEditor(page, { postInitializationDwellMs: 0 });
+    expect(await installSurfaceFrameProbe(page)).toBeGreaterThan(0);
+    const applicationOwner = await findProbedCanvasApplicationWorker(page);
+    expect(applicationOwner, "the canvas owner must have the completion probe installed").not
+      .toBeNull();
+    const hold = await holdCanvasCompletionForTest(page, [applicationOwner!]);
+    let requiredOwner: Worker | null = null;
+    let releaseSucceeded = false;
+    const captureErrors: unknown[] = [];
+    try {
+      const canvas = page.locator("canvas#canvas");
+      const bounds = await canvas.boundingBox();
+      expect(bounds).not.toBeNull();
+      if (bounds === null) throw new Error("the canvas bounds are unavailable");
+      const before = await page.evaluate(() => ({
+        results: window.__donnerWorkerStats?.completedResults ?? 0,
+        frames: window.__donnerMainLoopRenderedFrames ?? 0,
       }));
-    await expect.poll(
-      async () => hasPresentedBasicShapesHostFrame(await readState(), before.results),
-      { timeout: scaledMs(5_000) },
-    ).toBe(true);
-    const readyState = await readState();
-    expect(readyState.renderedFrames).toBeGreaterThan(before.frames);
-    await expect.poll(hold.observedCalls).toBeGreaterThan(0);
+      await page.mouse.click(bounds.x + bounds.width * 0.76, bounds.y + 282);
+      const readState = () =>
+        page.evaluate(() => ({
+          sampleId: window.__donnerActiveSampleStats?.sampleId ?? null,
+          completedResults: window.__donnerWorkerStats?.completedResults ?? 0,
+          presentedAtMs: window.__donnerWorkerStats?.presentedAtMs ?? null,
+          renderedFrames: window.__donnerMainLoopRenderedFrames ?? 0,
+          hostFrames: window.__donnerHostFrameTiming?.frames ?? null,
+          hostPresented: window.__donnerHostFrameTiming?.lastSurfacePresented === true,
+          frameId: window.__donnerOverlayStats?.frameId ?? 0,
+          captureId: window.__donnerOverlayStats?.captureId ?? 0,
+          completedFrameId: window.__donnerPresentationQueueStats?.frameId ?? 0,
+          completedCaptureId: window.__donnerPresentationQueueStats?.captureId ?? 0,
+          completedInputRepresented:
+            window.__donnerPresentationQueueStats?.inputRepresented === true,
+        }));
+      await expect.poll(
+        async () => hasPresentedBasicShapesHostFrame(await readState(), before.results),
+        { timeout: scaledMs(5_000) },
+      ).toBe(true);
+      const readyState = await readState();
+      expect(readyState.renderedFrames).toBeGreaterThan(before.frames);
+      await expect.poll(hold.observedCalls).toBeGreaterThan(0);
 
-    let screenshots = 0;
-    let settled = false;
-    const gatedCapture = captureReadyBasicShapesFrame(
-      page,
-      readyState,
-      before.results,
-      performance.now() + scaledMs(5_000),
-      (remainingMs) => {
-        ++screenshots;
-        return captureEditorPage(page, remainingMs);
-      },
-      (owner) => {
-        requiredOwner = owner;
-      },
-    ).finally(() => {
-      settled = true;
-    });
-    // Wait until this exact gate is entered, or a bypass starts the capture.
-    // A page round trip alone can finish before worker-owner discovery.
-    await expect.poll(async () => screenshots > 0 || (await hold.enteredWaits()) > 0, {
-      timeout: scaledMs(5_000),
-    }).toBe(true);
-    expect(screenshots).toBe(0);
-    expect(settled).toBe(false);
-    expect(requiredOwner).not.toBeNull();
-    if (requiredOwner === null) throw new Error("the held canvas owner was not identified");
-    await hold.release(requiredOwner);
-    releaseSucceeded = true;
-    const capture = await gatedCapture;
-    expect(capture).not.toBeNull();
-    if (capture === null) throw new Error("the held canvas capture is unavailable");
-    const scoredFramePath = testInfo.outputPath("held-canvas-scored-frame.png");
-    await writeFile(scoredFramePath, capture.png);
-    await testInfo.attach("held-canvas-scored-frame", {
-      path: scoredFramePath,
-      contentType: "image/png",
-    });
-    expect(capture.usable).toBe(true);
-    expect(screenshots).toBe(1);
-    const viewport = page.viewportSize();
-    expect(viewport).not.toBeNull();
-    if (viewport !== null) {
+      let screenshots = 0;
+      let settled = false;
+      const gatedCapture = captureReadyBasicShapesFrame(
+        page,
+        readyState,
+        before.results,
+        performance.now() + scaledMs(5_000),
+        (remainingMs) => {
+          ++screenshots;
+          return captureEditorPage(page, remainingMs);
+        },
+        (owner) => {
+          requiredOwner = owner;
+        },
+      ).finally(() => {
+        settled = true;
+      });
+      // Wait until this exact gate is entered, or a bypass starts the capture.
+      // A page round trip alone can finish before worker-owner discovery.
+      await expect.poll(async () => screenshots > 0 || (await hold.enteredWaits()) > 0, {
+        timeout: scaledMs(5_000),
+      }).toBe(true);
+      expect(screenshots).toBe(0);
+      expect(settled).toBe(false);
+      expect(requiredOwner).not.toBeNull();
+      if (requiredOwner === null) throw new Error("the held canvas owner was not identified");
+      await hold.release(requiredOwner);
+      releaseSucceeded = true;
+      const capture = await gatedCapture;
+      expect(capture).not.toBeNull();
+      if (capture === null) throw new Error("the held canvas capture is unavailable");
+      const scoredFramePath = testInfo.outputPath("held-canvas-scored-frame.png");
+      await writeFile(scoredFramePath, capture.png);
+      await testInfo.attach("held-canvas-scored-frame", {
+        path: scoredFramePath,
+        contentType: "image/png",
+      });
+      expect(capture.usable).toBe(true);
+      expect(screenshots).toBe(1);
+      const viewport = page.viewportSize();
+      expect(viewport).not.toBeNull();
+      if (viewport !== null) {
+        expect(
+          readEditorPixelBoundsFromPng(capture.png, "basic-blue", viewport, {
+            minX: 0,
+            minY: 0,
+            maxX: viewport.width,
+            maxY: viewport.height,
+          })?.pixels ?? 0,
+        ).toBeGreaterThan(500);
+      }
+      let staleCaptures = 0;
+      const staleCapture = async () => {
+        ++staleCaptures;
+      };
       expect(
-        readEditorPixelBoundsFromPng(capture.png, "basic-blue", viewport, {
-          minX: 0,
-          minY: 0,
-          maxX: viewport.width,
-          maxY: viewport.height,
-        })?.pixels ?? 0,
-      ).toBeGreaterThan(500);
-    }
-    let staleCaptures = 0;
-    const staleCapture = async () => {
-      ++staleCaptures;
-    };
-    expect(
-      await captureReadyBasicShapesFrame(
-        page,
-        { ...readyState, hostPresented: false, completedFrameId: 0 },
-        before.results,
-        performance.now() + 100,
-        staleCapture,
-      ),
-    ).toBeNull();
-    expect(
-      await captureReadyBasicShapesFrame(
-        page,
-        { ...readyState, hostFrames: readyState.renderedFrames - 1 },
-        before.results,
-        performance.now() + 100,
-        staleCapture,
-      ),
-    ).toBeNull();
-    expect(staleCaptures).toBe(0);
-  } catch (error) {
-    captureErrors.push(error);
-  } finally {
-    if (!releaseSucceeded && requiredOwner !== null) {
-      try {
-        await hold.release(requiredOwner);
-      } catch (cleanupError) {
-        captureErrors.push(cleanupError);
+        await captureReadyBasicShapesFrame(
+          page,
+          { ...readyState, hostPresented: false, completedFrameId: 0 },
+          before.results,
+          performance.now() + 100,
+          staleCapture,
+        ),
+      ).toBeNull();
+      expect(
+        await captureReadyBasicShapesFrame(
+          page,
+          { ...readyState, hostFrames: readyState.renderedFrames - 1 },
+          before.results,
+          performance.now() + 100,
+          staleCapture,
+        ),
+      ).toBeNull();
+      expect(staleCaptures).toBe(0);
+    } catch (error) {
+      captureErrors.push(error);
+    } finally {
+      if (!releaseSucceeded && requiredOwner !== null) {
+        try {
+          await hold.release(requiredOwner);
+        } catch (cleanupError) {
+          captureErrors.push(cleanupError);
+        }
       }
     }
-  }
-  if (captureErrors.length === 1) throw captureErrors[0];
-  if (captureErrors.length > 1) {
-    throw new AggregateError(captureErrors, "capture and hold cleanup failed");
-  }
-  // A parked secondary worker must not turn a successful owner release into
-  // a failure, while an unresponsive required owner must still fail closed.
-  let ownerEvaluations = 0;
-  let parkedEvaluations = 0;
-  const syntheticOwner = {
-    evaluate: async () => {
-      ++ownerEvaluations;
-      return true;
-    },
-  } as unknown as Worker;
-  const parkedSecondary = {
-    evaluate: async () => {
-      ++parkedEvaluations;
-      return parkedEvaluations === 1 ? true : new Promise<never>(() => {});
-    },
-  } as unknown as Worker;
-  const syntheticHold = await holdCanvasCompletionForTest(page, [
-    syntheticOwner,
-    parkedSecondary,
-  ]);
-  await syntheticHold.release(syntheticOwner);
-  await syntheticHold.release(syntheticOwner);
-  expect(ownerEvaluations).toBe(3);
-  expect(parkedEvaluations).toBe(1);
-  let requiredEvaluations = 0;
-  const unavailableOwner = {
-    evaluate: async () => {
-      ++requiredEvaluations;
-      if (requiredEvaluations === 1) return true;
-      throw new Error("required owner unavailable");
-    },
-  } as unknown as Worker;
-  const requiredHold = await holdCanvasCompletionForTest(page, [unavailableOwner]);
-  await expect(requiredHold.release(unavailableOwner))
-    .rejects.toThrow("could not release the required canvas completion owner");
-  let forbiddenCaptures = 0;
-  const noCapture = async () => {
-    ++forbiddenCaptures;
-  };
-  await expect(captureAfterCanvasGpuCompletion(
-    { evaluate: () => Promise.reject(new Error("rejected completion")) } as unknown as Worker,
-    performance.now() + 100,
-    noCapture,
-  )).rejects.toThrow("rejected completion");
-  await expect(captureAfterCanvasGpuCompletion(
-    { evaluate: () => new Promise<never>(() => {}) } as unknown as Worker,
-    performance.now() + 10,
-    noCapture,
-  )).rejects.toThrow("exceeded the blue-pixel deadline");
-  expect(forbiddenCaptures).toBe(0);
-  let boundedShots = 0;
-  let forwardedTimeout: number | undefined;
-  const timedOutPage = {
-    screenshot: async (options?: { timeout?: number }) => {
-      ++boundedShots;
-      forwardedTimeout = options?.timeout;
-      throw new errors.TimeoutError("Timeout exceeded while taking page screenshot");
-    },
-  } as unknown as Page;
-  const boundedCapture = await captureEditorPage(timedOutPage, 7);
-  expect(boundedCapture.usable).toBe(false);
-  expect(boundedShots).toBe(1);
-  expect(forwardedTimeout).toBe(7);
-  let lateCaptures = 0;
-  await expect(captureAfterCanvasGpuCompletion(
-    { evaluate: () => Promise.resolve(1) } as unknown as Worker,
-    performance.now() + 200,
-    async () => {
-      ++lateCaptures;
-      await new Promise<void>((resolve) => setTimeout(resolve, 250));
-      return "late";
-    },
-  )).rejects.toThrow("exceeded the blue-pixel deadline");
-  expect(lateCaptures).toBe(1);
-  expect(fatalMessages).toEqual([]);
-});
+    if (captureErrors.length === 1) throw captureErrors[0];
+    if (captureErrors.length > 1) {
+      throw new AggregateError(captureErrors, "capture and hold cleanup failed");
+    }
+    // A parked secondary worker must not turn a successful owner release into
+    // a failure, while an unresponsive required owner must still fail closed.
+    let ownerEvaluations = 0;
+    let parkedEvaluations = 0;
+    const syntheticOwner = {
+      evaluate: async () => {
+        ++ownerEvaluations;
+        return true;
+      },
+    } as unknown as Worker;
+    const parkedSecondary = {
+      evaluate: async () => {
+        ++parkedEvaluations;
+        return parkedEvaluations === 1 ? true : new Promise<never>(() => {});
+      },
+    } as unknown as Worker;
+    const syntheticHold = await holdCanvasCompletionForTest(page, [
+      syntheticOwner,
+      parkedSecondary,
+    ]);
+    await syntheticHold.release(syntheticOwner);
+    await syntheticHold.release(syntheticOwner);
+    expect(ownerEvaluations).toBe(3);
+    expect(parkedEvaluations).toBe(1);
+    let requiredEvaluations = 0;
+    const unavailableOwner = {
+      evaluate: async () => {
+        ++requiredEvaluations;
+        if (requiredEvaluations === 1) return true;
+        throw new Error("required owner unavailable");
+      },
+    } as unknown as Worker;
+    const requiredHold = await holdCanvasCompletionForTest(page, [unavailableOwner]);
+    await expect(requiredHold.release(unavailableOwner))
+      .rejects.toThrow("could not release the required canvas completion owner");
+    let forbiddenCaptures = 0;
+    const noCapture = async () => {
+      ++forbiddenCaptures;
+    };
+    await expect(captureAfterCanvasGpuCompletion(
+      { evaluate: () => Promise.reject(new Error("rejected completion")) } as unknown as Worker,
+      performance.now() + 100,
+      noCapture,
+    )).rejects.toThrow("rejected completion");
+    await expect(captureAfterCanvasGpuCompletion(
+      { evaluate: () => new Promise<never>(() => {}) } as unknown as Worker,
+      performance.now() + 10,
+      noCapture,
+    )).rejects.toThrow("exceeded the blue-pixel deadline");
+    expect(forbiddenCaptures).toBe(0);
+    let boundedShots = 0;
+    let forwardedTimeout: number | undefined;
+    const timedOutPage = {
+      screenshot: async (options?: { timeout?: number }) => {
+        ++boundedShots;
+        forwardedTimeout = options?.timeout;
+        throw new errors.TimeoutError("Timeout exceeded while taking page screenshot");
+      },
+    } as unknown as Page;
+    const boundedCapture = await captureEditorPage(timedOutPage, 7);
+    expect(boundedCapture.usable).toBe(false);
+    expect(boundedShots).toBe(1);
+    expect(forwardedTimeout).toBe(7);
+    let lateCaptures = 0;
+    await expect(captureAfterCanvasGpuCompletion(
+      { evaluate: () => Promise.resolve(1) } as unknown as Worker,
+      performance.now() + 200,
+      async () => {
+        ++lateCaptures;
+        await new Promise<void>((resolve) => setTimeout(resolve, 250));
+        return "late";
+      },
+    )).rejects.toThrow("exceeded the blue-pixel deadline");
+    expect(lateCaptures).toBe(1);
+    expect(fatalMessages).toEqual([]);
+  },
+);
 
 test("Firefox keeps Basic Shapes resize pixels and outline synchronized", async ({ browserName, page }) => {
   test.skip(browserName !== "firefox" || kBackend !== "geode", "Firefox Geode regression");
@@ -2292,14 +2306,23 @@ test("Geode WASM selects through the overlay with one prewarm render and no recu
     const artboard = {
       minX: Math.max(viewport.documentX, viewport.paneX),
       minY: Math.max(viewport.documentY, viewport.paneY),
-      maxX: Math.min(viewport.documentX + viewport.documentWidth, viewport.paneX + viewport.paneWidth),
-      maxY: Math.min(viewport.documentY + viewport.documentHeight, viewport.paneY + viewport.paneHeight),
+      maxX: Math.min(
+        viewport.documentX + viewport.documentWidth,
+        viewport.paneX + viewport.paneWidth,
+      ),
+      maxY: Math.min(
+        viewport.documentY + viewport.documentHeight,
+        viewport.paneY + viewport.paneHeight,
+      ),
     };
     const blue = readEditorPixelBoundsFromPng(image, "basic-blue", clip, artboard);
     expect(blue?.pixels ?? 0).toBeGreaterThan(500);
     if (blue === null) throw new Error("missing drag artwork pixels");
     const teal = readEditorPixelBoundsFromPng(image, "selection-teal", clip, {
-      minX: blue.minX - 16, minY: blue.minY - 16, maxX: blue.maxX + 16, maxY: blue.maxY + 16,
+      minX: blue.minX - 16,
+      minY: blue.minY - 16,
+      maxX: blue.maxX + 16,
+      maxY: blue.maxY + 16,
     });
     expect(teal?.pixels ?? 0).toBeGreaterThan(50);
     if (teal === null) throw new Error("missing selection pixels");
@@ -2399,10 +2422,16 @@ test("Geode WASM selects through the overlay with one prewarm render and no recu
   const settledPixels = await captureDragPixels("retained-drag-settled");
   const centerX = (pixels: PixelBounds) => (pixels.minX + pixels.maxX) / 2;
   const centerY = (pixels: PixelBounds) => (pixels.minY + pixels.maxY) / 2;
-  expect(Math.abs(centerX(settledPixels.blue) - centerX(startPixels.blue) - 32)).toBeLessThanOrEqual(3);
-  expect(Math.abs(centerY(settledPixels.blue) - centerY(startPixels.blue) - 20)).toBeLessThanOrEqual(3);
-  expect(Math.abs(centerX(settledPixels.blue) - centerX(settledPixels.teal))).toBeLessThanOrEqual(3);
-  expect(Math.abs(centerY(settledPixels.blue) - centerY(settledPixels.teal))).toBeLessThanOrEqual(3);
+  expect(Math.abs(centerX(settledPixels.blue) - centerX(startPixels.blue) - 32))
+    .toBeLessThanOrEqual(3);
+  expect(Math.abs(centerY(settledPixels.blue) - centerY(startPixels.blue) - 20))
+    .toBeLessThanOrEqual(3);
+  expect(Math.abs(centerX(settledPixels.blue) - centerX(settledPixels.teal))).toBeLessThanOrEqual(
+    3,
+  );
+  expect(Math.abs(centerY(settledPixels.blue) - centerY(settledPixels.teal))).toBeLessThanOrEqual(
+    3,
+  );
   const workerStats = await page.evaluate(() => window.__donnerWorkerStats);
   expect(workerStats).toBeDefined();
   console.log(`wasm-worker-stats=${JSON.stringify(workerStats)}`);
@@ -2483,8 +2512,10 @@ test("WGPU diagnostic completion distinguishes failure from old successful pixel
   await page.setContent("<canvas></canvas>");
   await page.evaluate(() => {
     Object.assign(window, {
-      __donnerWgpuReadbackRequested: 2, __donnerWgpuReadbackCompleted: 2,
-      __donnerWgpuReadbackStats: { request: 1 }, __donnerWgpuReadbackLastFailedRequest: 2,
+      __donnerWgpuReadbackRequested: 2,
+      __donnerWgpuReadbackCompleted: 2,
+      __donnerWgpuReadbackStats: { request: 1 },
+      __donnerWgpuReadbackLastFailedRequest: 2,
       __donnerWgpuReadbackCaptureFailures: 1,
     });
   });
@@ -2494,7 +2525,8 @@ test("WGPU diagnostic completion distinguishes failure from old successful pixel
   expect(hasSuccessfulDiagnosticRequest(failed, 2)).toBe(false);
   await page.evaluate(() => {
     Object.assign(window, {
-      __donnerWgpuReadbackRequested: 3, __donnerWgpuReadbackCompleted: 3,
+      __donnerWgpuReadbackRequested: 3,
+      __donnerWgpuReadbackCompleted: 3,
       __donnerWgpuReadbackStats: { request: 3 },
     });
   });

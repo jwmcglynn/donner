@@ -441,6 +441,19 @@ export async function findCanvasOwnerWorker(page: Page): Promise<Worker | null> 
   return owners.length === 1 ? owners[0] : null;
 }
 
+/** Find the probe-installed application canvas owner before its next acquisition. */
+export async function findProbedCanvasApplicationWorker(page: Page): Promise<Worker | null> {
+  const workers = probedWorkers.get(page) ?? [];
+  const owners = await evaluateInWorkers(workers, () => {
+    const scope = globalThis as ProbeGlobal & { __donnerApplicationGpuSurfaceWorker?: boolean };
+    return Boolean(
+      scope.__donnerApplicationGpuSurfaceWorker && scope.__donnerSurfaceFrameProbe?.installed,
+    );
+  });
+  const matches = workers.filter((_, index) => owners[index] === true);
+  return matches.length === 1 ? matches[0] : null;
+}
+
 /**
  * Prove the probe reports the ordering it watches for, in the engine under
  * test: two writes inside the acquiring task (one from its microtask) count as
@@ -460,14 +473,14 @@ export async function selfCheckSurfaceFrameProbe(
 // browser regression to prove CPU-published sample state cannot bypass the
 // screenshot's GPU gate. No queue work is added or delayed on ordinary paths.
 export async function holdCanvasCompletionForTest(
-  page: Page,
-  workersForTest?: Worker[],
+  _page: Page,
+  workersForTest: Worker[],
 ): Promise<{
   observedCalls: () => Promise<number>;
   enteredWaits: () => Promise<number>;
   release: (owner: Worker) => Promise<void>;
 }> {
-  const workers = workersForTest ?? probedWorkers.get(page) ?? [];
+  const workers = workersForTest;
   const armed = await evaluateInWorkers(workers, () => {
     const scope = globalThis as ProbeGlobal;
     let release!: () => void;

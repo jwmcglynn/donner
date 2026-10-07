@@ -4,6 +4,7 @@
 
 #include <atomic>
 #include <climits>
+#include <cstdint>
 #include <cstdlib>
 #ifdef __EMSCRIPTEN_PTHREADS__
 #include <emscripten/proxying.h>
@@ -15,6 +16,8 @@ namespace donner::gpu::browser {
 namespace {
 #ifdef __EMSCRIPTEN_PTHREADS__
 std::atomic<pthread_t> gOwner{};
+std::atomic<uint32_t> gOwnerWaitPumps{0};
+thread_local bool gProcessingOwnerWait = false;
 
 struct OwnerRequest {
   void (*operation)(void*);
@@ -39,7 +42,19 @@ void RegisterBrowserGpuOwner() {
       !pthread_equal(expected, pthread_self())) {
     std::abort();
   }
-  EM_ASM({ globalThis['__donnerGpuOwner'] = true; });
+  // Allocate the owner's queue before any client can hold an application lock while dispatching.
+  if (!emscripten_proxy_async(
+          emscripten_proxy_get_system_queue(), pthread_self(), [](void*) {}, nullptr)) {
+    std::abort();
+  }
+  emscripten_proxy_execute_queue(emscripten_proxy_get_system_queue());
+  // clang-format off
+  EM_ASM({
+    globalThis['__donnerGpuOwner'] = true;
+    const index = Number($0) / 4;
+    globalThis['__donnerReadGpuOwnerWaitPumps'] = () => Atomics.load(HEAPU32, index);
+  }, &gOwnerWaitPumps);
+  // clang-format on
 #endif
 }
 
@@ -48,7 +63,7 @@ void RunOnBrowserGpuOwner(void (*operation)(void*), void* context) {
   const pthread_t owner = gOwner.load(std::memory_order_acquire);
   if (owner && !pthread_equal(owner, pthread_self())) {
     OwnerRequest request{operation, context};
-    // Runtime waits service this queue; the callback may only call nonblocking JS primitives.
+    // The editor wait adapter services this queue; callbacks only call nonblocking JS primitives.
     if (!emscripten_proxy_async(emscripten_proxy_get_system_queue(), owner, &Invoke, &request)) {
       std::abort();
     }
@@ -66,6 +81,27 @@ void RunOnBrowserGpuOwner(void (*operation)(void*), void* context) {
   }
 #endif
   operation(context);
+}
+
+bool IsBrowserGpuOwnerThread() {
+#ifdef __EMSCRIPTEN_PTHREADS__
+  const pthread_t owner = gOwner.load(std::memory_order_acquire);
+  return owner && pthread_equal(owner, pthread_self());
+#else
+  return false;
+#endif
+}
+
+void ProcessBrowserGpuOwnerWait() {
+#ifdef __EMSCRIPTEN_PTHREADS__
+  if (gProcessingOwnerWait || !IsBrowserGpuOwnerThread()) {
+    return;
+  }
+  gProcessingOwnerWait = true;
+  gOwnerWaitPumps.fetch_add(1, std::memory_order_relaxed);
+  emscripten_proxy_execute_queue(emscripten_proxy_get_system_queue());
+  gProcessingOwnerWait = false;
+#endif
 }
 
 bool UsesBrowserGpuOwner() {

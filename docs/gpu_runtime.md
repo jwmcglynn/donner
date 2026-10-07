@@ -491,8 +491,12 @@ runtime devices share that owner's `GPUDevice` and queue. Standalone modules wit
 owner keep their device on the calling worker. The first logical device requests the browser
 device; later clients reuse it, and the last client releases it.
 
-`BrowserGpuOwner` dispatches synchronous JavaScript primitives through the Emscripten system queue,
-which also runs during runtime futex waits. Callbacks must not allocate or lock C++ state, yield,
+`BrowserGpuOwner` dispatches synchronous JavaScript primitives through the Emscripten system queue.
+The editor's `BrowserGpuOwnerWait` adapter drains that queue between one-millisecond futex wait
+slices on the registered app owner. Emscripten's automatic queue processing only covers the main
+runtime thread; `PROXY_TO_PTHREAD` does not give the app pthread that role. Other threads keep the
+original wait implementation. The adapter preserves the caller's total deadline and propagates
+non-timeout outcomes. The queue is initialized before raster clients start. Callbacks must not allocate or lock C++ state, yield,
 wait for another caller, or wait for a Promise. Prepared command batches contain at most 1024
 operations; the first refusal stops replay before submission. A ten-second dispatch deadline
 terminates the module instead of returning borrowed memory to a queued callback. Descriptor

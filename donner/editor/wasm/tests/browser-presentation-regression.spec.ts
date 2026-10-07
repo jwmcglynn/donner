@@ -10,13 +10,6 @@ import {
 } from "./basic-shapes-capture-gate";
 import { installBrowserStallDiagnostics } from "./browser-stall-diagnostics";
 import {
-  armFailureCanvasEvidence,
-  captureFailureCanvasEvidence,
-  type EvidencePage,
-  installFailureCanvasEvidence,
-  kFailureEvidenceBudgetMs,
-} from "./failure-canvas-evidence";
-import {
   captureEditorPage,
   captureSplashPresentationFrame,
   type CssRegion,
@@ -37,6 +30,13 @@ import {
   type SplashPresentationFrame,
   type SplashToneCensus,
 } from "./canvas-color-stats";
+import {
+  armFailureCanvasEvidence,
+  captureFailureCanvasEvidence,
+  type EvidencePage,
+  installFailureCanvasEvidence,
+  kFailureEvidenceBudgetMs,
+} from "./failure-canvas-evidence";
 import { waitForAppliedPointer } from "./gesture-streams";
 import { echoGpuSessionConsole } from "./gpu-session-console";
 import { compareOverlayBitmap, type OverlayBitmapComparison } from "./overlay-bitmap-compare";
@@ -205,6 +205,8 @@ declare global {
       frameId: number;
       captureId: number;
       inputRepresented: boolean;
+      viewportZoom: number;
+      deviceLost?: boolean;
       pointerX?: number;
       pointerY?: number;
       mouseDown?: boolean;
@@ -4226,59 +4228,46 @@ async function pinchZoom(
   }, { ...at, deltaY, count });
 }
 
-// One presented picture, named by the worker result it drew.
-//
-// A result is published with no `presentedAtMs` and the frame that consumes it
-// stamps the field exactly once, so the pair says both "which raster" and
-// "has a frame drawn it". Both halves come out of one round trip, so a gate
-// cannot pair a counter from one frame with a stamp from another.
-interface PresentedGeneration {
-  completedResults: number;
-  presentedAtMs: number | undefined;
+type CompletedZoomState = {
+  queue: Window["__donnerPresentationQueueStats"];
+  viewport: Window["__donnerViewportStats"];
+};
+
+function completedFrameMatchesCamera(state: CompletedZoomState): boolean {
+  if (!state.queue || !state.viewport) return false;
+  return state.queue.captureId > 0 && state.queue.inputRepresented
+    && state.queue.deviceLost !== true
+    && Math.abs(state.queue.viewportZoom - state.viewport.zoom) < 0.001;
 }
 
-async function readPresentedGeneration(page: Page): Promise<PresentedGeneration> {
-  return page.evaluate(() => ({
-    completedResults: window.__donnerWorkerStats?.completedResults || 0,
-    presentedAtMs: window.__donnerWorkerStats?.presentedAtMs,
-  }));
-}
-
-/**
- * Send one pinch notch and return once a strictly later worker result has been
- * consumed by a presented frame.
- *
- * A constant delay after a notch is not an observable of that notch. The worker
- * can take longer than any constant, and until the frame that draws its result
- * runs, the pane still shows the pre-gesture picture - which a coverage probe
- * scores as covered, because it was. The loop then decides on a frame the
- * gesture never touched, and the next notch supersedes the one that would have
- * shown the defect: with the notch's presentation held past a 200 ms wait, the
- * probe scored zero on all six storm notches while the frame each notch
- * actually presented carried 36375 uncovered backdrop pixels.
- *
- * That pair is the whole guarantee, and it is not "the notch's pixels are up":
- * `pollRenderResult` advances the counter before its non-presenting early
- * returns, so the callers converge through `settleUntilCovered` rather than
- * trust one capture. The wait is bounded and reports the worker's own health.
- */
+/** A completed UI frame can redraw retained GPU tiles without a new worker raster. */
 async function pinchZoomAndAwaitPresentation(
   page: Page,
   at: { x: number; y: number },
   deltaY: number,
   context: string,
 ): Promise<void> {
-  const before = await readPresentedGeneration(page);
+  const before = await page.evaluate(() => ({
+    serial: window.__donnerPresentationQueueStats?.completedSerial ?? 0,
+    frameId: window.__donnerPresentationQueueStats?.frameId ?? 0,
+    zoom: window.__donnerViewportStats?.zoom,
+  }));
   await pinchZoom(page, at, deltaY);
-  await expectWorkerResultsToReach(
-    page,
-    (completedResults, health) =>
-      completedResults > before.completedResults && health.presentedAtMs !== undefined,
-    {
-      message: `${context}: the zoom notch never presented a newer document raster`,
-      timeout: scaledMs(5_000),
-    },
-  );
+  await expect.poll(async () => {
+    const current = await page.evaluate(() => ({
+      queue: window.__donnerPresentationQueueStats,
+      viewport: window.__donnerViewportStats,
+    }));
+    const reached = completedFrameMatchesCamera(current)
+      && current.queue!.completedSerial > before.serial && current.queue!.frameId > before.frameId
+      && current.viewport!.zoom !== before.zoom;
+    return { reached, before, ...current, worker: await readWorkerHealth(page) };
+  }, {
+    message: `${context}: the zoom notch must complete a new frame at its camera`,
+    timeout: scaledMs(5_000),
+    intervals: [16, 25, 50, 100],
+  })
+    .toEqual(expect.objectContaining({ reached: true }));
   await waitForBrowserComposite(page);
 }
 
@@ -4600,6 +4589,21 @@ test("WebGPU toolbar eyedropper gives new SVG text the sampled Donner fill", asy
     selectedText: "SVG",
     selectedStyle: expect.stringContaining(expectedFill),
   }));
+  const waitPumps = await Promise.any(
+    page.workers().map(async (worker) => {
+      const count = await worker.evaluate(() => {
+        const scope = globalThis as typeof globalThis & {
+          __donnerReadGpuOwnerWaitPumps?: () => number;
+        };
+        return scope.__donnerReadGpuOwnerWaitPumps?.() ?? null;
+      });
+      if (count === null) throw new Error("not the registered GPU owner");
+      return count;
+    }),
+  );
+  expect(waitPumps, "the canvas owner must service GPU requests inside libc waits").toBeGreaterThan(
+    0,
+  );
   const beforeEscapeFrame = await page.evaluate(() => window.__donnerMainLoopRenderedFrames ?? 0);
   await page.keyboard.down("Escape");
   await expectBrowserKeyFrame(page, beforeEscapeFrame, "Escape must wake a browser editor frame");
