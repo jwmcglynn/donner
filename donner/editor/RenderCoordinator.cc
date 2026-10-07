@@ -64,7 +64,15 @@ void PublishWorkerTimingStats(
     const RenderResult& result, const EditorApp& app,
     const svg::compositor::CompositorController::RenderFrameStats& compositorStats) {
   const auto& timing = result.workerTiming;
-  constexpr std::size_t kValueCount = 38;
+  constexpr std::size_t kValueCount = 40;
+  int bitmapPayloadTiles = 0;
+  int texturePayloadTiles = 0;
+  if (result.compositedPreview) {
+    for (const auto& tile : result.compositedPreview->tiles) {
+      bitmapPayloadTiles += !tile.bitmap.empty();
+      texturePayloadTiles += tile.textureSnapshot != nullptr;
+    }
+  }
   const double values[kValueCount] = {
       result.workerMs,
       timing.queueWaitMs,
@@ -103,7 +111,9 @@ void PublishWorkerTimingStats(
       static_cast<double>(result.presentationRepairReason),
       static_cast<double>(timing.compositorReadbackCount),
       static_cast<double>(timing.tileHandoffReadbackCount),
-      static_cast<double>(timing.finalSnapshotReadbackCount)};
+      static_cast<double>(timing.finalSnapshotReadbackCount),
+      static_cast<double>(bitmapPayloadTiles),
+      static_cast<double>(texturePayloadTiles)};
   double* buffer = static_cast<double*>(std::malloc(sizeof(values)));
   if (buffer == nullptr) {
     return;
@@ -172,6 +182,12 @@ void PublishWorkerTimingStats(
         stats['compositorReadbackCount'] = heap[b + 35];
         stats['tileHandoffReadbackCount'] = heap[b + 36];
         stats['finalSnapshotReadbackCount'] = heap[b + 37];
+        stats['bitmapPayloadTileCount'] = heap[b + 38];
+        stats['texturePayloadTileCount'] = heap[b + 39];
+        stats['bitmapPayloadTileTotal'] =
+            (previous ? previous['bitmapPayloadTileTotal'] || 0 : 0) + stats['bitmapPayloadTileCount'];
+        stats['texturePayloadTileTotal'] =
+            (previous ? previous['texturePayloadTileTotal'] || 0 : 0) + stats['texturePayloadTileCount'];
         stats['compositorReadbackTotal'] =
             (previous ? previous['compositorReadbackTotal'] || 0 : 0) +
             stats['compositorReadbackCount'];

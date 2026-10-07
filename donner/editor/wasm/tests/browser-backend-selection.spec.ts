@@ -32,6 +32,8 @@ type WorkerStats = {
   compositorReadbackTotal?: number;
   tileHandoffReadbackTotal?: number;
   finalSnapshotReadbackTotal?: number;
+  bitmapPayloadTileTotal?: number;
+  texturePayloadTileTotal?: number;
 };
 type SelectionWindow = Window & {
   __donnerFirstFramePresented?: boolean;
@@ -137,6 +139,19 @@ test("ordinary document presentation performs no worker GPU readback", async ({ 
       return worker;
     }),
   );
+  await gpuOwner.evaluate(() => {
+    const state = globalThis as typeof globalThis & {
+      GPUQueue: { prototype: { writeTexture: (...args: unknown[]) => unknown } };
+      __donnerTestCpuWrites?: unknown[];
+    };
+    const writes: unknown[] = [];
+    state.__donnerTestCpuWrites = writes;
+    const original = state.GPUQueue.prototype.writeTexture;
+    state.GPUQueue.prototype.writeTexture = function(...args: unknown[]) {
+      if (writes.length < 32) writes.push({ layout: args[2], extent: args[3] });
+      return original.apply(this, args);
+    };
+  });
   const rawBefore = await gpuOwner.evaluate(() => {
     const state = globalThis as typeof globalThis & {
       __donnerReadGpuObjectStats: () => {
@@ -179,9 +194,14 @@ test("ordinary document presentation performs no worker GPU readback", async ({ 
     return state.__donnerReadGpuObjectStats();
   });
   expect(rawAfter.readbackCopies).toBe(rawBefore.readbackCopies);
-  expect(rawAfter.cpuTextureWrites).toBe(rawBefore.cpuTextureWrites);
+  const cpuWrites = await gpuOwner.evaluate(() =>
+    (globalThis as typeof globalThis & { __donnerTestCpuWrites?: unknown[] }).__donnerTestCpuWrites
+  );
+  expect(rawAfter.cpuTextureWrites, JSON.stringify(cpuWrites)).toBe(rawBefore.cpuTextureWrites);
   expect(rawAfter.surfacePresents).toBeGreaterThan(rawBefore.surfacePresents);
   expect(after, "the document result did not publish readback accounting").toBeDefined();
+  expect(after!.bitmapPayloadTileTotal).toBe(before?.bitmapPayloadTileTotal ?? 0);
+  expect(after!.texturePayloadTileTotal).toBeGreaterThan(before?.texturePayloadTileTotal ?? 0);
   expect(after!.compositorReadbackTotal).toBeDefined();
   expect(after!.tileHandoffReadbackTotal).toBeDefined();
   expect(after!.finalSnapshotReadbackTotal).toBeDefined();

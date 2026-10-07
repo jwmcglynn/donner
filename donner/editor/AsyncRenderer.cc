@@ -392,7 +392,7 @@ bool CanPresentTilePayload(bool requiresTexturePresentation, const svg::Renderer
   if (shouldCancel && shouldCancel()) {
     return false;
   }
-  return requiresTexturePresentation ? texture != nullptr || bitmap.empty() : texture == nullptr;
+  return requiresTexturePresentation ? bitmap.empty() : texture == nullptr;
 }
 
 bool CaptureFullCanvasTextureSnapshot(
@@ -1013,8 +1013,7 @@ void AsyncRenderer::waitForReplayDocumentAccess(std::unique_lock<std::mutex>& lo
 
 void AsyncRenderer::workerLoop() {
 #if defined(__EMSCRIPTEN__)
-  // Emscripten's WebGPU object table is per-worker. Construct and use the
-  // renderer on this pthread so wgpu handles never cross JS worker boundaries.
+  // C++ renderer state belongs to this worker; browser GPU primitives run on the app owner.
   svg::Renderer workerRenderer;
 #endif
   std::unique_ptr<svg::RendererInterface> sampleThumbnailRenderer;

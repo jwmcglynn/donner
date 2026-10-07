@@ -200,7 +200,7 @@ constexpr int kMaxMessageBytes = 512;
 std::atomic<uint32_t> gNextLogicalDevice{1};
 
 /**
- * The object whose address identifies one browser device of this worker.
+ * The object whose address identifies one browser GPU device across logical clients.
  *
  * The library names a browser device by the handle of the logical device whose request obtained
  * it, which is unique across workers. This turns that number into an address the runtime can
@@ -252,19 +252,11 @@ void DrainThreadShareReleasesProxied(void* /*unused*/) {
 #endif
 
 /**
- * A texture this worker's library holds for the other logical devices over one browser device.
+ * A texture the GPU owner holds for the logical devices over one browser device.
  *
- * Releasing it lets the library go of the texture, which it destroys then if the producer has
- * already released its own identifier. Browser objects belong to the worker that made them, so the
- * release runs only on the thread that made the share: one let go there releases at once, and one
- * let go on another thread posts its release to the owner's queue, which the owner drains the next
- * time it yields to the browser, makes a share call, destroys a bridge or runs the wake-up the
- * post proxied to it. If the owner thread has exited, its queue is closed and the release does
- * nothing; the share then stays with its browser device, which destroys the texture when the last
- * logical device over it is released. The release names the logical
- * device that made the share as well: share numbers are each worker's own while logical-device
- * handles are unique across workers, so a release run in the wrong worker finds no share of that
- * producer there.
+ * With a registered GPU owner, final release dispatches to that owner from any caller. Standalone
+ * modules retain a per-thread release mailbox; their objects cannot be registered on another
+ * worker's device. The shared identity remains alive until every client and share lets go.
  */
 class EmscriptenSharedTexture final : public BrowserSharedTexture {
 public:

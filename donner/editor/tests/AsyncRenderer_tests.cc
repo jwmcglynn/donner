@@ -268,6 +268,13 @@ TEST(AsyncRendererTileTransportTest, GpuReceiverRefusesCpuFallback) {
   EXPECT_TRUE(CanPresentTilePayload(false, bitmap, texture, {}));
 }
 
+TEST(AsyncRendererTileTransportTest, GpuReceiverRefusesRedundantCpuPixels) {
+  auto original = std::make_shared<TileTransportTexture>();
+  const svg::RendererBitmap bitmap = svg::tests::MockRendererInterface::makeDummyBitmap();
+  EXPECT_FALSE(CanPresentTilePayload(true, bitmap, original, {}));
+  EXPECT_EQ(original->captures, 0);
+}
+
 TEST(AsyncRendererTileTransportTest, CancelledCaptureDoesNotReadback) {
   auto original = std::make_shared<TileTransportTexture>();
   std::shared_ptr<const svg::RendererTextureSnapshot> texture = original;

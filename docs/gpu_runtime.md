@@ -62,8 +62,9 @@ flowchart TD
   gets a runtime device of its own, with separate handle tables, submission serials, counters,
   pipelines and retirement, and shares the root's loss condition. It refuses a null or lost owner.
   The editor's UI framebuffer is such a second context; the native editor renders documents
-  through the first. In the browser editor, the raster worker renders documents through a browser
-  device of its own, because a browser device belongs to the worker that obtained it.
+  through the first. In the browser editor, the raster worker keeps its own C++ runtime device
+  and sends validated GPU primitives to the application thread, which owns the shared browser
+  device and canvas.
 - The physical owner declares the root before the runtime device it holds, so the root outlives
   every device built over it. The root is released once, after the last context lets go.
 - `GeodeDevice` is neither copyable nor movable; callers hold it by `std::unique_ptr` or
@@ -74,7 +75,7 @@ flowchart TD
   `RendererGeode(std::shared_ptr<geode::GeodeDevice>)` shares the caller's context, which must
   outlive every frame rendered through it.
 - A `gpu::Device` and everything created from it are used from one thread at a time. A browser
-  device is also pinned to the worker that obtained it (`GeodeDevice::isBoundToCreatingThread()`),
+  runtime device is pinned to its creating caller (`GeodeDevice::isBoundToCreatingThread()`),
   and the headless cache hands such a device back only to that thread.
 - State a document keeps for a context can be destroyed on another thread. Its buffers and bind
   groups go to the context's `GeodeHandleRetirement`, which releases them on the context's own
@@ -150,11 +151,16 @@ section.
   renderer whose target is a borrowed surface frame reads back as an empty bitmap because the
   frame's export is refused.
 
-Explicit captures are CPU consumers by design. Ordinary native composition and presentation keep
-pixels on the GPU. The browser editor currently moves document pixels from its raster worker to
-its UI thread as CPU bitmaps, because direct texture handles do not cross workers;
-[#1720](https://github.com/jwmcglynn/donner/issues/1720) tracks that handoff as an open transport
-defect, not as the intended data path.
+Explicit captures are CPU consumers by design. Ordinary GPU composition and presentation retain
+pixels on the GPU on every platform. Browser raster workers publish resource identities; the
+application thread owns the textures and canvas and uses the desktop compositor to draw tiles
+directly into the acquired backbuffer. No per-tile browser objects, ImageBitmaps or pixel bytes
+cross workers, and presentation adds no intermediate framebuffer copy.
+
+`//donner/editor/wasm/tests:boot_presentation_test` checks actual browser readback calls and
+compositor/handoff/final-capture accounting for an ordinary document. The worker's published
+bitmap/texture payload counts distinguish GPU resources from CPU tiles. CPU-authored images and
+font atlases remain legitimate uploads; bounded screenshot/export captures remain explicit reads.
 
 ### Uploads and mappings {#GpuRuntimeUploads}
 
@@ -242,7 +248,7 @@ Teardown on a lost root depends on the backend:
 | ------------- | ----------------------------- | ----------- | ----------------- | --------------------------------------------------------------------- | ---------------- |
 | Native Metal  | `gpu::metal::MetalDevice`     | macOS       | MSL               | The system default `MTLDevice`; each device has its own command queue | Yes              |
 | Native Vulkan | `gpu::vulkan::VulkanDevice`   | Linux       | SPIR-V            | One instance, logical device and graphics queue (`VulkanSharedRoot`)  | Yes              |
-| Browser       | `gpu::browser::BrowserDevice` | WebAssembly | WGSL              | The worker's one `GPUDevice` and its queue                            | No               |
+| Browser       | `gpu::browser::BrowserDevice` | WebAssembly | WGSL              | The GPU owner's one `GPUDevice` and its queue                         | No               |
 
 Each product links only the shader projection its devices consume; see
 [WGSL shader compilation](wgsl_compiler.md).
@@ -265,7 +271,9 @@ Each product links only the shader projection its devices consume; see
 - **Browser.** `donner/gpu/browser` expresses validated operations to `navigator.gpu` through
   `library_donner_gpu.js`. Browser objects are named by identifiers that are never reused, and both
   sides check each identifier's kind and owner. A browser shows a canvas frame from its own frame
-  loop, so `presentSurface()` is refused and a frame ends with `abandonCurrentTexture()`.
+  loop. `presentSurface()` validates and releases the acquired frame for implicit presentation;
+  it does not copy or submit another frame. `abandonCurrentTexture()` retires a frame identifier
+  without reporting successful presentation.
 - **Test-only devices.** `gpu::RecordingDevice` records commands deterministically and completes
   them at once. The Linux `//donner/svg/renderer/tests:resvg_test_suite_wgpu_reference_linux`
   target renders through a pinned wgpu-native reference, adopted as an external root through
@@ -454,7 +462,7 @@ rest. The rationale and measurements are in the original design's
 
 | `SurfaceStatus` | Meaning                                                                                | Recovery                                                |
 | --------------- | -------------------------------------------------------------------------------------- | ------------------------------------------------------- |
-| `Success`       | The frame is usable.                                                                   | Draw, then present it (native) or abandon it (browser). |
+| `Success`       | The frame is usable.                                                                   | Draw, then present it.                                  |
 | `Outdated`      | The configuration no longer matches the window; a usable frame may still come with it. | Reconfigure to the current extent and acquire again.    |
 | `Timeout`       | No frame became available in time.                                                     | Skip this frame and try again.                          |
 | `Lost`          | The platform object is gone.                                                           | Create a new surface from a fresh native handle.        |
@@ -557,14 +565,10 @@ While running:
 
 - In the native editor, the document and UI contexts share one root, so a loss stops both: the
   window stops drawing frames and keeps showing its last one.
-- In the browser editor, the raster worker's browser device is separate from the UI thread's.
-  When the raster worker's device is lost, its results have nothing to present, so the canvas
-  keeps its last presented document frame, with overlays on that frame's transform. The identical
-  render request is retried after 100 ms, 500 ms and 2 s, then held until something about it
-  changes, and `window.__donnerWorkerStats` reports `deviceLost`, `gpuWaitTimeoutSite` and
-  `gpuWaitTimeoutMs`.
-- When the browser UI thread's device is lost, the canvas stops drawing frames;
-  `window.__donnerPresentationQueueStats` carries that context's `deviceLost` flag.
+- In the browser editor, app and raster clients observe loss of their shared browser device.
+  The canvas stops drawing; `window.__donnerPresentationQueueStats` reports the UI context's
+  loss, and `window.__donnerWorkerStats` reports `deviceLost`, `gpuWaitTimeoutSite` and
+  `gpuWaitTimeoutMs` when a worker result or wait failure is published.
 
 The loss is logged once per root as `[gpu] Device declared lost: <reason>`. Recovery means
 restarting the editor or reloading the page.

@@ -25,8 +25,10 @@ namespace donner::gpu::browser {
  * construction, which every entry point takes first. Handles come from one counter shared by every
  * worker in the process and are never reused, so a handle names one logical device anywhere, and a
  * stale one names nothing. The library keys each logical device's identifiers, mappings, recording
- * and completed serial by that handle while every logical device in a worker shares that worker's
- * one browser device and queue.
+ * and completed serial by that handle. The editor registers its application thread as GPU owner;
+ * all logical devices dispatch raw browser primitives to that thread and share its device/queue.
+ * Standalone modules without a registered owner execute on the caller. C++ handle tables and
+ * mapped byte storage stay on the creating caller; GPU objects never cross worker boundaries.
  *
  * \ref beginDeviceRequest compares \ref ProtocolCodeTable against the table the library holds
  * before asking for a device, so the two halves agree on what their numbers mean before anything
@@ -153,7 +155,7 @@ private:
 
   /// Identity of the browser device this logical device runs on, held once the library first
   /// names it; shared with every bridge and every share over the same browser device in this
-  /// worker, so its address is unique for as long as anything can compare against it.
+  /// process, so its address is unique for as long as anything can compare against it.
   mutable std::shared_ptr<const void> sharedDeviceIdentity_;
 
   /// A mapping this bridge has copied out of the browser's heap.
