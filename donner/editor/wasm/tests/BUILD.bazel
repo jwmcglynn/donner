@@ -190,6 +190,7 @@ playwright_bin.playwright_test(
         "playwright.responsiveness.bazel.config.js",
         "prepare-browser-archives.js",
         "remote-webserver.mjs",
+        "splash-aim.mjs",
         ":node_modules/@playwright/test",
         ":node_modules/pngjs",
         "//donner/editor/tests:standalone_geode_browser_png_compare",

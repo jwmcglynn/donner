@@ -1080,3 +1080,43 @@ test("hosted macOS quarantines read only the hosted job's switch and name their 
     /HOSTED_MACOS_QUARANTINE/,
   );
 });
+
+// Viewports the hosted macOS Perf job recorded for "held drag advances UI submissions while
+// composited pixels are sampled" when its "selecting D" click selected nothing (#1683): the editor
+// was still publishing the previous document's viewport when the case aimed, and settled on the
+// splash right after.
+const kPreviousDocumentViewport = {
+  paneX: 40, paneY: 31, paneWidth: 1131, paneHeight: 861,
+  documentX: 285.5, documentY: 261.5, documentWidth: 640, documentHeight: 400, zoom: 1,
+};
+const kSplashViewport = {
+  paneX: 40, paneY: 31, paneWidth: 1131, paneHeight: 861,
+  documentX: 159.5, documentY: 205.5, documentWidth: 892, documentHeight: 512, zoom: 1,
+};
+
+test("the D aim waits for the splash, not for the previous document's viewport", async () => {
+  const { showsSplashDocument, splashDPoint } = await import("./splash-aim.mjs");
+  // The recorded failure: the aim from the previous document's viewport is the pointer position
+  // the failing run reported, not the D point once the splash is displayed.
+  assert.deepEqual(splashDPoint(kPreviousDocumentViewport), { x: 488, y: 566 });
+  assert.deepEqual(splashDPoint(kSplashViewport), { x: 442, y: 596 });
+  assert.equal(showsSplashDocument(kPreviousDocumentViewport), false);
+  assert.equal(showsSplashDocument(kSplashViewport), true);
+  // A zoomed splash still counts; a missing or degenerate viewport does not.
+  const zoomed = { ...kSplashViewport, documentWidth: 892 * 1.93, documentHeight: 512 * 1.93,
+    zoom: 1.93 };
+  assert.equal(showsSplashDocument(zoomed), true);
+  assert.equal(showsSplashDocument(undefined), false);
+  assert.equal(showsSplashDocument({ ...kSplashViewport, zoom: 0 }), false);
+});
+
+test("responsiveness cases wait for the splash to be displayed before using it", () => {
+  const spec = readFileSync(path.join(testDirectory, "browser-responsiveness.perf.ts"), "utf8");
+  // The sample attribute changes before the editor displays the splash, and an idle wait taken
+  // then can finish on the previous document (#1683).
+  assert.doesNotMatch(
+    spec,
+    /"data-active-sample-id",\s*"donner-splash",\s*\);\s*(?:checkpoint\([^)]*\);\s*)?await waitForIdle\(page\);/,
+  );
+  assert.equal(spec.split("await waitForSplashDisplayed(page);").length - 1, 3);
+});
