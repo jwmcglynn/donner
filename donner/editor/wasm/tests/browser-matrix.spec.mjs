@@ -1079,8 +1079,10 @@ test("hosted macOS quarantines read only the hosted job's switch and name their 
   }
   for (const [spec, title, issue] of quarantined) {
     const source = readFileSync(path.join(testDirectory, spec), "utf8");
-    const start = source.indexOf(`\ntest("${title}"`);
-    assert.notEqual(start, -1, title);
+    const opening = [...source.matchAll(/\ntest\(\s*"([^"\n]+)"/g)]
+      .find((match) => match[1] === title);
+    assert.ok(opening, title);
+    const start = opening.index;
     const body = source.slice(start, source.indexOf("\ntest(", start + 1));
     const skip = body.indexOf("    kHostedMacosQuarantine,\n");
     assert.notEqual(skip, -1, `${title} must be skipped only by the hosted switch`);
