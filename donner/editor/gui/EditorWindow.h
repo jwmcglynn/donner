@@ -788,7 +788,25 @@ public:
   void pollIdleGpu();
 
   /// Outcome of maintaining a frame deferred by the presentation submission limit.
-  enum class PresentationProgress { Idle, Pending, Ready, Deadline, Failed };
+  enum class PresentationProgress {
+    Idle,      //!< No frame is waiting for a presentation slot.
+    Pending,   //!< The queue still has no available slot.
+    Ready,     //!< Completion permits a new frame, which still must admit.
+    Deadline,  //!< The oldest submission needs the normal bounded confirmation.
+    Failed,    //!< The presentation device is unavailable or lost.
+  };
+  /// Stream a progress result for diagnostics.
+  /// @param os Output stream. @param progress Result to describe.
+  friend std::ostream& operator<<(std::ostream& os, PresentationProgress progress) {
+    switch (progress) {
+      case PresentationProgress::Idle: return os << "Idle";
+      case PresentationProgress::Pending: return os << "Pending";
+      case PresentationProgress::Ready: return os << "Ready";
+      case PresentationProgress::Deadline: return os << "Deadline";
+      case PresentationProgress::Failed: return os << "Failed";
+    }
+    return os << "PresentationProgress(" << static_cast<int>(progress) << ")";
+  };
 
   /// Poll deferred GPU work without constructing another UI frame. Called on the window owner.
   PresentationProgress pollDeferredPresentation();

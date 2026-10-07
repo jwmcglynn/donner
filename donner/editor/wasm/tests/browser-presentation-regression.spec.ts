@@ -4222,9 +4222,14 @@ async function readGpuOwnerDispatchStats(page: Page) {
         worker.evaluate(() => {
           const scope = globalThis as typeof globalThis & {
             __donnerReadGpuOwnerWaitStats?: () => unknown;
+            __donnerReadGpuObjectStats?: () => unknown;
           };
           return scope.__donnerReadGpuOwnerWaitStats
-            ? { sampledAtMs: performance.now(), stats: scope.__donnerReadGpuOwnerWaitStats() }
+            ? {
+              sampledAtMs: performance.now(),
+              stats: scope.__donnerReadGpuOwnerWaitStats(),
+              gpu: scope.__donnerReadGpuObjectStats?.() ?? null,
+            }
             : null;
         }),
         1000,
@@ -4243,6 +4248,7 @@ async function captureRasterDispatchFailure(page: Page): Promise<void> {
         worker.evaluate(() => {
           const scope = globalThis as typeof globalThis & {
             __donnerReadGpuOwnerWaitStats?: () => unknown;
+            __donnerReadGpuObjectStats?: () => unknown;
             __donnerApplicationGpuSurfaceWorker?: boolean;
           };
           const read = scope.__donnerReadGpuOwnerWaitStats;
@@ -4250,6 +4256,7 @@ async function captureRasterDispatchFailure(page: Page): Promise<void> {
             gpuOwner: typeof read === "function",
             applicationSurface: scope.__donnerApplicationGpuSurfaceWorker === true,
             stats: read?.() ?? null,
+            gpu: scope.__donnerReadGpuObjectStats?.() ?? null,
           };
         }),
         1000,
