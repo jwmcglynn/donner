@@ -5184,6 +5184,13 @@ test("WebGPU eyedropper copies translucent document alpha, not checkerboard alph
     x: offscreenViewport.paneX + 34,
     y: offscreenViewport.paneY + offscreenViewport.paneHeight - 24,
   };
+  console.log(`alpha-reset-start ${
+    JSON.stringify({
+      elapsedMs: Date.now() - test.info().startTime.getTime(),
+      resetZoom,
+      viewport: offscreenViewport,
+    })
+  }`);
   await clickAppliedPoint(page, resetZoom, "center the replacement SVG with the 100% control");
   await expect.poll(async () => {
     const state = await page.evaluate(() => ({
