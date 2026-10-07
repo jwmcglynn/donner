@@ -4137,17 +4137,24 @@ test("Firefox never exposes the checkerboard while dragging a Splash letter", as
 
 async function captureRasterDispatchFailure(page: Page): Promise<void> {
   const owners = await Promise.all(
-    page.workers().map((worker) =>
-      boundFailureDiagnostic(
+    page.workers().map(async (worker, index) => ({
+      index,
+      observation: await boundFailureDiagnostic(
         worker.evaluate(() => {
-          const read = (globalThis as typeof globalThis & {
+          const scope = globalThis as typeof globalThis & {
             __donnerReadGpuOwnerWaitStats?: () => unknown;
-          }).__donnerReadGpuOwnerWaitStats;
-          return read?.() ?? null;
+            __donnerApplicationGpuSurfaceWorker?: boolean;
+          };
+          const read = scope.__donnerReadGpuOwnerWaitStats;
+          return {
+            gpuOwner: typeof read === "function",
+            applicationSurface: scope.__donnerApplicationGpuSurfaceWorker === true,
+            stats: read?.() ?? null,
+          };
         }),
         1000,
-      )
-    ),
+      ),
+    })),
   );
   const state = await boundFailureDiagnostic(
     page.evaluate(() => ({

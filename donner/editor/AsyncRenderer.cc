@@ -1027,9 +1027,9 @@ void PublishRasterWorkPhase(RasterWorkPhase phase) {
 #ifdef __EMSCRIPTEN__
   // clang-format off
   MAIN_THREAD_ASYNC_EM_ASM({
-    const phases = ['idle-maintenance', 'warmup-document-access', 'warmup', 'thumbnail',
-                    'render-setup', 'render-document-access', 'rendering', 'publishing'];
-    window['__donnerRasterWorkState'] = ({'phase': phases[$0], 'atMs': performance.now()});
+    const phases = (['idle-maintenance', 'warmup-document-access', 'warmup', 'thumbnail',
+                    'render-setup', 'render-document-access', 'rendering', 'publishing']);
+    window['__donnerRasterWorkState'] = ({'phase': phases[$0], 'publishedAtMs': performance.now()});
   }, static_cast<int>(phase));
   // clang-format on
 #else
