@@ -310,6 +310,35 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
                              path.name)
         self.assertNotIn("HOSTED_MACOS_QUARANTINE", self.bazelrc)
 
+    def test_quarantine_report_lane_is_enabled_only_by_the_scheduled_editor_wasm_run(self):
+        # The report-only lane lifts the Firefox quarantine of #1634 and never fails its job.
+        # Only the nightly Editor WASM run may enable it: pull request and push runs keep the
+        # quarantine, so a quarantined case can neither block a merge nor turn main red.
+        resolver = runfiles.Create()
+        workflows = Path(resolver.Rlocation("donner/.github/workflows/main.yml")).parent
+        editor = self.editor_wasm
+        gate = ("          DONNER_BROWSER_QUARANTINE_REPORT_LANE: "
+                "${{ github.event_name == 'schedule' && '1' || '0' }}\n")
+        self.assertIn(gate, editor)
+        self.assertEqual(editor.count("DONNER_BROWSER_QUARANTINE_REPORT"), 1)
+        schedule_only = "        if: ${{ !cancelled() && github.event_name == 'schedule' }}\n"
+        self.assertEqual(editor.count(schedule_only), 2)
+        for step in ("Summarize quarantined cases", "Upload quarantined case evidence"):
+            self.assertIn("      - name: %s\n%s" % (step, schedule_only), editor, step)
+        summary = self._step_body(editor, "Summarize quarantined cases")
+        self.assertIn('|| echo "::warning::Could not summarize the quarantined cases"', summary)
+        self.assertIn("if-no-files-found: warn",
+                      self._step_body(editor, "Upload quarantined case evidence"))
+        others = [path for path in sorted(workflows.glob("*.y*ml"))
+                  if path.name != "editor_wasm.yml"]
+        self.assertGreater(len(others), 5)
+        actions = sorted((workflows.parent / "actions").glob("*/action.y*ml"))
+        self.assertGreater(len(actions), 3)
+        for path in others + actions:
+            self.assertNotIn("DONNER_BROWSER_QUARANTINE_REPORT", path.read_text(encoding="utf-8"),
+                             path.name)
+        self.assertNotIn("DONNER_BROWSER_QUARANTINE_REPORT", self.bazelrc)
+
     def test_browser_stall_system_log_slices_only_well_formed_windows(self):
         collect = self._step_body(self._job_body("macos"), "Collect browser stall system log")
         script = textwrap.dedent(collect.split("run: |\n", 1)[1])

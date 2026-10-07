@@ -163,11 +163,35 @@ jobs:
       # there, not here; this step only supplies the package directory. The
       # script serves a private copy of the package, verifies the served
       # editor.wasm hash, runs every lane (no fail-fast, so one run reports the
-      # whole matrix), and exits nonzero if any lane failed.
+      # whole matrix), and exits nonzero if any lane failed. Only the scheduled
+      # run adds the report-only lane for the cases quarantined by #1634.
       - name: Serve Geode package and run browser suites
         env:
           DONNER_WASM_PACKAGE_DIR: ${{ runner.temp }}/editor-wasm-package-geode
+          DONNER_BROWSER_QUARANTINE_REPORT_LANE: ${{ github.event_name == 'schedule' && '1' || '0' }}
         run: bash tools/run-browser-ci.sh
+
+      # The report-only lane never fails the job, so its outcome reaches the
+      # reader through the job summary and its evidence through its own upload.
+      # Neither step fails the job on a missing report or missing evidence
+      # either: a scheduled run that passed the regular lanes stays usable as a
+      # release candidate source.
+      - name: Summarize quarantined cases
+        if: ${{ !cancelled() && github.event_name == 'schedule' }}
+        shell: bash
+        run: |
+          set -uo pipefail
+          node donner/editor/wasm/tests/quarantine-report-summary.mjs donner/editor/wasm/tests/playwright-failures/firefox-quarantine-report/quarantine-report.json >> "$GITHUB_STEP_SUMMARY" \
+            || echo "::warning::Could not summarize the quarantined cases"
+
+      - name: Upload quarantined case evidence
+        if: ${{ !cancelled() && github.event_name == 'schedule' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: editor-wasm-quarantine-report-${{ github.run_id }}-${{ github.run_attempt }}
+          path: donner/editor/wasm/tests/playwright-failures/firefox-quarantine-report
+          if-no-files-found: warn
+          retention-days: 14
 
       # run-browser-ci.sh copies each lane's Playwright output here as the lane
       # ends. The live output directory cannot be uploaded instead: every lane

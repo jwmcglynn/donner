@@ -6,6 +6,7 @@ import {
   hasPresentedBasicShapesHostFrame,
 } from "./basic-shapes-capture-gate";
 import { installBrowserStallDiagnostics } from "./browser-stall-diagnostics";
+import { armFailureCanvasEvidence, installFailureCanvasEvidence } from "./failure-canvas-evidence";
 import {
   type CanvasColorStats,
   captureEditorPage,
@@ -19,9 +20,11 @@ import {
 } from "./canvas-color-stats";
 import { waitForAppliedPointer } from "./gesture-streams";
 import { echoGpuSessionConsole } from "./gpu-session-console";
+import { quarantineStillSkips } from "./quarantine-report.mjs";
 import { holdCanvasCompletionForTest, installSurfaceFrameProbe } from "./surface-frame-probe";
 
 installBrowserStallDiagnostics(test);
+installFailureCanvasEvidence(test);
 
 // CI's GitHub-hosted macOS job sets this to skip the cases quarantined for that job only
 // (#1691, #1702); every other lane and local runs still run them.
@@ -1813,9 +1816,10 @@ test("production Geode wasm presents visible editor pixels after held canvas GPU
 test("Firefox keeps Basic Shapes resize pixels and outline synchronized", async ({ browserName, page }) => {
   test.skip(browserName !== "firefox" || kBackend !== "geode", "Firefox Geode regression");
   test.skip(
-    browserName === "firefox",
+    browserName === "firefox" && quarantineStillSkips(),
     "Quarantined: Firefox can capture a blank editor page (#1634)",
   );
+  armFailureCanvasEvidence(page, test.info());
   const fatalMessages = await openEditor(page, { postInitializationDwellMs: 0 });
   expect(await installSurfaceFrameProbe(page), "no worker could observe canvas submissions")
     .toBeGreaterThan(0);
