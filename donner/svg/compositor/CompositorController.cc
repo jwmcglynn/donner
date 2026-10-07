@@ -541,6 +541,7 @@ bool CompositorController::assignInteractionLayer(Registry& registry, Entity ent
 CompositorController::PromoteResult CompositorController::promoteEntity(
     Entity entity, InteractionHint interactionKind) {
   Registry& registry = document().registry();
+  noteActiveDragPromote(entity, interactionKind);
   if (!registry.valid(entity)) {
     return refusePromotion(entity, PromoteRefusalReason::InvalidEntity);
   }
@@ -560,8 +561,10 @@ CompositorController::PromoteResult CompositorController::promoteEntity(
   prepareColdFilterOnlyPromotion(registry);
   bool suspendBucketAncestors = false;
   if (const auto refusal = classifyPromotionContext(registry, entity, &suspendBucketAncestors)) {
+    noteRefusedPromotion(entity, *refusal, interactionKind);
     return *refusal;
   }
+  endOwningTilesDragOf(entity);
 
   // A selection hint can upgrade to ActiveDrag without dropping its retained tile.
   pendingDemotions_.erase(entity);
@@ -608,6 +611,7 @@ void CompositorController::demoteEntity(Entity entity) {
   // `demoteEntity` for those is a silent no-op (matching the
   // pre-hysteresis behaviour, where the `activeHints_.find` miss was also
   // a no-op).
+  endOwningTilesDragOf(entity);
   if (!activeHints_.contains(entity)) {
     return;
   }
@@ -1177,6 +1181,7 @@ bool CompositorController::remapAncillaryInteractionEntities(
     const auto it = remap.find(splitStaticLayersEntity_);
     splitStaticLayersEntity_ = it != remap.end() ? it->second : entt::null;
   }
+  remapMaskedChildDrag(remap);
   return true;
 }
 
@@ -1390,6 +1395,9 @@ void CompositorController::resetAllLayers(bool documentReplaced) {
   selectedBucketDescendant_ = entt::null;
   failedExclusiveInteractionRoot_ = entt::null;
   failedExclusiveCanvasSize_ = Vector2i::Zero();
+  owningTilesDragTarget_ = entt::null;
+  maskedChildDragRefused_ = entt::null;
+  maskedChildDragPieces_.reset();
   // The hysteresis queue is tied to the old entity space; both
   // document-replaced and live-registry resets must drop it.
   pendingDemotions_.clear();
@@ -1604,6 +1612,10 @@ void CompositorController::renderFrameImpl(const RenderViewport& viewport,
     lastRenderFrameStats_ = fresh;
   }
   surfaceBudgetExhaustedThisFrame_ = false;
+  // Interaction promotes arrive between frames; more than one active-drag entity means a
+  // multi-selection drag.
+  const bool singleActiveDragThisFrame = activeDragPromotesSinceFrame_.size() <= 1;
+  activeDragPromotesSinceFrame_.clear();
   const auto elapsedMsSince = [](std::chrono::steady_clock::time_point start) {
     return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start)
         .count();
@@ -1721,6 +1733,7 @@ void CompositorController::renderFrameImpl(const RenderViewport& viewport,
     ++fastPathCounters_.noDirtyFrames;
   }
   bool fastPathTakenThisFrame = false;
+  MaskedChildOutcome maskedChildOutcome = MaskedChildOutcome::None;
   if (documentPrepared_ && !needsFullRebuild && !dirtyEntitySnapshot.empty() && hintsScanned_) {
     constexpr uint16_t kTransformOnlyMask = components::DirtyFlagsComponent::Layout |
                                             components::DirtyFlagsComponent::Transform |
@@ -1731,19 +1744,10 @@ void CompositorController::renderFrameImpl(const RenderViewport& viewport,
     // entities before mutating any RIC or layer state. If any check fails
     // the whole block bails out cleanly and the slow path
     // (`prepareDocumentForRendering`) takes over.
-    struct FastPathResolution {
-      Entity entity = entt::null;
-      CompositorLayer* layer = nullptr;
-      Transform2d newWorldFromEntity;
-      /// `bitmapEntity_from_entity` - the canvas-from-canvas mapping from
-      /// the bitmap's stamped entity frame to the entity's CURRENT frame.
-      /// Used as the layer's `canvasFromBitmap` compose offset on the
-      /// bitmap-reuse fast path. **Stamp-relative**, NOT per-frame.
-      Transform2d bitmapEntityFromEntity;
-      bool isSubtree = false;
-    };
     std::vector<FastPathResolution> resolutions;
     resolutions.reserve(dirtyEntitySnapshot.size());
+
+    std::optional<MaskedChildResolution> maskedChild;
 
     bool eligible = true;
     const auto hasResolutionForEntity = [&resolutions](Entity entity) {
@@ -1847,15 +1851,13 @@ void CompositorController::renderFrameImpl(const RenderViewport& viewport,
         // is different: moving the whole owner bitmap would move its siblings, so the owner
         // must be re-rasterized. Clearing that child's dirty flag here used to freeze masked
         // crystal faces throughout a held drag until a later full render on mouse-up.
-        bool carriedByDirtyPromotedRoot = false;
-        for (auto& layer : layers_) {
-          if (layerContainsEntity(layer, e) &&
-              std::ranges::find(dirtyEntitySnapshot, layer.entity()) != dirtyEntitySnapshot.end()) {
-            carriedByDirtyPromotedRoot = true;
-            break;
-          }
-        }
-        if (carriedByDirtyPromotedRoot) {
+        //
+        // The moved child of a held owning-tiles drag resolves through its masked owner's cached
+        // pieces when the owner can be split around it. Moving the child dirties only the child,
+        // so a dirty descendant is an edit of its own and keeps the full render.
+        if (isCarriedByDirtyPromotedRoot(e, dirtyEntitySnapshot) ||
+            claimMaskedChildDrag(maskedChild, e, singleActiveDragThisFrame, viewport,
+                                 surfaceFromCanvas, kTransformOnlyMask)) {
           continue;
         }
         eligible = false;
@@ -1888,6 +1890,9 @@ void CompositorController::renderFrameImpl(const RenderViewport& viewport,
       if (!eligible) {
         break;
       }
+    }
+    if (maskedChildOwnerHasMovingLayer(maskedChild, resolutions)) {
+      eligible = false;
     }
 
     if (eligible) {
@@ -1937,20 +1942,22 @@ void CompositorController::renderFrameImpl(const RenderViewport& viewport,
           propagateFastPathDeltaToSubtree(registry, res.entity, worldFromPreviousWorld);
         }
       }
+      maskedChildOutcome = applyMaskedChildDrag(registry, maskedChild, viewport, surfaceFromCanvas);
       // Clear the dirty flags ourselves since we skipped prepare. Tell
       // the rest of renderFrame that the dirty state is fully resolved
       // - no need to re-run detectors, re-prepare, or re-resolve.
       registry.clear<components::DirtyFlagsComponent>();
       documentDirty = false;
-      if (unhandledDirtyEntities.empty()) {
-        fastPathTakenThisFrame = true;
-      }
+      fastPathTakenThisFrame =
+          unhandledDirtyEntities.empty() && maskedChildOutcome != MaskedChildOutcome::Failed;
       dirtyEntitySnapshot = std::move(unhandledDirtyEntities);
     }
   }
+  finishMaskedChildDragFrame(maskedChildOutcome);
   if (fastPathTakenThisFrame) {
     ++fastPathCounters_.fastPathFrames;
-  } else if (!dirtyEntitySnapshot.empty() || needsFullRebuild) {
+  } else if (!dirtyEntitySnapshot.empty() || needsFullRebuild ||
+             maskedChildOutcome == MaskedChildOutcome::Failed) {
     ++fastPathCounters_.slowPathFramesWithDirty;
   }
   const std::vector<DirtyEntityInvalidation> dirtyInvalidationSnapshot =
@@ -2513,6 +2520,8 @@ CompositorController::BitmapMemoryBreakdown CompositorController::bitmapMemoryBr
       ++breakdown.layerCount;
     }
   }
+  // Pieces held for a masked-child drag are layer textures for the length of the drag.
+  breakdown.layerTextureBytes += maskedChildDragPieceBytes();
   return breakdown;
 }
 
@@ -2989,6 +2998,307 @@ std::pair<Entity, Entity> CompositorController::computeEntityRange(Registry& reg
   };
   const Entity lastPainting = findLastPaintingDescendant(findLastPaintingDescendant, entity);
   return {entity, lastPainting != entt::null ? lastPainting : entity};
+}
+
+void CompositorController::settleMaskedChildDrag() {
+  if (!maskedChildDragPieces_.has_value()) {
+    return;
+  }
+  if (maskedChildDragPieces_->composed) {
+    // The owner's tile still holds a recomposition when its payload is the one the pieces made;
+    // render it from source.
+    if (CompositorLayer* owner = findLayer(maskedChildDragPieces_->owner);
+        owner != nullptr && owner->generation() == maskedChildDragPieces_->ownerGeneration) {
+      owner->markDirty();
+    }
+  }
+  maskedChildDragPieces_.reset();
+}
+
+void CompositorController::endMaskedChildDrag() {
+  settleMaskedChildDrag();
+  owningTilesDragTarget_ = entt::null;
+  maskedChildDragRefused_ = entt::null;
+}
+
+namespace {
+
+// True when @p instance opens a compositing context of its own: opacity, blending, isolation, a
+// clip or a filter applies to its whole subtree.
+bool OpensCompositingContext(Registry& registry,
+                             const components::RenderingInstanceComponent& instance) {
+  const auto* style = instance.styleHandle(registry).try_get<components::ComputedStyleComponent>();
+  if (style == nullptr || !style->properties.has_value()) {
+    return true;
+  }
+  const auto& properties = *style->properties;
+  return properties.opacity.get().value() < 1.0 ||
+         properties.mixBlendMode.get().value() != MixBlendMode::Normal ||
+         properties.isolation.get().value() == Isolation::Isolate ||
+         instance.clipPath.has_value() || instance.resolvedFilter.has_value() ||
+         instance.clipRect.has_value();
+}
+
+// True when @p owner holds a retained, unshifted texture of its own subtree. A dirty owner has a
+// pending raster; pieces drawn now could not stand in for it.
+bool IsCleanTextureOwner(const CompositorLayer& owner) {
+  return !owner.isDirty() && owner.firstEntity() == owner.entity() && !owner.isImmediate() &&
+         owner.textureSnapshot() != nullptr && owner.canvasFromBitmap().isIdentity();
+}
+
+// True when @p ownerEntity is a group whose mask is its only compositing context. The pieces skip
+// the owner entity itself, so it must be a container that paints nothing; opacity, blending, a
+// clip-path or a filter on the owner applies to its whole content, which separately drawn pieces
+// cannot reproduce.
+bool OwnerPaintsOnlyThroughMask(Registry& registry, Entity ownerEntity) {
+  const auto* instance = registry.try_get<components::RenderingInstanceComponent>(ownerEntity);
+  const auto* type = registry.try_get<components::ElementTypeComponent>(ownerEntity);
+  if (instance == nullptr || type == nullptr || type->type() != ElementType::G) {
+    return false;
+  }
+  return instance->mask.has_value() && instance->mask->valid() &&
+         !OpensCompositingContext(registry, *instance);
+}
+
+// True when every group between @p target and @p ownerEntity is plain: a context such a group
+// opened would span the boundaries between the pieces.
+bool HasPlainPathToOwner(Registry& registry, Entity target, Entity ownerEntity) {
+  using TreeComponent = donner::components::TreeComponent;
+  const auto* targetTree = registry.try_get<TreeComponent>(target);
+  Entity ancestor = targetTree != nullptr ? targetTree->parent() : entt::null;
+  while (ancestor != ownerEntity) {
+    if (ancestor == entt::null) {
+      return false;
+    }
+    if (const auto* instance = registry.try_get<components::RenderingInstanceComponent>(ancestor);
+        instance != nullptr && (instance->mask.has_value() || instance->subtreeInfo.has_value() ||
+                                OpensCompositingContext(registry, *instance))) {
+      return false;
+    }
+    ancestor = registry.get<TreeComponent>(ancestor).parent();
+  }
+  return true;
+}
+
+// True when @p lhs and @p rhs share their linear part, so they differ by a translation at most.
+bool SameLinearPartNear(const Transform2d& lhs, const Transform2d& rhs) {
+  for (size_t i = 0; i < 4; ++i) {
+    if (!NearEquals(lhs.data[i], rhs.data[i])) {
+      return false;
+    }
+  }
+  return true;
+}
+
+}  // namespace
+
+CompositorLayer* CompositorController::soleLayerContaining(Entity entity) {
+  CompositorLayer* container = nullptr;
+  for (auto& layer : layers_) {
+    if (layer.entity() == entity) {
+      return nullptr;
+    }
+    if (layerContainsEntity(layer, entity)) {
+      if (container != nullptr) {
+        return nullptr;
+      }
+      container = &layer;
+    }
+  }
+  return container;
+}
+
+CompositorLayer* CompositorController::maskedChildDragOwner(Registry& registry, Entity target) {
+  if (!renderer().supportsTextureSnapshotCompositing() ||
+      !registry.all_of<components::RenderingInstanceComponent>(target)) {
+    return nullptr;
+  }
+  CompositorLayer* owner = soleLayerContaining(target);
+  if (owner == nullptr || !IsCleanTextureOwner(*owner) ||
+      !OwnerPaintsOnlyThroughMask(registry, owner->entity()) ||
+      !HasPlainPathToOwner(registry, target, owner->entity())) {
+    return nullptr;
+  }
+  // Layers nested inside the owner are drawn into the owner's tile by its range draw, and the
+  // pieces draw the same ranges. The target itself must not be inside one (a second containing
+  // layer refuses above), and a nested layer that moves in the same frame refuses in the fast
+  // path.
+  return owner;
+}
+
+bool CompositorController::isCarriedByDirtyPromotedRoot(
+    Entity entity, const std::vector<Entity>& dirtyEntities) const {
+  for (const auto& layer : layers_) {
+    if (layerContainsEntity(layer, entity) &&
+        std::ranges::find(dirtyEntities, layer.entity()) != dirtyEntities.end()) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool CompositorController::claimMaskedChildDrag(std::optional<MaskedChildResolution>& resolution,
+                                                Entity entity, bool singleActiveDrag,
+                                                const RenderViewport& viewport,
+                                                const Transform2d& surfaceFromCanvas,
+                                                uint16_t transformOnlyMask) {
+  if (resolution.has_value()) {
+    return entity == resolution->target;
+  }
+  // One held drag at a time: a multi-selection drag moves several entities, and a target whose
+  // recomposition already failed keeps the full render for the rest of its drag.
+  if (entity != owningTilesDragTarget_ || !singleActiveDrag || entity == maskedChildDragRefused_) {
+    return false;
+  }
+  resolution = resolveMaskedChildDrag(document().registry(), entity, viewport, surfaceFromCanvas,
+                                      transformOnlyMask);
+  return resolution.has_value();
+}
+
+std::optional<CompositorController::MaskedChildResolution>
+CompositorController::resolveMaskedChildDrag(Registry& registry, Entity target,
+                                             const RenderViewport& viewport,
+                                             const Transform2d& surfaceFromCanvas,
+                                             uint16_t transformOnlyMask) {
+  CompositorLayer* owner = maskedChildDragOwner(registry, target);
+  const auto* targetDirty = registry.try_get<components::DirtyFlagsComponent>(target);
+  if (owner == nullptr || targetDirty == nullptr ||
+      (targetDirty->flags & ~transformOnlyMask) != 0) {
+    return std::nullopt;
+  }
+  // The instances still hold the previous frame's positions here, which is where the pieces are
+  // drawn; the shift below is measured from them.
+  if (!maskedChildDragPiecesCurrent(*owner, target, viewport, surfaceFromCanvas) &&
+      !buildMaskedChildDragPieces(*owner, target, viewport, surfaceFromCanvas)) {
+    return std::nullopt;
+  }
+  const MaskedChildDragPieces& pieces = *maskedChildDragPieces_;
+  const auto& abs =
+      components::LayoutSystem().getAbsoluteTransformComponent(EntityHandle(registry, target));
+  const Transform2d canvasFromDocument =
+      components::LayoutSystem().getCanvasFromDocumentTransform(registry);
+  const Transform2d newWorldFromEntity =
+      abs.worldFromEntity * (abs.worldIsCanvas ? canvasFromDocument : Transform2d());
+  const Transform2d ownerBitmapFromTarget = newWorldFromEntity * pieces.ownerBitmapFromCanvas;
+  // Only a translation of the drawn piece can stand in for re-rendering it.
+  if (!SameLinearPartNear(ownerBitmapFromTarget, pieces.ownerBitmapFromTargetAtStamp)) {
+    return std::nullopt;
+  }
+  return MaskedChildResolution{
+      .owner = owner,
+      .target = target,
+      .newWorldFromEntity = newWorldFromEntity,
+      .targetOffsetPx =
+          ownerBitmapFromTarget.translation() - pieces.ownerBitmapFromTargetAtStamp.translation(),
+  };
+}
+
+bool CompositorController::maskedChildDragPiecesCurrent(
+    const CompositorLayer& owner, Entity target, const RenderViewport& viewport,
+    const Transform2d& surfaceFromCanvas) const {
+  return maskedChildDragPieces_.has_value() && maskedChildDragPieces_->owner == owner.entity() &&
+         maskedChildDragPieces_->target == target &&
+         maskedChildDragPieces_->ownerGeneration == owner.generation() &&
+         maskedChildDragPieces_->canvasSize == BitmapDimensionsForViewport(viewport) &&
+         SameTransformNear(maskedChildDragPieces_->surfaceFromCanvas, surfaceFromCanvas);
+}
+
+bool CompositorController::maskedChildOwnerHasMovingLayer(
+    const std::optional<MaskedChildResolution>& resolution,
+    std::span<const FastPathResolution> resolutions) const {
+  return resolution.has_value() &&
+         std::ranges::any_of(resolutions, [&](const FastPathResolution& moved) {
+           return layerContainsEntity(*resolution->owner, moved.entity);
+         });
+}
+
+CompositorController::MaskedChildOutcome CompositorController::applyMaskedChildDrag(
+    Registry& registry, const std::optional<MaskedChildResolution>& resolution,
+    const RenderViewport& viewport, const Transform2d& surfaceFromCanvas) {
+  if (!resolution.has_value()) {
+    return MaskedChildOutcome::None;
+  }
+  auto& instance = registry.get<components::RenderingInstanceComponent>(resolution->target);
+  const Transform2d worldFromPreviousWorld =
+      resolution->newWorldFromEntity * instance.worldFromEntityTransform.inverse();
+  instance.worldFromEntityTransform = resolution->newWorldFromEntity;
+  propagateFastPathDeltaToSubtree(registry, resolution->target, worldFromPreviousWorld);
+  if (composeMaskedOwnerFromPieces(*resolution->owner, resolution->targetOffsetPx, viewport,
+                                   surfaceFromCanvas)) {
+    return MaskedChildOutcome::Composed;
+  }
+  // The instances are current, so the owner's normal raster later in this frame draws the child
+  // at its new position. The rest of this drag keeps that full render rather than rebuilding
+  // pieces that cannot be composed.
+  maskedChildDragRefused_ = resolution->target;
+  maskedChildDragPieces_.reset();
+  resolution->owner->markDirty();
+  return MaskedChildOutcome::Failed;
+}
+
+void CompositorController::finishMaskedChildDragFrame(MaskedChildOutcome outcome) {
+  // A frame that does not rebuild the masked owner from its pieces ends the held drag's use of
+  // them: the owner renders from its source again, which is the crisp settle after a release.
+  if (outcome != MaskedChildOutcome::Composed) {
+    settleMaskedChildDrag();
+  }
+}
+
+void CompositorController::noteActiveDragPromote(Entity entity, InteractionHint interactionKind) {
+  if (interactionKind == InteractionHint::ActiveDrag &&
+      std::ranges::find(activeDragPromotesSinceFrame_, entity) ==
+          activeDragPromotesSinceFrame_.end()) {
+    activeDragPromotesSinceFrame_.push_back(entity);
+  }
+}
+
+void CompositorController::noteRefusedPromotion(Entity entity, const PromoteResult& refusal,
+                                                InteractionHint interactionKind) {
+  // An owning-tiles drag keeps the entity inside its compositing ancestor's tile; remember it so
+  // held frames can rebuild a masked ancestor's tile from cached pieces. Any other answer, and a
+  // selection that follows the drag, ends that interaction.
+  if (!refusal.owningTilesRequired() || interactionKind != InteractionHint::ActiveDrag) {
+    endOwningTilesDragOf(entity);
+  } else if (owningTilesDragTarget_ != entity) {
+    endMaskedChildDrag();
+    owningTilesDragTarget_ = entity;
+  }
+}
+
+void CompositorController::endOwningTilesDragOf(Entity entity) {
+  if (owningTilesDragTarget_ == entity) {
+    endMaskedChildDrag();
+  }
+}
+
+void CompositorController::remapMaskedChildDrag(const std::unordered_map<Entity, Entity>& remap) {
+  // A masked owner last rebuilt from drag pieces renders from the replaced source; the pieces and
+  // the drag target belong to the old entity space.
+  if (maskedChildDragPieces_.has_value() && maskedChildDragPieces_->composed) {
+    if (const auto it = remap.find(maskedChildDragPieces_->owner); it != remap.end()) {
+      if (CompositorLayer* owner = findLayer(it->second); owner != nullptr) {
+        owner->markDirty();
+      }
+    }
+  }
+  maskedChildDragPieces_.reset();
+  owningTilesDragTarget_ = entt::null;
+  maskedChildDragRefused_ = entt::null;
+}
+
+size_t CompositorController::maskedChildDragPieceBytes() const {
+  if (!maskedChildDragPieces_.has_value()) {
+    return 0;
+  }
+  size_t bytes = 0;
+  for (const auto* piece : {&maskedChildDragPieces_->below, &maskedChildDragPieces_->targetPiece,
+                            &maskedChildDragPieces_->above}) {
+    if (*piece != nullptr) {
+      const Vector2i dims = (*piece)->dimensions();
+      bytes += static_cast<size_t>(dims.x) * static_cast<size_t>(dims.y) * 4u;
+    }
+  }
+  return bytes;
 }
 
 void CompositorController::propagateFastPathDeltaToSubtree(

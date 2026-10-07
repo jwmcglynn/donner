@@ -1090,6 +1090,108 @@ private:
   bool rasterizeLayerDamage(CompositorLayer& layer, const RenderViewport& viewport,
                             const Transform2d& surfaceFromCanvas, const Box2d& damageBoundsCanvas);
 
+  /// A dirty entity the translation-only fast path moves through its promoted layer root.
+  struct FastPathResolution {
+    Entity entity = entt::null;
+    CompositorLayer* layer = nullptr;
+    Transform2d newWorldFromEntity;
+    /// `bitmapEntity_from_entity` - the canvas-from-canvas mapping from
+    /// the bitmap's stamped entity frame to the entity's CURRENT frame.
+    /// Used as the layer's `canvasFromBitmap` compose offset on the
+    /// bitmap-reuse fast path. **Stamp-relative**, NOT per-frame.
+    Transform2d bitmapEntityFromEntity;
+    bool isSubtree = false;
+  };
+  /// A held drag of a child inside a masked owner's tile, resolved for the current frame: the owner
+  /// tile is rebuilt from cached unmasked pieces with the child's piece shifted, under the owner's
+  /// mask, instead of re-rendering the owner's subtree after a full prepare.
+  struct MaskedChildResolution {
+    CompositorLayer* owner = nullptr;
+    Entity target = entt::null;
+    Transform2d newWorldFromEntity;
+    /// Shift of the target's piece from where it was drawn, in owner-bitmap pixels.
+    Vector2d targetOffsetPx;
+  };
+  /// What the fast path did with a frame's held masked-child drag.
+  enum class MaskedChildOutcome : uint8_t {
+    None,      //!< No masked-child drag resolved this frame.
+    Composed,  //!< The owner's tile was rebuilt from the pieces.
+    Failed,    //!< The pieces could not be composed; the owner renders from source.
+  };
+  struct MaskedChildDragPieces;
+
+  /// True when @p entity, dirty without a layer of its own, is carried by the bitmap transform of
+  /// a promoted layer root that is dirty in the same frame.
+  bool isCarriedByDirtyPromotedRoot(Entity entity, const std::vector<Entity>& dirtyEntities) const;
+  /// Claim dirty @p entity for the frame's held masked-child drag, resolving the drag the first
+  /// time its target is seen. False when the entity must take the full render.
+  bool claimMaskedChildDrag(std::optional<MaskedChildResolution>& resolution, Entity entity,
+                            bool singleActiveDrag, const RenderViewport& viewport,
+                            const Transform2d& surfaceFromCanvas, uint16_t transformOnlyMask);
+  /// Resolve a held drag of @p target through its masked owner's pieces, building them when they
+  /// do not describe the owner's current tile.
+  std::optional<MaskedChildResolution> resolveMaskedChildDrag(Registry& registry, Entity target,
+                                                              const RenderViewport& viewport,
+                                                              const Transform2d& surfaceFromCanvas,
+                                                              uint16_t transformOnlyMask);
+  /// True when the cached pieces were drawn for @p owner's current tile around @p target.
+  bool maskedChildDragPiecesCurrent(const CompositorLayer& owner, Entity target,
+                                    const RenderViewport& viewport,
+                                    const Transform2d& surfaceFromCanvas) const;
+  /// True when a layer inside the resolved masked owner also moves this frame; it would stay in
+  /// the owner's pieces at its previous position.
+  bool maskedChildOwnerHasMovingLayer(const std::optional<MaskedChildResolution>& resolution,
+                                      std::span<const FastPathResolution> resolutions) const;
+  /// Move the resolved target and rebuild its owner's tile from the pieces.
+  MaskedChildOutcome applyMaskedChildDrag(Registry& registry,
+                                          const std::optional<MaskedChildResolution>& resolution,
+                                          const RenderViewport& viewport,
+                                          const Transform2d& surfaceFromCanvas);
+  /// Settle the held-drag pieces unless this frame rebuilt the owner from them.
+  void finishMaskedChildDragFrame(MaskedChildOutcome outcome);
+  /// Record an active-drag promote of @p entity for the single-drag check.
+  void noteActiveDragPromote(Entity entity, InteractionHint interactionKind);
+  /// Track the owning-tiles drag target from a refused promotion of @p entity.
+  void noteRefusedPromotion(Entity entity, const PromoteResult& refusal,
+                            InteractionHint interactionKind);
+  /// End the owning-tiles drag when @p entity is its target.
+  void endOwningTilesDragOf(Entity entity);
+  /// Drop the held-drag state after a structural remap, re-rendering an owner rebuilt from pieces.
+  void remapMaskedChildDrag(const std::unordered_map<Entity, Entity>& remap);
+  /// Texture bytes held by the masked-child drag pieces.
+  size_t maskedChildDragPieceBytes() const;
+  /// The only layer containing @p entity, or null when there is none, several, or @p entity is a
+  /// layer itself.
+  CompositorLayer* soleLayerContaining(Entity entity);
+  /// Draw the paint-order runs of one piece, unmasked, into a tile of @p tileViewport.
+  std::optional<std::shared_ptr<const RendererTextureSnapshot>> drawMaskedChildDragPiece(
+      Registry& registry, std::span<const std::pair<Entity, Entity>> runs,
+      const RenderViewport& tileViewport, const Transform2d& tileSurfaceFromCanvas);
+  /// Draw @p pieces into @p renderer's current frame in owner-bitmap pixels, the target piece
+  /// shifted by @p targetOffsetPx.
+  static bool drawShiftedMaskedChildDragPieces(RendererInterface& renderer,
+                                               const MaskedChildDragPieces& pieces,
+                                               const Vector2d& targetOffsetPx);
+
+  /// The masked owner layer whose tile a held drag of @p target can rebuild from cached pieces,
+  /// or null when splitting the owner around @p target would change how it composites.
+  CompositorLayer* maskedChildDragOwner(Registry& registry, Entity target);
+  /// Drop the held-drag pieces; an owner tile last rebuilt from them is marked dirty so it renders
+  /// from source.
+  void settleMaskedChildDrag();
+  /// End the owning-tiles drag: settle its pieces and forget the target.
+  void endMaskedChildDrag();
+  /// Rasterize the unmasked pieces of @p owner around @p target at their current positions:
+  /// the content painted before the target's subtree, the subtree itself, and the content after.
+  bool buildMaskedChildDragPieces(CompositorLayer& owner, Entity target,
+                                  const RenderViewport& viewport,
+                                  const Transform2d& surfaceFromCanvas);
+  /// Rebuild @p owner's tile from the cached pieces, the target piece shifted by
+  /// @p targetOffsetPx owner-bitmap pixels, under the owner's mask.
+  bool composeMaskedOwnerFromPieces(CompositorLayer& owner, const Vector2d& targetOffsetPx,
+                                    const RenderViewport& viewport,
+                                    const Transform2d& surfaceFromCanvas);
+
   /// Take the pooled offscreen renderer, or construct a fresh one when the
   /// pool is empty. Tile rasterization used to construct and destroy one
   /// offscreen renderer per tile; on the browser WebGPU backend each
@@ -1556,6 +1658,48 @@ private:
   bool hasLastSurfaceFromCanvas_ = false;
   Transform2d staticSegmentsSurfaceFromCanvas_;
   bool hasStaticSegmentsSurfaceFromCanvas_ = false;
+
+  /// Entity under an active drag whose promotion was answered with
+  /// `PromoteResult::OwningTilesRequired`: it moves inside a compositing ancestor's tile rather
+  /// than in a layer of its own. Replaced by the next such drag of another entity; cleared when the
+  /// same entity is promoted with any other answer or hint, is demoted, or when layers are reset
+  /// or remapped.
+  Entity owningTilesDragTarget_ = entt::null;
+
+  /// Unmasked pieces of a masked owner layer, rasterized around a held-drag child. Each held frame
+  /// rebuilds the owner's tile from them under the owner's mask, with the child's piece shifted,
+  /// instead of re-rendering the owner's subtree.
+  struct MaskedChildDragPieces {
+    Entity owner = entt::null;   //!< Owner layer entity, the masked compositing ancestor.
+    Entity target = entt::null;  //!< The dragged child.
+    /// Content painted before the target's subtree; null when there is none.
+    std::shared_ptr<const RendererTextureSnapshot> below;
+    /// The target's subtree at the position it had when the pieces were drawn.
+    std::shared_ptr<const RendererTextureSnapshot> targetPiece;
+    /// Content painted after the target's subtree; null when there is none.
+    std::shared_ptr<const RendererTextureSnapshot> above;
+    /// Owner-bitmap-from-canvas transform of the owner tile the pieces were drawn for.
+    Transform2d ownerBitmapFromCanvas;
+    /// Owner-bitmap-from-target-entity transform when `targetPiece` was drawn.
+    Transform2d ownerBitmapFromTargetAtStamp;
+    /// Owner tile size the pieces were drawn at.
+    Vector2i ownerSize = Vector2i::Zero();
+    /// Canvas size and surface transform the pieces were drawn under.
+    Vector2i canvasSize = Vector2i::Zero();
+    Transform2d surfaceFromCanvas;
+    /// Owner payload generation the pieces describe; any other raster of the owner invalidates
+    /// them.
+    uint64_t ownerGeneration = 0;
+    /// True once the owner's tile has been rebuilt from the pieces, so it must render from source
+    /// again when the drag ends.
+    bool composed = false;
+  };
+  std::optional<MaskedChildDragPieces> maskedChildDragPieces_;
+  /// Held-drag target whose owner tile could not be rebuilt from pieces; the rest of its drag
+  /// keeps the full render.
+  Entity maskedChildDragRefused_ = entt::null;
+  /// Entities promoted with an active-drag hint since the last frame.
+  std::vector<Entity> activeDragPromotesSinceFrame_;
 };
 
 }  // namespace donner::svg::compositor

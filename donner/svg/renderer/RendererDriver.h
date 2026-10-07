@@ -210,6 +210,30 @@ public:
                                        const Transform2d& surfaceFromCanvas);
 
   /**
+   * Draw caller-supplied content under one entity's mask, into the renderer's already-active
+   * frame.
+   *
+   * Replays the mask pass the entity would get in a range draw: the mask region, the mask content
+   * and its coverage mode. Between `RendererInterface::transitionMaskToContent()` and
+   * `RendererInterface::popMask()` it calls @p drawContent with the renderer transform reset to
+   * identity, so the callback draws in surface pixels. The entity's own opacity, blend mode,
+   * clip-path and filter are not applied; callers use this only for entities whose mask is their
+   * sole compositing context.
+   *
+   * @param registry The registry containing the prepared render tree.
+   * @param maskedEntity Entity whose `RenderingInstanceComponent` carries the mask.
+   * @param viewport Viewport for the active render pass.
+   * @param surfaceFromCanvas Transform that maps canvas coords to the active render surface.
+   * @param drawContent Draws the masked content; returns false if any draw failed.
+   * @return False, with nothing drawn, when the entity has no renderable mask; otherwise the
+   *     result of @p drawContent.
+   */
+  [[nodiscard]] bool drawUnderEntityMaskIntoCurrentFrame(Registry& registry, Entity maskedEntity,
+                                                         const RenderViewport& viewport,
+                                                         const Transform2d& surfaceFromCanvas,
+                                                         const std::function<bool()>& drawContent);
+
+  /**
    * Prepare and draw a whole document into the renderer's already-open frame,
    * using the same main-entity selection as `drawInterruptibly` (traversal
    * order, offscreen feImage shadow entities excluded). Use this instead of
