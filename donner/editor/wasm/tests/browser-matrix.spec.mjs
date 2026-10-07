@@ -1120,3 +1120,62 @@ test("responsiveness cases wait for the splash to be displayed before using it",
   );
   assert.equal(spec.split("await waitForSplashDisplayed(page);").length - 1, 3);
 });
+
+test("a presented-frame drag summary counts presented frames, not GPU submissions", async () => {
+  const { kHeldDragPresentationBounds, presentedDragSummary, presentedDragFailures } =
+    await import("./presented-frame-samples.mjs");
+  const stream = { firstInputAt: 0, lastInputAt: 1000, start: { x: 442, y: 596 },
+    end: { x: 322, y: 524 } };
+  // One sample per page frame; each presented editor frame completes several GPU submissions.
+  const sample = (t, frameId, step, inputRepresented = true) => ({
+    t,
+    frameId,
+    completedSerial: frameId * 5,
+    pointerX: 442 - 120 * step,
+    pointerY: 596 - 72 * step,
+    inputRepresented,
+  });
+
+  // A drag that presents a frame per input and follows the pointer.
+  const healthy = [];
+  for (let i = 0; i < 40; ++i) healthy.push(sample(10 + i * 20, 100 + i, i / 40));
+  const good = presentedDragSummary(healthy, stream);
+  assert.equal(good.activeSamples, 40);
+  assert.equal(good.presentedFrames, 39, "frame transitions inside the input window");
+  assert.equal(good.advancingFrames, 39);
+  assert.deepEqual(presentedDragFailures(good, kHeldDragPresentationBounds), []);
+
+  // Two presented frames, the second halfway along the drag, then a stall while GPU serials keep
+  // climbing. Counting serials passed this; counting presented frames must not.
+  const stalled = [sample(10, 100, 0), sample(30, 101, 0.5)];
+  for (let i = 2; i < 40; ++i) {
+    stalled.push({ ...sample(10 + i * 20, 101, 0.5), completedSerial: 505 + i * 7 });
+  }
+  const stall = presentedDragSummary(stalled, stream);
+  assert.equal(stall.presentedFrames, 1);
+  assert.deepEqual(
+    presentedDragFailures(stall, kHeldDragPresentationBounds).map((failure) => failure.metric),
+    ["presentedFrames", "advancingFrames"],
+  );
+
+  // Frames that keep presenting but represent the pointer moving only once do not pass either.
+  const frozen = [];
+  for (let i = 0; i < 40; ++i) frozen.push(sample(10 + i * 20, 100 + i, i === 0 ? 0 : 0.5));
+  const freeze = presentedDragSummary(frozen, stream);
+  assert.equal(freeze.advancingFrames, 1);
+  assert.deepEqual(
+    presentedDragFailures(freeze, kHeldDragPresentationBounds).map((failure) => failure.metric),
+    ["advancingFrames"],
+  );
+
+  // Unrepresented positions and travel against the drag do not count; samples outside the input
+  // window are ignored.
+  const outside = presentedDragSummary([
+    sample(-5, 1, 1),
+    sample(10, 2, 0.4, false),
+    sample(20, 3, -0.5),
+    sample(1500, 4, 1),
+  ], stream);
+  assert.deepEqual([outside.activeSamples, outside.travelFraction], [2, 0]);
+  assert.equal(presentedDragSummary([], stream).activeSamples, 0);
+});
