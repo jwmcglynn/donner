@@ -482,9 +482,21 @@ The editor applies this through `AcquirePresentationFrame()` and `SurfaceFrameAc
 
 ### Browser device acquisition {#GpuRuntimeBrowserAcquisition}
 
-Each worker owns one `GPUDevice`. The first runtime device in a worker calls
-`navigator.gpu.requestAdapter()` and then `requestDevice()`; later runtime devices in that worker
-run over the same device, and the device is released with the last runtime device over it.
+The editor registers the application pthread as GPU owner before creating devices. App and raster
+runtime devices share that owner's `GPUDevice` and queue. Standalone modules without a registered
+owner keep their device on the calling worker. The first logical device requests the browser
+device; later clients reuse it, and the last client releases it.
+
+`BrowserGpuOwner` dispatches synchronous JavaScript primitives through the Emscripten system queue,
+which also runs during runtime futex waits. Callbacks must not allocate or lock C++ state, yield,
+wait for another caller, or wait for a Promise. Prepared command batches contain at most 1024
+operations; the first refusal stops replay before submission. A ten-second dispatch deadline
+terminates the module instead of returning borrowed memory to a queued callback. Descriptor
+assembly, shared identity bookkeeping and mapped storage remain on callers.
+
+Browser renderer teardown releases resources without waiting for queue completion; submitted
+commands retain browser resources. Editor shutdown yields the app event loop until the raster
+loop exits before joining it, allowing pending device/capture promises to settle.
 
 The browser settles a device request asynchronously, through promises that cannot run while the
 requesting thread holds the event loop. `gpu::browser::BrowserDeviceRequest::settle()` therefore

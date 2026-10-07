@@ -187,10 +187,12 @@ playwright_bin.playwright_test(
     copy_data_to_bin = False,
     data = [
         "browser-application-heartbeat.mjs",
+        "browser-gpu-residency.ts",
         "browser-heartbeat.cjs",
         "browser-resource-quiescence.mjs",
         "browser-responsiveness.perf.ts",
         "browser-watchdog-setup.js",
+        "canvas-color-stats.ts",
         "composited-pixel-classifier.mjs",
         "composited-probe.ts",
         "composited-probe-evidence.mjs",
@@ -295,6 +297,8 @@ playwright_bin.playwright_test(
     data = [
         "boot-presentation.spec.ts",
         "browser-backend-selection.spec.ts",
+        "browser-gpu-residency.ts",
+        "canvas-color-stats.ts",
         "package.json",
         "playwright.bazel.config.js",
         "playwright.boot-presentation.bazel.config.js",

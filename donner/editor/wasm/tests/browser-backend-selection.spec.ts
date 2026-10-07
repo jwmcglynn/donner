@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 import { expectSampleThumbnailsToSettle } from "./sample-thumbnail-settle";
+import { checkDocumentGpuResidency, type SelectionWindow } from "./browser-gpu-residency";
 
 // The line the renderer prints the first time a selection in the page lands on the browser
 // backend because the build asked for it. The raster worker selects when the editor draws its
@@ -19,32 +20,6 @@ if (kExpectedHeadlessBackend !== "browser" && kExpectedHeadlessBackend !== "tran
 const kExpectsBrowserBackend = kExpectedHeadlessBackend === "browser";
 
 const baseUrl = process.env.DONNER_WASM_BASE_URL || "http://127.0.0.1:8000";
-
-type WorkerStats = {
-  completedResults?: number;
-  acceptedForPresentation?: boolean;
-  presentedAtMs?: number;
-  readbackCount?: number;
-  readbackWaitStrategy?: string;
-  compositorReadbackCount?: number;
-  tileHandoffReadbackCount?: number;
-  finalSnapshotReadbackCount?: number;
-  compositorReadbackTotal?: number;
-  tileHandoffReadbackTotal?: number;
-  finalSnapshotReadbackTotal?: number;
-  bitmapPayloadTileTotal?: number;
-  texturePayloadTileTotal?: number;
-};
-type SelectionWindow = Window & {
-  __donnerFirstFramePresented?: boolean;
-  __donnerWorkerStats?: WorkerStats;
-  __donnerSampleThumbnailStats?: {
-    completed?: number;
-    ready?: number;
-    active?: boolean;
-    pending?: boolean;
-  };
-};
 
 // The layout the Basic Shapes card is placed in below.
 test.use({ viewport: { width: 1600, height: 900 } });
@@ -109,109 +84,8 @@ test("the raster worker selects the backend its package was built for", async ({
   expect(errors, "the page threw").toEqual([]);
 });
 
-test("ordinary document presentation performs no worker GPU readback", async ({ page }) => {
-  test.skip(!kExpectsBrowserBackend, "GPU transport requires the browser backend");
+test("ordinary document presentation stays on the GPU", async ({ page }, info) => {
+  test.skip(!kExpectsBrowserBackend, "the production browser backend owns this boundary");
   test.setTimeout(60000);
-  await page.goto(`${baseUrl}/index.html`, { waitUntil: "domcontentloaded" });
-  await expect
-    .poll(() => page.evaluate(() => (window as SelectionWindow).__donnerFirstFramePresented), {
-      timeout: 30000,
-    })
-    .toBe(true);
-
-  await expect
-    .poll(() =>
-      page.evaluate(() => {
-        const thumbnails = (window as SelectionWindow).__donnerSampleThumbnailStats;
-        return !!thumbnails && (thumbnails.completed ?? 0) > 0
-          && (thumbnails.ready ?? 0) > 0 && !thumbnails.active && !thumbnails.pending;
-      }), { timeout: 20000 })
-    .toBe(true);
-  const gpuOwner = await Promise.any(
-    page.workers().map(async (worker) => {
-      const ownsGpu = await worker.evaluate(() =>
-        Boolean(
-          (globalThis as typeof globalThis & { __donnerGpuOwner?: boolean })
-            .__donnerGpuOwner,
-        )
-      );
-      if (!ownsGpu) throw new Error("not the GPU owner");
-      return worker;
-    }),
-  );
-  await gpuOwner.evaluate(() => {
-    const state = globalThis as typeof globalThis & {
-      GPUQueue: { prototype: { writeTexture: (...args: unknown[]) => unknown } };
-      __donnerTestCpuWrites?: unknown[];
-    };
-    const writes: unknown[] = [];
-    state.__donnerTestCpuWrites = writes;
-    const original = state.GPUQueue.prototype.writeTexture;
-    state.GPUQueue.prototype.writeTexture = function(...args: unknown[]) {
-      if (writes.length < 32) writes.push({ layout: args[2], extent: args[3] });
-      return original.apply(this, args);
-    };
-  });
-  const rawBefore = await gpuOwner.evaluate(() => {
-    const state = globalThis as typeof globalThis & {
-      __donnerReadGpuObjectStats: () => {
-        readbackCopies: number;
-        cpuTextureWrites: number;
-        surfacePresents: number;
-      };
-    };
-    return state.__donnerReadGpuObjectStats();
-  });
-  const before = await page.evaluate(() => (window as SelectionWindow).__donnerWorkerStats);
-  const editorCanvas = page.locator("canvas#canvas");
-  const bounds = await editorCanvas.boundingBox();
-  expect(bounds, "the editor canvas is missing").not.toBeNull();
-  await page.mouse.click(bounds!.x + bounds!.width * 0.76, bounds!.y + 282);
-  await expect(editorCanvas).toHaveAttribute("data-active-sample-id", "basic-shapes");
-  await expect
-    .poll(
-      () => page.evaluate(() => (window as SelectionWindow).__donnerWorkerStats?.completedResults),
-      {
-        timeout: 10000,
-      },
-    )
-    .toBeGreaterThan(before?.completedResults ?? 0);
-
-  await expect.poll(
-    () =>
-      page.evaluate(() => Boolean((window as SelectionWindow).__donnerWorkerStats?.presentedAtMs)),
-    { timeout: 10000 },
-  ).toBe(true);
-  const after = await page.evaluate(() => (window as SelectionWindow).__donnerWorkerStats);
-  const rawAfter = await gpuOwner.evaluate(() => {
-    const state = globalThis as typeof globalThis & {
-      __donnerReadGpuObjectStats: () => {
-        readbackCopies: number;
-        cpuTextureWrites: number;
-        surfacePresents: number;
-      };
-    };
-    return state.__donnerReadGpuObjectStats();
-  });
-  expect(rawAfter.readbackCopies).toBe(rawBefore.readbackCopies);
-  const cpuWrites = await gpuOwner.evaluate(() =>
-    (globalThis as typeof globalThis & { __donnerTestCpuWrites?: unknown[] }).__donnerTestCpuWrites
-  );
-  expect(rawAfter.cpuTextureWrites, JSON.stringify(cpuWrites)).toBe(rawBefore.cpuTextureWrites);
-  expect(rawAfter.surfacePresents).toBeGreaterThan(rawBefore.surfacePresents);
-  expect(after, "the document result did not publish readback accounting").toBeDefined();
-  expect(after!.bitmapPayloadTileTotal).toBe(before?.bitmapPayloadTileTotal ?? 0);
-  expect(after!.texturePayloadTileTotal).toBeGreaterThan(before?.texturePayloadTileTotal ?? 0);
-  expect(after!.compositorReadbackTotal).toBeDefined();
-  expect(after!.tileHandoffReadbackTotal).toBeDefined();
-  expect(after!.finalSnapshotReadbackTotal).toBeDefined();
-  expect(after!.readbackCount).toBe(
-    (after!.compositorReadbackCount ?? 0) + (after!.tileHandoffReadbackCount ?? 0)
-      + (after!.finalSnapshotReadbackCount ?? 0),
-  );
-  expect((after!.compositorReadbackTotal ?? 0) - (before?.compositorReadbackTotal ?? 0)).toBe(0);
-  expect((after!.tileHandoffReadbackTotal ?? 0) - (before?.tileHandoffReadbackTotal ?? 0)).toBe(0);
-  expect((after!.finalSnapshotReadbackTotal ?? 0) - (before?.finalSnapshotReadbackTotal ?? 0)).toBe(
-    0,
-  );
+  await checkDocumentGpuResidency(page, info);
 });
