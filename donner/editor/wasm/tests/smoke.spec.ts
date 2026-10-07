@@ -1222,6 +1222,32 @@ test("Firefox hands a blocked thumbnail renderer to a foreground sample load", a
   expect(fatalMessages).toEqual([]);
 });
 
+async function delayWorkerAnimationFrames(page: Page, delayMs: number) {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      Promise.any(
+        page.workers().map((worker) =>
+          worker.evaluate((delay) => {
+            const scope = globalThis as typeof globalThis & { __donnerGpuOwner?: boolean };
+            if (!scope.__donnerGpuOwner) throw new Error("not the GPU owner");
+            const original = globalThis.requestAnimationFrame.bind(globalThis);
+            globalThis.requestAnimationFrame = (callback) =>
+              original((timestamp) => {
+                setTimeout(() => callback(timestamp), delay);
+              });
+          }, delayMs)
+        ),
+      ),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error("GPU owner did not accept the rAF probe")), 2000);
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
 async function readCarouselFrameDiagnostics(page: Page) {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
@@ -1254,6 +1280,13 @@ for (
     { id: "basic-shapes", name: "Basic Shapes", xFraction: 0.76, y: 282 },
     { id: "text-style", name: "Text and Style", xFraction: 0.24, y: 390 },
     { id: "gradients-clip", name: "Gradients and Clip", xFraction: 0.5, y: 390 },
+    {
+      id: "basic-shapes",
+      name: "Basic Shapes with delayed animation frames",
+      xFraction: 0.76,
+      y: 282,
+      delayWorkerRafMs: 600,
+    },
   ] as const
 ) {
   test(`carousel loads ${sample.name} on the first interactive frame`, async ({ page }) => {
@@ -1265,6 +1298,9 @@ for (
       return;
     }
 
+    if ("delayWorkerRafMs" in sample) {
+      await delayWorkerAnimationFrames(page, sample.delayWorkerRafMs);
+    }
     const deviceCreationsBeforeClick = await page.evaluate(
       () => window.__donnerHeadlessDeviceCreations ?? -1,
     );
