@@ -595,6 +595,7 @@ struct FrameDriverState {
   em_proxying_queue* proxyQueue = nullptr;
   FrameDriver driver = FrameDriver::SetTimeoutFallback;
   FrameCallbackAdmission admission;
+  std::atomic<std::uint32_t> pendingFrames{0};
   std::atomic<std::uint32_t> peakPendingFrames{0};
 
   double lastTickMs = 0.0;
@@ -635,10 +636,15 @@ void RunDrivenFrame(void* token) {
   }
 }
 
-void RunProxiedFrame(void* token) {
+void CompleteProxiedFrame(std::uint32_t generation) {
   FrameDriverState& state = Driver();
+  state.pendingFrames.fetch_sub(1, std::memory_order_relaxed);
+  state.admission.complete(generation);
+}
+
+void RunProxiedFrame(void* token) {
   RunDrivenFrame(token);
-  state.admission.complete(static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(token)));
+  CompleteProxiedFrame(static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(token)));
 }
 
 void ScheduleProxiedFrame(void* token) {
@@ -648,7 +654,7 @@ void ScheduleProxiedFrame(void* token) {
     // Rendering inside the SDK's unbounded queue drain can starve GPU notifications.
     emscripten_async_call(&RunProxiedFrame, token, 0);
   } else {
-    state.admission.complete(generation);
+    CompleteProxiedFrame(generation);
   }
 }
 
@@ -664,10 +670,14 @@ extern "C" EMSCRIPTEN_KEEPALIVE bool donner_whole_app_vsync_tick(std::uint32_t g
     return false;
   }
   if (state.proxyQueue && state.admission.acquire(generation)) {
-    state.peakPendingFrames.store(1, std::memory_order_relaxed);
+    const std::uint32_t pending = state.pendingFrames.fetch_add(1, std::memory_order_relaxed) + 1;
+    std::uint32_t peak = state.peakPendingFrames.load(std::memory_order_relaxed);
+    while (peak < pending && !state.peakPendingFrames.compare_exchange_weak(
+                                 peak, pending, std::memory_order_relaxed)) {}
+
     void* token = reinterpret_cast<void*>(static_cast<std::uintptr_t>(generation));
     if (!emscripten_proxy_async(state.proxyQueue, state.appThread, &ScheduleProxiedFrame, token)) {
-      state.admission.complete(generation);
+      CompleteProxiedFrame(generation);
     }
   }
   return true;
