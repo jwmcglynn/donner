@@ -434,33 +434,28 @@ void CaptureFrameSnapshotsForResult(svg::RendererInterface& renderer,
   }
 }
 
-bool PrepareCompositedTilePayload(bool requiresTexturePresentation,
-                                  RenderResult::CompositedTile& tile,
-                                  RenderResult::WorkerTimingBreakdown& timing,
-                                  const std::function<bool()>& shouldCancel) {
-  const bool capturesCpuPixels = tile.textureSnapshot != nullptr && !requiresTexturePresentation;
-  if (!PrepareTilePayloadForPresentation(requiresTexturePresentation, tile.bitmap,
-                                         tile.textureSnapshot, shouldCancel)) {
-    return false;
-  }
-  timing.tileHandoffReadbackCount += capturesCpuPixels ? 1 : 0;
-  return true;
-}
-
 void ApplyReadbackTimingStats(RenderResult::WorkerTimingBreakdown& timing,
                               const svg::RendererReadbackStats& compositor,
-                              const svg::RendererReadbackStats& presentation) {
-  timing.readbackCount = compositor.count + presentation.count;
-  UTILS_RELEASE_ASSERT_MSG(presentation.count >= timing.tileHandoffReadbackCount,
-                           "Tile handoff readbacks exceed presentation readbacks");
-  timing.finalSnapshotReadbackCount = presentation.count - timing.tileHandoffReadbackCount;
-  timing.readbackPollIterations = compositor.pollIterations + presentation.pollIterations;
-  timing.usedTimedWaitAny = compositor.usedTimedWaitAny || presentation.usedTimedWaitAny;
-  timing.deviceLost = compositor.deviceLost || presentation.deviceLost;
-  const svg::RendererReadbackStats& timeout =
-      presentation.timedOutWaitSite != svg::GpuWaitTimeoutSite::None ? presentation : compositor;
-  timing.timedOutWaitSite = timeout.timedOutWaitSite;
-  timing.timedOutWaitMs = timeout.timedOutWaitMs;
+                              const svg::RendererReadbackStats& handoff,
+                              const svg::RendererReadbackStats& finalSnapshot) {
+  timing.compositorReadbackCount = compositor.count;
+  timing.tileHandoffReadbackCount = handoff.count;
+  timing.finalSnapshotReadbackCount = finalSnapshot.count;
+  timing.readbackCount = compositor.count + handoff.count + finalSnapshot.count;
+  timing.readbackPollIterations =
+      compositor.pollIterations + handoff.pollIterations + finalSnapshot.pollIterations;
+  timing.usedTimedWaitAny =
+      compositor.usedTimedWaitAny || handoff.usedTimedWaitAny || finalSnapshot.usedTimedWaitAny;
+  timing.deviceLost = compositor.deviceLost || handoff.deviceLost || finalSnapshot.deviceLost;
+  const svg::RendererReadbackStats* timeout = &compositor;
+  if (handoff.timedOutWaitSite != svg::GpuWaitTimeoutSite::None) {
+    timeout = &handoff;
+  }
+  if (finalSnapshot.timedOutWaitSite != svg::GpuWaitTimeoutSite::None) {
+    timeout = &finalSnapshot;
+  }
+  timing.timedOutWaitSite = timeout->timedOutWaitSite;
+  timing.timedOutWaitMs = timeout->timedOutWaitMs;
 }
 
 bool CanUseFullCanvasPresentation(bool hasCompositor, bool overviewInfillOnly,
@@ -1796,9 +1791,9 @@ void AsyncRenderer::workerLoop() {
         if (!metadataOnly) {
           tile.bitmap = std::move(ct.bitmap);
           tile.textureSnapshot = std::move(ct.textureSnapshot);
-          if (!PrepareCompositedTilePayload(requestRenderer.requiresTextureSnapshotPresentation(),
-                                            tile, workerTiming,
-                                            [this]() { return cancelRender_.isCancelled(); })) {
+          if (!PrepareTilePayloadForPresentation(
+                  requestRenderer.requiresTextureSnapshotPresentation(), tile.bitmap,
+                  tile.textureSnapshot, [this]() { return cancelRender_.isCancelled(); })) {
             return std::nullopt;
           }
         }
@@ -1948,7 +1943,6 @@ void AsyncRenderer::workerLoop() {
 
     const svg::RendererReadbackStats compositorReadbackStats =
         requestRenderer.consumeReadbackStats();
-    workerTiming.compositorReadbackCount = compositorReadbackStats.count;
     noteGpuWaitOutcome(compositorReadbackStats);
 
     // Every non-Off editor frame publishes the compositor's paint-order tile set. Promotion
@@ -1963,6 +1957,8 @@ void AsyncRenderer::workerLoop() {
       }
       workerTiming.buildPreviewMs = elapsedSince(buildPreviewStart);
     }
+    const svg::RendererReadbackStats handoffReadbackStats = requestRenderer.consumeReadbackStats();
+    noteGpuWaitOutcome(handoffReadbackStats);
     // Selection chrome is no longer baked into the bitmap - main.cc
     // draws it via the ImGui draw list every frame so clicks don't
     // pay the SVG re-rasterize cost. The `request.selection` field
@@ -1984,9 +1980,10 @@ void AsyncRenderer::workerLoop() {
                                      [this]() { return cancelRender_.isCancelled(); });
       workerTiming.finalSnapshotMs = elapsedSince(finalSnapshotStart);
     }
-    const svg::RendererReadbackStats readbackStats = requestRenderer.consumeReadbackStats();
-    ApplyReadbackTimingStats(workerTiming, compositorReadbackStats, readbackStats);
-    noteGpuWaitOutcome(readbackStats);
+    const svg::RendererReadbackStats finalReadbackStats = requestRenderer.consumeReadbackStats();
+    ApplyReadbackTimingStats(workerTiming, compositorReadbackStats, handoffReadbackStats,
+                             finalReadbackStats);
+    noteGpuWaitOutcome(finalReadbackStats);
     if (!compositedPreview.has_value() && (!bitmap.empty() || fullCanvasTexture != nullptr)) {
       UTILS_RELEASE_ASSERT_MSG(
           fullCanvasPresentationAllowed,

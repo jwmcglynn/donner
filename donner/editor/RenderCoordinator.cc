@@ -7,6 +7,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
+#include <cstring>
 #include <span>
 #include <utility>
 
@@ -54,17 +56,15 @@ const char* GpuWaitTimeoutSiteName(svg::GpuWaitTimeoutSite site) {
 }
 
 // Proxied to the browser main thread: the render pthread has no `window`.
-// The numeric values ride one heap buffer because EM_ASM argument
-// substitution stops at $15; the buffer is static because the async proxy
-// reads it after this function returns, and the publisher is single-threaded
-// per process. The wait-site name rides a separate argument as a pointer to a
-// string literal, which has static storage and so outlives the proxy hop too.
+// Numeric values ride an owned heap buffer because EM_ASM argument substitution stops at $15.
+// Each asynchronous proxy owns its buffer until the main thread copies and frees it, so a later
+// result cannot overwrite an earlier one's accounting. The wait-site name points to a string
+// literal whose storage outlives the proxy hop.
 void PublishWorkerTimingStats(
     const RenderResult& result, const EditorApp& app,
     const svg::compositor::CompositorController::RenderFrameStats& compositorStats) {
   const auto& timing = result.workerTiming;
   constexpr std::size_t kValueCount = 38;
-  static double buffer[kValueCount];
   const double values[kValueCount] = {
       result.workerMs,
       timing.queueWaitMs,
@@ -104,14 +104,24 @@ void PublishWorkerTimingStats(
       static_cast<double>(timing.compositorReadbackCount),
       static_cast<double>(timing.tileHandoffReadbackCount),
       static_cast<double>(timing.finalSnapshotReadbackCount)};
-  std::copy(std::begin(values), std::end(values), std::begin(buffer));
+  double* buffer = static_cast<double*>(std::malloc(sizeof(values)));
+  if (buffer == nullptr) {
+    return;
+  }
+  std::memcpy(buffer, values, sizeof(values));
   // clang-format off: EM_JS and EM_ASM bodies are JavaScript, which clang-format rewrites
   // as C++ - it has already split a `===` into `== =` elsewhere in the editor, a SyntaxError
   // the browser reports only once that arm is built.
   MAIN_THREAD_ASYNC_EM_ASM(
       {
-        const b = $0 >> 3;
-        const heap = HEAPF64;
+        let heap;
+        try {
+          const start = $0 >> 3;
+          heap = HEAPF64.slice(start, start + $2);
+        } finally {
+          _free($0);
+        }
+        const b = 0;
         const names = ([
           'workerMs',
           'queueWaitMs',
@@ -176,7 +186,7 @@ void PublishWorkerTimingStats(
         stats['publishReason'] = 'render-result';
         window['__donnerWorkerStats'] = stats;
       },
-      buffer, GpuWaitTimeoutSiteName(timing.timedOutWaitSite));
+      buffer, GpuWaitTimeoutSiteName(timing.timedOutWaitSite), kValueCount);
   // clang-format on
 }
 

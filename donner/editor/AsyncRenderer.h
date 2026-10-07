@@ -342,9 +342,9 @@ struct RenderResult {
     int readbackCount = 0;
     /// GPU-to-CPU readbacks performed inside compositor rendering, before document unlock.
     int compositorReadbackCount = 0;
-    /// Changed GPU tiles captured for a CPU receiver after document unlock.
+    /// GPU-to-CPU map attempts while preparing changed tile payloads after document unlock.
     int tileHandoffReadbackCount = 0;
-    /// Final frame captures, including explicit CPU captures requested by diagnostics or export.
+    /// GPU-to-CPU map attempts while capturing the final frame, including explicit captures.
     int finalSnapshotReadbackCount = 0;
 
     /// Legacy device-poll iterations used while waiting for those readbacks.
