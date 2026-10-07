@@ -1,9 +1,9 @@
 # Design 0017: Geode GPU Renderer
 
 **Status:** Implemented. Geode is Donner's GPU renderer for dynamic SVG documents. The native
-Metal/Vulkan and browser runtime cutover is described in [Design 0053](0053-native_gpu_hal.md);
-its final cross-platform acceptance remains open there. This page preserves the design number and
-points to the current implementation documentation.
+Metal/Vulkan and browser runtime cutover is described in [Design 0053](0053-native_gpu_hal.md),
+which records its cross-platform acceptance. This page preserves the design number and points to
+the current implementation documentation.
 
 **Author:** Jeff McGlynn
 
@@ -13,7 +13,7 @@ points to the current implementation documentation.
 
 **Created:** 2026-04-07
 
-**Last updated:** 2026-09-25
+**Last updated:** 2026-10-06
 
 ## What shipped
 
@@ -24,8 +24,9 @@ The renderer is selected with `--config=geode`; TinySkia remains the default CPU
 
 Native rendering uses Metal on macOS and Vulkan on Linux. The browser editor uses the browser
 GPU runtime. The Linux resvg comparison target keeps a checksum-pinned wgpu-native reference as
-test-only evidence; that reference is not a native embedding API. The final dependency and
-platform gates are tracked in Design 0053.
+test-only evidence; that reference is not a native embedding API. Design 0053's
+[cutover acceptance](0053-native_gpu_hal.md#cutover-acceptance) records the final dependency and
+platform gates.
 
 ## Current developer contract
 
@@ -34,8 +35,9 @@ root, and pass a runtime texture as the renderer's target. The maintained
 [native embedding guide](../guides/embedding_geode.md) and
 [GLFW example](../../examples/geode_embed.cc) give the API, surface retirement order, and a
 bounded one-frame presentation smoke. The [editor architecture](../editor_architecture.md)
-describes the product caller. Design 0053 defines ownership, backend selection, test-only
-reference containment, and cutover acceptance.
+describes the product caller. The [GPU runtime reference](../gpu_runtime.md) defines ownership
+and backend selection; Design 0053 records test-only reference containment and the cutover
+acceptance.
 
 The Geode resvg suite uses the same reviewed scene goldens and pixelmatch rules as the native
 backend lanes. Relevant tests include

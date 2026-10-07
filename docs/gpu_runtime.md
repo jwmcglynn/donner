@@ -5,8 +5,9 @@
 This reference is for Donner developers working on Geode, the editor, or the GPU runtime under
 `donner/gpu/`. It states who owns each GPU object, how a backend is chosen on each platform, and
 what the runtime does when the GPU fails. The [native embedding guide](guides/embedding_geode.md)
-walks through the same contracts from a windowed host, and
-[design 0053](design_docs/0053-native_gpu_hal.md) records how the runtime got here.
+walks through the same contracts from a windowed host.
+[Design 0053](design_docs/0053-native_gpu_hal.md) summarizes the cutover that produced the runtime,
+and its [original text](https://github.com/jwmcglynn/donner/blob/e1016864514efc5bf3eb7c8a74d1f7572bb3f4c6/docs/design_docs/0053-native_gpu_hal.md) records how the runtime got here.
 
 The runtime is internal to Donner. For v0.8 the maintainer decided that there is no native
 embedding surface beyond internal callers: the editor, the in-tree
@@ -124,8 +125,9 @@ event on Metal, where each runtime device has its own command queue. An acquired
 cannot be exported on Metal or Vulkan, because the surface can recycle it at presentation. Bytes
 of released textures that a token or registration still holds are reported by
 `Device::sharedTextureTailBytes()`. Geode's consumers register through
-`geode::RegisterOrderedTexture()`. The full contract is in
-[Cross-device texture registration](design_docs/0053-native_gpu_hal.md#cross-device-texture-registration).
+`geode::RegisterOrderedTexture()`. The full contract is in the original design's
+[cross-device texture registration](https://github.com/jwmcglynn/donner/blob/e1016864514efc5bf3eb7c8a74d1f7572bb3f4c6/docs/design_docs/0053-native_gpu_hal.md#cross-device-texture-registration)
+section.
 
 ### Snapshots {#GpuRuntimeSnapshots}
 
@@ -150,8 +152,9 @@ of released textures that a token or registration still holds are reported by
 
 Explicit captures are CPU consumers by design. Ordinary native composition and presentation keep
 pixels on the GPU. The browser editor currently moves document pixels from its raster worker to
-its UI thread as CPU bitmaps, because direct texture handles do not cross workers; design 0053
-tracks that handoff as an open transport defect, not as the intended data path.
+its UI thread as CPU bitmaps, because direct texture handles do not cross workers;
+[#1720](https://github.com/jwmcglynn/donner/issues/1720) tracks that handoff as an open transport
+defect, not as the intended data path.
 
 ### Uploads and mappings {#GpuRuntimeUploads}
 
@@ -196,8 +199,8 @@ tracks that handoff as an open transport defect, not as the intended data path.
   `VkSurfaceKHR` and window until `VulkanSharedRoot::destroyExternalSurface()` succeeds with the
   registration `registerExternalSurface()` returned. If teardown cannot be proved, the surface,
   window and root are retained until process exit and every later Vulkan device creation fails;
-  restart the process to use Vulkan again. See the
-  [Linux Vulkan external-surface retirement gate](design_docs/0053-native_gpu_hal.md#linux-vulkan-external-surface-retirement-gate).
+  restart the process to use Vulkan again. See the original design's
+  [Linux Vulkan external-surface retirement gate](https://github.com/jwmcglynn/donner/blob/e1016864514efc5bf3eb7c8a74d1f7572bb3f4c6/docs/design_docs/0053-native_gpu_hal.md#linux-vulkan-external-surface-retirement-gate).
 
 ### Retirement order {#GpuRuntimeRetirement}
 
@@ -321,8 +324,10 @@ The maintainer decided the GPU matrix:
   driver).
 - **Best-effort:** every other GPU and driver combination.
 
-Browser presentation is qualified separately, on Chromium, WebKit and physical iOS, under the
-[cutover acceptance](design_docs/0053-native_gpu_hal.md#cutover-acceptance) gates.
+Browser presentation is qualified separately, on Chromium, WebKit and real Safari, under the
+[cutover acceptance](design_docs/0053-native_gpu_hal.md#cutover-acceptance) gates. Physical iOS is
+outside the cutover's GPU qualification matrix; physical-iPhone checks are v0.8 release
+preparation in [#1420](https://github.com/jwmcglynn/donner/issues/1420).
 [Design 0064](design_docs/0064-gpu_release_matrix.md) records which CI lanes exercise each
 combination.
 
@@ -338,9 +343,9 @@ The enforced limits, such as 16,384 texels a side and 1 GiB per buffer, are in
 `donner/gpu/GpuLimits.h`.
 
 Untrusted SVG controls geometry, images, filter graphs, dimensions and repetition. It never
-supplies native handles, shader source or command streams: every shader is compiled at build time,
-browser object identifiers come from a space that is never reused, and UI draw data names textures
-by generation-checked `UiTextureId` values.
+supplies native handles, shader source or command streams: every shader is a frozen artifact that
+Donner's compiler produced at build time, browser object identifiers come from a space that is
+never reused, and UI draw data names textures by generation-checked `UiTextureId` values.
 
 ### Device loss {#GpuRuntimeDeviceLoss}
 
@@ -442,8 +447,8 @@ completion is unknown.
 `//donner/gpu/metal/tests:metal_submission_backstop_tests`,
 `//donner/gpu/vulkan/tests:vulkan_queue_progress_tests` and
 `EditorWindowPolicyTest.AnOverdueFrameBehindADeviceStillMakingProgressIsNotTimedOut` cover the
-rest. The rationale and measurements are in
-[Bounded GPU waits](design_docs/0053-native_gpu_hal.md#bounded-gpu-waits).
+rest. The rationale and measurements are in the original design's
+[bounded GPU waits](https://github.com/jwmcglynn/donner/blob/e1016864514efc5bf3eb7c8a74d1f7572bb3f4c6/docs/design_docs/0053-native_gpu_hal.md#bounded-gpu-waits) section.
 
 ### Surface loss and recovery {#GpuRuntimeSurfaceLoss}
 
@@ -526,7 +531,9 @@ test-time check of the backends underneath it:
   `//donner/gpu/shader:wgsl_chromium_compilation_tests`.
 
 The cutover gates require zero Metal API and Vulkan synchronization-validation errors on the
-exercised native workloads. A lane that must have a device fails rather than skips without one:
+exercised native workloads. No CI lane enables the Vulkan layers; for the cutover the maintainer
+accepted per-feature development runs of synchronization validation on lavapipe, which reported
+no findings. A lane that must have a device fails rather than skips without one:
 the Metal device targets fail under CI and skip on a developer machine
 (`DONNER_REQUIRE_METAL_DEVICE`), and the Vulkan targets fail when `DONNER_REQUIRE_VULKAN=1` is set.
 

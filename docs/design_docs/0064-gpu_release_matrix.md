@@ -104,7 +104,7 @@ Notes:
 | Linux arm64                   | Mesa lavapipe (software)            | **PR-gated**     | The self-hosted Linux routing, when it is the selected lane                                                                      |
 | Linux x86_64/arm64            | Mesa lavapipe, literal-fill goldens | **PR-gated**     | `renderer_geode_golden_tests` literal-fill cases and `vulkan_solid_fill_tests`, one golden per scene                             |
 | Every lane, SPIR-V validation | `spirv-val`                         | **PR-gated**     | `spirv_val_validation_tests`; Bazel builds the validator from source and hands it over in runfiles, so no lane can be missing it |
-| Linux                         | Vulkan validation layers            | **None**         | No lane enables them; the design requires zero validation errors                                                                 |
+| Linux                         | Vulkan validation layers            | **None**         | No lane enables them; the cutover relied on development runs                                                                     |
 | Linux x86_64/arm64            | Intel physical                      | **None**         | No lane has a GPU device; the shared executor advertises none                                                                    |
 | Linux x86_64                  | AMD physical                        | **None**         | As above                                                                                                                         |
 | Linux x86_64                  | NVIDIA physical                     | **None**         | As above                                                                                                                         |
@@ -121,8 +121,9 @@ Notes:
   software adapter is the entire matrix.
 - The missing driver is a red test rather than a skip on lanes that set `DONNER_REQUIRE_VULKAN`,
   which is the pattern the other backends' gates should adopt.
-- Validation layers are the load-bearing gate for the explicit-synchronization work Vulkan needs.
-  Enabling them is a prerequisite for the Vulkan cutover, not a follow-up to it.
+- Validation layers are the load-bearing check for the explicit-synchronization work Vulkan needs.
+  No CI lane enables them. For the cutover the maintainer accepted per-feature development runs of
+  Khronos synchronization validation on lavapipe, which reported no findings.
 
 ## Browser WebGPU
 
@@ -136,7 +137,7 @@ Notes:
 | Safari (the shipping browser)        | macOS        | **Dev-host**     | A regression script exists; no workflow invokes it    |
 | Any browser                          | Linux        | **None**         | The pixel-presenting smoke target is macOS-arm64 only |
 | Any browser                          | Windows      | **Out of scope** | Windows is not a target platform                      |
-| Mobile Safari                        | iOS / iPadOS | **None**         | 0053 requires physical iOS presentation checks        |
+| Mobile Safari                        | iOS / iPadOS | **None**         | Outside the cutover GPU qualification matrix          |
 
 Notes:
 
@@ -150,20 +151,23 @@ Notes:
 
 ## Cross-cutting gaps
 
-These are the combinations 0053's gates depend on that nothing currently executes. Windows is not
-among them: it is a non-target, listed as out of scope in the tables above rather than counted as a
-gap.
+These are the combinations that no CI lane executes. Windows is not among them: it is a
+non-target, listed as out of scope in the tables above rather than counted as a gap.
 
 1. Any physical Vulkan driver. Intel, AMD, and NVIDIA are all unqualified, and the executor pool
    advertises no GPU worker class, so adding one is a hardware and scheduling decision rather than
    a lane edit.
-2. Vulkan validation layers. The synchronization model 0053 calls its load-bearing subsystem has
-   no validation gate.
-3. Physical iOS presentation.
+2. Vulkan validation layers. No CI lane enables them for the synchronization model 0053 calls its
+   load-bearing subsystem; the cutover relied on per-feature development runs of synchronization
+   validation on lavapipe, which the maintainer accepted.
+3. Physical iOS presentation. It is outside the cutover's GPU qualification matrix;
+   physical-iPhone checks are v0.8 release preparation in
+   [#1420](https://github.com/jwmcglynn/donner/issues/1420).
 4. More than one Apple GPU generation per change.
 5. Geode through CMake. The CMake lanes build the CPU backend on both platforms, while the README
-   describes both backends as selectable. 0053 requires CMake to gain equivalent native GPU targets
-   as each backend reaches production, so this gap is on the cutover path.
+   describes both backends as selectable. Building Geode and the native GPU runtime through the
+   generated CMake build is a post-cutover follow-up,
+   [#1721](https://github.com/jwmcglynn/donner/issues/1721).
 6. macOS Geode fuzzing. The Linux nightly fuzz job has a Geode step; the macOS one does not.
 
 ## Binary-size budgets

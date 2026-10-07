@@ -10,9 +10,9 @@ namespace donner::gpu {
 /**
  * Overflow-checked addition of unsigned 64-bit sizes.
  *
- * All byte-size and extent arithmetic in the GPU runtime is checked (design
- * 0053 "Security and Reliability"): untrusted SVG content controls geometry
- * volume and image sizes, so silent wraparound must be impossible.
+ * Returns \c std::nullopt instead of wrapping when the sum does not fit in 64 bits. Untrusted SVG
+ * content controls geometry volume and image sizes, so GPU byte-size and extent math uses these
+ * helpers to refuse an overflowing size rather than continue with a wrapped, smaller one.
  *
  * @param a First operand.
  * @param b Second operand.
