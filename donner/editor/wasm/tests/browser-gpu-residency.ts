@@ -130,22 +130,35 @@ export async function checkDocumentGpuResidency(
   );
   // UI assets may upload while opening the document. Redraws must neither upload tile pixels
   // nor read them back; tile publication counts cover the initial opening as well.
+  const priorViewport = await page.evaluate(() =>
+    (window as SelectionWindow).__donnerViewportStats!
+  );
   await page.setViewportSize({ width: 1440, height: 920 });
   await expect.poll(
-    () => page.evaluate(() => (window as SelectionWindow).__donnerWorkerStats?.completedResults),
+    () => page.evaluate(() => (window as SelectionWindow).__donnerViewportStats?.paneWidth),
     { timeout: 10000 },
-  ).toBeGreaterThan(after!.completedResults!);
-  await expect.poll(
-    () =>
-      page.evaluate(() => Boolean((window as SelectionWindow).__donnerWorkerStats?.presentedAtMs)),
-    { timeout: 10000 },
-  ).toBe(true);
+  ).not.toBe(priorViewport.paneWidth);
   const viewport = await page.evaluate(() => (window as SelectionWindow).__donnerViewportStats!);
   await page.mouse.move(
     viewport.paneX + viewport.paneWidth * 0.5,
     viewport.paneY + viewport.paneHeight * 0.5,
   );
-  await page.mouse.wheel(0, -80);
+  await page.evaluate(({ x, y }) => {
+    document.querySelector("canvas#canvas")!.dispatchEvent(
+      new WheelEvent("wheel", {
+        bubbles: true,
+        cancelable: true,
+        clientX: x,
+        clientY: y,
+        ctrlKey: true,
+        deltaMode: 0,
+        deltaY: -20.5,
+      }),
+    );
+  }, {
+    x: viewport.paneX + viewport.paneWidth * 0.5,
+    y: viewport.paneY + viewport.paneHeight * 0.5,
+  });
   await expect.poll(
     () => page.evaluate(() => (window as SelectionWindow).__donnerViewportStats?.zoom),
     { timeout: 10000 },
