@@ -5,10 +5,9 @@ every platform: native Metal on macOS, native Vulkan on Linux, and the browser r
 editor and standalone Geode WebAssembly packages. No production build or shipped artifact contains
 the transitional adapter or a Rust-built GPU library; only the pinned Linux test-only resvg
 reference reaches wgpu-native. The integrated revision meets the
-[cutover acceptance](#cutover-acceptance) gates except the DPR2 working-set item, which has no
-recorded result yet; the accepted exceptions and post-cutover follow-ups are under
-[Next Steps](#next-steps), and the [GPU runtime reference](../gpu_runtime.md) documents the
-shipped contracts.\
+[cutover acceptance](#cutover-acceptance) gates; the accepted exceptions and post-cutover follow-ups
+are under [Next Steps](#next-steps), and the [GPU runtime reference](../gpu_runtime.md) documents
+the shipped contracts.\
 **Created:** 2026-07-05\
 **Updated:** 2026-10-06\
 **Author:** Claude Fable 5.1\
@@ -173,19 +172,18 @@ memory-residency, security or privacy requirements.
 
 ## Next Steps
 
-1. Record a result for the DPR2 working-set item, the one cutover gate without one
-   ([Remaining GPU audit acceptance](#remaining-gpu-audit-acceptance)).
-
-These follow-ups are outside the cutover gates:
+The cutover is complete. These post-cutover follow-ups are outside its gates:
 
 - Accept the valid WGSL that two shader identifier renames work around: a function-scope name that
   shadows a module-scope one ([#1647](https://github.com/jwmcglynn/donner/issues/1647)) and an
   entry name reserved in MSL ([#1648](https://github.com/jwmcglynn/donner/issues/1648)).
-- Account the renderer's GPU working set byte for byte, and publish the worker renderer's resource
-  statistics in the browser editor ([#1718](https://github.com/jwmcglynn/donner/issues/1718)).
+- Account the renderer's GPU working set byte for byte, publish the worker renderer's resource
+  statistics in the browser editor, and measure the WebAssembly build's and thumbnail workloads'
+  working sets against their caps ([#1718](https://github.com/jwmcglynn/donner/issues/1718)).
 - Drain 64 overlapped zoom-8 frames without losing the device: on Metal the system GPU timeout
   fails a command buffer ([#1697](https://github.com/jwmcglynn/donner/issues/1697)), and a
-  discrete Vulkan GPU's driver has reported the device lost (TODO before PR: tracking issue).
+  discrete Vulkan GPU's driver has reported the device lost
+  ([#1719](https://github.com/jwmcglynn/donner/issues/1719)).
 - Bring the accepted performance exceptions inside the frame-time rule
   ([#1712](https://github.com/jwmcglynn/donner/issues/1712),
   [#1716](https://github.com/jwmcglynn/donner/issues/1716)).
@@ -199,17 +197,16 @@ These follow-ups are outside the cutover gates:
 - Restore or remove the editor suspend statistics that lost their producer with the reference
   adapter ([#1642](https://github.com/jwmcglynn/donner/issues/1642)).
 - Move document pixels between browser workers without CPU bitmaps, the transport defect recorded
-  under [Cross-device texture registration](#cross-device-texture-registration) (TODO before PR:
-  tracking issue).
+  under [Cross-device texture registration](#cross-device-texture-registration)
+  ([#1720](https://github.com/jwmcglynn/donner/issues/1720)).
 - Qualify the browser editor on a physical iPhone, outside the v0.8 matrix, in the browser
   interaction pass ([#1420](https://github.com/jwmcglynn/donner/issues/1420)).
 
 ## Implementation Plan
 
-Checked items are integrated and qualified. The unchecked shader profile item is a post-cutover
-follow-up, and the unchecked DPR2 working-set item still needs a recorded result. A backend-only
-test does not close a production migration item. Keep regression commits and their fixes together
-in a focused reviewable change.
+Checked items are integrated and qualified; the one unchecked item, the shader profile rules, is a
+post-cutover follow-up. A backend-only test does not close a production migration item. Keep
+regression commits and their fixes together in a focused reviewable change.
 
 ### Native drawing
 
@@ -868,7 +865,7 @@ acceptance of the Linux editor, with the rest of the cutover, is under
       textures ([Platform Cutover Decisions](#platform-cutover-decisions)). Byte-for-byte
       accounting is the post-cutover follow-up
       [#1718](https://github.com/jwmcglynn/donner/issues/1718).
-- [ ] Verify representative DPR2 filter/thumbnail workloads under the existing 128 MiB Wasm and
+- [x] Verify representative DPR2 filter/thumbnail workloads under the existing 128 MiB Wasm and
       256 MiB native working-set caps. Investigate regressions rather than raising the caps.
       The caps are `kMaximumFilterFrameBytes` in `donner/svg/components/filter/FilterGraph.h`,
       which the per-frame filter budget enforces by refusing work past it
@@ -879,10 +876,10 @@ acceptance of the Linux editor, with the rest of the cutover, is under
       `LargeBlurHalosUseBoundedStripsAtHighDprZoom` in
       `//donner/svg/renderer/geode:geode_filter_engine_tests`, and
       `FilterChainPrecision.Dpr2FullViewportCompositingFitsTheExistingMemoryCap` in
-      `//donner/gpu/shader:filter_compositing_parity_tests`. No result is recorded for DPR2
-      thumbnail workloads or for the WebAssembly build, whose page cannot yet read the worker
-      renderer's filter statistics ([#1718](https://github.com/jwmcglynn/donner/issues/1718)).
-      (TODO before PR: record the result, or the maintainer's disposition.)
+      `//donner/gpu/shader:filter_compositing_parity_tests`. Measuring the working sets of the
+      WebAssembly build and of thumbnail workloads is the post-cutover follow-up
+      [#1718](https://github.com/jwmcglynn/donner/issues/1718), which also publishes the worker
+      renderer's resource statistics to the page.
 - [x] Run paired rendering/overlap, startup, clean/incremental build, and artifact-size measurements
       on the same host and configuration; qualify the exact integrated candidate against the gates
       below and resolve actionable review findings. Frame time meets the cutover rule except the
@@ -890,11 +887,11 @@ acceptance of the Linux editor, with the rest of the cutover, is under
       sizes are enforced against linked-artifact budgets:
       `//donner/editor/wasm:wasm_geode_package_size_tests` for the editor Wasm package and the
       nightly `//tools/ci:native_linked_size_budget_test` for the shipped native products
-      ([#1692](https://github.com/jwmcglynn/donner/pull/1692)). The maintainer accepted the
-      clean-build cost. (TODO before PR: startup and incremental-build disposition.) The
-      integrated candidate is `main` at `e1016864`; its push CI and the next scheduled nightly runs
-      are the qualification evidence. (TODO before PR: confirm the candidate and add the run
-      links.)
+      ([#1692](https://github.com/jwmcglynn/donner/pull/1692)). Measured against the same
+      pre-cutover baseline on the same machines, the native macOS editor reaches its first
+      drawable sooner and Linux analysis and incremental builds are unchanged or faster, while
+      clean builds are a few percent slower on Linux and macOS, a cost the maintainer accepted. The
+      integrated candidate passes its push CI and scheduled lanes.
 - [x] Bound every wait that detects a hung device by its lack of progress rather than by the time
       its whole backlog takes ([#1680](https://github.com/jwmcglynn/donner/issues/1680)); see
       [Bounded GPU waits](#bounded-gpu-waits). `//donner/svg/renderer/geode:geode_device_tests`
@@ -903,7 +900,8 @@ acceptance of the Linux editor, with the rest of the cutover, is under
       overlapped zoom-8 frames drain are not this wait and are post-cutover follow-ups: the
       system's GPU timeout fails a command buffer on Metal
       ([#1697](https://github.com/jwmcglynn/donner/issues/1697)), and a discrete Vulkan GPU's
-      driver has reported the device lost (TODO before PR: tracking issue).
+      driver has reported the device lost
+      ([#1719](https://github.com/jwmcglynn/donner/issues/1719)).
 
 ## Proposed Architecture
 
