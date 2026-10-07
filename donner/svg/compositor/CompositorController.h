@@ -867,6 +867,8 @@ public:
     int damagePatchTileCount = 0;
     /// Geometry draws charged while rasterizing those damage rectangles.
     std::size_t damagePatchGeometryDraws = 0;
+    /// Masked owner tiles rebuilt this frame from cached pieces around a held-drag child.
+    int maskedChildComposeTileCount = 0;
     /// Offscreen renderer instances constructed this frame. With pooling,
     /// a steady-state frame reuses the pooled instance and reports 0 or 1
     /// here regardless of tile count; per-tile construction (the pre-pool
