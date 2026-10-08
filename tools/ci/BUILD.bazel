@@ -32,6 +32,9 @@ test_suite(
         "//donner/editor/tests:gl_rnr_replay_tests_geode",
         "//donner/editor/tests:layer_thumbnail_golden_tests_geode",
         "//donner/editor/tests:rnr_replay_tests_geode",
+        # Not a transitioned wrapper: the lane's `--config=geode` makes it compatible, and no
+        # other lane builds it.
+        "//donner/svg/compositor:compositor_geode_splash_tests",
     ],
 )
 

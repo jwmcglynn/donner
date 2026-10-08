@@ -1587,6 +1587,33 @@ bool HasNeutralLeafCompositing(const components::ComputedStyleComponent& style) 
          style.properties->isolation.get().value() != Isolation::Isolate;
 }
 
+/// The paint-order slice from @p maskedEntity through the end of its mask content
+/// [@p maskFirst, @p maskLast], without offscreen feImage shadows. The mask content is traversed
+/// forward from the masked entity, as in a range draw, so the slice is empty when the mask content
+/// does not follow its entity.
+std::vector<Entity> CollectMaskReplaySlice(Registry& registry, Entity maskedEntity,
+                                           Entity maskFirst, Entity maskLast) {
+  const std::unordered_set<Entity> feImageShadowEntities =
+      collectOffscreenFeImageShadowEntities(registry);
+  std::vector<Entity> sliceEntities;
+  bool reachedMaskFirst = false;
+  RenderingInstanceView view(registry);
+  while (!view.done() && view.currentEntity() != maskedEntity) {
+    view.advance();
+  }
+  for (; !view.done(); view.advance()) {
+    const Entity entity = view.currentEntity();
+    if (feImageShadowEntities.count(entity) == 0) {
+      sliceEntities.push_back(entity);
+    }
+    reachedMaskFirst = reachedMaskFirst || entity == maskFirst;
+    if (entity == maskLast) {
+      return reachedMaskFirst ? sliceEntities : std::vector<Entity>();
+    }
+  }
+  return {};
+}
+
 }  // namespace
 
 void RendererDriver::syncFilterPreparationStats() {
@@ -1945,6 +1972,55 @@ void RendererDriver::drawEntityRangeIntoCurrentFrame(Registry& registry, Entity 
   visitedFontSubDocuments_.reset();
   preparedFilterGraphs_.clear();
   preparedFilterRegions_.clear();
+}
+
+bool RendererDriver::drawUnderEntityMaskIntoCurrentFrame(Registry& registry, Entity maskedEntity,
+                                                         const RenderViewport& viewport,
+                                                         const Transform2d& surfaceFromCanvas,
+                                                         const std::function<bool()>& drawContent) {
+  const auto* maskedInstance =
+      registry.try_get<components::RenderingInstanceComponent>(maskedEntity);
+  if (maskedInstance == nullptr || !maskedInstance->mask.has_value() ||
+      !maskedInstance->mask->valid() || !maskedInstance->mask->subtreeInfo.has_value()) {
+    return false;
+  }
+  const std::vector<Entity> sliceEntities = CollectMaskReplaySlice(
+      registry, maskedEntity, maskedInstance->mask->subtreeInfo->firstRenderedEntity,
+      maskedInstance->mask->subtreeInfo->lastRenderedEntity);
+  if (sliceEntities.empty() || sliceEntities.front() != maskedEntity) {
+    return false;
+  }
+
+  textFrameCache_->roots.clear();
+  components::ScopedFontResourceRender fontRenderScope(registry);
+  renderingSize_ = CheckedRenderingSize(viewport);
+  surfaceFromCanvasTransform_ = surfaceFromCanvas;
+  // Filter preparation can reorder `RenderingInstanceComponent` storage, so the instance is
+  // looked up again afterwards.
+  prepareFilterGraphs(registry, sliceEntities);
+  const auto& instance = registry.get<components::RenderingInstanceComponent>(maskedEntity);
+
+  RenderingInstanceView view(registry, sliceEntities);
+  view.advance();
+  renderer_.setTransform(instance.worldFromEntityTransform * surfaceFromCanvasTransform_);
+  const int maskDepth = renderMask(view, registry, instance, *instance.mask);
+  bool drawn = false;
+  if (maskDepth > 0) {
+    renderer_.setTransform(Transform2d());
+    drawn = drawContent();
+    for (int i = 0; i < maskDepth; ++i) {
+      renderer_.popMask();
+    }
+  }
+
+  fontRenderScope.finish(true);
+  surfaceFromCanvasTransform_ = Transform2d();
+  fontCollectionCache_.reset();
+  activeFontSubDocuments_.reset();
+  visitedFontSubDocuments_.reset();
+  preparedFilterGraphs_.clear();
+  preparedFilterRegions_.clear();
+  return drawn;
 }
 
 void RendererDriver::popEndedSubtrees(std::vector<DeferredPop>& markers, Entity entity) {

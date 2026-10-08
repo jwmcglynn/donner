@@ -492,6 +492,41 @@ During a drag, after the interaction hint has promoted entity E:
 This reduces per-frame cost from `O(N)` rasterization to `O(L)` blits
 where `L` is the number of layers (typically 2 during a drag).
 
+### Drags inside a masked group
+
+A shape inside a masked group cannot take a layer of its own: the group's
+mask must keep applying to it, at a fixed position, while the shape moves.
+During a held drag of such a shape the compositor rebuilds the group's tile
+instead of re-rendering the group:
+
+1. On the first held frame it rasterizes three unmasked pieces at the
+   group's tile size: the content painted before the dragged subtree, the
+   subtree itself, and the content painted after it.
+2. Each held frame replays the group's mask pass
+   (`RendererDriver::drawUnderEntityMaskIntoCurrentFrame`) and draws the
+   three textures inside it, the dragged piece shifted by the drag delta.
+   The frame stays on the translation-only fast path.
+3. The first frame that does not rebuild the tile from the pieces, such as
+   the selection frame that commits the drag or the next frame after a
+   release, renders the group from its source again.
+
+The mask is applied once over the recomposed pieces, so a soft mask over
+overlapping content composites as it does in a single render, within the
+rounding of the 8-bit pieces. The split applies only when the renderer
+composites tiles as texture snapshots (the Geode backend), the group paints
+nothing itself and its mask is its only compositing context, every group
+between it and the dragged shape is plain, the dragged shape is neither a
+layer of its own nor inside another layer, the drag only translates the
+shape, and the shape fits the group's tile when the pieces are drawn. Text
+and images, which have no tight bounds to check against the tile, keep the
+full render. So do shapes whose rendering instantiates content after them
+(markers, pattern tiles, a mask of their own), shapes drawn a second time
+anywhere in the document by a `use` copy or an `feImage` reference, a shape
+with a descendant edited in the same frame, a dirty or growing group tile, a
+layer inside the group that moves in the same frame, and multi-selection
+drags. A clip-path on an intermediate group stays fixed while the shape
+moves, so such shapes keep the full render too.
+
 ### What does NOT get promoted
 
 - Individual elements inside an already-promoted group. The group's

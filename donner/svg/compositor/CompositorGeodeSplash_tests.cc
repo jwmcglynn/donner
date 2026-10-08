@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <iostream>
 #include <limits>
 #include <string>
@@ -415,6 +416,9 @@ TEST(CompositorGeodeSplashTest, MaskedCrystalFaceDragRepaintsOwningTileBeforeRel
               static_cast<std::int64_t>(viewport.size.x * viewport.size.y) / 4)
         << "The masked cavity must use conservative source bounds, not a full-canvas tile";
     const std::uint64_t ownerGeneration = ownerLayer->generation();
+    // These faces sit inside clipped crystals, so a held drag cannot rebuild the cavity from
+    // pieces (see `MaskedChildDragKeepsSlowPathWhenSplitWouldChangeCompositing`) and patches only
+    // its damage in the owner.
     EXPECT_EQ(compositor.promoteEntity(target->unsafeEntityHandle().entity(),
                                        InteractionHint::ActiveDrag),
               CompositorController::PromoteResult::OwningTilesRequired)
@@ -454,6 +458,755 @@ TEST(CompositorGeodeSplashTest, MaskedCrystalFaceDragRepaintsOwningTileBeforeRel
     // second held-frame motion. Here the exact owner texture must match a full re-raster even
     // though the incremental path draws only the changed rectangle.
   }
+}
+
+// Renders `source` with `selector` translated by `translation` in a fresh compositor and returns
+// the owner layer's texture, the reference for a held-drag owner texture.
+RendererBitmap FreshOwnerTexture(std::string_view source, const char* ownerSelector,
+                                 const char* selector, const Vector2d& translation,
+                                 const RenderViewport& viewport, Vector2d* canvasOffset) {
+  ParseWarningSink warnings = ParseWarningSink::Disabled();
+  auto parsed = parser::SVGParser::ParseSVG(source, warnings);
+  EXPECT_FALSE(parsed.hasError());
+  SVGDocument document = std::move(parsed.result());
+  document.setCanvasSize(static_cast<int>(viewport.size.x), static_cast<int>(viewport.size.y));
+  const auto target = document.querySelector(selector);
+  EXPECT_TRUE(target.has_value());
+  target->cast<SVGGraphicsElement>().setTransform(Transform2d::Translate(translation));
+  Renderer renderer;
+  CompositorConfig config;
+  config.deferFirstFrameWarmup = false;
+  CompositorController compositor(document, renderer, config);
+  compositor.renderFrame(viewport);
+  const auto owner = document.querySelector(ownerSelector);
+  EXPECT_TRUE(owner.has_value());
+  const CompositorLayer* layer = compositor.findLayerForTest(owner->unsafeEntityHandle().entity());
+  EXPECT_NE(layer, nullptr);
+  if (layer == nullptr || layer->textureSnapshot() == nullptr) {
+    return RendererBitmap{};
+  }
+  *canvasOffset = layer->canvasOffset();
+  return layer->textureSnapshot()->takeSnapshot();
+}
+
+struct HeldMaskedDragResult {
+  std::uint64_t fastPathFrames = 0;
+  std::uint64_t slowPathFrames = 0;
+  int maskedChildComposeTiles = 0;
+  RendererBitmap ownerTexture;
+  Vector2d ownerCanvasOffset;
+};
+
+// Drags `selector` inside the masked `ownerSelector` group through `steps` held frames, each
+// translating it by `stepTranslation`, and reports the fast-path counters for those frames.
+HeldMaskedDragResult RunHeldMaskedDrag(std::string_view source, const char* ownerSelector,
+                                       const char* selector, const Vector2d& stepTranslation,
+                                       int steps, const RenderViewport& viewport) {
+  HeldMaskedDragResult result;
+  ParseWarningSink warnings = ParseWarningSink::Disabled();
+  auto parsed = parser::SVGParser::ParseSVG(source, warnings);
+  EXPECT_FALSE(parsed.hasError());
+  SVGDocument document = std::move(parsed.result());
+  document.setCanvasSize(static_cast<int>(viewport.size.x), static_cast<int>(viewport.size.y));
+  Renderer renderer;
+  CompositorConfig config;
+  config.deferFirstFrameWarmup = false;
+  CompositorController compositor(document, renderer, config);
+  compositor.renderFrame(viewport);
+  const auto owner = document.querySelector(ownerSelector);
+  const auto target = document.querySelector(selector);
+  EXPECT_TRUE(owner.has_value());
+  EXPECT_TRUE(target.has_value());
+  if (!owner.has_value() || !target.has_value()) {
+    return result;
+  }
+  const Entity ownerEntity = owner->unsafeEntityHandle().entity();
+  EXPECT_EQ(
+      compositor.promoteEntity(target->unsafeEntityHandle().entity(), InteractionHint::ActiveDrag),
+      CompositorController::PromoteResult::OwningTilesRequired)
+      << selector << " stays inside its masked owner";
+  const CompositorController::FastPathCounters before = compositor.fastPathCountersForTesting();
+  for (int step = 1; step <= steps; ++step) {
+    const CompositorLayer* ownerLayer = compositor.findLayerForTest(ownerEntity);
+    EXPECT_NE(ownerLayer, nullptr);
+    const std::uint64_t generationBefore = ownerLayer != nullptr ? ownerLayer->generation() : 0;
+    target->cast<SVGGraphicsElement>().setTransform(
+        Transform2d::Translate(stepTranslation * static_cast<double>(step)));
+    compositor.renderFrame(viewport);
+    EXPECT_TRUE(compositor.hasCompleteTileSetForPresentation()) << selector << " step " << step;
+    ownerLayer = compositor.findLayerForTest(ownerEntity);
+    EXPECT_NE(ownerLayer, nullptr);
+    if (ownerLayer != nullptr) {
+      EXPECT_GT(ownerLayer->generation(), generationBefore)
+          << selector << " must update its owning masked tile on held step " << step;
+    }
+    result.maskedChildComposeTiles += compositor.lastRenderFrameStats().maskedChildComposeTileCount;
+  }
+  const CompositorController::FastPathCounters after = compositor.fastPathCountersForTesting();
+  result.fastPathFrames = after.fastPathFrames - before.fastPathFrames;
+  result.slowPathFrames = after.slowPathFramesWithDirty - before.slowPathFramesWithDirty;
+  if (const CompositorLayer* ownerLayer = compositor.findLayerForTest(ownerEntity);
+      ownerLayer != nullptr && ownerLayer->textureSnapshot() != nullptr) {
+    result.ownerTexture = ownerLayer->textureSnapshot()->takeSnapshot();
+    result.ownerCanvasOffset = ownerLayer->canvasOffset();
+  }
+  return result;
+}
+
+// Separately drawn pieces are stored at 8 bits per channel before they are composited, so a
+// recomposed owner may differ from one full draw by rounding in partially covered pixels.
+constexpr auto kRecomposedOwnerParams =
+    editor::tests::ApprovedPixelToleranceParams(0.02f, 0, /*includeAntiAliasing=*/false);
+
+TEST(CompositorGeodeSplashTest, MaskedChildHeldDragTakesFastPath) {
+  const donner::tests::RequiredRunfile source =
+      donner::tests::ReadRequiredRunfile("geode_splash.svg");
+  DONNER_REQUIRE_RUNFILE(source);
+  RenderViewport viewport;
+  viewport.size = Vector2d(1536, 1024);
+  viewport.devicePixelRatio = 1.0;
+  constexpr int kSteps = 3;
+  const Vector2d step(12, 0);
+  for (const auto& [ownerSelector, selector] :
+       {std::pair{"#cavity-artwork", "#cavity-facet-001"},
+        std::pair{"#cavity-artwork", "#central-crystal"},
+        std::pair{"#colored-mineral-faces", "#agate-light-1"},
+        std::pair{"#shell-facets", "#shell-facet-001"}}) {
+    SCOPED_TRACE(selector);
+    const HeldMaskedDragResult held =
+        RunHeldMaskedDrag(source.contents, ownerSelector, selector, step, kSteps, viewport);
+    EXPECT_EQ(held.fastPathFrames, static_cast<std::uint64_t>(kSteps));
+    EXPECT_EQ(held.slowPathFrames, 0u);
+    EXPECT_EQ(held.maskedChildComposeTiles, kSteps);
+    Vector2d referenceOffset;
+    const RendererBitmap reference =
+        FreshOwnerTexture(source.contents, ownerSelector, selector,
+                          step * static_cast<double>(kSteps), viewport, &referenceOffset);
+    ASSERT_FALSE(held.ownerTexture.empty());
+    ASSERT_FALSE(reference.empty());
+    EXPECT_EQ(held.ownerCanvasOffset, referenceOffset);
+    editor::tests::CompareBitmapToBitmap(held.ownerTexture, reference,
+                                         std::string(selector) + "_recomposed_vs_full_owner",
+                                         kRecomposedOwnerParams);
+  }
+}
+
+constexpr std::string_view kSoftMaskOverlapSource = R"svg(
+  <svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96">
+    <defs>
+      <linearGradient id="fade" x1="0" x2="1">
+        <stop offset="0" stop-color="white"/>
+        <stop offset="1" stop-color="black"/>
+      </linearGradient>
+      <mask id="m" maskUnits="userSpaceOnUse" maskContentUnits="userSpaceOnUse"
+            x="0" y="0" width="96" height="96">
+        <rect width="96" height="96" fill="url(#fade)"/>
+      </mask>
+    </defs>
+    <g id="owner" mask="url(#m)">
+      <rect id="below" x="8" y="8" width="60" height="60" fill="#0a0" fill-opacity="0.6"/>
+      <g id="plain">
+        <rect id="target" x="20" y="20" width="30" height="30" fill="#c00" fill-opacity="0.7"/>
+      </g>
+      <circle id="above" cx="50" cy="50" r="20" fill="#00c" fill-opacity="0.5"/>
+    </g>
+  </svg>
+)svg";
+
+TEST(CompositorGeodeSplashTest, SoftMaskOverlapHeldDragMatchesFullOwner) {
+  const RenderViewport viewport{Vector2d(96, 96)};
+  constexpr int kSteps = 2;
+  const Vector2d step(5, 3);
+  const HeldMaskedDragResult held =
+      RunHeldMaskedDrag(kSoftMaskOverlapSource, "#owner", "#target", step, kSteps, viewport);
+  EXPECT_EQ(held.fastPathFrames, static_cast<std::uint64_t>(kSteps));
+  EXPECT_EQ(held.slowPathFrames, 0u);
+  EXPECT_EQ(held.maskedChildComposeTiles, kSteps);
+  Vector2d referenceOffset;
+  const RendererBitmap reference =
+      FreshOwnerTexture(kSoftMaskOverlapSource, "#owner", "#target",
+                        step * static_cast<double>(kSteps), viewport, &referenceOffset);
+  ASSERT_FALSE(held.ownerTexture.empty());
+  ASSERT_FALSE(reference.empty());
+  EXPECT_EQ(held.ownerCanvasOffset, referenceOffset);
+  editor::tests::CompareBitmapToBitmap(held.ownerTexture, reference,
+                                       "soft_mask_overlap_recomposed_vs_full_owner",
+                                       kRecomposedOwnerParams);
+}
+
+TEST(CompositorGeodeSplashTest, MaskedChildDragKeepsSlowPathWhenSplitWouldChangeCompositing) {
+  // An owner with opacity, or a non-plain group between the owner and the dragged shape, cannot
+  // be rebuilt from separately drawn pieces: those contexts composite their whole subtree.
+  for (const std::string_view source : {
+           std::string_view(R"svg(
+             <svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96">
+               <defs>
+                 <mask id="m" maskUnits="userSpaceOnUse" x="0" y="0" width="96" height="96">
+                   <rect width="96" height="96" fill="white"/>
+                 </mask>
+               </defs>
+               <g id="owner" mask="url(#m)" opacity="0.5">
+                 <rect x="8" y="8" width="60" height="60" fill="#0a0"/>
+                 <rect id="target" x="20" y="20" width="30" height="30" fill="#c00"/>
+               </g>
+             </svg>)svg"),
+           std::string_view(R"svg(
+             <svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96">
+               <defs>
+                 <mask id="m" maskUnits="userSpaceOnUse" x="0" y="0" width="96" height="96">
+                   <rect width="96" height="96" fill="white"/>
+                 </mask>
+               </defs>
+               <g id="owner" mask="url(#m)">
+                 <rect x="8" y="8" width="60" height="60" fill="#0a0"/>
+                 <g opacity="0.5">
+                   <rect id="target" x="20" y="20" width="30" height="30" fill="#c00"/>
+                 </g>
+               </g>
+             </svg>)svg"),
+           // A clip-path on a group between the owner and the target stays put while the target
+           // moves, like the geode splash's crystal faces inside their clipped crystals.
+           std::string_view(R"svg(
+             <svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96">
+               <defs>
+                 <mask id="m" maskUnits="userSpaceOnUse" x="0" y="0" width="96" height="96">
+                   <rect width="96" height="96" fill="white"/>
+                 </mask>
+                 <clipPath id="c" clipPathUnits="userSpaceOnUse">
+                   <rect x="16" y="16" width="40" height="40"/>
+                 </clipPath>
+               </defs>
+               <g id="owner" mask="url(#m)">
+                 <rect x="8" y="8" width="60" height="60" fill="#0a0"/>
+                 <g clip-path="url(#c)">
+                   <rect id="target" x="20" y="20" width="30" height="30" fill="#c00"/>
+                 </g>
+               </g>
+             </svg>)svg"),
+           // An owner with a clip-path, a filter or a blend mode composites its whole content.
+           std::string_view(R"svg(
+             <svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96">
+               <defs>
+                 <mask id="m" maskUnits="userSpaceOnUse" x="-20" y="0" width="136" height="96">
+                   <rect x="-20" width="136" height="96" fill="white"/>
+                 </mask>
+                 <clipPath id="c" clipPathUnits="userSpaceOnUse"><rect x="4" y="4" width="80" height="80"/></clipPath>
+               </defs>
+               <g id="owner" mask="url(#m)" clip-path="url(#c)">
+                 <rect x="8" y="8" width="60" height="60" fill="#0a0"/>
+                 <rect id="target" x="20" y="20" width="30" height="30" fill="#c00"/>
+               </g>
+             </svg>)svg"),
+           std::string_view(R"svg(
+             <svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96">
+               <defs>
+                 <mask id="m" maskUnits="userSpaceOnUse" x="-20" y="0" width="136" height="96">
+                   <rect x="-20" width="136" height="96" fill="white"/>
+                 </mask>
+                 <filter id="f"><feGaussianBlur stdDeviation="1"/></filter>
+               </defs>
+               <g id="owner" mask="url(#m)" filter="url(#f)">
+                 <rect x="8" y="8" width="60" height="60" fill="#0a0"/>
+                 <rect id="target" x="20" y="20" width="30" height="30" fill="#c00"/>
+               </g>
+             </svg>)svg"),
+           std::string_view(R"svg(
+             <svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96">
+               <defs>
+                 <mask id="m" maskUnits="userSpaceOnUse" x="-20" y="0" width="136" height="96">
+                   <rect x="-20" width="136" height="96" fill="white"/>
+                 </mask>
+               </defs>
+               <rect width="96" height="96" fill="#ff0"/>
+               <g id="owner" mask="url(#m)" style="mix-blend-mode: multiply">
+                 <rect x="8" y="8" width="60" height="60" fill="#0a0"/>
+                 <rect id="target" x="20" y="20" width="30" height="30" fill="#c00"/>
+               </g>
+             </svg>)svg"),
+           // A filtered group between the owner and the target is a layer of its own.
+           std::string_view(R"svg(
+             <svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96">
+               <defs>
+                 <mask id="m" maskUnits="userSpaceOnUse" x="-20" y="0" width="136" height="96">
+                   <rect x="-20" width="136" height="96" fill="white"/>
+                 </mask>
+                 <filter id="f"><feGaussianBlur stdDeviation="1"/></filter>
+               </defs>
+               <g id="owner" mask="url(#m)">
+                 <rect x="8" y="8" width="60" height="60" fill="#0a0"/>
+                 <g filter="url(#f)">
+                   <rect id="target" x="20" y="20" width="30" height="30" fill="#c00"/>
+                 </g>
+               </g>
+             </svg>)svg"),
+           // Part of the target lies outside the canvas when the pieces would be drawn.
+           std::string_view(R"svg(
+             <svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96">
+               <defs>
+                 <mask id="m" maskUnits="userSpaceOnUse" x="-20" y="0" width="136" height="96">
+                   <rect x="-20" width="136" height="96" fill="white"/>
+                 </mask>
+               </defs>
+               <g id="owner" mask="url(#m)">
+                 <rect x="8" y="8" width="60" height="60" fill="#0a0"/>
+                 <rect id="target" x="-20" y="20" width="40" height="30" fill="#c00"/>
+               </g>
+             </svg>)svg"),
+           // Markers and pattern tiles render content instantiated after their host.
+           std::string_view(R"svg(
+             <svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96">
+               <defs>
+                 <mask id="m" maskUnits="userSpaceOnUse" x="-20" y="0" width="136" height="96">
+                   <rect x="-20" width="136" height="96" fill="white"/>
+                 </mask>
+                 <marker id="dot" markerWidth="6" markerHeight="6" refX="3" refY="3">
+                   <circle cx="3" cy="3" r="3" fill="#00c"/>
+                 </marker>
+               </defs>
+               <g id="owner" mask="url(#m)">
+                 <rect x="8" y="8" width="60" height="60" fill="#0a0"/>
+                 <path id="target" d="M20 20 L50 20" stroke="#c00" stroke-width="4"
+                       marker-end="url(#dot)"/>
+               </g>
+             </svg>)svg"),
+           std::string_view(R"svg(
+             <svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96">
+               <defs>
+                 <mask id="m" maskUnits="userSpaceOnUse" x="-20" y="0" width="136" height="96">
+                   <rect x="-20" width="136" height="96" fill="white"/>
+                 </mask>
+                 <pattern id="p" width="8" height="8" patternUnits="userSpaceOnUse">
+                   <rect width="4" height="4" fill="#00c"/>
+                 </pattern>
+               </defs>
+               <g id="owner" mask="url(#m)">
+                 <rect x="8" y="8" width="60" height="60" fill="#0a0"/>
+                 <g id="target">
+                   <rect x="20" y="20" width="10" height="10" fill="#c00"/>
+                   <rect x="30" y="30" width="20" height="20" fill="url(#p)"/>
+                 </g>
+               </g>
+             </svg>)svg"),
+           // A `use` copy of the target would keep its old position in the other pieces.
+           std::string_view(R"svg(
+             <svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96">
+               <defs>
+                 <mask id="m" maskUnits="userSpaceOnUse" x="-20" y="0" width="136" height="96">
+                   <rect x="-20" width="136" height="96" fill="white"/>
+                 </mask>
+               </defs>
+               <g id="owner" mask="url(#m)">
+                 <rect x="8" y="8" width="60" height="60" fill="#0a0"/>
+                 <rect id="target" x="20" y="20" width="20" height="20" fill="#c00"/>
+                 <use href="#target" x="30" y="30"/>
+               </g>
+             </svg>)svg"),
+           // A `use` copy of the target inside the owner's mask would keep the mask in place.
+           std::string_view(R"svg(
+             <svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96">
+               <defs>
+                 <mask id="m" maskUnits="userSpaceOnUse" x="-20" y="0" width="136" height="96">
+                   <rect x="-20" width="136" height="96" fill="white" fill-opacity="0.5"/>
+                   <use href="#target" fill="white"/>
+                 </mask>
+               </defs>
+               <g id="owner" mask="url(#m)">
+                 <rect x="8" y="8" width="60" height="60" fill="#0a0"/>
+                 <rect id="target" x="20" y="20" width="20" height="20" fill="#c00"/>
+               </g>
+             </svg>)svg"),
+           // An feImage of the target draws its live instances into another element's filter.
+           std::string_view(R"svg(
+             <svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96">
+               <defs>
+                 <mask id="m" maskUnits="userSpaceOnUse" x="-20" y="0" width="136" height="96">
+                   <rect x="-20" width="136" height="96" fill="white"/>
+                 </mask>
+                 <filter id="f" filterUnits="userSpaceOnUse" x="0" y="0" width="96" height="96">
+                   <feImage href="#target"/>
+                 </filter>
+               </defs>
+               <g id="owner" mask="url(#m)">
+                 <rect x="8" y="8" width="60" height="60" fill="#0a0"/>
+                 <rect id="target" x="20" y="20" width="20" height="20" fill="#c00"/>
+                 <rect x="50" y="50" width="30" height="30" fill="#00c" filter="url(#f)"/>
+               </g>
+             </svg>)svg"),
+           // Text has no tight bounds to check against the owner tile.
+           std::string_view(R"svg(
+             <svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96">
+               <defs>
+                 <mask id="m" maskUnits="userSpaceOnUse" x="-20" y="0" width="136" height="96">
+                   <rect x="-20" width="136" height="96" fill="white"/>
+                 </mask>
+               </defs>
+               <g id="owner" mask="url(#m)">
+                 <rect x="8" y="8" width="60" height="60" fill="#0a0"/>
+                 <text id="target" x="20" y="44" font-size="20" fill="#c00">Ab</text>
+               </g>
+             </svg>)svg"),
+       }) {
+    const RenderViewport viewport{Vector2d(96, 96)};
+    const HeldMaskedDragResult held =
+        RunHeldMaskedDrag(source, "#owner", "#target", Vector2d(6, 0), 1, viewport);
+    EXPECT_EQ(held.fastPathFrames, 0u);
+    EXPECT_EQ(held.slowPathFrames, 1u);
+    EXPECT_EQ(held.maskedChildComposeTiles, 0);
+    Vector2d referenceOffset;
+    const RendererBitmap reference =
+        FreshOwnerTexture(source, "#owner", "#target", Vector2d(6, 0), viewport, &referenceOffset);
+    ASSERT_FALSE(held.ownerTexture.empty());
+    ASSERT_FALSE(reference.empty());
+    editor::tests::CompareBitmapToBitmap(held.ownerTexture, reference,
+                                         "split_ineligible_owner_full_render",
+                                         editor::tests::PixelmatchIdentityParams());
+  }
+}
+
+TEST(CompositorGeodeSplashTest, MaskedChildDragUpdatesUseCopyOutsideTheOwner) {
+  // A `use` copy of the dragged shape outside its masked owner must follow the shape on the
+  // held frame, whichever path renders that frame.
+  constexpr std::string_view kSource = R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96">
+      <defs>
+        <mask id="m" maskUnits="userSpaceOnUse" x="0" y="0" width="96" height="48">
+          <rect width="96" height="48" fill="white"/>
+        </mask>
+      </defs>
+      <g id="owner" mask="url(#m)">
+        <rect x="8" y="8" width="60" height="30" fill="#0a0"/>
+        <rect id="target" x="20" y="12" width="20" height="20" fill="#c00"/>
+      </g>
+      <use href="#target" y="48"/>
+    </svg>
+  )svg";
+  ParseWarningSink warnings = ParseWarningSink::Disabled();
+  auto parsed = parser::SVGParser::ParseSVG(kSource, warnings);
+  ASSERT_FALSE(parsed.hasError());
+  SVGDocument document = std::move(parsed.result());
+  document.setCanvasSize(96, 96);
+  auto referenceParsed = parser::SVGParser::ParseSVG(kSource, warnings);
+  ASSERT_FALSE(referenceParsed.hasError());
+  SVGDocument referenceDocument = std::move(referenceParsed.result());
+  referenceDocument.setCanvasSize(96, 96);
+  Renderer renderer;
+  CompositorConfig config;
+  config.deferFirstFrameWarmup = false;
+  CompositorController compositor(document, renderer, config);
+  const RenderViewport viewport{Vector2d(96, 96)};
+  compositor.renderFrame(viewport);
+  const auto target = document.querySelector("#target");
+  const auto referenceTarget = referenceDocument.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  ASSERT_TRUE(referenceTarget.has_value());
+  ASSERT_TRUE(
+      compositor.promoteEntity(target->unsafeEntityHandle().entity(), InteractionHint::ActiveDrag)
+          .owningTilesRequired());
+
+  for (int step = 1; step <= 2; ++step) {
+    const Transform2d moved = Transform2d::Translate(Vector2d(6.0 * step, 0));
+    target->cast<SVGGraphicsElement>().setTransform(moved);
+    referenceTarget->cast<SVGGraphicsElement>().setTransform(moved);
+    compositor.renderFrame(viewport);
+    ASSERT_TRUE(compositor.hasCompleteTileSetForPresentation()) << "step " << step;
+    Renderer referenceRenderer;
+    RendererDriver(referenceRenderer).draw(referenceDocument, viewport, Transform2d());
+    editor::tests::CompareBitmapToBitmap(renderer.takeSnapshot(), referenceRenderer.takeSnapshot(),
+                                         "masked_child_use_copy_outside_owner",
+                                         kGeodeFlatReferenceParams);
+  }
+}
+
+TEST(CompositorGeodeSplashTest, MaskedChildDragSettlesWithFullOwnerRender) {
+  const RenderViewport viewport{Vector2d(96, 96)};
+  ParseWarningSink warnings = ParseWarningSink::Disabled();
+  auto parsed = parser::SVGParser::ParseSVG(kSoftMaskOverlapSource, warnings);
+  ASSERT_FALSE(parsed.hasError());
+  SVGDocument document = std::move(parsed.result());
+  document.setCanvasSize(96, 96);
+  Renderer renderer;
+  CompositorConfig config;
+  config.deferFirstFrameWarmup = false;
+  CompositorController compositor(document, renderer, config);
+  compositor.renderFrame(viewport);
+  const auto owner = document.querySelector("#owner");
+  const auto target = document.querySelector("#target");
+  ASSERT_TRUE(owner.has_value());
+  ASSERT_TRUE(target.has_value());
+  const Entity targetEntity = target->unsafeEntityHandle().entity();
+  ASSERT_TRUE(
+      compositor.promoteEntity(targetEntity, InteractionHint::ActiveDrag).owningTilesRequired());
+  target->cast<SVGGraphicsElement>().setTransform(Transform2d::Translate(Vector2d(7.5, 2.25)));
+  compositor.renderFrame(viewport);
+  EXPECT_EQ(compositor.lastRenderFrameStats().maskedChildComposeTileCount, 1)
+      << "A fractional held move also recomposes the owner from its pieces";
+
+  // Releasing the pointer turns the interaction back into a selection; the committed position
+  // renders the owner from its source rather than from the resampled drag pieces.
+  ASSERT_TRUE(
+      compositor.promoteEntity(targetEntity, InteractionHint::Selection).owningTilesRequired());
+  target->cast<SVGGraphicsElement>().setTransform(Transform2d::Translate(Vector2d(7.5, 2.25)));
+  const CompositorController::FastPathCounters before = compositor.fastPathCountersForTesting();
+  compositor.renderFrame(viewport);
+  EXPECT_EQ(compositor.lastRenderFrameStats().maskedChildComposeTileCount, 0);
+  EXPECT_EQ(compositor.fastPathCountersForTesting().slowPathFramesWithDirty,
+            before.slowPathFramesWithDirty + 1);
+  const CompositorLayer* ownerLayer =
+      compositor.findLayerForTest(owner->unsafeEntityHandle().entity());
+  ASSERT_NE(ownerLayer, nullptr);
+  ASSERT_NE(ownerLayer->textureSnapshot(), nullptr);
+  Vector2d referenceOffset;
+  const RendererBitmap reference = FreshOwnerTexture(
+      kSoftMaskOverlapSource, "#owner", "#target", Vector2d(7.5, 2.25), viewport, &referenceOffset);
+  ASSERT_FALSE(reference.empty());
+  editor::tests::CompareBitmapToBitmap(ownerLayer->textureSnapshot()->takeSnapshot(), reference,
+                                       "settled_masked_child_full_owner",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+// Parses `source` at a 96 px canvas, applies `edit` to it, and returns the owner layer's texture
+// from a fresh compositor: the reference for an owner tile after the same edit.
+RendererBitmap FreshOwnerAfterEdit(std::string_view source,
+                                   const std::function<void(SVGDocument&)>& edit) {
+  ParseWarningSink warnings = ParseWarningSink::Disabled();
+  auto parsed = parser::SVGParser::ParseSVG(source, warnings);
+  EXPECT_FALSE(parsed.hasError());
+  SVGDocument document = std::move(parsed.result());
+  document.setCanvasSize(96, 96);
+  edit(document);
+  Renderer renderer;
+  CompositorConfig config;
+  config.deferFirstFrameWarmup = false;
+  CompositorController compositor(document, renderer, config);
+  compositor.renderFrame(RenderViewport{Vector2d(96, 96)});
+  const CompositorLayer* layer =
+      compositor.findLayerForTest(document.querySelector("#owner")->unsafeEntityHandle().entity());
+  EXPECT_NE(layer, nullptr);
+  if (layer == nullptr || layer->textureSnapshot() == nullptr) {
+    return RendererBitmap{};
+  }
+  return layer->textureSnapshot()->takeSnapshot();
+}
+
+TEST(CompositorGeodeSplashTest, MaskedChildDragRebuildsDirtyOwnerFromSource) {
+  // A frame that dirties the owner and stops before rasterizing it leaves the pieces stale; the
+  // next held frame must render the owner from source.
+  const RenderViewport viewport{Vector2d(96, 96)};
+  ParseWarningSink warnings = ParseWarningSink::Disabled();
+  auto parsed = parser::SVGParser::ParseSVG(kSoftMaskOverlapSource, warnings);
+  ASSERT_FALSE(parsed.hasError());
+  SVGDocument document = std::move(parsed.result());
+  document.setCanvasSize(96, 96);
+  Renderer renderer;
+  CompositorConfig config;
+  config.deferFirstFrameWarmup = false;
+  CompositorController compositor(document, renderer, config);
+  compositor.renderFrame(viewport);
+  const auto owner = document.querySelector("#owner");
+  const auto target = document.querySelector("#target");
+  auto below = document.querySelector("#below");
+  ASSERT_TRUE(owner.has_value());
+  ASSERT_TRUE(target.has_value());
+  ASSERT_TRUE(below.has_value());
+  ASSERT_TRUE(
+      compositor.promoteEntity(target->unsafeEntityHandle().entity(), InteractionHint::ActiveDrag)
+          .owningTilesRequired());
+  target->cast<SVGGraphicsElement>().setTransform(Transform2d::Translate(Vector2d(4, 0)));
+  compositor.renderFrame(viewport);
+  ASSERT_EQ(compositor.lastRenderFrameStats().maskedChildComposeTileCount, 1);
+
+  below->setAttribute("fill", "#08f");
+  CancellationToken cancelled;
+  cancelled.cancel();
+  (void)compositor.renderFrame(viewport, cancelled);
+
+  target->cast<SVGGraphicsElement>().setTransform(Transform2d::Translate(Vector2d(8, 0)));
+  compositor.renderFrame(viewport);
+  EXPECT_EQ(compositor.lastRenderFrameStats().maskedChildComposeTileCount, 0);
+  const CompositorLayer* ownerLayer =
+      compositor.findLayerForTest(owner->unsafeEntityHandle().entity());
+  ASSERT_NE(ownerLayer, nullptr);
+  ASSERT_NE(ownerLayer->textureSnapshot(), nullptr);
+  EXPECT_FALSE(ownerLayer->isDirty());
+  const RendererBitmap reference =
+      FreshOwnerAfterEdit(kSoftMaskOverlapSource, [](SVGDocument& reference) {
+        reference.querySelector("#below")->setAttribute("fill", "#08f");
+        reference.querySelector("#target")->cast<SVGGraphicsElement>().setTransform(
+            Transform2d::Translate(Vector2d(8, 0)));
+      });
+  ASSERT_FALSE(reference.empty());
+  editor::tests::CompareBitmapToBitmap(ownerLayer->textureSnapshot()->takeSnapshot(), reference,
+                                       "dirty_owner_rebuilt_from_source",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(CompositorGeodeSplashTest, MaskedChildDragKeepsSlowPathWhenDescendantMovesToo) {
+  // Moving the target dirties only the target, so a dirty descendant is an edit of its own.
+  constexpr std::string_view kSource = R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96">
+      <defs>
+        <mask id="m" maskUnits="userSpaceOnUse" x="0" y="0" width="96" height="96">
+          <rect width="96" height="96" fill="white"/>
+        </mask>
+      </defs>
+      <g id="owner" mask="url(#m)">
+        <rect x="8" y="8" width="60" height="60" fill="#0a0"/>
+        <g id="target">
+          <rect id="child" x="20" y="20" width="20" height="20" fill="#c00"/>
+          <rect x="44" y="44" width="10" height="10" fill="#00c"/>
+        </g>
+      </g>
+    </svg>)svg";
+  const RenderViewport viewport{Vector2d(96, 96)};
+  ParseWarningSink warnings = ParseWarningSink::Disabled();
+  auto parsed = parser::SVGParser::ParseSVG(kSource, warnings);
+  ASSERT_FALSE(parsed.hasError());
+  SVGDocument document = std::move(parsed.result());
+  document.setCanvasSize(96, 96);
+  Renderer renderer;
+  CompositorConfig config;
+  config.deferFirstFrameWarmup = false;
+  CompositorController compositor(document, renderer, config);
+  compositor.renderFrame(viewport);
+  const auto target = document.querySelector("#target");
+  const auto child = document.querySelector("#child");
+  ASSERT_TRUE(target.has_value());
+  ASSERT_TRUE(child.has_value());
+  ASSERT_TRUE(
+      compositor.promoteEntity(target->unsafeEntityHandle().entity(), InteractionHint::ActiveDrag)
+          .owningTilesRequired());
+  const CompositorController::FastPathCounters before = compositor.fastPathCountersForTesting();
+  target->cast<SVGGraphicsElement>().setTransform(Transform2d::Translate(Vector2d(6, 0)));
+  child->cast<SVGGraphicsElement>().setTransform(Transform2d::Translate(Vector2d(0, 5)));
+  compositor.renderFrame(viewport);
+  EXPECT_EQ(compositor.lastRenderFrameStats().maskedChildComposeTileCount, 0);
+  EXPECT_EQ(compositor.fastPathCountersForTesting().fastPathFrames, before.fastPathFrames);
+  const CompositorLayer* ownerLayer =
+      compositor.findLayerForTest(document.querySelector("#owner")->unsafeEntityHandle().entity());
+  ASSERT_NE(ownerLayer, nullptr);
+  ASSERT_NE(ownerLayer->textureSnapshot(), nullptr);
+  const RendererBitmap reference = FreshOwnerAfterEdit(kSource, [](SVGDocument& reference) {
+    reference.querySelector("#target")->cast<SVGGraphicsElement>().setTransform(
+        Transform2d::Translate(Vector2d(6, 0)));
+    reference.querySelector("#child")->cast<SVGGraphicsElement>().setTransform(
+        Transform2d::Translate(Vector2d(0, 5)));
+  });
+  ASSERT_FALSE(reference.empty());
+  editor::tests::CompareBitmapToBitmap(ownerLayer->textureSnapshot()->takeSnapshot(), reference,
+                                       "descendant_moved_with_target",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(CompositorGeodeSplashTest, MaskedChildDragSettlesOnNextFrameWithoutAMove) {
+  // A release that leaves the target where the last held frame put it settles on the next frame:
+  // the owner renders from source instead of keeping the recomposed tile.
+  const RenderViewport viewport{Vector2d(96, 96)};
+  ParseWarningSink warnings = ParseWarningSink::Disabled();
+  auto parsed = parser::SVGParser::ParseSVG(kSoftMaskOverlapSource, warnings);
+  ASSERT_FALSE(parsed.hasError());
+  SVGDocument document = std::move(parsed.result());
+  document.setCanvasSize(96, 96);
+  Renderer renderer;
+  CompositorConfig config;
+  config.deferFirstFrameWarmup = false;
+  CompositorController compositor(document, renderer, config);
+  compositor.renderFrame(viewport);
+  const auto owner = document.querySelector("#owner");
+  const auto target = document.querySelector("#target");
+  ASSERT_TRUE(owner.has_value());
+  ASSERT_TRUE(target.has_value());
+  ASSERT_TRUE(
+      compositor.promoteEntity(target->unsafeEntityHandle().entity(), InteractionHint::ActiveDrag)
+          .owningTilesRequired());
+  target->cast<SVGGraphicsElement>().setTransform(Transform2d::Translate(Vector2d(7.5, 2.25)));
+  compositor.renderFrame(viewport);
+  ASSERT_EQ(compositor.lastRenderFrameStats().maskedChildComposeTileCount, 1);
+  compositor.renderFrame(viewport);
+  const CompositorLayer* ownerLayer =
+      compositor.findLayerForTest(owner->unsafeEntityHandle().entity());
+  ASSERT_NE(ownerLayer, nullptr);
+  ASSERT_NE(ownerLayer->textureSnapshot(), nullptr);
+  Vector2d referenceOffset;
+  const RendererBitmap reference = FreshOwnerTexture(
+      kSoftMaskOverlapSource, "#owner", "#target", Vector2d(7.5, 2.25), viewport, &referenceOffset);
+  ASSERT_FALSE(reference.empty());
+  editor::tests::CompareBitmapToBitmap(ownerLayer->textureSnapshot()->takeSnapshot(), reference,
+                                       "idle_settled_masked_child_full_owner",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(CompositorGeodeSplashTest, MaskedChildDragFollowsSingleActiveDragAcrossPromoteOrder) {
+  constexpr std::string_view kSource = R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96">
+      <defs>
+        <mask id="m" maskUnits="userSpaceOnUse" x="0" y="0" width="96" height="96">
+          <rect width="96" height="96" fill="white"/>
+        </mask>
+      </defs>
+      <rect id="other" x="70" y="70" width="20" height="20" fill="#888"/>
+      <rect id="other2" x="4" y="70" width="20" height="20" fill="#444"/>
+      <g id="owner" mask="url(#m)">
+        <rect x="8" y="8" width="60" height="60" fill="#0a0"/>
+        <rect id="target" x="20" y="20" width="20" height="20" fill="#c00"/>
+      </g>
+    </svg>)svg";
+  const RenderViewport viewport{Vector2d(96, 96)};
+  ParseWarningSink warnings = ParseWarningSink::Disabled();
+  auto parsed = parser::SVGParser::ParseSVG(kSource, warnings);
+  ASSERT_FALSE(parsed.hasError());
+  SVGDocument document = std::move(parsed.result());
+  document.setCanvasSize(96, 96);
+  Renderer renderer;
+  CompositorConfig config;
+  config.deferFirstFrameWarmup = false;
+  CompositorController compositor(document, renderer, config);
+  compositor.renderFrame(viewport);
+  const Entity target = document.querySelector("#target")->unsafeEntityHandle().entity();
+  const Entity other = document.querySelector("#other")->unsafeEntityHandle().entity();
+  const Entity other2 = document.querySelector("#other2")->unsafeEntityHandle().entity();
+  auto targetElement = document.querySelector("#target")->cast<SVGGraphicsElement>();
+
+  // A selection promoted alongside the drag, in either order, leaves the drag on the fast path.
+  for (int step = 1; step <= 4; ++step) {
+    if (step % 2 == 0) {
+      (void)compositor.promoteEntity(other, InteractionHint::Selection);
+      ASSERT_TRUE(
+          compositor.promoteEntity(target, InteractionHint::ActiveDrag).owningTilesRequired());
+    } else {
+      ASSERT_TRUE(
+          compositor.promoteEntity(target, InteractionHint::ActiveDrag).owningTilesRequired());
+      (void)compositor.promoteEntity(other, InteractionHint::Selection);
+    }
+    targetElement.setTransform(Transform2d::Translate(Vector2d(2.0 * step, 0)));
+    compositor.renderFrame(viewport);
+    EXPECT_EQ(compositor.lastRenderFrameStats().maskedChildComposeTileCount, 1) << "step " << step;
+  }
+
+  // Two active-drag entities are a multi-selection drag: the owner renders from source.
+  ASSERT_TRUE(compositor.promoteEntity(target, InteractionHint::ActiveDrag).owningTilesRequired());
+  (void)compositor.promoteEntity(other2, InteractionHint::ActiveDrag);
+  targetElement.setTransform(Transform2d::Translate(Vector2d(10, 0)));
+  compositor.renderFrame(viewport);
+  EXPECT_EQ(compositor.lastRenderFrameStats().maskedChildComposeTileCount, 0);
+}
+
+TEST(CompositorGeodeSplashTest, MaskedChildHeldDragAtTwiceScaleMatchesFullOwner) {
+  const RenderViewport viewport{Vector2d(192, 192)};
+  constexpr int kSteps = 2;
+  const Vector2d step(5, 3);
+  const HeldMaskedDragResult held =
+      RunHeldMaskedDrag(kSoftMaskOverlapSource, "#owner", "#target", step, kSteps, viewport);
+  EXPECT_EQ(held.fastPathFrames, static_cast<std::uint64_t>(kSteps));
+  EXPECT_EQ(held.maskedChildComposeTiles, kSteps);
+  Vector2d referenceOffset;
+  const RendererBitmap reference =
+      FreshOwnerTexture(kSoftMaskOverlapSource, "#owner", "#target",
+                        step * static_cast<double>(kSteps), viewport, &referenceOffset);
+  ASSERT_FALSE(held.ownerTexture.empty());
+  ASSERT_FALSE(reference.empty());
+  EXPECT_EQ(held.ownerCanvasOffset, referenceOffset);
+  editor::tests::CompareBitmapToBitmap(
+      held.ownerTexture, reference, "twice_scale_recomposed_vs_full_owner", kRecomposedOwnerParams);
 }
 
 TEST(CompositorGeodeSplashTest, FilteredSiblingDisablesMaskedOwnerDamagePatch) {

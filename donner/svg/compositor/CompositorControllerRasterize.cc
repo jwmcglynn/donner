@@ -10,7 +10,9 @@
 #include <cmath>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -18,9 +20,12 @@
 #include "donner/base/Utils.h"
 #include "donner/base/xml/components/TreeComponent.h"
 #include "donner/editor/TracyWrapper.h"
+#include "donner/svg/components/AttachedIdLookup.h"
 #include "donner/svg/components/DirtyFlagsComponent.h"
 #include "donner/svg/components/RenderingInstanceComponent.h"
+#include "donner/svg/components/filter/FilterPrimitiveComponent.h"
 #include "donner/svg/components/layout/LayoutSystem.h"
+#include "donner/svg/components/shadow/ShadowEntityComponent.h"
 #include "donner/svg/compositor/CompositorControllerInternal.h"
 #include "donner/svg/renderer/PixelFormatUtils.h"
 #include "donner/svg/renderer/RendererDriver.h"
@@ -217,6 +222,200 @@ bool CanPatchLayerGeometry(const CompositorLayer& layer, const LayerRasterGeomet
   return !geometry.interactionBoundsRejected && geometry.tight &&
          ownerSize == layer.textureSnapshot()->dimensions() &&
          geometry.canvasOffset == layer.canvasOffset() && ownerSize.x > 0 && ownerSize.y > 0;
+}
+
+// Pieces drawn for a masked owner stand in for its tile only while the owner keeps the tile's size
+// and placement; full-canvas and tight tiles both qualify.
+bool OwnerTileGeometryUnchanged(const CompositorLayer& layer, const LayerRasterGeometry& geometry,
+                                const Vector2i& ownerSize) {
+  return !geometry.interactionBoundsRejected && ownerSize.x > 0 && ownerSize.y > 0 &&
+         ownerSize == layer.textureSnapshot()->dimensions() &&
+         geometry.canvasOffset == layer.canvasOffset();
+}
+
+// True when a paint renders instantiated content of its own, such as a pattern tile.
+bool HasSubtreePaint(const components::ResolvedPaintServer& paint) {
+  const auto* reference = std::get_if<components::PaintResolvedReference>(&paint);
+  return reference != nullptr && reference->subtreeInfo.has_value();
+}
+
+// True when the document draws `target` or its content a second time, anywhere: in the owner's
+// content, in its mask or outside the owner. An instantiated copy, such as a `use` copy, draws from
+// its own instances, which a held drag of `target` leaves in place. An `feImage` reference to the
+// target, one of its ancestors or one of its content elements draws the live instances into
+// another element's filter result, which the pieces would not update.
+bool DrawsCopyOf(Registry& registry, Entity target) {
+  for (const auto& [entity, shadow] : registry.view<components::ShadowEntityComponent>().each()) {
+    if (shadow.lightEntity == target || IsDomDescendantOf(registry, shadow.lightEntity, target)) {
+      return true;
+    }
+  }
+  for (const auto& [entity, image] : registry.view<components::FEImageComponent>().each()) {
+    const std::string_view href(image.href);
+    if (href.size() < 2 || href[0] != '#') {
+      continue;
+    }
+    const Entity referenced =
+        components::FindAttachedEntityById(registry, RcString(href.substr(1)));
+    if (referenced != entt::null &&
+        (referenced == target || IsDomDescendantOf(registry, referenced, target) ||
+         IsDomDescendantOf(registry, target, referenced))) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// True when @p instance renders content instantiated after its host entity, past the end of its
+// own range: a mask, markers or a pattern tile.
+bool RendersAfterItself(const components::RenderingInstanceComponent& instance) {
+  return instance.mask.has_value() || instance.markerStart.has_value() ||
+         instance.markerMid.has_value() || instance.markerEnd.has_value() ||
+         HasSubtreePaint(instance.resolvedFill) || HasSubtreePaint(instance.resolvedStroke);
+}
+
+using EntityRun = std::pair<Entity, Entity>;
+
+/// Runs of a masked owner's paint order before and after a target's subtree.
+struct OwnerRunSplit {
+  std::vector<EntityRun> below;
+  std::vector<EntityRun> above;
+};
+
+/// Splits a masked owner's paint order around a target's subtree, one entity at a time. The owner
+/// entity and its mask content are skipped: the per-frame mask pass replays them.
+class OwnerRunSplitter {
+public:
+  OwnerRunSplitter(Registry& registry, Entity ownerEntity, EntityRun mask, EntityRun target)
+      : registry_(registry), ownerEntity_(ownerEntity), mask_(mask), target_(target) {}
+
+  /// Adds the next entity in paint order; false when the owner cannot be split around the target.
+  bool add(Entity entity) {
+    inMask_ = inMask_ || entity == mask_.first;
+    const bool skipped = entity == ownerEntity_ || inMask_;
+    if (entity == mask_.second) {
+      inMask_ = false;
+    }
+    if (skipped) {
+      closeRun();
+      return !inTarget_;
+    }
+    if (entity == target_.first) {
+      closeRun();
+      inTarget_ = true;
+    }
+    if (inTarget_) {
+      return addTargetEntity(entity);
+    }
+    extendRun(entity);
+    return true;
+  }
+
+  /// The split, or nullopt when the target's subtree was not seen whole.
+  std::optional<OwnerRunSplit> finish() {
+    closeRun();
+    if (!targetComplete_) {
+      return std::nullopt;
+    }
+    return std::move(split_);
+  }
+
+private:
+  bool addTargetEntity(Entity entity) {
+    // Content instantiated after the host lies past the end of the target's range, outside its
+    // piece; keep such targets on the full render.
+    const auto* instance = registry_.try_get<components::RenderingInstanceComponent>(entity);
+    if (instance != nullptr && RendersAfterItself(*instance)) {
+      return false;
+    }
+    if (entity == target_.second) {
+      inTarget_ = false;
+      targetComplete_ = true;
+      runs_ = &split_.above;
+    }
+    return true;
+  }
+
+  void extendRun(Entity entity) {
+    if (openRun_.has_value()) {
+      openRun_->second = entity;
+    } else {
+      openRun_ = EntityRun{entity, entity};
+    }
+  }
+
+  void closeRun() {
+    if (openRun_.has_value()) {
+      runs_->push_back(*openRun_);
+      openRun_.reset();
+    }
+  }
+
+  Registry& registry_;
+  Entity ownerEntity_;
+  EntityRun mask_;
+  EntityRun target_;
+  OwnerRunSplit split_;
+  std::vector<EntityRun>* runs_ = &split_.below;
+  std::optional<EntityRun> openRun_;
+  bool inMask_ = false;
+  bool inTarget_ = false;
+  bool targetComplete_ = false;
+};
+
+// Splits @p owner's paint order into runs before and after the @p target subtree's paint range,
+// or nullopt when the owner cannot be drawn in pieces around it.
+std::optional<OwnerRunSplit> SplitOwnerAroundTarget(Registry& registry,
+                                                    const CompositorLayer& owner,
+                                                    EntityRun target) {
+  const auto& ownerInstance = registry.get<components::RenderingInstanceComponent>(owner.entity());
+  if (!ownerInstance.mask.has_value() || !ownerInstance.mask->subtreeInfo.has_value()) {
+    return std::nullopt;
+  }
+  OwnerRunSplitter splitter(registry, owner.entity(),
+                            EntityRun{ownerInstance.mask->subtreeInfo->firstRenderedEntity,
+                                      ownerInstance.mask->subtreeInfo->lastRenderedEntity},
+                            target);
+  RenderingInstanceView view(registry);
+  while (!view.done() && view.currentEntity() != owner.firstEntity()) {
+    view.advance();
+  }
+  bool reachedLast = false;
+  while (!view.done() && !reachedLast) {
+    const Entity entity = view.currentEntity();
+    reachedLast = entity == owner.lastEntity();
+    view.advance();
+    if (!splitter.add(entity)) {
+      return std::nullopt;
+    }
+  }
+  return splitter.finish();
+}
+
+// True when the target's unclipped extent, with the antialiasing halo the tile bounds carry, fits
+// @p ownerTileBounds. The target piece is clipped to the owner tile, so content outside it when
+// the pieces are drawn could be dragged into view.
+bool TargetFitsOwnerTile(RendererInterface& renderer, Registry& registry, EntityRun target,
+                         const RenderViewport& viewport, const Transform2d& surfaceFromCanvas,
+                         const Box2d& ownerTileBounds) {
+  RendererDriver boundsDriver(renderer);
+  const std::optional<Box2d> targetBounds = boundsDriver.computeEntityRangeBounds(
+      registry, target.first, target.second, viewport, surfaceFromCanvas,
+      RendererDriver::EntityRangeBoundsOptions{.clipToCanvas = false, .allowMaskSuperset = true});
+  if (!targetBounds.has_value()) {
+    return false;
+  }
+  constexpr double kEdgePaddingPx = 2.0;
+  return targetBounds->topLeft.x - kEdgePaddingPx >= ownerTileBounds.topLeft.x &&
+         targetBounds->topLeft.y - kEdgePaddingPx >= ownerTileBounds.topLeft.y &&
+         targetBounds->bottomRight.x + kEdgePaddingPx <= ownerTileBounds.bottomRight.x &&
+         targetBounds->bottomRight.y + kEdgePaddingPx <= ownerTileBounds.bottomRight.y;
+}
+
+// True when @p offsetPx is a whole number of pixels, so a shifted draw copies texels exactly.
+bool IsWholePixelOffset(const Vector2d& offsetPx) {
+  return std::abs(offsetPx.x - std::round(offsetPx.x)) < 1e-9 &&
+         std::abs(offsetPx.y - std::round(offsetPx.y)) < 1e-9;
 }
 
 }  // namespace
@@ -584,6 +783,170 @@ bool CompositorController::rasterizeLayerDamage(CompositorLayer& layer,
           : patchStats.geometryDraws;
   recycleOffscreen(std::move(offscreen));
   yieldBetweenTiles();
+  return true;
+}
+
+bool CompositorController::buildMaskedChildDragPieces(CompositorLayer& owner, Entity target,
+                                                      const RenderViewport& viewport,
+                                                      const Transform2d& surfaceFromCanvas) {
+  maskedChildDragPieces_.reset();
+  if (!CanPatchLayerPayload(renderer(), owner)) {
+    return false;
+  }
+  Registry& registry = document().registry();
+  const LayerRasterGeometry geometry = ComputeLayerRasterGeometry(
+      renderer(), registry, owner.firstEntity(), owner.lastEntity(), viewport, surfaceFromCanvas);
+  const Vector2i ownerSize = BitmapDimensionsForViewport(geometry.viewport);
+  if (!OwnerTileGeometryUnchanged(owner, geometry, ownerSize) || DrawsCopyOf(registry, target)) {
+    return false;
+  }
+  const EntityRun targetRange = computeEntityRange(registry, target);
+  const std::optional<OwnerRunSplit> split = SplitOwnerAroundTarget(registry, owner, targetRange);
+  const Box2d ownerTileBounds(geometry.canvasOffset,
+                              geometry.canvasOffset + Vector2d(ownerSize.x, ownerSize.y));
+  if (!split.has_value() || !TargetFitsOwnerTile(renderer(), registry, targetRange, viewport,
+                                                 surfaceFromCanvas, ownerTileBounds)) {
+    return false;
+  }
+
+  // Each piece is drawn without the owner's mask into a tile of the owner's size and placement.
+  std::optional<std::shared_ptr<const RendererTextureSnapshot>> below = drawMaskedChildDragPiece(
+      registry, split->below, geometry.viewport, geometry.surfaceFromCanvas);
+  if (!below.has_value()) {
+    return false;
+  }
+  const std::array<EntityRun, 1> targetRuns{targetRange};
+  std::optional<std::shared_ptr<const RendererTextureSnapshot>> targetPiece =
+      drawMaskedChildDragPiece(registry, targetRuns, geometry.viewport, geometry.surfaceFromCanvas);
+  if (!targetPiece.has_value() || *targetPiece == nullptr) {
+    return false;
+  }
+  std::optional<std::shared_ptr<const RendererTextureSnapshot>> above = drawMaskedChildDragPiece(
+      registry, split->above, geometry.viewport, geometry.surfaceFromCanvas);
+  if (!above.has_value()) {
+    return false;
+  }
+
+  maskedChildDragPieces_ = MaskedChildDragPieces{
+      .owner = owner.entity(),
+      .target = target,
+      .below = std::move(*below),
+      .targetPiece = std::move(*targetPiece),
+      .above = std::move(*above),
+      .ownerBitmapFromCanvas = geometry.surfaceFromCanvas,
+      .ownerBitmapFromTargetAtStamp =
+          registry.get<components::RenderingInstanceComponent>(target).worldFromEntityTransform *
+          geometry.surfaceFromCanvas,
+      .ownerSize = ownerSize,
+      .canvasSize = BitmapDimensionsForViewport(viewport),
+      .surfaceFromCanvas = surfaceFromCanvas,
+      .ownerGeneration = owner.generation(),
+  };
+  return true;
+}
+
+std::optional<std::shared_ptr<const RendererTextureSnapshot>>
+CompositorController::drawMaskedChildDragPiece(Registry& registry,
+                                               std::span<const std::pair<Entity, Entity>> runs,
+                                               const RenderViewport& tileViewport,
+                                               const Transform2d& tileSurfaceFromCanvas) {
+  if (runs.empty()) {
+    return std::shared_ptr<const RendererTextureSnapshot>();
+  }
+  std::unique_ptr<RendererInterface> offscreen = acquireOffscreen();
+  UTILS_RELEASE_ASSERT(offscreen != nullptr);
+  offscreen->beginFrame(tileViewport);
+  RendererDriver driver(*offscreen);
+  for (const auto& [first, last] : runs) {
+    driver.drawEntityRangeIntoCurrentFrame(registry, first, last, tileViewport,
+                                           tileSurfaceFromCanvas);
+  }
+  offscreen->endFrame();
+  std::shared_ptr<const RendererTextureSnapshot> texture =
+      isCancelled() ? nullptr : offscreen->takeTextureSnapshot();
+  if (texture == nullptr) {
+    discardFailedOffscreen(std::move(offscreen));
+    return std::nullopt;
+  }
+  recycleOffscreen(std::move(offscreen));
+  return texture;
+}
+
+bool CompositorController::drawShiftedMaskedChildDragPieces(RendererInterface& renderer,
+                                                            const MaskedChildDragPieces& pieces,
+                                                            const Vector2d& targetOffsetPx) {
+  renderer.setPaint(PaintParams{});
+  const Box2d ownerRect(Vector2d::Zero(), Vector2d(pieces.ownerSize.x, pieces.ownerSize.y));
+  const Box2d targetRect(ownerRect.topLeft + targetOffsetPx,
+                         ownerRect.bottomRight + targetOffsetPx);
+  bool composed = true;
+  if (pieces.below != nullptr) {
+    composed &= renderer.drawTextureSnapshot(*pieces.below, ownerRect, 1.0, true);
+  }
+  // A whole-pixel shift copies texels exactly; a fractional shift filters them.
+  composed &= renderer.drawTextureSnapshot(*pieces.targetPiece, targetRect, 1.0,
+                                           IsWholePixelOffset(targetOffsetPx));
+  if (pieces.above != nullptr) {
+    composed &= renderer.drawTextureSnapshot(*pieces.above, ownerRect, 1.0, true);
+  }
+  return composed;
+}
+
+bool CompositorController::composeMaskedOwnerFromPieces(CompositorLayer& owner,
+                                                        const Vector2d& targetOffsetPx,
+                                                        const RenderViewport& viewport,
+                                                        const Transform2d& surfaceFromCanvas) {
+  if (!maskedChildDragPieces_.has_value() || maskedChildDragPieces_->owner != owner.entity() ||
+      !CanPatchLayerPayload(renderer(), owner)) {
+    return false;
+  }
+  MaskedChildDragPieces& pieces = *maskedChildDragPieces_;
+  Registry& registry = document().registry();
+  // The moved child must still fit the owner's tile; a grown source bound needs the full raster.
+  const LayerRasterGeometry geometry = ComputeLayerRasterGeometry(
+      renderer(), registry, owner.firstEntity(), owner.lastEntity(), viewport, surfaceFromCanvas);
+  if (BitmapDimensionsForViewport(geometry.viewport) != pieces.ownerSize ||
+      !OwnerTileGeometryUnchanged(owner, geometry, pieces.ownerSize)) {
+    return false;
+  }
+
+  const auto started = std::chrono::steady_clock::now();
+  std::unique_ptr<RendererInterface> offscreen = acquireOffscreen();
+  UTILS_RELEASE_ASSERT(offscreen != nullptr);
+  offscreen->beginFrame(geometry.viewport);
+  RendererDriver driver(*offscreen);
+  const bool drawn = driver.drawUnderEntityMaskIntoCurrentFrame(
+      registry, owner.entity(), geometry.viewport, geometry.surfaceFromCanvas,
+      [&] { return drawShiftedMaskedChildDragPieces(*offscreen, pieces, targetOffsetPx); });
+  offscreen->endFrame();
+  if (!drawn) {
+    discardFailedOffscreen(std::move(offscreen));
+    return false;
+  }
+
+  Transform2d surfaceFromEntity;
+  if (registry.all_of<components::RenderingInstanceComponent>(owner.entity())) {
+    surfaceFromEntity = registry.get<components::RenderingInstanceComponent>(owner.entity())
+                            .worldFromEntityTransform *
+                        surfaceFromCanvas;
+  }
+  const CompositorLayer::PayloadRaster raster{
+      .canvasSize = BitmapDimensionsForViewport(viewport),
+      .surfaceFromCanvas = surfaceFromCanvas,
+  };
+  if (!SetLayerPayloadFromOffscreen(owner, *offscreen, surfaceFromEntity, raster)) {
+    discardFailedOffscreen(std::move(offscreen));
+    return false;
+  }
+  owner.setGeneration(nextTileGeneration_++);
+  owner.setCanvasOffset(geometry.canvasOffset);
+  owner.setLastRasterizeMs(
+      std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started)
+          .count());
+  pieces.ownerGeneration = owner.generation();
+  pieces.composed = true;
+  ++lastRenderFrameStats_.maskedChildComposeTileCount;
+  recycleOffscreen(std::move(offscreen));
   return true;
 }
 
