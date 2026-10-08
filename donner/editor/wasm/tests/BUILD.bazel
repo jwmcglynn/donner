@@ -743,6 +743,7 @@ js_test(
         "//donner/editor:WholeAppWorkerBridge.cc",
         "//donner/editor/gui:EditorWindow.cc",
         "//donner/editor/wasm/tests:browser-backend-selection.spec.ts",
+        "//donner/editor/wasm/tests:browser-gpu-residency.ts",
         "//donner/editor/wasm/tests:browser-presentation-regression.spec.ts",
         "//donner/editor/wasm/tests:browser-surface-recovery.spec.ts",
         "//donner/editor/wasm/tests:composited-drag-invariants.spec.ts",

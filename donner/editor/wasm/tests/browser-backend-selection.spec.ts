@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
-import { expectSampleThumbnailsToSettle } from "./sample-thumbnail-settle";
 import { checkDocumentGpuResidency, type SelectionWindow } from "./browser-gpu-residency";
+import { expectSampleThumbnailsToSettle } from "./sample-thumbnail-settle";
 
 // The line the renderer prints the first time a selection in the page lands on the browser
 // backend because the build asked for it. The raster worker selects when the editor draws its

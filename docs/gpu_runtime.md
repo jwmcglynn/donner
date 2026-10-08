@@ -491,10 +491,17 @@ runtime devices share that owner's `GPUDevice` and queue. Standalone modules wit
 owner keep their device on the calling worker. The first logical device requests the browser
 device; later clients reuse it, and the last client releases it.
 
-`BrowserGpuOwner` dispatches synchronous JavaScript primitives through the Emscripten system queue.
-The editor's `BrowserGpuOwnerWait` adapter drains that queue between one-millisecond futex wait
-slices on the registered app owner. Emscripten's automatic queue processing only covers the main
-runtime thread; `PROXY_TO_PTHREAD` does not give the app pthread that role. Other threads keep the
+`BrowserGpuOwner` sends synchronous JavaScript primitives through a prewarmed Emscripten
+notification queue to an owner-only FIFO. A notification can execute its single request inline
+when the FIFO had no backlog. After 32 inline requests or 2 ms of callback CPU, further work waits
+for a later browser pulse; only that pulse renews the budget. These thresholds stop starting more
+callbacks; they do not preempt one already running. Deferred work executes in a detached batch,
+so new arrivals cannot extend it. The editor defers asynchronous GPU batches during canvas
+acquisition, drawing and retirement, and prevents nested UI frames during dispatch.
+
+The editor's `BrowserGpuOwnerWait` adapter services notifications and a detached batch between
+one-millisecond futex wait slices on the registered app owner. Emscripten's automatic queue
+processing only covers the main runtime thread; `PROXY_TO_PTHREAD` does not give the app pthread that role. Other threads keep the
 original wait implementation. The adapter checks the caller's absolute deadline before starting
 another queue drain, bounds each remaining wait slice, and propagates non-timeout outcomes. An already running browser
 callback is not preempted and can finish after that deadline; the wait probe records its maximum
@@ -504,6 +511,11 @@ wait for another caller, or wait for a Promise. Prepared command batches contain
 operations; the first refusal stops replay before submission. A ten-second dispatch deadline
 terminates the module instead of returning borrowed memory to a queued callback. Descriptor
 assembly, shared identity bookkeeping and mapped storage remain on callers.
+
+`//donner/editor/wasm/tests:browser_presentation_regression_test` exercises delayed owner pulses,
+actual inline/pulse/futex dispatch counts, and coalesced animation-frame admission. The native
+`//donner/gpu/browser:browser_tests` target covers detached FIFO order, reentrant enqueue and
+callbacks that reclaim their borrowed task storage.
 
 Browser renderer teardown releases resources without waiting for queue completion; submitted
 commands retain browser resources. Editor shutdown yields the app event loop until the raster

@@ -5401,8 +5401,8 @@ void EditorShell::publishSampleThumbnailStats() const {
       stats.pending ? 1 : 0, stats.active ? 1 : 0, stats.resultReady ? 1 : 0,
       static_cast<int>(stats.foregroundHandoffWaits), stats.firstAttemptCompleted ? 1 : 0,
       static_cast<int>(stats.offscreenRendererConstructionStarts),
-      stats.offscreenRendererConstructionBlocked ? 1 : 0,
-      sampleThumbnailLaneDrained(stats) ? 1 : 0, static_cast<int>(stats.readbackCount));
+      stats.offscreenRendererConstructionBlocked ? 1 : 0, sampleThumbnailLaneDrained(stats) ? 1 : 0,
+      static_cast<int>(stats.readbackCount));
 #endif
 }
 

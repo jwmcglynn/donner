@@ -35,6 +35,10 @@ const surfaceRecoverySource = await readFile(
   new URL("./browser-surface-recovery.spec.ts", import.meta.url),
   "utf8",
 );
+const gpuResidencySource = await readFile(
+  new URL("./browser-gpu-residency.ts", import.meta.url),
+  "utf8",
+);
 const sampleThumbnailSettleSource = await readFile(
   new URL("./sample-thumbnail-settle.ts", import.meta.url),
   "utf8",
@@ -691,6 +695,30 @@ test("the sample picker publishes whether its thumbnail lane has drained", () =>
   }
 });
 
+test("thumbnail publication keeps drained state separate from explicit readback count", () => {
+  const publisher = editorShellSource.match(/void PublishSampleThumbnailStats\([\s\S]*?\n\}/);
+  assert.ok(publisher);
+  const callback = publisher[0].match(
+    /MAIN_THREAD_ASYNC_EM_ASM\(\s*\{([\s\S]*?)\n\s*\},([\s\S]*?)\);/,
+  );
+  assert.ok(callback);
+  const argumentNames = callback[2].split(",").map((name) => name.trim());
+  assert.ok(argumentNames.length <= 15, "the SDK proxy argument limit must be respected");
+  const publish = new Function(
+    "window",
+    "performance",
+    ...argumentNames.map((_, index) => `$${index}`),
+    callback[1],
+  );
+  const window = {};
+  for (const [drained, readbackCount] of [[1, 37], [0, 41]]) {
+    const values = { drained, readbackCount, completed: 5, ready: 5 };
+    publish(window, { now: () => 123 }, ...argumentNames.map((name) => values[name] ?? 0));
+    assert.equal(window.__donnerSampleThumbnailStats.drained, Boolean(drained));
+    assert.equal(window.__donnerSampleThumbnailStats.explicitPreviewReadbackTotal, readbackCount);
+  }
+});
+
 test("the shared sample thumbnail gate waits for a drained thumbnail lane", () => {
   const helper = extractAsyncFunction(
     sampleThumbnailSettleSource,
@@ -742,8 +770,12 @@ test("sample loads that do not test the thumbnail handoff settle thumbnails firs
     );
     assert.match(body.slice(settle, sampleClick), /timeout:\s*(?:scaledMs\(20_000\)|20000)/, name);
   }
+  const residencyStartup = extractAsyncFunction(gpuResidencySource, "openEditor");
+  assert.match(residencyStartup, /await expectSampleThumbnailsToSettle\(page, \{/);
+  assert.match(residencyStartup, /timeout: 20000/);
   for (
     const spec of [
+      gpuResidencySource,
       presentationRegressionSource,
       surfaceRecoverySource,
       smokeSource,

@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { readEditorPixelBoundsFromPng } from "./canvas-color-stats";
+import { expectSampleThumbnailsToSettle } from "./sample-thumbnail-settle";
 
 type WorkerStats = {
   completedResults?: number;
@@ -84,12 +85,10 @@ async function openEditor(page: Page, onReady?: () => Promise<void>) {
     { timeout: 30000 },
   ).toBe(true);
   await onReady?.();
-  await expect.poll(() =>
-    page.evaluate(() => {
-      const stats = (window as SelectionWindow).__donnerSampleThumbnailStats;
-      return stats && (stats.completed ?? 0) > 0 && (stats.ready ?? 0) > 0
-        && !stats.active && !stats.pending;
-    }), { timeout: 20000 }).toBe(true);
+  await expectSampleThumbnailsToSettle(page, {
+    message: "the sample thumbnail lane must drain before document GPU accounting begins",
+    timeout: 20000,
+  });
 }
 
 async function findGpuOwner(page: Page): Promise<Worker> {
