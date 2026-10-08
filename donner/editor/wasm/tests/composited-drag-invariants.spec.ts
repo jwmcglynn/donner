@@ -19,6 +19,7 @@ import {
   visibleDocumentRegion,
 } from "./composited-probe";
 import { dragStream, pointerClick, waitForAppliedPointer } from "./gesture-streams";
+import { expectSampleThumbnailsToSettle } from "./sample-thumbnail-settle";
 
 /**
  * Composited-output invariants for SHAPE DRAG and CLICK-SELECT.
@@ -193,31 +194,12 @@ async function openDonnerSplash(page: Page): Promise<{ editorBounds: Rect; docum
   // The carousel's first thumbnail initializes and exercises the worker-owned offscreen WebGPU
   // renderer. Replacing it while that first-use operation is active forces the foreground render
   // through a cancellation handoff that is unrelated to the drag invariant and can monopolize the
-  // first Firefox worker frame on a loaded runner. Let that one bounded initialization finish; the
+  // first Firefox worker frame on a loaded runner. Let the picker's thumbnail lane drain first; the
   // document-worker result below remains the actual proof that the selected sample is live.
-  await expect
-    .poll(
-      () =>
-        page.evaluate(() => {
-          const stats = (window as unknown as {
-            __donnerSampleThumbnailStats?: {
-              completed?: number;
-              ready?: number;
-              active?: boolean;
-              pending?: boolean;
-            };
-          }).__donnerSampleThumbnailStats;
-          if (!stats) return false;
-          const completed = stats.completed ?? 0;
-          return completed > 0 && (stats.ready ?? 0) > 0 && !stats.active && !stats.pending;
-        }),
-      {
-        message: "the first offscreen thumbnail must settle before the drag sample replaces it",
-        timeout: scaledMs(20_000),
-        intervals: [16, 25, 50, 100],
-      },
-    )
-    .toBe(true);
+  await expectSampleThumbnailsToSettle(page, {
+    message: "the sample thumbnail lane must drain before the drag sample replaces it",
+    timeout: scaledMs(20_000),
+  });
   const beforeSampleResults = await page.evaluate(
     () =>
       (window as unknown as { __donnerWorkerStats?: { completedResults?: number } })
@@ -363,19 +345,10 @@ async function openBasicShapes(page: Page): Promise<{
   const editorBounds = await editorCanvas.boundingBox();
   expect(editorBounds, "the editor canvas is missing").not.toBeNull();
   if (editorBounds === null) throw new Error("editor canvas is missing");
-  await expect.poll(() =>
-    page.evaluate(() => {
-      const stats = (window as unknown as {
-        __donnerSampleThumbnailStats?: {
-          completed?: number;
-          ready?: number;
-          active?: boolean;
-          pending?: boolean;
-        };
-      }).__donnerSampleThumbnailStats;
-      return !!stats && (stats.completed ?? 0) > 0 && (stats.ready ?? 0) > 0
-        && !stats.active && !stats.pending;
-    }), { timeout: scaledMs(20_000), intervals: [16, 25, 50, 100] }).toBe(true);
+  await expectSampleThumbnailsToSettle(page, {
+    message: "the sample thumbnail lane must drain before Basic Shapes replaces it",
+    timeout: scaledMs(20_000),
+  });
   const before = await page.evaluate(() =>
     (window as unknown as { __donnerWorkerStats?: { completedResults?: number } })
       .__donnerWorkerStats?.completedResults ?? 0

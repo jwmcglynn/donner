@@ -623,6 +623,7 @@ private:
   void drainOutputFontDemand();
   void ensureSampleThumbnails();
   void publishSampleThumbnailStats() const;
+  [[nodiscard]] bool sampleThumbnailLaneDrained(const SampleThumbnailRenderStats& stats) const;
   void cancelSampleThumbnailGeneration();
   void requestFontPreviews(const std::vector<std::string>& families);
   void advanceFontPreviewGeneration();

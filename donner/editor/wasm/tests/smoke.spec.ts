@@ -21,6 +21,7 @@ import {
 import { waitForAppliedPointer } from "./gesture-streams";
 import { echoGpuSessionConsole } from "./gpu-session-console";
 import { quarantineStillSkips } from "./quarantine-report.mjs";
+import { expectSampleThumbnailsToSettle } from "./sample-thumbnail-settle";
 import { holdCanvasCompletionForTest, installSurfaceFrameProbe } from "./surface-frame-probe";
 
 installBrowserStallDiagnostics(test);
@@ -170,6 +171,7 @@ declare global {
       firstAttemptCompleted: boolean;
       offscreenRendererConstructionStarts: number;
       offscreenRendererConstructionBlocked: boolean;
+      drained: boolean;
     };
     __donnerSampleThumbnailRendererCreationBlocked?: {
       blocked: boolean;
@@ -204,6 +206,14 @@ declare global {
 }
 
 type WgpuReadbackColorStats = Omit<CanvasColorStats, "region">;
+
+/** One published thumbnail-lane state, as the welcome picker test records it. */
+interface ThumbnailLanePublication {
+  ready: number;
+  drained: boolean;
+  active: boolean;
+  pending: boolean;
+}
 
 interface WgpuCarouselThumbnailStats extends WgpuReadbackColorStats {
   fingerprint: number;
@@ -725,6 +735,29 @@ test("welcome picker paints before asynchronously rendering real SVG thumbnails"
     kHostedMacosQuarantine,
     "Quarantined in the hosted macOS CI job: offscreen thumbnails can miss the budget (#1702)",
   );
+  // Record every thumbnail-lane publication, not only the latest: proving that `drained` never
+  // runs ahead of the thumbnails needs each published state, and a poll can miss one frame's.
+  await page.addInitScript(() => {
+    const publications: ThumbnailLanePublication[] = [];
+    let latest: unknown;
+    Object.defineProperty(window, "__donnerSampleThumbnailStats", {
+      configurable: true,
+      get: () => latest,
+      set: (value?: Partial<ThumbnailLanePublication>) => {
+        latest = value;
+        if (publications.length < 4096) {
+          publications.push({
+            ready: value?.ready ?? 0,
+            drained: value?.drained === true,
+            active: value?.active === true,
+            pending: value?.pending === true,
+          });
+        }
+      },
+    });
+    (window as Window & { __donnerThumbnailLanePublications?: ThumbnailLanePublication[] })
+      .__donnerThumbnailLanePublications = publications;
+  });
   const fatalMessages = await openEditor(page, {
     postInitializationDwellMs: 0,
     wgpuReadbackStats: kBackend === "geode",
@@ -740,6 +773,33 @@ test("welcome picker paints before asynchronously rendering real SVG thumbnails"
       intervals: [0, 25, 50, 100],
     })
     .toBe(5);
+
+  // The lane reports drained only once every visible thumbnail is on screen and nothing is in
+  // flight. Presentation tests rely on that before they click a sample.
+  const readPublications = () =>
+    page.evaluate(() =>
+      (window as Window & { __donnerThumbnailLanePublications?: ThumbnailLanePublication[] })
+        .__donnerThumbnailLanePublications ?? []
+    );
+  await expect
+    .poll(async () => (await readPublications()).some((publication) => publication.drained), {
+      message: "expected the thumbnail lane to report drained once all five thumbnails were ready",
+      timeout: scaledMs(5000),
+      intervals: [16, 25, 50, 100],
+    })
+    .toBe(true);
+  const publications = await readPublications();
+  const firstDrained = publications.findIndex((publication) => publication.drained);
+  expect(
+    publications.slice(0, firstDrained).some((publication) => publication.ready < 5),
+    "the lane must report not drained while thumbnails are still outstanding",
+  ).toBe(true);
+  expect(
+    publications.filter((publication) =>
+      publication.drained && (publication.ready < 5 || publication.active || publication.pending)
+    ),
+    `no publication may report drained ahead of the thumbnails: ${JSON.stringify(publications)}`,
+  ).toEqual([]);
 
   let geodeThumbnailStats: WgpuCarouselThumbnailStats[] | undefined;
   if (kBackend === "geode") {
@@ -773,6 +833,7 @@ test("welcome picker paints before asynchronously rendering real SVG thumbnails"
     pending: false,
     active: false,
     resultReady: false,
+    drained: true,
   });
   expect(settled.thumbnails?.requested).toBeGreaterThanOrEqual(5);
   expect(settled.thumbnails?.started).toBe(settled.thumbnails?.requested);
@@ -1830,6 +1891,12 @@ test("Firefox keeps Basic Shapes resize pixels and outline synchronized", async 
     return;
   }
 
+  // Resize synchronization is the subject here, so the Basic Shapes render's deadline below must
+  // not absorb the picker's first-use thumbnail work.
+  await expectSampleThumbnailsToSettle(page, {
+    message: "the sample thumbnail lane must drain before Basic Shapes replaces it",
+    timeout: scaledMs(20_000),
+  });
   const beforeSample = await page.evaluate(
     () => window.__donnerWorkerStats?.completedResults || 0,
   );

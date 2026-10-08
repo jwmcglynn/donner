@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { expectSampleThumbnailsToSettle } from "./sample-thumbnail-settle";
 
 // The line the renderer prints the first time a selection in the page lands on the browser
 // backend because the build asked for it. The raster worker selects when the editor draws its
@@ -33,12 +34,6 @@ type WorkerStats = {
 type SelectionWindow = Window & {
   __donnerFirstFramePresented?: boolean;
   __donnerWorkerStats?: WorkerStats;
-  __donnerSampleThumbnailStats?: {
-    completed?: number;
-    ready?: number;
-    active?: boolean;
-    pending?: boolean;
-  };
 };
 
 // The layout the Basic Shapes card is placed in below.
@@ -82,17 +77,10 @@ test("the raster worker selects the backend its package was built for", async ({
   // The line names the backend some selection in the page took, which could be any headless
   // renderer. Opening a document makes the raster worker read back, and the stats only its results
   // publish show which backend that readback went through.
-  await expect
-    .poll(
-      () =>
-        page.evaluate(() => {
-          const stats = (window as SelectionWindow).__donnerSampleThumbnailStats;
-          return !!stats && (stats.completed ?? 0) > 0 && (stats.ready ?? 0) > 0 && !stats.active
-            && !stats.pending;
-        }),
-      { message: "the sample picker's thumbnails never settled", timeout: 20000 },
-    )
-    .toBe(true);
+  await expectSampleThumbnailsToSettle(page, {
+    message: "the sample picker's thumbnail lane never drained",
+    timeout: 20000,
+  });
   const editorCanvas = page.locator("canvas#canvas");
   const bounds = await editorCanvas.boundingBox();
   expect(bounds, "the editor canvas is missing").not.toBeNull();
