@@ -1,7 +1,6 @@
 # Donner SVG Editor & Engine
 
 [![Build Status](https://github.com/jwmcglynn/donner/actions/workflows/main.yml/badge.svg)](https://github.com/jwmcglynn/donner/actions/workflows/main.yml) [![License: ISC](https://img.shields.io/badge/License-ISC-blue.svg)](https://opensource.org/licenses/ISC)
-[![DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/jwmcglynn/donner)
 [![CodeFactor](https://www.codefactor.io/repository/github/jwmcglynn/donner/badge)](https://www.codefactor.io/repository/github/jwmcglynn/donner)
 <br>
 [![Code coverage %](https://codecov.io/gh/jwmcglynn/donner/branch/main/graph/badge.svg?token=Z3YJZNKGU0)](https://codecov.io/gh/jwmcglynn/donner)
