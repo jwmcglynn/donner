@@ -6,6 +6,7 @@ module.exports = defineConfig({
     "smoke.spec.ts",
     "browser-presentation-regression.spec.ts",
     "browser-surface-recovery.spec.ts",
+    "browser-backend-selection.spec.ts",
   ],
   timeout: 30000,
   workers: 1,
@@ -16,6 +17,7 @@ module.exports = defineConfig({
       // Keep the visual pixel assertions intact while budgeting boot and first presentation.
       timeout: 90000,
       grep: [
+        /ordinary document presentation stays on the GPU/,
         /Geode Wasm View overlays render tile metadata and sparse Slug triangle edges/,
         /Firefox keeps Basic Shapes resize pixels and outline synchronized/,
         /Firefox keeps the dragged shape and its selection outline in every drag frame/,

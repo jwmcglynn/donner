@@ -744,7 +744,7 @@ public:
     return internal::AcquiredFrame{carriesFrame ? FakeFrameTexture() : gpu::Texture(), status};
   }
 
-  void present() override {}
+  bool present() override { return true; }
   void abandon() override { ++calls_->abandons; }
   void shutdown() override { ++calls_->shutdowns; }
   gpu::TextureFormat format() const override { return gpu::TextureFormat::BGRA8Unorm; }
@@ -1000,6 +1000,7 @@ public:
   std::vector<gpu::Extent2d> configuredSizes;
   /// Configuration the most recent \ref configure applied.
   gpu::SurfaceConfiguration lastConfiguration;
+  gpu::SurfaceStatus presentStatus = gpu::SurfaceStatus::Success;
   int presentCalls = 0;         //!< Frames handed to the platform.
   int abandonCalls = 0;         //!< Frames handed back without being shown.
   int destroySurfaceCalls = 0;  //!< Surfaces whose platform state was released.
@@ -1040,7 +1041,7 @@ protected:
   gpu::Result<gpu::SurfaceStatus> onPresentSurface(uint32_t) override {
     ++presentCalls;
     backendHasFrame_ = false;
-    return gpu::SurfaceStatus::Success;
+    return presentStatus;
   }
 
   void onAbandonCurrentTexture(uint32_t) override {
@@ -1132,7 +1133,7 @@ TEST_F(RuntimePresentationSurfaceTest, FollowsAResizeByReconfiguringTheSameSurfa
   ASSERT_NO_FATAL_FAILURE(attachAndConfigure(Vector2i(1280, 720)));
   internal::AcquiredFrame first = surface_.acquire();
   ASSERT_THAT(first.status, testing::Eq(gpu::SurfaceStatus::Success));
-  surface_.present();
+  EXPECT_TRUE(surface_.present());
 
   EXPECT_TRUE(surface_.configure(800, 600));
   internal::AcquiredFrame resized = surface_.acquire();
@@ -1186,11 +1187,21 @@ TEST_F(RuntimePresentationSurfaceTest, APresentedFrameIsNoLongerTheCallersToDraw
   internal::AcquiredFrame frame = surface_.acquire();
   ASSERT_TRUE(frame.texture.isValid());
 
-  surface_.present();
+  EXPECT_TRUE(surface_.present());
 
   EXPECT_EQ(device_.presentCalls, 1);
   EXPECT_THAT(useFrame(frame.texture), gpu::IsGpuError(gpu::GpuErrorType::InvalidHandle))
       << "the platform owns the frame once it has been handed over";
+}
+
+TEST_F(RuntimePresentationSurfaceTest, FailedPresentDoesNotClaimSuccess) {
+  ASSERT_NO_FATAL_FAILURE(attachAndConfigure());
+  internal::AcquiredFrame frame = surface_.acquire();
+  ASSERT_TRUE(frame.texture.isValid());
+  device_.presentStatus = gpu::SurfaceStatus::Lost;
+  EXPECT_FALSE(surface_.present());
+  EXPECT_THAT(useFrame(frame.texture), gpu::IsGpuError(gpu::GpuErrorType::InvalidHandle));
+  EXPECT_EQ(device_.presentCalls, 1);
 }
 
 TEST_F(RuntimePresentationSurfaceTest, AnAbandonedFrameIsNoLongerTheCallersToDrawInto) {
@@ -1224,7 +1235,7 @@ TEST_F(RuntimePresentationSurfaceTest, PresentingWithNoFrameHeldDoesNothing) {
   ASSERT_NO_FATAL_FAILURE(attachAndConfigure());
 
   // The frame loop presents unconditionally on its way out, including the frames it skipped.
-  surface_.present();
+  EXPECT_FALSE(surface_.present());
   surface_.abandon();
 
   EXPECT_EQ(device_.presentCalls, 0);
@@ -1272,7 +1283,7 @@ TEST_F(RuntimePresentationSurfaceTest, AFrameThatDidNotArriveInTimeLeavesNothing
   EXPECT_FALSE(frame.texture.isValid()) << "nothing became available to draw into";
 
   surface_.abandon();
-  surface_.present();
+  EXPECT_FALSE(surface_.present());
 
   EXPECT_EQ(device_.abandonCalls, 0)
       << "a frame that never came is not one to hand back, and asking would be refused";
@@ -1324,7 +1335,7 @@ TEST_F(RuntimePresentationSurfaceTest, AFrameThatCannotBeCopiedFromIsStillPresen
   ASSERT_THAT(frame.status, testing::Eq(gpu::SurfaceStatus::Success));
   ASSERT_THAT(frame.texture.isValid(), testing::IsTrue())
       << "a surface whose frames cannot be copied from still hands them out to draw into";
-  surface_.present();
+  EXPECT_TRUE(surface_.present());
 
   EXPECT_THAT(device_.presentCalls, testing::Eq(1))
       << "the frame was not shown because it could not be read back";
@@ -3747,6 +3758,7 @@ TEST(EditorWindowTest, PendingGpuCompletionCoalescesUiFramesAtThree) {
   ASSERT_NE(window.geodeFramebufferDevice(), nullptr);
   std::uint64_t completed = 0;
   window.setPresentationCompletionProbeForTesting([&] { return completed; });
+  EXPECT_EQ(window.pollDeferredPresentation(), EditorWindow::PresentationProgress::Idle);
   int documentDraws = 0;
   window.setWgpuUnderlayRenderCallback(
       [&](const EditorWindowWgpuRenderTarget&) { ++documentDraws; });
@@ -3755,10 +3767,17 @@ TEST(EditorWindowTest, PendingGpuCompletionCoalescesUiFramesAtThree) {
     window.endFrame();
   }
   EXPECT_EQ(documentDraws, 3) << "the fourth UI frame must not allocate or submit more GPU work";
+  EXPECT_EQ(window.pollDeferredPresentation(), EditorWindow::PresentationProgress::Pending);
+  EXPECT_EQ(documentDraws, 3) << "the progress probe must not construct a UI frame";
   completed = std::numeric_limits<std::uint64_t>::max();
+  EXPECT_EQ(window.pollDeferredPresentation(), EditorWindow::PresentationProgress::Ready);
+  EXPECT_EQ(window.pollDeferredPresentation(), EditorWindow::PresentationProgress::Ready)
+      << "readiness stays owed until a frame actually admits";
+  EXPECT_EQ(documentDraws, 3);
   window.beginFrame();
   window.endFrame();
   EXPECT_EQ(documentDraws, 4) << "the newest frame must resume as soon as completion permits";
+  EXPECT_EQ(window.pollDeferredPresentation(), EditorWindow::PresentationProgress::Idle);
 }
 
 TEST(EditorWindowTest, APublishedManifestRetainsItsUiRegistrationUntilItsLastOwnerLeaves) {

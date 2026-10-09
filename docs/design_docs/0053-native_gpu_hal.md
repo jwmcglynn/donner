@@ -33,6 +33,12 @@ loss. The one remaining wgpu-native consumer is a checksum-pinned, Linux-only, t
 comparison reference; the lexical no-Rust verifier and the configured dependency audits keep it out
 of every product.
 
+The browser editor keeps its device, retained tile textures and canvas on the application thread.
+Raster workers dispatch validated commands and resource identities; the desktop compositor draws
+those retained tiles directly into the canvas backbuffer. The
+[GPU runtime reference](../gpu_runtime.md#GpuRuntimeSnapshots) describes explicit CPU captures and
+the normal browser residency gates.
+
 ## Documentation
 
 - [GPU runtime reference](../gpu_runtime.md): ownership, backends, backend selection and failure
@@ -92,8 +98,6 @@ The maintainer decided:
   drain on Metal from tripping the system GPU timeout.
 - [#1719](https://github.com/jwmcglynn/donner/issues/1719): find why a discrete Vulkan GPU's
   driver reported device loss in the same drain.
-- [#1720](https://github.com/jwmcglynn/donner/issues/1720): present raster-worker document pixels
-  in the browser editor without a CPU bitmap handoff.
 - [#1721](https://github.com/jwmcglynn/donner/issues/1721): build Geode and the native GPU runtime
   through the generated CMake build.
 - [#1634](https://github.com/jwmcglynn/donner/issues/1634): the Firefox Geode lane intermittently

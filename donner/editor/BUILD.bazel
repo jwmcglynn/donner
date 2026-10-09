@@ -78,7 +78,10 @@ cc_library(
 donner_cc_library(
     name = "whole_app_worker_bridge",
     srcs = ["WholeAppWorkerBridge.cc"],
-    hdrs = ["WholeAppWorkerBridge.h"],
+    hdrs = [
+        "FrameCallbackAdmission.h",
+        "WholeAppWorkerBridge.h",
+    ],
     deps = [
         ":whole_app_worker_config",
         "//donner/base:asyncify_suspend_probe",

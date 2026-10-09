@@ -344,6 +344,7 @@ TEST(SampleThumbnailAsyncTest, RendersSourceDependentBitmapsThroughOneBoundedWor
   EXPECT_EQ(stats.started, 2u);
   EXPECT_EQ(stats.completed, 2u);
   EXPECT_EQ(stats.rendered, 2u);
+  EXPECT_EQ(stats.readbackCount, thumbnailRoot.supportsTextureSnapshotCompositing() ? 2u : 0u);
   EXPECT_EQ(stats.offscreenRendererCreations, 1u)
       << "The worker must lazily create and then reuse one offscreen renderer";
   EXPECT_FALSE(stats.pending);

@@ -196,12 +196,12 @@ jobs:
       # run-browser-ci.sh copies each lane's Playwright output here as the lane
       # ends. The live output directory cannot be uploaded instead: every lane
       # shares it and Playwright empties it on start, so a passing lane wipes
-      # the evidence of the failing lanes before it.
-      - name: Upload Playwright failure artifacts
-        if: failure()
+      # the evidence of the earlier lanes. Keep successful residency accounting too.
+      - name: Upload Playwright evidence
+        if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v7
         with:
-          name: editor-wasm-playwright-failure-${{ github.sha }}
+          name: editor-wasm-playwright-evidence-${{ github.sha }}-${{ github.run_attempt }}
           path: donner/editor/wasm/tests/playwright-failures
           if-no-files-found: warn
           retention-days: 14

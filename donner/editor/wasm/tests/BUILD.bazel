@@ -13,7 +13,7 @@ playwright_bin.playwright_test(
         "test",
         "$(rootpath :smoke.spec.ts)",
         "--config=$(rootpath :playwright.bazel.config.js)",
-        "--grep=production Geode wasm presents visible editor pixels",
+        "--grep=production.Geode.wasm.presents.visible.editor.pixels|carousel.loads",
     ],
     copy_data_to_bin = False,
     data = [
@@ -96,7 +96,9 @@ playwright_bin.playwright_test(
         "overlay-bitmap-compare.ts",
         "package.json",
         "playwright.bazel.config.js",
+        "playwright.compatibility.config.js",
         "playwright.config.js",
+        "playwright.webkit.bazel.config.js",
         "png-crop.ts",
         "quarantine-report.mjs",
         "remote-webserver.mjs",
@@ -107,6 +109,7 @@ playwright_bin.playwright_test(
         "//donner/editor/tests:standalone_geode_browser_png_compare",
         "//donner/editor/wasm:_wasm_web_package_for_serve",
         "@playwright//:chromium",
+        "@playwright//:webkit",
     ] + glob(["browser-presentation-regression.spec.ts-snapshots/*.png"]),
     env = {
         "CI": "1",
@@ -117,6 +120,7 @@ playwright_bin.playwright_test(
         # The repo-wide remote Emscripten workaround disables Node's WebAssembly
         # runtime, but Playwright's HTTP client uses its bundled llhttp Wasm.
         "NODE_OPTIONS": "",
+        "DONNER_WEBKIT_EXECUTABLE": "$(rootpath @playwright//:webkit)/pw_run.sh",
         "PLAYWRIGHT_BROWSERS_PATH": "$(rootpath @playwright//:chromium)/../",
     },
     tags = ["launches-browser"],
@@ -187,10 +191,12 @@ playwright_bin.playwright_test(
     copy_data_to_bin = False,
     data = [
         "browser-application-heartbeat.mjs",
+        "browser-gpu-residency.ts",
         "browser-heartbeat.cjs",
         "browser-resource-quiescence.mjs",
         "browser-responsiveness.perf.ts",
         "browser-watchdog-setup.js",
+        "canvas-color-stats.ts",
         "composited-pixel-classifier.mjs",
         "composited-probe.ts",
         "composited-probe-evidence.mjs",
@@ -295,6 +301,8 @@ playwright_bin.playwright_test(
     data = [
         "boot-presentation.spec.ts",
         "browser-backend-selection.spec.ts",
+        "browser-gpu-residency.ts",
+        "canvas-color-stats.ts",
         "package.json",
         "playwright.bazel.config.js",
         "playwright.boot-presentation.bazel.config.js",
@@ -503,6 +511,7 @@ js_test(
         "playwright.boot-presentation.bazel.config.js",
         "playwright.composited-chromium.bazel.config.js",
         "playwright.composited-chromium.config.js",
+        "playwright.webkit.bazel.config.js",
     ],
     entry_point = "playwright-bazel-config.spec.mjs",
     node_options = ["--test"],
@@ -734,6 +743,7 @@ js_test(
         "//donner/editor:WholeAppWorkerBridge.cc",
         "//donner/editor/gui:EditorWindow.cc",
         "//donner/editor/wasm/tests:browser-backend-selection.spec.ts",
+        "//donner/editor/wasm/tests:browser-gpu-residency.ts",
         "//donner/editor/wasm/tests:browser-presentation-regression.spec.ts",
         "//donner/editor/wasm/tests:browser-surface-recovery.spec.ts",
         "//donner/editor/wasm/tests:composited-drag-invariants.spec.ts",

@@ -7,6 +7,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
+#include <cstring>
 #include <span>
 #include <utility>
 
@@ -54,17 +56,23 @@ const char* GpuWaitTimeoutSiteName(svg::GpuWaitTimeoutSite site) {
 }
 
 // Proxied to the browser main thread: the render pthread has no `window`.
-// The numeric values ride one heap buffer because EM_ASM argument
-// substitution stops at $15; the buffer is static because the async proxy
-// reads it after this function returns, and the publisher is single-threaded
-// per process. The wait-site name rides a separate argument as a pointer to a
-// string literal, which has static storage and so outlives the proxy hop too.
+// Numeric values ride an owned heap buffer because EM_ASM argument substitution stops at $15.
+// Each asynchronous proxy owns its buffer until the main thread copies and frees it, so a later
+// result cannot overwrite an earlier one's accounting. The wait-site name points to a string
+// literal whose storage outlives the proxy hop.
 void PublishWorkerTimingStats(
     const RenderResult& result, const EditorApp& app,
     const svg::compositor::CompositorController::RenderFrameStats& compositorStats) {
   const auto& timing = result.workerTiming;
-  constexpr std::size_t kValueCount = 37;
-  static double buffer[kValueCount];
+  constexpr std::size_t kValueCount = 40;
+  int bitmapPayloadTiles = 0;
+  int texturePayloadTiles = 0;
+  if (result.compositedPreview) {
+    for (const auto& tile : result.compositedPreview->tiles) {
+      bitmapPayloadTiles += !tile.bitmap.empty();
+      texturePayloadTiles += tile.textureSnapshot != nullptr;
+    }
+  }
   const double values[kValueCount] = {
       result.workerMs,
       timing.queueWaitMs,
@@ -102,15 +110,28 @@ void PublishWorkerTimingStats(
       timing.documentWriteLockMs,
       static_cast<double>(result.presentationRepairReason),
       static_cast<double>(timing.compositorReadbackCount),
-      static_cast<double>(timing.tileHandoffReadbackCount)};
-  std::copy(std::begin(values), std::end(values), std::begin(buffer));
+      static_cast<double>(timing.tileHandoffReadbackCount),
+      static_cast<double>(timing.finalSnapshotReadbackCount),
+      static_cast<double>(bitmapPayloadTiles),
+      static_cast<double>(texturePayloadTiles)};
+  double* buffer = static_cast<double*>(std::malloc(sizeof(values)));
+  if (buffer == nullptr) {
+    return;
+  }
+  std::memcpy(buffer, values, sizeof(values));
   // clang-format off: EM_JS and EM_ASM bodies are JavaScript, which clang-format rewrites
   // as C++ - it has already split a `===` into `== =` elsewhere in the editor, a SyntaxError
   // the browser reports only once that arm is built.
   MAIN_THREAD_ASYNC_EM_ASM(
       {
-        const b = $0 >> 3;
-        const heap = HEAPF64;
+        let heap;
+        try {
+          const start = $0 >> 3;
+          heap = HEAPF64.slice(start, start + $2);
+        } finally {
+          _free($0);
+        }
+        const b = 0;
         const names = ([
           'workerMs',
           'queueWaitMs',
@@ -136,9 +157,9 @@ void PublishWorkerTimingStats(
           'readbackCount',
           'readbackPollIterations'
         ]);
-        const previous = window['__donnerWorkerStats'];
+        const previous = window['__donnerWorkerStats'] || ({});
         const stats = ({
-          'completedResults' : previous ? previous['completedResults'] + 1 : 1,
+          'completedResults' : (previous['completedResults'] || 0) + 1,
           'publishedAtMs' : performance.now(),
           'acceptedForPresentation' : false,
         });
@@ -160,12 +181,24 @@ void PublishWorkerTimingStats(
         stats['presentationRepairReason'] = heap[b + 34];
         stats['compositorReadbackCount'] = heap[b + 35];
         stats['tileHandoffReadbackCount'] = heap[b + 36];
-        stats['nothingToPresentTotal'] = (previous ? previous['nothingToPresentTotal'] || 0 : 0) +
-                                         (stats['nothingToPresent'] ? 1 : 0);
+        stats['finalSnapshotReadbackCount'] = heap[b + 37];
+        stats['bitmapPayloadTileCount'] = heap[b + 38];
+        stats['texturePayloadTileCount'] = heap[b + 39];
+        const totals = ([
+          [ 'bitmapPayloadTileTotal', 'bitmapPayloadTileCount' ],
+          [ 'texturePayloadTileTotal', 'texturePayloadTileCount' ],
+          [ 'compositorReadbackTotal', 'compositorReadbackCount' ],
+          [ 'tileHandoffReadbackTotal', 'tileHandoffReadbackCount' ],
+          [ 'finalSnapshotReadbackTotal', 'finalSnapshotReadbackCount' ],
+          [ 'nothingToPresentTotal', 'nothingToPresent' ],
+        ]);
+        for (const [total, count] of totals) {
+          stats[total] = Number(previous[total] || 0) + Number(stats[count]);
+        }
         stats['publishReason'] = 'render-result';
         window['__donnerWorkerStats'] = stats;
       },
-      buffer, GpuWaitTimeoutSiteName(timing.timedOutWaitSite));
+      buffer, GpuWaitTimeoutSiteName(timing.timedOutWaitSite), kValueCount);
   // clang-format on
 }
 

@@ -35,6 +35,10 @@ const surfaceRecoverySource = await readFile(
   new URL("./browser-surface-recovery.spec.ts", import.meta.url),
   "utf8",
 );
+const gpuResidencySource = await readFile(
+  new URL("./browser-gpu-residency.ts", import.meta.url),
+  "utf8",
+);
 const sampleThumbnailSettleSource = await readFile(
   new URL("./sample-thumbnail-settle.ts", import.meta.url),
   "utf8",
@@ -426,7 +430,6 @@ test("worker stats carry the GPU wait outcome that ended the frame", () => {
   // When the worker rendered nothing, the poll keeps presenting the previous frame; the page must
   // still be able to tell that iteration from one that presented.
   assert.match(publisher[0], /stats\['nothingToPresent'\] = heap\[b \+ 32\] > 0/);
-  assert.match(publisher[0], /stats\['nothingToPresentTotal'\] =/);
 
   // The site names are what a failing run prints, so they are part of the
   // contract rather than an implementation detail.
@@ -466,18 +469,54 @@ test("worker acceptance requires the fresh render identity and no old presentati
     "window",
     "$0",
     "$1",
+    "$2",
     "HEAPF64",
+    "_free",
     "UTF8ToString",
     "performance",
     body(timingPublisher[0]),
   );
   const publishAccepted = new Function("window", "$0", "$1", "$2", body(acceptedPublisher[0]));
-  const heap = new Float64Array(31);
+  const count = Number(/kValueCount = (\d+)/.exec(timingPublisher[0])[1]);
+  const heap = new Float64Array(count);
+  const released = [];
   heap.set([11, 22, 33, 44, 0], 26);
-  const window = { __donnerWorkerStats: { completedResults: 8, presentedAtMs: 100 } };
-  publishTiming(window, 0, 0, heap, () => "none", { now: () => 200 });
+  heap[32] = 1;
+  heap.set([2, 3, 4, 5, 6], 35);
+  const window = {
+    __donnerWorkerStats: {
+      completedResults: 8,
+      presentedAtMs: 100,
+      compositorReadbackTotal: 10,
+      bitmapPayloadTileTotal: 3,
+      texturePayloadTileTotal: 4,
+      nothingToPresentTotal: 5,
+    },
+  };
+  publishTiming(
+    window,
+    0,
+    0,
+    count,
+    heap,
+    (pointer) => {
+      released.push(pointer);
+      heap.fill(99);
+    },
+    () => "none",
+    { now: () => 200 },
+  );
+  assert.deepEqual(released, [0], "the asynchronous publication frees its owned buffer once");
   const stats = window.__donnerWorkerStats;
   assert.equal(stats.completedResults, 9);
+  assert.deepEqual([
+    stats.compositorReadbackTotal,
+    stats.tileHandoffReadbackTotal,
+    stats.finalSnapshotReadbackTotal,
+    stats.bitmapPayloadTileTotal,
+    stats.texturePayloadTileTotal,
+    stats.nothingToPresentTotal,
+  ], [12, 3, 4, 8, 10, 6]);
   assert.equal(stats.acceptedForPresentation, false);
   assert.equal(stats.presentedAtMs, undefined);
   assert.deepEqual([
@@ -656,6 +695,30 @@ test("the sample picker publishes whether its thumbnail lane has drained", () =>
   }
 });
 
+test("thumbnail publication keeps drained state separate from explicit readback count", () => {
+  const publisher = editorShellSource.match(/void PublishSampleThumbnailStats\([\s\S]*?\n\}/);
+  assert.ok(publisher);
+  const callback = publisher[0].match(
+    /MAIN_THREAD_ASYNC_EM_ASM\(\s*\{([\s\S]*?)\n\s*\},([\s\S]*?)\);/,
+  );
+  assert.ok(callback);
+  const argumentNames = callback[2].split(",").map((name) => name.trim());
+  assert.ok(argumentNames.length <= 15, "the SDK proxy argument limit must be respected");
+  const publish = new Function(
+    "window",
+    "performance",
+    ...argumentNames.map((_, index) => `$${index}`),
+    callback[1],
+  );
+  const window = {};
+  for (const [drained, readbackCount] of [[1, 37], [0, 41]]) {
+    const values = { drained, readbackCount, completed: 5, ready: 5 };
+    publish(window, { now: () => 123 }, ...argumentNames.map((name) => values[name] ?? 0));
+    assert.equal(window.__donnerSampleThumbnailStats.drained, Boolean(drained));
+    assert.equal(window.__donnerSampleThumbnailStats.explicitPreviewReadbackTotal, readbackCount);
+  }
+});
+
 test("the shared sample thumbnail gate waits for a drained thumbnail lane", () => {
   const helper = extractAsyncFunction(
     sampleThumbnailSettleSource,
@@ -707,8 +770,12 @@ test("sample loads that do not test the thumbnail handoff settle thumbnails firs
     );
     assert.match(body.slice(settle, sampleClick), /timeout:\s*(?:scaledMs\(20_000\)|20000)/, name);
   }
+  const residencyStartup = extractAsyncFunction(gpuResidencySource, "openEditor");
+  assert.match(residencyStartup, /await expectSampleThumbnailsToSettle\(page, \{/);
+  assert.match(residencyStartup, /timeout: 20000/);
   for (
     const spec of [
+      gpuResidencySource,
       presentationRegressionSource,
       surfaceRecoverySource,
       smokeSource,

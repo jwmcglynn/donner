@@ -1704,3 +1704,12 @@ donner_cc_test(
 )
 
 editor_product_dependency_tests()
+
+donner_cc_test(
+    name = "frame_callback_admission_tests",
+    srcs = ["FrameCallbackAdmission_tests.cc"],
+    deps = [
+        "//donner/editor:whole_app_worker_bridge",
+        "@com_google_gtest//:gtest_main",
+    ],
+)

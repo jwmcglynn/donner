@@ -150,10 +150,31 @@ enum class FrameDriver : int {
 ///
 /// Call instead of `emscripten_set_main_loop_arg`: on the worker-rAF arm this
 /// installs exactly that main loop, and on the proxied arm it installs a
-/// main-thread rAF pump that hands one task per vsync to @p frameFn on the
-/// calling thread. @p frameFn must be safe to re-enter-guard itself; the driver
-/// does not serialize.
-FrameDriver InstallFrameDriver(void (*frameFn)(void*), void* userData);
+/// main-thread rAF pump coalescing ticks until the scheduled frame completes.
+/// Rendering runs outside the proxy queue drain. @p frameFn must guard re-entry on the worker-rAF
+/// arm, where a synchronous proxied call may deliver another callback.
+/// @param canRunFrame Owner-thread readiness guard; false while an editor frame or GPU batch runs.
+/// @param frameFn Frame body; its second argument forces a frame for an event wake.
+/// @param userData Borrowed owner state, invalidated by StopFrameDriver before destruction.
+/// @param pollPresentation Cheap owner progress poll, returning true while a retry remains pending.
+FrameDriver InstallFrameDriver(void (*frameFn)(void*, bool), void* userData,
+                               bool (*canRunFrame)(void*), bool (*pollPresentation)(void*));
+
+/// Request an event frame for a raster-worker state change, independently of delayed browser rAF.
+/// Safe from any thread, including before installation and after shutdown. Ordinary UI/animation
+/// wakes keep using the rAF-paced request flag; this is not a self-driven animation loop.
+void RequestFrame();
+
+/// Start one bounded progress timer for a frame denied a presentation slot. Owner-thread only.
+/// Polls do not draw and preserve the submission queue's original completion deadline.
+void RequestPresentationProgress();
+
+/// Resume one deferred event frame after the owner exits its active frame. Owner-thread only.
+void NotifyFrameFinished();
+
+/// Invalidate queued frame callbacks before destroying their editor state. Called on the app
+/// thread.
+void StopFrameDriver();
 
 /// Interval statistics for the frame driver's ticks, in milliseconds.
 struct FrameTickStats {

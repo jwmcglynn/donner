@@ -33,6 +33,7 @@ _EDITOR_WASM_BINARY_DEPS = [
     "//donner/editor:editor_splash",
     "//donner/editor:pinch_zoom_policy",
     "//donner/editor/gui:editor_window",
+    "//donner/gpu/browser:emscripten_browser_bridge",
 ]
 
 # Fixed size of the editor's Wasm linear memory. See the `INITIAL_MEMORY` /
@@ -100,20 +101,11 @@ _EDITOR_LINKOPTS = [
     "-sBINARYEN_EXTRA_PASSES=--skip-pass=memory-packing,--one-caller-inline-max-function-size=400,--inline-max-combined-binary-size=196608",
     "-pthread",
     "-sEXIT_RUNTIME=0",
-    # the single-canvas architecture: the whole application - ImGui UI and Geode document
-    # rendering - runs on one app pthread that owns the single transferred
-    # `#canvas`. `main()` moves off the browser main thread, which is reduced
-    # to an event forwarder and a page-chrome host.
+    # The app thread owns the canvas and all GPU objects; raster workers dispatch commands to it.
     "-sPROXY_TO_PTHREAD",
-    # Emscripten's default already lists `#canvas`; state it so the
-    # single-canvas contract is visible at the link line.
+    # The application pthread must drain GPU commands while libc waits on its document locks.
+    "-Wl,--wrap=emscripten_futex_wait",
     "-sOFFSCREENCANVASES_TO_PTHREAD=#canvas",
-    # Two pre-warmed pool workers: the app pthread that `PROXY_TO_PTHREAD`
-    # moves `main()` onto, plus `AsyncRenderer`'s persistent raster
-    # `std::thread`. The unified architecture keeps that raster thread (it
-    # produces CPU tiles the app thread uploads once per generation), so a
-    # one-slot pool would make the browser main thread pay a synchronous
-    # worker spawn the first time a document rasterizes.
     "-sPTHREAD_POOL_SIZE=2",
     "-sSTACK_SIZE=1048576",
     "-sUSE_PTHREADS=1",
@@ -163,7 +155,10 @@ editor_wasm_geode_only_guard(
 
 cc_binary(
     name = "_editor_wasm_binary",
-    srcs = ["//donner/editor:main.cc"],
+    srcs = [
+        "BrowserGpuOwnerWait.cc",
+        "//donner/editor:main.cc",
+    ],
     additional_linker_inputs = [
         ":_geode_only_guard",
         "//donner/gpu/browser:library_donner_gpu.js",

@@ -62,83 +62,6 @@ std::vector<svg::FontFaceDependency> UnresolvedFontDependencies(const svg::SVGDo
   return document.renderedFontDependencies();
 }
 
-// ---------------------------------------------------------------------------
-// WEBKIT BITMAP BRIDGE - RETAINED PENDING THE DEFERRED WEBKIT DECISION
-//
-// `DONNER_WASM_WORKER_SURFACE` is defined by no build configuration, so nothing
-// below is compiled anywhere. It is the complete C++ dependency list of the
-// WebKit bitmap bridge - the two alternating document-canvas selectors, the
-// worker-canvas selector, the mode probe, and the three ImageBitmap handoff
-// entry points - held out of the single-canvas architecture deletion series so
-// the retire-or-rebuild decision for WebKit is made against the real code
-// rather than a changelog.
-//
-// This block is NOT a supported configuration and must not be revived as-is:
-// it presents into a second DOM canvas, which the "no CSS in presentation"
-// invariant forbids. That decision either deletes it (see the series' optional
-// bridge-deletion patch, which does exactly that and nothing else) or rebuilds
-// an ImageBitmap handoff against the single canvas. Retained-but-unused code is
-// not an outcome.
-// ---------------------------------------------------------------------------
-#ifdef DONNER_WASM_WORKER_SURFACE
-constexpr const char* kDirectWorkerDocumentCanvasSelector = "#donner-document-canvas";
-constexpr const char* kDirectWorkerDocumentBackCanvasSelector = "#donner-document-canvas-back";
-constexpr const char* kDirectWorkerDocumentCanvasSelectors =
-    "#donner-document-canvas,#donner-document-canvas-back";
-constexpr const char* kBitmapWorkerDocumentCanvasSelector = "#donner-worker-document-canvas";
-
-// clang-format off: every EM_JS body below is JavaScript, which clang-format reformats as C++
-// and can silently corrupt - it has split a `===` into `== =` in another file, a SyntaxError the
-// browser only reports once that arm is built.
-EM_JS(int, UseBitmapWorkerSurfaceBridge, (),
-      { return globalThis['__donnerWorkerSurfaceMode'] == 'bitmap-bridge' ? 1 : 0; });
-
-EM_JS(int, StageWorkerDocumentBitmap,
-      (const char* selector, int width, int height, double frameToken, int surfaceSlot), {
-        try {
-          const canvasTarget = findCanvasEventTarget(UTF8ToString(selector));
-          const canvas = canvasTarget && (canvasTarget['offscreenCanvas'] || canvasTarget);
-          if (!canvas || typeof canvas.transferToImageBitmap != 'function') {
-            Module['printErr'](
-                'Donner bitmap bridge: transferred canvas cannot create an ImageBitmap');
-            return 0;
-          }
-          const bitmap = canvas.transferToImageBitmap();
-          postMessage({
-            'cmd' : 'callHandler',
-            'handler' : 'stageDonnerDocumentBitmap',
-            'args' : [ frameToken, surfaceSlot, bitmap, width, height ],
-          },
-                      [bitmap]);
-          return 1;
-        } catch (error) {
-          Module['printErr']('Donner bitmap bridge failed: ' + error);
-          return 0;
-        }
-      });
-
-EM_JS(void, CommitWorkerDocumentBitmap, (double frameToken, int surfaceSlot), {
-  if (typeof Module['commitDonnerDocumentBitmap'] == 'function') {
-    Module['commitDonnerDocumentBitmap'](frameToken, surfaceSlot);
-  }
-});
-
-EM_JS(void, DiscardWorkerDocumentBitmap, (double frameToken), {
-  if (typeof document != 'undefined') {
-    if (typeof Module['discardDonnerDocumentBitmap'] == 'function') {
-      Module['discardDonnerDocumentBitmap'](frameToken);
-    }
-    return;
-  }
-  postMessage({
-    'cmd' : 'callHandler',
-    'handler' : 'discardDonnerDocumentBitmap',
-    'args' : [frameToken],
-  });
-});
-// clang-format on
-#endif  // DONNER_WASM_WORKER_SURFACE
-
 RenderResult::CompositedPreview BuildFullCanvasCompositedPreview(
     const Box2d& documentViewBox, const svg::RendererBitmap& bitmap,
     std::shared_ptr<const svg::RendererTextureSnapshot> textureSnapshot, std::uint64_t generation,
@@ -149,7 +72,7 @@ RenderResult::CompositedPreview BuildFullCanvasCompositedPreview(
   tile.kind = RenderResult::CompositedTile::Kind::Segment;
   tile.id = "full-canvas";
   tile.generation = generation;
-  tile.bitmap = bitmap;
+  tile.bitmap = textureSnapshot == nullptr ? bitmap : svg::RendererBitmap{};
   tile.textureSnapshot = std::move(textureSnapshot);
   tile.canvasOffsetDoc = rasterViewport.documentRect.topLeft - documentViewBox.topLeft;
   const Vector2i payloadDims =
@@ -405,11 +328,9 @@ private:
 
 // Captures the full-canvas texture for a result and counts an allocation failure.
 void CaptureFullCanvasTextureForResult(svg::RendererInterface& renderer,
-                                       const PresentationSnapshotPlan& plan,
-                                       svg::RendererBitmap& bitmap,
                                        std::shared_ptr<const svg::RendererTextureSnapshot>& texture,
                                        int& allocationFailureCount) {
-  if (CaptureFullCanvasTextureSnapshot(renderer, plan, bitmap, texture)) {
+  if (CaptureFullCanvasTextureSnapshot(renderer, texture)) {
     ++allocationFailureCount;
   }
 }
@@ -429,35 +350,33 @@ void CaptureFrameSnapshotsForResult(svg::RendererInterface& renderer,
     bitmap = renderer.takeSnapshotInterruptibly(shouldCancel);
   }
   if (plan.captureTextureSnapshot && !(shouldCancel && shouldCancel())) {
-    CaptureFullCanvasTextureForResult(renderer, plan, bitmap, texture,
+    CaptureFullCanvasTextureForResult(renderer, texture,
                                       timing.fullCanvasTextureAllocationFailureCount);
   }
 }
 
-bool PrepareCompositedTilePayload(bool requiresTexturePresentation,
-                                  RenderResult::CompositedTile& tile,
-                                  RenderResult::WorkerTimingBreakdown& timing,
-                                  const std::function<bool()>& shouldCancel) {
-  const bool capturesCpuPixels = tile.textureSnapshot != nullptr && !requiresTexturePresentation;
-  if (!PrepareTilePayloadForPresentation(requiresTexturePresentation, tile.bitmap,
-                                         tile.textureSnapshot, shouldCancel)) {
-    return false;
-  }
-  timing.tileHandoffReadbackCount += capturesCpuPixels ? 1 : 0;
-  return true;
-}
-
 void ApplyReadbackTimingStats(RenderResult::WorkerTimingBreakdown& timing,
                               const svg::RendererReadbackStats& compositor,
-                              const svg::RendererReadbackStats& presentation) {
-  timing.readbackCount = compositor.count + presentation.count;
-  timing.readbackPollIterations = compositor.pollIterations + presentation.pollIterations;
-  timing.usedTimedWaitAny = compositor.usedTimedWaitAny || presentation.usedTimedWaitAny;
-  timing.deviceLost = compositor.deviceLost || presentation.deviceLost;
-  const svg::RendererReadbackStats& timeout =
-      presentation.timedOutWaitSite != svg::GpuWaitTimeoutSite::None ? presentation : compositor;
-  timing.timedOutWaitSite = timeout.timedOutWaitSite;
-  timing.timedOutWaitMs = timeout.timedOutWaitMs;
+                              const svg::RendererReadbackStats& handoff,
+                              const svg::RendererReadbackStats& finalSnapshot) {
+  timing.compositorReadbackCount = compositor.count;
+  timing.tileHandoffReadbackCount = handoff.count;
+  timing.finalSnapshotReadbackCount = finalSnapshot.count;
+  timing.readbackCount = compositor.count + handoff.count + finalSnapshot.count;
+  timing.readbackPollIterations =
+      compositor.pollIterations + handoff.pollIterations + finalSnapshot.pollIterations;
+  timing.usedTimedWaitAny =
+      compositor.usedTimedWaitAny || handoff.usedTimedWaitAny || finalSnapshot.usedTimedWaitAny;
+  timing.deviceLost = compositor.deviceLost || handoff.deviceLost || finalSnapshot.deviceLost;
+  const svg::RendererReadbackStats* timeout = &compositor;
+  if (handoff.timedOutWaitSite != svg::GpuWaitTimeoutSite::None) {
+    timeout = &handoff;
+  }
+  if (finalSnapshot.timedOutWaitSite != svg::GpuWaitTimeoutSite::None) {
+    timeout = &finalSnapshot;
+  }
+  timing.timedOutWaitSite = timeout->timedOutWaitSite;
+  timing.timedOutWaitMs = timeout->timedOutWaitMs;
 }
 
 bool CanUseFullCanvasPresentation(bool hasCompositor, bool overviewInfillOnly,
@@ -467,35 +386,21 @@ bool CanUseFullCanvasPresentation(bool hasCompositor, bool overviewInfillOnly,
 
 }  // namespace
 
-bool PrepareTilePayloadForPresentation(bool requiresTexturePresentation,
-                                       svg::RendererBitmap& bitmap,
-                                       std::shared_ptr<const svg::RendererTextureSnapshot>& texture,
-                                       const std::function<bool()>& shouldCancel) {
-  if (requiresTexturePresentation || texture == nullptr) {
-    return true;
-  }
-  svg::RendererBitmap captured = texture->takeSnapshotInterruptibly(shouldCancel);
-  if (captured.empty()) {
+bool CanPresentTilePayload(bool requiresTexturePresentation, const svg::RendererBitmap& bitmap,
+                           const std::shared_ptr<const svg::RendererTextureSnapshot>& texture,
+                           const std::function<bool()>& shouldCancel) {
+  if (shouldCancel && shouldCancel()) {
     return false;
   }
-  bitmap = std::move(captured);
-  texture.reset();
-  return true;
+  return requiresTexturePresentation ? bitmap.empty() : texture == nullptr;
 }
 
 bool CaptureFullCanvasTextureSnapshot(
-    svg::RendererInterface& renderer, const PresentationSnapshotPlan& plan,
-    svg::RendererBitmap& bitmap, std::shared_ptr<const svg::RendererTextureSnapshot>& texture) {
+    svg::RendererInterface& renderer,
+    std::shared_ptr<const svg::RendererTextureSnapshot>& texture) {
   ZoneScopedN("Renderer::takeTextureSnapshot");
   texture = renderer.takeTextureSnapshot();
-  if (texture != nullptr) {
-    return false;
-  }
-  if (!plan.captureCpuSnapshot) {
-    ZoneScopedN("Renderer::takeSnapshot (texture-fallback)");
-    bitmap = renderer.takeSnapshot();
-  }
-  return true;
+  return texture == nullptr;
 }
 
 PresentationSnapshotPlan ChoosePresentationSnapshotPlan(bool hasCompositedPreview,
@@ -539,7 +444,11 @@ void AsyncRenderer::start() {
   if (thread_.joinable()) {
     return;
   }
-  thread_ = std::thread([this] { workerLoop(); });
+  workerExited_.store(false, std::memory_order_release);
+  thread_ = std::thread([this] {
+    workerLoop();
+    workerExited_.store(true, std::memory_order_release);
+  });
 }
 
 AsyncRenderer::~AsyncRenderer() {
@@ -570,6 +479,14 @@ void AsyncRenderer::shutdown() {
     cv_.notify_all();
   }
   if (thread_.joinable()) {
+#ifdef __EMSCRIPTEN__
+    // The app owns GPU promises used by explicit worker captures and device initialization.
+    const double deadlineMs = emscripten_get_now() + 30000.0;
+    while (!workerExited_.load(std::memory_order_acquire)) {
+      UTILS_RELEASE_ASSERT(emscripten_get_now() < deadlineMs);
+      emscripten_sleep(1);
+    }
+#endif
     thread_.join();
   }
 }
@@ -1094,16 +1011,47 @@ void AsyncRenderer::waitForReplayDocumentAccess(std::unique_lock<std::mutex>& lo
   });
 }
 
+namespace {
+enum class RasterWorkPhase {
+  IdleMaintenance,
+  WarmupAccess,
+  Warmup,
+  Thumbnail,
+  RenderSetup,
+  DocumentAccess,
+  Rendering,
+  Publishing
+};
+
+void PublishRasterWorkPhase(RasterWorkPhase phase) {
+#ifdef __EMSCRIPTEN__
+  // clang-format off
+  MAIN_THREAD_ASYNC_EM_ASM({
+    const phases = (['idle-maintenance', 'warmup-document-access', 'warmup', 'thumbnail',
+                    'render-setup', 'render-document-access', 'rendering', 'publishing']);
+    const state = ({'phase': phases[$0], 'publishedAtMs': performance.now()});
+    window['__donnerRasterWorkState'] = state;
+    const history = window['__donnerRasterWorkPhases'] || (window['__donnerRasterWorkPhases'] = []);
+    history.push(state);
+    if (history.length > 32) history.shift();
+  }, static_cast<int>(phase));
+  // clang-format on
+#else
+  (void)phase;
+#endif
+}
+}  // namespace
+
 void AsyncRenderer::workerLoop() {
 #if defined(__EMSCRIPTEN__)
-  // Emscripten's WebGPU object table is per-worker. Construct and use the
-  // renderer on this pthread so wgpu handles never cross JS worker boundaries.
+  // C++ renderer state belongs to this worker; browser GPU primitives run on the app owner.
   svg::Renderer workerRenderer;
 #endif
   std::unique_ptr<svg::RendererInterface> sampleThumbnailRenderer;
   svg::RendererInterface* sampleThumbnailRendererRoot = nullptr;
 
   while (true) {
+    PublishRasterWorkPhase(RasterWorkPhase::IdleMaintenance);
     std::optional<RenderRequest> requestStorage;
     std::optional<SampleThumbnailRenderRequest> sampleThumbnailStorage;
     bool runCompositorWarmup = false;
@@ -1167,7 +1115,9 @@ void AsyncRenderer::workerLoop() {
           !cancelCompositorWarmup_.isCancelled()) {
         svg::SVGDocument& warmupDocument = *compositorDocument_;
         std::optional<svg::DocumentWriteAccess> documentAccess;
+        PublishRasterWorkPhase(RasterWorkPhase::WarmupAccess);
         documentAccess.emplace(warmupDocument.writeAccess());
+        PublishRasterWorkPhase(RasterWorkPhase::Warmup);
         (void)compositor_->warmPendingFirstFrameCaches(cancelCompositorWarmup_);
       }
 
@@ -1191,6 +1141,7 @@ void AsyncRenderer::workerLoop() {
     }
 
     if (sampleThumbnailStorage.has_value()) {
+      PublishRasterWorkPhase(RasterWorkPhase::Thumbnail);
       svg::RendererInterface* offscreenRenderer = nullptr;
 #if defined(__EMSCRIPTEN__)
       if (sampleThumbnailRenderer == nullptr || sampleThumbnailRendererRoot != &workerRenderer) {
@@ -1237,6 +1188,7 @@ void AsyncRenderer::workerLoop() {
       finishSampleThumbnailRendererCreation();
 
       SampleThumbnailRenderResult result;
+      svg::RendererReadbackStats previewReadbackStats;
       if (offscreenRenderer == nullptr) {
         result.kind = sampleThumbnailStorage->kind;
         result.key = sampleThumbnailStorage->key;
@@ -1247,8 +1199,10 @@ void AsyncRenderer::workerLoop() {
         const std::chrono::milliseconds delay(
             sampleThumbnailRenderDelayMsForTesting_.load(std::memory_order_acquire));
         const ScopedFrameResourceScope resourceScope(*sampleThumbnailRendererRoot);
+        (void)offscreenRenderer->consumeReadbackStats();
         result = RenderSampleThumbnail(std::move(*sampleThumbnailStorage), *offscreenRenderer,
                                        cancelSampleThumbnail_, delay);
+        previewReadbackStats = offscreenRenderer->consumeReadbackStats();
       }
 
       std::function<void()> wake;
@@ -1256,6 +1210,7 @@ void AsyncRenderer::workerLoop() {
       {
         std::lock_guard<std::mutex> lock(mutex_);
         sampleThumbnailActive_ = false;
+        sampleThumbnailCounters_.readbackCount += previewReadbackStats.count;
         if (!std::holds_alternative<ShutdownState>(workerState_)) {
           ++sampleThumbnailCounters_.completed;
           if (discardActiveSampleThumbnailResult_) {
@@ -1282,6 +1237,7 @@ void AsyncRenderer::workerLoop() {
       continue;
     }
 
+    PublishRasterWorkPhase(RasterWorkPhase::RenderSetup);
     assert(requestStorage.has_value());
     RenderRequest& request = *requestStorage;
     const auto workerDequeuedAt = std::chrono::steady_clock::now();
@@ -1333,7 +1289,9 @@ void AsyncRenderer::workerLoop() {
     // holds a write guard across document-reading work and releases it via releaseDocumentAccess()
     // before every mutex_ section below to avoid a lock-order inversion.
     std::optional<svg::DocumentWriteAccess> documentAccess;
+    PublishRasterWorkPhase(RasterWorkPhase::DocumentAccess);
     documentAccess.emplace(requestDocument.writeAccess());
+    PublishRasterWorkPhase(RasterWorkPhase::Rendering);
     const auto documentLockAcquiredAt = std::chrono::steady_clock::now();
     const auto releaseDocumentAccess = [&]() {
       workerTiming.documentWriteLockMs = elapsedSince(documentLockAcquiredAt);
@@ -1793,9 +1751,9 @@ void AsyncRenderer::workerLoop() {
         if (!metadataOnly) {
           tile.bitmap = std::move(ct.bitmap);
           tile.textureSnapshot = std::move(ct.textureSnapshot);
-          if (!PrepareCompositedTilePayload(requestRenderer.requiresTextureSnapshotPresentation(),
-                                            tile, workerTiming,
-                                            [this]() { return cancelRender_.isCancelled(); })) {
+          if (!CanPresentTilePayload(requestRenderer.requiresTextureSnapshotPresentation(),
+                                     tile.bitmap, tile.textureSnapshot,
+                                     [this]() { return cancelRender_.isCancelled(); })) {
             return std::nullopt;
           }
         }
@@ -1943,9 +1901,9 @@ void AsyncRenderer::workerLoop() {
       continue;
     }
 
+    PublishRasterWorkPhase(RasterWorkPhase::Publishing);
     const svg::RendererReadbackStats compositorReadbackStats =
         requestRenderer.consumeReadbackStats();
-    workerTiming.compositorReadbackCount = compositorReadbackStats.count;
     noteGpuWaitOutcome(compositorReadbackStats);
 
     // Every non-Off editor frame publishes the compositor's paint-order tile set. Promotion
@@ -1960,6 +1918,8 @@ void AsyncRenderer::workerLoop() {
       }
       workerTiming.buildPreviewMs = elapsedSince(buildPreviewStart);
     }
+    const svg::RendererReadbackStats handoffReadbackStats = requestRenderer.consumeReadbackStats();
+    noteGpuWaitOutcome(handoffReadbackStats);
     // Selection chrome is no longer baked into the bitmap - main.cc
     // draws it via the ImGui draw list every frame so clicks don't
     // pay the SVG re-rasterize cost. The `request.selection` field
@@ -1981,10 +1941,14 @@ void AsyncRenderer::workerLoop() {
                                      [this]() { return cancelRender_.isCancelled(); });
       workerTiming.finalSnapshotMs = elapsedSince(finalSnapshotStart);
     }
-    const svg::RendererReadbackStats readbackStats = requestRenderer.consumeReadbackStats();
-    ApplyReadbackTimingStats(workerTiming, compositorReadbackStats, readbackStats);
-    noteGpuWaitOutcome(readbackStats);
-    if (!compositedPreview.has_value() && (!bitmap.empty() || fullCanvasTexture != nullptr)) {
+    const svg::RendererReadbackStats finalReadbackStats = requestRenderer.consumeReadbackStats();
+    ApplyReadbackTimingStats(workerTiming, compositorReadbackStats, handoffReadbackStats,
+                             finalReadbackStats);
+    noteGpuWaitOutcome(finalReadbackStats);
+    const bool hasFullCanvasPresentation = requestRenderer.requiresTextureSnapshotPresentation()
+                                               ? fullCanvasTexture != nullptr
+                                               : !bitmap.empty();
+    if (!compositedPreview.has_value() && hasFullCanvasPresentation) {
       UTILS_RELEASE_ASSERT_MSG(
           fullCanvasPresentationAllowed,
           "A non-Off editor render produced no compositor tiles. Refusing monolithic full-canvas "

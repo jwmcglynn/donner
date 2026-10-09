@@ -24,6 +24,7 @@ donner_cc_library(
     hdrs = [
         "BrowserBridge.h",
         "BrowserDevice.h",
+        "BrowserGpuTaskQueue.h",
         "BrowserObjectTable.h",
         "BrowserShareReleaseQueue.h",
         "BrowserWireCodes.h",
@@ -44,8 +45,14 @@ donner_cc_library(
 # `--js-library=$(execpath //donner/gpu/browser:library_donner_gpu.js)`.
 donner_cc_library(
     name = "emscripten_browser_bridge",
-    srcs = ["EmscriptenBrowserBridge.cc"],
-    hdrs = ["EmscriptenBrowserBridge.h"],
+    srcs = [
+        "BrowserGpuOwner.cc",
+        "EmscriptenBrowserBridge.cc",
+    ],
+    hdrs = [
+        "BrowserGpuOwner.h",
+        "EmscriptenBrowserBridge.h",
+    ],
     target_compatible_with = select({
         "@platforms//cpu:wasm32": [],
         "@platforms//cpu:wasm64": [],
@@ -157,6 +164,7 @@ donner_cc_test(
     name = "browser_tests",
     srcs = [
         "tests/BrowserDevice_tests.cc",
+        "tests/BrowserGpuTaskQueue_tests.cc",
         "tests/BrowserObjectTable_tests.cc",
         "tests/BrowserShareReleaseQueue_tests.cc",
         "tests/BrowserSubRectangleUpload_tests.cc",

@@ -15,6 +15,7 @@
 
 #include "donner/base/AsyncifySuspendProbe.h"
 #include "donner/editor/WholeAppWorkerBridge.h"
+#include "donner/gpu/browser/BrowserGpuOwner.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
 
 // The app pthread's JS context has no `window`, so the frame-scheduling flag,
@@ -154,22 +155,75 @@ struct WasmEditorLoopState {
   RenderFrameCallback renderFrame = &RunEditorFrame;
 };
 
-void RunWasmEditorFrame(void* userdata) {
+bool CanRunWasmEditorFrame(void* userdata) {
+  const auto* state = static_cast<WasmEditorLoopState*>(userdata);
+  return !state->frameActive && !donner::gpu::browser::IsBrowserGpuOwnerDispatchActive();
+}
+
+/// Protect an active editor callback from nested UI work, including during GPU idle waits.
+class WasmFrameScope {
+public:
+  explicit WasmFrameScope(WasmEditorLoopState& state) : state_(state) { state_.frameActive = true; }
+
+  ~WasmFrameScope() {
+    state_.frameActive = false;
+#ifdef DONNER_EDITOR_WHOLE_APP_WORKER
+    donner::editor::whole_app_worker::NotifyFrameFinished();
+#endif
+  }
+
+  WasmFrameScope(const WasmFrameScope&) = delete;
+  WasmFrameScope& operator=(const WasmFrameScope&) = delete;
+
+private:
+  WasmEditorLoopState& state_;
+};
+
+bool PollWasmPresentationProgress(void* userdata) {
+  if (!CanRunWasmEditorFrame(userdata)) {
+    return true;
+  }
+  auto* state = static_cast<WasmEditorLoopState*>(userdata);
+  WasmFrameScope callbackScope(*state);
+  switch (state->window->pollDeferredPresentation()) {
+    case donner::editor::gui::EditorWindow::PresentationProgress::Pending: return true;
+    case donner::editor::gui::EditorWindow::PresentationProgress::Ready:
+    case donner::editor::gui::EditorWindow::PresentationProgress::Deadline:
+    case donner::editor::gui::EditorWindow::PresentationProgress::Failed:
+      donner::editor::whole_app_worker::RequestFrame();
+      return false;
+    case donner::editor::gui::EditorWindow::PresentationProgress::Idle: return false;
+  }
+  std::abort();
+}
+
+void RunWasmEditorFrame(void* userdata, bool forceFrame) {
   auto* state = static_cast<WasmEditorLoopState*>(userdata);
   // Synchronous browser calls proxied from the pthread can let WebKit service
   // another requestAnimationFrame callback before the suspended frame resumes.
   // A nested frame would call ImGui::NewFrame() twice without an intervening
   // Render() and recurse until the JS stack overflows. Drop that callback; the
   // active frame will finish and the browser will schedule the next one.
-  if (state->frameActive) {
+  if (!CanRunWasmEditorFrame(userdata)) {
     return;
   }
   if (state->window->shouldClose()) {
+#ifdef DONNER_EDITOR_WHOLE_APP_WORKER
+    donner::editor::whole_app_worker::StopFrameDriver();
+#else
     emscripten_cancel_main_loop();
+#endif
     delete state;
+#ifdef DONNER_EDITOR_WHOLE_APP_WORKER
+    donner::gpu::browser::StopBrowserGpuOwner();
+#endif
     return;
   }
 
+  WasmFrameScope frameScope(*state);
+  if (forceFrame) {
+    state->window->wakeEventLoop();
+  }
   const double nowMs = emscripten_get_now();
   const bool editorRequested = state->window->consumeWasmFrameRequest();
   // Input that has arrived but not been presented is its own wake source.
@@ -190,15 +244,12 @@ void RunWasmEditorFrame(void* userdata) {
   const bool timerDue = state->nextIdleWakeAtMs.has_value() && nowMs >= *state->nextIdleWakeAtMs;
   if (!editorRequested && !browserRequested && !timerDue) {
     // Idle completion confirmation can yield to the browser and deliver another scheduler callback.
-    state->frameActive = true;
     state->window->pollIdleGpu();
-    state->frameActive = false;
     return;
   }
   const int triggerBits =
       (editorRequested ? 1 : 0) | (browserRequested ? 2 : 0) | (timerDue ? 4 : 0);
 
-  state->frameActive = true;
   const double frameStartMs = emscripten_get_now();
   // Every frame is a full frame. The document and the UI are composited by Geode into the same
   // canvas in the same pass, so there is no frame whose only work lives elsewhere: skipping the
@@ -211,7 +262,6 @@ void RunWasmEditorFrame(void* userdata) {
   } else {
     state->nextIdleWakeAtMs.reset();
   }
-  state->frameActive = false;
 }
 #endif
 
@@ -224,6 +274,7 @@ int main(int argc, char** argv) {
   // before anything is constructed.
   donner::editor::whole_app_worker::InstallWorkerGlobalShim();
   donner::editor::whole_app_worker::Install();
+  donner::gpu::browser::RegisterBrowserGpuOwner();
 #endif
 #ifndef __EMSCRIPTEN__
   donner::InstallFailureSignalHandler();
@@ -330,7 +381,8 @@ int main(int argc, char** argv) {
   // `requestAnimationFrame`, which is not vsync-aligned, so the driver probes
   // for it and installs a proxied main-thread rAF pump where it is missing.
   donner::BeginSuspendFrame();
-  donner::editor::whole_app_worker::InstallFrameDriver(&RunWasmEditorFrame, loopState);
+  donner::editor::whole_app_worker::InstallFrameDriver(
+      &RunWasmEditorFrame, loopState, &CanRunWasmEditorFrame, &PollWasmPresentationProgress);
 #else
   while (!window->shouldClose()) {
     RunEditorFrame(*window, *shell);

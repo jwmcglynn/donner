@@ -263,26 +263,38 @@ test("Bazel owns hermetic browser regression and manual performance lanes", () =
   }
   const watchdog = [...buildFile.matchAll(/js_test\(([\s\S]*?)\n\)\n/g)]
     .map(([, body]) => body)
-    .find((body) => body.includes('name = "browser_responsiveness_perf_test"'));
+    .find((body) => body.includes("name = \"browser_responsiveness_perf_test\""));
   assert.ok(watchdog, "the public responsiveness lane must own its watchdog");
   assert.match(watchdog, /entry_point = "browser-watchdog\.mjs"/);
-  for (const dependency of [
-    ":_browser_responsiveness_perf_driver", "browser-watchdog-anchor.mjs",
-    "browser-watchdog-child.cjs", "browser-responsiveness.perf.ts",
-    "playwright.responsiveness.bazel.config.js",
-  ]) {
+  for (
+    const dependency of [
+      ":_browser_responsiveness_perf_driver",
+      "browser-watchdog-anchor.mjs",
+      "browser-watchdog-child.cjs",
+      "browser-responsiveness.perf.ts",
+      "playwright.responsiveness.bazel.config.js",
+    ]
+  ) {
     assert.ok(watchdog.includes(`"${dependency}"`), `watchdog missing ${dependency}`);
   }
-  assert.match(watchdog, /"DONNER_WATCHDOG_DRIVER": "\$\(rootpath :_browser_responsiveness_perf_driver\)"/);
+  assert.match(
+    watchdog,
+    /"DONNER_WATCHDOG_DRIVER": "\$\(rootpath :_browser_responsiveness_perf_driver\)"/,
+  );
   assert.match(watchdog, /"DONNER_WATCHDOG_HEARTBEAT": "browser-watchdog-heartbeat"/);
-  const watchdogTags = [...(/tags = \[([\s\S]*?)\]/.exec(watchdog)?.[1] ?? "").matchAll(/"([^"]+)"/g)]
+  const watchdogTags = [
+    ...(/tags = \[([\s\S]*?)\]/.exec(watchdog)?.[1] ?? "").matchAll(/"([^"]+)"/g),
+  ]
     .map(([, tag]) => tag).sort();
   assert.deepEqual(watchdogTags, ["manual", "no-sandbox", "perf"]);
   const overlayLane = lanes.find((body) =>
-    body.includes('name = "browser_presentation_regression_test"'));
-  assert.ok(overlayLane?.includes('"overlay-bitmap-compare.ts"'));
-  assert.ok(overlayLane?.includes('"//donner/editor/tests:standalone_geode_browser_png_compare"'));
-  assert.ok(overlayLane?.includes('"DONNER_BROWSER_GOLDEN_COMPARE":'));
+    body.includes("name = \"browser_presentation_regression_test\"")
+  );
+  assert.ok(overlayLane?.includes("\"overlay-bitmap-compare.ts\""));
+  assert.ok(
+    overlayLane?.includes("\"//donner/editor/tests:standalone_geode_browser_png_compare\""),
+  );
+  assert.ok(overlayLane?.includes("\"DONNER_BROWSER_GOLDEN_COMPARE\":"));
   // Every editor lane serves the one production browser-selected package. The standalone
   // renderer has its own page and package, verified separately below.
   const editorPackage = "//donner/editor/wasm:_wasm_web_package_for_serve";
@@ -446,11 +458,13 @@ test("CI discovers Firefox, WebKit, and real Safari compatibility regressions", 
     "smoke.spec.ts",
     "browser-presentation-regression.spec.ts",
     "browser-surface-recovery.spec.ts",
+    "browser-backend-selection.spec.ts",
   ]);
 
   const firefox = projects.get("firefox-geode-resize");
   assert.ok(firefox, "missing Firefox Geode resize project");
   assert.equal(firefox.use.browserName, "firefox");
+  assert.match(String(firefox.grep), /ordinary document presentation stays on the GPU/);
   assert.match(
     String(firefox.grep),
     /Firefox keeps Basic Shapes resize pixels and outline synchronized/,
@@ -1037,12 +1051,22 @@ test("hosted macOS quarantines read only the hosted job's switch and name their 
   const definition = "const kHostedMacosQuarantine = "
     + "process.env.DONNER_HOSTED_MACOS_QUARANTINE === \"1\";";
   const quarantined = [
-    ["smoke.spec.ts", "welcome picker paints before asynchronously rendering real SVG thumbnails",
-      "#1702"],
-    ["smoke.spec.ts", "production Geode wasm presents visible editor pixels after held canvas GPU"
-      + " completion", "#1691"],
-    ["browser-presentation-regression.spec.ts",
-      "Basic Shapes gated setup reaches visible pixels in the browser journey", "#1702"],
+    [
+      "smoke.spec.ts",
+      "welcome picker paints before asynchronously rendering real SVG thumbnails",
+      "#1702",
+    ],
+    [
+      "smoke.spec.ts",
+      "production Geode wasm presents visible editor pixels after held canvas GPU"
+      + " completion",
+      "#1691",
+    ],
+    [
+      "browser-presentation-regression.spec.ts",
+      "Basic Shapes gated setup reaches visible pixels in the browser journey",
+      "#1702",
+    ],
   ];
   for (const spec of new Set(quarantined.map(([file]) => file))) {
     const source = readFileSync(path.join(testDirectory, spec), "utf8");
@@ -1057,8 +1081,10 @@ test("hosted macOS quarantines read only the hosted job's switch and name their 
   }
   for (const [spec, title, issue] of quarantined) {
     const source = readFileSync(path.join(testDirectory, spec), "utf8");
-    const start = source.indexOf(`\ntest("${title}"`);
-    assert.notEqual(start, -1, title);
+    const opening = [...source.matchAll(/\ntest\(\s*"([^"\n]+)"/g)]
+      .find((match) => match[1] === title);
+    assert.ok(opening, title);
+    const start = opening.index;
     const body = source.slice(start, source.indexOf("\ntest(", start + 1));
     const skip = body.indexOf("    kHostedMacosQuarantine,\n");
     assert.notEqual(skip, -1, `${title} must be skipped only by the hosted switch`);
@@ -1086,12 +1112,26 @@ test("hosted macOS quarantines read only the hosted job's switch and name their 
 // was still publishing the previous document's viewport when the case aimed, and settled on the
 // splash right after.
 const kPreviousDocumentViewport = {
-  paneX: 40, paneY: 31, paneWidth: 1131, paneHeight: 861,
-  documentX: 285.5, documentY: 261.5, documentWidth: 640, documentHeight: 400, zoom: 1,
+  paneX: 40,
+  paneY: 31,
+  paneWidth: 1131,
+  paneHeight: 861,
+  documentX: 285.5,
+  documentY: 261.5,
+  documentWidth: 640,
+  documentHeight: 400,
+  zoom: 1,
 };
 const kSplashViewport = {
-  paneX: 40, paneY: 31, paneWidth: 1131, paneHeight: 861,
-  documentX: 159.5, documentY: 205.5, documentWidth: 892, documentHeight: 512, zoom: 1,
+  paneX: 40,
+  paneY: 31,
+  paneWidth: 1131,
+  paneHeight: 861,
+  documentX: 159.5,
+  documentY: 205.5,
+  documentWidth: 892,
+  documentHeight: 512,
+  zoom: 1,
 };
 
 test("the D aim waits for the splash, not for the previous document's viewport", async () => {
@@ -1103,8 +1143,12 @@ test("the D aim waits for the splash, not for the previous document's viewport",
   assert.equal(showsSplashDocument(kPreviousDocumentViewport), false);
   assert.equal(showsSplashDocument(kSplashViewport), true);
   // A zoomed splash still counts; a missing or degenerate viewport does not.
-  const zoomed = { ...kSplashViewport, documentWidth: 892 * 1.93, documentHeight: 512 * 1.93,
-    zoom: 1.93 };
+  const zoomed = {
+    ...kSplashViewport,
+    documentWidth: 892 * 1.93,
+    documentHeight: 512 * 1.93,
+    zoom: 1.93,
+  };
   assert.equal(showsSplashDocument(zoomed), true);
   assert.equal(showsSplashDocument(undefined), false);
   assert.equal(showsSplashDocument({ ...kSplashViewport, zoom: 0 }), false);
@@ -1122,10 +1166,15 @@ test("responsiveness cases wait for the splash to be displayed before using it",
 });
 
 test("a presented-frame drag summary counts presented frames, not GPU submissions", async () => {
-  const { kHeldDragPresentationBounds, presentedDragSummary, presentedDragFailures } =
-    await import("./presented-frame-samples.mjs");
-  const stream = { firstInputAt: 0, lastInputAt: 1000, start: { x: 442, y: 596 },
-    end: { x: 322, y: 524 } };
+  const { kHeldDragPresentationBounds, presentedDragSummary, presentedDragFailures } = await import(
+    "./presented-frame-samples.mjs"
+  );
+  const stream = {
+    firstInputAt: 0,
+    lastInputAt: 1000,
+    start: { x: 442, y: 596 },
+    end: { x: 322, y: 524 },
+  };
   // One sample per page frame; each presented editor frame completes several GPU submissions.
   const sample = (t, frameId, step, inputRepresented = true) => ({
     t,
@@ -1186,18 +1235,20 @@ test("the editor-opening specs echo the GPU acquisition trace into the test log"
     "utf8",
   );
   const helper = readFileSync(path.join(testDirectory, "gpu-session-console.ts"), "utf8");
-  const prefix = /kTracePrefix: '(\[Geode\/browser\/gpu-trace\])'/.exec(library)?.[1];
+  const prefix = /kTracePrefix: ['"](\[Geode\/browser\/gpu-trace\])['"]/.exec(library)?.[1];
   assert.equal(prefix, "[Geode/browser/gpu-trace]");
   assert.ok(helper.includes(`export const kGpuTracePrefix = "${prefix}";`));
   // A trace line must never read as the acquisition failures the smoke spec treats as fatal, nor
   // as the "[Geode/browser]" lines the backend-selection spec refuses.
   assert.ok(!prefix.startsWith("[Geode/browser/acquire]"));
   assert.ok(!prefix.includes("[Geode/browser]"));
-  for (const spec of [
-    "smoke.spec.ts",
-    "browser-presentation-regression.spec.ts",
-    "browser-responsiveness.perf.ts",
-  ]) {
+  for (
+    const spec of [
+      "smoke.spec.ts",
+      "browser-presentation-regression.spec.ts",
+      "browser-responsiveness.perf.ts",
+    ]
+  ) {
     const source = readFileSync(path.join(testDirectory, spec), "utf8");
     const helperImport = /import \{ echoGpuSessionConsole \} from "\.\/gpu-session-console";/;
     assert.match(source, helperImport, spec);
@@ -1343,8 +1394,10 @@ test("only a report-only lane lifts the Firefox quarantine, and it never fails t
     [...titles].sort(),
     "the report lane must run exactly the quarantined cases",
   );
-  assert.ok(config.globalTimeout > 0 && config.globalTimeout <= 6 * 60_000,
-    "the report lane must stay within a few minutes of the nightly job");
+  assert.ok(
+    config.globalTimeout > 0 && config.globalTimeout <= 6 * 60_000,
+    "the report lane must stay within a few minutes of the nightly job",
+  );
   assert.deepEqual(config.reporter.map(([name]) => name), ["list", "json"]);
 
   const browserCi = readFileSync(path.join(repositoryRoot, "tools/run-browser-ci.sh"), "utf8");
@@ -1403,7 +1456,7 @@ test("only a report-only lane lifts the Firefox quarantine, and it never fails t
     const source = readFileSync(path.join(testDirectory, spec), "utf8");
     const quarantines = source.split(
       "browserName === \"firefox\" && quarantineStillSkips(),\n"
-      + "    \"Quarantined: Firefox can capture a blank editor page (#1634)\",",
+        + "    \"Quarantined: Firefox can capture a blank editor page (#1634)\",",
     ).length - 1;
     assert.equal(quarantines, count, `${spec} must lift its #1634 quarantine only in report mode`);
     assert.match(source, /\ninstallFailureCanvasEvidence\(test\);\n/);
@@ -1439,15 +1492,18 @@ test("a report-lane archive that cannot copy warns instead of passing silently",
     // A file where the archive directory belongs makes both mkdir and cp fail.
     const archiveRoot = path.join(scratch, "playwright-failures");
     writeFileSync(archiveRoot, "not a directory");
-    const output = execFileSync("bash", ["-c", [
-      "set -euo pipefail",
-      `kResultsDir=${JSON.stringify(results)}`,
-      `kFailureArchiveDir=${JSON.stringify(archiveRoot)}`,
-      "kQuarantineReportLane=firefox-quarantine-report",
-      archive,
-      call,
-      "echo lane-finished",
-    ].join("\n")], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+    const output = execFileSync("bash", [
+      "-c",
+      [
+        "set -euo pipefail",
+        `kResultsDir=${JSON.stringify(results)}`,
+        `kFailureArchiveDir=${JSON.stringify(archiveRoot)}`,
+        "kQuarantineReportLane=firefox-quarantine-report",
+        archive,
+        call,
+        "echo lane-finished",
+      ].join("\n"),
+    ], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
     assert.match(output, /warning: could not archive the firefox-quarantine-report results/);
     assert.doesNotMatch(output, /Archived firefox-quarantine-report/);
     assert.match(output, /lane-finished/, "a failed archive must not stop the script");

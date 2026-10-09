@@ -10,13 +10,6 @@ import {
 } from "./basic-shapes-capture-gate";
 import { installBrowserStallDiagnostics } from "./browser-stall-diagnostics";
 import {
-  armFailureCanvasEvidence,
-  captureFailureCanvasEvidence,
-  type EvidencePage,
-  installFailureCanvasEvidence,
-  kFailureEvidenceBudgetMs,
-} from "./failure-canvas-evidence";
-import {
   captureEditorPage,
   captureSplashPresentationFrame,
   type CssRegion,
@@ -37,6 +30,13 @@ import {
   type SplashPresentationFrame,
   type SplashToneCensus,
 } from "./canvas-color-stats";
+import {
+  armFailureCanvasEvidence,
+  captureFailureCanvasEvidence,
+  type EvidencePage,
+  installFailureCanvasEvidence,
+  kFailureEvidenceBudgetMs,
+} from "./failure-canvas-evidence";
 import { waitForAppliedPointer } from "./gesture-streams";
 import { echoGpuSessionConsole } from "./gpu-session-console";
 import { compareOverlayBitmap, type OverlayBitmapComparison } from "./overlay-bitmap-compare";
@@ -205,6 +205,8 @@ declare global {
       frameId: number;
       captureId: number;
       inputRepresented: boolean;
+      viewportZoom: number;
+      deviceLost?: boolean;
       pointerX?: number;
       pointerY?: number;
       mouseDown?: boolean;
@@ -1191,6 +1193,7 @@ async function openEditor(
   page: Page,
   testControl: false | "overlay" | "eyedropper" = false,
   failureReadback = false,
+  frameDriver: false | "proxied-main-raf" = false,
 ): Promise<string[]> {
   const failures: string[] = [];
   echoGpuSessionConsole(page);
@@ -1208,6 +1211,7 @@ async function openEditor(
   consoleFailuresByPage.set(page, failures);
 
   const editorUrl = new URL(kBaseUrl);
+  if (frameDriver) editorUrl.searchParams.set("frameDriver", frameDriver);
   if (testControl) {
     editorUrl.searchParams.set("testControl", testControl);
   }
@@ -3788,6 +3792,7 @@ test("Firefox host counters record a refused surface frame and later recovery", 
 test("Firefox never exposes the checkerboard while dragging a Splash letter", async ({ browserName, page }) => {
   test.skip(browserName !== "firefox", "Firefox Geode regression");
   const caseStartedAtMs = performance.now();
+  armFailureCanvasEvidence(page, test.info());
   const failures = await openEditor(page);
   // Open through the shared helper so the sample's first document render has to
   // complete before anything is measured. Clicking the picker and going straight
@@ -3852,16 +3857,41 @@ test("Firefox never exposes the checkerboard while dragging a Splash letter", as
   // happened to be there, and the letter never moved - which every assertion
   // below then confirmed against byte-identical bounds.
   const dragStart = splashDocumentToPage(viewport, kSplashLetterD.stemPress);
+  const phaseTimes: Record<string, number> = {
+    beforePointerMs: performance.now() - caseStartedAtMs,
+  };
   await page.mouse.move(dragStart.x, dragStart.y);
   await waitForAppliedPointer(page, dragStart, {
     message: "Splash drag press",
     timeoutMs: scaledMs(4_000),
   });
+  phaseTimes.pointerAppliedMs = performance.now() - caseStartedAtMs;
   await waitForPressReadiness(page, "Splash drag press");
+  phaseTimes.pressReadyMs = performance.now() - caseStartedAtMs;
   const resultsBeforePress = await page.evaluate(
     () => window.__donnerWorkerStats?.completedResults || 0,
   );
+  const dispatchBeforePress = await readGpuOwnerDispatchStats(page);
+  console.log(`firefox-prepress-checkpoint ${
+    JSON.stringify({
+      phaseTimes,
+      dispatchBeforePress,
+      dragStart,
+      originalViewport: viewport,
+      current: await boundFailureDiagnostic(page.evaluate(() => ({
+        viewport: window.__donnerViewportStats,
+        interaction: window.__donnerInteractionStats,
+        worker: window.__donnerWorkerStats,
+        thumbnails: window.__donnerSampleThumbnailStats,
+        presentation: window.__donnerPresentationQueueStats,
+        overlay: window.__donnerOverlayStats,
+        frames: window.__donnerFrameLoopStats,
+        host: window.__donnerHostFrameTiming,
+      }))),
+    })
+  }`);
   await page.mouse.down();
+  phaseTimes.pointerDownMs = performance.now() - caseStartedAtMs;
   // The press selects the letter, which schedules exactly one prewarm render of
   // the selected layer; the drag baseline is taken once that has landed so the
   // first step does not read it as a mid-drag raster.
@@ -3872,7 +3902,13 @@ test("Firefox never exposes the checkerboard while dragging a Splash letter", as
       timeout: scaledMs(2_000),
       intervals: [16, 25, 50, 100],
     })
-    .toEqual({ completedResults: resultsDuringDrag, selectedCount: 1 });
+    .toEqual({ completedResults: resultsDuringDrag, selectedCount: 1 })
+    .catch(async (error) => {
+      phaseTimes.failedMs = performance.now() - caseStartedAtMs;
+      console.log(`firefox-press-failure-phases ${JSON.stringify(phaseTimes)}`);
+      await captureRasterDispatchFailure(page);
+      throw error;
+    });
 
   // One selected element is not yet proof that it is the RIGHT element: a press
   // that misses the letter and lands on the artboard behind it also reports
@@ -4133,10 +4169,230 @@ test("Firefox never exposes the checkerboard while dragging a Splash letter", as
   expect(failures).toEqual([]);
 });
 
+test("proxied animation frames keep at most one outstanding callback", async ({ page }) => {
+  const failures = await openEditor(page, false, false, "proxied-main-raf");
+  const before = await page.evaluate(() => window.__donnerMainLoopRenderedFrames ?? 0);
+  const observation = await page.evaluate(() => {
+    const state = window as Window & { __donnerFrameDriver?: string };
+    const module = window.Module as unknown as {
+      _donner_whole_app_vsync_tick: () => void;
+      _donner_whole_app_vsync_peak_pending: () => number;
+    };
+    window.__donnerEditorFrameRequested = true;
+    for (let tick = 0; tick < 1024; ++tick) module._donner_whole_app_vsync_tick();
+    return {
+      driver: state.__donnerFrameDriver,
+      peakPending: module._donner_whole_app_vsync_peak_pending(),
+    };
+  });
+  expect(observation).toEqual({ driver: "proxied-main-raf", peakPending: 1 });
+  await expect.poll(() => page.evaluate(() => window.__donnerMainLoopRenderedFrames ?? 0))
+    .toBeGreaterThan(before);
+  await openBasicShapes(page);
+  const owner = await Promise.any(
+    page.workers().map(async (worker) => {
+      const observation = await boundFailureDiagnostic(worker.evaluate(() => {
+        const scope = globalThis as typeof globalThis & {
+          __donnerGpuOwner?: boolean;
+          __donnerReadGpuOwnerWaitStats?: () => {
+            batches: number;
+            maximumBatchSize: number;
+            maximumBatchMs: number;
+            requested: number;
+            started: number;
+            finished: number;
+          };
+        };
+        return scope.__donnerGpuOwner ? scope.__donnerReadGpuOwnerWaitStats?.() ?? null : null;
+      }));
+      if (observation === null) throw new Error("GPU owner did not answer the bounded probe");
+      return observation;
+    }),
+  );
+  expect(owner?.batches).toBeGreaterThan(0);
+  expect(owner?.maximumBatchSize).toBeGreaterThan(0);
+  console.log("[proxied-frame-batches]", JSON.stringify(owner));
+  expect(failures).toEqual([]);
+});
+
+test("GPU dispatch progresses while owner pulses are delayed", async ({ page }) => {
+  const failures = await openEditor(page);
+  const { captureClip, blueRect } = await openBasicShapes(page);
+  const press = {
+    x: captureClip.x + (blueRect.minX + blueRect.maxX) / 2,
+    y: captureClip.y + (blueRect.minY + blueRect.maxY) / 2,
+  };
+  await page.mouse.move(press.x, press.y);
+  await waitForAppliedPointer(page, press, {
+    message: "delayed pulse selection",
+    timeoutMs: scaledMs(4_000),
+  });
+  await waitForPressReadiness(page, "delayed pulse selection");
+  const beforeResults = await page.evaluate(() =>
+    window.__donnerWorkerStats?.completedResults || 0
+  );
+  const owner = await Promise.any(
+    page.workers().map(async (worker) => {
+      const installed = await boundFailureDiagnostic(
+        worker.evaluate(() => {
+          const scope = globalThis as typeof globalThis & {
+            __donnerGpuOwner?: boolean;
+            __donnerGpuPulsePort?: MessagePort;
+            __donnerPulseDelayProbe?: { sent: number; delivered: number; restore: () => void };
+          };
+          const port = scope.__donnerGpuPulsePort;
+          if (!scope.__donnerGpuOwner || !port) return false;
+          const original = port.postMessage.bind(port);
+          const probe = {
+            sent: 0,
+            delivered: 0,
+            restore: () => {
+              port.postMessage = original;
+            },
+          };
+          port.postMessage = (message: unknown) => {
+            ++probe.sent;
+            setTimeout(() => {
+              ++probe.delivered;
+              original(message);
+            }, 100);
+          };
+          scope.__donnerPulseDelayProbe = probe;
+          return true;
+        }),
+        1000,
+      );
+      if (!installed) throw new Error("GPU owner pulse port unavailable");
+      return worker;
+    }),
+  );
+  const before = await readGpuOwnerDispatchStats(page);
+  const startedAtMs = performance.now();
+  let after: Awaited<ReturnType<typeof readGpuOwnerDispatchStats>> = null;
+  let probe: { sent: number; delivered: number } | null = null;
+  try {
+    await page.mouse.down();
+    await expect.poll(() => readPressSelectionState(page), {
+      message: "selection prewarm must progress without one pulse delay per GPU request",
+      timeout: scaledMs(2_000),
+      intervals: [16, 25, 50, 100],
+    }).toEqual({ completedResults: beforeResults + 1, selectedCount: 1 });
+  } finally {
+    after = await readGpuOwnerDispatchStats(page);
+    probe = await boundFailureDiagnostic(
+      owner.evaluate(() => {
+        const scope = globalThis as typeof globalThis & {
+          __donnerPulseDelayProbe?: { sent: number; delivered: number; restore: () => void };
+        };
+        const probe = scope.__donnerPulseDelayProbe;
+        probe?.restore();
+        delete scope.__donnerPulseDelayProbe;
+        return probe ? { sent: probe.sent, delivered: probe.delivered } : null;
+      }),
+      1000,
+    );
+    console.log(
+      "[delayed-owner-pulses]",
+      JSON.stringify({ before, after, probe, elapsedMs: performance.now() - startedAtMs }),
+    );
+    await page.mouse.up();
+  }
+  expect(probe?.delivered).toBeGreaterThan(0);
+  type DispatchStats = {
+    inlineDispatches: number;
+    dispatches: number;
+    pulses: number;
+    maximumInlineEpochCalls: number;
+  };
+  const initial = before?.stats as DispatchStats;
+  const final = after?.stats as DispatchStats;
+  expect(initial).toBeTruthy();
+  expect(final).toBeTruthy();
+  expect(final.pulses - initial.pulses, "delayed owner pulse callbacks must actually execute")
+    .toBeGreaterThan(0);
+  expect(final.inlineDispatches - initial.inlineDispatches, "inline work must explain progress")
+    .toBeGreaterThan(Math.max(32, final.dispatches - initial.dispatches));
+  expect(final.maximumInlineEpochCalls).toBeLessThanOrEqual(32);
+  expect(failures).toEqual([]);
+});
+
+async function readGpuOwnerDispatchStats(page: Page) {
+  return Promise.any(
+    page.workers().map(async (worker) => {
+      const result = await boundFailureDiagnostic(
+        worker.evaluate(() => {
+          const scope = globalThis as typeof globalThis & {
+            __donnerReadGpuOwnerWaitStats?: () => unknown;
+            __donnerReadGpuObjectStats?: () => unknown;
+          };
+          return scope.__donnerReadGpuOwnerWaitStats
+            ? {
+              sampledAtMs: performance.now(),
+              stats: scope.__donnerReadGpuOwnerWaitStats(),
+              gpu: scope.__donnerReadGpuObjectStats?.() ?? null,
+            }
+            : null;
+        }),
+        1000,
+      );
+      if (result === null) throw new Error("GPU owner probe unavailable");
+      return result;
+    }),
+  ).catch(() => null);
+}
+
+async function captureRasterDispatchFailure(page: Page): Promise<void> {
+  const owners = await Promise.all(
+    page.workers().map(async (worker, index) => ({
+      index,
+      observation: await boundFailureDiagnostic(
+        worker.evaluate(() => {
+          const scope = globalThis as typeof globalThis & {
+            __donnerReadGpuOwnerWaitStats?: () => unknown;
+            __donnerReadGpuObjectStats?: () => unknown;
+            __donnerApplicationGpuSurfaceWorker?: boolean;
+          };
+          const read = scope.__donnerReadGpuOwnerWaitStats;
+          return {
+            gpuOwner: typeof read === "function",
+            applicationSurface: scope.__donnerApplicationGpuSurfaceWorker === true,
+            stats: read?.() ?? null,
+            gpu: scope.__donnerReadGpuObjectStats?.() ?? null,
+          };
+        }),
+        1000,
+      ),
+    })),
+  );
+  const state = await boundFailureDiagnostic(
+    page.evaluate(() => ({
+      raster: (window as Window & { __donnerRasterWorkState?: unknown }).__donnerRasterWorkState,
+      phases: (window as Window & { __donnerRasterWorkPhases?: unknown }).__donnerRasterWorkPhases,
+      driver: (window as Window & { __donnerFrameDriver?: string }).__donnerFrameDriver,
+      worker: window.__donnerWorkerStats,
+      interaction: window.__donnerInteractionStats,
+      presentation: window.__donnerPresentationQueueStats,
+      thumbnails: window.__donnerSampleThumbnailStats,
+      viewport: window.__donnerViewportStats,
+      overlay: window.__donnerOverlayStats,
+      frames: window.__donnerFrameLoopStats,
+      host: window.__donnerHostFrameTiming,
+    })),
+    1000,
+  );
+  const evidence = { owners, state, errors: consoleFailuresByPage.get(page) ?? [] };
+  console.log(`raster-dispatch-failure ${JSON.stringify(evidence)}`);
+  await boundFailureDiagnostic(
+    attachEvidenceFile("raster-dispatch-failure", JSON.stringify(evidence), "application/json"),
+    1000,
+  );
+}
+
 test("WebKit Geode survives a burst of drag wakeups without fatal errors", async ({ browserName, page }) => {
   test.skip(browserName !== "webkit", "WebKit Geode regression");
   // The thumbnail settle below comes on top of a cold browser start; see the comment there.
   test.slow();
+  armFailureCanvasEvidence(page, test.info());
   const failures = await openEditor(page);
   expect(await page.evaluate(() => window.__donnerBackend)).toBe("geode");
 
@@ -4156,12 +4412,16 @@ test("WebKit Geode survives a burst of drag wakeups without fatal errors", async
     message: "the sample thumbnail lane must drain before Basic Shapes replaces it",
     timeout: scaledMs(20_000),
   });
-  const beforeSample = await page.evaluate(() => window.__donnerWorkerStats?.completedResults || 0);
+  const beforeSample = await page.evaluate(() => ({
+    completedResults: window.__donnerWorkerStats?.completedResults || 0,
+    driver: (window as Window & { __donnerFrameDriver?: string }).__donnerFrameDriver,
+  }));
+  console.log(`WebKit frame driver: ${beforeSample.driver}`);
   await page.mouse.click(editorBounds.x + editorBounds.width * 0.76, editorBounds.y + 282);
   await expect(editorCanvas).toHaveAttribute("data-active-sample-id", "basic-shapes");
   await expectWorkerResultsToReach(
     page,
-    (completedResults) => completedResults > beforeSample,
+    (completedResults) => completedResults > beforeSample.completedResults,
     {
       message: "expected Basic Shapes to finish presenting before the WebKit drag burst",
       timeout: scaledMs(2_000),
@@ -4189,7 +4449,10 @@ test("WebKit Geode survives a burst of drag wakeups without fatal errors", async
       message: "expected WebKit to complete a render after the drag wakeup burst",
       timeout: scaledMs(2_000),
     },
-  );
+  ).catch(async (error) => {
+    await captureRasterDispatchFailure(page);
+    throw error;
+  });
   expect(failures).toEqual([]);
 });
 
@@ -4226,59 +4489,71 @@ async function pinchZoom(
   }, { ...at, deltaY, count });
 }
 
-// One presented picture, named by the worker result it drew.
-//
-// A result is published with no `presentedAtMs` and the frame that consumes it
-// stamps the field exactly once, so the pair says both "which raster" and
-// "has a frame drawn it". Both halves come out of one round trip, so a gate
-// cannot pair a counter from one frame with a stamp from another.
-interface PresentedGeneration {
-  completedResults: number;
-  presentedAtMs: number | undefined;
+type CompletedZoomState = {
+  queue?: Pick<
+    NonNullable<Window["__donnerPresentationQueueStats"]>,
+    "captureId" | "inputRepresented" | "deviceLost" | "viewportZoom"
+  >;
+  viewport?: Pick<ViewportStats, "zoom">;
+  host?: Pick<NonNullable<Window["__donnerHostFrameTiming"]>, "lastSurfacePresented">;
+};
+
+function completedFrameMatchesCamera(state: CompletedZoomState): boolean {
+  if (!state.queue || !state.viewport || !state.host?.lastSurfacePresented) return false;
+  // Canvas-size commits change scene revision while retained tiles still cover the new camera.
+  return state.queue.captureId > 0 && state.queue.deviceLost !== true
+    && Math.abs(state.queue.viewportZoom - state.viewport.zoom) < 0.001;
 }
 
-async function readPresentedGeneration(page: Page): Promise<PresentedGeneration> {
-  return page.evaluate(() => ({
-    completedResults: window.__donnerWorkerStats?.completedResults || 0,
-    presentedAtMs: window.__donnerWorkerStats?.presentedAtMs,
-  }));
-}
+test("zoom camera completion accepts retained scenes but rejects failed presentation", () => {
+  const state: CompletedZoomState = {
+    queue: { captureId: 14, inputRepresented: false, viewportZoom: 3.375 },
+    viewport: { zoom: 3.375 },
+    host: { lastSurfacePresented: true },
+  };
+  expect(completedFrameMatchesCamera(state)).toBe(true);
+  expect(completedFrameMatchesCamera({ ...state, host: { lastSurfacePresented: false } }))
+    .toBe(false);
+  expect(completedFrameMatchesCamera({ ...state, viewport: { zoom: 5.0625 } })).toBe(false);
+  expect(completedFrameMatchesCamera({ ...state, queue: { ...state.queue!, deviceLost: true } }))
+    .toBe(false);
+  expect(completedFrameMatchesCamera({ ...state, queue: { ...state.queue!, captureId: 0 } }))
+    .toBe(false);
+});
 
-/**
- * Send one pinch notch and return once a strictly later worker result has been
- * consumed by a presented frame.
- *
- * A constant delay after a notch is not an observable of that notch. The worker
- * can take longer than any constant, and until the frame that draws its result
- * runs, the pane still shows the pre-gesture picture - which a coverage probe
- * scores as covered, because it was. The loop then decides on a frame the
- * gesture never touched, and the next notch supersedes the one that would have
- * shown the defect: with the notch's presentation held past a 200 ms wait, the
- * probe scored zero on all six storm notches while the frame each notch
- * actually presented carried 36375 uncovered backdrop pixels.
- *
- * That pair is the whole guarantee, and it is not "the notch's pixels are up":
- * `pollRenderResult` advances the counter before its non-presenting early
- * returns, so the callers converge through `settleUntilCovered` rather than
- * trust one capture. The wait is bounded and reports the worker's own health.
- */
+/** A completed UI frame can redraw retained GPU tiles without a new worker raster. */
 async function pinchZoomAndAwaitPresentation(
   page: Page,
   at: { x: number; y: number },
   deltaY: number,
   context: string,
 ): Promise<void> {
-  const before = await readPresentedGeneration(page);
+  const before = await page.evaluate(() => ({
+    serial: window.__donnerPresentationQueueStats?.completedSerial ?? 0,
+    frameId: window.__donnerPresentationQueueStats?.frameId ?? 0,
+    zoom: window.__donnerViewportStats?.zoom,
+  }));
   await pinchZoom(page, at, deltaY);
-  await expectWorkerResultsToReach(
-    page,
-    (completedResults, health) =>
-      completedResults > before.completedResults && health.presentedAtMs !== undefined,
-    {
-      message: `${context}: the zoom notch never presented a newer document raster`,
-      timeout: scaledMs(5_000),
-    },
-  );
+  await expect.poll(async () => {
+    const current = await page.evaluate(() => ({
+      queue: window.__donnerPresentationQueueStats,
+      viewport: window.__donnerViewportStats,
+      repair: (window as Window & { __donnerPresentationRepairStats?: unknown })
+        .__donnerPresentationRepairStats,
+      raster: window.__donnerWorkerStats,
+      overlay: window.__donnerOverlayStats,
+      host: window.__donnerHostFrameTiming,
+    }));
+    const reached = completedFrameMatchesCamera(current)
+      && current.queue!.completedSerial > before.serial && current.queue!.frameId > before.frameId
+      && current.viewport!.zoom !== before.zoom;
+    return { reached, before, ...current, worker: await readWorkerHealth(page) };
+  }, {
+    message: `${context}: the zoom notch must complete a new frame at its camera`,
+    timeout: scaledMs(5_000),
+    intervals: [16, 25, 50, 100],
+  })
+    .toEqual(expect.objectContaining({ reached: true }));
   await waitForBrowserComposite(page);
 }
 
@@ -4600,6 +4875,31 @@ test("WebGPU toolbar eyedropper gives new SVG text the sampled Donner fill", asy
     selectedText: "SVG",
     selectedStyle: expect.stringContaining(expectedFill),
   }));
+  const waitStats = await Promise.any(
+    page.workers().map(async (worker) => {
+      const observation = await worker.evaluate(() => {
+        const scope = globalThis as typeof globalThis & {
+          __donnerReadGpuOwnerWaitStats?: () => {
+            pumps: number;
+            dispatches: number;
+            maximumPumpMs: number;
+            requested: number;
+            started: number;
+            finished: number;
+          };
+        };
+        return scope.__donnerReadGpuOwnerWaitStats?.() ?? null;
+      });
+      if (observation === null) throw new Error("not the registered GPU owner");
+      return observation;
+    }),
+  );
+  console.log(`GPU dispatch during owner waits: ${JSON.stringify(waitStats)}`);
+  expect(waitStats.dispatches, "GPU requests must execute while the app owner is in a libc wait")
+    .toBeGreaterThan(0);
+  expect(waitStats.requested).toBeGreaterThanOrEqual(waitStats.started);
+  expect(waitStats.started).toBeGreaterThanOrEqual(waitStats.finished);
+  expect(waitStats.finished).toBeGreaterThanOrEqual(waitStats.dispatches);
   const beforeEscapeFrame = await page.evaluate(() => window.__donnerMainLoopRenderedFrames ?? 0);
   await page.keyboard.down("Escape");
   await expectBrowserKeyFrame(page, beforeEscapeFrame, "Escape must wake a browser editor frame");
@@ -4941,9 +5241,113 @@ function pastedSourceReady(
     && snapshot.acceptedForPresentation && snapshot.hasPresentedAtMs;
 }
 
-test("WebGPU eyedropper copies translucent document alpha, not checkerboard alpha", async ({ page }) => {
+async function focusSourceEditor(page: Page): Promise<void> {
+  const sourcePoint = { x: 120, y: 180 };
+  await page.mouse.move(sourcePoint.x, sourcePoint.y);
+  await waitForAppliedPointer(page, sourcePoint, {
+    message: "source editor focus point",
+    timeoutMs: scaledMs(4_000),
+  });
+  const deadline = Date.now() + scaledMs(4_000);
+  const remainingMs = () => Math.max(1, deadline - Date.now());
+  await expect.poll(
+    () => page.evaluate(() => window.__donnerEyedropperShortcutProbe?.current.mouseLeftDown),
+    { timeout: remainingMs() },
+  ).toBe(false);
+  const beforeDown = await page.evaluate(() =>
+    window.__donnerEyedropperShortcutProbe?.current.frameNumber ?? -1
+  );
+  await page.mouse.down();
+  try {
+    await expect.poll(() =>
+      page.evaluate((before) => {
+        const gate = window.__donnerEyedropperShortcutProbe?.current;
+        return { down: gate?.mouseLeftDown, newFrame: (gate?.frameNumber ?? -1) > before };
+      }, beforeDown), {
+      message: "the source focus press must reach the app's live input probe",
+      timeout: remainingMs(),
+    }).toEqual({ down: true, newFrame: true });
+    const downFrame = await page.evaluate(() => {
+      window.__donnerEditorFrameRequested = true;
+      return window.__donnerEyedropperShortcutProbe?.current.frameNumber ?? -1;
+    });
+    // The shortcut probe precedes Source rendering, so focus becomes observable next frame.
+    await expect.poll(() =>
+      page.evaluate((before) => {
+        const gate = window.__donnerEyedropperShortcutProbe?.current;
+        return {
+          focused: gate?.sourcePaneFocused,
+          down: gate?.mouseLeftDown,
+          newFrame: (gate?.frameNumber ?? -1) > before,
+        };
+      }, downFrame), {
+      message: "source editor must own keyboard focus before replacing its text",
+      timeout: remainingMs(),
+    }).toEqual({ focused: true, down: true, newFrame: true });
+  } finally {
+    await page.mouse.up();
+  }
+}
+
+test("source focus uses live input while the document snapshot is stale", async ({ page }) => {
   const failures = await openEditor(page, "eyedropper");
-  await openDonnerSplash(page);
+  await openBasicShapes(page);
+  await clickAppliedPoint(page, { x: 16, y: 180 }, "reveal source before the stale snapshot probe");
+  await expect.poll(() => page.evaluate(() => window.__donnerViewportStats?.paneX ?? 0))
+    .toBeGreaterThan(500);
+  await page.evaluate(() => {
+    const key = "__donnerEyedropperTestState";
+    const descriptor = Object.getOwnPropertyDescriptor(window, key);
+    const snapshot = window.__donnerEyedropperTestState;
+    if (!descriptor || !snapshot || snapshot.sourcePaneFocused) {
+      throw new Error("expected an unfocused source snapshot before the press");
+    }
+    let latest = snapshot;
+    // The document publisher skips busy frames; hold its previous snapshot through this press.
+    Object.defineProperty(window, key, {
+      configurable: true,
+      get: () => snapshot,
+      set: (value) => {
+        latest = value;
+      },
+    });
+    (window as Window & { __donnerRestoreSourceSnapshot?: () => void })
+      .__donnerRestoreSourceSnapshot = () =>
+        Object.defineProperty(window, key, {
+          ...descriptor,
+          value: latest,
+        });
+  });
+  try {
+    await focusSourceEditor(page);
+    expect(
+      await page.evaluate(() => ({
+        staleFocus: window.__donnerEyedropperTestState?.sourcePaneFocused,
+        liveFocus: window.__donnerEyedropperShortcutProbe?.current.sourcePaneFocused,
+      })),
+    ).toEqual({ staleFocus: false, liveFocus: true });
+  } finally {
+    const observation = await page.evaluate(() => {
+      const state = window as Window & { __donnerRestoreSourceSnapshot?: () => void };
+      const observation = {
+        staleFocus: window.__donnerEyedropperTestState?.sourcePaneFocused,
+        live: window.__donnerEyedropperShortcutProbe?.current,
+      };
+      state.__donnerRestoreSourceSnapshot?.();
+      delete state.__donnerRestoreSourceSnapshot;
+      return observation;
+    });
+    console.log("[stale-source-focus]", JSON.stringify(observation));
+    await page.mouse.up();
+  }
+  expect(failures).toEqual([]);
+});
+
+test("WebGPU eyedropper copies translucent document alpha, not checkerboard alpha", async ({ page }) => {
+  const bodyStartedAtMs = performance.now();
+  armFailureCanvasEvidence(page, test.info());
+  const failures = await openEditor(page, "eyedropper");
+  await openBasicShapes(page);
   const revealRail = { x: 16, y: 180 };
   await clickAppliedPoint(page, revealRail, "show the hidden source pane through its reveal rail");
   await expect.poll(() => page.evaluate(() => window.__donnerViewportStats?.paneX ?? 0), {
@@ -4956,26 +5360,9 @@ test("WebGPU eyedropper copies translucent document alpha, not checkerboard alph
   expect(beforeDocumentGeneration).toBeGreaterThanOrEqual(0);
   const fixture = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"128\" height=\"128\" "
     + "viewBox=\"0 0 128 128\"><rect width=\"128\" height=\"128\" fill=\"#ff000080\"/></svg>";
-  const sourcePoint = { x: 120, y: 180 };
-  await page.mouse.move(sourcePoint.x, sourcePoint.y);
-  await waitForAppliedPointer(page, sourcePoint, {
-    message: "source editor focus point",
-    timeoutMs: scaledMs(4_000),
-  });
-  const beforeSourceFocusFrame = await page.evaluate(() =>
-    window.__donnerMainLoopRenderedFrames ?? 0
-  );
-  await page.mouse.down();
-  await expect.poll(() => page.evaluate(() => window.__donnerMainLoopRenderedFrames ?? 0))
-    .toBeGreaterThan(beforeSourceFocusFrame);
-  await page.mouse.up();
-  await expect.poll(
-    () => page.evaluate(() => window.__donnerEyedropperTestState?.sourcePaneFocused),
-    {
-      message: "source editor must own keyboard focus before replacing its text",
-      timeout: scaledMs(4_000),
-    },
-  ).toBe(true);
+  console.log("[alpha-source-focus-start]", performance.now() - bodyStartedAtMs);
+  await focusSourceEditor(page);
+  console.log("[alpha-source-focus-done]", performance.now() - bodyStartedAtMs);
   await page.keyboard.down("Control");
   await page.keyboard.down("a");
   await expect.poll(() =>
@@ -4994,6 +5381,7 @@ test("WebGPU eyedropper copies translucent document alpha, not checkerboard alph
   await page.keyboard.up("a");
   await page.keyboard.up("Control");
   await retainEyedropperPng("eyedropper-alpha-source-before-paste.png", await page.screenshot());
+  console.log("[alpha-paste-install]", performance.now() - bodyStartedAtMs);
   await page.evaluate(() => {
     window.__donnerTestPasteEventStats = { count: 0, lastTextLength: -1 };
     window.addEventListener("paste", (event) => {
@@ -5017,6 +5405,11 @@ test("WebGPU eyedropper copies translucent document alpha, not checkerboard alph
       }),
     );
   }, fixture);
+  console.log(
+    "[alpha-paste-dispatched]",
+    performance.now() - bodyStartedAtMs,
+    await page.evaluate(() => window.__donnerTestPasteEventStats),
+  );
   await expect.poll(() =>
     page.evaluate(() => {
       const stats = window.__donnerTestPasteEventStats;
@@ -5102,17 +5495,46 @@ test("WebGPU eyedropper copies translucent document alpha, not checkerboard alph
     x: offscreenViewport.paneX + 34,
     y: offscreenViewport.paneY + offscreenViewport.paneHeight - 24,
   };
+  const beforeResetOffset = Math.hypot(
+    offscreenViewport.documentX + offscreenViewport.documentWidth / 2
+      - (offscreenViewport.paneX + offscreenViewport.paneWidth / 2),
+    offscreenViewport.documentY + offscreenViewport.documentHeight / 2
+      - (offscreenViewport.paneY + offscreenViewport.paneHeight / 2),
+  );
+  expect(beforeResetOffset, "replacement must preserve an offset for the 100% control to repair")
+    .toBeGreaterThan(8);
+  console.log(`alpha-reset-start ${
+    JSON.stringify({
+      bodyElapsedMs: performance.now() - bodyStartedAtMs,
+      resetZoom,
+      viewport: offscreenViewport,
+    })
+  }`);
+  const beforeResetFrame = await page.evaluate(() => window.__donnerMainLoopRenderedFrames ?? 0);
   await clickAppliedPoint(page, resetZoom, "center the replacement SVG with the 100% control");
   await expect.poll(async () => {
-    const current = await readViewportStats(page);
+    const state = await page.evaluate(() => ({
+      viewport: window.__donnerViewportStats,
+      interaction: window.__donnerInteractionStats,
+      queue: window.__donnerPresentationQueueStats,
+      shortcut: window.__donnerEyedropperShortcutProbe,
+      frames: window.__donnerMainLoopRenderedFrames ?? 0,
+    }));
+    const current = state.viewport;
+    if (!current) return { ...state, resetZoom, ready: false };
     const x = current.documentX + current.documentWidth / 2;
     const y = current.documentY + current.documentHeight / 2;
-    return x >= current.paneX && x < current.paneX + current.paneWidth
-      && y >= current.paneY && y < current.paneY + current.paneHeight;
+    const centerOffset = Math.hypot(
+      x - (current.paneX + current.paneWidth / 2),
+      y - (current.paneY + current.paneHeight / 2),
+    );
+    const ready = state.frames > beforeResetFrame && centerOffset < 1
+      && Math.abs(current.zoom - 1) < 0.001;
+    return { ...state, resetZoom, centerOffset, ready };
   }, {
-    message: "the new SVG document center must be inside the render pane after reset",
+    message: "the 100% control must center the replacement SVG in the render pane",
     timeout: scaledMs(4_000),
-  }).toBe(true);
+  }).toEqual(expect.objectContaining({ ready: true }));
   await waitForBrowserComposite(page);
   const viewport = await readViewportStats(page);
   const center = {
@@ -5421,6 +5843,7 @@ test("the Splash coverage probe counts editor background, not document pixels", 
 });
 
 test("a zoom storm never uncovers the editor background under the Donner Splash", async ({ page }) => {
+  armFailureCanvasEvidence(page, test.info());
   // The per-test budget is the one deadline in this suite that does not scale
   // with the runner. Every bound inside the storm does: eight bounded settles
   // of `scaledMs(1_000)`, each of which may spend another such deadline

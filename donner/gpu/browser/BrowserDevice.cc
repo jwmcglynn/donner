@@ -1511,12 +1511,21 @@ Result<SurfaceStatus> BrowserDevice::onAcquireCurrentTexture(uint32_t slotIndex,
 }
 
 Result<SurfaceStatus> BrowserDevice::onPresentSurface(uint32_t slotIndex) {
-  // The runtime invalidates the acquired texture whether or not presenting was performed, so the
-  // frame is handed back here too rather than left named until the slot is reused.
+  static constexpr std::string_view kOperation = "presentSurface";
+  if (Status status = checkUsable(kOperation); status.hasError()) {
+    return std::move(status).error();
+  }
+  Result<BrowserObjectId> surfaceId = objectFor(BrowserObjectKind::Surface, slotIndex, kOperation);
+  if (surfaceId.hasError()) {
+    return std::move(surfaceId).error();
+  }
+  SurfaceStatus outcome = SurfaceStatus::Lost;
+  const BridgeStatus status = bridge_->presentSurface(surfaceId.result(), outcome);
   releaseAcquiredFrame(slotIndex);
-  return GpuError{GpuErrorType::Unsupported,
-                  "presentSurface: a browser shows a canvas on its own frame loop, so a frame "
-                  "ends by abandoning its acquired texture rather than by presenting it"};
+  if (status != BridgeStatus::Success) {
+    return ErrorForBridgeStatus(status, kOperation);
+  }
+  return outcome;
 }
 
 void BrowserDevice::releaseAcquiredFrame(uint32_t surfaceSlotIndex) {

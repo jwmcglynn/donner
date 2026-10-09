@@ -23,6 +23,7 @@
 #include "donner/base/AsyncifySuspendProbe.h"
 #include "donner/base/HeapSizeHistogram.h"
 #include "donner/base/MemoryAttribution.h"
+#include "donner/editor/FrameCallbackAdmission.h"
 #include "donner/svg/resources/CatalogEncodedFontStore.h"
 
 namespace donner::editor::whole_app_worker {
@@ -135,6 +136,7 @@ EM_JS(void, InstallWorkerGlobalShimImpl, (), {
     return;  // Running on the main thread; the real globals are present.
   }
 
+  globalThis['__donnerApplicationWorker'] = true;
   const noop = function() {};
   const emptyRect = function() {
     return {x : 0, y : 0, left : 0, top : 0, right : 0, bottom : 0, width : 0, height : 0};
@@ -587,11 +589,21 @@ namespace {
 constexpr std::size_t kTickSampleCapacity = 2048;
 
 struct FrameDriverState {
-  void (*frameFn)(void*) = nullptr;
+  void (*frameFn)(void*, bool) = nullptr;
+  bool (*canRunFrame)(void*) = nullptr;
+  bool (*pollPresentation)(void*) = nullptr;
   void* userData = nullptr;
   pthread_t appThread{};
   em_proxying_queue* proxyQueue = nullptr;
   FrameDriver driver = FrameDriver::SetTimeoutFallback;
+  FrameCallbackAdmission admission;
+  FrameCallbackAdmission eventAdmission;
+  FrameCallbackAdmission progressAdmission;
+  double progressDeadlineMs = 0;
+  std::atomic<std::uint32_t> wakeSerial{0};
+  bool eventDeferred = false;
+  std::atomic<std::uint32_t> pendingFrames{0};
+  std::atomic<std::uint32_t> peakPendingFrames{0};
 
   double lastTickMs = 0.0;
   std::uint64_t ticks = 0;
@@ -621,34 +633,129 @@ void RecordTick() {
   ++state.ticks;
 }
 
-/// Frame entry point for the worker-rAF arm: Emscripten's main loop calls this
-/// once per animation frame on the app thread.
-void RunDrivenFrame(void* userData) {
-  RecordTick();
+void RunPresentationProgress(void* token) {
   FrameDriverState& state = Driver();
-  if (state.frameFn != nullptr) {
-    state.frameFn(userData);
+  const auto generation = static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(token));
+  if (!state.progressAdmission.isCurrent(generation)) {
+    state.progressAdmission.complete(generation);
+    return;
+  }
+  if (emscripten_get_now() >= state.progressDeadlineMs) {
+    state.progressAdmission.complete(generation);
+    RequestFrame();
+    return;
+  }
+  if (state.pollPresentation(state.userData) && state.progressAdmission.isCurrent(generation)) {
+    emscripten_async_call(&RunPresentationProgress, token, 8);
+  } else {
+    state.progressAdmission.complete(generation);
   }
 }
 
-/// Frame entry point for the proxied arm, run on the app thread out of the
-/// proxying queue after the browser main thread's rAF posted it.
-void RunProxiedFrame(void* /*unused*/) {
+void QueueEventFrame(std::uint32_t generation);
+
+void RunEventFrame(void* token) {
   FrameDriverState& state = Driver();
-  RunDrivenFrame(state.userData);
+  const auto generation = static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(token));
+  if (!state.eventAdmission.isCurrent(generation)) {
+    state.eventAdmission.complete(generation);
+    return;
+  }
+  if (!state.canRunFrame(state.userData)) {
+    state.eventDeferred = true;
+    return;
+  }
+  const std::uint32_t serial = state.wakeSerial.load(std::memory_order_acquire);
+  state.frameFn(state.userData, true);
+  state.eventAdmission.complete(generation);
+  if (state.eventAdmission.isCurrent(generation) &&
+      state.wakeSerial.load(std::memory_order_acquire) != serial) {
+    QueueEventFrame(generation);
+  }
+}
+
+void ScheduleEventFrame(void* token) {
+  FrameDriverState& state = Driver();
+  const auto generation = static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(token));
+  if (state.eventAdmission.isCurrent(generation)) {
+    emscripten_async_call(&RunEventFrame, token, 0);
+  } else {
+    state.eventAdmission.complete(generation);
+  }
+}
+
+void QueueEventFrame(std::uint32_t generation) {
+  FrameDriverState& state = Driver();
+  if (state.proxyQueue && state.eventAdmission.acquire(generation)) {
+    void* token = reinterpret_cast<void*>(static_cast<std::uintptr_t>(generation));
+    if (!emscripten_proxy_async(state.proxyQueue, state.appThread, &ScheduleEventFrame, token)) {
+      state.eventAdmission.complete(generation);
+    }
+  }
+}
+
+/// Every scheduled callback carries a generation, never the lifetime-limited editor pointer.
+void RunDrivenFrame(void* token) {
+  FrameDriverState& state = Driver();
+  const auto generation = static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(token));
+  if (state.admission.isCurrent(generation)) {
+    RecordTick();
+    state.frameFn(state.userData, false);
+    NotifyFrameFinished();
+  }
+}
+
+void CompleteProxiedFrame(std::uint32_t generation) {
+  FrameDriverState& state = Driver();
+  if (state.pendingFrames.fetch_sub(1, std::memory_order_relaxed) == 0) {
+    std::abort();
+  }
+  state.admission.complete(generation);
+}
+
+void RunProxiedFrame(void* token) {
+  RunDrivenFrame(token);
+  CompleteProxiedFrame(static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(token)));
+}
+
+void ScheduleProxiedFrame(void* token) {
+  FrameDriverState& state = Driver();
+  const auto generation = static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(token));
+  if (state.admission.isCurrent(generation)) {
+    // Rendering inside the SDK's unbounded queue drain can starve GPU notifications.
+    emscripten_async_call(&RunProxiedFrame, token, 0);
+  } else {
+    CompleteProxiedFrame(generation);
+  }
 }
 
 }  // namespace
 
-// Called from the browser main thread's rAF loop. Runs on the main thread (the
-// wasm module is shared), and its only job is to hand one task per vsync to the
-// app thread's proxying queue, which wakes that thread's event loop.
-extern "C" EMSCRIPTEN_KEEPALIVE void donner_whole_app_vsync_tick() {
+/// Browser main-thread tick. Returns false to retire an obsolete main-thread rAF loop.
+extern "C" EMSCRIPTEN_KEEPALIVE bool donner_whole_app_vsync_tick(std::uint32_t generation) {
   FrameDriverState& state = Driver();
-  if (state.proxyQueue == nullptr) {
-    return;
+  if (!generation) {
+    generation = state.admission.generation();
   }
-  emscripten_proxy_async(state.proxyQueue, state.appThread, &RunProxiedFrame, nullptr);
+  if (!state.admission.isCurrent(generation)) {
+    return false;
+  }
+  if (state.proxyQueue && state.admission.acquire(generation)) {
+    const std::uint32_t pending = state.pendingFrames.fetch_add(1, std::memory_order_relaxed) + 1;
+    std::uint32_t peak = state.peakPendingFrames.load(std::memory_order_relaxed);
+    while (peak < pending && !state.peakPendingFrames.compare_exchange_weak(
+                                 peak, pending, std::memory_order_relaxed)) {}
+
+    void* token = reinterpret_cast<void*>(static_cast<std::uintptr_t>(generation));
+    if (!emscripten_proxy_async(state.proxyQueue, state.appThread, &ScheduleProxiedFrame, token)) {
+      CompleteProxiedFrame(generation);
+    }
+  }
+  return true;
+}
+
+extern "C" EMSCRIPTEN_KEEPALIVE std::uint32_t donner_whole_app_vsync_peak_pending() {
+  return Driver().peakPendingFrames.load(std::memory_order_relaxed);
 }
 
 // clang-format off
@@ -660,20 +767,42 @@ bool WorkerRequestAnimationFrameAvailable() {
   return WorkerRequestAnimationFrameAvailableImpl();
 }
 
-FrameDriver InstallFrameDriver(void (*frameFn)(void*), void* userData) {
+FrameDriver InstallFrameDriver(void (*frameFn)(void*, bool), void* userData,
+                               bool (*canRunFrame)(void*), bool (*pollPresentation)(void*)) {
   FrameDriverState& state = Driver();
   state.frameFn = frameFn;
+  state.canRunFrame = canRunFrame;
+  state.pollPresentation = pollPresentation;
   state.userData = userData;
   state.appThread = pthread_self();
+  if (!state.proxyQueue) {
+    state.proxyQueue = em_proxying_queue_create();
+  }
+  if (state.proxyQueue) {
+    if (!emscripten_proxy_async(state.proxyQueue, state.appThread, [](void*) {}, nullptr)) {
+      std::abort();
+    }
+    emscripten_proxy_execute_queue(state.proxyQueue);
+  }
 
-  if (WorkerRequestAnimationFrameAvailable()) {
+  // clang-format off
+  const bool forceProxiedFrames = MAIN_THREAD_EM_ASM_INT({
+    return new URLSearchParams(window.location.search).get('frameDriver') === 'proxied-main-raf';
+  });
+  // clang-format on
+  const std::uint32_t generation = state.admission.start();
+  (void)state.eventAdmission.start();
+  (void)state.progressAdmission.start();
+  state.eventDeferred = false;
+  void* token = reinterpret_cast<void*>(static_cast<std::uintptr_t>(generation));
+  if (!forceProxiedFrames && WorkerRequestAnimationFrameAvailable()) {
     // Emscripten's `fps == 0` path selects EM_TIMING_RAF, whose scheduler calls
     // `globalThis.requestAnimationFrame` when it exists. Nothing else to do.
     state.driver = FrameDriver::WorkerRequestAnimationFrame;
     // clang-format off
     MAIN_THREAD_ASYNC_EM_ASM({ window['__donnerFrameDriver'] = 'worker-raf'; });
     // clang-format on
-    emscripten_set_main_loop_arg(&RunDrivenFrame, userData, /*fps=*/0,
+    emscripten_set_main_loop_arg(&RunDrivenFrame, token, /*fps=*/0,
                                  /*simulateInfiniteLoop=*/true);
     return state.driver;
   }
@@ -682,13 +811,12 @@ FrameDriver InstallFrameDriver(void (*frameFn)(void*), void* userData) {
   // emulation that is not vsync-aligned and is subject to the nested-timer
   // clamp. Drive from the browser main thread's rAF instead and pay one
   // postMessage per frame (measured at ~40 microseconds).
-  state.proxyQueue = em_proxying_queue_create();
   if (state.proxyQueue == nullptr) {
     state.driver = FrameDriver::SetTimeoutFallback;
     // clang-format off
     MAIN_THREAD_ASYNC_EM_ASM({ window['__donnerFrameDriver'] = 'set-timeout'; });
     // clang-format on
-    emscripten_set_main_loop_arg(&RunDrivenFrame, userData, /*fps=*/0,
+    emscripten_set_main_loop_arg(&RunDrivenFrame, token, /*fps=*/0,
                                  /*simulateInfiniteLoop=*/true);
     return state.driver;
   }
@@ -697,18 +825,67 @@ FrameDriver InstallFrameDriver(void (*frameFn)(void*), void* userData) {
   // clang-format off
   MAIN_THREAD_ASYNC_EM_ASM({
     window['__donnerFrameDriver'] = 'proxied-main-raf';
+    const generation = $0;
     const tick = function() {
-      _donner_whole_app_vsync_tick();
-      requestAnimationFrame(tick);
+      if (_donner_whole_app_vsync_tick(generation)) requestAnimationFrame(tick);
     };
     requestAnimationFrame(tick);
-  });
+  }, generation);
   // clang-format on
   // The app thread must keep returning to its event loop so the proxying queue
   // drains; `emscripten_exit_with_live_runtime` does exactly that without
   // installing a second scheduler that would double-drive the frame.
   emscripten_exit_with_live_runtime();
   return state.driver;
+}
+
+void RequestFrame() {
+  FrameDriverState& state = Driver();
+  const std::uint32_t generation = state.eventAdmission.generation();
+  if (generation) {
+    state.wakeSerial.fetch_add(1, std::memory_order_release);
+    QueueEventFrame(generation);
+  }
+}
+
+void RequestPresentationProgress() {
+  FrameDriverState& state = Driver();
+  const std::uint32_t generation = state.progressAdmission.generation();
+  if (!generation) {
+    return;
+  }
+  if (!pthread_equal(state.appThread, pthread_self())) {
+    std::abort();
+  }
+  if (state.progressAdmission.acquire(generation)) {
+    // The original submission age remains authoritative; a busy UI cannot grow this timer forever.
+    state.progressDeadlineMs = emscripten_get_now() + 5500.0;
+    void* token = reinterpret_cast<void*>(static_cast<std::uintptr_t>(generation));
+    emscripten_async_call(&RunPresentationProgress, token, 8);
+  }
+}
+
+void NotifyFrameFinished() {
+  FrameDriverState& state = Driver();
+  const std::uint32_t generation = state.eventAdmission.generation();
+  if (state.eventDeferred && generation && state.canRunFrame(state.userData)) {
+    state.eventDeferred = false;
+    void* token = reinterpret_cast<void*>(static_cast<std::uintptr_t>(generation));
+    emscripten_async_call(&RunEventFrame, token, 0);
+  }
+}
+
+void StopFrameDriver() {
+  FrameDriverState& state = Driver();
+  state.admission.stop();
+  state.eventAdmission.stop();
+  state.progressAdmission.stop();
+  state.pollPresentation = nullptr;
+  state.eventDeferred = false;
+  state.canRunFrame = nullptr;
+  state.frameFn = nullptr;
+  state.userData = nullptr;
+  emscripten_cancel_main_loop();
 }
 
 FrameTickStats TickStats() {
@@ -1142,7 +1319,9 @@ void RecordFrameSample(int triggerBits, double frameMs, int callbacks) {
         // once. Probes read the pair to measure how promptly a completed
         // result reached the canvas without racing their own poll cadence.
         const workerStats = window['__donnerWorkerStats'];
-        if (workerStats && Object.is(workerStats['presentedAtMs'], undefined)) {
+        if (workerStats && workerStats['acceptedForPresentation'] &&
+            window['__donnerHostFrameTiming']?.['lastSurfacePresented'] &&
+            Object.is(workerStats['presentedAtMs'], undefined)) {
           workerStats['presentedAtMs'] = performance.now();
         }
         window['__donnerMainLoopRenderedFrames'] =

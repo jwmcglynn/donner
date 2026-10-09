@@ -1266,7 +1266,7 @@ TEST(BrowserDevice, UnmappingMakesTheMappedBytesUnreachable) {
   EXPECT_THAT(fixture.bridge->objectCount(), 1u);  // The buffer remains; the mapping is gone.
 }
 
-TEST(BrowserDevice, PresentsOnlyWhenTheBrowserChoosesTo) {
+TEST(BrowserDevice, PresentsTheAcquiredCanvasFrame) {
   BrowserFixture fixture = MakeDevice();
   ASSERT_THAT(fixture.device, testing::NotNull());
 
@@ -1281,8 +1281,10 @@ TEST(BrowserDevice, PresentsOnlyWhenTheBrowserChoosesTo) {
   ASSERT_THAT(acquired, HasResult());
   EXPECT_THAT(acquired.result().status, SurfaceStatus::Success);
 
-  EXPECT_THAT(fixture.device->presentSurface(surface.result()),
-              IsGpuErrorWithMessage(GpuErrorType::Unsupported, HasSubstr("own frame loop")));
+  const Result<SurfaceStatus> presented = fixture.device->presentSurface(surface.result());
+  ASSERT_THAT(presented, HasResult());
+  EXPECT_EQ(presented.result(), SurfaceStatus::Success);
+  EXPECT_THAT(*fixture.bridge->calls, Contains("presentSurface surface=1"));
 }
 
 TEST(BrowserDevice, AbandoningAFrameReleasesTheBrowserTextureBehindIt) {

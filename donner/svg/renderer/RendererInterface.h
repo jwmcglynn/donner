@@ -1263,9 +1263,8 @@ public:
   /**
    * Draws a backend-owned texture snapshot into the given target rectangle.
    *
-   * Backends that cannot consume \p texture directly return false. Callers
-   * should retain a CPU bitmap fallback when cross-backend composition is
-   * required.
+   * Backends that cannot consume \p texture directly return false. GPU presentation must
+   * preserve a usable frame or report that failure; it must not read pixels back as a fallback.
    */
   virtual bool drawTextureSnapshot(const RendererTextureSnapshot& texture, const Box2d& targetRect,
                                    double opacity = 1.0, bool pixelated = false) {

@@ -352,3 +352,31 @@ test("a lost device refuses another frame but still takes back the one it handed
   );
   assert.equal(bridge.objects(kDevice).size, 0);
 });
+
+test("presentation uses the acquired canvas texture without a copy or second acquisition", async () => {
+  const { bridge, canvas, id } = await surfaceBridge();
+  assert.equal(
+    configure(bridge, id, { width: 8, height: 8 }, bridge.state.kAlphaModeOpaque),
+    bridge.state.kSuccess,
+  );
+  const status = bridge.outParameter();
+  assert.equal(
+    bridge.entryPoints.donner_gpu_acquire_current_texture(kDevice, id, 2, status),
+    bridge.state.kSuccess,
+  );
+  assert.equal(canvas.context.frames, 1);
+  const objects = bridge.objects(kDevice).size;
+  assert.equal(
+    bridge.entryPoints.donner_gpu_present_surface(kDevice, id, status),
+    bridge.state.kSuccess,
+  );
+  assert.equal(bridge.read(status), bridge.state.kSurfaceSuccess);
+  assert.equal(canvas.context.frames, 1);
+  assert.equal(bridge.device.queue.submissions, 0);
+  assert.equal(bridge.objects(kDevice).size, objects - 1);
+  assert.equal(bridge.state.surfacePresents, 1);
+  assert.equal(
+    bridge.entryPoints.donner_gpu_present_surface(kDevice, id, status),
+    bridge.state.kFailed,
+  );
+});

@@ -3,6 +3,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { startApplicationHeartbeat } from "./browser-application-heartbeat.mjs";
+import { checkDocumentGpuResidency } from "./browser-gpu-residency";
 import { resourceQueuesAreQuiescent } from "./browser-resource-quiescence.mjs";
 import {
   contentMotionFraction,
@@ -1549,4 +1550,15 @@ test.describe("UI presentation diagnosis", () => {
       }
     },
   );
+});
+
+test("ordinary document GPU residency", async ({ page }, info) => {
+  let stopHeartbeat = () => {};
+  try {
+    await checkDocumentGpuResidency(page, info, async () => {
+      stopHeartbeat = await startApplicationHeartbeat(page);
+    });
+  } finally {
+    stopHeartbeat();
+  }
 });

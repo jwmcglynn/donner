@@ -44,7 +44,7 @@
  */
 
 var LibraryDonnerGpu = {
-  $DonnerGpu__deps: ['$UTF8ToString', '$stringToUTF8', '$lengthBytesUTF8'],
+  $DonnerGpu__deps: ["$UTF8ToString", "$stringToUTF8", "$lengthBytesUTF8"],
   $DonnerGpu: {
     // Protocol codes, assigned by BrowserWireCodes.h rather than by the underlying values of the
     // C++ enumerators. donner_gpu_check_protocol compares the whole table below against the one
@@ -110,20 +110,25 @@ var LibraryDonnerGpu = {
     // Which request is current. A request that settles after the device it was for has been let
     // go must not install a device into state that has moved on.
     requestGeneration: 0,
-    requestState: 1,  // Pending.
-    requestError: '',
+    requestState: 1, // Pending.
+    requestError: "",
     lost: false,
-    lostReason: '',
+    lostReason: "",
     // The handle of the logical device whose request obtained the browser device. Handles are
     // unique across workers and never reused, so this names the device across workers as well.
     deviceIdentity: 0,
 
     lastCompletionProgressAtMs: -Infinity,
 
-    logical: null,  // Map from logical-device handle to its own state; see openLogical.
+    logical: null, // Map from logical-device handle to its own state; see openLogical.
     // Map from share identifier to the texture it holds; see donner_gpu_share_texture.
     shares: null,
     nextShare: 1,
+    readbackCopies: 0,
+    cpuTextureWrites: 0,
+    surfacePresents: 0,
+    completionProgressKicks: 0,
+    completionProgressKickMs: 0,
 
     // The protocol table, in the order BrowserWireCodes.cc builds it. This is the artifact the two
     // halves agree on: donner_gpu_check_protocol compares it element by element against the C++
@@ -131,53 +136,137 @@ var LibraryDonnerGpu = {
     // an enumerator anywhere fails the comparison instead of quietly changing what a number means.
     protocolCodes: [
       // TextureFormat, TextureUsage, BufferUsage, ShaderStage, ColorWriteMask.
-      1, 2, 3, 4,
-      1, 2, 4, 8, 16,
-      1, 2, 4, 8, 16, 32, 64,
-      1, 2, 4,
-      1, 2, 4, 8,
+      1,
+      2,
+      3,
+      4,
+      1,
+      2,
+      4,
+      8,
+      16,
+      1,
+      2,
+      4,
+      8,
+      16,
+      32,
+      64,
+      1,
+      2,
+      4,
+      1,
+      2,
+      4,
+      8,
       // FilterMode, AddressMode, VertexFormat, VertexStepMode, IndexFormat.
-      1, 2,
-      1, 2,
-      1, 2, 3,
-      1, 2,
-      1, 2,
+      1,
+      2,
+      1,
+      2,
+      1,
+      2,
+      3,
+      1,
+      2,
+      1,
+      2,
       // PrimitiveTopology, CullMode, BlendFactor, BlendOperation, BindingType.
-      1, 2,
-      1, 2,
-      1, 2, 3, 4, 5,
-      1, 2,
-      1, 2, 3, 4, 5, 6,
+      1,
+      2,
+      1,
+      2,
+      1,
+      2,
+      3,
+      4,
+      5,
+      1,
+      2,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
       // LoadOp, StoreOp, PresentMode, SurfaceAlphaMode.
-      1, 2,
-      1, 2,
-      1, 2, 3,
-      1, 2, 3,
+      1,
+      2,
+      1,
+      2,
+      1,
+      2,
+      3,
+      1,
+      2,
+      3,
       // BrowserObjectKind.
-      1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
       // BridgeStatus, BrowserDeviceRequestState, MapSliceState, SurfaceStatus.
-      1, 2, 3, 4, 5, 6,
-      1, 2, 3, 4,
-      1, 2, 3, 4,
-      1, 2, 3, 4, 5,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      1,
+      2,
+      3,
+      4,
+      1,
+      2,
+      3,
+      4,
+      1,
+      2,
+      3,
+      4,
+      5,
     ],
 
     debugStatistics: function() {
-      var statistics = { 'objects': 0, 'textures': 0, 'textureBytes': 0, 'bufferBytes': 0,
-        'pendingSubmissions': 0, 'shares': DonnerGpu.shares.size, 'sharedTextureTailBytes': 0 };
+      var statistics = {
+        "objects": 0,
+        "textures": 0,
+        "textureBytes": 0,
+        "bufferBytes": 0,
+        "pendingSubmissions": 0,
+        "shares": DonnerGpu.shares.size,
+        "sharedTextureTailBytes": 0,
+        "readbackCopies": DonnerGpu.readbackCopies,
+        "cpuTextureWrites": DonnerGpu.cpuTextureWrites,
+        "surfacePresents": DonnerGpu.surfacePresents,
+        "completionProgressKicks": DonnerGpu.completionProgressKicks,
+        "completionProgressKickMs": DonnerGpu.completionProgressKickMs,
+      };
       DonnerGpu.logical.forEach(function(record) {
-        statistics['objects'] += record.objects.size;
-        statistics['pendingSubmissions'] += record.pendingSubmissions || 0;
+        statistics["objects"] += record.objects.size;
+        statistics["pendingSubmissions"] += record.pendingSubmissions || 0;
         record.objects.forEach(function(entry) {
           if (entry.alias) return;
           if (entry.kind === DonnerGpu.kTexture) {
-            statistics['textures'] += 1;
-            statistics['textureBytes'] += entry.allocationBytes || 0;
-          } else if (entry.kind === DonnerGpu.kBuffer) statistics['bufferBytes'] += entry.allocationBytes || 0;
+            statistics["textures"] += 1;
+            statistics["textureBytes"] += entry.allocationBytes || 0;
+          } else if (entry.kind === DonnerGpu.kBuffer) {
+            statistics["bufferBytes"] += entry.allocationBytes || 0;
+          }
         });
       });
       DonnerGpu.shares.forEach(function(share) {
-        if (share.producerReleased) statistics['sharedTextureTailBytes'] += share.allocationBytes || 0;
+        if (share.producerReleased) {
+          statistics["sharedTextureTailBytes"] += share.allocationBytes || 0;
+        }
       });
       return statistics;
     },
@@ -186,7 +275,7 @@ var LibraryDonnerGpu = {
       if (DonnerGpu.logical === null) {
         DonnerGpu.logical = new Map();
         DonnerGpu.shares = new Map();
-        globalThis['__donnerReadGpuObjectStats'] = DonnerGpu.debugStatistics;
+        globalThis["__donnerReadGpuObjectStats"] = DonnerGpu.debugStatistics;
       }
     },
 
@@ -201,8 +290,10 @@ var LibraryDonnerGpu = {
     // A pending completion can need another queue operation before the browser delivers it.
     // Coalesce progress across logical devices, without recording another frame or callback.
     requestCompletionProgress: function(record) {
-      if (!record || !(record.pendingSubmissions > 0) ||
-          DonnerGpu.guard(record) !== DonnerGpu.kSuccess) {
+      if (
+        !record || !(record.pendingSubmissions > 0)
+        || DonnerGpu.guard(record) !== DonnerGpu.kSuccess
+      ) {
         return;
       }
       var now = performance.now();
@@ -210,7 +301,15 @@ var LibraryDonnerGpu = {
         return;
       }
       DonnerGpu.lastCompletionProgressAtMs = now;
-      DonnerGpu.perform(record, function() { DonnerGpu.queue.submit([]); });
+      DonnerGpu.perform(record, function() {
+        var startedAt = performance.now();
+        DonnerGpu.completionProgressKicks += 1;
+        try {
+          DonnerGpu.queue.submit([]);
+        } finally {
+          DonnerGpu.completionProgressKickMs += performance.now() - startedAt;
+        }
+      });
     },
 
     // Opens the logical device `handle` if it is not open yet, and returns its state. Handle zero
@@ -225,16 +324,16 @@ var LibraryDonnerGpu = {
         requested: false,
         // Why this logical device's own request was refused, which is its alone: a protocol table
         // that disagrees with this library, or a second request on one handle.
-        failure: '',
-        objects: new Map(),  // Map from identifier to { kind, object, alias, frame, share }.
-        mappings: new Map(),  // Map from identifier to { buffer, offset, size, state, view }.
+        failure: "",
+        objects: new Map(), // Map from identifier to { kind, object, alias, frame, share }.
+        mappings: new Map(), // Map from identifier to { buffer, offset, size, state, view }.
         completedSerial: 0,
         encoder: null,
         recordingSerial: 0,
-        recordedBuffers: null,  // Finished command buffers of the open submission, in order.
+        recordedBuffers: null, // Finished command buffers of the open submission, in order.
         pass: null,
         attachments: null,
-        pending: null,  // Descriptor being built by a sequence of item calls.
+        pending: null, // Descriptor being built by a sequence of item calls.
       };
       DonnerGpu.logical.set(handle, record);
       return record;
@@ -258,7 +357,7 @@ var LibraryDonnerGpu = {
     },
 
     // The acquisition trace is observation only: it must never change a request or its outcome.
-    kTracePrefix: '[Geode/browser/gpu-trace]',
+    kTracePrefix: "[Geode/browser/gpu-trace]",
     // Past GeodeBrowserRoot's 10 s device settle window (kBrowserDeviceSettleSeconds), and inside
     // the life of a browser test that hit it, so a request the editor gave up on still says
     // whether the browser ever answered.
@@ -266,8 +365,8 @@ var LibraryDonnerGpu = {
 
     // Plain token for one field of a trace line.
     traceToken: function(value) {
-      return String(value === undefined || value === null ? '' : value)
-        .replace(/[^A-Za-z0-9._-]+/g, '_').slice(0, 64);
+      return String(value === undefined || value === null ? "" : value)
+        .replace(/[^A-Za-z0-9._-]+/g, "_").slice(0, 64);
     },
 
     // What the browser reports about `adapter`, reduced to plain tokens for one log line.
@@ -277,10 +376,10 @@ var LibraryDonnerGpu = {
       var fallback = info && info.isFallbackAdapter !== undefined
         ? info.isFallbackAdapter
         : adapter && adapter.isFallbackAdapter;
-      return ' vendor=' + token(info && info.vendor) + ' architecture=' +
-             token(info && info.architecture) + ' device=' + token(info && info.device) +
-             ' description=' + token(info && info.description) + ' fallback=' +
-             (fallback ? 1 : 0);
+      return " vendor=" + token(info && info.vendor) + " architecture="
+        + token(info && info.architecture) + " device=" + token(info && info.device)
+        + " description=" + token(info && info.description) + " fallback="
+        + (fallback ? 1 : 0);
     },
 
     // Runs `step` with `value`, swallowing anything it throws: a trace fault must never reach the
@@ -304,9 +403,11 @@ var LibraryDonnerGpu = {
         startedAt = 0;
       }
       var write = function(fields) {
-        console.info(DonnerGpu.kTracePrefix + ' ' + fields + ' elapsed_ms=' +
-                     Math.round(performance.now() - startedAt) +
-                     (generation !== DonnerGpu.requestGeneration ? ' late=1' : ''));
+        console.info(
+          DonnerGpu.kTracePrefix + " " + fields + " elapsed_ms="
+            + Math.round(performance.now() - startedAt)
+            + (generation !== DonnerGpu.requestGeneration ? " late=1" : ""),
+        );
       };
       var stopTimer = function() {
         var pending = timer;
@@ -316,11 +417,14 @@ var LibraryDonnerGpu = {
         }
       };
       try {
-        timer = setTimeout(DonnerGpu.traceGuarded(function() {
-          timer = null;
-          write('step=request outcome=still_pending');
-        }), DonnerGpu.kTraceStillPendingMs);
-        if (timer && typeof timer.unref === 'function') {
+        timer = setTimeout(
+          DonnerGpu.traceGuarded(function() {
+            timer = null;
+            write("step=request outcome=still_pending");
+          }),
+          DonnerGpu.kTraceStillPendingMs,
+        );
+        if (timer && typeof timer.unref === "function") {
           timer.unref();
         }
       } catch (ignored) {
@@ -328,16 +432,18 @@ var LibraryDonnerGpu = {
       }
       return {
         adapter: DonnerGpu.traceGuarded(function(adapter) {
-          write('step=adapter outcome=' + (adapter ? 'ready' : 'null') +
-                (adapter ? DonnerGpu.traceAdapterFields(adapter) : ''));
+          write(
+            "step=adapter outcome=" + (adapter ? "ready" : "null")
+              + (adapter ? DonnerGpu.traceAdapterFields(adapter) : ""),
+          );
         }),
         device: DonnerGpu.traceGuarded(function(device) {
           stopTimer();
-          write('step=device outcome=' + (device ? 'ready' : 'null'));
+          write("step=device outcome=" + (device ? "ready" : "null"));
         }),
         failed: DonnerGpu.traceGuarded(function(failure) {
           stopTimer();
-          write('step=request outcome=' + failure);
+          write("step=request outcome=" + failure);
         }),
       };
     },
@@ -347,7 +453,7 @@ var LibraryDonnerGpu = {
     requestBrowserDevice: function() {
       DonnerGpu.requestState = DonnerGpu.kRequestPending;
       var generation = DonnerGpu.requestGeneration;
-      var failure = 'adapter_rejected';
+      var failure = "adapter_rejected";
       var adapterRequest;
       try {
         adapterRequest = navigator.gpu.requestAdapter();
@@ -366,10 +472,10 @@ var LibraryDonnerGpu = {
         .then(function(adapter) {
           trace.adapter(adapter);
           if (!adapter) {
-            failure = 'adapter_null';
+            failure = "adapter_null";
             throw new Error();
           }
-          failure = 'device_rejected';
+          failure = "device_rejected";
           return adapter.requestDevice();
         })
         .then(function(device) {
@@ -377,7 +483,7 @@ var LibraryDonnerGpu = {
           if (!device) {
             throw new Error();
           }
-          failure = 'device_install_failed';
+          failure = "device_install_failed";
           if (generation === DonnerGpu.requestGeneration) {
             DonnerGpu.installDevice(device);
           }
@@ -398,8 +504,10 @@ var LibraryDonnerGpu = {
       // caller to return it to, so it is reported where the adapter's import reports its own.
       device.onuncapturederror = function(event) {
         var error = event && event.error;
-        console.error('[Geode/browser] Uncaptured error: ' +
-                      String(error && error.message ? error.message : error));
+        console.error(
+          "[Geode/browser] Uncaptured error: "
+            + String(error && error.message ? error.message : error),
+        );
       };
       // Loss is permanent, and the runtime refuses everything once it is observed, so the only
       // thing to do here is record it where the next call will see it - unless the device has been
@@ -407,12 +515,14 @@ var LibraryDonnerGpu = {
       device.lost.then(function(info) {
         if (DonnerGpu.device === device) {
           DonnerGpu.lost = true;
-          DonnerGpu.lostReason = String(info.reason) + ': ' + String(info.message);
+          DonnerGpu.lostReason = String(info.reason) + ": " + String(info.message);
           // The browser's free-text message stays in lostReason, which the runtime reports; the
           // trace line carries only the reason token, so no message can read as a failure pattern.
           DonnerGpu.traceGuarded(function() {
-            console.info(DonnerGpu.kTracePrefix + ' step=device outcome=lost reason=' +
-                         DonnerGpu.traceToken(info && info.reason));
+            console.info(
+              DonnerGpu.kTracePrefix + " step=device outcome=lost reason="
+                + DonnerGpu.traceToken(info && info.reason),
+            );
           })();
         }
       });
@@ -439,9 +549,9 @@ var LibraryDonnerGpu = {
       DonnerGpu.requestStarted = false;
       DonnerGpu.requestGeneration += 1;
       DonnerGpu.requestState = DonnerGpu.kRequestPending;
-      DonnerGpu.requestError = '';
+      DonnerGpu.requestError = "";
       DonnerGpu.lost = false;
-      DonnerGpu.lostReason = '';
+      DonnerGpu.lostReason = "";
       DonnerGpu.deviceIdentity = 0;
       DonnerGpu.lastCompletionProgressAtMs = -Infinity;
     },
@@ -463,12 +573,12 @@ var LibraryDonnerGpu = {
     // transferred canvases under the bare id, so that registry is what a worker looks in. The
     // document lookup stays for the main thread.
     resolveCanvas: function(selector) {
-      var id = selector.charAt(0) === '#' ? selector.substring(1) : selector;
-      if (typeof GL !== 'undefined' && GL.offscreenCanvases && GL.offscreenCanvases[id]) {
+      var id = selector.charAt(0) === "#" ? selector.substring(1) : selector;
+      if (typeof GL !== "undefined" && GL.offscreenCanvases && GL.offscreenCanvases[id]) {
         var registered = GL.offscreenCanvases[id];
         return registered.offscreenCanvas || registered;
       }
-      if (typeof document !== 'undefined' && document.querySelector) {
+      if (typeof document !== "undefined" && document.querySelector) {
         return document.querySelector(selector);
       }
       return null;
@@ -491,8 +601,9 @@ var LibraryDonnerGpu = {
     // strand every object it owns for the life of the page - so loss is not a reason to refuse,
     // while a logical device this worker does not hold still is.
     guardRelease: function(record) {
-      return record === null || DonnerGpu.device === null ? DonnerGpu.kNotOwner :
-                                                            DonnerGpu.kSuccess;
+      return record === null || DonnerGpu.device === null
+        ? DonnerGpu.kNotOwner
+        : DonnerGpu.kSuccess;
     },
 
     // Returns the object `id` names in `record` if it is of `kind`, otherwise null. The caller
@@ -579,21 +690,31 @@ var LibraryDonnerGpu = {
 
     textureFormat: function(code) {
       switch (code) {
-        case 1: return 'rgba8unorm';
-        case 2: return 'bgra8unorm';
-        case 3: return 'r8unorm';
-        case 4: return 'rgba32float';
-        default: return null;
+        case 1:
+          return "rgba8unorm";
+        case 2:
+          return "bgra8unorm";
+        case 3:
+          return "r8unorm";
+        case 4:
+          return "rgba32float";
+        default:
+          return null;
       }
     },
 
     formatCode: function(name) {
       switch (name) {
-        case 'rgba8unorm': return 1;
-        case 'bgra8unorm': return 2;
-        case 'r8unorm': return 3;
-        case 'rgba32float': return 4;
-        default: return 0;
+        case "rgba8unorm":
+          return 1;
+        case "bgra8unorm":
+          return 2;
+        case "r8unorm":
+          return 3;
+        case "rgba32float":
+          return 4;
+        default:
+          return 0;
       }
     },
 
@@ -644,92 +765,133 @@ var LibraryDonnerGpu = {
     // refusal, which is the one outcome this boundary must not produce.
     filterMode: function(code) {
       switch (code) {
-        case 1: return 'nearest';
-        case 2: return 'linear';
-        default: return null;
+        case 1:
+          return "nearest";
+        case 2:
+          return "linear";
+        default:
+          return null;
       }
     },
     addressMode: function(code) {
       switch (code) {
-        case 1: return 'clamp-to-edge';
-        case 2: return 'repeat';
-        default: return null;
+        case 1:
+          return "clamp-to-edge";
+        case 2:
+          return "repeat";
+        default:
+          return null;
       }
     },
     vertexFormat: function(code) {
       switch (code) {
-        case 1: return 'float32x2';
-        case 2: return 'float32x4';
-        case 3: return 'uint32';
-        default: return null;
+        case 1:
+          return "float32x2";
+        case 2:
+          return "float32x4";
+        case 3:
+          return "uint32";
+        default:
+          return null;
       }
     },
     stepMode: function(code) {
       switch (code) {
-        case 1: return 'vertex';
-        case 2: return 'instance';
-        default: return null;
+        case 1:
+          return "vertex";
+        case 2:
+          return "instance";
+        default:
+          return null;
       }
     },
     indexFormat: function(code) {
       switch (code) {
-        case 1: return 'uint16';
-        case 2: return 'uint32';
-        default: return null;
+        case 1:
+          return "uint16";
+        case 2:
+          return "uint32";
+        default:
+          return null;
       }
     },
     topology: function(code) {
       switch (code) {
-        case 1: return 'triangle-list';
-        case 2: return 'triangle-strip';
-        default: return null;
+        case 1:
+          return "triangle-list";
+        case 2:
+          return "triangle-strip";
+        default:
+          return null;
       }
     },
     cullMode: function(code) {
       switch (code) {
-        case 1: return 'none';
-        case 2: return 'back';
-        default: return null;
+        case 1:
+          return "none";
+        case 2:
+          return "back";
+        default:
+          return null;
       }
     },
     blendFactor: function(code) {
       switch (code) {
-        case 1: return 'zero';
-        case 2: return 'one';
-        case 3: return 'src-alpha';
-        case 4: return 'one-minus-src-alpha';
-        case 5: return 'one-minus-dst-alpha';
-        default: return null;
+        case 1:
+          return "zero";
+        case 2:
+          return "one";
+        case 3:
+          return "src-alpha";
+        case 4:
+          return "one-minus-src-alpha";
+        case 5:
+          return "one-minus-dst-alpha";
+        default:
+          return null;
       }
     },
     blendOperation: function(code) {
       switch (code) {
-        case 1: return 'add';
-        case 2: return 'max';
-        default: return null;
+        case 1:
+          return "add";
+        case 2:
+          return "max";
+        default:
+          return null;
       }
     },
     loadOp: function(code) {
       switch (code) {
-        case 1: return 'clear';
-        case 2: return 'load';
-        default: return null;
+        case 1:
+          return "clear";
+        case 2:
+          return "load";
+        default:
+          return null;
       }
     },
     storeOp: function(code) {
       switch (code) {
-        case 1: return 'store';
-        case 2: return 'discard';
-        default: return null;
+        case 1:
+          return "store";
+        case 2:
+          return "discard";
+        default:
+          return null;
       }
     },
     alphaMode: function(code) {
       switch (code) {
-        case DonnerGpu.kAlphaModeOpaque: return 'opaque';
-        case DonnerGpu.kAlphaModePremultiplied: return 'premultiplied';
+        case DonnerGpu.kAlphaModeOpaque:
+          return "opaque";
+        case DonnerGpu.kAlphaModePremultiplied:
+          return "premultiplied";
         // A surface that asks the platform for its default gets the one a canvas actually has.
-        case DonnerGpu.kAlphaModeInherit: return 'opaque';
-        default: return null;
+        case DonnerGpu.kAlphaModeInherit:
+          return "opaque";
+        default:
+          return null;
       }
     },
 
@@ -770,19 +932,30 @@ var LibraryDonnerGpu = {
     bindGroupLayoutEntry: function(item) {
       var entry = { binding: item.binding, visibility: DonnerGpu.shaderStage(item.visibility) };
       switch (item.type) {
-        case 1: entry.buffer = { type: 'uniform' }; break;
-        case 2: entry.buffer = { type: 'read-only-storage' }; break;
-        case 3: entry.texture = { sampleType: 'float' }; break;
-        case 4: entry.sampler = { type: 'filtering' }; break;
+        case 1:
+          entry.buffer = { type: "uniform" };
+          break;
+        case 2:
+          entry.buffer = { type: "read-only-storage" };
+          break;
+        case 3:
+          entry.texture = { sampleType: "float" };
+          break;
+        case 4:
+          entry.sampler = { type: "filtering" };
+          break;
         case 5:
           var storageFormat = DonnerGpu.textureFormat(item.storageFormat);
           if (storageFormat === null) {
             return null;
           }
-          entry.storageTexture = { access: 'write-only', format: storageFormat };
+          entry.storageTexture = { access: "write-only", format: storageFormat };
           break;
-        case 6: entry.texture = { sampleType: 'unfilterable-float' }; break;
-        default: return null;
+        case 6:
+          entry.texture = { sampleType: "unfilterable-float" };
+          break;
+        default:
+          return null;
       }
       return entry;
     },
@@ -790,7 +963,7 @@ var LibraryDonnerGpu = {
 
   // ----- Protocol agreement -------------------------------------------------
 
-  donner_gpu_check_protocol__deps: ['$DonnerGpu'],
+  donner_gpu_check_protocol__deps: ["$DonnerGpu"],
   donner_gpu_check_protocol: function(handle, codes, count) {
     // A disagreement refuses this logical device's request and nobody else's: another logical
     // device already running over the browser device goes on as it was.
@@ -799,16 +972,16 @@ var LibraryDonnerGpu = {
       return DonnerGpu.kFailed;
     }
     if (count !== DonnerGpu.protocolCodes.length) {
-      record.failure = 'GPU bridge protocol table has ' + DonnerGpu.protocolCodes.length +
-          ' entries and the module was built against ' + count;
+      record.failure = "GPU bridge protocol table has " + DonnerGpu.protocolCodes.length
+        + " entries and the module was built against " + count;
       return DonnerGpu.kFailed;
     }
     for (var i = 0; i < count; ++i) {
       var expected = DonnerGpu.protocolCodes[i];
       var actual = HEAPU32[(codes >> 2) + i];
       if (actual !== expected) {
-        record.failure = 'GPU bridge protocol entry ' + i + ' is ' + actual +
-            ' and this library assigns ' + expected;
+        record.failure = "GPU bridge protocol entry " + i + " is " + actual
+          + " and this library assigns " + expected;
         return DonnerGpu.kFailed;
       }
     }
@@ -817,16 +990,16 @@ var LibraryDonnerGpu = {
 
   // ----- Device acquisition -------------------------------------------------
 
-  donner_gpu_begin_device_request__deps: ['$DonnerGpu'],
+  donner_gpu_begin_device_request__deps: ["$DonnerGpu"],
   donner_gpu_begin_device_request: function(handle) {
     var record = DonnerGpu.openLogical(handle);
-    if (record === null || record.failure !== '') {
+    if (record === null || record.failure !== "") {
       return DonnerGpu.kFailed;
     }
     if (record.requested) {
       // A second request on one handle would stand for a second device where the runtime holds
       // one, so it is refused, on this logical device alone.
-      record.failure = 'this logical device has already requested its GPU bridge device';
+      record.failure = "this logical device has already requested its GPU bridge device";
       return DonnerGpu.kFailed;
     }
     record.requested = true;
@@ -837,7 +1010,7 @@ var LibraryDonnerGpu = {
     }
     DonnerGpu.requestStarted = true;
     DonnerGpu.deviceIdentity = handle;
-    if (typeof navigator === 'undefined' || !navigator.gpu) {
+    if (typeof navigator === "undefined" || !navigator.gpu) {
       DonnerGpu.requestState = DonnerGpu.kRequestUnavailable;
       return DonnerGpu.kSuccess;
     }
@@ -845,43 +1018,45 @@ var LibraryDonnerGpu = {
     return DonnerGpu.kSuccess;
   },
 
-  donner_gpu_release_device__deps: ['$DonnerGpu'],
+  donner_gpu_release_device__deps: ["$DonnerGpu"],
   donner_gpu_release_device: function(handle) {
     DonnerGpu.closeLogical(handle);
   },
 
-  donner_gpu_device_request_state__deps: ['$DonnerGpu'],
+  donner_gpu_device_request_state__deps: ["$DonnerGpu"],
   donner_gpu_device_request_state: function(handle) {
     var record = DonnerGpu.logicalFor(handle);
-    if (record === null || record.failure !== '') {
+    if (record === null || record.failure !== "") {
       return DonnerGpu.kRequestFailed;
     }
     return DonnerGpu.requestState;
   },
 
-  donner_gpu_read_request_error__deps: ['$DonnerGpu'],
+  donner_gpu_read_request_error__deps: ["$DonnerGpu"],
   donner_gpu_read_request_error: function(handle, destination, capacity) {
     var record = DonnerGpu.logicalFor(handle);
     if (record === null) {
       return 0;
     }
-    var reason = record.failure !== '' ? record.failure :
-                                         DonnerGpu.requestState === DonnerGpu.kRequestFailed ?
-                                         DonnerGpu.requestError : '';
+    var reason = record.failure !== ""
+      ? record.failure
+      : DonnerGpu.requestState === DonnerGpu.kRequestFailed
+      ? DonnerGpu.requestError
+      : "";
     return DonnerGpu.writeMessage(reason, destination, capacity);
   },
 
-  donner_gpu_owns_device__deps: ['$DonnerGpu'],
+  donner_gpu_owns_device__deps: ["$DonnerGpu"],
   donner_gpu_owns_device: function(handle) {
     return DonnerGpu.logicalFor(handle) !== null && DonnerGpu.device !== null ? 1 : 0;
   },
 
-  donner_gpu_is_device_lost__deps: ['$DonnerGpu'],
+  donner_gpu_is_device_lost__deps: ["$DonnerGpu"],
   donner_gpu_is_device_lost: function(handle) {
     return DonnerGpu.logicalFor(handle) !== null && DonnerGpu.lost ? 1 : 0;
   },
 
-  donner_gpu_read_lost_reason__deps: ['$DonnerGpu'],
+  donner_gpu_read_lost_reason__deps: ["$DonnerGpu"],
   donner_gpu_read_lost_reason: function(handle, destination, capacity) {
     if (DonnerGpu.logicalFor(handle) === null) {
       return 0;
@@ -889,24 +1064,24 @@ var LibraryDonnerGpu = {
     return DonnerGpu.writeMessage(DonnerGpu.lostReason, destination, capacity);
   },
 
-  donner_gpu_completed_serial__deps: ['$DonnerGpu'],
+  donner_gpu_completed_serial__deps: ["$DonnerGpu"],
   donner_gpu_completed_serial: function(handle) {
     var record = DonnerGpu.logicalFor(handle);
     DonnerGpu.requestCompletionProgress(record);
     return record === null ? 0 : record.completedSerial;
   },
 
-  donner_gpu_max_texture_dimension_2d__deps: ['$DonnerGpu'],
+  donner_gpu_max_texture_dimension_2d__deps: ["$DonnerGpu"],
   donner_gpu_max_texture_dimension_2d: function(handle) {
     var record = DonnerGpu.logicalFor(handle);
     if (record === null || DonnerGpu.device === null || !DonnerGpu.device.limits) {
       return 0;
     }
     var limit = DonnerGpu.device.limits.maxTextureDimension2D;
-    return typeof limit === 'number' && limit > 0 ? limit >>> 0 : 0;
+    return typeof limit === "number" && limit > 0 ? limit >>> 0 : 0;
   },
 
-  donner_gpu_device_identity__deps: ['$DonnerGpu'],
+  donner_gpu_device_identity__deps: ["$DonnerGpu"],
   donner_gpu_device_identity: function(handle) {
     // Zero until the device exists: an identity handed out for a request still in flight could
     // name a device the request never obtains.
@@ -918,7 +1093,7 @@ var LibraryDonnerGpu = {
 
   // ----- Resource creation --------------------------------------------------
 
-  donner_gpu_create_buffer__deps: ['$DonnerGpu'],
+  donner_gpu_create_buffer__deps: ["$DonnerGpu"],
   donner_gpu_create_buffer: function(handle, id, byteSize, usageBits) {
     var record = DonnerGpu.logicalFor(handle);
     var status = DonnerGpu.create(record, DonnerGpu.kBuffer, id, function() {
@@ -931,7 +1106,7 @@ var LibraryDonnerGpu = {
     return status;
   },
 
-  donner_gpu_create_texture__deps: ['$DonnerGpu'],
+  donner_gpu_create_texture__deps: ["$DonnerGpu"],
   donner_gpu_create_texture: function(handle, id, width, height, formatCode, usageBits) {
     var format = DonnerGpu.textureFormat(formatCode);
     if (format === null) {
@@ -952,7 +1127,7 @@ var LibraryDonnerGpu = {
     return status;
   },
 
-  donner_gpu_create_texture_view__deps: ['$DonnerGpu'],
+  donner_gpu_create_texture_view__deps: ["$DonnerGpu"],
   donner_gpu_create_texture_view: function(handle, id, textureId) {
     var record = DonnerGpu.logicalFor(handle);
     var texture = DonnerGpu.lookup(record, DonnerGpu.kTexture, textureId);
@@ -964,9 +1139,15 @@ var LibraryDonnerGpu = {
     });
   },
 
-  donner_gpu_create_sampler__deps: ['$DonnerGpu'],
-  donner_gpu_create_sampler: function(handle, id, magFilterCode, minFilterCode, addressUCode,
-                                      addressVCode) {
+  donner_gpu_create_sampler__deps: ["$DonnerGpu"],
+  donner_gpu_create_sampler: function(
+    handle,
+    id,
+    magFilterCode,
+    minFilterCode,
+    addressUCode,
+    addressVCode,
+  ) {
     var magFilter = DonnerGpu.filterMode(magFilterCode);
     var minFilter = DonnerGpu.filterMode(minFilterCode);
     var addressU = DonnerGpu.addressMode(addressUCode);
@@ -984,7 +1165,7 @@ var LibraryDonnerGpu = {
     });
   },
 
-  donner_gpu_create_shader_module__deps: ['$DonnerGpu'],
+  donner_gpu_create_shader_module__deps: ["$DonnerGpu"],
   donner_gpu_create_shader_module: function(handle, id, wgsl, byteCount) {
     var code = UTF8ToString(wgsl, byteCount);
     return DonnerGpu.create(DonnerGpu.logicalFor(handle), DonnerGpu.kShaderModule, id, function() {
@@ -992,7 +1173,7 @@ var LibraryDonnerGpu = {
     });
   },
 
-  donner_gpu_destroy_object__deps: ['$DonnerGpu'],
+  donner_gpu_destroy_object__deps: ["$DonnerGpu"],
   donner_gpu_destroy_object: function(handle, kindCode, id) {
     var record = DonnerGpu.logicalFor(handle);
     var released = DonnerGpu.guardRelease(record);
@@ -1020,7 +1201,7 @@ var LibraryDonnerGpu = {
     try {
       if (kindCode === DonnerGpu.kSurface) {
         DonnerGpu.releaseSurface(record, entry.object);
-      } else if (entry.object && typeof entry.object.destroy === 'function') {
+      } else if (entry.object && typeof entry.object.destroy === "function") {
         entry.object.destroy();
       }
     } catch (e) {
@@ -1031,7 +1212,7 @@ var LibraryDonnerGpu = {
 
   // ----- Sharing between logical devices ------------------------------------
 
-  donner_gpu_share_texture__deps: ['$DonnerGpu'],
+  donner_gpu_share_texture__deps: ["$DonnerGpu"],
   donner_gpu_share_texture: function(handle, textureId, shareOut) {
     var record = DonnerGpu.logicalFor(handle);
     var status = DonnerGpu.guard(record);
@@ -1068,7 +1249,7 @@ var LibraryDonnerGpu = {
     return DonnerGpu.kSuccess;
   },
 
-  donner_gpu_register_shared_texture__deps: ['$DonnerGpu'],
+  donner_gpu_register_shared_texture__deps: ["$DonnerGpu"],
   donner_gpu_register_shared_texture: function(handle, id, share) {
     var record = DonnerGpu.logicalFor(handle);
     var status = DonnerGpu.guard(record);
@@ -1088,7 +1269,7 @@ var LibraryDonnerGpu = {
     return registered;
   },
 
-  donner_gpu_release_texture_share__deps: ['$DonnerGpu'],
+  donner_gpu_release_texture_share__deps: ["$DonnerGpu"],
   donner_gpu_release_texture_share: function(handle, share) {
     DonnerGpu.ensureTables();
     var held = DonnerGpu.shares.get(share);
@@ -1119,7 +1300,7 @@ var LibraryDonnerGpu = {
 
   // ----- Bind group layouts, bind groups and pipeline layouts ---------------
 
-  donner_gpu_bind_group_layout_begin__deps: ['$DonnerGpu'],
+  donner_gpu_bind_group_layout_begin__deps: ["$DonnerGpu"],
   donner_gpu_bind_group_layout_begin: function(handle) {
     var record = DonnerGpu.logicalFor(handle);
     var status = DonnerGpu.guard(record);
@@ -1130,9 +1311,14 @@ var LibraryDonnerGpu = {
     return DonnerGpu.kSuccess;
   },
 
-  donner_gpu_bind_group_layout_entry__deps: ['$DonnerGpu'],
-  donner_gpu_bind_group_layout_entry: function(handle, binding, visibilityBits, bindingTypeCode,
-                                               storageTextureFormat) {
+  donner_gpu_bind_group_layout_entry__deps: ["$DonnerGpu"],
+  donner_gpu_bind_group_layout_entry: function(
+    handle,
+    binding,
+    visibilityBits,
+    bindingTypeCode,
+    storageTextureFormat,
+  ) {
     var record = DonnerGpu.logicalFor(handle);
     if (record === null || record.pending === null) {
       return DonnerGpu.kFailed;
@@ -1150,7 +1336,7 @@ var LibraryDonnerGpu = {
     return DonnerGpu.kSuccess;
   },
 
-  donner_gpu_bind_group_layout_finish__deps: ['$DonnerGpu'],
+  donner_gpu_bind_group_layout_finish__deps: ["$DonnerGpu"],
   donner_gpu_bind_group_layout_finish: function(handle, id) {
     var record = DonnerGpu.logicalFor(handle);
     if (record === null || record.pending === null) {
@@ -1163,7 +1349,7 @@ var LibraryDonnerGpu = {
     });
   },
 
-  donner_gpu_bind_group_begin__deps: ['$DonnerGpu'],
+  donner_gpu_bind_group_begin__deps: ["$DonnerGpu"],
   donner_gpu_bind_group_begin: function(handle, layoutId) {
     var record = DonnerGpu.logicalFor(handle);
     var layout = DonnerGpu.lookup(record, DonnerGpu.kBindGroupLayout, layoutId);
@@ -1178,9 +1364,15 @@ var LibraryDonnerGpu = {
     return DonnerGpu.kSuccess;
   },
 
-  donner_gpu_bind_group_entry__deps: ['$DonnerGpu'],
-  donner_gpu_bind_group_entry: function(handle, binding, resourceKindCode, resourceId, offsetBytes,
-                                        sizeBytes) {
+  donner_gpu_bind_group_entry__deps: ["$DonnerGpu"],
+  donner_gpu_bind_group_entry: function(
+    handle,
+    binding,
+    resourceKindCode,
+    resourceId,
+    offsetBytes,
+    sizeBytes,
+  ) {
     var record = DonnerGpu.logicalFor(handle);
     if (record === null || record.pending === null) {
       return DonnerGpu.kFailed;
@@ -1209,7 +1401,7 @@ var LibraryDonnerGpu = {
     return DonnerGpu.kSuccess;
   },
 
-  donner_gpu_bind_group_finish__deps: ['$DonnerGpu'],
+  donner_gpu_bind_group_finish__deps: ["$DonnerGpu"],
   donner_gpu_bind_group_finish: function(handle, id) {
     var record = DonnerGpu.logicalFor(handle);
     if (record === null || record.pending === null) {
@@ -1225,7 +1417,7 @@ var LibraryDonnerGpu = {
     });
   },
 
-  donner_gpu_pipeline_layout_begin__deps: ['$DonnerGpu'],
+  donner_gpu_pipeline_layout_begin__deps: ["$DonnerGpu"],
   donner_gpu_pipeline_layout_begin: function(handle) {
     var record = DonnerGpu.logicalFor(handle);
     var status = DonnerGpu.guard(record);
@@ -1236,7 +1428,7 @@ var LibraryDonnerGpu = {
     return DonnerGpu.kSuccess;
   },
 
-  donner_gpu_pipeline_layout_group__deps: ['$DonnerGpu'],
+  donner_gpu_pipeline_layout_group__deps: ["$DonnerGpu"],
   donner_gpu_pipeline_layout_group: function(handle, bindGroupLayoutId) {
     var record = DonnerGpu.logicalFor(handle);
     if (record === null || record.pending === null) {
@@ -1250,7 +1442,7 @@ var LibraryDonnerGpu = {
     return DonnerGpu.kSuccess;
   },
 
-  donner_gpu_pipeline_layout_finish__deps: ['$DonnerGpu'],
+  donner_gpu_pipeline_layout_finish__deps: ["$DonnerGpu"],
   donner_gpu_pipeline_layout_finish: function(handle, id) {
     var record = DonnerGpu.logicalFor(handle);
     if (record === null || record.pending === null) {
@@ -1265,11 +1457,19 @@ var LibraryDonnerGpu = {
 
   // ----- Pipelines ----------------------------------------------------------
 
-  donner_gpu_render_pipeline_begin__deps: ['$DonnerGpu'],
-  donner_gpu_render_pipeline_begin: function(handle, layoutId, vertexModuleId, vertexEntryPoint,
-                                             vertexEntryPointBytes, fragmentModuleId,
-                                             fragmentEntryPoint, fragmentEntryPointBytes,
-                                             topologyCode, cullModeCode) {
+  donner_gpu_render_pipeline_begin__deps: ["$DonnerGpu"],
+  donner_gpu_render_pipeline_begin: function(
+    handle,
+    layoutId,
+    vertexModuleId,
+    vertexEntryPoint,
+    vertexEntryPointBytes,
+    fragmentModuleId,
+    fragmentEntryPoint,
+    fragmentEntryPointBytes,
+    topologyCode,
+    cullModeCode,
+  ) {
     var record = DonnerGpu.logicalFor(handle);
     var layout = DonnerGpu.lookup(record, DonnerGpu.kPipelineLayout, layoutId);
     if (layout === null) {
@@ -1306,7 +1506,7 @@ var LibraryDonnerGpu = {
     return DonnerGpu.kSuccess;
   },
 
-  donner_gpu_render_pipeline_vertex_buffer__deps: ['$DonnerGpu'],
+  donner_gpu_render_pipeline_vertex_buffer__deps: ["$DonnerGpu"],
   donner_gpu_render_pipeline_vertex_buffer: function(handle, strideBytes, stepModeCode) {
     var record = DonnerGpu.logicalFor(handle);
     var stepMode = DonnerGpu.stepMode(stepModeCode);
@@ -1321,15 +1521,21 @@ var LibraryDonnerGpu = {
     return DonnerGpu.kSuccess;
   },
 
-  donner_gpu_render_pipeline_vertex_attribute__deps: ['$DonnerGpu'],
-  donner_gpu_render_pipeline_vertex_attribute: function(handle, formatCode, offsetBytes,
-                                                        shaderLocation) {
+  donner_gpu_render_pipeline_vertex_attribute__deps: ["$DonnerGpu"],
+  donner_gpu_render_pipeline_vertex_attribute: function(
+    handle,
+    formatCode,
+    offsetBytes,
+    shaderLocation,
+  ) {
     // An attribute belongs to the buffer most recently described; arriving before any buffer means
     // the two sides disagree about the shape being built, which is refused rather than guessed at.
     var record = DonnerGpu.logicalFor(handle);
     var format = DonnerGpu.vertexFormat(formatCode);
-    if (record === null || record.pending === null || record.pending.buffers.length === 0 ||
-        format === null) {
+    if (
+      record === null || record.pending === null || record.pending.buffers.length === 0
+      || format === null
+    ) {
       return DonnerGpu.kFailed;
     }
     record.pending.buffers[record.pending.buffers.length - 1].attributes.push({
@@ -1340,12 +1546,19 @@ var LibraryDonnerGpu = {
     return DonnerGpu.kSuccess;
   },
 
-  donner_gpu_render_pipeline_color_target__deps: ['$DonnerGpu'],
-  donner_gpu_render_pipeline_color_target: function(handle, formatCode, blendEnabled,
-                                                    colorSrcFactor, colorDstFactor,
-                                                    colorOperation, alphaSrcFactor,
-                                                    alphaDstFactor, alphaOperation,
-                                                    writeMaskBits) {
+  donner_gpu_render_pipeline_color_target__deps: ["$DonnerGpu"],
+  donner_gpu_render_pipeline_color_target: function(
+    handle,
+    formatCode,
+    blendEnabled,
+    colorSrcFactor,
+    colorDstFactor,
+    colorOperation,
+    alphaSrcFactor,
+    alphaDstFactor,
+    alphaOperation,
+    writeMaskBits,
+  ) {
     var record = DonnerGpu.logicalFor(handle);
     if (record === null || record.pending === null) {
       return DonnerGpu.kFailed;
@@ -1374,7 +1587,7 @@ var LibraryDonnerGpu = {
     return DonnerGpu.kSuccess;
   },
 
-  donner_gpu_render_pipeline_finish__deps: ['$DonnerGpu'],
+  donner_gpu_render_pipeline_finish__deps: ["$DonnerGpu"],
   donner_gpu_render_pipeline_finish: function(handle, id) {
     var record = DonnerGpu.logicalFor(handle);
     if (record === null || record.pending === null) {
@@ -1400,9 +1613,15 @@ var LibraryDonnerGpu = {
     });
   },
 
-  donner_gpu_create_compute_pipeline__deps: ['$DonnerGpu'],
-  donner_gpu_create_compute_pipeline: function(handle, id, layoutId, moduleId, entryPoint,
-                                               entryPointBytes) {
+  donner_gpu_create_compute_pipeline__deps: ["$DonnerGpu"],
+  donner_gpu_create_compute_pipeline: function(
+    handle,
+    id,
+    layoutId,
+    moduleId,
+    entryPoint,
+    entryPointBytes,
+  ) {
     var record = DonnerGpu.logicalFor(handle);
     var layout = DonnerGpu.lookup(record, DonnerGpu.kPipelineLayout, layoutId);
     if (layout === null) {
@@ -1423,7 +1642,7 @@ var LibraryDonnerGpu = {
 
   // ----- Queue writes -------------------------------------------------------
 
-  donner_gpu_write_buffer__deps: ['$DonnerGpu'],
+  donner_gpu_write_buffer__deps: ["$DonnerGpu"],
   donner_gpu_write_buffer: function(handle, bufferId, offsetBytes, data, byteCount) {
     var record = DonnerGpu.logicalFor(handle);
     var buffer = DonnerGpu.lookup(record, DonnerGpu.kBuffer, bufferId);
@@ -1433,32 +1652,43 @@ var LibraryDonnerGpu = {
     return DonnerGpu.perform(record, function() {
       // The browser copies during writeBuffer, so a view of the wasm heap is safe to hand over
       // even though the heap can move afterwards.
-      DonnerGpu.queue.writeBuffer(buffer, offsetBytes,
-                                  HEAPU8.subarray(data, data + byteCount));
+      DonnerGpu.queue.writeBuffer(buffer, offsetBytes, HEAPU8.subarray(data, data + byteCount));
     });
   },
 
-  donner_gpu_write_texture__deps: ['$DonnerGpu'],
-  donner_gpu_write_texture: function(handle, textureId, data, byteCount, layoutOffsetBytes,
-                                     bytesPerRow, rowsPerImage, destinationX, destinationY, width,
-                                     height) {
+  donner_gpu_write_texture__deps: ["$DonnerGpu"],
+  donner_gpu_write_texture: function(
+    handle,
+    textureId,
+    data,
+    byteCount,
+    layoutOffsetBytes,
+    bytesPerRow,
+    rowsPerImage,
+    destinationX,
+    destinationY,
+    width,
+    height,
+  ) {
     var record = DonnerGpu.logicalFor(handle);
     var texture = DonnerGpu.lookup(record, DonnerGpu.kTexture, textureId);
     if (texture === null) {
       return DonnerGpu.refusalFor(record, DonnerGpu.kTexture, textureId);
     }
     return DonnerGpu.perform(record, function() {
+      DonnerGpu.cpuTextureWrites += 1;
       DonnerGpu.queue.writeTexture(
         { texture: texture, origin: { x: destinationX, y: destinationY, z: 0 } },
         HEAPU8.subarray(data, data + byteCount),
         { offset: layoutOffsetBytes, bytesPerRow: bytesPerRow, rowsPerImage: rowsPerImage },
-        { width: width, height: height, depthOrArrayLayers: 1 });
+        { width: width, height: height, depthOrArrayLayers: 1 },
+      );
     });
   },
 
   // ----- Command recording --------------------------------------------------
 
-  donner_gpu_begin_command_buffer__deps: ['$DonnerGpu'],
+  donner_gpu_begin_command_buffer__deps: ["$DonnerGpu"],
   donner_gpu_begin_command_buffer: function(handle, submissionSerial, commandBufferIndex) {
     // A later buffer must continue the submission the first one opened, and the two halves must
     // agree on how many buffers have been finished under it; anything else means they disagree
@@ -1467,9 +1697,11 @@ var LibraryDonnerGpu = {
     if (record === null) {
       return DonnerGpu.kNotOwner;
     }
-    if (commandBufferIndex !== 0 &&
-        (record.recordingSerial !== submissionSerial || record.recordedBuffers === null ||
-         record.recordedBuffers.length !== commandBufferIndex)) {
+    if (
+      commandBufferIndex !== 0
+      && (record.recordingSerial !== submissionSerial || record.recordedBuffers === null
+        || record.recordedBuffers.length !== commandBufferIndex)
+    ) {
       return DonnerGpu.kFailed;
     }
     return DonnerGpu.perform(record, function() {
@@ -1491,7 +1723,7 @@ var LibraryDonnerGpu = {
     });
   },
 
-  donner_gpu_begin_render_pass__deps: ['$DonnerGpu'],
+  donner_gpu_begin_render_pass__deps: ["$DonnerGpu"],
   donner_gpu_begin_render_pass: function(handle) {
     var record = DonnerGpu.logicalFor(handle);
     if (record === null || record.encoder === null) {
@@ -1505,9 +1737,17 @@ var LibraryDonnerGpu = {
     return DonnerGpu.kSuccess;
   },
 
-  donner_gpu_render_pass_attachment__deps: ['$DonnerGpu'],
-  donner_gpu_render_pass_attachment: function(handle, viewId, loadOpCode, storeOpCode, clearRed,
-                                              clearGreen, clearBlue, clearAlpha) {
+  donner_gpu_render_pass_attachment__deps: ["$DonnerGpu"],
+  donner_gpu_render_pass_attachment: function(
+    handle,
+    viewId,
+    loadOpCode,
+    storeOpCode,
+    clearRed,
+    clearGreen,
+    clearBlue,
+    clearAlpha,
+  ) {
     var record = DonnerGpu.logicalFor(handle);
     if (record === null || record.attachments === null) {
       return DonnerGpu.kFailed;
@@ -1530,7 +1770,7 @@ var LibraryDonnerGpu = {
     return DonnerGpu.kSuccess;
   },
 
-  donner_gpu_begin_render_pass_finish__deps: ['$DonnerGpu'],
+  donner_gpu_begin_render_pass_finish__deps: ["$DonnerGpu"],
   donner_gpu_begin_render_pass_finish: function(handle) {
     var record = DonnerGpu.logicalFor(handle);
     if (record === null) {
@@ -1546,7 +1786,7 @@ var LibraryDonnerGpu = {
     });
   },
 
-  donner_gpu_end_render_pass__deps: ['$DonnerGpu'],
+  donner_gpu_end_render_pass__deps: ["$DonnerGpu"],
   donner_gpu_end_render_pass: function(handle) {
     var record = DonnerGpu.logicalFor(handle);
     if (record === null || record.pass === null) {
@@ -1558,7 +1798,7 @@ var LibraryDonnerGpu = {
     });
   },
 
-  donner_gpu_begin_compute_pass__deps: ['$DonnerGpu'],
+  donner_gpu_begin_compute_pass__deps: ["$DonnerGpu"],
   donner_gpu_begin_compute_pass: function(handle) {
     var record = DonnerGpu.logicalFor(handle);
     if (record === null || record.encoder === null) {
@@ -1569,7 +1809,7 @@ var LibraryDonnerGpu = {
     });
   },
 
-  donner_gpu_end_compute_pass__deps: ['$DonnerGpu'],
+  donner_gpu_end_compute_pass__deps: ["$DonnerGpu"],
   donner_gpu_end_compute_pass: function(handle) {
     var record = DonnerGpu.logicalFor(handle);
     if (record === null || record.pass === null) {
@@ -1581,7 +1821,7 @@ var LibraryDonnerGpu = {
     });
   },
 
-  donner_gpu_set_render_pipeline__deps: ['$DonnerGpu'],
+  donner_gpu_set_render_pipeline__deps: ["$DonnerGpu"],
   donner_gpu_set_render_pipeline: function(handle, pipelineId) {
     var record = DonnerGpu.logicalFor(handle);
     var pipeline = DonnerGpu.lookup(record, DonnerGpu.kRenderPipeline, pipelineId);
@@ -1591,10 +1831,12 @@ var LibraryDonnerGpu = {
     if (record.pass === null) {
       return DonnerGpu.kFailed;
     }
-    return DonnerGpu.perform(record, function() { record.pass.setPipeline(pipeline); });
+    return DonnerGpu.perform(record, function() {
+      record.pass.setPipeline(pipeline);
+    });
   },
 
-  donner_gpu_set_compute_pipeline__deps: ['$DonnerGpu'],
+  donner_gpu_set_compute_pipeline__deps: ["$DonnerGpu"],
   donner_gpu_set_compute_pipeline: function(handle, pipelineId) {
     var record = DonnerGpu.logicalFor(handle);
     var pipeline = DonnerGpu.lookup(record, DonnerGpu.kComputePipeline, pipelineId);
@@ -1604,10 +1846,12 @@ var LibraryDonnerGpu = {
     if (record.pass === null) {
       return DonnerGpu.kFailed;
     }
-    return DonnerGpu.perform(record, function() { record.pass.setPipeline(pipeline); });
+    return DonnerGpu.perform(record, function() {
+      record.pass.setPipeline(pipeline);
+    });
   },
 
-  donner_gpu_set_bind_group__deps: ['$DonnerGpu'],
+  donner_gpu_set_bind_group__deps: ["$DonnerGpu"],
   donner_gpu_set_bind_group: function(handle, index, bindGroupId) {
     var record = DonnerGpu.logicalFor(handle);
     var bindGroup = DonnerGpu.lookup(record, DonnerGpu.kBindGroup, bindGroupId);
@@ -1617,10 +1861,12 @@ var LibraryDonnerGpu = {
     if (record.pass === null) {
       return DonnerGpu.kFailed;
     }
-    return DonnerGpu.perform(record, function() { record.pass.setBindGroup(index, bindGroup); });
+    return DonnerGpu.perform(record, function() {
+      record.pass.setBindGroup(index, bindGroup);
+    });
   },
 
-  donner_gpu_set_vertex_buffer__deps: ['$DonnerGpu'],
+  donner_gpu_set_vertex_buffer__deps: ["$DonnerGpu"],
   donner_gpu_set_vertex_buffer: function(handle, slot, bufferId, offsetBytes) {
     var record = DonnerGpu.logicalFor(handle);
     var buffer = DonnerGpu.lookup(record, DonnerGpu.kBuffer, bufferId);
@@ -1635,7 +1881,7 @@ var LibraryDonnerGpu = {
     });
   },
 
-  donner_gpu_set_index_buffer__deps: ['$DonnerGpu'],
+  donner_gpu_set_index_buffer__deps: ["$DonnerGpu"],
   donner_gpu_set_index_buffer: function(handle, bufferId, indexFormatCode, offsetBytes) {
     var record = DonnerGpu.logicalFor(handle);
     var buffer = DonnerGpu.lookup(record, DonnerGpu.kBuffer, bufferId);
@@ -1651,7 +1897,7 @@ var LibraryDonnerGpu = {
     });
   },
 
-  donner_gpu_set_scissor_rect__deps: ['$DonnerGpu'],
+  donner_gpu_set_scissor_rect__deps: ["$DonnerGpu"],
   donner_gpu_set_scissor_rect: function(handle, x, y, width, height) {
     var record = DonnerGpu.logicalFor(handle);
     if (record === null || record.pass === null) {
@@ -1662,7 +1908,7 @@ var LibraryDonnerGpu = {
     });
   },
 
-  donner_gpu_set_viewport__deps: ['$DonnerGpu'],
+  donner_gpu_set_viewport__deps: ["$DonnerGpu"],
   donner_gpu_set_viewport: function(handle, x, y, width, height, minDepth, maxDepth) {
     var record = DonnerGpu.logicalFor(handle);
     if (record === null || record.pass === null) {
@@ -1673,7 +1919,7 @@ var LibraryDonnerGpu = {
     });
   },
 
-  donner_gpu_draw__deps: ['$DonnerGpu'],
+  donner_gpu_draw__deps: ["$DonnerGpu"],
   donner_gpu_draw: function(handle, vertexCount, instanceCount, firstVertex, firstInstance) {
     var record = DonnerGpu.logicalFor(handle);
     if (record === null || record.pass === null) {
@@ -1684,9 +1930,15 @@ var LibraryDonnerGpu = {
     });
   },
 
-  donner_gpu_draw_indexed__deps: ['$DonnerGpu'],
-  donner_gpu_draw_indexed: function(handle, indexCount, instanceCount, firstIndex, baseVertex,
-                                    firstInstance) {
+  donner_gpu_draw_indexed__deps: ["$DonnerGpu"],
+  donner_gpu_draw_indexed: function(
+    handle,
+    indexCount,
+    instanceCount,
+    firstIndex,
+    baseVertex,
+    firstInstance,
+  ) {
     var record = DonnerGpu.logicalFor(handle);
     if (record === null || record.pass === null) {
       return DonnerGpu.kFailed;
@@ -1696,7 +1948,7 @@ var LibraryDonnerGpu = {
     });
   },
 
-  donner_gpu_dispatch_workgroups__deps: ['$DonnerGpu'],
+  donner_gpu_dispatch_workgroups__deps: ["$DonnerGpu"],
   donner_gpu_dispatch_workgroups: function(handle, countX, countY, countZ) {
     var record = DonnerGpu.logicalFor(handle);
     if (record === null || record.pass === null) {
@@ -1707,9 +1959,17 @@ var LibraryDonnerGpu = {
     });
   },
 
-  donner_gpu_copy_texture_to_buffer__deps: ['$DonnerGpu'],
-  donner_gpu_copy_texture_to_buffer: function(handle, textureId, bufferId, layoutOffsetBytes,
-                                              bytesPerRow, rowsPerImage, width, height) {
+  donner_gpu_copy_texture_to_buffer__deps: ["$DonnerGpu"],
+  donner_gpu_copy_texture_to_buffer: function(
+    handle,
+    textureId,
+    bufferId,
+    layoutOffsetBytes,
+    bytesPerRow,
+    rowsPerImage,
+    width,
+    height,
+  ) {
     var record = DonnerGpu.logicalFor(handle);
     var texture = DonnerGpu.lookup(record, DonnerGpu.kTexture, textureId);
     if (texture === null) {
@@ -1723,18 +1983,32 @@ var LibraryDonnerGpu = {
       return DonnerGpu.kFailed;
     }
     return DonnerGpu.perform(record, function() {
+      DonnerGpu.readbackCopies += 1;
       record.encoder.copyTextureToBuffer(
         { texture: texture },
-        { buffer: buffer, offset: layoutOffsetBytes, bytesPerRow: bytesPerRow,
-          rowsPerImage: rowsPerImage },
-        { width: width, height: height, depthOrArrayLayers: 1 });
+        {
+          buffer: buffer,
+          offset: layoutOffsetBytes,
+          bytesPerRow: bytesPerRow,
+          rowsPerImage: rowsPerImage,
+        },
+        { width: width, height: height, depthOrArrayLayers: 1 },
+      );
     });
   },
 
-  donner_gpu_copy_texture_to_texture__deps: ['$DonnerGpu'],
-  donner_gpu_copy_texture_to_texture: function(handle, sourceTextureId, destinationTextureId,
-                                               sourceX, sourceY, destinationX, destinationY,
-                                               width, height) {
+  donner_gpu_copy_texture_to_texture__deps: ["$DonnerGpu"],
+  donner_gpu_copy_texture_to_texture: function(
+    handle,
+    sourceTextureId,
+    destinationTextureId,
+    sourceX,
+    sourceY,
+    destinationX,
+    destinationY,
+    width,
+    height,
+  ) {
     var record = DonnerGpu.logicalFor(handle);
     var source = DonnerGpu.lookup(record, DonnerGpu.kTexture, sourceTextureId);
     if (source === null) {
@@ -1751,17 +2025,20 @@ var LibraryDonnerGpu = {
       record.encoder.copyTextureToTexture(
         { texture: source, origin: { x: sourceX, y: sourceY, z: 0 } },
         { texture: destination, origin: { x: destinationX, y: destinationY, z: 0 } },
-        { width: width, height: height, depthOrArrayLayers: 1 });
+        { width: width, height: height, depthOrArrayLayers: 1 },
+      );
     });
   },
 
-  donner_gpu_end_command_buffer__deps: ['$DonnerGpu'],
+  donner_gpu_end_command_buffer__deps: ["$DonnerGpu"],
   donner_gpu_end_command_buffer: function(handle, submissionSerial) {
     // The serial that opened the recording is the one that must close it. A mismatch means the two
     // halves disagree about which submission this encoder belongs to, so nothing is kept.
     var record = DonnerGpu.logicalFor(handle);
-    if (record === null || record.encoder === null ||
-        record.recordingSerial !== submissionSerial) {
+    if (
+      record === null || record.encoder === null
+      || record.recordingSerial !== submissionSerial
+    ) {
       return DonnerGpu.kFailed;
     }
     return DonnerGpu.perform(record, function() {
@@ -1771,15 +2048,17 @@ var LibraryDonnerGpu = {
     });
   },
 
-  donner_gpu_submit_command_buffers__deps: ['$DonnerGpu'],
+  donner_gpu_submit_command_buffers__deps: ["$DonnerGpu"],
   donner_gpu_submit_command_buffers: function(handle, submissionSerial) {
     // Every buffer of this submission must be finished and belong to this serial: an open encoder
     // or a serial that never opened one means the two halves disagree about what is being
     // submitted, and a submission with no buffers names no work to complete.
     var record = DonnerGpu.logicalFor(handle);
-    if (record === null || record.encoder !== null ||
-        record.recordingSerial !== submissionSerial || record.recordedBuffers === null ||
-        record.recordedBuffers.length === 0) {
+    if (
+      record === null || record.encoder !== null
+      || record.recordingSerial !== submissionSerial || record.recordedBuffers === null
+      || record.recordedBuffers.length === 0
+    ) {
       return DonnerGpu.kFailed;
     }
     return DonnerGpu.perform(record, function() {
@@ -1805,7 +2084,7 @@ var LibraryDonnerGpu = {
 
   // ----- Host mapping -------------------------------------------------------
 
-  donner_gpu_map_buffer_async__deps: ['$DonnerGpu'],
+  donner_gpu_map_buffer_async__deps: ["$DonnerGpu"],
   donner_gpu_map_buffer_async: function(handle, mappingId, bufferId, offsetBytes, byteCount) {
     var record = DonnerGpu.logicalFor(handle);
     var buffer = DonnerGpu.lookup(record, DonnerGpu.kBuffer, bufferId);
@@ -1843,7 +2122,7 @@ var LibraryDonnerGpu = {
     return DonnerGpu.kSuccess;
   },
 
-  donner_gpu_mapping_state__deps: ['$DonnerGpu'],
+  donner_gpu_mapping_state__deps: ["$DonnerGpu"],
   donner_gpu_mapping_state: function(handle, mappingId) {
     var record = DonnerGpu.logicalFor(handle);
     if (record === null) {
@@ -1858,7 +2137,7 @@ var LibraryDonnerGpu = {
     return mapping === undefined ? DonnerGpu.kMapFailed : mapping.state;
   },
 
-  donner_gpu_request_mapping_progress__deps: ['$DonnerGpu'],
+  donner_gpu_request_mapping_progress__deps: ["$DonnerGpu"],
   donner_gpu_request_mapping_progress: function(handle, mappingId) {
     var record = DonnerGpu.logicalFor(handle);
     var status = DonnerGpu.guard(record);
@@ -1874,7 +2153,7 @@ var LibraryDonnerGpu = {
     });
   },
 
-  donner_gpu_copy_mapped_bytes__deps: ['$DonnerGpu'],
+  donner_gpu_copy_mapped_bytes__deps: ["$DonnerGpu"],
   donner_gpu_copy_mapped_bytes: function(handle, mappingId, destination, byteCount) {
     var record = DonnerGpu.logicalFor(handle);
     if (record === null) {
@@ -1885,15 +2164,17 @@ var LibraryDonnerGpu = {
       var refusal = DonnerGpu.refusalFor(record, DonnerGpu.kBufferMapping, mappingId);
       return refusal === DonnerGpu.kSuccess ? DonnerGpu.kFailed : refusal;
     }
-    if (mapping.state !== DonnerGpu.kMapReady || mapping.view === null ||
-        mapping.view.length < byteCount) {
+    if (
+      mapping.state !== DonnerGpu.kMapReady || mapping.view === null
+      || mapping.view.length < byteCount
+    ) {
       return DonnerGpu.kFailed;
     }
     HEAPU8.set(mapping.view.subarray(0, byteCount), destination);
     return DonnerGpu.kSuccess;
   },
 
-  donner_gpu_unmap_buffer__deps: ['$DonnerGpu'],
+  donner_gpu_unmap_buffer__deps: ["$DonnerGpu"],
   donner_gpu_unmap_buffer: function(handle, mappingId) {
     var record = DonnerGpu.logicalFor(handle);
     var released = DonnerGpu.guardRelease(record);
@@ -1923,7 +2204,7 @@ var LibraryDonnerGpu = {
 
   // ----- Presentation -------------------------------------------------------
 
-  donner_gpu_create_surface__deps: ['$DonnerGpu'],
+  donner_gpu_create_surface__deps: ["$DonnerGpu"],
   donner_gpu_create_surface: function(handle, id, canvasSelector, selectorBytes) {
     var selector = UTF8ToString(canvasSelector, selectorBytes);
     return DonnerGpu.create(DonnerGpu.logicalFor(handle), DonnerGpu.kSurface, id, function() {
@@ -1931,16 +2212,16 @@ var LibraryDonnerGpu = {
       if (!canvas) {
         return null;
       }
-      var context = canvas.getContext('webgpu');
+      var context = canvas.getContext("webgpu");
       if (!context) {
         return null;
       }
-      globalThis['__donnerApplicationGpuSurfaceWorker'] = true;
+      globalThis["__donnerApplicationGpuSurfaceWorker"] = true;
       return { canvas: canvas, context: context, frame: null };
     });
   },
 
-  donner_gpu_surface_capabilities__deps: ['$DonnerGpu'],
+  donner_gpu_surface_capabilities__deps: ["$DonnerGpu"],
   donner_gpu_surface_capabilities: function(handle, surfaceId, preferredFormatCode, usageBits) {
     var record = DonnerGpu.logicalFor(handle);
     var surface = DonnerGpu.lookup(record, DonnerGpu.kSurface, surfaceId);
@@ -1956,7 +2237,7 @@ var LibraryDonnerGpu = {
     });
   },
 
-  donner_gpu_surface_supports_alpha_mode__deps: ['$DonnerGpu'],
+  donner_gpu_surface_supports_alpha_mode__deps: ["$DonnerGpu"],
   donner_gpu_surface_supports_alpha_mode: function(handle, surfaceId, alphaModeCode, supported) {
     var record = DonnerGpu.logicalFor(handle);
     var surface = DonnerGpu.lookup(record, DonnerGpu.kSurface, surfaceId);
@@ -1971,9 +2252,16 @@ var LibraryDonnerGpu = {
     });
   },
 
-  donner_gpu_configure_surface__deps: ['$DonnerGpu'],
-  donner_gpu_configure_surface: function(handle, surfaceId, formatCode, usageBits, width, height,
-                                         alphaModeCode) {
+  donner_gpu_configure_surface__deps: ["$DonnerGpu"],
+  donner_gpu_configure_surface: function(
+    handle,
+    surfaceId,
+    formatCode,
+    usageBits,
+    width,
+    height,
+    alphaModeCode,
+  ) {
     var record = DonnerGpu.logicalFor(handle);
     var surface = DonnerGpu.lookup(record, DonnerGpu.kSurface, surfaceId);
     if (surface === null) {
@@ -1997,7 +2285,7 @@ var LibraryDonnerGpu = {
     });
   },
 
-  donner_gpu_acquire_current_texture__deps: ['$DonnerGpu'],
+  donner_gpu_acquire_current_texture__deps: ["$DonnerGpu"],
   donner_gpu_acquire_current_texture: function(handle, surfaceId, textureId, surfaceStatusCode) {
     var record = DonnerGpu.logicalFor(handle);
     var surface = DonnerGpu.lookup(record, DonnerGpu.kSurface, surfaceId);
@@ -2038,7 +2326,24 @@ var LibraryDonnerGpu = {
     return DonnerGpu.kSuccess;
   },
 
-  donner_gpu_abandon_current_texture__deps: ['$DonnerGpu'],
+  donner_gpu_present_surface__deps: ["$DonnerGpu"],
+  donner_gpu_present_surface: function(handle, surfaceId, surfaceStatusCode) {
+    var record = DonnerGpu.logicalFor(handle);
+    var surface = DonnerGpu.lookup(record, DonnerGpu.kSurface, surfaceId);
+    if (surface === null) {
+      return DonnerGpu.refusalFor(record, DonnerGpu.kSurface, surfaceId);
+    }
+    var status = DonnerGpu.guard(record);
+    if (status !== DonnerGpu.kSuccess) return status;
+    if (surface.frame === null) return DonnerGpu.kFailed;
+    // Canvas textures present implicitly when this application frame returns to the browser.
+    DonnerGpu.releaseFrame(record, surface);
+    DonnerGpu.surfacePresents += 1;
+    HEAPU32[surfaceStatusCode >> 2] = DonnerGpu.kSurfaceSuccess;
+    return DonnerGpu.kSuccess;
+  },
+
+  donner_gpu_abandon_current_texture__deps: ["$DonnerGpu"],
   donner_gpu_abandon_current_texture: function(handle, surfaceId) {
     var record = DonnerGpu.logicalFor(handle);
     var released = DonnerGpu.guardRelease(record);
