@@ -462,6 +462,7 @@ objc_library(
     deps = [
         ":metal_device_gate",
         "//donner/gpu",
+        "//donner/gpu:gpu_limits",
         "//donner/gpu:gpu_test_utils",
         "//donner/gpu/metal:metal_device",
         "@com_google_gtest//:gtest",
