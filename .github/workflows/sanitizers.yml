@@ -58,9 +58,11 @@ jobs:
     runs-on: ubuntu-24.04
     needs: gatekeeper
     if: needs.gatekeeper.outputs.should_run == 'true'
-    # A cold sanitizer build plus the full sharded suite has exceeded 60 minutes while still
-    # making forward progress. Keep the test command bounded without truncating its results.
-    timeout-minutes: 120
+    # Budget: this job is an uncached full build, and its time appears to track hosted-runner
+    # speed; test steps have taken about 68 to 120 minutes. Building only the tests that run under
+    # the sanitizer saves an estimated 11 to 15 minutes, and 135 leaves headroom for a slow
+    # runner. If a nightly approaches this limit, cut work or restore caching; do not raise it.
+    timeout-minutes: 135
     steps:
       - name: Checkout
         uses: actions/checkout@v7
