@@ -102,10 +102,14 @@ jobs:
           # Tag filters replace the .bazelrc default rather than adding to it, so repeat its
           # ci-remote-gpu exclusion: those remote-lane wrappers rerun the executable and tests of a
           # local twin that this lane already selects.
+          # Build only the selected tests and their dependencies. Non-test targets never execute
+          # here, so building them again under the sanitizer adds compile time but no sanitizer
+          # signal; the normal CI lanes keep building them.
           python3 tools/ci/test_with_exclusions.py --exclude-suite //tools/ci:asan_exclusions -- \
             bazelisk test \
             --config=asan \
             --test_output=errors \
+            --build_tests_only \
             --test_tag_filters=-fuzz_target,-ci-remote-gpu \
             --build_tag_filters=-fuzz_target,-ci-remote-gpu \
             -- \
@@ -116,6 +120,7 @@ jobs:
             --config=asan \
             --test_output=errors \
             --test_env=ASAN_OPTIONS=detect_leaks=0 \
+            --build_tests_only \
             --test_tag_filters=-fuzz_target,-ci-remote-gpu \
             --build_tag_filters=-fuzz_target,-ci-remote-gpu \
             //donner/svg/renderer/geode/... \
@@ -171,10 +176,14 @@ jobs:
           # Tag filters replace the .bazelrc default rather than adding to it, so repeat its
           # ci-remote-gpu exclusion: those remote-lane wrappers rerun the executable and tests of a
           # local twin that this lane already selects.
+          # Build only the selected tests and their dependencies. Non-test targets never execute
+          # here, so building them again under the sanitizer adds compile time but no sanitizer
+          # signal; the normal CI lanes keep building them.
           python3 tools/ci/test_with_exclusions.py --exclude-suite //tools/ci:sanitizer_allocator_exclusions -- \
             bazelisk test \
             --config=ubsan \
             --test_output=errors \
+            --build_tests_only \
             --test_tag_filters=-fuzz_target,-ci-remote-gpu \
             --build_tag_filters=-fuzz_target,-ci-remote-gpu \
             -- \
