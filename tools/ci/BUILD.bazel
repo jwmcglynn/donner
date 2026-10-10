@@ -145,12 +145,33 @@ test_suite(
     ],
 )
 
+# The package check reads the files of the packaged WebAssembly editor and never runs its code. In a
+# sanitizer lane it forces a sanitizer-flagged Emscripten build of the whole editor that nothing
+# executes. Main CI runs the full test, including its native versus deferred notice comparison, in
+# the normal configuration. The Editor WASM workflow also runs the validator on its staged
+# deployment candidate, without the notice comparison.
+test_suite(
+    name = "sanitizer_wasm_package_exclusions",
+    tags = ["manual"],
+    tests = ["//donner/editor/wasm:catalog_package_integrity_test"],
+)
+
+test_suite(
+    name = "ubsan_exclusions",
+    tags = ["manual"],
+    tests = [
+        ":sanitizer_allocator_exclusions",
+        ":sanitizer_wasm_package_exclusions",
+    ],
+)
+
 test_suite(
     name = "asan_exclusions",
     tags = ["manual"],
     tests = [
         ":asan_no_leak_tests",
         ":sanitizer_allocator_exclusions",
+        ":sanitizer_wasm_package_exclusions",
         "//donner/editor/tests:gl_rnr_replay_tests",
     ],
 )
