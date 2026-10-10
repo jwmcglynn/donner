@@ -99,12 +99,15 @@ jobs:
           # Allocation-tracker binaries replace the sanitizer allocator; keep them in normal lanes.
           # Native Geode tests use raw non-owning webgpu.hpp handles in their harnesses, so run that
           # package separately with leak detection disabled while retaining ASan memory-safety checks.
+          # Tag filters replace the .bazelrc default rather than adding to it, so repeat its
+          # ci-remote-gpu exclusion: those remote-lane wrappers rerun the executable and tests of a
+          # local twin that this lane already selects.
           python3 tools/ci/test_with_exclusions.py --exclude-suite //tools/ci:asan_exclusions -- \
             bazelisk test \
             --config=asan \
             --test_output=errors \
-            --test_tag_filters=-fuzz_target \
-            --build_tag_filters=-fuzz_target \
+            --test_tag_filters=-fuzz_target,-ci-remote-gpu \
+            --build_tag_filters=-fuzz_target,-ci-remote-gpu \
             -- \
             //donner/... \
             -//donner/svg/renderer/geode/...
@@ -113,8 +116,8 @@ jobs:
             --config=asan \
             --test_output=errors \
             --test_env=ASAN_OPTIONS=detect_leaks=0 \
-            --test_tag_filters=-fuzz_target \
-            --build_tag_filters=-fuzz_target \
+            --test_tag_filters=-fuzz_target,-ci-remote-gpu \
+            --build_tag_filters=-fuzz_target,-ci-remote-gpu \
             //donner/svg/renderer/geode/... \
             //tools/ci:asan_no_leak_tests
 
@@ -165,12 +168,15 @@ jobs:
           # The scheduled Fuzz workflow owns exploratory mutation under ASan. Keep the broad unit and
           # integration sweep here separate from deterministic corpus replay below.
           # Allocation-tracker binaries replace the sanitizer allocator; keep them in normal lanes.
+          # Tag filters replace the .bazelrc default rather than adding to it, so repeat its
+          # ci-remote-gpu exclusion: those remote-lane wrappers rerun the executable and tests of a
+          # local twin that this lane already selects.
           python3 tools/ci/test_with_exclusions.py --exclude-suite //tools/ci:sanitizer_allocator_exclusions -- \
             bazelisk test \
             --config=ubsan \
             --test_output=errors \
-            --test_tag_filters=-fuzz_target \
-            --build_tag_filters=-fuzz_target \
+            --test_tag_filters=-fuzz_target,-ci-remote-gpu \
+            --build_tag_filters=-fuzz_target,-ci-remote-gpu \
             -- \
             //donner/...
 
