@@ -2742,7 +2742,7 @@ TEST(RendererPublicApiTest, RotatedMaskRegionClipsInLocalCoordinatesAndRestoresS
   Renderer renderer;
   renderer.draw(document);
   const RendererBitmap snapshot = NormalizeSnapshot(renderer.takeSnapshot());
-  ASSERT_FALSE(snapshot.empty());
+  ASSERT_THAT(snapshot.empty(), testing::IsFalse());
   EXPECT_THAT(PixelAt(snapshot, 5, 5), ElementsAre(0, 128, 0, 255));
   EXPECT_THAT(PixelAt(snapshot, 11, 11), IsTransparent());
   EXPECT_THAT(PixelAt(snapshot, 22, 8), ElementsAre(0, 0, 255, 255));
@@ -2771,7 +2771,7 @@ TEST(RendererPublicApiTest, RotatedMaskRegionPreservesNestedMasksAndParentClips)
   Renderer renderer;
   renderer.draw(document);
   const RendererBitmap snapshot = NormalizeSnapshot(renderer.takeSnapshot());
-  ASSERT_FALSE(snapshot.empty());
+  ASSERT_THAT(snapshot.empty(), testing::IsFalse());
   EXPECT_THAT(PixelAt(snapshot, 5, 5), ElementsAre(0, 128, 0, 255));
   EXPECT_THAT(PixelAt(snapshot, 3, 9), IsTransparent());
   EXPECT_THAT(PixelAt(snapshot, 11, 11), IsTransparent());
@@ -2795,7 +2795,7 @@ TEST(RendererPublicApiTest, RotatedMaskRegionClipsBitmapMaskContent) {
   Renderer renderer;
   renderer.draw(document);
   const RendererBitmap snapshot = NormalizeSnapshot(renderer.takeSnapshot());
-  ASSERT_FALSE(snapshot.empty());
+  ASSERT_THAT(snapshot.empty(), testing::IsFalse());
   EXPECT_THAT(PixelAt(snapshot, 5, 5), ElementsAre(0, 128, 0, 255));
   EXPECT_THAT(PixelAt(snapshot, 11, 11), IsTransparent());
 }
