@@ -5,6 +5,7 @@
 
 #include "donner/base/tests/BaseTestUtils.h"
 #include "donner/svg/SVGLinearGradientElement.h"
+#include "donner/svg/properties/PropertyRegistry.h"
 #include "donner/svg/tests/ParserTestUtils.h"
 
 using testing::DoubleNear;
@@ -186,6 +187,20 @@ TEST(SVGStopElementTests, InlineColorReplacementPreservesAttributeFallback) {
   EXPECT_THAT(stop->computedStopColor(), css::Color(css::RGBA(0, 255, 0, 255)));
   stop->removeAttribute("style");
   EXPECT_THAT(stop->computedStopColor(), css::Color(css::RGBA(255, 0, 0, 255)));
+}
+
+TEST(SVGStopElementTests, SpecifiedResourceColorsFollowInlineMutations) {
+  auto stop = instantiateSubtreeElementAs<SVGStopElement>(
+      R"(<stop stop-color="red" style="stop-color: blue !important"/>)");
+  ASSERT_THAT(stop->specifiedStyle(), testing::NotNull());
+  EXPECT_THAT(stop->specifiedStyle()->stopColor.get(),
+              testing::Optional(css::Color(css::RGBA(0, 0, 255, 255))));
+  stop->setAttribute("stop-color", "lime");
+  EXPECT_THAT(stop->specifiedStyle()->stopColor.get(),
+              testing::Optional(css::Color(css::RGBA(0, 0, 255, 255))));
+  stop->removeAttribute("style");
+  EXPECT_THAT(stop->specifiedStyle()->stopColor.get(),
+              testing::Optional(css::Color(css::RGBA(0, 255, 0, 255))));
 }
 
 TEST(SVGStopElementTests, ComputedStopOpacity) {

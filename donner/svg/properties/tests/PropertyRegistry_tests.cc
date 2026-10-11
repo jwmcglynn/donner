@@ -2137,6 +2137,42 @@ TEST(PropertyRegistry, BaselineShiftSpacingAndDasharray) {
   }
 }
 
+TEST(PropertyRegistry, ResourceColorStyleParsingExposesTypedValues) {
+  PropertyRegistry registry;
+  registry.parseStyle("flood-color: red; stop-color: lime");
+  EXPECT_THAT(registry.floodColor.get(), Optional(Color(RGBA(255, 0, 0, 255))));
+  EXPECT_THAT(registry.stopColor.get(), Optional(Color(RGBA(0, 255, 0, 255))));
+}
+
+TEST(PropertyRegistry, ResourceColorInlineStylesPreserveAttributeUpdatesAndClearing) {
+  PropertyRegistry registry;
+  EXPECT_THAT(registry.parsePresentationAttribute("stop-color", "red"), ParseResultIs(true));
+  registry.parseStyle("stop-color: blue !important");
+  EXPECT_THAT(registry.stopColor.get(), Optional(Color(RGBA(0, 0, 255, 255))));
+  EXPECT_THAT(registry.parsePresentationAttribute("stop-color", "lime"), ParseResultIs(true));
+  EXPECT_THAT(registry.stopColor.get(), Optional(Color(RGBA(0, 0, 255, 255))));
+  registry.clearStyleAttributeProperties();
+  EXPECT_THAT(registry.stopColor.get(), Optional(Color(RGBA(0, 255, 0, 255))));
+
+  registry.parseStyle("stop-color: red");
+  const css::Declaration declaration =
+      css::CSS::ParseStyleAttribute("stop-color: blue !important").front();
+  EXPECT_THAT(registry.parseProperty(declaration, Specificity::FromABC(1, 0, 0)), Eq(std::nullopt));
+  EXPECT_THAT(registry.stopColor.get(), Optional(Color(RGBA(0, 0, 255, 255))));
+  registry.clearStyleAttributeProperties();
+  EXPECT_THAT(registry.stopColor.get(), Optional(Color(RGBA(0, 0, 255, 255))));
+}
+
+TEST(PropertyRegistry, ResourceColorInlineStylesKeepExplicitOverrides) {
+  PropertyRegistry registry;
+  registry.stopColor.set(Color(RGBA(255, 255, 255, 255)), Specificity::Override());
+  registry.parseStyle("stop-color: blue !important");
+  EXPECT_THAT(registry.stopColor.get(), Optional(Color(RGBA(255, 255, 255, 255))));
+  registry.stopColor.set(Color(RGBA(0, 255, 0, 255)), Specificity::Override());
+  registry.clearStyleAttributeProperties();
+  EXPECT_THAT(registry.stopColor.get(), Optional(Color(RGBA(0, 255, 0, 255))));
+}
+
 TEST(PropertyRegistry, FilterParsing) {
   {
     PropertyRegistry registry;
