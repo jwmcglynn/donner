@@ -32,6 +32,7 @@
 #include <vector>
 
 #include "donner/css/Color.h"
+#include "donner/editor/EditorCommand.h"
 #include "donner/editor/EditorSampleCatalog.h"
 #include "donner/editor/EditorShellInternal.h"
 #include "donner/editor/EditorShellPresentation.h"
@@ -44,6 +45,7 @@
 #include "donner/editor/tests/BitmapGoldenCompare.h"
 #include "donner/editor/tests/RenderCoordinatorTestAccess.h"
 #include "donner/svg/SVGGeometryElement.h"
+#include "donner/svg/SVGRectElement.h"
 #include "donner/svg/renderer/Renderer.h"
 #include "donner/svg/renderer/RendererImageIO.h"
 #ifdef DONNER_EDITOR_WGPU
@@ -8009,5 +8011,234 @@ TEST(EditorShellTest, EyedropperSamplesDonnerTextAndShowsEdgeLoupe) {
         return std::string(originalDonner->cast<svg::SVGTextElement>().textContent());
       });
   EXPECT_THAT(originalContent, testing::Eq("Donner"));
+}
+
+namespace {
+
+/// Source with enough lines before and after a resource that a focus partition computed against
+/// stale line numbers lands on unrelated markup.
+std::string SourceFocusInsertionSvg() {
+  std::string source =
+      "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"240\" height=\"160\">\n"
+      "<defs>\n";
+  for (int i = 0; i < 6; ++i) {
+    source += "<linearGradient id=\"gradient-" + std::to_string(i) + "\">\n";
+    source += "<stop offset=\"0\" stop-color=\"red\"/>\n";
+    source += "<stop offset=\"1\" stop-color=\"blue\"/>\n";
+    source += "</linearGradient>\n";
+  }
+  source += "</defs>\n";
+  for (int i = 0; i < 24; ++i) {
+    source += "<rect id=\"filler-" + std::to_string(i) + "\" x=\"" + std::to_string(200 + i) +
+              "\" y=\"150\" width=\"1\" height=\"1\"/>\n";
+  }
+  source += "</svg>\n";
+  return source;
+}
+
+int LineAtOffset(std::string_view text, std::size_t offset) {
+  return static_cast<int>(std::count(text.begin(), text.begin() + offset, '\n'));
+}
+
+/// Describe which source lines the active focus partition keeps visible.
+std::string DescribeFocusLines(const TextEditor& source) {
+  const std::string text = source.getText();
+  std::string description;
+  const int lineCount = LineAtOffset(text, text.size()) + 1;
+  std::size_t lineStart = 0;
+  for (int line = 0; line < lineCount; ++line) {
+    const std::size_t lineEnd = std::min(text.find('\n', lineStart), text.size());
+    description +=
+        source.isPositionInsideFocusRange(Coordinates(line, 0)) ? "  shown " : " folded ";
+    description += std::to_string(line) + ": " + text.substr(lineStart, lineEnd - lineStart);
+    description += "\n";
+    lineStart = lineEnd + 1;
+  }
+  return description;
+}
+
+/// Run frames until the async renderer is idle and every queued writeback reached the source pane.
+void SettleShellFrames(gui::EditorWindow& window, EditorShell& shell) {
+  for (int attempt = 0; attempt < 6; ++attempt) {
+    RunShellFrame(window, shell);
+    ASSERT_TRUE(shell.asyncRendererForReplay().waitUntilNoRenderInFlightForTesting(
+        std::chrono::steady_clock::now() + std::chrono::seconds(3)));
+  }
+  RunShellFrame(window, shell);
+}
+
+/// Expect the focused source view to show the whole selected element, and to fold unrelated
+/// filler markup.
+void ExpectFocusShowsSelectedElement(EditorShell& shell, std::string_view contentMarker,
+                                     std::string_view closeTag) {
+  EditorApp& app = EditorShellTestAccess::App(shell);
+  const TextEditor& source = EditorShellTestAccess::Source(shell);
+  const std::string text = source.getText();
+  ASSERT_EQ(text, internal::CanonicalizeForTextEditor(app.document().document().source()))
+      << "the source pane must mirror the document before focus is checked";
+  ASSERT_TRUE(EditorShellTestAccess::SourceFocusMode(shell));
+  ASSERT_TRUE(source.hasFocusPartition()) << DescribeFocusLines(source);
+
+  const std::size_t markerOffset = text.find(contentMarker);
+  ASSERT_NE(markerOffset, std::string::npos) << text;
+  const std::size_t openOffset = text.rfind('<', markerOffset);
+  ASSERT_NE(openOffset, std::string::npos);
+  // An empty element may still be self-closing; its end is whichever close comes first.
+  const std::size_t closeOffset =
+      std::min(text.find(closeTag, markerOffset), text.find("/>", markerOffset));
+  ASSERT_NE(closeOffset, std::string::npos) << text;
+  const int openLine = LineAtOffset(text, openOffset);
+  const int closeLine = LineAtOffset(text, closeOffset);
+  for (int line = openLine; line <= closeLine; ++line) {
+    EXPECT_TRUE(source.isPositionInsideFocusRange(Coordinates(line, 0)))
+        << "selected element line " << line << " is folded away\n"
+        << DescribeFocusLines(source);
+  }
+
+  const std::size_t fillerOffset = text.find("id=\"filler-12\"");
+  ASSERT_NE(fillerOffset, std::string::npos);
+  EXPECT_FALSE(source.isPositionInsideFocusRange(Coordinates(LineAtOffset(text, fillerOffset), 0)))
+      << "unrelated markup should stay folded\n"
+      << DescribeFocusLines(source);
+}
+
+}  // namespace
+
+TEST(EditorShellTest, SourceFocusRevealsNewTextWhileCreatingAndTyping) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
+
+  EditorShell shell(window, OptionsWithSource(SourceFocusInsertionSvg(), "focus-new-text.svg"));
+  ASSERT_TRUE(shell.valid());
+  ASSERT_TRUE(EditorShellTestAccess::SourceFocusMode(shell));
+  SettleShellFrames(window, shell);
+
+  DriveGlobalShortcut(shell, {ImGuiKey_T});
+  ASSERT_TRUE(EditorShellTestAccess::ActiveToolIsText(shell));
+  MouseModifiers doubleClick;
+  doubleClick.doubleClick = true;
+  shell.queueDocumentSpaceReplayInputForTesting(EditorShellDocumentReplayInput{
+      .documentPoint = Vector2d(20.0, 60.0),
+      .leftMouseDown = true,
+      .leftMousePressed = true,
+      .modifiers = doubleClick,
+  });
+  RunShellFrame(window, shell);
+  shell.queueDocumentSpaceReplayInputForTesting(EditorShellDocumentReplayInput{
+      .documentPoint = Vector2d(20.0, 60.0),
+      .leftMouseReleased = true,
+  });
+  SettleShellFrames(window, shell);
+
+  ASSERT_TRUE(EditorShellTestAccess::TextToolIsEditing(shell));
+  ASSERT_THAT(EditorShellTestAccess::App(shell).selectedElements(), testing::SizeIs(1));
+  EXPECT_EQ(EditorShellTestAccess::App(shell).selectedElements().front().type(),
+            svg::ElementType::Text);
+  {
+    SCOPED_TRACE("after creating the text element");
+    ExpectFocusShowsSelectedElement(shell, "x=\"20\" y=\"60\"", "</text>");
+  }
+
+  for (const char* typed : {"S", "V", "G"}) {
+    ImGui::GetIO().AddInputCharactersUTF8(typed);
+    SettleShellFrames(window, shell);
+    SCOPED_TRACE(std::string("after typing ") + typed);
+    ExpectFocusShowsSelectedElement(shell, "x=\"20\" y=\"60\"", "</text>");
+  }
+  EXPECT_NE(EditorShellTestAccess::Source(shell).getText().find("SVG</text>"), std::string::npos);
+}
+
+TEST(EditorShellTest, SourceFocusWaitsForInsertedElementToReachSourcePane) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
+
+  // A tool inserts and selects an element, then the selection is highlighted before the source
+  // pane has the element: either the insertion is still queued (a busy renderer defers the flush),
+  // or it is flushed and its source writeback waits for an idle frame.
+  for (const bool flushBeforeHighlight : {false, true}) {
+    SCOPED_TRACE(flushBeforeHighlight ? "flushed, writeback pending" : "insertion still queued");
+    EditorShell shell(window, OptionsWithSource(SourceFocusInsertionSvg(), "focus-insert.svg"));
+    ASSERT_TRUE(shell.valid());
+    SettleShellFrames(window, shell);
+
+    EditorApp& app = EditorShellTestAccess::App(shell);
+    svg::SVGDocument& document = app.document().document();
+    svg::SVGRectElement inserted = svg::SVGRectElement::Create(document);
+    inserted.setAttribute("id", "inserted");
+    inserted.setAttribute("width", "5");
+    inserted.setAttribute("height", "5");
+    app.applyMutation(EditorCommand::InsertElementCommand(document.svgElement(), inserted));
+    app.setSelection(inserted);
+    if (flushBeforeHighlight) {
+      ASSERT_TRUE(app.flushFrame());
+    }
+    EditorShellTestAccess::HighlightSelectionSourceIfNeeded(shell);
+
+    SettleShellFrames(window, shell);
+    ExpectFocusShowsSelectedElement(shell, "id=\"inserted\"", "/>");
+  }
+}
+
+TEST(EditorShellTest, SourceFocusRevealsNewPenPath) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
+
+  EditorShell shell(window, OptionsWithSource(SourceFocusInsertionSvg(), "focus-pen.svg"));
+  ASSERT_TRUE(shell.valid());
+  SettleShellFrames(window, shell);
+
+  DriveGlobalShortcut(shell, {ImGuiKey_P});
+  ASSERT_TRUE(EditorShellTestAccess::ActiveToolIsPen(shell));
+  for (const Vector2d& point : {Vector2d(20.0, 60.0), Vector2d(100.0, 60.0)}) {
+    shell.queueDocumentSpaceReplayInputForTesting(EditorShellDocumentReplayInput{
+        .documentPoint = point,
+        .leftMouseDown = true,
+        .leftMousePressed = true,
+    });
+    RunShellFrame(window, shell);
+    shell.queueDocumentSpaceReplayInputForTesting(EditorShellDocumentReplayInput{
+        .documentPoint = point,
+        .leftMouseReleased = true,
+    });
+    SettleShellFrames(window, shell);
+  }
+
+  ASSERT_THAT(EditorShellTestAccess::App(shell).selectedElements(), testing::SizeIs(1));
+  EXPECT_EQ(EditorShellTestAccess::App(shell).selectedElements().front().type(),
+            svg::ElementType::Path);
+  ExpectFocusShowsSelectedElement(shell, "<path", "/>");
+}
+
+TEST(EditorShellTest, SourceFocusRevealsPastedShape) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
+
+  EditorShell shell(window, OptionsWithSource(SourceFocusInsertionSvg(), "focus-paste.svg"));
+  ASSERT_TRUE(shell.valid());
+  EditorShellTestAccess::UseInMemoryShapeClipboard(shell);
+  SettleShellFrames(window, shell);
+
+  EditorApp& app = EditorShellTestAccess::App(shell);
+  std::optional<svg::SVGElement> source = app.document().document().querySelector("#filler-3");
+  ASSERT_TRUE(source.has_value());
+  app.setSelection(*source);
+  SettleShellFrames(window, shell);
+  EditorShellTestAccess::CopySelectedShapesToClipboard(shell);
+  ASSERT_TRUE(EditorShellTestAccess::ShapeClipboardHasText(shell));
+
+  EditorShellTestAccess::PasteShapesFromClipboard(shell, /*inFront=*/false);
+  SettleShellFrames(window, shell);
+
+  ASSERT_THAT(app.selectedElements(), testing::SizeIs(1));
+  EXPECT_EQ(std::string(app.selectedElements().front().id()), "filler-3_pasted");
+  ExpectFocusShowsSelectedElement(shell, "id=\"filler-3_pasted\"", "/>");
 }
 }  // namespace donner::editor
