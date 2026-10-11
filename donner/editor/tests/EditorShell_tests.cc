@@ -949,8 +949,44 @@ public:
     shell.requestFontPreviews(families);
   }
 
+  static void PrepareSingleFontPreviewRequest(EditorShell& shell, std::string family) {
+    shell.pendingFontPreviews_.clear();
+    shell.waitingFontPreviews_.clear();
+    shell.fontPreviewInFlight_.reset();
+    shell.sampleThumbnailInFlightIndex_.reset();
+    shell.fontPreviewBitmaps_.erase(family);
+    shell.fontPreviewIdentities_.erase(family);
+    RequestFontPreviews(shell, {std::move(family)});
+  }
+
+  static std::size_t PendingFontPreviewCount(const EditorShell& shell) {
+    return shell.pendingFontPreviews_.size();
+  }
+
   static void AdvanceFontPreviewGeneration(EditorShell& shell) {
     shell.advanceFontPreviewGeneration();
+  }
+
+  static std::size_t RequestedAuxiliaryPreviewCount(const EditorShell& shell) {
+    return shell.renderCoordinator_.asyncRenderer().sampleThumbnailRenderStats().requested;
+  }
+
+  static std::size_t RenderedLayerThumbnailCount(const EditorShell& shell) {
+    return shell.layerInspectorStatusForReadback().thumbnailRefreshStats.renderedCount;
+  }
+
+  static bool ForegroundPresentationAcknowledged(const EditorShell& shell) {
+    return shell.foregroundPresentationAcknowledged();
+  }
+
+  static std::optional<gui::EditorWindow::PresentedDocumentFrameIdentity>
+  ForegroundPresentationObligation(const EditorShell& shell) {
+    return shell.foregroundPresentationObligation_;
+  }
+
+  static void InstallFramePresentation(EditorShell& shell,
+                                       std::shared_ptr<const FramePresentation> frame) {
+    shell.installFramePresentation(std::move(frame));
   }
 
   static FormatBarFontPreview FontPreviewForFamily(EditorShell& shell, std::string_view family) {
@@ -2110,6 +2146,200 @@ TEST(EditorShellTest, UiRuntimeProducersUseFramebufferDevice) {
   EXPECT_THAT(uploadDeviceId, testing::Ne(primaryDeviceId));
   EXPECT_THAT(EditorShellTestAccess::RenderLayerThumbnailDeviceId(shell),
               testing::Eq(framebufferDeviceId));
+}
+
+TEST(EditorShellTest, CpuAdoptionDoesNotStartPreviewsBeforeForegroundPresentation) {
+  gui::EditorWindow window(gui::EditorWindowOptions{
+      .title = "Blocked first-frame preview admission",
+      .initialWidth = 1600,
+      .initialHeight = 900,
+      .visible = false,
+  });
+  if (!window.valid()) {
+    GTEST_SKIP() << "WGPU hidden editor window is unavailable on this host";
+  }
+  std::uint64_t completedSerial = 0;
+  window.setPresentationCompletionProbeForTesting([&] { return completedSerial; });
+
+  EditorShellOptions options = OptionsWithSource(
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="640" height="400" viewBox="0 0 640 400"/>)");
+  options.showWelcome = true;
+  EditorShell shell(window, options);
+  ASSERT_TRUE(shell.valid());
+  for (int frame = 0; frame < 3; ++frame) {
+    RunShellFrame(window, shell);
+  }
+  const auto oldPresentation = window.lastFullyPresentedDocumentFrame();
+  ASSERT_TRUE(oldPresentation.has_value());
+  ASSERT_FALSE(EditorShellTestAccess::AdaptiveUiLayout(shell).compactTouch());
+
+  EditorShellTestAccess::QueueSampleLoad(shell, "basic-shapes");
+  EditorShellTestAccess::ConfirmPendingSampleLoadDiscard(shell);
+  EditorShellTestAccess::ProcessPendingSampleLoad(shell);
+  EditorShellTestAccess::RequestFontPreviews(shell, {"Bebas Neue"});
+  const std::size_t layerRendersBefore = EditorShellTestAccess::RenderedLayerThumbnailCount(shell);
+  const std::size_t previewRequestsBefore =
+      EditorShellTestAccess::RequestedAuxiliaryPreviewCount(shell);
+
+  bool adopted = false;
+  for (int attempt = 0; attempt < 200; ++attempt) {
+    shell.prepareFrame();
+    RunShellFrame(window, shell);
+    if (EditorShellTestAccess::DisplayedDocVersion(shell) ==
+        EditorShellTestAccess::App(shell).document().currentFrameVersion()) {
+      adopted = true;
+      break;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  ASSERT_TRUE(adopted) << "The CPU result did not adopt while presentation admission was blocked";
+  ASSERT_FALSE(EditorShellTestAccess::ShowSamplePicker(shell));
+
+  const auto acceptedFrame = EditorShellTestAccess::Coordinator(shell).framePresentation();
+  ASSERT_NE(acceptedFrame, nullptr);
+  EditorShellTestAccess::InstallFramePresentation(shell, nullptr);
+  EXPECT_FALSE(EditorShellTestAccess::ForegroundPresentationAcknowledged(shell));
+  EditorShellTestAccess::InstallFramePresentation(shell, acceptedFrame);
+
+  window.beginFrame();
+  EditorShellTestAccess::RenderSidebars(shell);
+  EditorShellTestAccess::AdvanceFontPreviewGeneration(shell);
+  window.endFrame();
+  EXPECT_EQ(EditorShellTestAccess::RenderedLayerThumbnailCount(shell), layerRendersBefore);
+  EXPECT_EQ(EditorShellTestAccess::RequestedAuxiliaryPreviewCount(shell), previewRequestsBefore);
+
+  // Retiring the old fences only makes another frame admissible; a failed UI pass still cannot
+  // acknowledge the adopted document capture.
+  completedSerial = std::numeric_limits<std::uint64_t>::max();
+  window.forceUiPassFailureForTesting(true);
+  RunShellFrame(window, shell);
+  EXPECT_FALSE(EditorShellTestAccess::ForegroundPresentationAcknowledged(shell));
+  EXPECT_EQ(EditorShellTestAccess::RenderedLayerThumbnailCount(shell), layerRendersBefore);
+  EXPECT_EQ(EditorShellTestAccess::RequestedAuxiliaryPreviewCount(shell), previewRequestsBefore);
+
+  // A successful frame carrying the old scene identity is equally insufficient.
+  window.forceUiPassFailureForTesting(false);
+  window.setPresentationFrameIdentity(/*frameId=*/999, oldPresentation->captureId,
+                                      oldPresentation->documentGeneration,
+                                      oldPresentation->frameVersion,
+                                      /*inputRepresented=*/true, /*viewportZoom=*/1.0);
+  window.beginFrame();
+  window.endFrame();
+  EXPECT_FALSE(EditorShellTestAccess::ForegroundPresentationAcknowledged(shell));
+
+  // Only a fully drawn and presented frame carrying the matching adopted capture releases new
+  // preview work. Cached previews and the pending queues remain available throughout the hold.
+  RunShellFrame(window, shell);
+  ASSERT_TRUE(EditorShellTestAccess::ForegroundPresentationAcknowledged(shell));
+  window.beginFrame();
+  EditorShellTestAccess::RenderSidebars(shell);
+  EditorShellTestAccess::AdvanceFontPreviewGeneration(shell);
+  window.endFrame();
+  EXPECT_GT(EditorShellTestAccess::RenderedLayerThumbnailCount(shell), layerRendersBefore);
+  EXPECT_GT(EditorShellTestAccess::RequestedAuxiliaryPreviewCount(shell), previewRequestsBefore);
+}
+
+TEST(EditorShellTest, SettledEmptyDocumentDoesNotBlockFontPreviews) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "WGPU hidden editor window is unavailable on this host";
+  }
+  EditorShell shell(
+      window,
+      OptionsWithSource(R"(<svg xmlns="http://www.w3.org/2000/svg" width="0" height="0"/>)"));
+  ASSERT_TRUE(shell.valid());
+  RenderCoordinator& coordinator = EditorShellTestAccess::Coordinator(shell);
+  ASSERT_EQ(coordinator.framePresentation(), nullptr);
+  ASSERT_TRUE(EditorShellTestAccess::ForegroundPresentationAcknowledged(shell));
+
+  const std::size_t requestedBefore = EditorShellTestAccess::RequestedAuxiliaryPreviewCount(shell);
+  EditorShellTestAccess::RequestFontPreviews(shell, {"Bebas Neue"});
+  EditorShellTestAccess::AdvanceFontPreviewGeneration(shell);
+  EXPECT_GT(EditorShellTestAccess::RequestedAuxiliaryPreviewCount(shell), requestedBefore);
+}
+
+TEST(EditorShellTest, NewShellInvalidatesPriorProducerPresentationAck) {
+  gui::EditorWindow window(gui::EditorWindowOptions{
+      .title = "Reused-window presentation producer",
+      .initialWidth = 1600,
+      .initialHeight = 900,
+      .visible = false,
+  });
+  if (!window.valid()) {
+    GTEST_SKIP() << "WGPU hidden editor window is unavailable on this host";
+  }
+  std::uint64_t completedSerial = std::numeric_limits<std::uint64_t>::max();
+  window.setPresentationCompletionProbeForTesting([&] { return completedSerial; });
+
+  gui::EditorWindow::PresentedDocumentFrameIdentity firstIdentity;
+  {
+    EditorShell first(window, OptionsWithSource(kInitialSvg));
+    ASSERT_TRUE(first.valid());
+    bool acknowledged = false;
+    for (int attempt = 0; attempt < 200; ++attempt) {
+      first.prepareFrame();
+      RunShellFrame(window, first);
+      const auto frame = EditorShellTestAccess::Coordinator(first).framePresentation();
+      const auto presented = window.lastFullyPresentedDocumentFrame();
+      if (frame != nullptr && frame->identity().captureId > 0 && presented.has_value() &&
+          *presented == gui::EditorWindow::PresentedDocumentFrameIdentity{
+                            .documentGeneration = frame->identity().documentGeneration,
+                            .frameVersion = frame->identity().version,
+                            .captureId = frame->identity().captureId}) {
+        firstIdentity = *presented;
+        acknowledged = true;
+        break;
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    ASSERT_TRUE(acknowledged);
+    ASSERT_GT(firstIdentity.captureId, 0u);
+
+    completedSerial = 0;
+    for (int frame = 0; frame < 3; ++frame) {
+      RunShellFrame(window, first);
+    }
+    ASSERT_EQ(window.lastFullyPresentedDocumentFrame(), firstIdentity);
+  }
+
+  EditorShell second(window, OptionsWithSource(kInitialSvg));
+  ASSERT_TRUE(second.valid());
+  EXPECT_FALSE(window.lastFullyPresentedDocumentFrame().has_value());
+  const std::size_t layerRendersBefore = EditorShellTestAccess::RenderedLayerThumbnailCount(second);
+
+  bool adopted = false;
+  for (int attempt = 0; attempt < 200; ++attempt) {
+    second.prepareFrame();
+    RunShellFrame(window, second);
+    if (EditorShellTestAccess::DisplayedDocVersion(second) ==
+            EditorShellTestAccess::App(second).document().currentFrameVersion() &&
+        EditorShellTestAccess::Coordinator(second).framePresentation() != nullptr) {
+      adopted = true;
+      break;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  ASSERT_TRUE(adopted);
+  const auto secondIdentity = EditorShellTestAccess::ForegroundPresentationObligation(second);
+  ASSERT_TRUE(secondIdentity.has_value());
+  ASSERT_EQ(*secondIdentity, firstIdentity);
+  EXPECT_EQ(EditorShellTestAccess::RenderedLayerThumbnailCount(second), layerRendersBefore);
+  ASSERT_TRUE(second.asyncRendererForReplay().waitUntilNoRenderInFlightForTesting(
+      std::chrono::steady_clock::now() + std::chrono::seconds(10)));
+
+  EditorShellTestAccess::PrepareSingleFontPreviewRequest(second, "Bebas Neue");
+  ASSERT_EQ(EditorShellTestAccess::PendingFontPreviewCount(second), 1u);
+  const std::size_t previewRequestsBefore =
+      EditorShellTestAccess::RequestedAuxiliaryPreviewCount(second);
+
+  window.beginFrame();
+  EditorShellTestAccess::AdvanceFontPreviewGeneration(second);
+  EditorShellTestAccess::RenderSidebars(second);
+  window.endFrame();
+  EXPECT_FALSE(EditorShellTestAccess::ForegroundPresentationAcknowledged(second));
+  EXPECT_EQ(EditorShellTestAccess::RenderedLayerThumbnailCount(second), layerRendersBefore);
+  EXPECT_EQ(EditorShellTestAccess::RequestedAuxiliaryPreviewCount(second), previewRequestsBefore);
+  EXPECT_EQ(EditorShellTestAccess::PendingFontPreviewCount(second), 1u);
 }
 #endif
 

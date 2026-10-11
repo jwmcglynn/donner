@@ -791,6 +791,15 @@ using WgpuDirectRenderCallback = std::function<void(const EditorWindowWgpuRender
 /// means we can't easily have two at once.
 class EditorWindow {
 public:
+  /// Stable document identity committed only after a complete framebuffer presentation.
+  struct PresentedDocumentFrameIdentity {
+    std::uint64_t documentGeneration = 0;  //!< Document lifetime rendered into the frame.
+    std::uint64_t frameVersion = 0;        //!< Committed document mutation version.
+    std::uint64_t captureId = 0;           //!< Immutable renderer capture.
+
+    bool operator==(const PresentedDocumentFrameIdentity&) const = default;
+  };
+
   /// Create and initialize a host window with the requested settings.
   /// @param options Window title, dimensions, and UI configuration.
   explicit EditorWindow(EditorWindowOptions options = {});
@@ -999,9 +1008,24 @@ public:
   /// The callback renders above the document underlay and below ImGui UI.
   void setWgpuDirectRenderCallback(WgpuDirectRenderCallback callback);
   /// Bind both GPU passes and completion diagnostics to this sealed document frame.
-  /// @param frameId Presentation frame. @param captureId Paired raster capture.
+  /// @param frameId Presentation frame.
+  /// @param captureId Paired raster capture.
+  /// @param documentGeneration Document lifetime captured by the renderer.
+  /// @param frameVersion Committed document mutation version in the capture.
+  /// @param inputRepresented Whether pointer input is represented by the frame.
+  /// @param viewportZoom Viewport zoom sealed with the frame.
   void setPresentationFrameIdentity(std::uint64_t frameId, std::uint64_t captureId,
+                                    std::uint64_t documentGeneration, std::uint64_t frameVersion,
                                     bool inputRepresented, double viewportZoom);
+
+  /// Last document frame whose underlay and UI were successfully presented together.
+  [[nodiscard]] std::optional<PresentedDocumentFrameIdentity> lastFullyPresentedDocumentFrame()
+      const {
+    return lastFullyPresentedDocumentFrame_;
+  }
+
+  /// Invalidate acknowledgement owned by a previous document-presentation producer.
+  void clearLastFullyPresentedDocumentFrame() { lastFullyPresentedDocumentFrame_.reset(); }
 
   /// Substitute completion observation while driving the real framebuffer test path.
   /// @param probe Completed submission serial reported to the presentation scheduler.
@@ -1184,8 +1208,10 @@ private:
   std::uint64_t presentationFrameId_ = 0;
   std::uint64_t presentationCaptureId_ = 0;
   internal::PresentationSubmissionQueue::Fence presentationInputStamp_;
+  PresentedDocumentFrameIdentity presentationDocumentIdentity_;
   std::function<std::uint64_t()> presentationCompletionProbeForTesting_;
 #endif
+  std::optional<PresentedDocumentFrameIdentity> lastFullyPresentedDocumentFrame_;
 };
 
 }  // namespace donner::editor::gui

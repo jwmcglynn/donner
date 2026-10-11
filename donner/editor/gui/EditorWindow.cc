@@ -2246,7 +2246,9 @@ void EditorWindow::waitEventsTimeout(double timeoutSeconds) {
 
 #ifdef DONNER_EDITOR_WGPU
 void EditorWindow::setPresentationFrameIdentity(std::uint64_t frameId, std::uint64_t captureId,
-                                                bool inputRepresented, double viewportZoom) {
+                                                std::uint64_t documentGeneration,
+                                                std::uint64_t frameVersion, bool inputRepresented,
+                                                double viewportZoom) {
   presentationFrameId_ = frameId;
   presentationCaptureId_ = captureId;
   presentationInputStamp_ = {.frameId = frameId,
@@ -2256,6 +2258,9 @@ void EditorWindow::setPresentationFrameIdentity(std::uint64_t frameId, std::uint
                              .mouseDown = ImGui::GetIO().MouseDown[0],
                              .inputRepresented = inputRepresented,
                              .viewportZoom = viewportZoom};
+  presentationDocumentIdentity_ = {.documentGeneration = documentGeneration,
+                                   .frameVersion = frameVersion,
+                                   .captureId = captureId};
 }
 
 bool EditorWindow::hasUsableFrameTarget(int width, int height) {
@@ -3136,6 +3141,10 @@ struct EditorWindow::GpuFrameSubmission {
                                 .stamp = window.presentationInputStamp_,
                                 .fullFramePresented = fullFramePresented};
     fence.stamp.submittedAt = std::chrono::steady_clock::now();
+    const PresentedDocumentFrameIdentity documentIdentity{
+        .documentGeneration = window.presentationDocumentIdentity_.documentGeneration,
+        .frameVersion = window.presentationDocumentIdentity_.frameVersion,
+        .captureId = fence.stamp.captureId};
     gpu::Texture acquiredFrame;
     if (!acquireTarget(acquiredFrame)) {
       return;
@@ -3157,6 +3166,7 @@ struct EditorWindow::GpuFrameSubmission {
     if (!present(guard)) {
       return;
     }
+    window.lastFullyPresentedDocumentFrame_ = documentIdentity;
     fullFramePresented = true;
 #ifdef __EMSCRIPTEN__
     PublishFirstPresentedFrame(geode::GeodeDevice::headlessCreationCountForTesting());

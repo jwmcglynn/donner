@@ -627,6 +627,7 @@ private:
   void cancelSampleThumbnailGeneration();
   void requestFontPreviews(const std::vector<std::string>& families);
   void advanceFontPreviewGeneration();
+  [[nodiscard]] bool foregroundPresentationAcknowledged() const;
   void trimFontPreviewMemory();
   [[nodiscard]] FormatBarFontPreview fontPreviewForFamily(std::string_view family);
   void renderSamplePicker(const ImVec2& paneOrigin, const ImVec2& contentRegion);
@@ -907,6 +908,8 @@ private:
   /// session's presentation target, so the per-frame path carries no platform
   /// fork. Never null after construction.
   std::unique_ptr<DocumentPresenter> documentPresenter_;
+  std::optional<gui::EditorWindow::PresentedDocumentFrameIdentity>
+      foregroundPresentationObligation_;
 #ifdef DONNER_EDITOR_WGPU
   std::unique_ptr<FramebufferCheckerboardRenderer> directCheckerboardRenderer_;
   std::unique_ptr<svg::RendererGeode> directDocumentRenderer_;
