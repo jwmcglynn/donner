@@ -571,6 +571,76 @@ TEST(PropertyRegistry, Fill) {
   }
 }
 
+TEST(PropertyRegistry, PaintUrlsResolveDecodedReferences) {
+  struct Case {
+    std::string_view value;
+    std::string_view reference;
+  };
+  const Case cases[] = {
+      {"url(#paint)", "#paint"},
+      {R"(url('#paint'))", "#paint"},
+      {R"(URL( "#paint" ))", "#paint"},
+      {R"(url("#paint\"quoted"))", "#paint\"quoted"},
+      {R"(url('#paint\'quoted'))", "#paint'quoted"},
+      {R"(url("#pa\69 nt"))", "#paint"},
+  };
+  for (std::string_view property : {"fill", "stroke"}) {
+    for (const Case& test : cases) {
+      for (bool presentationAttribute : {false, true}) {
+        SCOPED_TRACE(testing::Message() << property << ": " << test.value
+                                        << " presentation=" << presentationAttribute);
+        PropertyRegistry registry;
+        if (presentationAttribute) {
+          EXPECT_THAT(registry.parsePresentationAttribute(property, test.value),
+                      ParseResultIs(true));
+        } else {
+          const css::Declaration declaration =
+              css::CSS::ParseStyleAttribute(std::string(property) + ": " + std::string(test.value))
+                  .at(0);
+          EXPECT_THAT(registry.parseProperty(declaration, Specificity()), Eq(std::nullopt));
+        }
+        const auto& paint = property == "fill" ? registry.fill : registry.stroke;
+        EXPECT_THAT(paint.get(),
+                    Optional(PaintServer(PaintServer::ElementReference(test.reference))));
+      }
+    }
+  }
+}
+
+TEST(PropertyRegistry, PaintUrlsSupportFallbacks) {
+  for (std::string_view url : {"url(#paint)", "url('#paint')", "url(\"#paint\")"}) {
+    for (std::string_view fallback : {"none", "red"}) {
+      for (std::string_view property : {"fill", "stroke"}) {
+        const std::string value = std::string(url) + "  " + std::string(fallback) + " \t";
+        SCOPED_TRACE(testing::Message() << property << ": " << value);
+        PropertyRegistry registry;
+        EXPECT_THAT(registry.parsePresentationAttribute(property, value), ParseResultIs(true));
+        const auto& paint = property == "fill" ? registry.fill : registry.stroke;
+        const std::optional<Color> fallbackColor =
+            fallback == "none" ? std::nullopt : std::optional<Color>(Color(RGBA(255, 0, 0, 255)));
+        EXPECT_THAT(paint.get(),
+                    Optional(PaintServer(PaintServer::ElementReference("#paint", fallbackColor))));
+      }
+    }
+  }
+}
+
+TEST(PropertyRegistry, PaintUrlsRejectMalformedArgumentsAndTrailingTokens) {
+  for (std::string_view value :
+       {R"(url("#paint" extra))", R"(url("#paint" "#other"))", R"(url("#paint",))",
+        R"(url('#paint') none red)", R"(url(#paint) none red)", R"(url('#paint') red none)",
+        R"(url('#paint') bogus)"}) {
+    for (std::string_view property : {"fill", "stroke"}) {
+      SCOPED_TRACE(testing::Message() << property << ": " << value);
+      PropertyRegistry registry;
+      EXPECT_THAT(registry.parsePresentationAttribute(property, value),
+                  ParseErrorIs(testing::StartsWith("Invalid paint server")));
+      const auto& paint = property == "fill" ? registry.fill : registry.stroke;
+      EXPECT_THAT(paint.isSpecified(), testing::IsFalse());
+    }
+  }
+}
+
 TEST(PropertyRegistry, Stroke) {
   // Initial value of stroke is none.
   const PaintServer kInitialFill(PaintServer::None{});
