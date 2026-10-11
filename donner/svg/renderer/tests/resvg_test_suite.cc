@@ -622,14 +622,6 @@ INSTANTIATE_TEST_SUITE_P(
                      Params::WithThreshold(0.1f, kDefaultMismatchedPixels,
                                            "Mask with <image> (bilinear edge diffs)")},
 
-                    {"half-width-region-with-rotation.svg",
-                     Params::Skip(
-                         "Bug: mask edge cases (color-interpolation, mask-units, mask-type) need "
-                         "investigation")},
-                    {"on-group-with-transform.svg",
-                     Params::Skip(
-                         "Bug: mask edge cases (color-interpolation, mask-units, mask-type) need "
-                         "investigation")},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
