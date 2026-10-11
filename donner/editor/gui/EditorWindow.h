@@ -971,6 +971,9 @@ public:
     return lastFullyPresentedDocumentFrame_;
   }
 
+  /// Invalidate acknowledgement owned by a previous document-presentation producer.
+  void clearLastFullyPresentedDocumentFrame() { lastFullyPresentedDocumentFrame_.reset(); }
+
   /// Substitute completion observation while driving the real framebuffer test path.
   /// @param probe Completed submission serial reported to the presentation scheduler.
   /// Refuse UI recording after the document pass has submitted, simulating an allocation failure.

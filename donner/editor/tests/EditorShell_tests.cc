@@ -949,6 +949,20 @@ public:
     shell.requestFontPreviews(families);
   }
 
+  static void PrepareSingleFontPreviewRequest(EditorShell& shell, std::string family) {
+    shell.pendingFontPreviews_.clear();
+    shell.waitingFontPreviews_.clear();
+    shell.fontPreviewInFlight_.reset();
+    shell.sampleThumbnailInFlightIndex_.reset();
+    shell.fontPreviewBitmaps_.erase(family);
+    shell.fontPreviewIdentities_.erase(family);
+    RequestFontPreviews(shell, {std::move(family)});
+  }
+
+  static std::size_t PendingFontPreviewCount(const EditorShell& shell) {
+    return shell.pendingFontPreviews_.size();
+  }
+
   static void AdvanceFontPreviewGeneration(EditorShell& shell) {
     shell.advanceFontPreviewGeneration();
   }
@@ -963,6 +977,11 @@ public:
 
   static bool ForegroundPresentationAcknowledged(const EditorShell& shell) {
     return shell.foregroundPresentationAcknowledged();
+  }
+
+  static std::optional<gui::EditorWindow::PresentedDocumentFrameIdentity>
+  ForegroundPresentationObligation(const EditorShell& shell) {
+    return shell.foregroundPresentationObligation_;
   }
 
   static void InstallFramePresentation(EditorShell& shell,
@@ -2252,6 +2271,7 @@ TEST(EditorShellTest, NewShellInvalidatesPriorProducerPresentationAck) {
   std::uint64_t completedSerial = std::numeric_limits<std::uint64_t>::max();
   window.setPresentationCompletionProbeForTesting([&] { return completedSerial; });
 
+  gui::EditorWindow::PresentedDocumentFrameIdentity firstIdentity;
   {
     EditorShell first(window, OptionsWithSource(kInitialSvg));
     ASSERT_TRUE(first.valid());
@@ -2259,30 +2279,33 @@ TEST(EditorShellTest, NewShellInvalidatesPriorProducerPresentationAck) {
     for (int attempt = 0; attempt < 200; ++attempt) {
       first.prepareFrame();
       RunShellFrame(window, first);
-      if (EditorShellTestAccess::ForegroundPresentationAcknowledged(first) &&
-          window.lastFullyPresentedDocumentFrame().has_value()) {
+      const auto frame = EditorShellTestAccess::Coordinator(first).framePresentation();
+      const auto presented = window.lastFullyPresentedDocumentFrame();
+      if (frame != nullptr && frame->identity().captureId > 0 && presented.has_value() &&
+          *presented == gui::EditorWindow::PresentedDocumentFrameIdentity{
+                            .documentGeneration = frame->identity().documentGeneration,
+                            .frameVersion = frame->identity().version,
+                            .captureId = frame->identity().captureId}) {
+        firstIdentity = *presented;
         acknowledged = true;
         break;
       }
       std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
     ASSERT_TRUE(acknowledged);
-  }
-  ASSERT_TRUE(window.lastFullyPresentedDocumentFrame().has_value());
+    ASSERT_GT(firstIdentity.captureId, 0u);
 
-  completedSerial = 0;
-  for (int frame = 0; frame < 3; ++frame) {
-    window.beginFrame();
-    window.endFrame();
+    completedSerial = 0;
+    for (int frame = 0; frame < 3; ++frame) {
+      RunShellFrame(window, first);
+    }
+    ASSERT_EQ(window.lastFullyPresentedDocumentFrame(), firstIdentity);
   }
 
   EditorShell second(window, OptionsWithSource(kInitialSvg));
   ASSERT_TRUE(second.valid());
   EXPECT_FALSE(window.lastFullyPresentedDocumentFrame().has_value());
-  EditorShellTestAccess::RequestFontPreviews(second, {"Bebas Neue"});
   const std::size_t layerRendersBefore = EditorShellTestAccess::RenderedLayerThumbnailCount(second);
-  const std::size_t previewRequestsBefore =
-      EditorShellTestAccess::RequestedAuxiliaryPreviewCount(second);
 
   bool adopted = false;
   for (int attempt = 0; attempt < 200; ++attempt) {
@@ -2297,14 +2320,26 @@ TEST(EditorShellTest, NewShellInvalidatesPriorProducerPresentationAck) {
     std::this_thread::sleep_for(std::chrono::milliseconds(1));
   }
   ASSERT_TRUE(adopted);
+  const auto secondIdentity = EditorShellTestAccess::ForegroundPresentationObligation(second);
+  ASSERT_TRUE(secondIdentity.has_value());
+  ASSERT_EQ(*secondIdentity, firstIdentity);
+  EXPECT_EQ(EditorShellTestAccess::RenderedLayerThumbnailCount(second), layerRendersBefore);
+  ASSERT_TRUE(second.asyncRendererForReplay().waitUntilNoRenderInFlightForTesting(
+      std::chrono::steady_clock::now() + std::chrono::seconds(10)));
+
+  EditorShellTestAccess::PrepareSingleFontPreviewRequest(second, "Bebas Neue");
+  ASSERT_EQ(EditorShellTestAccess::PendingFontPreviewCount(second), 1u);
+  const std::size_t previewRequestsBefore =
+      EditorShellTestAccess::RequestedAuxiliaryPreviewCount(second);
 
   window.beginFrame();
-  EditorShellTestAccess::RenderSidebars(second);
   EditorShellTestAccess::AdvanceFontPreviewGeneration(second);
+  EditorShellTestAccess::RenderSidebars(second);
   window.endFrame();
   EXPECT_FALSE(EditorShellTestAccess::ForegroundPresentationAcknowledged(second));
   EXPECT_EQ(EditorShellTestAccess::RenderedLayerThumbnailCount(second), layerRendersBefore);
   EXPECT_EQ(EditorShellTestAccess::RequestedAuxiliaryPreviewCount(second), previewRequestsBefore);
+  EXPECT_EQ(EditorShellTestAccess::PendingFontPreviewCount(second), 1u);
 }
 #endif
 

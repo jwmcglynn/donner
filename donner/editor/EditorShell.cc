@@ -1587,6 +1587,9 @@ EditorShell::EditorShell(gui::EditorWindow& window, EditorShellOptions options)
       inputBridge_(window_, kWheelZoomStep),
       compositorDebugPanel_(UiGeodeDevice(window)),
       dialogPresenter_(options_.editorNoticeText, options_.editorBuildInfo) {
+#ifdef DONNER_EDITOR_WGPU
+  window_.clearLastFullyPresentedDocumentFrame();
+#endif
   configureClipboardCapability();
   // One presenter owns where document pixels land for the whole session.
   documentPresenter_ =
