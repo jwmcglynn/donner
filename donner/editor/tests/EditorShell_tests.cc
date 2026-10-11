@@ -953,6 +953,14 @@ public:
     shell.advanceFontPreviewGeneration();
   }
 
+  static std::size_t RequestedAuxiliaryPreviewCount(const EditorShell& shell) {
+    return shell.renderCoordinator_.asyncRenderer().sampleThumbnailRenderStats().requested;
+  }
+
+  static std::size_t RenderedLayerThumbnailCount(const EditorShell& shell) {
+    return shell.layerInspectorStatusForReadback().thumbnailRefreshStats.renderedCount;
+  }
+
   static FormatBarFontPreview FontPreviewForFamily(EditorShell& shell, std::string_view family) {
     return shell.fontPreviewForFamily(family);
   }
@@ -2110,6 +2118,59 @@ TEST(EditorShellTest, UiRuntimeProducersUseFramebufferDevice) {
   EXPECT_THAT(uploadDeviceId, testing::Ne(primaryDeviceId));
   EXPECT_THAT(EditorShellTestAccess::RenderLayerThumbnailDeviceId(shell),
               testing::Eq(framebufferDeviceId));
+}
+
+TEST(EditorShellTest, CpuAdoptionDoesNotStartPreviewsBeforeForegroundPresentation) {
+  gui::EditorWindow window(gui::EditorWindowOptions{
+      .title = "Blocked first-frame preview admission",
+      .initialWidth = 1600,
+      .initialHeight = 900,
+      .visible = false,
+  });
+  if (!window.valid()) {
+    GTEST_SKIP() << "WGPU hidden editor window is unavailable on this host";
+  }
+  window.setPresentationCompletionProbeForTesting([] { return std::uint64_t(0); });
+
+  EditorShellOptions options = OptionsWithSource(
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="640" height="400" viewBox="0 0 640 400"/>)");
+  options.showWelcome = true;
+  EditorShell shell(window, options);
+  ASSERT_TRUE(shell.valid());
+  for (int frame = 0; frame < 3; ++frame) {
+    RunShellFrame(window, shell);
+  }
+  ASSERT_FALSE(EditorShellTestAccess::AdaptiveUiLayout(shell).compactTouch());
+
+  EditorShellTestAccess::QueueSampleLoad(shell, "basic-shapes");
+  EditorShellTestAccess::ConfirmPendingSampleLoadDiscard(shell);
+  EditorShellTestAccess::ProcessPendingSampleLoad(shell);
+  EditorShellTestAccess::RequestFontPreviews(shell, {"Bebas Neue"});
+  const std::size_t layerRendersBefore =
+      EditorShellTestAccess::RenderedLayerThumbnailCount(shell);
+  const std::size_t previewRequestsBefore =
+      EditorShellTestAccess::RequestedAuxiliaryPreviewCount(shell);
+
+  bool adopted = false;
+  for (int attempt = 0; attempt < 200; ++attempt) {
+    shell.prepareFrame();
+    RunShellFrame(window, shell);
+    if (EditorShellTestAccess::DisplayedDocVersion(shell) ==
+        EditorShellTestAccess::App(shell).document().currentFrameVersion()) {
+      adopted = true;
+      break;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  ASSERT_TRUE(adopted) << "The CPU result did not adopt while presentation admission was blocked";
+  ASSERT_FALSE(EditorShellTestAccess::ShowSamplePicker(shell));
+
+  window.beginFrame();
+  EditorShellTestAccess::RenderSidebars(shell);
+  EditorShellTestAccess::AdvanceFontPreviewGeneration(shell);
+  window.endFrame();
+  EXPECT_EQ(EditorShellTestAccess::RenderedLayerThumbnailCount(shell), layerRendersBefore);
+  EXPECT_EQ(EditorShellTestAccess::RequestedAuxiliaryPreviewCount(shell), previewRequestsBefore);
 }
 #endif
 
