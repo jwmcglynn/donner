@@ -961,6 +961,15 @@ public:
     return shell.layerInspectorStatusForReadback().thumbnailRefreshStats.renderedCount;
   }
 
+  static bool ForegroundPresentationAcknowledged(const EditorShell& shell) {
+    return shell.foregroundPresentationAcknowledged();
+  }
+
+  static void InstallFramePresentation(EditorShell& shell,
+                                       std::shared_ptr<const FramePresentation> frame) {
+    shell.installFramePresentation(std::move(frame));
+  }
+
   static FormatBarFontPreview FontPreviewForFamily(EditorShell& shell, std::string_view family) {
     return shell.fontPreviewForFamily(family);
   }
@@ -2130,7 +2139,8 @@ TEST(EditorShellTest, CpuAdoptionDoesNotStartPreviewsBeforeForegroundPresentatio
   if (!window.valid()) {
     GTEST_SKIP() << "WGPU hidden editor window is unavailable on this host";
   }
-  window.setPresentationCompletionProbeForTesting([] { return std::uint64_t(0); });
+  std::uint64_t completedSerial = 0;
+  window.setPresentationCompletionProbeForTesting([&] { return completedSerial; });
 
   EditorShellOptions options = OptionsWithSource(
       R"(<svg xmlns="http://www.w3.org/2000/svg" width="640" height="400" viewBox="0 0 640 400"/>)");
@@ -2140,14 +2150,15 @@ TEST(EditorShellTest, CpuAdoptionDoesNotStartPreviewsBeforeForegroundPresentatio
   for (int frame = 0; frame < 3; ++frame) {
     RunShellFrame(window, shell);
   }
+  const auto oldPresentation = window.lastFullyPresentedDocumentFrame();
+  ASSERT_TRUE(oldPresentation.has_value());
   ASSERT_FALSE(EditorShellTestAccess::AdaptiveUiLayout(shell).compactTouch());
 
   EditorShellTestAccess::QueueSampleLoad(shell, "basic-shapes");
   EditorShellTestAccess::ConfirmPendingSampleLoadDiscard(shell);
   EditorShellTestAccess::ProcessPendingSampleLoad(shell);
   EditorShellTestAccess::RequestFontPreviews(shell, {"Bebas Neue"});
-  const std::size_t layerRendersBefore =
-      EditorShellTestAccess::RenderedLayerThumbnailCount(shell);
+  const std::size_t layerRendersBefore = EditorShellTestAccess::RenderedLayerThumbnailCount(shell);
   const std::size_t previewRequestsBefore =
       EditorShellTestAccess::RequestedAuxiliaryPreviewCount(shell);
 
@@ -2165,12 +2176,67 @@ TEST(EditorShellTest, CpuAdoptionDoesNotStartPreviewsBeforeForegroundPresentatio
   ASSERT_TRUE(adopted) << "The CPU result did not adopt while presentation admission was blocked";
   ASSERT_FALSE(EditorShellTestAccess::ShowSamplePicker(shell));
 
+  const auto acceptedFrame = EditorShellTestAccess::Coordinator(shell).framePresentation();
+  ASSERT_NE(acceptedFrame, nullptr);
+  EditorShellTestAccess::InstallFramePresentation(shell, nullptr);
+  EXPECT_FALSE(EditorShellTestAccess::ForegroundPresentationAcknowledged(shell));
+  EditorShellTestAccess::InstallFramePresentation(shell, acceptedFrame);
+
   window.beginFrame();
   EditorShellTestAccess::RenderSidebars(shell);
   EditorShellTestAccess::AdvanceFontPreviewGeneration(shell);
   window.endFrame();
   EXPECT_EQ(EditorShellTestAccess::RenderedLayerThumbnailCount(shell), layerRendersBefore);
   EXPECT_EQ(EditorShellTestAccess::RequestedAuxiliaryPreviewCount(shell), previewRequestsBefore);
+
+  // Retiring the old fences only makes another frame admissible; a failed UI pass still cannot
+  // acknowledge the adopted document capture.
+  completedSerial = std::numeric_limits<std::uint64_t>::max();
+  window.forceUiPassFailureForTesting(true);
+  RunShellFrame(window, shell);
+  EXPECT_FALSE(EditorShellTestAccess::ForegroundPresentationAcknowledged(shell));
+  EXPECT_EQ(EditorShellTestAccess::RenderedLayerThumbnailCount(shell), layerRendersBefore);
+  EXPECT_EQ(EditorShellTestAccess::RequestedAuxiliaryPreviewCount(shell), previewRequestsBefore);
+
+  // A successful frame carrying the old scene identity is equally insufficient.
+  window.forceUiPassFailureForTesting(false);
+  window.setPresentationFrameIdentity(/*frameId=*/999, oldPresentation->captureId,
+                                      oldPresentation->documentGeneration,
+                                      oldPresentation->frameVersion,
+                                      /*inputRepresented=*/true, /*viewportZoom=*/1.0);
+  window.beginFrame();
+  window.endFrame();
+  EXPECT_FALSE(EditorShellTestAccess::ForegroundPresentationAcknowledged(shell));
+
+  // Only a fully drawn and presented frame carrying the matching adopted capture releases new
+  // preview work. Cached previews and the pending queues remain available throughout the hold.
+  RunShellFrame(window, shell);
+  ASSERT_TRUE(EditorShellTestAccess::ForegroundPresentationAcknowledged(shell));
+  window.beginFrame();
+  EditorShellTestAccess::RenderSidebars(shell);
+  EditorShellTestAccess::AdvanceFontPreviewGeneration(shell);
+  window.endFrame();
+  EXPECT_GT(EditorShellTestAccess::RenderedLayerThumbnailCount(shell), layerRendersBefore);
+  EXPECT_GT(EditorShellTestAccess::RequestedAuxiliaryPreviewCount(shell), previewRequestsBefore);
+}
+
+TEST(EditorShellTest, SettledEmptyDocumentDoesNotBlockFontPreviews) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "WGPU hidden editor window is unavailable on this host";
+  }
+  EditorShell shell(
+      window,
+      OptionsWithSource(R"(<svg xmlns="http://www.w3.org/2000/svg" width="0" height="0"/>)"));
+  ASSERT_TRUE(shell.valid());
+  RenderCoordinator& coordinator = EditorShellTestAccess::Coordinator(shell);
+  ASSERT_EQ(coordinator.framePresentation(), nullptr);
+  ASSERT_TRUE(EditorShellTestAccess::ForegroundPresentationAcknowledged(shell));
+
+  const std::size_t requestedBefore = EditorShellTestAccess::RequestedAuxiliaryPreviewCount(shell);
+  EditorShellTestAccess::RequestFontPreviews(shell, {"Bebas Neue"});
+  EditorShellTestAccess::AdvanceFontPreviewGeneration(shell);
+  EXPECT_GT(EditorShellTestAccess::RequestedAuxiliaryPreviewCount(shell), requestedBefore);
 }
 #endif
 
