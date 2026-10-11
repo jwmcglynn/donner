@@ -1921,13 +1921,15 @@ def _format_command_error(prefix: str, command: List[str], output: str) -> str:
     return f"{prefix}\n  {' '.join(command)}\n\n{rendered_output}"
 
 
-def _cmake_build_parallel_jobs(jobs: Optional[int]) -> int:
+def _cmake_build_parallel_jobs(jobs: Optional[int]) -> Optional[int]:
     """Honor CMake's concurrency environment unless explicit jobs were supplied."""
     if jobs is not None:
         return max(1, jobs or os.cpu_count() or 1)
     configured = os.environ.get("CMAKE_BUILD_PARALLEL_LEVEL")
     if configured is None:
         return max(1, os.cpu_count() or 1)
+    if configured == "":
+        return None
     parallel_jobs = int(configured)
     if parallel_jobs <= 0:
         raise ValueError("CMAKE_BUILD_PARALLEL_LEVEL must be a positive integer")
@@ -1972,7 +1974,9 @@ def _run_cmake_build_validation(
             configure_result.stdout,
         )
 
-    build_cmd = ["cmake", "--build", str(build_dir), "--parallel", str(parallel_jobs)]
+    build_cmd = ["cmake", "--build", str(build_dir), "--parallel"]
+    if parallel_jobs is not None:
+        build_cmd.append(str(parallel_jobs))
     try:
         build_result = subprocess.run(
             build_cmd,
