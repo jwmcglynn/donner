@@ -14,8 +14,9 @@ through the public \ref donner::svg::Renderer API. The
 failure-mode contracts this guide relies on.
 
 The code below is quoted from `examples/geode_embed.cc`, so it is the code that
-builds. The quoted blocks leave out the example's argument parsing and SVG
-loading.
+builds; `//examples:geode_embed_builds_test` compiles the example in ordinary
+`bazel test //...` runs. The quoted blocks leave out the example's argument
+parsing and SVG loading.
 
 Build the example with Geode enabled:
 

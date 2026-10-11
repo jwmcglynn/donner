@@ -101,6 +101,7 @@ exports_files(
         "BUILD.bazel",
         "MODULE.bazel",
         "NOTICE",
+        "RELEASE_NOTES.md",
         "codecov.yml",
         ".github/actions/apt-install/action.yml",
         ".github/actions/re-turnstile/action.yml",

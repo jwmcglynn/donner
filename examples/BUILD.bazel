@@ -62,7 +62,8 @@ donner_cc_binary(
 
 # --- Third-party notice embedding ---
 #
-# docs/getting_started.md mirrors the block between the markers.
+# docs/getting_started.md mirrors the block between the markers, and
+# //tools:documented_examples_tests keeps the two identical.
 # [embed_notice]
 filegroup(
     name = "notice_txt",
@@ -103,6 +104,13 @@ donner_cc_binary(
     ],
 )
 # [embed_notice]
+
+# Example sources and build recipes that the documentation quotes.
+filegroup(
+    name = "documented_example_sources",
+    srcs = glob(["*.cc"]) + ["BUILD.bazel"],
+    visibility = ["//tools:__pkg__"],
+)
 
 # --- WASM reproducer ---
 donner_cc_binary(
@@ -226,6 +234,21 @@ donner_cc_binary(
         "//donner/svg/renderer/geode:geode_device",
         "@glfw",
     ],
+)
+
+# Builds the embed example in the ordinary `bazel test //...` run, so the embedding guide's
+# snippets compile in pull-request CI and not only in `--config=geode` builds.
+sh_test(
+    name = "geode_embed_builds_impl",
+    srcs = ["geode_embed_builds_test.sh"],
+    data = [":geode_embed"],
+    tags = ["manual"],
+)
+
+donner_multi_transitioned_test(
+    name = "geode_embed_builds_test",
+    dep = ":geode_embed_builds_impl",
+    renderer_backend = "geode",
 )
 
 no_rust_dependency_audit_test(
