@@ -661,6 +661,7 @@ test("a failed worker publication cannot inherit a prior frame's presentation ad
       completedResults: 3,
       acceptedForPresentation: true,
       presentedAtMs: 200,
+      presentationPublicationDelayMs: 40,
       publishReason: "render-result",
     },
   };
@@ -673,12 +674,14 @@ test("a failed worker publication cannot inherit a prior frame's presentation ad
     completedResults: stats.completedResults,
     acceptedForPresentation: stats.acceptedForPresentation,
     presentedAtMs: stats.presentedAtMs,
+    presentationPublicationDelayMs: stats.presentationPublicationDelayMs,
     deviceLost: stats.deviceLost,
     publishReason: stats.publishReason,
   }, {
     completedResults: 3,
     acceptedForPresentation: false,
     presentedAtMs: undefined,
+    presentationPublicationDelayMs: undefined,
     deviceLost: true,
     publishReason: "gpu-wait-failure",
   });
