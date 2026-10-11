@@ -4016,6 +4016,7 @@ TEST(EditorShellTest, PartlyOffscreenSplashShineEllipseFirstHeldMoveMatchesSettl
         RenderCoordinator& coordinator = EditorShellTestAccess::Coordinator(shell);
         RenderCoordinatorTestAccess::makeCanvasCommitDue(coordinator);
         RenderCoordinatorTestAccess::makeRasterViewportSettled(coordinator);
+        continue;
       }
       if (!app.document().hasPendingMutations() && !shell.asyncRendererForReplay().isBusy() &&
           app.document().currentFrameVersion() >= minimumVersion &&
