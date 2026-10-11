@@ -1153,10 +1153,8 @@ TEST_F(TextSystemTest, PositioningAttributesIgnoreUnsupportedTextPathFields) {
   auto document = ParseAndCompute(R"svg(
     <svg xmlns="http://www.w3.org/2000/svg">
       <path id="p" d="M0 100H200"/>
-      <text id="t" x="10 20 30" y="11 21 31" dx="1 2 3" dy="7 8 9" rotate="10 20 30">
-        <textPath href="#p" x="900 901 902" y="800 801 802" dx="700 701 702"
-                  dy="600 601 602" rotate="500 501 502">A<tspan>B</tspan>C</textPath>
-      </text>
+      <text id="t" x="10 20 30" y="11 21 31" dx="1 2 3" dy="7 8 9" rotate="10 20 30"><textPath href="#p" x="900 901 902" y="800 801 802" dx="700 701 702"
+                  dy="600 601 602" rotate="500 501 502">A<tspan>B</tspan>C</textPath></text>
     </svg>
   )svg");
   const auto* computed =
