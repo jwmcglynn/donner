@@ -239,11 +239,14 @@ const Box2d kUnitPathBounds(Vector2d::Zero(), Vector2d(1, 1));
 /// Source UV rect that samples an entire texture.
 const Box2d kWholeTextureUv(Vector2d::Zero(), Vector2d(1, 1));
 
-/// Whether an affine map keeps rectangular mask regions axis aligned.
+/// Whether a mask region needs exact GPU clipping beyond its transformed bounding box.
+/// @param maskBounds Optional mask region in local coordinates.
 /// @param deviceFromLocal Transform from local coordinates to device pixels.
-bool PreservesAxisAlignedRectangles(const Transform2d& deviceFromLocal) {
-  return (deviceFromLocal.data[1] == 0.0 && deviceFromLocal.data[2] == 0.0) ||
-         (deviceFromLocal.data[0] == 0.0 && deviceFromLocal.data[3] == 0.0);
+bool RequiresMaskRegionClip(const std::optional<Box2d>& maskBounds,
+                            const Transform2d& deviceFromLocal) {
+  const bool axisAligned = (deviceFromLocal.data[1] == 0.0 && deviceFromLocal.data[2] == 0.0) ||
+                           (deviceFromLocal.data[0] == 0.0 && deviceFromLocal.data[3] == 0.0);
+  return maskBounds.has_value() && !axisAligned;
 }
 
 std::optional<Vector2i> CheckedViewportPixels(const RenderViewport& viewport) {
@@ -6426,7 +6429,7 @@ void RendererGeode::pushMask(const std::optional<Box2d>& maskBounds, MaskType ma
   captureEncoder->clear(css::RGBA(0, 0, 0, 0));
   impl_->replaceActiveEncoder(std::move(captureEncoder));
   impl_->maskStack.push_back(std::move(frame));
-  if (maskBounds.has_value() && !PreservesAxisAlignedRectangles(impl_->deviceFromLocalTransform)) {
+  if (RequiresMaskRegionClip(maskBounds, impl_->deviceFromLocalTransform)) {
     // The transformed AABB cannot preserve a rotated or sheared mask region. A GPU clip mask
     // also constrains bitmap and nested offscreen draws that do not consume polygon planes.
     ResolvedClip regionClip;
