@@ -10,13 +10,62 @@ import tempfile
 import unittest
 
 from python.runfiles import runfiles
+from test_executable_fixtures import ExecutableFixtureDirectory
 
 
 class CoverageScriptTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.executables = ExecutableFixtureDirectory()
+        cls.addClassCleanup(cls.executables.cleanup)
+        cls.fixture_bin = cls.executables.path
+        cls.executables.write(
+            "bazel",
+            '#!/bin/bash\n'
+            'case "$1" in\n'
+            ' info) case "$2" in\n'
+            '  workspace) echo "$FIXTURE_ROOT";;\n'
+            '  output_path) echo "$FIXTURE_ROOT/output";;\n'
+            ' esac;;\n'
+            ' coverage)\n'
+            '  printf "invoked\\n" > "$FIXTURE_ROOT/coverage-invoked"\n'
+            '  for arg in "$@"; do\n'
+            '   case "$arg" in --build_event_json_file=*)\n'
+            '    cp "$FIXTURE_ROOT/fixture-bep.json" "${arg#*=}";;\n'
+            '   esac\n'
+            '  done\n'
+            '  if [[ "$FIXTURE_REPORT" = 1 ]]; then\n'
+            '   mkdir -p "$FIXTURE_ROOT/output/_coverage"\n'
+            '   printf "SF:donner/example.cc\\nDA:1,1\\nLF:1\\nLH:1\\nend_of_record\\n" '
+            '> "$FIXTURE_ROOT/output/_coverage/_coverage_report.dat"\n'
+            '  fi\n'
+            '  if [[ -n "$FIXTURE_PRIVATE_ERROR" ]]; then\n'
+            '   printf "%s\\n" "$FIXTURE_PRIVATE_ERROR"\n'
+            '  fi\n'
+            '  exit "$FIXTURE_STATUS";;\n'
+            'esac\n',
+        )
+        cls.executables.write("java", "#!/bin/sh\nexit 0\n")
+        cls.executables.write(
+            "clang", '#!/bin/sh\nprintf "%s/%s\\n" "${0%/*}" "${1#--print-prog-name=}"\n'
+        )
+        cls.executables.write("llvm-cov", "#!/bin/sh\nexit 99\n")
+        cls.executables.write("llvm-profdata", "#!/bin/sh\nexit 99\n")
+        cls.executables.write("python3", '#!/bin/sh\nexec "$FIXTURE_PYTHON" "$@"\n')
+
+    def test_executable_stubs_are_shared_for_the_test_class(self):
+        stub = self.fixture_bin / "bazel"
+        inode = stub.stat().st_ino
+        for _ in range(2):
+            with tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                result = self.run_fixture(root, quiet=True, status=0, report=True)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertFalse((root / "bin/bazel").exists())
+                self.assertEqual(stub.stat().st_ino, inode)
+
     def run_fixture(self, root, quiet, status, report, failed_target=False, failed_test=False,
                     geode_failed=False, geode_xml=None, remote_failure=False):
-        binaries = root / "bin"
-        binaries.mkdir()
         (root / "output").mkdir()
         (root / "tools").mkdir()
         resolver = runfiles.Create()
@@ -88,72 +137,40 @@ class CoverageScriptTest(unittest.TestCase):
         (root / "fixture-bep.json").write_text(
             "\n".join(json.dumps(event) for event in events), encoding="utf-8"
         )
-        fake_bazel = binaries / "bazel"
-        fake_bazel.write_text(
-            '#!/bin/bash\n'
-            'case "$1" in\n'
-            ' info) case "$2" in\n'
-            '  workspace) echo "$FIXTURE_ROOT";;\n'
-            '  output_path) echo "$FIXTURE_ROOT/output";;\n'
-            ' esac;;\n'
-            ' coverage)\n'
-            '  printf "invoked\\n" > "$FIXTURE_ROOT/coverage-invoked"\n'
-            '  for arg in "$@"; do\n'
-            '   case "$arg" in --build_event_json_file=*)\n'
-            '    cp "$FIXTURE_ROOT/fixture-bep.json" "${arg#*=}";;\n'
-            '   esac\n'
-            '  done\n'
-            '  if [[ "$FIXTURE_REPORT" = 1 ]]; then\n'
-            '   mkdir -p "$FIXTURE_ROOT/output/_coverage"\n'
-            '   printf "SF:donner/example.cc\\nDA:1,1\\nLF:1\\nLH:1\\nend_of_record\\n" '
-            '> "$FIXTURE_ROOT/output/_coverage/_coverage_report.dat"\n'
-            '  fi\n'
-            '  if [[ -n "$FIXTURE_PRIVATE_ERROR" ]]; then\n'
-            '   printf "%s\\n" "$FIXTURE_PRIVATE_ERROR"\n'
-            '  fi\n'
-            '  exit "$FIXTURE_STATUS";;\n'
-            'esac\n',
-            encoding="utf-8",
-        )
-        fake_bazel.chmod(0o755)
-        for name, body in (
-            ("java", "#!/bin/sh\nexit 0\n"),
-            # Discovery checks executable paths without running either tool.
-            # Supply fixture-owned executables instead of assuming /bin/true
-            # exists on every worker (macOS provides /usr/bin/true).
-            ("clang", '#!/bin/sh\nprintf "%s/%s\\n" "${0%/*}" "${1#--print-prog-name=}"\n'),
-            ("llvm-cov", "#!/bin/sh\nexit 99\n"),
-            ("llvm-profdata", "#!/bin/sh\nexit 99\n"),
-            ("python3", '#!/bin/sh\nexec "$FIXTURE_PYTHON" "$@"\n'),
-        ):
-            path = binaries / name
-            path.write_text(body, encoding="utf-8")
-            path.chmod(0o755)
+        fake_bazel = self.fixture_bin / "bazel"
         command = ["bash", resolver.Rlocation("donner/tools/coverage.sh"), "--no-html"]
         if quiet:
             command.append("--quiet")
-        result = subprocess.run(
-            command,
-            cwd=root,
-            env={
-                **os.environ,
-                "PATH": str(binaries) + os.pathsep + os.environ["PATH"],
-                "FIXTURE_ROOT": str(root),
-                "FIXTURE_PYTHON": sys.executable,
-                "FIXTURE_STATUS": str(status),
-                "FIXTURE_REPORT": str(int(report)),
-                "FIXTURE_PRIVATE_ERROR": (
-                    "ERROR: NOT_FOUND: Error while downloading artifact with digest "
-                    "'abc/72' grpc://private.example/secret /runner/path token=secret"
-                    if remote_failure else ""
-                ),
-                "DONNER_BAZEL": str(fake_bazel),
-            },
-            capture_output=True,
-            text=True,
-            timeout=20,
-            check=False,
-        )
+        try:
+            result = subprocess.run(
+                command,
+                cwd=root,
+                env={
+                    **os.environ,
+                    "PATH": str(self.fixture_bin) + os.pathsep + os.environ["PATH"],
+                    "FIXTURE_ROOT": str(root),
+                    "FIXTURE_PYTHON": sys.executable,
+                    "FIXTURE_STATUS": str(status),
+                    "FIXTURE_REPORT": str(int(report)),
+                    "FIXTURE_PRIVATE_ERROR": (
+                        "ERROR: NOT_FOUND: Error while downloading artifact with digest "
+                        "'abc/72' grpc://private.example/secret /runner/path token=secret"
+                        if remote_failure else ""
+                    ),
+                    "DONNER_BAZEL": str(fake_bazel),
+                },
+                capture_output=True,
+                text=True,
+                timeout=20,
+                check=False,
+            )
+        except subprocess.TimeoutExpired as error:
+            context = (
+                f"{self.id()} quiet={quiet} status={status} report={report} "
+                f"failed_target={failed_target} failed_test={failed_test} "
+                f"geode_failed={geode_failed} remote_failure={remote_failure}"
+            )
+            raise AssertionError(f"{context}: coverage fixture exceeded 20 seconds") from error
         self.assertEqual(
             "invoked\n",
             (root / "coverage-invoked").read_text(encoding="utf-8")

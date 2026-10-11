@@ -14,6 +14,7 @@ import textwrap
 import unittest
 
 from python.runfiles import runfiles
+from test_executable_fixtures import ExecutableFixtureDirectory
 
 
 # The editor Wasm payload ceilings CI enforces. Changing one means editing the size test's
@@ -53,8 +54,37 @@ def _declared_payload_ceilings(size_test_arguments):
 
 
 class CiRuntimeWorkflowTest(unittest.TestCase):
+    def test_executable_stubs_are_shared_for_the_test_class(self):
+        stub = self.fixture_bin / "python3"
+        resolved = []
+        for _ in range(2):
+            result = self._run_script("#!/bin/bash\ncommand -v python3\n", [])
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            resolved.append(Path(result.stdout.strip()))
+        self.assertEqual(resolved, [stub, stub])
+        self.assertEqual(resolved[0].stat().st_ino, resolved[1].stat().st_ino)
+
     @classmethod
     def setUpClass(cls):
+        cls.executables = ExecutableFixtureDirectory()
+        cls.addClassCleanup(cls.executables.cleanup)
+        cls.fixture_bin = cls.executables.path
+        cls.executables.write("python3", '#!/bin/sh\nexec "$FIXTURE_PYTHON" "$@"\n')
+        (cls.fixture_bin / "shasum_fixture.py").write_text(
+            "import hashlib, os, sys, time\n"
+            "time.sleep(float(os.environ['FIXTURE_HASH_STARTUP_SECONDS']))\n"
+            "with open(os.path.join(os.environ['FIXTURE_ROOT'], 'hash-starts'), 'a') as starts:\n"
+            "    starts.write(str(len(sys.argv) - 3) + '\\n')\n"
+            "assert sys.argv[1:3] == ['-a', '256']\n"
+            "for name in sys.argv[3:]:\n"
+            "    with open(name, 'rb') as stream:\n"
+            "        digest = hashlib.sha256(stream.read()).hexdigest()\n"
+            "    print(f'{digest}  {name}')\n",
+            encoding="utf-8",
+        )
+        cls.executables.write(
+            "shasum", '#!/bin/sh\nexec "$FIXTURE_PYTHON" "$FIXTURE_BIN/shasum_fixture.py" "$@"\n'
+        )
         cls.bazelrc = _repository_text(".bazelrc")
         cls.main = _repository_text(".github/workflows/main.yml")
         cls.cmake = _repository_text(".github/workflows/cmake.yml")
@@ -389,26 +419,29 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         self.assertIsNotNone(match, "heartbeat wrapper heredoc not found")
         return textwrap.dedent(match.group("body"))
 
-    def _run_script(self, text, args, env=None, timeout=10, cwd=None):
+    def _run_script(self, text, args, env=None, timeout=10, cwd=None, context=None):
         with tempfile.TemporaryDirectory() as temp_dir:
             script = Path(temp_dir) / "fixture.sh"
             script.write_text(text)
-            script.chmod(0o755)
-            python = Path(temp_dir) / "python3"
-            python.write_text('#!/bin/sh\nexec "$FIXTURE_PYTHON" "$@"\n')
-            python.chmod(0o755)
             fixture_env = dict(os.environ if env is None else env)
             fixture_env["FIXTURE_PYTHON"] = sys.executable
-            fixture_env["PATH"] = temp_dir + os.pathsep + fixture_env.get("PATH", os.defpath)
-            return subprocess.run(
-                ["/bin/bash", str(script), *args],
-                check=False,
-                capture_output=True,
-                text=True,
-                env=fixture_env,
-                timeout=timeout,
-                cwd=cwd,
-            )
+            fixture_env["FIXTURE_BIN"] = str(self.fixture_bin)
+            fixture_env["PATH"] = (temp_dir + os.pathsep + str(self.fixture_bin) + os.pathsep +
+                                   fixture_env.get("PATH", os.defpath))
+            try:
+                return subprocess.run(
+                    ["/bin/bash", str(script), *args],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    env=fixture_env,
+                    timeout=timeout,
+                    cwd=cwd,
+                )
+            except subprocess.TimeoutExpired as error:
+                raise AssertionError(
+                    f"{context or self.id()}: shell fixture exceeded {timeout} seconds"
+                ) from error
 
     def test_wasm_build_and_browser_checks_share_one_runner_and_package(self):
         self.assertNotIn("\n  test:\n", self.editor_wasm)
@@ -1082,31 +1115,17 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
             "donner/editor/wasm/catalog_package_integrity_test.py"))
         return package
 
-    def _stage_catalog_candidate(self, root, hash_startup_delay=0):
+    def _stage_catalog_candidate(self, root, hash_startup_delay=0, context=None):
         body = self._step_body(self.editor_wasm, "Stage immutable Geode deployment candidate")
         script = "#!/bin/bash\n" + textwrap.dedent(body.split("        run: |\n", 1)[1])
         # The real staging job runs on macOS, where shasum is available. The
         # workflow contract test also runs on Linux, so provide the same
         # SHA-256 command from the fixture rather than relying on host tools.
-        (root / "shasum_fixture.py").write_text(
-            "import hashlib, os, sys, time\n"
-            "time.sleep(float(os.environ['FIXTURE_HASH_STARTUP_SECONDS']))\n"
-            "with open(os.path.join(os.environ['FIXTURE_ROOT'], 'hash-starts'), 'a') as starts:\n"
-            "    starts.write(str(len(sys.argv) - 3) + '\\n')\n"
-            "assert sys.argv[1:3] == ['-a', '256']\n"
-            "for name in sys.argv[3:]:\n"
-            "    with open(name, 'rb') as stream:\n"
-            "        digest = hashlib.sha256(stream.read()).hexdigest()\n"
-            "    print(f'{digest}  {name}')\n"
-        )
-        shasum = root / "shasum"
-        shasum.write_text('#!/bin/sh\nexec "$FIXTURE_PYTHON" "$FIXTURE_ROOT/shasum_fixture.py" "$@"\n')
-        shasum.chmod(0o755)
-        return self._run_script(script, [], cwd=root, env={
+        return self._run_script(script, [], cwd=root, context=context, env={
             **os.environ, "RUNNER_TEMP": str(root), "GITHUB_SHA": "a" * 40,
             "GITHUB_RUN_ID": "12", "GITHUB_RUN_ATTEMPT": "2",
             "PACKAGE_TARGET": "//fixture:package", "GITHUB_OUTPUT": str(root / "output"),
-            "PATH": str(root) + os.pathsep + os.environ["PATH"],
+            "PATH": os.environ["PATH"],
             "FIXTURE_PYTHON": sys.executable, "FIXTURE_ROOT": str(root),
             "FIXTURE_HASH_STARTUP_SECONDS": str(hash_startup_delay),
         })
@@ -1170,7 +1189,9 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
                     (package / "unexpected.txt").write_text("unexpected")
                 else:
                     (package / "catalog-fonts.js").unlink()
-                result = self._stage_catalog_candidate(root)
+                result = self._stage_catalog_candidate(
+                    root, context=f"{self.id()} failure={failure}"
+                )
                 self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
                 self.assertFalse((root / "output").exists())
 
