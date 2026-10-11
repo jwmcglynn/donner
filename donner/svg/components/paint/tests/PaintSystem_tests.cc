@@ -108,6 +108,90 @@ TEST_F(PaintSystemTest, LinearGradientWithStops) {
   EXPECT_THAT(computed->stops, SizeIs(2));
 }
 
+TEST_F(PaintSystemTest, StopExplicitColorInheritance) {
+  struct TestCase {
+    std::string_view svg;
+    css::Color expected;
+  };
+  for (
+      const auto& test : {
+          TestCase{R"(<svg xmlns="http://www.w3.org/2000/svg">
+            <style>#g { stop-color: lime !important; } linearGradient { stop-color: red !important; }</style>
+            <linearGradient id="g"><stop stop-color="inherit"/></linearGradient>
+          </svg>)",
+                   css::Color(css::RGBA(0, 255, 0, 255))},
+          TestCase{R"(<svg xmlns="http://www.w3.org/2000/svg">
+            <style>linearGradient { stop-color: red !important; } #g { stop-color: lime !important; }</style>
+            <linearGradient id="g"><stop stop-color="inherit"/></linearGradient>
+          </svg>)",
+                   css::Color(css::RGBA(0, 255, 0, 255))},
+          TestCase{R"(<svg xmlns="http://www.w3.org/2000/svg">
+            <style>linearGradient { stop-color: red !important; } linearGradient { stop-color: lime !important; }</style>
+            <linearGradient id="g"><stop stop-color="inherit"/></linearGradient>
+          </svg>)",
+                   css::Color(css::RGBA(0, 255, 0, 255))},
+          TestCase{R"(<svg xmlns="http://www.w3.org/2000/svg">
+            <style>linearGradient { stop-color: lime !important; } #g { stop-color: bogus !important; }</style>
+            <linearGradient id="g"><stop stop-color="inherit"/></linearGradient>
+          </svg>)",
+                   css::Color(css::RGBA(0, 255, 0, 255))},
+          TestCase{R"(<svg xmlns="http://www.w3.org/2000/svg">
+            <style>#g { stop-color: lime !important; }</style>
+            <linearGradient id="g" style="stop-color: red !important">
+              <stop stop-color="inherit"/>
+            </linearGradient>
+          </svg>)",
+                   css::Color(css::RGBA(255, 0, 0, 255))},
+          TestCase{
+              R"(<svg xmlns="http://www.w3.org/2000/svg"><style>linearGradient { stop-color: red; } #g { stop-color: lime; }</style><linearGradient id="g"><stop stop-color="inherit"/></linearGradient></svg>)",
+              css::Color(css::RGBA(0, 255, 0, 255))},
+          TestCase{
+              R"(<svg xmlns="http://www.w3.org/2000/svg"><style>#g { stop-color: lime !important; }</style><linearGradient id="g" style="stop-color: blue"><stop stop-color="inherit"/></linearGradient></svg>)",
+              css::Color(css::RGBA(0, 255, 0, 255))},
+          TestCase{
+              R"(<svg xmlns="http://www.w3.org/2000/svg"><linearGradient id="g" style="stop-color: bogus; stop-color: lime; stop-color: invalid"><stop stop-color="inherit"/></linearGradient></svg>)",
+              css::Color(css::RGBA(0, 255, 0, 255))},
+          TestCase{
+              R"(<svg xmlns="http://www.w3.org/2000/svg"><linearGradient id="g" style="stop-color: red !important; stop-color: lime"><stop stop-color="inherit"/></linearGradient></svg>)",
+              css::Color(css::RGBA(255, 0, 0, 255))},
+          TestCase{R"(<svg xmlns="http://www.w3.org/2000/svg">
+             <linearGradient id="g" stop-color="green">
+               <stop stop-color="inherit"/>
+             </linearGradient>
+           </svg>)",
+                   css::Color(css::RGBA(0, 128, 0, 255))},
+          TestCase{R"(<svg xmlns="http://www.w3.org/2000/svg">
+             <style>linearGradient { stop-color: green; } stop { stop-color: inherit; }</style>
+             <linearGradient id="g" stop-color="red"><stop/></linearGradient>
+           </svg>)",
+                   css::Color(css::RGBA(0, 128, 0, 255))},
+          TestCase{R"(<svg xmlns="http://www.w3.org/2000/svg" stop-color="lime">
+             <g style="stop-color: inherit"><linearGradient id="g" stop-color="inherit">
+               <stop stop-color="inherit"/>
+             </linearGradient></g>
+           </svg>)",
+                   css::Color(css::RGBA(0, 255, 0, 255))},
+          TestCase{R"(<svg xmlns="http://www.w3.org/2000/svg">
+             <linearGradient id="g" color="green" stop-color="currentColor">
+               <stop color="red" stop-color="inherit"/>
+             </linearGradient>
+           </svg>)",
+                   css::Color(css::RGBA(255, 0, 0, 255))},
+          TestCase{R"(<svg xmlns="http://www.w3.org/2000/svg">
+             <linearGradient id="g" stop-color="green"><stop/></linearGradient>
+           </svg>)",
+                   css::Color(css::RGBA(0, 0, 0, 255))},
+      }) {
+    SCOPED_TRACE(test.svg);
+    auto document = ParseAndCompute(test.svg);
+    auto element = document.querySelector("#g");
+    ASSERT_THAT(element, testing::Optional(testing::_));
+    const auto* computed = element->entityHandle().try_get<ComputedGradientComponent>();
+    ASSERT_THAT(computed, NotNull());
+    EXPECT_THAT(computed->stops, ElementsAre(GradientStopIs(0.0f, test.expected)));
+  }
+}
+
 TEST_F(PaintSystemTest, LinearGradientNoStops) {
   auto document = ParseAndCompute(R"(
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
@@ -130,7 +214,7 @@ TEST_F(PaintSystemTest, CreateComputedStopReturnsExistingComponent) {
   SVGStopElement stopElement = SVGStopElement::Create(document);
   auto& registry = document.registry();
   auto entity = stopElement.unsafeEntityHandle().entity();
-  auto& stop = registry.emplace<StopComponent>(entity);
+  auto& stop = registry.get<StopComponent>(entity);
   auto& style = registry.emplace<ComputedStyleComponent>(entity);
   style.properties.emplace();
   ParseWarningSink disabledSink = ParseWarningSink::Disabled();

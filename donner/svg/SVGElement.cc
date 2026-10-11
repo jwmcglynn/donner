@@ -20,6 +20,7 @@
 #include "donner/svg/components/TreeMutation.h"
 #include "donner/svg/components/layout/LayoutSystem.h"
 #include "donner/svg/components/layout/TransformComponent.h"
+#include "donner/svg/components/paint/StopComponent.h"
 #include "donner/svg/components/shadow/ShadowTreeComponent.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
 #include "donner/svg/components/style/StyleComponent.h"
@@ -51,8 +52,15 @@ void markStyleCascadeDirty(EntityHandle handle, uint16_t extraFlags = 0) {
   (void)components::InvalidateTextLayout(handle);
 }
 
+/// Resource colors support explicit inheritance despite their non-inherited defaults.
+bool ShouldInvalidateDescendantStyles(std::string_view name) {
+  return PropertyRegistry::isPresentationAttributeInherited(name) || name == "flood-color" ||
+         name == "stop-color";
+}
+
 void invalidateComputedStyle(EntityHandle handle) {
   components::StyleSystem().invalidateComputed(handle);
+  handle.remove<components::ComputedStopComponent>();
 }
 
 components::RenderTreeState& getRenderTreeState(EntityHandle handle) {
@@ -435,7 +443,7 @@ void SVGElement::setStyle(std::string_view style) {
   handle_.get_or_emplace<donner::components::AttributesComponent>(access).setAttribute(
       *handle_.registry(), xml::XMLQualifiedName("style"), RcString(style));
 
-  components::StyleSystem().invalidateAll(handle_);
+  invalidateComputedStyle(handle_);
   markNeedsFullStyleRecompute(handle_);
   invalidateComputedStyleForDescendants(handle_);
 
@@ -521,7 +529,7 @@ ParseResult<bool> SVGElement::trySetPresentationAttribute(std::string_view name,
       markNeedsFullStyleRecompute(handle_);
       invalidateComputedStyle(handle_);
       markStyleCascadeDirty(handle_, components::DirtyFlagsComponent::Shape);
-      if (PropertyRegistry::isPresentationAttributeInherited(actualName)) {
+      if (ShouldInvalidateDescendantStyles(actualName)) {
         invalidateComputedStyleForDescendants(handle_);
         propagateStyleDirtyToDescendants(handle_);
       }

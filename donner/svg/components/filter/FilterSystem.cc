@@ -161,24 +161,19 @@ filter_primitive::Flood resolveFloodProperties(const Registry& registry, entt::e
     props = *comp;
   }
 
-  // Overlay CSS unparsed properties (from style="" or stylesheet rules).
+  // Overlay computed CSS properties (from attributes, inline styles, or stylesheet rules).
   if (const auto* style = registry.try_get<ComputedStyleComponent>(cur)) {
     if (style->properties.has_value()) {
+      const auto& color = style->properties->floodColor;
+      if (color.isSpecified() && color.specificity >= props.floodColor.specificity) {
+        props.floodColor = color;
+      }
       for (const auto& [name, unparsedProperty] : style->properties->unparsedProperties) {
         const parser::PropertyParseFnParams params = parser::PropertyParseFnParams::Create(
             unparsedProperty.declaration, unparsedProperty.specificity,
             parser::PropertyParseBehavior::AllowUserUnits);
 
-        if (name == "flood-color") {
-          if (auto maybeError = Parse(
-                  params,
-                  [](const parser::PropertyParseFnParams& params) {
-                    return css::parser::ColorParser::Parse(params.components());
-                  },
-                  &props.floodColor)) {
-            warningSink.add(std::move(maybeError.value()));
-          }
-        } else if (name == "flood-opacity") {
+        if (name == "flood-opacity") {
           if (auto maybeError = Parse(
                   params,
                   [](const parser::PropertyParseFnParams& params) {
@@ -221,7 +216,7 @@ css::Color resolveLightingColor(const Registry& registry, entt::entity cur,
     lightingColor = comp->lightingColor;
   }
 
-  // Overlay CSS unparsed properties (from style="" or stylesheet rules).
+  // Overlay computed CSS properties (from attributes, inline styles, or stylesheet rules).
   if (const auto* style = registry.try_get<ComputedStyleComponent>(cur)) {
     if (style->properties.has_value()) {
       for (const auto& [name, unparsedProperty] : style->properties->unparsedProperties) {
@@ -622,21 +617,16 @@ void FilterSystem::createComputedFilter(EntityHandle handle, const FilterCompone
       FEDropShadowComponent props = *dropShadow;
       if (const auto* style = registry.try_get<ComputedStyleComponent>(cur)) {
         if (style->properties.has_value()) {
+          const auto& color = style->properties->floodColor;
+          if (color.isSpecified() && color.specificity >= props.floodColor.specificity) {
+            props.floodColor = color;
+          }
           for (const auto& [name, unparsedProperty] : style->properties->unparsedProperties) {
             const parser::PropertyParseFnParams params = parser::PropertyParseFnParams::Create(
                 unparsedProperty.declaration, unparsedProperty.specificity,
                 parser::PropertyParseBehavior::AllowUserUnits);
 
-            if (name == "flood-color") {
-              if (auto maybeError = Parse(
-                      params,
-                      [](const parser::PropertyParseFnParams& params) {
-                        return css::parser::ColorParser::Parse(params.components());
-                      },
-                      &props.floodColor)) {
-                warningSink.add(std::move(maybeError.value()));
-              }
-            } else if (name == "flood-opacity") {
+            if (name == "flood-opacity") {
               if (auto maybeError = Parse(
                       params,
                       [](const parser::PropertyParseFnParams& params) {

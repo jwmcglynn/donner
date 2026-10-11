@@ -561,15 +561,10 @@ INSTANTIATE_TEST_SUITE_P(
         ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
 
-INSTANTIATE_TEST_SUITE_P(
-    FiltersFloodColor, ImageComparisonTestFixture,
-    Combine(ValuesIn(getTestsInCategory("filters/flood-color",
-                                        {
-                                            {"inheritance-3.svg",
-                                             Params::Skip("230K diff: ICC color")},
-                                        })),
-            ValuesIn(ActiveComparisonModes())),
-    TestNameFromFilename);
+INSTANTIATE_TEST_SUITE_P(FiltersFloodColor, ImageComparisonTestFixture,
+                         Combine(ValuesIn(getTestsInCategory("filters/flood-color")),
+                                 ValuesIn(ActiveComparisonModes())),
+                         TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(FiltersFloodOpacity, ImageComparisonTestFixture,
                          Combine(ValuesIn(getTestsInCategory("filters/flood-opacity")),
@@ -716,8 +711,6 @@ INSTANTIATE_TEST_SUITE_P(
                     {"no-stop-color.svg",
                      Params::WithThreshold(0.03f, kDefaultMismatchedPixels,
                                            "OKLab sensitivity to gradient edge coverage")},
-                    {"stop-color-with-inherit-1.svg",
-                     Params::Skip("Bug? Strange edge case, stop-color")},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
