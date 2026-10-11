@@ -716,10 +716,11 @@ test("thumbnail publication keeps drained state separate from explicit readback 
   );
   const window = {};
   for (const [drained, readbackCount] of [[1, 37], [0, 41]]) {
-    const values = { drained, readbackCount, completed: 5, ready: 5 };
+    const values = { drained, readbackCount, completed: 5, ready: 5, fontPreviewObligations: 3 };
     publish(window, { now: () => 123 }, ...argumentNames.map((name) => values[name] ?? 0));
     assert.equal(window.__donnerSampleThumbnailStats.drained, Boolean(drained));
     assert.equal(window.__donnerSampleThumbnailStats.explicitPreviewReadbackTotal, readbackCount);
+    assert.equal(window.__donnerSampleThumbnailStats.fontPreviewObligations, 3);
   }
 });
 
@@ -745,7 +746,7 @@ test("the shared sample thumbnail gate waits for a drained thumbnail lane", () =
   assert.doesNotMatch(helper, /toMatchObject/);
 });
 
-test("post-picker thumbnail quiescence follows accepted request completion", () => {
+test("post-picker thumbnail quiescence includes queued and font-blocked previews", () => {
   const settledAfterPickerClosed = {
     requested: 17,
     started: 17,
@@ -754,6 +755,7 @@ test("post-picker thumbnail quiescence follows accepted request completion", () 
     active: false,
     resultReady: false,
     drained: false,
+    fontPreviewObligations: 0,
   };
   assert.equal(sampleThumbnailLaneQuiescent(settledAfterPickerClosed), true);
   assert.equal(
@@ -777,6 +779,20 @@ test("post-picker thumbnail quiescence follows accepted request completion", () 
     sampleThumbnailLaneQuiescent({ ...settledAfterPickerClosed, completed: 16 }),
     false,
   );
+  for (const obligation of ["a queued preview", "a font-blocked preview"]) {
+    assert.equal(
+      sampleThumbnailLaneQuiescent({ ...settledAfterPickerClosed, fontPreviewObligations: 1 }),
+      false,
+      `${obligation} can submit work after a font-store wake`,
+    );
+  }
+  for (const value of [undefined, Number.NaN, -1]) {
+    assert.equal(
+      sampleThumbnailLaneQuiescent({ ...settledAfterPickerClosed, fontPreviewObligations: value }),
+      false,
+      "missing or invalid shell obligations cannot establish quiescence",
+    );
+  }
   assert.equal(sampleThumbnailLaneQuiescent(undefined), false);
   for (const field of ["pending", "active", "resultReady"]) {
     const missing = { ...settledAfterPickerClosed };
