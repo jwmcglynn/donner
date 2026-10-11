@@ -664,6 +664,13 @@ TEST_F(RendererRegressionTests, SpanGradientOverridesElementPatternStroke) {
   renderAndCompare(document, svg, golden, GoldenParams());
 }
 
+TEST_F(RendererRegressionTests, NestedTextRotationMatchesResvgReference) {
+  const char* svg = "third_party/resvg-test-suite/tests/text/tspan/nested-rotate.svg";
+  const char* golden = "third_party/resvg-test-suite/tests/text/tspan/nested-rotate.png";
+  SVGDocument document = loadSVG(svg, ResvgResourceRoot());
+  renderAndCompare(document, svg, golden, Params());
+}
+
 TEST_F(RendererRegressionTests, NestedTextRotationMatchesExplicitCharacterRotations) {
   const RendererBitmap inherited = RenderTextOpacityCase(
       R"svg(<text x="15" y="90" font-family="Noto Sans" font-size="24"
