@@ -1002,7 +1002,7 @@ TEST_F(TextSystemTest, RotateListStopsWhenGlobalIndicesRunOut) {
   EXPECT_THAT(computed->spans[0].rotateList, testing::ElementsAre(testing::DoubleNear(15.0, 1e-9)));
 }
 
-TEST_F(TextSystemTest, InheritedRotateListStopsAcrossChildSpans) {
+TEST_F(TextSystemTest, InheritedRotateRepeatsAcrossChildSpans) {
   auto document = ParseAndCompute(R"svg(
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
       <text id="t" rotate="15"><tspan>A</tspan><tspan>B</tspan></text>
@@ -1015,7 +1015,26 @@ TEST_F(TextSystemTest, InheritedRotateListStopsAcrossChildSpans) {
   ASSERT_NE(computed, nullptr);
   ASSERT_THAT(computed->spans, SizeIs(3));
   EXPECT_THAT(computed->spans[1].rotateList, testing::ElementsAre(testing::DoubleNear(15.0, 1e-9)));
-  EXPECT_THAT(computed->spans[2].rotateList, IsEmpty());
+  EXPECT_THAT(computed->spans[2].rotateList, testing::ElementsAre(testing::DoubleEq(15.0)));
+}
+
+TEST_F(TextSystemTest, NestedRotateUsesAncestorSubtreeIndicesAndOverrides) {
+  auto document = ParseAndCompute(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+      <text id="t" rotate="1 2 3 4 5 6 7">A<tspan rotate="10 20 30">B<tspan>C</tspan><tspan rotate="90">D</tspan>E</tspan>F<tspan>G</tspan></text>
+    </svg>
+  )svg");
+
+  auto* computed =
+      document.querySelector("#t")->unsafeEntityHandle().try_get<ComputedTextComponent>();
+  ASSERT_THAT(computed, testing::NotNull());
+  ASSERT_THAT(computed->spans, SizeIs(7));
+  const std::vector<double> expected = {1, 10, 20, 90, 30, 6, 7};
+  for (size_t i = 0; i < expected.size(); ++i) {
+    SCOPED_TRACE(i);
+    ASSERT_THAT(computed->spans[i].rotateList, testing::Not(IsEmpty()));
+    EXPECT_THAT(computed->spans[i].rotateList.front(), testing::DoubleEq(expected[i]));
+  }
 }
 
 TEST_F(TextSystemTest, XmlSpacePreserveKeepsWhitespaceAndInheritance) {
