@@ -494,6 +494,17 @@ TEST(PropertyRegistry, MaskTypeGrammarAndCascade) {
   EXPECT_THAT(child.maskType.get(), Optional(MaskType::Luminance));
 }
 
+TEST(PropertyRegistry, ColorInterpolationGrammar) {
+  for (std::string_view value : {"sRGB", "linearRGB", "auto", "inherit", "initial", "unset"}) {
+    SCOPED_TRACE(value);
+    PropertyRegistry registry;
+    const css::Declaration declaration =
+        css::CSS::ParseStyleAttribute(std::string("color-interpolation: ") + std::string(value))
+            .at(0);
+    EXPECT_THAT(registry.parseProperty(declaration, Specificity()), Eq(std::nullopt));
+  }
+}
+
 TEST(PropertyRegistry, Fill) {
   // Initial value of fill is black.
   const PaintServer kInitialFill(PaintServer::Solid(Color(RGBA(0, 0, 0, 0xFF))));
