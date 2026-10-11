@@ -2193,6 +2193,24 @@ TEST(PropertyRegistry, ResourceColorDirectMutationsSurviveComputation) {
   EXPECT_THAT(registry.stopColor.get(), Optional(Color(RGBA(0, 255, 0, 255))));
 }
 
+TEST(PropertyRegistry, NegativeFilterAmountsRejectTheEntireDeclaration) {
+  for (std::string_view function :
+       {"brightness", "contrast", "grayscale", "invert", "opacity", "saturate", "sepia"}) {
+    for (std::string_view amount : {"-1", "-10%"}) {
+      const std::string input =
+          "filter: " + std::string(function) + "(" + std::string(amount) + ")";
+      SCOPED_TRACE(input);
+      PropertyRegistry registry;
+      registry.parseStyle("filter: blur(2px)");
+      const css::Declaration declaration = css::CSS::ParseStyleAttribute(input).front();
+      EXPECT_THAT(registry.parseProperty(declaration, Specificity::StyleAttribute()),
+                  ParseErrorIs("Negative value not allowed for " + std::string(function) + "()"));
+      EXPECT_THAT(registry.filter.get(),
+                  Optional(testing::ElementsAre(FilterBlurIs(2.0, Lengthd::Unit::Px))));
+    }
+  }
+}
+
 TEST(PropertyRegistry, FilterParsing) {
   {
     PropertyRegistry registry;
