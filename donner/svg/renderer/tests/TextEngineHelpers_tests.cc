@@ -207,7 +207,6 @@ TEST(FindChunkRangesTest, EmptyTextReturnsSingleEmptyRange) {
 TEST(BuildByteIndexMappingsTest, AsciiText) {
   const auto m = buildByteIndexMappings("ABC");
   EXPECT_THAT(m.byteToCharIdx, ElementsAre(0u, 1u, 2u));
-  EXPECT_THAT(m.byteToRawCpIdx, ElementsAre(0u, 1u, 2u));
 }
 
 TEST(BuildByteIndexMappingsTest, CombiningMarkConsumesPositioningIndex) {
@@ -223,7 +222,6 @@ TEST(BuildByteIndexMappingsTest, JoinerAndVariationSelectorConsumePositioningInd
       "C");
 
   EXPECT_THAT(m.byteToCharIdx, ElementsAre(0u, 1u, 1u, 1u, 2u, 3u, 3u, 3u, 4u));
-  EXPECT_THAT(m.byteToRawCpIdx, ElementsAre(0u, 1u, 1u, 1u, 2u, 3u, 3u, 3u, 4u));
 }
 
 TEST(BuildByteIndexMappingsTest, EveryNonSpacingCodepointConsumesPositioningIndex) {
@@ -272,7 +270,6 @@ TEST(BuildByteIndexMappingsTest, MalformedUtf8UsesOneIndexPerReplacement) {
 TEST(BuildByteIndexMappingsTest, EmptyText) {
   const auto m = buildByteIndexMappings("");
   EXPECT_THAT(m.byteToCharIdx, IsEmpty());
-  EXPECT_THAT(m.byteToRawCpIdx, IsEmpty());
 }
 
 // ── applyTextAnchor ─────────────────────────────────────────────────────────
@@ -926,7 +923,7 @@ TEST_F(TextEngineLayoutTest, PerCharacterXPositioning) {
                                                    GlyphXPositionIs(DoubleNear(50.0, 0.1))))));
 }
 
-TEST_F(TextEngineLayoutTest, SupplementaryCharacterLowSurrogateCoordinatesSetNextPen) {
+TEST_F(TextEngineLayoutTest, SupplementaryCoordinatesTargetNextCodepoint) {
   ON_CALL(*mockBackend_, shapeRun(testing::_, testing::_, testing::_, testing::_, testing::_,
                                   testing::_, testing::_, testing::_))
       .WillByDefault([](FontHandle, float, std::string_view text, size_t offset, size_t length,

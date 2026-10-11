@@ -972,7 +972,7 @@ TEST_F(TextSystemTest, Utf8MultibyteCounting) {
   EXPECT_THAT(computed->spans[0].xList, SizeIs(3));
 }
 
-TEST_F(TextSystemTest, Utf16CountingTreatsEmojiAsTwoCodeUnits) {
+TEST_F(TextSystemTest, CodepointCountingTreatsEmojiAsOneAttributeCharacter) {
   auto document = ParseAndCompute(R"svg(
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
       <text id="t" x="10 20 30">&#x1F600;A</text>
@@ -984,7 +984,7 @@ TEST_F(TextSystemTest, Utf16CountingTreatsEmojiAsTwoCodeUnits) {
   auto* computed = registry.try_get<ComputedTextComponent>(textEntity);
   ASSERT_NE(computed, nullptr);
   ASSERT_THAT(computed->spans, SizeIs(1));
-  EXPECT_THAT(computed->spans[0].xList, SizeIs(3));
+  EXPECT_THAT(computed->spans[0].xList, SizeIs(2));
 }
 
 TEST_F(TextSystemTest, RotateListStopsWhenGlobalIndicesRunOut) {
