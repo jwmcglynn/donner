@@ -181,8 +181,8 @@ TEST(FindChunkRangesTest, HandlesMultibyteUtf8) {
   EXPECT_THAT(ranges, ElementsAre(ChunkRangeIs(0u, 1u), ChunkRangeIs(1u, 3u)));
 }
 
-TEST(FindChunkRangesTest, SplitsAtCodepointPositionInsideJoinerSequence) {
-  // The absolute position at codepoint index 1 applies to the joiner, before B.
+TEST(FindChunkRangesTest, KeepsJoinerSequenceTogether) {
+  // Internal absolute coordinates do not split the joined typographic group.
   const std::string text =
       "A\xE2\x80\x8D"
       "B\xEF\xB8\x8F"
@@ -192,7 +192,7 @@ TEST(FindChunkRangesTest, SplitsAtCodepointPositionInsideJoinerSequence) {
 
   const auto ranges = findChunkRanges(text, xList, yList);
 
-  EXPECT_THAT(ranges, ElementsAre(ChunkRangeIs(0u, 1u), ChunkRangeIs(1u, 9u)));
+  EXPECT_THAT(ranges, ElementsAre(ChunkRangeIs(0u, 9u)));
 }
 
 TEST(FindChunkRangesTest, EmptyTextReturnsSingleEmptyRange) {
@@ -209,22 +209,22 @@ TEST(BuildByteIndexMappingsTest, AsciiText) {
   EXPECT_THAT(m.byteToCharIdx, ElementsAre(0u, 1u, 2u));
 }
 
-TEST(BuildByteIndexMappingsTest, CombiningMarkConsumesPositioningIndex) {
+TEST(BuildByteIndexMappingsTest, CombiningMarkUsesFirstGroupCodepoint) {
   // "o" + combining low line (U+0332, 2 bytes: CC B2)
   const auto m = buildByteIndexMappings("o\xCC\xB2");
-  EXPECT_THAT(m.byteToCharIdx, ElementsAre(0u, 1u, 1u));
+  EXPECT_THAT(m.byteToCharIdx, ElementsAre(0u, 0u, 0u));
 }
 
-TEST(BuildByteIndexMappingsTest, JoinerAndVariationSelectorConsumePositioningIndices) {
+TEST(BuildByteIndexMappingsTest, JoinerGroupPreservesFollowingCodepointIndex) {
   const auto m = buildByteIndexMappings(
       "A\xE2\x80\x8D"
       "B\xEF\xB8\x8F"
       "C");
 
-  EXPECT_THAT(m.byteToCharIdx, ElementsAre(0u, 1u, 1u, 1u, 2u, 3u, 3u, 3u, 4u));
+  EXPECT_THAT(m.byteToCharIdx, ElementsAre(0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 4u));
 }
 
-TEST(BuildByteIndexMappingsTest, EveryNonSpacingCodepointConsumesPositioningIndex) {
+TEST(BuildByteIndexMappingsTest, NonSpacingGroupPreservesFollowingCodepointIndex) {
   std::string text;
   std::vector<size_t> offsets;
   auto append = [&](char32_t cp) {
@@ -247,7 +247,7 @@ TEST(BuildByteIndexMappingsTest, EveryNonSpacingCodepointConsumesPositioningInde
   const auto m = buildByteIndexMappings(text);
 
   for (size_t i = 0; i < cOffsetIndex; ++i) {
-    EXPECT_EQ(m.byteToCharIdx[offsets[i]], i) << "offset index " << i;
+    EXPECT_EQ(m.byteToCharIdx[offsets[i]], 0u) << "offset index " << i;
   }
   EXPECT_EQ(m.byteToCharIdx[offsets[cOffsetIndex]], cOffsetIndex);
 }
@@ -651,6 +651,41 @@ TEST(ApplyTextLengthTest, CodepointResetMapsOutOfOrderUtf8GlyphClusters) {
   EXPECT_THAT(runs[1].glyphs,
               ElementsAre(GlyphXPositionIs(DoubleEq(40.0)), GlyphXPositionIs(DoubleEq(10.0)),
                           GlyphXPositionIs(DoubleEq(70.0)), GlyphXPositionIs(DoubleEq(20.0))));
+}
+
+TEST(ApplyTextLengthTest, InternalAbsolutePositionDoesNotResetLengthCarry) {
+  std::vector<TextRun> runs(3);
+  runs[0].glyphs = {{.xPosition = 0.0, .xAdvance = 10.0}};
+  runs[1].glyphs = {{.xPosition = 0.0, .cluster = 0},
+                    {.xPosition = 0.0, .cluster = 0},
+                    {.xPosition = 10.0, .cluster = 3}};
+  runs[2].glyphs = {{.xPosition = 20.0, .cluster = 0}};
+  components::ComputedTextComponent text;
+  text.spans.resize(3);
+  text.spans[0].textLength = Lengthd(20);
+  text.spans[1].text = RcString(
+      "A\xCC\x81"
+      "B");
+  text.spans[1].end = 4;
+  text.spans[1].xList = {std::nullopt, Lengthd(100), std::nullopt};
+  text.spans[2].text = RcString("C");
+  text.spans[2].end = 1;
+  const std::vector<RunPenExtent> extents = {
+      {.startX = 0.0, .endX = 10.0},
+      {.startX = 0.0, .endX = 20.0},
+      {.startX = 20.0, .endX = 30.0},
+  };
+  TextLayoutParams params;
+  params.viewBox = Box2d(Vector2d::Zero(), Vector2d(200, 200));
+  params.fontMetrics = FontMetrics();
+  TextLengthTraversalStats stats;
+  applyTextLength(runs, text, extents, params, false, 30.0, 0.0, &stats);
+  EXPECT_THAT(runs[1].glyphs,
+              ElementsAre(GlyphXPositionIs(DoubleEq(10)), GlyphXPositionIs(DoubleEq(10)),
+                          GlyphXPositionIs(DoubleEq(20))));
+  EXPECT_THAT(runs[2].glyphs, ElementsAre(GlyphXPositionIs(DoubleEq(30))));
+  EXPECT_EQ(stats.mappedTextBytes, 4u);
+  EXPECT_EQ(stats.inlinePositionVisits, 5u);
 }
 
 TEST(ApplyTextLengthTest, AnyPerSpanTextLengthSuppressesGlobalAdjustment) {
