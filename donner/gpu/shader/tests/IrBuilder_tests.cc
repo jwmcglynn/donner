@@ -47,6 +47,23 @@ IrExpr U32Val() {
   return LiteralU32(7u);
 }
 
+MATCHER_P2(IsFactoryError, messageMatcher, label, "has the expected labeled factory error") {
+  if (!arg.hasError()) {
+    *result_listener << "which has no error";
+    return false;
+  }
+  return testing::ExplainMatchResult(
+      testing::AllOf(testing::Field("message", &ShaderError::message, messageMatcher),
+                     testing::Field("nodeLabel", &ShaderError::nodeLabel, RcString(label))),
+      arg.error(), result_listener);
+}
+
+auto FactoryRefIs(RefKind kind, const RcString& name, const IrType& type) {
+  return testing::AllOf(testing::Field("kind", &IrExpr::RefInfo::kind, kind),
+                        testing::Field("name", &IrExpr::RefInfo::name, name),
+                        testing::Field("type", &IrExpr::RefInfo::type, type));
+}
+
 // == Types ====================================================================================
 
 TEST(IrBuilderTests, CeilAndExpRequireOneFloatScalarOrVector) {
@@ -383,6 +400,227 @@ TEST(IrExprTests, UnknownBuiltinNameIsRejected) {
   EXPECT_THAT(CallBuiltinNamed("pow", {F32Val(), F32Val()}), HasShaderResult());
   EXPECT_THAT(CallBuiltinNamed("reflect", {Vec2fVal(), Vec2fVal()}),
               IsShaderError(HasSubstr("unknown builtin function \"reflect\"")));
+}
+
+TEST(IrExprFactoryContracts, ConstructorsRetainOrderedOperandsAndProduceValues) {
+  const IrExpr xy = MakeRef(RefKind::Param, "xy", IrType::Vec2f());
+  const IrExpr z = MakeRef(RefKind::Var, "z", IrType::F32());
+  const IrExpr w = MakeRef(RefKind::Let, "w", IrType::F32());
+  std::vector<IrExpr> operands{xy, z, w};
+  const auto result = ConstructVector(IrType::Vec4f(), operands, "position-build");
+  ASSERT_THAT(result, HasShaderResult());
+  operands.clear();
+  const IrExpr& value = result.result();
+  EXPECT_THAT(value.type(), testing::Eq(IrType::Vec4f()));
+  EXPECT_THAT(value.kind(), testing::Eq(IrExpr::Kind::Construct));
+  EXPECT_FALSE(value.isMutableLvalue());
+  EXPECT_TRUE(z.isMutableLvalue());
+  std::vector<IrExpr::RefInfo> references;
+  value.collectRefs(references);
+  EXPECT_THAT(references, testing::ElementsAre(FactoryRefIs(RefKind::Param, "xy", IrType::Vec2f()),
+                                               FactoryRefIs(RefKind::Var, "z", IrType::F32()),
+                                               FactoryRefIs(RefKind::Let, "w", IrType::F32())));
+
+  const auto splat = ConstructVector(IrType::Vec4(ScalarKind::Bool), {LiteralBool(true)});
+  ASSERT_THAT(splat, HasShaderResult());
+  EXPECT_THAT(splat.result().type(), testing::Eq(IrType::Vec4(ScalarKind::Bool)));
+  EXPECT_FALSE(splat.result().isMutableLvalue());
+
+  const auto joined = ConstructVector(IrType::Vec4f(), {xy, xy});
+  ASSERT_THAT(joined, HasShaderResult());
+  references.clear();
+  joined.result().collectRefs(references);
+  EXPECT_THAT(references,
+              testing::ElementsAre(FactoryRefIs(RefKind::Param, "xy", IrType::Vec2f()),
+                                   FactoryRefIs(RefKind::Param, "xy", IrType::Vec2f())));
+}
+
+TEST(IrExprFactoryContracts, ConstructorBoundaryErrorsRetainCallerLabels) {
+  EXPECT_THAT(ConstructVector(IrType::F32(), {F32Val()}, "non-vector"),
+              IsFactoryError(HasSubstr("not a vector"), "non-vector"));
+  EXPECT_THAT(ConstructVector(IrType::Vec2f(), {}, "empty-vector"),
+              IsFactoryError(HasSubstr("at least one argument"), "empty-vector"));
+  EXPECT_THAT(ConstructVector(IrType::Vec2f(), {LiteralI32(1)}, "wrong-splat"),
+              IsFactoryError(HasSubstr("splat argument type i32"), "wrong-splat"));
+  EXPECT_THAT(ConstructVector(IrType::Vec4f(), {Vec2fVal(), Vec2uVal()}, "mixed-elements"),
+              IsFactoryError(HasSubstr("argument type vec2<u32>"), "mixed-elements"));
+  EXPECT_THAT(ConstructVector(IrType::Vec3f(), {Vec4fVal()}, "too-many-components"),
+              IsFactoryError(HasSubstr("needs 3 components, got 4"), "too-many-components"));
+}
+
+TEST(IrExprFactoryContracts, NumericBoundsRetainShapeAndOperandOrder) {
+  const IrExpr x = MakeRef(RefKind::Var, "x", IrType::Vec2i());
+  const IrExpr low = MakeRef(RefKind::Param, "low", IrType::Vec2i());
+  const IrExpr high = MakeRef(RefKind::Param, "high", IrType::Vec2i());
+  for (const BuiltinFn fn : {BuiltinFn::Abs, BuiltinFn::Min, BuiltinFn::Max, BuiltinFn::Clamp}) {
+    SCOPED_TRACE(fn);
+    std::vector<IrExpr> arguments{x};
+    if (fn != BuiltinFn::Abs) {
+      arguments.push_back(low);
+    }
+    if (fn == BuiltinFn::Clamp) {
+      arguments.push_back(high);
+    }
+    const auto result = CallBuiltin(fn, arguments);
+    ASSERT_THAT(result, HasShaderResult());
+    EXPECT_THAT(result.result().type(), testing::Eq(IrType::Vec2i()));
+    EXPECT_THAT(result.result().kind(), testing::Eq(IrExpr::Kind::CallBuiltin));
+    EXPECT_FALSE(result.result().isMutableLvalue());
+    std::vector<IrExpr::RefInfo> refs;
+    result.result().collectRefs(refs);
+    if (fn == BuiltinFn::Abs) {
+      EXPECT_THAT(refs, testing::ElementsAre(FactoryRefIs(RefKind::Var, "x", IrType::Vec2i())));
+    } else if (fn == BuiltinFn::Clamp) {
+      EXPECT_THAT(refs,
+                  testing::ElementsAre(FactoryRefIs(RefKind::Var, "x", IrType::Vec2i()),
+                                       FactoryRefIs(RefKind::Param, "low", IrType::Vec2i()),
+                                       FactoryRefIs(RefKind::Param, "high", IrType::Vec2i())));
+    } else {
+      EXPECT_THAT(refs, testing::ElementsAre(FactoryRefIs(RefKind::Var, "x", IrType::Vec2i()),
+                                             FactoryRefIs(RefKind::Param, "low", IrType::Vec2i())));
+    }
+  }
+}
+
+TEST(IrExprFactoryContracts, NumericBoundsRejectIllTypedArgumentsWithCallerLabels) {
+  EXPECT_THAT(CallBuiltin(BuiltinFn::Abs, {}, "abs-arity"),
+              IsFactoryError(HasSubstr("expects 1 arguments"), "abs-arity"));
+  EXPECT_THAT(CallBuiltin(BuiltinFn::Abs, {LiteralBool(true)}, "abs-domain"),
+              IsFactoryError(HasSubstr("numeric type"), "abs-domain"));
+  for (const BuiltinFn fn : {BuiltinFn::Min, BuiltinFn::Max}) {
+    SCOPED_TRACE(fn);
+    EXPECT_THAT(CallBuiltin(fn, {F32Val()}, "bounds-arity"),
+                IsFactoryError(HasSubstr("expects 2 arguments"), "bounds-arity"));
+    EXPECT_THAT(CallBuiltin(fn, {F32Val(), LiteralI32(1)}, "bounds-mismatch"),
+                IsFactoryError(HasSubstr("matching numeric types"), "bounds-mismatch"));
+    EXPECT_THAT(CallBuiltin(fn, {LiteralBool(true), LiteralBool(false)}, "bounds-domain"),
+                IsFactoryError(HasSubstr("matching numeric types"), "bounds-domain"));
+  }
+  EXPECT_THAT(CallBuiltin(BuiltinFn::Clamp, {F32Val(), LiteralI32(0), F32Val()}, "clamp-low"),
+              IsFactoryError(HasSubstr("three matching numeric"), "clamp-low"));
+  EXPECT_THAT(
+      CallBuiltin(BuiltinFn::Clamp, {LiteralBool(true), LiteralBool(false), LiteralBool(true)},
+                  "clamp-domain"),
+      IsFactoryError(HasSubstr("three matching numeric"), "clamp-domain"));
+}
+
+TEST(IrExprFactoryContracts, VectorMetricsReturnTheDeclaredScalarOrVectorShape) {
+  const IrExpr vector = MakeRef(RefKind::Param, "vector", IrType::Vec3f());
+  const IrExpr other = MakeRef(RefKind::Param, "other", IrType::Vec3f());
+  const auto normalized = CallBuiltin(BuiltinFn::Normalize, {vector});
+  ASSERT_THAT(normalized, HasShaderResult());
+  EXPECT_THAT(normalized.result().type(), testing::Eq(IrType::Vec3f()));
+  const auto length = CallBuiltin(BuiltinFn::Length, {normalized.result()});
+  ASSERT_THAT(length, HasShaderResult());
+  EXPECT_THAT(length.result().type(), testing::Eq(IrType::F32()));
+  std::vector<BuiltinFn> calls;
+  length.result().collectBuiltinCalls(calls);
+  EXPECT_THAT(calls, testing::ElementsAre(BuiltinFn::Length, BuiltinFn::Normalize));
+  std::vector<IrExpr::RefInfo> refs;
+  length.result().collectRefs(refs);
+  EXPECT_THAT(refs, testing::ElementsAre(FactoryRefIs(RefKind::Param, "vector", IrType::Vec3f())));
+
+  const auto dot = CallBuiltin(BuiltinFn::Dot, {vector, other});
+  ASSERT_THAT(dot, HasShaderResult());
+  EXPECT_THAT(dot.result().type(), testing::Eq(IrType::F32()));
+  refs.clear();
+  dot.result().collectRefs(refs);
+  EXPECT_THAT(refs, testing::ElementsAre(FactoryRefIs(RefKind::Param, "vector", IrType::Vec3f()),
+                                         FactoryRefIs(RefKind::Param, "other", IrType::Vec3f())));
+}
+
+TEST(IrExprFactoryContracts, VectorMetricErrorsDistinguishArityAndElementDomain) {
+  for (const BuiltinFn fn : {BuiltinFn::Length, BuiltinFn::Normalize}) {
+    SCOPED_TRACE(fn);
+    EXPECT_THAT(CallBuiltin(fn, {}, "metric-arity"),
+                IsFactoryError(HasSubstr("expects 1 arguments"), "metric-arity"));
+    EXPECT_THAT(CallBuiltin(fn, {Vec2uVal()}, "metric-domain"),
+                IsFactoryError(HasSubstr("float vector"), "metric-domain"));
+  }
+  EXPECT_THAT(CallBuiltin(BuiltinFn::Dot, {Vec2fVal()}, "dot-arity"),
+              IsFactoryError(HasSubstr("expects 2 arguments"), "dot-arity"));
+  EXPECT_THAT(CallBuiltin(BuiltinFn::Dot, {F32Val(), F32Val()}, "dot-scalar"),
+              IsFactoryError(HasSubstr("two matching float vectors"), "dot-scalar"));
+  EXPECT_THAT(CallBuiltin(BuiltinFn::Dot, {Vec2BoolVal(), Vec2BoolVal()}, "dot-domain"),
+              IsFactoryError(HasSubstr("two matching float vectors"), "dot-domain"));
+}
+
+TEST(IrExprFactoryContracts, SelectPreservesBranchShapeAndOrdering) {
+  const IrExpr fallback = MakeRef(RefKind::Param, "fallback", IrType::Vec4f());
+  const IrExpr chosen = MakeRef(RefKind::Var, "chosen", IrType::Vec4f());
+  const IrExpr condition = MakeRef(RefKind::Param, "condition", IrType::Bool());
+  const auto result = CallBuiltin(BuiltinFn::Select, {fallback, chosen, condition});
+  ASSERT_THAT(result, HasShaderResult());
+  EXPECT_THAT(result.result().type(), testing::Eq(IrType::Vec4f()));
+  EXPECT_FALSE(result.result().isMutableLvalue());
+  std::vector<IrExpr::RefInfo> refs;
+  result.result().collectRefs(refs);
+  EXPECT_THAT(refs,
+              testing::ElementsAre(FactoryRefIs(RefKind::Param, "fallback", IrType::Vec4f()),
+                                   FactoryRefIs(RefKind::Var, "chosen", IrType::Vec4f()),
+                                   FactoryRefIs(RefKind::Param, "condition", IrType::Bool())));
+  EXPECT_THAT(CallBuiltin(BuiltinFn::Select, {fallback, chosen}, "select-arity"),
+              IsFactoryError(HasSubstr("expects 3 arguments"), "select-arity"));
+  EXPECT_THAT(CallBuiltin(BuiltinFn::Select, {fallback, F32Val(), condition}, "select-branches"),
+              IsFactoryError(HasSubstr("branches must have matching types"), "select-branches"));
+}
+
+TEST(IrExprFactoryContracts, TextureLoadsRetainIntegerCoordinatesAndLevel) {
+  const IrExpr texture = MakeRef(RefKind::Resource, "image", IrType::Texture2dF32());
+  const IrExpr coords = MakeRef(RefKind::Param, "coords", IrType::Vec2i());
+  for (const IrType levelType : {IrType::I32(), IrType::U32()}) {
+    SCOPED_TRACE(levelType);
+    const IrExpr level = MakeRef(RefKind::Param, "level", levelType);
+    const auto result = CallBuiltin(BuiltinFn::TextureLoad, {texture, coords, level});
+    ASSERT_THAT(result, HasShaderResult());
+    EXPECT_THAT(result.result().type(), testing::Eq(IrType::Vec4f()));
+    EXPECT_FALSE(result.result().isMutableLvalue());
+    std::vector<IrExpr::RefInfo> refs;
+    result.result().collectRefs(refs);
+    EXPECT_THAT(
+        refs, testing::ElementsAre(FactoryRefIs(RefKind::Resource, "image", IrType::Texture2dF32()),
+                                   FactoryRefIs(RefKind::Param, "coords", IrType::Vec2i()),
+                                   FactoryRefIs(RefKind::Param, "level", levelType)));
+  }
+}
+
+TEST(IrExprFactoryContracts, TextureCallsReportIllTypedOperandsAndCallerLabels) {
+  const IrExpr texture = MakeRef(RefKind::Resource, "image", IrType::Texture2dF32());
+  const IrExpr sampler = MakeRef(RefKind::Resource, "filter", IrType::SamplerType());
+  const IrExpr coords = MakeRef(RefKind::Param, "coords", IrType::Vec2i());
+  EXPECT_THAT(CallBuiltin(BuiltinFn::TextureLoad, {texture, coords}, "load-arity"),
+              IsFactoryError(HasSubstr("expects 3 arguments"), "load-arity"));
+  EXPECT_THAT(CallBuiltin(BuiltinFn::TextureLoad, {sampler, coords, LiteralI32(0)}, "load-texture"),
+              IsFactoryError(HasSubstr("textureLoad requires"), "load-texture"));
+  EXPECT_THAT(CallBuiltin(BuiltinFn::TextureLoad, {texture, LiteralBool(false), LiteralI32(0)},
+                          "load-coordinates"),
+              IsFactoryError(HasSubstr("textureLoad requires"), "load-coordinates"));
+  EXPECT_THAT(
+      CallBuiltin(BuiltinFn::TextureLoad, {texture, coords, LiteralBool(false)}, "load-level"),
+      IsFactoryError(HasSubstr("textureLoad requires"), "load-level"));
+  EXPECT_THAT(CallBuiltin(BuiltinFn::TextureSample, {texture, sampler}, "sample-arity"),
+              IsFactoryError(HasSubstr("expects 3 arguments"), "sample-arity"));
+  EXPECT_THAT(
+      CallBuiltin(BuiltinFn::TextureSample, {sampler, sampler, Vec2fVal()}, "sample-texture"),
+      IsFactoryError(HasSubstr("textureSample requires"), "sample-texture"));
+  EXPECT_THAT(
+      CallBuiltin(BuiltinFn::TextureSample, {texture, sampler, Vec4fVal()}, "sample-coordinates"),
+      IsFactoryError(HasSubstr("textureSample requires"), "sample-coordinates"));
+  EXPECT_THAT(CallBuiltin(BuiltinFn::TextureDimensions, {}, "dimensions-arity"),
+              IsFactoryError(HasSubstr("expects 1 arguments"), "dimensions-arity"));
+  EXPECT_THAT(CallBuiltin(BuiltinFn::TextureDimensions, {sampler}, "dimensions-domain"),
+              IsFactoryError(HasSubstr("requires a texture"), "dimensions-domain"));
+}
+
+TEST(IrExprFactoryContracts, StorageTextureDimensionsAreAnUnsignedPair) {
+  const IrType storageType = IrType::WriteOnlyStorageTexture2d(StorageTextureFormat::Rgba32Float);
+  const IrExpr texture = MakeRef(RefKind::Resource, "output", storageType);
+  const auto result = CallBuiltin(BuiltinFn::TextureDimensions, {texture});
+  ASSERT_THAT(result, HasShaderResult());
+  EXPECT_THAT(result.result().type(), testing::Eq(IrType::Vec2u()));
+  std::vector<IrExpr::RefInfo> refs;
+  result.result().collectRefs(refs);
+  EXPECT_THAT(refs, testing::ElementsAre(FactoryRefIs(RefKind::Resource, "output", storageType)));
 }
 
 // == Module and function builders =============================================================
