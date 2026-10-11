@@ -222,6 +222,8 @@ def _member_size_limit(name: str) -> int:
         return MAX_SMALL_CONTROL_BYTES
     if name.endswith(".bazel.lock"):
         return MAX_LOCK_BYTES
+    if name.endswith(".NOTICE.txt"):
+        return release_cli.MAX_NOTICE_BYTES
     return MAX_UNPACKED_BYTES
 
 
