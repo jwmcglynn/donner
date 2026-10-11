@@ -520,11 +520,12 @@ TEST(PropertyRegistry, ColorInterpolationCascadeAndDefaults) {
   EXPECT_THAT(child.colorInterpolation.get(), Optional(ColorInterpolation::LinearRGB));
   registry.parseStyle("color-interpolation: auto");
   EXPECT_THAT(registry.colorInterpolation.get(), Optional(ColorInterpolation::Auto));
+  PropertyRegistry invalidRegistry;
   const css::Declaration invalid =
       css::CSS::ParseStyleAttribute("color-interpolation: invalid").at(0);
-  EXPECT_THAT(registry.parseProperty(invalid, Specificity()),
+  EXPECT_THAT(invalidRegistry.parseProperty(invalid, Specificity()),
               ParseErrorIs("Invalid color-interpolation value"));
-  EXPECT_THAT(registry.colorInterpolation.get(), Optional(ColorInterpolation::Auto));
+  EXPECT_THAT(invalidRegistry.colorInterpolation.get(), Optional(ColorInterpolation::SRGB));
 }
 
 TEST(PropertyRegistry, Fill) {
