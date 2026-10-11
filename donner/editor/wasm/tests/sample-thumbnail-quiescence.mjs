@@ -1,11 +1,12 @@
 /**
- * Whether every accepted thumbnail request has reached a terminal state and no lane slot is live.
+ * Whether accepted work is terminal and no shell preview obligation can enqueue a retry.
  * `drained` is deliberately excluded: the editor publishes it only while the picker is visible.
  */
 export function sampleThumbnailLaneQuiescent(stats) {
   const serial = sampleThumbnailLaneSerial(stats);
   return serial !== null && serial.requested === serial.completed
-    && stats.pending === false && stats.active === false && stats.resultReady === false;
+    && stats.pending === false && stats.active === false && stats.resultReady === false
+    && stats.fontPreviewObligations === 0;
 }
 
 /** Monotonic accepted/completed identity used to restart a continuous readiness window. */
