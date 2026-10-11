@@ -629,8 +629,8 @@ private:
   void advanceFontPreviewGeneration();
   [[nodiscard]] bool foregroundPresentationAcknowledged() const;
   void requestForegroundPresentationWake();
-  void noteSidebarPreviewDemand(bool foregroundAcknowledged, bool thumbnailDemand,
-                                bool refreshPending);
+  void noteSidebarPreviewDemand(bool foregroundAcknowledged, bool compactSheet,
+                                bool thumbnailDemand, bool refreshPending);
   void trimFontPreviewMemory();
   [[nodiscard]] FormatBarFontPreview fontPreviewForFamily(std::string_view family);
   void renderSamplePicker(const ImVec2& paneOrigin, const ImVec2& contentRegion);

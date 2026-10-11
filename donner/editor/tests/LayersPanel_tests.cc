@@ -1406,6 +1406,11 @@ TEST(LayersPanelTest, SwatchesOnlyReportsOnlyStaleThumbnailDemand) {
                         /*canvasPresentationCurrent=*/false);
   ASSERT_GT(panel.visibleRowCount(), 0u);
   EXPECT_TRUE(panel.hasThumbnailRenderDemand());
+  const std::size_t inspections = panel.thumbnailCacheInspectionCountForTesting();
+  ASSERT_GT(inspections, 0u);
+  EXPECT_TRUE(panel.hasThumbnailRenderDemand());
+  EXPECT_EQ(panel.thumbnailCacheInspectionCountForTesting(), inspections)
+      << "an unchanged demand query must use prepared queue metadata instead of rescanning rows";
 
   svg::Renderer renderer;
   panel.refreshSnapshot(app, &renderer, LayersPanel::ThumbnailRefreshMode::Render,

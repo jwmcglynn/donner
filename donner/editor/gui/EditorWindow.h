@@ -1045,6 +1045,11 @@ public:
     return presentedDocumentWakeSerial_.load(std::memory_order_acquire);
   }
 
+  /// Whether presentation-bound demand is currently armed, for scheduling regressions.
+  [[nodiscard]] bool hasPendingPresentedDocumentWakeForTesting() const {
+    return pendingPresentedDocumentWake_.has_value();
+  }
+
   /// Substitute completion observation while driving the real framebuffer test path.
   /// @param probe Completed submission serial reported to the presentation scheduler.
   /// Refuse UI recording after the document pass has submitted, simulating an allocation failure.

@@ -5276,11 +5276,12 @@ void EditorShell::requestForegroundPresentationWake() {
 #endif
 }
 
-void EditorShell::noteSidebarPreviewDemand(bool foregroundAcknowledged, bool thumbnailDemand,
-                                           bool refreshPending) {
-  if (!foregroundAcknowledged && (thumbnailDemand || refreshPending)) {
+void EditorShell::noteSidebarPreviewDemand(bool foregroundAcknowledged, bool compactSheet,
+                                           bool thumbnailDemand, bool refreshPending) {
+  const bool rasterDemand = !compactSheet && (thumbnailDemand || refreshPending);
+  if (!foregroundAcknowledged && rasterDemand) {
     requestForegroundPresentationWake();
-  } else if (refreshPending) {
+  } else if (!compactSheet && refreshPending) {
     window_.wakeEventLoop();
   }
 }
@@ -6595,12 +6596,13 @@ void EditorShell::renderSidebars() {
             ? thumbnailRefreshWasPending
             : internal::SidebarSnapshotRefreshPendingAfterPass(
                   layersPanel_.thumbnailRefreshStats().deferredCount);
-    noteSidebarPreviewDemand(foregroundAcknowledged, layersPanel_.hasThumbnailRenderDemand(),
+    noteSidebarPreviewDemand(foregroundAcknowledged, compactSheet,
+                             layersPanel_.hasThumbnailRenderDemand(),
                              sidebarSnapshotRefreshPending_);
   } else if (!showSamplePicker_ && sidebarSnapshotRefreshPending_) {
     // Preserve the refresh obligation across a renderer-busy frame or a trickled mouse transition.
     // This is bounded: the flag is cleared by the first idle refresh above.
-    noteSidebarPreviewDemand(foregroundPresentationAcknowledged(),
+    noteSidebarPreviewDemand(foregroundPresentationAcknowledged(), compactSheet,
                              layersPanel_.hasThumbnailRenderDemand(),
                              sidebarSnapshotRefreshPending_);
   }

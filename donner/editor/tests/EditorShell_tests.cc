@@ -984,6 +984,15 @@ public:
     return shell.foregroundPresentationObligation_;
   }
 
+  static void SetForegroundPresentationObligation(
+      EditorShell& shell, gui::EditorWindow::PresentedDocumentFrameIdentity identity) {
+    shell.foregroundPresentationObligation_ = identity;
+  }
+
+  static void SetSidebarSnapshotRefreshPending(EditorShell& shell, bool pending) {
+    shell.sidebarSnapshotRefreshPending_ = pending;
+  }
+
   static void InstallFramePresentation(EditorShell& shell,
                                        std::shared_ptr<const FramePresentation> frame) {
     shell.installFramePresentation(std::move(frame));
@@ -2275,6 +2284,50 @@ TEST(EditorShellTest, SettledEmptyDocumentDoesNotBlockFontPreviews) {
   EditorShellTestAccess::RequestFontPreviews(shell, {"Bebas Neue"});
   EditorShellTestAccess::AdvanceFontPreviewGeneration(shell);
   EXPECT_GT(EditorShellTestAccess::RequestedAuxiliaryPreviewCount(shell), requestedBefore);
+}
+
+TEST(EditorShellTest, SidebarPresentationWakeTracksOnlyRenderableRasterDemand) {
+  gui::EditorWindow window(gui::EditorWindowOptions{
+      .title = "Sidebar presentation wake policy",
+      .initialWidth = 844,
+      .initialHeight = 390,
+      .visible = false,
+  });
+  if (!window.valid()) {
+    GTEST_SKIP() << "WGPU hidden editor window is unavailable on this host";
+  }
+  EditorShell shell(window, OptionsWithSource(kInitialSvg));
+  ASSERT_TRUE(shell.valid());
+  EditorShellTestAccess::SetForegroundPresentationObligation(
+      shell, {.documentGeneration = 91, .frameVersion = 7, .captureId = 3});
+  EditorShellTestAccess::SetSidebarSnapshotRefreshPending(shell, true);
+
+  const EditorAdaptiveUiLayout compact = ComputeEditorAdaptiveUiLayout({
+      .windowWidth = 844.0f,
+      .windowHeight = 390.0f,
+      .preferTouch = true,
+  });
+  ASSERT_TRUE(compact.compactTouch());
+  EditorShellTestAccess::SetAdaptiveUiLayout(shell, compact);
+  EditorShellTestAccess::SetCompactPanelVisible(shell, true);
+  window.beginFrame();
+  EditorShellTestAccess::RenderSidebars(shell);
+  EXPECT_FALSE(window.hasPendingPresentedDocumentWakeForTesting())
+      << "compact swatches never consume raster thumbnails and must not arm their wake";
+  window.endFrame();
+
+  EditorShellTestAccess::SetAdaptiveUiLayout(shell, ComputeEditorAdaptiveUiLayout({
+                                                        .windowWidth = 1600.0f,
+                                                        .windowHeight = 900.0f,
+                                                        .preferTouch = false,
+                                                    }));
+  EditorShellTestAccess::SetCompactPanelVisible(shell, false);
+  EditorShellTestAccess::SetSidebarSnapshotRefreshPending(shell, false);
+  window.beginFrame();
+  EditorShellTestAccess::RenderSidebars(shell);
+  EXPECT_TRUE(window.hasPendingPresentedDocumentWakeForTesting())
+      << "a non-sample first load with stale rows must arm one wake without font demand";
+  window.endFrame();
 }
 
 TEST(EditorShellTest, NewShellInvalidatesPriorProducerPresentationAck) {
