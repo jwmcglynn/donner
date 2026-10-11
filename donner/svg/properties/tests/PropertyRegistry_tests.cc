@@ -494,6 +494,12 @@ TEST(PropertyRegistry, MaskTypeGrammarAndCascade) {
   EXPECT_THAT(child.maskType.get(), Optional(MaskType::Luminance));
 }
 
+TEST(PropertyRegistry, ColorInterpolationMetadataSupportsInheritance) {
+  EXPECT_THAT(PropertyRegistry::propertyNames(), Contains(std::string_view("color-interpolation")));
+  EXPECT_THAT(PropertyRegistry::isPresentationAttributeInherited("color-interpolation"),
+              testing::IsTrue());
+}
+
 TEST(PropertyRegistry, ColorInterpolationGrammar) {
   for (std::string_view value : {"sRGB", "linearRGB", "auto", "inherit", "initial", "unset"}) {
     SCOPED_TRACE(value);
