@@ -20,6 +20,8 @@ package(default_visibility = ["//visibility:public"])
 exports_files([
     "LICENSE",
     "fonts/Noto-LICENSE-OFL.txt",
+    "tests/text/tspan/nested-rotate.png",
+    "tests/text/tspan/nested-rotate.svg",
 ])
 
 filegroup(

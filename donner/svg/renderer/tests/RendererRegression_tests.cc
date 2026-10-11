@@ -665,10 +665,12 @@ TEST_F(RendererRegressionTests, SpanGradientOverridesElementPatternStroke) {
 }
 
 TEST_F(RendererRegressionTests, NestedTextRotationMatchesResvgReference) {
-  const char* svg = "third_party/resvg-test-suite/tests/text/tspan/nested-rotate.svg";
-  const char* golden = "third_party/resvg-test-suite/tests/text/tspan/nested-rotate.png";
-  SVGDocument document = loadSVG(svg, ResvgResourceRoot());
-  renderAndCompare(document, svg, golden, Params());
+  const std::string svg = Runfiles::instance().Rlocation(
+      "third_party/resvg-test-suite/tests/text/tspan/nested-rotate.svg");
+  const std::string golden = Runfiles::instance().Rlocation(
+      "third_party/resvg-test-suite/tests/text/tspan/nested-rotate.png");
+  SVGDocument document = loadSVG(svg.c_str(), ResvgResourceRoot());
+  renderAndCompare(document, svg, golden.c_str(), Params());
 }
 
 TEST_F(RendererRegressionTests, NestedTextRotationMatchesExplicitCharacterRotations) {
