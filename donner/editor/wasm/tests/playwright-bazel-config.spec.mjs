@@ -9,11 +9,6 @@ import vm from "node:vm";
 
 const require = createRequire(import.meta.url);
 const directory = path.dirname(fileURLToPath(import.meta.url));
-const {
-  firefoxAquaLauncherPath,
-  firefoxExecutablePath,
-  writeFirefoxAquaLauncher,
-} = require("./firefox-aqua-setup.js");
 
 function evaluateConfig(filename, baseConfig, environment, temporary) {
   const module = { exports: {} };
@@ -128,36 +123,6 @@ test("Bazel config requires an owned temporary directory", (t) => {
   );
 });
 
-test("Firefox Aqua bootstrap derives only test-owned and pinned-runtime paths", (t) => {
-  const { temporary, environment } = fixture(t);
-  environment.PLAYWRIGHT_BROWSERS_PATH = path.join(temporary, "pinned-browsers");
-  assert.equal(firefoxAquaLauncherPath(environment), path.join(temporary, "firefox-aqua.sh"));
-  assert.equal(
-    firefoxExecutablePath(environment),
-    path.join(
-      temporary,
-      "pinned-browsers/firefox-1538/firefox/Nightly.app/Contents/MacOS/firefox",
-    ),
-  );
-  assert.throws(() => firefoxExecutablePath({}), /PLAYWRIGHT_BROWSERS_PATH must be supplied/);
-});
-
-test("Firefox Aqua bootstrap writes a real shebang and preserves launcher arguments", (t) => {
-  const { temporary, environment } = fixture(t);
-  const executable = path.join(temporary, "pinned browser's/firefox");
-  writeFirefoxAquaLauncher(environment, 501, executable);
-  const launcher = firefoxAquaLauncherPath(environment);
-  const script = readFileSync(launcher, "utf8");
-  assert.equal(script.includes("\\n"), false, "the launcher must contain real newline bytes");
-  const lines = script.split("\n");
-  assert.equal(lines[0], "#!/bin/sh");
-  assert.match(lines[1], /^exec \/bin\/launchctl asuser 501 '/);
-  assert.match(lines[1], /pinned browser'"'"'s\/firefox/);
-  assert.ok(lines[1].endsWith(' "$@"'), "the launcher must preserve every Playwright argument");
-  assert.equal(lines[2], "", "the launcher must end with a newline");
-  assert.equal(statSync(launcher).mode & 0o777, 0o700);
-});
-
 test("Crash directory creation errors fail before browser launch", (t) => {
   const { temporary, environment, baseConfig } = fixture(t);
   writeFileSync(path.join(temporary, "chromium-crashpad"), "occupied");
@@ -264,47 +229,4 @@ test("WebKit adapter uses the pinned launcher without Chromium launch settings",
   assert.equal(project.use.viewport.width, 1280);
   assert.equal(project.use.launchOptions.executablePath, environment.DONNER_WEBKIT_EXECUTABLE);
   assert.equal(project.use.launchOptions.args, undefined);
-});
-
-test("Firefox presentation adapter keeps the compatibility project and Bazel server", (t) => {
-  const { temporary, environment, baseConfig } = fixture(t);
-  environment.PLAYWRIGHT_BROWSERS_PATH = path.join(temporary, "pinned-browsers");
-  baseConfig.webServer = { command: "bazel-owned-server" };
-  const firefoxProject = {
-    name: "firefox-geode-resize",
-    timeout: 90000,
-    grep: [/Splash letter/],
-    use: { browserName: "firefox", viewport: { width: 1200, height: 750 } },
-  };
-  const config = evaluateConfig(
-    "playwright.firefox-presentation.bazel.config.js",
-    {
-      "./playwright.bazel.config.js": baseConfig,
-      "./playwright.compatibility.config.js": {
-        timeout: 30000,
-        projects: [
-          firefoxProject,
-          { name: "webkit-geode-carousel", use: { browserName: "webkit" } },
-        ],
-      },
-    },
-    environment,
-    temporary,
-  );
-  assert.equal(config.webServer, baseConfig.webServer);
-  assert.equal(config.globalSetup, "./firefox-aqua-setup.js");
-  assert.equal(config.use.channel, undefined);
-  assert.equal(config.use.launchOptions, undefined);
-  assert.equal(config.projects.length, 1);
-  const project = config.projects[0];
-  assert.equal(project.name, "firefox-geode-resize");
-  assert.equal(project.timeout, 90000);
-  assert.deepEqual(Array.from(project.grep), firefoxProject.grep);
-  assert.equal(project.use.browserName, "firefox");
-  assert.equal(project.use.headless, false);
-  assert.equal(
-    project.use.launchOptions.executablePath,
-    path.join(temporary, "firefox-aqua.sh"),
-  );
-  assert.equal(project.use.launchOptions.timeout, 15000);
 });

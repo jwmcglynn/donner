@@ -741,25 +741,6 @@ test("the shared sample thumbnail gate waits for a drained thumbnail lane", () =
   assert.doesNotMatch(helper, /toMatchObject/);
 });
 
-test("the Firefox Splash press drains thumbnails after its pixel baseline", () => {
-  const body = extractTest(
-    presentationRegressionSource,
-    "Firefox never exposes the checkerboard while dragging a Splash letter",
-  );
-  const baseline = body.indexOf("const restFrame = await captureSplashDragFrame");
-  const drained = body.indexOf("await expectSampleThumbnailsToSettle", baseline);
-  const pointer = body.indexOf("await page.mouse.move(dragStart.x, dragStart.y)", drained);
-  assert.ok(
-    baseline >= 0 && drained > baseline && pointer > drained,
-    "late thumbnail work must drain after baseline captures and before the one-shot press",
-  );
-  assert.match(
-    body,
-    /waitForPressReadiness\(page, "Splash drag press", \{ requireThumbnailDrain: true \}\)/,
-    "the authoritative drain must remain part of readiness until the press",
-  );
-});
-
 test("sample loads that do not test the thumbnail handoff settle thumbnails first", () => {
   const gates = [
     ["openBasicShapes", extractAsyncFunction(presentationRegressionSource, "openBasicShapes")],

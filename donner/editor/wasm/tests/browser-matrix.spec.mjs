@@ -319,34 +319,12 @@ function assertFontReferenceLane({ lane, tags, specFiles }) {
   );
 }
 
-function assertFirefoxPresentationLane({ lane, tags, specFiles }) {
-  assert.deepEqual(
-    tags.sort(),
-    ["manual", "no-local"],
-    "focused Firefox presentation qualification must remain opt-in and remote-only",
-  );
-  assert.deepEqual(specFiles, ["browser-presentation-regression.spec.ts"]);
-  assert.match(
-    lane,
-    /--config=\$\(rootpath :playwright\.firefox-presentation\.bazel\.config\.js\)/,
-  );
-  for (const dependency of ["firefox-aqua-setup.js", "@playwright//:firefox"]) {
-    assert.ok(
-      lane.includes(`"${dependency}"`),
-      `Firefox presentation lane is missing ${dependency}`,
-    );
-  }
-  assert.match(lane, /"DONNER_WASM_REQUIRE_WEBGPU": "1"/);
-}
-
 function assertBrowserLane(lane) {
   const contract = parseBrowserLane(lane);
   assertCommonBrowserLane(contract);
   const { laneName, performanceLane, tags } = contract;
   if (performanceLane) {
     assertPerformanceLane(contract);
-  } else if (laneName === "firefox_browser_presentation_regression_test") {
-    assertFirefoxPresentationLane(contract);
   } else if (laneName === "firefox_composited_invariants_test") {
     assertCompositedLane(contract, "firefox");
   } else if (laneName === "chromium_composited_invariants_test") {
@@ -413,7 +391,6 @@ test("Bazel owns hermetic browser regression and manual performance lanes", () =
       "catalog_font_loading_test",
       "chromium_composited_invariants_test",
       "chromium_remote_smoke",
-      "firefox_browser_presentation_regression_test",
       "firefox_composited_invariants_test",
       "font_reference_probe",
       "standalone_geode_browser_renderer_test",

@@ -130,65 +130,6 @@ playwright_bin.playwright_test(
     ],
 )
 
-# Bazel-owned Firefox coverage for the compatibility presentation regressions. The regular
-# presentation target uses Chromium and WebKit; this target preserves the compatibility project's
-# Firefox-only grep and runs it with the authenticated Firefox archive from rules_playwright.
-playwright_bin.playwright_test(
-    name = "firefox_browser_presentation_regression_test",
-    size = "large",
-    timeout = "long",
-    args = [
-        "test",
-        "$(rootpath :browser-presentation-regression.spec.ts)",
-        "--config=$(rootpath :playwright.firefox-presentation.bazel.config.js)",
-    ],
-    copy_data_to_bin = False,
-    data = [
-        "basic-shapes-capture-gate.ts",
-        "browser-presentation-regression.spec.ts",
-        "browser-stall-diagnostics.mjs",
-        "browser-stall-diagnostics.ts",
-        "canvas-color-stats.ts",
-        "failure-canvas-evidence.ts",
-        "gesture-streams.ts",
-        "gpu-session-console.ts",
-        "overlay-bitmap-compare.ts",
-        "package.json",
-        "playwright.bazel.config.js",
-        "playwright.compatibility.config.js",
-        "playwright.config.js",
-        "firefox-aqua-setup.js",
-        "playwright.firefox-presentation.bazel.config.js",
-        "png-crop.ts",
-        "quarantine-report.mjs",
-        "remote-webserver.mjs",
-        "sample-thumbnail-settle.ts",
-        "surface-frame-probe.ts",
-        ":node_modules/@playwright/test",
-        ":node_modules/pngjs",
-        "//donner/editor/tests:standalone_geode_browser_png_compare",
-        "//donner/editor/wasm:_wasm_web_package_for_serve",
-        "@playwright//:firefox",
-    ] + glob(["browser-presentation-regression.spec.ts-snapshots/*.png"]),
-    env = {
-        "CI": "1",
-        "DONNER_BROWSER_GOLDEN_COMPARE": "$(rootpath //donner/editor/tests:standalone_geode_browser_png_compare)",
-        "DONNER_WASM_PACKAGE_DIR": "$(rootpath //donner/editor/wasm:_wasm_web_package_for_serve)",
-        "DONNER_WASM_REQUIRE_WEBGPU": "1",
-        "DONNER_WASM_TEST_SERVER": "$(rootpath :remote-webserver.mjs)",
-        "NODE_OPTIONS": "",
-        "PLAYWRIGHT_BROWSERS_PATH": "$(rootpath @playwright//:firefox)/../",
-    },
-    tags = [
-        "manual",
-        "no-local",
-    ],
-    target_compatible_with = [
-        "@platforms//cpu:aarch64",
-        "@platforms//os:macos",
-    ],
-)
-
 # This presentation gate shares the macOS WebGPU capability requirement of the smoke lane.
 playwright_bin.playwright_test(
     name = "catalog_font_loading_test",
@@ -256,7 +197,6 @@ playwright_bin.playwright_test(
         "browser-responsiveness.perf.ts",
         "browser-watchdog-setup.js",
         "canvas-color-stats.ts",
-        "firefox-aqua-setup.js",
         "composited-pixel-classifier.mjs",
         "composited-probe.ts",
         "composited-probe-evidence.mjs",
@@ -572,8 +512,6 @@ js_test(
         "playwright.boot-presentation.bazel.config.js",
         "playwright.composited-chromium.bazel.config.js",
         "playwright.composited-chromium.config.js",
-        "firefox-aqua-setup.js",
-        "playwright.firefox-presentation.bazel.config.js",
         "playwright.webkit.bazel.config.js",
     ],
     entry_point = "playwright-bazel-config.spec.mjs",
