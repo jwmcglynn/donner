@@ -523,8 +523,6 @@ INSTANTIATE_TEST_SUITE_P(
         ValuesIn(getTestsInCategory(
             "filters/filter-functions",
             {
-                {"blur-function.svg",
-                 Params::Skip("Triage: verify unitless nonzero blur grammar and reference oracle")},
                 {"color-adjust-functions-0percent.svg",
                  Params::Skip("Triage: CSS color-adjust input validity or output oracle mismatch")},
                 {"color-adjust-functions-100percent.svg",

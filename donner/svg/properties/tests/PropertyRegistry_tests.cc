@@ -2196,6 +2196,27 @@ TEST(PropertyRegistry, ResourceColorDirectMutationsSurviveComputation) {
 TEST(PropertyRegistry, FilterParsing) {
   {
     PropertyRegistry registry;
+    EXPECT_THAT(registry.parsePresentationAttribute("filter", "blur(4)"), ParseResultIs(true));
+    ASSERT_TRUE(registry.filter.isSpecified());
+    EXPECT_THAT(*registry.filter.getStoredValue(),
+                testing::ElementsAre(FilterBlurIs(4.0, Lengthd::Unit::None)));
+  }
+
+  {
+    PropertyRegistry registry;
+    css::Declaration declaration = css::CSS::ParseStyleAttribute("filter: blur(4)").at(0);
+    EXPECT_THAT(registry.parseProperty(declaration, Specificity()),
+                ParseErrorIs("Invalid blur value"));
+  }
+
+  {
+    PropertyRegistry registry;
+    EXPECT_THAT(registry.parsePresentationAttribute("filter", "blur(-4)"),
+                ParseErrorIs("Negative value not allowed for blur()"));
+  }
+
+  {
+    PropertyRegistry registry;
     registry.parseStyle("filter: none");
     ASSERT_TRUE(registry.filter.isSpecified());
     EXPECT_THAT(*registry.filter.getStoredValue(), testing::IsEmpty());
