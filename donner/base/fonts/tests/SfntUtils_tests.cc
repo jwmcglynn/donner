@@ -799,9 +799,10 @@ TEST(SfntUtils, CffCharsetFormatsResolveTheNamedCompositeComponents) {
   const std::vector<Case> cases{
       {"format 0", {0, 0, 34, 0, 35, 0, 150}},
       {"format 1 contiguous", {1, 0, 34, 2}},
-      {"format 1 separate ranges", {1, 0, 34, 1, 0, 150, 0}},
+      // Keep A and B in separate ranges so resolving the composite observes the second range.
+      {"format 1 separate ranges", {1, 0, 34, 0, 0, 35, 0, 0, 150, 0}},
       {"format 2 contiguous", {2, 0, 34, 0, 2}},
-      {"format 2 separate ranges", {2, 0, 34, 0, 1, 0, 150, 0, 0}},
+      {"format 2 separate ranges", {2, 0, 34, 0, 0, 0, 35, 0, 0, 0, 150, 0, 0}},
   };
   const std::vector<std::vector<uint8_t>> programs{
       {14},
