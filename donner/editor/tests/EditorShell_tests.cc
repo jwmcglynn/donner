@@ -2626,31 +2626,14 @@ TEST(EditorShellTest, LayerInspectorReadbackIncludesSelectedStyleAndPathDiagnost
   auto target = EditorShellTestAccess::App(shell).document().document().querySelector("#target");
   ASSERT_TRUE(target.has_value());
   RenderCoordinator& coordinator = EditorShellTestAccess::Coordinator(shell);
+  // Keep the unrelated canvas debounce from invalidating the fresh-render diagnostic phase.
   RenderCoordinatorTestAccess::useFakeSchedulingClock(coordinator);
   EditorShellTestAccess::App(shell).setSelection(*target);
   (void)target->getComputedStyle();
   RunFramesUntilDisplayedSelectionBounds(window, shell);
-  // Selection geometry can precede a deferred canvas commit that invalidates rendering instances.
-  RenderCoordinatorTestAccess::makeCanvasCommitDue(coordinator);
-  RenderCoordinatorTestAccess::makeRasterViewportSettled(coordinator);
-  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
-  bool selectedInstanceReady = false;
-  for (int frame = 0; frame < 20 && std::chrono::steady_clock::now() < deadline; ++frame) {
-    RunShellFrame(window, shell);
-    ASSERT_TRUE(coordinator.asyncRenderer().waitUntilNoRenderInFlightForTesting(deadline))
-        << "frame=" << frame << " rendererBusy=" << coordinator.asyncRenderer().isBusy();
-    RunShellFrame(window, shell);
-    if (!coordinator.asyncRenderer().isBusy() &&
-        EditorShellTestAccess::DisplayedDocVersion(shell) ==
-            EditorShellTestAccess::App(shell).document().currentFrameVersion() &&
-        target->resolvedFillPaint().has_value()) {
-      selectedInstanceReady = true;
-      break;
-    }
-  }
-  ASSERT_THAT(selectedInstanceReady, testing::IsTrue());
-  EXPECT_THAT(EditorShellTestAccess::App(shell).document().document().canvasSize(),
-              testing::Eq(shell.viewportForReadback().rasterViewport().semanticCanvasSizePx));
+  ASSERT_TRUE(coordinator.asyncRenderer().waitUntilNoRenderInFlightForTesting(
+      std::chrono::steady_clock::now() + std::chrono::seconds(2)));
+  RunShellFrame(window, shell);
 
   const LayerInspectorStatusReadback status = shell.layerInspectorStatusForReadback();
 
@@ -2664,6 +2647,19 @@ TEST(EditorShellTest, LayerInspectorReadbackIncludesSelectedStyleAndPathDiagnost
   EXPECT_FALSE(status.selectedRenderingInstanceFill->empty());
   ASSERT_TRUE(status.selectedPathDataAttribute.has_value());
   EXPECT_EQ(*status.selectedPathDataAttribute, "M 10 12 L 50 12 L 50 36 Z");
+
+  // A canvas commit clears the optional rendering instance until the next document render.
+  EditorShellTestAccess::App(shell).document().document().setCanvasSize(240, 160);
+  const LayerInspectorStatusReadback afterCommit = shell.layerInspectorStatusForReadback();
+  EXPECT_THAT(afterCommit.selectedRenderingInstanceFill, testing::Eq(std::nullopt));
+  EXPECT_THAT(afterCommit.selectedStyleAttribute,
+              testing::Optional("fill: #010203; stroke: #040506"));
+  EXPECT_THAT(afterCommit.selectedLocalStyleFill,
+              testing::Optional("PaintServer(solid rgba(1, 2, 3, 255))"));
+  EXPECT_THAT(afterCommit.selectedComputedFill,
+              testing::Optional("PaintServer(solid rgba(1, 2, 3, 255))"));
+  EXPECT_THAT(afterCommit.selectedPathDataAttribute,
+              testing::Optional("M 10 12 L 50 12 L 50 36 Z"));
 }
 
 TEST(EditorShellTest, ReplayActionsSwitchToolsAndIgnoreUnknownToolNames) {
