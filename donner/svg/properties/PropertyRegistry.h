@@ -8,6 +8,7 @@
 #include "donner/base/EcsRegistry.h"  // For EntityHandle
 #include "donner/base/FillRule.h"
 #include "donner/base/ParseResult.h"
+#include "donner/base/ParseWarningSink.h"
 #include "donner/base/SmallVector.h"
 #include "donner/css/Color.h"
 #include "donner/css/Declaration.h"
@@ -93,6 +94,8 @@ auto as_mutable(const std::tuple<Args...>& tuple) {
  * | Property | Member | Default |
  * |----------|--------|---------|
  * | `color` | \ref color | `black` |
+ * | `flood-color` | \ref floodColor | `black` |
+ * | `stop-color` | \ref stopColor | `black` |
  * | `display` | \ref display | `inline` |
  * | `opacity` | \ref opacity | `1.0` |
  * | `visibility` | \ref visibility | `visible` |
@@ -130,6 +133,18 @@ public:
   /// stroke or \ref fill instead.
   Property<css::Color, PropertyCascade::Inherit> color{
       "color", []() -> std::optional<css::Color> { return css::Color(css::RGBA(0, 0, 0, 0xFF)); }};
+
+  /// `flood-color` property, used by filter floods and drop shadows. Only explicit inheritance
+  /// propagates this color from an ancestor.
+  Property<css::Color> floodColor{"flood-color", []() -> std::optional<css::Color> {
+                                    return css::Color(css::RGBA(0, 0, 0, 255));
+                                  }};
+
+  /// `stop-color` property, used by gradient stops. Only explicit inheritance propagates this
+  /// color from an ancestor.
+  Property<css::Color> stopColor{"stop-color", []() -> std::optional<css::Color> {
+                                   return css::Color(css::RGBA(0, 0, 0, 255));
+                                 }};
 
   /// `display` property, which determines how the element is rendered. Set to \ref Display::None to
   /// hide the element.
@@ -453,14 +468,14 @@ public:
    */
   auto allProperties() const {
     return std::forward_as_tuple(
-        color, display, opacity, visibility, overflow, transformOrigin, fill, fillRule, fillOpacity,
-        stroke, strokeOpacity, strokeWidth, strokeLinecap, strokeLinejoin, strokeMiterlimit,
-        strokeDasharray, strokeDashoffset, vectorEffect, clipPath, clipRule, mask, maskType, filter,
-        colorInterpolationFilters, pointerEvents, cursor, markerStart, markerMid, markerEnd,
-        fontFamily, fontSize, fontWeight, fontStyle, fontStretch, fontVariant, fontKerning,
-        fontSizeAdjust, textAnchor, textDecoration, dominantBaseline, writingMode, inlineSize,
-        letterSpacing, wordSpacing, baselineShift, alignmentBaseline, mixBlendMode, isolation,
-        imageRendering, paintOrder);
+        color, floodColor, stopColor, display, opacity, visibility, overflow, transformOrigin, fill,
+        fillRule, fillOpacity, stroke, strokeOpacity, strokeWidth, strokeLinecap, strokeLinejoin,
+        strokeMiterlimit, strokeDasharray, strokeDashoffset, vectorEffect, clipPath, clipRule, mask,
+        maskType, filter, colorInterpolationFilters, pointerEvents, cursor, markerStart, markerMid,
+        markerEnd, fontFamily, fontSize, fontWeight, fontStyle, fontStretch, fontVariant,
+        fontKerning, fontSizeAdjust, textAnchor, textDecoration, dominantBaseline, writingMode,
+        inlineSize, letterSpacing, wordSpacing, baselineShift, alignmentBaseline, mixBlendMode,
+        isolation, imageRendering, paintOrder);
   }
 
   /**
@@ -509,6 +524,14 @@ public:
       forEachProperty<Start + 1, End>(f);
     }
   }
+
+  /**
+   * Resolve flood and gradient-stop colors before computing inheritance. Authored declarations
+   * remain deferred so replacing an inline style preserves presentation-attribute fallbacks.
+   *
+   * @param warningSink Receives invalid color diagnostics.
+   */
+  void resolveElementColors(ParseWarningSink& warningSink);
 
   /**
    * Inherit the value of each element in the stylesheet.

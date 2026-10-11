@@ -63,6 +63,10 @@ ComputedStopComponent::ComputedStopComponent(
     const std::map<RcString, parser::UnparsedProperty>& unparsedProperties,
     ParseWarningSink& warningSink)
     : properties(inputProperties) {
+  const auto& color = style.properties->stopColor;
+  if (color.isSpecified() && color.specificity >= properties.stopColor.specificity) {
+    properties.stopColor = color;
+  }
   for (const auto& [name, unparsedProperty] : unparsedProperties) {
     const parser::PropertyParseFnParams params = parser::PropertyParseFnParams::Create(
         unparsedProperty.declaration, unparsedProperty.specificity,

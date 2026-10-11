@@ -161,6 +161,33 @@ TEST(SVGStopElementTests, ComputedStopColor) {
   EXPECT_EQ(stop.computedStopColor(), css::Color(css::RGBA(0xFF, 0, 0, 0xFF)));
 }
 
+TEST(SVGStopElementTests, ExplicitColorInheritanceTracksAncestorMutation) {
+  auto doc = instantiateSubtree(R"(
+    <svg>
+      <linearGradient id="g" stop-color="red"><stop stop-color="inherit"/></linearGradient>
+    </svg>
+  )");
+  auto stop = doc.querySelector("stop")->cast<SVGStopElement>();
+  EXPECT_THAT(stop.computedStopColor(), css::Color(css::RGBA(255, 0, 0, 255)));
+  auto gradient = doc.querySelector("#g");
+  ASSERT_THAT(gradient, testing::Optional(testing::_));
+  gradient->setAttribute("stop-color", "blue");
+  EXPECT_THAT(stop.computedStopColor(), css::Color(css::RGBA(0, 0, 255, 255)));
+  gradient->setStyle("stop-color: lime");
+  EXPECT_THAT(stop.computedStopColor(), css::Color(css::RGBA(0, 255, 0, 255)));
+}
+
+TEST(SVGStopElementTests, InlineColorReplacementPreservesAttributeFallback) {
+  auto stop = instantiateSubtreeElementAs<SVGStopElement>(
+      R"(<stop stop-color="red" style="stop-color: blue"/>)");
+  stop->setStyle("");
+  EXPECT_THAT(stop->computedStopColor(), css::Color(css::RGBA(255, 0, 0, 255)));
+  stop->setStyle("stop-color: lime");
+  EXPECT_THAT(stop->computedStopColor(), css::Color(css::RGBA(0, 255, 0, 255)));
+  stop->removeAttribute("style");
+  EXPECT_THAT(stop->computedStopColor(), css::Color(css::RGBA(255, 0, 0, 255)));
+}
+
 TEST(SVGStopElementTests, ComputedStopOpacity) {
   auto doc = instantiateSubtree(R"(
     <svg>

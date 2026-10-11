@@ -318,7 +318,6 @@ bug vs. out-of-scope:
 
 - `structure/svg`: non-UTF-8 encoding, rect-inside-non-SVG-element, xmlns validation
   (XML entity references ×3 and mixed-namespaces now pass and are enabled)
-- `paint-servers/stop`: `stop-color` inherit edge case
 - `text/letter-spacing/non-ASCII-character`: different CJK glyph (wrong font? →
   overlaps [B7](#b7-font-substitution--missing-bundled-families))
 - `text/font-family/fallback-1`: fallback from invalid family

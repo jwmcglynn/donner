@@ -1,5 +1,6 @@
 #include "donner/svg/properties/PropertyRegistry.h"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdio>
@@ -2137,6 +2138,24 @@ DONNER_CONSTEXPR_MAP auto kProperties =
 
                    return maybeError;
                  }},  //
+                {"flood-color",
+                 [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
+                   return Parse(
+                       params,
+                       [](const parser::PropertyParseFnParams& params) {
+                         return css::parser::ColorParser::Parse(params.components());
+                       },
+                       &registry.floodColor);
+                 }},
+                {"stop-color",
+                 [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
+                   return Parse(
+                       params,
+                       [](const parser::PropertyParseFnParams& params) {
+                         return css::parser::ColorParser::Parse(params.components());
+                       },
+                       &registry.stopColor);
+                 }},
                 {"font-family",
                  [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
                    return Parse(
@@ -2763,8 +2782,46 @@ bool PropertyRegistry::parseStyle(std::string_view str) {
   if (securityStats.rejected) {
     return false;
   }
+  std::array<Property<css::Color>, 2> selectedColors{floodColor, stopColor};
+  auto parseColor = [](const parser::PropertyParseFnParams& params,
+                       Property<css::Color>& selected) {
+    return parser::Parse(
+        params,
+        [](const parser::PropertyParseFnParams& params) {
+          return css::parser::ColorParser::Parse(params.components());
+        },
+        &selected);
+  };
+  for (auto& selected : selectedColors) {
+    selected.clear();
+    if (auto it = unparsedProperties.find(RcString(selected.name));
+        it != unparsedProperties.end()) {
+      std::ignore = parseColor(
+          parser::PropertyParseFnParams::Create(it->second.declaration, it->second.specificity,
+                                                parser::PropertyParseBehavior::AllowUserUnits),
+          selected);
+    }
+  }
   for (const auto& declaration : declarations) {
-    std::ignore = parseProperty(declaration, css::Specificity::StyleAttribute());
+    auto color =
+        std::find_if(selectedColors.begin(), selectedColors.end(),
+                     [&](const auto& selected) { return selected.name == declaration.name; });
+    if (color == selectedColors.end()) {
+      std::ignore = parseProperty(declaration, css::Specificity::StyleAttribute());
+      continue;
+    }
+    const auto params =
+        parser::PropertyParseFnParams::Create(declaration, css::Specificity::StyleAttribute(),
+                                              parser::PropertyParseBehavior::AllowUserUnits);
+    if (color->isSpecified() && params.specificity < color->specificity) {
+      continue;
+    }
+    const auto error = parseColor(params, *color);
+    if (!error || !unparsedProperties.contains(declaration.name)) {
+      unparsedProperties.insert_or_assign(
+          declaration.name,
+          parser::UnparsedProperty{declaration, css::Specificity::StyleAttribute()});
+    }
   }
   return true;
 }
@@ -2841,6 +2898,26 @@ ParseResult<bool> PropertyRegistry::parsePresentationAttribute(std::string_view 
   }
 
   return false;
+}
+
+void PropertyRegistry::resolveElementColors(ParseWarningSink& warningSink) {
+  for (auto* property : {&floodColor, &stopColor}) {
+    if (auto it = unparsedProperties.find(RcString(property->name));
+        it != unparsedProperties.end()) {
+      const auto params =
+          parser::PropertyParseFnParams::Create(it->second.declaration, it->second.specificity,
+                                                parser::PropertyParseBehavior::AllowUserUnits);
+      if (auto error = parser::Parse(
+              params,
+              [](const parser::PropertyParseFnParams& params) {
+                return css::parser::ColorParser::Parse(params.components());
+              },
+              property)) {
+        warningSink.add(std::move(*error));
+      }
+      unparsedProperties.erase(it);
+    }
+  }
 }
 
 bool PropertyRegistry::isPresentationAttributeInherited(std::string_view name) {
