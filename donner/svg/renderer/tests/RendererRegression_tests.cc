@@ -269,8 +269,7 @@ TEST(RendererRegressionHelpersTest, AnEmptyRenderIsNeitherVisibleNorDifferentNor
                           "empty 0x0 snapshot");
 }
 
-/// Renders \p body at 200x200 with the hermetic test fonts, through the backend this build is
-/// configured around.
+/// Rejects vacuous fixtures with the canonical comparison against a transparent bitmap.
 void AssertVisibleFixture(const RendererBitmap& bitmap, std::string_view label) {
   ASSERT_THAT(bitmap.empty(), testing::IsFalse());
   RendererBitmap empty = bitmap;
@@ -286,6 +285,7 @@ void AssertVisibleFixture(const RendererBitmap& bitmap, std::string_view label) 
   EXPECT_THAT(visiblePixels, testing::Gt(0));
 }
 
+/// Renders \p body at 200x200 with the hermetic test fonts and the configured backend.
 RendererBitmap RenderTextOpacityCase(std::string_view body) {
   SVGDocument document = instantiateSubtree(body, parser::SVGParser::Options(), Vector2i(200, 200));
   RegisterFontsFromDirectoryForTesting(document, ResvgResourceRoot() / "fonts");
