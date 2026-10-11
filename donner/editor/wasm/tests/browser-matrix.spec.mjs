@@ -8,6 +8,7 @@ import {
   readdirSync,
   readFileSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { createRequire } from "node:module";
@@ -78,23 +79,159 @@ function parseBrowserLane(lane) {
   return { lane, laneName, performanceLane, tags, specFiles };
 }
 
-function assertCommonBrowserLane({ lane, laneName, specFiles }) {
-  assert.ok(laneName, "every browser lane must be named");
-  assert.ok(specFiles.length > 0, `${laneName} must run a named spec`);
-  for (const specFile of specFiles) {
-    assert.ok(
-      lane.includes(`"${specFile}"`),
-      `${laneName} must list ${specFile} in its data`,
-    );
-    const spec = readFileSync(path.join(testDirectory, specFile), "utf8");
-    for (const [, importedModule] of spec.matchAll(/from "\.\/([^"]+)"/g)) {
-      const dependency = path.extname(importedModule) ? importedModule : `${importedModule}.ts`;
+// Every form by which a test module loads a file beside it, with either quote style: static
+// imports and re-exports (type-only ones included, a harmless over-requirement), side-effect and
+// dynamic imports, CommonJS requires, require.resolve, and a URL resolved against the module.
+// Matches inside comments and JSDoc count as requirements too. That fails closed: an extra `data`
+// entry at worst, never a load the walk misses.
+const kLocalFileReferences = [
+  /\b(?:from|import)\s*(["'])(\.\.?\/[^"']+)\1/g,
+  /\b(?:import|require|require\.resolve)\(\s*(["'])(\.\.?\/[^"']+)\1\s*\)/g,
+  /\bnew URL\(\s*(["'])(\.\.?\/[^"']+)\1\s*,\s*import\.meta\.url\s*\)/g,
+];
+const kModuleFile = /\.[cm]?[jt]s$/;
+
+function localFileReferences(source) {
+  return kLocalFileReferences.flatMap((pattern) =>
+    [...source.matchAll(pattern)].map(([, , specifier]) => specifier)
+  );
+}
+
+// Resolves a reference to a file in this package: the exact path, else the module extensions in
+// order, else a directory index. A file outside the package would be listed by label, which this
+// contract does not follow, so reaching one fails instead of passing unchecked.
+function resolveLocalFile(fromFile, specifier, via) {
+  const target = path.posix.normalize(path.posix.join(path.posix.dirname(fromFile), specifier));
+  const reference = `${via.join(" -> ")} -> ${specifier}`;
+  assert.ok(
+    !target.startsWith("../"),
+    `${reference} leaves the test package; list it by label and extend this contract`,
+  );
+  const candidates = [
+    target,
+    ...[".ts", ".mjs", ".js", ".cjs"].map((extension) => `${target}${extension}`),
+    ...["index.ts", "index.js"].map((index) => `${target}/${index}`),
+  ];
+  const resolved = candidates.find((candidate) => {
+    const candidatePath = path.join(testDirectory, candidate);
+    return existsSync(candidatePath) && statSync(candidatePath).isFile();
+  });
+  assert.ok(resolved, `${reference} resolves to no file; tried ${candidates.join(", ")}`);
+  return resolved;
+}
+
+// The package modules a target names through location expansion in its args or env: its specs,
+// its Playwright config and the servers it starts.
+function locatedModules(target) {
+  return [...target.matchAll(/\$\((?:rootpaths?|locations?|execpaths?) :([^)\s]+)\)/g)]
+    .map(([, file]) => file)
+    .filter((file) => kModuleFile.test(file));
+}
+
+// Requires `target` to list every package module it names through location expansion; a manual
+// target is never analyzed by a pull request build, so Bazel's own check would come only nightly.
+// Then walks every package file those modules and `entryPoints` load, directly or through one
+// another, and requires `target` or one of `runfilesFrom` (targets whose runfiles it carries) to
+// list each one. A file that only a listed helper or a config loads is just as absent from the
+// runfiles, and the target then fails before any case runs. Each file keeps the chain that first
+// reached it, for the failure.
+function assertListsLoadedFiles(targetName, target, { entryPoints = [], runfilesFrom = [] } = {}) {
+  const located = locatedModules(target);
+  for (const module of located) {
+    assert.ok(target.includes(`"${module}"`), `${targetName} must list ${module} in its data`);
+  }
+  const listedIn = [target, ...runfilesFrom];
+  const chains = new Map([...entryPoints, ...located].map((root) => [root, [root]]));
+  for (const [file, chain] of chains) {
+    if (!kModuleFile.test(file)) continue;
+    const filePath = path.join(testDirectory, file);
+    assert.ok(existsSync(filePath), `${targetName} loads missing module ${chain.join(" -> ")}`);
+    for (const specifier of localFileReferences(readFileSync(filePath, "utf8"))) {
+      const dependency = resolveLocalFile(file, specifier, chain);
+      if (chains.has(dependency)) continue;
+      const dependencyChain = [...chain, dependency];
+      chains.set(dependency, dependencyChain);
       assert.ok(
-        lane.includes(`"${dependency}"`),
-        `${laneName} is missing ${specFile} dependency ${dependency}`,
+        listedIn.some((body) => body.includes(`"${dependency}"`)),
+        `${targetName} is missing ${dependency}, loaded through ${dependencyChain.join(" -> ")}`,
       );
     }
   }
+}
+
+test("the browser lane walk follows every way a module loads a file beside it", () => {
+  const source = [
+    "import { a } from \"./static\";",
+    "import type { B } from './type-only';",
+    "export * from \"./re-export.mjs\";",
+    "import \"./side-effect.js\";",
+    "const lazy = await import('./dynamic.mjs');",
+    "const helper = require(\"./common.cjs\");",
+    "const setup = require.resolve(\"./setup.js\");",
+    "const child = new URL(\"./child.cjs\", import.meta.url);",
+    "const parent = require(\"../parent.js\");",
+    "import { test } from \"@playwright/test\";",
+  ].join("\n");
+  assert.deepEqual(localFileReferences(source).sort(), [
+    "../parent.js",
+    "./child.cjs",
+    "./common.cjs",
+    "./dynamic.mjs",
+    "./re-export.mjs",
+    "./setup.js",
+    "./side-effect.js",
+    "./static",
+    "./type-only",
+  ]);
+  const via = ["root.ts"];
+  assert.equal(
+    resolveLocalFile("browser-responsiveness.perf.ts", "./browser-gpu-residency", via),
+    "browser-gpu-residency.ts",
+  );
+  assert.equal(
+    resolveLocalFile("browser-watchdog.mjs", "./browser-process-snapshot.cjs", via),
+    "browser-process-snapshot.cjs",
+  );
+  assert.throws(
+    () => resolveLocalFile("root.ts", "../parent.js", via),
+    /root\.ts -> \.\.\/parent\.js leaves the test package/,
+  );
+  assert.throws(
+    () => resolveLocalFile("root.ts", "./absent", via),
+    /root\.ts -> \.\/absent resolves to no file; tried absent, absent\.ts, .*absent\/index\.js/,
+  );
+  assert.deepEqual(
+    locatedModules(
+      "\"--config=$(rootpath :playwright.bazel.config.js)\", \"$(rootpath :smoke.spec.ts)\", "
+        + "\"$(rootpath :remote-webserver.mjs)\", \"$(rootpath //donner/editor/wasm:pkg)\", "
+        + "\"$(rootpath :_driver)\", \"$(rootpath @playwright//:chromium)/../\"",
+    ),
+    ["playwright.bazel.config.js", "smoke.spec.ts", "remote-webserver.mjs"],
+  );
+  // A target that lists its config and the config's base, but not the file the base requires.
+  const target = [
+    "name = \"synthetic_lane\",",
+    "args = [\"--config=$(rootpath :playwright.boot-presentation.bazel.config.js)\"],",
+    "data = [\"playwright.boot-presentation.bazel.config.js\", \"playwright.bazel.config.js\"],",
+  ].join("\n");
+  assert.throws(() => assertListsLoadedFiles("synthetic_lane", target), {
+    message: "synthetic_lane is missing playwright.config.js, loaded through "
+      + "playwright.boot-presentation.bazel.config.js -> playwright.bazel.config.js -> "
+      + "playwright.config.js",
+  });
+  assert.doesNotThrow(() =>
+    assertListsLoadedFiles("synthetic_lane", target, {
+      runfilesFrom: ["data = [\"playwright.config.js\"],"],
+    })
+  );
+});
+
+function assertCommonBrowserLane({ lane, laneName, specFiles }) {
+  assert.ok(laneName, "every browser lane must be named");
+  assert.ok(specFiles.length > 0, `${laneName} must run a named spec`);
+  // Start from every module the lane names, its specs included: the Playwright config and the
+  // web server it starts load package files of their own.
+  assertListsLoadedFiles(laneName, lane);
   assert.match(
     lane,
     /target_compatible_with = \[[\s\S]*?"@platforms\/\/cpu:aarch64"[\s\S]*?"@platforms\/\/os:macos"[\s\S]*?\]/,
@@ -238,9 +375,11 @@ test("Bazel owns hermetic browser regression and manual performance lanes", () =
   assert.match(buildFile, /name = "browser_presentation_regression_test"/);
   // Every Bazel-owned browser lane, checked one at a time rather than against
   // the file as a whole: a contract satisfied by some other lane in the same
-  // file is not a contract. Each lane names a spec, and the spec's own local
-  // imports have to be in that lane's `data` or the test runs against a
-  // runfiles tree that is missing them.
+  // file is not a contract. Each lane names a spec, a config and sometimes a
+  // server, and every package file those load, directly or through another
+  // file, has to be in that lane's `data` or the test runs against a runfiles
+  // tree that is missing it. That includes the manual performance driver and
+  // its watchdog, which no pull request runs.
   const lanes = [...buildFile.matchAll(/playwright_bin\.playwright_test\(([\s\S]*?)\n\)\n/g)]
     .map(([, body]) => body);
   assert.deepEqual(
@@ -266,17 +405,20 @@ test("Bazel owns hermetic browser regression and manual performance lanes", () =
     .find((body) => body.includes("name = \"browser_responsiveness_perf_test\""));
   assert.ok(watchdog, "the public responsiveness lane must own its watchdog");
   assert.match(watchdog, /entry_point = "browser-watchdog\.mjs"/);
-  for (
-    const dependency of [
-      ":_browser_responsiveness_perf_driver",
-      "browser-watchdog-anchor.mjs",
-      "browser-watchdog-child.cjs",
-      "browser-responsiveness.perf.ts",
-      "playwright.responsiveness.bazel.config.js",
-    ]
-  ) {
-    assert.ok(watchdog.includes(`"${dependency}"`), `watchdog missing ${dependency}`);
-  }
+  assert.ok(
+    watchdog.includes("\":_browser_responsiveness_perf_driver\""),
+    "the watchdog must carry the driver and its runfiles",
+  );
+  // The watchdog's entry point loads its own helpers and spawns an anchor and a preload beside
+  // it, then hands the driver the spec and config it names. Those run against the watchdog's
+  // runfiles, which include the driver's.
+  const driver = lanes.find((lane) =>
+    lane.includes("name = \"_browser_responsiveness_perf_driver\"")
+  );
+  assertListsLoadedFiles("browser_responsiveness_perf_test", watchdog, {
+    entryPoints: ["browser-watchdog.mjs"],
+    runfilesFrom: [driver],
+  });
   assert.match(
     watchdog,
     /"DONNER_WATCHDOG_DRIVER": "\$\(rootpath :_browser_responsiveness_perf_driver\)"/,

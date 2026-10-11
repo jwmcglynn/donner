@@ -210,6 +210,7 @@ playwright_bin.playwright_test(
         "prepare-browser-archives.js",
         "presented-frame-samples.mjs",
         "remote-webserver.mjs",
+        "sample-thumbnail-settle.ts",
         "splash-aim.mjs",
         ":node_modules/@playwright/test",
         ":node_modules/pngjs",
@@ -577,6 +578,7 @@ js_test(
     size = "small",
     copy_data_to_bin = False,
     data = glob([
+        "*.cjs",
         "*.js",
         "*.json",
         "*.mjs",
@@ -603,6 +605,7 @@ js_test(
     size = "small",
     copy_data_to_bin = False,
     data = glob([
+        "*.cjs",
         "*.js",
         "*.json",
         "*.mjs",
