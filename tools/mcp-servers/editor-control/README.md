@@ -15,7 +15,7 @@ bazel build //tools/mcp-servers/editor-control:editor_control_mcp_server
 For local development, configure MCP to launch the Python wrapper:
 
 ```sh
-python3 /Users/jwm/Projects/donner/tools/mcp-servers/editor-control/editor_control_wrapper.py
+python3 /path/to/donner/tools/mcp-servers/editor-control/editor_control_wrapper.py
 ```
 
 The wrapper proxies the C++ server and adds rebuild/restart tools, so local
@@ -23,7 +23,7 @@ changes can be picked up without manually rebuilding and then restarting the MCP
 client. It launches the child binary at:
 
 ```text
-/Users/jwm/Projects/donner/bazel-bin/tools/mcp-servers/editor-control/editor_control_mcp_server
+/path/to/donner/bazel-bin/tools/mcp-servers/editor-control/editor_control_mcp_server
 ```
 
 Set `DONNER_EDITOR_CONTROL_BUILD_ON_START=1` if the wrapper should run the Bazel

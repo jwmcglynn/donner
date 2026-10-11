@@ -191,11 +191,11 @@ last_run=$(cat "$LAST_RUN_FILE" 2>/dev/null || echo 0)
 elapsed=$((now - last_run))
 
 # Fetch latest main
-git -C /home/jwm/Projects/donner fetch origin main
+git -C "$FUZZ_REPO_DIR" fetch origin main
 
 # Check if new commits exist since last run
 LAST_RUN_COMMIT=$(cat ~/.donner-fuzz/last_run_commit 2>/dev/null || echo "")
-CURRENT_HEAD=$(git -C /home/jwm/Projects/donner rev-parse origin/main)
+CURRENT_HEAD=$(git -C "$FUZZ_REPO_DIR" rev-parse origin/main)
 
 if [ "$CURRENT_HEAD" = "$LAST_RUN_COMMIT" ]; then
     exit 0  # No new commits, nothing to do
