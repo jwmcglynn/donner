@@ -2653,13 +2653,13 @@ TEST(EditorShellTest, LayerInspectorReadbackIncludesSelectedStyleAndPathDiagnost
   const LayerInspectorStatusReadback afterCommit = shell.layerInspectorStatusForReadback();
   EXPECT_THAT(afterCommit.selectedRenderingInstanceFill, testing::Eq(std::nullopt));
   EXPECT_THAT(afterCommit.selectedStyleAttribute,
-              testing::Optional("fill: #010203; stroke: #040506"));
+              testing::Optional(testing::Eq("fill: #010203; stroke: #040506")));
   EXPECT_THAT(afterCommit.selectedLocalStyleFill,
-              testing::Optional("PaintServer(solid rgba(1, 2, 3, 255))"));
+              testing::Optional(testing::Eq("PaintServer(solid rgba(1, 2, 3, 255))")));
   EXPECT_THAT(afterCommit.selectedComputedFill,
-              testing::Optional("PaintServer(solid rgba(1, 2, 3, 255))"));
+              testing::Optional(testing::Eq("PaintServer(solid rgba(1, 2, 3, 255))")));
   EXPECT_THAT(afterCommit.selectedPathDataAttribute,
-              testing::Optional("M 10 12 L 50 12 L 50 36 Z"));
+              testing::Optional(testing::Eq("M 10 12 L 50 12 L 50 36 Z")));
 }
 
 TEST(EditorShellTest, ReplayActionsSwitchToolsAndIgnoreUnknownToolNames) {
