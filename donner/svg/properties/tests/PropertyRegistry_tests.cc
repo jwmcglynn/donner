@@ -600,9 +600,8 @@ TEST(PropertyRegistry, PaintUrlsResolveDecodedReferences) {
           EXPECT_THAT(registry.parseProperty(declaration, Specificity()), Eq(std::nullopt));
         }
         const auto& paint = property == "fill" ? registry.fill : registry.stroke;
-        EXPECT_THAT(
-            paint.get(),
-            Optional(PaintServer(PaintServer::ElementReference(Reference(test.reference)))));
+        EXPECT_THAT(paint.get(), Optional(PaintServer(PaintServer::ElementReference(
+                                     Reference(RcString(test.reference))))));
       }
     }
   }
