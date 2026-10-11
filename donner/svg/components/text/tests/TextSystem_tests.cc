@@ -1054,6 +1054,42 @@ TEST_F(TextSystemTest, TextPathIgnoresOwnRotationAndInheritsEnclosingTextRotatio
   EXPECT_THAT(computed->spans[2].rotateList, testing::ElementsAre(testing::DoubleEq(20)));
 }
 
+TEST_F(TextSystemTest, RotationDoesNotEscapeTextRootIntoGroupingAnchor) {
+  auto document = ParseAndCompute(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+      <a rotate="45"><text id="t">A<tspan rotate="10">B<tspan>C</tspan></tspan>D</text></a>
+    </svg>
+  )svg");
+
+  auto* computed =
+      document.querySelector("#t")->unsafeEntityHandle().try_get<ComputedTextComponent>();
+  ASSERT_THAT(computed, testing::NotNull());
+  ASSERT_THAT(computed->spans, SizeIs(4));
+  EXPECT_THAT(computed->spans[0].rotateList, IsEmpty());
+  EXPECT_THAT(computed->spans[1].rotateList, testing::ElementsAre(testing::DoubleEq(10)));
+  EXPECT_THAT(computed->spans[2].rotateList, testing::ElementsAre(testing::DoubleEq(10)));
+  EXPECT_THAT(computed->spans[3].rotateList, IsEmpty());
+}
+
+TEST_F(TextSystemTest, RotationInsideTextAnchorUsesTextRootAndNestedOverrides) {
+  auto document = ParseAndCompute(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+      <a rotate="45"><text id="t" rotate="15"><a>A<tspan rotate="30">B</tspan>C</a><tspan>D</tspan></text></a>
+    </svg>
+  )svg");
+
+  auto* computed =
+      document.querySelector("#t")->unsafeEntityHandle().try_get<ComputedTextComponent>();
+  ASSERT_THAT(computed, testing::NotNull());
+  ASSERT_THAT(computed->spans, SizeIs(5));
+  const std::vector<double> expected = {15, 15, 30, 15, 15};
+  for (size_t i = 0; i < expected.size(); ++i) {
+    SCOPED_TRACE(i);
+    EXPECT_THAT(computed->spans[i].rotateList,
+                testing::ElementsAre(testing::DoubleEq(expected[i])));
+  }
+}
+
 TEST_F(TextSystemTest, XmlSpacePreserveKeepsWhitespaceAndInheritance) {
   auto document = ParseAndCompute(R"svg(
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
