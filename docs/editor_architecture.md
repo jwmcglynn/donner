@@ -17,13 +17,15 @@ Two properties shape the whole design:
 
 - **Rendering runs on a background worker thread.** Canvas, tool, and application commands queue
   without waiting for a render and apply when the worker is idle; finished renders are polled back
-  as composited tiles. Incremental source-pane edits are the exception: they take the document's
-  exclusive write guard immediately and can briefly block the UI thread until an in-flight render
-  releases that guard.
-- **The frame loop is event-driven, not free-running.** `main()` blocks in
-  `waitEvents`/`waitEventsTimeout` until input arrives, the worker signals
-  completion, or a timed UI task is due; only then does it produce a frame. No
-  frames are drawn between those wake sources.
+  as composited tiles. Incremental source-pane edits and in-canvas text editing are the
+  exceptions: they apply immediately under the document's exclusive write guard and can briefly
+  block the UI thread until an in-flight render releases that guard.
+- **The frame loop is event-driven, not free-running.** On the desktop, `main()` blocks in
+  `waitEvents`/`waitEventsTimeout` until input arrives, another thread posts a wake (for example
+  render completion), or a timed UI task is due; while GPU completion or retirement work is
+  outstanding, the wait is capped at 100 ms. In the browser, `main()` runs on an application
+  thread whose vsync-aligned frame driver runs a full frame only when the editor requested one,
+  browser input is pending, or a timer is due, and otherwise only services idle GPU work.
 
 Guarantees callers can rely on:
 
@@ -33,10 +35,11 @@ Guarantees callers can rely on:
   projection change together. Tools may configure detached elements while constructing a command,
   but never mutate an element already attached to the live document.
 - **Edits cannot race the renderer.** Queued commands are flushed only while the async renderer
-  reports `!isBusy()`. Structured source edits acquire the SVG document's concurrent-DOM write
-  guard. A render in flight therefore either defers a queued flush or makes source dispatch wait
-  until guarded access is available. That blocking source-edit handoff is a known contention point,
-  not an asynchronous queue.
+  reports `!isBusy()`, except that an in-canvas text session flushes its own edits immediately.
+  Structured source edits and those text edits acquire the SVG document's concurrent-DOM write
+  guard. A render in flight therefore either defers a queued flush or makes the edit wait until
+  guarded access is available. That blocking handoff is a known contention point, not an
+  asynchronous queue.
 - **The interactive editor renders in-process.** The process-isolation prototype
   has been removed, so the GUI editor can no longer route through it; a
   replacement sandbox is planned for v1.0.
@@ -156,7 +159,7 @@ flowchart TB
   worker["AsyncRenderer<br/>worker state machine"]
   renderer["svg::Renderer and<br/>CompositorController"]
   preview["CompositedPreview<br/>paint-ordered tiles"]
-  presenter["GlTextureCache and RenderPanePresenter<br/>upload changed tiles and draw overlays"]
+  presenter["GlTextureCache, FramePresentation and DocumentPresenter<br/>prepare tiles, seal one frame, draw document and chrome"]
   document["AsyncSVGDocument<br/>guarded live registry"]
 
   panes --> coordinator
@@ -176,7 +179,8 @@ flowchart TB
 
 The component boundaries enforce two invariants: attached-DOM writes use one of the two guarded
 seams above, and a command-queue mutation is not flushed while a render result is in flight or
-waiting to be polled.
+waiting to be polled, except during an in-canvas text session, whose immediate flush waits on the
+document write guard instead.
 
 ### Dynamic view: one edit-to-pixel cycle
 
@@ -210,7 +214,7 @@ sequenceDiagram
     Host->>Shell: wake and runFrame
     Shell->>Worker: pollResult
     Worker-->>Shell: latest completed preview
-    Shell->>Output: upload changed tiles and present
+    Shell->>Output: install the frame's tiles and present
     Output-->>User: updated canvas
   else renderer is busy
     Shell-->>Host: retain queued command or dirty version until the next idle frame
@@ -228,32 +232,38 @@ points.
 - **`main()`** (`donner/editor/main.cc`) parses argv (a positional SVG path,
   `--save-repro <path>`), constructs `gui::EditorWindow` (GLFW + Geode GPU runtime +
   ImGui, `donner/editor/gui/EditorWindow.h`) and `EditorShell`, then runs the
-  event-driven loop: `waitEvents(timeout)` -> `window.beginFrame()` ->
-  `shell.runFrame()` -> `window.endFrame()`. The timeout comes from
-  `EditorShell::nextIdleWakeSeconds()` so throttled UI work still wakes the loop.
+  event-driven loop: wait for events (desktop only) -> `window.pollIdleGpu()` ->
+  `shell.prepareFrame()` -> `window.beginFrame()` -> `shell.runFrame()` ->
+  `window.endFrame()`. The desktop timeout is the earlier of
+  `EditorShell::nextIdleWakeSeconds()`, so throttled UI work still wakes the loop, and a 100 ms
+  poll while GPU work is outstanding. The browser build installs a frame driver instead of this
+  loop.
 - **`EditorShell`** (`donner/editor/EditorShell.h`) is the stateful frontend that
   owns nearly all of the long-lived orchestration state: `EditorApp`, the tools,
   `TextEditor`, its purpose-specific `GlTextureCache` instances, `RenderCoordinator`,
   `DocumentSyncController`,
   the viewport/input controllers, and the presenters.
-- **`EditorShell::runFrame()`** each frame: (1) poll the latest async render into
-  presentation textures through `RenderCoordinator::pollRenderResult`; (2) if `!isBusy()`,
-  flush queued edits (`EditorApp::flushFrame`) and refresh selection bounds; (3) sync
-  parse-error markers and apply pending canvas-to-source writebacks through
-  `DocumentSyncController`; (4) compute the adaptive UI profile and pane layout,
-  handle shortcuts, and render the desktop menu bar or compact command bar; (5)
-  render the panes; (6) if `!isBusy()`, request the next render through
-  `RenderCoordinator::maybeRequestRender`; (7) collect a `FrameCostBreakdown`
-  and emit frame-miss/resource telemetry. Queued canvas-text characters are
-  coalesced before the mutation flush, so one UI frame performs one text-content
-  synchronization rather than one synchronization per queued codepoint.
+- **`EditorShell::runFrame()`** each frame: (1) retire aged presentation textures, poll the
+  preview lane, then poll the latest async render through
+  `RenderCoordinator::pollRenderResult`, which prepares its tiles and rejects a result that
+  cannot keep the current object poses; (2) if `!isBusy()`, flush queued edits
+  (`EditorApp::flushFrame`) and refresh selection bounds; (3) sync parse-error markers and apply
+  pending canvas-to-source writebacks through `DocumentSyncController`; (4) compute the adaptive
+  UI profile, pane layout and DockSpace, handle shortcuts, and render the menu bar (the native
+  menu on macOS) or compact command bar, plus dialogs; (5) render the panes, sealing this
+  frame's `FramePresentation`; (6) if `!isBusy()`, request the next render through
+  `RenderCoordinator::maybeRequestRender` and advance visible previews; (7) collect a
+  `FrameCostBreakdown` and emit frame-miss/resource telemetry. Inspector and tool actions may
+  also flush mid-frame while the renderer is idle. Queued canvas-text characters are coalesced
+  into one batch, so one UI frame performs one text-content synchronization rather than one
+  synchronization per queued codepoint.
 
-The welcome catalog renders each bundled SVG once through a dedicated offscreen
-`svg::Renderer` at thumbnail resolution. A dedicated texture cache uploads those owned bitmaps for
-`SamplePickerPresenter`; ImGui only lays out cards and blits the resulting textures. Keeping this
-cache separate from Layers previews prevents the live-row retention sweep from evicting samples.
-Generation advances by at most one catalog entry per UI frame and explicitly wakes the event loop
-until the bounded cache is complete.
+The welcome catalog renders the visible sample cards one at a time on the render worker's
+low-priority preview lane, which also renders font-family previews. Document renders take
+priority and cancel an active preview, and no preview starts while the renderer is busy. A
+dedicated texture cache uploads the returned bitmaps for `SamplePickerPresenter`; ImGui only lays
+out cards and blits the resulting textures. Keeping this cache separate from Layers previews
+prevents the live-row retention sweep from evicting samples.
 
 ### The document write seams
 
@@ -273,15 +283,21 @@ Attached live-DOM writes enter through two explicit, guarded paths:
 
 - **`AsyncSVGDocument`** (`donner/editor/AsyncSVGDocument.h`) wraps `svg::SVGDocument`, queues
   command-based writes in a UI-thread-only per-frame `CommandQueue`, and exposes the guarded
-  incremental-source seam. `flushFrame()` drains and applies the queue once per frame and bumps a
-  `frameVersion` counter; full document replacements bump a separate `documentGeneration`. Both are
-  atomics the render worker can poll. `applySourceEdit()` routes incremental XML-source edits
+  incremental-source seam. `flushFrame()` drains and applies the queue, normally once per frame,
+  also after idle-gated inspector and tool actions, and immediately during an in-canvas text
+  session (including before a save), and bumps a `frameVersion` counter; full document
+  replacements bump a separate `documentGeneration`. Both are atomics the render worker can
+  poll. `applySourceEdit()` routes incremental XML-source edits
   through `donner/base/xml` for structured editing.
 - **`CommandQueue`** (`donner/editor/CommandQueue.h`) is UI-thread-only and
-  coalesces on flush: `ReplaceDocument` is exclusive and drops earlier commands;
-  repeated `SetTransform` on the same entity collapse to the latest (a 60 fps drag
-  flushes as a single `setTransform`); structural `Insert`/`Delete` never coalesce;
-  commands are never reordered across entities.
+  coalesces on flush: `ReplaceDocument` is exclusive and drops earlier commands, and
+  `CutShapes` and `PasteShapes` are exclusive the same way; repeated `SetTransform` on the
+  same entity collapse to the latest (a 60 fps drag flushes as a single `setTransform`);
+  repeated `SetAttribute` on the same element and attribute collapses to the latest value until
+  a `RemoveAttribute` of that attribute; structural `Insert`/`Delete` never coalesce; commands
+  are never reordered across entities. When a command is built, `pendingStyleAttribute()` lets a
+  new style edit start from the latest queued style for that element, so consecutive edits
+  compose.
 - **`setDocumentMaybeStructural`** builds an entity remap against the current
   document; when the new tree matches by tag + id, the replacement is tagged
   `Structural` and the remap rides the next render request so the compositor
@@ -292,20 +308,25 @@ Attached live-DOM writes enter through two explicit, guarded paths:
 
 ### Async rendering and threading
 
-- **`AsyncRenderer`** (`donner/editor/AsyncRenderer.h`) owns a dedicated worker
-  thread that owns the `svg::Renderer` and a `CompositorController` for its
-  lifetime. Its state is a variant over `Idle`/`Rendering`/`Cancelling`/`Done`/
-  `Shutdown`. `isBusy()` is true while a render is in flight _or_ a finished result
-  awaits polling; the UI thread must not mutate the document or touch the renderer
-  while it is true. `requestRender()` is non-blocking and cancels+replaces an
-  in-flight request; cancellation is delivered through a
-  `svg::compositor::CancellationToken` polled at compositor safe points.
+- **`AsyncRenderer`** (`donner/editor/AsyncRenderer.h`) runs a dedicated worker
+  thread that has exclusive use of the `svg::Renderer` owned by `RenderWorkerBundle` and
+  owns a `CompositorController`, which it recreates when the composited rendering mode changes
+  and destroys while compositing is off. Its foreground state is a variant over
+  `Idle`/`Rendering`/`Cancelling`/`Done`/`Shutdown`, beside a one-slot low-priority preview
+  lane and a compositor warmup after the first frame. `isBusy()` is true while a render is in
+  flight, a finished result awaits polling, or the warmup holds the document; preview work
+  never sets it. The UI thread must not mutate the document or touch the renderer while it is
+  true. `requestRender()` is non-blocking and cancels+replaces an in-flight request, and
+  `cancelInFlight()` cancels without a replacement; cancellation is delivered through a
+  `svg::compositor::CancellationToken` polled at compositor safe points. While idle, the worker
+  runs owner-thread GPU maintenance.
 - **Threading model.** The worker shares the _live_ registry rather than deep-copying
-  (`SVGDocument` is a value facade over a `shared_ptr<Registry>`). On first render
-  the document is flipped to `svg::ThreadingMode::ConcurrentDom` for the editor's
-  lifetime; the worker takes a `DocumentWriteAccess` guard across the render and
+  (`SVGDocument` is a value facade over a shared `DocumentState` that owns the registry). On
+  the first render request the document is flipped to `svg::ThreadingMode::ConcurrentDom` for
+  the editor's lifetime; the worker takes a `DocumentWriteAccess` guard across the render and
   releases it before touching its own mutex to avoid lock-order inversion.
-  UI-thread DOM reads take their own read-access guard. This is the editor-side
+  UI-thread DOM access takes its own guard: a read guard, or a write guard where a read
+  computes lazy state. This is the editor-side
   application of the DOM lifetime ownership model (see \ref Multithreading).
 - **Source-edit contention.** The source-pane structured-edit path requests a blocking
   `DocumentWriteAccess` from the UI thread even when the renderer is busy. This is race-safe, but a
@@ -315,7 +336,9 @@ Attached live-DOM writes enter through two explicit, guarded paths:
   renderer-side orchestration: the `RenderWorkerBundle` (renderer + `AsyncRenderer`,
   destroyed in reverse order so the worker joins before the renderer it references),
   the composited presentation, the selection-bounds cache, and render scheduling
-  with pinch-zoom / canvas-size / raster-viewport debouncing.
+  with pinch-zoom / canvas-size / raster-viewport debouncing, plus the scheduling policy
+  (`PresentationRenderScheduler`), the sealed per-frame `FramePresentation`, overview infill,
+  eyedropper pixel capture, and paced retries when there is nothing to present.
 
 ### Compositor and presentation
 
@@ -324,12 +347,19 @@ of `CompositedTile`s. Each tile carries document-unit geometry and a drag transl
 so tiles slide in real time without re-rasterizing. It may include a CPU
 `RendererBitmap` or backend `RendererTextureSnapshot`; a metadata-only tile can reuse
 a cached texture when its identity matches. `GlTextureCache` retains stable tile ids
-and generations. On Geode builds, it registers GPU snapshots with the UI texture
-registry and uploads CPU bitmap tiles through the GPU runtime; the OpenGL build path
-uses GL textures. `RenderPanePresenter` draws cached tiles through the ImGui draw list;
-editor chrome (selection outlines, marquee, handles) is drawn by `OverlayRenderer` or
-an immediate ImGui overlay. `svg::Renderer` resolves at build time to tiny-skia
-(software) or Geode (GPU); the shipped `editor` target uses Geode. Editor code compiled
+and generations and installs a tile set only when every payload is ready. On Geode
+builds, native and browser, document tiles arrive only as GPU texture snapshots, which
+the cache retains and registers with the UI texture registry; CPU bitmaps go through
+the GPU runtime only for thumbnails and previews. Each UI frame seals one
+`FramePresentation` that binds the tile set, the captured selection geometry, and the
+object poses. `DocumentPresenter` installs it, and the host draws the checkerboard,
+document tiles, and `OverlayRenderer` selection chrome straight into the window
+framebuffer before the ImGui pass. Non-Geode builds, which no shipped product uses, keep
+tiles in GL textures and compose tiles and chrome into one intermediate texture
+(`DocumentPresentationCompositor`) that the render pane draws as one image.
+`RenderPanePresenter` draws only that image and the diagnostic overlays.
+`svg::Renderer` resolves at build time to tiny-skia (software) or Geode (GPU); the
+shipped `editor` target uses Geode. Editor code compiled
 for Geode is guarded by `DONNER_EDITOR_WGPU`, a macro that keeps its historical name; it
 selects the Donner GPU runtime, not the retired wgpu adapter.
 
@@ -347,27 +377,40 @@ snapshot instead of traversing selected geometry every pointer frame. A presente
 tile carrying a live entity matches an active drag only when the entity identities
 are equal; the boolean drag-target marker is used only for entity-less legacy tiles.
 
+Dragging a shape inside a masked group keeps the translation-only fast path on Geode. The
+compositor caches three unmasked pieces of the group, the content painted before the dragged
+subtree, the subtree itself, and the content painted after it, and each held frame rebuilds the
+group's tile under its mask with the dragged piece shifted. Text, shapes with markers,
+patterns or their own mask, content drawn again through `<use>` or `feImage`, and other cases
+where separate pieces would not composite like one render keep the full render. The first frame
+that does not use the pieces renders the group from source, so a release settles crisp.
+`//donner/svg/compositor:compositor_geode_splash_tests` covers it on the splash.
+
 The composited-tile presentation is the subject of its own design work; this doc
 describes the editor's consumption of it.
 
 ### Panes, tools, and presenters
 
 - **Panes** are immediate-mode borderless ImGui windows; layout math lives in
-  `EditorShellLayout`. The **render pane** (`RenderPanePresenter`) blits tiles and
-  overlay chrome and owns pointer capture; the **source pane** is `TextEditor`
+  `EditorShellLayout`. The **render pane** (`EditorShell::renderRenderPane`) handles
+  pointer input, and `RenderPanePresenter` draws its diagnostic overlays; the
+  **source pane** is `TextEditor`
   (headless core split into `TextEditorCore`); **Layers** (`LayersPanel`) renders
   the user-facing document tree; **Inspector** (`SidebarPresenter`) renders XML,
   CSS, and transform state from a snapshot refreshed only while the worker is
-  idle; `LayerInspectorPanel` is the separate compositor diagnostics view; the
-  **menu bar** (`MenuBarPresenter`) returns a semantic `MenuBarActions` struct the
-  shell acts on; **dialogs** (Open/Save/About/Licenses) are `DialogPresenter`.
+  idle; `CompositorDebugPanel` (View > Compositor Debug Info) is the separate
+  compositor diagnostics view; the **menu bar** (`MenuBarPresenter`) returns a semantic
+  `MenuBarActions` struct the shell acts on; **dialogs** (Open/Save/About/Licenses) are
+  `DialogPresenter`, and on macOS Open and Save use native panels.
 - **Tools** implement the `Tool` interface (`onMouseDown`/`onMouseMove`/`onMouseUp` in
   document-space coordinates). They submit attached-document changes through
   `EditorApp::applyMutation`; a tool may configure a detached element before placing it in an
   `InsertElement` command, but never mutates an attached live element directly. `SelectTool`
   handles select / marquee / move / resize / rotate (emitting `SetTransform` commands); `PenTool`
-  is a prototype path-authoring tool. Input is dispatched inside the render pane, mapping ImGui
-  mouse state through `ViewportInteractionController::screenToDocument` to the active tool.
+  draws and directly edits paths (Bezier anchors, corner and smooth points, handle editing, and
+  continuing or closing a path); `TextTool` places and edits text; the eyedropper samples
+  document pixels. Input is dispatched inside the render pane, mapping ImGui mouse state through
+  `ViewportState::screenToDocument` to the active tool.
 - **Source-to-canvas and canvas-to-source sync** is handled by `DocumentSyncController` and documented in
   \ref StructuredSourceEditing.
 - **Source style annotations** are computed from an immutable source copy on a
@@ -378,7 +421,7 @@ describes the editor's consumption of it.
   read-guarded document traversal.
 - **Source reveal layout** preserves the document point under the render-pane center.
   `ViewportState` selects a pane-bounded raster only when its pixel area is smaller
-  than the full-document raster, unless a backend dimension cap requires bounds.
+  than the full-document raster, unless the editor's 8192-pixel canvas cap requires bounds.
 
 ### Adaptive UI profile
 
@@ -404,16 +447,16 @@ future multi-touch gesture integration.
 
 ## Code-level landmarks
 
-| Responsibility           | Primary code                                                              | Focused verification                                                                              |
-| :----------------------- | :------------------------------------------------------------------------ | :------------------------------------------------------------------------------------------------ |
-| Host and frame lifecycle | `donner/editor/main.cc`, `gui/EditorWindow.h`, `wasm/editor-bootstrap.js` | `EditorShellLayout_tests.cc`, browser smoke and lifecycle tests                                   |
-| UI orchestration         | `EditorShell.h`, `EditorShell.cc`                                         | `EditorDockLayout_tests.cc`, presenter and frame-budget tests                                     |
-| Document write seams     | `EditorApp.h`, `CommandQueue.h`, `AsyncSVGDocument.h`, `SourceSync.h`     | `EditorApp_tests.cc`, `CommandQueue_tests.cc`, `AsyncSVGDocument_tests.cc`, `EditorSync_tests.cc` |
-| Source synchronization   | `DocumentSyncController.h`, `TextEditorCore.h`                            | `DocumentSyncController_tests.cc`, `EditorSync_tests.cc`                                          |
-| Background annotations   | `StyleSourceAnnotations.h`                                                | `StyleSourceAnnotations_tests.cc`                                                                 |
-| Render scheduling        | `RenderCoordinator.h`, `AsyncRenderer.h`                                  | `RenderCoordinator_tests.cc`, `AsyncRenderer_tests.cc`                                            |
-| Composited presentation  | `CompositedPresentation.h`, `GlTextureCache.h`, `RenderPanePresenter.h`   | `CompositedPresentation_tests.cc`, `GlTextureCache_tests.cc`, browser compositing tests           |
-| Interaction tools        | `Tool.h`, `SelectTool.h`, `PenTool.h`                                     | tool, gesture, click, and drag-coalescing tests                                                   |
+| Responsibility           | Primary code                                                                                 | Focused verification                                                                                                  |
+| :----------------------- | :------------------------------------------------------------------------------------------- | :-------------------------------------------------------------------------------------------------------------------- |
+| Host and frame lifecycle | `donner/editor/main.cc`, `gui/EditorWindow.h`, `wasm/editor-bootstrap.js`                    | `EditorWindow_tests.cc`, `FrameCallbackAdmission_tests.cc`, browser smoke and lifecycle tests                         |
+| UI orchestration         | `EditorShell.h`, `EditorShell.cc`                                                            | `EditorDockLayout_tests.cc`, presenter and frame-budget tests                                                         |
+| Document write seams     | `EditorApp.h`, `CommandQueue.h`, `AsyncSVGDocument.h`, `SourceSync.h`                        | `EditorApp_tests.cc`, `CommandQueue_tests.cc`, `AsyncSVGDocument_tests.cc`, `EditorSync_tests.cc`                     |
+| Source synchronization   | `DocumentSyncController.h`, `TextEditorCore.h`                                               | `DocumentSyncController_tests.cc`, `EditorSync_tests.cc`                                                              |
+| Background annotations   | `StyleSourceAnnotations.h`                                                                   | `StyleSourceAnnotations_tests.cc`                                                                                     |
+| Render scheduling        | `RenderCoordinator.h`, `AsyncRenderer.h`                                                     | `RenderCoordinator_tests.cc`, `AsyncRenderer_tests.cc`                                                                |
+| Composited presentation  | `CompositedPresentation.h`, `FramePresentation.h`, `DocumentPresenter.h`, `GlTextureCache.h` | `CompositedPresentation_tests.cc`, `FramePresentation_tests.cc`, `GlTextureCache_tests.cc`, browser compositing tests |
+| Interaction tools        | `Tool.h`, `SelectTool.h`, `PenTool.h`, `TextTool.h`                                          | tool, gesture, click, and drag-coalescing tests                                                                       |
 
 ## API Surface
 
@@ -442,8 +485,8 @@ entry points are:
   `O_CREAT | O_EXCL`, with no pre-`stat` (avoiding a TOCTOU window). Save writes the
   XML source-store bytes verbatim and only after `hasSourceStore()` passes.
 - **Concurrent DOM access** is guarded: the worker holds `DocumentWriteAccess` for
-  the render; UI-thread reads take a read-access guard. Illegal cross-thread access
-  is designed to fail deterministically in debug builds.
+  the render; UI-thread reads take a read-access guard. Unguarded or invalid access in
+  `ConcurrentDom` mode trips release assertions, which abort in every build type.
 - **Source annotation isolation** is revision-gated. Background parsing uses a
   separate registry; registry-backed element handles are cleared before the result
   crosses threads, and stale document/source revisions are discarded.
@@ -456,42 +499,50 @@ entry points are:
 - **`stb_image`** is not used anywhere under `donner/editor/`; image decoding runs
   behind `svg::Renderer` on the worker.
 - **Profiling.** Tracy instrumentation compiles to no-ops unless `ENABLE_TRACY` is
-  defined (native builds enable it; RE/WASM builds do not).
+  defined (native builds enable it; RE, CI and Wasm builds do not).
 
 ## Testing and Observability
 
-Tests live under `donner/editor/tests/`. By area:
+Native tests live under `donner/editor/tests/` and browser suites under
+`donner/editor/wasm/tests/`. By area:
 
 - **Orchestration / document:** `EditorApp_tests.cc`, `EditorSync_tests.cc`,
   `CommandQueue_tests.cc`, `AsyncSVGDocument_tests.cc`,
   `DocumentSyncController_tests.cc`, `UndoTimeline_tests.cc`.
 - **Async rendering / compositor:** `AsyncRenderer_tests.cc`,
   `RenderCoordinator_tests.cc`, `CompositedPresentation_tests.cc`,
-  `GlTextureCache_tests.cc`, `EditorLayerStress_tests.cc`, and the
-  `AsyncRendererFilterGroup*` / `FilterDragRepro*` correctness and perf suites.
-- **Tools / interaction:** `SelectTool_tests.cc`, `PenTool_tests.cc`,
+  `FramePresentation_tests.cc`, `PresentationRenderScheduler_tests.cc`,
+  `GlTextureCache_tests.cc`, `EditorLayerStress_tests.cc`, the
+  `AsyncRendererFilterGroup*` / `FilterDragRepro*` correctness and perf suites, and
+  `//donner/svg/compositor:compositor_geode_splash_tests` for the masked-group drag.
+- **Tools / interaction:** `SelectTool_tests.cc`, `PenTool_tests.cc`, `TextTool_tests.cc`,
   `RenderPaneClick_tests.cc`, `RenderPaneGesture_tests.cc`, `DragCoalesce_tests.cc`,
   `ViewportInteractionController_tests.cc`.
-- **Presenters / UI:** `SidebarPresenter_tests.cc`, `RenderPanePresenter_tests.cc`,
+- **Presenters / UI:** `EditorShell_tests.cc`, `SidebarPresenter_tests.cc`,
+  `RenderPanePresenter_tests.cc`, `DocumentPresenter_tests.cc`,
   `OverlayRenderer_tests.cc`, `LayerInspectorDiagnostics_tests.cc`,
   `EditorShellLayout_tests.cc`, `EditorDockLayout_tests.cc`, and
   `LayersPanel_tests.cc`.
 - **Persistence / replay:** `DocumentSave_tests.cc`, `RnrReplay_tests.cc`,
   `GlRnrReplay_tests.cc` (see \ref DeterministicReplayTesting).
+- **Host and GPU:** `EditorWindow_tests.cc`, `FrameCallbackAdmission_tests.cc`,
+  `UiTextureRegistry_tests.cc`, and the browser presentation, surface-recovery, GPU-residency,
+  and smoke suites.
 - **Fuzz / telemetry:** `EditorStateMachine_fuzzer.cc`,
   `FrameMissTelemetry_tests.cc`.
 
-Per-frame `FrameCostBreakdown` and layer-inspector freshness diagnostics are
-surfaced for both the live layers panel and the replay/readback harnesses.
+Per-frame `FrameCostBreakdown` and compositor freshness diagnostics are surfaced for
+both the live Compositor Debug Info panel and the replay/readback harnesses.
 
 ## Limitations and Future Extensions
 
 - The GUI editor renders untrusted input in-process until the v1.0 sandbox redesign
   lands.
-- `PenTool` is a prototype path-authoring tool; more complete path editing and
-  boolean operations are tracked in their own design docs.
+- `PenTool` covers path drawing and direct point editing, and the Inspector applies
+  boolean path operations; further path-editing work is tracked separately.
 - Compact touch mode intentionally omits source editing, paint controls, the
-  contextual text format bar, canvas scrollbars, and compositor diagnostics. It
-  is a canvas-first editing subset, not a compressed copy of every desktop panel.
+  contextual text format bar, canvas scrollbars, and compositor diagnostics, and its
+  sheets show swatches instead of raster Layers thumbnails. It is a canvas-first editing
+  subset, not a compressed copy of every desktop panel.
 - The editor is an application binary, not a stable embedding API; the entry points
   above are internal contracts, not a supported external interface.

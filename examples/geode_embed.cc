@@ -115,8 +115,7 @@ GLFWwindow* CreateWindow() {
 }
 
 struct EmbedSession {
-  explicit EmbedSession(GLFWwindow* window)
-      : window(window), native(donner::example::PrepareNativeEmbedSurface(window)) {}
+  explicit EmbedSession(GLFWwindow* window) : window(window) {}
 
   GLFWwindow* window;
   donner::example::NativeEmbedSurface native;
@@ -125,6 +124,7 @@ struct EmbedSession {
   donner::gpu::SurfaceConfiguration config;
 
   int finish(int code) {
+    //! [retire]
     if (surface.isValid() && context != nullptr) {
       if (donner::gpu::Status released =
               context->runtimeDevice().destroySurface(std::move(surface));
@@ -143,15 +143,21 @@ struct EmbedSession {
       std::fprintf(stderr, "Native surface retirement is unproven; retaining its window\n");
       code = 1;
     }
+    //! [retire]
     return code;
   }
 };
 
 bool InitializeSession(EmbedSession& session) {
+  //! [select_root]
+  session.native = donner::example::PrepareNativeEmbedSurface(session.window);
   if (session.native.root == nullptr) {
     std::fprintf(stderr, "Could not select a native GPU root for this window\n");
     return false;
   }
+  //! [select_root]
+
+  //! [create_surface]
   session.context = std::shared_ptr<donner::geode::GeodeDevice>(
       donner::geode::GeodeDevice::CreateOverSelectedRoot(session.native.root,
                                                          session.native.format));
@@ -170,6 +176,9 @@ bool InitializeSession(EmbedSession& session) {
     return false;
   }
   session.surface = std::move(created).result();
+  //! [create_surface]
+
+  //! [configure_surface]
   donner::gpu::Result<donner::gpu::SurfaceCapabilities> capabilities =
       device.surfaceCapabilities(session.surface);
   if (capabilities.hasError() || !Supports(capabilities.result(), session.native.format) ||
@@ -184,9 +193,11 @@ bool InitializeSession(EmbedSession& session) {
                  configured.error().toString().c_str());
     return false;
   }
+  //! [configure_surface]
   return true;
 }
 
+//! [frame_status]
 enum class FrameOutcome { Continue, Presented, Failed };
 
 FrameOutcome HandleUnavailableFrame(EmbedSession& session, donner::gpu::Device& device,
@@ -221,10 +232,12 @@ FrameOutcome PresentFrame(EmbedSession& session, donner::gpu::Device& device) {
   return presented.result() == donner::gpu::SurfaceStatus::Success ? FrameOutcome::Presented
                                                                    : FrameOutcome::Continue;
 }
+//! [frame_status]
 
 FrameOutcome DrawFrame(EmbedSession& session, donner::svg::RendererGeode& renderer,
                        donner::svg::SVGDocument& document) {
   donner::gpu::Device& device = session.context->runtimeDevice();
+  //! [draw_frame]
   donner::gpu::Result<donner::gpu::SurfaceTexture> acquired =
       device.acquireCurrentTexture(session.surface);
   if (acquired.hasError()) {
@@ -240,11 +253,14 @@ FrameOutcome DrawFrame(EmbedSession& session, donner::svg::RendererGeode& render
   renderer.draw(document);
   renderer.clearTargetTexture();
   return PresentFrame(session, device);
+  //! [draw_frame]
 }
 
 int RenderFrames(EmbedSession& session, donner::svg::SVGDocument& document, bool oneFrame) {
   int oneFrameAttempts = 0;
+  //! [create_renderer]
   donner::svg::RendererGeode renderer(session.context);
+  //! [create_renderer]
   while (!glfwWindowShouldClose(session.window)) {
     if (oneFrame && ++oneFrameAttempts > kMaxOneFrameAttempts) {
       std::fprintf(stderr, "One-frame smoke could not present within %d attempts\n",

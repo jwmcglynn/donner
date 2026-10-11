@@ -415,8 +415,9 @@ use_repo(
 )
 
 # NOTE: To use any of these toolchains specify --config=latest_llvm (which
-# registers them via --extra_toolchains in .bazelrc). This is enabled by
-# default on Linux, disabled by default on macOS.
+# registers them via --extra_toolchains in .bazelrc). No platform enables it by
+# default: builds use the host Clang unless that config is passed, and macOS
+# always keeps the Xcode toolchain.
 # register_toolchains("@llvm_toolchain//:all", dev_dependency = True)
 
 bazel_dep(name = "zstd", version = "1.5.7.bcr.1", dev_dependency = True)

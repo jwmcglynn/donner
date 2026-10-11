@@ -190,8 +190,9 @@ readback delta with that explicit lane and requires zero document-stage readback
   and a mapping is not ownership: destroying the buffer invalidates it. `mappedBytes()` is readable
   only after `waitForMapping()` or `pollMapping()` reports it ready, and only until
   `unmapBuffer()`. A submission that names a mapped buffer is refused.
-- In the editor, `GlTextureCache` uploads CPU bitmap tiles into runtime textures through a bounded
-  upload path, registers GPU snapshots with the `UiTextureRegistry`, and retires superseded
+- In the editor, document tiles arrive as GPU texture snapshots, which `GlTextureCache` registers
+  with the `UiTextureRegistry`; the cache uploads CPU-rendered thumbnails and previews
+  into runtime textures through a bounded upload path. It retires superseded
   payloads by presentation frame (`GlTextureCacheTest.RetiredSnapshotsAgeByPresentationFrame`). UI
   draw data names textures by `UiTextureId`, a slot plus generation, so a stale or recycled
   registration is refused before any GPU work is recorded.

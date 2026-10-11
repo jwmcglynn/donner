@@ -60,6 +60,50 @@ donner_cc_binary(
     ],
 )
 
+# --- Third-party notice embedding ---
+#
+# docs/getting_started.md mirrors the block between the markers.
+# [embed_notice]
+filegroup(
+    name = "notice_txt",
+    srcs = ["@donner//third_party/licenses:notice_default"],
+    output_group = "notice",
+)
+
+genrule(
+    name = "embed_notice",
+    srcs = [":notice_txt"],
+    outs = [
+        "embedded/notice_embedded.h",
+        "embedded/notice_default_txt.cpp",
+    ],
+    cmd = """
+        mkdir -p $(@D)/embedded
+        $(location @donner//tools:embed_resources) \\
+            --out $(@D)/embedded \\
+            --header notice_embedded.h \\
+            kDonnerNotice=$(location :notice_txt)
+    """,
+    tools = ["@donner//tools:embed_resources"],
+)
+
+cc_library(
+    name = "embedded_notice",
+    srcs = ["embedded/notice_default_txt.cpp"],
+    hdrs = ["embedded/notice_embedded.h"],
+    includes = ["."],
+)
+
+donner_cc_binary(
+    name = "third_party_notice",
+    srcs = ["third_party_notice.cc"],
+    deps = [
+        ":embedded_notice",
+        "@donner",
+    ],
+)
+# [embed_notice]
+
 # --- WASM reproducer ---
 donner_cc_binary(
     name = "wasm_reproducer",

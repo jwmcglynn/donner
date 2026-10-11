@@ -13,9 +13,9 @@ through the public \ref donner::svg::Renderer API. The
 [GPU runtime reference](../gpu_runtime.md) covers the ownership, backend and
 failure-mode contracts this guide relies on.
 
-The code blocks below are condensed from `examples/geode_embed.cc`, which is the
-compiled and complete version. They leave out its error reporting, and the frame
-block drops the example's check of the status `presentSurface()` returns.
+The code below is quoted from `examples/geode_embed.cc`, so it is the code that
+builds. The quoted blocks leave out the example's argument parsing and SVG
+loading.
 
 Build the example with Geode enabled:
 
@@ -39,25 +39,31 @@ bazel run --config=geode //examples:geode_embed -- --one-frame path/to/drawing.s
 
 ## Native backend configuration {#EmbeddingGeodeBackendSelection}
 
-Native Geode uses Metal on macOS and Vulkan on Linux. For code that calls
-`SelectGpuRoot`, a supplied `GpuRootSelection::backend` takes precedence over
-`DONNER_GPU_BACKEND`. Without a caller selection, an empty environment setting
-selects the platform backend; `metal` and `vulkan` are case-insensitive requests.
-There is no fallback to another backend when a request cannot be served.
+Native Geode uses Metal on macOS and Vulkan on Linux. Other native platforms
+have no Geode backend: an unconstrained selection there returns a null root.
+WebAssembly builds select the browser backend through `GeodeBrowserRoot.h`
+instead; see [Backend selection](../gpu_runtime.md#GpuRuntimeBackendSelection).
+
+For code that calls `SelectGpuRoot`, a supplied `GpuRootSelection::backend`
+takes precedence over `DONNER_GPU_BACKEND`. Without a caller selection, an
+unset or empty environment setting selects the platform backend; `metal` and
+`vulkan` are case-insensitive requests. There is no fallback to another backend
+when a request cannot be served.
 
 `SelectGpuRoot` terminates the process when its Vulkan presentation options are
 inconsistent: presentation required while another backend resolves, or instance
 extensions supplied without presentation. When `DONNER_GPU_BACKEND` controls
-selection, a value that names no backend, or a backend this process cannot open,
-also terminates the process. A caller-selected or platform-selected backend that
-cannot be opened, or that this build cannot serve, returns a null root.
-`ResolveGpuBackendKind` reports the same request and option errors as values
-without creating a device; it does not probe backend availability. Treat
-environment settings as trusted process configuration.
+selection, a value that names no backend (`wgpu`, for example), or a backend
+this process cannot open, also terminates the process. A caller-selected or
+platform-selected backend that cannot be opened, or that this build cannot
+serve, returns a null root. `ResolveGpuBackendKind` reports the same request and
+option errors as values without creating a device; it does not probe backend
+availability. Treat environment settings as trusted process configuration.
 
-The macOS example helper uses `SelectGpuRoot`. The Linux helper instead creates
-and adopts a Vulkan root for its actual GLFW surface, so its backend is fixed by
-that presentation path.
+The macOS example helper uses `SelectGpuRoot`, so `DONNER_GPU_BACKEND` applies
+to it. The Linux helper instead creates and adopts a Vulkan root for its actual
+GLFW surface, so its backend is fixed by that presentation path and it does not
+read the variable.
 
 ## Select for the actual window {#EmbeddingGeodeSelection}
 
@@ -65,17 +71,7 @@ Create a GLFW window with `GLFW_NO_API` before selecting a GPU root. The
 \ref geode_embed_surface.h "platform helper" returns both the root and the
 native handle that the runtime surface will present to:
 
-```cpp
-donner::example::NativeEmbedSurface native =
-    donner::example::PrepareNativeEmbedSurface(window);
-if (native.root == nullptr) {
-  if (donner::example::RetireNativeEmbedSurface(native, window)) {
-    glfwDestroyWindow(window);
-    glfwTerminate();
-  }
-  return;
-}
-```
+\snippet geode_embed.cc select_root
 
 On macOS, the helper attaches a `CAMetalLayer` to the GLFW window before
 selecting the native Metal root. On Linux, it asks GLFW for Vulkan instance
@@ -92,41 +88,18 @@ format its Geode context uses.
 
 ## Create a context and runtime surface {#EmbeddingGeodeRuntimeSurface}
 
-Create one Geode context over the selected root, then create and configure a
-surface on that context's runtime device:
+Create one Geode context over the selected root, then create a surface on that
+context's runtime device:
 
-```cpp
-auto context = std::shared_ptr<donner::geode::GeodeDevice>(
-    donner::geode::GeodeDevice::CreateOverSelectedRoot(native.root, native.format));
-if (context == nullptr) {
-  native.root.reset();
-  if (donner::example::RetireNativeEmbedSurface(native, window)) {
-    glfwDestroyWindow(window);
-    glfwTerminate();
-  }
-  return;
-}
-donner::gpu::Device& device = context->runtimeDevice();
+\snippet geode_embed.cc create_surface
 
-donner::gpu::SurfaceDescriptor descriptor;
-descriptor.label = "GeodeEmbedSurface";
-descriptor.native = native.native;
-auto created = device.createSurface(descriptor);
-if (created.hasError()) {
-  context.reset();
-  native.root.reset();
-  if (donner::example::RetireNativeEmbedSurface(native, window)) {
-    glfwDestroyWindow(window);
-    glfwTerminate();
-  }
-  return;
-}
-donner::gpu::Surface surface = std::move(created).result();
-```
+Query the surface's capabilities and require the chosen format and
+`RenderAttachment` usage, then configure a nonzero framebuffer extent, a
+supported present mode, and a supported alpha mode. The example's `Supports()`
+helper checks the format and usage, and its `Configuration()` helper picks
+`Fifo` and `Opaque` when the surface offers them:
 
-Query `device.surfaceCapabilities(surface)` and require the chosen format and
-`RenderAttachment` usage. Configure a nonzero framebuffer extent, a supported
-present mode, and a supported alpha mode with `device.configureSurface`.
+\snippet geode_embed.cc configure_surface
 
 The host's window must outlive this runtime surface. The Geode context retains
 the selected root while it renders; its `gpu::Texture` handles belong to that
@@ -134,21 +107,14 @@ context's runtime device.
 
 ## Draw and present a frame {#EmbeddingGeodeFrame}
 
-Acquire one frame from the runtime surface, give its texture to the renderer
-only for that frame, then present it:
+Create one renderer over the context and keep it for the life of the surface:
 
-```cpp
-donner::svg::RendererGeode renderer(context);
-auto acquired = device.acquireCurrentTexture(surface);
-if (acquired.hasResult() &&
-    acquired.result().status == donner::gpu::SurfaceStatus::Success) {
-  donner::gpu::SurfaceTexture frame = std::move(acquired).result();
-  renderer.setTargetTexture(frame.texture);
-  renderer.draw(document);
-  renderer.clearTargetTexture();
-  (void)device.presentSurface(surface);
-}
-```
+\snippet geode_embed.cc create_renderer
+
+Each frame acquires one texture from the runtime surface, gives it to the
+renderer only for that frame, then presents it:
+
+\snippet geode_embed.cc draw_frame
 
 The acquired texture is borrowed from the surface. Do not release its backing,
 reuse its handle after presentation, or give its handle to another runtime
@@ -156,13 +122,13 @@ device. `RendererGeode::setTargetTexture()` keeps only the texture's identity,
 and keeps it for every later frame until `clearTargetTexture()`. Clear it before
 presenting, because presentation invalidates the frame's handle.
 
+Acquisition and presentation both report a `SurfaceStatus`.
 `SurfaceStatus::Outdated` calls for reconfiguration before another acquire.
 `Timeout` can be retried; `Lost` and `DeviceLost` stop this fixed-window
 example. A host that discards an acquired frame calls
-`device.abandonCurrentTexture(surface)` before retrying. `presentSurface()`
-reports a status too: the example stops on an error, `Lost` or `DeviceLost`,
-and reconfigures on `Outdated`. The example handles these statuses in its frame
-loop.
+`device.abandonCurrentTexture(surface)` before retrying:
+
+\snippet geode_embed.cc frame_status
 
 ## Device loss {#EmbeddingGeodeDeviceLoss}
 
@@ -170,11 +136,12 @@ Logical contexts over one root share its `DeviceLostState`. Runtime backends
 declare that state lost when their driver reports loss, and a bounded GPU wait
 declares it when the work it waits behind stops making progress. If the host
 receives a separate loss notification, retain the root's shared loss state for
-the callback and call `donner::gpu::DeclareDeviceLost(*lossState)`. Setting the
-flag directly would skip registered release callbacks. `DeclareDeviceLost` does
-not log; when it returns true, call `donner::gpu::LogDeclaredDeviceLoss()` if the
-loss should appear in the log. See
-[Device loss](../gpu_runtime.md#GpuRuntimeDeviceLoss) and
+the callback and call `donner::gpu::DeclareDeviceLost(*lossState)`, or call
+`GeodeDevice::markDeviceLost(reason)` on a context, which declares and logs the
+loss together. Setting the flag directly would skip registered release
+callbacks. `DeclareDeviceLost` does not log; when it returns true, call
+`donner::gpu::LogDeclaredDeviceLoss(reason)` if the loss should appear in the
+log. See [Device loss](../gpu_runtime.md#GpuRuntimeDeviceLoss) and
 [Bounded GPU waits](../gpu_runtime.md#GpuRuntimeBoundedWaits) for what a lost
 root does and which waits declare it.
 
@@ -187,10 +154,15 @@ Vulkan initialization until process restart.
 
 Destroy the renderer, release the runtime surface with
 `device.destroySurface`, and release the Geode context before destroying the
-host's native surface or GLFW window. On Linux, the embedder-created
-`VkSurfaceKHR` is not owned by Donner's runtime surface. The helper registers
-it with the Vulkan root and calls `destroyExternalSurface` only after runtime
-surface teardown proves the swapchain is finished with it.
+host's native surface or GLFW window. In the example the renderer goes out of
+scope when the frame loop returns, and the session then retires the rest:
+
+\snippet geode_embed.cc retire
+
+On Linux, the embedder-created `VkSurfaceKHR` is not owned by Donner's runtime
+surface. The helper registers it with the Vulkan root and calls
+`destroyExternalSurface` only after runtime surface teardown proves the
+swapchain is finished with it.
 
 If Vulkan cannot prove retirement, the example retains the native surface,
 root, and GLFW window until process exit and reports the failure. Destroying

@@ -60,10 +60,9 @@ int main(int argc, char* argv[]) {
   //! [text_query]
 
   //! [text_restyle]
-  // Restyle the <text> element. Styles compose with any existing values instead of replacing
-  // them, so this leaves the inherited fill color on the nested <tspan> runs alone.
-  text.setStyle("font-size: 40px");
-  text.setStyle("font-weight: 500");
+  // Restyle the <text> element. setStyle replaces only this element's style attribute, so its
+  // fill presentation attribute and the nested <tspan> runs keep their own values.
+  text.setStyle("font-size: 40px; font-weight: 500");
   text.setX(Lengthd(20));
   text.setY(Lengthd(80));
   //! [text_restyle]
@@ -74,8 +73,7 @@ int main(int argc, char* argv[]) {
   // the tree.
   SVGTSpanElement newRun = SVGTSpanElement::Create(document);
   newRun.appendText(" v0.5");
-  newRun.setStyle("fill: #2a9");
-  newRun.setStyle("font-style: italic");
+  newRun.setStyle("fill: #2a9; font-style: italic");
   text.appendChild(newRun);
   //! [text_append_tspan]
 
