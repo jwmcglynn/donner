@@ -522,13 +522,25 @@ class CmakeBuildParallelEnvironmentTest(unittest.TestCase):
             self.assertEqual(g._cmake_build_parallel_jobs(None), 8)
 
     def test_invalid_environment_fails_before_configuring(self):
-        for value in ("0", "-1", "invalid", ""):
+        for value in ("0", "-1", "invalid"):
             with self.subTest(value=value), mock.patch.dict(
                 os.environ, {"CMAKE_BUILD_PARALLEL_LEVEL": value}
             ), mock.patch.object(g.subprocess, "run") as command:
                 error = g._run_cmake_build_validation(Path("source"), Path("build"))
                 self.assertIn("Invalid CMake build concurrency", error)
                 command.assert_not_called()
+
+    def test_empty_environment_uses_native_tool_default(self):
+        completed = mock.Mock(returncode=0, stdout="")
+        with mock.patch.dict(os.environ, {"CMAKE_BUILD_PARALLEL_LEVEL": ""}), mock.patch.object(
+            g.subprocess, "run", return_value=completed
+        ) as command:
+            self.assertIsNone(g._run_cmake_build_validation(Path("source"), Path("build")))
+        self.assertEqual(command.call_args_list[1].args[0],
+                         ["cmake", "--build", "build", "--parallel"])
+        with mock.patch.dict(os.environ, {"CMAKE_BUILD_PARALLEL_LEVEL": ""}):
+            self.assertIsNone(g._cmake_build_parallel_jobs(None))
+            self.assertEqual(g._cmake_build_parallel_jobs(1), 1)
 
     def test_environment_is_forwarded_to_the_build_command(self):
         completed = mock.Mock(returncode=0, stdout="")
