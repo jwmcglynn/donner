@@ -28,6 +28,15 @@ donner_cc_binary(
 )
 
 donner_cc_binary(
+    name = "svg_quickstart",
+    srcs = ["svg_quickstart.cc"],
+    deps = [
+        "//donner/base",
+        "@donner",
+    ],
+)
+
+donner_cc_binary(
     name = "svg_tree_interaction",
     srcs = ["svg_tree_interaction.cc"],
     deps = [
