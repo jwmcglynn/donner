@@ -1120,3 +1120,18 @@ test("UI asm diagnostics stay within the compiler's sixteen argument slots", () 
     assert.ok(slots.every((slot) => slot < 16), `unsupported asm argument slots: ${slots}`);
   }
 });
+
+test("async presentation loss publication owns and always frees its reason payload", () => {
+  const start = source.indexOf("void EditorWindow::observePresentationDeviceLoss(");
+  const end = source.indexOf("\nbool EditorWindow::observePresentationCompletion()", start);
+  assert.ok(start >= 0 && end > start, "expected the presentation loss publisher");
+  const publisher = source.slice(start, end);
+  assert.match(publisher, /std::malloc\(reasonBytes \+ 1\)/);
+  assert.match(publisher, /const double firstObservedAbsoluteMs = emscripten_get_now\(\)/);
+  assert.match(publisher, /'firstObservedAtMs'\s*:\s*\$6 - performance\.timeOrigin/);
+  assert.match(publisher, /'pageTimeOriginMs'\s*:\s*performance\.timeOrigin/);
+  assert.match(publisher, /'publishedAtMs'\s*:\s*performance\.now\(\)/);
+  assert.match(publisher, /finally\s*\{[\s\S]*if \(\$5\)\s*\{\s*_free\(\$5\)/);
+  assert.match(publisher, /'browserReason'\s*:\s*\$5 \? UTF8ToString\(\$5\) : String\(\)/);
+  assert.doesNotMatch(publisher, /browserReason\.c_str\(\)/);
+});

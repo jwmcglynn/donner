@@ -3670,6 +3670,66 @@ TEST(EditorWindowTest, WgpuPresentsZoomedDonnerSplashFilteredLayerWithoutDarkeni
 #endif
 
 }  // namespace
+TEST(EditorWindowPolicyTest, FirstSettledPresentationDeviceLossObservationIsImmutable) {
+  internal::PresentationDeviceLossRecord record;
+  const auto firstAt = internal::PresentationDeviceLossRecord::Clock::time_point{};
+  const gpu::DeviceLossSnapshot healthy;
+  int observationQueries = 0;
+  const auto observation = [&](internal::PresentationDeviceLossRecord::Clock::time_point at,
+                               std::uint64_t completed, std::uint64_t submitted,
+                               std::uint64_t oldest, std::string_view reason) {
+    return [&, at, completed, submitted, oldest, reason] {
+      ++observationQueries;
+      return internal::PresentationDeviceLossRecord::Observation{
+          .observedAt = at,
+          .completedSerial = completed,
+          .submittedSerial = submitted,
+          .oldestSerial = oldest,
+          .browserReason = RcString(reason),
+      };
+    };
+  };
+  EXPECT_FALSE(record.observe(healthy, observation(firstAt, 1, 2, 2, "healthy")));
+  EXPECT_FALSE(record.observe(gpu::DeviceLossSnapshot{.lost = true, .attributionSettled = false},
+                              observation(firstAt, 3, 4, 4, "provisional")));
+  EXPECT_EQ(observationQueries, 0)
+      << "healthy/provisional observations queried serials or the browser owner";
+
+  const gpu::DeviceLossSnapshot settled{
+      .lost = true,
+      .attributionSettled = true,
+      .timedOutSite = gpu::DeviceLostWaitSite::ReadbackMap,
+      .timedOutElapsedMs = 250,
+  };
+  ASSERT_TRUE(record.observe(
+      settled, observation(firstAt + std::chrono::milliseconds(7), 5, 8, 6, "browser reset")));
+  EXPECT_EQ(observationQueries, 1);
+  EXPECT_FALSE(
+      record.observe(gpu::DeviceLossSnapshot{.lost = true,
+                                             .attributionSettled = true,
+                                             .timedOutSite = gpu::DeviceLostWaitSite::QueueIdle,
+                                             .timedOutElapsedMs = 900},
+                     observation(firstAt + std::chrono::seconds(10), 20, 30, 21, "later")));
+  EXPECT_EQ(observationQueries, 1) << "a repeated observation queried serials or the browser owner";
+
+  EXPECT_EQ(record.loss.timedOutSite, gpu::DeviceLostWaitSite::ReadbackMap);
+  EXPECT_EQ(record.loss.timedOutElapsedMs, 250);
+  EXPECT_EQ(record.observedAt, firstAt + std::chrono::milliseconds(7));
+  EXPECT_EQ(record.completedSerial, 5u);
+  EXPECT_EQ(record.submittedSerial, 8u);
+  EXPECT_EQ(record.oldestSerial, 6u);
+  EXPECT_EQ(record.browserReason.str(), "browser reset");
+}
+
+TEST(EditorWindowPolicyTest, PresentationDeviceLossReasonPayloadIsBoundedAndOwned) {
+  std::string source(internal::kMaximumPresentationDeviceLossReasonBytes + 100, 'x');
+  const std::string copied = internal::BoundedPresentationDeviceLossReason(source);
+  source.assign(source.size(), 'y');
+  EXPECT_EQ(copied.size(), internal::kMaximumPresentationDeviceLossReasonBytes - 1);
+  EXPECT_EQ(copied.front(), 'x');
+  EXPECT_EQ(copied.back(), 'x');
+}
+
 TEST(EditorWindowPolicyTest, BrowserCompletionConfirmedAfterAnEventLoopPauseIsRetired) {
   internal::PresentationSubmissionQueue queue;
   const auto now = internal::PresentationSubmissionQueue::Clock::time_point{};
@@ -3749,6 +3809,39 @@ TEST(EditorWindowPolicyTest, AnOverdueFrameBehindADeviceStillMakingProgressIsNot
 }
 
 #ifdef DONNER_EDITOR_WGPU
+TEST(EditorWindowTest, KnownLossIsObservedBeforeTheUnusableFrameTargetReturns) {
+  EditorWindow window(EditorWindowOptions{.title = "Early loss diagnostics",
+                                          .initialWidth = 64,
+                                          .initialHeight = 64,
+                                          .visible = false});
+  ASSERT_TRUE(window.valid());
+  ASSERT_NE(window.geodeFramebufferDevice(), nullptr);
+  window.geodeFramebufferDevice()->markDeviceLost("test loss before frame preparation");
+
+  window.beginFrame();
+  (void)window.endFrameAndReadPixels();
+
+  const auto& observed = window.presentationDeviceLossForTesting();
+  EXPECT_TRUE(observed.observed);
+  EXPECT_EQ(observed.loss.timedOutSite, gpu::DeviceLostWaitSite::None);
+}
+
+TEST(EditorWindowTest, PresentationTimeoutPublishesItsWinningAttributionImmediately) {
+  EditorWindow window(EditorWindowOptions{.title = "Timeout loss diagnostics",
+                                          .initialWidth = 64,
+                                          .initialHeight = 64,
+                                          .visible = false});
+  ASSERT_TRUE(window.valid());
+  ASSERT_NE(window.geodeFramebufferDevice(), nullptr);
+
+  window.declarePresentationTimeoutLossForTesting(std::chrono::milliseconds(73));
+
+  const auto& observed = window.presentationDeviceLossForTesting();
+  EXPECT_TRUE(observed.observed);
+  EXPECT_EQ(observed.loss.timedOutSite, gpu::DeviceLostWaitSite::QueueIdle);
+  EXPECT_EQ(observed.loss.timedOutElapsedMs, 73);
+}
+
 TEST(EditorWindowTest, PendingGpuCompletionCoalescesUiFramesAtThree) {
   EditorWindow window(EditorWindowOptions{.title = "Pending GPU frame test",
                                           .initialWidth = 64,

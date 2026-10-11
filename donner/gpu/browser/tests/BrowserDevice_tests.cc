@@ -508,7 +508,8 @@ TEST(BrowserDevice, RefusesCreationAfterTheDeviceIsLost) {
   fixture.bridge->lostReason = RcString("the browser reset the adapter");
 
   EXPECT_THAT(fixture.device->isDeviceLost(), true);
-  EXPECT_THAT(fixture.device->deviceLostReason().str(), "the browser reset the adapter");
+  const Device& genericDevice = *fixture.device;
+  EXPECT_THAT(genericDevice.deviceLostReason().str(), "the browser reset the adapter");
   EXPECT_THAT(fixture.device->createBuffer(SimpleBuffer(BufferUsage::Vertex)),
               IsGpuErrorWithMessage(
                   GpuErrorType::InvalidState,
