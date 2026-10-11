@@ -513,7 +513,7 @@ test("frame completion timestamps exclude proxy delay and retain successful admi
   for (const arrivalMs of [1000, 215]) {
     const window = {
       __donnerFrameLoopStats: { uiFrameMsSamples: [] },
-      __donnerWorkerStats: { acceptedForPresentation: false },
+      __donnerWorkerStats: { acceptedForPresentation: false, publishReason: "render-result" },
       __donnerHostFrameTiming: { lastSurfacePresented: true },
     };
     const clock = { timeOrigin: 1000, now: () => arrivalMs };
@@ -683,6 +683,13 @@ test("a failed worker publication cannot inherit a prior frame's presentation ad
     publishReason: "gpu-wait-failure",
   });
   assert.equal(previous.presentedAtMs, 200, "the failure must not modify the older frame object");
+  stats.acceptedForPresentation = true;
+  publishFrame(window, clock, 1, 15, 1, 4096, 1230);
+  assert.equal(
+    stats.presentedAtMs,
+    undefined,
+    "failure publications cannot present even if an admission marker is stale",
+  );
 });
 
 test("a GPU wait failure publishes worker stats even though no frame completed", () => {

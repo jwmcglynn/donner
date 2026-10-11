@@ -1313,7 +1313,8 @@ void RecordFrameSample(int triggerBits, double frameMs, int callbacks) {
         stats['lastFramePublicationDelayMs'] =
             Math.max(0, performance.now() - stats['lastFrameAtMs']);
         const workerStats = window['__donnerWorkerStats'];
-        if (workerStats && workerStats['acceptedForPresentation'] &&
+        if (workerStats && workerStats['publishReason'] === 'render-result' &&
+            workerStats['acceptedForPresentation'] &&
             window['__donnerHostFrameTiming']?.['lastSurfacePresented'] &&
             Object.is(workerStats['presentedAtMs'], undefined)) {
           workerStats['presentedAtMs'] = stats['lastFrameAtMs'];

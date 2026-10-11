@@ -242,6 +242,7 @@ void PublishWorkerGpuWaitFailure(bool deviceLost, const char* timedOutWaitSiteNa
         // presented something else. Absent is also the more useful answer
         // here: this publish is the one that never presented.
         delete stats['presentedAtMs'];
+        stats['acceptedForPresentation'] = false;
         stats['deviceLost'] = $0 > 0;
         stats['gpuWaitTimeoutSite'] = UTF8ToString($1);
         stats['gpuWaitTimeoutMs'] = $2;
