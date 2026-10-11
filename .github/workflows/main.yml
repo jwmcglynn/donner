@@ -1,5 +1,10 @@
 name: CI
 
+# Keep third-party Bazel module telemetry off, as the telemetry section of .bazelrc explains.
+env:
+  DO_NOT_TRACK: "1"
+  ASPECT_TOOLS_TELEMETRY: "-all"
+
 # Validate PRs targeting main or a dependency branch in a stack.
 on:
   push:
