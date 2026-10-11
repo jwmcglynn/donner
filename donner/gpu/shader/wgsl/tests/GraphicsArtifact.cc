@@ -26,6 +26,9 @@ static_assert(kStorageView.matchesMember("params", "vertices", 0, 64, ShaderScal
                                          16));
 constexpr auto kControlArtifact = Compile<kControlSource, Projection::All>();
 constexpr CompiledShaderView kControlView = kControlArtifact.view();
+constexpr auto kSamplingSwitchArtifact = Compile<kSamplingSwitchSource, Projection::All>();
+constexpr CompiledShaderView kSamplingSwitchView = kSamplingSwitchArtifact.view();
+static_assert(kSamplingSwitchView.resources.size() == 3);
 }  // namespace
 
 const CompiledShaderView& GraphicsShader() {
@@ -46,6 +49,10 @@ const CompiledShaderView& StorageArrayShader() {
 
 const CompiledShaderView& ControlShader() {
   return kControlView;
+}
+
+const CompiledShaderView& SamplingSwitchShader() {
+  return kSamplingSwitchView;
 }
 
 }  // namespace donner::gpu::shader::wgsl::tests
