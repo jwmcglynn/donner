@@ -1913,8 +1913,6 @@ INSTANTIATE_TEST_SUITE_P(
             "text/tspan",
             {
                 {"bidi-reordering.svg", Params::Skip("Not impl: BIDI reordering")},
-                {"nested-rotate.svg",
-                 Params::Skip("Bug: Applying rotation indices across nested tspans")},
                 {"nested-whitespaces.svg",
                  Params().withMaxPixelsDifferent(400).withReason("Vertical axis has different AA")},
                 {"tspan-bbox-2.svg", Params().withMaxPixelsDifferent(900).withReason(
