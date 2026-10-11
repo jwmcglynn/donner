@@ -3982,9 +3982,15 @@ TEST(EditorShellTest, PartlyOffscreenSplashShineEllipseFirstHeldMoveMatchesSettl
       shell.runFrame();
       window.endFrame();
       if (!shell.asyncRendererForReplay().waitUntilNoRenderInFlightForTesting(deadline)) {
-        break;
+        ADD_FAILURE() << "The splash render wait reached its deadline at " << stage
+                      << " frame=" << frame
+                      << " rendererBusy=" << shell.asyncRendererForReplay().isBusy()
+                      << " renderInFlight="
+                      << shell.asyncRendererForReplay().hasRenderInFlightForTesting()
+                      << " heldResultPolls="
+                      << shell.asyncRendererForReplay().replayResultHoldPollCountForTesting();
+        return false;
       }
-      const LayerInspectorStatusReadback status = shell.layerInspectorStatusForReadback();
       if (!app.document().hasPendingMutations() && !shell.asyncRendererForReplay().isBusy() &&
           app.document().currentFrameVersion() >= minimumVersion &&
           EditorShellTestAccess::DisplayedDocVersion(shell) ==
@@ -3999,6 +4005,7 @@ TEST(EditorShellTest, PartlyOffscreenSplashShineEllipseFirstHeldMoveMatchesSettl
       std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
     const LayerInspectorStatusReadback status = shell.layerInspectorStatusForReadback();
+    const auto frame = EditorShellTestAccess::Coordinator(shell).framePresentation();
     ADD_FAILURE() << "The splash did not produce a stable cached frame at " << stage
                   << ": minimumVersion=" << minimumVersion
                   << " current=" << app.document().currentFrameVersion()
@@ -4009,7 +4016,15 @@ TEST(EditorShellTest, PartlyOffscreenSplashShineEllipseFirstHeldMoveMatchesSettl
                   << " renderInFlight="
                   << shell.asyncRendererForReplay().hasRenderInFlightForTesting()
                   << " heldResultPolls="
-                  << shell.asyncRendererForReplay().replayResultHoldPollCountForTesting();
+                  << shell.asyncRendererForReplay().replayResultHoldPollCountForTesting()
+                  << " requireRequestedDensity=" << requireRequestedDensity
+                  << " presentedRect=" << (frame != nullptr ? frame->rasterDocumentRect() : Box2d())
+                  << " presentedPixels="
+                  << (frame != nullptr ? frame->rasterOutputSizePx() : Vector2i::Zero())
+                  << " presentedOverview=" << (frame != nullptr && frame->usesOverviewRaster())
+                  << " requestedRect=" << shell.viewportForReadback().rasterViewport().documentRect
+                  << " requestedPixels="
+                  << shell.viewportForReadback().rasterViewport().outputSizePx;
     return false;
   };
   ASSERT_TRUE(settleFrame("initial", app.document().currentFrameVersion()));
@@ -4198,22 +4213,28 @@ TEST(EditorShellTest, ColdSplashShineDragGetsFullTileBeforeMouseUp) {
       }
     }
     const LayerInspectorStatusReadback status = shell.layerInspectorStatusForReadback();
-    ADD_FAILURE() << "Cold shine frame did not reach its held-pointer cache: "
-                  << RenderCoordinatorTestAccess::overviewScheduleState(
-                         EditorShellTestAccess::Coordinator(shell), app,
-                         shell.viewportForReadback())
-                  << " pendingMutations=" << app.document().hasPendingMutations()
-                  << " dragging=" << status.selectionDragging
-                  << " activePreview=" << status.activeDragPreview.has_value()
-                  << " tiles=" << status.tiles.size() << " dragTiles="
-                  << std::ranges::count_if(status.tiles,
-                                           [](const LayerInspectorStatusReadback::Tile& tile) {
-                                             return tile.isDragTarget;
-                                           })
-                  << " renderInFlight="
-                  << shell.asyncRendererForReplay().hasRenderInFlightForTesting()
-                  << " heldResultPolls="
-                  << shell.asyncRendererForReplay().replayResultHoldPollCountForTesting();
+    const auto frame = EditorShellTestAccess::Coordinator(shell).framePresentation();
+    ADD_FAILURE()
+        << "Cold shine frame did not reach its held-pointer cache: "
+        << RenderCoordinatorTestAccess::overviewScheduleState(
+               EditorShellTestAccess::Coordinator(shell), app, shell.viewportForReadback())
+        << " pendingMutations=" << app.document().hasPendingMutations()
+        << " dragging=" << status.selectionDragging
+        << " activePreview=" << status.activeDragPreview.has_value()
+        << " tiles=" << status.tiles.size() << " dragTiles="
+        << std::ranges::count_if(
+               status.tiles,
+               [](const LayerInspectorStatusReadback::Tile& tile) { return tile.isDragTarget; })
+        << " renderInFlight=" << shell.asyncRendererForReplay().hasRenderInFlightForTesting()
+        << " heldResultPolls="
+        << shell.asyncRendererForReplay().replayResultHoldPollCountForTesting()
+        << " requireRequestedDensity=" << requireRequestedDensity
+        << " presentedRect=" << (frame != nullptr ? frame->rasterDocumentRect() : Box2d())
+        << " presentedPixels="
+        << (frame != nullptr ? frame->rasterOutputSizePx() : Vector2i::Zero())
+        << " presentedOverview=" << (frame != nullptr && frame->usesOverviewRaster())
+        << " requestedRect=" << shell.viewportForReadback().rasterViewport().documentRect
+        << " requestedPixels=" << shell.viewportForReadback().rasterViewport().outputSizePx;
     return false;
   };
   ASSERT_THAT(waitForCurrentFrame(/*requireRequestedDensity=*/true), testing::Eq(true));
