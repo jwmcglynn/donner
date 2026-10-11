@@ -712,19 +712,51 @@ test("resource quiescence requires explicit completed presentation telemetry", (
   assert.equal(resourceQueuesAreQuiescent([surface], 0), true);
 });
 
-test("the browser host capability reports what launchctl answers", () => {
-  // Stand-in launchctl commands; a CI executor may not provide /usr/bin/true or /usr/bin/false.
-  const scripts = directory();
-  const launchctl = (status) => {
-    const file = path.join(scripts, `launchctl-${status}`);
-    fs.writeFileSync(file, `#!/bin/sh\nexit ${status}\n`, { mode: 0o755 });
-    return file;
-  };
-  const capability = (status) =>
-    browserHostCapability({ platform: "darwin", launchctl: launchctl(status), uid: 501 });
-  assert.deepEqual(capability(0), { uid: 501, guiNamespaceAvailable: true });
-  assert.deepEqual(capability(1), { uid: 501, guiNamespaceAvailable: false });
-  assert.equal(browserHostCapability({ platform: "linux" }), null);
+test("the browser host capability forwards the bounded launchctl probe", () => {
+  const calls = [];
+  const actual = browserHostCapability({
+    platform: "darwin",
+    launchctl: "fixture-launchctl",
+    uid: 501,
+    execFile: (...args) => calls.push(args),
+  });
+  assert.deepEqual(actual, { uid: 501, guiNamespaceAvailable: true });
+  assert.deepEqual(calls, [
+    ["fixture-launchctl", ["print", "gui/501"], { stdio: "ignore", timeout: 1000 }],
+  ]);
+});
+
+test("failed and expired host capability probes remain unavailable", () => {
+  const failures = [
+    Object.assign(new Error("probe exited unsuccessfully"), { status: 1 }),
+    Object.assign(new Error("probe deadline expired"), { code: "ETIMEDOUT" }),
+    Object.assign(new Error("probe executable is missing"), { code: "ENOENT" }),
+  ];
+  for (const failure of failures) {
+    let calls = 0;
+    const actual = browserHostCapability({
+      platform: "darwin",
+      launchctl: "fixture-launchctl",
+      uid: 501,
+      execFile: () => {
+        ++calls;
+        throw failure;
+      },
+    });
+    assert.deepEqual(actual, { uid: 501, guiNamespaceAvailable: false });
+    assert.equal(calls, 1, failure.message);
+  }
+});
+
+test("other platforms do not probe a macOS GUI namespace", () => {
+  assert.equal(
+    browserHostCapability({
+      platform: "linux",
+      uid: 501,
+      execFile: () => assert.fail("a non-macOS host must not invoke launchctl"),
+    }),
+    null,
+  );
 });
 
 // Runs `script` under the driver preload in its own process group, with the process listing

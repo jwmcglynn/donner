@@ -281,18 +281,24 @@ export async function supervise(executable, args, options = {}) {
 /**
  * What the browser host offers a headed browser, for the run log: on macOS, whether this user has
  * a GUI session that a browser could be launched into. Null on other platforms.
- * @param {{ platform?: string, launchctl?: string, uid?: number }} options
+ * @param {{
+ *   platform?: string,
+ *   launchctl?: string,
+ *   uid?: number,
+ *   execFile?: typeof execFileSync,
+ * }} options
  * @returns {{ uid: number, guiNamespaceAvailable: boolean } | null}
  */
 export function browserHostCapability({
   platform = process.platform,
   launchctl = "/bin/launchctl",
   uid = process.getuid(),
+  execFile = execFileSync,
 } = {}) {
   if (platform !== "darwin") return null;
   let guiNamespaceAvailable = false;
   try {
-    execFileSync(launchctl, ["print", `gui/${uid}`], { stdio: "ignore", timeout: 1000 });
+    execFile(launchctl, ["print", `gui/${uid}`], { stdio: "ignore", timeout: 1000 });
     guiNamespaceAvailable = true;
   } catch {}
   return { uid, guiNamespaceAvailable };
