@@ -384,9 +384,9 @@ donner_cc_test(
     data = [
         "//donner/svg/renderer/testdata",
         "//third_party/resvg-test-suite:fonts",
+        "//third_party/resvg-test-suite:resources",
         "//third_party/resvg-test-suite:tests/text/tspan/nested-rotate.png",
         "//third_party/resvg-test-suite:tests/text/tspan/nested-rotate.svg",
-        "//third_party/resvg-test-suite:resources",
     ],
     opens_gpu_device = True,
     variants = [
