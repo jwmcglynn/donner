@@ -48,7 +48,7 @@ struct Uniforms {
   // writes the result as-is.
   sourceIsPremult: u32,
   // Mask coverage selector for the texture bound at binding 3:
-  // 0 disables masking, 1 uses luminance, and 2 uses alpha.
+  // 0 disables masking, 1 uses sRGB luminance, 2 alpha, and 3 linearRGB luminance.
   // When 0, the mask texture binding carries the 1x1 dummy and the
   // shader skips the sampling entirely.
   maskMode: u32,
