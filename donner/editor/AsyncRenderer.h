@@ -319,6 +319,8 @@ struct RenderResult {
     double finalSnapshotMs = 0.0;
     /// Time spent copying compositor diagnostics for editor panels.
     double diagnosticsMs = 0.0;
+    /// Browser epoch milliseconds at the UI-thread poll, zero in native builds.
+    double polledAtEpochMs = 0.0;
     /// Time from worker result completion until the UI thread polls it.
     double pollDelayMs = 0.0;
     /// Portion of `pollDelayMs` spent waiting for the UI thread's next frame after the result

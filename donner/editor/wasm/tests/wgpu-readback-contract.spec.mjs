@@ -476,9 +476,15 @@ test("worker poll timestamps retain their producer clock across delayed proxy de
     body,
   );
   const count = Number(/kValueCount = (\d+)/.exec(publisher)[1]);
+  const pollClock = workerRendererSource.match(
+    /polledAtEpochMs =\s*EM_ASM_DOUBLE\(\{([\s\S]*?)\}\)/,
+  );
+  assert.ok(pollClock, "the poll must capture its clock before asynchronous diagnostic delivery");
+  const epochNow = new Function("performance", pollClock[1]);
+  const polledAtEpochMs = epochNow({ timeOrigin: 700, now: () => 500 });
   for (const arrivalMs of [900, 200]) {
     const heap = new Float64Array(Math.max(count, 41));
-    heap[40] = 1200;
+    heap[40] = polledAtEpochMs;
     const window = {};
     publish(window, 0, 0, count, heap, () => {}, () => "none", {
       timeOrigin: 1000,
@@ -497,6 +503,13 @@ test("frame completion timestamps exclude proxy delay and retain successful admi
   const publisher = workerBridgeSource.match(/void RecordFrameSample\([\s\S]*?\n\}/)[0];
   const body = publisher.match(/MAIN_THREAD_ASYNC_EM_ASM\(\s*\{([\s\S]*?)\n\s*\},/)[1];
   const publish = new Function("window", "performance", "$0", "$1", "$2", "$3", "$4", body);
+  const frameClock = workerBridgeSource.match(
+    /EM_JS\(double, WorkerEpochNowMs, \(\), \{([\s\S]*?)\}\);/,
+  );
+  assert.ok(frameClock, "the app worker must expose an epoch clock comparable with the page");
+  const epochNow = new Function("performance", frameClock[1]);
+  const completedAtEpochMs = epochNow({ timeOrigin: 700, now: () => 515 });
+  assert.match(publisher, /const double completedAtEpochMs = WorkerEpochNowMs\(\)/);
   for (const arrivalMs of [1000, 215]) {
     const window = {
       __donnerFrameLoopStats: { uiFrameMsSamples: [] },
@@ -504,7 +517,7 @@ test("frame completion timestamps exclude proxy delay and retain successful admi
       __donnerHostFrameTiming: { lastSurfacePresented: true },
     };
     const clock = { timeOrigin: 1000, now: () => arrivalMs };
-    publish(window, clock, 1, 15, 1, 4096, 1215);
+    publish(window, clock, 1, 15, 1, 4096, completedAtEpochMs);
     assert.equal(
       window.__donnerWorkerStats.presentedAtMs,
       undefined,
@@ -512,14 +525,14 @@ test("frame completion timestamps exclude proxy delay and retain successful admi
     );
     window.__donnerWorkerStats.acceptedForPresentation = true;
     window.__donnerHostFrameTiming.lastSurfacePresented = false;
-    publish(window, clock, 1, 15, 1, 4096, 1215);
+    publish(window, clock, 1, 15, 1, 4096, completedAtEpochMs);
     assert.equal(
       window.__donnerWorkerStats.presentedAtMs,
       undefined,
       "a refused surface cannot acquire a presentation timestamp",
     );
     window.__donnerHostFrameTiming.lastSurfacePresented = true;
-    publish(window, clock, 1, 15, 1, 4096, 1215);
+    publish(window, clock, 1, 15, 1, 4096, completedAtEpochMs);
     assert.equal(window.__donnerFrameLoopStats.lastFrameAtMs, 215);
     assert.equal(
       window.__donnerWorkerStats.presentedAtMs,
@@ -527,7 +540,7 @@ test("frame completion timestamps exclude proxy delay and retain successful admi
       "a frame timestamp must reflect completion, not its diagnostic arrival",
     );
     assert.equal(window.__donnerWorkerStats.presentationPublicationDelayMs, arrivalMs - 215);
-    publish(window, clock, 1, 25, 1, 4096, 1230);
+    publish(window, clock, 1, 25, 1, 4096, completedAtEpochMs + 15);
     assert.equal(
       window.__donnerWorkerStats.presentedAtMs,
       215,
@@ -564,6 +577,7 @@ test("worker acceptance requires the fresh render identity and no old presentati
   heap.set([11, 22, 33, 44, 0], 26);
   heap[32] = 1;
   heap.set([2, 3, 4, 5, 6], 35);
+  heap[40] = 1200;
   const window = {
     __donnerWorkerStats: {
       completedResults: 8,
@@ -585,7 +599,7 @@ test("worker acceptance requires the fresh render identity and no old presentati
       heap.fill(99);
     },
     () => "none",
-    { now: () => 200 },
+    { timeOrigin: 1000, now: () => 200 },
   );
   assert.deepEqual(released, [0], "the asynchronous publication frees its owned buffer once");
   const stats = window.__donnerWorkerStats;

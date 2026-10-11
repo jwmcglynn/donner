@@ -755,6 +755,12 @@ std::optional<RenderResult> AsyncRenderer::pollResult() {
     }
 
     RenderResult result = std::move(done->result);
+#ifdef __EMSCRIPTEN__
+    // clang-format off
+    result.workerTiming.polledAtEpochMs =
+        EM_ASM_DOUBLE({ return performance.timeOrigin + performance.now(); });
+    // clang-format on
+#endif
     const HandoffTimings handoff =
         ComputeHandoffTimings(result.workerCompletedAt, std::chrono::steady_clock::now());
     result.workerTiming.pollDelayMs = handoff.pollDelayMs;

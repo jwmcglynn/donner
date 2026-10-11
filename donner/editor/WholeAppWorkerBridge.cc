@@ -1282,6 +1282,7 @@ void PublishMemoryAttribution() {
 }  // namespace
 
 void RecordFrameSample(int triggerBits, double frameMs, int callbacks) {
+  const double completedAtEpochMs = WorkerEpochNowMs();
   // clang-format off
   MAIN_THREAD_ASYNC_EM_ASM(
       {
@@ -1307,22 +1308,16 @@ void RecordFrameSample(int triggerBits, double frameMs, int callbacks) {
         if (stats['uiFrameMsSamples'].length < kMaxSamples) {
           stats['uiFrameMsSamples'].push($1);
         }
-        // Page-clock arrival time of the latest frame's sample. The presenting
-        // frame publishes its worker stats and this sample through the same
-        // in-order proxy queue, so a probe can measure the result-to-frame
-        // handoff from product timestamps instead of from when its own poll
-        // happened to run.
-        stats['lastFrameAtMs'] = performance.now();
-        // Each worker result publishes a fresh stats object with no
-        // 'presentedAtMs'; the first frame sample to arrive after it is the
-        // end of the frame that consumed that result, so stamp it exactly
-        // once. Probes read the pair to measure how promptly a completed
-        // result reached the canvas without racing their own poll cadence.
+        // Transfer the producer clock so queued diagnostics do not inflate frame latency.
+        stats['lastFrameAtMs'] = $4 - performance.timeOrigin;
+        stats['lastFramePublicationDelayMs'] =
+            Math.max(0, performance.now() - stats['lastFrameAtMs']);
         const workerStats = window['__donnerWorkerStats'];
         if (workerStats && workerStats['acceptedForPresentation'] &&
             window['__donnerHostFrameTiming']?.['lastSurfacePresented'] &&
             Object.is(workerStats['presentedAtMs'], undefined)) {
-          workerStats['presentedAtMs'] = performance.now();
+          workerStats['presentedAtMs'] = stats['lastFrameAtMs'];
+          workerStats['presentationPublicationDelayMs'] = stats['lastFramePublicationDelayMs'];
         }
         window['__donnerMainLoopRenderedFrames'] =
             Number(window['__donnerMainLoopRenderedFrames'] || 0) + 1;
@@ -1330,7 +1325,8 @@ void RecordFrameSample(int triggerBits, double frameMs, int callbacks) {
         window['__donnerHeapBytesHighWater'] =
             Math.max(Number(window['__donnerHeapBytesHighWater'] || 0), $3);
       },
-      triggerBits, frameMs, callbacks, static_cast<double>(emscripten_get_heap_size()));
+      triggerBits, frameMs, callbacks, static_cast<double>(emscripten_get_heap_size()),
+      completedAtEpochMs);
   // clang-format on
 
   PublishSuspendAndTickStats();
