@@ -8,6 +8,7 @@
 #include <functional>
 #include <limits>
 #include <source_location>
+#include <string>
 #include <tuple>
 #include <vector>
 
@@ -2798,6 +2799,37 @@ TEST(RendererPublicApiTest, RotatedMaskRegionClipsBitmapMaskContent) {
   ASSERT_THAT(snapshot.empty(), testing::IsFalse());
   EXPECT_THAT(PixelAt(snapshot, 5, 5), ElementsAre(0, 128, 0, 255));
   EXPECT_THAT(PixelAt(snapshot, 11, 11), IsTransparent());
+}
+
+TEST(RendererPublicApiTest, RotatedMaskRegionCoverageIsIndependentOfContentRepresentation) {
+  const std::array<std::string_view, 2> maskContents = {
+      R"svg(<rect x="-64" y="-64" width="128" height="128" fill="white" />)svg",
+      R"svg(<image x="-64" y="-64" width="128" height="128"
+        href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4nGP4DwQACfsD/fteaysAAAAASUVORK5CYII=" />)svg"};
+  std::array<RendererBitmap, 2> snapshots;
+  for (std::size_t i = 0; i < maskContents.size(); ++i) {
+    const std::string svg = std::string(R"svg(
+      <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24">
+        <defs>
+          <mask id="m" maskUnits="userSpaceOnUse" x="4" y="4" width="16" height="12" mask-type="alpha">
+    )svg") + std::string(maskContents[i]) +
+                            R"svg(
+          </mask>
+        </defs>
+        <g mask="url(#m)" transform="rotate(17 12 12) translate(0.25 0.125)">
+          <rect x="-64" y="-64" width="128" height="128" fill="green" />
+        </g>
+      </svg>
+    )svg";
+    SVGDocument document = ParseDocument(svg);
+    Renderer renderer;
+    renderer.draw(document);
+    snapshots[i] = NormalizeSnapshot(renderer.takeSnapshot());
+    ASSERT_THAT(snapshots[i].empty(), testing::IsFalse());
+    EXPECT_THAT(PixelAt(snapshots[i], 12, 10), ElementsAre(0, 128, 0, 255));
+  }
+  editor::tests::CompareBitmapToBitmap(snapshots[0], snapshots[1], "rotated-mask-content-coverage",
+                                       editor::tests::PixelmatchIdentityParams());
 }
 
 // 21. Mix-blend-mode triggers isolated layer
