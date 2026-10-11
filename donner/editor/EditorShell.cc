@@ -346,7 +346,7 @@ void PublishSampleThumbnailStats(int requested, int started, int completed, int 
                                  int foregroundHandoffWaits, int firstAttemptCompleted,
                                  int offscreenRendererConstructionStarts,
                                  int offscreenRendererConstructionBlocked, int drained,
-                                 int readbackCount) {
+                                 int readbackCount, int fontPreviewObligations) {
   // clang-format off
   MAIN_THREAD_ASYNC_EM_ASM(
       {
@@ -383,11 +383,12 @@ void PublishSampleThumbnailStats(int requested, int started, int completed, int 
           'offscreenRendererConstructionBlocked' : Boolean($11),
           'drained' : Boolean($12),
           'explicitPreviewReadbackTotal' : $13,
+          'fontPreviewObligations' : $14,
         });
       },
       requested, started, completed, rendered, ready, pending, active, resultReady,
       foregroundHandoffWaits, firstAttemptCompleted, offscreenRendererConstructionStarts,
-      offscreenRendererConstructionBlocked, drained, readbackCount);
+      offscreenRendererConstructionBlocked, drained, readbackCount, fontPreviewObligations);
   // clang-format on
 }
 
@@ -5402,7 +5403,8 @@ void EditorShell::publishSampleThumbnailStats() const {
       static_cast<int>(stats.foregroundHandoffWaits), stats.firstAttemptCompleted ? 1 : 0,
       static_cast<int>(stats.offscreenRendererConstructionStarts),
       stats.offscreenRendererConstructionBlocked ? 1 : 0, sampleThumbnailLaneDrained(stats) ? 1 : 0,
-      static_cast<int>(stats.readbackCount));
+      static_cast<int>(stats.readbackCount),
+      static_cast<int>(pendingFontPreviews_.size() + waitingFontPreviews_.size()));
 #endif
 }
 
@@ -5909,6 +5911,7 @@ void EditorShell::requestFontPreviews(const std::vector<std::string>& families) 
   }
   if (queued) {
     window_.wakeEventLoop();
+    publishSampleThumbnailStats();
   }
 }
 
@@ -5944,6 +5947,7 @@ void EditorShell::advanceFontPreviewGeneration() {
       fontPreviewOrder_.push_back(family);
       trimFontPreviewMemory();
       window_.wakeEventLoop();
+      publishSampleThumbnailStats();
       return;
     }
   }
