@@ -984,6 +984,15 @@ public:
     return shell.foregroundPresentationObligation_;
   }
 
+  static void SetForegroundPresentationObligation(
+      EditorShell& shell, gui::EditorWindow::PresentedDocumentFrameIdentity identity) {
+    shell.foregroundPresentationObligation_ = identity;
+  }
+
+  static void SetSidebarSnapshotRefreshPending(EditorShell& shell, bool pending) {
+    shell.sidebarSnapshotRefreshPending_ = pending;
+  }
+
   static void InstallFramePresentation(EditorShell& shell,
                                        std::shared_ptr<const FramePresentation> frame) {
     shell.installFramePresentation(std::move(frame));
@@ -2176,7 +2185,8 @@ TEST(EditorShellTest, CpuAdoptionDoesNotStartPreviewsBeforeForegroundPresentatio
   EditorShellTestAccess::QueueSampleLoad(shell, "basic-shapes");
   EditorShellTestAccess::ConfirmPendingSampleLoadDiscard(shell);
   EditorShellTestAccess::ProcessPendingSampleLoad(shell);
-  EditorShellTestAccess::RequestFontPreviews(shell, {"Bebas Neue"});
+  EditorShellTestAccess::PrepareSingleFontPreviewRequest(shell, "Bebas Neue");
+  ASSERT_EQ(EditorShellTestAccess::PendingFontPreviewCount(shell), 1u);
   const std::size_t layerRendersBefore = EditorShellTestAccess::RenderedLayerThumbnailCount(shell);
   const std::size_t previewRequestsBefore =
       EditorShellTestAccess::RequestedAuxiliaryPreviewCount(shell);
@@ -2200,22 +2210,33 @@ TEST(EditorShellTest, CpuAdoptionDoesNotStartPreviewsBeforeForegroundPresentatio
   EditorShellTestAccess::InstallFramePresentation(shell, nullptr);
   EXPECT_FALSE(EditorShellTestAccess::ForegroundPresentationAcknowledged(shell));
   EditorShellTestAccess::InstallFramePresentation(shell, acceptedFrame);
+  ASSERT_TRUE(shell.asyncRendererForReplay().waitUntilNoRenderInFlightForTesting(
+      std::chrono::steady_clock::now() + std::chrono::seconds(10)));
 
-  window.beginFrame();
-  EditorShellTestAccess::RenderSidebars(shell);
-  EditorShellTestAccess::AdvanceFontPreviewGeneration(shell);
-  window.endFrame();
+  const std::uint64_t blockedWakeSerial = window.wakeEventLoopRequestSerialForTesting();
+  for (int frame = 0; frame < 3; ++frame) {
+    window.beginFrame();
+    EditorShellTestAccess::RenderSidebars(shell);
+    EditorShellTestAccess::AdvanceFontPreviewGeneration(shell);
+    window.endFrame();
+    EXPECT_EQ(window.wakeEventLoopRequestSerialForTesting(), blockedWakeSerial);
+  }
   EXPECT_EQ(EditorShellTestAccess::RenderedLayerThumbnailCount(shell), layerRendersBefore);
   EXPECT_EQ(EditorShellTestAccess::RequestedAuxiliaryPreviewCount(shell), previewRequestsBefore);
+  EXPECT_EQ(EditorShellTestAccess::PendingFontPreviewCount(shell), 1u);
 
   // Retiring the old fences only makes another frame admissible; a failed UI pass still cannot
   // acknowledge the adopted document capture.
   completedSerial = std::numeric_limits<std::uint64_t>::max();
   window.forceUiPassFailureForTesting(true);
-  RunShellFrame(window, shell);
+  const std::uint64_t owedWakeSerial = window.presentedDocumentWakeSerialForTesting();
+  window.beginFrame();
+  window.endFrame();
+  EXPECT_EQ(window.presentedDocumentWakeSerialForTesting(), owedWakeSerial);
   EXPECT_FALSE(EditorShellTestAccess::ForegroundPresentationAcknowledged(shell));
   EXPECT_EQ(EditorShellTestAccess::RenderedLayerThumbnailCount(shell), layerRendersBefore);
   EXPECT_EQ(EditorShellTestAccess::RequestedAuxiliaryPreviewCount(shell), previewRequestsBefore);
+  EXPECT_EQ(EditorShellTestAccess::PendingFontPreviewCount(shell), 1u);
 
   // A successful frame carrying the old scene identity is equally insufficient.
   window.forceUiPassFailureForTesting(false);
@@ -2226,11 +2247,18 @@ TEST(EditorShellTest, CpuAdoptionDoesNotStartPreviewsBeforeForegroundPresentatio
   window.beginFrame();
   window.endFrame();
   EXPECT_FALSE(EditorShellTestAccess::ForegroundPresentationAcknowledged(shell));
+  EXPECT_EQ(window.presentedDocumentWakeSerialForTesting(), owedWakeSerial);
 
   // Only a fully drawn and presented frame carrying the matching adopted capture releases new
   // preview work. Cached previews and the pending queues remain available throughout the hold.
-  RunShellFrame(window, shell);
+  EditorShellTestAccess::InstallFramePresentation(shell, acceptedFrame);
+  window.beginFrame();
+  window.endFrame();
+  EXPECT_EQ(window.presentedDocumentWakeSerialForTesting(), owedWakeSerial + 1u);
   ASSERT_TRUE(EditorShellTestAccess::ForegroundPresentationAcknowledged(shell));
+  window.beginFrame();
+  window.endFrame();
+  EXPECT_EQ(window.presentedDocumentWakeSerialForTesting(), owedWakeSerial + 1u);
   window.beginFrame();
   EditorShellTestAccess::RenderSidebars(shell);
   EditorShellTestAccess::AdvanceFontPreviewGeneration(shell);
@@ -2256,6 +2284,50 @@ TEST(EditorShellTest, SettledEmptyDocumentDoesNotBlockFontPreviews) {
   EditorShellTestAccess::RequestFontPreviews(shell, {"Bebas Neue"});
   EditorShellTestAccess::AdvanceFontPreviewGeneration(shell);
   EXPECT_GT(EditorShellTestAccess::RequestedAuxiliaryPreviewCount(shell), requestedBefore);
+}
+
+TEST(EditorShellTest, SidebarPresentationWakeTracksOnlyRenderableRasterDemand) {
+  gui::EditorWindow window(gui::EditorWindowOptions{
+      .title = "Sidebar presentation wake policy",
+      .initialWidth = 844,
+      .initialHeight = 390,
+      .visible = false,
+  });
+  if (!window.valid()) {
+    GTEST_SKIP() << "WGPU hidden editor window is unavailable on this host";
+  }
+  EditorShell shell(window, OptionsWithSource(kInitialSvg));
+  ASSERT_TRUE(shell.valid());
+  EditorShellTestAccess::SetForegroundPresentationObligation(
+      shell, {.documentGeneration = 91, .frameVersion = 7, .captureId = 3});
+  EditorShellTestAccess::SetSidebarSnapshotRefreshPending(shell, true);
+
+  const EditorAdaptiveUiLayout compact = ComputeEditorAdaptiveUiLayout({
+      .windowWidth = 844.0f,
+      .windowHeight = 390.0f,
+      .preferTouch = true,
+  });
+  ASSERT_TRUE(compact.compactTouch());
+  EditorShellTestAccess::SetAdaptiveUiLayout(shell, compact);
+  EditorShellTestAccess::SetCompactPanelVisible(shell, true);
+  window.beginFrame();
+  EditorShellTestAccess::RenderSidebars(shell);
+  EXPECT_FALSE(window.hasPendingPresentedDocumentWakeForTesting())
+      << "compact swatches never consume raster thumbnails and must not arm their wake";
+  window.endFrame();
+
+  EditorShellTestAccess::SetAdaptiveUiLayout(shell, ComputeEditorAdaptiveUiLayout({
+                                                        .windowWidth = 1600.0f,
+                                                        .windowHeight = 900.0f,
+                                                        .preferTouch = false,
+                                                    }));
+  EditorShellTestAccess::SetCompactPanelVisible(shell, false);
+  EditorShellTestAccess::SetSidebarSnapshotRefreshPending(shell, false);
+  window.beginFrame();
+  EditorShellTestAccess::RenderSidebars(shell);
+  EXPECT_TRUE(window.hasPendingPresentedDocumentWakeForTesting())
+      << "a non-sample first load with stale rows must arm one wake without font demand";
+  window.endFrame();
 }
 
 TEST(EditorShellTest, NewShellInvalidatesPriorProducerPresentationAck) {

@@ -206,6 +206,14 @@ public:
     return thumbnailRefreshStats_;
   }
 
+  /// Whether at least one visible row lacks a thumbnail for the current snapshot version.
+  [[nodiscard]] bool hasThumbnailRenderDemand() const;
+
+  /// Number of visible-row cache entries inspected while preparing thumbnail queues.
+  [[nodiscard]] std::size_t thumbnailCacheInspectionCountForTesting() const {
+    return thumbnailCacheInspectionCountForTesting_;
+  }
+
   /// Number of currently-visible rows (rows in the flat list).
   [[nodiscard]] std::size_t visibleRowCount() const { return model_.rows().size(); }
 
@@ -370,6 +378,7 @@ private:
   std::vector<PendingThumbnail> pendingThumbnails_;
   std::size_t pendingThumbnailCursor_ = 0;
   std::size_t thumbnailQueueBaseReusedCount_ = 0;
+  std::size_t thumbnailCacheInspectionCountForTesting_ = 0;
   /// Visible-row index of the most recent plain/ctrl click; the anchor for
   /// shift-range selection.
   std::optional<std::size_t> anchorRowIndex_;

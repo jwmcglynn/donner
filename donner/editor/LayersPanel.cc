@@ -328,26 +328,13 @@ void LayersPanel::refreshSnapshot(const EditorApp& app, svg::Renderer* renderer,
     finishTiming();
     return;
   }
-  if (!thumbnailRenderingRequested) {
-    // Re-evaluate cache freshness when the canvas presentation catches up and
-    // the caller switches back from swatches to rendered thumbnails.
-    thumbnailQueuePrepared_ = false;
-    finishTiming();
-    return;
-  }
-
-  std::optional<svg::Renderer> fallbackRenderer;
-  if (renderer == nullptr) {
-    fallbackRenderer.emplace();
-    renderer = &*fallbackRenderer;
-  }
-
   if (!thumbnailQueuePrepared_) {
     pendingThumbnails_.clear();
     pendingThumbnailCursor_ = 0;
     thumbnailQueueBaseReusedCount_ = 0;
     pendingThumbnails_.reserve(model_.rows().size());
     for (const LayerTreeRow& row : model_.rows()) {
+      ++thumbnailCacheInspectionCountForTesting_;
       const auto thumbnailIt = thumbnailByStableId_.find(row.stableId);
       if (thumbnailIt != thumbnailByStableId_.end() &&
           thumbnailIt->second.documentFrameVersion == documentFrameVersion &&
@@ -362,6 +349,18 @@ void LayersPanel::refreshSnapshot(const EditorApp& app, svg::Renderer* renderer,
   }
 
   thumbnailRefreshStats_.reusedCount = thumbnailQueueBaseReusedCount_ + pendingThumbnailCursor_;
+  thumbnailRefreshStats_.deferredCount = pendingThumbnails_.size() - pendingThumbnailCursor_;
+  if (!thumbnailRenderingRequested) {
+    finishTiming();
+    return;
+  }
+
+  std::optional<svg::Renderer> fallbackRenderer;
+  if (renderer == nullptr) {
+    fallbackRenderer.emplace();
+    renderer = &*fallbackRenderer;
+  }
+
   const std::size_t remaining = pendingThumbnails_.size() - pendingThumbnailCursor_;
   const std::size_t renderCount = mode == ThumbnailRefreshMode::RenderIncremental
                                       ? std::min<std::size_t>(1u, remaining)
@@ -399,6 +398,10 @@ std::optional<std::size_t> LayersPanel::rowIndexForStableId(std::uint64_t stable
 
 bool LayersPanel::hasThumbnailOrSwatch(std::uint64_t stableId) const {
   return swatchByStableId_.count(stableId) != 0;
+}
+
+bool LayersPanel::hasThumbnailRenderDemand() const {
+  return thumbnailQueuePrepared_ && pendingThumbnailCursor_ < pendingThumbnails_.size();
 }
 
 std::optional<css::RGBA> LayersPanel::rowFallbackSwatch(std::uint64_t stableId) const {
