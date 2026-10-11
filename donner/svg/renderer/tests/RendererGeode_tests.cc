@@ -2102,7 +2102,7 @@ TEST_F(RendererGeodeTest, RotatedMaskRegionAdmissionFailsClosedAndRestoresClip) 
   beginFrame(renderer);
   renderer.setTransform(Transform2d::Rotate(0.5));
   renderer.pushMask(Box2d::FromXYWH(0.0, 0.0, 8.0, 8.0), MaskType::Alpha);
-  EXPECT_TRUE(renderer.resourceStats().surfaceBudgetRejected);
+  EXPECT_THAT(renderer.resourceStats().surfaceBudgetRejected, testing::IsTrue());
   EXPECT_EQ(renderer.resourceStats().surfaceCount, 3u);
   renderer.setPaint(solidFill(css::RGBA(255, 255, 255, 255)));
   renderer.drawRect(Box2d::FromXYWH(0.0, 0.0, kViewportSize, kViewportSize), StrokeParams{});
