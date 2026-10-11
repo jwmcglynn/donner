@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import {
+  sampleThumbnailLaneQuiescent,
+  sampleThumbnailLaneSerial,
+} from "./sample-thumbnail-quiescence.mjs";
 
 const source = await readFile(new URL("../../gui/EditorWindow.cc", import.meta.url), "utf8");
 const workerRendererSource = await readFile(
@@ -739,6 +743,58 @@ test("the shared sample thumbnail gate waits for a drained thumbnail lane", () =
   // lane never goes idle; `toMatchObject` would print only the flag.
   assert.match(helper, /\.toEqual\(expect\.objectContaining\(\{ settled: true \}\)\)/);
   assert.doesNotMatch(helper, /toMatchObject/);
+});
+
+test("post-picker thumbnail quiescence follows accepted request completion", () => {
+  const settledAfterPickerClosed = {
+    requested: 17,
+    started: 17,
+    completed: 17,
+    pending: false,
+    active: false,
+    resultReady: false,
+    drained: false,
+  };
+  assert.equal(sampleThumbnailLaneQuiescent(settledAfterPickerClosed), true);
+  assert.equal(
+    sampleThumbnailLaneQuiescent({ ...settledAfterPickerClosed, requested: 0, completed: 0 }),
+    true,
+    "an unused lane is idle",
+  );
+  assert.equal(
+    sampleThumbnailLaneQuiescent({ ...settledAfterPickerClosed, started: 16 }),
+    true,
+    "cancelling a queued request completes it without starting it",
+  );
+  for (const field of ["pending", "active", "resultReady"]) {
+    assert.equal(
+      sampleThumbnailLaneQuiescent({ ...settledAfterPickerClosed, [field]: true }),
+      false,
+      `${field} work is not quiescent`,
+    );
+  }
+  assert.equal(
+    sampleThumbnailLaneQuiescent({ ...settledAfterPickerClosed, completed: 16 }),
+    false,
+  );
+  assert.equal(sampleThumbnailLaneQuiescent(undefined), false);
+  for (const field of ["pending", "active", "resultReady"]) {
+    const missing = { ...settledAfterPickerClosed };
+    delete missing[field];
+    assert.equal(sampleThumbnailLaneQuiescent(missing), false, `missing ${field} is not idle`);
+  }
+  for (const value of [Number.NaN, -1]) {
+    assert.equal(
+      sampleThumbnailLaneQuiescent({ ...settledAfterPickerClosed, requested: value }),
+      false,
+    );
+  }
+  assert.notDeepEqual(
+    sampleThumbnailLaneSerial(settledAfterPickerClosed),
+    sampleThumbnailLaneSerial({ ...settledAfterPickerClosed, requested: 18, completed: 18 }),
+    "a request completed between polls must restart readiness",
+  );
+  assert.match(presentationRegressionSource, /requireThumbnailQuiescence: true/);
 });
 
 test("sample loads that do not test the thumbnail handoff settle thumbnails first", () => {

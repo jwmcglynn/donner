@@ -42,6 +42,10 @@ import { echoGpuSessionConsole } from "./gpu-session-console";
 import { compareOverlayBitmap, type OverlayBitmapComparison } from "./overlay-bitmap-compare";
 import { cropCapturedPng, normalizeOverlayGeneration, overlayGenerationMask } from "./png-crop";
 import { quarantineStillSkips } from "./quarantine-report.mjs";
+import {
+  sampleThumbnailLaneQuiescent,
+  sampleThumbnailLaneSerial,
+} from "./sample-thumbnail-quiescence.mjs";
 import { expectSampleThumbnailsToSettle } from "./sample-thumbnail-settle";
 import {
   delayNextCanvasCompletionForTest,
@@ -2552,20 +2556,37 @@ test("a frame account attach that fails or never settles still returns the captu
 // pending, and the worker result count has not moved for a continuous settle
 // window (so a queued follow-up render cannot land between the check and the
 // press).
-async function waitForPressReadiness(page: Page, message: string): Promise<void> {
+async function waitForPressReadiness(
+  page: Page,
+  message: string,
+  options: { requireThumbnailQuiescence?: boolean } = {},
+): Promise<void> {
   const settleMs = scaledMs(250);
   const deadline = Date.now() + scaledMs(6_000);
   let lastCompleted = -1;
+  let lastThumbnailSerial: { requested: number; completed: number } | null = null;
   let stableSince = Date.now();
   for (;;) {
     const snapshot = await page.evaluate(() => ({
       busy: window.__donnerInteractionStats?.workerBusy ?? true,
       completed: window.__donnerWorkerStats?.completedResults || 0,
       pendingClick: window.__donnerInteractionStats?.pendingClick ?? true,
+      thumbnails: window.__donnerSampleThumbnailStats,
     }));
     const now = Date.now();
-    if (snapshot.busy || snapshot.pendingClick || snapshot.completed !== lastCompleted) {
+    const thumbnailSerial = sampleThumbnailLaneSerial(snapshot.thumbnails);
+    const thumbnailSerialChanged = options.requireThumbnailQuiescence
+      && (thumbnailSerial === null || lastThumbnailSerial === null
+        || thumbnailSerial.requested !== lastThumbnailSerial.requested
+        || thumbnailSerial.completed !== lastThumbnailSerial.completed);
+    if (
+      snapshot.busy || snapshot.pendingClick || snapshot.completed !== lastCompleted
+      || thumbnailSerialChanged
+      || (options.requireThumbnailQuiescence
+        && !sampleThumbnailLaneQuiescent(snapshot.thumbnails))
+    ) {
       lastCompleted = snapshot.completed;
+      lastThumbnailSerial = thumbnailSerial;
       stableSince = now;
     } else if (now - stableSince >= settleMs) {
       return;
@@ -3848,6 +3869,20 @@ test("Firefox never exposes the checkerboard while dragging a Splash letter", as
     "a selection outline was already inside the letter window before anything was selected",
   ).toBeNull();
 
+  await expect
+    .poll(
+      async () =>
+        sampleThumbnailLaneQuiescent(
+          await page.evaluate(() => window.__donnerSampleThumbnailStats),
+        ),
+      {
+        message: "late sample thumbnail work must finish before the Splash drag press",
+        timeout: scaledMs(20_000),
+        intervals: [16, 25, 50, 100],
+      },
+    )
+    .toBe(true);
+
   // The document has no element of its own since the single-canvas
   // architecture, so the press is placed by mapping the letter's own document
   // coordinates through the editor's published viewport geometry. Deriving the
@@ -3866,7 +3901,9 @@ test("Firefox never exposes the checkerboard while dragging a Splash letter", as
     timeoutMs: scaledMs(4_000),
   });
   phaseTimes.pointerAppliedMs = performance.now() - caseStartedAtMs;
-  await waitForPressReadiness(page, "Splash drag press");
+  await waitForPressReadiness(page, "Splash drag press", {
+    requireThumbnailQuiescence: true,
+  });
   phaseTimes.pressReadyMs = performance.now() - caseStartedAtMs;
   const resultsBeforePress = await page.evaluate(
     () => window.__donnerWorkerStats?.completedResults || 0,
