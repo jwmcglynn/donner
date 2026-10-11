@@ -2748,6 +2748,36 @@ TEST(RendererPublicApiTest, RotatedMaskRegionClipsInLocalCoordinatesAndRestoresS
   EXPECT_THAT(PixelAt(snapshot, 22, 8), ElementsAre(0, 0, 255, 255));
 }
 
+TEST(RendererPublicApiTest, RotatedMaskRegionPreservesNestedMasksAndParentClips) {
+  SVGDocument document = ParseDocument(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="16" viewBox="0 0 24 16">
+      <defs>
+        <clipPath id="parent"><rect width="16" height="8" /></clipPath>
+        <mask id="inner" maskUnits="userSpaceOnUse" x="0" y="0" width="16" height="16" mask-type="alpha">
+          <rect width="16" height="16" fill="black" />
+        </mask>
+        <mask id="m" maskUnits="userSpaceOnUse" x="0" y="0" width="8" height="16" mask-type="alpha">
+          <rect width="16" height="16" fill="black" mask="url(#inner)" />
+        </mask>
+      </defs>
+      <g clip-path="url(#parent)">
+        <g mask="url(#m)" transform="rotate(45 8 8)">
+          <rect width="16" height="16" fill="green" />
+        </g>
+      </g>
+      <rect x="20" y="4" width="4" height="8" fill="blue" />
+    </svg>
+  )svg");
+  Renderer renderer;
+  renderer.draw(document);
+  const RendererBitmap snapshot = NormalizeSnapshot(renderer.takeSnapshot());
+  ASSERT_FALSE(snapshot.empty());
+  EXPECT_THAT(PixelAt(snapshot, 5, 5), ElementsAre(0, 128, 0, 255));
+  EXPECT_THAT(PixelAt(snapshot, 3, 9), IsTransparent());
+  EXPECT_THAT(PixelAt(snapshot, 11, 11), IsTransparent());
+  EXPECT_THAT(PixelAt(snapshot, 22, 8), ElementsAre(0, 0, 255, 255));
+}
+
 // 21. Mix-blend-mode triggers isolated layer
 TEST(RendererPublicApiTest, MixBlendModeIsolatedLayer) {
   // Use cyan (#00ffff) over yellow (#ffff00) with multiply blend.
