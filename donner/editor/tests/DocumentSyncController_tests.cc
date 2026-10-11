@@ -606,6 +606,27 @@ TEST_F(DocumentSyncControllerTest, MirrorsDeltasFlushedBeforeALaterNoOpFlush) {
   EXPECT_FALSE(textEditor_.isTextChanged());
 }
 
+TEST_F(DocumentSyncControllerTest, MirrorsWholeSourceAfterTooManyUnmirroredDeltas) {
+  SelectTool tool;
+  controller_.handleTextEdits(app_, textEditor_, /*deltaSeconds=*/0.0f);
+  ASSERT_FALSE(textEditor_.isTextChanged());
+
+  std::optional<svg::SVGElement> rect = app_.document().document().querySelector("#r1");
+  ASSERT_TRUE(rect.has_value());
+  // A host without a source pane never takes the deltas; past the cap they are dropped.
+  for (std::size_t i = 0; i <= AsyncSVGDocument::kMaxUnmirroredSourceDeltas; ++i) {
+    app_.applyMutation(EditorCommand::SetAttributeCommand(*rect, "x", std::to_string(i % 7)));
+    ASSERT_TRUE(app_.flushFrame());
+  }
+  ASSERT_TRUE(app_.document().hasUnmirroredSourceDeltas());
+
+  controller_.applyPendingWritebacks(app_, tool, textEditor_);
+
+  EXPECT_FALSE(app_.document().hasUnmirroredSourceDeltas());
+  EXPECT_EQ(textEditor_.getText(), app_.document().document().source());
+  EXPECT_FALSE(textEditor_.isTextChanged());
+}
+
 TEST_F(DocumentSyncControllerTest, PathOperationMirrorsInsertAndDeletesWithoutTextEcho) {
   constexpr std::string_view kTwoOverlappingRects =
       R"(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">

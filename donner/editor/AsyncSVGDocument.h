@@ -137,7 +137,9 @@ public:
   [[nodiscard]] const FlushResult& lastFlushResult() const { return lastFlushResult_; }
 
   /// True while flushed source deltas wait for the source pane to mirror them.
-  [[nodiscard]] bool hasUnmirroredSourceDeltas() const { return !unmirroredSourceDeltas_.empty(); }
+  [[nodiscard]] bool hasUnmirroredSourceDeltas() const {
+    return unmirroredSourceDeltasOverflowed_ || !unmirroredSourceDeltas_.empty();
+  }
 
   /**
    * Take the source deltas flushed since the previous call, in application order.
@@ -146,10 +148,20 @@ public:
    * flushes its own edit and is followed by any other flush would otherwise lose the deltas before
    * the source pane mirrors them. These accumulate until taken. Replacing the document discards
    * them, because they describe source that no longer exists.
+   *
+   * Hosts without a source pane never take them, so at most `kMaxUnmirroredSourceDeltas` are kept.
+   * Past that the list is dropped and this returns `std::nullopt` once: the caller must mirror the
+   * whole source instead.
    */
-  [[nodiscard]] std::vector<xml::XMLSourceDelta> takeUnmirroredSourceDeltas() {
+  [[nodiscard]] std::optional<std::vector<xml::XMLSourceDelta>> takeUnmirroredSourceDeltas() {
+    if (std::exchange(unmirroredSourceDeltasOverflowed_, false)) {
+      return std::nullopt;
+    }
     return std::exchange(unmirroredSourceDeltas_, {});
   }
+
+  /// Most flushed source deltas kept for `takeUnmirroredSourceDeltas()` before they are dropped.
+  static constexpr std::size_t kMaxUnmirroredSourceDeltas = 4096;
 
   /// Advances on every change that can alter a clip guide without changing the selected
   /// element's transform. Unlike lastFlushResult(), survives no-op frame flushes.
@@ -240,9 +252,14 @@ private:
   std::optional<ParseDiagnostic> lastParseError_;
   std::vector<ParseDiagnostic> parseDiagnostics_;
   std::uint64_t parseDiagnosticsRevision_ = 0;
+  /// Keep `sourceDeltas` for `takeUnmirroredSourceDeltas()`, or mark the list overflowed.
+  void appendUnmirroredSourceDeltas(const std::vector<xml::XMLSourceDelta>& sourceDeltas);
+
   FlushResult lastFlushResult_;
   /// Flushed source deltas not yet taken by `takeUnmirroredSourceDeltas()`.
   std::vector<xml::XMLSourceDelta> unmirroredSourceDeltas_;
+  /// Set when more than `kMaxUnmirroredSourceDeltas` accumulated and the list was dropped.
+  bool unmirroredSourceDeltasOverflowed_ = false;
 };
 
 }  // namespace donner::editor
