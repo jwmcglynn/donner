@@ -1065,7 +1065,7 @@ ParseResult<double> ParseNumberPercentage(std::span<const css::ComponentValue> v
 }
 
 /// Parse a single CSS filter function and return the corresponding FilterEffect.
-ParseResult<FilterEffect> ParseFilterFunction(const css::Function& function) {
+ParseResult<FilterEffect> ParseFilterFunction(const css::Function& function, bool allowUserUnits) {
   if (function.name.equalsLowercase("blur")) {
     if (function.values.empty()) {
       return FilterEffect(
@@ -1078,6 +1078,14 @@ ParseResult<FilterEffect> ParseFilterFunction(const css::Function& function) {
           FilterEffect::Blur{Lengthd(0.0, Lengthd::Unit::Px), Lengthd(0.0, Lengthd::Unit::Px)});
     }
     const auto& arg = remaining.front();
+    remaining = remaining.subspan(1);
+    SkipWhitespace(remaining);
+    if (!remaining.empty()) {
+      ParseDiagnostic err;
+      err.reason = "Unexpected extra values in blur()";
+      err.range.start = remaining.front().sourceOffset();
+      return err;
+    }
     if (const auto* dimension = arg.tryGetToken<css::Token::Dimension>()) {
       if (!dimension->suffixUnit || dimension->suffixUnit == Lengthd::Unit::Percent) {
         ParseDiagnostic err;
@@ -1085,14 +1093,30 @@ ParseResult<FilterEffect> ParseFilterFunction(const css::Function& function) {
         err.range.start = arg.sourceOffset();
         return err;
       }
+      if (dimension->value < 0.0) {
+        ParseDiagnostic err;
+        err.reason = "Negative value not allowed for blur()";
+        err.range.start = arg.sourceOffset();
+        return err;
+      }
       const Lengthd stdDeviation(dimension->value, dimension->suffixUnit.value());
       return FilterEffect(FilterEffect::Blur{stdDeviation, stdDeviation});
     }
-    // Accept bare 0 as 0px.
     if (const auto* number = arg.tryGetToken<css::Token::Number>()) {
+      if (number->value < 0.0) {
+        ParseDiagnostic err;
+        err.reason = "Negative value not allowed for blur()";
+        err.range.start = arg.sourceOffset();
+        return err;
+      }
+      // CSS declarations accept a bare zero as 0px.
       if (number->value == 0.0) {
         return FilterEffect(
             FilterEffect::Blur{Lengthd(0.0, Lengthd::Unit::Px), Lengthd(0.0, Lengthd::Unit::Px)});
+      }
+      if (allowUserUnits) {
+        const Lengthd stdDeviation(number->value, Lengthd::Unit::None);
+        return FilterEffect(FilterEffect::Blur{stdDeviation, stdDeviation});
       }
     }
     ParseDiagnostic err;
@@ -1307,8 +1331,8 @@ ParseResult<FilterEffect> ParseFilterFunction(const css::Function& function) {
   return err;
 }
 
-ParseResult<std::vector<FilterEffect>> ParseFilter(
-    std::span<const css::ComponentValue> components) {
+ParseResult<std::vector<FilterEffect>> ParseFilter(std::span<const css::ComponentValue> components,
+                                                   bool allowUserUnits) {
   if (components.empty()) {
     ParseDiagnostic err;
     err.reason = "Invalid filter value";
@@ -1366,7 +1390,7 @@ ParseResult<std::vector<FilterEffect>> ParseFilter(
         }
       }
 
-      auto result = ParseFilterFunction(function);
+      auto result = ParseFilterFunction(function, allowUserUnits);
       if (result.hasError()) {
         return std::move(result.error());
       }
@@ -2566,7 +2590,7 @@ DONNER_CONSTEXPR_MAP auto kProperties =
                    return Parse(
                        params,
                        [](const parser::PropertyParseFnParams& params) {
-                         return ParseFilter(params.components());
+                         return ParseFilter(params.components(), params.allowUserUnits());
                        },
                        &registry.filter);
                  }},  //
@@ -2805,9 +2829,11 @@ std::optional<ParseDiagnostic> PropertyRegistry::parseProperty(const css::Declar
 
   const PropertyParseFn* parseFn = kProperties.find(name);
   if (parseFn != nullptr) {
-    return (*parseFn)(*this,
-                      parser::PropertyParseFnParams::Create(
-                          declaration, specificity, parser::PropertyParseBehavior::AllowUserUnits));
+    const parser::PropertyParseBehavior parseBehavior =
+        name == "filter" ? parser::PropertyParseBehavior::Default
+                         : parser::PropertyParseBehavior::AllowUserUnits;
+    return (*parseFn)(
+        *this, parser::PropertyParseFnParams::Create(declaration, specificity, parseBehavior));
   }
 
   // Only store unparsed properties if they are valid presentation attribute names.
