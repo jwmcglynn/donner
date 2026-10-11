@@ -501,6 +501,7 @@ donner_perf_sensitive_cc_library(
         "//donner/base",
         "//donner/svg",
         "//donner/svg/components",
+        "@tiny-skia-cpp//src/tiny_skia/filter:color_space",
     ] + select({
         ":text_enabled": [
             ":placed_text_geometry",

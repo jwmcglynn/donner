@@ -2753,7 +2753,7 @@ TEST(RendererPublicApiTest, LinearRgbMaskConvertsStraightColorBeforeApplyingAlph
       renderer.draw(document);
     }
     const RendererBitmap snapshot = NormalizeSnapshot(renderer.takeSnapshot());
-    ASSERT_FALSE(snapshot.empty());
+    ASSERT_THAT(snapshot.empty(), testing::IsFalse());
     EXPECT_THAT(PixelAt(snapshot, 4, 4), Rgba(_, _, _, AllOf(testing::Ge(27), testing::Le(29))));
     EXPECT_THAT(PixelAt(snapshot, 12, 4), Rgba(_, _, _, AllOf(testing::Ge(63), testing::Le(65))));
     EXPECT_THAT(PixelAt(snapshot, 20, 4), Rgba(_, _, _, AllOf(testing::Ge(127), testing::Le(129))));

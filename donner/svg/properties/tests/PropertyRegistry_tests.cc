@@ -505,6 +505,22 @@ TEST(PropertyRegistry, ColorInterpolationGrammar) {
   }
 }
 
+TEST(PropertyRegistry, ColorInterpolationCascadeAndDefaults) {
+  PropertyRegistry registry;
+  EXPECT_THAT(registry.colorInterpolation.get(), Optional(ColorInterpolation::SRGB));
+  registry.parseStyle("color-interpolation: linearRGB");
+  EXPECT_THAT(registry.colorInterpolation.get(), Optional(ColorInterpolation::LinearRGB));
+  const PropertyRegistry child = PropertyRegistry().inheritFrom(registry);
+  EXPECT_THAT(child.colorInterpolation.get(), Optional(ColorInterpolation::LinearRGB));
+  registry.parseStyle("color-interpolation: auto");
+  EXPECT_THAT(registry.colorInterpolation.get(), Optional(ColorInterpolation::Auto));
+  const css::Declaration invalid =
+      css::CSS::ParseStyleAttribute("color-interpolation: invalid").at(0);
+  EXPECT_THAT(registry.parseProperty(invalid, Specificity()),
+              ParseErrorIs("Invalid color-interpolation value"));
+  EXPECT_THAT(registry.colorInterpolation.get(), Optional(ColorInterpolation::Auto));
+}
+
 TEST(PropertyRegistry, Fill) {
   // Initial value of fill is black.
   const PaintServer kInitialFill(PaintServer::Solid(Color(RGBA(0, 0, 0, 0xFF))));
