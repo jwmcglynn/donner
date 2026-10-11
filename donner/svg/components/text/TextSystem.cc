@@ -244,6 +244,35 @@ Entity findApplicableTextPathEntity(Registry& registry, Entity entity, bool& out
   return entt::null;
 }
 
+/// Resolves rotations from the nearest authored list, indexed across that element's subtree.
+void resolveInheritedRotations(EntityHandle handle, size_t charCount,
+                               const std::unordered_map<Entity, size_t>& subtreeCharOffsets,
+                               SmallVector<double, 1>& rotations) {
+  Registry& registry = *handle.registry();
+  Entity current = handle.entity();
+  while (current != entt::null) {
+    const auto* positioning = registry.try_get<TextPositioningComponent>(current);
+    if (positioning && !registry.any_of<TextPathComponent>(current) &&
+        !positioning->rotateDegrees.empty()) {
+      const auto offset = subtreeCharOffsets.find(current);
+      const auto& values = positioning->rotateDegrees;
+      const size_t startIndex =
+          std::min(offset != subtreeCharOffsets.end() ? offset->second : 0, values.size() - 1);
+      const size_t valueCount = std::min(charCount, values.size() - startIndex);
+      for (size_t ci = 0; ci < valueCount; ++ci) {
+        rotations.push_back(values[startIndex + ci]);
+      }
+      return;
+    }
+
+    const auto* tree = registry.try_get<donner::components::TreeComponent>(current);
+    if (!tree) {
+      return;
+    }
+    current = tree->parent();
+  }
+}
+
 }  // namespace
 
 void TextSystem::instantiateAllComputedComponents(Registry& registry,
@@ -260,11 +289,9 @@ void TextSystem::instantiateComputedComponent(EntityHandle rootHandle,
   UTILS_RELEASE_ASSERT(
       (rootHandle.all_of<TextRootComponent, TextComponent, TextPositioningComponent>()));
 
-  const auto& positioningComponent = rootHandle.get<TextPositioningComponent>();
   auto& computed = registry.get_or_emplace<ComputedTextComponent>(rootHandle.entity());
   computed.spans.clear();
 
-  size_t globalCharIndex = 0;
   std::unordered_map<Entity, size_t> entitySubtreeCharOffset;
 
   auto appendSpan = [&](EntityHandle handle, const RcString& spanText,
@@ -332,18 +359,9 @@ void TextSystem::instantiateComputedComponent(EntityHandle rootHandle,
 
     if (applyPositioning && !pos.rotateDegrees.empty()) {
       span.rotateList.assign(pos.rotateDegrees.begin(), pos.rotateDegrees.end());
-    } else if (!positioningComponent.rotateDegrees.empty()) {
-      for (size_t ci = 0; ci < charCount; ++ci) {
-        const size_t globalIdx = globalCharIndex + ci;
-        if (globalIdx < positioningComponent.rotateDegrees.size()) {
-          span.rotateList.push_back(positioningComponent.rotateDegrees[globalIdx]);
-        } else {
-          break;
-        }
-      }
+    } else {
+      resolveInheritedRotations(handle, charCount, entitySubtreeCharOffset, span.rotateList);
     }
-
-    globalCharIndex += charCount;
 
     Entity current = handle.entity();
     while (current != entt::null) {
