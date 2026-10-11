@@ -4309,6 +4309,39 @@ RendererBitmap RenderWithTinySkia(SVGDocument& document) {
   return reference.takeSnapshot();
 }
 
+TEST_F(RendererGeodeTest, NegativeFilterAmountsPreserveUnfilteredPixels) {
+  std::optional<SVGDocument> referenceDocument;
+  ASSERT_NO_FATAL_FAILURE(ParseDocumentWithoutWarnings(
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8">
+        <rect width="8" height="8" fill="blue"/>
+      </svg>)",
+      referenceDocument));
+  const RendererBitmap expected = RenderWithTinySkia(*referenceDocument);
+  EXPECT_THAT(PixelAt(expected, 4, 4), RgbaEq(0, 0, 255, 255));
+
+  for (std::string_view function : {"grayscale", "invert", "opacity", "sepia"}) {
+    SCOPED_TRACE(function);
+    const std::string source =
+        R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8">
+          <rect width="8" height="8" fill="blue" filter=")svg" +
+        std::string(function) + R"svg((-1)"/></svg>)svg";
+    ParseWarningSink warnings;
+    auto parsed = parser::SVGParser::ParseSVG(source, warnings);
+    ASSERT_THAT(parsed, NoParseError());
+    EXPECT_THAT(warnings.warnings(), testing::Not(testing::IsEmpty()));
+
+    editor::tests::CompareBitmapToBitmap(RenderWithTinySkia(parsed.result()), expected,
+                                         "negative_filter_cpu_" + std::string(function),
+                                         editor::tests::PixelmatchIdentityParams());
+    RendererGeode renderer = createRenderer();
+    renderer.draw(parsed.result());
+    EXPECT_THAT(renderer.deviceLost(), testing::IsFalse());
+    editor::tests::CompareBitmapToBitmap(renderer.takeSnapshot(), expected,
+                                         "negative_filter_geode_" + std::string(function),
+                                         editor::tests::PixelmatchIdentityParams());
+  }
+}
+
 /// How a Geode rendering of a scene with a circle is held to tiny-skia's. Scenes without one
 /// match pixel for pixel and use \ref editor::tests::PixelmatchIdentityParams. In scenes with a
 /// circle the two agree exactly on every pixel the circle's edge does not cross. Along the edge,
