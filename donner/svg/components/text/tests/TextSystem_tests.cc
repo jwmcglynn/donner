@@ -1446,7 +1446,7 @@ TEST_F(TextSystemTest, ChildTspanPreservesListZero) {
 
 // --- startsNewChunk flag ---
 
-TEST_F(TextSystemTest, StartsNewChunk) {
+TEST_F(TextSystemTest, ChunkStartsAtAddressableCharacterWithResolvedPosition) {
   auto document = ParseAndCompute(R"(
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
       <text id="t" x="10" y="20"><tspan>Continuation</tspan><tspan x="50">NewChunk</tspan></text>
@@ -1465,7 +1465,7 @@ TEST_F(TextSystemTest, StartsNewChunk) {
   for (const auto& span : computed->spans) {
     startsNewChunk.push_back(span.startsNewChunk);
   }
-  EXPECT_THAT(startsNewChunk, testing::ElementsAre(true, false, true));
+  EXPECT_THAT(startsNewChunk, testing::ElementsAre(false, true, true));
 }
 
 // --- display:none + rotate ---

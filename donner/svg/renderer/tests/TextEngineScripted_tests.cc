@@ -423,7 +423,7 @@ TEST(TextEngineScriptedTest, AllPositioningAttributesUseUnicodeCodepointIndices)
     text.spans.push_back(std::move(span));
     const auto runs = engine.layout(text, MakeTextParams(20));
     const double middleX = middle >= 0x2E80 ? 24 : 22;
-    const double middleY = middle >= 0x2E80 ? 26 : 29;
+    const double middleY = middle >= 0x2E80 ? 32 : 29;
     EXPECT_THAT(runs,
                 ElementsAre(RunGlyphsAre(ElementsAre(
                     AllOf(GlyphXPositionIs(DoubleEq(11)), GlyphYPositionIs(DoubleEq(18)),
@@ -433,6 +433,23 @@ TEST(TextEngineScriptedTest, AllPositioningAttributesUseUnicodeCodepointIndices)
                     AllOf(GlyphXPositionIs(DoubleEq(33)), GlyphYPositionIs(DoubleEq(40)),
                           GlyphRotateDegreesIs(DoubleEq(30)))))));
   }
+}
+
+TEST(TextEngineScriptedTest, AbsoluteCombiningPositionUsesItsOwnRotationOrigin) {
+  Registry registry;
+  FontManager fontManager(registry);
+  TextEngine engine = MakeScriptedEngine(registry, fontManager);
+  components::ComputedTextComponent text;
+  auto span = MakeSpan("A\xCC\x81");
+  span.xList = {Lengthd(10), Lengthd(20)};
+  span.yList = {Lengthd(30), Lengthd(40)};
+  span.rotateList = {0, 45};
+  text.spans.push_back(std::move(span));
+  const auto runs = engine.layout(text, MakeTextParams(20));
+  EXPECT_THAT(runs, ElementsAre(RunGlyphsAre(ElementsAre(
+                        AllOf(GlyphXPositionIs(DoubleEq(10)), GlyphYPositionIs(DoubleEq(30))),
+                        AllOf(GlyphXPositionIs(DoubleEq(20)), GlyphYPositionIs(DoubleEq(40)),
+                              GlyphRotateDegreesIs(DoubleEq(45)))))));
 }
 
 TEST(TextEngineScriptedTest, VerticalLayoutCoversSidewaysUprightSpacingAndRotation) {

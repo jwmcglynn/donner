@@ -835,7 +835,7 @@ TEST(TextEngineTest, ScriptedHorizontalLayoutCoversChunkAndSpanPositioningBranch
                             GlyphRotateDegreesIs(DoubleEq(15.0)))))));
 }
 
-TEST(TextEngineTest, ScriptedSupplementaryCoordinateListsUseLowSurrogateSlot) {
+TEST(TextEngineTest, ScriptedSupplementaryCoordinatesUseCodepointSlot) {
   Registry registry;
   FontManager fontManager(registry);
   TextEngine engine = MakeScriptedEngine(registry, fontManager);
@@ -846,9 +846,9 @@ TEST(TextEngineTest, ScriptedSupplementaryCoordinateListsUseLowSurrogateSlot) {
 
   components::ComputedTextComponent text;
   auto span = MakeSpan(textValue);
-  span.xList = {Lengthd(0.0, Lengthd::Unit::None), std::nullopt, std::nullopt,
+  span.xList = {Lengthd(0.0, Lengthd::Unit::None), std::nullopt,
                 Lengthd(70.0, Lengthd::Unit::None)};
-  span.yList = {Lengthd(0.0, Lengthd::Unit::None), std::nullopt, std::nullopt,
+  span.yList = {Lengthd(0.0, Lengthd::Unit::None), std::nullopt,
                 Lengthd(90.0, Lengthd::Unit::None)};
   text.spans.push_back(std::move(span));
 
@@ -976,7 +976,7 @@ TEST(TextEngineTest, UsesCoverageFallbackForVerticalJapaneseText) {
   EXPECT_LT(positionedBounds.topLeft.y, 42.0);
 }
 
-TEST(TextEngineTest, SupplementaryCharactersConsumeLowSurrogateCoordinates) {
+TEST(TextEngineTest, SupplementaryCodepointPositionsPreserveEmojiClusterShaping) {
 #ifndef DONNER_TEXT_FULL
   GTEST_SKIP() << "Bitmap emoji shaping requires the full text backend.";
 #endif
@@ -994,7 +994,7 @@ TEST(TextEngineTest, SupplementaryCharactersConsumeLowSurrogateCoordinates) {
       "\xF0\x9F\x8C\x88");
   span.xList.push_back(Lengthd(52.0, Lengthd::Unit::None));
   span.yList = {Lengthd(90.0, Lengthd::Unit::None), Lengthd(111.0, Lengthd::Unit::None),
-                Lengthd(130.0, Lengthd::Unit::None), Lengthd(150.0, Lengthd::Unit::None)};
+                Lengthd(130.0, Lengthd::Unit::None)};
   text.spans.push_back(std::move(span));
 
   TextLayoutParams params = MakeTextParams(32.0);
@@ -1003,8 +1003,8 @@ TEST(TextEngineTest, SupplementaryCharactersConsumeLowSurrogateCoordinates) {
 
   EXPECT_THAT(runs,
               ElementsAre(RunGlyphsAre(ElementsAre(GlyphYPositionIs(DoubleNear(90.0, 1.0)),
-                                                   GlyphYPositionIs(DoubleNear(130.0, 1.0)),
-                                                   GlyphYPositionIs(DoubleNear(150.0, 1.0))))));
+                                                   GlyphYPositionIs(DoubleNear(111.0, 1.0)),
+                                                   GlyphYPositionIs(DoubleNear(130.0, 1.0))))));
 }
 
 TEST(TextEngineTest, RotatesCombiningMarkOffsetsWithBaseGlyph) {
