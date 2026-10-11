@@ -105,6 +105,10 @@ class ExternalDepManifestTest(unittest.TestCase):
         dep = g._resolve_external_dep("@zlib//:z")
         self.assertEqual(dep, g.ExternalDepResolution("target", "zlib"))
 
+    def test_maps_mask_color_space_without_filter_configuration(self):
+        dep = g._resolve_external_dep("@tiny-skia-cpp//src/tiny_skia/filter:color_space")
+        self.assertEqual(dep, g.ExternalDepResolution("target", "tiny_skia"))
+
     def test_maps_system_dependency(self):
         dep = g._resolve_external_dep("@harfbuzz//:harfbuzz")
         self.assertEqual(
