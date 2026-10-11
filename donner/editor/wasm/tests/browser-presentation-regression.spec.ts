@@ -2552,7 +2552,11 @@ test("a frame account attach that fails or never settles still returns the captu
 // pending, and the worker result count has not moved for a continuous settle
 // window (so a queued follow-up render cannot land between the check and the
 // press).
-async function waitForPressReadiness(page: Page, message: string): Promise<void> {
+async function waitForPressReadiness(
+  page: Page,
+  message: string,
+  options: { requireThumbnailDrain?: boolean } = {},
+): Promise<void> {
   const settleMs = scaledMs(250);
   const deadline = Date.now() + scaledMs(6_000);
   let lastCompleted = -1;
@@ -2562,9 +2566,13 @@ async function waitForPressReadiness(page: Page, message: string): Promise<void>
       busy: window.__donnerInteractionStats?.workerBusy ?? true,
       completed: window.__donnerWorkerStats?.completedResults || 0,
       pendingClick: window.__donnerInteractionStats?.pendingClick ?? true,
+      thumbnailDrained: window.__donnerSampleThumbnailStats?.drained ?? false,
     }));
     const now = Date.now();
-    if (snapshot.busy || snapshot.pendingClick || snapshot.completed !== lastCompleted) {
+    if (
+      snapshot.busy || snapshot.pendingClick || snapshot.completed !== lastCompleted
+      || (options.requireThumbnailDrain && !snapshot.thumbnailDrained)
+    ) {
       lastCompleted = snapshot.completed;
       stableSince = now;
     } else if (now - stableSince >= settleMs) {
@@ -3848,6 +3856,14 @@ test("Firefox never exposes the checkerboard while dragging a Splash letter", as
     "a selection outline was already inside the letter window before anything was selected",
   ).toBeNull();
 
+  // The thumbnail lane can reopen after the sample picker has closed. Keep that unrelated work
+  // out of the press-to-prewarm bound just as openDonnerSplash keeps the initial carousel work out
+  // of the document-render bound.
+  await expectSampleThumbnailsToSettle(page, {
+    message: "the sample thumbnail lane must drain before the Splash drag press",
+    timeout: scaledMs(20_000),
+  });
+
   // The document has no element of its own since the single-canvas
   // architecture, so the press is placed by mapping the letter's own document
   // coordinates through the editor's published viewport geometry. Deriving the
@@ -3866,7 +3882,7 @@ test("Firefox never exposes the checkerboard while dragging a Splash letter", as
     timeoutMs: scaledMs(4_000),
   });
   phaseTimes.pointerAppliedMs = performance.now() - caseStartedAtMs;
-  await waitForPressReadiness(page, "Splash drag press");
+  await waitForPressReadiness(page, "Splash drag press", { requireThumbnailDrain: true });
   phaseTimes.pressReadyMs = performance.now() - caseStartedAtMs;
   const resultsBeforePress = await page.evaluate(
     () => window.__donnerWorkerStats?.completedResults || 0,
