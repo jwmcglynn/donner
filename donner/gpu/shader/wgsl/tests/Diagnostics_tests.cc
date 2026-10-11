@@ -165,6 +165,147 @@ TEST(Diagnostics, ReportsExactCodeForMinimalSemanticViolations) {
   }
 }
 
+const DiagnosticCase kValidationCases[] = {
+    {"stage_on_struct", "@compute struct S { value: f32, }", ErrorCode::InvalidAttribute},
+    {"binding_on_const", "@binding(0) const value = 1i;", ErrorCode::InvalidAttribute},
+    {"duplicate_stage", "@compute @fragment fn f() {}", ErrorCode::InvalidAttribute},
+    {"duplicate_location", "struct S { @location(0) @location(1) value: f32, }",
+     ErrorCode::InvalidAttribute},
+    {"location_out_of_range", "struct S { @location(16) value: f32, }",
+     ErrorCode::InvalidAttribute},
+    {"duplicate_interpolation", "struct S { @interpolate(flat) @interpolate(flat) value: i32, }",
+     ErrorCode::InvalidAttribute},
+    {"unsupported_interpolation", "struct S { @interpolate(linear) value: f32, }",
+     ErrorCode::UnsupportedConstruct},
+    {"unknown_attribute", "@diagnostic fn f() {}", ErrorCode::UnsupportedConstruct},
+    {"duplicate_workgroup_size", "@compute @workgroup_size(1) @workgroup_size(2) fn f() {}",
+     ErrorCode::InvalidAttribute},
+    {"duplicate_group", "@group(0) @group(0) @binding(0) var t: texture_2d<f32>;",
+     ErrorCode::InvalidAttribute},
+    {"duplicate_binding", "@group(0) @binding(0) @binding(1) var t: texture_2d<f32>;",
+     ErrorCode::InvalidAttribute},
+    {"duplicate_builtin", "struct S { @builtin(position) @builtin(position) value: vec4<f32>, }",
+     ErrorCode::InvalidAttribute},
+    {"unknown_builtin", "struct S { @builtin(unknown) value: f32, }", ErrorCode::InvalidAttribute},
+    {"attribute_unsigned_overflow", "@compute @workgroup_size(4294967296) fn f() {}",
+     ErrorCode::InvalidLiteral},
+    {"attribute_typed_literal", "@compute @workgroup_size(1u) fn f() {}",
+     ErrorCode::InvalidLiteral},
+    {"reserved_struct_name", "struct __private { value: f32, }", ErrorCode::InvalidIdentifier},
+    {"duplicate_struct_member", "struct S { value: f32, value: f32, }", ErrorCode::DuplicateName},
+    {"stage_on_member", "struct S { @compute value: f32, }", ErrorCode::InvalidAttribute},
+    {"reserved_binding_name", "@group(0) @binding(0) var __private: texture_2d<f32>;",
+     ErrorCode::InvalidIdentifier},
+    {"binding_without_attributes", "var t: texture_2d<f32>;", ErrorCode::InvalidAttribute},
+    {"constant_struct_collision", "const S = 1i; struct S { value: f32, }",
+     ErrorCode::DuplicateName},
+    {"binding_struct_collision",
+     "struct S { value: f32, } @group(0) @binding(0) var S: texture_2d<f32>;",
+     ErrorCode::DuplicateName},
+    {"binding_binding_collision",
+     "@group(0) @binding(0) var t: texture_2d<f32>; @group(0) @binding(1) var t: texture_2d<f32>;",
+     ErrorCode::DuplicateName},
+    {"duplicate_parameter", "fn f(value: f32, value: f32) {}", ErrorCode::DuplicateName},
+    {"duplicate_local", "fn f() { let value = 1i; let value = 2i; }", ErrorCode::DuplicateName},
+    {"local_binding_collision",
+     "@group(0) @binding(0) var t: texture_2d<f32>; fn f() { let t = 1i; }",
+     ErrorCode::DuplicateName},
+    {"sampled_texture_integer", "@group(0) @binding(0) var t: texture_2d<i32>;",
+     ErrorCode::UnknownType},
+    {"storage_texture_format", "@group(0) @binding(0) var t: texture_storage_2d<r32float, write>;",
+     ErrorCode::UnknownType},
+    {"storage_texture_access",
+     "@group(0) @binding(0) var t: texture_storage_2d<rgba32float, read>;", ErrorCode::UnknownType},
+    {"vector_vector_element", "fn f(value: vec2<vec2<f32>>) {}", ErrorCode::UnknownType},
+    {"matrix_integer_element", "fn f(value: mat2x2<i32>) {}", ErrorCode::UnknownType},
+    {"fixed_struct_array", "struct S { value: f32, } fn f(value: array<S, 2>) {}",
+     ErrorCode::UnsupportedConstruct},
+    {"runtime_struct_array_member", "struct S { value: f32, } struct T { value: array<S>, }",
+     ErrorCode::UnsupportedConstruct},
+    {"array_non_numeric_element", "fn f(value: array<bool, 2>) {}", ErrorCode::UnknownType},
+    {"array_zero_count", "fn f(value: array<f32, 0>) {}", ErrorCode::UnknownType},
+    {"array_wrong_element", "fn f() { let value = array<f32, 2>(1f, true); }",
+     ErrorCode::TypeMismatch},
+    {"array_wrong_count", "fn f() { let value = array<f32, 2>(1f); }", ErrorCode::InvalidCall},
+    {"runtime_array_construction", "fn f() { let value = array<f32>(); }",
+     ErrorCode::UnsupportedConstruct},
+    {"module_array_construction", "const value = array<f32, 2>(1f, 2f);",
+     ErrorCode::UnsupportedConstruct},
+    {"scalar_index", "fn f(value: f32) { let result = value[0i]; }", ErrorCode::TypeMismatch},
+    {"vector_float_index", "fn f(value: vec2<f32>) { let result = value[0f]; }",
+     ErrorCode::TypeMismatch},
+    {"scalar_member", "fn f(value: f32) { let result = value.x; }", ErrorCode::TypeMismatch},
+    {"convert_boolean", "fn f(value: bool) { let result = f32(value); }", ErrorCode::TypeMismatch},
+    {"convert_vector", "fn f(value: vec2<f32>) { let result = i32(value); }",
+     ErrorCode::TypeMismatch},
+    {"convert_typed_constant", "fn f() { let result = i32(1u); }",
+     ErrorCode::InvalidConstantExpression},
+    {"negate_i32_minimum", "fn f() { let result = -(-2147483647i - 1i); }",
+     ErrorCode::InvalidConstantExpression},
+    {"negate_abstract_minimum", "fn f() { let result = -(-9223372036854775807 - 1); }",
+     ErrorCode::InvalidConstantExpression},
+    {"not_abstract_integer", "fn f() { let result = !1; }", ErrorCode::TypeMismatch},
+    {"divide_i32_minimum", "fn f() { let result = (-2147483647i - 1i) / -1i; }",
+     ErrorCode::InvalidConstantExpression},
+    {"texture_store_helper",
+     "@group(0) @binding(0) var t: texture_storage_2d<rgba32float, write>; "
+     "fn f() { textureStore(t, vec2<i32>(0i), vec4<f32>(0f)); }",
+     ErrorCode::UnsupportedConstruct},
+    {"texture_store_coordinates",
+     "@group(0) @binding(0) var t: texture_storage_2d<rgba32float, write>; "
+     "@compute @workgroup_size(1) fn f() { "
+     "textureStore(t, vec2<f32>(0f), vec4<f32>(0f)); }",
+     ErrorCode::InvalidCall},
+};
+
+class ValidationDiagnostic : public testing::TestWithParam<DiagnosticCase> {};
+
+TEST_P(ValidationDiagnostic, RejectsInvalidModuleWithTheExactDiagnostic) {
+  const DiagnosticCase& item = GetParam();
+  EXPECT_THAT(item.source, RejectedWithCode(item.expected));
+}
+
+INSTANTIATE_TEST_SUITE_P(DeclarationAndExpressionContracts, ValidationDiagnostic,
+                         testing::ValuesIn(kValidationCases),
+                         [](const testing::TestParamInfo<DiagnosticCase>& info) {
+                           return info.param.name;
+                         });
+
+TEST(Diagnostics, RejectsInvalidValueBuiltinArguments) {
+  struct BuiltinCase {
+    const char* name;
+    const char* parameters;
+    const char* call;
+  };
+  const BuiltinCase cases[] = {
+      {"dot_scalar", "a: f32", "dot(a, a)"},
+      {"dot_wrong_width", "a: vec2<f32>, b: vec3<f32>", "dot(a, b)"},
+      {"length_integer", "a: vec2<i32>", "length(a)"},
+      {"normalize_extra_argument", "a: vec2<f32>", "normalize(a, a)"},
+      {"pow_integer", "a: i32", "pow(a, a)"},
+      {"pow_wrong_width", "a: vec2<f32>, b: vec3<f32>", "pow(a, b)"},
+      {"mix_wrong_arity", "a: f32", "mix(a, a)"},
+      {"mix_wrong_weight", "a: vec2<f32>, b: vec3<f32>", "mix(a, a, b)"},
+      {"any_scalar", "a: bool", "any(a)"},
+      {"all_integer", "a: vec2<i32>", "all(a)"},
+      {"clamp_wrong_width", "a: vec2<f32>, b: vec3<f32>", "clamp(a, a, b)"},
+      {"clamp_wrong_arity", "a: f32", "clamp(a, a)"},
+      {"select_integer_condition", "a: f32, b: i32", "select(a, a, b)"},
+      {"select_condition_width", "a: vec2<f32>, b: vec3<bool>", "select(a, a, b)"},
+      {"min_boolean", "a: bool", "min(a, a)"},
+      {"max_wrong_type", "a: f32, b: i32", "max(a, b)"},
+      {"sqrt_integer", "a: i32", "sqrt(a)"},
+      {"sin_wrong_arity", "a: f32", "sin(a, a)"},
+      {"texture_dimensions_value", "a: f32", "textureDimensions(a)"},
+  };
+  for (const auto& item : cases) {
+    SCOPED_TRACE(item.name);
+    const std::string source =
+        std::string("fn f(") + item.parameters + ") { let result = " + item.call + "; }";
+    EXPECT_THAT(source, RejectedWithCode(ErrorCode::InvalidCall));
+  }
+}
+
 // The arena-limit tests below build their sources from the ModuleLimits constants so they keep
 // tracking the limits. Each construct is chosen so the intended limit trips before any other:
 // parentheses add tokens without arena entries, module constants add symbols without statements,
