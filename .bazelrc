@@ -102,8 +102,8 @@ common --//third_party/google_fonts:google_fonts_available=true
 common:latest_llvm --extra_toolchains=@llvm_toolchain_linux_aarch64//:all
 common:latest_llvm --extra_toolchains=@llvm_toolchain_linux_x86_64//:all
 common:latest_llvm --//build_defs:llvm_latest=1
-# Disable V8's JIT in the emscripten Node runtime. bazel-re1's NativeLink
-# sandbox forbids creating executable memory pages (W+X), so V8 aborts with
+# Disable V8's JIT in the emscripten Node runtime. Some remote-execution
+# sandboxes forbid creating executable memory pages (W+X), so V8 aborts with
 # SIGTRAP in `OS::SetPermissions` the moment it tries to baseline-compile
 # anything. `--jitless` keeps Node in the interpreter-only mode, which
 # emscripten's `compiler.mjs` is happy with.
@@ -242,13 +242,18 @@ build:macos --macos_minimum_os=13.3
 # directories (first seen with Xcode 26.5).
 build:re --action_env=DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
 build:re --host_action_env=DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
-# NativeLink's sandbox can SIGKILL Tracy's static client startup before
+# A remote-execution sandbox can SIGKILL Tracy's static client startup before
 # gtest main runs (the test exits 9 with no gtest output). Keep editor
 # profiling enabled by default, but build the no-op wrapper for any action
-# that runs on Bazel RE. Two distinct paths route through the NativeLink
-# worker and BOTH need this: local RE via `--config=re`, and self-hosted CI,
-# which the runner's /etc/bazel.bazelrc routes through RE under `--config=ci`
-# (NOT `--config=re`, so this must be repeated on the ci config below).
+# that runs on Bazel RE. Two distinct paths route through remote execution
+# and BOTH need this: local RE via `--config=re`, and self-hosted CI, whose
+# runner-level system bazelrc routes `--config=ci` through RE (NOT
+# `--config=re`, so this must be repeated on the ci config below).
+#
+# The `re` config here holds only the generic, host-independent settings.
+# The remote executor/cache endpoints, TLS credentials and any per-host
+# priority belong in an untracked rc file: a user `~/.bazelrc`, or the
+# optional `%workspace%/.bazelrc.user` imported at the end of this file.
 common:re --//build_defs:enable_tracy=false
 common:ci --//build_defs:enable_tracy=false
 
@@ -436,10 +441,10 @@ test --test_tag_filters=-ci-remote-gpu
 
 # CI-specific optimizations — use `--config=ci` in GitHub Actions workflows.
 # NOTE: do NOT set --jobs / --local_test_jobs here. Trusted self-hosted Linux
-# runners route `--config=ci` through Bazel RE (bazel-re1) and cap concurrency
-# via /etc/bazel.bazelrc (--jobs=64). Setting HOST_CPUS here is read *after* the
-# system bazelrc and would override that cap, flooding the 96-slot RE worker and
-# (on cancel) leaking scheduler worker slots — the cause of the 2026-06-30 hang.
+# runners route `--config=ci` through Bazel RE and cap concurrency in their
+# system bazelrc. Setting HOST_CPUS here is read *after* the system bazelrc and
+# would override that cap, oversubscribing the RE workers and (on cancel)
+# leaking scheduler worker slots, the cause of a past CI hang.
 build:ci --verbose_failures
 build:ci --repository_cache=~/.cache/bazel-repo
 # Bazel-diff's `affected targets` list can include targets whose
@@ -457,11 +462,10 @@ build:ci --skip_incompatible_explicit_targets
 # floor of the server-supported range (0-2147483647; the backend rejects
 # negative values), while interactive development clients set higher values in
 # their user bazelrc, so an interactive build always wins queue position over
-# queued CI work. NativeLink's scheduler orders its queue by REAPI
-# ExecutionPolicy.priority; a HIGHER integer is scheduled sooner (verified in
-# nativelink v1.5.2 AwaitedActionSortKey: priority is the primary sort key,
-# insert order the tiebreaker). The explicit `--remote_execution_priority=0`
-# for CI lives in the CI runner's system bazelrc `build:ci` stanza, next to
+# queued CI work. The remote scheduler orders its queue by REAPI
+# ExecutionPolicy.priority; a HIGHER integer is scheduled sooner (priority is
+# the primary sort key, insert order the tiebreaker). The explicit
+# `--remote_execution_priority=0` for CI lives in the CI runner's system bazelrc `build:ci` stanza, next to
 # the remote-executor endpoint it applies to; it is deliberately NOT repeated
 # here, because the same option expanding from `--config=ci` in two rc files
 # fires a duplicate-expansion warning on every CI invocation. This is queue
@@ -485,3 +489,8 @@ run --test_sharding_strategy=disabled
 # file is absent (the default, and on every self-hosted lane, which never runs
 # that action), so builds are byte-for-byte unchanged unless the secret exists.
 try-import %workspace%/.buildbuddy.bazelrc
+
+# Optional per-developer overrides, such as remote-execution endpoints and TLS
+# credentials for `--config=re`. The file is git-ignored and absent by default,
+# so try-import is a silent no-op. Keep it last so it can override the above.
+try-import %workspace%/.bazelrc.user
