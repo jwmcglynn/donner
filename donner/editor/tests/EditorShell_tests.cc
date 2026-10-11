@@ -2238,6 +2238,74 @@ TEST(EditorShellTest, SettledEmptyDocumentDoesNotBlockFontPreviews) {
   EditorShellTestAccess::AdvanceFontPreviewGeneration(shell);
   EXPECT_GT(EditorShellTestAccess::RequestedAuxiliaryPreviewCount(shell), requestedBefore);
 }
+
+TEST(EditorShellTest, NewShellInvalidatesPriorProducerPresentationAck) {
+  gui::EditorWindow window(gui::EditorWindowOptions{
+      .title = "Reused-window presentation producer",
+      .initialWidth = 1600,
+      .initialHeight = 900,
+      .visible = false,
+  });
+  if (!window.valid()) {
+    GTEST_SKIP() << "WGPU hidden editor window is unavailable on this host";
+  }
+  std::uint64_t completedSerial = std::numeric_limits<std::uint64_t>::max();
+  window.setPresentationCompletionProbeForTesting([&] { return completedSerial; });
+
+  {
+    EditorShell first(window, OptionsWithSource(kInitialSvg));
+    ASSERT_TRUE(first.valid());
+    bool acknowledged = false;
+    for (int attempt = 0; attempt < 200; ++attempt) {
+      first.prepareFrame();
+      RunShellFrame(window, first);
+      if (EditorShellTestAccess::ForegroundPresentationAcknowledged(first) &&
+          window.lastFullyPresentedDocumentFrame().has_value()) {
+        acknowledged = true;
+        break;
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    ASSERT_TRUE(acknowledged);
+  }
+  ASSERT_TRUE(window.lastFullyPresentedDocumentFrame().has_value());
+
+  completedSerial = 0;
+  for (int frame = 0; frame < 3; ++frame) {
+    window.beginFrame();
+    window.endFrame();
+  }
+
+  EditorShell second(window, OptionsWithSource(kInitialSvg));
+  ASSERT_TRUE(second.valid());
+  EXPECT_FALSE(window.lastFullyPresentedDocumentFrame().has_value());
+  EditorShellTestAccess::RequestFontPreviews(second, {"Bebas Neue"});
+  const std::size_t layerRendersBefore = EditorShellTestAccess::RenderedLayerThumbnailCount(second);
+  const std::size_t previewRequestsBefore =
+      EditorShellTestAccess::RequestedAuxiliaryPreviewCount(second);
+
+  bool adopted = false;
+  for (int attempt = 0; attempt < 200; ++attempt) {
+    second.prepareFrame();
+    RunShellFrame(window, second);
+    if (EditorShellTestAccess::DisplayedDocVersion(second) ==
+            EditorShellTestAccess::App(second).document().currentFrameVersion() &&
+        EditorShellTestAccess::Coordinator(second).framePresentation() != nullptr) {
+      adopted = true;
+      break;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  ASSERT_TRUE(adopted);
+
+  window.beginFrame();
+  EditorShellTestAccess::RenderSidebars(second);
+  EditorShellTestAccess::AdvanceFontPreviewGeneration(second);
+  window.endFrame();
+  EXPECT_FALSE(EditorShellTestAccess::ForegroundPresentationAcknowledged(second));
+  EXPECT_EQ(EditorShellTestAccess::RenderedLayerThumbnailCount(second), layerRendersBefore);
+  EXPECT_EQ(EditorShellTestAccess::RequestedAuxiliaryPreviewCount(second), previewRequestsBefore);
+}
 #endif
 
 // A render that produces nothing to present is retried after each delay without any input: the
