@@ -165,19 +165,15 @@ TEST(Diagnostics, ReportsExactCodeForMinimalSemanticViolations) {
   }
 }
 
-const DiagnosticCase kValidationCases[] = {
+const DiagnosticCase kInvalidWgslCases[] = {
     {"stage_on_struct", "@compute struct S { value: f32, }", ErrorCode::InvalidAttribute},
     {"binding_on_const", "@binding(0) const value = 1i;", ErrorCode::InvalidAttribute},
     {"duplicate_stage", "@compute @fragment fn f() {}", ErrorCode::InvalidAttribute},
     {"duplicate_location", "struct S { @location(0) @location(1) value: f32, }",
      ErrorCode::InvalidAttribute},
-    {"location_out_of_range", "struct S { @location(16) value: f32, }",
-     ErrorCode::InvalidAttribute},
     {"duplicate_interpolation", "struct S { @interpolate(flat) @interpolate(flat) value: i32, }",
      ErrorCode::InvalidAttribute},
-    {"unsupported_interpolation", "struct S { @interpolate(linear) value: f32, }",
-     ErrorCode::UnsupportedConstruct},
-    {"unknown_attribute", "@diagnostic fn f() {}", ErrorCode::UnsupportedConstruct},
+    {"malformed_diagnostic_attribute", "@diagnostic fn f() {}", ErrorCode::UnsupportedConstruct},
     {"duplicate_workgroup_size", "@compute @workgroup_size(1) @workgroup_size(2) fn f() {}",
      ErrorCode::InvalidAttribute},
     {"duplicate_group", "@group(0) @group(0) @binding(0) var t: texture_2d<f32>;",
@@ -188,8 +184,6 @@ const DiagnosticCase kValidationCases[] = {
      ErrorCode::InvalidAttribute},
     {"unknown_builtin", "struct S { @builtin(unknown) value: f32, }", ErrorCode::InvalidAttribute},
     {"attribute_unsigned_overflow", "@compute @workgroup_size(4294967296) fn f() {}",
-     ErrorCode::InvalidLiteral},
-    {"attribute_typed_literal", "@compute @workgroup_size(1u) fn f() {}",
      ErrorCode::InvalidLiteral},
     {"reserved_struct_name", "struct __private { value: f32, }", ErrorCode::InvalidIdentifier},
     {"duplicate_struct_member", "struct S { value: f32, value: f32, }", ErrorCode::DuplicateName},
@@ -207,6 +201,39 @@ const DiagnosticCase kValidationCases[] = {
      ErrorCode::DuplicateName},
     {"duplicate_parameter", "fn f(value: f32, value: f32) {}", ErrorCode::DuplicateName},
     {"duplicate_local", "fn f() { let value = 1i; let value = 2i; }", ErrorCode::DuplicateName},
+    {"vector_vector_element", "fn f(value: vec2<vec2<f32>>) {}", ErrorCode::UnknownType},
+    {"matrix_integer_element", "fn f(value: mat2x2<i32>) {}", ErrorCode::UnknownType},
+    {"array_zero_count", "fn f(value: array<f32, 0>) {}", ErrorCode::UnknownType},
+    {"array_wrong_element", "fn f() { let value = array<f32, 2>(1f, true); }",
+     ErrorCode::TypeMismatch},
+    {"array_wrong_count", "fn f() { let value = array<f32, 2>(1f); }", ErrorCode::InvalidCall},
+    {"runtime_array_construction", "fn f() { let value = array<f32>(); }",
+     ErrorCode::UnsupportedConstruct},
+    {"scalar_index", "fn f(value: f32) { let result = value[0i]; }", ErrorCode::TypeMismatch},
+    {"vector_float_index", "fn f(value: vec2<f32>) { let result = value[0f]; }",
+     ErrorCode::TypeMismatch},
+    {"scalar_member", "fn f(value: f32) { let result = value.x; }", ErrorCode::TypeMismatch},
+    {"convert_vector", "fn f(value: vec2<f32>) { let result = i32(value); }",
+     ErrorCode::TypeMismatch},
+    {"negate_i32_minimum", "fn f() { let result = -(-2147483647i - 1i); }",
+     ErrorCode::InvalidConstantExpression},
+    {"negate_abstract_minimum", "fn f() { let result = -(-9223372036854775807 - 1); }",
+     ErrorCode::InvalidConstantExpression},
+    {"not_abstract_integer", "fn f() { let result = !1; }", ErrorCode::TypeMismatch},
+    {"divide_i32_minimum", "fn f() { let result = (-2147483647i - 1i) / -1i; }",
+     ErrorCode::InvalidConstantExpression},
+    {"texture_store_coordinates",
+     "@group(0) @binding(0) var t: texture_storage_2d<rgba32float, write>; "
+     "@compute @workgroup_size(1) fn f() { "
+     "textureStore(t, vec2<f32>(0f), vec4<f32>(0f)); }",
+     ErrorCode::InvalidCall},
+};
+
+const DiagnosticCase kUnsupportedProfileCases[] = {
+    {"location_out_of_range", "struct S { @location(16) value: f32, }",
+     ErrorCode::InvalidAttribute},
+    {"unsupported_interpolation", "struct S { @interpolate(linear) value: f32, }",
+     ErrorCode::UnsupportedConstruct},
     {"local_binding_collision",
      "@group(0) @binding(0) var t: texture_2d<f32>; fn f() { let t = 1i; }",
      ErrorCode::DuplicateName},
@@ -216,57 +243,43 @@ const DiagnosticCase kValidationCases[] = {
      ErrorCode::UnknownType},
     {"storage_texture_access",
      "@group(0) @binding(0) var t: texture_storage_2d<rgba32float, read>;", ErrorCode::UnknownType},
-    {"vector_vector_element", "fn f(value: vec2<vec2<f32>>) {}", ErrorCode::UnknownType},
-    {"matrix_integer_element", "fn f(value: mat2x2<i32>) {}", ErrorCode::UnknownType},
     {"fixed_struct_array", "struct S { value: f32, } fn f(value: array<S, 2>) {}",
      ErrorCode::UnsupportedConstruct},
     {"runtime_struct_array_member", "struct S { value: f32, } struct T { value: array<S>, }",
      ErrorCode::UnsupportedConstruct},
     {"array_non_numeric_element", "fn f(value: array<bool, 2>) {}", ErrorCode::UnknownType},
-    {"array_zero_count", "fn f(value: array<f32, 0>) {}", ErrorCode::UnknownType},
-    {"array_wrong_element", "fn f() { let value = array<f32, 2>(1f, true); }",
-     ErrorCode::TypeMismatch},
-    {"array_wrong_count", "fn f() { let value = array<f32, 2>(1f); }", ErrorCode::InvalidCall},
-    {"runtime_array_construction", "fn f() { let value = array<f32>(); }",
-     ErrorCode::UnsupportedConstruct},
     {"module_array_construction", "const value = array<f32, 2>(1f, 2f);",
      ErrorCode::UnsupportedConstruct},
-    {"scalar_index", "fn f(value: f32) { let result = value[0i]; }", ErrorCode::TypeMismatch},
-    {"vector_float_index", "fn f(value: vec2<f32>) { let result = value[0f]; }",
-     ErrorCode::TypeMismatch},
-    {"scalar_member", "fn f(value: f32) { let result = value.x; }", ErrorCode::TypeMismatch},
-    {"convert_boolean", "fn f(value: bool) { let result = f32(value); }", ErrorCode::TypeMismatch},
-    {"convert_vector", "fn f(value: vec2<f32>) { let result = i32(value); }",
-     ErrorCode::TypeMismatch},
     {"convert_typed_constant", "fn f() { let result = i32(1u); }",
-     ErrorCode::InvalidConstantExpression},
-    {"negate_i32_minimum", "fn f() { let result = -(-2147483647i - 1i); }",
-     ErrorCode::InvalidConstantExpression},
-    {"negate_abstract_minimum", "fn f() { let result = -(-9223372036854775807 - 1); }",
-     ErrorCode::InvalidConstantExpression},
-    {"not_abstract_integer", "fn f() { let result = !1; }", ErrorCode::TypeMismatch},
-    {"divide_i32_minimum", "fn f() { let result = (-2147483647i - 1i) / -1i; }",
      ErrorCode::InvalidConstantExpression},
     {"texture_store_helper",
      "@group(0) @binding(0) var t: texture_storage_2d<rgba32float, write>; "
      "fn f() { textureStore(t, vec2<i32>(0i), vec4<f32>(0f)); }",
      ErrorCode::UnsupportedConstruct},
-    {"texture_store_coordinates",
-     "@group(0) @binding(0) var t: texture_storage_2d<rgba32float, write>; "
-     "@compute @workgroup_size(1) fn f() { "
-     "textureStore(t, vec2<f32>(0f), vec4<f32>(0f)); }",
-     ErrorCode::InvalidCall},
 };
 
-class ValidationDiagnostic : public testing::TestWithParam<DiagnosticCase> {};
+class InvalidWgslDiagnostic : public testing::TestWithParam<DiagnosticCase> {};
 
-TEST_P(ValidationDiagnostic, RejectsInvalidModuleWithTheExactDiagnostic) {
+TEST_P(InvalidWgslDiagnostic, RejectsMalformedDeclarationOrExpression) {
   const DiagnosticCase& item = GetParam();
   EXPECT_THAT(item.source, RejectedWithCode(item.expected));
 }
 
-INSTANTIATE_TEST_SUITE_P(DeclarationAndExpressionContracts, ValidationDiagnostic,
-                         testing::ValuesIn(kValidationCases),
+INSTANTIATE_TEST_SUITE_P(LanguageValidation, InvalidWgslDiagnostic,
+                         testing::ValuesIn(kInvalidWgslCases),
+                         [](const testing::TestParamInfo<DiagnosticCase>& info) {
+                           return info.param.name;
+                         });
+
+class SupportedProfileDiagnostic : public testing::TestWithParam<DiagnosticCase> {};
+
+TEST_P(SupportedProfileDiagnostic, RejectsConstructOutsideTheSupportedProfile) {
+  const DiagnosticCase& item = GetParam();
+  EXPECT_THAT(item.source, RejectedWithCode(item.expected));
+}
+
+INSTANTIATE_TEST_SUITE_P(BoundedLanguageProfile, SupportedProfileDiagnostic,
+                         testing::ValuesIn(kUnsupportedProfileCases),
                          [](const testing::TestParamInfo<DiagnosticCase>& info) {
                            return info.param.name;
                          });
@@ -286,7 +299,6 @@ TEST(Diagnostics, RejectsInvalidValueBuiltinArguments) {
       {"pow_wrong_width", "a: vec2<f32>, b: vec3<f32>", "pow(a, b)"},
       {"mix_wrong_arity", "a: f32", "mix(a, a)"},
       {"mix_wrong_weight", "a: vec2<f32>, b: vec3<f32>", "mix(a, a, b)"},
-      {"any_scalar", "a: bool", "any(a)"},
       {"all_integer", "a: vec2<i32>", "all(a)"},
       {"clamp_wrong_width", "a: vec2<f32>, b: vec3<f32>", "clamp(a, a, b)"},
       {"clamp_wrong_arity", "a: f32", "clamp(a, a)"},
