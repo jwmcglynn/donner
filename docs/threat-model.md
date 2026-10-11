@@ -2,7 +2,8 @@
 
 This document describes the security boundaries for Donner v0.8. It is for application developers
 embedding Donner, contributors changing parsers or renderers, and operators packaging the editor.
-Donner v0.8 is the only supported release line; see [`SECURITY.md`](../SECURITY.md).
+Donner v0.8 is the only supported release line; see
+[`SECURITY.md`](https://github.com/jwmcglynn/donner/blob/main/SECURITY.md).
 
 ## Security goals {#ThreatModelGoals}
 
