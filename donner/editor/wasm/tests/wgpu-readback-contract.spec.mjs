@@ -459,6 +459,83 @@ test("formatted worker diagnostics remain valid JavaScript", () => {
   }
 });
 
+test("worker poll timestamps retain their producer clock across delayed proxy delivery", () => {
+  const publisher = renderCoordinatorSource.match(
+    /void PublishWorkerTimingStats\([\s\S]*?\n\}/,
+  )[0];
+  const body = publisher.match(/MAIN_THREAD_ASYNC_EM_ASM\(\s*\{([\s\S]*?)\n\s*\},/)[1];
+  const publish = new Function(
+    "window",
+    "$0",
+    "$1",
+    "$2",
+    "HEAPF64",
+    "_free",
+    "UTF8ToString",
+    "performance",
+    body,
+  );
+  const count = Number(/kValueCount = (\d+)/.exec(publisher)[1]);
+  for (const arrivalMs of [900, 200]) {
+    const heap = new Float64Array(Math.max(count, 41));
+    heap[40] = 1200;
+    const window = {};
+    publish(window, 0, 0, count, heap, () => {}, () => "none", {
+      timeOrigin: 1000,
+      now: () => arrivalMs,
+    });
+    assert.equal(
+      window.__donnerWorkerStats.publishedAtMs,
+      200,
+      "the UI poll timestamp must exclude its asynchronous publication delay",
+    );
+    assert.equal(window.__donnerWorkerStats.publicationDelayMs, arrivalMs - 200);
+  }
+});
+
+test("frame completion timestamps exclude proxy delay and retain successful admission", () => {
+  const publisher = workerBridgeSource.match(/void RecordFrameSample\([\s\S]*?\n\}/)[0];
+  const body = publisher.match(/MAIN_THREAD_ASYNC_EM_ASM\(\s*\{([\s\S]*?)\n\s*\},/)[1];
+  const publish = new Function("window", "performance", "$0", "$1", "$2", "$3", "$4", body);
+  for (const arrivalMs of [1000, 215]) {
+    const window = {
+      __donnerFrameLoopStats: { uiFrameMsSamples: [] },
+      __donnerWorkerStats: { acceptedForPresentation: false },
+      __donnerHostFrameTiming: { lastSurfacePresented: true },
+    };
+    const clock = { timeOrigin: 1000, now: () => arrivalMs };
+    publish(window, clock, 1, 15, 1, 4096, 1215);
+    assert.equal(
+      window.__donnerWorkerStats.presentedAtMs,
+      undefined,
+      "an unaccepted result cannot acquire a presentation timestamp",
+    );
+    window.__donnerWorkerStats.acceptedForPresentation = true;
+    window.__donnerHostFrameTiming.lastSurfacePresented = false;
+    publish(window, clock, 1, 15, 1, 4096, 1215);
+    assert.equal(
+      window.__donnerWorkerStats.presentedAtMs,
+      undefined,
+      "a refused surface cannot acquire a presentation timestamp",
+    );
+    window.__donnerHostFrameTiming.lastSurfacePresented = true;
+    publish(window, clock, 1, 15, 1, 4096, 1215);
+    assert.equal(window.__donnerFrameLoopStats.lastFrameAtMs, 215);
+    assert.equal(
+      window.__donnerWorkerStats.presentedAtMs,
+      215,
+      "a frame timestamp must reflect completion, not its diagnostic arrival",
+    );
+    assert.equal(window.__donnerWorkerStats.presentationPublicationDelayMs, arrivalMs - 215);
+    publish(window, clock, 1, 25, 1, 4096, 1230);
+    assert.equal(
+      window.__donnerWorkerStats.presentedAtMs,
+      215,
+      "later frames cannot replace the consumed result's first presentation timestamp",
+    );
+  }
+});
+
 test("worker acceptance requires the fresh render identity and no old presentation timestamp", () => {
   const timingPublisher = renderCoordinatorSource.match(
     /void PublishWorkerTimingStats\([\s\S]*?\n\}/,
