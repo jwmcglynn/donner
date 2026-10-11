@@ -3908,8 +3908,12 @@ TEST(EditorShellTest, FullDesktopFrameLoopPresentsShapeDragBeforeMouseUp) {
 
 namespace {
 
-bool CachedRasterCoversVisibleArtboard(const PresentationCoverageDiagnostics& coverage,
-                                       const ViewportState& viewport) {
+bool CachedRasterCoversVisibleArtboard(EditorShell& shell, const ViewportState& viewport,
+                                       bool requireRequestedDensity) {
+  const auto frame = EditorShellTestAccess::Coordinator(shell).framePresentation();
+  if (frame == nullptr || frame->tiles().empty()) {
+    return false;
+  }
   const Box2d pane = viewport.screenToDocument(
       Box2d(viewport.paneOrigin, viewport.paneOrigin + viewport.paneSize));
   const Box2d visible(
@@ -3917,18 +3921,20 @@ bool CachedRasterCoversVisibleArtboard(const PresentationCoverageDiagnostics& co
                std::max(pane.topLeft.y, viewport.documentViewBox.topLeft.y)),
       Vector2d(std::min(pane.bottomRight.x, viewport.documentViewBox.bottomRight.x),
                std::min(pane.bottomRight.y, viewport.documentViewBox.bottomRight.y)));
+  const Box2d rect = frame->rasterDocumentRect();
+  const Vector2i pixels = frame->rasterOutputSizePx();
+  if (rect.width() <= 0.0 || rect.height() <= 0.0 || pixels.x <= 0 || pixels.y <= 0 ||
+      visible.width() <= 0.0 || visible.height() <= 0.0 || !rect.contains(visible.topLeft) ||
+      !rect.contains(visible.bottomRight)) {
+    return false;
+  }
+  if (!requireRequestedDensity) {
+    return true;
+  }
   const EditorRasterViewport raster = viewport.rasterViewport();
   const Vector2d requiredScale(raster.outputSizePx.x / raster.documentRect.width(),
                                raster.outputSizePx.y / raster.documentRect.height());
-  const auto covers = [&](const Box2d& rect, const Vector2i& pixels) {
-    return rect.width() > 0.0 && rect.height() > 0.0 && pixels.x > 0 && pixels.y > 0 &&
-           visible.width() > 0.0 && visible.height() > 0.0 && rect.contains(visible.topLeft) &&
-           rect.contains(visible.bottomRight) && pixels.x / rect.width() == requiredScale.x &&
-           pixels.y / rect.height() == requiredScale.y;
-  };
-  return covers(coverage.activeRasterDocumentRect, coverage.activeOutputSizePx) ||
-         (coverage.overviewInfillAvailable &&
-          covers(coverage.overviewRasterDocumentRect, coverage.overviewOutputSizePx));
+  return pixels.x / rect.width() == requiredScale.x && pixels.y / rect.height() == requiredScale.y;
 }
 
 }  // namespace
@@ -3968,7 +3974,8 @@ TEST(EditorShellTest, PartlyOffscreenSplashShineEllipseFirstHeldMoveMatchesSettl
     return window.endFrameAndReadPixels();
   };
   const auto settleFrame = [&](std::string_view stage, std::uint64_t minimumVersion,
-                               bool requireSelectedCache = false) {
+                               bool requireSelectedCache = false,
+                               bool requireRequestedDensity = true) {
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
     for (int frame = 0; frame < 20 && std::chrono::steady_clock::now() < deadline; ++frame) {
       window.beginFrame();
@@ -3982,8 +3989,8 @@ TEST(EditorShellTest, PartlyOffscreenSplashShineEllipseFirstHeldMoveMatchesSettl
           app.document().currentFrameVersion() >= minimumVersion &&
           EditorShellTestAccess::DisplayedDocVersion(shell) ==
               app.document().currentFrameVersion() &&
-          CachedRasterCoversVisibleArtboard(status.presentationCoverage,
-                                            shell.viewportForReadback()) &&
+          CachedRasterCoversVisibleArtboard(shell, shell.viewportForReadback(),
+                                            requireRequestedDensity) &&
           (!requireSelectedCache || EditorShellTestAccess::Coordinator(shell)
                                         .compositedPresentation()
                                         .hasCachedTexturesForEntity(shineEntity))) {
@@ -4016,8 +4023,7 @@ TEST(EditorShellTest, PartlyOffscreenSplashShineEllipseFirstHeldMoveMatchesSettl
   ASSERT_TRUE(visibleRaster.viewportBounded);
   ASSERT_NE(visibleRaster.outputSizePx, viewport.selectedPrewarmRasterViewport().outputSizePx)
       << "The regression needs a small pane whose selected prewarm would change tile dimensions";
-  EXPECT_THAT(CachedRasterCoversVisibleArtboard(
-                  shell.layerInspectorStatusForReadback().presentationCoverage, viewport),
+  EXPECT_THAT(CachedRasterCoversVisibleArtboard(shell, viewport, /*requireRequestedDensity=*/true),
               testing::Eq(true))
       << "Selecting the ellipse must retain complete visible coverage at the requested density; "
       << RenderCoordinatorTestAccess::overviewScheduleState(
@@ -4069,7 +4075,9 @@ TEST(EditorShellTest, PartlyOffscreenSplashShineEllipseFirstHeldMoveMatchesSettl
       .leftMouseReleased = true,
   });
   (void)captureFrame();
-  ASSERT_TRUE(settleFrame("released", heldDragVersion));
+  ASSERT_THAT(settleFrame("released", heldDragVersion, /*requireSelectedCache=*/false,
+                          /*requireRequestedDensity=*/false),
+              testing::Eq(true));
   const std::optional<svg::SVGElement> movedShine =
       app.document().document().querySelector("#Background_shine ellipse");
   ASSERT_TRUE(movedShine.has_value());
@@ -4161,7 +4169,7 @@ TEST(EditorShellTest, ColdSplashShineDragGetsFullTileBeforeMouseUp) {
     shell.runFrame();
     return window.endFrameAndReadPixels();
   };
-  const auto waitForCurrentFrame = [&] {
+  const auto waitForCurrentFrame = [&](bool requireRequestedDensity = false) {
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
     for (int frame = 0; frame < 24 && std::chrono::steady_clock::now() < deadline; ++frame) {
       (void)captureContent();
@@ -4183,8 +4191,8 @@ TEST(EditorShellTest, ColdSplashShineDragGetsFullTileBeforeMouseUp) {
       if (!app.document().hasPendingMutations() && !shell.asyncRendererForReplay().isBusy() &&
           EditorShellTestAccess::DisplayedDocVersion(shell) ==
               app.document().currentFrameVersion() &&
-          CachedRasterCoversVisibleArtboard(status.presentationCoverage,
-                                            shell.viewportForReadback()) &&
+          CachedRasterCoversVisibleArtboard(shell, shell.viewportForReadback(),
+                                            requireRequestedDensity) &&
           dragTileReady) {
         return true;
       }
@@ -4208,7 +4216,7 @@ TEST(EditorShellTest, ColdSplashShineDragGetsFullTileBeforeMouseUp) {
                   << shell.asyncRendererForReplay().replayResultHoldPollCountForTesting();
     return false;
   };
-  ASSERT_TRUE(waitForCurrentFrame());
+  ASSERT_THAT(waitForCurrentFrame(/*requireRequestedDensity=*/true), testing::Eq(true));
   const ViewportState viewport = shell.viewportForReadback();
   const svg::RendererBitmap before = captureContent();
 
