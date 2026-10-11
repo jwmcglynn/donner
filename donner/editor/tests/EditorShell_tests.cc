@@ -2449,7 +2449,9 @@ TEST(EditorShellTest, NothingToPresentRetriesPostFromIdleFrames) {
     RenderCoordinatorTestAccess::advanceFakeSchedulingClock(delay);
     ++expected;
     EXPECT_EQ(runIdleFrames(10), expected)
-        << "the retry due after " << delay.count() << " ms must post from an idle frame";
+        << "the retry due after " << delay.count() << " ms must post from an idle frame; "
+        << RenderCoordinatorTestAccess::overviewScheduleState(
+               coordinator, EditorShellTestAccess::App(shell), shell.viewportForReadback());
   }
   RenderCoordinatorTestAccess::advanceFakeSchedulingClock(std::chrono::minutes(1));
   EXPECT_EQ(runIdleFrames(10), expected) << "after the last retry, idle frames post nothing";
@@ -3974,7 +3976,9 @@ TEST(EditorShellTest, PartlyOffscreenSplashShineEllipseFirstHeldMoveMatchesSettl
       << "The regression needs a small pane whose selected prewarm would change tile dimensions";
   EXPECT_EQ(shell.layerInspectorStatusForReadback().presentationCoverage.activeOutputSizePx,
             visibleRaster.outputSizePx)
-      << "Selecting the ellipse must preserve the complete visible static tile cache";
+      << "Selecting the ellipse must preserve the complete visible static tile cache; "
+      << RenderCoordinatorTestAccess::overviewScheduleState(
+             EditorShellTestAccess::Coordinator(shell), app, shell.viewportForReadback());
   const std::optional<Box2d> originalChromeBounds =
       EditorShellTestAccess::SelectionChromeFirstBoundsDoc(shell);
   ASSERT_TRUE(originalChromeBounds.has_value());
@@ -4129,6 +4133,23 @@ TEST(EditorShellTest, ColdSplashShineDragGetsFullTileBeforeMouseUp) {
         return true;
       }
     }
+    const LayerInspectorStatusReadback status = shell.layerInspectorStatusForReadback();
+    ADD_FAILURE() << "Cold shine frame did not reach its held-pointer cache: "
+                  << RenderCoordinatorTestAccess::overviewScheduleState(
+                         EditorShellTestAccess::Coordinator(shell), app,
+                         shell.viewportForReadback())
+                  << " pendingMutations=" << app.document().hasPendingMutations()
+                  << " dragging=" << status.selectionDragging
+                  << " activePreview=" << status.activeDragPreview.has_value()
+                  << " tiles=" << status.tiles.size() << " dragTiles="
+                  << std::ranges::count_if(status.tiles,
+                                           [](const LayerInspectorStatusReadback::Tile& tile) {
+                                             return tile.isDragTarget;
+                                           })
+                  << " renderInFlight="
+                  << shell.asyncRendererForReplay().hasRenderInFlightForTesting()
+                  << " heldResultPolls="
+                  << shell.asyncRendererForReplay().replayResultHoldPollCountForTesting();
     return false;
   };
   ASSERT_TRUE(waitForCurrentFrame());
