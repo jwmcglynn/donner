@@ -2625,12 +2625,32 @@ TEST(EditorShellTest, LayerInspectorReadbackIncludesSelectedStyleAndPathDiagnost
   ASSERT_TRUE(shell.valid());
   auto target = EditorShellTestAccess::App(shell).document().document().querySelector("#target");
   ASSERT_TRUE(target.has_value());
+  RenderCoordinator& coordinator = EditorShellTestAccess::Coordinator(shell);
+  RenderCoordinatorTestAccess::useFakeSchedulingClock(coordinator);
   EditorShellTestAccess::App(shell).setSelection(*target);
   (void)target->getComputedStyle();
   RunFramesUntilDisplayedSelectionBounds(window, shell);
-  ASSERT_TRUE(shell.asyncRendererForReplay().waitUntilNoRenderInFlightForTesting(
-      std::chrono::steady_clock::now() + std::chrono::seconds(2)));
-  RunShellFrame(window, shell);
+  // Selection geometry can precede a deferred canvas commit that invalidates rendering instances.
+  RenderCoordinatorTestAccess::makeCanvasCommitDue(coordinator);
+  RenderCoordinatorTestAccess::makeRasterViewportSettled(coordinator);
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+  bool selectedInstanceReady = false;
+  for (int frame = 0; frame < 20 && std::chrono::steady_clock::now() < deadline; ++frame) {
+    RunShellFrame(window, shell);
+    ASSERT_TRUE(coordinator.asyncRenderer().waitUntilNoRenderInFlightForTesting(deadline))
+        << "frame=" << frame << " rendererBusy=" << coordinator.asyncRenderer().isBusy();
+    RunShellFrame(window, shell);
+    if (!coordinator.asyncRenderer().isBusy() &&
+        EditorShellTestAccess::DisplayedDocVersion(shell) ==
+            EditorShellTestAccess::App(shell).document().currentFrameVersion() &&
+        target->resolvedFillPaint().has_value()) {
+      selectedInstanceReady = true;
+      break;
+    }
+  }
+  ASSERT_THAT(selectedInstanceReady, testing::IsTrue());
+  EXPECT_THAT(EditorShellTestAccess::App(shell).document().document().canvasSize(),
+              testing::Eq(shell.viewportForReadback().rasterViewport().semanticCanvasSizePx));
 
   const LayerInspectorStatusReadback status = shell.layerInspectorStatusForReadback();
 
