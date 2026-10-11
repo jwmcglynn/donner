@@ -69,6 +69,7 @@ void AsyncSVGDocument::publishParseDiagnostics(std::vector<ParseDiagnostic> warn
 void AsyncSVGDocument::setDocument(svg::SVGDocument document) {
   document_ = std::move(document);
   queue_.clear();
+  unmirroredSourceDeltas_.clear();
   publishParseDiagnostics({}, std::nullopt);
   pendingStructuralRemap_.clear();
   frameVersion_.fetch_add(1, std::memory_order_release);
@@ -110,6 +111,7 @@ AsyncSVGDocument::ReplaceKind AsyncSVGDocument::setDocumentMaybeStructural(
   // after.
   document_ = std::move(newDocument);
   queue_.clear();
+  unmirroredSourceDeltas_.clear();
   publishParseDiagnostics({}, std::nullopt);
   frameVersion_.fetch_add(1, std::memory_order_release);
   documentGeneration_.fetch_add(1, std::memory_order_release);
@@ -166,6 +168,9 @@ bool AsyncSVGDocument::flushFrame() {
   if (!lastFlushResult_.onlyTransformCommands) {
     ++nonTransformRevision_;
   }
+  unmirroredSourceDeltas_.insert(unmirroredSourceDeltas_.end(),
+                                 lastFlushResult_.sourceDeltas.begin(),
+                                 lastFlushResult_.sourceDeltas.end());
   frameVersion_.fetch_add(1, std::memory_order_release);
   return true;
 }

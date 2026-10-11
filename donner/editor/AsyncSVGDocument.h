@@ -16,6 +16,7 @@
 #include <optional>
 #include <string_view>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 #include "donner/base/EcsRegistry.h"
@@ -135,6 +136,21 @@ public:
   /// Metadata from the most recent `flushFrame()` call.
   [[nodiscard]] const FlushResult& lastFlushResult() const { return lastFlushResult_; }
 
+  /// True while flushed source deltas wait for the source pane to mirror them.
+  [[nodiscard]] bool hasUnmirroredSourceDeltas() const { return !unmirroredSourceDeltas_.empty(); }
+
+  /**
+   * Take the source deltas flushed since the previous call, in application order.
+   *
+   * Every `flushFrame()` resets `lastFlushResult()`, including a no-op flush, so a tool that
+   * flushes its own edit and is followed by any other flush would otherwise lose the deltas before
+   * the source pane mirrors them. These accumulate until taken. Replacing the document discards
+   * them, because they describe source that no longer exists.
+   */
+  [[nodiscard]] std::vector<xml::XMLSourceDelta> takeUnmirroredSourceDeltas() {
+    return std::exchange(unmirroredSourceDeltas_, {});
+  }
+
   /// Advances on every change that can alter a clip guide without changing the selected
   /// element's transform. Unlike lastFlushResult(), survives no-op frame flushes.
   [[nodiscard]] std::uint64_t nonTransformRevision() const { return nonTransformRevision_; }
@@ -225,6 +241,8 @@ private:
   std::vector<ParseDiagnostic> parseDiagnostics_;
   std::uint64_t parseDiagnosticsRevision_ = 0;
   FlushResult lastFlushResult_;
+  /// Flushed source deltas not yet taken by `takeUnmirroredSourceDeltas()`.
+  std::vector<xml::XMLSourceDelta> unmirroredSourceDeltas_;
 };
 
 }  // namespace donner::editor
