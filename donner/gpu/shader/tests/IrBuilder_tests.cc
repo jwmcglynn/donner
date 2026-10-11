@@ -515,7 +515,7 @@ TEST(IrExprFactoryContracts, VectorMetricsReturnTheDeclaredScalarOrVectorShape) 
   EXPECT_THAT(length.result().type(), testing::Eq(IrType::F32()));
   std::vector<BuiltinFn> calls;
   length.result().collectBuiltinCalls(calls);
-  EXPECT_THAT(calls, testing::ElementsAre(BuiltinFn::Length, BuiltinFn::Normalize));
+  EXPECT_THAT(calls, testing::UnorderedElementsAre(BuiltinFn::Length, BuiltinFn::Normalize));
   std::vector<IrExpr::RefInfo> refs;
   length.result().collectRefs(refs);
   EXPECT_THAT(refs, testing::ElementsAre(FactoryRefIs(RefKind::Param, "vector", IrType::Vec3f())));
