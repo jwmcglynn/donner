@@ -2519,6 +2519,7 @@ bool EditorWindow::hasIdleGpuWork() const {
 }
 
 void EditorWindow::wakeEventLoop() {
+  wakeEventLoopRequestSerial_.fetch_add(1, std::memory_order_acq_rel);
 #ifdef __EMSCRIPTEN__
   // The browser still invokes the lightweight rAF scheduler continuously, but expensive ImGui and
   // swapchain work is event-driven. Worker completion and editor animation paths land here.

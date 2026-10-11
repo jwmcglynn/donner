@@ -2176,7 +2176,8 @@ TEST(EditorShellTest, CpuAdoptionDoesNotStartPreviewsBeforeForegroundPresentatio
   EditorShellTestAccess::QueueSampleLoad(shell, "basic-shapes");
   EditorShellTestAccess::ConfirmPendingSampleLoadDiscard(shell);
   EditorShellTestAccess::ProcessPendingSampleLoad(shell);
-  EditorShellTestAccess::RequestFontPreviews(shell, {"Bebas Neue"});
+  EditorShellTestAccess::PrepareSingleFontPreviewRequest(shell, "Bebas Neue");
+  ASSERT_EQ(EditorShellTestAccess::PendingFontPreviewCount(shell), 1u);
   const std::size_t layerRendersBefore = EditorShellTestAccess::RenderedLayerThumbnailCount(shell);
   const std::size_t previewRequestsBefore =
       EditorShellTestAccess::RequestedAuxiliaryPreviewCount(shell);
@@ -2200,22 +2201,33 @@ TEST(EditorShellTest, CpuAdoptionDoesNotStartPreviewsBeforeForegroundPresentatio
   EditorShellTestAccess::InstallFramePresentation(shell, nullptr);
   EXPECT_FALSE(EditorShellTestAccess::ForegroundPresentationAcknowledged(shell));
   EditorShellTestAccess::InstallFramePresentation(shell, acceptedFrame);
+  ASSERT_TRUE(shell.asyncRendererForReplay().waitUntilNoRenderInFlightForTesting(
+      std::chrono::steady_clock::now() + std::chrono::seconds(10)));
 
-  window.beginFrame();
-  EditorShellTestAccess::RenderSidebars(shell);
-  EditorShellTestAccess::AdvanceFontPreviewGeneration(shell);
-  window.endFrame();
+  const std::uint64_t blockedWakeSerial = window.wakeEventLoopRequestSerialForTesting();
+  for (int frame = 0; frame < 3; ++frame) {
+    window.beginFrame();
+    EditorShellTestAccess::RenderSidebars(shell);
+    EditorShellTestAccess::AdvanceFontPreviewGeneration(shell);
+    window.endFrame();
+    EXPECT_EQ(window.wakeEventLoopRequestSerialForTesting(), blockedWakeSerial);
+  }
   EXPECT_EQ(EditorShellTestAccess::RenderedLayerThumbnailCount(shell), layerRendersBefore);
   EXPECT_EQ(EditorShellTestAccess::RequestedAuxiliaryPreviewCount(shell), previewRequestsBefore);
+  EXPECT_EQ(EditorShellTestAccess::PendingFontPreviewCount(shell), 1u);
 
   // Retiring the old fences only makes another frame admissible; a failed UI pass still cannot
   // acknowledge the adopted document capture.
   completedSerial = std::numeric_limits<std::uint64_t>::max();
   window.forceUiPassFailureForTesting(true);
-  RunShellFrame(window, shell);
+  const std::uint64_t failedWakeSerial = window.wakeEventLoopRequestSerialForTesting();
+  window.beginFrame();
+  window.endFrame();
+  EXPECT_EQ(window.wakeEventLoopRequestSerialForTesting(), failedWakeSerial);
   EXPECT_FALSE(EditorShellTestAccess::ForegroundPresentationAcknowledged(shell));
   EXPECT_EQ(EditorShellTestAccess::RenderedLayerThumbnailCount(shell), layerRendersBefore);
   EXPECT_EQ(EditorShellTestAccess::RequestedAuxiliaryPreviewCount(shell), previewRequestsBefore);
+  EXPECT_EQ(EditorShellTestAccess::PendingFontPreviewCount(shell), 1u);
 
   // A successful frame carrying the old scene identity is equally insufficient.
   window.forceUiPassFailureForTesting(false);
@@ -2226,11 +2238,18 @@ TEST(EditorShellTest, CpuAdoptionDoesNotStartPreviewsBeforeForegroundPresentatio
   window.beginFrame();
   window.endFrame();
   EXPECT_FALSE(EditorShellTestAccess::ForegroundPresentationAcknowledged(shell));
+  EXPECT_EQ(window.wakeEventLoopRequestSerialForTesting(), failedWakeSerial);
 
   // Only a fully drawn and presented frame carrying the matching adopted capture releases new
   // preview work. Cached previews and the pending queues remain available throughout the hold.
-  RunShellFrame(window, shell);
+  EditorShellTestAccess::InstallFramePresentation(shell, acceptedFrame);
+  window.beginFrame();
+  window.endFrame();
+  EXPECT_EQ(window.wakeEventLoopRequestSerialForTesting(), failedWakeSerial + 1u);
   ASSERT_TRUE(EditorShellTestAccess::ForegroundPresentationAcknowledged(shell));
+  window.beginFrame();
+  window.endFrame();
+  EXPECT_EQ(window.wakeEventLoopRequestSerialForTesting(), failedWakeSerial + 1u);
   window.beginFrame();
   EditorShellTestAccess::RenderSidebars(shell);
   EditorShellTestAccess::AdvanceFontPreviewGeneration(shell);

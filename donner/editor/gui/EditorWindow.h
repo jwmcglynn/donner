@@ -884,6 +884,11 @@ public:
   /// On Emscripten, sets the atomic gate consumed by the next browser animation frame.
   void wakeEventLoop();
 
+  /// Monotonic count of event-loop wake requests, for bounded scheduling regressions.
+  [[nodiscard]] std::uint64_t wakeEventLoopRequestSerialForTesting() const {
+    return wakeEventLoopRequestSerial_.load(std::memory_order_acquire);
+  }
+
 #ifdef __EMSCRIPTEN__
   /// Consume one Wasm main-frame request posted by editor or worker code.
   /// Browser input requests are tracked separately by the JavaScript bridge in `main.cc`.
@@ -1187,6 +1192,7 @@ private:
   bool valid_ = false;
   bool glUnavailable_ = false;
   bool imguiInitialized_ = false;
+  std::atomic<std::uint64_t> wakeEventLoopRequestSerial_{0};
 #ifdef __EMSCRIPTEN__
   /// Cross-thread wake gate for the event-driven Wasm main loop.
   std::atomic_bool wasmFrameRequested_{true};
