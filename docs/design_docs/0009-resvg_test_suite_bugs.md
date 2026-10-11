@@ -65,6 +65,26 @@ integer-tile pattern goldens in the same category (`with-pattern-in-use`,
 exact pixel sizes) match Donner exactly, isolating the discrepancy to the
 fractional-tile case. Revisit if resvg regenerates goldens without the rounding.
 
+### Allowed nearest-neighbor reference differences
+
+CSS Images permits an implementation-selected edge-preserving algorithm for
+`crisp-edges`; deprecated `optimizeSpeed` maps to that value. An alternate nearest
+sampling grid does not establish that the upstream reference violates the specification.
+
+| Category | Test | Reason |
+| --- | --- | --- |
+| painting/image-rendering | on-feImage | Nearest sampling at destination pixel centers |
+
+The project reference retains all vendored reference pixels outside the image
+primitive. Inside, the decoded 64 x 64 RGBA source is sampled with
+`source_index = floor((destination_index + 0.5) * 64 / destination_extent)`.
+The default filter region expands the `(40, 40, 120, 120)` object box by 10% on
+each side, producing `(70, 70, 360, 360)` after the `500 / 200` viewport scale.
+All 129,600 image-region pixels follow this independent geometric construction.
+The separate `optimizeSpeed` fixture remains classified pending reference
+qualification: CPU and GPU can choose adjacent source texels at exact nearest
+sampling ties, an allowed algorithm choice rather than missing SVG support.
+
 ### Backend-difference goldens (text)
 
 These render correctly but differ from resvg because Donner's text stack (and the
