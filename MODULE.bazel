@@ -95,7 +95,7 @@ bazel_dep(name = "rules_license", version = "1.0.0")
 # it, so a build needs no Vulkan library; Linux products and tests execute it.
 bazel_dep(name = "vulkan_headers", version = "1.4.349")
 bazel_dep(name = "freetype", version = "2.13.3.bcr.1")
-bazel_dep(name = "libpng", version = "1.6.58")
+bazel_dep(name = "libpng", version = "1.6.58.bcr.1")
 
 # Enable FreeType's PNG support for CBDT color emoji bitmaps.
 single_version_override(
