@@ -108,6 +108,50 @@ TEST_F(PaintSystemTest, LinearGradientWithStops) {
   EXPECT_THAT(computed->stops, SizeIs(2));
 }
 
+TEST_F(PaintSystemTest, StopExplicitColorInheritance) {
+  struct TestCase {
+    std::string_view svg;
+    css::Color expected;
+  };
+  for (const auto& test : {
+           TestCase{R"(<svg xmlns="http://www.w3.org/2000/svg">
+             <linearGradient id="g" stop-color="green">
+               <stop stop-color="inherit"/>
+             </linearGradient>
+           </svg>)",
+                    css::Color(css::RGBA(0, 128, 0, 255))},
+           TestCase{R"(<svg xmlns="http://www.w3.org/2000/svg">
+             <style>linearGradient { stop-color: green; } stop { stop-color: inherit; }</style>
+             <linearGradient id="g" stop-color="red"><stop/></linearGradient>
+           </svg>)",
+                    css::Color(css::RGBA(0, 128, 0, 255))},
+           TestCase{R"(<svg xmlns="http://www.w3.org/2000/svg" stop-color="lime">
+             <g style="stop-color: inherit"><linearGradient id="g" stop-color="inherit">
+               <stop stop-color="inherit"/>
+             </linearGradient></g>
+           </svg>)",
+                    css::Color(css::RGBA(0, 255, 0, 255))},
+           TestCase{R"(<svg xmlns="http://www.w3.org/2000/svg">
+             <linearGradient id="g" color="green" stop-color="currentColor">
+               <stop color="red" stop-color="inherit"/>
+             </linearGradient>
+           </svg>)",
+                    css::Color(css::RGBA(255, 0, 0, 255))},
+           TestCase{R"(<svg xmlns="http://www.w3.org/2000/svg">
+             <linearGradient id="g" stop-color="green"><stop/></linearGradient>
+           </svg>)",
+                    css::Color(css::RGBA(0, 0, 0, 255))},
+       }) {
+    SCOPED_TRACE(test.svg);
+    auto document = ParseAndCompute(test.svg);
+    auto element = document.querySelector("#g");
+    ASSERT_THAT(element, testing::Optional(testing::_));
+    const auto* computed = element->entityHandle().try_get<ComputedGradientComponent>();
+    ASSERT_THAT(computed, NotNull());
+    EXPECT_THAT(computed->stops, ElementsAre(GradientStopIs(0.0f, test.expected)));
+  }
+}
+
 TEST_F(PaintSystemTest, LinearGradientNoStops) {
   auto document = ParseAndCompute(R"(
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
