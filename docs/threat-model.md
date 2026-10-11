@@ -146,8 +146,10 @@ mutable path components; temporary outputs must be created exclusively and commi
 `.rnr` files are untrusted documents, not scripts with host authority. Parsing bounds file and line
 bytes, frames, items, strings, dimensions, duration, and pixel work. Playback separately reserves
 frames, pixel-frames, semantic actions, selection changes, input mutations, and source-rewrite work.
-Retained diagnostics also require an aggregate byte and item budget; the current replay collector
-has not yet wired its declared diagnostics budget into that path.
+Retained diagnostics also require an aggregate byte and item budget. At the v0.8 source-review
+checkpoint, the replay collector had not yet enforced its declared diagnostics budget;
+[issue #1422](https://github.com/jwmcglynn/donner/issues/1422) tracks validation and disposition
+before release qualification.
 
 Replay-relative SVG paths stay below the replay directory through descriptor-relative, no-follow
 loading. Replays disable normal editor filesystem actions and replace the host clipboard with an
@@ -217,11 +219,12 @@ requirement.
 
 Source, CLI, editor, and documentation packages must use explicit intended-file inventories or an
 equivalent privacy check. They must exclude credentials, private paths, local configuration,
-developer worktrees, internal handoffs, undeclared corpora, and unrelated test output. The current
-source archive includes private local paths and internal handoff material, so release qualification
-must reject that content before publication. Archive readers reject
-absolute paths, traversal, duplicates, links, special files, excessive members, and excessive
-expanded bytes.
+developer worktrees, internal handoffs, undeclared corpora, and unrelated test output. The v0.8
+source-review checkpoint found private local paths and internal handoff material in its candidate
+source archive. The affected members are intentionally omitted here to avoid redisclosure;
+[issue #1422](https://github.com/jwmcglynn/donner/issues/1422) requires a clean intended-file
+inventory before publication. Archive readers reject absolute paths, traversal, duplicates,
+links, special files, excessive members, and excessive expanded bytes.
 
 ## Refusal and recovery {#ThreatModelRecovery}
 
