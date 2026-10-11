@@ -415,6 +415,12 @@ fn composite_with_blend(mode: u32, src_pm: vec4f, dst_pm: vec4f) -> vec4f {
   return vec4f(co, ao);
 }
 
+fn mask_srgb_to_linear(srgb: vec3f) -> vec3f {
+  return select(srgb / vec3f(12.92),
+                pow((srgb + vec3f(0.055)) / vec3f(1.055), vec3f(2.4)),
+                srgb > vec3f(0.04045));
+}
+
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4f {
   var sampled = textureSample(imageTexture, imageSampler, in.uv);
@@ -469,6 +475,13 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4f {
       maskValue = maskSample.r * 0.2126
                 + maskSample.g * 0.7152
                 + maskSample.b * 0.0722;
+    } else if (uniforms.maskMode == 3u) {
+      maskValue = 0.0;
+      if (maskSample.a > 0.0) {
+        let straightRgb = clamp(maskSample.rgb / maskSample.a, vec3f(0.0), vec3f(1.0));
+        let linearRgb = mask_srgb_to_linear(straightRgb);
+        maskValue = dot(linearRgb, vec3f(0.2126, 0.7152, 0.0722)) * maskSample.a;
+      }
     }
 
     // Honour the `<mask>` element's x/y/width/height attributes by

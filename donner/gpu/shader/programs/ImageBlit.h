@@ -7,13 +7,14 @@
 namespace donner::gpu::shader::programs {
 /// Host layout for quad geometry, sampling, masking and compositing.
 struct alignas(16) ImageBlitParams {
-  float mvp[16];                        //!< Column-major clip-from-target transform.
-  float destRect[4];                    //!< Target-pixel rectangle.
-  float srcRect[4];                     //!< Normalized source UV rectangle.
-  float targetSize[2];                  //!< Target dimensions in pixels.
-  float opacity;                        //!< Overall opacity multiplier.
-  uint32_t sourceIsPremult;             //!< Nonzero for premultiplied source texels.
-  uint32_t maskMode;                    //!< Zero disables masks, one luminance, two alpha.
+  float mvp[16];             //!< Column-major clip-from-target transform.
+  float destRect[4];         //!< Target-pixel rectangle.
+  float srcRect[4];          //!< Normalized source UV rectangle.
+  float targetSize[2];       //!< Target dimensions in pixels.
+  float opacity;             //!< Overall opacity multiplier.
+  uint32_t sourceIsPremult;  //!< Nonzero for premultiplied source texels.
+  uint32_t
+      maskMode;  //!< Zero disables masks, one sRGB luminance, two alpha, three linear luminance.
   uint32_t applyMaskBounds;             //!< Nonzero enables the target-pixel bounds check.
   uint32_t paddingBeforeMaskBounds[2];  //!< Aligns the following vector to 16 bytes.
   float maskBounds[4];                  //!< Half-open target-pixel mask rectangle.
