@@ -664,6 +664,18 @@ TEST_F(RendererRegressionTests, SpanGradientOverridesElementPatternStroke) {
   renderAndCompare(document, svg, golden, GoldenParams());
 }
 
+TEST_F(RendererRegressionTests, NestedTextRotationMatchesExplicitCharacterRotations) {
+  const RendererBitmap inherited = RenderTextOpacityCase(
+      R"svg(<text x="15" y="90" font-family="Noto Sans" font-size="24"
+                  rotate="1 2 3 4 5 6 7">A<tspan rotate="10 20 30">B<tspan>C</tspan><tspan rotate="90">D</tspan><tspan>E</tspan></tspan><tspan>F</tspan><tspan>G</tspan><tspan>H</tspan></text>)svg");
+  const RendererBitmap explicitRotations = RenderTextOpacityCase(
+      R"svg(<text x="15" y="90" font-family="Noto Sans" font-size="24"
+                  rotate="1">A<tspan rotate="10">B<tspan rotate="20">C</tspan><tspan rotate="90">D</tspan><tspan rotate="30">E</tspan></tspan><tspan rotate="6">F</tspan><tspan rotate="7">G</tspan><tspan rotate="7">H</tspan></text>)svg");
+
+  ExpectVisibleBitmap(explicitRotations, "explicit_character_rotations_visible");
+  ExpectBitmapsIdentical(inherited, explicitRotations, "nested_character_rotations");
+}
+
 TEST_F(RendererRegressionTests, TextOpacityAppliesOnceLikeGroupOpacity) {
   const RendererBitmap textOpacity = RenderTextOpacityCase(
       R"svg(<text x="20" y="150" font-family="Noto Sans" font-size="120"
