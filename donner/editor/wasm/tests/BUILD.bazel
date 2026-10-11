@@ -577,6 +577,7 @@ js_test(
     size = "small",
     copy_data_to_bin = False,
     data = glob([
+        "*.cjs",
         "*.js",
         "*.json",
         "*.mjs",
@@ -603,6 +604,7 @@ js_test(
     size = "small",
     copy_data_to_bin = False,
     data = glob([
+        "*.cjs",
         "*.js",
         "*.json",
         "*.mjs",
