@@ -2211,6 +2211,19 @@ TEST(PropertyRegistry, NegativeFilterAmountsRejectTheEntireDeclaration) {
   }
 }
 
+TEST(PropertyRegistry, FilterAmountErrorsUseCanonicalFunctionNames) {
+  for (const auto& [authored, canonical] :
+       {std::pair{"BRIGHTNESS", "brightness"}, std::pair{"CONTRAST", "contrast"},
+        std::pair{"SATURATE", "saturate"}, std::pair{"OpAcItY", "opacity"}}) {
+    const std::string input = "filter: " + std::string(authored) + "(-1)";
+    SCOPED_TRACE(input);
+    PropertyRegistry registry;
+    const css::Declaration declaration = css::CSS::ParseStyleAttribute(input).front();
+    EXPECT_THAT(registry.parseProperty(declaration, Specificity()),
+                ParseErrorIs("Negative value not allowed for " + std::string(canonical) + "()"));
+  }
+}
+
 TEST(PropertyRegistry, FilterParsing) {
   {
     PropertyRegistry registry;
