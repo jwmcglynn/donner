@@ -1078,6 +1078,14 @@ ParseResult<FilterEffect> ParseFilterFunction(const css::Function& function, boo
           FilterEffect::Blur{Lengthd(0.0, Lengthd::Unit::Px), Lengthd(0.0, Lengthd::Unit::Px)});
     }
     const auto& arg = remaining.front();
+    remaining = remaining.subspan(1);
+    SkipWhitespace(remaining);
+    if (!remaining.empty()) {
+      ParseDiagnostic err;
+      err.reason = "Unexpected extra values in blur()";
+      err.range.start = remaining.front().sourceOffset();
+      return err;
+    }
     if (const auto* dimension = arg.tryGetToken<css::Token::Dimension>()) {
       if (!dimension->suffixUnit || dimension->suffixUnit == Lengthd::Unit::Percent) {
         ParseDiagnostic err;
@@ -2821,9 +2829,11 @@ std::optional<ParseDiagnostic> PropertyRegistry::parseProperty(const css::Declar
 
   const PropertyParseFn* parseFn = kProperties.find(name);
   if (parseFn != nullptr) {
-    return (*parseFn)(*this,
-                      parser::PropertyParseFnParams::Create(
-                          declaration, specificity, parser::PropertyParseBehavior::AllowUserUnits));
+    const parser::PropertyParseBehavior parseBehavior =
+        name == "filter" ? parser::PropertyParseBehavior::Default
+                         : parser::PropertyParseBehavior::AllowUserUnits;
+    return (*parseFn)(
+        *this, parser::PropertyParseFnParams::Create(declaration, specificity, parseBehavior));
   }
 
   // Only store unparsed properties if they are valid presentation attribute names.
