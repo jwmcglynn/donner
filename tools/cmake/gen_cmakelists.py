@@ -1982,6 +1982,14 @@ def _run_cmake_build_validation(
     return None
 
 
+def _positive_build_jobs(value: str) -> int:
+    """Parse a positive CMake build concurrency limit."""
+    jobs = int(value)
+    if jobs <= 0:
+        raise argparse.ArgumentTypeError("build jobs must be a positive integer")
+    return jobs
+
+
 def main() -> None:
     """Main entry point to generate all CMakeLists.txt files."""
     global _check_mode
@@ -2004,6 +2012,12 @@ def main() -> None:
               "default static validation and is intended as an opt-in deep check."),
     )
     parser.add_argument(
+        "--build-jobs",
+        type=_positive_build_jobs,
+        default=None,
+        help="Limit parallel jobs with --build; defaults to the host CPU count.",
+    )
+    parser.add_argument(
         "--output-dir",
         type=Path,
         default=None,
@@ -2019,6 +2033,8 @@ def main() -> None:
     args = parser.parse_args()
     if args.build and not args.check:
         parser.error("--build requires --check")
+    if args.build_jobs is not None and not args.build:
+        parser.error("--build-jobs requires --build")
     _set_bazel_startup_args(args.bazel_startup_arg)
     _check_mode = args.check
 
@@ -2079,6 +2095,7 @@ def main() -> None:
                     build_error = _run_cmake_build_validation(
                         workspace,
                         Path(temp_dir) / "build",
+                        jobs=args.build_jobs,
                     )
         finally:
             # Remove anything newly created then restore originals
