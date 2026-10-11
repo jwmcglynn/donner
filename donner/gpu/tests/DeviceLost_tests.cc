@@ -123,5 +123,45 @@ TEST(DeviceLostStateTest, AReleaseWhoseOwnerIsGoneIsNeitherKeptAliveNorRun) {
   EXPECT_THAT(DeclareDeviceLost(state), IsTrue());
 }
 
+TEST(DeviceLostStateTest, HealthyAndUnsettledStatesAreNotAttributed) {
+  DeviceLostState state;
+  EXPECT_THAT(ReadDeviceLossSnapshot(state).lost, IsFalse());
+  state.lost.store(true, std::memory_order_release);  // Simulates the winner before attribution.
+  const DeviceLossSnapshot provisional = ReadDeviceLossSnapshot(state);
+  EXPECT_THAT(provisional.lost, IsTrue());
+  EXPECT_THAT(provisional.attributionSettled, IsFalse());
+}
+
+TEST(DeviceLostStateTest, NonTimeoutLossKeepsItsAttributionWhenATimeoutFollows) {
+  DeviceLostState state;
+  ASSERT_THAT(DeclareDeviceLost(state), IsTrue());
+  EXPECT_THAT(DeclareDeviceLostAfterWaitTimeout(state, DeviceLostWaitSite::QueueIdle,
+                                                std::chrono::milliseconds(17)),
+              IsFalse());
+  const DeviceLossSnapshot snapshot = ReadDeviceLossSnapshot(state);
+  EXPECT_THAT(snapshot.lost, IsTrue());
+  EXPECT_THAT(snapshot.attributionSettled, IsTrue());
+  EXPECT_THAT(snapshot.timedOutSite, Eq(DeviceLostWaitSite::None));
+  EXPECT_THAT(snapshot.timedOutElapsedMs, Eq(0));
+}
+
+TEST(DeviceLostStateTest, FirstTimeoutAttributionIsImmutable) {
+  for (const DeviceLostWaitSite firstSite :
+       {DeviceLostWaitSite::QueueIdle, DeviceLostWaitSite::ReadbackMap}) {
+    SCOPED_TRACE(testing::Message() << "firstSite=" << firstSite);
+    DeviceLostState state;
+    ASSERT_THAT(DeclareDeviceLostAfterWaitTimeout(state, firstSite, std::chrono::milliseconds(23)),
+                IsTrue());
+    EXPECT_THAT(DeclareDeviceLostAfterWaitTimeout(state, DeviceLostWaitSite::Present,
+                                                  std::chrono::milliseconds(91)),
+                IsFalse());
+    EXPECT_THAT(DeclareDeviceLost(state), IsFalse());
+    const DeviceLossSnapshot snapshot = ReadDeviceLossSnapshot(state);
+    EXPECT_THAT(snapshot.attributionSettled, IsTrue());
+    EXPECT_THAT(snapshot.timedOutSite, Eq(firstSite));
+    EXPECT_THAT(snapshot.timedOutElapsedMs, Eq(23));
+  }
+}
+
 }  // namespace
 }  // namespace donner::gpu

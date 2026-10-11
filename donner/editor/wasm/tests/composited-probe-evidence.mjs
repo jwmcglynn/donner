@@ -1,5 +1,18 @@
 import { writeFile } from "node:fs/promises";
 
+/** Keep the loss observation explicitly comparable with probe `performance.now()` samples. */
+export function normalizePresentationDeviceLoss(loss) {
+  if (loss === null || loss === undefined) return null;
+  const firstObservedAbsoluteMs = Number(loss.firstObservedAbsoluteMs);
+  const pageTimeOriginMs = Number(loss.pageTimeOriginMs);
+  return {
+    ...loss,
+    firstObservedAtMs: Number.isFinite(firstObservedAbsoluteMs) && Number.isFinite(pageTimeOriginMs)
+      ? firstObservedAbsoluteMs - pageTimeOriginMs
+      : null,
+  };
+}
+
 /**
  * Stop sampling and preserve the collected window before any assertion.
  * @param {import("@playwright/test").Page} page
@@ -30,9 +43,15 @@ export async function stopCompositedProbe(page, testInfo, gesture) {
         worker: window.__donnerWorkerStats ?? null,
         host: window.__donnerHostFrameTiming ?? null,
         viewport: window.__donnerViewportStats ?? null,
+        deviceLoss: window.__donnerPresentationDeviceLoss ?? null,
       },
     };
   });
+  if (result.presentation) {
+    result.presentation.deviceLoss = normalizePresentationDeviceLoss(
+      result.presentation.deviceLoss,
+    );
+  }
   const evidencePath = testInfo.outputPath("composited-probe.json");
   await writeFile(evidencePath, JSON.stringify({ gesture, result }), "utf8");
   await testInfo.attach("composited-probe", {

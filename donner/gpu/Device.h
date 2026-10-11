@@ -295,6 +295,12 @@ public:
    */
   bool isLost() const { return lostState_->lost.load(std::memory_order_acquire); }
 
+  /// First-winner loss attribution, once its diagnostic fields have settled.
+  DeviceLossSnapshot deviceLossSnapshot() const { return ReadDeviceLossSnapshot(*lostState_); }
+
+  /// Backend-provided loss reason, when the backend retains one. Empty otherwise.
+  virtual RcString deviceLostReason() const { return RcString(); }
+
   /**
    * Declares this device's backend root lost because a bounded wait gave up, recording which wait
    * it was and how long it actually ran.

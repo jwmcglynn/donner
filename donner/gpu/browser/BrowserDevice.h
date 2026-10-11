@@ -166,7 +166,7 @@ public:
   bool isDeviceLost() const;
 
   /// What the browser said when it reported the device lost. Empty while the device is alive.
-  RcString deviceLostReason() const;
+  RcString deviceLostReason() const override;
 
   /// Largest width or height of a 2D texture this device supports, as the browser reports it.
   /// WebGPU guarantees at least 8,192, which stands in when the browser reports no limit.

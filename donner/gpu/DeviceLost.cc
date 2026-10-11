@@ -58,6 +58,7 @@ bool DeclareDeviceLost(DeviceLostState& state) {
   if (state.lost.exchange(true, std::memory_order_acq_rel)) {
     return false;
   }
+  state.attributionSettled.store(true, std::memory_order_release);
   state.runLossReleases();
   return true;
 }
@@ -74,9 +75,24 @@ bool DeclareDeviceLostAfterWaitTimeout(DeviceLostState& state, DeviceLostWaitSit
   DeviceLostWaitSite unattributed = DeviceLostWaitSite::None;
   state.timedOutSite.compare_exchange_strong(unattributed, site, std::memory_order_release,
                                              std::memory_order_relaxed);
+  state.attributionSettled.store(true, std::memory_order_release);
   // Released last, so work a release lets run already sees the wait that declared the loss.
   state.runLossReleases();
   return true;
+}
+
+DeviceLossSnapshot ReadDeviceLossSnapshot(const DeviceLostState& state) {
+  const bool lost = state.lost.load(std::memory_order_acquire);
+  const bool settled = state.attributionSettled.load(std::memory_order_acquire);
+  if (!lost || !settled) {
+    return {.lost = lost, .attributionSettled = settled};
+  }
+  return {
+      .lost = true,
+      .attributionSettled = true,
+      .timedOutSite = state.timedOutSite.load(std::memory_order_acquire),
+      .timedOutElapsedMs = state.timedOutElapsedMs.load(std::memory_order_relaxed),
+  };
 }
 
 void LogDeclaredDeviceLoss(const char* reason) {

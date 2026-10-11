@@ -40,10 +40,15 @@
 #endif
 
 #include "donner/base/Vector2.h"
+#include "donner/gpu/DeviceLost.h"
 #include "donner/svg/renderer/RendererInterface.h"
 
 struct GLFWwindow;
 struct ImFont;
+
+namespace donner::gpu {
+class Device;
+}
 
 /// GLFW-compatible callback for horizontal and vertical scroll offsets.
 using GLFWscrollfun = void (*)(GLFWwindow*, double, double);
@@ -594,6 +599,54 @@ private:
   std::deque<Fence> pending_;
   Fence completed_;
 };
+
+/// Immutable first observation of settled presentation-device loss diagnostics.
+struct PresentationDeviceLossRecord {
+  using Clock = std::chrono::steady_clock;
+
+  /// Expensive owner-thread details acquired only for the first settled loss.
+  struct Observation {
+    Clock::time_point observedAt;
+    std::uint64_t completedSerial = 0;
+    std::uint64_t submittedSerial = 0;
+    std::uint64_t oldestSerial = 0;
+    RcString browserReason;
+  };
+
+  bool observed = false;              //!< Whether a settled loss has been retained.
+  gpu::DeviceLossSnapshot loss;       //!< Attribution published by the winning declaration.
+  Clock::time_point observedAt;       //!< First observation time, not physical loss time.
+  std::uint64_t completedSerial = 0;  //!< Runtime completion at first observation.
+  std::uint64_t submittedSerial = 0;  //!< Last submitted serial at first observation.
+  std::uint64_t oldestSerial = 0;     //!< Oldest presentation serial at first observation.
+  RcString browserReason;  //!< Browser-retained reason, empty for non-browser/explicit loss.
+
+  /// Retains the first settled loss and rejects healthy, provisional, and repeated observations.
+  template <typename ObservationProvider>
+    requires std::invocable<ObservationProvider&> &&
+             std::same_as<std::invoke_result_t<ObservationProvider&>, Observation>
+  bool observe(const gpu::DeviceLossSnapshot& candidate, ObservationProvider&& provider) {
+    if (observed || !candidate.lost || !candidate.attributionSettled) {
+      return false;
+    }
+    Observation details = std::invoke(provider);
+    observed = true;
+    loss = candidate;
+    observedAt = details.observedAt;
+    completedSerial = details.completedSerial;
+    submittedSerial = details.submittedSerial;
+    oldestSerial = details.oldestSerial;
+    browserReason = std::move(details.browserReason);
+    return true;
+  }
+};
+
+inline constexpr std::size_t kMaximumPresentationDeviceLossReasonBytes = 1024;
+
+/// Copies a browser loss reason into the bounded payload retained for failure evidence.
+inline std::string BoundedPresentationDeviceLossReason(std::string_view reason) {
+  return std::string(reason.substr(0, kMaximumPresentationDeviceLossReasonBytes - 1));
+}
 }  // namespace internal
 
 /// Derive UI scaling from window size, framebuffer size, and the platform content scale hint.
@@ -960,6 +1013,14 @@ public:
     presentationCompletionProbeForTesting_ = std::move(probe);
   }
 
+  /// First settled presentation loss retained by the real frame path.
+  const internal::PresentationDeviceLossRecord& presentationDeviceLossForTesting() const {
+    return presentationDeviceLoss_;
+  }
+
+  /// Drives the same timeout declaration and immediate diagnostic observation as production.
+  void declarePresentationTimeoutLossForTesting(std::chrono::milliseconds age);
+
   /**
    * Test seam: bounds how long \ref donner::editor::gui::EditorWindow::endFrameAndReadPixels
    * "endFrameAndReadPixels" waits for its readback map while the device makes no progress, in
@@ -1108,7 +1169,9 @@ private:
 #endif
 #ifdef DONNER_EDITOR_WGPU
   bool observePresentationCompletion();
-  bool hasUsableFrameTarget(int width, int height) const;
+  void observePresentationDeviceLoss(gpu::Device& device);
+  void declarePresentationTimeoutLoss(gpu::Device& device, std::chrono::milliseconds age);
+  bool hasUsableFrameTarget(int width, int height);
   bool admitFrameSubmission(bool requestedReadback);
   internal::PresentationSubmissionQueue presentationSubmissions_;
   bool presentationWasDeferred_ = false;
@@ -1116,6 +1179,7 @@ private:
   std::uint64_t coalescedPresentationFrames_ = 0;
   std::uint64_t presentationTimeoutSerial_ = 0;
   std::chrono::milliseconds presentationTimeoutAge_{};
+  internal::PresentationDeviceLossRecord presentationDeviceLoss_;
   std::uint64_t presentationCompletionConfirmations_ = 0;
   std::uint64_t presentationFrameId_ = 0;
   std::uint64_t presentationCaptureId_ = 0;
