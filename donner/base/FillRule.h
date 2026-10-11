@@ -16,9 +16,10 @@ namespace donner {
  * https://www.w3.org/TR/SVG2/painting.html#FillRuleProperty
  */
 enum class FillRule : uint8_t {
-  NonZero,  ///< [DEFAULT] Determines "insideness" of a point by counting crossings of a ray drawn
-            ///< from that point to infinity and path segments. If crossings is non-zero, the point
-            ///< is inside, else outside.
+  NonZero,  ///< [DEFAULT] Determines "insideness" of a point by counting signed crossings of a
+            ///< ray drawn from that point to infinity and path segments: +1 where a segment
+            ///< crosses the ray from left to right, -1 where it crosses from right to left. If
+            ///< the sum is non-zero, the point is inside, else outside.
   EvenOdd   ///< Determines "insideness" of a point by counting the number of path segments from the
             ///< shape crossed by a ray drawn from that point to infinity. If count is odd, point is
             ///< inside, else outside.

@@ -18,9 +18,8 @@ namespace donner::svg::parser {
  * detached, so whole-tree consumers (attribute selectors, export checks, source projection) see
  * a complete document. They are marked non-rendering: neither a foreign element nor its subtree
  * paints, matching how conforming SVG consumers treat foreign content. A retained foreign
- * subtree materializes one entity per element and counts against \ref Options::maximumTreeNodes
- * and \ref Options::maximumTreeDepth like any other content, and reports one
- * unsupported-namespace warning at the top of the subtree.
+ * subtree counts against \ref Options::maximumTreeNodes and \ref Options::maximumTreeDepth like
+ * any other content, and reports one unsupported-namespace warning at the top of the subtree.
  */
 class SVGParser {
 public:
@@ -127,7 +126,7 @@ public:
    * Parses an SVG XML document from a string (typically the contents of a .svg file).
    *
    * The input buffer does not need to be null-terminated, but if there are embedded null characters
-   * parsing will stop.
+   * parsing will stop. Gzip-compressed input (SVGZ) is detected and decompressed automatically.
    *
    * @param source Input buffer containing the SVG XML document. Will not be modified.
    * @param warningSink Sink to collect warnings encountered during parsing.

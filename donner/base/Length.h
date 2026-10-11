@@ -67,7 +67,7 @@ inline std::ostream& operator<<(std::ostream& os, LengthUnit unit) {
 }
 
 /**
- * Parses a CSS `<length-percentage>` type as defined by
+ * A parsed CSS `<length-percentage>` value, as defined by
  * https://www.w3.org/TR/css-values-3/#typedef-length-percentage
  *
  * A length is composed of a number followed by a unit identifier.
@@ -138,13 +138,13 @@ struct Length {
   }
 
   /**
-   * Selects which extent of the viewBox to use for percentage and viewBox-relative length
-   * conversions, see \ref toPixels().
+   * Selects which extent of the viewBox to use for percentage length conversions, see
+   * \ref toPixels(). Viewport units (`vw`, `vh`, `vmin`, `vmax`) ignore it.
    */
   enum class Extent : uint8_t {
     X,     ///< Use X component of viewBox for percentage calculations.
     Y,     ///< Use Y component of viewBox for percentage calculations.
-    Mixed  ///< Use diagonal extent of viewBox.
+    Mixed  ///< Use the normalized diagonal of the viewBox, sqrt(width^2 + height^2) / sqrt(2).
   };
 
   /**
@@ -152,9 +152,11 @@ struct Length {
    * https://www.w3.org/TR/css-values/#absolute-lengths and
    * https://www.w3.org/TR/css-values/#relative-lengths.
    *
-   * @param viewBox ViewBox of the element for computing viewBox-relative conversions.
-   * @param fontMetrics Font size information for font-relative sizes.
-   * @param extent Which extent of the viewBox to use for percentage and viewBox-relative length.
+   * @param viewBox ViewBox of the element for computing percentage conversions, also used for
+   *   viewport units when \p fontMetrics has no viewport size.
+   * @param fontMetrics Font size information for font-relative sizes, and the optional viewport
+   *   size for viewport units.
+   * @param extent Which extent of the viewBox to use for percentage lengths.
    * @return Length in pixels.
    */
   T toPixels(const Box2<T>& viewBox, const FontMetrics& fontMetrics,
@@ -222,7 +224,7 @@ struct Length {
    *
    * - Integer-valued lengths omit the decimal point: `10px`, not `10.000000px`.
    * - Non-integer lengths print with the minimum precision required to round-trip, via
-   *   `std::format`'s `{:g}` specifier.
+   *   `std::format`'s default `{}` specifier.
    * - `LengthUnit::None` produces a bare number with no unit suffix.
    * - `LengthUnit::Percent` uses `%`; absolute and relative units use their CSS identifiers
    *   (see `operator<<(std::ostream&, LengthUnit)`).

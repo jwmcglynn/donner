@@ -113,10 +113,11 @@ public:
   struct Command {
     Verb verb;                ///< The verb type.
     uint32_t pointIndex;      ///< Index of the first point for this command in the points array.
-    bool isInternal = false;  ///< True for intermediate segments of arc decomposition. These are
-                              ///< skipped when computing vertices for marker placement.
+    bool isInternal = false;  ///< True for each cubic of a decomposed arc except the last, whose
+                              ///< end point is interior to the arc. \ref Path::vertices skips
+                              ///< those points when placing markers.
 
-    /// Equality operator.
+    /// Equality operator. Compares `verb` and `pointIndex`; `isInternal` is ignored.
     bool operator==(const Command& other) const {
       return verb == other.verb && pointIndex == other.pointIndex;
     }
@@ -183,7 +184,7 @@ public:
   /// Returns the number of commands (verbs) in the path.
   size_t verbCount() const { return commands_.size(); }
 
-  /// Dynamic bytes reserved by the path's command and point vectors.
+  /// Dynamic bytes reserved by the path's command and point vectors, or nullopt on overflow.
   std::optional<std::size_t> retainedBytes() const {
     constexpr std::size_t kMaximum = std::numeric_limits<std::size_t>::max();
     if (commands_.capacity() > kMaximum / sizeof(Command)) {
@@ -220,8 +221,8 @@ public:
   /**
    * Returns true if the given point is inside this path's fill region.
    *
-   * Uses a winding-number ray-casting algorithm. Points lying exactly on the path boundary are
-   * also considered inside.
+   * Uses a winding-number ray-casting algorithm. Points within 0.1 units of the path boundary are
+   * also considered inside. Returns false if the query exceeds its work or subdivision limits.
    *
    * @param point Point to test.
    * @param fillRule Fill rule to use (NonZero or EvenOdd).
@@ -229,10 +230,13 @@ public:
   bool isInside(const Vector2d& point, FillRule fillRule = FillRule::NonZero) const;
 
   /**
-   * Returns true if the given point is within \p strokeWidth / 2 of any path segment.
+   * Returns true if the given point is within \p strokeWidth of any path segment.
+   *
+   * The distance is compared against the full \p strokeWidth, not half of it. Returns false if the
+   * query exceeds its work or subdivision limits.
    *
    * @param point Point to test.
-   * @param strokeWidth Width of the stroke.
+   * @param strokeWidth Maximum distance from the path that counts as a hit.
    */
   bool isOnPath(const Vector2d& point, double strokeWidth) const;
 
@@ -241,7 +245,9 @@ public:
     Vector2d point;     ///< Position on the path.
     Vector2d tangent;   ///< Un-normalized tangent vector at the point.
     double angle;       ///< Tangent angle in radians (atan2).
-    bool valid = true;  ///< False if distance exceeds path length.
+    bool valid = true;  ///< False if the distance is negative, non-finite, or exceeds the path
+                        ///< length, or if the path has no drawable segments or could not be
+                        ///< measured.
   };
 
   /**
@@ -253,7 +259,7 @@ public:
    */
   class MeasuredPath {
   public:
-    /// Return the total measured arc length.
+    /// Return the total measured arc length, or infinity when the measurement is not valid.
     [[nodiscard]] double pathLength() const { return totalLength_; }
 
     /// Sample this measured path at the given arc length.
@@ -317,20 +323,23 @@ public:
    * Bytes needed to reserve the maximum possible segment array before measurement starts.
    *
    * Callers retaining a MeasuredPath can preflight this base allocation before calling measure().
-   * Returns nullopt if the estimate overflows or exceeds the per-index retained-memory cap.
+   * Returns nullopt if the path has more than \ref kMaximumGeometryQueryWork commands, or if the
+   * estimate overflows or exceeds the per-index retained-memory cap.
    */
   [[nodiscard]] std::optional<std::size_t> measurementBaseRetainedBytes() const;
 
   /// Compute the total arc length of the path.
   ///
   /// Line segments are measured directly. Quadratic Bezier curves are elevated to cubics.
-  /// Cubic Bezier arc lengths are approximated via recursive subdivision.
+  /// Cubic Bezier arc lengths are approximated via recursive subdivision. Returns infinity when
+  /// the path cannot be measured within its numeric, work, and memory limits.
   double pathLength() const;
 
   /// Sample the path at the given arc length \p distance from the start.
   ///
   /// Returns the position, tangent vector, and tangent angle at that distance. If \p distance
-  /// exceeds the total path length, returns the endpoint with \c valid = false.
+  /// exceeds the total path length, returns the endpoint with \c valid = false. A negative or
+  /// non-finite \p distance, or a path that cannot be measured, also returns \c valid = false.
   PointOnPath pointAtArcLength(double distance) const;
 
   /**
@@ -365,7 +374,8 @@ public:
   /**
    * Return the normal vector (perpendicular to the tangent) at segment \p index, parameter \p t.
    *
-   * Computed as the 90-degree counter-clockwise rotation of the normalized tangent.
+   * Computed as the 90-degree counter-clockwise rotation of \ref tangentAt, so it is not normalized
+   * and has the same length as the tangent.
    *
    * @param index Command index.
    * @param t Parameter in [0, 1].
@@ -373,14 +383,18 @@ public:
   Vector2d normalAt(size_t index, double t) const;
 
   /**
-   * Compute the bounding box of the stroked path, accounting for miter joins.
+   * Compute a bounding box of the path's on-curve points, extended to include miter tips.
    *
-   * At each join between segments, the miter extension is computed and included in the bounding
-   * box when it does not exceed \p miterLimit.
+   * The box is not expanded by half the stroke width, and curve control points and extrema are
+   * not included. At each join between segments, a miter tip is placed at a distance of
+   * `strokeWidth / sin(theta / 2)` from the join vertex, where theta is the angle between the two
+   * segments. The tip is included only when that distance is less than \p miterLimit and the join
+   * is not straight.
    *
+   * @pre The path is not empty.
    * @param strokeWidth Width of the stroke.
-   * @param miterLimit Maximum miter length (as per SVG stroke-miterlimit).
-   * @return Bounding box including stroke and miter extensions.
+   * @param miterLimit Maximum miter length, compared directly against the tip distance above.
+   * @return Bounding box of the on-curve points and the included miter tips.
    */
   Box2d strokeMiterBounds(double strokeWidth, double miterLimit) const;
 
@@ -422,8 +436,12 @@ public:
   /**
    * Flatten all curves to line segments within \p tolerance.
    *
+   * Each curve is subdivided at most \ref kMaximumFlattenSubdivisionDepth levels deep, so an
+   * extreme curve may deviate from its approximation by more than \p tolerance.
+   *
    * @param tolerance Maximum distance between the curve and its line approximation.
-   * @return A new Path containing only MoveTo, LineTo, and ClosePath verbs.
+   * @return A new Path containing only MoveTo, LineTo, and ClosePath verbs, or an empty Path when
+   *   \p tolerance is not a positive finite number.
    */
   Path flatten(double tolerance = 0.25) const;
 
@@ -460,15 +478,17 @@ public:
    * choice a compile-time obligation for every call site, so a scale-blind
    * stroke cannot be reintroduced by accident.
    *
-   * @param style Stroke parameters (width, cap, join, miter limit).
-   * @param flattenTolerance Tolerance for curve flattening, in this path's
-   *   coordinate space.
    * The result is a union of overlapping, positive-winding pieces and must
    * be consumed with \ref FillRule::NonZero.
    *
-   * @return A new Path representing the filled outline of the stroke, or an empty Path when the
-   *   outline cannot be represented: the aggregate point budget is exhausted, or a piece's
-   *   coordinates or corner products do not fit a double.
+   * @param style Stroke parameters (width, cap, join, miter limit, dash pattern).
+   * @param flattenTolerance Tolerance for curve flattening, in this path's
+   *   coordinate space.
+   *
+   * @return A new Path representing the filled outline of the stroke. Returns an empty Path when
+   *   this path is empty, when the stroke width or \p flattenTolerance is not a positive finite
+   *   number, or when the outline cannot be represented: the aggregate point budget or the dash
+   *   work budget is exhausted, or a piece's coordinates or corner products do not fit a double.
    */
   Path strokeToFill(const StrokeStyle& style, double flattenTolerance) const;
 
@@ -562,10 +582,11 @@ public:
   friend std::ostream& operator<<(std::ostream& os, const Path& path);
 
   /// Value equality. Two paths compare equal iff their command verb /
-  /// point-index sequences and point arrays are bitwise-equal. Used as an
-  /// invalidation edge by `ShapeSystem` to suppress redundant
-  /// `ComputedPathComponent` rewrites when shape attributes recompute to
-  /// the same geometry.
+  /// point-index sequences match and their points compare equal with
+  /// `Vector2d::operator==`, which allows an absolute difference of machine
+  /// epsilon per coordinate. `Command::isInternal` is not compared. Used to
+  /// skip redundant updates when shape attributes recompute to the same
+  /// geometry.
   bool operator==(const Path& other) const {
     return commands_ == other.commands_ && points_ == other.points_;
   }
@@ -594,9 +615,17 @@ private:
  */
 class PathBuilder {
 public:
+  /// Create a builder with no point limit.
   PathBuilder() = default;
 
-  /// Create a builder that fails closed after accepting @p maximumPoints points.
+  /**
+   * Create a builder that holds at most \p maximumPoints points.
+   *
+   * A command that would exceed the limit is rejected, along with every later command, and
+   * \ref exceededMaximumPoints reports true.
+   *
+   * @param maximumPoints Maximum number of points the built path may hold.
+   */
   explicit PathBuilder(std::size_t maximumPoints) : maximumPoints_(maximumPoints) {}
 
   /// @name Path construction
@@ -619,6 +648,10 @@ public:
    *
    * The arc is decomposed into cubic Bézier curves internally.
    *
+   * Out-of-range parameters are handled as in the SVG arc implementation notes: an arc whose end
+   * point equals the current point is omitted, a zero radius produces a straight line to \p end,
+   * negative radii use their absolute values, and radii too small to reach \p end are scaled up.
+   *
    * @param radius Ellipse radius (before rotation).
    * @param rotationRadians X-axis rotation of the ellipse in radians.
    * @param largeArc True for arc length >= 180 degrees.
@@ -628,7 +661,8 @@ public:
   PathBuilder& arcTo(const Vector2d& radius, double rotationRadians, bool largeArc, bool sweep,
                      const Vector2d& end);
 
-  /// Close the current subpath with a straight line back to the last moveTo point.
+  /// Close the current subpath with a straight line back to the last moveTo point. Has no effect
+  /// when there is no open subpath.
   PathBuilder& closePath();
 
   /// @}
@@ -639,7 +673,8 @@ public:
   /// Add an axis-aligned rectangle.
   PathBuilder& addRect(const Box2d& rect);
 
-  /// Add a rounded rectangle with corner radii \p rx and \p ry.
+  /// Add a rounded rectangle with corner radii \p rx and \p ry. The radii are clamped to half the
+  /// width and height of \p rect; if either is not positive, a plain rectangle is added.
   PathBuilder& addRoundedRect(const Box2d& rect, double rx, double ry);
 
   /// Add an ellipse inscribed in \p bounds.
@@ -656,19 +691,22 @@ public:
   /// @name State
   /// @{
 
-  /// Returns the current point (end point of the last command), or (0,0) if empty.
+  /// Returns the last point appended to the path, or (0,0) if empty. \ref closePath appends no
+  /// point, so after it this is still the point before the close, not the subpath start.
   Vector2d currentPoint() const;
 
   /// Returns true if no commands have been added.
   bool empty() const { return path_.commands_.empty(); }
 
-  /// Returns true if a command was rejected because the configured point limit was reached.
+  /// Returns true if a command was rejected because the configured point limit was reached, or
+  /// after \ref rejectRemainingCommands.
   bool exceededMaximumPoints() const { return exceededMaximumPoints_; }
 
   /// Refuse every further command, reported through \ref exceededMaximumPoints. A caller uses
   /// this when it cannot represent its geometry, so the caller can fail closed instead of
-  /// building a partial path. \ref build clears the flag, so the caller decides what an
-  /// exceeded builder becomes.
+  /// building a partial path. \ref build still returns the commands accepted before the
+  /// rejection and clears the flag, so a caller that needs a fail-closed result checks
+  /// \ref exceededMaximumPoints first and discards the partial path.
   void rejectRemainingCommands() { exceededMaximumPoints_ = true; }
 
   /// @}

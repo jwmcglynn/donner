@@ -263,7 +263,7 @@ struct SurfaceTexture {
  * reference them: \ref PipelineLayout and \ref ShaderModule are consumed at pipeline creation
  * only, so destroying one releases its backend object immediately. Backends must snapshot or
  * retain whatever they need from them when the pipeline is created (Metal's compiled pipeline
- * state retains its functions; the Vulkan backend must do the equivalent when it lands).
+ * state retains its functions, and each Vulkan pipeline retains its native pipeline layout).
  *
  * Thread affinity: a Device and everything created from it must be used from one thread at a
  * time, matching the async-renderer worker ownership model.
@@ -291,7 +291,8 @@ public:
    * Sticky: never resets. The condition belongs to the root rather than to this device, so every
    * device sharing the root reports it - a root that stopped answering has stopped answering all
    * of them. Once lost, rendering output is undefined, readbacks return promptly, and teardown
-   * skips GPU waits.
+   * skips GPU waits, except that Vulkan teardown still waits, bounded by queue progress, to prove
+   * its submissions complete before it frees native objects.
    */
   bool isLost() const { return lostState_->lost.load(std::memory_order_acquire); }
 
@@ -673,10 +674,10 @@ public:
   /**
    * Presents the texture acquired from \p surface and invalidates it.
    *
-   * Not every platform lets a caller present: where the host drives its own frame loop, the
-   * frame appears when the host shows it, and asking to present is rejected rather than
-   * performed. Such a surface still acquires and still invalidates its texture at the end of the
-   * frame through \ref abandonCurrentTexture.
+   * Where the host drives its own frame loop, as a browser does for a canvas, the frame appears
+   * when the host shows it: presenting there hands the acquired texture back for that implicit
+   * presentation and submits nothing of its own. A frame that should not be shown ends through
+   * \ref abandonCurrentTexture instead.
    *
    * @param surface Live surface with an acquired texture.
    */

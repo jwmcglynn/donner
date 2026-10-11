@@ -11,7 +11,7 @@ namespace donner::svg {
 /**
  * @page xml_linearGradient &lt;linearGradient&gt;
  *
- * Defines the paint server for a linear gradients.
+ * Defines the paint server for a linear gradient.
  *
  * - DOM object: SVGLinearGradientElement
  * - SVG2 spec: https://www.w3.org/TR/SVG2/pservers.html#LinearGradients

@@ -24,12 +24,11 @@ struct AtlasDocumentPlacement {
   ///
   /// Outliving the call is a hard requirement, not a lifetime convenience. A
   /// GPU backend keeps each document's resident geometry and bind groups in
-  /// components on that document's own registry and consumes them when the
-  /// frame is submitted (see
-  /// `donner/svg/renderer/geode/GeodeResidentPathComponent.h`), so a document
-  /// released before this call returns frees buffers the recorded draws still
-  /// reference and its tile comes back blank. Callers bounding peak memory must
-  /// therefore shrink the batch, not shorten a document's lifetime inside one.
+  /// state owned by that document and consumes them when the frame is
+  /// submitted, so a document released before this call returns frees buffers
+  /// the recorded draws still reference and its tile comes back blank. Callers
+  /// bounding peak memory must therefore shrink the batch, not shorten a
+  /// document's lifetime inside one.
   SVGDocument* document = nullptr;
   /// Top-left corner of this document's tile, in atlas device pixels.
   Vector2i originPx = Vector2i::Zero();
@@ -66,7 +65,8 @@ struct AtlasDocumentPlacement {
     Vector2i atlasSizePx);
 
 /**
- * Backend-agnostic renderer that resolves to the active build backend (Skia or tiny-skia).
+ * Backend-agnostic renderer that resolves to the active build backend (tiny-skia by default, or
+ * Geode).
  *
  * Typical usage:
  * ```cpp

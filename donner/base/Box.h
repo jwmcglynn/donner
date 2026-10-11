@@ -123,9 +123,9 @@ struct Box2 {
   }
 
   /**
-   * Adds a bounding box inside this bounding box.
+   * Expand to include the provided box.
    *
-   * @param box Box to add.
+   * @param box Box to include.
    */
   void addBox(const Box2<T>& box) {
     addPoint(box.topLeft);

@@ -62,13 +62,13 @@ public:
 
     /**
      * Parse custom entities in the XML document, e.g. `<!ENTITY ...>`. If this flag is set to true,
-     * custom entities will be parsed and and translated in the document tree.
+     * custom entities will be parsed and translated in the document tree.
      */
     bool parseCustomEntities = false;
 
     /**
-     * Parse processing instructions in the XML document, e.g. `<?php ...>`. If this flag is set to
-     * true, processing instructions will be parsed as \ref
+     * Parse processing instructions in the XML document, e.g. `<?php ... ?>`. If this flag is set
+     * to true, processing instructions will be parsed as \ref
      * donner::xml::XMLNode::Type::ProcessingInstruction nodes added to the document tree.
      */
     bool parseProcessingInstructions = false;
@@ -130,8 +130,9 @@ public:
   /**
    * Parse an XML string with the given options.
    *
-   * By default, the parser will ignore comments, the doctype node, and processing instructions. To
-   * enable parsing these nodes, configure the flags within \ref Options.
+   * By default, the parser keeps the doctype node but ignores comments and processing
+   * instructions. To change which of these nodes are parsed, configure the flags within
+   * \ref Options.
    *
    * The document tree will remain valid as long as the returned \ref XMLDocument is alive.
    *
@@ -155,10 +156,12 @@ public:
    * world!"`
    *
    * @param str XML data to parse. Will not be modified.
-   * @param elementStartOffset Start offset of the element in the input string.
+   * @param elementStartOffset Start offset of the element in the input string, pointing at its
+   *   `<`.
    * @param attributeName Name of the attribute to find.
-   * @return std::optional<AttributeLocation> containing the start and end offsets of the attribute
-   * in the input string, or std::nullopt if the attribute was not found.
+   * @return The source range of the attribute in the input string, or std::nullopt if the
+   * attribute was not found, \p elementStartOffset is unresolved or out of range, or the opening
+   * tag is malformed.
    */
   static std::optional<SourceRange> GetAttributeLocation(std::string_view str,
                                                          FileOffset elementStartOffset,

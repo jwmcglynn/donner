@@ -302,6 +302,8 @@ public:
    * Apply an incremental source edit through the underlying XML document and update the SVG
    * semantic projection from emitted XML mutations.
    *
+   * Documents without XML source text are not modified, and the result carries a diagnostic.
+   *
    * @param intent Source edit request.
    */
   xml::ApplySourceEditResult applySourceEdit(const xml::XMLEditIntent& intent);
@@ -333,6 +335,10 @@ public:
   /**
    * Insert an element into the document tree and return any XML-owned source edit result.
    *
+   * This only edits source-backed documents. If the document has no source text, or \p parent has
+   * no XML source identity, the tree is not modified and the result is unapplied; use
+   * \ref SVGElement::insertBefore or \ref SVGElement::appendChild instead.
+   *
    * @param parent Element that receives \p element as a child.
    * @param element Element to insert.
    * @param referenceElement Optional existing child to insert before.
@@ -351,14 +357,14 @@ public:
   /**
    * Replace an element's text content through this document and update owned source text.
    *
-   * This is the DOM-side structured editing entry point for text-content writes: it removes the
-   * element's existing text-like XML child nodes and (for non-empty @p text) inserts a single data
-   * node holding @p text, applying every change through \ref donner::xml::XMLSourceStore so source
-   * deltas are emitted. Element children (e.g. `<tspan>`) are preserved. Callers remain responsible
-   * for updating any component-level text mirror (e.g. `SVGTextContentElement::setTextContent`).
+   * This is the DOM-side structured editing entry point for text-content writes: it replaces the
+   * element's text through \ref donner::xml::XMLSourceStore so source deltas are emitted, then
+   * updates the parsed text of text-content and `<style>` elements to match. Only text-only
+   * content is edited: if the element has child elements (e.g. `<tspan>`), or the document has no
+   * source text, nothing changes and the result is unapplied without a diagnostic.
    *
    * @param element Element whose text content to replace.
-   * @param text New text content (raw, unescaped).
+   * @param text New text content (raw, unescaped). An empty string clears the content.
    */
   xml::ApplySourceEditResult setElementTextContent(const SVGElement& element,
                                                    std::string_view text);
@@ -372,12 +378,14 @@ public:
   /**
    * Set the canvas (output image) size to a fixed width and height, in pixels.
    *
-   * This controls the rendered output dimensions and may differ from the SVG's viewBox. If not
-   * set, defaults to 512x512 or the size specified by the root `<svg>` element's `width`/`height`
-   * attributes (when using useAutomaticCanvasSize()).
+   * This controls the rendered output dimensions and may differ from the SVG's viewBox. The
+   * document is scaled uniformly to fit within this size, so \ref canvasSize may be smaller than
+   * the requested size in one dimension. If not set (or after \ref useAutomaticCanvasSize), the
+   * size comes from the root `<svg>` element's `width`, `height`, and `viewBox`, falling back to
+   * 512x512.
    *
-   * @param width Width of the canvas, in pixels.
-   * @param height Height of the canvas, in pixels.
+   * @param width Width of the canvas, in pixels. Must be positive.
+   * @param height Height of the canvas, in pixels. Must be positive.
    */
   void setCanvasSize(int width, int height);
 
@@ -385,7 +393,7 @@ public:
    * Set the current document time for animations, in seconds from the document start.
    *
    * Advancing the document time causes the animation system to update animated attribute values
-   * on the next render. This invalidates the render tree.
+   * on the next render. This invalidates the render tree. Non-finite values are ignored.
    *
    * @param seconds Document time in seconds.
    */
@@ -397,14 +405,17 @@ public:
   double currentTime() const;
 
   /**
-   * Automatically determine the canvas size from the root `<svg>` element's `width` and `height`
-   * attributes. If those attributes are not set, falls back to the default size (512x512).
+   * Automatically determine the canvas size from the root `<svg>` element's `width`, `height`,
+   * and `viewBox`. If those do not define a size, falls back to the default size (512x512).
    */
   void useAutomaticCanvasSize();
 
   /**
-   * Get the current canvas size, or the default size (512x512) if the canvas size has not been
-   * explicitly set.
+   * Get the size of the rendered output, in pixels.
+   *
+   * Without an explicit canvas size, this is the document size from the root `<svg>` element's
+   * `width`, `height`, and `viewBox`, or 512x512 if those do not define a size. With a size from
+   * \ref setCanvasSize, this is the document size scaled uniformly to fit within it.
    */
   Vector2i canvasSize() const;
 
@@ -425,14 +436,14 @@ public:
   /**
    * Returns the transform that maps points from the SVG document's viewBox
    * coordinate space into the canvas-scaled output space. This bakes in the
-   * `preserveAspectRatio` fit (letterbox offset + uniform scale) between the
+   * `preserveAspectRatio` fit (scale plus alignment offset) between the
    * viewBox and the current canvas size.
    *
    * Naming: per the `destFromSource` convention, applying this transform to
    * a viewBox-space point yields a canvas-space point - i.e. it is
-   * `canvasFromDocument`, despite an earlier misnomer. Callers that need the
-   * opposite direction (canvas pixel → document viewBox coordinate, e.g.
-   * click math in editors/viewers) should invert it.
+   * `canvasFromDocument`. Callers that need the opposite direction (canvas
+   * pixel to document viewBox coordinate, e.g. click math in editors and
+   * viewers) should invert it.
    */
   Transform2d canvasFromDocumentTransform() const;
 
@@ -464,7 +475,8 @@ public:
   bool operator==(const SVGDocument& other) const;
 
   /**
-   * Find the first element in the tree that matches the given CSS selector.
+   * Find the first descendant of the root `<svg>` element, in document order, that matches the
+   * given CSS selector. The root element itself is not matched; use \ref svgElement for it.
    *
    * This method performs its own scoped read. For repeated DOM reads in
    * \ref donner::svg::ThreadingMode::ConcurrentDom, wrap the whole scan in \ref withReadAccess so
@@ -480,7 +492,8 @@ public:
    * ```
    *
    * @param selector CSS selector to match.
-   * @return The first matching element, or `std::nullopt` if no element matches.
+   * @return The first matching element, or `std::nullopt` if no element matches or the selector is
+   * invalid.
    */
 
   std::optional<SVGElement> querySelector(std::string_view selector);

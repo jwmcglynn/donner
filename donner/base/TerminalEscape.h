@@ -9,7 +9,16 @@
 
 namespace donner {
 
-/// Escape untrusted bytes and terminal format controls while preserving printable UTF-8.
+/**
+ * Escape untrusted bytes and terminal format controls while preserving printable UTF-8.
+ *
+ * Bytes that are not valid UTF-8, C0 controls, and DEL are written as `\xHH`; C1 controls as
+ * `\u00HH`; and invisible format and bidirectional controls (U+061C, U+180E, U+200B to U+200F,
+ * U+2028 to U+202E, U+2060 to U+206F, and U+FEFF) as `\uHHHH`. Hex digits are lowercase.
+ *
+ * @param text Text to escape.
+ * @param preserveNewlines When true, `\n` is copied unchanged instead of escaped.
+ */
 inline std::string EscapeTerminalText(std::string_view text, bool preserveNewlines = false) {
   constexpr char kHex[] = "0123456789abcdef";
   std::string result;

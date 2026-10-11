@@ -139,8 +139,8 @@ namespace donner::svg {
  *
  * At `elevation=15` the light grazes across the bump and picks out a thin crescent; at
  * `elevation=80` the light comes almost straight down and the whole bump lights up roughly
- * uniformly. Swinging `azimuth` from 0° to 180° walks the bright spot across the bump from left to
- * right.
+ * uniformly. Swinging `azimuth` from 0 to 180 degrees walks the bright spot across the bump from
+ * right to left.
  *
  * \par Usage
  *

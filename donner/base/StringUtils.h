@@ -73,8 +73,8 @@ struct CaseInsensitiveCharTraits : public std::char_traits<char> {
   static bool lt(char lhs, char rhs) { return lower(lhs) < lower(rhs); }
 
   /**
-   * Compare two strings for equality, returning -1 if \p lhs is less than \p rhs, 0 if they are
-   * equal, or 1 if \p lhs is greater than \p rhs.
+   * Compare the first \p sizeToCompare characters of two strings, returning -1 if \p lhs is less
+   * than \p rhs, 0 if they are equal, or 1 if \p lhs is greater than \p rhs.
    *
    * @param lhs Left-hand side string.
    * @param rhs Right-hand side string.
@@ -196,7 +196,7 @@ public:
    * methods).
    * @tparam U The type of the second string, must be \c StringLike (have `size()` and `data()
    * methods).
-   * @return true If the strings are equal.
+   * @return true If \p str starts with \p otherStr.
    */
   template <StringComparison Comparison = StringComparison::Default, StringLike T, StringLike U>
   static bool StartsWith(const T& str, const U& otherStr) {
@@ -222,7 +222,7 @@ public:
    * methods).
    * @tparam U The type of the second string, must be \c StringLike (have `size()` and `data()
    * methods).
-   * @return true If the strings are equal.
+   * @return true If \p str ends with \p otherStr.
    */
   template <StringComparison Comparison = StringComparison::Default, StringLike T, StringLike U>
   static bool EndsWith(const T& str, const U& otherStr) {
@@ -243,14 +243,14 @@ public:
    * StringUtils::Contains<StringComparison::IgnoreCase>("Hello world", "ELLO"); // true
    * ```
    *
-   * @param str The string to check for a suffix.
-   * @param otherStr The suffix to check for.
+   * @param str The string to search within.
+   * @param otherStr The substring to search for.
    * @tparam Comparison The comparison type to use, defaults to \ref StringComparison::Default.
    * @tparam T The type of the first string, must be \c StringLike (have `size()` and `data()
    * methods).
    * @tparam U The type of the second string, must be \c StringLike (have `size()` and `data()
    * methods).
-   * @return true If the strings are equal.
+   * @return true If \p str contains \p otherStr.
    */
   template <StringComparison Comparison = StringComparison::Default, StringLike T, StringLike U>
   static bool Contains(const T& str, const U& otherStr) {
@@ -303,8 +303,10 @@ public:
   }
 
   /**
-   * Splits a string by a given character, returning a range of the split strings as a
-   * `std::string_view`.
+   * Splits a string by a given character, returning the non-empty pieces as `std::string_view`s.
+   *
+   * Empty pieces, from leading, trailing, or adjacent separators, are omitted. The views alias
+   * \p str, so \p str must outlive them.
    *
    * ```
    * for (auto&& str : StringUtils::Split("a,b,c", ',')) {
@@ -316,7 +318,7 @@ public:
    * methods).
    * @param str The string to split.
    * @param ch The character to split by.
-   * @return A vector of the split string views.
+   * @return A vector of views into \p str.
    */
   template <StringLike T>
   static std::vector<std::string_view> Split(const T& str, char ch = ' ') {
@@ -334,6 +336,8 @@ public:
 
   /**
    * Trims leading and trailing whitespace from a string, returning a view of the trimmed string.
+   *
+   * The returned view aliases \p str, so \p str must outlive it.
    *
    * ```
    * std::string_view result = StringUtils::TrimWhitespace("  hello  ");

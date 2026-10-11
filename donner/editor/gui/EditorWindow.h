@@ -602,6 +602,7 @@ private:
 
 /// Immutable first observation of settled presentation-device loss diagnostics.
 struct PresentationDeviceLossRecord {
+  /// Monotonic clock that timestamps the observation.
   using Clock = std::chrono::steady_clock;
 
   /// Expensive owner-thread details acquired only for the first settled loss.
@@ -641,6 +642,7 @@ struct PresentationDeviceLossRecord {
   }
 };
 
+/// Bound on the retained browser loss reason; a copy keeps at most one byte fewer than this.
 inline constexpr std::size_t kMaximumPresentationDeviceLossReasonBytes = 1024;
 
 /// Copies a browser loss reason into the bounded payload retained for failure evidence.
@@ -797,6 +799,7 @@ public:
     std::uint64_t frameVersion = 0;        //!< Committed document mutation version.
     std::uint64_t captureId = 0;           //!< Immutable renderer capture.
 
+    /// Equal when all three identity fields match.
     bool operator==(const PresentedDocumentFrameIdentity&) const = default;
   };
 

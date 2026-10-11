@@ -8,7 +8,8 @@
 namespace donner {
 
 /**
- * Error context for a failed parse, such as the error reason, line, and character offset.
+ * A location in parser input, as a character offset and optional line information. An unset
+ * offset refers to the end of the input, see \ref EndOfString().
  */
 struct FileOffset {
   /**
@@ -77,6 +78,10 @@ struct FileOffset {
    * Assuming this FileOffset is from a subparser that ran on a substring of the original string,
    * take the resulting FileOffset and convert it back to absolute coordinates.
    *
+   * An unset offset in this FileOffset is treated as 0, not as the end of the substring; call
+   * \ref resolveOffset first to map it to the substring's length.
+   *
+   * @pre \p parentOffset has an offset (checked by assert in debug builds).
    * @param parentOffset Offset of the current string in the parent parser.
    */
   [[nodiscard]] FileOffset addParentOffset(FileOffset parentOffset) const {
@@ -135,8 +140,8 @@ private:
    * Internal constructor to create a FileOffset.
    *
    * @param offset Character offset of the error in the string, or std::nullopt to indicate the
-   * error is at the end of the line.
-   * @param line Line-number-relative error location, or std::nullopt if that information is not
+   * error is at the end of the input.
+   * @param lineInfo Line-number-relative error location, or std::nullopt if that information is not
    * available.
    */
   FileOffset(std::optional<size_t> offset, std::optional<LineInfo> lineInfo)

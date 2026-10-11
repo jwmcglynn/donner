@@ -141,7 +141,8 @@ public:
   void setD(RcString d);
 
   /**
-   * Set the path spline manually. Overrides the value of the `d` attribute.
+   * Set the path spline manually. Overrides the value of the `d` attribute; afterwards \ref d()
+   * returns an empty string until \ref setD() is called.
    *
    * @param spline Path spline.
    */

@@ -39,7 +39,7 @@ namespace donner::svg {
  *
  * \par Example 1: basic setup with a distant light
  *
- * A soft sphere-like bump lit from the upper-left with \ref xml_feDistantLight.
+ * A soft sphere-like bump lit from the lower-right with \ref xml_feDistantLight.
  *
  * \htmlonly
  * <svg viewBox="0 0 140 140" width="140" height="140"
@@ -68,7 +68,7 @@ namespace donner::svg {
  *
  * The black circle is invisible on its own - what you see is the lighting output. The blurred
  * alpha gives `feDiffuseLighting` a smooth dome to shade, so the result looks like a ball lit
- * from the upper-left.
+ * from the lower-right (`azimuth="45"` points along +X and +Y, which is right and down).
  *
  * \par Example 2: same bump, point light
  *

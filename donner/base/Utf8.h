@@ -1,4 +1,5 @@
 #pragma once
+/// @file
 
 #include <cassert>
 #include <cstdint>
@@ -82,8 +83,10 @@ public:
 
   /**
    * Decodes the next UTF-8 codepoint from the input string, while strictly validating continuation
-   * bytes and sequence lengths. If an invalid codepoint is encountered, the function returns
-   * the Unicode replacement character (`U+FFFD` �) and consumes the invalid codepoint.
+   * bytes and sequence lengths. If the sequence is invalid (a bad lead or continuation byte, a
+   * truncated, overlong, or surrogate encoding, or a codepoint above U+10FFFF), the function
+   * returns the Unicode replacement character (`U+FFFD`) and consumes one byte. An empty string
+   * returns `U+FFFD` and consumes zero bytes.
    *
    * @param str The input string_view from which to read the codepoint.
    * @return A tuple containing the decoded Unicode codepoint and the number of bytes consumed.

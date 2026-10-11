@@ -1,8 +1,8 @@
 #pragma once
 /// @file
 ///
-/// Compile-time lists of SVG element tag names and known attribute names, derived from donner's
-/// type registries. Used by the parser fuzzer, editor syntax highlighting, and autocomplete.
+/// Compile-time lists of SVG element tag names, derived from donner's element type list, and of
+/// known attribute names. Used by the structured parser fuzzer and editor autocomplete.
 
 #include <array>
 #include <string_view>
@@ -25,7 +25,7 @@ constexpr auto extractTagNames(entt::type_list<Types...>) {
 /// Derived from AllSVGElements and each element class's static Tag constant.
 inline constexpr auto kSVGElementNames = detail::extractTagNames(AllSVGElements{});
 
-/// Compile-time array of all known SVG presentation attributes and geometry attributes.
+/// Compile-time array of SVG presentation attributes and geometry attributes.
 /// Each entry is an attribute name string (e.g. "fill", "stroke", "transform").
 inline constexpr std::array<std::string_view, 71> kSVGPresentationAttributeNames{{
     "cx",

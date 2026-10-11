@@ -120,6 +120,9 @@ public:
    * Computes the advance distance for a substring of text.
    * The substring is defined by the character positions [charnum, charnum + nchars).
    * \see https://www.w3.org/TR/SVG2/text.html#__svg__SVGTextContentElement__getSubStringLength
+   *
+   * @param charnum Index of the first addressable character in the substring.
+   * @param nchars Number of characters in the substring.
    */
   double getSubStringLength(std::size_t charnum, std::size_t nchars) const;
 
@@ -127,6 +130,8 @@ public:
    * Returns the start position (in user space) of the glyphs
    * corresponding to the given character index.
    * \see https://www.w3.org/TR/SVG2/text.html#__svg__SVGTextContentElement__getStartPositionOfChar
+   *
+   * @param charnum Index of the addressable character.
    */
   Vector2d getStartPositionOfChar(std::size_t charnum) const;
 
@@ -134,6 +139,8 @@ public:
    * Returns the end position (in user space) of the glyphs
    * corresponding to the given character index.
    * \see https://www.w3.org/TR/SVG2/text.html#__svg__SVGTextContentElement__getEndPositionOfChar
+   *
+   * @param charnum Index of the addressable character.
    */
   Vector2d getEndPositionOfChar(std::size_t charnum) const;
 
@@ -141,6 +148,8 @@ public:
    * Returns the bounding box of the glyph cell for the specified character,
    * in the element's coordinate space.
    * \see https://www.w3.org/TR/SVG2/text.html#__svg__SVGTextContentElement__getExtentOfChar
+   *
+   * @param charnum Index of the addressable character.
    */
   Box2d getExtentOfChar(std::size_t charnum) const;
 
@@ -148,6 +157,8 @@ public:
    * Returns the rotation applied to the glyphs corresponding to the
    * given character index, in degrees.
    * \see https://www.w3.org/TR/SVG2/text.html#__svg__SVGTextContentElement__getRotationOfChar
+   *
+   * @param charnum Index of the addressable character.
    */
   double getRotationOfChar(std::size_t charnum) const;
 
@@ -155,12 +166,17 @@ public:
    * Given a point in the element's coordinate space, returns which character
    * is rendered at that point. Returns -1 if none.
    * \see https://www.w3.org/TR/SVG2/text.html#__svg__SVGTextContentElement__getCharNumAtPosition
+   *
+   * @param point Point in the element's coordinate space.
    */
   long getCharNumAtPosition(const Vector2d& point) const;
 
   /**
    * Selection highlighting is not currently implemented; this function is a no-op.
    * \see https://www.w3.org/TR/SVG2/text.html#__svg__SVGTextContentElement__selectSubString
+   *
+   * @param charnum Index of the first character to select.
+   * @param nchars Number of characters to select.
    */
   void selectSubString(std::size_t charnum, std::size_t nchars);
 
@@ -181,6 +197,9 @@ public:
    * Replace this element's direct text content with @p text, discarding any
    * existing direct text and intervening text chunks.
    *
+   * This does not modify the document's XML tree or source text; for a source-backed edit, use
+   * \ref SVGDocument::setElementTextContent.
+   *
    * @param text New text content.
    */
   void setTextContent(std::string_view text);
@@ -193,7 +212,8 @@ public:
   void advanceTextChunk();
 
   /**
-   * Get the raw text content concatenated from all child text nodes.
+   * Get the raw text content concatenated from all direct child text nodes. Text inside child
+   * elements such as `<tspan>` is not included.
    *
    * @return Text content string.
    */

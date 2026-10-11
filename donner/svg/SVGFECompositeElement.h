@@ -118,6 +118,8 @@ namespace donner::svg {
  *   overlap) with B showing through outside that overlap.
  * - **`xor`** - "Either A or B, but not where they overlap". The overlap region becomes
  *   transparent.
+ * - **`lighter`** - "A plus B". The two inputs are added together and clamped, so overlapping
+ *   areas become brighter.
  * - **`arithmetic`** - "Pixel-wise formula `k1*A*B + k2*A + k3*B + k4`". Gives you complete
  *   control over the per-channel result. Use it for cross-dissolves (`k2=α, k3=1-α`), custom
  *   blends, or specular-style highlights.

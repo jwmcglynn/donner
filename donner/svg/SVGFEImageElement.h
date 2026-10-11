@@ -179,7 +179,8 @@ namespace donner::svg {
  *     <rect id="xml_feImage_ex3_map" width="100" height="80" fill="url(#xml_feImage_ex3_grad)"/>
  *     <filter id="xml_feImage_ex3_f">
  *       <feImage href="#xml_feImage_ex3_map" result="map"/>
- *       <feDisplacementMap in="SourceGraphic" in2="map" scale="20"/>
+ *       <feDisplacementMap in="SourceGraphic" in2="map" scale="20"
+ *                          xChannelSelector="R" yChannelSelector="G"/>
  *     </filter>
  *   </defs>
  *   <g font-size="28" font-weight="bold">
@@ -194,7 +195,8 @@ namespace donner::svg {
  * ```xml
  * <filter id="Warp">
  *   <feImage href="#gradient" result="map" />
- *   <feDisplacementMap in="SourceGraphic" in2="map" scale="20" />
+ *   <feDisplacementMap in="SourceGraphic" in2="map" scale="20"
+ *                      xChannelSelector="R" yChannelSelector="G" />
  * </filter>
  * ```
  *
