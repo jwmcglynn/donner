@@ -2105,9 +2105,9 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
             glyph.rotateDegrees = span.rotateList.back();
           }
 
-          // Rotate combining mark offsets around the base glyph so the cluster rotates together.
-          if (!span.pathSpline && glyph.rotateDegrees != 0.0 && !run.glyphs.empty() &&
-              glyph.xAdvance == 0.0) {
+          // An absolute position gives a mark its own origin instead of the preceding base.
+          if (!span.pathSpline && !hasAbsoluteX && !hasAbsoluteY && glyph.rotateDegrees != 0.0 &&
+              !run.glyphs.empty() && glyph.xAdvance == 0.0) {
             const auto& base = run.glyphs.back();
             if (base.xAdvance != 0.0) {
               const double angle = glyph.rotateDegrees * MathConstants<double>::kDegToRad;
