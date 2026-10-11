@@ -4035,7 +4035,12 @@ TEST(EditorShellTest, PartlyOffscreenSplashShineEllipseFirstHeldMoveMatchesSettl
   ASSERT_TRUE(movedWorldBounds.has_value());
   EXPECT_NEAR(movedWorldBounds->topLeft.x, originalWorldBounds->topLeft.x, 1e-6);
   EXPECT_NEAR(movedWorldBounds->bottomRight.x, originalWorldBounds->bottomRight.x, 1e-6);
-  EXPECT_NEAR(movedWorldBounds->topLeft.y - originalWorldBounds->topLeft.y, 300.0, 1e-6);
+  EXPECT_NEAR(movedWorldBounds->topLeft.y - originalWorldBounds->topLeft.y, 300.0, 1e-6)
+      << " pendingMutations=" << app.document().hasPendingMutations()
+      << " rendererBusy=" << shell.asyncRendererForReplay().isBusy()
+      << " renderInFlight=" << shell.asyncRendererForReplay().hasRenderInFlightForTesting()
+      << " heldResultPolls="
+      << shell.asyncRendererForReplay().replayResultHoldPollCountForTesting();
   EXPECT_NEAR(movedWorldBounds->bottomRight.y - originalWorldBounds->bottomRight.y, 300.0, 1e-6);
   const svg::RendererBitmap settled = captureFrame(/*contentOnly=*/true);
   ASSERT_EQ(beforeMove.dimensions, firstMove.dimensions);
@@ -4118,6 +4123,12 @@ TEST(EditorShellTest, ColdSplashShineDragGetsFullTileBeforeMouseUp) {
     for (int frame = 0; frame < 24 && std::chrono::steady_clock::now() < deadline; ++frame) {
       (void)captureContent();
       if (!shell.asyncRendererForReplay().waitUntilNoRenderInFlightForTesting(deadline)) {
+        ADD_FAILURE() << "Cold shine render wait reached its deadline at frame " << frame
+                      << " rendererBusy=" << shell.asyncRendererForReplay().isBusy()
+                      << " renderInFlight="
+                      << shell.asyncRendererForReplay().hasRenderInFlightForTesting()
+                      << " heldResultPolls="
+                      << shell.asyncRendererForReplay().replayResultHoldPollCountForTesting();
         return false;
       }
       const LayerInspectorStatusReadback status = shell.layerInspectorStatusForReadback();
