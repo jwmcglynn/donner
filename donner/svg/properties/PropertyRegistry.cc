@@ -2138,24 +2138,6 @@ DONNER_CONSTEXPR_MAP auto kProperties =
 
                    return maybeError;
                  }},  //
-                {"flood-color",
-                 [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
-                   return Parse(
-                       params,
-                       [](const parser::PropertyParseFnParams& params) {
-                         return css::parser::ColorParser::Parse(params.components());
-                       },
-                       &registry.floodColor);
-                 }},
-                {"stop-color",
-                 [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
-                   return Parse(
-                       params,
-                       [](const parser::PropertyParseFnParams& params) {
-                         return css::parser::ColorParser::Parse(params.components());
-                       },
-                       &registry.stopColor);
-                 }},
                 {"font-family",
                  [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
                    return Parse(
@@ -2687,7 +2669,15 @@ PropertyRegistry& PropertyRegistry::operator=(const PropertyRegistry&) = default
 PropertyRegistry& PropertyRegistry::operator=(PropertyRegistry&&) noexcept = default;
 
 std::span<const std::string_view> PropertyRegistry::propertyNames() {
-  return kProperties.keys();
+  static const std::array<std::string_view, kProperties.kSize + 2> names = [] {
+    std::array<std::string_view, kProperties.kSize + 2> result;
+    result[0] = kProperties.keys()[0];
+    result[1] = "flood-color";
+    result[2] = "stop-color";
+    std::copy(kProperties.keys().begin() + 1, kProperties.keys().end(), result.begin() + 3);
+    return result;
+  }();
+  return names;
 }
 
 bool PropertyRegistry::isPresentationAttributeName(std::string_view name) {
@@ -2751,9 +2741,68 @@ std::size_t PropertyRegistry::complexPropertyBytes() const {
   return result;
 }
 
+Property<css::Color>& PropertyRegistry::resourceColor(std::size_t index) {
+  return index == 0 ? floodColor : stopColor;
+}
+
+void PropertyRegistry::reconcileResourceColorMutation(std::size_t index) {
+  const auto& color = resourceColor(index);
+  auto& overlay = inlineResourceColors_[index];
+  if (overlay) {
+    const auto& selected =
+        overlay->value.specificity >= overlay->base.specificity ? overlay->value : overlay->base;
+    if (color.state != selected.state || color.specificity != selected.specificity ||
+        color.get() != selected.get()) {
+      overlay.reset();
+      unparsedProperties.erase(RcString(color.name));
+    }
+  }
+}
+
+void PropertyRegistry::refreshResourceColor(std::size_t index) {
+  auto& color = resourceColor(index);
+  const auto& overlay = inlineResourceColors_[index];
+  if (overlay) {
+    color = overlay->base;
+    if (overlay->value.specificity >= color.specificity) {
+      color = overlay->value;
+    }
+  }
+}
+
+ParseResult<bool> PropertyRegistry::parseResourceColorAttribute(
+    std::size_t index, const parser::PropertyParseFnParams& params) {
+  if (auto error = parseResourceColor(index, params)) {
+    return std::move(*error);
+  }
+  return true;
+}
+
+std::optional<ParseDiagnostic> PropertyRegistry::parseResourceColor(
+    std::size_t index, const parser::PropertyParseFnParams& params) {
+  reconcileResourceColorMutation(index);
+  auto& overlay = inlineResourceColors_[index];
+  auto& destination = overlay ? overlay->base : resourceColor(index);
+  auto error = parser::Parse(
+      params,
+      [](const parser::PropertyParseFnParams& params) {
+        return css::parser::ColorParser::Parse(params.components());
+      },
+      &destination);
+  refreshResourceColor(index);
+  return error;
+}
+
 std::optional<ParseDiagnostic> PropertyRegistry::parseProperty(const css::Declaration& declaration,
                                                                css::Specificity specificity) {
   const std::string_view name(declaration.name);
+  if (name == "flood-color" || name == "stop-color") {
+    return parseResourceColor(
+        name == "flood-color" ? 0 : 1,
+        parser::PropertyParseFnParams::Create(declaration, specificity,
+                                              parser::PropertyParseBehavior::AllowUserUnits));
+  }
+
   const PropertyParseFn* parseFn = kProperties.find(name);
   if (parseFn != nullptr) {
     return (*parseFn)(*this,
@@ -2775,6 +2824,46 @@ std::optional<ParseDiagnostic> PropertyRegistry::parseProperty(const css::Declar
   return std::nullopt;
 }
 
+bool PropertyRegistry::parseInlineResourceColor(
+    const css::Declaration& declaration, std::array<Property<css::Color>, 2>& selectedColors) {
+  auto color =
+      std::find_if(selectedColors.begin(), selectedColors.end(),
+                   [&](const auto& selected) { return selected.name == declaration.name; });
+  if (color == selectedColors.end()) {
+    return false;
+  }
+  const std::size_t index = static_cast<std::size_t>(color - selectedColors.begin());
+  const auto params =
+      parser::PropertyParseFnParams::Create(declaration, css::Specificity::StyleAttribute(),
+                                            parser::PropertyParseBehavior::AllowUserUnits);
+  if (color->isSpecified() && params.specificity < color->specificity) {
+    return true;
+  }
+  const auto error = parser::Parse(
+      params,
+      [](const parser::PropertyParseFnParams& params) {
+        return css::parser::ColorParser::Parse(params.components());
+      },
+      &*color);
+  if (error) {
+    if (!inlineResourceColors_[index]) {
+      unparsedProperties.try_emplace(
+          declaration.name,
+          parser::UnparsedProperty{declaration, css::Specificity::StyleAttribute()});
+    }
+    return true;
+  }
+  if (inlineResourceColors_[index]) {
+    inlineResourceColors_[index]->value = *color;
+  } else {
+    inlineResourceColors_[index].emplace(InlineResourceColor{resourceColor(index), *color});
+  }
+  refreshResourceColor(index);
+  unparsedProperties.insert_or_assign(
+      declaration.name, parser::UnparsedProperty{declaration, css::Specificity::StyleAttribute()});
+  return true;
+}
+
 bool PropertyRegistry::parseStyle(std::string_view str) {
   css::parser::DeclarationListParser::SecurityStats securityStats;
   const std::vector<css::Declaration> declarations =
@@ -2783,50 +2872,30 @@ bool PropertyRegistry::parseStyle(std::string_view str) {
     return false;
   }
   std::array<Property<css::Color>, 2> selectedColors{floodColor, stopColor};
-  auto parseColor = [](const parser::PropertyParseFnParams& params,
-                       Property<css::Color>& selected) {
-    return parser::Parse(
-        params,
-        [](const parser::PropertyParseFnParams& params) {
-          return css::parser::ColorParser::Parse(params.components());
-        },
-        &selected);
-  };
-  for (auto& selected : selectedColors) {
-    selected.clear();
-    if (auto it = unparsedProperties.find(RcString(selected.name));
-        it != unparsedProperties.end()) {
-      std::ignore = parseColor(
-          parser::PropertyParseFnParams::Create(it->second.declaration, it->second.specificity,
-                                                parser::PropertyParseBehavior::AllowUserUnits),
-          selected);
+  for (std::size_t index = 0; index < selectedColors.size(); ++index) {
+    reconcileResourceColorMutation(index);
+    if (inlineResourceColors_[index]) {
+      selectedColors[index] = inlineResourceColors_[index]->value;
+    } else {
+      selectedColors[index].clear();
     }
   }
   for (const auto& declaration : declarations) {
-    auto color =
-        std::find_if(selectedColors.begin(), selectedColors.end(),
-                     [&](const auto& selected) { return selected.name == declaration.name; });
-    if (color == selectedColors.end()) {
+    if (!parseInlineResourceColor(declaration, selectedColors)) {
       std::ignore = parseProperty(declaration, css::Specificity::StyleAttribute());
-      continue;
-    }
-    const auto params =
-        parser::PropertyParseFnParams::Create(declaration, css::Specificity::StyleAttribute(),
-                                              parser::PropertyParseBehavior::AllowUserUnits);
-    if (color->isSpecified() && params.specificity < color->specificity) {
-      continue;
-    }
-    const auto error = parseColor(params, *color);
-    if (!error || !unparsedProperties.contains(declaration.name)) {
-      unparsedProperties.insert_or_assign(
-          declaration.name,
-          parser::UnparsedProperty{declaration, css::Specificity::StyleAttribute()});
     }
   }
   return true;
 }
 
 void PropertyRegistry::clearStyleAttributeProperties() {
+  for (std::size_t index = 0; index < inlineResourceColors_.size(); ++index) {
+    reconcileResourceColorMutation(index);
+    if (inlineResourceColors_[index]) {
+      resourceColor(index) = inlineResourceColors_[index]->base;
+      inlineResourceColors_[index].reset();
+    }
+  }
   const css::Specificity styleSpecificity = css::Specificity::StyleAttribute();
 
   auto properties = allPropertiesMutable();
@@ -2862,6 +2931,10 @@ ParseResult<bool> PropertyRegistry::parsePresentationAttribute(std::string_view 
   }
 
   parser::PropertyParseFnParams params = parser::PropertyParseFnParams::CreateForAttribute(value);
+
+  if (name == "flood-color" || name == "stop-color") {
+    return parseResourceColorAttribute(name == "flood-color" ? 0 : 1, params);
+  }
 
   const PropertyParseFn* parseFn = kProperties.find(name);
   if (parseFn != nullptr) {
@@ -2901,20 +2974,20 @@ ParseResult<bool> PropertyRegistry::parsePresentationAttribute(std::string_view 
 }
 
 void PropertyRegistry::resolveElementColors(ParseWarningSink& warningSink) {
-  for (auto* property : {&floodColor, &stopColor}) {
-    if (auto it = unparsedProperties.find(RcString(property->name));
-        it != unparsedProperties.end()) {
+  for (std::size_t index = 0; index < inlineResourceColors_.size(); ++index) {
+    reconcileResourceColorMutation(index);
+    auto it = unparsedProperties.find(RcString(resourceColor(index).name));
+    if (inlineResourceColors_[index]) {
+      refreshResourceColor(index);
+    } else if (it != unparsedProperties.end()) {
       const auto params =
           parser::PropertyParseFnParams::Create(it->second.declaration, it->second.specificity,
                                                 parser::PropertyParseBehavior::AllowUserUnits);
-      if (auto error = parser::Parse(
-              params,
-              [](const parser::PropertyParseFnParams& params) {
-                return css::parser::ColorParser::Parse(params.components());
-              },
-              property)) {
+      if (auto error = parseResourceColor(index, params)) {
         warningSink.add(std::move(*error));
       }
+    }
+    if (it != unparsedProperties.end()) {
       unparsedProperties.erase(it);
     }
   }

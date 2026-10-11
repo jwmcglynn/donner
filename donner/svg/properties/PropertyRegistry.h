@@ -1,6 +1,7 @@
 #pragma once
 /// @file
 
+#include <array>
 #include <map>
 #include <span>
 #include <string_view>
@@ -526,8 +527,8 @@ public:
   }
 
   /**
-   * Resolve flood and gradient-stop colors before computing inheritance. Authored declarations
-   * remain deferred so replacing an inline style preserves presentation-attribute fallbacks.
+   * Resolve resource-color overlays and deferred diagnostics before computing inheritance.
+   * Retained non-inline values preserve presentation-attribute fallbacks on inline replacement.
    *
    * @param warningSink Receives invalid color diagnostics.
    */
@@ -672,6 +673,37 @@ public:
    * @param registry PropertyRegistry to output.
    */
   friend std::ostream& operator<<(std::ostream& os, const PropertyRegistry& registry);
+
+private:
+  /// Retains both origins while an inline resource color overlays an attribute or stylesheet.
+  struct InlineResourceColor {
+    Property<css::Color> base;
+    Property<css::Color> value;
+  };
+
+  /// Inline-origin state is fixed size and independent of the number of declarations.
+  std::array<std::optional<InlineResourceColor>, 2> inlineResourceColors_;
+
+  /// Returns the stable color property stored in this registry.
+  Property<css::Color>& resourceColor(std::size_t index) UTILS_LIFETIME_BOUND;
+
+  /// Discard stale origin state after a direct public-field mutation.
+  void reconcileResourceColorMutation(std::size_t index);
+
+  /// Select the effective specified value from the retained base and inline origins.
+  void refreshResourceColor(std::size_t index);
+
+  /// Parse one inline resource color, caching selection across the declaration list.
+  bool parseInlineResourceColor(const css::Declaration& declaration,
+                                std::array<Property<css::Color>, 2>& selectedColors);
+
+  /// Apply a resource-color presentation attribute and preserve its diagnostic.
+  ParseResult<bool> parseResourceColorAttribute(std::size_t index,
+                                                const parser::PropertyParseFnParams& params);
+
+  /// Parse a non-inline color without losing a currently active inline overlay.
+  std::optional<ParseDiagnostic> parseResourceColor(std::size_t index,
+                                                    const parser::PropertyParseFnParams& params);
 };
 
 }  // namespace donner::svg
