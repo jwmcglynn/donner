@@ -2379,6 +2379,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     /// mirrors `RendererTinySkia::SurfaceFrame::maskBoundsTransform`.
     Transform2d maskBoundsTransform;
     MaskType maskType = MaskType::Luminance;
+    bool hasRegionClip = false;
   };
   static_assert(!std::is_copy_constructible_v<MaskStackFrame>,
                 "A copyable mask stack frame would let vector growth copy its texture handles.");
@@ -6418,6 +6419,18 @@ void RendererGeode::pushMask(const std::optional<Box2d>& maskBounds, MaskType ma
   captureEncoder->clear(css::RGBA(0, 0, 0, 0));
   impl_->replaceActiveEncoder(std::move(captureEncoder));
   impl_->maskStack.push_back(std::move(frame));
+  const Transform2d& deviceFromMask = impl_->deviceFromLocalTransform;
+  const bool axisAligned = (deviceFromMask.data[1] == 0.0 && deviceFromMask.data[2] == 0.0) ||
+                           (deviceFromMask.data[0] == 0.0 && deviceFromMask.data[3] == 0.0);
+  if (maskBounds.has_value() && !axisAligned) {
+    // The transformed AABB cannot preserve a rotated or sheared mask region. A GPU clip mask
+    // also constrains bitmap and nested offscreen draws that do not consume polygon planes.
+    ResolvedClip regionClip;
+    regionClip.clipRect = maskBounds;
+    regionClip.clipPaths.push_back({.path = PathBuilder().addRect(*maskBounds).build()});
+    pushClip(regionClip);
+    impl_->maskStack.back().hasRegionClip = true;
+  }
   impl_->updateEncoderScissor();
 }
 
@@ -6429,6 +6442,10 @@ void RendererGeode::transitionMaskToContent() {
   Impl::MaskStackFrame& frame = impl_->maskStack.back();
   if (frame.phase != Impl::MaskStackFrame::Phase::Capturing) {
     return;
+  }
+  if (frame.hasRegionClip) {
+    popClip();
+    frame.hasRegionClip = false;
   }
   if (!frame.contentTexture.isValid() || !impl_->encoder) {
     frame.phase = Impl::MaskStackFrame::Phase::Content;
@@ -6458,6 +6475,10 @@ void RendererGeode::popMask() {
   impl_->flushPendingBatch();  // Flush any pending `<use>` batch.
   if (impl_->maskStack.empty()) {
     return;
+  }
+  if (impl_->maskStack.back().hasRegionClip) {
+    popClip();
+    impl_->maskStack.back().hasRegionClip = false;
   }
   Impl::MaskStackFrame frame = std::move(impl_->maskStack.back());
   impl_->maskStack.pop_back();
