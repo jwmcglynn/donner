@@ -398,7 +398,7 @@ TEST(TextEngineHelperTest, ComputeBaselineShiftCoversBaselineKeywords) {
               2.7, 1e-6);
 }
 
-TEST(TextEngineHelperTest, ByteMappingsAndChunkRangesCollapseNonSpacingSequences) {
+TEST(TextEngineHelperTest, ByteMappingsAndChunkRangesUseCodepointIndices) {
   std::string text;
   std::vector<size_t> offsets;
   auto append = [&](char32_t cp) {
@@ -424,17 +424,16 @@ TEST(TextEngineHelperTest, ByteMappingsAndChunkRangesCollapseNonSpacingSequences
 
   const auto mappings = text_engine_detail::buildByteIndexMappings(text);
   for (size_t i = 0; i < cOffsetIndex; ++i) {
-    EXPECT_EQ(mappings.byteToCharIdx[offsets[i]], 0u) << "offset index " << i;
+    EXPECT_EQ(mappings.byteToCharIdx[offsets[i]], i) << "offset index " << i;
   }
-  EXPECT_EQ(mappings.byteToCharIdx[offsets[cOffsetIndex]], 1u);
-  EXPECT_EQ(mappings.byteToCharIdx[offsets[emojiOffsetIndex]], 3u);
-  EXPECT_EQ(mappings.byteToCharIdx[offsets[dOffsetIndex]], 4u);
+  EXPECT_EQ(mappings.byteToCharIdx[offsets[cOffsetIndex]], cOffsetIndex);
+  EXPECT_EQ(mappings.byteToCharIdx[offsets[emojiOffsetIndex]], emojiOffsetIndex);
+  EXPECT_EQ(mappings.byteToCharIdx[offsets[dOffsetIndex]], dOffsetIndex);
 
   SmallVector<std::optional<Lengthd>, 1> xList;
-  xList.push_back(std::nullopt);
-  xList.push_back(Lengthd(10.0, Lengthd::Unit::None));
-  xList.push_back(std::nullopt);
-  xList.push_back(Lengthd(20.0, Lengthd::Unit::None));
+  xList.resize(offsets.size());
+  xList[cOffsetIndex] = Lengthd(10.0, Lengthd::Unit::None);
+  xList[emojiOffsetIndex] = Lengthd(20.0, Lengthd::Unit::None);
   SmallVector<std::optional<Lengthd>, 1> yList;
 
   const auto chunks = text_engine_detail::findChunkRanges(text, xList, yList);

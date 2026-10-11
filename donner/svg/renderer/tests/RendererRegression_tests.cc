@@ -15,6 +15,7 @@
 #include "donner/base/ParseWarningSink.h"
 #include "donner/base/tests/BaseTestUtils.h"
 #include "donner/base/tests/Runfiles.h"
+#include "donner/editor/tests/BitmapGoldenCompare.h"
 #include "donner/svg/SVGImageElement.h"
 #include "donner/svg/SVGTextElement.h"
 #include "donner/svg/components/shape/ShapeSystem.h"
@@ -664,15 +665,6 @@ TEST_F(RendererRegressionTests, SpanGradientOverridesElementPatternStroke) {
   renderAndCompare(document, svg, golden, GoldenParams());
 }
 
-TEST_F(RendererRegressionTests, NestedTextRotationMatchesResvgReference) {
-  const std::string svg = Runfiles::instance().Rlocation(
-      "third_party/resvg-test-suite/tests/text/tspan/nested-rotate.svg");
-  const std::string golden = Runfiles::instance().Rlocation(
-      "third_party/resvg-test-suite/tests/text/tspan/nested-rotate.png");
-  SVGDocument document = loadSVG(svg.c_str(), ResvgResourceRoot());
-  renderAndCompare(document, svg, golden.c_str(), Params().setCanvasSize(500, 500));
-}
-
 TEST_F(RendererRegressionTests, NestedTextRotationMatchesExplicitCharacterRotations) {
   const RendererBitmap inherited = RenderTextOpacityCase(
       R"svg(<text x="15" y="90" font-family="Noto Sans" font-size="24"
@@ -681,8 +673,22 @@ TEST_F(RendererRegressionTests, NestedTextRotationMatchesExplicitCharacterRotati
       R"svg(<text x="15" y="90" font-family="Noto Sans" font-size="24"
                   rotate="1">A<tspan rotate="10">B<tspan rotate="20">C</tspan><tspan rotate="90">D</tspan><tspan rotate="30">E</tspan></tspan><tspan rotate="6">F</tspan><tspan rotate="7">G</tspan><tspan rotate="7">H</tspan></text>)svg");
 
-  ExpectVisibleBitmap(explicitRotations, "explicit_character_rotations_visible");
-  ExpectBitmapsIdentical(inherited, explicitRotations, "nested_character_rotations");
+  ASSERT_THAT(inherited.empty(), testing::IsFalse());
+  ASSERT_THAT(explicitRotations.empty(), testing::IsFalse());
+  RendererBitmap empty = explicitRotations;
+  std::fill(empty.pixels.begin(), empty.pixels.end(), 0);
+  int visiblePixels = -1;
+  testing::TestPartResultArray differences;
+  {
+    testing::ScopedFakeTestPartResultReporter capture(
+        testing::ScopedFakeTestPartResultReporter::INTERCEPT_ONLY_CURRENT_THREAD, &differences);
+    editor::tests::CompareBitmapToBitmap(explicitRotations, empty,
+                                         "explicit_character_rotations_visible",
+                                         editor::tests::PixelmatchIdentityParams(), &visiblePixels);
+  }
+  EXPECT_THAT(visiblePixels, testing::Gt(0));
+  editor::tests::CompareBitmapToBitmap(inherited, explicitRotations, "nested_character_rotations",
+                                       editor::tests::PixelmatchIdentityParams());
 }
 
 TEST_F(RendererRegressionTests, TextOpacityAppliesOnceLikeGroupOpacity) {

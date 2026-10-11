@@ -181,9 +181,8 @@ TEST(FindChunkRangesTest, HandlesMultibyteUtf8) {
   EXPECT_THAT(ranges, ElementsAre(ChunkRangeIs(0u, 1u), ChunkRangeIs(1u, 3u)));
 }
 
-TEST(FindChunkRangesTest, KeepsJoinerAndVariationSelectorWithBaseCluster) {
-  // A + ZWJ + B + VS16 + C.  The joiner sequence and variation selector stay in the
-  // first SVG addressable character cluster; the absolute x at character index 1 starts C.
+TEST(FindChunkRangesTest, SplitsAtCodepointPositionInsideJoinerSequence) {
+  // The absolute position at codepoint index 1 applies to the joiner, before B.
   const std::string text =
       "A\xE2\x80\x8D"
       "B\xEF\xB8\x8F"
@@ -193,7 +192,7 @@ TEST(FindChunkRangesTest, KeepsJoinerAndVariationSelectorWithBaseCluster) {
 
   const auto ranges = findChunkRanges(text, xList, yList);
 
-  EXPECT_THAT(ranges, ElementsAre(ChunkRangeIs(0u, 8u), ChunkRangeIs(8u, 9u)));
+  EXPECT_THAT(ranges, ElementsAre(ChunkRangeIs(0u, 1u), ChunkRangeIs(1u, 9u)));
 }
 
 TEST(FindChunkRangesTest, EmptyTextReturnsSingleEmptyRange) {
@@ -211,23 +210,23 @@ TEST(BuildByteIndexMappingsTest, AsciiText) {
   EXPECT_THAT(m.byteToRawCpIdx, ElementsAre(0u, 1u, 2u));
 }
 
-TEST(BuildByteIndexMappingsTest, CombiningMarkSharesBaseIndex) {
+TEST(BuildByteIndexMappingsTest, CombiningMarkConsumesPositioningIndex) {
   // "o" + combining low line (U+0332, 2 bytes: CC B2)
   const auto m = buildByteIndexMappings("o\xCC\xB2");
-  EXPECT_THAT(m.byteToCharIdx, ElementsAre(0u, 0u, 0u));
+  EXPECT_THAT(m.byteToCharIdx, ElementsAre(0u, 1u, 1u));
 }
 
-TEST(BuildByteIndexMappingsTest, JoinerAndVariationSelectorShareBaseIndex) {
+TEST(BuildByteIndexMappingsTest, JoinerAndVariationSelectorConsumePositioningIndices) {
   const auto m = buildByteIndexMappings(
       "A\xE2\x80\x8D"
       "B\xEF\xB8\x8F"
       "C");
 
-  EXPECT_THAT(m.byteToCharIdx, ElementsAre(0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 1u));
+  EXPECT_THAT(m.byteToCharIdx, ElementsAre(0u, 1u, 1u, 1u, 2u, 3u, 3u, 3u, 4u));
   EXPECT_THAT(m.byteToRawCpIdx, ElementsAre(0u, 1u, 1u, 1u, 2u, 3u, 3u, 3u, 4u));
 }
 
-TEST(BuildByteIndexMappingsTest, RepresentativeNonSpacingRangesShareBaseIndex) {
+TEST(BuildByteIndexMappingsTest, EveryNonSpacingCodepointConsumesPositioningIndex) {
   std::string text;
   std::vector<size_t> offsets;
   auto append = [&](char32_t cp) {
@@ -250,18 +249,24 @@ TEST(BuildByteIndexMappingsTest, RepresentativeNonSpacingRangesShareBaseIndex) {
   const auto m = buildByteIndexMappings(text);
 
   for (size_t i = 0; i < cOffsetIndex; ++i) {
-    EXPECT_EQ(m.byteToCharIdx[offsets[i]], 0u) << "offset index " << i;
+    EXPECT_EQ(m.byteToCharIdx[offsets[i]], i) << "offset index " << i;
   }
-  EXPECT_EQ(m.byteToCharIdx[offsets[cOffsetIndex]], 1u);
+  EXPECT_EQ(m.byteToCharIdx[offsets[cOffsetIndex]], cOffsetIndex);
 }
 
-TEST(BuildByteIndexMappingsTest, SupplementaryCharacterConsumeTwoIndices) {
-  // "A" + U+1F601 (😁, 4 bytes) + "B". Supplementary chars increment charIdx by 2
-  // (UTF-16 surrogate pair semantics) when they're not the first character.
+TEST(BuildByteIndexMappingsTest, SupplementaryCharacterConsumesOnePositioningIndex) {
+  // A supplementary codepoint consumes one SVG positioning entry, regardless of its byte size.
   const auto m = buildByteIndexMappings(
       "A\xF0\x9F\x98\x81"
       "B");
-  EXPECT_THAT(m.byteToCharIdx, ElementsAre(0u, 2u, 2u, 2u, 2u, 3u));
+  EXPECT_THAT(m.byteToCharIdx, ElementsAre(0u, 1u, 1u, 1u, 1u, 2u));
+}
+
+TEST(BuildByteIndexMappingsTest, MalformedUtf8UsesOneIndexPerReplacement) {
+  const auto mappings = buildByteIndexMappings(
+      "\x80\xF0\x9F"
+      "A");
+  EXPECT_THAT(mappings.byteToCharIdx, ElementsAre(0u, 1u, 2u, 3u));
 }
 
 TEST(BuildByteIndexMappingsTest, EmptyText) {
@@ -617,7 +622,7 @@ TEST(ApplyTextLengthTest, TextPathStopsIncomingAndOutgoingCarry) {
                                 RunGlyphsAre(ElementsAre(GlyphXPositionIs(DoubleEq(20.0))))));
 }
 
-TEST(ApplyTextLengthTest, Utf8AndUtf16ResetMapsOutOfOrderGlyphClusters) {
+TEST(ApplyTextLengthTest, CodepointResetMapsOutOfOrderUtf8GlyphClusters) {
   std::vector<TextRun> runs(2);
   runs[0].glyphs = {{.xPosition = 0.0, .xAdvance = 10.0}};
   runs[1].glyphs = {{.xPosition = 30.0, .cluster = 3},
@@ -647,7 +652,7 @@ TEST(ApplyTextLengthTest, Utf8AndUtf16ResetMapsOutOfOrderGlyphClusters) {
   applyTextLength(runs, text, extents, params, false, 80.0, 0.0);
 
   EXPECT_THAT(runs[1].glyphs,
-              ElementsAre(GlyphXPositionIs(DoubleEq(30.0)), GlyphXPositionIs(DoubleEq(10.0)),
+              ElementsAre(GlyphXPositionIs(DoubleEq(40.0)), GlyphXPositionIs(DoubleEq(10.0)),
                           GlyphXPositionIs(DoubleEq(70.0)), GlyphXPositionIs(DoubleEq(20.0))));
 }
 

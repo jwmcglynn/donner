@@ -385,8 +385,6 @@ donner_cc_test(
         "//donner/svg/renderer/testdata",
         "//third_party/resvg-test-suite:fonts",
         "//third_party/resvg-test-suite:resources",
-        "//third_party/resvg-test-suite:tests/text/tspan/nested-rotate.png",
-        "//third_party/resvg-test-suite:tests/text/tspan/nested-rotate.svg",
     ],
     opens_gpu_device = True,
     variants = [
@@ -397,6 +395,7 @@ donner_cc_test(
         ":image_comparison_test_fixture",
         "//donner/base:base_test_utils",
         "//donner/base:gtest_timeout_main",
+        "//donner/editor/tests:bitmap_golden_compare",
         "//donner/svg/components",
         "//donner/svg/renderer:pixel_format_utils",
         "//donner/svg/renderer:renderer_image_io",

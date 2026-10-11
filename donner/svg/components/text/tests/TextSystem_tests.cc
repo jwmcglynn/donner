@@ -1090,6 +1090,112 @@ TEST_F(TextSystemTest, RotationInsideTextAnchorUsesTextRootAndNestedOverrides) {
   }
 }
 
+TEST_F(TextSystemTest, PositioningAttributesUseCodepointsAcrossTransparentSpans) {
+  struct Case {
+    const char* name;
+    const char* prefix;
+    double nestedPosition;
+    double continuationPosition;
+  };
+  const Case cases[] = {
+      {"supplementary", "&#x1F600;", 20, 30},
+      {"BMP", "&#xE9;", 20, 30},
+      {"combining", "A&#x301;", 30, 40},
+      {"joiner", "A&#x200D;B", 40, 50},
+  };
+  for (const auto& test : cases) {
+    SCOPED_TRACE(test.name);
+    const std::string markup =
+        std::string(R"svg(<svg xmlns="http://www.w3.org/2000/svg"><text id="t"
+          x="10 20 30 40 50 60" y="11 21 31 41 51 61" dx="1 2 3 4 5 6"
+          dy="7 8 9 10 11 12" rotate="10 20 30 40 50 60">)svg") +
+        test.prefix + "<tspan>A</tspan>B</text></svg>";
+    auto document = ParseAndCompute(markup);
+    const auto* computed =
+        document.querySelector("#t")->unsafeEntityHandle().try_get<ComputedTextComponent>();
+    ASSERT_THAT(computed, testing::NotNull());
+    ASSERT_THAT(computed->spans, SizeIs(3));
+    for (const auto [index, position] :
+         {std::pair{1u, test.nestedPosition}, std::pair{2u, test.continuationPosition}}) {
+      SCOPED_TRACE(index);
+      const auto& span = computed->spans[index];
+      EXPECT_THAT(span.xList, testing::ElementsAre(OptionalLengthValueIs(position)));
+      EXPECT_THAT(span.yList, testing::ElementsAre(OptionalLengthValueIs(position + 1)));
+      EXPECT_THAT(span.dxList, testing::ElementsAre(OptionalLengthValueIs(position / 10)));
+      EXPECT_THAT(span.dyList, testing::ElementsAre(OptionalLengthValueIs(position / 10 + 6)));
+      EXPECT_THAT(span.rotateList, testing::ElementsAre(testing::DoubleEq(position)));
+    }
+  }
+}
+
+TEST_F(TextSystemTest, PositioningAttributesIgnoreGroupingAncestorsOutsideText) {
+  auto document = ParseAndCompute(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <a x="10 20 30" y="11 21 31" dx="1 2 3" dy="7 8 9" rotate="45">
+        <text id="t">A<tspan>B</tspan>C</text>
+      </a>
+    </svg>
+  )svg");
+  const auto* computed =
+      document.querySelector("#t")->unsafeEntityHandle().try_get<ComputedTextComponent>();
+  ASSERT_THAT(computed, testing::NotNull());
+  ASSERT_THAT(computed->spans, SizeIs(3));
+  for (const auto& span : computed->spans) {
+    EXPECT_THAT(span.xList, testing::ElementsAre(NoLengthValue()));
+    EXPECT_THAT(span.yList, testing::ElementsAre(NoLengthValue()));
+    EXPECT_THAT(span.dxList, testing::ElementsAre(NoLengthValue()));
+    EXPECT_THAT(span.dyList, testing::ElementsAre(NoLengthValue()));
+    EXPECT_THAT(span.rotateList, IsEmpty());
+  }
+}
+
+TEST_F(TextSystemTest, PositioningAttributesIgnoreUnsupportedTextPathFields) {
+  auto document = ParseAndCompute(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <path id="p" d="M0 100H200"/>
+      <text id="t" x="10 20 30" y="11 21 31" dx="1 2 3" dy="7 8 9" rotate="10 20 30">
+        <textPath href="#p" x="900 901 902" y="800 801 802" dx="700 701 702"
+                  dy="600 601 602" rotate="500 501 502">A<tspan>B</tspan>C</textPath>
+      </text>
+    </svg>
+  )svg");
+  const auto* computed =
+      document.querySelector("#t")->unsafeEntityHandle().try_get<ComputedTextComponent>();
+  ASSERT_THAT(computed, testing::NotNull());
+  ASSERT_THAT(computed->spans, SizeIs(4));
+  for (size_t index = 1; index < 4; ++index) {
+    SCOPED_TRACE(index);
+    const auto& span = computed->spans[index];
+    EXPECT_THAT(span.xList, testing::ElementsAre(OptionalLengthValueIs(index * 10)));
+    EXPECT_THAT(span.yList, testing::ElementsAre(OptionalLengthValueIs(index * 10 + 1)));
+    EXPECT_THAT(span.dxList, testing::ElementsAre(OptionalLengthValueIs(index)));
+    EXPECT_THAT(span.dyList, testing::ElementsAre(OptionalLengthValueIs(index + 6)));
+    EXPECT_THAT(span.rotateList, testing::ElementsAre(testing::DoubleEq(index * 10)));
+  }
+}
+
+TEST_F(TextSystemTest, MalformedUtf8ReplacementConsumesOnePositioningIndex) {
+  auto document = ParseAndCompute(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg"><text id="t" x="10 20 30"
+      y="11 21 31" dx="1 2 3" dy="7 8 9" rotate="10 20 30">X<tspan>A</tspan>B</text></svg>
+  )svg");
+  auto handle = document.querySelector("#t")->unsafeEntityHandle();
+  handle.get<TextComponent>().textChunks[0] = RcString("\x80");
+  ParseWarningSink warnings;
+  TextSystem().instantiateComputedComponent(handle, warnings);
+  const auto& computed = handle.get<ComputedTextComponent>();
+  ASSERT_THAT(computed.spans, SizeIs(3));
+  for (size_t index = 1; index < 3; ++index) {
+    SCOPED_TRACE(index);
+    const auto& span = computed.spans[index];
+    EXPECT_THAT(span.xList, testing::ElementsAre(OptionalLengthValueIs((index + 1) * 10)));
+    EXPECT_THAT(span.yList, testing::ElementsAre(OptionalLengthValueIs((index + 1) * 10 + 1)));
+    EXPECT_THAT(span.dxList, testing::ElementsAre(OptionalLengthValueIs(index + 1)));
+    EXPECT_THAT(span.dyList, testing::ElementsAre(OptionalLengthValueIs(index + 7)));
+    EXPECT_THAT(span.rotateList, testing::ElementsAre(testing::DoubleEq((index + 1) * 10)));
+  }
+}
+
 TEST_F(TextSystemTest, XmlSpacePreserveKeepsWhitespaceAndInheritance) {
   auto document = ParseAndCompute(R"svg(
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
