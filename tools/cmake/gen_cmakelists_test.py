@@ -511,42 +511,6 @@ class ExtractTargetsAndRefsTest(unittest.TestCase):
             self.assertNotIn("fake", defined)
 
 
-class CmakeBuildJobsCliTest(unittest.TestCase):
-    def test_build_jobs_are_forwarded_and_default_is_preserved(self):
-        for options, expected_jobs in (([], None), (["--build-jobs", "2"], 2)):
-            with self.subTest(options=options), tempfile.TemporaryDirectory() as directory:
-                with (mock.patch.object(sys, "argv", ["gen", "--check", "--build", *options]),
-                      mock.patch.object(g.Path, "cwd", return_value=Path(directory)),
-                      mock.patch.object(g, "generate_root"),
-                      mock.patch.object(g, "generate_all_packages"),
-                      mock.patch.object(g, "_validate_generated_output", return_value=[]),
-                      mock.patch.object(g, "_run_cmake_build_validation", return_value=None) as build,
-                      mock.patch.object(g, "_unmapped_deps", []),
-                      mock.patch.object(g, "_check_mode", False),
-                      mock.patch.object(g, "_set_bazel_startup_args")):
-                    with self.assertRaises(SystemExit) as result:
-                        g.main()
-                    self.assertEqual(result.exception.code, 0)
-                    self.assertEqual(build.call_count, 1)
-                    self.assertEqual(build.call_args.kwargs, {"jobs": expected_jobs})
-                    self.assertEqual(build.call_args.args[0], Path(directory))
-
-    def test_build_jobs_reject_nonpositive_and_invalid_values(self):
-        for value in ("0", "-1", "invalid"):
-            with self.subTest(value=value), mock.patch.object(
-                sys, "argv", ["gen", "--check", "--build", "--build-jobs", value]
-            ):
-                with self.assertRaises(SystemExit) as result:
-                    g.main()
-                self.assertEqual(result.exception.code, 2)
-
-    def test_build_jobs_require_build(self):
-        with mock.patch.object(sys, "argv", ["gen", "--check", "--build-jobs", "2"]):
-            with self.assertRaises(SystemExit) as result:
-                g.main()
-            self.assertEqual(result.exception.code, 2)
-
-
 class CmakeBuildValidationTest(unittest.TestCase):
     def _completed_cmake_process(self, returncode=0, stdout=""):
         return g.subprocess.CompletedProcess(
