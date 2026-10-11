@@ -17,6 +17,14 @@ exports_files(
     ],
 )
 
+# A file under a third_party directory with no BUILD file of its own belongs to this package. The
+# release notice fixture `//tools:closure_notice_fixture_root_package_file_tests` checks that the
+# closure walk still attributes such a file to its directory's component.
+exports_files(
+    ["stb/LICENSE"],
+    visibility = ["//tools:__pkg__"],
+)
+
 # Perf-sensitive wrappers for external deps that are shared between the Skia
 # rendering pipeline (built in opt via _force_opt_transition) and the rest of
 # the project.  By routing ALL usages through these wrappers the dep is always
