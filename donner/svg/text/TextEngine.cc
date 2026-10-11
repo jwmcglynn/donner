@@ -446,29 +446,19 @@ std::vector<ChunkRange> findChunkRanges(std::string_view spanText,
                                         const SmallVector<std::optional<Lengthd>, 1>& yList) {
   std::vector<ChunkRange> chunkRanges;
   size_t scanPos = 0;
-  unsigned int scanCharIdx = 0;
-  bool scanFirst = true;
-  bool scanPrevWasZwj = false;
+  unsigned int codepointIndex = 0;
   size_t currentChunkStart = 0;
 
   while (scanPos < spanText.size()) {
-    size_t byteStart = scanPos;
-    uint32_t cp = decodeUtf8(spanText, scanPos);
-
-    bool scanCombining = isNonSpacing(cp) || scanPrevWasZwj;
-    scanPrevWasZwj = (cp == 0x200D);
-    if (!scanCombining && !scanFirst) {
-      scanCharIdx += (cp >= 0x10000) ? 2 : 1;
-    }
-    scanFirst = false;
-
-    bool hasAbsX = scanCharIdx < xList.size() && xList[scanCharIdx].has_value();
-    bool hasAbsY = scanCharIdx < yList.size() && yList[scanCharIdx].has_value();
-
+    const size_t byteStart = scanPos;
+    decodeUtf8(spanText, scanPos);
+    const bool hasAbsX = codepointIndex < xList.size() && xList[codepointIndex].has_value();
+    const bool hasAbsY = codepointIndex < yList.size() && yList[codepointIndex].has_value();
     if ((hasAbsX || hasAbsY) && byteStart != currentChunkStart) {
       chunkRanges.push_back({currentChunkStart, byteStart});
       currentChunkStart = byteStart;
     }
+    ++codepointIndex;
   }
   chunkRanges.push_back({currentChunkStart, spanText.size()});
   return chunkRanges;
@@ -477,32 +467,16 @@ std::vector<ChunkRange> findChunkRanges(std::string_view spanText,
 ByteIndexMappings buildByteIndexMappings(std::string_view spanText) {
   ByteIndexMappings result;
   result.byteToCharIdx.resize(spanText.size(), 0);
-  result.byteToRawCpIdx.resize(spanText.size(), 0);
-
-  unsigned int ci = 0;
-  unsigned int rawCi = 0;
-  bool mapFirst = true;
-  bool mapPrevZwj = false;
-  size_t bi = 0;
-
-  while (bi < spanText.size()) {
-    size_t startBi = bi;
-    const uint32_t cp = decodeUtf8(spanText, bi);
-    const bool nonSpacing = isNonSpacing(cp) || mapPrevZwj;
-    mapPrevZwj = (cp == 0x200D);
-    if (!nonSpacing && !mapFirst) {
-      ci += (cp >= 0x10000) ? 2 : 1;
+  unsigned int codepointIndex = 0;
+  size_t byteIndex = 0;
+  while (byteIndex < spanText.size()) {
+    const size_t startIndex = byteIndex;
+    decodeUtf8(spanText, byteIndex);
+    for (size_t i = startIndex; i < byteIndex; ++i) {
+      result.byteToCharIdx[i] = codepointIndex;
     }
-    if (!mapFirst) {
-      rawCi += (cp >= 0x10000) ? 2 : 1;
-    }
-    mapFirst = false;
-    for (size_t j = startBi; j < bi && j < spanText.size(); ++j) {
-      result.byteToCharIdx[j] = ci;
-      result.byteToRawCpIdx[j] = rawCi;
-    }
+    ++codepointIndex;
   }
-
   return result;
 }
 
@@ -1879,7 +1853,6 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
     // ── Build byte→index mappings for the span text ──────────────────────────────
     const ByteIndexMappings indexMappings = buildByteIndexMappings(spanText);
     const auto& byteToCharIdx = indexMappings.byteToCharIdx;
-    const auto& byteToRawCpIdx = indexMappings.byteToRawCpIdx;
 
     // ── Shape each chunk and iterate its glyphs ─────────────────────────────────
     uint32_t lastCodepoint = 0;
@@ -1955,8 +1928,6 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
         // Look up per-character indices from the byte→index mappings.
         const unsigned int charIdx =
             sg.cluster < byteToCharIdx.size() ? byteToCharIdx[sg.cluster] : 0;
-        const unsigned int rawCpIdx =
-            sg.cluster < byteToRawCpIdx.size() ? byteToRawCpIdx[sg.cluster] : 0;
 
         if (vertical) {
           // ── Vertical mode ─────────────────────────────────────────────────────
@@ -2036,8 +2007,8 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
             glyph.xPosition -= centralBaselineOffset;
 
             double baseRotation = 90.0;
-            if (rawCpIdx < span.rotateList.size()) {
-              glyph.rotateDegrees = span.rotateList[rawCpIdx] + baseRotation;
+            if (charIdx < span.rotateList.size()) {
+              glyph.rotateDegrees = span.rotateList[charIdx] + baseRotation;
             } else if (!span.rotateList.empty()) {
               glyph.rotateDegrees = span.rotateList.back() + baseRotation;
             } else {
@@ -2049,8 +2020,8 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
             glyph.xPosition = penX + sg.xOffset;
             glyph.yPosition = penY + sg.yOffset;
 
-            if (rawCpIdx < span.rotateList.size()) {
-              glyph.rotateDegrees = span.rotateList[rawCpIdx];
+            if (charIdx < span.rotateList.size()) {
+              glyph.rotateDegrees = span.rotateList[charIdx];
             } else if (!span.rotateList.empty()) {
               glyph.rotateDegrees = span.rotateList.back();
             }
@@ -2128,8 +2099,8 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
           glyph.cluster = sg.cluster;
 
           // Per-character rotation (last value repeats per SVG spec).
-          if (rawCpIdx < span.rotateList.size()) {
-            glyph.rotateDegrees = span.rotateList[rawCpIdx];
+          if (charIdx < span.rotateList.size()) {
+            glyph.rotateDegrees = span.rotateList[charIdx];
           } else if (!span.rotateList.empty()) {
             glyph.rotateDegrees = span.rotateList.back();
           }
@@ -2150,21 +2121,6 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
           }
 
           run.glyphs.push_back(glyph);
-
-          // Supplementary characters consume a trailing UTF-16 code unit. Apply its coordinate
-          // values to the next glyph to preserve SVG's UTF-16 indexed positioning semantics.
-          if (codepoint >= 0x10000) {
-            const unsigned int lowIdx = charIdx + 1;
-            if (lowIdx < yListLocal.size() && yListLocal[lowIdx].has_value()) {
-              penY = yListLocal[lowIdx]->toPixels(params.viewBox, params.fontMetrics,
-                                                  Lengthd::Extent::Y) +
-                     defaultY;
-            }
-            if (lowIdx < xListLocal.size() && xListLocal[lowIdx].has_value()) {
-              penX = xListLocal[lowIdx]->toPixels(params.viewBox, params.fontMetrics,
-                                                  Lengthd::Extent::X);
-            }
-          }
 
           penX += sg.xAdvance;
 

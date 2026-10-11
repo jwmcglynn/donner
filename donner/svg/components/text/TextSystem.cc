@@ -6,6 +6,7 @@
 #include <optional>
 #include <unordered_map>
 
+#include "donner/base/Utf8.h"
 #include "donner/base/xml/components/AttributesComponent.h"
 #include "donner/base/xml/components/TreeComponent.h"
 #include "donner/svg/components/ConditionalProcessingComponent.h"
@@ -25,15 +26,12 @@ namespace donner::svg::components {
 
 namespace {
 
-size_t countUtf16CodeUnits(std::string_view utf8) {
+size_t countCodepoints(std::string_view utf8) {
   size_t count = 0;
-  for (unsigned char c : utf8) {
-    if ((c & 0xC0) != 0x80) {
-      count++;
-      if ((c & 0xF8) == 0xF0) {
-        count++;
-      }
-    }
+  while (!utf8.empty()) {
+    const auto [codepoint, length] = Utf8::NextCodepoint(utf8);
+    utf8.remove_prefix(static_cast<size_t>(length));
+    ++count;
   }
   return count;
 }
@@ -308,10 +306,9 @@ void TextSystem::instantiateComputedComponent(EntityHandle rootHandle,
     // Only apply element positioning for non-textPath elements.
     const bool isTextPath = handle.all_of<TextPathComponent>();
     const bool applyPositioning = applyElementPositioning && !isTextPath;
-    span.startsNewChunk = applyPositioning && (!pos.x.empty() || !pos.y.empty());
 
-    const size_t charCount = countUtf16CodeUnits(spanText);
-    const size_t listSize = std::max(charCount, size_t(1));
+    const size_t charCount = countCodepoints(spanText);
+    const size_t listSize = charCount;
 
     span.xList.resize(listSize);
     span.yList.resize(listSize);
@@ -319,32 +316,25 @@ void TextSystem::instantiateComputedComponent(EntityHandle rootHandle,
     span.dyList.resize(listSize);
 
     auto findAncestorValue = [&](size_t ci, const auto& getList) -> std::optional<Lengthd> {
-      const auto& elemList = getList(pos);
-      if (applyPositioning && ci < elemList.size()) {
-        return elemList[ci];
-      }
-
       Entity current = handle.entity();
       while (current != entt::null) {
-        auto* tree = registry.try_get<donner::components::TreeComponent>(current);
-        if (!tree || tree->parent() == entt::null) {
+        const auto* positioning = registry.try_get<TextPositioningComponent>(current);
+        if (positioning && !registry.any_of<TextPathComponent>(current)) {
+          const auto& values = getList(*positioning);
+          const auto offset = entitySubtreeCharOffset.find(current);
+          const size_t startIndex = offset != entitySubtreeCharOffset.end() ? offset->second : 0;
+          if (startIndex < values.size() && ci < values.size() - startIndex) {
+            return values[startIndex + ci];
+          }
+        }
+        if (registry.any_of<TextRootComponent>(current)) {
+          break;
+        }
+        const auto* tree = registry.try_get<donner::components::TreeComponent>(current);
+        if (!tree) {
           break;
         }
         current = tree->parent();
-
-        auto* ancestorPos = registry.try_get<TextPositioningComponent>(current);
-        if (!ancestorPos) {
-          continue;
-        }
-        const auto& ancestorList = getList(*ancestorPos);
-        if (ancestorList.empty()) {
-          continue;
-        }
-
-        size_t ancestorIdx = entitySubtreeCharOffset[current] + ci;
-        if (ancestorIdx < ancestorList.size()) {
-          return ancestorList[ancestorIdx];
-        }
       }
       return std::nullopt;
     };
@@ -360,6 +350,9 @@ void TextSystem::instantiateComputedComponent(EntityHandle rootHandle,
       span.dxList[ci] = findAncestorValue(ci, getDx);
       span.dyList[ci] = findAncestorValue(ci, getDy);
     }
+
+    span.startsNewChunk = !isTextPath && !span.xList.empty() &&
+                          (span.xList.front().has_value() || span.yList.front().has_value());
 
     if (applyPositioning && !pos.rotateDegrees.empty()) {
       span.rotateList.assign(pos.rotateDegrees.begin(), pos.rotateDegrees.end());
