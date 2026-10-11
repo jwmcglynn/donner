@@ -1007,6 +1007,111 @@ TEST(TextEngineTest, SupplementaryCodepointPositionsPreserveEmojiClusterShaping)
                                                    GlyphYPositionIs(DoubleNear(130.0, 1.0))))));
 }
 
+#ifdef DONNER_TEXT_FULL
+TEST(TextEngineTest, JoinedShapingKeepsPositioningSlotsAndRelativeCarry) {
+  struct Case {
+    const char* file;
+    const char* family;
+    const char* prefix;
+    const char* following;
+    bool bitmapOnly;
+  };
+  const Case cases[] = {
+      {"NotoSansDevanagari-Regular.ttf", "Noto Sans Devanagari",
+       "\xE0\xA4\x95\xE2\x80\x8D\xE0\xA4\xBF", "B", false},
+      {"NotoColorEmoji.ttf", "Noto Color Emoji", "\xF0\x9F\x91\xA9\xE2\x80\x8D\xF0\x9F\x92\xBB",
+       "\xF0\x9F\x98\x80", true},
+  };
+  for (const auto& test : cases) {
+    SCOPED_TRACE(test.family);
+    Registry registry;
+    FontManager manager(registry);
+    const FontHandle font = LoadResvgFont(manager, test.file, test.family);
+    ASSERT_TRUE(static_cast<bool>(font));
+    TextEngine engine(manager, registry);
+    TextBackendFull backend(manager, registry);
+    const std::string prefix(test.prefix);
+    const auto shaped =
+        backend.shapeRun(font, 20, prefix, 0, prefix.size(), false, FontVariant::Normal, false);
+    ASSERT_FALSE(shaped.glyphs.empty());
+    for (const auto& glyph : shaped.glyphs) {
+      EXPECT_EQ(glyph.cluster, 0u);
+    }
+    components::ComputedTextComponent text;
+    auto first = MakeSpan(prefix);
+    first.xList = {Lengthd(15), Lengthd(99), Lengthd(99)};
+    first.yList = {Lengthd(80), Lengthd(99), Lengthd(99)};
+    first.dxList = {Lengthd(1), Lengthd(2), Lengthd(3)};
+    first.dyList = {Lengthd(1), Lengthd(2), Lengthd(3)};
+    first.rotateList = {0, 10, 20, 30};
+    text.spans.push_back(std::move(first));
+    auto following = MakeSpan(test.following);
+    following.xList = {Lengthd(85)};
+    following.yList = {Lengthd(130)};
+    following.dxList = {Lengthd(4)};
+    following.dyList = {Lengthd(4)};
+    following.rotateList = {30};
+    text.spans.push_back(std::move(following));
+    auto params = MakeTextParams(20);
+    params.fontFamilies = {RcString(test.family)};
+    const auto runs = engine.layout(text, params);
+    ASSERT_EQ(runs.size(), 2u);
+    ASSERT_EQ(runs[0].glyphs.size(), shaped.glyphs.size());
+    ASSERT_EQ(runs[1].glyphs.size(), 1u);
+    EXPECT_THAT(runs[0].glyphs.front(),
+                AllOf(GlyphXPositionIs(DoubleEq(16)), GlyphYPositionIs(DoubleEq(81)),
+                      GlyphRotateDegreesIs(DoubleEq(0))));
+    EXPECT_THAT(runs[1].glyphs.front(),
+                AllOf(GlyphXPositionIs(DoubleEq(94)), GlyphYPositionIs(DoubleEq(139)),
+                      GlyphRotateDegreesIs(DoubleEq(30))));
+    double shapedAdvance = 0;
+    for (size_t index = 0; index < shaped.glyphs.size(); ++index) {
+      EXPECT_THAT(
+          runs[0].glyphs[index],
+          AllOf(GlyphXPositionIs(DoubleEq(16 + shapedAdvance + shaped.glyphs[index].xOffset)),
+                GlyphYPositionIs(DoubleEq(81 + shaped.glyphs[index].yOffset)),
+                GlyphRotateDegreesIs(DoubleEq(0))));
+      shapedAdvance += shaped.glyphs[index].xAdvance;
+    }
+    size_t visibleGlyphs = 0;
+    size_t invisibleGlyphs = 0;
+    for (const auto& run : runs) {
+      EXPECT_EQ(run.font, font);
+      EXPECT_EQ(engine.isBitmapOnly(run.font), test.bitmapOnly);
+      const float scale = engine.scaleForEmToPixels(run.font, run.usedFontSizePx);
+      for (const auto& glyph : run.glyphs) {
+        EXPECT_EQ(glyph.cluster, 0u);
+        const Path outline = engine.glyphOutline(run.font, glyph.glyphIndex, scale);
+        const auto bitmap = engine.bitmapGlyph(run.font, glyph.glyphIndex, scale);
+        if (test.bitmapOnly) {
+          EXPECT_TRUE(outline.empty());
+          ASSERT_TRUE(bitmap.has_value());
+          EXPECT_GT(bitmap->width, 0);
+          EXPECT_GT(bitmap->height, 0);
+          EXPECT_EQ(bitmap->rgbaPixels.size(),
+                    static_cast<size_t>(bitmap->width) * bitmap->height * 4u);
+          bool hasInk = false;
+          for (size_t alpha = 3; alpha < bitmap->rgbaPixels.size(); alpha += 4) {
+            hasInk |= bitmap->rgbaPixels[alpha] != 0;
+          }
+          EXPECT_TRUE(hasInk);
+          ++visibleGlyphs;
+        } else if (!outline.empty()) {
+          ++visibleGlyphs;
+        } else {
+          EXPECT_EQ(glyph.xAdvance, 0);
+          ++invisibleGlyphs;
+        }
+      }
+    }
+    EXPECT_GE(visibleGlyphs, test.bitmapOnly ? 2u : 3u);
+    if (!test.bitmapOnly) {
+      EXPECT_EQ(invisibleGlyphs, 1u);
+    }
+  }
+}
+#endif
+
 TEST(TextEngineTest, RotatesCombiningMarkOffsetsWithBaseGlyph) {
   Registry registry;
   FontManager fontManager(registry);

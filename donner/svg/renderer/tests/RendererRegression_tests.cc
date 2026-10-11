@@ -781,16 +781,16 @@ TEST_F(RendererRegressionTests, FinalInternalRotationRepeatsOnFollowingGroup) {
 }
 
 #ifdef DONNER_TEXT_FULL
-TEST_F(RendererRegressionTests, JoinedEmojiPositionsPreserveSourceIndicesAcrossSpans) {
+TEST_F(RendererRegressionTests, JoinedOutlineGlyphsPreserveSourceIndicesAcrossSpans) {
   const RendererBitmap actual = RenderTextOpacityCase(R"svg(
-    <text font-family="Noto Color Emoji" font-size="20" x="15 99 99 85" y="80 99 99 130"
-          dx="1 2 3 4" dy="1 2 3 4" rotate="0 10 20 30">&#x1F469;&#x200D;&#x1F4BB;<tspan>&#x1F600;</tspan></text>
+    <text font-family="Noto Sans Devanagari" font-size="20" x="15 99 99 85" y="80 99 99 130"
+          dx="1 2 3 4" dy="1 2 3 4" rotate="0 10 20 30">&#x915;&#x200D;&#x93F;<tspan>B</tspan></text>
   )svg");
   const RendererBitmap expected = RenderTextOpacityCase(R"svg(
-    <text font-family="Noto Color Emoji" font-size="20"><tspan x="16" y="81" rotate="0">&#x1F469;&#x200D;&#x1F4BB;</tspan><tspan x="94" y="139" rotate="30">&#x1F600;</tspan></text>
+    <text font-family="Noto Sans Devanagari" font-size="20"><tspan x="16" y="81" rotate="0">&#x915;&#x200D;&#x93F;</tspan><tspan x="94" y="139" rotate="30">B</tspan></text>
   )svg");
-  AssertVisibleFixture(expected, "joined_emoji_visible");
-  editor::tests::CompareBitmapToBitmap(actual, expected, "joined_emoji_positions",
+  AssertVisibleFixture(expected, "joined_outline_glyphs_visible");
+  editor::tests::CompareBitmapToBitmap(actual, expected, "joined_outline_glyphs_positions",
                                        editor::tests::PixelmatchIdentityParams());
 }
 #endif
