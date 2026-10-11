@@ -454,8 +454,8 @@ TEST(SpirvValValidation, EmittedSnapshotUnpremultiplyComputePassesVulkan11Valida
 
 TEST(SpirvValValidation, ShiftOperatorsPassVulkan11Validation) {
   // OpShiftLeftLogical and OpShiftRightArithmetic on scalars and vectors, with masked amounts.
-  ExpectWordsValidateForVulkan11(SpirvVal(), tests::ShiftOperatorsAllProjections().spirv,
-                                 "shift_operators.spv");
+  ExpectFrozenShaderValidatesForVulkan11(SpirvVal(), tests::ShiftOperatorsAllProjections(),
+                                         "shift_operators.spv");
 }
 
 TEST(SpirvValValidation, EmittedBoolVectorReductionsPassVulkan11Validation) {
