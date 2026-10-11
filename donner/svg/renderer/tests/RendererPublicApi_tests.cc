@@ -2778,6 +2778,28 @@ TEST(RendererPublicApiTest, RotatedMaskRegionPreservesNestedMasksAndParentClips)
   EXPECT_THAT(PixelAt(snapshot, 22, 8), ElementsAre(0, 0, 255, 255));
 }
 
+TEST(RendererPublicApiTest, RotatedMaskRegionClipsBitmapMaskContent) {
+  SVGDocument document = ParseDocument(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
+      <defs>
+        <mask id="m" maskUnits="userSpaceOnUse" x="0" y="0" width="8" height="16" mask-type="alpha">
+          <image width="16" height="16"
+            href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAEUlEQVR42mP4z8DwH4QZYAwAR8oH+Rq28akAAAAASUVORK5CYII=" />
+        </mask>
+      </defs>
+      <g mask="url(#m)" transform="rotate(45 8 8)">
+        <rect width="16" height="16" fill="green" />
+      </g>
+    </svg>
+  )svg");
+  Renderer renderer;
+  renderer.draw(document);
+  const RendererBitmap snapshot = NormalizeSnapshot(renderer.takeSnapshot());
+  ASSERT_FALSE(snapshot.empty());
+  EXPECT_THAT(PixelAt(snapshot, 5, 5), ElementsAre(0, 128, 0, 255));
+  EXPECT_THAT(PixelAt(snapshot, 11, 11), IsTransparent());
+}
+
 // 21. Mix-blend-mode triggers isolated layer
 TEST(RendererPublicApiTest, MixBlendModeIsolatedLayer) {
   // Use cyan (#00ffff) over yellow (#ffff00) with multiply blend.
