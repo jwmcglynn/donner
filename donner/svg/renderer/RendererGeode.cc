@@ -6433,7 +6433,6 @@ void RendererGeode::pushMask(const std::optional<Box2d>& maskBounds, MaskType ma
     // The transformed AABB cannot preserve a rotated or sheared mask region. A GPU clip mask
     // also constrains bitmap and nested offscreen draws that do not consume polygon planes.
     ResolvedClip regionClip;
-    regionClip.clipRect = maskBounds;
     regionClip.clipPaths.push_back({.path = PathBuilder().addRect(*maskBounds).build()});
     pushClip(regionClip);
     impl_->maskStack.back().hasRegionClip = true;
@@ -6518,14 +6517,11 @@ void RendererGeode::popMask() {
   impl_->replaceActiveEncoder(std::move(newEncoder));
   impl_->updateEncoderScissor();
 
-  // Lift the raw mask-bounds rect into device-pixel space using the
-  // transform captured at pushMask time. This handles `maskUnits ==
-  // userSpaceOnUse` (where bounds are in user space and need the
-  // element's world transform applied) and `objectBoundingBox`
-  // (where the driver has already folded the bbox mapping into the
-  // bounds, but the outer world transform still applies).
+  // A path-captured region already carries edge coverage. Only the legacy axis-aligned path
+  // needs a fragment-center bounds check; applying one again would discard partial coverage.
   std::optional<Box2d> pixelMaskBounds;
-  if (frame.maskBounds.has_value()) {
+  if (frame.maskBounds.has_value() &&
+      !RequiresMaskRegionClip(frame.maskBounds, frame.maskBoundsTransform)) {
     pixelMaskBounds = frame.maskBoundsTransform.transformBox(*frame.maskBounds);
   }
 
