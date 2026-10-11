@@ -670,7 +670,7 @@ TEST_F(RendererRegressionTests, NestedTextRotationMatchesResvgReference) {
   const std::string golden = Runfiles::instance().Rlocation(
       "third_party/resvg-test-suite/tests/text/tspan/nested-rotate.png");
   SVGDocument document = loadSVG(svg.c_str(), ResvgResourceRoot());
-  renderAndCompare(document, svg, golden.c_str(), Params());
+  renderAndCompare(document, svg, golden.c_str(), Params().setCanvasSize(500, 500));
 }
 
 TEST_F(RendererRegressionTests, NestedTextRotationMatchesExplicitCharacterRotations) {
