@@ -630,6 +630,61 @@ test("worker acceptance requires the fresh render identity and no old presentati
   assert.equal(stats.presentedAtMs, undefined, "admission must not manufacture a presentation");
 });
 
+test("a failed worker publication cannot inherit a prior frame's presentation admission", () => {
+  const failure =
+    renderCoordinatorSource.match(/void PublishWorkerGpuWaitFailure\([\s\S]*?\n\}/)[0];
+  const frame = workerBridgeSource.match(/void RecordFrameSample\([\s\S]*?\n\}/)[0];
+  const body = (method) => method.match(/MAIN_THREAD_ASYNC_EM_ASM\(\s*\{([\s\S]*?)\n\s*\},/)[1];
+  const publishFailure = new Function(
+    "window",
+    "performance",
+    "$0",
+    "$1",
+    "$2",
+    "UTF8ToString",
+    body(failure),
+  );
+  const publishFrame = new Function(
+    "window",
+    "performance",
+    "$0",
+    "$1",
+    "$2",
+    "$3",
+    "$4",
+    body(frame),
+  );
+  const window = {
+    __donnerFrameLoopStats: { uiFrameMsSamples: [] },
+    __donnerHostFrameTiming: { lastSurfacePresented: true },
+    __donnerWorkerStats: {
+      completedResults: 3,
+      acceptedForPresentation: true,
+      presentedAtMs: 200,
+      publishReason: "render-result",
+    },
+  };
+  const previous = window.__donnerWorkerStats;
+  const clock = { timeOrigin: 1000, now: () => 900 };
+  publishFailure(window, clock, 1, 0, 5000, () => "queue-idle");
+  publishFrame(window, clock, 1, 15, 1, 4096, 1215);
+  const stats = window.__donnerWorkerStats;
+  assert.deepEqual({
+    completedResults: stats.completedResults,
+    acceptedForPresentation: stats.acceptedForPresentation,
+    presentedAtMs: stats.presentedAtMs,
+    deviceLost: stats.deviceLost,
+    publishReason: stats.publishReason,
+  }, {
+    completedResults: 3,
+    acceptedForPresentation: false,
+    presentedAtMs: undefined,
+    deviceLost: true,
+    publishReason: "gpu-wait-failure",
+  });
+  assert.equal(previous.presentedAtMs, 200, "the failure must not modify the older frame object");
+});
+
 test("a GPU wait failure publishes worker stats even though no frame completed", () => {
   const failurePublisher = renderCoordinatorSource.match(
     /void PublishWorkerGpuWaitFailure\([\s\S]*?\n\}/,
