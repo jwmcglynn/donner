@@ -206,6 +206,9 @@ public:
     return thumbnailRefreshStats_;
   }
 
+  /// Whether at least one visible row lacks a thumbnail for the current snapshot version.
+  [[nodiscard]] bool hasThumbnailRenderDemand() const;
+
   /// Number of currently-visible rows (rows in the flat list).
   [[nodiscard]] std::size_t visibleRowCount() const { return model_.rows().size(); }
 

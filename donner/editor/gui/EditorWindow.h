@@ -1030,7 +1030,20 @@ public:
   }
 
   /// Invalidate acknowledgement owned by a previous document-presentation producer.
-  void clearLastFullyPresentedDocumentFrame() { lastFullyPresentedDocumentFrame_.reset(); }
+  void clearLastFullyPresentedDocumentFrame() {
+    lastFullyPresentedDocumentFrame_.reset();
+    pendingPresentedDocumentWake_.reset();
+  }
+
+  /// Request one event-loop wake after @p identity is fully presented.
+  void requestWakeAfterPresentedDocument(PresentedDocumentFrameIdentity identity) {
+    pendingPresentedDocumentWake_ = identity;
+  }
+
+  /// Number of identity-bound presentation wakes committed, for scheduling regressions.
+  [[nodiscard]] std::uint64_t presentedDocumentWakeSerialForTesting() const {
+    return presentedDocumentWakeSerial_.load(std::memory_order_acquire);
+  }
 
   /// Substitute completion observation while driving the real framebuffer test path.
   /// @param probe Completed submission serial reported to the presentation scheduler.
@@ -1074,6 +1087,7 @@ private:
 
   /// Releases the native window and its process-wide GLFW claim after GPU surface retirement.
   void closeWindow();
+  void wakeEventLoopForPresentedDocument();
 
 #ifdef DONNER_EDITOR_WGPU
   /// Selects this window's runtime root and settles its presentation format before pipelines.
@@ -1218,6 +1232,8 @@ private:
   std::function<std::uint64_t()> presentationCompletionProbeForTesting_;
 #endif
   std::optional<PresentedDocumentFrameIdentity> lastFullyPresentedDocumentFrame_;
+  std::optional<PresentedDocumentFrameIdentity> pendingPresentedDocumentWake_;
+  std::atomic<std::uint64_t> presentedDocumentWakeSerial_{0};
 };
 
 }  // namespace donner::editor::gui

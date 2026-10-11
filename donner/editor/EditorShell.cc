@@ -2462,6 +2462,9 @@ void EditorShell::resetPresentationForLoadedDocument(std::string_view canonicalS
   cancelEyedropper(true);
   cancelSampleThumbnailGeneration();
   foregroundPresentationObligation_.reset();
+#ifdef DONNER_EDITOR_WGPU
+  window_.clearLastFullyPresentedDocumentFrame();
+#endif
   documentSyncController_.resetForLoadedDocument(std::string(canonicalSource));
   app_.setCleanSourceText(canonicalSource);
   lastHighlightedSelection_.clear();
@@ -5265,6 +5268,23 @@ bool EditorShell::foregroundPresentationAcknowledged() const {
 #endif
 }
 
+void EditorShell::requestForegroundPresentationWake() {
+#ifdef DONNER_EDITOR_WGPU
+  if (foregroundPresentationObligation_.has_value()) {
+    window_.requestWakeAfterPresentedDocument(*foregroundPresentationObligation_);
+  }
+#endif
+}
+
+void EditorShell::noteSidebarPreviewDemand(bool foregroundAcknowledged, bool thumbnailDemand,
+                                           bool refreshPending) {
+  if (!foregroundAcknowledged && (thumbnailDemand || refreshPending)) {
+    requestForegroundPresentationWake();
+  } else if (refreshPending) {
+    window_.wakeEventLoop();
+  }
+}
+
 void EditorShell::installFramePresentation(std::shared_ptr<const FramePresentation> frame) {
   immediateChromePlanProduced_ = frame != nullptr && frame->chromeEnabled();
 #ifdef DONNER_EDITOR_WGPU
@@ -5977,7 +5997,7 @@ void EditorShell::advanceFontPreviewGeneration() {
   }
 #endif
   if (!foregroundPresentationAcknowledged()) {
-    window_.wakeEventLoop();
+    requestForegroundPresentationWake();
     return;
   }
   std::string family = std::move(pendingFontPreviews_.front());
@@ -6552,10 +6572,11 @@ void EditorShell::renderSidebars() {
     // Compact sheets use deterministic fill swatches. Avoiding per-row raster
     // rendering and texture uploads keeps the touch panel responsive and also
     // avoids backend-specific thumbnail presentation differences in Wasm.
+    const bool foregroundAcknowledged = foregroundPresentationAcknowledged();
     const bool presentationCurrent = PreviewPresentationCurrent(
         !app_.hasDocument() || renderCoordinator_.displayedDocVersionForDiagnostics() ==
                                    app_.document().currentFrameVersion(),
-        foregroundPresentationAcknowledged());
+        foregroundAcknowledged);
     LayersPanel::ThumbnailRefreshMode thumbnailMode =
         compactSheet || !presentationCurrent ? LayersPanel::ThumbnailRefreshMode::SwatchesOnly
                                              : LayersPanel::ThumbnailRefreshMode::RenderIncremental;
@@ -6574,13 +6595,14 @@ void EditorShell::renderSidebars() {
             ? thumbnailRefreshWasPending
             : internal::SidebarSnapshotRefreshPendingAfterPass(
                   layersPanel_.thumbnailRefreshStats().deferredCount);
-    if (sidebarSnapshotRefreshPending_) {
-      window_.wakeEventLoop();
-    }
+    noteSidebarPreviewDemand(foregroundAcknowledged, layersPanel_.hasThumbnailRenderDemand(),
+                             sidebarSnapshotRefreshPending_);
   } else if (!showSamplePicker_ && sidebarSnapshotRefreshPending_) {
     // Preserve the refresh obligation across a renderer-busy frame or a trickled mouse transition.
     // This is bounded: the flag is cleared by the first idle refresh above.
-    window_.wakeEventLoop();
+    noteSidebarPreviewDemand(foregroundPresentationAcknowledged(),
+                             layersPanel_.hasThumbnailRenderDemand(),
+                             sidebarSnapshotRefreshPending_);
   }
   EditorApp* liveAppForClicks = rendererBusy ? nullptr : &app_;
 

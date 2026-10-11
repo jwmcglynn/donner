@@ -2529,6 +2529,11 @@ void EditorWindow::wakeEventLoop() {
 #endif
 }
 
+void EditorWindow::wakeEventLoopForPresentedDocument() {
+  wakeEventLoop();
+  presentedDocumentWakeSerial_.fetch_add(1, std::memory_order_acq_rel);
+}
+
 bool EditorWindow::hasQueuedInputEvents() const {
   const ImGuiContext* context = ImGui::GetCurrentContext();
   return context != nullptr && context->InputEventsQueue.Size > 0;
@@ -3168,6 +3173,10 @@ struct EditorWindow::GpuFrameSubmission {
       return;
     }
     window.lastFullyPresentedDocumentFrame_ = documentIdentity;
+    if (window.pendingPresentedDocumentWake_ == documentIdentity) {
+      window.pendingPresentedDocumentWake_.reset();
+      window.wakeEventLoopForPresentedDocument();
+    }
     fullFramePresented = true;
 #ifdef __EMSCRIPTEN__
     PublishFirstPresentedFrame(geode::GeodeDevice::headlessCreationCountForTesting());

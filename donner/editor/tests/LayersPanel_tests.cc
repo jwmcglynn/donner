@@ -1372,6 +1372,7 @@ TEST(LayersPanelTest, IncrementalRefreshRendersAtMostOneStaleThumbnailPerPass) {
   EXPECT_EQ(panel.thumbnailRefreshStats().reusedCount, 0u);
   EXPECT_EQ(panel.thumbnailRefreshStats().deferredCount, rowCount - 1u);
   EXPECT_EQ(panel.thumbnailRefreshStats().snapshotRebuildCount, 1u);
+  EXPECT_TRUE(panel.hasThumbnailRenderDemand());
 
   for (std::size_t pass = 1; pass < rowCount; ++pass) {
     panel.refreshSnapshot(app, &renderer, LayersPanel::ThumbnailRefreshMode::RenderIncremental);
@@ -1381,6 +1382,7 @@ TEST(LayersPanelTest, IncrementalRefreshRendersAtMostOneStaleThumbnailPerPass) {
     EXPECT_EQ(panel.thumbnailRefreshStats().snapshotRebuildCount, 0u)
         << "incremental thumbnail frames must not rebuild the full row/style snapshot; pass="
         << pass;
+    EXPECT_EQ(panel.hasThumbnailRenderDemand(), pass + 1u < rowCount) << "pass=" << pass;
   }
 
   panel.refreshSnapshot(app, &renderer, LayersPanel::ThumbnailRefreshMode::RenderIncremental);
@@ -1388,6 +1390,32 @@ TEST(LayersPanelTest, IncrementalRefreshRendersAtMostOneStaleThumbnailPerPass) {
   EXPECT_EQ(panel.thumbnailRefreshStats().reusedCount, rowCount);
   EXPECT_EQ(panel.thumbnailRefreshStats().deferredCount, 0u);
   EXPECT_EQ(panel.thumbnailRefreshStats().snapshotRebuildCount, 0u);
+  EXPECT_FALSE(panel.hasThumbnailRenderDemand())
+      << "a fully current cache must not arm another foreground-presentation wake";
+}
+
+TEST(LayersPanelTest, SwatchesOnlyReportsOnlyStaleThumbnailDemand) {
+  EditorApp app;
+  ASSERT_TRUE(
+      app.loadFromString(R"SVG(<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40">
+    <rect id="shape" width="40" height="40" fill="red"/>
+  </svg>)SVG"));
+
+  LayersPanel panel;
+  panel.refreshSnapshot(app, nullptr, LayersPanel::ThumbnailRefreshMode::SwatchesOnly,
+                        /*canvasPresentationCurrent=*/false);
+  ASSERT_GT(panel.visibleRowCount(), 0u);
+  EXPECT_TRUE(panel.hasThumbnailRenderDemand());
+
+  svg::Renderer renderer;
+  panel.refreshSnapshot(app, &renderer, LayersPanel::ThumbnailRefreshMode::Render,
+                        /*canvasPresentationCurrent=*/true);
+  ASSERT_FALSE(panel.hasThumbnailRenderDemand());
+
+  panel.refreshSnapshot(app, nullptr, LayersPanel::ThumbnailRefreshMode::SwatchesOnly,
+                        /*canvasPresentationCurrent=*/false);
+  EXPECT_FALSE(panel.hasThumbnailRenderDemand())
+      << "a fully current cache must not request a presentation wake in swatches mode";
 }
 
 // The approved thumbnail PNGs are default-renderer goldens. The Geode wrapper

@@ -2220,10 +2220,10 @@ TEST(EditorShellTest, CpuAdoptionDoesNotStartPreviewsBeforeForegroundPresentatio
   // acknowledge the adopted document capture.
   completedSerial = std::numeric_limits<std::uint64_t>::max();
   window.forceUiPassFailureForTesting(true);
-  const std::uint64_t failedWakeSerial = window.wakeEventLoopRequestSerialForTesting();
+  const std::uint64_t owedWakeSerial = window.presentedDocumentWakeSerialForTesting();
   window.beginFrame();
   window.endFrame();
-  EXPECT_EQ(window.wakeEventLoopRequestSerialForTesting(), failedWakeSerial);
+  EXPECT_EQ(window.presentedDocumentWakeSerialForTesting(), owedWakeSerial);
   EXPECT_FALSE(EditorShellTestAccess::ForegroundPresentationAcknowledged(shell));
   EXPECT_EQ(EditorShellTestAccess::RenderedLayerThumbnailCount(shell), layerRendersBefore);
   EXPECT_EQ(EditorShellTestAccess::RequestedAuxiliaryPreviewCount(shell), previewRequestsBefore);
@@ -2238,18 +2238,18 @@ TEST(EditorShellTest, CpuAdoptionDoesNotStartPreviewsBeforeForegroundPresentatio
   window.beginFrame();
   window.endFrame();
   EXPECT_FALSE(EditorShellTestAccess::ForegroundPresentationAcknowledged(shell));
-  EXPECT_EQ(window.wakeEventLoopRequestSerialForTesting(), failedWakeSerial);
+  EXPECT_EQ(window.presentedDocumentWakeSerialForTesting(), owedWakeSerial);
 
   // Only a fully drawn and presented frame carrying the matching adopted capture releases new
   // preview work. Cached previews and the pending queues remain available throughout the hold.
   EditorShellTestAccess::InstallFramePresentation(shell, acceptedFrame);
   window.beginFrame();
   window.endFrame();
-  EXPECT_EQ(window.wakeEventLoopRequestSerialForTesting(), failedWakeSerial + 1u);
+  EXPECT_EQ(window.presentedDocumentWakeSerialForTesting(), owedWakeSerial + 1u);
   ASSERT_TRUE(EditorShellTestAccess::ForegroundPresentationAcknowledged(shell));
   window.beginFrame();
   window.endFrame();
-  EXPECT_EQ(window.wakeEventLoopRequestSerialForTesting(), failedWakeSerial + 1u);
+  EXPECT_EQ(window.presentedDocumentWakeSerialForTesting(), owedWakeSerial + 1u);
   window.beginFrame();
   EditorShellTestAccess::RenderSidebars(shell);
   EditorShellTestAccess::AdvanceFontPreviewGeneration(shell);

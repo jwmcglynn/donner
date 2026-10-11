@@ -401,6 +401,16 @@ bool LayersPanel::hasThumbnailOrSwatch(std::uint64_t stableId) const {
   return swatchByStableId_.count(stableId) != 0;
 }
 
+bool LayersPanel::hasThumbnailRenderDemand() const {
+  const Vector2i thumbnailMaxSizePx(kPreviewWidthPx, kPreviewHeightPx);
+  return std::ranges::any_of(model_.rows(), [&](const LayerTreeRow& row) {
+    const auto it = thumbnailByStableId_.find(row.stableId);
+    return it == thumbnailByStableId_.end() ||
+           it->second.documentFrameVersion != thumbnailRefreshStats_.documentFrameVersion ||
+           it->second.maxSizePx != thumbnailMaxSizePx;
+  });
+}
+
 std::optional<css::RGBA> LayersPanel::rowFallbackSwatch(std::uint64_t stableId) const {
   const auto it = swatchByStableId_.find(stableId);
   if (it == swatchByStableId_.end()) {
