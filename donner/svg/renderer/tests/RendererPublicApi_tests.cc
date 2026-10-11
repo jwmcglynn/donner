@@ -2762,6 +2762,38 @@ TEST(RendererPublicApiTest, LinearRgbMaskConvertsStraightColorBeforeApplyingAlph
   }
 }
 
+TEST(RendererPublicApiTest, LinearRgbMaskUsesTransferToeAndChromaticLuminance) {
+  for (bool replaySnapshot : {false, true}) {
+    SCOPED_TRACE(replaySnapshot ? "snapshot" : "document");
+    SVGDocument document = ParseDocument(R"svg(
+      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="8">
+        <defs color-interpolation="linearRGB">
+          <mask id="toe" maskContentUnits="objectBoundingBox">
+            <rect width="1" height="1" fill="#0a0a0a" />
+          </mask>
+          <mask id="chromatic" maskContentUnits="objectBoundingBox">
+            <rect width="1" height="1" fill="#804020" opacity="0.5" />
+          </mask>
+        </defs>
+        <rect width="8" height="8" fill="white" mask="url(#toe)" />
+        <rect x="8" width="8" height="8" fill="white" mask="url(#chromatic)" />
+      </svg>
+    )svg");
+    Renderer renderer;
+    if (replaySnapshot) {
+      RendererDriver driver(renderer);
+      const RenderSnapshot commands = driver.captureRenderSnapshot(document);
+      driver.draw(commands);
+    } else {
+      renderer.draw(document);
+    }
+    const RendererBitmap snapshot = NormalizeSnapshot(renderer.takeSnapshot());
+    ASSERT_THAT(snapshot.empty(), testing::IsFalse());
+    EXPECT_THAT(PixelAt(snapshot, 4, 4), Rgba(_, _, _, 1));
+    EXPECT_THAT(PixelAt(snapshot, 12, 4), Rgba(_, _, _, AllOf(testing::Ge(10), testing::Le(12))));
+  }
+}
+
 // 21. Mix-blend-mode triggers isolated layer
 TEST(RendererPublicApiTest, MixBlendModeIsolatedLayer) {
   // Use cyan (#00ffff) over yellow (#ffff00) with multiply blend.
