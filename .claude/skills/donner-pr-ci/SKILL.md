@@ -197,16 +197,20 @@ Failure signatures and what they mean:
 
   (List available names with `gh run view <run-id>` or `gh api` if unsure.)
 - The self-hosted Linux lane additionally uploads `ci-diagnostics-<job>-<attempt>` on every run
-  (3-day retention): `manifest.txt`, `target-list.txt`, and per-phase `profile.gz` / `bep.json` /
-  `exec.log.zst` under `build/` and `test/`. Download and summarize with:
+  (3-day retention): `manifest.txt`, `target-list.txt`, `report.md`, and per-phase `profile.gz`
+  plus any `stall.txt` under `build/` and `test/`. `report.md` is the full report, generated on
+  the runner from the Bazel build event and execution logs; those raw logs stay on the runner
+  because they record its effective Bazel configuration. Read `report.md` first. To re-derive
+  the profile timing locally:
 
   ```sh
   gh run download <run-id> -n 'ci-diagnostics-<job>-<attempt>' -D /tmp/ci-diag
   python3 tools/ci_diagnostics_report.py /tmp/ci-diag
   ```
 
-  Stdlib-only; prints Bazel phase timing plus the slowest compiles, links, and tests. Safe on
-  partial artifacts from a failed build. The argument must be the real extracted directory — a
+  Stdlib-only; prints Bazel phase timing plus the slowest compiles and links. Per-test wall
+  times and console tails need the build event logs, so they appear only in the uploaded
+  `report.md`. Safe on partial artifacts. The argument must be the real extracted directory — a
   wrong path silently yields a near-empty "No ... profile captured" report, not an error.
 - **Diagnosability-gap rule** (AGENTS.md, Pull Request Workflow item 8): if a CI failure cannot be
   diagnosed because logs, screenshots, undeclared outputs, or artifacts are missing, that is a CI

@@ -16,6 +16,82 @@ BAZEL_DIFF_SHA256 = "eadec6d0ca0991de78bd9e063bfed993a359ed3bc60e507818077c300b6
 CLOC_SHA256 = "73570f9da159fab13846038de7c3d8772554117c04117281dcbe6e5c7b988264"
 DOXYGEN_SHA256 = "0ec2e5b2c3cd82b7106d19cb42d8466450730b8cb7a9e85af712be38bf4523a1"
 
+# The repository's default workflow token can write, so every workflow states its token scopes.
+# Only these jobs may request a write scope, and each must request exactly the listed ones.
+WRITE_SCOPES = {
+    (".github/workflows/bcr_preflight.yml", "attest-artifacts"): {"attestations", "id-token"},
+    (".github/workflows/codeql.yml", "analyze"): {"security-events"},
+    (".github/workflows/deploy_docs.yaml", "deploy"): {"id-token", "pages"},
+    (".github/workflows/release.yml", "publish-release-artifacts"): {"contents"},
+}
+
+# Every job that reads a repository secret, and the secrets it reads.
+SECRET_USES = {
+    (".github/workflows/badges.yaml", "update-badges"): {"GIST_SECRET"},
+    (".github/workflows/coverage.yml", "upload-coverage"): {"CODECOV_TOKEN"},
+    (".github/workflows/github_hosted_nightly.yml", "build"): {"BUILDBUDDY_API_KEY"},
+    (".github/workflows/main.yml", "macos-self-hosted"): {"BAZEL_REMOTE_CACHE"},
+    (".github/workflows/publish_bcr.yml", "publish-fork"): {"PUBLISH_TOKEN"},
+    (".github/workflows/sanitizers.yml", "asan"): {"BUILDBUDDY_API_KEY"},
+    (".github/workflows/sanitizers.yml", "ubsan"): {"BUILDBUDDY_API_KEY"},
+}
+
+# The only jobs that may run on self-hosted runners, with the gatekeeper output admitting each.
+SELF_HOSTED_JOBS = {
+    (".github/workflows/main.yml", "linux-self-hosted"): "use_self_hosted_linux",
+    (".github/workflows/main.yml", "macos-self-hosted"): "use_self_hosted_macos",
+}
+
+# A runner label set is GitHub-hosted only when it is exactly one hosted image label. Any other
+# label, label list or runner group can route a job to a self-hosted runner.
+HOSTED_IMAGE = re.compile(r"(?:ubuntu|macos|windows)-[a-z0-9][a-z0-9.-]*\Z")
+
+# Reviewed `runs-on` expressions that are neither a literal label nor `${{ matrix.<key> }}`, with
+# every label each can produce.
+REVIEWED_RUNNER_EXPRESSIONS = {
+    (".github/workflows/codeql.yml", "analyze"): (
+        "${{ (matrix.language == 'swift' && 'macos-latest') || 'ubuntu-latest' }}",
+        {"macos-latest", "ubuntu-latest"}),
+}
+
+# Local actions that upload an artifact themselves, and why each one's contents are reviewed.
+REVIEWED_UPLOAD_ACTIONS = {
+    # Copies only test.log, test.xml and test.outputs, without following symlinks; pinned by
+    # test_artifact_collection_omits_nested_symlinks.
+    "./.github/actions/upload-bazel-test-artifacts",
+}
+
+# Steps that save an Actions cache. Self-hosted jobs never save one: their outputs would reach
+# hosted runs that restore the cache.
+CACHE_SAVE = re.compile(r"uses: (?:actions/cache@|actions/cache/save@|"
+                        r"bazel-contrib/setup-bazel@|\./\.github/actions/cache-bazel-actions)")
+
+# Files a self-hosted job may upload directly. Raw Bazel event streams and execution logs record
+# the runner's effective configuration, so they never leave the runner.
+SELF_HOSTED_UPLOAD_FILES = {"manifest.txt", "profile.gz", "report.md", "stall.txt",
+                            "target-list.txt"}
+
+# Triggers that run with repository credentials on behalf of an event someone else controls.
+PRIVILEGED_TRIGGERS = {"discussion_comment", "issue_comment", "issues", "pull_request_review",
+                       "pull_request_review_comment", "pull_request_target", "workflow_run"}
+
+# Event fields that a script may interpolate directly: commit IDs and numbers only.
+SCRIPT_SAFE_EVENT_FIELDS = {"github.event.pull_request.base.sha",
+                            "github.event.pull_request.head.sha",
+                            "github.event.pull_request.number"}
+
+UNTRUSTED_CONTEXT = re.compile(r"github\.event\.[A-Za-z0-9_.*-]+|github\.head_ref|\binputs\.")
+UPLOADED_EVENT_LOG = re.compile(r"(?i)(?:^|/)[^/]*bep[^/]*\.json$|exec(?:ution)?[._]log")
+WORKSPACE_ROOTS = {".", "./", "${{ github.workspace }}", "${{ github.workspace }}/"}
+# Private-network addresses, private DNS names and personal home directories have no place in
+# public CI definitions.
+PRIVATE_NETWORK_LITERAL = re.compile(
+    r"\b(?:10\.\d{1,3}|192\.168|172\.(?:1[6-9]|2\d|3[01])|169\.254|"
+    r"100\.(?:6[4-9]|[7-9]\d|1[01]\d|12[0-7]))(?:\.\d{1,3}){2}\b|"
+    r"(?i:\bf[cd][0-9a-f]{2}:[0-9a-f]{0,4}:[0-9a-f:]*)|"
+    r"(?i:\b[a-z0-9-]+(?:\.[a-z0-9-]+)*\.(?:local|lan|internal|home\.arpa|ts\.net)\b)|"
+    r"/(?:Users|home)/(?!(?:runner|linuxbrew)\b)[A-Za-z0-9._-]+")
+
 
 def _read(path):
     resolved = runfiles.Create().Rlocation("donner/%s" % path)
@@ -64,6 +140,320 @@ def _run_bodies(workflow):
             index += 1
         bodies.append("\n".join(body))
     return bodies
+
+
+def _workflows(files):
+    return {path: text for path, text in files.items() if path.startswith(".github/workflows/")}
+
+
+def _is_comment(line):
+    return line.lstrip().startswith("#")
+
+
+def _indented_block(lines, indent):
+    """The lines that follow a mapping key, up to the next line at or above its indentation.
+
+    Comment-only lines never end a block, whatever their column.
+    """
+    block = []
+    for line in lines:
+        if line.strip() and not _is_comment(line) and len(line) - len(line.lstrip()) <= indent:
+            break
+        block.append(line)
+    return block
+
+
+def _top_level_block(text, key):
+    """A top-level key's inline value as one entry, its block lines, or None when absent."""
+    lines = text.splitlines()
+    for index, line in enumerate(lines):
+        if line.startswith(key + ":"):
+            inline = line.split(":", 1)[1].split("#", 1)[0].strip()
+            return [inline] if inline else _indented_block(lines[index + 1:], 0)
+    return None
+
+
+def _triggers(workflow):
+    block = _top_level_block(workflow, "on") or []
+    if len(block) == 1 and not block[0].startswith(" "):
+        return set(re.findall(r"[a-z_]+", block[0]))
+    return {match.group(1) for match in (re.match(r"^  ([a-z_]+):", line) for line in block)
+            if match}
+
+
+def _jobs(workflow):
+    """Each job's body, keyed by job ID.
+
+    The checks below read job keys at four columns and steps at six. A workflow laid out any
+    other way raises instead of silently yielding no jobs.
+    """
+    jobs = {}
+    name = None
+    for line in _top_level_block(workflow, "jobs") or []:
+        if not line.strip() or _is_comment(line):
+            if name is not None:
+                jobs[name].append(line)
+            continue
+        indent = len(line) - len(line.lstrip())
+        header = re.match(r"^  ([A-Za-z0-9_-]+):\s*(?:#.*)?$", line)
+        if header:
+            name = header.group(1)
+            jobs[name] = []
+        elif name is None or indent < 4:
+            raise AssertionError("unexpected jobs layout: %r" % line)
+        else:
+            jobs[name].append(line)
+    return {name: "\n".join(lines) for name, lines in jobs.items()}
+
+
+def _mapping(lines):
+    entries = (line.split("#", 1)[0].partition(":") for line in lines)
+    return {key.strip(): value.strip() for key, _, value in entries if key.strip()}
+
+
+def _permissions(text, indent):
+    """The `permissions:` mapping at this indentation, `{"*": value}` inline, or None."""
+    lines = text.splitlines()
+    key = " " * indent + "permissions:"
+    for index, line in enumerate(lines):
+        if line.startswith(key):
+            inline = line[len(key):].split("#", 1)[0].strip()
+            if inline:
+                return {} if inline == "{}" else {"*": inline}
+            return _mapping(_indented_block(lines[index + 1:], indent))
+    return None
+
+
+def _steps(job):
+    return re.split(r"(?m)^      - ", job)[1:]
+
+
+def _step_values(step, key):
+    """A step `with:` value as entries: one inline value, or each line of a block scalar."""
+    match = re.search(r"(?m)^          %s:[ \t]*(.*)$" % re.escape(key), step)
+    if not match:
+        return []
+    value = match.group(1).strip()
+    if value not in ("|", "|-", ">", ">-"):
+        return [value]
+    block = _indented_block(step[match.end():].splitlines()[1:], 10)
+    return [line.strip() for line in block if line.strip()]
+
+
+def _script_bodies(text):
+    """Every shell, github-script and retry-action command body, block or inline."""
+    lines = text.splitlines()
+    bodies = []
+    for index, line in enumerate(lines):
+        match = re.match(r"^(\s*)(?:-\s+)?(?:run|script|command):[ \t]*(.*)$", line)
+        if not match:
+            continue
+        value = match.group(2).strip()
+        if value in ("|", "|-", ">", ">-"):
+            value = "\n".join(_indented_block(lines[index + 1:], len(match.group(1))))
+        bodies.append(value)
+    return bodies
+
+
+def _untrusted_script_contexts(text):
+    found = []
+    for body in _script_bodies(text):
+        for expression in re.findall(r"\$\{\{(.*?)\}\}", body, re.DOTALL):
+            found.extend(context for context in UNTRUSTED_CONTEXT.findall(expression)
+                         if context not in SCRIPT_SAFE_EVENT_FIELDS)
+    return found
+
+
+def _token_scope_violations(path, workflow):
+    violations = []
+    top = _permissions(workflow, 0)
+    if top is not None and (set(top.values()) - {"read", "none"} or "*" in top):
+        violations.append("%s grants more than read scopes to every job" % path)
+    for name, job in _jobs(workflow).items():
+        scopes = _permissions(job, 4)
+        if scopes is None and top is None:
+            violations.append("%s:%s inherits the repository's default token" % (path, name))
+            continue
+        scopes = scopes or {}
+        writes = {scope for scope, level in scopes.items() if level not in ("read", "none")}
+        if "*" in scopes or writes != WRITE_SCOPES.get((path, name), set()):
+            violations.append("%s:%s requests write scopes %s" % (path, name, sorted(writes)))
+    return violations
+
+
+def _secret_use_violations(workflows):
+    uses = {}
+    violations = []
+    for path, workflow in workflows.items():
+        if re.search(r"secrets:\s*inherit|toJSON\(\s*secrets\s*\)", workflow, re.IGNORECASE):
+            violations.append("%s forwards every secret" % path)
+        # Step `env:` and `with:` entries sit ten columns in; anything shallower is job- or
+        # workflow-wide and hands the secret to every step.
+        for line in workflow.splitlines():
+            if (re.search(r"\$\{\{[^}]*\bsecrets\.", line)
+                    and len(line) - len(line.lstrip()) < 10):
+                violations.append("%s exposes a secret beyond one step: %s" % (path, line.strip()))
+        for name, job in _jobs(workflow).items():
+            secrets = set(re.findall(r"\$\{\{\s*secrets\.([A-Za-z0-9_]+)", job))
+            if secrets:
+                uses[(path, name)] = secrets
+    if uses != SECRET_USES:
+        violations.append("secret uses changed: %s" % sorted(uses.items()))
+    return violations
+
+
+def _job_key(job, key):
+    match = re.search(r"(?m)^    %s:(.*)$" % key, job)
+    return match.group(1).split(" #", 1)[0].strip() if match else ""
+
+
+def _labels(text):
+    return [label.strip().strip("'\"") for label in text.split(",") if label.strip()]
+
+
+def _matrix_values(job, key):
+    """Every literal value of one matrix key, or None when the matrix is not fully literal."""
+    lines = job.splitlines()
+    starts = [index for index, line in enumerate(lines) if re.match(r"^      matrix:", line)]
+    if len(starts) != 1 or lines[starts[0]].split(":", 1)[1].split("#", 1)[0].strip():
+        return None
+    block = [line for line in _indented_block(lines[starts[0] + 1:], 6)
+             if line.strip() and not _is_comment(line)]
+    if any("${{" in line for line in block):
+        return None
+    values = []
+    for line in block:
+        match = re.match(r"^\s*(?:-\s+)?%s:\s*(.+?)\s*(?:#.*)?$" % re.escape(key), line)
+        if match:
+            value = match.group(1)
+            values.extend(_labels(value[1:-1]) if value.startswith("[") else [value.strip("'\"")])
+    return values or None
+
+
+def _block_runner(lines, start):
+    """A block `runs-on`: a label list, or a runner group mapping (never a hosted image)."""
+    block = [line.strip() for line in _indented_block(lines[start + 1:], 4)
+             if line.strip() and not _is_comment(line)]
+    if block and all(line.startswith("- ") for line in block):
+        return [{line[2:].strip().strip("'\"") for line in block}]
+    return [{"<runner group>"}]
+
+
+def _expression_runner(path, name, job, inline):
+    """Label sets for an expression `runs-on`, or a reason it cannot be reviewed."""
+    matrix = re.fullmatch(r"\$\{\{\s*matrix\.([A-Za-z0-9_-]+)\s*\}\}", inline)
+    if matrix:
+        values = _matrix_values(job, matrix.group(1))
+        if values is None:
+            return [], "%s:%s selects its runner from a non-literal matrix" % (path, name)
+        return [{value} for value in values], None
+    reviewed = REVIEWED_RUNNER_EXPRESSIONS.get((path, name))
+    if not reviewed or reviewed[0] != inline:
+        return [], "%s:%s selects its runner from an unreviewed expression" % (path, name)
+    return [{label} for label in reviewed[1]], None
+
+
+def _runner_label_sets(path, name, job):
+    """Each label set this job can request, or a reason the selection cannot be reviewed."""
+    lines = job.splitlines()
+    starts = [index for index, line in enumerate(lines) if line.startswith("    runs-on:")]
+    if not starts:
+        return [], None
+    inline = _job_key(job, "runs-on")
+    if re.search(r"vars\.|inputs\.|github\.event|fromJSON", inline, re.IGNORECASE):
+        return [], "%s:%s selects its runner from mutable input" % (path, name)
+    if not inline:
+        return _block_runner(lines, starts[0]), None
+    if inline.startswith("["):
+        return [set(_labels(inline[1:-1]))], None
+    if "${{" in inline:
+        return _expression_runner(path, name, job, inline)
+    return [{inline.strip("'\"")}], None
+
+
+def _is_hosted(labels):
+    return len(labels) == 1 and bool(HOSTED_IMAGE.match(next(iter(labels))))
+
+
+def _runs_self_hosted(path, name, job):
+    sets, _ = _runner_label_sets(path, name, job)
+    return any(not _is_hosted(labels) for labels in sets)
+
+
+def _runner_violation(path, name, job):
+    """Why this job's runner selection is unsafe, or None."""
+    sets, problem = _runner_label_sets(path, name, job)
+    if problem:
+        return problem
+    if all(_is_hosted(labels) for labels in sets):
+        return None
+    gate = "needs.gatekeeper.outputs.%s == 'true'" % SELF_HOSTED_JOBS.get((path, name))
+    admitted = ((path, name) in SELF_HOSTED_JOBS and gate in _job_key(job, "if")
+                and "gatekeeper" in _job_key(job, "needs"))
+    if not admitted:
+        return "%s:%s reaches a self-hosted runner without the trusted gate" % (path, name)
+    return None
+
+
+def _self_hosted_violations(workflows):
+    jobs = [(path, name, job) for path, workflow in workflows.items()
+            for name, job in _jobs(workflow).items()]
+    violations = [violation for violation in (_runner_violation(*job) for job in jobs)
+                  if violation]
+    seen = {(path, name) for path, name, job in jobs if _runs_self_hosted(path, name, job)}
+    if seen != set(SELF_HOSTED_JOBS):
+        violations.append("self-hosted jobs changed: %s" % sorted(seen))
+    return violations
+
+
+def _upload_paths(job):
+    """The `path` entries of every step that publishes an artifact or saves a cache directly."""
+    return [_step_values(step, "path") for step in _steps(job)
+            if re.search(r"uses: (?:actions/upload-artifact@|actions/upload-pages-artifact@|"
+                         r"actions/cache@|actions/cache/save@)", step)]
+
+
+UPLOAD_ACTION = re.compile(r"uses: (?:actions/upload-artifact@|actions/upload-pages-artifact@)")
+
+
+def _uploading_local_actions(files):
+    return {"./" + path.rsplit("/", 1)[0] for path, text in files.items()
+            if path.startswith(".github/actions/") and UPLOAD_ACTION.search(text)}
+
+
+def _unsafe_upload(entry, self_hosted):
+    if entry.startswith("!"):
+        return False
+    if UPLOADED_EVENT_LOG.search(entry) or entry in WORKSPACE_ROOTS:
+        return True
+    leaf = entry.rstrip("/").rsplit("/", 1)[-1]
+    return self_hosted and (entry.endswith("/") or leaf not in SELF_HOSTED_UPLOAD_FILES)
+
+
+def _upload_violations(path, name, job, uploading_actions):
+    violations = []
+    local = set(re.findall(r"uses: (\./\.github/actions/[A-Za-z0-9_-]+)", job))
+    # The reviewed collector copies only Bazel test logs, never the workspace that holds the
+    # generated credential fragment, so it stays usable in jobs that write one.
+    uploads = _upload_paths(job) or local & uploading_actions - REVIEWED_UPLOAD_ACTIONS
+    if "./.github/actions/buildbuddy-cache" in job and uploads:
+        violations.append("%s:%s uploads files after writing a cache credential" % (path, name))
+    for action in sorted(local & uploading_actions - REVIEWED_UPLOAD_ACTIONS):
+        violations.append("%s:%s uploads through unreviewed action %s" % (path, name, action))
+    self_hosted = (path, name) in SELF_HOSTED_JOBS
+    if self_hosted and CACHE_SAVE.search(job):
+        violations.append("%s:%s saves an Actions cache from a self-hosted runner" % (path, name))
+    violations.extend("%s:%s uploads %s" % (path, name, entry)
+                      for entries in _upload_paths(job) for entry in entries
+                      if _unsafe_upload(entry, self_hosted))
+    return violations
+
+
+def _artifact_upload_violations(files):
+    uploading_actions = _uploading_local_actions(files)
+    return [violation for path, workflow in _workflows(files).items()
+            for name, job in _jobs(workflow).items()
+            for violation in _upload_violations(path, name, job, uploading_actions)]
 
 
 class SecurityWorkflowPolicyTest(unittest.TestCase):
@@ -667,6 +1057,246 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
             self.assertIn("--test_tag_filters=%s" % tag, body)
             self.assertIn("--build_tag_filters=%s" % tag, body)
         self.assertNotRegex(body.replace("//...", ""), r"//[^\s]+")
+
+    def _assert_rejected(self, check, cases):
+        """Each weakened file must differ from the checked-in one and fail `check` for its reason.
+
+        `cases` maps a name to (path, weakened text, expected message fragment); `check`
+        receives every supply-chain file with that one replaced, plus the path, and returns the
+        violations it finds.
+        """
+        files = self.supply_chain_files
+        for name, (path, weakened, expected) in cases.items():
+            with self.subTest(name=name):
+                self.assertTrue(weakened != files[path], "mutation no longer applies")
+                violations = [str(item) for item in check({**files, path: weakened}, path)]
+                self.assertTrue(any(expected in item for item in violations),
+                                "expected %r in %s" % (expected, violations))
+
+    def test_every_workflow_parses_into_jobs(self):
+        workflows = _workflows(self.supply_chain_files)
+        self.assertGreaterEqual(len(workflows), 16)
+        for path, workflow in sorted(workflows.items()):
+            with self.subTest(path=path):
+                self.assertTrue(_jobs(workflow), "no jobs parsed")
+
+    def test_workflow_parser_fails_closed_on_layouts_it_cannot_read(self):
+        commented = "jobs:\n  first:\n    runs-on: ubuntu-24.04\n# note\n  second:\n" \
+                    "    runs-on: [self-hosted]\n"
+        self.assertEqual({"first", "second"}, set(_jobs(commented)))
+        for layout in ("jobs:\n    build:\n        runs-on: ubuntu-24.04\n",
+                       "jobs:\n  build:\n   runs-on: ubuntu-24.04\n"):
+            with self.subTest(layout=layout):
+                with self.assertRaises(AssertionError):
+                    _jobs(layout)
+
+    def test_every_workflow_job_states_least_privilege_token_scopes(self):
+        workflows = _workflows(self.supply_chain_files)
+        for path, workflow in sorted(workflows.items()):
+            with self.subTest(path=path):
+                self.assertEqual([], _token_scope_violations(path, workflow))
+        for path, job in WRITE_SCOPES:
+            self.assertIn(job, _jobs(workflows[path]), "%s:%s" % (path, job))
+
+    def test_token_scope_policy_rejects_widened_or_missing_permissions(self):
+        files = self.supply_chain_files
+        badges = ".github/workflows/badges.yaml"
+        release = ".github/workflows/release.yml"
+        publish = "    permissions:\n      contents: write\n      attestations: read\n"
+        top = "permissions:\n  contents: read\n"
+        self._assert_rejected(lambda files, path: _token_scope_violations(path, files[path]), {
+            "workflow write-all": (badges, files[badges].replace(
+                top, "permissions: write-all\n", 1), "more than read scopes to every job"),
+            "workflow write": (badges, files[badges].replace(
+                top, "permissions:\n  contents: write\n", 1), "more than read scopes to every job"),
+            "missing": (badges, files[badges].replace(top, "", 1), "default token"),
+            "extra job write": (release, files[release].replace(
+                publish, publish + "      packages: write\n", 1), "'packages'"),
+            "job write-all": (release, files[release].replace(
+                publish, "    permissions: write-all\n", 1), "requests write scopes"),
+        })
+
+    def test_no_workflow_runs_privileged_triggers_for_untrusted_events(self):
+        triggers = {path: _triggers(workflow)
+                    for path, workflow in _workflows(self.supply_chain_files).items()}
+        for path, events in sorted(triggers.items()):
+            with self.subTest(path=path):
+                self.assertTrue(events)
+                self.assertEqual(set(), events & PRIVILEGED_TRIGGERS)
+        self.assertEqual({"release"}, triggers[".github/workflows/release.yml"])
+        self.assertEqual({"workflow_dispatch"}, triggers[".github/workflows/publish_bcr.yml"])
+        sanitizers = ".github/workflows/sanitizers.yml"
+        dispatch = "  workflow_dispatch:\n"
+        self._assert_rejected(lambda files, path: _triggers(files[path]) & PRIVILEGED_TRIGGERS, {
+            "workflow_run": (sanitizers, self.sanitizers.replace(
+                dispatch, dispatch + "  workflow_run:\n    workflows: [CI]\n", 1), "workflow_run"),
+            "inline target": (sanitizers, re.sub(
+                r"(?ms)^on:\n.*?^(?=\S)", "on: [push, pull_request_target]\n", self.sanitizers,
+                count=1), "pull_request_target"),
+            "issues": (sanitizers, self.sanitizers.replace(
+                dispatch, dispatch + "  issues:\n", 1), "issues"),
+        })
+
+    def test_each_secret_is_read_only_by_its_reviewed_step(self):
+        self.assertEqual([], _secret_use_violations(_workflows(self.supply_chain_files)))
+
+    def test_secret_policy_rejects_new_or_widened_secret_reads(self):
+        files = self.supply_chain_files
+        main = ".github/workflows/main.yml"
+        badges = ".github/workflows/badges.yaml"
+        step = "      - name: Upload CI diagnostics\n"
+        runner = "    runs-on: ubuntu-latest\n"
+        self._assert_rejected(lambda files, path: _secret_use_violations(_workflows(files)), {
+            "new reader": (main, files[main].replace(
+                step, step + "        env:\n          TOKEN: ${{ secrets.CODECOV_TOKEN }}\n", 1),
+                "secret uses changed"),
+            "job-wide env": (badges, files[badges].replace(
+                runner, runner + "    env:\n      AUTH: ${{ secrets.GIST_SECRET }}\n", 1),
+                "beyond one step"),
+            "every secret": (badges, files[badges].replace(
+                "${{ secrets.GIST_SECRET }}", "${{ toJSON(secrets) }}", 1),
+                "forwards every secret"),
+            "inherit": (main, files[main] + "  reuse:\n    uses: ./.github/workflows/lint.yml\n"
+                        "    secrets: inherit\n", "forwards every secret"),
+        })
+
+    def test_only_gated_ci_jobs_reach_self_hosted_runners(self):
+        workflows = _workflows(self.supply_chain_files)
+        self.assertEqual([], _self_hosted_violations(workflows))
+        # Matrix and reviewed-expression runners resolve to hosted images.
+        hosted = {".github/workflows/bcr_preflight.yml": ("consumer", ["ubuntu-24.04", "macos-26"]),
+                  ".github/workflows/perf.yml": ("perf", ["macos-26", "ubuntu-24.04"])}
+        for path, (job, labels) in hosted.items():
+            expected = [{label} for label in labels]
+            with self.subTest(path=path):
+                sets, problem = _runner_label_sets(path, job, _jobs(workflows[path])[job])
+                self.assertIsNone(problem)
+                self.assertEqual(expected, sets)
+
+    def test_self_hosted_policy_rejects_ungated_or_mutable_runner_selection(self):
+        files = self.supply_chain_files
+        main = ".github/workflows/main.yml"
+        coverage = ".github/workflows/coverage.yml"
+        bcr = ".github/workflows/bcr_preflight.yml"
+        perf = ".github/workflows/perf.yml"
+        codeql = ".github/workflows/codeql.yml"
+        gate = "needs.gatekeeper.outputs.use_self_hosted_macos == 'true'"
+        hosted = "    runs-on: ubuntu-24.04\n"
+        ungated = "without the trusted gate"
+        self.assertEqual(1, files[main].count(gate))
+        self.assertEqual(1, files[bcr].count("        os: [ubuntu-24.04, macos-26]\n"))
+        self._assert_rejected(lambda files, path: _self_hosted_violations(_workflows(files)), {
+            "ungated": (main, files[main].replace(gate, "true", 1), ungated),
+            "self-hosted label": (coverage, files[coverage].replace(
+                hosted, "    runs-on: [self-hosted, linux, arm64]\n", 1), ungated),
+            "custom labels only": (coverage, files[coverage].replace(
+                hosted, "    runs-on: [linux, arm64]\n", 1), ungated),
+            "custom scalar label": (coverage, files[coverage].replace(
+                hosted, "    runs-on: arm64-builder\n", 1), ungated),
+            "block list": (coverage, files[coverage].replace(
+                hosted, "    runs-on:\n      - linux\n      - arm64\n", 1), ungated),
+            "runner group": (coverage, files[coverage].replace(
+                hosted, "    runs-on:\n      group: builders\n", 1), ungated),
+            "variable runner": (coverage, files[coverage].replace(
+                hosted, "    runs-on: ${{ vars.COVERAGE_RUNNER }}\n", 1), "mutable input"),
+            "matrix label": (bcr, files[bcr].replace(
+                "        os: [ubuntu-24.04, macos-26]\n", "        os: [ubuntu-24.04, arm64]\n", 1),
+                ungated),
+            "matrix include label": (perf, files[perf].replace(
+                "          - os: ubuntu-24.04\n", "          - os: linux-arm64\n", 1), ungated),
+            "computed matrix": (bcr, files[bcr].replace(
+                "        os: [ubuntu-24.04, macos-26]\n", "        os: ${{ fromJSON(vars.OS) }}\n",
+                1), "non-literal matrix"),
+            "changed expression": (codeql, files[codeql].replace(
+                "'ubuntu-latest' }}", "'arm64' }}", 1), "unreviewed expression"),
+        })
+
+    def test_artifacts_never_carry_raw_build_events_or_credential_jobs(self):
+        files = self.supply_chain_files
+        self.assertEqual([], _artifact_upload_violations(files))
+        self.assertEqual(REVIEWED_UPLOAD_ACTIONS, _uploading_local_actions(files))
+        # The self-hosted diagnostics keep their derived report, profiles and stall notes.
+        main = _jobs(files[".github/workflows/main.yml"])
+        uploads = _upload_paths(main["linux-self-hosted"])
+        self.assertEqual(1, len(uploads))
+        self.assertEqual(SELF_HOSTED_UPLOAD_FILES,
+                         {entry.rsplit("/", 1)[-1] for entry in uploads[0]})
+
+    def test_upload_policy_rejects_raw_logs_directories_and_workspace_roots(self):
+        files = self.supply_chain_files
+        main = ".github/workflows/main.yml"
+        coverage = ".github/workflows/coverage.yml"
+        sanitizers = ".github/workflows/sanitizers.yml"
+        report = "            ${{ runner.temp }}/donner-ci-diagnostics/report.md\n"
+        summary = "${{ runner.temp }}/browser-gpu-serial-summary.json"
+        evidence = "      - name: Retain failed test evidence\n"
+        upload = ("      - name: Upload logs\n        uses: actions/upload-artifact@v7\n"
+                  "        with:\n          name: logs\n          path: logs/test.log\n")
+        cache = ("      - name: Save cache\n        uses: actions/cache/save@v6\n"
+                 "        with:\n          key: k\n          path: build/bep.json\n")
+        diagnostics = "      - name: Upload CI diagnostics\n"
+        self._assert_rejected(lambda files, path: _artifact_upload_violations(files), {
+            "self-hosted directory": (main, files[main].replace(
+                report, "            ${{ runner.temp }}/donner-ci-diagnostics/\n", 1),
+                "donner-ci-diagnostics/"),
+            "self-hosted event log": (main, files[main].replace(
+                report, report + report.replace("report.md", "*/bep.json"), 1), "bep.json"),
+            "hosted event log": (main, files[main].replace(
+                summary, "${{ runner.temp }}/browser-gpu-serial.bep.json", 1), "serial.bep.json"),
+            "workspace root": (coverage, files[coverage].replace(
+                "path: coverage-report/*.log", "path: .", 1), "uploads ."),
+            "credential job": (sanitizers, files[sanitizers].replace(
+                evidence, upload + evidence, 1), "after writing a cache credential"),
+            "cache save event log": (coverage, files[coverage].replace(
+                "      - name: Generate coverage proof\n",
+                cache + "      - name: Generate coverage proof\n", 1), "build/bep.json"),
+            "self-hosted cache save": (main, files[main].replace(
+                diagnostics, "      - uses: actions/cache@v6\n" + diagnostics, 1),
+                "saves an Actions cache"),
+            "unreviewed upload action": (
+                ".github/actions/apt-install/action.yml",
+                files[".github/actions/apt-install/action.yml"]
+                + "    - uses: actions/upload-artifact@v7\n", "unreviewed action"),
+        })
+
+    def test_scripts_never_interpolate_untrusted_event_text(self):
+        for path, text in sorted(self.supply_chain_files.items()):
+            with self.subTest(path=path):
+                self.assertEqual([], _untrusted_script_contexts(text))
+
+    def test_script_context_policy_rejects_event_text_and_inputs(self):
+        fixture = textwrap.dedent("""\
+            steps:
+              - run: echo "${{ github.event.pull_request.title }}"
+              - name: Inline branch
+                run: echo ${{ github.head_ref }}
+              - uses: actions/github-script@v9
+                with:
+                  script: |
+                    core.info(`${{ inputs.artifact_id }}`)
+              - uses: nick-fields/retry@v4
+                with:
+                  command: >-
+                    make ${{ github.event.comment.body }}
+              - run: git diff ${{ github.event.pull_request.base.sha }}
+              - run: git show ${{ github.event.pull_request.head.sha }}
+            """)
+        self.assertEqual(["github.event.pull_request.title", "github.head_ref", "inputs.",
+                          "github.event.comment.body"], _untrusted_script_contexts(fixture))
+
+    def test_ci_definitions_name_no_private_network_or_home_directory(self):
+        for path, text in sorted(self.supply_chain_files.items()):
+            with self.subTest(path=path):
+                self.assertEqual([], PRIVATE_NETWORK_LITERAL.findall(text))
+        fixture = ("http://172.20.1.2:1234 /home/alice/.cache /Users/bob/bin 10.1.2.3 "
+                   "100.64.0.1 fd12:3456::1 builder.lan cache.example.internal nas.home.arpa "
+                   "/home/runner/work /home/linuxbrew/.linuxbrew /Users/runner/bin v10.1.2 "
+                   "172.15.0.1 cache.example.invalid fc.example.com")
+        self.assertEqual(["172.20.1.2", "/home/alice", "/Users/bob", "10.1.2.3", "100.64.0.1",
+                          "fd12:3456::1", "builder.lan", "cache.example.internal",
+                          "nas.home.arpa"],
+                         PRIVATE_NETWORK_LITERAL.findall(fixture))
+
 
 if __name__ == "__main__":
     unittest.main()
