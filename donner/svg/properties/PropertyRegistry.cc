@@ -1064,6 +1064,21 @@ ParseResult<double> ParseNumberPercentage(std::span<const css::ComponentValue> v
   return err;
 }
 
+/// Parse a nonnegative number-or-percentage amount, with an omitted amount defaulting to one.
+ParseResult<double> ParseFilterAmount(const css::Function& function, std::string_view name) {
+  auto result = ParseNumberPercentage(function.values, 1.0);
+  if (result.hasError()) {
+    return std::move(result.error());
+  }
+  if (result.result() < 0.0) {
+    ParseDiagnostic err;
+    err.reason = "Negative value not allowed for " + std::string(name) + "()";
+    err.range.start = function.sourceOffset;
+    return err;
+  }
+  return result.result();
+}
+
 /// Parse a single CSS filter function and return the corresponding FilterEffect.
 ParseResult<FilterEffect> ParseFilterFunction(const css::Function& function) {
   if (function.name.equalsLowercase("blur")) {
@@ -1133,37 +1148,23 @@ ParseResult<FilterEffect> ParseFilterFunction(const css::Function& function) {
   }
 
   if (function.name.equalsLowercase("brightness")) {
-    auto result = ParseNumberPercentage(function.values, 1.0);
+    auto result = ParseFilterAmount(function, "brightness");
     if (result.hasError()) {
       return std::move(result.error());
-    }
-    // CSS Filter Effects Level 1: brightness() does not allow negative values.
-    if (result.result() < 0.0) {
-      ParseDiagnostic err;
-      err.reason = "Negative value not allowed for brightness()";
-      err.range.start = function.sourceOffset;
-      return err;
     }
     return FilterEffect(FilterEffect::Brightness{result.result()});
   }
 
   if (function.name.equalsLowercase("contrast")) {
-    auto result = ParseNumberPercentage(function.values, 1.0);
+    auto result = ParseFilterAmount(function, "contrast");
     if (result.hasError()) {
       return std::move(result.error());
-    }
-    // CSS Filter Effects Level 1: contrast() does not allow negative values.
-    if (result.result() < 0.0) {
-      ParseDiagnostic err;
-      err.reason = "Negative value not allowed for contrast()";
-      err.range.start = function.sourceOffset;
-      return err;
     }
     return FilterEffect(FilterEffect::Contrast{result.result()});
   }
 
   if (function.name.equalsLowercase("grayscale")) {
-    auto result = ParseNumberPercentage(function.values, 1.0);
+    auto result = ParseFilterAmount(function, "grayscale");
     if (result.hasError()) {
       return std::move(result.error());
     }
@@ -1171,7 +1172,7 @@ ParseResult<FilterEffect> ParseFilterFunction(const css::Function& function) {
   }
 
   if (function.name.equalsLowercase("invert")) {
-    auto result = ParseNumberPercentage(function.values, 1.0);
+    auto result = ParseFilterAmount(function, "invert");
     if (result.hasError()) {
       return std::move(result.error());
     }
@@ -1179,7 +1180,7 @@ ParseResult<FilterEffect> ParseFilterFunction(const css::Function& function) {
   }
 
   if (function.name.equalsLowercase("opacity")) {
-    auto result = ParseNumberPercentage(function.values, 1.0);
+    auto result = ParseFilterAmount(function, "opacity");
     if (result.hasError()) {
       return std::move(result.error());
     }
@@ -1187,22 +1188,15 @@ ParseResult<FilterEffect> ParseFilterFunction(const css::Function& function) {
   }
 
   if (function.name.equalsLowercase("saturate")) {
-    auto result = ParseNumberPercentage(function.values, 1.0);
+    auto result = ParseFilterAmount(function, "saturate");
     if (result.hasError()) {
       return std::move(result.error());
-    }
-    // CSS Filter Effects Level 1: saturate() does not allow negative values.
-    if (result.result() < 0.0) {
-      ParseDiagnostic err;
-      err.reason = "Negative value not allowed for saturate()";
-      err.range.start = function.sourceOffset;
-      return err;
     }
     return FilterEffect(FilterEffect::Saturate{result.result()});
   }
 
   if (function.name.equalsLowercase("sepia")) {
-    auto result = ParseNumberPercentage(function.values, 1.0);
+    auto result = ParseFilterAmount(function, "sepia");
     if (result.hasError()) {
       return std::move(result.error());
     }

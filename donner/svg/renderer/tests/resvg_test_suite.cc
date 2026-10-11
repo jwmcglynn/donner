@@ -538,7 +538,8 @@ INSTANTIATE_TEST_SUITE_P(
                 {"color-adjust-functions-default-value.svg",
                  Params::Skip("Triage: CSS color-adjust input validity or output oracle mismatch")},
                 {"color-adjust-functions-negative.svg",
-                 Params::Skip("Triage: verify negative color-adjust grammar and reference oracle")},
+                 Params::Skip(
+                     "Triage: text labels differ after invalid negative filters are rejected")},
                 {"drop-shadow-function-color-last.svg",
                  Params::Skip("Triage: CSS drop-shadow color or unit variant oracle mismatch")},
                 {"drop-shadow-function-em-values.svg",
