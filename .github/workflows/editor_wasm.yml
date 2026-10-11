@@ -261,9 +261,12 @@ jobs:
 
           (
             cd "${candidate_dir}"
-            find site deploy -type f | LC_ALL=C sort | while IFS= read -r file; do
-              shasum -a 256 "${file}"
-            done > SHA256SUMS
+            manifest_paths=$(find site deploy -type f | LC_ALL=C sort)
+            manifest_files=()
+            while IFS= read -r file; do
+              manifest_files+=("${file}")
+            done <<< "${manifest_paths}"
+            shasum -a 256 "${manifest_files[@]}" > SHA256SUMS
           )
           echo "candidate_dir=${candidate_dir}" >> "${GITHUB_OUTPUT}"
 
