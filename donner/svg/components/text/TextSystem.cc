@@ -265,6 +265,10 @@ void resolveInheritedRotations(EntityHandle handle, size_t charCount,
       return;
     }
 
+    if (registry.any_of<TextRootComponent>(current)) {
+      return;
+    }
+
     const auto* tree = registry.try_get<donner::components::TreeComponent>(current);
     if (!tree) {
       return;
