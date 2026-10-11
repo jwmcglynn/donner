@@ -1082,14 +1082,17 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
             "donner/editor/wasm/catalog_package_integrity_test.py"))
         return package
 
-    def _stage_catalog_candidate(self, root):
+    def _stage_catalog_candidate(self, root, hash_startup_delay=0):
         body = self._step_body(self.editor_wasm, "Stage immutable Geode deployment candidate")
         script = "#!/bin/bash\n" + textwrap.dedent(body.split("        run: |\n", 1)[1])
         # The real staging job runs on macOS, where shasum is available. The
         # workflow contract test also runs on Linux, so provide the same
         # SHA-256 command from the fixture rather than relying on host tools.
         (root / "shasum_fixture.py").write_text(
-            "import hashlib, sys\n"
+            "import hashlib, os, sys, time\n"
+            "time.sleep(float(os.environ['FIXTURE_HASH_STARTUP_SECONDS']))\n"
+            "with open(os.path.join(os.environ['FIXTURE_ROOT'], 'hash-starts'), 'a') as starts:\n"
+            "    starts.write(str(len(sys.argv) - 3) + '\\n')\n"
             "assert sys.argv[1:3] == ['-a', '256']\n"
             "for name in sys.argv[3:]:\n"
             "    with open(name, 'rb') as stream:\n"
@@ -1105,6 +1108,7 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
             "PACKAGE_TARGET": "//fixture:package", "GITHUB_OUTPUT": str(root / "output"),
             "PATH": str(root) + os.pathsep + os.environ["PATH"],
             "FIXTURE_PYTHON": sys.executable, "FIXTURE_ROOT": str(root),
+            "FIXTURE_HASH_STARTUP_SECONDS": str(hash_startup_delay),
         })
 
     def test_editor_wasm_candidate_preserves_deferred_catalog_assets(self):
@@ -1136,6 +1140,22 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
             self.assertEqual(provenance["producer_run_id"], "12")
             self.assertEqual(provenance["producer_attempt"], "2")
             self.assertEqual(provenance["targets"], ["//fixture:package"])
+
+    def test_editor_wasm_candidate_bounds_checksum_startup_cost(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self._catalog_candidate_fixture(root)
+            result = self._stage_catalog_candidate(root, hash_startup_delay=0.25)
+            self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+            candidate = root / ("donner-editor-wasm-geode-" + "a" * 40)
+            expected_paths = sorted(p.relative_to(candidate).as_posix()
+                                    for directory in (candidate / "site", candidate / "deploy")
+                                    for p in directory.rglob("*") if p.is_file())
+            manifest_paths = [line.split("  ", 1)[1]
+                              for line in (candidate / "SHA256SUMS").read_text().splitlines()]
+            self.assertEqual(expected_paths, manifest_paths)
+            starts = [int(line) for line in (root / "hash-starts").read_text().splitlines()]
+            self.assertEqual([1, len(expected_paths)], starts)
 
     def test_editor_wasm_candidate_rejects_incomplete_or_unexpected_assets(self):
         for failure in ("corrupt-font", "extra-font", "extra-root-file", "missing-broker"):
