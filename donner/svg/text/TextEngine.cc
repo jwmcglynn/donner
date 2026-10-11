@@ -147,8 +147,8 @@ FontHandle selectBackendSafeFont(const TextBackend& backend, FontManager& fontMa
 }
 
 /**
- * Returns true if the codepoint is a non-spacing character that does not start a new
- * addressable character (grapheme cluster) for SVG per-character attributes.
+ * Existing nonspacing classification used to keep shaping input intact at
+ * positioning boundaries. These codepoints still consume addressable source slots.
  * Includes combining marks, zero-width joiners, and variation selectors.
  */
 bool isNonSpacing(uint32_t cp) {
@@ -472,17 +472,11 @@ ByteIndexMappings buildByteIndexMappings(std::string_view spanText) {
   result.byteToCharIdx.resize(spanText.size(), 0);
   unsigned int codepointIndex = 0;
   size_t byteIndex = 0;
-  unsigned int groupStart = 0;
-  bool previousWasJoiner = false;
   while (byteIndex < spanText.size()) {
     const size_t startIndex = byteIndex;
-    const uint32_t cp = decodeUtf8(spanText, byteIndex);
-    if (codepointIndex == 0 || (!isNonSpacing(cp) && !previousWasJoiner)) {
-      groupStart = codepointIndex;
-    }
-    previousWasJoiner = cp == 0x200D;
+    decodeUtf8(spanText, byteIndex);
     for (size_t i = startIndex; i < byteIndex; ++i) {
-      result.byteToCharIdx[i] = groupStart;
+      result.byteToCharIdx[i] = codepointIndex;
     }
     ++codepointIndex;
   }
@@ -1670,6 +1664,70 @@ TextBackend::ShapedRun ShapeSpanChunk(const TextBackend& backend, const TextRun&
                                          chunk.byteEnd - chunk.byteStart, vertical, variant, false);
 }
 
+/// Reuses one shaping result per existing chunk and records its source group starts.
+struct PreparedSpanShaping {
+  std::vector<TextBackend::ShapedRun> chunks;
+  std::vector<bool> groupStarts;
+};
+
+PreparedSpanShaping PrepareSpanShaping(const TextBackend& backend, const TextRun& run,
+                                       std::string_view text, const std::vector<ChunkRange>& ranges,
+                                       bool vertical, FontVariant variant, bool kerning,
+                                       const ByteIndexMappings& mappings) {
+  PreparedSpanShaping result;
+  result.chunks.reserve(ranges.size());
+  size_t codepointCount = 0;
+  for (size_t pos = 0; pos < text.size(); ++codepointCount) {
+    decodeUtf8(text, pos);
+  }
+  result.groupStarts.resize(codepointCount, false);
+  for (const auto& range : ranges) {
+    auto shaped = ShapeSpanChunk(backend, run, text, range, vertical, variant, kerning);
+    for (size_t index = 0; index < shaped.glyphs.size(); ++index) {
+      auto& glyph = shaped.glyphs[index];
+      // The simple backend reports marks separately. Preserve a zero-advance mark
+      // with its preceding group without merging a separately shaped spacing glyph.
+      if (index != 0 && glyph.cluster < text.size() && glyph.xAdvance == 0.0) {
+        size_t position = glyph.cluster;
+        if (isNonSpacing(decodeUtf8(text, position))) {
+          glyph.cluster = shaped.glyphs[index - 1].cluster;
+        }
+      }
+      if (glyph.cluster < mappings.byteToCharIdx.size()) {
+        result.groupStarts[mappings.byteToCharIdx[glyph.cluster]] = true;
+      }
+    }
+    result.chunks.push_back(std::move(shaped));
+  }
+  return result;
+}
+
+/// Applies internal displacements to the following group, retaining end-of-span carry.
+SmallVector<std::optional<Lengthd>, 1> ResolveGroupDisplacements(
+    const SmallVector<std::optional<Lengthd>, 1>& values, const std::vector<bool>& groupStarts,
+    Lengthd::Extent extent, const TextLayoutParams& params, double& pending) {
+  SmallVector<std::optional<Lengthd>, 1> result;
+  result.resize(groupStarts.size());
+  for (size_t index = 0; index < groupStarts.size(); ++index) {
+    if (index < values.size() && values[index]) {
+      pending += values[index]->toPixels(params.viewBox, params.fontMetrics, extent);
+    }
+    if (groupStarts[index]) {
+      if (pending != 0.0) {
+        result[index] = Lengthd(pending);
+      }
+      pending = 0.0;
+    }
+  }
+  return result;
+}
+
+/// Returns a group's authored position only on its first glyph.
+std::optional<Lengthd> PositionForGroup(const SmallVector<std::optional<Lengthd>, 1>& values,
+                                        unsigned int index, bool firstGlyph) {
+  return firstGlyph && index < values.size() ? values[index] : std::nullopt;
+}
+
 /// Valid zero adjustment retains characters; other unusable sizes do not reach layout.
 bool HasAddressableSpanText(std::string_view text, float size,
                             const std::optional<double>& adjustment) {
@@ -1890,46 +1948,15 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
     const ByteIndexMappings indexMappings = buildByteIndexMappings(spanText);
     const auto& byteToCharIdx = indexMappings.byteToCharIdx;
 
-    // Shape each chunk once. Source indices remain codepoints, while glyph clusters
-    // determine which entries start typographic characters for relative positioning.
-    std::vector<TextBackend::ShapedRun> shapedChunks;
-    shapedChunks.reserve(chunkRanges.size());
-    size_t codepointCount = 0;
-    for (size_t pos = 0; pos < spanText.size(); ++codepointCount) {
-      decodeUtf8(spanText, pos);
-    }
-    std::vector<bool> groupStarts(codepointCount, false);
-    for (const auto& chunk : chunkRanges) {
-      auto shaped = ShapeSpanChunk(*backend_, run, spanText, chunk, vertical, span.fontVariant,
-                                   spanFontKerning);
-      for (const auto& glyph : shaped.glyphs) {
-        if (glyph.cluster < byteToCharIdx.size()) {
-          groupStarts[byteToCharIdx[glyph.cluster]] = true;
-        }
-      }
-      shapedChunks.push_back(std::move(shaped));
-    }
-    const auto groupDisplacements = [&](const auto& values, Lengthd::Extent extent,
-                                        double& pending) {
-      SmallVector<std::optional<Lengthd>, 1> result;
-      result.resize(codepointCount);
-      for (size_t index = 0; index < codepointCount; ++index) {
-        if (index < values.size() && values[index]) {
-          pending += values[index]->toPixels(params.viewBox, params.fontMetrics, extent);
-        }
-        if (groupStarts[index]) {
-          if (pending != 0.0) {
-            result[index] = Lengthd(pending);
-          }
-          pending = 0.0;
-        }
-      }
-      return result;
-    };
-    dxListLocal = groupDisplacements(span.pathSpline ? span.dxList : dxListLocal,
-                                     Lengthd::Extent::X, pendingDx);
-    dyListLocal = groupDisplacements(span.pathSpline ? span.dyList : dyListLocal,
-                                     Lengthd::Extent::Y, pendingDy);
+    const PreparedSpanShaping shaping =
+        PrepareSpanShaping(*backend_, run, spanText, chunkRanges, vertical, span.fontVariant,
+                           spanFontKerning, indexMappings);
+    dxListLocal =
+        ResolveGroupDisplacements(span.pathSpline ? span.dxList : dxListLocal, shaping.groupStarts,
+                                  Lengthd::Extent::X, params, pendingDx);
+    dyListLocal =
+        ResolveGroupDisplacements(span.pathSpline ? span.dyList : dyListLocal, shaping.groupStarts,
+                                  Lengthd::Extent::Y, params, pendingDy);
 
     // ── Iterate the shaped chunks ───────────────────────────────────────────────
     uint32_t lastCodepoint = 0;
@@ -1942,7 +1969,7 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
 
     for (size_t ci = 0; ci < chunkRanges.size(); ++ci) {
       const auto& chunk = chunkRanges[ci];
-      const auto& shaped = shapedChunks[ci];
+      const auto& shaped = shaping.chunks[ci];
       std::optional<unsigned int> previousPositionedGroup;
 
       // ── RTL Y-override for multi-glyph chunks ─────────────────────────────────
@@ -2008,40 +2035,38 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
 
         const bool applyPosition = previousPositionedGroup != charIdx;
         previousPositionedGroup = charIdx;
+        const auto groupX = PositionForGroup(xListLocal, charIdx, applyPosition);
+        const auto groupY = PositionForGroup(yListLocal, charIdx, applyPosition);
+        const auto groupDx = PositionForGroup(dxListLocal, charIdx, applyPosition);
+        const auto groupDy = PositionForGroup(dyListLocal, charIdx, applyPosition);
 
         if (vertical) {
           // ── Vertical mode ─────────────────────────────────────────────────────
           // Primary advance is along Y, cross-axis is X.
-          const bool hasAbsoluteY =
-              applyPosition && charIdx < yListLocal.size() && yListLocal[charIdx].has_value();
-          const bool hasAbsoluteX_v =
-              applyPosition && charIdx < xListLocal.size() && xListLocal[charIdx].has_value();
+          const bool hasAbsoluteY = groupY.has_value();
+          const bool hasAbsoluteX_v = groupX.has_value();
           if ((hasAbsoluteX_v || hasAbsoluteY) && !(ci == 0 && gi == 0)) {
             chunkBoundaries.push_back({runs.size(), run.glyphs.size(), span.textAnchor});
           }
 
           // Per-character absolute Y (primary axis).
           if (hasAbsoluteY) {
-            penY = yListLocal[charIdx]->toPixels(params.viewBox, params.fontMetrics,
-                                                 Lengthd::Extent::Y);
+            penY = groupY->toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::Y);
           }
 
           // Per-character dy (primary axis).
-          if (applyPosition && charIdx < dyListLocal.size() && dyListLocal[charIdx].has_value()) {
-            penY += dyListLocal[charIdx]->toPixels(params.viewBox, params.fontMetrics,
-                                                   Lengthd::Extent::Y);
+          if (groupDy.has_value()) {
+            penY += groupDy->toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::Y);
           }
 
           // Per-character absolute X (cross-axis).
-          if (applyPosition && charIdx < xListLocal.size() && xListLocal[charIdx].has_value()) {
-            penX = xListLocal[charIdx]->toPixels(params.viewBox, params.fontMetrics,
-                                                 Lengthd::Extent::X);
+          if (groupX.has_value()) {
+            penX = groupX->toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::X);
           }
 
           // Per-character dx (cross-axis).
-          if (applyPosition && charIdx < dxListLocal.size() && dxListLocal[charIdx].has_value()) {
-            penX += dxListLocal[charIdx]->toPixels(params.viewBox, params.fontMetrics,
-                                                   Lengthd::Extent::X);
+          if (groupDx.has_value()) {
+            penX += groupDx->toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::X);
           }
 
           // Apply kerning: cross-chunk/cross-span for first glyph, within-chunk for subsequent.
@@ -2121,10 +2146,8 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
           }
         } else {
           // ── Horizontal mode ───────────────────────────────────────────────────
-          const bool hasAbsoluteX =
-              applyPosition && charIdx < xListLocal.size() && xListLocal[charIdx].has_value();
-          const bool hasAbsoluteY =
-              applyPosition && charIdx < yListLocal.size() && yListLocal[charIdx].has_value();
+          const bool hasAbsoluteX = groupX.has_value();
+          const bool hasAbsoluteY = groupY.has_value();
 
           // A within-span absolute x or y starts a new text chunk (unless it's the
           // first glyph of the span that already started a chunk via startsNewChunk).
@@ -2143,14 +2166,12 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
           }
 
           if (hasAbsoluteX) {
-            penX = xListLocal[charIdx]->toPixels(params.viewBox, params.fontMetrics,
-                                                 Lengthd::Extent::X);
+            penX = groupX->toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::X);
           }
 
           // Per-character dx.
-          if (applyPosition && charIdx < dxListLocal.size() && dxListLocal[charIdx].has_value()) {
-            penX += dxListLocal[charIdx]->toPixels(params.viewBox, params.fontMetrics,
-                                                   Lengthd::Extent::X);
+          if (groupDx.has_value()) {
+            penX += groupDx->toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::X);
           }
 
           // Per-character absolute Y positioning.
@@ -2159,15 +2180,13 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
           if (chunkYOverride.has_value()) {
             penY = *chunkYOverride;
           } else if (hasAbsoluteY) {
-            penY = yListLocal[charIdx]->toPixels(params.viewBox, params.fontMetrics,
-                                                 Lengthd::Extent::Y) +
-                   defaultY;
+            penY =
+                groupY->toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::Y) + defaultY;
           }
 
           // Per-character dy.
-          if (applyPosition && charIdx < dyListLocal.size() && dyListLocal[charIdx].has_value()) {
-            penY += dyListLocal[charIdx]->toPixels(params.viewBox, params.fontMetrics,
-                                                   Lengthd::Extent::Y);
+          if (groupDy.has_value()) {
+            penY += groupDy->toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::Y);
           }
 
           TextGlyph glyph;

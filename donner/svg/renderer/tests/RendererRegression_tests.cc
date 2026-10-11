@@ -750,6 +750,16 @@ TEST_F(RendererRegressionTests, TypographicGroupsSkipAbsoluteAndCarryRelativePos
                                        editor::tests::PixelmatchIdentityParams());
 }
 
+TEST_F(RendererRegressionTests, JoinerDoesNotMergeSeparatelyShapedGlyphs) {
+  const RendererBitmap actual = RenderTextOpacityCase(
+      R"svg(<text font-family="Noto Sans" font-size="24" x="12 99 80" y="65" rotate="0 70 20">A&#x200D;B</text>)svg");
+  const RendererBitmap expected = RenderTextOpacityCase(
+      R"svg(<text font-family="Noto Sans" font-size="24"><tspan x="12" y="65" rotate="0">A&#x200D;</tspan><tspan x="80" y="65" rotate="20">B</tspan></text>)svg");
+  AssertVisibleFixture(expected, "separate_joiner_glyphs_visible");
+  editor::tests::CompareBitmapToBitmap(actual, expected, "separate_joiner_glyphs_positions",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
 TEST_F(RendererRegressionTests, AbsolutePositionsBreakOptionalLigatures) {
   const RendererBitmap actual = RenderTextOpacityCase(
       R"svg(<text font-family="Noto Sans" font-size="24" x="12 70" y="65">fi</text>)svg");

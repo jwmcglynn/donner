@@ -40,11 +40,11 @@ std::vector<ChunkRange> findChunkRanges(std::string_view spanText,
 
 /// Index mapping result for a span's text.
 struct ByteIndexMappings {
-  std::vector<unsigned int> byteToCharIdx;  ///< First codepoint index of the typographic group.
+  std::vector<unsigned int> byteToCharIdx;  ///< Unicode codepoint index for SVG positioning.
 };
 
-/// Map bytes to group-start codepoint indices, preserving skipped source indices.
-/// Shaping may combine further characters; DOM indexing is separate.
+/// Build the byte-to-codepoint map; shaping determines group applicability.
+/// DOM indexing is separate.
 ByteIndexMappings buildByteIndexMappings(std::string_view spanText);
 
 /// Text chunk boundary for per-chunk text-anchor adjustment.

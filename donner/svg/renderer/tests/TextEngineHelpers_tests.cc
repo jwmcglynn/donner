@@ -209,22 +209,22 @@ TEST(BuildByteIndexMappingsTest, AsciiText) {
   EXPECT_THAT(m.byteToCharIdx, ElementsAre(0u, 1u, 2u));
 }
 
-TEST(BuildByteIndexMappingsTest, CombiningMarkUsesFirstGroupCodepoint) {
+TEST(BuildByteIndexMappingsTest, CombiningMarkConsumesPositioningIndex) {
   // "o" + combining low line (U+0332, 2 bytes: CC B2)
   const auto m = buildByteIndexMappings("o\xCC\xB2");
-  EXPECT_THAT(m.byteToCharIdx, ElementsAre(0u, 0u, 0u));
+  EXPECT_THAT(m.byteToCharIdx, ElementsAre(0u, 1u, 1u));
 }
 
-TEST(BuildByteIndexMappingsTest, JoinerGroupPreservesFollowingCodepointIndex) {
+TEST(BuildByteIndexMappingsTest, JoinerAndVariationSelectorConsumePositioningIndices) {
   const auto m = buildByteIndexMappings(
       "A\xE2\x80\x8D"
       "B\xEF\xB8\x8F"
       "C");
 
-  EXPECT_THAT(m.byteToCharIdx, ElementsAre(0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 4u));
+  EXPECT_THAT(m.byteToCharIdx, ElementsAre(0u, 1u, 1u, 1u, 2u, 3u, 3u, 3u, 4u));
 }
 
-TEST(BuildByteIndexMappingsTest, NonSpacingGroupPreservesFollowingCodepointIndex) {
+TEST(BuildByteIndexMappingsTest, EveryNonSpacingCodepointConsumesPositioningIndex) {
   std::string text;
   std::vector<size_t> offsets;
   auto append = [&](char32_t cp) {
@@ -247,7 +247,7 @@ TEST(BuildByteIndexMappingsTest, NonSpacingGroupPreservesFollowingCodepointIndex
   const auto m = buildByteIndexMappings(text);
 
   for (size_t i = 0; i < cOffsetIndex; ++i) {
-    EXPECT_EQ(m.byteToCharIdx[offsets[i]], 0u) << "offset index " << i;
+    EXPECT_EQ(m.byteToCharIdx[offsets[i]], i) << "offset index " << i;
   }
   EXPECT_EQ(m.byteToCharIdx[offsets[cOffsetIndex]], cOffsetIndex);
 }

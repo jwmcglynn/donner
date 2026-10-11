@@ -424,7 +424,7 @@ TEST(TextEngineHelperTest, ByteMappingsAndChunkRangesUseCodepointIndices) {
 
   const auto mappings = text_engine_detail::buildByteIndexMappings(text);
   for (size_t i = 0; i < cOffsetIndex; ++i) {
-    EXPECT_EQ(mappings.byteToCharIdx[offsets[i]], 0u) << "offset index " << i;
+    EXPECT_EQ(mappings.byteToCharIdx[offsets[i]], i) << "offset index " << i;
   }
   EXPECT_EQ(mappings.byteToCharIdx[offsets[cOffsetIndex]], cOffsetIndex);
   EXPECT_EQ(mappings.byteToCharIdx[offsets[emojiOffsetIndex]], emojiOffsetIndex);
