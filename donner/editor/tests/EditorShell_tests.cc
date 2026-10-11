@@ -2440,7 +2440,13 @@ TEST(EditorShellTest, NothingToPresentRetriesPostFromIdleFrames) {
     return coordinator.nothingToPresentResultTotalForDiagnostics();
   };
 
-  const std::uint64_t settled = runIdleFrames(30);
+  std::ignore = runIdleFrames(30);
+  RenderCoordinatorTestAccess::makeCanvasCommitDue(coordinator);
+  RenderCoordinatorTestAccess::makeRasterViewportSettled(coordinator);
+  const std::uint64_t settled = runIdleFrames(10);
+  const std::uint64_t retryVersion =
+      EditorShellTestAccess::App(shell).document().currentFrameVersion();
+  const Vector2i retryCanvas = EditorShellTestAccess::App(shell).document().document().canvasSize();
   ASSERT_GE(settled, 1u) << "the editor's first render must have produced nothing to present";
   EXPECT_EQ(runIdleFrames(10), settled) << "no retry before its delay has passed";
 
@@ -2452,6 +2458,10 @@ TEST(EditorShellTest, NothingToPresentRetriesPostFromIdleFrames) {
         << "the retry due after " << delay.count() << " ms must post from an idle frame; "
         << RenderCoordinatorTestAccess::overviewScheduleState(
                coordinator, EditorShellTestAccess::App(shell), shell.viewportForReadback());
+    EXPECT_THAT(EditorShellTestAccess::App(shell).document().currentFrameVersion(),
+                testing::Eq(retryVersion));
+    EXPECT_THAT(EditorShellTestAccess::App(shell).document().document().canvasSize(),
+                testing::Eq(retryCanvas));
   }
   RenderCoordinatorTestAccess::advanceFakeSchedulingClock(std::chrono::minutes(1));
   EXPECT_EQ(runIdleFrames(10), expected) << "after the last retry, idle frames post nothing";
@@ -3896,6 +3906,33 @@ TEST(EditorShellTest, FullDesktopFrameLoopPresentsShapeDragBeforeMouseUp) {
   runFrameWithMouse(screenPoint(Vector2d(35.0, 28.0)), /*mouseDown=*/false);
 }
 
+namespace {
+
+bool CachedRasterCoversVisibleArtboard(const PresentationCoverageDiagnostics& coverage,
+                                       const ViewportState& viewport) {
+  const Box2d pane = viewport.screenToDocument(
+      Box2d(viewport.paneOrigin, viewport.paneOrigin + viewport.paneSize));
+  const Box2d visible(
+      Vector2d(std::max(pane.topLeft.x, viewport.documentViewBox.topLeft.x),
+               std::max(pane.topLeft.y, viewport.documentViewBox.topLeft.y)),
+      Vector2d(std::min(pane.bottomRight.x, viewport.documentViewBox.bottomRight.x),
+               std::min(pane.bottomRight.y, viewport.documentViewBox.bottomRight.y)));
+  const EditorRasterViewport raster = viewport.rasterViewport();
+  const Vector2d requiredScale(raster.outputSizePx.x / raster.documentRect.width(),
+                               raster.outputSizePx.y / raster.documentRect.height());
+  const auto covers = [&](const Box2d& rect, const Vector2i& pixels) {
+    return rect.width() > 0.0 && rect.height() > 0.0 && pixels.x > 0 && pixels.y > 0 &&
+           visible.width() > 0.0 && visible.height() > 0.0 && rect.contains(visible.topLeft) &&
+           rect.contains(visible.bottomRight) && pixels.x / rect.width() == requiredScale.x &&
+           pixels.y / rect.height() == requiredScale.y;
+  };
+  return covers(coverage.activeRasterDocumentRect, coverage.activeOutputSizePx) ||
+         (coverage.overviewInfillAvailable &&
+          covers(coverage.overviewRasterDocumentRect, coverage.overviewOutputSizePx));
+}
+
+}  // namespace
+
 TEST(EditorShellTest, PartlyOffscreenSplashShineEllipseFirstHeldMoveMatchesSettledPixels) {
   gui::EditorWindow window(gui::EditorWindowOptions{
       .title = "Partly offscreen splash drag pixels",
@@ -3930,7 +3967,8 @@ TEST(EditorShellTest, PartlyOffscreenSplashShineEllipseFirstHeldMoveMatchesSettl
     shell.runFrame();
     return window.endFrameAndReadPixels();
   };
-  const auto settleFrame = [&](std::string_view stage, std::uint64_t minimumVersion) {
+  const auto settleFrame = [&](std::string_view stage, std::uint64_t minimumVersion,
+                               bool requireSelectedCache = false) {
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
     for (int frame = 0; frame < 20 && std::chrono::steady_clock::now() < deadline; ++frame) {
       window.beginFrame();
@@ -3940,10 +3978,15 @@ TEST(EditorShellTest, PartlyOffscreenSplashShineEllipseFirstHeldMoveMatchesSettl
         break;
       }
       const LayerInspectorStatusReadback status = shell.layerInspectorStatusForReadback();
-      if (app.document().currentFrameVersion() >= minimumVersion &&
+      if (!app.document().hasPendingMutations() && !shell.asyncRendererForReplay().isBusy() &&
+          app.document().currentFrameVersion() >= minimumVersion &&
           EditorShellTestAccess::DisplayedDocVersion(shell) ==
               app.document().currentFrameVersion() &&
-          !status.tiles.empty()) {
+          CachedRasterCoversVisibleArtboard(status.presentationCoverage,
+                                            shell.viewportForReadback()) &&
+          (!requireSelectedCache || EditorShellTestAccess::Coordinator(shell)
+                                        .compositedPresentation()
+                                        .hasCachedTexturesForEntity(shineEntity))) {
         return true;
       }
       std::this_thread::sleep_for(std::chrono::milliseconds(5));
@@ -3964,19 +4007,19 @@ TEST(EditorShellTest, PartlyOffscreenSplashShineEllipseFirstHeldMoveMatchesSettl
   };
   ASSERT_TRUE(settleFrame("initial", app.document().currentFrameVersion()));
   app.setSelection(*shine);
-  // The selection-only cache request is committed after a brief viewport-settle delay. Let it
-  // become eligible before starting the held-pointer frame.
-  std::this_thread::sleep_for(std::chrono::milliseconds(150));
-  ASSERT_TRUE(settleFrame("selected", app.document().currentFrameVersion()));
+  ASSERT_THAT(settleFrame("selected", app.document().currentFrameVersion(),
+                          /*requireSelectedCache=*/true),
+              testing::Eq(true));
 
   const ViewportState viewport = shell.viewportForReadback();
   const EditorRasterViewport visibleRaster = viewport.rasterViewport();
   ASSERT_TRUE(visibleRaster.viewportBounded);
   ASSERT_NE(visibleRaster.outputSizePx, viewport.selectedPrewarmRasterViewport().outputSizePx)
       << "The regression needs a small pane whose selected prewarm would change tile dimensions";
-  EXPECT_EQ(shell.layerInspectorStatusForReadback().presentationCoverage.activeOutputSizePx,
-            visibleRaster.outputSizePx)
-      << "Selecting the ellipse must preserve the complete visible static tile cache; "
+  EXPECT_THAT(CachedRasterCoversVisibleArtboard(
+                  shell.layerInspectorStatusForReadback().presentationCoverage, viewport),
+              testing::Eq(true))
+      << "Selecting the ellipse must retain complete visible coverage at the requested density; "
       << RenderCoordinatorTestAccess::overviewScheduleState(
              EditorShellTestAccess::Coordinator(shell), app, shell.viewportForReadback());
   const std::optional<Box2d> originalChromeBounds =
@@ -4137,10 +4180,12 @@ TEST(EditorShellTest, ColdSplashShineDragGetsFullTileBeforeMouseUp) {
           std::ranges::any_of(status.tiles, [](const LayerInspectorStatusReadback::Tile& tile) {
             return tile.isDragTarget;
           });
-      if (!app.document().hasPendingMutations() &&
+      if (!app.document().hasPendingMutations() && !shell.asyncRendererForReplay().isBusy() &&
           EditorShellTestAccess::DisplayedDocVersion(shell) ==
               app.document().currentFrameVersion() &&
-          !status.tiles.empty() && dragTileReady) {
+          CachedRasterCoversVisibleArtboard(status.presentationCoverage,
+                                            shell.viewportForReadback()) &&
+          dragTileReady) {
         return true;
       }
     }
