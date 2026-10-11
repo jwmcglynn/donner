@@ -32,22 +32,29 @@ flowchart LR
   embedder[Embedding application]
   build[Reviewed source and dependencies]
 
-  parser[Bounded parsers and resource managers]
+  inputGate[Editor input admission and capability policy]
+  mcpGate[Local MCP dispatch and argument checks]
+  parser[Bounded document and replay parsers]
   dom[Live DOM and editor state]
   renderer[CPU or GPU renderer]
+  hostGate[Explicit host capability boundary]
   host[Host capabilities]
   artifact[Release artifacts]
 
   document --> parser --> dom --> renderer
-  localInput --> dom
-  mcp --> dom
-  embedder --> host
-  dom --> host
+  localInput --> inputGate --> parser
+  mcp --> mcpGate --> inputGate
+  mcpGate --> dom
+  embedder --> hostGate
+  dom --> hostGate --> host
   build --> artifact
 
-  host -. explicit resource-loader capability .-> parser
+  hostGate -. explicit resource-loader capability .-> parser
   embedder -. trusted raw shader API .-> renderer
 ```
+
+The arrows show admission and authority boundaries, not a claim that every required check is
+enforced today. The controls and remaining validation requirements are described below.
 
 The following principals are distinct:
 
