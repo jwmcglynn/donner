@@ -4011,6 +4011,12 @@ TEST(EditorShellTest, PartlyOffscreenSplashShineEllipseFirstHeldMoveMatchesSettl
                       << shell.asyncRendererForReplay().replayResultHoldPollCountForTesting();
         return false;
       }
+      if (requireSelectedCache && frame == 0) {
+        // Selected prewarming requires the 120ms viewport/canvas setup window to have settled.
+        RenderCoordinator& coordinator = EditorShellTestAccess::Coordinator(shell);
+        RenderCoordinatorTestAccess::makeCanvasCommitDue(coordinator);
+        RenderCoordinatorTestAccess::makeRasterViewportSettled(coordinator);
+      }
       if (!app.document().hasPendingMutations() && !shell.asyncRendererForReplay().isBusy() &&
           app.document().currentFrameVersion() >= minimumVersion &&
           EditorShellTestAccess::DisplayedDocVersion(shell) ==
