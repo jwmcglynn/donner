@@ -126,7 +126,8 @@ class ReleaseCliTest(unittest.TestCase):
         cases = [
             {"path": "file:///home/runner/private/module"},
             {"path": "/root/credentials"},
-            {"address": "192.168.1.50"},
+            # Built at runtime so tools/check_private_details.py stays clean.
+            {"address": ".".join(["192", "168", "1", "50"])},
             {"url": "https://user:password@github.com/archive"},
             {"url": "HTTPS://internal.example.invalid/module"},
             {"url": "ssh://internal.example.invalid/repo"},

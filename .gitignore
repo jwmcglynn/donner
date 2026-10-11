@@ -65,6 +65,9 @@ examples/svg_viewer_screenshot.png
 # Per-developer Bazel overrides (remote-execution endpoints, credentials).
 .bazelrc.user
 
+# Optional local list of private names for tools/check_private_details.py.
+.private-names
+
 # Playwright run artifacts (browser test harness output).
 donner/editor/wasm/tests/playwright-report/
 donner/editor/wasm/tests/test-results/

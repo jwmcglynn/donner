@@ -453,6 +453,20 @@ py_test(
     ],
 )
 
+py_binary(
+    name = "check_private_details",
+    srcs = ["check_private_details.py"],
+)
+
+py_test(
+    name = "check_private_details_tests",
+    size = "small",
+    srcs = [
+        "check_private_details.py",
+        "check_private_details_tests.py",
+    ],
+)
+
 py_test(
     name = "ci_workflow_targets_tests",
     size = "small",
