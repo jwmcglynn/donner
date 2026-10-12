@@ -21,6 +21,8 @@ trailing newline. Record its SHA-256 outside the record; the record cannot conta
 - `source`: full commit and tree IDs; module version and compatibility level from `MODULE.bazel`;
   `.bazelversion`; and each CLI platform's retained `MODULE.bazel.lock` SHA-256 and compiler
   version. The two generated locks are bound separately because their bytes may differ by platform.
+  The compiler version must equal the CLI provenance's `compiler_version` (provenance schema 3),
+  which names the compiler of the C++ toolchain Bazel used for that binary.
 - `artifacts`: exactly `source`, `cli-linux`, `cli-macos`, `editor`, and `docs`. Each has a GitHub run
   ID and attempt, artifact ID and name, raw ZIP SHA-256, and a map of every ZIP member path to its
   uncompressed SHA-256. The artifact ID and ZIP digest must match GitHub's metadata. The editor

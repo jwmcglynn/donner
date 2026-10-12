@@ -110,7 +110,10 @@ Preflight builds the Linux and macOS CLI binaries from the same committed checko
 intentionally ignores `MODULE.bazel.lock`, so each platform resolves its lockfile once with
 `--lockfile_mode=update`, then repeats the build under `--lockfile_mode=error`. It retains each
 binary, generated lockfile, license notice, SHA-256, and provenance; the provenance binds the
-notice's SHA-256. A separate preflight job verifies and signs the source archive, both CLI binaries,
+notice's SHA-256 and records the compiler version reported by `//tools/ci:release_compiler_identity`,
+which is built in the same invocation and configuration as the CLI. Bazel compiles with the
+toolchain it resolves (clang, per `.bazelrc`), not the runner's default `c++`, so packaging fails
+when that probe cannot report a compiler. A separate preflight job verifies and signs the source archive, both CLI binaries,
 both generated lockfiles and both notices on main push or manual runs.
 Qualification waits for both CLI builds and the audited consumer matrix, re-verifies both CLI
 artifacts from its own attempt, and records that run ID and attempt without changing the archive
