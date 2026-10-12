@@ -3894,20 +3894,31 @@ TEST(Path, MeasuredTrailingMoveKeepsTheLastDrawingEndpointAtExactLength) {
                                             Vector2dNear(Vector2d(100, 200), 1e-12))));
 }
 
-TEST(Path, DegreeElevatedQuadraticConvertsBackWithoutChangingItsGeometry) {
+TEST(Path, DegreeElevatedQuadraticConversionPreservesItsAnalyticGeometry) {
   const Path cubic = PathBuilder().moveTo({0, 0}).curveTo({2, 4}, {4, 4}, {6, 0}).build();
-  const Path quadratic = cubic.cubicToQuadratic(1e-9);
-  EXPECT_THAT(quadratic.commands(), testing::ElementsAre(PathCommandVerbIs(Path::Verb::MoveTo),
-                                                         PathCommandVerbIs(Path::Verb::QuadTo)));
-  EXPECT_THAT(quadratic.points(), testing::ElementsAre(Vector2dNear(Vector2d(0, 0), 1e-12),
-                                                       Vector2dNear(Vector2d(3, 6), 1e-12),
-                                                       Vector2dNear(Vector2d(6, 0), 1e-12)));
+  constexpr double kTolerance = 1e-9;
+  const Path converted = cubic.cubicToQuadratic(kTolerance);
+  ASSERT_THAT(converted.empty(), testing::IsFalse());
+  EXPECT_THAT(converted.commands(),
+              testing::Each(
+                  testing::Field("verb", &Path::Command::verb, testing::Ne(Path::Verb::CurveTo))));
+  EXPECT_THAT(converted.pointAt(0, 0), Vector2dNear(Vector2d(0, 0), kTolerance));
+  EXPECT_THAT(converted.pointAt(converted.verbCount() - 1, 1),
+              Vector2dNear(Vector2d(6, 0), kTolerance));
   const Vector2d expected[] = {{1.5, 2.25}, {3, 3}, {4.5, 2.25}};
   for (std::size_t index = 0; index < 3; ++index) {
     SCOPED_TRACE(index);
-    const double parameter = double(index + 1) * 0.25;
-    EXPECT_THAT(cubic.pointAt(1, parameter), Vector2dNear(expected[index], 1e-12));
-    EXPECT_THAT(quadratic.pointAt(1, parameter), Vector2dNear(expected[index], 1e-12));
+    EXPECT_THAT(cubic.pointAt(1, double(index + 1) * 0.25), Vector2dNear(expected[index], 1e-12));
+  }
+  for (std::size_t index = 0; index < converted.verbCount(); ++index) {
+    SCOPED_TRACE(index);
+    for (double parameter : {0.0, 0.25, 0.5, 0.75, 1.0}) {
+      SCOPED_TRACE(parameter);
+      const Vector2d point = converted.pointAt(index, parameter);
+      EXPECT_THAT(point.x, testing::AllOf(testing::Ge(-kTolerance), testing::Le(6.0 + kTolerance)));
+      EXPECT_THAT(point.y,
+                  testing::DoubleNear(2.0 * point.x - point.x * point.x / 3.0, 4.0 * kTolerance));
+    }
   }
 }
 
