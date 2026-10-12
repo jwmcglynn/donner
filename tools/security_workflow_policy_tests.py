@@ -275,9 +275,30 @@ def _script_bodies(text):
     return bodies
 
 
+def _expression_end(text, index):
+    """Find the first unquoted close delimiter with one forward scan."""
+    quoted = False
+    while index < len(text):
+        if text[index] == "'":
+            if quoted and text[index:index + 2] == "''":
+                index += 2
+                continue
+            quoted = not quoted
+        elif not quoted and text[index:index + 2] == "}}":
+            return index
+        index += 1
+    return None
+
+
 def _expressions(text):
-    """Ignore close delimiters in expression strings, including doubled quote escapes."""
-    return re.finditer(r"\$\{\{((?:'(?:''|[^'])*'|[^'}]|}(?!}))*?)\}\}", text, re.DOTALL)
+    """Ignore quoted close delimiters without backtracking on malformed expressions."""
+    cursor = 0
+    while (start := text.find("${{", cursor)) != -1:
+        end = _expression_end(text, start + 3)
+        if end is None:
+            return
+        yield re.fullmatch(r"\$\{\{(.*)\}\}", text[start:end + 2], re.DOTALL)
+        cursor = end + 2
 
 
 def _canonical_context(expression):
@@ -1291,6 +1312,17 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
             with self.subTest(safe_literal=literal):
                 self.assertEqual([], _untrusted_script_contexts(
                     "      - run: echo ${{ " + literal + " }}\n"))
+
+    def test_expression_extraction_terminates_and_keeps_adjacent_expressions(self):
+        for expression in ("${{ secrets", "${{ 'unterminated }}", "${{ " + "'" * 4096):
+            with self.subTest(malformed=expression[:30]):
+                self.assertEqual([], list(_expressions(expression)))
+        text = "${{ format('it''s }}{0}', secrets.GIST_SECRET) }} " \
+               "${{ github.event.pull_request.title }}"
+        expressions = list(_expressions(text))
+        self.assertEqual(2, len(expressions))
+        self.assertEqual(" format('it''s }}{0}', secrets.GIST_SECRET) ", expressions[0].group(1))
+        self.assertEqual(" github.event.pull_request.title ", expressions[1].group(1))
 
     def test_only_gated_ci_jobs_reach_self_hosted_runners(self):
         workflows = _workflows(self.supply_chain_files)
