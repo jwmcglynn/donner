@@ -1,3 +1,4 @@
+diff --git a/npm/private/npm_package_store.bzl b/npm/private/npm_package_store.bzl
 --- a/npm/private/npm_package_store.bzl
 +++ b/npm/private/npm_package_store.bzl
 @@ -23,6 +23,10 @@
@@ -39,6 +40,7 @@
      ],
  )
  
+diff --git a/npm/private/BUILD.bazel b/npm/private/BUILD.bazel
 --- a/npm/private/BUILD.bazel
 +++ b/npm/private/BUILD.bazel
 @@ -12,7 +12,7 @@
