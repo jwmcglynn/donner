@@ -1397,7 +1397,10 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
                 "        uses: example/consumer-action@v1.0.0\n" \
                 "        with:\n          token: ${{ secrets.GIST_SECRET }}\n"
         self.assertTrue(_secret_use_violations(_workflows({**files, path: added})))
-        original = "      - name: Create Lines-of-Code-Badge\n"
+        reviewed = next(step for step in _steps(_jobs(files[path])["update-badges"])
+                        if _secret_reads(step))
+        duplicated = files[path] + "\n      - " + reviewed
+        self.assertTrue(_secret_use_violations(_workflows({**files, path: duplicated})))
         changed = files[path].replace("uses: schneegans/dynamic-badges-action@v1.9.0",
                                     "uses: example/consumer-action@v1.0.0", 1)
         self.assertTrue(_secret_use_violations(_workflows({**files, path: changed})))
