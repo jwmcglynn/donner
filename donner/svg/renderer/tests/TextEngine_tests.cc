@@ -21,6 +21,7 @@
 #include "donner/css/FontFace.h"
 #include "donner/svg/components/text/TextRootComponent.h"
 #include "donner/svg/text/TextBackendFull.h"
+#include "donner/svg/text/TextBackendSimple.h"
 #include "donner/svg/text/TextEngineHelpers.h"
 #include "donner/svg/text/TextLayoutParams.h"
 
@@ -398,7 +399,7 @@ TEST(TextEngineHelperTest, ComputeBaselineShiftCoversBaselineKeywords) {
               2.7, 1e-6);
 }
 
-TEST(TextEngineHelperTest, ByteMappingsAndChunkRangesCollapseNonSpacingSequences) {
+TEST(TextEngineHelperTest, ByteMappingsAndChunkRangesUseCodepointIndices) {
   std::string text;
   std::vector<size_t> offsets;
   auto append = [&](char32_t cp) {
@@ -424,17 +425,16 @@ TEST(TextEngineHelperTest, ByteMappingsAndChunkRangesCollapseNonSpacingSequences
 
   const auto mappings = text_engine_detail::buildByteIndexMappings(text);
   for (size_t i = 0; i < cOffsetIndex; ++i) {
-    EXPECT_EQ(mappings.byteToCharIdx[offsets[i]], 0u) << "offset index " << i;
+    EXPECT_EQ(mappings.byteToCharIdx[offsets[i]], i) << "offset index " << i;
   }
-  EXPECT_EQ(mappings.byteToCharIdx[offsets[cOffsetIndex]], 1u);
-  EXPECT_EQ(mappings.byteToCharIdx[offsets[emojiOffsetIndex]], 3u);
-  EXPECT_EQ(mappings.byteToCharIdx[offsets[dOffsetIndex]], 4u);
+  EXPECT_EQ(mappings.byteToCharIdx[offsets[cOffsetIndex]], cOffsetIndex);
+  EXPECT_EQ(mappings.byteToCharIdx[offsets[emojiOffsetIndex]], emojiOffsetIndex);
+  EXPECT_EQ(mappings.byteToCharIdx[offsets[dOffsetIndex]], dOffsetIndex);
 
   SmallVector<std::optional<Lengthd>, 1> xList;
-  xList.push_back(std::nullopt);
-  xList.push_back(Lengthd(10.0, Lengthd::Unit::None));
-  xList.push_back(std::nullopt);
-  xList.push_back(Lengthd(20.0, Lengthd::Unit::None));
+  xList.resize(offsets.size());
+  xList[cOffsetIndex] = Lengthd(10.0, Lengthd::Unit::None);
+  xList[emojiOffsetIndex] = Lengthd(20.0, Lengthd::Unit::None);
   SmallVector<std::optional<Lengthd>, 1> yList;
 
   const auto chunks = text_engine_detail::findChunkRanges(text, xList, yList);
@@ -836,7 +836,7 @@ TEST(TextEngineTest, ScriptedHorizontalLayoutCoversChunkAndSpanPositioningBranch
                             GlyphRotateDegreesIs(DoubleEq(15.0)))))));
 }
 
-TEST(TextEngineTest, ScriptedSupplementaryCoordinateListsUseLowSurrogateSlot) {
+TEST(TextEngineTest, ScriptedSupplementaryCoordinatesUseCodepointSlot) {
   Registry registry;
   FontManager fontManager(registry);
   TextEngine engine = MakeScriptedEngine(registry, fontManager);
@@ -847,9 +847,9 @@ TEST(TextEngineTest, ScriptedSupplementaryCoordinateListsUseLowSurrogateSlot) {
 
   components::ComputedTextComponent text;
   auto span = MakeSpan(textValue);
-  span.xList = {Lengthd(0.0, Lengthd::Unit::None), std::nullopt, std::nullopt,
+  span.xList = {Lengthd(0.0, Lengthd::Unit::None), std::nullopt,
                 Lengthd(70.0, Lengthd::Unit::None)};
-  span.yList = {Lengthd(0.0, Lengthd::Unit::None), std::nullopt, std::nullopt,
+  span.yList = {Lengthd(0.0, Lengthd::Unit::None), std::nullopt,
                 Lengthd(90.0, Lengthd::Unit::None)};
   text.spans.push_back(std::move(span));
 
@@ -977,7 +977,7 @@ TEST(TextEngineTest, UsesCoverageFallbackForVerticalJapaneseText) {
   EXPECT_LT(positionedBounds.topLeft.y, 42.0);
 }
 
-TEST(TextEngineTest, SupplementaryCharactersConsumeLowSurrogateCoordinates) {
+TEST(TextEngineTest, SupplementaryCodepointPositionsPreserveEmojiClusterShaping) {
 #ifndef DONNER_TEXT_FULL
   GTEST_SKIP() << "Bitmap emoji shaping requires the full text backend.";
 #endif
@@ -995,7 +995,7 @@ TEST(TextEngineTest, SupplementaryCharactersConsumeLowSurrogateCoordinates) {
       "\xF0\x9F\x8C\x88");
   span.xList.push_back(Lengthd(52.0, Lengthd::Unit::None));
   span.yList = {Lengthd(90.0, Lengthd::Unit::None), Lengthd(111.0, Lengthd::Unit::None),
-                Lengthd(130.0, Lengthd::Unit::None), Lengthd(150.0, Lengthd::Unit::None)};
+                Lengthd(130.0, Lengthd::Unit::None)};
   text.spans.push_back(std::move(span));
 
   TextLayoutParams params = MakeTextParams(32.0);
@@ -1004,8 +1004,154 @@ TEST(TextEngineTest, SupplementaryCharactersConsumeLowSurrogateCoordinates) {
 
   EXPECT_THAT(runs,
               ElementsAre(RunGlyphsAre(ElementsAre(GlyphYPositionIs(DoubleNear(90.0, 1.0)),
-                                                   GlyphYPositionIs(DoubleNear(130.0, 1.0)),
-                                                   GlyphYPositionIs(DoubleNear(150.0, 1.0))))));
+                                                   GlyphYPositionIs(DoubleNear(111.0, 1.0)),
+                                                   GlyphYPositionIs(DoubleNear(130.0, 1.0))))));
+}
+
+#ifdef DONNER_TEXT_FULL
+TEST(TextEngineTest, JoinedShapingKeepsPositioningSlotsAndRelativeCarry) {
+  struct Case {
+    const char* file;
+    const char* family;
+    const char* prefix;
+    const char* following;
+    bool bitmapOnly;
+  };
+  const Case cases[] = {
+      {"NotoSansDevanagari-Regular.ttf", "Noto Sans Devanagari",
+       "\xE0\xA4\x95\xE2\x80\x8D\xE0\xA4\xBF", "B", false},
+      {"NotoColorEmoji.ttf", "Noto Color Emoji", "\xF0\x9F\x91\xA9\xE2\x80\x8D\xF0\x9F\x92\xBB",
+       "\xF0\x9F\x98\x80", true},
+  };
+  for (const auto& test : cases) {
+    SCOPED_TRACE(test.family);
+    Registry registry;
+    FontManager manager(registry);
+    const FontHandle font = LoadResvgFont(manager, test.file, test.family);
+    ASSERT_TRUE(static_cast<bool>(font));
+    TextEngine engine(manager, registry);
+    TextBackendFull backend(manager, registry);
+    const std::string prefix(test.prefix);
+    const auto shaped =
+        backend.shapeRun(font, 20, prefix, 0, prefix.size(), false, FontVariant::Normal, false);
+    ASSERT_FALSE(shaped.glyphs.empty());
+    for (const auto& glyph : shaped.glyphs) {
+      EXPECT_EQ(glyph.cluster, 0u);
+    }
+    components::ComputedTextComponent text;
+    auto first = MakeSpan(prefix);
+    first.xList = {Lengthd(15), Lengthd(99), Lengthd(99)};
+    first.yList = {Lengthd(80), Lengthd(99), Lengthd(99)};
+    first.dxList = {Lengthd(1), Lengthd(2), Lengthd(3)};
+    first.dyList = {Lengthd(1), Lengthd(2), Lengthd(3)};
+    first.rotateList = {0, 10, 20, 30};
+    text.spans.push_back(std::move(first));
+    auto following = MakeSpan(test.following);
+    following.xList = {Lengthd(85)};
+    following.yList = {Lengthd(130)};
+    following.dxList = {Lengthd(4)};
+    following.dyList = {Lengthd(4)};
+    following.rotateList = {30};
+    text.spans.push_back(std::move(following));
+    auto params = MakeTextParams(20);
+    params.fontFamilies = {RcString(test.family)};
+    const auto runs = engine.layout(text, params);
+    ASSERT_EQ(runs.size(), 2u);
+    ASSERT_EQ(runs[0].glyphs.size(), shaped.glyphs.size());
+    ASSERT_EQ(runs[1].glyphs.size(), 1u);
+    EXPECT_THAT(runs[0].glyphs.front(),
+                AllOf(GlyphXPositionIs(DoubleEq(16)), GlyphYPositionIs(DoubleEq(81)),
+                      GlyphRotateDegreesIs(DoubleEq(0))));
+    EXPECT_THAT(runs[1].glyphs.front(),
+                AllOf(GlyphXPositionIs(DoubleEq(94)), GlyphYPositionIs(DoubleEq(139)),
+                      GlyphRotateDegreesIs(DoubleEq(30))));
+    double shapedAdvance = 0;
+    for (size_t index = 0; index < shaped.glyphs.size(); ++index) {
+      EXPECT_THAT(
+          runs[0].glyphs[index],
+          AllOf(GlyphXPositionIs(DoubleEq(16 + shapedAdvance + shaped.glyphs[index].xOffset)),
+                GlyphYPositionIs(DoubleEq(81 + shaped.glyphs[index].yOffset)),
+                GlyphRotateDegreesIs(DoubleEq(0))));
+      shapedAdvance += shaped.glyphs[index].xAdvance;
+    }
+    size_t visibleGlyphs = 0;
+    size_t invisibleGlyphs = 0;
+    for (const auto& run : runs) {
+      EXPECT_EQ(run.font, font);
+      EXPECT_EQ(engine.isBitmapOnly(run.font), test.bitmapOnly);
+      const float scale = engine.scaleForEmToPixels(run.font, run.usedFontSizePx);
+      for (const auto& glyph : run.glyphs) {
+        EXPECT_EQ(glyph.cluster, 0u);
+        const Path outline = engine.glyphOutline(run.font, glyph.glyphIndex, scale);
+        const auto bitmap = engine.bitmapGlyph(run.font, glyph.glyphIndex, scale);
+        if (test.bitmapOnly) {
+          EXPECT_TRUE(outline.empty());
+          ASSERT_TRUE(bitmap.has_value());
+          EXPECT_GT(bitmap->width, 0);
+          EXPECT_GT(bitmap->height, 0);
+          EXPECT_EQ(bitmap->rgbaPixels.size(),
+                    static_cast<size_t>(bitmap->width) * bitmap->height * 4u);
+          bool hasInk = false;
+          for (size_t alpha = 3; alpha < bitmap->rgbaPixels.size(); alpha += 4) {
+            hasInk |= bitmap->rgbaPixels[alpha] != 0;
+          }
+          EXPECT_TRUE(hasInk);
+          ++visibleGlyphs;
+        } else if (!outline.empty()) {
+          ++visibleGlyphs;
+        } else {
+          EXPECT_EQ(glyph.xAdvance, 0);
+          ++invisibleGlyphs;
+        }
+      }
+    }
+    EXPECT_GE(visibleGlyphs, test.bitmapOnly ? 2u : 3u);
+    if (!test.bitmapOnly) {
+      EXPECT_EQ(invisibleGlyphs, 1u);
+    }
+  }
+}
+#endif
+
+TEST(TextEngineTest, CombiningMarkAfterSpaceAppliesWordSpacingOnce) {
+  for (bool fullBackend : {false, true}) {
+    SCOPED_TRACE(fullBackend ? "full backend" : "simple backend");
+    Registry registry;
+    FontManager fontManager(registry);
+    const FontHandle font = LoadResvgFont(fontManager, "NotoSans-Regular.ttf", "Noto Sans");
+    ASSERT_THAT(static_cast<bool>(font), testing::IsTrue());
+    std::unique_ptr<TextBackend> backend;
+    if (fullBackend) {
+      backend = std::make_unique<TextBackendFull>(fontManager, registry);
+    } else {
+      backend = std::make_unique<TextBackendSimple>(fontManager, registry);
+    }
+    const std::string value =
+        "A \xCC\x81"
+        "B";
+    const auto shaped =
+        backend->shapeRun(font, 24.0f, value, 0, value.size(), false, FontVariant::Normal, false);
+    ASSERT_THAT(shaped.glyphs, SizeIs(4));
+    ASSERT_THAT(shaped.glyphs[2].xAdvance, DoubleEq(0.0));
+    TextEngine engine(fontManager, registry, std::move(backend));
+
+    components::ComputedTextComponent text;
+    text.spans.push_back(MakeSpan(value));
+    TextLayoutParams params = MakeTextParams(24.0);
+    params.fontFamilies = {RcString("Noto Sans")};
+    const auto ordinary = engine.layout(text, params);
+    ASSERT_THAT(ordinary, ElementsAre(RunGlyphsAre(SizeIs(4))));
+
+    text.spans[0].wordSpacingPx = 11.0;
+    const auto spaced = engine.layout(text, params);
+    ASSERT_THAT(spaced, ElementsAre(RunGlyphsAre(SizeIs(4))));
+    EXPECT_THAT(spaced[0].glyphs[2],
+                GlyphXPositionIs(DoubleNear(ordinary[0].glyphs[2].xPosition, 1e-6)));
+    EXPECT_THAT(spaced[0].glyphs.back(),
+                GlyphXPositionIs(DoubleNear(ordinary[0].glyphs.back().xPosition + 11.0, 1e-6)));
+    EXPECT_THAT(spaced[0].glyphs[2],
+                Field("cluster", &TextGlyph::cluster, shaped.glyphs[2].cluster));
+  }
 }
 
 TEST(TextEngineTest, RotatesCombiningMarkOffsetsWithBaseGlyph) {

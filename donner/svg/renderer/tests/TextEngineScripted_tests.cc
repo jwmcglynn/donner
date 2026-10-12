@@ -357,7 +357,7 @@ TEST(TextEngineScriptedTest, HorizontalLayoutCoversChunkAndSpanPositioningBranch
                             GlyphRotateDegreesIs(DoubleEq(15.0)))))));
 }
 
-TEST(TextEngineScriptedTest, SupplementaryCoordinateListsUseLowSurrogateSlot) {
+TEST(TextEngineScriptedTest, SupplementaryCoordinatesUseCodepointSlot) {
   Registry registry;
   FontManager fontManager(registry);
   TextEngine engine = MakeScriptedEngine(registry, fontManager);
@@ -368,9 +368,9 @@ TEST(TextEngineScriptedTest, SupplementaryCoordinateListsUseLowSurrogateSlot) {
 
   components::ComputedTextComponent text;
   auto span = MakeSpan(textValue);
-  span.xList = {Lengthd(0.0, Lengthd::Unit::None), std::nullopt, std::nullopt,
+  span.xList = {Lengthd(0.0, Lengthd::Unit::None), std::nullopt,
                 Lengthd(70.0, Lengthd::Unit::None)};
-  span.yList = {Lengthd(0.0, Lengthd::Unit::None), std::nullopt, std::nullopt,
+  span.yList = {Lengthd(0.0, Lengthd::Unit::None), std::nullopt,
                 Lengthd(90.0, Lengthd::Unit::None)};
   text.spans.push_back(std::move(span));
 
@@ -382,7 +382,7 @@ TEST(TextEngineScriptedTest, SupplementaryCoordinateListsUseLowSurrogateSlot) {
                   AllOf(GlyphXPositionIs(DoubleEq(70.0)), GlyphYPositionIs(DoubleEq(90.0)))))));
 }
 
-TEST(TextEngineScriptedTest, SupplementaryLowSurrogateCoordinatesApplyToFollowingGlyph) {
+TEST(TextEngineScriptedTest, SupplementaryFollowingCodepointCoordinatesAreAppliedOnce) {
   Registry registry;
   FontManager fontManager(registry);
   TextEngine engine = MakeScriptedEngine(registry, fontManager);
@@ -402,6 +402,105 @@ TEST(TextEngineScriptedTest, SupplementaryLowSurrogateCoordinatesApplyToFollowin
   EXPECT_THAT(runs,
               ElementsAre(RunGlyphsAre(ElementsAre(
                   _, AllOf(GlyphXPositionIs(DoubleEq(70.0)), GlyphYPositionIs(DoubleEq(90.0)))))));
+}
+
+TEST(TextEngineScriptedTest, AllPositioningAttributesUseUnicodeCodepointIndices) {
+  for (const char32_t middle : {U'\u00E9', U'\U0001F600'}) {
+    SCOPED_TRACE(static_cast<uint32_t>(middle));
+    Registry registry;
+    FontManager fontManager(registry);
+    TextEngine engine = MakeScriptedEngine(registry, fontManager);
+    std::string value = "A";
+    Utf8::Append(middle, std::back_inserter(value));
+    value += "B";
+    components::ComputedTextComponent text;
+    auto span = MakeSpan(value);
+    span.xList = {Lengthd(10), Lengthd(20), Lengthd(30)};
+    span.yList = {Lengthd(11), Lengthd(21), Lengthd(31)};
+    span.dxList = {Lengthd(1), Lengthd(2), Lengthd(3)};
+    span.dyList = {Lengthd(7), Lengthd(8), Lengthd(9)};
+    span.rotateList = {10, 20, 30};
+    text.spans.push_back(std::move(span));
+    const auto runs = engine.layout(text, MakeTextParams(20));
+    const double middleX = middle >= 0x2E80 ? 24 : 22;
+    const double middleY = middle >= 0x2E80 ? 32 : 29;
+    EXPECT_THAT(runs,
+                ElementsAre(RunGlyphsAre(ElementsAre(
+                    AllOf(GlyphXPositionIs(DoubleEq(11)), GlyphYPositionIs(DoubleEq(18)),
+                          GlyphRotateDegreesIs(DoubleEq(10))),
+                    AllOf(GlyphXPositionIs(DoubleEq(middleX)), GlyphYPositionIs(DoubleEq(middleY)),
+                          GlyphRotateDegreesIs(DoubleEq(20))),
+                    AllOf(GlyphXPositionIs(DoubleEq(33)), GlyphYPositionIs(DoubleEq(40)),
+                          GlyphRotateDegreesIs(DoubleEq(30)))))));
+  }
+}
+
+TEST(TextEngineScriptedTest, VerticalPositioningAttributesUseUnicodeCodepointIndices) {
+  for (const char32_t middle : {U'\u00E9', U'\U0001F600'}) {
+    SCOPED_TRACE(static_cast<uint32_t>(middle));
+    Registry registry;
+    FontManager fontManager(registry);
+    TextEngine engine = MakeScriptedEngine(registry, fontManager);
+    std::string value = "A";
+    Utf8::Append(middle, std::back_inserter(value));
+    value += "B";
+    components::ComputedTextComponent text;
+    auto span = MakeSpan(value);
+    span.xList = {Lengthd(10), Lengthd(20), Lengthd(30)};
+    span.yList = {Lengthd(11), Lengthd(21), Lengthd(31)};
+    span.dxList = {Lengthd(1), Lengthd(2), Lengthd(3)};
+    span.dyList = {Lengthd(7), Lengthd(8), Lengthd(9)};
+    span.rotateList = {10, 20, 30};
+    text.spans.push_back(std::move(span));
+    auto params = MakeTextParams(20);
+    params.writingMode = WritingMode::VerticalRl;
+    const auto runs = engine.layout(text, params);
+    const bool upright = middle >= 0x2E80;
+    EXPECT_THAT(runs,
+                ElementsAre(RunGlyphsAre(ElementsAre(
+                    AllOf(GlyphXPositionIs(DoubleNear(11 - 20.0 / 3, 1e-8)),
+                          GlyphYPositionIs(DoubleEq(18)), GlyphRotateDegreesIs(DoubleEq(100))),
+                    AllOf(GlyphXPositionIs(DoubleNear(upright ? 24 : 22 - 20.0 / 3, 1e-8)),
+                          GlyphYPositionIs(DoubleEq(upright ? 32 : 29)),
+                          GlyphRotateDegreesIs(DoubleEq(upright ? 20 : 110))),
+                    AllOf(GlyphXPositionIs(DoubleNear(33 - 20.0 / 3, 1e-8)),
+                          GlyphYPositionIs(DoubleEq(40)), GlyphRotateDegreesIs(DoubleEq(120)))))));
+  }
+}
+
+TEST(TextEngineScriptedTest, CombiningGroupSkipsAbsoluteAndCarriesRelativePositions) {
+  for (const bool vertical : {false, true}) {
+    Registry registry;
+    FontManager fontManager(registry);
+    TextEngine engine = MakeScriptedEngine(registry, fontManager, false, std::nullopt, true);
+    components::ComputedTextComponent text;
+    auto span = MakeSpan(
+        "A\xCC\x81"
+        "B");
+    span.xList = {Lengthd(10), Lengthd(99), Lengthd(30)};
+    span.yList = {Lengthd(11), Lengthd(99), Lengthd(31)};
+    span.dxList = {Lengthd(1), Lengthd(2), Lengthd(3)};
+    span.dyList = {Lengthd(7), Lengthd(8), Lengthd(9)};
+    span.rotateList = {10, 80, 30};
+    text.spans.push_back(std::move(span));
+    auto params = MakeTextParams(20);
+    if (vertical) {
+      params.writingMode = WritingMode::VerticalRl;
+    }
+    const auto runs = engine.layout(text, params);
+    ASSERT_EQ(runs.size(), 1u);
+    ASSERT_EQ(runs[0].glyphs.size(), 3u);
+    const double baselineOffset = vertical ? 20.0 / 3 : 0;
+    EXPECT_THAT(
+        runs[0].glyphs.front(),
+        AllOf(GlyphXPositionIs(DoubleNear(11 - baselineOffset, 1e-8)),
+              GlyphYPositionIs(DoubleEq(18)), GlyphRotateDegreesIs(DoubleEq(vertical ? 100 : 10))));
+    EXPECT_THAT(runs[0].glyphs[1], GlyphRotateDegreesIs(DoubleEq(vertical ? 100 : 10)));
+    EXPECT_THAT(
+        runs[0].glyphs.back(),
+        AllOf(GlyphXPositionIs(DoubleNear(35 - baselineOffset, 1e-8)),
+              GlyphYPositionIs(DoubleEq(48)), GlyphRotateDegreesIs(DoubleEq(vertical ? 120 : 30))));
+  }
 }
 
 TEST(TextEngineScriptedTest, VerticalLayoutCoversSidewaysUprightSpacingAndRotation) {

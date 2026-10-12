@@ -270,8 +270,23 @@ TEST(RendererRegressionHelpersTest, AnEmptyRenderIsNeitherVisibleNorDifferentNor
                           "empty 0x0 snapshot");
 }
 
-/// Renders \p body at 200x200 with the hermetic test fonts, through the backend this build is
-/// configured around.
+/// Rejects vacuous fixtures with the canonical comparison against a transparent bitmap.
+void AssertVisibleFixture(const RendererBitmap& bitmap, std::string_view label) {
+  ASSERT_THAT(bitmap.empty(), testing::IsFalse());
+  RendererBitmap empty = bitmap;
+  std::fill(empty.pixels.begin(), empty.pixels.end(), 0);
+  int visiblePixels = -1;
+  testing::TestPartResultArray differences;
+  {
+    testing::ScopedFakeTestPartResultReporter capture(
+        testing::ScopedFakeTestPartResultReporter::INTERCEPT_ONLY_CURRENT_THREAD, &differences);
+    editor::tests::CompareBitmapToBitmap(bitmap, empty, label,
+                                         editor::tests::PixelmatchIdentityParams(), &visiblePixels);
+  }
+  EXPECT_THAT(visiblePixels, testing::Gt(0));
+}
+
+/// Renders \p body at 200x200 with the hermetic test fonts and the configured backend.
 RendererBitmap RenderTextOpacityCase(std::string_view body) {
   SVGDocument document = instantiateSubtree(body, parser::SVGParser::Options(), Vector2i(200, 200));
   RegisterFontsFromDirectoryForTesting(document, ResvgResourceRoot() / "fonts");
@@ -790,6 +805,131 @@ TEST_F(RendererRegressionTests, SpanGradientOverridesElementPatternStroke) {
 
   SVGDocument document = loadSVG(svg, ResvgResourceRoot());
   renderAndCompare(document, svg, golden, GoldenParams());
+}
+
+TEST_F(RendererRegressionTests, NestedTextRotationMatchesExplicitCharacterRotations) {
+  const RendererBitmap inherited = RenderTextOpacityCase(
+      R"svg(<text x="15" y="90" font-family="Noto Sans" font-size="24"
+                  rotate="1 2 3 4 5 6 7">A<tspan rotate="10 20 30">B<tspan>C</tspan><tspan rotate="90">D</tspan><tspan>E</tspan></tspan><tspan>F</tspan><tspan>G</tspan><tspan>H</tspan></text>)svg");
+  const RendererBitmap explicitRotations = RenderTextOpacityCase(
+      R"svg(<text x="15" y="90" font-family="Noto Sans" font-size="24"
+                  rotate="1">A<tspan rotate="10">B<tspan rotate="20">C</tspan><tspan rotate="90">D</tspan><tspan rotate="30">E</tspan></tspan><tspan rotate="6">F</tspan><tspan rotate="7">G</tspan><tspan rotate="7">H</tspan></text>)svg");
+
+  ASSERT_THAT(inherited.empty(), testing::IsFalse());
+  ASSERT_THAT(explicitRotations.empty(), testing::IsFalse());
+  AssertVisibleFixture(explicitRotations, "explicit_character_rotations_visible");
+  editor::tests::CompareBitmapToBitmap(inherited, explicitRotations, "nested_character_rotations",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+TEST_F(RendererRegressionTests, UnicodePositioningAcrossSpansMatchesExplicitPositions) {
+  struct Case {
+    const char* name;
+    const char* prefix;
+    int prefixCodepoints;
+  };
+  const Case cases[] = {
+      {"supplementary", "&#x1F600;", 1},
+      {"BMP", "&#xE9;", 1},
+      {"combining", "A&#x301;", 2},
+      {"joiner", "&#x200D;", 1},
+  };
+  for (const auto& test : cases) {
+    SCOPED_TRACE(test.name);
+    const std::string start = R"svg(<text font-family="Noto Sans" font-size="24" )svg";
+    const std::string inherited = start +
+                                  R"svg(x="10 20 30 40" y="55 65 75 85" dx="1 2 3 4" dy="1 2 3 4"
+                      rotate="0 10 20 30">)svg" +
+                                  test.prefix + "<tspan>B</tspan>C</text>";
+    const int bX = 11 * (test.prefixCodepoints + 1);
+    const int bY = 56 + 11 * test.prefixCodepoints;
+    const int bRotation = 10 * test.prefixCodepoints;
+    const std::string prefixPositions = test.prefixCodepoints == 1
+                                            ? R"svg(x="11" y="56" rotate="0")svg"
+                                            : R"svg(x="11" y="56" rotate="0")svg";
+    const std::string explicitPositions =
+        start + "><tspan " + prefixPositions + ">" + test.prefix + "</tspan><tspan x='" +
+        std::to_string(bX + (test.prefixCodepoints == 2 ? 2 : 0)) + "' y='" +
+        std::to_string(bY + (test.prefixCodepoints == 2 ? 2 : 0)) + "' rotate='" +
+        std::to_string(bRotation) + "'>B</tspan><tspan x='" + std::to_string(bX + 11) + "' y='" +
+        std::to_string(bY + 11) + "' rotate='" + std::to_string(bRotation + 10) +
+        "'>C</tspan></text>";
+    const RendererBitmap actual = RenderTextOpacityCase(inherited);
+    const RendererBitmap expected = RenderTextOpacityCase(explicitPositions);
+    ASSERT_THAT(actual.empty(), testing::IsFalse());
+    AssertVisibleFixture(expected, std::string("unicode_positions_visible_") + test.name);
+    editor::tests::CompareBitmapToBitmap(actual, expected,
+                                         std::string("unicode_positions_") + test.name,
+                                         editor::tests::PixelmatchIdentityParams());
+  }
+}
+
+TEST_F(RendererRegressionTests, TypographicGroupsSkipAbsoluteAndCarryRelativePositions) {
+  const RendererBitmap actual = RenderTextOpacityCase(R"svg(
+    <text font-family="Noto Sans" font-size="24" x="10 99 80" y="55 99 55"
+          dx="1 2 3" dy="1 4 3" rotate="10 80 30">A&#x301;<tspan>B</tspan></text>
+  )svg");
+  const RendererBitmap expected = RenderTextOpacityCase(R"svg(
+    <text font-family="Noto Sans" font-size="24"><tspan x="11" y="56" rotate="10">A&#x301;</tspan><tspan x="85" y="62" rotate="30">B</tspan></text>
+  )svg");
+  AssertVisibleFixture(expected, "typographic_groups_visible");
+  editor::tests::CompareBitmapToBitmap(actual, expected, "typographic_groups_positions",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+TEST_F(RendererRegressionTests, JoinerDoesNotMergeSeparatelyShapedGlyphs) {
+  const RendererBitmap actual = RenderTextOpacityCase(
+      R"svg(<text font-family="Noto Sans" font-size="24" x="12 99 80" y="65" rotate="0 70 20">A&#x200D;B</text>)svg");
+  const RendererBitmap expected = RenderTextOpacityCase(
+      R"svg(<text font-family="Noto Sans" font-size="24"><tspan x="12" y="65" rotate="0">A&#x200D;</tspan><tspan x="80" y="65" rotate="20">B</tspan></text>)svg");
+  AssertVisibleFixture(expected, "separate_joiner_glyphs_visible");
+  editor::tests::CompareBitmapToBitmap(actual, expected, "separate_joiner_glyphs_positions",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+TEST_F(RendererRegressionTests, AbsolutePositionsBreakOptionalLigatures) {
+  const RendererBitmap actual = RenderTextOpacityCase(
+      R"svg(<text font-family="Noto Sans" font-size="24" x="12 70" y="65">fi</text>)svg");
+  const RendererBitmap expected = RenderTextOpacityCase(
+      R"svg(<text font-family="Noto Sans" font-size="24"><tspan x="12" y="65">f</tspan><tspan x="70" y="65">i</tspan></text>)svg");
+  AssertVisibleFixture(expected, "optional_ligatures_visible");
+  editor::tests::CompareBitmapToBitmap(actual, expected, "optional_ligatures_positions",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+TEST_F(RendererRegressionTests, FinalInternalRotationRepeatsOnFollowingGroup) {
+  const RendererBitmap actual = RenderTextOpacityCase(
+      R"svg(<text font-family="Noto Sans" font-size="24" x="12 99 80" y="65" rotate="10 70">A&#x301;B</text>)svg");
+  const RendererBitmap expected = RenderTextOpacityCase(
+      R"svg(<text font-family="Noto Sans" font-size="24"><tspan x="12" y="65" rotate="10">A&#x301;</tspan><tspan x="80" y="65" rotate="70">B</tspan></text>)svg");
+  AssertVisibleFixture(expected, "internal_rotation_visible");
+  editor::tests::CompareBitmapToBitmap(actual, expected, "internal_rotation_positions",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+#ifdef DONNER_TEXT_FULL
+TEST_F(RendererRegressionTests, JoinedOutlineGlyphsPreserveSourceIndicesAcrossSpans) {
+  const RendererBitmap actual = RenderTextOpacityCase(R"svg(
+    <text font-family="Noto Sans Devanagari" font-size="20" x="15 99 99 85" y="80 99 99 130"
+          dx="1 2 3 4" dy="1 2 3 4" rotate="0 10 20 30">&#x915;&#x200D;&#x93F;<tspan>B</tspan></text>
+  )svg");
+  const RendererBitmap expected = RenderTextOpacityCase(R"svg(
+    <text font-family="Noto Sans Devanagari" font-size="20"><tspan x="16" y="81" rotate="0">&#x915;&#x200D;&#x93F;</tspan><tspan x="94" y="139" rotate="30">B</tspan></text>
+  )svg");
+  AssertVisibleFixture(expected, "joined_outline_glyphs_visible");
+  editor::tests::CompareBitmapToBitmap(actual, expected, "joined_outline_glyphs_positions",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+#endif
+
+TEST_F(RendererRegressionTests, EmptyTextSpansDoNotConsumeRelativePositioning) {
+  const RendererBitmap actual = RenderTextOpacityCase(
+      R"svg(<text font-family="Noto Sans" font-size="24" y="60" dx="5" dy="7"><tspan>A</tspan>B</text>)svg");
+  const RendererBitmap expected = RenderTextOpacityCase(
+      R"svg(<text font-family="Noto Sans" font-size="24" x="5" y="67">A<tspan>B</tspan></text>)svg");
+  AssertVisibleFixture(expected, "empty_text_relative_positions_visible");
+  editor::tests::CompareBitmapToBitmap(actual, expected, "empty_text_relative_positions",
+                                       editor::tests::PixelmatchIdentityParams());
 }
 
 TEST_F(RendererRegressionTests, TextOpacityAppliesOnceLikeGroupOpacity) {

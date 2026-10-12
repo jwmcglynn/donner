@@ -58,6 +58,11 @@ uint32_t decodeUtf8(const std::string_view str, size_t& i) {
   return static_cast<uint32_t>(cp);
 }
 
+/// Returns a glyph's positioning group without changing its source identity.
+uint32_t GetPositioningCluster(const TextGlyph& glyph) {
+  return glyph.positioningCluster.value_or(glyph.cluster);
+}
+
 /// Returns the first non-ASCII codepoint in \p str, or 0 if none exists.
 uint32_t firstNonAsciiCodepoint(const std::string_view str) {
   for (size_t i = 0; i < str.size();) {
@@ -147,8 +152,8 @@ FontHandle selectBackendSafeFont(const TextBackend& backend, FontManager& fontMa
 }
 
 /**
- * Returns true if the codepoint is a non-spacing character that does not start a new
- * addressable character (grapheme cluster) for SVG per-character attributes.
+ * Existing nonspacing classification used to keep shaping input intact at
+ * positioning boundaries. These codepoints still consume addressable source slots.
  * Includes combining marks, zero-width joiners, and variation selectors.
  */
 bool isNonSpacing(uint32_t cp) {
@@ -446,29 +451,22 @@ std::vector<ChunkRange> findChunkRanges(std::string_view spanText,
                                         const SmallVector<std::optional<Lengthd>, 1>& yList) {
   std::vector<ChunkRange> chunkRanges;
   size_t scanPos = 0;
-  unsigned int scanCharIdx = 0;
-  bool scanFirst = true;
-  bool scanPrevWasZwj = false;
+  unsigned int codepointIndex = 0;
   size_t currentChunkStart = 0;
+  bool previousWasJoiner = false;
 
   while (scanPos < spanText.size()) {
-    size_t byteStart = scanPos;
-    uint32_t cp = decodeUtf8(spanText, scanPos);
-
-    bool scanCombining = isNonSpacing(cp) || scanPrevWasZwj;
-    scanPrevWasZwj = (cp == 0x200D);
-    if (!scanCombining && !scanFirst) {
-      scanCharIdx += (cp >= 0x10000) ? 2 : 1;
-    }
-    scanFirst = false;
-
-    bool hasAbsX = scanCharIdx < xList.size() && xList[scanCharIdx].has_value();
-    bool hasAbsY = scanCharIdx < yList.size() && yList[scanCharIdx].has_value();
-
-    if ((hasAbsX || hasAbsY) && byteStart != currentChunkStart) {
+    const size_t byteStart = scanPos;
+    const uint32_t cp = decodeUtf8(spanText, scanPos);
+    const bool middle = codepointIndex != 0 && (isNonSpacing(cp) || previousWasJoiner);
+    const bool hasAbsX = codepointIndex < xList.size() && xList[codepointIndex].has_value();
+    const bool hasAbsY = codepointIndex < yList.size() && yList[codepointIndex].has_value();
+    if (!middle && (hasAbsX || hasAbsY) && byteStart != currentChunkStart) {
       chunkRanges.push_back({currentChunkStart, byteStart});
       currentChunkStart = byteStart;
     }
+    previousWasJoiner = cp == 0x200D;
+    ++codepointIndex;
   }
   chunkRanges.push_back({currentChunkStart, spanText.size()});
   return chunkRanges;
@@ -477,32 +475,16 @@ std::vector<ChunkRange> findChunkRanges(std::string_view spanText,
 ByteIndexMappings buildByteIndexMappings(std::string_view spanText) {
   ByteIndexMappings result;
   result.byteToCharIdx.resize(spanText.size(), 0);
-  result.byteToRawCpIdx.resize(spanText.size(), 0);
-
-  unsigned int ci = 0;
-  unsigned int rawCi = 0;
-  bool mapFirst = true;
-  bool mapPrevZwj = false;
-  size_t bi = 0;
-
-  while (bi < spanText.size()) {
-    size_t startBi = bi;
-    const uint32_t cp = decodeUtf8(spanText, bi);
-    const bool nonSpacing = isNonSpacing(cp) || mapPrevZwj;
-    mapPrevZwj = (cp == 0x200D);
-    if (!nonSpacing && !mapFirst) {
-      ci += (cp >= 0x10000) ? 2 : 1;
+  unsigned int codepointIndex = 0;
+  size_t byteIndex = 0;
+  while (byteIndex < spanText.size()) {
+    const size_t startIndex = byteIndex;
+    decodeUtf8(spanText, byteIndex);
+    for (size_t i = startIndex; i < byteIndex; ++i) {
+      result.byteToCharIdx[i] = codepointIndex;
     }
-    if (!mapFirst) {
-      rawCi += (cp >= 0x10000) ? 2 : 1;
-    }
-    mapFirst = false;
-    for (size_t j = startBi; j < bi && j < spanText.size(); ++j) {
-      result.byteToCharIdx[j] = ci;
-      result.byteToRawCpIdx[j] = rawCi;
-    }
+    ++codepointIndex;
   }
-
   return result;
 }
 
@@ -539,7 +521,7 @@ bool EndsTextPathCluster(const TextRun& run, size_t glyphIndex, unsigned int cha
   if (glyphIndex + 1 == run.glyphs.size()) {
     return true;
   }
-  const size_t nextByte = run.glyphs[glyphIndex + 1].cluster;
+  const size_t nextByte = GetPositioningCluster(run.glyphs[glyphIndex + 1]);
   return nextByte >= mappings.byteToCharIdx.size() || mappings.byteToCharIdx[nextByte] != charIndex;
 }
 
@@ -547,19 +529,24 @@ bool EndsTextPathCluster(const TextRun& run, size_t glyphIndex, unsigned int cha
 void StageTextPathRun(TextRun& run, size_t runIndex,
                       const components::ComputedTextComponent::TextSpan& span,
                       const ByteIndexMappings& mappings, const TextLayoutParams& params,
-                      const TextBackend& backend, double defaultY, TextPathStagingState& state) {
+                      const TextBackend& backend, double defaultY,
+                      const SmallVector<std::optional<Lengthd>, 1>& dxList,
+                      const SmallVector<std::optional<Lengthd>, 1>& dyList,
+                      TextPathStagingState& state) {
   const std::string_view spanText(span.text.data() + span.start, span.end - span.start);
   const bool vertical = isVertical(params.writingMode);
   for (size_t gi = 0; gi < run.glyphs.size(); ++gi) {
     TextGlyph& glyph = run.glyphs[gi];
-    const unsigned int charIndex =
-        glyph.cluster < mappings.byteToCharIdx.size() ? mappings.byteToCharIdx[glyph.cluster] : 0;
+    const uint32_t positioningCluster = GetPositioningCluster(glyph);
+    const unsigned int charIndex = positioningCluster < mappings.byteToCharIdx.size()
+                                       ? mappings.byteToCharIdx[positioningCluster]
+                                       : 0;
     if (gi > 0) {
       state.advance += glyph.xKern;
     }
     if (gi == 0 || charIndex != state.clusters.back().charIndex) {
-      state.advance += TextPathDisplacement(span.dxList, charIndex, params, Lengthd::Extent::X);
-      state.dy += TextPathDisplacement(span.dyList, charIndex, params, Lengthd::Extent::Y);
+      state.advance += TextPathDisplacement(dxList, charIndex, params, Lengthd::Extent::X);
+      state.dy += TextPathDisplacement(dyList, charIndex, params, Lengthd::Extent::Y);
       state.clusters.push_back(
           {runIndex, gi, gi + 1, charIndex, state.advance, defaultY + state.dy});
     }
@@ -570,7 +557,7 @@ void StageTextPathRun(TextRun& run, size_t runIndex,
     cluster.glyphEnd = gi + 1;
     cluster.advance = state.advance - cluster.pathOffset;
     if (EndsTextPathCluster(run, gi, charIndex, mappings)) {
-      size_t byteIndex = run.glyphs[cluster.glyphStart].cluster;
+      size_t byteIndex = GetPositioningCluster(run.glyphs[cluster.glyphStart]);
       const uint32_t codepoint = decodeUtf8(spanText, byteIndex);
       if (!backend.isCursive(codepoint)) {
         state.advance += span.letterSpacingPx;
@@ -903,6 +890,29 @@ void applyTextLength(std::vector<TextRun>& runs, const components::ComputedTextC
             traversalStats->mappedTextBytes += spanText.size();
           }
           mappings = buildByteIndexMappings(spanText);
+          std::vector<bool> groupStarts(inlinePositions.size(), false);
+          for (const auto& glyph : run.glyphs) {
+            if (traversalStats) {
+              ++traversalStats->glyphVisits;
+            }
+            const uint32_t positioningCluster = GetPositioningCluster(glyph);
+            if (positioningCluster < mappings->byteToCharIdx.size()) {
+              const size_t index = mappings->byteToCharIdx[positioningCluster];
+              if (index < groupStarts.size()) {
+                groupStarts[index] = true;
+              }
+            }
+          }
+          resetCharIndex.reset();
+          for (size_t index = 0; index < inlinePositions.size(); ++index) {
+            if (traversalStats) {
+              ++traversalStats->inlinePositionVisits;
+            }
+            if (groupStarts[index] && inlinePositions[index]) {
+              resetCharIndex = index;
+              break;
+            }
+          }
         }
 
         for (auto& glyph : run.glyphs) {
@@ -910,8 +920,9 @@ void applyTextLength(std::vector<TextRun>& runs, const components::ComputedTextC
             ++traversalStats->glyphVisits;
           }
           if (resetCharIndex.has_value()) {
-            const size_t charIndex = glyph.cluster < mappings->byteToCharIdx.size()
-                                         ? mappings->byteToCharIdx[glyph.cluster]
+            const uint32_t positioningCluster = GetPositioningCluster(glyph);
+            const size_t charIndex = positioningCluster < mappings->byteToCharIdx.size()
+                                         ? mappings->byteToCharIdx[positioningCluster]
                                          : 0;
             if (charIndex >= *resetCharIndex) {
               continue;
@@ -1220,7 +1231,7 @@ bool applyInlineSizeWrap(std::vector<TextRun>& runs, const components::ComputedT
     const std::string_view spanText(span.text.data() + span.start, span.end - span.start);
     for (size_t gi = 0; gi < run.glyphs.size(); ++gi) {
       const auto& g = run.glyphs[gi];
-      size_t clusterPos = g.cluster;
+      size_t clusterPos = GetPositioningCluster(g);
       const uint32_t cp = clusterPos < spanText.size() ? decodeUtf8(spanText, clusterPos) : 0;
       const bool isSpace = (cp == 0x20 || cp == 0x09 || cp == 0x0A || cp == 0x0D);
       flat.push_back({ri, gi, g.xPosition, g.xAdvance, g.yPosition, isSpace});
@@ -1662,6 +1673,87 @@ TextBackend::ShapedRun ShapeSpanChunk(const TextBackend& backend, const TextRun&
                                          chunk.byteEnd - chunk.byteStart, vertical, variant, false);
 }
 
+/// A shaped chunk retains backend source clusters and separate SVG positioning groups.
+struct PreparedSpanChunk {
+  TextBackend::ShapedRun shaped;
+  std::vector<uint32_t> positioningClusters;
+};
+
+/// Reuses one shaping result per existing chunk and records its positioning group starts.
+struct PreparedSpanShaping {
+  std::vector<PreparedSpanChunk> chunks;
+  std::vector<bool> groupStarts;
+};
+
+PreparedSpanShaping PrepareSpanShaping(const TextBackend& backend, const TextRun& run,
+                                       std::string_view text, const std::vector<ChunkRange>& ranges,
+                                       bool vertical, FontVariant variant, bool kerning,
+                                       const ByteIndexMappings& mappings) {
+  PreparedSpanShaping result;
+  result.chunks.reserve(ranges.size());
+  size_t codepointCount = 0;
+  for (size_t pos = 0; pos < text.size(); ++codepointCount) {
+    decodeUtf8(text, pos);
+  }
+  result.groupStarts.resize(codepointCount, false);
+  for (const auto& range : ranges) {
+    PreparedSpanChunk prepared;
+    prepared.shaped = ShapeSpanChunk(backend, run, text, range, vertical, variant, kerning);
+    prepared.positioningClusters.reserve(prepared.shaped.glyphs.size());
+    for (size_t index = 0; index < prepared.shaped.glyphs.size(); ++index) {
+      const auto& glyph = prepared.shaped.glyphs[index];
+      uint32_t positioningCluster = glyph.cluster;
+      // The simple backend reports marks separately. Preserve a zero-advance mark
+      // with its preceding group without merging a separately shaped spacing glyph.
+      if (index != 0 && glyph.cluster < text.size() && glyph.xAdvance == 0.0) {
+        size_t position = glyph.cluster;
+        if (isNonSpacing(decodeUtf8(text, position))) {
+          positioningCluster = prepared.positioningClusters.back();
+        }
+      }
+      prepared.positioningClusters.push_back(positioningCluster);
+      if (positioningCluster < mappings.byteToCharIdx.size()) {
+        result.groupStarts[mappings.byteToCharIdx[positioningCluster]] = true;
+      }
+    }
+    result.chunks.push_back(std::move(prepared));
+  }
+  return result;
+}
+
+/// Word spacing advances only after every glyph attached to the space group.
+bool IsWordSpacingGroupEnd(const PreparedSpanChunk& chunk, size_t index, uint32_t codepoint) {
+  return codepoint == 0x20 &&
+         (index + 1 == chunk.positioningClusters.size() ||
+          chunk.positioningClusters[index] != chunk.positioningClusters[index + 1]);
+}
+
+/// Applies internal displacements to the following group, retaining end-of-span carry.
+SmallVector<std::optional<Lengthd>, 1> ResolveGroupDisplacements(
+    const SmallVector<std::optional<Lengthd>, 1>& values, const std::vector<bool>& groupStarts,
+    Lengthd::Extent extent, const TextLayoutParams& params, double& pending) {
+  SmallVector<std::optional<Lengthd>, 1> result;
+  result.resize(groupStarts.size());
+  for (size_t index = 0; index < groupStarts.size(); ++index) {
+    if (index < values.size() && values[index]) {
+      pending += values[index]->toPixels(params.viewBox, params.fontMetrics, extent);
+    }
+    if (groupStarts[index]) {
+      if (pending != 0.0) {
+        result[index] = Lengthd(pending);
+      }
+      pending = 0.0;
+    }
+  }
+  return result;
+}
+
+/// Returns a group's authored position only on its first glyph.
+std::optional<Lengthd> PositionForGroup(const SmallVector<std::optional<Lengthd>, 1>& values,
+                                        unsigned int index, bool firstGlyph) {
+  return firstGlyph && index < values.size() ? values[index] : std::nullopt;
+}
+
 /// Valid zero adjustment retains characters; other unusable sizes do not reach layout.
 bool HasAddressableSpanText(std::string_view text, float size,
                             const std::optional<double>& adjustment) {
@@ -1719,6 +1811,8 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
   // ── Layout state ──────────────────────────────────────────────────────────────
   std::vector<TextRun> runs;
   bool haveCurrentPosition = false;
+  double pendingDx = 0.0;
+  double pendingDy = 0.0;
   double currentPenX = 0.0;
   double currentPenY = 0.0;
   double prevDefaultY = 0.0;  // Previous span's baseline-shift offset, for undo/redo between spans.
@@ -1879,9 +1973,18 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
     // ── Build byte→index mappings for the span text ──────────────────────────────
     const ByteIndexMappings indexMappings = buildByteIndexMappings(spanText);
     const auto& byteToCharIdx = indexMappings.byteToCharIdx;
-    const auto& byteToRawCpIdx = indexMappings.byteToRawCpIdx;
 
-    // ── Shape each chunk and iterate its glyphs ─────────────────────────────────
+    const PreparedSpanShaping shaping =
+        PrepareSpanShaping(*backend_, run, spanText, chunkRanges, vertical, span.fontVariant,
+                           spanFontKerning, indexMappings);
+    dxListLocal =
+        ResolveGroupDisplacements(span.pathSpline ? span.dxList : dxListLocal, shaping.groupStarts,
+                                  Lengthd::Extent::X, params, pendingDx);
+    dyListLocal =
+        ResolveGroupDisplacements(span.pathSpline ? span.dyList : dyListLocal, shaping.groupStarts,
+                                  Lengthd::Extent::Y, params, pendingDy);
+
+    // ── Iterate the shaped chunks ───────────────────────────────────────────────
     uint32_t lastCodepoint = 0;
 
     // Track last codepoint per chunk for cross-chunk kerning.
@@ -1892,8 +1995,9 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
 
     for (size_t ci = 0; ci < chunkRanges.size(); ++ci) {
       const auto& chunk = chunkRanges[ci];
-      const auto shaped = ShapeSpanChunk(*backend_, run, spanText, chunk, vertical,
-                                         span.fontVariant, spanFontKerning);
+      const auto& prepared = shaping.chunks[ci];
+      const auto& shaped = prepared.shaped;
+      std::optional<unsigned int> previousPositionedGroup;
 
       // ── RTL Y-override for multi-glyph chunks ─────────────────────────────────
       // When a multi-glyph RTL chunk starts because of an absolute y position on the
@@ -1901,8 +2005,8 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
       // returns RTL glyphs in visual order (last DOM char first), so the engine would
       // otherwise apply the explicit y to the wrong glyph. Pre-compute the override.
       std::optional<double> chunkYOverride;
-      const bool isRTLChunk =
-          shaped.glyphs.size() > 1 && shaped.glyphs.front().cluster > shaped.glyphs.back().cluster;
+      const bool isRTLChunk = shaped.glyphs.size() > 1 && prepared.positioningClusters.front() >
+                                                              prepared.positioningClusters.back();
       if (isRTLChunk && ci > 0) {
         // The chunk started at chunk.byteStart - check if that byte's charIdx has absolute y.
         const unsigned int firstCharIdx =
@@ -1948,48 +2052,49 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
       for (size_t gi = 0; gi < shaped.glyphs.size(); ++gi) {
         const auto& sg = shaped.glyphs[gi];
 
-        // Decode codepoint from the cluster byte offset into spanText.
-        size_t clusterPos = sg.cluster;
+        // Classification and authored lists use the typographic positioning group.
+        const uint32_t positioningCluster = prepared.positioningClusters[gi];
+        size_t clusterPos = positioningCluster;
         const uint32_t codepoint = decodeUtf8(spanText, clusterPos);
 
         // Look up per-character indices from the byte→index mappings.
         const unsigned int charIdx =
-            sg.cluster < byteToCharIdx.size() ? byteToCharIdx[sg.cluster] : 0;
-        const unsigned int rawCpIdx =
-            sg.cluster < byteToRawCpIdx.size() ? byteToRawCpIdx[sg.cluster] : 0;
+            positioningCluster < byteToCharIdx.size() ? byteToCharIdx[positioningCluster] : 0;
+
+        const bool applyPosition = previousPositionedGroup != charIdx;
+        previousPositionedGroup = charIdx;
+        const auto groupX = PositionForGroup(xListLocal, charIdx, applyPosition);
+        const auto groupY = PositionForGroup(yListLocal, charIdx, applyPosition);
+        const auto groupDx = PositionForGroup(dxListLocal, charIdx, applyPosition);
+        const auto groupDy = PositionForGroup(dyListLocal, charIdx, applyPosition);
 
         if (vertical) {
           // ── Vertical mode ─────────────────────────────────────────────────────
           // Primary advance is along Y, cross-axis is X.
-          const bool hasAbsoluteY = charIdx < yListLocal.size() && yListLocal[charIdx].has_value();
-          const bool hasAbsoluteX_v =
-              charIdx < xListLocal.size() && xListLocal[charIdx].has_value();
+          const bool hasAbsoluteY = groupY.has_value();
+          const bool hasAbsoluteX_v = groupX.has_value();
           if ((hasAbsoluteX_v || hasAbsoluteY) && !(ci == 0 && gi == 0)) {
             chunkBoundaries.push_back({runs.size(), run.glyphs.size(), span.textAnchor});
           }
 
           // Per-character absolute Y (primary axis).
           if (hasAbsoluteY) {
-            penY = yListLocal[charIdx]->toPixels(params.viewBox, params.fontMetrics,
-                                                 Lengthd::Extent::Y);
+            penY = groupY->toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::Y);
           }
 
           // Per-character dy (primary axis).
-          if (charIdx < dyListLocal.size() && dyListLocal[charIdx].has_value()) {
-            penY += dyListLocal[charIdx]->toPixels(params.viewBox, params.fontMetrics,
-                                                   Lengthd::Extent::Y);
+          if (groupDy.has_value()) {
+            penY += groupDy->toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::Y);
           }
 
           // Per-character absolute X (cross-axis).
-          if (charIdx < xListLocal.size() && xListLocal[charIdx].has_value()) {
-            penX = xListLocal[charIdx]->toPixels(params.viewBox, params.fontMetrics,
-                                                 Lengthd::Extent::X);
+          if (groupX.has_value()) {
+            penX = groupX->toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::X);
           }
 
           // Per-character dx (cross-axis).
-          if (charIdx < dxListLocal.size() && dxListLocal[charIdx].has_value()) {
-            penX += dxListLocal[charIdx]->toPixels(params.viewBox, params.fontMetrics,
-                                                   Lengthd::Extent::X);
+          if (groupDx.has_value()) {
+            penX += groupDx->toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::X);
           }
 
           // Apply kerning: cross-chunk/cross-span for first glyph, within-chunk for subsequent.
@@ -2009,6 +2114,7 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
           glyph.xAdvance = 0;
           glyph.fontSizeScale = sg.fontSizeScale;
           glyph.cluster = sg.cluster;
+          glyph.positioningCluster = positioningCluster;
 
           // Vertical mode glyph handling: non-CJK glyphs get 90 degrees CW rotation.
           if (codepoint < 0x2E80) {
@@ -2036,8 +2142,8 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
             glyph.xPosition -= centralBaselineOffset;
 
             double baseRotation = 90.0;
-            if (rawCpIdx < span.rotateList.size()) {
-              glyph.rotateDegrees = span.rotateList[rawCpIdx] + baseRotation;
+            if (charIdx < span.rotateList.size()) {
+              glyph.rotateDegrees = span.rotateList[charIdx] + baseRotation;
             } else if (!span.rotateList.empty()) {
               glyph.rotateDegrees = span.rotateList.back() + baseRotation;
             } else {
@@ -2049,8 +2155,8 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
             glyph.xPosition = penX + sg.xOffset;
             glyph.yPosition = penY + sg.yOffset;
 
-            if (rawCpIdx < span.rotateList.size()) {
-              glyph.rotateDegrees = span.rotateList[rawCpIdx];
+            if (charIdx < span.rotateList.size()) {
+              glyph.rotateDegrees = span.rotateList[charIdx];
             } else if (!span.rotateList.empty()) {
               glyph.rotateDegrees = span.rotateList.back();
             }
@@ -2064,13 +2170,13 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
             penY += span.letterSpacingPx;
           }
           // Word-spacing after U+0020 (space).
-          if (codepoint == 0x0020) {
+          if (IsWordSpacingGroupEnd(prepared, gi, codepoint)) {
             penY += span.wordSpacingPx;
           }
         } else {
           // ── Horizontal mode ───────────────────────────────────────────────────
-          const bool hasAbsoluteX = charIdx < xListLocal.size() && xListLocal[charIdx].has_value();
-          const bool hasAbsoluteY = charIdx < yListLocal.size() && yListLocal[charIdx].has_value();
+          const bool hasAbsoluteX = groupX.has_value();
+          const bool hasAbsoluteY = groupY.has_value();
 
           // A within-span absolute x or y starts a new text chunk (unless it's the
           // first glyph of the span that already started a chunk via startsNewChunk).
@@ -2089,14 +2195,12 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
           }
 
           if (hasAbsoluteX) {
-            penX = xListLocal[charIdx]->toPixels(params.viewBox, params.fontMetrics,
-                                                 Lengthd::Extent::X);
+            penX = groupX->toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::X);
           }
 
           // Per-character dx.
-          if (charIdx < dxListLocal.size() && dxListLocal[charIdx].has_value()) {
-            penX += dxListLocal[charIdx]->toPixels(params.viewBox, params.fontMetrics,
-                                                   Lengthd::Extent::X);
+          if (groupDx.has_value()) {
+            penX += groupDx->toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::X);
           }
 
           // Per-character absolute Y positioning.
@@ -2105,15 +2209,13 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
           if (chunkYOverride.has_value()) {
             penY = *chunkYOverride;
           } else if (hasAbsoluteY) {
-            penY = yListLocal[charIdx]->toPixels(params.viewBox, params.fontMetrics,
-                                                 Lengthd::Extent::Y) +
-                   defaultY;
+            penY =
+                groupY->toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::Y) + defaultY;
           }
 
           // Per-character dy.
-          if (charIdx < dyListLocal.size() && dyListLocal[charIdx].has_value()) {
-            penY += dyListLocal[charIdx]->toPixels(params.viewBox, params.fontMetrics,
-                                                   Lengthd::Extent::Y);
+          if (groupDy.has_value()) {
+            penY += groupDy->toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::Y);
           }
 
           TextGlyph glyph;
@@ -2126,17 +2228,18 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
           glyph.xKern = sg.xKern;
           glyph.fontSizeScale = sg.fontSizeScale;
           glyph.cluster = sg.cluster;
+          glyph.positioningCluster = positioningCluster;
 
           // Per-character rotation (last value repeats per SVG spec).
-          if (rawCpIdx < span.rotateList.size()) {
-            glyph.rotateDegrees = span.rotateList[rawCpIdx];
+          if (charIdx < span.rotateList.size()) {
+            glyph.rotateDegrees = span.rotateList[charIdx];
           } else if (!span.rotateList.empty()) {
             glyph.rotateDegrees = span.rotateList.back();
           }
 
-          // Rotate combining mark offsets around the base glyph so the cluster rotates together.
-          if (!span.pathSpline && glyph.rotateDegrees != 0.0 && !run.glyphs.empty() &&
-              glyph.xAdvance == 0.0) {
+          // An absolute position gives a mark its own origin instead of the preceding base.
+          if (!span.pathSpline && !hasAbsoluteX && !hasAbsoluteY && glyph.rotateDegrees != 0.0 &&
+              !run.glyphs.empty() && glyph.xAdvance == 0.0) {
             const auto& base = run.glyphs.back();
             if (base.xAdvance != 0.0) {
               const double angle = glyph.rotateDegrees * MathConstants<double>::kDegToRad;
@@ -2151,21 +2254,6 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
 
           run.glyphs.push_back(glyph);
 
-          // Supplementary characters consume a trailing UTF-16 code unit. Apply its coordinate
-          // values to the next glyph to preserve SVG's UTF-16 indexed positioning semantics.
-          if (codepoint >= 0x10000) {
-            const unsigned int lowIdx = charIdx + 1;
-            if (lowIdx < yListLocal.size() && yListLocal[lowIdx].has_value()) {
-              penY = yListLocal[lowIdx]->toPixels(params.viewBox, params.fontMetrics,
-                                                  Lengthd::Extent::Y) +
-                     defaultY;
-            }
-            if (lowIdx < xListLocal.size() && xListLocal[lowIdx].has_value()) {
-              penX = xListLocal[lowIdx]->toPixels(params.viewBox, params.fontMetrics,
-                                                  Lengthd::Extent::X);
-            }
-          }
-
           penX += sg.xAdvance;
 
           // CSS letter-spacing: extra space after every character, suppressed for cursive scripts.
@@ -2173,7 +2261,7 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
             penX += span.letterSpacingPx;
           }
           // CSS word-spacing: extra space after U+0020 (space) characters.
-          if (codepoint == 0x0020) {
+          if (IsWordSpacingGroupEnd(prepared, gi, codepoint)) {
             penX += span.wordSpacingPx;
           }
         }
@@ -2183,7 +2271,7 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
 
       // Track last codepoint of this chunk for cross-chunk kerning in the next chunk.
       if (!shaped.glyphs.empty()) {
-        size_t lastCluster = shaped.glyphs.back().cluster;
+        size_t lastCluster = prepared.positioningClusters.back();
         prevChunkLastCodepoint = decodeUtf8(spanText, lastCluster);
         prevChunkFont = spanFont;
         prevChunkFontSizePx = spanFontSizePx;
@@ -2198,7 +2286,7 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
         prevTextPathSource = span.textPathSourceEntity;
       }
       StageTextPathRun(run, runs.size(), span, indexMappings, params, *backend_, defaultY,
-                       pathStaging);
+                       dxListLocal, dyListLocal, pathStaging);
       run.onPath = true;
       runExtents.push_back({runPenStartX, runPenStartY, penX, penY});
       runs.push_back(std::move(run));

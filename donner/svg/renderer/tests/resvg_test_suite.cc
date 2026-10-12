@@ -1601,9 +1601,9 @@ INSTANTIATE_TEST_SUITE_P(
                      Params::WithGoldenOverride("donner/svg/renderer/testdata/golden/"
                                                 "resvg-compound-emojis-and-coordinates-list.png",
                                                 0.1f)
-                         .withMaxPixelsDifferent(1100)
                          .onlyTextFull()
-                         .withReason("Emoji bitmap scaling differs from the golden")},
+                         .withReason(
+                             "Codepoint positioning reference preserves complete emoji clusters")},
                     {"compound-emojis.svg",
                      Params::WithThreshold(0.2f, kDefaultMismatchedPixels,
                                            "Emoji, differences between resvg and our bitmap")
@@ -1905,8 +1905,6 @@ INSTANTIATE_TEST_SUITE_P(
             "text/tspan",
             {
                 {"bidi-reordering.svg", Params::Skip("Not impl: BIDI reordering")},
-                {"nested-rotate.svg",
-                 Params::Skip("Bug: Applying rotation indices across nested tspans")},
                 {"nested-whitespaces.svg",
                  Params().withMaxPixelsDifferent(400).withReason("Vertical axis has different AA")},
                 {"tspan-bbox-2.svg", Params().withMaxPixelsDifferent(900).withReason(

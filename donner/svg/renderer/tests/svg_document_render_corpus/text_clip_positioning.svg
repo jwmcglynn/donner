@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64">
+  <defs>
+    <clipPath id="text-clip"><text x="2 8 16 24 32 40" y="24" rotate="0 5 10 15 20 25" font-size="10"><tspan rotate="0 5">&#x1F600;A</tspan><tspan dx="1 2 0 1" dy="0 1 0 0">e&#x301;&#x200D;B</tspan></text></clipPath>
+  </defs>
+  <rect width="64" height="64" clip-path="url(#text-clip)"/>
+</svg>
