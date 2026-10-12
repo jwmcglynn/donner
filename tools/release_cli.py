@@ -25,6 +25,10 @@ INPUTS = (
     "third_party/bazel/non_bcr_deps.bzl",
 )
 LOCKFILE = "MODULE.bazel.lock"
+# Provenance schema 2 added the third-party license NOTICE that ships beside each binary.
+SCHEMA = 2
+NOTICE_HEADER = "Third-party licenses for build variant: "
+MAX_NOTICE_BYTES = 1024 * 1024
 PUBLIC_LOCK_HOSTS = frozenset({
     "bcr.bazel.build",
     "playwright.azureedge.net",
@@ -129,11 +133,24 @@ def _validate_public_lockfile(path: Path) -> None:
         _validate_lock_string(value)
 
 
-def _names(platform: str) -> tuple[str, str, str, str]:
+def _names(platform: str) -> tuple[str, str, str, str, str]:
     if platform not in PLATFORMS:
         raise ValueError("unsupported release CLI platform")
     binary = PLATFORMS[platform]
-    return binary, f"{binary}.sha256", f"{binary}.provenance", f"{binary}.bazel.lock"
+    return (binary, f"{binary}.sha256", f"{binary}.provenance", f"{binary}.bazel.lock",
+            f"{binary}.NOTICE.txt")
+
+
+def _check_notice(path: Path) -> None:
+    """Require the generated license notice: a bounded, non-empty UTF-8 text file."""
+    if path.is_symlink() or not path.is_file() or not 0 < path.stat().st_size <= MAX_NOTICE_BYTES:
+        raise ValueError("release CLI license notice is missing, empty or too large")
+    try:
+        text = path.read_bytes().decode("utf-8")
+    except UnicodeDecodeError:
+        raise ValueError("release CLI license notice is not UTF-8 text") from None
+    if not text.startswith(NOTICE_HEADER) or "\x00" in text or "\nPackage: " not in text:
+        raise ValueError("release CLI license notice is not a generated third-party notice")
 
 
 def _run_identity(run_id: str, attempt: str) -> None:
@@ -142,14 +159,15 @@ def _run_identity(run_id: str, attempt: str) -> None:
 
 
 def package(
-    *, root: Path, binary: Path, output: Path, platform: str,
+    *, root: Path, binary: Path, notice: Path, output: Path, platform: str,
     commit: str, run_id: str, attempt: str,
 ) -> dict[str, object]:
     _run_identity(run_id, attempt)
     source_tree = _source_tree(root, commit)
-    binary_name, checksum_name, provenance_name, lock_name = _names(platform)
+    binary_name, checksum_name, provenance_name, lock_name, notice_name = _names(platform)
     if not binary.is_file() or binary.stat().st_size == 0:
         raise ValueError("release CLI binary is missing or empty")
+    _check_notice(notice)
     lockfile = root / LOCKFILE
     if lockfile.is_symlink() or not lockfile.is_file() or lockfile.stat().st_size == 0:
         raise ValueError("generated Bazel lockfile is missing or empty")
@@ -161,6 +179,8 @@ def package(
     shutil.copyfile(binary, destination)
     shutil.copyfile(lockfile, output / lock_name)
     _validate_public_lockfile(output / lock_name)
+    shutil.copyfile(notice, output / notice_name)
+    _check_notice(output / notice_name)
     checksum = digest(destination)
     lock_checksum = digest(output / lock_name)
     (output / checksum_name).write_text(f"{checksum}  {binary_name}\n", encoding="ascii")
@@ -168,7 +188,7 @@ def package(
     if not re.fullmatch(r"[A-Za-z0-9 .+()~_-]{1,256}", compiler):
         raise ValueError("host compiler version contains unsupported characters")
     provenance: dict[str, object] = {
-        "schema": 1,
+        "schema": SCHEMA,
         "platform": platform,
         "source_commit": commit,
         "source_tree": source_tree,
@@ -180,6 +200,7 @@ def package(
         "generated_lock_sha256": lock_checksum,
         "binary_sha256": checksum,
         "binary_size": destination.stat().st_size,
+        "notice_sha256": digest(output / notice_name),
     }
     (output / provenance_name).write_text(json.dumps(provenance, indent=2) + "\n")
     return provenance
@@ -205,8 +226,8 @@ def verify(
 ) -> dict[str, object]:
     _run_identity(run_id, attempt)
     source_tree = _source_tree(root, commit)
-    binary_name, checksum_name, provenance_name, lock_name = _names(platform)
-    expected_names = {binary_name, checksum_name, provenance_name, lock_name}
+    binary_name, checksum_name, provenance_name, lock_name, notice_name = _names(platform)
+    expected_names = {binary_name, checksum_name, provenance_name, lock_name, notice_name}
     if {path.name for path in artifacts.iterdir()} != expected_names:
         raise ValueError("release CLI artifact set is incomplete or contains unexpected files")
     if any((artifacts / name).is_symlink() for name in expected_names):
@@ -218,12 +239,14 @@ def verify(
     if not retained_lock.is_file() or retained_lock.stat().st_size == 0:
         raise ValueError("retained Bazel lockfile is missing or empty")
     _validate_public_lockfile(retained_lock)
+    retained_notice = artifacts / notice_name
+    _check_notice(retained_notice)
     checksum = digest(binary)
     if (artifacts / checksum_name).read_text(encoding="ascii") != f"{checksum}  {binary_name}\n":
         raise ValueError("release CLI checksum does not match retained bytes")
     provenance = json.loads((artifacts / provenance_name).read_text(encoding="utf-8"))
     expected = {
-        "schema": 1,
+        "schema": SCHEMA,
         "platform": platform,
         "source_commit": commit,
         "source_tree": source_tree,
@@ -234,6 +257,7 @@ def verify(
         "generated_lock_sha256": digest(retained_lock),
         "binary_sha256": checksum,
         "binary_size": binary.stat().st_size,
+        "notice_sha256": digest(retained_notice),
     }
     return _check_provenance(provenance, expected)
 
@@ -250,6 +274,7 @@ def main() -> None:
         command.add_argument("--root", type=Path, default=Path.cwd())
         if name == "package":
             command.add_argument("--binary", type=Path, required=True)
+            command.add_argument("--notice", type=Path, required=True)
             command.add_argument("--output", type=Path, required=True)
         else:
             command.add_argument("--artifacts", type=Path, required=True)
@@ -257,7 +282,7 @@ def main() -> None:
     options = dict(root=args.root, platform=args.platform, commit=args.commit,
                    run_id=args.run_id, attempt=args.attempt)
     if args.command == "package":
-        package(binary=args.binary, output=args.output, **options)
+        package(binary=args.binary, notice=args.notice, output=args.output, **options)
     else:
         verify(artifacts=args.artifacts, **options)
 

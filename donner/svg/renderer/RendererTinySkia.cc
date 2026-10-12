@@ -40,11 +40,22 @@
 #include "tiny_skia/Painter.h"
 #include "tiny_skia/Path.h"
 #include "tiny_skia/PathBuilder.h"
+#include "tiny_skia/filter/ColorSpace.h"
 #include "tiny_skia/shaders/Shaders.h"
 
 namespace donner::svg {
 
 namespace {
+
+tiny_skia::Mask MakeMaskCoverage(tiny_skia::Pixmap& pixmap, MaskType maskType,
+                                 ColorInterpolation colorInterpolation) {
+  if (maskType == MaskType::Luminance && colorInterpolation == ColorInterpolation::LinearRGB) {
+    tiny_skia::filter::srgbToLinear(pixmap);
+  }
+  const tiny_skia::MaskType coverageMode =
+      maskType == MaskType::Alpha ? tiny_skia::MaskType::Alpha : tiny_skia::MaskType::Luminance;
+  return tiny_skia::Mask::fromPixmap(pixmap.view(), coverageMode);
+}
 
 std::optional<int> CheckedPixelDimension(double logicalDimension, double devicePixelRatio) {
   const double pixelDimension = logicalDimension * devicePixelRatio;
@@ -225,6 +236,27 @@ bool HasOpenDashSeam(const std::optional<tiny_skia::StrokeDash>& dash,
 }
 
 #ifdef DONNER_TEXT_ENABLED
+/// Map decoded bitmap texels through their bearing and scale, then rotate about the glyph origin.
+Transform2d ComputeDeviceFromBitmapGlyph(const TextGlyph& glyph,
+                                         const TextBackend::BitmapGlyph& bitmap,
+                                         const Transform2d& deviceFromLocal) {
+  const double targetX = glyph.xPosition + bitmap.bearingX;
+  const double targetY = glyph.yPosition - bitmap.bearingY;
+  const double targetW = static_cast<double>(bitmap.width) * bitmap.scale * glyph.stretchScaleX;
+  const double targetH = static_cast<double>(bitmap.height) * bitmap.scale * glyph.stretchScaleY;
+  const double imgScaleX = targetW / static_cast<double>(bitmap.width);
+  const double imgScaleY = targetH / static_cast<double>(bitmap.height);
+  Transform2d localFromBitmap =
+      Transform2d::Scale(imgScaleX, imgScaleY) * Transform2d::Translate(Vector2d(targetX, targetY));
+  if (glyph.rotateDegrees != 0.0) {
+    localFromBitmap =
+        localFromBitmap * Transform2d::Translate(-glyph.xPosition, -glyph.yPosition) *
+        Transform2d::Rotate(glyph.rotateDegrees * MathConstants<double>::kPi / 180.0) *
+        Transform2d::Translate(glyph.xPosition, glyph.yPosition);
+  }
+  return localFromBitmap * deviceFromLocal;
+}
+
 bool CanRenderTextRun(bool isBitmapFont, float scale) {
   return isBitmapFont || scale != 0.0f;
 }
@@ -1077,25 +1109,6 @@ private:
   std::span<const ClipPathShape> paths_;
   std::ptrdiff_t index_ = -1;
 };
-
-#ifndef DONNER_FILTERS_ENABLED
-// When filters are disabled, FilterGraphExecutor.h is not included so PremultiplyRgba is not
-// available. Provide a local copy for drawImage().
-std::vector<std::uint8_t> PremultiplyRgba(std::span<const std::uint8_t> rgbaPixels) {
-  std::vector<std::uint8_t> result(rgbaPixels.begin(), rgbaPixels.end());
-  for (std::size_t i = 0; i + 3 < result.size(); i += 4) {
-    const unsigned alpha = result[i + 3];
-    result[i + 0] =
-        static_cast<std::uint8_t>((static_cast<unsigned>(result[i + 0]) * alpha + 127u) / 255u);
-    result[i + 1] =
-        static_cast<std::uint8_t>((static_cast<unsigned>(result[i + 1]) * alpha + 127u) / 255u);
-    result[i + 2] =
-        static_cast<std::uint8_t>((static_cast<unsigned>(result[i + 2]) * alpha + 127u) / 255u);
-  }
-
-  return result;
-}
-#endif  // !DONNER_FILTERS_ENABLED
 
 #ifdef DONNER_FILTERS_ENABLED
 // Blur implementation moved to tiny_skia::filter::gaussianBlur (GaussianBlur.h).
@@ -2076,11 +2089,17 @@ void RendererTinySkia::popFilterLayer() {
 }
 
 void RendererTinySkia::pushMask(const std::optional<Box2d>& maskBounds, MaskType maskType) {
+  pushMask(maskBounds, maskType, ColorInterpolation::SRGB);
+}
+
+void RendererTinySkia::pushMask(const std::optional<Box2d>& maskBounds, MaskType maskType,
+                                ColorInterpolation colorInterpolation) {
   SurfaceFrame frame;
   frame.kind = SurfaceKind::MaskCapture;
   frame.maskBounds = maskBounds;
   frame.maskBoundsTransform = deviceFromLocalTransform_;
   frame.maskType = maskType;
+  frame.maskColorInterpolation = colorInterpolation;
   if (rejectedFilterDepth_ != 0) {
     frame.allocationRejected = true;
     surfaceStack_.push_back(std::move(frame));
@@ -2112,10 +2131,7 @@ void RendererTinySkia::transitionMaskToContent() {
     frame.kind = SurfaceKind::MaskContent;
     return;
   }
-  const tiny_skia::MaskType tinyMaskType = frame.maskType == MaskType::Alpha
-                                               ? tiny_skia::MaskType::Alpha
-                                               : tiny_skia::MaskType::Luminance;
-  frame.maskAlpha = tiny_skia::Mask::fromPixmap(frame.pixmap.view(), tinyMaskType);
+  frame.maskAlpha = MakeMaskCoverage(frame.pixmap, frame.maskType, frame.maskColorInterpolation);
 
   if (frame.maskAlpha.has_value() && frame.maskBounds.has_value()) {
     std::optional<tiny_skia::Mask> boundsMask =
@@ -2969,7 +2985,7 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
 
       // Placed outline in document space (outline -> stretch -> translate ->
       // rotate). Shared with RendererGeode via PlacedTextGeometry so the two
-      // backends can't drift on placement (0038). Empty for bitmap-only fonts
+      // backends cannot drift on placement. Empty for bitmap-only fonts
       // / outline-less glyphs, which fall through to the bitmap branch below
       // exactly as before.
       Path glyphPath;
@@ -2994,31 +3010,17 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
           return;
         }
         if (bitmap) {
-          // Premultiply alpha for correct blending.
-          std::vector<uint8_t> premul = PremultiplyRgba(bitmap->rgbaPixels);
-          auto maybePixmap = tiny_skia::Pixmap::fromVec(
-              std::move(premul), tiny_skia::IntSize(static_cast<uint32_t>(bitmap->width),
-                                                    static_cast<uint32_t>(bitmap->height)));
+          // BitmapGlyph already contains premultiplied RGBA from the font decoder.
+          auto maybePixmap =
+              tiny_skia::Pixmap::fromVec(std::move(bitmap->rgbaPixels),
+                                         tiny_skia::IntSize(static_cast<uint32_t>(bitmap->width),
+                                                            static_cast<uint32_t>(bitmap->height)));
           if (!maybePixmap.has_value()) {
             continue;
           }
 
-          // Compute target rect in document space: position with bearing, scaled size.
-          const double targetX = glyph.xPosition + bitmap->bearingX;
-          const double targetY = glyph.yPosition - bitmap->bearingY;
-          const double targetW =
-              static_cast<double>(bitmap->width) * bitmap->scale * glyph.stretchScaleX;
-          const double targetH =
-              static_cast<double>(bitmap->height) * bitmap->scale * glyph.stretchScaleY;
-
-          // Use the same transform pattern as drawImage: Scale * Translate *
-          // deviceFromLocalTransform_.
-          const double imgScaleX = targetW / static_cast<double>(bitmap->width);
-          const double imgScaleY = targetH / static_cast<double>(bitmap->height);
-          const Transform2d imageFromLocal = Transform2d::Scale(imgScaleX, imgScaleY) *
-                                             Transform2d::Translate(Vector2d(targetX, targetY)) *
-                                             deviceFromLocalTransform_;
-
+          const Transform2d deviceFromBitmap =
+              ComputeDeviceFromBitmapGlyph(glyph, *bitmap, deviceFromLocalTransform_);
           tiny_skia::PixmapPaint paint =
               makePixmapPaint(currentPixmap(), tiny_skia::FilterQuality::Bilinear);
           paint.opacity = NarrowToFloat(spanOpacity);
@@ -3027,7 +3029,7 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
           const tiny_skia::Mask* mask = currentClipMask_.has_value() ? &*currentClipMask_ : nullptr;
           auto pixmapView = currentPixmapView();
           tiny_skia::Painter::drawPixmap(pixmapView, 0, 0, maybePixmap->view(), paint,
-                                         toTinyTransform(imageFromLocal), mask);
+                                         toTinyTransform(deviceFromBitmap), mask);
           continue;
         }
       }

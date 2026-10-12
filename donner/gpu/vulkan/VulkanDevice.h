@@ -158,8 +158,8 @@ std::vector<const char*> SelectPresentationExtensionsForTest(
  * may be pending. Identical ranges coalesce at the newest write's position, preserving overlap
  * order.
  *
- * Readback waits for the buffer's last use before reading mapped memory; a timeout or device
- * error returns an error without copying any bytes. Queued writes become visible after the
+ * Readback waits for the buffer's last use before reading mapped memory; a stalled queue or a
+ * device error returns an error without copying any bytes. Queued writes become visible after the
  * subsequent submission completes. Staging and destination allocations remain alive until its
  * fence signals, including destinations absent from the public command stream. Terminal queue
  * submission loss is latched before cleanup, and the device is drained before submitted objects
@@ -368,13 +368,18 @@ public:
   [[nodiscard]] void* nativeInstance() const;
 
   /**
-   * Destructor. Proves this device's own work complete, waiting up to five seconds on each of its
-   * outstanding submission and upload fences and preparing each of its surfaces, then destroys its
-   * Vulkan objects in dependency order and releases its reference to the shared root. The root's
-   * instance, logical device and queue go when the root's last holder releases it, so devices over
-   * the same root are neither waited for nor torn down. If completion cannot be proved, this
-   * device's complete native graph is retained until process exit and later Vulkan device
-   * creation is refused.
+   * Destructor. Proves this device's own work complete before releasing any of its objects: it
+   * waits on each of its outstanding submission and upload fences for as long as the shared queue
+   * keeps completing work, giving up once the queue has made no progress for five seconds, and
+   * prepares each of its surfaces, including any whose explicit destruction failed. After a
+   * submission whose completion is unknown, each of those submission and upload fence waits is
+   * bounded to five seconds in all instead. A loss declared over the root does not end these
+   * waits: only a signalled fence, or a wait the driver reports as device loss, proves the work
+   * complete. It then destroys its Vulkan objects in dependency order and releases its reference to
+   * the shared root. The root's instance, logical device and queue go when the root's last holder
+   * releases it, so other devices over the same root are not torn down and their fences are not
+   * waited on. If completion cannot be proved, this device's complete native graph is retained
+   * until process exit and later Vulkan device creation is refused.
    */
   ~VulkanDevice() override;
 
@@ -388,9 +393,11 @@ public:
    * Synchronous test and diagnostic readback, outside the asynchronous mapping API
    * (\ref donner::gpu::Device::mapBufferAsync): validates the handle (null, device identity, and
    * generation) through the base class, then reads the persistently mapped host-visible
-   * allocation after waiting up to five seconds for this buffer's last submission. Unrelated work
-   * does not delay an idle buffer. Timeout or device failure returns an error without reading
-   * memory; fence completion makes device writes visible to the host for HOST_COHERENT memory.
+   * allocation once this buffer's last submission completes. That wait lasts as long as the queue
+   * keeps completing work, and gives up once it has made no progress for five seconds. Unrelated
+   * work does not delay an idle buffer. A stalled queue, a device failure or a loss declared over
+   * the root returns an error without reading memory; fence completion makes device writes
+   * visible to the host for HOST_COHERENT memory.
    *
    * @param buffer Buffer to read back; must be a live buffer of this device.
    */
@@ -676,9 +683,10 @@ protected:
 private:
   friend class VulkanSwapchainTestAccess;
 
-  /// Waits for a buffer's last use and reports timeout or device error before host access.
+  /// Waits for a buffer's last use before host access, giving up once the queue has made no
+  /// progress for five seconds, and reports a stall, a loss or a device error.
   /// @param serial Last submitted use of this buffer.
-  /// @param operation Operation name included in a timeout diagnostic.
+  /// @param operation Operation name used in the stall and loss messages.
   Status waitForBufferAccess(uint64_t serial, std::string_view operation);
 
   /// Creates the common backend, optionally enabling the extension used by native test gates and

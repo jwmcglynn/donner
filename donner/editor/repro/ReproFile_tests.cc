@@ -153,6 +153,14 @@ std::string FrameLineWith(std::string_view suffix) {
   return line;
 }
 
+// Construct a v4 replay with JSON-encoded property contents, excluding the surrounding quotes.
+std::string StyleReplayWithEncodedValue(std::string_view encodedValue) {
+  return R"({"v":4,"svg":"foo.svg","wnd":[100,100],"scale":1,"exp":0})"
+         "\n" +
+         FrameLineWith(R"(,"a":[{"k":"style","p":"font-family","v":")" + std::string(encodedValue) +
+                       R"("}])");
+}
+
 }  // namespace
 
 TEST(ReproFileTest, RoundTripMetadataOnly) {
@@ -1563,6 +1571,149 @@ TEST(ReproFileTest, RejectsOversizedStyleActionValue) {
       MetadataLineWith("") +
       FrameLineWith(",\"a\":[{\"k\":\"style\",\"p\":\"fill\",\"v\":\"" + oversized + "\"}]");
   EXPECT_FALSE(ParseReproFile(input).has_value());
+}
+
+TEST(ReproFileTest, DecodesUnicodeScalarsEquallyFromEscapesAndUtf8) {
+  const struct {
+    std::string_view label;
+    std::string_view escaped;
+    std::string_view utf8;
+  } cases[] = {
+      {"ascii_max", R"(\u007f)", "\x7f"},
+      {"two_byte_min", R"(\u0080)", "\xc2\x80"},
+      {"two_byte_max", R"(\u07fF)", "\xdf\xbf"},
+      {"three_byte_min", R"(\u0800)", "\xe0\xa0\x80"},
+      {"before_surrogates", R"(\ud7ff)", "\xed\x9f\xbf"},
+      {"after_surrogates", R"(\uE000)", "\xee\x80\x80"},
+      {"bmp_max", R"(\uFfFf)", "\xef\xbf\xbf"},
+      {"supplementary_min", R"(\uD800\udC00)", "\xf0\x90\x80\x80"},
+      {"supplementary_max", R"(\udbFF\uDfFf)", "\xf4\x8f\xbf\xbf"},
+      {"emoji", R"(\uD83d\ude00)", "\xf0\x9f\x98\x80"},
+  };
+
+  for (const auto& testCase : cases) {
+    SCOPED_TRACE(testCase.label);
+    for (const auto encoded : {testCase.escaped, testCase.utf8}) {
+      const auto loaded = ParseReproFile(StyleReplayWithEncodedValue(encoded));
+      ASSERT_TRUE(loaded.has_value());
+      EXPECT_THAT(loaded->frames,
+                  ElementsAre(Field("actions", &ReproFrame::actions,
+                                    ElementsAre(ReproActionIs(ReproAction::Kind::SetStyleProperty,
+                                                              "", "font-family", testCase.utf8)))));
+    }
+  }
+}
+
+TEST(ReproFileTest, RoundTripsSupplementaryUnicodeAndEmbeddedNullInActions) {
+  const std::string emoji = "\xf0\x9f\x98\x80";
+  const std::string source = "<svg><text>" + emoji + "</text></svg>";
+  const std::string value = std::string("A\0", 2) + emoji + "\n\"\\";
+  const auto parsed = ParseReproFile(
+      R"({"v":4,"svg":"foo.svg","wnd":[100,100],"scale":1,"exp":0,)"
+      R"("svg_base":"drawing\uD83D\uDE00.svg","svg_src":"<svg><text>)" +
+      emoji + R"(</text></svg>"})" + "\n" +
+      FrameLineWith(R"(,"a":[{"k":"style","p":"font-family","v":"A\u0000\ud83d\ude00\n\"\\"}])"));
+  ASSERT_TRUE(parsed.has_value());
+  EXPECT_THAT(parsed->metadata.svgSource, Optional(source));
+  EXPECT_THAT(parsed->metadata.svgBasename, Eq("drawing" + emoji + ".svg"));
+  EXPECT_THAT(parsed->frames,
+              ElementsAre(Field("actions", &ReproFrame::actions,
+                                ElementsAre(ReproActionIs(ReproAction::Kind::SetStyleProperty, "",
+                                                          "font-family", value)))));
+
+  const auto path = TempFile("unicode_action_roundtrip");
+  ASSERT_TRUE(WriteReproFile(path, *parsed));
+  const auto loaded = ReadReproFile(path);
+  // Remove the temporary file before assertions so a failed read does not leave it behind.
+  std::error_code ec;
+  std::filesystem::remove(path, ec);
+  ASSERT_TRUE(loaded.has_value());
+  EXPECT_THAT(loaded->metadata.svgSource, Optional(source));
+  EXPECT_THAT(loaded->metadata.svgBasename, Eq("drawing" + emoji + ".svg"));
+  EXPECT_THAT(loaded->frames,
+              ElementsAre(Field("actions", &ReproFrame::actions,
+                                ElementsAre(ReproActionIs(ReproAction::Kind::SetStyleProperty, "",
+                                                          "font-family", value)))));
+}
+
+TEST(ReproFileTest, LimitsUnicodeStyleValuesByDecodedUtf8Bytes) {
+  const struct {
+    std::string_view label;
+    std::string_view escaped;
+    std::string_view utf8;
+  } cases[] = {
+      {"two_bytes", R"(\u00e9)", "\xc3\xa9"},
+      {"three_bytes", R"(\u20ac)", "\xe2\x82\xac"},
+      {"four_bytes", R"(\ud83d\ude00)", "\xf0\x9f\x98\x80"},
+  };
+
+  for (const auto& testCase : cases) {
+    SCOPED_TRACE(testCase.label);
+    const size_t repetitions = kMaximumReproActionPropertyValueBytes / testCase.utf8.size();
+    const size_t padding = kMaximumReproActionPropertyValueBytes % testCase.utf8.size();
+    std::string expected(padding, 'a');
+    std::string escaped(padding, 'a');
+    for (size_t i = 0; i < repetitions; ++i) {
+      expected += testCase.utf8;
+      escaped += testCase.escaped;
+    }
+    ASSERT_THAT(expected.size(), Eq(kMaximumReproActionPropertyValueBytes));
+    // Both encodings represent exactly the same retained bytes, although the escaped form is
+    // larger.
+    for (const std::string& encoded : {escaped, expected}) {
+      const auto loaded = ParseReproFile(StyleReplayWithEncodedValue(encoded));
+      ASSERT_TRUE(loaded.has_value());
+      EXPECT_THAT(loaded->frames,
+                  ElementsAre(Field("actions", &ReproFrame::actions,
+                                    ElementsAre(ReproActionIs(ReproAction::Kind::SetStyleProperty,
+                                                              "", "font-family", expected)))));
+      // A complete additional scalar exceeds the byte budget; truncating it would corrupt the
+      // value.
+      EXPECT_FALSE(
+          ParseReproFile(StyleReplayWithEncodedValue(encoded + std::string(testCase.escaped)))
+              .has_value());
+    }
+    // Leaving some room is insufficient when it cannot hold a whole UTF-8 scalar.
+    for (size_t remaining = 1; remaining < testCase.utf8.size(); ++remaining) {
+      SCOPED_TRACE(remaining);
+      const std::string almostFull = expected.substr(0, expected.size() - testCase.utf8.size()) +
+                                     std::string(testCase.utf8.size() - remaining, 'a');
+      EXPECT_FALSE(
+          ParseReproFile(StyleReplayWithEncodedValue(almostFull + std::string(testCase.escaped)))
+              .has_value());
+    }
+  }
+}
+
+TEST(ReproFileTest, RejectsEscapedByteBeyondDecodedStyleValueLimit) {
+  const std::string full(kMaximumReproActionPropertyValueBytes, 'a');
+  for (const std::string_view escape : {R"(\n)", R"(\u0000)"}) {
+    SCOPED_TRACE(escape);
+    const std::string input = StyleReplayWithEncodedValue(full + std::string(escape));
+    EXPECT_FALSE(ParseReproFile(input).has_value());
+  }
+}
+
+TEST(ReproFileTest, PreservesUnicodeStringsContainingEscapedStructuralSyntax) {
+  const std::string expected = "\xf0\x9f\x98\x80\"f\":99,\"a\":[{}]/tail";
+  const auto loaded =
+      ParseReproFile(StyleReplayWithEncodedValue(R"(\ud83d\ude00\"f\":99,\"a\":[{}]\/tail)"));
+  ASSERT_TRUE(loaded.has_value());
+  EXPECT_THAT(loaded->frames,
+              ElementsAre(AllOf(Field("index", &ReproFrame::index, 0),
+                                Field("actions", &ReproFrame::actions,
+                                      ElementsAre(ReproActionIs(ReproAction::Kind::SetStyleProperty,
+                                                                "", "font-family", expected))))));
+}
+
+TEST(ReproFileTest, RejectsNonHexDigitsInUnicodeEscapes) {
+  // RFC 8259 requires exactly four hexadecimal digits in each Unicode escape, including the
+  // second escape of a surrogate pair. These cases do not classify lone-surrogate syntax.
+  for (const std::string_view value : {R"(\u000g)", R"(\uD83D\uDE0z)"}) {
+    SCOPED_TRACE(value);
+    const std::string input = StyleReplayWithEncodedValue(value);
+    EXPECT_FALSE(ParseReproFile(input).has_value());
+  }
 }
 
 TEST(ReproFileTest, RejectsOversizedNumericToken) {

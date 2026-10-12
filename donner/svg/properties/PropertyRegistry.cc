@@ -641,6 +641,58 @@ ParseResult<Overflow> ParseOverflow(std::span<const css::ComponentValue> compone
   return err;
 }
 
+std::optional<RcString> ParseUrlComponent(const css::ComponentValue& component) {
+  if (const auto* token = component.is<css::Token>() ? &component.get<css::Token>() : nullptr) {
+    if (token->is<css::Token::Url>()) {
+      return token->get<css::Token::Url>().value;
+    }
+  }
+
+  if (const auto* function =
+          component.is<css::Function>() ? &component.get<css::Function>() : nullptr;
+      function && function->name.equalsLowercase("url")) {
+    std::span<const css::ComponentValue> values = function->values;
+    SkipWhitespace(values);
+    if (values.empty()) {
+      return std::nullopt;
+    }
+    const auto* string = values.front().tryGetToken<css::Token::String>();
+    if (!string) {
+      return std::nullopt;
+    }
+    values = values.subspan(1);
+    SkipWhitespace(values);
+    if (values.empty()) {
+      return string->value;
+    }
+  }
+  return std::nullopt;
+}
+
+ParseResult<PaintServer> ParsePaintReference(const RcString& url,
+                                             std::span<const css::ComponentValue> fallback) {
+  SkipWhitespace(fallback);
+  if (fallback.empty()) {
+    return PaintServer(PaintServer::ElementReference(url));
+  }
+
+  if (const auto* ident = fallback.front().tryGetToken<css::Token::Ident>();
+      ident && ident->value.equalsLowercase("none")) {
+    std::span<const css::ComponentValue> remaining = fallback.subspan(1);
+    SkipWhitespace(remaining);
+    if (remaining.empty()) {
+      return PaintServer(PaintServer::ElementReference(url));
+    }
+  }
+
+  auto color = css::parser::ColorParser::Parse(fallback);
+  if (color.hasResult()) {
+    return PaintServer(PaintServer::ElementReference(url, color.result()));
+  }
+  return ParseDiagnostic::Error("Invalid paint server url, failed to parse fallback",
+                                fallback.front().sourceOffset());
+}
+
 ParseResult<PaintServer> ParsePaintServer(std::span<const css::ComponentValue> components) {
   if (components.empty()) {
     ParseDiagnostic err;
@@ -675,42 +727,11 @@ ParseResult<PaintServer> ParsePaintServer(std::span<const css::ComponentValue> c
 
         return std::move(result.value());
       }
-    } else if (token.is<css::Token::Url>()) {
-      const auto& url = token.get<css::Token::Url>();
-
-      // Extract the fallback if it is provided.
-      for (size_t i = 1; i < components.size(); ++i) {
-        const auto& component = components[i];
-        if (component.is<css::Token>()) {
-          const auto& token = component.get<css::Token>();
-          if (token.is<css::Token::Whitespace>()) {
-            continue;
-          } else if (token.is<css::Token::Ident>()) {
-            const RcString& value = token.get<css::Token::Ident>().value;
-            if (value.equalsLowercase("none")) {
-              // TODO(jwmcglynn): Is there a difference between omitted and "none"?
-              return PaintServer(PaintServer::ElementReference(url.value, std::nullopt));
-            }
-          }
-        }
-
-        // If we couldn't identify a fallback yet, try parsing it as a color.
-        auto colorResult = css::parser::ColorParser::Parse(components.subspan(i));
-        if (colorResult.hasResult()) {
-          return PaintServer(PaintServer::ElementReference(url.value, colorResult.result()));
-        } else {
-          // Invalid paint.
-          ParseDiagnostic err;
-          err.reason = "Invalid paint server url, failed to parse fallback";
-          err.range.start = components[i].sourceOffset();
-          return err;
-        }
-      }
-
-      // If we finished looping over additional tokens and didn't return, there is no fallback, only
-      // whitespace.
-      return PaintServer(PaintServer::ElementReference(url.value, std::nullopt));
     }
+  }
+
+  if (const std::optional<RcString> url = ParseUrlComponent(firstComponent)) {
+    return ParsePaintReference(*url, components.subspan(1));
   }
 
   // If we couldn't parse yet, try parsing as a color.
@@ -741,6 +762,27 @@ ParseResult<FillRule> ParseFillRule(std::span<const css::ComponentValue> compone
 
   ParseDiagnostic err;
   err.reason = "Invalid fill rule";
+  err.range.start = !components.empty() ? components.front().sourceOffset() : FileOffset::Offset(0);
+  return err;
+}
+
+ParseResult<ColorInterpolation> ParseColorInterpolation(
+    std::span<const css::ComponentValue> components) {
+  if (components.size() == 1) {
+    if (const auto* ident = components.front().tryGetToken<css::Token::Ident>()) {
+      if (ident->value.equalsLowercase("srgb")) {
+        return ColorInterpolation::SRGB;
+      }
+      if (ident->value.equalsLowercase("linearrgb")) {
+        return ColorInterpolation::LinearRGB;
+      }
+      if (ident->value.equalsLowercase("auto")) {
+        return ColorInterpolation::Auto;
+      }
+    }
+  }
+  ParseDiagnostic err;
+  err.reason = "Invalid color-interpolation value";
   err.range.start = !components.empty() ? components.front().sourceOffset() : FileOffset::Offset(0);
   return err;
 }
@@ -1514,41 +1556,13 @@ ParseResult<CursorType> ParseCursorType(std::span<const css::ComponentValue> com
   return err;
 }
 
-std::optional<RcString> CursorUrl(const css::ComponentValue& component) {
-  if (const auto* token = component.is<css::Token>() ? &component.get<css::Token>() : nullptr) {
-    if (token->is<css::Token::Url>()) {
-      return token->get<css::Token::Url>().value;
-    }
-  }
-
-  if (const auto* function =
-          component.is<css::Function>() ? &component.get<css::Function>() : nullptr;
-      function && function->name.equalsLowercase("url")) {
-    std::span<const css::ComponentValue> values = function->values;
-    SkipWhitespace(values);
-    if (values.empty()) {
-      return std::nullopt;
-    }
-    const auto* string = values.front().tryGetToken<css::Token::String>();
-    if (!string) {
-      return std::nullopt;
-    }
-    values = values.subspan(1);
-    SkipWhitespace(values);
-    if (values.empty()) {
-      return string->value;
-    }
-  }
-  return std::nullopt;
-}
-
 ParseResult<Cursor> ParseCursor(std::span<const css::ComponentValue> components) {
   Cursor cursor;
   std::span<const css::ComponentValue> remaining = components;
   SkipWhitespace(remaining);
 
   while (!remaining.empty()) {
-    const std::optional<RcString> url = CursorUrl(remaining.front());
+    const std::optional<RcString> url = ParseUrlComponent(remaining.front());
     if (!url) {
       break;
     }
@@ -2570,6 +2584,15 @@ DONNER_CONSTEXPR_MAP auto kProperties =
                        },
                        &registry.maskType);
                  }},  //
+                {"color-interpolation",
+                 [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
+                   return Parse(
+                       params,
+                       [](const parser::PropertyParseFnParams& params) {
+                         return ParseColorInterpolation(params.components());
+                       },
+                       &registry.colorInterpolation);
+                 }},
                 {"color-interpolation-filters",
                  [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
                    return Parse(
