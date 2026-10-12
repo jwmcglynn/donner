@@ -2832,6 +2832,72 @@ TEST(RendererPublicApiTest, RotatedMaskRegionCoverageIsIndependentOfContentRepre
                                        editor::tests::PixelmatchIdentityParams());
 }
 
+namespace {
+
+RendererBitmap RenderRotatedMaskContent(std::string_view maskContent) {
+  const std::string source = std::string(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24">
+      <defs>
+        <mask id="inner" maskUnits="userSpaceOnUse" x="-64" y="-64" width="128" height="128"
+              mask-type="alpha">
+          <rect x="-64" y="-64" width="128" height="128" fill="white"/>
+        </mask>
+        <mask id="m" maskUnits="userSpaceOnUse" x="4" y="4" width="16" height="12"
+              mask-type="alpha">
+  )svg") + std::string(maskContent) +
+                             R"svg(
+        </mask>
+      </defs>
+      <g mask="url(#m)" transform="rotate(17 12 12) translate(0.25 0.125)">
+        <rect x="-64" y="-64" width="128" height="128" fill="green"/>
+      </g>
+    </svg>
+  )svg";
+  SVGDocument document = ParseDocument(source);
+  Renderer renderer;
+  renderer.draw(document);
+  return NormalizeSnapshot(renderer.takeSnapshot());
+}
+
+}  // namespace
+
+TEST(RendererPublicApiTest, RotatedMaskRegionIntersectsOpaqueOverlapsOnce) {
+  const auto single = RenderRotatedMaskContent(
+      R"svg(<rect x="-64" y="-64" width="128" height="128" fill="white"/>)svg");
+  const auto duplicated = RenderRotatedMaskContent(R"svg(
+      <rect x="-64" y="-64" width="128" height="128" fill="white"/>
+      <rect x="-64" y="-64" width="128" height="128" fill="white"/>
+  )svg");
+  ASSERT_THAT(single.empty(), testing::IsFalse());
+  EXPECT_THAT(PixelAt(single, 12, 10), ElementsAre(0, 128, 0, 255));
+  editor::tests::CompareBitmapToBitmap(duplicated, single, "mask-region-opaque-overlaps",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(RendererPublicApiTest, RotatedMaskRegionIntersectsIsolatedGroupOnce) {
+  const auto flat = RenderRotatedMaskContent(
+      R"svg(<rect x="-64" y="-64" width="128" height="128" fill="white" opacity="0.5"/>)svg");
+  const auto isolated = RenderRotatedMaskContent(R"svg(
+      <g opacity="0.5"><rect x="-64" y="-64" width="128" height="128" fill="white"/></g>
+  )svg");
+  ASSERT_THAT(flat.empty(), testing::IsFalse());
+  EXPECT_THAT(PixelAt(flat, 12, 10), Rgba(_, _, _, testing::Gt(100)));
+  editor::tests::CompareBitmapToBitmap(isolated, flat, "mask-region-isolated-group",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(RendererPublicApiTest, RotatedMaskRegionIntersectsNestedMaskOnce) {
+  const auto flat = RenderRotatedMaskContent(
+      R"svg(<rect x="-64" y="-64" width="128" height="128" fill="white"/>)svg");
+  const auto nested = RenderRotatedMaskContent(R"svg(
+      <g mask="url(#inner)"><rect x="-64" y="-64" width="128" height="128" fill="white"/></g>
+  )svg");
+  ASSERT_THAT(flat.empty(), testing::IsFalse());
+  EXPECT_THAT(PixelAt(flat, 12, 10), ElementsAre(0, 128, 0, 255));
+  editor::tests::CompareBitmapToBitmap(nested, flat, "mask-region-nested-mask",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
 TEST(RendererPublicApiTest, LinearRgbMaskConvertsStraightColorBeforeApplyingAlpha) {
   for (bool replaySnapshot : {false, true}) {
     SCOPED_TRACE(replaySnapshot ? "snapshot" : "document");
