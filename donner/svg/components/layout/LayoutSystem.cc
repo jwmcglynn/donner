@@ -759,7 +759,11 @@ Box2d LayoutSystem::calculateSizedElementBounds(EntityHandle entity,
 
   Vector2d size = inheritedViewBox.size();
   if (const auto* viewBox = entity.try_get<ViewBoxComponent>()) {
-    if (!properties.width.isSpecified() && !properties.height.isSpecified() && viewBox->viewBox) {
+    const auto* elementType = entity.try_get<ElementTypeComponent>();
+    const bool isSvg = elementType && elementType->type() == ElementType::SVG;
+    // An omitted SVG viewport size is 100% of the parent, independent of its viewBox.
+    if (!isSvg && !properties.width.isSpecified() && !properties.height.isSpecified() &&
+        viewBox->viewBox) {
       size = viewBox->viewBox->size();
     }
 
