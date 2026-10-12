@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64">
+  <defs><linearGradient id="paint"><stop stop-color="red"/><stop offset="1" stop-color="blue"/></linearGradient></defs>
+  <rect x="1" y="1" width="16" height="16" fill="url('#paint') red" stroke="url(&quot;#paint&quot;) none"/>
+  <rect x="20" y="1" width="16" height="16" style="fill:url('#paint') red;stroke:url(&quot;#paint\&quot;quoted&quot;) none"/>
+  <rect x="1" y="20" width="16" height="16" fill="url('#paint') none red"/>
+  <rect x="20" y="20" width="16" height="16" fill="url(&quot;#paint&quot; extra)"/>
+</svg>

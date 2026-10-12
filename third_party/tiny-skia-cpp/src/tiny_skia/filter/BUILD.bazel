@@ -3,11 +3,24 @@
 load("//:bazel/defs.bzl", "tiny_skia_cc_library")
 
 tiny_skia_cc_library(
+    name = "color_space",
+    srcs = ["ColorSpace.cpp"],
+    hdrs = [
+        "ColorSpace.h",
+        "FloatPixmap.h",
+        "SimdVec.h",
+    ],
+    include_prefix = "tiny_skia/filter",
+    strip_include_prefix = ".",
+    visibility = ["//visibility:public"],
+    deps = ["//src/tiny_skia:tiny_skia_core"],
+)
+
+tiny_skia_cc_library(
     name = "filter",
     srcs = [
         "Blend.cpp",
         "ColorMatrix.cpp",
-        "ColorSpace.cpp",
         "ComponentTransfer.cpp",
         "Composite.cpp",
         "ConvolveMatrix.cpp",
@@ -25,20 +38,17 @@ tiny_skia_cc_library(
     hdrs = [
         "Blend.h",
         "ColorMatrix.h",
-        "ColorSpace.h",
         "ComponentTransfer.h",
         "Composite.h",
         "ConvolveMatrix.h",
         "DisplacementMap.h",
         "FilterGraph.h",
-        "FloatPixmap.h",
         "Flood.h",
         "GaussianBlur.h",
         "Lighting.h",
         "Merge.h",
         "Morphology.h",
         "Offset.h",
-        "SimdVec.h",
         "Tile.h",
         "Turbulence.h",
         "TurbulenceKernel.h",
@@ -47,6 +57,7 @@ tiny_skia_cc_library(
     strip_include_prefix = ".",
     visibility = ["//visibility:public"],
     deps = [
+        ":color_space",
         "//src/tiny_skia:tiny_skia_core",
     ],
     alwayslink = True,  # link-order independence (#665)

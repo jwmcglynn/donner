@@ -7,6 +7,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <initializer_list>
 #include <limits>
 #include <optional>
 #include <string_view>
@@ -1521,6 +1522,219 @@ TEST(SfntUtils, CffCharStringNumberEncodingsRequireAllOperandBytes) {
   ASSERT_EQ(complete.status, CffOutlineValidationStatus::Complete);
   ASSERT_THAT(complete.glyphs, testing::SizeIs(1));
   EXPECT_EQ(complete.glyphs[0].maximumVertices, 3u);
+}
+
+MATCHER_P(CffCompleteWithVertices, expectedVertices,
+          "completes with one glyph bounded by " + testing::PrintToString(expectedVertices) +
+              " vertices") {
+  return testing::ExplainMatchResult(
+      testing::AllOf(
+          testing::Field("status", &CffOutlineValidationResult::status,
+                         testing::Eq(CffOutlineValidationStatus::Complete)),
+          testing::Field("work", &CffOutlineValidationResult::work, testing::Gt(0u)),
+          testing::Field("glyphs", &CffOutlineValidationResult::glyphs,
+                         testing::ElementsAre(testing::Field(
+                             "maximumVertices", &CffGlyphOutlineComplexity::maximumVertices,
+                             testing::Eq(expectedVertices))))),
+      arg, result_listener);
+}
+
+TEST(SfntUtils, CffSubroutineBiasTransitionsSelectTheFirstAndLastObjects) {
+  struct BiasCase {
+    std::size_t count;
+    int32_t bias;
+  };
+  for (const BiasCase item :
+       {BiasCase{1239, 107}, BiasCase{1240, 1131}, BiasCase{33899, 1131}, BiasCase{33900, 32768}}) {
+    SCOPED_TRACE(item.count);
+    std::vector<std::vector<uint8_t>> subrs(item.count, {11});
+    subrs.front() = {149, 139, 5, 11};
+    subrs.back() = {149, 139, 5, 149, 139, 5, 11};
+    for (const bool global : {false, true}) {
+      SCOPED_TRACE(global);
+      std::vector<uint8_t> program{139, 139, 21};
+      for (const int32_t object : {0, static_cast<int32_t>(item.count - 1)}) {
+        const uint16_t encoded = static_cast<uint16_t>(object - item.bias);
+        program.insert(program.end(), {28, static_cast<uint8_t>(encoded >> 8),
+                                       static_cast<uint8_t>(encoded), uint8_t(global ? 29 : 10)});
+      }
+      program.push_back(14);
+      const auto table =
+          global ? MakeCff1WithSubrs(program, {}, subrs) : MakeCff1WithSubrs(program, subrs);
+      const auto result = ValidateCffOutlineComplexities(table, false, 1);
+      EXPECT_THAT(result, CffCompleteWithVertices(5u));
+    }
+  }
+}
+
+TEST(SfntUtils, Cff1OptionalWidthsAndContourClosuresPreserveOutlineCosts) {
+  struct ProgramCase {
+    const char* name;
+    std::vector<uint8_t> program;
+    uint32_t vertices;
+  };
+  const ProgramCase cases[] = {
+      {"space width", {248, 136, 14}, 0},
+      {"horizontal move width", {248, 136, 139, 22, 149, 139, 5, 14}, 3},
+      {"vertical move width", {248, 136, 139, 4, 149, 139, 5, 14}, 3},
+      {"relative move width", {248, 136, 139, 139, 21, 149, 139, 5, 14}, 3},
+      {"horizontal stem width", {248, 136, 139, 149, 1, 139, 139, 21, 149, 139, 5, 14}, 3},
+      {"vertical stem width", {248, 136, 139, 149, 3, 139, 139, 21, 149, 139, 5, 14}, 3},
+      {"two contours", {139, 139, 21, 149, 139, 5, 149, 139, 21, 149, 139, 5, 14}, 6},
+  };
+  for (const auto& item : cases) {
+    SCOPED_TRACE(item.name);
+    EXPECT_THAT(ValidateCffOutlineComplexities(MakeCff1WithSubrs(item.program, {}), false, 1),
+                CffCompleteWithVertices(item.vertices));
+  }
+}
+
+TEST(SfntUtils, Cff2EmptyNonPrintingGlyphRequiresNoCharStringOrOutlineStorage) {
+  const auto result = ValidateCffOutlineComplexities(MakeCff2WithCharString({}), true, 1);
+  EXPECT_THAT(result, CffCompleteWithVertices(0u));
+  ASSERT_THAT(result.glyphs, testing::SizeIs(1));
+  EXPECT_THAT(result.glyphs[0].work, testing::Eq(0u));
+}
+
+TEST(SfntUtils, Cff1StemHintsAtTheFormatLimitDoNotAddOutlineVertices) {
+  for (const std::size_t hintCount : {96u, 97u}) {
+    SCOPED_TRACE(hintCount);
+    std::vector<uint8_t> program;
+    for (std::size_t start = 0; start < hintCount; start += 24) {
+      const std::size_t count = std::min(std::size_t{24}, hintCount - start);
+      for (std::size_t hint = 0; hint < count; ++hint) {
+        program.push_back(EncodeSmallInteger(hint == 0 ? start : 0));
+        program.push_back(140);
+      }
+      program.push_back(18);
+    }
+    program.push_back(19);
+    program.insert(program.end(), (hintCount + 7) / 8, 0xff);
+    if (hintCount % 8 != 0) {
+      program.back() = uint8_t(0xff << (8 - hintCount % 8));
+    }
+    program.insert(program.end(), {139, 139, 21, 149, 139, 5, 14});
+    const auto result = ValidateCffOutlineComplexities(MakeCff1WithSubrs(program, {}), false, 1);
+    if (hintCount == 96) {
+      EXPECT_THAT(result, CffCompleteWithVertices(3u));
+    } else {
+      EXPECT_THAT(result.status, testing::Eq(CffOutlineValidationStatus::Invalid));
+      EXPECT_THAT(result.glyphs, testing::IsEmpty());
+    }
+  }
+}
+
+TEST(SfntUtils, CffDrawingOperatorsRejectOnlyTheirMalformedOperandCounts) {
+  struct OperatorCase {
+    uint8_t op;
+    uint8_t operands;
+    bool escaped = false;
+  };
+  const OperatorCase cases[] = {
+      {5, 1},         {5, 3},         {8, 5},        {8, 7},         {24, 7},        {24, 9},
+      {25, 7},        {25, 9},        {26, 3},       {26, 6},        {27, 3},        {27, 6},
+      {30, 3},        {30, 6},        {31, 3},       {31, 6},        {34, 6, true},  {34, 8, true},
+      {35, 12, true}, {35, 14, true}, {36, 8, true}, {36, 10, true}, {37, 10, true}, {37, 12, true},
+  };
+  for (const auto& item : cases) {
+    SCOPED_TRACE(int(item.op));
+    SCOPED_TRACE(int(item.operands));
+    std::vector<uint8_t> program{139, 139, 21};
+    program.insert(program.end(), item.operands, 139);
+    if (item.escaped) {
+      program.push_back(12);
+    }
+    program.insert(program.end(), {item.op, 14});
+    const auto result = ValidateCffOutlineComplexities(MakeCff1WithSubrs(program, {}), false, 1);
+    EXPECT_THAT(result.status, testing::Eq(CffOutlineValidationStatus::Invalid));
+    EXPECT_THAT(result.glyphs, testing::IsEmpty());
+  }
+}
+
+TEST(SfntUtils, Cff1ExplicitType2AndExtendedHeadersRetainTheSameGlyph) {
+  EXPECT_THAT(
+      ValidateCffOutlineComplexities(
+          MakeCff1WithSubrs({139, 139, 21, 149, 139, 5, 14}, {}, {}, {141, 12, 6}), false, 1),
+      CffCompleteWithVertices(3u));
+  for (const std::size_t padding : {1u, 4u, 32u}) {
+    SCOPED_TRACE(padding);
+    auto table = MakeCff1();
+    table.insert(table.begin() + 4, padding, 0);
+    table[2] = static_cast<uint8_t>(4 + padding);
+    table[15 + padding] = EncodeSmallInteger(21 + padding);
+    EXPECT_THAT(ValidateCffOutlineComplexities(table, false, 1), CffCompleteWithVertices(3u));
+  }
+}
+
+TEST(SfntUtils, CffMalformedHeadersAndImpossibleSfntGlyphCountsPublishNoGlyphs) {
+  struct HeaderCase {
+    std::size_t offset;
+    uint8_t byte;
+    bool cff2 = false;
+  };
+  const HeaderCase cases[] = {
+      {0, 0}, {0, 2},       {2, 0},       {2, 3},       {2, 255},       {3, 0},
+      {3, 5}, {0, 1, true}, {2, 0, true}, {2, 4, true}, {2, 255, true}, {3, 255, true},
+  };
+  for (const auto& item : cases) {
+    SCOPED_TRACE(item.offset);
+    SCOPED_TRACE(int(item.byte));
+    auto table = item.cff2 ? MakeCff2() : MakeCff1();
+    table[item.offset] = item.byte;
+    const auto result = ValidateCffOutlineComplexities(table, item.cff2, 1);
+    EXPECT_THAT(result.status, testing::Eq(CffOutlineValidationStatus::Invalid));
+    EXPECT_THAT(result.glyphs, testing::IsEmpty());
+  }
+  for (const std::size_t glyphCount : {0u, 65536u}) {
+    SCOPED_TRACE(glyphCount);
+    const auto result = ValidateCffOutlineComplexities(MakeCff1(), false, glyphCount);
+    EXPECT_THAT(result.status, testing::Eq(CffOutlineValidationStatus::Invalid));
+    EXPECT_THAT(result.work, testing::Eq(0u));
+    EXPECT_THAT(result.glyphs, testing::IsEmpty());
+  }
+}
+
+/// A one-axis CFF2 variation store with one region and no item delta rows.
+std::vector<uint8_t> MakeCff2WithVariationStore() {
+  const auto globals = MakeCffIndex({}, true);
+  const auto chars = MakeCffIndex({{139, 15, 139, 139, 21, 149, 139, 5}}, true);
+  const auto fontDicts = MakeCffIndex({{139, 139, 18}}, true);
+  const std::vector<uint8_t> store{
+      0, 30,  // Length of the ItemVariationStore.
+      0, 1,  0, 0,    0, 12,   0, 1, 0, 0, 0, 22, 0, 1, 0,
+      1, 0,  0, 0x40, 0, 0x40, 0, 0, 0, 0, 0, 0,  1, 0, 0,
+  };
+  std::vector<uint8_t> top;
+  for (int iteration = 0; iteration < 8; ++iteration) {
+    const std::size_t charOffset = 5 + top.size() + globals.size();
+    const std::size_t dictOffset = charOffset + chars.size();
+    const std::size_t storeOffset = dictOffset + fontDicts.size();
+    auto next = EncodeDictInteger(charOffset);
+    next.push_back(17);
+    const auto append = [&](std::size_t value, std::initializer_list<uint8_t> op) {
+      const auto encoded = EncodeDictInteger(value);
+      next.insert(next.end(), encoded.begin(), encoded.end());
+      next.insert(next.end(), op.begin(), op.end());
+    };
+    append(dictOffset, {12, 36});
+    append(storeOffset, {24});
+    if (next == top) {
+      break;
+    }
+    top = std::move(next);
+  }
+  std::vector<uint8_t> table{2, 0, 5, 0, static_cast<uint8_t>(top.size())};
+  for (const auto& section : {top, globals, chars, fontDicts, store}) {
+    table.insert(table.end(), section.begin(), section.end());
+  }
+  return table;
+}
+
+TEST(SfntUtils, Cff2VariationStoreIsARecognizedUnsupportedProfile) {
+  const auto result = ValidateCffOutlineComplexities(MakeCff2WithVariationStore(), true, 1);
+  EXPECT_THAT(result.status, testing::Eq(CffOutlineValidationStatus::UnsupportedVariation));
+  EXPECT_THAT(result.work, testing::Gt(0u));
+  EXPECT_THAT(result.glyphs, testing::IsEmpty());
 }
 
 }  // namespace donner::fonts

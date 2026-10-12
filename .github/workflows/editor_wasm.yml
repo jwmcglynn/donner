@@ -1,5 +1,10 @@
 name: Editor WASM
 
+# Keep third-party Bazel module telemetry off, as the telemetry section of .bazelrc explains.
+env:
+  DO_NOT_TRACK: "1"
+  ASPECT_TOOLS_TELEMETRY: "-all"
+
 on:
   push:
     branches: ["main"]

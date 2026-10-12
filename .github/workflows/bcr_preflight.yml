@@ -1,5 +1,10 @@
 name: BCR Preflight
 
+# Keep third-party Bazel module telemetry off, as the telemetry section of .bazelrc explains.
+env:
+  DO_NOT_TRACK: "1"
+  ASPECT_TOOLS_TELEMETRY: "-all"
+
 on:
   push:
     branches: [main]
@@ -23,6 +28,8 @@ on:
       - third_party/**
       - tools/BUILD.bazel
       - tools/bcr_*.py
+      - tools/notice_coverage*.py
+      - tools/render_notice.py
       - "tools/ci/**"
       - tools/release_cli*.py
       - tools/release_artifact_publisher*.py
@@ -195,10 +202,13 @@ jobs:
         run: |
           # The repository ignores MODULE.bazel.lock. Resolve once, then prove
           # the build is complete under that generated, retained lockfile.
-          bazelisk build --lockfile_mode=update -c opt //tools/ci:release_svg
-          bazelisk build --lockfile_mode=error -c opt //tools/ci:release_svg
+          bazelisk build --lockfile_mode=update -c opt //tools/ci:release_svg //tools/ci:release_svg_notice
+          bazelisk build --lockfile_mode=error -c opt //tools/ci:release_svg //tools/ci:release_svg_notice
+          # The NOTICE must attribute every third-party component in this configuration's closure.
+          bazelisk test --lockfile_mode=error -c opt //tools/ci:release_svg_notice_coverage
           python3 -B -m tools.release_cli package \
             --platform linux-x86-64 --binary bazel-bin/donner/svg/tool/donner-svg \
+            --notice bazel-bin/third_party/licenses/notice_cli.txt \
             --output "$RUNNER_TEMP/donner-cli-linux" --commit "$SOURCE_COMMIT" \
             --run-id "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT"
       - uses: actions/upload-artifact@v7
@@ -223,10 +233,13 @@ jobs:
           bazelisk-cache: true
       - name: Build and bind the macOS CLI to the preflight candidate
         run: |
-          bazelisk build --lockfile_mode=update -c opt //tools/ci:release_svg
-          bazelisk build --lockfile_mode=error -c opt //tools/ci:release_svg
+          bazelisk build --lockfile_mode=update -c opt //tools/ci:release_svg //tools/ci:release_svg_notice
+          bazelisk build --lockfile_mode=error -c opt //tools/ci:release_svg //tools/ci:release_svg_notice
+          # The NOTICE must attribute every third-party component in this configuration's closure.
+          bazelisk test --lockfile_mode=error -c opt //tools/ci:release_svg_notice_coverage
           python3 -B -m tools.release_cli package \
             --platform darwin-arm64 --binary bazel-bin/donner/svg/tool/donner-svg \
+            --notice bazel-bin/third_party/licenses/notice_cli.txt \
             --output "$RUNNER_TEMP/donner-cli-macos" --commit "$SOURCE_COMMIT" \
             --run-id "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT"
       - uses: actions/upload-artifact@v7
@@ -294,8 +307,10 @@ jobs:
             ${{ runner.temp }}/donner-bcr/source/*.tar.gz
             ${{ runner.temp }}/donner-bcr/cli-linux/donner-svg_linux_x86_64
             ${{ runner.temp }}/donner-bcr/cli-linux/donner-svg_linux_x86_64.bazel.lock
+            ${{ runner.temp }}/donner-bcr/cli-linux/donner-svg_linux_x86_64.NOTICE.txt
             ${{ runner.temp }}/donner-bcr/cli-macos/donner-svg_darwin_arm64
             ${{ runner.temp }}/donner-bcr/cli-macos/donner-svg_darwin_arm64.bazel.lock
+            ${{ runner.temp }}/donner-bcr/cli-macos/donner-svg_darwin_arm64.NOTICE.txt
 
   qualify:
     needs: [prepare, consumer, cli-linux, cli-macos]
