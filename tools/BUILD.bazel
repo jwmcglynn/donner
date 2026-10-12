@@ -476,12 +476,16 @@ py_test(
 py_test(
     name = "sanitizer_allocator_isolation_tests",
     size = "small",
-    srcs = ["sanitizer_allocator_isolation_tests.py"],
+    srcs = [
+        "sanitizer_allocator_isolation_tests.py",
+        "test_executable_fixtures.py",
+    ],
     data = [
         "//:.github/workflows/sanitizers.yml",
         "//tools/ci:BUILD.bazel",
         "//tools/ci:test_with_exclusions.py",
     ],
+    imports = ["."],
     deps = ["@rules_python//python/runfiles"],
 )
 
