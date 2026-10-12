@@ -1344,6 +1344,106 @@ TEST(RenderCoordinatorTest, CanvasCommitThrottleRunsOnTheSchedulingClock) {
       << "the throttle elapses on the scheduling clock, whatever the steady clock says";
 }
 
+TEST(RenderCoordinatorTest, HiDpiCanvasCommitRebuildsAnAlreadyRenderedTree) {
+  EditorApp app;
+  ASSERT_THAT(app.loadFromString(kTwoRectSvg), testing::IsTrue());
+  app.document().document().setCanvasSize(100, 100);
+  const svg::SVGElement target = QuerySelector(app, "#r1");
+  const std::uint64_t versionBefore = app.document().currentFrameVersion();
+  RenderCoordinator coordinator;
+  SelectTool selectTool;
+  RenderCoordinatorTestAccess::useFakeSchedulingClock(coordinator);
+  ViewportState viewport = MakeViewport(app);
+  viewport.devicePixelRatio = 2.0;
+  ASSERT_THAT(viewport.desiredCanvasSize(), testing::Eq(Vector2i(200, 200)));
+  ASSERT_THAT(coordinator.documentPixelCaptureEnabled(), testing::IsFalse());
+
+  ASSERT_THAT(coordinator.maybeRequestRender(app, selectTool, viewport, nullptr),
+              testing::IsTrue());
+  ASSERT_THAT(coordinator.asyncRenderer().waitUntilNoRenderInFlightForTesting(
+                  std::chrono::steady_clock::now() + std::chrono::seconds(2)),
+              testing::IsTrue());
+  const std::optional<RenderResult> before = coordinator.asyncRenderer().pollResult();
+  ASSERT_THAT(before, testing::Optional(testing::_));
+  ASSERT_THAT(before->rasterViewport.outputSizePx, testing::Eq(viewport.desiredCanvasSize()));
+  RenderCoordinatorTestAccess::noteRenderCompleted(coordinator, before->version,
+                                                   before->rasterViewport);
+  const auto representedFill = target.resolvedFillPaint();
+  ASSERT_THAT(representedFill, testing::Optional(testing::_));
+
+  RenderCoordinatorTestAccess::advanceFakeSchedulingClock(std::chrono::milliseconds(119));
+  EXPECT_THAT(coordinator.maybeRequestRender(app, selectTool, viewport, nullptr),
+              testing::IsFalse());
+  EXPECT_THAT(coordinator.documentCanvasCommitTotal(), testing::Eq(0u));
+  RenderCoordinatorTestAccess::advanceFakeSchedulingClock(std::chrono::milliseconds(1));
+  const bool requested = coordinator.maybeRequestRender(app, selectTool, viewport, nullptr);
+  EXPECT_THAT(coordinator.documentCanvasCommitTotal(), testing::Eq(1u));
+  EXPECT_THAT(app.document().currentFrameVersion(), testing::Eq(versionBefore));
+  EXPECT_THAT(requested, testing::IsTrue())
+      << "The real canvas commit invalidates the render tree even when its raster is current.";
+  ASSERT_THAT(coordinator.asyncRenderer().waitUntilNoRenderInFlightForTesting(
+                  std::chrono::steady_clock::now() + std::chrono::seconds(2)),
+              testing::IsTrue());
+  EXPECT_THAT(target.resolvedFillPaint(), testing::Eq(representedFill))
+      << "The committed canvas needs a rebuilt rendering instance without another document edit.";
+  const std::optional<RenderResult> rebuilt = coordinator.asyncRenderer().pollResult();
+  ASSERT_THAT(rebuilt, testing::Optional(testing::_));
+  RenderCoordinatorTestAccess::noteRenderCompleted(coordinator, rebuilt->version,
+                                                   rebuilt->rasterViewport);
+  EXPECT_THAT(coordinator.maybeRequestRender(app, selectTool, viewport, nullptr),
+              testing::IsFalse())
+      << "An unchanged, represented canvas must not keep requesting renders.";
+  EXPECT_THAT(coordinator.documentCanvasCommitTotal(), testing::Eq(1u));
+}
+
+TEST(RenderCoordinatorTest, BusyWorkerDoesNotLoseAHiDpiCanvasCommitRender) {
+  EditorApp app;
+  ASSERT_THAT(app.loadFromString(kTwoRectSvg), testing::IsTrue());
+  app.document().document().setCanvasSize(100, 100);
+  const svg::SVGElement target = QuerySelector(app, "#r1");
+  RenderCoordinator coordinator;
+  SelectTool selectTool;
+  RenderCoordinatorTestAccess::useFakeSchedulingClock(coordinator);
+  ViewportState viewport = MakeViewport(app);
+  viewport.devicePixelRatio = 2.0;
+  const auto completeRender = [&]() {
+    EXPECT_THAT(coordinator.asyncRenderer().waitUntilNoRenderInFlightForTesting(
+                    std::chrono::steady_clock::now() + std::chrono::seconds(2)),
+                testing::IsTrue());
+    const std::optional<RenderResult> result = coordinator.asyncRenderer().pollResult();
+    EXPECT_THAT(result, testing::Optional(testing::_));
+    if (result) {
+      RenderCoordinatorTestAccess::noteRenderCompleted(coordinator, result->version,
+                                                       result->rasterViewport);
+    }
+  };
+  ASSERT_THAT(coordinator.maybeRequestRender(app, selectTool, viewport, nullptr),
+              testing::IsTrue());
+  completeRender();
+  const auto representedFill = target.resolvedFillPaint();
+  ASSERT_THAT(representedFill, testing::Optional(testing::_));
+
+  coordinator.asyncRenderer().setReplayRenderDelayForTesting(std::chrono::milliseconds(100));
+  coordinator.requestPresentationRefresh();
+  ASSERT_THAT(coordinator.maybeRequestRender(app, selectTool, viewport, nullptr),
+              testing::IsTrue());
+  ASSERT_THAT(coordinator.asyncRenderer().isBusy(), testing::IsTrue());
+  RenderCoordinatorTestAccess::advanceFakeSchedulingClock(std::chrono::milliseconds(120));
+  EXPECT_THAT(coordinator.maybeRequestRender(app, selectTool, viewport, nullptr),
+              testing::IsFalse());
+  EXPECT_THAT(coordinator.documentCanvasCommitTotal(), testing::Eq(0u));
+  completeRender();
+  coordinator.asyncRenderer().setReplayRenderDelayForTesting(std::chrono::milliseconds(0));
+
+  EXPECT_THAT(coordinator.maybeRequestRender(app, selectTool, viewport, nullptr),
+              testing::IsTrue());
+  EXPECT_THAT(coordinator.documentCanvasCommitTotal(), testing::Eq(1u));
+  completeRender();
+  EXPECT_THAT(target.resolvedFillPaint(), testing::Eq(representedFill));
+  EXPECT_THAT(coordinator.maybeRequestRender(app, selectTool, viewport, nullptr),
+              testing::IsFalse());
+}
+
 // The idle loop wakes for a pending pixel-capture canvas commit; that wake must count down on the
 // same scheduling clock as the throttle it waits for.
 TEST(RenderCoordinatorTest, PixelCaptureCanvasCommitWakeRunsOnTheSchedulingClock) {

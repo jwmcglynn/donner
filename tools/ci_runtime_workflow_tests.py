@@ -1081,10 +1081,11 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         The module is built explicitly: it is incompatible without Browser selection, and an
         incompatible audit inside a test_suite is skipped rather than failed.
         """
-        workflow = self.editor_wasm
+        self._assert_editor_wasm_browser_bridge_link(self.editor_wasm)
+
+    def _assert_editor_wasm_browser_bridge_link(self, workflow):
         build_job = workflow.split("\n  build:\n", 1)[1].split("\n  test:\n", 1)[0]
-        self.assertIn("- name: Link the browser GPU bridge", build_job)
-        link = build_job.split("- name: Link the browser GPU bridge", 1)[1]
+        link = self._step_body(build_job, "Link the browser GPU bridge")
         build = link.split("bazelisk build --config=wasm-geode", 1)[1].split("bazelisk test", 1)[0]
         self.assertIn("//tools/ci:browser_bridge_link_probes", build)
         self.assertIn("//tools/ci:geode_wasm_browser_module", build)
@@ -1095,6 +1096,30 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         self.assertIn(module, self.ci_target_definitions)
         definition = self.ci_target_definitions.split(module, 1)[1].split("\n)", 1)[0]
         self.assertIn('srcs = ["//donner/svg/renderer/wasm:donner_wasm_geode"]', definition)
+
+    def test_browser_bridge_step_stays_strict_with_later_evidence_recovery(self):
+        workflow = self.editor_wasm
+        link = self._step_body(workflow, "Link the browser GPU bridge")
+        self.assertIn("continue-on-error: true", workflow)
+        self.assertNotIn("continue-on-error", link)
+        self._assert_editor_wasm_browser_bridge_link(workflow)
+        for defect in ("continue-on-error", "missing-module", "missing-audit"):
+            with self.subTest(defect=defect):
+                if defect == "continue-on-error":
+                    changed = "        continue-on-error: true\n" + link
+                else:
+                    target = (
+                        "//tools/ci:geode_wasm_browser_module" if defect == "missing-module"
+                        else "//tools/ci:geode_wasm_browser_default_audit"
+                    )
+                    changed = link.replace(target, "//tools/ci:unrelated_target")
+                    # A later mention cannot satisfy the owning link step's contract.
+                    changed_workflow = workflow.replace(link, changed, 1)
+                    changed_workflow += "\n# Later target mention: " + target + "\n"
+                if defect == "continue-on-error":
+                    changed_workflow = workflow.replace(link, changed, 1)
+                with self.assertRaises(AssertionError):
+                    self._assert_editor_wasm_browser_bridge_link(changed_workflow)
 
     def _size_check_step(self, workflow):
         """The workflow step that builds and size-checks the editor Wasm package.

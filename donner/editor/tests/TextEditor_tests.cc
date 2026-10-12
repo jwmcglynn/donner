@@ -236,6 +236,22 @@ protected:
     ImGui::Render();
   }
 
+  std::vector<ImDrawVert> SourceVerticesForVisualLine(int line) const {
+    const ImVec2 center = ScreenPointAtVisualTextOffset(line, 0);
+    const float top = center.y - CharacterAdvanceY() * 0.5f;
+    const float bottom = top + CharacterAdvanceY();
+    std::vector<ImDrawVert> vertices;
+    const ImDrawData* data = ImGui::GetDrawData();
+    for (const ImDrawList* list : data->CmdLists) {
+      for (const ImDrawVert& vertex : list->VtxBuffer) {
+        if (vertex.pos.x >= center.x && vertex.pos.y >= top && vertex.pos.y <= bottom) {
+          vertices.push_back(vertex);
+        }
+      }
+    }
+    return vertices;
+  }
+
   // Drives one render frame with keyboard input handling enabled, injecting
   // the supplied modifier state, key presses, and typed characters. ImGui
   // reports `IsKeyPressed` on the frame a key transitions from up→down, so
@@ -5572,6 +5588,302 @@ TEST_F(TextEditorTests, RightClickInTextMovesCursorToClickPosition) {
   EXPECT_EQ(editor.getCursorPosition(), Coordinates(0, 6))
       << "A right-click over text must reposition the caret to the click point.";
   EXPECT_EQ(editor.getText(), "hello world") << "A right-click must not modify the text.";
+}
+
+TEST_F(TextEditorTests, SourceDiagnosticsNormalizeRangesAndRecognizeAnUnchangedSnapshot) {
+  editor.setText("first\nsecond");
+  const SourceDiagnostic shortWarning{.id = 9,
+                                      .severity = DiagnosticSeverity::Warning,
+                                      .range = {6, 8},
+                                      .message = "short warning"};
+  const SourceDiagnostic shortError{.id = 2, .range = {6, 8}, .message = "short error"};
+  const SourceDiagnostic wide{.id = 1, .range = {6, 99}, .message = "wide"};
+  EXPECT_TRUE(editor.setSourceDiagnostics(
+      {wide, shortWarning, shortError, SourceDiagnostic{.id = 4, .range = {99, 100}}}));
+  EXPECT_THAT(editor.sourceDiagnostics(),
+              ::testing::UnorderedElementsAre(
+                  AllOf(Field("id", &SourceDiagnostic::id, 2u),
+                        Field("range", &SourceDiagnostic::range, SourceByteRangeIs(6, 8)),
+                        Field("line", &SourceDiagnostic::line, 2u),
+                        Field("column", &SourceDiagnostic::column, 0u),
+                        Field("endColumn", &SourceDiagnostic::endColumn, 2u)),
+                  Field("id", &SourceDiagnostic::id, 9u),
+                  AllOf(Field("id", &SourceDiagnostic::id, 1u),
+                        Field("range", &SourceDiagnostic::range, SourceByteRangeIs(6, 12)),
+                        Field("endColumn", &SourceDiagnostic::endColumn, 6u))));
+  EXPECT_FALSE(editor.setSourceDiagnostics(
+      {wide, shortWarning, shortError, SourceDiagnostic{.id = 4, .range = {99, 100}}}));
+  EXPECT_THAT(editor.sourceDiagnosticAtByteOffset(6), ::testing::Optional(2u));
+  EXPECT_THAT(editor.sourceDiagnosticAtByteOffset(8), ::testing::Optional(1u));
+  EXPECT_EQ(editor.sourceDiagnosticAtByteOffset(12), std::nullopt);
+}
+
+TEST_F(TextEditorTests, SourceDiagnosticErrorWinsEqualWidthWarning) {
+  editor.setText("abcdef");
+  EXPECT_TRUE(editor.setSourceDiagnostics({
+      SourceDiagnostic{.id = 1, .severity = DiagnosticSeverity::Warning, .range = {1, 5}},
+      SourceDiagnostic{.id = 2, .range = {1, 5}},
+      SourceDiagnostic{.id = 3, .severity = DiagnosticSeverity::Warning, .range = {2, 4}},
+  }));
+  EXPECT_THAT(editor.sourceDiagnosticAtByteOffset(1), ::testing::Optional(2u));
+  EXPECT_THAT(editor.sourceDiagnosticAtByteOffset(2), ::testing::Optional(3u));
+  EXPECT_EQ(editor.sourceDiagnosticAtByteOffset(0), std::nullopt);
+  EXPECT_EQ(editor.sourceDiagnosticAtByteOffset(5), std::nullopt);
+}
+
+TEST_F(TextEditorTests, ReplacingDiagnosticsClearsOnlyMissingActiveId) {
+  editor.setText("abcdef");
+  const SourceDiagnostic first{.id = 1, .range = {0, 2}};
+  const SourceDiagnostic second{.id = 2, .range = {3, 5}};
+  ASSERT_TRUE(editor.setSourceDiagnostics({first, second}));
+  ASSERT_TRUE(editor.setActiveSourceDiagnosticId(2));
+  EXPECT_TRUE(editor.setSourceDiagnostics({second}));
+  EXPECT_THAT(editor.activeSourceDiagnosticId(), ::testing::Optional(2u));
+  EXPECT_TRUE(editor.setSourceDiagnostics({first}));
+  EXPECT_EQ(editor.activeSourceDiagnosticId(), std::nullopt);
+  EXPECT_FALSE(editor.setActiveSourceDiagnosticId(std::nullopt));
+  EXPECT_TRUE(editor.setActiveSourceDiagnosticId(1));
+  EXPECT_TRUE(editor.setActiveSourceDiagnosticId(1));
+  EXPECT_TRUE(editor.setActiveSourceDiagnosticId(std::nullopt));
+  EXPECT_FALSE(editor.setActiveSourceDiagnosticId(std::nullopt));
+}
+
+TEST_F(TextEditorTests, StructuralMoveDecorationNormalizesThenDetectsNoChange) {
+  editor.setText("<svg/>");
+  const TextEditor::SourceStructuralMoveDecoration decoration{
+      .elementRange = {1, 100}, .insertionOffset = 100, .valid = true, .message = "move"};
+  EXPECT_TRUE(editor.setSourceStructuralMoveDecoration(decoration));
+  EXPECT_THAT(editor.sourceStructuralMoveDecoration(),
+              ::testing::Optional(AllOf(
+                  Field("elementRange", &TextEditor::SourceStructuralMoveDecoration::elementRange,
+                        SourceByteRangeIs(1, 6)),
+                  Field("insertionOffset",
+                        &TextEditor::SourceStructuralMoveDecoration::insertionOffset, 6u),
+                  Field("valid", &TextEditor::SourceStructuralMoveDecoration::valid, true),
+                  Field("message", &TextEditor::SourceStructuralMoveDecoration::message, "move"))));
+  EXPECT_FALSE(editor.setSourceStructuralMoveDecoration(decoration));
+  EXPECT_TRUE(editor.setSourceStructuralMoveDecoration(
+      TextEditor::SourceStructuralMoveDecoration{.elementRange = {99, 100}}));
+  EXPECT_EQ(editor.sourceStructuralMoveDecoration(), std::nullopt);
+  EXPECT_FALSE(editor.setSourceStructuralMoveDecoration(std::nullopt));
+}
+
+TEST_F(TextEditorTests, PublicSourceEditsRemapHoverAndStyleRangesThroughUndo) {
+  editor.setText("alpha beta");
+  ASSERT_TRUE(editor.setHoverSourceRanges({{6, 10}}));
+  ASSERT_TRUE(editor.setSourceStyleDecorations({TextEditor::SourceStyleDecoration{
+      .id = 7, .range = {6, 10}, .chipRange = {6, 10}, .ineffective = true}}));
+  editor.setCursorPosition(Coordinates(0, 0));
+  editor.insertText("new ");
+  EXPECT_EQ(editor.getText(), "new alpha beta");
+  EXPECT_THAT(editor.hoverSourceRanges(), ElementsAre(SourceByteRangeIs(10, 14)));
+  EXPECT_THAT(editor.sourceStyleDecorations(),
+              ElementsAre(SourceStyleDecorationIs(7, {10, 14}, true, false, 0, "",
+                                                  SourceByteRange{10, 14})));
+  editor.undo();
+  EXPECT_EQ(editor.getText(), "alpha beta");
+  EXPECT_THAT(editor.hoverSourceRanges(), ElementsAre(SourceByteRangeIs(6, 10)));
+  EXPECT_THAT(
+      editor.sourceStyleDecorations(),
+      ElementsAre(SourceStyleDecorationIs(7, {6, 10}, true, false, 0, "", SourceByteRange{6, 10})));
+  editor.redo();
+  EXPECT_THAT(editor.hoverSourceRanges(), ElementsAre(SourceByteRangeIs(10, 14)));
+}
+
+TEST_F(TextEditorTests, ProcessFindAdvancesAcrossLinesAndWrapsCaseInsensitively) {
+  editor.setText("One\ntwo ONE\nlast one");
+  editor.setCursorPosition(Coordinates(1, 0));
+  editor.processFind("one", true);
+  EXPECT_EQ(editor.getSelectedText(), "ONE");
+  EXPECT_EQ(editor.getCursorPosition(), Coordinates(1, 7));
+  editor.processFind("ONE", true);
+  EXPECT_EQ(editor.getSelectedText(), "one");
+  EXPECT_EQ(editor.getCursorPosition(), Coordinates(2, 8));
+  editor.processFind("one", true);
+  EXPECT_EQ(editor.getSelectedText(), "One");
+  EXPECT_EQ(editor.getCursorPosition(), Coordinates(0, 3));
+}
+
+TEST_F(TextEditorTests, ProcessReplaceAllTracksChangingMultilineOffsetsAndUndo) {
+  editor.setText("first red\nred last\nred");
+  editor.processReplace("red", "blue", true);
+  EXPECT_EQ(editor.getText(), "first blue\nblue last\nblue");
+  EXPECT_EQ(editor.getCursorPosition(), Coordinates(2, 4));
+  editor.undo(3);
+  EXPECT_EQ(editor.getText(), "first red\nred last\nred");
+  editor.redo(3);
+  EXPECT_EQ(editor.getText(), "first blue\nblue last\nblue");
+}
+
+TEST_F(TextEditorTests, CustomTwoKeyShortcutRequiresBothKeys) {
+  editor.setText("one\ntwo\nthree");
+  editor.setCursorPosition(Coordinates(1, 1));
+  editor.setShortcut(TextEditor::ShortcutId::MoveUp, Shortcut(ImGuiKey_F7, ImGuiKey_F8));
+  ResetKeyboardState({ImGuiKey_F7, ImGuiKey_F8});
+  RenderEditorFrameWithKeyboard({ImGuiKey_F7});
+  EXPECT_EQ(editor.getCursorPosition(), Coordinates(1, 1));
+  EXPECT_EQ(editor.getText(), "one\ntwo\nthree");
+  ResetKeyboardState({ImGuiKey_F7, ImGuiKey_F8});
+  RenderEditorFrameWithKeyboard({ImGuiKey_F8});
+  EXPECT_EQ(editor.getCursorPosition(), Coordinates(1, 1));
+  EXPECT_EQ(editor.getText(), "one\ntwo\nthree");
+  ResetKeyboardState({ImGuiKey_F7, ImGuiKey_F8});
+  RenderEditorFrameWithKeyboard({ImGuiKey_F7, ImGuiKey_F8});
+  EXPECT_EQ(editor.getCursorPosition(), Coordinates(0, 1));
+  EXPECT_EQ(editor.getText(), "one\ntwo\nthree");
+}
+
+TEST_F(TextEditorTests, PublicAutocompleteProviderNavigatesUpWithoutMovingSourceCursor) {
+  editor.setText("valu");
+  editor.setCursorPosition(Coordinates(0, 4));
+  editor.setActiveAutocomplete(true);
+  editor.setAutocompleteProvider([](const TextEditor::AutocompleteRequest& request)
+                                     -> std::optional<TextEditor::AutocompleteResponse> {
+    EXPECT_EQ(request.source, "value");
+    EXPECT_EQ(request.cursorOffset, 5u);
+    return TextEditor::AutocompleteResponse{
+        .replaceStartOffset = 0,
+        .replaceEndOffset = 5,
+        .suggestions = {{RcString("first"), RcString("alpha")},
+                        {RcString("second"), RcString("beta")}}};
+  });
+  RenderEditorFrameWithKeyboard({}, "e");
+  RenderEditorFrameWithKeyboard({});
+  ResetKeyboardState({ImGuiKey_DownArrow});
+  RenderEditorFrameWithKeyboard({ImGuiKey_DownArrow});
+  EXPECT_EQ(AutocompleteIndex(), 1) << "DownArrow must advance the suggestion selection";
+  ResetKeyboardState({ImGuiKey_UpArrow});
+  RenderEditorFrameWithKeyboard({ImGuiKey_UpArrow});
+  EXPECT_EQ(AutocompleteIndex(), 0) << "UpArrow must return to the first suggestion";
+  EXPECT_EQ(editor.getCursorPosition(), Coordinates(0, 5));
+  EXPECT_EQ(editor.getSelectedText(), "");
+  ResetKeyboardState({ImGuiKey_Enter});
+  RenderEditorFrameWithKeyboard({ImGuiKey_Enter});
+  EXPECT_EQ(editor.getText(), "alpha");
+  editor.undo();
+  EXPECT_EQ(editor.getText(), "value");
+  editor.undo();
+  EXPECT_EQ(editor.getText(), "valu");
+}
+
+TEST_F(TextEditorTests, ReferenceColoredSourcePreservesTextGeometryIncludingWhitespace) {
+  editor.setText("\nX\t X");
+  editor.setShowLineNumbers(false);
+  editor.setHighlightLine(false);
+  editor.setColorizerEnabled(false);
+  RenderEditorFrame();
+  const std::vector<ImDrawVert> baseline = SourceVerticesForVisualLine(1);
+  ASSERT_THAT(baseline, ::testing::Not(IsEmpty()));
+  editor.setFocusPartition(FocusPartition{.referenceColor = {{1, 2}}});
+  RenderEditorFrame();
+  const std::vector<ImDrawVert> reference = SourceVerticesForVisualLine(1);
+  ASSERT_EQ(reference.size(), baseline.size());
+  for (std::size_t index = 0; index < baseline.size(); ++index) {
+    SCOPED_TRACE(index);
+    EXPECT_THAT(
+        reference[index],
+        AllOf(Field("pos", &ImDrawVert::pos,
+                    AllOf(Field("x", &ImVec2::x, ::testing::FloatEq(baseline[index].pos.x)),
+                          Field("y", &ImVec2::y, ::testing::FloatEq(baseline[index].pos.y)))),
+              Field("uv", &ImDrawVert::uv,
+                    AllOf(Field("x", &ImVec2::x, ::testing::FloatEq(baseline[index].uv.x)),
+                          Field("y", &ImVec2::y, ::testing::FloatEq(baseline[index].uv.y))))));
+    const float baselineAlpha = ImGui::ColorConvertU32ToFloat4(baseline[index].col).w;
+    const float referenceAlpha = ImGui::ColorConvertU32ToFloat4(reference[index].col).w;
+    if (baselineAlpha > 0.0f) {
+      EXPECT_LT(referenceAlpha, baselineAlpha);
+    } else {
+      EXPECT_EQ(referenceAlpha, 0.0f);
+    }
+  }
+  EXPECT_EQ(editor.getText(), "\nX\t X");
+  EXPECT_EQ(editor.getCursorPosition(), Coordinates(0, 0));
+  EXPECT_THAT(editor.takePendingSourceEditIntents(), IsEmpty());
+}
+
+TEST_F(TextEditorTests, DimmedSourcePreservesGeometryAndDesaturatesWhitespaceAndText) {
+  editor.setText("\nX\t X");
+  editor.setShowLineNumbers(false);
+  editor.setHighlightLine(false);
+  editor.setColorizerEnabled(false);
+  RenderEditorFrame();
+  const std::vector<ImDrawVert> baseline = SourceVerticesForVisualLine(1);
+  ASSERT_THAT(baseline, ::testing::Not(IsEmpty()));
+  editor.setFocusPartition(FocusPartition{.dimmed = {{1, 2}}});
+  RenderEditorFrame();
+  const std::vector<ImDrawVert> dimmed = SourceVerticesForVisualLine(1);
+  ASSERT_EQ(dimmed.size(), baseline.size());
+  for (std::size_t index = 0; index < baseline.size(); ++index) {
+    SCOPED_TRACE(index);
+    EXPECT_THAT(dimmed[index].pos,
+                AllOf(Field("x", &ImVec2::x, ::testing::FloatEq(baseline[index].pos.x)),
+                      Field("y", &ImVec2::y, ::testing::FloatEq(baseline[index].pos.y))));
+    const ImVec4 color = ImGui::ColorConvertU32ToFloat4(dimmed[index].col);
+    EXPECT_THAT((std::array<float, 3>{color.x, color.y, color.z}),
+                ElementsAre(color.x, color.x, color.x));
+    const float baselineAlpha = ImGui::ColorConvertU32ToFloat4(baseline[index].col).w;
+    if (baselineAlpha > 0.0f) {
+      EXPECT_LT(color.w, baselineAlpha);
+    } else {
+      EXPECT_EQ(color.w, 0.0f);
+    }
+  }
+  editor.clearFocusPartition();
+  RenderEditorFrame();
+  const std::vector<ImDrawVert> restored = SourceVerticesForVisualLine(1);
+  ASSERT_EQ(restored.size(), baseline.size());
+  for (std::size_t index = 0; index < baseline.size(); ++index) {
+    SCOPED_TRACE(index);
+    EXPECT_EQ(restored[index].col, baseline[index].col);
+  }
+  EXPECT_EQ(editor.getText(), "\nX\t X");
+}
+
+TEST_F(TextEditorTests, PublicSourceEditCancelsAnActiveGutterDragAndPreview) {
+  editor.setText("one\ntwo\nthree");
+  RenderEditorFrame();
+  const ImVec2 handle = SourceGutterHandlePoint(0);
+  RenderEditorFrameWithMouse(handle, false);
+  RenderEditorFrameWithMouse(handle, true);
+  ASSERT_THAT(editor.takeSourceGutterDragStartedLine(), ::testing::Optional(0));
+  ASSERT_TRUE(editor.setSourceStructuralMoveDecoration(
+      TextEditor::SourceStructuralMoveDecoration{.elementRange = {0, 3}, .insertionOffset = 8}));
+  editor.applyExternalSourceEdit(0, 0, "new\n");
+  EXPECT_EQ(editor.getText(), "new\none\ntwo\nthree");
+  EXPECT_TRUE(editor.takeSourceGutterDragCancelled());
+  EXPECT_FALSE(editor.takeSourceGutterDragCancelled());
+  EXPECT_EQ(editor.sourceGutterDragTarget(), std::nullopt);
+  EXPECT_EQ(editor.takeSourceGutterDropTarget(), std::nullopt);
+  EXPECT_EQ(editor.sourceStructuralMoveDecoration(), std::nullopt);
+  EXPECT_THAT(editor.takePendingSourceEditIntents(), IsEmpty());
+}
+
+TEST_F(TextEditorTests, PublicAutocompleteSuppressesSourceNavigationWhilePopupIsOpen) {
+  editor.setText("first\nvalu");
+  editor.setCursorPosition(Coordinates(1, 4));
+  editor.setActiveAutocomplete(true);
+  editor.setAutocompleteProvider([](const TextEditor::AutocompleteRequest&)
+                                     -> std::optional<TextEditor::AutocompleteResponse> {
+    return TextEditor::AutocompleteResponse{
+        .replaceStartOffset = 6,
+        .replaceEndOffset = 11,
+        .suggestions = {{RcString("first"), RcString("alpha")},
+                        {RcString("second"), RcString("beta")}}};
+  });
+  RenderEditorFrameWithKeyboard({}, "e");
+  RenderEditorFrameWithKeyboard({});
+  editor.setShortcut(TextEditor::ShortcutId::MoveUp, Shortcut(ImGuiKey_F7));
+  ResetKeyboardState({ImGuiKey_F7});
+  RenderEditorFrameWithKeyboard({ImGuiKey_F7});
+  EXPECT_EQ(editor.getCursorPosition(), Coordinates(1, 5));
+  EXPECT_EQ(editor.getText(), "first\nvalue");
+  editor.setShortcut(TextEditor::ShortcutId::AutocompleteSelect, Shortcut(ImGuiKey_F8));
+  ResetKeyboardState({ImGuiKey_F8});
+  RenderEditorFrameWithKeyboard({ImGuiKey_F8});
+  EXPECT_EQ(editor.getText(), "first\nalpha");
+  ResetKeyboardState({ImGuiKey_F7});
+  RenderEditorFrameWithKeyboard({ImGuiKey_F7});
+  EXPECT_EQ(editor.getCursorPosition(), Coordinates(0, 5));
 }
 
 }  // namespace donner::editor

@@ -1856,19 +1856,9 @@ void RenderCoordinator::configurePresentationRepair(RenderRequest& request) cons
       (pendingRepair_ && pendingRepair_->failure == FramePresentationFailure::IncompatiblePose);
 }
 
-bool RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectTool,
-                                           const ViewportState& viewport, GlTextureCache* textures,
-                                           bool supersedeInFlight,
-                                           SelectionChromeDetail directSurfaceSelectionDetail) {
-  ZoneScopedN("RenderCoordinator::maybeRequestRender");
-  if (!app.hasDocument() || viewport.paneSize.x <= 0.0 || viewport.paneSize.y <= 0.0) {
-    return false;
-  }
-
-  const EditorRasterViewport rasterViewport = viewport.rasterViewport();
+RenderCoordinator::CanvasCommitPlan RenderCoordinator::prepareCanvasCommit(
+    const EditorRasterViewport& rasterViewport, Vector2i actualDocumentCanvas, bool hasActiveDrag) {
   const Vector2i desiredCanvasSize = rasterViewport.semanticCanvasSizePx;
-  const Vector2i actualDocumentCanvas = app.document().document().canvasSize();
-  const auto dragPreview = previewWithPresentationEpoch(selectTool.activeDragPreview());
   // Compare desired size against the live document size. Document replacement
   // can reset the stored canvas size, and LayoutSystem readback can round by a
   // pixel, so a separate last-set tracker is not authoritative here.
@@ -1893,71 +1883,94 @@ bool RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectToo
   // the overlay. Committing a zoom-driven canvas size here invalidates the render tree and can
   // rerasterize every cached span before the next pointer frame; defer that crisp refresh until
   // mouse-up unless the document still needs its first canvas.
-  const bool deferCanvasCommitForActiveDrag = dragPreview.has_value() && !firstCommit;
+  const bool deferCanvasCommitForActiveDrag = hasActiveDrag && !firstCommit;
   updatePixelCaptureCanvasCommitWake(wouldChange, firstCommit, deferCanvasCommitForActiveDrag);
-  const auto currentVersion = app.document().currentFrameVersion();
-  DocumentPixelCaptureIdentity desiredCapture;
-  bool captureNeeded = preparePixelCaptureRequest(app, viewport, &desiredCapture);
-  const Entity prewarmEntity = selectedCompositedEntity(app);
-  const bool useVisibleSelectedRaster = selectedPrewarmFallbackApplies(
-      app.document().documentGeneration(), prewarmEntity, rasterViewport);
-  const bool willCommitCanvas =
-      ShouldCommitCanvas(pendingCanvasSize_, wouldChange, deferCanvasCommitForActiveDrag,
-                         firstCommit, throttleElapsed);
-  const bool needsOverviewInfill =
-      needsOverviewInfillForViewport(app, rasterViewport, dragPreview.has_value(), textures) ||
-      (textures != nullptr && rasterViewport.viewportBounded && willCommitCanvas);
-  const bool pendingSelectedLayerRasterization =
-      prewarmEntity != entt::null && prewarmEntity == pendingSelectedLayerRasterizationEntity_;
-  const bool deferSelectedViewportRefresh = ShouldDeferSelectedViewportRefresh(
-      prewarmEntity, dragPreview.has_value(), currentVersion, displayedDocVersion_,
-      compositedPresentation_.hasCachedTextures(), rasterViewportSettled, needsOverviewInfill,
-      pendingSelectedLayerRasterization || selectedPrewarmRecoveryPending_);
-  if (shouldDeferViewportRender(deferSelectedViewportRefresh, needsOverviewInfill, captureNeeded)) {
+  return {.now = now,
+          .willCommit =
+              ShouldCommitCanvas(pendingCanvasSize_, wouldChange, deferCanvasCommitForActiveDrag,
+                                 firstCommit, throttleElapsed),
+          .rasterViewportSettled = rasterViewportSettled};
+}
+
+bool RenderCoordinator::needsOverviewForRender(EditorApp& app,
+                                               const EditorRasterViewport& rasterViewport,
+                                               bool hasActiveDrag, const GlTextureCache* textures,
+                                               bool willCommitCanvas) {
+  return needsOverviewInfillForViewport(app, rasterViewport, hasActiveDrag, textures) ||
+         (textures != nullptr && rasterViewport.viewportBounded && willCommitCanvas);
+}
+
+bool RenderCoordinator::canPostViewportRender(bool selectedViewportDeferred,
+                                              bool needsOverviewInfill, bool captureNeeded,
+                                              bool supersedeInFlight) {
+  if (shouldDeferViewportRender(selectedViewportDeferred, needsOverviewInfill, captureNeeded)) {
     if (renderWorker_.asyncRenderer.isBusy()) {
       renderWorker_.asyncRenderer.cancelInFlight();
     }
     return false;
   }
-  if (renderWorker_.asyncRenderer.isBusy() && !supersedeInFlight) {
-    return false;
-  }
+  return !renderWorker_.asyncRenderer.isBusy() || supersedeInFlight;
+}
 
-  const bool requestOverviewInfill = needsOverviewInfill;
-  const std::vector<Entity> prewarmExtraEntities =
-      requestOverviewInfill ? std::vector<Entity>{}
-                            : selectedCompositedExtraEntities(app, prewarmEntity);
-  const bool forceSelectedLayerRasterization = pendingSelectedLayerRasterization;
-  bool forcePresentationRefresh = hasForcedRenderReason(captureNeeded);
-  const bool hasIndependentSelectedPrewarmRenderReason = HasIndependentSelectedPrewarmRenderReason(
-      dragPreview.has_value(), currentVersion != displayedDocVersion_,
-      forceSelectedLayerRasterization, forcePresentationRefresh);
-  const bool selectionOnlyPrewarmAllowed = shouldRequestSelectionOnlyPrewarm(
-      app.document().documentGeneration(), prewarmEntity, currentVersion, rasterViewport);
+void RenderCoordinator::prepareSelectedRenderSchedule(EditorApp& app, const ViewportState& viewport,
+                                                      const GlTextureCache* textures,
+                                                      const SelectedRenderDemand& selection,
+                                                      bool requestOverviewInfill,
+                                                      bool captureNeeded,
+                                                      PresentationRenderScheduleInput& input) {
+  input.selectedEntity = requestOverviewInfill ? entt::null : selection.entity;
+  input.selectedExtraEntities = requestOverviewInfill
+                                    ? std::vector<Entity>{}
+                                    : selectedCompositedExtraEntities(app, selection.entity);
+  input.forceSelectedLayerRasterization = selection.forceRasterization;
+  input.forcePresentationRefresh = hasForcedRenderReason(captureNeeded);
+  const bool independentRenderReason = HasIndependentSelectedPrewarmRenderReason(
+      input.activeDragPreview.has_value(), input.currentVersion != displayedDocVersion_,
+      input.forceSelectedLayerRasterization, input.forcePresentationRefresh);
+  input.selectionOnlyPrewarmMayTriggerRender =
+      shouldRequestSelectionOnlyPrewarm(app.document().documentGeneration(), selection.entity,
+                                        input.currentVersion, input.currentRasterViewport);
   const EditorRasterViewport selectedPrewarmRaster = viewport.selectedPrewarmRasterViewport();
-  const bool useSelectedPrewarmRasterViewport =
-      !documentPixelCaptureEnabled_ && !useVisibleSelectedRaster &&
+  const bool useSelectedPrewarmRaster =
+      !documentPixelCaptureEnabled_ && !selection.useVisibleRaster &&
       ShouldUseSelectedPrewarmRasterViewport(
-          prewarmEntity, requestOverviewInfill, rasterViewport.viewportBounded,
-          selectionOnlyPrewarmAllowed, hasIndependentSelectedPrewarmRenderReason,
-          HasCompleteVisibleCachedCoverage(textures, viewport, rasterViewport),
-          rasterViewport.outputSizePx, selectedPrewarmRaster.outputSizePx);
-  const EditorRasterViewport requestRasterViewport =
+          selection.entity, requestOverviewInfill, input.currentRasterViewport.viewportBounded,
+          input.selectionOnlyPrewarmMayTriggerRender, independentRenderReason,
+          HasCompleteVisibleCachedCoverage(textures, viewport, input.currentRasterViewport),
+          input.currentRasterViewport.outputSizePx, selectedPrewarmRaster.outputSizePx);
+  input.currentRasterViewport =
       requestOverviewInfill
           ? viewport.overviewInfillRasterViewport()
-          : (useSelectedPrewarmRasterViewport ? selectedPrewarmRaster : rasterViewport);
-  const Vector2i currentCanvasSize = requestRasterViewport.outputSizePx;
+          : (useSelectedPrewarmRaster ? selectedPrewarmRaster : input.currentRasterViewport);
+  input.currentCanvasSize = input.currentRasterViewport.outputSizePx;
+}
 
-  if (willCommitCanvas) {
-    app.document().document().setCanvasSize(pendingCanvasSize_.x, pendingCanvasSize_.y);
-    pendingCanvasSizeSince_ = now;
-    ++lastFrameCostBreakdown_.documentCanvasCommitCount;
-    ++documentCanvasCommitTotal_;
-    lastFrameCostBreakdown_.lastCommittedCanvasSize = pendingCanvasSize_;
-    noteCanvasSizeCommitForPixelCapture(app, viewport, &desiredCapture, &captureNeeded,
-                                        &forcePresentationRefresh);
+void RenderCoordinator::commitCanvasForRender(EditorApp& app, const ViewportState& viewport,
+                                              const CanvasCommitPlan& plan,
+                                              DocumentPixelCaptureIdentity* desiredCapture,
+                                              bool* captureNeeded, bool* forcePresentationRefresh) {
+  if (!plan.willCommit) {
+    return;
   }
+  svg::SVGDocument& document = app.document().document();
+  const std::uint64_t revisionBefore = document.handle()->revision();
+  document.setCanvasSize(pendingCanvasSize_.x, pendingCanvasSize_.y);
+  if (!documentPixelCaptureEnabled_ && document.handle()->revision() != revisionBefore) {
+    // The old raster can match the viewport while this commit invalidates its render tree.
+    requestPresentationRefresh();
+    *forcePresentationRefresh = true;
+  }
+  pendingCanvasSizeSince_ = plan.now;
+  ++lastFrameCostBreakdown_.documentCanvasCommitCount;
+  ++documentCanvasCommitTotal_;
+  lastFrameCostBreakdown_.lastCommittedCanvasSize = pendingCanvasSize_;
+  noteCanvasSizeCommitForPixelCapture(app, viewport, desiredCapture, captureNeeded,
+                                      forcePresentationRefresh);
+}
 
+void RenderCoordinator::prepareRenderPresentation(EditorApp& app, const ViewportState& viewport,
+                                                  GlTextureCache* textures,
+                                                  PresentationRenderScheduleInput& input) {
   const Entity suppressedLayerEntity = suppressedCompositedLayerEntity(app);
   if (suppressedLayerEntity != entt::null) {
     compositedPresentation_.discardCachedTexturesForEntity(suppressedLayerEntity);
@@ -1967,57 +1980,36 @@ bool RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectToo
   // example, when a mask forces its child into an owning layer). In that case the presenter has
   // no bitmap to move on the UI thread. Render the changing document during the held drag rather
   // than treating the selection's cached metadata as proof that its pixels can move locally.
-  const bool renderDragFallback =
-      activeDragNeedsRenderedPresentation(app, dragPreview, textures, suppressedLayerEntity);
+  input.requiresRenderedActiveDragPresentation = activeDragNeedsRenderedPresentation(
+      app, input.activeDragPreview, textures, suppressedLayerEntity);
 
   const bool selectionBoundsChanged = app.selectedElements() != selectionBoundsCache_.lastSelection;
-  if (!compositedPresentation_.isWaitingForFullRender() || dragPreview.has_value()) {
-    if (selectionBoundsChanged || currentVersion != selectionBoundsCache_.lastRefreshVersion) {
+  if (!compositedPresentation_.isWaitingForFullRender() || input.activeDragPreview.has_value()) {
+    if (selectionBoundsChanged ||
+        input.currentVersion != selectionBoundsCache_.lastRefreshVersion) {
       refreshSelectionBoundsCache(app);
     }
   }
 
-  const PresentationRenderScheduleDecision schedule = renderScheduler_.evaluate(
-      compositedPresentation_,
-      PresentationRenderScheduleInput{
-          .selectedEntity = requestOverviewInfill ? entt::null : prewarmEntity,
-          .selectedExtraEntities = prewarmExtraEntities,
-          .activeDragPreview = dragPreview,
-          // A scheduled retry owes a render even when the failed request's only reason for one,
-          // such as a presentation refresh, was consumed when it was posted.
-          .forcePresentationRefresh = forcePresentationRefresh || requestOverviewInfill ||
-                                      nothingToPresentRetry_.retryScheduled(),
-          .forceSelectedLayerRasterization = forceSelectedLayerRasterization,
-          .currentVersion = currentVersion,
-          .currentCanvasSize = currentCanvasSize,
-          .currentRasterViewport = requestRasterViewport,
-          .dragTranslationRecaptureDistanceDoc =
-              kDragTranslationRecaptureScreenPx /
-              std::max(std::abs(viewport.pixelsPerDocUnit()), 1e-9),
-          .requiresRenderedActiveDragPresentation = renderDragFallback,
-          .selectionOnlyPrewarmMayTriggerRender = selectionOnlyPrewarmAllowed,
-      });
-  if (!schedule.shouldRequestRender()) {
-    return false;
-  }
-  RenderAttemptIdentity attempt = MakeRenderAttempt(
-      app.document().documentGeneration(), currentVersion, requestRasterViewport,
-      requestOverviewInfill, prewarmEntity, schedule.dragPreview, presentationEpoch_);
-  attempt.repair = pendingRepair_;
-  if (!nothingToPresentRetry_.mayPost(attempt, schedulingNow())) {
-    return false;
-  }
+  input.dragTranslationRecaptureDistanceDoc =
+      kDragTranslationRecaptureScreenPx / std::max(std::abs(viewport.pixelsPerDocUnit()), 1e-9);
+}
 
+void RenderCoordinator::postScheduledRender(EditorApp& app, const ViewportState& viewport,
+                                            const PresentationRenderScheduleInput& input,
+                                            bool requestOverviewInfill,
+                                            const RenderAttemptIdentity& attempt,
+                                            const DocumentPixelCaptureIdentity& desiredCapture) {
   RenderRequest req(renderWorker_.renderer, app.document().document());
   capturePresentationRequest(req, app);
-  req.rasterViewport = requestRasterViewport;
+  req.rasterViewport = input.currentRasterViewport;
   // The presenter places the accepted surface with this transform, so it must be
-  // the exact viewport `requestRasterViewport` was derived from.
+  // the exact viewport `input.currentRasterViewport` was derived from.
   req.viewport = viewport;
   req.overviewInfillOnly = requestOverviewInfill;
   configurePresentationRepair(req);
-  configurePixelCaptureRequest(&req, requestOverviewInfill, dragPreview.has_value(),
-                               requestRasterViewport);
+  configurePixelCaptureRequest(&req, requestOverviewInfill, input.activeDragPreview.has_value(),
+                               input.currentRasterViewport);
   // Drain any pending structural remap from a recent `setDocumentMaybe
   // Structural` call. Non-empty remap lets the worker preserve the
   // compositor's cached state across the document swap instead of
@@ -2039,6 +2031,67 @@ bool RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectToo
   lastPostedAttempt_ = attempt;
   recordPixelCaptureRequest(req, desiredCapture);
   pendingPresentationRefresh_ = false;
+}
+
+bool RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectTool,
+                                           const ViewportState& viewport, GlTextureCache* textures,
+                                           bool supersedeInFlight,
+                                           SelectionChromeDetail directSurfaceSelectionDetail) {
+  ZoneScopedN("RenderCoordinator::maybeRequestRender");
+  if (!app.hasDocument() || viewport.paneSize.x <= 0.0 || viewport.paneSize.y <= 0.0) {
+    return false;
+  }
+
+  const EditorRasterViewport rasterViewport = viewport.rasterViewport();
+  const Vector2i actualDocumentCanvas = app.document().document().canvasSize();
+  const auto dragPreview = previewWithPresentationEpoch(selectTool.activeDragPreview());
+  const CanvasCommitPlan canvas =
+      prepareCanvasCommit(rasterViewport, actualDocumentCanvas, dragPreview.has_value());
+  const auto currentVersion = app.document().currentFrameVersion();
+  DocumentPixelCaptureIdentity desiredCapture;
+  bool captureNeeded = preparePixelCaptureRequest(app, viewport, &desiredCapture);
+  SelectedRenderDemand selection;
+  selection.entity = selectedCompositedEntity(app);
+  selection.useVisibleRaster = selectedPrewarmFallbackApplies(app.document().documentGeneration(),
+                                                              selection.entity, rasterViewport);
+  const bool requestOverviewInfill = needsOverviewForRender(
+      app, rasterViewport, dragPreview.has_value(), textures, canvas.willCommit);
+  selection.forceRasterization = selection.entity != entt::null &&
+                                 selection.entity == pendingSelectedLayerRasterizationEntity_;
+  const bool deferSelectedViewportRefresh = ShouldDeferSelectedViewportRefresh(
+      selection.entity, dragPreview.has_value(), currentVersion, displayedDocVersion_,
+      compositedPresentation_.hasCachedTextures(), canvas.rasterViewportSettled,
+      requestOverviewInfill, selection.forceRasterization || selectedPrewarmRecoveryPending_);
+  if (!canPostViewportRender(deferSelectedViewportRefresh, requestOverviewInfill, captureNeeded,
+                             supersedeInFlight)) {
+    return false;
+  }
+
+  PresentationRenderScheduleInput input;
+  input.activeDragPreview = dragPreview;
+  input.currentVersion = currentVersion;
+  input.currentRasterViewport = rasterViewport;
+  prepareSelectedRenderSchedule(app, viewport, textures, selection, requestOverviewInfill,
+                                captureNeeded, input);
+  commitCanvasForRender(app, viewport, canvas, &desiredCapture, &captureNeeded,
+                        &input.forcePresentationRefresh);
+  prepareRenderPresentation(app, viewport, textures, input);
+  // A paced retry retains the render demand consumed by the failed post.
+  input.forcePresentationRefresh = input.forcePresentationRefresh || requestOverviewInfill ||
+                                   nothingToPresentRetry_.retryScheduled();
+  const PresentationRenderScheduleDecision schedule =
+      renderScheduler_.evaluate(compositedPresentation_, input);
+  if (!schedule.shouldRequestRender()) {
+    return false;
+  }
+  RenderAttemptIdentity attempt = MakeRenderAttempt(
+      app.document().documentGeneration(), currentVersion, input.currentRasterViewport,
+      requestOverviewInfill, selection.entity, schedule.dragPreview, presentationEpoch_);
+  attempt.repair = pendingRepair_;
+  if (!nothingToPresentRetry_.mayPost(attempt, schedulingNow())) {
+    return false;
+  }
+  postScheduledRender(app, viewport, input, requestOverviewInfill, attempt, desiredCapture);
   return true;
 }
 

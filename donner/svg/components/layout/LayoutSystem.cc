@@ -180,6 +180,67 @@ Box2d GetViewBoxInternal(Registry& registry, Entity rootEntity, std::optional<Bo
   }
 }
 
+/// Resolve omitted dimensions without treating an SVG viewBox as its viewport size.
+Vector2d DefaultSizedElementExtent(EntityHandle entity, const SizedElementProperties& properties,
+                                   const Box2d& inheritedViewBox) {
+  Vector2d size = inheritedViewBox.size();
+  if (const auto* viewBox = entity.try_get<ViewBoxComponent>()) {
+    const auto* elementType = entity.try_get<ElementTypeComponent>();
+    const bool isSvg = elementType && elementType->type() == ElementType::SVG;
+    if (!isSvg && !properties.width.isSpecified() && !properties.height.isSpecified() &&
+        viewBox->viewBox) {
+      size = viewBox->viewBox->size();
+    }
+  }
+  return size;
+}
+
+/// Apply authored dimensions only when the referenced element establishes a viewport.
+Vector2d ApplySpecifiedDimensions(EntityHandle entity, const SizedElementProperties& properties,
+                                  const Box2d& inheritedViewBox, FontMetrics fontMetrics,
+                                  Vector2d size) {
+  const ComputedShadowTreeComponent* shadowTree = entity.try_get<ComputedShadowTreeComponent>();
+  if (!shadowTree || (shadowTree && shadowTree->mainLightRoot() != entt::null &&
+                      entity.registry()->all_of<ViewBoxComponent>(shadowTree->mainLightRoot()))) {
+    if (properties.width.isSpecified()) {
+      size.x = properties.width.get().value().toPixels(inheritedViewBox, fontMetrics,
+                                                       Lengthd::Extent::X);
+    }
+    if (properties.height.isSpecified()) {
+      size.y = properties.height.get().value().toPixels(inheritedViewBox, fontMetrics,
+                                                        Lengthd::Extent::Y);
+    }
+  }
+  return size;
+}
+
+/// Retain the existing intrinsic-image sizing algorithm after authored dimensions resolve.
+Vector2d ResolveIntrinsicImageExtent(EntityHandle entity, const SizedElementProperties& properties,
+                                     const Box2d& inheritedViewBox, FontMetrics fontMetrics,
+                                     Vector2d size) {
+  if (auto maybeImageSize =
+          entity.registry()->ctx().get<ResourceManagerContext>().getImageSize(entity)) {
+    const Vector2i imageSize = *maybeImageSize;
+    if (properties.width.isSpecified() && properties.height.isSpecified()) {
+      return size;
+    } else if (!properties.width.isSpecified() && !properties.height.isSpecified()) {
+      size = Vector2d(imageSize);
+    } else {
+      const float aspectRatio = static_cast<float>(imageSize.x) / static_cast<float>(imageSize.y);
+      if (!properties.width.isSpecified()) {
+        size.x = properties.height.get().value().toPixels(inheritedViewBox, fontMetrics,
+                                                          Lengthd::Extent::X) *
+                 aspectRatio;
+      } else if (!properties.height.isSpecified()) {
+        size.y = properties.width.get().value().toPixels(inheritedViewBox, fontMetrics,
+                                                         Lengthd::Extent::Y) /
+                 aspectRatio;
+      }
+    }
+  }
+  return size;
+}
+
 }  // namespace
 
 ParseResult<bool> ParseSizedElementPresentationAttribute(
@@ -756,73 +817,25 @@ Box2d LayoutSystem::calculateSizedElementBounds(EntityHandle entity,
                                                 const Box2d& inheritedViewBox,
                                                 FontMetrics fontMetrics) {
   Registry& registry = *entity.registry();
-
-  Vector2d size = inheritedViewBox.size();
-  if (const auto* viewBox = entity.try_get<ViewBoxComponent>()) {
-    if (!properties.width.isSpecified() && !properties.height.isSpecified() && viewBox->viewBox) {
-      size = viewBox->viewBox->size();
-    }
-
-    const auto& ctx = registry.ctx().get<SVGDocumentContext>();
-    if (ctx.rootEntity == entity.entity()) {
-      // This is the root <svg> element.
-      const Vector2i documentSize =
-          calculateCanvasScaledDocumentSize(registry, InvalidSizeBehavior::ZeroSize);
-      return Box2d(Vector2d(), documentSize);
-    }
+  if (entity.all_of<ViewBoxComponent>() &&
+      registry.ctx().get<SVGDocumentContext>().rootEntity == entity.entity()) {
+    const Vector2i documentSize =
+        calculateCanvasScaledDocumentSize(registry, InvalidSizeBehavior::ZeroSize);
+    return Box2d(Vector2d(), documentSize);
   }
 
-  const ComputedShadowTreeComponent* shadowTree = entity.try_get<ComputedShadowTreeComponent>();
-
-  // From https://www.w3.org/TR/SVG/struct.html#UseElement:
-  // > The width and height attributes only have an effect if the referenced element defines a
-  // > viewport (i.e., if it is a 'svg' or 'symbol')
-  if (!shadowTree || (shadowTree && shadowTree->mainLightRoot() != entt::null &&
-                      entity.registry()->all_of<ViewBoxComponent>(shadowTree->mainLightRoot()))) {
-    if (properties.width.isSpecified()) {
-      size.x = properties.width.get().value().toPixels(inheritedViewBox, fontMetrics,
-                                                       Lengthd::Extent::X);
-    }
-
-    if (properties.height.isSpecified()) {
-      size.y = properties.height.get().value().toPixels(inheritedViewBox, fontMetrics,
-                                                        Lengthd::Extent::Y);
-    }
-  }
-
+  Vector2d size =
+      ApplySpecifiedDimensions(entity, properties, inheritedViewBox, fontMetrics,
+                               DefaultSizedElementExtent(entity, properties, inheritedViewBox));
   const Vector2d origin(
       properties.x.get().value().toPixels(inheritedViewBox, fontMetrics, Lengthd::Extent::X),
       properties.y.get().value().toPixels(inheritedViewBox, fontMetrics, Lengthd::Extent::Y));
-
   if (registry.all_of<ImageComponent>(entity)) {
-    if (auto maybeImageSize = registry.ctx().get<ResourceManagerContext>().getImageSize(entity)) {
-      const Vector2i imageSize = *maybeImageSize;
-
-      // Use the default sizing algorithm to detect the size if any parameters are missing.
-      // See https://www.w3.org/TR/css-images-3/#default-sizing
-      if (properties.width.isSpecified() && properties.height.isSpecified()) {
-        return Box2d(origin, origin + size);
-      } else if (!properties.width.isSpecified() && !properties.height.isSpecified()) {
-        size = Vector2d(imageSize);
-      } else {
-        const float aspectRatio = static_cast<float>(imageSize.x) / static_cast<float>(imageSize.y);
-
-        if (!properties.width.isSpecified()) {
-          size.x = properties.height.get().value().toPixels(inheritedViewBox, fontMetrics,
-                                                            Lengthd::Extent::X) *
-                   aspectRatio;
-        } else if (!properties.height.isSpecified()) {
-          size.y = properties.width.get().value().toPixels(inheritedViewBox, fontMetrics,
-                                                           Lengthd::Extent::Y) /
-                   aspectRatio;
-        }
-      }
-    }
+    size = ResolveIntrinsicImageExtent(entity, properties, inheritedViewBox, fontMetrics, size);
   } else if (registry.all_of<MaskComponent>(entity)) {
     // The bounds of a shadow entity are determined by the light entity.
     return Box2d(origin, origin + size);
   }
-
   return Box2d(origin, origin + size);
 }
 

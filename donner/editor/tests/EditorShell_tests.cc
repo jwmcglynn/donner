@@ -1516,6 +1516,10 @@ public:
 
   static void RenderLayerPanelContents(EditorShell& shell) { shell.renderLayerPanelContents(); }
 
+  static void RenderEditingScopeBreadcrumb(EditorShell& shell) {
+    shell.renderEditingScopeBreadcrumb();
+  }
+
   static void RenderReferenceHighlightChip(EditorShell& shell) {
     shell.renderReferenceHighlightChip();
   }
@@ -2158,6 +2162,44 @@ void RenderReferenceHighlightChipFrame(gui::EditorWindow& window, EditorShell& s
   window.endFrame();
 }
 
+struct EditingScopeBreadcrumbItem {
+  ImRect rect;
+  ImGuiID id;
+  ImGuiID expectedLabelId;
+  bool hovered;
+};
+
+std::optional<EditingScopeBreadcrumbItem> RenderEditingScopeBreadcrumbFrame(
+    gui::EditorWindow& window, EditorShell& shell, const char* expectedLabel,
+    const ImVec2& mouse = ImVec2(-100.0f, -100.0f), bool mouseDown = false) {
+  ImGuiIO& io = ImGui::GetIO();
+  io.DisplaySize = ImVec2(640.0f, 480.0f);
+  if (!io.Fonts->IsBuilt()) {
+    io.Fonts->Build();
+  }
+  io.AddMousePosEvent(mouse.x, mouse.y);
+  io.AddMouseButtonEvent(0, mouseDown);
+
+  window.beginFrame();
+  ImGui::SetNextWindowPos(ImVec2(0.0f, 0.0f), ImGuiCond_Always);
+  ImGui::SetNextWindowSize(ImVec2(640.0f, 480.0f), ImGuiCond_Always);
+  ImGui::Begin(
+      "EditorShellBreadcrumbHost", nullptr,
+      ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings);
+  // A zero-ID item makes the no-scope path distinguishable from a submitted button.
+  ImGui::Dummy(ImVec2(1.0f, 1.0f));
+  EditorShellTestAccess::RenderEditingScopeBreadcrumb(shell);
+  std::optional<EditingScopeBreadcrumbItem> item;
+  if (ImGui::GetCurrentContext()->LastItemData.ID != 0) {
+    item = EditingScopeBreadcrumbItem{ImRect(ImGui::GetItemRectMin(), ImGui::GetItemRectMax()),
+                                      ImGui::GetCurrentContext()->LastItemData.ID,
+                                      ImGui::GetID(expectedLabel), ImGui::IsItemHovered()};
+  }
+  ImGui::End();
+  window.endFrame();
+  return item;
+}
+
 void RenderSelectionSizeChipFrame(
     gui::EditorWindow& window, EditorShell& shell,
     const SelectionTransformHandleIntent& hoverTransformIntent,
@@ -2724,22 +2766,26 @@ TEST(EditorShellTest, LayerInspectorReadbackIncludesSelectedStyleAndPathDiagnost
 )svg";
   EditorShell shell(window, OptionsWithSource(kDiagnosticSvg, "diagnostics.svg"));
   ASSERT_TRUE(shell.valid());
-  // On a HiDPI display the editor commits the device-pixel canvas size after a debounce. That
-  // commit invalidates the render tree this readback inspects, and when the presented raster
-  // already matches it no render follows to rebuild it, so whether the rendering-instance fill is
-  // present would depend on how long the host's frames take. Hold the scheduling clock so the
-  // debounce cannot elapse mid-test and the readback sees the render tree its render built.
-  RenderCoordinatorTestAccess::useFakeSchedulingClock(EditorShellTestAccess::Coordinator(shell));
+  RenderCoordinator& coordinator = EditorShellTestAccess::Coordinator(shell);
   auto target = EditorShellTestAccess::App(shell).document().document().querySelector("#target");
   ASSERT_TRUE(target.has_value());
-  RenderCoordinator& coordinator = EditorShellTestAccess::Coordinator(shell);
-  // Keep the unrelated canvas debounce from invalidating the fresh-render diagnostic phase.
-  RenderCoordinatorTestAccess::useFakeSchedulingClock(coordinator);
   EditorShellTestAccess::App(shell).setSelection(*target);
   (void)target->getComputedStyle();
   RunFramesUntilDisplayedSelectionBounds(window, shell);
+  const tests::HangGuard initialRenderGuard;
   ASSERT_TRUE(coordinator.asyncRenderer().waitUntilNoRenderInFlightForTesting(
-      std::chrono::steady_clock::now() + std::chrono::seconds(2)));
+      initialRenderGuard.deadline()));
+  RunShellFrame(window, shell);
+  const tests::HangGuard commitGuard;
+  while (coordinator.documentCanvasCommitTotal() == 0 && commitGuard.active()) {
+    RunShellFrame(window, shell);
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+  }
+  ASSERT_THAT(coordinator.documentCanvasCommitTotal(), testing::Gt(0u));
+  const tests::HangGuard rebuildGuard;
+  ASSERT_THAT(
+      coordinator.asyncRenderer().waitUntilNoRenderInFlightForTesting(rebuildGuard.deadline()),
+      testing::IsTrue());
   RunShellFrame(window, shell);
 
   const LayerInspectorStatusReadback status = shell.layerInspectorStatusForReadback();
@@ -2756,7 +2802,7 @@ TEST(EditorShellTest, LayerInspectorReadbackIncludesSelectedStyleAndPathDiagnost
   EXPECT_EQ(*status.selectedPathDataAttribute, "M 10 12 L 50 12 L 50 36 Z");
 
   // A canvas commit clears the optional rendering instance until the next document render.
-  EditorShellTestAccess::App(shell).document().document().setCanvasSize(240, 160);
+  EditorShellTestAccess::App(shell).document().document().setCanvasSize(480, 320);
   const LayerInspectorStatusReadback afterCommit = shell.layerInspectorStatusForReadback();
   EXPECT_THAT(afterCommit.selectedRenderingInstanceFill, testing::Eq(std::nullopt));
   EXPECT_THAT(afterCommit.selectedStyleAttribute,
@@ -6823,6 +6869,142 @@ TEST(EditorShellTest, EscapeExitsGroupEditEvenWhenSelectionIsActive) {
 
   EXPECT_FALSE(app.editingScope().has_value());
   EXPECT_EQ(app.selectedElement(), std::optional<svg::SVGElement>(scope));
+}
+
+TEST(EditorShellTest, EditingScopeBreadcrumbMouseClicksExitOneNestedLevelAtATime) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
+  constexpr std::string_view kNestedSvg =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="120" height="120">
+        <g id="outer"><g id="inner"><rect id="leaf" width="40" height="40"/></g></g>
+      </svg>)svg";
+  EditorShell shell(window, OptionsWithSource(kNestedSvg, "nested.svg"));
+  ASSERT_TRUE(shell.valid());
+  EditorApp& app = EditorShellTestAccess::App(shell);
+  const auto outer = app.document().document().querySelector("#outer");
+  const auto inner = app.document().document().querySelector("#inner");
+  const auto leaf = app.document().document().querySelector("#leaf");
+  ASSERT_TRUE(outer.has_value());
+  ASSERT_TRUE(inner.has_value());
+  ASSERT_TRUE(leaf.has_value());
+  EditorShellTestAccess::ConfigureViewport(shell, Box2d::FromXYWH(0.0, 0.0, 120.0, 120.0));
+  const std::string originalSource = EditorShellTestAccess::Source(shell).getText();
+  const auto generation = app.document().documentGeneration();
+  EXPECT_FALSE(RenderEditingScopeBreadcrumbFrame(window, shell, "unused").has_value());
+  ASSERT_TRUE(app.enterGroupEdit(*outer));
+  ASSERT_TRUE(app.enterGroupEdit(*inner));
+  app.setSelection(*leaf);
+
+  const auto innerItem =
+      RenderEditingScopeBreadcrumbFrame(window, shell, "<  inner##exit_group_edit");
+  ASSERT_TRUE(innerItem.has_value());
+  EXPECT_EQ(innerItem->id, innerItem->expectedLabelId);
+  const ImVec2 innerCenter = innerItem->rect.GetCenter();
+  const auto hovered =
+      RenderEditingScopeBreadcrumbFrame(window, shell, "<  inner##exit_group_edit", innerCenter);
+  ASSERT_TRUE(hovered.has_value());
+  EXPECT_TRUE(hovered->hovered);
+  RenderEditingScopeBreadcrumbFrame(window, shell, "<  inner##exit_group_edit", innerCenter,
+                                    /*mouseDown=*/true);
+  EXPECT_THAT(app.editingScope(), testing::Optional(*inner));
+  RenderEditingScopeBreadcrumbFrame(window, shell, "<  inner##exit_group_edit", innerCenter);
+  EXPECT_THAT(app.editingScope(), testing::Optional(*outer));
+  EXPECT_THAT(app.selectedElement(), testing::Optional(*inner));
+  EXPECT_EQ(EditorShellTestAccess::Source(shell).getText(), originalSource);
+
+  const auto outerItem =
+      RenderEditingScopeBreadcrumbFrame(window, shell, "<  outer##exit_group_edit");
+  ASSERT_TRUE(outerItem.has_value());
+  EXPECT_EQ(outerItem->id, outerItem->expectedLabelId);
+  const ImVec2 outerCenter = outerItem->rect.GetCenter();
+  RenderEditingScopeBreadcrumbFrame(window, shell, "<  outer##exit_group_edit", outerCenter);
+  RenderEditingScopeBreadcrumbFrame(window, shell, "<  outer##exit_group_edit", outerCenter,
+                                    /*mouseDown=*/true);
+  RenderEditingScopeBreadcrumbFrame(window, shell, "<  outer##exit_group_edit", outerCenter);
+  EXPECT_FALSE(app.editingScope().has_value());
+  EXPECT_THAT(app.selectedElement(), testing::Optional(*outer));
+  EXPECT_FALSE(RenderEditingScopeBreadcrumbFrame(window, shell, "unused").has_value());
+  EXPECT_EQ(EditorShellTestAccess::Source(shell).getText(), originalSource);
+  EXPECT_EQ(app.document().document().source(), originalSource);
+  EXPECT_EQ(app.document().documentGeneration(), generation);
+  EXPECT_THAT(inner->parentElement(), testing::Optional(*outer));
+  EXPECT_THAT(leaf->parentElement(), testing::Optional(*inner));
+}
+
+TEST(EditorShellTest, EditingScopeBreadcrumbAnonymousGroupUsesClickableFallbackLabel) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
+  constexpr std::string_view kAnonymousSvg =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="120" height="120">
+        <g><rect id="leaf" width="40" height="40"/></g>
+      </svg>)svg";
+  EditorShell shell(window, OptionsWithSource(kAnonymousSvg, "anonymous.svg"));
+  ASSERT_TRUE(shell.valid());
+  EditorApp& app = EditorShellTestAccess::App(shell);
+  const auto leaf = app.document().document().querySelector("#leaf");
+  ASSERT_TRUE(leaf.has_value());
+  const auto group = leaf->parentElement();
+  ASSERT_TRUE(group.has_value());
+  ASSERT_TRUE(group->id().empty());
+  ASSERT_TRUE(app.enterGroupEdit(*group));
+  app.setSelection(*leaf);
+  EditorShellTestAccess::ConfigureViewport(shell, Box2d::FromXYWH(0.0, 0.0, 120.0, 120.0));
+  const std::string originalSource = EditorShellTestAccess::Source(shell).getText();
+
+  const auto item = RenderEditingScopeBreadcrumbFrame(window, shell, "<  Group##exit_group_edit");
+  ASSERT_TRUE(item.has_value());
+  EXPECT_EQ(item->id, item->expectedLabelId);
+  const ImVec2 center = item->rect.GetCenter();
+  RenderEditingScopeBreadcrumbFrame(window, shell, "<  Group##exit_group_edit", center);
+  RenderEditingScopeBreadcrumbFrame(window, shell, "<  Group##exit_group_edit", center,
+                                    /*mouseDown=*/true);
+  RenderEditingScopeBreadcrumbFrame(window, shell, "<  Group##exit_group_edit", center);
+  EXPECT_FALSE(app.editingScope().has_value());
+  EXPECT_THAT(app.selectedElement(), testing::Optional(*group));
+  EXPECT_EQ(EditorShellTestAccess::Source(shell).getText(), originalSource);
+  EXPECT_EQ(app.document().document().source(), originalSource);
+  EXPECT_THAT(leaf->parentElement(), testing::Optional(*group));
+}
+
+TEST(EditorShellTest, EditingScopeBreadcrumbOutsideClickPreservesScopeAndSelection) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
+  constexpr std::string_view kGroupSvg =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="120" height="120">
+        <g id="scope"><rect id="leaf" width="40" height="40"/></g>
+      </svg>)svg";
+  EditorShell shell(window, OptionsWithSource(kGroupSvg, "outside.svg"));
+  ASSERT_TRUE(shell.valid());
+  EditorApp& app = EditorShellTestAccess::App(shell);
+  const auto scope = app.document().document().querySelector("#scope");
+  const auto leaf = app.document().document().querySelector("#leaf");
+  ASSERT_TRUE(scope.has_value());
+  ASSERT_TRUE(leaf.has_value());
+  ASSERT_TRUE(app.enterGroupEdit(*scope));
+  app.setSelection(*leaf);
+  EditorShellTestAccess::ConfigureViewport(shell, Box2d::FromXYWH(0.0, 0.0, 120.0, 120.0));
+  const std::string originalSource = EditorShellTestAccess::Source(shell).getText();
+
+  const auto item = RenderEditingScopeBreadcrumbFrame(window, shell, "<  scope##exit_group_edit");
+  ASSERT_TRUE(item.has_value());
+  const ImVec2 outside = item->rect.Max + ImVec2(20.0f, 20.0f);
+  const auto hovered =
+      RenderEditingScopeBreadcrumbFrame(window, shell, "<  scope##exit_group_edit", outside);
+  ASSERT_TRUE(hovered.has_value());
+  EXPECT_FALSE(hovered->hovered);
+  RenderEditingScopeBreadcrumbFrame(window, shell, "<  scope##exit_group_edit", outside,
+                                    /*mouseDown=*/true);
+  RenderEditingScopeBreadcrumbFrame(window, shell, "<  scope##exit_group_edit", outside);
+  EXPECT_THAT(app.editingScope(), testing::Optional(*scope));
+  EXPECT_THAT(app.selectedElement(), testing::Optional(*leaf));
+  EXPECT_EQ(EditorShellTestAccess::Source(shell).getText(), originalSource);
+  EXPECT_EQ(app.document().document().source(), originalSource);
 }
 
 TEST(EditorShellTest, GlobalShortcutsRouteFileDialogsSaveAndQuit) {

@@ -8,17 +8,26 @@ moved, so new git fetches are rejected. The commit-pinned git fetches that preda
 listed in LEGACY_GIT_COMMIT_PINS until each moves to a release tag fetched as an archive with its
 hash. That list may only shrink: each entry's digest must be in REVIEWED_LEGACY_PIN_DIGESTS, a
 listed fetch may not change its remote or commit or share its name with a second fetch, and a
-listed fetch that no longer exists fails the test until its entry is deleted.
+listed fetch that no longer exists fails until its entry and approval digest are deleted.
 
 The check fails closed where it could otherwise be bypassed: a load or use_repo_rule of Bazel's
 http.bzl or git.bzl must bind each rule under its own name, MODULE.bazel may not include() other
 files, and main-repository labels (`@//`, `@@//`, `@donner//`) are followed like `//` labels.
+Playwright repository tags are recognized from literal use_extension identities rather than proxy
+variable names. Their selected manifest must have the reviewed literal identity and SHA-256;
+their integrity maps must contain exactly the complete reviewed archive set with unique literal keys.
+A nonempty subset leaves unchecked platforms and is rejected. Proxy rebinding,
+factory/method aliases and unreadable method lookups fail closed;
+direct repository mapping operations remain allowed. Unreadable native getter results may be
+inspected as bare expressions, but cannot be invoked or transported; first-class getter factories
+are rejected. This is a conservative static check, not a general Starlark interpreter.
 
 The telemetry checks keep aspect_tools_telemetry's documented opt-out in the shared .bazelrc and in
 every workflow's environment. The telemetry section of .bazelrc explains why.
 """
 
 import ast
+from collections import Counter
 from hashlib import sha256
 from pathlib import Path
 import re
@@ -27,7 +36,39 @@ import unittest
 from python.runfiles import runfiles
 
 
-HTTP_FETCH_RULES = frozenset({"archive_override", "http_archive", "http_file", "http_jar"})
+NATIVE_DOWNLOAD_APIS = frozenset({"download", "download_and_extract"})
+# The manifest and archive set are reviewed together; changing either requires a new review.
+REVIEWED_PLAYWRIGHT_MANIFEST = "//donner/editor/wasm/tests:browsers.1.62.1.json"
+REVIEWED_PLAYWRIGHT_MANIFEST_PATH = "donner/editor/wasm/tests/browsers.1.62.1.json"
+REVIEWED_PLAYWRIGHT_MANIFEST_SHA256 = \
+    "de911b7cde3dc5b25c709a8ec23603f288caba52350b2e8cec0e76b483364d19"
+REVIEWED_PLAYWRIGHT_ARCHIVES = frozenset({
+    'builds/chromium/1234/chromium-headless-shell-linux-arm64.zip',
+    'builds/chromium/1234/chromium-linux-arm64.zip',
+    'builds/firefox/1538/firefox-debian-12-arm64.zip',
+    'builds/firefox/1538/firefox-debian-12.zip',
+    'builds/firefox/1538/firefox-mac-arm64.zip',
+    'builds/firefox/1538/firefox-mac.zip',
+    'builds/firefox/1538/firefox-ubuntu-20.04-arm64.zip',
+    'builds/firefox/1538/firefox-ubuntu-20.04.zip',
+    'builds/firefox/1538/firefox-ubuntu-22.04-arm64.zip',
+    'builds/firefox/1538/firefox-ubuntu-22.04.zip',
+    'builds/firefox/1538/firefox-ubuntu-24.04-arm64.zip',
+    'builds/firefox/1538/firefox-ubuntu-24.04.zip',
+    'builds/webkit/2251/webkit-mac-14-arm64.zip',
+    'builds/webkit/2251/webkit-mac-14.zip',
+    'builds/webkit/2336/webkit-debian-12-arm64.zip',
+    'builds/webkit/2336/webkit-debian-12.zip',
+    'builds/webkit/2336/webkit-mac-15-arm64.zip',
+    'builds/webkit/2336/webkit-mac-15.zip',
+    'builds/webkit/2336/webkit-ubuntu-22.04-arm64.zip',
+    'builds/webkit/2336/webkit-ubuntu-22.04.zip',
+    'builds/webkit/2336/webkit-ubuntu-24.04-arm64.zip',
+    'builds/webkit/2336/webkit-ubuntu-24.04.zip',
+})
+PROXY_REPO_OPERATIONS = frozenset({"use_repo", "override_repo", "inject_repo"})
+HTTP_FETCH_RULES = frozenset({"archive_override", "http_archive", "http_file", "http_jar"}) | \
+    NATIVE_DOWNLOAD_APIS
 GIT_FETCH_RULES = frozenset({"git_override", "git_repository", "new_git_repository"})
 HASH_PATTERNS = {
     "sha256": re.compile(r"[0-9a-f]{64}"),
@@ -38,7 +79,7 @@ FULL_COMMIT = re.compile(r"[0-9a-f]{40}")
 # Commit-pinned git fetches that predate this check: (declaring file, name) -> (remote, commit).
 # Each is an open #1423 finding: Donner pins release tags or versions, so move each one to a release
 # tag fetched as the tag archive or release asset with its integrity hash, then delete its entry
-# here. Removal is only a deletion from this list. Never add or change an entry.
+# here and its corresponding approval digest below. Never add or change an entry.
 LEGACY_GIT_COMMIT_PINS = {
     ("MODULE.bazel", "bloaty"): (
         "https://github.com/jwmcglynn/bloaty", "a655c418811ef5097e37a562ce62f925bda72d88"),
@@ -57,8 +98,8 @@ LEGACY_GIT_COMMIT_PINS = {
 }
 
 # SHA-256 of "file|name|remote|commit" for each entry above as reviewed in #1423. An entry whose
-# digest is missing here was added or changed after the review, which this test rejects. Leave
-# this set alone when deleting an entry above.
+# digest is missing here was added or changed after the review, which this test rejects. Keep
+# this set paired with the active entries: delete its digest when retiring a pin.
 REVIEWED_LEGACY_PIN_DIGESTS = frozenset({
     "00f2be3717e043f6027cbc15859850cb9a18778482660fab2f90521c6f87bba5",
     "50aec4cd196a494b72acc67da399119ef2ca77444c7799b6cff38acdbc83532f",
@@ -86,6 +127,13 @@ def _runfile(path):
     return resolved.read_text(encoding="utf-8")
 
 
+def _runfile_bytes(path):
+    resolved = runfiles.Create().Rlocation("donner/%s" % path)
+    if resolved is None or not Path(resolved).is_file():
+        raise OSError("reviewed browser manifest is not in the policy test data")
+    return Path(resolved).read_bytes()
+
+
 def _literal(node):
     if isinstance(node, ast.Constant) and isinstance(node.value, str):
         return node.value
@@ -99,11 +147,18 @@ def _keyword(call, name):
     return None
 
 
+def _call_name(call):
+    if isinstance(call.func, ast.Name):
+        return call.func.id
+    if isinstance(call.func, ast.Attribute) and call.func.attr in NATIVE_DOWNLOAD_APIS:
+        return call.func.attr
+    return None
+
+
 def _calls(tree, functions):
     for node in ast.walk(tree):
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
-            if node.func.id in functions:
-                yield node
+        if isinstance(node, ast.Call) and _call_name(node) in functions:
+            yield node
 
 
 def _resolve_label(label, package):
@@ -207,6 +262,12 @@ def _hash_problem(name, values):
 
 def _http_problems(call, bindings):
     hashes = {name: _keyword(call, name) for name in HASH_PATTERNS}
+    native = _call_name(call) in NATIVE_DOWNLOAD_APIS
+    if native and hashes["sha256"] is None and len(call.args) > 2:
+        hashes["sha256"] = call.args[2]
+    # Both native APIs put sha256 third; an empty default can accompany a supplied integrity.
+    if native and _literal(hashes["sha256"]) == "" and hashes["integrity"] is not None:
+        hashes["sha256"] = None
     present = {name: expression for name, expression in hashes.items() if expression is not None}
     if not present:
         return ["has no sha256 or integrity"]
@@ -223,10 +284,16 @@ def legacy_pin_digest(key, value):
     return sha256("|".join(key + value).encode("utf-8")).hexdigest()
 
 
-def legacy_list_problems(pins):
-    """Entries that were added or changed after the review, so the list can only shrink."""
-    return ["%s:%s is not a reviewed legacy pin" % key for key, value in sorted(pins.items())
-            if legacy_pin_digest(key, value) not in REVIEWED_LEGACY_PIN_DIGESTS]
+def legacy_list_problems(pins, reviewed_digests=None):
+    """Keep active pins and approvals paired, so retired pins cannot be restored unchanged."""
+    reviewed = REVIEWED_LEGACY_PIN_DIGESTS if reviewed_digests is None else reviewed_digests
+    active = {legacy_pin_digest(key, value) for key, value in pins.items()}
+    problems = ["%s:%s is not a reviewed legacy pin" % key
+                for key, value in sorted(pins.items()) if legacy_pin_digest(key, value) not in reviewed]
+    if problems:
+        return problems
+    return ["retired legacy approval has no active entry; delete its digest: %s" % digest
+            for digest in sorted(reviewed - active)]
 
 
 def missing_legacy_fetches(pins, fetched):
@@ -270,6 +337,42 @@ def binding_problems(path, tree):
         if isinstance(node, ast.Assign) and isinstance(node.value, ast.Call) and \
                 isinstance(node.value.func, ast.Name) and node.value.func.id == "use_repo_rule":
             problems.extend(_repo_rule_problems(path, node))
+    problems.extend(_native_getattr_problems(path, tree))
+    direct_calls = {id(node.func) for node in ast.walk(tree) if isinstance(node, ast.Call)}
+    problems.extend("%s:%d: native %s must be called directly" % (path, node.lineno, node.attr)
+                    for node in ast.walk(tree) if isinstance(node, ast.Attribute)
+                    and node.attr in NATIVE_DOWNLOAD_APIS and id(node) not in direct_calls)
+    return problems
+
+
+def _single_literal_assignment(tree, name):
+    values = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign) and any(
+                isinstance(target, ast.Name) and target.id == name for target in node.targets):
+            values.append(_literal(node.value))
+    return values[0] if len(values) == 1 else None
+
+
+def _getter_factory_problems(path, tree, parents):
+    return ["%s:%d: getattr must be called directly, not aliased or transported" % (path, node.lineno)
+            for node in ast.walk(tree) if isinstance(node, ast.Name) and node.id == "getattr"
+            and not _is_direct_call(node, parents.get(id(node)))]
+
+
+def _native_getattr_problems(path, tree):
+    """Reject fetch or unresolved callable lookups; bare unknown inspection stays allowed."""
+    parents = {id(child): node for node in ast.walk(tree) for child in ast.iter_child_nodes(node)}
+    problems = _getter_factory_problems(path, tree, parents)
+    for call in _calls(tree, {"getattr"}):
+        expression = call.args[1] if len(call.args) > 1 else _keyword(call, "name")
+        values = _readable_string_values(tree, expression, call)
+        if NATIVE_DOWNLOAD_APIS.intersection(values or []):
+            problems.append("%s:%d: native download methods must be called directly, not through "
+                            "getattr" % (path, call.lineno))
+        elif values is None and not isinstance(parents.get(id(call)), ast.Expr):
+            problems.append("%s:%d: callable or transported getattr methods must be readable literals"
+                            % (path, call.lineno))
     return problems
 
 
@@ -294,37 +397,206 @@ def _repo_rule_problems(path, node):
             % (path, node.lineno, args[1], args[1])]
 
 
-def fetch_findings(trees, pins=None):
+def fetch_findings(trees, pins=None, read_manifest=None):
     """Returns (problems, git fetches present by (file, name)) for the parsed Starlark files."""
     pins = LEGACY_GIT_COMMIT_PINS if pins is None else pins
+    read_manifest = _runfile_bytes if read_manifest is None else read_manifest
     problems = legacy_list_problems(pins)
     git_fetches = []
     for path, tree in sorted(trees.items()):
         bindings = _Bindings(tree)
         for call in _calls(tree, HTTP_FETCH_RULES | GIT_FETCH_RULES):
-            if call.func.id in HTTP_FETCH_RULES:
+            if _call_name(call) in HTTP_FETCH_RULES:
                 found = _http_problems(call, bindings)
             else:
                 found = _git_problems(call, path, pins)
                 git_fetches.append((path, _git_name(call)))
-            problems.extend("%s:%d: %s %s" % (path, call.lineno, call.func.id, problem)
+            problems.extend("%s:%d: %s %s" % (path, call.lineno, _call_name(call), problem)
                             for problem in found)
-        problems.extend(_integrity_map_problems(path, tree))
+        problems.extend(_integrity_map_problems(path, tree, read_manifest))
         problems.extend(binding_problems(path, tree))
     problems.extend("%s:%s is fetched more than once" % key for key in sorted(set(git_fetches))
                     if git_fetches.count(key) > 1)
     return problems, set(git_fetches)
 
 
-def _integrity_map_problems(path, tree):
-    """An empty value in a browser integrity map would silently skip that archive's check."""
+def _readable_string_values(tree, expression, call):
+    values = _Bindings(tree).values(expression, call)
+    if values is None and isinstance(expression, ast.Name):
+        value = _single_literal_assignment(tree, expression.id)
+        return [value] if value is not None else None
+    return values
+
+
+def _assigned_proxy_name(assignment):
+    if assignment is None or len(assignment.targets) != 1:
+        return None
+    target = assignment.targets[0]
+    return target.id if isinstance(target, ast.Name) else None
+
+
+def _proxy_assignment_index(tree):
+    assignments = [node for node in ast.walk(tree) if isinstance(node, ast.Assign)]
+    by_value = {id(node.value): node for node in assignments}
+    counts = Counter(target.id for node in assignments for target in node.targets
+                     if isinstance(target, ast.Name))
+    return by_value, counts
+
+
+def _extension_proxy_bindings(path, tree):
+    """Recognize literal extension identities, rejecting ambiguous proxy bindings."""
+    by_value, counts = _proxy_assignment_index(tree)
+    proxies, problems = set(), []
+    for call in _calls(tree, {"use_extension"}):
+        expression = call.args[1] if len(call.args) > 1 else _keyword(call, "extension_name")
+        values = _readable_string_values(tree, expression, call)
+        if not values or len(values) != 1:
+            problems.append("%s:%d: use_extension name must be a readable literal" % (path, call.lineno))
+            continue
+        name = _assigned_proxy_name(by_value.get(id(call)))
+        if name is None:
+            problems.append("%s:%d: use_extension must bind one proxy name directly" % (path, call.lineno))
+            continue
+        if counts[name] != 1:
+            problems.append("%s:%d: extension proxy name is rebound" % (path, call.lineno))
+        if values == ["playwright"]:
+            proxies.add(name)
+    return proxies, problems
+
+
+def _is_proxy_name(node, proxies):
+    return isinstance(node, ast.Name) and node.id in proxies
+
+
+def _is_playwright_repo(call, proxies):
+    return (isinstance(call.func, ast.Attribute) and call.func.attr == "repo"
+            and _is_proxy_name(call.func.value, proxies))
+
+
+def _proxy_argument_is_direct(node, parent):
+    return (isinstance(parent, ast.Call) and isinstance(parent.func, ast.Name)
+            and parent.func.id in PROXY_REPO_OPERATIONS | {"getattr"}
+            and bool(parent.args) and parent.args[0] is node)
+
+
+def _proxy_keyword_is_direct(parent, parents):
+    if not isinstance(parent, ast.keyword) or parent.arg != "extension_proxy":
+        return False
+    call = parents.get(id(parent))
+    return (isinstance(call, ast.Call) and isinstance(call.func, ast.Name)
+            and call.func.id in PROXY_REPO_OPERATIONS)
+
+
+def _is_direct_call(node, parent):
+    return isinstance(parent, ast.Call) and parent.func is node
+
+
+def _is_extension_factory(node):
+    return isinstance(node, ast.Name) and node.id == "use_extension"
+
+
+def _is_browser_repo_member(node, proxies):
+    return (isinstance(node, ast.Attribute) and node.attr == "repo"
+            and _is_proxy_name(node.value, proxies))
+
+
+def _browser_node_indirection(node, parent, parents, proxies):
+    if _is_extension_factory(node) and not _is_direct_call(node, parent):
+        return "use_extension must be called directly"
+    if _is_browser_repo_member(node, proxies) and not _is_direct_call(node, parent):
+        return "browser repo method must be called directly"
+    if _is_proxy_name(node, proxies) and isinstance(node.ctx, ast.Load):
+        if not (isinstance(parent, ast.Attribute) or _proxy_argument_is_direct(node, parent)
+                or _proxy_keyword_is_direct(parent, parents)):
+            return "browser proxy must be used directly"
+    return None
+
+
+def _browser_indirection_problems(path, tree, proxies):
+    """Reject detached repository methods and first-class proxy/factory indirections."""
+    parents = {id(child): node for node in ast.walk(tree) for child in ast.iter_child_nodes(node)}
     problems = []
+    for node in ast.walk(tree):
+        problem = _browser_node_indirection(node, parents.get(id(node)), parents, proxies)
+        if problem:
+            problems.append("%s:%d: %s" % (path, node.lineno, problem))
+    return problems
+
+
+def _browser_getattr_problems(path, tree, proxies):
+    problems = []
+    for call in _calls(tree, {"getattr"}):
+        if not call.args or not _is_proxy_name(call.args[0], proxies):
+            continue
+        expression = call.args[1] if len(call.args) > 1 else None
+        values = _readable_string_values(tree, expression, call)
+        if values is None or "repo" in values:
+            problems.append("%s:%d: browser repo method lookups must be direct and readable" % (path, call.lineno))
+    return problems
+
+
+def _missing_browser_integrity_maps(path, tree, proxies):
+    return ["%s:%d: playwright.repo requires integrity_path_map" % (path, call.lineno)
+            for call in ast.walk(tree) if isinstance(call, ast.Call) and _is_playwright_repo(call, proxies)
+            and _keyword(call, "integrity_path_map") is None]
+
+
+def _browser_archive_key_problems(path, tree, proxies):
+    """Require the reviewed complete archive set on recognized Playwright repository tags."""
+    problems = []
+    for call in ast.walk(tree):
+        if not (isinstance(call, ast.Call) and _is_playwright_repo(call, proxies)):
+            continue
+        mapping = _keyword(call, "integrity_path_map")
+        if not isinstance(mapping, ast.Dict) or not mapping.keys:
+            continue  # Missing, nonliteral and empty maps are reported separately.
+        keys = [_literal(key) for key in mapping.keys]
+        if (None in keys or len(keys) != len(set(keys))
+                or set(keys) != REVIEWED_PLAYWRIGHT_ARCHIVES):
+            problems.append("%s:%d: browser archive keys must match the complete reviewed set"
+                            % (path, call.lineno))
+    return problems
+
+
+def _browser_manifest_problems(path, tree, proxies, read_manifest):
+    problems = []
+    for call in ast.walk(tree):
+        if not (isinstance(call, ast.Call) and _is_playwright_repo(call, proxies)):
+            continue
+        mapping = _keyword(call, "integrity_path_map")
+        if not isinstance(mapping, ast.Dict) or not mapping.keys:
+            continue  # These calls already fail the integrity-map checks.
+        if _literal(_keyword(call, "browsers_json")) != REVIEWED_PLAYWRIGHT_MANIFEST:
+            problems.append("%s:%d: browsers_json must select the reviewed literal manifest"
+                            % (path, call.lineno))
+            continue
+        try:
+            digest = sha256(read_manifest(REVIEWED_PLAYWRIGHT_MANIFEST_PATH)).hexdigest()
+        except (OSError, TypeError):
+            problems.append("%s:%d: reviewed browser manifest is unreadable" % (path, call.lineno))
+            continue
+        if digest != REVIEWED_PLAYWRIGHT_MANIFEST_SHA256:
+            problems.append("%s:%d: browser manifest bytes do not match the reviewed SHA-256"
+                            % (path, call.lineno))
+    return problems
+
+
+def _integrity_map_problems(path, tree, read_manifest):
+    """An empty value in a browser integrity map would silently skip that archive's check."""
+    proxies, problems = _extension_proxy_bindings(path, tree)
+    problems.extend(_missing_browser_integrity_maps(path, tree, proxies))
+    problems.extend(_browser_archive_key_problems(path, tree, proxies))
+    problems.extend(_browser_manifest_problems(path, tree, proxies, read_manifest))
+    problems.extend(_browser_indirection_problems(path, tree, proxies))
+    problems.extend(_browser_getattr_problems(path, tree, proxies))
     for node in ast.walk(tree):
         if not (isinstance(node, ast.keyword) and node.arg == "integrity_path_map"):
             continue
         if not isinstance(node.value, ast.Dict):
             problems.append("%s:%d: integrity_path_map is not a literal" % (path, node.lineno))
             continue
+        if not node.value.keys:
+            problems.append("%s:%d: integrity_path_map is empty" % (path, node.lineno))
         for key, value in zip(node.value.keys, node.value.values):
             literal = _literal(value)
             if literal is None or not HASH_PATTERNS["integrity"].fullmatch(literal):
@@ -377,8 +649,23 @@ class CheckerTest(unittest.TestCase):
     """The checks reject the defects they exist for, so a green run is not vacuous."""
 
     @staticmethod
-    def _findings(source, path="third_party/example.bzl"):
-        return fetch_findings({path: ast.parse(source)})[0]
+    def _findings(source, path="third_party/example.bzl", read_manifest=None):
+        return fetch_findings({path: ast.parse(source)}, read_manifest=read_manifest)[0]
+
+    @staticmethod
+    def _browser(source, receiver="pw", extension='"playwright"'):
+        return '%s = use_extension("@rules_playwright//playwright:extensions.bzl", %s)\n%s' % (
+            receiver, extension, source)
+
+    @staticmethod
+    def _browser_call(arguments, receiver="pw"):
+        return '%s.repo(browsers_json = %r, %s)' % (
+            receiver, REVIEWED_PLAYWRIGHT_MANIFEST, arguments)
+
+    @staticmethod
+    def _browser_map():
+        integrity = "sha256-" + "A" * 43 + "="
+        return {path: integrity for path in sorted(REVIEWED_PLAYWRIGHT_ARCHIVES)}
 
     def test_rejects_an_archive_without_a_hash(self):
         self.assertEqual(len(self._findings('http_archive(name = "a", urls = ["https://x"])')), 1)
@@ -437,7 +724,10 @@ class CheckerTest(unittest.TestCase):
         self.assertEqual(len(legacy_list_problems(changed)), 1)
         shrunk = dict(LEGACY_GIT_COMMIT_PINS)
         del shrunk[("MODULE.bazel", "imgui")]
-        self.assertEqual(legacy_list_problems(shrunk), [])
+        retired_digest = legacy_pin_digest(("MODULE.bazel", "imgui"),
+                                           LEGACY_GIT_COMMIT_PINS[("MODULE.bazel", "imgui")])
+        self.assertEqual(legacy_list_problems(
+            shrunk, REVIEWED_LEGACY_PIN_DIGESTS - {retired_digest}), [])
 
     def test_fetch_rules_must_keep_their_canonical_names(self):
         canonical = ('http_file = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", '
@@ -467,7 +757,10 @@ class CheckerTest(unittest.TestCase):
         self.assertEqual(len(fetch_findings(trees)[0]), 1)
 
     def test_rejects_an_empty_browser_integrity(self):
-        source = 'playwright.repo(integrity_path_map = {"a.zip": "sha256-AAAA", "b.zip": ""})'
+        hashes = self._browser_map()
+        hashes[sorted(hashes)[0]] = ""
+        source = self._browser(self._browser_call('integrity_path_map = %r' % hashes, "playwright"),
+                               receiver="playwright")
         self.assertEqual(len(self._findings(source)), 1)
 
     def test_bazelrc_rejects_a_missing_empty_or_scoped_setting(self):
@@ -485,6 +778,239 @@ class CheckerTest(unittest.TestCase):
         self.assertEqual(len(workflow_telemetry_problems("name: X\non: push\n")), 2)
         override = complete + "jobs:\n  a:\n    env:\n      DO_NOT_TRACK: \"\"\n"
         self.assertEqual(len(workflow_telemetry_problems(override)), 1)
+
+
+    def test_native_repository_downloads_require_an_integrity_hash(self):
+        for context in ("ctx", "repository_ctx", "download_context"):
+            for method in ("download", "download_and_extract"):
+                for suffix in ("", ', sha256 = ""', ', integrity = "sha256-"',
+                               ", sha256 = UNKNOWN_HASH"):
+                    with self.subTest(context=context, method=method, suffix=suffix):
+                        source = '%s.%s("https://example.invalid/archive"%s)' % (
+                            context, method, suffix)
+                        self.assertEqual(len(self._findings(source)), 1)
+                valid = '%s.%s("https://example.invalid/archive", sha256 = "%s")' % (
+                    context, method, "a" * 64)
+                self.assertEqual(self._findings(valid), [])
+                positional = '%s.%s("https://example.invalid/archive", "out", "%s")' % (
+                    context, method, "a" * 64)
+                self.assertEqual(self._findings(positional), [])
+
+    def test_retired_legacy_pin_cannot_keep_a_dormant_approval(self):
+        retired = dict(LEGACY_GIT_COMMIT_PINS)
+        del retired[(self._NON_BCR, "woff2")]
+        self.assertEqual(len(legacy_list_problems(retired)), 1)
+
+
+    def test_retirement_rejects_restoring_the_original_pin(self):
+        key = (self._NON_BCR, "woff2")
+        retired = dict(LEGACY_GIT_COMMIT_PINS)
+        value = retired.pop(key)
+        remaining_approvals = REVIEWED_LEGACY_PIN_DIGESTS - {legacy_pin_digest(key, value)}
+        self.assertEqual(legacy_list_problems(retired, remaining_approvals), [])
+        retired[key] = value
+        self.assertEqual(len(legacy_list_problems(retired, remaining_approvals)), 1)
+
+    def test_native_integrity_supports_the_empty_positional_sha_default(self):
+        integrity = "sha256-" + "A" * 43 + "="
+        for method in NATIVE_DOWNLOAD_APIS:
+            source = 'ctx.%s("https://example.invalid/archive", "out", "", ' \
+                     'integrity = "%s")' % (method, integrity)
+            self.assertEqual(self._findings(source), [])
+
+    def test_native_download_aliases_cannot_hide_a_fetch(self):
+        for method in NATIVE_DOWNLOAD_APIS:
+            source = 'fetch = ctx.%s\nfetch("https://example.invalid/archive")' % method
+            self.assertEqual(len(self._findings(source)), 1)
+
+
+    def test_getattr_cannot_hide_known_native_download_methods(self):
+        for method in NATIVE_DOWNLOAD_APIS:
+            for source in (
+                'getattr(ctx, "%s")("https://example.invalid/archive")' % method,
+                'fetch = getattr(ctx, "%s")\nfetch("https://example.invalid/archive")' % method,
+                'METHOD = "%s"\ngetattr(ctx, METHOD)("https://example.invalid/archive")' % method,
+                'P = [struct(method = "%s")]\nfor p in P:\n'
+                '    getattr(ctx, p.method)("https://example.invalid/archive")' % method,
+            ):
+                with self.subTest(method=method, source=source):
+                    self.assertEqual(len(self._findings(source)), 1)
+
+    def test_unreadable_native_getattr_callees_fail_closed(self):
+        for source in ('METHOD = choose_method()\ngetattr(ctx, METHOD)("https://example.invalid/archive")',
+                       'getattr(ctx, "down" + "load")("https://example.invalid/archive")',
+                       'getattr(ctx, UNKNOWN_FIELD)("https://example.invalid/archive")'):
+            with self.subTest(source=source):
+                self.assertTrue(self._findings(source))
+
+    def test_unreadable_native_getattr_transport_fails_closed(self):
+        for source in ('METHOD = choose_method()\nfetch = getattr(ctx, METHOD)\n'
+                       'fetch("https://example.invalid/archive")',
+                       'fetches = [getattr(ctx, UNKNOWN_FIELD)]\n'
+                       'fetches[0]("https://example.invalid/archive")',
+                       'invoke(getattr(ctx, UNKNOWN_FIELD))'):
+            with self.subTest(source=source):
+                self.assertTrue(self._findings(source))
+
+    def test_getattr_factory_aliases_cannot_hide_native_fetches(self):
+        for source in ('lookup = getattr\nlookup(ctx, "download")("https://example.invalid/archive")',
+                       'lookups = [getattr]\nlookups[0](ctx, "download")("https://example.invalid/archive")'):
+            with self.subTest(source=source):
+                self.assertTrue(self._findings(source))
+
+    def test_known_non_download_getters_and_bare_unknown_inspection_remain_allowed(self):
+        for source in ('METHOD = "file"\ngetattr(ctx, METHOD)("BUILD.bazel", "")',
+                       'METHOD = choose_method()\ngetattr(ctx, METHOD)',
+                       'value = getattr(ctx, "name")\ninspect(value)'):
+            with self.subTest(source=source):
+                self.assertEqual(self._findings(source), [])
+
+    def test_non_download_getattr_remains_allowed(self):
+        for source in ('getattr(ctx, "name")', 'getattr(ctx, "file")("BUILD.bazel", "")',
+                       'FIELD = "name"\ngetattr(ctx, FIELD)', 'getattr(ctx, UNKNOWN_FIELD)'):
+            with self.subTest(source=source):
+                self.assertEqual(self._findings(source), [])
+
+    def test_playwright_repo_requires_a_nonempty_integrity_map(self):
+        for source in ('playwright.repo(name = "browsers")',
+                       'playwright.repo(integrity_path_map = {})'):
+            with self.subTest(source=source):
+                self.assertEqual(len(self._findings(self._browser(source, receiver="playwright"))), 1)
+        self.assertEqual(self._findings(self._browser(
+            self._browser_call('integrity_path_map = %r' % self._browser_map(), "playwright"),
+            receiver="playwright")), [])
+
+
+    def test_playwright_extension_binding_requires_integrity_for_every_receiver(self):
+        for receiver in ("pw", "browser_extension", "playwright"):
+            with self.subTest(receiver=receiver):
+                self.assertTrue(self._findings(self._browser(
+                    receiver + '.repo(name = "browsers")', receiver)))
+                complete = self._browser_call('integrity_path_map = %r' % self._browser_map(), receiver)
+                self.assertEqual(self._findings(self._browser(complete, receiver)), [])
+        keyword = self._browser('pw.repo(name = "browsers")', extension='extension_name="playwright"')
+        self.assertTrue(self._findings(keyword))
+        constant = 'EXT = "playwright"\n' + self._browser('pw.repo(name = "browsers")', extension="EXT")
+        self.assertTrue(self._findings(constant))
+
+    def test_playwright_integrity_map_requires_every_reviewed_archive(self):
+        complete = self._browser_map()
+        self.assertEqual(self._findings(self._browser(
+            self._browser_call('integrity_path_map = %r' % complete))), [])
+        for missing in sorted(complete):
+            with self.subTest(missing=missing):
+                subset = dict(complete)
+                del subset[missing]
+                self.assertTrue(self._findings(self._browser(
+                    self._browser_call('integrity_path_map = %r' % subset))))
+
+    def test_playwright_archive_set_is_bound_to_selected_manifest(self):
+        source = self._browser(
+            'pw.repo(browsers_json = "//donner/editor/wasm/tests:browsers.1.63.0.json", '
+            'integrity_path_map = %r)' % self._browser_map())
+        self.assertTrue(self._findings(source),
+                        "An unchanged archive map must not approve a different browser manifest")
+
+    def test_playwright_manifest_identity_is_required_and_literal(self):
+        for manifest in (None, '"//other:browsers.json"', 'MANIFEST',
+                         '"//donner/editor/wasm/tests:" + "browsers.1.62.1.json"'):
+            with self.subTest(manifest=manifest):
+                selected = "" if manifest is None else "browsers_json = %s, " % manifest
+                source = self._browser('pw.repo(%sintegrity_path_map = %r)' % (
+                    selected, self._browser_map()))
+                self.assertRegex("\n".join(self._findings(source)), "reviewed literal manifest")
+
+    def test_playwright_manifest_bytes_are_authenticated(self):
+        source = self._browser(self._browser_call('integrity_path_map = %r' % self._browser_map()))
+        reviewed = _runfile_bytes(REVIEWED_PLAYWRIGHT_MANIFEST_PATH)
+        self.assertEqual(self._findings(source, read_manifest=lambda _: reviewed), [])
+        altered = reviewed.replace(b'"1234"', b'"1235"', 1)
+        self.assertNotEqual(altered, reviewed)
+        for content in (b"", altered, reviewed + b"\n"):
+            with self.subTest(content=content):
+                self.assertRegex("\n".join(self._findings(
+                    source, read_manifest=lambda _: content)), "reviewed SHA-256")
+
+    def test_playwright_manifest_read_errors_fail_closed(self):
+        source = self._browser(self._browser_call('integrity_path_map = %r' % self._browser_map()))
+        for failure in (FileNotFoundError, PermissionError, IsADirectoryError):
+            with self.subTest(failure=failure):
+                def unreadable(_):
+                    raise failure("manifest cannot be read")
+                self.assertRegex("\n".join(self._findings(
+                    source, read_manifest=unreadable)), "manifest is unreadable")
+
+    def test_playwright_integrity_keys_are_exact_unique_and_literal(self):
+        complete = self._browser_map()
+        first = sorted(complete)[0]
+        malformed = dict(complete)
+        malformed["unreviewed/archive.zip"] = malformed[first]
+        maps = (repr(malformed), repr(complete)[:-1] + ', %r: %r}' % (first, complete[first]),
+                repr(complete).replace(repr(first), "ARCHIVE_PATH", 1))
+        for mapping in maps:
+            with self.subTest(mapping=mapping):
+                self.assertTrue(self._findings(self._browser(
+                    self._browser_call('integrity_path_map = %s' % mapping))))
+        ordinary = self._browser('ordinary.repo(integrity_path_map = {"archive.zip": "sha256-AAAA"})',
+                                 receiver="ordinary", extension='"unrelated"')
+        self.assertEqual(self._findings(ordinary), [])
+
+    def test_playwright_proxy_and_repo_indirections_are_rejected(self):
+        for source in ('alias = pw\nalias.repo(name = "browsers")',
+                       'repos = [pw]\nrepos[0].repo(name = "browsers")',
+                       'holder = struct(extension = pw)\nholder.extension.repo(name = "browsers")',
+                       'repo = pw.repo\nrepo(name = "browsers")'):
+            with self.subTest(source=source):
+                self.assertTrue(self._findings(self._browser(source)))
+
+    def test_playwright_repo_getattr_must_not_hide_integrity(self):
+        for source in ('getattr(pw, "repo")(name = "browsers")',
+                       'repo = getattr(pw, "repo")\nrepo(name = "browsers")',
+                       'FIELD = "repo"\ngetattr(pw, FIELD)(name = "browsers")',
+                       'getattr(pw, UNKNOWN)(name = "browsers")',
+                       'getter = getattr\ngetter(pw, "repo")(name = "browsers")'):
+            with self.subTest(source=source):
+                self.assertTrue(self._findings(self._browser(source)))
+        self.assertEqual(self._findings(self._browser('getattr(pw, "version")')), [])
+
+    def test_unrelated_literal_extensions_and_repo_calls_remain_allowed(self):
+        for receiver in ("ordinary", "playwright"):
+            with self.subTest(receiver=receiver):
+                source = self._browser(receiver + '.repo(name = "ordinary")', receiver,
+                                       extension='"unrelated"')
+                self.assertEqual(self._findings(source), [])
+        self.assertEqual(self._findings('ordinary.repo(name = "ordinary")'), [])
+
+    def test_direct_repository_mapping_operations_remain_allowed(self):
+        for operation in ("use_repo", "override_repo", "inject_repo"):
+            with self.subTest(operation=operation):
+                self.assertEqual(self._findings(self._browser(
+                    '%s(pw, browser = "existing_repo")' % operation)), [])
+                self.assertEqual(self._findings(self._browser(
+                    '%s(extension_proxy = pw, browser = "existing_repo")' % operation)), [])
+
+    def test_nonliteral_extension_names_fail_closed(self):
+        for name in ('"play" + "wright"', 'EXTENSION_NAME', 'choose_extension()'):
+            with self.subTest(name=name):
+                self.assertTrue(self._findings(self._browser('pw.repo(name = "browsers")',
+                                                            extension=name)))
+
+    def test_rebound_extension_proxy_names_fail_closed(self):
+        for suffix in ('pw = use_extension("@example//:extensions.bzl", "ordinary")\n'
+                       'pw.repo(name = "ordinary")',
+                       'pw = other\npw.repo(name = "browsers")'):
+            with self.subTest(suffix=suffix):
+                self.assertTrue(self._findings(self._browser(suffix)))
+        repeated = 'EXT = "playwright"\nEXT = "ordinary"\n' + self._browser(
+            'pw.repo(name = "browsers")', extension="EXT")
+        self.assertTrue(self._findings(repeated))
+
+    def test_extension_factory_indirections_fail_closed(self):
+        source = 'factory = use_extension\npw = factory(' \
+                 '"@rules_playwright//playwright:extensions.bzl", "playwright")\n' \
+                 'pw.repo(name = "browsers")'
+        self.assertTrue(self._findings(source))
+
 
 
 class RepositoryPolicyTest(unittest.TestCase):

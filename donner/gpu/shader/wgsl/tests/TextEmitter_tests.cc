@@ -3,9 +3,12 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <array>
+#include <span>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include "donner/gpu/GpuLimits.h"
 #include "donner/gpu/shader/MslBindingMap.h"
@@ -323,6 +326,207 @@ TEST(TextEmitter, PreservesFloatBitsAndUsesUniqueNamesAndEagerSelect) {
   EXPECT_THAT(msl, HasSubstr("select(2u, uint(1u),"));
   EXPECT_THAT(msl, HasSubstr("select("));
   EXPECT_THAT(msl, Not(HasSubstr(" ? ")));
+}
+
+/// Exercises every caller-owned text-buffer boundary using an ordinary validated module.
+void ExpectTextCapacityContract(const Module& module,
+                                TextEmitResult (*emit)(const Module&, TextSink&)) {
+  TextSink countOnly;
+  ASSERT_THAT(emit(module, countOnly).error, testing::Eq(TextEmitError::None));
+  ASSERT_THAT(countOnly.size, testing::Gt(0u));
+  ASSERT_THAT(countOnly.size, testing::Lt(kMaxTextEmitBytes));
+  const uint32_t required = countOnly.size;
+  constexpr char kGuard = '~';
+  std::vector<char> storage(required + 2, kGuard);
+  TextSink sink{storage.data(), required};
+  ASSERT_THAT(emit(module, sink).error, testing::Eq(TextEmitError::None));
+  const std::string expected(sink.view());
+  EXPECT_THAT(sink.size, testing::Eq(required));
+  EXPECT_THAT(std::span(storage).subspan(required), testing::Each(kGuard));
+
+  for (uint32_t capacity = 0; capacity < required; ++capacity) {
+    SCOPED_TRACE(capacity);
+    std::fill(storage.begin(), storage.end(), kGuard);
+    sink.capacity = capacity;
+    EXPECT_THAT(emit(module, sink).error, testing::Eq(TextEmitError::SinkTooSmall));
+    EXPECT_THAT(sink.diagnostic, testing::Eq(TextEmitError::SinkTooSmall));
+    EXPECT_THAT(sink.view(), testing::IsEmpty());
+    EXPECT_THAT(sink.size, testing::Eq(0u));
+    EXPECT_THAT(std::span(storage).subspan(capacity), testing::Each(kGuard));
+  }
+
+  sink.capacity = required;
+  ASSERT_THAT(emit(module, sink).error, testing::Eq(TextEmitError::None));
+  EXPECT_THAT(sink.diagnostic, testing::Eq(TextEmitError::None));
+  EXPECT_THAT(sink.view(), testing::Eq(expected));
+  EXPECT_THAT(std::span(storage).subspan(required), testing::Each(kGuard));
+}
+
+TEST(TextEmitter, MslRespectsEveryCapacityAndReusesTheFailedSink) {
+  ExpectTextCapacityContract(kParsed.module, EmitMsl);
+}
+
+TEST(TextEmitter, WgslRespectsEveryCapacityAndReusesTheFailedSink) {
+  ExpectTextCapacityContract(kParsed.module, EmitWgsl);
+}
+
+TEST(TextEmitter, SpirvRespectsEveryCapacityAndReusesTheFailedSink) {
+  SpirvSink countOnly;
+  ASSERT_THAT(EmitSpirv(kParsed.module, countOnly).error, testing::Eq(SpirvEmitError::None));
+  ASSERT_THAT(countOnly.size, testing::Gt(5u));
+  const uint32_t required = countOnly.size;
+  constexpr uint32_t kGuard = 0xdeadbeef;
+  std::vector<uint32_t> storage(required + 2, kGuard);
+  SpirvSink sink{storage.data(), required};
+  ASSERT_THAT(EmitSpirv(kParsed.module, sink).error, testing::Eq(SpirvEmitError::None));
+  const std::vector<uint32_t> expected(storage.begin(), storage.begin() + required);
+  EXPECT_THAT(storage.front(), testing::Eq(0x07230203u));
+  EXPECT_THAT(sink.size, testing::Eq(required));
+  EXPECT_THAT(std::span(storage).subspan(required), testing::Each(kGuard));
+
+  for (uint32_t capacity = 0; capacity < required; ++capacity) {
+    SCOPED_TRACE(capacity);
+    std::fill(storage.begin(), storage.end(), kGuard);
+    sink.capacity = capacity;
+    EXPECT_THAT(EmitSpirv(kParsed.module, sink).error, testing::Eq(SpirvEmitError::Capacity));
+    EXPECT_THAT(sink.error, testing::Eq(SpirvEmitError::Capacity));
+    EXPECT_THAT(sink.size, testing::Eq(0u));
+    EXPECT_THAT(std::span(storage).subspan(capacity), testing::Each(kGuard));
+  }
+
+  sink.capacity = required;
+  ASSERT_THAT(EmitSpirv(kParsed.module, sink).error, testing::Eq(SpirvEmitError::None));
+  EXPECT_THAT(sink.error, testing::Eq(SpirvEmitError::None));
+  EXPECT_THAT(sink.size, testing::Eq(required));
+  EXPECT_THAT(std::span(storage).first(required), testing::ElementsAreArray(expected));
+  EXPECT_THAT(std::span(storage).subspan(required), testing::Each(kGuard));
+}
+
+TEST(TextEmitter, TextSinkAppendsAtomicallyAndCountsWithoutStorage) {
+  std::array<char, 4> storage = {'~', '~', '~', '~'};
+  TextSink sink{storage.data(), 2};
+  EXPECT_THAT(sink.append("ab"), testing::IsTrue());
+  EXPECT_THAT(sink.append('c'), testing::IsFalse());
+  EXPECT_THAT(sink.append("cd"), testing::IsFalse());
+  EXPECT_THAT(sink.view(), testing::Eq("ab"));
+  EXPECT_THAT(storage, testing::ElementsAre('a', 'b', '~', '~'));
+  sink.clear();
+  EXPECT_THAT(sink.append('c'), testing::IsTrue());
+  EXPECT_THAT(sink.append("d"), testing::IsTrue());
+  EXPECT_THAT(sink.view(), testing::Eq("cd"));
+
+  TextSink countOnly;
+  const std::string atLimit(kMaxTextEmitBytes, 'a');
+  EXPECT_THAT(countOnly.append(atLimit), testing::IsTrue());
+  EXPECT_THAT(countOnly.append('b'), testing::IsFalse());
+  EXPECT_THAT(countOnly.append("b"), testing::IsFalse());
+  EXPECT_THAT(countOnly.size, testing::Eq(kMaxTextEmitBytes));
+  EXPECT_THAT(countOnly.view(), testing::IsEmpty());
+}
+
+TEST(TextEmitter, SpirvSinkLatchesTheFirstCapacityFailureWithoutWritingPastStorage) {
+  constexpr uint32_t kGuard = 0xdeadbeef;
+  std::array<uint32_t, 4> storage = {kGuard, kGuard, kGuard, kGuard};
+  SpirvSink sink{storage.data(), 2};
+  sink.word(1);
+  sink.word(2);
+  sink.word(3);
+  sink.word(4);
+  EXPECT_THAT(sink.error, testing::Eq(SpirvEmitError::Capacity));
+  EXPECT_THAT(sink.size, testing::Eq(2u));
+  EXPECT_THAT(storage, testing::ElementsAre(1u, 2u, kGuard, kGuard));
+}
+
+TEST(TextEmitter, FailedParsingCannotProduceAUsableProjection) {
+  const ParseResult parsed = Parse("fn f() { let value = ; }");
+  ASSERT_THAT(parsed.diagnostic.code, testing::Eq(ErrorCode::UnexpectedToken));
+  std::array<char, 4096> textStorage = {};
+  TextSink text{textStorage.data(), uint32_t(textStorage.size())};
+  EXPECT_THAT(EmitWgsl(parsed.module, text).error, testing::Eq(TextEmitError::InvalidModule));
+  EXPECT_THAT(text.view(), testing::IsEmpty());
+  EXPECT_THAT(text.diagnostic, testing::Eq(TextEmitError::InvalidModule));
+  EXPECT_THAT(EmitMsl(parsed.module, text).error, testing::Eq(TextEmitError::InvalidModule));
+  EXPECT_THAT(text.view(), testing::IsEmpty());
+  EXPECT_THAT(text.diagnostic, testing::Eq(TextEmitError::InvalidModule));
+  std::array<uint32_t, 4096> wordStorage = {};
+  SpirvSink words{wordStorage.data(), uint32_t(wordStorage.size())};
+  EXPECT_THAT(EmitSpirv(parsed.module, words).error, testing::Eq(SpirvEmitError::InvalidModule));
+  EXPECT_THAT(words.size, testing::Eq(0u));
+  EXPECT_THAT(words.error, testing::Eq(SpirvEmitError::InvalidModule));
+}
+
+TEST(TextEmitter, ValidWgslEntryNamesCanBeOutsideTheMetalProjectionProfile) {
+  for (const auto name : {"main", "donner_msl_entry"}) {
+    SCOPED_TRACE(name);
+    const std::string source = std::string("@compute @workgroup_size(1) fn ") + name + "() {}";
+    const ParseResult parsed = Parse(source);
+    ASSERT_THAT(parsed.diagnostic.code, testing::Eq(ErrorCode::None));
+    std::array<char, 4096> output = {};
+    TextSink text{output.data(), uint32_t(output.size())};
+    ASSERT_THAT(EmitWgsl(parsed.module, text).error, testing::Eq(TextEmitError::None));
+    EXPECT_THAT(Parse(text.view()).diagnostic.code, testing::Eq(ErrorCode::None));
+    EXPECT_THAT(EmitMsl(parsed.module, text).error,
+                testing::Eq(TextEmitError::UnsupportedEntryPointName));
+    EXPECT_THAT(text.view(), testing::IsEmpty());
+    EXPECT_THAT(text.diagnostic, testing::Eq(TextEmitError::UnsupportedEntryPointName));
+    SpirvSink words;
+    EXPECT_THAT(EmitSpirv(parsed.module, words).error, testing::Eq(SpirvEmitError::None));
+    EXPECT_THAT(words.size, testing::Gt(5u));
+  }
+}
+
+TEST(TextEmitter, SubnormalAndExtremeFloatLiteralsKeepTheirExactBitsInNativeText) {
+  struct LiteralCase {
+    const char* sourceLiteral;
+    uint32_t expectedBits;
+    const char* mslLiteral;
+  };
+  const LiteralCase cases[] = {
+      {"0x1p-149f", 0x00000001, "0x1.000000p-149f"},
+      {"0x1.fffffcp-127f", 0x007fffff, "0x1.fffffcp-127f"},
+      {"0x1p-126f", 0x00800000, "0x1.000000p-126f"},
+      {"0x1.fffffep127f", 0x7f7fffff, "0x1.fffffep127f"},
+  };
+  for (const auto& item : cases) {
+    SCOPED_TRACE(item.sourceLiteral);
+    const std::string source = std::string("fn f() -> f32 { return ") + item.sourceLiteral + "; }";
+    const ParseResult parsed = Parse(source);
+    ASSERT_THAT(parsed.diagnostic.code, testing::Eq(ErrorCode::None));
+    ASSERT_THAT(parsed.module.expressionCount, testing::Eq(1u));
+    EXPECT_THAT(parsed.module.expressions[0].payload, testing::Eq(item.expectedBits));
+    std::array<char, 4096> output = {};
+    TextSink text{output.data(), uint32_t(output.size())};
+    ASSERT_THAT(EmitMsl(parsed.module, text).error, testing::Eq(TextEmitError::None));
+    EXPECT_THAT(text.view(), HasSubstr(item.mslLiteral));
+  }
+}
+
+TEST(TextEmitter, FoldedWgslRespectsEveryCapacityAndKeepsTheExactRoundedLiteral) {
+  const ParseResult parsed = Parse("fn f() -> f32 { return 1f / 3f; }");
+  ASSERT_THAT(parsed.diagnostic.code, testing::Eq(ErrorCode::None));
+  ExpectTextCapacityContract(parsed.module, EmitWgsl);
+  std::array<char, 256> output = {};
+  TextSink text{output.data(), uint32_t(output.size())};
+  ASSERT_THAT(EmitWgsl(parsed.module, text).error, testing::Eq(TextEmitError::None));
+  EXPECT_THAT(text.view(), testing::Eq("fn f() -> f32 { return 0x1.555556p-2f; }\n"));
+  const ParseResult reparsed = Parse(text.view());
+  ASSERT_THAT(reparsed.diagnostic.code, testing::Eq(ErrorCode::None));
+  ASSERT_THAT(reparsed.module.expressionCount, testing::Eq(1u));
+  EXPECT_THAT(reparsed.module.expressions[0].payload, testing::Eq(0x3eaaaaabu));
+}
+
+TEST(TextEmitter, SignedMinimumLiteralDoesNotOverflowWhenPrintedAsNativeText) {
+  const ParseResult parsed = Parse("fn f() -> i32 { return -2147483648; }");
+  ASSERT_THAT(parsed.diagnostic.code, testing::Eq(ErrorCode::None));
+  std::array<char, 4096> output = {};
+  TextSink text{output.data(), uint32_t(output.size())};
+  ASSERT_THAT(EmitMsl(parsed.module, text).error, testing::Eq(TextEmitError::None));
+  EXPECT_THAT(text.view(), HasSubstr("return int(-2147483648);"));
+  const Statement& statement = parsed.module.statements[parsed.module.functions[0].firstStatement];
+  const Expression& value = parsed.module.expressions[statement.expression];
+  EXPECT_THAT(value.type.kind, testing::Eq(TypeKind::I32));
+  EXPECT_THAT(value.type.lanes, testing::Eq(1u));
+  EXPECT_THAT(value.payload, testing::Eq(0x80000000u));
 }
 
 }  // namespace

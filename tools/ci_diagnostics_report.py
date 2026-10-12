@@ -10,16 +10,18 @@ Reads the diagnostics directory the self-hosted CI jobs write on the runner:
     <diag_dir>/{build,test}/console.log  Bazel stdout/stderr
 
 and prints markdown with phase timing, the slowest compile/link/test actions,
-per-test wall times, and console tails for incomplete Bazel event streams.
+per-test wall times. Raw console tails are omitted unless explicitly requested
+for local debugging with --include-console-tails; that output must not be published.
 The CI job runs it on the runner and uploads the result as report.md. The
 uploaded artifact omits bep.json, the execution logs and console.log, which
 record the runner's effective configuration, so running this on a downloaded
 artifact reports profile timing only. Stdlib only; safe to run on partial
 input (a failed build leaves whatever exists).
 
-Usage: python3 tools/ci_diagnostics_report.py <diag_dir>
+Usage: python3 tools/ci_diagnostics_report.py <diag_dir> [--include-console-tails]
 """
 
+import argparse
 import json
 import os
 import sys
@@ -139,8 +141,13 @@ def has_build_finished(path):
     return False
 
 
-def console_tail_summary(name, bep_path, console_path, lines):
+def console_tail_summary(name, bep_path, console_path, lines, *, include_raw=False):
     if not os.path.exists(console_path) or has_build_finished(bep_path):
+        return
+
+    if not include_raw:
+        lines.append(f"_{name} console tail omitted: no terminal Bazel build event captured._")
+        lines.append("")
         return
 
     tail = deque(maxlen=CONSOLE_TAIL_LINES)
@@ -246,10 +253,12 @@ def test_summary(path, lines):
 
 
 def main():
-    if len(sys.argv) != 2:
-        print(__doc__, file=sys.stderr)
-        return 1
-    diag_dir = sys.argv[1]
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("diag_dir")
+    parser.add_argument("--include-console-tails", action="store_true",
+                        help="Include raw logs for local debugging; do not publish this output")
+    options = parser.parse_args()
+    diag_dir = options.diag_dir
     lines = ["## CI diagnostics report", ""]
 
     manifest = os.path.join(diag_dir, "manifest.txt")
@@ -263,11 +272,13 @@ def main():
     profile_summary("Build", os.path.join(diag_dir, "build", "profile.gz"),
                     lines)
     console_tail_summary("Build", os.path.join(diag_dir, "build", "bep.json"),
-                         os.path.join(diag_dir, "build", "console.log"), lines)
+                         os.path.join(diag_dir, "build", "console.log"), lines,
+                         include_raw=options.include_console_tails)
     profile_summary("Test", os.path.join(diag_dir, "test", "profile.gz"),
                     lines)
     console_tail_summary("Test", os.path.join(diag_dir, "test", "bep.json"),
-                         os.path.join(diag_dir, "test", "console.log"), lines)
+                         os.path.join(diag_dir, "test", "console.log"), lines,
+                         include_raw=options.include_console_tails)
     unfinished_tests_summary(os.path.join(diag_dir, "test", "bep.json"), lines)
     test_summary(os.path.join(diag_dir, "test", "bep.json"), lines)
 

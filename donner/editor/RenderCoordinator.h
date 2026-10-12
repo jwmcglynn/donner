@@ -519,6 +519,38 @@ public:
   [[nodiscard]] Entity selectedCompositedEntityForDiagnostics(EditorApp& app) const;
 
 private:
+  struct CanvasCommitPlan {
+    std::chrono::steady_clock::time_point now;
+    bool willCommit = false;
+    bool rasterViewportSettled = false;
+  };
+  struct SelectedRenderDemand {
+    Entity entity = entt::null;
+    bool useVisibleRaster = false;
+    bool forceRasterization = false;
+  };
+  CanvasCommitPlan prepareCanvasCommit(const EditorRasterViewport& rasterViewport,
+                                       Vector2i actualDocumentCanvas, bool hasActiveDrag);
+  bool needsOverviewForRender(EditorApp& app, const EditorRasterViewport& rasterViewport,
+                              bool hasActiveDrag, const GlTextureCache* textures,
+                              bool willCommitCanvas);
+  bool canPostViewportRender(bool selectedViewportDeferred, bool needsOverviewInfill,
+                             bool captureNeeded, bool supersedeInFlight);
+  void prepareSelectedRenderSchedule(EditorApp& app, const ViewportState& viewport,
+                                     const GlTextureCache* textures,
+                                     const SelectedRenderDemand& selection,
+                                     bool requestOverviewInfill, bool captureNeeded,
+                                     PresentationRenderScheduleInput& input);
+  void commitCanvasForRender(EditorApp& app, const ViewportState& viewport,
+                             const CanvasCommitPlan& plan,
+                             DocumentPixelCaptureIdentity* desiredCapture, bool* captureNeeded,
+                             bool* forcePresentationRefresh);
+  void prepareRenderPresentation(EditorApp& app, const ViewportState& viewport,
+                                 GlTextureCache* textures, PresentationRenderScheduleInput& input);
+  void postScheduledRender(EditorApp& app, const ViewportState& viewport,
+                           const PresentationRenderScheduleInput& input, bool requestOverviewInfill,
+                           const RenderAttemptIdentity& attempt,
+                           const DocumentPixelCaptureIdentity& desiredCapture);
   std::vector<Entity> selectedPresentationEntities(const EditorApp& app) const;
   std::optional<LockedRejectionFlashInput> lockedFlashForCapture() const;
   bool shouldRecaptureSelection(const CapturedPresentation& captured,

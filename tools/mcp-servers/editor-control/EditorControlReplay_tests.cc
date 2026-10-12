@@ -53,6 +53,85 @@ TEST(EditorControlSessionTest, HighDpiEditorStartupCapture) {
   EXPECT_THAT(result.body.value("capture_count", 0), testing::Eq(1)) << result.body.dump(2);
 }
 
+TEST(EditorControlSessionTest, HiDpiInspectorCaptureAfterCanvasCommit) {
+  repro::ReproFile replay;
+  replay.metadata.svgPath = "hidpi_inspector.svg";
+  replay.metadata.svgSource =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="120" height="80" viewBox="0 0 120 80">
+<path id="target" d="M 10 12 L 50 12 L 50 36 Z" style="fill: #010203; stroke: #040506"/>
+</svg>)svg";
+  replay.metadata.windowWidth = 640;
+  replay.metadata.windowHeight = 400;
+  replay.metadata.displayScale = 2.0;
+  for (std::uint64_t index = 0; index <= 36; ++index) {
+    repro::ReproFrame frame;
+    frame.index = index;
+    frame.timestampSeconds = static_cast<double>(index) / 60.0;
+    frame.deltaMs = 1000.0 / 60.0;
+    frame.mouseDocX = 35.0;
+    frame.mouseDocY = 18.0;
+    if (index == 3) {
+      frame.mouseButtonMask = 1;
+      frame.events.push_back({.kind = repro::ReproEvent::Kind::MouseDown});
+    } else if (index == 4) {
+      frame.events.push_back({.kind = repro::ReproEvent::Kind::MouseUp});
+    }
+    replay.frames.push_back(std::move(frame));
+  }
+  const char* outputs = std::getenv("TEST_UNDECLARED_OUTPUTS_DIR");
+  const std::filesystem::path outputDir = outputs != nullptr ? outputs : TestTempDir();
+  const std::filesystem::path rnrPath = outputDir / "hidpi_inspector.rnr";
+  ASSERT_THAT(repro::WriteReproFile(rnrPath, replay), testing::IsTrue());
+  EditorControlSession session;
+  const ToolCallResult capture =
+      session.handleToolCall("replay_rnr", json{{"rnr_path", rnrPath.string()},
+                                                {"gl_readback", true},
+                                                {"gl_capture_frame", 36},
+                                                {"gl_crop", "full"},
+                                                {"gl_output_dir", (outputDir / "mcp").string()},
+                                                {"gl_drive_document_input", true},
+                                                {"gl_pace", true},
+                                                {"include_gl_images", false}});
+  ASSERT_THAT(capture.isError, testing::IsFalse()) << capture.body.dump(2);
+  ASSERT_THAT(capture.body.value("capture_count", 0), testing::Eq(1));
+
+  // The MCP capture and diagnostic replay use the same real-clock editor journey. The last
+  // frame is well after the 120 ms canvas debounce, without enabling document pixel capture.
+  repro::GlRnrReplayOptions options;
+  options.rnrPath = rnrPath;
+  options.outputDir = outputDir / "diagnostics";
+  options.captureFrames = {36};
+  options.maxFrame = 36;
+  options.driveDocumentSpaceInput = true;
+  options.pace = true;
+  repro::GlRnrReplayResult result;
+  std::string error;
+  ASSERT_THAT(repro::RunGlRnrReplay(options, &result, &error), testing::IsTrue()) << error;
+  ASSERT_THAT(result.finalSelectedElementLabel, testing::Optional(testing::HasSubstr("target")));
+  ASSERT_FALSE(result.frameDiagnostics.empty());
+  std::uint64_t commits = 0;
+  for (const auto& frame : result.frameDiagnostics) {
+    commits += frame.frameCost.documentCanvasCommitCount;
+  }
+  ASSERT_THAT(commits, testing::Gt(0u));
+  // Frame 35 has no capture selector: its rendering instance must already be fresh before
+  // frame 36 reads the framebuffer. Capture barriers cannot supply the missing render.
+  ASSERT_THAT(result.frameDiagnostics.size(), testing::Eq(37u));
+  EXPECT_THAT(result.frameDiagnostics[35].selectedRenderingInstanceFill,
+              testing::Optional(testing::Eq("PaintServer(solid rgba(1, 2, 3, 255))")));
+  const auto& status = result.frameDiagnostics.back();
+  EXPECT_THAT(status.selectedRenderingInstanceFill,
+              testing::Optional(testing::Eq("PaintServer(solid rgba(1, 2, 3, 255))")));
+  EXPECT_THAT(status.selectedStyleAttribute,
+              testing::Optional(testing::Eq("fill: #010203; stroke: #040506")));
+  EXPECT_THAT(status.selectedLocalStyleFill,
+              testing::Optional(testing::Eq("PaintServer(solid rgba(1, 2, 3, 255))")));
+  EXPECT_THAT(status.selectedComputedFill,
+              testing::Optional(testing::Eq("PaintServer(solid rgba(1, 2, 3, 255))")));
+  EXPECT_THAT(status.selectedPathDataAttribute,
+              testing::Optional(testing::Eq("M 10 12 L 50 12 L 50 36 Z")));
+}
+
 TEST(EditorControlSessionTest, DragPathOverlayCapture) {
   repro::ReproFile replay;
   replay.metadata.svgPath = "drag_path.svg";

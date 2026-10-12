@@ -1,5 +1,6 @@
 """Pins review-driven security workflow selection and scheduling policy."""
 
+from collections import Counter
 import os
 from pathlib import Path
 import re
@@ -25,15 +26,26 @@ WRITE_SCOPES = {
     (".github/workflows/release.yml", "publish-release-artifacts"): {"contents"},
 }
 
-# Every job that reads a repository secret, and the secrets it reads.
+# Exact reviewed step consumers: workflow, job, name, id, action (or the run script marker).
 SECRET_USES = {
-    (".github/workflows/badges.yaml", "update-badges"): {"GIST_SECRET"},
-    (".github/workflows/coverage.yml", "upload-coverage"): {"CODECOV_TOKEN"},
-    (".github/workflows/github_hosted_nightly.yml", "build"): {"BUILDBUDDY_API_KEY"},
-    (".github/workflows/main.yml", "macos-self-hosted"): {"BAZEL_REMOTE_CACHE"},
-    (".github/workflows/publish_bcr.yml", "publish-fork"): {"PUBLISH_TOKEN"},
-    (".github/workflows/sanitizers.yml", "asan"): {"BUILDBUDDY_API_KEY"},
-    (".github/workflows/sanitizers.yml", "ubsan"): {"BUILDBUDDY_API_KEY"},
+    (".github/workflows/badges.yaml", "update-badges", "Create Lines-of-Code-Badge", None,
+     "schneegans/dynamic-badges-action@v1.9.0"): {"GIST_SECRET"},
+    (".github/workflows/badges.yaml", "update-badges", "Create Test-Lines-of-Code-Badge", None,
+     "schneegans/dynamic-badges-action@v1.9.0"): {"GIST_SECRET"},
+    (".github/workflows/badges.yaml", "update-badges", "Create Comments-Badge", None,
+     "schneegans/dynamic-badges-action@v1.9.0"): {"GIST_SECRET"},
+    (".github/workflows/coverage.yml", "upload-coverage", "Upload coverage to Codecov", None,
+     "codecov/codecov-action@v7"): {"CODECOV_TOKEN"},
+    (".github/workflows/github_hosted_nightly.yml", "build", "Configure BuildBuddy remote cache", None,
+     "./.github/actions/buildbuddy-cache"): {"BUILDBUDDY_API_KEY"},
+    (".github/workflows/main.yml", "macos-self-hosted", "Configure masked remote cache", None,
+     "<run>"): {"BAZEL_REMOTE_CACHE"},
+    (".github/workflows/publish_bcr.yml", "publish-fork", "Create the fork branch only if absent", None,
+     "<run>"): {"PUBLISH_TOKEN"},
+    (".github/workflows/sanitizers.yml", "asan", "Configure BuildBuddy remote cache", None,
+     "./.github/actions/buildbuddy-cache"): {"BUILDBUDDY_API_KEY"},
+    (".github/workflows/sanitizers.yml", "ubsan", "Configure BuildBuddy remote cache", None,
+     "./.github/actions/buildbuddy-cache"): {"BUILDBUDDY_API_KEY"},
 }
 
 # The only jobs that may run on self-hosted runners, with the gatekeeper output admitting each.
@@ -44,7 +56,12 @@ SELF_HOSTED_JOBS = {
 
 # A runner label set is GitHub-hosted only when it is exactly one hosted image label. Any other
 # label, label list or runner group can route a job to a self-hosted runner.
-HOSTED_IMAGE = re.compile(r"(?:ubuntu|macos|windows)-[a-z0-9][a-z0-9.-]*\Z")
+HOSTED_IMAGES = frozenset({"ubuntu-24.04", "ubuntu-latest", "macos-26", "macos-latest"})
+
+SELF_HOSTED_GATE_PREFIX = (
+    "${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && "
+    "(github.ref == 'refs/heads/main' || github.event_name == 'pull_request') && "
+    "(github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') && ")
 
 # Reviewed `runs-on` expressions that are neither a literal label nor `${{ matrix.<key> }}`, with
 # every label each can produce.
@@ -80,7 +97,8 @@ SCRIPT_SAFE_EVENT_FIELDS = {"github.event.pull_request.base.sha",
                             "github.event.pull_request.head.sha",
                             "github.event.pull_request.number"}
 
-UNTRUSTED_CONTEXT = re.compile(r"github\.event\.[A-Za-z0-9_.*-]+|github\.head_ref|\binputs\.")
+UNTRUSTED_CONTEXT = re.compile(r"github\.event\b(?:\.[A-Za-z0-9_.*-]+)?|github\.head_ref\b|"
+                              r"\binputs\b(?:\.[A-Za-z0-9_.*-]+)?")
 UPLOADED_EVENT_LOG = re.compile(r"(?i)(?:^|/)[^/]*bep[^/]*\.json$|exec(?:ution)?[._]log")
 WORKSPACE_ROOTS = {".", "./", "${{ github.workspace }}", "${{ github.workspace }}/"}
 # Private-network addresses, private DNS names and personal home directories have no place in
@@ -224,19 +242,21 @@ def _permissions(text, indent):
     return None
 
 
-def _steps(job):
-    return re.split(r"(?m)^      - ", job)[1:]
+def _steps(job, indent=6):
+    parts = re.split(r"(?m)^%s- " % (" " * indent), job)[1:]
+    return ["\n".join([part.splitlines()[0],
+                       *_indented_block(part.splitlines()[1:], indent)]) for part in parts]
 
 
-def _step_values(step, key):
+def _step_values(step, key, indent=10):
     """A step `with:` value as entries: one inline value, or each line of a block scalar."""
-    match = re.search(r"(?m)^          %s:[ \t]*(.*)$" % re.escape(key), step)
+    match = re.search(r"(?m)^%s%s:[ \t]*(.*)$" % (" " * indent, re.escape(key)), step)
     if not match:
         return []
     value = match.group(1).strip()
     if value not in ("|", "|-", ">", ">-"):
         return [value]
-    block = _indented_block(step[match.end():].splitlines()[1:], 10)
+    block = _indented_block(step[match.end():].splitlines()[1:], indent)
     return [line.strip() for line in block if line.strip()]
 
 
@@ -255,11 +275,66 @@ def _script_bodies(text):
     return bodies
 
 
+def _expression_end(text, index):
+    """Find the first unquoted close delimiter with one forward scan."""
+    quoted = False
+    while index < len(text):
+        if text[index] == "'":
+            if quoted and text[index:index + 2] == "''":
+                index += 2
+                continue
+            quoted = not quoted
+        elif not quoted and text[index:index + 2] == "}}":
+            return index
+        index += 1
+    return None
+
+
+def _expressions(text):
+    """Ignore quoted close delimiters without backtracking on malformed expressions."""
+    cursor = 0
+    while (start := text.find("${{", cursor)) != -1:
+        end = _expression_end(text, start + 3)
+        if end is None:
+            # Fail closed even in comments: a marker must not hide later reads.
+            raise ValueError("unterminated expression marker")
+        # Conservatively reject hash-before-marker text, without parsing YAML or shell.
+        line_start = text.rfind("\n", 0, start) + 1
+        if "#" in text[line_start:start]:
+            raise ValueError("ambiguous comment expression marker")
+        yield re.fullmatch(r"\$\{\{(.*)\}\}", text[start:end + 2], re.DOTALL)
+        cursor = end + 2
+
+
+def _canonical_context(expression):
+    """Give literal index and property access the same spelling for policy checks."""
+    indexed = re.sub(r"\s*\[\s*(['\"])([A-Za-z_][A-Za-z0-9_]*)\1\s*\]",
+                     r".\2", expression)
+    # Resolve literal index keys first, then exclude harmless expression strings.
+    unquoted = re.sub(r"'(?:''|[^'])*'", "''", indexed)
+    return re.sub(r"\s*\.\s*", ".", unquoted)
+
+
+def _secret_reads(text):
+    names = set()
+    for match in _expressions(text):
+        expression = _canonical_context(match.group(1))
+        names.update(name.upper() for name in
+                     re.findall(r"\bsecrets\.([A-Za-z0-9_]+)", expression, re.IGNORECASE))
+        if re.search(r"\bsecrets(?:\s*\[|\.\*)", expression, re.IGNORECASE):
+            names.add("<unreviewable secret reference>")
+        if re.search(r"(?<![\w.])secrets\b(?!\s*[.\[])", expression, re.IGNORECASE):
+            names.add("<whole secret object>")
+    return names
+
+
 def _untrusted_script_contexts(text):
     found = []
     for body in _script_bodies(text):
-        for expression in re.findall(r"\$\{\{(.*?)\}\}", body, re.DOTALL):
-            found.extend(context for context in UNTRUSTED_CONTEXT.findall(expression)
+        for match in _expressions(body):
+            expression = _canonical_context(match.group(1)).lower()
+            found.extend("inputs." if context.startswith("inputs") else context
+                         for context in UNTRUSTED_CONTEXT.findall(expression)
                          if context not in SCRIPT_SAFE_EVENT_FIELDS)
     return found
 
@@ -281,24 +356,53 @@ def _token_scope_violations(path, workflow):
     return violations
 
 
+def _step_identity_value(step, key):
+    match = re.search(r"(?m)^(?:        )?%s:[ \t]*(.*)$" % re.escape(key), step)
+    return match.group(1).strip() if match else None
+
+
+def _secret_reference_counts(text):
+    counts = Counter()
+    for match in _expressions(text):
+        counts.update(_secret_reads(match.group()))
+    return counts
+
+
+def _unscoped_secret_reads(workflow):
+    steps = Counter()
+    for job in _jobs(workflow).values():
+        for step in _steps(job):
+            steps.update(_secret_reference_counts(step))
+    return _secret_reference_counts(workflow) - steps
+
+
+def _step_secret_consumers(path, workflow):
+    for name, job in _jobs(workflow).items():
+        for step in _steps(job):
+            secrets = _secret_reads(step)
+            if secrets:
+                identity = (path, name, _step_identity_value(step, "name"),
+                            _step_identity_value(step, "id"),
+                            _step_identity_value(step, "uses") or "<run>")
+                yield identity, secrets
+
+
 def _secret_use_violations(workflows):
-    uses = {}
+    records = []
     violations = []
     for path, workflow in workflows.items():
-        if re.search(r"secrets:\s*inherit|toJSON\(\s*secrets\s*\)", workflow, re.IGNORECASE):
+        if (re.search(r"secrets:\s*inherit", workflow, re.IGNORECASE) or
+                "<whole secret object>" in _secret_reads(workflow)):
             violations.append("%s forwards every secret" % path)
-        # Step `env:` and `with:` entries sit ten columns in; anything shallower is job- or
-        # workflow-wide and hands the secret to every step.
-        for line in workflow.splitlines():
-            if (re.search(r"\$\{\{[^}]*\bsecrets\.", line)
-                    and len(line) - len(line.lstrip()) < 10):
-                violations.append("%s exposes a secret beyond one step: %s" % (path, line.strip()))
-        for name, job in _jobs(workflow).items():
-            secrets = set(re.findall(r"\$\{\{\s*secrets\.([A-Za-z0-9_]+)", job))
-            if secrets:
-                uses[(path, name)] = secrets
+        if _unscoped_secret_reads(workflow):
+            violations.append("%s exposes a secret beyond one step" % path)
+        records.extend(_step_secret_consumers(path, workflow))
+    uses = dict(records)
+    if len(uses) != len(records):
+        violations.append("duplicate secret consumer steps")
     if uses != SECRET_USES:
-        violations.append("secret uses changed: %s" % sorted(uses.items()))
+        violations.append("secret uses changed: %s" %
+                          sorted(uses.items(), key=lambda item: repr(item[0])))
     return violations
 
 
@@ -372,7 +476,7 @@ def _runner_label_sets(path, name, job):
 
 
 def _is_hosted(labels):
-    return len(labels) == 1 and bool(HOSTED_IMAGE.match(next(iter(labels))))
+    return len(labels) == 1 and next(iter(labels)) in HOSTED_IMAGES
 
 
 def _runs_self_hosted(path, name, job):
@@ -387,9 +491,11 @@ def _runner_violation(path, name, job):
         return problem
     if all(_is_hosted(labels) for labels in sets):
         return None
-    gate = "needs.gatekeeper.outputs.%s == 'true'" % SELF_HOSTED_JOBS.get((path, name))
-    admitted = ((path, name) in SELF_HOSTED_JOBS and gate in _job_key(job, "if")
-                and "gatekeeper" in _job_key(job, "needs"))
+    gate = SELF_HOSTED_GATE_PREFIX + "needs.gatekeeper.outputs.%s == 'true' }}" % \
+        SELF_HOSTED_JOBS.get((path, name))
+    needs = _job_key(job, "needs").strip("[]")
+    admitted = ((path, name) in SELF_HOSTED_JOBS and gate == _job_key(job, "if")
+                and "gatekeeper" in _labels(needs))
     if not admitted:
         return "%s:%s reaches a self-hosted runner without the trusted gate" % (path, name)
     return None
@@ -449,11 +555,23 @@ def _upload_violations(path, name, job, uploading_actions):
     return violations
 
 
+def _reviewed_action_upload_violations(files):
+    problems = []
+    for action in REVIEWED_UPLOAD_ACTIONS:
+        path = action.removeprefix("./") + "/action.yml"
+        uploads = [_step_values(step, "path", indent=8) for step in _steps(files[path], indent=4)
+                   if UPLOAD_ACTION.search(step)]
+        if uploads != [["${{ runner.temp }}/bazel-test-artifacts"]]:
+            problems.append("%s changes the reviewed collected-artifact upload path" % path)
+    return problems
+
+
 def _artifact_upload_violations(files):
     uploading_actions = _uploading_local_actions(files)
-    return [violation for path, workflow in _workflows(files).items()
-            for name, job in _jobs(workflow).items()
-            for violation in _upload_violations(path, name, job, uploading_actions)]
+    return _reviewed_action_upload_violations(files) + [
+        violation for path, workflow in _workflows(files).items()
+        for name, job in _jobs(workflow).items()
+        for violation in _upload_violations(path, name, job, uploading_actions)]
 
 
 class SecurityWorkflowPolicyTest(unittest.TestCase):
@@ -1214,6 +1332,84 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
                         "    secrets: inherit\n", "forwards every secret"),
         })
 
+    def test_whole_secret_objects_cannot_bypass_step_consumers(self):
+        files = self.supply_chain_files
+        path = ".github/workflows/main.yml"
+        step = "      - name: Upload CI diagnostics\n"
+        for reference in ("secrets", "toJSON ( secrets )", "ToJsOn\t( secrets )",
+                          "format('{0}', secrets)"):
+            with self.subTest(reference=reference):
+                changed = files[path].replace(
+                    step, step + "        env:\n          TOKEN: ${{ " + reference + " }}\n", 1)
+                self.assertNotEqual(changed, files[path])
+                self.assertTrue(_secret_use_violations(_workflows({**files, path: changed})))
+        for literal in ("'secrets'", "'toJSON(secrets)'", "'secrets.UNREVIEWED_TOKEN'",
+                        "'it''s secrets'", "'# secrets.UNREVIEWED_TOKEN'"):
+            with self.subTest(literal=literal):
+                self.assertEqual(set(), _secret_reads("${{ " + literal + " }}"))
+                changed = files[path].replace(
+                    step, step + "        env:\n          TOKEN: ${{ " + literal + " }}\n", 1)
+                self.assertEqual([], _secret_use_violations(_workflows({**files, path: changed})))
+
+    def test_quoted_expression_delimiters_do_not_hide_context_reads(self):
+        files = self.supply_chain_files
+        path = ".github/workflows/main.yml"
+        step = "      - name: Upload CI diagnostics\n"
+        for literal in ("'}}{0}'", "'it''s }}{0}'"):
+            with self.subTest(literal=literal):
+                expression = "format(" + literal + ", secrets.UNREVIEWED_TOKEN)"
+                changed = files[path].replace(
+                    step, step + "        env:\n          TOKEN: ${{ " + expression + " }}\n", 1)
+                self.assertNotEqual(changed, files[path])
+                with self.subTest(context="secret"):
+                    self.assertTrue(_secret_use_violations(_workflows({**files, path: changed})))
+                with self.subTest(context="event"):
+                    self.assertTrue(_untrusted_script_contexts(
+                        "      - run: echo ${{ format(" + literal +
+                        ", github.event.pull_request.title) }}\n"))
+        for literal in ("'github.event.pull_request.title'", "'}}github.event.pull_request.title'"):
+            with self.subTest(safe_literal=literal):
+                self.assertEqual([], _untrusted_script_contexts(
+                    "      - run: echo ${{ " + literal + " }}\n"))
+
+    def test_expression_extraction_terminates_and_keeps_adjacent_expressions(self):
+        for expression in ("${{ secrets", "${{ 'unterminated }}", "${{ " + "'" * 4096):
+            with self.subTest(malformed=expression[:30]):
+                with self.assertRaisesRegex(ValueError, "unterminated expression marker"):
+                    list(_expressions(expression))
+        text = "${{ format('it''s }}{0}', secrets.GIST_SECRET) }} " \
+               "${{ github.event.pull_request.title }}"
+        expressions = list(_expressions(text))
+        self.assertEqual(2, len(expressions))
+        self.assertEqual(" format('it''s }}{0}', secrets.GIST_SECRET) ", expressions[0].group(1))
+        self.assertEqual(" github.event.pull_request.title ", expressions[1].group(1))
+
+    def test_unterminated_comment_marker_cannot_hide_a_later_secret_consumer(self):
+        files = self.supply_chain_files
+        path = ".github/workflows/badges.yaml"
+        changed = files[path] + "\n      - name: Unreviewed consumer\n" \
+                  "        # marker ${{ '\n" \
+                  "        uses: example/consumer-action@v1.0.0\n" \
+                  "        with:\n          auth: ${{ secrets.UNREVIEWED_TOKEN }}\n"
+        self.assertNotEqual(changed, files[path])
+        with self.assertRaisesRegex(ValueError, "unterminated expression marker"):
+            _secret_use_violations(_workflows({**files, path: changed}))
+
+    def test_comment_quote_pairs_cannot_hide_a_later_secret_consumer(self):
+        files = self.supply_chain_files
+        path = ".github/workflows/badges.yaml"
+        for step in (
+            "        uses: example/consumer-action@v1.0.0\n        # marker ${{ '\n",
+            "        uses: example/consumer-action@v1.0.0 # marker ${{ '\n",
+        ):
+            with self.subTest(step=step):
+                changed = files[path] + "\n      - name: Unreviewed consumer\n" + step + \
+                          "        with:\n          auth: ${{ secrets.UNREVIEWED_TOKEN }}\n" \
+                          "        # ' }}\n"
+                self.assertNotEqual(changed, files[path])
+                with self.assertRaisesRegex(ValueError, "ambiguous comment expression marker"):
+                    _secret_use_violations(_workflows({**files, path: changed}))
+
     def test_only_gated_ci_jobs_reach_self_hosted_runners(self):
         workflows = _workflows(self.supply_chain_files)
         self.assertEqual([], _self_hosted_violations(workflows))
@@ -1357,6 +1553,118 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
                    "/home/runner/work /home/linuxbrew/.linuxbrew /Users/runner/bin v10.1.2 "
                    "172.15.0.1 cache.example.invalid fc.example.com").format(*expected)
         self.assertEqual(expected, PRIVATE_NETWORK_LITERAL.findall(fixture))
+
+
+
+    def test_secret_policy_handles_indexed_and_compound_references(self):
+        files = self.supply_chain_files
+        badges = ".github/workflows/badges.yaml"
+        for reference in ("secrets['GIST_SECRET']", "secrets [ 'GIST_SECRET' ]",
+                          "format('{0}', secrets['GIST_SECRET'])"):
+            with self.subTest(reference=reference):
+                changed = files[badges].replace("secrets.GIST_SECRET", reference)
+                self.assertEqual([], _secret_use_violations(_workflows({**files, badges: changed})))
+        main = ".github/workflows/main.yml"
+        step = "      - name: Upload CI diagnostics\n"
+        for reference in ("secrets['UNREVIEWED_TOKEN']", "secrets[inputs.token_name]",
+                          "join(secrets.*, 'fixture')"):
+            with self.subTest(reference=reference):
+                changed = files[main].replace(
+                    step, step + "        env:\n          TOKEN: ${{ " + reference + " }}\n", 1)
+                self.assertTrue(any("secret uses changed" in item for item in
+                                    _secret_use_violations(_workflows({**files, main: changed}))))
+
+    def test_indexed_secret_cannot_move_to_job_or_workflow_scope(self):
+        files = self.supply_chain_files
+        badges = ".github/workflows/badges.yaml"
+        for anchor, injection in (
+            ("    runs-on: ubuntu-latest\n",
+             "    env:\n      AUTH: ${{ secrets['GIST_SECRET'] }}\n"),
+            ("jobs:\n", "env:\n  AUTH: ${{ secrets['GIST_SECRET'] }}\njobs:\n"),
+        ):
+            with self.subTest(anchor=anchor):
+                replacement = injection if anchor == "jobs:\n" else anchor + injection
+                changed = files[badges].replace(anchor, replacement, 1)
+                self.assertNotEqual(changed, files[badges])
+                self.assertTrue(any("beyond one step" in item for item in
+                                    _secret_use_violations(_workflows({**files, badges: changed}))))
+
+    def test_indexed_event_text_is_rejected_in_every_script_kind(self):
+        for key in ("run", "script", "command"):
+            for reference in ("github.event['pull_request']['title']",
+                              "github['event']['pull_request'].body",
+                              "github [ 'head_ref' ]", "inputs['message']",
+                              "github.event['pull_request.head.sha']",
+                              "github.event[inputs.event_key]"):
+                with self.subTest(key=key, reference=reference):
+                    script = "      - " + key + ": echo ${{ " + reference + " }}\n"
+                    self.assertTrue(_untrusted_script_contexts(script))
+        for reference in ("github.event['pull_request']['head']['sha']",
+                          "github['event'].pull_request.number", "github.event_name"):
+            with self.subTest(safe=reference):
+                self.assertEqual([], _untrusted_script_contexts(
+                    "      - run: echo ${{ " + reference + " }}\n"))
+
+
+
+    def test_public_diagnostics_do_not_enable_raw_console_tails(self):
+        summary = _step_body(self.supply_chain_files[".github/workflows/main.yml"],
+                             "Summarize diagnostics")
+        self.assertNotIn("--include-console-tails", summary)
+
+
+
+    def test_secret_consumers_are_reviewed_at_each_step(self):
+        files = self.supply_chain_files
+        path = ".github/workflows/badges.yaml"
+        added = files[path] + "      - name: Unreviewed consumer\n" \
+                "        uses: example/consumer-action@v1.0.0\n" \
+                "        with:\n          token: ${{ secrets.GIST_SECRET }}\n"
+        self.assertTrue(_secret_use_violations(_workflows({**files, path: added})))
+        reviewed = next(step for step in _steps(_jobs(files[path])["update-badges"])
+                        if _secret_reads(step))
+        duplicated = files[path] + "\n      - " + reviewed
+        self.assertTrue(_secret_use_violations(_workflows({**files, path: duplicated})))
+        changed_id = files[path].replace("      - name: Create Lines-of-Code-Badge\n",
+                                        "      - name: Create Lines-of-Code-Badge\n"
+                                        "        id: alternate-consumer\n", 1)
+        self.assertTrue(_secret_use_violations(_workflows({**files, path: changed_id})))
+        changed = files[path].replace("uses: schneegans/dynamic-badges-action@v1.9.0",
+                                    "uses: example/consumer-action@v1.0.0", 1)
+        self.assertTrue(_secret_use_violations(_workflows({**files, path: changed})))
+
+    def test_self_hosted_gate_cannot_be_weakened_by_boolean_context(self):
+        files = self.supply_chain_files
+        path = ".github/workflows/main.yml"
+        for runner in ("linux", "macos"):
+            gate = "needs.gatekeeper.outputs.use_self_hosted_" + runner + " == 'true'"
+            for replacement in ("true || " + gate, gate + " || true"):
+                with self.subTest(runner=runner, replacement=replacement):
+                    job = _jobs(files[path])[runner + "-self-hosted"]
+                    weakened_job = job.replace(gate, replacement, 1)
+                    self.assertNotEqual(weakened_job, job)
+                    changed = files[path].replace(job, weakened_job, 1)
+                    self.assertNotEqual(changed, files[path])
+                    self.assertTrue(_self_hosted_violations(_workflows({**files, path: changed})))
+
+    def test_hosted_runner_prefixes_do_not_approve_custom_labels(self):
+        files = self.supply_chain_files
+        path = ".github/workflows/coverage.yml"
+        for label in ("ubuntu-unreviewed-worker", "macos-unreviewed-worker",
+                      "windows-unreviewed-worker"):
+            with self.subTest(label=label):
+                changed = files[path].replace("runs-on: ubuntu-24.04", "runs-on: " + label, 1)
+                self.assertNotEqual(changed, files[path])
+                self.assertTrue(_self_hosted_violations(_workflows({**files, path: changed})))
+
+    def test_reviewed_collector_must_upload_only_its_collected_tree(self):
+        files = self.supply_chain_files
+        path = ".github/actions/upload-bazel-test-artifacts/action.yml"
+        for upload in (".", "${{ github.workspace }}", "${{ runner.temp }}/other-tree"):
+            with self.subTest(upload=upload):
+                changed = files[path].replace("${{ runner.temp }}/bazel-test-artifacts", upload)
+                self.assertNotEqual(changed, files[path])
+                self.assertTrue(_artifact_upload_violations({**files, path: changed}))
 
 
 if __name__ == "__main__":

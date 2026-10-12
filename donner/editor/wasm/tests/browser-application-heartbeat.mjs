@@ -56,14 +56,18 @@ export async function startApplicationHeartbeat(
     }
   };
   const pulse = async () => {
-    if (busy || stopped) return;
+    if (busy || stopped || workerRequests.has(application)) return;
     busy = true;
+    workerRequests.add(application);
     let timeout;
     try {
       const gpu = await Promise.race([
         application.evaluate(() => {
           const state = globalThis;
           return state.__donnerReadGpuObjectStats?.() ?? null;
+        }).finally(() => {
+          // A wait deadline does not cancel the underlying worker IPC.
+          workerRequests.delete(application);
         }),
         new Promise((_, reject) => {
           timeout = setTimeout(() => reject(new Error("application heartbeat deadline")), 500);

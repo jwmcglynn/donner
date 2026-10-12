@@ -96,6 +96,7 @@ donner_cc_test(
         "tests/ProjectionTestSupport.h",
         "tests/Shift_tests.cc",
         "tests/SlugFeatures_tests.cc",
+        "tests/SpirvEmitter_tests.cc",
         "tests/TextEmitter_tests.cc",
         "tests/Uniformity_tests.cc",
     ],
