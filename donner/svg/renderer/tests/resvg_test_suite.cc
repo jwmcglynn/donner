@@ -788,6 +788,7 @@ INSTANTIATE_TEST_SUITE_P(
                     {"on-feImage.svg",
                      Params::WithGoldenOverride(
                          "donner/svg/renderer/testdata/golden/resvg-on-feImage.png")
+                         .requireFeature(RendererBackendFeature::FilterEffects, "filter effects")
                          .withReason("Nearest sampling at destination pixel centers")},
                     {"optimizeSpeed.svg",
                      Params::Skip("Reference oracle: allowed crisp-edges nearest grid differs from "
