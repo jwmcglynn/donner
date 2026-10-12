@@ -582,8 +582,9 @@ class CheckerTest(unittest.TestCase):
                        'playwright.repo(integrity_path_map = {})'):
             with self.subTest(source=source):
                 self.assertEqual(len(self._findings(source)), 1)
+        integrity = "sha256-" + "A" * 43 + "="
         self.assertEqual(self._findings(
-            'playwright.repo(integrity_path_map = {"archive.zip": "sha256-AAAA"})'), [])
+            'playwright.repo(integrity_path_map = {"archive.zip": "%s"})' % integrity), [])
 
 
 class RepositoryPolicyTest(unittest.TestCase):
