@@ -626,6 +626,11 @@ bool ShouldPresentCompositedPreviewForViewport(const RenderResult::CompositedPre
   return true;
 }
 
+bool PresentationRepairNeedsCoverage(FramePresentationFailure buildFailure,
+                                     FramePresentationFailure adoptionFailure) {
+  return IsCoverageFailure(buildFailure) || IsCoverageFailure(adoptionFailure);
+}
+
 std::uint64_t PostReleaseSettleTargetVersion(std::uint64_t currentFrameVersion,
                                              bool hasPendingMutations) {
   if (hasPendingMutations && currentFrameVersion < std::numeric_limits<std::uint64_t>::max()) {
@@ -1422,10 +1427,7 @@ void RenderCoordinator::updateFrameRepairStatus(
   const auto failure =
       outcome.failure != FramePresentationFailure::None ? outcome.failure : adoptionFailure_;
   presentationNeedsRender_ = failure != FramePresentationFailure::None;
-  // A frame can lack more than one proof at once. A result rejected for a missing overview still
-  // needs that coverage when the frame build reports another failure first, such as selection
-  // geometry not yet captured; an active drag would otherwise never request the overview.
-  presentationNeedsCoverage_ = IsCoverageFailure(failure) || IsCoverageFailure(adoptionFailure_);
+  presentationNeedsCoverage_ = PresentationRepairNeedsCoverage(outcome.failure, adoptionFailure_);
 #ifdef __EMSCRIPTEN__
   PublishFrameRepairDetails(input, *resources, failure, adoptionFailure_);
 #endif
