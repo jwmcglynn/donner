@@ -19,6 +19,7 @@ every workflow's environment. The telemetry section of .bazelrc explains why.
 """
 
 import ast
+from collections import Counter
 from hashlib import sha256
 from pathlib import Path
 import re
@@ -369,20 +370,96 @@ def fetch_findings(trees, pins=None):
     return problems, set(git_fetches)
 
 
-def _is_playwright_repo(call):
+def _readable_string_values(tree, expression, call):
+    values = _Bindings(tree).values(expression, call)
+    if values is None and isinstance(expression, ast.Name):
+        value = _single_literal_assignment(tree, expression.id)
+        return [value] if value is not None else None
+    return values
+
+
+def _extension_proxy_bindings(path, tree):
+    """Recognize literal extension identities, rejecting ambiguous proxy bindings."""
+    assignments = [node for node in ast.walk(tree) if isinstance(node, ast.Assign)]
+    by_value = {id(node.value): node for node in assignments}
+    counts = Counter(target.id for node in assignments for target in node.targets
+                     if isinstance(target, ast.Name))
+    proxies, problems = set(), []
+    for call in _calls(tree, {"use_extension"}):
+        expression = call.args[1] if len(call.args) > 1 else _keyword(call, "extension_name")
+        values = _readable_string_values(tree, expression, call)
+        if not values or len(values) != 1:
+            problems.append("%s:%d: use_extension name must be a readable literal" % (path, call.lineno))
+            continue
+        assignment = by_value.get(id(call))
+        if assignment is None or len(assignment.targets) != 1 or not isinstance(assignment.targets[0], ast.Name):
+            problems.append("%s:%d: use_extension must bind one proxy name directly" % (path, call.lineno))
+            continue
+        name = assignment.targets[0].id
+        if counts[name] != 1:
+            problems.append("%s:%d: extension proxy name is rebound" % (path, call.lineno))
+        if values == ["playwright"]:
+            proxies.add(name)
+    return proxies, problems
+
+
+def _is_proxy_name(node, proxies):
+    return isinstance(node, ast.Name) and node.id in proxies
+
+
+def _is_playwright_repo(call, proxies):
     return (isinstance(call.func, ast.Attribute) and call.func.attr == "repo"
-            and isinstance(call.func.value, ast.Name) and call.func.value.id == "playwright")
+            and _is_proxy_name(call.func.value, proxies))
 
 
-def _missing_browser_integrity_maps(path, tree):
+def _proxy_argument_is_direct(node, parent):
+    return (isinstance(parent, ast.Call) and isinstance(parent.func, ast.Name)
+            and parent.func.id in {"use_repo", "getattr"}
+            and bool(parent.args) and parent.args[0] is node)
+
+
+def _browser_indirection_problems(path, tree, proxies):
+    """Reject detached repository methods and first-class proxy/factory indirections."""
+    parents = {id(child): node for node in ast.walk(tree) for child in ast.iter_child_nodes(node)}
+    problems = []
+    for node in ast.walk(tree):
+        parent = parents.get(id(node))
+        if isinstance(node, ast.Name) and node.id == "use_extension":
+            if not (isinstance(parent, ast.Call) and parent.func is node):
+                problems.append("%s:%d: use_extension must be called directly" % (path, node.lineno))
+        if isinstance(node, ast.Attribute) and node.attr == "repo" and _is_proxy_name(node.value, proxies):
+            if not (isinstance(parent, ast.Call) and parent.func is node):
+                problems.append("%s:%d: browser repo method must be called directly" % (path, node.lineno))
+        if _is_proxy_name(node, proxies) and isinstance(node.ctx, ast.Load):
+            if not isinstance(parent, ast.Attribute) and not _proxy_argument_is_direct(node, parent):
+                problems.append("%s:%d: browser proxy must be used directly" % (path, node.lineno))
+    return problems
+
+
+def _browser_getattr_problems(path, tree, proxies):
+    problems = []
+    for call in _calls(tree, {"getattr"}):
+        if not call.args or not _is_proxy_name(call.args[0], proxies):
+            continue
+        expression = call.args[1] if len(call.args) > 1 else None
+        values = _readable_string_values(tree, expression, call)
+        if values is None or "repo" in values:
+            problems.append("%s:%d: browser repo method lookups must be direct and readable" % (path, call.lineno))
+    return problems
+
+
+def _missing_browser_integrity_maps(path, tree, proxies):
     return ["%s:%d: playwright.repo requires integrity_path_map" % (path, call.lineno)
-            for call in ast.walk(tree) if isinstance(call, ast.Call) and _is_playwright_repo(call)
+            for call in ast.walk(tree) if isinstance(call, ast.Call) and _is_playwright_repo(call, proxies)
             and _keyword(call, "integrity_path_map") is None]
 
 
 def _integrity_map_problems(path, tree):
     """An empty value in a browser integrity map would silently skip that archive's check."""
-    problems = _missing_browser_integrity_maps(path, tree)
+    proxies, problems = _extension_proxy_bindings(path, tree)
+    problems.extend(_missing_browser_integrity_maps(path, tree, proxies))
+    problems.extend(_browser_indirection_problems(path, tree, proxies))
+    problems.extend(_browser_getattr_problems(path, tree, proxies))
     for node in ast.walk(tree):
         if not (isinstance(node, ast.keyword) and node.arg == "integrity_path_map"):
             continue
@@ -541,7 +618,8 @@ class CheckerTest(unittest.TestCase):
         self.assertEqual(len(fetch_findings(trees)[0]), 1)
 
     def test_rejects_an_empty_browser_integrity(self):
-        source = 'playwright.repo(integrity_path_map = {"a.zip": "sha256-AAAA", "b.zip": ""})'
+        source = self._browser('playwright.repo(integrity_path_map = {"a.zip": "sha256-AAAA", "b.zip": ""})',
+                               receiver="playwright")
         self.assertEqual(len(self._findings(source)), 1)
 
     def test_bazelrc_rejects_a_missing_empty_or_scoped_setting(self):
@@ -627,10 +705,11 @@ class CheckerTest(unittest.TestCase):
         for source in ('playwright.repo(name = "browsers")',
                        'playwright.repo(integrity_path_map = {})'):
             with self.subTest(source=source):
-                self.assertEqual(len(self._findings(source)), 1)
+                self.assertEqual(len(self._findings(self._browser(source, receiver="playwright"))), 1)
         integrity = "sha256-" + "A" * 43 + "="
-        self.assertEqual(self._findings(
-            'playwright.repo(integrity_path_map = {"archive.zip": "%s"})' % integrity), [])
+        self.assertEqual(self._findings(self._browser(
+            'playwright.repo(integrity_path_map = {"archive.zip": "%s"})' % integrity,
+            receiver="playwright")), [])
 
 
     def test_playwright_extension_binding_requires_integrity_for_every_receiver(self):
