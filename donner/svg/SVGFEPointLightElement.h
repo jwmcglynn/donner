@@ -152,7 +152,7 @@ namespace donner::svg {
  * DOM object for a \ref xml_fePointLight element.
  *
  * Represents a light source at a specific position in 3D space. Light direction varies
- * per pixel based on the distance from the light to the surface point.
+ * per pixel based on the position of each surface point relative to the light.
  */
 class SVGFEPointLightElement : public SVGElement {
   friend class parser::SVGParserImpl;

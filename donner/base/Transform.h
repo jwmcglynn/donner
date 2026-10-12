@@ -220,7 +220,8 @@ struct Transform2 {
   T determinant() const { return data[0] * data[3] - data[1] * data[2]; }
 
   /**
-   * Returns the inverse of this transform.
+   * Returns the inverse of this transform. If the determinant is zero, the result contains
+   * non-finite values.
    */
   Transform2<T> inverse() const {
     const T invDet = T(1.0) / determinant();
@@ -293,14 +294,14 @@ struct Transform2 {
   }
 
   /**
-   * Post-multiplies rhs with this transform.
+   * Composes two transforms: the result applies this transform first, then \p rhs.
    *
    * Example: Take A, transform by T, transform by R is written as
    * ```
-   * R * T * A
+   * A * T * R
    * ```
    *
-   * @param rhs Other transform.
+   * @param rhs Transform applied after this one.
    */
   Transform2<T> operator*(const Transform2<T>& rhs) const {
     Transform2<T> result(uninitialized);
@@ -358,15 +359,16 @@ using Transform2d = Transform2<double>;
  * Serialize a \ref Transform2d to its canonical SVG `transform` attribute text, decomposing
  * to the simplest form when possible:
  *
- * - Identity → empty string
- * - Pure translate (`[1 0 0 1 e f]`) → `translate(e, f)`, or `translate(e)` when `f == 0`
- * - Pure uniform scale (`[s 0 0 s 0 0]`) → `scale(s)`
- * - Pure non-uniform scale (`[sx 0 0 sy 0 0]`) → `scale(sx, sy)`
- * - Pure rotation around origin (`[cos -sin sin cos 0 0]`) → `rotate(deg)`
- * - General → `matrix(a, b, c, d, e, f)`
+ * - Identity -> empty string
+ * - Pure translate (`[1 0 0 1 e f]`) -> `translate(e, f)`, or `translate(e)` when `f == 0`
+ * - Pure rotation around origin (`[cos sin -sin cos 0 0]`) -> `rotate(deg)`, checked before
+ *   scale so `[-1 0 0 -1 0 0]` serializes as a rotation, not `scale(-1)`
+ * - Pure uniform scale (`[s 0 0 s 0 0]`) -> `scale(s)`
+ * - Pure non-uniform scale (`[sx 0 0 sy 0 0]`) -> `scale(sx, sy)`
+ * - General -> `matrix(a, b, c, d, e, f)`
  *
- * Numbers are emitted via `{}` (integer-valued doubles) or `{:g}` (fractional) so the
- * output is the shortest form that round-trips.  Arguments are comma-separated with a
+ * Integer-valued numbers are emitted without a decimal point; other numbers use `std::format`'s
+ * default `{}` form, the shortest decimal that round-trips. Arguments are comma-separated with a
  * space after the comma, matching the canonical CSS transform syntax.
  *
  * Round-trips with `donner::svg::parser::TransformParser::Parse` for every shape above.

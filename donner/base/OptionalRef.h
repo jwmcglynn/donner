@@ -42,7 +42,10 @@ public:
   /**
    * Constructs an `OptionalRef` that contains a reference to the given object.
    *
-   * @param ref The object to reference.
+   * Only the address of \p ref is stored, so passing a temporary leaves the `OptionalRef`
+   * dangling once the full-expression ends.
+   *
+   * @param ref The object to reference, which must outlive this `OptionalRef`.
    */
   /* implicit */ constexpr OptionalRef(const T& ref) noexcept : ptr_(&ref) {}
 
@@ -82,7 +85,7 @@ public:
   /**
    * Assigns a reference to the given object.
    *
-   * @param ref The object to reference.
+   * @param ref The object to reference, which must outlive this `OptionalRef`.
    * @return Reference to this `OptionalRef`.
    */
   OptionalRef& operator=(const T& ref) noexcept {

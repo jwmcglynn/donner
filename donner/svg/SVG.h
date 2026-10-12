@@ -44,8 +44,7 @@ namespace donner {
  *
  * if (auto myPath = document.querySelector("#myPath")) {
  *   std::cout << "Found #myPath" << std::endl;
- *   myPath->setStyle("fill: red");
- *   myPath->setStyle("stroke: white");
+ *   myPath->setStyle("fill: red; stroke: white");
  * }
  * ```
  *

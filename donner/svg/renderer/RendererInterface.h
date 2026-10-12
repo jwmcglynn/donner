@@ -71,7 +71,8 @@ struct RendererBitmap {
   std::vector<uint8_t> pixels;
   /// Bytes between rows; allows alignment/padding differences between renderers.
   std::size_t rowBytes = 0;
-  /// Alpha channel interpretation. Backends produce premultiplied data by default.
+  /// Alpha channel interpretation. Defaults to premultiplied; renderer snapshots
+  /// (\ref RendererInterface::takeSnapshot) publish straight alpha.
   AlphaType alphaType = AlphaType::Premultiplied;
 
   /// Returns true if this bitmap has no pixel data.
@@ -108,13 +109,19 @@ enum class GpuWaitTimeoutSite : uint8_t {
 };
 
 /**
- * Aggregate diagnostics for CPU readbacks completed by a renderer and any
+ * Aggregate diagnostics for CPU readbacks run by a renderer and any
  * offscreen instances that share its backend device, plus the device-health
  * outcome those readbacks observed.
  */
 struct RendererReadbackStats {
+  /// Readback buffer-map waits run since the last consume, including waits that were cancelled
+  /// or timed out.
   int count = 0;
+  /// Bounded wait iterations those readbacks ran. A wait cancelled or past its deadline before
+  /// its first iteration adds none.
   int pollIterations = 0;
+  /// True when any of those waits blocked on the map's completion event rather than only
+  /// polling for it.
   bool usedTimedWaitAny = false;
   /// True once the backend device has been declared lost. Sticky: a device
   /// that hangs never recovers, and a caller whose frame produced nothing has
@@ -1232,13 +1239,11 @@ public:
    * Draws a CPU bitmap (typically a compositor layer/segment raster) into the
    * given target rectangle.
    *
-   * The `ImageResource` contract is unpremultiplied RGBA, while renderer
-   * snapshots are premultiplied - routing a per-frame compose through
-   * `drawImage` costs an unpremultiply + repremultiply round trip (two full
-   * pixel-buffer conversions and three allocations per layer per frame).
-   * Backends that can consume premultiplied pixels directly should override
-   * this with a zero-copy path; the default converts and delegates so every
-   * backend stays correct.
+   * The `ImageResource` contract is tightly packed unpremultiplied RGBA, so the
+   * default copies \p bitmap into that form, unpremultiplying premultiplied
+   * pixels, and delegates to `drawImage`. That keeps every backend correct at
+   * the cost of a full pixel-buffer copy per draw. Backends that can consume
+   * the bitmap's pixels directly should override this with a zero-copy path.
    *
    * @param bitmap The bitmap to draw.
    * @param params Image placement parameters.
@@ -1413,8 +1418,8 @@ public:
    * pattern text, and charges draws against its frame geometry budget. Lowering the cap bounds
    * per-frame text work for untrusted documents.
    *
-   * Offscreen instances from \ref createOffscreenInstance share the cap. Backends without text
-   * ignore the call.
+   * Offscreen instances from \ref createOffscreenInstance share the cap. Backends and builds
+   * without text ignore the call.
    *
    * The initial cap is \ref RendererTextMaterializationBudget::kDefaultMaximumGlyphs.
    *
@@ -1422,7 +1427,7 @@ public:
    */
   virtual void setMaximumGlyphs(std::size_t maximumGlyphs) { (void)maximumGlyphs; }
 
-  /// The glyph cap set by \ref setMaximumGlyphs, or 0 for backends without text.
+  /// The glyph cap set by \ref setMaximumGlyphs, or 0 for a backend or build without text.
   [[nodiscard]] virtual std::size_t maximumGlyphs() const { return 0; }
 
   /**

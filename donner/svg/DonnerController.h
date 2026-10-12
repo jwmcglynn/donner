@@ -57,30 +57,35 @@ public:
   explicit DonnerController(SVGDocument document);
 
   /**
-   * Finds the topmost geometry element whose rendered area contains the given point.
+   * Finds the topmost rendered element (a shape, or a `<text>` element when text support is
+   * enabled) whose rendered area contains the given point.
    *
-   * The point is in SVG canvas coordinates (the same coordinate space as the root `<svg>`
-   * element's viewBox). Returns the deepest matching element in paint order (last painted =
-   * topmost).
+   * The point is in document coordinates: the user space of the root `<svg>` element's viewBox.
+   * To hit-test a canvas pixel, map it through the inverse of
+   * \ref SVGDocument::canvasFromDocumentTransform first. Returns the last-painted (topmost)
+   * matching element.
    *
-   * @param point Position in canvas coordinates.
-   * @return The topmost intersecting geometry element, or \c std::nullopt if no element is hit.
+   * @param point Position in document coordinates.
+   * @return The topmost intersecting element, or \c std::nullopt if no element is hit.
    */
   std::optional<SVGGraphicsElement> findIntersecting(const Vector2d& point);
 
   /**
-   * Return every painted element intersecting p point, front to back.
+   * Return every painted element intersecting \p point, front to back.
    *
    * This supports scoped editor hit testing without allowing an element
    * outside the active scope to occlude an eligible descendant.
+   *
+   * @param point Position in document coordinates, as for \ref findIntersecting.
+   * @return Intersecting elements, topmost first, or an empty vector if no element is hit.
    */
   std::vector<SVGGraphicsElement> findAllIntersecting(const Vector2d& point);
 
   /**
-   * Returns the inherited CSS cursor value for the topmost interactive element at a point. URL
-   * strings remain authored until declaration-base tracking is available.
+   * Returns the inherited CSS cursor value for the topmost interactive element at a point. Cursor
+   * image URLs are returned as authored, without resolving them against a base URL.
    *
-   * @param point Position in canvas coordinates.
+   * @param point Position in document coordinates, as for \ref findIntersecting.
    * @return Ordered image candidates and keyword fallback, or `std::nullopt` when no element is
    * hit.
    */
@@ -105,8 +110,8 @@ public:
    * the point is not inside any `<a>`, no link is returned even when a lower, occluded element
    * would have been linked.
    *
-   * The point is in SVG canvas coordinates (the same coordinate space as the root `<svg>`
-   * element's viewBox), identical to \ref findIntersecting.
+   * The point is in document coordinates (the user space of the root `<svg>` element's viewBox),
+   * identical to \ref findIntersecting.
    *
    * Resolution follows the document-tree ancestor chain, which has two consequences worth noting:
    * a `<a>` wrapping graphics (or a whole `<text>`) resolves normally, but an inline `<a>` span
@@ -123,7 +128,7 @@ public:
    * }
    * ```
    *
-   * @param point Position in canvas coordinates.
+   * @param point Position in document coordinates.
    * @return The enclosing link, its raw target, and the hit element, or \c std::nullopt if no link
    *   is at the point.
    */

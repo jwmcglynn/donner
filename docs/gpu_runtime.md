@@ -182,16 +182,20 @@ readback delta with that explicit lane and requires zero document-stage readback
     buffer: with `GpuErrorType::InvalidState`, or on Vulkan with `GpuErrorType::DeviceLost` when
     another device over the root declared the loss.
   - Vulkan's `writeTexture()` always stages the texels in a transient buffer and submits a fenced
-    upload that it waits for before returning. The wait gives up after 60 seconds without queue
-    progress (`kUploadStallTimeout` in `VulkanDevice.cc`) with `GpuErrorType::InvalidState`. A
+    upload that it waits for before returning. Its 60-second bound (`kUploadStallTimeout` in
+    `VulkanDevice.cc`) runs from the last observed ordinary command-buffer completion, or from
+    the upload's submission when no tracked work is outstanding. Ordinary command events can
+    extend it; the upload submits no event and its own completion cannot renew that clock. Expiry
+    returns `GpuErrorType::InvalidState`. A
     root declared lost before or during the upload fails it with `GpuErrorType::DeviceLost`,
     unless the device has already recorded an error of its own.
 - `Device::mapBufferAsync()` returns a `gpu::BufferMapping`. A buffer carries one mapping at a time,
   and a mapping is not ownership: destroying the buffer invalidates it. `mappedBytes()` is readable
   only after `waitForMapping()` or `pollMapping()` reports it ready, and only until
   `unmapBuffer()`. A submission that names a mapped buffer is refused.
-- In the editor, `GlTextureCache` uploads CPU bitmap tiles into runtime textures through a bounded
-  upload path, registers GPU snapshots with the `UiTextureRegistry`, and retires superseded
+- In the editor, document tiles arrive as GPU texture snapshots, which `GlTextureCache` registers
+  with the `UiTextureRegistry`; the cache uploads CPU-rendered thumbnails and previews
+  into runtime textures through a bounded upload path. It retires superseded
   payloads by presentation frame (`GlTextureCacheTest.RetiredSnapshotsAgeByPresentationFrame`). UI
   draw data names textures by `UiTextureId`, a slot plus generation, so a stale or recycled
   registration is refused before any GPU work is recorded.
@@ -237,10 +241,12 @@ Teardown on a lost root depends on the backend:
   buffer completes, so the device releases its own references without waiting.
 - Vulkan teardown frees nothing native until a fence proves the work that used it complete. Only
   a signalled fence, or the driver's `VK_ERROR_DEVICE_LOST`, counts as proof, and the wait does not
-  end because the root was declared lost. Each outstanding fence gets up to five seconds without
-  queue progress (`kTeardownStallTimeout`), counted from the queue's last progress, or a fixed
-  five seconds after a submission whose completion is unknown. The swapchain proves its own
-  submissions the same way.
+  end because the root was declared lost. Tracked submission fences use the shared queue's
+  five-second stall bound (`kTeardownStallTimeout`). Upload fences share the last tracked-event
+  clock, but their completions do not renew it: after an earlier upload completes, a later wait
+  may already have exhausted that bound. This does not guarantee progress-extended teardown for
+  a backlog of uploads. After a submission whose completion is unknown, each fence wait instead
+  has a fixed five-second total budget. The swapchain proves its own submissions the same way.
 - When Vulkan cannot prove completion, as after a hang the driver never reported, the device's
   whole native graph is retained until process exit. The backend logs
   `[donner::gpu::vulkan] shutdown incomplete; Vulkan disabled until restart`, and every later
@@ -436,8 +442,10 @@ Waits judged by progress:
 - Metal: a present's wait for its frame's work, which declares the loss at `Present`; the teardown
   drain; an unaligned write's wait for its busy buffer; and the wait for room under the 512 command
   buffer backstop, which also gives up after sixty seconds in all.
-- Vulkan: a host access to a busy buffer, a texture upload (bounded at 60 seconds), the proof of
-  completion at teardown and the swapchain's waits for its own submissions. The teardown proofs
+- Vulkan: a host access to a busy buffer, teardown of tracked submissions and the swapchain's
+  waits for its own submissions. Upload calls and upload teardown use that tracked-event clock
+  with 60-second and five-second bounds respectively, but an upload completion does not renew it.
+  The teardown proofs
   and the swapchain's waits do not end when the root is declared lost (see
   [Retirement order](#GpuRuntimeRetirement)).
 - The editor: UI submission admission, where a frame times out only once it is five seconds old

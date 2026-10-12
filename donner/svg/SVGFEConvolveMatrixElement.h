@@ -169,7 +169,7 @@ namespace donner::svg {
  * ## Example 4: emboss
  *
  * An asymmetric kernel lights one diagonal and darkens the other, simulating a raised surface
- * lit from the upper-left. This zero-sum kernel defaults to an effective divisor of `1`; the
+ * lit from the lower-right. This kernel sums to `1`, so the default divisor is also `1`; the
  * example states it explicitly and uses `bias="0.5"` to keep negative responses visible:
  *
  * \htmlonly

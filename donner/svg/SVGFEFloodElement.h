@@ -32,7 +32,7 @@ namespace donner::svg {
  * the **entire filter region** of the parent `<filter>` element, which by default extends 10%
  * beyond the source graphic's bounding box on every side.
  *
- * The example below shows a 200×120 shape with a filter that floods orange. Because the
+ * The example below shows a 160x80 shape with a filter that floods orange. Because the
  * filter region extends past the shape, the orange rectangle is actually larger than the shape
  * itself:
  *

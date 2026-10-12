@@ -9,7 +9,7 @@ namespace donner::svg {
 /**
  * @page xml_radialGradient &lt;radialGradient&gt;
  *
- * Defines the paint server for a radial gradients.
+ * Defines the paint server for a radial gradient.
  *
  * - DOM object: SVGRadialGradientElement
  * - SVG2 spec: https://www.w3.org/TR/SVG2/pservers.html#RadialGradients
@@ -140,7 +140,7 @@ namespace donner::svg {
  * \endhtmlonly
  *
  * To control the shape of the radial gradient, use the `cx`, `cy`, `r`, `fx`, `fy`, and `fr`
- * attributes, which defines two circles representing the start and end of the gradient, the focal
+ * attributes, which define two circles representing the start and end of the gradient, the focal
  * point and the outer circle. If the focal point is not specified (`fx`, `fy`, and `fr`), the focal
  * point defaults to the position of the outer circle (`cx` and `cy`) with radius `0`.
  *

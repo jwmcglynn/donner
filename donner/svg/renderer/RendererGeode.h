@@ -2,8 +2,9 @@
 /// @file
 /// Geode GPU implementation of \ref donner::svg::RendererInterface.
 ///
-/// Geode uses native Metal or Vulkan and the Slug algorithm for resolution-independent vector
-/// rasterization. It can create a headless device or render over a selected shared GPU root.
+/// Geode uses native Metal on macOS, native Vulkan on Linux and the browser GPU runtime in
+/// WebAssembly, with the Slug algorithm for resolution-independent vector rasterization. It can
+/// create a headless device or render over a selected shared GPU root.
 
 #include <chrono>
 #include <cstddef>
@@ -27,9 +28,6 @@ class GeodeDevice;
 class GeodePipeline;
 class GeoEncoder;
 }  // namespace donner::geode
-
-// Forward-declare std::shared_ptr specialization to avoid pulling <memory>
-// into every includer - <memory> is already included above.
 
 namespace donner::svg {
 
@@ -267,7 +265,7 @@ public:
   /**
    * Construct the renderer. Acquires an exclusive lease on a pooled headless `GeodeDevice`; if
    * device creation fails, the renderer enters a "no-op" state and all subsequent draw calls do
-   * nothing. Pooling avoids repeated physical-device creation and keeps WebGPU pipeline caches warm
+   * nothing. Pooling avoids repeated physical-device creation and keeps the device's pipelines warm
    * for sequential renderer instances, while concurrently live renderers receive independent
    * devices. Callers that intentionally share a device should use the explicit-device constructor.
    *
@@ -280,13 +278,14 @@ public:
    * Construct the renderer with an externally-owned `GeodeDevice`.
    *
    * The caller retains shared ownership of the device; it must outlive every
-   * frame rendered through this renderer. This overload avoids creating a new
-   * WebGPU instance/adapter/device per renderer, which is important in test
-   * fixtures that construct thousands of short-lived renderers - Mesa llvmpipe
-   * (and some Intel ANV configurations) accumulate driver state across device
-   * creations and eventually deadlock.
+   * frame rendered through this renderer. This overload avoids opening a GPU
+   * device per renderer, which is important in test fixtures that construct
+   * thousands of short-lived renderers - Mesa llvmpipe (and some Intel ANV
+   * configurations) accumulate driver state across device creations and
+   * eventually deadlock.
    *
-   * @param device Shared device. Must not be null.
+   * @param device Shared device. A null device leaves the renderer in the no-op state, where draw
+   *   calls do nothing.
    * @param verbose If true, emit warnings for unsupported features.
    */
   explicit RendererGeode(std::shared_ptr<geode::GeodeDevice> device, bool verbose = false);
@@ -426,13 +425,14 @@ public:
    * GPU wait exceeding its deadline (for example a snapshot readback map that
    * never completed). The condition is sticky.
    *
-   * Once lost: draw calls may produce no usable output, snapshots return
-   * empty bitmaps promptly instead of waiting out the readback deadline, and
-   * destroying this renderer and its `GeodeDevice` performs no further GPU
-   * waits (GPU resources are deliberately leaked rather than risking a
-   * blocking call into a hung driver). Callers should treat a lost device as
-   * fatal for this renderer instance: destroy it and recreate the renderer,
-   * or fall back to a CPU backend.
+   * Once lost: draw calls may produce no usable output, and snapshots return
+   * empty bitmaps promptly instead of waiting out the readback deadline.
+   * Destroying this renderer and its `GeodeDevice` skips the context's
+   * queue-idle waits; a Vulkan runtime device still waits, bounded by queue
+   * progress, to prove its submissions complete before it frees native objects,
+   * and retains them until process exit when it cannot. Callers should treat a
+   * lost device as fatal for this renderer instance: destroy it and recreate
+   * the renderer before resuming GPU rendering.
    */
   [[nodiscard]] bool deviceLost() const;
 
@@ -562,11 +562,13 @@ public:
 
   /**
    * Captures the current resolved render target as a directly sampleable
-   * WebGPU texture.
+   * GPU runtime texture.
    *
-   * For internally-owned render targets, this transfers ownership out of the
-   * renderer and detaches the current target so a subsequent same-size frame
-   * cannot overwrite a texture still being sampled by editor presentation.
+   * Only an internally-owned render target can be taken: this transfers its
+   * ownership out of the renderer and detaches the current target so a
+   * subsequent same-size frame cannot overwrite a texture still being sampled
+   * by editor presentation. Returns null while a host target is set with
+   * `setTargetTexture()`, and when there is no owned target to take.
    */
   [[nodiscard]] std::shared_ptr<const RendererTextureSnapshot> takeTextureSnapshot() override;
 

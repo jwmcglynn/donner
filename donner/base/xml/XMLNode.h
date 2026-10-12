@@ -23,7 +23,8 @@ struct XMLAttributeSourceLocation {
 };
 
 /**
- * Represents an XML element belonging to an \ref donner::xml::XMLDocument.
+ * Represents an XML node, such as an element, text, or comment, belonging to an
+ * \ref donner::xml::XMLDocument. See \ref donner::xml::XMLNode::Type for the node types.
  *
  * Each \ref XMLNode may only belong to a single document, and each document can have only one
  * root. XMLDocument is responsible for managing the lifetime of all elements in the document, by
@@ -66,7 +67,8 @@ public:
     /// \ref donner::xml::XMLDocument. \ref tagName() and \ref value() are empty.
     Document,
     /// Element node, representing a regular XML tag, such as `<svg>`. \ref tagName() is the tag
-    /// name, and \ref value() contains the text of the first data node.
+    /// name. The parser sets \ref value() to the text of each data child as it reads it, so it
+    /// holds the last one.
     /// @see https://www.w3.org/TR/xml/#dt-element
     Element,
     /// Data node, containing verbatim text. \ref value() contains the data, and \ref tagName() is
@@ -89,8 +91,8 @@ public:
     /// @see https://www.w3.org/TR/xml/#sec-pi
     ProcessingInstruction,
     /// XML Declaration node, such as `<?xml ... ?>`. This is a special case of
-    /// \ref donner::xml::XMLNode::Type::ProcessingInstruction with type "xml"; contents are parsed
-    /// as attributes. \ref tagName() is "xml" and \ref value() is empty.
+    /// \ref donner::xml::XMLNode::Type::ProcessingInstruction with target "xml"; contents are
+    /// parsed as attributes. \ref tagName() and \ref value() are empty.
     /// @see https://www.w3.org/TR/xml/#sec-prolog-dtd
     XMLDeclaration,
   };
@@ -135,7 +137,7 @@ public:
                                      const XMLQualifiedNameRef& tagName);
 
   /**
-   * Create a new XML node for an element bound to \p document, with a given \p value. Note that
+   * Create a new XML node for text data bound to \p document, with a given \p value. Note that
    * this does not insert the node into the document tree, to do so call \ref appendChild.
    *
    * @param document Containing document.
@@ -276,7 +278,7 @@ public:
    * The SourceRange for the `child` element should contain the substring
    * `<child>Hello, world!</child>`
    *
-   * @return Start and end offsets of the node in the input string, or \c std::nullptr if source
+   * @return Start and end offsets of the node in the input string, or \c std::nullopt if source
    * locations are not available.
    */
   std::optional<SourceRange> getNodeLocation() const;
@@ -373,12 +375,10 @@ public:
   std::optional<RcString> getNamespaceUri(const RcString& prefix) const;
 
   /**
-   * Set the value of a generic XML attribute, which may be either a presentation attribute or
-   * custom user-provided attribute.
+   * Set the value of an XML attribute, adding the attribute if it does not exist.
    *
-   * This API supports a superset of \ref donner::svg::SVGElement::trySetPresentationAttribute,
-   * however its parse errors are ignored. If the attribute is not a presentation attribute, or
-   * there are parse errors the attribute will be stored as a custom attribute instead.
+   * This API only stores the name and value strings, and does not parse them. To parse
+   * presentation attributes, use the upper-layer API: \ref donner::svg::SVGElement::setAttribute.
    *
    * @param name Name of the attribute to set.
    * @param value New value to set.
@@ -386,11 +386,7 @@ public:
   void setAttribute(const XMLQualifiedNameRef& name, std::string_view value);
 
   /**
-   * Remove an attribute, which may be either a presentation attribute or custom user-provided
-   * attribute.
-   *
-   * If this is a presentation attribute, the presentation attributes value will be removed
-   * (internally by setting the value to 'inherit').
+   * Remove an attribute and clear its source metadata.
    *
    * @param name Name of the attribute to remove.
    */
@@ -574,11 +570,12 @@ public:
    *
    * Attribute values are escaped via \ref donner::xml::EscapeAttributeValue. If an attribute
    * value cannot be represented in well-formed XML (e.g. it contains NUL bytes), it is
-   * omitted from the output.
+   * omitted from the output. Data text that cannot be represented in well-formed XML is written
+   * unescaped.
    *
-   * Child elements are indented by `indentLevel + 1` levels (2 spaces per level). Mixed
-   * content (elements that have both element and text children) is emitted inline without
-   * extra indentation.
+   * When \p prettyPrint is set and an element has at least one element child, every child,
+   * including text, is written on its own line indented by `indentLevel + 1` levels (2 spaces
+   * per level). An element whose children are all text-like is written inline.
    *
    * @param indentLevel Current indentation depth; each level adds 2 spaces of leading whitespace.
    * @param prettyPrint Whether to insert indentation whitespace between child elements.
@@ -587,12 +584,12 @@ public:
   RcString serializeToString(int indentLevel = 0, bool prettyPrint = true) const;
 
   /**
-   * Returns true if the two XMLNode handles reference the same underlying document.
+   * Returns true if the two XMLNode handles reference the same node.
    */
   bool operator==(const XMLNode& other) const { return handle_ == other.handle_; }
 
   /**
-   * Returns true if the two XMLNode handles reference the same underlying document.
+   * Returns true if the two XMLNode handles reference different nodes.
    */
   bool operator!=(const XMLNode& other) const { return handle_ != other.handle_; }
 

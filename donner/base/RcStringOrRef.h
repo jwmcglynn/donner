@@ -26,13 +26,16 @@ namespace donner {
  *
  * // Passing either an RcString or std::string_view works.
  * setString("test");
- * setString(RcString("will addref if this is larger than the small string optimization");
+ * setString(RcString("will addref if this is larger than the small string optimization"));
  * ```
  *
  * As a map key:
  * ```
  * std::map<RcStringOrRef, int> myMap;
- * myMap[RcString("key")] = 1; // Danger! The key lifetime must remain valid.
+ * myMap[RcString("key")] = 1; // Stores an owning RcString key.
+ *
+ * std::string buffer = "view";
+ * myMap[std::string_view(buffer)] = 2; // Danger! buffer must outlive the map entry.
  *
  * // Lookups are possible with a `std::string_view` or string literal.
  * auto it = myMap.find("key");
@@ -74,8 +77,8 @@ public:
    * Constructs a new RcStringOrRef object from a C-style string reference and optional length.
    *
    * @param value C-style string.
-   * @param len Length of the string, or npos to automatically measure, which requires that \ref
-   *   data is null-terminated.
+   * @param len Length of the string, or npos to automatically measure, which requires that \p
+   *   value is null-terminated.
    */
   /* implicit */ constexpr RcStringOrRef(const char* value UTILS_LIFETIME_BOUND, size_t len = npos)
       : RcStringOrRef(len == npos ? std::string_view(value) : std::string_view(value, len)) {}
@@ -122,8 +125,7 @@ public:
 
   /// Cast operator to `std::string_view`. The returned view aliases this object's storage, so it
   /// must not outlive the \ref RcStringOrRef. Annotated with `UTILS_LIFETIME_BOUND` so Clang's
-  /// `-Wdangling` and clang-tidy flag binding the view to a temporary \ref RcStringOrRef (see
-  /// AGENTS.md "Non-owning view return types").
+  /// `-Wdangling` and clang-tidy flag binding the view to a temporary \ref RcStringOrRef.
   operator std::string_view() const UTILS_LIFETIME_BOUND {
     return std::visit([](auto&& value) { return std::string_view(value); }, value_);
   }
@@ -162,7 +164,7 @@ public:
   // For gtest, also implement operator== in terms of operator<=>.
   //
 
-  /// Equality operator to another \ref RcString.
+  /// Equality operator to another \ref RcStringOrRef.
   friend bool operator==(const RcStringOrRef& lhs, const RcStringOrRef& rhs) {
     return (lhs <=> rhs) == std::strong_ordering::equal;
   }
@@ -205,12 +207,12 @@ public:
     return concatStringViews(lhs, rhs);
   }
 
-  /// Reversed concatenation operator with a C-style string.
+  /// Reversed concatenation operator with a `std::string_view`.
   friend std::string operator+(std::string_view lhs, const RcStringOrRef& rhs) {
     return concatStringViews(lhs, rhs);
   }
 
-  /// Reversed concatenation operator with a `std::string_view`.
+  /// Reversed concatenation operator with a C-style string.
   friend std::string operator+(const char* lhs, const RcStringOrRef& rhs) {
     return concatStringViews(lhs, rhs);
   }
@@ -245,8 +247,10 @@ public:
   /**
    * Returns a substring of the string.
    *
+   * @pre \p pos is at most \ref size().
    * @param pos The position to start the substring.
-   * @param len The length of the substring, or `RcStringOrRef::npos` to return the whole string.
+   * @param len The length of the substring, or `RcStringOrRef::npos` to take the rest of the
+   *   string.
    * @return An RcStringOrRef containing the substring.
    */
   RcStringOrRef substr(size_t pos, size_t len = npos) const {
@@ -342,7 +346,7 @@ private:
 }  // namespace donner
 
 /**
- * Hash function for RcString.
+ * Hash function for RcStringOrRef.
  */
 template <>
 struct std::hash<donner::RcStringOrRef> {

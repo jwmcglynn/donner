@@ -111,29 +111,34 @@ enum class BufferUsage : uint32_t {
 
 /// Platform object kind a \ref donner::gpu::NativeSurfaceHandle names.
 ///
-/// One kind per windowing system this runtime can present to. A browser canvas is named by a CSS
-/// selector rather than by a pointer, which is why the handle below carries a string field
-/// alongside its pointer fields.
+/// One kind per platform object a surface can name; each backend accepts only the kinds it
+/// presents to. A browser canvas is named by a CSS selector rather than by a pointer, which is why
+/// the handle below carries a string field alongside its pointer fields.
 enum class NativeSurfaceKind : uint8_t {
   MetalLayer,      //!< Core Animation Metal layer.
-  XlibWindow,      //!< X11 display plus window id.
-  WaylandSurface,  //!< Wayland display plus surface.
+  XlibWindow,      //!< X11 display plus window id. Refused by every backend; use EmbedderSurface.
+  WaylandSurface,  //!< Wayland display plus surface. Refused by every backend; use EmbedderSurface.
 
   /// CSS selector naming a browser canvas element.
   ///
   /// A browser drives presentation from its own frame loop, so a surface of this kind presents
-  /// when the host says so rather than when the caller asks: an explicit present on it is
-  /// rejected rather than performed. Everything else about the surface behaves the same.
+  /// when the host says so rather than when the caller asks: an explicit present only hands the
+  /// acquired frame back for that implicit presentation. Everything else about the surface
+  /// behaves the same. In a worker, which has no document, the selector is read as the id of a
+  /// transferred canvas, so only a plain id such as `"#canvas"` resolves there.
   CanvasSelector,
   /// A surface object the embedder created itself, named by its 64-bit handle.
   ///
   /// The production path on a platform whose windowing library already knows how to make one. A
   /// window-system surface is scoped to the graphics instance it was created against, so the
   /// embedder creates it against the instance the runtime exposes for exactly this purpose, and
-  /// keeps ownership: the runtime builds its swapchain on the surface and tears that down with
-  /// the surface handle, but never destroys the surface itself, because the library that made it
-  /// generally destroys it with the window. Destroy order is the runtime's surface first, then
-  /// the embedder's, then the device.
+  /// keeps ownership: the runtime builds its swapchain on the surface and retires that swapchain
+  /// with the surface handle, but destroying the handle never destroys the surface itself. On
+  /// Vulkan, the only backend that accepts this kind, the embedder registers the surface with
+  /// `VulkanSharedRoot::registerExternalSurface()` before creating the runtime surface and
+  /// destroys it with `VulkanSharedRoot::destroyExternalSurface()`, which refuses until the
+  /// swapchain is proven retired. Destroy order is the runtime's surface first, then the
+  /// embedder's, then the instance it was created against.
   ///
   /// This is what keeps the runtime free of window-system headers: the embedder links the one it
   /// already uses and hands over the result.
@@ -159,7 +164,7 @@ struct NativeSurfaceHandle {
   // the caller and the handle disagree about what this names, which is rejected rather than
   // silently ignored.
   /// MetalLayer: the layer. XlibWindow: the display. WaylandSurface: the display. Null for
-  /// CanvasSelector.
+  /// CanvasSelector, EmbedderSurface and Headless.
   void* display = nullptr;
   /// XlibWindow: the window id. WaylandSurface: the surface. EmbedderSurface: the handle of the
   /// surface object the embedder created. Zero for MetalLayer, CanvasSelector and Headless.
@@ -851,7 +856,8 @@ struct BufferBinding {
 
 /// A texture view bound through a bind group.
 struct TextureViewBinding {
-  TextureViewRef view;  //!< Bound view. Texture needs \ref TextureUsage::Sampled.
+  TextureViewRef view;  //!< Bound view. Texture needs \ref TextureUsage::Sampled, or
+                        //!< \ref TextureUsage::StorageBinding for a storage-texture binding.
 };
 
 /// A sampler bound through a bind group.

@@ -50,7 +50,7 @@ bazel build --override_module=donner=/path/to/donner //:my_app
 
 For a published BCR version, replace `0.8.0-pre` with the version listed in the registry and
 run `bazel build //:my_app` without the override. Donner is built and tested against the Bazel
-version pinned in its `.bazelversion` (currently 8.8.0).
+version pinned in its `.bazelversion` (currently 8.8.1).
 
 ## Adding to Your CMake Project {#GettingStartedCMake}
 
@@ -81,10 +81,7 @@ target_link_libraries(my_svg_app PRIVATE donner)
 
 Use the same public headers as the Bazel build:
 
-```cpp
-#include "donner/svg/SVG.h"
-#include "donner/svg/renderer/Renderer.h"
-```
+\snippet svg_quickstart.cc includes
 
 The complete runnable example is under `examples/cmake_consumer/`. It parses a small SVG, queries
 the DOM, renders it, and exits non-zero if any step fails. From the Donner checkout:
@@ -111,13 +108,8 @@ are the exception.
 
 ## Loading an SVG
 
-First include the core SVG module with:
-
-```cpp
-#include "donner/svg/SVG.h"
-```
-
-Use `SVGParser` to load an SVG from a string, which may have been read from a file:
+First include the core SVG module, `donner/svg/SVG.h`. Then use `SVGParser` to load an SVG from a
+string, which may have been read from a file:
 
 \snippet svg_tree_interaction.cc svg_string
 
@@ -142,30 +134,19 @@ The complete example prints the path geometry, applies style edits, and then pri
 
 ## Rendering an SVG
 
-Use the `Renderer` class, which resolves to the backend selected at build time:
+Include `donner/svg/renderer/Renderer.h` and use the `Renderer` class, which resolves to the
+backend selected at build time. Drawing renders the document in memory, and `save()` writes it to a
+PNG file:
 
-```cpp
-#include "donner/svg/renderer/Renderer.h"
-
-donner::svg::Renderer renderer;
-renderer.draw(document);
-```
-
-The output can be saved to a PNG file:
-
-```cpp
-const bool success = renderer.save("output.png");
-```
+\snippet svg_to_png.cc render
 
 Pixel data can also be read back with a snapshot:
 
-```cpp
-donner::svg::RendererBitmap snapshot = renderer.takeSnapshot();
-std::cout << "Size: " << renderer.width() << "x" << renderer.height() << "\n";
-```
+\snippet svg_quickstart.cc snapshot
 
-See \ref BuildingDonner for details on choosing between tiny_skia (the compact CPU default) and
-Geode (the GPU backend).
+\ref svg_quickstart.cc "The quickstart example" parses a document, edits it, and renders it in one
+short program. See \ref BuildingDonner for details on choosing between tiny_skia (the compact CPU
+default) and Geode (the GPU backend).
 
 ## Third-Party License Attribution
 
@@ -209,15 +190,15 @@ Each variant produces two files next to each other:
 
 ### Embedding the NOTICE into your application
 
-The `donner_notice_file` rule exposes its `NOTICE.txt` under `output_group = "notice"`. Select it
-with a `filegroup` and pass it through Donner's `//tools:embed_resources` helper to produce a
-linkable C++ symbol:
+The `donner_notice_file` rule exposes its text file (`notice_default.txt` for
+`notice_default`) under `output_group = "notice"`; the `.json` manifest is not needed at runtime.
+Select the text with a `filegroup` and pass it through Donner's `//tools:embed_resources` helper to
+produce a linkable C++ symbol. With `donner_cc_binary` loaded from `@donner//build_defs:rules.bzl`,
+the recipe is:
+
+<!-- example: examples/BUILD.bazel [embed_notice] -->
 
 ```py
-load("@donner//build_defs:rules.bzl", "donner_cc_binary")
-
-# Select only NOTICE.txt from the notice target; the .json manifest is not
-# needed at runtime.
 filegroup(
     name = "notice_txt",
     srcs = ["@donner//third_party/licenses:notice_default"],
@@ -245,11 +226,12 @@ cc_library(
     name = "embedded_notice",
     srcs = ["embedded/notice_default_txt.cpp"],
     hdrs = ["embedded/notice_embedded.h"],
+    includes = ["."],
 )
 
 donner_cc_binary(
-    name = "my_app",
-    srcs = ["my_app.cc"],
+    name = "third_party_notice",
+    srcs = ["third_party_notice.cc"],
     deps = [
         ":embedded_notice",
         "@donner",
@@ -257,25 +239,18 @@ donner_cc_binary(
 )
 ```
 
+`includes = ["."]` lets sources include the generated header as `embedded/notice_embedded.h` from
+any package. Donner builds this recipe as `//examples:third_party_notice`.
+
 The generated `.cpp` filename is the input filename with non-alphanumeric characters replaced by
 underscores, so `notice_default.txt` becomes `notice_default_txt.cpp`.
 
 `embed_resources` generates a header that exposes each resource as a
-`std::span<const unsigned char>` in the `donner::embedded` namespace. The application can then
-show it behind an `--about` flag or a menu item:
+`std::span<const unsigned char>` in the `donner::embedded` namespace. After
+`#include "embedded/notice_embedded.h"`, the application can show the text behind an `--about` flag
+or a menu item:
 
-```cpp
-#include "embedded/notice_embedded.h"
-
-#include <span>
-#include <string_view>
-
-std::string_view thirdPartyLicenses() {
-  const auto& span = donner::embedded::kDonnerNotice;
-  return std::string_view(
-      reinterpret_cast<const char*>(span.data()), span.size());
-}
-```
+\snippet third_party_notice.cc third_party_licenses
 
 Alternatively, declare the notice target as a `data` dependency of your binary and read the file
 at runtime through Bazel runfiles.

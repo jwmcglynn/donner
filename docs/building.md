@@ -1,11 +1,14 @@
 # Building Donner {#BuildingDonner}
 
-Donner builds with Bazel, which downloads a pinned LLVM toolchain on the first build, so no separate compiler installation is needed.
+Donner builds with Bazel. By default Bazel compiles with the host's Clang: Xcode's toolchain on
+macOS, and the `clang` and `clang++` on `PATH` on Linux. On Linux, `--config=latest_llvm` downloads a
+pinned LLVM toolchain instead.
 
 ## Requirements
 
 - Bazel
 - On macOS: A working Xcode installation
+- On Linux: Clang (`clang` and `clang++` on `PATH`), unless you build with `--config=latest_llvm`
 - CMake builds on Linux: pkg-config and development libraries for Fontconfig and Freetype.
   For Debian/Ubuntu:
 
@@ -44,7 +47,7 @@ The `debug` and `time-trace` configurations and CodeQL builds preserve ordinary 
 standalone execution and diagnostics. When selecting `--spawn_strategy=local` or `standalone`
 explicitly, also pass `--experimental_output_paths=off`.
 
-The first build downloads LLVM and the other external dependencies and builds them from source. Once the dependencies are downloaded, a clean build with the default tiny-skia backend takes:
+The first build downloads the external dependencies and builds them from source. Once the dependencies are downloaded, a clean build with the default tiny-skia backend takes:
 
 - **Apple Silicon M1**: ~2 minutes
 
@@ -56,7 +59,8 @@ To run the tests, run:
 bazel test //donner/...
 ```
 
-To include experimental code as well, run:
+That includes the `tiny`, `text_full` and `geode` variants of the library tests. To also build and
+test the packages outside the libraries, such as the examples and tools, run:
 
 ```sh
 bazel test //...
@@ -70,7 +74,7 @@ To generate a build report locally:
 
 1. Install prerequisites. On macOS:
    ```sh
-   brew install lcov genhtml
+   brew install lcov
    ```
 
 2. Run the command:
@@ -174,12 +178,16 @@ for the external-consumer setup.
 
 ### CMake configuration options
 
-| Option                    | Default       | Description                                                        |
-| ------------------------- | ------------- | ------------------------------------------------------------------ |
-| `DONNER_RENDERER_BACKEND` | `"tiny_skia"` | Renderer backend selection; the supported default is `"tiny_skia"` |
-| `DONNER_TEXT`             | `ON`          | Enable text rendering (`<text>`, `<tspan>`)                        |
-| `DONNER_TEXT_WOFF2`       | `ON`          | Enable WOFF2 web font loading                                      |
-| `DONNER_FILTERS`          | `ON`          | Enable SVG filter effects                                          |
+| Option                    | Default       | Description                                                       |
+| ------------------------- | ------------- | ----------------------------------------------------------------- |
+| `DONNER_RENDERER_BACKEND` | `"tiny_skia"` | Renderer backend; `"tiny_skia"` is the only accepted value        |
+| `DONNER_TEXT`             | `ON`          | Enable text rendering (`<text>`, `<tspan>`)                       |
+| `DONNER_TEXT_FULL`        | `OFF`         | Enable FreeType and HarfBuzz text shaping; requires `DONNER_TEXT` |
+| `DONNER_TEXT_WOFF2`       | `ON`          | Enable WOFF2 web font loading; requires `DONNER_TEXT`             |
+| `DONNER_FILTERS`          | `ON`          | Enable SVG filter effects                                         |
+
+The CMake build does not build the Geode GPU backend or the native GPU runtime yet
+([#1721](https://github.com/jwmcglynn/donner/issues/1721)); use Bazel for Geode.
 
 ### Bazel configuration options
 
@@ -191,28 +199,35 @@ for the external-consumer setup.
 | `--config=latest_llvm` | Use the latest LLVM toolchain (required for coverage)                                                             |
 | `--config=lld`         | Force the `lld` linker; workaround for dev boxes whose default linker can't link the suite (see FAQ below)        |
 
-For a separate Bazel module, the root `@donner` dependency uses tiny-skia by default. See
-\ref GettingStarted for the checked-in consumer example, the source-checkout override, and
-published BCR versions.
+### Using Donner from another Bazel module {#BuildingDonnerBcr}
+
+A separate Bazel module depends on Donner with `bazel_dep(name = "donner", version = ...)`, either
+from the Bazel Central Registry once a version is published there or from a source checkout with
+`--override_module`. Its root `@donner` library renders with tiny-skia by default, with base text
+and filters enabled, and none of Donner's development-only dependencies are fetched. Donner's BCR
+preflight checks each release candidate in that default configuration: on Linux and macOS, with
+Bazel 7 and 8, it builds `@donner//donner/base`, `@donner//donner/css`, `@donner//donner/svg` and
+`@donner//donner/svg/renderer` from the candidate's source archive and builds and runs the
+checked-in consumer module against it. See \ref GettingStarted for the `MODULE.bazel`,
+`BUILD.bazel` and `.bazelrc` a consumer needs.
 
 ## Continuous integration remote cache
 
-The GitHub-hosted CI lanes (the hosted Linux/macOS fallback builds, the
-`linker-canary`, the hosted Coverage build, the nightly full-tree build, and
-the sanitizer lanes) can share a [BuildBuddy](https://www.buildbuddy.io/)
-remote cache. It is off by default and never affects local builds or the
-self-hosted runners.
+The scheduled GitHub-hosted nightly full-tree build and the scheduled
+sanitizer lanes can share a [BuildBuddy](https://www.buildbuddy.io/) remote
+cache. It is off by default and never affects local builds, pull-request runs,
+or the self-hosted runners.
 
 **How it works.** The `.github/actions/buildbuddy-cache` composite action runs
-early in each hosted lane. When the `BUILDBUDDY_API_KEY` repository secret is
+early in each of those lanes. When the `BUILDBUDDY_API_KEY` repository secret is
 present it writes a `.buildbuddy.bazelrc` fragment (loaded by a `try-import` in
 `.bazelrc`) that points Bazel at `grpcs://remote.buildbuddy.io`. When the secret
 is absent the action writes nothing and the `try-import` is a silent no-op, so
 every lane builds exactly as it would without the cache.
 
-Pull-request runs are read-only: they may read cache hits but never upload
-(`--remote_upload_local_results=false`), so a PR can never poison the cache.
-Only trusted `main` pushes and scheduled runs upload results.
+Pull-request runs never receive the key, and the action refuses to configure the
+cache for a pull request, so a PR can never read or poison it. The lanes that
+use it run only on a schedule or by manual dispatch, and they upload results.
 
 **Activation.** Add a repository secret named `BUILDBUDDY_API_KEY` (Settings ->
 Secrets and variables -> Actions) holding a BuildBuddy API key. No code change
@@ -283,6 +298,5 @@ bazel run //donner/editor/wasm:serve_http -- --https
 ```
 
 Use `-- --https` for LAN access with the generated local certificate. Then open
-the served `index.html` in a browser. See
-[docs/design_docs/0020-editor.md](design_docs/0020-editor.md) for the editor
-design and milestone plan.
+the served `index.html` in a browser. See \ref EditorArchitecture for how the
+editor is put together.

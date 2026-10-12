@@ -23,7 +23,8 @@ enum class GpuErrorType : uint8_t {
   UsageMismatch,      //!< A resource lacks the usage flag required by the operation.
   OutOfBounds,        //!< An offset, size, or copy region exceeds the resource bounds.
   LimitExceeded,      //!< A count or dimension exceeds a documented device limit.
-  InvalidState,       //!< An operation was issued in an invalid state (encoder state machine).
+  InvalidState,       //!< The operation is refused in the current state, e.g. encoder order, an
+                      //!< open mapping, or a bounded wait that gave up.
   Unsupported,        //!< The requested feature is not supported by this runtime.
   DeviceLost, /**< Terminal device failure: in-flight work cannot complete and its results cannot
     be trusted. Unlike \ref donner::gpu::GpuErrorType::InvalidState, retrying on the same device

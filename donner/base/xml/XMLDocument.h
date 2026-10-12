@@ -141,7 +141,7 @@ public:
   /// Gets the registry as a shared pointer, for advanced use.
   std::shared_ptr<Registry> sharedRegistry() const { return registry_; }
 
-  /// Get the root XMLNdoe of the document.
+  /// Get the root XMLNode of the document.
   XMLNode root() const;
 
   /// Get the root ECS Entity of the document, for advanced use.
@@ -211,9 +211,9 @@ public:
   /**
    * Return the attribute whose current source range contains \p offset, if any.
    *
-   * This currently resolves the containing node, then reparses that node's current opening tag to
-   * locate attributes. It is intentionally XML-owned and source-store aware, but does not yet
-   * require long-lived per-attribute anchors.
+   * Resolves the deepest node containing \p offset, then checks each of its attributes, using the
+   * attribute's tracked source range when it has one and otherwise reparsing the node's current
+   * opening tag.
    *
    * @param offset Byte offset in the current XML source.
    */
@@ -270,15 +270,18 @@ public:
   ApplySourceEditResult removeAttribute(XMLNode node, const XMLQualifiedNameRef& name);
 
   /**
-   * Insert a source-less XML node under a source-backed parent and update owned source text.
+   * Insert an XML node under a source-backed element and update owned source text.
    *
-   * The first implementation supports inserting an unparented node into an element that has a
-   * parsed closing tag. If \p referenceNode is set, it must be an existing child of \p parent and
-   * the new node is inserted immediately before it; otherwise the new node is appended before
-   * \p parent 's closing tag.
+   * A source-less, unparented \p node is serialized and inserted, emitting an
+   * \ref XMLMutation::Kind::NodeInserted mutation. A source-backed element that is already in the
+   * tree is moved instead: its existing source bytes are relocated, and a
+   * \ref XMLMutation::Kind::NodeRemoved mutation precedes the NodeInserted one. If
+   * \p referenceNode is set, it must be an existing child of \p parent and the node is inserted
+   * immediately before it; otherwise the node is appended before \p parent 's closing tag, and a
+   * self-closing \p parent is expanded into an opening and closing tag pair.
    *
    * @param parent Element node to receive the inserted child.
-   * @param node Source-less node to insert.
+   * @param node Source-less node to insert, or source-backed element to move.
    * @param referenceNode Optional existing child to insert before.
    */
   ApplySourceEditResult insertNode(XMLNode parent, XMLNode node,
@@ -300,8 +303,9 @@ public:
    * Replaces the element's tracked text value range when it has one, otherwise inserts the
    * escaped text before the element's closing tag (expanding a self-closing tag). Element
    * children are not touched, so this only supports elements whose content is text-only -
-   * mixed-content elements replace just the tracked leading text chunk. Emits an
-   * \ref XMLMutation::Kind::NodeValueChanged mutation on success.
+   * mixed-content elements replace just the one tracked text run, which after parsing is the
+   * last one the parser read. Emits an \ref XMLMutation::Kind::NodeValueChanged mutation on
+   * success.
    *
    * @param element Element whose text content to replace.
    * @param text New raw (unescaped) text content; empty clears the content.

@@ -48,10 +48,13 @@ public:
   bool isEnabled() const { return enabled_; }
 
   /**
-   * Add a warning via a factory callable. The callable is only invoked when the sink is enabled,
-   * implicitly avoiding formatting overhead when warnings are disabled.
+   * Add a warning via a factory callable. The callable is only invoked when the sink is enabled
+   * and has not reached a resource limit, implicitly avoiding formatting overhead when warnings
+   * are disabled. Once \ref kMaximumWarnings or \ref kMaximumWarningBytes would be exceeded, this
+   * and every later warning is dropped and \ref resourceLimitExceeded returns true.
    *
    * @tparam Factory A callable returning ParseDiagnostic.
+   * @param factory Callable that builds the warning.
    */
   template <typename Factory>
     requires std::invocable<Factory> && std::same_as<std::invoke_result_t<Factory>, ParseDiagnostic>

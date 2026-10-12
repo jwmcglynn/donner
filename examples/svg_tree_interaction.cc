@@ -70,10 +70,9 @@ int main(int argc, char* argv[]) {
   // We could also use \ref SVGElement::isa<>() to check if the element is a path, and then cast it.
   assert(maybePath->isa<donner::svg::SVGPathElement>());
 
-  // Set styles, note that these combine together and do not replace.
+  // setStyle replaces the element's style attribute, so pass every declaration in one call.
   //! [path_set_style]
-  path.setStyle("fill: red");
-  path.setStyle("stroke: white");
+  path.setStyle("fill: red; stroke: white");
 
   // Get the parsed, cascaded style for this element and output it to the console.
   std::cout << "Computed style: " << path.getComputedStyle() << "\n";

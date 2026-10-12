@@ -28,8 +28,9 @@ namespace donner::svg {
  *
  * \note For the preview images below, browsers render each cell with CSS `mix-blend-mode`
  *       because `<feImage>` references to inline elements are not universally supported across
- *       browsers. The actual `<feBlend>` primitive produces identical pixel results - the XML
- *       snippet further down is what Donner executes.
+ *       browsers. `<feBlend>` uses the same blend formulas but computes in `linearRGB` by
+ *       default, so it matches these previews only with `color-interpolation-filters="sRGB"`.
+ *       The XML snippet further down is what Donner executes.
  *
  * \htmlonly
  * <svg xmlns="http://www.w3.org/2000/svg" width="340" height="380"
@@ -133,9 +134,9 @@ namespace donner::svg {
  * The 16 modes are grouped into five families by what they do to the underlying pixels:
  *
  * - **Darken family** - `multiply`, `darken`, `color-burn`. The result is never brighter than
- *   either input; white acts as a no-op.
+ *   the bottom layer (`in2`); a white top layer acts as a no-op.
  * - **Lighten family** - `screen`, `lighten`, `color-dodge`. The result is never darker than
- *   either input; black acts as a no-op.
+ *   the bottom layer (`in2`); a black top layer acts as a no-op.
  * - **Contrast family** - `overlay`, `hard-light`, `soft-light`. Darkens dark areas and
  *   brightens bright areas, increasing contrast.
  * - **Difference family** - `difference`, `exclusion`. Produce inverting or contrast-reversing
