@@ -502,6 +502,65 @@ TEST(EditorShellInternalTest, TextFormatBarCapturesCanvasInputWithinItsLayoutRec
                    .has_value());
 }
 
+TEST(EditorShellInternalTest, DisabledSourceFocusClearsBeforePendingEditsReachThePane) {
+  for (const bool flushBeforeDisable : {false, true}) {
+    SCOPED_TRACE(flushBeforeDisable ? "writeback awaiting source pane" : "queued insertion");
+    EditorApp app;
+    ASSERT_THAT(app.loadFromString(kInitialSvg), testing::Eq(true));
+    auto target = app.document().document().querySelector("#target");
+    ASSERT_THAT(target, testing::Optional(testing::_));
+    app.setSelection(*target);
+    TextEditor source;
+    source.setText(kInitialSvg);
+    source.resetTextChanged();
+    source.setFocusPartition(ComputeFocusPartition(app.document().document(), *target));
+    ASSERT_THAT(source.hasFocusPartition(), testing::Eq(true));
+
+    svg::SVGDocument& document = app.document().document();
+    svg::SVGRectElement inserted = svg::SVGRectElement::Create(document);
+    inserted.setAttribute("id", "inserted");
+    app.applyMutation(EditorCommand::InsertElementCommand(document.svgElement(), inserted));
+    if (flushBeforeDisable) {
+      ASSERT_THAT(app.flushFrame(), testing::Eq(true));
+      ASSERT_THAT(app.document().hasUnmirroredSourceDeltas(), testing::Eq(true));
+    } else {
+      ASSERT_THAT(app.document().hasPendingMutations(), testing::Eq(true));
+    }
+    const std::string beforeText = source.getText();
+    const auto beforeVersion = app.document().currentFrameVersion();
+    const bool beforePending = app.document().hasPendingMutations();
+    const bool beforeUnmirrored = app.document().hasUnmirroredSourceDeltas();
+
+    EXPECT_THAT(internal::DeferSourceFocusWhileAwaitingEdits(source, /*focusEnabled=*/false),
+                testing::Eq(false));
+    EXPECT_THAT(source.hasFocusPartition(), testing::Eq(false));
+    EXPECT_THAT(source.getText(), testing::Eq(beforeText));
+    EXPECT_THAT(source.isTextChanged(), testing::Eq(false));
+    EXPECT_THAT(app.document().currentFrameVersion(), testing::Eq(beforeVersion));
+    EXPECT_THAT(app.document().hasPendingMutations(), testing::Eq(beforePending));
+    EXPECT_THAT(app.document().hasUnmirroredSourceDeltas(), testing::Eq(beforeUnmirrored));
+  }
+}
+
+TEST(EditorShellInternalTest, EnabledSourceFocusRetainsPartitionWhileAwaitingEdits) {
+  TextEditor source;
+  source.setText("root\nhidden\ntarget");
+  source.resetTextChanged();
+  source.setFocusPartition(FocusPartition{
+      .fullColor = {{.startLine = 2, .endLine = 3}},
+      .hidden = {{.startLine = 1, .endLine = 2}},
+  });
+  ASSERT_THAT(source.hasFocusPartition(), testing::Eq(true));
+
+  EXPECT_THAT(internal::DeferSourceFocusWhileAwaitingEdits(source, /*focusEnabled=*/true),
+              testing::Eq(true));
+  EXPECT_THAT(source.hasFocusPartition(), testing::Eq(true));
+  EXPECT_THAT(source.isPositionInsideFocusRange(Coordinates(2, 0)), testing::Eq(true));
+  EXPECT_THAT(source.isPositionInsideFocusRange(Coordinates(1, 0)), testing::Eq(false));
+  EXPECT_THAT(source.getText(), testing::Eq("root\nhidden\ntarget"));
+  EXPECT_THAT(source.isTextChanged(), testing::Eq(false));
+}
+
 TEST(EditorShellInternalTest, StructuralDocumentActionsWaitForExclusiveDomOwnership) {
   EXPECT_FALSE(internal::GroupOperationCanDispatch(
       /*rendererBusy=*/true, GroupOperationAvailability{.canApply = true}));
@@ -8402,6 +8461,49 @@ TEST(EditorShellTest, SourceFocusRevealsNewTextWhileCreatingAndTyping) {
     ExpectFocusShowsSelectedElement(shell, "x=\"20\" y=\"60\"", "</text>");
   }
   EXPECT_NE(EditorShellTestAccess::Source(shell).getText().find("SVG</text>"), std::string::npos);
+}
+
+TEST(EditorShellTest, DisablingSourceFocusClearsPendingEditPartitionImmediately) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "Hidden editor window is unavailable on this host";
+  }
+
+  for (const bool flushBeforeDisable : {false, true}) {
+    SCOPED_TRACE(flushBeforeDisable ? "writeback awaiting source pane" : "queued insertion");
+    EditorShell shell(window, OptionsWithSource(kInitialSvg, "focus-disable.svg"));
+    ASSERT_THAT(shell.valid(), testing::Eq(true));
+    EditorApp& app = EditorShellTestAccess::App(shell);
+    auto target = app.document().document().querySelector("#target");
+    ASSERT_THAT(target, testing::Optional(testing::_));
+    app.setSelection(*target);
+    EditorShellTestAccess::SetSourceFocusMode(shell, true);
+    TextEditor& source = EditorShellTestAccess::Source(shell);
+    ASSERT_THAT(source.hasFocusPartition(), testing::Eq(true));
+
+    svg::SVGDocument& document = app.document().document();
+    svg::SVGRectElement inserted = svg::SVGRectElement::Create(document);
+    inserted.setAttribute("id", "inserted");
+    app.applyMutation(EditorCommand::InsertElementCommand(document.svgElement(), inserted));
+    if (flushBeforeDisable) {
+      ASSERT_THAT(app.flushFrame(), testing::Eq(true));
+      ASSERT_THAT(app.document().hasUnmirroredSourceDeltas(), testing::Eq(true));
+    } else {
+      ASSERT_THAT(app.document().hasPendingMutations(), testing::Eq(true));
+    }
+    const std::string beforeText = source.getText();
+    const auto beforeVersion = app.document().currentFrameVersion();
+    const bool beforePending = app.document().hasPendingMutations();
+    const bool beforeUnmirrored = app.document().hasUnmirroredSourceDeltas();
+
+    EditorShellTestAccess::SetSourceFocusMode(shell, false);
+    EXPECT_THAT(EditorShellTestAccess::SourceFocusMode(shell), testing::Eq(false));
+    EXPECT_THAT(source.hasFocusPartition(), testing::Eq(false));
+    EXPECT_THAT(source.getText(), testing::Eq(beforeText));
+    EXPECT_THAT(app.document().currentFrameVersion(), testing::Eq(beforeVersion));
+    EXPECT_THAT(app.document().hasPendingMutations(), testing::Eq(beforePending));
+    EXPECT_THAT(app.document().hasUnmirroredSourceDeltas(), testing::Eq(beforeUnmirrored));
+  }
 }
 
 TEST(EditorShellTest, SourceFocusWaitsForInsertedElementToReachSourcePane) {
