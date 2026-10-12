@@ -601,6 +601,30 @@ test("the first canvas frame after a polled result must carry that result", () =
   );
 });
 
+test("the presentation timeline rides the queue-stats proxy call and stays bounded", () => {
+  const observe = source.match(
+    /bool EditorWindow::observePresentationCompletion\(\) \{[\s\S]*?\n\}/,
+  )[0];
+  const calls = [...observe.matchAll(/MAIN_THREAD_ASYNC_EM_ASM\(\s*\{([\s\S]*?)\n\s*\},/g)];
+  assert.equal(calls.length, 2, "the timeline must not add a proxy call per frame");
+  const body = calls.find((call) => call[1].includes("__donnerPresentationTimeline"));
+  assert.ok(body, "the timeline sample must be published by the queue-stats call");
+  assert.match(body[1], /__donnerPresentationQueueStats/);
+  const publish = new Function(
+    "window",
+    "performance",
+    ...Array.from({ length: 15 }, (_, index) => `$${index}`),
+    body[1],
+  );
+  const window = {};
+  const clock = { now: () => 12.34 };
+  for (let frame = 0; frame < 600; ++frame) {
+    publish(window, clock, 4, 9, 2, 0, 0, 0, 0, 0, 0, 0, 0, 3, 5, 0, 1);
+  }
+  assert.equal(window.__donnerPresentationTimeline.length, 512);
+  assert.deepEqual(window.__donnerPresentationTimeline.at(-1), [12.3, 1, 2, 3, 9, 5]);
+});
+
 test("worker acceptance requires the fresh render identity and no old presentation timestamp", () => {
   const timingPublisher = renderCoordinatorSource.match(
     /void PublishWorkerTimingStats\([\s\S]*?\n\}/,
