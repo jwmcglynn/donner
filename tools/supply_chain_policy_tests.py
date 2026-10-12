@@ -14,8 +14,9 @@ The check fails closed where it could otherwise be bypassed: a load or use_repo_
 http.bzl or git.bzl must bind each rule under its own name, MODULE.bazel may not include() other
 files, and main-repository labels (`@//`, `@@//`, `@donner//`) are followed like `//` labels.
 Playwright repository tags are recognized from literal use_extension identities rather than proxy
-variable names. Their integrity maps must contain exactly the complete reviewed archive set with
-unique literal keys; a nonempty subset leaves unchecked platforms and is rejected. Proxy rebinding,
+variable names. Their selected manifest must have the reviewed literal identity and SHA-256;
+their integrity maps must contain exactly the complete reviewed archive set with unique literal keys.
+A nonempty subset leaves unchecked platforms and is rejected. Proxy rebinding,
 factory/method aliases and unreadable method lookups fail closed;
 direct repository mapping operations remain allowed. Unreadable native getter results may be
 inspected as bare expressions, but cannot be invoked or transported; first-class getter factories
@@ -36,7 +37,11 @@ from python.runfiles import runfiles
 
 
 NATIVE_DOWNLOAD_APIS = frozenset({"download", "download_and_extract"})
-# Archive paths reviewed for the pinned Playwright browser manifest. Changes require a new review.
+# The manifest and archive set are reviewed together; changing either requires a new review.
+REVIEWED_PLAYWRIGHT_MANIFEST = "//donner/editor/wasm/tests:browsers.1.62.1.json"
+REVIEWED_PLAYWRIGHT_MANIFEST_PATH = "donner/editor/wasm/tests/browsers.1.62.1.json"
+REVIEWED_PLAYWRIGHT_MANIFEST_SHA256 = \
+    "de911b7cde3dc5b25c709a8ec23603f288caba52350b2e8cec0e76b483364d19"
 REVIEWED_PLAYWRIGHT_ARCHIVES = frozenset({
     'builds/chromium/1234/chromium-headless-shell-linux-arm64.zip',
     'builds/chromium/1234/chromium-linux-arm64.zip',
@@ -120,6 +125,13 @@ def _runfile(path):
             "checked" % path
         )
     return resolved.read_text(encoding="utf-8")
+
+
+def _runfile_bytes(path):
+    resolved = runfiles.Create().Rlocation("donner/%s" % path)
+    if resolved is None or not Path(resolved).is_file():
+        raise OSError("reviewed browser manifest is not in the policy test data")
+    return Path(resolved).read_bytes()
 
 
 def _literal(node):
@@ -385,9 +397,10 @@ def _repo_rule_problems(path, node):
             % (path, node.lineno, args[1], args[1])]
 
 
-def fetch_findings(trees, pins=None):
+def fetch_findings(trees, pins=None, read_manifest=None):
     """Returns (problems, git fetches present by (file, name)) for the parsed Starlark files."""
     pins = LEGACY_GIT_COMMIT_PINS if pins is None else pins
+    read_manifest = _runfile_bytes if read_manifest is None else read_manifest
     problems = legacy_list_problems(pins)
     git_fetches = []
     for path, tree in sorted(trees.items()):
@@ -400,7 +413,7 @@ def fetch_findings(trees, pins=None):
                 git_fetches.append((path, _git_name(call)))
             problems.extend("%s:%d: %s %s" % (path, call.lineno, _call_name(call), problem)
                             for problem in found)
-        problems.extend(_integrity_map_problems(path, tree))
+        problems.extend(_integrity_map_problems(path, tree, read_manifest))
         problems.extend(binding_problems(path, tree))
     problems.extend("%s:%s is fetched more than once" % key for key in sorted(set(git_fetches))
                     if git_fetches.count(key) > 1)
@@ -545,11 +558,35 @@ def _browser_archive_key_problems(path, tree, proxies):
     return problems
 
 
-def _integrity_map_problems(path, tree):
+def _browser_manifest_problems(path, tree, proxies, read_manifest):
+    problems = []
+    for call in ast.walk(tree):
+        if not (isinstance(call, ast.Call) and _is_playwright_repo(call, proxies)):
+            continue
+        mapping = _keyword(call, "integrity_path_map")
+        if not isinstance(mapping, ast.Dict) or not mapping.keys:
+            continue  # These calls already fail the integrity-map checks.
+        if _literal(_keyword(call, "browsers_json")) != REVIEWED_PLAYWRIGHT_MANIFEST:
+            problems.append("%s:%d: browsers_json must select the reviewed literal manifest"
+                            % (path, call.lineno))
+            continue
+        try:
+            digest = sha256(read_manifest(REVIEWED_PLAYWRIGHT_MANIFEST_PATH)).hexdigest()
+        except (OSError, TypeError):
+            problems.append("%s:%d: reviewed browser manifest is unreadable" % (path, call.lineno))
+            continue
+        if digest != REVIEWED_PLAYWRIGHT_MANIFEST_SHA256:
+            problems.append("%s:%d: browser manifest bytes do not match the reviewed SHA-256"
+                            % (path, call.lineno))
+    return problems
+
+
+def _integrity_map_problems(path, tree, read_manifest):
     """An empty value in a browser integrity map would silently skip that archive's check."""
     proxies, problems = _extension_proxy_bindings(path, tree)
     problems.extend(_missing_browser_integrity_maps(path, tree, proxies))
     problems.extend(_browser_archive_key_problems(path, tree, proxies))
+    problems.extend(_browser_manifest_problems(path, tree, proxies, read_manifest))
     problems.extend(_browser_indirection_problems(path, tree, proxies))
     problems.extend(_browser_getattr_problems(path, tree, proxies))
     for node in ast.walk(tree):
@@ -612,13 +649,18 @@ class CheckerTest(unittest.TestCase):
     """The checks reject the defects they exist for, so a green run is not vacuous."""
 
     @staticmethod
-    def _findings(source, path="third_party/example.bzl"):
-        return fetch_findings({path: ast.parse(source)})[0]
+    def _findings(source, path="third_party/example.bzl", read_manifest=None):
+        return fetch_findings({path: ast.parse(source)}, read_manifest=read_manifest)[0]
 
     @staticmethod
     def _browser(source, receiver="pw", extension='"playwright"'):
         return '%s = use_extension("@rules_playwright//playwright:extensions.bzl", %s)\n%s' % (
             receiver, extension, source)
+
+    @staticmethod
+    def _browser_call(arguments, receiver="pw"):
+        return '%s.repo(browsers_json = %r, %s)' % (
+            receiver, REVIEWED_PLAYWRIGHT_MANIFEST, arguments)
 
     @staticmethod
     def _browser_map():
@@ -717,7 +759,7 @@ class CheckerTest(unittest.TestCase):
     def test_rejects_an_empty_browser_integrity(self):
         hashes = self._browser_map()
         hashes[sorted(hashes)[0]] = ""
-        source = self._browser('playwright.repo(integrity_path_map = %r)' % hashes,
+        source = self._browser(self._browser_call('integrity_path_map = %r' % hashes, "playwright"),
                                receiver="playwright")
         self.assertEqual(len(self._findings(source)), 1)
 
@@ -835,7 +877,7 @@ class CheckerTest(unittest.TestCase):
             with self.subTest(source=source):
                 self.assertEqual(len(self._findings(self._browser(source, receiver="playwright"))), 1)
         self.assertEqual(self._findings(self._browser(
-            'playwright.repo(integrity_path_map = %r)' % self._browser_map(),
+            self._browser_call('integrity_path_map = %r' % self._browser_map(), "playwright"),
             receiver="playwright")), [])
 
 
@@ -844,7 +886,7 @@ class CheckerTest(unittest.TestCase):
             with self.subTest(receiver=receiver):
                 self.assertTrue(self._findings(self._browser(
                     receiver + '.repo(name = "browsers")', receiver)))
-                complete = receiver + '.repo(integrity_path_map = %r)' % self._browser_map()
+                complete = self._browser_call('integrity_path_map = %r' % self._browser_map(), receiver)
                 self.assertEqual(self._findings(self._browser(complete, receiver)), [])
         keyword = self._browser('pw.repo(name = "browsers")', extension='extension_name="playwright"')
         self.assertTrue(self._findings(keyword))
@@ -853,12 +895,14 @@ class CheckerTest(unittest.TestCase):
 
     def test_playwright_integrity_map_requires_every_reviewed_archive(self):
         complete = self._browser_map()
-        self.assertEqual(self._findings(self._browser('pw.repo(integrity_path_map = %r)' % complete)), [])
+        self.assertEqual(self._findings(self._browser(
+            self._browser_call('integrity_path_map = %r' % complete))), [])
         for missing in sorted(complete):
             with self.subTest(missing=missing):
                 subset = dict(complete)
                 del subset[missing]
-                self.assertTrue(self._findings(self._browser('pw.repo(integrity_path_map = %r)' % subset)))
+                self.assertTrue(self._findings(self._browser(
+                    self._browser_call('integrity_path_map = %r' % subset))))
 
     def test_playwright_archive_set_is_bound_to_selected_manifest(self):
         source = self._browser(
@@ -866,6 +910,35 @@ class CheckerTest(unittest.TestCase):
             'integrity_path_map = %r)' % self._browser_map())
         self.assertTrue(self._findings(source),
                         "An unchanged archive map must not approve a different browser manifest")
+
+    def test_playwright_manifest_identity_is_required_and_literal(self):
+        for manifest in (None, '"//other:browsers.json"', 'MANIFEST',
+                         '"//donner/editor/wasm/tests:" + "browsers.1.62.1.json"'):
+            with self.subTest(manifest=manifest):
+                selected = "" if manifest is None else "browsers_json = %s, " % manifest
+                source = self._browser('pw.repo(%sintegrity_path_map = %r)' % (
+                    selected, self._browser_map()))
+                self.assertRegex("\n".join(self._findings(source)), "reviewed literal manifest")
+
+    def test_playwright_manifest_bytes_are_authenticated(self):
+        source = self._browser(self._browser_call('integrity_path_map = %r' % self._browser_map()))
+        reviewed = _runfile_bytes(REVIEWED_PLAYWRIGHT_MANIFEST_PATH)
+        self.assertEqual(self._findings(source, read_manifest=lambda _: reviewed), [])
+        altered = reviewed.replace(b'"1234"', b'"1235"', 1)
+        self.assertNotEqual(altered, reviewed)
+        for content in (b"", altered, reviewed + b"\n"):
+            with self.subTest(content=content):
+                self.assertRegex("\n".join(self._findings(
+                    source, read_manifest=lambda _: content)), "reviewed SHA-256")
+
+    def test_playwright_manifest_read_errors_fail_closed(self):
+        source = self._browser(self._browser_call('integrity_path_map = %r' % self._browser_map()))
+        for failure in (FileNotFoundError, PermissionError, IsADirectoryError):
+            with self.subTest(failure=failure):
+                def unreadable(_):
+                    raise failure("manifest cannot be read")
+                self.assertRegex("\n".join(self._findings(
+                    source, read_manifest=unreadable)), "manifest is unreadable")
 
     def test_playwright_integrity_keys_are_exact_unique_and_literal(self):
         complete = self._browser_map()
@@ -876,7 +949,8 @@ class CheckerTest(unittest.TestCase):
                 repr(complete).replace(repr(first), "ARCHIVE_PATH", 1))
         for mapping in maps:
             with self.subTest(mapping=mapping):
-                self.assertTrue(self._findings(self._browser('pw.repo(integrity_path_map = %s)' % mapping)))
+                self.assertTrue(self._findings(self._browser(
+                    self._browser_call('integrity_path_map = %s' % mapping))))
         ordinary = self._browser('ordinary.repo(integrity_path_map = {"archive.zip": "sha256-AAAA"})',
                                  receiver="ordinary", extension='"unrelated"')
         self.assertEqual(self._findings(ordinary), [])
