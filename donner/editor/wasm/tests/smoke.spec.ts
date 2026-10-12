@@ -3055,9 +3055,21 @@ test("Geode WASM presents selection path overlay pixels", async ({ page }) => {
       timeout: 20000,
     })
     .toBeGreaterThanOrEqual(sampleRequest);
-  const beforeSelectionChrome = await page.evaluate(
-    () => window.__donnerWgpuReadbackStats?.selectionChromePixels || 0,
+  const beforeSelectionState = await page.evaluate(() => ({
+    readback: window.__donnerWgpuReadbackStats,
+    interaction: window.__donnerInteractionStats,
+    worker: window.__donnerWorkerStats,
+  }));
+  const beforePath = test.info().outputPath("selection-overlay-before.json");
+  await writeFile(beforePath, JSON.stringify({ sampleRequest, ...beforeSelectionState }, null, 2));
+  await test.info().attach("selection-overlay-before", {
+    path: beforePath,
+    contentType: "application/json",
+  });
+  expect(beforeSelectionState.interaction?.selectedCount, "expected an unselected baseline").toBe(
+    0,
   );
+  const beforeSelectionChrome = beforeSelectionState.readback?.selectionChromePixels || 0;
   await page.mouse.click(coloredPixel.x, coloredPixel.y);
   await expect
     .poll(async () => page.evaluate(() => window.__donnerInteractionStats?.selectedCount || 0), {
@@ -3075,12 +3087,22 @@ test("Geode WASM presents selection path overlay pixels", async ({ page }) => {
     })
     .toBeGreaterThanOrEqual(selectionRequest);
   try {
+    let selectionProbeRequest = selectionRequest;
     await expect
       .poll(
-        async () =>
-          (await page.evaluate(
-            () => window.__donnerWgpuReadbackStats?.selectionChromePixels || 0,
-          )) - beforeSelectionChrome,
+        async () => {
+          const snapshot = await page.evaluate(() => ({
+            request: window.__donnerWgpuReadbackStats?.request || 0,
+            chrome: window.__donnerWgpuReadbackStats?.selectionChromePixels || 0,
+          }));
+          const delta = snapshot.chrome - beforeSelectionChrome;
+          // A capture can precede the first frame that draws the selection chrome.
+          // Refresh only after the previous request produced its diagnostic pixels.
+          if (delta <= 50 && snapshot.request >= selectionProbeRequest) {
+            selectionProbeRequest = await requestWgpuDiagnostic(page);
+          }
+          return delta;
+        },
         {
           message: "expected selection outline, bounds, and handle pixels in the document pane",
           timeout: 20000,
@@ -3097,6 +3119,18 @@ test("Geode WASM presents selection path overlay pixels", async ({ page }) => {
       )
     }`);
     throw error;
+  } finally {
+    const afterState = await page.evaluate(() => ({
+      readback: window.__donnerWgpuReadbackStats,
+      interaction: window.__donnerInteractionStats,
+      worker: window.__donnerWorkerStats,
+    }));
+    const afterPath = test.info().outputPath("selection-overlay-after.json");
+    await writeFile(afterPath, JSON.stringify({ selectionRequest, ...afterState }, null, 2));
+    await test.info().attach("selection-overlay-after", {
+      path: afterPath,
+      contentType: "application/json",
+    });
   }
 
   expect(fatalMessages).toEqual([]);
