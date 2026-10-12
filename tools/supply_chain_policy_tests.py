@@ -559,6 +559,33 @@ class CheckerTest(unittest.TestCase):
             self.assertEqual(len(self._findings(source)), 1)
 
 
+    def test_getattr_cannot_hide_known_native_download_methods(self):
+        for method in NATIVE_DOWNLOAD_APIS:
+            for source in (
+                'getattr(ctx, "%s")("https://example.invalid/archive")' % method,
+                'fetch = getattr(ctx, "%s")\nfetch("https://example.invalid/archive")' % method,
+                'METHOD = "%s"\ngetattr(ctx, METHOD)("https://example.invalid/archive")' % method,
+                'P = [struct(method = "%s")]\nfor p in P:\n'
+                '    getattr(ctx, p.method)("https://example.invalid/archive")' % method,
+            ):
+                with self.subTest(method=method, source=source):
+                    self.assertEqual(len(self._findings(source)), 1)
+
+    def test_non_download_getattr_remains_allowed(self):
+        for source in ('getattr(ctx, "name")', 'getattr(ctx, "file")("BUILD.bazel", "")',
+                       'FIELD = "name"\ngetattr(ctx, FIELD)', 'getattr(ctx, UNKNOWN_FIELD)'):
+            with self.subTest(source=source):
+                self.assertEqual(self._findings(source), [])
+
+    def test_playwright_repo_requires_a_nonempty_integrity_map(self):
+        for source in ('playwright.repo(name = "browsers")',
+                       'playwright.repo(integrity_path_map = {})'):
+            with self.subTest(source=source):
+                self.assertEqual(len(self._findings(source)), 1)
+        self.assertEqual(self._findings(
+            'playwright.repo(integrity_path_map = {"archive.zip": "sha256-AAAA"})'), [])
+
+
 class RepositoryPolicyTest(unittest.TestCase):
     """Applies the checks to the checked-in configuration."""
 
