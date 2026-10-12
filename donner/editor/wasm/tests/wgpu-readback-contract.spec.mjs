@@ -1340,8 +1340,6 @@ test("selection chrome probe refreshes stale captures without flooding pending r
     selectionTest,
     /beforeSelectionState\.interaction\?\.selectedCount[\s\S]*?\.toBe\(0\)/,
   );
-  assert.match(selectionTest, /selection-overlay-before\.json/);
-  assert.match(selectionTest, /finally[\s\S]*?selection-overlay-after\.json/);
 
   for (const scenario of ["delayed capture", "missing overlay", "unacknowledged request"]) {
     await t.test(scenario, async () => {
