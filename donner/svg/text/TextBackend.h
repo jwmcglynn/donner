@@ -1,6 +1,7 @@
 #pragma once
 /// @file
 
+#include <cstddef>
 #include <optional>
 
 #include "donner/base/Path.h"
@@ -121,22 +122,31 @@ public:
     double bearingY = 0;           ///< Scaled upward bearing from baseline.
     double scale = 1.0;            ///< Native bitmap pixel scale.
     float requestedScale = 0;      ///< Scale used for this metadata query.
+    /// Compare all cost and placement fields exactly.
+    bool operator==(const BitmapGlyphMetrics&) const = default;
   };
 
   /// Query bounded bitmap metadata without materializing bitmap pixels.
-  /// @param font Font to query. @param glyphIndex Glyph within the font. @param scale Requested
-  /// scale.
-  virtual std::optional<BitmapGlyphMetrics> bitmapGlyphMetrics(FontHandle, int, float) const {
+  /// @param font Font to query.
+  /// @param glyphIndex Glyph within the font.
+  /// @param scale Requested scale.
+  virtual std::optional<BitmapGlyphMetrics> bitmapGlyphMetrics(FontHandle /*font*/,
+                                                               int /*glyphIndex*/,
+                                                               float /*scale*/) const {
     return std::nullopt;
   }
 
   /// Decode only after independently revalidating admitted metrics and the RGBA byte limit.
-  /// @param font Font to decode. @param glyphIndex Glyph within the font. @param scale Requested
-  /// scale.
+  /// This bounds converted RGBA storage, not every internal decoder allocation.
+  /// @param font Font to decode.
+  /// @param glyphIndex Glyph within the font.
+  /// @param scale Requested scale.
   /// @param admitted Previously queried cost and placement metadata.
   /// @param maximumRgbaBytes Maximum allowed converted RGBA storage bytes.
-  virtual std::optional<BitmapGlyph> bitmapGlyph(FontHandle, int, float, const BitmapGlyphMetrics&,
-                                                 std::size_t) const {
+  virtual std::optional<BitmapGlyph> bitmapGlyph(FontHandle /*font*/, int /*glyphIndex*/,
+                                                 float /*scale*/,
+                                                 const BitmapGlyphMetrics& /*admitted*/,
+                                                 std::size_t /*maximumRgbaBytes*/) const {
     return std::nullopt;
   }
 

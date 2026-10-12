@@ -671,13 +671,27 @@ bool TextBackendFull::isBitmapOnly(FontHandle font) const {
 
 namespace {
 
-bool SelectBestBitmapStrike(FT_Face face) {
+/// Select a checked strike candidate without passing an absent index to FreeType.
+std::optional<int> SelectBitmapStrike(FT_Face face, std::optional<int> index) {
+  if (!index || FT_Select_Size(face, *index) != 0) {
+    return std::nullopt;
+  }
+  return index;
+}
+
+/// Bitmap decoding remains restricted to trusted fonts and finite positive scales.
+bool CanDecodeBitmapGlyph(const FontManager& manager, FontHandle font, int glyphIndex,
+                          float scale) {
+  return manager.isTrustedFont(font) && glyphIndex >= 0 && std::isfinite(scale) && scale > 0.0f;
+}
+
+std::optional<int> SelectBestBitmapStrike(FT_Face face) {
   if (face->num_fixed_sizes <= 0) {
-    return true;
+    return -1;
   }
   constexpr int kMaximumBitmapStrikes = 256;
   if (!face->available_sizes || face->num_fixed_sizes > kMaximumBitmapStrikes) {
-    return false;
+    return std::nullopt;
   }
 
   std::optional<int> bestIndex;
@@ -697,16 +711,19 @@ bool SelectBestBitmapStrike(FT_Face face) {
       bestIndex = i;
     }
   }
-  return bestIndex && FT_Select_Size(face, *bestIndex) == 0;
+  return SelectBitmapStrike(face, bestIndex);
+}
+
+std::optional<std::size_t> LoadBitmapMetrics(FT_Face face, int glyphIndex) {
+  constexpr FT_Int32 kMetricsFlags = FT_LOAD_COLOR | FT_LOAD_BITMAP_METRICS_ONLY;
+  if (FT_Load_Glyph(face, static_cast<FT_UInt>(glyphIndex), kMetricsFlags) != 0 ||
+      face->glyph->format != FT_GLYPH_FORMAT_BITMAP) {
+    return std::nullopt;
+  }
+  return details::ValidatedBgraOutputBytes(face->glyph->bitmap.width, face->glyph->bitmap.rows);
 }
 
 std::optional<details::BgraBitmapLayout> LoadValidatedBitmap(FT_Face face, int glyphIndex) {
-  constexpr FT_Int32 kMetricsFlags = FT_LOAD_COLOR | FT_LOAD_BITMAP_METRICS_ONLY;
-  if (FT_Load_Glyph(face, static_cast<FT_UInt>(glyphIndex), kMetricsFlags) != 0 ||
-      face->glyph->format != FT_GLYPH_FORMAT_BITMAP ||
-      !details::ValidatedBgraOutputBytes(face->glyph->bitmap.width, face->glyph->bitmap.rows)) {
-    return std::nullopt;
-  }
   if (FT_Load_Glyph(face, static_cast<FT_UInt>(glyphIndex), FT_LOAD_COLOR) != 0 ||
       face->glyph->format != FT_GLYPH_FORMAT_BITMAP) {
     return std::nullopt;
@@ -734,48 +751,75 @@ std::optional<double> BitmapPixelScale(hb_font_t* hbFont, FT_Face face, float re
 
 }  // namespace
 
-std::optional<TextBackend::BitmapGlyph> TextBackendFull::bitmapGlyph(FontHandle font,
-                                                                     int glyphIndex,
-                                                                     float requestedScale) const {
-  if (!fontManager_.isTrustedFont(font) || glyphIndex < 0 || !std::isfinite(requestedScale) ||
-      requestedScale <= 0.0f) {
+std::optional<TextBackend::BitmapGlyphMetrics> TextBackendFull::bitmapGlyphMetrics(
+    FontHandle font, int glyphIndex, float requestedScale) const {
+  if (!CanDecodeBitmapGlyph(fontManager_, font, glyphIndex, requestedScale)) {
     return std::nullopt;
   }
-
   hb_font_t* hbFont = getOrCreateHbFont(font);
-  if (!hbFont) {
+  const auto* entry = registry_.try_get<HbFontEntry>(font.entity());
+  if (!hbFont || !entry || !entry->ftFace) {
     return std::nullopt;
   }
+  FT_Face face = entry->ftFace;
+  const auto strikeIndex = SelectBestBitmapStrike(face);
+  if (!strikeIndex) {
+    return std::nullopt;
+  }
+  const auto rgbaBytes = LoadBitmapMetrics(face, glyphIndex);
+  const auto pixelScale = BitmapPixelScale(hbFont, face, requestedScale);
+  if (!rgbaBytes || !pixelScale) {
+    return std::nullopt;
+  }
+  return BitmapGlyphMetrics{.font = font,
+                            .glyphIndex = glyphIndex,
+                            .selectedStrikeIndex = *strikeIndex,
+                            .width = static_cast<int>(face->glyph->bitmap.width),
+                            .height = static_cast<int>(face->glyph->bitmap.rows),
+                            .rgbaBytes = *rgbaBytes,
+                            .bearingX = static_cast<double>(face->glyph->bitmap_left) * *pixelScale,
+                            .bearingY = static_cast<double>(face->glyph->bitmap_top) * *pixelScale,
+                            .scale = *pixelScale,
+                            .requestedScale = requestedScale};
+}
 
-  // Use the cached entry's FT_Face directly.
-  const auto* entry = registry_.try_get<HbFontEntry>(font.entity());
+std::optional<TextBackend::BitmapGlyph> TextBackendFull::decodeBitmapGlyph(
+    const BitmapGlyphMetrics& metrics) const {
+  const auto* entry = registry_.try_get<HbFontEntry>(metrics.font.entity());
   if (!entry || !entry->ftFace) {
     return std::nullopt;
   }
-  FT_Face ftFace = entry->ftFace;
-
-  if (!SelectBestBitmapStrike(ftFace)) {
+  const auto layout = LoadValidatedBitmap(entry->ftFace, metrics.glyphIndex);
+  if (!layout || layout->width != metrics.width || layout->height != metrics.height ||
+      layout->rgbaBytes != metrics.rgbaBytes) {
     return std::nullopt;
   }
-
-  const auto layout = LoadValidatedBitmap(ftFace, glyphIndex);
-  if (!layout) {
-    return std::nullopt;
-  }
-  const FT_Bitmap& bitmap = ftFace->glyph->bitmap;
-  const auto pixelScale = BitmapPixelScale(hbFont, ftFace, requestedScale);
-  if (!pixelScale) {
-    return std::nullopt;
-  }
-
   BitmapGlyph result;
-  result.rgbaPixels = details::ConvertValidatedBgraToRgba(bitmap.buffer, *layout);
-  result.width = layout->width;
-  result.height = layout->height;
-  result.bearingX = static_cast<double>(ftFace->glyph->bitmap_left) * *pixelScale;
-  result.bearingY = static_cast<double>(ftFace->glyph->bitmap_top) * *pixelScale;
-  result.scale = *pixelScale;
+  result.rgbaPixels =
+      details::ConvertValidatedBgraToRgba(entry->ftFace->glyph->bitmap.buffer, *layout);
+  result.width = metrics.width;
+  result.height = metrics.height;
+  result.bearingX = metrics.bearingX;
+  result.bearingY = metrics.bearingY;
+  result.scale = metrics.scale;
   return result;
+}
+
+std::optional<TextBackend::BitmapGlyph> TextBackendFull::bitmapGlyph(FontHandle font,
+                                                                     int glyphIndex,
+                                                                     float scale) const {
+  const auto metrics = bitmapGlyphMetrics(font, glyphIndex, scale);
+  return metrics ? decodeBitmapGlyph(*metrics) : std::nullopt;
+}
+
+std::optional<TextBackend::BitmapGlyph> TextBackendFull::bitmapGlyph(
+    FontHandle font, int glyphIndex, float scale, const BitmapGlyphMetrics& admitted,
+    std::size_t maximumRgbaBytes) const {
+  const auto current = bitmapGlyphMetrics(font, glyphIndex, scale);
+  if (!current || *current != admitted || current->rgbaBytes > maximumRgbaBytes) {
+    return std::nullopt;
+  }
+  return decodeBitmapGlyph(*current);
 }
 
 // ---------------------------------------------------------------------------

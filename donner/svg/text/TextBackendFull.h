@@ -35,6 +35,11 @@ public:
   bool hasSmallCapsFeature(FontHandle font) const override;
   std::optional<BitmapGlyph> bitmapGlyph(FontHandle font, int glyphIndex,
                                          float scale) const override;
+  std::optional<BitmapGlyphMetrics> bitmapGlyphMetrics(FontHandle font, int glyphIndex,
+                                                       float scale) const override;
+  std::optional<BitmapGlyph> bitmapGlyph(FontHandle font, int glyphIndex, float scale,
+                                         const BitmapGlyphMetrics& admitted,
+                                         std::size_t maximumRgbaBytes) const override;
   ShapedRun shapeRun(FontHandle font, float fontSizePx, std::string_view spanText,
                      size_t byteOffset, size_t byteLength, bool isVertical, FontVariant fontVariant,
                      bool forceLogicalOrder) const override;
@@ -52,6 +57,9 @@ public:
   [[nodiscard]] bool embeddedBitmapLoadingDisabledForTesting(FontHandle font) const;
 
 private:
+  /// Decode a previously validated current glyph slot without another metrics-only load.
+  std::optional<BitmapGlyph> decodeBitmapGlyph(const BitmapGlyphMetrics& metrics) const;
+
   ShapedRun shapeRunImpl(FontHandle font, float fontSizePx, std::string_view spanText,
                          size_t byteOffset, size_t byteLength, bool isVertical,
                          FontVariant fontVariant, bool enableKerning, bool forceLogicalOrder) const;
