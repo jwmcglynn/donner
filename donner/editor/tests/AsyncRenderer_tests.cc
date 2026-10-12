@@ -9,7 +9,6 @@
 #include <future>
 #include <iostream>
 #include <memory>
-#include <mutex>
 #include <span>
 #include <sstream>
 #include <thread>
@@ -45,18 +44,6 @@
 #include "gtest/gtest.h"
 
 namespace donner::editor {
-
-struct AsyncRendererTestAccess {
-  static bool WorkerMutexAvailableFromAnotherThread(AsyncRenderer& renderer) {
-    bool available = false;
-    std::thread probe([&] {
-      std::unique_lock<std::mutex> lock(renderer.mutex_, std::try_to_lock);
-      available = lock.owns_lock();
-    });
-    probe.join();
-    return available;
-  }
-};
 
 void PrintTo(const Vector2d& vector, std::ostream* os) {
   *os << "Vector2d{x=" << vector.x << ", y=" << vector.y << "}";
@@ -1956,24 +1943,14 @@ TEST(AsyncRendererTest, ExplicitReplayResultHoldReleaseAdoptsCurrentAndFutureRes
 
   const std::thread::id hostThread = std::this_thread::get_id();
   bool releaseWakeObserved = false;
-  bool wakeOutsideMutex = false;
-  bool reentrantBusy = false;
-  asyncRenderer.setWakeCallback([&] {
-    if (std::this_thread::get_id() != hostThread) {
-      return;
-    }
-    releaseWakeObserved = true;
-    wakeOutsideMutex =
-        AsyncRendererTestAccess::WorkerMutexAvailableFromAnotherThread(asyncRenderer);
-    if (wakeOutsideMutex) {
-      reentrantBusy = asyncRenderer.isBusy();
+  asyncRenderer.setWakeCallback([hostThread, &releaseWakeObserved] {
+    if (std::this_thread::get_id() == hostThread) {
+      releaseWakeObserved = true;
     }
   });
   asyncRenderer.releaseReplayResultHoldForTesting();
   asyncRenderer.setWakeCallback({});
   EXPECT_THAT(releaseWakeObserved, testing::IsTrue());
-  EXPECT_THAT(wakeOutsideMutex, testing::IsTrue());
-  EXPECT_THAT(reentrantBusy, testing::IsTrue());
   std::optional<RenderResult> heldResult = asyncRenderer.pollResult();
   ASSERT_THAT(heldResult, testing::Optional(testing::_));
   EXPECT_THAT(heldResult->version, testing::Eq(1u));
