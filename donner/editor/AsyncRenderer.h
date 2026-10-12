@@ -588,11 +588,12 @@ public:
   [[nodiscard]] bool isBusy() const;
 
   /**
-   * Like \ref isBusy, but when busy also guarantees one wake callback once the input gate opens.
+   * Like \ref isBusy, and when busy also registers for a wake so a deferring caller need not poll.
    *
-   * Foreground renders, cancellations, and staged results already wake on completion; speculative
+   * Foreground renders and cancellations wake when they finish, and a staged result woke when it
+   * was staged; the caller opens that gate itself with its next \ref pollResult. Speculative
    * compositor warmup wakes only for a caller registered here or by \ref cancelInFlight. A caller
-   * that defers document access while this returns true can therefore wait for that wake instead
+   * that polls results every frame before this check can therefore wait for the next wake instead
    * of requesting a frame every frame, which would redraw at display rate for the whole render.
    */
   [[nodiscard]] bool isBusyWithIdleWake();

@@ -1133,8 +1133,13 @@ TEST(AsyncRendererTest, CancellingDeferredCompositorWarmupCannotLoseDocumentWait
 }
 
 TEST(AsyncRendererTest, BusyWithIdleWakeWakesOnceWhenTheGateOpens) {
-  AsyncRenderer asyncRenderer(AsyncRendererStartMode::Deferred);
+  // Everything the worker can reach outlives the renderer, which joins the worker on destruction.
   std::atomic<int> wakeCount = 0;
+  svg::SVGDocument document =
+      svg::instantiateSubtree(R"svg(<rect width="8" height="8" fill="blue"/>)svg");
+  document.setCanvasSize(8, 8);
+  svg::Renderer renderer;
+  AsyncRenderer asyncRenderer(AsyncRendererStartMode::Deferred);
   asyncRenderer.setWakeCallback([&] { ++wakeCount; });
 
   EXPECT_FALSE(asyncRenderer.isBusyWithIdleWake());
@@ -1153,11 +1158,8 @@ TEST(AsyncRendererTest, BusyWithIdleWakeWakesOnceWhenTheGateOpens) {
   asyncRenderer.completeCompositorWarmupForTesting();
   EXPECT_EQ(wakeCount, 1) << "One check registers one wake.";
 
-  // A foreground render supplies its own completion wake.
-  svg::SVGDocument document =
-      svg::instantiateSubtree(R"svg(<rect width="8" height="8" fill="blue"/>)svg");
-  document.setCanvasSize(8, 8);
-  svg::Renderer renderer;
+  // A foreground render supplies its own completion wake. Warmup above is staged through the test
+  // hooks; this path runs the real worker.
   asyncRenderer.setReplayDocumentAccessBlockedForTesting(true);
   asyncRenderer.requestRender(RenderRequest(renderer, document));
   asyncRenderer.start();

@@ -301,8 +301,8 @@ Attached live-DOM writes enter through two explicit, guarded paths:
   render completion and cancellation always wake, and `isBusyWithIdleWake()` also
   registers a wake for speculative warmup. Polling instead, by requesting a frame
   on every busy frame, redraws at display rate for the whole render; in the
-  browser those frames hold the GPU owner thread that the render is waiting on. `requestRender()` is non-blocking and cancels+replaces an
-  in-flight request; cancellation is delivered through a
+  browser those frames hold the GPU owner thread that the render is waiting on.
+  `requestRender()` is non-blocking and cancels+replaces an in-flight request; cancellation is delivered through a
   `svg::compositor::CancellationToken` polled at compositor safe points.
 - **Threading model.** The worker shares the _live_ registry rather than deep-copying
   (`SVGDocument` is a value facade over a `shared_ptr<Registry>`). On first render

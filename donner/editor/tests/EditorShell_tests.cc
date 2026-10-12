@@ -5383,17 +5383,19 @@ TEST(EditorShellTest, ReferenceHighlightWaitsForRendererWakeInsteadOfRequestingF
   // Drive the loop the way the browser does: a frame runs only for an outstanding wake. The
   // renderer's own completion and warmup-release wakes must carry the summary to completion.
   renderer.setReplayDocumentAccessBlockedForTesting(false);
+  const auto completionDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
   std::uint64_t consumedWakeSerial = blockedWakeSerial;
   for (int frame = 0; frame < 20; ++frame) {
     if (EditorShellTestAccess::LastReferenceHighlightSelectionSize(shell) == 1u) {
       break;
     }
     while (window.wakeEventLoopRequestSerialForTesting() == consumedWakeSerial &&
-           std::chrono::steady_clock::now() < deadline) {
+           std::chrono::steady_clock::now() < completionDeadline) {
       std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
     ASSERT_GT(window.wakeEventLoopRequestSerialForTesting(), consumedWakeSerial)
-        << "the demand-driven loop would park with a stale reference summary";
+        << "no wake within 10 s: the demand-driven loop would park with a stale reference summary "
+        << "(renderer busy=" << EditorShellTestAccess::RendererBusy(shell) << ")";
     consumedWakeSerial = window.wakeEventLoopRequestSerialForTesting();
     RunShellFrame(window, shell);
   }
