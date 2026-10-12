@@ -86,6 +86,18 @@ Source archives require root `LICENSE` and `NOTICE`. The committed `NOTICE` matc
 variant; other build variants use their own generated notices. The release dependency/license
 review checks the final shipped closure.
 
+Each released `donner-svg` binary ships with `donner-svg_<platform>.NOTICE.txt`, built as
+`//third_party/licenses:notice_cli` in the same invocation and configuration as the binary. That
+notice attributes exactly the third-party components in the configured closure of
+`//tools/ci:release_svg` (the dependencies, headers, sources, embedded assets, data and linker
+inputs that reach the binary, not build tools). `//tools:cli_notice_coverage_tests` fails when that
+closure reaches a component with neither a license catalog entry nor a reviewed exemption for each
+of its labels, or a linker option that links a library or file without a reviewed exemption, and
+preflight runs it in the release configuration before packaging. Toolchain runtimes (the C and C++
+standard libraries and compiler runtime) are outside that walk; today the release binaries link
+them dynamically from the system, so switching release builds to a hermetic toolchain with a
+statically linked runtime needs its own license review.
+
 Preflight generates the real entry with `bazel-contrib/publish-to-bcr@v1.5.0` and executes the current
 upstream BCR validator. The entry retains the stable release URL. Only the source download transport
 uses the local candidate bytes, because the approved release does not exist yet. URL policy,
@@ -97,22 +109,23 @@ future admission.
 Preflight builds the Linux and macOS CLI binaries from the same committed checkout. The repository
 intentionally ignores `MODULE.bazel.lock`, so each platform resolves its lockfile once with
 `--lockfile_mode=update`, then repeats the build under `--lockfile_mode=error`. It retains each
-binary, generated lockfile, SHA-256, and provenance. A separate preflight job verifies and signs
-the source archive, both CLI binaries, and both generated lockfiles on main push or manual runs.
+binary, generated lockfile, license notice, SHA-256, and provenance; the provenance binds the
+notice's SHA-256. A separate preflight job verifies and signs the source archive, both CLI binaries,
+both generated lockfiles and both notices on main push or manual runs.
 Qualification waits for both CLI builds and the audited consumer matrix, re-verifies both CLI
 artifacts from its own attempt, and records that run ID and attempt without changing the archive
 bytes.
 After a failed preflight, rerun **all jobs** so source, binaries, matrix and qualification share
 one attempt; a failed-jobs-only rerun cannot qualify with older CLI artifacts. `//tools:bcr_source_tests`,
-`//tools:default_notice_freshness_tests`,
-`//tools:release_cli_tests`, and `//tools:bcr_admission_tests` cover archive, binary, and admission
-rejection paths; `//tools:bcr_dependency_closure_tests` covers the consumer closure audit.
+`//tools:default_notice_freshness_tests`, `//tools:release_cli_tests`,
+`//tools:cli_notice_coverage_tests`, and `//tools:bcr_admission_tests` cover archive, binary,
+notice, and admission rejection paths; `//tools:bcr_dependency_closure_tests` covers the consumer closure audit.
 
 ### Publish and observe
 
 1. After release approval, create the intended immutable tag and publish the GitHub release.
 2. Watch `Release` resolve the named preflight attempt and download its source archive, both CLI
-   binaries, and their generated lockfiles. It verifies their retained bytes and preflight build attestations, then uploads those exact bytes
+   binaries, and their generated lockfiles and license notices. It verifies their retained bytes and preflight build attestations, then uploads those exact bytes
    without compiling or repackaging. The source URL is:
    `https://github.com/jwmcglynn/donner/releases/download/vX.Y.Z/donner-X.Y.Z.tar.gz`.
 3. Require server-reported SHA-256 confirmation for every uploaded asset. An existing identical asset

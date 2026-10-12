@@ -826,8 +826,19 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         self.assertNotIn("id-token: write", release)
         self.assertIn("actions/download-artifact@", release)
         self.assertNotIn("actions/attest-build-provenance@", release)
-        self.assertEqual(release.count("gh attestation verify"), 5)
-        self.assertEqual(release.count("--signer-workflow jwmcglynn/donner/.github/workflows/bcr_preflight.yml"), 5)
+        # One loop verifies the preflight attestation of every attested release subject.
+        self.assertEqual(release.count("gh attestation verify"), 1)
+        self.assertEqual(release.count("--signer-workflow jwmcglynn/donner/.github/workflows/bcr_preflight.yml"), 1)
+        attested = release.split("          for subject in \\\n", 1)[1].split("; do\n", 1)[0]
+        cli_assets = [
+            f"release/{directory}/donner-svg_{platform}{suffix}"
+            for directory, platform in (("linux", "linux_x86_64"), ("macos", "darwin_arm64"))
+            for suffix in ("", ".bazel.lock", ".NOTICE.txt")
+        ]
+        self.assertEqual(
+            [line.strip().rstrip(" \\") for line in attested.splitlines()],
+            cli_assets + ["release/source/*.tar.gz"],
+        )
         self.assertNotIn("bazelisk build", release)
         self.assertNotIn("actions/upload-artifact@", release)
         self.assertNotIn("--lockfile_mode=off", release)
@@ -841,6 +852,9 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         self.assertIn("RELEASE_UPLOAD_URL: ${{ github.event.release.upload_url }}", release)
         self.assertIn("Upload verified release artifacts without replacement", release)
         self.assertIn("python3 tools/release_artifact_publisher.py", release)
+        uploaded = release.split("python3 tools/release_artifact_publisher.py", 1)[1]
+        for asset in cli_assets:
+            self.assertIn(f"            {asset} \\\n", uploaded)
         self.assertNotIn("softprops/action-gh-release", release)
         self.assertNotIn("publish-to-bcr", release)
         self.assertNotIn("svenstaro/upload-release-action", release)
@@ -856,8 +870,21 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         self.assertIn("needs: [prepare, consumer, cli-linux, cli-macos]", preflight)
         self.assertEqual(preflight.count("tools.release_cli package"), 2)
         self.assertEqual(preflight.count("tools.release_cli verify"), 4)
-        self.assertEqual(preflight.count("--lockfile_mode=update -c opt //tools/ci:release_svg"), 2)
-        self.assertEqual(preflight.count("--lockfile_mode=error -c opt //tools/ci:release_svg"), 2)
+        # Each CLI ships the NOTICE built with it, after the closure coverage test passes.
+        for mode in ("update", "error"):
+            self.assertEqual(preflight.count(
+                f"bazelisk build --lockfile_mode={mode} -c opt "
+                "//tools/ci:release_svg //tools/ci:release_svg_notice\n"), 2)
+        self.assertEqual(preflight.count(
+            "bazelisk test --lockfile_mode=error -c opt //tools/ci:release_svg_notice_coverage\n"), 2)
+        self.assertEqual(preflight.count(
+            "--notice bazel-bin/third_party/licenses/notice_cli.txt \\\n"), 2)
+        for job_name in ("cli-linux", "cli-macos"):
+            job = preflight.split("\n  %s:\n" % job_name, 1)[1].split("\n  cli-macos:\n", 1)[0]
+            self.assertLess(job.index("//tools/ci:release_svg_notice_coverage"),
+                            job.index("tools.release_cli package"))
+        for platform in ("linux_x86_64", "darwin_arm64"):
+            self.assertIn(f"/donner-svg_{platform}.NOTICE.txt\n", preflight)
         self.assertIn("actions/attest-build-provenance@", preflight)
         self.assertIn("if: github.ref == 'refs/heads/main'", preflight)
         self.assertIn("id-token: write", preflight)

@@ -192,6 +192,20 @@ alias(
     tags = ["manual"],
 )
 
+# The license NOTICE released beside `release_svg`, built in the same invocation so it describes the
+# same configured closure, and the test that it attributes every third-party component there.
+alias(
+    name = "release_svg_notice",
+    actual = "//third_party/licenses:notice_cli_txt",
+    tags = ["manual"],
+)
+
+test_suite(
+    name = "release_svg_notice_coverage",
+    tags = ["manual"],
+    tests = ["//tools:cli_notice_coverage_tests"],
+)
+
 alias(
     name = "editor_wasm_package",
     actual = "//donner/editor/wasm:wasm_web_package",

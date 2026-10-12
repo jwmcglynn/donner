@@ -412,6 +412,12 @@ bool SameRenderAttempt(const RenderAttemptIdentity& lhs, const RenderAttemptIden
          SameRequestedDragPreview(lhs.dragPreview, rhs.dragPreview);
 }
 
+/// Whether @p failure is repaired only by rendering more of the document.
+bool IsCoverageFailure(FramePresentationFailure failure) {
+  return failure == FramePresentationFailure::InsufficientCoverage ||
+         failure == FramePresentationFailure::MissingOverview;
+}
+
 RenderAttemptIdentity MakeRenderAttempt(
     std::uint64_t documentGeneration, std::uint64_t version,
     const EditorRasterViewport& rasterViewport, bool overviewInfillOnly, Entity selectedEntity,
@@ -620,6 +626,11 @@ bool ShouldPresentCompositedPreviewForViewport(const RenderResult::CompositedPre
     }
   }
   return true;
+}
+
+bool PresentationRepairNeedsCoverage(FramePresentationFailure buildFailure,
+                                     FramePresentationFailure adoptionFailure) {
+  return IsCoverageFailure(buildFailure) || IsCoverageFailure(adoptionFailure);
 }
 
 std::uint64_t PostReleaseSettleTargetVersion(std::uint64_t currentFrameVersion,
@@ -1418,8 +1429,7 @@ void RenderCoordinator::updateFrameRepairStatus(
   const auto failure =
       outcome.failure != FramePresentationFailure::None ? outcome.failure : adoptionFailure_;
   presentationNeedsRender_ = failure != FramePresentationFailure::None;
-  presentationNeedsCoverage_ = failure == FramePresentationFailure::InsufficientCoverage ||
-                               failure == FramePresentationFailure::MissingOverview;
+  presentationNeedsCoverage_ = PresentationRepairNeedsCoverage(outcome.failure, adoptionFailure_);
 #ifdef __EMSCRIPTEN__
   PublishFrameRepairDetails(input, *resources, failure, adoptionFailure_);
 #endif
