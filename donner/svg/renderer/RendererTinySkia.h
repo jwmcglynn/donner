@@ -381,6 +381,8 @@ private:
     std::vector<std::uint64_t> savedClipEpochStack;
   };
 
+  void restoreMaskClipAndApplyCoverage(SurfaceFrame& frame);
+
   struct FilterAdmission {
     int width = 0;
     int height = 0;

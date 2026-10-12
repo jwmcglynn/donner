@@ -239,6 +239,32 @@ const Box2d kUnitPathBounds(Vector2d::Zero(), Vector2d(1, 1));
 /// Source UV rect that samples an entire texture.
 const Box2d kWholeTextureUv(Vector2d::Zero(), Vector2d(1, 1));
 
+/// Accept trigonometric roundoff only when it cannot move a mask edge appreciably in device pixels.
+/// The coefficient bound alone is insufficient for large local regions.
+bool IsMaskEdgeAxisAligned(double offAxis, double alongAxis, double localExtent) {
+  constexpr double kCoefficientRoundoff = 4.0 * std::numeric_limits<double>::epsilon();
+  constexpr double kMaximumDeviceDrift = 1e-9;
+  return offAxis == 0.0 || (std::abs(offAxis) <= kCoefficientRoundoff * std::abs(alongAxis) &&
+                            std::abs(offAxis * localExtent) <= kMaximumDeviceDrift);
+}
+
+/// Whether a mask region needs exact GPU clipping beyond its transformed bounding box.
+/// @param maskBounds Optional mask region in local coordinates.
+/// @param deviceFromLocal Transform from local coordinates to device pixels.
+bool RequiresMaskRegionClip(const std::optional<Box2d>& maskBounds,
+                            const Transform2d& deviceFromLocal) {
+  if (!maskBounds) {
+    return false;
+  }
+
+  const auto& data = deviceFromLocal.data;
+  const bool axisAligned = (IsMaskEdgeAxisAligned(data[1], data[0], maskBounds->width()) &&
+                            IsMaskEdgeAxisAligned(data[2], data[3], maskBounds->height())) ||
+                           (IsMaskEdgeAxisAligned(data[0], data[1], maskBounds->width()) &&
+                            IsMaskEdgeAxisAligned(data[3], data[2], maskBounds->height()));
+  return !axisAligned;
+}
+
 std::optional<Vector2i> CheckedViewportPixels(const RenderViewport& viewport) {
   const double width = viewport.size.x * viewport.devicePixelRatio;
   const double height = viewport.size.y * viewport.devicePixelRatio;
@@ -2379,6 +2405,12 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     /// mirrors `RendererTinySkia::SurfaceFrame::maskBoundsTransform`.
     Transform2d maskBoundsTransform;
     MaskType maskType = MaskType::Luminance;
+    // Outer clipping belongs to the completed composite, not to either capture. A prepared
+    // region clip already incorporates the outer path-mask coverage and is sampled only once.
+    std::vector<ClipStackEntry> savedClipStack;
+    std::vector<ClipStackEntry> compositeRegionClip;
+    // Only rejected region admission remains active while capturing, to fail closed immediately.
+    bool hasRegionClip = false;
     ColorInterpolation maskColorInterpolation = ColorInterpolation::SRGB;
   };
   static_assert(!std::is_copy_constructible_v<MaskStackFrame>,
@@ -2762,6 +2794,18 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
       return std::nullopt;
     }
     return filtered;
+  }
+
+  void suspendMaskClipsForCapture(MaskStackFrame& frame) {
+    frame.savedClipStack = std::move(clipStack);
+    clipStack.clear();
+    if (frame.hasRegionClip) {
+      // Preserve admission timing and empty capture on failure. Successful region coverage must
+      // not be applied to each mask primitive or multiplied again by an isolated layer.
+      clipStack.push_back(std::move(frame.compositeRegionClip.back()));
+      frame.compositeRegionClip.clear();
+    }
+    updateEncoderScissor();
   }
 
   /// Recompute the intersection of every rectangular clip entry on
@@ -5074,6 +5118,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
       }
       releaseTextureAtFrameEnd(std::move(frame.maskTexture), frame.maskDesc);
       releaseTextureAtFrameEnd(std::move(frame.contentTexture), frame.contentDesc);
+      releaseClipStackTexturesAtFrameEnd(frame.savedClipStack);
+      releaseClipStackTexturesAtFrameEnd(frame.compositeRegionClip);
     }
     maskStack.clear();
   }
@@ -5316,6 +5362,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     for (MaskStackFrame& frame : maskStack) {
       releaseRuntimeTexture(frame.maskTexture);
       releaseRuntimeTexture(frame.contentTexture);
+      releaseClipStackTextures(frame.savedClipStack);
+      releaseClipStackTextures(frame.compositeRegionClip);
     }
     maskStack.clear();
 
@@ -6425,7 +6473,19 @@ void RendererGeode::pushMask(const std::optional<Box2d>& maskBounds, MaskType ma
   captureEncoder->clear(css::RGBA(0, 0, 0, 0));
   impl_->replaceActiveEncoder(std::move(captureEncoder));
   impl_->maskStack.push_back(std::move(frame));
-  impl_->updateEncoderScissor();
+  if (RequiresMaskRegionClip(maskBounds, impl_->deviceFromLocalTransform)) {
+    // Admit the transformed region while outer clips are available: pushClip incorporates the
+    // parent path-mask coverage into the prepared texture. Apply that texture only to the final
+    // composite, after overlapping mask primitives and nested offscreen content have resolved.
+    ResolvedClip regionClip;
+    regionClip.clipPaths.push_back({.path = PathBuilder().addRect(*maskBounds).build()});
+    pushClip(regionClip);
+    Impl::MaskStackFrame& activeFrame = impl_->maskStack.back();
+    activeFrame.hasRegionClip = impl_->clipStack.back().allocationRejected;
+    activeFrame.compositeRegionClip.push_back(std::move(impl_->clipStack.back()));
+    impl_->clipStack.pop_back();
+  }
+  impl_->suspendMaskClipsForCapture(impl_->maskStack.back());
 }
 
 void RendererGeode::transitionMaskToContent() {
@@ -6436,6 +6496,10 @@ void RendererGeode::transitionMaskToContent() {
   Impl::MaskStackFrame& frame = impl_->maskStack.back();
   if (frame.phase != Impl::MaskStackFrame::Phase::Capturing) {
     return;
+  }
+  if (frame.hasRegionClip) {
+    popClip();
+    frame.hasRegionClip = false;
   }
   if (!frame.contentTexture.isValid() || !impl_->encoder) {
     frame.phase = Impl::MaskStackFrame::Phase::Content;
@@ -6466,6 +6530,10 @@ void RendererGeode::popMask() {
   if (impl_->maskStack.empty()) {
     return;
   }
+  if (impl_->maskStack.back().hasRegionClip) {
+    popClip();
+    impl_->maskStack.back().hasRegionClip = false;
+  }
   Impl::MaskStackFrame frame = std::move(impl_->maskStack.back());
   impl_->maskStack.pop_back();
 
@@ -6479,12 +6547,20 @@ void RendererGeode::popMask() {
     impl_->retireActiveEncoder();
   }
   impl_->retireFinishedEncoder(std::move(frame.savedEncoder));
+  impl_->releaseClipStackTexturesAtFrameEnd(impl_->clipStack);
+  impl_->clipStack = std::move(frame.savedClipStack);
   if (impl_->frameRecordingAbandoned) {
     impl_->target = Impl::aliasOf(frame.savedTarget);
     impl_->replaceActiveEncoder(nullptr);
     impl_->retainTextureWithoutCompletionProof(std::move(frame.maskTexture), frame.maskDesc);
     impl_->retainTextureWithoutCompletionProof(std::move(frame.contentTexture), frame.contentDesc);
+    impl_->releaseClipStackTexturesAtFrameEnd(frame.compositeRegionClip);
     return;
+  }
+  const bool hasCompositeRegionClip = !frame.compositeRegionClip.empty();
+  if (hasCompositeRegionClip) {
+    impl_->clipStack.push_back(std::move(frame.compositeRegionClip.back()));
+    frame.compositeRegionClip.clear();
   }
 
   // Restore the outer target and reopen a new encoder with load-preserve.
@@ -6497,20 +6573,21 @@ void RendererGeode::popMask() {
   impl_->replaceActiveEncoder(std::move(newEncoder));
   impl_->updateEncoderScissor();
 
-  // Lift the raw mask-bounds rect into device-pixel space using the
-  // transform captured at pushMask time. This handles `maskUnits ==
-  // userSpaceOnUse` (where bounds are in user space and need the
-  // element's world transform applied) and `objectBoundingBox`
-  // (where the driver has already folded the bbox mapping into the
-  // bounds, but the outer world transform still applies).
+  // A path-captured region already carries edge coverage. Only the legacy axis-aligned path
+  // needs a fragment-center bounds check; applying one again would discard partial coverage.
   std::optional<Box2d> pixelMaskBounds;
-  if (frame.maskBounds.has_value()) {
+  if (frame.maskBounds.has_value() &&
+      !RequiresMaskRegionClip(frame.maskBounds, frame.maskBoundsTransform)) {
     pixelMaskBounds = frame.maskBoundsTransform.transformBox(*frame.maskBounds);
   }
 
   // Composite content through the selected luminance or alpha mask onto the outer target.
   impl_->encoder->blitFullTargetMasked(frame.contentTexture, frame.maskTexture, frame.maskType,
                                        pixelMaskBounds, frame.maskColorInterpolation);
+  if (hasCompositeRegionClip) {
+    // The final blit is the only consumer; pop restores parent clipping for the next sibling.
+    popClip();
+  }
 
   // Defer release to endFrame - `blitFullTargetMasked` recorded
   // samples from both `contentTexture` and `maskTexture` into the

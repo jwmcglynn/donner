@@ -2118,6 +2118,17 @@ void RendererTinySkia::pushMask(const std::optional<Box2d>& maskBounds, MaskType
     return;
   }
   frame.pixmap = createTransparentPixmap(width, height);
+  // Parent coverage belongs to the completed masked subtree, not to both captures.
+  frame.savedClipMask = std::move(currentClipMask_);
+  frame.savedClipStack = std::move(clipStack_);
+  frame.savedClipRestoreStack = std::move(clipRestoreStack_);
+  frame.savedClipEpoch = clipEpoch_;
+  frame.savedClipEpochStack = std::move(clipEpochStack_);
+  currentClipMask_.reset();
+  clipStack_.clear();
+  clipRestoreStack_.clear();
+  clipEpoch_ = 0;
+  clipEpochStack_.clear();
   surfaceStack_.push_back(std::move(frame));
 }
 
@@ -2159,6 +2170,32 @@ void RendererTinySkia::transitionMaskToContent() {
   }
 }
 
+void RendererTinySkia::restoreMaskClipAndApplyCoverage(SurfaceFrame& frame) {
+  currentClipMask_ = std::move(frame.savedClipMask);
+  clipStack_ = std::move(frame.savedClipStack);
+  clipRestoreStack_ = std::move(frame.savedClipRestoreStack);
+  clipEpoch_ = frame.savedClipEpoch;
+  clipEpochStack_ = std::move(frame.savedClipEpochStack);
+  if (frame.maskAlpha.has_value() && currentClipMask_.has_value()) {
+    intersectMaskInPlace(*frame.maskAlpha, *currentClipMask_);
+  }
+  const std::optional<tiny_skia::Mask>& coverage =
+      frame.maskAlpha.has_value() ? frame.maskAlpha : currentClipMask_;
+  if (!coverage.has_value()) {
+    return;
+  }
+  auto pixmapView = frame.pixmap.mutableView();
+  tiny_skia::Painter::applyMask(pixmapView, *coverage);
+  if (frame.fillPaintPixmap.has_value()) {
+    auto fillView = frame.fillPaintPixmap->mutableView();
+    tiny_skia::Painter::applyMask(fillView, *coverage);
+  }
+  if (frame.strokePaintPixmap.has_value()) {
+    auto strokeView = frame.strokePaintPixmap->mutableView();
+    tiny_skia::Painter::applyMask(strokeView, *coverage);
+  }
+}
+
 void RendererTinySkia::popMask() {
   if (surfaceStack_.empty() || surfaceStack_.back().kind != SurfaceKind::MaskContent) {
     return;
@@ -2166,18 +2203,10 @@ void RendererTinySkia::popMask() {
 
   SurfaceFrame frame = std::move(surfaceStack_.back());
   surfaceStack_.pop_back();
-  if (frame.maskAlpha.has_value()) {
-    auto pixmapView = frame.pixmap.mutableView();
-    tiny_skia::Painter::applyMask(pixmapView, *frame.maskAlpha);
-    if (frame.fillPaintPixmap.has_value()) {
-      auto fillView = frame.fillPaintPixmap->mutableView();
-      tiny_skia::Painter::applyMask(fillView, *frame.maskAlpha);
-    }
-    if (frame.strokePaintPixmap.has_value()) {
-      auto strokeView = frame.strokePaintPixmap->mutableView();
-      tiny_skia::Painter::applyMask(strokeView, *frame.maskAlpha);
-    }
+  if (frame.allocationRejected) {
+    return;
   }
+  restoreMaskClipAndApplyCoverage(frame);
   compositePixmap(frame.pixmap, 1.0);
   if (!surfaceStack_.empty()) {
     SurfaceFrame& parent = surfaceStack_.back();
