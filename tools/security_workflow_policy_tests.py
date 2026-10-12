@@ -283,7 +283,8 @@ def _untrusted_script_contexts(text):
     for body in _script_bodies(text):
         for match in _expressions(body):
             expression = _canonical_context(match.group(1)).lower()
-            found.extend(context for context in UNTRUSTED_CONTEXT.findall(expression)
+            found.extend("inputs." if context.startswith("inputs") else context
+                         for context in UNTRUSTED_CONTEXT.findall(expression)
                          if context not in SCRIPT_SAFE_EVENT_FIELDS)
     return found
 
