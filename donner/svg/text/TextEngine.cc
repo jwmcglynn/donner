@@ -58,6 +58,11 @@ uint32_t decodeUtf8(const std::string_view str, size_t& i) {
   return static_cast<uint32_t>(cp);
 }
 
+/// Returns a glyph's positioning group without changing its source identity.
+uint32_t GetPositioningCluster(const TextGlyph& glyph) {
+  return glyph.positioningCluster.value_or(glyph.cluster);
+}
+
 /// Returns the first non-ASCII codepoint in \p str, or 0 if none exists.
 uint32_t firstNonAsciiCodepoint(const std::string_view str) {
   for (size_t i = 0; i < str.size();) {
@@ -516,7 +521,7 @@ bool EndsTextPathCluster(const TextRun& run, size_t glyphIndex, unsigned int cha
   if (glyphIndex + 1 == run.glyphs.size()) {
     return true;
   }
-  const size_t nextByte = run.glyphs[glyphIndex + 1].cluster;
+  const size_t nextByte = GetPositioningCluster(run.glyphs[glyphIndex + 1]);
   return nextByte >= mappings.byteToCharIdx.size() || mappings.byteToCharIdx[nextByte] != charIndex;
 }
 
@@ -532,8 +537,10 @@ void StageTextPathRun(TextRun& run, size_t runIndex,
   const bool vertical = isVertical(params.writingMode);
   for (size_t gi = 0; gi < run.glyphs.size(); ++gi) {
     TextGlyph& glyph = run.glyphs[gi];
-    const unsigned int charIndex =
-        glyph.cluster < mappings.byteToCharIdx.size() ? mappings.byteToCharIdx[glyph.cluster] : 0;
+    const uint32_t positioningCluster = GetPositioningCluster(glyph);
+    const unsigned int charIndex = positioningCluster < mappings.byteToCharIdx.size()
+                                       ? mappings.byteToCharIdx[positioningCluster]
+                                       : 0;
     if (gi > 0) {
       state.advance += glyph.xKern;
     }
@@ -550,7 +557,7 @@ void StageTextPathRun(TextRun& run, size_t runIndex,
     cluster.glyphEnd = gi + 1;
     cluster.advance = state.advance - cluster.pathOffset;
     if (EndsTextPathCluster(run, gi, charIndex, mappings)) {
-      size_t byteIndex = run.glyphs[cluster.glyphStart].cluster;
+      size_t byteIndex = GetPositioningCluster(run.glyphs[cluster.glyphStart]);
       const uint32_t codepoint = decodeUtf8(spanText, byteIndex);
       if (!backend.isCursive(codepoint)) {
         state.advance += span.letterSpacingPx;
@@ -888,8 +895,9 @@ void applyTextLength(std::vector<TextRun>& runs, const components::ComputedTextC
             if (traversalStats) {
               ++traversalStats->glyphVisits;
             }
-            if (glyph.cluster < mappings->byteToCharIdx.size()) {
-              const size_t index = mappings->byteToCharIdx[glyph.cluster];
+            const uint32_t positioningCluster = GetPositioningCluster(glyph);
+            if (positioningCluster < mappings->byteToCharIdx.size()) {
+              const size_t index = mappings->byteToCharIdx[positioningCluster];
               if (index < groupStarts.size()) {
                 groupStarts[index] = true;
               }
@@ -912,8 +920,9 @@ void applyTextLength(std::vector<TextRun>& runs, const components::ComputedTextC
             ++traversalStats->glyphVisits;
           }
           if (resetCharIndex.has_value()) {
-            const size_t charIndex = glyph.cluster < mappings->byteToCharIdx.size()
-                                         ? mappings->byteToCharIdx[glyph.cluster]
+            const uint32_t positioningCluster = GetPositioningCluster(glyph);
+            const size_t charIndex = positioningCluster < mappings->byteToCharIdx.size()
+                                         ? mappings->byteToCharIdx[positioningCluster]
                                          : 0;
             if (charIndex >= *resetCharIndex) {
               continue;
@@ -1222,7 +1231,7 @@ bool applyInlineSizeWrap(std::vector<TextRun>& runs, const components::ComputedT
     const std::string_view spanText(span.text.data() + span.start, span.end - span.start);
     for (size_t gi = 0; gi < run.glyphs.size(); ++gi) {
       const auto& g = run.glyphs[gi];
-      size_t clusterPos = g.cluster;
+      size_t clusterPos = GetPositioningCluster(g);
       const uint32_t cp = clusterPos < spanText.size() ? decodeUtf8(spanText, clusterPos) : 0;
       const bool isSpace = (cp == 0x20 || cp == 0x09 || cp == 0x0A || cp == 0x0D);
       flat.push_back({ri, gi, g.xPosition, g.xAdvance, g.yPosition, isSpace});
@@ -1664,9 +1673,15 @@ TextBackend::ShapedRun ShapeSpanChunk(const TextBackend& backend, const TextRun&
                                          chunk.byteEnd - chunk.byteStart, vertical, variant, false);
 }
 
-/// Reuses one shaping result per existing chunk and records its source group starts.
+/// A shaped chunk retains backend source clusters and separate SVG positioning groups.
+struct PreparedSpanChunk {
+  TextBackend::ShapedRun shaped;
+  std::vector<uint32_t> positioningClusters;
+};
+
+/// Reuses one shaping result per existing chunk and records its positioning group starts.
 struct PreparedSpanShaping {
-  std::vector<TextBackend::ShapedRun> chunks;
+  std::vector<PreparedSpanChunk> chunks;
   std::vector<bool> groupStarts;
 };
 
@@ -1682,24 +1697,35 @@ PreparedSpanShaping PrepareSpanShaping(const TextBackend& backend, const TextRun
   }
   result.groupStarts.resize(codepointCount, false);
   for (const auto& range : ranges) {
-    auto shaped = ShapeSpanChunk(backend, run, text, range, vertical, variant, kerning);
-    for (size_t index = 0; index < shaped.glyphs.size(); ++index) {
-      auto& glyph = shaped.glyphs[index];
+    PreparedSpanChunk prepared;
+    prepared.shaped = ShapeSpanChunk(backend, run, text, range, vertical, variant, kerning);
+    prepared.positioningClusters.reserve(prepared.shaped.glyphs.size());
+    for (size_t index = 0; index < prepared.shaped.glyphs.size(); ++index) {
+      const auto& glyph = prepared.shaped.glyphs[index];
+      uint32_t positioningCluster = glyph.cluster;
       // The simple backend reports marks separately. Preserve a zero-advance mark
       // with its preceding group without merging a separately shaped spacing glyph.
       if (index != 0 && glyph.cluster < text.size() && glyph.xAdvance == 0.0) {
         size_t position = glyph.cluster;
         if (isNonSpacing(decodeUtf8(text, position))) {
-          glyph.cluster = shaped.glyphs[index - 1].cluster;
+          positioningCluster = prepared.positioningClusters.back();
         }
       }
-      if (glyph.cluster < mappings.byteToCharIdx.size()) {
-        result.groupStarts[mappings.byteToCharIdx[glyph.cluster]] = true;
+      prepared.positioningClusters.push_back(positioningCluster);
+      if (positioningCluster < mappings.byteToCharIdx.size()) {
+        result.groupStarts[mappings.byteToCharIdx[positioningCluster]] = true;
       }
     }
-    result.chunks.push_back(std::move(shaped));
+    result.chunks.push_back(std::move(prepared));
   }
   return result;
+}
+
+/// Word spacing advances only after every glyph attached to the space group.
+bool IsWordSpacingGroupEnd(const PreparedSpanChunk& chunk, size_t index, uint32_t codepoint) {
+  return codepoint == 0x20 &&
+         (index + 1 == chunk.positioningClusters.size() ||
+          chunk.positioningClusters[index] != chunk.positioningClusters[index + 1]);
 }
 
 /// Applies internal displacements to the following group, retaining end-of-span carry.
@@ -1969,7 +1995,8 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
 
     for (size_t ci = 0; ci < chunkRanges.size(); ++ci) {
       const auto& chunk = chunkRanges[ci];
-      const auto& shaped = shaping.chunks[ci];
+      const auto& prepared = shaping.chunks[ci];
+      const auto& shaped = prepared.shaped;
       std::optional<unsigned int> previousPositionedGroup;
 
       // ── RTL Y-override for multi-glyph chunks ─────────────────────────────────
@@ -1978,8 +2005,8 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
       // returns RTL glyphs in visual order (last DOM char first), so the engine would
       // otherwise apply the explicit y to the wrong glyph. Pre-compute the override.
       std::optional<double> chunkYOverride;
-      const bool isRTLChunk =
-          shaped.glyphs.size() > 1 && shaped.glyphs.front().cluster > shaped.glyphs.back().cluster;
+      const bool isRTLChunk = shaped.glyphs.size() > 1 && prepared.positioningClusters.front() >
+                                                              prepared.positioningClusters.back();
       if (isRTLChunk && ci > 0) {
         // The chunk started at chunk.byteStart - check if that byte's charIdx has absolute y.
         const unsigned int firstCharIdx =
@@ -2025,13 +2052,14 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
       for (size_t gi = 0; gi < shaped.glyphs.size(); ++gi) {
         const auto& sg = shaped.glyphs[gi];
 
-        // Decode codepoint from the cluster byte offset into spanText.
-        size_t clusterPos = sg.cluster;
+        // Classification and authored lists use the typographic positioning group.
+        const uint32_t positioningCluster = prepared.positioningClusters[gi];
+        size_t clusterPos = positioningCluster;
         const uint32_t codepoint = decodeUtf8(spanText, clusterPos);
 
         // Look up per-character indices from the byte→index mappings.
         const unsigned int charIdx =
-            sg.cluster < byteToCharIdx.size() ? byteToCharIdx[sg.cluster] : 0;
+            positioningCluster < byteToCharIdx.size() ? byteToCharIdx[positioningCluster] : 0;
 
         const bool applyPosition = previousPositionedGroup != charIdx;
         previousPositionedGroup = charIdx;
@@ -2086,6 +2114,7 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
           glyph.xAdvance = 0;
           glyph.fontSizeScale = sg.fontSizeScale;
           glyph.cluster = sg.cluster;
+          glyph.positioningCluster = positioningCluster;
 
           // Vertical mode glyph handling: non-CJK glyphs get 90 degrees CW rotation.
           if (codepoint < 0x2E80) {
@@ -2141,7 +2170,7 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
             penY += span.letterSpacingPx;
           }
           // Word-spacing after U+0020 (space).
-          if (codepoint == 0x0020) {
+          if (IsWordSpacingGroupEnd(prepared, gi, codepoint)) {
             penY += span.wordSpacingPx;
           }
         } else {
@@ -2199,6 +2228,7 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
           glyph.xKern = sg.xKern;
           glyph.fontSizeScale = sg.fontSizeScale;
           glyph.cluster = sg.cluster;
+          glyph.positioningCluster = positioningCluster;
 
           // Per-character rotation (last value repeats per SVG spec).
           if (charIdx < span.rotateList.size()) {
@@ -2231,7 +2261,7 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
             penX += span.letterSpacingPx;
           }
           // CSS word-spacing: extra space after U+0020 (space) characters.
-          if (codepoint == 0x0020) {
+          if (IsWordSpacingGroupEnd(prepared, gi, codepoint)) {
             penX += span.wordSpacingPx;
           }
         }
@@ -2241,7 +2271,7 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
 
       // Track last codepoint of this chunk for cross-chunk kerning in the next chunk.
       if (!shaped.glyphs.empty()) {
-        size_t lastCluster = shaped.glyphs.back().cluster;
+        size_t lastCluster = prepared.positioningClusters.back();
         prevChunkLastCodepoint = decodeUtf8(spanText, lastCluster);
         prevChunkFont = spanFont;
         prevChunkFontSizePx = spanFontSizePx;
