@@ -98,11 +98,12 @@ playwright_bin.playwright_test(
         "playwright.bazel.config.js",
         "playwright.compatibility.config.js",
         "playwright.config.js",
-        "sample-thumbnail-quiescence.mjs",
         "playwright.webkit.bazel.config.js",
         "png-crop.ts",
+        "png-crop-core.mjs",
         "quarantine-report.mjs",
         "remote-webserver.mjs",
+        "sample-thumbnail-quiescence.mjs",
         "sample-thumbnail-settle.ts",
         "surface-frame-probe.ts",
         ":node_modules/@playwright/test",
@@ -643,6 +644,20 @@ js_test(
 )
 
 js_test(
+    name = "png_crop_tests",
+    size = "small",
+    copy_data_to_bin = False,
+    data = [
+        "png-crop.spec.mjs",
+        "png-crop-core.mjs",
+        ":node_modules/pngjs",
+    ],
+    entry_point = "png-crop.spec.mjs",
+    env = {"NODE_OPTIONS": ""},
+    node_options = ["--test"],
+)
+
+js_test(
     name = "catalog_font_broker_tests",
     size = "small",
     copy_data_to_bin = False,
@@ -764,4 +779,14 @@ js_test(
     entry_point = "wgpu-readback-contract.spec.mjs",
     env = {"NODE_OPTIONS": ""},
     node_options = ["--test"],
+)
+
+# Archive permissions are a build contract; no browser or editor is involved.
+js_test(
+    name = "npm_archive_permissions_test",
+    size = "small",
+    args = ["$(rlocationpath @aspect_rules_js//npm/private:npm_package_extract.mjs)"],
+    copy_data_to_bin = False,
+    data = ["@aspect_rules_js//npm/private:npm_package_extract.mjs"],
+    entry_point = "npm-archive-permissions.spec.mjs",
 )
