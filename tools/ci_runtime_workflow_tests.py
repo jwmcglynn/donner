@@ -493,7 +493,7 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
                 raise AssertionError(
                     f"{context or self.id()}: shell fixture exceeded {timeout} seconds "
                     f"(entered={entered}, exited={exited})"
-                ) from error
+                ) from None
 
     def test_wasm_build_and_browser_checks_share_one_runner_and_package(self):
         self.assertNotIn("\n  test:\n", self.editor_wasm)
@@ -609,6 +609,7 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
                 message = str(raised.exception)
                 self.assertIn(f"entered={entered}, exited={exited}", message)
                 self.assertNotIn("untrusted-output", message)
+                self.assertTrue(raised.exception.__suppress_context__)
 
     def test_shell_fixture_ignores_inherited_bash_startup_hook(self):
         with tempfile.TemporaryDirectory() as directory:
