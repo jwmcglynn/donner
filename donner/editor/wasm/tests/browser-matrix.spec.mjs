@@ -1700,3 +1700,68 @@ test("a report-lane archive that cannot copy warns instead of passing silently",
     rmSync(scratch, { recursive: true, force: true });
   }
 });
+
+test("the delayed-completion baseline waits for the picker's last publication frame", async () => {
+  const { pickerPresentationSettled } = await import("./presentation-baseline.mjs");
+  const spec = readFileSync(path.join(testDirectory, "browser-responsiveness.perf.ts"), "utf8");
+  const start = spec.indexOf('"delayed UI completion callbacks do not permanently disable');
+  const body = spec.slice(start, spec.indexOf("await application.evaluate(", start));
+  // The baseline is read only from a settled poll after the surface worker is found.
+  assert.equal(body.split("pickerPresentationSettled(").length - 1, 2);
+  assert.doesNotMatch(body, /report\.before = await snapshot\(page\);/);
+
+  const thumbnails = {
+    drained: true,
+    pending: false,
+    active: false,
+    resultReady: false,
+    ready: 5,
+    rendered: 5,
+    requested: 6,
+    completed: 6,
+  };
+  const idle = { completedSerial: 19, submittedSerial: 19, framesInFlight: 0, oldestSerial: 0 };
+  // Values recorded by the hosted Perf run whose Firefox baseline read caught the picker's last
+  // thumbnail-publication frame in flight.
+  const recordedInFlight = {
+    thumbnails: { ...thumbnails, publishedAtMs: 6237.56 },
+    presentation: {
+      completedSerial: 18,
+      submittedSerial: 19,
+      framesInFlight: 1,
+      oldestSerial: 19,
+      completedAtMs: 6169.88,
+    },
+  };
+  const settled = {
+    thumbnails: { ...thumbnails, publishedAtMs: 4521.64 },
+    presentation: { ...idle, completedAtMs: 4546.45 },
+  };
+  assert.equal(pickerPresentationSettled(recordedInFlight), false);
+  assert.equal(pickerPresentationSettled(settled), true);
+  // A publication whose frame has not completed still owes a submission.
+  assert.equal(
+    pickerPresentationSettled({
+      ...settled,
+      presentation: { ...idle, completedAtMs: 4500 },
+    }),
+    false,
+  );
+  // A rendered thumbnail that is not yet published still owes its publication frame.
+  assert.equal(
+    pickerPresentationSettled({ ...settled, thumbnails: { ...settled.thumbnails, ready: 4 } }),
+    false,
+  );
+  for (const field of ["pending", "active", "resultReady"]) {
+    assert.equal(
+      pickerPresentationSettled({ ...settled, thumbnails: { ...settled.thumbnails, [field]: true } }),
+      false,
+      field,
+    );
+  }
+  assert.equal(
+    pickerPresentationSettled({ ...settled, thumbnails: { ...settled.thumbnails, drained: false } }),
+    false,
+  );
+  assert.equal(pickerPresentationSettled({ presentation: settled.presentation }), false);
+});
