@@ -41,11 +41,11 @@ REQUIRED_EVIDENCE_JOBS = {
 REVIEW_NAMES = {"security", "supply-chain"}
 SHA = re.compile(r"[0-9a-f]{40}\Z")
 STABLE_VERSION = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+\Z")
+SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 # Every retained artifact must stay downloadable this long after verification: up to 30 days from
 # verification to publication, then a 30-day post-release rollback window in which the candidate's
 # own bytes can be promoted again. docs/release_candidate.md documents this window.
 MIN_REMAINING_RETENTION = timedelta(days=60)
-SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 MAX_ZIP_BYTES = 1_000_000_000
 MAX_UNPACKED_BYTES = 2_000_000_000
 MAX_FILES = 100_000
