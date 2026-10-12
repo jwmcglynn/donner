@@ -15,6 +15,7 @@
 #include "donner/css/Color.h"
 #include "donner/gpu/CommandEncoder.h"
 #include "donner/gpu/Handles.h"
+#include "donner/svg/core/ColorInterpolation.h"
 #include "donner/svg/core/ImageRendering.h"
 #include "donner/svg/core/MaskType.h"
 #include "donner/svg/renderer/geode/GeodeResidentPathComponent.h"
@@ -457,9 +458,12 @@ public:
    *   size as `content`.
    * @param maskType Whether mask coverage comes from luminance or alpha.
    * @param maskBounds Optional clip rect in target-pixel space.
+   * @param colorInterpolation Color space for luminance conversion; auto chooses sRGB.
    */
-  void blitFullTargetMasked(const gpu::Texture& content, const gpu::Texture& mask,
-                            svg::MaskType maskType, const std::optional<Box2d>& maskBounds);
+  void blitFullTargetMasked(
+      const gpu::Texture& content, const gpu::Texture& mask, svg::MaskType maskType,
+      const std::optional<Box2d>& maskBounds,
+      svg::ColorInterpolation colorInterpolation = svg::ColorInterpolation::SRGB);
 
   /**
    * `mix-blend-mode` compositing. Blits `layer` across the
