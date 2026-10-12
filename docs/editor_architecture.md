@@ -297,7 +297,11 @@ Attached live-DOM writes enter through two explicit, guarded paths:
   lifetime. Its state is a variant over `Idle`/`Rendering`/`Cancelling`/`Done`/
   `Shutdown`. `isBusy()` is true while a render is in flight _or_ a finished result
   awaits polling; the UI thread must not mutate the document or touch the renderer
-  while it is true. `requestRender()` is non-blocking and cancels+replaces an
+  while it is true. UI work deferred by that gate waits for the renderer's wake:
+  render completion and cancellation always wake, and `isBusyWithIdleWake()` also
+  registers a wake for speculative warmup. Polling instead, by requesting a frame
+  on every busy frame, redraws at display rate for the whole render; in the
+  browser those frames hold the GPU owner thread that the render is waiting on. `requestRender()` is non-blocking and cancels+replaces an
   in-flight request; cancellation is delivered through a
   `svg::compositor::CancellationToken` polled at compositor safe points.
 - **Threading model.** The worker shares the _live_ registry rather than deep-copying
