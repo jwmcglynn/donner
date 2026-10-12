@@ -1078,25 +1078,6 @@ private:
   std::ptrdiff_t index_ = -1;
 };
 
-#ifndef DONNER_FILTERS_ENABLED
-// When filters are disabled, FilterGraphExecutor.h is not included so PremultiplyRgba is not
-// available. Provide a local copy for drawImage().
-std::vector<std::uint8_t> PremultiplyRgba(std::span<const std::uint8_t> rgbaPixels) {
-  std::vector<std::uint8_t> result(rgbaPixels.begin(), rgbaPixels.end());
-  for (std::size_t i = 0; i + 3 < result.size(); i += 4) {
-    const unsigned alpha = result[i + 3];
-    result[i + 0] =
-        static_cast<std::uint8_t>((static_cast<unsigned>(result[i + 0]) * alpha + 127u) / 255u);
-    result[i + 1] =
-        static_cast<std::uint8_t>((static_cast<unsigned>(result[i + 1]) * alpha + 127u) / 255u);
-    result[i + 2] =
-        static_cast<std::uint8_t>((static_cast<unsigned>(result[i + 2]) * alpha + 127u) / 255u);
-  }
-
-  return result;
-}
-#endif  // !DONNER_FILTERS_ENABLED
-
 #ifdef DONNER_FILTERS_ENABLED
 // Blur implementation moved to tiny_skia::filter::gaussianBlur (GaussianBlur.h).
 
@@ -2969,7 +2950,7 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
 
       // Placed outline in document space (outline -> stretch -> translate ->
       // rotate). Shared with RendererGeode via PlacedTextGeometry so the two
-      // backends can't drift on placement (0038). Empty for bitmap-only fonts
+      // backends cannot drift on placement. Empty for bitmap-only fonts
       // / outline-less glyphs, which fall through to the bitmap branch below
       // exactly as before.
       Path glyphPath;
@@ -2994,11 +2975,11 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
           return;
         }
         if (bitmap) {
-          // Premultiply alpha for correct blending.
-          std::vector<uint8_t> premul = PremultiplyRgba(bitmap->rgbaPixels);
-          auto maybePixmap = tiny_skia::Pixmap::fromVec(
-              std::move(premul), tiny_skia::IntSize(static_cast<uint32_t>(bitmap->width),
-                                                    static_cast<uint32_t>(bitmap->height)));
+          // BitmapGlyph already contains premultiplied RGBA from the font decoder.
+          auto maybePixmap =
+              tiny_skia::Pixmap::fromVec(std::move(bitmap->rgbaPixels),
+                                         tiny_skia::IntSize(static_cast<uint32_t>(bitmap->width),
+                                                            static_cast<uint32_t>(bitmap->height)));
           if (!maybePixmap.has_value()) {
             continue;
           }

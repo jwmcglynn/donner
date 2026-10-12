@@ -15,9 +15,11 @@
 #include "donner/base/ParseWarningSink.h"
 #include "donner/base/tests/BaseTestUtils.h"
 #include "donner/base/tests/Runfiles.h"
+#include "donner/editor/tests/BitmapGoldenCompare.h"
 #include "donner/svg/SVGImageElement.h"
 #include "donner/svg/SVGTextElement.h"
 #include "donner/svg/components/shape/ShapeSystem.h"
+#include "donner/svg/components/text/ComputedTextGeometryComponent.h"
 #include "donner/svg/renderer/PixelFormatUtils.h"
 #include "donner/svg/renderer/RendererImageIO.h"
 #include "donner/svg/renderer/tests/ImageComparisonTestFixture.h"
@@ -332,6 +334,74 @@ TEST_F(RendererRegressionTests, UnitlessStylesheetBlurIsIgnored) {
   ExpectBitmapsIdentical(actual, expected, "invalid_stylesheet_filter_ignored");
   EXPECT_EQ(PixelAt(actual, 16, 40)[3], 0);
 }
+
+#ifdef DONNER_TEXT_FULL
+TEST_F(RendererRegressionTests, TinySkiaBitmapGlyphPreservesDecodedPremultipliedAlpha) {
+  SVGDocument document = ParseSvg(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="220" height="180">
+      <text id="emoji" x="20" y="150" font-family="Noto Color Emoji" font-size="109">&#x1F600;</text>
+    </svg>)svg");
+  RegisterFontsFromDirectoryForTesting(document, ResvgResourceRoot() / "fonts");
+  const RendererBitmap actual = RenderDocumentWithBackend(document, RendererBackend::TinySkia);
+  ASSERT_THAT(actual.empty(), testing::IsFalse());
+
+  auto access = document.writeAccess();
+  const auto element = document.querySelector("#emoji");
+  ASSERT_THAT(element, testing::Ne(std::nullopt));
+  Registry& registry = document.registry();
+  FontManager& fonts = registry.ctx().get<FontManager>();
+  TextEngine& engine = registry.ctx().get<TextEngine>();
+  const auto& geometry = engine.ensureComputedTextGeometryComponent(element->entityHandle());
+  ASSERT_THAT(geometry.runs, testing::SizeIs(1));
+  const TextRun& run = geometry.runs.front();
+  EXPECT_THAT(run.font, testing::Eq(fonts.findFont("Noto Color Emoji")));
+  ASSERT_THAT(engine.isBitmapOnly(run.font), testing::IsTrue());
+  ASSERT_THAT(run.glyphs, testing::SizeIs(1));
+  const TextGlyph& glyph = run.glyphs.front();
+  EXPECT_THAT(glyph.glyphIndex, testing::Gt(0));
+  EXPECT_THAT(glyph.xPosition, testing::DoubleEq(20));
+  EXPECT_THAT(glyph.yPosition, testing::DoubleEq(150));
+  const auto bitmap = engine.bitmapGlyph(run.font, glyph.glyphIndex,
+                                         engine.scaleForPixelHeight(run.font, run.usedFontSizePx));
+  ASSERT_THAT(bitmap, testing::Ne(std::nullopt));
+  ASSERT_THAT(bitmap->scale, testing::DoubleEq(1));
+  ASSERT_THAT(bitmap->width, testing::Gt(0));
+  ASSERT_THAT(bitmap->height, testing::Gt(0));
+  ASSERT_THAT(bitmap->rgbaPixels, testing::SizeIs(bitmap->width * bitmap->height * 4));
+  int partialAlphaPixels = 0;
+  for (std::size_t offset = 0; offset < bitmap->rgbaPixels.size(); offset += 4) {
+    const uint8_t alpha = bitmap->rgbaPixels[offset + 3];
+    if (alpha > 0 && alpha < 255 && bitmap->rgbaPixels[offset] > 0) {
+      ++partialAlphaPixels;
+    }
+  }
+  ASSERT_THAT(partialAlphaPixels, testing::Gt(0))
+      << "Decoded glyph must exercise colored partial alpha";
+  std::cout << "Decoded bitmap partial-alpha pixels: " << partialAlphaPixels << '\n';
+
+  const int left = 20 + static_cast<int>(bitmap->bearingX);
+  const int top = 150 - static_cast<int>(bitmap->bearingY);
+  ASSERT_THAT(bitmap->bearingX, testing::DoubleEq(static_cast<int>(bitmap->bearingX)));
+  ASSERT_THAT(bitmap->bearingY, testing::DoubleEq(static_cast<int>(bitmap->bearingY)));
+  ASSERT_THAT(left, testing::Ge(0));
+  ASSERT_THAT(top, testing::Ge(0));
+  ASSERT_THAT(left + bitmap->width, testing::Le(220));
+  ASSERT_THAT(top + bitmap->height, testing::Le(180));
+  RendererBitmap expected;
+  expected.dimensions = Vector2i(220, 180);
+  expected.rowBytes = 220 * 4;
+  expected.alphaType = AlphaType::Unpremultiplied;
+  expected.pixels.resize(expected.rowBytes * 180, 0);
+  // At the native strike scale and integer origin, decoded texels are the independent oracle.
+  for (int row = 0; row < bitmap->height; ++row) {
+    std::copy_n(bitmap->rgbaPixels.begin() + row * bitmap->width * 4, bitmap->width * 4,
+                expected.pixels.begin() + (top + row) * expected.rowBytes + left * 4);
+  }
+  UnpremultiplyRgbaInPlace(expected.pixels);
+  editor::tests::CompareBitmapToBitmap(actual, expected, "bitmap_glyph_native_alpha",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+#endif
 
 TEST_F(RendererRegressionTests, FontPropertiesDoNotChangeReducedCrosshair) {
   SVGDocument reduced = instantiateSubtree(R"(
