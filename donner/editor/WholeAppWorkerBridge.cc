@@ -1422,6 +1422,25 @@ void NotifyFirstFramePresented(int headlessDeviceCreations) {
   // clang-format on
 }
 
+void PublishPresentedDocumentFrame(std::uint64_t documentGeneration, std::uint64_t frameVersion) {
+  // clang-format off
+  MAIN_THREAD_ASYNC_EM_ASM(
+      {
+        const stats = window['__donnerWorkerStats'];
+        if (!stats || stats['publishReason'] !== 'render-result' || stats['resultFramePresented']) {
+          return;
+        }
+        if (Object.is(stats['documentGeneration'], $0) && Object.is(stats['frameVersion'], $1)) {
+          stats['resultFramePresented'] = true;
+          stats['framesPresentedWithoutResult'] = stats['framesPresentedWithoutResult'] | 0;
+        } else {
+          stats['framesPresentedWithoutResult'] = (stats['framesPresentedWithoutResult'] | 0) + 1;
+        }
+      },
+      static_cast<double>(documentGeneration), static_cast<double>(frameVersion));
+  // clang-format on
+}
+
 void RecordScrollDebug(bool zoomModifierHeld, double xoffset, double yoffset,
                        bool physicalKeyHeld) {
   // clang-format off

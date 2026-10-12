@@ -1,0 +1,387 @@
+"""Tests for tools/check_private_details.py.
+
+Fixture values with a private shape are assembled at runtime so that this file
+itself passes the check without a waiver.
+"""
+
+import importlib.util
+from contextlib import redirect_stderr, redirect_stdout
+from io import StringIO
+from pathlib import Path
+import sys
+import tempfile
+import unittest
+from unittest import mock
+
+
+MODULE_PATH = Path(__file__).with_name("check_private_details.py")
+MODULE_SPEC = importlib.util.spec_from_file_location("check_private_details", MODULE_PATH)
+assert MODULE_SPEC is not None
+assert MODULE_SPEC.loader is not None
+checker = importlib.util.module_from_spec(MODULE_SPEC)
+sys.modules[MODULE_SPEC.name] = checker
+MODULE_SPEC.loader.exec_module(checker)
+
+
+def join(*parts):
+    return "".join(parts)
+
+
+MAC_HOME = join("/", "Users", "/")
+LINUX_HOME = join("/", "home", "/")
+WINDOWS_HOME = join("C:", "\\", "Users", "\\")
+FAKE_NAMES = checker.PrivateNames.parse("exhost-alpha, quill.example\naccount:ziggy  # comment")
+
+
+def kinds(text, names=checker.PrivateNames()):
+    return [finding.kind for finding in checker.scan_text("file.txt", text, names)]
+
+
+def ipv4(*octets):
+    return ".".join(str(octet) for octet in octets)
+
+
+class HomePathTests(unittest.TestCase):
+    def test_flags_personal_home_directories(self):
+        for text in [
+            MAC_HOME + "alice/Projects/donner",
+            "cd " + LINUX_HOME + "bob/src",
+            '"' + MAC_HOME + 'carol/x"',
+            "file://" + LINUX_HOME + "dave/x",
+            WINDOWS_HOME + "erin\\src",
+            join("c:/", "users/", "frank/x"),
+        ]:
+            with self.subTest(text=text):
+                self.assertEqual(kinds(text), [checker.KIND_HOME_PATH])
+
+    def test_allows_generic_system_and_sandbox_paths(self):
+        for text in [
+            LINUX_HOME + "user/art/a.svg",
+            LINUX_HOME + "runner/work",
+            LINUX_HOME + "fuzzer/.cache/bazel",
+            LINUX_HOME + "linuxbrew/.linuxbrew/bin",
+            MAC_HOME + "Shared/data",
+            MAC_HOME + "username/Projects/donner",
+            MAC_HOME + "<name>/Projects",
+            "/private" + LINUX_HOME + "runfiles/app",
+            "/path/to/donner",
+        ]:
+            with self.subTest(text=text):
+                self.assertEqual(kinds(text), [])
+
+
+class PrivateAddressTests(unittest.TestCase):
+    def test_flags_private_ipv4_ranges(self):
+        for text in [
+            "grpc://" + ipv4(192, 168, 4, 20) + ":9092",
+            ipv4(10, 1, 2, 3),
+            "host " + ipv4(172, 20, 0, 5) + " up",
+            ipv4(100, 64, 0, 1),
+            ipv4(100, 127, 255, 254),
+            ipv4(169, 254, 1, 1),
+        ]:
+            with self.subTest(text=text):
+                self.assertEqual(kinds(text), [checker.KIND_PRIVATE_ADDRESS])
+
+    def test_build_named_endpoints_do_not_receive_version_exemptions(self):
+        address = ipv4(10, 1, 2, 3)
+        for prefix in [
+            "remote_build=", "rebuild: ", "remote-build=", "--remote-build=",
+            "remote.build=", "prefixbuild" + " " * 10 + "=",
+        ]:
+            with self.subTest(prefix=prefix):
+                self.assertEqual(kinds(prefix + address), [checker.KIND_PRIVATE_ADDRESS])
+
+    def test_flags_ipv6_unique_local(self):
+        for text in [join("fd12:", "3456:789a::1"), join("[FC00:", ":1]:443")]:
+            with self.subTest(text=text):
+                self.assertEqual(kinds(text), [checker.KIND_PRIVATE_ADDRESS])
+
+    def test_flags_trailing_compression_and_mixed_ipv6_endpoints(self):
+        addresses = [
+            ":".join(["fd12", *[str(n) for n in range(1, count + 1)], "", ""])
+            for count in range(7)
+        ]
+        addresses.extend([
+            join("FC00", ":", ":"),
+            join("fd12", "::", ipv4(192, 0, 2, 1)),
+        ])
+        for address in addresses:
+            for text in (address, "https://[" + address + "]:443/path", address + "%eth0"):
+                with self.subTest(text=text):
+                    self.assertEqual(kinds(text), [checker.KIND_PRIVATE_ADDRESS])
+
+    def test_rejects_invalid_ipv6_candidates_without_matching_a_prefix(self):
+        for text in [
+            ":".join(["fd12", *[str(n) for n in range(1, 8)], "", ""]),
+            join("fd12", "::", "1::2"),
+            join("fd12", ":", "12345:1:2:3:4:5:6"),
+            join("fd12", ":", "1"),
+            join("fd12", "::", ipv4(192, 0, 2, 999)),
+        ]:
+            with self.subTest(text=text):
+                self.assertEqual(kinds(text), [])
+
+    def test_ignores_public_addresses_and_versions(self):
+        for text in [
+            ipv4(8, 8, 8, 8),
+            ipv4(172, 32, 0, 1),
+            ipv4(100, 128, 0, 1),
+            ipv4(127, 0, 0, 1),
+            "version " + ipv4(10, 1, 2, 3),
+            "SDK " + ipv4(10, 0, 2, 0),
+            "v" + ipv4(10, 1, 2, 3),
+            ipv4(10, 0, 19041, 1),
+            ipv4(10, 1, 2, 3) + ".4",
+            "fd_set fdcount: 3",
+        ]:
+            with self.subTest(text=text):
+                self.assertEqual(kinds(text), [])
+
+
+class PrivateSuffixTests(unittest.TestCase):
+    def test_flags_private_suffix_hosts(self):
+        for text in [
+            join("printer", ".local"),
+            join("grpcs://cache.", "lan:50051"),
+            join("api.corp", ".internal/path"),
+            join("router.HOME", ".ARPA"),
+        ]:
+            with self.subTest(text=text):
+                self.assertEqual(kinds(text), [checker.KIND_PRIVATE_SUFFIX])
+
+    def test_ignores_public_names_and_code(self):
+        for text in [
+            "internal.example.invalid",
+            "donner::svg::internal",
+            "localhost",
+            "x.localdomain",
+            "the local cache",
+        ]:
+            with self.subTest(text=text):
+                self.assertEqual(kinds(text), [])
+
+
+class PrivateNameTests(unittest.TestCase):
+    def test_names_are_skipped_without_a_list(self):
+        self.assertEqual(kinds("runs on exhost-alpha"), [])
+        self.assertFalse(checker.PrivateNames())
+
+    def test_flags_configured_names_in_any_spelling(self):
+        for text in [
+            "runs on exhost-alpha",
+            "grpcs://exhost-alpha.example:50051",
+            "EXHOST_ALPHA sandbox",
+            "exhostalpha",
+            "exhost alpha",
+            "exhost.alpha",
+            "build-exhost-alpha-worker",
+            "see https://svc.quill.example/",
+        ]:
+            with self.subTest(text=text):
+                self.assertEqual(kinds(text, FAKE_NAMES), [checker.KIND_PRIVATE_NAME])
+
+    def test_ignores_partial_and_punctuated_matches(self):
+        for text in ["exhost", "alpha", "exhost/alpha", "exhost: alpha", "exhostalphabet"]:
+            with self.subTest(text=text):
+                self.assertEqual(kinds(text, FAKE_NAMES), [])
+
+    def test_long_names_match_every_allowed_separator_without_a_part_limit(self):
+        parts = ["example", "alpha", "beta", "gamma", "delta", "epsilon", "service"]
+        names = checker.PrivateNames.parse("-".join(parts))
+        spellings = [separator.join(parts) for separator in ["-", "_", ".", " ", ""]]
+        spellings.append("example-alpha_beta.gamma delta-epsilon_service")
+        for text in spellings:
+            with self.subTest(text=text):
+                self.assertEqual(kinds("run on " + text.upper(), names), [checker.KIND_PRIVATE_NAME])
+        for text in ["/".join(parts), ":".join(parts), "".join(parts) + "x"]:
+            with self.subTest(text=text):
+                self.assertEqual(kinds(text, names), [])
+
+    def test_exact_entries_match_only_as_written(self):
+        names = checker.PrivateNames.parse("exact:box9")
+        for text in ["on box9 today", "BOX9.example", "a-box9-b"]:
+            with self.subTest(text=text):
+                self.assertEqual(kinds(text, names), [checker.KIND_PRIVATE_NAME])
+        for text in ["box-9", "box 9", "box90", "abox9"]:
+            with self.subTest(text=text):
+                self.assertEqual(kinds(text, names), [])
+
+    def test_reports_one_name_finding_per_line(self):
+        self.assertEqual(kinds("exhost-alpha and EXHOST-ALPHA", FAKE_NAMES), [checker.KIND_PRIVATE_NAME])
+
+    def test_flags_configured_accounts_in_user_contexts(self):
+        for text in ["User=ziggy", "cd ~ziggy/src", WINDOWS_HOME + "Ziggy\\x"]:
+            with self.subTest(text=text):
+                self.assertIn(checker.KIND_PRIVATE_ACCOUNT, kinds(text, FAKE_NAMES))
+        self.assertEqual(kinds("TODO(ziggy): fix", FAKE_NAMES), [])
+
+
+class LoadPrivateNamesTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary_directory = tempfile.TemporaryDirectory()
+        self.root = Path(self.temporary_directory.name)
+
+    def tearDown(self):
+        self.temporary_directory.cleanup()
+
+    def test_absent_source_is_empty(self):
+        self.assertFalse(checker.load_private_names(self.root, environ={}))
+
+    def test_explicit_file_must_be_readable_and_contain_usable_entries(self):
+        missing = self.root / "missing-list.txt"
+        unusable = self.root / "unusable-list.txt"
+        for content in ["", "# comments only\n", "account: exact:", "*"]:
+            unusable.write_text(content, encoding="utf-8")
+            for candidate in [missing, unusable, self.root, ""]:
+                with self.subTest(content=content, candidate=str(candidate)):
+                    with self.assertRaises(ValueError):
+                        checker.load_private_names(self.root, environ={checker.NAMES_FILE_ENV: str(candidate)})
+
+    def test_existing_default_file_is_configuration_while_absence_is_optional(self):
+        candidate = self.root / checker.NAMES_DEFAULT_FILE
+        self.assertFalse(checker.load_private_names(self.root, environ={}))
+        candidate.write_text("# no entries", encoding="utf-8")
+        with self.assertRaises(ValueError):
+            checker.load_private_names(self.root, environ={})
+        candidate.unlink()
+        candidate.symlink_to("missing-list.txt")
+        with self.assertRaises(ValueError):
+            checker.load_private_names(self.root, environ={})
+        self.assertTrue(checker.load_private_names(self.root, environ={checker.NAMES_ENV: "example-alpha"}))
+
+    def test_nonempty_explicit_environment_list_must_have_usable_entries(self):
+        with self.assertRaises(ValueError):
+            checker.load_private_names(self.root, environ={checker.NAMES_ENV: "# comments only"})
+        self.assertFalse(checker.load_private_names(self.root, environ={checker.NAMES_ENV: ""}))
+
+    def test_main_configuration_failure_is_nonzero_without_echoing_the_file_path(self):
+        missing = self.root / "missing-list.txt"
+        clean = self.root / "clean.txt"
+        clean.write_text("nothing private", encoding="utf-8")
+        stdout, stderr = StringIO(), StringIO()
+        with mock.patch.dict(checker.os.environ, {checker.NAMES_FILE_ENV: str(missing)}, clear=True):
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                self.assertEqual(checker.main(["--root", str(self.root), "clean.txt"]), 2)
+        self.assertNotIn(str(missing), stdout.getvalue() + stderr.getvalue())
+        self.assertIn("configuration", stderr.getvalue())
+
+    def test_reads_default_file_env_file_and_env_value(self):
+        (self.root / ".private-names").write_text("exhost-alpha\n", encoding="utf-8")
+        self.assertEqual(checker.load_private_names(self.root, environ={}).names, {"exhostalpha"})
+        other = self.root / "names.txt"
+        other.write_text("account:ziggy\n", encoding="utf-8")
+        loaded = checker.load_private_names(self.root, environ={checker.NAMES_FILE_ENV: str(other)})
+        self.assertEqual(loaded.accounts, {"ziggy"})
+        loaded = checker.load_private_names(self.root, environ={checker.NAMES_ENV: "quill.example"})
+        self.assertEqual(loaded.names, {"quillexample"})
+
+
+class ScanFilesTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary_directory = tempfile.TemporaryDirectory()
+        self.root = Path(self.temporary_directory.name)
+
+    def tearDown(self):
+        self.temporary_directory.cleanup()
+
+    def write(self, relative, content):
+        path = self.root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if isinstance(content, bytes):
+            path.write_bytes(content)
+        else:
+            path.write_text(content, encoding="utf-8")
+
+    def test_reports_location_without_echoing_the_value(self):
+        self.write("docs/a.md", "ok\nsee " + MAC_HOME + "alice/notes\n")
+        findings = checker.scan_files(self.root, ["docs/a.md"])
+        self.assertEqual([str(finding) for finding in findings],
+                         ["docs/a.md:2: home-path: personal home directory path"])
+        self.assertNotIn("alice", str(findings[0]))
+
+    def test_scans_binary_payload_and_ignores_missing_files(self):
+        self.write("image.png", b"\x89PNG\0" + (MAC_HOME + "alice").encode())
+        findings = checker.scan_files(self.root, ["image.png", "missing.txt"])
+        self.assertEqual([(f.path, f.kind) for f in findings],
+                         [("image.png", checker.KIND_HOME_PATH)])
+        self.assertNotIn("alice", str(findings[0]))
+
+    def test_scans_binary_metadata_with_redacted_locations_and_safe_accounts(self):
+        self.write("metadata.bin", (
+            b"\0" + b"exhost-alpha" + b"\xff\n" +
+            ipv4(10, 1, 2, 3).encode() + b"\0\n" +
+            (LINUX_HOME + "alice/notes").encode() + b"\xff"
+        ))
+        findings = checker.scan_files(self.root, ["metadata.bin"], FAKE_NAMES)
+        self.assertEqual([(f.line, f.kind) for f in findings], [
+            (1, checker.KIND_PRIVATE_NAME),
+            (2, checker.KIND_PRIVATE_ADDRESS),
+            (3, checker.KIND_HOME_PATH),
+        ])
+        self.write("safe.bin", b"\0" + (MAC_HOME + "runner").encode() + b"\xff")
+        self.assertEqual(checker.scan_files(self.root, ["safe.bin"]), [])
+
+    def test_opaque_payload_boundaries_do_not_create_version_or_name_context(self):
+        for separator in (b"\0", b"\xff", "\u200b".encode()):
+            with self.subTest(separator=separator):
+                self.write("version.bin", b"version" + separator + ipv4(10, 1, 2, 3).encode())
+                findings = checker.scan_files(self.root, ["version.bin"])
+                self.assertEqual([(f.line, f.kind) for f in findings],
+                                 [(1, checker.KIND_PRIVATE_ADDRESS)])
+                self.write("name.bin", b"exhost" + separator + b"alpha")
+                self.assertEqual(checker.scan_files(self.root, ["name.bin"], FAKE_NAMES), [])
+        self.write("unicode.bin", (LINUX_HOME + "\u00e1lice/notes").encode())
+        self.assertEqual([f.kind for f in checker.scan_files(self.root, ["unicode.bin"])],
+                         [checker.KIND_HOME_PATH])
+
+    def test_scans_binary_metadata_after_the_old_detection_prefix(self):
+        self.write("large.bin", b"x" * 8192 + b"\0" + (MAC_HOME + "alice").encode())
+        findings = checker.scan_files(self.root, ["large.bin"])
+        self.assertEqual([f.kind for f in findings], [checker.KIND_HOME_PATH])
+
+    def test_scans_symlink_target_without_following_it(self):
+        self.write("clean-target.txt", "nothing private here\n")
+        (self.root / "broken-link").symlink_to(MAC_HOME + "alice/notes")
+        (self.root / "name-link").symlink_to("example-alpha-beta-gamma-delta")
+        (self.root / "clean-link").symlink_to("clean-target.txt")
+        names = checker.PrivateNames.parse("example-alpha-beta-gamma-delta")
+        findings = checker.scan_files(self.root, ["broken-link", "name-link", "clean-link"], names)
+        self.assertEqual([(f.path, f.line, f.kind) for f in findings], [
+            ("broken-link", 1, checker.KIND_HOME_PATH),
+            ("name-link", 1, checker.KIND_PRIVATE_NAME),
+        ])
+        self.assertNotIn("alice", str(findings[0]))
+
+    def test_symlink_does_not_scan_external_target_contents(self):
+        self.write("dirty-target.txt", MAC_HOME + "alice/notes")
+        (self.root / "clean-link").symlink_to("dirty-target.txt")
+        self.assertEqual(checker.scan_files(self.root, ["clean-link"]), [])
+
+    def test_scans_private_path_names_for_binary_missing_and_symlink_entries(self):
+        names = checker.PrivateNames.parse("example-alpha")
+        paths = ["docs/example-alpha.md", "example-alpha.png", "example-alpha-link", "example-alpha-missing"]
+        self.write(paths[0], "clean content")
+        self.write(paths[1], b"\x89PNG\0")
+        (self.root / paths[2]).symlink_to("missing-target")
+        findings = checker.scan_files(self.root, paths, names)
+        self.assertEqual(len(findings), 4)
+        self.assertEqual([f.kind for f in findings], [checker.KIND_PRIVATE_NAME] * 4)
+        self.assertTrue(all("example-alpha" not in str(f) for f in findings))
+
+    def test_redacts_private_path_in_content_findings_too(self):
+        relative = "docs/example-alpha.md"
+        self.write(relative, MAC_HOME + "alice/notes")
+        findings = checker.scan_files(self.root, [relative], checker.PrivateNames.parse("example-alpha"))
+        self.assertEqual([f.kind for f in findings], [checker.KIND_PRIVATE_NAME, checker.KIND_HOME_PATH])
+        self.assertTrue(all("example-alpha" not in str(f) and "alice" not in str(f) for f in findings))
+
+    def test_main_exit_status(self):
+        self.write("clean.txt", "nothing private here\n")
+        self.write("dirty.txt", "cache at " + ipv4(10, 0, 0, 7) + "\n")
+        self.assertEqual(checker.main(["--root", str(self.root), "clean.txt"]), 0)
+        self.assertEqual(checker.main(["--root", str(self.root), "dirty.txt"]), 1)
+
+
+if __name__ == "__main__":
+    unittest.main()
