@@ -1298,5 +1298,53 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
                          PRIVATE_NETWORK_LITERAL.findall(fixture))
 
 
+
+    def test_secret_policy_handles_indexed_and_compound_references(self):
+        files = self.supply_chain_files
+        badges = ".github/workflows/badges.yaml"
+        for reference in ("secrets['GIST_SECRET']", "secrets [ 'GIST_SECRET' ]",
+                          "format('{0}', secrets['GIST_SECRET'])"):
+            with self.subTest(reference=reference):
+                changed = files[badges].replace("secrets.GIST_SECRET", reference)
+                self.assertEqual([], _secret_use_violations(_workflows({**files, badges: changed})))
+        main = ".github/workflows/main.yml"
+        step = "      - name: Upload CI diagnostics\n"
+        for reference in ("secrets['UNREVIEWED_TOKEN']", "secrets[inputs.token_name]"):
+            with self.subTest(reference=reference):
+                changed = files[main].replace(
+                    step, step + "        env:\n          TOKEN: ${{ " + reference + " }}\n", 1)
+                self.assertTrue(any("secret uses changed" in item for item in
+                                    _secret_use_violations(_workflows({**files, main: changed}))))
+
+    def test_indexed_secret_cannot_move_to_job_or_workflow_scope(self):
+        files = self.supply_chain_files
+        badges = ".github/workflows/badges.yaml"
+        for anchor, injection in (
+            ("    runs-on: ubuntu-latest\n",
+             "    env:\n      AUTH: ${{ secrets['GIST_SECRET'] }}\n"),
+            ("jobs:\n", "env:\n  AUTH: ${{ secrets['GIST_SECRET'] }}\njobs:\n"),
+        ):
+            with self.subTest(anchor=anchor):
+                replacement = injection if anchor == "jobs:\n" else anchor + injection
+                changed = files[badges].replace(anchor, replacement, 1)
+                self.assertNotEqual(changed, files[badges])
+                self.assertTrue(any("beyond one step" in item for item in
+                                    _secret_use_violations(_workflows({**files, badges: changed}))))
+
+    def test_indexed_event_text_is_rejected_in_every_script_kind(self):
+        for key in ("run", "script", "command"):
+            for reference in ("github.event['pull_request']['title']",
+                              "github['event']['pull_request'].body",
+                              "github [ 'head_ref' ]", "inputs['message']"):
+                with self.subTest(key=key, reference=reference):
+                    script = "      - " + key + ": echo ${{ " + reference + " }}\n"
+                    self.assertTrue(_untrusted_script_contexts(script))
+        for reference in ("github.event['pull_request']['head']['sha']",
+                          "github['event'].pull_request.number"):
+            with self.subTest(safe=reference):
+                self.assertEqual([], _untrusted_script_contexts(
+                    "      - run: echo ${{ " + reference + " }}\n"))
+
+
 if __name__ == "__main__":
     unittest.main()
