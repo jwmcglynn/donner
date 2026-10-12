@@ -3868,12 +3868,12 @@ TEST(Path, MeasurementHonorsZeroAllowanceAndClampsAnOversizedAllowance) {
   EXPECT_THAT(oversized.valid(), testing::IsTrue());
   EXPECT_THAT(oversized.pathLength(), testing::DoubleEq(5.0));
   EXPECT_THAT(oversized.measurementWorkUnits(), testing::Eq(path.measure().measurementWorkUnits()));
-  EXPECT_THAT(
-      oversized.pointAtArcLength(2.5),
-      testing::AllOf(
-          testing::Field("valid", &Path::PointOnPath::valid, true),
-          testing::Field("point", &Path::PointOnPath::point, Vector2dNear({2.5, 4}, 1e-12)),
-          testing::Field("tangent", &Path::PointOnPath::tangent, Vector2dNear({3, 4}, 1e-12))));
+  EXPECT_THAT(oversized.pointAtArcLength(2.5),
+              testing::AllOf(testing::Field("valid", &Path::PointOnPath::valid, true),
+                             testing::Field("point", &Path::PointOnPath::point,
+                                            Vector2dNear(Vector2d(2.5, 4), 1e-12)),
+                             testing::Field("tangent", &Path::PointOnPath::tangent,
+                                            Vector2dNear(Vector2d(3, 4), 1e-12))));
 }
 
 TEST(Path, MeasuredTrailingMoveKeepsTheLastDrawingEndpointAtExactLength) {
@@ -3882,16 +3882,16 @@ TEST(Path, MeasuredTrailingMoveKeepsTheLastDrawingEndpointAtExactLength) {
   ASSERT_THAT(measured.valid(), testing::IsTrue());
   EXPECT_THAT(measured.segmentCount(), testing::Eq(1u));
   EXPECT_THAT(measured.pathLength(), testing::DoubleEq(5.0));
-  EXPECT_THAT(
-      measured.pointAtArcLength(5),
-      testing::AllOf(
-          testing::Field("valid", &Path::PointOnPath::valid, true),
-          testing::Field("point", &Path::PointOnPath::point, Vector2dNear({4, 6}, 1e-12)),
-          testing::Field("tangent", &Path::PointOnPath::tangent, Vector2dNear({3, 4}, 1e-12))));
+  EXPECT_THAT(measured.pointAtArcLength(5),
+              testing::AllOf(testing::Field("valid", &Path::PointOnPath::valid, true),
+                             testing::Field("point", &Path::PointOnPath::point,
+                                            Vector2dNear(Vector2d(4, 6), 1e-12)),
+                             testing::Field("tangent", &Path::PointOnPath::tangent,
+                                            Vector2dNear(Vector2d(3, 4), 1e-12))));
   EXPECT_THAT(measured.pointAtArcLength(6),
               testing::AllOf(testing::Field("valid", &Path::PointOnPath::valid, false),
                              testing::Field("point", &Path::PointOnPath::point,
-                                            Vector2dNear({100, 200}, 1e-12))));
+                                            Vector2dNear(Vector2d(100, 200), 1e-12))));
 }
 
 TEST(Path, DegreeElevatedQuadraticConvertsBackWithoutChangingItsGeometry) {
@@ -3899,9 +3899,9 @@ TEST(Path, DegreeElevatedQuadraticConvertsBackWithoutChangingItsGeometry) {
   const Path quadratic = cubic.cubicToQuadratic(1e-9);
   EXPECT_THAT(quadratic.commands(), testing::ElementsAre(PathCommandVerbIs(Path::Verb::MoveTo),
                                                          PathCommandVerbIs(Path::Verb::QuadTo)));
-  EXPECT_THAT(quadratic.points(),
-              testing::ElementsAre(Vector2dNear({0, 0}, 1e-12), Vector2dNear({3, 6}, 1e-12),
-                                   Vector2dNear({6, 0}, 1e-12)));
+  EXPECT_THAT(quadratic.points(), testing::ElementsAre(Vector2dNear(Vector2d(0, 0), 1e-12),
+                                                       Vector2dNear(Vector2d(3, 6), 1e-12),
+                                                       Vector2dNear(Vector2d(6, 0), 1e-12)));
   const Vector2d expected[] = {{1.5, 2.25}, {3, 3}, {4.5, 2.25}};
   for (std::size_t index = 0; index < 3; ++index) {
     SCOPED_TRACE(index);
@@ -3915,8 +3915,9 @@ TEST(Path, QuadraticMarkerAtCoincidentEndControlUsesTheIncomingChord) {
   const Path path = PathBuilder().moveTo({2, 3}).quadTo({5, 7}, {5, 7}).build();
   EXPECT_THAT(
       path.vertices(),
-      testing::ElementsAre(testing::AllOf(VertexPointIs({2, 3}), VertexOrientationIs({0.6, 0.8})),
-                           testing::AllOf(VertexPointIs({5, 7}), VertexOrientationIs({0.6, 0.8}))));
+      testing::ElementsAre(
+          testing::AllOf(VertexPointIs(Vector2d(2, 3)), VertexOrientationIs(Vector2d(0.6, 0.8))),
+          testing::AllOf(VertexPointIs(Vector2d(5, 7)), VertexOrientationIs(Vector2d(0.6, 0.8)))));
 }
 
 TEST(Path, DegenerateMarkerDirectionNeverBorrowsFromALaterSubpath) {
@@ -3929,11 +3930,12 @@ TEST(Path, DegenerateMarkerDirectionNeverBorrowsFromALaterSubpath) {
                         .build();
   EXPECT_THAT(
       path.vertices(),
-      testing::ElementsAre(testing::AllOf(VertexPointIs({1, 2}), VertexOrientationIs({0, 0})),
-                           testing::AllOf(VertexPointIs({1, 2}), VertexOrientationIs({0, 0})),
-                           testing::AllOf(VertexPointIs({1, 2}), VertexOrientationIs({0, 0})),
-                           testing::AllOf(VertexPointIs({20, 20}), VertexOrientationIs({1, 0})),
-                           testing::AllOf(VertexPointIs({30, 20}), VertexOrientationIs({1, 0}))));
+      testing::ElementsAre(
+          testing::AllOf(VertexPointIs(Vector2d(1, 2)), VertexOrientationIs(Vector2d(0, 0))),
+          testing::AllOf(VertexPointIs(Vector2d(1, 2)), VertexOrientationIs(Vector2d(0, 0))),
+          testing::AllOf(VertexPointIs(Vector2d(1, 2)), VertexOrientationIs(Vector2d(0, 0))),
+          testing::AllOf(VertexPointIs(Vector2d(20, 20)), VertexOrientationIs(Vector2d(1, 0))),
+          testing::AllOf(VertexPointIs(Vector2d(30, 20)), VertexOrientationIs(Vector2d(1, 0)))));
 }
 
 TEST(Path, NonFiniteHitQueriesCannotSelectFiniteCurveGeometry) {
