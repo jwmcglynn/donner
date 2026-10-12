@@ -167,6 +167,15 @@ single_version_override(
 )
 
 bazel_dep(name = "aspect_rules_js", version = "2.9.3", dev_dependency = True)
+
+# Normalize unreadable npm archive directories before remote output upload.
+single_version_override(
+    module_name = "aspect_rules_js",
+    patch_strip = 1,
+    patches = ["//third_party/patches:rules-js-readable-npm-directories.patch"],
+    version = "2.9.3",
+)
+
 bazel_dep(name = "rules_playwright", version = "0.5.3", dev_dependency = True)
 
 playwright = use_extension(

@@ -780,3 +780,12 @@ js_test(
     env = {"NODE_OPTIONS": ""},
     node_options = ["--test"],
 )
+
+# Archive permissions are a build contract; no browser or editor is involved.
+js_test(
+    name = "npm_archive_permissions_test",
+    size = "small",
+    args = ["$(rlocationpath @aspect_rules_js//npm/private:npm_package_extract.mjs)"],
+    data = ["@aspect_rules_js//npm/private:npm_package_extract.mjs"],
+    entry_point = "npm-archive-permissions.spec.mjs",
+)
