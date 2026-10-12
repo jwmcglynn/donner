@@ -1944,5 +1944,29 @@ TEST(FocusViewTest, ElementAndStyleFocusRespectReentrantConcurrentDocumentReadAc
   EXPECT_THAT(document.source(), testing::Eq(kCssReferencedSvg));
 }
 
+TEST(FocusViewTest, OversizedSelectionReportsElementTruncationAndRetainsBoundedSourceFocus) {
+  constexpr std::size_t kSelectionCount = kMaximumFocusElements + 1u;
+  std::string source = "<svg xmlns='http://www.w3.org/2000/svg'>\n";
+  for (std::size_t i = 0; i < kSelectionCount; ++i) {
+    source += "<rect id='selected" + std::to_string(i) + "' width='1' height='1'/>\n";
+  }
+  source += "</svg>";
+  EditorApp app;
+  ASSERT_THAT(app.loadFromString(source), testing::IsTrue());
+  std::vector<svg::SVGElement> selection;
+  for (auto child = app.document().document().svgElement().firstChild(); child.has_value();
+       child = child->nextSibling()) {
+    selection.push_back(*child);
+  }
+  ASSERT_THAT(selection, testing::SizeIs(kSelectionCount));
+  const FocusPartition partition = ComputeFocusPartition(app.document().document(), selection);
+  EXPECT_THAT(partition.resourceLimitExceeded, testing::IsTrue());
+  EXPECT_THAT(partition.fullColor, testing::Not(IsEmpty()));
+  EXPECT_THAT(partition.fullColor, testing::SizeIs(testing::Le(kMaximumFocusLineRanges)));
+  EXPECT_THAT(partition.referenceLinks, IsEmpty());
+  EXPECT_THAT(partition.traversalWork, testing::Le(kMaximumFocusTraversalWork));
+  EXPECT_THAT(app.document().document().source(), testing::Eq(source));
+}
+
 }  // namespace
 }  // namespace donner::editor
