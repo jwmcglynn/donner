@@ -1106,12 +1106,14 @@ public:
 /// zero-sized bitmap (empty extent).
 class BitmapOutlineBackend : public ScriptedTextBackend {
 public:
+  mutable std::size_t bitmapDecodeCalls = 0;
   Path glyphOutline(FontHandle /*font*/, int /*glyphIndex*/, float /*scale*/) const override {
     return Path();
   }
 
   std::optional<BitmapGlyph> bitmapGlyph(FontHandle /*font*/, int glyphIndex,
                                          float /*scale*/) const override {
+    ++bitmapDecodeCalls;
     if (glyphIndex == 'A' % 997 + 1) {
       return BitmapGlyph{.rgbaPixels = {},
                          .width = 4,
@@ -2005,7 +2007,9 @@ TEST(TextEngineScriptedTest, TextAnchorSkipsOnPathRunsInsideChunks) {
 TEST(TextEngineScriptedTest, GeometryCacheFallsBackToBitmapGlyphExtents) {
   Registry registry;
   FontManager fontManager(registry);
-  TextEngine engine(fontManager, registry, std::make_unique<BitmapOutlineBackend>());
+  auto backend = std::make_unique<BitmapOutlineBackend>();
+  const auto* observedBackend = backend.get();
+  TextEngine engine(fontManager, registry, std::move(backend));
 
   const Entity root = MakeTextRootWithSpan(registry, "AB", MakeSpan("AB"));
   const EntityHandle rootHandle(registry, root);
@@ -2017,6 +2021,8 @@ TEST(TextEngineScriptedTest, GeometryCacheFallsBackToBitmapGlyphExtents) {
   EXPECT_EQ(engine.getExtentOfChar(rootHandle, 0), Box2d::FromXYWH(1.0, -2.0, 2.0, 2.0));
   // 'B' resolves to a zero-sized bitmap: its extent stays empty.
   EXPECT_EQ(engine.getExtentOfChar(rootHandle, 1), Box2d());
+  EXPECT_EQ(observedBackend->bitmapDecodeCalls, 0u)
+      << "Text bounds must use metadata without materializing glyph pixels.";
 
   EXPECT_EQ(engine.getNumberOfChars(rootHandle), 2);
   // End position advances by the scripted (10, 12) glyph advance.
