@@ -405,8 +405,9 @@ async function evaluateInWorkers<T>(
  * Watch every canvas frame the page's workers acquire from now on.
  *
  * Installed per worker, so it must run after the editor has started its
- * workers. Returns how many workers took the probe (every worker that answered
- * and exposes WebGPU); zero means it will observe nothing.
+ * workers. Returns the number of acknowledged installations. A bounded wait
+ * can finish before an installation reply; that late acknowledgement remains
+ * available to the next readiness check.
  */
 export async function installSurfaceFrameProbe(page: Page): Promise<number> {
   return probeRegistry.install(page, installInWorker);
@@ -419,8 +420,10 @@ export function surfaceFrameProbeInstalled(page: Page): boolean {
 
 /** Return the one worker that acquired the editor's canvas while the probe watched. */
 export async function findCanvasOwnerWorker(page: Page): Promise<Worker | null> {
-  return probeRegistry.findOwner(page, readInWorker, (state: WorkerProbeState | null) =>
-    (state?.frames ?? 0) > 0
+  return probeRegistry.findOwner(
+    page,
+    readInWorker,
+    (state: WorkerProbeState | null) => (state?.frames ?? 0) > 0,
   );
 }
 
@@ -441,7 +444,8 @@ export async function expectSurfaceFrameProbeReady(page: Page): Promise<void> {
   await expect.poll(async () => {
     await installSurfaceFrameProbe(page);
     return findProbedCanvasApplicationWorker(page);
-  }, { message: "the application canvas owner must acknowledge the completion probe" }).not.toBeNull();
+  }, { message: "the application canvas owner must acknowledge the completion probe" }).not
+    .toBeNull();
 }
 
 /**

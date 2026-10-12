@@ -49,10 +49,10 @@ import {
 import { expectSampleThumbnailsToSettle } from "./sample-thumbnail-settle";
 import {
   delayNextCanvasCompletionForTest,
+  expectSurfaceFrameProbeReady,
   findCanvasOwnerWorker,
   holdCanvasCompletionForTest,
   installSurfaceFrameProbe,
-  expectSurfaceFrameProbeReady,
   readCanvasOwnerSurfaceFrameProbe,
   readSurfaceFrameProbe,
   selfCheckSurfaceFrameProbe,

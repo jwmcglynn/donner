@@ -2,9 +2,8 @@ import { expect, test } from "@playwright/test";
 import { captureSplashPresentationFrame, type CssRegion } from "./canvas-color-stats";
 import { expectSampleThumbnailsToSettle } from "./sample-thumbnail-settle";
 import {
-  findCanvasOwnerWorker,
-  installSurfaceFrameProbe,
   expectSurfaceFrameProbeReady,
+  findCanvasOwnerWorker,
   readSurfaceFrameProbe,
 } from "./surface-frame-probe";
 

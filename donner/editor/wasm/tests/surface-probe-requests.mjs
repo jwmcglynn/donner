@@ -43,19 +43,21 @@ export function createSurfaceProbeRegistry(answerMs) {
     watch(worker);
     let expired = false;
     let timer;
-    const reply = Promise.resolve().then(() => worker.evaluate(fn)).catch(() => null).then((value) => {
-      if (closed.has(worker)) return null;
-      onReply?.(value);
-      if (expired && discovery && value !== null) {
-        let saved = lateDiscovery.get(worker);
-        if (saved === undefined) {
-          saved = new Map();
-          lateDiscovery.set(worker, saved);
+    const reply = Promise.resolve().then(() => worker.evaluate(fn)).catch(() => null).then(
+      (value) => {
+        if (closed.has(worker)) return null;
+        onReply?.(value);
+        if (expired && discovery && value !== null) {
+          let saved = lateDiscovery.get(worker);
+          if (saved === undefined) {
+            saved = new Map();
+            lateDiscovery.set(worker, saved);
+          }
+          saved.set(fn, value);
         }
-        saved.set(fn, value);
-      }
-      return value;
-    }).finally(() => pending.delete(worker));
+        return value;
+      },
+    ).finally(() => pending.delete(worker));
     pending.set(worker, reply);
     const timedOut = new Promise((resolve) => {
       timer = setTimeout(() => {
@@ -87,9 +89,9 @@ export function createSurfaceProbeRegistry(answerMs) {
   }
   async function findOwner(page, fn, owns = (answer) => answer === true) {
     const current = workers(page);
-    const answers = await Promise.all(current.map((worker) =>
-      request(worker, fn, answerMs, undefined, true)
-    ));
+    const answers = await Promise.all(
+      current.map((worker) => request(worker, fn, answerMs, undefined, true)),
+    );
     const live = workers(page);
     const owners = current.filter((worker, index) => live.includes(worker) && owns(answers[index]));
     return owners.length === 1 ? owners[0] : null;

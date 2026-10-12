@@ -23,10 +23,9 @@ import { echoGpuSessionConsole } from "./gpu-session-console";
 import { quarantineStillSkips } from "./quarantine-report.mjs";
 import { expectSampleThumbnailsToSettle } from "./sample-thumbnail-settle";
 import {
+  expectSurfaceFrameProbeReady,
   findProbedCanvasApplicationWorker,
   holdCanvasCompletionForTest,
-  installSurfaceFrameProbe,
-  expectSurfaceFrameProbeReady,
 } from "./surface-frame-probe";
 
 installBrowserStallDiagnostics(test);
@@ -1848,9 +1847,25 @@ test(
       });
       // Wait until this exact gate is entered, or a bypass starts the capture.
       // A page round trip alone can finish before worker-owner discovery.
-      await expect.poll(async () => screenshots > 0 || (await completionHold.enteredWaits()) > 0, {
-        timeout: scaledMs(5_000),
-      }).toBe(true);
+      let lastEnteredWaits: number | null = null;
+      try {
+        await expect.poll(async () => {
+          if (screenshots > 0) return true;
+          lastEnteredWaits = await completionHold.enteredWaits();
+          return lastEnteredWaits > 0;
+        }, { timeout: scaledMs(5_000) }).toBe(true);
+      } catch (error) {
+        console.error(JSON.stringify({
+          heldCanvasCapture: {
+            readyStateValid: hasPresentedBasicShapesHostFrame(readyState, before.results),
+            screenshots,
+            settled,
+            requiredOwnerIdentified: requiredOwner !== null,
+            enteredWaits: lastEnteredWaits,
+          },
+        }));
+        throw error;
+      }
       expect(screenshots).toBe(0);
       expect(settled).toBe(false);
       expect(requiredOwner).not.toBeNull();

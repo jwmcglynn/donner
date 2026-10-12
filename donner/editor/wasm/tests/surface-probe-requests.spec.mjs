@@ -35,7 +35,8 @@ class Worker extends EventEmitter {
     if (this.closed) return Promise.reject(new Error("worker closed"));
     this.pending++;
     this.maximumPending = Math.max(this.maximumPending, this.pending);
-    const reply = this.replies.get(fn)?.shift() ?? (fn === installProbe ? this.installed : this.owner);
+    const reply = this.replies.get(fn)?.shift()
+      ?? (fn === installProbe ? this.installed : this.owner);
     return Promise.resolve(reply.promise ?? reply).finally(() => this.pending--);
   }
   close() {
@@ -52,7 +53,12 @@ function fixture(context, workers, controls = []) {
   });
   return {
     registry: createSurfaceProbeRegistry(1000),
-    page: { current: workers, workers() { return [...this.current]; } },
+    page: {
+      current: workers,
+      workers() {
+        return [...this.current];
+      },
+    },
   };
 }
 async function advance(context, milliseconds) {
@@ -151,4 +157,46 @@ test("nonowner replies and multiple acknowledged owners fail closed", async (con
   owner.owner = false;
   other.owner = false;
   assert.equal(await registry.findOwner(page, readOwner), null);
+});
+
+test("a rejected installation remains unknown and retries after the request settles", async (context) => {
+  const reply = deferred();
+  const worker = new Worker({ replies: new Map([[installProbe, [reply, true]]]) });
+  const { registry, page } = fixture(context, [worker], [reply]);
+  const first = registry.install(page, installProbe);
+  await advance(context, 1000);
+  assert.equal(await first, 0);
+  assert.equal(await registry.install(page, installProbe), 0);
+  assert.equal(worker.calls.length, 1);
+  reply.reject(new Error("installation failed"));
+  await setImmediate();
+  assert.deepEqual(registry.workers(page), []);
+  assert.equal(await registry.install(page, installProbe), 1);
+  assert.equal(worker.calls.length, 2);
+  assert.equal(worker.maximumPending, 1);
+});
+
+test("an acknowledged unsupported worker is excluded without repeated installation IPC", async (context) => {
+  const worker = new Worker({ installed: false });
+  const { registry, page } = fixture(context, [worker]);
+  assert.equal(await registry.install(page, installProbe), 0);
+  assert.equal(await registry.install(page, installProbe), 0);
+  assert.equal(await registry.findOwner(page, readOwner), null);
+  assert.deepEqual(registry.workers(page), []);
+  assert.equal(worker.calls.length, 1);
+});
+
+test("ordinary observations do not reuse a late discovery sample", async (context) => {
+  const late = deferred();
+  const worker = new Worker({ replies: new Map([[readProbe, [late, { frames: 2 }]]]) });
+  const { registry, page } = fixture(context, [worker], [late]);
+  assert.equal(await registry.install(page, installProbe), 1);
+  const first = registry.findOwner(page, readProbe, (answer) => answer?.frames > 0);
+  await advance(context, 1000);
+  assert.equal(await first, null);
+  late.resolve({ frames: 1 });
+  await setImmediate();
+  assert.deepEqual(await registry.evaluate([worker], readProbe), [{ frames: 2 }]);
+  assert.equal(worker.calls.length, 3);
+  assert.equal(worker.maximumPending, 1);
 });
