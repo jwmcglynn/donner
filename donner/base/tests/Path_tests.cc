@@ -3909,6 +3909,8 @@ TEST(Path, DegreeElevatedQuadraticConversionPreservesItsAnalyticGeometry) {
   for (std::size_t index = 0; index < 3; ++index) {
     SCOPED_TRACE(index);
     EXPECT_THAT(cubic.pointAt(1, double(index + 1) * 0.25), Vector2dNear(expected[index], 1e-12));
+    EXPECT_THAT(converted.isOnPath(expected[index], 0.01), testing::IsTrue())
+        << "Converted geometry must contain interior point " << expected[index];
   }
   for (std::size_t index = 0; index < converted.verbCount(); ++index) {
     SCOPED_TRACE(index);
