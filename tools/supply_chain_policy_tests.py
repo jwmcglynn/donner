@@ -736,6 +736,35 @@ class CheckerTest(unittest.TestCase):
                 with self.subTest(method=method, source=source):
                     self.assertEqual(len(self._findings(source)), 1)
 
+    def test_unreadable_native_getattr_callees_fail_closed(self):
+        for source in ('METHOD = choose_method()\ngetattr(ctx, METHOD)("https://example.invalid/archive")',
+                       'getattr(ctx, "down" + "load")("https://example.invalid/archive")',
+                       'getattr(ctx, UNKNOWN_FIELD)("https://example.invalid/archive")'):
+            with self.subTest(source=source):
+                self.assertTrue(self._findings(source))
+
+    def test_unreadable_native_getattr_transport_fails_closed(self):
+        for source in ('METHOD = choose_method()\nfetch = getattr(ctx, METHOD)\n'
+                       'fetch("https://example.invalid/archive")',
+                       'fetches = [getattr(ctx, UNKNOWN_FIELD)]\n'
+                       'fetches[0]("https://example.invalid/archive")',
+                       'invoke(getattr(ctx, UNKNOWN_FIELD))'):
+            with self.subTest(source=source):
+                self.assertTrue(self._findings(source))
+
+    def test_getattr_factory_aliases_cannot_hide_native_fetches(self):
+        for source in ('lookup = getattr\nlookup(ctx, "download")("https://example.invalid/archive")',
+                       'lookups = [getattr]\nlookups[0](ctx, "download")("https://example.invalid/archive")'):
+            with self.subTest(source=source):
+                self.assertTrue(self._findings(source))
+
+    def test_known_non_download_getters_and_bare_unknown_inspection_remain_allowed(self):
+        for source in ('METHOD = "file"\ngetattr(ctx, METHOD)("BUILD.bazel", "")',
+                       'METHOD = choose_method()\ngetattr(ctx, METHOD)',
+                       'value = getattr(ctx, "name")\ninspect(value)'):
+            with self.subTest(source=source):
+                self.assertEqual(self._findings(source), [])
+
     def test_non_download_getattr_remains_allowed(self):
         for source in ('getattr(ctx, "name")', 'getattr(ctx, "file")("BUILD.bazel", "")',
                        'FIELD = "name"\ngetattr(ctx, FIELD)', 'getattr(ctx, UNKNOWN_FIELD)'):
