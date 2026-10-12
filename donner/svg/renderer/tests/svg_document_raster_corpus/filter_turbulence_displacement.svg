@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <filter id="f" filterUnits="userSpaceOnUse" x="0" y="0" width="64" height="64">
+    <feTurbulence type="fractalNoise" baseFrequency="0.05 0.1" numOctaves="3" seed="7"
+                  stitchTiles="stitch" result="noise"/>
+    <feDisplacementMap in="SourceGraphic" in2="noise" scale="8" xChannelSelector="R"
+                       yChannelSelector="A"/>
+  </filter>
+  <rect x="8" y="8" width="48" height="48" fill="purple" filter="url(#f)"/>
+</svg>

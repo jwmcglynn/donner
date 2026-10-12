@@ -244,8 +244,45 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
             self.assertIn("steps.test.outcome == 'failure'", body, step)
             self.assertIn("steps.browser_test.outcome == 'failure'", body, step)
         # Other jobs keep their own scheduling.
-        for job in ("macos-self-hosted", "linux", "linux-self-hosted"):
+        for job in ("linux", "linux-self-hosted"):
             self.assertNotIn("launches-browser", self._job_body(job), job)
+
+    def test_self_hosted_browser_tests_run_alone_after_the_suite(self):
+        job = self._job_body("macos-self-hosted")
+        main_test = self._step_body(job, "Test")
+        self.assertIn(
+            "--test_tag_filters=-manual,-perf,-ci-remote-gpu,-launches-browser ", main_test)
+        browser = self._step_body(job, "Test (browser targets)")
+        self.assertLess(job.index("      - name: Test\n"),
+                        job.index("      - name: Test (browser targets)\n"))
+        self.assertLess(job.index("      - name: Test (browser targets)\n"),
+                        job.index("      - name: Test (Geode editor lane)\n"))
+        self.assertIn("id: browser_test", browser)
+        self.assertIn(
+            "if: ${{ !cancelled() && (steps.test.outcome == 'success' || "
+            "steps.test.outcome == 'failure') }}", browser)
+        self.assertIn("--local_test_jobs=1", browser)
+        self.assertIn(
+            "--test_tag_filters=launches-browser,-manual,-perf,-ci-remote-gpu ", browser)
+        self.assertIn("bazelisk --nohome_rc test --config=ci", browser)
+        for phase in (main_test, browser):
+            self.assertIn("$BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS $TARGETS", phase)
+            self.assertNotIn("requires_metal_toolchain", phase)
+        archive = self._step_body(job, "Upload Bazel test failure artifacts")
+        self.assertIn("steps.browser_test.outcome == 'failure'", archive)
+
+    def test_geode_phase_runs_after_a_completed_native_phase_even_if_browser_fails(self):
+        for job_name in ("macos", "macos-self-hosted"):
+            with self.subTest(job=job_name):
+                job = self._job_body(job_name)
+                geode = self._step_body(job, "Test (Geode editor lane)")
+                self.assertIn(
+                    "if: ${{ !cancelled() && (steps.test.outcome == 'success' || "
+                    "steps.test.outcome == 'failure') }}", geode)
+                self.assertNotIn("steps.browser_test.outcome", geode)
+                self.assertLess(job.index("      - name: Test (browser targets)\n"),
+                                job.index("      - name: Test (Geode editor lane)\n"))
+                self.assertIn("$GEODE_EDITOR_TARGETS", geode)
 
     def test_every_test_that_launches_a_browser_is_tagged(self):
         # The hosted browser phase selects by tag, so an untagged browser test would
