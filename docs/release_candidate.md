@@ -58,3 +58,10 @@ Keep the exact canonical record and digest with its retained artifacts. The fina
 be assembled only after the versioned source, editor, docs, CI, fuzz, sanitizer, and review
 attempts are fixed. Publication workflows must be wired to select that record before it becomes
 the release authority.
+
+## Rollback
+
+A rollback never edits a record. Deployment results, the previous builds a rollback would
+reactivate, and the rollback itself are recorded in GitHub issues, as the rollback section of the
+[BCR release runbook](design_docs/0018-bcr_release.md) describes. A replacement release gets a new
+record. The schema has no slot for rollback artifacts.

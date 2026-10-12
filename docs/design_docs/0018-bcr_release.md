@@ -183,6 +183,180 @@ notice, and admission rejection paths; `//tools:bcr_dependency_closure_tests` co
    GitHub login and numeric ID. `.bcr/source.template.json` names the stable asset and strip prefix.
 4. Review `.bcr/presubmit.yml` when public targets or supported Bazel/platform versions change.
 
+## Roll back a published release
+
+A rollback withdraws a bad published version and reactivates earlier retained bytes. It never
+builds, repackages, deletes or replaces a published artifact, and it never edits a
+[release candidate record](../release_candidate.md); a replacement release gets its own new
+record. No workflow starts a rollback. Each action below is a separate, explicit maintainer
+decision.
+
+| Surface        | Rollback action                                             | Mechanism                                   |
+| -------------- | ----------------------------------------------------------- | ------------------------------------------- |
+| BCR version    | Supersede with a patch release, or yank with a reason       | Normal release, or a manual BCR metadata PR |
+| GitHub release | Add a notice to the notes; keep the tag and every asset     | `gh release edit --notes-file`              |
+| Docs site      | Redeploy the previous retained, marker-bearing Pages build  | `deploy_docs.yaml` dispatch                 |
+| Web editor     | Re-serve the previous retained editor package by its digest | Manual; no workflow in this repository      |
+
+### Decide and record
+
+The maintainer decides whether to roll back and approves each action separately: the BCR PR,
+the release-notes edit, the docs dispatch and any editor change. Approving one does not approve
+the others.
+
+Record the rollback in a new public GitHub issue titled `Roll back vX.Y.Z`. Include the
+withdrawn release's candidate record digest, the reason, each decision with its date, the BCR PR
+URL, the time the release notes were edited, the artifact IDs and digests that were reactivated,
+the docs deploy run and Pages deployment ID, and each compatibility check result. Link that issue
+from the release notice. The candidate record stays exactly as it was published.
+
+**Gap:** the candidate record has no slot for the previous docs build or editor package that a
+rollback would reactivate. Before publication, write their artifact IDs and digests in the release
+tracking issue.
+
+### BCR: supersede or yank
+
+The BCR is add-only: a published module version cannot be changed or replaced
+([BCR module versions](https://github.com/bazelbuild/bazel-central-registry/blob/main/docs/README.md#add-only)).
+There are two responses to a bad version.
+
+- **Supersede** (the default). Fix the problem on `main` and publish `X.Y.(Z+1)` through the full
+  release process, with a new candidate record and its own approvals. Consumers move by raising
+  their `bazel_dep` version. Use this for an ordinary bug.
+- **Yank.** Use this when the version must not be built at all: a security vulnerability, a
+  wrong or unverifiable source archive, or a defect that breaks every consumer. A yanked version
+  fails any build whose resolved graph contains it, and the error shows the reason. Consumers can
+  override with `--allow_yanked_versions` or `BZLMOD_ALLOW_YANKED_VERSIONS`
+  ([BCR: yank a module version](https://github.com/bazelbuild/bazel-central-registry/blob/main/docs/README.md#yank-a-module-version)).
+
+BCR does not allow the latest version to be yanked unless the module's `metadata.json` also sets
+`deprecated`; its validator fails otherwise (`tools/bcr_validation.py` in the BCR repository).
+For a first release such as v0.8.0, which is also the latest version, publish the replacement
+first and then yank. Setting `deprecated` instead marks the whole module as not for use.
+
+To yank:
+
+1. In a branch of the owned registry fork, edit only `modules/donner/metadata.json`. Add the
+   version to `yanked_versions` with a reason that links the rollback issue, for example
+   `"0.8.0": "Broken source archive; use 0.8.1. https://github.com/jwmcglynn/donner/issues/NNNN"`.
+   Change nothing else.
+2. In a local clone of the registry with that change, run
+   `bazel run -- //tools:bcr_validation --check=donner@X.Y.Z` for the latest version, as
+   described in
+   [BCR presubmit validations](https://github.com/bazelbuild/bazel-central-registry/blob/main/docs/README.md#validations).
+3. Inspect the exact diff and PR title and body. Obtain an explicit maintainer approval for that
+   filing, as for a release submission. Then open a normal PR to
+   `bazelbuild/bazel-central-registry`. A module maintainer listed in `metadata.json` approves it
+   through GitHub review
+   ([BCR approval and submission](https://github.com/bazelbuild/bazel-central-registry/blob/main/docs/README.md#approval-and-submission)).
+4. After it merges, confirm that `https://registry.bazel.build/modules/donner` shows the version
+   as yanked.
+
+What this repository's tooling checks:
+
+- **Gap:** no workflow or tool in this repository prepares or checks a yank PR. It is a manual
+  edit, checked by the BCR validator and upstream review.
+- On every later submission, `tools/bcr_release.py` requires the existing yanks to be carried
+  forward unchanged and the version being published not to be yanked (`verify_yanked_metadata`,
+  `verify_metadata_history`). `//tools:bcr_release_tests` covers these rejections.
+- `tools/bcr_release.py` also requires every other metadata field to equal
+  `.bcr/metadata.template.json`. **Gap:** if upstream metadata gains `deprecated`, the next
+  `Prepare BCR submission` fails until the template carries the same field or upstream removes
+  it.
+- **Gap:** BCR's convention for a registry-only fix after merge is a `X.Y.Z.bcr.N` version.
+  `verify_generated_entry` accepts only `X.Y.Z`, so the repository tooling cannot prepare one.
+  Before the BCR PR merges, repair that PR instead (see the retry section above).
+
+Removing a version from the registry entirely goes through BCR's takedown request process in the
+same document. That is BCR's decision, not this repository's.
+
+### GitHub release
+
+Keep the release, its tag and every asset. `tools/release_artifact_publisher.py` only uploads
+assets and refuses to replace one with different bytes; nothing in this repository deletes or
+replaces a release asset. The BCR `source.json` for the version points to the release asset URL
+with its integrity hash, so deleting the archive would break every consumer still resolving that
+version, including those that allow yanked versions.
+
+1. Write the new notes: a notice at the top that states the problem, the date, whether the
+   version is yanked or superseded, and links to the replacement release and the rollback issue.
+   Keep the rest of the body, including the `Release-Candidate-Preflight:` line, unchanged.
+2. Run `gh release edit vX.Y.Z --notes-file notes.md`. `Release` runs only on the `published`
+   event (`.github/workflows/release.yml`), so editing the notes does not run it again.
+3. When a replacement is published, confirm that it, not the withdrawn release, is marked
+   Latest; use `gh release edit vX.Y.(Z+1) --latest` if needed. Do not move the tag or turn the
+   withdrawn release back into a draft.
+
+### Docs site and web editor
+
+**Docs site.** Follow the "Roll back" section of the
+[documentation promotion and rollback procedure](../release_checklists/docs_artifact_promotion.md).
+It redeploys the previous retained, marker-bearing Pages build by artifact ID through
+`deploy_docs.yaml`, without rebuilding, and checks the live `docs-build.json` marker.
+
+**Web editor.** **Gap:** no workflow in this repository deploys the editor, and editor hosting is
+outside the repository. `Editor WASM` retains a package named `donner-editor-wasm-geode-<commit>`
+with `SHA256SUMS`, `provenance.json`, the `site/` files and the `deploy/` files. It is retained
+for 30 days, shorter than the 90 days of the other release artifacts, so the editor rollback
+window ends 30 days after that build. To reactivate a previous package by hand:
+
+1. Read its digest with
+   `gh api repos/jwmcglynn/donner/actions/artifacts/ARTIFACT_ID --jq '.digest, .expired'` and
+   compare it with the value written in the release tracking issue.
+2. Download the ZIP with `gh api repos/jwmcglynn/donner/actions/artifacts/ARTIFACT_ID/zip`,
+   check that its SHA-256 equals that digest, extract it, and run `shasum -a 256 -c SHA256SUMS`.
+   Confirm that `provenance.json` names the expected `source_revision`, run and attempt.
+3. Whoever operates the editor host serves the `deploy/` files unchanged, with the same server
+   settings used for the current package.
+
+### Compatibility check
+
+The build being reactivated was reviewed when it was published. A rollback does not repeat that
+review; it runs only these checks. If any fails, stop: the rollback target is not usable, and the
+fix becomes a new release.
+
+- **Digest.** The artifact ID and digest match the recorded values, the artifact has not
+  expired, and the downloaded bytes match. `deploy_docs.yaml` enforces this for docs; for the
+  editor it is the manual check above. A BCR yank changes no bytes; confirm that the integrity in
+  the version's `source.json` still matches the release asset digest.
+- **Configuration.** The reactivated build uses the configuration it was reviewed with. For
+  docs, it is a successful `main` push build with a matching `docs-build.json` marker. For the
+  editor, `provenance.json` gives `bazel_configs` `["editor-wasm"]`, `renderer` `geode` and
+  `transport_encoding` `gzip`, and the host settings have not changed since. For a BCR
+  supersede, the replacement keeps the same `compatibility_level` unless that change was
+  reviewed.
+- **Health.** For docs, the deploy job checks the live marker; also open the landing page and key
+  links. For the editor, load the page and confirm that `editor.wasm` starts and opens a sample.
+  For BCR, check the registry page, then build `examples/bazel_consumer` from the replacement
+  tag against the public registry.
+
+## Rehearsal
+
+Rehearse publication and rollback without touching the public release, its tag, the live docs
+site or the upstream registry.
+
+- **Fixture tests.** Run
+  `bazel test //tools:bcr_release_tests //tools:release_artifact_publisher_tests //tools:pages_artifact_tests //tools:release_candidate_tests`.
+  They cover preflight selection, submission planning, preservation of existing yanks, write-once
+  asset publication with conflicts and lost responses, Pages artifact selection and candidate
+  record verification. They use mocked GitHub responses and publish nothing.
+- **Yank PR.** In a local clone of the registry, add a test entry to
+  `modules/donner/metadata.json` and run the BCR validator as in step 2 of the yank procedure.
+  Do not push the branch.
+- **Docs.** The read-only selection rehearsal is recorded in the
+  [documentation procedure](../release_checklists/docs_artifact_promotion.md). A live promotion
+  and rollback changes the public site and needs its own maintainer approval.
+- **Fork.** **Gap:** `tools/bcr_release.py`, `tools/pages_artifact.py` and
+  `tools/release_candidate.py` name `jwmcglynn/donner`, `Release` verifies attestations against
+  it, and `Prepare BCR submission` runs only in that repository. A fork cannot run the
+  publication workflows end to end without changes.
+
+Record each rehearsal here.
+
+| Date | Source commit | What was rehearsed | Result | Notes |
+| ---- | ------------- | ------------------ | ------ | ----- |
+| none | none          | not yet rehearsed  | none   | none  |
+
 ## Common failures and fixes
 
 | Symptom                            | Meaning and response                                                                                                                                         |
@@ -229,3 +403,5 @@ Things that are deliberately out of scope for the first few BCR releases but may
 - `docs/design_docs/0011-v0_5_release.md` — v0.5 release scope
 - `third_party/bazel/non_bcr_deps.bzl` — the dev-only extension that hides non-BCR deps
 - `docs/release_checklists/release_checklist.md` — generic release checklist (pairs with this BCR-specific runbook)
+- `docs/release_candidate.md` - the immutable release candidate record
+- `docs/release_checklists/docs_artifact_promotion.md` - documentation promotion and rollback
