@@ -224,6 +224,16 @@ void PublishHostFrameTiming(double endFrameMs, double imguiRenderMs, double surf
 /// Tell the page the first frame reached the canvas, so the loader can hide.
 void NotifyFirstFramePresented(int headlessDeviceCreations);
 
+/**
+ * Record which document frame a fully presented canvas frame carried, against the last published
+ * render result: the result is marked presented once a frame carries its document generation and
+ * frame version, and every frame presented before that is counted as one that left it out.
+ *
+ * @param documentGeneration Document generation of the presented frame.
+ * @param frameVersion Frame version of the presented frame.
+ */
+void PublishPresentedDocumentFrame(std::uint64_t documentGeneration, std::uint64_t frameVersion);
+
 /// Mirror one scroll event onto `window.__donnerLastScrollEvent` for the
 /// browser suites.
 void RecordScrollDebug(bool zoomModifierHeld, double xoffset, double yoffset, bool physicalKeyHeld);

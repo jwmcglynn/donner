@@ -1064,7 +1064,7 @@ void PublishRasterWorkPhase(RasterWorkPhase phase) {
     window['__donnerRasterWorkState'] = state;
     const history = window['__donnerRasterWorkPhases'] || (window['__donnerRasterWorkPhases'] = []);
     history.push(state);
-    if (history.length > 32) history.shift();
+    if (history.length > 256) history.shift();
   }, static_cast<int>(phase));
   // clang-format on
 #else
