@@ -82,7 +82,10 @@ class PrivateAddressTests(unittest.TestCase):
 
     def test_build_named_endpoints_do_not_receive_version_exemptions(self):
         address = ipv4(10, 1, 2, 3)
-        for prefix in ["remote_build=", "rebuild: ", "prefixbuild" + " " * 10 + "="]:
+        for prefix in [
+            "remote_build=", "rebuild: ", "remote-build=", "--remote-build=",
+            "remote.build=", "prefixbuild" + " " * 10 + "=",
+        ]:
             with self.subTest(prefix=prefix):
                 self.assertEqual(kinds(prefix + address), [checker.KIND_PRIVATE_ADDRESS])
 

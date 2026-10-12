@@ -120,7 +120,7 @@ IPV6_ULA_RE = re.compile(
     re.IGNORECASE,
 )
 # A dotted number right after a version keyword is a version, not an address.
-VERSION_CONTEXT_RE = re.compile(r"\b(?:version|ver|sdk|build)\s*[:=]?\s*[\"']?$", re.IGNORECASE)
+VERSION_CONTEXT_RE = re.compile(r"(?<![\w.-])(?:version|ver|sdk|build)\s*[:=]?\s*[\"']?$", re.IGNORECASE)
 _LABEL = r"[a-z0-9](?:[a-z0-9-]*[a-z0-9])?"
 PRIVATE_SUFFIX_RE = re.compile(
     r"(?<![\w.-])" + _LABEL + r"(?:\." + _LABEL + r")*\.(?:lan|local|internal|home\.arpa)"
