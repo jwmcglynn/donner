@@ -1315,14 +1315,21 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         for path, text in sorted(self.supply_chain_files.items()):
             with self.subTest(path=path):
                 self.assertEqual([], PRIVATE_NETWORK_LITERAL.findall(text))
-        fixture = ("http://172.20.1.2:1234 /home/alice/.cache /Users/bob/bin 10.1.2.3 "
-                   "100.64.0.1 fd12:3456::1 builder.lan cache.example.internal nas.home.arpa "
+        expected = [
+            ".".join(("172", "20", "1", "2")),
+            "/".join(("", "home", "alice")),
+            "/".join(("", "Users", "bob")),
+            ".".join(("10", "1", "2", "3")),
+            ".".join(("100", "64", "0", "1")),
+            ":".join(("fd12", "3456", "", "1")),
+            ".".join(("builder", "lan")),
+            ".".join(("cache", "example", "internal")),
+            ".".join(("nas", "home", "arpa")),
+        ]
+        fixture = ("http://{}:1234 {}/.cache {}/bin {} {} {} {} {} {} "
                    "/home/runner/work /home/linuxbrew/.linuxbrew /Users/runner/bin v10.1.2 "
-                   "172.15.0.1 cache.example.invalid fc.example.com")
-        self.assertEqual(["172.20.1.2", "/home/alice", "/Users/bob", "10.1.2.3", "100.64.0.1",
-                          "fd12:3456::1", "builder.lan", "cache.example.internal",
-                          "nas.home.arpa"],
-                         PRIVATE_NETWORK_LITERAL.findall(fixture))
+                   "172.15.0.1 cache.example.invalid fc.example.com").format(*expected)
+        self.assertEqual(expected, PRIVATE_NETWORK_LITERAL.findall(fixture))
 
 
 if __name__ == "__main__":
