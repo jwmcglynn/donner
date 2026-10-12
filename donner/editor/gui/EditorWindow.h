@@ -681,9 +681,15 @@ struct EditorWindowOptions {
   /// can cover the offscreen target creation, resize, and readback path on both
   /// the Linux and macOS lanes. No effect in non-WebGPU (OpenGL) builds.
   bool forceOffscreenRenderTarget = false;
-  /// Content/display scale to emulate for hidden replay windows. Replay sets
-  /// this to the recorded scale so framebuffer readback reproduces the pixel
-  /// geometry of captures taken on a HiDPI machine.
+  /// Content/display scale an `offscreen` window emulates. Replay sets this to
+  /// the recorded scale so framebuffer readback reproduces the pixel geometry
+  /// of captures taken on a HiDPI machine, and editor tests set it so they
+  /// render at a chosen scale on every host. The emulated scale wins over the
+  /// host display's own scale, including 1.0 on a HiDPI display: the
+  /// framebuffer, the UI scale, \ref
+  /// donner::editor::gui::EditorWindow::windowSize "windowSize", and \ref
+  /// donner::editor::gui::EditorWindow::contentScale "contentScale" all follow
+  /// it. Ignored when `offscreen` is false.
   double offscreenContentScale = 1.0;
   /// Background clear color (RGBA, 0..1). Matches the viewport surround
   /// when the document doesn't fill the whole window.
@@ -944,7 +950,8 @@ public:
   /// Update the native window title.
   void setTitle(std::string_view title);
 
-  /// Logical window size in screen coordinates.
+  /// Logical window size in screen coordinates. An `offscreen` window returns the logical size of
+  /// the scale it emulates, which is the size the UI is laid out in.
   [[nodiscard]] Vector2i windowSize() const;
 
   /// Physical framebuffer size in pixels. Equals \ref windowSize scaled by the
@@ -953,7 +960,8 @@ public:
   /// when the window failed to initialize.
   [[nodiscard]] Vector2i framebufferSize() const;
 
-  /// Backing display content scale (for example 2.0 on a Retina display).
+  /// Backing display content scale (for example 2.0 on a Retina display). An
+  /// `offscreen` window returns the scale it emulates instead.
   [[nodiscard]] Vector2d contentScale() const;
 
   /// Effective UI display scale used for ImGui fonts and framebuffer coordinates.
@@ -1204,9 +1212,11 @@ private:
   EditorWindowFonts editorFonts_;
   double lastBeginFrameMs_ = 0.0;
   EditorWindowFrameTiming lastEndFrameTiming_;
-  /// When > 0, the content scale to force into ImGui's `DisplayFramebufferScale`
-  /// every frame because the windowless null platform reports no HiDPI scale of
-  /// its own (and `ImGui_ImplGlfw_NewFrame` would otherwise reset it to 1).
+  /// When > 0, the content scale an offscreen window emulates. It is forced
+  /// into ImGui's `DisplayFramebufferScale` every frame because the windowless
+  /// null platform reports no HiDPI scale of its own, and a native window may
+  /// sit on a display with a different one (`ImGui_ImplGlfw_NewFrame` would
+  /// otherwise reset it to the host ratio).
   double frameDisplayScaleOverride_ = 0.0;
   bool valid_ = false;
   bool glUnavailable_ = false;
