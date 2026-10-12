@@ -8,7 +8,7 @@ moved, so new git fetches are rejected. The commit-pinned git fetches that preda
 listed in LEGACY_GIT_COMMIT_PINS until each moves to a release tag fetched as an archive with its
 hash. That list may only shrink: each entry's digest must be in REVIEWED_LEGACY_PIN_DIGESTS, a
 listed fetch may not change its remote or commit or share its name with a second fetch, and a
-listed fetch that no longer exists fails the test until its entry is deleted.
+listed fetch that no longer exists fails until its entry and approval digest are deleted.
 
 The check fails closed where it could otherwise be bypassed: a load or use_repo_rule of Bazel's
 http.bzl or git.bzl must bind each rule under its own name, MODULE.bazel may not include() other
@@ -27,7 +27,9 @@ import unittest
 from python.runfiles import runfiles
 
 
-HTTP_FETCH_RULES = frozenset({"archive_override", "http_archive", "http_file", "http_jar"})
+NATIVE_DOWNLOAD_APIS = frozenset({"download", "download_and_extract"})
+HTTP_FETCH_RULES = frozenset({"archive_override", "http_archive", "http_file", "http_jar"}) | \
+    NATIVE_DOWNLOAD_APIS
 GIT_FETCH_RULES = frozenset({"git_override", "git_repository", "new_git_repository"})
 HASH_PATTERNS = {
     "sha256": re.compile(r"[0-9a-f]{64}"),
@@ -38,7 +40,7 @@ FULL_COMMIT = re.compile(r"[0-9a-f]{40}")
 # Commit-pinned git fetches that predate this check: (declaring file, name) -> (remote, commit).
 # Each is an open #1423 finding: Donner pins release tags or versions, so move each one to a release
 # tag fetched as the tag archive or release asset with its integrity hash, then delete its entry
-# here. Removal is only a deletion from this list. Never add or change an entry.
+# here and its corresponding approval digest below. Never add or change an entry.
 LEGACY_GIT_COMMIT_PINS = {
     ("MODULE.bazel", "bloaty"): (
         "https://github.com/jwmcglynn/bloaty", "a655c418811ef5097e37a562ce62f925bda72d88"),
@@ -58,7 +60,7 @@ LEGACY_GIT_COMMIT_PINS = {
 
 # SHA-256 of "file|name|remote|commit" for each entry above as reviewed in #1423. An entry whose
 # digest is missing here was added or changed after the review, which this test rejects. Leave
-# this set alone when deleting an entry above.
+# this set paired with the active entries: delete its digest when retiring a pin.
 REVIEWED_LEGACY_PIN_DIGESTS = frozenset({
     "00f2be3717e043f6027cbc15859850cb9a18778482660fab2f90521c6f87bba5",
     "50aec4cd196a494b72acc67da399119ef2ca77444c7799b6cff38acdbc83532f",
@@ -99,11 +101,18 @@ def _keyword(call, name):
     return None
 
 
+def _call_name(call):
+    if isinstance(call.func, ast.Name):
+        return call.func.id
+    if isinstance(call.func, ast.Attribute) and call.func.attr in NATIVE_DOWNLOAD_APIS:
+        return call.func.attr
+    return None
+
+
 def _calls(tree, functions):
     for node in ast.walk(tree):
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
-            if node.func.id in functions:
-                yield node
+        if isinstance(node, ast.Call) and _call_name(node) in functions:
+            yield node
 
 
 def _resolve_label(label, package):
@@ -207,6 +216,12 @@ def _hash_problem(name, values):
 
 def _http_problems(call, bindings):
     hashes = {name: _keyword(call, name) for name in HASH_PATTERNS}
+    native = _call_name(call) in NATIVE_DOWNLOAD_APIS
+    if native and hashes["sha256"] is None and len(call.args) > 2:
+        hashes["sha256"] = call.args[2]
+    # Both native APIs put sha256 third; an empty default can accompany a supplied integrity.
+    if native and _literal(hashes["sha256"]) == "" and hashes["integrity"] is not None:
+        hashes["sha256"] = None
     present = {name: expression for name, expression in hashes.items() if expression is not None}
     if not present:
         return ["has no sha256 or integrity"]
@@ -223,10 +238,16 @@ def legacy_pin_digest(key, value):
     return sha256("|".join(key + value).encode("utf-8")).hexdigest()
 
 
-def legacy_list_problems(pins):
-    """Entries that were added or changed after the review, so the list can only shrink."""
-    return ["%s:%s is not a reviewed legacy pin" % key for key, value in sorted(pins.items())
-            if legacy_pin_digest(key, value) not in REVIEWED_LEGACY_PIN_DIGESTS]
+def legacy_list_problems(pins, reviewed_digests=None):
+    """Keep active pins and approvals paired, so retired pins cannot be restored unchanged."""
+    reviewed = REVIEWED_LEGACY_PIN_DIGESTS if reviewed_digests is None else reviewed_digests
+    active = {legacy_pin_digest(key, value) for key, value in pins.items()}
+    problems = ["%s:%s is not a reviewed legacy pin" % key
+                for key, value in sorted(pins.items()) if legacy_pin_digest(key, value) not in reviewed]
+    if problems:
+        return problems
+    return ["retired legacy approval has no active entry; delete its digest: %s" % digest
+            for digest in sorted(reviewed - active)]
 
 
 def missing_legacy_fetches(pins, fetched):
@@ -270,6 +291,10 @@ def binding_problems(path, tree):
         if isinstance(node, ast.Assign) and isinstance(node.value, ast.Call) and \
                 isinstance(node.value.func, ast.Name) and node.value.func.id == "use_repo_rule":
             problems.extend(_repo_rule_problems(path, node))
+    direct_calls = {id(node.func) for node in ast.walk(tree) if isinstance(node, ast.Call)}
+    problems.extend("%s:%d: native %s must be called directly" % (path, node.lineno, node.attr)
+                    for node in ast.walk(tree) if isinstance(node, ast.Attribute)
+                    and node.attr in NATIVE_DOWNLOAD_APIS and id(node) not in direct_calls)
     return problems
 
 
@@ -302,12 +327,12 @@ def fetch_findings(trees, pins=None):
     for path, tree in sorted(trees.items()):
         bindings = _Bindings(tree)
         for call in _calls(tree, HTTP_FETCH_RULES | GIT_FETCH_RULES):
-            if call.func.id in HTTP_FETCH_RULES:
+            if _call_name(call) in HTTP_FETCH_RULES:
                 found = _http_problems(call, bindings)
             else:
                 found = _git_problems(call, path, pins)
                 git_fetches.append((path, _git_name(call)))
-            problems.extend("%s:%d: %s %s" % (path, call.lineno, call.func.id, problem)
+            problems.extend("%s:%d: %s %s" % (path, call.lineno, _call_name(call), problem)
                             for problem in found)
         problems.extend(_integrity_map_problems(path, tree))
         problems.extend(binding_problems(path, tree))
@@ -437,7 +462,10 @@ class CheckerTest(unittest.TestCase):
         self.assertEqual(len(legacy_list_problems(changed)), 1)
         shrunk = dict(LEGACY_GIT_COMMIT_PINS)
         del shrunk[("MODULE.bazel", "imgui")]
-        self.assertEqual(legacy_list_problems(shrunk), [])
+        retired_digest = legacy_pin_digest(("MODULE.bazel", "imgui"),
+                                           LEGACY_GIT_COMMIT_PINS[("MODULE.bazel", "imgui")])
+        self.assertEqual(legacy_list_problems(
+            shrunk, REVIEWED_LEGACY_PIN_DIGESTS - {retired_digest}), [])
 
     def test_fetch_rules_must_keep_their_canonical_names(self):
         canonical = ('http_file = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", '
@@ -507,6 +535,27 @@ class CheckerTest(unittest.TestCase):
         retired = dict(LEGACY_GIT_COMMIT_PINS)
         del retired[(self._NON_BCR, "woff2")]
         self.assertEqual(len(legacy_list_problems(retired)), 1)
+
+
+    def test_retirement_rejects_restoring_the_original_pin(self):
+        key = (self._NON_BCR, "woff2")
+        retired = dict(LEGACY_GIT_COMMIT_PINS)
+        value = retired.pop(key)
+        remaining_approvals = REVIEWED_LEGACY_PIN_DIGESTS - {legacy_pin_digest(key, value)}
+        self.assertEqual(legacy_list_problems(retired, remaining_approvals), [])
+        retired[key] = value
+        self.assertEqual(len(legacy_list_problems(retired, remaining_approvals)), 1)
+
+    def test_native_integrity_supports_the_empty_positional_sha_default(self):
+        for method in NATIVE_DOWNLOAD_APIS:
+            source = 'ctx.%s("https://example.invalid/archive", "out", "", ' \
+                     'integrity = "sha256-AAAA")' % method
+            self.assertEqual(self._findings(source), [])
+
+    def test_native_download_aliases_cannot_hide_a_fetch(self):
+        for method in NATIVE_DOWNLOAD_APIS:
+            source = 'fetch = ctx.%s\nfetch("https://example.invalid/archive")' % method
+            self.assertEqual(len(self._findings(source)), 1)
 
 
 class RepositoryPolicyTest(unittest.TestCase):
