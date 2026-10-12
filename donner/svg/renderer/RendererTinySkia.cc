@@ -225,6 +225,27 @@ bool HasOpenDashSeam(const std::optional<tiny_skia::StrokeDash>& dash,
 }
 
 #ifdef DONNER_TEXT_ENABLED
+/// Map decoded bitmap texels through their bearing and scale, then rotate about the glyph origin.
+Transform2d ComputeDeviceFromBitmapGlyph(const TextGlyph& glyph,
+                                         const TextBackend::BitmapGlyph& bitmap,
+                                         const Transform2d& deviceFromLocal) {
+  const double targetX = glyph.xPosition + bitmap.bearingX;
+  const double targetY = glyph.yPosition - bitmap.bearingY;
+  const double targetW = static_cast<double>(bitmap.width) * bitmap.scale * glyph.stretchScaleX;
+  const double targetH = static_cast<double>(bitmap.height) * bitmap.scale * glyph.stretchScaleY;
+  const double imgScaleX = targetW / static_cast<double>(bitmap.width);
+  const double imgScaleY = targetH / static_cast<double>(bitmap.height);
+  Transform2d localFromBitmap =
+      Transform2d::Scale(imgScaleX, imgScaleY) * Transform2d::Translate(Vector2d(targetX, targetY));
+  if (glyph.rotateDegrees != 0.0) {
+    localFromBitmap =
+        localFromBitmap * Transform2d::Translate(-glyph.xPosition, -glyph.yPosition) *
+        Transform2d::Rotate(glyph.rotateDegrees * MathConstants<double>::kPi / 180.0) *
+        Transform2d::Translate(glyph.xPosition, glyph.yPosition);
+  }
+  return localFromBitmap * deviceFromLocal;
+}
+
 bool CanRenderTextRun(bool isBitmapFont, float scale) {
   return isBitmapFont || scale != 0.0f;
 }
@@ -2984,22 +3005,8 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
             continue;
           }
 
-          // Compute target rect in document space: position with bearing, scaled size.
-          const double targetX = glyph.xPosition + bitmap->bearingX;
-          const double targetY = glyph.yPosition - bitmap->bearingY;
-          const double targetW =
-              static_cast<double>(bitmap->width) * bitmap->scale * glyph.stretchScaleX;
-          const double targetH =
-              static_cast<double>(bitmap->height) * bitmap->scale * glyph.stretchScaleY;
-
-          // Use the same transform pattern as drawImage: Scale * Translate *
-          // deviceFromLocalTransform_.
-          const double imgScaleX = targetW / static_cast<double>(bitmap->width);
-          const double imgScaleY = targetH / static_cast<double>(bitmap->height);
-          const Transform2d imageFromLocal = Transform2d::Scale(imgScaleX, imgScaleY) *
-                                             Transform2d::Translate(Vector2d(targetX, targetY)) *
-                                             deviceFromLocalTransform_;
-
+          const Transform2d deviceFromBitmap =
+              ComputeDeviceFromBitmapGlyph(glyph, *bitmap, deviceFromLocalTransform_);
           tiny_skia::PixmapPaint paint =
               makePixmapPaint(currentPixmap(), tiny_skia::FilterQuality::Bilinear);
           paint.opacity = NarrowToFloat(spanOpacity);
@@ -3008,7 +3015,7 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
           const tiny_skia::Mask* mask = currentClipMask_.has_value() ? &*currentClipMask_ : nullptr;
           auto pixmapView = currentPixmapView();
           tiny_skia::Painter::drawPixmap(pixmapView, 0, 0, maybePixmap->view(), paint,
-                                         toTinyTransform(imageFromLocal), mask);
+                                         toTinyTransform(deviceFromBitmap), mask);
           continue;
         }
       }
