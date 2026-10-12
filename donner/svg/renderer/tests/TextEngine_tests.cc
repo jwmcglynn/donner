@@ -1145,6 +1145,8 @@ TEST(TextEngineTest, CombiningMarkAfterSpaceAppliesWordSpacingOnce) {
     text.spans[0].wordSpacingPx = 11.0;
     const auto spaced = engine.layout(text, params);
     ASSERT_THAT(spaced, ElementsAre(RunGlyphsAre(SizeIs(4))));
+    EXPECT_THAT(spaced[0].glyphs[2],
+                GlyphXPositionIs(DoubleNear(ordinary[0].glyphs[2].xPosition, 1e-6)));
     EXPECT_THAT(spaced[0].glyphs.back(),
                 GlyphXPositionIs(DoubleNear(ordinary[0].glyphs.back().xPosition + 11.0, 1e-6)));
     EXPECT_THAT(spaced[0].glyphs[2],
