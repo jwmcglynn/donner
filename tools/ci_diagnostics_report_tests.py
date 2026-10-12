@@ -51,6 +51,15 @@ class CiDiagnosticsReportTests(unittest.TestCase):
         self.assertNotIn("test-only-token", output.getvalue())
         self.assertIn("omitted", output.getvalue())
 
+    def test_raw_console_tails_require_an_explicit_local_option(self) -> None:
+        self._write("build/bep.json", json.dumps({"id": {"started": {}}}) + "\n")
+        self._write("build/console.log", "local-debug-sentinel\n")
+        output = io.StringIO()
+        with mock.patch.object(sys, "argv", ["ci_diagnostics_report.py", self._tmpdir.name,
+                                           "--include-console-tails"]), redirect_stdout(output):
+            self.assertEqual(ci_diagnostics_report.main(), 0)
+        self.assertIn("local-debug-sentinel", output.getvalue())
+
     def _write(self, relative_path: str, contents: str) -> str:
         path = Path(self._tmpdir.name) / relative_path
         path.parent.mkdir(parents=True, exist_ok=True)

@@ -262,7 +262,7 @@ def _expressions(text):
 
 def _canonical_context(expression):
     """Give literal index and property access the same spelling for policy checks."""
-    indexed = re.sub(r"\s*\[\s*(['\"])([A-Za-z0-9_.*-]+)\1\s*\]",
+    indexed = re.sub(r"\s*\[\s*(['\"])([A-Za-z_][A-Za-z0-9_]*)\1\s*\]",
                      r".\2", expression)
     return re.sub(r"\s*\.\s*", ".", indexed)
 
@@ -1372,6 +1372,13 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
             with self.subTest(safe=reference):
                 self.assertEqual([], _untrusted_script_contexts(
                     "      - run: echo ${{ " + reference + " }}\n"))
+
+
+
+    def test_public_diagnostics_do_not_enable_raw_console_tails(self):
+        summary = _step_body(self.supply_chain_files[".github/workflows/main.yml"],
+                             "Summarize diagnostics")
+        self.assertNotIn("--include-console-tails", summary)
 
 
 if __name__ == "__main__":
