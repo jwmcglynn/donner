@@ -5722,6 +5722,11 @@ TEST_F(TextEditorTests, CustomTwoKeyShortcutRequiresBothKeys) {
   ResetKeyboardState({ImGuiKey_F7, ImGuiKey_F8});
   RenderEditorFrameWithKeyboard({ImGuiKey_F7});
   EXPECT_EQ(editor.getCursorPosition(), Coordinates(1, 1));
+  EXPECT_EQ(editor.getText(), "one\ntwo\nthree");
+  ResetKeyboardState({ImGuiKey_F7, ImGuiKey_F8});
+  RenderEditorFrameWithKeyboard({ImGuiKey_F8});
+  EXPECT_EQ(editor.getCursorPosition(), Coordinates(1, 1));
+  EXPECT_EQ(editor.getText(), "one\ntwo\nthree");
   ResetKeyboardState({ImGuiKey_F7, ImGuiKey_F8});
   RenderEditorFrameWithKeyboard({ImGuiKey_F7, ImGuiKey_F8});
   EXPECT_EQ(editor.getCursorPosition(), Coordinates(0, 1));
