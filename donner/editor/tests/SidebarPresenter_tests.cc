@@ -2728,9 +2728,10 @@ TEST_F(SidebarPresenterImGuiTest, WidthSpriteProviderMapsOnlyItsValidTextureArea
   ASSERT_NO_FATAL_FAILURE(LoadAndSelectTarget(app, presenter, kInspectorSvg));
   constexpr ImTextureID kTexture = static_cast<ImTextureID>(0x5678);
   std::size_t spriteCalls = 0;
-  const SidebarPresenter::IconTextureProvider provider = [&](std::uint64_t,
+  const SidebarPresenter::IconTextureProvider provider = [&](std::uint64_t key,
                                                              const svg::RendererBitmap& bitmap) {
-    if (bitmap.dimensions == Vector2i(256, 256)) {
+    if (key == StrokeWidthPresetTextureKey()) {
+      EXPECT_EQ(bitmap.dimensions, Vector2i(256, 256));
       ++spriteCalls;
       return SidebarPresenter::IconTexture{kTexture, Vector2d(0.5, 0.75)};
     }
@@ -2762,6 +2763,46 @@ TEST_F(SidebarPresenterImGuiTest, WidthSpriteProviderMapsOnlyItsValidTextureArea
   EXPECT_FLOAT_EQ(maximumV, 0.75f);
   EXPECT_EQ(app.document().queue().size(), 0u);
   EXPECT_FALSE(app.canUndo());
+}
+
+TEST_F(SidebarPresenterImGuiTest, AuthoredRareJoinsKeepTheCompatibilityNoticeUntilChanged) {
+  for (const auto& [join, notice] : std::array<std::pair<std::string_view, std::string_view>, 2>{
+           {{"miter-clip", "Miter clip*"}, {"arcs", "Arcs*"}}}) {
+    SCOPED_TRACE(join);
+    const std::string source =
+        "<svg xmlns=\"http://www.w3.org/2000/svg\"><path id=\"target\" d=\"M0 0L30 0L30 30\" "
+        "stroke=\"black\" stroke-linejoin=\"" +
+        std::string(join) + "\"/></svg>";
+    EditorApp app;
+    SidebarPresenter presenter;
+    ASSERT_NO_FATAL_FAILURE(LoadAndSelectTarget(app, presenter, source));
+    constexpr char kWindow[] = "##authored_join_notice";
+    constexpr float kHeight = 900.0f;
+    InspectorFrameCapture capture;
+    EXPECT_FALSE(RenderInspectorFrame(presenter, &app, kWindow, ImVec2(-1, -1), false, kHeight, {},
+                                      &capture));
+    EXPECT_THAT(capture.text, HasSubstr(std::string(notice)));
+    EXPECT_EQ(app.document().document().source(), source);
+    EXPECT_FALSE(app.canUndo());
+    EXPECT_TRUE(presenter.strokeMiterLimitVisibleForTesting());
+    const auto round = presenter.strokeJoinRectForTesting(2);
+    ASSERT_TRUE(round.has_value());
+    RenderInspectorFrame(presenter, &app, kWindow, RectCenter(*round), false, kHeight);
+    RenderInspectorFrame(presenter, &app, kWindow, RectCenter(*round), true, kHeight);
+    EXPECT_TRUE(RenderInspectorFrame(presenter, &app, kWindow, RectCenter(*round), false, kHeight));
+    ASSERT_TRUE(app.flushFrame());
+    presenter.refreshSnapshot(app);
+    RenderInspectorFrame(presenter, &app, kWindow, ImVec2(-1, -1), false, kHeight, {}, &capture);
+    ASSERT_THAT(capture.text, HasSubstr("STROKE"));
+    EXPECT_THAT(capture.text, Not(HasSubstr(std::string(notice))));
+    EXPECT_FALSE(presenter.strokeMiterLimitVisibleForTesting());
+    EXPECT_EQ(app.document().document().querySelector("#target")->getAttribute("style"),
+              "stroke-linejoin: round");
+    EXPECT_EQ(app.undoTimeline().entryCount(), 1u);
+    app.undo();
+    app.flushFrame();
+    EXPECT_EQ(app.document().document().source(), source);
+  }
 }
 
 }  // namespace
