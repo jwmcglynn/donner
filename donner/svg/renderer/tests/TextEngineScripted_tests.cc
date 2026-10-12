@@ -2,6 +2,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <iterator>
 #include <memory>
@@ -2048,6 +2049,78 @@ TEST(TextEngineScriptedTest, GeometryCacheFallsBackToBitmapGlyphExtents) {
   EXPECT_EQ(engine.getEndPositionOfChar(rootHandle, 9), Vector2d());
   EXPECT_EQ(engine.getExtentOfChar(rootHandle, 9), Box2d());
   EXPECT_DOUBLE_EQ(engine.getRotationOfChar(rootHandle, 9), 0.0);
+}
+
+TEST(TextEngineScriptedTest, BitmapGeometryRotatesAboutItsNonzeroGlyphOrigin) {
+  struct Case {
+    double rotation;
+    Box2d expected;
+    Vector2d inside;
+    Vector2d outside;
+  };
+  const std::array<Case, 3> cases = {{
+      {90.0, Box2d::FromXYWH(10.0, 21.0, 2.0, 2.0), {11.0, 22.0}, {12.0, 19.0}},
+      {-90.0, Box2d::FromXYWH(8.0, 17.0, 2.0, 2.0), {9.0, 18.0}, {12.0, 19.0}},
+      {30.0,
+       Box2d({10.866025403784439, 18.767949192431123}, {13.598076211353316, 21.5}),
+       {12.0, 20.5},
+       {13.5, 18.0}},
+  }};
+  for (const auto& test : cases) {
+    SCOPED_TRACE(test.rotation);
+    Registry registry;
+    FontManager manager(registry);
+    auto backend = std::make_unique<BitmapOutlineBackend>();
+    const auto* observedBackend = backend.get();
+    TextEngine engine(manager, registry, std::move(backend));
+    auto span = MakeSpan("A");
+    span.xList = {Lengthd(10.0, Lengthd::Unit::None)};
+    span.yList = {Lengthd(20.0, Lengthd::Unit::None)};
+    span.rotateList = {test.rotation};
+    const Entity root = MakeTextRootWithSpan(registry, "A", std::move(span));
+    const EntityHandle handle(registry, root);
+    EXPECT_THAT(engine.getStartPositionOfChar(handle, 0), testing::Eq(Vector2d(10.0, 20.0)));
+    const auto boundsMatch = [&test](const Box2d& box) {
+      EXPECT_NEAR(box.topLeft.x, test.expected.topLeft.x, 1e-9);
+      EXPECT_NEAR(box.topLeft.y, test.expected.topLeft.y, 1e-9);
+      EXPECT_NEAR(box.bottomRight.x, test.expected.bottomRight.x, 1e-9);
+      EXPECT_NEAR(box.bottomRight.y, test.expected.bottomRight.y, 1e-9);
+    };
+    boundsMatch(engine.getExtentOfChar(handle, 0));
+    boundsMatch(engine.computedInkBounds(handle));
+    EXPECT_EQ(engine.getCharNumAtPosition(handle, test.inside), 0);
+    EXPECT_EQ(engine.getCharNumAtPosition(handle, test.outside), -1);
+    EXPECT_EQ(observedBackend->bitmapDecodeCalls, 0u);
+  }
+}
+
+TEST(TextEngineScriptedTest, BitmapGeometryStretchesBeforeObliqueRotation) {
+  Registry registry;
+  FontManager manager(registry);
+  auto backend = std::make_unique<BitmapOutlineBackend>();
+  const auto* observedBackend = backend.get();
+  TextEngine engine(manager, registry, std::move(backend));
+  auto span = MakeSpan("A");
+  span.xList = {Lengthd(10.0, Lengthd::Unit::None)};
+  span.yList = {Lengthd(20.0, Lengthd::Unit::None)};
+  span.rotateList = {30.0};
+  const Entity root = MakeTextRootWithSpan(registry, "A", std::move(span));
+  auto& component = registry.get<components::TextComponent>(root);
+  component.textLength = Lengthd(20.0, Lengthd::Unit::None);
+  component.lengthAdjust = LengthAdjust::SpacingAndGlyphs;
+  const EntityHandle handle(registry, root);
+  const auto& geometry = engine.ensureComputedTextGeometryComponent(handle);
+  ASSERT_THAT(geometry.runs, SizeIs(1));
+  ASSERT_THAT(geometry.runs[0].glyphs, SizeIs(1));
+  EXPECT_THAT(geometry.runs[0].glyphs[0].stretchScaleX, testing::FloatEq(2.0f));
+  for (const Box2d bounds : {engine.getExtentOfChar(handle, 0), engine.computedInkBounds(handle)}) {
+    EXPECT_NEAR(bounds.topLeft.x, 10.866025403784439, 1e-9);
+    EXPECT_NEAR(bounds.topLeft.y, 18.767949192431123, 1e-9);
+    EXPECT_NEAR(bounds.bottomRight.x, 15.330127018922193, 1e-9);
+    EXPECT_NEAR(bounds.bottomRight.y, 22.5, 1e-9);
+  }
+  EXPECT_EQ(engine.getCharNumAtPosition(handle, {15.0, 21.0}), 0);
+  EXPECT_EQ(observedBackend->bitmapDecodeCalls, 0u);
 }
 
 TEST(TextEngineScriptedTest, GeometryCacheTransformsQuadraticAndCubicOutlineSegments) {
