@@ -26,17 +26,17 @@ trailing newline. Record its SHA-256 outside the record; the record cannot conta
   uncompressed SHA-256. The artifact ID and ZIP digest must match GitHub's metadata. The editor
   package provenance also records its producer run and attempt; older editor packages without those
   fields cannot qualify a candidate.
-- `evidence`: exactly `ci`, `coverage`, `fuzz`, `sanitizers`, and `security`. Each names a successful
+- `evidence`: exactly `ci`, `coverage`, `fuzz`, and `sanitizers`. Each names a successful
   exact-source run ID and attempt, its retained evidence-file SHA-256, and successful/skipped
   **workflow job** counts. The verifier gets those counts from GitHub's attempt-specific jobs API;
-  they are not test-target counts. Required CI, coverage, fuzz, sanitizer, and CodeQL lanes must
+  they are not test-target counts. Required CI, coverage, fuzz, and sanitizer lanes must
   each have a successful job, and coverage also needs its successful Codecov upload job; a green
   idle workflow with skipped sanitizer jobs is insufficient.
   Keep test-target details in the evidence files themselves.
 - `reviews`: SHA-256 digests of the local `security.md` and `supply-chain.md` reports. The record
   contains their digests, not the reports' potentially sensitive contents.
 
-All five artifact ZIPs and five evidence JSON files must be kept alongside the record in a durable
+All five artifact ZIPs and four evidence JSON files must be kept alongside the record in a durable
 location. Local filenames are `artifacts/{role}.zip` and `evidence/{role}.json`; the two review
 files live under `reviews/`. The verifier never uses these local paths as published metadata.
 

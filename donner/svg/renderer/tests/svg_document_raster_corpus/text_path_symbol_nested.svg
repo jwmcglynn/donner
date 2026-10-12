@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <defs>
+    <path id="curve" d="M4 40 C20 10 44 10 60 40"/>
+    <symbol id="sym" viewBox="0 0 10 10" preserveAspectRatio="xMaxYMin meet"><rect width="10" height="5"/></symbol>
+  </defs>
+  <text font-size="8" letter-spacing="1"><textPath href="#curve" startOffset="10%">Donner fuzz</textPath></text>
+  <text x="2 6 10" y="60" dx="1" rotate="0 15 30" font-weight="bold">Az</text>
+  <use href="#sym" x="40" y="44" width="20" height="16"/>
+  <svg x="0" y="44" width="20" height="20" viewBox="0 0 2 2" overflow="visible">
+    <polygon points="0,0 2,0 1,2" fill="olive"/>
+  </svg>
+</svg>

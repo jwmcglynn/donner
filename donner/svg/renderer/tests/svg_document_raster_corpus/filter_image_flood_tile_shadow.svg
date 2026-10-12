@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 64 64">
+  <filter id="f" primitiveUnits="objectBoundingBox">
+    <feImage x="0" y="0" width="0.5" height="0.5" preserveAspectRatio="xMidYMid slice"
+             href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC"/>
+    <feTile result="tiles"/>
+    <feFlood flood-color="gold" flood-opacity="0.5" result="flood"/>
+    <feBlend in="tiles" in2="flood" mode="multiply"/>
+    <feDropShadow dx="0.05" dy="0.05" stdDeviation="0.02" flood-color="black"/>
+  </filter>
+  <filter id="g"><feImage xlink:href="#shape"/></filter>
+  <rect id="shape" x="4" y="4" width="24" height="24" fill="green" filter="url(#f)"/>
+  <rect x="36" y="36" width="24" height="24" filter="url(#g)"/>
+</svg>
