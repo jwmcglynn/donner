@@ -34,6 +34,31 @@ from python.runfiles import runfiles
 
 
 NATIVE_DOWNLOAD_APIS = frozenset({"download", "download_and_extract"})
+# Archive paths reviewed for the pinned Playwright browser manifest. Changes require a new review.
+REVIEWED_PLAYWRIGHT_ARCHIVES = frozenset({
+    'builds/chromium/1234/chromium-headless-shell-linux-arm64.zip',
+    'builds/chromium/1234/chromium-linux-arm64.zip',
+    'builds/firefox/1538/firefox-debian-12-arm64.zip',
+    'builds/firefox/1538/firefox-debian-12.zip',
+    'builds/firefox/1538/firefox-mac-arm64.zip',
+    'builds/firefox/1538/firefox-mac.zip',
+    'builds/firefox/1538/firefox-ubuntu-20.04-arm64.zip',
+    'builds/firefox/1538/firefox-ubuntu-20.04.zip',
+    'builds/firefox/1538/firefox-ubuntu-22.04-arm64.zip',
+    'builds/firefox/1538/firefox-ubuntu-22.04.zip',
+    'builds/firefox/1538/firefox-ubuntu-24.04-arm64.zip',
+    'builds/firefox/1538/firefox-ubuntu-24.04.zip',
+    'builds/webkit/2251/webkit-mac-14-arm64.zip',
+    'builds/webkit/2251/webkit-mac-14.zip',
+    'builds/webkit/2336/webkit-debian-12-arm64.zip',
+    'builds/webkit/2336/webkit-debian-12.zip',
+    'builds/webkit/2336/webkit-mac-15-arm64.zip',
+    'builds/webkit/2336/webkit-mac-15.zip',
+    'builds/webkit/2336/webkit-ubuntu-22.04-arm64.zip',
+    'builds/webkit/2336/webkit-ubuntu-22.04.zip',
+    'builds/webkit/2336/webkit-ubuntu-24.04-arm64.zip',
+    'builds/webkit/2336/webkit-ubuntu-24.04.zip',
+})
 PROXY_REPO_OPERATIONS = frozenset({"use_repo", "override_repo", "inject_repo"})
 HTTP_FETCH_RULES = frozenset({"archive_override", "http_archive", "http_file", "http_jar"}) | \
     NATIVE_DOWNLOAD_APIS
@@ -575,6 +600,11 @@ class CheckerTest(unittest.TestCase):
         return '%s = use_extension("@rules_playwright//playwright:extensions.bzl", %s)\n%s' % (
             receiver, extension, source)
 
+    @staticmethod
+    def _browser_map():
+        integrity = "sha256-" + "A" * 43 + "="
+        return {path: integrity for path in sorted(REVIEWED_PLAYWRIGHT_ARCHIVES)}
+
     def test_rejects_an_archive_without_a_hash(self):
         self.assertEqual(len(self._findings('http_archive(name = "a", urls = ["https://x"])')), 1)
 
@@ -665,7 +695,9 @@ class CheckerTest(unittest.TestCase):
         self.assertEqual(len(fetch_findings(trees)[0]), 1)
 
     def test_rejects_an_empty_browser_integrity(self):
-        source = self._browser('playwright.repo(integrity_path_map = {"a.zip": "sha256-AAAA", "b.zip": ""})',
+        hashes = self._browser_map()
+        hashes[sorted(hashes)[0]] = ""
+        source = self._browser('playwright.repo(integrity_path_map = %r)' % hashes,
                                receiver="playwright")
         self.assertEqual(len(self._findings(source)), 1)
 
@@ -782,24 +814,45 @@ class CheckerTest(unittest.TestCase):
                        'playwright.repo(integrity_path_map = {})'):
             with self.subTest(source=source):
                 self.assertEqual(len(self._findings(self._browser(source, receiver="playwright"))), 1)
-        integrity = "sha256-" + "A" * 43 + "="
         self.assertEqual(self._findings(self._browser(
-            'playwright.repo(integrity_path_map = {"archive.zip": "%s"})' % integrity,
+            'playwright.repo(integrity_path_map = %r)' % self._browser_map(),
             receiver="playwright")), [])
 
 
     def test_playwright_extension_binding_requires_integrity_for_every_receiver(self):
-        integrity = "sha256-" + "A" * 43 + "="
         for receiver in ("pw", "browser_extension", "playwright"):
             with self.subTest(receiver=receiver):
                 self.assertTrue(self._findings(self._browser(
                     receiver + '.repo(name = "browsers")', receiver)))
-                complete = receiver + '.repo(integrity_path_map = {"archive.zip": "%s"})' % integrity
+                complete = receiver + '.repo(integrity_path_map = %r)' % self._browser_map()
                 self.assertEqual(self._findings(self._browser(complete, receiver)), [])
         keyword = self._browser('pw.repo(name = "browsers")', extension='extension_name="playwright"')
         self.assertTrue(self._findings(keyword))
         constant = 'EXT = "playwright"\n' + self._browser('pw.repo(name = "browsers")', extension="EXT")
         self.assertTrue(self._findings(constant))
+
+    def test_playwright_integrity_map_requires_every_reviewed_archive(self):
+        complete = self._browser_map()
+        self.assertEqual(self._findings(self._browser('pw.repo(integrity_path_map = %r)' % complete)), [])
+        for missing in sorted(complete):
+            with self.subTest(missing=missing):
+                subset = dict(complete)
+                del subset[missing]
+                self.assertTrue(self._findings(self._browser('pw.repo(integrity_path_map = %r)' % subset)))
+
+    def test_playwright_integrity_keys_are_exact_unique_and_literal(self):
+        complete = self._browser_map()
+        first = sorted(complete)[0]
+        malformed = dict(complete)
+        malformed["unreviewed/archive.zip"] = malformed[first]
+        maps = (repr(malformed), repr(complete)[:-1] + ', %r: %r}' % (first, complete[first]),
+                repr(complete).replace(repr(first), "ARCHIVE_PATH", 1))
+        for mapping in maps:
+            with self.subTest(mapping=mapping):
+                self.assertTrue(self._findings(self._browser('pw.repo(integrity_path_map = %s)' % mapping)))
+        ordinary = self._browser('ordinary.repo(integrity_path_map = {"archive.zip": "sha256-AAAA"})',
+                                 receiver="ordinary", extension='"unrelated"')
+        self.assertEqual(self._findings(ordinary), [])
 
     def test_playwright_proxy_and_repo_indirections_are_rejected(self):
         for source in ('alias = pw\nalias.repo(name = "browsers")',
