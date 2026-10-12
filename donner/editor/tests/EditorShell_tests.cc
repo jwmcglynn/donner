@@ -2625,10 +2625,13 @@ TEST(EditorShellTest, LayerInspectorReadbackIncludesSelectedStyleAndPathDiagnost
   ASSERT_TRUE(shell.valid());
   auto target = EditorShellTestAccess::App(shell).document().document().querySelector("#target");
   ASSERT_TRUE(target.has_value());
+  RenderCoordinator& coordinator = EditorShellTestAccess::Coordinator(shell);
+  // Keep the unrelated canvas debounce from invalidating the fresh-render diagnostic phase.
+  RenderCoordinatorTestAccess::useFakeSchedulingClock(coordinator);
   EditorShellTestAccess::App(shell).setSelection(*target);
   (void)target->getComputedStyle();
   RunFramesUntilDisplayedSelectionBounds(window, shell);
-  ASSERT_TRUE(shell.asyncRendererForReplay().waitUntilNoRenderInFlightForTesting(
+  ASSERT_TRUE(coordinator.asyncRenderer().waitUntilNoRenderInFlightForTesting(
       std::chrono::steady_clock::now() + std::chrono::seconds(2)));
   RunShellFrame(window, shell);
 
@@ -2644,6 +2647,19 @@ TEST(EditorShellTest, LayerInspectorReadbackIncludesSelectedStyleAndPathDiagnost
   EXPECT_FALSE(status.selectedRenderingInstanceFill->empty());
   ASSERT_TRUE(status.selectedPathDataAttribute.has_value());
   EXPECT_EQ(*status.selectedPathDataAttribute, "M 10 12 L 50 12 L 50 36 Z");
+
+  // A canvas commit clears the optional rendering instance until the next document render.
+  EditorShellTestAccess::App(shell).document().document().setCanvasSize(240, 160);
+  const LayerInspectorStatusReadback afterCommit = shell.layerInspectorStatusForReadback();
+  EXPECT_THAT(afterCommit.selectedRenderingInstanceFill, testing::Eq(std::nullopt));
+  EXPECT_THAT(afterCommit.selectedStyleAttribute,
+              testing::Optional(testing::Eq("fill: #010203; stroke: #040506")));
+  EXPECT_THAT(afterCommit.selectedLocalStyleFill,
+              testing::Optional(testing::Eq("PaintServer(solid rgba(1, 2, 3, 255))")));
+  EXPECT_THAT(afterCommit.selectedComputedFill,
+              testing::Optional(testing::Eq("PaintServer(solid rgba(1, 2, 3, 255))")));
+  EXPECT_THAT(afterCommit.selectedPathDataAttribute,
+              testing::Optional(testing::Eq("M 10 12 L 50 12 L 50 36 Z")));
 }
 
 TEST(EditorShellTest, ReplayActionsSwitchToolsAndIgnoreUnknownToolNames) {
@@ -3991,6 +4007,13 @@ TEST(EditorShellTest, PartlyOffscreenSplashShineEllipseFirstHeldMoveMatchesSettl
                       << shell.asyncRendererForReplay().replayResultHoldPollCountForTesting();
         return false;
       }
+      if (requireSelectedCache && frame == 0) {
+        // Selected prewarming requires the 120ms viewport/canvas setup window to have settled.
+        RenderCoordinator& coordinator = EditorShellTestAccess::Coordinator(shell);
+        RenderCoordinatorTestAccess::makeCanvasCommitDue(coordinator);
+        RenderCoordinatorTestAccess::makeRasterViewportSettled(coordinator);
+        continue;
+      }
       if (!app.document().hasPendingMutations() && !shell.asyncRendererForReplay().isBusy() &&
           app.document().currentFrameVersion() >= minimumVersion &&
           EditorShellTestAccess::DisplayedDocVersion(shell) ==
@@ -4082,8 +4105,9 @@ TEST(EditorShellTest, PartlyOffscreenSplashShineEllipseFirstHeldMoveMatchesSettl
   EXPECT_NEAR(firstChromeBounds->topLeft.y - originalChromeBounds->topLeft.y, 300.0, 1e-6);
   EXPECT_NEAR(firstChromeBounds->bottomRight.y - originalChromeBounds->bottomRight.y, 300.0, 1e-6);
   const svg::RendererBitmap firstMove = captureFrame(/*contentOnly=*/true);
+  ASSERT_THAT(firstMove.empty(), testing::IsFalse());
 
-  EditorShellTestAccess::HoldRenderResultsForPolls(shell, 0);
+  shell.asyncRendererForReplay().releaseReplayResultHoldForTesting();
   const std::uint64_t heldDragVersion = app.document().currentFrameVersion();
   shell.queueDocumentSpaceReplayInputForTesting(EditorShellDocumentReplayInput{
       .documentPoint = Vector2d(300.0, 380.0),
