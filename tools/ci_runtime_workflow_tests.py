@@ -461,8 +461,8 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
     def _run_script(self, text, args, env=None, timeout=10, cwd=None, context=None):
         with tempfile.TemporaryDirectory() as temp_dir:
             script = Path(temp_dir) / "fixture.sh"
-            # Builtin-only markers distinguish shell progress from an open output pipe.
-            # Timeout reports retain only these fixed tokens, never captured script output.
+            # Best-effort builtin markers expose progress without captured script output.
+            # Scripts may replace EXIT traps, so an absent marker proves no lifecycle state.
             script.write_text(
                 "printf 'fixture-stage:entered\\n' >&2\n"
                 "trap \"printf 'fixture-stage:exited\\n' >&2\" EXIT\n" + text
@@ -492,7 +492,7 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
                 exited = b"fixture-stage:exited\n" in stderr
                 raise AssertionError(
                     f"{context or self.id()}: shell fixture exceeded {timeout} seconds "
-                    f"(entered={entered}, exited={exited})"
+                    f"(entry_marker_seen={entered}, exit_marker_seen={exited})"
                 ) from None
 
     def test_wasm_build_and_browser_checks_share_one_runner_and_package(self):
@@ -607,9 +607,20 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
                     with self.assertRaises(AssertionError) as raised:
                         self._run_script("exit 0\n", [])
                 message = str(raised.exception)
-                self.assertIn(f"entered={entered}, exited={exited}", message)
+                self.assertIn(
+                    f"entry_marker_seen={entered}, exit_marker_seen={exited}", message
+                )
                 self.assertNotIn("untrusted-output", message)
                 self.assertTrue(raised.exception.__suppress_context__)
+
+    def test_shell_fixture_keeps_a_script_owned_exit_trap(self):
+        result = self._run_script(
+            "trap \"printf 'script-owned-exit\\n' >&2\" EXIT\nexit 0\n", []
+        )
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertIn("fixture-stage:entered\n", result.stderr)
+        self.assertIn("script-owned-exit\n", result.stderr)
+        self.assertNotIn("fixture-stage:exited\n", result.stderr)
 
     def test_shell_fixture_ignores_inherited_bash_startup_hook(self):
         with tempfile.TemporaryDirectory() as directory:
