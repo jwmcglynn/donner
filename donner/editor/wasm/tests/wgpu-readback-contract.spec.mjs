@@ -662,6 +662,7 @@ test("a failed worker publication cannot inherit a prior frame's presentation ad
       acceptedForPresentation: true,
       presentedAtMs: 200,
       presentationPublicationDelayMs: 40,
+      publicationDelayMs: 75,
       publishReason: "render-result",
     },
   };
@@ -675,6 +676,7 @@ test("a failed worker publication cannot inherit a prior frame's presentation ad
     acceptedForPresentation: stats.acceptedForPresentation,
     presentedAtMs: stats.presentedAtMs,
     presentationPublicationDelayMs: stats.presentationPublicationDelayMs,
+    publicationDelayMs: stats.publicationDelayMs,
     deviceLost: stats.deviceLost,
     publishReason: stats.publishReason,
   }, {
@@ -682,10 +684,16 @@ test("a failed worker publication cannot inherit a prior frame's presentation ad
     acceptedForPresentation: false,
     presentedAtMs: undefined,
     presentationPublicationDelayMs: undefined,
+    publicationDelayMs: undefined,
     deviceLost: true,
     publishReason: "gpu-wait-failure",
   });
   assert.equal(previous.presentedAtMs, 200, "the failure must not modify the older frame object");
+  assert.equal(
+    previous.publicationDelayMs,
+    75,
+    "the original render keeps its own publication delay",
+  );
   stats.acceptedForPresentation = true;
   publishFrame(window, clock, 1, 15, 1, 4096, 1230);
   assert.equal(
@@ -1290,4 +1298,24 @@ test("async presentation loss publication owns and always frees its reason paylo
   assert.match(publisher, /finally\s*\{[\s\S]*if \(\$5\)\s*\{\s*_free\(\$5\)/);
   assert.match(publisher, /'browserReason'\s*:\s*\$5 \? UTF8ToString\(\$5\) : String\(\)/);
   assert.doesNotMatch(publisher, /browserReason\.c_str\(\)/);
+});
+
+
+test("presented document wakes use the event driver while generic wakes stay rAF paced", () => {
+  const presentedWake = source.match(
+    /void EditorWindow::wakeEventLoopForPresentedDocument\(\) \{([\s\S]*?)\n\}/,
+  );
+  assert.ok(presentedWake, "expected the presentation-specific wake entry");
+  assert.match(
+    presentedWake[1],
+    /#ifdef DONNER_EDITOR_WHOLE_APP_WORKER[\s\S]*whole_app_worker::RequestFrame\(\);[\s\S]*#endif/,
+    "a matching presentation must schedule its held preview work even while worker rAF is delayed",
+  );
+  const genericWake = source.match(/void EditorWindow::wakeEventLoop\(\) \{([\s\S]*?)\n\}/);
+  assert.ok(genericWake, "expected the ordinary UI wake entry");
+  assert.doesNotMatch(
+    genericWake[1],
+    /whole_app_worker::RequestFrame/,
+    "ordinary UI and animation wakes must retain their rAF cadence",
+  );
 });
