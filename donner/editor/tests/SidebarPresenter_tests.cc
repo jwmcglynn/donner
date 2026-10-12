@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
+#include <limits>
 #include <optional>
 #include <span>
 #include <sstream>
@@ -523,6 +524,213 @@ TEST(SidebarPresenterTest, RefreshSnapshotOmitsInspectorDetailsForMultiSelection
   EXPECT_THAT(presenter.inspectorComputedStyleForTesting(), IsEmpty());
 }
 
+TEST(SidebarTransformEditTest, PositionYEditPreservesTheOtherBoundsCoordinates) {
+  EditorApp app;
+  SidebarPresenter presenter;
+  ASSERT_NO_FATAL_FAILURE(LoadAndSelectTarget(app, presenter, kInspectorSvg));
+  ASSERT_NO_FATAL_FAILURE(
+      EditTransformField(app, presenter, SidebarPresenter::TransformField::PositionY, 45.0));
+  EXPECT_THAT(presenter.inspectorBoundsForTesting(),
+              testing::Optional(testing::Eq(Box2d::FromXYWH(10, 45, 100, 50))));
+  EXPECT_THAT(app.undoTimeline().entryCount(), testing::Eq(1u));
+}
+
+TEST(SidebarTransformEditTest, HeightEditKeepsTheTopLeftAndRoundTripsThroughUndoRedo) {
+  EditorApp app;
+  SidebarPresenter presenter;
+  ASSERT_NO_FATAL_FAILURE(LoadAndSelectTarget(app, presenter, kInspectorSvg));
+  ASSERT_NO_FATAL_FAILURE(
+      EditTransformField(app, presenter, SidebarPresenter::TransformField::Height, 75.0));
+  EXPECT_THAT(presenter.inspectorBoundsForTesting(),
+              testing::Optional(testing::Eq(Box2d::FromXYWH(10, 20, 100, 75))));
+  EXPECT_THAT(app.undoTimeline().entryCount(), testing::Eq(1u));
+  app.undo();
+  ASSERT_THAT(app.flushFrame(), testing::IsTrue());
+  presenter.refreshSnapshot(app);
+  EXPECT_THAT(presenter.inspectorBoundsForTesting(),
+              testing::Optional(testing::Eq(Box2d::FromXYWH(10, 20, 100, 50))));
+  app.redo();
+  ASSERT_THAT(app.flushFrame(), testing::IsTrue());
+  presenter.refreshSnapshot(app);
+  EXPECT_THAT(presenter.inspectorBoundsForTesting(),
+              testing::Optional(testing::Eq(Box2d::FromXYWH(10, 20, 100, 75))));
+}
+
+TEST(SidebarTransformEditTest, DegenerateAndNonFiniteSizesLeaveTheDocumentAndHistoryUntouched) {
+  EditorApp app;
+  SidebarPresenter presenter;
+  ASSERT_NO_FATAL_FAILURE(LoadAndSelectTarget(app, presenter, kInspectorSvg));
+  const std::string originalSource(app.document().document().source());
+  for (const auto field :
+       {SidebarPresenter::TransformField::Width, SidebarPresenter::TransformField::Height}) {
+    SCOPED_TRACE(static_cast<unsigned>(field));
+    presenter.beginTransformEditForTesting(app, field);
+    ASSERT_THAT(presenter.hasTransformEditForTesting(), testing::IsTrue());
+    for (double value :
+         {0.0, -1.0, std::numeric_limits<double>::quiet_NaN(),
+          std::numeric_limits<double>::infinity(), -std::numeric_limits<double>::infinity()}) {
+      SCOPED_TRACE(value);
+      EXPECT_THAT(presenter.applyTransformEditForTesting(app, value), testing::IsFalse());
+      EXPECT_THAT(app.document().queue().size(), testing::Eq(0u));
+    }
+    presenter.commitTransformEditForTesting(app);
+    EXPECT_THAT(presenter.hasTransformEditForTesting(), testing::IsFalse());
+    EXPECT_THAT(app.undoTimeline().entryCount(), testing::Eq(0u));
+  }
+  EXPECT_THAT(app.document().document().source(), testing::Eq(originalSource));
+  presenter.refreshSnapshot(app);
+  EXPECT_THAT(presenter.inspectorBoundsForTesting(),
+              testing::Optional(testing::Eq(Box2d::FromXYWH(10, 20, 100, 50))));
+}
+
+TEST(SidebarTransformEditTest, StartingAnotherFieldCommitsThePreviousEditOnce) {
+  EditorApp app;
+  SidebarPresenter presenter;
+  ASSERT_NO_FATAL_FAILURE(LoadAndSelectTarget(app, presenter, kInspectorSvg));
+  presenter.beginTransformEditForTesting(app, SidebarPresenter::TransformField::PositionX);
+  ASSERT_THAT(presenter.applyTransformEditForTesting(app, 35.0), testing::IsTrue());
+  ASSERT_THAT(app.flushFrame(), testing::IsTrue());
+  presenter.refreshSnapshot(app);
+  presenter.beginTransformEditForTesting(app, SidebarPresenter::TransformField::Height);
+  EXPECT_THAT(app.undoTimeline().entryCount(), testing::Eq(1u));
+  ASSERT_THAT(presenter.applyTransformEditForTesting(app, 75.0), testing::IsTrue());
+  presenter.commitTransformEditForTesting(app);
+  ASSERT_THAT(app.flushFrame(), testing::IsTrue());
+  presenter.refreshSnapshot(app);
+  EXPECT_THAT(app.undoTimeline().entryCount(), testing::Eq(2u));
+  EXPECT_THAT(presenter.inspectorBoundsForTesting(),
+              testing::Optional(testing::Eq(Box2d::FromXYWH(35, 20, 100, 75))));
+  app.undo();
+  ASSERT_THAT(app.flushFrame(), testing::IsTrue());
+  presenter.refreshSnapshot(app);
+  EXPECT_THAT(presenter.inspectorBoundsForTesting(),
+              testing::Optional(testing::Eq(Box2d::FromXYWH(35, 20, 100, 50))));
+  app.undo();
+  ASSERT_THAT(app.flushFrame(), testing::IsTrue());
+  presenter.refreshSnapshot(app);
+  EXPECT_THAT(presenter.inspectorBoundsForTesting(),
+              testing::Optional(testing::Eq(Box2d::FromXYWH(10, 20, 100, 50))));
+}
+
+TEST(SidebarTransformEditTest, ReloadDiscardsThePreviousDocumentsPendingEdit) {
+  EditorApp app;
+  SidebarPresenter presenter;
+  ASSERT_NO_FATAL_FAILURE(LoadAndSelectTarget(app, presenter, kInspectorSvg));
+  presenter.beginTransformEditForTesting(app, SidebarPresenter::TransformField::PositionY);
+  ASSERT_THAT(presenter.hasTransformEditForTesting(), testing::IsTrue());
+  constexpr std::string_view replacement =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="120" height="80">
+           <rect id="target" x="2" y="3" width="7" height="11"/>
+         </svg>)";
+  ASSERT_NO_FATAL_FAILURE(LoadAndSelectTarget(app, presenter, replacement));
+  EXPECT_THAT(presenter.hasTransformEditForTesting(), testing::IsFalse());
+  EXPECT_THAT(presenter.applyTransformEditForTesting(app, 99.0), testing::IsFalse());
+  presenter.commitTransformEditForTesting(app);
+  EXPECT_THAT(app.document().queue().size(), testing::Eq(0u));
+  EXPECT_THAT(app.undoTimeline().entryCount(), testing::Eq(0u));
+  EXPECT_THAT(presenter.inspectorBoundsForTesting(),
+              testing::Optional(testing::Eq(Box2d::FromXYWH(2, 3, 7, 11))));
+  EXPECT_THAT(app.document().document().source(), testing::Eq(replacement));
+}
+
+TEST(SidebarPresenterTest, DashSubmissionRejectsNegativeLengthsAndAdditionalDeclarations) {
+  EditorApp app;
+  SidebarPresenter presenter;
+  ASSERT_NO_FATAL_FAILURE(LoadAndSelectTarget(app, presenter, kInspectorSvg));
+  const std::string originalSource(app.document().document().source());
+  for (const std::string_view pattern : {"-1 2", "4; fill: blue", "4; stroke: black"}) {
+    SCOPED_TRACE(pattern);
+    EXPECT_THAT(presenter.submitDashPatternForTesting(app, pattern), testing::IsFalse());
+    EXPECT_THAT(app.document().queue().size(), testing::Eq(0u));
+    EXPECT_THAT(app.undoTimeline().entryCount(), testing::Eq(0u));
+    EXPECT_THAT(app.document().document().source(), testing::Eq(originalSource));
+  }
+}
+
+TEST(SidebarPresenterTest, ZeroDashLengthsAreRetainedAsAValidSvgStyle) {
+  EditorApp app;
+  SidebarPresenter presenter;
+  ASSERT_NO_FATAL_FAILURE(LoadAndSelectTarget(app, presenter, kInspectorSvg));
+  const auto target = app.selectedElement();
+  ASSERT_THAT(target, testing::Optional(testing::_));
+  ASSERT_THAT(presenter.submitDashPatternForTesting(app, "0 0"), testing::IsTrue());
+  ASSERT_THAT(app.flushFrame(), testing::IsTrue());
+  EXPECT_THAT(target->getAttribute("style"),
+              testing::Optional(testing::Eq(RcString("stroke-dasharray: 0 0"))));
+  EXPECT_THAT(app.undoTimeline().entryCount(), testing::Eq(1u));
+}
+
+TEST(SidebarPresenterTest, SignedDashOffsetsKeepPercentageUnitsAndRejectNonFiniteValues) {
+  constexpr std::string_view source =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="120" height="80">
+           <rect id="target" width="40" height="30" stroke="black"
+                 stroke-dasharray="4 2" stroke-dashoffset="20%"/>
+         </svg>)";
+  EditorApp app;
+  SidebarPresenter presenter;
+  ASSERT_NO_FATAL_FAILURE(LoadAndSelectTarget(app, presenter, source));
+  const auto target = app.selectedElement();
+  ASSERT_THAT(target, testing::Optional(testing::_));
+  ASSERT_THAT(presenter.setStrokeDashOffsetForTesting(app, -12.5), testing::IsTrue());
+  ASSERT_THAT(app.flushFrame(), testing::IsTrue());
+  EXPECT_THAT(target->getAttribute("style"),
+              testing::Optional(testing::Eq(RcString("stroke-dashoffset: -12.5%"))));
+  const std::string editedSource(app.document().document().source());
+  for (double value :
+       {std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::infinity(),
+        -std::numeric_limits<double>::infinity()}) {
+    SCOPED_TRACE(value);
+    EXPECT_THAT(presenter.setStrokeDashOffsetForTesting(app, value), testing::IsFalse());
+    EXPECT_THAT(app.document().queue().size(), testing::Eq(0u));
+    EXPECT_THAT(app.document().document().source(), testing::Eq(editedSource));
+  }
+}
+
+TEST(SidebarPresenterTest, MarkerPickerRetainsItsFirstHundredIdsAndReplacesThemAfterReload) {
+  std::string source = R"(<svg xmlns="http://www.w3.org/2000/svg" width="120" height="80"><defs>)";
+  std::vector<std::string> expected;
+  for (int i = 0; i < 101; ++i) {
+    const std::string id = "arrow-" + std::to_string(i);
+    source += "<marker id=\"" + id + "\"><path d=\"M0 0L4 2L0 4\"/></marker>";
+    if (i < 100) {
+      expected.push_back(id);
+    }
+  }
+  source += R"(</defs><rect id="target" width="10" height="10"/></svg>)";
+  EditorApp app;
+  SidebarPresenter presenter;
+  ASSERT_NO_FATAL_FAILURE(LoadAndSelectTarget(app, presenter, source));
+  EXPECT_THAT(presenter.markerIdsForTesting(), testing::UnorderedElementsAreArray(expected));
+  const std::size_t scans = presenter.markerScanCountForTesting();
+  presenter.refreshSnapshot(app);
+  EXPECT_THAT(presenter.markerScanCountForTesting(), testing::Eq(scans));
+  constexpr std::string_view replacement =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="120" height="80">
+           <defs><marker id="replacement"><path d="M0 0L4 2L0 4"/></marker></defs>
+           <rect id="target" width="10" height="10"/>
+         </svg>)";
+  ASSERT_NO_FATAL_FAILURE(LoadAndSelectTarget(app, presenter, replacement));
+  EXPECT_THAT(presenter.markerIdsForTesting(), ElementsAre("replacement"));
+  EXPECT_THAT(presenter.markerScanCountForTesting(), testing::Eq(scans + 1u));
+}
+
+TEST(SidebarPresenterTest, MarkerPickerHonorsTheDocumentedNodeScanBudget) {
+  std::string source = R"(<svg xmlns="http://www.w3.org/2000/svg" width="120" height="80">)";
+  for (int i = 0; i < 4096; ++i) {
+    source += "<g/>";
+  }
+  source += R"(<marker id="beyond-budget"><path d="M0 0L4 2L0 4"/></marker>
+               <rect id="target" width="10" height="10"/></svg>)";
+  EditorApp app;
+  SidebarPresenter presenter;
+  ASSERT_NO_FATAL_FAILURE(LoadAndSelectTarget(app, presenter, source));
+  EXPECT_THAT(presenter.markerIdsForTesting(), IsEmpty());
+  EXPECT_THAT(presenter.inspectorTitleForTesting(), testing::Eq("Selected: <rect id=\"target\">"));
+  const std::size_t scans = presenter.markerScanCountForTesting();
+  presenter.refreshSnapshot(app);
+  EXPECT_THAT(presenter.markerScanCountForTesting(), testing::Eq(scans));
+}
+
 class SidebarPresenterImGuiTest : public ::testing::Test {
 protected:
   void SetUp() override {
@@ -564,6 +772,32 @@ protected:
     return queuedMutation;
   }
 
+  /// Render the real tree widgets and capture the final visible row's hit rectangle.
+  static Box2d RenderLastTreeRowFrame(SidebarPresenter& presenter, EditorApp* app,
+                                      TreeViewState& state, const char* windowName,
+                                      ImVec2 mouse = ImVec2(-1.0f, -1.0f), bool mouseDown = false,
+                                      ImGuiKey modifier = ImGuiKey_None) {
+    ImGuiIO& io = ImGui::GetIO();
+    io.AddKeyEvent(ImGuiMod_Ctrl, modifier == ImGuiMod_Ctrl);
+    io.AddKeyEvent(ImGuiMod_Super, modifier == ImGuiMod_Super);
+    io.AddMousePosEvent(mouse.x, mouse.y);
+    io.AddMouseButtonEvent(0, mouseDown);
+    state.selectionChangedInTree = false;
+    ImGui::NewFrame();
+    ImGui::SetNextWindowPos(ImVec2(0, 0), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(360, 280), ImGuiCond_Always);
+    ImGui::Begin(windowName, nullptr,
+                 ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
+                     ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoScrollbar);
+    presenter.renderTreeView(app, state);
+    const ImVec2 min = ImGui::GetItemRectMin();
+    const ImVec2 max = ImGui::GetItemRectMax();
+    const Box2d row(Vector2d(min.x, min.y), Vector2d(max.x, max.y));
+    ImGui::End();
+    ImGui::Render();
+    return row;
+  }
+
   static std::vector<ImU32> DrawVertexColors() {
     std::vector<ImU32> colors;
     const ImDrawData* drawData = ImGui::GetDrawData();
@@ -580,6 +814,167 @@ protected:
     return colors;
   }
 };
+
+constexpr std::string_view kTreeClickSvg =
+    R"(<svg xmlns="http://www.w3.org/2000/svg" width="120" height="80"><rect id="peer" width="10" height="10"/><rect id="target" x="20" width="10" height="10"/></svg>)";
+
+TEST_F(SidebarPresenterImGuiTest, TreeRowClickReplacesSelectionAndConsumesTheScrollRequest) {
+  EditorApp app;
+  SidebarPresenter presenter;
+  ASSERT_NO_FATAL_FAILURE(LoadAndSelectTarget(app, presenter, kTreeClickSvg));
+  const auto target = app.selectedElement();
+  const auto peer = app.document().document().querySelector("#peer");
+  ASSERT_THAT(target, testing::Optional(testing::_));
+  ASSERT_THAT(peer, testing::Optional(testing::_));
+  app.setSelection(*peer);
+  presenter.refreshSnapshot(app);
+  TreeViewState state{.scrollTarget = *target, .pendingScroll = true};
+  constexpr char windowName[] = "##tree_single_click_contract";
+  const Box2d row = RenderLastTreeRowFrame(presenter, &app, state, windowName);
+  const ImVec2 center = RectCenter(row);
+  RenderLastTreeRowFrame(presenter, &app, state, windowName, center);
+  RenderLastTreeRowFrame(presenter, &app, state, windowName, center, true);
+  RenderLastTreeRowFrame(presenter, &app, state, windowName, center, false);
+  EXPECT_THAT(app.selectedElements(), ElementsAre(*target));
+  EXPECT_THAT(state.selectionChangedInTree, testing::IsTrue());
+  EXPECT_THAT(state.pendingScroll, testing::IsFalse());
+  EXPECT_THAT(app.undoTimeline().entryCount(), testing::Eq(0u));
+  EXPECT_THAT(app.document().document().source(), testing::Eq(kTreeClickSvg));
+}
+
+TEST_F(SidebarPresenterImGuiTest, TreeControlAndSuperClicksToggleMembershipWithoutSourceChanges) {
+  for (ImGuiKey modifier : {ImGuiMod_Ctrl, ImGuiMod_Super}) {
+    SCOPED_TRACE(static_cast<int>(modifier));
+    EditorApp app;
+    SidebarPresenter presenter;
+    ASSERT_NO_FATAL_FAILURE(LoadAndSelectTarget(app, presenter, kTreeClickSvg));
+    const auto target = app.selectedElement();
+    const auto peer = app.document().document().querySelector("#peer");
+    ASSERT_THAT(target, testing::Optional(testing::_));
+    ASSERT_THAT(peer, testing::Optional(testing::_));
+    app.setSelection(*peer);
+    presenter.refreshSnapshot(app);
+    TreeViewState state{.scrollTarget = *target, .pendingScroll = true};
+    const char* windowName =
+        modifier == ImGuiMod_Ctrl ? "##tree_ctrl_contract" : "##tree_super_contract";
+    const Box2d row = RenderLastTreeRowFrame(presenter, &app, state, windowName);
+    const ImVec2 center = RectCenter(row);
+    RenderLastTreeRowFrame(presenter, &app, state, windowName, center, false, modifier);
+    RenderLastTreeRowFrame(presenter, &app, state, windowName, center, true, modifier);
+    RenderLastTreeRowFrame(presenter, &app, state, windowName, center, false, modifier);
+    EXPECT_THAT(app.selectedElements(), testing::UnorderedElementsAre(*peer, *target));
+    EXPECT_THAT(state.selectionChangedInTree, testing::IsTrue());
+    presenter.refreshSnapshot(app);
+    RenderLastTreeRowFrame(presenter, &app, state, windowName, center, true, modifier);
+    RenderLastTreeRowFrame(presenter, &app, state, windowName, center, false, modifier);
+    EXPECT_THAT(app.selectedElements(), ElementsAre(*peer));
+    EXPECT_THAT(state.selectionChangedInTree, testing::IsTrue());
+    EXPECT_THAT(app.undoTimeline().entryCount(), testing::Eq(0u));
+    EXPECT_THAT(app.document().document().source(), testing::Eq(kTreeClickSvg));
+    RenderLastTreeRowFrame(presenter, &app, state, windowName, ImVec2(-1.0f, -1.0f));
+  }
+}
+
+TEST_F(SidebarPresenterImGuiTest, ReadOnlyTreeDropsClicksAndKeepsTheScrollRequestPending) {
+  EditorApp app;
+  SidebarPresenter presenter;
+  ASSERT_NO_FATAL_FAILURE(LoadAndSelectTarget(app, presenter, kTreeClickSvg));
+  const auto target = app.selectedElement();
+  const auto peer = app.document().document().querySelector("#peer");
+  ASSERT_THAT(target, testing::Optional(testing::_));
+  ASSERT_THAT(peer, testing::Optional(testing::_));
+  app.setSelection(*peer);
+  presenter.refreshSnapshot(app);
+  TreeViewState state{.scrollTarget = *target, .pendingScroll = true};
+  constexpr char windowName[] = "##tree_readonly_click_contract";
+  const Box2d row = RenderLastTreeRowFrame(presenter, nullptr, state, windowName);
+  const ImVec2 center = RectCenter(row);
+  RenderLastTreeRowFrame(presenter, nullptr, state, windowName, center);
+  RenderLastTreeRowFrame(presenter, nullptr, state, windowName, center, true);
+  RenderLastTreeRowFrame(presenter, nullptr, state, windowName, center, false);
+  EXPECT_THAT(app.selectedElements(), ElementsAre(*peer));
+  EXPECT_THAT(state.selectionChangedInTree, testing::IsFalse());
+  EXPECT_THAT(state.pendingScroll, testing::IsTrue());
+  EXPECT_THAT(app.document().queue().size(), testing::Eq(0u));
+  EXPECT_THAT(app.document().document().source(), testing::Eq(kTreeClickSvg));
+}
+
+TEST_F(SidebarPresenterImGuiTest, ScrollRevealExpandsOnlyTheTargetAncestors) {
+  constexpr std::string_view source =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="120" height="80"><g id="outer"><g id="inner"><rect id="target" width="10" height="10"/></g></g><g id="unrelated"><rect width="10" height="10"/></g></svg>)";
+  EditorApp app;
+  SidebarPresenter presenter;
+  ASSERT_NO_FATAL_FAILURE(LoadAndSelectTarget(app, presenter, source));
+  const auto target = app.selectedElement();
+  ASSERT_THAT(target, testing::Optional(testing::_));
+  TreeViewState state{.scrollTarget = *target, .pendingScroll = true};
+  RenderLastTreeRowFrame(presenter, nullptr, state, "##nested_tree_reveal_contract");
+  for (const auto selector : {"svg", "#outer", "#inner"}) {
+    SCOPED_TRACE(selector);
+    const auto element = app.document().document().querySelector(selector);
+    ASSERT_THAT(element, testing::Optional(testing::_));
+    EXPECT_THAT(presenter.isTreeNodeExpandedForTesting(
+                    static_cast<std::uint32_t>(element->unsafeEntityHandle().entity())),
+                testing::IsTrue());
+  }
+  const auto unrelated = app.document().document().querySelector("#unrelated");
+  ASSERT_THAT(unrelated, testing::Optional(testing::_));
+  EXPECT_THAT(presenter.isTreeNodeExpandedForTesting(
+                  static_cast<std::uint32_t>(unrelated->unsafeEntityHandle().entity())),
+              testing::IsFalse());
+  EXPECT_THAT(state.selectionChangedInTree, testing::IsFalse());
+  EXPECT_THAT(app.selectedElements(), ElementsAre(*target));
+}
+
+TEST_F(SidebarPresenterImGuiTest, StrokeWidthDecrementPreservesTheAuthoredEmUnit) {
+  constexpr std::string_view source =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="120" height="80"><rect id="target" width="40" height="30" stroke="black" stroke-width="3em"/></svg>)";
+  EditorApp app;
+  SidebarPresenter presenter;
+  ASSERT_NO_FATAL_FAILURE(LoadAndSelectTarget(app, presenter, source));
+  const auto target = app.selectedElement();
+  ASSERT_THAT(target, testing::Optional(testing::_));
+  constexpr char windowName[] = "##stroke_width_em_decrement_contract";
+  RenderInspectorFrame(presenter, &app, windowName, ImVec2(-1.0f, -1.0f), false, 560.0f);
+  const auto decrement = presenter.strokeDecrementRectForTesting();
+  ASSERT_THAT(decrement, testing::Optional(testing::_));
+  RenderInspectorFrame(presenter, &app, windowName, RectCenter(*decrement), true, 560.0f);
+  ASSERT_THAT(
+      RenderInspectorFrame(presenter, &app, windowName, RectCenter(*decrement), false, 560.0f),
+      testing::IsTrue());
+  ASSERT_THAT(app.flushFrame(), testing::IsTrue());
+  EXPECT_THAT(target->getAttribute("style"),
+              testing::Optional(testing::Eq(RcString("stroke-width: 2em"))));
+  EXPECT_THAT(app.undoTimeline().entryCount(), testing::Eq(1u));
+}
+
+TEST_F(SidebarPresenterImGuiTest, MiterLimitDecrementRecordsOneUndoableStyleChange) {
+  constexpr std::string_view source =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="120" height="80"><rect id="target" width="40" height="30" stroke="black" stroke-miterlimit="5"/></svg>)";
+  EditorApp app;
+  SidebarPresenter presenter;
+  ASSERT_NO_FATAL_FAILURE(LoadAndSelectTarget(app, presenter, source));
+  const auto target = app.selectedElement();
+  ASSERT_THAT(target, testing::Optional(testing::_));
+  constexpr char windowName[] = "##miter_decrement_contract";
+  RenderInspectorFrame(presenter, &app, windowName);
+  const auto decrement = presenter.strokeMiterDecrementRectForTesting();
+  ASSERT_THAT(decrement, testing::Optional(testing::_));
+  RenderInspectorFrame(presenter, &app, windowName, RectCenter(*decrement), true);
+  ASSERT_THAT(RenderInspectorFrame(presenter, &app, windowName, RectCenter(*decrement), false),
+              testing::IsTrue());
+  ASSERT_THAT(app.flushFrame(), testing::IsTrue());
+  EXPECT_THAT(target->getAttribute("style"),
+              testing::Optional(testing::Eq(RcString("stroke-miterlimit: 4"))));
+  EXPECT_THAT(app.undoTimeline().entryCount(), testing::Eq(1u));
+  app.undo();
+  ASSERT_THAT(app.flushFrame(), testing::IsTrue());
+  const auto restored = app.document().document().querySelector("#target");
+  ASSERT_THAT(restored, testing::Optional(testing::_));
+  EXPECT_THAT(restored->getAttribute("style"), testing::Eq(std::nullopt));
+  EXPECT_THAT(restored->getAttribute("stroke-miterlimit"),
+              testing::Optional(testing::Eq(RcString("5"))));
+}
 
 TEST_F(SidebarPresenterImGuiTest, TreeViewAndInspectorRenderEmptySnapshotReadOnly) {
   SidebarPresenter presenter;
