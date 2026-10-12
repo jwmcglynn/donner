@@ -5335,6 +5335,65 @@ TEST(EditorShellTest, ReferenceHighlightSummaryClearsForEmptySelection) {
   EXPECT_TRUE(EditorShellTestAccess::CombinedSourcePreviewElements(shell).empty());
 }
 
+// A press that changes the selection starts a render, and the reference summary must wait for it.
+// Waiting by requesting a frame every frame redraws at display rate for the whole render; in the
+// browser those frames hold the GPU owner thread that the render itself is waiting on.
+TEST(EditorShellTest, ReferenceHighlightWaitsForRendererWakeInsteadOfRequestingFrames) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
+
+  EditorShell shell(window, OptionsWithSource(kReferencedSvg, "referenced.svg"));
+  ASSERT_TRUE(shell.valid());
+  AsyncRenderer& renderer = shell.asyncRendererForReplay();
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+  for (int frame = 0; frame < 40; ++frame) {
+    RunShellFrame(window, shell);
+    ASSERT_TRUE(renderer.waitUntilNoRenderInFlightForTesting(deadline));
+    if (frame >= 3 && !EditorShellTestAccess::RendererBusy(shell)) {
+      break;
+    }
+  }
+  ASSERT_FALSE(EditorShellTestAccess::RendererBusy(shell));
+
+  renderer.setReplayDocumentAccessBlockedForTesting(true);
+  auto target = EditorShellTestAccess::App(shell).document().document().querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  EditorShellTestAccess::App(shell).setSelection(*target);
+  EditorShellTestAccess::SetRequestRenderAtEndOfFrame(shell);
+  RunShellFrame(window, shell);
+  ASSERT_TRUE(EditorShellTestAccess::RendererBusy(shell));
+
+  const std::uint64_t blockedWakeSerial = window.wakeEventLoopRequestSerialForTesting();
+  for (int frame = 0; frame < 3; ++frame) {
+    RunShellFrame(window, shell);
+    EXPECT_EQ(window.wakeEventLoopRequestSerialForTesting(), blockedWakeSerial)
+        << "frame " << frame << " requested another frame while the render was still running";
+  }
+  EXPECT_EQ(EditorShellTestAccess::LastReferenceHighlightSelectionSize(shell), 0u);
+
+  // Drive the loop the way the browser does: a frame runs only for an outstanding wake. The
+  // renderer's own completion and warmup-release wakes must carry the summary to completion.
+  renderer.setReplayDocumentAccessBlockedForTesting(false);
+  std::uint64_t consumedWakeSerial = blockedWakeSerial;
+  for (int frame = 0; frame < 20; ++frame) {
+    if (EditorShellTestAccess::LastReferenceHighlightSelectionSize(shell) == 1u) {
+      break;
+    }
+    while (window.wakeEventLoopRequestSerialForTesting() == consumedWakeSerial &&
+           std::chrono::steady_clock::now() < deadline) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    ASSERT_GT(window.wakeEventLoopRequestSerialForTesting(), consumedWakeSerial)
+        << "the demand-driven loop would park with a stale reference summary";
+    consumedWakeSerial = window.wakeEventLoopRequestSerialForTesting();
+    RunShellFrame(window, shell);
+  }
+  EXPECT_EQ(EditorShellTestAccess::LastReferenceHighlightSelectionSize(shell), 1u);
+  EXPECT_EQ(EditorShellTestAccess::ReferenceSummary(shell).referencedElements.size(), 2u);
+}
+
 TEST(EditorShellTest, ShellGeometryHelpersClampToViewportAndSelectionCache) {
   gui::EditorWindow window = MakeHiddenWindow();
   if (!window.valid()) {
