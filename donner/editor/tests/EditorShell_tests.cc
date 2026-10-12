@@ -5357,13 +5357,15 @@ TEST(EditorShellTest, ReferenceHighlightWaitsForRendererWakeInsteadOfRequestingF
   }
   ASSERT_FALSE(EditorShellTestAccess::RendererBusy(shell));
 
+  // Start a render that stays in flight, then change the selection behind it.
   renderer.setReplayDocumentAccessBlockedForTesting(true);
+  EditorShellTestAccess::Coordinator(shell).requestPresentationRefresh();
+  EditorShellTestAccess::SetRequestRenderAtEndOfFrame(shell);
+  RunShellFrame(window, shell);
+  ASSERT_TRUE(renderer.hasRenderInFlightForTesting());
   auto target = EditorShellTestAccess::App(shell).document().document().querySelector("#target");
   ASSERT_TRUE(target.has_value());
   EditorShellTestAccess::App(shell).setSelection(*target);
-  EditorShellTestAccess::SetRequestRenderAtEndOfFrame(shell);
-  RunShellFrame(window, shell);
-  ASSERT_TRUE(EditorShellTestAccess::RendererBusy(shell));
 
   const std::uint64_t blockedWakeSerial = window.wakeEventLoopRequestSerialForTesting();
   for (int frame = 0; frame < 3; ++frame) {
@@ -5372,6 +5374,7 @@ TEST(EditorShellTest, ReferenceHighlightWaitsForRendererWakeInsteadOfRequestingF
         << "frame " << frame << " requested another frame while the render was still running";
   }
   EXPECT_EQ(EditorShellTestAccess::LastReferenceHighlightSelectionSize(shell), 0u);
+  ASSERT_TRUE(renderer.hasRenderInFlightForTesting());
 
   // Drive the loop the way the browser does: a frame runs only for an outstanding wake. The
   // renderer's own completion and warmup-release wakes must carry the summary to completion.
