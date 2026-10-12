@@ -909,7 +909,11 @@ TEST_F(SidebarPresenterImGuiTest, ScrollRevealExpandsOnlyTheTargetAncestors) {
   ASSERT_THAT(target, testing::Optional(testing::_));
   TreeViewState state{.scrollTarget = *target, .pendingScroll = true};
   RenderLastTreeRowFrame(presenter, nullptr, state, "##nested_tree_reveal_contract");
-  for (const auto selector : {"svg", "#outer", "#inner"}) {
+  const svg::SVGElement root = app.document().document().svgElement();
+  EXPECT_THAT(presenter.isTreeNodeExpandedForTesting(
+                  static_cast<std::uint32_t>(root.unsafeEntityHandle().entity())),
+              testing::IsTrue());
+  for (const auto selector : {"#outer", "#inner"}) {
     SCOPED_TRACE(selector);
     const auto element = app.document().document().querySelector(selector);
     ASSERT_THAT(element, testing::Optional(testing::_));
@@ -957,12 +961,14 @@ TEST_F(SidebarPresenterImGuiTest, MiterLimitDecrementRecordsOneUndoableStyleChan
   const auto target = app.selectedElement();
   ASSERT_THAT(target, testing::Optional(testing::_));
   constexpr char windowName[] = "##miter_decrement_contract";
-  RenderInspectorFrame(presenter, &app, windowName);
+  RenderInspectorFrame(presenter, &app, windowName, ImVec2(-1.0f, -1.0f), false, 560.0f);
   const auto decrement = presenter.strokeMiterDecrementRectForTesting();
   ASSERT_THAT(decrement, testing::Optional(testing::_));
-  RenderInspectorFrame(presenter, &app, windowName, RectCenter(*decrement), true);
-  ASSERT_THAT(RenderInspectorFrame(presenter, &app, windowName, RectCenter(*decrement), false),
-              testing::IsTrue());
+  EXPECT_THAT(decrement->bottomRight.y, testing::Lt(560.0));
+  RenderInspectorFrame(presenter, &app, windowName, RectCenter(*decrement), true, 560.0f);
+  ASSERT_THAT(
+      RenderInspectorFrame(presenter, &app, windowName, RectCenter(*decrement), false, 560.0f),
+      testing::IsTrue());
   ASSERT_THAT(app.flushFrame(), testing::IsTrue());
   EXPECT_THAT(target->getAttribute("style"),
               testing::Optional(testing::Eq(RcString("stroke-miterlimit: 4"))));
