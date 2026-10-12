@@ -8,7 +8,9 @@
 #include <vector>
 
 #include "donner/base/Length.h"
+#include "donner/base/MathUtils.h"
 #include "donner/base/SmallVector.h"
+#include "donner/base/Transform.h"
 #include "donner/svg/components/text/ComputedTextComponent.h"
 #include "donner/svg/core/DominantBaseline.h"
 #include "donner/svg/core/TextAnchor.h"
@@ -17,6 +19,29 @@
 #include "donner/svg/text/TextTypes.h"
 
 namespace donner::svg::text_engine_detail {
+
+/// Map positive-size bitmap texels through their bearing and stretch, then rotate at glyph origin.
+/// @param glyph Placed glyph in text-element local coordinates.
+/// @param bitmap Decoded bitmap or metadata with positive width and height.
+/// @return Transform from bitmap texels to text-element local coordinates.
+template <typename Bitmap>
+Transform2d computeLocalFromBitmapGlyph(const TextGlyph& glyph, const Bitmap& bitmap) {
+  const double targetX = glyph.xPosition + bitmap.bearingX;
+  const double targetY = glyph.yPosition - bitmap.bearingY;
+  const double targetW = static_cast<double>(bitmap.width) * bitmap.scale * glyph.stretchScaleX;
+  const double targetH = static_cast<double>(bitmap.height) * bitmap.scale * glyph.stretchScaleY;
+  const double imgScaleX = targetW / static_cast<double>(bitmap.width);
+  const double imgScaleY = targetH / static_cast<double>(bitmap.height);
+  Transform2d localFromBitmap =
+      Transform2d::Scale(imgScaleX, imgScaleY) * Transform2d::Translate(Vector2d(targetX, targetY));
+  if (glyph.rotateDegrees != 0.0) {
+    localFromBitmap =
+        localFromBitmap * Transform2d::Translate(-glyph.xPosition, -glyph.yPosition) *
+        Transform2d::Rotate(glyph.rotateDegrees * MathConstants<double>::kPi / 180.0) *
+        Transform2d::Translate(glyph.xPosition, glyph.yPosition);
+  }
+  return localFromBitmap;
+}
 
 /// Compute the baseline-alignment offset for a `dominant-baseline` / `alignment-baseline`
 /// keyword, in pixels. The offset is added to the baseline Y position, so positive values

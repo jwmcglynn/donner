@@ -2469,11 +2469,12 @@ const components::ComputedTextGeometryComponent& TextEngine::ensureComputedTextG
         cache.glyphs.push_back({span.sourceEntity, std::move(transformed), extent});
         addBox(cache.inkBounds, hasInkBounds, extent);
         addBox(charGeom.extent, charGeom.hasExtent, extent);
-      } else if (auto bitmap = bitmapGlyphMetrics(run.font, glyph.glyphIndex, emScale)) {
-        const double targetX = glyph.xPosition + bitmap->bearingX;
-        const double targetY = glyph.yPosition - bitmap->bearingY;
-        const Box2d extent = Box2d::FromXYWH(targetX, targetY, bitmap->width * bitmap->scale,
-                                             bitmap->height * bitmap->scale);
+      } else if (auto bitmap = bitmapGlyphMetrics(run.font, glyph.glyphIndex, emScale);
+                 bitmap && bitmap->width > 0 && bitmap->height > 0) {
+        const Transform2d localFromBitmap =
+            text_engine_detail::computeLocalFromBitmapGlyph(glyph, *bitmap);
+        const Box2d extent =
+            localFromBitmap.transformBox(Box2d::FromXYWH(0, 0, bitmap->width, bitmap->height));
         addBox(cache.inkBounds, hasInkBounds, extent);
         addBox(charGeom.extent, charGeom.hasExtent, extent);
       }
@@ -2514,9 +2515,9 @@ Box2d TextEngine::computedInkBounds(EntityHandle handle) const {
   const auto& cache = ensureComputedTextGeometryComponent(handle);
   Box2d result;
   bool initialized = false;
-  for (const auto& glyph : cache.glyphs) {
-    if (isDescendantOf(registry_, glyph.sourceEntity, handle.entity())) {
-      addBox(result, initialized, glyph.extent);
+  for (const auto& character : cache.characters) {
+    if (character.hasExtent && isDescendantOf(registry_, character.sourceEntity, handle.entity())) {
+      addBox(result, initialized, character.extent);
     }
   }
   return result;

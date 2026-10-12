@@ -35,6 +35,7 @@
 #include "donner/svg/renderer/PlacedTextGeometry.h"
 #include "donner/svg/resources/FontManager.h"
 #include "donner/svg/text/TextEngine.h"
+#include "donner/svg/text/TextEngineHelpers.h"
 #include "donner/svg/text/TextLayoutParams.h"
 #endif
 #include "tiny_skia/Painter.h"
@@ -240,21 +241,7 @@ bool HasOpenDashSeam(const std::optional<tiny_skia::StrokeDash>& dash,
 Transform2d ComputeDeviceFromBitmapGlyph(const TextGlyph& glyph,
                                          const TextBackend::BitmapGlyph& bitmap,
                                          const Transform2d& deviceFromLocal) {
-  const double targetX = glyph.xPosition + bitmap.bearingX;
-  const double targetY = glyph.yPosition - bitmap.bearingY;
-  const double targetW = static_cast<double>(bitmap.width) * bitmap.scale * glyph.stretchScaleX;
-  const double targetH = static_cast<double>(bitmap.height) * bitmap.scale * glyph.stretchScaleY;
-  const double imgScaleX = targetW / static_cast<double>(bitmap.width);
-  const double imgScaleY = targetH / static_cast<double>(bitmap.height);
-  Transform2d localFromBitmap =
-      Transform2d::Scale(imgScaleX, imgScaleY) * Transform2d::Translate(Vector2d(targetX, targetY));
-  if (glyph.rotateDegrees != 0.0) {
-    localFromBitmap =
-        localFromBitmap * Transform2d::Translate(-glyph.xPosition, -glyph.yPosition) *
-        Transform2d::Rotate(glyph.rotateDegrees * MathConstants<double>::kPi / 180.0) *
-        Transform2d::Translate(glyph.xPosition, glyph.yPosition);
-  }
-  return localFromBitmap * deviceFromLocal;
+  return text_engine_detail::computeLocalFromBitmapGlyph(glyph, bitmap) * deviceFromLocal;
 }
 
 bool CanRenderTextRun(bool isBitmapFont, float scale) {
