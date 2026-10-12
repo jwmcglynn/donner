@@ -1219,6 +1219,33 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
                 self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
                 self.assertFalse((root / "output").exists())
 
+    def _run_heartbeat_fixture(self, wrapper, log, env):
+        return subprocess.run(
+            [str(wrapper), str(log), "bash", "-c", "exit 17"],
+            check=False,
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=5,
+        )
+
+    def test_heartbeat_fixture_ignores_unrelated_inherited_bash(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            wrapper = root / "wrapper.sh"
+            wrapper.write_text(self._heartbeat_script())
+            wrapper.chmod(0o755)
+            ambient = root / "ambient"
+            ambient.mkdir()
+            bash = ambient / "bash"
+            bash.write_text("#!/bin/sh\necho unexpected-inherited-bash >&2\nexit 73\n")
+            bash.chmod(0o755)
+            env = dict(os.environ, PATH=str(ambient) + os.pathsep + os.environ["PATH"],
+                       BAZEL_HEARTBEAT_INTERVAL_SECONDS="300")
+            result = self._run_heartbeat_fixture(wrapper, root / "command.log", env)
+            self.assertEqual(result.returncode, 17, result.stderr)
+            self.assertEqual([], list(root.glob("*.heartbeat-control.*")))
+
     def test_heartbeat_cleanup_is_prompt_without_ps(self):
         """A finished command cannot leave the heartbeat sleeper holding the pipe."""
         job = self._job_body("linux-self-hosted")
@@ -1239,14 +1266,7 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
             env = os.environ.copy()
             env["BAZEL_HEARTBEAT_INTERVAL_SECONDS"] = "300"
 
-            result = subprocess.run(
-                [str(wrapper), str(log), "bash", "-c", "exit 17"],
-                check=False,
-                capture_output=True,
-                text=True,
-                env=env,
-                timeout=5,
-            )
+            result = self._run_heartbeat_fixture(wrapper, log, env)
 
             self.assertEqual(17, result.returncode, result.stderr)
             self.assertEqual([], list(Path(temp_dir).glob("*.heartbeat-control.*")))
