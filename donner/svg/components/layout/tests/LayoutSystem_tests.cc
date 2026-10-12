@@ -123,10 +123,11 @@ TEST_F(LayoutSystemTest, NestedSvgOmittedDimensionsUseParentViewportWithViewBox)
   const auto explicitSize = document.querySelector("#explicit")->entityHandle();
   const Transform2d parentFromContent =
       Transform2d::Scale({0.5, 0.5}) * Transform2d::Translate({0, 35});
+  const Transform2d implicitElementFromContent =
+      layoutSystem.getEntityContentFromEntityTransform(implicit);
   EXPECT_THAT(layoutSystem.clipRect(implicit),
               testing::Optional(BoxEq(Vector2d(0, 0), Vector2d(100, 120))));
-  EXPECT_THAT(layoutSystem.getEntityContentFromEntityTransform(implicit),
-              TransformEq(parentFromContent));
+  EXPECT_THAT(implicitElementFromContent, TransformEq(parentFromContent));
   EXPECT_THAT(layoutSystem.getEntityContentFromEntityTransform(percent),
               TransformEq(parentFromContent));
   EXPECT_THAT(layoutSystem.getEntityContentFromEntityTransform(explicitSize),
