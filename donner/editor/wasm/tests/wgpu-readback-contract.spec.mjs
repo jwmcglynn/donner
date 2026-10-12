@@ -211,6 +211,8 @@ test("late browser map rejection cannot change a reused mapping ID", () => {
     kMapFailed: 6,
     kMapDeviceLost: 7,
     lost: false,
+    trace: () => {},
+    epochMs: () => 0,
     logicalFor: () => record,
     lookup: () => buffer,
     guard: () => 0,
@@ -547,6 +549,80 @@ test("frame completion timestamps exclude proxy delay and retain successful admi
       "later frames cannot replace the consumed result's first presentation timestamp",
     );
   }
+});
+
+test("the first canvas frame after a polled result must carry that result", () => {
+  const publisher = workerBridgeSource.match(/void PublishPresentedDocumentFrame\([\s\S]*?\n\}/);
+  assert.ok(publisher, "expected the presented-document-frame publisher");
+  const body = publisher[0].match(/MAIN_THREAD_ASYNC_EM_ASM\(\s*\{([\s\S]*?)\n\s*\},/)[1];
+  const presentFrame = new Function("window", "$0", "$1", body);
+  const window = {
+    __donnerWorkerStats: { publishReason: "render-result", documentGeneration: 2, frameVersion: 5 },
+  };
+  const stats = window.__donnerWorkerStats;
+  presentFrame(window, 2, 4);
+  presentFrame(window, 1, 9);
+  assert.deepEqual(
+    { presented: stats.resultFramePresented, without: stats.framesPresentedWithoutResult },
+    { presented: undefined, without: 2 },
+    "frames that reach the canvas with another document frame are counted against the result",
+  );
+  presentFrame(window, 2, 5);
+  presentFrame(window, 2, 4);
+  assert.deepEqual(
+    { presented: stats.resultFramePresented, without: stats.framesPresentedWithoutResult },
+    { presented: true, without: 2 },
+    "the count stops at the first frame that carries the result",
+  );
+
+  const prompt = { publishReason: "render-result", documentGeneration: 3, frameVersion: 1 };
+  window.__donnerWorkerStats = prompt;
+  presentFrame(window, 3, 1);
+  assert.deepEqual(
+    { presented: prompt.resultFramePresented, without: prompt.framesPresentedWithoutResult },
+    { presented: true, without: 0 },
+    "a result carried by the first presented frame records zero frames without it",
+  );
+
+  const failure = { publishReason: "gpu-wait-failure", documentGeneration: 3, frameVersion: 1 };
+  window.__donnerWorkerStats = failure;
+  presentFrame(window, 3, 1);
+  assert.equal(failure.resultFramePresented, undefined, "only render results can be presented");
+
+  const failurePublisher = renderCoordinatorSource.match(
+    /void PublishWorkerGpuWaitFailure\([\s\S]*?\n\}/,
+  )[0];
+  assert.match(failurePublisher, /delete stats\['resultFramePresented'\]/);
+  assert.match(failurePublisher, /delete stats\['framesPresentedWithoutResult'\]/);
+  assert.match(
+    source,
+    /window\.lastFullyPresentedDocumentFrame_ = documentIdentity;[\s\S]{0,600}PublishPresentedDocumentFrame\(documentIdentity\.documentGeneration,/,
+    "only a fully presented frame reports the document frame it carried",
+  );
+});
+
+test("the presentation timeline rides the queue-stats proxy call and stays bounded", () => {
+  const observe = source.match(
+    /bool EditorWindow::observePresentationCompletion\(\) \{[\s\S]*?\n\}/,
+  )[0];
+  const calls = [...observe.matchAll(/MAIN_THREAD_ASYNC_EM_ASM\(\s*\{([\s\S]*?)\n\s*\},/g)];
+  assert.equal(calls.length, 2, "the timeline must not add a proxy call per frame");
+  const body = calls.find((call) => call[1].includes("__donnerPresentationTimeline"));
+  assert.ok(body, "the timeline sample must be published by the queue-stats call");
+  assert.match(body[1], /__donnerPresentationQueueStats/);
+  const publish = new Function(
+    "window",
+    "performance",
+    ...Array.from({ length: 15 }, (_, index) => `$${index}`),
+    body[1],
+  );
+  const window = {};
+  const clock = { now: () => 12.34 };
+  for (let frame = 0; frame < 600; ++frame) {
+    publish(window, clock, 4, 9, 2, 0, 0, 0, 0, 0, 0, 0, 0, 3, 5, 0, 1);
+  }
+  assert.equal(window.__donnerPresentationTimeline.length, 512);
+  assert.deepEqual(window.__donnerPresentationTimeline.at(-1), [12.3, 1, 2, 3, 9, 5]);
 });
 
 test("worker acceptance requires the fresh render identity and no old presentation timestamp", () => {
