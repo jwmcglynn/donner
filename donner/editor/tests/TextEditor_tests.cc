@@ -5751,8 +5751,10 @@ TEST_F(TextEditorTests, PublicAutocompleteProviderNavigatesUpWithoutMovingSource
   RenderEditorFrameWithKeyboard({});
   ResetKeyboardState({ImGuiKey_DownArrow});
   RenderEditorFrameWithKeyboard({ImGuiKey_DownArrow});
+  EXPECT_EQ(AutocompleteIndex(), 1) << "DownArrow must advance the suggestion selection";
   ResetKeyboardState({ImGuiKey_UpArrow});
   RenderEditorFrameWithKeyboard({ImGuiKey_UpArrow});
+  EXPECT_EQ(AutocompleteIndex(), 0) << "UpArrow must return to the first suggestion";
   EXPECT_EQ(editor.getCursorPosition(), Coordinates(0, 5));
   EXPECT_EQ(editor.getSelectedText(), "");
   ResetKeyboardState({ImGuiKey_Enter});
