@@ -20,6 +20,16 @@
 ##   --config=wasm              - Build for WebAssembly via Emscripten.
 ##
 
+# Opt out of usage reporting by third-party Bazel modules. aspect_tools_telemetry, which
+# aspect_rules_js brings into the module graph, posts a usage report from developer machines and
+# CI runners each time its repository rule runs. Without a MODULE.bazel.lock in the checkout,
+# which is every fresh clone because the lockfile is not committed, it reports on the first
+# invocation. DO_NOT_TRACK is the module's documented opt-out, and ASPECT_TOOLS_TELEMETRY=-all
+# also turns off every collector; an empty ASPECT_TOOLS_TELEMETRY value turns them all back on.
+# Workflows set the same variables, and //tools:supply_chain_policy_tests keeps both in place.
+common --repo_env=DO_NOT_TRACK=1
+common --repo_env=ASPECT_TOOLS_TELEMETRY=-all
+
 # Enables using platform-specific configs such as build:linux and build:macos in this .bazelrc file
 build --enable_platform_specific_config
 

@@ -1,5 +1,10 @@
 name: Fuzz
 
+# Keep third-party Bazel module telemetry off, as the telemetry section of .bazelrc explains.
+env:
+  DO_NOT_TRACK: "1"
+  ASPECT_TOOLS_TELEMETRY: "-all"
+
 # Runs the libFuzzer-tagged corpus regression suite. Split out of `main.yml`
 # so it doesn't gate every main push (it adds 5–7 min and uses a separate
 # toolchain that fights with the main build for cache slots).

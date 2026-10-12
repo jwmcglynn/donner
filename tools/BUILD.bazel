@@ -1,4 +1,7 @@
 load("@hedron_compile_commands//:refresh_compile_commands.bzl", "refresh_compile_commands")
+load("@rules_cc//cc:defs.bzl", "cc_library")
+load("//build_defs:embed_resources.bzl", "embed_resources")
+load("//build_defs:licenses.bzl", "donner_closure_notice_file")
 
 exports_files([
     "lint.sh",
@@ -275,6 +278,121 @@ py_test(
 )
 
 py_library(
+    name = "notice_coverage",
+    srcs = ["notice_coverage_tests.py"],
+)
+
+# The released CLI's NOTICE must attribute every third-party component that its configured closure
+# links or embeds. BCR Preflight runs this in the release build's configuration before packaging.
+py_test(
+    name = "cli_notice_coverage_tests",
+    size = "small",
+    srcs = ["notice_coverage_tests.py"],
+    args = [
+        "--outputs $(rootpaths //third_party/licenses:notice_cli)",
+        # Guards the traversal: every component the CLI is known to link or embed.
+        "--require=entt",
+        "--require=public-sans",
+        "--require=stb",
+        "--require=tiny-skia-cpp",
+        "--require=zlib",
+    ],
+    data = ["//third_party/licenses:notice_cli"],
+    main = "notice_coverage_tests.py",
+)
+
+# Fixtures for the closure walk behind release notices. Each input reaches third-party code only
+# through an edge the walk must follow; the last links a library by linker option alone, which
+# must be reported.
+embed_resources(
+    name = "closure_notice_fixture_asset_input",
+    header_output = "closure_notice_fixture/Asset.h",
+    resources = {"kClosureNoticeFixture": "//third_party/public-sans:PublicSans-Medium.otf"},
+    tags = ["manual"],
+    visibility = ["//visibility:private"],
+)
+
+cc_library(
+    name = "closure_notice_fixture_compiler_input_input",
+    additional_compiler_inputs = ["//third_party/public-sans:PublicSans-Medium.otf"],
+    tags = ["manual"],
+)
+
+# `third_party/stb` has no BUILD file, so its files belong to the `//third_party` package.
+cc_library(
+    name = "closure_notice_fixture_root_package_file_input",
+    data = ["//third_party:stb/LICENSE"],
+    tags = ["manual"],
+)
+
+cc_library(
+    name = "closure_notice_fixture_linkopt_input",
+    linkopts = ["-lz"],
+    tags = ["manual"],
+)
+
+_CLOSURE_NOTICE_FIXTURES = {
+    "asset": (
+        "public-sans",
+        ["--require=public-sans"],
+    ),
+    "compiler_input": (
+        "public-sans",
+        ["--require=public-sans"],
+    ),
+    "linkopt": (
+        "public-sans",
+        ["--expect-failure=-lz"],
+    ),
+    "root_package_file": (
+        "stb",
+        ["--require=stb"],
+    ),
+}
+
+[donner_closure_notice_file(
+    name = "closure_notice_fixture_" + fixture,
+    available_licenses = ["//third_party/licenses:" + license],
+    tags = ["manual"],
+    target = ":closure_notice_fixture_%s_input" % fixture,
+    variant = "closure walk fixture: " + fixture,
+) for fixture, (license, _) in _CLOSURE_NOTICE_FIXTURES.items()]
+
+[py_test(
+    name = "closure_notice_fixture_%s_tests" % fixture,
+    size = "small",
+    srcs = ["notice_coverage_tests.py"],
+    args = ["--outputs $(rootpaths :closure_notice_fixture_%s)" % fixture] + checks,
+    data = [":closure_notice_fixture_" + fixture],
+    main = "notice_coverage_tests.py",
+) for fixture, (_, checks) in _CLOSURE_NOTICE_FIXTURES.items()]
+
+py_test(
+    name = "notice_coverage_check_tests",
+    size = "small",
+    srcs = ["notice_coverage_check_tests.py"],
+    deps = [":notice_coverage"],
+)
+
+# Every Donner Starlark file that MODULE.bazel reaches must be listed here; the test fails on one
+# that is missing, so that its fetches are checked too.
+py_test(
+    name = "supply_chain_policy_tests",
+    size = "small",
+    srcs = ["supply_chain_policy_tests.py"],
+    data = [
+        "//:.bazelrc",
+        "//:MODULE.bazel",
+        "//:github_action_definitions",
+        "//config:extensions.bzl",
+        "//third_party:bazel/local.bzl",
+        "//third_party:bazel/non_bcr_deps.bzl",
+        "//third_party/google_fonts:fonts.bzl",
+    ],
+    deps = ["@rules_python//python/runfiles"],
+)
+
+py_library(
     name = "bcr_dependency_closure",
     srcs = ["bcr_dependency_closure.py"],
 )
@@ -370,12 +488,16 @@ py_test(
 py_test(
     name = "sanitizer_allocator_isolation_tests",
     size = "small",
-    srcs = ["sanitizer_allocator_isolation_tests.py"],
+    srcs = [
+        "sanitizer_allocator_isolation_tests.py",
+        "test_executable_fixtures.py",
+    ],
     data = [
         "//:.github/workflows/sanitizers.yml",
         "//tools/ci:BUILD.bazel",
         "//tools/ci:test_with_exclusions.py",
     ],
+    imports = ["."],
     deps = ["@rules_python//python/runfiles"],
 )
 

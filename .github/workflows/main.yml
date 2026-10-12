@@ -1,5 +1,10 @@
 name: CI
 
+# Keep third-party Bazel module telemetry off, as the telemetry section of .bazelrc explains.
+env:
+  DO_NOT_TRACK: "1"
+  ASPECT_TOOLS_TELEMETRY: "-all"
+
 # Validate PRs targeting main or a dependency branch in a stack.
 on:
   push:
@@ -755,11 +760,13 @@ jobs:
       # the same signature appeared on 2026-07-02 for large coverage uploads).
       # 60s still fast-fails a genuinely dead endpoint.
       BAZEL_SELF_HOSTED_REMOTE_FALLBACK_FLAGS: "--strategy=TestRunner=remote --remote_local_fallback=false --incompatible_remote_local_fallback_for_remote_cache=false --remote_timeout=60s"
-      # Every self-hosted run uploads Bazel profiles + BEP + compact execution
-      # logs so slow runs can be attributed to targets/actions without live
-      # SSH. Keep artifacts small; retention is 3 days. DIAG_DIR is exported
-      # from the first step ($RUNNER_TEMP; the `runner` context is not
-      # available in job-level env).
+      # Every self-hosted run uploads its diagnostics report, Bazel profiles
+      # and any stall note so slow runs can be attributed to targets/actions
+      # without live SSH. The build event and execution logs feed the report
+      # but stay on the runner: they record the host's effective Bazel
+      # configuration, which a public artifact must not carry. Keep artifacts
+      # small; retention is 3 days. DIAG_DIR is exported from the first step
+      # ($RUNNER_TEMP; the `runner` context is not available in job-level env).
       # Build without the Bytes: the runner is a thin remote-execution client on
       # a CPU-capped host. Downloading every toplevel output (unstripped ARM64
       # test binaries) added minutes of pure transfer per run. Tests execute
@@ -1068,7 +1075,13 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: ci-diagnostics-${{ github.job }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/donner-ci-diagnostics/
+          # Derived files only; see the job environment comment above.
+          path: |
+            ${{ runner.temp }}/donner-ci-diagnostics/manifest.txt
+            ${{ runner.temp }}/donner-ci-diagnostics/target-list.txt
+            ${{ runner.temp }}/donner-ci-diagnostics/report.md
+            ${{ runner.temp }}/donner-ci-diagnostics/*/profile.gz
+            ${{ runner.temp }}/donner-ci-diagnostics/*/stall.txt
           retention-days: 3
           if-no-files-found: ignore
 

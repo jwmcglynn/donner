@@ -4,7 +4,9 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <optional>
 #include <ostream>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -1512,6 +1514,458 @@ TEST(FocusViewTest, BoundsSelectAllReferenceSummaryTraversal) {
   EXPECT_GT(summary.traversalWork, 0u);
   EXPECT_LE(summary.traversalWork, kMaximumFocusTraversalWork);
   EXPECT_LE(summary.totalCount(), kMaximumFocusElements);
+}
+
+std::vector<std::string> FocusElementIds(std::span<const svg::SVGElement> elements) {
+  std::vector<std::string> ids;
+  for (const svg::SVGElement& element : elements) {
+    ids.emplace_back(std::string_view(element.id()));
+  }
+  return ids;
+}
+
+std::optional<svg::SVGDocument> ParseDeepFocusSvg(std::string_view source) {
+  ParseWarningSink warnings = ParseWarningSink::Disabled();
+  svg::parser::SVGParser::Options options;
+  options.maximumTreeDepth = kMaximumFocusTraversalDepth + 8u;
+  auto parsed = svg::parser::SVGParser::ParseSVG(source, warnings, options);
+  if (parsed.hasError()) {
+    ADD_FAILURE() << parsed.error();
+    return std::nullopt;
+  }
+  return std::move(parsed.result());
+}
+
+std::string DeepFocusGroupSvg() {
+  std::string source = "<svg xmlns='http://www.w3.org/2000/svg'><g id='target'>";
+  for (std::size_t depth = 0; depth <= kMaximumFocusTraversalDepth; ++depth) {
+    source += "<g>";
+  }
+  source += "<rect width='10' height='10'/>";
+  for (std::size_t depth = 0; depth <= kMaximumFocusTraversalDepth; ++depth) {
+    source += "</g>";
+  }
+  source += "</g></svg>";
+  return source;
+}
+
+TEST(FocusViewTest, CrLfSourceKeepsHalfOpenRangesAndExactReferenceCoordinates) {
+  constexpr std::string_view source =
+      "<svg xmlns=\"http://www.w3.org/2000/svg\">\r\n"
+      "  <path id=\"shape\" d=\"M0 0H1\"/>\r\n"
+      "  <use id=\"target\"\r\n"
+      "       href=\"#shape\"/>\r\n"
+      "</svg>\r\n";
+  EditorApp app;
+  ASSERT_THAT(app.loadFromString(source), testing::IsTrue());
+  const auto target = app.document().document().querySelector("#target");
+  ASSERT_THAT(target, testing::Optional(testing::_));
+  const FocusPartition partition = ComputeFocusPartition(app.document().document(), *target);
+  EXPECT_THAT(partition.fullColor, ElementsAre(LineRangeIs(2, 4)));
+  EXPECT_THAT(partition.referenceColor, ElementsAre(LineRangeIs(1, 2)));
+  EXPECT_THAT(partition.dimmed, ElementsAre(LineRangeIs(0, 1), LineRangeIs(4, 5)));
+  EXPECT_THAT(partition.hidden, ElementsAre(LineRangeIs(5, 6)));
+  EXPECT_THAT(partition.referenceLinks,
+              ElementsAre(ReferenceLinkIs(SourcePoint{3, 13}, SourcePoint{1, 2})));
+  EXPECT_THAT(partition.resourceLimitExceeded, testing::IsFalse());
+  EXPECT_THAT(app.document().document().source(), testing::Eq(source));
+  EXPECT_THAT(app.undoTimeline().entryCount(), testing::Eq(0u));
+}
+
+TEST(FocusViewTest, DuplicateSelectionsAndRepeatedReferencesKeepDistinctSummaryMembership) {
+  constexpr std::string_view source =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg">
+  <defs><linearGradient id="paint"><stop offset="0"/></linearGradient></defs>
+  <rect id="target" fill="url(#paint)" stroke="url(#paint)"/>
+</svg>)svg";
+  EditorApp app;
+  ASSERT_THAT(app.loadFromString(source), testing::IsTrue());
+  const auto target = app.document().document().querySelector("#target");
+  ASSERT_THAT(target, testing::Optional(testing::_));
+  const std::vector<svg::SVGElement> selection{*target, *target, *target};
+  const ReferenceHighlightSummary summary =
+      ComputeReferenceHighlightSummary(app.document().document(), selection);
+  EXPECT_THAT(FocusElementIds(summary.referencedElements), ElementsAre("paint"));
+  EXPECT_THAT(summary.referencingElements, IsEmpty());
+  EXPECT_THAT(summary.totalCount(), testing::Eq(1u));
+  EXPECT_THAT(summary.resourceLimitExceeded, testing::IsFalse());
+  const FocusPartition once = ComputeFocusPartition(app.document().document(), *target);
+  const FocusPartition repeated = ComputeFocusPartition(app.document().document(), selection);
+  EXPECT_THAT(repeated.fullColor, testing::ElementsAreArray(once.fullColor));
+  EXPECT_THAT(repeated.referenceColor, testing::ElementsAreArray(once.referenceColor));
+  EXPECT_THAT(repeated.dimmed, testing::ElementsAreArray(once.dimmed));
+  EXPECT_THAT(repeated.hidden, testing::ElementsAreArray(once.hidden));
+  EXPECT_THAT(repeated.referenceLinks, testing::UnorderedElementsAreArray(once.referenceLinks));
+  EXPECT_THAT(repeated.resourceLimitExceeded, testing::IsFalse());
+}
+
+TEST(FocusViewTest, CyclicResourceContextTerminatesWhileSummaryRemainsDirect) {
+  constexpr std::string_view source =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="first" href="#second"/>
+    <linearGradient id="second" href="#first"/>
+  </defs>
+  <rect id="target" fill="url(#first)"/>
+</svg>)svg";
+  EditorApp app;
+  ASSERT_THAT(app.loadFromString(source), testing::IsTrue());
+  const auto target = app.document().document().querySelector("#target");
+  ASSERT_THAT(target, testing::Optional(testing::_));
+  const FocusPartition partition = ComputeFocusPartition(app.document().document(), *target);
+  EXPECT_THAT(partition.fullColor, ElementsAre(LineRangeIs(5, 6)));
+  EXPECT_THAT(partition.referenceColor, ElementsAre(LineRangeIs(2, 4)));
+  EXPECT_THAT(partition.referenceLinks,
+              testing::UnorderedElementsAre(
+                  ReferenceLinkIs(PointForNeedle(source, "#second"),
+                                  PointForOpeningTagEnd(source, R"(<linearGradient id="second")")),
+                  ReferenceLinkIs(PointForNeedle(source, "#first"),
+                                  PointForOpeningTagEnd(source, R"(<linearGradient id="first")")),
+                  ReferenceLinkIs(PointForNeedleAfter(source, "#first", R"(<rect id="target")"),
+                                  PointForOpeningTagEnd(source, R"(<linearGradient id="first")"))));
+  const std::vector<svg::SVGElement> selection{*target};
+  const ReferenceHighlightSummary summary =
+      ComputeReferenceHighlightSummary(app.document().document(), selection);
+  EXPECT_THAT(FocusElementIds(summary.referencedElements), ElementsAre("first"));
+  EXPECT_THAT(summary.referencingElements, IsEmpty());
+  EXPECT_THAT(partition.resourceLimitExceeded, testing::IsFalse());
+  EXPECT_THAT(summary.resourceLimitExceeded, testing::IsFalse());
+}
+
+TEST(FocusViewTest, DeclarationFocusMatchesTheWholeSelectorListAndWrapperPreservesItsPartition) {
+  EditorApp app;
+  ASSERT_THAT(app.loadFromString(kSelectorListSvg), testing::IsTrue());
+  const std::size_t offset = OffsetForNeedle(kSelectorListSvg, "opacity");
+  const auto focus = ComputeStyleFocusAtSourceOffset(app.document().document(), offset);
+  ASSERT_THAT(focus, testing::Optional(testing::_));
+  EXPECT_THAT(FocusElementIds(focus->impactedElements),
+              testing::UnorderedElementsAre("hit", "miss"));
+  EXPECT_THAT(focus->reverseReferenceExpansionSuppressed, testing::IsFalse());
+  EXPECT_THAT(focus->partition.fullColor, ElementsAre(LineRangeIs(2, 3)));
+  const auto partition =
+      ComputeStyleFocusPartitionAtSourceOffset(app.document().document(), offset);
+  ASSERT_THAT(partition, testing::Optional(testing::_));
+  EXPECT_THAT(partition->fullColor, testing::ElementsAreArray(focus->partition.fullColor));
+  EXPECT_THAT(partition->referenceColor,
+              testing::ElementsAreArray(focus->partition.referenceColor));
+  EXPECT_THAT(partition->dimmed, testing::ElementsAreArray(focus->partition.dimmed));
+  EXPECT_THAT(partition->hidden, testing::ElementsAreArray(focus->partition.hidden));
+  EXPECT_THAT(partition->referenceLinks,
+              testing::UnorderedElementsAreArray(focus->partition.referenceLinks));
+  EXPECT_THAT(partition->resourceLimitExceeded, testing::IsFalse());
+  EXPECT_THAT(app.document().document().source(), testing::Eq(kSelectorListSvg));
+}
+
+TEST(FocusViewTest, UnmatchedRuleFocusKeepsOnlyItsRuleAndAncestorContext) {
+  constexpr std::string_view source =
+      R"(<svg xmlns="http://www.w3.org/2000/svg">
+  <style>
+    .unmatched { opacity: 0.5; }
+  </style>
+  <rect id="other"/>
+</svg>)";
+  EditorApp app;
+  ASSERT_THAT(app.loadFromString(source), testing::IsTrue());
+  const auto focus = ComputeStyleFocusAtSourceOffset(app.document().document(),
+                                                     OffsetForNeedle(source, "opacity"));
+  ASSERT_THAT(focus, testing::Optional(testing::_));
+  EXPECT_THAT(focus->impactedElements, IsEmpty());
+  EXPECT_THAT(focus->reverseReferenceExpansionSuppressed, testing::IsFalse());
+  EXPECT_THAT(focus->partition.fullColor, ElementsAre(LineRangeIs(2, 3)));
+  EXPECT_THAT(focus->partition.referenceColor, IsEmpty());
+  EXPECT_THAT(focus->partition.dimmed,
+              ElementsAre(LineRangeIs(0, 2), LineRangeIs(3, 4), LineRangeIs(5, 6)));
+  EXPECT_THAT(focus->partition.hidden, ElementsAre(LineRangeIs(4, 5)));
+  EXPECT_THAT(focus->partition.referenceLinks, IsEmpty());
+}
+
+TEST(FocusViewTest, StyleFocusIdentifiesEachRenderedSvgElementKind) {
+  for (const std::string_view shape : {
+           R"(<circle id="target" class="hit" r="3"/>)",
+           R"(<ellipse id="target" class="hit" rx="3" ry="2"/>)",
+           R"(<g id="target" class="hit"><rect width="2" height="2"/></g>)",
+           R"(<image id="target" class="hit" width="2" height="2"/>)",
+           R"(<line id="target" class="hit" x2="3"/>)",
+           R"(<path id="target" class="hit" d="M0 0H3"/>)",
+           R"(<polygon id="target" class="hit" points="0,0 3,0 3,3"/>)",
+           R"(<polyline id="target" class="hit" points="0,0 3,0 3,3"/>)",
+           R"(<rect id="target" class="hit" width="2" height="2"/>)",
+           R"(<svg id="target" class="hit" width="3" height="3"><rect/></svg>)",
+           R"(<text id="target" class="hit">Hello</text>)",
+           R"(<text><textPath id="target" class="hit" href="#curve">Hello</textPath></text>)",
+           R"(<text><tspan id="target" class="hit">Hello</tspan></text>)",
+           R"(<use id="target" class="hit" href="#curve"/>)",
+       }) {
+    SCOPED_TRACE(shape);
+    std::string source =
+        R"(<svg xmlns="http://www.w3.org/2000/svg"><style>.hit { opacity: 0.5; }</style><defs><path id="curve" d="M0 0H10"/></defs>)";
+    source += shape;
+    source += "</svg>";
+    EditorApp app;
+    ASSERT_THAT(app.loadFromString(source), testing::IsTrue());
+    const auto focus = ComputeStyleFocusAtSourceOffset(app.document().document(),
+                                                       OffsetForNeedle(source, "opacity"));
+    ASSERT_THAT(focus, testing::Optional(testing::_));
+    EXPECT_THAT(FocusElementIds(focus->impactedElements), ElementsAre("target"));
+    EXPECT_THAT(focus->reverseReferenceExpansionSuppressed, testing::IsFalse());
+    EXPECT_THAT(focus->partition.resourceLimitExceeded, testing::IsFalse());
+  }
+}
+
+TEST(FocusViewTest, DefinitionSubtreesDoNotBecomeCanvasSelectionFromStyleFocus) {
+  for (const std::string_view container :
+       {"defs", "clipPath", "mask", "pattern", "symbol", "marker"}) {
+    SCOPED_TRACE(container);
+    std::string source =
+        R"(<svg xmlns="http://www.w3.org/2000/svg"><style>.hit { opacity: 0.5; }</style><)";
+    source += container;
+    source += R"( id="resource"><rect id="definition" class="hit" width="2" height="2"/></)";
+    source += container;
+    source += "></svg>";
+    EditorApp app;
+    ASSERT_THAT(app.loadFromString(source), testing::IsTrue());
+    const auto focus = ComputeStyleFocusAtSourceOffset(app.document().document(),
+                                                       OffsetForNeedle(source, "opacity"));
+    ASSERT_THAT(focus, testing::Optional(testing::_));
+    EXPECT_THAT(focus->impactedElements, IsEmpty());
+    EXPECT_THAT(focus->reverseReferenceExpansionSuppressed, testing::IsFalse());
+    EXPECT_THAT(focus->partition.referenceColor, IsEmpty());
+    EXPECT_THAT(focus->partition.referenceLinks, IsEmpty());
+  }
+}
+
+TEST(FocusViewTest, UnrelatedStylesheetResourcesDoNotEnterTheSelectionSummary) {
+  constexpr std::string_view source =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg">
+  <style>.hit { fill: url(#paint); }</style>
+  <style>.other { fill: url(#unrelated); }</style>
+  <defs>
+    <linearGradient id="paint"><stop offset="0"/></linearGradient>
+    <linearGradient id="unrelated"><stop offset="1"/></linearGradient>
+  </defs>
+  <rect id="target" class="hit"/>
+  <rect id="peer" class="other"/>
+</svg>)svg";
+  EditorApp app;
+  ASSERT_THAT(app.loadFromString(source), testing::IsTrue());
+  const auto target = app.document().document().querySelector("#target");
+  ASSERT_THAT(target, testing::Optional(testing::_));
+  const std::vector<svg::SVGElement> selected{*target};
+  const auto summary = ComputeReferenceHighlightSummary(app.document().document(), selected);
+  EXPECT_THAT(FocusElementIds(summary.referencedElements), ElementsAre("paint"));
+  EXPECT_THAT(summary.referencingElements, IsEmpty());
+  const auto partition = ComputeFocusPartition(app.document().document(), *target);
+  EXPECT_THAT(partition.fullColor, ElementsAre(LineRangeIs(7, 8)));
+  EXPECT_THAT(partition.referenceColor, ElementsAre(LineRangeIs(1, 2), LineRangeIs(4, 5)));
+  EXPECT_THAT(partition.referenceLinks,
+              testing::UnorderedElementsAre(
+                  ReferenceLinkIs(PointForOpeningTagEnd(source, R"(<rect id="target")"),
+                                  PointForNeedle(source, ".hit")),
+                  ReferenceLinkIs(PointForNeedle(source, "#paint"),
+                                  PointForOpeningTagEnd(source, R"(<linearGradient id="paint")"))));
+}
+
+TEST(FocusViewTest, ReverseCssFanoutExpandsFiveAndSummarizesSixWithoutLosingTheCount) {
+  for (const std::size_t count : {5u, 6u}) {
+    SCOPED_TRACE(count);
+    std::string source =
+        R"svg(<svg xmlns="http://www.w3.org/2000/svg">
+  <style>.hit { fill: url(#paint); }</style>
+  <defs><linearGradient id="paint"><stop offset="0"/></linearGradient></defs>
+)svg";
+    std::vector<std::string> expectedIds;
+    for (std::size_t i = 0; i < count; ++i) {
+      const std::string id = "user" + std::to_string(i);
+      expectedIds.push_back(id);
+      source += "  <rect id='" + id + "' class='hit'/>\n";
+    }
+    source += "</svg>";
+    EditorApp app;
+    ASSERT_THAT(app.loadFromString(source), testing::IsTrue());
+    const auto paint = app.document().document().querySelector("#paint");
+    ASSERT_THAT(paint, testing::Optional(testing::_));
+    const std::vector<svg::SVGElement> selected{*paint};
+    const auto summary = ComputeReferenceHighlightSummary(app.document().document(), selected);
+    EXPECT_THAT(FocusElementIds(summary.referencingElements),
+                testing::UnorderedElementsAreArray(expectedIds));
+    EXPECT_THAT(summary.referencedElements, IsEmpty());
+    EXPECT_THAT(summary.totalCount(), testing::Eq(count));
+    const auto partition = ComputeFocusPartition(app.document().document(), *paint);
+    EXPECT_THAT(partition.resourceLimitExceeded, testing::IsFalse());
+    if (count == 5u) {
+      EXPECT_THAT(partition.referenceColor, ElementsAre(LineRangeIs(1, 2), LineRangeIs(3, 8)));
+      EXPECT_THAT(partition.referenceLinks, testing::SizeIs(6u));
+    } else {
+      EXPECT_THAT(partition.referenceColor, IsEmpty());
+      EXPECT_THAT(partition.referenceLinks, IsEmpty());
+      EXPECT_THAT(partition.hidden, ElementsAre(LineRangeIs(1, 2), LineRangeIs(3, 9)));
+    }
+  }
+}
+
+TEST(FocusViewTest, WideDocumentSummaryReportsIndexTruncationAndKeepsItsLimits) {
+  std::string source =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg"><defs><linearGradient id="paint"/></defs><rect id="target" fill="url(#paint)"/>)svg";
+  for (std::size_t i = 0; i < kMaximumFocusElements; ++i) {
+    source += "<rect id='user" + std::to_string(i) + "' fill='url(#paint)'/>";
+  }
+  source += "</svg>";
+  EditorApp app;
+  ASSERT_THAT(app.loadFromString(source), testing::IsTrue());
+  const auto target = app.document().document().querySelector("#target");
+  ASSERT_THAT(target, testing::Optional(testing::_));
+  const std::vector<svg::SVGElement> selected{*target};
+  const auto summary = ComputeReferenceHighlightSummary(app.document().document(), selected);
+  EXPECT_THAT(summary.resourceLimitExceeded, testing::IsTrue());
+  EXPECT_THAT(summary.traversalWork,
+              testing::AllOf(testing::Gt(0u), testing::Le(kMaximumFocusTraversalWork)));
+  EXPECT_THAT(summary.referencedElements, testing::SizeIs(testing::Le(kMaximumFocusElements)));
+  EXPECT_THAT(summary.referencingElements, testing::SizeIs(testing::Le(kMaximumFocusElements)));
+  EXPECT_THAT(app.document().document().source(), testing::Eq(source));
+}
+
+TEST(FocusViewTest, ExcessMatchedRulesBoundTheConnectorsAndReportTruncation) {
+  std::string source = "<svg xmlns='http://www.w3.org/2000/svg'>\n<style>\n";
+  for (std::size_t i = 0; i <= kMaximumFocusElements; ++i) {
+    source += ".hit { opacity: 0.5; }\n";
+  }
+  source += "</style>\n<rect id='target' class='hit'/>\n</svg>";
+  EditorApp app;
+  ASSERT_THAT(app.loadFromString(source), testing::IsTrue());
+  const auto target = app.document().document().querySelector("#target");
+  ASSERT_THAT(target, testing::Optional(testing::_));
+  const auto partition = ComputeFocusPartition(app.document().document(), *target);
+  EXPECT_THAT(partition.resourceLimitExceeded, testing::IsTrue());
+  EXPECT_THAT(partition.fullColor,
+              ElementsAre(LineRangeIs(static_cast<int>(kMaximumFocusElements + 4u),
+                                      static_cast<int>(kMaximumFocusElements + 5u))));
+  EXPECT_THAT(partition.referenceLinks, testing::SizeIs(testing::Le(kMaximumFocusReferenceLinks)));
+  EXPECT_THAT(partition.referenceColor, testing::Not(IsEmpty()));
+  EXPECT_THAT(partition.traversalWork, testing::Le(kMaximumFocusTraversalWork));
+  EXPECT_THAT(app.document().document().source(), testing::Eq(source));
+}
+
+TEST(FocusViewTest, DeepSelectedGroupReportsDepthTruncationWithoutChangingItsSource) {
+  const std::string source = DeepFocusGroupSvg();
+  auto document = ParseDeepFocusSvg(source);
+  ASSERT_THAT(document, testing::Optional(testing::_));
+  const auto target = document->querySelector("#target");
+  ASSERT_THAT(target, testing::Optional(testing::_));
+  const auto partition = ComputeFocusPartition(*document, *target);
+  EXPECT_THAT(partition.resourceLimitExceeded, testing::IsTrue());
+  EXPECT_THAT(partition.fullColor, ElementsAre(LineRangeIs(0, 1)));
+  EXPECT_THAT(partition.traversalWork,
+              testing::AllOf(testing::Gt(0u), testing::Le(kMaximumFocusTraversalWork)));
+  EXPECT_THAT(partition.referenceLinks, IsEmpty());
+  EXPECT_THAT(document->source(), testing::Eq(source));
+}
+
+TEST(FocusViewTest, DeepSelectedGroupSummaryReportsDepthTruncation) {
+  const std::string source = DeepFocusGroupSvg();
+  auto document = ParseDeepFocusSvg(source);
+  ASSERT_THAT(document, testing::Optional(testing::_));
+  const auto target = document->querySelector("#target");
+  ASSERT_THAT(target, testing::Optional(testing::_));
+  const std::vector<svg::SVGElement> selected{*target};
+  const auto summary = ComputeReferenceHighlightSummary(*document, selected);
+  EXPECT_THAT(summary.resourceLimitExceeded, testing::IsTrue());
+  EXPECT_THAT(summary.traversalWork,
+              testing::AllOf(testing::Gt(0u), testing::Le(kMaximumFocusTraversalWork)));
+  EXPECT_THAT(summary.referencedElements, IsEmpty());
+  EXPECT_THAT(summary.referencingElements, IsEmpty());
+  EXPECT_THAT(document->source(), testing::Eq(source));
+}
+
+TEST(FocusViewTest, LargestSupportedLineIndexStillProducesTheExactFocusPartition) {
+  std::string source = "<svg xmlns='http://www.w3.org/2000/svg'>\n<rect id='target'/>";
+  source.append(kMaximumFocusLineStarts - 2u, '\n');
+  source += "</svg>";
+  EditorApp app;
+  ASSERT_THAT(app.loadFromString(source), testing::IsTrue());
+  const auto target = app.document().document().querySelector("#target");
+  ASSERT_THAT(target, testing::Optional(testing::_));
+  const auto partition = ComputeFocusPartition(app.document().document(), *target);
+  EXPECT_THAT(partition.resourceLimitExceeded, testing::IsFalse());
+  EXPECT_THAT(partition.fullColor, ElementsAre(LineRangeIs(1, 2)));
+  EXPECT_THAT(
+      partition.dimmed,
+      ElementsAre(LineRangeIs(0, 1), LineRangeIs(static_cast<int>(kMaximumFocusLineStarts - 1u),
+                                                 static_cast<int>(kMaximumFocusLineStarts))));
+  EXPECT_THAT(partition.hidden,
+              ElementsAre(LineRangeIs(2, static_cast<int>(kMaximumFocusLineStarts - 1u))));
+}
+
+TEST(FocusViewTest, DomAttributeReflectionUpdatesTheReferenceSummaryAndConnector) {
+  constexpr std::string_view source =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg">
+  <defs><linearGradient id="paint"/><linearGradient id="accent"/></defs>
+  <rect id="target" fill="url(#paint)"/>
+</svg>)svg";
+  EditorApp app;
+  ASSERT_THAT(app.loadFromString(source), testing::IsTrue());
+  auto target = app.document().document().querySelector("#target");
+  ASSERT_THAT(target, testing::Optional(testing::_));
+  const std::vector<svg::SVGElement> selected{*target};
+  EXPECT_THAT(
+      FocusElementIds(
+          ComputeReferenceHighlightSummary(app.document().document(), selected).referencedElements),
+      ElementsAre("paint"));
+  target->setAttribute("fill", "url(#accent)");
+  const auto summary = ComputeReferenceHighlightSummary(app.document().document(), selected);
+  EXPECT_THAT(FocusElementIds(summary.referencedElements), ElementsAre("accent"));
+  EXPECT_THAT(summary.referencingElements, IsEmpty());
+  const std::string_view reflected = app.document().document().source();
+  EXPECT_THAT(reflected, testing::HasSubstr("fill=\"url(#accent)\""));
+  const auto partition = ComputeFocusPartition(app.document().document(), *target);
+  EXPECT_THAT(partition.referenceLinks,
+              ElementsAre(ReferenceLinkIs(
+                  PointForNeedle(reflected, "#accent"),
+                  PointForOpeningTagEnd(reflected, R"(<linearGradient id="accent")"))));
+}
+
+TEST(FocusViewTest, ElementAndStyleFocusRespectReentrantConcurrentDocumentReadAccess) {
+  EditorApp app;
+  ASSERT_THAT(app.loadFromString(kCssReferencedSvg), testing::IsTrue());
+  svg::SVGDocument& document = app.document().document();
+  document.setThreadingMode(svg::ThreadingMode::ConcurrentDom);
+  const auto access = document.readAccess();
+  const auto target = document.querySelector("#target");
+  ASSERT_THAT(target, testing::Optional(testing::_));
+  const auto elementFocus = ComputeFocusPartition(document, *target);
+  EXPECT_THAT(elementFocus.fullColor, ElementsAre(LineRangeIs(8, 9)));
+  const auto styleFocus =
+      ComputeStyleFocusAtSourceOffset(document, OffsetForNeedle(kCssReferencedSvg, "fill"));
+  ASSERT_THAT(styleFocus, testing::Optional(testing::_));
+  EXPECT_THAT(FocusElementIds(styleFocus->impactedElements), ElementsAre("target"));
+  const std::vector<svg::SVGElement> selected{*target};
+  EXPECT_THAT(
+      FocusElementIds(ComputeReferenceHighlightSummary(document, selected).referencedElements),
+      ElementsAre("paint"));
+  EXPECT_THAT(document.source(), testing::Eq(kCssReferencedSvg));
+}
+
+TEST(FocusViewTest, OversizedSelectionReportsElementTruncationAndRetainsBoundedSourceFocus) {
+  constexpr std::size_t kSelectionCount = kMaximumFocusElements + 1u;
+  std::string source = "<svg xmlns='http://www.w3.org/2000/svg'>\n";
+  for (std::size_t i = 0; i < kSelectionCount; ++i) {
+    source += "<rect id='selected" + std::to_string(i) + "' width='1' height='1'/>\n";
+  }
+  source += "</svg>";
+  EditorApp app;
+  ASSERT_THAT(app.loadFromString(source), testing::IsTrue());
+  std::vector<svg::SVGElement> selection;
+  for (auto child = app.document().document().svgElement().firstChild(); child.has_value();
+       child = child->nextSibling()) {
+    selection.push_back(*child);
+  }
+  ASSERT_THAT(selection, testing::SizeIs(kSelectionCount));
+  const FocusPartition partition = ComputeFocusPartition(app.document().document(), selection);
+  EXPECT_THAT(partition.resourceLimitExceeded, testing::IsTrue());
+  EXPECT_THAT(partition.fullColor, testing::Not(IsEmpty()));
+  EXPECT_THAT(partition.fullColor, testing::SizeIs(testing::Le(kMaximumFocusLineRanges)));
+  EXPECT_THAT(partition.referenceLinks, IsEmpty());
+  EXPECT_THAT(partition.traversalWork, testing::Le(kMaximumFocusTraversalWork));
+  EXPECT_THAT(app.document().document().source(), testing::Eq(source));
 }
 
 }  // namespace

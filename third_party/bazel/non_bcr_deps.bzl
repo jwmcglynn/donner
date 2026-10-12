@@ -49,16 +49,21 @@ def _non_bcr_deps_impl(_mctx):
 
     # HarfBuzz text shaping. Gated on //donner/svg/renderer:text_full_enabled.
     #
+    # Fetched as the release tag's source archive and pinned by its SHA-256, so a
+    # moved tag fails the fetch instead of changing the shipped sources. The
+    # archive holds the same tree as a checkout of the tag.
+    #
     # The patch_cmds below create src/config-override.h to re-enable parts of
     # the HarfBuzz API that HB_TINY/HB_LEAN strip out. We need:
     #   - the draw API for glyph outline extraction
     #   - CFF outlines for our OTF fallback font (Public Sans)
     #   - file I/O for hb_face_create_from_file_or_fail
-    new_git_repository(
+    http_archive(
         name = "harfbuzz",
         build_file = "//third_party:BUILD.harfbuzz",
-        remote = "https://github.com/harfbuzz/harfbuzz.git",
-        tag = "14.2.1",
+        sha256 = "3c2a9006a7e1bf58737e557014d7882c554c628fb379a9f00008f5ea53dbbdfb",
+        strip_prefix = "harfbuzz-14.2.1",
+        urls = ["https://github.com/harfbuzz/harfbuzz/archive/refs/tags/14.2.1.tar.gz"],
         patch_cmds = [
             """cat > src/config-override.h << 'HBEOF'
 // Re-enable the draw API for glyph outline extraction.
@@ -113,12 +118,14 @@ HBEOF""",
     # Donner uses a custom BUILD file (third_party/BUILD.tracy) because Tracy
     # does not ship Bazel BUILD files upstream. The build file is adapted
     # from the one donner-editor maintains in its own vendored Tracy copy.
-    new_git_repository(
+    # Pinned to the latest stable upstream release's tag archive and its
+    # SHA-256, like HarfBuzz above. Bump deliberately.
+    http_archive(
         name = "tracy",
         build_file = "//third_party:BUILD.tracy",
-        # Pinned to the latest stable upstream release. Bump deliberately.
-        tag = "v0.13.1",
-        remote = "https://github.com/wolfpld/tracy.git",
+        sha256 = "d4efc50ebcb0bfcfdbba148995aeb75044c0d80f5d91223aebfaa8fa9e563d2b",
+        strip_prefix = "tracy-0.13.1",
+        urls = ["https://github.com/wolfpld/tracy/archive/refs/tags/v0.13.1.tar.gz"],
     )
 
     # bazel_clang_tidy: --config=clang-tidy aspect (see .bazelrc).
