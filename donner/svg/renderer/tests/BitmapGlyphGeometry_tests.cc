@@ -125,11 +125,11 @@ TEST(BitmapGlyphGeometryTest, RealFontPixelsBoundsHitAndCropMatchParentRotation)
     ASSERT_THAT(metrics, testing::Ne(std::nullopt));
     const Box2d expected = IndependentlyRotatedBounds(*metrics, glyph);
     EXPECT_THAT(text.getExtentOfChar(0), BoundsNear(expected));
-    EXPECT_THAT(text.computedInkBounds(), BoundsNear(expected));
+    EXPECT_THAT(text.inkBoundingBox(), BoundsNear(expected));
     EXPECT_EQ(text.getCharNumAtPosition((expected.topLeft + expected.bottomRight) * 0.5), 0);
     EXPECT_EQ(text.getCharNumAtPosition(expected.bottomRight + Vector2d(2, 2)), -1);
-    EXPECT_THAT(text.computedGlyphPaths(), testing::IsEmpty());
-    EXPECT_THAT(text.computedGlyphOutlines(), testing::IsEmpty());
+    EXPECT_THAT(engine.computedGlyphPaths(element->entityHandle()), testing::IsEmpty());
+    EXPECT_THAT(engine.computedGlyphOutlines(element->entityHandle()), testing::IsEmpty());
 
     const auto actualCrop = actualRenderer.renderElement(*element, Vector2i(80, 80)).bitmap();
     const auto referenceCrop =
