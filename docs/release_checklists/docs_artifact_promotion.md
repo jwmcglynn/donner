@@ -13,11 +13,12 @@ It does not rebuild, repack, or re-upload the site.
 2. Read the artifact metadata digest with
    `gh api repos/jwmcglynn/donner/actions/artifacts/ARTIFACT_ID --jq .digest`. Record the full
    `sha256:...` value. Confirm the artifact is not expired and the run is a successful main push.
-3. Bind those six values to the release candidate record with the documentation review and
-   security decision. Retain the same values for the previous healthy docs build before any
-   promotion. Both builds must contain a matching `docs-build.json` marker. The previous artifact
-   must still be available for rollback; an expired or pre-marker artifact cannot be recovered
-   by rebuilding old source.
+3. The `docs` role of the [release candidate record](../release_candidate.md) binds the
+   candidate build with the documentation review and security decision. The record has no slot
+   for the previous healthy docs build, so write its six values in the release tracking issue
+   before any promotion. Both builds must contain a matching `docs-build.json` marker. The
+   previous artifact must still be available for rollback; an expired or pre-marker artifact
+   cannot be recovered by rebuilding old source.
 
 ## Publish the reviewed candidate
 
@@ -31,25 +32,27 @@ and waits for Pages success and the selected
 `docs-build.json` marker at the live URL.
 
 Record the deploy run, Pages deployment ID, live URL, selected artifact ID, and marker contents
-in the release candidate record. A green push build alone does not publish documentation.
+in the release tracking issue. The candidate record is immutable and is never edited after it is
+assembled. A green push build alone does not publish documentation.
 
 ## Roll back
 
 1. Select the retained artifact ID and six recorded values for the last healthy, reviewed docs
    build. Reconfirm that the artifact has not expired and that its configuration and content
    remain acceptable for the current release.
-2. Obtain the operator's rollback approval, then manually dispatch the same workflow on `main`
+2. Obtain the maintainer's rollback approval, then manually dispatch the same workflow on `main`
    with that previous selection. Do not run Doxygen or upload a substitute archive.
 3. Require the deployment job to complete green. Confirm the live `docs-build.json` gives the
    previous source commit, run ID, and attempt; check the docs landing page and key links.
-   Record the rollback deployment ID and time.
+   Record the rollback deployment ID and time in the rollback issue described in the
+   [BCR runbook](../design_docs/0018-bcr_release.md).
 
 If selection or archive validation fails before the Pages POST, nothing has cut over; leave the
 site selected as it was. If the Pages POST succeeds but status or live-marker verification fails,
 the site may already have changed. Inspect the live marker and landing page immediately. If they
-do not show a healthy reviewed build, obtain the operator's rollback approval and dispatch the
+do not show a healthy reviewed build, obtain the maintainer's rollback approval and dispatch the
 previous retained selection. If that previous artifact has expired, the release is missing a
-required rollback asset; obtain a new reviewed candidate and an explicit operator decision
+required rollback asset; obtain a new reviewed candidate and an explicit maintainer decision
 before publication.
 
 ## Rehearsal evidence

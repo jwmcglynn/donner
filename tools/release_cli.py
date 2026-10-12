@@ -26,7 +26,9 @@ INPUTS = (
 )
 LOCKFILE = "MODULE.bazel.lock"
 # Provenance schema 2 added the third-party license NOTICE that ships beside each binary.
-SCHEMA = 2
+# Schema 3 replaced `host_cxx_version` (the runner's `c++ --version`, which was not the compiler
+# Bazel used) with `compiler_version`, reported by a probe built with the CLI.
+SCHEMA = 3
 NOTICE_HEADER = "Third-party licenses for build variant: "
 MAX_NOTICE_BYTES = 1024 * 1024
 PUBLIC_LOCK_HOSTS = frozenset({
@@ -52,6 +54,8 @@ URI = re.compile(r"(?i)[A-Za-z][A-Za-z0-9+.-]*://[^\s\"'<>]+")
 IP_ADDRESS = re.compile(r"(?<![0-9])(?:[0-9]{1,3}\.){3}[0-9]{1,3}(?![0-9])")
 PRIVATE_HOST = re.compile(r"(?i)(?:\blocalhost\b|\b(?:internal|private|corp)\.[A-Za-z0-9.-]+|\b[A-Za-z0-9.-]+\.(?:local|lan|internal)\b)")
 COMMIT = re.compile(r"[0-9a-f]{40}\Z")
+COMPILER_VERSION = re.compile(r"[A-Za-z0-9 .+()~_-]{1,256}\Z")
+COMPILER_PROBE_TIMEOUT_SECONDS = 60
 POSITIVE_NUMBER = re.compile(r"[1-9][0-9]*\Z")
 
 
@@ -153,13 +157,39 @@ def _check_notice(path: Path) -> None:
         raise ValueError("release CLI license notice is not a generated third-party notice")
 
 
+def compiler_version(probe: Path) -> str:
+    """Return the compiler identity printed by the probe built beside the release CLI.
+
+    `//tools/ci:release_compiler_identity` is compiled in the same Bazel invocation and
+    configuration as the CLI, so it names the compiler of the C++ toolchain Bazel resolved for the
+    released binary. Any doubt about that identity fails closed.
+    """
+    if probe.is_symlink() or not probe.is_file() or probe.stat().st_size == 0:
+        raise ValueError("release CLI compiler probe is missing or empty")
+    try:
+        result = subprocess.run([str(probe.resolve())], capture_output=True, check=False,
+                                timeout=COMPILER_PROBE_TIMEOUT_SECONDS)
+    except (OSError, subprocess.TimeoutExpired):
+        raise ValueError("release CLI compiler probe could not run") from None
+    if result.returncode != 0:
+        raise ValueError("release CLI compiler probe failed")
+    try:
+        output = result.stdout.decode("ascii")
+    except UnicodeDecodeError:
+        raise ValueError("release CLI compiler version is not ASCII") from None
+    version = output.removesuffix("\n")
+    if "\n" in version or not COMPILER_VERSION.fullmatch(version):
+        raise ValueError("release CLI compiler version is missing or has unsupported characters")
+    return version
+
+
 def _run_identity(run_id: str, attempt: str) -> None:
     if not POSITIVE_NUMBER.fullmatch(run_id) or not POSITIVE_NUMBER.fullmatch(attempt):
         raise ValueError("release CLI producer run and attempt must be positive integers")
 
 
 def package(
-    *, root: Path, binary: Path, notice: Path, output: Path, platform: str,
+    *, root: Path, binary: Path, notice: Path, compiler_probe: Path, output: Path, platform: str,
     commit: str, run_id: str, attempt: str,
 ) -> dict[str, object]:
     _run_identity(run_id, attempt)
@@ -168,6 +198,7 @@ def package(
     if not binary.is_file() or binary.stat().st_size == 0:
         raise ValueError("release CLI binary is missing or empty")
     _check_notice(notice)
+    compiler = compiler_version(compiler_probe)
     lockfile = root / LOCKFILE
     if lockfile.is_symlink() or not lockfile.is_file() or lockfile.stat().st_size == 0:
         raise ValueError("generated Bazel lockfile is missing or empty")
@@ -184,9 +215,6 @@ def package(
     checksum = digest(destination)
     lock_checksum = digest(output / lock_name)
     (output / checksum_name).write_text(f"{checksum}  {binary_name}\n", encoding="ascii")
-    compiler = subprocess.check_output(["c++", "--version"], text=True).splitlines()[0]
-    if not re.fullmatch(r"[A-Za-z0-9 .+()~_-]{1,256}", compiler):
-        raise ValueError("host compiler version contains unsupported characters")
     provenance: dict[str, object] = {
         "schema": SCHEMA,
         "platform": platform,
@@ -195,7 +223,7 @@ def package(
         "producer_run_id": run_id,
         "producer_attempt": attempt,
         "bazel_version": (root / ".bazelversion").read_text(encoding="utf-8").strip(),
-        "host_cxx_version": compiler,
+        "compiler_version": compiler,
         "inputs_sha256": _input_digests(root),
         "generated_lock_sha256": lock_checksum,
         "binary_sha256": checksum,
@@ -212,10 +240,10 @@ def _check_provenance(provenance: object, expected: dict[str, object]) -> dict[s
     for key, value in expected.items():
         if provenance.get(key) != value:
             raise ValueError("release CLI provenance does not match the selected candidate")
-    compiler = provenance.get("host_cxx_version")
-    if not isinstance(compiler, str) or not re.fullmatch(r"[A-Za-z0-9 .+()~_-]{1,256}", compiler):
+    compiler = provenance.get("compiler_version")
+    if not isinstance(compiler, str) or not COMPILER_VERSION.fullmatch(compiler):
         raise ValueError("release CLI compiler version is missing or invalid")
-    if set(provenance) != set(expected) | {"host_cxx_version"}:
+    if set(provenance) != set(expected) | {"compiler_version"}:
         raise ValueError("release CLI provenance has unexpected fields")
     return provenance
 
@@ -275,6 +303,8 @@ def main() -> None:
         if name == "package":
             command.add_argument("--binary", type=Path, required=True)
             command.add_argument("--notice", type=Path, required=True)
+            command.add_argument("--compiler-probe", type=Path, required=True,
+                                 help="//tools/ci:release_compiler_identity from the same build")
             command.add_argument("--output", type=Path, required=True)
         else:
             command.add_argument("--artifacts", type=Path, required=True)
@@ -282,7 +312,8 @@ def main() -> None:
     options = dict(root=args.root, platform=args.platform, commit=args.commit,
                    run_id=args.run_id, attempt=args.attempt)
     if args.command == "package":
-        package(binary=args.binary, notice=args.notice, output=args.output, **options)
+        package(binary=args.binary, notice=args.notice, compiler_probe=args.compiler_probe,
+                output=args.output, **options)
     else:
         verify(artifacts=args.artifacts, **options)
 
