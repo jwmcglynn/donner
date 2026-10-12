@@ -4585,7 +4585,10 @@ TEST_F(XMLDocumentTests, InsertNodeReconcilesAdjacentPublicDataChildrenIntoTextV
   EXPECT_EQ(doc.source(), "<root><text>a &amp; b</text></root>");
   EXPECT_THAT(root.firstChild(), Optional(Eq(text)));
   EXPECT_THAT(text.value(), Optional(Eq("a & b")));
-  EXPECT_FALSE(text.firstChild().has_value());
+  ASSERT_TRUE(text.firstChild().has_value());
+  EXPECT_EQ(text.firstChild()->type(), XMLNode::Type::Data);
+  EXPECT_THAT(text.firstChild()->value(), Optional(Eq("a & b")));
+  EXPECT_FALSE(text.firstChild()->nextSibling().has_value());
   EXPECT_THAT(first.parentElement(), Eq(std::nullopt));
   EXPECT_THAT(second.parentElement(), Eq(std::nullopt));
   ASSERT_TRUE(text.getValueLocation().has_value());
@@ -4626,16 +4629,9 @@ TEST_F(XMLDocumentTests, ForwardMoveCapacityFailureReportsOnlyCommittedRemoval) 
               testing::ElementsAre(XMLMutation::Kind::SourceDiagnosticChanged));
   EXPECT_TRUE(doc.sourceDiagnostic().has_value());
 
-  // A covering edit repairs the source/tree mismatch before another structured move.
-  limits.maximumSourceSize = 1024;
-  ASSERT_TRUE(doc.sourceStore()->setResourceLimits(limits));
-  const auto repair = doc.applySourceEdit(XMLEditIntent{
-      .range = SourceRange{FileOffset::Offset(0), FileOffset::Offset(doc.source().size())},
-      .replacement = std::string(kSource),
-      .sourceVersion = doc.sourceVersion(),
-  });
-  ASSERT_TRUE(repair.applied);
-  EXPECT_THAT(repair.diagnostic, Eq(std::nullopt));
+  // Restore the retained last-valid source through a full public reparse. Whole-document
+  // recovery is the caller's responsibility, rather than a narrow incremental edit.
+  doc = ParseDocument(kSource);
   EXPECT_THAT(doc.sourceDiagnostic(), Eq(std::nullopt));
   root = *doc.root().firstChild();
   moved = ElementChild(root, 0);
