@@ -784,9 +784,12 @@ INSTANTIATE_TEST_SUITE_P(
                     // Both files use the deprecated `optimizeSpeed` alias, which CSS Images maps to
                     // `crisp-edges`. Donner uses an allowed nearest-neighbor policy, but the resvg
                     // golden chooses a different pixel-center grid under the root viewport scale.
+                    // The reference uses an allowed destination-pixel-center nearest grid.
                     {"on-feImage.svg",
-                     Params::Skip("Reference oracle: allowed crisp-edges nearest grid differs from "
-                                  "the resvg pixel-center convention under viewport scaling")},
+                     Params::WithGoldenOverride(
+                         "donner/svg/renderer/testdata/golden/resvg-on-feImage.png")
+                         .requireFeature(RendererBackendFeature::FilterEffects, "filter effects")
+                         .withReason("Nearest sampling at destination pixel centers")},
                     {"optimizeSpeed.svg",
                      Params::Skip("Reference oracle: allowed crisp-edges nearest grid differs from "
                                   "the resvg pixel-center convention under viewport scaling")},
