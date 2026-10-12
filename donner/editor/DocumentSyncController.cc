@@ -4,6 +4,7 @@
 #include <iterator>
 #include <optional>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "donner/base/xml/XMLTokenizer.h"
@@ -442,10 +443,28 @@ std::optional<float> DocumentSyncController::nextTextSyncWakeSeconds() const {
   return std::max(0.0f, kTextChangeDebounceSeconds - textChangeIdleTimer_);
 }
 
+std::vector<xml::XMLSourceDelta> DocumentSyncController::takeSourceDeltasOrMirrorWholeSource(
+    EditorApp& app, TextEditor& textEditor) {
+  std::optional<std::vector<xml::XMLSourceDelta>> sourceDeltas =
+      app.document().takeUnmirroredSourceDeltas();
+  if (sourceDeltas.has_value()) {
+    return std::move(*sourceDeltas);
+  }
+
+  // Too many deltas accumulated to keep; the whole source replaces them.
+  (void)MirrorDocumentSourceIntoTextEditor(app, textEditor, &previousSourceText_,
+                                           &lastWritebackSourceText_);
+  return {};
+}
+
 void DocumentSyncController::applyPendingWritebacks(EditorApp& app, SelectTool& selectTool,
                                                     TextEditor& textEditor) {
   const AsyncSVGDocument::FlushResult& lastFlush = app.document().lastFlushResult();
-  bool handledLastFlushSourceDeltas = false;
+  // Take every delta flushed since the last mirror, not only the latest flush's: tools flush their
+  // own edits, and any later flush (even a no-op) resets lastFlushResult() before this runs.
+  const std::vector<xml::XMLSourceDelta> sourceDeltas =
+      takeSourceDeltasOrMirrorWholeSource(app, textEditor);
+  bool handledSourceDeltas = false;
   if (lastFlush.replacedDocument && lastFlush.preserveUndoOnReparse && app.hasDocument() &&
       !app.document().lastParseError().has_value()) {
     (void)MirrorDocumentSourceIntoTextEditor(app, textEditor, &previousSourceText_,
@@ -476,8 +495,8 @@ void DocumentSyncController::applyPendingWritebacks(EditorApp& app, SelectTool& 
   }
 
   if (!pendingElementRemoveWritebacks_.empty()) {
-    handledLastFlushSourceDeltas = true;
-    if (mirrorSourceDeltas(app, textEditor, app.document().lastFlushResult().sourceDeltas) ||
+    handledSourceDeltas = true;
+    if (mirrorSourceDeltas(app, textEditor, sourceDeltas) ||
         MirrorDocumentSourceIntoTextEditor(app, textEditor, &previousSourceText_,
                                            &lastWritebackSourceText_)) {
       pendingElementRemoveWritebacks_.clear();
@@ -502,8 +521,8 @@ void DocumentSyncController::applyPendingWritebacks(EditorApp& app, SelectTool& 
     }
   }
 
-  if (!handledLastFlushSourceDeltas && !lastFlush.sourceDeltas.empty()) {
-    if (!mirrorSourceDeltas(app, textEditor, lastFlush.sourceDeltas)) {
+  if (!handledSourceDeltas && !sourceDeltas.empty()) {
+    if (!mirrorSourceDeltas(app, textEditor, sourceDeltas)) {
       (void)MirrorDocumentSourceIntoTextEditor(app, textEditor, &previousSourceText_,
                                                &lastWritebackSourceText_);
     }

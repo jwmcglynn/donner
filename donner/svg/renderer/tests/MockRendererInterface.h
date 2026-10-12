@@ -34,6 +34,10 @@ public:
   MOCK_METHOD(void, pushMask, (const std::optional<Box2d>& maskBounds), (override));
   MOCK_METHOD(void, pushMask, (const std::optional<Box2d>& maskBounds, MaskType maskType),
               (override));
+  MOCK_METHOD(void, pushMask,
+              (const std::optional<Box2d>& maskBounds, MaskType maskType,
+               ColorInterpolation colorInterpolation),
+              (override));
   MOCK_METHOD(void, transitionMaskToContent, (), (override));
   MOCK_METHOD(void, popMask, (), (override));
   MOCK_METHOD(bool, beginPatternTile, (const Box2d& tileRect, const Transform2d& targetFromPattern),

@@ -3269,7 +3269,8 @@ void GeoEncoder::blitFullTarget(const gpu::Texture& src, double opacity) {
 
 void GeoEncoder::blitFullTargetMasked(const gpu::Texture& content, const gpu::Texture& mask,
                                       svg::MaskType maskType,
-                                      const std::optional<Box2d>& maskBounds) {
+                                      const std::optional<Box2d>& maskBounds,
+                                      svg::ColorInterpolation colorInterpolation) {
   if (!content.isValid() || !mask.isValid()) {
     return;
   }
@@ -3300,7 +3301,9 @@ void GeoEncoder::blitFullTargetMasked(const gpu::Texture& content, const gpu::Te
   // in premultiplied alpha.
   qp.sourceIsPremultiplied = true;
   qp.maskTexture = &mask;
-  qp.maskMode = maskType == svg::MaskType::Alpha ? 2u : 1u;
+  qp.maskMode = maskType == svg::MaskType::Alpha                           ? 2u
+                : colorInterpolation == svg::ColorInterpolation::LinearRGB ? 3u
+                                                                           : 1u;
   qp.clipMaskView = impl_->activeClipMaskView;
   if (maskBounds.has_value()) {
     qp.applyMaskBounds = true;

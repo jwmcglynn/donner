@@ -69,6 +69,8 @@ void AsyncSVGDocument::publishParseDiagnostics(std::vector<ParseDiagnostic> warn
 void AsyncSVGDocument::setDocument(svg::SVGDocument document) {
   document_ = std::move(document);
   queue_.clear();
+  unmirroredSourceDeltas_.clear();
+  unmirroredSourceDeltasOverflowed_ = false;
   publishParseDiagnostics({}, std::nullopt);
   pendingStructuralRemap_.clear();
   frameVersion_.fetch_add(1, std::memory_order_release);
@@ -110,6 +112,8 @@ AsyncSVGDocument::ReplaceKind AsyncSVGDocument::setDocumentMaybeStructural(
   // after.
   document_ = std::move(newDocument);
   queue_.clear();
+  unmirroredSourceDeltas_.clear();
+  unmirroredSourceDeltasOverflowed_ = false;
   publishParseDiagnostics({}, std::nullopt);
   frameVersion_.fetch_add(1, std::memory_order_release);
   documentGeneration_.fetch_add(1, std::memory_order_release);
@@ -121,6 +125,23 @@ AsyncSVGDocument::ReplaceKind AsyncSVGDocument::setDocumentMaybeStructural(
   }
   pendingStructuralRemap_.clear();
   return ReplaceKind::FullReplace;
+}
+
+void AsyncSVGDocument::appendUnmirroredSourceDeltas(
+    const std::vector<xml::XMLSourceDelta>& sourceDeltas) {
+  if (unmirroredSourceDeltasOverflowed_) {
+    return;
+  }
+
+  if (unmirroredSourceDeltas_.size() + sourceDeltas.size() > kMaxUnmirroredSourceDeltas) {
+    unmirroredSourceDeltas_.clear();
+    unmirroredSourceDeltas_.shrink_to_fit();
+    unmirroredSourceDeltasOverflowed_ = true;
+    return;
+  }
+
+  unmirroredSourceDeltas_.insert(unmirroredSourceDeltas_.end(), sourceDeltas.begin(),
+                                 sourceDeltas.end());
 }
 
 bool AsyncSVGDocument::flushFrame() {
@@ -166,6 +187,7 @@ bool AsyncSVGDocument::flushFrame() {
   if (!lastFlushResult_.onlyTransformCommands) {
     ++nonTransformRevision_;
   }
+  appendUnmirroredSourceDeltas(lastFlushResult_.sourceDeltas);
   frameVersion_.fetch_add(1, std::memory_order_release);
   return true;
 }

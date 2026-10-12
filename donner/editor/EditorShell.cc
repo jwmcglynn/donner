@@ -2470,6 +2470,7 @@ void EditorShell::resetPresentationForLoadedDocument(std::string_view canonicalS
   lastHighlightedSelection_.clear();
   lastTreeSelection_.reset();
   textEditor_.clearFocusPartition();
+  deferredSourceFocusScroll_.reset();
   lastPostedScreenPoint_.reset();
   preserveSourceEditFocusCursor_ = false;
   sourceSelectionOriginatedInText_ = false;
@@ -6996,26 +6997,14 @@ bool EditorShell::highlightSelectionSourceIfNeeded() {
     return false;
   }
 
-  const auto& selectionNow = app_.selectedElements();
   const bool preserveSourceEditCursor =
       preserveSourceEditFocusCursor_ && sourceFocusMode_ && textEditor_.isCursorInsideFocusRange();
-  if (selectionNow != lastHighlightedSelection_) {
-    referenceHighlightActive_ = false;
-    referenceHighlightChipHovered_ = false;
-    referenceHighlightSummary_ = ReferenceHighlightSummary{};
-    lastReferenceHighlightSelection_.clear();
-    if (sourceSelectionOriginatedInText_ || preserveSourceEditCursor) {
-      if (!sourceFocusOriginatedInStyle_) {
-        updateSourceFocusView(/*scrollToSelection=*/false);
-      }
-      sourceSelectionOriginatedInText_ = false;
-      preserveSourceEditFocusCursor_ = false;
-    } else if (!selectionNow.empty()) {
-      updateSourceFocusView(/*scrollToSelection=*/true);
-    } else {
-      textEditor_.clearFocusPartition();
-    }
-    lastHighlightedSelection_ = selectionNow;
+  if (app_.selectedElements() != lastHighlightedSelection_) {
+    highlightChangedSelectionSource(preserveSourceEditCursor);
+    return true;
+  }
+
+  if (applyDeferredSourceFocusIfReady()) {
     return true;
   }
 
@@ -7025,6 +7014,36 @@ bool EditorShell::highlightSelectionSourceIfNeeded() {
   }
 
   return false;
+}
+
+void EditorShell::highlightChangedSelectionSource(bool preserveSourceEditCursor) {
+  const auto& selectionNow = app_.selectedElements();
+  referenceHighlightActive_ = false;
+  referenceHighlightChipHovered_ = false;
+  referenceHighlightSummary_ = ReferenceHighlightSummary{};
+  lastReferenceHighlightSelection_.clear();
+  if (sourceSelectionOriginatedInText_ || preserveSourceEditCursor) {
+    if (!sourceFocusOriginatedInStyle_) {
+      updateSourceFocusView(/*scrollToSelection=*/false);
+    }
+    sourceSelectionOriginatedInText_ = false;
+    preserveSourceEditFocusCursor_ = false;
+  } else if (!selectionNow.empty()) {
+    updateSourceFocusView(/*scrollToSelection=*/true);
+  } else {
+    deferredSourceFocusScroll_.reset();
+    textEditor_.clearFocusPartition();
+  }
+  lastHighlightedSelection_ = selectionNow;
+}
+
+bool EditorShell::applyDeferredSourceFocusIfReady() {
+  if (!deferredSourceFocusScroll_.has_value() || sourcePaneAwaitsDocumentEdits()) {
+    return false;
+  }
+
+  updateSourceFocusView(*deferredSourceFocusScroll_);
+  return true;
 }
 
 std::optional<StyleFocus> EditorShell::styleFocusAtSourceOffset(std::size_t sourceOffset) const {
@@ -7269,8 +7288,10 @@ void EditorShell::refreshReferenceHighlightSummaryIfNeeded() {
     return;
   }
 
-  if (renderCoordinator_.asyncRenderer().isBusy()) {
-    window_.wakeEventLoop();
+  // The renderer wakes the loop when its gate opens. Requesting a frame here instead would redraw
+  // every frame of a press-started render and, in the browser, hold the GPU owner thread the render
+  // needs.
+  if (renderCoordinator_.asyncRenderer().isBusyWithIdleWake()) {
     return;
   }
 
@@ -7898,6 +7919,7 @@ std::optional<StyleFocus> EditorShell::styleFocusAtSourceCursor() {
 }
 
 void EditorShell::applyStyleFocus(StyleFocus styleFocus) {
+  deferredSourceFocusScroll_.reset();
   applySourcePartition(std::move(styleFocus.partition));
   sourceFocusOriginatedInStyle_ = true;
   sourceSelectionOriginatedInText_ = false;
@@ -7965,10 +7987,24 @@ void EditorShell::applySourcePartition(FocusPartition partition) {
   textEditor_.setFocusPartition(partition);
 }
 
+bool EditorShell::sourcePaneAwaitsDocumentEdits() const {
+  return app_.hasDocument() &&
+         (app_.document().hasPendingMutations() || app_.document().hasUnmirroredSourceDeltas());
+}
+
 void EditorShell::updateSourceFocusView(bool scrollToSelection) {
   sourceFocusOriginatedInStyle_ = false;
+  deferredSourceFocusScroll_.reset();
   if (!app_.hasDocument() || app_.selectedElements().empty()) {
     textEditor_.clearFocusPartition();
+    return;
+  }
+
+  if (sourcePaneAwaitsDocumentEdits()) {
+    // A tool just inserted or edited the selection and its source writeback waits for an idle
+    // frame. Keep the current partition, which tracks the pane's own text, until the pane catches
+    // up; highlightSelectionSourceIfNeeded() then computes focus against matching lines.
+    deferredSourceFocusScroll_ = scrollToSelection;
     return;
   }
 

@@ -64,6 +64,7 @@ struct PopFilterLayerCommand {};
 struct PushMaskCommand {
   std::optional<Box2d> maskBounds;
   MaskType maskType = MaskType::Luminance;
+  ColorInterpolation colorInterpolation = ColorInterpolation::SRGB;
 };
 
 struct TransitionMaskToContentCommand {};
@@ -440,7 +441,11 @@ void ReplayCommand(const RenderCommand& command, RendererInterface& renderer,
           },
           [&](const PopFilterLayerCommand&) { renderer.popFilterLayer(); },
           [&](const PushMaskCommand& value) {
-            renderer.pushMask(value.maskBounds, value.maskType);
+            if (value.colorInterpolation == ColorInterpolation::LinearRGB) {
+              renderer.pushMask(value.maskBounds, value.maskType, value.colorInterpolation);
+            } else {
+              renderer.pushMask(value.maskBounds, value.maskType);
+            }
           },
           [&](const TransitionMaskToContentCommand&) { renderer.transitionMaskToContent(); },
           [&](const PopMaskCommand&) { renderer.popMask(); },
@@ -646,7 +651,12 @@ void RenderSnapshotRecorder::pushMask(const std::optional<Box2d>& maskBounds) {
 }
 
 void RenderSnapshotRecorder::pushMask(const std::optional<Box2d>& maskBounds, MaskType maskType) {
-  snapshot_.impl_->commands.push_back(PushMaskCommand{maskBounds, maskType});
+  pushMask(maskBounds, maskType, ColorInterpolation::SRGB);
+}
+
+void RenderSnapshotRecorder::pushMask(const std::optional<Box2d>& maskBounds, MaskType maskType,
+                                      ColorInterpolation colorInterpolation) {
+  snapshot_.impl_->commands.push_back(PushMaskCommand{maskBounds, maskType, colorInterpolation});
 }
 
 void RenderSnapshotRecorder::transitionMaskToContent() {

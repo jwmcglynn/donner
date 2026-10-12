@@ -6,12 +6,23 @@ exports_files(
         "BUILD.cmark-gfm",
         "BUILD.css-parsing-tests",
         "BUILD.stb",
+        # //tools:supply_chain_policy_tests reads every repository rule file
+        # that MODULE.bazel declares.
+        "bazel/local.bzl",
         # tools/cmake/gen_cmakelists.py reads this at runtime to discover the
         # versions of deps that are hidden from BCR consumers behind a
         # dev_dependency module extension.
         "bazel/non_bcr_deps.bzl",
         "woff2_bounded_decode.patch",
     ],
+)
+
+# A file under a third_party directory with no BUILD file of its own belongs to this package. The
+# release notice fixture `//tools:closure_notice_fixture_root_package_file_tests` checks that the
+# closure walk still attributes such a file to its directory's component.
+exports_files(
+    ["stb/LICENSE"],
+    visibility = ["//tools:__pkg__"],
 )
 
 # Perf-sensitive wrappers for external deps that are shared between the Skia
