@@ -752,11 +752,17 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         self.assertIn("needs: [prepare, consumer, cli-linux, cli-macos]", preflight)
         self.assertEqual(preflight.count("tools.release_cli package"), 2)
         self.assertEqual(preflight.count("tools.release_cli verify"), 4)
-        # Each CLI ships the NOTICE built with it, after the closure coverage test passes.
+        # Each CLI ships the NOTICE built with it, after the closure coverage test passes. The
+        # compiler identity probe is built in the same invocations, so its configuration (and
+        # therefore its compiler) is the CLI's.
         for mode in ("update", "error"):
             self.assertEqual(preflight.count(
                 f"bazelisk build --lockfile_mode={mode} -c opt "
-                "//tools/ci:release_svg //tools/ci:release_svg_notice\n"), 2)
+                "//tools/ci:release_svg //tools/ci:release_svg_notice \\\n"
+                "            //tools/ci:release_compiler_identity\n"), 2)
+        self.assertEqual(preflight.count(
+            "--compiler-probe bazel-bin/tools/ci/release_compiler_identity \\\n"), 2)
+        self.assertNotIn("c++ --version", preflight)
         self.assertEqual(preflight.count(
             "bazelisk test --lockfile_mode=error -c opt //tools/ci:release_svg_notice_coverage\n"), 2)
         self.assertEqual(preflight.count(
