@@ -1246,6 +1246,41 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
                         "    secrets: inherit\n", "forwards every secret"),
         })
 
+    def test_whole_secret_objects_cannot_bypass_step_consumers(self):
+        files = self.supply_chain_files
+        path = ".github/workflows/main.yml"
+        step = "      - name: Upload CI diagnostics\n"
+        for reference in ("secrets", "toJSON ( secrets )", "ToJsOn\n( secrets )",
+                          "format('{0}', secrets)"):
+            with self.subTest(reference=reference):
+                changed = files[path].replace(
+                    step, step + "        env:\n          TOKEN: ${{ " + reference + " }}\n", 1)
+                self.assertNotEqual(changed, files[path])
+                self.assertTrue(_secret_use_violations(_workflows({**files, path: changed})))
+        for literal in ("'secrets'", "'toJSON(secrets)'", "'secrets.UNREVIEWED_TOKEN'",
+                        "'it''s secrets'"):
+            with self.subTest(literal=literal):
+                self.assertEqual(set(), _secret_reads("${{ " + literal + " }}"))
+
+    def test_quoted_expression_delimiters_do_not_hide_context_reads(self):
+        files = self.supply_chain_files
+        path = ".github/workflows/main.yml"
+        step = "      - name: Upload CI diagnostics\n"
+        for literal in ("'}}{0}'", "'it''s }}{0}'"):
+            with self.subTest(literal=literal):
+                expression = "format(" + literal + ", secrets.UNREVIEWED_TOKEN)"
+                changed = files[path].replace(
+                    step, step + "        env:\n          TOKEN: ${{ " + expression + " }}\n", 1)
+                self.assertNotEqual(changed, files[path])
+                self.assertTrue(_secret_use_violations(_workflows({**files, path: changed})))
+                self.assertTrue(_untrusted_script_contexts(
+                    "      - run: echo ${{ format(" + literal +
+                    ", github.event.pull_request.title) }}\n"))
+        for literal in ("'github.event.pull_request.title'", "'}}github.event.pull_request.title'"):
+            with self.subTest(safe_literal=literal):
+                self.assertEqual([], _untrusted_script_contexts(
+                    "      - run: echo ${{ " + literal + " }}\n"))
+
     def test_only_gated_ci_jobs_reach_self_hosted_runners(self):
         workflows = _workflows(self.supply_chain_files)
         self.assertEqual([], _self_hosted_violations(workflows))
