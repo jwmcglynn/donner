@@ -2142,6 +2142,106 @@ TEST(TextEngineScriptedTest, TextAnchorSkipsOnPathRunsInsideChunks) {
                                 RunGlyphsAre(ElementsAre(GlyphXPositionIs(DoubleEq(70.0))))));
 }
 
+TEST(TextEngineScriptedTest, DomUtf16SupplementaryUnitsShareGlyphGeometry) {
+  Registry registry;
+  FontManager manager(registry);
+  TextEngine engine = MakeScriptedEngine(registry, manager);
+  std::string text;
+  Utf8::Append(U'\U0001F600', std::back_inserter(text));
+  auto span = MakeSpan(text);
+  span.xList = {Lengthd(10.0, Lengthd::Unit::None)};
+  span.yList = {Lengthd(20.0, Lengthd::Unit::None)};
+  const Entity root = MakeTextRootWithSpan(registry, text, std::move(span));
+  const EntityHandle handle(registry, root);
+
+  EXPECT_EQ(engine.getNumberOfChars(handle), 2);
+  EXPECT_THAT(engine.getStartPositionOfChar(handle, 0), Eq(Vector2d(12.0, 23.0)));
+  EXPECT_THAT(engine.getStartPositionOfChar(handle, 1), Eq(Vector2d(12.0, 23.0)));
+  EXPECT_THAT(engine.getEndPositionOfChar(handle, 1), Eq(engine.getEndPositionOfChar(handle, 0)));
+  EXPECT_THAT(engine.getExtentOfChar(handle, 0), Eq(Box2d::FromXYWH(12.0, 15.0, 6.0, 8.0)));
+  EXPECT_THAT(engine.getExtentOfChar(handle, 1), Eq(Box2d::FromXYWH(12.0, 15.0, 6.0, 8.0)));
+  EXPECT_EQ(engine.getCharNumAtPosition(handle, {15.0, 19.0}), 0);
+  EXPECT_THAT(engine.getSubStringLength(handle, 0, 2), DoubleEq(std::hypot(10.0, 12.0)));
+  EXPECT_THAT(engine.getSubStringLength(handle, 1, 1), DoubleEq(0.0));
+}
+
+TEST(TextEngineScriptedTest, DomUtf16FollowingCharacterKeepsCodepointPositioning) {
+  Registry registry;
+  FontManager manager(registry);
+  TextEngine engine = MakeScriptedEngine(registry, manager);
+  std::string text("A");
+  Utf8::Append(U'\U0001F600', std::back_inserter(text));
+  text += "B";
+  auto span = MakeSpan(text);
+  span.xList = {Lengthd(10.0, Lengthd::Unit::None), Lengthd(30.0, Lengthd::Unit::None),
+                Lengthd(70.0, Lengthd::Unit::None)};
+  span.yList = {Lengthd(20.0, Lengthd::Unit::None)};
+  const Entity root = MakeTextRootWithSpan(registry, text, std::move(span));
+  const EntityHandle handle(registry, root);
+
+  EXPECT_EQ(engine.getNumberOfChars(handle), 4);
+  EXPECT_THAT(engine.getStartPositionOfChar(handle, 1), Eq(Vector2d(32.0, 23.0)));
+  EXPECT_THAT(engine.getStartPositionOfChar(handle, 2), Eq(Vector2d(32.0, 23.0)));
+  EXPECT_THAT(engine.getStartPositionOfChar(handle, 3), Eq(Vector2d(70.0, 20.0)));
+  EXPECT_THAT(engine.getExtentOfChar(handle, 1), Eq(Box2d::FromXYWH(32.0, 15.0, 6.0, 8.0)));
+  EXPECT_THAT(engine.getExtentOfChar(handle, 2), Eq(Box2d::FromXYWH(32.0, 15.0, 6.0, 8.0)));
+  EXPECT_THAT(engine.getExtentOfChar(handle, 3), Eq(Box2d::FromXYWH(70.0, 12.0, 6.0, 8.0)));
+  EXPECT_EQ(engine.getCharNumAtPosition(handle, {73.0, 16.0}), 3);
+  EXPECT_THAT(engine.getSubStringLength(handle, 1, 2), DoubleEq(std::hypot(10.0, 12.0)));
+  EXPECT_THAT(engine.getSubStringLength(handle, 2, 1), DoubleEq(0.0));
+  EXPECT_THAT(engine.getSubStringLength(handle, 3, 1), DoubleEq(std::hypot(10.0, 12.0)));
+  EXPECT_THAT(engine.getComputedTextLength(handle), DoubleEq(3.0 * std::hypot(10.0, 12.0)));
+}
+
+TEST(TextEngineScriptedTest, DomUtf16CountsCombiningAndJoinerUnits) {
+  for (const char32_t middle : {U'\u0301', U'\u200D'}) {
+    SCOPED_TRACE(static_cast<uint32_t>(middle));
+    Registry registry;
+    FontManager manager(registry);
+    TextEngine engine = MakeScriptedEngine(registry, manager);
+    std::string text("A");
+    Utf8::Append(middle, std::back_inserter(text));
+    text += "B";
+    const Entity root = MakeTextRootWithSpan(registry, text, MakeSpan(text));
+    EXPECT_EQ(engine.getNumberOfChars(EntityHandle(registry, root)), 3);
+  }
+}
+
+TEST(TextEngineScriptedTest, DomUtf16CombiningAndJoinerKeepFollowingGlyphIdentity) {
+  for (const char32_t middle : {U'\u0301', U'\u200D'}) {
+    SCOPED_TRACE(static_cast<uint32_t>(middle));
+    Registry registry;
+    FontManager manager(registry);
+    TextEngine engine = MakeScriptedEngine(registry, manager);
+    std::string text("A");
+    Utf8::Append(middle, std::back_inserter(text));
+    text += "B";
+    auto span = MakeSpan(text);
+    span.xList = {Lengthd(10.0, Lengthd::Unit::None), Lengthd(40.0, Lengthd::Unit::None),
+                  Lengthd(70.0, Lengthd::Unit::None)};
+    span.yList = {Lengthd(20.0, Lengthd::Unit::None)};
+    const Entity root = MakeTextRootWithSpan(registry, text, std::move(span));
+    const EntityHandle handle(registry, root);
+
+    const auto& geometry = engine.ensureComputedTextGeometryComponent(handle);
+    ASSERT_THAT(geometry.runs, SizeIs(1));
+    ASSERT_THAT(geometry.runs[0].glyphs, SizeIs(3));
+    const TextGlyph& following = geometry.runs[0].glyphs.back();
+    EXPECT_EQ(following.cluster, middle == U'\u0301' ? 3u : 4u);
+    EXPECT_THAT(following.xPosition, DoubleEq(70.0));
+    EXPECT_THAT(following.yPosition, DoubleEq(20.0));
+    EXPECT_THAT(engine.glyphOutline(geometry.runs[0].font, following.glyphIndex, 1.0f).bounds(),
+                Eq(Box2d::FromXYWH(0.0, -8.0, 6.0, 8.0)));
+
+    EXPECT_EQ(engine.getNumberOfChars(handle), 3);
+    EXPECT_THAT(engine.getStartPositionOfChar(handle, 2), Eq(Vector2d(70.0, 20.0)));
+    EXPECT_THAT(engine.getEndPositionOfChar(handle, 2), Eq(Vector2d(80.0, 32.0)));
+    EXPECT_THAT(engine.getExtentOfChar(handle, 2), Eq(Box2d::FromXYWH(70.0, 12.0, 6.0, 8.0)));
+    EXPECT_EQ(engine.getCharNumAtPosition(handle, {73.0, 16.0}), 2);
+    EXPECT_THAT(engine.getSubStringLength(handle, 2, 1), DoubleEq(std::hypot(10.0, 12.0)));
+  }
+}
+
 TEST(TextEngineScriptedTest, GeometryCacheFallsBackToBitmapGlyphExtents) {
   Registry registry;
   FontManager fontManager(registry);
