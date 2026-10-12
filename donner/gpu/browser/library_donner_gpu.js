@@ -2089,8 +2089,15 @@ var LibraryDonnerGpu = {
       DonnerGpu.queue.submit(commandBuffers);
       record.pendingSubmissions = (record.pendingSubmissions || 0) + 1;
       // ["s", logical device, serial, buffers, draws, submitted, completion observed]
-      var traced = ["s", handle, submissionSerial, commandBuffers.length, record.traceDraws || 0,
-        DonnerGpu.epochMs(), 0];
+      var traced = [
+        "s",
+        handle,
+        submissionSerial,
+        commandBuffers.length,
+        record.traceDraws || 0,
+        DonnerGpu.epochMs(),
+        0,
+      ];
       record.traceDraws = 0;
       DonnerGpu.trace(traced);
       DonnerGpu.queue.onSubmittedWorkDone().then(function() {
