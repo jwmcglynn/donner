@@ -137,7 +137,7 @@ HBEOF""",
 
     # Hermetic Linux sysroots for Bazel remote execution via `--config=re`.
     #
-    # The RE worker on bazel-re1 (NixOS) has no system glibc headers, so
+    # A remote-execution worker may have no system glibc headers, so
     # libc++'s <wchar.h> can't find `mbstate_t`. Chromium's prebuilt
     # Debian Bullseye sysroots give the LLVM toolchain a complete set of
     # C/C++ headers + runtime stubs to link against, keeping the build

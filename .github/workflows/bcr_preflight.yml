@@ -202,13 +202,18 @@ jobs:
         run: |
           # The repository ignores MODULE.bazel.lock. Resolve once, then prove
           # the build is complete under that generated, retained lockfile.
-          bazelisk build --lockfile_mode=update -c opt //tools/ci:release_svg //tools/ci:release_svg_notice
-          bazelisk build --lockfile_mode=error -c opt //tools/ci:release_svg //tools/ci:release_svg_notice
+          # The compiler identity probe shares the CLI's configuration, so provenance
+          # names the compiler Bazel used rather than the runner's default c++.
+          bazelisk build --lockfile_mode=update -c opt //tools/ci:release_svg //tools/ci:release_svg_notice \
+            //tools/ci:release_compiler_identity
+          bazelisk build --lockfile_mode=error -c opt //tools/ci:release_svg //tools/ci:release_svg_notice \
+            //tools/ci:release_compiler_identity
           # The NOTICE must attribute every third-party component in this configuration's closure.
           bazelisk test --lockfile_mode=error -c opt //tools/ci:release_svg_notice_coverage
           python3 -B -m tools.release_cli package \
             --platform linux-x86-64 --binary bazel-bin/donner/svg/tool/donner-svg \
             --notice bazel-bin/third_party/licenses/notice_cli.txt \
+            --compiler-probe bazel-bin/tools/ci/release_compiler_identity \
             --output "$RUNNER_TEMP/donner-cli-linux" --commit "$SOURCE_COMMIT" \
             --run-id "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT"
       - uses: actions/upload-artifact@v7
@@ -233,13 +238,16 @@ jobs:
           bazelisk-cache: true
       - name: Build and bind the macOS CLI to the preflight candidate
         run: |
-          bazelisk build --lockfile_mode=update -c opt //tools/ci:release_svg //tools/ci:release_svg_notice
-          bazelisk build --lockfile_mode=error -c opt //tools/ci:release_svg //tools/ci:release_svg_notice
+          bazelisk build --lockfile_mode=update -c opt //tools/ci:release_svg //tools/ci:release_svg_notice \
+            //tools/ci:release_compiler_identity
+          bazelisk build --lockfile_mode=error -c opt //tools/ci:release_svg //tools/ci:release_svg_notice \
+            //tools/ci:release_compiler_identity
           # The NOTICE must attribute every third-party component in this configuration's closure.
           bazelisk test --lockfile_mode=error -c opt //tools/ci:release_svg_notice_coverage
           python3 -B -m tools.release_cli package \
             --platform darwin-arm64 --binary bazel-bin/donner/svg/tool/donner-svg \
             --notice bazel-bin/third_party/licenses/notice_cli.txt \
+            --compiler-probe bazel-bin/tools/ci/release_compiler_identity \
             --output "$RUNNER_TEMP/donner-cli-macos" --commit "$SOURCE_COMMIT" \
             --run-id "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT"
       - uses: actions/upload-artifact@v7

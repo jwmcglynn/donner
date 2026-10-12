@@ -42,6 +42,7 @@
 #include "donner/editor/gui/EditorWindow.h"
 #include "donner/editor/repro/ReplayResourceBudget.h"
 #include "donner/editor/repro/ReproFile.h"
+#include "donner/editor/tests/AsyncTestPolling.h"
 #include "donner/editor/tests/BitmapGoldenCompare.h"
 #include "donner/editor/tests/RenderCoordinatorTestAccess.h"
 #include "donner/svg/SVGGeometryElement.h"
@@ -1842,7 +1843,7 @@ void RunShellFrame(gui::EditorWindow& window, EditorShell& shell) {
 }
 
 void RunFramesUntilDisplayedSelectionBounds(gui::EditorWindow& window, EditorShell& shell) {
-  for (int attempt = 0; attempt < 40; ++attempt) {
+  for (const tests::HangGuard guard; guard.active();) {
     RunShellFrame(window, shell);
     if (EditorShellTestAccess::DisplayedSelectionBoundsCount(shell) > 0u) {
       return;
@@ -1878,14 +1879,14 @@ std::uint64_t HoldRasterWhileLiveDocumentAdvances(gui::EditorWindow& window, Edi
 }
 
 bool WaitForStyleSourceDecorations(EditorShell& shell) {
-  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+  const tests::HangGuard guard;
   do {
     EditorShellTestAccess::UpdateSourceStyleDecorations(shell);
     if (EditorShellTestAccess::StyleSourceDecorationsValid(shell)) {
       return true;
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(1));
-  } while (std::chrono::steady_clock::now() < deadline);
+  } while (guard.active());
 
   return false;
 }
@@ -3684,13 +3685,13 @@ TEST(EditorShellTest, SelectedSplashStylesheetEditPresentsWithoutCanvasClick) {
   EXPECT_GT(app.document().currentFrameVersion(), before);
   EXPECT_TRUE(EditorShellTestAccess::RequestRenderAtEndOfFrame(shell));
 
-  for (int attempt = 0; attempt < 4; ++attempt) {
+  for (const tests::HangGuard guard; guard.active();) {
     RunShellFrame(window, shell);
     if (EditorShellTestAccess::DisplayedDocVersion(shell) == app.document().currentFrameVersion()) {
       break;
     }
-    ASSERT_TRUE(shell.asyncRendererForReplay().waitUntilNoRenderInFlightForTesting(
-        std::chrono::steady_clock::now() + std::chrono::seconds(1)));
+    ASSERT_TRUE(
+        shell.asyncRendererForReplay().waitUntilNoRenderInFlightForTesting(guard.deadline()));
   }
   EXPECT_EQ(EditorShellTestAccess::DisplayedDocVersion(shell),
             app.document().currentFrameVersion());
@@ -3910,7 +3911,8 @@ void RunFullDesktopFrameLoopPresentsShapeDragBeforeMouseUp(double contentScale) 
     shell.runFrame();
     window.endFrame();
   };
-  for (int frame = 0; frame < 20; ++frame) {
+  const tests::HangGuard prewarmGuard;
+  for (int frame = 0; prewarmGuard.active(); ++frame) {
     runFrameWithMouse(ImVec2(-20.0f, -20.0f), /*mouseDown=*/false);
     if (!EditorShellTestAccess::RendererBusy(shell) && frame >= 2) {
       break;
@@ -4061,13 +4063,13 @@ TEST(EditorShellTest, PartlyOffscreenSplashShineEllipseFirstHeldMoveMatchesSettl
   const auto settleFrame = [&](std::string_view stage, std::uint64_t minimumVersion,
                                bool requireSelectedCache = false,
                                bool requireRequestedDensity = true) {
-    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
-    for (int frame = 0; frame < 20 && std::chrono::steady_clock::now() < deadline; ++frame) {
+    const tests::HangGuard guard;
+    for (int frame = 0; guard.active(); ++frame) {
       window.beginFrame();
       shell.runFrame();
       window.endFrame();
-      if (!shell.asyncRendererForReplay().waitUntilNoRenderInFlightForTesting(deadline)) {
-        ADD_FAILURE() << "The splash render wait reached its deadline at " << stage
+      if (!shell.asyncRendererForReplay().waitUntilNoRenderInFlightForTesting(guard.deadline())) {
+        ADD_FAILURE() << "The splash render did not complete within the hang guard at " << stage
                       << " frame=" << frame
                       << " rendererBusy=" << shell.asyncRendererForReplay().isBusy()
                       << " renderInFlight="
@@ -4278,12 +4280,12 @@ TEST(EditorShellTest, ColdSplashShineDragGetsFullTileBeforeMouseUp) {
     return window.endFrameAndReadPixels();
   };
   const auto waitForCurrentFrame = [&](bool requireRequestedDensity = false) {
-    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
-    for (int frame = 0; frame < 24 && std::chrono::steady_clock::now() < deadline; ++frame) {
+    const tests::HangGuard guard;
+    for (int frame = 0; guard.active(); ++frame) {
       (void)captureContent();
-      if (!shell.asyncRendererForReplay().waitUntilNoRenderInFlightForTesting(deadline)) {
-        ADD_FAILURE() << "Cold shine render wait reached its deadline at frame " << frame
-                      << " rendererBusy=" << shell.asyncRendererForReplay().isBusy()
+      if (!shell.asyncRendererForReplay().waitUntilNoRenderInFlightForTesting(guard.deadline())) {
+        ADD_FAILURE() << "Cold shine render did not complete within the hang guard at frame "
+                      << frame << " rendererBusy=" << shell.asyncRendererForReplay().isBusy()
                       << " renderInFlight="
                       << shell.asyncRendererForReplay().hasRenderInFlightForTesting()
                       << " heldResultPolls="
@@ -4412,10 +4414,9 @@ TEST(EditorShellTest, GeodeMaskedChildrenUpdateCanvasThroughTwoHeldMoves) {
     return window.endFrameAndReadPixels();
   };
   const auto awaitPresentation = [&] {
-    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
-    for (int frame = 0; frame < 30 && std::chrono::steady_clock::now() < deadline; ++frame) {
+    for (const tests::HangGuard guard; guard.active();) {
       (void)captureContent();
-      if (!shell.asyncRendererForReplay().waitUntilNoRenderInFlightForTesting(deadline)) {
+      if (!shell.asyncRendererForReplay().waitUntilNoRenderInFlightForTesting(guard.deadline())) {
         break;
       }
       if (!app.document().hasPendingMutations() &&
@@ -4549,10 +4550,9 @@ void RunGeodeColdDirectRetinaDrag(std::string_view id, bool selectFromLayers,
     window.endFrame();
     return svg::RendererBitmap{};
   };
-  const auto coldDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
-  for (int tick = 0; tick < 30 && std::chrono::steady_clock::now() < coldDeadline; ++tick) {
+  for (const tests::HangGuard coldGuard; coldGuard.active();) {
     (void)frame(Vector2d(-100.0, -100.0), false, false);
-    if (!shell.asyncRendererForReplay().waitUntilNoRenderInFlightForTesting(coldDeadline)) {
+    if (!shell.asyncRendererForReplay().waitUntilNoRenderInFlightForTesting(coldGuard.deadline())) {
       break;
     }
     if (EditorShellTestAccess::DisplayedDocVersion(shell) == app.document().currentFrameVersion()) {
@@ -4608,12 +4608,10 @@ void RunGeodeColdDirectRetinaDrag(std::string_view id, bool selectFromLayers,
     (void)frame(*hitPoint, false, false);
     if (waitForSelectedPrewarm) {
       const auto awaitSelectedPrewarm = [&] {
-        const auto settledDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
-        for (int tick = 0; tick < 30 && std::chrono::steady_clock::now() < settledDeadline;
-             ++tick) {
+        for (const tests::HangGuard settledGuard; settledGuard.active();) {
           (void)frame(*hitPoint, false, false);
           if (!shell.asyncRendererForReplay().waitUntilNoRenderInFlightForTesting(
-                  settledDeadline)) {
+                  settledGuard.deadline())) {
             break;
           }
           if (!EditorShellTestAccess::RendererBusy(shell) &&
@@ -4681,8 +4679,8 @@ void RunGeodeColdDirectRetinaDrag(std::string_view id, bool selectFromLayers,
                                    const svg::RendererBitmap& prior,
                                    std::string_view phase) -> std::optional<svg::RendererBitmap> {
     const Vector2d pointer = *hitPoint + Vector2d(dx, 0.0);
-    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
-    for (int tick = 0; tick < 40 && std::chrono::steady_clock::now() < deadline; ++tick) {
+    const tests::HangGuard guard;
+    for (int tick = 0; guard.active(); ++tick) {
       (void)frame(pointer, true, false);
       requestsPosted += EditorShellTestAccess::RenderRequestsPosted(shell);
       const LayerInspectorStatusReadback status = shell.layerInspectorStatusForReadback();
@@ -4700,7 +4698,7 @@ void RunGeodeColdDirectRetinaDrag(std::string_view id, bool selectFromLayers,
                         << " displayed=" << status.displayedDocVersion
                         << " pendingTransform=" << pendingTransform
                         << " rendererBusy=" << rendererBusy;
-        (void)shell.asyncRendererForReplay().waitUntilNoRenderInFlightForTesting(deadline);
+        (void)shell.asyncRendererForReplay().waitUntilNoRenderInFlightForTesting(guard.deadline());
         continue;
       }
       svg::RendererBitmap held = frame(pointer, true, true);
@@ -5335,6 +5333,74 @@ TEST(EditorShellTest, ReferenceHighlightSummaryClearsForEmptySelection) {
   EXPECT_TRUE(EditorShellTestAccess::CombinedSourcePreviewElements(shell).empty());
 }
 
+// A press that changes the selection starts a render, and the reference summary must wait for it.
+// Waiting by requesting a frame every frame redraws at display rate for the whole render; in the
+// browser those frames hold the GPU owner thread that the render itself is waiting on.
+TEST(EditorShellTest, ReferenceHighlightWaitsForRendererWakeInsteadOfRequestingFrames) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
+
+  EditorShell shell(window, OptionsWithSource(kReferencedSvg, "referenced.svg"));
+  ASSERT_TRUE(shell.valid());
+  AsyncRenderer& renderer = shell.asyncRendererForReplay();
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+  for (int frame = 0; frame < 40; ++frame) {
+    RunShellFrame(window, shell);
+    ASSERT_TRUE(renderer.waitUntilNoRenderInFlightForTesting(deadline));
+    if (frame >= 3 && !EditorShellTestAccess::RendererBusy(shell)) {
+      break;
+    }
+  }
+  ASSERT_FALSE(EditorShellTestAccess::RendererBusy(shell));
+
+  // Start a render that stays in flight, then change the selection behind it.
+  renderer.setReplayDocumentAccessBlockedForTesting(true);
+  EditorShellTestAccess::Coordinator(shell).requestPresentationRefresh();
+  EditorShellTestAccess::SetRequestRenderAtEndOfFrame(shell);
+  RunShellFrame(window, shell);
+  ASSERT_TRUE(renderer.hasRenderInFlightForTesting());
+  auto target = EditorShellTestAccess::App(shell).document().document().querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  EditorShellTestAccess::App(shell).setSelection(*target);
+
+  // The change may ask for a follow-up frame, but the loop must then be able to park.
+  std::uint64_t blockedWakeSerial = window.wakeEventLoopRequestSerialForTesting();
+  int quietFrames = 0;
+  for (int frame = 0; frame < 6 && quietFrames < 3; ++frame) {
+    RunShellFrame(window, shell);
+    const std::uint64_t wakeSerial = window.wakeEventLoopRequestSerialForTesting();
+    quietFrames = wakeSerial == blockedWakeSerial ? quietFrames + 1 : 0;
+    blockedWakeSerial = wakeSerial;
+  }
+  EXPECT_EQ(quietFrames, 3) << "the editor kept requesting frames while the render was running";
+  EXPECT_EQ(EditorShellTestAccess::LastReferenceHighlightSelectionSize(shell), 0u);
+  ASSERT_TRUE(renderer.hasRenderInFlightForTesting());
+
+  // Drive the loop the way the browser does: a frame runs only for an outstanding wake. The
+  // renderer's own completion and warmup-release wakes must carry the summary to completion.
+  renderer.setReplayDocumentAccessBlockedForTesting(false);
+  const auto completionDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+  std::uint64_t consumedWakeSerial = blockedWakeSerial;
+  for (int frame = 0; frame < 20; ++frame) {
+    if (EditorShellTestAccess::LastReferenceHighlightSelectionSize(shell) == 1u) {
+      break;
+    }
+    while (window.wakeEventLoopRequestSerialForTesting() == consumedWakeSerial &&
+           std::chrono::steady_clock::now() < completionDeadline) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    ASSERT_GT(window.wakeEventLoopRequestSerialForTesting(), consumedWakeSerial)
+        << "no wake within 10 s: the demand-driven loop would park with a stale reference summary "
+        << "(renderer busy=" << EditorShellTestAccess::RendererBusy(shell) << ")";
+    consumedWakeSerial = window.wakeEventLoopRequestSerialForTesting();
+    RunShellFrame(window, shell);
+  }
+  EXPECT_EQ(EditorShellTestAccess::LastReferenceHighlightSelectionSize(shell), 1u);
+  EXPECT_EQ(EditorShellTestAccess::ReferenceSummary(shell).referencedElements.size(), 2u);
+}
+
 TEST(EditorShellTest, ShellGeometryHelpersClampToViewportAndSelectionCache) {
   gui::EditorWindow window = MakeHiddenWindow();
   if (!window.valid()) {
@@ -5547,7 +5613,7 @@ TEST(EditorShellTest, TextFormatBarPrewarmsCatalogFamilyInItsOwnFace) {
 
   EditorShellTestAccess::RequestFontPreviews(shell, {"Bebas Neue"});
   FormatBarFontPreview preview;
-  for (int attempt = 0; attempt < 500 && !preview.available(); ++attempt) {
+  for (const tests::HangGuard guard; guard.active() && !preview.available();) {
     EditorShellTestAccess::AdvanceFontPreviewGeneration(shell);
     preview = EditorShellTestAccess::FontPreviewForFamily(shell, "Bebas Neue");
     if (!preview.available()) {
@@ -5577,7 +5643,7 @@ TEST(EditorShellTest, FontPreviewWarmsFromDiskBeforeWorkerRender) {
     ASSERT_TRUE(shell.valid());
     EditorShellTestAccess::RequestFontPreviews(shell, {"Bebas Neue"});
     FormatBarFontPreview preview;
-    for (int attempt = 0; attempt < 500 && !preview.available(); ++attempt) {
+    for (const tests::HangGuard guard; guard.active() && !preview.available();) {
       EditorShellTestAccess::AdvanceFontPreviewGeneration(shell);
       preview = EditorShellTestAccess::FontPreviewForFamily(shell, "Bebas Neue");
       if (!preview.available()) {
@@ -7222,7 +7288,7 @@ TEST(EditorShellTest, GeodeSplashSampleClickPublishesFirstDocumentFrame) {
   ASSERT_TRUE(EditorShellTestAccess::SamplePresentationPending(shell));
 
   bool displayed = false;
-  for (int attempt = 0; attempt < 300; ++attempt) {
+  for (const tests::HangGuard guard; guard.active();) {
     shell.prepareFrame();
     window.beginFrame();
     shell.runFrame();
@@ -7252,9 +7318,9 @@ TEST(EditorShellTest, MainDocumentRenderTakesPriorityOverNewCarouselThumbnailWor
 
   // Drain the editor's initial document render before opening the picker so this test controls the
   // priority transition precisely.
-  for (int frame = 0; frame < 200 && (EditorShellTestAccess::RendererBusy(shell) ||
-                                      EditorShellTestAccess::RequestRenderAtEndOfFrame(shell));
-       ++frame) {
+  for (const tests::HangGuard guard;
+       guard.active() && (EditorShellTestAccess::RendererBusy(shell) ||
+                          EditorShellTestAccess::RequestRenderAtEndOfFrame(shell));) {
     window.beginFrame();
     shell.runFrame();
     window.endFrame();
@@ -7422,10 +7488,9 @@ void RunFrameWithMouse(gui::EditorWindow& window, EditorShell& shell, const ImVe
 
 const DocumentPixelCapture* WaitForDocumentPixelCapture(gui::EditorWindow& window,
                                                         EditorShell& shell) {
-  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
-  while (std::chrono::steady_clock::now() < deadline) {
+  for (const tests::HangGuard guard; guard.active();) {
     RunFrameWithMouse(window, shell, ImVec2(-1.0f, -1.0f), false);
-    if (!shell.asyncRendererForReplay().waitUntilNoRenderInFlightForTesting(deadline)) {
+    if (!shell.asyncRendererForReplay().waitUntilNoRenderInFlightForTesting(guard.deadline())) {
       return nullptr;
     }
     RunFrameWithMouse(window, shell, ImVec2(-1.0f, -1.0f), false);
@@ -7499,8 +7564,7 @@ HistoryAvailability CurrentHistoryAvailability(const EditorApp& app) {
 
 bool RunFramesUntilHistoryState(gui::EditorWindow& window, EditorShell& shell,
                                 HistoryAvailability expectedAvailability) {
-  constexpr int kMaxFrames = 200;
-  for (int frame = 0; frame < kMaxFrames; ++frame) {
+  for (const tests::HangGuard guard; guard.active();) {
     if (CurrentHistoryAvailability(EditorShellTestAccess::App(shell)) == expectedAvailability) {
       return true;
     }
@@ -8248,10 +8312,11 @@ std::string DescribeFocusLines(const TextEditor& source) {
 
 /// Run frames until the async renderer is idle and every queued writeback reached the source pane.
 void SettleShellFrames(gui::EditorWindow& window, EditorShell& shell) {
+  const tests::HangGuard guard;
   for (int attempt = 0; attempt < 6; ++attempt) {
     RunShellFrame(window, shell);
-    ASSERT_TRUE(shell.asyncRendererForReplay().waitUntilNoRenderInFlightForTesting(
-        std::chrono::steady_clock::now() + std::chrono::seconds(3)));
+    ASSERT_TRUE(
+        shell.asyncRendererForReplay().waitUntilNoRenderInFlightForTesting(guard.deadline()));
   }
   RunShellFrame(window, shell);
 }
