@@ -211,6 +211,8 @@ test("late browser map rejection cannot change a reused mapping ID", () => {
     kMapFailed: 6,
     kMapDeviceLost: 7,
     lost: false,
+    trace: () => {},
+    epochMs: () => 0,
     logicalFor: () => record,
     lookup: () => buffer,
     guard: () => 0,
