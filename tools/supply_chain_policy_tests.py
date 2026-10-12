@@ -291,10 +291,38 @@ def binding_problems(path, tree):
         if isinstance(node, ast.Assign) and isinstance(node.value, ast.Call) and \
                 isinstance(node.value.func, ast.Name) and node.value.func.id == "use_repo_rule":
             problems.extend(_repo_rule_problems(path, node))
+    problems.extend(_native_getattr_problems(path, tree))
     direct_calls = {id(node.func) for node in ast.walk(tree) if isinstance(node, ast.Call)}
     problems.extend("%s:%d: native %s must be called directly" % (path, node.lineno, node.attr)
                     for node in ast.walk(tree) if isinstance(node, ast.Attribute)
                     and node.attr in NATIVE_DOWNLOAD_APIS and id(node) not in direct_calls)
+    return problems
+
+
+def _single_literal_assignment(tree, name):
+    values = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign) and any(
+                isinstance(target, ast.Name) and target.id == name for target in node.targets):
+            values.append(_literal(node.value))
+    return values[0] if len(values) == 1 else None
+
+
+def _native_getattr_problems(path, tree):
+    """Reject known native method lookups; unrelated or unresolved getattr remains untouched."""
+    problems = []
+    bindings = _Bindings(tree)
+    for call in _calls(tree, {"getattr"}):
+        if len(call.args) < 2:
+            continue
+        expression = call.args[1]
+        values = bindings.values(expression, call)
+        if values is None and isinstance(expression, ast.Name):
+            value = _single_literal_assignment(tree, expression.id)
+            values = [value] if value is not None else []
+        if NATIVE_DOWNLOAD_APIS.intersection(values or []):
+            problems.append("%s:%d: native download methods must be called directly, not through "
+                            "getattr" % (path, call.lineno))
     return problems
 
 
@@ -341,15 +369,24 @@ def fetch_findings(trees, pins=None):
     return problems, set(git_fetches)
 
 
+def _is_playwright_repo(call):
+    return (isinstance(call.func, ast.Attribute) and call.func.attr == "repo"
+            and isinstance(call.func.value, ast.Name) and call.func.value.id == "playwright")
+
+
 def _integrity_map_problems(path, tree):
     """An empty value in a browser integrity map would silently skip that archive's check."""
-    problems = []
+    problems = ["%s:%d: playwright.repo requires integrity_path_map" % (path, call.lineno)
+                for call in ast.walk(tree) if isinstance(call, ast.Call) and _is_playwright_repo(call)
+                and _keyword(call, "integrity_path_map") is None]
     for node in ast.walk(tree):
         if not (isinstance(node, ast.keyword) and node.arg == "integrity_path_map"):
             continue
         if not isinstance(node.value, ast.Dict):
             problems.append("%s:%d: integrity_path_map is not a literal" % (path, node.lineno))
             continue
+        if not node.value.keys:
+            problems.append("%s:%d: integrity_path_map is empty" % (path, node.lineno))
         for key, value in zip(node.value.keys, node.value.values):
             literal = _literal(value)
             if literal is None or not HASH_PATTERNS["integrity"].fullmatch(literal):
