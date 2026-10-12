@@ -696,6 +696,27 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         self.assertIn("if: github.event_name == 'workflow_dispatch'", deploy)
         self.assertIn("branches: [\"main\"]", workflow)
 
+    def test_release_candidate_artifacts_share_the_maximum_retention(self):
+        # tools/release_candidate.py requires each candidate artifact to stay retained through the
+        # release and rollback window. Every role's upload keeps the 90-day maximum, so a
+        # candidate is verifiable for the same 30 days after its builds whichever role is oldest.
+        uploads = (
+            (".github/workflows/bcr_preflight.yml", "upload-artifact@", "name: donner-bcr-qualified-"),
+            (".github/workflows/bcr_preflight.yml", "upload-artifact@",
+             "name: donner-svg-linux-x86-64-"),
+            (".github/workflows/bcr_preflight.yml", "upload-artifact@",
+             "name: donner-svg-darwin-arm64-"),
+            (".github/workflows/editor_wasm.yml", "upload-artifact@",
+             "name: donner-editor-wasm-geode-"),
+            (".github/workflows/deploy_docs.yaml", "upload-pages-artifact@", "retention-days:"),
+        )
+        for path, action, name in uploads:
+            with self.subTest(path=path, name=name):
+                steps = [step for step in self.supply_chain_files[path].split("\n      - ")
+                         if action in step and name in step]
+                self.assertEqual(len(steps), 1)
+                self.assertRegex(steps[0], r"\n          retention-days: 90\n")
+
     def test_release_only_verifies_retained_preflight_bytes_before_publication(self):
         release = self.supply_chain_files[".github/workflows/release.yml"]
         self.assertIn("types: [published]", release)

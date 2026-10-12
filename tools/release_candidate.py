@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import argparse
+from collections import Counter
+from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 from pathlib import Path, PurePosixPath
@@ -38,13 +40,20 @@ REQUIRED_EVIDENCE_JOBS = {
 }
 REVIEW_NAMES = {"security", "supply-chain"}
 SHA = re.compile(r"[0-9a-f]{40}\Z")
+STABLE_VERSION = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+\Z")
 SHA256 = re.compile(r"[0-9a-f]{64}\Z")
+# Every retained artifact must stay downloadable this long after verification: up to 30 days from
+# verification to publication, then a 30-day post-release rollback window in which the candidate's
+# own bytes can be promoted again. docs/release_candidate.md documents this window.
+MIN_REMAINING_RETENTION = timedelta(days=60)
 MAX_ZIP_BYTES = 1_000_000_000
 MAX_UNPACKED_BYTES = 2_000_000_000
 MAX_FILES = 100_000
 MAX_RECORD_BYTES = 10_000_000
 MAX_SMALL_CONTROL_BYTES = 1_000_000
 MAX_LOCK_BYTES = 16_000_000
+MAX_REVIEW_BYTES = 10_000_000
+EVIDENCE_KEYS = {"workflow", "run_id", "attempt", "commit", "jobs"}
 EDITOR_COMMON_FILES = {
     "CatalogFontNotices.txt", "catalog-fonts.js", "catalog-fonts.json", "donner_icon.svg",
     "editor-bootstrap.js", "editor.css", "editor.js", "enable-threads.js", "index.html",
@@ -107,6 +116,8 @@ def _verify_source(source: dict, root: Path) -> tuple[str, str]:
         raise ValueError("candidate verification needs a clean exact-source checkout")
     if _git(root, "rev-parse", "HEAD^{tree}") != tree:
         raise ValueError("candidate source tree does not match its commit")
+    if not isinstance(source["version"], str) or not STABLE_VERSION.fullmatch(source["version"]):
+        raise ValueError("candidate version must be a stable X.Y.Z release, not a prerelease")
     values = bcr_source.module_values((root / "MODULE.bazel").read_text(encoding="utf-8"))
     if (type(source["compatibility_level"]) is not int or
             source["version"] != values["version"] or
@@ -140,6 +151,23 @@ def _verify_run(run: dict, run_id: int, attempt: int, commit: str, workflow: str
         raise ValueError("candidate evidence run is not a successful exact-source attempt")
     if workflow == ARTIFACT_WORKFLOWS["docs"] and (run.get("event") != "push" or run.get("head_branch") != "main"):
         raise ValueError("documentation artifact must come from a main push")
+
+
+def _expiry(artifact: dict) -> datetime | None:
+    value = artifact.get("expires_at")
+    if not isinstance(value, str):
+        return None
+    try:
+        expires = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return expires if expires.tzinfo is not None else None
+
+
+def _verify_retention(artifact: dict, role: str, now: datetime) -> None:
+    expires = _expiry(artifact)
+    if expires is None or expires - now < MIN_REMAINING_RETENTION:
+        raise ValueError(f"{role} artifact expires before the release and rollback window ends")
 
 
 def _verify_artifact_metadata(artifact: dict, role: str, entry: dict, commit: str,
@@ -329,21 +357,56 @@ def _verify_payload(role: str, directory: Path, entry: dict, record: dict, root:
         pages_artifact.verify_archive(directory / "artifact.tar", selected["archive_sha256"], selected)
 
 
-def _verify_job_counts(response: dict, kind: str, passed: int, skipped: int) -> None:
-    jobs = response.get("jobs")
-    if (not isinstance(jobs, list) or type(response.get("total_count")) is not int or
-            len(jobs) != response["total_count"] or
-            any(job.get("conclusion") not in ("success", "skipped") for job in jobs) or
+def _check_jobs(jobs: object, kind: str, passed: int, skipped: int) -> None:
+    if (not isinstance(jobs, list) or
+            any(not isinstance(job, dict) or not isinstance(job.get("name"), str) or
+                job.get("conclusion") not in ("success", "skipped") for job in jobs) or
             sum(job["conclusion"] == "success" for job in jobs) != passed or
             sum(job["conclusion"] == "skipped" for job in jobs) != skipped):
         raise ValueError("candidate workflow job counts are incomplete or not green")
-    successful = {job.get("name") for job in jobs if job["conclusion"] == "success"}
+    successful = {job["name"] for job in jobs if job["conclusion"] == "success"}
     if any(not successful.intersection(alternatives) for alternatives in REQUIRED_EVIDENCE_JOBS[kind]):
         raise ValueError("candidate qualification run skipped a required execution lane")
 
 
+def _verify_job_counts(response: dict, kind: str, passed: int, skipped: int) -> None:
+    jobs = response.get("jobs")
+    if (not isinstance(jobs, list) or type(response.get("total_count")) is not int or
+            len(jobs) != response["total_count"]):
+        raise ValueError("candidate workflow job counts are incomplete or not green")
+    _check_jobs(jobs, kind, passed, skipped)
+
+
+def _job_outcomes(jobs: list) -> Counter:
+    return Counter((job["name"], job["conclusion"]) for job in jobs)
+
+
+def _read_bounded(path: Path, limit: int, label: str) -> bytes:
+    if not path.is_file() or path.is_symlink() or path.stat().st_size > limit:
+        raise ValueError(f"{label} is missing, linked, or too large")
+    return path.read_bytes()
+
+
+def _verify_evidence_content(path: Path, kind: str, entry: dict, commit: str,
+                             api_jobs: list) -> None:
+    """Require the evidence file to be the job record of exactly the bound attempt."""
+    try:
+        document = json.loads(_read_bounded(path, MAX_SMALL_CONTROL_BYTES, f"{kind} evidence"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        raise ValueError(f"{kind} evidence is not JSON") from None
+    if (not isinstance(document, dict) or set(document) != EVIDENCE_KEYS or
+            document["workflow"] != EVIDENCE_WORKFLOWS[kind] or
+            document["run_id"] != entry["run_id"] or type(document["run_id"]) is not int or
+            document["attempt"] != entry["attempt"] or type(document["attempt"]) is not int or
+            document["commit"] != commit):
+        raise ValueError(f"{kind} evidence does not name the candidate run, attempt and commit")
+    _check_jobs(document["jobs"], kind, entry["passed_jobs"], entry["skipped_jobs"])
+    if _job_outcomes(document["jobs"]) != _job_outcomes(api_jobs):
+        raise ValueError(f"{kind} evidence jobs differ from the GitHub attempt")
+
+
 def _verify_one_artifact(role: str, entry: dict, record: dict, root: Path,
-                         artifacts: Path, github_json) -> tuple[int, int]:
+                         artifacts: Path, github_json, now: datetime) -> tuple[int, int]:
     if not isinstance(entry, dict) or set(entry) != {
         "run_id", "attempt", "artifact_id", "name", "zip_sha256", "files"
     } or not isinstance(entry["files"], dict):
@@ -360,6 +423,7 @@ def _verify_one_artifact(role: str, entry: dict, record: dict, root: Path,
     _verify_run(run, run_id, attempt, commit, ARTIFACT_WORKFLOWS[role])
     metadata = github_json(f"repos/{REPOSITORY}/actions/artifacts/{entry['artifact_id']}")
     _verify_artifact_metadata(metadata, role, entry, commit, run)
+    _verify_retention(metadata, role, now)
     if role == "docs":
         pages_artifact.verify_metadata(metadata, run, {
             "artifact_id": entry["artifact_id"], "run_id": run_id, "attempt": attempt,
@@ -379,9 +443,10 @@ def _verify_one_artifact(role: str, entry: dict, record: dict, root: Path,
 
 
 def _verify_artifacts(record: dict, root: Path, artifacts: Path, github_json) -> None:
+    now = datetime.now(timezone.utc)
     preflight: set[tuple[int, int]] = set()
     for role, entry in record["artifacts"].items():
-        identity = _verify_one_artifact(role, entry, record, root, artifacts, github_json)
+        identity = _verify_one_artifact(role, entry, record, root, artifacts, github_json, now)
         if role in ("source", "cli-linux", "cli-macos"):
             preflight.add(identity)
     if len(preflight) != 1:
@@ -408,13 +473,28 @@ def _verify_evidence(record: dict, evidence: Path, github_json) -> None:
         _verify_job_counts(jobs, kind, entry["passed_jobs"], entry["skipped_jobs"])
         if _sha256(evidence / f"{kind}.json") != entry["sha256"]:
             raise ValueError(f"{kind} evidence digest differs from the candidate")
+        _verify_evidence_content(evidence / f"{kind}.json", kind, entry, commit, jobs["jobs"])
+
+
+def _verify_review_content(path: Path, kind: str, commit: str) -> None:
+    """Require a non-empty UTF-8 report that names the full candidate commit."""
+    try:
+        text = _read_bounded(path, MAX_REVIEW_BYTES, f"{kind} review report").decode("utf-8")
+    except UnicodeDecodeError:
+        raise ValueError(f"{kind} review report is not UTF-8 text") from None
+    if not text.strip() or "\x00" in text:
+        raise ValueError(f"{kind} review report is empty or not text")
+    if not re.search(rf"(?<![0-9A-Fa-f]){commit}(?![0-9A-Fa-f])", text):
+        raise ValueError(f"{kind} review report does not name the candidate commit")
 
 
 def _verify_reviews(record: dict, reviews: Path) -> None:
+    commit = record["source"]["commit"]
     for kind, digest in record["reviews"].items():
         _digest(digest, "review report digest")
         if _sha256(reviews / f"{kind}.md") != digest:
             raise ValueError(f"{kind} review report digest differs from the candidate")
+        _verify_review_content(reviews / f"{kind}.md", kind, commit)
 
 
 def verify(record: dict, root: Path, artifacts: Path, evidence: Path, reviews: Path,
