@@ -298,6 +298,10 @@ def _expressions(text):
         if end is None:
             # Fail closed even in comments: a marker must not hide later reads.
             raise ValueError("unterminated expression marker")
+        # Conservatively reject hash-before-marker text, without parsing YAML or shell.
+        line_start = text.rfind("\n", 0, start) + 1
+        if "#" in text[line_start:start]:
+            raise ValueError("ambiguous comment expression marker")
         yield re.fullmatch(r"\$\{\{(.*)\}\}", text[start:end + 2], re.DOTALL)
         cursor = end + 2
 
@@ -1286,7 +1290,7 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
                 self.assertNotEqual(changed, files[path])
                 self.assertTrue(_secret_use_violations(_workflows({**files, path: changed})))
         for literal in ("'secrets'", "'toJSON(secrets)'", "'secrets.UNREVIEWED_TOKEN'",
-                        "'it''s secrets'"):
+                        "'it''s secrets'", "'# secrets.UNREVIEWED_TOKEN'"):
             with self.subTest(literal=literal):
                 self.assertEqual(set(), _secret_reads("${{ " + literal + " }}"))
                 changed = files[path].replace(
