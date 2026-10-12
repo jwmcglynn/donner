@@ -2969,7 +2969,7 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
 
       // Placed outline in document space (outline -> stretch -> translate ->
       // rotate). Shared with RendererGeode via PlacedTextGeometry so the two
-      // backends can't drift on placement (0038). Empty for bitmap-only fonts
+      // backends cannot drift on placement. Empty for bitmap-only fonts
       // / outline-less glyphs, which fall through to the bitmap branch below
       // exactly as before.
       Path glyphPath;
@@ -2994,11 +2994,11 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
           return;
         }
         if (bitmap) {
-          // Premultiply alpha for correct blending.
-          std::vector<uint8_t> premul = PremultiplyRgba(bitmap->rgbaPixels);
-          auto maybePixmap = tiny_skia::Pixmap::fromVec(
-              std::move(premul), tiny_skia::IntSize(static_cast<uint32_t>(bitmap->width),
-                                                    static_cast<uint32_t>(bitmap->height)));
+          // BitmapGlyph already contains premultiplied RGBA from the font decoder.
+          auto maybePixmap =
+              tiny_skia::Pixmap::fromVec(std::move(bitmap->rgbaPixels),
+                                         tiny_skia::IntSize(static_cast<uint32_t>(bitmap->width),
+                                                            static_cast<uint32_t>(bitmap->height)));
           if (!maybePixmap.has_value()) {
             continue;
           }
