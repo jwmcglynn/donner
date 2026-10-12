@@ -96,6 +96,23 @@ public:
   std::optional<TextBackend::BitmapGlyph> bitmapGlyph(FontHandle font, int glyphIndex,
                                                       float scale) const;
 
+  /// Query bitmap cost and placement without decoding pixels.
+  /// @param font Font to query.
+  /// @param glyphIndex Glyph within the font.
+  /// @param scale Requested scale.
+  std::optional<TextBackend::BitmapGlyphMetrics> bitmapGlyphMetrics(FontHandle font, int glyphIndex,
+                                                                    float scale) const;
+
+  /// Decode an admitted bitmap only after revalidating its metadata and RGBA byte cap.
+  /// @param font Font to decode.
+  /// @param glyphIndex Glyph within the font.
+  /// @param scale Requested scale.
+  /// @param admitted Metadata whose cost the caller has reserved.
+  /// @param maximumRgbaBytes Maximum converted RGBA storage allowed by that reservation.
+  std::optional<TextBackend::BitmapGlyph> bitmapGlyph(
+      FontHandle font, int glyphIndex, float scale, const TextBackend::BitmapGlyphMetrics& admitted,
+      std::size_t maximumRgbaBytes) const;
+
   /// Measure the `ch` unit in ems for the given font-family cascade.
   std::optional<double> measureChUnitInEm(std::span<const RcString> fontFamilies,
                                           Entity geometryOwner = entt::null);

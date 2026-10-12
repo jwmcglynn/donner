@@ -2,6 +2,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <iterator>
 #include <memory>
@@ -135,13 +136,7 @@ public:
       glyph.xKern = run.glyphs.empty() ? 0.0 : 1.0;
       glyph.yKern = run.glyphs.empty() ? 0.0 : 2.0;
       glyph.cluster = static_cast<uint32_t>(cluster);
-      if (clusterCombiningMarks && codepoint == 0x0301 && !run.glyphs.empty()) {
-        glyph.cluster = run.glyphs.back().cluster;
-        glyph.xKern = 0.0;
-        glyph.yKern = 0.0;
-        glyph.xOffset = -7.0;
-        glyph.yOffset = -4.0;
-      }
+      applyCombiningMarkPosition(glyph, run, codepoint);
       glyph.fontSizeScale = fontVariant == FontVariant::SmallCaps ? 0.8f : 1.0f;
       if (codepoint >= 0x2E80) {
         glyph.xOffset = 2.0;
@@ -154,6 +149,17 @@ public:
       std::reverse(run.glyphs.begin(), run.glyphs.end());
     }
     return run;
+  }
+
+  void applyCombiningMarkPosition(ShapedGlyph& glyph, const ShapedRun& run,
+                                  uint32_t codepoint) const {
+    if (clusterCombiningMarks && codepoint == 0x0301 && !run.glyphs.empty()) {
+      glyph.cluster = run.glyphs.back().cluster;
+      glyph.xKern = 0.0;
+      glyph.yKern = 0.0;
+      glyph.xOffset = -7.0;
+      glyph.yOffset = -4.0;
+    }
   }
 
   ShapedRun shapeRunNoKerning(FontHandle font, float fontSizePx, std::string_view spanText,
@@ -174,6 +180,15 @@ public:
     return isVertical ? 4.0 : 3.0;
   }
 };
+
+auto BitmapBoundsNear(const Box2d& expected) {
+  return AllOf(Field("topLeft", &Box2d::topLeft,
+                     AllOf(Field("x", &Vector2d::x, DoubleNear(expected.topLeft.x, 1e-9)),
+                           Field("y", &Vector2d::y, DoubleNear(expected.topLeft.y, 1e-9)))),
+               Field("bottomRight", &Box2d::bottomRight,
+                     AllOf(Field("x", &Vector2d::x, DoubleNear(expected.bottomRight.x, 1e-9)),
+                           Field("y", &Vector2d::y, DoubleNear(expected.bottomRight.y, 1e-9)))));
+}
 
 TextEngine MakeScriptedEngine(Registry& registry, FontManager& fontManager,
                               bool reverseClusters = false,
@@ -1205,12 +1220,30 @@ public:
 /// zero-sized bitmap (empty extent).
 class BitmapOutlineBackend : public ScriptedTextBackend {
 public:
+  mutable std::size_t bitmapDecodeCalls = 0;
   Path glyphOutline(FontHandle /*font*/, int /*glyphIndex*/, float /*scale*/) const override {
     return Path();
   }
 
+  std::optional<BitmapGlyphMetrics> bitmapGlyphMetrics(FontHandle font, int glyphIndex,
+                                                       float scale) const override {
+    if (glyphIndex == 'A' % 997 + 1) {
+      return BitmapGlyphMetrics{.font = font,
+                                .glyphIndex = glyphIndex,
+                                .width = 4,
+                                .height = 4,
+                                .rgbaBytes = 64,
+                                .bearingX = 1.0,
+                                .bearingY = 2.0,
+                                .scale = 0.5,
+                                .requestedScale = scale};
+    }
+    return BitmapGlyphMetrics{.font = font, .glyphIndex = glyphIndex, .requestedScale = scale};
+  }
+
   std::optional<BitmapGlyph> bitmapGlyph(FontHandle /*font*/, int glyphIndex,
                                          float /*scale*/) const override {
+    ++bitmapDecodeCalls;
     if (glyphIndex == 'A' % 997 + 1) {
       return BitmapGlyph{.rgbaPixels = {},
                          .width = 4,
@@ -1221,6 +1254,14 @@ public:
     }
     return BitmapGlyph{
         .rgbaPixels = {}, .width = 0, .height = 0, .bearingX = 0.0, .bearingY = 0.0, .scale = 1.0};
+  }
+};
+
+class MixedBitmapOutlineBackend : public BitmapOutlineBackend {
+public:
+  Path glyphOutline(FontHandle font, int glyphIndex, float scale) const override {
+    return glyphIndex == 'A' % 997 + 1 ? Path()
+                                       : ScriptedTextBackend::glyphOutline(font, glyphIndex, scale);
   }
 };
 
@@ -2104,7 +2145,9 @@ TEST(TextEngineScriptedTest, TextAnchorSkipsOnPathRunsInsideChunks) {
 TEST(TextEngineScriptedTest, GeometryCacheFallsBackToBitmapGlyphExtents) {
   Registry registry;
   FontManager fontManager(registry);
-  TextEngine engine(fontManager, registry, std::make_unique<BitmapOutlineBackend>());
+  auto backend = std::make_unique<BitmapOutlineBackend>();
+  const auto* observedBackend = backend.get();
+  TextEngine engine(fontManager, registry, std::move(backend));
 
   const Entity root = MakeTextRootWithSpan(registry, "AB", MakeSpan("AB"));
   const EntityHandle rootHandle(registry, root);
@@ -2116,6 +2159,8 @@ TEST(TextEngineScriptedTest, GeometryCacheFallsBackToBitmapGlyphExtents) {
   EXPECT_EQ(engine.getExtentOfChar(rootHandle, 0), Box2d::FromXYWH(1.0, -2.0, 2.0, 2.0));
   // 'B' resolves to a zero-sized bitmap: its extent stays empty.
   EXPECT_EQ(engine.getExtentOfChar(rootHandle, 1), Box2d());
+  EXPECT_EQ(observedBackend->bitmapDecodeCalls, 0u)
+      << "Text bounds must use metadata without materializing glyph pixels.";
 
   EXPECT_EQ(engine.getNumberOfChars(rootHandle), 2);
   // End position advances by the scripted (10, 12) glyph advance.
@@ -2125,6 +2170,102 @@ TEST(TextEngineScriptedTest, GeometryCacheFallsBackToBitmapGlyphExtents) {
   EXPECT_EQ(engine.getEndPositionOfChar(rootHandle, 9), Vector2d());
   EXPECT_EQ(engine.getExtentOfChar(rootHandle, 9), Box2d());
   EXPECT_DOUBLE_EQ(engine.getRotationOfChar(rootHandle, 9), 0.0);
+}
+
+TEST(TextEngineScriptedTest, BitmapGeometryRotatesAboutItsNonzeroGlyphOrigin) {
+  struct Case {
+    double rotation;
+    Box2d expected;
+    Vector2d inside;
+    Vector2d outside;
+  };
+  const std::array<Case, 3> cases = {{
+      {90.0, Box2d::FromXYWH(10.0, 21.0, 2.0, 2.0), {11.0, 22.0}, {12.0, 19.0}},
+      {-90.0, Box2d::FromXYWH(8.0, 17.0, 2.0, 2.0), {9.0, 18.0}, {12.0, 19.0}},
+      {30.0,
+       Box2d({10.866025403784439, 18.767949192431123}, {13.598076211353316, 21.5}),
+       {12.0, 20.5},
+       {13.5, 18.0}},
+  }};
+  for (const auto& test : cases) {
+    SCOPED_TRACE(test.rotation);
+    Registry registry;
+    FontManager manager(registry);
+    auto backend = std::make_unique<BitmapOutlineBackend>();
+    const auto* observedBackend = backend.get();
+    TextEngine engine(manager, registry, std::move(backend));
+    auto span = MakeSpan("A");
+    span.xList = {Lengthd(10.0, Lengthd::Unit::None)};
+    span.yList = {Lengthd(20.0, Lengthd::Unit::None)};
+    span.rotateList = {test.rotation};
+    const Entity root = MakeTextRootWithSpan(registry, "A", std::move(span));
+    const EntityHandle handle(registry, root);
+    EXPECT_THAT(engine.getStartPositionOfChar(handle, 0), testing::Eq(Vector2d(10.0, 20.0)));
+    EXPECT_THAT(engine.getExtentOfChar(handle, 0), BitmapBoundsNear(test.expected));
+    EXPECT_THAT(engine.computedInkBounds(handle), BitmapBoundsNear(test.expected));
+    EXPECT_EQ(engine.getCharNumAtPosition(handle, test.inside), 0);
+    EXPECT_EQ(engine.getCharNumAtPosition(handle, test.outside), -1);
+    EXPECT_EQ(observedBackend->bitmapDecodeCalls, 0u);
+  }
+}
+
+TEST(TextEngineScriptedTest, BitmapGeometryStretchesBeforeObliqueRotation) {
+  Registry registry;
+  FontManager manager(registry);
+  auto backend = std::make_unique<BitmapOutlineBackend>();
+  const auto* observedBackend = backend.get();
+  TextEngine engine(manager, registry, std::move(backend));
+  auto span = MakeSpan("A");
+  span.xList = {Lengthd(10.0, Lengthd::Unit::None)};
+  span.yList = {Lengthd(20.0, Lengthd::Unit::None)};
+  span.rotateList = {30.0};
+  const Entity root = MakeTextRootWithSpan(registry, "A", std::move(span));
+  auto& component = registry.get<components::TextComponent>(root);
+  component.textLength = Lengthd(20.0, Lengthd::Unit::None);
+  component.lengthAdjust = LengthAdjust::SpacingAndGlyphs;
+  const EntityHandle handle(registry, root);
+  const auto& geometry = engine.ensureComputedTextGeometryComponent(handle);
+  ASSERT_THAT(geometry.runs, SizeIs(1));
+  ASSERT_THAT(geometry.runs[0].glyphs, SizeIs(1));
+  EXPECT_THAT(geometry.runs[0].glyphs[0].stretchScaleX, testing::FloatEq(2.0f));
+  const Box2d expected({10.866025403784439, 18.767949192431123}, {15.330127018922193, 22.5});
+  EXPECT_THAT(engine.getExtentOfChar(handle, 0), BitmapBoundsNear(expected));
+  EXPECT_THAT(engine.computedInkBounds(handle), BitmapBoundsNear(expected));
+  EXPECT_EQ(engine.getCharNumAtPosition(handle, {15.0, 21.0}), 0);
+  EXPECT_EQ(observedBackend->bitmapDecodeCalls, 0u);
+}
+
+TEST(TextEngineScriptedTest, BitmapAndOutlineInkBoundsPreserveSourceSubtrees) {
+  Registry registry;
+  FontManager manager(registry);
+  auto backend = std::make_unique<MixedBitmapOutlineBackend>();
+  const auto* observedBackend = backend.get();
+  TextEngine engine(manager, registry, std::move(backend));
+  const Entity root = MakeTextRootWithSpan(registry, "AB", MakeSpan(""));
+  const auto child = [&](const char* text, double x) {
+    const Entity entity = registry.create();
+    registry.emplace<donner::components::TreeComponent>(entity, xml::XMLQualifiedNameRef("tspan"));
+    registry.get<donner::components::TreeComponent>(root).appendChild(registry, entity);
+    registry.emplace<components::ComputedStyleComponent>(entity, MakeStyle());
+    auto span = MakeSpan(text);
+    span.sourceEntity = entity;
+    span.xList = {Lengthd(x, Lengthd::Unit::None)};
+    span.yList = {Lengthd(0.0, Lengthd::Unit::None)};
+    registry.get<components::ComputedTextComponent>(root).spans.push_back(std::move(span));
+    return EntityHandle(registry, entity);
+  };
+  registry.get<components::ComputedTextComponent>(root).spans.clear();
+  const EntityHandle bitmap = child("A", 0.0);
+  const EntityHandle outline = child("B", 20.0);
+  const EntityHandle rootHandle(registry, root);
+  EXPECT_THAT(engine.computedInkBounds(bitmap), BitmapBoundsNear(Box2d::FromXYWH(1, -2, 2, 2)));
+  EXPECT_THAT(engine.computedInkBounds(outline), BitmapBoundsNear(Box2d::FromXYWH(20, -8, 6, 8)));
+  EXPECT_THAT(engine.computedInkBounds(rootHandle), BitmapBoundsNear(Box2d({1, -8}, {26, 0})));
+  EXPECT_THAT(engine.computedGlyphPaths(bitmap), IsEmpty());
+  EXPECT_THAT(engine.computedGlyphOutlines(bitmap), IsEmpty());
+  EXPECT_THAT(engine.computedGlyphPaths(outline), SizeIs(1));
+  EXPECT_THAT(engine.computedGlyphOutlines(rootHandle), SizeIs(1));
+  EXPECT_EQ(observedBackend->bitmapDecodeCalls, 0u);
 }
 
 TEST(TextEngineScriptedTest, GeometryCacheTransformsQuadraticAndCubicOutlineSegments) {

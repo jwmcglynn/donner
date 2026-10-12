@@ -1340,6 +1340,15 @@ using namespace text_engine_detail;  // NOLINT(google-build-using-namespace)
 
 namespace {
 
+std::optional<Box2d> BitmapGlyphExtent(
+    const TextGlyph& glyph, const std::optional<TextBackend::BitmapGlyphMetrics>& bitmap) {
+  if (!bitmap || bitmap->width <= 0 || bitmap->height <= 0) {
+    return std::nullopt;
+  }
+  const Transform2d localFromBitmap = computeLocalFromBitmapGlyph(glyph, *bitmap);
+  return localFromBitmap.transformBox(Box2d::FromXYWH(0, 0, bitmap->width, bitmap->height));
+}
+
 void addBox(Box2d& accum, bool& initialized, const Box2d& box) {
   if (box.isEmpty()) {
     return;
@@ -2374,6 +2383,18 @@ std::optional<TextBackend::BitmapGlyph> TextEngine::bitmapGlyph(FontHandle font,
   return backend_->bitmapGlyph(font, glyphIndex, scale);
 }
 
+std::optional<TextBackend::BitmapGlyphMetrics> TextEngine::bitmapGlyphMetrics(FontHandle font,
+                                                                              int glyphIndex,
+                                                                              float scale) const {
+  return backend_->bitmapGlyphMetrics(font, glyphIndex, scale);
+}
+
+std::optional<TextBackend::BitmapGlyph> TextEngine::bitmapGlyph(
+    FontHandle font, int glyphIndex, float scale, const TextBackend::BitmapGlyphMetrics& admitted,
+    std::size_t maximumRgbaBytes) const {
+  return backend_->bitmapGlyph(font, glyphIndex, scale, admitted, maximumRgbaBytes);
+}
+
 std::optional<double> TextEngine::measureChUnitInEm(std::span<const RcString> fontFamilies,
                                                     Entity geometryOwner) {
   std::vector<FontFaceDependency> dependencies;
@@ -2545,13 +2566,10 @@ const components::ComputedTextGeometryComponent& TextEngine::ensureComputedTextG
         cache.glyphs.push_back({span.sourceEntity, std::move(transformed), extent});
         addBox(cache.inkBounds, hasInkBounds, extent);
         addBox(charGeom.extent, charGeom.hasExtent, extent);
-      } else if (auto bitmap = bitmapGlyph(run.font, glyph.glyphIndex, emScale)) {
-        const double targetX = glyph.xPosition + bitmap->bearingX;
-        const double targetY = glyph.yPosition - bitmap->bearingY;
-        const Box2d extent = Box2d::FromXYWH(targetX, targetY, bitmap->width * bitmap->scale,
-                                             bitmap->height * bitmap->scale);
-        addBox(cache.inkBounds, hasInkBounds, extent);
-        addBox(charGeom.extent, charGeom.hasExtent, extent);
+      } else if (const auto extent = BitmapGlyphExtent(
+                     glyph, bitmapGlyphMetrics(run.font, glyph.glyphIndex, emScale))) {
+        addBox(cache.inkBounds, hasInkBounds, *extent);
+        addBox(charGeom.extent, charGeom.hasExtent, *extent);
       }
     }
   }
@@ -2590,9 +2608,9 @@ Box2d TextEngine::computedInkBounds(EntityHandle handle) const {
   const auto& cache = ensureComputedTextGeometryComponent(handle);
   Box2d result;
   bool initialized = false;
-  for (const auto& glyph : cache.glyphs) {
-    if (isDescendantOf(registry_, glyph.sourceEntity, handle.entity())) {
-      addBox(result, initialized, glyph.extent);
+  for (const auto& character : cache.characters) {
+    if (character.hasExtent && isDescendantOf(registry_, character.sourceEntity, handle.entity())) {
+      addBox(result, initialized, character.extent);
     }
   }
   return result;
