@@ -731,6 +731,50 @@ TEST(SidebarPresenterTest, MarkerPickerHonorsTheDocumentedNodeScanBudget) {
   EXPECT_THAT(presenter.markerScanCountForTesting(), testing::Eq(scans));
 }
 
+TEST(SidebarPresenterTest, ColorWrappersKeepTheirCssValueAndProvenance) {
+  const struct {
+    std::string_view serialized;
+    std::string_view value;
+    InspectorStyleState state;
+  } cases[] = {
+      {"Color(currentColor)", "currentColor", InspectorStyleState::Unspecified},
+      {"Color(rgba(1, 2, 3, 255)) (set)", "rgba(1, 2, 3, 255)", InspectorStyleState::Set},
+      {"Color(rgba(0, 0, 0, 255)) (default)", "rgba(0, 0, 0, 255)", InspectorStyleState::Default},
+  };
+  for (const auto& item : cases) {
+    SCOPED_TRACE(item.serialized);
+    EXPECT_THAT(
+        FormatInspectorStyleValue(item.serialized),
+        testing::AllOf(
+            testing::Field("value", &InspectorStyleDisplayValue::value, testing::Eq(item.value)),
+            testing::Field("state", &InspectorStyleDisplayValue::state, testing::Eq(item.state))));
+  }
+}
+
+TEST(SidebarPresenterTest, EmptyDocumentClearsCapturedMarkerAndTransformState) {
+  constexpr std::string_view source =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="120" height="80"><defs><marker id="arrow"><path d="M0 0L4 2L0 4"/></marker></defs><rect id="target" width="10" height="10"/></svg>)";
+  EditorApp app;
+  SidebarPresenter presenter;
+  ASSERT_NO_FATAL_FAILURE(LoadAndSelectTarget(app, presenter, source));
+  presenter.beginTransformEditForTesting(app, SidebarPresenter::TransformField::PositionX);
+  ASSERT_THAT(presenter.hasTransformEditForTesting(), testing::IsTrue());
+  ASSERT_THAT(presenter.markerIdsForTesting(), ElementsAre("arrow"));
+  const EditorApp empty;
+  presenter.refreshSnapshot(empty);
+  EXPECT_THAT(presenter.hasTreeSnapshotForTesting(), testing::IsFalse());
+  EXPECT_THAT(presenter.inspectorHasSelectionForTesting(), testing::IsFalse());
+  EXPECT_THAT(presenter.hasTransformEditForTesting(), testing::IsFalse());
+  EXPECT_THAT(presenter.markerIdsForTesting(), IsEmpty());
+  EXPECT_THAT(presenter.inspectorTitleForTesting(), IsEmpty());
+  EXPECT_THAT(presenter.inspectorXmlAttributesForTesting(), IsEmpty());
+  EXPECT_THAT(presenter.inspectorComputedStyleForTesting(), IsEmpty());
+  EXPECT_THAT(presenter.inspectorComputedStyleSwatchesForTesting(), IsEmpty());
+  EXPECT_THAT(presenter.inspectorBoundsForTesting(), testing::Eq(std::nullopt));
+  EXPECT_THAT(presenter.inspectorTransformForTesting(), testing::Eq(std::nullopt));
+  EXPECT_THAT(app.undoTimeline().entryCount(), testing::Eq(0u));
+}
+
 class SidebarPresenterImGuiTest : public ::testing::Test {
 protected:
   void SetUp() override {
@@ -980,6 +1024,40 @@ TEST_F(SidebarPresenterImGuiTest, MiterLimitDecrementRecordsOneUndoableStyleChan
   EXPECT_THAT(restored->getAttribute("style"), testing::Eq(std::nullopt));
   EXPECT_THAT(restored->getAttribute("stroke-miterlimit"),
               testing::Optional(testing::Eq(RcString("5"))));
+}
+
+TEST_F(SidebarPresenterImGuiTest, StrokeTypingDeactivatedWhileBusyCommitsWhenLiveAccessReturns) {
+  EditorApp app;
+  SidebarPresenter presenter;
+  ASSERT_NO_FATAL_FAILURE(LoadAndSelectTarget(app, presenter, kInspectorSvg));
+  const auto target = app.selectedElement();
+  ASSERT_THAT(target, testing::Optional(testing::_));
+  constexpr char windowName[] = "##stroke_busy_commit_contract";
+  RenderInspectorFrame(presenter, &app, windowName);
+  const auto field = presenter.strokeWidthRectForTesting();
+  ASSERT_THAT(field, testing::Optional(testing::_));
+  RenderInspectorFrame(presenter, &app, windowName, RectCenter(*field), true);
+  RenderInspectorFrame(presenter, &app, windowName, RectCenter(*field), false);
+  ImGui::GetIO().AddInputCharacter('3');
+  ASSERT_THAT(RenderInspectorFrame(presenter, &app, windowName), testing::IsTrue());
+  ASSERT_THAT(app.flushFrame(), testing::IsTrue());
+  EXPECT_THAT(target->getAttribute("style"),
+              testing::Optional(testing::Eq(RcString("stroke-width: 3"))));
+  EXPECT_THAT(app.undoTimeline().entryCount(), testing::Eq(0u));
+  const ImVec2 outside(20.0f, 20.0f);
+  EXPECT_THAT(RenderInspectorFrame(presenter, nullptr, windowName, outside, true),
+              testing::IsFalse());
+  EXPECT_THAT(RenderInspectorFrame(presenter, nullptr, windowName, outside, false),
+              testing::IsFalse());
+  EXPECT_THAT(app.undoTimeline().entryCount(), testing::Eq(0u));
+  EXPECT_THAT(RenderInspectorFrame(presenter, &app, windowName), testing::IsFalse());
+  EXPECT_THAT(app.flushFrame(), testing::IsFalse());
+  EXPECT_THAT(app.undoTimeline().entryCount(), testing::Eq(1u));
+  app.undo();
+  ASSERT_THAT(app.flushFrame(), testing::IsTrue());
+  const auto restored = app.document().document().querySelector("#target");
+  ASSERT_THAT(restored, testing::Optional(testing::_));
+  EXPECT_THAT(restored->getAttribute("style"), testing::Eq(std::nullopt));
 }
 
 TEST_F(SidebarPresenterImGuiTest, TreeViewAndInspectorRenderEmptySnapshotReadOnly) {
