@@ -459,6 +459,96 @@ test("formatted worker diagnostics remain valid JavaScript", () => {
   }
 });
 
+test("worker poll timestamps retain their producer clock across delayed proxy delivery", () => {
+  const publisher = renderCoordinatorSource.match(
+    /void PublishWorkerTimingStats\([\s\S]*?\n\}/,
+  )[0];
+  const body = publisher.match(/MAIN_THREAD_ASYNC_EM_ASM\(\s*\{([\s\S]*?)\n\s*\},/)[1];
+  const publish = new Function(
+    "window",
+    "$0",
+    "$1",
+    "$2",
+    "HEAPF64",
+    "_free",
+    "UTF8ToString",
+    "performance",
+    body,
+  );
+  const count = Number(/kValueCount = (\d+)/.exec(publisher)[1]);
+  const pollClock = workerRendererSource.match(
+    /polledAtEpochMs =\s*EM_ASM_DOUBLE\(\{([\s\S]*?)\}\)/,
+  );
+  assert.ok(pollClock, "the poll must capture its clock before asynchronous diagnostic delivery");
+  const epochNow = new Function("performance", pollClock[1]);
+  const polledAtEpochMs = epochNow({ timeOrigin: 700, now: () => 500 });
+  for (const arrivalMs of [900, 200]) {
+    const heap = new Float64Array(Math.max(count, 41));
+    heap[40] = polledAtEpochMs;
+    const window = {};
+    publish(window, 0, 0, count, heap, () => {}, () => "none", {
+      timeOrigin: 1000,
+      now: () => arrivalMs,
+    });
+    assert.equal(
+      window.__donnerWorkerStats.publishedAtMs,
+      200,
+      "the UI poll timestamp must exclude its asynchronous publication delay",
+    );
+    assert.equal(window.__donnerWorkerStats.publicationDelayMs, arrivalMs - 200);
+  }
+});
+
+test("frame completion timestamps exclude proxy delay and retain successful admission", () => {
+  const publisher = workerBridgeSource.match(/void RecordFrameSample\([\s\S]*?\n\}/)[0];
+  const body = publisher.match(/MAIN_THREAD_ASYNC_EM_ASM\(\s*\{([\s\S]*?)\n\s*\},/)[1];
+  const publish = new Function("window", "performance", "$0", "$1", "$2", "$3", "$4", body);
+  const frameClock = workerBridgeSource.match(
+    /EM_JS\(double, WorkerEpochNowMs, \(\), \{([\s\S]*?)\}\);/,
+  );
+  assert.ok(frameClock, "the app worker must expose an epoch clock comparable with the page");
+  const epochNow = new Function("performance", frameClock[1]);
+  const completedAtEpochMs = epochNow({ timeOrigin: 700, now: () => 515 });
+  assert.match(publisher, /const double completedAtEpochMs = WorkerEpochNowMs\(\)/);
+  for (const arrivalMs of [1000, 215]) {
+    const window = {
+      __donnerFrameLoopStats: { uiFrameMsSamples: [] },
+      __donnerWorkerStats: { acceptedForPresentation: false, publishReason: "render-result" },
+      __donnerHostFrameTiming: { lastSurfacePresented: true },
+    };
+    const clock = { timeOrigin: 1000, now: () => arrivalMs };
+    publish(window, clock, 1, 15, 1, 4096, completedAtEpochMs);
+    assert.equal(
+      window.__donnerWorkerStats.presentedAtMs,
+      undefined,
+      "an unaccepted result cannot acquire a presentation timestamp",
+    );
+    window.__donnerWorkerStats.acceptedForPresentation = true;
+    window.__donnerHostFrameTiming.lastSurfacePresented = false;
+    publish(window, clock, 1, 15, 1, 4096, completedAtEpochMs);
+    assert.equal(
+      window.__donnerWorkerStats.presentedAtMs,
+      undefined,
+      "a refused surface cannot acquire a presentation timestamp",
+    );
+    window.__donnerHostFrameTiming.lastSurfacePresented = true;
+    publish(window, clock, 1, 15, 1, 4096, completedAtEpochMs);
+    assert.equal(window.__donnerFrameLoopStats.lastFrameAtMs, 215);
+    assert.equal(
+      window.__donnerWorkerStats.presentedAtMs,
+      215,
+      "a frame timestamp must reflect completion, not its diagnostic arrival",
+    );
+    assert.equal(window.__donnerWorkerStats.presentationPublicationDelayMs, arrivalMs - 215);
+    publish(window, clock, 1, 25, 1, 4096, completedAtEpochMs + 15);
+    assert.equal(
+      window.__donnerWorkerStats.presentedAtMs,
+      215,
+      "later frames cannot replace the consumed result's first presentation timestamp",
+    );
+  }
+});
+
 test("worker acceptance requires the fresh render identity and no old presentation timestamp", () => {
   const timingPublisher = renderCoordinatorSource.match(
     /void PublishWorkerTimingStats\([\s\S]*?\n\}/,
@@ -487,6 +577,7 @@ test("worker acceptance requires the fresh render identity and no old presentati
   heap.set([11, 22, 33, 44, 0], 26);
   heap[32] = 1;
   heap.set([2, 3, 4, 5, 6], 35);
+  heap[40] = 1200;
   const window = {
     __donnerWorkerStats: {
       completedResults: 8,
@@ -508,7 +599,7 @@ test("worker acceptance requires the fresh render identity and no old presentati
       heap.fill(99);
     },
     () => "none",
-    { now: () => 200 },
+    { timeOrigin: 1000, now: () => 200 },
   );
   assert.deepEqual(released, [0], "the asynchronous publication frees its owned buffer once");
   const stats = window.__donnerWorkerStats;
@@ -537,6 +628,71 @@ test("worker acceptance requires the fresh render identity and no old presentati
   publishAccepted(window, 11, 22, 33);
   assert.equal(stats.acceptedForPresentation, true);
   assert.equal(stats.presentedAtMs, undefined, "admission must not manufacture a presentation");
+});
+
+test("a failed worker publication cannot inherit a prior frame's presentation admission", () => {
+  const failure =
+    renderCoordinatorSource.match(/void PublishWorkerGpuWaitFailure\([\s\S]*?\n\}/)[0];
+  const frame = workerBridgeSource.match(/void RecordFrameSample\([\s\S]*?\n\}/)[0];
+  const body = (method) => method.match(/MAIN_THREAD_ASYNC_EM_ASM\(\s*\{([\s\S]*?)\n\s*\},/)[1];
+  const publishFailure = new Function(
+    "window",
+    "performance",
+    "$0",
+    "$1",
+    "$2",
+    "UTF8ToString",
+    body(failure),
+  );
+  const publishFrame = new Function(
+    "window",
+    "performance",
+    "$0",
+    "$1",
+    "$2",
+    "$3",
+    "$4",
+    body(frame),
+  );
+  const window = {
+    __donnerFrameLoopStats: { uiFrameMsSamples: [] },
+    __donnerHostFrameTiming: { lastSurfacePresented: true },
+    __donnerWorkerStats: {
+      completedResults: 3,
+      acceptedForPresentation: true,
+      presentedAtMs: 200,
+      presentationPublicationDelayMs: 40,
+      publishReason: "render-result",
+    },
+  };
+  const previous = window.__donnerWorkerStats;
+  const clock = { timeOrigin: 1000, now: () => 900 };
+  publishFailure(window, clock, 1, 0, 5000, () => "queue-idle");
+  publishFrame(window, clock, 1, 15, 1, 4096, 1215);
+  const stats = window.__donnerWorkerStats;
+  assert.deepEqual({
+    completedResults: stats.completedResults,
+    acceptedForPresentation: stats.acceptedForPresentation,
+    presentedAtMs: stats.presentedAtMs,
+    presentationPublicationDelayMs: stats.presentationPublicationDelayMs,
+    deviceLost: stats.deviceLost,
+    publishReason: stats.publishReason,
+  }, {
+    completedResults: 3,
+    acceptedForPresentation: false,
+    presentedAtMs: undefined,
+    presentationPublicationDelayMs: undefined,
+    deviceLost: true,
+    publishReason: "gpu-wait-failure",
+  });
+  assert.equal(previous.presentedAtMs, 200, "the failure must not modify the older frame object");
+  stats.acceptedForPresentation = true;
+  publishFrame(window, clock, 1, 15, 1, 4096, 1230);
+  assert.equal(
+    stats.presentedAtMs,
+    undefined,
+    "failure publications cannot present even if an admission marker is stale",
+  );
 });
 
 test("a GPU wait failure publishes worker stats even though no frame completed", () => {
@@ -1134,4 +1290,24 @@ test("async presentation loss publication owns and always frees its reason paylo
   assert.match(publisher, /finally\s*\{[\s\S]*if \(\$5\)\s*\{\s*_free\(\$5\)/);
   assert.match(publisher, /'browserReason'\s*:\s*\$5 \? UTF8ToString\(\$5\) : String\(\)/);
   assert.doesNotMatch(publisher, /browserReason\.c_str\(\)/);
+});
+
+
+test("presented document wakes use the event driver while generic wakes stay rAF paced", () => {
+  const presentedWake = source.match(
+    /void EditorWindow::wakeEventLoopForPresentedDocument\(\) \{([\s\S]*?)\n\}/,
+  );
+  assert.ok(presentedWake, "expected the presentation-specific wake entry");
+  assert.match(
+    presentedWake[1],
+    /#ifdef DONNER_EDITOR_WHOLE_APP_WORKER[\s\S]*whole_app_worker::RequestFrame\(\);[\s\S]*#endif/,
+    "a matching presentation must schedule its held preview work even while worker rAF is delayed",
+  );
+  const genericWake = source.match(/void EditorWindow::wakeEventLoop\(\) \{([\s\S]*?)\n\}/);
+  assert.ok(genericWake, "expected the ordinary UI wake entry");
+  assert.doesNotMatch(
+    genericWake[1],
+    /whole_app_worker::RequestFrame/,
+    "ordinary UI and animation wakes must retain their rAF cadence",
+  );
 });
