@@ -470,6 +470,63 @@ TEST(EditorShellInternalTest, TextFormatBarCapturesCanvasInputWithinItsLayoutRec
                    .has_value());
 }
 
+TEST(EditorShellInternalTest, DisabledSourceFocusClearsBeforePendingEditsReachThePane) {
+  for (const bool flushBeforeDisable : {false, true}) {
+    SCOPED_TRACE(flushBeforeDisable ? "writeback awaiting source pane" : "queued insertion");
+    EditorApp app;
+    ASSERT_THAT(app.loadFromString(kInitialSvg), testing::Eq(true));
+    auto target = app.document().document().querySelector("#target");
+    ASSERT_THAT(target, testing::Optional(testing::_));
+    app.setSelection(*target);
+    TextEditor source;
+    source.setText(kInitialSvg);
+    source.resetTextChanged();
+    source.setFocusPartition(ComputeFocusPartition(app.document().document(), *target));
+    ASSERT_THAT(source.hasFocusPartition(), testing::Eq(true));
+
+    svg::SVGDocument& document = app.document().document();
+    svg::SVGRectElement inserted = svg::SVGRectElement::Create(document);
+    inserted.setAttribute("id", "inserted");
+    app.applyMutation(EditorCommand::InsertElementCommand(document.svgElement(), inserted));
+    if (flushBeforeDisable) {
+      ASSERT_THAT(app.flushFrame(), testing::Eq(true));
+      ASSERT_THAT(app.document().hasUnmirroredSourceDeltas(), testing::Eq(true));
+    } else {
+      ASSERT_THAT(app.document().hasPendingMutations(), testing::Eq(true));
+    }
+    const std::string beforeText = source.getText();
+    const auto beforeVersion = app.document().currentFrameVersion();
+    const bool beforePending = app.document().hasPendingMutations();
+    const bool beforeUnmirrored = app.document().hasUnmirroredSourceDeltas();
+
+    EXPECT_THAT(internal::DeferSourceFocusWhileAwaitingEdits(source, /*focusEnabled=*/false),
+                testing::Eq(false));
+    EXPECT_THAT(source.hasFocusPartition(), testing::Eq(false));
+    EXPECT_THAT(source.getText(), testing::Eq(beforeText));
+    EXPECT_THAT(source.isTextChanged(), testing::Eq(false));
+    EXPECT_THAT(app.document().currentFrameVersion(), testing::Eq(beforeVersion));
+    EXPECT_THAT(app.document().hasPendingMutations(), testing::Eq(beforePending));
+    EXPECT_THAT(app.document().hasUnmirroredSourceDeltas(), testing::Eq(beforeUnmirrored));
+  }
+}
+
+TEST(EditorShellInternalTest, EnabledSourceFocusRetainsPartitionWhileAwaitingEdits) {
+  TextEditor source;
+  source.setText("root\nhidden\ntarget");
+  source.resetTextChanged();
+  source.setFocusPartition(FocusPartition{
+      .fullColor = {{.startLine = 2, .endLine = 3}},
+      .hidden = {{.startLine = 1, .endLine = 2}},
+  });
+  ASSERT_THAT(source.hasFocusPartition(), testing::Eq(true));
+
+  EXPECT_THAT(internal::DeferSourceFocusWhileAwaitingEdits(source, /*focusEnabled=*/true),
+              testing::Eq(true));
+  EXPECT_THAT(source.hasFocusPartition(), testing::Eq(true));
+  EXPECT_THAT(source.getText(), testing::Eq("root\nhidden\ntarget"));
+  EXPECT_THAT(source.isTextChanged(), testing::Eq(false));
+}
+
 TEST(EditorShellInternalTest, StructuralDocumentActionsWaitForExclusiveDomOwnership) {
   EXPECT_FALSE(internal::GroupOperationCanDispatch(
       /*rendererBusy=*/true, GroupOperationAvailability{.canApply = true}));

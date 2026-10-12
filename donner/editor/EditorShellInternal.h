@@ -270,6 +270,12 @@ template <typename Resolver>
 [[nodiscard]] Box2d TransformDocumentBox(const Box2d& box,
                                          const Transform2d& documentFromBoundsDocument);
 
+/// Preserve enabled source focus while document edits await source-pane writeback.
+/// @param textEditor Source pane whose focus partition may be cleared.
+/// @param focusEnabled Whether selected-element source focus is enabled.
+/// @return True when the caller should defer focus recomputation until writeback completes.
+[[nodiscard]] bool DeferSourceFocusWhileAwaitingEdits(TextEditor& textEditor, bool focusEnabled);
+
 /// Clamp a requested source-pane width to the usable window range.
 /// @param requestedWidth Requested width in logical pixels.
 /// @param windowWidth Available window width in logical pixels.
