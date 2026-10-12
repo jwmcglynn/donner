@@ -98,11 +98,12 @@ playwright_bin.playwright_test(
         "playwright.bazel.config.js",
         "playwright.compatibility.config.js",
         "playwright.config.js",
-        "sample-thumbnail-quiescence.mjs",
         "playwright.webkit.bazel.config.js",
         "png-crop.ts",
+        "png-crop-core.mjs",
         "quarantine-report.mjs",
         "remote-webserver.mjs",
+        "sample-thumbnail-quiescence.mjs",
         "sample-thumbnail-settle.ts",
         "surface-frame-probe.ts",
         ":node_modules/@playwright/test",
@@ -638,6 +639,20 @@ js_test(
         "//tools:run-browser-ci.sh",
     ],
     entry_point = "selector-tests.mjs",
+    env = {"NODE_OPTIONS": ""},
+    node_options = ["--test"],
+)
+
+js_test(
+    name = "png_crop_tests",
+    size = "small",
+    copy_data_to_bin = False,
+    data = [
+        "png-crop.spec.mjs",
+        "png-crop-core.mjs",
+        ":node_modules/pngjs",
+    ],
+    entry_point = "png-crop.spec.mjs",
     env = {"NODE_OPTIONS": ""},
     node_options = ["--test"],
 )
