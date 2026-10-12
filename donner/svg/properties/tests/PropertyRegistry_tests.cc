@@ -494,6 +494,40 @@ TEST(PropertyRegistry, MaskTypeGrammarAndCascade) {
   EXPECT_THAT(child.maskType.get(), Optional(MaskType::Luminance));
 }
 
+TEST(PropertyRegistry, ColorInterpolationMetadataSupportsInheritance) {
+  EXPECT_THAT(PropertyRegistry::propertyNames(), Contains(std::string_view("color-interpolation")));
+  EXPECT_THAT(PropertyRegistry::isPresentationAttributeInherited("color-interpolation"),
+              testing::IsTrue());
+}
+
+TEST(PropertyRegistry, ColorInterpolationGrammar) {
+  for (std::string_view value : {"sRGB", "linearRGB", "auto", "inherit", "initial", "unset"}) {
+    SCOPED_TRACE(value);
+    PropertyRegistry registry;
+    const css::Declaration declaration =
+        css::CSS::ParseStyleAttribute(std::string("color-interpolation: ") + std::string(value))
+            .at(0);
+    EXPECT_THAT(registry.parseProperty(declaration, Specificity()), Eq(std::nullopt));
+  }
+}
+
+TEST(PropertyRegistry, ColorInterpolationCascadeAndDefaults) {
+  PropertyRegistry registry;
+  EXPECT_THAT(registry.colorInterpolation.get(), Optional(ColorInterpolation::SRGB));
+  registry.parseStyle("color-interpolation: linearRGB");
+  EXPECT_THAT(registry.colorInterpolation.get(), Optional(ColorInterpolation::LinearRGB));
+  const PropertyRegistry child = PropertyRegistry().inheritFrom(registry);
+  EXPECT_THAT(child.colorInterpolation.get(), Optional(ColorInterpolation::LinearRGB));
+  registry.parseStyle("color-interpolation: auto");
+  EXPECT_THAT(registry.colorInterpolation.get(), Optional(ColorInterpolation::Auto));
+  PropertyRegistry invalidRegistry;
+  const css::Declaration invalid =
+      css::CSS::ParseStyleAttribute("color-interpolation: invalid").at(0);
+  EXPECT_THAT(invalidRegistry.parseProperty(invalid, Specificity()),
+              ParseErrorIs("Invalid color-interpolation value"));
+  EXPECT_THAT(invalidRegistry.colorInterpolation.get(), Optional(ColorInterpolation::SRGB));
+}
+
 TEST(PropertyRegistry, Fill) {
   // Initial value of fill is black.
   const PaintServer kInitialFill(PaintServer::Solid(Color(RGBA(0, 0, 0, 0xFF))));

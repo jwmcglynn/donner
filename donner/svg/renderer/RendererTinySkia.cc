@@ -40,11 +40,22 @@
 #include "tiny_skia/Painter.h"
 #include "tiny_skia/Path.h"
 #include "tiny_skia/PathBuilder.h"
+#include "tiny_skia/filter/ColorSpace.h"
 #include "tiny_skia/shaders/Shaders.h"
 
 namespace donner::svg {
 
 namespace {
+
+tiny_skia::Mask MakeMaskCoverage(tiny_skia::Pixmap& pixmap, MaskType maskType,
+                                 ColorInterpolation colorInterpolation) {
+  if (maskType == MaskType::Luminance && colorInterpolation == ColorInterpolation::LinearRGB) {
+    tiny_skia::filter::srgbToLinear(pixmap);
+  }
+  const tiny_skia::MaskType coverageMode =
+      maskType == MaskType::Alpha ? tiny_skia::MaskType::Alpha : tiny_skia::MaskType::Luminance;
+  return tiny_skia::Mask::fromPixmap(pixmap.view(), coverageMode);
+}
 
 std::optional<int> CheckedPixelDimension(double logicalDimension, double devicePixelRatio) {
   const double pixelDimension = logicalDimension * devicePixelRatio;
@@ -2078,11 +2089,17 @@ void RendererTinySkia::popFilterLayer() {
 }
 
 void RendererTinySkia::pushMask(const std::optional<Box2d>& maskBounds, MaskType maskType) {
+  pushMask(maskBounds, maskType, ColorInterpolation::SRGB);
+}
+
+void RendererTinySkia::pushMask(const std::optional<Box2d>& maskBounds, MaskType maskType,
+                                ColorInterpolation colorInterpolation) {
   SurfaceFrame frame;
   frame.kind = SurfaceKind::MaskCapture;
   frame.maskBounds = maskBounds;
   frame.maskBoundsTransform = deviceFromLocalTransform_;
   frame.maskType = maskType;
+  frame.maskColorInterpolation = colorInterpolation;
   if (rejectedFilterDepth_ != 0) {
     frame.allocationRejected = true;
     surfaceStack_.push_back(std::move(frame));
@@ -2114,10 +2131,7 @@ void RendererTinySkia::transitionMaskToContent() {
     frame.kind = SurfaceKind::MaskContent;
     return;
   }
-  const tiny_skia::MaskType tinyMaskType = frame.maskType == MaskType::Alpha
-                                               ? tiny_skia::MaskType::Alpha
-                                               : tiny_skia::MaskType::Luminance;
-  frame.maskAlpha = tiny_skia::Mask::fromPixmap(frame.pixmap.view(), tinyMaskType);
+  frame.maskAlpha = MakeMaskCoverage(frame.pixmap, frame.maskType, frame.maskColorInterpolation);
 
   if (frame.maskAlpha.has_value() && frame.maskBounds.has_value()) {
     std::optional<tiny_skia::Mask> boundsMask =

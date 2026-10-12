@@ -766,6 +766,27 @@ ParseResult<FillRule> ParseFillRule(std::span<const css::ComponentValue> compone
   return err;
 }
 
+ParseResult<ColorInterpolation> ParseColorInterpolation(
+    std::span<const css::ComponentValue> components) {
+  if (components.size() == 1) {
+    if (const auto* ident = components.front().tryGetToken<css::Token::Ident>()) {
+      if (ident->value.equalsLowercase("srgb")) {
+        return ColorInterpolation::SRGB;
+      }
+      if (ident->value.equalsLowercase("linearrgb")) {
+        return ColorInterpolation::LinearRGB;
+      }
+      if (ident->value.equalsLowercase("auto")) {
+        return ColorInterpolation::Auto;
+      }
+    }
+  }
+  ParseDiagnostic err;
+  err.reason = "Invalid color-interpolation value";
+  err.range.start = !components.empty() ? components.front().sourceOffset() : FileOffset::Offset(0);
+  return err;
+}
+
 ParseResult<ColorInterpolationFilters> ParseColorInterpolationFilters(
     std::span<const css::ComponentValue> components) {
   if (components.size() == 1) {
@@ -2563,6 +2584,15 @@ DONNER_CONSTEXPR_MAP auto kProperties =
                        },
                        &registry.maskType);
                  }},  //
+                {"color-interpolation",
+                 [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
+                   return Parse(
+                       params,
+                       [](const parser::PropertyParseFnParams& params) {
+                         return ParseColorInterpolation(params.components());
+                       },
+                       &registry.colorInterpolation);
+                 }},
                 {"color-interpolation-filters",
                  [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
                    return Parse(

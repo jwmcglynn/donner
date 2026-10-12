@@ -614,8 +614,6 @@ INSTANTIATE_TEST_SUITE_P(
     Combine(ValuesIn(getTestsInCategory(
                 "masking/mask",
                 {
-                    {"color-interpolation=linearRGB.svg",
-                     Params::Skip("Not implemented: color-interpolation linearRGB")},
                     {"recursive-on-child.svg", Params::RenderOnly("UB: Recursive on child")},
                     {"on-a-small-object.svg", WithMaxPixels(120, "Small mask edge AA")},
                     {"with-image.svg",
