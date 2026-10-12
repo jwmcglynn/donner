@@ -14,7 +14,9 @@ The check fails closed where it could otherwise be bypassed: a load or use_repo_
 http.bzl or git.bzl must bind each rule under its own name, MODULE.bazel may not include() other
 files, and main-repository labels (`@//`, `@@//`, `@donner//`) are followed like `//` labels.
 Playwright repository tags are recognized from literal use_extension identities rather than proxy
-variable names. Proxy rebinding, factory/method aliases and unreadable method lookups fail closed;
+variable names. Their integrity maps must contain exactly the complete reviewed archive set with
+unique literal keys; a nonempty subset leaves unchecked platforms and is rejected. Proxy rebinding,
+factory/method aliases and unreadable method lookups fail closed;
 direct repository mapping operations remain allowed. Unreadable native getter results may be
 inspected as bare expressions, but cannot be invoked or transported; first-class getter factories
 are rejected. This is a conservative static check, not a general Starlark interpreter.
@@ -526,10 +528,28 @@ def _missing_browser_integrity_maps(path, tree, proxies):
             and _keyword(call, "integrity_path_map") is None]
 
 
+def _browser_archive_key_problems(path, tree, proxies):
+    """Require the reviewed complete archive set on recognized Playwright repository tags."""
+    problems = []
+    for call in ast.walk(tree):
+        if not (isinstance(call, ast.Call) and _is_playwright_repo(call, proxies)):
+            continue
+        mapping = _keyword(call, "integrity_path_map")
+        if not isinstance(mapping, ast.Dict) or not mapping.keys:
+            continue  # Missing, nonliteral and empty maps are reported separately.
+        keys = [_literal(key) for key in mapping.keys]
+        if (None in keys or len(keys) != len(set(keys))
+                or set(keys) != REVIEWED_PLAYWRIGHT_ARCHIVES):
+            problems.append("%s:%d: browser archive keys must match the complete reviewed set"
+                            % (path, call.lineno))
+    return problems
+
+
 def _integrity_map_problems(path, tree):
     """An empty value in a browser integrity map would silently skip that archive's check."""
     proxies, problems = _extension_proxy_bindings(path, tree)
     problems.extend(_missing_browser_integrity_maps(path, tree, proxies))
+    problems.extend(_browser_archive_key_problems(path, tree, proxies))
     problems.extend(_browser_indirection_problems(path, tree, proxies))
     problems.extend(_browser_getattr_problems(path, tree, proxies))
     for node in ast.walk(tree):
