@@ -282,6 +282,23 @@ StructuredFont MakeStructuredFont(uint8_t selector) {
   }
 }
 
+void ExerciseBitmapAdmission(const TextBackend& backend, FontHandle font, int glyphIndex,
+                             float scale) {
+  const auto metrics = backend.bitmapGlyphMetrics(font, glyphIndex, scale);
+  if (!metrics) {
+    return;
+  }
+  if (backend.bitmapGlyph(font, glyphIndex, scale, *metrics, 0).has_value()) {
+    std::abort();
+  }
+  auto forged = *metrics;
+  forged.rgbaBytes ^= 1u;
+  if (backend.bitmapGlyph(font, glyphIndex, scale, forged, metrics->rgbaBytes).has_value()) {
+    std::abort();
+  }
+  (void)backend.bitmapGlyph(font, glyphIndex, scale, *metrics, metrics->rgbaBytes);
+}
+
 void ExerciseLoadedFont(FontManager& fontManager, Registry& registry, FontHandle font,
                         int outlineGlyph = 0) {
   FuzzTextBackend backend(fontManager, registry);
@@ -294,6 +311,7 @@ void ExerciseLoadedFont(FontManager& fontManager, Registry& registry, FontHandle
   (void)backend.isBitmapOnly(font);
   (void)backend.hasSmallCapsFeature(font);
   (void)backend.bitmapGlyph(font, outlineGlyph, 1.0f);
+  ExerciseBitmapAdmission(backend, font, outlineGlyph, 1.0f);
 
   // Exercise the selected compound root directly even when cmap has no mapping for it. The
   // shared-tail seed deliberately selects a high glyph index at the exact depth-32 boundary.
@@ -310,6 +328,7 @@ void ExerciseLoadedFont(FontManager& fontManager, Registry& registry, FontHandle
     }
     (void)backend.glyphOutline(font, glyph.glyphIndex, 1.0f);
     (void)backend.bitmapGlyph(font, glyph.glyphIndex, 1.0f);
+    ExerciseBitmapAdmission(backend, font, glyph.glyphIndex, 1.0f);
   }
   (void)backend.crossSpanKern(font, 16.0f, font, 16.0f, 'A', 'z', false);
 }
@@ -404,6 +423,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
     if (!backend.bitmapGlyph(font, shaped.glyphs.front().glyphIndex, scale).has_value()) {
       std::abort();
     }
+    ExerciseBitmapAdmission(backend, font, shaped.glyphs.front().glyphIndex, scale);
     return 0;
   }
 #endif

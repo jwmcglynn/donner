@@ -864,6 +864,20 @@ TEST_F(TinySkiaBitmapAdmissionTest, ExhaustedBudgetRejectsBeforeBitmapDecode) {
   EXPECT_EQ(stats.textMaterializationBytes, 0u);
 }
 
+TEST_F(TinySkiaBitmapAdmissionTest, FailedBoundedDecodeStopsBeforeLaterGlyphs) {
+  EXPECT_CALL(*backend_, bitmapGlyph(_, _, _)).Times(0);
+  EXPECT_CALL(*backend_, bitmapGlyphMetrics(font_, 2, _)).Times(0);
+  EXPECT_CALL(*backend_, bitmapGlyph(font_, 1, 1.0f, _, 4u))
+      .WillOnce(testing::Return(std::nullopt));
+  EXPECT_CALL(*backend_, bitmapGlyph(font_, 2, _, _, _)).Times(0);
+  drawWithByteLimit(8);
+  const RendererResourceStats stats = renderer_.resourceStats();
+  EXPECT_THAT(stats.textMaterializationBudgetRejected, testing::IsTrue());
+  EXPECT_THAT(stats.drawBudgetRejected, testing::IsTrue());
+  EXPECT_EQ(stats.textUniqueOutlines, 1u);
+  EXPECT_EQ(stats.textMaterializationBytes, 8u);
+}
+
 TEST_F(TinySkiaBitmapAdmissionTest, OnlyAdmittedGlyphDecodesAtExactAggregateLimit) {
   EXPECT_CALL(*backend_, bitmapGlyph(_, _, _)).Times(0);
   EXPECT_CALL(*backend_, bitmapGlyph(font_, 1, 1.0f, _, 4u)).WillOnce(testing::Return(bitmap()));
