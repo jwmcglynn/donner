@@ -1700,3 +1700,55 @@ test("a report-lane archive that cannot copy warns instead of passing silently",
     rmSync(scratch, { recursive: true, force: true });
   }
 });
+
+
+test("Playwright evidence upload retries only transport while retaining terminal failure", () => {
+  const workflow = readFileSync(path.join(repositoryRoot, ".github/workflows/editor_wasm.yml"), "utf8");
+  const uploads = [...workflow.matchAll(
+    /      - name: Upload Playwright evidence[^\n]*\n([\s\S]*?)(?=\n      - name:|$)/g,
+  )].map(([text]) => ({
+    id: text.match(/        id: ([\w-]+)/)?.[1],
+    condition: text.match(/        if: \$\{\{ (.*?) \}\}/)?.[1],
+    continueOnError: text.includes("        continue-on-error: true"),
+    action: text.match(/        uses: (.*)/)?.[1],
+    name: text.match(/          name: (.*)/)?.[1],
+    path: text.match(/          path: (.*)/)?.[1],
+    retention: text.match(/          retention-days: (.*)/)?.[1],
+    missing: text.match(/          if-no-files-found: (.*)/)?.[1],
+    overwrite: text.match(/          overwrite: (.*)/)?.[1],
+  }));
+  assert.equal(uploads.length, 3, "bound transport attempts to three");
+  assert.equal(new Set(uploads.map(({ name }) => name)).size, 3, "preserve uncertain prior artifacts");
+  assert.deepEqual(uploads.map(({ continueOnError }) => continueOnError), [true, true, false]);
+  for (const upload of uploads) {
+    assert.equal(upload.action, "actions/upload-artifact@v7");
+    assert.equal(upload.path, "donner/editor/wasm/tests/playwright-failures");
+    assert.equal(upload.retention, "14");
+    assert.equal(upload.missing, "warn");
+    assert.notEqual(upload.overwrite, "true");
+  }
+  for (const scenario of [
+    { outcomes: ["success"], attempts: 1, failed: false },
+    { outcomes: ["failure", "success"], attempts: 2, failed: false },
+    { outcomes: ["failure", "failure", "success"], attempts: 3, failed: false },
+    { outcomes: ["failure", "failure", "failure"], attempts: 3, failed: true },
+    { outcomes: ["failure"], cancelAfter: 1, attempts: 1, failed: false },
+    { outcomes: [], cancelAfter: 0, attempts: 0, failed: false },
+    { outcomes: ["failure", "success"], browserFailed: true, attempts: 2, failed: true },
+  ]) {
+    const steps = {};
+    let attempts = 0;
+    let failed = scenario.browserFailed ?? false;
+    for (const upload of uploads) {
+      const cancelled = scenario.cancelAfter !== undefined && attempts >= scenario.cancelAfter;
+      const expression = upload.condition.replaceAll("cancelled()", "cancelled");
+      if (!new Function("steps", "cancelled", `return (${expression});`)(steps, cancelled)) continue;
+      const outcome = scenario.outcomes[attempts++];
+      assert.ok(outcome, "no extra upload attempt after recovery or exhaustion");
+      steps[upload.id] = { outcome };
+      failed ||= outcome === "failure" && !upload.continueOnError;
+    }
+    assert.equal(attempts, scenario.attempts, JSON.stringify(scenario));
+    assert.equal(failed, scenario.failed, JSON.stringify(scenario));
+  }
+});
