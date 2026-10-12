@@ -410,6 +410,12 @@ bool SameRenderAttempt(const RenderAttemptIdentity& lhs, const RenderAttemptIden
          SameRequestedDragPreview(lhs.dragPreview, rhs.dragPreview);
 }
 
+/// Whether @p failure is repaired only by rendering more of the document.
+bool IsCoverageFailure(FramePresentationFailure failure) {
+  return failure == FramePresentationFailure::InsufficientCoverage ||
+         failure == FramePresentationFailure::MissingOverview;
+}
+
 RenderAttemptIdentity MakeRenderAttempt(
     std::uint64_t documentGeneration, std::uint64_t version,
     const EditorRasterViewport& rasterViewport, bool overviewInfillOnly, Entity selectedEntity,
@@ -1416,8 +1422,10 @@ void RenderCoordinator::updateFrameRepairStatus(
   const auto failure =
       outcome.failure != FramePresentationFailure::None ? outcome.failure : adoptionFailure_;
   presentationNeedsRender_ = failure != FramePresentationFailure::None;
-  presentationNeedsCoverage_ = failure == FramePresentationFailure::InsufficientCoverage ||
-                               failure == FramePresentationFailure::MissingOverview;
+  // A frame can lack more than one proof at once. A result rejected for a missing overview still
+  // needs that coverage when the frame build reports another failure first, such as selection
+  // geometry not yet captured; an active drag would otherwise never request the overview.
+  presentationNeedsCoverage_ = IsCoverageFailure(failure) || IsCoverageFailure(adoptionFailure_);
 #ifdef __EMSCRIPTEN__
   PublishFrameRepairDetails(input, *resources, failure, adoptionFailure_);
 #endif
