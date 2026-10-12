@@ -2096,6 +2096,72 @@ TEST_F(RendererGeodeTest, AFrameAbandonedWithATileOpenLeavesNothingOfItselfInThe
          "scale - 4x here, a 2x transform supersampled 2x - painting the rect four times as wide";
 }
 
+TEST_F(RendererGeodeTest, QuarterTurnMaskRegionsKeepTheAxisAlignedSurfaceBudget) {
+  struct Case {
+    double angleRadians;
+    Vector2i inside;
+  };
+  const std::array<Case, 4> cases = {{{0, {20, 20}},
+                                      {MathConstants<double>::kHalfPi, {12, 20}},
+                                      {MathConstants<double>::kPi, {12, 12}},
+                                      {3 * MathConstants<double>::kHalfPi, {20, 12}}}};
+  for (const auto& test : cases) {
+    SCOPED_TRACE(test.angleRadians);
+    RendererGeode renderer = createRenderer();
+    renderer.setSurfaceBudgetForTesting(/*maximumSurfaces=*/3u, /*maximumBytes=*/1u << 20);
+    beginFrame(renderer);
+    renderer.setTransform(Transform2d::Rotate(test.angleRadians) *
+                          Transform2d::Translate({16, 16}));
+    renderer.pushMask(Box2d::FromXYWH(0, 0, 8, 8), MaskType::Alpha);
+    EXPECT_THAT(renderer.resourceStats().surfaceBudgetRejected, testing::IsFalse());
+    EXPECT_THAT(renderer.resourceStats().surfaceCount, testing::Eq(3u));
+    renderer.setTransform(Transform2d());
+    renderer.setPaint(solidFill(css::RGBA(255, 255, 255, 255)));
+    renderer.drawRect(Box2d::FromXYWH(0, 0, kViewportSize, kViewportSize), StrokeParams{});
+    renderer.transitionMaskToContent();
+    renderer.setPaint(solidFill(css::RGBA(0, 128, 0, 255)));
+    renderer.drawRect(Box2d::FromXYWH(0, 0, kViewportSize, kViewportSize), StrokeParams{});
+    renderer.popMask();
+    renderer.setPaint(solidFill(css::RGBA(255, 0, 0, 255)));
+    renderer.drawRect(Box2d::FromXYWH(48, 0, 8, kViewportSize), StrokeParams{});
+    renderer.endFrame();
+    const RendererBitmap bitmap = renderer.takeSnapshot();
+    ASSERT_THAT(bitmap.empty(), testing::IsFalse());
+    EXPECT_THAT(PixelAt(bitmap, test.inside.x, test.inside.y), RgbaEq(0, 128, 0, 255));
+    EXPECT_THAT(PixelAt(bitmap, 2, 2), IsTransparent());
+    EXPECT_THAT(PixelAt(bitmap, 52, 32), RgbaEq(255, 0, 0, 255));
+  }
+}
+
+TEST_F(RendererGeodeTest, NearAxisMaskWithLargeExtentStillRequiresExactClipAdmission) {
+  RendererGeode renderer = createRenderer();
+  renderer.setSurfaceBudgetForTesting(/*maximumSurfaces=*/3u, /*maximumBytes=*/1u << 20);
+  beginFrame(renderer);
+  Transform2d deviceFromMaskLocal;
+  // A sub-epsilon coefficient still moves the far edge by 100 device pixels.
+  deviceFromMaskLocal.data[1] = 1e-10;
+  deviceFromMaskLocal.data[4] = -5e11;
+  renderer.setTransform(deviceFromMaskLocal);
+  renderer.pushMask(Box2d::FromXYWH(0, 0, 1e12, 8), MaskType::Alpha);
+  EXPECT_THAT(renderer.resourceStats().surfaceBudgetRejected, testing::IsTrue());
+  EXPECT_THAT(renderer.resourceStats().surfaceCount, testing::Eq(3u));
+  renderer.setTransform(Transform2d());
+  renderer.setPaint(solidFill(css::RGBA(255, 255, 255, 255)));
+  renderer.drawRect(Box2d::FromXYWH(0, 0, kViewportSize, kViewportSize), StrokeParams{});
+  renderer.transitionMaskToContent();
+  renderer.setPaint(solidFill(css::RGBA(0, 128, 0, 255)));
+  renderer.drawRect(Box2d::FromXYWH(0, 0, kViewportSize, kViewportSize), StrokeParams{});
+  renderer.popMask();
+  renderer.setPaint(solidFill(css::RGBA(255, 0, 0, 255)));
+  renderer.drawRect(Box2d::FromXYWH(48, 0, 8, kViewportSize), StrokeParams{});
+  renderer.endFrame();
+  const RendererBitmap bitmap = renderer.takeSnapshot();
+  ASSERT_THAT(bitmap.empty(), testing::IsFalse());
+  // Inside the transformed AABB, but outside the sheared mask's visible y=50..58 band.
+  EXPECT_THAT(PixelAt(bitmap, 32, 5), IsTransparent());
+  EXPECT_THAT(PixelAt(bitmap, 52, 32), RgbaEq(255, 0, 0, 255));
+}
+
 TEST_F(RendererGeodeTest, RotatedMaskRegionAdmissionFailsClosedAndRestoresClip) {
   RendererGeode renderer = createRenderer();
   renderer.setSurfaceBudgetForTesting(/*maximumSurfaces=*/3u, /*maximumBytes=*/1u << 20);
