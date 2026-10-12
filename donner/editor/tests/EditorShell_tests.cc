@@ -4105,8 +4105,9 @@ TEST(EditorShellTest, PartlyOffscreenSplashShineEllipseFirstHeldMoveMatchesSettl
   EXPECT_NEAR(firstChromeBounds->topLeft.y - originalChromeBounds->topLeft.y, 300.0, 1e-6);
   EXPECT_NEAR(firstChromeBounds->bottomRight.y - originalChromeBounds->bottomRight.y, 300.0, 1e-6);
   const svg::RendererBitmap firstMove = captureFrame(/*contentOnly=*/true);
+  ASSERT_THAT(firstMove.empty(), testing::IsFalse());
 
-  EditorShellTestAccess::HoldRenderResultsForPolls(shell, 0);
+  shell.asyncRendererForReplay().releaseReplayResultHoldForTesting();
   const std::uint64_t heldDragVersion = app.document().currentFrameVersion();
   shell.queueDocumentSpaceReplayInputForTesting(EditorShellDocumentReplayInput{
       .documentPoint = Vector2d(300.0, 380.0),

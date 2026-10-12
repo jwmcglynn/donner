@@ -1969,7 +1969,7 @@ TEST(AsyncRendererTest, ExplicitReplayResultHoldReleaseAdoptsCurrentAndFutureRes
       reentrantBusy = asyncRenderer.isBusy();
     }
   });
-  asyncRenderer.setReplayResultHoldFramesForTesting(0);
+  asyncRenderer.releaseReplayResultHoldForTesting();
   asyncRenderer.setWakeCallback({});
   EXPECT_THAT(releaseWakeObserved, testing::IsTrue());
   EXPECT_THAT(wakeOutsideMutex, testing::IsTrue());

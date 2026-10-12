@@ -623,6 +623,21 @@ void AsyncRenderer::setReplayResultHoldFramesForTesting(int frameCount) {
   replayResultHoldFramesForTesting_ = std::max(frameCount, 0);
 }
 
+void AsyncRenderer::releaseReplayResultHoldForTesting() {
+  std::function<void()> wake;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    replayResultHoldFramesForTesting_ = 0;
+    if (auto* done = std::get_if<DoneState>(&workerState_)) {
+      done->presentationHoldPollsRemaining = 0;
+      wake = wakeCallback_;
+    }
+  }
+  if (wake) {
+    wake();
+  }
+}
+
 void AsyncRenderer::requestRender(const RenderRequest& request) {
   bool signalCancel = false;
   {

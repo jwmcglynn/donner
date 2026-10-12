@@ -632,6 +632,10 @@ public:
    */
   void setReplayResultHoldFramesForTesting(int frameCount);
 
+  /// End replay-only delivery holds for the staged result and later results.
+  /// Leaves any staged result intact for normal polling and wakes the owner outside the mutex.
+  void releaseReplayResultHoldForTesting();
+
   /**
    * Drop every compositor tile a completed render produced, as a render whose tile payloads all
    * failed would, so tests can drive the result that carries nothing to present. Unlike a real
