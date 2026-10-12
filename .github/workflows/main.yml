@@ -1248,6 +1248,7 @@ jobs:
 
       - name: Test (Geode editor lane)
         id: geode_test
+        if: ${{ !cancelled() && (steps.test.outcome == 'success' || steps.test.outcome == 'failure') }}
         shell: bash
         run: |
           set -euo pipefail
@@ -1639,6 +1640,7 @@ jobs:
 
       - name: Test (Geode editor lane)
         id: geode_test
+        if: ${{ !cancelled() && (steps.test.outcome == 'success' || steps.test.outcome == 'failure') }}
         shell: bash
         run: |
           set -euo pipefail
