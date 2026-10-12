@@ -1915,12 +1915,12 @@ TEST(FocusViewTest, DomAttributeReflectionUpdatesTheReferenceSummaryAndConnector
   EXPECT_THAT(FocusElementIds(summary.referencedElements), ElementsAre("accent"));
   EXPECT_THAT(summary.referencingElements, IsEmpty());
   const std::string_view reflected = app.document().document().source();
-  EXPECT_THAT(reflected, testing::HasSubstr(R"(fill="url(#accent)")"));
+  EXPECT_THAT(reflected, testing::HasSubstr("fill=\"url(#accent)\""));
   const auto partition = ComputeFocusPartition(app.document().document(), *target);
   EXPECT_THAT(partition.referenceLinks,
-              ElementsAre(ReferenceLinkIs(PointForNeedle(reflected, "#accent"),
-                                         PointForOpeningTagEnd(reflected,
-                                                               R"(<linearGradient id="accent")"))));
+              ElementsAre(ReferenceLinkIs(
+                  PointForNeedle(reflected, "#accent"),
+                  PointForOpeningTagEnd(reflected, R"(<linearGradient id="accent")"))));
 }
 
 TEST(FocusViewTest, ElementAndStyleFocusRespectReentrantConcurrentDocumentReadAccess) {
