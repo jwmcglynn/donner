@@ -1143,12 +1143,11 @@ test("WGPU diagnostics do not block the first carousel interaction", async ({ pa
       (heartbeat?.maxGapMs || 0).toFixed(1)
     }ms`,
   );
-  // The regression class this guards (synchronous readback waits on the main
-  // thread) blocks for whole map-wait rounds, far beyond even the scaled
-  // bound; the scaling only keeps shared-runner scheduler noise from failing
-  // an unblocked main thread.
-  expect(carouselHeartbeatGapMs).toBeLessThan(scaledMs(100));
-  expect(heartbeat?.maxGapMs).toBeLessThan(scaledMs(100));
+  // The heartbeat gaps are logged, not gated: a wall-clock bound on page timer cadence measures
+  // runner scheduling as much as the editor and belongs in a performance lane. This case gates
+  // what it can order: both diagnostics complete, the main loop goes idle and wakes for the idle
+  // request, and the page timer kept running. The structural guard against a blocking mapping
+  // wait is the readback contract test that requires bounded event-loop yields.
   expect(fatalMessages).toEqual([]);
 });
 
