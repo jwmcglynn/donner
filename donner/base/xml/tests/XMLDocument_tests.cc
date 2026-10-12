@@ -4353,10 +4353,6 @@ TEST(XMLDocument, SetSourceClearsDeclaredDoctypeInternalSubset) {
   EXPECT_FALSE(doc.declaresDoctypeInternalSubset());
 }
 
-//
-// Public source-store limits: rejected structured edits remain retryable.
-//
-
 namespace {
 
 template <typename Edit>
