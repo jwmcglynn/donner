@@ -3855,4 +3855,104 @@ TEST(Path, StrokeToFillQuadraticFlatteningSharesAggregateGeometryBudget) {
               testing::IsEmpty());
 }
 
+TEST(Path, MeasurementHonorsZeroAllowanceAndClampsAnOversizedAllowance) {
+  const Path path = PathBuilder().moveTo({1, 2}).lineTo({4, 6}).build();
+  const Path::MeasuredPath zero = path.measure(0);
+  EXPECT_THAT(zero.valid(), testing::IsFalse());
+  EXPECT_THAT(zero.measurementWorkUnits(), testing::Eq(0u));
+  EXPECT_THAT(zero.segmentCount(), testing::Eq(0u));
+  EXPECT_THAT(zero.pointAtArcLength(0).valid, testing::IsFalse());
+  EXPECT_THAT(zero.retainedBytes(), testing::Optional(sizeof(Path::MeasuredPath)));
+
+  const Path::MeasuredPath oversized = path.measure(std::numeric_limits<std::size_t>::max());
+  EXPECT_THAT(oversized.valid(), testing::IsTrue());
+  EXPECT_THAT(oversized.pathLength(), testing::DoubleEq(5.0));
+  EXPECT_THAT(oversized.measurementWorkUnits(), testing::Eq(path.measure().measurementWorkUnits()));
+  EXPECT_THAT(
+      oversized.pointAtArcLength(2.5),
+      testing::AllOf(
+          testing::Field("valid", &Path::PointOnPath::valid, true),
+          testing::Field("point", &Path::PointOnPath::point, Vector2dNear({2.5, 4}, 1e-12)),
+          testing::Field("tangent", &Path::PointOnPath::tangent, Vector2dNear({3, 4}, 1e-12))));
+}
+
+TEST(Path, MeasuredTrailingMoveKeepsTheLastDrawingEndpointAtExactLength) {
+  const Path path = PathBuilder().moveTo({1, 2}).lineTo({4, 6}).moveTo({100, 200}).build();
+  const Path::MeasuredPath measured = path.measure();
+  ASSERT_THAT(measured.valid(), testing::IsTrue());
+  EXPECT_THAT(measured.segmentCount(), testing::Eq(1u));
+  EXPECT_THAT(measured.pathLength(), testing::DoubleEq(5.0));
+  EXPECT_THAT(
+      measured.pointAtArcLength(5),
+      testing::AllOf(
+          testing::Field("valid", &Path::PointOnPath::valid, true),
+          testing::Field("point", &Path::PointOnPath::point, Vector2dNear({4, 6}, 1e-12)),
+          testing::Field("tangent", &Path::PointOnPath::tangent, Vector2dNear({3, 4}, 1e-12))));
+  EXPECT_THAT(measured.pointAtArcLength(6),
+              testing::AllOf(testing::Field("valid", &Path::PointOnPath::valid, false),
+                             testing::Field("point", &Path::PointOnPath::point,
+                                            Vector2dNear({100, 200}, 1e-12))));
+}
+
+TEST(Path, DegreeElevatedQuadraticConvertsBackWithoutChangingItsGeometry) {
+  const Path cubic = PathBuilder().moveTo({0, 0}).curveTo({2, 4}, {4, 4}, {6, 0}).build();
+  const Path quadratic = cubic.cubicToQuadratic(1e-9);
+  EXPECT_THAT(quadratic.commands(), testing::ElementsAre(PathCommandVerbIs(Path::Verb::MoveTo),
+                                                         PathCommandVerbIs(Path::Verb::QuadTo)));
+  EXPECT_THAT(quadratic.points(),
+              testing::ElementsAre(Vector2dNear({0, 0}, 1e-12), Vector2dNear({3, 6}, 1e-12),
+                                   Vector2dNear({6, 0}, 1e-12)));
+  const Vector2d expected[] = {{1.5, 2.25}, {3, 3}, {4.5, 2.25}};
+  for (std::size_t index = 0; index < 3; ++index) {
+    SCOPED_TRACE(index);
+    const double parameter = double(index + 1) * 0.25;
+    EXPECT_THAT(cubic.pointAt(1, parameter), Vector2dNear(expected[index], 1e-12));
+    EXPECT_THAT(quadratic.pointAt(1, parameter), Vector2dNear(expected[index], 1e-12));
+  }
+}
+
+TEST(Path, QuadraticMarkerAtCoincidentEndControlUsesTheIncomingChord) {
+  const Path path = PathBuilder().moveTo({2, 3}).quadTo({5, 7}, {5, 7}).build();
+  EXPECT_THAT(
+      path.vertices(),
+      testing::ElementsAre(testing::AllOf(VertexPointIs({2, 3}), VertexOrientationIs({0.6, 0.8})),
+                           testing::AllOf(VertexPointIs({5, 7}), VertexOrientationIs({0.6, 0.8}))));
+}
+
+TEST(Path, DegenerateMarkerDirectionNeverBorrowsFromALaterSubpath) {
+  const Path path = PathBuilder()
+                        .moveTo({1, 2})
+                        .lineTo({1, 2})
+                        .lineTo({1, 2})
+                        .moveTo({20, 20})
+                        .lineTo({30, 20})
+                        .build();
+  EXPECT_THAT(
+      path.vertices(),
+      testing::ElementsAre(testing::AllOf(VertexPointIs({1, 2}), VertexOrientationIs({0, 0})),
+                           testing::AllOf(VertexPointIs({1, 2}), VertexOrientationIs({0, 0})),
+                           testing::AllOf(VertexPointIs({1, 2}), VertexOrientationIs({0, 0})),
+                           testing::AllOf(VertexPointIs({20, 20}), VertexOrientationIs({1, 0})),
+                           testing::AllOf(VertexPointIs({30, 20}), VertexOrientationIs({1, 0}))));
+}
+
+TEST(Path, NonFiniteHitQueriesCannotSelectFiniteCurveGeometry) {
+  const Path quadratic = PathBuilder().moveTo({0, 0}).quadTo({5, 10}, {10, 0}).closePath().build();
+  const Path cubic =
+      PathBuilder().moveTo({0, 0}).curveTo({0, 10}, {10, 10}, {10, 0}).closePath().build();
+  const double nan = std::numeric_limits<double>::quiet_NaN();
+  const double infinity = std::numeric_limits<double>::infinity();
+  for (const Path& path : {quadratic, cubic}) {
+    SCOPED_TRACE(path);
+    for (const Vector2d& point :
+         {Vector2d(nan, 5), Vector2d(5, nan), Vector2d(infinity, 5), Vector2d(5, infinity),
+          Vector2d(-infinity, 5), Vector2d(5, -infinity)}) {
+      SCOPED_TRACE(point);
+      EXPECT_THAT(path.isInside(point, FillRule::NonZero), testing::IsFalse());
+      EXPECT_THAT(path.isInside(point, FillRule::EvenOdd), testing::IsFalse());
+      EXPECT_THAT(path.isOnPath(point, 0.5), testing::IsFalse());
+    }
+  }
+}
+
 }  // namespace donner
