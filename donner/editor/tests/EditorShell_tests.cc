@@ -2665,7 +2665,6 @@ TEST(EditorShellTest, LayerInspectorReadbackIncludesSelectedStyleAndPathDiagnost
   EditorShell shell(window, OptionsWithSource(kDiagnosticSvg, "diagnostics.svg"));
   ASSERT_TRUE(shell.valid());
   RenderCoordinator& coordinator = EditorShellTestAccess::Coordinator(shell);
-  RenderCoordinatorTestAccess::useFakeSchedulingClock(coordinator);
   auto target = EditorShellTestAccess::App(shell).document().document().querySelector("#target");
   ASSERT_TRUE(target.has_value());
   EditorShellTestAccess::App(shell).setSelection(*target);
@@ -2674,8 +2673,12 @@ TEST(EditorShellTest, LayerInspectorReadbackIncludesSelectedStyleAndPathDiagnost
   ASSERT_TRUE(coordinator.asyncRenderer().waitUntilNoRenderInFlightForTesting(
       std::chrono::steady_clock::now() + std::chrono::seconds(2)));
   RunShellFrame(window, shell);
-  RenderCoordinatorTestAccess::advanceFakeSchedulingClock(std::chrono::milliseconds(120));
-  RunShellFrame(window, shell);
+  const auto commitDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+  while (coordinator.documentCanvasCommitTotal() == 0 &&
+         std::chrono::steady_clock::now() < commitDeadline) {
+    RunShellFrame(window, shell);
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+  }
   ASSERT_THAT(coordinator.documentCanvasCommitTotal(), testing::Gt(0u));
   ASSERT_THAT(coordinator.asyncRenderer().waitUntilNoRenderInFlightForTesting(
                   std::chrono::steady_clock::now() + std::chrono::seconds(2)),
