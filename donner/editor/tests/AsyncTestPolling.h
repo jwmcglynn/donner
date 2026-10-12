@@ -15,6 +15,35 @@ namespace donner::editor::tests {
 /// to this quantum.
 constexpr auto kPollInterval = std::chrono::milliseconds(1);
 
+/// How long a wait for real work, such as a render completing, may run before the test gives up.
+///
+/// This is a hang guard, not a latency budget. A test that checks ordering, for example that a drag
+/// frame reaches the presenter while the pointer is still held, pumps frames until its condition
+/// holds and waits on the renderer's completion; how fast that happens depends on the build and the
+/// host. Sanitizer builds and software rasterizers take many times longer than an ordinary build,
+/// so a tight wall-clock deadline there fails while the renderer is still making progress. The
+/// guard is long enough never to bind on progress and short enough that a real hang fails the case
+/// with a message instead of running into the test runner's timeout. Latency belongs in a
+/// performance test.
+constexpr auto kHangGuard = std::chrono::seconds(60);
+
+/// A `kHangGuard` window that starts when the guard is constructed. Pump a wait loop while
+/// `active()`, and pass `deadline()` to any blocking wait inside it, so the whole loop shares one
+/// window.
+class HangGuard {
+public:
+  HangGuard() : deadline_(std::chrono::steady_clock::now() + kHangGuard) {}
+
+  /// Whether the window is still open. @return False once `kHangGuard` has elapsed.
+  [[nodiscard]] bool active() const { return std::chrono::steady_clock::now() < deadline_; }
+
+  /// The instant the window closes. @return The deadline.
+  [[nodiscard]] std::chrono::steady_clock::time_point deadline() const { return deadline_; }
+
+private:
+  std::chrono::steady_clock::time_point deadline_;
+};
+
 // Polls until `poll()` yields a value, or `maxPolls` intervals elapse.
 //
 // Iteration-bounded rather than clock-bounded on purpose. The callers this

@@ -371,6 +371,9 @@ double BrowserDevicePixelRatio() {
 void PublishFirstPresentedFrame(int headlessDeviceCreations) {
   whole_app_worker::NotifyFirstFramePresented(headlessDeviceCreations);
 }
+void PublishPresentedDocumentFrame(std::uint64_t documentGeneration, std::uint64_t frameVersion) {
+  whole_app_worker::PublishPresentedDocumentFrame(documentGeneration, frameVersion);
+}
 // The readback diagnostic's page handshake lives in the whole-app bridge: the
 // request/completed ids ride the shared-memory mirror and the stats publishes
 // proxy to the main thread.
@@ -2437,6 +2440,11 @@ bool EditorWindow::observePresentationCompletion() {
           'completedAtMs' : previous &&
               Object.is(previous['completedSerial'], $0) ? previous['completedAtMs'] : performance.now(),
         });
+        // Bounded admission timeline for failure diagnostics: time, admission, frames in flight,
+        // device completed serial, submitted serial, oldest pending serial.
+        const timeline = (window['__donnerPresentationTimeline'] ??= []);
+        timeline.push([ Math.round(performance.now() * 10) / 10, $14, $2, $11, $1, $12 ]);
+        timeline.splice(0, timeline.length - 512);
       },
       static_cast<double>(frame.serial), static_cast<double>(device.lastSubmittedSerial()),
       static_cast<double>(presentationSubmissions_.pendingCount()),
@@ -3205,6 +3213,8 @@ struct EditorWindow::GpuFrameSubmission {
     fullFramePresented = true;
 #ifdef __EMSCRIPTEN__
     PublishFirstPresentedFrame(geode::GeodeDevice::headlessCreationCountForTesting());
+    PublishPresentedDocumentFrame(documentIdentity.documentGeneration,
+                                  documentIdentity.frameVersion);
 #endif
     completed = true;
   }

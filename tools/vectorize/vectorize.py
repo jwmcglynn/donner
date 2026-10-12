@@ -385,6 +385,21 @@ def find_repo_root(start: str) -> Optional[str]:
         d = parent
 
 
+def report_path(path: str, repo_root: Optional[str]) -> str:
+    """Returns `path` relative to the repository when it lies inside it.
+
+    score.json files are checked in as examples, so paths inside the checkout
+    are recorded repository-relative instead of leaking a machine-specific
+    absolute location. Paths outside the checkout stay absolute.
+    """
+    absolute = os.path.abspath(path)
+    if repo_root:
+        root = os.path.abspath(repo_root)
+        if os.path.commonpath([absolute, root]) == root:
+            return os.path.relpath(absolute, root)
+    return absolute
+
+
 def default_renderer(repo_root: Optional[str]) -> Optional[str]:
     if not repo_root:
         return None
@@ -492,11 +507,11 @@ def main(argv: List[str]) -> int:
     encode_png(result.diff_image, diff_png)
 
     score = {
-        "reference": os.path.abspath(args.reference),
-        "candidate_svg": os.path.abspath(args.svg),
-        "renderer": os.path.abspath(renderer),
-        "rendered_png": os.path.abspath(rendered_png),
-        "diff_png": os.path.abspath(diff_png),
+        "reference": report_path(args.reference, repo_root),
+        "candidate_svg": report_path(args.svg, repo_root),
+        "renderer": report_path(renderer, repo_root),
+        "rendered_png": report_path(rendered_png, repo_root),
+        "diff_png": report_path(diff_png, repo_root),
         "width": result.width,
         "height": result.height,
         "background": args.background,

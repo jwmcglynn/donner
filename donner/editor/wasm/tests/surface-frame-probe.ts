@@ -1,4 +1,5 @@
-import type { Page, Worker } from "@playwright/test";
+import { expect, type Page, type Worker } from "@playwright/test";
+import { createSurfaceProbeRegistry } from "./surface-probe-requests.mjs";
 
 /**
  * A command buffer that wrote into a canvas frame in a later task than the one
@@ -386,72 +387,65 @@ export function waitForSubmittedCanvasGpuWork(owner: Worker): Promise<number> {
   return owner.evaluate(waitForCanvasGpuWorkInWorker);
 }
 
-// A pthread parked in a blocking wait never returns to its event loop, so an
-// evaluation there would not settle. The canvas owner runs a frame loop and
-// answers between frames, and the slowest frames measured on a shared runner
-// are well under this; a worker that does not answer within it owns no frame
-// loop to observe. Every worker is asked at once, so the bound is paid once.
+// Bound each observation without treating a slow reply as proof of nonownership.
+// The registry retains installation and discovery replies until they can be observed.
 const kWorkerAnswerMs = 1_000;
 
-// The workers that took the probe, so later reads ask only them rather than
-// spending the answer bound again on a worker that never answers.
-const probedWorkers = new WeakMap<Page, Worker[]>();
+const probeRegistry = createSurfaceProbeRegistry(kWorkerAnswerMs);
 
 async function evaluateInWorkers<T>(
   workers: Worker[],
   fn: () => T,
   answerMs = kWorkerAnswerMs,
 ): Promise<Array<Awaited<T> | null>> {
-  return Promise.all(workers.map((worker) => {
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const timedOut = new Promise<null>((resolve) => {
-      timer = setTimeout(() => resolve(null), answerMs);
-    });
-    return Promise.race([worker.evaluate(fn).catch(() => null), timedOut]).finally(() =>
-      clearTimeout(timer)
-    );
-  }));
+  return probeRegistry.evaluate(workers, fn, answerMs);
 }
 
 /**
  * Watch every canvas frame the page's workers acquire from now on.
  *
  * Installed per worker, so it must run after the editor has started its
- * workers. Returns how many workers took the probe (every worker that answered
- * and exposes WebGPU); zero means it will observe nothing.
+ * workers. Returns the number of acknowledged installations. A bounded wait
+ * can finish before an installation reply; that late acknowledgement remains
+ * available to the next readiness check.
  */
 export async function installSurfaceFrameProbe(page: Page): Promise<number> {
-  const workers = page.workers() as Worker[];
-  const installed = await evaluateInWorkers(workers, installInWorker);
-  const probed = workers.filter((_, index) => installed[index] === true);
-  probedWorkers.set(page, probed);
-  return probed.length;
+  return probeRegistry.install(page, installInWorker);
 }
 
 /** Whether \ref installSurfaceFrameProbe installed the probe in any of the page's workers. */
 export function surfaceFrameProbeInstalled(page: Page): boolean {
-  return (probedWorkers.get(page)?.length ?? 0) > 0;
+  return probeRegistry.workers(page).length > 0;
 }
 
 /** Return the one worker that acquired the editor's canvas while the probe watched. */
 export async function findCanvasOwnerWorker(page: Page): Promise<Worker | null> {
-  const workers = probedWorkers.get(page) ?? [];
-  const states = await evaluateInWorkers(workers, readInWorker);
-  const owners = workers.filter((_, index) => (states[index]?.frames ?? 0) > 0);
-  return owners.length === 1 ? owners[0] : null;
+  return probeRegistry.findOwner(
+    page,
+    readInWorker,
+    (state: WorkerProbeState | null) => (state?.frames ?? 0) > 0,
+  );
 }
 
 /** Find the probe-installed application canvas owner before its next acquisition. */
+function applicationCanvasOwnerInWorker(): boolean {
+  const scope = globalThis as ProbeGlobal & { __donnerApplicationGpuSurfaceWorker?: boolean };
+  return Boolean(
+    scope.__donnerApplicationGpuSurfaceWorker && scope.__donnerSurfaceFrameProbe?.installed,
+  );
+}
+
 export async function findProbedCanvasApplicationWorker(page: Page): Promise<Worker | null> {
-  const workers = probedWorkers.get(page) ?? [];
-  const owners = await evaluateInWorkers(workers, () => {
-    const scope = globalThis as ProbeGlobal & { __donnerApplicationGpuSurfaceWorker?: boolean };
-    return Boolean(
-      scope.__donnerApplicationGpuSurfaceWorker && scope.__donnerSurfaceFrameProbe?.installed,
-    );
-  });
-  const matches = workers.filter((_, index) => owners[index] === true);
-  return matches.length === 1 ? matches[0] : null;
+  return probeRegistry.findOwner(page, applicationCanvasOwnerInWorker);
+}
+
+/** Wait for a unique acknowledged application owner within the caller's existing expect budget. */
+export async function expectSurfaceFrameProbeReady(page: Page): Promise<void> {
+  await expect.poll(async () => {
+    await installSurfaceFrameProbe(page);
+    return findProbedCanvasApplicationWorker(page);
+  }, { message: "the application canvas owner must acknowledge the completion probe" }).not
+    .toBeNull();
 }
 
 /**
@@ -466,7 +460,7 @@ export async function selfCheckSurfaceFrameProbe(
   page: Page,
 ): Promise<Array<{ late: number; inTask: number } | string | null>> {
   // Requesting a scratch device takes longer than reading the probe's state.
-  return evaluateInWorkers(probedWorkers.get(page) ?? [], selfCheckInWorker, 4 * kWorkerAnswerMs);
+  return evaluateInWorkers(probeRegistry.workers(page), selfCheckInWorker, 4 * kWorkerAnswerMs);
 }
 
 // Control only the completion signal already returned to the app. Used by a
@@ -567,7 +561,7 @@ export async function delayNextCanvasCompletionForTest(
 }
 
 export async function readSurfaceFrameProbe(page: Page): Promise<SurfaceFrameProbeReport> {
-  return summarizeProbeStates(await evaluateInWorkers(probedWorkers.get(page) ?? [], readInWorker));
+  return summarizeProbeStates(await evaluateInWorkers(probeRegistry.workers(page), readInWorker));
 }
 
 /**

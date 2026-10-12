@@ -167,6 +167,15 @@ single_version_override(
 )
 
 bazel_dep(name = "aspect_rules_js", version = "2.9.3", dev_dependency = True)
+
+# Normalize unreadable npm archive directories before remote output upload.
+single_version_override(
+    module_name = "aspect_rules_js",
+    patch_strip = 1,
+    patches = ["//third_party/patches:rules-js-readable-npm-directories.patch"],
+    version = "2.9.3",
+)
+
 bazel_dep(name = "rules_playwright", version = "0.5.3", dev_dependency = True)
 
 playwright = use_extension(
@@ -318,8 +327,8 @@ bazel_dep(name = "rules_python", version = "2.3.3", dev_dependency = True)
 
 # Hermetic Python toolchain. Without this, rules_python's py_binary targets
 # fall back to `/usr/bin/env python3` on the host — which is fine for local
-# dev on dev1, but on the Bazel remote-execution sandbox (NixOS) no such
-# host interpreter is available. Registering `python.toolchain()` makes
+# development, but a remote-execution sandbox may have no such host
+# interpreter available. Registering `python.toolchain()` makes
 # rules_python ship a prebuilt CPython through the action cache so RE
 # workers execute the same interpreter as local builds.
 python = use_extension(
@@ -353,8 +362,8 @@ llvm.toolchain(
 )
 
 # Hermetic Linux sysroots: keep the toolchain self-contained on Bazel
-# remote-execution workers (bazel-re1, NixOS) that lack system glibc
-# headers. See third_party/bazel/non_bcr_deps.bzl for the tarballs.
+# remote-execution workers that lack system glibc headers. See
+# third_party/bazel/non_bcr_deps.bzl for the tarballs.
 llvm.sysroot(
     name = "llvm_toolchain",
     label = "@sysroot_linux_aarch64//:sysroot",
