@@ -1469,7 +1469,11 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
             gate = "needs.gatekeeper.outputs.use_self_hosted_" + runner + " == 'true'"
             for replacement in ("true || " + gate, gate + " || true"):
                 with self.subTest(runner=runner, replacement=replacement):
-                    changed = files[path].replace(gate, replacement, 1)
+                    job = _jobs(files[path])[runner + "-self-hosted"]
+                    weakened_job = job.replace(gate, replacement, 1)
+                    self.assertNotEqual(weakened_job, job)
+                    changed = files[path].replace(job, weakened_job, 1)
+                    self.assertNotEqual(changed, files[path])
                     self.assertTrue(_self_hosted_violations(_workflows({**files, path: changed})))
 
     def test_hosted_runner_prefixes_do_not_approve_custom_labels(self):
