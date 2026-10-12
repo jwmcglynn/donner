@@ -8,7 +8,7 @@ mkdir -p ~/.config/systemd/user/
 cp tools/fuzzing/systemd/donner-fuzz.{service,timer} ~/.config/systemd/user/
 
 # Edit the service file if paths differ from defaults
-# (default assumes repo at /home/jwm/Projects/donner)
+# (default assumes the repo is checked out at ~/Projects/donner)
 
 # Reload, enable, and start
 systemctl --user daemon-reload

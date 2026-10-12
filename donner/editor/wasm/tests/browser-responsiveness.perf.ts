@@ -25,6 +25,7 @@ import {
   presentedDragFailures,
   presentedDragSummary,
 } from "./presented-frame-samples.mjs";
+import { pickerPresentationSettled } from "./presentation-baseline.mjs";
 import { showsSplashDocument, splashDPoint } from "./splash-aim.mjs";
 
 // Every case here opens the editor; echo its GPU acquisition trace into the test log.
@@ -87,6 +88,9 @@ interface Diagnostics extends Window {
     active: boolean;
     resultReady: boolean;
     ready?: number;
+    rendered?: number;
+    drained?: boolean;
+    publishedAtMs?: number;
   };
   __donnerLayerThumbnailStats?: {
     rowCount: number;
@@ -1195,12 +1199,10 @@ test(
       ...packageHashes(),
     };
     try {
-      await expect.poll(async () => {
-        const state = await snapshot(page);
-        return !state.thumbnails?.pending && !state.thumbnails?.active
-          && (state.thumbnails?.ready ?? 0) > 0
-          && state.presentation?.framesInFlight === 0;
-      }, { timeout: 20000 }).toBe(true);
+      await expect.poll(async () => pickerPresentationSettled(await snapshot(page)), {
+        timeout: 20000,
+        message: "sample thumbnails must be published and presentation idle",
+      }).toBe(true);
       application = await Promise.any(
         page.workers().map(async (worker) => {
           let timer: ReturnType<typeof setTimeout> | undefined;
@@ -1220,7 +1222,15 @@ test(
           }
         }),
       );
-      report.before = await snapshot(page);
+      // Finding the worker takes up to a second; read the baseline from a settled state after it.
+      await expect.poll(async () => {
+        const state = await snapshot(page);
+        report.before = state;
+        return pickerPresentationSettled(state);
+      }, {
+        timeout: 10000,
+        message: "presentation must still be idle once the surface worker is found",
+      }).toBe(true);
       const before = (report.before as Snapshot).presentation!;
       expect(before).toEqual(
         expect.objectContaining({ deviceLost: false, framesInFlight: 0, oldestSerial: 0 }),

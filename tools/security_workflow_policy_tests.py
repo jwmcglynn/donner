@@ -752,11 +752,17 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         self.assertIn("needs: [prepare, consumer, cli-linux, cli-macos]", preflight)
         self.assertEqual(preflight.count("tools.release_cli package"), 2)
         self.assertEqual(preflight.count("tools.release_cli verify"), 4)
-        # Each CLI ships the NOTICE built with it, after the closure coverage test passes.
+        # Each CLI ships the NOTICE built with it, after the closure coverage test passes. The
+        # compiler identity probe is built in the same invocations, so its configuration (and
+        # therefore its compiler) is the CLI's.
         for mode in ("update", "error"):
             self.assertEqual(preflight.count(
                 f"bazelisk build --lockfile_mode={mode} -c opt "
-                "//tools/ci:release_svg //tools/ci:release_svg_notice\n"), 2)
+                "//tools/ci:release_svg //tools/ci:release_svg_notice \\\n"
+                "            //tools/ci:release_compiler_identity\n"), 2)
+        self.assertEqual(preflight.count(
+            "--compiler-probe bazel-bin/tools/ci/release_compiler_identity \\\n"), 2)
+        self.assertNotIn("c++ --version", preflight)
         self.assertEqual(preflight.count(
             "bazelisk test --lockfile_mode=error -c opt //tools/ci:release_svg_notice_coverage\n"), 2)
         self.assertEqual(preflight.count(
@@ -1315,14 +1321,21 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         for path, text in sorted(self.supply_chain_files.items()):
             with self.subTest(path=path):
                 self.assertEqual([], PRIVATE_NETWORK_LITERAL.findall(text))
-        fixture = ("http://172.20.1.2:1234 /home/alice/.cache /Users/bob/bin 10.1.2.3 "
-                   "100.64.0.1 fd12:3456::1 builder.lan cache.example.internal nas.home.arpa "
+        expected = [
+            ".".join(("172", "20", "1", "2")),
+            "/".join(("", "home", "alice")),
+            "/".join(("", "Users", "bob")),
+            ".".join(("10", "1", "2", "3")),
+            ".".join(("100", "64", "0", "1")),
+            ":".join(("fd12", "3456", "", "1")),
+            ".".join(("builder", "lan")),
+            ".".join(("cache", "example", "internal")),
+            ".".join(("nas", "home", "arpa")),
+        ]
+        fixture = ("http://{}:1234 {}/.cache {}/bin {} {} {} {} {} {} "
                    "/home/runner/work /home/linuxbrew/.linuxbrew /Users/runner/bin v10.1.2 "
-                   "172.15.0.1 cache.example.invalid fc.example.com")
-        self.assertEqual(["172.20.1.2", "/home/alice", "/Users/bob", "10.1.2.3", "100.64.0.1",
-                          "fd12:3456::1", "builder.lan", "cache.example.internal",
-                          "nas.home.arpa"],
-                         PRIVATE_NETWORK_LITERAL.findall(fixture))
+                   "172.15.0.1 cache.example.invalid fc.example.com").format(*expected)
+        self.assertEqual(expected, PRIVATE_NETWORK_LITERAL.findall(fixture))
 
 
 if __name__ == "__main__":

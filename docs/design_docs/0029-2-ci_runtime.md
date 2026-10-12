@@ -441,7 +441,7 @@ self-hosted tail; matters for P90, not the P95/P99 gap.
    keeps the common two-PR burst free of pending-eviction while making the
    measured failure (two concurrent coverage builds) impossible. Caveat: for
    `pull_request`, GitHub runs the base-branch workflow, so this validates on
-   the first post-merge bursts (ci-times monitor red-count), not on the
+   the first post-merge bursts (CI run-time red count), not on the
    introducing PR.
 2. **Make the coverage lane a thin RE client (software, follow-up).** The
    coverage merge runs locally on the runner host's limited cores. Either move
@@ -660,8 +660,9 @@ warmed and the instrumented surface is both broad (all //donner) and multiplied
    audit.
 
 4. **Timeout right-sizing, AFTER the lane is fast.** Once (1)-(3) land, lower the
-   60-min SLA bound so a genuinely wedged RE endpoint fast-fails per the 0018
-   end-state, paired with the existing `--remote_local_fallback=false`.
+   60-min SLA bound so a genuinely wedged RE endpoint fast-fails within minutes
+   instead of holding a runner until the job timeout, paired with the existing
+   `--remote_local_fallback=false`.
 
 Levers 1 and 2 are the ones that reach P99<=15 on worst-case (#829-class) PRs
 and both are operator-reserved (infra load / coverage scope); lever 3 is the

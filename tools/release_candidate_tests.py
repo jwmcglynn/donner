@@ -291,6 +291,20 @@ class SourceAndEditorTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "clean exact-source"):
             candidate._verify_source(source, self.root)
 
+    def test_cli_payload_binds_the_compiler_recorded_by_its_provenance(self):
+        record = {"source": {"commit": COMMIT,
+                             "module_locks_sha256": {"cli-linux": LOCK_LINUX,
+                                                     "cli-macos": LOCK_MACOS},
+                             "compiler_versions": COMPILERS.copy()}}
+        entry = {"run_id": 100, "attempt": 1}
+        provenance = {"generated_lock_sha256": LOCK_LINUX,
+                      "compiler_version": COMPILERS["cli-linux"]}
+        with mock.patch.object(candidate.release_cli, "verify", return_value=provenance):
+            candidate._verify_payload("cli-linux", self.root, entry, record, self.root)
+            provenance["compiler_version"] = "GCC 13.3.0"
+            with self.assertRaisesRegex(ValueError, "compiler differs"):
+                candidate._verify_payload("cli-linux", self.root, entry, record, self.root)
+
     def test_editor_manifest_covers_site_deploy_and_lock(self):
         directory = self.root / "package"
         directory.mkdir()

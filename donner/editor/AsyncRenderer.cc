@@ -577,6 +577,16 @@ bool AsyncRenderer::isBusy() const {
   return workerStateBusy(workerState_) || pendingCompositorWarmup_ || compositorWarmupActive_;
 }
 
+bool AsyncRenderer::isBusyWithIdleWake() {
+  std::lock_guard<std::mutex> lock(mutex_);
+  const bool warmupBusy = pendingCompositorWarmup_ || compositorWarmupActive_;
+  if (warmupBusy) {
+    // Warmup completion wakes only registered callers; render states wake on their own.
+    compositorWarmupReleaseWakePending_ = true;
+  }
+  return warmupBusy || workerStateBusy(workerState_);
+}
+
 bool AsyncRenderer::isFontResourceAdoptionSafe() const {
   std::lock_guard<std::mutex> lock(mutex_);
   return !workerStateBusy(workerState_) && !pendingCompositorWarmup_ && !compositorWarmupActive_ &&
@@ -1054,7 +1064,7 @@ void PublishRasterWorkPhase(RasterWorkPhase phase) {
     window['__donnerRasterWorkState'] = state;
     const history = window['__donnerRasterWorkPhases'] || (window['__donnerRasterWorkPhases'] = []);
     history.push(state);
-    if (history.length > 32) history.shift();
+    if (history.length > 256) history.shift();
   }, static_cast<int>(phase));
   // clang-format on
 #else

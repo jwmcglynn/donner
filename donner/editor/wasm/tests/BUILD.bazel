@@ -32,6 +32,7 @@ playwright_bin.playwright_test(
         "sample-thumbnail-settle.ts",
         "smoke.spec.ts",
         "surface-frame-probe.ts",
+        "surface-probe-requests.mjs",
         ":node_modules/@playwright/test",
         "//donner/editor/wasm:_wasm_web_package_for_serve",
         "@playwright//:chromium",
@@ -100,11 +101,13 @@ playwright_bin.playwright_test(
         "playwright.config.js",
         "playwright.webkit.bazel.config.js",
         "png-crop.ts",
+        "png-crop-core.mjs",
         "quarantine-report.mjs",
         "remote-webserver.mjs",
         "sample-thumbnail-quiescence.mjs",
         "sample-thumbnail-settle.ts",
         "surface-frame-probe.ts",
+        "surface-probe-requests.mjs",
         ":node_modules/@playwright/test",
         ":node_modules/pngjs",
         "//donner/editor/tests:standalone_geode_browser_png_compare",
@@ -158,6 +161,7 @@ playwright_bin.playwright_test(
         "sample-thumbnail-settle.ts",
         "smoke.spec.ts",
         "surface-frame-probe.ts",
+        "surface-probe-requests.mjs",
         ":node_modules/@playwright/test",
         "//donner/editor/wasm:_wasm_web_package_for_serve",
         "@playwright//:chromium",
@@ -209,6 +213,7 @@ playwright_bin.playwright_test(
         "playwright.config.js",
         "playwright.responsiveness.bazel.config.js",
         "prepare-browser-archives.js",
+        "presentation-baseline.mjs",
         "presented-frame-samples.mjs",
         "remote-webserver.mjs",
         "sample-thumbnail-settle.ts",
@@ -460,6 +465,15 @@ js_test(
 )
 
 js_test(
+    name = "surface_probe_requests_tests",
+    size = "small",
+    copy_data_to_bin = False,
+    data = ["surface-probe-requests.mjs"],
+    entry_point = "surface-probe-requests.spec.mjs",
+    node_options = ["--test"],
+)
+
+js_test(
     name = "composited_pixel_classifier_tests",
     size = "small",
     copy_data_to_bin = False,
@@ -655,6 +669,20 @@ js_test(
 )
 
 js_test(
+    name = "png_crop_tests",
+    size = "small",
+    copy_data_to_bin = False,
+    data = [
+        "png-crop.spec.mjs",
+        "png-crop-core.mjs",
+        ":node_modules/pngjs",
+    ],
+    entry_point = "png-crop.spec.mjs",
+    env = {"NODE_OPTIONS": ""},
+    node_options = ["--test"],
+)
+
+js_test(
     name = "catalog_font_broker_tests",
     size = "small",
     copy_data_to_bin = False,
@@ -776,4 +804,14 @@ js_test(
     entry_point = "wgpu-readback-contract.spec.mjs",
     env = {"NODE_OPTIONS": ""},
     node_options = ["--test"],
+)
+
+# Archive permissions are a build contract; no browser or editor is involved.
+js_test(
+    name = "npm_archive_permissions_test",
+    size = "small",
+    args = ["$(rlocationpath @aspect_rules_js//npm/private:npm_package_extract.mjs)"],
+    copy_data_to_bin = False,
+    data = ["@aspect_rules_js//npm/private:npm_package_extract.mjs"],
+    entry_point = "npm-archive-permissions.spec.mjs",
 )
