@@ -49,7 +49,7 @@ diff --git a/npm/private/BUILD.bazel b/npm/private/BUILD.bazel
  )
  
 -exports_files(glob(["*.bzl"]))
-+exports_files(glob(["*.bzl"]) + ["npm_package_extract.mjs"]
++exports_files(glob(["*.bzl"]) + ["npm_package_extract.mjs"])
  
  # We manually keep the generated rules documentation synced.
  # Check that the signatures stay matched.
