@@ -5,10 +5,13 @@ itself passes the check without a waiver.
 """
 
 import importlib.util
+from contextlib import redirect_stderr, redirect_stdout
+from io import StringIO
 from pathlib import Path
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 
 MODULE_PATH = Path(__file__).with_name("check_private_details.py")
@@ -199,6 +202,44 @@ class LoadPrivateNamesTests(unittest.TestCase):
 
     def test_absent_source_is_empty(self):
         self.assertFalse(checker.load_private_names(self.root, environ={}))
+
+    def test_explicit_file_must_be_readable_and_contain_usable_entries(self):
+        missing = self.root / "missing-list.txt"
+        unusable = self.root / "unusable-list.txt"
+        for content in ["", "# comments only\n", "account: exact:", "*"]:
+            unusable.write_text(content, encoding="utf-8")
+            for candidate in [missing, unusable, self.root, ""]:
+                with self.subTest(content=content, candidate=str(candidate)):
+                    with self.assertRaises(ValueError):
+                        checker.load_private_names(self.root, environ={checker.NAMES_FILE_ENV: str(candidate)})
+
+    def test_existing_default_file_is_configuration_while_absence_is_optional(self):
+        candidate = self.root / checker.NAMES_DEFAULT_FILE
+        self.assertFalse(checker.load_private_names(self.root, environ={}))
+        candidate.write_text("# no entries", encoding="utf-8")
+        with self.assertRaises(ValueError):
+            checker.load_private_names(self.root, environ={})
+        candidate.unlink()
+        candidate.symlink_to("missing-list.txt")
+        with self.assertRaises(ValueError):
+            checker.load_private_names(self.root, environ={})
+        self.assertTrue(checker.load_private_names(self.root, environ={checker.NAMES_ENV: "example-alpha"}))
+
+    def test_nonempty_explicit_environment_list_must_have_usable_entries(self):
+        with self.assertRaises(ValueError):
+            checker.load_private_names(self.root, environ={checker.NAMES_ENV: "# comments only"})
+        self.assertFalse(checker.load_private_names(self.root, environ={checker.NAMES_ENV: ""}))
+
+    def test_main_configuration_failure_is_nonzero_without_echoing_the_file_path(self):
+        missing = self.root / "missing-list.txt"
+        clean = self.root / "clean.txt"
+        clean.write_text("nothing private", encoding="utf-8")
+        stdout, stderr = StringIO(), StringIO()
+        with mock.patch.dict(checker.os.environ, {checker.NAMES_FILE_ENV: str(missing)}, clear=True):
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                self.assertEqual(checker.main(["--root", str(self.root), "clean.txt"]), 2)
+        self.assertNotIn(str(missing), stdout.getvalue() + stderr.getvalue())
+        self.assertIn("configuration", stderr.getvalue())
 
     def test_reads_default_file_env_file_and_env_value(self):
         (self.root / ".private-names").write_text("exhost-alpha\n", encoding="utf-8")

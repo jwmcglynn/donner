@@ -30,6 +30,8 @@ An entry written `exact:<name>` is a private name matched only as written
 (ignoring case), for short names whose separator-free form is a common
 phrase. An entry written `account:<name>` is a personal account name. When no list is
 configured, the name checks are skipped and the generic checks still run.
+An explicit configuration or existing default file must be readable and contain
+usable entries; a configuration failure exits nonzero without printing its path.
 
 Fixtures that must contain one of these shapes (for example a test proving a
 redactor removes private addresses) build the value at runtime, so no file
@@ -196,11 +198,27 @@ class PrivateNames:
 
 def load_private_names(root: Path, environ: Mapping[str, str] = os.environ) -> PrivateNames:
     if environ.get(NAMES_ENV):
-        return PrivateNames.parse(environ[NAMES_ENV])
-    candidate = Path(environ[NAMES_FILE_ENV]) if environ.get(NAMES_FILE_ENV) else root / NAMES_DEFAULT_FILE
-    if candidate.is_file():
-        return PrivateNames.parse(candidate.read_text(encoding="utf-8"))
-    return PrivateNames()
+        names = PrivateNames.parse(environ[NAMES_ENV])
+    else:
+        if NAMES_FILE_ENV in environ:
+            if not environ[NAMES_FILE_ENV]:
+                raise ValueError("private-name configuration file path is empty")
+            candidate = Path(environ[NAMES_FILE_ENV])
+        else:
+            candidate = root / NAMES_DEFAULT_FILE
+            try:
+                candidate.lstat()
+            except FileNotFoundError:
+                return PrivateNames()
+            except OSError:
+                raise ValueError("private-name configuration file cannot be inspected") from None
+        try:
+            names = PrivateNames.parse(candidate.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError):
+            raise ValueError("private-name configuration file cannot be read") from None
+    if not names:
+        raise ValueError("private-name configuration contains no usable entries")
+    return names
 
 
 def _is_generic_home(name: str) -> bool:
@@ -316,7 +334,11 @@ def main(argv: Optional[list[str]] = None) -> int:
     args = parser.parse_args(argv)
 
     root = args.root.resolve()
-    private_names = load_private_names(root)
+    try:
+        private_names = load_private_names(root)
+    except ValueError as error:
+        print("check_private_details: %s" % error, file=sys.stderr)
+        return 2
     if not private_names:
         print("check_private_details: no private name list configured; name checks skipped.")
     files = args.files or tracked_files(root)
