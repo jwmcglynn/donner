@@ -349,7 +349,7 @@ TEST_F(RendererRegressionTests, TinySkiaBitmapGlyphPreservesDecodedPremultiplied
   const auto element = document.querySelector("#emoji");
   ASSERT_THAT(element, testing::Ne(std::nullopt));
   Registry& registry = document.registry();
-  const auto& geometry = registry.get<components::ComputedTextGeometryComponent>(element->entity());
+  const auto& geometry = element->entityHandle().get<components::ComputedTextGeometryComponent>();
   ASSERT_THAT(geometry.runs, testing::SizeIs(1));
   const TextRun& run = geometry.runs.front();
   FontManager& fonts = registry.ctx().get<FontManager>();
