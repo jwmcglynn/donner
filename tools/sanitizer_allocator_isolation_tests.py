@@ -6,11 +6,13 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest import mock
 
 from python.runfiles import runfiles
+from test_executable_fixtures import ExecutableFixtureDirectory
 
 
 class SanitizerAllocatorIsolationTest(unittest.TestCase):
@@ -29,6 +31,22 @@ class SanitizerAllocatorIsolationTest(unittest.TestCase):
         cls.workflow = Path(resolver.Rlocation("donner/.github/workflows/sanitizers.yml")).read_text(
             encoding="utf-8"
         )
+        cls.executables = ExecutableFixtureDirectory()
+        cls.addClassCleanup(cls.executables.cleanup)
+        cls.fixture_bin = cls.executables.path
+        cls.executables.write("python3", '#!/bin/sh\nexec "$FIXTURE_PYTHON" "$@"\n')
+        (cls.fixture_bin / "bazelisk_fixture.py").write_text(
+            "import json, os, sys\n"
+            "with open(os.environ['CAPTURE_COMMANDS'], 'a', encoding='utf-8') as output:\n"
+            "    output.write(json.dumps(sys.argv[1:]) + '\\n')\n"
+            "if sys.argv[1] == 'query':\n"
+            "    print('\\n'.join(json.loads(os.environ['QUERY_SUITES'])[sys.argv[-1]]))\n",
+            encoding="utf-8",
+        )
+        cls.executables.write(
+            "bazelisk",
+            '#!/bin/sh\nexec "$FIXTURE_PYTHON" "$FIXTURE_BIN/bazelisk_fixture.py" "$@"\n',
+        )
 
     def _commands(self, sanitizer):
         marker = f"      - name: Test //donner/... with {sanitizer}\n        run: |\n"
@@ -43,21 +61,11 @@ class SanitizerAllocatorIsolationTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             capture = root / "commands.jsonl"
-            stub = root / "bazelisk"
-            stub.write_text(
-                "#!/usr/bin/env python3\n"
-                "import json, os, sys\n"
-                "with open(os.environ['CAPTURE_COMMANDS'], 'a', encoding='utf-8') as output:\n"
-                "    output.write(json.dumps(sys.argv[1:]) + '\\n')\n"
-                "if sys.argv[1] == 'query':\n"
-                "    print('\\n'.join(json.loads(os.environ['QUERY_SUITES'])[sys.argv[-1]]))\n",
-                encoding="utf-8",
-            )
-            stub.chmod(0o755)
             query_suites = {f"tests({name})": self._expand_suite(name) for name in self.suites}
             environment = dict(os.environ, CAPTURE_COMMANDS=str(capture),
-                               QUERY_SUITES=json.dumps(query_suites))
-            environment["PATH"] = str(root) + os.pathsep + environment["PATH"]
+                               QUERY_SUITES=json.dumps(query_suites),
+                               FIXTURE_PYTHON=sys.executable, FIXTURE_BIN=str(self.fixture_bin))
+            environment["PATH"] = str(self.fixture_bin) + os.pathsep + environment["PATH"]
             result = subprocess.run(
                 ["bash", "-euo", "pipefail", "-c", script],
                 env=environment,
