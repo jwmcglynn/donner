@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <defs>
+    <linearGradient id="lg" spreadMethod="reflect" x2="0.3"><stop offset="0" stop-color="white"/>
+      <stop offset="1" stop-color="black" stop-opacity="0.2"/></linearGradient>
+    <radialGradient id="rg" fx="0.3" fy="0.3" r="0.6"><stop offset="0" stop-color="orange"/>
+      <stop offset="1" stop-color="navy"/></radialGradient>
+    <mask id="m" maskContentUnits="objectBoundingBox" mask-type="luminance">
+      <rect width="1" height="1" fill="url(#lg)"/></mask>
+    <pattern id="p" width="8" height="8" patternUnits="userSpaceOnUse"
+             patternTransform="rotate(30) skewX(10)"><circle cx="4" cy="4" r="3" fill="url(#rg)"/></pattern>
+    <marker id="mk" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="4" markerHeight="4"
+            orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="crimson"/></marker>
+    <clipPath id="c" clipPathUnits="objectBoundingBox"><circle cx="0.5" cy="0.5" r="0.45"/></clipPath>
+  </defs>
+  <rect width="64" height="64" fill="url(#p)" mask="url(#m)"/>
+  <path d="M8 56 Q32 0 56 56" fill="none" stroke="black" stroke-width="2" stroke-dasharray="4 2 1"
+        stroke-linejoin="miter" stroke-miterlimit="10" marker-start="url(#mk)" marker-mid="url(#mk)"
+        marker-end="url(#mk)"/>
+  <g clip-path="url(#c)" opacity="0.7"><rect x="16" y="16" width="32" height="32" fill="url(#rg)"/></g>
+</svg>
