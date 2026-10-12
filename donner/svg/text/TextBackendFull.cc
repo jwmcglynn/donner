@@ -717,7 +717,8 @@ std::optional<int> SelectBestBitmapStrike(FT_Face face) {
 std::optional<std::size_t> LoadBitmapMetrics(FT_Face face, int glyphIndex) {
   constexpr FT_Int32 kMetricsFlags = FT_LOAD_COLOR | FT_LOAD_BITMAP_METRICS_ONLY;
   if (FT_Load_Glyph(face, static_cast<FT_UInt>(glyphIndex), kMetricsFlags) != 0 ||
-      face->glyph->format != FT_GLYPH_FORMAT_BITMAP) {
+      face->glyph->format != FT_GLYPH_FORMAT_BITMAP ||
+      face->glyph->bitmap.pixel_mode != FT_PIXEL_MODE_BGRA) {
     return std::nullopt;
   }
   return details::ValidatedBgraOutputBytes(face->glyph->bitmap.width, face->glyph->bitmap.rows);
