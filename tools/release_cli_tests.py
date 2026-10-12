@@ -36,6 +36,12 @@ class ReleaseCliTest(unittest.TestCase):
         (self.root / release_cli.LOCKFILE).write_text(self.lock_contents)
         self.binary = Path(self.temporary.name) / "donner-svg"
         self.binary.write_bytes(b"retained CLI bytes\n")
+        self.notice = Path(self.temporary.name) / "notice_cli.txt"
+        self.notice_contents = (
+            release_cli.NOTICE_HEADER + "donner-svg\n" + "=" * 72 + "\n\n" + "-" * 72 +
+            "\nPackage: tiny-skia-cpp\nLicense: BSD-3-Clause\n\nCopyright fixture\n"
+        )
+        self.notice.write_text(self.notice_contents, encoding="utf-8")
         self.artifacts = Path(self.temporary.name) / "artifacts"
 
     def _package(self, platform: str = "linux-x86-64") -> dict[str, object]:
@@ -50,7 +56,7 @@ class ReleaseCliTest(unittest.TestCase):
             release_cli.subprocess, "check_output", side_effect=fixture_check_output
         ):
             return release_cli.package(
-                root=self.root, binary=self.binary, output=self.artifacts,
+                root=self.root, binary=self.binary, notice=self.notice, output=self.artifacts,
                 platform=platform, commit=self.commit, run_id="123", attempt="2",
             )
 
@@ -69,6 +75,12 @@ class ReleaseCliTest(unittest.TestCase):
                 self.assertEqual(self._verify(platform), expected)
                 binary_name = release_cli.PLATFORMS[platform]
                 self.assertEqual((self.artifacts / binary_name).read_bytes(), self.binary.read_bytes())
+                self.assertEqual(
+                    (self.artifacts / f"{binary_name}.NOTICE.txt").read_bytes(),
+                    self.notice.read_bytes(),
+                )
+                self.assertEqual(expected["schema"], 2)
+                self.assertEqual(expected["notice_sha256"], release_cli.digest(self.notice))
                 self.assertEqual(
                     json.loads((self.artifacts / f"{binary_name}.provenance").read_text()),
                     expected,
@@ -105,10 +117,49 @@ class ReleaseCliTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "incomplete"):
             self._verify()
 
+    def test_changed_missing_or_replaced_notice_fails_closed(self) -> None:
+        self._package()
+        notice = self.artifacts / "donner-svg_linux_x86_64.NOTICE.txt"
+        notice.write_text(self.notice_contents.replace("tiny-skia-cpp", "other"), encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "provenance"):
+            self._verify()
+        notice.write_text(self.notice_contents, encoding="utf-8")
+        self.assertEqual(self._verify()["notice_sha256"], release_cli.digest(self.notice))
+        notice.unlink()
+        with self.assertRaisesRegex(ValueError, "incomplete"):
+            self._verify()
+        notice.symlink_to(self.notice)
+        with self.assertRaisesRegex(ValueError, "symlink"):
+            self._verify()
+
+    def test_package_requires_a_generated_notice_before_upload(self) -> None:
+        cases = {
+            "missing": None,
+            "empty": b"",
+            "not a notice": b"MIT License\n",
+            "no packages": release_cli.NOTICE_HEADER.encode() + b"donner-svg\n",
+            "not UTF-8": release_cli.NOTICE_HEADER.encode() + b"\nPackage: \xff\n",
+            "NUL": release_cli.NOTICE_HEADER.encode() + b"\nPackage: x\n\x00",
+            "too large": release_cli.NOTICE_HEADER.encode() + b"\nPackage: x\n" +
+                         b"x" * release_cli.MAX_NOTICE_BYTES,
+        }
+        for case, contents in cases.items():
+            with self.subTest(case=case):
+                self.notice.unlink(missing_ok=True)
+                if contents is not None:
+                    self.notice.write_bytes(contents)
+                with self.assertRaisesRegex(ValueError, "license notice"):
+                    self._package()
+                self.assertFalse(self.artifacts.exists())
+        self.notice.unlink()
+        self.notice.symlink_to(self.binary)
+        with self.assertRaisesRegex(ValueError, "license notice is missing"):
+            self._package()
+
     def test_package_requires_exact_checkout_and_empty_destination(self) -> None:
         with self.assertRaisesRegex(ValueError, "checkout"):
             release_cli.package(
-                root=self.root, binary=self.binary, output=self.artifacts,
+                root=self.root, binary=self.binary, notice=self.notice, output=self.artifacts,
                 platform="linux-x86-64", commit="a" * 40, run_id="123", attempt="2",
             )
         self._package()
@@ -160,6 +211,20 @@ class ReleaseCliTest(unittest.TestCase):
 
         with mock.patch.object(release_cli.shutil, "copyfile", side_effect=copy_with_changed_lock):
             with self.assertRaisesRegex(ValueError, "non-public"):
+                self._package()
+        self.assertFalse((self.artifacts / "donner-svg_linux_x86_64.provenance").exists())
+
+    def test_copied_notice_is_rechecked_before_artifact_upload(self) -> None:
+        original_copy = release_cli.shutil.copyfile
+
+        def copy_with_truncated_notice(source, destination):
+            if Path(source) == self.notice:
+                Path(destination).write_bytes(b"")
+            else:
+                original_copy(source, destination)
+
+        with mock.patch.object(release_cli.shutil, "copyfile", side_effect=copy_with_truncated_notice):
+            with self.assertRaisesRegex(ValueError, "license notice"):
                 self._package()
         self.assertFalse((self.artifacts / "donner-svg_linux_x86_64.provenance").exists())
 

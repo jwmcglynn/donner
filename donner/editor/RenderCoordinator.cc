@@ -243,6 +243,8 @@ void PublishWorkerGpuWaitFailure(bool deviceLost, const char* timedOutWaitSiteNa
         // here: this publish is the one that never presented.
         delete stats['presentedAtMs'];
         delete stats['presentationPublicationDelayMs'];
+        // This failure has no result-poll producer timestamp; prior render delay is unrelated.
+        delete stats['publicationDelayMs'];
         stats['acceptedForPresentation'] = false;
         stats['deviceLost'] = $0 > 0;
         stats['gpuWaitTimeoutSite'] = UTF8ToString($1);
@@ -408,6 +410,12 @@ bool SameRenderAttempt(const RenderAttemptIdentity& lhs, const RenderAttemptIden
          lhs.presentationEpoch == rhs.presentationEpoch &&
          SameRasterViewport(lhs.rasterViewport, rhs.rasterViewport) &&
          SameRequestedDragPreview(lhs.dragPreview, rhs.dragPreview);
+}
+
+/// Whether @p failure is repaired only by rendering more of the document.
+bool IsCoverageFailure(FramePresentationFailure failure) {
+  return failure == FramePresentationFailure::InsufficientCoverage ||
+         failure == FramePresentationFailure::MissingOverview;
 }
 
 RenderAttemptIdentity MakeRenderAttempt(
@@ -618,6 +626,11 @@ bool ShouldPresentCompositedPreviewForViewport(const RenderResult::CompositedPre
     }
   }
   return true;
+}
+
+bool PresentationRepairNeedsCoverage(FramePresentationFailure buildFailure,
+                                     FramePresentationFailure adoptionFailure) {
+  return IsCoverageFailure(buildFailure) || IsCoverageFailure(adoptionFailure);
 }
 
 std::uint64_t PostReleaseSettleTargetVersion(std::uint64_t currentFrameVersion,
@@ -1416,8 +1429,7 @@ void RenderCoordinator::updateFrameRepairStatus(
   const auto failure =
       outcome.failure != FramePresentationFailure::None ? outcome.failure : adoptionFailure_;
   presentationNeedsRender_ = failure != FramePresentationFailure::None;
-  presentationNeedsCoverage_ = failure == FramePresentationFailure::InsufficientCoverage ||
-                               failure == FramePresentationFailure::MissingOverview;
+  presentationNeedsCoverage_ = PresentationRepairNeedsCoverage(outcome.failure, adoptionFailure_);
 #ifdef __EMSCRIPTEN__
   PublishFrameRepairDetails(input, *resources, failure, adoptionFailure_);
 #endif

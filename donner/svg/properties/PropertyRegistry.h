@@ -15,6 +15,7 @@
 #include "donner/css/Declaration.h"
 #include "donner/svg/components/filter/FilterEffect.h"
 #include "donner/svg/core/ClipRule.h"
+#include "donner/svg/core/ColorInterpolation.h"
 #include "donner/svg/core/ColorInterpolationFilters.h"
 #include "donner/svg/core/Cursor.h"
 #include "donner/svg/core/Display.h"
@@ -269,6 +270,11 @@ public:
   Property<MaskType> maskType{"mask-type",
                               []() -> std::optional<MaskType> { return MaskType::Luminance; }};
 
+  /// Inherited `color-interpolation` property. Defaults to sRGB; used by luminance masks.
+  Property<ColorInterpolation, PropertyCascade::Inherit> colorInterpolation{
+      "color-interpolation",
+      []() -> std::optional<ColorInterpolation> { return ColorInterpolation::SRGB; }};
+
   //
   // Filter
   //
@@ -472,11 +478,11 @@ public:
         color, floodColor, stopColor, display, opacity, visibility, overflow, transformOrigin, fill,
         fillRule, fillOpacity, stroke, strokeOpacity, strokeWidth, strokeLinecap, strokeLinejoin,
         strokeMiterlimit, strokeDasharray, strokeDashoffset, vectorEffect, clipPath, clipRule, mask,
-        maskType, filter, colorInterpolationFilters, pointerEvents, cursor, markerStart, markerMid,
-        markerEnd, fontFamily, fontSize, fontWeight, fontStyle, fontStretch, fontVariant,
-        fontKerning, fontSizeAdjust, textAnchor, textDecoration, dominantBaseline, writingMode,
-        inlineSize, letterSpacing, wordSpacing, baselineShift, alignmentBaseline, mixBlendMode,
-        isolation, imageRendering, paintOrder);
+        maskType, colorInterpolation, filter, colorInterpolationFilters, pointerEvents, cursor,
+        markerStart, markerMid, markerEnd, fontFamily, fontSize, fontWeight, fontStyle, fontStretch,
+        fontVariant, fontKerning, fontSizeAdjust, textAnchor, textDecoration, dominantBaseline,
+        writingMode, inlineSize, letterSpacing, wordSpacing, baselineShift, alignmentBaseline,
+        mixBlendMode, isolation, imageRendering, paintOrder);
   }
 
   /**

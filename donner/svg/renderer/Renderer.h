@@ -227,6 +227,12 @@ public:
 
   /// Begins mask rendering with an explicit luminance or alpha coverage mode.
   void pushMask(const std::optional<Box2d>& maskBounds, MaskType maskType) override;
+  /// Begins a mask using the specified color space for luminance conversion.
+  /// @param maskBounds Optional mask region in local coordinates.
+  /// @param maskType Coverage mode.
+  /// @param colorInterpolation Luminance color space; auto chooses sRGB.
+  void pushMask(const std::optional<Box2d>& maskBounds, MaskType maskType,
+                ColorInterpolation colorInterpolation) override;
 
   /// Switches from mask rendering to masked content rendering.
   void transitionMaskToContent() override;

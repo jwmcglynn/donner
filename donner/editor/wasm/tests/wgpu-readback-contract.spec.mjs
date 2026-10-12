@@ -662,6 +662,7 @@ test("a failed worker publication cannot inherit a prior frame's presentation ad
       acceptedForPresentation: true,
       presentedAtMs: 200,
       presentationPublicationDelayMs: 40,
+      publicationDelayMs: 75,
       publishReason: "render-result",
     },
   };
@@ -675,6 +676,7 @@ test("a failed worker publication cannot inherit a prior frame's presentation ad
     acceptedForPresentation: stats.acceptedForPresentation,
     presentedAtMs: stats.presentedAtMs,
     presentationPublicationDelayMs: stats.presentationPublicationDelayMs,
+    publicationDelayMs: stats.publicationDelayMs,
     deviceLost: stats.deviceLost,
     publishReason: stats.publishReason,
   }, {
@@ -682,10 +684,16 @@ test("a failed worker publication cannot inherit a prior frame's presentation ad
     acceptedForPresentation: false,
     presentedAtMs: undefined,
     presentationPublicationDelayMs: undefined,
+    publicationDelayMs: undefined,
     deviceLost: true,
     publishReason: "gpu-wait-failure",
   });
   assert.equal(previous.presentedAtMs, 200, "the failure must not modify the older frame object");
+  assert.equal(
+    previous.publicationDelayMs,
+    75,
+    "the original render keeps its own publication delay",
+  );
   stats.acceptedForPresentation = true;
   publishFrame(window, clock, 1, 15, 1, 4096, 1230);
   assert.equal(

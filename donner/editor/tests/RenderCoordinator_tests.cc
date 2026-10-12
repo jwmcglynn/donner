@@ -244,6 +244,20 @@ TEST(RenderCoordinatorPolicyTest, ReleaseSettleWaitsForQueuedTransformFlush) {
             std::numeric_limits<std::uint64_t>::max());
 }
 
+TEST(RenderCoordinatorPolicyTest, RejectedOverviewKeepsCoverageDemandBehindOtherFrameFailures) {
+  using Failure = FramePresentationFailure;
+  EXPECT_FALSE(PresentationRepairNeedsCoverage(Failure::None, Failure::None));
+  EXPECT_TRUE(PresentationRepairNeedsCoverage(Failure::InsufficientCoverage, Failure::None));
+  EXPECT_TRUE(PresentationRepairNeedsCoverage(Failure::None, Failure::MissingOverview));
+  EXPECT_FALSE(PresentationRepairNeedsCoverage(Failure::MissingSelectionGeometry, Failure::None));
+  // A bounded drag result rejected for a stale overview is followed by a frame that still lacks
+  // the new selection geometry. During a drag, only this coverage demand requests the overview.
+  EXPECT_TRUE(
+      PresentationRepairNeedsCoverage(Failure::MissingSelectionGeometry, Failure::MissingOverview))
+      << "another frame failure must not hide the overview the rejected result needs";
+  EXPECT_TRUE(PresentationRepairNeedsCoverage(Failure::IncompatiblePose, Failure::MissingOverview));
+}
+
 TEST(RenderCoordinatorPolicyTest, PendingSelectedLayerRasterizationBypassesViewportDefer) {
   const Entity selectedEntity = static_cast<Entity>(7);
 

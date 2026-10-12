@@ -9,6 +9,7 @@ cc_library(
     hdrs = [
         "ClipPathUnits.h",
         "ClipRule.h",
+        "ColorInterpolation.h",
         "ColorInterpolationFilters.h",
         "CssTransform.h",
         "Cursor.h",
