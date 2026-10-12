@@ -12,6 +12,7 @@ import sys
 import tempfile
 import textwrap
 import unittest
+from unittest.mock import patch
 
 from python.runfiles import runfiles
 from test_executable_fixtures import ExecutableFixtureDirectory
@@ -460,8 +461,15 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
     def _run_script(self, text, args, env=None, timeout=10, cwd=None, context=None):
         with tempfile.TemporaryDirectory() as temp_dir:
             script = Path(temp_dir) / "fixture.sh"
-            script.write_text(text)
+            # Builtin-only markers distinguish shell progress from an open output pipe.
+            # Timeout reports retain only these fixed tokens, never captured script output.
+            script.write_text(
+                "printf 'fixture-stage:entered\\n' >&2\n"
+                "trap \"printf 'fixture-stage:exited\\n' >&2\" EXIT\n" + text
+            )
             fixture_env = dict(os.environ if env is None else env)
+            # Fixture scripts must not execute an unrelated shell startup file.
+            fixture_env.pop("BASH_ENV", None)
             fixture_env["FIXTURE_PYTHON"] = sys.executable
             fixture_env["FIXTURE_BIN"] = str(self.fixture_bin)
             fixture_env["PATH"] = (temp_dir + os.pathsep + str(self.fixture_bin) + os.pathsep +
@@ -477,8 +485,14 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
                     cwd=cwd,
                 )
             except subprocess.TimeoutExpired as error:
+                stderr = error.stderr or b""
+                if isinstance(stderr, str):
+                    stderr = stderr.encode()
+                entered = b"fixture-stage:entered\n" in stderr
+                exited = b"fixture-stage:exited\n" in stderr
                 raise AssertionError(
-                    f"{context or self.id()}: shell fixture exceeded {timeout} seconds"
+                    f"{context or self.id()}: shell fixture exceeded {timeout} seconds "
+                    f"(entered={entered}, exited={exited})"
                 ) from error
 
     def test_wasm_build_and_browser_checks_share_one_runner_and_package(self):
@@ -574,15 +588,27 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
                     args_file = root / "args.txt"
                     env = {**os.environ, "BAZEL_ARGS": str(args_file),
                            "PATH": str(root) + os.pathsep + os.environ.get("PATH", "")}
-                    result = subprocess.run(
-                        ["/bin/bash", "-c", script], cwd=root, env=env,
-                        capture_output=True, text=True, timeout=10,
-                    )
+                    result = self._run_script(script, [], cwd=root, env=env)
                     self.assertEqual(0, result.returncode, result.stdout + result.stderr)
                     args = args_file.read_text()
                     self.assertIn("--test_tag_filters=requires_xvfb", args)
                     self.assertIn(expected_target, args)
                     self.assertEqual(no_tests, "No test targets" in result.stdout)
+
+    def test_shell_fixture_timeout_reports_only_known_progress_markers(self):
+        for stderr, entered, exited in (
+            (b"untrusted-output", False, False),
+            (b"fixture-stage:entered\nuntrusted-output", True, False),
+            (b"fixture-stage:entered\nfixture-stage:exited\nuntrusted-output", True, True),
+        ):
+            with self.subTest(entered=entered, exited=exited):
+                error = subprocess.TimeoutExpired("fixture", 10, stderr=stderr)
+                with patch("subprocess.run", side_effect=error):
+                    with self.assertRaises(AssertionError) as raised:
+                        self._run_script("exit 0\n", [])
+                message = str(raised.exception)
+                self.assertIn(f"entered={entered}, exited={exited}", message)
+                self.assertNotIn("untrusted-output", message)
 
     def test_shell_fixture_ignores_inherited_bash_startup_hook(self):
         with tempfile.TemporaryDirectory() as directory:
