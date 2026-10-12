@@ -1737,6 +1737,10 @@ test("the delayed-completion baseline waits for the picker's last publication fr
     thumbnails: { ...thumbnails, publishedAtMs: 4521.64 },
     presentation: { ...idle, completedAtMs: 4546.45 },
   };
+  const withThumbnails = (changes) => ({
+    ...settled,
+    thumbnails: { ...settled.thumbnails, ...changes },
+  });
   assert.equal(pickerPresentationSettled(recordedInFlight), false);
   assert.equal(pickerPresentationSettled(settled), true);
   // A publication whose frame has not completed still owes a submission.
@@ -1748,20 +1752,10 @@ test("the delayed-completion baseline waits for the picker's last publication fr
     false,
   );
   // A rendered thumbnail that is not yet published still owes its publication frame.
-  assert.equal(
-    pickerPresentationSettled({ ...settled, thumbnails: { ...settled.thumbnails, ready: 4 } }),
-    false,
-  );
+  assert.equal(pickerPresentationSettled(withThumbnails({ ready: 4 })), false);
   for (const field of ["pending", "active", "resultReady"]) {
-    assert.equal(
-      pickerPresentationSettled({ ...settled, thumbnails: { ...settled.thumbnails, [field]: true } }),
-      false,
-      field,
-    );
+    assert.equal(pickerPresentationSettled(withThumbnails({ [field]: true })), false, field);
   }
-  assert.equal(
-    pickerPresentationSettled({ ...settled, thumbnails: { ...settled.thumbnails, drained: false } }),
-    false,
-  );
+  assert.equal(pickerPresentationSettled(withThumbnails({ drained: false })), false);
   assert.equal(pickerPresentationSettled({ presentation: settled.presentation }), false);
 });
