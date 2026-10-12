@@ -80,6 +80,12 @@ class PrivateAddressTests(unittest.TestCase):
             with self.subTest(text=text):
                 self.assertEqual(kinds(text), [checker.KIND_PRIVATE_ADDRESS])
 
+    def test_build_named_endpoints_do_not_receive_version_exemptions(self):
+        address = ipv4(10, 1, 2, 3)
+        for prefix in ["remote_build=", "rebuild: ", "prefixbuild" + " " * 10 + "="]:
+            with self.subTest(prefix=prefix):
+                self.assertEqual(kinds(prefix + address), [checker.KIND_PRIVATE_ADDRESS])
+
     def test_flags_ipv6_unique_local(self):
         for text in [join("fd12:", "3456:789a::1"), join("[FC00:", ":1]:443")]:
             with self.subTest(text=text):
@@ -246,6 +252,24 @@ class ScanFilesTests(unittest.TestCase):
         self.write("dirty-target.txt", MAC_HOME + "alice/notes")
         (self.root / "clean-link").symlink_to("dirty-target.txt")
         self.assertEqual(checker.scan_files(self.root, ["clean-link"]), [])
+
+    def test_scans_private_path_names_for_binary_missing_and_symlink_entries(self):
+        names = checker.PrivateNames.parse("example-alpha")
+        paths = ["docs/example-alpha.md", "example-alpha.png", "example-alpha-link", "example-alpha-missing"]
+        self.write(paths[0], "clean content")
+        self.write(paths[1], b"\x89PNG\0")
+        (self.root / paths[2]).symlink_to("missing-target")
+        findings = checker.scan_files(self.root, paths, names)
+        self.assertEqual(len(findings), 4)
+        self.assertEqual([f.kind for f in findings], [checker.KIND_PRIVATE_NAME] * 4)
+        self.assertTrue(all("example-alpha" not in str(f) for f in findings))
+
+    def test_redacts_private_path_in_content_findings_too(self):
+        relative = "docs/example-alpha.md"
+        self.write(relative, MAC_HOME + "alice/notes")
+        findings = checker.scan_files(self.root, [relative], checker.PrivateNames.parse("example-alpha"))
+        self.assertEqual([f.kind for f in findings], [checker.KIND_PRIVATE_NAME, checker.KIND_HOME_PATH])
+        self.assertTrue(all("example-alpha" not in str(f) and "alice" not in str(f) for f in findings))
 
     def test_main_exit_status(self):
         self.write("clean.txt", "nothing private here\n")

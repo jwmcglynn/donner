@@ -3,7 +3,8 @@
 
 This is a public repository. The check scans every file reported by
 `git ls-files` (or an explicit file list) and reports each finding as
-`path:line: kind`, without echoing the matched text.
+`path:line: kind`, without echoing the matched text. A sensitive filename is
+reported by its one-based input position instead of repeating the filename.
 
 Generic checks, always on:
   home-path        /Users/<name>, /home/<name> or C:\\Users\\<name> for a
@@ -119,7 +120,7 @@ IPV6_ULA_RE = re.compile(
     re.IGNORECASE,
 )
 # A dotted number right after a version keyword is a version, not an address.
-VERSION_CONTEXT_RE = re.compile(r"(?:version|ver|sdk|build)\s*[:=]?\s*[\"']?$", re.IGNORECASE)
+VERSION_CONTEXT_RE = re.compile(r"\b(?:version|ver|sdk|build)\s*[:=]?\s*[\"']?$", re.IGNORECASE)
 _LABEL = r"[a-z0-9](?:[a-z0-9-]*[a-z0-9])?"
 PRIVATE_SUFFIX_RE = re.compile(
     r"(?<![\w.-])" + _LABEL + r"(?:\." + _LABEL + r")*\.(?:lan|local|internal|home\.arpa)"
@@ -208,7 +209,7 @@ def _is_generic_home(name: str) -> bool:
 
 def _address_kinds(line: str) -> Iterable[str]:
     for match in IPV4_PRIVATE_RE.finditer(line):
-        if not VERSION_CONTEXT_RE.search(line[max(0, match.start() - 16):match.start()]):
+        if not VERSION_CONTEXT_RE.search(line, max(0, match.start() - 16), match.start()):
             yield KIND_PRIVATE_ADDRESS
     for _ in IPV6_ULA_RE.finditer(line):
         yield KIND_PRIVATE_ADDRESS
@@ -278,7 +279,10 @@ def scan_files(
     root: Path, relative_paths: Iterable[str], private_names: PrivateNames = PrivateNames()
 ) -> list[Finding]:
     findings: list[Finding] = []
-    for relative in relative_paths:
+    for position, relative in enumerate(relative_paths, start=1):
+        path_findings = scan_text("<tracked path %d>" % position, relative, private_names)
+        findings.extend(path_findings)
+        display_path = path_findings[0].path if path_findings else relative
         path = root / relative
         if path.is_symlink():
             # The link target is the tracked payload. Never follow it into an
@@ -290,7 +294,7 @@ def scan_files(
             continue
         if _is_binary(data):
             continue
-        findings.extend(scan_text(relative, data.decode("utf-8", errors="replace"), private_names))
+        findings.extend(scan_text(display_path, data.decode("utf-8", errors="replace"), private_names))
     return findings
 
 

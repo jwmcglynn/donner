@@ -180,9 +180,11 @@ number is expected to grow as new parsers and code paths are added.
 #### 1. Trigger Layer (`tools/fuzzing/trigger_fuzz.sh`)
 
 A lightweight shell script invoked by a systemd timer every 30 minutes. It implements the
-rate-limiting and freshness logic:
+rate-limiting and freshness logic. Run this example from a Donner checkout;
+`FUZZ_REPO_DIR` defaults to that repository root:
 
 ```
+FUZZ_REPO_DIR="${FUZZ_REPO_DIR:-$(git rev-parse --show-toplevel)}"
 LAST_RUN_FILE=~/.donner-fuzz/last_run_timestamp
 MIN_INTERVAL=7200  # 2 hours in seconds
 
