@@ -5803,7 +5803,7 @@ TEST_F(TextEditorTests, DimmedSourcePreservesGeometryAndDesaturatesWhitespaceAnd
                 AllOf(Field(&ImVec2::x, ::testing::FloatEq(baseline[index].pos.x)),
                       Field(&ImVec2::y, ::testing::FloatEq(baseline[index].pos.y))));
     const ImVec4 color = ImGui::ColorConvertU32ToFloat4(dimmed[index].col);
-    EXPECT_THAT(std::array<float, 3>{color.x, color.y, color.z},
+    EXPECT_THAT((std::array<float, 3>{color.x, color.y, color.z}),
                 ElementsAre(color.x, color.x, color.x));
     EXPECT_LT(color.w, ImGui::ColorConvertU32ToFloat4(baseline[index].col).w);
   }
