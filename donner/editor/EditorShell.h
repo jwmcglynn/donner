@@ -645,6 +645,11 @@ private:
   void maybeLogResourceDiagnostics(const FrameCostBreakdown& frameCost);
   void maybeLogFrameMissTelemetry(const FrameCostBreakdown& frameCost);
   [[nodiscard]] bool highlightSelectionSourceIfNeeded();
+  /// Reset reference highlights and refocus the source pane for a changed canvas selection.
+  void highlightChangedSelectionSource(bool preserveSourceEditCursor);
+  /// Apply a deferred selection focus once the source pane mirrors pending document edits.
+  /// @return True when the focus partition was recomputed.
+  bool applyDeferredSourceFocusIfReady();
   [[nodiscard]] std::vector<svg::SVGElement> sourceHoverElements() const;
   [[nodiscard]] std::vector<SourceByteRange> sourceHoverRangesForElements(
       const std::vector<svg::SVGElement>& elements) const;
@@ -708,6 +713,9 @@ private:
   void syncSelectionFromSourceCursorIfNeeded();
   void applySourcePartition(FocusPartition partition);
   void updateSourceFocusView(bool scrollToSelection = false);
+  /// True while document edits have not reached the source pane: queued mutations or flushed source
+  /// deltas that the source writeback has not mirrored yet.
+  [[nodiscard]] bool sourcePaneAwaitsDocumentEdits() const;
   void updateSourceStyleDecorations();
   void applySourceStyleDecorationChipClick();
   void setSourceFocusMode(bool enabled);
@@ -1010,6 +1018,10 @@ private:
   /// Suppress source-pane reselection/scrolling when a source edit remaps the same selection while
   /// the cursor remains inside the active focus partition.
   bool preserveSourceEditFocusCursor_ = false;
+  /// Scroll request of a selection focus update deferred until the source pane mirrors pending
+  /// document edits. Focus line ranges are document-source lines: applied to a lagging source pane
+  /// they fold the wrong lines, and mirroring the edits afterwards shifts them again.
+  std::optional<bool> deferredSourceFocusScroll_;
   /// Set when a fast-path click consumed the
   /// pending click without going through the `!isBusy()`-gated post-
   /// onMouseDown cache refresh. The follow-up fires on the next idle
