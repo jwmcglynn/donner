@@ -1166,9 +1166,13 @@ TEST(AsyncRendererTest, BusyWithIdleWakeWakesOnceWhenTheGateOpens) {
   EXPECT_TRUE(asyncRenderer.isBusyWithIdleWake());
   EXPECT_EQ(wakeCount, 1);
   asyncRenderer.setReplayDocumentAccessBlockedForTesting(false);
-  ASSERT_TRUE(asyncRenderer.waitUntilNoRenderInFlightForTesting(std::chrono::steady_clock::now() +
-                                                                std::chrono::seconds(5)));
-  EXPECT_GE(wakeCount, 2);
+  // The worker stages the result, then calls the wake callback after releasing its lock, so the
+  // render can leave flight before its wake runs. Wait for the wake itself; the bound only guards
+  // against a hang.
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+  ASSERT_TRUE(asyncRenderer.waitUntilNoRenderInFlightForTesting(deadline));
+  EXPECT_TRUE(WaitUntil([&] { return wakeCount.load() >= 2; }, deadline))
+      << "The foreground render must wake the caller when it completes; wakes=" << wakeCount;
   EXPECT_TRUE(asyncRenderer.pollResult().has_value());
 }
 
