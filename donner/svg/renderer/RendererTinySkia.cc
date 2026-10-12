@@ -1078,25 +1078,6 @@ private:
   std::ptrdiff_t index_ = -1;
 };
 
-#ifndef DONNER_FILTERS_ENABLED
-// When filters are disabled, FilterGraphExecutor.h is not included so PremultiplyRgba is not
-// available. Provide a local copy for drawImage().
-std::vector<std::uint8_t> PremultiplyRgba(std::span<const std::uint8_t> rgbaPixels) {
-  std::vector<std::uint8_t> result(rgbaPixels.begin(), rgbaPixels.end());
-  for (std::size_t i = 0; i + 3 < result.size(); i += 4) {
-    const unsigned alpha = result[i + 3];
-    result[i + 0] =
-        static_cast<std::uint8_t>((static_cast<unsigned>(result[i + 0]) * alpha + 127u) / 255u);
-    result[i + 1] =
-        static_cast<std::uint8_t>((static_cast<unsigned>(result[i + 1]) * alpha + 127u) / 255u);
-    result[i + 2] =
-        static_cast<std::uint8_t>((static_cast<unsigned>(result[i + 2]) * alpha + 127u) / 255u);
-  }
-
-  return result;
-}
-#endif  // !DONNER_FILTERS_ENABLED
-
 #ifdef DONNER_FILTERS_ENABLED
 // Blur implementation moved to tiny_skia::filter::gaussianBlur (GaussianBlur.h).
 
