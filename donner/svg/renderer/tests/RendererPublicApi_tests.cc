@@ -2876,7 +2876,7 @@ TEST(RendererPublicApiTest, RotatedMaskRegionIntersectsOpaqueOverlapsOnce) {
 
 TEST(RendererPublicApiTest, RotatedMaskRegionIntersectsIsolatedGroupOnce) {
   const auto flat = RenderRotatedMaskContent(
-      R"svg(<rect x="-64" y="-64" width="128" height="128" fill="white" opacity="0.5"/>)svg");
+      R"svg(<rect x="-64" y="-64" width="128" height="128" fill="white" fill-opacity="0.5"/>)svg");
   const auto isolated = RenderRotatedMaskContent(R"svg(
       <g opacity="0.5"><rect x="-64" y="-64" width="128" height="128" fill="white"/></g>
   )svg");
