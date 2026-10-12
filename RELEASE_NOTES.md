@@ -129,8 +129,8 @@ See the [Project Roadmap](docs/ProjectRoadmap.md) and
 - The Donner SVG Editor as both a native desktop application and a WebAssembly edition.
 - `donner-svg`, a CLI tool for rendering and previewing SVG files.
 - An embeddable C++ API for parsing, inspecting, modifying, and rendering SVGs.
-- Prebuilt `donner-svg_linux_x86_64` and `donner-svg_darwin_arm64` binaries, to be attached by
-  release automation.
+- Prebuilt `donner-svg_linux_x86_64` and `donner-svg_darwin_arm64` binaries, each with a
+  `.NOTICE.txt` listing the third-party licenses it includes, to be attached by release automation.
 
 ## v0.5.0
 

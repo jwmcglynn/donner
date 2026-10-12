@@ -2379,6 +2379,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     /// mirrors `RendererTinySkia::SurfaceFrame::maskBoundsTransform`.
     Transform2d maskBoundsTransform;
     MaskType maskType = MaskType::Luminance;
+    ColorInterpolation maskColorInterpolation = ColorInterpolation::SRGB;
   };
   static_assert(!std::is_copy_constructible_v<MaskStackFrame>,
                 "A copyable mask stack frame would let vector growth copy its texture handles.");
@@ -6371,6 +6372,11 @@ void RendererGeode::popFilterLayer() {
 }
 
 void RendererGeode::pushMask(const std::optional<Box2d>& maskBounds, MaskType maskType) {
+  pushMask(maskBounds, maskType, ColorInterpolation::SRGB);
+}
+
+void RendererGeode::pushMask(const std::optional<Box2d>& maskBounds, MaskType maskType,
+                             ColorInterpolation colorInterpolation) {
   impl_->flushPendingBatch();  // Flush any pending `<use>` batch.
   if (!impl_->device || !impl_->pipeline || !impl_->gradientPipeline || !impl_->imagePipeline ||
       !impl_->encoder || impl_->pixelWidth <= 0 || impl_->pixelHeight <= 0) {
@@ -6401,6 +6407,7 @@ void RendererGeode::pushMask(const std::optional<Box2d>& maskBounds, MaskType ma
   frame.maskBounds = maskBounds;
   frame.maskBoundsTransform = impl_->deviceFromLocalTransform;
   frame.maskType = maskType;
+  frame.maskColorInterpolation = colorInterpolation;
 
   // Flush the outer encoder's pending draws so they land before we
   // redirect subsequent commands into the mask capture.
@@ -6503,7 +6510,7 @@ void RendererGeode::popMask() {
 
   // Composite content through the selected luminance or alpha mask onto the outer target.
   impl_->encoder->blitFullTargetMasked(frame.contentTexture, frame.maskTexture, frame.maskType,
-                                       pixelMaskBounds);
+                                       pixelMaskBounds, frame.maskColorInterpolation);
 
   // Defer release to endFrame - `blitFullTargetMasked` recorded
   // samples from both `contentTexture` and `maskTexture` into the

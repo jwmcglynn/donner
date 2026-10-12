@@ -579,6 +579,54 @@ TEST_F(DocumentSyncControllerTest, SourceBackedDeleteWritebackMirrorsFlushDeltaW
   EXPECT_FALSE(app_.document().document().querySelector("#r1").has_value());
 }
 
+TEST_F(DocumentSyncControllerTest, MirrorsDeltasFlushedBeforeALaterNoOpFlush) {
+  SelectTool tool;
+  controller_.handleTextEdits(app_, textEditor_, /*deltaSeconds=*/0.0f);
+  ASSERT_FALSE(textEditor_.isTextChanged());
+
+  std::optional<svg::SVGElement> rect = app_.document().document().querySelector("#r1");
+  ASSERT_TRUE(rect.has_value());
+  // A tool flushes its own edit (the text tool does this for wrap measurement), then the frame's
+  // ordinary flush runs with nothing queued before the source pane mirrors anything.
+  app_.applyMutation(EditorCommand::SetAttributeCommand(*rect, "fill", "blue"));
+  ASSERT_TRUE(app_.flushFrame());
+  ASSERT_FALSE(app_.document().lastFlushResult().sourceDeltas.empty());
+  svg::SVGRectElement inserted = svg::SVGRectElement::Create(app_.document().document());
+  inserted.setAttribute("id", "inserted");
+  app_.applyMutation(
+      EditorCommand::InsertElementCommand(app_.document().document().svgElement(), inserted));
+  ASSERT_TRUE(app_.flushFrame());
+  ASSERT_FALSE(app_.flushFrame());
+
+  controller_.applyPendingWritebacks(app_, tool, textEditor_);
+
+  EXPECT_EQ(textEditor_.getText(), app_.document().document().source());
+  EXPECT_NE(textEditor_.getText().find("fill=\"blue\""), std::string::npos);
+  EXPECT_NE(textEditor_.getText().find("id=\"inserted\""), std::string::npos);
+  EXPECT_FALSE(textEditor_.isTextChanged());
+}
+
+TEST_F(DocumentSyncControllerTest, MirrorsWholeSourceAfterTooManyUnmirroredDeltas) {
+  SelectTool tool;
+  controller_.handleTextEdits(app_, textEditor_, /*deltaSeconds=*/0.0f);
+  ASSERT_FALSE(textEditor_.isTextChanged());
+
+  std::optional<svg::SVGElement> rect = app_.document().document().querySelector("#r1");
+  ASSERT_TRUE(rect.has_value());
+  // A host without a source pane never takes the deltas; past the cap they are dropped.
+  for (std::size_t i = 0; i <= AsyncSVGDocument::kMaxUnmirroredSourceDeltas; ++i) {
+    app_.applyMutation(EditorCommand::SetAttributeCommand(*rect, "x", std::to_string(i % 7)));
+    ASSERT_TRUE(app_.flushFrame());
+  }
+  ASSERT_TRUE(app_.document().hasUnmirroredSourceDeltas());
+
+  controller_.applyPendingWritebacks(app_, tool, textEditor_);
+
+  EXPECT_FALSE(app_.document().hasUnmirroredSourceDeltas());
+  EXPECT_EQ(textEditor_.getText(), app_.document().document().source());
+  EXPECT_FALSE(textEditor_.isTextChanged());
+}
+
 TEST_F(DocumentSyncControllerTest, PathOperationMirrorsInsertAndDeletesWithoutTextEcho) {
   constexpr std::string_view kTwoOverlappingRects =
       R"(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">

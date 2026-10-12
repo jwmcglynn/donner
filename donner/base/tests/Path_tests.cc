@@ -3590,7 +3590,8 @@ TEST(Path, StrokeToFillCurveFlatteningSharesAggregateGeometryBudget) {
   }
 
   const StrokeStyle style{.width = 10.0, .cap = LineCap::Round, .join = LineJoin::Round};
-  EXPECT_TRUE(builder.build().strokeToFill(style, 0.0).empty());
+  EXPECT_THAT(builder.build().strokeToFill(style, kFlattenTolerance).commands(),
+              testing::IsEmpty());
 }
 
 TEST(Path, StrokeToFillFailsClosedWhenPieceOrientationOverflows) {
@@ -3645,6 +3646,213 @@ TEST(PathBuilder, ArcToDegenerateTinyGeometryFallsBackToLine) {
                                                     PathCommandVerbIs(Path::Verb::LineTo)));
   ASSERT_EQ(path.points().size(), 2u);
   ExpectNear(path.points()[1], Vector2d(2e-7, 0), 1e-20);
+}
+
+TEST(PathBuilder, PointBudgetsAcceptWholeCommandsAndLatchRejectionUntilBuild) {
+  const Path source = PathBuilder()
+                          .moveTo({0, 0})
+                          .lineTo({1, 0})
+                          .quadTo({2, 1}, {3, 0})
+                          .curveTo({4, 1}, {5, 1}, {6, 0})
+                          .closePath()
+                          .build();
+  for (std::size_t allowance = 0; allowance < source.points().size(); ++allowance) {
+    SCOPED_TRACE(allowance);
+    PathBuilder builder(allowance);
+    builder.addPath(source);
+    EXPECT_THAT(builder.exceededMaximumPoints(), testing::IsTrue());
+    const Vector2d lastAcceptedPoint = builder.currentPoint();
+    builder.moveTo({20, 20})
+        .lineTo({21, 21})
+        .quadTo({22, 22}, {23, 23})
+        .curveTo({24, 24}, {25, 25}, {26, 26})
+        .closePath();
+    EXPECT_THAT(builder.currentPoint(), testing::Eq(lastAcceptedPoint));
+    const Path prefix = builder.build();
+    EXPECT_THAT(prefix.points().size(), testing::Le(allowance));
+    EXPECT_THAT(builder.exceededMaximumPoints(), testing::IsFalse());
+    EXPECT_THAT(builder.empty(), testing::IsTrue());
+    if (allowance > 0) {
+      builder.moveTo({10, 10});
+      EXPECT_THAT(builder.build().points(), testing::ElementsAre(Vector2d(10, 10)));
+    }
+  }
+  PathBuilder exact(source.points().size());
+  exact.addPath(source);
+  EXPECT_THAT(exact.exceededMaximumPoints(), testing::IsFalse());
+  EXPECT_THAT(exact.build(), testing::Eq(source));
+}
+
+TEST(PathBuilder, ArcPointAllowanceStopsBetweenWholeCubicSegments) {
+  const Path source =
+      PathBuilder().moveTo({10, 0}).arcTo({10, 10}, 0.0, true, true, {0, -10}).build();
+  ASSERT_THAT(source.points().size(), testing::Gt(4u));
+  for (std::size_t allowance = 1; allowance < source.points().size(); ++allowance) {
+    SCOPED_TRACE(allowance);
+    PathBuilder builder(allowance);
+    builder.moveTo({10, 0}).arcTo({10, 10}, 0.0, true, true, {0, -10});
+    EXPECT_THAT(builder.exceededMaximumPoints(), testing::IsTrue());
+    const Path prefix = builder.build();
+    EXPECT_THAT(prefix.points().size(), testing::Le(allowance));
+    EXPECT_THAT((prefix.points().size() - 1) % 3, testing::Eq(0u));
+    EXPECT_THAT(prefix.points(),
+                testing::ElementsAreArray(source.points().begin(),
+                                          source.points().begin() + prefix.points().size()));
+  }
+}
+
+TEST(Path, UnrepresentableSegmentLengthsInvalidateTheWholeMeasurement) {
+  const double infinity = std::numeric_limits<double>::infinity();
+  const double nan = std::numeric_limits<double>::quiet_NaN();
+  const Path sources[] = {
+      PathBuilder().moveTo({0, 0}).lineTo({3, 4}).lineTo({infinity, 0}).build(),
+      PathBuilder().moveTo({0, 0}).lineTo({3, 4}).lineTo({nan, 0}).build(),
+      PathBuilder().moveTo({-1e308, 0}).lineTo({1e308, 0}).build(),
+      PathBuilder().moveTo({0, 0}).curveTo({1e200, 1e200}, {-1e200, 1e200}, {1, 0}).build(),
+  };
+  for (const Path& source : sources) {
+    SCOPED_TRACE(source);
+    const Path::MeasuredPath measured = source.measure();
+    EXPECT_THAT(measured.valid(), testing::IsFalse());
+    EXPECT_THAT(measured.pathLength(), testing::Eq(infinity));
+    EXPECT_THAT(measured.segmentCount(), testing::Eq(0u));
+    EXPECT_THAT(measured.retainedBytes(), testing::Optional(sizeof(Path::MeasuredPath)));
+    EXPECT_THAT(
+        measured.pointAtArcLength(0.0),
+        testing::AllOf(
+            testing::Field("valid", &Path::PointOnPath::valid, testing::IsFalse()),
+            testing::Field("point", &Path::PointOnPath::point, testing::Eq(Vector2d(0, 0)))));
+  }
+}
+
+TEST(Path, MeasuredFinitePolylineAndItsReverseAgreeAtInteriorDistances) {
+  const Path path =
+      PathBuilder().moveTo({0, 0}).lineTo({3, 4}).lineTo({6, 0}).lineTo({9, 4}).build();
+  const Path::MeasuredPath forward = path.measure();
+  const Path::MeasuredPath reverse = path.reversed().measure();
+  ASSERT_THAT(forward.valid(), testing::IsTrue());
+  ASSERT_THAT(reverse.valid(), testing::IsTrue());
+  EXPECT_THAT(forward.pathLength(), testing::DoubleEq(15.0));
+  EXPECT_THAT(reverse.pathLength(), testing::DoubleEq(15.0));
+  const Vector2d midpoints[] = {{1.5, 2}, {4.5, 2}, {7.5, 2}};
+  const Vector2d tangents[] = {{3, 4}, {3, -4}, {3, 4}};
+  for (std::size_t index = 0; index < 3; ++index) {
+    SCOPED_TRACE(index);
+    const double distance = 2.5 + 5.0 * double(index);
+    const Path::PointOnPath a = forward.pointAtArcLength(distance);
+    const Path::PointOnPath b = reverse.pointAtArcLength(15.0 - distance);
+    EXPECT_THAT(
+        a, testing::AllOf(
+               testing::Field("valid", &Path::PointOnPath::valid, testing::IsTrue()),
+               testing::Field("point", &Path::PointOnPath::point,
+                              Vector2dNear(midpoints[index], 1e-12)),
+               testing::Field("tangent", &Path::PointOnPath::tangent,
+                              Vector2dNear(tangents[index], 1e-12)),
+               testing::Field(
+                   "angle", &Path::PointOnPath::angle,
+                   testing::DoubleNear(std::atan2(tangents[index].y, tangents[index].x), 1e-12))));
+    EXPECT_THAT(
+        b, testing::AllOf(
+               testing::Field("valid", &Path::PointOnPath::valid, testing::IsTrue()),
+               testing::Field("point", &Path::PointOnPath::point,
+                              Vector2dNear(midpoints[index], 1e-12)),
+               testing::Field("tangent", &Path::PointOnPath::tangent,
+                              Vector2dNear(-tangents[index], 1e-12)),
+               testing::Field("angle", &Path::PointOnPath::angle,
+                              testing::DoubleNear(
+                                  std::atan2(-tangents[index].y, -tangents[index].x), 1e-12))));
+  }
+  for (double distance :
+       {-1.0, std::numeric_limits<double>::infinity(), std::numeric_limits<double>::quiet_NaN()}) {
+    SCOPED_TRACE(distance);
+    EXPECT_THAT(forward.pointAtArcLength(distance).valid, testing::IsFalse());
+  }
+}
+
+TEST(PathBuilder, NonFiniteArcParametersPreserveAFiniteDestinationAsAStraightLine) {
+  struct ArcCase {
+    Vector2d radius;
+    double rotation;
+  };
+  const double infinity = std::numeric_limits<double>::infinity();
+  const double nan = std::numeric_limits<double>::quiet_NaN();
+  const ArcCase cases[] = {{{infinity, 10}, 0}, {{10, infinity}, 0},  {{nan, 10}, 0},
+                           {{10, nan}, 0},      {{10, 10}, infinity}, {{10, 10}, nan}};
+  for (const ArcCase& item : cases) {
+    SCOPED_TRACE(item.radius);
+    SCOPED_TRACE(item.rotation);
+    const Path path = PathBuilder()
+                          .moveTo({0, 0})
+                          .arcTo(item.radius, item.rotation, false, false, {3, 4})
+                          .build();
+    EXPECT_THAT(path.commands(), testing::ElementsAre(PathCommandVerbIs(Path::Verb::MoveTo),
+                                                      PathCommandVerbIs(Path::Verb::LineTo)));
+    EXPECT_THAT(path.points(), testing::ElementsAre(Vector2d(0, 0), Vector2d(3, 4)));
+    EXPECT_THAT(path.pathLength(), testing::DoubleEq(5.0));
+  }
+}
+
+TEST(PathBuilder, NonFiniteArcDestinationsEmitNoAdditionalGeometry) {
+  const double infinity = std::numeric_limits<double>::infinity();
+  const double nan = std::numeric_limits<double>::quiet_NaN();
+  for (const Vector2d end :
+       {Vector2d(infinity, 4), Vector2d(3, infinity), Vector2d(nan, 4), Vector2d(3, nan)}) {
+    SCOPED_TRACE(end);
+    const Path path = PathBuilder().moveTo({1, 2}).arcTo({10, 10}, 0.0, false, true, end).build();
+    EXPECT_THAT(path.commands(), testing::ElementsAre(PathCommandVerbIs(Path::Verb::MoveTo)));
+    EXPECT_THAT(path.points(), testing::ElementsAre(Vector2d(1, 2)));
+  }
+}
+
+TEST(PathBuilder, FiniteArcArithmeticOverflowFallsBackWithoutNonFiniteControls) {
+  const Vector2d radii[] = {{1e150, 1e150}, {1e100, 1e100}, {1e-5, 1e-5}};
+  for (const Vector2d radius : radii) {
+    SCOPED_TRACE(radius);
+    const Path path =
+        PathBuilder().moveTo({0, 0}).arcTo(radius, 0.0, false, false, {1e100, 1e100}).build();
+    EXPECT_THAT(path.commands(), testing::ElementsAre(PathCommandVerbIs(Path::Verb::MoveTo),
+                                                      PathCommandVerbIs(Path::Verb::LineTo)));
+    EXPECT_THAT(path.points(), testing::ElementsAre(Vector2d(0, 0), Vector2d(1e100, 1e100)));
+  }
+}
+
+TEST(Path, NonFiniteFlattenAndStrokeTolerancesCannotProduceOutlines) {
+  const Path curve = PathBuilder().moveTo({0, 0}).quadTo({4, 8}, {8, 0}).build();
+  for (double tolerance :
+       {std::numeric_limits<double>::infinity(), std::numeric_limits<double>::quiet_NaN(), -1.0}) {
+    SCOPED_TRACE(tolerance);
+    EXPECT_THAT(curve.flatten(tolerance).commands(), testing::IsEmpty());
+    EXPECT_THAT(curve.strokeToFill({.width = 2}, tolerance).commands(), testing::IsEmpty());
+  }
+}
+
+TEST(PathBuilder, NonFiniteArcStartsDoNotGenerateIntermediateControlPoints) {
+  const double infinity = std::numeric_limits<double>::infinity();
+  const double nan = std::numeric_limits<double>::quiet_NaN();
+  for (const Vector2d start :
+       {Vector2d(infinity, 0), Vector2d(0, infinity), Vector2d(nan, 0), Vector2d(0, nan)}) {
+    SCOPED_TRACE(start);
+    PathBuilder builder;
+    builder.moveTo(start).arcTo({10, 10}, 0.0, false, false, {3, 4});
+    EXPECT_THAT(builder.currentPoint(), testing::Eq(Vector2d(3, 4)));
+    const Path path = builder.build();
+    EXPECT_THAT(path.commands(), testing::ElementsAre(PathCommandVerbIs(Path::Verb::MoveTo),
+                                                      PathCommandVerbIs(Path::Verb::LineTo)));
+    EXPECT_THAT(path.points().size(), testing::Eq(2u));
+    EXPECT_THAT(path.points().back(), testing::Eq(Vector2d(3, 4)));
+  }
+}
+
+TEST(Path, StrokeToFillQuadraticFlatteningSharesAggregateGeometryBudget) {
+  PathBuilder builder;
+  builder.moveTo({0.0, 0.0});
+  for (int i = 0; i < 2048; ++i) {
+    const double x = static_cast<double>(i);
+    builder.quadTo({x + 0.5, 1.0e12}, {x + 1.0, 0.0});
+  }
+  const StrokeStyle style{.width = 10.0, .cap = LineCap::Round, .join = LineJoin::Round};
+  EXPECT_THAT(builder.build().strokeToFill(style, kFlattenTolerance).commands(),
+              testing::IsEmpty());
 }
 
 }  // namespace donner
