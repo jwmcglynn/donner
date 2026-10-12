@@ -80,8 +80,8 @@ SCRIPT_SAFE_EVENT_FIELDS = {"github.event.pull_request.base.sha",
                             "github.event.pull_request.head.sha",
                             "github.event.pull_request.number"}
 
-UNTRUSTED_CONTEXT = re.compile(r"github\.event(?:\.[A-Za-z0-9_.*-]+)?|github\.head_ref|"
-                              r"\binputs(?:\.[A-Za-z0-9_.*-]+)?")
+UNTRUSTED_CONTEXT = re.compile(r"github\.event\b(?:\.[A-Za-z0-9_.*-]+)?|github\.head_ref\b|"
+                              r"\binputs\b(?:\.[A-Za-z0-9_.*-]+)?")
 UPLOADED_EVENT_LOG = re.compile(r"(?i)(?:^|/)[^/]*bep[^/]*\.json$|exec(?:ution)?[._]log")
 WORKSPACE_ROOTS = {".", "./", "${{ github.workspace }}", "${{ github.workspace }}/"}
 # Private-network addresses, private DNS names and personal home directories have no place in
@@ -273,8 +273,8 @@ def _secret_reads(text):
         expression = _canonical_context(match.group(1))
         names.update(name.upper() for name in
                      re.findall(r"\bsecrets\.([A-Za-z0-9_]+)", expression, re.IGNORECASE))
-        if re.search(r"\bsecrets\s*\[", expression, re.IGNORECASE):
-            names.add("<dynamic secret index>")
+        if re.search(r"\bsecrets(?:\s*\[|\.\*)", expression, re.IGNORECASE):
+            names.add("<unreviewable secret reference>")
     return names
 
 
@@ -1335,7 +1335,8 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
                 self.assertEqual([], _secret_use_violations(_workflows({**files, badges: changed})))
         main = ".github/workflows/main.yml"
         step = "      - name: Upload CI diagnostics\n"
-        for reference in ("secrets['UNREVIEWED_TOKEN']", "secrets[inputs.token_name]"):
+        for reference in ("secrets['UNREVIEWED_TOKEN']", "secrets[inputs.token_name]",
+                          "join(secrets.*, 'fixture')"):
             with self.subTest(reference=reference):
                 changed = files[main].replace(
                     step, step + "        env:\n          TOKEN: ${{ " + reference + " }}\n", 1)
@@ -1368,7 +1369,7 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
                     script = "      - " + key + ": echo ${{ " + reference + " }}\n"
                     self.assertTrue(_untrusted_script_contexts(script))
         for reference in ("github.event['pull_request']['head']['sha']",
-                          "github['event'].pull_request.number"):
+                          "github['event'].pull_request.number", "github.event_name"):
             with self.subTest(safe=reference):
                 self.assertEqual([], _untrusted_script_contexts(
                     "      - run: echo ${{ " + reference + " }}\n"))
