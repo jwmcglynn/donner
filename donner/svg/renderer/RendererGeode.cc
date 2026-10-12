@@ -239,14 +239,30 @@ const Box2d kUnitPathBounds(Vector2d::Zero(), Vector2d(1, 1));
 /// Source UV rect that samples an entire texture.
 const Box2d kWholeTextureUv(Vector2d::Zero(), Vector2d(1, 1));
 
+/// Accept trigonometric roundoff only when it cannot move a mask edge appreciably in device pixels.
+/// The coefficient bound alone is insufficient for large local regions.
+bool IsMaskEdgeAxisAligned(double offAxis, double alongAxis, double localExtent) {
+  constexpr double kCoefficientRoundoff = 4.0 * std::numeric_limits<double>::epsilon();
+  constexpr double kMaximumDeviceDrift = 1e-9;
+  return offAxis == 0.0 || (std::abs(offAxis) <= kCoefficientRoundoff * std::abs(alongAxis) &&
+                            std::abs(offAxis * localExtent) <= kMaximumDeviceDrift);
+}
+
 /// Whether a mask region needs exact GPU clipping beyond its transformed bounding box.
 /// @param maskBounds Optional mask region in local coordinates.
 /// @param deviceFromLocal Transform from local coordinates to device pixels.
 bool RequiresMaskRegionClip(const std::optional<Box2d>& maskBounds,
                             const Transform2d& deviceFromLocal) {
-  const bool axisAligned = (deviceFromLocal.data[1] == 0.0 && deviceFromLocal.data[2] == 0.0) ||
-                           (deviceFromLocal.data[0] == 0.0 && deviceFromLocal.data[3] == 0.0);
-  return maskBounds.has_value() && !axisAligned;
+  if (!maskBounds) {
+    return false;
+  }
+
+  const auto& data = deviceFromLocal.data;
+  const bool axisAligned = (IsMaskEdgeAxisAligned(data[1], data[0], maskBounds->width()) &&
+                            IsMaskEdgeAxisAligned(data[2], data[3], maskBounds->height())) ||
+                           (IsMaskEdgeAxisAligned(data[0], data[1], maskBounds->width()) &&
+                            IsMaskEdgeAxisAligned(data[3], data[2], maskBounds->height()));
+  return !axisAligned;
 }
 
 std::optional<Vector2i> CheckedViewportPixels(const RenderViewport& viewport) {
