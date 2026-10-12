@@ -866,6 +866,7 @@ TEST_F(TinySkiaBitmapAdmissionTest, ExhaustedBudgetRejectsBeforeBitmapDecode) {
 
 TEST_F(TinySkiaBitmapAdmissionTest, FailedBoundedDecodeStopsBeforeLaterGlyphs) {
   EXPECT_CALL(*backend_, bitmapGlyph(_, _, _)).Times(0);
+  EXPECT_CALL(*backend_, bitmapGlyphMetrics(font_, 1, 1.0f)).Times(1);
   EXPECT_CALL(*backend_, bitmapGlyphMetrics(font_, 2, _)).Times(0);
   EXPECT_CALL(*backend_, bitmapGlyph(font_, 1, 1.0f, _, 4u))
       .WillOnce(testing::Return(std::nullopt));
