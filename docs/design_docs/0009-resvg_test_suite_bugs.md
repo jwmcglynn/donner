@@ -31,7 +31,7 @@ the test name there to find it inline.
 > direction) were superseded upstream and retired — the surviving marker
 > override is `orient=auto-on-M-C-C-4`.
 
-## Active overrides (36)
+## Active overrides (37)
 
 ### resvg golden is wrong per spec
 
@@ -162,7 +162,7 @@ git history if a real override need surfaces):
 
 The corresponding `text/font-size` tests pass against the upstream golden — only
 `named-value{,-without-a-parent}` need an override. After this cleanup the
-`golden/` dir holds exactly 38 `resvg-*.png`: 36 active + the 2 parked drop-shadow
+`golden/` dir holds exactly 39 `resvg-*.png`: 37 active + the 2 parked drop-shadow
 goldens above.
 
 ## Maintenance
