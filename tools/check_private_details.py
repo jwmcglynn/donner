@@ -130,7 +130,6 @@ WORD_RE = re.compile(r"[A-Za-z0-9]+")
 # Characters that may separate the parts of one name: `bazel-x`, `bazel_x`,
 # `bazel.x` and `bazel x` all match the configured name `bazel-x`.
 NAME_SEPARATOR_RE = re.compile(r"^(?:[-_.]| +)$")
-MAX_NAME_PARTS = 4
 
 
 @dataclass(frozen=True)
@@ -186,7 +185,9 @@ class PrivateNames:
     def matches_name(self, line: str) -> bool:
         if self.exact is not None and self.exact.search(line):
             return True
-        return bool(self.names) and any(run in self.names for run in _word_runs(line))
+        return bool(self.names) and any(
+            run in self.names for run in _word_runs(line, max(map(len, self.names)))
+        )
 
     def __bool__(self) -> bool:
         return bool(self.names or self.accounts or self.exact)
@@ -213,20 +214,26 @@ def _address_kinds(line: str) -> Iterable[str]:
         yield KIND_PRIVATE_ADDRESS
 
 
-def _word_runs(line: str) -> Iterable[str]:
-    """Yields the compact form of every run of up to MAX_NAME_PARTS adjacent words.
+def _word_runs(line: str, max_length: int) -> Iterable[str]:
+    """Yields compact adjacent words up to the longest configured name length.
 
     Words are adjacent when only a name separator lies between them, so a run
-    never spans other punctuation such as `/` or `:`.
+    never spans other punctuation such as `/` or `:`. Each word contributes at
+    least one character, bounding the work without limiting the number of parts.
     """
     words = list(WORD_RE.finditer(line))
     for start, first in enumerate(words):
         compact = first.group(0).lower()
+        if len(compact) > max_length:
+            continue
         yield compact
-        for previous, word in zip(words[start:start + MAX_NAME_PARTS - 1], words[start + 1:start + MAX_NAME_PARTS]):
+        for index in range(start + 1, len(words)):
+            previous, word = words[index - 1], words[index]
             if not NAME_SEPARATOR_RE.match(line[previous.end():word.start()]):
                 break
             compact += word.group(0).lower()
+            if len(compact) > max_length:
+                break
             yield compact
 
 
@@ -273,9 +280,14 @@ def scan_files(
     findings: list[Finding] = []
     for relative in relative_paths:
         path = root / relative
-        if not path.is_file() or path.is_symlink():
+        if path.is_symlink():
+            # The link target is the tracked payload. Never follow it into an
+            # untracked or external file, including when the target is missing.
+            data = os.fsencode(os.readlink(path))
+        elif path.is_file():
+            data = path.read_bytes()
+        else:
             continue
-        data = path.read_bytes()
         if _is_binary(data):
             continue
         findings.extend(scan_text(relative, data.decode("utf-8", errors="replace"), private_names))

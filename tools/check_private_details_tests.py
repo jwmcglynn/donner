@@ -149,6 +149,18 @@ class PrivateNameTests(unittest.TestCase):
             with self.subTest(text=text):
                 self.assertEqual(kinds(text, FAKE_NAMES), [])
 
+    def test_long_names_match_every_allowed_separator_without_a_part_limit(self):
+        parts = ["example", "alpha", "beta", "gamma", "delta", "epsilon", "service"]
+        names = checker.PrivateNames.parse("-".join(parts))
+        spellings = [separator.join(parts) for separator in ["-", "_", ".", " ", ""]]
+        spellings.append("example-alpha_beta.gamma delta-epsilon_service")
+        for text in spellings:
+            with self.subTest(text=text):
+                self.assertEqual(kinds("run on " + text.upper(), names), [checker.KIND_PRIVATE_NAME])
+        for text in ["/".join(parts), ":".join(parts), "".join(parts) + "x"]:
+            with self.subTest(text=text):
+                self.assertEqual(kinds(text, names), [])
+
     def test_exact_entries_match_only_as_written(self):
         names = checker.PrivateNames.parse("exact:box9")
         for text in ["on box9 today", "BOX9.example", "a-box9-b"]:
@@ -216,6 +228,24 @@ class ScanFilesTests(unittest.TestCase):
     def test_skips_binary_and_missing_files(self):
         self.write("image.png", b"\x89PNG\0" + (MAC_HOME + "alice").encode())
         self.assertEqual(checker.scan_files(self.root, ["image.png", "missing.txt"]), [])
+
+    def test_scans_symlink_target_without_following_it(self):
+        self.write("clean-target.txt", "nothing private here\n")
+        (self.root / "broken-link").symlink_to(MAC_HOME + "alice/notes")
+        (self.root / "name-link").symlink_to("example-alpha-beta-gamma-delta")
+        (self.root / "clean-link").symlink_to("clean-target.txt")
+        names = checker.PrivateNames.parse("example-alpha-beta-gamma-delta")
+        findings = checker.scan_files(self.root, ["broken-link", "name-link", "clean-link"], names)
+        self.assertEqual([(f.path, f.line, f.kind) for f in findings], [
+            ("broken-link", 1, checker.KIND_HOME_PATH),
+            ("name-link", 1, checker.KIND_PRIVATE_NAME),
+        ])
+        self.assertNotIn("alice", str(findings[0]))
+
+    def test_symlink_does_not_scan_external_target_contents(self):
+        self.write("dirty-target.txt", MAC_HOME + "alice/notes")
+        (self.root / "clean-link").symlink_to("dirty-target.txt")
+        self.assertEqual(checker.scan_files(self.root, ["clean-link"]), [])
 
     def test_main_exit_status(self):
         self.write("clean.txt", "nothing private here\n")
