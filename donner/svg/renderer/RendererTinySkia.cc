@@ -2996,9 +2996,15 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
           // deviceFromLocalTransform_.
           const double imgScaleX = targetW / static_cast<double>(bitmap->width);
           const double imgScaleY = targetH / static_cast<double>(bitmap->height);
-          const Transform2d imageFromLocal = Transform2d::Scale(imgScaleX, imgScaleY) *
-                                             Transform2d::Translate(Vector2d(targetX, targetY)) *
-                                             deviceFromLocalTransform_;
+          Transform2d localFromBitmap = Transform2d::Scale(imgScaleX, imgScaleY) *
+                                        Transform2d::Translate(Vector2d(targetX, targetY));
+          if (glyph.rotateDegrees != 0.0) {
+            localFromBitmap =
+                localFromBitmap * Transform2d::Translate(-glyph.xPosition, -glyph.yPosition) *
+                Transform2d::Rotate(glyph.rotateDegrees * MathConstants<double>::kPi / 180.0) *
+                Transform2d::Translate(glyph.xPosition, glyph.yPosition);
+          }
+          const Transform2d deviceFromBitmap = localFromBitmap * deviceFromLocalTransform_;
 
           tiny_skia::PixmapPaint paint =
               makePixmapPaint(currentPixmap(), tiny_skia::FilterQuality::Bilinear);
@@ -3008,7 +3014,7 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
           const tiny_skia::Mask* mask = currentClipMask_.has_value() ? &*currentClipMask_ : nullptr;
           auto pixmapView = currentPixmapView();
           tiny_skia::Painter::drawPixmap(pixmapView, 0, 0, maybePixmap->view(), paint,
-                                         toTinyTransform(imageFromLocal), mask);
+                                         toTinyTransform(deviceFromBitmap), mask);
           continue;
         }
       }
