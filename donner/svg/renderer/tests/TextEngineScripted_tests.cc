@@ -317,7 +317,8 @@ TEST(TextEngineScriptedTest, CachedGeometryBuildsCharacterGlyphAndBoundsData) {
   registry.emplace<components::ComputedStyleComponent>(root, style);
 
   const EntityHandle rootHandle(registry, root);
-  EXPECT_EQ(engine.getNumberOfChars(rootHandle), 2);
+  // A, combining acute, and B each consume one DOM UTF-16 unit.
+  EXPECT_EQ(engine.getNumberOfChars(rootHandle), 3);
 
   const std::vector<Path> glyphPaths = engine.computedGlyphPaths(rootHandle);
   EXPECT_THAT(glyphPaths, SizeIs(3));
@@ -325,7 +326,7 @@ TEST(TextEngineScriptedTest, CachedGeometryBuildsCharacterGlyphAndBoundsData) {
   EXPECT_THAT(engine.computedObjectBoundingBox(rootHandle).height(), Gt(0.0));
   EXPECT_THAT(engine.getComputedTextLength(rootHandle), Gt(0.0));
   EXPECT_THAT(engine.getSubStringLength(rootHandle, 0, 1), Gt(0.0));
-  EXPECT_EQ(engine.getStartPositionOfChar(rootHandle, 2), Vector2d());
+  EXPECT_EQ(engine.getStartPositionOfChar(rootHandle, 3), Vector2d());
   EXPECT_NE(engine.getRotationOfChar(rootHandle, 0), 0.0);
   EXPECT_THAT(engine.getExtentOfChar(rootHandle, 0).width(), Gt(0.0));
   EXPECT_EQ(engine.getCharNumAtPosition(rootHandle, engine.getStartPositionOfChar(rootHandle, 0)),
