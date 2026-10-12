@@ -191,6 +191,23 @@ class RecordValidationTest(unittest.TestCase):
         with self.assertRaises((KeyError, ValueError)):
             self.verify()
 
+    def test_evidence_roles_are_exactly_the_required_lanes(self):
+        # CodeQL is not a release gate: the workflow is disabled by maintainer decision.
+        self.assertEqual({"ci", "coverage", "fuzz", "sanitizers"}, set(candidate.EVIDENCE_WORKFLOWS))
+        self.assertEqual(set(candidate.EVIDENCE_WORKFLOWS), set(candidate.REQUIRED_EVIDENCE_JOBS))
+        self.record["evidence"]["security"] = {"run_id": 999, "attempt": 1, "passed_jobs": 3,
+                                               "skipped_jobs": 0, "sha256": "d" * 64}
+        with self.assertRaisesRegex(ValueError, "every qualification evidence role"):
+            self.verify()
+        del self.record["evidence"]["security"]
+        for kind in sorted(candidate.EVIDENCE_WORKFLOWS):
+            with self.subTest(kind=kind):
+                entry = self.record["evidence"].pop(kind)
+                with self.assertRaisesRegex(ValueError, "every qualification evidence role"):
+                    self.verify()
+                self.record["evidence"][kind] = entry
+        self.verify()
+
     def test_wrong_artifact_digest_or_review_bytes_rejects_candidate(self):
         self.record["artifacts"]["source"]["zip_sha256"] = "d" * 64
         with self.assertRaisesRegex(ValueError, "metadata"):

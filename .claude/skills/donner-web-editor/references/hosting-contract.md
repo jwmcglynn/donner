@@ -96,7 +96,8 @@ Review the exact candidate and deployment configuration. At minimum cover:
 - Secrets and privacy: static bytes and generated JavaScript contain no tokens, credentials,
   private paths, user data, or private infrastructure references.
 - Analysis evidence: relevant unit/integration tests, `bazel test //...`, sanitizers, fuzzing,
-  CodeQL/static analysis, and headed browser tests are current for the candidate.
+  and headed browser tests are current for the candidate. CodeQL is disabled and is not a
+  release-candidate gate.
 - CI/CD permissions: least-privilege artifact production and deployment credentials; untrusted
   pull requests cannot publish.
 - Negative exposure tests: unknown files return 404, directory listing is disabled, headers apply
