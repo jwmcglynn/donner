@@ -72,7 +72,8 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         cls.executables.write("python3", '#!/bin/sh\nexec "$FIXTURE_PYTHON" "$@"\n')
         cls.executables.write("bash", '#!/bin/sh\nexec /bin/bash "$@"\n')
         (cls.fixture_bin / "shasum_fixture.py").write_text(
-            "import hashlib, os, sys\n"
+            "import hashlib, os, sys, time\n"
+            "time.sleep(float(os.environ['FIXTURE_HASH_STARTUP_SECONDS']))\n"
             "with open(os.path.join(os.environ['FIXTURE_ROOT'], 'hash-starts'), 'a') as starts:\n"
             "    starts.write(str(len(sys.argv) - 3) + '\\n')\n"
             "assert sys.argv[1:3] == ['-a', '256']\n"
@@ -1139,7 +1140,7 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
             "donner/editor/wasm/catalog_package_integrity_test.py"))
         return package
 
-    def _stage_catalog_candidate(self, root, context=None):
+    def _stage_catalog_candidate(self, root, hash_startup_delay=0, context=None):
         body = self._step_body(self.editor_wasm, "Stage immutable Geode deployment candidate")
         script = "#!/bin/bash\n" + textwrap.dedent(body.split("        run: |\n", 1)[1])
         # The real staging job runs on macOS, where shasum is available. The
@@ -1151,6 +1152,7 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
             "PACKAGE_TARGET": "//fixture:package", "GITHUB_OUTPUT": str(root / "output"),
             "PATH": os.environ["PATH"],
             "FIXTURE_PYTHON": sys.executable, "FIXTURE_ROOT": str(root),
+            "FIXTURE_HASH_STARTUP_SECONDS": str(hash_startup_delay),
         })
 
     def test_editor_wasm_candidate_preserves_deferred_catalog_assets(self):
@@ -1187,7 +1189,7 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             self._catalog_candidate_fixture(root)
-            result = self._stage_catalog_candidate(root)
+            result = self._stage_catalog_candidate(root, hash_startup_delay=0.25)
             self.assertEqual(0, result.returncode, result.stdout + result.stderr)
             candidate = root / ("donner-editor-wasm-geode-" + "a" * 40)
             expected_paths = sorted(p.relative_to(candidate).as_posix()
