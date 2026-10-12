@@ -446,6 +446,11 @@ class CheckerTest(unittest.TestCase):
     def _findings(source, path="third_party/example.bzl"):
         return fetch_findings({path: ast.parse(source)})[0]
 
+    @staticmethod
+    def _browser(source, receiver="pw", extension='"playwright"'):
+        return '%s = use_extension("@rules_playwright//playwright:extensions.bzl", %s)\n%s' % (
+            receiver, extension, source)
+
     def test_rejects_an_archive_without_a_hash(self):
         self.assertEqual(len(self._findings('http_archive(name = "a", urls = ["https://x"])')), 1)
 
@@ -626,6 +631,69 @@ class CheckerTest(unittest.TestCase):
         integrity = "sha256-" + "A" * 43 + "="
         self.assertEqual(self._findings(
             'playwright.repo(integrity_path_map = {"archive.zip": "%s"})' % integrity), [])
+
+
+    def test_playwright_extension_binding_requires_integrity_for_every_receiver(self):
+        integrity = "sha256-" + "A" * 43 + "="
+        for receiver in ("pw", "browser_extension", "playwright"):
+            with self.subTest(receiver=receiver):
+                self.assertTrue(self._findings(self._browser(
+                    receiver + '.repo(name = "browsers")', receiver)))
+                complete = receiver + '.repo(integrity_path_map = {"archive.zip": "%s"})' % integrity
+                self.assertEqual(self._findings(self._browser(complete, receiver)), [])
+        keyword = self._browser('pw.repo(name = "browsers")', extension='extension_name="playwright"')
+        self.assertTrue(self._findings(keyword))
+        constant = 'EXT = "playwright"\n' + self._browser('pw.repo(name = "browsers")', extension="EXT")
+        self.assertTrue(self._findings(constant))
+
+    def test_playwright_proxy_and_repo_indirections_are_rejected(self):
+        for source in ('alias = pw\nalias.repo(name = "browsers")',
+                       'repos = [pw]\nrepos[0].repo(name = "browsers")',
+                       'holder = struct(extension = pw)\nholder.extension.repo(name = "browsers")',
+                       'repo = pw.repo\nrepo(name = "browsers")'):
+            with self.subTest(source=source):
+                self.assertTrue(self._findings(self._browser(source)))
+
+    def test_playwright_repo_getattr_must_not_hide_integrity(self):
+        for source in ('getattr(pw, "repo")(name = "browsers")',
+                       'repo = getattr(pw, "repo")\nrepo(name = "browsers")',
+                       'FIELD = "repo"\ngetattr(pw, FIELD)(name = "browsers")',
+                       'getattr(pw, UNKNOWN)(name = "browsers")',
+                       'getter = getattr\ngetter(pw, "repo")(name = "browsers")'):
+            with self.subTest(source=source):
+                self.assertTrue(self._findings(self._browser(source)))
+        self.assertEqual(self._findings(self._browser('getattr(pw, "version")')), [])
+
+    def test_unrelated_literal_extensions_and_repo_calls_remain_allowed(self):
+        for receiver in ("ordinary", "playwright"):
+            with self.subTest(receiver=receiver):
+                source = self._browser(receiver + '.repo(name = "ordinary")', receiver,
+                                       extension='"unrelated"')
+                self.assertEqual(self._findings(source), [])
+        self.assertEqual(self._findings('ordinary.repo(name = "ordinary")'), [])
+
+    def test_nonliteral_extension_names_fail_closed(self):
+        for name in ('"play" + "wright"', 'EXTENSION_NAME', 'choose_extension()'):
+            with self.subTest(name=name):
+                self.assertTrue(self._findings(self._browser('pw.repo(name = "browsers")',
+                                                            extension=name)))
+
+    def test_rebound_extension_proxy_names_fail_closed(self):
+        for suffix in ('pw = use_extension("@example//:extensions.bzl", "ordinary")\n'
+                       'pw.repo(name = "ordinary")',
+                       'pw = other\npw.repo(name = "browsers")'):
+            with self.subTest(suffix=suffix):
+                self.assertTrue(self._findings(self._browser(suffix)))
+        repeated = 'EXT = "playwright"\nEXT = "ordinary"\n' + self._browser(
+            'pw.repo(name = "browsers")', extension="EXT")
+        self.assertTrue(self._findings(repeated))
+
+    def test_extension_factory_indirections_fail_closed(self):
+        source = 'factory = use_extension\npw = factory(' \
+                 '"@rules_playwright//playwright:extensions.bzl", "playwright")\n' \
+                 'pw.repo(name = "browsers")'
+        self.assertTrue(self._findings(source))
+
 
 
 class RepositoryPolicyTest(unittest.TestCase):
