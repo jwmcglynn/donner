@@ -775,6 +775,11 @@ TEST(SidebarPresenterTest, EmptyDocumentClearsCapturedMarkerAndTransformState) {
   EXPECT_THAT(app.undoTimeline().entryCount(), testing::Eq(0u));
 }
 
+struct InspectorFrameCapture {
+  std::string text;
+  Box2d lastItem;
+};
+
 class SidebarPresenterImGuiTest : public ::testing::Test {
 protected:
   void SetUp() override {
@@ -799,7 +804,9 @@ protected:
   static bool RenderInspectorFrame(SidebarPresenter& presenter, EditorApp* app,
                                    const char* windowName,
                                    const ImVec2 mouse = ImVec2(-1.0f, -1.0f),
-                                   bool mouseDown = false, float windowHeight = 280.0f) {
+                                   bool mouseDown = false, float windowHeight = 280.0f,
+                                   const SidebarPresenter::IconTextureProvider& provider = {},
+                                   InspectorFrameCapture* capture = nullptr) {
     ImGuiIO& io = ImGui::GetIO();
     io.DisplaySize = ImVec2(400, std::max(300.0f, windowHeight + 20.0f));
     io.AddMousePosEvent(mouse.x, mouse.y);
@@ -810,7 +817,17 @@ protected:
     ImGui::Begin(windowName, nullptr,
                  ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
                      ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoScrollbar);
-    const bool queuedMutation = presenter.renderInspector(app, ViewportState{});
+    if (capture != nullptr) {
+      ImGui::LogToBuffer(0);
+    }
+    const bool queuedMutation = presenter.renderInspector(app, ViewportState{}, provider);
+    if (capture != nullptr) {
+      capture->text = ImGui::GetCurrentContext()->LogBuffer.c_str();
+      const ImVec2 min = ImGui::GetItemRectMin();
+      const ImVec2 max = ImGui::GetItemRectMax();
+      capture->lastItem = Box2d(Vector2d(min.x, min.y), Vector2d(max.x, max.y));
+      ImGui::LogFinish();
+    }
     ImGui::End();
     ImGui::Render();
     return queuedMutation;
@@ -820,7 +837,8 @@ protected:
   static Box2d RenderLastTreeRowFrame(SidebarPresenter& presenter, EditorApp* app,
                                       TreeViewState& state, const char* windowName,
                                       ImVec2 mouse = ImVec2(-1.0f, -1.0f), bool mouseDown = false,
-                                      ImGuiKey modifier = ImGuiKey_None) {
+                                      ImGuiKey modifier = ImGuiKey_None,
+                                      const SidebarPresenter::IconTextureProvider& provider = {}) {
     ImGuiIO& io = ImGui::GetIO();
     io.AddKeyEvent(ImGuiMod_Ctrl, modifier == ImGuiMod_Ctrl);
     io.AddKeyEvent(ImGuiMod_Super, modifier == ImGuiMod_Super);
@@ -833,13 +851,47 @@ protected:
     ImGui::Begin(windowName, nullptr,
                  ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
                      ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoScrollbar);
-    presenter.renderTreeView(app, state);
+    presenter.renderTreeView(app, state, provider);
     const ImVec2 min = ImGui::GetItemRectMin();
     const ImVec2 max = ImGui::GetItemRectMax();
     const Box2d row(Vector2d(min.x, min.y), Vector2d(max.x, max.y));
     ImGui::End();
     ImGui::Render();
     return row;
+  }
+
+  static bool ReplaceFocusedInput(SidebarPresenter& presenter, EditorApp* app,
+                                  const char* windowName, std::string_view text, ImVec2 mouse,
+                                  float height, InspectorFrameCapture* capture = nullptr) {
+    ImGuiIO& io = ImGui::GetIO();
+    io.AddKeyEvent(ImGuiMod_Ctrl, true);
+    io.AddKeyEvent(ImGuiKey_A, true);
+    RenderInspectorFrame(presenter, app, windowName, mouse, false, height);
+    io.AddKeyEvent(ImGuiKey_A, false);
+    io.AddKeyEvent(ImGuiMod_Ctrl, false);
+    RenderInspectorFrame(presenter, app, windowName, mouse, false, height);
+    io.AddInputCharactersUTF8(std::string(text).c_str());
+    return RenderInspectorFrame(presenter, app, windowName, mouse, false, height, {}, capture);
+  }
+
+  static std::vector<ImDrawVert> TextureVertices(ImTextureID texture) {
+    std::vector<ImDrawVert> vertices;
+    const ImDrawData* data = ImGui::GetDrawData();
+    if (data == nullptr) {
+      return vertices;
+    }
+    for (const ImDrawList* list : data->CmdLists) {
+      for (const ImDrawCmd& command : list->CmdBuffer) {
+        if (command.GetTexID() != texture) {
+          continue;
+        }
+        for (unsigned int index = command.IdxOffset; index < command.IdxOffset + command.ElemCount;
+             ++index) {
+          vertices.push_back(list->VtxBuffer[command.VtxOffset + list->IdxBuffer[index]]);
+        }
+      }
+    }
+    return vertices;
   }
 
   static std::vector<ImU32> DrawVertexColors() {
@@ -2449,6 +2501,259 @@ TEST(SidebarStrokePreviewIcons, PrewarmRequestsIncludeEveryStrokeSvg) {
         });
     EXPECT_TRUE(present) << "stroke SVG preview is missing from startup prewarm";
   }
+}
+
+TEST_F(SidebarPresenterImGuiTest, MiterTypingRejectsSmallValuesAndRecoversOneUndoableEdit) {
+  EditorApp app;
+  SidebarPresenter presenter;
+  ASSERT_NO_FATAL_FAILURE(LoadAndSelectTarget(app, presenter, kInspectorSvg));
+  const auto target = app.document().document().querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  const std::string before(app.document().document().source());
+  constexpr char kWindow[] = "##miter_validation_recovery";
+  constexpr float kHeight = 900.0f;
+  RenderInspectorFrame(presenter, &app, kWindow, ImVec2(-1, -1), false, kHeight);
+  const auto field = presenter.strokeMiterLimitRectForTesting();
+  ASSERT_TRUE(field.has_value());
+  const auto center = RectCenter(*field);
+  RenderInspectorFrame(presenter, &app, kWindow, center, false, kHeight);
+  RenderInspectorFrame(presenter, &app, kWindow, center, true, kHeight);
+  RenderInspectorFrame(presenter, &app, kWindow, center, false, kHeight);
+  ASSERT_TRUE(ImGui::GetIO().WantTextInput);
+
+  InspectorFrameCapture capture;
+  EXPECT_FALSE(ReplaceFocusedInput(presenter, &app, kWindow, "0", center, kHeight, &capture));
+  EXPECT_THAT(capture.text, HasSubstr("Limit must be at least 1"));
+  EXPECT_EQ(app.document().queue().size(), 0u);
+  EXPECT_EQ(app.document().document().source(), before);
+  EXPECT_FALSE(app.canUndo());
+  EXPECT_TRUE(ReplaceFocusedInput(presenter, &app, kWindow, "3", center, kHeight, &capture));
+  EXPECT_THAT(capture.text, Not(HasSubstr("Limit must be at least 1")));
+  ASSERT_TRUE(app.flushFrame());
+  EXPECT_EQ(target->getComputedStyle().strokeMiterlimit.get(), 3.0f);
+  EXPECT_EQ(app.undoTimeline().entryCount(), 0u);
+  RenderInspectorFrame(presenter, &app, kWindow, ImVec2(20, 20), true, kHeight);
+  RenderInspectorFrame(presenter, &app, kWindow, ImVec2(20, 20), false, kHeight);
+  app.flushFrame();
+  EXPECT_EQ(app.undoTimeline().entryCount(), 1u);
+  const std::string after(app.document().document().source());
+  app.undo();
+  app.flushFrame();
+  EXPECT_EQ(app.document().document().source(), before);
+  app.redo();
+  app.flushFrame();
+  EXPECT_EQ(app.document().document().source(), after);
+}
+
+TEST_F(SidebarPresenterImGuiTest, CustomDashTypingRejectsInvalidPatternThenClearsTheError) {
+  constexpr std::string_view kDashed =
+      R"(<svg xmlns="http://www.w3.org/2000/svg"><path id="target" d="M0 0L30 0" stroke="black" stroke-dasharray="4 2"/></svg>)";
+  EditorApp app;
+  SidebarPresenter presenter;
+  ASSERT_NO_FATAL_FAILURE(LoadAndSelectTarget(app, presenter, kDashed));
+  const auto target = app.document().document().querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  constexpr char kWindow[] = "##custom_dash_validation_recovery";
+  constexpr float kHeight = 900.0f;
+  RenderInspectorFrame(presenter, &app, kWindow, ImVec2(-1, -1), false, kHeight);
+  const auto lastPreset = presenter.strokeDashPresetRectForTesting(2);
+  ASSERT_TRUE(lastPreset.has_value());
+  const ImVec2 custom(static_cast<float>(lastPreset->bottomRight.x) + 20.0f,
+                      RectCenter(*lastPreset).y);
+  RenderInspectorFrame(presenter, &app, kWindow, custom, true, kHeight);
+  InspectorFrameCapture capture;
+  RenderInspectorFrame(presenter, &app, kWindow, custom, false, kHeight, {}, &capture);
+  ASSERT_THAT(capture.text, HasSubstr("Pattern"));
+  const auto preview = presenter.strokeDashPreviewRectForTesting();
+  ASSERT_TRUE(preview.has_value());
+  const ImVec2 input(RectCenter(*preview).x, static_cast<float>(lastPreset->bottomRight.y) +
+                                                 ImGui::GetStyle().ItemSpacing.y +
+                                                 ImGui::GetFrameHeight() * 0.5f);
+  RenderInspectorFrame(presenter, &app, kWindow, input, true, kHeight);
+  RenderInspectorFrame(presenter, &app, kWindow, input, false, kHeight);
+  ASSERT_TRUE(ImGui::GetIO().WantTextInput);
+  const std::string before(app.document().document().source());
+  EXPECT_FALSE(ReplaceFocusedInput(presenter, &app, kWindow, "4 -2", input, kHeight));
+  ImGui::GetIO().AddKeyEvent(ImGuiKey_Enter, true);
+  EXPECT_FALSE(RenderInspectorFrame(presenter, &app, kWindow, input, false, kHeight, {}, &capture));
+  EXPECT_THAT(capture.text, HasSubstr("Use nonnegative dash and gap lengths"));
+  EXPECT_EQ(app.document().queue().size(), 0u);
+  EXPECT_EQ(app.document().document().source(), before);
+  EXPECT_FALSE(app.canUndo());
+  ImGui::GetIO().AddKeyEvent(ImGuiKey_Enter, false);
+  RenderInspectorFrame(presenter, &app, kWindow, input, false, kHeight);
+  RenderInspectorFrame(presenter, &app, kWindow, input, true, kHeight);
+  RenderInspectorFrame(presenter, &app, kWindow, input, false, kHeight);
+  EXPECT_FALSE(ReplaceFocusedInput(presenter, &app, kWindow, "9 3", input, kHeight));
+  ImGui::GetIO().AddKeyEvent(ImGuiKey_Enter, true);
+  EXPECT_TRUE(RenderInspectorFrame(presenter, &app, kWindow, input, false, kHeight, {}, &capture));
+  EXPECT_THAT(capture.text, Not(HasSubstr("Use nonnegative dash and gap lengths")));
+  ImGui::GetIO().AddKeyEvent(ImGuiKey_Enter, false);
+  RenderInspectorFrame(presenter, &app, kWindow, input, false, kHeight);
+  ASSERT_TRUE(app.flushFrame());
+  EXPECT_EQ(target->getAttribute("style"), "stroke-dasharray: 9 3");
+  EXPECT_EQ(app.undoTimeline().entryCount(), 1u);
+  app.undo();
+  app.flushFrame();
+  EXPECT_EQ(app.document().document().source(), before);
+}
+
+TEST_F(SidebarPresenterImGuiTest, CustomEditorPreservesLongAuthoredDashPatternsReadOnly) {
+  std::string pattern;
+  for (int index = 0; index < 70; ++index) {
+    pattern += index ? " 1 2" : "1 2";
+  }
+  const std::string source =
+      "<svg xmlns=\"http://www.w3.org/2000/svg\"><path id=\"target\" d=\"M0 0L30 0\" "
+      "stroke=\"black\" stroke-dasharray=\"" +
+      pattern + "\"/></svg>";
+  EditorApp app;
+  SidebarPresenter presenter;
+  ASSERT_NO_FATAL_FAILURE(LoadAndSelectTarget(app, presenter, source));
+  constexpr char kWindow[] = "##long_custom_dash_readonly";
+  constexpr float kHeight = 900.0f;
+  RenderInspectorFrame(presenter, &app, kWindow, ImVec2(-1, -1), false, kHeight);
+  const auto lastPreset = presenter.strokeDashPresetRectForTesting(2);
+  ASSERT_TRUE(lastPreset.has_value());
+  const ImVec2 custom(static_cast<float>(lastPreset->bottomRight.x) + 20.0f,
+                      RectCenter(*lastPreset).y);
+  RenderInspectorFrame(presenter, &app, kWindow, custom, true, kHeight);
+  InspectorFrameCapture capture;
+  EXPECT_FALSE(
+      RenderInspectorFrame(presenter, &app, kWindow, custom, false, kHeight, {}, &capture));
+  EXPECT_THAT(capture.text, HasSubstr("Long pattern - edit in SVG source"));
+  EXPECT_FALSE(presenter.dashPatternEditableForTesting());
+  EXPECT_EQ(app.document().queue().size(), 0u);
+  EXPECT_EQ(app.document().document().source(), source);
+  EXPECT_FALSE(app.canUndo());
+  EXPECT_EQ(app.document().document().querySelector("#target")->getAttribute("stroke-dasharray"),
+            pattern);
+}
+
+TEST_F(SidebarPresenterImGuiTest, ExcludeButtonMutatesOnlyWithLiveAccessAndKeepsGeometricMeaning) {
+  constexpr std::string_view kOverlap =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40"><rect id="a" width="20" height="20"/><rect id="b" x="10" y="10" width="20" height="20"/></svg>)";
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kOverlap));
+  const auto a = app.document().document().querySelector("#a");
+  const auto b = app.document().document().querySelector("#b");
+  ASSERT_TRUE(a.has_value());
+  ASSERT_TRUE(b.has_value());
+  app.setSelection(std::vector<svg::SVGElement>{*a, *b});
+  SidebarPresenter presenter;
+  presenter.refreshSnapshot(app);
+  constexpr char kWindow[] = "##exclude_action_live_gate";
+  constexpr float kHeight = 900.0f;
+  InspectorFrameCapture capture;
+  RenderInspectorFrame(presenter, &app, kWindow, ImVec2(-1, -1), false, kHeight, {}, &capture);
+  const ImVec2 button = RectCenter(capture.lastItem);
+  const std::string before(app.document().document().source());
+  EXPECT_FALSE(RenderInspectorFrame(presenter, nullptr, kWindow, button, true, kHeight));
+  EXPECT_FALSE(RenderInspectorFrame(presenter, nullptr, kWindow, button, false, kHeight));
+  EXPECT_EQ(app.document().document().source(), before);
+  EXPECT_EQ(app.selectedElements().size(), 2u);
+  EXPECT_FALSE(app.canUndo());
+  RenderInspectorFrame(presenter, &app, kWindow, button, false, kHeight);
+  EXPECT_FALSE(RenderInspectorFrame(presenter, &app, kWindow, button, true, kHeight));
+  EXPECT_TRUE(RenderInspectorFrame(presenter, &app, kWindow, button, false, kHeight));
+  app.flushFrame();
+  ASSERT_EQ(app.selectedElements().size(), 1u);
+  const auto geometry =
+      app.selectedElements().front().cast<svg::SVGGeometryElement>().computedSpline();
+  ASSERT_TRUE(geometry.has_value());
+  EXPECT_TRUE(geometry->isInside(Vector2d(5, 5)));
+  EXPECT_TRUE(geometry->isInside(Vector2d(25, 25)));
+  EXPECT_FALSE(geometry->isInside(Vector2d(15, 15)));
+  EXPECT_FALSE(geometry->isInside(Vector2d(35, 35)));
+  EXPECT_EQ(app.undoTimeline().entryCount(), 1u);
+  app.undo();
+  app.flushFrame();
+  EXPECT_EQ(app.document().document().source(), before);
+}
+
+TEST_F(SidebarPresenterImGuiTest, TreeChevronTextureUsesValidUvsAndDisclosureDoesNotSelect) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kInspectorSvg));
+  SidebarPresenter presenter;
+  presenter.refreshSnapshot(app);
+  const auto root = app.document().document().svgElement();
+  const auto rootId = static_cast<std::uint32_t>(root.unsafeEntityHandle().entity());
+  constexpr ImTextureID kTexture = static_cast<ImTextureID>(0x4567);
+  std::vector<std::uint64_t> keys;
+  const SidebarPresenter::IconTextureProvider provider = [&](std::uint64_t key,
+                                                             const svg::RendererBitmap& bitmap) {
+    EXPECT_FALSE(bitmap.empty());
+    keys.push_back(key);
+    return SidebarPresenter::IconTexture{kTexture, Vector2d(0.5, 0.75)};
+  };
+  TreeViewState state;
+  constexpr char kWindow[] = "##tree_chevron_payload";
+  const auto row = RenderLastTreeRowFrame(presenter, &app, state, kWindow, ImVec2(-1, -1), false,
+                                          ImGuiKey_None, provider);
+  ASSERT_EQ(keys.size(), 1u);
+  const auto collapsedKey = keys.back();
+  const auto vertices = TextureVertices(kTexture);
+  ASSERT_FALSE(vertices.empty());
+  for (const auto& vertex : vertices) {
+    EXPECT_GE(vertex.uv.x, 0.0f);
+    EXPECT_LE(vertex.uv.x, 0.5f);
+    EXPECT_GE(vertex.uv.y, 0.0f);
+    EXPECT_LE(vertex.uv.y, 0.75f);
+  }
+  const ImVec2 chevron(static_cast<float>(row.topLeft.x) - ImGui::GetFrameHeight() * 0.5f,
+                       RectCenter(row).y);
+  RenderLastTreeRowFrame(presenter, &app, state, kWindow, chevron, false, ImGuiKey_None, provider);
+  RenderLastTreeRowFrame(presenter, &app, state, kWindow, chevron, true, ImGuiKey_None, provider);
+  RenderLastTreeRowFrame(presenter, &app, state, kWindow, chevron, false, ImGuiKey_None, provider);
+  EXPECT_TRUE(presenter.isTreeNodeExpandedForTesting(rootId));
+  RenderLastTreeRowFrame(presenter, &app, state, kWindow, chevron, false, ImGuiKey_None, provider);
+  EXPECT_NE(keys.back(), collapsedKey);
+  EXPECT_FALSE(state.selectionChangedInTree);
+  EXPECT_FALSE(app.hasSelection());
+  EXPECT_FALSE(app.canUndo());
+  EXPECT_EQ(app.document().document().source(), kInspectorSvg);
+}
+
+TEST_F(SidebarPresenterImGuiTest, WidthSpriteProviderMapsOnlyItsValidTextureAreaIntoPresetRows) {
+  EditorApp app;
+  SidebarPresenter presenter;
+  ASSERT_NO_FATAL_FAILURE(LoadAndSelectTarget(app, presenter, kInspectorSvg));
+  constexpr ImTextureID kTexture = static_cast<ImTextureID>(0x5678);
+  std::size_t spriteCalls = 0;
+  const SidebarPresenter::IconTextureProvider provider = [&](std::uint64_t,
+                                                             const svg::RendererBitmap& bitmap) {
+    if (bitmap.dimensions == Vector2i(256, 256)) {
+      ++spriteCalls;
+      return SidebarPresenter::IconTexture{kTexture, Vector2d(0.5, 0.75)};
+    }
+    return SidebarPresenter::IconTexture{};
+  };
+  constexpr char kWindow[] = "##width_sprite_uv_bounds";
+  constexpr float kHeight = 900.0f;
+  RenderInspectorFrame(presenter, &app, kWindow, ImVec2(-1, -1), false, kHeight, provider);
+  const auto field = presenter.strokeWidthRectForTesting();
+  ASSERT_TRUE(field.has_value());
+  const auto center = RectCenter(*field);
+  RenderInspectorFrame(presenter, &app, kWindow, center, false, kHeight, provider);
+  RenderInspectorFrame(presenter, &app, kWindow, center, true, kHeight, provider);
+  RenderInspectorFrame(presenter, &app, kWindow, center, false, kHeight, provider);
+  const auto vertices = TextureVertices(kTexture);
+  ASSERT_GT(spriteCalls, 0u);
+  ASSERT_FALSE(vertices.empty());
+  float maximumU = 0.0f;
+  float maximumV = 0.0f;
+  for (const auto& vertex : vertices) {
+    EXPECT_GE(vertex.uv.x, 0.0f);
+    EXPECT_GE(vertex.uv.y, 0.0f);
+    EXPECT_LE(vertex.uv.x, 0.0625f);
+    EXPECT_LE(vertex.uv.y, 0.75f);
+    maximumU = std::max(maximumU, vertex.uv.x);
+    maximumV = std::max(maximumV, vertex.uv.y);
+  }
+  EXPECT_FLOAT_EQ(maximumU, 0.0625f);
+  EXPECT_FLOAT_EQ(maximumV, 0.75f);
+  EXPECT_EQ(app.document().queue().size(), 0u);
+  EXPECT_FALSE(app.canUndo());
 }
 
 }  // namespace
