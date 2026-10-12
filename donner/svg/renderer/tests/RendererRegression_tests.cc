@@ -403,6 +403,64 @@ TEST_F(RendererRegressionTests, TinySkiaBitmapGlyphPreservesDecodedPremultiplied
 }
 #endif
 
+#ifdef DONNER_TEXT_FULL
+TEST_F(RendererRegressionTests, TinySkiaBitmapGlyphRotationMatchesGroupRotation) {
+  for (const int angle : {90, -90, 30}) {
+    SCOPED_TRACE(angle);
+    const std::string text =
+        R"svg(<text id="emoji" x="80" y="120" font-family="Noto Color Emoji" font-size="48")svg";
+    const std::string outer =
+        R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="260" height="260">
+        <g transform="translate(15 9) scale(1.25 0.75)">)svg";
+    SVGDocument actualDocument =
+        ParseSvg(outer + text + R"svg( rotate=")svg" + std::to_string(angle) +
+                 R"svg(">&#x1F600;</text></g></svg>)svg");
+    SVGDocument expectedDocument =
+        ParseSvg(outer + R"svg(<g transform="rotate()svg" + std::to_string(angle) +
+                 R"svg( 80 120)">)svg" + text + R"svg(>&#x1F600;</text></g></g></svg>)svg");
+    RegisterFontsFromDirectoryForTesting(actualDocument, ResvgResourceRoot() / "fonts");
+    RegisterFontsFromDirectoryForTesting(expectedDocument, ResvgResourceRoot() / "fonts");
+    const RendererBitmap actual =
+        RenderDocumentWithBackend(actualDocument, RendererBackend::TinySkia);
+    const RendererBitmap expected =
+        RenderDocumentWithBackend(expectedDocument, RendererBackend::TinySkia);
+    ASSERT_THAT(actual.pixels, testing::Contains(testing::Gt(0))) << "Actual glyph must be visible";
+    ASSERT_THAT(expected.pixels, testing::Contains(testing::Gt(0)))
+        << "Reference glyph must be visible";
+    for (auto [document, rotation] :
+         {std::pair(&actualDocument, angle), std::pair(&expectedDocument, 0)}) {
+      auto access = document->writeAccess();
+      const auto element = document->querySelector("#emoji");
+      ASSERT_THAT(element, testing::Ne(std::nullopt));
+      Registry& registry = document->registry();
+      FontManager& fonts = registry.ctx().get<FontManager>();
+      TextEngine& engine = registry.ctx().get<TextEngine>();
+      const auto& geometry = engine.ensureComputedTextGeometryComponent(element->entityHandle());
+      ASSERT_THAT(geometry.runs, testing::SizeIs(1));
+      const TextRun& run = geometry.runs.front();
+      EXPECT_THAT(run.font, testing::Eq(fonts.findFont("Noto Color Emoji")));
+      ASSERT_THAT(engine.isBitmapOnly(run.font), testing::IsTrue());
+      ASSERT_THAT(run.glyphs, testing::SizeIs(1));
+      const TextGlyph& glyph = run.glyphs.front();
+      EXPECT_THAT(glyph.glyphIndex, testing::Gt(0));
+      EXPECT_THAT(glyph.xPosition, testing::DoubleEq(80));
+      EXPECT_THAT(glyph.yPosition, testing::DoubleEq(120));
+      EXPECT_THAT(glyph.rotateDegrees, testing::DoubleEq(rotation));
+      const auto bitmap = engine.bitmapGlyph(
+          run.font, glyph.glyphIndex, engine.scaleForPixelHeight(run.font, run.usedFontSizePx));
+      ASSERT_THAT(bitmap, testing::Ne(std::nullopt));
+      ASSERT_THAT(bitmap->width, testing::Gt(0));
+      ASSERT_THAT(bitmap->height, testing::Gt(0));
+      ASSERT_THAT(bitmap->rgbaPixels, testing::SizeIs(bitmap->width * bitmap->height * 4));
+      EXPECT_THAT(bitmap->rgbaPixels, testing::Contains(testing::Gt(0)));
+    }
+    editor::tests::CompareBitmapToBitmap(actual, expected,
+                                         "bitmap_glyph_rotation_" + std::to_string(angle),
+                                         editor::tests::PixelmatchIdentityParams());
+  }
+}
+#endif
+
 TEST_F(RendererRegressionTests, FontPropertiesDoNotChangeReducedCrosshair) {
   SVGDocument reduced = instantiateSubtree(R"(
     <svg width="500" height="500" viewBox="0 0 200 200">
