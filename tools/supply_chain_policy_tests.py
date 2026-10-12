@@ -374,11 +374,15 @@ def _is_playwright_repo(call):
             and isinstance(call.func.value, ast.Name) and call.func.value.id == "playwright")
 
 
+def _missing_browser_integrity_maps(path, tree):
+    return ["%s:%d: playwright.repo requires integrity_path_map" % (path, call.lineno)
+            for call in ast.walk(tree) if isinstance(call, ast.Call) and _is_playwright_repo(call)
+            and _keyword(call, "integrity_path_map") is None]
+
+
 def _integrity_map_problems(path, tree):
     """An empty value in a browser integrity map would silently skip that archive's check."""
-    problems = ["%s:%d: playwright.repo requires integrity_path_map" % (path, call.lineno)
-                for call in ast.walk(tree) if isinstance(call, ast.Call) and _is_playwright_repo(call)
-                and _keyword(call, "integrity_path_map") is None]
+    problems = _missing_browser_integrity_maps(path, tree)
     for node in ast.walk(tree):
         if not (isinstance(node, ast.keyword) and node.arg == "integrity_path_map"):
             continue
