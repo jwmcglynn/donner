@@ -50,6 +50,8 @@
  
  # We manually keep the generated rules documentation synced.
  # Check that the signatures stay matched.
+diff --git a/npm/private/npm_package_extract.mjs b/npm/private/npm_package_extract.mjs
+new file mode 100644
 --- /dev/null
 +++ b/npm/private/npm_package_extract.mjs
 @@ -0,0 +1,26 @@
