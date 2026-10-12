@@ -276,14 +276,17 @@ def _script_bodies(text):
 
 
 def _expressions(text):
-    return re.finditer(r"\$\{\{(.*?)\}\}", text, re.DOTALL)
+    """Ignore close delimiters in expression strings, including doubled quote escapes."""
+    return re.finditer(r"\$\{\{((?:'(?:''|[^'])*'|[^'}]|}(?!}))*?)\}\}", text, re.DOTALL)
 
 
 def _canonical_context(expression):
     """Give literal index and property access the same spelling for policy checks."""
     indexed = re.sub(r"\s*\[\s*(['\"])([A-Za-z_][A-Za-z0-9_]*)\1\s*\]",
                      r".\2", expression)
-    return re.sub(r"\s*\.\s*", ".", indexed)
+    # Resolve literal index keys first, then exclude harmless expression strings.
+    unquoted = re.sub(r"'(?:''|[^'])*'", "''", indexed)
+    return re.sub(r"\s*\.\s*", ".", unquoted)
 
 
 def _secret_reads(text):
@@ -294,6 +297,8 @@ def _secret_reads(text):
                      re.findall(r"\bsecrets\.([A-Za-z0-9_]+)", expression, re.IGNORECASE))
         if re.search(r"\bsecrets(?:\s*\[|\.\*)", expression, re.IGNORECASE):
             names.add("<unreviewable secret reference>")
+        if re.search(r"(?<![\w.])secrets\b(?!\s*[.\[])", expression, re.IGNORECASE):
+            names.add("<whole secret object>")
     return names
 
 
@@ -360,7 +365,8 @@ def _secret_use_violations(workflows):
     records = []
     violations = []
     for path, workflow in workflows.items():
-        if re.search(r"secrets:\s*inherit|toJSON\(\s*secrets\s*\)", workflow, re.IGNORECASE):
+        if (re.search(r"secrets:\s*inherit", workflow, re.IGNORECASE) or
+                "<whole secret object>" in _secret_reads(workflow)):
             violations.append("%s forwards every secret" % path)
         if _unscoped_secret_reads(workflow):
             violations.append("%s exposes a secret beyond one step" % path)
@@ -1261,6 +1267,9 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
                         "'it''s secrets'"):
             with self.subTest(literal=literal):
                 self.assertEqual(set(), _secret_reads("${{ " + literal + " }}"))
+                changed = files[path].replace(
+                    step, step + "        env:\n          TOKEN: ${{ " + literal + " }}\n", 1)
+                self.assertEqual([], _secret_use_violations(_workflows({**files, path: changed})))
 
     def test_quoted_expression_delimiters_do_not_hide_context_reads(self):
         files = self.supply_chain_files
