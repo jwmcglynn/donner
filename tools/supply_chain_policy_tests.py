@@ -15,7 +15,9 @@ http.bzl or git.bzl must bind each rule under its own name, MODULE.bazel may not
 files, and main-repository labels (`@//`, `@@//`, `@donner//`) are followed like `//` labels.
 Playwright repository tags are recognized from literal use_extension identities rather than proxy
 variable names. Proxy rebinding, factory/method aliases and unreadable method lookups fail closed;
-direct repository mapping operations remain allowed. This is a conservative static check.
+direct repository mapping operations remain allowed. Unreadable native getter results may be
+inspected as bare expressions, but cannot be invoked or transported; first-class getter factories
+are rejected. This is a conservative static check, not a general Starlark interpreter.
 
 The telemetry checks keep aspect_tools_telemetry's documented opt-out in the shared .bazelrc and in
 every workflow's environment. The telemetry section of .bazelrc explains why.
@@ -313,21 +315,25 @@ def _single_literal_assignment(tree, name):
     return values[0] if len(values) == 1 else None
 
 
+def _getter_factory_problems(path, tree, parents):
+    return ["%s:%d: getattr must be called directly, not aliased or transported" % (path, node.lineno)
+            for node in ast.walk(tree) if isinstance(node, ast.Name) and node.id == "getattr"
+            and not _is_direct_call(node, parents.get(id(node)))]
+
+
 def _native_getattr_problems(path, tree):
-    """Reject known native method lookups; unrelated or unresolved getattr remains untouched."""
-    problems = []
-    bindings = _Bindings(tree)
+    """Reject fetch or unresolved callable lookups; bare unknown inspection stays allowed."""
+    parents = {id(child): node for node in ast.walk(tree) for child in ast.iter_child_nodes(node)}
+    problems = _getter_factory_problems(path, tree, parents)
     for call in _calls(tree, {"getattr"}):
-        if len(call.args) < 2:
-            continue
-        expression = call.args[1]
-        values = bindings.values(expression, call)
-        if values is None and isinstance(expression, ast.Name):
-            value = _single_literal_assignment(tree, expression.id)
-            values = [value] if value is not None else []
+        expression = call.args[1] if len(call.args) > 1 else _keyword(call, "name")
+        values = _readable_string_values(tree, expression, call)
         if NATIVE_DOWNLOAD_APIS.intersection(values or []):
             problems.append("%s:%d: native download methods must be called directly, not through "
                             "getattr" % (path, call.lineno))
+        elif values is None and not isinstance(parents.get(id(call)), ast.Expr):
+            problems.append("%s:%d: callable or transported getattr methods must be readable literals"
+                            % (path, call.lineno))
     return problems
 
 
