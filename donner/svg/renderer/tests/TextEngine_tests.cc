@@ -1112,6 +1112,30 @@ TEST(TextEngineTest, JoinedShapingKeepsPositioningSlotsAndRelativeCarry) {
 }
 #endif
 
+TEST(TextEngineTest, CombiningMarkAfterSpaceAppliesWordSpacingOnce) {
+  Registry registry;
+  FontManager fontManager(registry);
+  const FontHandle font = LoadResvgFont(fontManager, "NotoSans-Regular.ttf", "Noto Sans");
+  ASSERT_THAT(static_cast<bool>(font), testing::IsTrue());
+  TextEngine engine(fontManager, registry);
+
+  components::ComputedTextComponent text;
+  text.spans.push_back(
+      MakeSpan("A \xCC\x81"
+               "B"));
+  TextLayoutParams params = MakeTextParams(24.0);
+  params.fontFamilies = {RcString("Noto Sans")};
+  const auto ordinary = engine.layout(text, params);
+  ASSERT_THAT(ordinary, ElementsAre(RunGlyphsAre(SizeIs(4))));
+  ASSERT_THAT(ordinary[0].glyphs[2], GlyphXAdvanceIs(DoubleEq(0.0)));
+
+  text.spans[0].wordSpacingPx = 11.0;
+  const auto spaced = engine.layout(text, params);
+  ASSERT_THAT(spaced, ElementsAre(RunGlyphsAre(SizeIs(4))));
+  EXPECT_THAT(spaced[0].glyphs.back(),
+              GlyphXPositionIs(DoubleNear(ordinary[0].glyphs.back().xPosition + 11.0, 1e-6)));
+}
+
 TEST(TextEngineTest, RotatesCombiningMarkOffsetsWithBaseGlyph) {
   Registry registry;
   FontManager fontManager(registry);
