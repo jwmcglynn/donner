@@ -1947,7 +1947,14 @@ bool RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectToo
   const Vector2i currentCanvasSize = requestRasterViewport.outputSizePx;
 
   if (willCommitCanvas) {
-    app.document().document().setCanvasSize(pendingCanvasSize_.x, pendingCanvasSize_.y);
+    svg::SVGDocument& document = app.document().document();
+    const std::uint64_t revisionBefore = document.handle()->revision();
+    document.setCanvasSize(pendingCanvasSize_.x, pendingCanvasSize_.y);
+    if (!documentPixelCaptureEnabled_ && document.handle()->revision() != revisionBefore) {
+      // The old raster can match the viewport while this commit invalidates its render tree.
+      requestPresentationRefresh();
+      forcePresentationRefresh = true;
+    }
     pendingCanvasSizeSince_ = now;
     ++lastFrameCostBreakdown_.documentCanvasCommitCount;
     ++documentCanvasCommitTotal_;

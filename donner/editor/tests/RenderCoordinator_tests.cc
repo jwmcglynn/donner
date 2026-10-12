@@ -1386,6 +1386,62 @@ TEST(RenderCoordinatorTest, HiDpiCanvasCommitRebuildsAnAlreadyRenderedTree) {
               testing::IsTrue());
   EXPECT_THAT(target.resolvedFillPaint(), testing::Eq(representedFill))
       << "The committed canvas needs a rebuilt rendering instance without another document edit.";
+  const std::optional<RenderResult> rebuilt = coordinator.asyncRenderer().pollResult();
+  ASSERT_THAT(rebuilt, testing::Optional(testing::_));
+  RenderCoordinatorTestAccess::noteRenderCompleted(coordinator, rebuilt->version,
+                                                   rebuilt->rasterViewport);
+  EXPECT_THAT(coordinator.maybeRequestRender(app, selectTool, viewport, nullptr),
+              testing::IsFalse())
+      << "An unchanged, represented canvas must not keep requesting renders.";
+  EXPECT_THAT(coordinator.documentCanvasCommitTotal(), testing::Eq(1u));
+}
+
+TEST(RenderCoordinatorTest, BusyWorkerDoesNotLoseAHiDpiCanvasCommitRender) {
+  EditorApp app;
+  ASSERT_THAT(app.loadFromString(kTwoRectSvg), testing::IsTrue());
+  app.document().document().setCanvasSize(100, 100);
+  const svg::SVGElement target = QuerySelector(app, "#r1");
+  RenderCoordinator coordinator;
+  SelectTool selectTool;
+  RenderCoordinatorTestAccess::useFakeSchedulingClock(coordinator);
+  ViewportState viewport = MakeViewport(app);
+  viewport.devicePixelRatio = 2.0;
+  const auto completeRender = [&]() {
+    EXPECT_THAT(coordinator.asyncRenderer().waitUntilNoRenderInFlightForTesting(
+                    std::chrono::steady_clock::now() + std::chrono::seconds(2)),
+                testing::IsTrue());
+    const std::optional<RenderResult> result = coordinator.asyncRenderer().pollResult();
+    EXPECT_THAT(result, testing::Optional(testing::_));
+    if (result) {
+      RenderCoordinatorTestAccess::noteRenderCompleted(coordinator, result->version,
+                                                       result->rasterViewport);
+    }
+  };
+  ASSERT_THAT(coordinator.maybeRequestRender(app, selectTool, viewport, nullptr),
+              testing::IsTrue());
+  completeRender();
+  const auto representedFill = target.resolvedFillPaint();
+  ASSERT_THAT(representedFill, testing::Optional(testing::_));
+
+  coordinator.asyncRenderer().setReplayRenderDelayForTesting(std::chrono::milliseconds(100));
+  coordinator.requestPresentationRefresh();
+  ASSERT_THAT(coordinator.maybeRequestRender(app, selectTool, viewport, nullptr),
+              testing::IsTrue());
+  ASSERT_THAT(coordinator.asyncRenderer().isBusy(), testing::IsTrue());
+  RenderCoordinatorTestAccess::advanceFakeSchedulingClock(std::chrono::milliseconds(120));
+  EXPECT_THAT(coordinator.maybeRequestRender(app, selectTool, viewport, nullptr),
+              testing::IsFalse());
+  EXPECT_THAT(coordinator.documentCanvasCommitTotal(), testing::Eq(0u));
+  completeRender();
+  coordinator.asyncRenderer().setReplayRenderDelayForTesting(std::chrono::milliseconds(0));
+
+  EXPECT_THAT(coordinator.maybeRequestRender(app, selectTool, viewport, nullptr),
+              testing::IsTrue());
+  EXPECT_THAT(coordinator.documentCanvasCommitTotal(), testing::Eq(1u));
+  completeRender();
+  EXPECT_THAT(target.resolvedFillPaint(), testing::Eq(representedFill));
+  EXPECT_THAT(coordinator.maybeRequestRender(app, selectTool, viewport, nullptr),
+              testing::IsFalse());
 }
 
 // The idle loop wakes for a pending pixel-capture canvas commit; that wake must count down on the
