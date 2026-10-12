@@ -2898,6 +2898,44 @@ TEST(RendererPublicApiTest, RotatedMaskRegionIntersectsNestedMaskOnce) {
                                        editor::tests::PixelmatchIdentityParams());
 }
 
+TEST(RendererPublicApiTest, MaskCompositeAppliesParentClipOnceAndRestoresSiblingClip) {
+  for (int angle : {0, 17}) {
+    SCOPED_TRACE(angle);
+    std::array<RendererBitmap, 2> snapshots;
+    for (bool masked : {false, true}) {
+      const std::string source = std::string(R"svg(
+        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24">
+          <defs>
+            <clipPath id="parent"><circle cx="12.25" cy="12.125" r="8.5"/></clipPath>
+            <mask id="m" maskUnits="userSpaceOnUse" x="-64" y="-64" width="128"
+                  height="128" mask-type="alpha">
+              <rect x="-64" y="-64" width="128" height="128" fill="white"/>
+            </mask>
+          </defs>
+          <g transform="rotate()svg") +
+                                 std::to_string(angle) + R"svg( 12 12)">
+            <g clip-path="url(#parent)">
+              <g )svg" + (masked ? "mask=\"url(#m)\"" : "") +
+                                 R"svg(>
+                <rect x="-64" y="-64" width="128" height="128" fill="green"/>
+              </g>
+              <rect x="0" y="0" width="5" height="24" fill="red"/>
+            </g>
+          </g>
+        </svg>
+      )svg";
+      SVGDocument document = ParseDocument(source);
+      Renderer renderer;
+      renderer.draw(document);
+      snapshots[masked] = NormalizeSnapshot(renderer.takeSnapshot());
+    }
+    ASSERT_THAT(snapshots[0].empty(), testing::IsFalse());
+    EXPECT_THAT(PixelAt(snapshots[0], 12, 12), ElementsAre(0, 128, 0, 255));
+    editor::tests::CompareBitmapToBitmap(snapshots[1], snapshots[0], "mask-parent-clip-once",
+                                         editor::tests::PixelmatchIdentityParams());
+  }
+}
+
 TEST(RendererPublicApiTest, LinearRgbMaskConvertsStraightColorBeforeApplyingAlpha) {
   for (bool replaySnapshot : {false, true}) {
     SCOPED_TRACE(replaySnapshot ? "snapshot" : "document");
