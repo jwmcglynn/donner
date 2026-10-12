@@ -306,6 +306,16 @@ def _token_scope_violations(path, workflow):
     return violations
 
 
+def _wide_secret_read_lines(workflow):
+    """Secret expressions whose placement exposes them beyond one step."""
+    for match in _expressions(workflow):
+        line_start = workflow.rfind("\n", 0, match.start()) + 1
+        line_end = workflow.find("\n", match.start())
+        line = workflow[line_start:line_end if line_end >= 0 else len(workflow)]
+        if _secret_reads(match.group()) and len(line) - len(line.lstrip()) < 10:
+            yield line.strip()
+
+
 def _secret_use_violations(workflows):
     uses = {}
     violations = []
@@ -314,12 +324,8 @@ def _secret_use_violations(workflows):
             violations.append("%s forwards every secret" % path)
         # Step `env:` and `with:` entries sit ten columns in; anything shallower is job- or
         # workflow-wide and hands the secret to every step.
-        for match in _expressions(workflow):
-            line_start = workflow.rfind("\n", 0, match.start()) + 1
-            line_end = workflow.find("\n", match.start())
-            line = workflow[line_start:line_end if line_end >= 0 else len(workflow)]
-            if _secret_reads(match.group()) and len(line) - len(line.lstrip()) < 10:
-                violations.append("%s exposes a secret beyond one step: %s" % (path, line.strip()))
+        violations.extend("%s exposes a secret beyond one step: %s" % (path, line)
+                          for line in _wide_secret_read_lines(workflow))
         for name, job in _jobs(workflow).items():
             secrets = _secret_reads(job)
             if secrets:
