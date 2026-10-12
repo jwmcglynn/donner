@@ -3957,4 +3957,27 @@ TEST(Path, NonFiniteHitQueriesCannotSelectFiniteCurveGeometry) {
   }
 }
 
+TEST(Path, FirstCubicMiterBoundsMatchAnEquivalentStraightLine) {
+  const Path cubic = PathBuilder().moveTo({2, 3}).curveTo({4, 3}, {6, 3}, {8, 3}).build();
+  const Path line = PathBuilder().moveTo({2, 3}).lineTo({8, 3}).build();
+  EXPECT_THAT(cubic.bounds(), testing::Eq(line.bounds()));
+  EXPECT_THAT(cubic.strokeMiterBounds(2, 4), testing::Eq(line.strokeMiterBounds(2, 4)));
+  EXPECT_THAT(
+      cubic.vertices(),
+      testing::ElementsAre(
+          testing::AllOf(VertexPointIs(Vector2d(2, 3)), VertexOrientationIs(Vector2d(1, 0))),
+          testing::AllOf(VertexPointIs(Vector2d(8, 3)), VertexOrientationIs(Vector2d(1, 0)))));
+}
+
+TEST(Path, QuadraticEndpointMarkersFollowTheOutgoingAndIncomingDirections) {
+  const Path path = PathBuilder().moveTo({0, 0}).quadTo({10, 10}, {20, 0}).build();
+  const double diagonal = std::sqrt(0.5);
+  EXPECT_THAT(
+      path.vertices(),
+      testing::ElementsAre(testing::AllOf(VertexPointIs(Vector2d(0, 0)),
+                                          VertexOrientationIs(Vector2d(diagonal, diagonal))),
+                           testing::AllOf(VertexPointIs(Vector2d(20, 0)),
+                                          VertexOrientationIs(Vector2d(diagonal, -diagonal)))));
+}
+
 }  // namespace donner
