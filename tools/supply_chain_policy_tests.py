@@ -860,6 +860,13 @@ class CheckerTest(unittest.TestCase):
                 del subset[missing]
                 self.assertTrue(self._findings(self._browser('pw.repo(integrity_path_map = %r)' % subset)))
 
+    def test_playwright_archive_set_is_bound_to_selected_manifest(self):
+        source = self._browser(
+            'pw.repo(browsers_json = "//donner/editor/wasm/tests:browsers.1.63.0.json", '
+            'integrity_path_map = %r)' % self._browser_map())
+        self.assertTrue(self._findings(source),
+                        "An unchanged archive map must not approve a different browser manifest")
+
     def test_playwright_integrity_keys_are_exact_unique_and_literal(self):
         complete = self._browser_map()
         first = sorted(complete)[0]
