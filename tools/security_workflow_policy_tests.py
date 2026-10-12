@@ -369,7 +369,8 @@ def _secret_use_violations(workflows):
     if len(uses) != len(records):
         violations.append("duplicate secret consumer steps")
     if uses != SECRET_USES:
-        violations.append("secret uses changed: %s" % sorted(uses.items()))
+        violations.append("secret uses changed: %s" %
+                          sorted(uses.items(), key=lambda item: repr(item[0])))
     return violations
 
 
@@ -1453,6 +1454,10 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
                         if _secret_reads(step))
         duplicated = files[path] + "\n      - " + reviewed
         self.assertTrue(_secret_use_violations(_workflows({**files, path: duplicated})))
+        changed_id = files[path].replace("      - name: Create Lines-of-Code-Badge\n",
+                                        "      - name: Create Lines-of-Code-Badge\n"
+                                        "        id: alternate-consumer\n", 1)
+        self.assertTrue(_secret_use_violations(_workflows({**files, path: changed_id})))
         changed = files[path].replace("uses: schneegans/dynamic-badges-action@v1.9.0",
                                     "uses: example/consumer-action@v1.0.0", 1)
         self.assertTrue(_secret_use_violations(_workflows({**files, path: changed})))
