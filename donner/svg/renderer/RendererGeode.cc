@@ -2800,6 +2800,18 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   /// `clipStack` and apply it to the active encoder as a scissor,
   /// plus forward the topmost polygon clip (if any) through
   /// `setClipPolygon`. Called whenever the clip stack changes.
+  void suspendMaskClipsForCapture(MaskStackFrame& frame) {
+    frame.savedClipStack = std::move(clipStack);
+    clipStack.clear();
+    if (frame.hasRegionClip) {
+      // Preserve admission timing and empty capture on failure. Successful region coverage must
+      // not be applied to each mask primitive or multiplied again by an isolated layer.
+      clipStack.push_back(std::move(frame.compositeRegionClip.back()));
+      frame.compositeRegionClip.clear();
+    }
+    updateEncoderScissor();
+  }
+
   void updateEncoderScissor() {
     if (!encoder) {
       return;
@@ -6473,16 +6485,7 @@ void RendererGeode::pushMask(const std::optional<Box2d>& maskBounds, MaskType ma
     activeFrame.compositeRegionClip.push_back(std::move(impl_->clipStack.back()));
     impl_->clipStack.pop_back();
   }
-  Impl::MaskStackFrame& activeFrame = impl_->maskStack.back();
-  activeFrame.savedClipStack = std::move(impl_->clipStack);
-  impl_->clipStack.clear();
-  if (activeFrame.hasRegionClip) {
-    // Preserve admission timing and empty capture on failure. Successful region coverage must
-    // not be applied to each mask primitive or multiplied again by an isolated layer.
-    impl_->clipStack.push_back(std::move(activeFrame.compositeRegionClip.back()));
-    activeFrame.compositeRegionClip.clear();
-  }
-  impl_->updateEncoderScissor();
+  impl_->suspendMaskClipsForCapture(impl_->maskStack.back());
 }
 
 void RendererGeode::transitionMaskToContent() {

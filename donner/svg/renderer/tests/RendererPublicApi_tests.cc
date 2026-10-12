@@ -2876,12 +2876,12 @@ TEST(RendererPublicApiTest, RotatedMaskRegionIntersectsOpaqueOverlapsOnce) {
 
 TEST(RendererPublicApiTest, RotatedMaskRegionIntersectsIsolatedGroupOnce) {
   const auto flat = RenderRotatedMaskContent(
-      R"svg(<rect x="-64" y="-64" width="128" height="128" fill="white" fill-opacity="0.5"/>)svg");
+      R"svg(<rect x="-64" y="-64" width="128" height="128" fill="white" fill-opacity="0.4"/>)svg");
   const auto isolated = RenderRotatedMaskContent(R"svg(
-      <g opacity="0.5"><rect x="-64" y="-64" width="128" height="128" fill="white"/></g>
+      <g opacity="0.4"><rect x="-64" y="-64" width="128" height="128" fill="white"/></g>
   )svg");
   ASSERT_THAT(flat.empty(), testing::IsFalse());
-  EXPECT_THAT(PixelAt(flat, 12, 10), Rgba(_, _, _, testing::Gt(100)));
+  EXPECT_THAT(PixelAt(flat, 12, 10), Rgba(_, _, _, testing::Gt(80)));
   editor::tests::CompareBitmapToBitmap(isolated, flat, "mask-region-isolated-group",
                                        editor::tests::PixelmatchIdentityParams());
 }
