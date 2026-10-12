@@ -1265,7 +1265,9 @@ async function readDelayedAnimationFrameCallbacks(page: Page): Promise<[number, 
   for (const worker of page.workers()) {
     const ran = await worker.evaluate(() => {
       const scope = globalThis as unknown as Record<string, unknown>;
-      return scope.__donnerGpuOwner ? (scope.__donnerDelayedRafCallbacks as [number, number][]) : null;
+      return scope.__donnerGpuOwner
+        ? (scope.__donnerDelayedRafCallbacks as [number, number][])
+        : null;
     }).catch(() => null);
     if (ran) return ran;
   }
