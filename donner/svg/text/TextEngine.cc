@@ -1329,6 +1329,15 @@ using namespace text_engine_detail;  // NOLINT(google-build-using-namespace)
 
 namespace {
 
+std::optional<Box2d> BitmapGlyphExtent(
+    const TextGlyph& glyph, const std::optional<TextBackend::BitmapGlyphMetrics>& bitmap) {
+  if (!bitmap || bitmap->width <= 0 || bitmap->height <= 0) {
+    return std::nullopt;
+  }
+  const Transform2d localFromBitmap = computeLocalFromBitmapGlyph(glyph, *bitmap);
+  return localFromBitmap.transformBox(Box2d::FromXYWH(0, 0, bitmap->width, bitmap->height));
+}
+
 void addBox(Box2d& accum, bool& initialized, const Box2d& box) {
   if (box.isEmpty()) {
     return;
@@ -2469,14 +2478,10 @@ const components::ComputedTextGeometryComponent& TextEngine::ensureComputedTextG
         cache.glyphs.push_back({span.sourceEntity, std::move(transformed), extent});
         addBox(cache.inkBounds, hasInkBounds, extent);
         addBox(charGeom.extent, charGeom.hasExtent, extent);
-      } else if (auto bitmap = bitmapGlyphMetrics(run.font, glyph.glyphIndex, emScale);
-                 bitmap && bitmap->width > 0 && bitmap->height > 0) {
-        const Transform2d localFromBitmap =
-            text_engine_detail::computeLocalFromBitmapGlyph(glyph, *bitmap);
-        const Box2d extent =
-            localFromBitmap.transformBox(Box2d::FromXYWH(0, 0, bitmap->width, bitmap->height));
-        addBox(cache.inkBounds, hasInkBounds, extent);
-        addBox(charGeom.extent, charGeom.hasExtent, extent);
+      } else if (const auto extent = BitmapGlyphExtent(
+                     glyph, bitmapGlyphMetrics(run.font, glyph.glyphIndex, emScale))) {
+        addBox(cache.inkBounds, hasInkBounds, *extent);
+        addBox(charGeom.extent, charGeom.hasExtent, *extent);
       }
     }
   }

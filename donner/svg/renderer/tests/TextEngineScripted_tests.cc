@@ -136,13 +136,7 @@ public:
       glyph.xKern = run.glyphs.empty() ? 0.0 : 1.0;
       glyph.yKern = run.glyphs.empty() ? 0.0 : 2.0;
       glyph.cluster = static_cast<uint32_t>(cluster);
-      if (clusterCombiningMarks && codepoint == 0x0301 && !run.glyphs.empty()) {
-        glyph.cluster = run.glyphs.back().cluster;
-        glyph.xKern = 0.0;
-        glyph.yKern = 0.0;
-        glyph.xOffset = -7.0;
-        glyph.yOffset = -4.0;
-      }
+      applyCombiningMarkPosition(glyph, run, codepoint);
       glyph.fontSizeScale = fontVariant == FontVariant::SmallCaps ? 0.8f : 1.0f;
       if (codepoint >= 0x2E80) {
         glyph.xOffset = 2.0;
@@ -155,6 +149,17 @@ public:
       std::reverse(run.glyphs.begin(), run.glyphs.end());
     }
     return run;
+  }
+
+  void applyCombiningMarkPosition(ShapedGlyph& glyph, const ShapedRun& run,
+                                  uint32_t codepoint) const {
+    if (clusterCombiningMarks && codepoint == 0x0301 && !run.glyphs.empty()) {
+      glyph.cluster = run.glyphs.back().cluster;
+      glyph.xKern = 0.0;
+      glyph.yKern = 0.0;
+      glyph.xOffset = -7.0;
+      glyph.yOffset = -4.0;
+    }
   }
 
   ShapedRun shapeRunNoKerning(FontHandle font, float fontSizePx, std::string_view spanText,
