@@ -1300,7 +1300,6 @@ test("async presentation loss publication owns and always frees its reason paylo
   assert.doesNotMatch(publisher, /browserReason\.c_str\(\)/);
 });
 
-
 test("presented document wakes use the event driver while generic wakes stay rAF paced", () => {
   const presentedWake = source.match(
     /void EditorWindow::wakeEventLoopForPresentedDocument\(\) \{([\s\S]*?)\n\}/,
@@ -1318,4 +1317,73 @@ test("presented document wakes use the event driver while generic wakes stay rAF
     /whole_app_worker::RequestFrame/,
     "ordinary UI and animation wakes must retain their rAF cadence",
   );
+});
+
+test("selection chrome probe refreshes stale captures without flooding pending requests", async (t) => {
+  const selectionTest = extractTest(
+    smokeSource,
+    "Geode WASM presents selection path overlay pixels",
+  );
+  const probeStart = selectionTest.indexOf("  try {\n");
+  const probeEnd = selectionTest.indexOf("  } catch (error)", probeStart);
+  assert.ok(probeStart >= 0 && probeEnd > probeStart, "expected the live selection chrome probe");
+  const probe = selectionTest.slice(probeStart + "  try {\n".length, probeEnd);
+  const runProbe = new Function(
+    "page",
+    "expect",
+    "requestWgpuDiagnostic",
+    "beforeSelectionChrome",
+    "selectionRequest",
+    `return (async () => {${probe}})();`,
+  );
+
+  for (const scenario of ["delayed capture", "missing overlay", "unacknowledged request"]) {
+    await t.test(scenario, async () => {
+      const state = { __donnerWgpuReadbackStats: { request: 3, selectionChromePixels: 384 } };
+      const requests = [];
+      const observations = [];
+      let pending = null;
+      const page = {
+        evaluate: async (callback) => new Function("window", `return (${callback})()`)(state),
+      };
+      const expect = {
+        poll: (callback, options) => ({
+          toBeGreaterThan: async (threshold) => {
+            assert.equal(threshold, 50, "retain the overlay pixel threshold");
+            assert.equal(options.timeout, 20000, "retain the existing probe budget");
+            for (let attempt = 0; attempt < 5; ++attempt) {
+              const value = await callback();
+              observations.push(value);
+              if (value > threshold) return;
+              if (pending && scenario !== "unacknowledged request" && ++pending.polls === 2) {
+                state.__donnerWgpuReadbackStats = {
+                  request: pending.request,
+                  selectionChromePixels: scenario === "delayed capture" ? 608 : 384,
+                };
+                pending = null;
+              }
+            }
+            assert.fail(`selection chrome stayed at stale capture: ${observations}`);
+          },
+        }),
+      };
+      const requestWgpuDiagnostic = async () => {
+        assert.equal(pending, null, "a request must finish before another is sent");
+        const request = state.__donnerWgpuReadbackStats.request + 1;
+        requests.push(request);
+        pending = { request, polls: 0 };
+        return request;
+      };
+      const result = runProbe(page, expect, requestWgpuDiagnostic, 384, 3);
+      if (scenario === "delayed capture") {
+        await result;
+        assert.deepEqual(requests, [4]);
+        assert.deepEqual(observations, [0, 0, 224]);
+      } else {
+        await assert.rejects(result, /selection chrome stayed at stale capture/);
+        assert.deepEqual(requests, scenario === "missing overlay" ? [4, 5, 6] : [4]);
+        assert.deepEqual(observations, [0, 0, 0, 0, 0]);
+      }
+    });
+  }
 });
