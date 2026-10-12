@@ -9,6 +9,8 @@
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/components/text/ComputedTextComponent.h"
 #include "donner/svg/parser/SVGParser.h"
+#include "donner/svg/renderer/PlacedTextGeometry.h"
+#include "donner/svg/renderer/RendererTinySkia.h"
 #include "donner/svg/renderer/tests/MockTextBackend.h"
 #include "donner/svg/text/TextEngine.h"
 
@@ -801,6 +803,77 @@ TEST(ComputeSpanBaselineShiftPxTest, AccumulatesAncestorKeywordAndLengthShifts) 
 }
 
 // ── TextEngine::layout() with MockTextBackend ───────────────────────────────
+
+class TinySkiaBitmapAdmissionTest : public testing::Test {
+protected:
+  void SetUp() override {
+    auto& manager = registry_.ctx().emplace<FontManager>(registry_);
+    font_ = manager.fallbackFont();
+    auto backend = std::make_unique<testing::NiceMock<MockTextBackend>>();
+    backend_ = backend.get();
+    registry_.ctx().emplace<TextEngine>(manager, registry_, std::move(backend));
+    ON_CALL(*backend_, isBitmapOnly(_)).WillByDefault(testing::Return(true));
+    ON_CALL(*backend_, scaleForPixelHeight(_, _)).WillByDefault(testing::Return(1.0f));
+    ON_CALL(*backend_, bitmapGlyph(_, _, _)).WillByDefault(testing::Return(bitmap()));
+    ON_CALL(*backend_, bitmapGlyphMetrics(_, _, _))
+        .WillByDefault([this](FontHandle, int glyphIndex, float scale) {
+          return std::optional<TextBackend::BitmapGlyphMetrics>({.font = font_,
+                                                                 .glyphIndex = glyphIndex,
+                                                                 .width = 1,
+                                                                 .height = 1,
+                                                                 .rgbaBytes = 4,
+                                                                 .scale = 1.0,
+                                                                 .requestedScale = scale});
+        });
+  }
+
+  static TextBackend::BitmapGlyph bitmap() {
+    return {.rgbaPixels = {255, 0, 0, 255}, .width = 1, .height = 1};
+  }
+
+  void drawWithByteLimit(std::uint64_t maximumBytes) {
+    renderer_.setTextMaterializationBudgetForTesting({.uniqueOutlines = 8, .bytes = maximumBytes});
+    auto prepared = std::make_shared<PreparedTextDraw>();
+    TextRun run;
+    run.font = font_;
+    run.usedFontSizePx = 1.0f;
+    run.glyphs = {{.glyphIndex = 1}, {.glyphIndex = 2, .xPosition = 1.0}};
+    prepared->runs.push_back(std::move(run));
+    prepared->elementBounds = Box2d::FromXYWH(0, 0, 2, 1);
+    TextParams params;
+    params.preparedTextDraw = std::move(prepared);
+    renderer_.beginFrame({.size = Vector2d(2, 1)});
+    renderer_.drawText(registry_, components::ComputedTextComponent(), params);
+    renderer_.endFrame();
+  }
+
+  Registry registry_;
+  FontHandle font_;
+  testing::NiceMock<MockTextBackend>* backend_ = nullptr;
+  RendererTinySkia renderer_;
+};
+
+TEST_F(TinySkiaBitmapAdmissionTest, ExhaustedBudgetRejectsBeforeBitmapDecode) {
+  EXPECT_CALL(*backend_, bitmapGlyph(_, _, _)).Times(0);
+  EXPECT_CALL(*backend_, bitmapGlyph(_, _, _, _, _)).Times(0);
+  drawWithByteLimit(0);
+  const RendererResourceStats stats = renderer_.resourceStats();
+  EXPECT_THAT(stats.textMaterializationBudgetRejected, testing::IsTrue());
+  EXPECT_THAT(stats.drawBudgetRejected, testing::IsTrue());
+  EXPECT_EQ(stats.textUniqueOutlines, 0u);
+  EXPECT_EQ(stats.textMaterializationBytes, 0u);
+}
+
+TEST_F(TinySkiaBitmapAdmissionTest, OnlyAdmittedGlyphDecodesAtExactAggregateLimit) {
+  EXPECT_CALL(*backend_, bitmapGlyph(_, _, _)).Times(0);
+  EXPECT_CALL(*backend_, bitmapGlyph(font_, 1, 1.0f, _, 4u)).WillOnce(testing::Return(bitmap()));
+  drawWithByteLimit(8);
+  const RendererResourceStats stats = renderer_.resourceStats();
+  EXPECT_THAT(stats.textMaterializationBudgetRejected, testing::IsTrue());
+  EXPECT_THAT(stats.drawBudgetRejected, testing::IsTrue());
+  EXPECT_EQ(stats.textUniqueOutlines, 1u);
+  EXPECT_EQ(stats.textMaterializationBytes, 8u);
+}
 
 class TextEngineLayoutTest : public testing::Test {
 protected:

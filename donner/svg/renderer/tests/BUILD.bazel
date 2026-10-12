@@ -706,6 +706,8 @@ donner_cc_test(
     deps = [
         "//donner/svg/components/text:components",
         "//donner/svg/parser",
+        "//donner/svg/renderer:placed_text_geometry",
+        "//donner/svg/renderer:renderer_tiny_skia",
         "//donner/svg/text:text_backend",
         "//donner/svg/text:text_engine",
         "//donner/svg/text:text_layout_params",

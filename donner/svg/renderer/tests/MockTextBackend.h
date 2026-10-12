@@ -20,6 +20,10 @@ public:
   MOCK_METHOD(bool, isCursive, (uint32_t), (const, override));
   MOCK_METHOD(bool, hasSmallCapsFeature, (FontHandle), (const, override));
   MOCK_METHOD(std::optional<BitmapGlyph>, bitmapGlyph, (FontHandle, int, float), (const, override));
+  MOCK_METHOD(std::optional<BitmapGlyphMetrics>, bitmapGlyphMetrics, (FontHandle, int, float),
+              (const, override));
+  MOCK_METHOD(std::optional<BitmapGlyph>, bitmapGlyph,
+              (FontHandle, int, float, const BitmapGlyphMetrics&, std::size_t), (const, override));
   MOCK_METHOD(ShapedRun, shapeRun,
               (FontHandle, float, std::string_view, size_t, size_t, bool, FontVariant, bool),
               (const, override));
