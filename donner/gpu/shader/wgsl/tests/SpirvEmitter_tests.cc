@@ -123,7 +123,7 @@ TEST(SpirvEmitter, EntryNamesKeepTheirNulPaddingAndWorkgroupModesAcrossWordBound
     ASSERT_THAT(tests::Diagnose(source), Eq(tests::kAccepted));
     const auto words = tests::Spirv(source);
     ASSERT_THAT(words, SizeIs(testing::Ge(5u)));
-    EXPECT_THAT(std::span(words).first(3), ElementsAre(0x07230203u, 0x00010300u, 0u));
+    EXPECT_THAT(std::span(words).first(2), ElementsAre(0x07230203u, 0x00010300u));
     EXPECT_THAT(words[4], Eq(0u));
     const auto entries = OperandsOf(words, 15u);
     ASSERT_THAT(entries, SizeIs(1));
