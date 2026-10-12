@@ -290,12 +290,21 @@ def scan_text(path: str, text: str, private_names: PrivateNames = PrivateNames()
     return [
         Finding(path, line_number, kind)
         for line_number, line in enumerate(text.splitlines(), start=1)
-        for kind in _line_kinds(line, private_names)
+        for portion in line.split("\0")
+        for kind in _line_kinds(portion, private_names)
     ]
 
 
-def _is_binary(data: bytes) -> bool:
-    return b"\0" in data[:8192]
+def _payload_text(data: bytes) -> str:
+    """Keep readable metadata in every payload, with opaque bytes as separators."""
+    text = data.decode("utf-8", errors="replace")
+    separators = {
+        ord(character): "\0"
+        for character in set(text)
+        if not (character.isprintable() or character.isspace())
+    }
+    separators[0xFFFD] = "\0"
+    return text.translate(separators)
 
 
 def scan_files(
@@ -315,9 +324,7 @@ def scan_files(
             data = path.read_bytes()
         else:
             continue
-        if _is_binary(data):
-            continue
-        findings.extend(scan_text(display_path, data.decode("utf-8", errors="replace"), private_names))
+        findings.extend(scan_text(display_path, _payload_text(data), private_names))
     return findings
 
 

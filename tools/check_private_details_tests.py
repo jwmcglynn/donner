@@ -300,9 +300,45 @@ class ScanFilesTests(unittest.TestCase):
                          ["docs/a.md:2: home-path: personal home directory path"])
         self.assertNotIn("alice", str(findings[0]))
 
-    def test_skips_binary_and_missing_files(self):
+    def test_scans_binary_payload_and_ignores_missing_files(self):
         self.write("image.png", b"\x89PNG\0" + (MAC_HOME + "alice").encode())
-        self.assertEqual(checker.scan_files(self.root, ["image.png", "missing.txt"]), [])
+        findings = checker.scan_files(self.root, ["image.png", "missing.txt"])
+        self.assertEqual([(f.path, f.kind) for f in findings],
+                         [("image.png", checker.KIND_HOME_PATH)])
+        self.assertNotIn("alice", str(findings[0]))
+
+    def test_scans_binary_metadata_with_redacted_locations_and_safe_accounts(self):
+        self.write("metadata.bin", (
+            b"\0" + b"exhost-alpha" + b"\xff\n" +
+            ipv4(10, 1, 2, 3).encode() + b"\0\n" +
+            (LINUX_HOME + "alice/notes").encode() + b"\xff"
+        ))
+        findings = checker.scan_files(self.root, ["metadata.bin"], FAKE_NAMES)
+        self.assertEqual([(f.line, f.kind) for f in findings], [
+            (1, checker.KIND_PRIVATE_NAME),
+            (2, checker.KIND_PRIVATE_ADDRESS),
+            (3, checker.KIND_HOME_PATH),
+        ])
+        self.write("safe.bin", b"\0" + (MAC_HOME + "runner").encode() + b"\xff")
+        self.assertEqual(checker.scan_files(self.root, ["safe.bin"]), [])
+
+    def test_opaque_payload_boundaries_do_not_create_version_or_name_context(self):
+        for separator in (b"\0", b"\xff", "\u200b".encode()):
+            with self.subTest(separator=separator):
+                self.write("version.bin", b"version" + separator + ipv4(10, 1, 2, 3).encode())
+                findings = checker.scan_files(self.root, ["version.bin"])
+                self.assertEqual([(f.line, f.kind) for f in findings],
+                                 [(1, checker.KIND_PRIVATE_ADDRESS)])
+                self.write("name.bin", b"exhost" + separator + b"alpha")
+                self.assertEqual(checker.scan_files(self.root, ["name.bin"], FAKE_NAMES), [])
+        self.write("unicode.bin", (LINUX_HOME + "\u00e1lice/notes").encode())
+        self.assertEqual([f.kind for f in checker.scan_files(self.root, ["unicode.bin"])],
+                         [checker.KIND_HOME_PATH])
+
+    def test_scans_binary_metadata_after_the_old_detection_prefix(self):
+        self.write("large.bin", b"x" * 8192 + b"\0" + (MAC_HOME + "alice").encode())
+        findings = checker.scan_files(self.root, ["large.bin"])
+        self.assertEqual([f.kind for f in findings], [checker.KIND_HOME_PATH])
 
     def test_scans_symlink_target_without_following_it(self):
         self.write("clean-target.txt", "nothing private here\n")
