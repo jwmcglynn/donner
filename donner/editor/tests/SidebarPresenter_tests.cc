@@ -2522,12 +2522,16 @@ TEST_F(SidebarPresenterImGuiTest, MiterTypingRejectsSmallValuesAndRecoversOneUnd
   ASSERT_TRUE(ImGui::GetIO().WantTextInput);
 
   InspectorFrameCapture capture;
-  EXPECT_FALSE(ReplaceFocusedInput(presenter, &app, kWindow, "0", center, kHeight, &capture));
+  EXPECT_FALSE(ReplaceFocusedInput(presenter, &app, kWindow, "0", center, kHeight));
+  RenderInspectorFrame(presenter, &app, kWindow, ImVec2(-1, -1), false, kHeight, {}, &capture);
+  ASSERT_THAT(capture.text, HasSubstr("STROKE"));
   EXPECT_THAT(capture.text, HasSubstr("Limit must be at least 1"));
   EXPECT_EQ(app.document().queue().size(), 0u);
   EXPECT_EQ(app.document().document().source(), before);
   EXPECT_FALSE(app.canUndo());
-  EXPECT_TRUE(ReplaceFocusedInput(presenter, &app, kWindow, "3", center, kHeight, &capture));
+  EXPECT_TRUE(ReplaceFocusedInput(presenter, &app, kWindow, "3", center, kHeight));
+  RenderInspectorFrame(presenter, &app, kWindow, ImVec2(-1, -1), false, kHeight, {}, &capture);
+  ASSERT_THAT(capture.text, HasSubstr("STROKE"));
   EXPECT_THAT(capture.text, Not(HasSubstr("Limit must be at least 1")));
   ASSERT_TRUE(app.flushFrame());
   EXPECT_EQ(target->getComputedStyle().strokeMiterlimit.get(), 3.0f);
@@ -2576,6 +2580,8 @@ TEST_F(SidebarPresenterImGuiTest, CustomDashTypingRejectsInvalidPatternThenClear
   EXPECT_FALSE(ReplaceFocusedInput(presenter, &app, kWindow, "4 -2", input, kHeight));
   ImGui::GetIO().AddKeyEvent(ImGuiKey_Enter, true);
   EXPECT_FALSE(RenderInspectorFrame(presenter, &app, kWindow, input, false, kHeight, {}, &capture));
+  RenderInspectorFrame(presenter, &app, kWindow, ImVec2(-1, -1), false, kHeight, {}, &capture);
+  ASSERT_THAT(capture.text, HasSubstr("Pattern"));
   EXPECT_THAT(capture.text, HasSubstr("Use nonnegative dash and gap lengths"));
   EXPECT_EQ(app.document().queue().size(), 0u);
   EXPECT_EQ(app.document().document().source(), before);
@@ -2587,6 +2593,8 @@ TEST_F(SidebarPresenterImGuiTest, CustomDashTypingRejectsInvalidPatternThenClear
   EXPECT_FALSE(ReplaceFocusedInput(presenter, &app, kWindow, "9 3", input, kHeight));
   ImGui::GetIO().AddKeyEvent(ImGuiKey_Enter, true);
   EXPECT_TRUE(RenderInspectorFrame(presenter, &app, kWindow, input, false, kHeight, {}, &capture));
+  RenderInspectorFrame(presenter, &app, kWindow, ImVec2(-1, -1), false, kHeight, {}, &capture);
+  ASSERT_THAT(capture.text, HasSubstr("Pattern"));
   EXPECT_THAT(capture.text, Not(HasSubstr("Use nonnegative dash and gap lengths")));
   ImGui::GetIO().AddKeyEvent(ImGuiKey_Enter, false);
   RenderInspectorFrame(presenter, &app, kWindow, input, false, kHeight);
