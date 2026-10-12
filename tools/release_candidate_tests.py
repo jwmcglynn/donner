@@ -245,8 +245,7 @@ class RecordValidationTest(unittest.TestCase):
             self.verify()
 
     def test_artifacts_must_stay_retained_through_release_and_rollback(self):
-        self.assertEqual(candidate.MIN_REMAINING_RETENTION, timedelta(days=60))
-        for artifact_id, metadata in self.metadata.items():
+        for metadata in self.metadata.values():
             with self.subTest(artifact=metadata["name"]):
                 original = metadata["expires_at"]
                 # Not yet expired is not enough: one day short of the window fails.
@@ -260,6 +259,7 @@ class RecordValidationTest(unittest.TestCase):
                 metadata["expires_at"] = github_time(NOW + timedelta(days=60))
                 self.verify()
                 metadata["expires_at"] = original
+        self.assertEqual(candidate.MIN_REMAINING_RETENTION, timedelta(days=60))
 
     def test_empty_or_unbound_evidence_is_rejected(self):
         run_id = self.record["evidence"]["ci"]["run_id"]
