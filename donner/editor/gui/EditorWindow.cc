@@ -2127,9 +2127,8 @@ Vector2i EditorWindow::windowSize() const {
     int framebufferWidth = 0;
     int framebufferHeight = 0;
     glfwGetFramebufferSize(window_, &framebufferWidth, &framebufferHeight);
-    return Vector2i(
-        static_cast<int>(std::lround(framebufferWidth / frameDisplayScaleOverride_)),
-        static_cast<int>(std::lround(framebufferHeight / frameDisplayScaleOverride_)));
+    return Vector2i(static_cast<int>(std::lround(framebufferWidth / frameDisplayScaleOverride_)),
+                    static_cast<int>(std::lround(framebufferHeight / frameDisplayScaleOverride_)));
   }
 
   int width = 0;
