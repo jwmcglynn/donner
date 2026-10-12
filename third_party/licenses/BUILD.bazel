@@ -158,6 +158,16 @@ license(
     package_url = "https://github.com/tonsky/FiraCode",
 )
 
+# Public Sans: the fallback text font the renderer embeds whenever text is
+# enabled, so it ships in the CLI as well as the editor. SIL Open Font License 1.1.
+license(
+    name = "public-sans",
+    package_name = "Public Sans",
+    license_kinds = ["@rules_license//licenses/spdx:OFL-1.1"],
+    license_text = "//third_party/public-sans:LICENSE.md",
+    package_url = "https://github.com/uswds/public-sans",
+)
+
 # Bootstrap Icons — UI icons embedded in //donner/editor.
 license(
     name = "bootstrap-icons",
@@ -190,6 +200,7 @@ license(
 
 DEFAULT_LICENSES = [
     ":entt",
+    ":public-sans",
     ":stb",
     ":tiny-skia-cpp",
     "@libpng//:license",
@@ -219,6 +230,7 @@ ALL_KNOWN_LICENSES = [
     ":emscripten-glfw",
     ":roboto",
     ":fira-code",
+    ":public-sans",
     ":bootstrap-icons",
     ":google_fonts",
     ":generic_sans_faces",
