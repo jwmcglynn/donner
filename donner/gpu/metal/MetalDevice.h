@@ -72,8 +72,10 @@ namespace donner::gpu::metal {
  * in-flight byte reservation.
  *
  * macOS buffer blits require four-byte-aligned offsets and sizes. An unaligned update instead
- * waits at most five seconds for that buffer's last use, returning an error on timeout; it never
- * waits for unrelated later submissions.
+ * waits for that buffer's last use for as long as the work ahead of it keeps making progress. It
+ * returns an error if this device has failed work, its root is lost, or that work makes no progress
+ * for the `unalignedWriteTimeout` given to `Create` (five seconds by default); it never waits for
+ * unrelated later submissions.
  *
  * Memory model: unified-memory resources use `MTLStorageModeShared`; other devices use
  * `MTLStorageModeManaged`. Managed CPU writes publish their ranges, and every submission

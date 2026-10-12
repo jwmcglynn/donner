@@ -1,5 +1,10 @@
 name: Sanitizers
 
+# Keep third-party Bazel module telemetry off, as the telemetry section of .bazelrc explains.
+env:
+  DO_NOT_TRACK: "1"
+  ASPECT_TOOLS_TELEMETRY: "-all"
+
 # Runs the sanitizer variants on a nightly schedule, but first checks whether
 # main has advanced since the last successful run so idle days don't consume CI.
 on:
