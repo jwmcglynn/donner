@@ -33,7 +33,8 @@ class ControlledWorker {
     const index = this.calls++;
     this.pending++;
     this.maximumPending = Math.max(this.maximumPending, this.pending);
-    return Promise.resolve(this.replies[index] ?? { objects: index + 1 }).finally(() => {
+    const reply = this.replies[index] ?? { objects: index + 1 };
+    return Promise.resolve(reply.promise ?? reply).finally(() => {
       this.pending--;
     });
   }
@@ -77,7 +78,7 @@ async function holdAcrossPulses(context) {
 
 test("application IPC stays pending across deadlines and late completion resumes freshness", async (context) => {
   const held = deferred();
-  const state = fixture(context, [held.promise]);
+  const state = fixture(context, [held]);
   await setImmediate();
   assert.equal(state.worker.calls, 1);
   await advance(context, 500);
@@ -100,7 +101,7 @@ test("application IPC stays pending across deadlines and late completion resumes
 
 test("a held application diagnostic reply blocks overlapping application heartbeats", async (context) => {
   const held = deferred();
-  const state = fixture(context, [{ objects: 1 }, held.promise]);
+  const state = fixture(context, [{ objects: 1 }, held]);
   await setImmediate();
   assert.equal(state.worker.calls, 2);
   await advance(context, 500);
@@ -122,7 +123,7 @@ test("a held application diagnostic reply blocks overlapping application heartbe
 
 test("rejected application IPC releases the guard for the next acknowledged pulse", async (context) => {
   const failed = deferred();
-  const state = fixture(context, [failed.promise]);
+  const state = fixture(context, [failed]);
   await setImmediate();
   failed.reject(new Error("injected IPC rejection"));
   await state.start();
@@ -136,7 +137,7 @@ test("rejected application IPC releases the guard for the next acknowledged puls
 
 test("stop preserves teardown while outstanding IPC completes without cancellation", async (context) => {
   const held = deferred();
-  const state = fixture(context, [held.promise]);
+  const state = fixture(context, [held]);
   await setImmediate();
   await advance(context, 500);
   const stop = await state.start();
