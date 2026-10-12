@@ -114,6 +114,11 @@ TEST(EditorControlSessionTest, HiDpiInspectorCaptureAfterCanvasCommit) {
     commits += frame.frameCost.documentCanvasCommitCount;
   }
   ASSERT_THAT(commits, testing::Gt(0u));
+  // Frame 35 has no capture selector: its rendering instance must already be fresh before
+  // frame 36 reads the framebuffer. Capture barriers cannot supply the missing render.
+  ASSERT_THAT(result.frameDiagnostics.size(), testing::Eq(37u));
+  EXPECT_THAT(result.frameDiagnostics[35].selectedRenderingInstanceFill,
+              testing::Optional(testing::Eq("PaintServer(solid rgba(1, 2, 3, 255))")));
   const auto& status = result.frameDiagnostics.back();
   EXPECT_THAT(status.selectedRenderingInstanceFill,
               testing::Optional(testing::Eq("PaintServer(solid rgba(1, 2, 3, 255))")));
