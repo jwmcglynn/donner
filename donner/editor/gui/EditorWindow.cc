@@ -2383,6 +2383,27 @@ void EditorWindow::declarePresentationTimeoutLossForTesting(std::chrono::millise
   declarePresentationTimeoutLoss(device, age);
 }
 
+#ifdef __EMSCRIPTEN__
+namespace {
+/// Append one presentation admission observation to the page's bounded diagnostic timeline.
+void PublishPresentationTimelineSample(int admission, std::size_t pending,
+                                       std::uint64_t deviceCompleted, std::uint64_t submitted,
+                                       std::uint64_t oldest) {
+  // clang-format off
+  MAIN_THREAD_ASYNC_EM_ASM(
+      {
+        const timeline = window['__donnerPresentationTimeline'] ||
+            (window['__donnerPresentationTimeline'] = []);
+        if (timeline.length >= 512) timeline.shift();
+        timeline.push([ Math.round(performance.now() * 10) / 10, $0, $1, $2, $3, $4 ]);
+      },
+      admission, static_cast<double>(pending), static_cast<double>(deviceCompleted),
+      static_cast<double>(submitted), static_cast<double>(oldest));
+  // clang-format on
+}
+}  // namespace
+#endif
+
 bool EditorWindow::observePresentationCompletion() {
   if (wgpuState_ == nullptr || wgpuState_->framebufferGeodeDevice == nullptr) {
     return false;
@@ -2440,10 +2461,6 @@ bool EditorWindow::observePresentationCompletion() {
           'completedAtMs' : previous &&
               Object.is(previous['completedSerial'], $0) ? previous['completedAtMs'] : performance.now(),
         });
-        const timeline = window['__donnerPresentationTimeline'] ||
-            (window['__donnerPresentationTimeline'] = []);
-        if (timeline.length >= 512) timeline.shift();
-        timeline.push([ Math.round(performance.now() * 10) / 10, $14, $2, $11, $1, $12 ]);
       },
       static_cast<double>(frame.serial), static_cast<double>(device.lastSubmittedSerial()),
       static_cast<double>(presentationSubmissions_.pendingCount()),
@@ -2451,6 +2468,10 @@ bool EditorWindow::observePresentationCompletion() {
       static_cast<double>(frame.captureId), frame.pointerX, frame.pointerY, frame.mouseDown, frame.inputRepresented, frame.viewportZoom,
       static_cast<double>(device.completedSerial()), static_cast<double>(presentationSubmissions_.oldestSerial()),
       deviceLost, static_cast<int>(admission));
+  PublishPresentationTimelineSample(static_cast<int>(admission),
+                                    presentationSubmissions_.pendingCount(),
+                                    device.completedSerial(), device.lastSubmittedSerial(),
+                                    presentationSubmissions_.oldestSerial());
   MAIN_THREAD_ASYNC_EM_ASM({
     const stats = window['__donnerPresentationQueueStats'];
     if (stats) {
