@@ -2531,6 +2531,9 @@ void EditorWindow::wakeEventLoop() {
 
 void EditorWindow::wakeEventLoopForPresentedDocument() {
   wakeEventLoop();
+#ifdef DONNER_EDITOR_WHOLE_APP_WORKER
+  whole_app_worker::RequestFrame();
+#endif
   presentedDocumentWakeSerial_.fetch_add(1, std::memory_order_acq_rel);
 }
 
