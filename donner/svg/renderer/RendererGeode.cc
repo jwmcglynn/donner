@@ -2796,10 +2796,6 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     return filtered;
   }
 
-  /// Recompute the intersection of every rectangular clip entry on
-  /// `clipStack` and apply it to the active encoder as a scissor,
-  /// plus forward the topmost polygon clip (if any) through
-  /// `setClipPolygon`. Called whenever the clip stack changes.
   void suspendMaskClipsForCapture(MaskStackFrame& frame) {
     frame.savedClipStack = std::move(clipStack);
     clipStack.clear();
@@ -2812,6 +2808,10 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     updateEncoderScissor();
   }
 
+  /// Recompute the intersection of every rectangular clip entry on
+  /// `clipStack` and apply it to the active encoder as a scissor,
+  /// plus forward the topmost polygon clip (if any) through
+  /// `setClipPolygon`. Called whenever the clip stack changes.
   void updateEncoderScissor() {
     if (!encoder) {
       return;
