@@ -29,6 +29,7 @@ from python.runfiles import runfiles
 
 
 NATIVE_DOWNLOAD_APIS = frozenset({"download", "download_and_extract"})
+PROXY_REPO_OPERATIONS = frozenset({"use_repo", "override_repo", "inject_repo"})
 HTTP_FETCH_RULES = frozenset({"archive_override", "http_archive", "http_file", "http_jar"}) | \
     NATIVE_DOWNLOAD_APIS
 GIT_FETCH_RULES = frozenset({"git_override", "git_repository", "new_git_repository"})
@@ -378,6 +379,13 @@ def _readable_string_values(tree, expression, call):
     return values
 
 
+def _assigned_proxy_name(assignment):
+    if assignment is None or len(assignment.targets) != 1:
+        return None
+    target = assignment.targets[0]
+    return target.id if isinstance(target, ast.Name) else None
+
+
 def _extension_proxy_bindings(path, tree):
     """Recognize literal extension identities, rejecting ambiguous proxy bindings."""
     assignments = [node for node in ast.walk(tree) if isinstance(node, ast.Assign)]
@@ -391,11 +399,10 @@ def _extension_proxy_bindings(path, tree):
         if not values or len(values) != 1:
             problems.append("%s:%d: use_extension name must be a readable literal" % (path, call.lineno))
             continue
-        assignment = by_value.get(id(call))
-        if assignment is None or len(assignment.targets) != 1 or not isinstance(assignment.targets[0], ast.Name):
+        name = _assigned_proxy_name(by_value.get(id(call)))
+        if name is None:
             problems.append("%s:%d: use_extension must bind one proxy name directly" % (path, call.lineno))
             continue
-        name = assignment.targets[0].id
         if counts[name] != 1:
             problems.append("%s:%d: extension proxy name is rebound" % (path, call.lineno))
         if values == ["playwright"]:
@@ -414,8 +421,41 @@ def _is_playwright_repo(call, proxies):
 
 def _proxy_argument_is_direct(node, parent):
     return (isinstance(parent, ast.Call) and isinstance(parent.func, ast.Name)
-            and parent.func.id in {"use_repo", "getattr"}
+            and parent.func.id in PROXY_REPO_OPERATIONS | {"getattr"}
             and bool(parent.args) and parent.args[0] is node)
+
+
+def _proxy_keyword_is_direct(parent, parents):
+    if not isinstance(parent, ast.keyword) or parent.arg != "extension_proxy":
+        return False
+    call = parents.get(id(parent))
+    return (isinstance(call, ast.Call) and isinstance(call.func, ast.Name)
+            and call.func.id in PROXY_REPO_OPERATIONS)
+
+
+def _is_direct_call(node, parent):
+    return isinstance(parent, ast.Call) and parent.func is node
+
+
+def _is_extension_factory(node):
+    return isinstance(node, ast.Name) and node.id == "use_extension"
+
+
+def _is_browser_repo_member(node, proxies):
+    return (isinstance(node, ast.Attribute) and node.attr == "repo"
+            and _is_proxy_name(node.value, proxies))
+
+
+def _browser_node_indirection(node, parent, parents, proxies):
+    if _is_extension_factory(node) and not _is_direct_call(node, parent):
+        return "use_extension must be called directly"
+    if _is_browser_repo_member(node, proxies) and not _is_direct_call(node, parent):
+        return "browser repo method must be called directly"
+    if _is_proxy_name(node, proxies) and isinstance(node.ctx, ast.Load):
+        if not (isinstance(parent, ast.Attribute) or _proxy_argument_is_direct(node, parent)
+                or _proxy_keyword_is_direct(parent, parents)):
+            return "browser proxy must be used directly"
+    return None
 
 
 def _browser_indirection_problems(path, tree, proxies):
@@ -423,16 +463,9 @@ def _browser_indirection_problems(path, tree, proxies):
     parents = {id(child): node for node in ast.walk(tree) for child in ast.iter_child_nodes(node)}
     problems = []
     for node in ast.walk(tree):
-        parent = parents.get(id(node))
-        if isinstance(node, ast.Name) and node.id == "use_extension":
-            if not (isinstance(parent, ast.Call) and parent.func is node):
-                problems.append("%s:%d: use_extension must be called directly" % (path, node.lineno))
-        if isinstance(node, ast.Attribute) and node.attr == "repo" and _is_proxy_name(node.value, proxies):
-            if not (isinstance(parent, ast.Call) and parent.func is node):
-                problems.append("%s:%d: browser repo method must be called directly" % (path, node.lineno))
-        if _is_proxy_name(node, proxies) and isinstance(node.ctx, ast.Load):
-            if not isinstance(parent, ast.Attribute) and not _proxy_argument_is_direct(node, parent):
-                problems.append("%s:%d: browser proxy must be used directly" % (path, node.lineno))
+        problem = _browser_node_indirection(node, parents.get(id(node)), parents, proxies)
+        if problem:
+            problems.append("%s:%d: %s" % (path, node.lineno, problem))
     return problems
 
 
@@ -750,6 +783,14 @@ class CheckerTest(unittest.TestCase):
                                        extension='"unrelated"')
                 self.assertEqual(self._findings(source), [])
         self.assertEqual(self._findings('ordinary.repo(name = "ordinary")'), [])
+
+    def test_direct_repository_mapping_operations_remain_allowed(self):
+        for operation in ("use_repo", "override_repo", "inject_repo"):
+            with self.subTest(operation=operation):
+                self.assertEqual(self._findings(self._browser(
+                    '%s(pw, browser = "existing_repo")' % operation)), [])
+                self.assertEqual(self._findings(self._browser(
+                    '%s(extension_proxy = pw, browser = "existing_repo")' % operation)), [])
 
     def test_nonliteral_extension_names_fail_closed(self):
         for name in ('"play" + "wright"', 'EXTENSION_NAME', 'choose_extension()'):
