@@ -296,7 +296,8 @@ def _expressions(text):
     while (start := text.find("${{", cursor)) != -1:
         end = _expression_end(text, start + 3)
         if end is None:
-            return
+            # Fail closed even in comments: a marker must not hide later reads.
+            raise ValueError("unterminated expression marker")
         yield re.fullmatch(r"\$\{\{(.*)\}\}", text[start:end + 2], re.DOTALL)
         cursor = end + 2
 
