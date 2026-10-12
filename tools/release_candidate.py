@@ -317,8 +317,8 @@ def _verify_payload(role: str, directory: Path, entry: dict, record: dict, root:
         provenance = release_cli.verify(root=root, artifacts=directory, platform=platform,
                                         commit=commit, run_id=run_id, attempt=attempt)
         if (provenance["generated_lock_sha256"] != record["source"]["module_locks_sha256"][role] or
-                provenance["host_cxx_version"] != record["source"]["compiler_versions"][role]):
-            raise ValueError("CLI generated lock differs from candidate dependency state")
+                provenance["compiler_version"] != record["source"]["compiler_versions"][role]):
+            raise ValueError("CLI generated lock or compiler differs from candidate dependency state")
     elif role == "editor":
         _verify_editor(directory, commit, root, entry["files"], run_id, attempt)
     else:
