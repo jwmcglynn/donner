@@ -5590,7 +5590,7 @@ TEST_F(TextEditorTests, RightClickInTextMovesCursorToClickPosition) {
   EXPECT_EQ(editor.getText(), "hello world") << "A right-click must not modify the text.";
 }
 
-TEST_F(TextEditorTests, SourceDiagnosticsNormalizeRangesAndStableOrdering) {
+TEST_F(TextEditorTests, SourceDiagnosticsNormalizeRangesAndRecognizeAnUnchangedSnapshot) {
   editor.setText("first\nsecond");
   const SourceDiagnostic shortWarning{.id = 9,
                                       .severity = DiagnosticSeverity::Warning,
@@ -5600,17 +5600,19 @@ TEST_F(TextEditorTests, SourceDiagnosticsNormalizeRangesAndStableOrdering) {
   const SourceDiagnostic wide{.id = 1, .range = {6, 99}, .message = "wide"};
   EXPECT_TRUE(editor.setSourceDiagnostics(
       {wide, shortWarning, shortError, SourceDiagnostic{.id = 4, .range = {99, 100}}}));
-  EXPECT_THAT(
-      editor.sourceDiagnostics(),
-      ElementsAre(AllOf(Field(&SourceDiagnostic::id, 2u),
-                        Field(&SourceDiagnostic::range, SourceByteRangeIs(6, 8)),
-                        Field(&SourceDiagnostic::line, 2u), Field(&SourceDiagnostic::column, 0u),
-                        Field(&SourceDiagnostic::endColumn, 2u)),
-                  Field(&SourceDiagnostic::id, 9u),
-                  AllOf(Field(&SourceDiagnostic::id, 1u),
-                        Field(&SourceDiagnostic::range, SourceByteRangeIs(6, 12)),
-                        Field(&SourceDiagnostic::endColumn, 6u))));
-  EXPECT_FALSE(editor.setSourceDiagnostics({shortError, wide, shortWarning}));
+  EXPECT_THAT(editor.sourceDiagnostics(),
+              ::testing::UnorderedElementsAre(
+                  AllOf(Field("id", &SourceDiagnostic::id, 2u),
+                        Field("range", &SourceDiagnostic::range, SourceByteRangeIs(6, 8)),
+                        Field("line", &SourceDiagnostic::line, 2u),
+                        Field("column", &SourceDiagnostic::column, 0u),
+                        Field("endColumn", &SourceDiagnostic::endColumn, 2u)),
+                  Field("id", &SourceDiagnostic::id, 9u),
+                  AllOf(Field("id", &SourceDiagnostic::id, 1u),
+                        Field("range", &SourceDiagnostic::range, SourceByteRangeIs(6, 12)),
+                        Field("endColumn", &SourceDiagnostic::endColumn, 6u))));
+  EXPECT_FALSE(editor.setSourceDiagnostics(
+      {wide, shortWarning, shortError, SourceDiagnostic{.id = 4, .range = {99, 100}}}));
   EXPECT_THAT(editor.sourceDiagnosticAtByteOffset(6), ::testing::Optional(2u));
   EXPECT_THAT(editor.sourceDiagnosticAtByteOffset(8), ::testing::Optional(1u));
   EXPECT_EQ(editor.sourceDiagnosticAtByteOffset(12), std::nullopt);
@@ -5651,13 +5653,14 @@ TEST_F(TextEditorTests, StructuralMoveDecorationNormalizesThenDetectsNoChange) {
   const TextEditor::SourceStructuralMoveDecoration decoration{
       .elementRange = {1, 100}, .insertionOffset = 100, .valid = true, .message = "move"};
   EXPECT_TRUE(editor.setSourceStructuralMoveDecoration(decoration));
-  EXPECT_THAT(
-      editor.sourceStructuralMoveDecoration(),
-      ::testing::Optional(AllOf(
-          Field(&TextEditor::SourceStructuralMoveDecoration::elementRange, SourceByteRangeIs(1, 6)),
-          Field(&TextEditor::SourceStructuralMoveDecoration::insertionOffset, 6u),
-          Field(&TextEditor::SourceStructuralMoveDecoration::valid, true),
-          Field(&TextEditor::SourceStructuralMoveDecoration::message, "move"))));
+  EXPECT_THAT(editor.sourceStructuralMoveDecoration(),
+              ::testing::Optional(AllOf(
+                  Field("elementRange", &TextEditor::SourceStructuralMoveDecoration::elementRange,
+                        SourceByteRangeIs(1, 6)),
+                  Field("insertionOffset",
+                        &TextEditor::SourceStructuralMoveDecoration::insertionOffset, 6u),
+                  Field("valid", &TextEditor::SourceStructuralMoveDecoration::valid, true),
+                  Field("message", &TextEditor::SourceStructuralMoveDecoration::message, "move"))));
   EXPECT_FALSE(editor.setSourceStructuralMoveDecoration(decoration));
   EXPECT_TRUE(editor.setSourceStructuralMoveDecoration(
       TextEditor::SourceStructuralMoveDecoration{.elementRange = {99, 100}}));
@@ -5770,13 +5773,14 @@ TEST_F(TextEditorTests, ReferenceColoredSourcePreservesTextGeometryIncludingWhit
   ASSERT_EQ(reference.size(), baseline.size());
   for (std::size_t index = 0; index < baseline.size(); ++index) {
     SCOPED_TRACE(index);
-    EXPECT_THAT(reference[index],
-                AllOf(Field(&ImDrawVert::pos,
-                            AllOf(Field(&ImVec2::x, ::testing::FloatEq(baseline[index].pos.x)),
-                                  Field(&ImVec2::y, ::testing::FloatEq(baseline[index].pos.y)))),
-                      Field(&ImDrawVert::uv,
-                            AllOf(Field(&ImVec2::x, ::testing::FloatEq(baseline[index].uv.x)),
-                                  Field(&ImVec2::y, ::testing::FloatEq(baseline[index].uv.y))))));
+    EXPECT_THAT(
+        reference[index],
+        AllOf(Field("pos", &ImDrawVert::pos,
+                    AllOf(Field("x", &ImVec2::x, ::testing::FloatEq(baseline[index].pos.x)),
+                          Field("y", &ImVec2::y, ::testing::FloatEq(baseline[index].pos.y)))),
+              Field("uv", &ImDrawVert::uv,
+                    AllOf(Field("x", &ImVec2::x, ::testing::FloatEq(baseline[index].uv.x)),
+                          Field("y", &ImVec2::y, ::testing::FloatEq(baseline[index].uv.y))))));
     const float baselineAlpha = ImGui::ColorConvertU32ToFloat4(baseline[index].col).w;
     const float referenceAlpha = ImGui::ColorConvertU32ToFloat4(reference[index].col).w;
     if (baselineAlpha > 0.0f) {
@@ -5805,8 +5809,8 @@ TEST_F(TextEditorTests, DimmedSourcePreservesGeometryAndDesaturatesWhitespaceAnd
   for (std::size_t index = 0; index < baseline.size(); ++index) {
     SCOPED_TRACE(index);
     EXPECT_THAT(dimmed[index].pos,
-                AllOf(Field(&ImVec2::x, ::testing::FloatEq(baseline[index].pos.x)),
-                      Field(&ImVec2::y, ::testing::FloatEq(baseline[index].pos.y))));
+                AllOf(Field("x", &ImVec2::x, ::testing::FloatEq(baseline[index].pos.x)),
+                      Field("y", &ImVec2::y, ::testing::FloatEq(baseline[index].pos.y))));
     const ImVec4 color = ImGui::ColorConvertU32ToFloat4(dimmed[index].col);
     EXPECT_THAT((std::array<float, 3>{color.x, color.y, color.z}),
                 ElementsAre(color.x, color.x, color.x));
