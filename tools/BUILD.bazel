@@ -332,10 +332,22 @@ cc_library(
 )
 
 _CLOSURE_NOTICE_FIXTURES = {
-    "asset": ("public-sans", ["--require=public-sans"]),
-    "compiler_input": ("public-sans", ["--require=public-sans"]),
-    "linkopt": ("public-sans", ["--expect-failure=-lz"]),
-    "root_package_file": ("stb", ["--require=stb"]),
+    "asset": (
+        "public-sans",
+        ["--require=public-sans"],
+    ),
+    "compiler_input": (
+        "public-sans",
+        ["--require=public-sans"],
+    ),
+    "linkopt": (
+        "public-sans",
+        ["--expect-failure=-lz"],
+    ),
+    "root_package_file": (
+        "stb",
+        ["--require=stb"],
+    ),
 }
 
 [donner_closure_notice_file(
