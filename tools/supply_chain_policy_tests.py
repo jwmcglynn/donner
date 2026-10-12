@@ -487,6 +487,28 @@ class CheckerTest(unittest.TestCase):
         self.assertEqual(len(workflow_telemetry_problems(override)), 1)
 
 
+    def test_native_repository_downloads_require_an_integrity_hash(self):
+        for context in ("ctx", "repository_ctx", "download_context"):
+            for method in ("download", "download_and_extract"):
+                for suffix in ("", ', sha256 = ""', ', integrity = "sha256-"',
+                               ", sha256 = UNKNOWN_HASH"):
+                    with self.subTest(context=context, method=method, suffix=suffix):
+                        source = '%s.%s("https://example.invalid/archive"%s)' % (
+                            context, method, suffix)
+                        self.assertEqual(len(self._findings(source)), 1)
+                valid = '%s.%s("https://example.invalid/archive", sha256 = "%s")' % (
+                    context, method, "a" * 64)
+                self.assertEqual(self._findings(valid), [])
+                positional = '%s.%s("https://example.invalid/archive", "out", "%s")' % (
+                    context, method, "a" * 64)
+                self.assertEqual(self._findings(positional), [])
+
+    def test_retired_legacy_pin_cannot_keep_a_dormant_approval(self):
+        retired = dict(LEGACY_GIT_COMMIT_PINS)
+        del retired[(self._NON_BCR, "woff2")]
+        self.assertEqual(len(legacy_list_problems(retired)), 1)
+
+
 class RepositoryPolicyTest(unittest.TestCase):
     """Applies the checks to the checked-in configuration."""
 
