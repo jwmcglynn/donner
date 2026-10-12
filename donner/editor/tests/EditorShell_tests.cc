@@ -73,8 +73,9 @@ svg::RendererBitmap CropDocumentRect(const svg::RendererBitmap& bitmap,
   }
   const Vector2d screenMin = viewport.documentToScreen(documentRect.topLeft);
   const Vector2d screenMax = viewport.documentToScreen(documentRect.bottomRight);
-  // documentToScreen() uses logical UI pixels. The offscreen test's forced display scale can
-  // differ from both GLFW windowSize() and the viewport's OS-reported devicePixelRatio.
+  // documentToScreen() uses logical UI pixels. Scale them by the framebuffer scale the caller
+  // passes rather than GLFW windowSize() or the viewport's devicePixelRatio, which a native window
+  // emulating another scale need not share.
   const Vector2d physicalMin = screenMin * framebufferScale;
   const Vector2d physicalMax = screenMax * framebufferScale;
   if (!std::isfinite(physicalMin.x) || !std::isfinite(physicalMin.y) ||
@@ -202,13 +203,43 @@ constexpr std::string_view kIntrinsicSizeSvg = R"svg(
 </svg>
 )svg";
 
-gui::EditorWindow MakeHiddenWindow() {
-  return gui::EditorWindow(gui::EditorWindowOptions{
-      .title = "Donner EditorShell test",
-      .initialWidth = 640,
-      .initialHeight = 480,
-      .visible = false,
-  });
+/// Content scale every editor shell test window emulates unless a test asks for another.
+///
+/// The suite runs at 2x on purpose, on every platform. Without a forced scale a hidden macOS window
+/// takes the main display's scale while Linux's windowless platform is always 1x, so whether HiDPI
+/// was tested depended on the host's display. `EditorShell1xSmokeTest` keeps a small 1x
+/// cross-section so regressions at 1x are still caught.
+constexpr double kTestContentScale = 2.0;
+
+/// Return @p options for a hidden test window that emulates @p contentScale regardless of the host
+/// display.
+gui::EditorWindowOptions TestWindowOptions(gui::EditorWindowOptions options,
+                                           double contentScale = kTestContentScale) {
+  options.visible = false;
+  options.offscreen = true;
+  options.offscreenContentScale = contentScale;
+  return options;
+}
+
+/// Assert that @p window, created for a @p logicalSize UI, renders at @p contentScale, so a silent
+/// fallback to the host display's scale fails the test instead of quietly changing what it covers.
+void ExpectTestWindowScale(const gui::EditorWindow& window, const Vector2i& logicalSize,
+                           double contentScale) {
+  EXPECT_DOUBLE_EQ(window.displayScale(), contentScale);
+  EXPECT_DOUBLE_EQ(window.contentScale().x, contentScale);
+  EXPECT_EQ(window.framebufferSize(),
+            Vector2i(static_cast<int>(std::lround(logicalSize.x * contentScale)),
+                     static_cast<int>(std::lround(logicalSize.y * contentScale))));
+}
+
+gui::EditorWindow MakeHiddenWindow(double contentScale = kTestContentScale) {
+  return gui::EditorWindow(TestWindowOptions(
+      {
+          .title = "Donner EditorShell test",
+          .initialWidth = 640,
+          .initialHeight = 480,
+      },
+      contentScale));
 }
 
 std::filesystem::path TempPathForTest(std::string_view suffix) {
@@ -2086,11 +2117,12 @@ void RenderSelectionSizeChipFrame(
   window.endFrame();
 }
 
-TEST(EditorShellTest, HiddenWindowShellConstructsAndRunsFrames) {
-  gui::EditorWindow window = MakeHiddenWindow();
+void RunHiddenWindowShellConstructsAndRunsFrames(double contentScale) {
+  gui::EditorWindow window = MakeHiddenWindow(contentScale);
   if (!window.valid()) {
     GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
   }
+  ExpectTestWindowScale(window, Vector2i(640, 480), contentScale);
 
   {
     EditorShell emptyShell(window, EditorShellOptions{});
@@ -2133,6 +2165,10 @@ TEST(EditorShellTest, HiddenWindowShellConstructsAndRunsFrames) {
   EXPECT_TRUE(shell.valid());
 }
 
+TEST(EditorShellTest, HiddenWindowShellConstructsAndRunsFrames) {
+  RunHiddenWindowShellConstructsAndRunsFrames(kTestContentScale);
+}
+
 #ifdef DONNER_EDITOR_WGPU
 TEST(EditorShellTest, UiRuntimeProducersUseFramebufferDevice) {
   gui::EditorWindow window = MakeHiddenWindow();
@@ -2158,12 +2194,11 @@ TEST(EditorShellTest, UiRuntimeProducersUseFramebufferDevice) {
 }
 
 TEST(EditorShellTest, CpuAdoptionDoesNotStartPreviewsBeforeForegroundPresentation) {
-  gui::EditorWindow window(gui::EditorWindowOptions{
+  gui::EditorWindow window(TestWindowOptions({
       .title = "Blocked first-frame preview admission",
       .initialWidth = 1600,
       .initialHeight = 900,
-      .visible = false,
-  });
+  }));
   if (!window.valid()) {
     GTEST_SKIP() << "WGPU hidden editor window is unavailable on this host";
   }
@@ -2287,12 +2322,11 @@ TEST(EditorShellTest, SettledEmptyDocumentDoesNotBlockFontPreviews) {
 }
 
 TEST(EditorShellTest, SidebarPresentationWakeTracksOnlyRenderableRasterDemand) {
-  gui::EditorWindow window(gui::EditorWindowOptions{
+  gui::EditorWindow window(TestWindowOptions({
       .title = "Sidebar presentation wake policy",
       .initialWidth = 844,
       .initialHeight = 390,
-      .visible = false,
-  });
+  }));
   if (!window.valid()) {
     GTEST_SKIP() << "WGPU hidden editor window is unavailable on this host";
   }
@@ -2331,12 +2365,11 @@ TEST(EditorShellTest, SidebarPresentationWakeTracksOnlyRenderableRasterDemand) {
 }
 
 TEST(EditorShellTest, NewShellInvalidatesPriorProducerPresentationAck) {
-  gui::EditorWindow window(gui::EditorWindowOptions{
+  gui::EditorWindow window(TestWindowOptions({
       .title = "Reused-window presentation producer",
       .initialWidth = 1600,
       .initialHeight = 900,
-      .visible = false,
-  });
+  }));
   if (!window.valid()) {
     GTEST_SKIP() << "WGPU hidden editor window is unavailable on this host";
   }
@@ -2422,6 +2455,7 @@ TEST(EditorShellTest, NothingToPresentRetriesPostFromIdleFrames) {
   if (!window.valid()) {
     GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
   }
+  ExpectTestWindowScale(window, Vector2i(640, 480), kTestContentScale);
   EditorShell shell(window, OptionsWithSource(kInitialSvg));
   ASSERT_TRUE(shell.valid());
   RenderCoordinator& coordinator = EditorShellTestAccess::Coordinator(shell);
@@ -2503,11 +2537,12 @@ TEST(EditorShellTest, DueNothingToPresentRetryWaitsForTheSamplePickerWithoutWaki
   EXPECT_EQ(runIdleFrames(10), settled + 1) << "the due retry posts once the picker closes";
 }
 
-TEST(EditorShellTest, FullFrameSmokeCoversPanelSourceAndContextMenuStates) {
-  gui::EditorWindow window = MakeHiddenWindow();
+void RunFullFrameSmokeCoversPanelSourceAndContextMenuStates(double contentScale) {
+  gui::EditorWindow window = MakeHiddenWindow(contentScale);
   if (!window.valid()) {
     GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
   }
+  ExpectTestWindowScale(window, Vector2i(640, 480), contentScale);
 
   EditorShell shell(window, OptionsWithSource(kReferencedSvg, "referenced.svg"));
   ASSERT_TRUE(shell.valid());
@@ -2559,6 +2594,10 @@ TEST(EditorShellTest, FullFrameSmokeCoversPanelSourceAndContextMenuStates) {
   shell.runFrame();
   window.endFrame();
   EXPECT_FALSE(EditorShellTestAccess::RenderContextMenuOpenRequested(shell));
+}
+
+TEST(EditorShellTest, FullFrameSmokeCoversPanelSourceAndContextMenuStates) {
+  RunFullFrameSmokeCoversPanelSourceAndContextMenuStates(kTestContentScale);
 }
 
 TEST(EditorShellTest, IntrinsicSizeDocumentInitializesViewportWithoutViewBox) {
@@ -3833,16 +3872,18 @@ TEST(EditorShellTest, DocumentSpaceReplayInputRoutesSelectPressAndRelease) {
   EXPECT_TRUE(EditorShellTestAccess::RequestRenderAtEndOfFrame(shell));
 }
 
-TEST(EditorShellTest, FullDesktopFrameLoopPresentsShapeDragBeforeMouseUp) {
-  gui::EditorWindow window(gui::EditorWindowOptions{
-      .title = "Donner full desktop drag regression",
-      .initialWidth = 1200,
-      .initialHeight = 800,
-      .visible = false,
-  });
+void RunFullDesktopFrameLoopPresentsShapeDragBeforeMouseUp(double contentScale) {
+  gui::EditorWindow window(TestWindowOptions(
+      {
+          .title = "Donner full desktop drag regression",
+          .initialWidth = 1200,
+          .initialHeight = 800,
+      },
+      contentScale));
   if (!window.valid()) {
     GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
   }
+  ExpectTestWindowScale(window, Vector2i(1200, 800), contentScale);
 
   EditorShell shell(window, OptionsWithSource(kInitialSvg, "initial.svg"));
   ASSERT_TRUE(shell.valid());
@@ -3922,6 +3963,26 @@ TEST(EditorShellTest, FullDesktopFrameLoopPresentsShapeDragBeforeMouseUp) {
   runFrameWithMouse(screenPoint(Vector2d(35.0, 28.0)), /*mouseDown=*/false);
 }
 
+TEST(EditorShellTest, FullDesktopFrameLoopPresentsShapeDragBeforeMouseUp) {
+  RunFullDesktopFrameLoopPresentsShapeDragBeforeMouseUp(kTestContentScale);
+}
+
+// The rest of this suite renders at 2x by design (see `kTestContentScale`). This 1x cross-section
+// is a deliberate regression check for standard-density displays: startup and first present, a
+// held select-and-drag that presents a live tile before mouse-up, and the docked source pane and
+// overlay states. Keep it small; scale-sensitive coverage belongs in the 2x suite.
+TEST(EditorShell1xSmokeTest, HiddenWindowShellConstructsAndRunsFrames) {
+  RunHiddenWindowShellConstructsAndRunsFrames(/*contentScale=*/1.0);
+}
+
+TEST(EditorShell1xSmokeTest, FullDesktopFrameLoopPresentsShapeDragBeforeMouseUp) {
+  RunFullDesktopFrameLoopPresentsShapeDragBeforeMouseUp(/*contentScale=*/1.0);
+}
+
+TEST(EditorShell1xSmokeTest, FullFrameSmokeCoversPanelSourceAndContextMenuStates) {
+  RunFullFrameSmokeCoversPanelSourceAndContextMenuStates(/*contentScale=*/1.0);
+}
+
 namespace {
 
 bool CachedRasterCoversVisibleArtboard(EditorShell& shell, const ViewportState& viewport,
@@ -3956,17 +4017,17 @@ bool CachedRasterCoversVisibleArtboard(EditorShell& shell, const ViewportState& 
 }  // namespace
 
 TEST(EditorShellTest, PartlyOffscreenSplashShineEllipseFirstHeldMoveMatchesSettledPixels) {
-  gui::EditorWindow window(gui::EditorWindowOptions{
+  gui::EditorWindow window(TestWindowOptions({
       .title = "Partly offscreen splash drag pixels",
       .initialWidth = 960,
       .initialHeight = 720,
-      .visible = false,
       .forceOffscreenRenderTarget = true,
       .enableFramebufferReadback = true,
-  });
+  }));
   if (!window.valid()) {
     GTEST_SKIP() << "Framebuffer readback is unavailable on this host";
   }
+  ExpectTestWindowScale(window, Vector2i(960, 720), kTestContentScale);
   const EditorSample* splash = FindEditorSample("donner-splash");
   ASSERT_NE(splash, nullptr);
   EditorShell shell(window, OptionsWithSource(splash->source, "donner_splash.svg"));
@@ -4183,17 +4244,17 @@ TEST(EditorShellTest, PartlyOffscreenSplashShineEllipseFirstHeldMoveMatchesSettl
 }
 
 TEST(EditorShellTest, ColdSplashShineDragGetsFullTileBeforeMouseUp) {
-  gui::EditorWindow window(gui::EditorWindowOptions{
+  gui::EditorWindow window(TestWindowOptions({
       .title = "Cold splash shine drag pixels",
       .initialWidth = 960,
       .initialHeight = 720,
-      .visible = false,
       .forceOffscreenRenderTarget = true,
       .enableFramebufferReadback = true,
-  });
+  }));
   if (!window.valid()) {
     GTEST_SKIP() << "Framebuffer readback is unavailable on this host";
   }
+  ExpectTestWindowScale(window, Vector2i(960, 720), kTestContentScale);
   const EditorSample* splash = FindEditorSample("donner-splash");
   ASSERT_NE(splash, nullptr);
   EditorShell shell(window, OptionsWithSource(splash->source, "donner_splash.svg"));
@@ -4321,14 +4382,13 @@ TEST(EditorShellTest, ColdSplashShineDragGetsFullTileBeforeMouseUp) {
 }
 
 TEST(EditorShellTest, GeodeMaskedChildrenUpdateCanvasThroughTwoHeldMoves) {
-  gui::EditorWindow window(gui::EditorWindowOptions{
+  gui::EditorWindow window(TestWindowOptions({
       .title = "Geode masked child held drag pixels",
       .initialWidth = 1024,
       .initialHeight = 768,
-      .visible = false,
       .forceOffscreenRenderTarget = true,
       .enableFramebufferReadback = true,
-  });
+  }));
   if (!window.valid()) {
     GTEST_SKIP() << "Framebuffer readback is unavailable on this host";
   }
@@ -4449,16 +4509,13 @@ TEST(EditorShellTest, GeodeMaskedChildrenUpdateCanvasThroughTwoHeldMoves) {
 
 void RunGeodeColdDirectRetinaDrag(std::string_view id, bool selectFromLayers,
                                   bool waitForSelectedPrewarm = false) {
-  gui::EditorWindow window(gui::EditorWindowOptions{
+  gui::EditorWindow window(TestWindowOptions({
       .title = "Geode direct Retina pointer drag",
       .initialWidth = 1600,
       .initialHeight = 900,
-      .visible = false,
-      .offscreen = true,
       .forceOffscreenRenderTarget = true,
-      .offscreenContentScale = 2.0,
       .enableFramebufferReadback = true,
-  });
+  }));
   if (!window.valid()) {
     GTEST_SKIP() << "Retina framebuffer readback is unavailable on this host";
   }
@@ -7026,12 +7083,11 @@ TEST(EditorShellTest, ShapeClipboardRejectsMalformedAndPastesIntoSelectedGroup) 
 
 TEST(EditorShellTest, SamplePickerAppearsBeforeGeneratingThumbnailsAcrossFrames) {
   // Every card must be visible before this test requires every thumbnail.
-  gui::EditorWindow window(gui::EditorWindowOptions{
+  gui::EditorWindow window(TestWindowOptions({
       .title = "Donner complete sample picker test",
       .initialWidth = 960,
       .initialHeight = 720,
-      .visible = false,
-  });
+  }));
   if (!window.valid()) {
     GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
   }
@@ -7134,12 +7190,11 @@ TEST(EditorShellTest, SamplePickerAppearsBeforeGeneratingThumbnailsAcrossFrames)
 }
 
 TEST(EditorShellTest, GeodeSplashSampleClickPublishesFirstDocumentFrame) {
-  gui::EditorWindow window(gui::EditorWindowOptions{
+  gui::EditorWindow window(TestWindowOptions({
       .title = "Geode Splash sample load regression",
       .initialWidth = 960,
       .initialHeight = 720,
-      .visible = false,
-  });
+  }));
   if (!window.valid()) {
     GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
   }
@@ -7966,14 +8021,13 @@ TEST(EditorShellTest, SingleNoneControlClearsActiveSelectedStrokeWithOneUndo) {
 }
 
 TEST(EditorShellTest, FillAndStrokeForegroundWidgetScreenshots) {
-  gui::EditorWindow window(gui::EditorWindowOptions{
+  gui::EditorWindow window(TestWindowOptions({
       .title = "Fill and Stroke foreground screenshots",
       .initialWidth = 640,
       .initialHeight = 480,
-      .visible = false,
       .forceOffscreenRenderTarget = true,
       .enableFramebufferReadback = true,
-  });
+  }));
   if (!window.valid()) {
     GTEST_SKIP() << "Hidden editor window is unavailable on this host";
   }
@@ -8047,14 +8101,13 @@ TEST(EditorShellTest, StrokeTargetUpdatesAuthoringDefaultWithoutDocumentUndo) {
 }
 
 TEST(EditorShellTest, EyedropperSamplesDonnerTextAndShowsEdgeLoupe) {
-  gui::EditorWindow window(gui::EditorWindowOptions{
+  gui::EditorWindow window(TestWindowOptions({
       .title = "Eyedropper integration test",
       .initialWidth = 1600,
       .initialHeight = 900,
-      .visible = false,
       .forceOffscreenRenderTarget = true,
       .enableFramebufferReadback = true,
-  });
+  }));
   if (!window.valid()) {
     GTEST_SKIP() << "Hidden editor window is unavailable on this host";
   }

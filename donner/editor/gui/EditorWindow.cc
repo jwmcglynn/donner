@@ -1790,7 +1790,10 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
   }
 
 #ifndef __EMSCRIPTEN__
-  if (options_.offscreen && !useNullPlatform && offscreenScale != 1.0) {
+  // Size the native window so its framebuffer matches the emulated scale even
+  // when the display it lands on has a different one, including an emulated
+  // 1x on a HiDPI display.
+  if (options_.offscreen && !useNullPlatform) {
     int nativeLogicalWidth = 0;
     int nativeLogicalHeight = 0;
     glfwGetWindowSize(window_, &nativeLogicalWidth, &nativeLogicalHeight);
@@ -1964,10 +1967,12 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
   int framebufferHeight = 0;
   glfwGetFramebufferSize(window_, &framebufferWidth, &framebufferHeight);
 #endif
-  if (offscreenScale != 1.0) {
-    // Offscreen replay may resize the native window to emulate the recorded
-    // framebuffer scale, so reapply the scale every frame (see beginFrameImpl)
-    // because ImGui_ImplGlfw_NewFrame would otherwise reset it.
+  if (options_.offscreen) {
+    // An offscreen window emulates its requested scale on every platform, so a
+    // test or replay renders at that scale whatever the host display reports.
+    // The native window may have been resized to emulate it, so reapply the
+    // scale every frame (see beginFrameImpl) because ImGui_ImplGlfw_NewFrame
+    // would otherwise reset it.
     uiScaleConfig_.displayScale = offscreenScale;
     frameDisplayScaleOverride_ = offscreenScale;
   } else {
@@ -2145,6 +2150,12 @@ Vector2d EditorWindow::contentScale() const {
   const double scale = CurrentDisplayScale();
   return Vector2d(scale, scale);
 #else
+  if (frameDisplayScaleOverride_ > 0.0) {
+    // An offscreen window reports the scale it emulates rather than the scale
+    // of whatever display hosts it, so the viewport's device pixel ratio
+    // agrees with the emulated framebuffer.
+    return Vector2d(frameDisplayScaleOverride_, frameDisplayScaleOverride_);
+  }
   float xScale = 1.0f;
   float yScale = 1.0f;
   glfwGetWindowContentScale(window_, &xScale, &yScale);

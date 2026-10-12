@@ -605,6 +605,41 @@ TEST(EditorWindowTest, ComputeUiScaleConfigClampsToOne) {
 }
 
 #if defined(DONNER_EDITOR_WGPU)
+class EditorWindowEmulatedScaleTest : public testing::TestWithParam<double> {};
+
+// Editor tests and hidden replay choose their scale through `offscreenContentScale`. It must win
+// over the host display, which differs between hosts (a hidden macOS window takes the main
+// display's scale, while Linux's windowless platform is always 1x), or what a test covers would
+// depend on the machine it runs on.
+TEST_P(EditorWindowEmulatedScaleTest, OffscreenScaleWinsOverHostDisplay) {
+  const double scale = GetParam();
+  EditorWindow window(EditorWindowOptions{
+      .title = "Emulated content scale",
+      .initialWidth = 320,
+      .initialHeight = 200,
+      .visible = false,
+      .offscreen = true,
+      .offscreenContentScale = scale,
+  });
+  ASSERT_THAT(window.valid(), testing::IsTrue());
+
+  EXPECT_DOUBLE_EQ(window.displayScale(), scale);
+  EXPECT_DOUBLE_EQ(window.contentScale().x, scale);
+  EXPECT_DOUBLE_EQ(window.contentScale().y, scale);
+  EXPECT_EQ(window.framebufferSize(),
+            Vector2i(static_cast<int>(320 * scale), static_cast<int>(200 * scale)));
+
+  window.beginFrame();
+  const ImGuiIO& io = ImGui::GetIO();
+  EXPECT_FLOAT_EQ(io.DisplaySize.x, 320.0f);
+  EXPECT_FLOAT_EQ(io.DisplaySize.y, 200.0f);
+  EXPECT_FLOAT_EQ(io.DisplayFramebufferScale.x, static_cast<float>(scale));
+  EXPECT_FLOAT_EQ(io.DisplayFramebufferScale.y, static_cast<float>(scale));
+  window.endFrame();
+}
+
+INSTANTIATE_TEST_SUITE_P(Scales, EditorWindowEmulatedScaleTest, testing::Values(1.0, 2.0));
+
 class EditorShellUiFontTest : public testing::TestWithParam<double> {};
 
 TEST_P(EditorShellUiFontTest, DefaultUiFontKeepsItsLogicalSizeAfterRendererStartup) {
