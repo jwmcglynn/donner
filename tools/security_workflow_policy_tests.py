@@ -1250,7 +1250,7 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         files = self.supply_chain_files
         path = ".github/workflows/main.yml"
         step = "      - name: Upload CI diagnostics\n"
-        for reference in ("secrets", "toJSON ( secrets )", "ToJsOn\n( secrets )",
+        for reference in ("secrets", "toJSON ( secrets )", "ToJsOn\t( secrets )",
                           "format('{0}', secrets)"):
             with self.subTest(reference=reference):
                 changed = files[path].replace(
@@ -1272,10 +1272,12 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
                 changed = files[path].replace(
                     step, step + "        env:\n          TOKEN: ${{ " + expression + " }}\n", 1)
                 self.assertNotEqual(changed, files[path])
-                self.assertTrue(_secret_use_violations(_workflows({**files, path: changed})))
-                self.assertTrue(_untrusted_script_contexts(
-                    "      - run: echo ${{ format(" + literal +
-                    ", github.event.pull_request.title) }}\n"))
+                with self.subTest(context="secret"):
+                    self.assertTrue(_secret_use_violations(_workflows({**files, path: changed})))
+                with self.subTest(context="event"):
+                    self.assertTrue(_untrusted_script_contexts(
+                        "      - run: echo ${{ format(" + literal +
+                        ", github.event.pull_request.title) }}\n"))
         for literal in ("'github.event.pull_request.title'", "'}}github.event.pull_request.title'"):
             with self.subTest(safe_literal=literal):
                 self.assertEqual([], _untrusted_script_contexts(
