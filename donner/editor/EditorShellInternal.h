@@ -272,6 +272,7 @@ template <typename Resolver>
                                          const Transform2d& documentFromBoundsDocument);
 
 /// Preserve enabled source focus while document edits await source-pane writeback.
+/// Disabled focus clears the view-only partition immediately.
 /// @param textEditor Source pane whose focus partition may be cleared.
 /// @param focusEnabled Whether selected-element source focus is enabled.
 /// @return True when the caller should defer focus recomputation until writeback completes.
