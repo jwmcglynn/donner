@@ -28,7 +28,8 @@
 
 namespace donner::editor {
 struct EditorShellOptions;
-}
+class TextEditor;
+}  // namespace donner::editor
 
 namespace donner::editor::internal {
 
@@ -269,6 +270,13 @@ template <typename Resolver>
 /// @param documentFromBoundsDocument Transform into destination document coordinates.
 [[nodiscard]] Box2d TransformDocumentBox(const Box2d& box,
                                          const Transform2d& documentFromBoundsDocument);
+
+/// Preserve enabled source focus while document edits await source-pane writeback.
+/// Disabled focus clears the view-only partition immediately.
+/// @param textEditor Source pane whose focus partition may be cleared.
+/// @param focusEnabled Whether selected-element source focus is enabled.
+/// @return True when the caller should defer focus recomputation until writeback completes.
+[[nodiscard]] bool DeferSourceFocusWhileAwaitingEdits(TextEditor& textEditor, bool focusEnabled);
 
 /// Clamp a requested source-pane width to the usable window range.
 /// @param requestedWidth Requested width in logical pixels.

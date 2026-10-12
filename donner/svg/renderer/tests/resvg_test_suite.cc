@@ -619,15 +619,6 @@ INSTANTIATE_TEST_SUITE_P(
                     {"with-image.svg",
                      Params::WithThreshold(0.1f, kDefaultMismatchedPixels,
                                            "Mask with <image> (bilinear edge diffs)")},
-
-                    {"half-width-region-with-rotation.svg",
-                     Params::Skip(
-                         "Bug: mask edge cases (color-interpolation, mask-units, mask-type) need "
-                         "investigation")},
-                    {"on-group-with-transform.svg",
-                     Params::Skip(
-                         "Bug: mask edge cases (color-interpolation, mask-units, mask-type) need "
-                         "investigation")},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
@@ -784,9 +775,12 @@ INSTANTIATE_TEST_SUITE_P(
                     // Both files use the deprecated `optimizeSpeed` alias, which CSS Images maps to
                     // `crisp-edges`. Donner uses an allowed nearest-neighbor policy, but the resvg
                     // golden chooses a different pixel-center grid under the root viewport scale.
+                    // The reference uses an allowed destination-pixel-center nearest grid.
                     {"on-feImage.svg",
-                     Params::Skip("Reference oracle: allowed crisp-edges nearest grid differs from "
-                                  "the resvg pixel-center convention under viewport scaling")},
+                     Params::WithGoldenOverride(
+                         "donner/svg/renderer/testdata/golden/resvg-on-feImage.png")
+                         .requireFeature(RendererBackendFeature::FilterEffects, "filter effects")
+                         .withReason("Nearest sampling at destination pixel centers")},
                     {"optimizeSpeed.svg",
                      Params::Skip("Reference oracle: allowed crisp-edges nearest grid differs from "
                                   "the resvg pixel-center convention under viewport scaling")},
@@ -1607,9 +1601,9 @@ INSTANTIATE_TEST_SUITE_P(
                      Params::WithGoldenOverride("donner/svg/renderer/testdata/golden/"
                                                 "resvg-compound-emojis-and-coordinates-list.png",
                                                 0.1f)
-                         .withMaxPixelsDifferent(1100)
                          .onlyTextFull()
-                         .withReason("Emoji bitmap scaling differs from the golden")},
+                         .withReason(
+                             "Codepoint positioning reference preserves complete emoji clusters")},
                     {"compound-emojis.svg",
                      Params::WithThreshold(0.2f, kDefaultMismatchedPixels,
                                            "Emoji, differences between resvg and our bitmap")
@@ -1911,8 +1905,6 @@ INSTANTIATE_TEST_SUITE_P(
             "text/tspan",
             {
                 {"bidi-reordering.svg", Params::Skip("Not impl: BIDI reordering")},
-                {"nested-rotate.svg",
-                 Params::Skip("Bug: Applying rotation indices across nested tspans")},
                 {"nested-whitespaces.svg",
                  Params().withMaxPixelsDifferent(400).withReason("Vertical axis has different AA")},
                 {"tspan-bbox-2.svg", Params().withMaxPixelsDifferent(900).withReason(

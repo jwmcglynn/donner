@@ -13,8 +13,8 @@ namespace donner::svg {
  * - DOM object: SVGFEDropShadowElement
  * - SVG2 spec: https://www.w3.org/TR/filter-effects/#feDropShadowElement
  *
- * Equivalent to: feGaussianBlur of SourceAlpha, offset by dx/dy, flooded with
- * flood-color/flood-opacity, then merged under SourceGraphic.
+ * Equivalent to: feGaussianBlur of the alpha channel of `in`, offset by dx/dy, flooded with
+ * flood-color/flood-opacity, then merged under `in`.
  *
  * Example usage:
  *

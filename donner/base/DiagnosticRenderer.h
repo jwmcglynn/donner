@@ -25,7 +25,7 @@ namespace donner {
  * For multi-character ranges, tildes indicate the span:
  * ```
  * warning: Invalid paint server value
- *   --> line 4, col 12
+ *   --> 4:13
  *    |
  *  4 | <path fill="url(#)"/>
  *    |             ^~~~~~
@@ -46,6 +46,10 @@ public:
 
   /**
    * Format a single diagnostic against source text.
+   *
+   * The location is printed as a 1-based line and column. A range that spans several lines is
+   * underlined only to the end of its first line. A diagnostic without a resolved offset, or with
+   * an offset past the end of \p source, renders only the message line.
    *
    * @param source The original source text that was parsed.
    * @param diag The diagnostic to render.

@@ -41,8 +41,8 @@ namespace donner::svg {
  *
  * ## Example 1: drop shadow
  *
- * A classic drop shadow is built from four primitives: take the source's alpha, blur it,
- * offset it down and to the right, then merge that shadow *underneath* the original graphic.
+ * A classic drop shadow is built from three primitives: blur the source's alpha, offset it
+ * down and to the right, then merge that shadow *underneath* the original graphic.
  *
  * \htmlonly
  * <svg xmlns="http://www.w3.org/2000/svg" width="360" height="140"

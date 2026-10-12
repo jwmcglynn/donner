@@ -171,16 +171,18 @@ std::vector<const char*> SelectPresentationExtensionsForTest(
  * the error is latched; serial waits, texture uploads and mappings end as soon as any device over
  * the root has declared it.
  *
- * Every wait whose bound exists to detect a hung device judges a stall by the progress of the
- * queue its work is on, never by a budget for the whole backlog ahead of that work: the serial
- * wait \ref Device::waitForSerialUnlessStalled, a host access to a busy buffer, a texture upload
- * and the proof of completion at teardown. Each command buffer ends by setting an event, and the
- * queue progresses whenever one is seen set, including those of other devices over the root,
- * whose work runs ahead on the same queue (see \ref VulkanQueueProgress). A slow device that keeps
- * finishing command buffers is never cut off, however long its backlog, and one that stops is
- * caught within the bound of when its last progress was seen. A swapchain's wait for a present to
- * finish, which the presentation engine signals, and the proof at teardown after a submission
- * whose completion is unknown keep a fixed budget.
+ * Serial waits, host access to busy buffers and teardown of tracked submissions judge a stall
+ * by observed ordinary command-buffer events on the shared queue (see \ref VulkanQueueProgress).
+ * Events from other devices over the root also renew the bound, so an ordinary command backlog
+ * is not cut off while those events keep completing.
+ *
+ * Texture uploads submit no progress event. Their waits use the last observed tracked event, or
+ * the upload's submission time when no tracked work is outstanding: 60 seconds for an upload
+ * call and five seconds for teardown. Tracked events can extend that deadline; an upload fence
+ * signalling cannot. Sequential upload-fence waits share that clock, so a later wait can already
+ * have exhausted its bound when an earlier upload completes. A swapchain's present-completion
+ * wait and teardown after a submission whose completion is unknown instead use a fixed budget
+ * for the whole wait.
  *
  * Several runtime devices can open over one \ref VulkanSharedRoot (\ref CreateOverSharedRoot).
  * An owned texture exported from one registers on another as a read-only alias of the same
@@ -369,17 +371,19 @@ public:
 
   /**
    * Destructor. Proves this device's own work complete before releasing any of its objects: it
-   * waits on each of its outstanding submission and upload fences for as long as the shared queue
-   * keeps completing work, giving up once the queue has made no progress for five seconds, and
-   * prepares each of its surfaces, including any whose explicit destruction failed. After a
-   * submission whose completion is unknown, each of those submission and upload fence waits is
-   * bounded to five seconds in all instead. A loss declared over the root does not end these
-   * waits: only a signalled fence, or a wait the driver reports as device loss, proves the work
-   * complete. It then destroys its Vulkan objects in dependency order and releases its reference to
-   * the shared root. The root's instance, logical device and queue go when the root's last holder
-   * releases it, so other devices over the same root are not torn down and their fences are not
-   * waited on. If completion cannot be proved, this device's complete native graph is retained
-   * until process exit and later Vulkan device creation is refused.
+   * waits on outstanding tracked submission fences while ordinary command-buffer events renew
+   * the shared queue's five-second stall bound. Upload fences use the same last-progress clock,
+   * but upload completions do not renew it; a later upload-fence wait can therefore already have
+   * exhausted the bound when an earlier upload completes. It also prepares each of its surfaces,
+   * including any whose explicit destruction failed. After a submission whose completion is
+   * unknown, each submission and upload fence wait is bounded to five seconds in all instead. A
+   * loss declared over the root does not end these waits: only a signalled fence, or a wait the
+   * driver reports as device loss, proves the work complete. It then destroys its Vulkan objects in
+   * dependency order and releases its reference to the shared root. The root's instance, logical
+   * device and queue go when the root's last holder releases it, so other devices over the same
+   * root are not torn down and their fences are not waited on. If completion cannot be proved, this
+   * device's complete native graph is retained until process exit and later Vulkan device creation
+   * is refused.
    */
   ~VulkanDevice() override;
 

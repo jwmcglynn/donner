@@ -5,10 +5,6 @@ clean, editable SVG using Donner itself as the render oracle. No third-party
 rasterizer, no cloud tracing service: the same renderer Donner ships answers
 "does this SVG look like the target?"
 
-Related KB pages: `Donner Self-Hosted Vectorization Workflow`,
-`Donner v1.0 Splash Reference`, `Hand Vectorization`, and the v1.0 splash
-tracing milestone in `Backlog.md`.
-
 ## The loop
 
 ```

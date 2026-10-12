@@ -1,0 +1,87 @@
+diff --git a/npm/private/npm_package_store.bzl b/npm/private/npm_package_store.bzl
+--- a/npm/private/npm_package_store.bzl
++++ b/npm/private/npm_package_store.bzl
+@@ -23,6 +23,10 @@
+ """
+ 
+ _ATTRS = {
++    "_package_extract": attr.label(
++        default = Label("//npm/private:npm_package_extract.mjs"),
++        allow_single_file = True,
++    ),
+     "src": attr.label(
+         doc = """A target providing a `NpmPackageInfo` or `JsInfo` containing the package sources.
+         """,
+@@ -240,11 +244,17 @@
+                 args.add_all("--directory", [package_store_directory], expand_directories = False)
+                 args.add_all(ctx.attr.exclude_package_contents, before_each = "--exclude")
+ 
++                wrapper_args = ctx.actions.args()
++                wrapper_args.add(ctx.file._package_extract)
++                wrapper_args.add(bsdtar.tarinfo.binary)
++                wrapper_args.add_all([package_store_directory], expand_directories = False)
++
+                 ctx.actions.run(
+-                    executable = bsdtar.tarinfo.binary,
+-                    inputs = [src],
++                    executable = ctx.toolchains["@rules_nodejs//nodejs:toolchain_type"].nodeinfo.node,
++                    inputs = [src, ctx.file._package_extract],
++                    tools = [bsdtar.tarinfo.binary],
+                     outputs = [package_store_directory],
+-                    arguments = [args],
++                    arguments = [wrapper_args, args],
+                     mnemonic = "NpmPackageExtract",
+                     progress_message = "Extracting npm package {}@{}".format(package, version),
+                     execution_requirements = {
+@@ -441,6 +451,7 @@
+     toolchains = [
+         Label("@aspect_bazel_lib//lib:copy_directory_toolchain_type"),
+         Label("@aspect_bazel_lib//lib:tar_toolchain_type"),
++        Label("@rules_nodejs//nodejs:toolchain_type"),
+     ],
+ )
+ 
+diff --git a/npm/private/BUILD.bazel b/npm/private/BUILD.bazel
+--- a/npm/private/BUILD.bazel
++++ b/npm/private/BUILD.bazel
+@@ -12,7 +12,7 @@
+     srcs = ["npm_publish.mjs"],
+ )
+ 
+-exports_files(glob(["*.bzl"]))
++exports_files(glob(["*.bzl"]) + ["npm_package_extract.mjs"])
+ 
+ # We manually keep the generated rules documentation synced.
+ # Check that the signatures stay matched.
+diff --git a/npm/private/npm_package_extract.mjs b/npm/private/npm_package_extract.mjs
+new file mode 100644
+--- /dev/null
++++ b/npm/private/npm_package_extract.mjs
+@@ -0,0 +1,27 @@
++import { spawnSync } from "node:child_process";
++import { chmodSync, lstatSync, readdirSync, realpathSync } from "node:fs";
++import { join } from "node:path";
++import { fileURLToPath } from "node:url";
++
++// Some npm archives give directories file-like modes (for example 0666).
++// Restore read/traverse access before the declared tree is uploaded, without
++// changing package bytes, executable bits or following archive symlinks.
++export function normalizePermissions(path) {
++  const stat = lstatSync(path);
++  if (stat.isSymbolicLink()) return;
++  if (stat.isDirectory()) {
++    chmodSync(path, (stat.mode & 0o777) | 0o555);
++    for (const entry of readdirSync(path)) normalizePermissions(join(path, entry));
++  } else if (stat.isFile()) {
++    chmodSync(path, (stat.mode & 0o777) | 0o444);
++  }
++}
++
++// Node canonicalizes an ES-module entry point even when Bazel invokes a symlink.
++if (process.argv[1] && realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url))) {
++  const [tar, output, ...args] = process.argv.slice(2);
++  const result = spawnSync(tar, args, { stdio: "inherit" });
++  if (result.error) console.error(result.error.message);
++  if (result.status !== 0) process.exit(result.status ?? 1);
++  normalizePermissions(output);
++}

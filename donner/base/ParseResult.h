@@ -113,6 +113,9 @@ public:
    * Map the result of this ParseResult to a new type, by transforming the result with the provided
    * functor.
    *
+   * If this ParseResult holds both a result and an error, only the mapped result is kept and the
+   * error is discarded.
+   *
    * @tparam Target The type to map to.
    * @tparam Functor The functor type.
    * @param functor The functor to apply to the result.
@@ -129,6 +132,9 @@ public:
   /**
    * Map the error of this ParseResult to a new type, by transforming the error with the provided
    * functor.
+   *
+   * If this ParseResult holds both a result and an error, only the mapped error is kept and the
+   * result is discarded.
    *
    * @tparam Target The type to map to.
    * @tparam Functor The functor type.

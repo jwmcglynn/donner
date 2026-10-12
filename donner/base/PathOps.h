@@ -30,7 +30,8 @@ struct PathBooleanInput {
 
 /// Limits and tolerances for bounded boolean operations.
 struct PathBooleanOptions {
-  double geometricTolerance = 1e-6;        ///< Geometric comparison tolerance.
+  double geometricTolerance = 1e-6;        ///< Geometric comparison tolerance. A non-positive
+                                           ///< or non-finite value uses the 1e-6 default.
   std::size_t maxCurveCount = 100000;      ///< Maximum input segment count.
   std::size_t maxIntersections = 100000;   ///< Maximum segment intersections.
   std::size_t maxOutputCommands = 200000;  ///< Maximum emitted output commands.
@@ -40,7 +41,8 @@ struct PathBooleanOptions {
 enum class PathBooleanStatus : std::uint8_t {
   Ok,            ///< Operation succeeded and produced at least one output path.
   EmptyResult,   ///< Operation succeeded but the requested region is empty.
-  InvalidInput,  ///< Input paths or options are invalid.
+  InvalidInput,  ///< Fewer than two inputs, or an input path has non-finite coordinates or no
+                 ///< drawing segments.
   TooComplex,    ///< Operation exceeded configured complexity caps.
 };
 
@@ -59,7 +61,7 @@ struct PathBooleanResult {
  * caps return a non-\ref PathBooleanStatus::Ok status instead of mutating caller state.
  *
  * @param op Boolean operation to apply.
- * @param inputs Filled path inputs in operation order.
+ * @param inputs Filled path inputs in operation order; at least two are required.
  * @param options Tolerances and complexity caps.
  */
 PathBooleanResult ApplyPathBoolean(PathBooleanOp op, std::span<const PathBooleanInput> inputs,

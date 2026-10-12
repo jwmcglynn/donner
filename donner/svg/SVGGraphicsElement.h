@@ -16,7 +16,7 @@ namespace donner::svg {
  *
  * This cannot be instantiated directly.
  *
- * Holds an transformation which defaults to identity.
+ * Holds a transformation which defaults to identity.
  */
 class SVGGraphicsElement : public SVGElement {
   friend class parser::SVGParserImpl;
@@ -27,7 +27,7 @@ protected:
   explicit SVGGraphicsElement(EntityHandle handle);
 
 public:
-  /// Returns true if the given element type can be cast to \ref SVGTextContentElement.
+  /// Returns true if the given element type can be cast to \ref SVGGraphicsElement.
   static constexpr bool IsBaseOf(ElementType type) {
     return type == ElementType::A || type == ElementType::Circle || type == ElementType::Defs ||
            type == ElementType::Ellipse || type == ElementType::G || type == ElementType::Image ||
@@ -38,14 +38,17 @@ public:
            type == ElementType::TSpan || type == ElementType::Unknown;
   }
 
-  /// Get the 2d transformation for this element, element-from-parent.
+  /// Get the 2d transformation for this element, which maps element coordinates into the parent's
+  /// coordinate space (parent-from-element). The `transform-origin` offset is not included.
   Transform2d transform() const;
 
-  /// Set the 2d transformation for this element, element-from-parent. This is a no-op if the
-  /// transform is identity.
+  /// Set the 2d transformation for this element (parent-from-element), overriding any authored
+  /// `transform`. The `transform-origin` offset still applies on top of it.
   void setTransform(const Transform2d& transform);
 
-  /// Get the absolute element-from-world transform for this element.
+  /// Get the absolute transform that maps this element's coordinates into world (document)
+  /// coordinates, including all ancestor transforms. Despite the name, this is the
+  /// world-from-element transform; invert it to map world points into element space.
   Transform2d elementFromWorld() const;
 
   /// Return this element's single effective clip outline in document coordinates. The transform
@@ -54,7 +57,13 @@ public:
   /// that owns it. An absent, invalid, nested, or multi-shape boolean clip returns nullopt rather
   /// than a misleading source outline. If provided, `hasClipPath` distinguishes absence from an
   /// unsupported effective clip; callers combining ancestor clips must fail closed in the latter
-  /// case. Explicit limits bound source and returned path storage.
+  /// case. Explicit limits bound source and returned path storage. This reads the prepared render
+  /// tree, and returns nullopt when this element has no visible rendering instance.
+  ///
+  /// @param maxVerbs Maximum number of path verbs accepted in the source clip path.
+  /// @param maxPoints Maximum number of points accepted in the source clip path.
+  /// @param maxBytes Maximum retained bytes for the source clip path and the returned outline.
+  /// @param hasClipPath Optional output, set to true when the element has an effective clip path.
   std::optional<Path> resolvedSimpleClipPathOutline(std::size_t maxVerbs, std::size_t maxPoints,
                                                     std::size_t maxBytes,
                                                     bool* hasClipPath = nullptr) const;

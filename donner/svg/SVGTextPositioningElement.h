@@ -15,6 +15,10 @@ namespace donner::svg {
  * These attributes can contain a list of values, one for each character. The methods here provide
  * access to either the first value in the list (for convenience) or the entire list.
  *
+ * The list getters (\ref xList, \ref yList, \ref dxList, \ref dyList, \ref rotateList) return a
+ * reference to a per-thread snapshot, which the next call to a getter of this class on the same
+ * thread may overwrite. Copy the list to keep it.
+ *
  * \see https://www.w3.org/TR/SVG2/text.html#InterfaceSVGTextPositioningElement
  */
 class SVGTextPositioningElement : public SVGTextContentElement {

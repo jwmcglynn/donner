@@ -638,6 +638,13 @@ void PublishPresentationResourceStats(double totalTrackedBytes, double peakTrack
 
 namespace internal {
 
+bool DeferSourceFocusWhileAwaitingEdits(TextEditor& textEditor, bool focusEnabled) {
+  if (!focusEnabled) {
+    textEditor.clearFocusPartition();
+  }
+  return focusEnabled;
+}
+
 constexpr float kMinSourcePaneWidth = 240.0f;
 constexpr float kMaxSourcePaneWidth = 900.0f;
 constexpr float kSourcePaneSplitterThickness = 6.0f;
@@ -8001,10 +8008,12 @@ void EditorShell::updateSourceFocusView(bool scrollToSelection) {
   }
 
   if (sourcePaneAwaitsDocumentEdits()) {
-    // A tool just inserted or edited the selection and its source writeback waits for an idle
-    // frame. Keep the current partition, which tracks the pane's own text, until the pane catches
+    // Enabled focus keeps the partition, which tracks the pane's own text, while an insertion
+    // or edit awaits source writeback in an idle frame. Wait until the pane catches
     // up; highlightSelectionSourceIfNeeded() then computes focus against matching lines.
-    deferredSourceFocusScroll_ = scrollToSelection;
+    if (DeferSourceFocusWhileAwaitingEdits(textEditor_, sourceFocusMode_)) {
+      deferredSourceFocusScroll_ = scrollToSelection;
+    }
     return;
   }
 

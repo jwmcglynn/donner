@@ -33,56 +33,60 @@ protected:
 
 public:
   /**
-   * Get the top-left X coordinate of the filter region, which defines a rectangular region on the
-   * canvas to which this filter applies. The initial value is '-10%'.
+   * Get the top-left X coordinate of the filter primitive subregion, which restricts where this
+   * primitive's result is calculated and drawn. If the attribute is not set, rendering uses a
+   * default subregion within the filter region, and this accessor returns `-10%`.
    */
   Lengthd x() const;
 
   /**
-   * Get the top-left Y coordinate of the filter region, which defines a rectangular region on the
-   * canvas to which this filter applies. The initial value is '-10%'.
+   * Get the top-left Y coordinate of the filter primitive subregion, which restricts where this
+   * primitive's result is calculated and drawn. If the attribute is not set, rendering uses a
+   * default subregion within the filter region, and this accessor returns `-10%`.
    */
   Lengthd y() const;
 
   /**
-   * Get the width of the filter region, which defines a rectangular region on the
-   * canvas to which this filter applies. The initial value is '120%'.
+   * Get the width of the filter primitive subregion, which restricts where this primitive's result
+   * is calculated and drawn. If the attribute is not set, rendering uses a default subregion
+   * within the filter region, and this accessor returns `120%`.
    */
   Lengthd width() const;
 
   /**
-   * Get the height of the filter region, which defines a rectangular region on the
-   * canvas to which this filter applies. The initial value is '120%'.
+   * Get the height of the filter primitive subregion, which restricts where this primitive's
+   * result is calculated and drawn. If the attribute is not set, rendering uses a default
+   * subregion within the filter region, and this accessor returns `120%`.
    */
   Lengthd height() const;
 
   /**
-   * Set the top-left X coordinate of the filter region, which defines a rectangular region on the
-   * canvas to which this filter applies. The initial value is '-10%'.
+   * Set the top-left X coordinate of the filter primitive subregion, which restricts where this
+   * primitive's result is calculated and drawn.
    *
    * @param value Coordinate value.
    */
   void setX(const Lengthd& value);
 
   /**
-   * Set the top-left Y coordinate of the filter region, which defines a rectangular region on the
-   * canvas to which this filter applies. The initial value is '-10%'.
+   * Set the top-left Y coordinate of the filter primitive subregion, which restricts where this
+   * primitive's result is calculated and drawn.
    *
    * @param value Coordinate value.
    */
   void setY(const Lengthd& value);
 
   /**
-   * Set the width of the filter region, which defines a rectangular region on the
-   * canvas to which this filter applies. The initial value is '120%'.
+   * Set the width of the filter primitive subregion, which restricts where this primitive's result
+   * is calculated and drawn.
    *
    * @param value Dimension value.
    */
   void setWidth(const Lengthd& value);
 
   /**
-   * Set the height of the filter region, which defines a rectangular region on the
-   * canvas to which this filter applies. The initial value is '120%'.
+   * Set the height of the filter primitive subregion, which restricts where this primitive's
+   * result is calculated and drawn.
    *
    * @param value Dimension value.
    */
@@ -101,6 +105,8 @@ public:
    * primitive within the same filter element. If no value is provided, the output will only be
    * available for re-use as the implicit input into the next filter primitive if that filter
    * primitive provides no value for its in attribute.
+   *
+   * @param value Name for this primitive's result.
    */
   void setResult(const RcStringOrRef& value);
 };

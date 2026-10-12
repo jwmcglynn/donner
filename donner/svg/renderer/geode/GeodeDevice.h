@@ -31,8 +31,8 @@ namespace donner::geode {
 /// 256-align a tightly packed row-byte count per the GPU runtime's
 /// texture-to-buffer copy rules. Shared by the device's readback-buffer
 /// sizing and the renderer's map-range math; the two MUST agree, because a
-/// mapped-range request larger than the buffer returns null rather than
-/// raising an error.
+/// map request larger than the buffer fails with `GpuErrorType::OutOfBounds`
+/// and the readback with it.
 constexpr uint32_t AlignReadbackBytesPerRow(uint32_t rowBytes) {
   return (rowBytes + 255u) & ~255u;
 }
@@ -182,7 +182,8 @@ gpu::Result<gpu::Texture> RegisterOrderedTexture(
  * Owns a logical Geode context over a selected GPU runtime device.
  *
  * GeodeDevice is the entry point to the Geode rendering backend. In headless mode it selects
- * the platform's native GPU root and creates a device without window system integration.
+ * the platform's GPU root (native Metal or Vulkan, or the browser GPU runtime in WebAssembly
+ * builds) and creates a device without window system integration.
  *
  * A host that selects a presentation root creates its first context with
  * CreateOverSelectedRoot, then creates sibling contexts with CreateOverPhysicalDeviceOwner.
@@ -201,6 +202,10 @@ public:
   /**
    * Create a headless GeodeDevice.
    *
+   * Selects a GPU root with default options, so `DONNER_GPU_BACKEND` applies: a value that names
+   * no backend, or one this process cannot open, halts the process.
+   *
+   * @param textureFormat Format the context's render targets and pipelines are built for.
    * @return A valid GeodeDevice on success, or an empty unique_ptr if the
    *   runtime could not create a GPU device (e.g., no GPU, no driver).
    */
@@ -215,7 +220,7 @@ public:
    *
    * @param root Selected backend root; must not be null.
    * @param textureFormat Format the context's render targets and pipelines are built for.
-   * @return A valid context, or null when the root could not be retained.
+   * @return A valid context, or null when no runtime device could be opened over the root.
    */
   static std::unique_ptr<GeodeDevice> CreateOverSelectedRoot(std::shared_ptr<GeodeGpuRoot> root,
                                                              gpu::TextureFormat textureFormat);
@@ -240,8 +245,10 @@ public:
   /// sharing by asserting this count stays flat across repeated operations.
   static int headlessCreationCountForTesting();
 
-  /// Destructor releases logical resources before their runtime device and selected root. Teardown
-  /// waits are bounded; a declared loss skips further waits into the failed device.
+  /// Destructor releases logical resources before their runtime device and selected root. Native
+  /// builds wait, bounded by lack of progress, for this context's submitted work, and a declared
+  /// loss skips those waits; a Vulkan runtime device still proves its own submissions complete
+  /// when it is destroyed. WebAssembly builds do not wait.
   ~GeodeDevice();
 
   // Non-copyable, non-movable. The device owns pipelines and a filter
@@ -272,8 +279,9 @@ public:
    * `TimedOut`.
    *
    * @param stallBound Longest the work may go without progress; defaults to the shared bound.
-   * @return `Complete` when the queue drained, `TimedOut` when the work stopped progressing (the
-   *   device is now marked lost), or `DeviceLost` when the device was already lost and no wait was
+   * @return `Complete` when the queue drained, `TimedOut` when the work stopped progressing or the
+   *   backend failed before the queue went idle (the device is now marked lost either way), or
+   *   `DeviceLost` when the device was already lost and no wait was
    *   performed, or a loss was declared while the wait was running.
    */
   GpuWaitResult waitForQueueIdle(
@@ -286,8 +294,9 @@ public:
 
   /// True once this device has been declared lost, either by its backend or by a bounded GPU wait
   /// exceeding its deadline. Sticky: never resets. Once lost, rendering
-  /// output is undefined, snapshots return empty bitmaps promptly, and
-  /// teardown skips all GPU waits.
+  /// output is undefined, snapshots return empty bitmaps promptly, and this
+  /// context's teardown skips its queue-idle waits; a Vulkan runtime device
+  /// still proves its own submissions complete when it is destroyed.
   bool isDeviceLost() const {
     return physicalDevice_->lostState()->lost.load(std::memory_order_acquire);
   }
@@ -298,11 +307,13 @@ public:
   /// thread that created it.
   bool isBoundToCreatingThread() const;
 
-  /// Declare this device lost. Idempotent; the first call logs @p reason.
-  /// Called from bounded waits on timeout, and available to embedders whose
-  /// own device-lost signal is not shared through the selected root.
+  /// Declare this device lost with no wait to attribute it to. Idempotent; the first call logs
+  /// @p reason. Called when a frame's or a filter's commands cannot be closed, submitted, or
+  /// restored, and available to embedders whose own device-lost signal is not shared through the
+  /// selected root. Bounded waits that give up use \ref markDeviceLostAfterWaitTimeout instead.
   /// Const because observers treat the flag as shared diagnostic state and
   /// waits that discover a hang run through const accessors.
+  /// @param reason Human-readable cause, logged once.
   void markDeviceLost(const char* reason) const;
 
   /**
@@ -325,8 +336,13 @@ public:
 
   /// Readback timing, completion, loss, cancellation, and resource counters.
   struct ReadbackStats {
+    /// Readback buffer-map waits run since the last consume, including waits that were cancelled
+    /// or timed out.
     int count = 0;
+    /// Bounded wait iterations those readbacks ran.
     int pollIterations = 0;
+    /// True when any of those waits blocked on the map's completion event rather than only
+    /// polling for it (`gpu::MapWaitKind::CompletionEvent`).
     bool usedTimedWaitAny = false;
     /// True once this device has been declared lost. Sticky, so every later
     /// consume keeps reporting it: a frame that never rendered has no other
@@ -376,7 +392,11 @@ public:
   /// capture context's lifetime.
   void setSnapshotCaptureRuntimeHookForTesting(std::function<void(gpu::Device&)> hook);
 
-  /// Record one completed CPU readback from a renderer sharing this device.
+  /// Record one readback buffer-map wait from a renderer sharing this device, whether or not the
+  /// map completed.
+  /// @param usedTimedWaitAny Whether any iteration of the wait blocked on the map's completion
+  ///   event.
+  /// @param pollIterations Bounded wait iterations the readback ran.
   void recordReadback(bool usedTimedWaitAny, int pollIterations);
 
   /// Consume aggregate readback diagnostics for all renderers sharing this device.
@@ -784,8 +804,7 @@ public:
     return residentBytesGauge_ ? residentBytesGauge_->load(std::memory_order_relaxed) : 0;
   }
 
-  /// True when the active native backend is Vulkan (Intel Arc hardware or Mesa
-  /// lavapipe software). GeodeFilterEngine uses this to force inter-pass
+  /// True when the active native backend is Vulkan. GeodeFilterEngine uses this to force inter-pass
   /// serialization that eliminates a nondeterministic cross-submit
   /// storage-write -> sampled-read visibility race observed on Arc Vulkan.
   /// Metal returns false and keeps the fast multi-submit path.

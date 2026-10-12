@@ -54,9 +54,10 @@ struct RendererTinySkiaFrameCounters {
  * Rendering backend using tiny-skia-cpp.
  *
  * This backend provides a lightweight software rasterizer implementation of
- * \ref RendererInterface. It currently targets shape, image, gradient, clip,
- * mask, pattern, and opacity-layer rendering. Text rendering is not yet
- * implemented.
+ * \ref RendererInterface and is the default renderer. It renders shapes,
+ * images, gradients, patterns, clips, masks, isolated layers, filters, and
+ * text; filters and text are compiled in when the build enables them, which it
+ * does by default.
  */
 class RendererTinySkia : public RendererInterface {
 public:
@@ -380,6 +381,8 @@ private:
     /// @see savedClipEpoch
     std::vector<std::uint64_t> savedClipEpochStack;
   };
+
+  void restoreMaskClipAndApplyCoverage(SurfaceFrame& frame);
 
   struct FilterAdmission {
     int width = 0;

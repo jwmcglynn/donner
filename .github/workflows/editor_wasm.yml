@@ -282,7 +282,7 @@ jobs:
           name: donner-editor-wasm-geode-${{ github.sha }}
           path: ${{ steps.stage-candidate.outputs.candidate_dir }}
           if-no-files-found: error
-          retention-days: 30
+          retention-days: 90
 
       - name: Record deployment candidate digest
         run: |

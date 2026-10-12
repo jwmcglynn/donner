@@ -58,18 +58,18 @@ struct ChunkRange {
 };
 
 /// Pre-scan span text to find chunk byte boundaries. A new chunk starts when a non-first
-/// codepoint has an absolute x or y position.
+/// typographic character has an absolute x or y position.
 std::vector<ChunkRange> findChunkRanges(std::string_view spanText,
                                         const SmallVector<std::optional<Lengthd>, 1>& xList,
                                         const SmallVector<std::optional<Lengthd>, 1>& yList);
 
 /// Index mapping result for a span's text.
 struct ByteIndexMappings {
-  std::vector<unsigned int> byteToCharIdx;   ///< SVG addressable character index.
-  std::vector<unsigned int> byteToRawCpIdx;  ///< Raw codepoint index (for rotation).
+  std::vector<unsigned int> byteToCharIdx;  ///< Unicode codepoint index for SVG positioning.
 };
 
-/// Build byte→charIdx and byte→rawCpIdx mappings for a span.
+/// Build the byte-to-codepoint map; shaping determines group applicability.
+/// DOM indexing is separate.
 ByteIndexMappings buildByteIndexMappings(std::string_view spanText);
 
 /// Text chunk boundary for per-chunk text-anchor adjustment.

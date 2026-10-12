@@ -22,17 +22,17 @@ namespace details {
  * Example usage:
  * ```
  * XMLQualifiedName element;
- * std::cout << element.printAsCssSyntax() << "\n";
+ * std::cout << element.printCssSyntax() << "\n";
  * ```
  *
- * Where \ref XMLQualifiedName::printAsCssSyntax returns a DeferredPrinter as its result.
+ * Where \ref XMLQualifiedName::printCssSyntax returns a DeferredCssSyntaxPrinter as its result.
  */
 template <typename NameT>
 struct DeferredCssSyntaxPrinter {
   /// The qualified name to print.
   const NameT& name;  // NOLINT
 
-  /// Ostream output operator, which prints the element's and all children.
+  /// Ostream output operator, which prints the name in CSS syntax (e.g. "ns|name").
   friend std::ostream& operator<<(std::ostream& os, const DeferredCssSyntaxPrinter& printer) {
     if (!printer.name.namespacePrefix.empty()) {
       os << printer.name.namespacePrefix << "|";
@@ -166,6 +166,11 @@ struct XMLQualifiedName {
 /**
  * Reference type for \ref XMLQualifiedName, to pass the value to APIs without needing to allocate
  * an \ref RcString.
+ *
+ * Either member may be a non-owning view, so the strings it refers to must outlive this object.
+ * Use it for in-parameters, and copy into an \ref XMLQualifiedName to keep a name. Do not cache a
+ * `std::string_view` of a member of a temporary XMLQualifiedNameRef: under the small-string
+ * optimization the bytes can live inside the temporary itself.
  */
 struct XMLQualifiedNameRef {
   RcStringOrRef namespacePrefix;  //!< The namespace prefix of the attribute, or an empty string
@@ -173,7 +178,7 @@ struct XMLQualifiedNameRef {
   RcStringOrRef name;             //!< The attribute name.
 
   /**
-   * Construct from an attribute name as a string_view, assumes no namespacePrefix.
+   * Construct from an attribute name, assumes no namespacePrefix.
    *
    * @param name The attribute name.
    */
@@ -208,6 +213,8 @@ struct XMLQualifiedNameRef {
 
   /**
    * Construct from \ref XMLQualifiedName.
+   *
+   * @param attr Qualified name to convert.
    */
   /* implicit*/ constexpr XMLQualifiedNameRef(const XMLQualifiedName& attr)
       : namespacePrefix(attr.namespacePrefix), name(attr.name) {}
@@ -313,7 +320,7 @@ inline XMLQualifiedName::XMLQualifiedName(const XMLQualifiedNameRef& attr)
 template <>
 struct std::hash<donner::xml::XMLQualifiedNameRef> {
   /**
-   * Hash function for \ref donner::xml::XMLQualifiedName.
+   * Hash function for \ref donner::xml::XMLQualifiedNameRef.
    *
    * @param attr Input attribute.
    * @return std::size_t Output hash.

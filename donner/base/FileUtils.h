@@ -10,9 +10,9 @@ namespace donner {
 
 /// Failure returned by \ref donner::ReadFileBounded "ReadFileBounded".
 enum class FileReadError {
-  OpenFailed,
-  TooLarge,
-  ReadFailed,
+  OpenFailed,  ///< The path could not be opened, or does not name a regular file.
+  TooLarge,    ///< The file is larger than the maximum size, or grew while being read.
+  ReadFailed,  ///< A read failed, or the file ended before its reported size.
 };
 
 /// Contents or failure from a bounded file read.

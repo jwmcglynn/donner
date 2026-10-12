@@ -42,6 +42,7 @@
 #include "donner/editor/gui/EditorWindow.h"
 #include "donner/editor/repro/ReplayResourceBudget.h"
 #include "donner/editor/repro/ReproFile.h"
+#include "donner/editor/tests/AsyncTestPolling.h"
 #include "donner/editor/tests/BitmapGoldenCompare.h"
 #include "donner/editor/tests/RenderCoordinatorTestAccess.h"
 #include "donner/svg/SVGGeometryElement.h"
@@ -499,6 +500,65 @@ TEST(EditorShellInternalTest, TextFormatBarCapturesCanvasInputWithinItsLayoutRec
                                                  toolPaletteRect,
                                                  /*visible=*/false, /*barHeight=*/48.0f)
                    .has_value());
+}
+
+TEST(EditorShellInternalTest, DisabledSourceFocusClearsBeforePendingEditsReachThePane) {
+  for (const bool flushBeforeDisable : {false, true}) {
+    SCOPED_TRACE(flushBeforeDisable ? "writeback awaiting source pane" : "queued insertion");
+    EditorApp app;
+    ASSERT_THAT(app.loadFromString(kInitialSvg), testing::Eq(true));
+    auto target = app.document().document().querySelector("#target");
+    ASSERT_THAT(target, testing::Optional(testing::_));
+    app.setSelection(*target);
+    TextEditor source;
+    source.setText(kInitialSvg);
+    source.resetTextChanged();
+    source.setFocusPartition(ComputeFocusPartition(app.document().document(), *target));
+    ASSERT_THAT(source.hasFocusPartition(), testing::Eq(true));
+
+    svg::SVGDocument& document = app.document().document();
+    svg::SVGRectElement inserted = svg::SVGRectElement::Create(document);
+    inserted.setAttribute("id", "inserted");
+    app.applyMutation(EditorCommand::InsertElementCommand(document.svgElement(), inserted));
+    if (flushBeforeDisable) {
+      ASSERT_THAT(app.flushFrame(), testing::Eq(true));
+      ASSERT_THAT(app.document().hasUnmirroredSourceDeltas(), testing::Eq(true));
+    } else {
+      ASSERT_THAT(app.document().hasPendingMutations(), testing::Eq(true));
+    }
+    const std::string beforeText = source.getText();
+    const auto beforeVersion = app.document().currentFrameVersion();
+    const bool beforePending = app.document().hasPendingMutations();
+    const bool beforeUnmirrored = app.document().hasUnmirroredSourceDeltas();
+
+    EXPECT_THAT(internal::DeferSourceFocusWhileAwaitingEdits(source, /*focusEnabled=*/false),
+                testing::Eq(false));
+    EXPECT_THAT(source.hasFocusPartition(), testing::Eq(false));
+    EXPECT_THAT(source.getText(), testing::Eq(beforeText));
+    EXPECT_THAT(source.isTextChanged(), testing::Eq(false));
+    EXPECT_THAT(app.document().currentFrameVersion(), testing::Eq(beforeVersion));
+    EXPECT_THAT(app.document().hasPendingMutations(), testing::Eq(beforePending));
+    EXPECT_THAT(app.document().hasUnmirroredSourceDeltas(), testing::Eq(beforeUnmirrored));
+  }
+}
+
+TEST(EditorShellInternalTest, EnabledSourceFocusRetainsPartitionWhileAwaitingEdits) {
+  TextEditor source;
+  source.setText("root\nhidden\ntarget");
+  source.resetTextChanged();
+  source.setFocusPartition(FocusPartition{
+      .fullColor = {{.startLine = 2, .endLine = 3}},
+      .hidden = {{.startLine = 1, .endLine = 2}},
+  });
+  ASSERT_THAT(source.hasFocusPartition(), testing::Eq(true));
+
+  EXPECT_THAT(internal::DeferSourceFocusWhileAwaitingEdits(source, /*focusEnabled=*/true),
+              testing::Eq(true));
+  EXPECT_THAT(source.hasFocusPartition(), testing::Eq(true));
+  EXPECT_THAT(source.isPositionInsideFocusRange(Coordinates(2, 0)), testing::Eq(true));
+  EXPECT_THAT(source.isPositionInsideFocusRange(Coordinates(1, 0)), testing::Eq(false));
+  EXPECT_THAT(source.getText(), testing::Eq("root\nhidden\ntarget"));
+  EXPECT_THAT(source.isTextChanged(), testing::Eq(false));
 }
 
 TEST(EditorShellInternalTest, StructuralDocumentActionsWaitForExclusiveDomOwnership) {
@@ -1842,7 +1902,7 @@ void RunShellFrame(gui::EditorWindow& window, EditorShell& shell) {
 }
 
 void RunFramesUntilDisplayedSelectionBounds(gui::EditorWindow& window, EditorShell& shell) {
-  for (int attempt = 0; attempt < 40; ++attempt) {
+  for (const tests::HangGuard guard; guard.active();) {
     RunShellFrame(window, shell);
     if (EditorShellTestAccess::DisplayedSelectionBoundsCount(shell) > 0u) {
       return;
@@ -1878,14 +1938,14 @@ std::uint64_t HoldRasterWhileLiveDocumentAdvances(gui::EditorWindow& window, Edi
 }
 
 bool WaitForStyleSourceDecorations(EditorShell& shell) {
-  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+  const tests::HangGuard guard;
   do {
     EditorShellTestAccess::UpdateSourceStyleDecorations(shell);
     if (EditorShellTestAccess::StyleSourceDecorationsValid(shell)) {
       return true;
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(1));
-  } while (std::chrono::steady_clock::now() < deadline);
+  } while (guard.active());
 
   return false;
 }
@@ -3684,13 +3744,13 @@ TEST(EditorShellTest, SelectedSplashStylesheetEditPresentsWithoutCanvasClick) {
   EXPECT_GT(app.document().currentFrameVersion(), before);
   EXPECT_TRUE(EditorShellTestAccess::RequestRenderAtEndOfFrame(shell));
 
-  for (int attempt = 0; attempt < 4; ++attempt) {
+  for (const tests::HangGuard guard; guard.active();) {
     RunShellFrame(window, shell);
     if (EditorShellTestAccess::DisplayedDocVersion(shell) == app.document().currentFrameVersion()) {
       break;
     }
-    ASSERT_TRUE(shell.asyncRendererForReplay().waitUntilNoRenderInFlightForTesting(
-        std::chrono::steady_clock::now() + std::chrono::seconds(1)));
+    ASSERT_TRUE(
+        shell.asyncRendererForReplay().waitUntilNoRenderInFlightForTesting(guard.deadline()));
   }
   EXPECT_EQ(EditorShellTestAccess::DisplayedDocVersion(shell),
             app.document().currentFrameVersion());
@@ -3910,7 +3970,8 @@ void RunFullDesktopFrameLoopPresentsShapeDragBeforeMouseUp(double contentScale) 
     shell.runFrame();
     window.endFrame();
   };
-  for (int frame = 0; frame < 20; ++frame) {
+  const tests::HangGuard prewarmGuard;
+  for (int frame = 0; prewarmGuard.active(); ++frame) {
     runFrameWithMouse(ImVec2(-20.0f, -20.0f), /*mouseDown=*/false);
     if (!EditorShellTestAccess::RendererBusy(shell) && frame >= 2) {
       break;
@@ -4061,13 +4122,13 @@ TEST(EditorShellTest, PartlyOffscreenSplashShineEllipseFirstHeldMoveMatchesSettl
   const auto settleFrame = [&](std::string_view stage, std::uint64_t minimumVersion,
                                bool requireSelectedCache = false,
                                bool requireRequestedDensity = true) {
-    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
-    for (int frame = 0; frame < 20 && std::chrono::steady_clock::now() < deadline; ++frame) {
+    const tests::HangGuard guard;
+    for (int frame = 0; guard.active(); ++frame) {
       window.beginFrame();
       shell.runFrame();
       window.endFrame();
-      if (!shell.asyncRendererForReplay().waitUntilNoRenderInFlightForTesting(deadline)) {
-        ADD_FAILURE() << "The splash render wait reached its deadline at " << stage
+      if (!shell.asyncRendererForReplay().waitUntilNoRenderInFlightForTesting(guard.deadline())) {
+        ADD_FAILURE() << "The splash render did not complete within the hang guard at " << stage
                       << " frame=" << frame
                       << " rendererBusy=" << shell.asyncRendererForReplay().isBusy()
                       << " renderInFlight="
@@ -4278,12 +4339,12 @@ TEST(EditorShellTest, ColdSplashShineDragGetsFullTileBeforeMouseUp) {
     return window.endFrameAndReadPixels();
   };
   const auto waitForCurrentFrame = [&](bool requireRequestedDensity = false) {
-    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
-    for (int frame = 0; frame < 24 && std::chrono::steady_clock::now() < deadline; ++frame) {
+    const tests::HangGuard guard;
+    for (int frame = 0; guard.active(); ++frame) {
       (void)captureContent();
-      if (!shell.asyncRendererForReplay().waitUntilNoRenderInFlightForTesting(deadline)) {
-        ADD_FAILURE() << "Cold shine render wait reached its deadline at frame " << frame
-                      << " rendererBusy=" << shell.asyncRendererForReplay().isBusy()
+      if (!shell.asyncRendererForReplay().waitUntilNoRenderInFlightForTesting(guard.deadline())) {
+        ADD_FAILURE() << "Cold shine render did not complete within the hang guard at frame "
+                      << frame << " rendererBusy=" << shell.asyncRendererForReplay().isBusy()
                       << " renderInFlight="
                       << shell.asyncRendererForReplay().hasRenderInFlightForTesting()
                       << " heldResultPolls="
@@ -4412,10 +4473,9 @@ TEST(EditorShellTest, GeodeMaskedChildrenUpdateCanvasThroughTwoHeldMoves) {
     return window.endFrameAndReadPixels();
   };
   const auto awaitPresentation = [&] {
-    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
-    for (int frame = 0; frame < 30 && std::chrono::steady_clock::now() < deadline; ++frame) {
+    for (const tests::HangGuard guard; guard.active();) {
       (void)captureContent();
-      if (!shell.asyncRendererForReplay().waitUntilNoRenderInFlightForTesting(deadline)) {
+      if (!shell.asyncRendererForReplay().waitUntilNoRenderInFlightForTesting(guard.deadline())) {
         break;
       }
       if (!app.document().hasPendingMutations() &&
@@ -4549,10 +4609,9 @@ void RunGeodeColdDirectRetinaDrag(std::string_view id, bool selectFromLayers,
     window.endFrame();
     return svg::RendererBitmap{};
   };
-  const auto coldDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
-  for (int tick = 0; tick < 30 && std::chrono::steady_clock::now() < coldDeadline; ++tick) {
+  for (const tests::HangGuard coldGuard; coldGuard.active();) {
     (void)frame(Vector2d(-100.0, -100.0), false, false);
-    if (!shell.asyncRendererForReplay().waitUntilNoRenderInFlightForTesting(coldDeadline)) {
+    if (!shell.asyncRendererForReplay().waitUntilNoRenderInFlightForTesting(coldGuard.deadline())) {
       break;
     }
     if (EditorShellTestAccess::DisplayedDocVersion(shell) == app.document().currentFrameVersion()) {
@@ -4608,12 +4667,10 @@ void RunGeodeColdDirectRetinaDrag(std::string_view id, bool selectFromLayers,
     (void)frame(*hitPoint, false, false);
     if (waitForSelectedPrewarm) {
       const auto awaitSelectedPrewarm = [&] {
-        const auto settledDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
-        for (int tick = 0; tick < 30 && std::chrono::steady_clock::now() < settledDeadline;
-             ++tick) {
+        for (const tests::HangGuard settledGuard; settledGuard.active();) {
           (void)frame(*hitPoint, false, false);
           if (!shell.asyncRendererForReplay().waitUntilNoRenderInFlightForTesting(
-                  settledDeadline)) {
+                  settledGuard.deadline())) {
             break;
           }
           if (!EditorShellTestAccess::RendererBusy(shell) &&
@@ -4681,8 +4738,8 @@ void RunGeodeColdDirectRetinaDrag(std::string_view id, bool selectFromLayers,
                                    const svg::RendererBitmap& prior,
                                    std::string_view phase) -> std::optional<svg::RendererBitmap> {
     const Vector2d pointer = *hitPoint + Vector2d(dx, 0.0);
-    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
-    for (int tick = 0; tick < 40 && std::chrono::steady_clock::now() < deadline; ++tick) {
+    const tests::HangGuard guard;
+    for (int tick = 0; guard.active(); ++tick) {
       (void)frame(pointer, true, false);
       requestsPosted += EditorShellTestAccess::RenderRequestsPosted(shell);
       const LayerInspectorStatusReadback status = shell.layerInspectorStatusForReadback();
@@ -4700,7 +4757,7 @@ void RunGeodeColdDirectRetinaDrag(std::string_view id, bool selectFromLayers,
                         << " displayed=" << status.displayedDocVersion
                         << " pendingTransform=" << pendingTransform
                         << " rendererBusy=" << rendererBusy;
-        (void)shell.asyncRendererForReplay().waitUntilNoRenderInFlightForTesting(deadline);
+        (void)shell.asyncRendererForReplay().waitUntilNoRenderInFlightForTesting(guard.deadline());
         continue;
       }
       svg::RendererBitmap held = frame(pointer, true, true);
@@ -5615,7 +5672,7 @@ TEST(EditorShellTest, TextFormatBarPrewarmsCatalogFamilyInItsOwnFace) {
 
   EditorShellTestAccess::RequestFontPreviews(shell, {"Bebas Neue"});
   FormatBarFontPreview preview;
-  for (int attempt = 0; attempt < 500 && !preview.available(); ++attempt) {
+  for (const tests::HangGuard guard; guard.active() && !preview.available();) {
     EditorShellTestAccess::AdvanceFontPreviewGeneration(shell);
     preview = EditorShellTestAccess::FontPreviewForFamily(shell, "Bebas Neue");
     if (!preview.available()) {
@@ -5645,7 +5702,7 @@ TEST(EditorShellTest, FontPreviewWarmsFromDiskBeforeWorkerRender) {
     ASSERT_TRUE(shell.valid());
     EditorShellTestAccess::RequestFontPreviews(shell, {"Bebas Neue"});
     FormatBarFontPreview preview;
-    for (int attempt = 0; attempt < 500 && !preview.available(); ++attempt) {
+    for (const tests::HangGuard guard; guard.active() && !preview.available();) {
       EditorShellTestAccess::AdvanceFontPreviewGeneration(shell);
       preview = EditorShellTestAccess::FontPreviewForFamily(shell, "Bebas Neue");
       if (!preview.available()) {
@@ -7290,7 +7347,7 @@ TEST(EditorShellTest, GeodeSplashSampleClickPublishesFirstDocumentFrame) {
   ASSERT_TRUE(EditorShellTestAccess::SamplePresentationPending(shell));
 
   bool displayed = false;
-  for (int attempt = 0; attempt < 300; ++attempt) {
+  for (const tests::HangGuard guard; guard.active();) {
     shell.prepareFrame();
     window.beginFrame();
     shell.runFrame();
@@ -7320,9 +7377,9 @@ TEST(EditorShellTest, MainDocumentRenderTakesPriorityOverNewCarouselThumbnailWor
 
   // Drain the editor's initial document render before opening the picker so this test controls the
   // priority transition precisely.
-  for (int frame = 0; frame < 200 && (EditorShellTestAccess::RendererBusy(shell) ||
-                                      EditorShellTestAccess::RequestRenderAtEndOfFrame(shell));
-       ++frame) {
+  for (const tests::HangGuard guard;
+       guard.active() && (EditorShellTestAccess::RendererBusy(shell) ||
+                          EditorShellTestAccess::RequestRenderAtEndOfFrame(shell));) {
     window.beginFrame();
     shell.runFrame();
     window.endFrame();
@@ -7490,10 +7547,9 @@ void RunFrameWithMouse(gui::EditorWindow& window, EditorShell& shell, const ImVe
 
 const DocumentPixelCapture* WaitForDocumentPixelCapture(gui::EditorWindow& window,
                                                         EditorShell& shell) {
-  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
-  while (std::chrono::steady_clock::now() < deadline) {
+  for (const tests::HangGuard guard; guard.active();) {
     RunFrameWithMouse(window, shell, ImVec2(-1.0f, -1.0f), false);
-    if (!shell.asyncRendererForReplay().waitUntilNoRenderInFlightForTesting(deadline)) {
+    if (!shell.asyncRendererForReplay().waitUntilNoRenderInFlightForTesting(guard.deadline())) {
       return nullptr;
     }
     RunFrameWithMouse(window, shell, ImVec2(-1.0f, -1.0f), false);
@@ -7567,8 +7623,7 @@ HistoryAvailability CurrentHistoryAvailability(const EditorApp& app) {
 
 bool RunFramesUntilHistoryState(gui::EditorWindow& window, EditorShell& shell,
                                 HistoryAvailability expectedAvailability) {
-  constexpr int kMaxFrames = 200;
-  for (int frame = 0; frame < kMaxFrames; ++frame) {
+  for (const tests::HangGuard guard; guard.active();) {
     if (CurrentHistoryAvailability(EditorShellTestAccess::App(shell)) == expectedAvailability) {
       return true;
     }
@@ -8316,10 +8371,11 @@ std::string DescribeFocusLines(const TextEditor& source) {
 
 /// Run frames until the async renderer is idle and every queued writeback reached the source pane.
 void SettleShellFrames(gui::EditorWindow& window, EditorShell& shell) {
+  const tests::HangGuard guard;
   for (int attempt = 0; attempt < 6; ++attempt) {
     RunShellFrame(window, shell);
-    ASSERT_TRUE(shell.asyncRendererForReplay().waitUntilNoRenderInFlightForTesting(
-        std::chrono::steady_clock::now() + std::chrono::seconds(3)));
+    ASSERT_TRUE(
+        shell.asyncRendererForReplay().waitUntilNoRenderInFlightForTesting(guard.deadline()));
   }
   RunShellFrame(window, shell);
 }
@@ -8405,6 +8461,49 @@ TEST(EditorShellTest, SourceFocusRevealsNewTextWhileCreatingAndTyping) {
     ExpectFocusShowsSelectedElement(shell, "x=\"20\" y=\"60\"", "</text>");
   }
   EXPECT_NE(EditorShellTestAccess::Source(shell).getText().find("SVG</text>"), std::string::npos);
+}
+
+TEST(EditorShellTest, DisablingSourceFocusClearsPendingEditPartitionImmediately) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "Hidden editor window is unavailable on this host";
+  }
+
+  for (const bool flushBeforeDisable : {false, true}) {
+    SCOPED_TRACE(flushBeforeDisable ? "writeback awaiting source pane" : "queued insertion");
+    EditorShell shell(window, OptionsWithSource(kInitialSvg, "focus-disable.svg"));
+    ASSERT_THAT(shell.valid(), testing::Eq(true));
+    EditorApp& app = EditorShellTestAccess::App(shell);
+    auto target = app.document().document().querySelector("#target");
+    ASSERT_THAT(target, testing::Optional(testing::_));
+    app.setSelection(*target);
+    EditorShellTestAccess::SetSourceFocusMode(shell, true);
+    TextEditor& source = EditorShellTestAccess::Source(shell);
+    ASSERT_THAT(source.hasFocusPartition(), testing::Eq(true));
+
+    svg::SVGDocument& document = app.document().document();
+    svg::SVGRectElement inserted = svg::SVGRectElement::Create(document);
+    inserted.setAttribute("id", "inserted");
+    app.applyMutation(EditorCommand::InsertElementCommand(document.svgElement(), inserted));
+    if (flushBeforeDisable) {
+      ASSERT_THAT(app.flushFrame(), testing::Eq(true));
+      ASSERT_THAT(app.document().hasUnmirroredSourceDeltas(), testing::Eq(true));
+    } else {
+      ASSERT_THAT(app.document().hasPendingMutations(), testing::Eq(true));
+    }
+    const std::string beforeText = source.getText();
+    const auto beforeVersion = app.document().currentFrameVersion();
+    const bool beforePending = app.document().hasPendingMutations();
+    const bool beforeUnmirrored = app.document().hasUnmirroredSourceDeltas();
+
+    EditorShellTestAccess::SetSourceFocusMode(shell, false);
+    EXPECT_THAT(EditorShellTestAccess::SourceFocusMode(shell), testing::Eq(false));
+    EXPECT_THAT(source.hasFocusPartition(), testing::Eq(false));
+    EXPECT_THAT(source.getText(), testing::Eq(beforeText));
+    EXPECT_THAT(app.document().currentFrameVersion(), testing::Eq(beforeVersion));
+    EXPECT_THAT(app.document().hasPendingMutations(), testing::Eq(beforePending));
+    EXPECT_THAT(app.document().hasUnmirroredSourceDeltas(), testing::Eq(beforeUnmirrored));
+  }
 }
 
 TEST(EditorShellTest, SourceFocusWaitsForInsertedElementToReachSourcePane) {

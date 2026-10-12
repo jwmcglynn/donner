@@ -67,7 +67,7 @@ public:
    * Constructs a new RcString object from a C-style string and optional length.
    *
    * @param data C-style string.
-   * @param len Length of the string, or npos to automatically measure, which requires that \ref
+   * @param len Length of the string, or npos to automatically measure, which requires that \p
    *   data is null-terminated.
    */
   /* implicit */ RcString(const char* data, size_t len = npos)
@@ -146,12 +146,12 @@ public:
   // Reversed comparison operators.
   //
 
-  /// Spaceship equality operator to another \ref RcString.
+  /// Reversed spaceship equality operator to a C-style string.
   friend auto operator<=>(const char* lhs, const RcString& rhs) {
     return compareStringViews(lhs, rhs);
   }
 
-  /// Spaceship equality operator to a C-style string.
+  /// Reversed spaceship equality operator to a `std::string_view`.
   friend auto operator<=>(std::string_view lhs, const RcString& rhs) {
     return compareStringViews(lhs, rhs);
   }
@@ -175,12 +175,12 @@ public:
     return (lhs <=> rhs) == std::strong_ordering::equal;
   }
 
-  /// Reversed equality operator to another \ref RcString.
+  /// Reversed equality operator to a C-style string.
   friend bool operator==(const char* lhs, const RcString& rhs) {
     return (lhs <=> rhs) == std::strong_ordering::equal;
   }
 
-  /// Reversed equality operator to a C-style string.
+  /// Reversed equality operator to a `std::string_view`.
   friend bool operator==(std::string_view lhs, const RcString& rhs) {
     return (lhs <=> rhs) == std::strong_ordering::equal;
   }
@@ -210,12 +210,12 @@ public:
     return concatStringViews(lhs, rhs);
   }
 
-  /// Reversed concatenation operator with a C-style string.
+  /// Reversed concatenation operator with a `std::string_view`.
   friend std::string operator+(std::string_view lhs, const RcString& rhs) {
     return concatStringViews(lhs, rhs);
   }
 
-  /// Reversed concatenation operator with a `std::string_view`.
+  /// Reversed concatenation operator with a C-style string.
   friend std::string operator+(const char* lhs, const RcString& rhs) {
     return concatStringViews(lhs, rhs);
   }
@@ -225,7 +225,8 @@ public:
   /**
    * @return a pointer to the string data. With the small-string optimization the pointer can alias
    *   this object's inline buffer, so it must not outlive the \ref RcString (annotated
-   *   `UTILS_LIFETIME_BOUND`).
+   *   `UTILS_LIFETIME_BOUND`). The data is not guaranteed to be null-terminated (short strings
+   *   and substrings that share storage may not be), so use it together with \ref size().
    */
   const char* data() const UTILS_LIFETIME_BOUND {
     return data_.isLong() ? data_.long_.data : &data_.short_.data[0];
@@ -288,8 +289,9 @@ public:
    * that due to the short-string optimization, this may not always reference the original data
    * and may contain a copy if the string is below the short-string threshold.
    *
+   * @pre \p pos is at most \ref size().
    * @param pos The position to start the substring.
-   * @param len The length of the substring, or `RcString::npos` to return the whole string.
+   * @param len The length of the substring, or `RcString::npos` to take the rest of the string.
    */
   RcString substr(size_t pos, size_t len = npos) const {
     const std::string_view slice = std::string_view(*this).substr(pos, len);
@@ -303,7 +305,7 @@ public:
 
   /**
    * Deduplicates the string, updating its underlying storage to ensure that it has a unique
-   * reference to the underlying contents. This can be used to reduce memory usage whe taking a
+   * reference to the underlying contents. This can be used to reduce memory usage when taking a
    * substring.
    *
    * Has no effect if the string is short due to the short-string optimization.

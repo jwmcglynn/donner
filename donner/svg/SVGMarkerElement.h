@@ -127,7 +127,7 @@ public:
 
   /**
    * The value of the `preserveAspectRatio` attribute, which defines how to scale the viewport to
-   * fit the content. Only applies is `viewBox` is specified.
+   * fit the content. Only applies if `viewBox` is specified.
    */
   PreserveAspectRatio preserveAspectRatio() const;
 

@@ -20,10 +20,10 @@ struct Vector2 {
   /// Returns a vector with all components set to zero.
   static Vector2<T> Zero() { return Vector2(T(0), T(0)); }
 
-  /// Returns a vector with for the x-axis, i.e. (1, 0).
+  /// Returns the unit vector along the x-axis, i.e. (1, 0).
   static Vector2<T> XAxis() { return Vector2(T(1), T(0)); }
 
-  /// Returns a vector with for the y-axis, i.e. (0, 1).
+  /// Returns the unit vector along the y-axis, i.e. (0, 1).
   static Vector2<T> YAxis() { return Vector2(T(0), T(1)); }
 
   /// Default constructor for a zero vector.
@@ -112,7 +112,7 @@ struct Vector2 {
   [[nodiscard]] T dot(const Vector2<T>& other) const { return x * other.x + y * other.y; }
 
   /**
-   * Returns the Z component of the cross product of this vecctor and \p other in the 2D plane. The
+   * Returns the Z component of the cross product of this vector and \p other in the 2D plane. The
    * result always points perpendicular outside the plane.
    *
    * @param other The other vector.
@@ -163,7 +163,7 @@ struct Vector2 {
   }
 
   /**
-   * Returns the normalized form of this vector.
+   * Returns the normalized form of this vector, or a zero vector if its length is near zero.
    */
   [[nodiscard]] Vector2<T> normalize() const {
     const T len = length();
@@ -340,7 +340,8 @@ struct Vector2 {
   }
 
   /**
-   * Equality operator, check if two vectors are equal.
+   * Equality operator, check if two vectors are equal. Each component is compared with
+   * `NearEquals`, using an absolute tolerance of `std::numeric_limits<T>::epsilon()`.
    *
    * @param other The vector to compare.
    */
@@ -356,7 +357,9 @@ struct Vector2 {
   bool operator!=(const Vector2<T>& rhs) const { return !operator==(rhs); }
 
   /**
-   * Equality operator with a vector of a different type, check if two vectors are equal.
+   * Equality operator with a vector of a different type, check if two vectors are equal. Each
+   * component of \p other is cast to `T` and compared with `NearEquals`, using an absolute
+   * tolerance of `std::numeric_limits<T>::epsilon()`.
    *
    * @param other The vector to compare.
    */

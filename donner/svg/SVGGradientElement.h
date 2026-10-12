@@ -52,7 +52,7 @@ public:
    *   <stop offset="100%" stop-color="yellow" />
    * </linearGradient>
    *
-   * <linearGradient id="MyGradient2" href="#MyGradient" gradientTransform="rotate(45deg)">
+   * <linearGradient id="MyGradient2" href="#MyGradient" gradientTransform="rotate(45)">
    *  <!-- Stops are inherited from MyGradient -->
    * </linearGradient>
    * ```
@@ -77,7 +77,8 @@ public:
    * \endhtmlonly
    *
    * The attributes that can be inherited are:
-   * - `gradientUnits`, `spreadMethod`, and `gradientTransform`.
+   * - `gradientUnits` and `spreadMethod`. `gradientTransform` is not inherited; each gradient
+   *   uses only its own.
    * - For \ref SVGLinearGradientElement, `x1`, `y1`, `x2`, and `y2`.
    * - For \ref SVGRadialGradientElement, `cx`, `cy`, `r`, `fx`, `fy`, and `fr`.
    * - \ref xml_stop child elements, if this element has none itself.

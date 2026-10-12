@@ -11,8 +11,8 @@ namespace donner::svg {
  *
  * Defines a clipping path, which is used to clip the rendering of other elements using paths and
  * shapes. The clipping path is defined by the child elements of this element. Compared to
- * \ref xml_mask, which uses image-based rendering and their white and black values to determine
- * visibility, "<clipPath>" uses paths and shapes to define the clipping area.
+ * \ref xml_mask, which uses the luminance or alpha of its rendered content to determine
+ * visibility, `<clipPath>` uses paths and shapes to define the clipping area.
  *
  * This element is not rendered directly, but is referenced by other elements using the `clip-path`
  * CSS property.

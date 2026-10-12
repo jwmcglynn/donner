@@ -397,7 +397,7 @@ public:
   void setStyle(std::string_view style);
 
   /**
-   * Update the element style, adding new attributes or overridding existing ones (without removing
+   * Update the element style, adding new properties or overriding existing ones (without removing
    * them).
    *
    * @param style Style updates to apply, as a CSS style string (e.g. "fill:red;").
@@ -408,9 +408,8 @@ public:
    * Set the value of a presentation attribute, such as "fill" or "stroke". Note that this accepts
    * the CSS value, not the XML attribute value.
    *
-   * For example, for the following XML attributes they need to be mapped as follows before calling:
-   * - `gradientTransform` -> `transform`
-   * - `patternTransform` -> `transform`
+   * `gradientTransform` on gradient elements and `patternTransform` on `<pattern>` are accepted
+   * under their XML names and applied as the `transform` property.
    *
    * @param name Name of the attribute to set.
    * @param value New value to set.
@@ -470,8 +469,8 @@ public:
    * Remove an attribute, which may be either a presentation attribute or custom user-provided
    * attribute.
    *
-   * If this is a presentation attribute, the presentation attributes value will be removed
-   * (internally by setting the value to 'inherit').
+   * If this is a presentation attribute, the presentation attribute's value will be removed
+   * (internally by setting the value to 'initial').
    *
    * @param name Name of the attribute to remove.
    */
@@ -574,18 +573,18 @@ public:
   void remove();
 
   /**
-   * Returns true if the two SVGElement handles reference the same underlying document.
+   * Returns true if the two SVGElement handles reference the same underlying element.
    */
   bool operator==(const SVGElement& other) const { return handle_ == other.handle_; }
 
   /**
-   * Returns true if the two SVGElement handles reference the same underlying document.
+   * Returns true if the two SVGElement handles reference different underlying elements.
    */
   bool operator!=(const SVGElement& other) const { return handle_ != other.handle_; }
 
   /**
-   * Return true if this element "is a" instance of type, if it be cast to a specific type with \ref
-   * cast.
+   * Return true if this element "is a" instance of type, i.e. if it can be cast to a specific type
+   * with \ref cast.
    *
    * @tparam Derived Type to check.
    */
@@ -670,7 +669,8 @@ public:
   }
 
   /**
-   * Find the first element in the tree that matches the given CSS selector.
+   * Find the first descendant of this element, in document order, that matches the given CSS
+   * selector. This element itself is not matched.
    *
    * This method performs its own scoped read. For repeated DOM reads in
    * \ref donner::svg::ThreadingMode::ConcurrentDom, wrap the surrounding scan in
@@ -839,7 +839,7 @@ protected:
    * Create a new SVG element instance on a given \ref donner::Entity.
    *
    * @param handle Entity to create the element on.
-   * @param tagName XML element type, e.g. "svg" or "rect", which an optional namespace.
+   * @param tagName XML element type, e.g. "svg" or "rect", with an optional namespace.
    * @param Type Type of the entity.
    */
   static void CreateEntityOn(EntityHandle handle, const xml::XMLQualifiedNameRef& tagName,

@@ -173,7 +173,8 @@ public:
   void setType(const RcStringOrRef& type);
 
   /**
-   * Set the contents of the stylesheet.
+   * Set the contents of the stylesheet. Ignored if the stylesheet type is not `text/css`
+   * (see \ref isCssType).
    *
    * @param style Stylesheet contents (CSS text).
    */

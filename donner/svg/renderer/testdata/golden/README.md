@@ -18,3 +18,42 @@ Run these commands from the repository root:
 resvg --skip-system-fonts --use-font-file third_party/resvg-test-suite/fonts/NotoSans-Regular.ttf --width 500 third_party/resvg-test-suite/tests/text/textPath/tspan-with-relative-position.svg donner/svg/renderer/testdata/golden/resvg-tspan-with-relative-position.png
 resvg --skip-system-fonts --use-font-file third_party/resvg-test-suite/fonts/NotoSans-Regular.ttf --width 500 third_party/resvg-test-suite/tests/text/textPath/dy-with-tiny-coordinates.svg donner/svg/renderer/testdata/golden/resvg-dy-with-tiny-coordinates.png
 ```
+
+## Emoji positioning reference
+
+`resvg-compound-emojis-and-coordinates-list.png` is generated independently with
+resvg 0.47.0 and the corpus `NotoColorEmoji.ttf`, with system fonts disabled.
+Donner output is not used to generate this reference. The unchanged corpus SVG
+uses `y="90 111 130 150"`. [SVG2 positioning](https://www.w3.org/TR/SVG2/text.html#TextLayoutAlgorithm)
+indexes that list by codepoint, while positioning complete typographic characters:
+the smile starts at index 0, the crab at index 1, and the joined rainbow flag at
+index 2. Their baselines are therefore 90, 111, and 130. The internal variation
+selector's value is skipped. The old image placed the crab and flag at 130 and
+150, consistent with counting supplementary characters as two UTF-16 units.
+
+To reproduce, copy the corpus SVG to `reference.svg` and replace only its `text`
+element with this equivalent fragment. Keeping each complete cluster in its own
+span avoids splitting the flag on an internal absolute position. Font, font size,
+viewBox, crosshair, frame, and implicit horizontal advances stay the same:
+
+```xml
+<text id="text1" x="52" y="90"><tspan>&#x1F601;</tspan><tspan y="111">&#x1F980;</tspan><tspan y="130">&#x1F3F3;&#xFE0F;&#x200D;&#x1F308;</tspan></text>
+```
+
+```sh
+resvg --skip-system-fonts --use-font-file third_party/resvg-test-suite/fonts/NotoColorEmoji.ttf --width 500 --height 500 reference.svg donner/svg/renderer/testdata/golden/resvg-compound-emojis-and-coordinates-list.png
+```
+
+The existing per-pixel threshold remains 0.1; the comparison uses the ordinary
+100-pixel budget, replacing the former 1100-pixel allowance.
+
+Font SHA-256: `21fc478e003fc871200ba3bcf4215295a80e06a5c1b96f5368adc2183956f01a`.
+
+Corpus SVG SHA-256: `e65aef72d28ca80b2ad7c3830da8e06a7a50eb685c751525e0450f3ea9c4dcdc`.
+
+Reference PNG SHA-256: `9fef8a7afaf51ff396e4a776da3ec65f72f1b3a5c3ed59e55bd4b10d5ca2061f`.
+
+This reference qualifies the full-text CPU rendering path. Geode currently skips
+bitmap-only fonts in its text renderer; that GPU capability remains unsupported.
+The native positioning regression uses an independently authored joined outline
+cluster, while Full TextEngine tests retain bitmap-emoji addressing and carry.

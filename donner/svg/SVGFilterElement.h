@@ -218,7 +218,7 @@ public:
    * length values within the filter primitives and for the attributes that define the filter
    * primitive subregion.
    *
-   * The default is \ref FilterUnits::UserSpaceOnUse, where the user coordinate system in place
+   * The default is \ref PrimitiveUnits::UserSpaceOnUse, where the user coordinate system in place
    * at the time when the `filter` element is referenced is used.
    */
   PrimitiveUnits primitiveUnits() const;

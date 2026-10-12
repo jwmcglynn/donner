@@ -8,6 +8,7 @@
 #include <functional>
 #include <limits>
 #include <source_location>
+#include <string>
 #include <tuple>
 #include <vector>
 
@@ -2723,6 +2724,216 @@ TEST(RendererPublicApiTest, MaskTypeAlphaUsesAlphaChannel) {
 
   EXPECT_THAT(PixelAt(snapshot, 10, 10), ElementsAre(0, 128, 0, 255));
   EXPECT_THAT(PixelAt(snapshot, 30, 10), IsTransparent());
+}
+
+TEST(RendererPublicApiTest, RotatedMaskRegionClipsInLocalCoordinatesAndRestoresSibling) {
+  SVGDocument document = ParseDocument(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="16" viewBox="0 0 24 16">
+      <defs>
+        <mask id="m" maskUnits="userSpaceOnUse" x="0" y="0" width="8" height="16">
+          <rect width="16" height="16" fill="white" />
+        </mask>
+      </defs>
+      <g mask="url(#m)" transform="rotate(45 8 8)">
+        <rect width="16" height="16" fill="green" />
+      </g>
+      <rect x="20" y="4" width="4" height="8" fill="blue" />
+    </svg>
+  )svg");
+  Renderer renderer;
+  renderer.draw(document);
+  const RendererBitmap snapshot = NormalizeSnapshot(renderer.takeSnapshot());
+  ASSERT_THAT(snapshot.empty(), testing::IsFalse());
+  EXPECT_THAT(PixelAt(snapshot, 5, 5), ElementsAre(0, 128, 0, 255));
+  EXPECT_THAT(PixelAt(snapshot, 11, 11), IsTransparent());
+  EXPECT_THAT(PixelAt(snapshot, 22, 8), ElementsAre(0, 0, 255, 255));
+}
+
+TEST(RendererPublicApiTest, RotatedMaskRegionPreservesNestedMasksAndParentClips) {
+  SVGDocument document = ParseDocument(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="16" viewBox="0 0 24 16">
+      <defs>
+        <clipPath id="parent"><rect width="16" height="8" /></clipPath>
+        <mask id="inner" maskUnits="userSpaceOnUse" x="0" y="0" width="16" height="16" mask-type="alpha">
+          <rect width="16" height="16" fill="black" />
+        </mask>
+        <mask id="m" maskUnits="userSpaceOnUse" x="0" y="0" width="8" height="16" mask-type="alpha">
+          <rect width="16" height="16" fill="black" mask="url(#inner)" />
+        </mask>
+      </defs>
+      <g clip-path="url(#parent)">
+        <g mask="url(#m)" transform="rotate(45 8 8)">
+          <rect width="16" height="16" fill="green" />
+        </g>
+      </g>
+      <rect x="20" y="4" width="4" height="8" fill="blue" />
+    </svg>
+  )svg");
+  Renderer renderer;
+  renderer.draw(document);
+  const RendererBitmap snapshot = NormalizeSnapshot(renderer.takeSnapshot());
+  ASSERT_THAT(snapshot.empty(), testing::IsFalse());
+  EXPECT_THAT(PixelAt(snapshot, 5, 5), ElementsAre(0, 128, 0, 255));
+  EXPECT_THAT(PixelAt(snapshot, 3, 9), IsTransparent());
+  EXPECT_THAT(PixelAt(snapshot, 11, 11), IsTransparent());
+  EXPECT_THAT(PixelAt(snapshot, 22, 8), ElementsAre(0, 0, 255, 255));
+}
+
+TEST(RendererPublicApiTest, RotatedMaskRegionClipsBitmapMaskContent) {
+  SVGDocument document = ParseDocument(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
+      <defs>
+        <mask id="m" maskUnits="userSpaceOnUse" x="0" y="0" width="8" height="16" mask-type="alpha">
+          <image width="16" height="16"
+            href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAEUlEQVR42mP4z8DwH4QZYAwAR8oH+Rq28akAAAAASUVORK5CYII=" />
+        </mask>
+      </defs>
+      <g mask="url(#m)" transform="rotate(45 8 8)">
+        <rect width="16" height="16" fill="green" />
+      </g>
+    </svg>
+  )svg");
+  Renderer renderer;
+  renderer.draw(document);
+  const RendererBitmap snapshot = NormalizeSnapshot(renderer.takeSnapshot());
+  ASSERT_THAT(snapshot.empty(), testing::IsFalse());
+  EXPECT_THAT(PixelAt(snapshot, 5, 5), ElementsAre(0, 128, 0, 255));
+  EXPECT_THAT(PixelAt(snapshot, 11, 11), IsTransparent());
+}
+
+TEST(RendererPublicApiTest, RotatedMaskRegionCoverageIsIndependentOfContentRepresentation) {
+  const std::array<std::string_view, 2> maskContents = {
+      R"svg(<rect x="-64" y="-64" width="128" height="128" fill="white" />)svg",
+      R"svg(<image x="-64" y="-64" width="128" height="128"
+        href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4nGP4DwQACfsD/fteaysAAAAASUVORK5CYII=" />)svg"};
+  std::array<RendererBitmap, 2> snapshots;
+  for (std::size_t i = 0; i < maskContents.size(); ++i) {
+    const std::string svg = std::string(R"svg(
+      <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24">
+        <defs>
+          <mask id="m" maskUnits="userSpaceOnUse" x="4" y="4" width="16" height="12" mask-type="alpha">
+    )svg") + std::string(maskContents[i]) +
+                            R"svg(
+          </mask>
+        </defs>
+        <g mask="url(#m)" transform="rotate(17 12 12) translate(0.25 0.125)">
+          <rect x="-64" y="-64" width="128" height="128" fill="green" />
+        </g>
+      </svg>
+    )svg";
+    SVGDocument document = ParseDocument(svg);
+    Renderer renderer;
+    renderer.draw(document);
+    snapshots[i] = NormalizeSnapshot(renderer.takeSnapshot());
+    ASSERT_THAT(snapshots[i].empty(), testing::IsFalse());
+    EXPECT_THAT(PixelAt(snapshots[i], 12, 10), ElementsAre(0, 128, 0, 255));
+  }
+  editor::tests::CompareBitmapToBitmap(snapshots[0], snapshots[1], "rotated-mask-content-coverage",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+namespace {
+
+RendererBitmap RenderRotatedMaskContent(std::string_view maskContent) {
+  const std::string source = std::string(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24">
+      <defs>
+        <mask id="inner" maskUnits="userSpaceOnUse" x="-64" y="-64" width="128" height="128"
+              mask-type="alpha">
+          <rect x="-64" y="-64" width="128" height="128" fill="white"/>
+        </mask>
+        <mask id="m" maskUnits="userSpaceOnUse" x="4" y="4" width="16" height="12"
+              mask-type="alpha">
+  )svg") + std::string(maskContent) +
+                             R"svg(
+        </mask>
+      </defs>
+      <g mask="url(#m)" transform="rotate(17 12 12) translate(0.25 0.125)">
+        <rect x="-64" y="-64" width="128" height="128" fill="green"/>
+      </g>
+    </svg>
+  )svg";
+  SVGDocument document = ParseDocument(source);
+  Renderer renderer;
+  renderer.draw(document);
+  return NormalizeSnapshot(renderer.takeSnapshot());
+}
+
+}  // namespace
+
+TEST(RendererPublicApiTest, RotatedMaskRegionIntersectsOpaqueOverlapsOnce) {
+  const auto single = RenderRotatedMaskContent(
+      R"svg(<rect x="-64" y="-64" width="128" height="128" fill="white"/>)svg");
+  const auto duplicated = RenderRotatedMaskContent(R"svg(
+      <rect x="-64" y="-64" width="128" height="128" fill="white"/>
+      <rect x="-64" y="-64" width="128" height="128" fill="white"/>
+  )svg");
+  ASSERT_THAT(single.empty(), testing::IsFalse());
+  EXPECT_THAT(PixelAt(single, 12, 10), ElementsAre(0, 128, 0, 255));
+  editor::tests::CompareBitmapToBitmap(duplicated, single, "mask-region-opaque-overlaps",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(RendererPublicApiTest, RotatedMaskRegionIntersectsIsolatedGroupOnce) {
+  const auto flat = RenderRotatedMaskContent(
+      R"svg(<rect x="-64" y="-64" width="128" height="128" fill="white" fill-opacity="0.4"/>)svg");
+  const auto isolated = RenderRotatedMaskContent(R"svg(
+      <g opacity="0.4"><rect x="-64" y="-64" width="128" height="128" fill="white"/></g>
+  )svg");
+  ASSERT_THAT(flat.empty(), testing::IsFalse());
+  EXPECT_THAT(PixelAt(flat, 12, 10), Rgba(_, _, _, testing::Gt(80)));
+  editor::tests::CompareBitmapToBitmap(isolated, flat, "mask-region-isolated-group",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(RendererPublicApiTest, RotatedMaskRegionIntersectsNestedMaskOnce) {
+  const auto flat = RenderRotatedMaskContent(
+      R"svg(<rect x="-64" y="-64" width="128" height="128" fill="white"/>)svg");
+  const auto nested = RenderRotatedMaskContent(R"svg(
+      <g mask="url(#inner)"><rect x="-64" y="-64" width="128" height="128" fill="white"/></g>
+  )svg");
+  ASSERT_THAT(flat.empty(), testing::IsFalse());
+  EXPECT_THAT(PixelAt(flat, 12, 10), ElementsAre(0, 128, 0, 255));
+  editor::tests::CompareBitmapToBitmap(nested, flat, "mask-region-nested-mask",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(RendererPublicApiTest, MaskCompositeAppliesParentClipOnceAndRestoresSiblingClip) {
+  for (int angle : {0, 17}) {
+    SCOPED_TRACE(angle);
+    std::array<RendererBitmap, 2> snapshots;
+    for (bool masked : {false, true}) {
+      const std::string source = std::string(R"svg(
+        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24">
+          <defs>
+            <clipPath id="parent"><circle cx="12.25" cy="12.125" r="8.5"/></clipPath>
+            <mask id="m" maskUnits="userSpaceOnUse" x="-64" y="-64" width="128"
+                  height="128" mask-type="alpha">
+              <rect x="-64" y="-64" width="128" height="128" fill="white"/>
+            </mask>
+          </defs>
+          <g transform="rotate()svg") +
+                                 std::to_string(angle) + R"svg( 12 12)">
+            <g clip-path="url(#parent)">
+              <g )svg" + (masked ? "mask=\"url(#m)\"" : "") +
+                                 R"svg(>
+                <rect x="-64" y="-64" width="128" height="128" fill="green"/>
+              </g>
+              <rect x="0" y="0" width="5" height="24" fill="red"/>
+            </g>
+          </g>
+        </svg>
+      )svg";
+      SVGDocument document = ParseDocument(source);
+      Renderer renderer;
+      renderer.draw(document);
+      snapshots[masked] = NormalizeSnapshot(renderer.takeSnapshot());
+    }
+    ASSERT_THAT(snapshots[0].empty(), testing::IsFalse());
+    EXPECT_THAT(PixelAt(snapshots[0], 12, 12), ElementsAre(0, 128, 0, 255));
+    editor::tests::CompareBitmapToBitmap(snapshots[1], snapshots[0], "mask-parent-clip-once",
+                                         editor::tests::PixelmatchIdentityParams());
+  }
 }
 
 TEST(RendererPublicApiTest, LinearRgbMaskConvertsStraightColorBeforeApplyingAlpha) {

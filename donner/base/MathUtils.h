@@ -151,7 +151,8 @@ inline double Abs(double a) {
 }
 
 /**
- * Returns the absolute value of the number.
+ * Returns the absolute value of the number. For the type's lowest value, whose absolute value is
+ * not representable, returns the type's maximum instead.
  */
 template <typename T,
           typename = std::enable_if<std::is_integral<T>::value && std::is_signed<T>::value>>
@@ -164,7 +165,8 @@ inline T Abs(T a) {
 }
 
 /**
- * Round a floating point value to an integer.
+ * Round a floating point value to the nearest integral value, rounding halfway cases toward
+ * positive infinity (so -0.5 rounds to 0).
  */
 template <typename T, typename = std::enable_if<std::is_floating_point<T>::value>>
 inline T Round(T orig) {
@@ -192,6 +194,12 @@ inline const T Clamp(T value, T low, T high) {
 
 /**
  * Returns if @a a equals @a b, taking possible rounding errors into account.
+ *
+ * The tolerance is absolute and does not scale with the magnitude of the values.
+ *
+ * @param a First value.
+ * @param b Second value.
+ * @param tolerance Maximum absolute difference considered equal, machine epsilon by default.
  */
 template <typename T>
 inline bool NearEquals(T a, T b, T tolerance = std::numeric_limits<T>::epsilon()) {
@@ -200,6 +208,9 @@ inline bool NearEquals(T a, T b, T tolerance = std::numeric_limits<T>::epsilon()
 
 /**
  * Returns if @a a equals zero, taking rounding errors into account.
+ *
+ * @param a Value to test.
+ * @param tolerance Maximum absolute value considered zero, machine epsilon by default.
  */
 template <typename T>
 inline bool NearZero(T a, T tolerance = std::numeric_limits<T>::epsilon()) {
@@ -207,7 +218,7 @@ inline bool NearZero(T a, T tolerance = std::numeric_limits<T>::epsilon()) {
 }
 
 /**
- * Test if a variable is in a specific range, using an optimized technique
+ * Test if a variable is in the inclusive range [start, end], using an optimized technique
  * that requires only one branch.  Some compilers do this automatically.
  *
  * Example:
@@ -243,7 +254,8 @@ struct QuadraticSolution {
  * @param a First coefficient.
  * @param b Second coefficient.
  * @param c Third coefficient.
- * @return QuadraticSolution, containing 0-2 solutions.
+ * @return QuadraticSolution with no solution when the discriminant is negative or \p a is zero,
+ *   otherwise with both roots, which are equal for a repeated root.
  */
 template <typename T>
 QuadraticSolution<T> SolveQuadratic(T a, T b, T c) {

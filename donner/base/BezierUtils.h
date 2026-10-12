@@ -104,6 +104,16 @@ void ApproximateCubicWithQuadratics(const Vector2d& p0, const Vector2d& p1, cons
 /**
  * Bounded variant of \ref ApproximateCubicWithQuadratics.
  *
+ * \p maximumOutputPoints caps the total size of \p out, including any points it already holds.
+ * On failure \p out may keep the quadratics appended before the cap was reached.
+ *
+ * @param p0 Start point.
+ * @param p1 First control point.
+ * @param p2 Second control point.
+ * @param p3 End point.
+ * @param tolerance Maximum allowed distance between the cubic and its quadratic approximation.
+ * @param maximumOutputPoints Maximum size of \p out after appending.
+ * @param[out] out Output vector to which (control, end) point pairs are appended.
  * @return False without exceeding \p maximumOutputPoints when the approximation needs more
  * points than the caller can retain.
  */

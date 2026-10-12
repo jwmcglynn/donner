@@ -137,6 +137,9 @@ public:
   /**
    * Get the line points, which the polyline connects with straight line segments.
    *
+   * The returned reference is a per-thread snapshot that the next `points()` call on any polyline
+   * on the same thread overwrites. Copy the list to keep it.
+   *
    * @return Points list.
    */
   const std::vector<Vector2d>& points() const;

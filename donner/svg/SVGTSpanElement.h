@@ -16,7 +16,7 @@ namespace donner::svg {
  * weight, or position of a portion of text within a \ref xml_text element.
  *
  * - DOM object: SVGTSpanElement
- * - SVG2 spec: https://www.w3.org/TR/SVG2/text.html#TextElement
+ * - SVG2 spec: https://www.w3.org/TR/SVG2/text.html#TSpanElement
  *
  * A `<tspan>` is a text run nested inside a \ref xml_text (or inside another `<tspan>`) - very
  * similar in spirit to how HTML's `<span>` subdivides a `<p>`. Any text that isn't wrapped in

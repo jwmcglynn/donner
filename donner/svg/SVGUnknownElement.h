@@ -8,7 +8,9 @@ namespace donner::svg {
 /**
  * DOM object for an unknown SVG element.
  *
- * This is a placeholder for any SVG element that is not explicitly supported by Donner.
+ * This is a placeholder for any SVG element that is not explicitly supported by Donner. The parser
+ * also uses it for elements outside the SVG namespace, which never render, and for experimental
+ * elements when \ref donner::svg::parser::SVGParser::Options::enableExperimental is false.
  */
 class SVGUnknownElement : public SVGGraphicsElement {
   friend class parser::SVGParserImpl;

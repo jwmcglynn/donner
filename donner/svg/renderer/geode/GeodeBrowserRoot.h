@@ -89,6 +89,11 @@ gpu::Result<GpuBackendKind> ProcessDefaultGpuBackendKind();
 std::optional<GpuBackendKind> BuildDefaultGpuBackendKind();
 /// In WebAssembly builds, resolves the caller's backend, then `DONNER_GPU_BACKEND`, then the build
 /// default, without opening a device.
+/// @param options Caller-supplied inputs.
+/// @param request Value of `DONNER_GPU_BACKEND`; empty when it is unset or empty.
+/// @param buildDefault Backend chosen when nothing names one; the browser backend when empty.
+/// @return The kind, or an error when the caller names no backend and a non-empty @p request
+///   names none.
 gpu::Result<GpuBackendKind> ResolveGpuBackendKind(const GpuRootSelection& options,
                                                   std::string_view request,
                                                   std::optional<GpuBackendKind> buildDefault);

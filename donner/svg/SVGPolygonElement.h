@@ -137,6 +137,9 @@ public:
 
   /**
    * Get the polygon's points.
+   *
+   * The returned reference is a per-thread snapshot that the next `points()` call on any polygon
+   * on the same thread overwrites. Copy the list to keep it.
    */
   const std::vector<Vector2d>& points() const;
 

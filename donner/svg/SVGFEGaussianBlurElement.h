@@ -88,7 +88,7 @@ public:
   static constexpr std::string_view Tag{"feGaussianBlur"};
 
   /**
-   * Create a new \ref xml_filter element.
+   * Create a new \ref xml_feGaussianBlur element.
    *
    * @param document Containing document.
    */
