@@ -2120,6 +2120,18 @@ Vector2i EditorWindow::windowSize() const {
     return Vector2i::Zero();
   }
 
+  if (frameDisplayScaleOverride_ > 0.0) {
+    // An offscreen window's native size reflects the scale it emulates relative to its host
+    // display (and the null platform's is the framebuffer itself), so report the logical size the
+    // UI is laid out in, matching the ImGui display size set in beginFrameImpl.
+    int framebufferWidth = 0;
+    int framebufferHeight = 0;
+    glfwGetFramebufferSize(window_, &framebufferWidth, &framebufferHeight);
+    return Vector2i(
+        static_cast<int>(std::lround(framebufferWidth / frameDisplayScaleOverride_)),
+        static_cast<int>(std::lround(framebufferHeight / frameDisplayScaleOverride_)));
+  }
+
   int width = 0;
   int height = 0;
   glfwGetWindowSize(window_, &width, &height);

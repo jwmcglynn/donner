@@ -686,7 +686,8 @@ struct EditorWindowOptions {
   /// of captures taken on a HiDPI machine, and editor tests set it so they
   /// render at a chosen scale on every host. The emulated scale wins over the
   /// host display's own scale, including 1.0 on a HiDPI display: the
-  /// framebuffer, the UI scale, and \ref
+  /// framebuffer, the UI scale, \ref
+  /// donner::editor::gui::EditorWindow::windowSize "windowSize", and \ref
   /// donner::editor::gui::EditorWindow::contentScale "contentScale" all follow
   /// it. Ignored when `offscreen` is false.
   double offscreenContentScale = 1.0;
@@ -949,7 +950,8 @@ public:
   /// Update the native window title.
   void setTitle(std::string_view title);
 
-  /// Logical window size in screen coordinates.
+  /// Logical window size in screen coordinates. An `offscreen` window returns the logical size of
+  /// the scale it emulates, which is the size the UI is laid out in.
   [[nodiscard]] Vector2i windowSize() const;
 
   /// Physical framebuffer size in pixels. Equals \ref windowSize scaled by the

@@ -626,6 +626,7 @@ TEST_P(EditorWindowEmulatedScaleTest, OffscreenScaleWinsOverHostDisplay) {
   EXPECT_DOUBLE_EQ(window.displayScale(), scale);
   EXPECT_DOUBLE_EQ(window.contentScale().x, scale);
   EXPECT_DOUBLE_EQ(window.contentScale().y, scale);
+  EXPECT_EQ(window.windowSize(), Vector2i(320, 200));
   EXPECT_EQ(window.framebufferSize(),
             Vector2i(static_cast<int>(320 * scale), static_cast<int>(200 * scale)));
 
@@ -1875,16 +1876,21 @@ TEST(EditorWindowTest, NativeMetalWindowSurfacePresentsUiAtRetinaScale) {
     GTEST_SKIP() << "This test exercises the native Metal window surface";
   }
 
+  // Emulate Retina rather than inherit the main display's scale, so the backing-scale path is
+  // covered on a 1x display too. macOS keeps the native Metal surface for an offscreen window.
   EditorWindow window(EditorWindowOptions{
       .title = "Native Metal Retina UI Test",
       .initialWidth = 96,
       .initialHeight = 96,
       .visible = false,
+      .offscreen = true,
+      .offscreenContentScale = 2.0,
       .clearColor = {0.0f, 0.0f, 0.0f, 1.0f},
       .enableFramebufferReadback = true,
   });
   ASSERT_TRUE(window.valid());
   ASSERT_FALSE(window.usingOffscreenRenderTarget());
+  ASSERT_EQ(window.framebufferSize(), Vector2i(192, 192));
 
   window.beginFrame();
   ImGui::GetBackgroundDrawList()->AddRectFilled(ImVec2(24.0f, 24.0f), ImVec2(72.0f, 72.0f),
