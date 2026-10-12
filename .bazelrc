@@ -457,8 +457,7 @@ build:ci --repository_cache=~/.cache/bazel-repo
 # Avoids needing the `ci:full-test` PR label as a workaround.
 build:ci --skip_incompatible_explicit_targets
 
-# Remote-execution queue priority convention (see
-# docs/design_docs/0029-2-ci_runtime.md): CI actions run at priority 0, the
+# Remote-execution queue priority convention: CI actions run at priority 0, the
 # floor of the server-supported range (0-2147483647; the backend rejects
 # negative values), while interactive development clients set higher values in
 # their user bazelrc, so an interactive build always wins queue position over
