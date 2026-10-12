@@ -2671,19 +2671,20 @@ TEST(EditorShellTest, LayerInspectorReadbackIncludesSelectedStyleAndPathDiagnost
   EditorShellTestAccess::App(shell).setSelection(*target);
   (void)target->getComputedStyle();
   RunFramesUntilDisplayedSelectionBounds(window, shell);
+  const tests::HangGuard initialRenderGuard;
   ASSERT_TRUE(coordinator.asyncRenderer().waitUntilNoRenderInFlightForTesting(
-      std::chrono::steady_clock::now() + std::chrono::seconds(2)));
+      initialRenderGuard.deadline()));
   RunShellFrame(window, shell);
-  const auto commitDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
-  while (coordinator.documentCanvasCommitTotal() == 0 &&
-         std::chrono::steady_clock::now() < commitDeadline) {
+  const tests::HangGuard commitGuard;
+  while (coordinator.documentCanvasCommitTotal() == 0 && commitGuard.active()) {
     RunShellFrame(window, shell);
     std::this_thread::sleep_for(std::chrono::milliseconds(5));
   }
   ASSERT_THAT(coordinator.documentCanvasCommitTotal(), testing::Gt(0u));
-  ASSERT_THAT(coordinator.asyncRenderer().waitUntilNoRenderInFlightForTesting(
-                  std::chrono::steady_clock::now() + std::chrono::seconds(2)),
-              testing::IsTrue());
+  const tests::HangGuard rebuildGuard;
+  ASSERT_THAT(
+      coordinator.asyncRenderer().waitUntilNoRenderInFlightForTesting(rebuildGuard.deadline()),
+      testing::IsTrue());
   RunShellFrame(window, shell);
 
   const LayerInspectorStatusReadback status = shell.layerInspectorStatusForReadback();
