@@ -2662,6 +2662,12 @@ TEST(EditorShellTest, LayerInspectorReadbackIncludesSelectedStyleAndPathDiagnost
 )svg";
   EditorShell shell(window, OptionsWithSource(kDiagnosticSvg, "diagnostics.svg"));
   ASSERT_TRUE(shell.valid());
+  // On a HiDPI display the editor commits the device-pixel canvas size after a debounce. That
+  // commit invalidates the render tree this readback inspects, and when the presented raster
+  // already matches it no render follows to rebuild it, so whether the rendering-instance fill is
+  // present would depend on how long the host's frames take. Hold the scheduling clock so the
+  // debounce cannot elapse mid-test and the readback sees the render tree its render built.
+  RenderCoordinatorTestAccess::useFakeSchedulingClock(EditorShellTestAccess::Coordinator(shell));
   auto target = EditorShellTestAccess::App(shell).document().document().querySelector("#target");
   ASSERT_TRUE(target.has_value());
   RenderCoordinator& coordinator = EditorShellTestAccess::Coordinator(shell);
