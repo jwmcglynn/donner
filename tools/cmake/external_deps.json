@@ -65,6 +65,7 @@
         "@tiny-skia-cpp//src:tiny_skia_lib",
         "@tiny-skia-cpp//src:tiny_skia_lib_native",
         "@tiny-skia-cpp//src/tiny_skia:tiny_skia_core",
+        "@tiny-skia-cpp//src/tiny_skia/filter:color_space",
         "@tiny-skia-cpp//src/tiny_skia/filter:filter"
       ],
       "cmake": "tiny_skia",

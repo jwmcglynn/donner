@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Summarize donner CI diagnostics into a compact markdown report.
 
-Reads the artifact layout produced by the self-hosted CI jobs:
+Reads the diagnostics directory the self-hosted CI jobs write on the runner:
 
     <diag_dir>/manifest.txt
     <diag_dir>/target-list.txt
@@ -11,8 +11,11 @@ Reads the artifact layout produced by the self-hosted CI jobs:
 
 and prints markdown with phase timing, the slowest compile/link/test actions,
 per-test wall times, and console tails for incomplete Bazel event streams.
-Stdlib only; safe to run on partial artifacts (a failed build uploads whatever
-exists).
+The CI job runs it on the runner and uploads the result as report.md. The
+uploaded artifact omits bep.json, the execution logs and console.log, which
+record the runner's effective configuration, so running this on a downloaded
+artifact reports profile timing only. Stdlib only; safe to run on partial
+input (a failed build leaves whatever exists).
 
 Usage: python3 tools/ci_diagnostics_report.py <diag_dir>
 """

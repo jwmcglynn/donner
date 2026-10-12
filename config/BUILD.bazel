@@ -1,1 +1,7 @@
 # This package provides config/extensions.bzl for the donner module extension.
+
+# //tools:supply_chain_policy_tests reads every module extension that MODULE.bazel declares.
+exports_files(
+    ["extensions.bzl"],
+    visibility = ["//tools:__pkg__"],
+)

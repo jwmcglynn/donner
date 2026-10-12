@@ -2832,6 +2832,75 @@ TEST(RendererPublicApiTest, RotatedMaskRegionCoverageIsIndependentOfContentRepre
                                        editor::tests::PixelmatchIdentityParams());
 }
 
+TEST(RendererPublicApiTest, LinearRgbMaskConvertsStraightColorBeforeApplyingAlpha) {
+  for (bool replaySnapshot : {false, true}) {
+    SCOPED_TRACE(replaySnapshot ? "snapshot" : "document");
+    SVGDocument document = ParseDocument(R"svg(
+      <svg xmlns="http://www.w3.org/2000/svg" width="40" height="8" viewBox="0 0 40 8">
+        <defs color-interpolation="linearRGB">
+          <mask maskContentUnits="objectBoundingBox" id="linear"><rect width="1" height="1" fill="#808080" opacity="0.5" /></mask>
+          <mask maskContentUnits="objectBoundingBox" id="srgb" color-interpolation="sRGB"><rect width="1" height="1" fill="#808080" opacity="0.5" /></mask>
+          <mask maskContentUnits="objectBoundingBox" id="alpha" mask-type="alpha"><rect width="1" height="1" fill="#808080" opacity="0.5" /></mask>
+          <mask maskContentUnits="objectBoundingBox" id="transparent"><rect width="1" height="1" fill="#808080" opacity="0" /></mask>
+          <mask maskContentUnits="objectBoundingBox" id="auto" color-interpolation="auto"><rect width="1" height="1" fill="#808080" opacity="0.5" /></mask>
+        </defs>
+        <rect width="8" height="8" fill="white" mask="url(#linear)" />
+        <rect x="8" width="8" height="8" fill="white" mask="url(#srgb)" />
+        <rect x="16" width="8" height="8" fill="white" mask="url(#alpha)" />
+        <rect x="24" width="8" height="8" fill="white" mask="url(#transparent)" />
+        <rect x="32" width="8" height="8" fill="white" mask="url(#auto)" />
+      </svg>
+    )svg");
+    Renderer renderer;
+    if (replaySnapshot) {
+      RendererDriver driver(renderer);
+      const RenderSnapshot snapshot = driver.captureRenderSnapshot(document);
+      driver.draw(snapshot);
+    } else {
+      renderer.draw(document);
+    }
+    const RendererBitmap snapshot = NormalizeSnapshot(renderer.takeSnapshot());
+    ASSERT_THAT(snapshot.empty(), testing::IsFalse());
+    EXPECT_THAT(PixelAt(snapshot, 4, 4), Rgba(_, _, _, AllOf(testing::Ge(27), testing::Le(29))));
+    EXPECT_THAT(PixelAt(snapshot, 12, 4), Rgba(_, _, _, AllOf(testing::Ge(63), testing::Le(65))));
+    EXPECT_THAT(PixelAt(snapshot, 20, 4), Rgba(_, _, _, AllOf(testing::Ge(127), testing::Le(129))));
+    EXPECT_THAT(PixelAt(snapshot, 28, 4), IsTransparent());
+    EXPECT_THAT(PixelAt(snapshot, 36, 4), Rgba(_, _, _, AllOf(testing::Ge(63), testing::Le(65))));
+  }
+}
+
+TEST(RendererPublicApiTest, LinearRgbMaskUsesTransferToeAndChromaticLuminance) {
+  for (bool replaySnapshot : {false, true}) {
+    SCOPED_TRACE(replaySnapshot ? "snapshot" : "document");
+    SVGDocument document = ParseDocument(R"svg(
+      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="8">
+        <defs color-interpolation="linearRGB">
+          <mask id="toe" maskContentUnits="objectBoundingBox">
+            <rect width="1" height="1" fill="#0a0a0a" />
+          </mask>
+          <mask id="chromatic" maskContentUnits="objectBoundingBox">
+            <rect width="1" height="1" fill="#804020" opacity="0.5" />
+          </mask>
+        </defs>
+        <rect width="8" height="8" fill="white" mask="url(#toe)" />
+        <rect x="8" width="8" height="8" fill="white" mask="url(#chromatic)" />
+      </svg>
+    )svg");
+    Renderer renderer;
+    if (replaySnapshot) {
+      RendererDriver driver(renderer);
+      const RenderSnapshot commands = driver.captureRenderSnapshot(document);
+      driver.draw(commands);
+    } else {
+      renderer.draw(document);
+    }
+    const RendererBitmap snapshot = NormalizeSnapshot(renderer.takeSnapshot());
+    ASSERT_THAT(snapshot.empty(), testing::IsFalse());
+    EXPECT_THAT(PixelAt(snapshot, 4, 4), Rgba(_, _, _, 1));
+    EXPECT_THAT(PixelAt(snapshot, 12, 4), Rgba(_, _, _, AllOf(testing::Ge(10), testing::Le(12))));
+  }
+}
+
 // 21. Mix-blend-mode triggers isolated layer
 TEST(RendererPublicApiTest, MixBlendModeIsolatedLayer) {
   // Use cyan (#00ffff) over yellow (#ffff00) with multiply blend.
