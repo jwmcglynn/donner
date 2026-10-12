@@ -260,9 +260,26 @@ fn evaluate(seed:f32)->f32 {
   const std::string source = tests::ComputeModule(helpers, "evaluate(f32(gid.x))");
   ASSERT_THAT(tests::Diagnose(source), Eq(tests::kAccepted));
   const auto words = tests::Spirv(source);
-  EXPECT_THAT(tests::Opcodes(words), testing::Contains(255u));
-  EXPECT_THAT(OperandsOf(words, 254u), SizeIs(2u));
-  EXPECT_THAT(OperandsOf(words, 247u), SizeIs(1u));
+  const auto entryPoints = OperandsOf(words, 15u);
+  ASSERT_THAT(entryPoints, SizeIs(1u));
+  const uint32_t entry = entryPoints.front()[1];
+  std::vector<uint32_t> helperOpcodes;
+  bool inHelper = false;
+  for (const auto& instruction : tests::Instructions(words)) {
+    if (instruction.opcode == 54u) {
+      ASSERT_THAT(instruction.operands, SizeIs(4u));
+      inHelper = instruction.operands[1] != entry;
+    }
+    if (inHelper) {
+      helperOpcodes.push_back(instruction.opcode);
+    }
+    if (instruction.opcode == 56u) {
+      inHelper = false;
+    }
+  }
+  EXPECT_THAT(helperOpcodes, testing::Contains(255u));
+  EXPECT_THAT(helperOpcodes, testing::Contains(254u).Times(2));
+  EXPECT_THAT(helperOpcodes, testing::Contains(247u).Times(1));
 }
 
 }  // namespace
