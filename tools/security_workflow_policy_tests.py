@@ -1,5 +1,6 @@
 """Pins review-driven security workflow selection and scheduling policy."""
 
+from collections import Counter
 import os
 from pathlib import Path
 import re
@@ -25,15 +26,26 @@ WRITE_SCOPES = {
     (".github/workflows/release.yml", "publish-release-artifacts"): {"contents"},
 }
 
-# Every job that reads a repository secret, and the secrets it reads.
+# Exact reviewed step consumers: workflow, job, name, id, action (or the run script marker).
 SECRET_USES = {
-    (".github/workflows/badges.yaml", "update-badges"): {"GIST_SECRET"},
-    (".github/workflows/coverage.yml", "upload-coverage"): {"CODECOV_TOKEN"},
-    (".github/workflows/github_hosted_nightly.yml", "build"): {"BUILDBUDDY_API_KEY"},
-    (".github/workflows/main.yml", "macos-self-hosted"): {"BAZEL_REMOTE_CACHE"},
-    (".github/workflows/publish_bcr.yml", "publish-fork"): {"PUBLISH_TOKEN"},
-    (".github/workflows/sanitizers.yml", "asan"): {"BUILDBUDDY_API_KEY"},
-    (".github/workflows/sanitizers.yml", "ubsan"): {"BUILDBUDDY_API_KEY"},
+    (".github/workflows/badges.yaml", "update-badges", "Create Lines-of-Code-Badge", None,
+     "schneegans/dynamic-badges-action@v1.9.0"): {"GIST_SECRET"},
+    (".github/workflows/badges.yaml", "update-badges", "Create Test-Lines-of-Code-Badge", None,
+     "schneegans/dynamic-badges-action@v1.9.0"): {"GIST_SECRET"},
+    (".github/workflows/badges.yaml", "update-badges", "Create Comments-Badge", None,
+     "schneegans/dynamic-badges-action@v1.9.0"): {"GIST_SECRET"},
+    (".github/workflows/coverage.yml", "upload-coverage", "Upload coverage to Codecov", None,
+     "codecov/codecov-action@v7"): {"CODECOV_TOKEN"},
+    (".github/workflows/github_hosted_nightly.yml", "build", "Configure BuildBuddy remote cache", None,
+     "./.github/actions/buildbuddy-cache"): {"BUILDBUDDY_API_KEY"},
+    (".github/workflows/main.yml", "macos-self-hosted", "Configure masked remote cache", None,
+     "<run>"): {"BAZEL_REMOTE_CACHE"},
+    (".github/workflows/publish_bcr.yml", "publish-fork", "Create the fork branch only if absent", None,
+     "<run>"): {"PUBLISH_TOKEN"},
+    (".github/workflows/sanitizers.yml", "asan", "Configure BuildBuddy remote cache", None,
+     "./.github/actions/buildbuddy-cache"): {"BUILDBUDDY_API_KEY"},
+    (".github/workflows/sanitizers.yml", "ubsan", "Configure BuildBuddy remote cache", None,
+     "./.github/actions/buildbuddy-cache"): {"BUILDBUDDY_API_KEY"},
 }
 
 # The only jobs that may run on self-hosted runners, with the gatekeeper output admitting each.
@@ -44,7 +56,12 @@ SELF_HOSTED_JOBS = {
 
 # A runner label set is GitHub-hosted only when it is exactly one hosted image label. Any other
 # label, label list or runner group can route a job to a self-hosted runner.
-HOSTED_IMAGE = re.compile(r"(?:ubuntu|macos|windows)-[a-z0-9][a-z0-9.-]*\Z")
+HOSTED_IMAGES = frozenset({"ubuntu-24.04", "ubuntu-latest", "macos-26", "macos-latest"})
+
+SELF_HOSTED_GATE_PREFIX = (
+    "${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && "
+    "(github.ref == 'refs/heads/main' || github.event_name == 'pull_request') && "
+    "(github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') && ")
 
 # Reviewed `runs-on` expressions that are neither a literal label nor `${{ matrix.<key> }}`, with
 # every label each can produce.
@@ -225,19 +242,21 @@ def _permissions(text, indent):
     return None
 
 
-def _steps(job):
-    return re.split(r"(?m)^      - ", job)[1:]
+def _steps(job, indent=6):
+    parts = re.split(r"(?m)^%s- " % (" " * indent), job)[1:]
+    return ["\n".join([part.splitlines()[0],
+                       *_indented_block(part.splitlines()[1:], indent)]) for part in parts]
 
 
-def _step_values(step, key):
+def _step_values(step, key, indent=10):
     """A step `with:` value as entries: one inline value, or each line of a block scalar."""
-    match = re.search(r"(?m)^          %s:[ \t]*(.*)$" % re.escape(key), step)
+    match = re.search(r"(?m)^%s%s:[ \t]*(.*)$" % (" " * indent, re.escape(key)), step)
     if not match:
         return []
     value = match.group(1).strip()
     if value not in ("|", "|-", ">", ">-"):
         return [value]
-    block = _indented_block(step[match.end():].splitlines()[1:], 10)
+    block = _indented_block(step[match.end():].splitlines()[1:], indent)
     return [line.strip() for line in block if line.strip()]
 
 
@@ -306,30 +325,49 @@ def _token_scope_violations(path, workflow):
     return violations
 
 
-def _wide_secret_read_lines(workflow):
-    """Secret expressions whose placement exposes them beyond one step."""
-    for match in _expressions(workflow):
-        line_start = workflow.rfind("\n", 0, match.start()) + 1
-        line_end = workflow.find("\n", match.start())
-        line = workflow[line_start:line_end if line_end >= 0 else len(workflow)]
-        if _secret_reads(match.group()) and len(line) - len(line.lstrip()) < 10:
-            yield line.strip()
+def _step_identity_value(step, key):
+    match = re.search(r"(?m)^(?:        )?%s:[ \t]*(.*)$" % re.escape(key), step)
+    return match.group(1).strip() if match else None
+
+
+def _secret_reference_counts(text):
+    counts = Counter()
+    for match in _expressions(text):
+        counts.update(_secret_reads(match.group()))
+    return counts
+
+
+def _unscoped_secret_reads(workflow):
+    steps = Counter()
+    for job in _jobs(workflow).values():
+        for step in _steps(job):
+            steps.update(_secret_reference_counts(step))
+    return _secret_reference_counts(workflow) - steps
+
+
+def _step_secret_consumers(path, workflow):
+    for name, job in _jobs(workflow).items():
+        for step in _steps(job):
+            secrets = _secret_reads(step)
+            if secrets:
+                identity = (path, name, _step_identity_value(step, "name"),
+                            _step_identity_value(step, "id"),
+                            _step_identity_value(step, "uses") or "<run>")
+                yield identity, secrets
 
 
 def _secret_use_violations(workflows):
-    uses = {}
+    records = []
     violations = []
     for path, workflow in workflows.items():
         if re.search(r"secrets:\s*inherit|toJSON\(\s*secrets\s*\)", workflow, re.IGNORECASE):
             violations.append("%s forwards every secret" % path)
-        # Step `env:` and `with:` entries sit ten columns in; anything shallower is job- or
-        # workflow-wide and hands the secret to every step.
-        violations.extend("%s exposes a secret beyond one step: %s" % (path, line)
-                          for line in _wide_secret_read_lines(workflow))
-        for name, job in _jobs(workflow).items():
-            secrets = _secret_reads(job)
-            if secrets:
-                uses[(path, name)] = secrets
+        if _unscoped_secret_reads(workflow):
+            violations.append("%s exposes a secret beyond one step" % path)
+        records.extend(_step_secret_consumers(path, workflow))
+    uses = dict(records)
+    if len(uses) != len(records):
+        violations.append("duplicate secret consumer steps")
     if uses != SECRET_USES:
         violations.append("secret uses changed: %s" % sorted(uses.items()))
     return violations
@@ -405,7 +443,7 @@ def _runner_label_sets(path, name, job):
 
 
 def _is_hosted(labels):
-    return len(labels) == 1 and bool(HOSTED_IMAGE.match(next(iter(labels))))
+    return len(labels) == 1 and next(iter(labels)) in HOSTED_IMAGES
 
 
 def _runs_self_hosted(path, name, job):
@@ -420,9 +458,11 @@ def _runner_violation(path, name, job):
         return problem
     if all(_is_hosted(labels) for labels in sets):
         return None
-    gate = "needs.gatekeeper.outputs.%s == 'true'" % SELF_HOSTED_JOBS.get((path, name))
-    admitted = ((path, name) in SELF_HOSTED_JOBS and gate in _job_key(job, "if")
-                and "gatekeeper" in _job_key(job, "needs"))
+    gate = SELF_HOSTED_GATE_PREFIX + "needs.gatekeeper.outputs.%s == 'true' }}" % \
+        SELF_HOSTED_JOBS.get((path, name))
+    needs = _job_key(job, "needs").strip("[]")
+    admitted = ((path, name) in SELF_HOSTED_JOBS and gate == _job_key(job, "if")
+                and "gatekeeper" in _labels(needs))
     if not admitted:
         return "%s:%s reaches a self-hosted runner without the trusted gate" % (path, name)
     return None
@@ -482,11 +522,23 @@ def _upload_violations(path, name, job, uploading_actions):
     return violations
 
 
+def _reviewed_action_upload_violations(files):
+    problems = []
+    for action in REVIEWED_UPLOAD_ACTIONS:
+        path = action.removeprefix("./") + "/action.yml"
+        uploads = [_step_values(step, "path", indent=8) for step in _steps(files[path], indent=4)
+                   if UPLOAD_ACTION.search(step)]
+        if uploads != [["${{ runner.temp }}/bazel-test-artifacts"]]:
+            problems.append("%s changes the reviewed collected-artifact upload path" % path)
+    return problems
+
+
 def _artifact_upload_violations(files):
     uploading_actions = _uploading_local_actions(files)
-    return [violation for path, workflow in _workflows(files).items()
-            for name, job in _jobs(workflow).items()
-            for violation in _upload_violations(path, name, job, uploading_actions)]
+    return _reviewed_action_upload_violations(files) + [
+        violation for path, workflow in _workflows(files).items()
+        for name, job in _jobs(workflow).items()
+        for violation in _upload_violations(path, name, job, uploading_actions)]
 
 
 class SecurityWorkflowPolicyTest(unittest.TestCase):
