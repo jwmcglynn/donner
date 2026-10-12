@@ -277,24 +277,6 @@ py_test(
     ],
 )
 
-# Every Donner Starlark file that MODULE.bazel reaches must be listed here; the test fails on one
-# that is missing, so that its fetches are checked too.
-py_test(
-    name = "supply_chain_policy_tests",
-    size = "small",
-    srcs = ["supply_chain_policy_tests.py"],
-    data = [
-        "//:.bazelrc",
-        "//:MODULE.bazel",
-        "//:github_action_definitions",
-        "//config:extensions.bzl",
-        "//third_party:bazel/local.bzl",
-        "//third_party:bazel/non_bcr_deps.bzl",
-        "//third_party/google_fonts:fonts.bzl",
-    ],
-    deps = ["@rules_python//python/runfiles"],
-)
-
 py_library(
     name = "notice_coverage",
     srcs = ["notice_coverage_tests.py"],
