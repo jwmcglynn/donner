@@ -59,7 +59,7 @@ LEGACY_GIT_COMMIT_PINS = {
 }
 
 # SHA-256 of "file|name|remote|commit" for each entry above as reviewed in #1423. An entry whose
-# digest is missing here was added or changed after the review, which this test rejects. Leave
+# digest is missing here was added or changed after the review, which this test rejects. Keep
 # this set paired with the active entries: delete its digest when retiring a pin.
 REVIEWED_LEGACY_PIN_DIGESTS = frozenset({
     "00f2be3717e043f6027cbc15859850cb9a18778482660fab2f90521c6f87bba5",
@@ -547,9 +547,10 @@ class CheckerTest(unittest.TestCase):
         self.assertEqual(len(legacy_list_problems(retired, remaining_approvals)), 1)
 
     def test_native_integrity_supports_the_empty_positional_sha_default(self):
+        integrity = "sha256-" + "A" * 43 + "="
         for method in NATIVE_DOWNLOAD_APIS:
             source = 'ctx.%s("https://example.invalid/archive", "out", "", ' \
-                     'integrity = "sha256-AAAA")' % method
+                     'integrity = "%s")' % (method, integrity)
             self.assertEqual(self._findings(source), [])
 
     def test_native_download_aliases_cannot_hide_a_fetch(self):
