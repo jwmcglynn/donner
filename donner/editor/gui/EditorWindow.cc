@@ -2246,7 +2246,9 @@ void EditorWindow::waitEventsTimeout(double timeoutSeconds) {
 
 #ifdef DONNER_EDITOR_WGPU
 void EditorWindow::setPresentationFrameIdentity(std::uint64_t frameId, std::uint64_t captureId,
-                                                bool inputRepresented, double viewportZoom) {
+                                                std::uint64_t documentGeneration,
+                                                std::uint64_t frameVersion, bool inputRepresented,
+                                                double viewportZoom) {
   presentationFrameId_ = frameId;
   presentationCaptureId_ = captureId;
   presentationInputStamp_ = {.frameId = frameId,
@@ -2256,9 +2258,15 @@ void EditorWindow::setPresentationFrameIdentity(std::uint64_t frameId, std::uint
                              .mouseDown = ImGui::GetIO().MouseDown[0],
                              .inputRepresented = inputRepresented,
                              .viewportZoom = viewportZoom};
+  presentationDocumentIdentity_ = {.documentGeneration = documentGeneration,
+                                   .frameVersion = frameVersion,
+                                   .captureId = captureId};
 }
 
-bool EditorWindow::hasUsableFrameTarget(int width, int height) const {
+bool EditorWindow::hasUsableFrameTarget(int width, int height) {
+  if (wgpuState_ != nullptr && wgpuState_->framebufferGeodeDevice != nullptr) {
+    observePresentationDeviceLoss(wgpuState_->framebufferGeodeDevice->runtimeDevice());
+  }
   return wgpuState_ != nullptr && wgpuState_->canPresentFrames() && width > 0 && height > 0;
 }
 
@@ -2285,6 +2293,71 @@ bool EditorWindow::admitFrameSubmission(bool requestedReadback) {
   return true;
 }
 
+void EditorWindow::observePresentationDeviceLoss(gpu::Device& device) {
+  if (!presentationDeviceLoss_.observe(device.deviceLossSnapshot(), [&] {
+        return internal::PresentationDeviceLossRecord::Observation{
+            .observedAt = std::chrono::steady_clock::now(),
+            .completedSerial = device.completedSerial(),
+            .submittedSerial = device.lastSubmittedSerial(),
+            .oldestSerial = presentationSubmissions_.oldestSerial(),
+            .browserReason = device.deviceLostReason(),
+        };
+      })) {
+    return;
+  }
+#ifdef __EMSCRIPTEN__
+  const auto& loss = presentationDeviceLoss_;
+  const double firstObservedAbsoluteMs = emscripten_get_now();
+  const std::string reason =
+      internal::BoundedPresentationDeviceLossReason(loss.browserReason.str());
+  const std::size_t reasonBytes = reason.size();
+  char* ownedReason = static_cast<char*>(std::malloc(reasonBytes + 1));
+  if (ownedReason != nullptr) {
+    std::memcpy(ownedReason, reason.data(), reasonBytes);
+    ownedReason[reasonBytes] = '\0';
+  }
+  MAIN_THREAD_ASYNC_EM_ASM(
+      {
+        try {
+          if (!window['__donnerPresentationDeviceLoss']) {
+            window['__donnerPresentationDeviceLoss'] = ({
+              'firstObservedAbsoluteMs' : $6,
+              'firstObservedAtMs' : $6 - performance.timeOrigin,
+              'pageTimeOriginMs' : performance.timeOrigin,
+              'publishedAtMs' : performance.now(),
+              'completedSerial' : $0,
+              'submittedSerial' : $1,
+              'oldestSerial' : $2,
+              'timedOutSite' : $3,
+              'timedOutElapsedMs' : $4,
+              'browserReason' : $5 ? UTF8ToString($5) : String(),
+            });
+          }
+        } finally {
+          if ($5) {
+            _free($5);
+          }
+        }
+      },
+      static_cast<double>(loss.completedSerial), static_cast<double>(loss.submittedSerial),
+      static_cast<double>(loss.oldestSerial), static_cast<int>(loss.loss.timedOutSite),
+      loss.loss.timedOutElapsedMs, ownedReason, firstObservedAbsoluteMs);
+#endif
+}
+
+void EditorWindow::declarePresentationTimeoutLoss(gpu::Device& device,
+                                                  std::chrono::milliseconds age) {
+  wgpuState_->framebufferGeodeDevice->markDeviceLostAfterWaitTimeout(
+      geode::GpuWaitSite::QueueIdle, age, "UI submission completion remained overdue");
+  observePresentationDeviceLoss(device);
+}
+
+void EditorWindow::declarePresentationTimeoutLossForTesting(std::chrono::milliseconds age) {
+  UTILS_RELEASE_ASSERT(wgpuState_ != nullptr && wgpuState_->framebufferGeodeDevice != nullptr);
+  auto& device = wgpuState_->framebufferGeodeDevice->runtimeDevice();
+  declarePresentationTimeoutLoss(device, age);
+}
+
 bool EditorWindow::observePresentationCompletion() {
   if (wgpuState_ == nullptr || wgpuState_->framebufferGeodeDevice == nullptr) {
     return false;
@@ -2294,6 +2367,10 @@ bool EditorWindow::observePresentationCompletion() {
   const auto completed = presentationCompletionProbeForTesting_
                              ? presentationCompletionProbeForTesting_()
                              : device.completedSerial();
+#ifdef __EMSCRIPTEN__
+  const bool deviceLost = wgpuState_->framebufferGeodeDevice->isDeviceLost();
+  observePresentationDeviceLoss(device);
+#endif
 #ifdef __EMSCRIPTEN__
   const auto admission =
       presentationSubmissions_.observe(completed, std::chrono::steady_clock::now(), [&] {
@@ -2344,7 +2421,7 @@ bool EditorWindow::observePresentationCompletion() {
       static_cast<double>(coalescedPresentationFrames_), static_cast<double>(frame.frameId),
       static_cast<double>(frame.captureId), frame.pointerX, frame.pointerY, frame.mouseDown, frame.inputRepresented, frame.viewportZoom,
       static_cast<double>(device.completedSerial()), static_cast<double>(presentationSubmissions_.oldestSerial()),
-      wgpuState_->framebufferGeodeDevice->isDeviceLost(), static_cast<int>(admission));
+      deviceLost, static_cast<int>(admission));
   MAIN_THREAD_ASYNC_EM_ASM({
     const stats = window['__donnerPresentationQueueStats'];
     if (stats) {
@@ -2357,9 +2434,7 @@ bool EditorWindow::observePresentationCompletion() {
   // clang-format on
 #endif
   if (admission == internal::PresentationSubmissionQueue::Admission::TimedOut) {
-    wgpuState_->framebufferGeodeDevice->markDeviceLostAfterWaitTimeout(
-        geode::GpuWaitSite::QueueIdle, presentationTimeoutAge_,
-        "UI submission completion remained overdue");
+    declarePresentationTimeoutLoss(device, presentationTimeoutAge_);
     return false;
   }
   return admission == internal::PresentationSubmissionQueue::Admission::Ready;
@@ -2393,6 +2468,9 @@ void EditorWindow::pollIdleGpu() {
 EditorWindow::PresentationProgress EditorWindow::pollDeferredPresentation() {
 #ifdef DONNER_EDITOR_WGPU
   if (presentationWasDeferred_) {
+    if (wgpuState_ != nullptr && wgpuState_->framebufferGeodeDevice != nullptr) {
+      observePresentationDeviceLoss(wgpuState_->framebufferGeodeDevice->runtimeDevice());
+    }
     if (wgpuState_ == nullptr || wgpuState_->framebufferGeodeDevice == nullptr ||
         wgpuState_->framebufferGeodeDevice->isDeviceLost()) {
       return PresentationProgress::Failed;
@@ -2441,6 +2519,7 @@ bool EditorWindow::hasIdleGpuWork() const {
 }
 
 void EditorWindow::wakeEventLoop() {
+  wakeEventLoopRequestSerial_.fetch_add(1, std::memory_order_acq_rel);
 #ifdef __EMSCRIPTEN__
   // The browser still invokes the lightweight rAF scheduler continuously, but expensive ImGui and
   // swapchain work is event-driven. Worker completion and editor animation paths land here.
@@ -2448,6 +2527,11 @@ void EditorWindow::wakeEventLoop() {
 #else
   glfwPostEmptyEvent();
 #endif
+}
+
+void EditorWindow::wakeEventLoopForPresentedDocument() {
+  wakeEventLoop();
+  presentedDocumentWakeSerial_.fetch_add(1, std::memory_order_acq_rel);
 }
 
 bool EditorWindow::hasQueuedInputEvents() const {
@@ -3063,6 +3147,10 @@ struct EditorWindow::GpuFrameSubmission {
                                 .stamp = window.presentationInputStamp_,
                                 .fullFramePresented = fullFramePresented};
     fence.stamp.submittedAt = std::chrono::steady_clock::now();
+    const PresentedDocumentFrameIdentity documentIdentity{
+        .documentGeneration = window.presentationDocumentIdentity_.documentGeneration,
+        .frameVersion = window.presentationDocumentIdentity_.frameVersion,
+        .captureId = fence.stamp.captureId};
     gpu::Texture acquiredFrame;
     if (!acquireTarget(acquiredFrame)) {
       return;
@@ -3083,6 +3171,11 @@ struct EditorWindow::GpuFrameSubmission {
     captureSmokeOutput(target);
     if (!present(guard)) {
       return;
+    }
+    window.lastFullyPresentedDocumentFrame_ = documentIdentity;
+    if (window.pendingPresentedDocumentWake_ == documentIdentity) {
+      window.pendingPresentedDocumentWake_.reset();
+      window.wakeEventLoopForPresentedDocument();
     }
     fullFramePresented = true;
 #ifdef __EMSCRIPTEN__

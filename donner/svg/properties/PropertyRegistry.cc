@@ -1,5 +1,6 @@
 #include "donner/svg/properties/PropertyRegistry.h"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdio>
@@ -1063,8 +1064,23 @@ ParseResult<double> ParseNumberPercentage(std::span<const css::ComponentValue> v
   return err;
 }
 
+/// Parse a nonnegative number-or-percentage amount, with an omitted amount defaulting to one.
+ParseResult<double> ParseFilterAmount(const css::Function& function, std::string_view name) {
+  auto result = ParseNumberPercentage(function.values, 1.0);
+  if (result.hasError()) {
+    return std::move(result.error());
+  }
+  if (result.result() < 0.0) {
+    ParseDiagnostic err;
+    err.reason = "Negative value not allowed for " + std::string(name) + "()";
+    err.range.start = function.sourceOffset;
+    return err;
+  }
+  return result.result();
+}
+
 /// Parse a single CSS filter function and return the corresponding FilterEffect.
-ParseResult<FilterEffect> ParseFilterFunction(const css::Function& function) {
+ParseResult<FilterEffect> ParseFilterFunction(const css::Function& function, bool allowUserUnits) {
   if (function.name.equalsLowercase("blur")) {
     if (function.values.empty()) {
       return FilterEffect(
@@ -1077,6 +1093,14 @@ ParseResult<FilterEffect> ParseFilterFunction(const css::Function& function) {
           FilterEffect::Blur{Lengthd(0.0, Lengthd::Unit::Px), Lengthd(0.0, Lengthd::Unit::Px)});
     }
     const auto& arg = remaining.front();
+    remaining = remaining.subspan(1);
+    SkipWhitespace(remaining);
+    if (!remaining.empty()) {
+      ParseDiagnostic err;
+      err.reason = "Unexpected extra values in blur()";
+      err.range.start = remaining.front().sourceOffset();
+      return err;
+    }
     if (const auto* dimension = arg.tryGetToken<css::Token::Dimension>()) {
       if (!dimension->suffixUnit || dimension->suffixUnit == Lengthd::Unit::Percent) {
         ParseDiagnostic err;
@@ -1084,14 +1108,30 @@ ParseResult<FilterEffect> ParseFilterFunction(const css::Function& function) {
         err.range.start = arg.sourceOffset();
         return err;
       }
+      if (dimension->value < 0.0) {
+        ParseDiagnostic err;
+        err.reason = "Negative value not allowed for blur()";
+        err.range.start = arg.sourceOffset();
+        return err;
+      }
       const Lengthd stdDeviation(dimension->value, dimension->suffixUnit.value());
       return FilterEffect(FilterEffect::Blur{stdDeviation, stdDeviation});
     }
-    // Accept bare 0 as 0px.
     if (const auto* number = arg.tryGetToken<css::Token::Number>()) {
+      if (number->value < 0.0) {
+        ParseDiagnostic err;
+        err.reason = "Negative value not allowed for blur()";
+        err.range.start = arg.sourceOffset();
+        return err;
+      }
+      // CSS declarations accept a bare zero as 0px.
       if (number->value == 0.0) {
         return FilterEffect(
             FilterEffect::Blur{Lengthd(0.0, Lengthd::Unit::Px), Lengthd(0.0, Lengthd::Unit::Px)});
+      }
+      if (allowUserUnits) {
+        const Lengthd stdDeviation(number->value, Lengthd::Unit::None);
+        return FilterEffect(FilterEffect::Blur{stdDeviation, stdDeviation});
       }
     }
     ParseDiagnostic err;
@@ -1132,37 +1172,23 @@ ParseResult<FilterEffect> ParseFilterFunction(const css::Function& function) {
   }
 
   if (function.name.equalsLowercase("brightness")) {
-    auto result = ParseNumberPercentage(function.values, 1.0);
+    auto result = ParseFilterAmount(function, "brightness");
     if (result.hasError()) {
       return std::move(result.error());
-    }
-    // CSS Filter Effects Level 1: brightness() does not allow negative values.
-    if (result.result() < 0.0) {
-      ParseDiagnostic err;
-      err.reason = "Negative value not allowed for brightness()";
-      err.range.start = function.sourceOffset;
-      return err;
     }
     return FilterEffect(FilterEffect::Brightness{result.result()});
   }
 
   if (function.name.equalsLowercase("contrast")) {
-    auto result = ParseNumberPercentage(function.values, 1.0);
+    auto result = ParseFilterAmount(function, "contrast");
     if (result.hasError()) {
       return std::move(result.error());
-    }
-    // CSS Filter Effects Level 1: contrast() does not allow negative values.
-    if (result.result() < 0.0) {
-      ParseDiagnostic err;
-      err.reason = "Negative value not allowed for contrast()";
-      err.range.start = function.sourceOffset;
-      return err;
     }
     return FilterEffect(FilterEffect::Contrast{result.result()});
   }
 
   if (function.name.equalsLowercase("grayscale")) {
-    auto result = ParseNumberPercentage(function.values, 1.0);
+    auto result = ParseFilterAmount(function, "grayscale");
     if (result.hasError()) {
       return std::move(result.error());
     }
@@ -1170,7 +1196,7 @@ ParseResult<FilterEffect> ParseFilterFunction(const css::Function& function) {
   }
 
   if (function.name.equalsLowercase("invert")) {
-    auto result = ParseNumberPercentage(function.values, 1.0);
+    auto result = ParseFilterAmount(function, "invert");
     if (result.hasError()) {
       return std::move(result.error());
     }
@@ -1178,7 +1204,7 @@ ParseResult<FilterEffect> ParseFilterFunction(const css::Function& function) {
   }
 
   if (function.name.equalsLowercase("opacity")) {
-    auto result = ParseNumberPercentage(function.values, 1.0);
+    auto result = ParseFilterAmount(function, "opacity");
     if (result.hasError()) {
       return std::move(result.error());
     }
@@ -1186,22 +1212,15 @@ ParseResult<FilterEffect> ParseFilterFunction(const css::Function& function) {
   }
 
   if (function.name.equalsLowercase("saturate")) {
-    auto result = ParseNumberPercentage(function.values, 1.0);
+    auto result = ParseFilterAmount(function, "saturate");
     if (result.hasError()) {
       return std::move(result.error());
-    }
-    // CSS Filter Effects Level 1: saturate() does not allow negative values.
-    if (result.result() < 0.0) {
-      ParseDiagnostic err;
-      err.reason = "Negative value not allowed for saturate()";
-      err.range.start = function.sourceOffset;
-      return err;
     }
     return FilterEffect(FilterEffect::Saturate{result.result()});
   }
 
   if (function.name.equalsLowercase("sepia")) {
-    auto result = ParseNumberPercentage(function.values, 1.0);
+    auto result = ParseFilterAmount(function, "sepia");
     if (result.hasError()) {
       return std::move(result.error());
     }
@@ -1306,8 +1325,8 @@ ParseResult<FilterEffect> ParseFilterFunction(const css::Function& function) {
   return err;
 }
 
-ParseResult<std::vector<FilterEffect>> ParseFilter(
-    std::span<const css::ComponentValue> components) {
+ParseResult<std::vector<FilterEffect>> ParseFilter(std::span<const css::ComponentValue> components,
+                                                   bool allowUserUnits) {
   if (components.empty()) {
     ParseDiagnostic err;
     err.reason = "Invalid filter value";
@@ -1365,7 +1384,7 @@ ParseResult<std::vector<FilterEffect>> ParseFilter(
         }
       }
 
-      auto result = ParseFilterFunction(function);
+      auto result = ParseFilterFunction(function, allowUserUnits);
       if (result.hasError()) {
         return std::move(result.error());
       }
@@ -2565,7 +2584,7 @@ DONNER_CONSTEXPR_MAP auto kProperties =
                    return Parse(
                        params,
                        [](const parser::PropertyParseFnParams& params) {
-                         return ParseFilter(params.components());
+                         return ParseFilter(params.components(), params.allowUserUnits());
                        },
                        &registry.filter);
                  }},  //
@@ -2668,7 +2687,15 @@ PropertyRegistry& PropertyRegistry::operator=(const PropertyRegistry&) = default
 PropertyRegistry& PropertyRegistry::operator=(PropertyRegistry&&) noexcept = default;
 
 std::span<const std::string_view> PropertyRegistry::propertyNames() {
-  return kProperties.keys();
+  static const std::array<std::string_view, kProperties.kSize + 2> names = [] {
+    std::array<std::string_view, kProperties.kSize + 2> result;
+    result[0] = kProperties.keys()[0];
+    result[1] = "flood-color";
+    result[2] = "stop-color";
+    std::copy(kProperties.keys().begin() + 1, kProperties.keys().end(), result.begin() + 3);
+    return result;
+  }();
+  return names;
 }
 
 bool PropertyRegistry::isPresentationAttributeName(std::string_view name) {
@@ -2732,14 +2759,75 @@ std::size_t PropertyRegistry::complexPropertyBytes() const {
   return result;
 }
 
+Property<css::Color>& PropertyRegistry::resourceColor(std::size_t index) {
+  return index == 0 ? floodColor : stopColor;
+}
+
+void PropertyRegistry::reconcileResourceColorMutation(std::size_t index) {
+  const auto& color = resourceColor(index);
+  auto& overlay = inlineResourceColors_[index];
+  if (overlay) {
+    const auto& selected =
+        overlay->value.specificity >= overlay->base.specificity ? overlay->value : overlay->base;
+    if (color.state != selected.state || color.specificity != selected.specificity ||
+        color.get() != selected.get()) {
+      overlay.reset();
+      unparsedProperties.erase(RcString(color.name));
+    }
+  }
+}
+
+void PropertyRegistry::refreshResourceColor(std::size_t index) {
+  auto& color = resourceColor(index);
+  const auto& overlay = inlineResourceColors_[index];
+  if (overlay) {
+    color = overlay->base;
+    if (overlay->value.specificity >= color.specificity) {
+      color = overlay->value;
+    }
+  }
+}
+
+ParseResult<bool> PropertyRegistry::parseResourceColorAttribute(
+    std::size_t index, const parser::PropertyParseFnParams& params) {
+  if (auto error = parseResourceColor(index, params)) {
+    return std::move(*error);
+  }
+  return true;
+}
+
+std::optional<ParseDiagnostic> PropertyRegistry::parseResourceColor(
+    std::size_t index, const parser::PropertyParseFnParams& params) {
+  reconcileResourceColorMutation(index);
+  auto& overlay = inlineResourceColors_[index];
+  auto& destination = overlay ? overlay->base : resourceColor(index);
+  auto error = parser::Parse(
+      params,
+      [](const parser::PropertyParseFnParams& params) {
+        return css::parser::ColorParser::Parse(params.components());
+      },
+      &destination);
+  refreshResourceColor(index);
+  return error;
+}
+
 std::optional<ParseDiagnostic> PropertyRegistry::parseProperty(const css::Declaration& declaration,
                                                                css::Specificity specificity) {
   const std::string_view name(declaration.name);
+  if (name == "flood-color" || name == "stop-color") {
+    return parseResourceColor(
+        name == "flood-color" ? 0 : 1,
+        parser::PropertyParseFnParams::Create(declaration, specificity,
+                                              parser::PropertyParseBehavior::AllowUserUnits));
+  }
+
   const PropertyParseFn* parseFn = kProperties.find(name);
   if (parseFn != nullptr) {
-    return (*parseFn)(*this,
-                      parser::PropertyParseFnParams::Create(
-                          declaration, specificity, parser::PropertyParseBehavior::AllowUserUnits));
+    const parser::PropertyParseBehavior parseBehavior =
+        name == "filter" ? parser::PropertyParseBehavior::Default
+                         : parser::PropertyParseBehavior::AllowUserUnits;
+    return (*parseFn)(
+        *this, parser::PropertyParseFnParams::Create(declaration, specificity, parseBehavior));
   }
 
   // Only store unparsed properties if they are valid presentation attribute names.
@@ -2756,6 +2844,46 @@ std::optional<ParseDiagnostic> PropertyRegistry::parseProperty(const css::Declar
   return std::nullopt;
 }
 
+bool PropertyRegistry::parseInlineResourceColor(
+    const css::Declaration& declaration, std::array<Property<css::Color>, 2>& selectedColors) {
+  auto color =
+      std::find_if(selectedColors.begin(), selectedColors.end(),
+                   [&](const auto& selected) { return selected.name == declaration.name; });
+  if (color == selectedColors.end()) {
+    return false;
+  }
+  const std::size_t index = static_cast<std::size_t>(color - selectedColors.begin());
+  const auto params =
+      parser::PropertyParseFnParams::Create(declaration, css::Specificity::StyleAttribute(),
+                                            parser::PropertyParseBehavior::AllowUserUnits);
+  if (color->isSpecified() && params.specificity < color->specificity) {
+    return true;
+  }
+  const auto error = parser::Parse(
+      params,
+      [](const parser::PropertyParseFnParams& params) {
+        return css::parser::ColorParser::Parse(params.components());
+      },
+      &*color);
+  if (error) {
+    if (!inlineResourceColors_[index]) {
+      unparsedProperties.try_emplace(
+          declaration.name,
+          parser::UnparsedProperty{declaration, css::Specificity::StyleAttribute()});
+    }
+    return true;
+  }
+  if (inlineResourceColors_[index]) {
+    inlineResourceColors_[index]->value = *color;
+  } else {
+    inlineResourceColors_[index].emplace(InlineResourceColor{resourceColor(index), *color});
+  }
+  refreshResourceColor(index);
+  unparsedProperties.insert_or_assign(
+      declaration.name, parser::UnparsedProperty{declaration, css::Specificity::StyleAttribute()});
+  return true;
+}
+
 bool PropertyRegistry::parseStyle(std::string_view str) {
   css::parser::DeclarationListParser::SecurityStats securityStats;
   const std::vector<css::Declaration> declarations =
@@ -2763,13 +2891,31 @@ bool PropertyRegistry::parseStyle(std::string_view str) {
   if (securityStats.rejected) {
     return false;
   }
+  std::array<Property<css::Color>, 2> selectedColors{floodColor, stopColor};
+  for (std::size_t index = 0; index < selectedColors.size(); ++index) {
+    reconcileResourceColorMutation(index);
+    if (inlineResourceColors_[index]) {
+      selectedColors[index] = inlineResourceColors_[index]->value;
+    } else {
+      selectedColors[index].clear();
+    }
+  }
   for (const auto& declaration : declarations) {
-    std::ignore = parseProperty(declaration, css::Specificity::StyleAttribute());
+    if (!parseInlineResourceColor(declaration, selectedColors)) {
+      std::ignore = parseProperty(declaration, css::Specificity::StyleAttribute());
+    }
   }
   return true;
 }
 
 void PropertyRegistry::clearStyleAttributeProperties() {
+  for (std::size_t index = 0; index < inlineResourceColors_.size(); ++index) {
+    reconcileResourceColorMutation(index);
+    if (inlineResourceColors_[index]) {
+      resourceColor(index) = inlineResourceColors_[index]->base;
+      inlineResourceColors_[index].reset();
+    }
+  }
   const css::Specificity styleSpecificity = css::Specificity::StyleAttribute();
 
   auto properties = allPropertiesMutable();
@@ -2806,6 +2952,10 @@ ParseResult<bool> PropertyRegistry::parsePresentationAttribute(std::string_view 
 
   parser::PropertyParseFnParams params = parser::PropertyParseFnParams::CreateForAttribute(value);
 
+  if (name == "flood-color" || name == "stop-color") {
+    return parseResourceColorAttribute(name == "flood-color" ? 0 : 1, params);
+  }
+
   const PropertyParseFn* parseFn = kProperties.find(name);
   if (parseFn != nullptr) {
     auto maybeError = (*parseFn)(*this, params);
@@ -2841,6 +2991,26 @@ ParseResult<bool> PropertyRegistry::parsePresentationAttribute(std::string_view 
   }
 
   return false;
+}
+
+void PropertyRegistry::resolveElementColors(ParseWarningSink& warningSink) {
+  for (std::size_t index = 0; index < inlineResourceColors_.size(); ++index) {
+    reconcileResourceColorMutation(index);
+    auto it = unparsedProperties.find(RcString(resourceColor(index).name));
+    if (inlineResourceColors_[index]) {
+      refreshResourceColor(index);
+    } else if (it != unparsedProperties.end()) {
+      const auto params =
+          parser::PropertyParseFnParams::Create(it->second.declaration, it->second.specificity,
+                                                parser::PropertyParseBehavior::AllowUserUnits);
+      if (auto error = parseResourceColor(index, params)) {
+        warningSink.add(std::move(*error));
+      }
+    }
+    if (it != unparsedProperties.end()) {
+      unparsedProperties.erase(it);
+    }
+  }
 }
 
 bool PropertyRegistry::isPresentationAttributeInherited(std::string_view name) {

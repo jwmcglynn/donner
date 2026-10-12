@@ -756,6 +756,53 @@ test("composited probe evidence survives lane archival and the next lane", async
   }
 });
 
+test("composited probe evidence retains presentation loss only when published", async () => {
+  const { stopCompositedProbe } = await import("./composited-probe-evidence.mjs");
+  const temporary = mkdtempSync(path.join(tmpdir(), "donner-probe-loss-"));
+  const attachments = [];
+  const testInfo = {
+    outputPath: (name) => path.join(temporary, name),
+    attach: async (name, attachment) => attachments.push({ name, ...attachment }),
+  };
+  const originalWindow = globalThis.window;
+  try {
+    const deviceLoss = {
+      firstObservedAbsoluteMs: 10123,
+      pageTimeOriginMs: 10000,
+      firstObservedAtMs: 123,
+      publishedAtMs: 140,
+      completedSerial: 7,
+      submittedSerial: 11,
+      oldestSerial: 9,
+      timedOutSite: 2,
+      timedOutElapsedMs: 250,
+      browserReason: "browser reset",
+    };
+    globalThis.window = {
+      __donnerCompositedProbe: {
+        running: true,
+        samples: [],
+        drawFailures: 0,
+        frames: 0,
+        stop() {
+          this.running = false;
+        },
+      },
+      __donnerPresentationDeviceLoss: deviceLoss,
+    };
+    const page = { evaluate: async (callback) => callback() };
+    const lost = await stopCompositedProbe(page, testInfo, {});
+    assert.deepEqual(lost.presentation.deviceLoss, deviceLoss);
+
+    delete globalThis.window.__donnerPresentationDeviceLoss;
+    const healthy = await stopCompositedProbe(page, testInfo, {});
+    assert.equal(healthy.presentation.deviceLoss, null);
+  } finally {
+    globalThis.window = originalWindow;
+    rmSync(temporary, { recursive: true, force: true });
+  }
+});
+
 test("drag failure readbacks are archived after sampling with exact frame identities", async () => {
   const { attachCompositedReadbacks } = await import("./composited-probe-evidence.mjs");
   const temporary = mkdtempSync(path.join(tmpdir(), "donner-readback-evidence-"));

@@ -119,6 +119,114 @@ TEST_F(FilterSystemTest, FeFloodResolvesCssCurrentColorAndOpacity) {
   EXPECT_DOUBLE_EQ(flood->floodOpacity, 0.25);
 }
 
+TEST_F(FilterSystemTest, FeFloodExplicitColorInheritance) {
+  struct TestCase {
+    std::string_view svg;
+    css::Color expected;
+  };
+  for (
+      const auto& test : {
+          TestCase{R"(<svg xmlns="http://www.w3.org/2000/svg">
+            <style>#f { flood-color: lime !important; } filter { flood-color: red !important; }</style>
+            <filter id="f"><feFlood flood-color="inherit"/></filter>
+          </svg>)",
+                   css::Color(css::RGBA(0, 255, 0, 255))},
+          TestCase{R"(<svg xmlns="http://www.w3.org/2000/svg">
+            <style>filter { flood-color: red !important; } #f { flood-color: lime !important; }</style>
+            <filter id="f"><feFlood flood-color="inherit"/></filter>
+          </svg>)",
+                   css::Color(css::RGBA(0, 255, 0, 255))},
+          TestCase{R"(<svg xmlns="http://www.w3.org/2000/svg">
+            <style>filter { flood-color: red !important; } filter { flood-color: lime !important; }</style>
+            <filter id="f"><feFlood flood-color="inherit"/></filter>
+          </svg>)",
+                   css::Color(css::RGBA(0, 255, 0, 255))},
+          TestCase{R"(<svg xmlns="http://www.w3.org/2000/svg">
+            <style>filter { flood-color: lime !important; } #f { flood-color: bogus !important; }</style>
+            <filter id="f"><feFlood flood-color="inherit"/></filter>
+          </svg>)",
+                   css::Color(css::RGBA(0, 255, 0, 255))},
+          TestCase{R"(<svg xmlns="http://www.w3.org/2000/svg">
+            <style>#f { flood-color: lime !important; }</style>
+            <filter id="f" style="flood-color: red !important">
+              <feFlood flood-color="inherit"/>
+            </filter>
+          </svg>)",
+                   css::Color(css::RGBA(255, 0, 0, 255))},
+          TestCase{
+              R"(<svg xmlns="http://www.w3.org/2000/svg"><style>filter { flood-color: red; } #f { flood-color: lime; }</style><filter id="f"><feFlood flood-color="inherit"/></filter></svg>)",
+              css::Color(css::RGBA(0, 255, 0, 255))},
+          TestCase{
+              R"(<svg xmlns="http://www.w3.org/2000/svg"><style>#f { flood-color: lime !important; }</style><filter id="f" style="flood-color: blue"><feFlood flood-color="inherit"/></filter></svg>)",
+              css::Color(css::RGBA(0, 255, 0, 255))},
+          TestCase{
+              R"(<svg xmlns="http://www.w3.org/2000/svg"><filter id="f" style="flood-color: bogus; flood-color: lime; flood-color: invalid"><feFlood flood-color="inherit"/></filter></svg>)",
+              css::Color(css::RGBA(0, 255, 0, 255))},
+          TestCase{
+              R"(<svg xmlns="http://www.w3.org/2000/svg"><filter id="f" style="flood-color: red !important; flood-color: lime"><feFlood flood-color="inherit"/></filter></svg>)",
+              css::Color(css::RGBA(255, 0, 0, 255))},
+          TestCase{R"(<svg xmlns="http://www.w3.org/2000/svg">
+             <filter id="f" flood-color="green"><feFlood flood-color="inherit"/></filter>
+           </svg>)",
+                   css::Color(css::RGBA(0, 128, 0, 255))},
+          TestCase{R"(<svg xmlns="http://www.w3.org/2000/svg">
+             <style>filter { flood-color: green; } feFlood { flood-color: inherit; }</style>
+             <filter id="f" flood-color="red"><feFlood/></filter>
+           </svg>)",
+                   css::Color(css::RGBA(0, 128, 0, 255))},
+          TestCase{R"(<svg xmlns="http://www.w3.org/2000/svg" flood-color="lime">
+             <g style="flood-color: inherit"><filter id="f" flood-color="inherit">
+               <feFlood flood-color="inherit"/>
+             </filter></g>
+           </svg>)",
+                   css::Color(css::RGBA(0, 255, 0, 255))},
+          TestCase{R"(<svg xmlns="http://www.w3.org/2000/svg">
+             <filter id="f" color="green" flood-color="currentColor">
+               <feFlood color="red" flood-color="inherit"/>
+             </filter>
+           </svg>)",
+                   css::Color(css::RGBA(255, 0, 0, 255))},
+          TestCase{R"(<svg xmlns="http://www.w3.org/2000/svg">
+             <filter id="f" flood-color="green"><feFlood/></filter>
+           </svg>)",
+                   css::Color(css::RGBA(0, 0, 0, 255))},
+      }) {
+    SCOPED_TRACE(test.svg);
+    auto document = ParseAndComputeFilters(test.svg);
+    auto element = document.querySelector("#f");
+    ASSERT_THAT(element, testing::Optional(testing::_));
+    const auto* computed = element->entityHandle().try_get<ComputedFilterComponent>();
+    ASSERT_THAT(computed, NotNull());
+    ASSERT_THAT(computed->filterGraph.nodes, SizeIs(1));
+    const auto* flood =
+        std::get_if<filter_primitive::Flood>(&computed->filterGraph.nodes[0].primitive);
+    ASSERT_THAT(flood, NotNull());
+    EXPECT_THAT(flood->floodColor, test.expected);
+  }
+}
+
+TEST_F(FilterSystemTest, FloodColorInheritanceTracksAncestorAndInlineMutations) {
+  auto document = ParseSVG(R"(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <filter id="f" flood-color="red" style="flood-color: blue">
+        <feFlood id="child" flood-color="inherit"/>
+      </filter>
+    </svg>
+  )");
+  auto parent = document.querySelector("#f");
+  auto child = document.querySelector("#child");
+  ASSERT_THAT(parent, testing::Optional(testing::_));
+  ASSERT_THAT(child, testing::Optional(testing::_));
+  EXPECT_THAT(child->getComputedStyle().floodColor.get(),
+              testing::Optional(css::Color(css::RGBA(0, 0, 255, 255))));
+  parent->setStyle("");
+  EXPECT_THAT(child->getComputedStyle().floodColor.get(),
+              testing::Optional(css::Color(css::RGBA(255, 0, 0, 255))));
+  parent->setAttribute("flood-color", "lime");
+  EXPECT_THAT(child->getComputedStyle().floodColor.get(),
+              testing::Optional(css::Color(css::RGBA(0, 255, 0, 255))));
+}
+
 TEST_F(FilterSystemTest, FeFloodInvalidCssOverlayProducesWarning) {
   auto document = ParseSVG(R"(
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">

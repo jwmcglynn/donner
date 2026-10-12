@@ -84,7 +84,10 @@ py_test(
 py_test(
     name = "coverage_script_tests",
     size = "small",
-    srcs = ["coverage_script_tests.py"],
+    srcs = [
+        "coverage_script_tests.py",
+        "test_executable_fixtures.py",
+    ],
     data = [
         "check_lcov_report.py",
         "coverage.sh",
@@ -92,6 +95,7 @@ py_test(
         "filter_coverage.py",
         "lcov_metrics.py",
     ],
+    imports = ["."],
     deps = ["@rules_python//python/runfiles"],
 )
 
@@ -192,7 +196,10 @@ py_test(
 py_test(
     name = "ci_runtime_workflow_tests",
     size = "small",
-    srcs = ["ci_runtime_workflow_tests.py"],
+    srcs = [
+        "ci_runtime_workflow_tests.py",
+        "test_executable_fixtures.py",
+    ],
     data = [
         "//:.bazelrc",
         "//:.github/actions/apt-install/action.yml",
@@ -213,6 +220,7 @@ py_test(
         "//tools:coverage.sh",
         "//tools/ci:BUILD.bazel",
     ],
+    imports = ["."],
     deps = ["@rules_python//python/runfiles"],
 )
 

@@ -1172,6 +1172,29 @@ donner_cc_fuzzer(
     ],
 )
 
+# The document seeds above plus filter-primitive, mask, marker, pattern and textPath seeds, which
+# only matter once a fuzzer actually rasterizes.
+filegroup(
+    name = "svg_document_raster_fuzzer_seeds",
+    srcs = glob([
+        "svg_document_render_corpus/**",
+        "svg_document_raster_corpus/**",
+    ]),
+)
+
+donner_cc_fuzzer(
+    name = "svg_document_raster_fuzzer",
+    srcs = [
+        "SVGDocumentRaster_fuzzer.cc",
+    ],
+    corpus = ":svg_document_raster_fuzzer_seeds",
+    tags = ["fuzz_text_full"],
+    deps = [
+        "//donner/svg",
+        "//donner/svg/renderer",
+    ],
+)
+
 donner_cc_test(
     name = "image_comparison_terminal_preview_tests",
     srcs = [

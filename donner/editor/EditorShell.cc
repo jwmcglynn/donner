@@ -346,7 +346,7 @@ void PublishSampleThumbnailStats(int requested, int started, int completed, int 
                                  int foregroundHandoffWaits, int firstAttemptCompleted,
                                  int offscreenRendererConstructionStarts,
                                  int offscreenRendererConstructionBlocked, int drained,
-                                 int readbackCount) {
+                                 int readbackCount, int fontPreviewObligations) {
   // clang-format off
   MAIN_THREAD_ASYNC_EM_ASM(
       {
@@ -383,11 +383,12 @@ void PublishSampleThumbnailStats(int requested, int started, int completed, int 
           'offscreenRendererConstructionBlocked' : Boolean($11),
           'drained' : Boolean($12),
           'explicitPreviewReadbackTotal' : $13,
+          'fontPreviewObligations' : $14,
         });
       },
       requested, started, completed, rendered, ready, pending, active, resultReady,
       foregroundHandoffWaits, firstAttemptCompleted, offscreenRendererConstructionStarts,
-      offscreenRendererConstructionBlocked, drained, readbackCount);
+      offscreenRendererConstructionBlocked, drained, readbackCount, fontPreviewObligations);
   // clang-format on
 }
 
@@ -1587,6 +1588,9 @@ EditorShell::EditorShell(gui::EditorWindow& window, EditorShellOptions options)
       inputBridge_(window_, kWheelZoomStep),
       compositorDebugPanel_(UiGeodeDevice(window)),
       dialogPresenter_(options_.editorNoticeText, options_.editorBuildInfo) {
+#ifdef DONNER_EDITOR_WGPU
+  window_.clearLastFullyPresentedDocumentFrame();
+#endif
   configureClipboardCapability();
   // One presenter owns where document pixels land for the whole session.
   documentPresenter_ =
@@ -2457,6 +2461,10 @@ bool EditorShell::tryApplyGroupOperation(bool ungroup) {
 void EditorShell::resetPresentationForLoadedDocument(std::string_view canonicalSource) {
   cancelEyedropper(true);
   cancelSampleThumbnailGeneration();
+  foregroundPresentationObligation_.reset();
+#ifdef DONNER_EDITOR_WGPU
+  window_.clearLastFullyPresentedDocumentFrame();
+#endif
   documentSyncController_.resetForLoadedDocument(std::string(canonicalSource));
   app_.setCleanSourceText(canonicalSource);
   lastHighlightedSelection_.clear();
@@ -5242,14 +5250,51 @@ void EditorShell::recordPresentationIdentity(const FramePresentation* frame) {
 #ifdef DONNER_EDITOR_WGPU
   window_.setPresentationFrameIdentity(frame != nullptr ? frame->frameId() : 0,
                                        frame != nullptr ? frame->identity().captureId : 0,
+                                       frame != nullptr ? frame->identity().documentGeneration : 0,
+                                       frame != nullptr ? frame->identity().version : 0,
                                        renderCoordinator_.frameRepresentsCurrentIntent(),
                                        frame != nullptr ? frame->viewport().zoom : 0.0);
 #endif
 }
 
+bool EditorShell::foregroundPresentationAcknowledged() const {
+#ifdef DONNER_EDITOR_WGPU
+  if (!foregroundPresentationObligation_.has_value()) {
+    return true;
+  }
+  return window_.lastFullyPresentedDocumentFrame() == foregroundPresentationObligation_;
+#else
+  return true;
+#endif
+}
+
+void EditorShell::requestForegroundPresentationWake() {
+#ifdef DONNER_EDITOR_WGPU
+  if (foregroundPresentationObligation_.has_value()) {
+    window_.requestWakeAfterPresentedDocument(*foregroundPresentationObligation_);
+  }
+#endif
+}
+
+void EditorShell::noteSidebarPreviewDemand(bool foregroundAcknowledged, bool compactSheet,
+                                           bool thumbnailDemand, bool refreshPending) {
+  const bool rasterDemand = !compactSheet && (thumbnailDemand || refreshPending);
+  if (!foregroundAcknowledged && rasterDemand) {
+    requestForegroundPresentationWake();
+  } else if (!compactSheet && refreshPending) {
+    window_.wakeEventLoop();
+  }
+}
+
 void EditorShell::installFramePresentation(std::shared_ptr<const FramePresentation> frame) {
   immediateChromePlanProduced_ = frame != nullptr && frame->chromeEnabled();
 #ifdef DONNER_EDITOR_WGPU
+  if (frame != nullptr) {
+    foregroundPresentationObligation_ = gui::EditorWindow::PresentedDocumentFrameIdentity{
+        .documentGeneration = frame->identity().documentGeneration,
+        .frameVersion = frame->identity().version,
+        .captureId = frame->identity().captureId};
+  }
   recordPresentationIdentity(frame.get());
   if (frame == nullptr || directCheckerboardRenderer_ == nullptr ||
       directDocumentRenderer_ == nullptr || directOverlayRenderer_ == nullptr) {
@@ -5402,7 +5447,8 @@ void EditorShell::publishSampleThumbnailStats() const {
       static_cast<int>(stats.foregroundHandoffWaits), stats.firstAttemptCompleted ? 1 : 0,
       static_cast<int>(stats.offscreenRendererConstructionStarts),
       stats.offscreenRendererConstructionBlocked ? 1 : 0, sampleThumbnailLaneDrained(stats) ? 1 : 0,
-      static_cast<int>(stats.readbackCount));
+      static_cast<int>(stats.readbackCount),
+      static_cast<int>(pendingFontPreviews_.size() + waitingFontPreviews_.size()));
 #endif
 }
 
@@ -5909,6 +5955,7 @@ void EditorShell::requestFontPreviews(const std::vector<std::string>& families) 
   }
   if (queued) {
     window_.wakeEventLoop();
+    publishSampleThumbnailStats();
   }
 }
 
@@ -5921,18 +5968,19 @@ void EditorShell::advanceFontPreviewGeneration() {
     sampleThumbnailRetryPending_ = false;
     return;
   }
-  std::string family = std::move(pendingFontPreviews_.front());
-  pendingFontPreviews_.pop_front();
   const double displayScale = window_.displayScale();
   const Vector2i dimensions(
       std::max(1, static_cast<int>(std::ceil(kFontPreviewWidth * displayScale))),
       std::max(1, static_cast<int>(std::ceil(kFontPreviewHeight * displayScale))));
 #ifndef __EMSCRIPTEN__
   if (fontPreviewCache_) {
+    const std::string& pendingFamily = pendingFontPreviews_.front();
     const svg::FontFaceAvailability availability =
-        fontCatalog_.availability(family, svg::FontFaceRequest{});
-    if (auto bitmap =
-            fontPreviewCache_->load(family, PersistentFontIdentity(availability), dimensions)) {
+        fontCatalog_.availability(pendingFamily, svg::FontFaceRequest{});
+    if (auto bitmap = fontPreviewCache_->load(pendingFamily, PersistentFontIdentity(availability),
+                                              dimensions)) {
+      const std::string family = std::move(pendingFontPreviews_.front());
+      pendingFontPreviews_.pop_front();
       fontPreviewBitmaps_.insert_or_assign(family, std::move(*bitmap));
       fontPreviewIdentities_.insert_or_assign(
           family, PreviewFontIdentity{.dependencies = {svg::FontFaceDependency{
@@ -5944,10 +5992,17 @@ void EditorShell::advanceFontPreviewGeneration() {
       fontPreviewOrder_.push_back(family);
       trimFontPreviewMemory();
       window_.wakeEventLoop();
+      publishSampleThumbnailStats();
       return;
     }
   }
 #endif
+  if (!foregroundPresentationAcknowledged()) {
+    requestForegroundPresentationWake();
+    return;
+  }
+  std::string family = std::move(pendingFontPreviews_.front());
+  pendingFontPreviews_.pop_front();
   const auto store = fontCatalog_.encodedStore();
   SampleThumbnailRenderRequest request{
       .kind = AuxiliaryPreviewKind::FontFamily,
@@ -6470,6 +6525,12 @@ void EditorShell::renderCompactTopBar() {
   ImGui::End();
 }
 
+namespace {
+bool PreviewPresentationCurrent(bool documentVersionCurrent, bool foregroundAcknowledged) {
+  return documentVersionCurrent && foregroundAcknowledged;
+}
+}  // namespace
+
 void EditorShell::renderSidebars() {
   // The right-column panels are dockable windows owned by the DockSpace (see
   // renderDockSpaceHost); their position, size, and tab bars are managed by
@@ -6512,9 +6573,11 @@ void EditorShell::renderSidebars() {
     // Compact sheets use deterministic fill swatches. Avoiding per-row raster
     // rendering and texture uploads keeps the touch panel responsive and also
     // avoids backend-specific thumbnail presentation differences in Wasm.
-    const bool presentationCurrent =
+    const bool foregroundAcknowledged = foregroundPresentationAcknowledged();
+    const bool presentationCurrent = PreviewPresentationCurrent(
         !app_.hasDocument() || renderCoordinator_.displayedDocVersionForDiagnostics() ==
-                                   app_.document().currentFrameVersion();
+                                   app_.document().currentFrameVersion(),
+        foregroundAcknowledged);
     LayersPanel::ThumbnailRefreshMode thumbnailMode =
         compactSheet || !presentationCurrent ? LayersPanel::ThumbnailRefreshMode::SwatchesOnly
                                              : LayersPanel::ThumbnailRefreshMode::RenderIncremental;
@@ -6533,13 +6596,15 @@ void EditorShell::renderSidebars() {
             ? thumbnailRefreshWasPending
             : internal::SidebarSnapshotRefreshPendingAfterPass(
                   layersPanel_.thumbnailRefreshStats().deferredCount);
-    if (sidebarSnapshotRefreshPending_) {
-      window_.wakeEventLoop();
-    }
+    noteSidebarPreviewDemand(foregroundAcknowledged, compactSheet,
+                             layersPanel_.hasThumbnailRenderDemand(),
+                             sidebarSnapshotRefreshPending_);
   } else if (!showSamplePicker_ && sidebarSnapshotRefreshPending_) {
     // Preserve the refresh obligation across a renderer-busy frame or a trickled mouse transition.
     // This is bounded: the flag is cleared by the first idle refresh above.
-    window_.wakeEventLoop();
+    noteSidebarPreviewDemand(foregroundPresentationAcknowledged(), compactSheet,
+                             layersPanel_.hasThumbnailRenderDemand(),
+                             sidebarSnapshotRefreshPending_);
   }
   EditorApp* liveAppForClicks = rendererBusy ? nullptr : &app_;
 

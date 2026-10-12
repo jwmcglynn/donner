@@ -43,6 +43,14 @@ enum class DeviceLostWaitSite : std::uint8_t {
   Present,
 };
 
+/// Stable diagnostic view of the first declaration that won a device-loss condition.
+struct DeviceLossSnapshot {
+  bool lost = false;                //!< Whether loss has been declared.
+  bool attributionSettled = false;  //!< Whether the winning attribution is safe to retain.
+  DeviceLostWaitSite timedOutSite = DeviceLostWaitSite::None;  //!< Winning bounded wait, if any.
+  int timedOutElapsedMs = 0;                                   //!< Time spent in that bounded wait.
+};
+
 /// Ostream output operator, e.g. `QueueIdle`. @param os Output stream. @param site Value to output.
 std::ostream& operator<<(std::ostream& os, DeviceLostWaitSite site);
 
@@ -91,6 +99,10 @@ struct DeviceLostState {
   /// `timedOutSite`, which publishes it, so a reader that sees a site also sees that site's
   /// elapsed time. Zero while `timedOutSite` is `None`.
   std::atomic<int> timedOutElapsedMs{0};
+  /// True after the winning declaration has published its attribution. Diagnostic readers must
+  /// not freeze a first-loss record before this becomes true: a timeout sets `lost` first to win
+  /// the declaration, then publishes its site and elapsed time.
+  std::atomic<bool> attributionSettled{false};
 
   /**
    * Registers \p release to run when this condition is declared, or runs it at once when it
@@ -150,6 +162,9 @@ bool DeclareDeviceLost(DeviceLostState& state);
  */
 bool DeclareDeviceLostAfterWaitTimeout(DeviceLostState& state, DeviceLostWaitSite site,
                                        std::chrono::milliseconds elapsed);
+
+/// Reads the sticky loss and its first-winner attribution as one diagnostic snapshot.
+DeviceLossSnapshot ReadDeviceLossSnapshot(const DeviceLostState& state);
 
 /**
  * Logs the cause of a device loss.

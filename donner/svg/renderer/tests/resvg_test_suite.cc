@@ -523,8 +523,6 @@ INSTANTIATE_TEST_SUITE_P(
         ValuesIn(getTestsInCategory(
             "filters/filter-functions",
             {
-                {"blur-function.svg",
-                 Params::Skip("Triage: verify unitless nonzero blur grammar and reference oracle")},
                 {"color-adjust-functions-0percent.svg",
                  Params::Skip("Triage: CSS color-adjust input validity or output oracle mismatch")},
                 {"color-adjust-functions-100percent.svg",
@@ -538,7 +536,8 @@ INSTANTIATE_TEST_SUITE_P(
                 {"color-adjust-functions-default-value.svg",
                  Params::Skip("Triage: CSS color-adjust input validity or output oracle mismatch")},
                 {"color-adjust-functions-negative.svg",
-                 Params::Skip("Triage: verify negative color-adjust grammar and reference oracle")},
+                 Params::Skip(
+                     "Triage: text labels differ after invalid negative filters are rejected")},
                 {"drop-shadow-function-color-last.svg",
                  Params::Skip("Triage: CSS drop-shadow color or unit variant oracle mismatch")},
                 {"drop-shadow-function-em-values.svg",
@@ -561,15 +560,10 @@ INSTANTIATE_TEST_SUITE_P(
         ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
 
-INSTANTIATE_TEST_SUITE_P(
-    FiltersFloodColor, ImageComparisonTestFixture,
-    Combine(ValuesIn(getTestsInCategory("filters/flood-color",
-                                        {
-                                            {"inheritance-3.svg",
-                                             Params::Skip("230K diff: ICC color")},
-                                        })),
-            ValuesIn(ActiveComparisonModes())),
-    TestNameFromFilename);
+INSTANTIATE_TEST_SUITE_P(FiltersFloodColor, ImageComparisonTestFixture,
+                         Combine(ValuesIn(getTestsInCategory("filters/flood-color")),
+                                 ValuesIn(ActiveComparisonModes())),
+                         TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(FiltersFloodOpacity, ImageComparisonTestFixture,
                          Combine(ValuesIn(getTestsInCategory("filters/flood-opacity")),
@@ -716,8 +710,6 @@ INSTANTIATE_TEST_SUITE_P(
                     {"no-stop-color.svg",
                      Params::WithThreshold(0.03f, kDefaultMismatchedPixels,
                                            "OKLab sensitivity to gradient edge coverage")},
-                    {"stop-color-with-inherit-1.svg",
-                     Params::Skip("Bug? Strange edge case, stop-color")},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);

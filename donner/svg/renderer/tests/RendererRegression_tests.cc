@@ -297,6 +297,42 @@ RendererBitmap RenderImageOpacityCase(bool imageOpacity, bool groupOpacity) {
 
 class RendererRegressionTests : public ImageComparisonTestFixture {};
 
+TEST_F(RendererRegressionTests, UnitlessPresentationAttributeBlurUsesUserUnits) {
+  const auto render = [](std::string_view filter) {
+    const std::string markup =
+        R"svg(<rect x="20" y="20" width="40" height="40" fill="seagreen" filter=")svg" +
+        std::string(filter) + R"svg("/>)svg";
+    SVGDocument document = instantiateSubtree(markup, {}, Vector2i(80, 80));
+    return RenderDocumentWithBackend(document, ActiveRendererBackend());
+  };
+
+  const RendererBitmap unitless = render("blur(4)");
+  const RendererBitmap px = render("blur(4px)");
+  const RendererBitmap plain = render("none");
+
+  ExpectVisibleBitmap(unitless, "unitless_blur_visible");
+  ExpectBitmapsIdentical(unitless, px, "unitless_blur_matches_px");
+  ExpectBitmapsDiffer(unitless, plain, "unitless_blur_changes_pixels");
+  EXPECT_THAT(PixelAt(unitless, 16, 40)[3], testing::Gt(0));
+  EXPECT_EQ(PixelAt(plain, 16, 40)[3], 0);
+}
+
+TEST_F(RendererRegressionTests, UnitlessStylesheetBlurIsIgnored) {
+  SVGDocument styled = instantiateSubtree(
+      R"svg(<style>rect { filter: blur(4); }</style>
+             <rect x="20" y="20" width="40" height="40" fill="seagreen"/>)svg",
+      {}, Vector2i(80, 80));
+  SVGDocument plain =
+      instantiateSubtree(R"svg(<rect x="20" y="20" width="40" height="40" fill="seagreen"/>)svg",
+                         {}, Vector2i(80, 80));
+
+  const RendererBitmap actual = RenderDocumentWithBackend(styled, ActiveRendererBackend());
+  const RendererBitmap expected = RenderDocumentWithBackend(plain, ActiveRendererBackend());
+  ExpectVisibleBitmap(actual, "invalid_stylesheet_filter_visible");
+  ExpectBitmapsIdentical(actual, expected, "invalid_stylesheet_filter_ignored");
+  EXPECT_EQ(PixelAt(actual, 16, 40)[3], 0);
+}
+
 TEST_F(RendererRegressionTests, FontPropertiesDoNotChangeReducedCrosshair) {
   SVGDocument reduced = instantiateSubtree(R"(
     <svg width="500" height="500" viewBox="0 0 200 200">

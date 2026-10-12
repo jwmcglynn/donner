@@ -86,6 +86,7 @@ donner_cc_library(
         "//donner/editor:imgui_headers",
         "//donner/editor:tracy_wrapper",
         "//donner/editor:whole_app_worker_bridge",
+        "//donner/gpu",
         "//donner/svg/renderer:renderer_interface",
         "@imgui",
     ] + select({
@@ -96,7 +97,6 @@ donner_cc_library(
             ":imgui_runtime_renderer",
             ":ui_texture_registration",
             ":ui_texture_registry",
-            "//donner/gpu",
             "//donner/gpu/browser:emscripten_browser_bridge",
             "//donner/svg/renderer/geode:geode_device",
             "//donner/svg/renderer/geode:geode_gpu_wait",
@@ -106,7 +106,6 @@ donner_cc_library(
             ":imgui_runtime_renderer",
             ":ui_texture_registration",
             ":ui_texture_registry",
-            "//donner/gpu",
             "//donner/gpu/vulkan:vulkan_device",
             "//donner/svg/renderer/geode:geode_device",
             "//donner/svg/renderer/geode:geode_gpu_wait",

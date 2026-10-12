@@ -5,6 +5,7 @@
 
 #include <sstream>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "donner/base/tests/BaseTestUtils.h"
@@ -138,7 +139,12 @@ TEST(PropertyRegistry, Set) {
 }
 
 TEST(PropertyRegistry, PropertyNamesExposeCssRegistryKeys) {
+  EXPECT_THAT(PropertyRegistry::propertyNames().subspan(0, 3),
+              testing::ElementsAre(std::string_view("color"), std::string_view("flood-color"),
+                                   std::string_view("stop-color")));
   EXPECT_THAT(PropertyRegistry::propertyNames(), Contains(std::string_view("fill")));
+  EXPECT_THAT(PropertyRegistry::propertyNames(), Contains(std::string_view("flood-color")));
+  EXPECT_THAT(PropertyRegistry::propertyNames(), Contains(std::string_view("stop-color")));
   EXPECT_THAT(PropertyRegistry::propertyNames(), Contains(std::string_view("mix-blend-mode")));
   EXPECT_THAT(PropertyRegistry::propertyNames(), Contains(std::string_view("marker")));
 
@@ -2137,7 +2143,116 @@ TEST(PropertyRegistry, BaselineShiftSpacingAndDasharray) {
   }
 }
 
+TEST(PropertyRegistry, ResourceColorStyleParsingExposesTypedValues) {
+  PropertyRegistry registry;
+  registry.parseStyle("flood-color: red; stop-color: lime");
+  EXPECT_THAT(registry.floodColor.get(), Optional(Color(RGBA(255, 0, 0, 255))));
+  EXPECT_THAT(registry.stopColor.get(), Optional(Color(RGBA(0, 255, 0, 255))));
+}
+
+TEST(PropertyRegistry, ResourceColorInlineStylesPreserveAttributeUpdatesAndClearing) {
+  PropertyRegistry registry;
+  EXPECT_THAT(registry.parsePresentationAttribute("stop-color", "red"), ParseResultIs(true));
+  registry.parseStyle("stop-color: blue !important");
+  EXPECT_THAT(registry.stopColor.get(), Optional(Color(RGBA(0, 0, 255, 255))));
+  EXPECT_THAT(registry.parsePresentationAttribute("stop-color", "lime"), ParseResultIs(true));
+  EXPECT_THAT(registry.stopColor.get(), Optional(Color(RGBA(0, 0, 255, 255))));
+  registry.clearStyleAttributeProperties();
+  EXPECT_THAT(registry.stopColor.get(), Optional(Color(RGBA(0, 255, 0, 255))));
+
+  registry.parseStyle("stop-color: red");
+  const css::Declaration declaration =
+      css::CSS::ParseStyleAttribute("stop-color: blue !important").front();
+  EXPECT_THAT(registry.parseProperty(declaration, Specificity::FromABC(1, 0, 0)), Eq(std::nullopt));
+  EXPECT_THAT(registry.stopColor.get(), Optional(Color(RGBA(0, 0, 255, 255))));
+  registry.clearStyleAttributeProperties();
+  EXPECT_THAT(registry.stopColor.get(), Optional(Color(RGBA(0, 0, 255, 255))));
+}
+
+TEST(PropertyRegistry, ResourceColorInlineStylesKeepExplicitOverrides) {
+  PropertyRegistry registry;
+  registry.stopColor.set(Color(RGBA(255, 255, 255, 255)), Specificity::Override());
+  registry.parseStyle("stop-color: blue !important");
+  EXPECT_THAT(registry.stopColor.get(), Optional(Color(RGBA(255, 255, 255, 255))));
+  registry.stopColor.set(Color(RGBA(0, 255, 0, 255)), Specificity::Override());
+  registry.clearStyleAttributeProperties();
+  EXPECT_THAT(registry.stopColor.get(), Optional(Color(RGBA(0, 255, 0, 255))));
+}
+
+TEST(PropertyRegistry, ResourceColorDirectMutationsSurviveComputation) {
+  PropertyRegistry registry;
+  registry.parseStyle("stop-color: red");
+  registry.stopColor.clear();
+  ParseWarningSink warnings;
+  registry.resolveElementColors(warnings);
+  EXPECT_THAT(registry.stopColor.isSpecified(), testing::IsFalse());
+  EXPECT_THAT(registry.stopColor.get(), Optional(Color(RGBA(0, 0, 0, 255))));
+
+  registry.parseStyle("stop-color: red");
+  registry.stopColor.substitute(Color(RGBA(0, 255, 0, 255)));
+  registry.resolveElementColors(warnings);
+  EXPECT_THAT(registry.stopColor.get(), Optional(Color(RGBA(0, 255, 0, 255))));
+}
+
+TEST(PropertyRegistry, NegativeFilterAmountsRejectTheEntireDeclaration) {
+  for (std::string_view function :
+       {"brightness", "contrast", "grayscale", "invert", "opacity", "saturate", "sepia"}) {
+    for (std::string_view amount : {"-1", "-10%"}) {
+      const std::string input =
+          "filter: " + std::string(function) + "(" + std::string(amount) + ")";
+      SCOPED_TRACE(input);
+      PropertyRegistry registry;
+      registry.parseStyle("filter: blur(2px)");
+      const css::Declaration declaration = css::CSS::ParseStyleAttribute(input).front();
+      EXPECT_THAT(registry.parseProperty(declaration, Specificity::StyleAttribute()),
+                  ParseErrorIs("Negative value not allowed for " + std::string(function) + "()"));
+      EXPECT_THAT(registry.filter.get(),
+                  Optional(testing::ElementsAre(FilterBlurIs(2.0, Lengthd::Unit::Px))));
+    }
+  }
+}
+
+TEST(PropertyRegistry, FilterAmountErrorsUseCanonicalFunctionNames) {
+  for (const auto& [authored, canonical] :
+       {std::pair{"BRIGHTNESS", "brightness"}, std::pair{"CONTRAST", "contrast"},
+        std::pair{"SATURATE", "saturate"}, std::pair{"OpAcItY", "opacity"}}) {
+    const std::string input = "filter: " + std::string(authored) + "(-1)";
+    SCOPED_TRACE(input);
+    PropertyRegistry registry;
+    const css::Declaration declaration = css::CSS::ParseStyleAttribute(input).front();
+    EXPECT_THAT(registry.parseProperty(declaration, Specificity()),
+                ParseErrorIs("Negative value not allowed for " + std::string(canonical) + "()"));
+  }
+}
+
 TEST(PropertyRegistry, FilterParsing) {
+  {
+    PropertyRegistry registry;
+    EXPECT_THAT(registry.parsePresentationAttribute("filter", "blur(4)"), ParseResultIs(true));
+    ASSERT_TRUE(registry.filter.isSpecified());
+    EXPECT_THAT(*registry.filter.getStoredValue(),
+                testing::ElementsAre(FilterBlurIs(4.0, Lengthd::Unit::None)));
+  }
+
+  {
+    PropertyRegistry registry;
+    EXPECT_TRUE(registry.parseStyle("filter: blur(4)"));
+    EXPECT_FALSE(registry.filter.isSpecified());
+  }
+
+  {
+    PropertyRegistry registry;
+    EXPECT_THAT(registry.parsePresentationAttribute("filter", "blur(-4)"),
+                ParseErrorIs("Negative value not allowed for blur()"));
+  }
+
+  for (const char* value : {"blur(4 8)", "blur(4,8)", "blur(4px 8px)", "blur(4px,8px)"}) {
+    PropertyRegistry registry;
+    EXPECT_THAT(registry.parsePresentationAttribute("filter", value),
+                ParseErrorIs("Unexpected extra values in blur()"));
+    EXPECT_FALSE(registry.filter.isSpecified());
+  }
+
   {
     PropertyRegistry registry;
     registry.parseStyle("filter: none");

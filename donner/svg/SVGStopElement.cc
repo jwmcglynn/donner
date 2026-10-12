@@ -13,6 +13,7 @@ SVGStopElement SVGStopElement::CreateOn(EntityHandle handle) {
   CreateEntityOn(handle, Tag, Type);
   handle.emplace<components::RenderingBehaviorComponent>(
       components::RenderingBehavior::Nonrenderable);
+  handle.emplace<components::StopComponent>();
   return SVGStopElement(handle);
 }
 
@@ -46,7 +47,13 @@ float SVGStopElement::offset() const {
 }
 
 css::Color SVGStopElement::stopColor() const {
+  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   const auto* component = handle_.try_get<components::StopComponent>();
+  const auto* style = specifiedStyle();
+  if (style && style->stopColor.isSpecified() &&
+      (!component || style->stopColor.specificity >= component->properties.stopColor.specificity)) {
+    return style->stopColor.get().value();
+  }
   return component ? component->properties.stopColor.get().value()
                    : components::StopProperties().stopColor.get().value();
 }

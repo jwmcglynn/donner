@@ -1,5 +1,7 @@
 #include "donner/svg/components/style/StyleSystem.h"
 
+#include <array>
+
 #include "donner/base/EcsRegistry.h"
 #include "donner/base/ParseWarningSink.h"
 #include "donner/base/xml/XMLQualifiedName.h"
@@ -193,13 +195,25 @@ bool LocalRangeContainsOffset(const SourceRange& range, std::size_t localOffset)
   return start.has_value() && end.has_value() && *start <= localOffset && localOffset < *end;
 }
 
-void ApplyRuleDeclarations(const css::SelectorRule& rule, css::Specificity specificity,
-                           PropertyRegistry& properties, StyleResourceBudget& styleBudget,
-                           ParseWarningSink& warningSink) {
+void ApplyRuleDeclarations(
+    const css::SelectorRule& rule, css::Specificity specificity, PropertyRegistry& properties,
+    StyleResourceBudget& styleBudget, ParseWarningSink& warningSink,
+    std::array<std::optional<css::Specificity>, 2>& importantResourceColors) {
   for (const auto& declaration : rule.declarations) {
     if (!styleBudget.reserveDeclarationApplication(declaration.values.size(),
                                                    declaration.sourceByteSize)) {
       return;
+    }
+    std::optional<css::Specificity>* importantSource = nullptr;
+    if (declaration.name == "flood-color") {
+      importantSource = &importantResourceColors[0];
+    } else if (declaration.name == "stop-color") {
+      importantSource = &importantResourceColors[1];
+    }
+    // The generic important rank omits selector specificity, so retain it for resource colors.
+    if (declaration.important && importantSource && importantSource->has_value() &&
+        specificity < **importantSource) {
+      continue;
     }
     if (auto error = properties.parseProperty(declaration, specificity)) {
       constexpr std::size_t kMaximumStyleDiagnosticBytes = 4096;
@@ -208,6 +222,8 @@ void ApplyRuleDeclarations(const css::SelectorRule& rule, css::Specificity speci
             RcString(std::string_view(error->reason).substr(0, kMaximumStyleDiagnosticBytes));
       }
       warningSink.add(std::move(*error));
+    } else if (declaration.important && importantSource) {
+      *importantSource = specificity;
     }
   }
 }
@@ -259,6 +275,7 @@ void StyleSystem::applyStylesheetRules(Registry& registry, Entity treeEntity, En
                                        StyleResourceBudget& styleBudget,
                                        ParseWarningSink& warningSink) {
   const ShadowedElementAdapter adapter(registry, treeEntity, dataEntity);
+  std::array<std::optional<css::Specificity>, 2> importantResourceColors;
   for (auto view = registry.view<StylesheetComponent>(); auto stylesheetEntity : view) {
     const auto& stylesheet = view.get<StylesheetComponent>(stylesheetEntity);
     for (const css::SelectorRule& rule : stylesheet.stylesheet.rules()) {
@@ -273,7 +290,8 @@ void StyleSystem::applyStylesheetRules(Registry& registry, Entity treeEntity, En
       if (stylesheet.isUserAgentStylesheet) {
         specificity = specificity.toUserAgentSpecificity();
       }
-      ApplyRuleDeclarations(rule, specificity, properties, styleBudget, warningSink);
+      ApplyRuleDeclarations(rule, specificity, properties, styleBudget, warningSink,
+                            importantResourceColors);
     }
   }
 }
@@ -331,6 +349,7 @@ void StyleSystem::computePropertiesInto(EntityHandle handle, ComputedStyleCompon
   }
 
   applyStylesheetRules(registry, handle.entity(), dataEntity, properties, styleBudget, warningSink);
+  properties.resolveElementColors(warningSink);
 
   // Inherit from parent, then charge the dynamic bytes retained by the final computed style.
   // Charging the parent's source value alone misses large locally parsed vectors and can also

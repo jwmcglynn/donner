@@ -1,7 +1,12 @@
 #!/usr/bin/env python3
-"""Tests for the generated resvg parity report."""
+"""Verify registration parsing and corpus accounting without rendering SVGs.
+
+Live inventory totals are report metrics; controlled fixtures test their meaning.
+"""
 
 from __future__ import annotations
+
+from collections import Counter
 
 import io
 import json
@@ -269,6 +274,60 @@ class ParityReportTests(unittest.TestCase):
             "painting/fill/z.svg",
         ])
 
+    def test_resolving_exceptions_preserves_corpus_coverage(self) -> None:
+        for filename in ("skip.svg", "render-only.svg", "compare.svg"):
+            self.fixture.add_case("painting/fill/" + filename)
+        before = parity_report.build_report(
+            _registration(
+                "PaintingFill",
+                '\"painting/fill\", {'
+                '{\"skip.svg\", Params::Skip(\"pending fix\")},'
+                '{\"render-only.svg\", Params::RenderOnly(\"pending oracle\")},'
+                '{\"compare.svg\", Params::WithThreshold(0.1f, 200, \"pending precision fix\")}'
+                '}',
+            ),
+            self.fixture.tests_root,
+        )
+        after = parity_report.build_report(
+            _registration("PaintingFill", '\"painting/fill\"'), self.fixture.tests_root
+        )
+
+        self.assertEqual([case["path"] for case in before["cases"]],
+                         [case["path"] for case in after["cases"]])
+        self.assertEqual(after["summary"]["total_cases"], 3)
+        self.assertEqual(after["summary"]["compare_cases"], 3)
+        self.assertEqual(after["summary"]["skip_cases"], 0)
+        self.assertEqual(after["summary"]["render_only_cases"], 0)
+        self.assertEqual(after["summary"]["pixel_budget_sources"], 0)
+
+    def test_category_budget_sources_and_affected_files_are_separate(self) -> None:
+        self.fixture.add_case("painting/fill/a.svg")
+        self.fixture.add_case("painting/fill/b.svg")
+        report = parity_report.build_report(
+            _registration(
+                "PaintingFill",
+                '\"painting/fill\", {}, Params::WithThreshold(0.1f, 200, \"category budget\")',
+            ),
+            self.fixture.tests_root,
+        )
+
+        self.assertEqual(report["summary"]["pixel_budget_sources"], 1)
+        self.assertEqual(report["summary"]["effective_pixel_budget_cases"], 2)
+
+    def test_shared_goldens_do_not_imply_backend_specific_goldens(self) -> None:
+        self.fixture.add_case("painting/fill/shared.svg")
+        report = parity_report.build_report(
+            _registration(
+                "PaintingFill",
+                '\"painting/fill\", {{\"shared.svg\", Params::WithGoldenOverride(\"shared.png\")}}',
+            ),
+            self.fixture.tests_root,
+        )
+
+        self.assertEqual(report["cases"][0]["exception_types"], ["shared_golden"])
+        self.assertEqual(report["summary"]["shared_golden_cases"], 1)
+        self.assertEqual(report["summary"]["geode_golden_cases"], 0)
+
     def test_cli_resolves_explicit_repo_root_independent_of_cwd(self) -> None:
         self.fixture.add_case("painting/fill/a.svg")
         source_path = self.fixture.root / parity_report.REGISTRATION_SOURCE
@@ -283,49 +342,53 @@ class ParityReportTests(unittest.TestCase):
 
 
 class RealTreeParityReportTests(unittest.TestCase):
-    def test_current_source_facts(self) -> None:
+    def test_current_corpus_is_fully_registered_and_consistently_reported(self) -> None:
         repo_root = parity_report._default_repo_root()
         self.assertTrue(
             (repo_root / parity_report.REGISTRATION_SOURCE).is_file(),
             "registration source is missing from the Bazel runfiles tree",
         )
+        tests_root = repo_root / parity_report.TESTS_ROOT
         self.assertTrue(
-            (repo_root / parity_report.TESTS_ROOT).is_dir(),
+            tests_root.is_dir(),
             "vendored resvg corpus is missing from the Bazel runfiles tree",
         )
 
         report = parity_report.generate_report(repo_root)
+        cases = report["cases"]
         summary = report["summary"]
+        vendored_paths = {path.relative_to(tests_root).as_posix()
+                          for path in tests_root.rglob("*.svg")}
+        reported_paths = [case["path"] for case in cases]
 
-        self.assertEqual(summary["total_cases"], 1679)
-        self.assertEqual(summary["active_cases"], 1679)
+        self.assertEqual(set(reported_paths), vendored_paths)
+        self.assertEqual(len(reported_paths), len(vendored_paths), "duplicate reported SVG paths")
+        self.assertEqual({case["registration"] for case in cases}, {"active"})
+        self.assertEqual(report["source"]["disabled_categories"], [])
+        self.assertEqual(summary["total_cases"], len(vendored_paths))
+        self.assertEqual(summary["active_cases"], len(cases))
         self.assertEqual(summary["disabled_cases"], 0)
-        # Five fewer skips than before textPath geometry sources and layout options landed.
-        # link-to-rect.svg, with-path.svg, and with-path-and-xlink-href.svg now compare against
-        # their vendored references; spacing=auto.svg compares against a shared golden, which is
-        # also the one added shared-golden case; side=right.svg compares under one added pixel
-        # budget source. Two more drop out with clip-path and mask on a tspan applied.
-        self.assertEqual(summary["skip_cases"], 123)
-        self.assertEqual(summary["render_only_cases"], 78)
-        # The pixelmatch-cpp17 2.0 migration (checkerboard transparency, OKLab metric) added 32
-        # threshold sources: 10 recalibrated modest cases plus 22 large-diff cases that expose
-        # pre-existing filter-math and background-convention alpha deltas; see
-        # donner/svg/renderer/tests/README_pixelmatch_2.md.
-        self.assertEqual(summary["pixel_budget_sources"], 131)
-        self.assertEqual(summary["effective_pixel_budget_cases"], 153)
-        # Two text/font-family cases carry a simple-text-only budget: Source Sans Pro kerns through
-        # GPOS, which the stb_truetype backend does not read, so only that tier needs an allowance.
-        self.assertEqual(summary["simple_text_pixel_budget_cases"], 4)
-        self.assertEqual(summary["shared_golden_cases"], 37)
-        self.assertEqual(summary["geode_golden_cases"], 4)
-        self.assertEqual(summary["backend_disabled_cases"], 0)
 
-        on_tspan = next(
-            case for case in report["cases"]
-            if case["path"] == "painting/paint-order/on-tspan.svg"
-        )
-        self.assertIn("shared_golden", on_tspan["exception_types"])
-        self.assertNotIn("geode_golden", on_tspan["exception_types"])
+        states = Counter(case["primary_state"] for case in cases)
+        self.assertLessEqual(set(states), {"compare", "skip", "render-only"})
+        for metric, state in (("compare_cases", "compare"), ("skip_cases", "skip"),
+                              ("render_only_cases", "render-only")):
+            self.assertEqual(summary[metric], states[state], metric)
+        self.assertEqual(sum(states.values()), summary["active_cases"])
+
+        metrics = {
+            "effective_pixel_budget_cases": "threshold",
+            "shared_golden_cases": "shared_golden",
+            "geode_golden_cases": "geode_golden",
+            "geode_pixel_budget_cases": "geode_threshold",
+            "simple_text_pixel_budget_cases": "simple_text_threshold",
+            "text_full_gated_cases": "text_full_gate",
+        }
+        for metric, flag in metrics.items():
+            self.assertEqual(summary[metric],
+                             sum(flag in case["exception_types"] for case in cases), metric)
+        self.assertEqual(summary["backend_disabled_cases"],
+                         sum(bool(case["disabled_backends"]) for case in cases))
 
 
 if __name__ == "__main__":

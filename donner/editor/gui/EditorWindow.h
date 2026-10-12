@@ -40,10 +40,15 @@
 #endif
 
 #include "donner/base/Vector2.h"
+#include "donner/gpu/DeviceLost.h"
 #include "donner/svg/renderer/RendererInterface.h"
 
 struct GLFWwindow;
 struct ImFont;
+
+namespace donner::gpu {
+class Device;
+}
 
 /// GLFW-compatible callback for horizontal and vertical scroll offsets.
 using GLFWscrollfun = void (*)(GLFWwindow*, double, double);
@@ -594,6 +599,54 @@ private:
   std::deque<Fence> pending_;
   Fence completed_;
 };
+
+/// Immutable first observation of settled presentation-device loss diagnostics.
+struct PresentationDeviceLossRecord {
+  using Clock = std::chrono::steady_clock;
+
+  /// Expensive owner-thread details acquired only for the first settled loss.
+  struct Observation {
+    Clock::time_point observedAt;
+    std::uint64_t completedSerial = 0;
+    std::uint64_t submittedSerial = 0;
+    std::uint64_t oldestSerial = 0;
+    RcString browserReason;
+  };
+
+  bool observed = false;              //!< Whether a settled loss has been retained.
+  gpu::DeviceLossSnapshot loss;       //!< Attribution published by the winning declaration.
+  Clock::time_point observedAt;       //!< First observation time, not physical loss time.
+  std::uint64_t completedSerial = 0;  //!< Runtime completion at first observation.
+  std::uint64_t submittedSerial = 0;  //!< Last submitted serial at first observation.
+  std::uint64_t oldestSerial = 0;     //!< Oldest presentation serial at first observation.
+  RcString browserReason;  //!< Browser-retained reason, empty for non-browser/explicit loss.
+
+  /// Retains the first settled loss and rejects healthy, provisional, and repeated observations.
+  template <typename ObservationProvider>
+    requires std::invocable<ObservationProvider&> &&
+             std::same_as<std::invoke_result_t<ObservationProvider&>, Observation>
+  bool observe(const gpu::DeviceLossSnapshot& candidate, ObservationProvider&& provider) {
+    if (observed || !candidate.lost || !candidate.attributionSettled) {
+      return false;
+    }
+    Observation details = std::invoke(provider);
+    observed = true;
+    loss = candidate;
+    observedAt = details.observedAt;
+    completedSerial = details.completedSerial;
+    submittedSerial = details.submittedSerial;
+    oldestSerial = details.oldestSerial;
+    browserReason = std::move(details.browserReason);
+    return true;
+  }
+};
+
+inline constexpr std::size_t kMaximumPresentationDeviceLossReasonBytes = 1024;
+
+/// Copies a browser loss reason into the bounded payload retained for failure evidence.
+inline std::string BoundedPresentationDeviceLossReason(std::string_view reason) {
+  return std::string(reason.substr(0, kMaximumPresentationDeviceLossReasonBytes - 1));
+}
 }  // namespace internal
 
 /// Derive UI scaling from window size, framebuffer size, and the platform content scale hint.
@@ -738,6 +791,15 @@ using WgpuDirectRenderCallback = std::function<void(const EditorWindowWgpuRender
 /// means we can't easily have two at once.
 class EditorWindow {
 public:
+  /// Stable document identity committed only after a complete framebuffer presentation.
+  struct PresentedDocumentFrameIdentity {
+    std::uint64_t documentGeneration = 0;  //!< Document lifetime rendered into the frame.
+    std::uint64_t frameVersion = 0;        //!< Committed document mutation version.
+    std::uint64_t captureId = 0;           //!< Immutable renderer capture.
+
+    bool operator==(const PresentedDocumentFrameIdentity&) const = default;
+  };
+
   /// Create and initialize a host window with the requested settings.
   /// @param options Window title, dimensions, and UI configuration.
   explicit EditorWindow(EditorWindowOptions options = {});
@@ -821,6 +883,11 @@ public:
   ///
   /// On Emscripten, sets the atomic gate consumed by the next browser animation frame.
   void wakeEventLoop();
+
+  /// Monotonic count of event-loop wake requests, for bounded scheduling regressions.
+  [[nodiscard]] std::uint64_t wakeEventLoopRequestSerialForTesting() const {
+    return wakeEventLoopRequestSerial_.load(std::memory_order_acquire);
+  }
 
 #ifdef __EMSCRIPTEN__
   /// Consume one Wasm main-frame request posted by editor or worker code.
@@ -946,9 +1013,42 @@ public:
   /// The callback renders above the document underlay and below ImGui UI.
   void setWgpuDirectRenderCallback(WgpuDirectRenderCallback callback);
   /// Bind both GPU passes and completion diagnostics to this sealed document frame.
-  /// @param frameId Presentation frame. @param captureId Paired raster capture.
+  /// @param frameId Presentation frame.
+  /// @param captureId Paired raster capture.
+  /// @param documentGeneration Document lifetime captured by the renderer.
+  /// @param frameVersion Committed document mutation version in the capture.
+  /// @param inputRepresented Whether pointer input is represented by the frame.
+  /// @param viewportZoom Viewport zoom sealed with the frame.
   void setPresentationFrameIdentity(std::uint64_t frameId, std::uint64_t captureId,
+                                    std::uint64_t documentGeneration, std::uint64_t frameVersion,
                                     bool inputRepresented, double viewportZoom);
+
+  /// Last document frame whose underlay and UI were successfully presented together.
+  [[nodiscard]] std::optional<PresentedDocumentFrameIdentity> lastFullyPresentedDocumentFrame()
+      const {
+    return lastFullyPresentedDocumentFrame_;
+  }
+
+  /// Invalidate acknowledgement owned by a previous document-presentation producer.
+  void clearLastFullyPresentedDocumentFrame() {
+    lastFullyPresentedDocumentFrame_.reset();
+    pendingPresentedDocumentWake_.reset();
+  }
+
+  /// Request one event-loop wake after @p identity is fully presented.
+  void requestWakeAfterPresentedDocument(PresentedDocumentFrameIdentity identity) {
+    pendingPresentedDocumentWake_ = identity;
+  }
+
+  /// Number of identity-bound presentation wakes committed, for scheduling regressions.
+  [[nodiscard]] std::uint64_t presentedDocumentWakeSerialForTesting() const {
+    return presentedDocumentWakeSerial_.load(std::memory_order_acquire);
+  }
+
+  /// Whether presentation-bound demand is currently armed, for scheduling regressions.
+  [[nodiscard]] bool hasPendingPresentedDocumentWakeForTesting() const {
+    return pendingPresentedDocumentWake_.has_value();
+  }
 
   /// Substitute completion observation while driving the real framebuffer test path.
   /// @param probe Completed submission serial reported to the presentation scheduler.
@@ -959,6 +1059,14 @@ public:
   void setPresentationCompletionProbeForTesting(std::function<std::uint64_t()> probe) {
     presentationCompletionProbeForTesting_ = std::move(probe);
   }
+
+  /// First settled presentation loss retained by the real frame path.
+  const internal::PresentationDeviceLossRecord& presentationDeviceLossForTesting() const {
+    return presentationDeviceLoss_;
+  }
+
+  /// Drives the same timeout declaration and immediate diagnostic observation as production.
+  void declarePresentationTimeoutLossForTesting(std::chrono::milliseconds age);
 
   /**
    * Test seam: bounds how long \ref donner::editor::gui::EditorWindow::endFrameAndReadPixels
@@ -984,6 +1092,7 @@ private:
 
   /// Releases the native window and its process-wide GLFW claim after GPU surface retirement.
   void closeWindow();
+  void wakeEventLoopForPresentedDocument();
 
 #ifdef DONNER_EDITOR_WGPU
   /// Selects this window's runtime root and settles its presentation format before pipelines.
@@ -1102,13 +1211,16 @@ private:
   bool valid_ = false;
   bool glUnavailable_ = false;
   bool imguiInitialized_ = false;
+  std::atomic<std::uint64_t> wakeEventLoopRequestSerial_{0};
 #ifdef __EMSCRIPTEN__
   /// Cross-thread wake gate for the event-driven Wasm main loop.
   std::atomic_bool wasmFrameRequested_{true};
 #endif
 #ifdef DONNER_EDITOR_WGPU
   bool observePresentationCompletion();
-  bool hasUsableFrameTarget(int width, int height) const;
+  void observePresentationDeviceLoss(gpu::Device& device);
+  void declarePresentationTimeoutLoss(gpu::Device& device, std::chrono::milliseconds age);
+  bool hasUsableFrameTarget(int width, int height);
   bool admitFrameSubmission(bool requestedReadback);
   internal::PresentationSubmissionQueue presentationSubmissions_;
   bool presentationWasDeferred_ = false;
@@ -1116,12 +1228,17 @@ private:
   std::uint64_t coalescedPresentationFrames_ = 0;
   std::uint64_t presentationTimeoutSerial_ = 0;
   std::chrono::milliseconds presentationTimeoutAge_{};
+  internal::PresentationDeviceLossRecord presentationDeviceLoss_;
   std::uint64_t presentationCompletionConfirmations_ = 0;
   std::uint64_t presentationFrameId_ = 0;
   std::uint64_t presentationCaptureId_ = 0;
   internal::PresentationSubmissionQueue::Fence presentationInputStamp_;
+  PresentedDocumentFrameIdentity presentationDocumentIdentity_;
   std::function<std::uint64_t()> presentationCompletionProbeForTesting_;
 #endif
+  std::optional<PresentedDocumentFrameIdentity> lastFullyPresentedDocumentFrame_;
+  std::optional<PresentedDocumentFrameIdentity> pendingPresentedDocumentWake_;
+  std::atomic<std::uint64_t> presentedDocumentWakeSerial_{0};
 };
 
 }  // namespace donner::editor::gui
