@@ -104,6 +104,39 @@ TEST_F(LayoutSystemTest, ViewportNestedSvgWithComputedComponents) {
               BoxEq(Vector2i(0, 0), Vector2i(100, 100)));
 }
 
+TEST_F(LayoutSystemTest, NestedSvgOmittedDimensionsUseParentViewportWithViewBox) {
+  auto document = ParseSVG(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="200" height="200">
+      <svg x="20" y="30" width="100" height="120">
+        <svg id="implicit" viewBox="0 0 200 100"><rect id="content" width="200" height="100"/></svg>
+        <svg id="percent" width="100%" height="100%" viewBox="0 0 200 100"/>
+        <svg id="explicit" width="200" height="100" viewBox="0 0 200 100"/>
+      </svg>
+    </svg>
+  )svg");
+  ParseWarningSink warnings;
+  layoutSystem.instantiateAllComputedComponents(document.registry(), warnings);
+  EXPECT_FALSE(warnings.hasWarnings());
+
+  const auto implicit = document.querySelector("#implicit")->entityHandle();
+  const auto percent = document.querySelector("#percent")->entityHandle();
+  const auto explicitSize = document.querySelector("#explicit")->entityHandle();
+  const Transform2d parentFromContent =
+      Transform2d::Scale({0.5, 0.5}) * Transform2d::Translate({0, 35});
+  const Transform2d implicitElementFromContent =
+      layoutSystem.getEntityContentFromEntityTransform(implicit);
+  EXPECT_THAT(layoutSystem.clipRect(implicit),
+              testing::Optional(BoxEq(Vector2d(0, 0), Vector2d(100, 120))));
+  EXPECT_THAT(implicitElementFromContent, TransformEq(parentFromContent));
+  EXPECT_THAT(layoutSystem.getEntityContentFromEntityTransform(percent),
+              TransformEq(parentFromContent));
+  EXPECT_THAT(layoutSystem.getEntityContentFromEntityTransform(explicitSize),
+              TransformEq(Transform2d()));
+  EXPECT_THAT(
+      layoutSystem.getEntityFromWorldTransform(document.querySelector("#content")->entityHandle()),
+      TransformEq(Transform2d::Scale({0.5, 0.5}) * Transform2d::Translate({20, 65})));
+}
+
 TEST_F(LayoutSystemTest, ViewportPattern) {
   auto document = ParseSVG(R"(
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
