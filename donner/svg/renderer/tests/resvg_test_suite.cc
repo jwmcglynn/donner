@@ -621,7 +621,6 @@ INSTANTIATE_TEST_SUITE_P(
                     {"with-image.svg",
                      Params::WithThreshold(0.1f, kDefaultMismatchedPixels,
                                            "Mask with <image> (bilinear edge diffs)")},
-
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
