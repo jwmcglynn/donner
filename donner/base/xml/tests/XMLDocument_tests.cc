@@ -4353,4 +4353,242 @@ TEST(XMLDocument, SetSourceClearsDeclaredDoctypeInternalSubset) {
   EXPECT_FALSE(doc.declaresDoctypeInternalSubset());
 }
 
+//
+// Public source-store limits: rejected structured edits remain retryable.
+//
+
+namespace {
+
+template <typename Edit>
+ApplySourceEditResult RetryAfterAnchorWorkRejection(XMLDocument& doc, std::string_view diagnostic,
+                                                    Edit edit) {
+  XMLSourceStore* store = doc.sourceStore();
+  EXPECT_THAT(store, NotNull());
+  if (!store) {
+    return {};
+  }
+  const auto originalLimits = store->resourceLimits();
+  const auto initialStats = store->resourceStats();
+  EXPECT_GT(initialStats.liveAnchorCount, 0u);
+  auto limits = originalLimits;
+  limits.maximumAnchorUpdateWorkPerEdit = 0;
+  EXPECT_TRUE(store->setResourceLimits(limits));
+  const std::string sourceBefore(doc.source());
+  const RcString treeBefore = doc.root().serializeToString();
+  const auto versionBefore = doc.sourceVersion();
+
+  const ApplySourceEditResult rejected = edit();
+  EXPECT_FALSE(rejected.applied);
+  EXPECT_THAT(rejected, DiagnosticReasonContains(diagnostic));
+  EXPECT_THAT(rejected.sourceDeltas, IsEmpty());
+  EXPECT_THAT(rejected.mutations, IsEmpty());
+  EXPECT_EQ(doc.source(), sourceBefore);
+  EXPECT_EQ(doc.root().serializeToString(), treeBefore);
+  EXPECT_EQ(doc.sourceVersion(), versionBefore);
+  EXPECT_THAT(doc.sourceDiagnostic(), Eq(std::nullopt));
+  const auto rejectedStats = store->resourceStats();
+  EXPECT_EQ(rejectedStats.liveAnchorCount, initialStats.liveAnchorCount);
+  EXPECT_EQ(rejectedStats.totalCreatedAnchors, initialStats.totalCreatedAnchors);
+  EXPECT_EQ(rejectedStats.totalRetiredAnchors, initialStats.totalRetiredAnchors);
+  EXPECT_EQ(rejectedStats.totalAnchorUpdateWork, initialStats.totalAnchorUpdateWork);
+  EXPECT_EQ(rejectedStats.anchorUpdateWorkRejections, initialStats.anchorUpdateWorkRejections + 1);
+
+  EXPECT_TRUE(store->setResourceLimits(originalLimits));
+  ApplySourceEditResult recovered = edit();
+  EXPECT_TRUE(recovered.applied);
+  EXPECT_THAT(recovered.diagnostic, Eq(std::nullopt));
+  EXPECT_GT(doc.sourceVersion(), versionBefore);
+  EXPECT_THAT(doc.sourceDiagnostic(), Eq(std::nullopt));
+  return recovered;
+}
+
+}  // namespace
+
+TEST_F(XMLDocumentTests, AttributeValueEditRetriesAfterAnchorWorkRejection) {
+  XMLDocument doc = ParseDocument(R"(<root label='old' keep="yes"/>)");
+  XMLNode root = *doc.root().firstChild();
+  const auto location = root.getAttributeSourceLocation("label");
+  const auto result = RetryAfterAnchorWorkRejection(doc, "attribute value", [&] {
+    const auto edited = doc.setAttribute(root, "label", "new & 'quoted'");
+    if (!edited.applied) {
+      EXPECT_THAT(root.getAttribute("label"), Optional(Eq("old")));
+      EXPECT_EQ(root.getAttributeSourceLocation("label"), location);
+    }
+    return edited;
+  });
+  EXPECT_EQ(doc.source(), R"(<root label='new &amp; &apos;quoted&apos;' keep="yes"/>)");
+  EXPECT_THAT(root.getAttribute("label"), Optional(Eq("new & 'quoted'")));
+  EXPECT_THAT(root.getAttribute("keep"), Optional(Eq("yes")));
+  EXPECT_THAT(MutationKinds(result), testing::ElementsAre(XMLMutation::Kind::AttributeSet));
+  ASSERT_EQ(result.sourceDeltas.size(), 1u);
+}
+
+TEST_F(XMLDocumentTests, AttributeInsertionRetriesAfterAnchorWorkRejection) {
+  XMLDocument doc = ParseDocument("<root/>");
+  XMLNode root = *doc.root().firstChild();
+  const auto result = RetryAfterAnchorWorkRejection(doc, "attribute insertion", [&] {
+    const auto edited = doc.setAttribute(root, "label", "a & b");
+    if (!edited.applied) {
+      EXPECT_FALSE(root.hasAttribute("label"));
+    }
+    return edited;
+  });
+  EXPECT_EQ(doc.source(), R"(<root label="a &amp; b"/>)");
+  EXPECT_THAT(root.getAttribute("label"), Optional(Eq("a & b")));
+  EXPECT_THAT(root.getAttributeSourceLocation("label"), testing::Ne(std::nullopt));
+  EXPECT_THAT(MutationKinds(result), testing::ElementsAre(XMLMutation::Kind::AttributeSet));
+}
+
+TEST_F(XMLDocumentTests, AttributeRemovalRetriesAfterAnchorWorkRejection) {
+  XMLDocument doc = ParseDocument(R"(<root label="old" keep="yes"/>)");
+  XMLNode root = *doc.root().firstChild();
+  const auto result = RetryAfterAnchorWorkRejection(
+      doc, "attribute removal", [&] { return doc.removeAttribute(root, "label"); });
+  EXPECT_EQ(doc.source(), R"(<root keep="yes"/>)");
+  EXPECT_FALSE(root.hasAttribute("label"));
+  EXPECT_THAT(root.getAttribute("keep"), Optional(Eq("yes")));
+  EXPECT_THAT(MutationKinds(result), testing::ElementsAre(XMLMutation::Kind::AttributeRemoved));
+}
+
+TEST_F(XMLDocumentTests, SubtreeRemovalRetriesAfterAnchorWorkRejection) {
+  XMLDocument doc = ParseDocument("<root><branch><leaf/></branch><keep/></root>");
+  XMLNode root = *doc.root().firstChild();
+  XMLNode branch = *root.firstChild();
+  XMLNode leaf = *branch.firstChild();
+  const auto result = RetryAfterAnchorWorkRejection(doc, "node removal", [&] {
+    const auto edited = doc.removeNode(branch);
+    if (!edited.applied) {
+      EXPECT_THAT(root.firstChild(), Optional(Eq(branch)));
+      EXPECT_THAT(leaf.parentElement(), Optional(Eq(branch)));
+      EXPECT_TRUE(leaf.getNodeLocation().has_value());
+    }
+    return edited;
+  });
+  EXPECT_EQ(doc.source(), "<root><keep/></root>");
+  EXPECT_THAT(branch.parentElement(), Eq(std::nullopt));
+  EXPECT_THAT(branch.getNodeLocation(), Eq(std::nullopt));
+  EXPECT_THAT(leaf.getNodeLocation(), Eq(std::nullopt));
+  EXPECT_THAT(branch.firstChild(), Optional(Eq(leaf)));
+  EXPECT_EQ(root.firstChild()->tagName(), XMLQualifiedNameRef("keep"));
+  EXPECT_THAT(MutationKinds(result), testing::ElementsAre(XMLMutation::Kind::NodeRemoved));
+}
+
+TEST_F(XMLDocumentTests, ExistingTextRetriesAfterAnchorWorkRejection) {
+  XMLDocument doc = ParseDocument("<text>old</text>");
+  XMLNode text = *doc.root().firstChild();
+  const auto result = RetryAfterAnchorWorkRejection(
+      doc, "text content", [&] { return doc.setElementText(text, "new & <text>"); });
+  EXPECT_EQ(doc.source(), "<text>new &amp; &lt;text&gt;</text>");
+  EXPECT_THAT(text.value(), Optional(Eq("new & <text>")));
+  EXPECT_THAT(MutationKinds(result), testing::ElementsAre(XMLMutation::Kind::NodeValueChanged));
+}
+
+TEST_F(XMLDocumentTests, EmptyElementTextRetriesAfterAnchorWorkRejection) {
+  for (std::string_view source : {"<text/>", "<text></text>"}) {
+    SCOPED_TRACE(source);
+    XMLDocument doc = ParseDocument(source);
+    XMLNode text = *doc.root().firstChild();
+    const auto result = RetryAfterAnchorWorkRejection(
+        doc, "text content", [&] { return doc.setElementText(text, "hello"); });
+    EXPECT_EQ(doc.source(), "<text>hello</text>");
+    EXPECT_THAT(text.value(), Optional(Eq("hello")));
+    ASSERT_TRUE(text.getValueLocation().has_value());
+    ExpectSourceRangeOffsets(*text.getValueLocation(), 6, 11);
+    EXPECT_THAT(MutationKinds(result), testing::ElementsAre(XMLMutation::Kind::NodeValueChanged));
+  }
+}
+
+TEST_F(XMLDocumentTests, NodeInsertionRetriesAfterAnchorWorkRejection) {
+  XMLDocument doc = ParseDocument("<root/>");
+  XMLNode root = *doc.root().firstChild();
+  XMLNode branch = XMLNode::CreateElementNode(doc, "branch");
+  XMLNode leaf = XMLNode::CreateElementNode(doc, "leaf");
+  branch.appendChild(leaf);
+  const auto result = RetryAfterAnchorWorkRejection(doc, "node insertion",
+                                                    [&] { return doc.insertNode(root, branch); });
+  EXPECT_EQ(doc.source(), "<root><branch><leaf/></branch></root>");
+  EXPECT_THAT(root.firstChild(), Optional(Eq(branch)));
+  EXPECT_THAT(branch.firstChild(), Optional(Eq(leaf)));
+  EXPECT_TRUE(branch.getNodeLocation().has_value());
+  EXPECT_TRUE(leaf.getNodeLocation().has_value());
+  EXPECT_THAT(MutationKinds(result), testing::ElementsAre(XMLMutation::Kind::NodeInserted));
+}
+
+TEST_F(XMLDocumentTests, NodeMovesInBothDirectionsRetryAfterAnchorWorkRejection) {
+  for (bool forward : {false, true}) {
+    SCOPED_TRACE(forward);
+    XMLDocument doc =
+        ParseDocument(forward ? "<root><move/><host/></root>" : "<root><host/><move/></root>");
+    XMLNode root = *doc.root().firstChild();
+    XMLNode moved = ElementChild(root, forward ? 0 : 1);
+    XMLNode host = ElementChild(root, forward ? 1 : 0);
+    const auto result = RetryAfterAnchorWorkRejection(
+        doc, forward ? "source removal for node move" : "source replacement for node move", [&] {
+          const auto edited = doc.insertNode(host, moved);
+          if (!edited.applied) {
+            EXPECT_THAT(moved.parentElement(), Optional(Eq(root)));
+            EXPECT_FALSE(host.firstChild().has_value());
+          }
+          return edited;
+        });
+    EXPECT_EQ(doc.source(), "<root><host><move/></host></root>");
+    EXPECT_THAT(moved.parentElement(), Optional(Eq(host)));
+    EXPECT_THAT(host.firstChild(), Optional(Eq(moved)));
+    EXPECT_EQ(result.sourceDeltas.size(), 2u);
+    EXPECT_THAT(MutationKinds(result), testing::ElementsAre(XMLMutation::Kind::NodeRemoved,
+                                                            XMLMutation::Kind::NodeInserted));
+  }
+}
+
+TEST_F(XMLDocumentTests, SourceCapacityRejectsGrowthButAllowsExactFitAndShrinking) {
+  XMLDocument doc = ParseDocument(R"(<root label="old"/>)");
+  XMLNode root = *doc.root().firstChild();
+  auto limits = doc.sourceStore()->resourceLimits();
+  limits.maximumSourceSize = doc.source().size();
+  ASSERT_TRUE(doc.sourceStore()->setResourceLimits(limits));
+  const auto version = doc.sourceVersion();
+  const auto rejected = doc.setAttribute(root, "label", "longer");
+  EXPECT_FALSE(rejected.applied);
+  EXPECT_THAT(rejected, DiagnosticReasonContains("attribute value"));
+  EXPECT_THAT(rejected.sourceDeltas, IsEmpty());
+  EXPECT_THAT(rejected.mutations, IsEmpty());
+  EXPECT_EQ(doc.sourceVersion(), version);
+  EXPECT_EQ(doc.source(), R"(<root label="old"/>)");
+  EXPECT_THAT(root.getAttribute("label"), Optional(Eq("old")));
+  EXPECT_TRUE(doc.setAttribute(root, "label", "new").applied);
+  EXPECT_EQ(doc.source().size(), limits.maximumSourceSize);
+  EXPECT_THAT(root.getAttribute("label"), Optional(Eq("new")));
+  EXPECT_TRUE(doc.removeAttribute(root, "label").applied);
+  EXPECT_EQ(doc.source(), "<root/>");
+  EXPECT_THAT(doc.sourceDiagnostic(), Eq(std::nullopt));
+}
+
+TEST_F(XMLDocumentTests, InsertNodeReconcilesAdjacentPublicDataChildrenIntoTextValue) {
+  XMLDocument doc = ParseDocument("<root/>");
+  XMLNode root = *doc.root().firstChild();
+  XMLNode text = XMLNode::CreateElementNode(doc, "text");
+  XMLNode first = XMLNode::CreateDataNode(doc, "a & ");
+  XMLNode second = XMLNode::CreateDataNode(doc, "b");
+  text.appendChild(first);
+  text.appendChild(second);
+
+  const auto result = doc.insertNode(root, text);
+
+  ASSERT_TRUE(result.applied);
+  EXPECT_THAT(result.diagnostic, Eq(std::nullopt));
+  EXPECT_EQ(doc.source(), "<root><text>a &amp; b</text></root>");
+  EXPECT_THAT(root.firstChild(), Optional(Eq(text)));
+  EXPECT_THAT(text.value(), Optional(Eq("a & b")));
+  EXPECT_FALSE(text.firstChild().has_value());
+  EXPECT_THAT(first.parentElement(), Eq(std::nullopt));
+  EXPECT_THAT(second.parentElement(), Eq(std::nullopt));
+  ASSERT_TRUE(text.getValueLocation().has_value());
+  const auto range = *text.getValueLocation();
+  ASSERT_TRUE(range.start.offset.has_value());
+  ASSERT_TRUE(range.end.offset.has_value());
+  EXPECT_EQ(doc.source().substr(*range.start.offset, *range.end.offset - *range.start.offset),
+            "a &amp; b");
+  EXPECT_THAT(MutationKinds(result), testing::ElementsAre(XMLMutation::Kind::NodeInserted));
+}
+
 }  // namespace donner::xml
