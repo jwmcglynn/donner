@@ -1361,7 +1361,9 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         for key in ("run", "script", "command"):
             for reference in ("github.event['pull_request']['title']",
                               "github['event']['pull_request'].body",
-                              "github [ 'head_ref' ]", "inputs['message']"):
+                              "github [ 'head_ref' ]", "inputs['message']",
+                              "github.event['pull_request.head.sha']",
+                              "github.event[inputs.event_key]"):
                 with self.subTest(key=key, reference=reference):
                     script = "      - " + key + ": echo ${{ " + reference + " }}\n"
                     self.assertTrue(_untrusted_script_contexts(script))
