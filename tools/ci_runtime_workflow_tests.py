@@ -70,6 +70,7 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         cls.addClassCleanup(cls.executables.cleanup)
         cls.fixture_bin = cls.executables.path
         cls.executables.write("python3", '#!/bin/sh\nexec "$FIXTURE_PYTHON" "$@"\n')
+        cls.executables.write("bash", '#!/bin/sh\nexec /bin/bash "$@"\n')
         (cls.fixture_bin / "shasum_fixture.py").write_text(
             "import hashlib, os, sys, time\n"
             "time.sleep(float(os.environ['FIXTURE_HASH_STARTUP_SECONDS']))\n"
@@ -244,8 +245,45 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
             self.assertIn("steps.test.outcome == 'failure'", body, step)
             self.assertIn("steps.browser_test.outcome == 'failure'", body, step)
         # Other jobs keep their own scheduling.
-        for job in ("macos-self-hosted", "linux", "linux-self-hosted"):
+        for job in ("linux", "linux-self-hosted"):
             self.assertNotIn("launches-browser", self._job_body(job), job)
+
+    def test_self_hosted_browser_tests_run_alone_after_the_suite(self):
+        job = self._job_body("macos-self-hosted")
+        main_test = self._step_body(job, "Test")
+        self.assertIn(
+            "--test_tag_filters=-manual,-perf,-ci-remote-gpu,-launches-browser ", main_test)
+        browser = self._step_body(job, "Test (browser targets)")
+        self.assertLess(job.index("      - name: Test\n"),
+                        job.index("      - name: Test (browser targets)\n"))
+        self.assertLess(job.index("      - name: Test (browser targets)\n"),
+                        job.index("      - name: Test (Geode editor lane)\n"))
+        self.assertIn("id: browser_test", browser)
+        self.assertIn(
+            "if: ${{ !cancelled() && (steps.test.outcome == 'success' || "
+            "steps.test.outcome == 'failure') }}", browser)
+        self.assertIn("--local_test_jobs=1", browser)
+        self.assertIn(
+            "--test_tag_filters=launches-browser,-manual,-perf,-ci-remote-gpu ", browser)
+        self.assertIn("bazelisk --nohome_rc test --config=ci", browser)
+        for phase in (main_test, browser):
+            self.assertIn("$BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS $TARGETS", phase)
+            self.assertNotIn("requires_metal_toolchain", phase)
+        archive = self._step_body(job, "Upload Bazel test failure artifacts")
+        self.assertIn("steps.browser_test.outcome == 'failure'", archive)
+
+    def test_geode_phase_runs_after_a_completed_native_phase_even_if_browser_fails(self):
+        for job_name in ("macos", "macos-self-hosted"):
+            with self.subTest(job=job_name):
+                job = self._job_body(job_name)
+                geode = self._step_body(job, "Test (Geode editor lane)")
+                self.assertIn(
+                    "if: ${{ !cancelled() && (steps.test.outcome == 'success' || "
+                    "steps.test.outcome == 'failure') }}", geode)
+                self.assertNotIn("steps.browser_test.outcome", geode)
+                self.assertLess(job.index("      - name: Test (browser targets)\n"),
+                                job.index("      - name: Test (Geode editor lane)\n"))
+                self.assertIn("$GEODE_EDITOR_TARGETS", geode)
 
     def test_every_test_that_launches_a_browser_is_tagged(self):
         # The hosted browser phase selects by tag, so an untagged browser test would
@@ -1195,6 +1233,33 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
                 self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
                 self.assertFalse((root / "output").exists())
 
+    def _run_heartbeat_fixture(self, wrapper, log, env):
+        return subprocess.run(
+            ["/bin/bash", str(wrapper), str(log), "/bin/bash", "-c", "exit 17"],
+            check=False,
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=5,
+        )
+
+    def test_heartbeat_fixture_ignores_unrelated_inherited_bash(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            wrapper = root / "wrapper.sh"
+            wrapper.write_text(self._heartbeat_script())
+            wrapper.chmod(0o755)
+            ambient = root / "ambient"
+            ambient.mkdir()
+            bash = ambient / "bash"
+            bash.write_text("#!/bin/sh\necho unexpected-inherited-bash >&2\nexit 73\n")
+            bash.chmod(0o755)
+            env = dict(os.environ, PATH=str(ambient) + os.pathsep + os.environ["PATH"],
+                       BAZEL_HEARTBEAT_INTERVAL_SECONDS="300")
+            result = self._run_heartbeat_fixture(wrapper, root / "command.log", env)
+            self.assertEqual(result.returncode, 17, result.stderr)
+            self.assertEqual([], list(root.glob("*.heartbeat-control.*")))
+
     def test_heartbeat_cleanup_is_prompt_without_ps(self):
         """A finished command cannot leave the heartbeat sleeper holding the pipe."""
         job = self._job_body("linux-self-hosted")
@@ -1215,14 +1280,7 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
             env = os.environ.copy()
             env["BAZEL_HEARTBEAT_INTERVAL_SECONDS"] = "300"
 
-            result = subprocess.run(
-                [str(wrapper), str(log), "bash", "-c", "exit 17"],
-                check=False,
-                capture_output=True,
-                text=True,
-                env=env,
-                timeout=5,
-            )
+            result = self._run_heartbeat_fixture(wrapper, log, env)
 
             self.assertEqual(17, result.returncode, result.stderr)
             self.assertEqual([], list(Path(temp_dir).glob("*.heartbeat-control.*")))

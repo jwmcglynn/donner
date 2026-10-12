@@ -1,13 +1,19 @@
 """Tests for release CLI packaging and retained-byte verification."""
 
 import json
+import os
 from pathlib import Path
+import stat
 import subprocess
 import tempfile
 import unittest
 from unittest import mock
 
 from tools import release_cli
+
+
+PROBE_COMPILER = "Ubuntu Clang 18.1.3 (1ubuntu1)"
+RUNNER_CXX = "c++ (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0"
 
 
 class ReleaseCliTest(unittest.TestCase):
@@ -36,21 +42,37 @@ class ReleaseCliTest(unittest.TestCase):
         (self.root / release_cli.LOCKFILE).write_text(self.lock_contents)
         self.binary = Path(self.temporary.name) / "donner-svg"
         self.binary.write_bytes(b"retained CLI bytes\n")
+        self.notice = Path(self.temporary.name) / "notice_cli.txt"
+        self.notice_contents = (
+            release_cli.NOTICE_HEADER + "donner-svg\n" + "=" * 72 + "\n\n" + "-" * 72 +
+            "\nPackage: tiny-skia-cpp\nLicense: BSD-3-Clause\n\nCopyright fixture\n"
+        )
+        self.notice.write_text(self.notice_contents, encoding="utf-8")
         self.artifacts = Path(self.temporary.name) / "artifacts"
+        self.probe = Path(self.temporary.name) / "release_compiler_identity"
+        self._write_probe(f"printf '%s\\n' '{PROBE_COMPILER}'")
+
+    def _write_probe(self, body: str) -> None:
+        """Stand in for //tools/ci:release_compiler_identity with a script."""
+        self.probe.unlink(missing_ok=True)
+        self.probe.write_text(f"#!/bin/sh\n{body}\n", encoding="ascii")
+        self.probe.chmod(self.probe.stat().st_mode | stat.S_IXUSR)
 
     def _package(self, platform: str = "linux-x86-64") -> dict[str, object]:
         real_check_output = subprocess.check_output
 
         def fixture_check_output(command, **kwargs):
+            # The runner's default c++ is not the compiler Bazel uses; it must not be recorded.
             if command == ["c++", "--version"]:
-                return "Test C++ compiler 1.0\n"
+                return RUNNER_CXX + "\n"
             return real_check_output(command, **kwargs)
 
         with mock.patch.object(
             release_cli.subprocess, "check_output", side_effect=fixture_check_output
         ):
             return release_cli.package(
-                root=self.root, binary=self.binary, output=self.artifacts,
+                root=self.root, binary=self.binary, notice=self.notice,
+                compiler_probe=self.probe, output=self.artifacts,
                 platform=platform, commit=self.commit, run_id="123", attempt="2",
             )
 
@@ -65,16 +87,78 @@ class ReleaseCliTest(unittest.TestCase):
             with self.subTest(platform=platform):
                 self.artifacts.mkdir(exist_ok=True)
                 expected = self._package(platform)
-                self.assertEqual(expected["host_cxx_version"], "Test C++ compiler 1.0")
+                self.assertEqual(expected["compiler_version"], PROBE_COMPILER)
                 self.assertEqual(self._verify(platform), expected)
                 binary_name = release_cli.PLATFORMS[platform]
                 self.assertEqual((self.artifacts / binary_name).read_bytes(), self.binary.read_bytes())
+                self.assertEqual(
+                    (self.artifacts / f"{binary_name}.NOTICE.txt").read_bytes(),
+                    self.notice.read_bytes(),
+                )
+                self.assertEqual(expected["schema"], 3)
+                self.assertEqual(expected["notice_sha256"], release_cli.digest(self.notice))
                 self.assertEqual(
                     json.loads((self.artifacts / f"{binary_name}.provenance").read_text()),
                     expected,
                 )
                 for path in self.artifacts.iterdir():
                     path.unlink()
+
+    def test_provenance_records_the_bazel_built_compiler_not_the_runner_cxx(self) -> None:
+        # Bazel builds with CC=clang/CXX=clang++ (.bazelrc), so the runner's default `c++` (GCC on
+        # Ubuntu) is not the compiler of the released binary.
+        provenance = self._package()
+        self.assertEqual(provenance["compiler_version"], PROBE_COMPILER)
+        self.assertNotIn("host_cxx_version", provenance)
+        self.assertNotIn(RUNNER_CXX, json.dumps(provenance))
+        self.assertEqual(self._verify()["compiler_version"], PROBE_COMPILER)
+
+    def test_undeterminable_compiler_fails_closed_before_upload(self) -> None:
+        cases = {
+            "fails": "echo 'clang 18' && exit 1",
+            "no output": "exit 0",
+            "blank line": "echo",
+            "two lines": "echo 'clang 18'; echo 'clang 19'",
+            "URL": "echo 'Clang 21.1.6 (https://example.invalid/llvm.git 0123abc)'",
+            "not ASCII": "printf 'clang \\303\\251\\n'",
+            "too long": "printf '%0300d\\n' 0",
+        }
+        for case, body in cases.items():
+            with self.subTest(case=case):
+                self._write_probe(body)
+                with self.assertRaisesRegex(ValueError, "compiler"):
+                    self._package()
+                self.assertFalse(self.artifacts.exists())
+        self.probe.unlink()
+        with self.assertRaisesRegex(ValueError, "compiler probe is missing"):
+            self._package()
+        self.probe.write_bytes(b"")
+        with self.assertRaisesRegex(ValueError, "compiler probe is missing"):
+            self._package()
+        self.probe.unlink()
+        self.probe.symlink_to(self.binary)
+        with self.assertRaisesRegex(ValueError, "compiler probe is missing"):
+            self._package()
+        self.probe.unlink()
+        self.probe.write_text("#!/bin/sh\necho clang\n", encoding="ascii")
+        os.chmod(self.probe, 0o600)
+        with self.assertRaisesRegex(ValueError, "compiler probe could not run"):
+            self._package()
+        self.assertFalse(self.artifacts.exists())
+
+    def test_previous_schema_with_runner_compiler_is_rejected(self) -> None:
+        self._package()
+        path = self.artifacts / "donner-svg_linux_x86_64.provenance"
+        provenance = json.loads(path.read_text())
+        provenance["schema"] = 2
+        provenance["host_cxx_version"] = provenance.pop("compiler_version")
+        path.write_text(json.dumps(provenance, indent=2) + "\n")
+        with self.assertRaisesRegex(ValueError, "provenance"):
+            self._verify()
+        provenance["schema"] = release_cli.SCHEMA
+        path.write_text(json.dumps(provenance, indent=2) + "\n")
+        with self.assertRaisesRegex(ValueError, "compiler version is missing"):
+            self._verify()
 
     def test_tampered_binary_and_mismatched_run_fail_closed(self) -> None:
         self._package()
@@ -105,10 +189,50 @@ class ReleaseCliTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "incomplete"):
             self._verify()
 
+    def test_changed_missing_or_replaced_notice_fails_closed(self) -> None:
+        self._package()
+        notice = self.artifacts / "donner-svg_linux_x86_64.NOTICE.txt"
+        notice.write_text(self.notice_contents.replace("tiny-skia-cpp", "other"), encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "provenance"):
+            self._verify()
+        notice.write_text(self.notice_contents, encoding="utf-8")
+        self.assertEqual(self._verify()["notice_sha256"], release_cli.digest(self.notice))
+        notice.unlink()
+        with self.assertRaisesRegex(ValueError, "incomplete"):
+            self._verify()
+        notice.symlink_to(self.notice)
+        with self.assertRaisesRegex(ValueError, "symlink"):
+            self._verify()
+
+    def test_package_requires_a_generated_notice_before_upload(self) -> None:
+        cases = {
+            "missing": None,
+            "empty": b"",
+            "not a notice": b"MIT License\n",
+            "no packages": release_cli.NOTICE_HEADER.encode() + b"donner-svg\n",
+            "not UTF-8": release_cli.NOTICE_HEADER.encode() + b"\nPackage: \xff\n",
+            "NUL": release_cli.NOTICE_HEADER.encode() + b"\nPackage: x\n\x00",
+            "too large": release_cli.NOTICE_HEADER.encode() + b"\nPackage: x\n" +
+                         b"x" * release_cli.MAX_NOTICE_BYTES,
+        }
+        for case, contents in cases.items():
+            with self.subTest(case=case):
+                self.notice.unlink(missing_ok=True)
+                if contents is not None:
+                    self.notice.write_bytes(contents)
+                with self.assertRaisesRegex(ValueError, "license notice"):
+                    self._package()
+                self.assertFalse(self.artifacts.exists())
+        self.notice.unlink()
+        self.notice.symlink_to(self.binary)
+        with self.assertRaisesRegex(ValueError, "license notice is missing"):
+            self._package()
+
     def test_package_requires_exact_checkout_and_empty_destination(self) -> None:
         with self.assertRaisesRegex(ValueError, "checkout"):
             release_cli.package(
-                root=self.root, binary=self.binary, output=self.artifacts,
+                root=self.root, binary=self.binary, notice=self.notice,
+                compiler_probe=self.probe, output=self.artifacts,
                 platform="linux-x86-64", commit="a" * 40, run_id="123", attempt="2",
             )
         self._package()
@@ -160,6 +284,20 @@ class ReleaseCliTest(unittest.TestCase):
 
         with mock.patch.object(release_cli.shutil, "copyfile", side_effect=copy_with_changed_lock):
             with self.assertRaisesRegex(ValueError, "non-public"):
+                self._package()
+        self.assertFalse((self.artifacts / "donner-svg_linux_x86_64.provenance").exists())
+
+    def test_copied_notice_is_rechecked_before_artifact_upload(self) -> None:
+        original_copy = release_cli.shutil.copyfile
+
+        def copy_with_truncated_notice(source, destination):
+            if Path(source) == self.notice:
+                Path(destination).write_bytes(b"")
+            else:
+                original_copy(source, destination)
+
+        with mock.patch.object(release_cli.shutil, "copyfile", side_effect=copy_with_truncated_notice):
+            with self.assertRaisesRegex(ValueError, "license notice"):
                 self._package()
         self.assertFalse((self.artifacts / "donner-svg_linux_x86_64.provenance").exists())
 

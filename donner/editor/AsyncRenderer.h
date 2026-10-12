@@ -319,6 +319,8 @@ struct RenderResult {
     double finalSnapshotMs = 0.0;
     /// Time spent copying compositor diagnostics for editor panels.
     double diagnosticsMs = 0.0;
+    /// Browser epoch milliseconds at the UI-thread poll, zero in native builds.
+    double polledAtEpochMs = 0.0;
     /// Time from worker result completion until the UI thread polls it.
     double pollDelayMs = 0.0;
     /// Portion of `pollDelayMs` spent waiting for the UI thread's next frame after the result
@@ -584,6 +586,17 @@ public:
   /// The UI thread must not touch the `Renderer` or mutate the `SVGDocument` while this returns
   /// true.
   [[nodiscard]] bool isBusy() const;
+
+  /**
+   * Like \ref isBusy, and when busy also registers for a wake so a deferring caller need not poll.
+   *
+   * Foreground renders and cancellations wake when they finish, and a staged result woke when it
+   * was staged; the caller opens that gate itself with its next \ref pollResult. Speculative
+   * compositor warmup wakes only for a caller registered here or by \ref cancelInFlight. A caller
+   * that polls results every frame before this check can therefore wait for the next wake instead
+   * of requesting a frame every frame, which would redraw at display rate for the whole render.
+   */
+  [[nodiscard]] bool isBusyWithIdleWake();
 
   /// True only when no document, warmup, or auxiliary preview can observe a changed font store.
   /// Pending results must be consumed before adoption so they retain their original font epoch.
@@ -1039,7 +1052,8 @@ private:
   /// that request cancels this work at the compositor's existing safe points.
   bool pendingCompositorWarmup_ = false;
   bool compositorWarmupActive_ = false;
-  /// A caller deferred document access while warmup owned the write guard. Keep this independent
+  /// A caller deferred document access while warmup owned the write guard, through
+  /// \ref cancelInFlight or \ref isBusyWithIdleWake. Keep this independent
   /// from the cancellation token so a cancel arriving after warmup's final token poll still wakes
   /// the caller at the actual guard-release edge.
   bool compositorWarmupReleaseWakePending_ = false;

@@ -105,6 +105,13 @@ concern; the tag never moves retroactively.
       jobs after a failed preflight.
       Follow the [BCR runbook](../design_docs/0018-bcr_release.md); a manual dispatch on `main`
       can supply missing preflight evidence while it still points to the exact commit.
+- [ ] **Candidate record verified**. Assemble the
+      [immutable release candidate record](../release_candidate.md) for the exact final commit and
+      verify it. Keep the record, its SHA-256 and its retained artifacts together.
+- [ ] **Rollback assets recorded**. In the release tracking issue, write the artifact IDs and
+      digests of the previous healthy marker-bearing docs build and the previous editor package.
+      The candidate record has no slot for them. Confirm that neither expires during the
+      intended rollback window; the editor package is retained for only 30 days.
 
 - [ ] **Create release tag**. Run `git tag -a vX.Y.Z -m "Donner SVG vX.Y.Z"` on the build-report commit.
 - [ ] **Push tag**. Run `git push origin vX.Y.Z`.
@@ -118,9 +125,11 @@ concern; the tag never moves retroactively.
   - Add `Release-Candidate-Preflight: <run-id>/<attempt>` on its own line, using the reviewed
     successful preflight attempt. The Release workflow rejects a missing or ambiguous marker.
   - Attach binary artifacts (e.g., `donner-svg_darwin_arm64`, `donner-svg_linux_x86_64`)
-    through the Release workflow, which verifies and uploads the retained preflight bytes.
+    and their `.NOTICE.txt` license notices through the Release workflow, which verifies and
+    uploads the retained preflight bytes.
 - [ ] **Verify release artifacts**. Check that the GitHub release page shows the correct tag,
-      binaries and `donner-X.Y.Z.tar.gz` with its checksum/provenance are attached, uploaded digests
+      binaries with their `.NOTICE.txt` license notices and `donner-X.Y.Z.tar.gz` with its
+      checksum/provenance are attached, uploaded digests
       match the qualified artifacts, and the release body renders correctly.
 - [ ] **BCR submission checked**. For a stable release, manually dispatch `Prepare BCR submission`
       with the reviewed Release run, source commit and archive SHA-256 to prepare the owned fork
@@ -137,3 +146,24 @@ concern; the tag never moves retroactively.
 - [ ] **Update ProjectRoadmap.md**. Mark the released milestone as "shipped" and update the
       design documents table.
 - [ ] **Announce**. Post to relevant channels.
+
+## Rollback
+
+Only if a published version must be withdrawn. Follow the rollback section of the
+[BCR runbook](../design_docs/0018-bcr_release.md). Each step is a separate explicit maintainer
+decision, and no step builds, deletes or replaces published bytes or edits the candidate record.
+
+- [ ] **Rollback decided and recorded**. Open a `Roll back vX.Y.Z` issue with the reason, the
+      withdrawn candidate record digest and each decision as it is made.
+- [ ] **BCR version handled**. Supersede with `X.Y.(Z+1)` through this checklist, or file an
+      approved PR to `bazelbuild/bazel-central-registry` that adds the version to
+      `yanked_versions` with a reason. Do not yank the latest version until its replacement is
+      published.
+- [ ] **GitHub release marked**. Add a notice with the reason and the replacement to the top of
+      the release notes with `gh release edit --notes-file`. Keep the tag and every asset.
+- [ ] **Docs site reactivated** if needed, by the
+      [documentation rollback procedure](docs_artifact_promotion.md).
+- [ ] **Editor reactivated** if needed. No workflow deploys the editor; verify the previous
+      package's digest and `SHA256SUMS` by hand before it is served.
+- [ ] **Compatibility check passed** for each reactivated build: digest, configuration and
+      health, with results in the rollback issue.

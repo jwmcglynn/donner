@@ -1,5 +1,10 @@
 name: CI
 
+# Keep third-party Bazel module telemetry off, as the telemetry section of .bazelrc explains.
+env:
+  DO_NOT_TRACK: "1"
+  ASPECT_TOOLS_TELEMETRY: "-all"
+
 # Validate PRs targeting main or a dependency branch in a stack.
 on:
   push:
@@ -755,11 +760,13 @@ jobs:
       # the same signature appeared on 2026-07-02 for large coverage uploads).
       # 60s still fast-fails a genuinely dead endpoint.
       BAZEL_SELF_HOSTED_REMOTE_FALLBACK_FLAGS: "--strategy=TestRunner=remote --remote_local_fallback=false --incompatible_remote_local_fallback_for_remote_cache=false --remote_timeout=60s"
-      # Every self-hosted run uploads Bazel profiles + BEP + compact execution
-      # logs so slow runs can be attributed to targets/actions without live
-      # SSH. Keep artifacts small; retention is 3 days. DIAG_DIR is exported
-      # from the first step ($RUNNER_TEMP; the `runner` context is not
-      # available in job-level env).
+      # Every self-hosted run uploads its diagnostics report, Bazel profiles
+      # and any stall note so slow runs can be attributed to targets/actions
+      # without live SSH. The build event and execution logs feed the report
+      # but stay on the runner: they record the host's effective Bazel
+      # configuration, which a public artifact must not carry. Keep artifacts
+      # small; retention is 3 days. DIAG_DIR is exported from the first step
+      # ($RUNNER_TEMP; the `runner` context is not available in job-level env).
       # Build without the Bytes: the runner is a thin remote-execution client on
       # a CPU-capped host. Downloading every toplevel output (unstripped ARM64
       # test binaries) added minutes of pure transfer per run. Tests execute
@@ -1068,7 +1075,13 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: ci-diagnostics-${{ github.job }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/donner-ci-diagnostics/
+          # Derived files only; see the job environment comment above.
+          path: |
+            ${{ runner.temp }}/donner-ci-diagnostics/manifest.txt
+            ${{ runner.temp }}/donner-ci-diagnostics/target-list.txt
+            ${{ runner.temp }}/donner-ci-diagnostics/report.md
+            ${{ runner.temp }}/donner-ci-diagnostics/*/profile.gz
+            ${{ runner.temp }}/donner-ci-diagnostics/*/stall.txt
           retention-days: 3
           if-no-files-found: ignore
 
@@ -1248,6 +1261,7 @@ jobs:
 
       - name: Test (Geode editor lane)
         id: geode_test
+        if: ${{ !cancelled() && (steps.test.outcome == 'success' || steps.test.outcome == 'failure') }}
         shell: bash
         run: |
           set -euo pipefail
@@ -1611,13 +1625,35 @@ jobs:
             exit 1
           fi
           tools/ci_bazel_test.sh bazelisk --nohome_rc test --config=ci --test_output=errors \
-            --test_tag_filters=-manual,-perf,-ci-remote-gpu \
+            --test_tag_filters=-manual,-perf,-ci-remote-gpu,-launches-browser \
             $BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS $TARGETS
         # Deterministic fuzzer corpus replay remains in this Bazel suite. Sanitizer-backed mutation
         # runs nightly or on demand in `.github/workflows/fuzz.yml`.
 
+      # Browser tests share the GPU with native replays and need their own serial phase.
+      - name: Test (browser targets)
+        id: browser_test
+        if: ${{ !cancelled() && (steps.test.outcome == 'success' || steps.test.outcome == 'failure') }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          TARGETS=$(if [[ "${{ needs.determine-targets.outputs.fallback }}" == "true" ]]; then
+            echo "//..."
+          else
+            echo "${{ needs.determine-targets.outputs.affected }}"
+          fi)
+          if [[ -z "${TARGETS// /}" ]]; then
+            echo "::error::Empty target selection reached the browser test step."
+            exit 1
+          fi
+          tools/ci_bazel_test.sh bazelisk --nohome_rc test --config=ci --test_output=errors \
+            --local_test_jobs=1 \
+            --test_tag_filters=launches-browser,-manual,-perf,-ci-remote-gpu \
+            $BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS $TARGETS
+
       - name: Test (Geode editor lane)
         id: geode_test
+        if: ${{ !cancelled() && (steps.test.outcome == 'success' || steps.test.outcome == 'failure') }}
         shell: bash
         run: |
           set -euo pipefail
@@ -1625,7 +1661,7 @@ jobs:
             $BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS $GEODE_EDITOR_TARGETS
 
       - name: Upload Bazel test failure artifacts
-        if: failure() && (steps.metal_profile.outcome == 'failure' || steps.metal_preflight.outcome == 'failure' || steps.test.outcome == 'failure' || steps.geode_test.outcome == 'failure')
+        if: failure() && (steps.metal_profile.outcome == 'failure' || steps.metal_preflight.outcome == 'failure' || steps.test.outcome == 'failure' || steps.browser_test.outcome == 'failure' || steps.geode_test.outcome == 'failure')
         uses: ./.github/actions/upload-bazel-test-artifacts
         with:
           name: bazel-test-failure-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}
