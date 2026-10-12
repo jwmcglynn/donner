@@ -101,31 +101,66 @@ _ConfiguredDepsInfo = provider(fields = ["labels", "linkopts"])
 # product package can ship. Build-only tools stay outside the product closure.
 _CONFIGURED_DEP_ATTRS = ["deps", "implementation_deps", "dep", "actual", "binary", "cc_target", "wasm_deps", "dir", "data", "srcs", "asset_trees", "additional_linker_inputs"]
 
-def _configured_deps_impl(target, ctx):
+def _collect_configured_deps(target, ctx, attrs, info):
     if ctx.rule == None:
-        return [_ConfiguredDepsInfo(labels = depset([target.label]), linkopts = depset())]
+        return [info(labels = depset([target.label]), linkopts = depset())]
 
     direct_labels = [target.label]
     transitive_labels = []
     transitive_linkopts = []
-    for name in _CONFIGURED_DEP_ATTRS:
+    for name in attrs:
         deps = getattr(ctx.rule.attr, name, [])
         if type(deps) != "list":
             deps = [deps] if deps != None else []
         for dep in deps:
             direct_labels.append(dep.label)
-            if _ConfiguredDepsInfo in dep:
-                transitive_labels.append(dep[_ConfiguredDepsInfo].labels)
-                transitive_linkopts.append(dep[_ConfiguredDepsInfo].linkopts)
+            if info in dep:
+                transitive_labels.append(dep[info].labels)
+                transitive_linkopts.append(dep[info].linkopts)
     own_linkopts = [str(target.label) + " " + option for option in getattr(ctx.rule.attr, "linkopts", [])]
-    return [_ConfiguredDepsInfo(
+    return [info(
         labels = depset(direct_labels, transitive = transitive_labels),
         linkopts = depset(own_linkopts, transitive = transitive_linkopts),
     )]
 
+def _configured_deps_impl(target, ctx):
+    return _collect_configured_deps(target, ctx, _CONFIGURED_DEP_ATTRS, _ConfiguredDepsInfo)
+
 _configured_deps = aspect(
     implementation = _configured_deps_impl,
     attr_aspects = _CONFIGURED_DEP_ATTRS,
+)
+
+ShippedClosureInfo = provider(
+    doc = "Labels and linker options in the configured closure of a shipped product.",
+    fields = ["labels", "linkopts"],
+)
+
+# For attributing what a product ships, also follow headers and compiler inputs, an embedded
+# asset's single `src`, the implicit link inputs and linkstamps of C++ rules, and the prebuilt
+# libraries and objects of `cc_import`. Build-only tools still stay outside.
+_SHIPPED_CLOSURE_ATTRS = _CONFIGURED_DEP_ATTRS + [
+    "hdrs",
+    "textual_hdrs",
+    "additional_compiler_inputs",
+    "src",
+    "malloc",
+    "link_extra_lib",
+    "linkstamp",
+    "static_library",
+    "pic_static_library",
+    "shared_library",
+    "interface_library",
+    "objects",
+]
+
+def _shipped_closure_impl(target, ctx):
+    return _collect_configured_deps(target, ctx, _SHIPPED_CLOSURE_ATTRS, ShippedClosureInfo)
+
+shipped_closure_aspect = aspect(
+    implementation = _shipped_closure_impl,
+    attr_aspects = _SHIPPED_CLOSURE_ATTRS,
+    doc = "Collects the configured closure of a shipped product, for its license notice.",
 )
 
 def _configured_dependency_labels_impl(ctx):

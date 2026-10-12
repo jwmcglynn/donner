@@ -1,5 +1,10 @@
 name: Perf
 
+# Keep third-party Bazel module telemetry off, as the telemetry section of .bazelrc explains.
+env:
+  DO_NOT_TRACK: "1"
+  ASPECT_TOOLS_TELEMETRY: "-all"
+
 # Runs wall-clock perf targets on a nightly schedule after checking whether
 # origin/main advanced since the last successful run.
 on:

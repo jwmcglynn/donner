@@ -135,6 +135,20 @@ TEST(RendererSnapshotTests, ReplayingSnapshotPreservesMaskType) {
   driver.draw(snapshot);
 }
 
+TEST(RendererSnapshotTests, ReplayingSnapshotPreservesMaskColorInterpolation) {
+  SVGDocument document = MakeDocument(R"svg(
+    <defs color-interpolation="linearRGB">
+      <mask id="linear"><rect width="8" height="8" fill="#808080" /></mask>
+    </defs>
+    <rect width="8" height="8" fill="green" mask="url(#linear)" />
+  )svg");
+  ::testing::NiceMock<MockRendererInterface> renderer;
+  RendererDriver driver(renderer);
+  RenderSnapshot snapshot = driver.captureRenderSnapshot(document);
+  EXPECT_CALL(renderer, pushMask(_, MaskType::Luminance, ColorInterpolation::LinearRGB)).Times(1);
+  driver.draw(snapshot);
+}
+
 TEST(RendererSnapshotTests, ConcurrentDomMutationsCanCompleteWhileSnapshotReplays) {
   SVGDocument document = MakeDocument(R"svg(
     <rect x="1" y="2" width="8" height="6" fill="red" />

@@ -118,9 +118,11 @@ concern; the tag never moves retroactively.
   - Add `Release-Candidate-Preflight: <run-id>/<attempt>` on its own line, using the reviewed
     successful preflight attempt. The Release workflow rejects a missing or ambiguous marker.
   - Attach binary artifacts (e.g., `donner-svg_darwin_arm64`, `donner-svg_linux_x86_64`)
-    through the Release workflow, which verifies and uploads the retained preflight bytes.
+    and their `.NOTICE.txt` license notices through the Release workflow, which verifies and
+    uploads the retained preflight bytes.
 - [ ] **Verify release artifacts**. Check that the GitHub release page shows the correct tag,
-      binaries and `donner-X.Y.Z.tar.gz` with its checksum/provenance are attached, uploaded digests
+      binaries with their `.NOTICE.txt` license notices and `donner-X.Y.Z.tar.gz` with its
+      checksum/provenance are attached, uploaded digests
       match the qualified artifacts, and the release body renders correctly.
 - [ ] **BCR submission checked**. For a stable release, manually dispatch `Prepare BCR submission`
       with the reviewed Release run, source commit and archive SHA-256 to prepare the owned fork
