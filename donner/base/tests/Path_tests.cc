@@ -3920,22 +3920,26 @@ TEST(Path, QuadraticMarkerAtCoincidentEndControlUsesTheIncomingChord) {
           testing::AllOf(VertexPointIs(Vector2d(5, 7)), VertexOrientationIs(Vector2d(0.6, 0.8)))));
 }
 
-TEST(Path, DegenerateMarkerDirectionNeverBorrowsFromALaterSubpath) {
+TEST(Path, DegenerateMarkerAngleNeverBorrowsFromALaterSubpath) {
   const Path path = PathBuilder()
                         .moveTo({1, 2})
                         .lineTo({1, 2})
                         .lineTo({1, 2})
                         .moveTo({20, 20})
-                        .lineTo({30, 20})
+                        .lineTo({20, 30})
                         .build();
-  EXPECT_THAT(
-      path.vertices(),
-      testing::ElementsAre(
-          testing::AllOf(VertexPointIs(Vector2d(1, 2)), VertexOrientationIs(Vector2d(0, 0))),
-          testing::AllOf(VertexPointIs(Vector2d(1, 2)), VertexOrientationIs(Vector2d(0, 0))),
-          testing::AllOf(VertexPointIs(Vector2d(1, 2)), VertexOrientationIs(Vector2d(0, 0))),
-          testing::AllOf(VertexPointIs(Vector2d(20, 20)), VertexOrientationIs(Vector2d(1, 0))),
-          testing::AllOf(VertexPointIs(Vector2d(30, 20)), VertexOrientationIs(Vector2d(1, 0)))));
+  const std::vector<Path::Vertex> vertices = path.vertices();
+  ASSERT_THAT(vertices, testing::SizeIs(5));
+  EXPECT_THAT(vertices,
+              testing::ElementsAre(VertexPointIs(Vector2d(1, 2)), VertexPointIs(Vector2d(1, 2)),
+                                   VertexPointIs(Vector2d(1, 2)), VertexPointIs(Vector2d(20, 20)),
+                                   VertexPointIs(Vector2d(20, 30))));
+  for (std::size_t index = 0; index < 3; ++index) {
+    SCOPED_TRACE(index);
+    EXPECT_THAT(vertices[index].orientation.angle(), testing::DoubleNear(0, 1e-12));
+  }
+  EXPECT_THAT(vertices[3].orientation, Vector2dNear(Vector2d(0, 1), 1e-12));
+  EXPECT_THAT(vertices[4].orientation, Vector2dNear(Vector2d(0, 1), 1e-12));
 }
 
 TEST(Path, NonFiniteHitQueriesCannotSelectFiniteCurveGeometry) {
