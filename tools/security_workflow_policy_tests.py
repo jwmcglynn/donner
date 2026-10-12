@@ -1316,13 +1316,25 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
     def test_expression_extraction_terminates_and_keeps_adjacent_expressions(self):
         for expression in ("${{ secrets", "${{ 'unterminated }}", "${{ " + "'" * 4096):
             with self.subTest(malformed=expression[:30]):
-                self.assertEqual([], list(_expressions(expression)))
+                with self.assertRaisesRegex(ValueError, "unterminated expression marker"):
+                    list(_expressions(expression))
         text = "${{ format('it''s }}{0}', secrets.GIST_SECRET) }} " \
                "${{ github.event.pull_request.title }}"
         expressions = list(_expressions(text))
         self.assertEqual(2, len(expressions))
         self.assertEqual(" format('it''s }}{0}', secrets.GIST_SECRET) ", expressions[0].group(1))
         self.assertEqual(" github.event.pull_request.title ", expressions[1].group(1))
+
+    def test_unterminated_comment_marker_cannot_hide_a_later_secret_consumer(self):
+        files = self.supply_chain_files
+        path = ".github/workflows/badges.yaml"
+        changed = files[path] + "\n      - name: Unreviewed consumer\n" \
+                  "        # marker ${{ '\n" \
+                  "        uses: example/consumer-action@v1.0.0\n" \
+                  "        with:\n          auth: ${{ secrets.UNREVIEWED_TOKEN }}\n"
+        self.assertNotEqual(changed, files[path])
+        with self.assertRaisesRegex(ValueError, "unterminated expression marker"):
+            _secret_use_violations(_workflows({**files, path: changed}))
 
     def test_only_gated_ci_jobs_reach_self_hosted_runners(self):
         workflows = _workflows(self.supply_chain_files)
