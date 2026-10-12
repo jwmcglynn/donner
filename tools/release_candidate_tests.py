@@ -1,5 +1,6 @@
 """Tests for immutable release-candidate record and retained artifact validation."""
 
+from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 from pathlib import Path
@@ -18,10 +19,23 @@ TREE = "b" * 40
 LOCK_LINUX = "c" * 64
 LOCK_MACOS = "d" * 64
 COMPILERS = {"cli-linux": "clang 21", "cli-macos": "Apple clang 17"}
+NOW = datetime(2026, 10, 12, 12, 0, tzinfo=timezone.utc)
 
 
 def digest(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
+
+
+def github_time(value: datetime) -> str:
+    return value.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+class FrozenDatetime(datetime):
+    """The verifier's clock, fixed so retention windows are deterministic."""
+
+    @classmethod
+    def now(cls, tz=None):
+        return NOW if tz is None else NOW.astimezone(tz)
 
 
 class ZipValidationTest(unittest.TestCase):
@@ -131,6 +145,7 @@ class RecordValidationTest(unittest.TestCase):
             self.metadata[artifact_id] = {
                 "id": artifact_id, "name": self.record["artifacts"][role]["name"],
                 "digest": "sha256:" + candidate._sha256(path), "expired": False,
+                "expires_at": github_time(NOW + timedelta(days=89)),
                 "size_in_bytes": path.stat().st_size,
                 "workflow_run": {"id": run_id, "head_sha": COMMIT, "head_branch": "main",
                                  "repository_id": 1, "head_repository_id": 1},
@@ -139,20 +154,31 @@ class RecordValidationTest(unittest.TestCase):
     def _add_evidence(self):
         for index, (kind, workflow) in enumerate(candidate.EVIDENCE_WORKFLOWS.items(), 201):
             names = [alternatives[0] for alternatives in candidate.REQUIRED_EVIDENCE_JOBS[kind]]
-            data = json.dumps({"passed_jobs": len(names), "skipped_jobs": 0}).encode()
-            (self.root / "evidence" / f"{kind}.json").write_bytes(data)
+            jobs = [{"name": name, "conclusion": "success"} for name in names]
             self.record["evidence"][kind] = {"run_id": index, "attempt": 1,
-                                              "passed_jobs": len(names), "skipped_jobs": 0,
-                                              "sha256": digest(data)}
+                                              "passed_jobs": len(names), "skipped_jobs": 0}
+            self.write_evidence(kind, self.evidence_document(kind, index, jobs))
             self.runs[index] = self.fixture_run(index, workflow)
-            self.jobs[index] = {"total_count": len(names),
-                                "jobs": [{"name": name, "conclusion": "success"} for name in names]}
+            self.jobs[index] = {"total_count": len(names), "jobs": jobs}
+
+    @staticmethod
+    def evidence_document(kind, run_id, jobs):
+        return {"workflow": candidate.EVIDENCE_WORKFLOWS[kind], "run_id": run_id, "attempt": 1,
+                "commit": COMMIT, "jobs": [dict(job) for job in jobs]}
+
+    def write_evidence(self, kind, document):
+        """Write evidence bytes and bind their digest, so only the content rules can reject it."""
+        data = document if isinstance(document, bytes) else json.dumps(document).encode()
+        (self.root / "evidence" / f"{kind}.json").write_bytes(data)
+        self.record["evidence"][kind]["sha256"] = digest(data)
+
+    def write_review(self, kind, data):
+        (self.root / "reviews" / f"{kind}.md").write_bytes(data)
+        self.record["reviews"][kind] = digest(data)
 
     def _add_reviews(self):
         for kind in candidate.REVIEW_NAMES:
-            data = f"{kind} approved\n".encode()
-            (self.root / "reviews" / f"{kind}.md").write_bytes(data)
-            self.record["reviews"][kind] = digest(data)
+            self.write_review(kind, f"# {kind} review\n\nCandidate commit: {COMMIT}\n".encode())
 
     @staticmethod
     def fixture_run(run_id, workflow):
@@ -171,7 +197,8 @@ class RecordValidationTest(unittest.TestCase):
 
     def verify(self):
         with mock.patch.object(candidate, "_verify_source", return_value=(COMMIT, TREE)), \
-             mock.patch.object(candidate, "_verify_payload"):
+             mock.patch.object(candidate, "_verify_payload"), \
+             mock.patch.object(candidate, "datetime", FrozenDatetime, create=True):
             candidate.verify(self.record, self.root / "source", self.root / "artifacts",
                              self.root / "evidence", self.root / "reviews", self.github)
 
@@ -217,6 +244,73 @@ class RecordValidationTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "review report digest differs"):
             self.verify()
 
+    def test_artifacts_must_stay_retained_through_release_and_rollback(self):
+        self.assertEqual(candidate.MIN_REMAINING_RETENTION, timedelta(days=60))
+        for artifact_id, metadata in self.metadata.items():
+            with self.subTest(artifact=metadata["name"]):
+                original = metadata["expires_at"]
+                # Not yet expired is not enough: one day short of the window fails.
+                metadata["expires_at"] = github_time(NOW + timedelta(days=59))
+                with self.assertRaisesRegex(ValueError, "release and rollback window"):
+                    self.verify()
+                for value in (None, "", "next week", "2027-01-01T00:00:00"):
+                    metadata["expires_at"] = value
+                    with self.assertRaisesRegex(ValueError, "release and rollback window"):
+                        self.verify()
+                metadata["expires_at"] = github_time(NOW + timedelta(days=60))
+                self.verify()
+                metadata["expires_at"] = original
+
+    def test_empty_or_unbound_evidence_is_rejected(self):
+        run_id = self.record["evidence"]["ci"]["run_id"]
+        valid = self.evidence_document("ci", run_id, self.jobs[run_id]["jobs"])
+        cases = {
+            "empty": b"",
+            "empty object": {},
+            "not JSON": b"passed\n",
+            "not an object": [valid],
+            "missing jobs": {key: value for key, value in valid.items() if key != "jobs"},
+            "extra field": {**valid, "note": "all green"},
+            "other workflow": {**valid, "workflow": candidate.EVIDENCE_WORKFLOWS["fuzz"]},
+            "other run": {**valid, "run_id": run_id + 1},
+            "other attempt": {**valid, "attempt": 2},
+            "boolean attempt": {**valid, "attempt": True},
+            "other commit": {**valid, "commit": "f" * 40},
+            "no jobs": {**valid, "jobs": []},
+            "failed job": {**valid, "jobs": [{"name": "linux", "conclusion": "failure"},
+                                             {"name": "macos", "conclusion": "success"}]},
+            "missing lane": {**valid, "jobs": [{"name": "linux", "conclusion": "success"}]},
+            "renamed job": {**valid, "jobs": [{"name": "linux", "conclusion": "success"},
+                                              {"name": "macos-self-hosted",
+                                               "conclusion": "success"}]},
+        }
+        for case, document in cases.items():
+            with self.subTest(case=case):
+                self.write_evidence("ci", document)
+                with self.assertRaisesRegex(ValueError, "ci evidence|job counts|execution lane"):
+                    self.verify()
+        self.write_evidence("ci", valid)
+        self.verify()
+
+    def test_empty_or_unbound_review_report_is_rejected(self):
+        cases = {
+            "empty": b"",
+            "whitespace": b" \n\t\n",
+            "no commit": b"# security review\n\nNo findings.\n",
+            "short commit": f"Reviewed {COMMIT[:12]}\n".encode(),
+            "other commit": f"Reviewed {'f' * 40}\n".encode(),
+            "longer hex": f"Reviewed {COMMIT}ab\n".encode(),
+            "not UTF-8": b"Reviewed \xff " + COMMIT.encode() + b"\n",
+            "NUL": f"Reviewed {COMMIT}\n\x00".encode(),
+        }
+        for case, data in cases.items():
+            with self.subTest(case=case):
+                self.write_review("security", data)
+                with self.assertRaisesRegex(ValueError, "security review report"):
+                    self.verify()
+        self.write_review("security", f"Security review of {COMMIT}: no findings.\n".encode())
+        self.verify()
+
     def test_cross_repository_artifact_metadata_is_rejected(self):
         self.metadata[1]["workflow_run"]["head_repository_id"] = 999
         with self.assertRaisesRegex(ValueError, "artifact metadata"):
@@ -248,6 +342,7 @@ class RecordValidationTest(unittest.TestCase):
         ci_id = self.record["evidence"]["ci"]["run_id"]
         self.jobs[ci_id]["jobs"][0]["name"] = "linux-self-hosted"
         self.jobs[ci_id]["jobs"][1]["name"] = "macos-self-hosted"
+        self.write_evidence("ci", self.evidence_document("ci", ci_id, self.jobs[ci_id]["jobs"]))
         self.verify()
 
     def test_coverage_run_without_its_codecov_upload_cannot_qualify(self):
@@ -304,6 +399,31 @@ class SourceAndEditorTest(unittest.TestCase):
             provenance["compiler_version"] = "GCC 13.3.0"
             with self.assertRaisesRegex(ValueError, "compiler differs"):
                 candidate._verify_payload("cli-linux", self.root, entry, record, self.root)
+
+    def test_prerelease_module_version_cannot_be_a_release_candidate(self):
+        subprocess.run(["git", "init", "-q", str(self.root)], check=True)
+        (self.root / ".bazelversion").write_text("8.8.1\n", encoding="utf-8")
+        for version in ("0.8.0-pre", "0.8.0-rc.1", "1.0.0-alpha"):
+            with self.subTest(version=version):
+                (self.root / "MODULE.bazel").write_text(
+                    f'module(name="donner", version="{version}", compatibility_level=1)\n',
+                    encoding="utf-8")
+                subprocess.run(["git", "-C", str(self.root), "add", "--", "MODULE.bazel",
+                                ".bazelversion"], check=True)
+                subprocess.run(["git", "-C", str(self.root), "-c", "user.name=Test",
+                                "-c", "user.email=test@example.com", "commit", "-qm", version],
+                               check=True)
+                source = {
+                    "commit": subprocess.check_output(
+                        ["git", "-C", str(self.root), "rev-parse", "HEAD"], text=True).strip(),
+                    "tree": subprocess.check_output(
+                        ["git", "-C", str(self.root), "rev-parse", "HEAD^{tree}"],
+                        text=True).strip(),
+                    "version": version, "compatibility_level": 1, "bazel_version": "8.8.1",
+                    "module_locks_sha256": {"cli-linux": LOCK_LINUX, "cli-macos": LOCK_MACOS},
+                    "compiler_versions": COMPILERS.copy()}
+                with self.assertRaisesRegex(ValueError, "stable X.Y.Z"):
+                    candidate._verify_source(source, self.root)
 
     def test_editor_manifest_covers_site_deploy_and_lock(self):
         directory = self.root / "package"
