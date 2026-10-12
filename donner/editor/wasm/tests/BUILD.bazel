@@ -32,6 +32,7 @@ playwright_bin.playwright_test(
         "sample-thumbnail-settle.ts",
         "smoke.spec.ts",
         "surface-frame-probe.ts",
+        "surface-probe-requests.mjs",
         ":node_modules/@playwright/test",
         "//donner/editor/wasm:_wasm_web_package_for_serve",
         "@playwright//:chromium",
@@ -106,6 +107,7 @@ playwright_bin.playwright_test(
         "sample-thumbnail-quiescence.mjs",
         "sample-thumbnail-settle.ts",
         "surface-frame-probe.ts",
+        "surface-probe-requests.mjs",
         ":node_modules/@playwright/test",
         ":node_modules/pngjs",
         "//donner/editor/tests:standalone_geode_browser_png_compare",
@@ -159,6 +161,7 @@ playwright_bin.playwright_test(
         "sample-thumbnail-settle.ts",
         "smoke.spec.ts",
         "surface-frame-probe.ts",
+        "surface-probe-requests.mjs",
         ":node_modules/@playwright/test",
         "//donner/editor/wasm:_wasm_web_package_for_serve",
         "@playwright//:chromium",
@@ -446,6 +449,15 @@ js_test(
         "@platforms//cpu:aarch64",
         "@platforms//os:macos",
     ],
+)
+
+js_test(
+    name = "surface_probe_requests_tests",
+    size = "small",
+    copy_data_to_bin = False,
+    data = ["surface-probe-requests.mjs"],
+    entry_point = "surface-probe-requests.spec.mjs",
+    node_options = ["--test"],
 )
 
 js_test(
