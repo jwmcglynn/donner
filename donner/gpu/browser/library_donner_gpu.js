@@ -129,6 +129,17 @@ var LibraryDonnerGpu = {
     surfacePresents: 0,
     completionProgressKicks: 0,
     completionProgressKickMs: 0,
+    // Bounded queue timeline for failure diagnostics, on the epoch clock so a page can align it.
+    timeline: [],
+
+    trace: function(entry) {
+      if (DonnerGpu.timeline.length >= 1024) DonnerGpu.timeline.shift();
+      DonnerGpu.timeline.push(entry);
+    },
+
+    epochMs: function() {
+      return Math.round((performance.timeOrigin + performance.now()) * 10) / 10;
+    },
 
     // The protocol table, in the order BrowserWireCodes.cc builds it. This is the artifact the two
     // halves agree on: donner_gpu_check_protocol compares it element by element against the C++
@@ -276,6 +287,9 @@ var LibraryDonnerGpu = {
         DonnerGpu.logical = new Map();
         DonnerGpu.shares = new Map();
         globalThis["__donnerReadGpuObjectStats"] = DonnerGpu.debugStatistics;
+        globalThis["__donnerReadGpuTimeline"] = function() {
+          return DonnerGpu.timeline.slice();
+        };
       }
     },
 
@@ -1596,6 +1610,7 @@ var LibraryDonnerGpu = {
     var pending = record.pending;
     record.pending = null;
     return DonnerGpu.create(record, DonnerGpu.kRenderPipeline, id, function() {
+      DonnerGpu.trace(["p", handle, DonnerGpu.epochMs()]);
       return DonnerGpu.device.createRenderPipeline({
         layout: pending.layout,
         vertex: {
@@ -1633,6 +1648,7 @@ var LibraryDonnerGpu = {
     }
     var name = UTF8ToString(entryPoint, entryPointBytes);
     return DonnerGpu.create(record, DonnerGpu.kComputePipeline, id, function() {
+      DonnerGpu.trace(["p", handle, DonnerGpu.epochMs()]);
       return DonnerGpu.device.createComputePipeline({
         layout: layout,
         compute: { module: module, entryPoint: name },
@@ -1927,6 +1943,7 @@ var LibraryDonnerGpu = {
     }
     return DonnerGpu.perform(record, function() {
       record.pass.draw(vertexCount, instanceCount, firstVertex, firstInstance);
+      record.traceDraws = (record.traceDraws || 0) + 1;
     });
   },
 
@@ -1945,6 +1962,7 @@ var LibraryDonnerGpu = {
     }
     return DonnerGpu.perform(record, function() {
       record.pass.drawIndexed(indexCount, instanceCount, firstIndex, baseVertex, firstInstance);
+      record.traceDraws = (record.traceDraws || 0) + 1;
     });
   },
 
@@ -2070,7 +2088,13 @@ var LibraryDonnerGpu = {
       record.recordingSerial = 0;
       DonnerGpu.queue.submit(commandBuffers);
       record.pendingSubmissions = (record.pendingSubmissions || 0) + 1;
+      // ["s", logical device, serial, buffers, draws, submitted, completion observed]
+      var traced = ["s", handle, submissionSerial, commandBuffers.length, record.traceDraws || 0,
+        DonnerGpu.epochMs(), 0];
+      record.traceDraws = 0;
+      DonnerGpu.trace(traced);
       DonnerGpu.queue.onSubmittedWorkDone().then(function() {
+        traced[6] = DonnerGpu.epochMs();
         record.pendingSubmissions -= 1;
         // Submissions complete in order, but the serial is recorded defensively as a maximum so a
         // completion observed out of order can never move the reported serial backwards. It is
@@ -2107,9 +2131,12 @@ var LibraryDonnerGpu = {
       return registered;
     }
     record.mappings.set(mappingId, mapping);
+    var tracedMap = ["m", handle, byteCount, DonnerGpu.epochMs(), 0];
+    DonnerGpu.trace(tracedMap);
     try {
       buffer.mapAsync(GPUMapMode.READ, offsetBytes, byteCount)
         .then(function() {
+          tracedMap[4] = DonnerGpu.epochMs();
           mapping.view = new Uint8Array(buffer.getMappedRange(offsetBytes, byteCount));
           mapping.state = DonnerGpu.kMapReady;
         })
@@ -2322,6 +2349,7 @@ var LibraryDonnerGpu = {
     }
     record.objects.get(textureId).frame = true;
     surface.frame = textureId;
+    DonnerGpu.trace(["a", handle, DonnerGpu.epochMs()]);
     HEAPU32[surfaceStatusCode >> 2] = DonnerGpu.kSurfaceSuccess;
     return DonnerGpu.kSuccess;
   },

@@ -2437,6 +2437,10 @@ bool EditorWindow::observePresentationCompletion() {
           'completedAtMs' : previous &&
               Object.is(previous['completedSerial'], $0) ? previous['completedAtMs'] : performance.now(),
         });
+        const timeline = window['__donnerPresentationTimeline'] ||
+            (window['__donnerPresentationTimeline'] = []);
+        if (timeline.length >= 512) timeline.shift();
+        timeline.push([ Math.round(performance.now() * 10) / 10, $14, $2, $11, $1, $12 ]);
       },
       static_cast<double>(frame.serial), static_cast<double>(device.lastSubmittedSerial()),
       static_cast<double>(presentationSubmissions_.pendingCount()),

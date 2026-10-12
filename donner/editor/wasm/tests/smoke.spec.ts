@@ -1273,6 +1273,59 @@ async function readCarouselFrameDiagnostics(page: Page) {
   }
 }
 
+// Queue timeline around the first sample click: every GPU submission with its completion, the
+// raster worker phases, and each UI frame's presentation admission, all on the page clock. It is
+// what separates a presentation held behind earlier GPU work from a late wake.
+async function readCarouselGpuTimeline(page: Page) {
+  const withDeadline = async <T>(work: Promise<T>): Promise<T | null> => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        work.catch(() => null),
+        new Promise<null>((resolve) => {
+          timer = setTimeout(() => resolve(null), 2000);
+        }),
+      ]);
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
+    }
+  };
+  const pageState = await withDeadline(page.evaluate(() => {
+    const state = window as unknown as Record<string, unknown>;
+    return {
+      timeOrigin: performance.timeOrigin,
+      presentation: state.__donnerPresentationTimeline ?? null,
+      phases: state.__donnerRasterWorkPhases ?? null,
+    };
+  }));
+  let gpu: unknown[] | null = null;
+  for (const worker of page.workers()) {
+    const entries = await withDeadline(worker.evaluate(() => {
+      const read = (globalThis as unknown as Record<string, unknown>).__donnerReadGpuTimeline;
+      return typeof read === "function" ? (read as () => unknown[])() : null;
+    }));
+    if (entries !== null && entries.length > 0) {
+      gpu = entries;
+      break;
+    }
+  }
+  if (pageState === null) return null;
+  const toPage = (epochMs: number) =>
+    epochMs > 0 ? Math.round((epochMs - pageState.timeOrigin) * 10) / 10 : 0;
+  const gpuOnPageClock = gpu?.map((entry) => {
+    const fields = entry as (string | number)[];
+    switch (fields[0]) {
+      case "s":
+        return [...fields.slice(0, 5), toPage(fields[5] as number), toPage(fields[6] as number)];
+      case "m":
+        return [...fields.slice(0, 3), toPage(fields[3] as number), toPage(fields[4] as number)];
+      default:
+        return [...fields.slice(0, 2), toPage(fields[2] as number)];
+    }
+  }) ?? null;
+  return { presentation: pageState.presentation, phases: pageState.phases, gpu: gpuOnPageClock };
+}
+
 for (
   const sample of [
     { id: "donner-splash", name: "Donner Splash", xFraction: 0.24, y: 282 },
@@ -1399,6 +1452,11 @@ for (
       console.log(
         `carousel-frame-diagnostics sample=${sample.id} ${
           JSON.stringify(await readCarouselFrameDiagnostics(page))
+        }`,
+      );
+      console.log(
+        `carousel-gpu-timeline sample=${sample.id} clickStartedAt=${clickStartedAt} ${
+          JSON.stringify(await readCarouselGpuTimeline(page))
         }`,
       );
       console.log(
