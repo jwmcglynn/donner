@@ -149,7 +149,7 @@ Workflow map (all in `.github/workflows/`):
 | `fuzz.yml`          | nightly cron + dispatch + PR touching `**/*_fuzzer.{cc,cpp,h}`, `**/corpus/**`, `build_defs/rules.bzl`, or `fuzz.yml` itself | Fuzzer regression suite                                                                                        |
 | `perf.yml`          | nightly cron + dispatch                                                                                                      | Wall-clock perf targets (discovered via `bazelisk query 'tests(//...) intersect attr("tags", "perf", //...)'`) |
 | `editor_wasm.yml`   | nightly cron + dispatch                                                                                                      | Builds and browser-tests both editor backends; emits the reviewed Geode static-site candidate                  |
-| `codeql.yml`        | push + weekly cron                                                                                                           | CodeQL static analysis                                                                                         |
+| `codeql.yml`        | disabled in repository settings (push + weekly cron when enabled)                                                            | CodeQL static analysis; not run while disabled, and not a release-candidate gate                               |
 | `release.yml`       | release published/edited + manual dispatch                                                                                   | Release pipeline — see `donner-release`                                                                        |
 
 **Check-name collisions**: `gh pr checks` interleaves every workflow's checks, and job names
