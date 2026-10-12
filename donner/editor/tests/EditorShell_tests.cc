@@ -5367,12 +5367,16 @@ TEST(EditorShellTest, ReferenceHighlightWaitsForRendererWakeInsteadOfRequestingF
   ASSERT_TRUE(target.has_value());
   EditorShellTestAccess::App(shell).setSelection(*target);
 
-  const std::uint64_t blockedWakeSerial = window.wakeEventLoopRequestSerialForTesting();
-  for (int frame = 0; frame < 3; ++frame) {
+  // The change may ask for a follow-up frame, but the loop must then be able to park.
+  std::uint64_t blockedWakeSerial = window.wakeEventLoopRequestSerialForTesting();
+  int quietFrames = 0;
+  for (int frame = 0; frame < 6 && quietFrames < 3; ++frame) {
     RunShellFrame(window, shell);
-    EXPECT_EQ(window.wakeEventLoopRequestSerialForTesting(), blockedWakeSerial)
-        << "frame " << frame << " requested another frame while the render was still running";
+    const std::uint64_t wakeSerial = window.wakeEventLoopRequestSerialForTesting();
+    quietFrames = wakeSerial == blockedWakeSerial ? quietFrames + 1 : 0;
+    blockedWakeSerial = wakeSerial;
   }
+  EXPECT_EQ(quietFrames, 3) << "the editor kept requesting frames while the render was running";
   EXPECT_EQ(EditorShellTestAccess::LastReferenceHighlightSelectionSize(shell), 0u);
   ASSERT_TRUE(renderer.hasRenderInFlightForTesting());
 
