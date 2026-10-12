@@ -1219,6 +1219,8 @@ private:
 
   /// Replay/test-only count of poll attempts that withheld a staged result.
   std::atomic<std::uint64_t> replayResultHoldPollCount_{0};
+
+  friend struct AsyncRendererTestAccess;
 };
 
 }  // namespace donner::editor

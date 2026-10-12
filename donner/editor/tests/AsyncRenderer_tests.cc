@@ -9,6 +9,7 @@
 #include <future>
 #include <iostream>
 #include <memory>
+#include <mutex>
 #include <span>
 #include <sstream>
 #include <thread>
@@ -44,6 +45,18 @@
 #include "gtest/gtest.h"
 
 namespace donner::editor {
+
+struct AsyncRendererTestAccess {
+  static bool WorkerMutexAvailableFromAnotherThread(AsyncRenderer& renderer) {
+    bool available = false;
+    std::thread probe([&] {
+      std::unique_lock<std::mutex> lock(renderer.mutex_, std::try_to_lock);
+      available = lock.owns_lock();
+    });
+    probe.join();
+    return available;
+  }
+};
 
 void PrintTo(const Vector2d& vector, std::ostream* os) {
   *os << "Vector2d{x=" << vector.x << ", y=" << vector.y << "}";
@@ -1921,6 +1934,60 @@ TEST(AsyncRendererTest, ReplayResultHoldWithholdsStagedDoneResultForPollAttempts
   ASSERT_TRUE(asyncRenderer.waitUntilNoRenderInFlightForTesting(std::chrono::steady_clock::now() +
                                                                 std::chrono::seconds(5)));
   EXPECT_FALSE(asyncRenderer.isBusy());
+}
+
+TEST(AsyncRendererTest, ExplicitReplayResultHoldReleaseAdoptsCurrentAndFutureResults) {
+  svg::SVGDocument document = svg::instantiateSubtree(R"svg(
+    <rect x="0" y="0" width="16" height="16" fill="red" />
+  )svg");
+  document.setCanvasSize(32, 32);
+  svg::Renderer renderer;
+  AsyncRenderer asyncRenderer;
+  asyncRenderer.setReplayResultHoldFramesForTesting(2);
+  RenderRequest request(renderer, document);
+  request.version = 1;
+  asyncRenderer.requestRender(request);
+  ASSERT_THAT(asyncRenderer.waitUntilNoRenderInFlightForTesting(std::chrono::steady_clock::now() +
+                                                                std::chrono::seconds(2)),
+              testing::IsTrue());
+  EXPECT_THAT(asyncRenderer.pollResult(), testing::Eq(std::nullopt));
+  ASSERT_THAT(asyncRenderer.isBusy(), testing::IsTrue());
+  const std::uint64_t heldPolls = asyncRenderer.replayResultHoldPollCountForTesting();
+
+  const std::thread::id hostThread = std::this_thread::get_id();
+  bool releaseWakeObserved = false;
+  bool wakeOutsideMutex = false;
+  bool reentrantBusy = false;
+  asyncRenderer.setWakeCallback([&] {
+    if (std::this_thread::get_id() != hostThread) {
+      return;
+    }
+    releaseWakeObserved = true;
+    wakeOutsideMutex =
+        AsyncRendererTestAccess::WorkerMutexAvailableFromAnotherThread(asyncRenderer);
+    if (wakeOutsideMutex) {
+      reentrantBusy = asyncRenderer.isBusy();
+    }
+  });
+  asyncRenderer.setReplayResultHoldFramesForTesting(0);
+  asyncRenderer.setWakeCallback({});
+  EXPECT_THAT(releaseWakeObserved, testing::IsTrue());
+  EXPECT_THAT(wakeOutsideMutex, testing::IsTrue());
+  EXPECT_THAT(reentrantBusy, testing::IsTrue());
+  std::optional<RenderResult> heldResult = asyncRenderer.pollResult();
+  ASSERT_THAT(heldResult, testing::Optional(testing::_));
+  EXPECT_THAT(heldResult->version, testing::Eq(1u));
+  EXPECT_THAT(asyncRenderer.replayResultHoldPollCountForTesting(), testing::Eq(heldPolls));
+
+  request.version = 2;
+  asyncRenderer.requestRender(request);
+  ASSERT_THAT(asyncRenderer.waitUntilNoRenderInFlightForTesting(std::chrono::steady_clock::now() +
+                                                                std::chrono::seconds(2)),
+              testing::IsTrue());
+  std::optional<RenderResult> futureResult = asyncRenderer.pollResult();
+  ASSERT_THAT(futureResult, testing::Optional(testing::_));
+  EXPECT_THAT(futureResult->version, testing::Eq(2u));
+  EXPECT_THAT(asyncRenderer.replayResultHoldPollCountForTesting(), testing::Eq(heldPolls));
 }
 
 // A second wake should fire for a second render request - the worker
