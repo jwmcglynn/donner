@@ -22,7 +22,7 @@ class CiDiagnosticsReportTests(unittest.TestCase):
         console = self._write("build/console.log", "\n".join(console_lines) + "\n")
 
         lines: list[str] = []
-        ci_diagnostics_report.console_tail_summary("Build", bep, console, lines)
+        ci_diagnostics_report.console_tail_summary("Build", bep, console, lines, include_raw=True)
 
         report = "\n".join(lines)
         self.assertIn("Build console tail", report)
@@ -35,7 +35,7 @@ class CiDiagnosticsReportTests(unittest.TestCase):
         console = self._write("build/console.log", "last visible line\n")
 
         lines: list[str] = []
-        ci_diagnostics_report.console_tail_summary("Build", bep, console, lines)
+        ci_diagnostics_report.console_tail_summary("Build", bep, console, lines, include_raw=True)
 
         self.assertEqual(lines, [])
 

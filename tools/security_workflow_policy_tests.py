@@ -80,7 +80,8 @@ SCRIPT_SAFE_EVENT_FIELDS = {"github.event.pull_request.base.sha",
                             "github.event.pull_request.head.sha",
                             "github.event.pull_request.number"}
 
-UNTRUSTED_CONTEXT = re.compile(r"github\.event\.[A-Za-z0-9_.*-]+|github\.head_ref|\binputs\.")
+UNTRUSTED_CONTEXT = re.compile(r"github\.event(?:\.[A-Za-z0-9_.*-]+)?|github\.head_ref|"
+                              r"\binputs(?:\.[A-Za-z0-9_.*-]+)?")
 UPLOADED_EVENT_LOG = re.compile(r"(?i)(?:^|/)[^/]*bep[^/]*\.json$|exec(?:ution)?[._]log")
 WORKSPACE_ROOTS = {".", "./", "${{ github.workspace }}", "${{ github.workspace }}/"}
 # Private-network addresses, private DNS names and personal home directories have no place in
@@ -255,10 +256,33 @@ def _script_bodies(text):
     return bodies
 
 
+def _expressions(text):
+    return re.finditer(r"\$\{\{(.*?)\}\}", text, re.DOTALL)
+
+
+def _canonical_context(expression):
+    """Give literal index and property access the same spelling for policy checks."""
+    indexed = re.sub(r"\s*\[\s*(['\"])([A-Za-z0-9_.*-]+)\1\s*\]",
+                     r".\2", expression)
+    return re.sub(r"\s*\.\s*", ".", indexed)
+
+
+def _secret_reads(text):
+    names = set()
+    for match in _expressions(text):
+        expression = _canonical_context(match.group(1))
+        names.update(name.upper() for name in
+                     re.findall(r"\bsecrets\.([A-Za-z0-9_]+)", expression, re.IGNORECASE))
+        if re.search(r"\bsecrets\s*\[", expression, re.IGNORECASE):
+            names.add("<dynamic secret index>")
+    return names
+
+
 def _untrusted_script_contexts(text):
     found = []
     for body in _script_bodies(text):
-        for expression in re.findall(r"\$\{\{(.*?)\}\}", body, re.DOTALL):
+        for match in _expressions(body):
+            expression = _canonical_context(match.group(1)).lower()
             found.extend(context for context in UNTRUSTED_CONTEXT.findall(expression)
                          if context not in SCRIPT_SAFE_EVENT_FIELDS)
     return found
@@ -289,12 +313,14 @@ def _secret_use_violations(workflows):
             violations.append("%s forwards every secret" % path)
         # Step `env:` and `with:` entries sit ten columns in; anything shallower is job- or
         # workflow-wide and hands the secret to every step.
-        for line in workflow.splitlines():
-            if (re.search(r"\$\{\{[^}]*\bsecrets\.", line)
-                    and len(line) - len(line.lstrip()) < 10):
+        for match in _expressions(workflow):
+            line_start = workflow.rfind("\n", 0, match.start()) + 1
+            line_end = workflow.find("\n", match.start())
+            line = workflow[line_start:line_end if line_end >= 0 else len(workflow)]
+            if _secret_reads(match.group()) and len(line) - len(line.lstrip()) < 10:
                 violations.append("%s exposes a secret beyond one step: %s" % (path, line.strip()))
         for name, job in _jobs(workflow).items():
-            secrets = set(re.findall(r"\$\{\{\s*secrets\.([A-Za-z0-9_]+)", job))
+            secrets = _secret_reads(job)
             if secrets:
                 uses[(path, name)] = secrets
     if uses != SECRET_USES:
