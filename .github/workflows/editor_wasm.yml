@@ -197,11 +197,36 @@ jobs:
       # ends. The live output directory cannot be uploaded instead: every lane
       # shares it and Playwright empties it on start, so a passing lane wipes
       # the evidence of the earlier lanes. Keep successful residency accounting too.
+      # The browser command has exited and archived every lane before these reads.
+      # Retry only evidence transport; keep uncertain uploads under distinct names.
+      # The final upload failure remains a job failure, including non-DNS errors.
       - name: Upload Playwright evidence
+        id: upload-playwright-evidence-1
         if: ${{ !cancelled() }}
+        continue-on-error: true
         uses: actions/upload-artifact@v7
         with:
           name: editor-wasm-playwright-evidence-${{ github.sha }}-${{ github.run_attempt }}
+          path: donner/editor/wasm/tests/playwright-failures
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Upload Playwright evidence (attempt 2)
+        id: upload-playwright-evidence-2
+        if: ${{ !cancelled() && steps.upload-playwright-evidence-1.outcome == 'failure' }}
+        continue-on-error: true
+        uses: actions/upload-artifact@v7
+        with:
+          name: editor-wasm-playwright-evidence-${{ github.sha }}-${{ github.run_attempt }}-upload-2
+          path: donner/editor/wasm/tests/playwright-failures
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Upload Playwright evidence (attempt 3)
+        if: ${{ !cancelled() && steps.upload-playwright-evidence-1.outcome == 'failure' && steps.upload-playwright-evidence-2.outcome == 'failure' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: editor-wasm-playwright-evidence-${{ github.sha }}-${{ github.run_attempt }}-upload-3
           path: donner/editor/wasm/tests/playwright-failures
           if-no-files-found: warn
           retention-days: 14
