@@ -13,6 +13,9 @@ listed fetch that no longer exists fails until its entry and approval digest are
 The check fails closed where it could otherwise be bypassed: a load or use_repo_rule of Bazel's
 http.bzl or git.bzl must bind each rule under its own name, MODULE.bazel may not include() other
 files, and main-repository labels (`@//`, `@@//`, `@donner//`) are followed like `//` labels.
+Playwright repository tags are recognized from literal use_extension identities rather than proxy
+variable names. Proxy rebinding, factory/method aliases and unreadable method lookups fail closed;
+direct repository mapping operations remain allowed. This is a conservative static check.
 
 The telemetry checks keep aspect_tools_telemetry's documented opt-out in the shared .bazelrc and in
 every workflow's environment. The telemetry section of .bazelrc explains why.
@@ -386,12 +389,17 @@ def _assigned_proxy_name(assignment):
     return target.id if isinstance(target, ast.Name) else None
 
 
-def _extension_proxy_bindings(path, tree):
-    """Recognize literal extension identities, rejecting ambiguous proxy bindings."""
+def _proxy_assignment_index(tree):
     assignments = [node for node in ast.walk(tree) if isinstance(node, ast.Assign)]
     by_value = {id(node.value): node for node in assignments}
     counts = Counter(target.id for node in assignments for target in node.targets
                      if isinstance(target, ast.Name))
+    return by_value, counts
+
+
+def _extension_proxy_bindings(path, tree):
+    """Recognize literal extension identities, rejecting ambiguous proxy bindings."""
+    by_value, counts = _proxy_assignment_index(tree)
     proxies, problems = set(), []
     for call in _calls(tree, {"use_extension"}):
         expression = call.args[1] if len(call.args) > 1 else _keyword(call, "extension_name")
