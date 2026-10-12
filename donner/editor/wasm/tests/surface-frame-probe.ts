@@ -1,4 +1,4 @@
-import type { Page, Worker } from "@playwright/test";
+import { expect, type Page, type Worker } from "@playwright/test";
 import { createSurfaceProbeRegistry } from "./surface-probe-requests.mjs";
 
 /**
@@ -387,11 +387,8 @@ export function waitForSubmittedCanvasGpuWork(owner: Worker): Promise<number> {
   return owner.evaluate(waitForCanvasGpuWorkInWorker);
 }
 
-// A pthread parked in a blocking wait never returns to its event loop, so an
-// evaluation there would not settle. The canvas owner runs a frame loop and
-// answers between frames, and the slowest frames measured on a shared runner
-// are well under this; a worker that does not answer within it owns no frame
-// loop to observe. Every worker is asked at once, so the bound is paid once.
+// Bound each observation without treating a slow reply as proof of nonownership.
+// The registry retains installation and discovery replies until they can be observed.
 const kWorkerAnswerMs = 1_000;
 
 const probeRegistry = createSurfaceProbeRegistry(kWorkerAnswerMs);
@@ -428,13 +425,23 @@ export async function findCanvasOwnerWorker(page: Page): Promise<Worker | null> 
 }
 
 /** Find the probe-installed application canvas owner before its next acquisition. */
+function applicationCanvasOwnerInWorker(): boolean {
+  const scope = globalThis as ProbeGlobal & { __donnerApplicationGpuSurfaceWorker?: boolean };
+  return Boolean(
+    scope.__donnerApplicationGpuSurfaceWorker && scope.__donnerSurfaceFrameProbe?.installed,
+  );
+}
+
 export async function findProbedCanvasApplicationWorker(page: Page): Promise<Worker | null> {
-  return probeRegistry.findOwner(page, () => {
-    const scope = globalThis as ProbeGlobal & { __donnerApplicationGpuSurfaceWorker?: boolean };
-    return Boolean(
-      scope.__donnerApplicationGpuSurfaceWorker && scope.__donnerSurfaceFrameProbe?.installed,
-    );
-  });
+  return probeRegistry.findOwner(page, applicationCanvasOwnerInWorker);
+}
+
+/** Wait for a unique acknowledged application owner within the caller's existing expect budget. */
+export async function expectSurfaceFrameProbeReady(page: Page): Promise<void> {
+  await expect.poll(async () => {
+    await installSurfaceFrameProbe(page);
+    return findProbedCanvasApplicationWorker(page);
+  }, { message: "the application canvas owner must acknowledge the completion probe" }).not.toBeNull();
 }
 
 /**

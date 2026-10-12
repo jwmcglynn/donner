@@ -52,6 +52,7 @@ import {
   findCanvasOwnerWorker,
   holdCanvasCompletionForTest,
   installSurfaceFrameProbe,
+  expectSurfaceFrameProbeReady,
   readCanvasOwnerSurfaceFrameProbe,
   readSurfaceFrameProbe,
   selfCheckSurfaceFrameProbe,
@@ -1925,8 +1926,7 @@ async function openBasicShapes(
   const fullPage = firefox || forceGpuGateForTest;
   const gateCanvasGpu = fullPage;
   if (gateCanvasGpu) {
-    expect(await installSurfaceFrameProbe(page), "no worker could observe canvas submissions")
-      .toBeGreaterThan(0);
+    await expectSurfaceFrameProbeReady(page);
   }
   const beforeSampleResults = await page.evaluate(
     () => window.__donnerWorkerStats?.completedResults || 0,
@@ -3137,7 +3137,7 @@ test("coalesced UI frames do not consume diagnostic capture retries", async ({ p
   // EditorWindow admits a UI frame for presentation only while fewer than this many are in flight.
   const queueCapacity = 3;
   const failures = await openEditor(page, false, true);
-  expect(await installSurfaceFrameProbe(page)).toBeGreaterThan(0);
+  await expectSurfaceFrameProbeReady(page);
   await page.evaluate(() => {
     window.__donnerEditorFrameRequested = true;
   });
@@ -3231,7 +3231,7 @@ test("coalesced UI frames do not consume diagnostic capture retries", async ({ p
 
 test("canvas GPU completion gate waits after the CPU host frame advances", async ({ page }) => {
   const failures = await openEditor(page);
-  expect(await installSurfaceFrameProbe(page)).toBeGreaterThan(0);
+  await expectSurfaceFrameProbeReady(page);
   await page.evaluate(() => {
     window.__donnerEditorFrameRequested = true;
   });
@@ -3316,7 +3316,7 @@ test("Firefox keeps the dragged shape and its selection outline in every drag fr
     page,
     true,
   );
-  expect(await installSurfaceFrameProbe(page)).toBeGreaterThan(0);
+  await expectSurfaceFrameProbeReady(page);
   const baselineBluePixels = blueCss.pixels;
   expect(baselineBluePixels, "expected the initial Basic Shapes render before starting the drag")
     .toBeGreaterThan(500);
@@ -3721,7 +3721,7 @@ test("Geode crown face paints at each held pointer position before release", asy
 // scratch canvas frame cleared after the task that acquired it has ended.
 test("the surface frame probe reports canvas work submitted after its task ended", async ({ page }) => {
   const failures = await openEditor(page);
-  expect(await installSurfaceFrameProbe(page), "no worker could host the probe").toBeGreaterThan(0);
+  await expectSurfaceFrameProbeReady(page);
   await page.evaluate(() => {
     window.__donnerEditorFrameRequested = true;
   });
@@ -3774,7 +3774,7 @@ function sawFailedFrameThenRecovery(
 test("Firefox host counters record a refused surface frame and later recovery", async ({ browserName, page }) => {
   test.skip(browserName !== "firefox", "Firefox surface counter regression");
   const failures = await openEditor(page);
-  expect(await installSurfaceFrameProbe(page)).toBeGreaterThan(0);
+  await expectSurfaceFrameProbeReady(page);
   await page.evaluate(() => {
     window.__donnerEditorFrameRequested = true;
   });

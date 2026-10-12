@@ -4,6 +4,7 @@ import { expectSampleThumbnailsToSettle } from "./sample-thumbnail-settle";
 import {
   findCanvasOwnerWorker,
   installSurfaceFrameProbe,
+  expectSurfaceFrameProbeReady,
   readSurfaceFrameProbe,
 } from "./surface-frame-probe";
 
@@ -135,7 +136,7 @@ test("Firefox restores the Splash canvas after transient surface loss", async ({
   expect(region.height).toBeGreaterThan(0);
   const letterWindow = splashLetterTrackingWindow(viewport);
 
-  expect(await installSurfaceFrameProbe(page)).toBeGreaterThan(0);
+  await expectSurfaceFrameProbeReady(page);
   await page.evaluate(() => {
     (window as Window & { __donnerEditorFrameRequested?: boolean }).__donnerEditorFrameRequested =
       true;

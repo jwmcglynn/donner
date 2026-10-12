@@ -26,6 +26,7 @@ import {
   findProbedCanvasApplicationWorker,
   holdCanvasCompletionForTest,
   installSurfaceFrameProbe,
+  expectSurfaceFrameProbeReady,
 } from "./surface-frame-probe";
 
 installBrowserStallDiagnostics(test);
@@ -1773,7 +1774,7 @@ test(
       "Quarantined in the hosted macOS CI job: the GPU device request can miss its window (#1691)",
     );
     const fatalMessages = await openEditor(page, { postInitializationDwellMs: 0 });
-    expect(await installSurfaceFrameProbe(page)).toBeGreaterThan(0);
+    await expectSurfaceFrameProbeReady(page);
     const applicationOwner = await findProbedCanvasApplicationWorker(page);
     expect(applicationOwner, "the canvas owner must have the completion probe installed").not
       .toBeNull();
@@ -2003,8 +2004,7 @@ test("Firefox keeps Basic Shapes resize pixels and outline synchronized", async 
   );
   armFailureCanvasEvidence(page, test.info());
   const fatalMessages = await openEditor(page, { postInitializationDwellMs: 0 });
-  expect(await installSurfaceFrameProbe(page), "no worker could observe canvas submissions")
-    .toBeGreaterThan(0);
+  await expectSurfaceFrameProbeReady(page);
   const canvas = page.locator("canvas#canvas");
   const bounds = await canvas.boundingBox();
   expect(bounds).not.toBeNull();
