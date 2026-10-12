@@ -52,6 +52,11 @@ public:
   bool mirrorSourceDeltas(EditorApp& app, TextEditor& textEditor,
                           const std::vector<xml::XMLSourceDelta>& sourceDeltas);
 
+  /// Take the document's unmirrored source deltas. When too many accumulated to keep, mirror the
+  /// whole source instead and return none.
+  std::vector<xml::XMLSourceDelta> takeSourceDeltasOrMirrorWholeSource(EditorApp& app,
+                                                                       TextEditor& textEditor);
+
   /// Observe source edits and dispatch eligible document updates through the debounce policy.
   /// @param app Application receiving source changes.
   /// @param textEditor Source editor containing the current text.

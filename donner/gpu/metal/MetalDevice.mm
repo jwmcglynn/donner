@@ -240,8 +240,27 @@ struct ParkedCompletion {
   uint64_t payloadBytes = 0;  //!< Payload bytes the submission reserved.
 };
 
-/// State shared with Metal command-buffer completion handlers, which run on a Metal-internal
-/// thread. Held by shared_ptr so a handler that outlives the device touches valid memory.
+/**
+ * One device's completion record: the serials it has committed and completed, the upload bytes
+ * still in flight, the first execution error, its progress clock, and the shared event that orders
+ * another queue's work after this device's.
+ *
+ * Held by shared_ptr because holders beyond the device may outlive it:
+ * - Metal runs the command-buffer completion handlers that publish into it on a Metal-internal
+ *   thread.
+ * - Consumers on other devices read its serials, error flag and progress through
+ *   \ref MetalSubmissionCompletion.
+ * - Each \ref MetalExportedTexture keeps it for the consumers of that texture. A consumer that
+ *   shares this device's root loss condition has its command buffers wait on
+ *   \ref completionEvent for the serial it reads after; any other consumer waits on the host.
+ * - Such a consumer device holds it while it encodes that wait, and weakly while the waiting
+ *   submission is outstanding.
+ * - The root's loss condition holds it weakly as a \ref DeviceLossRelease, so \ref releaseOnLoss
+ *   runs once the loss is declared, by whoever declares it, or at once if it already had been
+ *   when this device registered.
+ *
+ * The device's own buffer mapping host also keeps a reference, to read its error flag.
+ */
 struct CompletionState final : DeviceLossRelease {
   /// Highest serial through which every submission's completion has been published. Advanced
   /// only in serial order, under \ref watermarkMutex.
@@ -588,7 +607,7 @@ struct MetalDevice::Impl {
   std::vector<std::optional<ComputePipelineRecord>> computePipelines;  //!< Compute pipeline slots.
 
   std::shared_ptr<CompletionState> completionState =
-      std::make_shared<CompletionState>();  //!< Shared with completion handlers.
+      std::make_shared<CompletionState>();  //!< Shared beyond the device; see CompletionState.
 
   /// One producer's work the submission being encoded waits for on the GPU.
   struct PendingSourceWait {
@@ -3034,7 +3053,7 @@ class MetalMappingHost final : public BufferMappingHost {
 public:
   /// @param device Device whose submissions decide readiness; must outlive this host.
   /// @param buffers Buffer slot table of \p device.
-  /// @param completionState Completion counters shared with Metal's completion handlers.
+  /// @param completionState Completion record of \p device, read for its error flag.
   MetalMappingHost(MetalDevice& device, const std::vector<id<MTLBuffer>>& buffers,
                    std::shared_ptr<CompletionState> completionState)
       : device_(device), buffers_(buffers), completionState_(std::move(completionState)) {}

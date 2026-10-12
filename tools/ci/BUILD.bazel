@@ -1,3 +1,4 @@
+load("@rules_cc//cc:defs.bzl", "cc_binary")
 load(":shipped_product.bzl", "shipped_product")
 
 package(default_visibility = ["//visibility:public"])
@@ -190,6 +191,29 @@ alias(
     name = "release_svg",
     actual = "//donner/svg/tool:donner-svg",
     tags = ["manual"],
+)
+
+# Prints the identity of the compiler that built it. Built in the same invocation and configuration
+# as `release_svg`, so the release CLI provenance names the compiler Bazel's resolved C++ toolchain
+# actually used, not whichever `c++` happens to be on the runner's PATH.
+cc_binary(
+    name = "release_compiler_identity",
+    srcs = ["release_compiler_identity.cc"],
+    tags = ["manual"],
+)
+
+# The license NOTICE released beside `release_svg`, built in the same invocation so it describes the
+# same configured closure, and the test that it attributes every third-party component there.
+alias(
+    name = "release_svg_notice",
+    actual = "//third_party/licenses:notice_cli_txt",
+    tags = ["manual"],
+)
+
+test_suite(
+    name = "release_svg_notice_coverage",
+    tags = ["manual"],
+    tests = ["//tools:cli_notice_coverage_tests"],
 )
 
 alias(

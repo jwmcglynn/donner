@@ -577,6 +577,16 @@ bool AsyncRenderer::isBusy() const {
   return workerStateBusy(workerState_) || pendingCompositorWarmup_ || compositorWarmupActive_;
 }
 
+bool AsyncRenderer::isBusyWithIdleWake() {
+  std::lock_guard<std::mutex> lock(mutex_);
+  const bool warmupBusy = pendingCompositorWarmup_ || compositorWarmupActive_;
+  if (warmupBusy) {
+    // Warmup completion wakes only registered callers; render states wake on their own.
+    compositorWarmupReleaseWakePending_ = true;
+  }
+  return warmupBusy || workerStateBusy(workerState_);
+}
+
 bool AsyncRenderer::isFontResourceAdoptionSafe() const {
   std::lock_guard<std::mutex> lock(mutex_);
   return !workerStateBusy(workerState_) && !pendingCompositorWarmup_ && !compositorWarmupActive_ &&
@@ -621,6 +631,21 @@ void AsyncRenderer::setReplayDocumentAccessBlockedForTesting(bool blocked) {
 void AsyncRenderer::setReplayResultHoldFramesForTesting(int frameCount) {
   std::lock_guard<std::mutex> lock(mutex_);
   replayResultHoldFramesForTesting_ = std::max(frameCount, 0);
+}
+
+void AsyncRenderer::releaseReplayResultHoldForTesting() {
+  std::function<void()> wake;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    replayResultHoldFramesForTesting_ = 0;
+    if (auto* done = std::get_if<DoneState>(&workerState_)) {
+      done->presentationHoldPollsRemaining = 0;
+      wake = wakeCallback_;
+    }
+  }
+  if (wake) {
+    wake();
+  }
 }
 
 void AsyncRenderer::requestRender(const RenderRequest& request) {
@@ -755,6 +780,12 @@ std::optional<RenderResult> AsyncRenderer::pollResult() {
     }
 
     RenderResult result = std::move(done->result);
+#ifdef __EMSCRIPTEN__
+    // clang-format off
+    result.workerTiming.polledAtEpochMs =
+        EM_ASM_DOUBLE({ return performance.timeOrigin + performance.now(); });
+    // clang-format on
+#endif
     const HandoffTimings handoff =
         ComputeHandoffTimings(result.workerCompletedAt, std::chrono::steady_clock::now());
     result.workerTiming.pollDelayMs = handoff.pollDelayMs;

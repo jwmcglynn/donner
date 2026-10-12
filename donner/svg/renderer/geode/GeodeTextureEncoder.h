@@ -135,7 +135,8 @@ public:
     bool sourceIsPremultiplied = false;
     /// `<mask>` compositing input. Ignored unless `maskMode` is nonzero. Borrowed.
     const gpu::Texture* maskTexture = nullptr;
-    /// Mask coverage selector: 0 disables masking, 1 uses luminance, and 2 uses alpha.
+    /// Mask coverage selector: 0 disables masks, 1 uses sRGB luminance, 2 alpha, 3 linear
+    /// luminance.
     uint32_t maskMode = 0;
     /// When true, output pixels outside `maskBounds` are discarded.
     /// Used to honour the `<mask>` element's x/y/width/height.

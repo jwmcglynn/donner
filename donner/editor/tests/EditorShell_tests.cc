@@ -32,6 +32,7 @@
 #include <vector>
 
 #include "donner/css/Color.h"
+#include "donner/editor/EditorCommand.h"
 #include "donner/editor/EditorSampleCatalog.h"
 #include "donner/editor/EditorShellInternal.h"
 #include "donner/editor/EditorShellPresentation.h"
@@ -44,6 +45,7 @@
 #include "donner/editor/tests/BitmapGoldenCompare.h"
 #include "donner/editor/tests/RenderCoordinatorTestAccess.h"
 #include "donner/svg/SVGGeometryElement.h"
+#include "donner/svg/SVGRectElement.h"
 #include "donner/svg/renderer/Renderer.h"
 #include "donner/svg/renderer/RendererImageIO.h"
 #ifdef DONNER_EDITOR_WGPU
@@ -73,8 +75,9 @@ svg::RendererBitmap CropDocumentRect(const svg::RendererBitmap& bitmap,
   }
   const Vector2d screenMin = viewport.documentToScreen(documentRect.topLeft);
   const Vector2d screenMax = viewport.documentToScreen(documentRect.bottomRight);
-  // documentToScreen() uses logical UI pixels. The offscreen test's forced display scale can
-  // differ from both GLFW windowSize() and the viewport's OS-reported devicePixelRatio.
+  // documentToScreen() uses logical UI pixels. Scale them by the framebuffer scale the caller
+  // passes rather than GLFW windowSize() or the viewport's devicePixelRatio, which a native window
+  // emulating another scale need not share.
   const Vector2d physicalMin = screenMin * framebufferScale;
   const Vector2d physicalMax = screenMax * framebufferScale;
   if (!std::isfinite(physicalMin.x) || !std::isfinite(physicalMin.y) ||
@@ -202,13 +205,43 @@ constexpr std::string_view kIntrinsicSizeSvg = R"svg(
 </svg>
 )svg";
 
-gui::EditorWindow MakeHiddenWindow() {
-  return gui::EditorWindow(gui::EditorWindowOptions{
-      .title = "Donner EditorShell test",
-      .initialWidth = 640,
-      .initialHeight = 480,
-      .visible = false,
-  });
+/// Content scale every editor shell test window emulates unless a test asks for another.
+///
+/// The suite runs at 2x on purpose, on every platform. Without a forced scale a hidden macOS window
+/// takes the main display's scale while Linux's windowless platform is always 1x, so whether HiDPI
+/// was tested depended on the host's display. `EditorShell1xSmokeTest` keeps a small 1x
+/// cross-section so regressions at 1x are still caught.
+constexpr double kTestContentScale = 2.0;
+
+/// Return @p options for a hidden test window that emulates @p contentScale regardless of the host
+/// display.
+gui::EditorWindowOptions TestWindowOptions(gui::EditorWindowOptions options,
+                                           double contentScale = kTestContentScale) {
+  options.visible = false;
+  options.offscreen = true;
+  options.offscreenContentScale = contentScale;
+  return options;
+}
+
+/// Assert that @p window, created for a @p logicalSize UI, renders at @p contentScale, so a silent
+/// fallback to the host display's scale fails the test instead of quietly changing what it covers.
+void ExpectTestWindowScale(const gui::EditorWindow& window, const Vector2i& logicalSize,
+                           double contentScale) {
+  EXPECT_DOUBLE_EQ(window.displayScale(), contentScale);
+  EXPECT_DOUBLE_EQ(window.contentScale().x, contentScale);
+  EXPECT_EQ(window.framebufferSize(),
+            Vector2i(static_cast<int>(std::lround(logicalSize.x * contentScale)),
+                     static_cast<int>(std::lround(logicalSize.y * contentScale))));
+}
+
+gui::EditorWindow MakeHiddenWindow(double contentScale = kTestContentScale) {
+  return gui::EditorWindow(TestWindowOptions(
+      {
+          .title = "Donner EditorShell test",
+          .initialWidth = 640,
+          .initialHeight = 480,
+      },
+      contentScale));
 }
 
 std::filesystem::path TempPathForTest(std::string_view suffix) {
@@ -2086,11 +2119,12 @@ void RenderSelectionSizeChipFrame(
   window.endFrame();
 }
 
-TEST(EditorShellTest, HiddenWindowShellConstructsAndRunsFrames) {
-  gui::EditorWindow window = MakeHiddenWindow();
+void RunHiddenWindowShellConstructsAndRunsFrames(double contentScale) {
+  gui::EditorWindow window = MakeHiddenWindow(contentScale);
   if (!window.valid()) {
     GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
   }
+  ExpectTestWindowScale(window, Vector2i(640, 480), contentScale);
 
   {
     EditorShell emptyShell(window, EditorShellOptions{});
@@ -2133,6 +2167,10 @@ TEST(EditorShellTest, HiddenWindowShellConstructsAndRunsFrames) {
   EXPECT_TRUE(shell.valid());
 }
 
+TEST(EditorShellTest, HiddenWindowShellConstructsAndRunsFrames) {
+  RunHiddenWindowShellConstructsAndRunsFrames(kTestContentScale);
+}
+
 #ifdef DONNER_EDITOR_WGPU
 TEST(EditorShellTest, UiRuntimeProducersUseFramebufferDevice) {
   gui::EditorWindow window = MakeHiddenWindow();
@@ -2158,12 +2196,11 @@ TEST(EditorShellTest, UiRuntimeProducersUseFramebufferDevice) {
 }
 
 TEST(EditorShellTest, CpuAdoptionDoesNotStartPreviewsBeforeForegroundPresentation) {
-  gui::EditorWindow window(gui::EditorWindowOptions{
+  gui::EditorWindow window(TestWindowOptions({
       .title = "Blocked first-frame preview admission",
       .initialWidth = 1600,
       .initialHeight = 900,
-      .visible = false,
-  });
+  }));
   if (!window.valid()) {
     GTEST_SKIP() << "WGPU hidden editor window is unavailable on this host";
   }
@@ -2287,12 +2324,11 @@ TEST(EditorShellTest, SettledEmptyDocumentDoesNotBlockFontPreviews) {
 }
 
 TEST(EditorShellTest, SidebarPresentationWakeTracksOnlyRenderableRasterDemand) {
-  gui::EditorWindow window(gui::EditorWindowOptions{
+  gui::EditorWindow window(TestWindowOptions({
       .title = "Sidebar presentation wake policy",
       .initialWidth = 844,
       .initialHeight = 390,
-      .visible = false,
-  });
+  }));
   if (!window.valid()) {
     GTEST_SKIP() << "WGPU hidden editor window is unavailable on this host";
   }
@@ -2331,12 +2367,11 @@ TEST(EditorShellTest, SidebarPresentationWakeTracksOnlyRenderableRasterDemand) {
 }
 
 TEST(EditorShellTest, NewShellInvalidatesPriorProducerPresentationAck) {
-  gui::EditorWindow window(gui::EditorWindowOptions{
+  gui::EditorWindow window(TestWindowOptions({
       .title = "Reused-window presentation producer",
       .initialWidth = 1600,
       .initialHeight = 900,
-      .visible = false,
-  });
+  }));
   if (!window.valid()) {
     GTEST_SKIP() << "WGPU hidden editor window is unavailable on this host";
   }
@@ -2422,6 +2457,7 @@ TEST(EditorShellTest, NothingToPresentRetriesPostFromIdleFrames) {
   if (!window.valid()) {
     GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
   }
+  ExpectTestWindowScale(window, Vector2i(640, 480), kTestContentScale);
   EditorShell shell(window, OptionsWithSource(kInitialSvg));
   ASSERT_TRUE(shell.valid());
   RenderCoordinator& coordinator = EditorShellTestAccess::Coordinator(shell);
@@ -2440,7 +2476,13 @@ TEST(EditorShellTest, NothingToPresentRetriesPostFromIdleFrames) {
     return coordinator.nothingToPresentResultTotalForDiagnostics();
   };
 
-  const std::uint64_t settled = runIdleFrames(30);
+  std::ignore = runIdleFrames(30);
+  RenderCoordinatorTestAccess::makeCanvasCommitDue(coordinator);
+  RenderCoordinatorTestAccess::makeRasterViewportSettled(coordinator);
+  const std::uint64_t settled = runIdleFrames(10);
+  const std::uint64_t retryVersion =
+      EditorShellTestAccess::App(shell).document().currentFrameVersion();
+  const Vector2i retryCanvas = EditorShellTestAccess::App(shell).document().document().canvasSize();
   ASSERT_GE(settled, 1u) << "the editor's first render must have produced nothing to present";
   EXPECT_EQ(runIdleFrames(10), settled) << "no retry before its delay has passed";
 
@@ -2449,7 +2491,13 @@ TEST(EditorShellTest, NothingToPresentRetriesPostFromIdleFrames) {
     RenderCoordinatorTestAccess::advanceFakeSchedulingClock(delay);
     ++expected;
     EXPECT_EQ(runIdleFrames(10), expected)
-        << "the retry due after " << delay.count() << " ms must post from an idle frame";
+        << "the retry due after " << delay.count() << " ms must post from an idle frame; "
+        << RenderCoordinatorTestAccess::overviewScheduleState(
+               coordinator, EditorShellTestAccess::App(shell), shell.viewportForReadback());
+    EXPECT_THAT(EditorShellTestAccess::App(shell).document().currentFrameVersion(),
+                testing::Eq(retryVersion));
+    EXPECT_THAT(EditorShellTestAccess::App(shell).document().document().canvasSize(),
+                testing::Eq(retryCanvas));
   }
   RenderCoordinatorTestAccess::advanceFakeSchedulingClock(std::chrono::minutes(1));
   EXPECT_EQ(runIdleFrames(10), expected) << "after the last retry, idle frames post nothing";
@@ -2491,11 +2539,12 @@ TEST(EditorShellTest, DueNothingToPresentRetryWaitsForTheSamplePickerWithoutWaki
   EXPECT_EQ(runIdleFrames(10), settled + 1) << "the due retry posts once the picker closes";
 }
 
-TEST(EditorShellTest, FullFrameSmokeCoversPanelSourceAndContextMenuStates) {
-  gui::EditorWindow window = MakeHiddenWindow();
+void RunFullFrameSmokeCoversPanelSourceAndContextMenuStates(double contentScale) {
+  gui::EditorWindow window = MakeHiddenWindow(contentScale);
   if (!window.valid()) {
     GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
   }
+  ExpectTestWindowScale(window, Vector2i(640, 480), contentScale);
 
   EditorShell shell(window, OptionsWithSource(kReferencedSvg, "referenced.svg"));
   ASSERT_TRUE(shell.valid());
@@ -2547,6 +2596,10 @@ TEST(EditorShellTest, FullFrameSmokeCoversPanelSourceAndContextMenuStates) {
   shell.runFrame();
   window.endFrame();
   EXPECT_FALSE(EditorShellTestAccess::RenderContextMenuOpenRequested(shell));
+}
+
+TEST(EditorShellTest, FullFrameSmokeCoversPanelSourceAndContextMenuStates) {
+  RunFullFrameSmokeCoversPanelSourceAndContextMenuStates(kTestContentScale);
 }
 
 TEST(EditorShellTest, IntrinsicSizeDocumentInitializesViewportWithoutViewBox) {
@@ -2611,12 +2664,21 @@ TEST(EditorShellTest, LayerInspectorReadbackIncludesSelectedStyleAndPathDiagnost
 )svg";
   EditorShell shell(window, OptionsWithSource(kDiagnosticSvg, "diagnostics.svg"));
   ASSERT_TRUE(shell.valid());
+  // On a HiDPI display the editor commits the device-pixel canvas size after a debounce. That
+  // commit invalidates the render tree this readback inspects, and when the presented raster
+  // already matches it no render follows to rebuild it, so whether the rendering-instance fill is
+  // present would depend on how long the host's frames take. Hold the scheduling clock so the
+  // debounce cannot elapse mid-test and the readback sees the render tree its render built.
+  RenderCoordinatorTestAccess::useFakeSchedulingClock(EditorShellTestAccess::Coordinator(shell));
   auto target = EditorShellTestAccess::App(shell).document().document().querySelector("#target");
   ASSERT_TRUE(target.has_value());
+  RenderCoordinator& coordinator = EditorShellTestAccess::Coordinator(shell);
+  // Keep the unrelated canvas debounce from invalidating the fresh-render diagnostic phase.
+  RenderCoordinatorTestAccess::useFakeSchedulingClock(coordinator);
   EditorShellTestAccess::App(shell).setSelection(*target);
   (void)target->getComputedStyle();
   RunFramesUntilDisplayedSelectionBounds(window, shell);
-  ASSERT_TRUE(shell.asyncRendererForReplay().waitUntilNoRenderInFlightForTesting(
+  ASSERT_TRUE(coordinator.asyncRenderer().waitUntilNoRenderInFlightForTesting(
       std::chrono::steady_clock::now() + std::chrono::seconds(2)));
   RunShellFrame(window, shell);
 
@@ -2632,6 +2694,19 @@ TEST(EditorShellTest, LayerInspectorReadbackIncludesSelectedStyleAndPathDiagnost
   EXPECT_FALSE(status.selectedRenderingInstanceFill->empty());
   ASSERT_TRUE(status.selectedPathDataAttribute.has_value());
   EXPECT_EQ(*status.selectedPathDataAttribute, "M 10 12 L 50 12 L 50 36 Z");
+
+  // A canvas commit clears the optional rendering instance until the next document render.
+  EditorShellTestAccess::App(shell).document().document().setCanvasSize(240, 160);
+  const LayerInspectorStatusReadback afterCommit = shell.layerInspectorStatusForReadback();
+  EXPECT_THAT(afterCommit.selectedRenderingInstanceFill, testing::Eq(std::nullopt));
+  EXPECT_THAT(afterCommit.selectedStyleAttribute,
+              testing::Optional(testing::Eq("fill: #010203; stroke: #040506")));
+  EXPECT_THAT(afterCommit.selectedLocalStyleFill,
+              testing::Optional(testing::Eq("PaintServer(solid rgba(1, 2, 3, 255))")));
+  EXPECT_THAT(afterCommit.selectedComputedFill,
+              testing::Optional(testing::Eq("PaintServer(solid rgba(1, 2, 3, 255))")));
+  EXPECT_THAT(afterCommit.selectedPathDataAttribute,
+              testing::Optional(testing::Eq("M 10 12 L 50 12 L 50 36 Z")));
 }
 
 TEST(EditorShellTest, ReplayActionsSwitchToolsAndIgnoreUnknownToolNames) {
@@ -3805,16 +3880,18 @@ TEST(EditorShellTest, DocumentSpaceReplayInputRoutesSelectPressAndRelease) {
   EXPECT_TRUE(EditorShellTestAccess::RequestRenderAtEndOfFrame(shell));
 }
 
-TEST(EditorShellTest, FullDesktopFrameLoopPresentsShapeDragBeforeMouseUp) {
-  gui::EditorWindow window(gui::EditorWindowOptions{
-      .title = "Donner full desktop drag regression",
-      .initialWidth = 1200,
-      .initialHeight = 800,
-      .visible = false,
-  });
+void RunFullDesktopFrameLoopPresentsShapeDragBeforeMouseUp(double contentScale) {
+  gui::EditorWindow window(TestWindowOptions(
+      {
+          .title = "Donner full desktop drag regression",
+          .initialWidth = 1200,
+          .initialHeight = 800,
+      },
+      contentScale));
   if (!window.valid()) {
     GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
   }
+  ExpectTestWindowScale(window, Vector2i(1200, 800), contentScale);
 
   EditorShell shell(window, OptionsWithSource(kInitialSvg, "initial.svg"));
   ASSERT_TRUE(shell.valid());
@@ -3894,18 +3971,71 @@ TEST(EditorShellTest, FullDesktopFrameLoopPresentsShapeDragBeforeMouseUp) {
   runFrameWithMouse(screenPoint(Vector2d(35.0, 28.0)), /*mouseDown=*/false);
 }
 
+TEST(EditorShellTest, FullDesktopFrameLoopPresentsShapeDragBeforeMouseUp) {
+  RunFullDesktopFrameLoopPresentsShapeDragBeforeMouseUp(kTestContentScale);
+}
+
+// The rest of this suite renders at 2x by design (see `kTestContentScale`). This 1x cross-section
+// is a deliberate regression check for standard-density displays: startup and first present, a
+// held select-and-drag that presents a live tile before mouse-up, and the docked source pane and
+// overlay states. Keep it small; scale-sensitive coverage belongs in the 2x suite.
+TEST(EditorShell1xSmokeTest, HiddenWindowShellConstructsAndRunsFrames) {
+  RunHiddenWindowShellConstructsAndRunsFrames(/*contentScale=*/1.0);
+}
+
+TEST(EditorShell1xSmokeTest, FullDesktopFrameLoopPresentsShapeDragBeforeMouseUp) {
+  RunFullDesktopFrameLoopPresentsShapeDragBeforeMouseUp(/*contentScale=*/1.0);
+}
+
+TEST(EditorShell1xSmokeTest, FullFrameSmokeCoversPanelSourceAndContextMenuStates) {
+  RunFullFrameSmokeCoversPanelSourceAndContextMenuStates(/*contentScale=*/1.0);
+}
+
+namespace {
+
+bool CachedRasterCoversVisibleArtboard(EditorShell& shell, const ViewportState& viewport,
+                                       bool requireRequestedDensity) {
+  const auto frame = EditorShellTestAccess::Coordinator(shell).framePresentation();
+  if (frame == nullptr || frame->tiles().empty()) {
+    return false;
+  }
+  const Box2d pane = viewport.screenToDocument(
+      Box2d(viewport.paneOrigin, viewport.paneOrigin + viewport.paneSize));
+  const Box2d visible(
+      Vector2d(std::max(pane.topLeft.x, viewport.documentViewBox.topLeft.x),
+               std::max(pane.topLeft.y, viewport.documentViewBox.topLeft.y)),
+      Vector2d(std::min(pane.bottomRight.x, viewport.documentViewBox.bottomRight.x),
+               std::min(pane.bottomRight.y, viewport.documentViewBox.bottomRight.y)));
+  const Box2d rect = frame->rasterDocumentRect();
+  const Vector2i pixels = frame->rasterOutputSizePx();
+  if (rect.width() <= 0.0 || rect.height() <= 0.0 || pixels.x <= 0 || pixels.y <= 0 ||
+      visible.width() <= 0.0 || visible.height() <= 0.0 || !rect.contains(visible.topLeft) ||
+      !rect.contains(visible.bottomRight)) {
+    return false;
+  }
+  if (!requireRequestedDensity) {
+    return true;
+  }
+  const EditorRasterViewport raster = viewport.rasterViewport();
+  const Vector2d requiredScale(raster.outputSizePx.x / raster.documentRect.width(),
+                               raster.outputSizePx.y / raster.documentRect.height());
+  return pixels.x / rect.width() == requiredScale.x && pixels.y / rect.height() == requiredScale.y;
+}
+
+}  // namespace
+
 TEST(EditorShellTest, PartlyOffscreenSplashShineEllipseFirstHeldMoveMatchesSettledPixels) {
-  gui::EditorWindow window(gui::EditorWindowOptions{
+  gui::EditorWindow window(TestWindowOptions({
       .title = "Partly offscreen splash drag pixels",
       .initialWidth = 960,
       .initialHeight = 720,
-      .visible = false,
       .forceOffscreenRenderTarget = true,
       .enableFramebufferReadback = true,
-  });
+  }));
   if (!window.valid()) {
     GTEST_SKIP() << "Framebuffer readback is unavailable on this host";
   }
+  ExpectTestWindowScale(window, Vector2i(960, 720), kTestContentScale);
   const EditorSample* splash = FindEditorSample("donner-splash");
   ASSERT_NE(splash, nullptr);
   EditorShell shell(window, OptionsWithSource(splash->source, "donner_splash.svg"));
@@ -3928,25 +4058,46 @@ TEST(EditorShellTest, PartlyOffscreenSplashShineEllipseFirstHeldMoveMatchesSettl
     shell.runFrame();
     return window.endFrameAndReadPixels();
   };
-  const auto settleFrame = [&](std::string_view stage, std::uint64_t minimumVersion) {
+  const auto settleFrame = [&](std::string_view stage, std::uint64_t minimumVersion,
+                               bool requireSelectedCache = false,
+                               bool requireRequestedDensity = true) {
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
     for (int frame = 0; frame < 20 && std::chrono::steady_clock::now() < deadline; ++frame) {
       window.beginFrame();
       shell.runFrame();
       window.endFrame();
       if (!shell.asyncRendererForReplay().waitUntilNoRenderInFlightForTesting(deadline)) {
-        break;
+        ADD_FAILURE() << "The splash render wait reached its deadline at " << stage
+                      << " frame=" << frame
+                      << " rendererBusy=" << shell.asyncRendererForReplay().isBusy()
+                      << " renderInFlight="
+                      << shell.asyncRendererForReplay().hasRenderInFlightForTesting()
+                      << " heldResultPolls="
+                      << shell.asyncRendererForReplay().replayResultHoldPollCountForTesting();
+        return false;
       }
-      const LayerInspectorStatusReadback status = shell.layerInspectorStatusForReadback();
-      if (app.document().currentFrameVersion() >= minimumVersion &&
+      if (requireSelectedCache && frame == 0) {
+        // Selected prewarming requires the 120ms viewport/canvas setup window to have settled.
+        RenderCoordinator& coordinator = EditorShellTestAccess::Coordinator(shell);
+        RenderCoordinatorTestAccess::makeCanvasCommitDue(coordinator);
+        RenderCoordinatorTestAccess::makeRasterViewportSettled(coordinator);
+        continue;
+      }
+      if (!app.document().hasPendingMutations() && !shell.asyncRendererForReplay().isBusy() &&
+          app.document().currentFrameVersion() >= minimumVersion &&
           EditorShellTestAccess::DisplayedDocVersion(shell) ==
               app.document().currentFrameVersion() &&
-          !status.tiles.empty()) {
+          CachedRasterCoversVisibleArtboard(shell, shell.viewportForReadback(),
+                                            requireRequestedDensity) &&
+          (!requireSelectedCache || EditorShellTestAccess::Coordinator(shell)
+                                        .compositedPresentation()
+                                        .hasCachedTexturesForEntity(shineEntity))) {
         return true;
       }
       std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
     const LayerInspectorStatusReadback status = shell.layerInspectorStatusForReadback();
+    const auto frame = EditorShellTestAccess::Coordinator(shell).framePresentation();
     ADD_FAILURE() << "The splash did not produce a stable cached frame at " << stage
                   << ": minimumVersion=" << minimumVersion
                   << " current=" << app.document().currentFrameVersion()
@@ -3957,24 +4108,33 @@ TEST(EditorShellTest, PartlyOffscreenSplashShineEllipseFirstHeldMoveMatchesSettl
                   << " renderInFlight="
                   << shell.asyncRendererForReplay().hasRenderInFlightForTesting()
                   << " heldResultPolls="
-                  << shell.asyncRendererForReplay().replayResultHoldPollCountForTesting();
+                  << shell.asyncRendererForReplay().replayResultHoldPollCountForTesting()
+                  << " requireRequestedDensity=" << requireRequestedDensity
+                  << " presentedRect=" << (frame != nullptr ? frame->rasterDocumentRect() : Box2d())
+                  << " presentedPixels="
+                  << (frame != nullptr ? frame->rasterOutputSizePx() : Vector2i::Zero())
+                  << " presentedOverview=" << (frame != nullptr && frame->usesOverviewRaster())
+                  << " requestedRect=" << shell.viewportForReadback().rasterViewport().documentRect
+                  << " requestedPixels="
+                  << shell.viewportForReadback().rasterViewport().outputSizePx;
     return false;
   };
   ASSERT_TRUE(settleFrame("initial", app.document().currentFrameVersion()));
   app.setSelection(*shine);
-  // The selection-only cache request is committed after a brief viewport-settle delay. Let it
-  // become eligible before starting the held-pointer frame.
-  std::this_thread::sleep_for(std::chrono::milliseconds(150));
-  ASSERT_TRUE(settleFrame("selected", app.document().currentFrameVersion()));
+  ASSERT_THAT(settleFrame("selected", app.document().currentFrameVersion(),
+                          /*requireSelectedCache=*/true),
+              testing::Eq(true));
 
   const ViewportState viewport = shell.viewportForReadback();
   const EditorRasterViewport visibleRaster = viewport.rasterViewport();
   ASSERT_TRUE(visibleRaster.viewportBounded);
   ASSERT_NE(visibleRaster.outputSizePx, viewport.selectedPrewarmRasterViewport().outputSizePx)
       << "The regression needs a small pane whose selected prewarm would change tile dimensions";
-  EXPECT_EQ(shell.layerInspectorStatusForReadback().presentationCoverage.activeOutputSizePx,
-            visibleRaster.outputSizePx)
-      << "Selecting the ellipse must preserve the complete visible static tile cache";
+  EXPECT_THAT(CachedRasterCoversVisibleArtboard(shell, viewport, /*requireRequestedDensity=*/true),
+              testing::Eq(true))
+      << "Selecting the ellipse must retain complete visible coverage at the requested density; "
+      << RenderCoordinatorTestAccess::overviewScheduleState(
+             EditorShellTestAccess::Coordinator(shell), app, shell.viewportForReadback());
   const std::optional<Box2d> originalChromeBounds =
       EditorShellTestAccess::SelectionChromeFirstBoundsDoc(shell);
   ASSERT_TRUE(originalChromeBounds.has_value());
@@ -4014,15 +4174,18 @@ TEST(EditorShellTest, PartlyOffscreenSplashShineEllipseFirstHeldMoveMatchesSettl
   EXPECT_NEAR(firstChromeBounds->topLeft.y - originalChromeBounds->topLeft.y, 300.0, 1e-6);
   EXPECT_NEAR(firstChromeBounds->bottomRight.y - originalChromeBounds->bottomRight.y, 300.0, 1e-6);
   const svg::RendererBitmap firstMove = captureFrame(/*contentOnly=*/true);
+  ASSERT_THAT(firstMove.empty(), testing::IsFalse());
 
-  EditorShellTestAccess::HoldRenderResultsForPolls(shell, 0);
+  shell.asyncRendererForReplay().releaseReplayResultHoldForTesting();
   const std::uint64_t heldDragVersion = app.document().currentFrameVersion();
   shell.queueDocumentSpaceReplayInputForTesting(EditorShellDocumentReplayInput{
       .documentPoint = Vector2d(300.0, 380.0),
       .leftMouseReleased = true,
   });
   (void)captureFrame();
-  ASSERT_TRUE(settleFrame("released", heldDragVersion));
+  ASSERT_THAT(settleFrame("released", heldDragVersion, /*requireSelectedCache=*/false,
+                          /*requireRequestedDensity=*/false),
+              testing::Eq(true));
   const std::optional<svg::SVGElement> movedShine =
       app.document().document().querySelector("#Background_shine ellipse");
   ASSERT_TRUE(movedShine.has_value());
@@ -4031,7 +4194,12 @@ TEST(EditorShellTest, PartlyOffscreenSplashShineEllipseFirstHeldMoveMatchesSettl
   ASSERT_TRUE(movedWorldBounds.has_value());
   EXPECT_NEAR(movedWorldBounds->topLeft.x, originalWorldBounds->topLeft.x, 1e-6);
   EXPECT_NEAR(movedWorldBounds->bottomRight.x, originalWorldBounds->bottomRight.x, 1e-6);
-  EXPECT_NEAR(movedWorldBounds->topLeft.y - originalWorldBounds->topLeft.y, 300.0, 1e-6);
+  EXPECT_NEAR(movedWorldBounds->topLeft.y - originalWorldBounds->topLeft.y, 300.0, 1e-6)
+      << " pendingMutations=" << app.document().hasPendingMutations()
+      << " rendererBusy=" << shell.asyncRendererForReplay().isBusy()
+      << " renderInFlight=" << shell.asyncRendererForReplay().hasRenderInFlightForTesting()
+      << " heldResultPolls="
+      << shell.asyncRendererForReplay().replayResultHoldPollCountForTesting();
   EXPECT_NEAR(movedWorldBounds->bottomRight.y - originalWorldBounds->bottomRight.y, 300.0, 1e-6);
   const svg::RendererBitmap settled = captureFrame(/*contentOnly=*/true);
   ASSERT_EQ(beforeMove.dimensions, firstMove.dimensions);
@@ -4084,17 +4252,17 @@ TEST(EditorShellTest, PartlyOffscreenSplashShineEllipseFirstHeldMoveMatchesSettl
 }
 
 TEST(EditorShellTest, ColdSplashShineDragGetsFullTileBeforeMouseUp) {
-  gui::EditorWindow window(gui::EditorWindowOptions{
+  gui::EditorWindow window(TestWindowOptions({
       .title = "Cold splash shine drag pixels",
       .initialWidth = 960,
       .initialHeight = 720,
-      .visible = false,
       .forceOffscreenRenderTarget = true,
       .enableFramebufferReadback = true,
-  });
+  }));
   if (!window.valid()) {
     GTEST_SKIP() << "Framebuffer readback is unavailable on this host";
   }
+  ExpectTestWindowScale(window, Vector2i(960, 720), kTestContentScale);
   const EditorSample* splash = FindEditorSample("donner-splash");
   ASSERT_NE(splash, nullptr);
   EditorShell shell(window, OptionsWithSource(splash->source, "donner_splash.svg"));
@@ -4109,11 +4277,17 @@ TEST(EditorShellTest, ColdSplashShineDragGetsFullTileBeforeMouseUp) {
     shell.runFrame();
     return window.endFrameAndReadPixels();
   };
-  const auto waitForCurrentFrame = [&] {
+  const auto waitForCurrentFrame = [&](bool requireRequestedDensity = false) {
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
     for (int frame = 0; frame < 24 && std::chrono::steady_clock::now() < deadline; ++frame) {
       (void)captureContent();
       if (!shell.asyncRendererForReplay().waitUntilNoRenderInFlightForTesting(deadline)) {
+        ADD_FAILURE() << "Cold shine render wait reached its deadline at frame " << frame
+                      << " rendererBusy=" << shell.asyncRendererForReplay().isBusy()
+                      << " renderInFlight="
+                      << shell.asyncRendererForReplay().hasRenderInFlightForTesting()
+                      << " heldResultPolls="
+                      << shell.asyncRendererForReplay().replayResultHoldPollCountForTesting();
         return false;
       }
       const LayerInspectorStatusReadback status = shell.layerInspectorStatusForReadback();
@@ -4122,16 +4296,41 @@ TEST(EditorShellTest, ColdSplashShineDragGetsFullTileBeforeMouseUp) {
           std::ranges::any_of(status.tiles, [](const LayerInspectorStatusReadback::Tile& tile) {
             return tile.isDragTarget;
           });
-      if (!app.document().hasPendingMutations() &&
+      if (!app.document().hasPendingMutations() && !shell.asyncRendererForReplay().isBusy() &&
           EditorShellTestAccess::DisplayedDocVersion(shell) ==
               app.document().currentFrameVersion() &&
-          !status.tiles.empty() && dragTileReady) {
+          CachedRasterCoversVisibleArtboard(shell, shell.viewportForReadback(),
+                                            requireRequestedDensity) &&
+          dragTileReady) {
         return true;
       }
     }
+    const LayerInspectorStatusReadback status = shell.layerInspectorStatusForReadback();
+    const auto frame = EditorShellTestAccess::Coordinator(shell).framePresentation();
+    ADD_FAILURE()
+        << "Cold shine frame did not reach its held-pointer cache: "
+        << RenderCoordinatorTestAccess::overviewScheduleState(
+               EditorShellTestAccess::Coordinator(shell), app, shell.viewportForReadback())
+        << " pendingMutations=" << app.document().hasPendingMutations()
+        << " dragging=" << status.selectionDragging
+        << " activePreview=" << status.activeDragPreview.has_value()
+        << " tiles=" << status.tiles.size() << " dragTiles="
+        << std::ranges::count_if(
+               status.tiles,
+               [](const LayerInspectorStatusReadback::Tile& tile) { return tile.isDragTarget; })
+        << " renderInFlight=" << shell.asyncRendererForReplay().hasRenderInFlightForTesting()
+        << " heldResultPolls="
+        << shell.asyncRendererForReplay().replayResultHoldPollCountForTesting()
+        << " requireRequestedDensity=" << requireRequestedDensity
+        << " presentedRect=" << (frame != nullptr ? frame->rasterDocumentRect() : Box2d())
+        << " presentedPixels="
+        << (frame != nullptr ? frame->rasterOutputSizePx() : Vector2i::Zero())
+        << " presentedOverview=" << (frame != nullptr && frame->usesOverviewRaster())
+        << " requestedRect=" << shell.viewportForReadback().rasterViewport().documentRect
+        << " requestedPixels=" << shell.viewportForReadback().rasterViewport().outputSizePx;
     return false;
   };
-  ASSERT_TRUE(waitForCurrentFrame());
+  ASSERT_THAT(waitForCurrentFrame(/*requireRequestedDensity=*/true), testing::Eq(true));
   const ViewportState viewport = shell.viewportForReadback();
   const svg::RendererBitmap before = captureContent();
 
@@ -4191,14 +4390,13 @@ TEST(EditorShellTest, ColdSplashShineDragGetsFullTileBeforeMouseUp) {
 }
 
 TEST(EditorShellTest, GeodeMaskedChildrenUpdateCanvasThroughTwoHeldMoves) {
-  gui::EditorWindow window(gui::EditorWindowOptions{
+  gui::EditorWindow window(TestWindowOptions({
       .title = "Geode masked child held drag pixels",
       .initialWidth = 1024,
       .initialHeight = 768,
-      .visible = false,
       .forceOffscreenRenderTarget = true,
       .enableFramebufferReadback = true,
-  });
+  }));
   if (!window.valid()) {
     GTEST_SKIP() << "Framebuffer readback is unavailable on this host";
   }
@@ -4319,16 +4517,13 @@ TEST(EditorShellTest, GeodeMaskedChildrenUpdateCanvasThroughTwoHeldMoves) {
 
 void RunGeodeColdDirectRetinaDrag(std::string_view id, bool selectFromLayers,
                                   bool waitForSelectedPrewarm = false) {
-  gui::EditorWindow window(gui::EditorWindowOptions{
+  gui::EditorWindow window(TestWindowOptions({
       .title = "Geode direct Retina pointer drag",
       .initialWidth = 1600,
       .initialHeight = 900,
-      .visible = false,
-      .offscreen = true,
       .forceOffscreenRenderTarget = true,
-      .offscreenContentScale = 2.0,
       .enableFramebufferReadback = true,
-  });
+  }));
   if (!window.valid()) {
     GTEST_SKIP() << "Retina framebuffer readback is unavailable on this host";
   }
@@ -5138,6 +5333,74 @@ TEST(EditorShellTest, ReferenceHighlightSummaryClearsForEmptySelection) {
   EXPECT_EQ(EditorShellTestAccess::LastReferenceHighlightSelectionSize(shell), 0u);
   EXPECT_TRUE(EditorShellTestAccess::ReferenceHighlightElements(shell).empty());
   EXPECT_TRUE(EditorShellTestAccess::CombinedSourcePreviewElements(shell).empty());
+}
+
+// A press that changes the selection starts a render, and the reference summary must wait for it.
+// Waiting by requesting a frame every frame redraws at display rate for the whole render; in the
+// browser those frames hold the GPU owner thread that the render itself is waiting on.
+TEST(EditorShellTest, ReferenceHighlightWaitsForRendererWakeInsteadOfRequestingFrames) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
+
+  EditorShell shell(window, OptionsWithSource(kReferencedSvg, "referenced.svg"));
+  ASSERT_TRUE(shell.valid());
+  AsyncRenderer& renderer = shell.asyncRendererForReplay();
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+  for (int frame = 0; frame < 40; ++frame) {
+    RunShellFrame(window, shell);
+    ASSERT_TRUE(renderer.waitUntilNoRenderInFlightForTesting(deadline));
+    if (frame >= 3 && !EditorShellTestAccess::RendererBusy(shell)) {
+      break;
+    }
+  }
+  ASSERT_FALSE(EditorShellTestAccess::RendererBusy(shell));
+
+  // Start a render that stays in flight, then change the selection behind it.
+  renderer.setReplayDocumentAccessBlockedForTesting(true);
+  EditorShellTestAccess::Coordinator(shell).requestPresentationRefresh();
+  EditorShellTestAccess::SetRequestRenderAtEndOfFrame(shell);
+  RunShellFrame(window, shell);
+  ASSERT_TRUE(renderer.hasRenderInFlightForTesting());
+  auto target = EditorShellTestAccess::App(shell).document().document().querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  EditorShellTestAccess::App(shell).setSelection(*target);
+
+  // The change may ask for a follow-up frame, but the loop must then be able to park.
+  std::uint64_t blockedWakeSerial = window.wakeEventLoopRequestSerialForTesting();
+  int quietFrames = 0;
+  for (int frame = 0; frame < 6 && quietFrames < 3; ++frame) {
+    RunShellFrame(window, shell);
+    const std::uint64_t wakeSerial = window.wakeEventLoopRequestSerialForTesting();
+    quietFrames = wakeSerial == blockedWakeSerial ? quietFrames + 1 : 0;
+    blockedWakeSerial = wakeSerial;
+  }
+  EXPECT_EQ(quietFrames, 3) << "the editor kept requesting frames while the render was running";
+  EXPECT_EQ(EditorShellTestAccess::LastReferenceHighlightSelectionSize(shell), 0u);
+  ASSERT_TRUE(renderer.hasRenderInFlightForTesting());
+
+  // Drive the loop the way the browser does: a frame runs only for an outstanding wake. The
+  // renderer's own completion and warmup-release wakes must carry the summary to completion.
+  renderer.setReplayDocumentAccessBlockedForTesting(false);
+  const auto completionDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+  std::uint64_t consumedWakeSerial = blockedWakeSerial;
+  for (int frame = 0; frame < 20; ++frame) {
+    if (EditorShellTestAccess::LastReferenceHighlightSelectionSize(shell) == 1u) {
+      break;
+    }
+    while (window.wakeEventLoopRequestSerialForTesting() == consumedWakeSerial &&
+           std::chrono::steady_clock::now() < completionDeadline) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    ASSERT_GT(window.wakeEventLoopRequestSerialForTesting(), consumedWakeSerial)
+        << "no wake within 10 s: the demand-driven loop would park with a stale reference summary "
+        << "(renderer busy=" << EditorShellTestAccess::RendererBusy(shell) << ")";
+    consumedWakeSerial = window.wakeEventLoopRequestSerialForTesting();
+    RunShellFrame(window, shell);
+  }
+  EXPECT_EQ(EditorShellTestAccess::LastReferenceHighlightSelectionSize(shell), 1u);
+  EXPECT_EQ(EditorShellTestAccess::ReferenceSummary(shell).referencedElements.size(), 2u);
 }
 
 TEST(EditorShellTest, ShellGeometryHelpersClampToViewportAndSelectionCache) {
@@ -6896,12 +7159,11 @@ TEST(EditorShellTest, ShapeClipboardRejectsMalformedAndPastesIntoSelectedGroup) 
 
 TEST(EditorShellTest, SamplePickerAppearsBeforeGeneratingThumbnailsAcrossFrames) {
   // Every card must be visible before this test requires every thumbnail.
-  gui::EditorWindow window(gui::EditorWindowOptions{
+  gui::EditorWindow window(TestWindowOptions({
       .title = "Donner complete sample picker test",
       .initialWidth = 960,
       .initialHeight = 720,
-      .visible = false,
-  });
+  }));
   if (!window.valid()) {
     GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
   }
@@ -7004,12 +7266,11 @@ TEST(EditorShellTest, SamplePickerAppearsBeforeGeneratingThumbnailsAcrossFrames)
 }
 
 TEST(EditorShellTest, GeodeSplashSampleClickPublishesFirstDocumentFrame) {
-  gui::EditorWindow window(gui::EditorWindowOptions{
+  gui::EditorWindow window(TestWindowOptions({
       .title = "Geode Splash sample load regression",
       .initialWidth = 960,
       .initialHeight = 720,
-      .visible = false,
-  });
+  }));
   if (!window.valid()) {
     GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
   }
@@ -7836,14 +8097,13 @@ TEST(EditorShellTest, SingleNoneControlClearsActiveSelectedStrokeWithOneUndo) {
 }
 
 TEST(EditorShellTest, FillAndStrokeForegroundWidgetScreenshots) {
-  gui::EditorWindow window(gui::EditorWindowOptions{
+  gui::EditorWindow window(TestWindowOptions({
       .title = "Fill and Stroke foreground screenshots",
       .initialWidth = 640,
       .initialHeight = 480,
-      .visible = false,
       .forceOffscreenRenderTarget = true,
       .enableFramebufferReadback = true,
-  });
+  }));
   if (!window.valid()) {
     GTEST_SKIP() << "Hidden editor window is unavailable on this host";
   }
@@ -7917,14 +8177,13 @@ TEST(EditorShellTest, StrokeTargetUpdatesAuthoringDefaultWithoutDocumentUndo) {
 }
 
 TEST(EditorShellTest, EyedropperSamplesDonnerTextAndShowsEdgeLoupe) {
-  gui::EditorWindow window(gui::EditorWindowOptions{
+  gui::EditorWindow window(TestWindowOptions({
       .title = "Eyedropper integration test",
       .initialWidth = 1600,
       .initialHeight = 900,
-      .visible = false,
       .forceOffscreenRenderTarget = true,
       .enableFramebufferReadback = true,
-  });
+  }));
   if (!window.valid()) {
     GTEST_SKIP() << "Hidden editor window is unavailable on this host";
   }
@@ -8009,5 +8268,234 @@ TEST(EditorShellTest, EyedropperSamplesDonnerTextAndShowsEdgeLoupe) {
         return std::string(originalDonner->cast<svg::SVGTextElement>().textContent());
       });
   EXPECT_THAT(originalContent, testing::Eq("Donner"));
+}
+
+namespace {
+
+/// Source with enough lines before and after a resource that a focus partition computed against
+/// stale line numbers lands on unrelated markup.
+std::string SourceFocusInsertionSvg() {
+  std::string source =
+      "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"240\" height=\"160\">\n"
+      "<defs>\n";
+  for (int i = 0; i < 6; ++i) {
+    source += "<linearGradient id=\"gradient-" + std::to_string(i) + "\">\n";
+    source += "<stop offset=\"0\" stop-color=\"red\"/>\n";
+    source += "<stop offset=\"1\" stop-color=\"blue\"/>\n";
+    source += "</linearGradient>\n";
+  }
+  source += "</defs>\n";
+  for (int i = 0; i < 24; ++i) {
+    source += "<rect id=\"filler-" + std::to_string(i) + "\" x=\"" + std::to_string(200 + i) +
+              "\" y=\"150\" width=\"1\" height=\"1\"/>\n";
+  }
+  source += "</svg>\n";
+  return source;
+}
+
+int LineAtOffset(std::string_view text, std::size_t offset) {
+  return static_cast<int>(std::count(text.begin(), text.begin() + offset, '\n'));
+}
+
+/// Describe which source lines the active focus partition keeps visible.
+std::string DescribeFocusLines(const TextEditor& source) {
+  const std::string text = source.getText();
+  std::string description;
+  const int lineCount = LineAtOffset(text, text.size()) + 1;
+  std::size_t lineStart = 0;
+  for (int line = 0; line < lineCount; ++line) {
+    const std::size_t lineEnd = std::min(text.find('\n', lineStart), text.size());
+    description +=
+        source.isPositionInsideFocusRange(Coordinates(line, 0)) ? "  shown " : " folded ";
+    description += std::to_string(line) + ": " + text.substr(lineStart, lineEnd - lineStart);
+    description += "\n";
+    lineStart = lineEnd + 1;
+  }
+  return description;
+}
+
+/// Run frames until the async renderer is idle and every queued writeback reached the source pane.
+void SettleShellFrames(gui::EditorWindow& window, EditorShell& shell) {
+  for (int attempt = 0; attempt < 6; ++attempt) {
+    RunShellFrame(window, shell);
+    ASSERT_TRUE(shell.asyncRendererForReplay().waitUntilNoRenderInFlightForTesting(
+        std::chrono::steady_clock::now() + std::chrono::seconds(3)));
+  }
+  RunShellFrame(window, shell);
+}
+
+/// Expect the focused source view to show the whole selected element, and to fold unrelated
+/// filler markup.
+void ExpectFocusShowsSelectedElement(EditorShell& shell, std::string_view contentMarker,
+                                     std::string_view closeTag) {
+  EditorApp& app = EditorShellTestAccess::App(shell);
+  const TextEditor& source = EditorShellTestAccess::Source(shell);
+  const std::string text = source.getText();
+  ASSERT_EQ(text, internal::CanonicalizeForTextEditor(app.document().document().source()))
+      << "the source pane must mirror the document before focus is checked";
+  ASSERT_TRUE(EditorShellTestAccess::SourceFocusMode(shell));
+  ASSERT_TRUE(source.hasFocusPartition()) << DescribeFocusLines(source);
+
+  const std::size_t markerOffset = text.find(contentMarker);
+  ASSERT_NE(markerOffset, std::string::npos) << text;
+  const std::size_t openOffset = text.rfind('<', markerOffset);
+  ASSERT_NE(openOffset, std::string::npos);
+  // An empty element may still be self-closing; its end is whichever close comes first.
+  const std::size_t closeOffset =
+      std::min(text.find(closeTag, markerOffset), text.find("/>", markerOffset));
+  ASSERT_NE(closeOffset, std::string::npos) << text;
+  const int openLine = LineAtOffset(text, openOffset);
+  const int closeLine = LineAtOffset(text, closeOffset);
+  for (int line = openLine; line <= closeLine; ++line) {
+    EXPECT_TRUE(source.isPositionInsideFocusRange(Coordinates(line, 0)))
+        << "selected element line " << line << " is folded away\n"
+        << DescribeFocusLines(source);
+  }
+
+  const std::size_t fillerOffset = text.find("id=\"filler-12\"");
+  ASSERT_NE(fillerOffset, std::string::npos);
+  EXPECT_FALSE(source.isPositionInsideFocusRange(Coordinates(LineAtOffset(text, fillerOffset), 0)))
+      << "unrelated markup should stay folded\n"
+      << DescribeFocusLines(source);
+}
+
+}  // namespace
+
+TEST(EditorShellTest, SourceFocusRevealsNewTextWhileCreatingAndTyping) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
+
+  EditorShell shell(window, OptionsWithSource(SourceFocusInsertionSvg(), "focus-new-text.svg"));
+  ASSERT_TRUE(shell.valid());
+  ASSERT_TRUE(EditorShellTestAccess::SourceFocusMode(shell));
+  SettleShellFrames(window, shell);
+
+  DriveGlobalShortcut(shell, {ImGuiKey_T});
+  ASSERT_TRUE(EditorShellTestAccess::ActiveToolIsText(shell));
+  MouseModifiers doubleClick;
+  doubleClick.doubleClick = true;
+  shell.queueDocumentSpaceReplayInputForTesting(EditorShellDocumentReplayInput{
+      .documentPoint = Vector2d(20.0, 60.0),
+      .leftMouseDown = true,
+      .leftMousePressed = true,
+      .modifiers = doubleClick,
+  });
+  RunShellFrame(window, shell);
+  shell.queueDocumentSpaceReplayInputForTesting(EditorShellDocumentReplayInput{
+      .documentPoint = Vector2d(20.0, 60.0),
+      .leftMouseReleased = true,
+  });
+  SettleShellFrames(window, shell);
+
+  ASSERT_TRUE(EditorShellTestAccess::TextToolIsEditing(shell));
+  ASSERT_THAT(EditorShellTestAccess::App(shell).selectedElements(), testing::SizeIs(1));
+  EXPECT_EQ(EditorShellTestAccess::App(shell).selectedElements().front().type(),
+            svg::ElementType::Text);
+  {
+    SCOPED_TRACE("after creating the text element");
+    ExpectFocusShowsSelectedElement(shell, "x=\"20\" y=\"60\"", "</text>");
+  }
+
+  for (const char* typed : {"S", "V", "G"}) {
+    ImGui::GetIO().AddInputCharactersUTF8(typed);
+    SettleShellFrames(window, shell);
+    SCOPED_TRACE(std::string("after typing ") + typed);
+    ExpectFocusShowsSelectedElement(shell, "x=\"20\" y=\"60\"", "</text>");
+  }
+  EXPECT_NE(EditorShellTestAccess::Source(shell).getText().find("SVG</text>"), std::string::npos);
+}
+
+TEST(EditorShellTest, SourceFocusWaitsForInsertedElementToReachSourcePane) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
+
+  // A tool inserts and selects an element, then the selection is highlighted before the source
+  // pane has the element: either the insertion is still queued (a busy renderer defers the flush),
+  // or it is flushed and its source writeback waits for an idle frame.
+  for (const bool flushBeforeHighlight : {false, true}) {
+    SCOPED_TRACE(flushBeforeHighlight ? "flushed, writeback pending" : "insertion still queued");
+    EditorShell shell(window, OptionsWithSource(SourceFocusInsertionSvg(), "focus-insert.svg"));
+    ASSERT_TRUE(shell.valid());
+    SettleShellFrames(window, shell);
+
+    EditorApp& app = EditorShellTestAccess::App(shell);
+    svg::SVGDocument& document = app.document().document();
+    svg::SVGRectElement inserted = svg::SVGRectElement::Create(document);
+    inserted.setAttribute("id", "inserted");
+    inserted.setAttribute("width", "5");
+    inserted.setAttribute("height", "5");
+    app.applyMutation(EditorCommand::InsertElementCommand(document.svgElement(), inserted));
+    app.setSelection(inserted);
+    if (flushBeforeHighlight) {
+      ASSERT_TRUE(app.flushFrame());
+    }
+    EditorShellTestAccess::HighlightSelectionSourceIfNeeded(shell);
+
+    SettleShellFrames(window, shell);
+    ExpectFocusShowsSelectedElement(shell, "id=\"inserted\"", "/>");
+  }
+}
+
+TEST(EditorShellTest, SourceFocusRevealsNewPenPath) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
+
+  EditorShell shell(window, OptionsWithSource(SourceFocusInsertionSvg(), "focus-pen.svg"));
+  ASSERT_TRUE(shell.valid());
+  SettleShellFrames(window, shell);
+
+  DriveGlobalShortcut(shell, {ImGuiKey_P});
+  ASSERT_TRUE(EditorShellTestAccess::ActiveToolIsPen(shell));
+  for (const Vector2d& point : {Vector2d(20.0, 60.0), Vector2d(100.0, 60.0)}) {
+    shell.queueDocumentSpaceReplayInputForTesting(EditorShellDocumentReplayInput{
+        .documentPoint = point,
+        .leftMouseDown = true,
+        .leftMousePressed = true,
+    });
+    RunShellFrame(window, shell);
+    shell.queueDocumentSpaceReplayInputForTesting(EditorShellDocumentReplayInput{
+        .documentPoint = point,
+        .leftMouseReleased = true,
+    });
+    SettleShellFrames(window, shell);
+  }
+
+  ASSERT_THAT(EditorShellTestAccess::App(shell).selectedElements(), testing::SizeIs(1));
+  EXPECT_EQ(EditorShellTestAccess::App(shell).selectedElements().front().type(),
+            svg::ElementType::Path);
+  ExpectFocusShowsSelectedElement(shell, "<path", "/>");
+}
+
+TEST(EditorShellTest, SourceFocusRevealsPastedShape) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
+
+  EditorShell shell(window, OptionsWithSource(SourceFocusInsertionSvg(), "focus-paste.svg"));
+  ASSERT_TRUE(shell.valid());
+  EditorShellTestAccess::UseInMemoryShapeClipboard(shell);
+  SettleShellFrames(window, shell);
+
+  EditorApp& app = EditorShellTestAccess::App(shell);
+  std::optional<svg::SVGElement> source = app.document().document().querySelector("#filler-3");
+  ASSERT_TRUE(source.has_value());
+  app.setSelection(*source);
+  SettleShellFrames(window, shell);
+  EditorShellTestAccess::CopySelectedShapesToClipboard(shell);
+  ASSERT_TRUE(EditorShellTestAccess::ShapeClipboardHasText(shell));
+
+  EditorShellTestAccess::PasteShapesFromClipboard(shell, /*inFront=*/false);
+  SettleShellFrames(window, shell);
+
+  ASSERT_THAT(app.selectedElements(), testing::SizeIs(1));
+  EXPECT_EQ(std::string(app.selectedElements().front().id()), "filler-3_pasted");
+  ExpectFocusShowsSelectedElement(shell, "id=\"filler-3_pasted\"", "/>");
 }
 }  // namespace donner::editor

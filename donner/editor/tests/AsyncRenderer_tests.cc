@@ -1132,6 +1132,50 @@ TEST(AsyncRendererTest, CancellingDeferredCompositorWarmupCannotLoseDocumentWait
          "busy immediately before the worker released the gate.";
 }
 
+TEST(AsyncRendererTest, BusyWithIdleWakeWakesOnceWhenTheGateOpens) {
+  // Everything the worker can reach outlives the renderer, which joins the worker on destruction.
+  std::atomic<int> wakeCount = 0;
+  svg::SVGDocument document =
+      svg::instantiateSubtree(R"svg(<rect width="8" height="8" fill="blue"/>)svg");
+  document.setCanvasSize(8, 8);
+  svg::Renderer renderer;
+  AsyncRenderer asyncRenderer(AsyncRendererStartMode::Deferred);
+  asyncRenderer.setWakeCallback([&] { ++wakeCount; });
+
+  EXPECT_FALSE(asyncRenderer.isBusyWithIdleWake());
+  asyncRenderer.stageCompositorWarmupForTesting(/*pending=*/false, /*active=*/true);
+  asyncRenderer.completeCompositorWarmupForTesting();
+  EXPECT_EQ(wakeCount, 0) << "An idle check must not register a wake for later warmup.";
+
+  asyncRenderer.stageCompositorWarmupForTesting(/*pending=*/true, /*active=*/false);
+  EXPECT_TRUE(asyncRenderer.isBusyWithIdleWake());
+  EXPECT_EQ(wakeCount, 0) << "The caller waits; it must not be woken while the gate is closed.";
+  // The worker claims the queued warmup and later releases the document guard.
+  asyncRenderer.stageCompositorWarmupForTesting(/*pending=*/false, /*active=*/true);
+  asyncRenderer.completeCompositorWarmupForTesting();
+  EXPECT_EQ(wakeCount, 1) << "Speculative warmup publishes nothing, so the release must wake.";
+  asyncRenderer.stageCompositorWarmupForTesting(/*pending=*/false, /*active=*/true);
+  asyncRenderer.completeCompositorWarmupForTesting();
+  EXPECT_EQ(wakeCount, 1) << "One check registers one wake.";
+
+  // A foreground render supplies its own completion wake. Warmup above is staged through the test
+  // hooks; this path runs the real worker.
+  asyncRenderer.setReplayDocumentAccessBlockedForTesting(true);
+  asyncRenderer.requestRender(RenderRequest(renderer, document));
+  asyncRenderer.start();
+  EXPECT_TRUE(asyncRenderer.isBusyWithIdleWake());
+  EXPECT_EQ(wakeCount, 1);
+  asyncRenderer.setReplayDocumentAccessBlockedForTesting(false);
+  // The worker stages the result, then calls the wake callback after releasing its lock, so the
+  // render can leave flight before its wake runs. Wait for the wake itself; the bound only guards
+  // against a hang.
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+  ASSERT_TRUE(asyncRenderer.waitUntilNoRenderInFlightForTesting(deadline));
+  EXPECT_TRUE(WaitUntil([&] { return wakeCount.load() >= 2; }, deadline))
+      << "The foreground render must wake the caller when it completes; wakes=" << wakeCount;
+  EXPECT_TRUE(asyncRenderer.pollResult().has_value());
+}
+
 TEST(AsyncRendererTest, FirstDocumentResultWarmsLayerTilesBeforePublishing) {
   svg::SVGDocument document = svg::instantiateSubtree(R"svg(
     <defs>
@@ -1921,6 +1965,50 @@ TEST(AsyncRendererTest, ReplayResultHoldWithholdsStagedDoneResultForPollAttempts
   ASSERT_TRUE(asyncRenderer.waitUntilNoRenderInFlightForTesting(std::chrono::steady_clock::now() +
                                                                 std::chrono::seconds(5)));
   EXPECT_FALSE(asyncRenderer.isBusy());
+}
+
+TEST(AsyncRendererTest, ExplicitReplayResultHoldReleaseAdoptsCurrentAndFutureResults) {
+  svg::SVGDocument document = svg::instantiateSubtree(R"svg(
+    <rect x="0" y="0" width="16" height="16" fill="red" />
+  )svg");
+  document.setCanvasSize(32, 32);
+  svg::Renderer renderer;
+  AsyncRenderer asyncRenderer;
+  asyncRenderer.setReplayResultHoldFramesForTesting(2);
+  RenderRequest request(renderer, document);
+  request.version = 1;
+  asyncRenderer.requestRender(request);
+  ASSERT_THAT(asyncRenderer.waitUntilNoRenderInFlightForTesting(std::chrono::steady_clock::now() +
+                                                                std::chrono::seconds(2)),
+              testing::IsTrue());
+  EXPECT_THAT(asyncRenderer.pollResult(), testing::Eq(std::nullopt));
+  ASSERT_THAT(asyncRenderer.isBusy(), testing::IsTrue());
+  const std::uint64_t heldPolls = asyncRenderer.replayResultHoldPollCountForTesting();
+
+  const std::thread::id hostThread = std::this_thread::get_id();
+  bool releaseWakeObserved = false;
+  asyncRenderer.setWakeCallback([hostThread, &releaseWakeObserved] {
+    if (std::this_thread::get_id() == hostThread) {
+      releaseWakeObserved = true;
+    }
+  });
+  asyncRenderer.releaseReplayResultHoldForTesting();
+  asyncRenderer.setWakeCallback({});
+  EXPECT_THAT(releaseWakeObserved, testing::IsTrue());
+  std::optional<RenderResult> heldResult = asyncRenderer.pollResult();
+  ASSERT_THAT(heldResult, testing::Optional(testing::_));
+  EXPECT_THAT(heldResult->version, testing::Eq(1u));
+  EXPECT_THAT(asyncRenderer.replayResultHoldPollCountForTesting(), testing::Eq(heldPolls));
+
+  request.version = 2;
+  asyncRenderer.requestRender(request);
+  ASSERT_THAT(asyncRenderer.waitUntilNoRenderInFlightForTesting(std::chrono::steady_clock::now() +
+                                                                std::chrono::seconds(2)),
+              testing::IsTrue());
+  std::optional<RenderResult> futureResult = asyncRenderer.pollResult();
+  ASSERT_THAT(futureResult, testing::Optional(testing::_));
+  EXPECT_THAT(futureResult->version, testing::Eq(2u));
+  EXPECT_THAT(asyncRenderer.replayResultHoldPollCountForTesting(), testing::Eq(heldPolls));
 }
 
 // A second wake should fire for a second render request - the worker
