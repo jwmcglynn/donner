@@ -1241,7 +1241,7 @@ INSTANTIATE_TEST_SUITE_P(
                                            "Has anti-aliasing artifacts.")},
                     {"xmlns-validation.svg", Params::Skip("Bug? xmlns validation")},
 
-                    {"funcIRI-with-quotes.svg", Params::Skip("Bug: <svg> root element edge cases")},
+                    {"funcIRI-with-quotes.svg", Params{}},
                     {"nested-svg-one-with-rect-and-one-with-viewBox.svg",
                      Params::Skip("Bug: <svg> root element edge cases")},
                 })),
