@@ -8,6 +8,7 @@ import re
 import subprocess
 import tempfile
 import unittest
+from unittest import mock
 
 from python.runfiles import runfiles
 
@@ -92,6 +93,16 @@ class SanitizerAllocatorIsolationTest(unittest.TestCase):
         return any(matches(pattern) for pattern in patterns if not pattern.startswith("-")) and not any(
             matches(pattern[1:]) for pattern in patterns if pattern.startswith("-")
         )
+
+    def test_workflow_fixture_ignores_an_unrelated_inherited_python(self):
+        with tempfile.TemporaryDirectory() as directory:
+            python = Path(directory) / "python3"
+            python.write_text("#!/bin/sh\necho unexpected-inherited-python >&2\nexit 73\n")
+            python.chmod(0o755)
+            path = directory + os.pathsep + os.environ.get("PATH", os.defpath)
+            with mock.patch.dict(os.environ, {"PATH": path}):
+                commands = self._commands("ASan")
+        self.assertGreater(len(commands), 0)
 
     def test_recursive_exclusions_cover_the_package_and_descendants(self):
         arguments = ["//donner/...", "-//donner/gpu/..."]
