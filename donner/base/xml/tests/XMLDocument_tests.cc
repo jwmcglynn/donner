@@ -4412,7 +4412,13 @@ TEST_F(XMLDocumentTests, AttributeValueEditRetriesAfterAnchorWorkRejection) {
     const auto edited = doc.setAttribute(root, "label", "new & 'quoted'");
     if (!edited.applied) {
       EXPECT_THAT(root.getAttribute("label"), Optional(Eq("old")));
-      EXPECT_EQ(root.getAttributeSourceLocation("label"), location);
+      const auto rejectedLocation = root.getAttributeSourceLocation("label");
+      EXPECT_TRUE(rejectedLocation.has_value());
+      if (location && rejectedLocation) {
+        EXPECT_EQ(rejectedLocation->fullRange, location->fullRange);
+        EXPECT_EQ(rejectedLocation->valueRange, location->valueRange);
+        EXPECT_EQ(rejectedLocation->quote, location->quote);
+      }
     }
     return edited;
   });
@@ -4589,6 +4595,114 @@ TEST_F(XMLDocumentTests, InsertNodeReconcilesAdjacentPublicDataChildrenIntoTextV
   EXPECT_EQ(doc.source().substr(*range.start.offset, *range.end.offset - *range.start.offset),
             "a &amp; b");
   EXPECT_THAT(MutationKinds(result), testing::ElementsAre(XMLMutation::Kind::NodeInserted));
+}
+
+TEST_F(XMLDocumentTests, ForwardMoveCapacityFailureReportsOnlyCommittedRemoval) {
+  constexpr std::string_view kSource = "<root>\n  <move/>\n  <host/>\n</root>";
+  XMLDocument doc = ParseDocument(kSource);
+  XMLNode root = *doc.root().firstChild();
+  XMLNode moved = ElementChild(root, 0);
+  XMLNode host = ElementChild(root, 1);
+  const RcString treeBefore = root.serializeToString();
+  const auto versionBefore = doc.sourceVersion();
+  auto limits = doc.sourceStore()->resourceLimits();
+  limits.maximumSourceSize = kSource.size();
+  ASSERT_TRUE(doc.sourceStore()->setResourceLimits(limits));
+
+  const auto result = doc.insertNode(host, moved);
+
+  EXPECT_FALSE(result.applied);
+  EXPECT_THAT(result, DiagnosticReasonContains("source replacement for node move"));
+  ASSERT_EQ(result.sourceDeltas.size(), 1u);
+  EXPECT_EQ(result.sourceDeltas.front().offset, 6u);
+  EXPECT_EQ(result.sourceDeltas.front().removedLength, 10u);
+  EXPECT_EQ(result.sourceDeltas.front().insertedLength, 0u);
+  EXPECT_EQ(doc.sourceVersion(), versionBefore + 1);
+  EXPECT_EQ(doc.source(), "<root>\n  <host/>\n</root>");
+  EXPECT_EQ(root.serializeToString(), treeBefore);
+  EXPECT_THAT(moved.parentElement(), Optional(Eq(root)));
+  EXPECT_FALSE(host.firstChild().has_value());
+  EXPECT_THAT(MutationKinds(result),
+              testing::ElementsAre(XMLMutation::Kind::SourceDiagnosticChanged));
+  EXPECT_TRUE(doc.sourceDiagnostic().has_value());
+
+  // A covering edit repairs the source/tree mismatch before another structured move.
+  limits.maximumSourceSize = 1024;
+  ASSERT_TRUE(doc.sourceStore()->setResourceLimits(limits));
+  const auto repair = doc.applySourceEdit(XMLEditIntent{
+      .range = SourceRange{FileOffset::Offset(0), FileOffset::Offset(doc.source().size())},
+      .replacement = std::string(kSource),
+      .sourceVersion = doc.sourceVersion(),
+  });
+  ASSERT_TRUE(repair.applied);
+  EXPECT_THAT(repair.diagnostic, Eq(std::nullopt));
+  EXPECT_THAT(doc.sourceDiagnostic(), Eq(std::nullopt));
+  root = *doc.root().firstChild();
+  moved = ElementChild(root, 0);
+  host = ElementChild(root, 1);
+  const auto retry = doc.insertNode(host, moved);
+  ASSERT_TRUE(retry.applied);
+  EXPECT_THAT(retry.diagnostic, Eq(std::nullopt));
+  EXPECT_THAT(moved.parentElement(), Optional(Eq(host)));
+  EXPECT_EQ(ElementChild(host, 0), moved);
+  EXPECT_THAT(XMLParser::Parse(doc.source()), NoParseError());
+}
+
+TEST_F(XMLDocumentTests, SubtreeLocalDepthOverflowRejectsBeforeSourceCommit) {
+  XMLParser::Options options;
+  options.maxNestingDepth = 3;
+  XMLDocument doc = ParseDocument("<root><host/></root>", options);
+  const auto versionBefore = doc.sourceVersion();
+  const auto result = doc.applySourceEdit(XMLEditIntent{
+      .range = SourceRange{FileOffset::Offset(6), FileOffset::Offset(13)},
+      .replacement = "<host><a><b><c/></b></a></host>",
+      .sourceVersion = versionBefore,
+  });
+  EXPECT_FALSE(result.applied);
+  EXPECT_THAT(result, DiagnosticReasonContains("tree-depth limit"));
+  EXPECT_THAT(result.sourceDeltas, IsEmpty());
+  EXPECT_THAT(result.mutations, IsEmpty());
+  EXPECT_EQ(doc.sourceVersion(), versionBefore);
+  EXPECT_EQ(doc.source(), "<root><host/></root>");
+  EXPECT_FALSE(doc.root().firstChild()->firstChild()->firstChild().has_value());
+  EXPECT_THAT(doc.sourceDiagnostic(), Eq(std::nullopt));
+  const auto accepted = doc.applySourceEdit(XMLEditIntent{
+      .range = SourceRange{FileOffset::Offset(6), FileOffset::Offset(13)},
+      .replacement = "<host><a/></host>",
+      .sourceVersion = versionBefore,
+  });
+  ASSERT_TRUE(accepted.applied);
+  EXPECT_THAT(accepted.diagnostic, Eq(std::nullopt));
+  EXPECT_EQ(doc.source(), "<root><host><a/></host></root>");
+}
+
+TEST_F(XMLDocumentTests, OpeningTagLocalAttributeOverflowRejectsBeforeSourceCommit) {
+  XMLParser::Options options;
+  options.maxTotalAttributes = 2;
+  XMLDocument doc = ParseDocument("<root/>", options);
+  const auto versionBefore = doc.sourceVersion();
+  const auto result = doc.applySourceEdit(XMLEditIntent{
+      .range = SourceRange{FileOffset::Offset(5), FileOffset::Offset(5)},
+      .replacement = R"( a="1" b="2" c="3")",
+      .sourceVersion = versionBefore,
+  });
+  EXPECT_FALSE(result.applied);
+  EXPECT_THAT(result, DiagnosticReasonContains("total-attribute limit"));
+  EXPECT_THAT(result.sourceDeltas, IsEmpty());
+  EXPECT_THAT(result.mutations, IsEmpty());
+  EXPECT_EQ(doc.sourceVersion(), versionBefore);
+  EXPECT_EQ(doc.source(), "<root/>");
+  EXPECT_TRUE(doc.root().firstChild()->attributes().empty());
+  EXPECT_THAT(doc.sourceDiagnostic(), Eq(std::nullopt));
+  const auto accepted = doc.applySourceEdit(XMLEditIntent{
+      .range = SourceRange{FileOffset::Offset(5), FileOffset::Offset(5)},
+      .replacement = R"( a="1" b="2")",
+      .sourceVersion = versionBefore,
+  });
+  ASSERT_TRUE(accepted.applied);
+  EXPECT_THAT(accepted.diagnostic, Eq(std::nullopt));
+  EXPECT_THAT(doc.root().firstChild()->getAttribute("a"), Optional(Eq("1")));
+  EXPECT_THAT(doc.root().firstChild()->getAttribute("b"), Optional(Eq("2")));
 }
 
 }  // namespace donner::xml
