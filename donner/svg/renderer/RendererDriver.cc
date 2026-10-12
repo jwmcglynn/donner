@@ -3217,6 +3217,19 @@ void RendererDriver::applyDrawTimeContextRemaps(
   paint.stroke = resolvePaintContextRemap(paint.stroke, surfaceFromEntity);
 }
 
+namespace {
+
+void PushMaskWithColorSpace(RendererInterface& renderer, const std::optional<Box2d>& bounds,
+                            MaskType maskType, ColorInterpolation colorInterpolation) {
+  if (colorInterpolation == ColorInterpolation::LinearRGB) {
+    renderer.pushMask(bounds, maskType, colorInterpolation);
+  } else {
+    renderer.pushMask(bounds, maskType);
+  }
+}
+
+}  // namespace
+
 int RendererDriver::renderMask(RenderingInstanceView& view, Registry& registry,
                                const components::RenderingInstanceComponent& instance,
                                const components::ResolvedMask& mask) {
@@ -3287,9 +3300,12 @@ int RendererDriver::renderMask(RenderingInstanceView& view, Registry& registry,
     const double hPx = resolveMaskLength(height, Lengthd::Extent::Y, false);
     const std::optional<Box2d> maskBounds = Box2d::FromXYWH(xPx, yPx, wPx, hPx);
     MaskType maskType = MaskType::Luminance;
+    ColorInterpolation colorInterpolation = ColorInterpolation::SRGB;
     if (const auto* maskStyle = m->reference.handle.try_get<components::ComputedStyleComponent>();
         maskStyle != nullptr && maskStyle->properties.has_value()) {
       maskType = maskStyle->properties->maskType.get().value_or(MaskType::Luminance);
+      colorInterpolation =
+          maskStyle->properties->colorInterpolation.get().value_or(ColorInterpolation::SRGB);
     }
 
     if (verbose_) {
@@ -3302,7 +3318,7 @@ int RendererDriver::renderMask(RenderingInstanceView& view, Registry& registry,
                                                                                 : "userSpace")
                 << "\n";
     }
-    renderer_.pushMask(maskBounds, maskType);
+    PushMaskWithColorSpace(renderer_, maskBounds, maskType, colorInterpolation);
 
     const Transform2d savedSurfaceFromCanvas = surfaceFromCanvasTransform_;
     surfaceFromCanvasTransform_ = instance.worldFromEntityTransform * surfaceFromCanvasTransform_;

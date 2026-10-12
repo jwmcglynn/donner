@@ -26,6 +26,7 @@
 #include "donner/svg/components/filter/FilterEffect.h"
 #include "donner/svg/components/filter/FilterGraph.h"
 #include "donner/svg/components/text/ComputedTextComponent.h"
+#include "donner/svg/core/ColorInterpolation.h"
 #include "donner/svg/core/ImageRendering.h"
 #include "donner/svg/core/LengthAdjust.h"
 #include "donner/svg/core/MaskType.h"
@@ -1428,6 +1429,22 @@ public:
 
   /// The glyph cap set by \ref setMaximumGlyphs, or 0 for a backend or build without text.
   [[nodiscard]] virtual std::size_t maximumGlyphs() const { return 0; }
+
+  /**
+   * Begins a mask with an explicit luminance color space.
+   *
+   * Legacy implementations retain their sRGB behavior through the two-argument overload.
+   * Backends supporting linearRGB masks override this entry point.
+   *
+   * @param maskBounds Optional mask region in local coordinates.
+   * @param maskType Whether coverage comes from luminance or alpha.
+   * @param colorInterpolation Color space for luminance conversion; auto chooses sRGB.
+   */
+  virtual void pushMask(const std::optional<Box2d>& maskBounds, MaskType maskType,
+                        ColorInterpolation colorInterpolation) {
+    (void)colorInterpolation;
+    pushMask(maskBounds, maskType);
+  }
 };
 
 }  // namespace donner::svg

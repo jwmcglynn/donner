@@ -19,6 +19,11 @@ exports_files(
     ],
 )
 
+exports_files(
+    ["LICENSE.md"],
+    visibility = ["//third_party/licenses:__pkg__"],
+)
+
 filegroup(
     name = "embedded_header",
     srcs = [":public-sans_header_gen"],

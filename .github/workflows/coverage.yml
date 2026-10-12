@@ -1,5 +1,10 @@
 name: Coverage
 
+# Keep third-party Bazel module telemetry off, as the telemetry section of .bazelrc explains.
+env:
+  DO_NOT_TRACK: "1"
+  ASPECT_TOOLS_TELEMETRY: "-all"
+
 # Measures line and branch coverage of the complete product tree on main and
 # uploads it to Codecov as the project baseline (the `unittests` flag).
 #

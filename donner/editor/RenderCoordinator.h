@@ -150,6 +150,19 @@ private:
     const RenderResult::CompositedPreview& preview, const Vector2i& viewportDesiredCanvas);
 
 /**
+ * Return true when a frame repair must render more document coverage.
+ *
+ * A frame can lack more than one proof at once. A result rejected for a missing overview still
+ * needs that coverage when the frame build reports another failure first, such as selection
+ * geometry that is not yet captured; otherwise an active drag never requests the overview.
+ *
+ * @param buildFailure Missing proof reported by the frame build, or `None`.
+ * @param adoptionFailure Missing proof that rejected the latest worker result, or `None`.
+ */
+[[nodiscard]] bool PresentationRepairNeedsCoverage(FramePresentationFailure buildFailure,
+                                                   FramePresentationFailure adoptionFailure);
+
+/**
  * Return the document version a released drag must settle against.
  *
  * @param currentFrameVersion Last flushed document frame version at mouse-up.

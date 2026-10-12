@@ -379,6 +379,12 @@ public:
     pushMask(maskBounds, MaskType::Luminance);
   }
   void pushMask(const std::optional<Box2d>& maskBounds, MaskType maskType) override;
+  /// Begins a mask using the specified color space for luminance conversion.
+  /// @param maskBounds Optional mask region in local coordinates.
+  /// @param maskType Coverage mode.
+  /// @param colorInterpolation Luminance color space; auto chooses sRGB.
+  void pushMask(const std::optional<Box2d>& maskBounds, MaskType maskType,
+                ColorInterpolation colorInterpolation) override;
   void transitionMaskToContent() override;
   void popMask() override;
 
@@ -426,7 +432,7 @@ public:
    * progress, to prove its submissions complete before it frees native objects,
    * and retains them until process exit when it cannot. Callers should treat a
    * lost device as fatal for this renderer instance: destroy it and recreate
-   * the renderer, or fall back to a CPU backend.
+   * the renderer before resuming GPU rendering.
    */
   [[nodiscard]] bool deviceLost() const;
 

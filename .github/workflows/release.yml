@@ -1,5 +1,10 @@
 name: Release
 
+# Keep third-party Bazel module telemetry off, as the telemetry section of .bazelrc explains.
+env:
+  DO_NOT_TRACK: "1"
+  ASPECT_TOOLS_TELEMETRY: "-all"
+
 # Publish only immutable artifacts built and qualified before the release event.
 on:
   release:
@@ -109,26 +114,19 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh attestation verify release/linux/donner-svg_linux_x86_64 \
-            --repo jwmcglynn/donner \
-            --signer-workflow jwmcglynn/donner/.github/workflows/bcr_preflight.yml \
-            --source-digest "$GITHUB_SHA" > /dev/null
-          gh attestation verify release/linux/donner-svg_linux_x86_64.bazel.lock \
-            --repo jwmcglynn/donner \
-            --signer-workflow jwmcglynn/donner/.github/workflows/bcr_preflight.yml \
-            --source-digest "$GITHUB_SHA" > /dev/null
-          gh attestation verify release/macos/donner-svg_darwin_arm64 \
-            --repo jwmcglynn/donner \
-            --signer-workflow jwmcglynn/donner/.github/workflows/bcr_preflight.yml \
-            --source-digest "$GITHUB_SHA" > /dev/null
-          gh attestation verify release/macos/donner-svg_darwin_arm64.bazel.lock \
-            --repo jwmcglynn/donner \
-            --signer-workflow jwmcglynn/donner/.github/workflows/bcr_preflight.yml \
-            --source-digest "$GITHUB_SHA" > /dev/null
-          gh attestation verify release/source/*.tar.gz \
-            --repo jwmcglynn/donner \
-            --signer-workflow jwmcglynn/donner/.github/workflows/bcr_preflight.yml \
-            --source-digest "$GITHUB_SHA" > /dev/null
+          for subject in \
+            release/linux/donner-svg_linux_x86_64 \
+            release/linux/donner-svg_linux_x86_64.bazel.lock \
+            release/linux/donner-svg_linux_x86_64.NOTICE.txt \
+            release/macos/donner-svg_darwin_arm64 \
+            release/macos/donner-svg_darwin_arm64.bazel.lock \
+            release/macos/donner-svg_darwin_arm64.NOTICE.txt \
+            release/source/*.tar.gz; do
+            gh attestation verify "$subject" \
+              --repo jwmcglynn/donner \
+              --signer-workflow jwmcglynn/donner/.github/workflows/bcr_preflight.yml \
+              --source-digest "$GITHUB_SHA" > /dev/null
+          done
 
       - name: Upload verified release artifacts without replacement
         env:
@@ -139,8 +137,10 @@ jobs:
             release/linux/donner-svg_linux_x86_64.sha256 \
             release/linux/donner-svg_linux_x86_64.provenance \
             release/linux/donner-svg_linux_x86_64.bazel.lock \
+            release/linux/donner-svg_linux_x86_64.NOTICE.txt \
             release/macos/donner-svg_darwin_arm64 \
             release/macos/donner-svg_darwin_arm64.sha256 \
             release/macos/donner-svg_darwin_arm64.provenance \
             release/macos/donner-svg_darwin_arm64.bazel.lock \
+            release/macos/donner-svg_darwin_arm64.NOTICE.txt \
             release/source/*

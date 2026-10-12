@@ -316,7 +316,11 @@ Attached live-DOM writes enter through two explicit, guarded paths:
   lane and a compositor warmup after the first frame. `isBusy()` is true while a render is in
   flight, a finished result awaits polling, or the warmup holds the document; preview work
   never sets it. The UI thread must not mutate the document or touch the renderer while it is
-  true. `requestRender()` is non-blocking and cancels+replaces an in-flight request, and
+  true. UI work deferred by that gate waits for the renderer's wake: render completion and
+  cancellation always wake, and `isBusyWithIdleWake()` also registers a wake for speculative
+  warmup. Requesting a frame on every busy frame instead redraws at display rate for the whole
+  render; in the browser those frames hold the GPU owner thread that the render is waiting on.
+  `requestRender()` is non-blocking and cancels+replaces an in-flight request, and
   `cancelInFlight()` cancels without a replacement; cancellation is delivered through a
   `svg::compositor::CancellationToken` polled at compositor safe points. While idle, the worker
   runs owner-thread GPU maintenance.
