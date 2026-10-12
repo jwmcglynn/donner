@@ -523,6 +523,8 @@ TEST(EditorShellInternalTest, EnabledSourceFocusRetainsPartitionWhileAwaitingEdi
   EXPECT_THAT(internal::DeferSourceFocusWhileAwaitingEdits(source, /*focusEnabled=*/true),
               testing::Eq(true));
   EXPECT_THAT(source.hasFocusPartition(), testing::Eq(true));
+  EXPECT_THAT(source.isPositionInsideFocusRange(TextEditor::Coordinates(2, 0)), testing::Eq(true));
+  EXPECT_THAT(source.isPositionInsideFocusRange(TextEditor::Coordinates(1, 0)), testing::Eq(false));
   EXPECT_THAT(source.getText(), testing::Eq("root\nhidden\ntarget"));
   EXPECT_THAT(source.isTextChanged(), testing::Eq(false));
 }

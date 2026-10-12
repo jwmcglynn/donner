@@ -28,7 +28,8 @@
 
 namespace donner::editor {
 struct EditorShellOptions;
-}
+class TextEditor;
+}  // namespace donner::editor
 
 namespace donner::editor::internal {
 
