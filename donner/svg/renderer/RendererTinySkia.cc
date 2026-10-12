@@ -261,18 +261,23 @@ bool CanRenderTextRun(bool isBitmapFont, float scale) {
   return isBitmapFont || scale != 0.0f;
 }
 
-template <typename Bitmap>
-std::optional<Bitmap> AdmitBitmapGlyph(std::optional<Bitmap> bitmap,
-                                       RendererTextMaterializationBudget& materializationBudget,
-                                       RendererDrawBudget& drawBudget) {
-  if (!bitmap.has_value()) {
+std::optional<TextBackend::BitmapGlyph> AdmitBitmapGlyph(
+    TextEngine& textEngine, FontHandle font, int glyphIndex, float scale,
+    RendererTextMaterializationBudget& materializationBudget, RendererDrawBudget& drawBudget) {
+  const auto metrics = textEngine.bitmapGlyphMetrics(font, glyphIndex, scale);
+  if (!metrics) {
     return std::nullopt;
   }
-  const std::size_t bytes = bitmap->rgbaPixels.size();
+  const std::size_t bytes = metrics->rgbaBytes;
   if (bytes > std::numeric_limits<std::size_t>::max() / 2u ||
       !materializationBudget.reserve({.uniqueOutlines = 1, .bytes = bytes * 2u})) {
     drawBudget.reject();
     return std::nullopt;
+  }
+  auto bitmap = textEngine.bitmapGlyph(font, glyphIndex, scale, *metrics, bytes);
+  if (!bitmap) {
+    materializationBudget.reject();
+    drawBudget.reject();
   }
   return bitmap;
 }
@@ -3004,7 +3009,7 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
 
       // For bitmap fonts (color emoji), extract and draw the bitmap directly.
       if (glyphPath.empty()) {
-        auto bitmap = AdmitBitmapGlyph(textEngine.bitmapGlyph(run.font, glyph.glyphIndex, scale),
+        auto bitmap = AdmitBitmapGlyph(textEngine, run.font, glyph.glyphIndex, scale,
                                        *textMaterializationBudget_, *drawBudget_);
         if (drawBudget_->rejected()) {
           return;

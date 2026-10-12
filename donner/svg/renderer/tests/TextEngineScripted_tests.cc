@@ -1111,6 +1111,22 @@ public:
     return Path();
   }
 
+  std::optional<BitmapGlyphMetrics> bitmapGlyphMetrics(FontHandle font, int glyphIndex,
+                                                       float scale) const override {
+    if (glyphIndex == 'A' % 997 + 1) {
+      return BitmapGlyphMetrics{.font = font,
+                                .glyphIndex = glyphIndex,
+                                .width = 4,
+                                .height = 4,
+                                .rgbaBytes = 64,
+                                .bearingX = 1.0,
+                                .bearingY = 2.0,
+                                .scale = 0.5,
+                                .requestedScale = scale};
+    }
+    return BitmapGlyphMetrics{.font = font, .glyphIndex = glyphIndex, .requestedScale = scale};
+  }
+
   std::optional<BitmapGlyph> bitmapGlyph(FontHandle /*font*/, int glyphIndex,
                                          float /*scale*/) const override {
     ++bitmapDecodeCalls;

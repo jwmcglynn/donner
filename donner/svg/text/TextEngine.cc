@@ -2286,6 +2286,18 @@ std::optional<TextBackend::BitmapGlyph> TextEngine::bitmapGlyph(FontHandle font,
   return backend_->bitmapGlyph(font, glyphIndex, scale);
 }
 
+std::optional<TextBackend::BitmapGlyphMetrics> TextEngine::bitmapGlyphMetrics(FontHandle font,
+                                                                              int glyphIndex,
+                                                                              float scale) const {
+  return backend_->bitmapGlyphMetrics(font, glyphIndex, scale);
+}
+
+std::optional<TextBackend::BitmapGlyph> TextEngine::bitmapGlyph(
+    FontHandle font, int glyphIndex, float scale, const TextBackend::BitmapGlyphMetrics& admitted,
+    std::size_t maximumRgbaBytes) const {
+  return backend_->bitmapGlyph(font, glyphIndex, scale, admitted, maximumRgbaBytes);
+}
+
 std::optional<double> TextEngine::measureChUnitInEm(std::span<const RcString> fontFamilies,
                                                     Entity geometryOwner) {
   std::vector<FontFaceDependency> dependencies;
@@ -2457,7 +2469,7 @@ const components::ComputedTextGeometryComponent& TextEngine::ensureComputedTextG
         cache.glyphs.push_back({span.sourceEntity, std::move(transformed), extent});
         addBox(cache.inkBounds, hasInkBounds, extent);
         addBox(charGeom.extent, charGeom.hasExtent, extent);
-      } else if (auto bitmap = bitmapGlyph(run.font, glyph.glyphIndex, emScale)) {
+      } else if (auto bitmap = bitmapGlyphMetrics(run.font, glyph.glyphIndex, emScale)) {
         const double targetX = glyph.xPosition + bitmap->bearingX;
         const double targetY = glyph.yPosition - bitmap->bearingY;
         const Box2d extent = Box2d::FromXYWH(targetX, targetY, bitmap->width * bitmap->scale,
