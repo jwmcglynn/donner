@@ -1,6 +1,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <fstream>
@@ -33,6 +34,49 @@ std::vector<uint8_t> LoadBitmapFontSeed() {
   std::ifstream file(path, std::ios::binary);
   return std::vector<uint8_t>(std::istreambuf_iterator<char>(file),
                               std::istreambuf_iterator<char>());
+}
+
+std::vector<uint8_t> MonochromeBitmapFontSeed() {
+  auto bytes = LoadBitmapFontSeed();
+  if (bytes.size() < 12) {
+    return {};
+  }
+  const auto read32 = [&bytes](std::size_t at) {
+    return (std::uint32_t(bytes[at]) << 24) | (std::uint32_t(bytes[at + 1]) << 16) |
+           (std::uint32_t(bytes[at + 2]) << 8) | std::uint32_t(bytes[at + 3]);
+  };
+  const auto write32 = [&bytes](std::size_t at, std::uint32_t value) {
+    for (std::size_t i = 0; i < 4; ++i) {
+      bytes[at + i] = static_cast<uint8_t>(value >> (24 - i * 8));
+    }
+  };
+  const std::size_t tables = (std::size_t(bytes[4]) << 8) | bytes[5];
+  if (tables > (bytes.size() - 12) / 16) {
+    return {};
+  }
+  for (std::size_t i = 0; i < tables; ++i) {
+    const std::size_t record = 12 + i * 16;
+    const std::string_view tag(reinterpret_cast<const char*>(bytes.data() + record), 4);
+    const std::size_t offset = read32(record + 8);
+    if (offset > bytes.size() || bytes.size() - offset < 80) {
+      continue;
+    }
+    if (tag == "CBDT") {
+      bytes[record] = 'E';
+      write32(offset, 0x00020000);
+      const std::array<uint8_t, 6> bitmap = {1, 1, 0, 1, 1, 0x80};
+      std::copy(bitmap.begin(), bitmap.end(), bytes.begin() + offset + 4);
+      write32(record + 12, 10);
+    } else if (tag == "CBLC") {
+      bytes[record] = 'E';
+      write32(offset, 0x00020000);
+      bytes[offset + 54] = 1;
+      bytes[offset + 66] = 0;
+      bytes[offset + 67] = 1;
+      write32(offset + 76, 6);
+    }
+  }
+  return bytes;
 }
 
 auto GlyphIndexIs(auto matcher) {
@@ -162,6 +206,29 @@ TEST(TextBackendFullBitmap, QueriesMetadataAndHonorsExactDecodeByteAdmission) {
   }
   EXPECT_THAT(api.bitmapGlyph(font, glyphIndex, scale * 2, *metrics, metrics->rgbaBytes),
               testing::Eq(std::nullopt));
+}
+
+TEST(TextBackendFullBitmap, MonochromeEmbeddedBitmapDoesNotAdvertiseBgraAdmission) {
+  Registry registry;
+  FontManager manager(registry);
+  const auto monochromeBytes = MonochromeBitmapFontSeed();
+  ASSERT_THAT(monochromeBytes, Not(SizeIs(0)));
+  const FontHandle monochrome = manager.loadFontData(monochromeBytes, FontDataTrust::Trusted);
+  ASSERT_THAT(static_cast<bool>(monochrome), testing::IsTrue());
+  TextBackendFull backend(manager, registry);
+  ASSERT_THAT(backend.isBitmapOnly(monochrome), testing::IsTrue());
+  const float scale = backend.scaleForEmToPixels(monochrome, 32.0f);
+  EXPECT_THAT(backend.bitmapGlyph(monochrome, 1, scale), testing::Eq(std::nullopt));
+  EXPECT_THAT(backend.bitmapGlyphMetrics(monochrome, 1, scale), testing::Eq(std::nullopt))
+      << "A real one-bit EBDT glyph must be rejected before claiming BGRA cost.";
+  const FontHandle color = manager.loadFontData(LoadBitmapFontSeed(), FontDataTrust::Trusted);
+  ASSERT_THAT(static_cast<bool>(color), testing::IsTrue());
+  const auto colorMetrics = backend.bitmapGlyphMetrics(color, 1, scale);
+  ASSERT_THAT(colorMetrics,
+              Optional(Field(&TextBackend::BitmapGlyphMetrics::rgbaBytes, 136 * 128 * 4)));
+  EXPECT_THAT(
+      backend.bitmapGlyph(color, 1, scale, *colorMetrics, colorMetrics->rgbaBytes),
+      Optional(Field(&TextBackend::BitmapGlyph::rgbaPixels, SizeIs(colorMetrics->rgbaBytes))));
 }
 
 TEST(TextBackendFullBitmap, MetadataRejectsUntrustedFontsAndInvalidRequests) {
