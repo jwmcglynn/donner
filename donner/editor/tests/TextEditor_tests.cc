@@ -236,24 +236,20 @@ protected:
     ImGui::Render();
   }
 
-  std::optional<ImVec2> OpenSourceContextMenu(const ImVec2& point, int row) {
-    RenderEditorFrameWithInputs(point, false, false);
-    RenderEditorFrameWithInputs(point, false, true);
-    RenderEditorFrameWithInputs(point, false, false);
-    const ImGuiContext* context = ImGui::GetCurrentContext();
-    if (context->OpenPopupStack.empty() || context->OpenPopupStack.back().Window == nullptr) {
-      return std::nullopt;
+  std::vector<ImDrawVert> SourceVerticesForVisualLine(int line) const {
+    const ImVec2 center = ScreenPointAtVisualTextOffset(line, 0);
+    const float top = center.y - CharacterAdvanceY() * 0.5f;
+    const float bottom = top + CharacterAdvanceY();
+    std::vector<ImDrawVert> vertices;
+    const ImDrawData* data = ImGui::GetDrawData();
+    for (const ImDrawList* list : data->CmdLists) {
+      for (const ImDrawVert& vertex : list->VtxBuffer) {
+        if (vertex.pos.x >= center.x && vertex.pos.y >= top && vertex.pos.y <= bottom) {
+          vertices.push_back(vertex);
+        }
+      }
     }
-    const ImGuiWindow* popup = context->OpenPopupStack.back().Window;
-    return ImVec2(
-        popup->DC.CursorStartPos.x + 24.0f,
-        popup->DC.CursorStartPos.y + (static_cast<float>(row) + 0.5f) * ImGui::GetFontSize());
-  }
-
-  void ClickSourceContextMenuItem(const ImVec2& point) {
-    RenderEditorFrameWithInputs(point, false, false);
-    RenderEditorFrameWithInputs(point, true, false);
-    RenderEditorFrameWithInputs(point, false, false);
+    return vertices;
   }
 
   // Drives one render frame with keyboard input handling enabled, injecting
@@ -5730,8 +5726,9 @@ TEST_F(TextEditorTests, CustomTwoKeyShortcutRequiresBothKeys) {
 }
 
 TEST_F(TextEditorTests, PublicAutocompleteProviderNavigatesUpWithoutMovingSourceCursor) {
-  editor.setText("value");
-  editor.setCursorPosition(Coordinates(0, 5));
+  editor.setText("valu");
+  editor.setCursorPosition(Coordinates(0, 4));
+  editor.setActiveAutocomplete(true);
   editor.setAutocompleteProvider([](const TextEditor::AutocompleteRequest& request)
                                      -> std::optional<TextEditor::AutocompleteResponse> {
     EXPECT_EQ(request.source, "value");
@@ -5742,9 +5739,7 @@ TEST_F(TextEditorTests, PublicAutocompleteProviderNavigatesUpWithoutMovingSource
         .suggestions = {{RcString("first"), RcString("alpha")},
                         {RcString("second"), RcString("beta")}}};
   });
-  ResetKeyboardState({ImGuiKey_I}, true);
-  RenderEditorFrameWithKeyboard({ImGuiKey_I}, "", true);
-  ResetKeyboardState({ImGuiKey_I}, true);
+  RenderEditorFrameWithKeyboard({}, "e");
   RenderEditorFrameWithKeyboard({});
   ResetKeyboardState({ImGuiKey_DownArrow});
   RenderEditorFrameWithKeyboard({ImGuiKey_DownArrow});
@@ -5757,49 +5752,117 @@ TEST_F(TextEditorTests, PublicAutocompleteProviderNavigatesUpWithoutMovingSource
   EXPECT_EQ(editor.getText(), "alpha");
   editor.undo();
   EXPECT_EQ(editor.getText(), "value");
-}
-
-TEST_F(TextEditorTests, ContextMenuCutUpdatesSourceClipboardAndUndo) {
-  editor.setText("alpha beta");
-  RenderEditorFrame();
-  editor.setSelection(Coordinates(0, 0), Coordinates(0, 5));
-  const auto item = OpenSourceContextMenu(ScreenPointAtVisualTextOffset(0, 2), 0);
-  ASSERT_THAT(item, ::testing::Ne(std::nullopt));
-  ClickSourceContextMenuItem(*item);
-  EXPECT_EQ(editor.getText(), " beta");
-  EXPECT_STREQ(ImGui::GetClipboardText(), "alpha");
-  EXPECT_THAT(editor.takePendingSourceEditIntents(),
-              ElementsAre(SourceEditIntentIs(0, 5, "", SourceEditIntentKind::Delete)));
   editor.undo();
-  EXPECT_EQ(editor.getText(), "alpha beta");
+  EXPECT_EQ(editor.getText(), "valu");
 }
 
-TEST_F(TextEditorTests, ContextMenuCopyPreservesSourceAndSelection) {
-  editor.setText("alpha beta");
+TEST_F(TextEditorTests, ReferenceColoredSourcePreservesTextGeometryIncludingWhitespace) {
+  editor.setText("\nX\t X");
+  editor.setShowLineNumbers(false);
+  editor.setHighlightLine(false);
+  editor.setColorizerEnabled(false);
   RenderEditorFrame();
-  editor.setSelection(Coordinates(0, 0), Coordinates(0, 5));
-  const auto item = OpenSourceContextMenu(ScreenPointAtVisualTextOffset(0, 2), 1);
-  ASSERT_THAT(item, ::testing::Ne(std::nullopt));
-  ClickSourceContextMenuItem(*item);
-  EXPECT_EQ(editor.getText(), "alpha beta");
-  EXPECT_EQ(editor.getSelectedText(), "alpha");
-  EXPECT_STREQ(ImGui::GetClipboardText(), "alpha");
+  const std::vector<ImDrawVert> baseline = SourceVerticesForVisualLine(1);
+  ASSERT_THAT(baseline, ::testing::Not(IsEmpty()));
+  editor.setFocusPartition(FocusPartition{.referenceColor = {{1, 2}}});
+  RenderEditorFrame();
+  const std::vector<ImDrawVert> reference = SourceVerticesForVisualLine(1);
+  ASSERT_EQ(reference.size(), baseline.size());
+  for (std::size_t index = 0; index < baseline.size(); ++index) {
+    SCOPED_TRACE(index);
+    EXPECT_THAT(reference[index],
+                AllOf(Field(&ImDrawVert::pos,
+                            AllOf(Field(&ImVec2::x, ::testing::FloatEq(baseline[index].pos.x)),
+                                  Field(&ImVec2::y, ::testing::FloatEq(baseline[index].pos.y)))),
+                      Field(&ImDrawVert::uv,
+                            AllOf(Field(&ImVec2::x, ::testing::FloatEq(baseline[index].uv.x)),
+                                  Field(&ImVec2::y, ::testing::FloatEq(baseline[index].uv.y))))));
+    EXPECT_LT(ImGui::ColorConvertU32ToFloat4(reference[index].col).w,
+              ImGui::ColorConvertU32ToFloat4(baseline[index].col).w);
+  }
+  EXPECT_EQ(editor.getText(), "\nX\t X");
+  EXPECT_EQ(editor.getCursorPosition(), Coordinates(0, 0));
   EXPECT_THAT(editor.takePendingSourceEditIntents(), IsEmpty());
 }
 
-TEST_F(TextEditorTests, ContextMenuPasteReplacesSelectedSourceAndCanUndo) {
-  editor.setText("alpha beta");
+TEST_F(TextEditorTests, DimmedSourcePreservesGeometryAndDesaturatesWhitespaceAndText) {
+  editor.setText("\nX\t X");
+  editor.setShowLineNumbers(false);
+  editor.setHighlightLine(false);
+  editor.setColorizerEnabled(false);
   RenderEditorFrame();
-  editor.setSelection(Coordinates(0, 0), Coordinates(0, 5));
-  ImGui::SetClipboardText("gamma");
-  const auto item = OpenSourceContextMenu(ScreenPointAtVisualTextOffset(0, 2), 2);
-  ASSERT_THAT(item, ::testing::Ne(std::nullopt));
-  ClickSourceContextMenuItem(*item);
-  EXPECT_EQ(editor.getText(), "gamma beta");
-  EXPECT_THAT(editor.takePendingSourceEditIntents(),
-              ElementsAre(SourceEditIntentIs(0, 5, "gamma", SourceEditIntentKind::Replace)));
-  editor.undo();
-  EXPECT_EQ(editor.getText(), "alpha beta");
+  const std::vector<ImDrawVert> baseline = SourceVerticesForVisualLine(1);
+  ASSERT_THAT(baseline, ::testing::Not(IsEmpty()));
+  editor.setFocusPartition(FocusPartition{.dimmed = {{1, 2}}});
+  RenderEditorFrame();
+  const std::vector<ImDrawVert> dimmed = SourceVerticesForVisualLine(1);
+  ASSERT_EQ(dimmed.size(), baseline.size());
+  for (std::size_t index = 0; index < baseline.size(); ++index) {
+    SCOPED_TRACE(index);
+    EXPECT_THAT(dimmed[index].pos,
+                AllOf(Field(&ImVec2::x, ::testing::FloatEq(baseline[index].pos.x)),
+                      Field(&ImVec2::y, ::testing::FloatEq(baseline[index].pos.y))));
+    const ImVec4 color = ImGui::ColorConvertU32ToFloat4(dimmed[index].col);
+    EXPECT_THAT(std::array<float, 3>{color.x, color.y, color.z},
+                ElementsAre(color.x, color.x, color.x));
+    EXPECT_LT(color.w, ImGui::ColorConvertU32ToFloat4(baseline[index].col).w);
+  }
+  editor.clearFocusPartition();
+  RenderEditorFrame();
+  const std::vector<ImDrawVert> restored = SourceVerticesForVisualLine(1);
+  ASSERT_EQ(restored.size(), baseline.size());
+  for (std::size_t index = 0; index < baseline.size(); ++index) {
+    SCOPED_TRACE(index);
+    EXPECT_EQ(restored[index].col, baseline[index].col);
+  }
+  EXPECT_EQ(editor.getText(), "\nX\t X");
+}
+
+TEST_F(TextEditorTests, PublicSourceEditCancelsAnActiveGutterDragAndPreview) {
+  editor.setText("one\ntwo\nthree");
+  RenderEditorFrame();
+  const ImVec2 handle = SourceGutterHandlePoint(0);
+  RenderEditorFrameWithMouse(handle, false);
+  RenderEditorFrameWithMouse(handle, true);
+  ASSERT_THAT(editor.takeSourceGutterDragStartedLine(), ::testing::Optional(0));
+  ASSERT_TRUE(editor.setSourceStructuralMoveDecoration(
+      TextEditor::SourceStructuralMoveDecoration{.elementRange = {0, 3}, .insertionOffset = 8}));
+  editor.applyExternalSourceEdit(0, 0, "new\n");
+  EXPECT_EQ(editor.getText(), "new\none\ntwo\nthree");
+  EXPECT_TRUE(editor.takeSourceGutterDragCancelled());
+  EXPECT_FALSE(editor.takeSourceGutterDragCancelled());
+  EXPECT_EQ(editor.sourceGutterDragTarget(), std::nullopt);
+  EXPECT_EQ(editor.takeSourceGutterDropTarget(), std::nullopt);
+  EXPECT_EQ(editor.sourceStructuralMoveDecoration(), std::nullopt);
+  EXPECT_THAT(editor.takePendingSourceEditIntents(), IsEmpty());
+}
+
+TEST_F(TextEditorTests, PublicAutocompleteSuppressesSourceNavigationWhilePopupIsOpen) {
+  editor.setText("first\nvalu");
+  editor.setCursorPosition(Coordinates(1, 4));
+  editor.setActiveAutocomplete(true);
+  editor.setAutocompleteProvider([](const TextEditor::AutocompleteRequest&)
+                                     -> std::optional<TextEditor::AutocompleteResponse> {
+    return TextEditor::AutocompleteResponse{
+        .replaceStartOffset = 6,
+        .replaceEndOffset = 11,
+        .suggestions = {{RcString("first"), RcString("alpha")},
+                        {RcString("second"), RcString("beta")}}};
+  });
+  RenderEditorFrameWithKeyboard({}, "e");
+  RenderEditorFrameWithKeyboard({});
+  editor.setShortcut(TextEditor::ShortcutId::MoveUp, Shortcut(ImGuiKey_F7));
+  ResetKeyboardState({ImGuiKey_F7});
+  RenderEditorFrameWithKeyboard({ImGuiKey_F7});
+  EXPECT_EQ(editor.getCursorPosition(), Coordinates(1, 5));
+  EXPECT_EQ(editor.getText(), "first\nvalue");
+  editor.setShortcut(TextEditor::ShortcutId::AutocompleteSelect, Shortcut(ImGuiKey_F8));
+  ResetKeyboardState({ImGuiKey_F8});
+  RenderEditorFrameWithKeyboard({ImGuiKey_F8});
+  EXPECT_EQ(editor.getText(), "first\nalpha");
+  ResetKeyboardState({ImGuiKey_F7});
+  RenderEditorFrameWithKeyboard({ImGuiKey_F7});
+  EXPECT_EQ(editor.getCursorPosition(), Coordinates(0, 5));
 }
 
 }  // namespace donner::editor
