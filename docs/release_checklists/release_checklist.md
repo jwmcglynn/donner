@@ -109,9 +109,13 @@ concern; the tag never moves retroactively.
       [immutable release candidate record](../release_candidate.md) for the exact final commit and
       verify it. Keep the record, its SHA-256 and its retained artifacts together.
 - [ ] **Rollback assets recorded**. In the release tracking issue, write the artifact IDs and
-      digests of the previous healthy marker-bearing docs build and the previous editor package.
-      The candidate record has no slot for them. Confirm that neither expires during the
-      intended rollback window; the editor package is retained for only 30 days.
+      ZIP digests of the previous healthy marker-bearing docs build and the previous editor
+      package, plus each build's independently reviewed source revision, producer run ID and
+      attempt. Record the editor's expected `source_revision`, `producer_run_id` and
+      `producer_attempt` even when it predates the first candidate record; do not derive those
+      expected values from the package being verified. The candidate record has no slot for these
+      rollback selections. Confirm that neither expires during the intended rollback window;
+      the editor package is retained for only 30 days.
 
 - [ ] **Create release tag**. Run `git tag -a vX.Y.Z -m "Donner SVG vX.Y.Z"` on the build-report commit.
 - [ ] **Push tag**. Run `git push origin vX.Y.Z`.
@@ -163,7 +167,8 @@ decision, and no step builds, deletes or replaces published bytes or edits the c
       the release notes with `gh release edit --notes-file`. Keep the tag and every asset.
 - [ ] **Docs site reactivated** if needed, by the
       [documentation rollback procedure](docs_artifact_promotion.md).
-- [ ] **Editor reactivated** if needed. No workflow deploys the editor; verify the previous
-      package's digest and `SHA256SUMS` by hand before it is served.
+- [ ] **Editor reactivated** if needed. No workflow deploys the editor; verify the retained ZIP
+      digest, `SHA256SUMS` and source/run/attempt provenance against the independently recorded
+      rollback selection before it is served.
 - [ ] **Compatibility check passed** for each reactivated build: digest, configuration and
       health, with results in the rollback issue.

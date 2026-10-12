@@ -214,8 +214,11 @@ the docs deploy run and Pages deployment ID, and each compatibility check result
 from the release notice. The candidate record stays exactly as it was published.
 
 **Gap:** the candidate record has no slot for the previous docs build or editor package that a
-rollback would reactivate. Before publication, write their artifact IDs and digests in the release
-tracking issue.
+rollback would reactivate. Before publication, write their artifact IDs, ZIP digests, independently
+reviewed source revisions, producer run IDs and attempts in the release tracking issue. For the
+editor these are the expected `source_revision`, `producer_run_id` and `producer_attempt`, even
+for a package that predates the first candidate record. A downloaded package's own provenance is
+checked against this selection; it does not supply the expected values.
 
 ### BCR: supersede or yank
 
@@ -303,14 +306,45 @@ with `SHA256SUMS`, `provenance.json`, the `site/` files and the `deploy/` files.
 for 30 days, shorter than the 90 days of the other release artifacts, so the editor rollback
 window ends 30 days after that build. To reactivate a previous package by hand:
 
-1. Read its digest with
-   `gh api repos/jwmcglynn/donner/actions/artifacts/ARTIFACT_ID --jq '.digest, .expired'` and
-   compare it with the value written in the release tracking issue.
-2. Download the ZIP with `gh api repos/jwmcglynn/donner/actions/artifacts/ARTIFACT_ID/zip`,
-   check that its SHA-256 equals that digest, extract it, and run `shasum -a 256 -c SHA256SUMS`.
-   Confirm that `provenance.json` names the expected `source_revision`, run and attempt.
-3. Whoever operates the editor host serves the `deploy/` files unchanged, with the same server
-   settings used for the current package.
+1. Set `EDITOR_ARTIFACT_ID`, `EDITOR_ZIP_SHA256` (64 hex digits without the `sha256:` prefix),
+   `EDITOR_SOURCE_REVISION`, `EDITOR_PRODUCER_RUN_ID` and `EDITOR_PRODUCER_ATTEMPT` from the
+   independently reviewed selection in the release tracking issue. Read the artifact metadata
+   with `gh api "repos/jwmcglynn/donner/actions/artifacts/$EDITOR_ARTIFACT_ID"` and confirm its
+   ID, name, `sha256:` digest, unexpired state, and `workflow_run.id`/`workflow_run.head_sha`
+   match that selection. Check the producer with
+   `gh api "repos/jwmcglynn/donner/actions/runs/$EDITOR_PRODUCER_RUN_ID/attempts/$EDITOR_PRODUCER_ATTEMPT"`:
+   it must be the successful `Editor WASM` attempt for the recorded source revision.
+2. Use a token with read access to Actions in `GH_TOKEN` to download the ZIP. HTTPS redirects are
+   followed; credentials are not forwarded to a different host. Save, authenticate and extract
+   the exact retained bytes in an empty working directory using Bash:
+
+   ```sh
+   set -euo pipefail
+   curl --fail --location --proto '=https' --proto-redir '=https' \
+     --header "Authorization: Bearer $GH_TOKEN" \
+     --output editor.zip \
+     "https://api.github.com/repos/jwmcglynn/donner/actions/artifacts/$EDITOR_ARTIFACT_ID/zip"
+   printf '%s  editor.zip\n' "$EDITOR_ZIP_SHA256" | shasum -a 256 -c -
+   unzip -q editor.zip -d editor-rollback
+   (cd editor-rollback && shasum -a 256 -c SHA256SUMS)
+   python3 - editor-rollback/provenance.json "$EDITOR_SOURCE_REVISION" \
+     "$EDITOR_PRODUCER_RUN_ID" "$EDITOR_PRODUCER_ATTEMPT" <<'PYTHON'
+   import json
+   import sys
+
+   with open(sys.argv[1], encoding="utf-8") as source:
+       provenance = json.load(source)
+   expected = dict(zip(
+       ("source_revision", "producer_run_id", "producer_attempt"), sys.argv[2:5]))
+   if any(provenance.get(key) != value for key, value in expected.items()):
+       raise SystemExit("Editor rollback provenance does not match the reviewed selection")
+   PYTHON
+   ```
+
+   Stop if any metadata, digest, manifest or provenance check fails. A package without independently
+   retained source/run/attempt evidence, or without those provenance fields, cannot use this path.
+3. Whoever operates the editor host serves the verified `editor-rollback/deploy/` files unchanged,
+   with the same server settings used for the current package.
 
 ### Compatibility check
 
