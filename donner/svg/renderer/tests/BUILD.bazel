@@ -668,6 +668,38 @@ donner_cc_test(
 )
 
 donner_cc_test(
+    name = "bitmap_glyph_geometry_tests_impl",
+    srcs = ["BitmapGlyphGeometry_tests.cc"],
+    data = ["//donner/svg/text:bitmap_glyph_test_font"],
+    tags = ["manual"],
+    target_compatible_with = select({
+        "//donner/svg/renderer:text_full_enabled": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    deps = [
+        "//donner/base:base_test_utils",
+        "//donner/base:runfiles",
+        "//donner/css",
+        "//donner/editor/tests:bitmap_golden_compare",
+        "//donner/svg",
+        "//donner/svg/components/text:components",
+        "//donner/svg/renderer",
+        "//donner/svg/resources:font_manager",
+        "//donner/svg/tests:parser_test_utils",
+        "//donner/svg/text:text_engine",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_multi_transitioned_test(
+    name = "bitmap_glyph_geometry_tests",
+    dep = ":bitmap_glyph_geometry_tests_impl",
+    renderer_backend = "tiny_skia",
+    text = "true",
+    text_full = "true",
+)
+
+donner_cc_test(
     name = "text_engine_scripted_tests",
     srcs = ["TextEngineScripted_tests.cc"],
     deps = [

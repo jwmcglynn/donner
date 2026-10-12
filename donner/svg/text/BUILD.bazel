@@ -126,6 +126,12 @@ donner_cc_fuzzer(
 )
 
 filegroup(
+    name = "bitmap_glyph_test_font",
+    srcs = ["tests/font_decoder_corpus/bitmap_emoji_subset.ttf"],
+    visibility = ["//donner/svg/renderer/tests:__pkg__"],
+)
+
+filegroup(
     name = "font_decoder_fuzzer_corpus",
     srcs = [
         # Single-glyph subset of NotoColorEmoji.ttf; see
