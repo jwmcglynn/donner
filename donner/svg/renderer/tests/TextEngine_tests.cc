@@ -21,6 +21,7 @@
 #include "donner/css/FontFace.h"
 #include "donner/svg/components/text/TextRootComponent.h"
 #include "donner/svg/text/TextBackendFull.h"
+#include "donner/svg/text/TextBackendSimple.h"
 #include "donner/svg/text/TextEngineHelpers.h"
 #include "donner/svg/text/TextLayoutParams.h"
 
@@ -1113,27 +1114,42 @@ TEST(TextEngineTest, JoinedShapingKeepsPositioningSlotsAndRelativeCarry) {
 #endif
 
 TEST(TextEngineTest, CombiningMarkAfterSpaceAppliesWordSpacingOnce) {
-  Registry registry;
-  FontManager fontManager(registry);
-  const FontHandle font = LoadResvgFont(fontManager, "NotoSans-Regular.ttf", "Noto Sans");
-  ASSERT_THAT(static_cast<bool>(font), testing::IsTrue());
-  TextEngine engine(fontManager, registry);
+  for (bool fullBackend : {false, true}) {
+    SCOPED_TRACE(fullBackend ? "full backend" : "simple backend");
+    Registry registry;
+    FontManager fontManager(registry);
+    const FontHandle font = LoadResvgFont(fontManager, "NotoSans-Regular.ttf", "Noto Sans");
+    ASSERT_THAT(static_cast<bool>(font), testing::IsTrue());
+    std::unique_ptr<TextBackend> backend;
+    if (fullBackend) {
+      backend = std::make_unique<TextBackendFull>(fontManager, registry);
+    } else {
+      backend = std::make_unique<TextBackendSimple>(fontManager, registry);
+    }
+    const std::string value =
+        "A \xCC\x81"
+        "B";
+    const auto shaped =
+        backend->shapeRun(font, 24.0f, value, 0, value.size(), false, FontVariant::Normal, false);
+    ASSERT_THAT(shaped.glyphs, SizeIs(4));
+    ASSERT_THAT(shaped.glyphs[2].xAdvance, DoubleEq(0.0));
+    TextEngine engine(fontManager, registry, std::move(backend));
 
-  components::ComputedTextComponent text;
-  text.spans.push_back(
-      MakeSpan("A \xCC\x81"
-               "B"));
-  TextLayoutParams params = MakeTextParams(24.0);
-  params.fontFamilies = {RcString("Noto Sans")};
-  const auto ordinary = engine.layout(text, params);
-  ASSERT_THAT(ordinary, ElementsAre(RunGlyphsAre(SizeIs(4))));
-  ASSERT_THAT(ordinary[0].glyphs[2], GlyphXAdvanceIs(DoubleEq(0.0)));
+    components::ComputedTextComponent text;
+    text.spans.push_back(MakeSpan(value));
+    TextLayoutParams params = MakeTextParams(24.0);
+    params.fontFamilies = {RcString("Noto Sans")};
+    const auto ordinary = engine.layout(text, params);
+    ASSERT_THAT(ordinary, ElementsAre(RunGlyphsAre(SizeIs(4))));
 
-  text.spans[0].wordSpacingPx = 11.0;
-  const auto spaced = engine.layout(text, params);
-  ASSERT_THAT(spaced, ElementsAre(RunGlyphsAre(SizeIs(4))));
-  EXPECT_THAT(spaced[0].glyphs.back(),
-              GlyphXPositionIs(DoubleNear(ordinary[0].glyphs.back().xPosition + 11.0, 1e-6)));
+    text.spans[0].wordSpacingPx = 11.0;
+    const auto spaced = engine.layout(text, params);
+    ASSERT_THAT(spaced, ElementsAre(RunGlyphsAre(SizeIs(4))));
+    EXPECT_THAT(spaced[0].glyphs.back(),
+                GlyphXPositionIs(DoubleNear(ordinary[0].glyphs.back().xPosition + 11.0, 1e-6)));
+    EXPECT_THAT(spaced[0].glyphs[2],
+                Field("cluster", &TextGlyph::cluster, shaped.glyphs[2].cluster));
+  }
 }
 
 TEST(TextEngineTest, RotatesCombiningMarkOffsetsWithBaseGlyph) {
