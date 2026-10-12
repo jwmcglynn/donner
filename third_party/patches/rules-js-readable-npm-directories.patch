@@ -57,11 +57,11 @@ diff --git a/npm/private/npm_package_extract.mjs b/npm/private/npm_package_extra
 new file mode 100644
 --- /dev/null
 +++ b/npm/private/npm_package_extract.mjs
-@@ -0,0 +1,26 @@
+@@ -0,0 +1,27 @@
 +import { spawnSync } from "node:child_process";
-+import { chmodSync, lstatSync, readdirSync } from "node:fs";
-+import { join, resolve } from "node:path";
-+import { pathToFileURL } from "node:url";
++import { chmodSync, lstatSync, readdirSync, realpathSync } from "node:fs";
++import { join } from "node:path";
++import { fileURLToPath } from "node:url";
 +
 +// Some npm archives give directories file-like modes (for example 0666).
 +// Restore read/traverse access before the declared tree is uploaded, without
@@ -77,7 +77,8 @@ new file mode 100644
 +  }
 +}
 +
-+if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.meta.url) {
++// Node canonicalizes an ES-module entry point even when Bazel invokes a symlink.
++if (process.argv[1] && realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url))) {
 +  const [tar, output, ...args] = process.argv.slice(2);
 +  const result = spawnSync(tar, args, { stdio: "inherit" });
 +  if (result.error) console.error(result.error.message);

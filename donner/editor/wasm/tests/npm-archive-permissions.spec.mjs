@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import {
   chmodSync,
   lstatSync,
@@ -66,4 +67,45 @@ test("symlinks remain unchanged and external targets are never opened", () =>
     for (const name of ["outside", "broken", "cycle"]) {
       assert.equal(lstatSync(join(packageRoot, name)).isSymbolicLink(), true);
     }
+  }));
+
+test("CLI extracts through both direct and symlinked input paths", () =>
+  fixture((root) => {
+    const linkedHelper = join(root, "helper-link.mjs");
+    symlinkSync(helper, linkedHelper);
+    const extractor = join(root, "extractor.mjs");
+    writeFileSync(
+      extractor,
+      `
+import { mkdirSync, writeFileSync, chmodSync } from "node:fs";
+import { join } from "node:path";
+const output = process.argv[2];
+mkdirSync(output);
+writeFileSync(join(output, "sentinel"), "package bytes");
+chmodSync(output, 0o644);
+`,
+    );
+    for (const [index, entry] of [helper, linkedHelper].entries()) {
+      const output = join(root, `output-${index}`);
+      execFileSync(process.execPath, [entry, process.execPath, output, extractor, output]);
+      assert.equal(mode(output), 0o755);
+      assert.equal(readFileSync(join(output, "sentinel"), "utf8"), "package bytes");
+    }
+  }));
+
+test("CLI propagates extractor failure through symlinked inputs", () =>
+  fixture((root) => {
+    const linkedHelper = join(root, "helper-link.mjs");
+    symlinkSync(helper, linkedHelper);
+    assert.throws(
+      () =>
+        execFileSync(process.execPath, [
+          linkedHelper,
+          process.execPath,
+          join(root, "output"),
+          "-e",
+          "process.exit(7)",
+        ]),
+      (error) => error.status === 7,
+    );
   }));
