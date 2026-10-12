@@ -448,6 +448,18 @@ js_test(
 )
 
 js_test(
+    name = "browser_application_heartbeat_tests",
+    size = "small",
+    copy_data_to_bin = False,
+    data = [
+        "browser-application-heartbeat.mjs",
+        "browser-heartbeat.cjs",
+    ],
+    entry_point = "browser-application-heartbeat.spec.mjs",
+    node_options = ["--test"],
+)
+
+js_test(
     name = "composited_pixel_classifier_tests",
     size = "small",
     copy_data_to_bin = False,
