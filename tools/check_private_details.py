@@ -46,6 +46,7 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import dataclass, field
+from ipaddress import AddressValueError, IPv6Address
 import os
 from pathlib import Path
 import re
@@ -118,7 +119,7 @@ IPV4_PRIVATE_RE = re.compile(
     r")(?![\w-]|\.\d)"
 )
 IPV6_ULA_RE = re.compile(
-    r"(?<![\w:])f[cd][0-9a-f]{2}:(?:[0-9a-f]{0,4}:){1,6}[0-9a-f]{0,4}(?![\w:])",
+    r"(?<![\w:])f[cd][0-9a-f]{2}:[0-9a-f:]*(?:\.[0-9]+){0,3}(?![\w:]|\.\d)",
     re.IGNORECASE,
 )
 # A dotted number right after a version keyword is a version, not an address.
@@ -229,7 +230,11 @@ def _address_kinds(line: str) -> Iterable[str]:
     for match in IPV4_PRIVATE_RE.finditer(line):
         if not VERSION_CONTEXT_RE.search(line, max(0, match.start() - 16), match.start()):
             yield KIND_PRIVATE_ADDRESS
-    for _ in IPV6_ULA_RE.finditer(line):
+    for match in IPV6_ULA_RE.finditer(line):
+        try:
+            IPv6Address(match.group())
+        except AddressValueError:
+            continue
         yield KIND_PRIVATE_ADDRESS
 
 

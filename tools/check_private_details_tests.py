@@ -97,6 +97,31 @@ class PrivateAddressTests(unittest.TestCase):
             with self.subTest(text=text):
                 self.assertEqual(kinds(text), [checker.KIND_PRIVATE_ADDRESS])
 
+    def test_flags_trailing_compression_and_mixed_ipv6_endpoints(self):
+        addresses = [
+            ":".join(["fd12", *[str(n) for n in range(1, count + 1)], "", ""])
+            for count in range(7)
+        ]
+        addresses.extend([
+            join("FC00", ":", ":"),
+            join("fd12", "::", ipv4(192, 0, 2, 1)),
+        ])
+        for address in addresses:
+            for text in (address, "https://[" + address + "]:443/path", address + "%eth0"):
+                with self.subTest(text=text):
+                    self.assertEqual(kinds(text), [checker.KIND_PRIVATE_ADDRESS])
+
+    def test_rejects_invalid_ipv6_candidates_without_matching_a_prefix(self):
+        for text in [
+            ":".join(["fd12", *[str(n) for n in range(1, 8)], "", ""]),
+            join("fd12", "::", "1::2"),
+            join("fd12", ":", "12345:1:2:3:4:5:6"),
+            join("fd12", ":", "1"),
+            join("fd12", "::", ipv4(192, 0, 2, 999)),
+        ]:
+            with self.subTest(text=text):
+                self.assertEqual(kinds(text), [])
+
     def test_ignores_public_addresses_and_versions(self):
         for text in [
             ipv4(8, 8, 8, 8),
