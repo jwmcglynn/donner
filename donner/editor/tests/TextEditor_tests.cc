@@ -5777,8 +5777,13 @@ TEST_F(TextEditorTests, ReferenceColoredSourcePreservesTextGeometryIncludingWhit
                       Field(&ImDrawVert::uv,
                             AllOf(Field(&ImVec2::x, ::testing::FloatEq(baseline[index].uv.x)),
                                   Field(&ImVec2::y, ::testing::FloatEq(baseline[index].uv.y))))));
-    EXPECT_LT(ImGui::ColorConvertU32ToFloat4(reference[index].col).w,
-              ImGui::ColorConvertU32ToFloat4(baseline[index].col).w);
+    const float baselineAlpha = ImGui::ColorConvertU32ToFloat4(baseline[index].col).w;
+    const float referenceAlpha = ImGui::ColorConvertU32ToFloat4(reference[index].col).w;
+    if (baselineAlpha > 0.0f) {
+      EXPECT_LT(referenceAlpha, baselineAlpha);
+    } else {
+      EXPECT_EQ(referenceAlpha, 0.0f);
+    }
   }
   EXPECT_EQ(editor.getText(), "\nX\t X");
   EXPECT_EQ(editor.getCursorPosition(), Coordinates(0, 0));
@@ -5805,7 +5810,12 @@ TEST_F(TextEditorTests, DimmedSourcePreservesGeometryAndDesaturatesWhitespaceAnd
     const ImVec4 color = ImGui::ColorConvertU32ToFloat4(dimmed[index].col);
     EXPECT_THAT((std::array<float, 3>{color.x, color.y, color.z}),
                 ElementsAre(color.x, color.x, color.x));
-    EXPECT_LT(color.w, ImGui::ColorConvertU32ToFloat4(baseline[index].col).w);
+    const float baselineAlpha = ImGui::ColorConvertU32ToFloat4(baseline[index].col).w;
+    if (baselineAlpha > 0.0f) {
+      EXPECT_LT(color.w, baselineAlpha);
+    } else {
+      EXPECT_EQ(color.w, 0.0f);
+    }
   }
   editor.clearFocusPartition();
   RenderEditorFrame();
