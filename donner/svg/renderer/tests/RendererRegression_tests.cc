@@ -349,11 +349,11 @@ TEST_F(RendererRegressionTests, TinySkiaBitmapGlyphPreservesDecodedPremultiplied
   const auto element = document.querySelector("#emoji");
   ASSERT_THAT(element, testing::Ne(std::nullopt));
   Registry& registry = document.registry();
-  const auto& geometry = element->entityHandle().get<components::ComputedTextGeometryComponent>();
-  ASSERT_THAT(geometry.runs, testing::SizeIs(1));
-  const TextRun& run = geometry.runs.front();
   FontManager& fonts = registry.ctx().get<FontManager>();
   TextEngine& engine = registry.ctx().get<TextEngine>();
+  const auto& geometry = engine.ensureComputedTextGeometryComponent(element->entityHandle());
+  ASSERT_THAT(geometry.runs, testing::SizeIs(1));
+  const TextRun& run = geometry.runs.front();
   EXPECT_THAT(run.font, testing::Eq(fonts.findFont("Noto Color Emoji")));
   ASSERT_THAT(engine.isBitmapOnly(run.font), testing::IsTrue());
   ASSERT_THAT(run.glyphs, testing::SizeIs(1));
