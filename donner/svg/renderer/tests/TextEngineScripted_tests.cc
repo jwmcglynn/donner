@@ -176,6 +176,15 @@ public:
   }
 };
 
+auto BitmapBoundsNear(const Box2d& expected) {
+  return AllOf(Field("topLeft", &Box2d::topLeft,
+                     AllOf(Field("x", &Vector2d::x, DoubleNear(expected.topLeft.x, 1e-9)),
+                           Field("y", &Vector2d::y, DoubleNear(expected.topLeft.y, 1e-9)))),
+               Field("bottomRight", &Box2d::bottomRight,
+                     AllOf(Field("x", &Vector2d::x, DoubleNear(expected.bottomRight.x, 1e-9)),
+                           Field("y", &Vector2d::y, DoubleNear(expected.bottomRight.y, 1e-9)))));
+}
+
 TextEngine MakeScriptedEngine(Registry& registry, FontManager& fontManager,
                               bool reverseClusters = false,
                               std::optional<SubSuperMetrics> subSuper = std::nullopt,
@@ -1144,6 +1153,14 @@ public:
   }
 };
 
+class MixedBitmapOutlineBackend : public BitmapOutlineBackend {
+public:
+  Path glyphOutline(FontHandle font, int glyphIndex, float scale) const override {
+    return glyphIndex == 'A' % 997 + 1 ? Path()
+                                       : ScriptedTextBackend::glyphOutline(font, glyphIndex, scale);
+  }
+};
+
 /// Backend whose outlines contain quadratic and cubic curve segments.
 class CurveOutlineBackend : public ScriptedTextBackend {
 public:
@@ -2080,14 +2097,8 @@ TEST(TextEngineScriptedTest, BitmapGeometryRotatesAboutItsNonzeroGlyphOrigin) {
     const Entity root = MakeTextRootWithSpan(registry, "A", std::move(span));
     const EntityHandle handle(registry, root);
     EXPECT_THAT(engine.getStartPositionOfChar(handle, 0), testing::Eq(Vector2d(10.0, 20.0)));
-    const auto boundsMatch = [&test](const Box2d& box) {
-      EXPECT_NEAR(box.topLeft.x, test.expected.topLeft.x, 1e-9);
-      EXPECT_NEAR(box.topLeft.y, test.expected.topLeft.y, 1e-9);
-      EXPECT_NEAR(box.bottomRight.x, test.expected.bottomRight.x, 1e-9);
-      EXPECT_NEAR(box.bottomRight.y, test.expected.bottomRight.y, 1e-9);
-    };
-    boundsMatch(engine.getExtentOfChar(handle, 0));
-    boundsMatch(engine.computedInkBounds(handle));
+    EXPECT_THAT(engine.getExtentOfChar(handle, 0), BitmapBoundsNear(test.expected));
+    EXPECT_THAT(engine.computedInkBounds(handle), BitmapBoundsNear(test.expected));
     EXPECT_EQ(engine.getCharNumAtPosition(handle, test.inside), 0);
     EXPECT_EQ(engine.getCharNumAtPosition(handle, test.outside), -1);
     EXPECT_EQ(observedBackend->bitmapDecodeCalls, 0u);
@@ -2113,13 +2124,43 @@ TEST(TextEngineScriptedTest, BitmapGeometryStretchesBeforeObliqueRotation) {
   ASSERT_THAT(geometry.runs, SizeIs(1));
   ASSERT_THAT(geometry.runs[0].glyphs, SizeIs(1));
   EXPECT_THAT(geometry.runs[0].glyphs[0].stretchScaleX, testing::FloatEq(2.0f));
-  for (const Box2d bounds : {engine.getExtentOfChar(handle, 0), engine.computedInkBounds(handle)}) {
-    EXPECT_NEAR(bounds.topLeft.x, 10.866025403784439, 1e-9);
-    EXPECT_NEAR(bounds.topLeft.y, 18.767949192431123, 1e-9);
-    EXPECT_NEAR(bounds.bottomRight.x, 15.330127018922193, 1e-9);
-    EXPECT_NEAR(bounds.bottomRight.y, 22.5, 1e-9);
-  }
+  const Box2d expected({10.866025403784439, 18.767949192431123}, {15.330127018922193, 22.5});
+  EXPECT_THAT(engine.getExtentOfChar(handle, 0), BitmapBoundsNear(expected));
+  EXPECT_THAT(engine.computedInkBounds(handle), BitmapBoundsNear(expected));
   EXPECT_EQ(engine.getCharNumAtPosition(handle, {15.0, 21.0}), 0);
+  EXPECT_EQ(observedBackend->bitmapDecodeCalls, 0u);
+}
+
+TEST(TextEngineScriptedTest, BitmapAndOutlineInkBoundsPreserveSourceSubtrees) {
+  Registry registry;
+  FontManager manager(registry);
+  auto backend = std::make_unique<MixedBitmapOutlineBackend>();
+  const auto* observedBackend = backend.get();
+  TextEngine engine(manager, registry, std::move(backend));
+  const Entity root = MakeTextRootWithSpan(registry, "AB", MakeSpan(""));
+  const auto child = [&](const char* text, double x) {
+    const Entity entity = registry.create();
+    registry.emplace<donner::components::TreeComponent>(entity, xml::XMLQualifiedNameRef("tspan"));
+    registry.get<donner::components::TreeComponent>(root).appendChild(registry, entity);
+    registry.emplace<components::ComputedStyleComponent>(entity, MakeStyle());
+    auto span = MakeSpan(text);
+    span.sourceEntity = entity;
+    span.xList = {Lengthd(x, Lengthd::Unit::None)};
+    span.yList = {Lengthd(0.0, Lengthd::Unit::None)};
+    registry.get<components::ComputedTextComponent>(root).spans.push_back(std::move(span));
+    return EntityHandle(registry, entity);
+  };
+  registry.get<components::ComputedTextComponent>(root).spans.clear();
+  const EntityHandle bitmap = child("A", 0.0);
+  const EntityHandle outline = child("B", 20.0);
+  const EntityHandle rootHandle(registry, root);
+  EXPECT_THAT(engine.computedInkBounds(bitmap), BitmapBoundsNear(Box2d::FromXYWH(1, -2, 2, 2)));
+  EXPECT_THAT(engine.computedInkBounds(outline), BitmapBoundsNear(Box2d::FromXYWH(20, -8, 6, 8)));
+  EXPECT_THAT(engine.computedInkBounds(rootHandle), BitmapBoundsNear(Box2d({1, -8}, {26, 0})));
+  EXPECT_THAT(engine.computedGlyphPaths(bitmap), IsEmpty());
+  EXPECT_THAT(engine.computedGlyphOutlines(bitmap), IsEmpty());
+  EXPECT_THAT(engine.computedGlyphPaths(outline), SizeIs(1));
+  EXPECT_THAT(engine.computedGlyphOutlines(rootHandle), SizeIs(1));
   EXPECT_EQ(observedBackend->bitmapDecodeCalls, 0u);
 }
 
