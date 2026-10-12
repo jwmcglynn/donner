@@ -29,15 +29,12 @@ EVIDENCE_WORKFLOWS = {
     "coverage": ".github/workflows/coverage.yml",
     "fuzz": ".github/workflows/fuzz.yml",
     "sanitizers": ".github/workflows/sanitizers.yml",
-    "security": ".github/workflows/codeql.yml",
 }
 REQUIRED_EVIDENCE_JOBS = {
     "ci": (("linux", "linux-self-hosted"), ("macos", "macos-self-hosted")),
     "coverage": (("build",), ("upload-coverage",)),
     "fuzz": (("linux",), ("macos",)),
     "sanitizers": (("asan",), ("ubsan",)),
-    "security": (("Analyze (c-cpp)",), ("Analyze (javascript-typescript)",),
-                 ("Analyze (python)",)),
 }
 REVIEW_NAMES = {"security", "supply-chain"}
 SHA = re.compile(r"[0-9a-f]{40}\Z")

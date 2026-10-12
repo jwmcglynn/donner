@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <filter id="d">
+    <feDiffuseLighting surfaceScale="3" diffuseConstant="1.5" lighting-color="ivory">
+      <fePointLight x="20" y="10" z="30"/>
+    </feDiffuseLighting>
+  </filter>
+  <filter id="s">
+    <feSpecularLighting surfaceScale="2" specularConstant="1" specularExponent="20"
+                        kernelUnitLength="1 2">
+      <feSpotLight x="0" y="0" z="40" pointsAtX="32" pointsAtY="32" pointsAtZ="0"
+                   specularExponent="4" limitingConeAngle="30"/>
+    </feSpecularLighting>
+    <feComposite in2="SourceAlpha" operator="in"/>
+  </filter>
+  <filter id="t">
+    <feDiffuseLighting><feDistantLight azimuth="45" elevation="60"/></feDiffuseLighting>
+  </filter>
+  <rect width="30" height="30" fill="red" filter="url(#d)"/>
+  <circle cx="44" cy="44" r="16" fill="blue" filter="url(#s)"/>
+  <rect x="34" y="2" width="28" height="28" filter="url(#t)"/>
+</svg>
