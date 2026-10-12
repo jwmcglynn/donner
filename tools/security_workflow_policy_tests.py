@@ -1337,6 +1337,21 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "unterminated expression marker"):
             _secret_use_violations(_workflows({**files, path: changed}))
 
+    def test_comment_quote_pairs_cannot_hide_a_later_secret_consumer(self):
+        files = self.supply_chain_files
+        path = ".github/workflows/badges.yaml"
+        for step in (
+            "        uses: example/consumer-action@v1.0.0\n        # marker ${{ '\n",
+            "        uses: example/consumer-action@v1.0.0 # marker ${{ '\n",
+        ):
+            with self.subTest(step=step):
+                changed = files[path] + "\n      - name: Unreviewed consumer\n" + step + \
+                          "        with:\n          auth: ${{ secrets.UNREVIEWED_TOKEN }}\n" \
+                          "        # ' }}\n"
+                self.assertNotEqual(changed, files[path])
+                with self.assertRaisesRegex(ValueError, "ambiguous comment expression marker"):
+                    _secret_use_violations(_workflows({**files, path: changed}))
+
     def test_only_gated_ci_jobs_reach_self_hosted_runners(self):
         workflows = _workflows(self.supply_chain_files)
         self.assertEqual([], _self_hosted_violations(workflows))
