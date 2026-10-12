@@ -587,6 +587,16 @@ public:
   /// true.
   [[nodiscard]] bool isBusy() const;
 
+  /**
+   * Like \ref isBusy, but when busy also guarantees one wake callback once the input gate opens.
+   *
+   * Foreground renders, cancellations, and staged results already wake on completion; speculative
+   * compositor warmup wakes only for a caller registered here or by \ref cancelInFlight. A caller
+   * that defers document access while this returns true can therefore wait for that wake instead
+   * of requesting a frame every frame, which would redraw at display rate for the whole render.
+   */
+  [[nodiscard]] bool isBusyWithIdleWake();
+
   /// True only when no document, warmup, or auxiliary preview can observe a changed font store.
   /// Pending results must be consumed before adoption so they retain their original font epoch.
   [[nodiscard]] bool isFontResourceAdoptionSafe() const;
@@ -1041,7 +1051,8 @@ private:
   /// that request cancels this work at the compositor's existing safe points.
   bool pendingCompositorWarmup_ = false;
   bool compositorWarmupActive_ = false;
-  /// A caller deferred document access while warmup owned the write guard. Keep this independent
+  /// A caller deferred document access while warmup owned the write guard, through
+  /// \ref cancelInFlight or \ref isBusyWithIdleWake. Keep this independent
   /// from the cancellation token so a cancel arriving after warmup's final token poll still wakes
   /// the caller at the actual guard-release edge.
   bool compositorWarmupReleaseWakePending_ = false;

@@ -577,6 +577,16 @@ bool AsyncRenderer::isBusy() const {
   return workerStateBusy(workerState_) || pendingCompositorWarmup_ || compositorWarmupActive_;
 }
 
+bool AsyncRenderer::isBusyWithIdleWake() {
+  std::lock_guard<std::mutex> lock(mutex_);
+  const bool warmupBusy = pendingCompositorWarmup_ || compositorWarmupActive_;
+  if (warmupBusy) {
+    // Warmup completion wakes only registered callers; render states wake on their own.
+    compositorWarmupReleaseWakePending_ = true;
+  }
+  return warmupBusy || workerStateBusy(workerState_);
+}
+
 bool AsyncRenderer::isFontResourceAdoptionSafe() const {
   std::lock_guard<std::mutex> lock(mutex_);
   return !workerStateBusy(workerState_) && !pendingCompositorWarmup_ && !compositorWarmupActive_ &&

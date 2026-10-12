@@ -7288,8 +7288,9 @@ void EditorShell::refreshReferenceHighlightSummaryIfNeeded() {
     return;
   }
 
-  if (renderCoordinator_.asyncRenderer().isBusy()) {
-    window_.wakeEventLoop();
+  // The renderer wakes the loop when its gate opens. Requesting a frame here instead would redraw
+  // every frame of a press-started render and, in the browser, hold the GPU owner that render needs.
+  if (renderCoordinator_.asyncRenderer().isBusyWithIdleWake()) {
     return;
   }
 
