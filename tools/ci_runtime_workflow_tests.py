@@ -568,6 +568,9 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
                         'esac\n'
                     )
                     fake_bazel.chmod(0o755)
+                    ambient_bash = root / "bash"
+                    ambient_bash.write_text("#!/bin/sh\necho ambient-bash-was-used >&2\nexit 97\n")
+                    ambient_bash.chmod(0o755)
                     args_file = root / "args.txt"
                     env = {**os.environ, "BAZEL_ARGS": str(args_file),
                            "PATH": str(root) + os.pathsep + os.environ.get("PATH", "")}
@@ -580,6 +583,18 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
                     self.assertIn("--test_tag_filters=requires_xvfb", args)
                     self.assertIn(expected_target, args)
                     self.assertEqual(no_tests, "No test targets" in result.stdout)
+
+    def test_shell_fixture_ignores_inherited_bash_startup_hook(self):
+        with tempfile.TemporaryDirectory() as directory:
+            startup = Path(directory) / "startup.sh"
+            startup.write_text("echo ambient-startup-was-used >&2\nexit 73\n")
+            result = self._run_script(
+                "#!/bin/bash\nprintf 'fixture-complete\\n'\n",
+                [],
+                env={**os.environ, "BASH_ENV": str(startup)},
+            )
+            self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+            self.assertEqual("fixture-complete\n", result.stdout)
 
     def test_shell_fixture_uses_the_test_interpreter(self):
         with tempfile.TemporaryDirectory() as directory:
