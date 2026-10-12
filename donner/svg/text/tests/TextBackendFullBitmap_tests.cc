@@ -118,6 +118,62 @@ TEST(TextBackendFullBitmap, DecodesBoundedTrustedBitmapFontSeed) {
   EXPECT_THAT(bitmap->rgbaPixels, SizeIs(136 * 128 * 4));
 }
 
+TEST(TextBackendFullBitmap, QueriesMetadataAndHonorsExactDecodeByteAdmission) {
+  Registry registry;
+  FontManager manager(registry);
+  const FontHandle font = manager.loadFontData(LoadBitmapFontSeed(), FontDataTrust::Trusted);
+  ASSERT_THAT(static_cast<bool>(font), testing::IsTrue());
+  TextBackendFull backend(manager, registry);
+  const TextBackend& api = backend;
+  constexpr std::string_view kEmoji = "\xF0\x9F\x98\x81";
+  const auto shaped =
+      backend.shapeRun(font, 32.0f, kEmoji, 0, kEmoji.size(), false, FontVariant::Normal, false);
+  ASSERT_THAT(shaped.glyphs, ElementsAre(GlyphIndexIs(Gt(0))));
+  const int glyphIndex = shaped.glyphs.front().glyphIndex;
+  const float scale = backend.scaleForEmToPixels(font, 32.0f);
+  const auto metrics = api.bitmapGlyphMetrics(font, glyphIndex, scale);
+  ASSERT_THAT(metrics,
+              Optional(AllOf(Field(&TextBackend::BitmapGlyphMetrics::width, 136),
+                             Field(&TextBackend::BitmapGlyphMetrics::height, 128),
+                             Field(&TextBackend::BitmapGlyphMetrics::rgbaBytes, 136 * 128 * 4))));
+  const auto bitmap = api.bitmapGlyph(font, glyphIndex, scale, *metrics, metrics->rgbaBytes);
+  ASSERT_THAT(bitmap,
+              Optional(Field(&TextBackend::BitmapGlyph::rgbaPixels, SizeIs(metrics->rgbaBytes))));
+  EXPECT_THAT(api.bitmapGlyph(font, glyphIndex, scale, *metrics, metrics->rgbaBytes - 1),
+              testing::Eq(std::nullopt));
+  EXPECT_THAT(api.bitmapGlyph(font, glyphIndex, scale, *metrics, 0), testing::Eq(std::nullopt));
+
+  auto changed = *metrics;
+  ++changed.width;
+  EXPECT_THAT(api.bitmapGlyph(font, glyphIndex, scale, changed, metrics->rgbaBytes),
+              testing::Eq(std::nullopt));
+  changed = *metrics;
+  changed.rgbaBytes = 0;
+  EXPECT_THAT(api.bitmapGlyph(font, glyphIndex, scale, changed, metrics->rgbaBytes),
+              testing::Eq(std::nullopt));
+  changed = *metrics;
+  changed.scale = std::numeric_limits<double>::quiet_NaN();
+  EXPECT_THAT(api.bitmapGlyph(font, glyphIndex, scale, changed, metrics->rgbaBytes),
+              testing::Eq(std::nullopt));
+  EXPECT_THAT(api.bitmapGlyph(font, glyphIndex, scale * 2, *metrics, metrics->rgbaBytes),
+              testing::Eq(std::nullopt));
+}
+
+TEST(TextBackendFullBitmap, MetadataRejectsUntrustedFontsAndInvalidRequests) {
+  Registry registry;
+  FontManager manager(registry);
+  const FontHandle font = manager.loadFontData(LoadBitmapFontSeed(), FontDataTrust::Untrusted);
+  ASSERT_THAT(static_cast<bool>(font), testing::IsTrue());
+  TextBackendFull backend(manager, registry);
+  const TextBackend& api = backend;
+  EXPECT_THAT(api.bitmapGlyphMetrics(font, 1, 1.0f), testing::Eq(std::nullopt));
+  EXPECT_THAT(api.bitmapGlyphMetrics(FontHandle(), 1, 1.0f), testing::Eq(std::nullopt));
+  EXPECT_THAT(api.bitmapGlyphMetrics(font, -1, 1.0f), testing::Eq(std::nullopt));
+  EXPECT_THAT(api.bitmapGlyphMetrics(font, 1, 0.0f), testing::Eq(std::nullopt));
+  EXPECT_THAT(api.bitmapGlyphMetrics(font, 1, std::numeric_limits<float>::infinity()),
+              testing::Eq(std::nullopt));
+}
+
 TEST(TextBackendFullBitmap, RejectsInvalidDecodeRequestsBeforeLoadingGlyph) {
   const std::vector<uint8_t> fontBytes = LoadBitmapFontSeed();
   ASSERT_THAT(fontBytes, Not(SizeIs(0)));

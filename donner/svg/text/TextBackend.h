@@ -109,6 +109,37 @@ public:
     double scale = 1.0;               ///< Scale factor to apply.
   };
 
+  /// Validated bitmap cost and placement metadata; not an authentication or cache identity token.
+  struct BitmapGlyphMetrics {
+    FontHandle font;               ///< Font whose metrics were queried.
+    int glyphIndex = 0;            ///< Glyph index within the font.
+    int selectedStrikeIndex = -1;  ///< Selected embedded strike, or -1 without fixed strikes.
+    int width = 0;                 ///< Native bitmap width in pixels.
+    int height = 0;                ///< Native bitmap height in pixels.
+    std::size_t rgbaBytes = 0;     ///< Checked tightly packed RGBA storage bytes.
+    double bearingX = 0;           ///< Scaled horizontal bearing from glyph origin.
+    double bearingY = 0;           ///< Scaled upward bearing from baseline.
+    double scale = 1.0;            ///< Native bitmap pixel scale.
+    float requestedScale = 0;      ///< Scale used for this metadata query.
+  };
+
+  /// Query bounded bitmap metadata without materializing bitmap pixels.
+  /// @param font Font to query. @param glyphIndex Glyph within the font. @param scale Requested
+  /// scale.
+  virtual std::optional<BitmapGlyphMetrics> bitmapGlyphMetrics(FontHandle, int, float) const {
+    return std::nullopt;
+  }
+
+  /// Decode only after independently revalidating admitted metrics and the RGBA byte limit.
+  /// @param font Font to decode. @param glyphIndex Glyph within the font. @param scale Requested
+  /// scale.
+  /// @param admitted Previously queried cost and placement metadata.
+  /// @param maximumRgbaBytes Maximum allowed converted RGBA storage bytes.
+  virtual std::optional<BitmapGlyph> bitmapGlyph(FontHandle, int, float, const BitmapGlyphMetrics&,
+                                                 std::size_t) const {
+    return std::nullopt;
+  }
+
   /// Extract a bitmap glyph (CBDT/CBLC color emoji). Returns std::nullopt if
   /// the glyph is not a bitmap. Simple backends always return std::nullopt.
   virtual std::optional<BitmapGlyph> bitmapGlyph(FontHandle font, int glyphIndex,
