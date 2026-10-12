@@ -1389,5 +1389,48 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         self.assertNotIn("--include-console-tails", summary)
 
 
+
+    def test_secret_consumers_are_reviewed_at_each_step(self):
+        files = self.supply_chain_files
+        path = ".github/workflows/badges.yaml"
+        added = files[path] + "      - name: Unreviewed consumer\n" \
+                "        uses: example/consumer-action@v1.0.0\n" \
+                "        with:\n          token: ${{ secrets.GIST_SECRET }}\n"
+        self.assertTrue(_secret_use_violations(_workflows({**files, path: added})))
+        original = "      - name: Create Lines-of-Code-Badge\n"
+        changed = files[path].replace("uses: schneegans/dynamic-badges-action@v1.9.0",
+                                    "uses: example/consumer-action@v1.0.0", 1)
+        self.assertTrue(_secret_use_violations(_workflows({**files, path: changed})))
+
+    def test_self_hosted_gate_cannot_be_weakened_by_boolean_context(self):
+        files = self.supply_chain_files
+        path = ".github/workflows/main.yml"
+        for runner in ("linux", "macos"):
+            gate = "needs.gatekeeper.outputs.use_self_hosted_" + runner + " == 'true'"
+            for replacement in ("true || " + gate, gate + " || true"):
+                with self.subTest(runner=runner, replacement=replacement):
+                    changed = files[path].replace(gate, replacement, 1)
+                    self.assertTrue(_self_hosted_violations(_workflows({**files, path: changed})))
+
+    def test_hosted_runner_prefixes_do_not_approve_custom_labels(self):
+        files = self.supply_chain_files
+        path = ".github/workflows/coverage.yml"
+        for label in ("ubuntu-unreviewed-worker", "macos-unreviewed-worker",
+                      "windows-unreviewed-worker"):
+            with self.subTest(label=label):
+                changed = files[path].replace("runs-on: ubuntu-24.04", "runs-on: " + label, 1)
+                self.assertNotEqual(changed, files[path])
+                self.assertTrue(_self_hosted_violations(_workflows({**files, path: changed})))
+
+    def test_reviewed_collector_must_upload_only_its_collected_tree(self):
+        files = self.supply_chain_files
+        path = ".github/actions/upload-bazel-test-artifacts/action.yml"
+        for upload in (".", "${{ github.workspace }}", "${{ runner.temp }}/other-tree"):
+            with self.subTest(upload=upload):
+                changed = files[path].replace("${{ runner.temp }}/bazel-test-artifacts", upload)
+                self.assertNotEqual(changed, files[path])
+                self.assertTrue(_artifact_upload_violations({**files, path: changed}))
+
+
 if __name__ == "__main__":
     unittest.main()
