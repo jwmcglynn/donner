@@ -1319,3 +1319,46 @@ test("presented document wakes use the event driver while generic wakes stay rAF
     "ordinary UI and animation wakes must retain their rAF cadence",
   );
 });
+
+
+test("selection chrome probe refreshes a capture that precedes the overlay frame", async () => {
+  const selectionTest = extractTest(smokeSource, "Geode WASM presents selection path overlay pixels");
+  const probeStart = selectionTest.indexOf("  try {\n");
+  const probeEnd = selectionTest.indexOf("  } catch (error)", probeStart);
+  assert.ok(probeStart >= 0 && probeEnd > probeStart, "expected the live selection chrome probe");
+  const probe = selectionTest.slice(probeStart + "  try {\n".length, probeEnd);
+  const state = { __donnerWgpuReadbackStats: { request: 3, selectionChromePixels: 384 } };
+  const requests = [];
+  const observations = [];
+  const page = {
+    evaluate: async (callback) => new Function("window", `return (${callback})()`)(state),
+  };
+  const expect = {
+    poll: (callback, options) => ({
+      toBeGreaterThan: async (threshold) => {
+        assert.equal(threshold, 50, "retain the overlay pixel threshold");
+        assert.equal(options.timeout, 20000, "retain the existing probe budget");
+        for (let attempt = 0; attempt < 3; ++attempt) {
+          const value = await callback();
+          observations.push(value);
+          if (value > threshold) return;
+        }
+        assert.fail(`selection chrome stayed at stale capture: ${observations}`);
+      },
+    }),
+  };
+  const requestWgpuDiagnostic = async () => {
+    const request = state.__donnerWgpuReadbackStats.request + 1;
+    requests.push(request);
+    // The first explicit post-selection capture preceded the frame that drew chrome.
+    // A later request observes that frame; repeated reads of request 3 cannot do so.
+    state.__donnerWgpuReadbackStats = { request, selectionChromePixels: 608 };
+    return request;
+  };
+  await new Function(
+    "page", "expect", "requestWgpuDiagnostic", "beforeSelectionChrome",
+    `return (async () => {${probe}})();`,
+  )(page, expect, requestWgpuDiagnostic, 384);
+  assert.deepEqual(requests, [4]);
+  assert.deepEqual(observations, [0, 224]);
+});
