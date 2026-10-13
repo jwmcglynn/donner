@@ -5926,7 +5926,8 @@ void EditorShell::ensureSampleThumbnails() {
   }
   // Submitted GPU work cannot be recalled, so hold the first thumbnail while a click on the picker
   // is likely. The first picker frame always holds, which also paints every card before any
-  // sample is parsed. Ask for another frame so the hold advances without input.
+  // sample is parsed. Ask for another frame so the hold advances without input. Frames in which
+  // the lane was busy are not observed; their presented frames count as quiet on the next one.
   if (!sampleThumbnailStartGate_.admitFrame(presentedUiFrameCount(),
                                             internal::FrameHasUserInput(ImGui::GetIO()))) {
     window_.wakeEventLoop();

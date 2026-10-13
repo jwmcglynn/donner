@@ -7636,10 +7636,10 @@ TEST(EditorShellTest, SampleClickedRightAfterBootRendersBeforeAnyThumbnail) {
   if (!window.valid()) {
     GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
   }
+  std::uint64_t presentedFrames = 0;  // Outlives the shell that reads it.
   EditorShell shell(window, WelcomePickerOptions());
   ASSERT_TRUE(shell.valid());
   AsyncRenderer& renderer = shell.asyncRendererForReplay();
-  std::uint64_t presentedFrames = 0;
   EditorShellTestAccess::SetPresentedUiFrameCount(shell, &presentedFrames);
 
   constexpr int kFramesBeforeTheFirstPresents = 20;
@@ -7691,12 +7691,12 @@ TEST(EditorShellTest, IdlePickerStartsThumbnailsAfterAHoldScaledByTheFirstFrame)
   if (!window.valid()) {
     GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
   }
+  std::uint64_t presentedFrames = 0;  // Outlives the shell that reads it.
   EditorShell shell(window, WelcomePickerOptions());
   ASSERT_TRUE(shell.valid());
   AsyncRenderer& renderer = shell.asyncRendererForReplay();
   const SampleThumbnailStartGate& gate =
       EditorShellTestAccess::SampleThumbnailStartGateState(shell);
-  std::uint64_t presentedFrames = 0;
   EditorShellTestAccess::SetPresentedUiFrameCount(shell, &presentedFrames);
 
   constexpr int kFramesBuiltBeforeTheFirstPresents = 30;
@@ -7715,8 +7715,12 @@ TEST(EditorShellTest, IdlePickerStartsThumbnailsAfterAHoldScaledByTheFirstFrame)
     }
   }
   ASSERT_TRUE(gate.open());
-  EXPECT_EQ(gate.quietTarget(), kFramesBuiltBeforeTheFirstPresents);
-  EXPECT_EQ(presentedWhileHeld, kFramesBuiltBeforeTheFirstPresents);
+  ASSERT_TRUE(gate.quietTarget().has_value());
+  // Every built frame consults the gate unless the renderer was busy, so the target is at most the
+  // frames built before the first presented one, and well above the minimum.
+  EXPECT_LE(*gate.quietTarget(), kFramesBuiltBeforeTheFirstPresents);
+  EXPECT_GT(*gate.quietTarget(), SampleThumbnailStartGate::kMinQuietFrames);
+  EXPECT_EQ(presentedWhileHeld, *gate.quietTarget());
   EXPECT_EQ(renderer.sampleThumbnailRenderStats().requested, 1u)
       << "The frame that opens the gate requests the first thumbnail";
 }
@@ -7724,6 +7728,9 @@ TEST(EditorShellTest, IdlePickerStartsThumbnailsAfterAHoldScaledByTheFirstFrame)
 // A window that presents each frame as soon as it is built, as a hardware GPU does, holds the
 // thumbnails for only the minimum. This uses the window's real presented-frame count.
 TEST(EditorShellTest, FastWindowStartsThumbnailsAfterTheMinimumHold) {
+#ifdef DONNER_EDITOR_WGPU
+  GTEST_SKIP() << "WebGPU frames retire at the GPU's pace; this case pins the OpenGL swap count";
+#endif
   gui::EditorWindow window(TestWindowOptions({
       .title = "Donner fast sample picker",
       .initialWidth = 960,
@@ -7761,12 +7768,12 @@ TEST(EditorShellTest, PointerActivityHoldsThumbnailsUpToTheBound) {
   if (!window.valid()) {
     GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
   }
+  std::uint64_t presentedFrames = 0;  // Outlives the shell that reads it.
   EditorShell shell(window, WelcomePickerOptions());
   ASSERT_TRUE(shell.valid());
   AsyncRenderer& renderer = shell.asyncRendererForReplay();
   const SampleThumbnailStartGate& gate =
       EditorShellTestAccess::SampleThumbnailStartGateState(shell);
-  std::uint64_t presentedFrames = 0;
   EditorShellTestAccess::SetPresentedUiFrameCount(shell, &presentedFrames);
 
   // Move the pointer by one pixel in each presented frame.

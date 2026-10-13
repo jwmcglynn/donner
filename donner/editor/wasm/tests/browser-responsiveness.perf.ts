@@ -1701,8 +1701,9 @@ test("first sample click after boot", async ({ page, browser }, info) => {
     completedAt,
     presentedAt: worker!.presentedAtMs!,
   });
-  // When the thumbnail lane first asked the worker for a thumbnail, relative to the click; null
-  // when it had not by the time the clicked document presented.
+  // When the thumbnail lane first asked the worker for work, relative to the click; null when it
+  // had not by the time the clicked document presented. After the click this is a font preview,
+  // which shares the lane, not a sample thumbnail.
   const marks = await readSampleThumbnailMarks(page);
   const relativeToClick = (at: number | undefined) =>
     at === undefined ? null : Math.round((at - clickAt) * 10) / 10;
@@ -1715,7 +1716,7 @@ test("first sample click after boot", async ({ page, browser }, info) => {
     clickAfterFirstFrameMs: marks.firstFramePresentedAt === undefined
       ? null
       : Math.round((clickAt - marks.firstFramePresentedAt) * 10) / 10,
-    thumbnailRequestMs: relativeToClick(marks.firstRequestAt),
+    thumbnailLaneRequestMs: relativeToClick(marks.firstRequestAt),
     gpuObjects: gpu!.statistics,
   };
   console.log(`first-click-after-boot ${JSON.stringify(report)}`);
