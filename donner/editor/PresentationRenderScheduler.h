@@ -26,6 +26,9 @@ struct PresentationRenderScheduleInput {
   bool forcePresentationRefresh = false;
   /// True when the selected layer's cached pixels are known stale.
   bool forceSelectedLayerRasterization = false;
+  /// True when a canvas commit invalidated the render tree behind the presented raster. Like a
+  /// raster change, the rebuild must keep the selected layer promoted.
+  bool renderTreeInvalidated = false;
   /// Current document frame version.
   std::uint64_t currentVersion = 0;
   /// Current output raster canvas size in pixels.
