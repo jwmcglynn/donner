@@ -1182,14 +1182,16 @@ void PrintTo(const DefaultConvolveDivisorCase& value, std::ostream* output) {
 class DefaultConvolveDivisorTest : public testing::TestWithParam<DefaultConvolveDivisorCase> {};
 
 template <typename RendererT>
-void ExpectSpecifiedConvolveNormalization(const DefaultConvolveDivisorCase& params) {
+void ExpectSpecifiedConvolveNormalization(const DefaultConvolveDivisorCase& params,
+                                          std::string_view sourceFill = "red") {
   const std::string source =
       std::string(
           "<svg xmlns='http://www.w3.org/2000/svg' width='4' height='4'>"
           "<filter id='f' filterUnits='userSpaceOnUse' x='0' y='0' width='4' height='4' "
           "color-interpolation-filters='sRGB'><feConvolveMatrix order='1' kernelMatrix='") +
       params.kernel + "' " + params.divisorAttribute + " preserveAlpha='" + params.preserveAlpha +
-      "'/></filter><rect width='4' height='4' fill='red' filter='url(#f)'/></svg>";
+      "'/></filter><rect width='4' height='4' fill='" + std::string(sourceFill) +
+      "' filter='url(#f)'/></svg>";
   SVGDocument document = ParseDocument(source);
   SVGDocument reference =
       ParseDocument(std::string("<svg xmlns='http://www.w3.org/2000/svg' width='4' height='4'>"
@@ -1218,18 +1220,18 @@ TEST_P(CpuSubnormalConvolveDivisorTest, MatchesSpecifiedNormalization) {
   if (!ActiveRendererSupportsFeature(RendererBackendFeature::FilterEffects)) {
     GTEST_SKIP() << "Filter rendering disabled in " << ActiveRendererBackendName();
   }
-  ExpectSpecifiedConvolveNormalization<RendererTinySkia>(GetParam());
+  ExpectSpecifiedConvolveNormalization<RendererTinySkia>(GetParam(), "#408000");
 }
 
 INSTANTIATE_TEST_SUITE_P(
     FilterCpuSubnormalDivisor, CpuSubnormalConvolveDivisorTest,
     testing::Values(
-        DefaultConvolveDivisorCase{"PositiveOmitted", "1e-310", "", "false", "fill='red'"},
-        DefaultConvolveDivisorCase{"NegativeOmitted", "-1e-310", "", "false", "fill='red'"},
+        DefaultConvolveDivisorCase{"PositiveOmitted", "1e-310", "", "false", "fill='#408000'"},
+        DefaultConvolveDivisorCase{"NegativeOmitted", "-1e-310", "", "false", "fill='#408000'"},
         DefaultConvolveDivisorCase{"PositiveExplicit", "1e-310", "divisor='1e-310'", "false",
-                                   "fill='red'"},
+                                   "fill='#408000'"},
         DefaultConvolveDivisorCase{"NegativeExplicit", "-1e-310", "divisor='-1e-310'", "false",
-                                   "fill='red'"}),
+                                   "fill='#408000'"}),
     [](const testing::TestParamInfo<DefaultConvolveDivisorCase>& info) { return info.param.name; });
 
 INSTANTIATE_TEST_SUITE_P(
