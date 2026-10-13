@@ -232,10 +232,21 @@ action writes nothing and the `try-import` is a silent no-op.
 
 | Run | Key | Cache access |
 | --- | --- | --- |
-| Push, schedule or manual dispatch on `main` | `BUILDBUDDY_API_KEY` | read and write |
-| Trusted pull request: same repository, opened and run by the maintainer | `BUILDBUDDY_API_KEY` | read and write |
+| Push, schedule or manual dispatch on `main` | `BUILDBUDDY_API_KEY` (environment) | read and write |
+| Trusted pull request: same repository, opened and run by the maintainer | `BUILDBUDDY_API_KEY` (environment) | read and write |
 | Renovate pull request | `BUILDBUDDY_API_KEY_READONLY` | read only |
 | Fork or any other pull request, push to another branch | none | no remote cache |
+
+**Where the read-write key lives.** `BUILDBUDDY_API_KEY` is a secret of the `buildbuddy-write`
+GitHub Environment, not a repository secret. GitHub delivers a job every secret its definition
+references, even for steps that end up skipped, so a repository-level write key would reach the
+runner of every pull request job that also handles the writer case. Each covered job therefore binds
+`environment: {name: ..., deployment: false}` with an expression that names `buildbuddy-write` only
+for a `main` push, schedule or dispatch run or a trusted maintainer pull request, and names no
+environment otherwise. Renovate and untrusted runs never bind it and never receive the key.
+`deployment: false` uses the environment's secrets without creating deployment records. In
+`main.yml` the trust outputs come from the `gatekeeper` job; the Editor WASM and Geode ASan
+workflows run a small `trust` job first, because an environment is chosen before a job's steps run.
 
 Renovate pull requests are read-only because a dependency update brings new upstream code into the
 build. Letting that code write results that `main` and other pull requests later reuse would be a
@@ -259,7 +270,10 @@ image update the first runs on the new image start cold. The sanitizer lanes use
 toolchain (`--config=latest_llvm`), whose compiler and sysroot are action inputs.
 
 **Interplay with the GitHub Actions cache.** Only `main` saves Actions caches. They remain the
-fallback when BuildBuddy is off, so they are unchanged.
+fallback when BuildBuddy is off and are unchanged. While BuildBuddy is on, a remote cache hit with
+`--remote_download_outputs=minimal` is not written to the local disk cache, so the disk action caches
+that `main` saves hold mostly actions that ran locally, and runs without BuildBuddy (forks, other
+pull requests) restore a colder snapshot.
 
 **Activation.**
 
@@ -267,11 +281,13 @@ fallback when BuildBuddy is off, so they are unchanged.
 2. Create two API keys. The read-write key needs cache write access (BuildBuddy's "Read+Write"
    key type). The read-only key must have no cache write access ("Read-only"). Neither needs
    executor or organization-admin rights.
-3. Add them as repository secrets (Settings -> Secrets and variables -> Actions):
-   `BUILDBUDDY_API_KEY` holds the read-write key and `BUILDBUDDY_API_KEY_READONLY` the read-only
-   key. No code change is needed; the next hosted run picks them up.
+3. Create the GitHub Environment `buildbuddy-write` (Settings -> Environments) with no protection
+   rules or reviewers, and add the read-write key to it as the environment secret
+   `BUILDBUDDY_API_KEY`. Do not add a repository secret with that name.
+4. Add the read-only key as the repository secret `BUILDBUDDY_API_KEY_READONLY` (Settings ->
+   Secrets and variables -> Actions). No code change is needed; the next hosted run picks them up.
 
-**Deactivation.** Delete both secrets. The next runs build without the remote cache. Deleting only
+**Deactivation.** Delete the environment secret and the repository secret. The next runs build without the remote cache. Deleting only
 `BUILDBUDDY_API_KEY_READONLY` turns the cache off for Renovate pull requests alone.
 
 ## Frequently Asked Questions (FAQ)

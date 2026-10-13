@@ -240,37 +240,85 @@ BUILDBUDDY_JOBS = {
     (".github/workflows/sanitizers.yml", "asan"),
     (".github/workflows/sanitizers.yml", "ubsan"),
 }
-# Where a job may read the one pull request trust rule (.github/actions/pr-trust).
-TRUST_GATES = ("needs.gatekeeper.outputs", "steps.pr_trust.outputs")
+# Jobs that may classify pull request trust with the shared rule (.github/actions/pr-trust) for
+# the jobs that need them.
+TRUST_JOBS = ("gatekeeper", "trust")
+WRITE_ENVIRONMENT = "buildbuddy-write"
 BUILDBUDDY_DOWNLOADS = {"minimal", "toplevel", "all"}
 SECRET_NAMES_BUILDBUDDY = ("BUILDBUDDY_API_KEY", "BUILDBUDDY_API_KEY_READONLY")
-BAZEL_COMMAND = re.compile(r"\bbazelisk (?:build|test|fetch|query|cquery|coverage|run)\b")
+# Anything that can start Bazel: the client itself, directly or by path, and the repository's
+# wrappers that run it.
+BAZEL_COMMAND = re.compile(r"(?:^|[\s/\"'(=])bazel(?:isk)?\b(?!-)|\$\{?bazel_bin\b|"
+                           r"ci_bazel_test\.sh|run-browser-ci\.sh|test_with_exclusions\.py")
 
 
-def _gatekeeper_exports_trust(workflow):
-    gatekeeper = _jobs(workflow).get("gatekeeper", "")
+def _exports_trust(workflow, name):
+    job = _jobs(workflow).get(name, "")
     return (any(_step_identity_value(step, "id") == "pr_trust" and
-                _step_action(step, 8) == PR_TRUST_ACTION for step in _steps(gatekeeper)) and
-            all("      %s_pr: ${{ steps.pr_trust.outputs.%s_pr }}" % (kind, kind) in gatekeeper
+                _step_action(step, 8) == PR_TRUST_ACTION for step in _steps(job)) and
+            all("      %s_pr: ${{ steps.pr_trust.outputs.%s_pr }}" % (kind, kind) in job
                 for kind in ("trusted", "renovate")))
 
 
-def _trust_gates(workflow, job, steps_before):
-    """The trust gates this step may read: only ones fed by the shared pr-trust action."""
-    gates = set()
-    if "gatekeeper" in _labels(_job_key(job, "needs").strip("[]")) and \
-            _gatekeeper_exports_trust(workflow):
-        gates.add("needs.gatekeeper.outputs")
-    if any(_step_identity_value(step, "id") == "pr_trust" and
-           _step_action(step, 8) == PR_TRUST_ACTION for step in steps_before):
-        gates.add("steps.pr_trust.outputs")
-    return gates
+def _trust_gates(workflow, job):
+    """The trust gates this job may read: only outputs of a needed job that runs pr-trust."""
+    needs = _labels(_job_key(job, "needs").strip("[]"))
+    return {"needs.%s.outputs" % name for name in TRUST_JOBS
+            if name in needs and _exports_trust(workflow, name)}
+
+
+def _write_conditions(gates):
+    """Every reviewed condition under which a job may hold the read-write key."""
+    return {MAIN_CACHE_WRITE} | {"(%s) || %s.trusted_pr == 'true'" % (MAIN_CACHE_WRITE, gate)
+                                 for gate in gates}
+
+
+def _job_environment(job):
+    """A job's `environment:` as (name, deployment), the inline name alone, or None."""
+    lines = job.splitlines()
+    for index, line in enumerate(lines):
+        if line.startswith("    environment:"):
+            inline = line.split(":", 1)[1].split(" #", 1)[0].strip()
+            if inline:
+                return inline, None
+            block = _mapping(_indented_block(lines[index + 1:], 4))
+            return block.get("name"), block.get("deployment")
+    return None
+
+
+def _write_environment_condition(job):
+    """The condition under which this job binds the write environment, or None."""
+    environment = _job_environment(job)
+    if not environment or environment[1] != "false":
+        return None
+    match = re.fullmatch(r"\$\{\{ \((.*)\) && '%s' \|\| '' \}\}" % WRITE_ENVIRONMENT,
+                         environment[0] or "")
+    return match.group(1) if match else None
+
+
+def _evaluate_condition(condition, event, ref, gates_values):
+    """Evaluate one reviewed write condition for a run, without trusting arbitrary text."""
+    atoms = {"github.event_name": event, "github.ref": ref}
+    for gate, values in gates_values.items():
+        atoms.update({"%s.%s" % (gate, key): value for key, value in values.items()})
+    tokens = re.findall(r"\(|\)|&&|\|\||==|!=|'[^']*'|[A-Za-z_][A-Za-z0-9_.-]*", condition)
+    if "".join(tokens) != condition.replace(" ", ""):
+        raise ValueError("unreviewable condition: %s" % condition)
+    python = []
+    for token in tokens:
+        if token in ("&&", "||"):
+            python.append(" and " if token == "&&" else " or ")
+        elif token in ("(", ")", "==", "!=") or token.startswith("'"):
+            python.append(token)
+        else:
+            python.append(repr(atoms.get(token, "")))
+    return eval("".join(python), {"__builtins__": {}})  # Tokens are restricted above.
 
 
 def _writer_step_problem(condition, inputs, gates):
     if inputs["api-key"] != "${{ secrets.BUILDBUDDY_API_KEY }}":
         return "passes the read-write key through an unreviewed input"
-    if _main_write_only(condition):
+    if condition == MAIN_CACHE_WRITE:
         return None
     for gate in gates:
         trusted = "(%s) || %s.trusted_pr == 'true'" % (MAIN_CACHE_WRITE, gate)
@@ -278,6 +326,25 @@ def _writer_step_problem(condition, inputs, gates):
                 and inputs["renovate-pr"] == "${{ %s.renovate_pr }}" % gate):
             return None
     return "gives the read-write key to a run that is neither main nor a trusted pull request"
+
+
+def _write_environment_violations(path, name, workflow, job):
+    """A job holding the read-write key must bind the write environment exactly when its writer
+    step may run; any other job must never bind that environment."""
+    where = "%s:%s" % (path, name)
+    environment = _job_environment(job)
+    binds = bool(environment) and WRITE_ENVIRONMENT in (environment[0] or "")
+    writes = "BUILDBUDDY_API_KEY" in _secret_reads(job)
+    if not writes:
+        return ["%s binds the write environment without a writer step" % where] if binds else []
+    condition = _write_environment_condition(job)
+    if condition not in _write_conditions(_trust_gates(workflow, job)):
+        return ["%s binds the write environment outside main and trusted pull requests" % where]
+    writer = [_step_key(step, "if", 8) for step in _steps(job)
+              if _secret_reads(step) == {"BUILDBUDDY_API_KEY"}]
+    if writer != [condition]:
+        return ["%s writer step condition differs from its environment condition" % where]
+    return []
 
 
 def _reader_step_problem(condition, inputs, gates):
@@ -296,7 +363,7 @@ BUILDBUDDY_STEP_CHECKS = {
 }
 
 
-def _buildbuddy_step_problem(workflow, job, steps_before, step):
+def _buildbuddy_step_problem(workflow, job, step):
     """Why one BuildBuddy step could hand a key to the wrong run, or None."""
     inputs = {key: _with_key(step, key, 8) for key in
               ("api-key", "read-only-api-key", "trusted-pr", "renovate-pr", "download-outputs")}
@@ -305,19 +372,18 @@ def _buildbuddy_step_problem(workflow, job, steps_before, step):
     check = BUILDBUDDY_STEP_CHECKS.get(frozenset(_secret_reads(step)))
     if check is None:
         return "configures BuildBuddy without exactly one reviewed key"
-    return check(_step_key(step, "if", 8) or "", inputs,
-                 _trust_gates(workflow, job, steps_before))
+    return check(_step_key(step, "if", 8) or "", inputs, _trust_gates(workflow, job))
 
 
 def _buildbuddy_step_violations(workflow, where, job):
     """Problems of each step that configures BuildBuddy or reads one of its keys."""
     violations = []
     steps = _steps(job)
-    for index, step in enumerate(steps):
+    for step in steps:
         uses_action = _step_action(step, 8) == BUILDBUDDY_ACTION
         if not uses_action and _secret_reads(step) & set(SECRET_NAMES_BUILDBUDDY):
             violations.append("%s reads a BuildBuddy key outside the action" % where)
-        problem = uses_action and _buildbuddy_step_problem(workflow, job, steps[:index], step)
+        problem = uses_action and _buildbuddy_step_problem(workflow, job, step)
         if problem:
             violations.append("%s %s" % (where, problem))
     return violations
@@ -352,6 +418,7 @@ def _buildbuddy_violations(files):
         for name, job in _jobs(workflow).items():
             steps = _steps(job)
             violations.extend(_buildbuddy_step_violations(workflow, "%s:%s" % (path, name), job))
+            violations.extend(_write_environment_violations(path, name, workflow, job))
             if BUILDBUDDY_ACTION in [_step_action(step, 8) for step in steps]:
                 seen.add((path, name))
                 violations.extend(_buildbuddy_job_violations(path, name, workflow, steps))
@@ -837,11 +904,31 @@ def _unsafe_upload(entry, self_hosted):
     return self_hosted and (entry.endswith("/") or leaf not in SELF_HOSTED_UPLOAD_FILES)
 
 
+# Upload paths taken from a step output, each reviewed: the producing step writes a named
+# subdirectory of runner.temp, never the root that also holds the BuildBuddy key directory.
+REVIEWED_OUTPUT_UPLOADS = {
+    "${{ steps.stage-package.outputs.handoff_dir }}",
+    "${{ steps.stage-candidate.outputs.candidate_dir }}",
+}
+
+
 def _reaches_buildbuddy_credential(entry):
+    """Whether an upload path can reach runner.temp/buildbuddy, where the key file lives."""
     entry = entry.lstrip("!").strip().strip("'\"")
-    temp_root = re.fullmatch(r"\$\{\{ runner\.temp \}\}/?|\$\{?RUNNER_TEMP\}?/?", entry)
-    return bool(temp_root) or entry in WORKSPACE_ROOTS or "buildbuddy" in entry.lower() or \
-        "*" in entry.split("/", 1)[0] or entry.startswith("..")
+    if entry in REVIEWED_OUTPUT_UPLOADS:
+        return False
+    temp = re.match(r"(?:\$\{\{ runner\.temp \}\}|\$\{?RUNNER_TEMP\}?|/home/runner/work/_temp|"
+                    r"/Users/runner/work/_temp)(/.*)?$", entry)
+    if temp:
+        first = (temp.group(1) or "/").lstrip("/").split("/", 1)[0]
+        return first in ("", "buildbuddy") or any(char in first for char in "*?[") or \
+            ".." in entry
+    if entry.startswith("~"):
+        # The runner's temporary directory lives under its home directory's `work` tree.
+        first = entry[1:].lstrip("/").split("/", 1)[0]
+        return first in ("", "work") or any(char in first for char in "*?[")
+    return entry in WORKSPACE_ROOTS or entry.startswith(("/", "..", "$")) or \
+        "buildbuddy" in entry.lower() or "*" in entry.split("/", 1)[0]
 
 
 def _credential_upload_violations(path, name, job):
@@ -1631,6 +1718,81 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         sanitizers_pr = self.supply_chain_files[".github/workflows/sanitizers-pr.yml"]
         self.assertEqual({"pull_request"}, _triggers(sanitizers_pr))
 
+    def test_write_key_environment_resolves_only_for_main_and_trusted_pull_requests(self):
+        # name: (event, ref, trusted_pr, renovate_pr, expected environment binding)
+        runs = {
+            "main push": ("push", "refs/heads/main", "false", "false", True),
+            "main schedule": ("schedule", "refs/heads/main", "false", "false", True),
+            "main dispatch": ("workflow_dispatch", "refs/heads/main", "false", "false", True),
+            "trusted pull request": ("pull_request", "refs/pull/1/merge", "true", "false", True),
+            "Renovate pull request": ("pull_request", "refs/pull/1/merge", "false", "true", False),
+            "untrusted or fork pull request": (
+                "pull_request", "refs/pull/1/merge", "false", "false", False),
+            "branch push": ("push", "refs/heads/topic", "false", "false", False),
+            "pull request against main ref": ("pull_request", "refs/heads/main", "false",
+                                              "false", False),
+        }
+        for path, name in sorted(BUILDBUDDY_JOBS):
+            workflow = self.supply_chain_files[path]
+            job = _jobs(workflow)[name]
+            condition = _write_environment_condition(job)
+            self.assertIsNotNone(condition, "%s:%s" % (path, name))
+            self.assertNotIn("renovate_pr", condition)
+            gates = _trust_gates(workflow, job)
+            for run, (event, ref, trusted, renovate, expected) in runs.items():
+                # A lane without a trust gate (schedule and dispatch only) never writes for a
+                # pull request.
+                expected = expected and (event != "pull_request" or bool(gates))
+                with self.subTest(job="%s:%s" % (path, name), run=run):
+                    values = {gate: {"trusted_pr": trusted, "renovate_pr": renovate}
+                              for gate in gates}
+                    self.assertEqual(expected,
+                                     bool(_evaluate_condition(condition, event, ref, values)))
+        # The step outputs these jobs upload are named runner.temp subdirectories.
+        wasm = self.supply_chain_files[".github/workflows/editor_wasm.yml"]
+        self.assertIn('handoff_dir="${RUNNER_TEMP}/editor-wasm-package-geode"', wasm)
+        self.assertIn('candidate_dir="${RUNNER_TEMP}/donner-editor-wasm-geode-${GITHUB_SHA}"', wasm)
+
+    def test_write_environment_policy_rejects_widened_bindings(self):
+        files = self.supply_chain_files
+        main = ".github/workflows/main.yml"
+        wasm = ".github/workflows/editor_wasm.yml"
+        nightly = ".github/workflows/github_hosted_nightly.yml"
+        lint = ".github/workflows/lint.yml"
+        main_env = ("      name: ${{ ((github.event_name != 'pull_request' && github.ref == "
+                    "'refs/heads/main') || needs.gatekeeper.outputs.trusted_pr == 'true') && "
+                    "'buildbuddy-write' || '' }}\n")
+        self._assert_rejected(lambda files, path: _buildbuddy_violations(files), {
+            "unconditional environment": (main, files[main].replace(
+                main_env, "      name: buildbuddy-write\n", 1), "outside main and trusted"),
+            "environment for Renovate": (main, files[main].replace(
+                main_env, main_env.replace("trusted_pr", "renovate_pr"), 1),
+                "outside main and trusted"),
+            "environment for every pull request": (main, files[main].replace(
+                main_env, main_env.replace(
+                    "needs.gatekeeper.outputs.trusted_pr == 'true'",
+                    "github.event_name == 'pull_request'"), 1), "outside main and trusted"),
+            "deployment record": (main, files[main].replace(
+                main_env + "      deployment: false\n", main_env, 1), "outside main and trusted"),
+            "no environment": (nightly, files[nightly].replace(
+                "      deployment: false\n", "", 1).replace(
+                "    environment:\n", "    environment-removed:\n", 1),
+                "outside main and trusted"),
+            "trust job without the shared rule": (wasm, files[wasm].replace(
+                "        uses: ./.github/actions/pr-trust\n",
+                "        run: echo trusted_pr=true >> \"$GITHUB_OUTPUT\"\n", 1),
+                "outside main and trusted"),
+            "writer step wider than environment": (nightly, files[nightly].replace(
+                "        if: github.event_name != 'pull_request' && github.ref == "
+                "'refs/heads/main'\n        uses: ./.github/actions/buildbuddy-cache\n",
+                "        if: github.ref == 'refs/heads/main'\n"
+                "        uses: ./.github/actions/buildbuddy-cache\n", 1),
+                "neither main nor a trusted"),
+            "environment in another job": (lint, files[lint].replace(
+                "  lint:\n", "  lint:\n    environment:\n      name: buildbuddy-write\n"
+                "      deployment: false\n", 1), "without a writer step"),
+        })
+
     def test_buildbuddy_policy_rejects_widened_key_access(self):
         files = self.supply_chain_files
         main = ".github/workflows/main.yml"
@@ -1659,10 +1821,6 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
                 "      trusted_pr: ${{ steps.pr_trust.outputs.trusted_pr }}\n",
                 "      trusted_pr: ${{ github.actor == 'jwmcglynn' }}\n", 1),
                 "neither main nor a trusted"),
-            "step trust gate not from pr-trust": (wasm, files[wasm].replace(
-                "        uses: ./.github/actions/pr-trust\n",
-                "        run: echo trusted_pr=true >> \"$GITHUB_OUTPUT\"\n", 1),
-                "neither main nor a trusted"),
             "trusted input from another gate": (main, files[main].replace(
                 "          trusted-pr: ${{ needs.gatekeeper.outputs.trusted_pr }}\n",
                 "          trusted-pr: 'true'\n", 1), "neither main nor a trusted"),
@@ -1679,8 +1837,14 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
                 "          download-outputs: minimal\n", "", 1),
                 "does not choose --remote_download_outputs"),
             "Bazel before the cache": (wasm, files[wasm].replace(
-                "      - id: pr_trust\n", "      - name: Early build\n"
-                "        run: bazelisk build //donner/base\n\n      - id: pr_trust\n", 1),
+                "      - name: Restore Bazel action cache\n", "      - name: Early build\n"
+                "        run: bazel build //donner/base\n\n"
+                "      - name: Restore Bazel action cache\n", 1),
+                "runs Bazel before configuring BuildBuddy"),
+            "wrapper before the cache": (wasm, files[wasm].replace(
+                "      - name: Restore Bazel action cache\n", "      - name: Early browser run\n"
+                "        run: bash tools/run-browser-ci.sh\n\n"
+                "      - name: Restore Bazel action cache\n", 1),
                 "runs Bazel before configuring BuildBuddy"),
             "lane dropped": (wasm, files[wasm].replace(
                 "uses: ./.github/actions/buildbuddy-cache", "uses: ./.github/actions/apt-install"),
@@ -1759,6 +1923,7 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
                 event="push", write=write, RUNNER_ENVIRONMENT="self-hosted"), 1, None),
             "unknown download mode": (dict(event="push", write=write, download="some"), 1, None),
             "unreachable cache": (dict(event="push", write=write, curl_status=7), 0, None),
+            "TLS failure": (dict(event="push", write=write, curl_status=35), 0, None),
             "unknown runner image": (dict(event="push", write=write, ImageVersion=""), 0, None),
         }
         for name, (arguments, status, mode) in cases.items():
@@ -2168,6 +2333,11 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
                 "after writing a cache credential"),
             "credential directory": (main, files[main].replace(
                 summary, "${{ runner.temp }}/buildbuddy/credentials.bazelrc", 1),
+                "after writing a cache credential"),
+            "credential glob": (main, files[main].replace(
+                summary, "${{ runner.temp }}/**", 1), "after writing a cache credential"),
+            "credential absolute temp": (main, files[main].replace(
+                summary, "/Users/runner/work/_temp/*/credentials.bazelrc", 1),
                 "after writing a cache credential"),
             "cache save event log": (coverage, files[coverage].replace(
                 "      - name: Generate coverage proof\n",

@@ -24,9 +24,33 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  # Classify pull request trust at job level, so the build job can bind the
+  # BuildBuddy write environment only for runs allowed to write.
+  trust:
+    runs-on: ubuntu-24.04
+    outputs:
+      trusted_pr: ${{ steps.pr_trust.outputs.trusted_pr }}
+      renovate_pr: ${{ steps.pr_trust.outputs.renovate_pr }}
+    steps:
+      - name: Checkout trust action
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/actions/pr-trust
+
+      - id: pr_trust
+        name: Classify pull request trust
+        uses: ./.github/actions/pr-trust
+
   asan-geode:
     name: asan-geode
     runs-on: ubuntu-24.04
+    needs: trust
+    # The read-write BuildBuddy key is a secret of the buildbuddy-write environment. Only
+    # runs allowed to write bind it, so other runs never receive that key.
+    environment:
+      name: ${{ ((github.event_name != 'pull_request' && github.ref == 'refs/heads/main') || needs.trust.outputs.trusted_pr == 'true') && 'buildbuddy-write' || '' }}
+      deployment: false
     timeout-minutes: 30
     steps:
       - name: Checkout
@@ -51,28 +75,24 @@ jobs:
           external-cache: true
           cache-save: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
 
-      - id: pr_trust
-        name: Classify pull request trust
-        uses: ./.github/actions/pr-trust
-
       # BuildBuddy remote cache (docs/building.md). Main push, schedule and dispatch
       # runs and trusted maintainer pull requests read and write; Renovate pull
       # requests only read; every other run gets no key and no remote cache.
       - name: Configure BuildBuddy remote cache
-        if: (github.event_name != 'pull_request' && github.ref == 'refs/heads/main') || steps.pr_trust.outputs.trusted_pr == 'true'
+        if: (github.event_name != 'pull_request' && github.ref == 'refs/heads/main') || needs.trust.outputs.trusted_pr == 'true'
         uses: ./.github/actions/buildbuddy-cache
         with:
           api-key: ${{ secrets.BUILDBUDDY_API_KEY }}
-          trusted-pr: ${{ steps.pr_trust.outputs.trusted_pr }}
-          renovate-pr: ${{ steps.pr_trust.outputs.renovate_pr }}
+          trusted-pr: ${{ needs.trust.outputs.trusted_pr }}
+          renovate-pr: ${{ needs.trust.outputs.renovate_pr }}
           download-outputs: minimal
 
       - name: Configure BuildBuddy read-only cache
-        if: steps.pr_trust.outputs.renovate_pr == 'true'
+        if: needs.trust.outputs.renovate_pr == 'true'
         uses: ./.github/actions/buildbuddy-cache
         with:
           read-only-api-key: ${{ secrets.BUILDBUDDY_API_KEY_READONLY }}
-          renovate-pr: ${{ steps.pr_trust.outputs.renovate_pr }}
+          renovate-pr: ${{ needs.trust.outputs.renovate_pr }}
           download-outputs: minimal
 
       - name: Test Geode with ASan

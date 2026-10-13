@@ -524,6 +524,11 @@ jobs:
     runs-on: ubuntu-24.04
     needs: [gatekeeper, determine-targets]
     if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request') && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') }}
+    # The read-write BuildBuddy key is a secret of the buildbuddy-write environment. Only
+    # runs allowed to write bind it, so other runs never receive that key.
+    environment:
+      name: ${{ ((github.event_name != 'pull_request' && github.ref == 'refs/heads/main') || needs.gatekeeper.outputs.trusted_pr == 'true') && 'buildbuddy-write' || '' }}
+      deployment: false
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -1076,6 +1081,11 @@ jobs:
     runs-on: macos-26
     needs: [gatekeeper, determine-targets]
     if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request') && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') && needs.gatekeeper.outputs.use_self_hosted_macos != 'true' }}
+    # The read-write BuildBuddy key is a secret of the buildbuddy-write environment. Only
+    # runs allowed to write bind it, so other runs never receive that key.
+    environment:
+      name: ${{ ((github.event_name != 'pull_request' && github.ref == 'refs/heads/main') || needs.gatekeeper.outputs.trusted_pr == 'true') && 'buildbuddy-write' || '' }}
+      deployment: false
     env:
       # Xcode's libc++ marks std::format floating-point support as macOS 13.3+.
       # Set the CI deployment target explicitly so hosted and self-hosted macOS

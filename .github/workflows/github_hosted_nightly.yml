@@ -71,6 +71,11 @@ jobs:
     runs-on: ubuntu-24.04
     needs: gatekeeper
     if: needs.gatekeeper.outputs.should_run == 'true'
+    # The read-write BuildBuddy key is a secret of the buildbuddy-write environment. Only
+    # runs allowed to write bind it, so other runs never receive that key.
+    environment:
+      name: ${{ (github.event_name != 'pull_request' && github.ref == 'refs/heads/main') && 'buildbuddy-write' || '' }}
+      deployment: false
     timeout-minutes: 90
     strategy:
       fail-fast: false

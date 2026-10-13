@@ -10,9 +10,10 @@ description: >-
 inputs:
   api-key:
     description: >-
-      Read-write key. Pass `secrets.BUILDBUDDY_API_KEY`, only from a step
-      limited to main push, schedule and dispatch runs or to a trusted
-      maintainer pull request.
+      Read-write key. Pass `secrets.BUILDBUDDY_API_KEY`, a secret of the
+      buildbuddy-write environment, only from a job that binds that
+      environment and a step limited to main push, schedule and dispatch runs
+      or to a trusted maintainer pull request.
     required: false
     default: ""
   read-only-api-key:
@@ -112,16 +113,13 @@ runs:
 
         # An unreachable cache must cost nothing: Bazel can stop at startup
         # when it cannot reach the remote cache, so probe first and build
-        # locally when name resolution, connection or the probe times out.
-        probe=0
-        curl --silent --output /dev/null --connect-timeout 5 --max-time 10 \
-          "https://${endpoint}" || probe=$?
-        case "${probe}" in
-          6|7|28)
-            echo "::warning::BuildBuddy unreachable; building without the remote cache."
-            exit 0
-            ;;
-        esac
+        # locally on any transport failure. Without --fail, curl succeeds on
+        # every HTTP response, so any nonzero status means no usable endpoint.
+        if ! curl --silent --output /dev/null --connect-timeout 5 --max-time 10 \
+            "https://${endpoint}"; then
+          echo "::warning::BuildBuddy unreachable; building without the remote cache."
+          exit 0
+        fi
 
         # The key lives outside the workspace, so no artifact or cache upload
         # of workspace paths can carry it; the workspace fragment only imports
