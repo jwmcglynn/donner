@@ -1574,18 +1574,27 @@ test("ordinary document GPU residency", async ({ page }, info) => {
   }
 });
 
-// The bridge's GPU queue timeline from whichever worker owns the browser device, on the page clock.
+// The bridge's GPU queue timeline, on the page clock, and its object statistics, from whichever
+// worker owns the browser device.
 async function readGpuTimelineOnPageClock(page: Page) {
   const timeOrigin = await page.evaluate(() => performance.timeOrigin);
   for (const worker of page.workers()) {
-    const entries = await worker.evaluate(() => {
-      const read = (globalThis as unknown as Record<string, unknown>).__donnerReadGpuTimeline;
-      return typeof read === "function" ? (read as () => (string | number)[][])() : null;
+    const read = await worker.evaluate(() => {
+      const state = globalThis as unknown as Record<string, unknown>;
+      const timeline = state.__donnerReadGpuTimeline;
+      const statistics = state.__donnerReadGpuObjectStats;
+      return typeof timeline === "function" && typeof statistics === "function"
+        ? {
+          entries: (timeline as () => (string | number)[][])(),
+          statistics: (statistics as () => unknown)(),
+        }
+        : null;
     }).catch(() => null);
-    if (entries === null || entries.length === 0) continue;
+    if (read === null || read.entries.length === 0) continue;
+    const { entries, statistics } = read;
     const toPage = (epochMs: unknown) =>
       Number(epochMs) > 0 ? Math.round((Number(epochMs) - timeOrigin) * 10) / 10 : 0;
-    return entries.map((fields) => {
+    const timeline = entries.map((fields) => {
       switch (fields[0]) {
         case "s":
           return [...fields.slice(0, 5), toPage(fields[5]), toPage(fields[6])];
@@ -1597,6 +1606,7 @@ async function readGpuTimelineOnPageClock(page: Page) {
           return [fields[0], fields[1], toPage(fields[2])];
       }
     });
+    return { timeline, statistics };
   }
   return null;
 }
@@ -1636,10 +1646,10 @@ test("first sample click after boot", async ({ page, browser }, info) => {
       && worker?.resultFramePresented === true;
   }, { timeout: 60000, message: "the clicked document must reach the canvas" }).toBe(true);
   // The breakdown needs every pre-click submission retired, which presentation implies.
-  const timeline = await readGpuTimelineOnPageClock(page);
-  expect(timeline, "the bridge must publish its GPU queue timeline").not.toBeNull();
+  const gpu = await readGpuTimelineOnPageClock(page);
+  expect(gpu, "the bridge must publish its GPU queue timeline").not.toBeNull();
   const completedAt = worker!.publishedAtMs - worker!.pollDelayMs;
-  const breakdown = firstClickBreakdown(timeline!, {
+  const breakdown = firstClickBreakdown(gpu!.timeline, {
     clickAt,
     completedAt,
     presentedAt: worker!.presentedAtMs!,
@@ -1650,11 +1660,9 @@ test("first sample click after boot", async ({ page, browser }, info) => {
     adapter: process.env.DONNER_BROWSER_WEBGPU_ADAPTER ?? "default",
     ...packageHashes(),
     ...breakdown,
-    gpuObjects: await page.evaluate(() =>
-      (window as unknown as { __donnerGpuObjectStats?: unknown }).__donnerGpuObjectStats ?? null
-    ),
+    gpuObjects: gpu!.statistics,
   };
   console.log(`first-click-after-boot ${JSON.stringify(report)}`);
-  await attachJson(info, "first-click-after-boot.json", { ...report, timeline });
+  await attachJson(info, "first-click-after-boot.json", { ...report, timeline: gpu!.timeline });
   expect(failures).toEqual([]);
 });
