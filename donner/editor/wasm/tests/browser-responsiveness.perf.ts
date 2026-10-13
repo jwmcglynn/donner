@@ -25,6 +25,7 @@ import {
   presentedDragFailures,
   presentedDragSummary,
 } from "./presented-frame-samples.mjs";
+import { firstClickBreakdown } from "./first-click-breakdown.mjs";
 import { pickerPresentationSettled } from "./presentation-baseline.mjs";
 import { showsSplashDocument, splashDPoint } from "./splash-aim.mjs";
 
@@ -1571,4 +1572,89 @@ test("ordinary document GPU residency", async ({ page }, info) => {
   } finally {
     stopHeartbeat();
   }
+});
+
+// The bridge's GPU queue timeline from whichever worker owns the browser device, on the page clock.
+async function readGpuTimelineOnPageClock(page: Page) {
+  const timeOrigin = await page.evaluate(() => performance.timeOrigin);
+  for (const worker of page.workers()) {
+    const entries = await worker.evaluate(() => {
+      const read = (globalThis as unknown as Record<string, unknown>).__donnerReadGpuTimeline;
+      return typeof read === "function" ? (read as () => (string | number)[][])() : null;
+    }).catch(() => null);
+    if (entries === null || entries.length === 0) continue;
+    const toPage = (epochMs: unknown) =>
+      Number(epochMs) > 0 ? Math.round((Number(epochMs) - timeOrigin) * 10) / 10 : 0;
+    return entries.map((fields) => {
+      switch (fields[0]) {
+        case "s":
+          return [...fields.slice(0, 5), toPage(fields[5]), toPage(fields[6])];
+        case "m":
+          return [...fields.slice(0, 3), toPage(fields[3]), toPage(fields[4])];
+        case "p":
+          return [fields[0], fields[1], toPage(fields[2]), toPage(fields[3]), fields[4]];
+        default:
+          return [fields[0], fields[1], toPage(fields[2])];
+      }
+    });
+  }
+  return null;
+}
+
+// Clicks a sample the moment the editor has presented its first frame, while boot work such as the
+// sample thumbnails is still on the GPU, and splits the wait for the clicked document into the GPU
+// queue backlog left from before the click and the presentation handoff after it. Report only: the
+// numbers depend on the GPU. Run with DONNER_BROWSER_WEBGPU_ADAPTER=swiftshader to measure a slow
+// GPU, where a pipeline's first use used to hold the queue for seconds.
+test("first sample click after boot", async ({ page, browser }, info) => {
+  const failures: string[] = [];
+  page.on("pageerror", (error) => failures.push(error.message));
+  page.on("console", (message) => {
+    if (/Aborted|RuntimeError|UTILS_RELEASE_ASSERT|device lost/i.test(message.text())) {
+      failures.push(message.text());
+    }
+  });
+  await page.goto(process.env.DONNER_WASM_BASE_URL!, { waitUntil: "domcontentloaded" });
+  await expect.poll(
+    () => page.evaluate(() => (window as Diagnostics).__donnerFirstFramePresented),
+    { timeout: 30000, message: "WebGPU must present the production editor before the click" },
+  ).toBe(true);
+  const canvas = await page.locator("canvas#canvas").boundingBox();
+  expect(canvas).not.toBeNull();
+  if (canvas === null) throw new Error("missing editor canvas");
+  const beforeResults = (await snapshot(page)).worker?.completedResults ?? 0;
+  const clickAt = await page.evaluate(() => performance.now());
+  await dispatchPointer(page, { x: canvas.x + canvas.width * 0.76, y: canvas.y + 282 }, true);
+  await expect(page.locator("canvas#canvas")).toHaveAttribute(
+    "data-active-sample-id",
+    "basic-shapes",
+  );
+  let worker: Diagnostics["__donnerWorkerStats"];
+  await expect.poll(async () => {
+    worker = (await snapshot(page)).worker;
+    return (worker?.completedResults ?? 0) > beforeResults && worker?.presentedAtMs !== undefined
+      && worker?.resultFramePresented === true;
+  }, { timeout: 60000, message: "the clicked document must reach the canvas" }).toBe(true);
+  // The breakdown needs every pre-click submission retired, which presentation implies.
+  const timeline = await readGpuTimelineOnPageClock(page);
+  expect(timeline, "the bridge must publish its GPU queue timeline").not.toBeNull();
+  const completedAt = worker!.publishedAtMs - worker!.pollDelayMs;
+  const breakdown = firstClickBreakdown(timeline!, {
+    clickAt,
+    completedAt,
+    presentedAt: worker!.presentedAtMs!,
+  });
+  const report = {
+    browser: info.project.name,
+    version: browser.version(),
+    adapter: process.env.DONNER_BROWSER_WEBGPU_ADAPTER ?? "default",
+    ...packageHashes(),
+    ...breakdown,
+    gpuObjects: await page.evaluate(() =>
+      (window as unknown as { __donnerGpuObjectStats?: unknown }).__donnerGpuObjectStats ?? null
+    ),
+  };
+  console.log(`first-click-after-boot ${JSON.stringify(report)}`);
+  await attachJson(info, "first-click-after-boot.json", { ...report, timeline });
+  expect(failures).toEqual([]);
 });
