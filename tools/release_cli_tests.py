@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import stat
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest import mock
@@ -287,6 +288,40 @@ class ReleaseCliTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "non-public"):
                 self._package()
         self.assertFalse((self.artifacts / "donner-svg_linux_x86_64.provenance").exists())
+
+    def test_lockfile_check_for_other_artifacts_returns_digest_or_fails_closed(self) -> None:
+        # The editor package and docs build retain their generated lockfiles through this check.
+        lock = self.root / release_cli.LOCKFILE
+        self.assertEqual(release_cli.check_public_lockfile(lock), release_cli.digest(lock))
+        command = [sys.executable, "-B", "-c", "from tools import release_cli; release_cli.main()",
+                   "check-lockfile", "--lockfile", str(lock)]
+        package_root = Path(release_cli.__file__).resolve().parent.parent
+        result = subprocess.run(command, cwd=package_root, capture_output=True, text=True,
+                                check=False)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, f"{release_cli.digest(lock)}  {lock.name}\n")
+        for case in ("private", "empty", "symlink", "too large"):
+            with self.subTest(case=case):
+                lock.unlink()
+                if case == "private":
+                    lock.write_text(json.dumps({"path": "/home/runner/private"}))
+                elif case == "empty":
+                    lock.write_bytes(b"")
+                elif case == "symlink":
+                    lock.symlink_to(self.binary)
+                else:
+                    lock.write_text(self.lock_contents)
+                limit = 4 if case == "too large" else release_cli.MAX_LOCKFILE_BYTES
+                with mock.patch.object(release_cli, "MAX_LOCKFILE_BYTES", limit):
+                    with self.assertRaisesRegex(ValueError, "non-public|lockfile is missing"):
+                        release_cli.check_public_lockfile(lock)
+        lock.unlink()
+        lock.write_text(json.dumps({"path": "/home/runner/private"}))
+        result = subprocess.run(command, cwd=package_root, capture_output=True, text=True,
+                                check=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Lockfile check failed", result.stderr)
+        self.assertNotIn("/home/runner/private", result.stderr)
 
     def test_copied_notice_is_rechecked_before_artifact_upload(self) -> None:
         original_copy = release_cli.shutil.copyfile

@@ -137,6 +137,21 @@ def _validate_public_lockfile(path: Path) -> None:
         _validate_lock_string(value)
 
 
+MAX_LOCKFILE_BYTES = 16_000_000
+
+
+def check_public_lockfile(path: Path) -> str:
+    """Return the SHA-256 of a generated lockfile that may be retained in a public artifact.
+
+    The editor package and the docs build retain their generated `MODULE.bazel.lock` beside their
+    provenance, as each CLI does, so every published artifact records its resolved module graph.
+    """
+    if path.is_symlink() or not path.is_file() or not 0 < path.stat().st_size <= MAX_LOCKFILE_BYTES:
+        raise ValueError("generated Bazel lockfile is missing, linked, empty or too large")
+    _validate_public_lockfile(path)
+    return digest(path)
+
+
 def _names(platform: str) -> tuple[str, str, str, str, str]:
     if platform not in PLATFORMS:
         raise ValueError("unsupported release CLI platform")
@@ -308,7 +323,16 @@ def main() -> None:
             command.add_argument("--output", type=Path, required=True)
         else:
             command.add_argument("--artifacts", type=Path, required=True)
+    lockfile = commands.add_parser(
+        "check-lockfile", help="validate a generated lockfile for a public artifact")
+    lockfile.add_argument("--lockfile", type=Path, required=True)
     args = parser.parse_args()
+    if args.command == "check-lockfile":
+        try:
+            print(f"{check_public_lockfile(args.lockfile)}  {args.lockfile.name}")
+        except (ValueError, OSError, UnicodeDecodeError) as error:
+            raise SystemExit(f"Lockfile check failed: {error}") from None
+        return
     options = dict(root=args.root, platform=args.platform, commit=args.commit,
                    run_id=args.run_id, attempt=args.attempt)
     if args.command == "package":
