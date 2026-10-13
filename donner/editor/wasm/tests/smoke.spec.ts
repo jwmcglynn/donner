@@ -1353,7 +1353,7 @@ async function readCarouselGpuTimeline(page: Page) {
           fields[4],
         ];
       default:
-        return [...fields.slice(0, 2), toPage(fields[2] as number)];
+        return [...fields.slice(0, 2), toPage(fields[2] as number), ...fields.slice(3)];
     }
   }) ?? null;
   return { presentation: pageState.presentation, phases: pageState.phases, gpu: gpuOnPageClock };

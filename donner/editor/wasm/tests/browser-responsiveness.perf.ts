@@ -1603,7 +1603,7 @@ async function readGpuTimelineOnPageClock(page: Page) {
         case "p":
           return [fields[0], fields[1], toPage(fields[2]), toPage(fields[3]), fields[4]];
         default:
-          return [fields[0], fields[1], toPage(fields[2])];
+          return [fields[0], fields[1], toPage(fields[2]), ...fields.slice(3)];
       }
     });
     return { timeline, statistics };

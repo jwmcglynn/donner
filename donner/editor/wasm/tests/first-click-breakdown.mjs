@@ -5,7 +5,7 @@
 // clock. A submission entry is ["s", device, serial, buffers, draws, submittedAt, completedAt],
 // with completedAt 0 while it has not completed. A pipeline entry is
 // ["p", device, createdAt, compiledAt, shared], with compiledAt 0 while its asynchronous compile
-// has not settled (or when the browser had none), and a first-use entry ["c", device, at] records
+// has not settled (or when the browser had none), and a first-use entry ["c", device, at, entryPoint] records
 // a pipeline created synchronously where a pass first needed it.
 
 /**

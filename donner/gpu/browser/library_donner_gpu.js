@@ -769,7 +769,16 @@ var LibraryDonnerGpu = {
         DonnerGpu.trace(["p", record.handle, DonnerGpu.epochMs(), compile.compiledAt, 1]);
         return DonnerGpu.register(record, kind, id, compile);
       }
-      compile = { kind: kind, descriptor: descriptor, pipeline: null, compiledAt: 0 };
+      var entryPoint = kind === DonnerGpu.kRenderPipeline
+        ? descriptor.fragment.entryPoint
+        : descriptor.compute.entryPoint;
+      compile = {
+        kind: kind,
+        descriptor: descriptor,
+        entryPoint: entryPoint,
+        pipeline: null,
+        compiledAt: 0,
+      };
       var traced = ["p", record.handle, DonnerGpu.epochMs(), 0, 0];
       DonnerGpu.trace(traced);
       var device = DonnerGpu.device;
@@ -812,7 +821,7 @@ var LibraryDonnerGpu = {
       }
       if (compile.pipeline === null) {
         DonnerGpu.pipelineCompilesOnFirstUse += 1;
-        DonnerGpu.trace(["c", record.handle, DonnerGpu.epochMs()]);
+        DonnerGpu.trace(["c", record.handle, DonnerGpu.epochMs(), compile.entryPoint]);
         try {
           compile.pipeline = kind === DonnerGpu.kRenderPipeline
             ? DonnerGpu.device.createRenderPipeline(compile.descriptor)
