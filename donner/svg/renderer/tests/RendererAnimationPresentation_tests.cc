@@ -575,5 +575,18 @@ TEST(RendererAnimationPresentation, FilterImageFragmentHrefAnimatesAndRestores) 
               test::Rgba(255, 0, 0, 255));
 }
 
+TEST(RendererAnimationPresentation, DiscreteToOnlyUsesTheCascadedBaseValue) {
+  auto document = ParsePresentation(R"svg(
+    <rect width="16" height="16" visibility="visible" style="visibility:hidden">
+      <animate attributeName="visibility" to="visible" dur="2s"/>
+    </rect>)svg");
+  document.setTime(0.25);
+  EXPECT_THAT(test::PixelAt(RenderDocumentWithActiveBackend(document), 8, 8),
+              test::Rgba(0, 0, 0, 0));
+  document.setTime(1.5);
+  EXPECT_THAT(test::PixelAt(RenderDocumentWithActiveBackend(document), 8, 8),
+              test::Rgba(0, 0, 0, 255));
+}
+
 }  // namespace
 }  // namespace donner::svg
