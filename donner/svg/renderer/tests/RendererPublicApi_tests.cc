@@ -18,6 +18,7 @@
 #include "donner/svg/SVGRectElement.h"
 #include "donner/svg/SVGTextElement.h"
 #include "donner/svg/SVGUseElement.h"
+#include "donner/svg/components/filter/FilterGraph.h"
 #include "donner/svg/renderer/Renderer.h"
 #include "donner/svg/renderer/RendererDriver.h"
 #include "donner/svg/renderer/RendererTinySkia.h"
@@ -1247,6 +1248,20 @@ INSTANTIATE_TEST_SUITE_P(
         DefaultConvolveDivisorCase{"ZeroSumExplicitOne", "0", "divisor='1'", "true",
                                    "fill='black'"}),
     [](const testing::TestParamInfo<DefaultConvolveDivisorCase>& info) { return info.param.name; });
+
+TEST(ConvolveKernelSumTest, PreservesRealResidualsAfterLargeCancellation) {
+  using components::filter_primitive::ConvolveKernelSum;
+  const std::array positive = {1e16, 5e-11, -1e16};
+  const std::array negative = {-1e16, -5e-11, 1e16};
+  const std::array subnormalPositive = {1e16, 1e-310, -1e16};
+  const std::array subnormalNegative = {-1e16, -1e-310, 1e16};
+  const std::array exactZero = {0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, -0.8};
+  EXPECT_THAT(ConvolveKernelSum(positive), testing::Eq(5e-11));
+  EXPECT_THAT(ConvolveKernelSum(negative), testing::Eq(-5e-11));
+  EXPECT_THAT(ConvolveKernelSum(subnormalPositive), testing::Eq(1e-310));
+  EXPECT_THAT(ConvolveKernelSum(subnormalNegative), testing::Eq(-1e-310));
+  EXPECT_THAT(ConvolveKernelSum(exactZero), testing::Eq(0.0));
+}
 
 TEST(RendererPublicApiTest, CpuReorderedZeroSumConvolveUsesFallbackDivisor) {
   if (!ActiveRendererSupportsFeature(RendererBackendFeature::FilterEffects)) {

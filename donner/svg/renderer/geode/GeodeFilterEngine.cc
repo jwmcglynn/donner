@@ -2953,9 +2953,7 @@ std::optional<gpu::shader::programs::ConvolveMatrixParams> BuildConvolveMatrixPa
   if (primitive.divisor.has_value()) {
     divisor = *primitive.divisor;
   } else {
-    for (double coefficient : primitive.kernelMatrix) {
-      divisor += coefficient;
-    }
+    divisor = svg::components::filter_primitive::ConvolveKernelSum(primitive.kernelMatrix);
     if (divisor == 0.0) {
       divisor = 1.0;
     }
