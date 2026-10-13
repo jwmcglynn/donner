@@ -48,8 +48,9 @@ TEST(ParseWarningSink, RangeMappingPreservesAccountingAndRefusalFlags) {
 
 TEST(ParseWarningSink, RangeMappingKeepsByteBudgetRefusalWithoutInvokingMapper) {
   ParseWarningSink sink;
-  sink.add(ParseDiagnostic::Warning(std::string(ParseWarningSink::kMaximumWarningBytes + 1, 'x'),
-                                    FileOffset::Offset(2)));
+  sink.add(ParseDiagnostic::Warning(
+      RcString(std::string(ParseWarningSink::kMaximumWarningBytes + 1, 'x')),
+      FileOffset::Offset(2)));
   std::size_t mappedCount = 0;
   sink.mapSourceRanges([&](const SourceRange& range) {
     ++mappedCount;

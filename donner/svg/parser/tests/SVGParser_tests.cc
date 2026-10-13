@@ -18,6 +18,7 @@
 #include "donner/svg/SVGTextElement.h"
 #include "donner/svg/SVGTextPathElement.h"
 #include "donner/svg/components/DescriptiveTextComponent.h"
+#include "donner/svg/components/ParsedPayloadResourceBudget.h"
 #include "donner/svg/components/StylesheetComponent.h"
 #include "donner/svg/renderer/RendererUtils.h"
 
@@ -201,6 +202,25 @@ TEST(SVGParser, CssImportWarningRefusalFlagsSurviveSourceMapping) {
   EXPECT_THAT(warnings.warnings(), testing::SizeIs(ParseWarningSink::kMaximumWarnings));
   EXPECT_THAT(warnings.resourceLimitExceeded(), testing::IsTrue());
   EXPECT_LE(warnings.warningBytes(), ParseWarningSink::kMaximumWarningBytes);
+}
+
+TEST(SVGParser, CssImportDiagnosticsDoNotBypassStylesheetPayloadAdmission) {
+  constexpr std::string_view source =
+      "<svg xmlns='http://www.w3.org/2000/svg'><style>"
+      "@import 'hidden.css'; rect { fill: green; }</style></svg>";
+  SVGParser::Options options;
+  options.maximumParsedPayloadSize = 4096;
+  ParseWarningSink warnings;
+  auto result = SVGParser::ParseSVG(source, warnings, options);
+  ASSERT_THAT(result, NoParseError());
+  const auto* budget =
+      result.result().registry().ctx().find<components::ParsedPayloadResourceBudget>();
+  ASSERT_THAT(budget, testing::NotNull());
+  EXPECT_THAT(budget->securityStats().rejected, testing::IsTrue());
+  EXPECT_THAT(warnings.warnings(),
+              testing::Contains(testing::Field(&ParseDiagnostic::reason,
+                                               testing::HasSubstr("parsed-payload budget"))));
+  EXPECT_THAT(warnings.resourceLimitExceeded(), testing::IsFalse());
 }
 
 TEST(SVGParser, StylesheetPointMappingDoesNotChangeExistingRangeEndSemantics) {

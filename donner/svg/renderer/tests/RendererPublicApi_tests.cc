@@ -906,10 +906,16 @@ public:
     if (response_ == Response::Oversized) {
       return std::vector<uint8_t>(UrlLoader::kDefaultMaximumResourceSize + 1, 'x');
     }
-    const std::string css =
-        response_ == Response::Cyclic
-            ? "@import 'https://example.test/cycle.css';"
-            : std::string(8192, ' ') + "@import 'https://example.test/next-level.css';";
+    if (response_ == Response::Cyclic) {
+      const std::string css = "@import 'https://example.test/style.css';";
+      return std::vector<uint8_t>(css.begin(), css.end());
+    }
+    std::string css;
+    for (std::size_t depth = 0; depth < 256; ++depth) {
+      css += "@media all {";
+    }
+    css += "@import 'https://example.test/next-level.css';";
+    css.append(256, '}');
     return std::vector<uint8_t>(css.begin(), css.end());
   }
 
