@@ -171,9 +171,21 @@ class CiRunnerRoutingTest(unittest.TestCase):
         turnstile = self._job_body("linux-self-hosted-turnstile")
         self_hosted = self._job_body("linux-self-hosted")
 
-        self.assertIn("outputs.use_self_hosted_linux != 'true'", hosted)
         self.assertIn("outputs.use_self_hosted_linux == 'true'", turnstile)
         self.assertIn("outputs.use_self_hosted_linux == 'true'", self_hosted)
+        # The hosted job is the only one that runs what main runs, so routing a trusted PR to
+        # the self-hosted lane adds that lane without skipping the hosted build and tests.
+        self.assertNotIn("use_self_hosted_linux", hosted.split("    steps:\n", 1)[0])
+        for step in ("Build", "Test"):
+            marker = "      - name: %s\n" % step
+            self.assertIn(marker, hosted, step)
+            body = hosted.split(marker, 1)[1].split("\n      - name: ", 1)[0]
+            self.assertNotIn("use_self_hosted", body, step)
+            self.assertNotIn("        if:", body, step)
+        # The hosted resvg reference still yields to the self-hosted lane, which runs it there.
+        reference = hosted.split("      - name: Test Linux WebGPU resvg reference\n", 1)[1]
+        reference = reference.split("\n      - name: ", 1)[0]
+        self.assertIn("outputs.use_self_hosted_linux != 'true'", reference)
 
     def test_macos_jobs_are_selected_only_by_the_trusted_runner_gate(self):
         hosted = self._job_body("macos")

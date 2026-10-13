@@ -532,14 +532,14 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
             self.assertNotIn("\n  %s:\n" % redundant, self.main)
         self.assertIn("//tools/ci:linker_canary", self._job_body("linux"))
 
-    def test_native_window_gate_runs_on_hosted_linux_when_remote_routing_is_selected(self):
+    def test_native_window_gate_runs_on_hosted_linux_on_every_route(self):
+        # The self-hosted lane executes tests remotely and excludes local-display targets, so
+        # the hosted job's own Test step owns them on every route, trusted PRs included.
         hosted = self._job_body("linux")
-        local = hosted
         remote = self._job_body("linux-self-hosted")
         self.assertNotIn("use_self_hosted_linux", hosted.split("steps:", 1)[0])
-        self.assertIn("use_self_hosted_linux == 'true'", self._step_body(local, "Test local Xvfb targets"))
+        self.assertNotIn("Test local Xvfb targets", self.main)
         self.assertIn("xvfb xauth", hosted)
-        self.assertIn("xvfb xauth", local)
         self.assertIn("-local-gpu-isolated", remote)
         target = self.editor_tests_build.split(
             'name = "editor_window_vulkan_surface_tests",', 1
@@ -550,10 +550,14 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         self.assertIn("export DONNER_GPU_BACKEND=vulkan", self.xvfb_runner)
         self.assertIn("xvfb-run -a", self.xvfb_runner)
 
-        step = self._step_body(local, "Test local Xvfb targets")
+        step = self._step_body(hosted, "Test")
+        self.assertNotIn("        if:", step)
         self.assertIn("tools/ci_bazel_test.sh bazelisk test", step)
-        self.assertIn("--test_tag_filters=requires_xvfb", step)
-        self.assertIn("--strategy=TestRunner=local", step)
+        tag_filters = re.findall(r"--test_tag_filters=(\S*)", step)
+        self.assertEqual(len(tag_filters), 1, step)
+        excluded = {tag[1:] for tag in tag_filters[0].split(",") if tag.startswith("-")}
+        self.assertFalse(excluded & {"requires_xvfb", "local-gpu-isolated", "exclusive-if-local"})
+        self.assertFalse([tag for tag in tag_filters[0].split(",") if not tag.startswith("-")])
         script_template = textwrap.dedent(step.split("run: |\n", 1)[1])
         native_target = "//donner/editor/tests:editor_window_vulkan_surface_tests"
         for fallback, affected, expected_target, no_tests in (
@@ -591,7 +595,7 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
                     result = self._run_script(script, [], cwd=root, env=env)
                     self.assertEqual(0, result.returncode, result.stdout + result.stderr)
                     args = args_file.read_text()
-                    self.assertIn("--test_tag_filters=requires_xvfb", args)
+                    self.assertIn("--test_tag_filters=" + tag_filters[0], args)
                     self.assertIn(expected_target, args)
                     self.assertEqual(no_tests, "No test targets" in result.stdout)
 

@@ -590,8 +590,12 @@ jobs:
         with:
           namespace: native
 
+      # Build and Test run on every route, including trusted PRs that also run the self-hosted
+      # ARM64 lane. This job is the only one that runs exactly what main runs: x86_64, the
+      # runner's own clang with libstdc++, and a four-core runner's timing. The self-hosted lane
+      # adds coverage (another architecture and the hermetic LLVM toolchain with libc++) but
+      # cannot stand in for it, so a PR that is green only there could still turn main red.
       - name: Build
-        if: ${{ needs.gatekeeper.outputs.use_self_hosted_linux != 'true' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -603,7 +607,6 @@ jobs:
           bazelisk build --config=ci $TARGETS
 
       - name: Test
-        if: ${{ needs.gatekeeper.outputs.use_self_hosted_linux != 'true' }}
         id: test
         shell: bash
         run: |
@@ -642,27 +645,8 @@ jobs:
             --test_tag_filters= --test_env=XDG_RUNTIME_DIR=/tmp \
             //tools/ci:linux_wgpu_resvg_reference
 
-      - name: Test local Xvfb targets
-        id: local_xvfb
-        if: ${{ !cancelled() && needs.gatekeeper.outputs.use_self_hosted_linux == 'true' }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          TARGETS=$(if [[ "${{ needs.determine-targets.outputs.fallback }}" == "true" ]]; then
-            echo "//..."
-          else
-            echo "${{ needs.determine-targets.outputs.affected }}"
-          fi)
-          if [[ -z "${TARGETS// /}" ]]; then
-            echo "::error::Empty target selection reached the local Xvfb test step."
-            exit 1
-          fi
-          tools/ci_bazel_test.sh bazelisk test --config=ci --nocache_test_results \
-            --test_output=errors --test_tag_filters=requires_xvfb \
-            --strategy=TestRunner=local $TARGETS
-
       - name: Upload Bazel test failure artifacts
-        if: failure() && (steps.test.outcome == 'failure' || steps.wgpu_resvg_reference.outcome == 'failure' || steps.local_xvfb.outcome == 'failure')
+        if: failure() && (steps.test.outcome == 'failure' || steps.wgpu_resvg_reference.outcome == 'failure')
         uses: ./.github/actions/upload-bazel-test-artifacts
         with:
           name: bazel-test-failure-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}
@@ -713,8 +697,9 @@ jobs:
           timeout-minutes: "150"
 
   # Operator's ARM64 Linux runs on the operator's self-hosted runner.
-  # Replaces `linux` for trusted operator PRs (extra architecture coverage).
-  # Main pushes, Renovate, and non-operator runs stay hosted.
+  # Runs alongside the hosted `linux` job for trusted operator PRs (extra
+  # architecture and toolchain coverage); it does not replace that job's tests.
+  # Main pushes, Renovate, and non-operator runs stay hosted only.
   # The runner host pre-provisions the toolchain (fontconfig, freetype, mesa,
   # vulkan, X11, clang-tidy) and its own Bazel cache configuration, so there
   # is no apt/setup-bazel step. The runner intentionally has

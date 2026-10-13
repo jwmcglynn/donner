@@ -129,9 +129,11 @@ gh api repos/jwmcglynn/donner/pulls/<N>/reviews       # review state + top-level
   in `perf.yml`).
 - **linux-self-hosted** (ARM64) and **macos-self-hosted** — run on PR events when
   `vars.SELFHOSTED_LINUX_RUNNER` / `SELFHOSTED_MACOS_RUNNER` == "true" AND both `github.actor`
-  and `github.triggering_actor` == `jwmcglynn`. The matching GitHub-hosted lane is then skipped
-  UNLESS `determine-targets` emitted `full_test == 'true'` (the `ci:full-test` label), which
-  fans the run out to the hosted lanes as well. Pushes to `main` always stay GitHub-hosted so a
+  and `github.triggering_actor` == `jwmcglynn`. The hosted **macos** lane is then skipped (the
+  `ci:hosted-macos` label keeps it). The hosted **linux** job still builds and tests the selected
+  targets on every route: it is the only lane that matches main (x86_64, the runner image's clang
+  with libstdc++, four cores), so the ARM64 lane adds coverage without replacing it. Pushes to
+  `main` always stay GitHub-hosted so a
   dead self-hosted runner can never hang main's required check. Never "simplify" these gates —
   the double-actor check prevents collaborator reruns from executing on (or poisoning the cache
   of) the operator's runner.
