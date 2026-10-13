@@ -180,7 +180,19 @@ py_test(
         "check_pr_body.py",
         "check_pr_body_tests.py",
     ],
-    data = ["//:.github/workflows/main.yml"],
+    data = ["//:github_action_definitions"],
+    imports = ["."],
+    deps = ["@rules_python//python/runfiles"],
+)
+
+py_test(
+    name = "ci_pull_request_events_tests",
+    size = "small",
+    srcs = [
+        "ci_pull_request_events_tests.py",
+        "test_executable_fixtures.py",
+    ],
+    data = ["//:github_action_definitions"],
     imports = ["."],
     deps = ["@rules_python//python/runfiles"],
 )

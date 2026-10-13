@@ -64,6 +64,17 @@ SECRET_USES = {
      "./.github/actions/buildbuddy-cache"): {"BUILDBUDDY_API_KEY"},
 }
 
+# The only jobs that call a reusable workflow: (caller, job) to (callee, forwarded secrets). A
+# called workflow receives only the secrets its caller passes, so a caller forwards each listed
+# secret under its own name and nothing else. The callee declares exactly these names and reads
+# each one only in its reviewed steps above. pr_base_change.yml runs main.yml's full CI when a
+# pull request's base branch changes; it forwards the repository secrets main.yml's steps read.
+REVIEWED_WORKFLOW_CALLS = {
+    (".github/workflows/pr_base_change.yml", "base-change-ci"): (
+        "./.github/workflows/main.yml", frozenset({"BAZEL_REMOTE_CACHE",
+                                                   "BUILDBUDDY_API_KEY_READONLY"})),
+}
+
 # The only jobs that may run on self-hosted runners, with the gatekeeper output admitting each.
 SELF_HOSTED_JOBS = {
     (".github/workflows/main.yml", "linux-self-hosted"): "use_self_hosted_linux",
@@ -745,6 +756,86 @@ def _step_secret_consumers(path, workflow):
                 yield identity, secrets
 
 
+def _call_secrets(job):
+    """A calling job's `secrets:` block as {name: value}, `{"*": value}` inline, or None."""
+    lines = job.splitlines()
+    for index, line in enumerate(lines):
+        if line.startswith("    secrets:"):
+            inline = line.split(":", 1)[1].split(" #", 1)[0].strip()
+            if inline:
+                return {"*": inline}
+            return _mapping(_indented_block(lines[index + 1:], 4))
+    return None
+
+
+def _forwarded_secrets(names):
+    """The one reviewed spelling of a `secrets:` block that forwards each name as itself."""
+    return {name: "${{ secrets.%s }}" % name for name in names}
+
+
+def _block_after(lines, pattern, indent):
+    """The block under the first line matching `pattern`, or None when no line matches."""
+    starts = [index for index, line in enumerate(lines) if re.match(pattern, line)]
+    return _indented_block(lines[starts[0] + 1:], indent) if starts else None
+
+
+def _declared_call_secrets(workflow):
+    """The secret names a workflow declares under `on.workflow_call.secrets`, or None."""
+    call = _block_after(_top_level_block(workflow, "on") or [], r"^  workflow_call:\s*$", 2)
+    if call is None:
+        return None
+    names = _block_after(call, r"^    secrets:\s*$", 4) or []
+    return {match.group(1) for match in
+            (re.match(r"^      ([A-Za-z0-9_]+):", line) for line in names) if match}
+
+
+def _reviewed_forwarded_reads(path, workflow):
+    """Secret reads of this workflow's reviewed calls, when each forwards exactly its list."""
+    reads = Counter()
+    for (caller, name), (_, secrets) in REVIEWED_WORKFLOW_CALLS.items():
+        job = _jobs(workflow).get(name) if caller == path else None
+        if job is not None and _call_secrets(job) == _forwarded_secrets(secrets):
+            reads.update(secrets)
+    return reads
+
+
+def _workflow_calls(workflows):
+    """Every job that calls a reusable workflow: (path, job) to (callee, forwarded secrets)."""
+    return {(path, name): (_job_key(job, "uses").strip("'\""), _call_secrets(job))
+            for path, workflow in workflows.items()
+            for name, job in _jobs(workflow).items() if _job_key(job, "uses")}
+
+
+def _workflow_call_problem(workflows, where, call, reviewed):
+    """Why one reviewed call differs from its review, or None."""
+    callee, forwarded = call
+    reviewed_callee, secrets = reviewed
+    if callee != reviewed_callee:
+        return "%s calls %s instead of %s" % (where, callee, reviewed_callee)
+    if forwarded != _forwarded_secrets(secrets):
+        return "%s forwards secrets other than %s" % (where, sorted(secrets))
+    declared = _declared_call_secrets(
+        workflows.get(".github/workflows/" + callee.rsplit("/", 1)[-1], ""))
+    if declared != set(secrets):
+        return "%s callee declares workflow_call secrets %s" % (
+            where, sorted(declared) if declared is not None else None)
+    return None
+
+
+def _workflow_call_violations(workflows):
+    """Every reusable workflow call that is unreviewed or forwards an unreviewed secret."""
+    calls = _workflow_calls(workflows)
+    violations = []
+    if set(calls) != set(REVIEWED_WORKFLOW_CALLS):
+        violations.append("reusable workflow calls changed: %s" % sorted(calls))
+    for key in sorted(set(calls) & set(REVIEWED_WORKFLOW_CALLS)):
+        problem = _workflow_call_problem(workflows, "%s:%s" % key, calls[key],
+                                         REVIEWED_WORKFLOW_CALLS[key])
+        if problem:
+            violations.append(problem)
+    return violations
+
+
 def _secret_use_violations(workflows):
     records = []
     violations = []
@@ -752,7 +843,7 @@ def _secret_use_violations(workflows):
         if (re.search(r"secrets:\s*inherit", workflow, re.IGNORECASE) or
                 "<whole secret object>" in _secret_reads(workflow)):
             violations.append("%s forwards every secret" % path)
-        if _unscoped_secret_reads(workflow):
+        if _unscoped_secret_reads(workflow) - _reviewed_forwarded_reads(path, workflow):
             violations.append("%s exposes a secret beyond one step" % path)
         records.extend(_step_secret_consumers(path, workflow))
     uses = dict(records)
@@ -2201,6 +2292,40 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
                 "forwards every secret"),
             "inherit": (main, files[main] + "  reuse:\n    uses: ./.github/workflows/lint.yml\n"
                         "    secrets: inherit\n", "forwards every secret"),
+        })
+
+    def test_reusable_workflow_calls_are_reviewed(self):
+        self.assertEqual([], _workflow_call_violations(_workflows(self.supply_chain_files)))
+
+    def test_workflow_call_policy_rejects_unreviewed_calls_and_secrets(self):
+        files = self.supply_chain_files
+        caller = ".github/workflows/pr_base_change.yml"
+        main = ".github/workflows/main.yml"
+        forward = "      BAZEL_REMOTE_CACHE: ${{ secrets.BAZEL_REMOTE_CACHE }}\n"
+        declared = "      BAZEL_REMOTE_CACHE:\n        required: false\n"
+        self.assertIn(forward, files[caller])
+        self.assertIn(declared, files[main])
+        cases = {
+            "new call": (main, files[main] + "  reuse:\n    uses: ./.github/workflows/lint.yml\n",
+                         "reusable workflow calls changed"),
+            "other callee": (caller, files[caller].replace(
+                "uses: ./.github/workflows/main.yml", "uses: ./.github/workflows/lint.yml", 1),
+                "calls ./.github/workflows/lint.yml"),
+            "extra secret": (caller, files[caller].replace(
+                forward, forward + "      CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}\n", 1),
+                "forwards secrets other than"),
+            "renamed secret": (caller, files[caller].replace(
+                forward, "      BAZEL_REMOTE_CACHE: ${{ secrets.CODECOV_TOKEN }}\n", 1),
+                "forwards secrets other than"),
+            "undeclared in callee": (main, files[main].replace(declared, "", 1),
+                                     "callee declares workflow_call secrets"),
+        }
+        self._assert_rejected(lambda files, path: _workflow_call_violations(_workflows(files)),
+                              cases)
+        # A forwarded secret outside the reviewed list also reads a secret beyond one step.
+        self._assert_rejected(lambda files, path: _secret_use_violations(_workflows(files)), {
+            "extra secret": cases["extra secret"][:2] + ("beyond one step",),
+            "renamed secret": cases["renamed secret"][:2] + ("beyond one step",),
         })
 
     def test_whole_secret_objects_cannot_bypass_step_consumers(self):
