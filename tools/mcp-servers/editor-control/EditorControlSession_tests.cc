@@ -1514,6 +1514,33 @@ TEST(EditorControlSessionTest, RecordsInMemoryRnrWithEmbeddedSource) {
   std::filesystem::remove(rnrPath, removeError);
 }
 
+TEST(EditorControlSessionTest, PointerGestureSelectsAndEditsPointerEventsNoneText) {
+  constexpr std::string_view scene = R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 80">
+      <rect id="background" width="120" height="80" fill="#ccc"/>
+      <g pointer-events="none">
+        <text id="label" x="10" y="40" font-family="sans-serif" font-size="24">Hello</text>
+      </g>
+    </svg>)svg";
+  for (const std::string tool : {"select", "text"}) {
+    SCOPED_TRACE(tool);
+    EditorControlSession session;
+    const auto load = session.handleToolCall("load_svg", json{{"svg_source", scene},
+                                                              {"canvas_width", 120},
+                                                              {"canvas_height", 80},
+                                                              {"render_after_load", false}});
+    ASSERT_THAT(load.body.value("ok", false), testing::IsTrue()) << load.body.dump(2);
+    const auto activated = session.handleToolCall("set_active_tool", json{{"tool", tool}});
+    ASSERT_THAT(activated.body.value("ok", false), testing::IsTrue()) << activated.body.dump(2);
+    const auto gesture =
+        session.handleToolCall("pointer_gesture", json{{"start_x", 18.0}, {"start_y", 34.0}});
+    ASSERT_THAT(gesture.body.value("ok", false), testing::IsTrue()) << gesture.body.dump(2);
+    ASSERT_THAT(gesture.body["selection"].is_object(), testing::IsTrue()) << gesture.body.dump(2);
+    EXPECT_THAT(gesture.body["selection"].value("id", ""), testing::Eq("label"));
+    EXPECT_THAT(gesture.body.value("text_editing", false), testing::Eq(tool == "text"));
+  }
+}
+
 TEST(EditorControlSessionTest, RecordsTextToolPointerGestureWithIdleTail) {
   constexpr std::string_view kScene =
       R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 80">
