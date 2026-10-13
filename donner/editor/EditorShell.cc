@@ -5285,11 +5285,12 @@ void EditorShell::requestForegroundPresentationWake() {
 }
 
 void EditorShell::noteSidebarPreviewDemand(bool foregroundAcknowledged, bool compactSheet,
-                                           bool thumbnailDemand, bool refreshPending) {
+                                           bool thumbnailDemand, bool refreshPending,
+                                           bool rendererWakeArmed) {
   const bool rasterDemand = !compactSheet && (thumbnailDemand || refreshPending);
   if (!foregroundAcknowledged && rasterDemand) {
     requestForegroundPresentationWake();
-  } else if (!compactSheet && refreshPending) {
+  } else if (!compactSheet && refreshPending && !rendererWakeArmed) {
     window_.wakeEventLoop();
   }
 }
@@ -6606,13 +6607,17 @@ void EditorShell::renderSidebars() {
                   layersPanel_.thumbnailRefreshStats().deferredCount);
     noteSidebarPreviewDemand(foregroundAcknowledged, compactSheet,
                              layersPanel_.hasThumbnailRenderDemand(),
-                             sidebarSnapshotRefreshPending_);
+                             sidebarSnapshotRefreshPending_, /*rendererWakeArmed=*/false);
   } else if (!showSamplePicker_ && sidebarSnapshotRefreshPending_) {
     // Preserve the refresh obligation across a renderer-busy frame or a trickled mouse transition.
-    // This is bounded: the flag is cleared by the first idle refresh above.
+    // This is bounded: the flag is cleared by the first idle refresh above. A busy renderer wakes
+    // the loop when its gate opens; requesting a frame instead would redraw every frame of the
+    // render and, in the browser, hold the GPU owner thread that the render is waiting on.
+    const bool rendererWakeArmed =
+        rendererBusy && renderCoordinator_.asyncRenderer().isBusyWithIdleWake();
     noteSidebarPreviewDemand(foregroundPresentationAcknowledged(), compactSheet,
                              layersPanel_.hasThumbnailRenderDemand(),
-                             sidebarSnapshotRefreshPending_);
+                             sidebarSnapshotRefreshPending_, rendererWakeArmed);
   }
   EditorApp* liveAppForClicks = rendererBusy ? nullptr : &app_;
 

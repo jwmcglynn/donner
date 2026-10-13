@@ -1086,6 +1086,10 @@ public:
     shell.sidebarSnapshotRefreshPending_ = pending;
   }
 
+  static bool SidebarSnapshotRefreshPending(const EditorShell& shell) {
+    return shell.sidebarSnapshotRefreshPending_;
+  }
+
   static void InstallFramePresentation(EditorShell& shell,
                                        std::shared_ptr<const FramePresentation> frame) {
     shell.installFramePresentation(std::move(frame));
@@ -5504,6 +5508,73 @@ TEST(EditorShellTest, ReferenceHighlightWaitsForRendererWakeInsteadOfRequestingF
   }
   EXPECT_EQ(EditorShellTestAccess::LastReferenceHighlightSelectionSize(shell), 1u);
   EXPECT_EQ(EditorShellTestAccess::ReferenceSummary(shell).referencedElements.size(), 2u);
+}
+
+// A sample's first presentation owes the sidebars a snapshot refresh, which only an idle frame may
+// take. A render that is already running when it becomes due, such as the render-tree rebuild after
+// a canvas commit, must not turn that obligation into a frame request on every frame: in the
+// browser those frames hold the GPU owner thread that the render, and a press that cancels it, are
+// waiting on.
+TEST(EditorShellTest, SidebarRefreshWaitsForRendererWakeInsteadOfRequestingFrames) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
+
+  EditorShell shell(window, OptionsWithSource(kInitialSvg));
+  ASSERT_TRUE(shell.valid());
+  AsyncRenderer& renderer = shell.asyncRendererForReplay();
+  const tests::HangGuard settleGuard;
+  for (int frame = 0; frame < 40; ++frame) {
+    RunShellFrame(window, shell);
+    ASSERT_TRUE(renderer.waitUntilNoRenderInFlightForTesting(settleGuard.deadline()));
+    if (frame >= 3 && !EditorShellTestAccess::RendererBusy(shell)) {
+      break;
+    }
+  }
+  ASSERT_FALSE(EditorShellTestAccess::RendererBusy(shell));
+  EditorShellTestAccess::SetShowSamplePicker(shell, false);
+  ASSERT_TRUE(EditorShellTestAccess::ForegroundPresentationAcknowledged(shell));
+
+  // Start a render that stays in flight, then make the sidebar refresh due behind it.
+  renderer.setReplayDocumentAccessBlockedForTesting(true);
+  EditorShellTestAccess::Coordinator(shell).requestPresentationRefresh();
+  EditorShellTestAccess::SetRequestRenderAtEndOfFrame(shell);
+  RunShellFrame(window, shell);
+  ASSERT_TRUE(renderer.hasRenderInFlightForTesting());
+  EditorShellTestAccess::SetSidebarSnapshotRefreshPending(shell, true);
+
+  std::uint64_t blockedWakeSerial = window.wakeEventLoopRequestSerialForTesting();
+  int quietFrames = 0;
+  for (int frame = 0; frame < 6 && quietFrames < 3; ++frame) {
+    RunShellFrame(window, shell);
+    const std::uint64_t wakeSerial = window.wakeEventLoopRequestSerialForTesting();
+    quietFrames = wakeSerial == blockedWakeSerial ? quietFrames + 1 : 0;
+    blockedWakeSerial = wakeSerial;
+  }
+  EXPECT_EQ(quietFrames, 3) << "the editor kept requesting frames while the render was running";
+  EXPECT_TRUE(EditorShellTestAccess::SidebarSnapshotRefreshPending(shell));
+  ASSERT_TRUE(renderer.hasRenderInFlightForTesting());
+
+  // Drive the loop the way the browser does: a frame runs only for an outstanding wake. The
+  // renderer's completion wake must carry the owed refresh to an idle frame.
+  renderer.setReplayDocumentAccessBlockedForTesting(false);
+  const tests::HangGuard completionGuard;
+  std::uint64_t consumedWakeSerial = blockedWakeSerial;
+  for (int frame = 0; frame < 20 && EditorShellTestAccess::SidebarSnapshotRefreshPending(shell);
+       ++frame) {
+    while (window.wakeEventLoopRequestSerialForTesting() == consumedWakeSerial &&
+           completionGuard.active()) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    ASSERT_GT(window.wakeEventLoopRequestSerialForTesting(), consumedWakeSerial)
+        << "no wake before the hang guard: the demand-driven loop would park with the sidebar "
+        << "refresh still owed (renderer busy=" << EditorShellTestAccess::RendererBusy(shell)
+        << ")";
+    consumedWakeSerial = window.wakeEventLoopRequestSerialForTesting();
+    RunShellFrame(window, shell);
+  }
+  EXPECT_FALSE(EditorShellTestAccess::SidebarSnapshotRefreshPending(shell));
 }
 
 TEST(EditorShellTest, ShellGeometryHelpersClampToViewportAndSelectionCache) {

@@ -629,8 +629,18 @@ private:
   void advanceFontPreviewGeneration();
   [[nodiscard]] bool foregroundPresentationAcknowledged() const;
   void requestForegroundPresentationWake();
+  /**
+   * Keep the loop scheduled for sidebar preview work that has not been consumed yet.
+   *
+   * @param foregroundAcknowledged Whether the current foreground document has been presented.
+   * @param compactSheet Whether the compact sheet, which renders no raster rows, is showing.
+   * @param thumbnailDemand Whether layer thumbnails still need a raster pass.
+   * @param refreshPending Whether a sidebar snapshot refresh is still owed.
+   * @param rendererWakeArmed Whether a busy renderer will wake the loop when its gate opens, so
+   *   the owed refresh needs no frame request of its own.
+   */
   void noteSidebarPreviewDemand(bool foregroundAcknowledged, bool compactSheet,
-                                bool thumbnailDemand, bool refreshPending);
+                                bool thumbnailDemand, bool refreshPending, bool rendererWakeArmed);
   void trimFontPreviewMemory();
   [[nodiscard]] FormatBarFontPreview fontPreviewForFamily(std::string_view family);
   void renderSamplePicker(const ImVec2& paneOrigin, const ImVec2& contentRegion);
