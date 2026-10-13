@@ -264,12 +264,20 @@ class ReleaseCliTest(unittest.TestCase):
             {"value": "github_pat_abcdefghijklmnopqrstuvwx"},
             {"secret": "credential"},
         ]
+        cases += [{"path": "/private/var/folders/cache"}, {"argv": "--cache=/tmp/build"},
+                  {"path": "C:\\Users\\runner"}]
         for payload in cases:
             with self.subTest(payload=payload):
                 lock.write_text(json.dumps(payload))
                 with self.assertRaisesRegex(ValueError, "non-public|unreviewed|sensitive"):
                     self._package()
                 self.assertFalse(self.artifacts.exists())
+        # Bazel labels and relative paths may name a `private` or `tmp` package.
+        for label in ("@@rules_fuzzing+//fuzzing/private/oss_fuzz:repository.bzl%oss_fuzz_repository",
+                      "//private/tools:rule.bzl", "src/var/run/data.txt"):
+            with self.subTest(label=label):
+                lock.write_text(json.dumps({"label": label}))
+                release_cli._validate_public_lockfile(lock)
         lock.unlink()
         lock.symlink_to(self.binary)
         with self.assertRaisesRegex(ValueError, "lockfile is missing"):
@@ -293,6 +301,14 @@ class ReleaseCliTest(unittest.TestCase):
         # The editor package and docs build retain their generated lockfiles through this check.
         lock = self.root / release_cli.LOCKFILE
         self.assertEqual(release_cli.check_public_lockfile(lock), release_cli.digest(lock))
+        public = {"urls": [
+            "https://files.pythonhosted.org/packages/zipp-3.18.2-py3-none-any.whl",
+            "https://mirror.bazel.build/github.com/bazelbuild/bazel-skylib/archive.tar.gz",
+            "https://repo1.maven.org/maven2/com/code-intelligence/jazzer-api/0.20.1/api.jar",
+        ]}
+        lock.write_text(json.dumps(public))
+        self.assertEqual(release_cli.check_public_lockfile(lock), release_cli.digest(lock))
+        lock.write_text(self.lock_contents)
         command = [sys.executable, "-B", "-c", "from tools import release_cli; release_cli.main()",
                    "check-lockfile", "--lockfile", str(lock)]
         package_root = Path(release_cli.__file__).resolve().parent.parent

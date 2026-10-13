@@ -42,8 +42,18 @@ PUBLIC_LOCK_HOSTS = frozenset({
     "nodejs.org",
     "storage.googleapis.com",
     "commondatastorage.googleapis.com",
+    # Public package registries that module extensions in the production module graph record,
+    # which the docs build retains (rules_python, rules_fuzzing, and the Bazel mirror).
+    "files.pythonhosted.org",
+    "mirror.bazel.build",
+    "repo1.maven.org",
 })
-PRIVATE_PATH = re.compile(r"(?i)(?:file://|/(?:Users|home|private|var|tmp|opt|root|etc|mnt|proc|srv|run)/|(?<![A-Za-z])[A-Za-z]:[\\/])")
+# An absolute host path starts the string or follows a separator; inside a Bazel label or a
+# relative path, such as `@@rules_fuzzing+//fuzzing/private/oss_fuzz:repository.bzl`, the same
+# directory name is not a host path.
+PRIVATE_PATH = re.compile(
+    r"(?i)(?:file://|(?<![A-Za-z0-9_.+@~/-])/(?:Users|home|private|var|tmp|opt|root|etc|mnt|proc|"
+    r"srv|run)/|(?<![A-Za-z])[A-Za-z]:[\\/])")
 SECRET_KEY = re.compile(r"(?i)(?:token|password|secret|credential|authorization|api[_-]?key|private[_-]?key)")
 SECRET_SHAPE = re.compile(
     r"(?i)(?:-----BEGIN|AKIA[0-9A-Z]{16}|github_pat_[A-Za-z0-9_]{16,}|"
