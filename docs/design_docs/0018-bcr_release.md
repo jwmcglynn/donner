@@ -98,8 +98,8 @@ standard libraries and compiler runtime) are outside that walk; today the releas
 them dynamically from the system, so switching release builds to a hermetic toolchain with a
 statically linked runtime needs its own license review.
 
-Preflight generates the real entry with `bazel-contrib/publish-to-bcr@v1.5.0` and executes the current
-upstream BCR validator. The entry retains the stable release URL. Only the source download transport
+Preflight generates the real entry with `bazel-contrib/publish-to-bcr`, pinned to a release tag,
+and executes the current upstream BCR validator. The entry retains the stable release URL. Only the source download transport
 uses the local candidate bytes, because the approved release does not exist yet. URL policy,
 integrity, module identity, compatibility level, metadata, presubmit and global admission checks
 remain enabled. The report records the validator revision. Live asset availability is checked after
