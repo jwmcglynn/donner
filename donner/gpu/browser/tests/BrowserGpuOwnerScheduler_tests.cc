@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <deque>
+#include <memory>
 #include <ostream>
 #include <vector>
 
@@ -232,6 +233,64 @@ TEST(BrowserGpuOwnerScheduler, ReportsIdleOnlyWithNothingQueuedOrActive) {
   EXPECT_FALSE(owner.scheduler.idle()) << "a request beyond the inline budget is still queued";
   owner.runPulseMessage();
   EXPECT_TRUE(owner.scheduler.idle());
+}
+
+/// Back-to-back canvas frames where the owner's event loop runs only the pulse message between
+/// frames, the starvation a held drag produces. A proxied delivery message never runs.
+void RunBackToBackFrames(FakeOwner& owner, int frames) {
+  for (int frame = 0; frame < frames; ++frame) {
+    owner.runCanvasFrame();
+    owner.runPulseMessage();
+  }
+}
+
+TEST(BrowserGpuOwnerScheduler, QueuedRequestsProgressAcrossBackToBackCanvasFrames) {
+  FakeOwner owner;
+  SequentialClient document(owner, 100, 64, 0.01);
+  SequentialClient thumbnails(owner, 200, 64, 0.01);
+  document.start();
+  thumbnails.start();
+  constexpr int kFrames = 12;
+  RunBackToBackFrames(owner, kFrames);
+
+  EXPECT_GE(document.completed(), static_cast<std::size_t>(kFrames))
+      << "each blocked client must advance at least once per canvas frame";
+  EXPECT_GE(thumbnails.completed(), static_cast<std::size_t>(kFrames));
+  EXPECT_THAT(owner.starts, Each(Field(&Start::canvasActive, false)))
+      << "no request may start between canvas acquisition and retirement";
+  EXPECT_LE(owner.maximumEpochCalls, BrowserGpuOwnerScheduler::kMaximumInlineCalls);
+}
+
+TEST(BrowserGpuOwnerScheduler, FrameSafePointsStartNoMoreThanTheRemainingInlineBudget) {
+  FakeOwner owner;
+  std::vector<std::unique_ptr<SequentialClient>> clients;
+  for (int index = 0; index < 40; ++index) {
+    clients.push_back(std::make_unique<SequentialClient>(owner, index, 1, 0.0));
+    clients.back()->start();
+  }
+  owner.runCanvasFrame();
+  EXPECT_THAT(owner.starts, SizeIs(BrowserGpuOwnerScheduler::kMaximumInlineCalls))
+      << "a frame safe point must start queued requests up to, and not past, the call budget";
+  owner.runCanvasFrame();
+  EXPECT_THAT(owner.starts, SizeIs(BrowserGpuOwnerScheduler::kMaximumInlineCalls))
+      << "only a pulse renews the budget";
+
+  owner.runPulseMessage();
+  EXPECT_THAT(owner.starts, SizeIs(40));
+  EXPECT_EQ(owner.maximumEpochCalls, BrowserGpuOwnerScheduler::kMaximumInlineCalls);
+}
+
+TEST(BrowserGpuOwnerScheduler, FrameSafePointsStopAtTheInlineTimeBudget) {
+  FakeOwner owner;
+  std::vector<std::unique_ptr<SequentialClient>> clients;
+  for (int index = 0; index < 8; ++index) {
+    clients.push_back(std::make_unique<SequentialClient>(owner, index, 1, 0.75));
+    clients.back()->start();
+  }
+  owner.runCanvasFrame();
+  // Starts at 0, 0.75 and 1.5 ms of callback time; a running callback is not preempted.
+  EXPECT_THAT(owner.starts, SizeIs(3));
+  EXPECT_THAT(owner.starts, Each(Field(&Start::canvasActive, false)));
 }
 
 }  // namespace
