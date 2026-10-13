@@ -2673,6 +2673,58 @@ TEST(RendererPublicApiTest, ClipPathCropsContent) {
   EXPECT_THAT(outside, IsTransparent());
 }
 
+TEST(RendererPublicApiTest, TransformedClipChildFlatControl) {
+  SVGDocument document = ParseDocument(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="32" height="16">
+      <rect x="12" y="4" width="6" height="8" fill="#204060"/>
+    </svg>
+  )svg");
+  Renderer renderer;
+  renderer.draw(document);
+  const RendererBitmap snapshot = NormalizeSnapshot(renderer.takeSnapshot());
+  ASSERT_THAT(snapshot.empty(), testing::IsFalse());
+  EXPECT_THAT(PixelAt(snapshot, 14, 6), ElementsAre(32, 64, 96, 255));
+  EXPECT_THAT(PixelAt(snapshot, 20, 6), IsTransparent());
+  EXPECT_THAT(PixelAt(snapshot, 2, 6), IsTransparent());
+  EXPECT_THAT(PixelAt(snapshot, 14, 2), IsTransparent());
+}
+
+TEST(RendererPublicApiTest, TransformedClipChildCarriesNestedUserSpace) {
+  SVGDocument document = ParseDocument(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="32" height="16">
+      <defs>
+        <clipPath id="inner" clipPathUnits="userSpaceOnUse">
+          <rect width="6" height="8"/>
+        </clipPath>
+        <clipPath id="outer">
+          <rect width="12" height="8" transform="translate(12 4)" clip-path="url(#inner)"/>
+        </clipPath>
+      </defs>
+      <rect width="32" height="16" fill="#204060" clip-path="url(#outer)"/>
+    </svg>
+  )svg");
+  SVGDocument reference = ParseDocument(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="32" height="16">
+      <rect x="12" y="4" width="6" height="8" fill="#204060"/>
+    </svg>
+  )svg");
+  Renderer actual;
+  actual.draw(document);
+  Renderer expected;
+  expected.draw(reference);
+  const RendererBitmap actualSnapshot = NormalizeSnapshot(actual.takeSnapshot());
+  const RendererBitmap expectedSnapshot = NormalizeSnapshot(expected.takeSnapshot());
+  ASSERT_THAT(actualSnapshot.empty(), testing::IsFalse());
+  ASSERT_THAT(expectedSnapshot.empty(), testing::IsFalse());
+  EXPECT_THAT(PixelAt(actualSnapshot, 14, 6), ElementsAre(32, 64, 96, 255));
+  EXPECT_THAT(PixelAt(actualSnapshot, 20, 6), IsTransparent());
+  EXPECT_THAT(PixelAt(actualSnapshot, 2, 6), IsTransparent());
+  EXPECT_THAT(PixelAt(actualSnapshot, 14, 2), IsTransparent());
+  editor::tests::CompareBitmapToBitmap(actualSnapshot, expectedSnapshot,
+                                       "nested_clip_transformed_child",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
 // 20. Mask element
 TEST(RendererPublicApiTest, MaskElement) {
   SVGDocument document = ParseDocument(R"svg(
