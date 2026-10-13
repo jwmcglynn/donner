@@ -1601,7 +1601,9 @@ async function readGpuTimelineOnPageClock(page: Page) {
         case "m":
           return [...fields.slice(0, 3), toPage(fields[3]), toPage(fields[4])];
         case "p":
-          return [fields[0], fields[1], toPage(fields[2]), toPage(fields[3]), fields[4]];
+          return fields.length >= 5
+            ? [fields[0], fields[1], toPage(fields[2]), toPage(fields[3]), fields[4]]
+            : [fields[0], fields[1], toPage(fields[2])];
         default:
           return [fields[0], fields[1], toPage(fields[2]), ...fields.slice(3)];
       }

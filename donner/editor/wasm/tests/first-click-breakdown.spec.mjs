@@ -20,7 +20,7 @@ test("the backlog is the last pre-click submission's completion and handoff what
       queueBacklogMs: 1500,
       handoffMs: 60,
       submissionsAheadOfClick: 1,
-      pipelinesCompilingAtClick: 0,
+      pipelinesCompilingAtClick: null,
       firstUsePipelineCompiles: 0,
     },
   );
@@ -71,4 +71,14 @@ test("pipelines still compiling at the click and first-use compiles are counted"
     },
     { compiling: 2, firstUse: 1 },
   );
+});
+
+test("pipeline entries without a compile time leave the compiling count unknown", () => {
+  const timeline = [["p", 1, 5], ["p", 1, 6]];
+  const breakdown = firstClickBreakdown(timeline, {
+    clickAt: 100,
+    completedAt: 180,
+    presentedAt: 200,
+  });
+  assert.equal(breakdown.pipelinesCompilingAtClick, null);
 });

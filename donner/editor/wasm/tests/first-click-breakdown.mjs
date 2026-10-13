@@ -19,7 +19,7 @@
  *   queueBacklogMs: number | null,
  *   handoffMs: number | null,
  *   submissionsAheadOfClick: number,
- *   pipelinesCompilingAtClick: number,
+ *   pipelinesCompilingAtClick: number | null,
  *   firstUsePipelineCompiles: number,
  * }} Durations relative to the click. queueBacklogMs is how long after the click the GPU retired
  *     the last submission made before it; handoffMs is what presentation took once both that
@@ -30,7 +30,8 @@ export function firstClickBreakdown(timeline, { clickAt, completedAt, presentedA
   let backlogEnd = clickAt;
   let backlogKnown = true;
   let submissionsAheadOfClick = 0;
-  let pipelinesCompilingAtClick = 0;
+  // Null when the timeline predates compile tracking, whose pipeline entries carry no compile time.
+  let pipelinesCompilingAtClick = null;
   let firstUsePipelineCompiles = 0;
   for (const entry of timeline) {
     if (entry[0] === "s" && entry[5] <= clickAt) {
@@ -41,9 +42,12 @@ export function firstClickBreakdown(timeline, { clickAt, completedAt, presentedA
         submissionsAheadOfClick += 1;
         backlogEnd = Math.max(backlogEnd, completed);
       }
-    } else if (entry[0] === "p" && entry[2] <= clickAt && entry[4] !== 1) {
+    } else if (entry[0] === "p" && entry.length >= 5) {
+      pipelinesCompilingAtClick ??= 0;
       const compiled = Number(entry[3]);
-      if (compiled <= 0 || compiled > clickAt) pipelinesCompilingAtClick += 1;
+      const compiling = entry[2] <= clickAt && entry[4] !== 1
+        && (compiled <= 0 || compiled > clickAt);
+      if (compiling) pipelinesCompilingAtClick += 1;
     } else if (entry[0] === "c" && entry[2] <= presentedAt) {
       firstUsePipelineCompiles += 1;
     }
