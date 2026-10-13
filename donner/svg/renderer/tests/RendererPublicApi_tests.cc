@@ -1263,7 +1263,7 @@ TEST(ConvolveKernelSumTest, PreservesRealResidualsAfterLargeCancellation) {
   EXPECT_THAT(ConvolveKernelSum(exactZero), testing::Eq(0.0));
 }
 
-TEST(RendererPublicApiTest, CpuReorderedZeroSumConvolveUsesFallbackDivisor) {
+TEST(RendererPublicApiTest, ReorderedZeroSumConvolveUsesFallbackDivisor) {
   if (!ActiveRendererSupportsFeature(RendererBackendFeature::FilterEffects)) {
     GTEST_SKIP() << "Filter rendering disabled in " << ActiveRendererBackendName();
   }
@@ -1279,9 +1279,9 @@ TEST(RendererPublicApiTest, CpuReorderedZeroSumConvolveUsesFallbackDivisor) {
   };
   SVGDocument document = ParseDocument(makeSource(""));
   SVGDocument reference = ParseDocument(makeSource("divisor='1'"));
-  RendererTinySkia actual;
+  Renderer actual;
   actual.draw(document);
-  RendererTinySkia expected;
+  Renderer expected;
   expected.draw(reference);
   editor::tests::CompareBitmapToBitmap(
       NormalizeSnapshot(actual.takeSnapshot()), NormalizeSnapshot(expected.takeSnapshot()),
