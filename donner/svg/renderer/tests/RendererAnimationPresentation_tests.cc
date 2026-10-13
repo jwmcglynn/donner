@@ -117,5 +117,75 @@ TEST(RendererAnimationPresentation, TextLengthAndRotationMatchStaticSamples) {
   }
 }
 
+TEST(RendererAnimationPresentation, UseHrefSwitchesAndRestoresWithoutChangingSource) {
+  auto document = ParsePresentation(R"svg(
+    <defs><rect id="a" width="4" height="16"/><rect id="b" x="8" width="4" height="16"/></defs>
+    <use href="#a"><set attributeName="href" to="#b" begin="0.5s" dur="1s"/></use>)svg");
+  const std::string source(document.source());
+  for (int cycle = 0; cycle < 3; ++cycle) {
+    document.setTime(1);
+    EXPECT_THAT(RendererTestUtils::renderToAsciiImage(document).generated,
+                testing::StartsWith("........@@@@...."));
+    document.setTime(2);
+    EXPECT_THAT(RendererTestUtils::renderToAsciiImage(document).generated,
+                testing::StartsWith("@@@@............"));
+  }
+  EXPECT_EQ(document.source(), source);
+}
+
+TEST(RendererAnimationPresentation, GradientHrefSwitchesInheritedStops) {
+  auto document = ParsePresentation(R"svg(
+    <defs><linearGradient id="a"><stop stop-color="black"/></linearGradient>
+      <linearGradient id="b"><stop stop-color="red"/></linearGradient>
+      <linearGradient id="g" href="#a"/>
+      <set href="#g" attributeName="href" to="#b" begin="0.5s" dur="1s"/>
+    </defs><rect width="16" height="16" fill="url(#g)"/>)svg");
+  document.setTime(1);
+  EXPECT_THAT(test::PixelAt(RenderDocumentWithActiveBackend(document), 8, 8),
+              test::Rgba(255, 0, 0, 255));
+  document.setTime(2);
+  EXPECT_THAT(test::PixelAt(RenderDocumentWithActiveBackend(document), 8, 8),
+              test::Rgba(0, 0, 0, 255));
+}
+
+TEST(RendererAnimationPresentation, PatternHrefSwitchesInheritedContent) {
+  auto document = ParsePresentation(R"svg(
+    <defs><pattern id="a" patternUnits="userSpaceOnUse" width="16" height="16"><rect width="4" height="16"/></pattern>
+      <pattern id="b" patternUnits="userSpaceOnUse" width="16" height="16"><rect x="8" width="4" height="16"/></pattern>
+      <pattern id="p" href="#a"/>
+      <set href="#p" attributeName="href" to="#b" begin="0.5s" dur="1s"/>
+    </defs><rect width="16" height="16" fill="url(#p)"/>)svg");
+  document.setTime(1);
+  EXPECT_THAT(RendererTestUtils::renderToAsciiImage(document).generated,
+              testing::StartsWith("........@@@@...."));
+  document.setTime(2);
+  EXPECT_THAT(RendererTestUtils::renderToAsciiImage(document).generated,
+              testing::StartsWith("@@@@............"));
+}
+
+TEST(RendererAnimationPresentation, AnimatedMpathHrefChangesTheSameMotionSample) {
+  auto document = ParsePresentation(R"svg(
+    <defs><path id="a" d="M0 0L8 0"/><path id="b" d="M0 0L0 8"/></defs>
+    <rect width="4" height="4"><animateMotion dur="2s"><mpath id="m" href="#a"/></animateMotion></rect>
+    <set href="#m" attributeName="href" to="#b" begin="0.5s" dur="1s"/>)svg");
+  auto expected = ParsePresentation(R"(<rect y="4" width="4" height="4"/>)");
+  document.setTime(1);
+  EXPECT_EQ(RendererTestUtils::renderToAsciiImage(document).generated,
+            RendererTestUtils::renderToAsciiImage(expected).generated);
+}
+
+TEST(RendererAnimationPresentation, TextPathHrefSwitchesLayout) {
+  auto document = ParsePresentation(R"svg(
+    <defs><path id="a" d="M0 12H16"/><path id="b" d="M0 16H16"/></defs>
+    <text font-size="12"><textPath id="t" href="#a">H</textPath></text>
+    <set href="#t" attributeName="href" to="#b" begin="0.5s" dur="1s"/>)svg");
+  auto expected = ParsePresentation(R"svg(
+    <defs><path id="b" d="M0 16H16"/></defs>
+    <text font-size="12"><textPath href="#b">H</textPath></text>)svg");
+  document.setTime(1);
+  EXPECT_EQ(RendererTestUtils::renderToAsciiImage(document).generated,
+            RendererTestUtils::renderToAsciiImage(expected).generated);
+}
+
 }  // namespace
 }  // namespace donner::svg
