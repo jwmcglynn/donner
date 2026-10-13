@@ -40,6 +40,31 @@ async function beginReady(bridge, handle) {
   );
 }
 
+test("device status reports ownership and loss together without retaining stale state", async () => {
+  const bridge = loadLibrary();
+  const { entryPoints, state } = bridge;
+  const status = entryPoints.donner_gpu_device_status;
+  assert.equal(typeof status, "function");
+  assert.equal(status(kFirst), state.kNotOwner);
+  assert.equal(entryPoints.donner_gpu_begin_device_request(kFirst), state.kSuccess);
+  assert.equal(status(kFirst), state.kNotOwner);
+  await until(() => state.requestState === state.kRequestReady, "a ready browser device");
+  assert.equal(status(kFirst), state.kSuccess);
+  assert.equal(status(kSecond), state.kNotOwner);
+  await beginReady(bridge, kSecond);
+  assert.equal(status(kSecond), state.kSuccess);
+
+  bridge.lose({ reason: "destroyed", message: "device status regression" });
+  await until(() => state.lost, "browser device loss");
+  assert.equal(status(kFirst), state.kDeviceLost);
+  assert.equal(status(kSecond), state.kDeviceLost);
+  entryPoints.donner_gpu_release_device(kSecond);
+  assert.equal(status(kSecond), state.kNotOwner);
+  assert.equal(status(kFirst), state.kDeviceLost);
+  entryPoints.donner_gpu_release_device(kFirst);
+  assert.equal(status(kFirst), state.kNotOwner);
+});
+
 test("browser acquisition failures expose fixed stages without rejected message text", async () => {
   const secret = "secret-token https://example.invalid/private/path";
   const cases = [
