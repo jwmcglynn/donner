@@ -5922,7 +5922,8 @@ void EditorShell::ensureSampleThumbnails() {
   // Submitted GPU work cannot be recalled, so hold the first thumbnail while a click on the picker
   // is likely. The first picker frame always holds, which also paints every card before any
   // sample is parsed. Ask for another frame so the hold advances without input.
-  if (!sampleThumbnailStartGate_.admitFrame(internal::FrameHasUserInput(ImGui::GetIO()))) {
+  if (!sampleThumbnailStartGate_.admitFrame(window_.presentedUiFrameCount(),
+                                            internal::FrameHasUserInput(ImGui::GetIO()))) {
     window_.wakeEventLoop();
     publishSampleThumbnailStats();
     return;

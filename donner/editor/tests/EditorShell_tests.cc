@@ -7691,7 +7691,8 @@ TEST(EditorShellTest, IdlePickerStartsThumbnailsAfterTheQuietHold) {
     }
   }
   ASSERT_TRUE(gate.open());
-  EXPECT_EQ(gate.heldFrames(), SampleThumbnailStartGate::kQuietFrames);
+  EXPECT_EQ(gate.heldFrames(), SampleThumbnailStartGate::kQuietFrames)
+      << "Each picker frame presents once, so the hold is exactly the quiet count";
   EXPECT_EQ(renderer.sampleThumbnailRenderStats().requested, 1u)
       << "The frame that opens the gate requests the first thumbnail";
 }
@@ -7712,7 +7713,7 @@ TEST(EditorShellTest, PointerActivityHoldsThumbnailsUpToTheBound) {
   const SampleThumbnailStartGate& gate =
       EditorShellTestAccess::SampleThumbnailStartGateState(shell);
 
-  // Move the pointer by one pixel each frame, inside the picker's background.
+  // Move the pointer by one pixel each frame.
   int moves = 0;
   for (const tests::HangGuard guard; guard.active() && !gate.open();) {
     RunPickerFrame(window, shell,

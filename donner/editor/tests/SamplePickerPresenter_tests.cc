@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <array>
 #include <cstddef>
+#include <cstdint>
 #include <limits>
 #include <span>
 #include <string>
@@ -121,52 +122,97 @@ TEST(SamplePickerPresenter, CommandsIgnoreEmptySampleAndNullAccumulator) {
   EXPECT_FALSE(actions.openGitHub);
 }
 
-TEST(SampleThumbnailStartGate, OpensAfterQuietFramesAndStaysOpen) {
+/// Drives a gate one presented frame per call, the way the picker sees a window that presents
+/// every frame it builds.
+class PresentedFrames {
+public:
+  explicit PresentedFrames(SampleThumbnailStartGate& gate) : gate_(gate) {}
+
+  bool next(bool inputActive) { return gate_.admitFrame(++presented_, inputActive); }
+
+  bool repeat(bool inputActive) { return gate_.admitFrame(presented_, inputActive); }
+
+private:
+  SampleThumbnailStartGate& gate_;
+  std::uint64_t presented_ = 1000;
+};
+
+TEST(SampleThumbnailStartGate, OpensAfterQuietPresentedFramesAndStaysOpen) {
   SampleThumbnailStartGate gate;
+  PresentedFrames frames(gate);
+  // The first observation only records the window's count.
+  EXPECT_FALSE(frames.repeat(/*inputActive=*/false));
   for (int frame = 1; frame < SampleThumbnailStartGate::kQuietFrames; ++frame) {
-    EXPECT_FALSE(gate.admitFrame(/*inputActive=*/false)) << "frame " << frame;
+    EXPECT_FALSE(frames.next(/*inputActive=*/false)) << "frame " << frame;
   }
-  EXPECT_TRUE(gate.admitFrame(/*inputActive=*/false));
+  EXPECT_TRUE(frames.next(/*inputActive=*/false));
   EXPECT_TRUE(gate.open());
   EXPECT_EQ(gate.heldFrames(), SampleThumbnailStartGate::kQuietFrames);
 
   // Input after the gate opened does not stop work that is already allowed to start.
-  EXPECT_TRUE(gate.admitFrame(/*inputActive=*/true));
+  EXPECT_TRUE(frames.next(/*inputActive=*/true));
   EXPECT_EQ(gate.heldFrames(), SampleThumbnailStartGate::kQuietFrames);
+}
+
+TEST(SampleThumbnailStartGate, FramesThatWereNotPresentedDoNotCount) {
+  SampleThumbnailStartGate gate;
+  PresentedFrames frames(gate);
+  EXPECT_FALSE(frames.repeat(/*inputActive=*/false));
+  // A window still waiting on the GPU builds frames without presenting them.
+  for (int frame = 0; frame < 4 * SampleThumbnailStartGate::kMaxHeldFrames; ++frame) {
+    ASSERT_FALSE(frames.repeat(/*inputActive=*/false)) << "frame " << frame;
+  }
+  EXPECT_EQ(gate.heldFrames(), 0);
+}
+
+TEST(SampleThumbnailStartGate, CountsEveryFramePresentedSinceTheLastObservation) {
+  SampleThumbnailStartGate gate;
+  EXPECT_FALSE(gate.admitFrame(10u, /*inputActive=*/false));
+  EXPECT_FALSE(gate.admitFrame(10u + SampleThumbnailStartGate::kQuietFrames - 1u, false));
+  EXPECT_EQ(gate.heldFrames(), SampleThumbnailStartGate::kQuietFrames - 1);
+  EXPECT_TRUE(gate.admitFrame(10u + SampleThumbnailStartGate::kQuietFrames, false));
 }
 
 TEST(SampleThumbnailStartGate, InputRestartsTheQuietCount) {
   SampleThumbnailStartGate gate;
+  PresentedFrames frames(gate);
+  EXPECT_FALSE(frames.repeat(/*inputActive=*/false));
   for (int frame = 1; frame < SampleThumbnailStartGate::kQuietFrames; ++frame) {
-    ASSERT_FALSE(gate.admitFrame(/*inputActive=*/false));
+    ASSERT_FALSE(frames.next(/*inputActive=*/false));
   }
-  EXPECT_FALSE(gate.admitFrame(/*inputActive=*/true));
+  EXPECT_FALSE(frames.next(/*inputActive=*/true));
   for (int frame = 1; frame < SampleThumbnailStartGate::kQuietFrames; ++frame) {
-    EXPECT_FALSE(gate.admitFrame(/*inputActive=*/false)) << "quiet frame " << frame;
+    EXPECT_FALSE(frames.next(/*inputActive=*/false)) << "quiet frame " << frame;
   }
-  EXPECT_TRUE(gate.admitFrame(/*inputActive=*/false));
+  EXPECT_TRUE(frames.next(/*inputActive=*/false));
   EXPECT_EQ(gate.heldFrames(), 2 * SampleThumbnailStartGate::kQuietFrames);
 }
 
 TEST(SampleThumbnailStartGate, ContinuousInputHoldsAtMostTheBound) {
   SampleThumbnailStartGate gate;
+  PresentedFrames frames(gate);
+  EXPECT_FALSE(frames.repeat(/*inputActive=*/true));
   for (int frame = 1; frame < SampleThumbnailStartGate::kMaxHeldFrames; ++frame) {
-    ASSERT_FALSE(gate.admitFrame(/*inputActive=*/true)) << "frame " << frame;
+    ASSERT_FALSE(frames.next(/*inputActive=*/true)) << "frame " << frame;
   }
-  EXPECT_TRUE(gate.admitFrame(/*inputActive=*/true));
+  EXPECT_TRUE(frames.next(/*inputActive=*/true));
   EXPECT_EQ(gate.heldFrames(), SampleThumbnailStartGate::kMaxHeldFrames);
 }
 
 TEST(SampleThumbnailStartGate, ResetStartsANewHold) {
   SampleThumbnailStartGate gate;
+  PresentedFrames frames(gate);
+  EXPECT_FALSE(frames.repeat(/*inputActive=*/false));
   for (int frame = 0; frame < SampleThumbnailStartGate::kQuietFrames; ++frame) {
-    (void)gate.admitFrame(/*inputActive=*/false);
+    (void)frames.next(/*inputActive=*/false);
   }
   ASSERT_TRUE(gate.open());
   gate.reset();
   EXPECT_FALSE(gate.open());
   EXPECT_EQ(gate.heldFrames(), 0);
-  EXPECT_FALSE(gate.admitFrame(/*inputActive=*/false));
+  EXPECT_FALSE(frames.next(/*inputActive=*/false))
+      << "After a reset the first observation only records the window's count";
+  EXPECT_EQ(gate.heldFrames(), 0);
 }
 
 // ---------------------------------------------------------------------------

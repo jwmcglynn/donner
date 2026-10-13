@@ -2567,6 +2567,14 @@ void EditorWindow::wakeEventLoopForPresentedDocument() {
   presentedDocumentWakeSerial_.fetch_add(1, std::memory_order_acq_rel);
 }
 
+std::uint64_t EditorWindow::presentedUiFrameCount() const {
+#ifdef DONNER_EDITOR_WGPU
+  return presentationSubmissions_.retiredCount();
+#else
+  return glSwappedFrames_;
+#endif
+}
+
 bool EditorWindow::hasQueuedInputEvents() const {
   const ImGuiContext* context = ImGui::GetCurrentContext();
   return context != nullptr && context->InputEventsQueue.Size > 0;
@@ -2913,6 +2921,7 @@ void EditorWindow::endFrameGl(svg::RendererBitmap* readback, int displayW, int d
     ZoneScopedN("glfwSwapBuffers");
     const auto presentStart = std::chrono::steady_clock::now();
     glfwSwapBuffers(window_);
+    ++glSwappedFrames_;
     timing.presentMs = ElapsedMs(presentStart);
   }
 }

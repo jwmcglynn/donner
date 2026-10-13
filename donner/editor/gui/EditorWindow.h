@@ -561,6 +561,7 @@ public:
     while (!pending_.empty() && pending_.front().serial <= completedSerial) {
       completed_ = pending_.front();
       pending_.pop_front();
+      ++retired_;
     }
     if (!pending_.empty() && now - pending_.front().submittedAt >= kCompletionDeadline &&
         (!lastProgress.has_value() || now - *lastProgress >= kCompletionDeadline)) {
@@ -586,6 +587,8 @@ public:
   std::size_t pendingCount() const { return pending_.size(); }
   /// Most recently retired frame, or a default fence before any frame retires.
   Fence completed() const { return completed_; }
+  /// Number of submitted frames observed to retire.
+  std::uint64_t retiredCount() const { return retired_; }
   /// Serial of the oldest pending frame, or zero when none is pending.
   std::uint64_t oldestSerial() const { return pending_.empty() ? 0 : pending_.front().serial; }
   /// Elapsed time of the oldest unfinished frame without restarting its submission clock.
@@ -598,6 +601,7 @@ public:
 private:
   std::deque<Fence> pending_;
   Fence completed_;
+  std::uint64_t retired_ = 0;
 };
 
 /// Immutable first observation of settled presentation-device loss diagnostics.
@@ -918,6 +922,11 @@ public:
   /// lands.
   [[nodiscard]] bool hasQueuedInputEvents() const;
 
+  /// UI frames this window has put on screen: with WebGPU, submitted frames whose GPU work has
+  /// been seen to complete; with OpenGL, frames swapped to the window. Frames the window coalesced
+  /// or that are still on the GPU do not count.
+  [[nodiscard]] std::uint64_t presentedUiFrameCount() const;
+
   /// Starts a new ImGui frame. Caller issues `ImGui::*` widget calls
   /// after this returns.
   void beginFrame();
@@ -1223,6 +1232,8 @@ private:
   double frameDisplayScaleOverride_ = 0.0;
   bool valid_ = false;
   bool glUnavailable_ = false;
+  /// OpenGL frames swapped to the window. @see presentedUiFrameCount
+  std::uint64_t glSwappedFrames_ = 0;
   bool imguiInitialized_ = false;
   std::atomic<std::uint64_t> wakeEventLoopRequestSerial_{0};
 #ifdef __EMSCRIPTEN__

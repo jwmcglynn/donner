@@ -214,12 +214,23 @@ SamplePickerActions SamplePickerPresenter::render(
   return actions;
 }
 
-bool SampleThumbnailStartGate::admitFrame(bool inputActive) noexcept {
+bool SampleThumbnailStartGate::admitFrame(std::uint64_t presentedFrames,
+                                          bool inputActive) noexcept {
   if (open_) {
     return true;
   }
-  ++heldFrames_;
-  quietFrames_ = inputActive ? 0 : quietFrames_ + 1;
+  if (inputActive) {
+    quietFrames_ = 0;
+  }
+  const std::uint64_t previous = lastPresentedFrames_.value_or(presentedFrames);
+  lastPresentedFrames_ = presentedFrames;
+  const int presented = static_cast<int>(
+      std::min<std::uint64_t>(presentedFrames > previous ? presentedFrames - previous : 0u,
+                              static_cast<std::uint64_t>(kMaxHeldFrames)));
+  heldFrames_ = std::min(heldFrames_ + presented, kMaxHeldFrames);
+  if (!inputActive) {
+    quietFrames_ = std::min(quietFrames_ + presented, kQuietFrames);
+  }
   open_ = quietFrames_ >= kQuietFrames || heldFrames_ >= kMaxHeldFrames;
   return open_;
 }
