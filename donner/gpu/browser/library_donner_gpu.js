@@ -717,7 +717,6 @@ var LibraryDonnerGpu = {
       return written;
     },
 
-
     // ----- Pipeline compilation ------------------------------------------------
     //
     // A browser compiles a pipeline created with createRenderPipeline in order with everything

@@ -25,7 +25,9 @@ function createTimelineDevice({ asyncCompiles = true, refuseAsync = false } = {}
   const compiles = new Map(); // Fragment entry point to { finished, settle: [] }.
   const created = { sync: [], async: [] };
   const compileFor = (descriptor) => {
-    const name = descriptor.fragment ? descriptor.fragment.entryPoint : descriptor.compute.entryPoint;
+    const name = descriptor.fragment
+      ? descriptor.fragment.entryPoint
+      : descriptor.compute.entryPoint;
     let compile = compiles.get(name);
     if (compile === undefined) {
       compile = { finished: false, settle: [] };

@@ -1345,7 +1345,13 @@ async function readCarouselGpuTimeline(page: Page) {
       case "m":
         return [...fields.slice(0, 3), toPage(fields[3] as number), toPage(fields[4] as number)];
       case "p":
-        return [fields[0], fields[1], toPage(fields[2] as number), toPage(fields[3] as number), fields[4]];
+        return [
+          fields[0],
+          fields[1],
+          toPage(fields[2] as number),
+          toPage(fields[3] as number),
+          fields[4],
+        ];
       default:
         return [...fields.slice(0, 2), toPage(fields[2] as number)];
     }

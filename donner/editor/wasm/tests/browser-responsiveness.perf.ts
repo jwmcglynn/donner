@@ -11,6 +11,7 @@ import {
   startCompositedProbe,
 } from "./composited-probe";
 import { stopCompositedProbe } from "./composited-probe-evidence.mjs";
+import { firstClickBreakdown } from "./first-click-breakdown.mjs";
 import { inspectGpuImageTransfer } from "./gpu-image-transfer-canary";
 import { echoGpuSessionConsole } from "./gpu-session-console";
 import {
@@ -20,13 +21,12 @@ import {
   latencyGateMode,
   runCompletionCheck,
 } from "./latency-gates.mjs";
+import { pickerPresentationSettled } from "./presentation-baseline.mjs";
 import {
   kHeldDragPresentationBounds,
   presentedDragFailures,
   presentedDragSummary,
 } from "./presented-frame-samples.mjs";
-import { firstClickBreakdown } from "./first-click-breakdown.mjs";
-import { pickerPresentationSettled } from "./presentation-baseline.mjs";
 import { showsSplashDocument, splashDPoint } from "./splash-aim.mjs";
 
 // Every case here opens the editor; echo its GPU acquisition trace into the test log.

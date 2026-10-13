@@ -65,7 +65,10 @@ test("pipelines still compiling at the click and first-use compiles are counted"
     presentedAt: 200,
   });
   assert.deepEqual(
-    { compiling: breakdown.pipelinesCompilingAtClick, firstUse: breakdown.firstUsePipelineCompiles },
+    {
+      compiling: breakdown.pipelinesCompilingAtClick,
+      firstUse: breakdown.firstUsePipelineCompiles,
+    },
     { compiling: 2, firstUse: 1 },
   );
 });
