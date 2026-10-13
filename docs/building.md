@@ -111,7 +111,10 @@ tools/build_docs.sh
 `tools/build_docs.sh` runs `doxygen Doxyfile`, copies
 `docs/reports/binary-size/` into the generated HTML output, and
 extracts `docs/reports/coverage.zip` into `reports/coverage/` so the
-deployed docs site has both reports live.
+deployed docs site has both reports live. The docs site builds from the
+repository checkout; `.gitattributes` leaves `coverage.zip` out of the
+release source archive, so `tools/build_docs.sh` run from that archive
+skips the coverage report.
 
 To collect coverage without generating the local HTML report:
 
