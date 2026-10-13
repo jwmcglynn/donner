@@ -16,6 +16,13 @@ import { writeFile } from "node:fs/promises";
  * of the worker-owned canvas, repeated every frame, has stalled Gecko (#1668), so the readback runs
  * once, last, and only when the page still answered the state read. Every step is bounded, so the
  * whole capture takes at most kFailureEvidenceBudgetMs even if the page stops answering.
+ *
+ * The state read also asks every worker of the page, in the same step, for what it publishes
+ * about the browser GPU bridge: the owning worker's queue timeline, object statistics and owner
+ * wait counters. Together with the raster worker's phase history from the page, that separates a
+ * worker that stopped answering from one waiting on GPU work that never completed. A worker whose
+ * JavaScript is blocked cannot answer; it is recorded as a timeout, with the time it was asked:
+ * on the page clock when the page answered, otherwise in epoch milliseconds.
  */
 
 /** Bound for each evidence step. */
@@ -65,7 +72,41 @@ interface CanvasReadback {
 }
 
 /** The page methods the capture uses, so a test can drive it with a page that never answers. */
-export type EvidencePage = Pick<Page, "evaluate" | "screenshot">;
+export type EvidencePage = Pick<Page, "evaluate" | "screenshot" | "workers">;
+
+/** Epoch milliseconds in `value`, at any depth, moved onto the page clock starting at `origin`. */
+function onPageClock(value: unknown, origin: number): unknown {
+  if (typeof value === "number") {
+    return value > 1e12 ? Math.round((value - origin) * 10) / 10 : value;
+  }
+  if (Array.isArray(value)) return value.map((item) => onPageClock(item, origin));
+  return value;
+}
+
+/**
+ * What each worker of the page publishes about the browser GPU bridge, read on demand. Times are
+ * epoch milliseconds; every read is bounded by `stepMs`.
+ */
+async function readWorkerGpuState(page: EvidencePage, stepMs: number): Promise<unknown[]> {
+  return Promise.all(page.workers().map((worker) => {
+    const askedAt = Date.now();
+    return bounded(
+      worker.evaluate(() => {
+        const g = globalThis as unknown as Record<string, unknown>;
+        const read = (name: string) =>
+          typeof g[name] === "function" ? (g[name] as () => unknown)() : null;
+        return {
+          gpuOwner: g.__donnerGpuOwner === true,
+          answeredAt: performance.timeOrigin + performance.now(),
+          ownerWait: read("__donnerReadGpuOwnerWaitStats"),
+          gpuObjects: read("__donnerReadGpuObjectStats"),
+          gpuTimeline: read("__donnerReadGpuTimeline"),
+        };
+      }).catch((error: unknown) => ({ error: String(error) })),
+      stepMs,
+    ).then((answer) => (answer === "timeout" ? { timeout: true, askedAt } : answer));
+  }));
+}
 
 /**
  * Capture the presentation state, a page screenshot and one canvas readback, and attach them.
@@ -82,10 +123,16 @@ export async function captureFailureCanvasEvidence(
   const record: Record<string, unknown> = { stepMs };
   const startedAt = Date.now();
 
+  const workersAnswer = readWorkerGpuState(page, stepMs);
   const state = await bounded(
     page.evaluate(() => {
       const w = window as unknown as Record<string, unknown>;
       return {
+        timeOrigin: performance.timeOrigin,
+        nowMs: performance.now(),
+        rasterPhases: w.__donnerRasterWorkPhases ?? null,
+        sampleThumbnails: w.__donnerSampleThumbnailStats ?? null,
+        frameLoop: w.__donnerFrameLoopStats ?? null,
         presentationQueue: w.__donnerPresentationQueueStats ?? null,
         hostFrames: w.__donnerHostFrameTiming ?? null,
         worker: w.__donnerWorkerStats ?? null,
@@ -99,6 +146,33 @@ export async function captureFailureCanvasEvidence(
     stepMs,
   );
   record.presentation = state;
+  const workers = await workersAnswer;
+  record.workers = typeof state === "object" && "timeOrigin" in state
+    ? workers.map((worker) =>
+      Object.fromEntries(
+        Object.entries(worker as Record<string, unknown>).map(([key, value]) => [
+          key,
+          key === "gpuTimeline" || key === "answeredAt" || key === "askedAt"
+            ? onPageClock(value, state.timeOrigin)
+            : value,
+        ]),
+      )
+    )
+    : workers;
+  // The test output carries the tail of each history; the attached record keeps all of it.
+  const tail = (value: unknown, count: number) =>
+    Array.isArray(value) ? value.slice(-count) : value;
+  console.log(`failure-gpu-state ${
+    JSON.stringify({
+      rasterPhases: typeof state === "object" && "rasterPhases" in state
+        ? tail(state.rasterPhases, 16)
+        : state,
+      workers: (record.workers as Record<string, unknown>[]).map((worker) => ({
+        ...worker,
+        gpuTimeline: tail(worker.gpuTimeline, 32),
+      })),
+    })
+  }`);
 
   const screenshotStartedAt = Date.now();
   const screenshot = await bounded(
