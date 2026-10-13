@@ -1,3 +1,4 @@
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <string>
@@ -29,18 +30,36 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
                                       ? std::string_view(generated)
                                       : input.substr(0, std::min(input.size(), size_t(512)));
 
-  // Build a minimal SVG with the fuzzed value as animate values.
-  std::string svg =
-      "<svg xmlns='http://www.w3.org/2000/svg'>"
-      "<rect id='r' width='100' height='100'>"
-      "<animate id='budget' attributeName='width' values='";
-  svg.append(values);
-  svg +=
-      "' begin='0s' dur='2s' />"
-      "</rect></svg>";
+  struct Target {
+    std::string_view prefix;
+    std::string_view element;
+    std::string_view attribute;
+  };
+  constexpr std::array<Target, 5> targets = {{
+      {"pair:", "feGaussianBlur", "stdDeviation"},
+      {"integer:", "feTurbulence", "numOctaves"},
+      {"order:", "feConvolveMatrix", "order"},
+      {"input:", "feOffset", "in"},
+      {"reference:", "use", "href"},
+  }};
+  Target target{"", "rect", "width"};
+  for (const auto& candidate : targets) {
+    if (input.starts_with(candidate.prefix)) {
+      target = candidate;
+      break;
+    }
+  }
+  std::string svg = "<svg xmlns='http://www.w3.org/2000/svg'><";
+  svg += target.element;
+  svg += " id='r'><animate id='budget' attributeName='";
+  svg += target.attribute;
+  svg += "' values='";
+  svg.append(values.substr(target.prefix.size()));
+  svg += "' begin='0s' dur='2s'/></";
+  svg += target.element;
+  svg += "></svg>";
 
   parser::SVGParser::Options options;
-  options.enableExperimental = true;
 
   ParseWarningSink warnings = ParseWarningSink::Disabled();
   auto result = parser::SVGParser::ParseSVG(svg, warnings, options);

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <initializer_list>
 #include <sstream>
 #include <tuple>
 #include <type_traits>
@@ -17,9 +18,12 @@
 #include "donner/svg/components/filter/FilterPrimitiveComponent.h"
 #include "donner/svg/components/layout/LayoutSystem.h"
 #include "donner/svg/components/layout/SizedElementComponent.h"
+#include "donner/svg/components/layout/SymbolComponent.h"
 #include "donner/svg/components/layout/TransformComponent.h"
 #include "donner/svg/components/paint/GradientComponent.h"
 #include "donner/svg/components/paint/LinearGradientComponent.h"
+#include "donner/svg/components/paint/MarkerComponent.h"
+#include "donner/svg/components/paint/MaskComponent.h"
 #include "donner/svg/components/paint/PatternComponent.h"
 #include "donner/svg/components/paint/RadialGradientComponent.h"
 #include "donner/svg/components/resources/ImageComponent.h"
@@ -127,6 +131,47 @@ std::optional<std::string> GeometryBaseValue(Registry& registry, Entity target,
       registry, target, attribute, context, budget);
 }
 
+std::optional<bool> SampledBoundingBoxUnits(Registry& registry, Entity target,
+                                            std::string_view attribute) {
+  const auto* values = registry.try_get<AnimatedValuesComponent>(target);
+  if (!values) {
+    return std::nullopt;
+  }
+  const auto it = values->overrides.find(std::string(attribute));
+  if (it == values->overrides.end()) {
+    return std::nullopt;
+  }
+  if (it->second == "userSpaceOnUse") {
+    return false;
+  }
+  if (it->second == "objectBoundingBox") {
+    return true;
+  }
+  return std::nullopt;
+}
+
+std::optional<RcString> InheritanceReference(Registry& registry, Entity target,
+                                             AnimationResourceBudget& budget) {
+  if (const auto* values = registry.try_get<AnimatedValuesComponent>(target)) {
+    auto it = values->overrides.find("href");
+    const auto* attributes = registry.try_get<donner::components::AttributesComponent>(target);
+    if (it == values->overrides.end() && (!attributes || !attributes->getAttribute("href"))) {
+      it = values->overrides.find("xlink:href");
+    }
+    if (it != values->overrides.end()) {
+      if (!budget.reserveSourceBytes(it->second.size())) {
+        return std::nullopt;
+      }
+      RcString href(it->second);
+      if (Reference(href).hasSafeRepresentation()) {
+        return href;
+      }
+    }
+  }
+  const auto href = AnimationReferenceValue(registry, target);
+  return href && budget.reserveSourceBytes(href->size()) ? href : std::nullopt;
+}
+
 template <typename Component, typename Value>
 std::optional<Value> InheritedGradientField(Registry& registry, Entity target,
                                             std::optional<Value> Component::* field,
@@ -137,11 +182,16 @@ std::optional<Value> InheritedGradientField(Registry& registry, Entity target,
     if (!component || !IsAnimationInSvgNamespace(registry, target)) {
       return std::nullopt;
     }
+    if constexpr (std::is_same_v<Value, GradientUnits>) {
+      if (const auto boxUnits = SampledBoundingBoxUnits(registry, target, "gradientUnits")) {
+        return *boxUnits ? GradientUnits::ObjectBoundingBox : GradientUnits::UserSpaceOnUse;
+      }
+    }
     if (component->*field) {
       return component->*field;
     }
-    const auto href = AnimationReferenceValue(registry, target);
-    if (!href || !budget.reserveSourceBytes(href->size())) {
+    const auto href = InheritanceReference(registry, target, budget);
+    if (!href) {
       return std::nullopt;
     }
     const auto reference = Reference(*href).resolve(registry);
@@ -226,6 +276,55 @@ std::string NumberPair(double first, double second) {
   output.precision(12);
   output << first << ' ' << second;
   return output.str();
+}
+
+template <typename Component>
+std::optional<std::string> LayoutLengthBaseValue(
+    Registry& registry, Entity target, std::string_view name,
+    std::initializer_list<std::pair<std::string_view, Lengthd Component::*>> fields,
+    const AnimationValueContext& context) {
+  const auto* component = registry.try_get<Component>(target);
+  if (!component) {
+    return std::nullopt;
+  }
+  for (const auto& [attribute, field] : fields) {
+    if (attribute == name) {
+      return SerializeValue(component->*field, context);
+    }
+  }
+  return std::nullopt;
+}
+
+std::optional<std::string> LayoutBaseValue(Registry& registry, Entity target, std::string_view name,
+                                           const AnimationValueContext& context) {
+  if (auto value =
+          LayoutLengthBaseValue<MarkerComponent>(registry, target, name,
+                                                 {{"markerWidth", &MarkerComponent::markerWidth},
+                                                  {"markerHeight", &MarkerComponent::markerHeight},
+                                                  {"refX", &MarkerComponent::refX},
+                                                  {"refY", &MarkerComponent::refY}},
+                                                 context)) {
+    return value;
+  }
+  if (auto value = LayoutLengthBaseValue<SymbolComponent>(
+          registry, target, name,
+          {{"refX", &SymbolComponent::refX}, {"refY", &SymbolComponent::refY}}, context)) {
+    return value;
+  }
+  if (const auto* mask = registry.try_get<MaskComponent>(target)) {
+    using Field = std::optional<Lengthd> MaskComponent::*;
+    const std::pair<std::string_view, Field> fields[] = {{"x", &MaskComponent::x},
+                                                         {"y", &MaskComponent::y},
+                                                         {"width", &MaskComponent::width},
+                                                         {"height", &MaskComponent::height}};
+    for (const auto& [attribute, field] : fields) {
+      if (attribute == name) {
+        const Lengthd fallback(name == "x" || name == "y" ? -10 : 120, Lengthd::Unit::Percent);
+        return SerializeValue((mask->*field).value_or(fallback), context);
+      }
+    }
+  }
+  return std::nullopt;
 }
 
 std::string FilterInputBaseValue(const std::optional<FilterInput>& input,
@@ -425,6 +524,11 @@ AnimationValueContext AnimationContextFor(Registry& registry, Entity target,
               .value_or(GradientUnits::Default) == GradientUnits::ObjectBoundingBox) {
     result.viewBox = Box2d{{0, 0}, {1, 1}};
   }
+  if (const auto* mask = registry.try_get<MaskComponent>(target);
+      mask && SampledBoundingBoxUnits(registry, target, "maskUnits")
+                  .value_or(mask->maskUnits == MaskUnits::ObjectBoundingBox)) {
+    result.viewBox = Box2d{{0, 0}, {1, 1}};
+  }
   if (attribute == "x" || attribute == "dx" || attribute == "x1" || attribute == "x2" ||
       attribute == "cx" || attribute == "rx" || attribute == "width" || attribute == "fx" ||
       attribute == "refX" || attribute == "markerWidth") {
@@ -470,6 +574,9 @@ std::string UnderlyingAnimationValue(Registry& registry, Entity target, std::str
   }
 
   if (auto value = GeometryBaseValue(registry, target, attribute, context, budget)) {
+    return *value;
+  }
+  if (auto value = LayoutBaseValue(registry, target, attribute, context)) {
     return *value;
   }
   if (auto value = GradientBaseValue(registry, target, attribute, context, budget)) {

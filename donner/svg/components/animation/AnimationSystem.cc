@@ -51,6 +51,20 @@ Entity resolveTargetByHrefOrParent(Registry& registry, Entity animationEntity,
   return entt::null;
 }
 
+bool AnimatesContextAttribute(Registry& registry, Entity entity, bool reference) {
+  const auto matches = [reference](std::string_view name) {
+    return reference ? name == "href" || name == "xlink:href"
+                     : name == "gradientUnits" || name == "maskUnits";
+  };
+  if (const auto* value = registry.try_get<AnimateValueComponent>(entity)) {
+    return matches(value->attributeName);
+  }
+  if (const auto* value = registry.try_get<SetAnimationComponent>(entity)) {
+    return matches(value->attributeName);
+  }
+  return false;
+}
+
 /// Returns true if the animation value should be applied (active or frozen).
 bool shouldApplyValue(AnimationPhase phase, AnimationFill fill) {
   return phase == AnimationPhase::Active ||
@@ -881,6 +895,13 @@ void AnimationSystem::advance(Registry& registry, double documentTime,
   });
   std::stable_partition(animations.begin(), animations.end(), [&](Entity entity) {
     return !registry.all_of<AnimateMotionComponent>(entity);
+  });
+  // Coordinate interpolation needs the final sampled unit selection, including inherited units.
+  std::stable_partition(animations.begin(), animations.end(), [&](Entity entity) {
+    return AnimatesContextAttribute(registry, entity, false);
+  });
+  std::stable_partition(animations.begin(), animations.end(), [&](Entity entity) {
+    return AnimatesContextAttribute(registry, entity, true);
   });
   std::unordered_map<Entity, std::string> motionBases;
   for (const Entity entity : animations) {

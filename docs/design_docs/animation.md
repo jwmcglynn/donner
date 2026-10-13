@@ -64,8 +64,12 @@ uses type-specific distances and ignores key times.
 `AnimationValueMath` handles numeric lists, unit-bearing lengths, and colors. Relative units use the
 target's viewport and font context. Path interpolation requires compatible command structures.
 Underlying values include lower animation layers, resolved style values, and typed resource references.
-URI values are discrete and non-additive, even when their text resembles a number.
-Animations are ordered by begin time, with document order breaking ties. Additive values combine
+URI and filter-input/result names are discrete and non-additive, even when their text resembles a number.
+Number-optional-number filter values repeat a single coordinate; integer fields round the final
+interpolated value to the nearest integer. Underlying filter values come from typed components,
+including nonzero defaults and implicit previous-primitive inputs.
+References and coordinate-unit selectors are sampled before dependent coordinates; motion is last.
+Within each attribute, animations are ordered by begin time, with document order breaking ties. Additive values combine
 with the underlying result; accumulation adds completed iterations' final values.
 
 Motion runs after ordinary transform/value sampling. It adds a supplemental transform while
@@ -117,9 +121,12 @@ value. The current presentation surface is:
 | Line endpoints, polygon/polyline points, path data | Animated geometry; compatible path structures required for interpolation                                    |
 | Ordinary, gradient and pattern transforms          | Transform sampling and composition; qualification in progress                                               |
 | Gradient coordinates and stop offsets              | Reversible animated values                                                                                  |
-| `viewBox`                                          | Reversible viewport rectangle                                                                               |
+| Viewports and path calibration                     | Reversible `viewBox`, `preserveAspectRatio` and `pathLength`, including initially absent components         |
+| Marker, symbol, mask and clip geometry             | Marker dimensions/orientation, marker/symbol reference points, mask regions and mask/clip units             |
+| Text paths                                         | Start offset, side, method/spacing selections and inline geometry; static renderer limitations still apply  |
 | Filter numeric/list parameters                     | Offset, blur, transfer functions, convolution, displacement, turbulence and lighting fields                 |
-| Filter and gradient enumerations                   | Discrete values for the explicitly parsed operation/type/unit fields                                        |
+| Filter and gradient enumerations                   | Discrete operation/type/unit fields, convolution edge/alpha controls, displacement channels and stitching   |
+| Filter graph references                            | Discrete `in`, `in2` and `result`; to-only sampling preserves implicit and typed input bindings             |
 | Text positioning and text length                   | Reversible positioning lists, rotation, text length and length adjustment                                   |
 | Pattern tile geometry and units                    | Reversible tile lengths and unit selections                                                                 |
 | Filter regions and primitive regions               | Reversible region lengths and unit selections                                                               |
@@ -161,8 +168,10 @@ fuzzer coverage must be expanded whenever a new input form or resource-owning pa
 - [x] Motion paths, `<mpath>`, key points, rotation, and supplemental transforms.
 - [x] Host begin/end controls, named events and bounded lifecycle queries.
 - [x] Rendered inheritance/precedence regressions and three real SVG fixture tests.
-- [ ] Finish default-parser and source-edit qualification, including element insertion/removal.
-- [ ] Finish presentation-attribute coverage and publish the verified support matrix.
+- [x] Default-parser and source-edit regressions, including element insertion/removal.
+- [ ] Finish presentation-attribute coverage and publish the verified support matrix, including
+      remaining typed layout defaults, resource/text unit contexts beyond the verified gradient and mask
+      cases, and empty references.
 - [ ] Finish independent code/security review and all new hostile-input regressions.
 - [ ] Run affected source lint, formatting, CMake generation checks, and sanitizer/fuzzer gates.
 - [ ] Run native editor interaction tests and live UI verification on the final candidate.

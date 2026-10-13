@@ -4,6 +4,7 @@
 #include <array>
 #include <cmath>
 #include <functional>
+#include <initializer_list>
 #include <limits>
 #include <map>
 #include <optional>
@@ -25,6 +26,7 @@
 #include "donner/svg/components/filter/FilterComponent.h"
 #include "donner/svg/components/filter/FilterPrimitiveComponent.h"
 #include "donner/svg/components/layout/LayoutSystem.h"
+#include "donner/svg/components/layout/SymbolComponent.h"
 #include "donner/svg/components/layout/ViewBoxComponent.h"
 #include "donner/svg/components/paint/ClipPathComponent.h"
 #include "donner/svg/components/paint/GradientComponent.h"
@@ -818,17 +820,13 @@ bool ApplyLayoutEnumeration(Registry& registry, Entity entity, std::string_view 
   return false;
 }
 
-bool ApplyMarkerLength(Registry& registry, Entity entity, std::string_view name,
-                       std::string_view value) {
-  if (!registry.all_of<MarkerComponent>(entity)) {
+template <typename Component>
+bool ApplyReferenceLength(
+    Registry& registry, Entity entity, std::string_view name, std::string_view value,
+    std::initializer_list<std::pair<std::string_view, Lengthd Component::*>> fields) {
+  if (!registry.all_of<Component>(entity)) {
     return false;
   }
-  using Field = Lengthd MarkerComponent::*;
-  static constexpr std::pair<std::string_view, Field> fields[] = {
-      {"markerWidth", &MarkerComponent::markerWidth},
-      {"markerHeight", &MarkerComponent::markerHeight},
-      {"refX", &MarkerComponent::refX},
-      {"refY", &MarkerComponent::refY}};
   for (const auto& [fieldName, field] : fields) {
     if (fieldName != name) {
       continue;
@@ -852,6 +850,18 @@ bool ApplyMarkerLength(Registry& registry, Entity entity, std::string_view name,
     return true;
   }
   return false;
+}
+
+bool ApplyViewportReferenceLength(Registry& registry, Entity entity, std::string_view name,
+                                  std::string_view value) {
+  return ApplyReferenceLength<MarkerComponent>(registry, entity, name, value,
+                                               {{"markerWidth", &MarkerComponent::markerWidth},
+                                                {"markerHeight", &MarkerComponent::markerHeight},
+                                                {"refX", &MarkerComponent::refX},
+                                                {"refY", &MarkerComponent::refY}}) ||
+         ApplyReferenceLength<SymbolComponent>(
+             registry, entity, name, value,
+             {{"refX", &SymbolComponent::refX}, {"refY", &SymbolComponent::refY}});
 }
 
 bool ApplyMarkerOrientation(Registry& registry, Entity entity, std::string_view name,
@@ -1027,7 +1037,7 @@ bool ApplyLayoutAttribute(Registry& registry, Entity entity, std::string_view na
       ApplyLayoutEnumeration(registry, entity, name, value)) {
     return true;
   }
-  if (ApplyMarkerLength(registry, entity, name, value) ||
+  if (ApplyViewportReferenceLength(registry, entity, name, value) ||
       ApplyMarkerOrientation(registry, entity, name, value) ||
       ApplyMaskOrClipUnits(registry, entity, name, value)) {
     return true;
