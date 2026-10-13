@@ -9,16 +9,18 @@ successful verification does not publish, deploy, or open a registry pull reques
 `tools/release_candidate.py` checks a record against a clean checkout at its source commit, local
 copies of the retained artifact ZIPs, the current GitHub Actions API, and the review evidence. It
 recomputes each ZIP and member digest, checks that the source archive and Linux/macOS CLI packages
-pass their existing provenance verifiers, checks the editor package's file manifest, and validates
-the Pages archive, its build marker and the docs build provenance. It rejects missing, expired,
+pass their existing provenance verifiers, checks the registry entry that BCR Preflight
+admission-validated, checks the editor package's file manifest, and validates the Pages archive,
+its build marker and the docs build provenance. It rejects missing, expired,
 mismatched, or cross-commit runs and artifacts; artifacts that expire before the
 [retention window](#ReleaseCandidateRetention) ends; evidence files and review reports whose content
-does not describe the candidate; and prerelease versions. The source and both CLIs must come from
-one BCR Preflight attempt, and the Pages artifact and docs provenance from one docs build attempt.
+does not describe the candidate; and prerelease versions. The source, both CLIs and the registry
+entry must come from one BCR Preflight attempt, and the Pages artifact and docs provenance from one
+docs build attempt.
 
 ## Record fields
 
-The top-level fields are `schema` (currently `2`), `source`, `artifacts`, `evidence`, and
+The top-level fields are `schema` (currently `3`), `source`, `artifacts`, `evidence`, and
 `reviews`. The JSON is serialized with sorted keys, compact separators, ASCII escapes, and one
 trailing newline. Its SHA-256 is recorded outside the record, in `candidate.json.sha256` beside it
 and in the release body; the record cannot contain its own hash.
@@ -29,13 +31,13 @@ and in the release body; the record cannot contain its own hash.
   artifact as `module_locks_sha256`; and each CLI platform's compiler version. The compiler
   version must equal the CLI provenance's `compiler_version` (provenance schema 3), which names
   the compiler of the C++ toolchain Bazel used for that binary.
-- `artifacts`: exactly `source`, `cli-linux`, `cli-macos`, `editor`, `docs`, and
+- `artifacts`: exactly `source`, `cli-linux`, `cli-macos`, `bcr-entry`, `editor`, `docs`, and
   `docs-provenance`. Each has a GitHub run ID and attempt, artifact ID and name, raw ZIP SHA-256,
   and a map of every ZIP member path to its uncompressed SHA-256. The artifact ID and ZIP digest
   must match GitHub's metadata. The editor package provenance also records its producer run and
   attempt; older editor packages without those fields, or without a generated lockfile, cannot
   qualify a candidate. `docs-provenance` is retained by the docs build beside its Pages artifact
-  and is never published.
+  and is never published. `bcr-entry` is described [below](#ReleaseCandidateRegistryEntry).
 - `evidence`: exactly `ci`, `coverage`, `fuzz`, and `sanitizers`. Each names a successful
   exact-source run ID and attempt, its retained evidence-file SHA-256, and successful/skipped
   **workflow job** counts. The verifier gets those counts from GitHub's attempt-specific jobs API;
@@ -45,6 +47,26 @@ and in the release body; the record cannot contain its own hash.
   bound run's logs and artifacts. See [evidence and review content](#ReleaseCandidateContent).
 - `reviews`: SHA-256 digests of the `security.md` and `supply-chain.md` reports. The record
   contains their digests; the record artifact retains the reports beside it.
+
+## Registry entry {#ReleaseCandidateRegistryEntry}
+
+The `bcr-entry` role is `donner-bcr-entry-<attempt>` from the qualifying BCR Preflight attempt:
+the registry entry that `publish-to-bcr` generated from the candidate source and that the upstream
+BCR validator then checked, with its `admission.json` report. Schema 3 added it. Its inventory is
+`admission.json`, `registry/bazel_registry.json`, `registry/modules/donner/metadata.json` and the
+version's `MODULE.bazel`, `presubmit.yml` and `source.json`, plus any earlier `donner` versions
+that preflight copied from the upstream registry. The verifier requires:
+
+- an admission report for `donner@X.Y.Z` with upstream exit code 0, or 42 (a BCR maintainer must
+  review the entry), a full validator revision and no `FAILED` result;
+- a `source.json` that names the stable release URL and the record's source archive digest;
+- `MODULE.bazel` and `presubmit.yml` byte-identical to the candidate's `MODULE.bazel` and
+  `.bcr/presubmit.yml`;
+- `metadata.json` with the maintainer fields of `.bcr/metadata.template.json`, the version listed
+  once and not yanked.
+
+BCR fork preparation submits exactly these bytes; it never regenerates the entry (see
+[the consumers](#ReleaseCandidateConsumers)).
 
 ## Dependency state {#ReleaseCandidateDependencies}
 
@@ -177,6 +199,36 @@ The `Release` workflow then:
 A missing, ambiguous, expired, mismatched or rewritten record fails the release before any upload.
 The docs site and BCR fork preparation are published by their own manually dispatched workflows;
 Release does not run them.
+
+## BCR fork preparation and docs deployment read the record {#ReleaseCandidateConsumers}
+
+Each is a separate, explicit maintainer decision and a manual dispatch on `main`. Neither builds,
+regenerates or repackages anything, and neither edits the record.
+
+- **Prepare BCR submission** (`.github/workflows/publish_bcr.yml`) takes the successful Release
+  run and the record digest from the release's `Release-Candidate-Record:` line. It requires that
+  line to name the same digest, downloads the release asset `donner-X.Y.Z.candidate.json`, checks
+  its bytes against the digest and its attestation by the assembly workflow, and takes the
+  approved source archive digest and the preflight attempt from the record. The published
+  archive's provenance must name exactly that attempt, a successful run on `main`. It then
+  downloads the record's `bcr-entry` artifact by ID, verifies it as above, copies exactly its
+  entry files onto the current registry `main` and requires the proposed commit to equal them
+  byte for byte. A change in upstream `metadata.json` since preflight fails that check; run a new
+  preflight and assemble a new record. The fork branch is prepared from those bytes; no upstream
+  pull request is opened.
+- **Build and manually deploy documentation** (`.github/workflows/deploy_docs.yaml`) with
+  `selection: record` takes the assembly `RUN_ID/ATTEMPT` and the record digest. It downloads the
+  record artifact by ID from that successful manual assembly on `main`, checks the digest,
+  checksum file and attestation, and verifies the record's `docs-provenance` artifact against
+  the record. The `docs` entry's artifact ID, run, attempt, commit and digests are the only
+  selection; the job checks them against GitHub and the downloaded `artifact.tar`, then promotes
+  that artifact ID. `selection: rollback` instead takes the six values of a previous healthy
+  build recorded in the release tracking issue, because a record has no rollback slot; see the
+  [documentation procedure](release_checklists/docs_artifact_promotion.md).
+
+Both need only that the artifacts are still retained when they run. Assembly requires 60 days of
+retention and Release 30, so fork preparation and a docs deploy have at least 30 days after
+publication; after the artifacts expire, a new candidate is needed.
 
 ## Rollback
 

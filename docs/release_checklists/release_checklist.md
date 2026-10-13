@@ -142,9 +142,16 @@ concern; the tag never moves retroactively.
       binaries with their `.NOTICE.txt` license notices, `donner-X.Y.Z.tar.gz` with its
       checksum/provenance and `donner-X.Y.Z.candidate.json` are attached, uploaded digests
       match the record's, and the release body renders correctly.
+- [ ] **Docs deployed** if approved. Dispatch `Build and manually deploy documentation` with
+      `selection: record`, the assembly run/attempt and the record digest, per the
+      [documentation procedure](docs_artifact_promotion.md). It promotes exactly the record's docs
+      build; it never rebuilds.
 - [ ] **BCR submission checked**. For a stable release, manually dispatch `Prepare BCR submission`
-      with the reviewed Release run, source commit and archive SHA-256 to prepare the owned fork
-      branch after the protected token environment is verified. Confirm the tokenless entry check
+      with the reviewed Release run and the record digest from its `Release-Candidate-Record:`
+      line to prepare the owned fork branch after the protected token environment is verified.
+      The approved archive digest, preflight attempt and registry entry come from the record; the
+      entry submitted is the one preflight admission-validated, byte for byte, never regenerated.
+      Confirm the tokenless entry check
       and the action-free protected push job both verify the bundle digest and commit. Check the
       source digest and create-only branch lease: an existing branch must be inspected,
       never advanced or replaced. A fork no-force-push ruleset adds defense in depth.

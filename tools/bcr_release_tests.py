@@ -161,12 +161,12 @@ class PublishedSourceTest(unittest.TestCase):
         for patch in patches:
             self.addCleanup(patch.stop)
 
-    def verify(self, assets=None, run_id="12", attempt="2"):
+    def check(self, assets=None, run_id="12", attempt="2"):
         return release.verify_published_source(SHA, "v1.0.0", {"assets": assets or self.assets},
                                                run_id, attempt)
 
     def test_published_bytes_are_bound_to_the_successful_exact_attempt(self):
-        self.assertEqual(self.verify(), self.receipt)
+        self.assertEqual(self.check(), self.receipt)
         self.assertEqual(self.download.call_count, 3)
         self.gh.assert_called_once_with("api", "repos/jwmcglynn/donner/actions/runs/12/attempts/2")
 
@@ -175,7 +175,7 @@ class PublishedSourceTest(unittest.TestCase):
         for run_id, attempt in (("12", "1"), ("13", "2")):
             with self.subTest(run_id=run_id, attempt=attempt):
                 with self.assertRaisesRegex(ValueError, "another preflight attempt"):
-                    self.verify(run_id=run_id, attempt=attempt)
+                    self.check(run_id=run_id, attempt=attempt)
         self.gh.assert_not_called()
         for change, message in (({"head_branch": "feature"}, "run on main"),
                                 ({"head_branch": None}, "run on main"),
@@ -183,26 +183,26 @@ class PublishedSourceTest(unittest.TestCase):
             with self.subTest(change=change):
                 self.gh.return_value = run_record(**change)
                 with self.assertRaisesRegex(ValueError, message):
-                    self.verify()
+                    self.check()
 
     def test_missing_duplicate_or_wrong_digest_assets_are_rejected(self):
         cases = [self.assets[1:], self.assets + [self.assets[0]],
                  [dict(self.assets[0], digest="sha256:different"), *self.assets[1:]]]
         for assets in cases:
             with self.subTest(assets=assets), self.assertRaises(ValueError):
-                self.verify(assets)
+                self.check(assets)
         self.gh.assert_not_called()
 
     def test_unqualified_and_failed_attempts_are_rejected(self):
         for changes in [{"verified_run_id": None}, {"verified_run_attempt": "../other"}]:
             self.verify.return_value = dict(self.receipt, **changes)
             with self.subTest(changes=changes), self.assertRaisesRegex(ValueError, "missing its CI"):
-                self.verify()
+                self.check()
         self.verify.return_value = self.receipt
         for changes in [{"conclusion": "failure"}, {"run_attempt": 3}, {"head_sha": "d" * 40}]:
             self.gh.return_value = run_record(**changes)
             with self.subTest(changes=changes), self.assertRaises(ValueError):
-                self.verify()
+                self.check()
 
 
 class SubmissionTest(unittest.TestCase):

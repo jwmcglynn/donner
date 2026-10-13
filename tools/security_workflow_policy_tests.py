@@ -1234,7 +1234,7 @@ ASSEMBLY_PUBLICATIONS = ("gh release", "gh workflow", "gh pr", "/pages/deploymen
 def _candidate_input_names(workflow):
     inputs = workflow.split("    inputs:\n", 1)[-1].split("\npermissions:", 1)[0]
     required = inputs.count("        required: true\n")
-    names = re.findall(r"(?m)^      ([a-z_]+):$", inputs)
+    names = re.findall(r"(?m)^      ([a-z][a-z0-9_]*):$", inputs)
     return names if required == len(names) else names + ["<optional input>"]
 
 
