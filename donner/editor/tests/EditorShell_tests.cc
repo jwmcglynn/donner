@@ -1025,6 +1025,9 @@ public:
     shell.advanceAnimationPreview(nowSeconds);
   }
   static bool IsAnimationPreview(const EditorShell& shell) { return shell.animationPreview_; }
+  static Box2d AnimationControlRect(const EditorShell& shell) {
+    return shell.animationPreviewControlScreenRect();
+  }
 
   static EditorApp& App(EditorShell& shell) { return shell.app_; }
   static const EditorApp& App(const EditorShell& shell) { return shell.app_; }
@@ -2310,6 +2313,25 @@ TEST(EditorShellTest, AnimationPreviewWaitsForPresentationAndRestartsWithoutEdit
   EXPECT_EQ(app.document().document().source(), source);
   EXPECT_EQ(app.isDirty(), dirty);
   EXPECT_EQ(app.canUndo(), canUndo);
+}
+
+TEST(EditorShellTest, AnimationPreviewHeaderRespondsToMouse) {
+  gui::EditorWindow window(TestWindowOptions(
+      {.title = "Animation header", .initialWidth = 1600, .initialHeight = 900}, 1.0));
+  ASSERT_TRUE(window.valid());
+  EditorShell shell(window, OptionsWithSource(kInitialSvg));
+  RunShellFrame(window, shell);
+  RunShellFrame(window, shell);
+  const Box2d rect = EditorShellTestAccess::AnimationControlRect(shell);
+  ASSERT_GT(rect.width(), 0.0);
+  const ImVec2 previewPoint(static_cast<float>(rect.topLeft.x + rect.width() * 0.75),
+                            static_cast<float>(rect.topLeft.y + rect.height() * 0.5));
+  for (const bool down : {false, true, false}) {
+    ImGui::GetIO().AddMousePosEvent(previewPoint.x, previewPoint.y);
+    ImGui::GetIO().AddMouseButtonEvent(0, down);
+    RunShellFrame(window, shell);
+  }
+  EXPECT_TRUE(EditorShellTestAccess::IsAnimationPreview(shell));
 }
 
 TEST(EditorShellTest, AnimationPreviewPresentsSuccessiveFrames) {

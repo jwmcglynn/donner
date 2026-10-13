@@ -601,8 +601,11 @@ private:
   [[nodiscard]] bool previewAllowsEditing(bool allowed) const;
   void applyPreviewMenuState(MenuBarState& state) const;
   void renderAnimationPreviewControl();
+  void renderAnimationModePanel();
+  [[nodiscard]] bool animationFramePresented() const;
   [[nodiscard]] Box2d animationPreviewControlScreenRect() const;
 
+  Box2d animationPreviewControlRect_;
   bool animationPreview_ = false;
   bool animationResetPending_ = false;
   double animationPreviewStartSeconds_ = 0.0;
