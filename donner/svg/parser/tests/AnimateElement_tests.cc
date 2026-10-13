@@ -7,6 +7,7 @@
 
 #include "donner/base/tests/ParseResultTestUtils.h"
 #include "donner/svg/SVGDocument.h"
+#include "donner/svg/SVGUseElement.h"
 #include "donner/svg/components/animation/AnimateValueComponent.h"
 #include "donner/svg/components/animation/AnimatedValuesComponent.h"
 #include "donner/svg/components/animation/AnimationSystem.h"
@@ -1480,6 +1481,27 @@ TEST(SVGAnimateElement, MixedTextPositionUnitsUseTheirOwnViewportAxis) {
     </text></svg>)svg");
   EXPECT_THAT(getAnimatedValue(document, "#r", "dx", 1), testing::Optional(testing::StrEq("55")));
   EXPECT_THAT(getAnimatedValue(document, "#r", "dy", 1), testing::Optional(testing::StrEq("30")));
+}
+
+TEST(SVGAnimateElement, ReferenceValuesAreDiscreteAndNonAdditive) {
+  auto document = parseSVGWithExperimental(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg"><use id="r" href="9">
+      <animate attributeName="href" values="1;10" dur="2s" additive="sum" accumulate="sum" repeatCount="2"/>
+    </use></svg>)svg");
+  EXPECT_THAT(getAnimatedValue(document, "#r", "href", 0.5),
+              testing::Optional(testing::StrEq("1")));
+  EXPECT_THAT(getAnimatedValue(document, "#r", "href", 3.5),
+              testing::Optional(testing::StrEq("10")));
+}
+
+TEST(SVGAnimateElement, ToOnlyReferenceUsesTheTypedBaseValue) {
+  auto document = parseSVGWithExperimental(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg"><use id="r" href="#a">
+      <animate attributeName="href" to="#c" dur="2s"/>
+    </use></svg>)svg");
+  document.querySelector("#r")->cast<SVGUseElement>().setHref("#b");
+  EXPECT_THAT(getAnimatedValue(document, "#r", "href", 0.25),
+              testing::Optional(testing::StrEq("#b")));
 }
 
 }  // namespace donner::svg
