@@ -218,7 +218,7 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         main_test = self._step_body(hosted, "Test")
         self.assertIn(
             "--test_tag_filters=-manual,-perf,-requires_metal_toolchain,-ci-remote-gpu,"
-            "-launches-browser ",
+            "-launches-browser,-fuzz_soak ",
             main_test,
         )
         browser = self._step_body(hosted, "Test (browser targets)")
@@ -235,7 +235,7 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         self.assertIn("--local_test_jobs=1", browser)
         self.assertIn(
             "--test_tag_filters=launches-browser,-manual,-perf,-requires_metal_toolchain,"
-            "-ci-remote-gpu ",
+            "-ci-remote-gpu,-fuzz_soak ",
             browser,
         )
         self.assertIn("$BAZEL_MACOS_TEST_FLAGS $BROWSER_STALL_TEST_FLAGS $TARGETS", browser)
@@ -253,7 +253,8 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         job = self._job_body("macos-self-hosted")
         main_test = self._step_body(job, "Test")
         self.assertIn(
-            "--test_tag_filters=-manual,-perf,-ci-remote-gpu,-launches-browser ", main_test)
+            "--test_tag_filters=-manual,-perf,-ci-remote-gpu,-launches-browser,-fuzz_soak ",
+            main_test)
         browser = self._step_body(job, "Test (browser targets)")
         self.assertLess(job.index("      - name: Test\n"),
                         job.index("      - name: Test (browser targets)\n"))
@@ -265,7 +266,8 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
             "steps.test.outcome == 'failure') }}", browser)
         self.assertIn("--local_test_jobs=1", browser)
         self.assertIn(
-            "--test_tag_filters=launches-browser,-manual,-perf,-ci-remote-gpu ", browser)
+            "--test_tag_filters=launches-browser,-manual,-perf,-ci-remote-gpu,-fuzz_soak ",
+            browser)
         self.assertIn("bazelisk --nohome_rc test --config=ci", browser)
         for phase in (main_test, browser):
             self.assertIn("$BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS $TARGETS", phase)
@@ -727,6 +729,45 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
             with self.subTest(job=job_name):
                 job = self._job_body(job_name)
                 self.assertEqual(1, job.count("--test_tag_filters=-manual,-perf"))
+
+    def test_pr_test_lanes_exclude_fuzz_soaks(self):
+        """Mutation soaks run in the Fuzz workflow; PR CI keeps only the corpus replay."""
+        ci_filter = re.search(r"(?m)^test:ci --test_tag_filters=(\S+)$", self.bazelrc)
+        self.assertIsNotNone(ci_filter)
+        self.assertIn("-fuzz_soak", ci_filter.group(1).split(","))
+        selected_suites = set()
+        for job_name in ("linux", "linux-self-hosted", "macos", "macos-self-hosted"):
+            job = self._job_body(job_name)
+            filters = re.findall(r"--test_tag_filters=(\S*)", job)
+            self.assertTrue(filters, job_name)
+            for value in filters:
+                # An empty filter accompanies an explicit //tools/ci suite, checked below.
+                if value:
+                    with self.subTest(job=job_name, filters=value):
+                        self.assertIn("-fuzz_soak", value.split(","))
+            uncommented = "\n".join(
+                line for line in job.splitlines() if not line.lstrip().startswith("#"))
+            selected_suites.update(re.findall(r"//tools/ci:(\w+)", uncommented))
+            for variable in re.findall(r"\$(\w+_TARGETS)\b", uncommented):
+                definition = re.search(
+                    r"(?m)^      %s: >-\n((?:        .*\n)+)" % variable, job)
+                self.assertIsNotNone(definition, variable)
+                selected_suites.update(re.findall(r"//tools/ci:(\w+)", definition.group(1)))
+        self.assertTrue(selected_suites)
+        suites = dict(re.findall(
+            r'(?ms)^test_suite\(\n    name = "(\w+)",\n(.*?)^\)$', self.ci_target_definitions))
+        pending = sorted(selected_suites)
+        seen = set()
+        while pending:
+            name = pending.pop()
+            if name in seen:
+                continue
+            seen.add(name)
+            if name not in suites:
+                continue  # Not a suite, such as a build-only canary binary.
+            with self.subTest(suite=name):
+                self.assertNotRegex(suites[name], r'_soak"')
+            pending.extend(re.findall(r'"(?://tools/ci)?:(\w+)"', suites[name]))
 
     def test_linux_wgpu_resvg_reference_is_selected_only_for_relevant_prs(self):
         """The manual comparison and dependency audit stay in the explicit Linux suite."""

@@ -417,7 +417,7 @@ build:tsan --strip=never
 build:tsan --test_env=TSAN_OPTIONS=halt_on_error=1:second_deadlock_stack=1
 
 # Long-budget fuzzing. Raises the `{fuzzer}_soak` targets' libFuzzer time
-# budget above the short PR-gate default. Used by the nightly Fuzz workflow,
+# budget above the short local default. Used by the nightly Fuzz workflow,
 # which pairs it with --config=asan-fuzzer so a discovered input is diagnosable.
 common:fuzz-soak --//build_defs:fuzz_soak=true
 
@@ -487,7 +487,9 @@ build:ci --skip_incompatible_explicit_targets
 # use `perf`. Filtering both tags protects affected-target lists and full `//...`
 # fallbacks even when a runner bazelrc changes wildcard expansion or config
 # precedence. See CLAUDE.md ("wall-clock budgets move to nightly perf targets").
-test:ci --test_tag_filters=-manual,-perf,-ci-remote-gpu
+# `fuzz_soak` marks the time-budgeted `{fuzzer}_soak` mutation targets, which run
+# only in the Fuzz workflow; the `{fuzzer}` corpus replay stays on the PR gate.
+test:ci --test_tag_filters=-manual,-perf,-ci-remote-gpu,-fuzz_soak
 
 # Allow `bazel run` on sharded test targets (sharding only applies to `bazel test`).
 run --test_sharding_strategy=disabled
