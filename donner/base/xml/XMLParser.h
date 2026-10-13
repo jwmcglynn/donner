@@ -12,7 +12,11 @@
 namespace donner::xml {
 
 /**
- * Parses an XML document from a string.
+ * Parses an XML document from UTF-8 bytes.
+ *
+ * This byte API does not transcode other encodings. An encoding declaration, when present, must
+ * name UTF-8 (case-insensitively); other declared encodings return an unsupported-input error.
+ * Transcode legacy input and update or remove its encoding declaration before calling Parse.
  *
  * The document tree will remain valid as long as the returned \ref XMLDocument is alive.
  */
