@@ -265,6 +265,7 @@ std::optional<ParseDiagnostic> ParseNodeContents<SVGStyleElement>(SVGParserConte
         }
       }
     }
+    sourceMap.setCssLength(combined.size());
     if (!combined.empty()) {
       auto& stylesheetComponent =
           element.entityHandle().get_or_emplace<components::StylesheetComponent>();

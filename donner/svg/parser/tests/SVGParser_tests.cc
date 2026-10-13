@@ -206,6 +206,20 @@ TEST(SVGParser, CssImportAfterUnmappedChunkBoundaryKeepsCssLocalOffset) {
   EXPECT_THAT(warnings.warnings().front().range.start.lineInfo, testing::Eq(std::nullopt));
 }
 
+TEST(SVGParser, StylesheetPointMappingUsesSegmentEndOnlyAtStylesheetEnd) {
+  components::StylesheetSourceMap trailingUnmapped;
+  trailingUnmapped.addSegment(0, 3, FileOffset::Offset(100));
+  trailingUnmapped.setCssLength(10);
+  EXPECT_THAT(trailingUnmapped.mapPointToDocumentSource(FileOffset::Offset(3)),
+              testing::Eq(std::nullopt));
+
+  components::StylesheetSourceMap fullyMapped;
+  fullyMapped.addSegment(0, 3, FileOffset::Offset(100));
+  fullyMapped.setCssLength(3);
+  EXPECT_THAT(fullyMapped.mapPointToDocumentSource(FileOffset::Offset(3)),
+              testing::Eq(FileOffset::Offset(103)));
+}
+
 TEST(SVGParser, CssImportWarningRefusalFlagsSurviveSourceMapping) {
   std::string source = "<svg xmlns='http://www.w3.org/2000/svg'><style>";
   for (std::size_t i = 0; i <= ParseWarningSink::kMaximumWarnings; ++i) {

@@ -65,7 +65,8 @@ std::optional<FileOffset> StylesheetSourceMap::mapPointToDocumentSource(
                                 segment.cssStartOffset);
     }
   }
-  if (!segments_.empty() && *localOffset.offset == segments_.back().cssEndOffset) {
+  if (!segments_.empty() && cssLength_ == *localOffset.offset &&
+      segments_.back().cssEndOffset == *cssLength_) {
     const auto& last = segments_.back();
     return FileOffset::Offset(*last.documentStartOffset.offset + last.cssEndOffset -
                               last.cssStartOffset);

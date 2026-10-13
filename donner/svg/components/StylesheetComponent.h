@@ -39,6 +39,17 @@ public:
                   FileOffset documentStartOffset);
 
   /**
+   * Record the length of the concatenated CSS text this map describes.
+   *
+   * Point diagnostics at the end of the last mapped segment map to that segment's end only when
+   * it is also the end of the stylesheet; a later chunk without source provenance makes that point
+   * unmappable instead.
+   *
+   * @param cssLength Length in bytes of the concatenated CSS text.
+   */
+  void setCssLength(std::size_t cssLength) { cssLength_ = cssLength; }
+
+  /**
    * Return true when no local CSS offsets can be mapped to document source.
    */
   bool empty() const { return segments_.empty(); }
@@ -52,7 +63,9 @@ public:
   std::optional<SourceRange> mapToDocumentSource(const SourceRange& localRange) const;
 
   /**
-   * Map a point diagnostic, preferring the next chunk at a shared CSS boundary.
+   * Map a point diagnostic, preferring the next chunk at a shared CSS boundary. The stylesheet
+   * end maps to the end of the last segment only when \ref setCssLength recorded that the last
+   * segment reaches it.
    *
    * @param localOffset Point in the parsed CSS string.
    * @return Document offset, or nullopt when no source segment covers the point.
@@ -78,6 +91,7 @@ private:
   std::optional<FileOffset> mapOffset(const FileOffset& localOffset) const;
 
   std::vector<StylesheetSourceMapSegment> segments_;
+  std::optional<std::size_t> cssLength_;  ///< Concatenated CSS length, when recorded.
 };
 
 /**
