@@ -607,7 +607,9 @@ donner_cc_test(
 donner_cc_test(
     name = "renderer_animation_presentation_tests",
     srcs = [
+        "RendererAnimationCoordinateContext_tests.cc",
         "RendererAnimationFilter_tests.cc",
+        "RendererAnimationLayoutBase_tests.cc",
         "RendererAnimationPresentation_tests.cc",
     ],
     opens_gpu_device = True,
