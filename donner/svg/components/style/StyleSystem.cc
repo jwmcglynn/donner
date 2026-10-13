@@ -400,9 +400,19 @@ PropertyRegistry StyleSystem::inheritComputedParent(EntityHandle handle, Entity 
                                                     ParseWarningSink& warningSink) {
   Registry& registry = *handle.registry();
   const auto* occurrence = ExternalRootContext(registry, handle.entity());
-  PropertyRegistry result = occurrence
-                                ? inheritExternalParent(properties, *occurrence->parent)
-                                : inheritProperties(registry, parent, properties, warningSink);
+  const PropertyState fillState = properties.fill.state;
+  const PropertyState strokeState = properties.stroke.state;
+  PropertyRegistry result;
+  if (occurrence) {
+    result = inheritExternalParent(properties, *occurrence->parent);
+    if (BlockExternalResources(result, properties)) {
+      rejectExternalHostResource(registry);
+      warningSink.add(ParseDiagnostic::Error("External-use inherited URL resources are unsupported",
+                                             FileOffset::Offset(0)));
+    }
+  } else {
+    result = inheritProperties(registry, parent, std::move(properties), warningSink);
+  }
   const auto* parentStyle =
       parent != entt::null ? registry.try_get<ComputedStyleComponent>(parent) : nullptr;
   const bool allowPaint = occurrence || !registry.all_of<DoNotInheritFillOrStrokeTag>(parent);
