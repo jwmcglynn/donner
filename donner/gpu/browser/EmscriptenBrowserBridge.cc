@@ -43,7 +43,7 @@ void donner_gpu_release_device(unsigned int device);
 int donner_gpu_begin_device_request(unsigned int device);
 int donner_gpu_device_request_state(unsigned int device);
 int donner_gpu_read_request_error(unsigned int device, char* destination, int capacity);
-int donner_gpu_owns_device(unsigned int device);
+int donner_gpu_device_status(unsigned int device);
 int donner_gpu_is_device_lost(unsigned int device);
 int donner_gpu_read_lost_reason(unsigned int device, char* destination, int capacity);
 double donner_gpu_completed_serial(unsigned int device);
@@ -183,8 +183,8 @@ template <auto Function, typename... Args>
 auto CallBrowserGpu(Args... args) -> decltype(Function(args...)) {
   using Result = decltype(Function(args...));
   constexpr BrowserGpuOperationKind kind = [] {
-    if constexpr (std::is_same_v<decltype(Function), decltype(&donner_gpu_owns_device)>) {
-      if constexpr (Function == &donner_gpu_owns_device) {
+    if constexpr (std::is_same_v<decltype(Function), decltype(&donner_gpu_device_status)>) {
+      if constexpr (Function == &donner_gpu_device_status) {
         return BrowserGpuOperationKind::OwnershipQuery;
       } else if constexpr (Function == &donner_gpu_is_device_lost) {
         return BrowserGpuOperationKind::DeviceLossQuery;
@@ -453,8 +453,8 @@ RcString EmscriptenBrowserBridge::deviceRequestError() const {
   return ReadMessage(logicalDevice_, &CallBrowserGpu<donner_gpu_read_request_error>);
 }
 
-bool EmscriptenBrowserBridge::ownsDevice() const {
-  return CallBrowserGpu<donner_gpu_owns_device>(logicalDevice_) != 0;
+BridgeStatus EmscriptenBrowserBridge::deviceStatus() const {
+  return StatusFromBrowser(CallBrowserGpu<donner_gpu_device_status>(logicalDevice_));
 }
 
 bool EmscriptenBrowserBridge::isDeviceLost() const {

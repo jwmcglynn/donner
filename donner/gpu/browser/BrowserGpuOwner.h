@@ -6,7 +6,7 @@
 
 namespace donner::gpu::browser {
 
-/// Bounded dispatch categories used to distinguish state queries from other browser primitives.
+/// Bounded dispatch categories; OwnershipQuery includes the combined ownership/loss query.
 enum class BrowserGpuOperationKind { Other, OwnershipQuery, DeviceLossQuery, CompletionQuery };
 
 /// Register the calling application thread before creating any browser GPU devices or workers.

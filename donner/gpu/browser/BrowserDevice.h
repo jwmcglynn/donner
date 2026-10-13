@@ -266,6 +266,9 @@ private:
   /// @return Whether the browser reports the device lost.
   bool observeBrowserLoss() const;
 
+  /// Publishes an observed browser loss to all devices sharing its loss condition.
+  void recordBrowserLoss() const;
+
   /**
    * Fails closed unless this device can still be used from here: not lost, and called from the
    * context that owns the browser device.

@@ -206,6 +206,10 @@ public:
   BridgeStatus beginStatus = BridgeStatus::Success;
   /// Whether the calling context owns the device.
   bool owned = true;
+  /// Number of combined ownership/loss queries.
+  mutable size_t deviceStatusQueries = 0;
+  /// Optional status-query failure for validating fail-closed callers.
+  std::optional<BridgeStatus> deviceStatusOverride;
   /// Whether the browser has reported the device lost to this logical device. The shared device's
   /// own \ref FakeBrowserGpuDevice::lost reports it to every logical device over it.
   bool lost = false;
@@ -303,7 +307,16 @@ public:
 
   RcString deviceRequestError() const override { return requestError; }
 
-  bool ownsDevice() const override { return owned; }
+  BridgeStatus deviceStatus() const override {
+    ++deviceStatusQueries;
+    if (deviceStatusOverride.has_value()) {
+      return *deviceStatusOverride;
+    }
+    if (!owned) {
+      return BridgeStatus::NotOwner;
+    }
+    return isDeviceLost() ? BridgeStatus::DeviceLost : BridgeStatus::Success;
+  }
 
   bool isDeviceLost() const override { return lost || gpuDevice->lost; }
 

@@ -393,6 +393,28 @@ TEST(BrowserDevice, ReleasesEveryBrowserObjectWhenTheDeviceIsDestroyed) {
   EXPECT_THAT(objects->size(), 0u);
 }
 
+TEST(BrowserDevice, CreationUsesOneCurrentDeviceStatusQuery) {
+  BrowserFixture fixture = MakeDevice();
+  ASSERT_THAT(fixture.device, testing::NotNull());
+  const size_t before = fixture.bridge->deviceStatusQueries;
+  EXPECT_THAT(fixture.device->createBuffer(SimpleBuffer(BufferUsage::Vertex)), HasResult());
+  EXPECT_THAT(fixture.bridge->deviceStatusQueries, before + 1);
+}
+
+TEST(BrowserDevice, UnexpectedDeviceStatusFailsClosedBeforeCreatingObjects) {
+  for (const BridgeStatus status :
+       {BridgeStatus::Failed, BridgeStatus::UnknownObject, BridgeStatus::WrongObjectKind}) {
+    SCOPED_TRACE(status);
+    BrowserFixture fixture = MakeDevice();
+    ASSERT_THAT(fixture.device, testing::NotNull());
+    fixture.bridge->deviceStatusOverride = status;
+    EXPECT_THAT(
+        fixture.device->createBuffer(SimpleBuffer(BufferUsage::Vertex)),
+        IsGpuErrorWithMessage(GpuErrorType::InvalidState, HasSubstr("status query failed")));
+    EXPECT_THAT(*fixture.bridge->objects, testing::IsEmpty());
+  }
+}
+
 TEST(BrowserDevice, RefusesCreationFromAContextThatDoesNotOwnTheDevice) {
   BrowserFixture fixture = MakeDevice();
   ASSERT_THAT(fixture.device, testing::NotNull());
@@ -414,6 +436,7 @@ TEST(BrowserDevice, RefusesCreationFromAnotherThread) {
   EXPECT_THAT(fromOtherThread, IsGpuErrorWithMessage(GpuErrorType::InvalidState,
                                                      HasSubstr("cannot be used from another "
                                                                "thread")));
+  EXPECT_THAT(fixture.bridge->deviceStatusQueries, 0u);
 }
 
 TEST(BrowserDevice, NonOwningContextCannotReadWriteSubmitOrAcquireExistingResources) {
