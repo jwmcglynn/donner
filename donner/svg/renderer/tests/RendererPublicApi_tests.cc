@@ -17,6 +17,7 @@
 #include "donner/svg/SVG.h"
 #include "donner/svg/SVGRectElement.h"
 #include "donner/svg/SVGTextElement.h"
+#include "donner/svg/SVGUnknownElement.h"
 #include "donner/svg/SVGUseElement.h"
 #include "donner/svg/components/filter/FilterGraph.h"
 #include "donner/svg/renderer/Renderer.h"
@@ -913,6 +914,78 @@ TEST(RendererPublicApiTest, UnknownSvgWrapperDoesNotPaintDescendants) {
   editor::tests::CompareBitmapToBitmap(NormalizeSnapshot(renderer.takeSnapshot()),
                                        NormalizeSnapshot(expectedRenderer.takeSnapshot()),
                                        "unknown_svg_wrapper_does_not_paint_descendants",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(RendererPublicApiTest, SourceInsertedUnsupportedWrappersDoNotPaint) {
+  for (const std::string_view replacement :
+       {"<unsupported id='u' style='display:inline!important'><rect id='inner' width='16' "
+        "height='12' fill='red'/></unsupported>",
+        "<other:g id='u'><rect id='inner' width='16' height='12' fill='red'/></other:g>"}) {
+    SCOPED_TRACE(replacement);
+    SVGDocument document = ParseDocument(R"svg(
+        <svg xmlns="http://www.w3.org/2000/svg" xmlns:other="http://example.test/other" width="16" height="12">
+          <rect width="16" height="12" fill="green"/>
+          <g id="host"><rect id="old"/></g>
+        </svg>
+      )svg");
+    SVGDocument expected = ParseDocument(R"svg(
+        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="12">
+          <rect width="16" height="12" fill="green"/>
+        </svg>
+      )svg");
+    constexpr std::string_view oldChild = R"(<rect id="old"/>)";
+    const size_t editStart = document.source().find(oldChild);
+    ASSERT_THAT(editStart, testing::Ne(std::string_view::npos));
+    const auto result = document.applySourceEdit(xml::XMLEditIntent{
+        .range = SourceRange{FileOffset::Offset(editStart),
+                             FileOffset::Offset(editStart + oldChild.size())},
+        .replacement = RcString(replacement),
+        .sourceVersion = document.sourceVersion(),
+    });
+    ASSERT_THAT(result.applied, testing::IsTrue());
+    ASSERT_THAT(result.diagnostic, testing::Eq(std::nullopt));
+    ASSERT_THAT(document.querySelector("#u"), testing::Ne(std::nullopt));
+    EXPECT_THAT(document.querySelector("#u")->type(), testing::Eq(ElementType::Unknown));
+    ASSERT_THAT(document.querySelector("#inner"), testing::Ne(std::nullopt));
+    EXPECT_THAT(document.querySelector("#inner")->type(), testing::Eq(ElementType::Rect));
+    Renderer renderer;
+    renderer.draw(document);
+    Renderer expectedRenderer;
+    expectedRenderer.draw(expected);
+    editor::tests::CompareBitmapToBitmap(NormalizeSnapshot(renderer.takeSnapshot()),
+                                         NormalizeSnapshot(expectedRenderer.takeSnapshot()),
+                                         "source_inserted_unsupported_wrapper",
+                                         editor::tests::PixelmatchIdentityParams());
+  }
+}
+
+TEST(RendererPublicApiTest, SourceProjectionPromotesKnownSvgContainerToRenderableGroup) {
+  SVGDocument document = ParseDocument(R"svg(
+      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="12"/>
+    )svg");
+  SVGUnknownElement container = SVGUnknownElement::Create(document, "g");
+  SVGRectElement rect = SVGRectElement::Create(document);
+  rect.setWidth(Lengthd(16));
+  rect.setHeight(Lengthd(12));
+  rect.setAttribute("fill", "green");
+  container.appendChild(rect);
+  const auto result = document.insertElement(document.svgElement(), container);
+  ASSERT_THAT(result.applied, testing::IsTrue());
+  ASSERT_THAT(result.diagnostic, testing::Eq(std::nullopt));
+  EXPECT_THAT(container.type(), testing::Eq(ElementType::G));
+  SVGDocument expected = ParseDocument(R"svg(
+      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="12">
+        <g><rect width="16" height="12" fill="green"/></g>
+      </svg>
+    )svg");
+  Renderer renderer;
+  renderer.draw(document);
+  Renderer expectedRenderer;
+  expectedRenderer.draw(expected);
+  editor::tests::CompareBitmapToBitmap(NormalizeSnapshot(renderer.takeSnapshot()),
+                                       NormalizeSnapshot(expectedRenderer.takeSnapshot()),
+                                       "source_projection_known_group",
                                        editor::tests::PixelmatchIdentityParams());
 }
 
