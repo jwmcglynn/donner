@@ -85,6 +85,17 @@ TEST(StylesheetParser, Empty) {
   EXPECT_THAT(StylesheetParser::Parse("", disabled).rules(), ElementsAre());
 }
 
+TEST(StylesheetParser, ImportIsUnsupportedButFollowingRulesRemain) {
+  constexpr std::string_view kCss = "  @import 'hidden.css'; rect { fill: green; }";
+  ParseWarningSink warnings;
+  const Stylesheet sheet = StylesheetParser::Parse(kCss, warnings);
+  EXPECT_THAT(sheet.rules(), testing::SizeIs(1));
+  EXPECT_THAT(warnings.warnings(),
+              ElementsAre(ParseDiagnostic::Warning(
+                  "CSS @import is unsupported; imported stylesheets are not loaded",
+                  FileOffset::Offset(2))));
+}
+
 TEST(StylesheetParser, WithRules) {
   ParseWarningSink disabled = ParseWarningSink::Disabled();
   EXPECT_THAT(StylesheetParser::Parse(R"(

@@ -123,6 +123,23 @@ TEST(SVGParser, Style) {
   EXPECT_THAT(warnings.warnings(), ElementsAre());
 }
 
+TEST(SVGParser, CssImportWarningUsesDocumentSourceOffset) {
+  const std::string source =
+      "<svg xmlns='http://www.w3.org/2000/svg'><style>\n "
+      "@import 'hidden.css'; rect { fill: green; }</style><rect/></svg>";
+  ParseWarningSink warnings;
+  EXPECT_THAT(SVGParser::ParseSVG(source, warnings), NoParseError());
+  ASSERT_THAT(warnings.warnings(), testing::SizeIs(1));
+  EXPECT_THAT(warnings.warnings()[0].severity, testing::Eq(DiagnosticSeverity::Warning));
+  EXPECT_THAT(warnings.warnings()[0].reason,
+              testing::Eq("CSS @import is unsupported; imported stylesheets are not loaded"));
+  EXPECT_THAT(warnings.warnings()[0].range.start.offset, testing::Eq(source.find("@import")));
+  EXPECT_THAT(
+      warnings.warnings()[0],
+      ParseWarningIs(
+          2, 1, testing::Eq("CSS @import is unsupported; imported stylesheets are not loaded")));
+}
+
 TEST(SVGParser, StyleConcatenatesTextAndCDataButRejectsElementChildren) {
   const std::string_view styleXml(
       R"(<svg xmlns="http://www.w3.org/2000/svg">

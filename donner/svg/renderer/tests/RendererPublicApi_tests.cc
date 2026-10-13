@@ -890,6 +890,23 @@ TEST(RendererPublicApiTest, FeImageFragmentUsesItsOwnSubregionOrigin) {
   }
 }
 
+TEST(RendererPublicApiTest, UnsupportedCssImportKeepsFollowingLocalRules) {
+  SVGDocument document = ParseDocument(
+      "<svg xmlns='http://www.w3.org/2000/svg' width='4' height='4'>"
+      "<style>@import 'hidden.css'; rect { fill: green; }</style>"
+      "<rect width='4' height='4' fill='red'/></svg>");
+  SVGDocument reference = ParseDocument(
+      "<svg xmlns='http://www.w3.org/2000/svg' width='4' height='4'>"
+      "<rect width='4' height='4' fill='green'/></svg>");
+  Renderer actual;
+  actual.draw(document);
+  Renderer expected;
+  expected.draw(reference);
+  editor::tests::CompareBitmapToBitmap(
+      NormalizeSnapshot(actual.takeSnapshot()), NormalizeSnapshot(expected.takeSnapshot()),
+      "unsupported_css_import_following_rule", editor::tests::PixelmatchIdentityParams());
+}
+
 TEST(RendererPublicApiTest, SnapshotReportsAndReturnsStraightAlpha) {
   // Backends composite in premultiplied space but publish straight alpha, so a
   // half-covered pixel has to come back carrying its full-strength color. A
