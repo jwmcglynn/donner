@@ -2,6 +2,7 @@ import { expect, type Page, test } from "@playwright/test";
 import { execFileSync } from "node:child_process";
 import { writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { PNG } from "pngjs";
 import { installBrowserStallDiagnostics } from "./browser-stall-diagnostics";
 
 installBrowserStallDiagnostics(test);
@@ -435,10 +436,24 @@ test("standalone Geode wasm selects the browser backend and paints SVG pixels", 
     "the standalone browser module must create only one WebGPU device",
   ).toBe(1);
 
-  const png = await page.locator("#canvas").evaluate((element) =>
-    (element as HTMLCanvasElement).toDataURL("image/png")
-  );
-  expect(png).toMatch(/^data:image\/png;base64,/);
+  // Compare the renderer's RGBA, not a canvas readback: the 2D canvas premultiplies alpha,
+  // and its unpremultiply rounding on export varies between browser releases.
+  const rendered = await page.evaluate(() => {
+    const render = (window as Window & {
+      __donnerLastRender?: { width: number; height: number; rgba: Uint8ClampedArray };
+    }).__donnerLastRender;
+    if (!render) return null;
+    let binary = "";
+    for (let offset = 0; offset < render.rgba.length; offset += 0x8000) {
+      binary += String.fromCharCode(...render.rgba.subarray(offset, offset + 0x8000));
+    }
+    return { width: render.width, height: render.height, rgba: btoa(binary) };
+  });
+  expect(rendered, "the page must expose the renderer's RGBA output").not.toBeNull();
+  const image = new PNG({ width: rendered!.width, height: rendered!.height });
+  const rgba = Buffer.from(rendered!.rgba, "base64");
+  expect(rgba.length).toBe(rendered!.width * rendered!.height * 4);
+  rgba.copy(image.data);
   const outputDirectory = process.env.TEST_UNDECLARED_OUTPUTS_DIR;
   const compare = process.env.DONNER_BROWSER_GOLDEN_COMPARE;
   const golden = process.env.DONNER_BROWSER_GOLDEN_PNG;
@@ -446,7 +461,7 @@ test("standalone Geode wasm selects the browser backend and paints SVG pixels", 
   expect(compare, "the shared pixelmatch comparator is missing").toBeTruthy();
   expect(golden, "the committed SVG golden is missing").toBeTruthy();
   const actual = join(outputDirectory!, "standalone_geode_browser_actual.png");
-  writeFileSync(actual, Buffer.from(png.slice("data:image/png;base64,".length), "base64"));
+  writeFileSync(actual, PNG.sync.write(image));
   execFileSync(resolve(compare!), [], {
     env: {
       ...process.env,
