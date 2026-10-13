@@ -142,6 +142,11 @@ runs:
           echo "build --remote_timeout=60s"
           echo "build --remote_cache_compression"
           echo "build --remote_download_outputs=${DOWNLOAD_OUTPUTS}"
+          # rules_playwright unpacks each browser into a directory output. When
+          # that output comes from a cache (remote or disk) and is fetched only
+          # when a test needs it, its macOS app bundle cannot be staged into the
+          # test sandbox. Download the browser trees in full on every cache hit.
+          echo 'build --remote_download_regex=.*/rules_playwright[+][^/]*/browsers/.*'
           if [[ "${upload}" == "true" ]]; then
             echo "build --remote_upload_local_results"
           else
