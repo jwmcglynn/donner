@@ -4,11 +4,18 @@
 #include <type_traits>
 
 #include "donner/base/xml/components/AttributesComponent.h"
+#include "donner/svg/components/ElementTypeComponent.h"
 #include "donner/svg/components/SVGDocumentContext.h"
 #include "donner/svg/components/animation/AnimatedValuesComponent.h"
+#include "donner/svg/components/filter/FilterComponent.h"
 #include "donner/svg/components/layout/LayoutSystem.h"
 #include "donner/svg/components/layout/TransformComponent.h"
+#include "donner/svg/components/paint/GradientComponent.h"
+#include "donner/svg/components/paint/PatternComponent.h"
+#include "donner/svg/components/resources/ImageComponent.h"
+#include "donner/svg/components/shadow/ShadowTreeComponent.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
+#include "donner/svg/components/text/TextPathComponent.h"
 
 namespace donner::svg::components {
 namespace {
@@ -51,11 +58,52 @@ std::optional<std::string> StyleValue(const PropertyRegistry& properties,
   return result;
 }
 
+template <typename Component>
+std::optional<RcString> ReadReference(Registry& registry, Entity entity) {
+  const auto* component = registry.try_get<Component>(entity);
+  if (!component) {
+    return std::nullopt;
+  }
+  if constexpr (std::is_same_v<decltype(component->href), RcString>) {
+    return component->href;
+  } else {
+    return component->href ? std::optional(component->href->href) : std::nullopt;
+  }
+}
+
 }  // namespace
+
+std::optional<RcString> AnimationReferenceValue(Registry& registry, Entity entity) {
+  const auto* type = registry.try_get<ElementTypeComponent>(entity);
+  switch (type ? type->type() : ElementType::Unknown) {
+    case ElementType::Use: {
+      const auto* shadow = registry.try_get<ShadowTreeComponent>(entity);
+      return shadow ? shadow->mainHref() : std::nullopt;
+    }
+    case ElementType::LinearGradient:
+    case ElementType::RadialGradient: return ReadReference<GradientComponent>(registry, entity);
+    case ElementType::Pattern: return ReadReference<PatternComponent>(registry, entity);
+    case ElementType::Filter: return ReadReference<FilterComponent>(registry, entity);
+    case ElementType::Image:
+    case ElementType::FeImage: return ReadReference<ImageComponent>(registry, entity);
+    case ElementType::TextPath: return ReadReference<TextPathComponent>(registry, entity);
+    default: {
+      const auto* attributes = registry.try_get<donner::components::AttributesComponent>(entity);
+      if (!attributes) {
+        return std::nullopt;
+      }
+      if (auto href = attributes->getAttribute("href")) {
+        return href;
+      }
+      return attributes->getAttribute(xml::XMLQualifiedNameRef("xlink", "href"));
+    }
+  }
+}
 
 AnimationValueContext AnimationContextFor(Registry& registry, Entity target,
                                           std::string_view attribute) {
   AnimationValueContext result;
+  result.referenceValue = attribute == "href" || attribute == "xlink:href";
   result.viewBox = LayoutSystem().getViewBox(EntityHandle(registry, target));
   if (attribute == "x" || attribute == "dx" || attribute == "x1" || attribute == "x2" ||
       attribute == "cx" || attribute == "rx" || attribute == "width") {
@@ -99,6 +147,10 @@ std::string UnderlyingAnimationValue(Registry& registry, Entity target, std::str
     }
   }
 
+  if (context.referenceValue) {
+    const auto value = AnimationReferenceValue(registry, target);
+    return value && budget.reserveSourceBytes(value->size()) ? value->str() : std::string{};
+  }
   if (attribute == "transform" || attribute == "gradientTransform" ||
       attribute == "patternTransform") {
     if (const auto* transform = registry.try_get<TransformComponent>(target);

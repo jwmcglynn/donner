@@ -63,7 +63,8 @@ uses type-specific distances and ignores key times.
 
 `AnimationValueMath` handles numeric lists, unit-bearing lengths, and colors. Relative units use the
 target's viewport and font context. Path interpolation requires compatible command structures.
-Underlying values include lower animation layers and resolved style values where available.
+Underlying values include lower animation layers, resolved style values, and typed resource references.
+URI values are discrete and non-additive, even when their text resembles a number.
 Animations are ordered by begin time, with document order breaking ties. Additive values combine
 with the underlying result; accumulation adds completed iterations' final values.
 
@@ -81,6 +82,12 @@ edits authored while an animation is active. Typed DOM setters restore the targe
 writing, so an intentional edit equal to the displayed animated value is retained. Failed
 presentation-attribute probes preserve the current presentation. Direct internal storage mutations
 bypass this setter lifecycle and are not part of the supported editing contract.
+
+Resource references are sampled before shadow-tree expansion. Derived resources are invalidated only
+when the final reference changes, after the previous shadow instances have been removed. Repeated
+raster-image references move decoded frames into bounded per-element caches and retain their resource
+revisions; they do not repeatedly charge the resource loader for the same decoded frame. Existing
+resource-loader policies and document byte/fetch limits still apply.
 
 The default parser recognizes the animation elements. `AnimationAttributeParser` is shared by the
 initial parser and runtime attribute refresh. A bounded source fingerprint avoids reparsing unchanged
@@ -113,10 +120,10 @@ value. The current presentation surface is:
 | `viewBox`                                          | Reversible viewport rectangle                                                                               |
 | Filter numeric/list parameters                     | Offset, blur, transfer functions, convolution, displacement, turbulence and lighting fields                 |
 | Filter and gradient enumerations                   | Discrete values for the explicitly parsed operation/type/unit fields                                        |
-| Text positioning and text length                   | Not yet applied by animation presentation                                                                   |
-| Pattern tile geometry and units                    | Not yet applied by animation presentation                                                                   |
-| Filter regions and primitive regions               | Not yet applied by animation presentation                                                                   |
-| Resource references, including animated `href`     | Not yet applied by animation presentation; static animation target and motion-path references are supported |
+| Text positioning and text length                   | Reversible positioning lists, rotation, text length and length adjustment                                   |
+| Pattern tile geometry and units                    | Reversible tile lengths and unit selections                                                                 |
+| Filter regions and primitive regions               | Reversible region lengths and unit selections                                                               |
+| Resource references, including animated `href`     | Discrete use, image, gradient, pattern, filter, textPath and mpath references; normal loader policy applies |
 
 The final coverage gate requires rendered regressions for newly supported families. Unsupported
 attribute families remain gaps in #1239; this table does not redefine them as completed work.
@@ -133,9 +140,12 @@ geometry measurement, lifecycle queries, hit geometry, and queued preview input.
 - At most 4 MiB of generated values, 64 numeric values per sampled list, and 64 KiB per motion path.
 - A shared 262144-unit path parsing/measurement budget per evaluation.
 - Lifecycle queries exceeding 4096 events return an incomplete empty result.
+- Decoded animation-image caches admit at most 4096 lifetime URI keys and 1 MiB of URI metadata
+  per document; decoded bytes remain charged to the existing document resource budget.
 - Referenced and underlying values are admitted before potentially large copies.
 - Public interaction validates document ownership before resolving target storage and rejects detached
-  targets and secure processing modes. No script execution or external fetch is added.
+  targets and secure processing modes. No script execution is added; animated references use the
+  existing resource loader and its URI validation, processing-mode restrictions and budgets.
 - Production rendering retains its existing GPU-resident path. Pixel readback belongs only to explicit
   diagnostics and rendered tests.
 

@@ -15,6 +15,7 @@
 #include "donner/svg/components/animation/AnimationSystem.h"
 #include "donner/svg/components/shape/PathComponent.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
+#include "donner/svg/graph/Reference.h"
 #include "donner/svg/parser/PathParser.h"
 #include "donner/svg/parser/PointsListParser.h"
 #include "donner/svg/properties/PropertyParsing.h"
@@ -97,6 +98,19 @@ std::optional<std::string> MotionPathSource(Registry& registry, Entity entity,
     const auto* attributes = registry.try_get<donner::components::AttributesComponent>(child);
     std::optional<RcString> authoredHref =
         attributes ? attributes->getAttribute("href") : std::nullopt;
+    if (const auto* values = registry.try_get<AnimatedValuesComponent>(child)) {
+      auto it = values->overrides.find("href");
+      if (it == values->overrides.end() && !authoredHref) {
+        it = values->overrides.find("xlink:href");
+      }
+      if (it != values->overrides.end()) {
+        if (it->second.size() > Reference::kMaximumHrefBytes ||
+            !budget.reserveSourceBytes(it->second.size())) {
+          return std::string{};
+        }
+        authoredHref = RcString(it->second);
+      }
+    }
     if (!authoredHref && attributes) {
       authoredHref = attributes->getAttribute(xml::XMLQualifiedNameRef("xlink", "href"));
     }

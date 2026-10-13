@@ -24,10 +24,9 @@
 namespace donner::svg {
 namespace {
 
-/// Parse a fragment with experimental (animation) elements enabled, on a 16x16 canvas.
+/// Parse an animated fragment through the default parser on a 16x16 canvas.
 SVGDocument parseAnimated(std::string_view fragment) {
   parser::SVGParser::Options options;
-  options.enableExperimental = true;
   return instantiateSubtree(fragment, options, Vector2i(16, 16));
 }
 

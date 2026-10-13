@@ -10,6 +10,13 @@
 
 namespace donner::svg::components {
 
+/** Read the current typed resource reference, falling back to attributes for other elements.
+ * @param registry Document storage.
+ * @param target Reference-bearing element.
+ * @return Owning reference value, or nullopt when unset.
+ */
+std::optional<RcString> AnimationReferenceValue(Registry& registry, Entity target);
+
 /** Resolve units and colors for an animation target.
  * @param registry Document storage.
  * @param target Animation target.

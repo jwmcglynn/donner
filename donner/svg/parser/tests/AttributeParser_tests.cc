@@ -2102,9 +2102,10 @@ TEST(AttributeParserTest, AnimateValueListEdgeCases) {
   const auto& a2 = QueryComponent<components::AnimateValueComponent>(document, "#a2");
   EXPECT_THAT(a2.keyTimes, testing::ElementsAre(0.0, 0.25, 0.5, 1.0));
 
-  // Non-numeric groups contribute no values.
+  // A malformed entry rejects the entire key-time list.
   const auto& a3 = QueryComponent<components::AnimateValueComponent>(document, "#a3");
-  EXPECT_THAT(a3.keyTimes, testing::ElementsAre(0.0, 1.0));
+  EXPECT_THAT(a3.keyTimes, testing::IsEmpty());
+  EXPECT_EQ(a3.valid, false);
 }
 
 TEST(AttributeParserTest, AnimationTimingAttributeEdgeCases) {

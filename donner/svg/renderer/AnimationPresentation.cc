@@ -29,6 +29,7 @@
 #include "donner/svg/parser/PointsListParser.h"
 #include "donner/svg/parser/TransformParser.h"
 #include "donner/svg/renderer/AnimationAttributes.h"
+#include "donner/svg/renderer/AnimationReferences.h"
 
 namespace donner::svg::components {
 namespace {
@@ -261,6 +262,7 @@ void restoreAnimationBaseBackup(Registry& registry, Entity entity, AnimationBase
 }  // namespace
 
 void RestoreAnimationPresentationForMutation(Registry& registry, Entity entity) {
+  RestoreAnimationReferences(registry, entity);
   RestoreAnimationAttributes(registry, entity);
   if (auto* saved = registry.try_get<AnimationBaseBackup>(entity)) {
     auto backup = std::move(*saved);
@@ -296,15 +298,17 @@ bool ReserveAnimationGeometryBackups(Registry& registry, AnimationResourceBudget
   return true;
 }
 
-void ApplyAnimationPresentation(Registry& registry) {
-  const double documentTime = registry.ctx().get<SVGDocumentContext>().documentTime;
-
+void RestoreAnimationPresentation(Registry& registry) {
+  RestoreAnimationReferences(registry);
   RestoreAnimationAttributes(registry);
-  // Restore geometry before resolving underlying values and motion paths.
   for (auto [entity, backup] : registry.view<AnimationBaseBackup>().each()) {
     restoreAnimationBaseBackup(registry, entity, backup);
   }
   registry.clear<AnimationBaseBackup>();
+}
+
+void ApplyAnimationPresentation(Registry& registry) {
+  const double documentTime = registry.ctx().get<SVGDocumentContext>().documentTime;
   AnimationSystem().advance(registry, documentTime, nullptr);
   if (!registry.view<AnimatedValuesComponent>().empty()) {
     registry.ctx().get<AnimationStyleContext>().enabled = true;
@@ -314,15 +318,19 @@ void ApplyAnimationPresentation(Registry& registry) {
   }
 
   if (!ReserveAnimationGeometryBackups(registry, registry.ctx().get<AnimationResourceBudget>()) ||
-      !ApplyAnimationAttributes(registry)) {
+      !ApplyAnimationReferences(registry) || !ApplyAnimationAttributes(registry)) {
+    RestoreAnimationReferences(registry);
     RestoreAnimationAttributes(registry);
     registry.clear<AnimatedValuesComponent>();
     registry.ctx().get<AnimationStyleContext>().enabled = false;
     registry.clear<ComputedStyleComponent>();
     ParseWarningSink warnings = ParseWarningSink::Disabled();
     StyleSystem().computeAllStyles(registry, warnings);
+    FinalizeAnimationReferences(registry);
     return;
   }
+
+  FinalizeAnimationReferences(registry);
 
   // 3. Apply the current frame's overrides. The loop body only touches storages other than
   //    AnimatedValuesComponent, so the view can be iterated directly.

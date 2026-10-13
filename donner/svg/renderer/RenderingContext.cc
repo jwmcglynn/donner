@@ -1789,10 +1789,7 @@ void InstantiateNestedMarkerTrees(Registry& registry, ParseWarningSink& warningS
 }  // namespace
 
 void RenderingContext::createComputedComponents(ParseWarningSink& warningSink) {
-  // Evaluate conditional components which may create shadow trees.
-  PaintSystem().createShadowTrees(registry_, warningSink);
-
-  InstantiateMainShadowTrees(registry_, warningSink);
+  RestoreAnimationPresentation(registry_);
 
   if (!registry_.ctx().contains<AnimationStyleContext>()) {
     registry_.ctx().emplace<AnimationStyleContext>();
@@ -1803,6 +1800,10 @@ void RenderingContext::createComputedComponents(ParseWarningSink& warningSink) {
   // Advance SMIL animations and apply their value overrides on top of the computed styles/geometry,
   // before layout and shape computation.
   ApplyAnimationPresentation(registry_);
+  // Expand references from this sample, sharing the original rebuild's resource limits.
+  PaintSystem().createShadowTrees(registry_, warningSink);
+  InstantiateMainShadowTrees(registry_, warningSink);
+  StyleSystem().computeAllStyles(registry_, warningSink);
 
   // After styles are computed, we can load fonts and other embedded resources.
   registry_.ctx().get<components::ResourceManagerContext>().loadResources(warningSink);

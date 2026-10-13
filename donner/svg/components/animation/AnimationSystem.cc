@@ -211,7 +211,7 @@ std::string interpolateAnimateValue(double progress, const AnimateValueComponent
   if (values.empty()) {
     if (valueComp.to) {
       values = {valueComp.from.value_or(underlying), *valueComp.to};
-    } else if (valueComp.by) {
+    } else if (valueComp.by && !context.referenceValue) {
       const auto from = valueComp.from
                             ? valueComp.from
                             : CombineAnimationValues(*valueComp.by, *valueComp.by, 0, 0, context);
@@ -227,6 +227,9 @@ std::string interpolateAnimateValue(double progress, const AnimateValueComponent
   }
   std::vector<double> distances;
   AnimationInterpolation options = valueComp;
+  if (context.referenceValue) {
+    options.calcMode = CalcMode::Discrete;
+  }
   if (options.calcMode == CalcMode::Paced) {
     for (std::size_t i = 1; i < values.size(); ++i) {
       const auto distance = AnimationValueDistance(values[i - 1], values[i], context);
@@ -492,13 +495,13 @@ std::optional<std::pair<std::string_view, std::string>> SampleAnimationValue(
     }
     std::string sampled = interpolateAnimateValue(progress, *valueComp, underlying, context);
     const bool toOnly = valueComp->values.empty() && !valueComp->from && valueComp->to;
-    if (valueComp->accumulate && !toOnly && iteration > 0) {
+    if (!context.referenceValue && valueComp->accumulate && !toOnly && iteration > 0) {
       const auto last = interpolateAnimateValue(1, *valueComp, underlying, context);
       sampled = CombineAnimationValues(sampled, last, 1, iteration, context).value_or(sampled);
     }
     const bool byOnly =
         valueComp->values.empty() && !valueComp->from && !valueComp->to && valueComp->by;
-    if (!sampled.empty() && !toOnly && (valueComp->additive || byOnly)) {
+    if (!context.referenceValue && !sampled.empty() && !toOnly && (valueComp->additive || byOnly)) {
       sampled = CombineAnimationValues(underlying, sampled, 1, 1, context).value_or(sampled);
     }
     return std::pair<std::string_view, std::string>{valueComp->attributeName, std::move(sampled)};
@@ -558,6 +561,9 @@ bool ProcessAnimation(Registry& registry, Entity entity, double documentTime,
   state.targetEntity =
       resolveTargetByHrefOrParent(registry, entity, AnimationHref(registry, entity));
   if (!registry.valid(state.targetEntity) || !shouldApplyValue(state.phase, timing.fill)) {
+    return true;
+  }
+  if (!IsAnimationInSvgNamespace(registry, state.targetEntity)) {
     return true;
   }
 

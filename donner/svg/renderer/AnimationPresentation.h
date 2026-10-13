@@ -18,6 +18,10 @@ bool ReserveAnimationGeometryBackups(Registry& registry, AnimationResourceBudget
 /// @param entity Target of the impending authored mutation.
 void RestoreAnimationPresentationForMutation(Registry& registry, Entity entity);
 
+/// Restore authored presentation before building reference trees and base styles.
+/// @param registry Document storage with write access held.
+void RestoreAnimationPresentation(Registry& registry);
+
 /// Sample animation and apply reversible style, geometry, and transform presentation values.
 /// @param registry Document storage, held with write access by render preparation.
 void ApplyAnimationPresentation(Registry& registry);

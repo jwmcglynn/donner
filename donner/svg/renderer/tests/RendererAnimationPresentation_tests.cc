@@ -18,6 +18,30 @@ SVGDocument ParsePresentation(std::string_view source) {
   return instantiateSubtree(source, parser::SVGParser::Options(), Vector2i(16, 16));
 }
 
+TEST(RendererAnimationPresentation, DefaultParserSourceInsertionAndRemovalUpdatesPresentation) {
+  auto document = ParsePresentation(R"svg(<rect id="r" width="4" height="16"/>)svg");
+  const std::string source(document.source());
+  const auto start = source.find("<rect");
+  const auto end = source.find("/>", start) + 2;
+  const auto inserted = document.applySourceEdit(xml::XMLEditIntent{
+      .range = {FileOffset::Offset(start), FileOffset::Offset(end)},
+      .replacement = R"svg(<rect id="r" width="4" height="16">
+        <animate id="a" attributeName="width" from="4" to="12" dur="2s"/>
+      </rect>)svg",
+      .sourceVersion = document.sourceVersion(),
+  });
+  ASSERT_EQ(inserted.applied, true);
+  auto animation = document.querySelector("#a");
+  ASSERT_THAT(animation, testing::Ne(std::nullopt));
+  EXPECT_EQ(animation->type(), ElementType::Animate);
+  document.setTime(1);
+  EXPECT_THAT(RendererTestUtils::renderToAsciiImage(document).generated,
+              testing::StartsWith("@@@@@@@@........"));
+  ASSERT_EQ(document.removeElement(*animation).applied, true);
+  EXPECT_THAT(RendererTestUtils::renderToAsciiImage(document).generated,
+              testing::StartsWith("@@@@............"));
+}
+
 TEST(RendererAnimationPresentation, PatternTileWidthRendersAndRestores) {
   auto document = ParsePresentation(R"svg(
     <defs><pattern id="p" patternUnits="userSpaceOnUse" width="4" height="16">

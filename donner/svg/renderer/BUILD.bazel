@@ -321,11 +321,13 @@ donner_perf_sensitive_cc_library(
     srcs = [
         "AnimationAttributes.cc",
         "AnimationPresentation.cc",
+        "AnimationReferences.cc",
         "RenderingContext.cc",
     ],
     hdrs = [
         "AnimationAttributes.h",
         "AnimationPresentation.h",
+        "AnimationReferences.h",
         "RenderingContext.h",
     ],
     defines = select({

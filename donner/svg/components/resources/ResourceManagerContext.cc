@@ -1,6 +1,7 @@
 #include "donner/svg/components/resources/ResourceManagerContext.h"
 
 #include <algorithm>
+#include <atomic>
 #include <memory>
 #include <string>
 #include <utility>
@@ -339,7 +340,13 @@ void ResourceManagerContext::onStylesheetDestroy(Registry&, Entity entity) {
   stylesheetFontFaceRegistrations_.erase(entity);
 }
 
+uint64_t ResourceManagerContext::NextCacheGeneration() {
+  static std::atomic<uint64_t> next{1};
+  return next.fetch_add(1, std::memory_order_relaxed);
+}
+
 void ResourceManagerContext::setResourceLoader(std::unique_ptr<ResourceLoaderInterface>&& loader) {
+  cacheGeneration_ = NextCacheGeneration();
   failedImageUrls_.clear();
   externalFetchCache_.clear();
   if (auto* cache = registry_.ctx().find<SubDocumentCache>()) {

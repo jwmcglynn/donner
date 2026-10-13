@@ -77,7 +77,15 @@ public:
    *
    * @param mode Processing mode to set.
    */
-  void setProcessingMode(ProcessingMode mode) { processingMode_ = mode; }
+  void setProcessingMode(ProcessingMode mode) {
+    if (processingMode_ != mode) {
+      processingMode_ = mode;
+      cacheGeneration_ = NextCacheGeneration();
+    }
+  }
+
+  /// Identity of the current resource loader and processing policy for derived caches.
+  uint64_t cacheGeneration() const { return cacheGeneration_; }
 
   /// Processing policy governing resource loading and interactive event delivery.
   ProcessingMode processingMode() const { return processingMode_; }
@@ -145,6 +153,9 @@ public:
   }
 
 private:
+  static uint64_t NextCacheGeneration();
+  uint64_t cacheGeneration_ = NextCacheGeneration();
+
   void onStylesheetDestroy(Registry& registry, Entity entity);
 
   /**
