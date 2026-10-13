@@ -7,6 +7,7 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <ostream>
 #include <span>
 #include <string>
 #include <unordered_map>
@@ -54,6 +55,29 @@ enum class StaticSpanMode : uint8_t {
   /// Re-rasterize as a transient tile and do not publish metadata-only reuse.
   Immediate,
 };
+
+/// Outcome of the optional compositor pixel-identity diagnostic.
+enum class PixelIdentityVerificationStatus : uint8_t {
+  NotAttempted,           //!< Disabled or not reached by this render path.
+  Compared,               //!< Complete, compatible captures passed the strict comparison.
+  InconclusiveStyleWork,  //!< Style admission left either rendering incomplete.
+  SnapshotUnavailable,    //!< A diagnostic renderer or compatible capture was unavailable.
+};
+
+/// Print a compositor pixel-verification outcome.
+/// @param stream Output stream.
+/// @param status Outcome to print.
+inline std::ostream& operator<<(std::ostream& stream, PixelIdentityVerificationStatus status) {
+  switch (status) {
+    case PixelIdentityVerificationStatus::NotAttempted: return stream << "NotAttempted";
+    case PixelIdentityVerificationStatus::Compared: return stream << "Compared";
+    case PixelIdentityVerificationStatus::InconclusiveStyleWork:
+      return stream << "InconclusiveStyleWork";
+    case PixelIdentityVerificationStatus::SnapshotUnavailable:
+      return stream << "SnapshotUnavailable";
+  }
+  return stream;
+}
 
 /// A single bitmap cache unit the compositor exposes for GPU upload -
 /// either a static segment (non-promoted content between promoted
@@ -852,6 +876,9 @@ public:
   /// Worker render costs from the most recent `renderFrame` call, split by whether the work was
   /// caused by immediate-mode transient spans or retained cached tiles.
   struct RenderFrameStats {
+    /// Result of Config.verifyPixelIdentity for this render attempt.
+    PixelIdentityVerificationStatus pixelIdentityVerification =
+        PixelIdentityVerificationStatus::NotAttempted;
     /// First-frame full-document draw that produces the immediately presentable surface.
     double firstFrameDrawMs = 0.0;
     /// First-frame detector, resolver, and layer-plan construction after the initial draw.
