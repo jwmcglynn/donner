@@ -51,8 +51,10 @@ TEST(EditorControlSessionTest, AnimationPreviewToolbarCaptureAcrossWorkerHandoff
   ASSERT_THAT(repro::WriteReproFile(rnrPath, replay), testing::IsTrue());
   const char* outputs = std::getenv("TEST_UNDECLARED_OUTPUTS_DIR");
   const std::filesystem::path outputDir = outputs != nullptr ? outputs : TestTempDir();
-  std::filesystem::copy_file(rnrPath, outputDir / "animation_toolbar.rnr",
-                             std::filesystem::copy_options::overwrite_existing);
+  if (rnrPath != outputDir / "animation_toolbar.rnr") {
+    std::filesystem::copy_file(rnrPath, outputDir / "animation_toolbar.rnr",
+                               std::filesystem::copy_options::overwrite_existing);
+  }
   for (const int frame : {12, 22}) {
     SCOPED_TRACE(frame);
     EditorControlSession session;

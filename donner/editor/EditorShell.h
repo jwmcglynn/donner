@@ -559,7 +559,7 @@ private:
       bool rendererBusy, const svg::SVGDocumentHandle& currentPaintDocument);
   void renderFillStrokeToolbarWidget();
   [[nodiscard]] internal::ToolbarPaintState toolbarPaintStateForFrame(bool rendererBusy,
-                                                                      bool canvasInteractionActive,
+                                                                      bool authoringSuspended,
                                                                       bool* canEditPaint);
   void swapToolbarPaint(const internal::ToolbarPaintState& paintState, bool canEditPaint);
   void setActivePaintNone();

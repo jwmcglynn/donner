@@ -4204,8 +4204,7 @@ void EditorShell::renderEyedropperLoupe(const Vector2d& pointerScreen, const Box
   drawList->PopClipRect();
 }
 
-ToolbarPaintState EditorShell::toolbarPaintStateForFrame(bool rendererBusy,
-                                                         bool canvasInteractionActive,
+ToolbarPaintState EditorShell::toolbarPaintStateForFrame(bool rendererBusy, bool authoringSuspended,
                                                          bool* canEditPaint) {
   svg::SVGDocumentHandle currentPaintDocument;
   std::optional<Entity> currentPaintSelection;
@@ -4217,7 +4216,7 @@ ToolbarPaintState EditorShell::toolbarPaintStateForFrame(bool rendererBusy,
       toolbarPaintSnapshot_ != nullptr && toolbarPaintSnapshotDocument_ == currentPaintDocument &&
       toolbarPaintSnapshotSelection_ == currentPaintSelection;
   const FillStrokeWidgetInteractionState interactionState = ResolveFillStrokeWidgetInteractionState(
-      app_.hasDocument(), rendererBusy, canvasInteractionActive, paintSnapshotMatchesSelection);
+      app_.hasDocument(), rendererBusy, authoringSuspended, paintSnapshotMatchesSelection);
   *canEditPaint = interactionState.canEdit;
   std::string editorSource;
   std::string documentSource;
@@ -4229,10 +4228,7 @@ ToolbarPaintState EditorShell::toolbarPaintStateForFrame(bool rendererBusy,
       sourceForRanges = std::string_view(editorSource);
     }
   }
-  // The worker owns the selected element while busy, and drag-frame handoffs
-  // alternate between busy and idle as previews land. Preserve one paint and
-  // enabled-state presentation for the entire canvas interaction instead of
-  // letting the swap arrow and selected swatches oscillate with worker state.
+  // Keep paint snapshots stable throughout gestures and Preview, without reading worker-owned DOM.
   if (interactionState.refreshPaintSnapshot) {
     ToolbarPaintState paintState = ToolbarPaintStateForApp(app_, sourceForRanges);
     toolbarPaintSnapshot_ = std::make_unique<ToolbarPaintState>(paintState);
@@ -4361,6 +4357,10 @@ void EditorShell::showPaintSwatchTooltip(PaintTarget target, bool canSelectPaint
 void EditorShell::showFillStrokeWidgetTooltip(FillStrokeWidgetRegion region,
                                               const ToolbarPaintState& paintState,
                                               bool canSelectPaint, bool canEditPaint) {
+  if (animationPreview_) {
+    ImGui::SetTooltip("Switch to Edit to change paint");
+    return;
+  }
   switch (region) {
     case FillStrokeWidgetRegion::Swap: ImGui::SetTooltip("Swap fill and stroke"); break;
     case FillStrokeWidgetRegion::SetNone:
@@ -4417,10 +4417,11 @@ void EditorShell::renderFillStrokeToolbarWidget() {
   const bool canvasInteractionActive = selectTool_.isDragging() || selectTool_.isMarqueeing() ||
                                        penTool_.isDraggingAnchor() || textTool_.isDraggingBox() ||
                                        textTool_.isAdjustingFrame();
+  const bool authoringSuspended = canvasInteractionActive || animationPreview_;
   bool canEditPaint = false;
   const ToolbarPaintState paintState =
-      toolbarPaintStateForFrame(rendererBusy, canvasInteractionActive, &canEditPaint);
-  const bool canSelectPaint = app_.hasDocument() && !canvasInteractionActive;
+      toolbarPaintStateForFrame(rendererBusy, authoringSuspended, &canEditPaint);
+  const bool canSelectPaint = app_.hasDocument() && !authoringSuspended;
   ImGui::BeginDisabled(!canSelectPaint);
   ImGui::InvisibleButton("##fill_stroke_widget",
                          ImVec2(kToolPalettePaintWidgetWidth, kToolPalettePaintWidgetHeight));
@@ -4429,7 +4430,9 @@ void EditorShell::renderFillStrokeToolbarWidget() {
   const ImVec2 mouse = ImGui::GetMousePos();
   const FillStrokeWidgetLayout layout = ComputeFillStrokeWidgetLayout(min, max);
   const bool fillIsActive = activePaintTarget_ == PaintTarget::Fill;
-  DrawFillStrokeWidget(ImGui::GetWindowDrawList(), layout, paintState, fillIsActive, canEditPaint);
+  // Worker availability gates mutation, not the brightness of persistent toolbar chrome.
+  DrawFillStrokeWidget(ImGui::GetWindowDrawList(), layout, paintState, fillIsActive,
+                       canSelectPaint);
 
   const FillStrokeWidgetRegion region = HitTestFillStrokeWidget(
       layout, mouse, paintState.fill.isCustom, paintState.stroke.isCustom, fillIsActive);

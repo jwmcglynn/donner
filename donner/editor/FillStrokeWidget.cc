@@ -80,12 +80,12 @@ void DrawPaintChip(ImDrawList* drawList, std::string_view prefix, const ToolbarP
 }  // namespace
 
 FillStrokeWidgetInteractionState ResolveFillStrokeWidgetInteractionState(
-    bool hasDocument, bool rendererBusy, bool canvasInteractionActive,
+    bool hasDocument, bool rendererBusy, bool authoringSuspended,
     bool paintSnapshotMatchesSelection) {
   return FillStrokeWidgetInteractionState{
-      .canEdit = hasDocument && !rendererBusy && !canvasInteractionActive,
+      .canEdit = hasDocument && !rendererBusy && !authoringSuspended,
       .refreshPaintSnapshot =
-          !rendererBusy && (!canvasInteractionActive || !paintSnapshotMatchesSelection),
+          !rendererBusy && (!authoringSuspended || !paintSnapshotMatchesSelection),
   };
 }
 
