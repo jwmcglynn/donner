@@ -97,7 +97,6 @@ class PoolStateTests(unittest.TestCase):
         payload = _jobs(("some-hosted-job", "in_progress"))
         self.assertEqual(admission.pool_state(payload, _POOL), admission.ABSENT)
 
-
     def test_called_workflow_pool_jobs_count(self):
         # A reusable workflow call names its jobs `<calling job> / <job>`.
         payload = _jobs(("base-change-ci / " + _LINUX_LANE, "in_progress"))
@@ -113,12 +112,15 @@ class PoolStateTests(unittest.TestCase):
 
 
 class AdmissionTests(unittest.TestCase):
-    def test_called_workflow_run_holds_a_slot(self):
+    def test_executing_called_workflow_run_holds_a_slot(self):
+        # A newer run counts only while its pool job executes, so this fails if a called
+        # run's `<calling job> / linux-self-hosted` job is not recognised as a pool job.
         runs = [
             _run(10 + index, _jobs((_LINUX_LANE, "in_progress"))) for index in range(3)
-        ] + [_run(13, _jobs(("base-change-ci / " + _LINUX_LANE, "in_progress")))]
+        ] + [_run(101, _jobs(("base-change-ci / " + _LINUX_LANE, "in_progress")))]
         decision = _decide(100, runs)
-        self.assertEqual(decision["occupancy"], 4)
+        self.assertEqual(decision["blockers"],
+                         ["10 (active)", "11 (active)", "12 (active)", "101 (active)"])
         self.assertFalse(decision["admit"])
 
     def test_empty_pool_admits(self):
