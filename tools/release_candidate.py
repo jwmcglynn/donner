@@ -426,38 +426,60 @@ def _verify_editor(directory: Path, commit: str, root: Path, expected: dict[str,
     return generated_lock
 
 
+def _require_lock(role: str, actual: str, record: dict) -> None:
+    lock_role = "docs" if role == "docs-provenance" else role
+    if actual != record["source"]["module_locks_sha256"][lock_role]:
+        raise ValueError(f"{lock_role} generated lock differs from candidate dependency state")
+
+
+def _verify_source_payload(role, directory, entry, record, root, commit, run_id, attempt):
+    receipt = bcr_source.verify_archive(directory, commit, run_id, attempt)
+    if receipt["sha256"] != entry["files"][receipt["archive"]]:
+        raise ValueError("source archive digest differs from candidate")
+
+
+def _verify_cli_payload(role, directory, entry, record, root, commit, run_id, attempt):
+    provenance = release_cli.verify(root=root, artifacts=directory, platform=CLI_PLATFORMS[role],
+                                    commit=commit, run_id=run_id, attempt=attempt)
+    if provenance["compiler_version"] != record["source"]["compiler_versions"][role]:
+        raise ValueError("CLI compiler differs from candidate dependency state")
+    _require_lock(role, provenance["generated_lock_sha256"], record)
+
+
+def _verify_editor_payload(role, directory, entry, record, root, commit, run_id, attempt):
+    _require_lock(role, _verify_editor(directory, commit, root, entry["files"], run_id, attempt),
+                  record)
+
+
+def _verify_docs_provenance_payload(role, directory, entry, record, root, commit, run_id, attempt):
+    selected = {"run_id": entry["run_id"], "attempt": entry["attempt"], "source_commit": commit,
+                "archive_sha256": record["artifacts"]["docs"]["files"]["artifact.tar"]}
+    bazel_version = (root / ".bazelversion").read_text(encoding="utf-8").strip()
+    _require_lock(role, pages_artifact.verify_provenance(directory, selected, bazel_version), record)
+
+
+def _verify_docs_payload(role, directory, entry, record, root, commit, run_id, attempt):
+    selected = {"artifact_id": entry["artifact_id"], "run_id": entry["run_id"],
+                "attempt": entry["attempt"], "source_commit": commit,
+                "artifact_digest": "sha256:" + entry["zip_sha256"],
+                "archive_sha256": entry["files"]["artifact.tar"]}
+    pages_artifact.verify_archive(directory / "artifact.tar", selected["archive_sha256"], selected)
+
+
+PAYLOAD_VERIFIERS = {
+    "source": _verify_source_payload,
+    "cli-linux": _verify_cli_payload,
+    "cli-macos": _verify_cli_payload,
+    "editor": _verify_editor_payload,
+    "docs": _verify_docs_payload,
+    "docs-provenance": _verify_docs_provenance_payload,
+}
+
+
 def _verify_payload(role: str, directory: Path, entry: dict, record: dict, root: Path) -> None:
-    commit = record["source"]["commit"]
-    run_id, attempt = str(entry["run_id"]), str(entry["attempt"])
-    if role == "source":
-        receipt = bcr_source.verify_archive(directory, commit, run_id, attempt)
-        if receipt["sha256"] != entry["files"][receipt["archive"]]:
-            raise ValueError("source archive digest differs from candidate")
-    elif role in ("cli-linux", "cli-macos"):
-        platform = "linux-x86-64" if role == "cli-linux" else "darwin-arm64"
-        provenance = release_cli.verify(root=root, artifacts=directory, platform=platform,
-                                        commit=commit, run_id=run_id, attempt=attempt)
-        if (provenance["generated_lock_sha256"] != record["source"]["module_locks_sha256"][role] or
-                provenance["compiler_version"] != record["source"]["compiler_versions"][role]):
-            raise ValueError("CLI generated lock or compiler differs from candidate dependency state")
-    elif role == "editor":
-        lock = _verify_editor(directory, commit, root, entry["files"], run_id, attempt)
-        if lock != record["source"]["module_locks_sha256"]["editor"]:
-            raise ValueError("editor generated lock differs from candidate dependency state")
-    elif role == "docs-provenance":
-        docs = record["artifacts"]["docs"]
-        selected = {"run_id": entry["run_id"], "attempt": entry["attempt"],
-                    "source_commit": commit, "archive_sha256": docs["files"]["artifact.tar"]}
-        bazel_version = (root / ".bazelversion").read_text(encoding="utf-8").strip()
-        lock = pages_artifact.verify_provenance(directory, selected, bazel_version)
-        if lock != record["source"]["module_locks_sha256"]["docs"]:
-            raise ValueError("docs generated lock differs from candidate dependency state")
-    else:
-        selected = {"artifact_id": entry["artifact_id"], "run_id": entry["run_id"],
-                    "attempt": entry["attempt"], "source_commit": commit,
-                    "artifact_digest": "sha256:" + entry["zip_sha256"],
-                    "archive_sha256": entry["files"]["artifact.tar"]}
-        pages_artifact.verify_archive(directory / "artifact.tar", selected["archive_sha256"], selected)
+    """Run the role's own verifier on its extracted files and bind its dependency state."""
+    PAYLOAD_VERIFIERS[role](role, directory, entry, record, root, record["source"]["commit"],
+                            str(entry["run_id"]), str(entry["attempt"]))
 
 
 def _check_jobs(jobs: object, kind: str, passed: int, skipped: int) -> None:
@@ -853,65 +875,71 @@ def _decimal_id(value: str, label: str) -> int:
     return _positive(int(value), label)
 
 
-def main() -> None:
+def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
     check = commands.add_parser("verify", help="verify a record and its local files")
-    check.add_argument("--record", type=Path, required=True)
-    check.add_argument("--source-root", type=Path, required=True)
-    check.add_argument("--artifacts", type=Path, required=True)
-    check.add_argument("--evidence", type=Path, required=True)
-    check.add_argument("--reviews", type=Path, required=True)
+    for name in ("record", "source-root", "artifacts", "evidence", "reviews"):
+        check.add_argument(f"--{name}", type=Path, required=True)
     build = commands.add_parser("assemble", help="assemble and verify a record from named runs")
     build.add_argument("--commit", required=True)
     for name in (*ARTIFACT_RUN_INPUTS, *EVIDENCE_WORKFLOWS):
         build.add_argument(f"--{name}", required=True, metavar="RUN_ID/ATTEMPT")
     for name in sorted(REVIEW_NAMES):
         build.add_argument(f"--{name}-review-comment", required=True, metavar="COMMENT_ID")
-    build.add_argument("--source-root", type=Path, required=True)
-    build.add_argument("--work", type=Path, required=True)
-    build.add_argument("--output", type=Path, required=True)
+    for name in ("source-root", "work", "output"):
+        build.add_argument(f"--{name}", type=Path, required=True)
     stage = commands.add_parser("release", help="re-verify a record and stage its release files")
-    stage.add_argument("--source-root", type=Path, required=True)
-    stage.add_argument("--record-run-id", required=True)
-    stage.add_argument("--record-attempt", required=True)
-    stage.add_argument("--record-artifact-id", required=True)
-    stage.add_argument("--record-sha256", required=True)
-    stage.add_argument("--work", type=Path, required=True)
-    stage.add_argument("--output", type=Path, required=True)
+    for name in ("record-run-id", "record-attempt", "record-artifact-id", "record-sha256"):
+        stage.add_argument(f"--{name}", required=True)
+    for name in ("source-root", "work", "output"):
+        stage.add_argument(f"--{name}", type=Path, required=True)
     stage.add_argument("--github-output")
-    args = parser.parse_args()
+    return parser
+
+
+def _verify_command(args: argparse.Namespace) -> bytes:
+    if args.record.is_symlink() or args.record.stat().st_size > MAX_RECORD_BYTES:
+        raise ValueError("candidate record is linked or too large")
+    raw = args.record.read_bytes()
+    verify(_load_canonical(raw), args.source_root, args.artifacts, args.evidence, args.reviews)
+    return raw
+
+
+def _assemble_command(args: argparse.Namespace) -> bytes:
+    runs = {name: _run_reference(getattr(args, name), f"{name} run")
+            for name in (*ARTIFACT_RUN_INPUTS, *EVIDENCE_WORKFLOWS)}
+    reviews = {name: _decimal_id(getattr(args, f"{name.replace('-', '_')}_review_comment"),
+                                 f"{name} review comment ID")
+               for name in REVIEW_NAMES}
+    return assemble(commit=args.commit, runs=runs, reviews=reviews, root=args.source_root,
+                    work=args.work, output=args.output)
+
+
+def _release_command(args: argparse.Namespace) -> str:
+    result = release(
+        root=args.source_root,
+        record_run_id=_decimal_id(args.record_run_id, "record run ID"),
+        record_attempt=_decimal_id(args.record_attempt, "record attempt"),
+        record_artifact_id=_decimal_id(args.record_artifact_id, "record artifact ID"),
+        record_sha256=args.record_sha256, work=args.work, output=args.output)
+    bcr_source.outputs(result, args.github_output)
+    return result["record_sha256"]
+
+
+def main() -> None:
+    args = _parser().parse_args()
+    commands = {"verify": _verify_command, "assemble": _assemble_command,
+                "release": _release_command}
     try:
-        if args.command == "verify":
-            if args.record.is_symlink() or args.record.stat().st_size > MAX_RECORD_BYTES:
-                raise ValueError("candidate record is linked or too large")
-            raw = args.record.read_bytes()
-            verify(_load_canonical(raw), args.source_root, args.artifacts, args.evidence,
-                   args.reviews)
-        elif args.command == "assemble":
-            runs = {name: _run_reference(getattr(args, name), f"{name} run")
-                    for name in (*ARTIFACT_RUN_INPUTS, *EVIDENCE_WORKFLOWS)}
-            reviews = {name: _decimal_id(getattr(args, f"{name.replace('-', '_')}_review_comment"),
-                                         f"{name} review comment ID")
-                       for name in REVIEW_NAMES}
-            raw = assemble(commit=args.commit, runs=runs, reviews=reviews, root=args.source_root,
-                           work=args.work, output=args.output)
-        else:
-            result = release(
-                root=args.source_root,
-                record_run_id=_decimal_id(args.record_run_id, "record run ID"),
-                record_attempt=_decimal_id(args.record_attempt, "record attempt"),
-                record_artifact_id=_decimal_id(args.record_artifact_id, "record artifact ID"),
-                record_sha256=args.record_sha256, work=args.work, output=args.output)
-            bcr_source.outputs(result, args.github_output)
-            print(f"Verified release candidate sha256:{result['record_sha256']}")
-            return
+        outcome = commands[args.command](args)
     except ValueError as error:
         raise SystemExit(f"Candidate verification failed: {error}") from None
     except (OSError, KeyError, TypeError, AttributeError, subprocess.CalledProcessError,
             zipfile.BadZipFile) as error:
         raise SystemExit(f"Candidate verification failed: {type(error).__name__}") from None
-    print(f"Verified release candidate sha256:{hashlib.sha256(raw).hexdigest()}")
+    digest = outcome if isinstance(outcome, str) else hashlib.sha256(outcome).hexdigest()
+    print(f"Verified release candidate sha256:{digest}")
 
 
 if __name__ == "__main__":

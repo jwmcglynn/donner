@@ -1052,117 +1052,151 @@ def _continued_arguments(script, command):
     return arguments
 
 
+def _failed(checks):
+    """The message of every policy check whose condition failed."""
+    return [message for passed, message in checks if not passed]
+
+
+RELEASE_STEPS = ("Reverify the candidate record and stage its release files",
+                 "Verify the candidate record attestation",
+                 "Verify preflight build attestations",
+                 "Upload verified release artifacts without replacement")
+RELEASE_FORBIDDEN = ("actions/upload-artifact@", "actions/download-artifact@",
+                     "actions/attest-build-provenance@", "id-token: write", "--lockfile_mode",
+                     "Release-Candidate-Preflight", "select-preflight")
+RELEASE_RECORD_ARGUMENTS = ('--record-run-id "$RECORD_RUN_ID"', '--record-attempt "$RECORD_ATTEMPT"',
+                            '--record-artifact-id "$RECORD_ARTIFACT_ID"',
+                            '--record-sha256 "$RECORD_SHA256"')
+
+
+def _release_asset_paths(assets):
+    return ['"$RUNNER_TEMP"/release/%s/%s' % ("cli-linux" if "linux" in asset else "cli-macos",
+                                              asset) for asset in assets]
+
+
+def _release_shape_violations(release):
+    signer = "--signer-workflow jwmcglynn/donner/.github/workflows/"
+    return _failed([
+        (_triggers(release) == {"release"} and "types: [published]" in release,
+         "release runs on an event other than a published release"),
+        (not _build_steps(release), "release builds: %s" % _build_steps(release)),
+        (release.count("gh attestation verify") == 2 and
+         release.count(signer + "release_candidate.yml") == 1 and
+         release.count(signer + "bcr_preflight.yml") == 1,
+         "release does not verify the record and preflight attestations"),
+        (not any("${{" in body for body in _run_bodies(release)),
+         "release run blocks must use quoted environment values"),
+    ]) + ["release contains %s" % item for item in RELEASE_FORBIDDEN if item in release]
+
+
+def _release_step_violations(jobs):
+    publication = jobs["publish-release-artifacts"]
+    names = [_step_identity_value(step, "name") for step in _steps(publication)]
+    stage = _named_step(publication, RELEASE_STEPS[0])
+    reverified = "python3 -B -m tools.release_candidate release" in stage and all(
+        argument in stage for argument in RELEASE_RECORD_ARGUMENTS)
+    return _failed([
+        (jobs["resolve-candidate"].count("python3 -B -m tools.bcr_release select-record") == 1,
+         "release does not select the record named by the release body"),
+        ("needs: resolve-candidate" in publication, "publication does not wait for record selection"),
+        ([name for name in names if name in RELEASE_STEPS] == list(RELEASE_STEPS) and
+         names[-1:] == [RELEASE_STEPS[-1]],
+         "release does not verify the record before its final upload step"),
+        (reverified, "release does not re-verify the named record"),
+    ])
+
+
+def _release_file_violations(publication):
+    attested = _continued_arguments(_named_step(publication, RELEASE_STEPS[2]), "for subject in")
+    signed = [asset for asset in RELEASE_CLI_ASSETS if asset.endswith(("64", ".bazel.lock",
+                                                                        ".NOTICE.txt"))]
+    uploaded = _continued_arguments(_named_step(publication, RELEASE_STEPS[3]),
+                                    "python3 tools/release_artifact_publisher.py")
+    expected_uploaded = _release_asset_paths(RELEASE_CLI_ASSETS) + [
+        '"$RUNNER_TEMP"/release/source/*', '"$RUNNER_TEMP"/release/donner-*.candidate.json']
+    return _failed([
+        (attested == _release_asset_paths(signed) + ['"$RUNNER_TEMP"/release/source/*.tar.gz; do'],
+         "release attestation subjects changed: %s" % attested),
+        (uploaded == expected_uploaded, "release uploads files the record did not stage: %s" % uploaded),
+    ])
+
+
 def _release_publication_violations(release):
     """Release must publish exactly the record's verified files and build nothing."""
-    problems = []
-    if _triggers(release) != {"release"} or "types: [published]" not in release:
-        problems.append("release runs on an event other than a published release")
-    if _build_steps(release):
-        problems.append("release builds: %s" % _build_steps(release))
-    for forbidden in ("actions/upload-artifact@", "actions/download-artifact@",
-                      "actions/attest-build-provenance@", "id-token: write", "--lockfile_mode",
-                      "Release-Candidate-Preflight", "select-preflight"):
-        if forbidden in release:
-            problems.append("release contains %s" % forbidden)
     jobs = _jobs(release)
     if set(jobs) != {"resolve-candidate", "publish-release-artifacts"}:
-        return problems + ["release jobs changed: %s" % sorted(jobs)]
-    if jobs["resolve-candidate"].count("python3 -B -m tools.bcr_release select-record") != 1:
-        problems.append("release does not select the record named by the release body")
-    publication = jobs["publish-release-artifacts"]
-    if "needs: resolve-candidate" not in publication:
-        problems.append("publication does not wait for record selection")
-    names = [_step_identity_value(step, "name") for step in _steps(publication)]
-    order = ["Reverify the candidate record and stage its release files",
-             "Verify the candidate record attestation",
-             "Verify preflight build attestations",
-             "Upload verified release artifacts without replacement"]
-    if [name for name in names if name in order] != order or names[-1] != order[-1]:
-        problems.append("release does not verify the record before its final upload step")
-    stage = _named_step(publication, order[0])
-    for argument in ('--record-run-id "$RECORD_RUN_ID"', '--record-attempt "$RECORD_ATTEMPT"',
-                     '--record-artifact-id "$RECORD_ARTIFACT_ID"',
-                     '--record-sha256 "$RECORD_SHA256"'):
-        if "python3 -B -m tools.release_candidate release" not in stage or argument not in stage:
-            problems.append("release does not re-verify the named record: %s" % argument)
-    if (release.count("gh attestation verify") != 2 or
-            release.count("--signer-workflow jwmcglynn/donner/.github/workflows/"
-                          "release_candidate.yml") != 1 or
-            release.count("--signer-workflow jwmcglynn/donner/.github/workflows/"
-                          "bcr_preflight.yml") != 1):
-        problems.append("release does not verify the record and preflight attestations")
-    attested = _continued_arguments(_named_step(publication, order[2]), "for subject in")
-    expected_attested = ['"$RUNNER_TEMP"/release/%s/%s' % (
-        "cli-linux" if "linux" in asset else "cli-macos", asset)
-        for asset in RELEASE_CLI_ASSETS if asset.endswith(("64", ".bazel.lock", ".NOTICE.txt"))]
-    if attested != expected_attested + ['"$RUNNER_TEMP"/release/source/*.tar.gz; do']:
-        problems.append("release attestation subjects changed: %s" % attested)
-    uploaded = _continued_arguments(_named_step(publication, order[3]),
-                                    "python3 tools/release_artifact_publisher.py")
-    expected_uploaded = ['"$RUNNER_TEMP"/release/%s/%s' % (
-        "cli-linux" if "linux" in asset else "cli-macos", asset) for asset in RELEASE_CLI_ASSETS]
-    expected_uploaded += ['"$RUNNER_TEMP"/release/source/*',
-                          '"$RUNNER_TEMP"/release/donner-*.candidate.json']
-    if uploaded != expected_uploaded:
-        problems.append("release uploads files the record did not stage: %s" % uploaded)
-    if any("${{" in body for body in _run_bodies(release)):
-        problems.append("release run blocks must use quoted environment values")
-    return problems
+        return ["release jobs changed: %s" % sorted(jobs)]
+    return (_release_shape_violations(release) + _release_step_violations(jobs) +
+            _release_file_violations(jobs["publish-release-artifacts"]))
+
+
+ASSEMBLY_PUBLICATIONS = ("gh release", "gh workflow", "gh pr", "/pages/deployments", "git push",
+                         "release_artifact_publisher")
+
+
+def _candidate_input_names(workflow):
+    inputs = workflow.split("    inputs:\n", 1)[-1].split("\npermissions:", 1)[0]
+    required = inputs.count("        required: true\n")
+    names = re.findall(r"(?m)^      ([a-z_]+):$", inputs)
+    return names if required == len(names) else names + ["<optional input>"]
+
+
+def _candidate_workflow_violations(workflow):
+    scripts = _run_bodies(workflow)
+    return _failed([
+        (_triggers(workflow) == {"workflow_dispatch"},
+         "assembly runs on an event other than a manual dispatch"),
+        (_candidate_input_names(workflow) == list(CANDIDATE_INPUTS),
+         "assembly inputs changed: %s" % _candidate_input_names(workflow)),
+        (_permissions(workflow, 0) == {"contents": "read"}, "assembly widens the workflow token"),
+        (not _secret_reads(workflow) and "secrets" not in workflow, "assembly reads a secret"),
+        (not _build_steps(workflow), "assembly builds: %s" % _build_steps(workflow)),
+        (not _untrusted_script_contexts(workflow) and not any("${{" in body for body in scripts),
+         "assembly interpolates inputs into a script"),
+        (not re.search(r"uses: [^\n]+@[0-9a-f]{40}", workflow) and
+         "continue-on-error" not in workflow,
+         "assembly pins an action by commit or ignores a failure"),
+    ]) + ["assembly publishes: %s" % item for item in ASSEMBLY_PUBLICATIONS if item in workflow]
+
+
+def _candidate_retention_violations(assemble):
+    uploads = [step for step in _steps(assemble) if "actions/upload-artifact@" in step]
+    values = [(_step_values(step, "name"), _step_values(step, "path"),
+               _step_values(step, "retention-days"), _step_values(step, "if-no-files-found"))
+              for step in uploads]
+    expected = (["donner-release-candidate-${{ github.run_attempt }}"],
+                ["${{ runner.temp }}/candidate/"], ["90"], ["error"])
+    return _failed([(values == [expected], "assembly does not retain the record for 90 days")])
+
+
+def _candidate_job_violations(jobs):
+    assemble, attest = jobs["assemble"], jobs["attest-record"]
+    guard = "    if: github.repository == 'jwmcglynn/donner' && github.ref == 'refs/heads/main'\n"
+    check = attest.find("sha256sum --check --strict candidate.json.sha256")
+    signer = attest.find("uses: actions/attest-build-provenance@")
+    return _failed([
+        (guard in assemble + "\n", "assembly can run outside main"),
+        (_permissions(assemble, 4) == {"contents": "read", "actions": "read", "issues": "read"},
+         "assembly job token scopes changed"),
+        (_permissions(attest, 4) == {"contents": "read", "id-token": "write",
+                                     "attestations": "write"},
+         "attestation job token scopes changed"),
+        (assemble.count("python3 -B -m tools.release_candidate assemble") == 1,
+         "assembly does not run the candidate verifier"),
+        ("needs: assemble" in attest and "actions/checkout@" not in attest and
+         "python3" not in attest, "attestation job runs repository code or skips assembly"),
+        (0 <= check < signer and
+         "subject-path: ${{ runner.temp }}/candidate/candidate.json\n" in attest + "\n",
+         "attestation does not sign the checked record"),
+    ]) + _candidate_retention_violations(assemble)
 
 
 def _candidate_assembly_violations(workflow):
     """Assembly is manual, least-privilege, secret-free, retained and attested, and builds nothing."""
-    problems = []
-    if _triggers(workflow) != {"workflow_dispatch"}:
-        problems.append("assembly runs on an event other than a manual dispatch")
-    inputs = workflow.split("    inputs:\n", 1)[-1].split("\npermissions:", 1)[0]
-    declared = re.findall(r"(?m)^      ([a-z_]+):$", inputs)
-    if (declared != list(CANDIDATE_INPUTS) or
-            inputs.count("        required: true\n") != len(CANDIDATE_INPUTS)):
-        problems.append("assembly inputs changed: %s" % declared)
-    if _permissions(workflow, 0) != {"contents": "read"}:
-        problems.append("assembly widens the workflow token")
-    if _secret_reads(workflow) or "secrets" in workflow:
-        problems.append("assembly reads a secret")
-    if _build_steps(workflow):
-        problems.append("assembly builds: %s" % _build_steps(workflow))
-    if _untrusted_script_contexts(workflow) or any("${{" in body for body in _run_bodies(workflow)):
-        problems.append("assembly interpolates inputs into a script")
-    if re.search(r"uses: [^\n]+@[0-9a-f]{40}", workflow) or "continue-on-error" in workflow:
-        problems.append("assembly pins an action by commit or ignores a failure")
-    for publication in ("gh release", "gh workflow", "gh pr", "/pages/deployments", "git push",
-                        "release_artifact_publisher"):
-        if publication in workflow:
-            problems.append("assembly publishes: %s" % publication)
     jobs = _jobs(workflow)
     if set(jobs) != {"assemble", "attest-record"}:
-        return problems + ["assembly jobs changed: %s" % sorted(jobs)]
-    assemble, attest = jobs["assemble"], jobs["attest-record"]
-    if "    if: github.repository == 'jwmcglynn/donner' && github.ref == 'refs/heads/main'\n" \
-            not in assemble + "\n":
-        problems.append("assembly can run outside main")
-    if _permissions(assemble, 4) != {"contents": "read", "actions": "read", "issues": "read"}:
-        problems.append("assembly job token scopes changed")
-    if _permissions(attest, 4) != {"contents": "read", "id-token": "write",
-                                   "attestations": "write"}:
-        problems.append("attestation job token scopes changed")
-    if assemble.count("python3 -B -m tools.release_candidate assemble") != 1:
-        problems.append("assembly does not run the candidate verifier")
-    upload = [step for step in _steps(assemble) if "actions/upload-artifact@" in step]
-    if (len(upload) != 1 or
-            _step_values(upload[0], "name") != ["donner-release-candidate-${{ github.run_attempt }}"] or
-            _step_values(upload[0], "path") != ["${{ runner.temp }}/candidate/"] or
-            _step_values(upload[0], "retention-days") != ["90"] or
-            _step_values(upload[0], "if-no-files-found") != ["error"]):
-        problems.append("assembly does not retain the record for 90 days")
-    if ("needs: assemble" not in attest or "actions/checkout@" in attest or "python3" in attest):
-        problems.append("attestation job runs repository code or skips assembly")
-    check = attest.find("sha256sum --check --strict candidate.json.sha256")
-    signer = attest.find("uses: actions/attest-build-provenance@")
-    if check < 0 or signer < check or \
-            "subject-path: ${{ runner.temp }}/candidate/candidate.json\n" not in attest + "\n":
-        problems.append("attestation does not sign the checked record")
-    return problems
+        return ["assembly jobs changed: %s" % sorted(jobs)]
+    return _candidate_workflow_violations(workflow) + _candidate_job_violations(jobs)
 
 
 class SecurityWorkflowPolicyTest(unittest.TestCase):
