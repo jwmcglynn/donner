@@ -2318,6 +2318,11 @@ TEST(EditorShellTest, CpuAdoptionDoesNotStartPreviewsBeforeForegroundPresentatio
   options.showWelcome = true;
   EditorShell shell(window, options);
   ASSERT_TRUE(shell.valid());
+  // Hold the canvas-commit debounce: on a slow host it can elapse while the sample is adopted, and
+  // the render-tree rebuild that follows a HiDPI commit leaves a staged result behind that the
+  // directly driven sidebar frames below never poll, so the renderer looks busy to them. The
+  // commit is not part of this preview-admission contract.
+  RenderCoordinatorTestAccess::useFakeSchedulingClock(EditorShellTestAccess::Coordinator(shell));
   for (int frame = 0; frame < 3; ++frame) {
     RunShellFrame(window, shell);
   }
@@ -2485,9 +2490,13 @@ TEST(EditorShellTest, NewShellInvalidatesPriorProducerPresentationAck) {
   window.setPresentationCompletionProbeForTesting([&] { return completedSerial; });
 
   gui::EditorWindow::PresentedDocumentFrameIdentity firstIdentity;
+  // Each shell holds its canvas-commit debounce. On a slow host it can elapse within the loops
+  // below, and the render-tree rebuild after a HiDPI commit adopts a second capture, so the
+  // identities compared here would depend on host speed. The commit is not part of this contract.
   {
     EditorShell first(window, OptionsWithSource(kInitialSvg));
     ASSERT_TRUE(first.valid());
+    RenderCoordinatorTestAccess::useFakeSchedulingClock(EditorShellTestAccess::Coordinator(first));
     bool acknowledged = false;
     for (int attempt = 0; attempt < 200; ++attempt) {
       first.prepareFrame();
@@ -2517,6 +2526,7 @@ TEST(EditorShellTest, NewShellInvalidatesPriorProducerPresentationAck) {
 
   EditorShell second(window, OptionsWithSource(kInitialSvg));
   ASSERT_TRUE(second.valid());
+  RenderCoordinatorTestAccess::useFakeSchedulingClock(EditorShellTestAccess::Coordinator(second));
   EXPECT_FALSE(window.lastFullyPresentedDocumentFrame().has_value());
   const std::size_t layerRendersBefore = EditorShellTestAccess::RenderedLayerThumbnailCount(second);
 
