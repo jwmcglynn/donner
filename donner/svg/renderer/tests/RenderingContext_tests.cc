@@ -436,6 +436,31 @@ TEST_F(RenderingContextTest, GroupedElements) {
   EXPECT_NEAR(bounds->topLeft.y, 50.0, 1.0);
 }
 
+TEST_F(RenderingContextTest, NestedClipOverflowClearsStoredGeometry) {
+  auto document = ParseSVG(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="32" height="16">
+      <defs>
+        <clipPath id="inner" transform="scale(1e200)"><rect width="1" height="1"/></clipPath>
+        <clipPath id="outer">
+          <rect width="1" height="1" transform="scale(1e200)" clip-path="url(#inner)"/>
+        </clipPath>
+      </defs>
+      <rect id="target" width="32" height="16" clip-path="url(#outer)"/>
+    </svg>
+  )svg");
+  RenderingContext context(document.registry());
+  context.instantiateRenderTree(false, warningSink_);
+  const auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  const auto* clips = target->entityHandle().try_get<ComputedClipPathsComponent>();
+  ASSERT_THAT(clips, NotNull());
+  EXPECT_THAT(clips->clipPaths, testing::SizeIs(0));
+  for (const auto& shape : clips->clipPaths) {
+    EXPECT_THAT(shape.parentFromEntity.data,
+                testing::Each(testing::Truly([](double value) { return std::isfinite(value); })));
+  }
+}
+
 TEST_F(RenderingContextTest, GradientAndClipPath) {
   auto document = ParseSVG(R"svg(
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">

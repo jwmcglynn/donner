@@ -2865,6 +2865,34 @@ TEST(RendererPublicApiTest, TransformedClipChildCarriesNestedObjectBox) {
                                        editor::tests::PixelmatchIdentityParams());
 }
 
+TEST(RendererPublicApiTest, ClipPathSelfUnitObjectBoxPreservesIdentity) {
+  SVGDocument document = ParseDocument(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 1 1">
+      <defs>
+        <clipPath id="inner" clipPathUnits="objectBoundingBox"><rect width="1" height="1"/></clipPath>
+        <clipPath id="outer" clip-path="url(#inner)"><rect width="1" height="1"/></clipPath>
+      </defs>
+      <rect width="1" height="1" fill="blue" clip-path="url(#outer)"/>
+    </svg>
+  )svg");
+  SVGDocument reference = ParseDocument(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32">
+      <rect width="32" height="32" fill="blue"/>
+    </svg>
+  )svg");
+  Renderer actual;
+  actual.draw(document);
+  Renderer expected;
+  expected.draw(reference);
+  const RendererBitmap actualSnapshot = NormalizeSnapshot(actual.takeSnapshot());
+  const RendererBitmap expectedSnapshot = NormalizeSnapshot(expected.takeSnapshot());
+  ASSERT_THAT(actualSnapshot.empty(), testing::IsFalse());
+  EXPECT_THAT(PixelAt(actualSnapshot, 16, 16), ElementsAre(0, 0, 255, 255));
+  editor::tests::CompareBitmapToBitmap(actualSnapshot, expectedSnapshot,
+                                       "clip_self_object_box_identity",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
 // 20. Mask element
 TEST(RendererPublicApiTest, MaskElement) {
   SVGDocument document = ParseDocument(R"svg(
