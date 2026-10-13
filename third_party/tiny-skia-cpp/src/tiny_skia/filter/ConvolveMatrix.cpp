@@ -19,9 +19,7 @@ class ConvolveNormalization {
       : divisor_(divisor), inverse_(1.0 / divisor), useInverse_(std::isfinite(inverse_)) {}
 
   /// @param value Accumulated channel before normalization.
-  double apply(double value) const {
-    return useInverse_ ? value * inverse_ : value / divisor_;
-  }
+  double apply(double value) const { return useInverse_ ? value * inverse_ : value / divisor_; }
 
  private:
   double divisor_;
