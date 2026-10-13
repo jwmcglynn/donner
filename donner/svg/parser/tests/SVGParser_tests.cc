@@ -191,6 +191,21 @@ TEST(SVGParser, SourceLessCssImportWarningKeepsCssLocalOffset) {
   EXPECT_THAT(warnings.warnings().front().range.start.lineInfo, testing::Eq(std::nullopt));
 }
 
+TEST(SVGParser, CssImportAfterUnmappedChunkBoundaryKeepsCssLocalOffset) {
+  // The entity makes the second chunk's source length differ from its decoded value, so only the
+  // CDATA chunk is mapped. The import starts exactly where that mapped chunk ends, which is not
+  // the end of the stylesheet, so it must not be mapped to the end of the CDATA content.
+  const std::string source =
+      "<svg xmlns='http://www.w3.org/2000/svg'><style><![CDATA[/*x*/]]>@import 'hidden.css'; "
+      "/* &amp; */</style><rect/></svg>";
+  ParseWarningSink warnings;
+  EXPECT_THAT(SVGParser::ParseSVG(source, warnings), NoParseError());
+  ASSERT_THAT(warnings.warnings(), testing::SizeIs(1));
+  EXPECT_THAT(warnings.warnings().front().range.start.offset,
+              testing::Eq(std::string_view("/*x*/").size()));
+  EXPECT_THAT(warnings.warnings().front().range.start.lineInfo, testing::Eq(std::nullopt));
+}
+
 TEST(SVGParser, CssImportWarningRefusalFlagsSurviveSourceMapping) {
   std::string source = "<svg xmlns='http://www.w3.org/2000/svg'><style>";
   for (std::size_t i = 0; i <= ParseWarningSink::kMaximumWarnings; ++i) {
