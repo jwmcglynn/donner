@@ -28,7 +28,7 @@ was written for the C++ port to support SVG `<filter>` rendering in donner.
 | Merge | `feMerge` | N-input layer compositing |
 | ColorMatrix | `feColorMatrix` | 5×4 matrix + saturate/hueRotate/luminanceToAlpha |
 | ComponentTransfer | `feComponentTransfer` | Identity/Table/Discrete/Linear/Gamma per channel |
-| ConvolveMatrix | `feConvolveMatrix` | Arbitrary kernel with edge modes |
+| ConvolveMatrix | `feConvolveMatrix` | Arbitrary kernel with edge modes; SVG bias (unscaled alpha bias, color bias scaled by pre-clamp alpha) |
 | Morphology | `feMorphology` | Erode/Dilate with independent X/Y radii |
 | Tile | `feTile` | Region tiling |
 | Turbulence | `feTurbulence` | Perlin noise (fractalNoise + turbulence) |
@@ -85,6 +85,10 @@ was written for the C++ port to support SVG `<filter>` rendering in donner.
      graph, named result resolution, subregion clipping.
    - Round-trip tests: sRGB→linear→sRGB color space conversion accuracy.
 
+   Progress: `filter/tests/ConvolveMatrixTest.cpp` checks ConvolveMatrix bias handling on
+   both the uint8 and float paths against literal SVG results (positive/negative bias,
+   transparent and opaque inputs, saturation, zero bias, and preserved alpha).
+
 ### P1 — Should Fix
 
 2. **No `FilterGraph` integration test exercising multi-node chains.** The
@@ -118,7 +122,8 @@ Each step should leave `bazel test //...` green.
 - [ ] **IP-02**: Add golden-image tests for each standalone primitive (uint8):
   GaussianBlur, Flood, Offset, Blend, Composite, Merge, ColorMatrix,
   ComponentTransfer, ConvolveMatrix, Morphology, Tile, Turbulence,
-  DisplacementMap, DiffuseLighting, SpecularLighting.
+  DisplacementMap, DiffuseLighting, SpecularLighting. (ConvolveMatrix bias is covered by
+  literal-value tests in `filter/tests/ConvolveMatrixTest.cpp`; golden images remain open.)
 - [ ] **IP-03**: Add golden-image tests for float-path variants of the same
   primitives, verifying that float and uint8 paths produce visually equivalent
   results (within tolerance).

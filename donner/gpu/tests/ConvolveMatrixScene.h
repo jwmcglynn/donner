@@ -33,12 +33,38 @@ inline constexpr uint32_t kBytesPerRow = 256;
 
 using Params = shader::programs::ConvolveMatrixParams;
 
+/// Literal SVG results independent of the general convolution reference evaluator.
+struct BiasCase {
+  const char* name;
+  float bias;
+  bool preserveAlpha;
+  std::array<float, 4> input;
+  std::array<float, 4> expected;
+};
+
+inline constexpr std::array<BiasCase, 8> kBiasCases{{
+    {"positive", 0.25f, false, {0.2f, 0.1f, 0.05f, 0.5f}, {0.3875f, 0.2875f, 0.2375f, 0.75f}},
+    {"negative", -0.25f, false, {0.2f, 0.1f, 0.05f, 0.5f}, {0.1375f, 0.0375f, 0.0f, 0.25f}},
+    {"transparent", 0.25f, false, {0.0f, 0.0f, 0.0f, 0.0f}, {0.0625f, 0.0625f, 0.0625f, 0.25f}},
+    {"clamp_high", 0.75f, false, {0.2f, 0.1f, 0.05f, 0.5f}, {1.0f, 1.0f, 0.9875f, 1.0f}},
+    {"clamp_low", -0.75f, false, {0.2f, 0.1f, 0.05f, 0.5f}, {0.0f, 0.0f, 0.0f, 0.0f}},
+    {"opaque", 0.25f, false, {0.2f, 0.1f, 0.05f, 1.0f}, {0.5125f, 0.4125f, 0.3625f, 1.0f}},
+    {"zero", 0.0f, false, {0.2f, 0.1f, 0.05f, 0.5f}, {0.2f, 0.1f, 0.05f, 0.5f}},
+    {"preserved", 0.25f, true, {0.2f, 0.1f, 0.05f, 0.5f}, {0.325f, 0.225f, 0.175f, 0.5f}},
+}};
+
 /// Dynamic coefficient-array index selected by a test artifact.
 enum class ArrayIndexMode { Authored, High, Low };
 
 /// Varied premultiplied source whose position, channels, and fractional alpha are independent.
-inline std::array<float, kWidth * kHeight * 4> InputTexels() {
+inline std::array<float, kWidth * kHeight * 4> InputTexels(const BiasCase* biasCase = nullptr) {
   std::array<float, kWidth * kHeight * 4> result{};
+  if (biasCase != nullptr) {
+    for (size_t offset = 0; offset < result.size(); offset += 4) {
+      std::copy(biasCase->input.begin(), biasCase->input.end(), result.begin() + offset);
+    }
+    return result;
+  }
   for (uint32_t y = 0; y < kHeight; ++y) {
     for (uint32_t x = 0; x < kWidth; ++x) {
       const size_t offset = size_t{y * kWidth + x} * 4;
@@ -53,7 +79,11 @@ inline std::array<float, kWidth * kHeight * 4> InputTexels() {
 }
 
 /// Asymmetric kernel and off-center target expose transposition, reversal, and offset errors.
-inline Params Parameters(uint32_t edgeMode, bool preserveAlpha, ArrayIndexMode indexMode) {
+inline Params Parameters(uint32_t edgeMode, bool preserveAlpha, ArrayIndexMode indexMode,
+                         const BiasCase* biasCase = nullptr) {
+  if (biasCase != nullptr) {
+    return Params{1, 1, 0, 0, 1.0f, biasCase->bias, 0u, biasCase->preserveAlpha ? 1u : 0u, {1.0f}};
+  }
   Params result{2, 3, 0, 1, 2.0f, 0.04f, edgeMode, preserveAlpha ? 1u : 0u, {}};
   if (indexMode != ArrayIndexMode::Authored) {
     std::fill(result.kernel, result.kernel + shader::programs::kConvolveMatrixKernelCapacity,
@@ -113,10 +143,11 @@ inline std::array<float, 4> ExpectedTexel(const std::array<float, kWidth * kHeig
     return {rgb[0], rgb[1], rgb[2], sourceAlpha};
   }
 
-  const float scaledBias = params.bias * sourceAlpha;
-  alpha = std::clamp(alpha / params.divisor + scaledBias, 0.0f, 1.0f);
+  const float rawAlpha = alpha / params.divisor + params.bias;
+  const float colorBias = params.bias * rawAlpha;
+  alpha = std::clamp(rawAlpha, 0.0f, 1.0f);
   for (float& channel : rgb) {
-    channel = std::clamp(channel / params.divisor + scaledBias, 0.0f, alpha);
+    channel = std::clamp(channel / params.divisor + colorBias, 0.0f, alpha);
   }
   return {rgb[0], rgb[1], rgb[2], alpha};
 }
@@ -133,13 +164,15 @@ inline std::array<float, 4> ExpectedTexel(const std::array<float, kWidth * kHeig
  * @param edgeMode Zero for duplicate, one for wrap, and two for transparent black.
  * @param preserveAlpha Whether to convolve straight RGB while retaining source alpha.
  * @param shaderMetadata Reflected binding and workgroup interface, when supplied.
+ * @param biasCase Uniform literal bias fixture, when supplied.
  */
 template <typename DeviceType, typename Readback>
 void CheckConvolveMatrixStorage(DeviceType& device, const ShaderModuleDescriptor& shaderDescriptor,
                                 Readback readbackBuffer, uint32_t edgeMode, bool preserveAlpha,
                                 convolve_matrix_scene::ArrayIndexMode indexMode =
                                     convolve_matrix_scene::ArrayIndexMode::Authored,
-                                const shader::CompiledShaderView* shaderMetadata = nullptr) {
+                                const shader::CompiledShaderView* shaderMetadata = nullptr,
+                                const convolve_matrix_scene::BiasCase* biasCase = nullptr) {
   using namespace convolve_matrix_scene;
   uint32_t inputBinding = 0;
   uint32_t outputBinding = 1;
@@ -196,7 +229,7 @@ void CheckConvolveMatrixStorage(DeviceType& device, const ShaderModuleDescriptor
   ASSERT_THAT(inputView, HasResult());
   ASSERT_THAT(outputView, HasResult());
 
-  const std::array<float, kWidth * kHeight * 4> inputTexels = InputTexels();
+  const auto inputTexels = InputTexels(biasCase);
   std::array<uint8_t, kBytesPerRow * kHeight> upload{};
   for (uint32_t y = 0; y < kHeight; ++y) {
     std::memcpy(upload.data() + size_t{y} * kBytesPerRow,
@@ -206,7 +239,7 @@ void CheckConvolveMatrixStorage(DeviceType& device, const ShaderModuleDescriptor
       device.writeTexture(input.result(), upload, {0, kBytesPerRow, kHeight}, {kWidth, kHeight}),
       IsOk());
 
-  const Params params = Parameters(edgeMode, preserveAlpha, indexMode);
+  const Params params = Parameters(edgeMode, preserveAlpha, indexMode, biasCase);
   Params expectedParams = params;
   if (indexMode != ArrayIndexMode::Authored) {
     const float endpoint = indexMode == ArrayIndexMode::High ? params.kernel[24] : params.kernel[0];
@@ -267,7 +300,13 @@ void CheckConvolveMatrixStorage(DeviceType& device, const ShaderModuleDescriptor
     std::memcpy(actual->data().data() + size_t{y} * kWidth * 4,
                 bytes.result().data() + size_t{y} * kBytesPerRow, kWidth * 4 * sizeof(float));
     for (uint32_t x = 0; x < kWidth; ++x) {
-      const std::array<float, 4> reference = ExpectedTexel(inputTexels, expectedParams, x, y);
+      const std::array<float, 4> reference = biasCase != nullptr
+                                                 ? biasCase->expected
+                                                 : ExpectedTexel(inputTexels, expectedParams, x, y);
+      if (biasCase != nullptr) {
+        const auto actualTexel = actual->data().subspan(size_t{y * kWidth + x} * 4, 4);
+        EXPECT_THAT(actualTexel, testing::Pointwise(testing::FloatNear(1e-6f), reference));
+      }
       std::copy(reference.begin(), reference.end(),
                 expected->data().begin() + size_t{y * kWidth + x} * 4);
     }
