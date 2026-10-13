@@ -342,6 +342,11 @@ the affected descendants while retaining their typed state for restoration; fore
 stylesheets, paint references, filter children, and clip geometry are excluded from their consumers.
 This does not purge previously loaded or queued font faces from the existing resource cache.
 
+The named rendering gates are `//donner/svg/renderer/tests:renderer_public_api_tests` and its
+configured `renderer_public_api_tests_geode` counterpart. Corpus enforcement uses
+`//donner/svg/renderer/tests:resvg_test_suite_default_text`, `resvg_test_suite_geode`, and
+`resvg_test_suite_max` for the configured text lane.
+
 The XML byte parser accepts UTF-8 input and rejects declarations naming another encoding rather
 than interpreting those bytes as UTF-8. `structure/svg/not-UTF-8-encoding.svg` is an explicitly
 unsupported Windows-1251 input: transcode the bytes and update or remove the declaration first.
