@@ -433,6 +433,12 @@ py_test(
     }),
 )
 
+# Also the size gate of the standalone renderer module, //donner/svg/renderer/wasm:wasm_size_tests.
+exports_files(
+    ["wasm_package_size_tests.py"],
+    visibility = ["//donner/svg/renderer/wasm:__pkg__"],
+)
+
 py_binary(
     name = "package_web_files",
     srcs = ["package_web_files.py"],

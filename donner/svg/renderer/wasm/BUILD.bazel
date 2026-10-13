@@ -129,6 +129,39 @@ py_test(
     deps = ["@rules_python//python/runfiles"],
 )
 
+# Size gate for the shipped (`--config=wasm-size`) module and its JavaScript glue, run by
+# //tools/ci:wasm_size_tests. Each ceiling is about 2 percent above the measured artifact: Wasm
+# 1,854,541 raw / 734,268 gzip, JS 5,525 raw / 2,711 gzip. Lower them as the module
+# shrinks; raise one only by explicit maintainer decision.
+py_test(
+    name = "wasm_size_tests",
+    size = "small",
+    srcs = ["//donner/editor/wasm:wasm_package_size_tests.py"],
+    args = [
+        "--metric-prefix",
+        "renderer",
+        "--wasm-file",
+        "$(rootpath :donner_wasm_bin.wasm)",
+        "--js-file",
+        "$(rootpath :donner_wasm_bin.js)",
+        "--max-wasm-raw-bytes",
+        "1892000",
+        "--max-wasm-gzip-bytes",
+        "749000",
+        "--max-js-raw-bytes",
+        "5700",
+        "--max-js-gzip-bytes",
+        "2800",
+    ],
+    data = [
+        ":donner_wasm_bin.js",
+        ":donner_wasm_bin.wasm",
+    ],
+    main = "//donner/editor/wasm:wasm_package_size_tests.py",
+    tags = ["manual"],
+    target_compatible_with = _WASM_TINY_SKIA_COMPATIBLE_WITH,
+)
+
 # ─── Geode (WebGPU) WASM build ─────────────────────────────────────────
 
 # Internal cc_binary for the Geode backend. Uses ASYNCIFY so that the

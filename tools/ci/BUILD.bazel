@@ -93,7 +93,10 @@ test_suite(
 test_suite(
     name = "wasm_size_tests",
     tags = ["manual"],
-    tests = ["//donner/svg/renderer/wasm:render_test"],
+    tests = [
+        "//donner/svg/renderer/wasm:render_test",
+        "//donner/svg/renderer/wasm:wasm_size_tests",
+    ],
 )
 
 test_suite(
