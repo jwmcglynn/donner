@@ -1,5 +1,5 @@
 const { defineConfig, devices } = require("@playwright/test");
-const { kStallGuardMs } = require("./test-timing.cjs");
+const { stallGuardFor } = require("./test-timing.cjs");
 
 // The editor is one canvas transferred to a worker that presents into it with
 // WebGPU. Chromium's default headless GL path never composites that
@@ -36,7 +36,7 @@ module.exports = defineConfig({
   ],
   timeout: 30000,
   // Web-first assertions wait for a state; bound them by the shared stall guard, not a latency.
-  expect: { timeout: kStallGuardMs },
+  expect: { timeout: stallGuardFor(30000) },
   use: {
     ...devices["Desktop Chrome"],
     // Playwright normally swaps in Chromium's legacy headless shell when

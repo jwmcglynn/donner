@@ -16,10 +16,11 @@ using std::chrono::steady_clock;
 using testing::Eq;
 using testing::Optional;
 
-// The guard is a hang bound of tens of seconds, never a latency budget. The per-case watchdog in
-// gtest_timeout_main defaults to the same 60 s, so a wait never outlives the case that owns it.
+// The guard is a hang bound of tens of seconds, never a latency budget. It must expire strictly
+// before the 60 s per-case watchdog in gtest_timeout_main and the 60 s Bazel timeout of a `small`
+// test, so a hang fails with the guard's message rather than a bare timeout.
 static_assert(kHangGuard >= std::chrono::seconds(10));
-static_assert(kHangGuard <= std::chrono::seconds(60));
+static_assert(kHangGuard < std::chrono::seconds(60));
 
 TEST(StallGuardTest, HangGuardWindowIsKHangGuardFromConstruction) {
   const auto before = steady_clock::now();

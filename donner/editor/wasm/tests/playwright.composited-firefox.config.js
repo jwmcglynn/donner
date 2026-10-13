@@ -1,5 +1,5 @@
 const { defineConfig, devices } = require("@playwright/test");
-const { kStallGuardMs } = require("./test-timing.cjs");
+const { stallGuardFor } = require("./test-timing.cjs");
 
 // Gecko lane for the composited-output invariant suite.
 //
@@ -26,7 +26,7 @@ module.exports = defineConfig({
   testMatch: ["composited-invariants.spec.ts", "composited-drag-invariants.spec.ts"],
   timeout: 180000,
   // Web-first assertions wait for a state; bound them by the shared stall guard, not a latency.
-  expect: { timeout: kStallGuardMs },
+  expect: { timeout: stallGuardFor(180000) },
   workers: 1,
   projects: [
     {

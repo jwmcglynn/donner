@@ -1,12 +1,12 @@
 const path = require("node:path");
-const { kStallGuardMs } = require("./test-timing.cjs");
+const { stallGuardFor } = require("./test-timing.cjs");
 
 module.exports = {
   testDir: __dirname,
   testMatch: "font-reference.spec.ts",
   timeout: 10000,
   // Web-first assertions wait for a state; bound them by the shared stall guard, not a latency.
-  expect: { timeout: kStallGuardMs },
+  expect: { timeout: stallGuardFor(10000) },
   retries: 0,
   workers: 1,
   reporter: "list",

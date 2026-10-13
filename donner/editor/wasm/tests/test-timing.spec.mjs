@@ -7,22 +7,17 @@ import { fileURLToPath } from "node:url";
 
 const require = createRequire(import.meta.url);
 const testDirectory = path.dirname(fileURLToPath(import.meta.url));
-const { kCiTimeScale, kStallGuardMs, scaledMs, stallGuardPollOptions } = require(
-  "./test-timing.cjs",
-);
+const { kCiTimeScale, kStallGuardMs, scaledMs, stallGuardFor } = require("./test-timing.cjs");
 
 test("the stall guard is a generous hang bound, not a latency budget", () => {
-  assert.equal(kStallGuardMs, 60_000);
+  assert.equal(kStallGuardMs, 30_000);
   assert.ok(kStallGuardMs >= 10_000, "a stall guard must be tens of seconds");
 });
 
-test("stall-guarded polls carry the guard and name the state they wait for", () => {
-  assert.deepEqual(stallGuardPollOptions("the worker goes idle"), {
-    message: "the worker goes idle",
-    timeout: kStallGuardMs,
-  });
-  assert.throws(() => stallGuardPollOptions(""), /needs a label/);
-  assert.throws(() => stallGuardPollOptions(undefined), /needs a label/);
+test("a config's stall guard ends before its per-test timeout", () => {
+  assert.equal(stallGuardFor(180_000), kStallGuardMs);
+  assert.equal(stallGuardFor(30_000), 20_000);
+  assert.equal(stallGuardFor(10_000), 6_666);
 });
 
 test("the CI time scale keeps its existing values", () => {
@@ -30,15 +25,10 @@ test("the CI time scale keeps its existing values", () => {
   assert.equal(scaledMs(250), 250 * kCiTimeScale);
 });
 
-test("the Playwright wrapper polls through the shared stall guard", () => {
-  const source = readFileSync(path.join(testDirectory, "test-timing.ts"), "utf8");
-  assert.match(source, /from "\.\/test-timing\.cjs"/);
-  assert.match(source, /expect\.poll\(fn, stallGuardPollOptions\(label\)\)/);
-});
-
 // Every config, the derived Bazel configs included, must bound web-first assertions by the stall
-// guard: Playwright's own 5 s default applies otherwise, unscaled, on any host.
-test("every Playwright config bounds web-first assertions by the stall guard", (t) => {
+// guard, and the guard must end before the per-test timeout or a stalled assertion is reported
+// only as a test timeout. Playwright's own 5 s default applies when a config sets none.
+test("every Playwright config bounds web-first assertions inside its test timeout", (t) => {
   const temporary = mkdtempSync(path.join(process.env.TEST_TMPDIR ?? testDirectory, "configs-"));
   t.after(() => rmSync(temporary, { recursive: true, force: true }));
   Object.assign(process.env, {
@@ -52,7 +42,14 @@ test("every Playwright config bounds web-first assertions by the stall guard", (
   assert.ok(configs.length >= 10, `found only ${configs.join(", ")}`);
   for (const config of configs) {
     const loaded = require(path.join(testDirectory, config));
-    assert.equal(loaded.expect?.timeout, kStallGuardMs, `${config} expect.timeout`);
+    const guard = loaded.expect?.timeout;
+    assert.ok(Number.isInteger(guard) && guard <= kStallGuardMs, `${config} expect.timeout ${guard}`);
+    const timeouts = [loaded.timeout, ...(loaded.projects ?? []).map((project) => project.timeout)]
+      .filter((timeout) => timeout !== undefined);
+    assert.ok(timeouts.length > 0, `${config} sets no per-test timeout`);
+    for (const timeout of timeouts) {
+      assert.ok(guard < timeout, `${config} expect.timeout ${guard} >= test timeout ${timeout}`);
+    }
   }
 });
 
@@ -104,6 +101,6 @@ test("no test module defines its own CI time scale or stall guard", () => {
   assert.deepEqual(
     duplicatedTimingDefinitions(files),
     [],
-    "import kStallGuardMs, waitForState or scaledMs from ./test-timing instead",
+    "import the timing constants from ./test-timing instead",
   );
 });

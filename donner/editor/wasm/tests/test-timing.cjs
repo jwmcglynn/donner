@@ -10,8 +10,11 @@
 // This file is CommonJS so the Playwright configs, which are CommonJS, can load it with
 // `require`; the specs load it through `test-timing.ts`.
 
-/** How long a wait for the browser or editor to reach a state may run before the case fails. */
-const kStallGuardMs = 60_000;
+/**
+ * How long a wait for the browser or editor to reach a state may run before the case fails.
+ * Matches the C++ stall guard (`kHangGuard` in donner/base/tests/StallGuard.h).
+ */
+const kStallGuardMs = 30_000;
 
 /**
  * Multiplier applied to the suites' remaining wall-clock bounds when `CI` is set. Shared CI
@@ -34,16 +37,15 @@ function scaledMs(ms) {
 }
 
 /**
- * Options for `expect.poll` or `expect(...).toPass` that wait for a state under the stall guard.
+ * The stall guard for web-first assertions in a config whose cases time out after
+ * `testTimeoutMs`: `kStallGuardMs`, capped at two thirds of the per-test timeout so a stalled
+ * assertion fails with its own message before the test's timeout ends the case without one.
  *
- * @param {string} label What the wait is for, printed when the guard expires.
- * @returns {{message: string, timeout: number}} Poll options.
+ * @param {number} testTimeoutMs The config's per-test timeout, in milliseconds.
+ * @returns {number} The `expect.timeout` for that config, in milliseconds.
  */
-function stallGuardPollOptions(label) {
-  if (typeof label !== "string" || label.length === 0) {
-    throw new TypeError("a stall-guarded wait needs a label naming the state it waits for");
-  }
-  return { message: label, timeout: kStallGuardMs };
+function stallGuardFor(testTimeoutMs) {
+  return Math.min(kStallGuardMs, Math.floor((testTimeoutMs * 2) / 3));
 }
 
-module.exports = { kCiTimeScale, kStallGuardMs, scaledMs, stallGuardPollOptions };
+module.exports = { kCiTimeScale, kStallGuardMs, scaledMs, stallGuardFor };
