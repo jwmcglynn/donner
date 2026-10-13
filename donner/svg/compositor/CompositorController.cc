@@ -1566,9 +1566,14 @@ bool CompositorController::renderFrame(const RenderViewport& viewport, Cancellat
   // `isCancelled()`. The reference is active only for this render attempt.
   cancelToken_.emplace(token);
   renderFrameImpl(viewport, surfaceFromCanvas);
-  const bool cancelled = token.isCancelled();
-  if (!cancelled) {
+  if (!token.isCancelled()) {
     recoverFailedExclusivePromotion();
+  }
+  // Report the final observed cancellation state, including cancellation during recovery or
+  // after the diagnostic's last checkpoint. No cancelled result may claim a comparison.
+  const bool cancelled = token.isCancelled();
+  if (cancelled) {
+    lastRenderFrameStats_.pixelIdentityVerification = PixelIdentityVerificationStatus::NotAttempted;
   }
   cancelToken_.reset();
   return !cancelled;
@@ -2458,20 +2463,73 @@ bool CompatibleIdentitySnapshots(const RendererBitmap& actual, const RendererBit
          actual.pixels.size() / actual.rowBytes >= size_t(actual.dimensions.y);
 }
 
-void AssertPixelIdentity(const RendererBitmap& actual, const RendererBitmap& reference) {
+}  // namespace
+
+std::unique_ptr<RendererInterface> CompositorController::createPixelIdentityReference() {
+  if (isCancelled()) {
+    return nullptr;
+  }
+  auto offscreen = renderer().createOffscreenInstance();
+  if (isCancelled()) {
+    return nullptr;
+  }
+  if (!offscreen) {
+    lastRenderFrameStats_.pixelIdentityVerification =
+        PixelIdentityVerificationStatus::SnapshotUnavailable;
+  }
+  return offscreen;
+}
+
+bool CompositorController::drawPixelIdentityReference(
+    RendererInterface& reference, const std::shared_ptr<components::StyleResourceBudget>& work,
+    const RenderViewport& viewport, const Transform2d& surfaceFromCanvas) {
+  if (isCancelled()) {
+    return false;
+  }
+  // Keep full-document traversal: the separate interruptible range dispatcher does not implement
+  // every full-document operation. Poll around this existing bounded operation instead.
+  RendererDriver driver(reference, false, nullptr, work);
+  driver.draw(document(), viewport, surfaceFromCanvas);
+  return !isCancelled();
+}
+
+std::optional<RendererBitmap> CompositorController::capturePixelIdentitySnapshot(
+    RendererInterface& source) {
+  if (isCancelled()) {
+    return std::nullopt;
+  }
+  RendererBitmap snapshot = source.takeSnapshot();
+  if (isCancelled()) {
+    return std::nullopt;
+  }
+  if (snapshot.empty()) {
+    lastRenderFrameStats_.pixelIdentityVerification =
+        PixelIdentityVerificationStatus::SnapshotUnavailable;
+    return std::nullopt;
+  }
+  return snapshot;
+}
+
+bool CompositorController::assertPixelIdentityUnlessCancelled(const RendererBitmap& actual,
+                                                              const RendererBitmap& reference) {
+  if (isCancelled()) {
+    return false;
+  }
   size_t mismatch = 0;
   for (size_t i = 0; i < actual.pixels.size(); ++i) {
     if (actual.pixels[i] != reference.pixels[i]) {
       ++mismatch;
     }
   }
+  if (isCancelled()) {
+    return false;
+  }
   UTILS_RELEASE_ASSERT_MSG(
       mismatch == 0,
       "Compositor dual-path pixel-identity assertion failed: composited output "
       "differs from full-render reference. Check 0025 § Dual-path debug assertion.");
+  return true;
 }
-
-}  // namespace
 
 void CompositorController::verifyComposedPixelIdentity(const RenderViewport& viewport,
                                                        const Transform2d& surfaceFromCanvas) {
@@ -2483,34 +2541,35 @@ void CompositorController::verifyComposedPixelIdentity(const RenderViewport& vie
   // This diagnostic owns an independent allowance with the same limits. Sharing the depleted
   // frame allowance would change which reference occurrences are admitted. Keep reference pixels
   // offscreen so a refused diagnostic cannot replace the user's presented composition.
-  auto offscreen = renderer().createOffscreenInstance();
+  auto offscreen = createPixelIdentityReference();
   if (!offscreen) {
-    lastRenderFrameStats_.pixelIdentityVerification =
-        PixelIdentityVerificationStatus::SnapshotUnavailable;
     return;
   }
-  const RendererBitmap actual = renderer().takeSnapshot();
-  if (actual.empty()) {
-    lastRenderFrameStats_.pixelIdentityVerification =
-        PixelIdentityVerificationStatus::SnapshotUnavailable;
+  const auto actual = capturePixelIdentitySnapshot(renderer());
+  if (!actual) {
     return;
   }
   auto referenceWork = std::make_shared<components::StyleResourceBudget>(styleWork_->limits());
-  RendererDriver referenceDriver(*offscreen, false, nullptr, referenceWork);
-  referenceDriver.draw(document(), viewport, surfaceFromCanvas);
+  if (!drawPixelIdentityReference(*offscreen, referenceWork, viewport, surfaceFromCanvas)) {
+    return;
+  }
   if (referenceWork->rejected()) {
     lastRenderFrameStats_.pixelIdentityVerification =
         PixelIdentityVerificationStatus::InconclusiveStyleWork;
     return;
   }
-  const RendererBitmap reference = offscreen->takeSnapshot();
-  if (!CompatibleIdentitySnapshots(actual, reference)) {
+  const auto reference = capturePixelIdentitySnapshot(*offscreen);
+  if (!reference) {
+    return;
+  }
+  if (!CompatibleIdentitySnapshots(*actual, *reference)) {
     lastRenderFrameStats_.pixelIdentityVerification =
         PixelIdentityVerificationStatus::SnapshotUnavailable;
     return;
   }
-  AssertPixelIdentity(actual, reference);
-  lastRenderFrameStats_.pixelIdentityVerification = PixelIdentityVerificationStatus::Compared;
+  if (assertPixelIdentityUnlessCancelled(*actual, *reference)) {
+    lastRenderFrameStats_.pixelIdentityVerification = PixelIdentityVerificationStatus::Compared;
+  }
 }
 
 size_t CompositorController::layerCount() const {

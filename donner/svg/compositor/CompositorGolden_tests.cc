@@ -224,7 +224,7 @@ RendererBitmap NormalLimitedVerificationOutput() {
 class CompositorVerificationSourceTest : public testing::TestWithParam<bool> {};
 
 TEST_P(CompositorVerificationSourceTest, FullAllowanceMatchesLiteralSource) {
-#ifndef DONNER_FILTERS_ENABLED
+#if !defined(DONNER_FILTERS_ENABLED) && !defined(DONNER_COMPOSITOR_TEST_GEODE)
   GTEST_SKIP() << "External feImage fixture requires filter rendering";
 #endif
   SVGDocument document = MakeVerificationDocument();
@@ -254,7 +254,7 @@ INSTANTIATE_TEST_SUITE_P(Paths, CompositorVerificationSourceTest, testing::Bool(
                          });
 
 TEST(CompositorVerificationTest, LimitedUnverifiedOutputPreservesRetainedPayload) {
-#ifndef DONNER_FILTERS_ENABLED
+#if !defined(DONNER_FILTERS_ENABLED) && !defined(DONNER_COMPOSITOR_TEST_GEODE)
   GTEST_SKIP() << "External feImage fixture requires filter rendering";
 #endif
   SVGDocument document = MakeVerificationDocument();
@@ -267,8 +267,11 @@ TEST(CompositorVerificationTest, LimitedUnverifiedOutputPreservesRetainedPayload
   const auto target = document.querySelector("#target");
   const CompositorLayer* layer = compositor.findLayerForTest(target->unsafeEntityHandle().entity());
   ASSERT_NE(layer, nullptr);
-  ASSERT_TRUE(layer->hasValidBitmap());
-  const RendererBitmap retained = layer->bitmap();
+  ASSERT_TRUE(layer->hasRenderablePayload());
+  // This test explicitly reads the retained payload; ordinary composition remains GPU resident.
+  const RendererBitmap retained =
+      layer->hasValidBitmap() ? layer->bitmap() : layer->textureSnapshot()->takeSnapshot();
+  ASSERT_FALSE(retained.empty());
   const uint64_t generation = layer->generation();
   compositor.renderFrame(RenderViewport{Vector2i(2, 2)});
   EXPECT_FALSE(work->rejected());
@@ -282,7 +285,7 @@ TEST(CompositorVerificationTest, LimitedUnverifiedOutputPreservesRetainedPayload
 }
 
 TEST(CompositorVerificationTest, CompleteCachedDiagnosticReportsCompared) {
-#ifndef DONNER_FILTERS_ENABLED
+#if !defined(DONNER_FILTERS_ENABLED) && !defined(DONNER_COMPOSITOR_TEST_GEODE)
   GTEST_SKIP() << "External feImage fixture requires filter rendering";
 #endif
   SVGDocument document = MakeVerificationDocument();
@@ -298,7 +301,7 @@ TEST(CompositorVerificationTest, CompleteCachedDiagnosticReportsCompared) {
 }
 
 TEST(CompositorVerificationTest, LimitedCachedDiagnosticIsInconclusiveAndPreservesOutput) {
-#ifndef DONNER_FILTERS_ENABLED
+#if !defined(DONNER_FILTERS_ENABLED) && !defined(DONNER_COMPOSITOR_TEST_GEODE)
   GTEST_SKIP() << "External feImage fixture requires filter rendering";
 #endif
   EXPECT_EXIT(
@@ -322,7 +325,7 @@ TEST(CompositorVerificationTest, LimitedCachedDiagnosticIsInconclusiveAndPreserv
 }
 
 TEST(CompositorVerificationTest, LimitedCachedReuseRemainsInconclusiveAfterBudgetReset) {
-#ifndef DONNER_FILTERS_ENABLED
+#if !defined(DONNER_FILTERS_ENABLED) && !defined(DONNER_COMPOSITOR_TEST_GEODE)
   GTEST_SKIP() << "External feImage fixture requires filter rendering";
 #endif
   EXPECT_EXIT(
@@ -352,7 +355,7 @@ TEST(CompositorVerificationTest, LimitedCachedReuseRemainsInconclusiveAfterBudge
 }
 
 TEST(CompositorVerificationTest, CompleteReplacementClearsPartialPayloadProvenance) {
-#ifndef DONNER_FILTERS_ENABLED
+#if !defined(DONNER_FILTERS_ENABLED) && !defined(DONNER_COMPOSITOR_TEST_GEODE)
   GTEST_SKIP() << "External feImage fixture requires filter rendering";
 #endif
   SVGDocument document = MakeVerificationDocument();
@@ -421,7 +424,7 @@ public:
 class CompositorVerificationCaptureTest : public testing::TestWithParam<bool> {};
 
 TEST_P(CompositorVerificationCaptureTest, MissingDiagnosticCapturePreservesPresentationAndCache) {
-#ifndef DONNER_FILTERS_ENABLED
+#if !defined(DONNER_FILTERS_ENABLED) && !defined(DONNER_COMPOSITOR_TEST_GEODE)
   GTEST_SKIP() << "External feImage fixture requires filter rendering";
 #endif
   SVGDocument document = MakeVerificationDocument();
@@ -454,7 +457,7 @@ class CompositorVerificationCancellationTest : public testing::TestWithParam<boo
 
 TEST_P(CompositorVerificationCancellationTest,
        CancelledDiagnosticPreservesPresentationWithoutClaimingComparison) {
-#ifndef DONNER_FILTERS_ENABLED
+#if !defined(DONNER_FILTERS_ENABLED) && !defined(DONNER_COMPOSITOR_TEST_GEODE)
   GTEST_SKIP() << "External feImage fixture requires filter rendering";
 #endif
   EXPECT_EXIT(
@@ -496,7 +499,7 @@ INSTANTIATE_TEST_SUITE_P(Stages, CompositorVerificationCancellationTest, testing
                          });
 
 TEST(CompositorVerificationTest, CompletePixelMismatchRemainsFatal) {
-#ifndef DONNER_FILTERS_ENABLED
+#if !defined(DONNER_FILTERS_ENABLED) && !defined(DONNER_COMPOSITOR_TEST_GEODE)
   GTEST_SKIP() << "External feImage fixture requires filter rendering";
 #endif
   EXPECT_DEATH(

@@ -217,6 +217,12 @@ donner_cc_test(
     # Independent golden cases (perf cases excluded via the filter above
     # and split into compositor_golden_perf_tests); shard for parallelism.
     shard_count = 4,
+    # Geode implements filters independently of the TinySkia filter build flag. Keep this
+    # test-only backend selection in configured defines so the CMake model carries it too.
+    defines = select({
+        "//donner/svg/renderer:renderer_backend_geode": ["DONNER_COMPOSITOR_TEST_GEODE"],
+        "//conditions:default": [],
+    }),
     deps = [
         ":compositor",
         ":dual_path_verifier",

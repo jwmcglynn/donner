@@ -264,6 +264,8 @@ struct CompositorConfig {
   /// Complete pixel mismatches still fire UTILS_RELEASE_ASSERT. The diagnostic can consume up to
   /// twice the normal style allowance, with at most two diagnostic snapshots; it does not promise
   /// a bound of twice the CPU, GPU, or memory cost. Intended for CI and compositor-debug runs.
+  /// Cancellation is sampled around drawing/capture/comparison; an operation already running
+  /// is not preempted, and the style allowance does not provide a time guarantee.
   /// This option does not configure the separate DualPathVerifier.
   /// Default is false.
   bool verifyPixelIdentity = false;
@@ -1123,6 +1125,17 @@ private:
                                     const std::shared_ptr<const RendererTextureSnapshot>& texture,
                                     const Transform2d& canvasFromPayload, bool textureMode,
                                     bool styleWorkIncomplete);
+
+  /// Diagnostic checkpoints observe cancellation around existing operations; they do not preempt
+  /// a draw or capture that is already running.
+  [[nodiscard]] std::unique_ptr<RendererInterface> createPixelIdentityReference();
+  [[nodiscard]] bool drawPixelIdentityReference(
+      RendererInterface& reference, const std::shared_ptr<components::StyleResourceBudget>& work,
+      const RenderViewport& viewport, const Transform2d& surfaceFromCanvas);
+  [[nodiscard]] std::optional<RendererBitmap> capturePixelIdentitySnapshot(
+      RendererInterface& source);
+  [[nodiscard]] bool assertPixelIdentityUnlessCancelled(const RendererBitmap& actual,
+                                                        const RendererBitmap& reference);
 
   /// Run the optional bounded diagnostic without replacing the presented frame.
   void verifyComposedPixelIdentity(const RenderViewport& viewport,
