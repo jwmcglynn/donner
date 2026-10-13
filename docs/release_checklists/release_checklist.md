@@ -104,7 +104,8 @@ concern; the tag never moves retroactively.
       the preflight build attestations for the source archive, binaries, and lockfiles; rerun all
       jobs after a failed preflight.
       Follow the [BCR runbook](../design_docs/0018-bcr_release.md); a manual dispatch on `main`
-      can supply missing preflight evidence while it still points to the exact commit.
+      can supply missing preflight evidence while it still points to the exact commit. A main
+      push runs only the slim preflight check, which produces no release artifacts.
 - [ ] **Candidate record verified**. Assemble the
       [immutable release candidate record](../release_candidate.md) for the exact final commit and
       verify it. Keep the record, its SHA-256 and its retained artifacts together.

@@ -415,6 +415,29 @@ def _labels(text):
     return [label.strip().strip("'\"") for label in text.split(",") if label.strip()]
 
 
+def _without_computed_exclusions(block):
+    """A matrix block without the computed values of its `exclude:` entries.
+
+    An exclusion can only remove a combination the literal entries already define, never add a
+    runner label, so its values may be computed from an earlier job's output. Every other line,
+    including literal exclusions, is kept and read: a superset of labels is the safe reading.
+    """
+    kept = []
+    excluding = False
+    for line in block:
+        if len(line) - len(line.lstrip()) <= 8:
+            excluding = re.match(r"^        exclude:\s*$", line) is not None
+        if not (excluding and "${{" in line):
+            kept.append(line)
+    return kept
+
+
+def _unreadable_matrix_line(line):
+    """Expressions, flow mappings and YAML anchors or aliases can all supply a value this
+    line-based reading would miss."""
+    return "{" in line or re.search(r"(?:^|[\s\[,-])[&*][A-Za-z0-9_]", line) is not None
+
+
 def _matrix_values(job, key):
     """Every literal value of one matrix key, or None when the matrix is not fully literal."""
     lines = job.splitlines()
@@ -423,7 +446,8 @@ def _matrix_values(job, key):
         return None
     block = [line for line in _indented_block(lines[starts[0] + 1:], 6)
              if line.strip() and not _is_comment(line)]
-    if any("${{" in line for line in block):
+    block = _without_computed_exclusions(block)
+    if any(_unreadable_matrix_line(line) for line in block):
         return None
     values = []
     for line in block:
@@ -1004,6 +1028,113 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         self.assertIn("os: [ubuntu-24.04, macos-26]", consumer)
         self.assertIn("bazel: ['7.x', '8.x']", consumer)
 
+    def _bcr_scope(self, changed=(), event_name="pull_request", base=None, renamed=None):
+        """Run the preflight scope step on a fixture repository; returns `full_matrix`."""
+        preflight = self.supply_chain_files[".github/workflows/bcr_preflight.yml"]
+        step = _step_body(_jobs(preflight)["prepare"], "Select the preflight scope")
+        script = textwrap.dedent(step.split("        run: |\n", 1)[1])
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repo = root / "repo"
+            repo.mkdir()
+            env = {"PATH": os.environ.get("PATH", os.defpath), "HOME": directory,
+                   "GIT_CONFIG_NOSYSTEM": "1", "GIT_AUTHOR_NAME": "fixture",
+                   "GIT_AUTHOR_EMAIL": "fixture@example.invalid",
+                   "GIT_COMMITTER_NAME": "fixture",
+                   "GIT_COMMITTER_EMAIL": "fixture@example.invalid"}
+
+            def git(*args):
+                return subprocess.run(["git", *args], cwd=repo, env=env, check=True,
+                                      text=True, capture_output=True).stdout.strip()
+
+            def write(path, text):
+                (repo / path).parent.mkdir(parents=True, exist_ok=True)
+                (repo / path).write_text(text, encoding="utf-8")
+                git("add", path)
+
+            git("init", "-q")
+            write("README.md", "base\n")
+            if renamed:
+                write(renamed[0], "a file long enough to be detected as a rename\n" * 8)
+            git("commit", "-q", "-m", "base")
+            base_sha = git("rev-parse", "HEAD")
+            if renamed:
+                (repo / renamed[1]).parent.mkdir(parents=True, exist_ok=True)
+                git("mv", *renamed)
+            for path in changed:
+                write(path, "change\n")
+            git("commit", "-q", "--allow-empty", "-m", "head")
+            output = root / "output"
+            result = subprocess.run(
+                ["/bin/bash", "-c", script], cwd=repo, text=True, capture_output=True,
+                env=dict(env, EVENT_NAME=event_name, BASE_SHA=base or base_sha,
+                         HEAD_SHA=git("rev-parse", "HEAD"), GITHUB_OUTPUT=str(output)),
+                timeout=60)
+            self.assertEqual(0, result.returncode, result.stderr)
+            values = dict(line.split("=", 1) for line in output.read_text().splitlines())
+            return values["full_matrix"]
+
+    def test_bcr_ordinary_pull_requests_run_the_slim_check(self):
+        for changed in (["donner/svg/SVGElement.cc"], ["donner/base/Utils.h", "docs/notes.md"],
+                        ["donner/svg/BUILD.bazel"], ["build_defs/rules.bzl"],
+                        ["third_party/resvg-test-suite/fixture.svg"], ["tools/lint.sh"],
+                        ["tools/ci/test_with_exclusions.py"], [".github/workflows/main.yml"]):
+            with self.subTest(changed=changed):
+                self.assertEqual("false", self._bcr_scope(changed))
+
+    def test_bcr_release_path_pull_requests_run_the_full_matrix(self):
+        for changed in (["MODULE.bazel"], ["MODULE.bazel.lock"], [".bazelversion"],
+                        [".bazelrc"], [".bcr/presubmit.yml"], ["examples/bazel_consumer/main.cc"],
+                        ["third_party/licenses/BUILD.bazel"], ["tools/bcr_source.py"],
+                        ["tools/bcr_dependency_closure.py"], ["tools/release_cli.py"],
+                        ["tools/notice_coverage_check.py"], ["tools/render_notice.py"],
+                        ["tools/ci/BUILD.bazel"], ["tools/ci/release_compiler_identity.cc"],
+                        ["tools/BUILD.bazel"], ["tools/default_notice_freshness_tests.py"],
+                        ["build_defs/licenses.bzl"], ["build_defs/dep_audit.bzl"],
+                        ["third_party/bazel/non_bcr_deps.bzl"], ["third_party/BUILD.harfbuzz"],
+                        ["third_party/cmark-gfm.BUILD"], ["third_party/stb.bzl"],
+                        ["third_party/patches/fixture.patch"],
+                        [".github/workflows/bcr_preflight.yml"],
+                        [".github/workflows/publish_bcr.yml"],
+                        [".github/workflows/release.yml"],
+                        ["donner/svg/SVGElement.cc", "MODULE.bazel"]):
+            with self.subTest(changed=changed):
+                self.assertEqual("true", self._bcr_scope(changed))
+        # A rename out of a release path is a release-path change.
+        moved = ("third_party/licenses/fixture.LICENSE.txt", "donner/fixture.LICENSE.txt")
+        self.assertEqual("true", self._bcr_scope(renamed=moved))
+
+    def test_bcr_scope_keeps_main_slim_and_qualification_full(self):
+        # Pushes to main always run the slim check, whatever they change; the full matrix
+        # qualifies candidates on schedule and dispatch. A diff that cannot be read is full.
+        self.assertEqual("false", self._bcr_scope(["MODULE.bazel"], event_name="push"))
+        self.assertEqual("true", self._bcr_scope(event_name="schedule"))
+        self.assertEqual("true", self._bcr_scope(event_name="workflow_dispatch"))
+        self.assertEqual("true", self._bcr_scope(["donner/a.cc"], base="0" * 40))
+        self.assertEqual("true", self._bcr_scope([]))
+        preflight = self.supply_chain_files[".github/workflows/bcr_preflight.yml"]
+        self.assertTrue({"push", "pull_request", "schedule", "workflow_dispatch"} <=
+                        _triggers(preflight))
+        jobs = _jobs(preflight)
+        full = "needs.prepare.outputs.full_matrix == 'true'"
+        self.assertIn("full_matrix: ${{ steps.scope.outputs.full_matrix }}", jobs["prepare"])
+        # The slim check always runs: prepare and the Ubuntu consumer on the newest Bazel.
+        self.assertEqual("", _job_key(jobs["prepare"], "if"))
+        self.assertEqual("", _job_key(jobs["consumer"], "if"))
+        self.assertIn("        os: [ubuntu-24.04, macos-26]\n", jobs["consumer"])
+        self.assertIn("        bazel: ['7.x', '8.x']\n", jobs["consumer"])
+        exclusions = _indented_block(
+            jobs["consumer"].split("        exclude:\n", 1)[1].splitlines(), 8)
+        self.assertEqual(["          - os: ${{ %s && 'none' || 'macos-26' }}" % full,
+                          "          - bazel: ${{ %s && 'none' || '7.x' }}" % full],
+                         [line for line in exclusions if line.strip() and not _is_comment(line)])
+        for job in ("cli-linux", "cli-macos", "qualify"):
+            self.assertEqual("${{ %s }}" % full, _job_key(jobs[job], "if"), job)
+        self.assertEqual("github.ref == 'refs/heads/main' && " + full,
+                         _job_key(jobs["attest-artifacts"], "if"))
+        self.assertEqual("[prepare, consumer, cli-linux, cli-macos]",
+                         _job_key(jobs["qualify"], "needs"))
+
     def test_bcr_consumers_audit_the_configured_closure_for_rust(self):
         preflight = self.supply_chain_files[".github/workflows/bcr_preflight.yml"]
         self._assert_bcr_consumer_audit(preflight)
@@ -1458,6 +1589,21 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
             "computed matrix": (bcr, files[bcr].replace(
                 "        os: [ubuntu-24.04, macos-26]\n", "        os: ${{ fromJSON(vars.OS) }}\n",
                 1), "non-literal matrix"),
+            "computed include beside exclusions": (bcr, files[bcr].replace(
+                "        exclude:\n",
+                "        include:\n          - os: ${{ vars.OS }}\n        exclude:\n", 1),
+                "non-literal matrix"),
+            "label after an exclusion": (bcr, files[bcr].replace(
+                "'7.x' }}\n", "'7.x' }}\n        include:\n          - os: arm64\n", 1),
+                ungated),
+            "literal label in an exclusion": (bcr, files[bcr].replace(
+                "'7.x' }}\n", "'7.x' }}\n          - os: arm64\n", 1), ungated),
+            "anchored exclusion aliased into include": (bcr, files[bcr].replace(
+                "'7.x' }}\n", "'7.x' }}\n          - &extra\n            os: arm64\n"
+                "        include:\n          - *extra\n", 1), "non-literal matrix"),
+            "flow mapping include": (bcr, files[bcr].replace(
+                "'7.x' }}\n", "'7.x' }}\n        include: [{os: arm64}]\n", 1),
+                "non-literal matrix"),
             "changed expression": (codeql, files[codeql].replace(
                 "'ubuntu-latest' }}", "'arm64' }}", 1), "unreviewed expression"),
         })
