@@ -135,6 +135,14 @@ gh api repos/jwmcglynn/donner/pulls/<N>/reviews       # review state + top-level
   dead self-hosted runner can never hang main's required check. Never "simplify" these gates —
   the double-actor check prevents collaborator reruns from executing on (or poisoning the cache
   of) the operator's runner.
+- **macos-browser** (macos-26) - GitHub-hosted. Runs only on a trusted PR whose macOS lane went to
+  `macos-self-hosted`, when `determine-targets` reports `browser_affected == 'true'` (an affected
+  test is tagged `launches-browser`, or a browser test dependency manifest changed) or the
+  selection falls back to `//...`. It runs the hosted `macos` job's browser step unchanged (same
+  targets, filters, quarantine and test environment, plus `--build_tests_only`), so browser
+  tests see the hosted runner's three cores and paravirtual GPU before merge. Its BuildBuddy
+  wiring matches the `macos` job's (trusted PRs read and write); it saves no Actions cache.
+  `tools/ci_lane_parity_tests.py` fails if its browser step drifts from the `macos` job's.
 
 Workflow map (all in `.github/workflows/`):
 

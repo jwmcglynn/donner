@@ -50,6 +50,10 @@ SECRET_USES = {
      "./.github/actions/buildbuddy-cache"): {"BUILDBUDDY_API_KEY"},
     (".github/workflows/main.yml", "macos", "Configure BuildBuddy read-only cache", None,
      "./.github/actions/buildbuddy-cache"): {"BUILDBUDDY_API_KEY_READONLY"},
+    (".github/workflows/main.yml", "macos-browser", "Configure BuildBuddy remote cache", None,
+     "./.github/actions/buildbuddy-cache"): {"BUILDBUDDY_API_KEY"},
+    (".github/workflows/main.yml", "macos-browser", "Configure BuildBuddy read-only cache", None,
+     "./.github/actions/buildbuddy-cache"): {"BUILDBUDDY_API_KEY_READONLY"},
     (".github/workflows/main.yml", "macos-self-hosted", "Configure masked remote cache", None,
      "<run>"): {"BAZEL_REMOTE_CACHE"},
     (".github/workflows/publish_bcr.yml", "publish-fork", "Create the fork branch only if absent", None,
@@ -236,6 +240,8 @@ BUILDBUDDY_JOBS = {
     (".github/workflows/github_hosted_nightly.yml", "build"),
     (".github/workflows/main.yml", "linux"),
     (".github/workflows/main.yml", "macos"),
+    # Hosted macOS browser subset for trusted maintainer PRs, wired exactly like `macos`.
+    (".github/workflows/main.yml", "macos-browser"),
     (".github/workflows/sanitizers-pr.yml", "asan-geode"),
     (".github/workflows/sanitizers.yml", "asan"),
     (".github/workflows/sanitizers.yml", "ubsan"),
@@ -2294,6 +2300,30 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
                 self.assertIsNone(problem)
                 self.assertEqual(expected, sets)
 
+    def test_hosted_browser_subset_stays_hosted_and_never_writes_caches(self):
+        # The trusted-PR hosted macOS browser subset reads the self-hosted routing output only to
+        # run when the self-hosted macOS lane replaced the hosted one. It must stay on the hosted
+        # image, and as a pull-request-only job it restores main's Actions caches without saving
+        # any. Its BuildBuddy steps are the reviewed `macos` ones, checked by the BuildBuddy
+        # policy above; no other step reads a secret.
+        main = ".github/workflows/main.yml"
+        workflow = _workflows(self.supply_chain_files)[main]
+        job = _jobs(workflow)["macos-browser"]
+        self.assertEqual("macos-26", _job_key(job, "runs-on"))
+        self.assertNotIn((main, "macos-browser"), SELF_HOSTED_JOBS)
+        condition = _job_key(job, "if")
+        self.assertIn("github.event_name == 'pull_request'", condition)
+        self.assertIn("needs.gatekeeper.outputs.use_self_hosted_macos == 'true'", condition)
+        self.assertIn("cache-save: false", job)
+        self.assertNotRegex(job, r"uses: actions/cache(?:/save)?@")
+        readers = {_step_key(step, "name", 8): _secret_reads(step) for step in _steps(job)
+                   if _secret_reads(step)}
+        self.assertEqual(readers, {
+            "Configure BuildBuddy remote cache": {"BUILDBUDDY_API_KEY"},
+            "Configure BuildBuddy read-only cache": {"BUILDBUDDY_API_KEY_READONLY"},
+        })
+        self.assertEqual(_secret_reads(job.split("    steps:\n", 1)[0]), set())
+
     def test_self_hosted_policy_rejects_ungated_or_mutable_runner_selection(self):
         files = self.supply_chain_files
         main = ".github/workflows/main.yml"
@@ -2301,7 +2331,9 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         bcr = ".github/workflows/bcr_preflight.yml"
         perf = ".github/workflows/perf.yml"
         codeql = ".github/workflows/codeql.yml"
-        gate = "needs.gatekeeper.outputs.use_self_hosted_macos == 'true'"
+        # The full admission expression: the hosted browser subset job reads the same routing
+        # output inside a different condition, and must not be the one this case mutates.
+        gate = SELF_HOSTED_GATE_PREFIX + "needs.gatekeeper.outputs.use_self_hosted_macos == 'true'"
         hosted = "    runs-on: ubuntu-24.04\n"
         ungated = "without the trusted gate"
         self.assertEqual(1, files[main].count(gate))
