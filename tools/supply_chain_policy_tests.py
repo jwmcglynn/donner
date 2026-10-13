@@ -38,33 +38,33 @@ from python.runfiles import runfiles
 
 NATIVE_DOWNLOAD_APIS = frozenset({"download", "download_and_extract"})
 # The manifest and archive set are reviewed together; changing either requires a new review.
-REVIEWED_PLAYWRIGHT_MANIFEST = "//donner/editor/wasm/tests:browsers.1.62.1.json"
-REVIEWED_PLAYWRIGHT_MANIFEST_PATH = "donner/editor/wasm/tests/browsers.1.62.1.json"
+REVIEWED_PLAYWRIGHT_MANIFEST = "//donner/editor/wasm/tests:browsers.1.64.0.json"
+REVIEWED_PLAYWRIGHT_MANIFEST_PATH = "donner/editor/wasm/tests/browsers.1.64.0.json"
 REVIEWED_PLAYWRIGHT_MANIFEST_SHA256 = \
-    "de911b7cde3dc5b25c709a8ec23603f288caba52350b2e8cec0e76b483364d19"
+    "78fcc3d35522868d983f04d1626d57061601f384edef7732ddb39d19fc7d3c93"
 REVIEWED_PLAYWRIGHT_ARCHIVES = frozenset({
-    'builds/chromium/1234/chromium-headless-shell-linux-arm64.zip',
-    'builds/chromium/1234/chromium-linux-arm64.zip',
-    'builds/firefox/1538/firefox-debian-12-arm64.zip',
-    'builds/firefox/1538/firefox-debian-12.zip',
-    'builds/firefox/1538/firefox-mac-arm64.zip',
-    'builds/firefox/1538/firefox-mac.zip',
-    'builds/firefox/1538/firefox-ubuntu-20.04-arm64.zip',
-    'builds/firefox/1538/firefox-ubuntu-20.04.zip',
-    'builds/firefox/1538/firefox-ubuntu-22.04-arm64.zip',
-    'builds/firefox/1538/firefox-ubuntu-22.04.zip',
-    'builds/firefox/1538/firefox-ubuntu-24.04-arm64.zip',
-    'builds/firefox/1538/firefox-ubuntu-24.04.zip',
+    'builds/ffmpeg/1013/ffmpeg-linux-arm64.zip',
+    'builds/ffmpeg/1013/ffmpeg-linux.zip',
+    'builds/ffmpeg/1013/ffmpeg-mac-arm64.zip',
+    'builds/ffmpeg/1013/ffmpeg-mac.zip',
+    'builds/firefox/1555/firefox-debian-12-arm64.zip',
+    'builds/firefox/1555/firefox-debian-12.zip',
+    'builds/firefox/1555/firefox-mac-arm64.zip',
+    'builds/firefox/1555/firefox-mac.zip',
+    'builds/firefox/1555/firefox-ubuntu-22.04-arm64.zip',
+    'builds/firefox/1555/firefox-ubuntu-22.04.zip',
+    'builds/firefox/1555/firefox-ubuntu-24.04-arm64.zip',
+    'builds/firefox/1555/firefox-ubuntu-24.04.zip',
     'builds/webkit/2251/webkit-mac-14-arm64.zip',
     'builds/webkit/2251/webkit-mac-14.zip',
-    'builds/webkit/2336/webkit-debian-12-arm64.zip',
-    'builds/webkit/2336/webkit-debian-12.zip',
-    'builds/webkit/2336/webkit-mac-15-arm64.zip',
-    'builds/webkit/2336/webkit-mac-15.zip',
-    'builds/webkit/2336/webkit-ubuntu-22.04-arm64.zip',
-    'builds/webkit/2336/webkit-ubuntu-22.04.zip',
-    'builds/webkit/2336/webkit-ubuntu-24.04-arm64.zip',
-    'builds/webkit/2336/webkit-ubuntu-24.04.zip',
+    'builds/webkit/2370/webkit-debian-12-arm64.zip',
+    'builds/webkit/2370/webkit-debian-12.zip',
+    'builds/webkit/2370/webkit-mac-15-arm64.zip',
+    'builds/webkit/2370/webkit-mac-15.zip',
+    'builds/webkit/2370/webkit-ubuntu-22.04-arm64.zip',
+    'builds/webkit/2370/webkit-ubuntu-22.04.zip',
+    'builds/webkit/2370/webkit-ubuntu-24.04-arm64.zip',
+    'builds/webkit/2370/webkit-ubuntu-24.04.zip',
 })
 PROXY_REPO_OPERATIONS = frozenset({"use_repo", "override_repo", "inject_repo"})
 HTTP_FETCH_RULES = frozenset({"archive_override", "http_archive", "http_file", "http_jar"}) | \
@@ -913,7 +913,7 @@ class CheckerTest(unittest.TestCase):
 
     def test_playwright_manifest_identity_is_required_and_literal(self):
         for manifest in (None, '"//other:browsers.json"', 'MANIFEST',
-                         '"//donner/editor/wasm/tests:" + "browsers.1.62.1.json"'):
+                         '"//donner/editor/wasm/tests:" + "browsers.1.64.0.json"'):
             with self.subTest(manifest=manifest):
                 selected = "" if manifest is None else "browsers_json = %s, " % manifest
                 source = self._browser('pw.repo(%sintegrity_path_map = %r)' % (
@@ -924,7 +924,7 @@ class CheckerTest(unittest.TestCase):
         source = self._browser(self._browser_call('integrity_path_map = %r' % self._browser_map()))
         reviewed = _runfile_bytes(REVIEWED_PLAYWRIGHT_MANIFEST_PATH)
         self.assertEqual(self._findings(source, read_manifest=lambda _: reviewed), [])
-        altered = reviewed.replace(b'"1234"', b'"1235"', 1)
+        altered = reviewed.replace(b'"installByDefault": true', b'"installByDefault": false', 1)
         self.assertNotEqual(altered, reviewed)
         for content in (b"", altered, reviewed + b"\n"):
             with self.subTest(content=content):
