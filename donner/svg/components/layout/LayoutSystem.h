@@ -172,6 +172,17 @@ public:
    */
   void instantiateAllComputedComponents(Registry& registry, ParseWarningSink& warningSink);
 
+  /** Apply the size-property cascade while preserving unresolved lengths.
+   * @param sizeProperties Typed properties, including their cascade specificity.
+   * @param unparsedProperties CSS declarations to apply.
+   * @param warningSink Destination for invalid-property diagnostics.
+   * @return Resolved properties with authored length units retained.
+   */
+  SizedElementProperties resolveSizeProperties(
+      const SizedElementProperties& sizeProperties,
+      const std::map<RcString, parser::UnparsedProperty>& unparsedProperties,
+      ParseWarningSink& warningSink);
+
   /**
    * Evaluates SizedElementProperties and returns the resulting bounds, using precomputed style
    * information.

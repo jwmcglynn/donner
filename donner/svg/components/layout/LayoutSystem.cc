@@ -689,15 +689,22 @@ void LayoutSystem::instantiateAllComputedComponents(Registry& registry,
   }
 }
 
+SizedElementProperties LayoutSystem::resolveSizeProperties(
+    const SizedElementProperties& sizeProperties,
+    const std::map<RcString, parser::UnparsedProperty>& unparsedProperties,
+    ParseWarningSink& warningSink) {
+  SizedElementProperties result = sizeProperties;
+  ApplyUnparsedProperties(result, unparsedProperties, warningSink);
+  return result;
+}
+
 // Evaluates SizedElementProperties and returns the resulting bounds.
 Box2d LayoutSystem::computeSizeProperties(
     EntityHandle entity, const SizedElementProperties& sizeProperties,
     const std::map<RcString, parser::UnparsedProperty>& unparsedProperties, const Box2d& viewBox,
     FontMetrics fontMetrics, ParseWarningSink& warningSink) {
-  SizedElementProperties mutableSizeProperties = sizeProperties;
-
-  ApplyUnparsedProperties(mutableSizeProperties, unparsedProperties, warningSink);
-  return calculateSizedElementBounds(entity, mutableSizeProperties, viewBox, fontMetrics);
+  const auto properties = resolveSizeProperties(sizeProperties, unparsedProperties, warningSink);
+  return calculateSizedElementBounds(entity, properties, viewBox, fontMetrics);
 }
 
 // Creates a ComputedSizedElementComponent for the linked entity, using precomputed style

@@ -54,7 +54,8 @@ Entity resolveTargetByHrefOrParent(Registry& registry, Entity animationEntity,
 bool AnimatesContextAttribute(Registry& registry, Entity entity, bool reference) {
   const auto matches = [reference](std::string_view name) {
     return reference ? name == "href" || name == "xlink:href"
-                     : name == "gradientUnits" || name == "maskUnits";
+                     : name == "gradientUnits" || name == "maskUnits" || name == "patternUnits" ||
+                           name == "filterUnits";
   };
   if (const auto* value = registry.try_get<AnimateValueComponent>(entity)) {
     return matches(value->attributeName);

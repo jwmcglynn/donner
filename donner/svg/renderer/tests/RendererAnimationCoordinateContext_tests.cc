@@ -136,8 +136,8 @@ TEST(RendererAnimationCoordinateContext, PatternBaseUsesStylesheetAndTypedOverri
         " height='16'><rect width='2' height='16'/></pattern></defs>"
         "<rect width='16' height='16' fill='url(#p)'/>";
     auto document = instantiateSubtree(
-        "<style>#p {width:8}</style><defs><pattern id='p' patternUnits='userSpaceOnUse' width='4'" +
-            ending + "<animate href='#p' attributeName='width' to='12' dur='2s'/>",
+        "<style>#p {width:8}</style><defs><pattern id='p' patternUnits='userSpaceOnUse'" + ending +
+            "<animate href='#p' attributeName='width' to='12' dur='2s'/>",
         parser::SVGParser::Options(), Vector2i(16, 16));
     if (typedOverride) {
       document.querySelector("#p")->cast<SVGPatternElement>().setWidth(Lengthd(10));

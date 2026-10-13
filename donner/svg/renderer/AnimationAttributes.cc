@@ -187,7 +187,7 @@ bool OverrideField(Registry& registry, Entity entity, std::string_view name, con
 }
 
 template <typename Component, typename Field, typename Value>
-bool SimpleField(Registry& registry, Entity entity, std::string_view name, Field Component::* field,
+bool SimpleField(Registry& registry, Entity entity, std::string_view name, Field Component::*field,
                  const Value& value, bool create = false) {
   return OverrideField<Component>(
       registry, entity, name, Field(value),

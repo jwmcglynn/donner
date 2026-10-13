@@ -232,23 +232,17 @@ std::optional<RcString> InheritanceReference(Registry& registry, Entity target,
   return href && budget.reserveSourceBytes(href->size()) ? href : std::nullopt;
 }
 
-template <typename Component, typename Value>
-std::optional<Value> InheritedGradientField(Registry& registry, Entity target,
-                                            std::optional<Value> Component::* field,
-                                            AnimationResourceBudget& budget) {
+template <typename Component, typename Value, typename Reader>
+std::optional<Value> InheritedResourceValue(Registry& registry, Entity target,
+                                            AnimationResourceBudget& budget, Reader read) {
   std::unordered_set<Entity> visited;
   while (budget.reserveGeometryWork(1) && visited.insert(target).second) {
     const auto* component = registry.try_get<Component>(target);
     if (!component || !IsAnimationInSvgNamespace(registry, target)) {
       return std::nullopt;
     }
-    if constexpr (std::is_same_v<Value, GradientUnits>) {
-      if (const auto boxUnits = SampledBoundingBoxUnits(registry, target, "gradientUnits")) {
-        return *boxUnits ? GradientUnits::ObjectBoundingBox : GradientUnits::UserSpaceOnUse;
-      }
-    }
-    if (component->*field) {
-      return component->*field;
+    if (auto value = read(*component, target)) {
+      return value;
     }
     const auto href = InheritanceReference(registry, target, budget);
     if (!href) {
@@ -261,6 +255,26 @@ std::optional<Value> InheritedGradientField(Registry& registry, Entity target,
     target = reference->handle.entity();
   }
   return std::nullopt;
+}
+
+template <typename Component, typename Value>
+std::optional<Value> InheritedResourceField(Registry& registry, Entity target,
+                                            std::optional<Value> Component::*field,
+                                            AnimationResourceBudget& budget,
+                                            std::string_view unitAttribute = {}) {
+  return InheritedResourceValue<Component, Value>(
+      registry, target, budget,
+      [&](const Component& component, Entity entity) -> std::optional<Value> {
+        if constexpr (requires {
+                        Value::ObjectBoundingBox;
+                        Value::UserSpaceOnUse;
+                      }) {
+          if (const auto boxUnits = SampledBoundingBoxUnits(registry, entity, unitAttribute)) {
+            return *boxUnits ? Value::ObjectBoundingBox : Value::UserSpaceOnUse;
+          }
+        }
+        return component.*field;
+      });
 }
 
 std::optional<Lengthd> LinearGradientBaseLength(Registry& registry, Entity target,
@@ -282,7 +296,7 @@ std::optional<Lengthd> LinearGradientBaseLength(Registry& registry, Entity targe
                                   {"y2", &LinearGradientComponent::y2, defaults.y2}};
   for (const auto& item : attributes) {
     if (item.name == name) {
-      return InheritedGradientField(registry, target, item.field, budget).value_or(item.fallback);
+      return InheritedResourceField(registry, target, item.field, budget).value_or(item.fallback);
     }
   }
   return std::nullopt;
@@ -307,12 +321,12 @@ std::optional<Lengthd> RadialGradientBaseLength(Registry& registry, Entity targe
                                   {"fr", &RadialGradientComponent::fr, defaults.fr}};
   for (const auto& item : attributes) {
     if (item.name == name) {
-      return InheritedGradientField(registry, target, item.field, budget).value_or(item.fallback);
+      return InheritedResourceField(registry, target, item.field, budget).value_or(item.fallback);
     }
   }
   if (name == "fx" || name == "fy") {
     const auto field = name == "fx" ? &RadialGradientComponent::fx : &RadialGradientComponent::fy;
-    if (auto value = InheritedGradientField(registry, target, field, budget)) {
+    if (auto value = InheritedResourceField(registry, target, field, budget)) {
       return value;
     }
     return RadialGradientBaseLength(registry, target, name == "fx" ? "cx" : "cy", budget);
@@ -329,6 +343,98 @@ std::optional<std::string> GradientBaseValue(Registry& registry, Entity target,
     length = RadialGradientBaseLength(registry, target, attribute, budget);
   }
   return length ? SerializeValue(*length, context) : std::nullopt;
+}
+
+std::optional<std::string> PatternBaseValue(Registry& registry, Entity target,
+                                            std::string_view name,
+                                            const AnimationValueContext& context,
+                                            AnimationResourceBudget& budget) {
+  if (!registry.all_of<PatternComponent>(target)) {
+    return std::nullopt;
+  }
+  using Field = Property<Lengthd> SizedElementProperties::*;
+  const std::pair<std::string_view, Field> fields[] = {{"x", &SizedElementProperties::x},
+                                                       {"y", &SizedElementProperties::y},
+                                                       {"width", &SizedElementProperties::width},
+                                                       {"height", &SizedElementProperties::height}};
+  for (const auto& [attribute, field] : fields) {
+    if (attribute != name) {
+      continue;
+    }
+    SizedElementProperties properties;
+    const auto value = InheritedResourceValue<PatternComponent, Property<Lengthd>>(
+        registry, target, budget,
+        [field, &budget](const PatternComponent& pattern,
+                         Entity) -> std::optional<Property<Lengthd>> {
+          const auto& property = pattern.sizeProperties.*field;
+          if (!property.isSpecified() || !budget.reserveSourceBytes(sizeof(property))) {
+            return std::nullopt;
+          }
+          return property;
+        });
+    if (value) {
+      properties.*field = *value;
+    }
+    if (const auto* style = registry.try_get<ComputedStyleComponent>(target);
+        style && style->properties) {
+      const auto bytes = style->properties->complexPropertyBytes();
+      if (bytes > AnimationResourceBudget::kMaximumSourceBytes / 6 ||
+          !budget.reserveSourceBytes(bytes * 6)) {
+        return std::string{};
+      }
+      ParseWarningSink warnings = ParseWarningSink::Disabled();
+      properties = LayoutSystem().resolveSizeProperties(
+          properties, style->properties->unparsedProperties, warnings);
+    }
+    return SerializeValue((properties.*field).get().value_or(Lengthd()), context);
+  }
+  return std::nullopt;
+}
+
+std::optional<std::string> FilterRegionBaseValue(Registry& registry, Entity target,
+                                                 std::string_view name,
+                                                 const AnimationValueContext& context,
+                                                 AnimationResourceBudget& budget) {
+  if (!registry.all_of<FilterComponent>(target)) {
+    return std::nullopt;
+  }
+  using Field = std::optional<Lengthd> FilterComponent::*;
+  const std::pair<std::string_view, Field> fields[] = {{"x", &FilterComponent::x},
+                                                       {"y", &FilterComponent::y},
+                                                       {"width", &FilterComponent::width},
+                                                       {"height", &FilterComponent::height}};
+  for (const auto& [attribute, field] : fields) {
+    if (attribute == name) {
+      const Lengthd fallback(name == "x" || name == "y" ? -10 : 120, Lengthd::Unit::Percent);
+      return SerializeValue(
+          InheritedResourceField(registry, target, field, budget).value_or(fallback), context);
+    }
+  }
+  return std::nullopt;
+}
+
+bool ResourceUsesBoundingBoxUnits(Registry& registry, Entity target,
+                                  AnimationResourceBudget& budget) {
+  if (registry.all_of<GradientComponent>(target)) {
+    return InheritedResourceField(registry, target, &GradientComponent::gradientUnits, budget,
+                                  "gradientUnits")
+               .value_or(GradientUnits::Default) == GradientUnits::ObjectBoundingBox;
+  }
+  if (registry.all_of<PatternComponent>(target)) {
+    return InheritedResourceField(registry, target, &PatternComponent::patternUnits, budget,
+                                  "patternUnits")
+               .value_or(PatternUnits::Default) == PatternUnits::ObjectBoundingBox;
+  }
+  if (registry.all_of<FilterComponent>(target)) {
+    return InheritedResourceField(registry, target, &FilterComponent::filterUnits, budget,
+                                  "filterUnits")
+               .value_or(FilterUnits::Default) == FilterUnits::ObjectBoundingBox;
+  }
+  if (const auto* mask = registry.try_get<MaskComponent>(target)) {
+    return SampledBoundingBoxUnits(registry, target, "maskUnits")
+        .value_or(mask->maskUnits == MaskUnits::ObjectBoundingBox);
+  }
+  return false;
 }
 
 std::string NumberPair(double first, double second) {
@@ -588,14 +694,7 @@ AnimationValueContext AnimationContextFor(Registry& registry, Entity target,
   result.integerValue = attribute == "numOctaves" || attribute == "targetX" ||
                         attribute == "targetY" || attribute == "order";
   result.viewBox = LayoutSystem().getViewBox(EntityHandle(registry, target));
-  if (registry.all_of<GradientComponent>(target) &&
-      InheritedGradientField(registry, target, &GradientComponent::gradientUnits, budget)
-              .value_or(GradientUnits::Default) == GradientUnits::ObjectBoundingBox) {
-    result.viewBox = Box2d{{0, 0}, {1, 1}};
-  }
-  if (const auto* mask = registry.try_get<MaskComponent>(target);
-      mask && SampledBoundingBoxUnits(registry, target, "maskUnits")
-                  .value_or(mask->maskUnits == MaskUnits::ObjectBoundingBox)) {
+  if (ResourceUsesBoundingBoxUnits(registry, target, budget)) {
     result.viewBox = Box2d{{0, 0}, {1, 1}};
   }
   if (attribute == "x" || attribute == "dx" || attribute == "x1" || attribute == "x2" ||
@@ -649,6 +748,12 @@ std::string UnderlyingAnimationValue(Registry& registry, Entity target, std::str
     return *value;
   }
   if (auto value = GradientBaseValue(registry, target, attribute, context, budget)) {
+    return *value;
+  }
+  if (auto value = PatternBaseValue(registry, target, attribute, context, budget)) {
+    return *value;
+  }
+  if (auto value = FilterRegionBaseValue(registry, target, attribute, context, budget)) {
     return *value;
   }
   if (auto* sized = registry.try_get<SizedElementComponent>(target)) {
