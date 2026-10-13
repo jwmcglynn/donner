@@ -1242,7 +1242,8 @@ TEST(RendererPublicApiTest, RebindingForeignRectangleBuildsRenderableGeometry) {
   EXPECT_THAT(shape->type(), testing::Eq(ElementType::Unknown));
   Renderer renderer;
   renderer.draw(document);
-  const auto result = document.setElementAttribute(owner, "xmlns:x", "http://www.w3.org/2000/svg");
+  const auto result = document.setElementAttribute(owner, xml::XMLQualifiedNameRef("xmlns", "x"),
+                                                   "http://www.w3.org/2000/svg");
   ASSERT_THAT(result.applied, testing::IsTrue());
   ASSERT_THAT(result.diagnostic, testing::Eq(std::nullopt));
   EXPECT_THAT(shape->type(), testing::Eq(ElementType::Rect));
