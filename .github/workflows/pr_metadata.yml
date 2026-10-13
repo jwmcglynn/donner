@@ -1,0 +1,37 @@
+name: PR Metadata
+
+# Keep third-party Bazel module telemetry off, as the telemetry section of .bazelrc explains.
+env:
+  DO_NOT_TRACK: "1"
+  ASPECT_TOOLS_TELEMETRY: "-all"
+
+# Checks of the pull request's own text. They run when the description is
+# edited as well as on every push, so they live apart from CI: an edit reruns
+# only these few seconds of checks, never the build and test lanes.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited]
+
+# One group per run: a metadata check never cancels or waits for another run,
+# and it shares no group with CI. Each run checks the text in its own event, and
+# the PR shows the most recent run.
+concurrency:
+  group: pr-metadata-${{ github.event.pull_request.number }}-${{ github.run_id }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  pr-body:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          sparse-checkout: tools/check_pr_body.py
+          sparse-checkout-cone-mode: false
+
+      - name: Reject tool-session links in PR body
+        run: python3 tools/check_pr_body.py "$GITHUB_EVENT_PATH"

@@ -5,6 +5,7 @@
 
 #include "donner/base/tests/BaseTestUtils.h"
 #include "donner/svg/SVGDocument.h"
+#include "donner/svg/components/RenderingBehaviorComponent.h"
 
 namespace donner::svg {
 namespace {
@@ -20,6 +21,10 @@ TEST(SVGUnknownElementTests, CreateAndCast) {
   EXPECT_THAT(unknown.tryCast<SVGUnknownElement>(), Ne(std::nullopt));
   EXPECT_EQ(unknown.type(), ElementType::Unknown);
   EXPECT_EQ(unknown.tagName(), "custom-element");
+  ASSERT_THAT(unknown.entityHandle().try_get<components::RenderingBehaviorComponent>(),
+              testing::NotNull());
+  EXPECT_THAT(unknown.entityHandle().get<components::RenderingBehaviorComponent>().behavior,
+              testing::Eq(components::RenderingBehavior::Nonrenderable));
 }
 
 }  // namespace

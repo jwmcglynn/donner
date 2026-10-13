@@ -62,16 +62,16 @@ class CheckPrBodyTest(unittest.TestCase):
             )
         self.assertNotEqual(result.returncode, 0)
 
-    def test_gatekeeper_runs_on_edited_pull_request_bodies(self):
-        source = Path(runfiles.Create().Rlocation("donner/.github/workflows/main.yml")).read_text()
+    def test_metadata_workflow_reruns_the_check_when_the_body_is_edited(self):
+        source = Path(
+            runfiles.Create().Rlocation("donner/.github/workflows/pr_metadata.yml")).read_text()
         self.assertTrue(
             "types: [opened, synchronize, reopened, edited]" in source,
-            "CI must rerun the PR body gate when the body is edited",
+            "The PR body check must rerun when the body is edited",
         )
-        gatekeeper = source.split("  gatekeeper:\n", 1)[1].split("\n  determine-targets:", 1)[0]
         self.assertTrue(
-            "python3 tools/check_pr_body.py" in gatekeeper,
-            "Gatekeeper must run the PR-body check",
+            'run: python3 tools/check_pr_body.py "$GITHUB_EVENT_PATH"' in source,
+            "The PR metadata workflow must run the PR-body check",
         )
 
 

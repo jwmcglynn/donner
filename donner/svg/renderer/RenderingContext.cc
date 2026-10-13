@@ -444,6 +444,47 @@ SwitchChildScore ScoreSwitchChild(Registry& registry, Entity child,
   return {.eligible = true, .hasLanguage = true, .languageRank = *rank};
 }
 
+bool HasRenderableType(EntityHandle handle) {
+  const auto* type = handle.try_get<ElementTypeComponent>();
+  return type && type->type() != ElementType::Unknown;
+}
+
+struct ClipGeometry {
+  EntityHandle dataEntity;
+  EntityHandle textEntity;
+  const ComputedPathComponent* path;
+  const ComputedStyleComponent* style;
+  bool isText;
+};
+
+std::optional<ClipGeometry> PrepareClipGeometry(EntityHandle entity, bool enforceVisibility) {
+  const auto* shadowEntity = entity.try_get<ShadowEntityComponent>();
+  const EntityHandle dataEntity =
+      shadowEntity ? EntityHandle(*entity.registry(), shadowEntity->lightEntity) : entity;
+  if (!HasRenderableType(dataEntity)) {
+    return std::nullopt;
+  }
+  const auto* path = dataEntity.try_get<ComputedPathComponent>();
+  const auto* style = entity.try_get<ComputedStyleComponent>();
+#ifdef DONNER_TEXT_ENABLED
+  const EntityHandle textEntity =
+      entity.all_of<TextRootComponent, ComputedTextComponent>() ? entity : dataEntity;
+  const bool isText = textEntity.all_of<TextRootComponent, ComputedTextComponent>();
+#else
+  const EntityHandle textEntity = dataEntity;
+  const bool isText = false;
+#endif
+  if ((!path && !isText) || !style) {
+    return std::nullopt;
+  }
+  const auto& properties = style->properties.value();
+  if (enforceVisibility && (properties.visibility.get().value() != Visibility::Visible ||
+                            properties.display.get().value() == Display::None)) {
+    return std::nullopt;
+  }
+  return ClipGeometry{dataEntity, textEntity, path, style, isText};
+}
+
 class RenderingContextImpl {
 public:
   explicit RenderingContextImpl(Registry& registry, bool verbose,
@@ -581,7 +622,7 @@ public:
     std::optional<ContextPaintServers> savedContextPaintServers;
     const bool isShape = dataHandle.all_of<ComputedPathComponent>();
 
-    if (!dataHandle.all_of<ElementTypeComponent>()) {
+    if (!HasRenderableType(dataHandle)) {
       return std::nullopt;
     }
 
@@ -993,29 +1034,13 @@ public:
         return;
       }
 
-      // Shadow entities (from <use>) store data on the light entity but styles on the shadow.
-      const auto* shadowEntity = entity.try_get<ShadowEntityComponent>();
-      const EntityHandle dataEntity =
-          shadowEntity ? EntityHandle(registry_, shadowEntity->lightEntity) : entity;
-
-      const auto* clipPathData = dataEntity.try_get<components::ComputedPathComponent>();
-      const auto* computedStyle = entity.try_get<components::ComputedStyleComponent>();
-#ifdef DONNER_TEXT_ENABLED
-      const EntityHandle textEntity =
-          entity.all_of<TextRootComponent, ComputedTextComponent>() ? entity : dataEntity;
-      const bool isTextClipChild = textEntity.all_of<TextRootComponent, ComputedTextComponent>();
-#else
-      const bool isTextClipChild = false;
-#endif
-      if ((!clipPathData && !isTextClipChild) || !computedStyle) {
+      const auto geometry = PrepareClipGeometry(entity, enforceVisibility);
+      if (!geometry) {
         return;
       }
-
+      const auto& [dataEntity, textEntity, clipPathData, computedStyle, isTextClipChild] =
+          *geometry;
       const auto& style = computedStyle->properties.value();
-      if (enforceVisibility && (style.visibility.get().value() != Visibility::Visible ||
-                                style.display.get().value() == Display::None)) {
-        return;
-      }
 
       // Keep text glyphs separate for evenodd; reject nested clips until layers preserve groups.
       if (isTextClipChild && style.clipPath.get()) {

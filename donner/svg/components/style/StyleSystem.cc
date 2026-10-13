@@ -27,6 +27,20 @@ namespace donner::svg::components {
 
 namespace {
 
+void SynchronizeStylesheetFonts(ResourceManagerContext& resources, Registry& registry,
+                                Entity entity, const StylesheetComponent& stylesheet) {
+  const css::Stylesheet empty;
+  resources.synchronizeStylesheetFontFaces(entity, HasSvgNamespace(registry, entity)
+                                                       ? stylesheet.stylesheet.fontFaces()
+                                                       : empty.fontFaces());
+}
+
+bool IsActiveAuthorStylesheet(const Registry& registry, Entity entity,
+                              const StylesheetComponent& stylesheet) {
+  return HasSvgNamespace(registry, entity) && !stylesheet.isUserAgentStylesheet &&
+         !stylesheet.sourceMap.empty();
+}
+
 StyleResourceBudget& GetStyleResourceBudget(Registry& registry) {
   if (registry.ctx().contains<StyleResourceBudget>()) {
     auto& budget = registry.ctx().get<StyleResourceBudget>();
@@ -353,6 +367,9 @@ void StyleSystem::applyStylesheetRules(Registry& registry, Entity treeEntity, En
   const ShadowedElementAdapter adapter(registry, treeEntity, dataEntity);
   std::array<std::optional<css::Specificity>, 2> importantResourceColors;
   for (auto view = registry.view<StylesheetComponent>(); auto stylesheetEntity : view) {
+    if (!HasSvgNamespace(registry, stylesheetEntity)) {
+      continue;
+    }
     const auto& stylesheet = view.get<StylesheetComponent>(stylesheetEntity);
     for (const css::SelectorRule& rule : stylesheet.stylesheet.rules()) {
       if (!styleBudget.reserveRuleElementMatch()) {
@@ -540,6 +557,9 @@ std::vector<MatchedStyleRule> StyleSystem::collectMatchedStyleRules(EntityHandle
   std::vector<MatchedStyleRule> result;
   StyleResourceBudget styleBudget;
   for (auto view = registry.view<StylesheetComponent>(); auto stylesheetEntity : view) {
+    if (!HasSvgNamespace(registry, stylesheetEntity)) {
+      continue;
+    }
     const auto& stylesheet = view.get<StylesheetComponent>(stylesheetEntity);
     const std::span<const css::SelectorRule> rules = stylesheet.stylesheet.rules();
 
@@ -594,7 +614,7 @@ std::optional<StyleRuleAtSourceOffset> StyleSystem::findStyleRuleAtSourceOffset(
     Registry& registry, std::size_t documentSourceOffset) const {
   for (auto view = registry.view<StylesheetComponent>(); auto stylesheetEntity : view) {
     const auto& stylesheet = view.get<StylesheetComponent>(stylesheetEntity);
-    if (stylesheet.isUserAgentStylesheet || stylesheet.sourceMap.empty()) {
+    if (!IsActiveAuthorStylesheet(registry, stylesheetEntity, stylesheet)) {
       continue;
     }
 
@@ -683,8 +703,7 @@ void StyleSystem::computeAllStyles(Registry& registry, ParseWarningSink& warning
     ResourceManagerContext& resourceManager = registry.ctx().get<ResourceManagerContext>();
     for (auto view = registry.view<StylesheetComponent>(); auto stylesheetEntity : view) {
       auto [stylesheet] = view.get(stylesheetEntity);
-      resourceManager.synchronizeStylesheetFontFaces(stylesheetEntity,
-                                                     stylesheet.stylesheet.fontFaces());
+      SynchronizeStylesheetFonts(resourceManager, registry, stylesheetEntity, stylesheet);
     }
 
     return;
@@ -711,9 +730,7 @@ void StyleSystem::computeAllStyles(Registry& registry, ParseWarningSink& warning
   ResourceManagerContext& resourceManager = registry.ctx().get<ResourceManagerContext>();
   for (auto view = registry.view<StylesheetComponent>(); auto stylesheetEntity : view) {
     auto [stylesheet] = view.get(stylesheetEntity);
-
-    resourceManager.synchronizeStylesheetFontFaces(stylesheetEntity,
-                                                   stylesheet.stylesheet.fontFaces());
+    SynchronizeStylesheetFonts(resourceManager, registry, stylesheetEntity, stylesheet);
   }
 }
 
@@ -727,6 +744,9 @@ void StyleSystem::computeStylesFor(Registry& registry, std::span<const Entity> e
 bool StyleSystem::anyStylesheetUsesAttributeInSelector(Registry& registry,
                                                        std::string_view localName) const {
   for (auto view = registry.view<StylesheetComponent>(); auto stylesheetEntity : view) {
+    if (!HasSvgNamespace(registry, stylesheetEntity)) {
+      continue;
+    }
     if (view.get<StylesheetComponent>(stylesheetEntity).usesAttributeInSelector(localName)) {
       return true;
     }

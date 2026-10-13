@@ -24,6 +24,7 @@ WRITE_SCOPES = {
     (".github/workflows/codeql.yml", "analyze"): {"security-events"},
     (".github/workflows/deploy_docs.yaml", "deploy"): {"id-token", "pages"},
     (".github/workflows/release.yml", "publish-release-artifacts"): {"contents"},
+    (".github/workflows/release_candidate.yml", "attest-record"): {"attestations", "id-token"},
 }
 
 # Exact reviewed step consumers: workflow, job, name, id, action (or the run script marker).
@@ -50,6 +51,10 @@ SECRET_USES = {
      "./.github/actions/buildbuddy-cache"): {"BUILDBUDDY_API_KEY"},
     (".github/workflows/main.yml", "macos", "Configure BuildBuddy read-only cache", None,
      "./.github/actions/buildbuddy-cache"): {"BUILDBUDDY_API_KEY_READONLY"},
+    (".github/workflows/main.yml", "macos-browser", "Configure BuildBuddy remote cache", None,
+     "./.github/actions/buildbuddy-cache"): {"BUILDBUDDY_API_KEY"},
+    (".github/workflows/main.yml", "macos-browser", "Configure BuildBuddy read-only cache", None,
+     "./.github/actions/buildbuddy-cache"): {"BUILDBUDDY_API_KEY_READONLY"},
     (".github/workflows/main.yml", "macos-self-hosted", "Configure masked remote cache", None,
      "<run>"): {"BAZEL_REMOTE_CACHE"},
     (".github/workflows/publish_bcr.yml", "publish-fork", "Create the fork branch only if absent", None,
@@ -62,6 +67,17 @@ SECRET_USES = {
      "./.github/actions/buildbuddy-cache"): {"BUILDBUDDY_API_KEY"},
     (".github/workflows/sanitizers.yml", "ubsan", "Configure BuildBuddy remote cache", None,
      "./.github/actions/buildbuddy-cache"): {"BUILDBUDDY_API_KEY"},
+}
+
+# The only jobs that call a reusable workflow: (caller, job) to (callee, forwarded secrets). A
+# called workflow receives only the secrets its caller passes, so a caller forwards each listed
+# secret under its own name and nothing else. The callee declares exactly these names and reads
+# each one only in its reviewed steps above. pr_base_change.yml runs main.yml's full CI when a
+# pull request's base branch changes; it forwards the repository secrets main.yml's steps read.
+REVIEWED_WORKFLOW_CALLS = {
+    (".github/workflows/pr_base_change.yml", "base-change-ci"): (
+        "./.github/workflows/main.yml", frozenset({"BAZEL_REMOTE_CACHE",
+                                                   "BUILDBUDDY_API_KEY_READONLY"})),
 }
 
 # The only jobs that may run on self-hosted runners, with the gatekeeper output admitting each.
@@ -236,6 +252,8 @@ BUILDBUDDY_JOBS = {
     (".github/workflows/github_hosted_nightly.yml", "build"),
     (".github/workflows/main.yml", "linux"),
     (".github/workflows/main.yml", "macos"),
+    # Hosted macOS browser subset for trusted maintainer PRs, wired exactly like `macos`.
+    (".github/workflows/main.yml", "macos-browser"),
     (".github/workflows/sanitizers-pr.yml", "asan-geode"),
     (".github/workflows/sanitizers.yml", "asan"),
     (".github/workflows/sanitizers.yml", "ubsan"),
@@ -745,6 +763,86 @@ def _step_secret_consumers(path, workflow):
                 yield identity, secrets
 
 
+def _call_secrets(job):
+    """A calling job's `secrets:` block as {name: value}, `{"*": value}` inline, or None."""
+    lines = job.splitlines()
+    for index, line in enumerate(lines):
+        if line.startswith("    secrets:"):
+            inline = line.split(":", 1)[1].split(" #", 1)[0].strip()
+            if inline:
+                return {"*": inline}
+            return _mapping(_indented_block(lines[index + 1:], 4))
+    return None
+
+
+def _forwarded_secrets(names):
+    """The one reviewed spelling of a `secrets:` block that forwards each name as itself."""
+    return {name: "${{ secrets.%s }}" % name for name in names}
+
+
+def _block_after(lines, pattern, indent):
+    """The block under the first line matching `pattern`, or None when no line matches."""
+    starts = [index for index, line in enumerate(lines) if re.match(pattern, line)]
+    return _indented_block(lines[starts[0] + 1:], indent) if starts else None
+
+
+def _declared_call_secrets(workflow):
+    """The secret names a workflow declares under `on.workflow_call.secrets`, or None."""
+    call = _block_after(_top_level_block(workflow, "on") or [], r"^  workflow_call:\s*$", 2)
+    if call is None:
+        return None
+    names = _block_after(call, r"^    secrets:\s*$", 4) or []
+    return {match.group(1) for match in
+            (re.match(r"^      ([A-Za-z0-9_]+):", line) for line in names) if match}
+
+
+def _reviewed_forwarded_reads(path, workflow):
+    """Secret reads of this workflow's reviewed calls, when each forwards exactly its list."""
+    reads = Counter()
+    for (caller, name), (_, secrets) in REVIEWED_WORKFLOW_CALLS.items():
+        job = _jobs(workflow).get(name) if caller == path else None
+        if job is not None and _call_secrets(job) == _forwarded_secrets(secrets):
+            reads.update(secrets)
+    return reads
+
+
+def _workflow_calls(workflows):
+    """Every job that calls a reusable workflow: (path, job) to (callee, forwarded secrets)."""
+    return {(path, name): (_job_key(job, "uses").strip("'\""), _call_secrets(job))
+            for path, workflow in workflows.items()
+            for name, job in _jobs(workflow).items() if _job_key(job, "uses")}
+
+
+def _workflow_call_problem(workflows, where, call, reviewed):
+    """Why one reviewed call differs from its review, or None."""
+    callee, forwarded = call
+    reviewed_callee, secrets = reviewed
+    if callee != reviewed_callee:
+        return "%s calls %s instead of %s" % (where, callee, reviewed_callee)
+    if forwarded != _forwarded_secrets(secrets):
+        return "%s forwards secrets other than %s" % (where, sorted(secrets))
+    declared = _declared_call_secrets(
+        workflows.get(".github/workflows/" + callee.rsplit("/", 1)[-1], ""))
+    if declared != set(secrets):
+        return "%s callee declares workflow_call secrets %s" % (
+            where, sorted(declared) if declared is not None else None)
+    return None
+
+
+def _workflow_call_violations(workflows):
+    """Every reusable workflow call that is unreviewed or forwards an unreviewed secret."""
+    calls = _workflow_calls(workflows)
+    violations = []
+    if set(calls) != set(REVIEWED_WORKFLOW_CALLS):
+        violations.append("reusable workflow calls changed: %s" % sorted(calls))
+    for key in sorted(set(calls) & set(REVIEWED_WORKFLOW_CALLS)):
+        problem = _workflow_call_problem(workflows, "%s:%s" % key, calls[key],
+                                         REVIEWED_WORKFLOW_CALLS[key])
+        if problem:
+            violations.append(problem)
+    return violations
+
+
 def _secret_use_violations(workflows):
     records = []
     violations = []
@@ -752,7 +850,7 @@ def _secret_use_violations(workflows):
         if (re.search(r"secrets:\s*inherit", workflow, re.IGNORECASE) or
                 "<whole secret object>" in _secret_reads(workflow)):
             violations.append("%s forwards every secret" % path)
-        if _unscoped_secret_reads(workflow):
+        if _unscoped_secret_reads(workflow) - _reviewed_forwarded_reads(path, workflow):
             violations.append("%s exposes a secret beyond one step" % path)
         records.extend(_step_secret_consumers(path, workflow))
     uses = dict(records)
@@ -1009,6 +1107,193 @@ def _artifact_upload_violations(files):
         violation for path, workflow in _workflows(files).items()
         for name, job in _jobs(workflow).items()
         for violation in _upload_violations(path, name, job, uploading_actions)]
+
+
+# A publication or record-assembly workflow promotes retained bytes; it never builds them. These
+# commands and actions compile, package, generate or upload a site.
+BUILD_COMMAND = re.compile(
+    r"(?:^|[\s;&|(])(bazel|bazelisk|cmake|make|ninja|npm|npx|node|doxygen|cargo|rustc|emcc|"
+    r"clang\+\+|g\+\+|gcc|tools/build_docs\.sh|tools/doxygen\.sh)(?=[\s;&|)]|$)", re.MULTILINE)
+BUILD_ACTIONS = ("bazel-contrib/setup-bazel@", "actions/setup-node@", "upload-pages-artifact@",
+                 "./.github/actions/cache-bazel-actions", "bazel-contrib/publish-to-bcr@")
+CANDIDATE_WORKFLOW = ".github/workflows/release_candidate.yml"
+CANDIDATE_INPUTS = ("candidate_commit", "preflight_run", "editor_run", "docs_run", "ci_run",
+                    "coverage_run", "fuzz_run", "sanitizers_run", "security_review_comment",
+                    "supply_chain_review_comment")
+RELEASE_CLI_ASSETS = tuple(
+    "donner-svg_%s%s" % (platform, suffix) for platform in ("linux_x86_64", "darwin_arm64")
+    for suffix in ("", ".sha256", ".provenance", ".bazel.lock", ".NOTICE.txt"))
+
+
+def _build_steps(workflow):
+    found = [match.group(1) for body in _script_bodies(workflow)
+             for match in BUILD_COMMAND.finditer(body)]
+    return found + [action for action in BUILD_ACTIONS if action in workflow]
+
+
+def _named_step(job, name):
+    steps = [step for step in _steps(job) if _step_identity_value(step, "name") == name]
+    return steps[0] if len(steps) == 1 else ""
+
+
+def _continued_arguments(script, command):
+    """The arguments of one backslash-continued command, one entry per line."""
+    if command not in script:
+        return []
+    tail = script.split(command, 1)[1]
+    arguments = []
+    for line in tail.splitlines()[1:]:
+        arguments.append(line.strip().rstrip("\\").strip())
+        if not line.rstrip().endswith("\\"):
+            break
+    return arguments
+
+
+def _failed(checks):
+    """The message of every policy check whose condition failed."""
+    return [message for passed, message in checks if not passed]
+
+
+RELEASE_STEPS = ("Reverify the candidate record and stage its release files",
+                 "Verify the candidate record attestation",
+                 "Verify preflight build attestations",
+                 "Upload verified release artifacts without replacement")
+RELEASE_FORBIDDEN = ("actions/upload-artifact@", "actions/download-artifact@",
+                     "actions/attest-build-provenance@", "id-token: write", "--lockfile_mode",
+                     "Release-Candidate-Preflight", "select-preflight")
+RELEASE_RECORD_ARGUMENTS = ('--record-run-id "$RECORD_RUN_ID"', '--record-attempt "$RECORD_ATTEMPT"',
+                            '--record-artifact-id "$RECORD_ARTIFACT_ID"',
+                            '--record-sha256 "$RECORD_SHA256"')
+
+
+def _release_asset_paths(assets):
+    return ['"$RUNNER_TEMP"/release/%s/%s' % ("cli-linux" if "linux" in asset else "cli-macos",
+                                              asset) for asset in assets]
+
+
+def _release_shape_violations(release):
+    signer = "--signer-workflow jwmcglynn/donner/.github/workflows/"
+    return _failed([
+        (_triggers(release) == {"release"} and "types: [published]" in release,
+         "release runs on an event other than a published release"),
+        (not _build_steps(release), "release builds: %s" % _build_steps(release)),
+        (release.count("gh attestation verify") == 2 and
+         release.count(signer + "release_candidate.yml") == 1 and
+         release.count(signer + "bcr_preflight.yml") == 1,
+         "release does not verify the record and preflight attestations"),
+        (not any("${{" in body for body in _run_bodies(release)),
+         "release run blocks must use quoted environment values"),
+    ]) + ["release contains %s" % item for item in RELEASE_FORBIDDEN if item in release]
+
+
+def _release_step_violations(jobs):
+    publication = jobs["publish-release-artifacts"]
+    names = [_step_identity_value(step, "name") for step in _steps(publication)]
+    stage = _named_step(publication, RELEASE_STEPS[0])
+    reverified = "python3 -B -m tools.release_candidate release" in stage and all(
+        argument in stage for argument in RELEASE_RECORD_ARGUMENTS)
+    return _failed([
+        (jobs["resolve-candidate"].count("python3 -B -m tools.bcr_release select-record") == 1,
+         "release does not select the record named by the release body"),
+        ("needs: resolve-candidate" in publication, "publication does not wait for record selection"),
+        ([name for name in names if name in RELEASE_STEPS] == list(RELEASE_STEPS) and
+         names[-1:] == [RELEASE_STEPS[-1]],
+         "release does not verify the record before its final upload step"),
+        (reverified, "release does not re-verify the named record"),
+    ])
+
+
+def _release_file_violations(publication):
+    attested = _continued_arguments(_named_step(publication, RELEASE_STEPS[2]), "for subject in")
+    signed = [asset for asset in RELEASE_CLI_ASSETS if asset.endswith(("64", ".bazel.lock",
+                                                                        ".NOTICE.txt"))]
+    uploaded = _continued_arguments(_named_step(publication, RELEASE_STEPS[3]),
+                                    "python3 tools/release_artifact_publisher.py")
+    expected_uploaded = _release_asset_paths(RELEASE_CLI_ASSETS) + [
+        '"$RUNNER_TEMP"/release/source/*', '"$RUNNER_TEMP"/release/donner-*.candidate.json']
+    return _failed([
+        (attested == _release_asset_paths(signed) + ['"$RUNNER_TEMP"/release/source/*.tar.gz; do'],
+         "release attestation subjects changed: %s" % attested),
+        (uploaded == expected_uploaded, "release uploads files the record did not stage: %s" % uploaded),
+    ])
+
+
+def _release_publication_violations(release):
+    """Release must publish exactly the record's verified files and build nothing."""
+    jobs = _jobs(release)
+    if set(jobs) != {"resolve-candidate", "publish-release-artifacts"}:
+        return ["release jobs changed: %s" % sorted(jobs)]
+    return (_release_shape_violations(release) + _release_step_violations(jobs) +
+            _release_file_violations(jobs["publish-release-artifacts"]))
+
+
+ASSEMBLY_PUBLICATIONS = ("gh release", "gh workflow", "gh pr", "/pages/deployments", "git push",
+                         "release_artifact_publisher")
+
+
+def _candidate_input_names(workflow):
+    inputs = workflow.split("    inputs:\n", 1)[-1].split("\npermissions:", 1)[0]
+    required = inputs.count("        required: true\n")
+    names = re.findall(r"(?m)^      ([a-z_]+):$", inputs)
+    return names if required == len(names) else names + ["<optional input>"]
+
+
+def _candidate_workflow_violations(workflow):
+    scripts = _run_bodies(workflow)
+    return _failed([
+        (_triggers(workflow) == {"workflow_dispatch"},
+         "assembly runs on an event other than a manual dispatch"),
+        (_candidate_input_names(workflow) == list(CANDIDATE_INPUTS),
+         "assembly inputs changed: %s" % _candidate_input_names(workflow)),
+        (_permissions(workflow, 0) == {"contents": "read"}, "assembly widens the workflow token"),
+        (not _secret_reads(workflow) and "secrets" not in workflow, "assembly reads a secret"),
+        (not _build_steps(workflow), "assembly builds: %s" % _build_steps(workflow)),
+        (not _untrusted_script_contexts(workflow) and not any("${{" in body for body in scripts),
+         "assembly interpolates inputs into a script"),
+        (not re.search(r"uses: [^\n]+@[0-9a-f]{40}", workflow) and
+         "continue-on-error" not in workflow,
+         "assembly pins an action by commit or ignores a failure"),
+    ]) + ["assembly publishes: %s" % item for item in ASSEMBLY_PUBLICATIONS if item in workflow]
+
+
+def _candidate_retention_violations(assemble):
+    uploads = [step for step in _steps(assemble) if "actions/upload-artifact@" in step]
+    values = [(_step_values(step, "name"), _step_values(step, "path"),
+               _step_values(step, "retention-days"), _step_values(step, "if-no-files-found"))
+              for step in uploads]
+    expected = (["donner-release-candidate-${{ github.run_attempt }}"],
+                ["${{ runner.temp }}/candidate/"], ["90"], ["error"])
+    return _failed([(values == [expected], "assembly does not retain the record for 90 days")])
+
+
+def _candidate_job_violations(jobs):
+    assemble, attest = jobs["assemble"], jobs["attest-record"]
+    guard = "    if: github.repository == 'jwmcglynn/donner' && github.ref == 'refs/heads/main'\n"
+    check = attest.find("sha256sum --check --strict candidate.json.sha256")
+    signer = attest.find("uses: actions/attest-build-provenance@")
+    return _failed([
+        (guard in assemble + "\n", "assembly can run outside main"),
+        (_permissions(assemble, 4) == {"contents": "read", "actions": "read", "issues": "read"},
+         "assembly job token scopes changed"),
+        (_permissions(attest, 4) == {"contents": "read", "id-token": "write",
+                                     "attestations": "write"},
+         "attestation job token scopes changed"),
+        (assemble.count("python3 -B -m tools.release_candidate assemble") == 1,
+         "assembly does not run the candidate verifier"),
+        ("needs: assemble" in attest and "actions/checkout@" not in attest and
+         "python3" not in attest, "attestation job runs repository code or skips assembly"),
+        (0 <= check < signer and
+         "subject-path: ${{ runner.temp }}/candidate/candidate.json\n" in attest + "\n",
+         "attestation does not sign the checked record"),
+    ]) + _candidate_retention_violations(assemble)
+
+
+def _candidate_assembly_violations(workflow):
+    """Assembly is manual, least-privilege, secret-free, retained and attested, and builds nothing."""
+    jobs = _jobs(workflow)
+    if set(jobs) != {"assemble", "attest-record"}:
+        return ["assembly jobs changed: %s" % sorted(jobs)]
+    return _candidate_workflow_violations(workflow) + _candidate_job_violations(jobs)
 
 
 class SecurityWorkflowPolicyTest(unittest.TestCase):
@@ -1340,6 +1625,9 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
             (".github/workflows/editor_wasm.yml", "upload-artifact@",
              "name: donner-editor-wasm-geode-"),
             (".github/workflows/deploy_docs.yaml", "upload-pages-artifact@", "retention-days:"),
+            (".github/workflows/deploy_docs.yaml", "upload-artifact@",
+             "name: donner-docs-provenance-"),
+            (CANDIDATE_WORKFLOW, "upload-artifact@", "name: donner-release-candidate-"),
         )
         for path, action, name in uploads:
             with self.subTest(path=path, name=name):
@@ -1348,52 +1636,121 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
                 self.assertEqual(len(steps), 1)
                 self.assertRegex(steps[0], r"\n          retention-days: 90\n")
 
-    def test_release_only_verifies_retained_preflight_bytes_before_publication(self):
+    def test_release_publishes_only_the_verified_candidate_record(self):
         release = self.supply_chain_files[".github/workflows/release.yml"]
-        self.assertIn("types: [published]", release)
-        self.assertNotIn("edited", release)
-        self.assertNotIn("workflow_dispatch", release)
+        self.assertEqual([], _release_publication_violations(release))
         self.assertIn("permissions:\n  contents: read", release)
-        self.assertIn("publish-release-artifacts:", release)
-        self.assertIn("contents: write", release)
-        self.assertIn("attestations: read", release)
-        self.assertNotIn("id-token: write", release)
-        self.assertIn("actions/download-artifact@", release)
-        self.assertNotIn("actions/attest-build-provenance@", release)
-        # One loop verifies the preflight attestation of every attested release subject.
-        self.assertEqual(release.count("gh attestation verify"), 1)
-        self.assertEqual(release.count("--signer-workflow jwmcglynn/donner/.github/workflows/bcr_preflight.yml"), 1)
-        attested = release.split("          for subject in \\\n", 1)[1].split("; do\n", 1)[0]
-        cli_assets = [
-            f"release/{directory}/donner-svg_{platform}{suffix}"
-            for directory, platform in (("linux", "linux_x86_64"), ("macos", "darwin_arm64"))
-            for suffix in ("", ".bazel.lock", ".NOTICE.txt")
-        ]
-        self.assertEqual(
-            [line.strip().rstrip(" \\") for line in attested.splitlines()],
-            cli_assets + ["release/source/*.tar.gz"],
-        )
-        self.assertNotIn("bazelisk build", release)
-        self.assertNotIn("actions/upload-artifact@", release)
-        self.assertNotIn("--lockfile_mode=off", release)
-        self.assertNotIn("tools.bcr_release plan-binaries", release)
-        publication = release.split("  publish-release-artifacts:", 1)[1]
-        self.assertIn("needs: resolve-source", publication)
-        self.assertIn("tools.bcr_source verify", publication)
-        self.assertEqual(publication.count("tools.release_cli verify"), 2)
-        self.assertEqual(publication.count("run-id: ${{ needs.resolve-source.outputs.run_id }}"), 3)
-        self.assertIn("release/source/*", publication)
         self.assertIn("RELEASE_UPLOAD_URL: ${{ github.event.release.upload_url }}", release)
-        self.assertIn("Upload verified release artifacts without replacement", release)
-        self.assertIn("python3 tools/release_artifact_publisher.py", release)
-        uploaded = release.split("python3 tools/release_artifact_publisher.py", 1)[1]
-        for asset in cli_assets:
-            self.assertIn(f"            {asset} \\\n", uploaded)
         self.assertNotIn("softprops/action-gh-release", release)
         self.assertNotIn("publish-to-bcr", release)
         self.assertNotIn("svenstaro/upload-release-action", release)
-        for body in _run_bodies(release):
-            self.assertNotIn("${{", body, "release run blocks must use quoted environment values")
+
+    def test_release_policy_rejects_builds_preflight_selection_and_extra_assets(self):
+        path = ".github/workflows/release.yml"
+        release = self.supply_chain_files[path]
+        stage = "          python3 -B -m tools.release_candidate release --source-root . \\\n"
+        upload = '            "$RUNNER_TEMP"/release/donner-*.candidate.json\n'
+        self._assert_rejected(lambda files, path: _release_publication_violations(files[path]), {
+            "build": (path, release.replace(
+                stage, "          bazelisk build -c opt //donner/svg/tool:donner-svg\n" + stage, 1),
+                "release builds"),
+            "doxygen": (path, release.replace(stage, "          tools/build_docs.sh\n" + stage, 1),
+                        "release builds"),
+            "no record verification": (path, release.replace(
+                stage, "          python3 -B -m tools.release_candidate verify \\\n", 1),
+                "re-verify the named record"),
+            "preflight line": (path, release.replace(
+                "tools.bcr_release select-record", "tools.bcr_release select-preflight", 1),
+                "select-preflight"),
+            "extra asset": (path, release.replace(
+                upload, upload[:-1] + ' \\\n            "$RUNNER_TEMP"/candidate-work/artifacts/editor.zip\n', 1),
+                "release uploads files"),
+            "retained upload": (path, release + "      - uses: actions/upload-artifact@v7\n",
+                                "actions/upload-artifact@"),
+            "no record attestation": (path, release.replace(
+                "release_candidate.yml", "bcr_preflight.yml", 1), "attestations"),
+            "upload before verification": (path, release.replace(
+                "      - name: Verify preflight build attestations\n",
+                "      - name: Check preflight build attestations\n", 1), "before its final upload"),
+        })
+
+    def test_candidate_assembly_is_manual_minimal_and_retained(self):
+        workflow = self.supply_chain_files[CANDIDATE_WORKFLOW]
+        self.assertEqual([], _candidate_assembly_violations(workflow))
+
+    def test_candidate_assembly_policy_rejects_widened_or_building_workflows(self):
+        path = CANDIDATE_WORKFLOW
+        workflow = self.supply_chain_files[path]
+        dispatch = "on:\n  workflow_dispatch:\n"
+        assemble_scopes = "      actions: read\n      issues: read\n"
+        step = "          python3 -B -m tools.release_candidate assemble \\\n"
+        self._assert_rejected(lambda files, path: _candidate_assembly_violations(files[path]), {
+            "push trigger": (path, workflow.replace(
+                dispatch, "on:\n  push:\n    branches: [main]\n  workflow_dispatch:\n", 1),
+                "manual dispatch"),
+            "write scope": (path, workflow.replace(
+                assemble_scopes, assemble_scopes + "      contents: write\n", 1), "token scopes"),
+            "workflow write": (path, workflow.replace(
+                "permissions:\n  contents: read\n", "permissions:\n  contents: write\n", 1),
+                "widens"),
+            "secret": (path, workflow.replace(
+                "      GH_TOKEN: ${{ github.token }}\n",
+                "      GH_TOKEN: ${{ secrets.PUBLISH_TOKEN }}\n", 1), "secret"),
+            "build": (path, workflow.replace(
+                step, "          bazelisk build //tools/ci:editor_wasm_package\n" + step, 1),
+                "assembly builds"),
+            "commit pin": (path, workflow.replace(
+                "actions/upload-artifact@v7", "actions/upload-artifact@" + "0" * 40, 1),
+                "pins an action"),
+            "short retention": (path, workflow.replace(
+                "          retention-days: 90\n", "          retention-days: 30\n", 1),
+                "90 days"),
+            "input in script": (path, workflow.replace(
+                '--commit "$CANDIDATE_COMMIT"', "--commit ${{ inputs.candidate_commit }}", 1),
+                "interpolates"),
+            "publishes": (path, workflow.replace(
+                step, "          gh release upload v0.8.0 candidate.json\n" + step, 1),
+                "assembly publishes"),
+            "unchecked attestation": (path, workflow.replace(
+                "sha256sum --check --strict candidate.json.sha256", "true", 1),
+                "sign the checked record"),
+            "optional input": (path, workflow.replace(
+                "        required: true\n", "        required: false\n", 1), "inputs changed"),
+        })
+
+    def test_published_artifact_builds_record_their_module_graph(self):
+        # Each artifact a release candidate binds records the generated MODULE.bazel.lock its
+        # build resolved and proved in error mode, never a committed lockfile.
+        editor = self.supply_chain_files[".github/workflows/editor_wasm.yml"]
+        prove = _step_body(editor, "Prove the package's resolved module graph")
+        update = "bazelisk build --config=editor-wasm --lockfile_mode=update //tools/ci:editor_wasm_package"
+        error = "bazelisk build --config=editor-wasm --lockfile_mode=error //tools/ci:editor_wasm_package"
+        check = "python3 -B -m tools.release_cli check-lockfile --lockfile MODULE.bazel.lock"
+        snapshot = 'cp MODULE.bazel.lock "$RUNNER_TEMP/editor-wasm-module.lock"'
+        self.assertLess(prove.index(update), prove.index(error))
+        self.assertLess(prove.index(error), prove.index(check))
+        self.assertLess(prove.index(check), prove.index(snapshot))
+        self.assertLess(editor.index("- name: Prove the package's resolved module graph"),
+                        editor.index("- name: Stage package for handoff"))
+        stage = _step_body(editor, "Stage immutable Geode deployment candidate")
+        self.assertIn('cp "${RUNNER_TEMP}/editor-wasm-module.lock" '
+                      '"${candidate_dir}/MODULE.bazel.lock"', stage)
+        self.assertIn('\\"generated_lock_sha256\\":\\"${generated_lock_sha256}\\"', stage)
+
+        docs = self.supply_chain_files[".github/workflows/deploy_docs.yaml"]
+        build = docs.split("\n  deploy:\n", 1)[0]
+        record = _step_body(build, "Record the docs build dependency state")
+        update = "bazelisk mod graph --ignore_dev_dependency --lockfile_mode=update"
+        error = "bazelisk mod graph --ignore_dev_dependency --lockfile_mode=error"
+        self.assertLess(record.index(update), record.index(error))
+        self.assertLess(record.index(error), record.index("python3 -B -m tools.pages_artifact provenance"))
+        self.assertLess(build.index("- name: Upload retained Pages artifact"),
+                        build.index("- name: Record the docs build dependency state"))
+        retain = _step_body(build, "Retain the docs build provenance")
+        self.assertIn("name: donner-docs-provenance-${{ github.run_attempt }}", retain)
+        self.assertIn("path: ${{ runner.temp }}/docs-provenance/", retain)
+        deploy = docs.split("\n  deploy:\n", 1)[1]
+        self.assertEqual([], _build_steps(deploy.replace("bazel-contrib", "")))
 
     def test_bcr_preflight_has_no_publication_credentials(self):
         preflight = self.supply_chain_files[".github/workflows/bcr_preflight.yml"]
@@ -2013,6 +2370,7 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
             ".github/workflows/cmake.yml",
             ".github/workflows/lint.yml",
             ".github/workflows/release.yml",
+            CANDIDATE_WORKFLOW,
             ".github/workflows/sanitizers-pr.yml",
         )
         for path in paths:
@@ -2168,6 +2526,7 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
                 self.assertEqual(set(), events & PRIVILEGED_TRIGGERS)
         self.assertEqual({"release"}, triggers[".github/workflows/release.yml"])
         self.assertEqual({"workflow_dispatch"}, triggers[".github/workflows/publish_bcr.yml"])
+        self.assertEqual({"workflow_dispatch"}, triggers[CANDIDATE_WORKFLOW])
         sanitizers = ".github/workflows/sanitizers.yml"
         dispatch = "  workflow_dispatch:\n"
         self._assert_rejected(lambda files, path: _triggers(files[path]) & PRIVILEGED_TRIGGERS, {
@@ -2201,6 +2560,40 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
                 "forwards every secret"),
             "inherit": (main, files[main] + "  reuse:\n    uses: ./.github/workflows/lint.yml\n"
                         "    secrets: inherit\n", "forwards every secret"),
+        })
+
+    def test_reusable_workflow_calls_are_reviewed(self):
+        self.assertEqual([], _workflow_call_violations(_workflows(self.supply_chain_files)))
+
+    def test_workflow_call_policy_rejects_unreviewed_calls_and_secrets(self):
+        files = self.supply_chain_files
+        caller = ".github/workflows/pr_base_change.yml"
+        main = ".github/workflows/main.yml"
+        forward = "      BAZEL_REMOTE_CACHE: ${{ secrets.BAZEL_REMOTE_CACHE }}\n"
+        declared = "      BAZEL_REMOTE_CACHE:\n        required: false\n"
+        self.assertIn(forward, files[caller])
+        self.assertIn(declared, files[main])
+        cases = {
+            "new call": (main, files[main] + "  reuse:\n    uses: ./.github/workflows/lint.yml\n",
+                         "reusable workflow calls changed"),
+            "other callee": (caller, files[caller].replace(
+                "uses: ./.github/workflows/main.yml", "uses: ./.github/workflows/lint.yml", 1),
+                "calls ./.github/workflows/lint.yml"),
+            "extra secret": (caller, files[caller].replace(
+                forward, forward + "      CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}\n", 1),
+                "forwards secrets other than"),
+            "renamed secret": (caller, files[caller].replace(
+                forward, "      BAZEL_REMOTE_CACHE: ${{ secrets.CODECOV_TOKEN }}\n", 1),
+                "forwards secrets other than"),
+            "undeclared in callee": (main, files[main].replace(declared, "", 1),
+                                     "callee declares workflow_call secrets"),
+        }
+        self._assert_rejected(lambda files, path: _workflow_call_violations(_workflows(files)),
+                              cases)
+        # A forwarded secret outside the reviewed list also reads a secret beyond one step.
+        self._assert_rejected(lambda files, path: _secret_use_violations(_workflows(files)), {
+            "extra secret": cases["extra secret"][:2] + ("beyond one step",),
+            "renamed secret": cases["renamed secret"][:2] + ("beyond one step",),
         })
 
     def test_whole_secret_objects_cannot_bypass_step_consumers(self):
@@ -2294,6 +2687,30 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
                 self.assertIsNone(problem)
                 self.assertEqual(expected, sets)
 
+    def test_hosted_browser_subset_stays_hosted_and_never_writes_caches(self):
+        # The trusted-PR hosted macOS browser subset reads the self-hosted routing output only to
+        # run when the self-hosted macOS lane replaced the hosted one. It must stay on the hosted
+        # image, and as a pull-request-only job it restores main's Actions caches without saving
+        # any. Its BuildBuddy steps are the reviewed `macos` ones, checked by the BuildBuddy
+        # policy above; no other step reads a secret.
+        main = ".github/workflows/main.yml"
+        workflow = _workflows(self.supply_chain_files)[main]
+        job = _jobs(workflow)["macos-browser"]
+        self.assertEqual("macos-26", _job_key(job, "runs-on"))
+        self.assertNotIn((main, "macos-browser"), SELF_HOSTED_JOBS)
+        condition = _job_key(job, "if")
+        self.assertIn("github.event_name == 'pull_request'", condition)
+        self.assertIn("needs.gatekeeper.outputs.use_self_hosted_macos == 'true'", condition)
+        self.assertIn("cache-save: false", job)
+        self.assertNotRegex(job, r"uses: actions/cache(?:/save)?@")
+        readers = {_step_key(step, "name", 8): _secret_reads(step) for step in _steps(job)
+                   if _secret_reads(step)}
+        self.assertEqual(readers, {
+            "Configure BuildBuddy remote cache": {"BUILDBUDDY_API_KEY"},
+            "Configure BuildBuddy read-only cache": {"BUILDBUDDY_API_KEY_READONLY"},
+        })
+        self.assertEqual(_secret_reads(job.split("    steps:\n", 1)[0]), set())
+
     def test_self_hosted_policy_rejects_ungated_or_mutable_runner_selection(self):
         files = self.supply_chain_files
         main = ".github/workflows/main.yml"
@@ -2301,7 +2718,9 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         bcr = ".github/workflows/bcr_preflight.yml"
         perf = ".github/workflows/perf.yml"
         codeql = ".github/workflows/codeql.yml"
-        gate = "needs.gatekeeper.outputs.use_self_hosted_macos == 'true'"
+        # The full admission expression: the hosted browser subset job reads the same routing
+        # output inside a different condition, and must not be the one this case mutates.
+        gate = SELF_HOSTED_GATE_PREFIX + "needs.gatekeeper.outputs.use_self_hosted_macos == 'true'"
         hosted = "    runs-on: ubuntu-24.04\n"
         ungated = "without the trusted gate"
         self.assertEqual(1, files[main].count(gate))
