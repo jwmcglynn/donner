@@ -214,8 +214,6 @@ bool ParseXYWidthHeight(SVGParserContext& context, T element, const XMLQualified
   return true;
 }
 
-// Filter element parsing is intentionally disabled on the text branch cleanup path.
-#if 0
 /**
  * Parse the `in` attribute value into a \ref FilterInput.
  *
@@ -229,90 +227,7 @@ bool ParseXYWidthHeight(SVGParserContext& context, T element, const XMLQualified
  * @return The parsed FilterInput.
  */
 components::FilterInput ParseFilterInput(std::string_view value) {
-  using components::FilterInput;
-  using components::FilterStandardInput;
-
-  if (value == "SourceGraphic") {
-    return FilterInput{FilterStandardInput::SourceGraphic};
-  }
-  if (value == "SourceAlpha") {
-    return FilterInput{FilterStandardInput::SourceAlpha};
-  }
-  if (value == "FillPaint") {
-    return FilterInput{FilterStandardInput::FillPaint};
-  }
-  if (value == "StrokePaint") {
-    return FilterInput{FilterStandardInput::StrokePaint};
-  }
-  // BackgroundImage and BackgroundAlpha were SVG 1.1 filter inputs, deprecated in SVG 2.
-  // They fall through to Named (unresolved → transparent black), which is the correct SVG 2
-  // behavior.
-  return FilterInput{FilterInput::Named{RcString(value)}};
-}
-
-/**
- * Parses the `in` and `result` attributes common to all filter primitives.
- * Returns true if the attribute was handled.
- *
- * @tparam T Element type deriving from SVGFilterPrimitiveStandardAttributes.
- * @param element The element to set the values on.
- * @param name The attribute name.
- * @param value The attribute value.
- * @return True if the attribute was `in` or `result`.
- */
-template <typename T>
-bool ParseFilterPrimitiveAttributes(T element, const XMLQualifiedNameRef& name,
-                                    std::string_view value) {
-  if (name == XMLQualifiedNameRef("in")) {
-    element.entityHandle().template get<components::FilterPrimitiveComponent>().in =
-        ParseFilterInput(value);
-    return true;
-  }
-  if (name == XMLQualifiedNameRef("in2")) {
-    element.entityHandle().template get<components::FilterPrimitiveComponent>().in2 =
-        ParseFilterInput(value);
-    return true;
-  }
-  if (name == XMLQualifiedNameRef("result")) {
-    element.setResult(value);
-    return true;
-  }
-  return false;
-}
-#endif
-
-/**
- * Parse the `in` attribute value into a \ref FilterInput.
- *
- * Standard keywords: SourceGraphic, SourceAlpha, FillPaint, StrokePaint.
- * Any other non-empty string is treated as a named result reference.
- *
- * BackgroundImage and BackgroundAlpha are deprecated in SVG 2 and not supported.
- * They are parsed as named references (which won't resolve, producing transparent black).
- *
- * @param value Attribute value.
- * @return The parsed FilterInput.
- */
-components::FilterInput ParseFilterInput(std::string_view value) {
-  using components::FilterInput;
-  using components::FilterStandardInput;
-
-  if (value == "SourceGraphic") {
-    return FilterInput{FilterStandardInput::SourceGraphic};
-  }
-  if (value == "SourceAlpha") {
-    return FilterInput{FilterStandardInput::SourceAlpha};
-  }
-  if (value == "FillPaint") {
-    return FilterInput{FilterStandardInput::FillPaint};
-  }
-  if (value == "StrokePaint") {
-    return FilterInput{FilterStandardInput::StrokePaint};
-  }
-  // BackgroundImage and BackgroundAlpha were SVG 1.1 filter inputs, deprecated in SVG 2.
-  // They fall through to Named (unresolved → transparent black), which is the correct SVG 2
-  // behavior.
-  return FilterInput{FilterInput::Named{RcString(value)}};
+  return components::FilterInput::FromAttribute(value);
 }
 
 /**
@@ -761,7 +676,7 @@ std::optional<ParseDiagnostic> ParseAttribute<SVGFEComponentTransferElement>(
 namespace {
 
 /// Parse the shared attributes for feFuncR/G/B/A elements.
-void ParseFuncAttributes(components::FEFuncComponent& comp, const XMLQualifiedNameRef& name,
+bool ParseFuncAttributes(components::FEFuncComponent& comp, const XMLQualifiedNameRef& name,
                          std::string_view value) {
   if (name == XMLQualifiedNameRef("type")) {
     if (value == "identity") {
@@ -831,7 +746,10 @@ void ParseFuncAttributes(components::FEFuncComponent& comp, const XMLQualifiedNa
     if (auto n = ParseNumberNoSuffix(value)) {
       comp.offset = *n;
     }
+  } else {
+    return false;
   }
+  return true;
 }
 
 }  // namespace
@@ -842,7 +760,9 @@ std::optional<ParseDiagnostic> ParseAttribute<SVGFEFuncRElement>(SVGParserContex
                                                                  const XMLQualifiedNameRef& name,
                                                                  std::string_view value) {
   auto& comp = element.entityHandle().get<components::FEFuncComponent>();
-  ParseFuncAttributes(comp, name, value);
+  if (!ParseFuncAttributes(comp, name, value)) {
+    return ParseCommonAttribute(context, element, name, value);
+  }
   return std::nullopt;
 }
 
@@ -852,7 +772,9 @@ std::optional<ParseDiagnostic> ParseAttribute<SVGFEFuncGElement>(SVGParserContex
                                                                  const XMLQualifiedNameRef& name,
                                                                  std::string_view value) {
   auto& comp = element.entityHandle().get<components::FEFuncComponent>();
-  ParseFuncAttributes(comp, name, value);
+  if (!ParseFuncAttributes(comp, name, value)) {
+    return ParseCommonAttribute(context, element, name, value);
+  }
   return std::nullopt;
 }
 
@@ -862,7 +784,9 @@ std::optional<ParseDiagnostic> ParseAttribute<SVGFEFuncBElement>(SVGParserContex
                                                                  const XMLQualifiedNameRef& name,
                                                                  std::string_view value) {
   auto& comp = element.entityHandle().get<components::FEFuncComponent>();
-  ParseFuncAttributes(comp, name, value);
+  if (!ParseFuncAttributes(comp, name, value)) {
+    return ParseCommonAttribute(context, element, name, value);
+  }
   return std::nullopt;
 }
 
@@ -872,7 +796,9 @@ std::optional<ParseDiagnostic> ParseAttribute<SVGFEFuncAElement>(SVGParserContex
                                                                  const XMLQualifiedNameRef& name,
                                                                  std::string_view value) {
   auto& comp = element.entityHandle().get<components::FEFuncComponent>();
-  ParseFuncAttributes(comp, name, value);
+  if (!ParseFuncAttributes(comp, name, value)) {
+    return ParseCommonAttribute(context, element, name, value);
+  }
   return std::nullopt;
 }
 

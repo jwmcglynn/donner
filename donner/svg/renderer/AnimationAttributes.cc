@@ -19,6 +19,7 @@
 #include "donner/svg/components/PathLengthComponent.h"
 #include "donner/svg/components/PreserveAspectRatioComponent.h"
 #include "donner/svg/components/animation/AnimatedValuesComponent.h"
+#include "donner/svg/components/animation/AnimationNumericAttributes.h"
 #include "donner/svg/components/animation/AnimationResourceBudget.h"
 #include "donner/svg/components/animation/AnimationValueMath.h"
 #include "donner/svg/components/filter/FilterComponent.h"
@@ -78,7 +79,12 @@ std::optional<RcString> SourceAttribute(Registry& registry, Entity entity, std::
 
 template <typename Value>
 std::size_t RetainedValueBytes(const Value& value) {
-  if constexpr (requires { value.retainedBytes(); }) {
+  if constexpr (std::is_same_v<Value, RcString>) {
+    return sizeof(Value) + value.size();
+  } else if constexpr (std::is_same_v<Value, FilterInput>) {
+    const auto* named = std::get_if<FilterInput::Named>(&value.value);
+    return sizeof(Value) + (named ? named->name.size() : 0);
+  } else if constexpr (requires { value.retainedBytes(); }) {
     return value.retainedBytes().value_or(AnimationResourceBudget::kMaximumOutputBytes + 1);
   } else if constexpr (requires {
                          value.has_value();
@@ -179,7 +185,7 @@ bool OverrideField(Registry& registry, Entity entity, std::string_view name, con
 }
 
 template <typename Component, typename Field, typename Value>
-bool SimpleField(Registry& registry, Entity entity, std::string_view name, Field Component::*field,
+bool SimpleField(Registry& registry, Entity entity, std::string_view name, Field Component::* field,
                  const Value& value, bool create = false) {
   return OverrideField<Component>(
       registry, entity, name, Field(value),
@@ -239,117 +245,9 @@ bool ApplyGradientLength(Registry& registry, Entity entity, std::string_view nam
 }
 
 bool ApplyFilterNumber(Registry& registry, Entity entity, std::string_view name, double value) {
-  if (name == "dx" && SimpleField(registry, entity, name, &FEOffsetComponent::dx, value)) {
-    return true;
-  }
-  if (name == "dy" && SimpleField(registry, entity, name, &FEOffsetComponent::dy, value)) {
-    return true;
-  }
-  if (name == "dx" && SimpleField(registry, entity, name, &FEDropShadowComponent::dx, value)) {
-    return true;
-  }
-  if (name == "dy" && SimpleField(registry, entity, name, &FEDropShadowComponent::dy, value)) {
-    return true;
-  }
-  if (name == "k1" && SimpleField(registry, entity, name, &FECompositeComponent::k1, value)) {
-    return true;
-  }
-  if (name == "k2" && SimpleField(registry, entity, name, &FECompositeComponent::k2, value)) {
-    return true;
-  }
-  if (name == "k3" && SimpleField(registry, entity, name, &FECompositeComponent::k3, value)) {
-    return true;
-  }
-  if (name == "k4" && SimpleField(registry, entity, name, &FECompositeComponent::k4, value)) {
-    return true;
-  }
-  if (name == "slope" && SimpleField(registry, entity, name, &FEFuncComponent::slope, value)) {
-    return true;
-  }
-  if (name == "intercept" &&
-      SimpleField(registry, entity, name, &FEFuncComponent::intercept, value)) {
-    return true;
-  }
-  if (name == "amplitude" &&
-      SimpleField(registry, entity, name, &FEFuncComponent::amplitude, value)) {
-    return true;
-  }
-  if (name == "exponent" &&
-      SimpleField(registry, entity, name, &FEFuncComponent::exponent, value)) {
-    return true;
-  }
-  if (name == "offset" && SimpleField(registry, entity, name, &FEFuncComponent::offset, value)) {
-    return true;
-  }
-  if (name == "divisor" &&
-      SimpleField(registry, entity, name, &FEConvolveMatrixComponent::divisor, value)) {
-    return true;
-  }
-  if (name == "bias" &&
-      SimpleField(registry, entity, name, &FEConvolveMatrixComponent::bias, value)) {
-    return true;
-  }
-  if (name == "scale" &&
-      SimpleField(registry, entity, name, &FEDisplacementMapComponent::scale, value)) {
-    return true;
-  }
-  if (name == "seed" && SimpleField(registry, entity, name, &FETurbulenceComponent::seed, value)) {
-    return true;
-  }
-  if (name == "surfaceScale" &&
-      SimpleField(registry, entity, name, &FEDiffuseLightingComponent::surfaceScale, value)) {
-    return true;
-  }
-  if (name == "diffuseConstant" &&
-      SimpleField(registry, entity, name, &FEDiffuseLightingComponent::diffuseConstant, value)) {
-    return true;
-  }
-  if (name == "surfaceScale" &&
-      SimpleField(registry, entity, name, &FESpecularLightingComponent::surfaceScale, value)) {
-    return true;
-  }
-  if (name == "specularConstant" &&
-      SimpleField(registry, entity, name, &FESpecularLightingComponent::specularConstant, value)) {
-    return true;
-  }
-  if (name == "specularExponent" &&
-      SimpleField(registry, entity, name, &FESpecularLightingComponent::specularExponent, value)) {
-    return true;
-  }
-  if (name == "azimuth" &&
-      SimpleField(registry, entity, name, &LightSourceComponent::azimuth, value)) {
-    return true;
-  }
-  if (name == "elevation" &&
-      SimpleField(registry, entity, name, &LightSourceComponent::elevation, value)) {
-    return true;
-  }
-  if (name == "x" && SimpleField(registry, entity, name, &LightSourceComponent::x, value)) {
-    return true;
-  }
-  if (name == "y" && SimpleField(registry, entity, name, &LightSourceComponent::y, value)) {
-    return true;
-  }
-  if (name == "z" && SimpleField(registry, entity, name, &LightSourceComponent::z, value)) {
-    return true;
-  }
-  if (name == "pointsAtX" &&
-      SimpleField(registry, entity, name, &LightSourceComponent::pointsAtX, value)) {
-    return true;
-  }
-  if (name == "pointsAtY" &&
-      SimpleField(registry, entity, name, &LightSourceComponent::pointsAtY, value)) {
-    return true;
-  }
-  if (name == "pointsAtZ" &&
-      SimpleField(registry, entity, name, &LightSourceComponent::pointsAtZ, value)) {
-    return true;
-  }
-  if (name == "limitingConeAngle" &&
-      SimpleField(registry, entity, name, &LightSourceComponent::limitingConeAngle, value)) {
-    return true;
-  }
-  return false;
+  return VisitAnimationNumberAttribute(registry, entity, name, [&](auto&, auto field) {
+    (void)SimpleField(registry, entity, name, field, value);
+  });
 }
 
 template <typename Component>
@@ -436,6 +334,149 @@ bool ApplyFilterPair(Registry& registry, Entity entity, std::string_view name,
         });
   }
   return true;
+}
+
+std::optional<int> AnimationInteger(double value, int minimum, int maximum) {
+  if (!std::isfinite(value) || value < minimum || value > maximum) {
+    return std::nullopt;
+  }
+  return static_cast<int>(value);
+}
+
+bool ApplyFilterInteger(Registry& registry, Entity entity, std::string_view name,
+                        std::string_view value) {
+  if (name != "order" && name != "numOctaves" && name != "targetX" && name != "targetY") {
+    return false;
+  }
+  const auto numbers = AnimationNumbers(value);
+  if (!numbers) {
+    return true;
+  }
+  if (name == "order") {
+    if (numbers->size() > 2) {
+      return true;
+    }
+    const auto x = AnimationInteger(numbers->front(), 1, kMaximumFilterConvolveOrder);
+    const auto y = AnimationInteger(numbers->back(), 1, kMaximumFilterConvolveOrder);
+    if (x && y) {
+      (void)OverrideField<FEConvolveMatrixComponent>(
+          registry, entity, name, Vector2i(*x, *y),
+          [](const auto& component) { return Vector2i(component.orderX, component.orderY); },
+          [](auto& component, Vector2i value) {
+            component.orderX = value.x;
+            component.orderY = value.y;
+          });
+    }
+    return true;
+  }
+  if (numbers->size() != 1) {
+    return true;
+  }
+  const auto number = AnimationInteger(numbers->front(), std::numeric_limits<int>::min(),
+                                       std::numeric_limits<int>::max());
+  if (!number) {
+    return true;
+  }
+  if (name == "numOctaves") {
+    return SimpleField(registry, entity, name, &FETurbulenceComponent::numOctaves, *number);
+  }
+  const auto field =
+      name == "targetX" ? &FEConvolveMatrixComponent::targetX : &FEConvolveMatrixComponent::targetY;
+  return SimpleField(registry, entity, name, field, *number);
+}
+
+bool ApplyFilterBoolean(Registry& registry, Entity entity, std::string_view name,
+                        std::string_view value) {
+  if (name == "preserveAlpha" && (value == "true" || value == "false")) {
+    return SimpleField(registry, entity, name, &FEConvolveMatrixComponent::preserveAlpha,
+                       value == "true");
+  }
+  if (name == "stitchTiles" && (value == "stitch" || value == "noStitch")) {
+    return SimpleField(registry, entity, name, &FETurbulenceComponent::stitchTiles,
+                       value == "stitch");
+  }
+  return false;
+}
+
+bool ApplyFilterEdgeMode(Registry& registry, Entity entity, std::string_view name,
+                         std::string_view value) {
+  if (name != "edgeMode") {
+    return false;
+  }
+  using Convolve = FEConvolveMatrixComponent::EdgeMode;
+  using Blur = FEGaussianBlurComponent::EdgeMode;
+  if (value == "none") {
+    return SimpleField(registry, entity, name, &FEConvolveMatrixComponent::edgeMode,
+                       Convolve::None) ||
+           SimpleField(registry, entity, name, &FEGaussianBlurComponent::edgeMode, Blur::None);
+  }
+  if (value == "duplicate") {
+    return SimpleField(registry, entity, name, &FEConvolveMatrixComponent::edgeMode,
+                       Convolve::Duplicate) ||
+           SimpleField(registry, entity, name, &FEGaussianBlurComponent::edgeMode, Blur::Duplicate);
+  }
+  if (value == "wrap") {
+    return SimpleField(registry, entity, name, &FEConvolveMatrixComponent::edgeMode,
+                       Convolve::Wrap) ||
+           SimpleField(registry, entity, name, &FEGaussianBlurComponent::edgeMode, Blur::Wrap);
+  }
+  return true;
+}
+
+bool ApplyFilterChannel(Registry& registry, Entity entity, std::string_view name,
+                        std::string_view value) {
+  if (name != "xChannelSelector" && name != "yChannelSelector") {
+    return false;
+  }
+  using Channel = FEDisplacementMapComponent::Channel;
+  const auto field = name == "xChannelSelector" ? &FEDisplacementMapComponent::xChannelSelector
+                                                : &FEDisplacementMapComponent::yChannelSelector;
+  if (value == "R") {
+    return SimpleField(registry, entity, name, field, Channel::R);
+  }
+  if (value == "G") {
+    return SimpleField(registry, entity, name, field, Channel::G);
+  }
+  if (value == "B") {
+    return SimpleField(registry, entity, name, field, Channel::B);
+  }
+  if (value == "A") {
+    return SimpleField(registry, entity, name, field, Channel::A);
+  }
+  return true;
+}
+
+bool ApplyFilterReference(Registry& registry, Entity entity, std::string_view name,
+                          std::string_view value) {
+  if (name != "in" && name != "in2" && name != "result") {
+    return false;
+  }
+  if (!registry.any_of<FilterPrimitiveComponent, FEMergeNodeComponent>(entity)) {
+    return false;
+  }
+  auto* restoration = registry.ctx().find<AttributeRestoreContext>();
+  auto& budget = restoration ? restoration->budget : registry.ctx().get<AnimationResourceBudget>();
+  if (!budget.reserveOutput(value.size())) {
+    return true;
+  }
+  if (name == "result") {
+    return SimpleField(registry, entity, name, &FilterPrimitiveComponent::result, RcString(value));
+  }
+  const auto input = FilterInput::FromAttribute(value);
+  if (name == "in2") {
+    return SimpleField(registry, entity, name, &FilterPrimitiveComponent::in2, input);
+  }
+  return SimpleField(registry, entity, name, &FilterPrimitiveComponent::in, input) ||
+         SimpleField(registry, entity, name, &FEMergeNodeComponent::in, input);
+}
+
+bool ApplyFilterControl(Registry& registry, Entity entity, std::string_view name,
+                        std::string_view value) {
+  return ApplyFilterInteger(registry, entity, name, value) ||
+         ApplyFilterBoolean(registry, entity, name, value) ||
+         ApplyFilterEdgeMode(registry, entity, name, value) ||
+         ApplyFilterChannel(registry, entity, name, value) ||
+         ApplyFilterReference(registry, entity, name, value);
 }
 
 bool ApplyDiscreteAttribute(Registry& registry, Entity entity, std::string_view name,
@@ -1004,7 +1045,8 @@ void ApplyAttribute(Registry& registry, Entity entity, std::string_view name,
     InvalidateAnimatedText(registry, entity);
     return;
   }
-  if (ApplyDiscreteAttribute(registry, entity, name, value) ||
+  if (ApplyFilterControl(registry, entity, name, value) ||
+      ApplyDiscreteAttribute(registry, entity, name, value) ||
       ApplyFilterList(registry, entity, name, value) ||
       ApplyFilterPair(registry, entity, name, value)) {
     return;

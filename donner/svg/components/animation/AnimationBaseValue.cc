@@ -11,6 +11,7 @@
 #include "donner/svg/components/ElementTypeComponent.h"
 #include "donner/svg/components/SVGDocumentContext.h"
 #include "donner/svg/components/animation/AnimatedValuesComponent.h"
+#include "donner/svg/components/animation/AnimationNumericAttributes.h"
 #include "donner/svg/components/animation/AnimationSystem.h"
 #include "donner/svg/components/filter/FilterComponent.h"
 #include "donner/svg/components/filter/FilterPrimitiveComponent.h"
@@ -128,7 +129,7 @@ std::optional<std::string> GeometryBaseValue(Registry& registry, Entity target,
 
 template <typename Component, typename Value>
 std::optional<Value> InheritedGradientField(Registry& registry, Entity target,
-                                            std::optional<Value> Component::*field,
+                                            std::optional<Value> Component::* field,
                                             AnimationResourceBudget& budget) {
   std::unordered_set<Entity> visited;
   while (budget.reserveGeometryWork(1) && visited.insert(target).second) {
@@ -220,6 +221,136 @@ std::optional<std::string> GradientBaseValue(Registry& registry, Entity target,
   return length ? SerializeValue(*length, context) : std::nullopt;
 }
 
+std::string NumberPair(double first, double second) {
+  std::ostringstream output;
+  output.precision(12);
+  output << first << ' ' << second;
+  return output.str();
+}
+
+std::string FilterInputBaseValue(const std::optional<FilterInput>& input,
+                                 AnimationResourceBudget& budget) {
+  if (!input || std::holds_alternative<FilterInput::Previous>(input->value)) {
+    // An empty underlying sample leaves the implicit previous-input binding untouched.
+    return {};
+  }
+  if (const auto* named = std::get_if<FilterInput::Named>(&input->value)) {
+    return budget.reserveSourceBytes(named->name.size()) ? named->name.str() : std::string{};
+  }
+  switch (std::get<FilterStandardInput>(input->value)) {
+    case FilterStandardInput::SourceGraphic: return "SourceGraphic";
+    case FilterStandardInput::SourceAlpha: return "SourceAlpha";
+    case FilterStandardInput::FillPaint: return "FillPaint";
+    case FilterStandardInput::StrokePaint: return "StrokePaint";
+  }
+  return {};
+}
+
+std::optional<std::string> FilterReferenceBaseValue(Registry& registry, Entity target,
+                                                    std::string_view name,
+                                                    AnimationResourceBudget& budget) {
+  if (const auto* primitive = registry.try_get<FilterPrimitiveComponent>(target)) {
+    if (name == "in" || name == "in2") {
+      return FilterInputBaseValue(name == "in" ? primitive->in : primitive->in2, budget);
+    }
+    if (name == "result") {
+      return primitive->result && budget.reserveSourceBytes(primitive->result->size())
+                 ? primitive->result->str()
+                 : std::string{};
+    }
+  }
+  if (name == "in") {
+    if (const auto* merge = registry.try_get<FEMergeNodeComponent>(target)) {
+      return FilterInputBaseValue(merge->in, budget);
+    }
+  }
+  return std::nullopt;
+}
+
+std::optional<std::string> FilterPairBaseValue(Registry& registry, Entity target,
+                                               std::string_view name) {
+  if (name == "stdDeviation") {
+    if (const auto* blur = registry.try_get<FEGaussianBlurComponent>(target)) {
+      return NumberPair(blur->stdDeviationX, blur->stdDeviationY);
+    }
+    if (const auto* shadow = registry.try_get<FEDropShadowComponent>(target)) {
+      return NumberPair(shadow->stdDeviationX, shadow->stdDeviationY);
+    }
+  }
+  if (name == "radius") {
+    if (const auto* morph = registry.try_get<FEMorphologyComponent>(target)) {
+      return NumberPair(morph->radiusX, morph->radiusY);
+    }
+  }
+  if (name == "baseFrequency") {
+    if (const auto* noise = registry.try_get<FETurbulenceComponent>(target)) {
+      return NumberPair(noise->baseFrequencyX, noise->baseFrequencyY);
+    }
+  }
+  if (name == "order") {
+    if (const auto* convolution = registry.try_get<FEConvolveMatrixComponent>(target)) {
+      return NumberPair(convolution->orderX, convolution->orderY);
+    }
+  }
+  return std::nullopt;
+}
+
+std::optional<std::string> FilterIntegerBaseValue(Registry& registry, Entity target,
+                                                  std::string_view name,
+                                                  const AnimationValueContext& context) {
+  if (name == "numOctaves") {
+    if (const auto* noise = registry.try_get<FETurbulenceComponent>(target)) {
+      return SerializeValue(noise->numOctaves, context);
+    }
+  }
+  const auto* convolution = registry.try_get<FEConvolveMatrixComponent>(target);
+  if (!convolution) {
+    return std::nullopt;
+  }
+  if (name == "targetX") {
+    return SerializeValue(convolution->targetX.value_or(convolution->orderX / 2), context);
+  }
+  if (name == "targetY") {
+    return SerializeValue(convolution->targetY.value_or(convolution->orderY / 2), context);
+  }
+  return std::nullopt;
+}
+
+std::optional<std::string> FilterNumberBaseValue(Registry& registry, Entity target,
+                                                 std::string_view name,
+                                                 const AnimationValueContext& context,
+                                                 AnimationResourceBudget& budget) {
+  if (auto pair = FilterPairBaseValue(registry, target, name)) {
+    return pair;
+  }
+  if (auto integer = FilterIntegerBaseValue(registry, target, name, context)) {
+    return integer;
+  }
+  if (name == "divisor") {
+    if (const auto* convolution = registry.try_get<FEConvolveMatrixComponent>(target);
+        convolution && !convolution->divisor) {
+      if (!budget.reserveGeometryWork(convolution->kernelMatrix.size())) {
+        return std::string{};
+      }
+      double sum = 0;
+      for (double value : convolution->kernelMatrix) {
+        sum += value;
+      }
+      return SerializeValue(sum == 0 ? 1 : sum, context);
+    }
+  }
+  std::optional<std::string> result;
+  VisitAnimationNumberAttribute(registry, target, name, [&](const auto& component, auto field) {
+    const auto& value = component.*field;
+    if constexpr (requires { value.has_value(); }) {
+      result = value ? SerializeValue(*value, context) : std::optional(std::string{});
+    } else {
+      result = SerializeValue(value, context);
+    }
+  });
+  return result;
+}
+
 std::optional<std::string> StyleValue(const PropertyRegistry& properties,
                                       std::string_view attribute,
                                       const AnimationValueContext& context) {
@@ -282,7 +413,12 @@ AnimationValueContext AnimationContextFor(Registry& registry, Entity target,
                                           std::string_view attribute,
                                           AnimationResourceBudget& budget) {
   AnimationValueContext result;
-  result.referenceValue = attribute == "href" || attribute == "xlink:href";
+  result.referenceValue = attribute == "href" || attribute == "xlink:href" || attribute == "in" ||
+                          attribute == "in2" || attribute == "result";
+  result.numberPair = attribute == "stdDeviation" || attribute == "radius" ||
+                      attribute == "baseFrequency" || attribute == "order";
+  result.integerValue = attribute == "numOctaves" || attribute == "targetX" ||
+                        attribute == "targetY" || attribute == "order";
   result.viewBox = LayoutSystem().getViewBox(EntityHandle(registry, target));
   if (registry.all_of<GradientComponent>(target) &&
       InheritedGradientField(registry, target, &GradientComponent::gradientUnits, budget)
@@ -344,7 +480,13 @@ std::string UnderlyingAnimationValue(Registry& registry, Entity target, std::str
       return *value;
     }
   }
-  if (context.referenceValue) {
+  if (auto value = FilterReferenceBaseValue(registry, target, attribute, budget)) {
+    return *value;
+  }
+  if (auto value = FilterNumberBaseValue(registry, target, attribute, context, budget)) {
+    return *value;
+  }
+  if (attribute == "href" || attribute == "xlink:href") {
     const auto value = AnimationReferenceValue(registry, target);
     return value && budget.reserveSourceBytes(value->size()) ? value->str() : std::string{};
   }

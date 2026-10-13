@@ -479,6 +479,25 @@ std::size_t AnimationSourceBytes(const SetAnimationComponent* setComp,
   return sourceBytes;
 }
 
+std::string RoundAnimationIntegers(const std::string& input) {
+  const auto numbers = ParseAnimationLengths(input);
+  if (!numbers) {
+    return {};
+  }
+  std::ostringstream output;
+  output.precision(12);
+  for (std::size_t i = 0; i < numbers->size(); ++i) {
+    if ((*numbers)[i].unit != Lengthd::Unit::None) {
+      return {};
+    }
+    if (i != 0) {
+      output << ' ';
+    }
+    output << std::floor((*numbers)[i].value + 0.5);
+  }
+  return output.str();
+}
+
 std::optional<std::pair<std::string_view, std::string>> SampleAnimationValue(
     double progress, double iteration, const SetAnimationComponent* setComp,
     const AnimateValueComponent* valueComp, const AnimateTransformComponent* transformComp,
@@ -503,6 +522,9 @@ std::optional<std::pair<std::string_view, std::string>> SampleAnimationValue(
         valueComp->values.empty() && !valueComp->from && !valueComp->to && valueComp->by;
     if (!context.referenceValue && !sampled.empty() && !toOnly && (valueComp->additive || byOnly)) {
       sampled = CombineAnimationValues(underlying, sampled, 1, 1, context).value_or(sampled);
+    }
+    if (context.integerValue) {
+      sampled = RoundAnimationIntegers(sampled);
     }
     return std::pair<std::string_view, std::string>{valueComp->attributeName, std::move(sampled)};
   }

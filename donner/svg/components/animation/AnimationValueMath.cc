@@ -121,8 +121,16 @@ std::optional<std::string> CombineAnimationValues(std::string_view first, std::s
   if (!std::isfinite(firstWeight) || !std::isfinite(secondWeight)) {
     return std::nullopt;
   }
-  const auto a = ParseAnimationLengths(first);
-  const auto b = ParseAnimationLengths(second);
+  auto a = ParseAnimationLengths(first);
+  auto b = ParseAnimationLengths(second);
+  if (context.numberPair) {
+    if (a && a->size() == 1) {
+      a->push_back(a->front());
+    }
+    if (b && b->size() == 1) {
+      b->push_back(b->front());
+    }
+  }
   if (a && b) {
     return CombineLengths(*a, *b, firstWeight, secondWeight, context);
   }
@@ -136,8 +144,16 @@ std::optional<std::string> CombineAnimationValues(std::string_view first, std::s
 
 std::optional<double> AnimationValueDistance(std::string_view first, std::string_view second,
                                              const AnimationValueContext& context) {
-  const auto a = ParseAnimationLengths(first);
-  const auto b = ParseAnimationLengths(second);
+  auto a = ParseAnimationLengths(first);
+  auto b = ParseAnimationLengths(second);
+  if (context.numberPair) {
+    if (a && a->size() == 1) {
+      a->push_back(a->front());
+    }
+    if (b && b->size() == 1) {
+      b->push_back(b->front());
+    }
+  }
   if (a && b && a->size() == b->size()) {
     double distance = 0;
     for (std::size_t i = 0; i < a->size(); ++i) {

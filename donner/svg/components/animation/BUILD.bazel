@@ -35,6 +35,7 @@ donner_cc_library(
     hdrs = [
         "AnimationBaseValue.h",
         "AnimationMotion.h",
+        "AnimationNumericAttributes.h",
         "AnimationSystem.h",
         "AnimationTimeline.h",
         "AnimationValueMath.h",

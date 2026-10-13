@@ -14,7 +14,9 @@ namespace donner::svg::components {
 /// Context required to resolve relative units and currentColor for an animated value.
 struct AnimationValueContext {
   Box2d viewBox{{0, 0}, {300, 150}};  ///< Current SVG viewport in user units.
-  bool referenceValue = false;        ///< URI values are discrete and non-additive.
+  bool referenceValue = false;        ///< References are discrete and non-additive.
+  bool numberPair = false;            ///< Repeat one coordinate for number-optional-number values.
+  bool integerValue = false;          ///< Round interpolated numeric values to the nearest integer.
   bool linearRgb = false;             ///< Interpolate colors in linear-light RGB when requested.
   FontMetrics fontMetrics;            ///< Font and viewport unit metrics.
   Lengthd::Extent extent = Lengthd::Extent::Mixed;   ///< Percentage reference axis.

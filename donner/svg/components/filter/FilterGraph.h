@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <string_view>
 #include <type_traits>
 #include <variant>
 #include <vector>
@@ -128,11 +129,14 @@ enum class FilterStandardInput : std::uint8_t {
 struct FilterInput {
   /// The input is the output of the immediately preceding primitive (or SourceGraphic for the first
   /// primitive).
-  struct Previous {};
+  struct Previous {
+    bool operator==(const Previous&) const = default;
+  };
 
   /// The input is a named result from a prior primitive's `result` attribute.
   struct Named {
     RcString name;  ///< The result name to reference.
+    bool operator==(const Named&) const = default;
   };
 
   /// Variant of all input types.
@@ -151,6 +155,26 @@ struct FilterInput {
 
   /// Construct from a variant value.
   /* implicit */ FilterInput(Type value) : value(std::move(value)) {}
+
+  /// Parse a standard keyword or a named filter-result reference.
+  /// @param value SVG input attribute value; the caller admits any owning string allocation.
+  static FilterInput FromAttribute(std::string_view value) {
+    if (value == "SourceGraphic") {
+      return FilterInput(FilterStandardInput::SourceGraphic);
+    }
+    if (value == "SourceAlpha") {
+      return FilterInput(FilterStandardInput::SourceAlpha);
+    }
+    if (value == "FillPaint") {
+      return FilterInput(FilterStandardInput::FillPaint);
+    }
+    if (value == "StrokePaint") {
+      return FilterInput(FilterStandardInput::StrokePaint);
+    }
+    return FilterInput(Named{RcString(value)});
+  }
+
+  bool operator==(const FilterInput&) const = default;
 };
 
 /**
