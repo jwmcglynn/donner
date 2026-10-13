@@ -127,6 +127,12 @@ def verify_published_source(commit: str, tag: str, release: dict, run_id: str,
         receipt = bcr_source.verify_archive(directory, commit)
         if assets[f"{prefix}.tar.gz"].get("digest") != "sha256:" + receipt["sha256"]:
             raise ValueError("published source digest does not match its verified bytes")
+    check_preflight_attempt(receipt, commit, run_id, attempt)
+    return receipt
+
+
+def check_preflight_attempt(receipt: dict, commit: str, run_id: str, attempt: str) -> None:
+    """Require the archive's qualifying preflight to be the named successful attempt on main."""
     verified = (receipt.get("verified_run_id", ""), receipt.get("verified_run_attempt", ""))
     if any(not isinstance(value, str) or not re.fullmatch(r"[1-9][0-9]*", value)
            for value in verified):
@@ -139,7 +145,6 @@ def verify_published_source(commit: str, tag: str, release: dict, run_id: str,
         raise ValueError("source preflight must have run on main")
     if run.get("id") != int(run_id) or run["run_attempt"] != int(attempt):
         raise ValueError("source CI attempt does not match provenance")
-    return receipt
 
 
 def fork_contents(path: str, commit: str) -> bytes:

@@ -226,13 +226,13 @@ testing a sibling checkout.
 
 ## Volatile facts — query, never trust memory
 
-| Fact                     | Query                                                                       |
-| ------------------------ | --------------------------------------------------------------------------- |
-| Current module version   | `grep -n '^module(' MODULE.bazel`                                           |
-| Existing release tags    | `git tag -l 'v*'`                                                           |
+| Fact                     | Query                                                                         |
+| ------------------------ | ----------------------------------------------------------------------------- |
+| Current module version   | `grep -n '^module(' MODULE.bazel`                                             |
+| Existing release tags    | `git tag -l 'v*'`                                                             |
 | BCR generator pin        | `grep -n 'bazel-contrib/publish-to-bcr@' .github/workflows/bcr_preflight.yml` |
-| Unreleased notes section | `grep -n 'unreleased' RELEASE_NOTES.md`                                     |
-| BCR presubmit allowlist  | `grep -A40 'build_targets' .bcr/presubmit.yml`                              |
+| Unreleased notes section | `grep -n 'unreleased' RELEASE_NOTES.md`                                       |
+| BCR presubmit allowlist  | `grep -A40 'build_targets' .bcr/presubmit.yml`                                |
 
 ## Related skills
 

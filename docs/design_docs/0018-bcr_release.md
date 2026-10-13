@@ -62,8 +62,9 @@ alone does not submit to BCR. Prereleases do not open BCR PRs.
 4. Inspect its admission report and all four consumer jobs. A generator or checkout-only build is
    not an admission test. Expected BCR maintainer review is reported separately from validation
    errors, and does not imply that upstream builds have run.
-5. Confirm `donner-bcr-qualified-<attempt>` and both `donner-svg-<platform>-<commit>-<attempt>`
-   artifacts, including each generated Bazel lockfile, are retained. Artifact retention is 90 days; run a fresh preflight before approval if
+5. Confirm `donner-bcr-qualified-<attempt>`, `donner-bcr-entry-<attempt>` and both
+   `donner-svg-<platform>-<commit>-<attempt>` artifacts, including each generated Bazel lockfile,
+   are retained. Artifact retention is 90 days; run a fresh preflight before approval if
    any expires. Use a successful manually dispatched full preflight on main for the exact source
    commit, never a slim push run, a PR or a feature-branch run.
 6. While `main` still points at the candidate commit, dispatch `Assemble release candidate` with
@@ -162,8 +163,7 @@ notice, and admission rejection paths; `//tools:bcr_dependency_closure_tests` co
    checks its digest and its attestation by `Assemble release candidate`, and takes the approved
    source digest and preflight attempt from the record. The published archive's provenance must
    name exactly that attempt, a successful run on `main`. Tokenless jobs download the record's
-   `bcr-entry` artifact by ID, verify it against the record ([registry
-   entry](../release_candidate.md)), copy exactly its entry files onto the current registry
+   `bcr-entry` artifact by ID, verify it against the record ([registry entry](../release_candidate.md)), copy exactly its entry files onto the current registry
    `main`, require the staged change to equal them byte for byte along with the source
    integrity, module files, metadata and existing history, and retain and check a bounded Git
    bundle. If upstream `metadata.json` changed after preflight, this fails; run a new preflight
