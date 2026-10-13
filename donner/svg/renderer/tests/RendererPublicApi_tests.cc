@@ -7,6 +7,7 @@
 #include <filesystem>
 #include <functional>
 #include <limits>
+#include <memory>
 #include <source_location>
 #include <string>
 #include <tuple>
@@ -26,6 +27,8 @@
 #include "donner/svg/renderer/tests/RendererTestBackend.h"
 #include "donner/svg/renderer/tests/RgbaTestMatchers.h"
 #include "donner/svg/resources/FontManager.h"
+#include "donner/svg/resources/ResourceLoaderInterface.h"
+#include "donner/svg/resources/UrlLoader.h"
 
 namespace donner::svg {
 namespace {
@@ -887,6 +890,56 @@ TEST(RendererPublicApiTest, FeImageFragmentUsesItsOwnSubregionOrigin) {
         NormalizeSnapshot(expectedRenderer.takeSnapshot()),
         "feimage_fragment_subregion_origin_" + std::to_string(index),
         editor::tests::PixelmatchIdentityParams());
+  }
+}
+
+class UnrequestedImportLoader final : public ResourceLoaderInterface {
+public:
+  enum class Response { Cyclic, Deep, Oversized };
+
+  UnrequestedImportLoader(std::shared_ptr<std::size_t> calls, Response response)
+      : calls_(std::move(calls)), response_(response) {}
+
+  std::variant<std::vector<uint8_t>, ResourceLoaderError> fetchExternalResource(
+      std::string_view /*url*/) override {
+    ++*calls_;
+    if (response_ == Response::Oversized) {
+      return std::vector<uint8_t>(UrlLoader::kDefaultMaximumResourceSize + 1, 'x');
+    }
+    const std::string css =
+        response_ == Response::Cyclic
+            ? "@import 'https://example.test/cycle.css';"
+            : std::string(8192, ' ') + "@import 'https://example.test/next-level.css';";
+    return std::vector<uint8_t>(css.begin(), css.end());
+  }
+
+private:
+  std::shared_ptr<std::size_t> calls_;
+  Response response_;
+};
+
+TEST(RendererPublicApiTest, UnsupportedCssImportsNeverRequestConfiguredResponses) {
+  for (const auto response :
+       {UnrequestedImportLoader::Response::Cyclic, UnrequestedImportLoader::Response::Deep,
+        UnrequestedImportLoader::Response::Oversized}) {
+    SCOPED_TRACE(static_cast<int>(response));
+    auto calls = std::make_shared<std::size_t>(0);
+    SVGDocument::Settings settings;
+    settings.resourceLoader = std::make_unique<UnrequestedImportLoader>(calls, response);
+    ParseWarningSink warnings;
+    auto result = parser::SVGParser::ParseSVG(
+        "<svg xmlns='http://www.w3.org/2000/svg' width='4' height='4'>"
+        "<style>@import url('https://example.test/style.css'); rect { fill: green; }</style>"
+        "<rect width='4' height='4'/></svg>",
+        warnings, parser::SVGParser::Options(), std::move(settings));
+    ASSERT_THAT(result.hasError(), testing::IsFalse());
+    SVGDocument document = std::move(result.result());
+    EXPECT_EQ(*calls, 0u);
+    RendererTinySkia renderer;
+    renderer.draw(document);
+    renderer.draw(document);
+    EXPECT_EQ(*calls, 0u);
+    EXPECT_THAT(warnings.warnings(), testing::SizeIs(1));
   }
 }
 

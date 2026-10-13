@@ -34,6 +34,19 @@ ParseDiagnostic SubparserError(size_t offset) {
 
 }  // namespace
 
+TEST(SVGParserContext, RecoverableWarningMergePreservesAdmissionRefusal) {
+  ParseWarningSink documentWarnings;
+  SVGParserContext context(kInput, documentWarnings, SVGParser::Options());
+  ParseWarningSink local;
+  for (std::size_t i = 0; i <= ParseWarningSink::kMaximumWarnings; ++i) {
+    local.add(ParseDiagnostic::Warning("recovered", FileOffset::Offset(i)));
+  }
+  context.addRecoverableWarnings(std::move(local));
+  EXPECT_THAT(documentWarnings.warnings(), testing::SizeIs(ParseWarningSink::kMaximumWarnings));
+  EXPECT_THAT(documentWarnings.resourceLimitExceeded(), testing::IsTrue());
+  EXPECT_EQ(documentWarnings.warningBytes(), ParseWarningSink::kMaximumWarnings * 9);
+}
+
 TEST(SVGParserContext, FromSubparserReportsColumnWithinLine) {
   ParseWarningSink warnings;
   SVGParser::Options options;

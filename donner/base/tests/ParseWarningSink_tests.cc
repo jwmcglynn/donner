@@ -22,6 +22,48 @@ MATCHER_P2(WarningAt, expectedReason, expectedOffset, "") {
 
 }  // namespace
 
+TEST(ParseWarningSink, RangeMappingPreservesAccountingAndRefusalFlags) {
+  ParseWarningSink sink;
+  for (std::size_t i = 0; i <= ParseWarningSink::kMaximumWarnings; ++i) {
+    sink.add(ParseDiagnostic::Warning("kept", FileOffset::Offset(i)));
+  }
+  const std::size_t bytes = sink.warningBytes();
+  std::size_t mappedCount = 0;
+  sink.mapSourceRanges([&](const SourceRange& range) {
+    ++mappedCount;
+    return SourceRange{range.start.addParentOffset(FileOffset::Offset(100)),
+                       range.end.addParentOffset(FileOffset::Offset(100))};
+  });
+  EXPECT_EQ(mappedCount, ParseWarningSink::kMaximumWarnings);
+  EXPECT_EQ(sink.warningBytes(), bytes);
+  EXPECT_THAT(sink.resourceLimitExceeded(), testing::IsTrue());
+  ASSERT_THAT(sink.warnings(), testing::SizeIs(ParseWarningSink::kMaximumWarnings));
+  EXPECT_THAT(sink.warnings().front(), WarningAt("kept", 100));
+  ParseWarningSink forwarded;
+  forwarded.merge(std::move(sink));
+  EXPECT_THAT(forwarded.resourceLimitExceeded(), testing::IsTrue());
+  EXPECT_EQ(forwarded.warningBytes(), bytes);
+  EXPECT_THAT(forwarded.warnings(), testing::SizeIs(ParseWarningSink::kMaximumWarnings));
+}
+
+TEST(ParseWarningSink, RangeMappingKeepsByteBudgetRefusalWithoutInvokingMapper) {
+  ParseWarningSink sink;
+  sink.add(ParseDiagnostic::Warning(std::string(ParseWarningSink::kMaximumWarningBytes + 1, 'x'),
+                                    FileOffset::Offset(2)));
+  std::size_t mappedCount = 0;
+  sink.mapSourceRanges([&](const SourceRange& range) {
+    ++mappedCount;
+    return range;
+  });
+  EXPECT_EQ(mappedCount, 0u);
+  EXPECT_EQ(sink.warningBytes(), 0u);
+  EXPECT_THAT(sink.warnings(), IsEmpty());
+  EXPECT_THAT(sink.resourceLimitExceeded(), testing::IsTrue());
+  ParseWarningSink forwarded;
+  forwarded.merge(std::move(sink));
+  EXPECT_THAT(forwarded.resourceLimitExceeded(), testing::IsTrue());
+}
+
 TEST(ParseWarningSink, DefaultIsEnabled) {
   ParseWarningSink sink;
   EXPECT_TRUE(sink.isEnabled());

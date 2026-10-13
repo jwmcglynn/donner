@@ -3,6 +3,9 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <array>
+#include <string>
+
 #include "donner/base/ParseWarningSink.h"
 #include "donner/base/tests/ParseResultTestUtils.h"
 #include "donner/base/xml/XMLDocument.h"
@@ -138,6 +141,76 @@ TEST(SVGParser, CssImportWarningUsesDocumentSourceOffset) {
       warnings.warnings()[0],
       ParseWarningIs(
           2, 1, testing::Eq("CSS @import is unsupported; imported stylesheets are not loaded")));
+}
+
+TEST(SVGParser, CssImportWarningsMapTextCdataAndSplitKeywords) {
+  const std::array<std::string_view, 4> bodies = {
+      "  @import 'hidden.css'; rect { fill: green; }",
+      "<![CDATA[@import 'hidden.css'; rect { fill: green; }]]>",
+      " \n <![CDATA[@import 'hidden.css'; rect { fill: green; }]]>",
+      "  @<![CDATA[import 'hidden.css'; rect { fill: green; }]]>"};
+  for (const std::string_view body : bodies) {
+    SCOPED_TRACE(body);
+    const std::string source = "<svg xmlns='http://www.w3.org/2000/svg'><style>" +
+                               std::string(body) + "</style><rect/></svg>";
+    ParseWarningSink warnings;
+    EXPECT_THAT(SVGParser::ParseSVG(source, warnings), NoParseError());
+    ASSERT_THAT(warnings.warnings(), testing::SizeIs(1));
+    EXPECT_THAT(warnings.warnings().front().range.start.offset, testing::Eq(source.find('@')));
+    EXPECT_THAT(warnings.warnings().front().range.end.offset, testing::Eq(source.find('@')));
+  }
+}
+
+TEST(SVGParser, CssImportSourceOffsetCountsUtf8Bytes) {
+  const std::string source =
+      "<svg xmlns='http://www.w3.org/2000/svg'><style>/* \xc3\xa9 */ @import 'hidden.css';"
+      "rect { fill: green; }</style><rect/></svg>";
+  ParseWarningSink warnings;
+  EXPECT_THAT(SVGParser::ParseSVG(source, warnings), NoParseError());
+  ASSERT_THAT(warnings.warnings(), testing::SizeIs(1));
+  EXPECT_THAT(warnings.warnings().front().range.start.offset, testing::Eq(source.find("@import")));
+  EXPECT_THAT(
+      warnings.warnings().front(),
+      ParseWarningIs(1, source.find("@import"), testing::HasSubstr("@import is unsupported")));
+}
+
+TEST(SVGParser, SourceLessCssImportWarningKeepsCssLocalOffset) {
+  xml::XMLDocument xmlDocument;
+  auto svg = xml::XMLNode::CreateElementNode(xmlDocument, "svg");
+  svg.setAttribute("xmlns", "http://www.w3.org/2000/svg");
+  xmlDocument.root().appendChild(svg);
+  auto style = xml::XMLNode::CreateElementNode(xmlDocument, "style");
+  svg.appendChild(style);
+  auto data = xml::XMLNode::CreateDataNode(xmlDocument, "  @import 'hidden.css';");
+  style.appendChild(data);
+  ParseWarningSink warnings;
+  EXPECT_THAT(SVGParser::ParseXMLDocument(std::move(xmlDocument), warnings), NoParseError());
+  ASSERT_THAT(warnings.warnings(), testing::SizeIs(1));
+  EXPECT_THAT(warnings.warnings().front().range.start.offset, testing::Eq(2u));
+  EXPECT_THAT(warnings.warnings().front().range.start.lineInfo, testing::Eq(std::nullopt));
+}
+
+TEST(SVGParser, CssImportWarningRefusalFlagsSurviveSourceMapping) {
+  std::string source = "<svg xmlns='http://www.w3.org/2000/svg'><style>";
+  for (std::size_t i = 0; i <= ParseWarningSink::kMaximumWarnings; ++i) {
+    source += "@import 'hidden.css';";
+  }
+  source += "rect { fill: green; }</style><rect/></svg>";
+  ParseWarningSink warnings;
+  EXPECT_THAT(SVGParser::ParseSVG(source, warnings), NoParseError());
+  EXPECT_THAT(warnings.warnings(), testing::SizeIs(ParseWarningSink::kMaximumWarnings));
+  EXPECT_THAT(warnings.resourceLimitExceeded(), testing::IsTrue());
+  EXPECT_LE(warnings.warningBytes(), ParseWarningSink::kMaximumWarningBytes);
+}
+
+TEST(SVGParser, StylesheetPointMappingDoesNotChangeExistingRangeEndSemantics) {
+  components::StylesheetSourceMap map;
+  map.addSegment(0, 3, FileOffset::Offset(100));
+  map.addSegment(3, 10, FileOffset::Offset(300));
+  EXPECT_THAT(map.mapPointToDocumentSource(FileOffset::Offset(3)),
+              testing::Eq(FileOffset::Offset(300)));
+  EXPECT_THAT(map.mapToDocumentSource(SourceRange{FileOffset::Offset(0), FileOffset::Offset(3)}),
+              testing::Eq(SourceRange{FileOffset::Offset(100), FileOffset::Offset(103)}));
 }
 
 TEST(SVGParser, StyleConcatenatesTextAndCDataButRejectsElementChildren) {

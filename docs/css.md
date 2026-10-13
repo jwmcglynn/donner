@@ -6,6 +6,26 @@ Donner implements CSS3 in its own CSS library, \ref donner::css. The library has
 
 \ref donner::css::CSS provides a high-level API for parsing CSS constructs. It is implemented on top of lower-level parser APIs that give finer-grained control over parsing and more detailed error handling.
 
+## Unsupported Stylesheet Imports
+
+CSS `@import` is unsupported. The stylesheet parser emits a warning at the import keyword and
+ignores the import. It does not request the target stylesheet or follow import chains. Import
+keywords are recognized after CSS escape decoding and without regard to ASCII case. The diagnostic
+uses static text and does not repeat the target URL.
+
+Local rules following a semicolon-terminated import still apply. An import reaching EOF is also
+reported as unsupported; this does not promise recovery of a following rule when its preceding
+import lacks a semicolon.
+
+Enabled warning sinks retain diagnostics within their existing count and text limits. A refused
+diagnostic sets the sink's refusal flag; it does not mean an imported resource was requested.
+Stylesheet rule and payload admission limits remain separate.
+
+SVG parsing maps warnings to document source when a text or CDATA source segment is available.
+Without source provenance, offsets remain local to the concatenated CSS text. Programmatic style
+setters ignore imports but do not expose a warning sink; callers needing diagnostics can parse CSS
+with `css::parser::StylesheetParser` before assigning it.
+
 ## Anatomy of CSS Strings
 
 <img src="css_anatomy.svg" title="CSS stylesheet anatomy diagram" width="600" />

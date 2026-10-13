@@ -3,11 +3,13 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <array>
 #include <memory>
 #include <string>
 #include <string_view>
 
 #include "donner/base/ParseWarningSink.h"
+#include "donner/css/parser/RuleParser.h"
 #include "donner/css/parser/tests/TokenTestUtils.h"
 #include "donner/css/tests/SelectorTestUtils.h"
 
@@ -94,6 +96,75 @@ TEST(StylesheetParser, ImportIsUnsupportedButFollowingRulesRemain) {
               ElementsAre(ParseDiagnostic::Warning(
                   "CSS @import is unsupported; imported stylesheets are not loaded",
                   FileOffset::Offset(2))));
+}
+
+TEST(StylesheetParser, ImportKeywordIsDecodedAndCaseInsensitive) {
+  const std::array<std::string_view, 5> imports = {
+      R"(@import "hidden.css";)", R"(@import url("hidden.css");)", R"(@ImPoRt url(hidden.css);)",
+      R"(@\69mport "hidden.css";)", R"(@\000069 mport url(hidden.css);)"};
+  for (const std::string_view import : imports) {
+    SCOPED_TRACE(import);
+    const std::string source = "  " + std::string(import) + " rect { fill: green; }";
+    ParseWarningSink warnings;
+    const Stylesheet sheet = StylesheetParser::Parse(source, warnings);
+    EXPECT_THAT(sheet.rules(), testing::SizeIs(1));
+    EXPECT_THAT(sheet.fontFaces(), IsEmpty());
+    EXPECT_THAT(warnings.warnings(),
+                ElementsAre(ParseDiagnostic::Warning(
+                    "CSS @import is unsupported; imported stylesheets are not loaded",
+                    FileOffset::Offset(2))));
+  }
+}
+
+TEST(StylesheetParser, ImportAtEofIsDiagnosedWithoutInventingSemicolonRecovery) {
+  ParseWarningSink warnings;
+  const Stylesheet sheet = StylesheetParser::Parse("@import 'hidden.css'", warnings);
+  EXPECT_THAT(sheet.rules(), IsEmpty());
+  EXPECT_THAT(warnings.warnings(),
+              ElementsAre(ParseDiagnostic::Warning(
+                  "CSS @import is unsupported; imported stylesheets are not loaded",
+                  FileOffset::Offset(0))));
+}
+
+TEST(StylesheetParser, ImportOffsetIncludesRemovedCharsetPrefix) {
+  constexpr std::string_view source =
+      "@charset \"UTF-8\";  @import 'hidden.css'; rect { fill: green; }";
+  ParseWarningSink warnings;
+  const Stylesheet sheet = StylesheetParser::Parse(source, warnings);
+  EXPECT_THAT(sheet.rules(), testing::SizeIs(1));
+  ASSERT_THAT(warnings.warnings(), testing::SizeIs(1));
+  EXPECT_THAT(warnings.warnings().front().range.start.offset, Eq(source.find("@import")));
+}
+
+TEST(StylesheetParser, ImportWarningsAreCappedWithoutEchoingTargetsOrDroppingLocalRules) {
+  std::string source;
+  for (std::size_t i = 0; i <= ParseWarningSink::kMaximumWarnings; ++i) {
+    source += "@import 'https://example.test/private-target.css';";
+  }
+  source += "rect { fill: green; }";
+  ParseWarningSink warnings;
+  const Stylesheet sheet = StylesheetParser::Parse(source, warnings);
+  EXPECT_THAT(sheet.rules(), testing::SizeIs(1));
+  EXPECT_THAT(sheet.securityStats().rejected, testing::IsFalse());
+  EXPECT_THAT(warnings.warnings(), testing::SizeIs(ParseWarningSink::kMaximumWarnings));
+  EXPECT_THAT(warnings.resourceLimitExceeded(), testing::IsTrue());
+  EXPECT_LE(warnings.warningBytes(), ParseWarningSink::kMaximumWarningBytes);
+  EXPECT_THAT(warnings.warnings(),
+              testing::Each(testing::Field(
+                  &ParseDiagnostic::reason,
+                  Eq("CSS @import is unsupported; imported stylesheets are not loaded"))));
+}
+
+TEST(StylesheetParser, DroppedImportsStillConsumeTheRuleAdmissionBudget) {
+  std::string source;
+  for (std::size_t i = 0; i <= RuleParser::kMaximumRules; ++i) {
+    source += "@import 'hidden.css';";
+  }
+  ParseWarningSink warnings;
+  const Stylesheet sheet = StylesheetParser::Parse(source, warnings);
+  EXPECT_THAT(sheet.securityStats().rejected, testing::IsTrue());
+  EXPECT_THAT(warnings.resourceLimitExceeded(), testing::IsTrue());
+  EXPECT_THAT(warnings.warnings(), testing::SizeIs(ParseWarningSink::kMaximumWarnings));
 }
 
 TEST(StylesheetParser, WithRules) {

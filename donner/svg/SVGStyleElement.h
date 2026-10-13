@@ -176,6 +176,9 @@ public:
    * Set the contents of the stylesheet. Ignored if the stylesheet type is not `text/css`
    * (see \ref isCssType).
    *
+   * Imported stylesheets are ignored. This setter does not expose parsing diagnostics; use
+   * css::parser::StylesheetParser with an enabled warning sink when diagnostics are needed.
+   *
    * @param style Stylesheet contents (CSS text).
    */
   void setContents(std::string_view style);
