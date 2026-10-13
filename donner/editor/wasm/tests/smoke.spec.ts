@@ -5,6 +5,7 @@ import {
   captureReadyBasicShapesFrame,
   hasPresentedBasicShapesHostFrame,
 } from "./basic-shapes-capture-gate";
+import { boundBrowserDiagnostic, readGpuOwnerDispatchStats } from "./browser-runtime-diagnostics";
 import { installBrowserStallDiagnostics } from "./browser-stall-diagnostics";
 import {
   type CanvasColorStats,
@@ -1303,19 +1304,9 @@ async function readCarouselFrameDiagnostics(page: Page) {
 // raster worker phases, and each UI frame's presentation admission, all on the page clock. It is
 // what separates a presentation held behind earlier GPU work from a late wake.
 async function readCarouselGpuTimeline(page: Page) {
-  const withDeadline = async <T>(work: Promise<T>): Promise<T | null> => {
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    try {
-      return await Promise.race([
-        work.catch(() => null),
-        new Promise<null>((resolve) => {
-          timer = setTimeout(() => resolve(null), 2000);
-        }),
-      ]);
-    } finally {
-      if (timer !== undefined) clearTimeout(timer);
-    }
-  };
+  const withDeadline = <T>(work: Promise<T>): Promise<T | null> =>
+    boundBrowserDiagnostic(work, 2000);
+
   const pageState = await withDeadline(page.evaluate(() => {
     const state = window as unknown as Record<string, unknown>;
     return {
@@ -3317,12 +3308,14 @@ test(
         frames: window.__donnerMainLoopRenderedFrames ?? 0,
         documents: window.__donnerWorkerStats?.completedResults ?? 0,
       }));
+    const ownerBefore = await readGpuOwnerDispatchStats(page);
     const before = await readCadence();
     await expect.poll(async () => (await readCadence()).time - before.time, {
       timeout: scaledMs(5000),
       intervals: [100],
     }).toBeGreaterThanOrEqual(2000);
     const after = await readCadence();
+    const ownerAfter = await readGpuOwnerDispatchStats(page);
     const seconds = (after.time - before.time) / 1000;
     const cadencePath = testInfo.outputPath("animation-cadence.json");
     const cadence = {
@@ -3331,6 +3324,7 @@ test(
       uiFps: (after.frames - before.frames) / seconds,
       documentFps: (after.documents - before.documents) / seconds,
       viewport: box,
+      gpuOwner: { before: ownerBefore, after: ownerAfter },
       environment: await page.evaluate(() => ({
         userAgent: navigator.userAgent,
         devicePixelRatio,

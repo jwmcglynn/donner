@@ -18,6 +18,7 @@ playwright_bin.playwright_test(
     copy_data_to_bin = False,
     data = [
         "basic-shapes-capture-gate.ts",
+        "browser-runtime-diagnostics.ts",
         "browser-stall-diagnostics.mjs",
         "browser-stall-diagnostics.ts",
         "canvas-color-stats.ts",
@@ -87,6 +88,7 @@ playwright_bin.playwright_test(
     data = [
         "basic-shapes-capture-gate.ts",
         "browser-presentation-regression.spec.ts",
+        "browser-runtime-diagnostics.ts",
         "browser-stall-diagnostics.mjs",
         "browser-stall-diagnostics.ts",
         "browser-surface-recovery.spec.ts",
@@ -147,6 +149,7 @@ playwright_bin.playwright_test(
     copy_data_to_bin = False,
     data = [
         "basic-shapes-capture-gate.ts",
+        "browser-runtime-diagnostics.ts",
         "browser-stall-diagnostics.mjs",
         "browser-stall-diagnostics.ts",
         "canvas-color-stats.ts",
@@ -491,6 +494,7 @@ js_test(
     copy_data_to_bin = False,
     data = [
         "browser-presentation-regression.spec.ts",
+        "browser-runtime-diagnostics.ts",
         "browser-stall-diagnostics.mjs",
         "browser-stall-diagnostics.ts",
         "smoke.spec.ts",
@@ -743,6 +747,7 @@ playwright_bin.playwright_test(
     ],
     copy_data_to_bin = False,
     data = [
+        "browser-runtime-diagnostics.ts",
         "browser-stall-diagnostics.mjs",
         "browser-stall-diagnostics.ts",
         "package.json",
@@ -828,6 +833,7 @@ playwright_bin.playwright_test(
     copy_data_to_bin = False,
     data = [
         "basic-shapes-capture-gate.ts",
+        "browser-runtime-diagnostics.ts",
         "browser-stall-diagnostics.mjs",
         "browser-stall-diagnostics.ts",
         "canvas-color-stats.ts",

@@ -8,6 +8,7 @@ import {
   hasPresentedBasicShapesHostFrame,
   type InitialBlueFrameState,
 } from "./basic-shapes-capture-gate";
+import { boundBrowserDiagnostic, readGpuOwnerDispatchStats } from "./browser-runtime-diagnostics";
 import { installBrowserStallDiagnostics } from "./browser-stall-diagnostics";
 import {
   captureEditorPage,
@@ -827,17 +828,7 @@ async function boundFailureDiagnostic<T>(
   work: Promise<T>,
   timeoutMs = scaledMs(2_000),
 ): Promise<T | null> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      work.catch(() => null),
-      new Promise<null>((resolve) => {
-        timer = setTimeout(() => resolve(null), timeoutMs);
-      }),
-    ]);
-  } finally {
-    if (timer !== undefined) clearTimeout(timer);
-  }
+  return boundBrowserDiagnostic(work, timeoutMs);
 }
 
 const kCaptureSentinelSize = 12;
@@ -4291,31 +4282,6 @@ test("GPU dispatch progresses while owner pulses are delayed", async ({ page }) 
   expect(final.maximumInlineEpochCalls).toBeLessThanOrEqual(32);
   expect(failures).toEqual([]);
 });
-
-async function readGpuOwnerDispatchStats(page: Page) {
-  return Promise.any(
-    page.workers().map(async (worker) => {
-      const result = await boundFailureDiagnostic(
-        worker.evaluate(() => {
-          const scope = globalThis as typeof globalThis & {
-            __donnerReadGpuOwnerWaitStats?: () => unknown;
-            __donnerReadGpuObjectStats?: () => unknown;
-          };
-          return scope.__donnerReadGpuOwnerWaitStats
-            ? {
-              sampledAtMs: performance.now(),
-              stats: scope.__donnerReadGpuOwnerWaitStats(),
-              gpu: scope.__donnerReadGpuObjectStats?.() ?? null,
-            }
-            : null;
-        }),
-        1000,
-      );
-      if (result === null) throw new Error("GPU owner probe unavailable");
-      return result;
-    }),
-  ).catch(() => null);
-}
 
 async function captureRasterDispatchFailure(page: Page): Promise<void> {
   const owners = await Promise.all(
