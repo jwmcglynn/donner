@@ -17,6 +17,7 @@ donner_cc_library(
     srcs = [
         "BrowserBridge.cc",
         "BrowserDevice.cc",
+        "BrowserGpuOwnerScheduler.cc",
         "BrowserObjectTable.cc",
         "BrowserShareReleaseQueue.cc",
         "BrowserWireCodes.cc",
@@ -24,6 +25,7 @@ donner_cc_library(
     hdrs = [
         "BrowserBridge.h",
         "BrowserDevice.h",
+        "BrowserGpuOwnerScheduler.h",
         "BrowserGpuTaskQueue.h",
         "BrowserObjectTable.h",
         "BrowserShareReleaseQueue.h",
@@ -164,6 +166,7 @@ donner_cc_test(
     name = "browser_tests",
     srcs = [
         "tests/BrowserDevice_tests.cc",
+        "tests/BrowserGpuOwnerScheduler_tests.cc",
         "tests/BrowserGpuTaskQueue_tests.cc",
         "tests/BrowserObjectTable_tests.cc",
         "tests/BrowserShareReleaseQueue_tests.cc",

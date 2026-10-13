@@ -12,7 +12,7 @@
 #include <cstdlib>
 #include <limits>
 
-#include "donner/gpu/browser/BrowserGpuTaskQueue.h"
+#include "donner/gpu/browser/BrowserGpuOwnerScheduler.h"
 #ifdef __EMSCRIPTEN_PTHREADS__
 #include <emscripten/proxying.h>
 #include <emscripten/threading.h>
@@ -55,27 +55,12 @@ static_assert(std::atomic<uint32_t>::is_always_lock_free);
 thread_local bool gProcessingOwnerWait = false;
 // The queue outlives SDK notification messages, including those pending at owner shutdown.
 em_proxying_queue* gNotificationQueue = nullptr;
-BrowserGpuTaskQueue gReady;
-bool gProcessingBatch = false;
-bool gPulseScheduled = false;
-bool gCanvasFrameActive = false;
-constexpr std::size_t kMaximumInlineCalls = 32;
-constexpr double kMaximumInlineMs = 2.0;
-std::size_t gInlineCalls = 0;
-double gInlineMs = 0.0;
 
 // clang-format off
 EM_JS(void, ScheduleGpuPulse, (), {
   globalThis['__donnerGpuPulsePort'].postMessage(0);
 });
 // clang-format on
-
-void SchedulePulse() {
-  if (!gPulseScheduled && !gCanvasFrameActive) {
-    gPulseScheduled = true;
-    ScheduleGpuPulse();
-  }
-}
 
 void RecordMaximum(std::size_t index, double value) {
   const auto bounded = static_cast<uint32_t>(
@@ -105,40 +90,37 @@ std::size_t OperationCounter(BrowserGpuOperationKind kind) {
   std::abort();
 }
 
-std::size_t ExecuteReadyBatch() {
-  const double started = emscripten_get_now();
-  const std::size_t count = gReady.executeBatch();
-  if (count) {
+/// Connects the owner's scheduling policy to the runtime and its shared diagnostic counters.
+class OwnerSchedulerHost final : public BrowserGpuOwnerScheduler::Host {
+public:
+  double nowMs() override { return emscripten_get_now(); }
+
+  void schedulePulse() override { ScheduleGpuPulse(); }
+
+  void deliverPendingRequests() override { emscripten_proxy_execute_queue(gNotificationQueue); }
+
+  void recordBatch(std::size_t count, double elapsedMs) override {
     gOwnerWaitStats[kBatches].fetch_add(1, std::memory_order_relaxed);
     RecordMaximum(kMaximumBatchSize, static_cast<double>(count));
-    const double elapsedUs = (emscripten_get_now() - started) * 1000.0;
-    RecordMaximum(kMaximumBatchUs, elapsedUs);
-    AddSaturatingMicros(kTotalBatchUs, elapsedUs);
+    RecordMaximum(kMaximumBatchUs, elapsedMs * 1000.0);
+    AddSaturatingMicros(kTotalBatchUs, elapsedMs * 1000.0);
   }
-  if (!gReady.empty()) {
-    SchedulePulse();
-  }
-  return count;
-}
 
-void TryInlineDispatch(bool wasEmpty) {
-  if (!wasEmpty || gProcessingBatch || gCanvasFrameActive || gInlineCalls >= kMaximumInlineCalls ||
-      gInlineMs >= kMaximumInlineMs) {
-    return;
+  void recordInline(std::size_t count, double elapsedMs, std::size_t epochCalls) override {
+    gOwnerWaitStats[kInlineDispatches].fetch_add(count, std::memory_order_relaxed);
+    AddSaturatingMicros(kTotalInlineUs, elapsedMs * 1000.0);
+    RecordMaximum(kMaximumInlineCallbackUs, elapsedMs * 1000.0);
+    RecordMaximum(kMaximumInlineEpochCalls, static_cast<double>(epochCalls));
   }
-  gProcessingBatch = true;
-  const double started = emscripten_get_now();
-  // The FIFO held only this request; reentrant requests stay in the next detached batch.
-  const std::size_t count = ExecuteReadyBatch();
-  const double elapsedMs = emscripten_get_now() - started;
-  gInlineCalls += count;
-  gInlineMs += elapsedMs;
-  gOwnerWaitStats[kInlineDispatches].fetch_add(count, std::memory_order_relaxed);
-  AddSaturatingMicros(kTotalInlineUs, elapsedMs * 1000.0);
-  RecordMaximum(kMaximumInlineCallbackUs, elapsedMs * 1000.0);
-  RecordMaximum(kMaximumInlineEpochCalls, static_cast<double>(gInlineCalls));
-  gProcessingBatch = false;
-}
+
+  void recordPulse(std::size_t count) override {
+    gOwnerWaitStats[kPulses].fetch_add(1, std::memory_order_relaxed);
+    gOwnerWaitStats[kPulseDispatches].fetch_add(count, std::memory_order_relaxed);
+  }
+};
+
+OwnerSchedulerHost gSchedulerHost;
+BrowserGpuOwnerScheduler gScheduler(gSchedulerHost);
 
 struct OwnerRequest {
   void (*operation)(void*);
@@ -197,35 +179,16 @@ void EnqueueRequest(void* context) {
   auto& request = *static_cast<OwnerRequest*>(context);
   request.task.callback = &Invoke;
   request.task.context = &request;
-  const bool wasEmpty = gReady.empty();
-  gReady.enqueue(request.task);
-  // Keep this future pulse even if inline work empties the FIFO: only it renews the budget.
-  SchedulePulse();
-  TryInlineDispatch(wasEmpty);
+  gScheduler.enqueue(request.task);
 }
 #endif
 }  // namespace
 
 extern "C" EMSCRIPTEN_KEEPALIVE void donner_browser_gpu_pulse() {
 #ifdef __EMSCRIPTEN_PTHREADS__
-  if (!IsBrowserGpuOwnerThread()) {
-    return;
+  if (IsBrowserGpuOwnerThread()) {
+    gScheduler.pulse();
   }
-  gPulseScheduled = false;
-  if (gCanvasFrameActive) {
-    return;
-  }
-  if (gProcessingBatch) {
-    SchedulePulse();
-    return;
-  }
-  gInlineCalls = 0;
-  gInlineMs = 0.0;
-  gOwnerWaitStats[kPulses].fetch_add(1, std::memory_order_relaxed);
-  gProcessingBatch = true;
-  const std::size_t count = ExecuteReadyBatch();
-  gOwnerWaitStats[kPulseDispatches].fetch_add(count, std::memory_order_relaxed);
-  gProcessingBatch = false;
 #endif
 }
 
@@ -328,24 +291,21 @@ bool IsBrowserGpuOwnerThread() {
 
 void ProcessBrowserGpuOwnerWait() {
 #ifdef __EMSCRIPTEN_PTHREADS__
-  if (gProcessingBatch || !IsBrowserGpuOwnerThread()) {
+  if (gScheduler.dispatchActive() || !IsBrowserGpuOwnerThread()) {
     return;
   }
-  gProcessingBatch = true;
   gProcessingOwnerWait = true;
   gOwnerWaitStats[kPumpCount].fetch_add(1, std::memory_order_relaxed);
   const double started = emscripten_get_now();
-  emscripten_proxy_execute_queue(gNotificationQueue);
-  ExecuteReadyBatch();
+  gScheduler.serviceWait();
   RecordMaximum(kMaximumPumpUs, (emscripten_get_now() - started) * 1000.0);
   gProcessingOwnerWait = false;
-  gProcessingBatch = false;
 #endif
 }
 
 bool IsBrowserGpuOwnerDispatchActive() {
 #ifdef __EMSCRIPTEN_PTHREADS__
-  return IsBrowserGpuOwnerThread() && gProcessingBatch;
+  return IsBrowserGpuOwnerThread() && gScheduler.dispatchActive();
 #else
   return false;
 #endif
@@ -353,25 +313,22 @@ bool IsBrowserGpuOwnerDispatchActive() {
 
 void SetBrowserGpuOwnerCanvasFrameActive([[maybe_unused]] bool active) {
 #ifdef __EMSCRIPTEN_PTHREADS__
-  if (!IsBrowserGpuOwnerThread() || gCanvasFrameActive == active || (active && gProcessingBatch)) {
+  if (!IsBrowserGpuOwnerThread()) {
     std::abort();
   }
-  gCanvasFrameActive = active;
-  if (!active && !gReady.empty()) {
-    SchedulePulse();
-  }
+  gScheduler.setCanvasFrameActive(active);
 #endif
 }
 
 void StopBrowserGpuOwner() {
 #ifdef __EMSCRIPTEN_PTHREADS__
-  if (!IsBrowserGpuOwnerThread() || gProcessingBatch || gCanvasFrameActive || !gReady.empty() ||
+  if (!IsBrowserGpuOwnerThread() || !gScheduler.idle() ||
       gOwnerWaitStats[kRequested].load() != gOwnerWaitStats[kFinished].load()) {
     std::abort();
   }
   // All clients have joined and released resources before the pulse ports close.
   EM_ASM({ globalThis['__donnerCloseGpuPulse'](); });
-  gPulseScheduled = false;
+  gScheduler.cancelScheduledPulse();
   gStopped.store(true, std::memory_order_release);
 #endif
 }
