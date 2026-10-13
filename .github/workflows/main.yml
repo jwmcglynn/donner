@@ -508,8 +508,12 @@ jobs:
           done
 
           manual_affected="$(
+            # Quote each label: npm package labels contain query operators such as `+`.
+            quoted_affected="$(
+              python3 -c 'import pathlib, sys; print(" ".join("\"%s\"" % line.strip() for line in pathlib.Path(sys.argv[1]).read_text(encoding="utf-8").splitlines() if line.strip()))' "$work_dir/affected.txt"
+            )"
             cd "$head_dir"
-            bazelisk query --keep_going "attr(\"tags\", \"manual\", set($affected))"
+            bazelisk query --keep_going "attr(\"tags\", \"manual\", set($quoted_affected))"
           )"
           if [[ -n "$manual_affected" ]]; then
             printf '%s\n' "$manual_affected" > "$work_dir/manual-affected.txt"
