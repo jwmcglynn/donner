@@ -51,5 +51,30 @@ TEST(RendererAnimationReferenceValue, MissingOrInvalidReferenceAnimationKeepsBas
   }
 }
 
+TEST(RendererAnimationReferenceValue, EmptyResultNameClearsAndRestoresBinding) {
+  if (!ActiveRendererSupportsFeature(RendererBackendFeature::FilterEffects)) {
+    GTEST_SKIP() << "Filters are disabled in this configuration";
+  }
+  const std::string content =
+      "<defs><filter id='f' filterUnits='userSpaceOnUse' x='0' y='0' width='16' height='16'>"
+      "<feFlood id='p' flood-color='red' result='red'/><feFlood flood-color='blue'/>"
+      "<feOffset in='red'/></filter></defs>"
+      "<rect width='16' height='16' filter='url(#f)'/>";
+  auto document =
+      instantiateSubtree(content + "<set href='#p' attributeName='result' to='' dur='2s'/>",
+                         parser::SVGParser::Options(), Vector2i(16, 16));
+  auto previous = instantiateSubtree("<rect width='16' height='16' fill='blue'/>",
+                                     parser::SVGParser::Options(), Vector2i(16, 16));
+  auto base = instantiateSubtree(content, parser::SVGParser::Options(), Vector2i(16, 16));
+  document.setTime(1);
+  editor::tests::CompareBitmapToBitmap(
+      RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(previous),
+      "empty-result-name", editor::tests::PixelmatchIdentityParams());
+  document.setTime(3);
+  editor::tests::CompareBitmapToBitmap(
+      RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(base),
+      "restored-result-name", editor::tests::PixelmatchIdentityParams());
+}
+
 }  // namespace
 }  // namespace donner::svg

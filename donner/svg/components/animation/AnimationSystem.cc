@@ -217,10 +217,11 @@ std::string tryInterpolatePaths(const std::string& fromStr, const std::string& t
 }
 
 /// Interpolate a value for `<animate>` at the given progress.
-/// Returns the interpolated value as a string, or empty if interpolation failed.
-std::string interpolateAnimateValue(double progress, const AnimateValueComponent& valueComp,
-                                    const std::string& underlying,
-                                    const AnimationValueContext& context) {
+/// Returns a value (which may be empty), or nullopt if interpolation failed.
+std::optional<std::string> interpolateAnimateValue(double progress,
+                                                   const AnimateValueComponent& valueComp,
+                                                   const std::string& underlying,
+                                                   const AnimationValueContext& context) {
   std::vector<std::string> values = valueComp.values;
   if (values.empty()) {
     if (valueComp.to) {
@@ -274,7 +275,7 @@ std::string interpolateAnimateValue(double progress, const AnimateValueComponent
   }
   options.calcMode = CalcMode::Discrete;
   const auto discrete = SelectAnimationSegment(progress, values.size(), options);
-  return discrete ? values[discrete->from] : std::string{};
+  return discrete ? std::optional(values[discrete->from]) : std::nullopt;
 }
 
 /// Get the expected number of values per entry for a given transform type.
@@ -477,7 +478,7 @@ std::size_t AnimationSourceBytes(const SetAnimationComponent* setComp,
   };
   if (setComp) {
     AddAnimationSourceBytes(setComp->attributeName, sourceBytes);
-    AddAnimationSourceBytes(setComp->to, sourceBytes);
+    AddOptionalAnimationSourceBytes(setComp->to, sourceBytes);
     AddOptionalAnimationSourceBytes(setComp->href, sourceBytes);
   } else if (valueComp) {
     addValues(*valueComp);
@@ -517,20 +518,26 @@ std::optional<std::pair<std::string_view, std::string>> SampleAnimationValue(
     const AnimateValueComponent* valueComp, const AnimateTransformComponent* transformComp,
     const std::string& underlying, const AnimationValueContext& context) {
   if (setComp) {
-    if (setComp->attributeName.empty()) {
+    if (setComp->attributeName.empty() || !setComp->to) {
       return std::nullopt;
     }
-    return std::pair<std::string_view, std::string>{setComp->attributeName, setComp->to};
+    return std::pair<std::string_view, std::string>{setComp->attributeName, *setComp->to};
   }
   if (valueComp) {
     if (valueComp->attributeName.empty()) {
       return std::nullopt;
     }
-    std::string sampled = interpolateAnimateValue(progress, *valueComp, underlying, context);
+    auto value = interpolateAnimateValue(progress, *valueComp, underlying, context);
+    if (!value) {
+      return std::nullopt;
+    }
+    std::string sampled = std::move(*value);
     const bool toOnly = valueComp->values.empty() && !valueComp->from && valueComp->to;
     if (!context.referenceValue && valueComp->accumulate && !toOnly && iteration > 0) {
       const auto last = interpolateAnimateValue(1, *valueComp, underlying, context);
-      sampled = CombineAnimationValues(sampled, last, 1, iteration, context).value_or(sampled);
+      if (last) {
+        sampled = CombineAnimationValues(sampled, *last, 1, iteration, context).value_or(sampled);
+      }
     }
     const bool byOnly =
         valueComp->values.empty() && !valueComp->from && !valueComp->to && valueComp->by;
@@ -664,7 +671,12 @@ bool ProcessAnimation(Registry& registry, Entity entity, double documentTime,
   if (resourceBudget.rejected()) {
     return false;
   }
-  if (!sampled || sampled->second.empty()) {
+  if (!sampled) {
+    return true;
+  }
+  const bool acceptsEmpty =
+      sampled->first == "href" || sampled->first == "xlink:href" || sampled->first == "result";
+  if (sampled->second.empty() && !acceptsEmpty) {
     return true;
   }
   if (!resourceBudget.reserveOutput(sampled->second.size())) {

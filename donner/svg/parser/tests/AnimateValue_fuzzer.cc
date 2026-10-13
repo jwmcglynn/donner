@@ -35,12 +35,13 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
     std::string_view element;
     std::string_view attribute;
   };
-  constexpr std::array<Target, 5> targets = {{
+  constexpr std::array<Target, 6> targets = {{
       {"pair:", "feGaussianBlur", "stdDeviation"},
       {"integer:", "feTurbulence", "numOctaves"},
       {"order:", "feConvolveMatrix", "order"},
       {"input:", "feOffset", "in"},
       {"reference:", "use", "href"},
+      {"reference-to:", "use", "href"},
   }};
   Target target{"", "rect", "width"};
   for (const auto& candidate : targets) {
@@ -53,7 +54,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
   svg += target.element;
   svg += " id='r'><animate id='budget' attributeName='";
   svg += target.attribute;
-  svg += "' values='";
+  svg += target.prefix == "reference-to:" ? "' to='" : "' values='";
   svg.append(values.substr(target.prefix.size()));
   svg += "' begin='0s' dur='2s'/></";
   svg += target.element;

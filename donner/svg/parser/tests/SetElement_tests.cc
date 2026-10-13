@@ -289,7 +289,7 @@ TEST(SVGSetElement, OversizedSetValueConsumesSourceBudgetBeforeCopyingOutput) {
   ASSERT_NE(view.begin(), view.end());
   components::AnimationSystem().advance(registry, 0.0, nullptr);
   registry.get<components::SetAnimationComponent>(*view.begin())
-      .to.assign(components::AnimationResourceBudget::kMaximumSourceBytes + 1, 'x');
+      .to.emplace(components::AnimationResourceBudget::kMaximumSourceBytes + 1, 'x');
 
   components::AnimationSystem().advance(registry, 1.0, nullptr);
 

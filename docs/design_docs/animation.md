@@ -67,7 +67,9 @@ Underlying values include lower animation layers, resolved style values, and typ
 URI and filter-input/result names are discrete and non-additive, even when their text resembles a number.
 Number-optional-number filter values repeat a single coordinate; integer fields round the final
 interpolated value to the nearest integer. Underlying filter values come from typed components,
-including nonzero defaults and implicit previous-primitive inputs.
+including nonzero defaults and implicit previous-primitive inputs. Explicit empty resource references
+and filter result names are distinct from invalid or missing animation values and restore after
+the interval ends.
 References and coordinate-unit selectors are sampled before dependent coordinates; motion is last.
 Within each attribute, animations are ordered by begin time, with document order breaking ties. Additive values combine
 with the underlying result; accumulation adds completed iterations' final values.
@@ -171,7 +173,7 @@ fuzzer coverage must be expanded whenever a new input form or resource-owning pa
 - [x] Default-parser and source-edit regressions, including element insertion/removal.
 - [ ] Finish presentation-attribute coverage and publish the verified support matrix, including
       remaining typed layout defaults, resource/text unit contexts beyond the verified gradient and mask
-      cases, and empty references.
+      cases.
 - [ ] Finish independent code/security review and all new hostile-input regressions.
 - [ ] Run affected source lint, formatting, CMake generation checks, and sanitizer/fuzzer gates.
 - [ ] Run native editor interaction tests and live UI verification on the final candidate.
