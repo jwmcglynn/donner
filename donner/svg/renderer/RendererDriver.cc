@@ -624,6 +624,72 @@ void resolvePerSpanStyles(Registry& registry, components::ComputedTextComponent&
   }
 }
 
+/// Owned tile bounds and transforms for one pattern placement.
+struct PatternPlacement {
+  Box2d tileBounds;                           ///< Tile bounds at the pattern origin.
+  Transform2d patternContentFromPatternTile;  ///< Transform used while painting the tile content.
+  Transform2d targetFromPattern;              ///< Placement of the tile in the consuming entity.
+};
+
+/// Resolve pattern placement without changing renderer state or retaining component borrows.
+std::optional<PatternPlacement> ResolvePatternPlacement(
+    Registry& registry, const components::RenderingInstanceComponent& instance,
+    const components::PaintResolvedReference& ref, EntityHandle target,
+    const components::ComputedPatternComponent& pattern, Box2d rect) {
+  const Box2d viewBox = components::LayoutSystem().getViewBox(instance.dataHandle(registry));
+  // For paints inherited via `context-fill` / `context-stroke`, objectBoundingBox units resolve
+  // against the context element's bounding box instead of the consuming shape's.
+  const Box2d pathBounds =
+      ref.contextRemap
+          ? ref.contextRemap->contextBounds
+          : RenderingObjectBoundingBox(registry, instance.dataHandle(registry)).value_or(Box2d());
+
+  const bool objectBoundingBox = pattern.patternUnits == PatternUnits::ObjectBoundingBox;
+  const bool patternContentObjectBoundingBox =
+      pattern.patternContentUnits == PatternContentUnits::ObjectBoundingBox;
+
+  if (objectBoundingBox) {
+    if (NearZero(pathBounds.width()) || NearZero(pathBounds.height())) {
+      return std::nullopt;
+    }
+
+    const Vector2d rectSize = rect.size();
+    rect.topLeft = rect.topLeft * pathBounds.size() + pathBounds.topLeft;
+    rect.bottomRight = rectSize * pathBounds.size() + rect.topLeft;
+  }
+
+  Transform2d patternContentFromPatternTile;
+  if (pattern.viewBox) {
+    patternContentFromPatternTile = pattern.preserveAspectRatio.elementContentFromViewBoxTransform(
+        rect.toOrigin(), pattern.viewBox);
+  } else if (patternContentObjectBoundingBox) {
+    patternContentFromPatternTile = Transform2d::Scale(pathBounds.size());
+  }
+
+  // Resolve the pattern's own transform (patternTransform attribute).
+  const auto* maybeTransformComponent =
+      target.try_get<components::ComputedLocalTransformComponent>();
+  Transform2d patternTransform;
+  if (maybeTransformComponent) {
+    const Vector2d origin = maybeTransformComponent->transformOrigin;
+    // Pivot order matches shapes (LayoutSystem::getEntityFromParentTransform, #609):
+    // `Translate(-origin)·M·Translate(origin)` (left-first `operator*`). The reversed order
+    // offsets the pattern tile away from its `transform-origin` pivot (#621).
+    patternTransform = Transform2d::Translate(-origin) *
+                       maybeTransformComponent->rawCssTransform.compute(viewBox, FontMetrics()) *
+                       Transform2d::Translate(origin);
+  }
+
+  // Context paints are positioned in the context element's user space, then remapped into the
+  // consuming entity's local space.
+  const Transform2d entityFromContextTransform =
+      ref.contextRemap ? ref.contextRemap->entityFromContextTransform : Transform2d();
+  const Transform2d targetFromPattern =
+      Transform2d::Translate(rect.topLeft) * patternTransform * entityFromContextTransform;
+
+  return PatternPlacement{rect.toOrigin(), patternContentFromPatternTile, targetFromPattern};
+}
+
 /// Build a cached path view, allowing deferred borrowing only while its geometry stays stable.
 /// Scoped external-use styles can recompute the same child between draws.
 PathShape toPathShape(EntityHandle sourceEntity,
@@ -3405,67 +3471,18 @@ void RendererDriver::renderPattern(RenderingInstanceView& view, Registry& regist
     return;
   }
 
-  const Box2d viewBox = components::LayoutSystem().getViewBox(instance.dataHandle(registry));
-  // For paints inherited via `context-fill` / `context-stroke`, objectBoundingBox units resolve
-  // against the context element's bounding box instead of the consuming shape's.
-  const Box2d pathBounds =
-      ref.contextRemap
-          ? ref.contextRemap->contextBounds
-          : RenderingObjectBoundingBox(registry, instance.dataHandle(registry)).value_or(Box2d());
+  const auto placement =
+      ResolvePatternPlacement(registry, instance, ref, target, *computedPattern, rect);
 
-  const bool objectBoundingBox = computedPattern->patternUnits == PatternUnits::ObjectBoundingBox;
-  const bool patternContentObjectBoundingBox =
-      computedPattern->patternContentUnits == PatternContentUnits::ObjectBoundingBox;
-
-  if (objectBoundingBox) {
-    if (NearZero(pathBounds.width()) || NearZero(pathBounds.height())) {
-      skipSubtree();
-      return;
-    }
-
-    const Vector2d rectSize = rect.size();
-    rect.topLeft = rect.topLeft * pathBounds.size() + pathBounds.topLeft;
-    rect.bottomRight = rectSize * pathBounds.size() + rect.topLeft;
-  }
-
-  Transform2d patternContentFromPatternTile;
-  if (computedPattern->viewBox) {
-    patternContentFromPatternTile =
-        computedPattern->preserveAspectRatio.elementContentFromViewBoxTransform(
-            rect.toOrigin(), computedPattern->viewBox);
-  } else if (patternContentObjectBoundingBox) {
-    patternContentFromPatternTile = Transform2d::Scale(pathBounds.size());
-  }
-
-  // Resolve the pattern's own transform (patternTransform attribute).
-  const auto* maybeTransformComponent =
-      target.try_get<components::ComputedLocalTransformComponent>();
-  Transform2d patternTransform;
-  if (maybeTransformComponent) {
-    const Vector2d origin = maybeTransformComponent->transformOrigin;
-    // Pivot order matches shapes (LayoutSystem::getEntityFromParentTransform, #609):
-    // `Translate(-origin)·M·Translate(origin)` (left-first `operator*`). The reversed order
-    // offsets the pattern tile away from its `transform-origin` pivot (#621).
-    patternTransform = Transform2d::Translate(-origin) *
-                       maybeTransformComponent->rawCssTransform.compute(viewBox, FontMetrics()) *
-                       Transform2d::Translate(origin);
-  }
-
-  // Context paints are positioned in the context element's user space, then remapped into the
-  // consuming entity's local space.
-  const Transform2d entityFromContextTransform =
-      ref.contextRemap ? ref.contextRemap->entityFromContextTransform : Transform2d();
-  const Transform2d targetFromPattern =
-      Transform2d::Translate(rect.topLeft) * patternTransform * entityFromContextTransform;
-
-  if (!renderer_.beginPatternTile(rect.toOrigin(), targetFromPattern)) {
+  if (!placement ||
+      !renderer_.beginPatternTile(placement->tileBounds, placement->targetFromPattern)) {
     skipSubtree();
     return;
   }
 
   // Save and override surfaceFromCanvasTransform for pattern content rendering.
   const Transform2d savedSurfaceFromCanvas = surfaceFromCanvasTransform_;
-  surfaceFromCanvasTransform_ = patternContentFromPatternTile;
+  surfaceFromCanvasTransform_ = placement->patternContentFromPatternTile;
   {
     RendererDriverTextFrameCache::ScopedRegistryOccurrence textOccurrence(*textFrameCache_,
                                                                           registry);
