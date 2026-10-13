@@ -7,7 +7,7 @@
 #include <optional>
 #include <utility>
 
-#include "donner/svg/SVGDocumentHandle.h"
+#include "donner/svg/SVGElement.h"
 #include "donner/svg/components/DocumentResourceFamilyBudget.h"
 #include "donner/svg/components/RenderingInstanceComponent.h"
 #include "donner/svg/properties/PropertyRegistry.h"
@@ -21,8 +21,7 @@ struct ExternalUseStyleContext {
   /// Create an owned parent snapshot after its caller has reserved its dynamic bytes.
   ExternalUseStyleContext(Entity root, const PropertyRegistry& properties,
                           const ResolvedPaintServer& fill, const ResolvedPaintServer& stroke,
-                          SVGDocumentHandle host,
-                          std::shared_ptr<DocumentResourceFamilyBudget> budget,
+                          ElementAnchor host, std::shared_ptr<DocumentResourceFamilyBudget> budget,
                           std::size_t chargedBytes, std::shared_ptr<StyleResourceBudget> work)
       : root(root),
         parent(properties),
@@ -45,11 +44,11 @@ struct ExternalUseStyleContext {
 
   bool unsupportedResource = false;  ///< An inherited resource was refused in this occurrence.
   Entity root;                       ///< Referenced instance root.
-  std::optional<PropertyRegistry> parent;           ///< Host's owned computed parent properties.
-  ResolvedPaintServer fill;                         ///< Host-registry-qualified fill.
-  ResolvedPaintServer stroke;                       ///< Host-registry-qualified stroke.
-  std::array<SVGDocumentHandle, 2> resourceOwners;  ///< Leases for qualified paint resources.
-  SVGDocumentHandle host;  ///< Retains host resource identities during capture.
+  std::optional<PropertyRegistry> parent;       ///< Host's owned computed parent properties.
+  ResolvedPaintServer fill;                     ///< Host-registry-qualified fill.
+  ResolvedPaintServer stroke;                   ///< Host-registry-qualified stroke.
+  std::array<ElementAnchor, 2> resourceOwners;  ///< Leases for qualified paint resources.
+  ElementAnchor host;  ///< Retains host resource identities during capture.
   std::shared_ptr<DocumentResourceFamilyBudget> family;  ///< Shared retained-byte envelope.
   std::size_t chargedBytes;                              ///< Live charge for the parent snapshot.
   std::shared_ptr<StyleResourceBudget>
