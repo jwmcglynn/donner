@@ -11,6 +11,24 @@ namespace tiny_skia::filter {
 
 namespace {
 
+/// Normalizes without an overflowing reciprocal turning zero channels into NaN.
+class ConvolveNormalization {
+ public:
+  /// @param divisor Nonzero divisor applied to each accumulated channel.
+  explicit ConvolveNormalization(double divisor)
+      : divisor_(divisor), inverse_(1.0 / divisor), useInverse_(std::isfinite(inverse_)) {}
+
+  /// @param value Accumulated channel before normalization.
+  double apply(double value) const {
+    return useInverse_ ? value * inverse_ : value / divisor_;
+  }
+
+ private:
+  double divisor_;
+  double inverse_;
+  bool useInverse_;
+};
+
 /// Fetch a premultiplied pixel from the source with edge mode handling.
 /// Returns premultiplied RGBA as doubles in [0, 1].
 void fetchPixel(const std::span<const std::uint8_t>& srcData, int w, int h, int x, int y,
@@ -53,7 +71,7 @@ void convolveMatrix(const Pixmap& src, Pixmap& dst, const ConvolveParams& params
   auto srcData = src.data();
   auto dstData = dst.data();
 
-  const double invDivisor = 1.0 / params.divisor;
+  const ConvolveNormalization normalization(params.divisor);
 
   for (int y = 0; y < h; ++y) {
     for (int x = 0; x < w; ++x) {
@@ -96,16 +114,16 @@ void convolveMatrix(const Pixmap& src, Pixmap& dst, const ConvolveParams& params
       double outR, outG, outB, outA;
       if (params.preserveAlpha) {
         // preserveAlpha: convolution on unpremultiplied RGB, bias is unscaled, then re-premultiply.
-        outR = std::clamp(sumR * invDivisor + params.bias, 0.0, 1.0) * srcAlpha;
-        outG = std::clamp(sumG * invDivisor + params.bias, 0.0, 1.0) * srcAlpha;
-        outB = std::clamp(sumB * invDivisor + params.bias, 0.0, 1.0) * srcAlpha;
+        outR = std::clamp(normalization.apply(sumR) + params.bias, 0.0, 1.0) * srcAlpha;
+        outG = std::clamp(normalization.apply(sumG) + params.bias, 0.0, 1.0) * srcAlpha;
+        outB = std::clamp(normalization.apply(sumB) + params.bias, 0.0, 1.0) * srcAlpha;
         outA = srcAlpha;
       } else {
         // Standard: convolution on premultiplied RGBA, bias scaled by source alpha.
-        outR = sumR * invDivisor + params.bias * srcAlpha;
-        outG = sumG * invDivisor + params.bias * srcAlpha;
-        outB = sumB * invDivisor + params.bias * srcAlpha;
-        outA = sumA * invDivisor + params.bias * srcAlpha;
+        outR = normalization.apply(sumR) + params.bias * srcAlpha;
+        outG = normalization.apply(sumG) + params.bias * srcAlpha;
+        outB = normalization.apply(sumB) + params.bias * srcAlpha;
+        outA = normalization.apply(sumA) + params.bias * srcAlpha;
         outA = std::clamp(outA, 0.0, 1.0);
         outR = std::clamp(outR, 0.0, outA);
         outG = std::clamp(outG, 0.0, outA);
@@ -166,7 +184,7 @@ void convolveMatrix(const FloatPixmap& src, FloatPixmap& dst, const ConvolvePara
   auto srcData = src.data();
   auto dstData = dst.data();
 
-  const double invDivisor = 1.0 / params.divisor;
+  const ConvolveNormalization normalization(params.divisor);
 
   for (int y = 0; y < h; ++y) {
     for (int x = 0; x < w; ++x) {
@@ -207,15 +225,15 @@ void convolveMatrix(const FloatPixmap& src, FloatPixmap& dst, const ConvolvePara
 
       double outR, outG, outB, outA;
       if (params.preserveAlpha) {
-        outR = std::clamp(sumR * invDivisor + params.bias, 0.0, 1.0) * srcAlpha;
-        outG = std::clamp(sumG * invDivisor + params.bias, 0.0, 1.0) * srcAlpha;
-        outB = std::clamp(sumB * invDivisor + params.bias, 0.0, 1.0) * srcAlpha;
+        outR = std::clamp(normalization.apply(sumR) + params.bias, 0.0, 1.0) * srcAlpha;
+        outG = std::clamp(normalization.apply(sumG) + params.bias, 0.0, 1.0) * srcAlpha;
+        outB = std::clamp(normalization.apply(sumB) + params.bias, 0.0, 1.0) * srcAlpha;
         outA = srcAlpha;
       } else {
-        outR = sumR * invDivisor + params.bias * srcAlpha;
-        outG = sumG * invDivisor + params.bias * srcAlpha;
-        outB = sumB * invDivisor + params.bias * srcAlpha;
-        outA = sumA * invDivisor + params.bias * srcAlpha;
+        outR = normalization.apply(sumR) + params.bias * srcAlpha;
+        outG = normalization.apply(sumG) + params.bias * srcAlpha;
+        outB = normalization.apply(sumB) + params.bias * srcAlpha;
+        outA = normalization.apply(sumA) + params.bias * srcAlpha;
         outA = std::clamp(outA, 0.0, 1.0);
         outR = std::clamp(outR, 0.0, outA);
         outG = std::clamp(outG, 0.0, outA);
