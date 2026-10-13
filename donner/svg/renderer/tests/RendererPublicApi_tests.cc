@@ -1181,11 +1181,8 @@ void PrintTo(const DefaultConvolveDivisorCase& value, std::ostream* output) {
 
 class DefaultConvolveDivisorTest : public testing::TestWithParam<DefaultConvolveDivisorCase> {};
 
-TEST_P(DefaultConvolveDivisorTest, MatchesSpecifiedNormalization) {
-  if (!ActiveRendererSupportsFeature(RendererBackendFeature::FilterEffects)) {
-    GTEST_SKIP() << "Filter rendering disabled in " << ActiveRendererBackendName();
-  }
-  const auto& params = GetParam();
+template <typename RendererT>
+void ExpectSpecifiedConvolveNormalization(const DefaultConvolveDivisorCase& params) {
   const std::string source =
       std::string(
           "<svg xmlns='http://www.w3.org/2000/svg' width='4' height='4'>"
@@ -1198,14 +1195,42 @@ TEST_P(DefaultConvolveDivisorTest, MatchesSpecifiedNormalization) {
       ParseDocument(std::string("<svg xmlns='http://www.w3.org/2000/svg' width='4' height='4'>"
                                 "<rect width='4' height='4' ") +
                     params.referencePaint + "/></svg>");
-  Renderer actual;
+  RendererT actual;
   actual.draw(document);
-  Renderer expected;
+  RendererT expected;
   expected.draw(reference);
   editor::tests::CompareBitmapToBitmap(NormalizeSnapshot(actual.takeSnapshot()),
                                        NormalizeSnapshot(expected.takeSnapshot()), params.name,
                                        editor::tests::PixelmatchIdentityParams());
 }
+
+TEST_P(DefaultConvolveDivisorTest, MatchesSpecifiedNormalization) {
+  if (!ActiveRendererSupportsFeature(RendererBackendFeature::FilterEffects)) {
+    GTEST_SKIP() << "Filter rendering disabled in " << ActiveRendererBackendName();
+  }
+  ExpectSpecifiedConvolveNormalization<Renderer>(GetParam());
+}
+
+class CpuSubnormalConvolveDivisorTest : public testing::TestWithParam<DefaultConvolveDivisorCase> {
+};
+
+TEST_P(CpuSubnormalConvolveDivisorTest, MatchesSpecifiedNormalization) {
+  if (!ActiveRendererSupportsFeature(RendererBackendFeature::FilterEffects)) {
+    GTEST_SKIP() << "Filter rendering disabled in " << ActiveRendererBackendName();
+  }
+  ExpectSpecifiedConvolveNormalization<RendererTinySkia>(GetParam());
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    FilterCpuSubnormalDivisor, CpuSubnormalConvolveDivisorTest,
+    testing::Values(
+        DefaultConvolveDivisorCase{"PositiveOmitted", "1e-310", "", "false", "fill='red'"},
+        DefaultConvolveDivisorCase{"NegativeOmitted", "-1e-310", "", "false", "fill='red'"},
+        DefaultConvolveDivisorCase{"PositiveExplicit", "1e-310", "divisor='1e-310'", "false",
+                                   "fill='red'"},
+        DefaultConvolveDivisorCase{"NegativeExplicit", "-1e-310", "divisor='-1e-310'", "false",
+                                   "fill='red'"}),
+    [](const testing::TestParamInfo<DefaultConvolveDivisorCase>& info) { return info.param.name; });
 
 INSTANTIATE_TEST_SUITE_P(
     FilterDefaultDivisor, DefaultConvolveDivisorTest,
