@@ -429,7 +429,7 @@ use_repo(
 # always keeps the Xcode toolchain.
 # register_toolchains("@llvm_toolchain//:all", dev_dependency = True)
 
-bazel_dep(name = "zstd", version = "1.5.7.bcr.1", dev_dependency = True)
+bazel_dep(name = "zstd", version = "1.5.7.bcr.3", dev_dependency = True)
 
 #
 # Devtools
