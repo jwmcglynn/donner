@@ -34,6 +34,7 @@
 
 #include "donner/css/Color.h"
 #include "donner/editor/EditorCommand.h"
+#include "donner/editor/EditorDockLayout.h"
 #include "donner/editor/EditorSampleCatalog.h"
 #include "donner/editor/EditorShellInternal.h"
 #include "donner/editor/EditorShellPresentation.h"
@@ -2324,6 +2325,9 @@ TEST(EditorShellTest, AnimationPreviewHeaderRespondsToMouse) {
   RunShellFrame(window, shell);
   const Box2d rect = EditorShellTestAccess::AnimationControlRect(shell);
   ASSERT_GT(rect.width(), 0.0);
+  const ImGuiWindow* layers = ImGui::FindWindowByName(kLayersWindowName);
+  ASSERT_NE(layers, nullptr);
+  EXPECT_LE(rect.bottomRight.y, layers->Pos.y);
   const ImVec2 previewPoint(static_cast<float>(rect.topLeft.x + rect.width() * 0.75),
                             static_cast<float>(rect.topLeft.y + rect.height() * 0.5));
   for (const bool down : {false, true, false}) {

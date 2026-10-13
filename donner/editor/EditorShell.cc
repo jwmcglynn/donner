@@ -6491,15 +6491,15 @@ void EditorShell::renderAnimationModePanel() {
                static_cast<float>(palette.bottomRight.y) + 12.0f));
     ImGui::SetNextWindowSize(ImVec2(200.0f, 52.0f));
   }
-  const ImGuiWindowFlags flags = compact ? ImGuiWindowFlags_NoDecoration |
-                                               ImGuiWindowFlags_NoSavedSettings |
-                                               ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoMove
-                                         : ImGuiWindowFlags_NoCollapse;
-  ImGui::Begin(compact ? "##animation_mode_panel" : kLayersWindowName, nullptr, flags);
+  const ImGuiWindowFlags flags =
+      ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
+      (compact ? ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoSavedSettings : 0);
+  ImGui::Begin(compact ? "##animation_mode_panel" : kAnimationModeWindowName, nullptr, flags);
   const ImVec2 cursor = ImGui::GetCursorScreenPos();
   const float width = std::min(184.0f, ImGui::GetContentRegionAvail().x);
   const float x = cursor.x + (ImGui::GetContentRegionAvail().x - width) * 0.5f;
-  animationPreviewControlRect_ = Box2d::FromXYWH(x, cursor.y + 2.0f, width, 32.0f);
+  const float y = ImGui::GetWindowPos().y + (ImGui::GetWindowSize().y - 32.0f) * 0.5f;
+  animationPreviewControlRect_ = Box2d::FromXYWH(x, y, width, 32.0f);
   renderAnimationPreviewControl();
   ImGui::SetCursorScreenPos(
       ImVec2(cursor.x, static_cast<float>(animationPreviewControlRect_.bottomRight.y) + 12.0f));
@@ -7147,6 +7147,7 @@ void EditorShell::renderDockSpaceHost(float hostX, float hostY, float hostWidth,
     }
   }
   dockSidebarsIncludedInLayout_ = sidebarsIncluded;
+  EnsureAnimationModeDock(dockspaceId, 100.0f);
 
   ImGui::DockSpace(dockspaceId, ImVec2(0.0f, 0.0f), EditorDockSpaceFlags(dockLayoutLocked_));
   // Record the central node's rect alongside the host rect the shell just laid out. Comparing the

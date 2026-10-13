@@ -1,5 +1,7 @@
 #include "donner/editor/EditorDockLayout.h"
 
+#include <algorithm>
+
 #include "donner/editor/ImGuiInternalIncludes.h"
 
 namespace donner::editor {
@@ -78,6 +80,52 @@ EditorDockNodes BuildDefaultDockLayout(ImGuiID dockspaceId, const EditorDockLayo
 
   ImGui::DockBuilderFinish(dockspaceId);
   return nodes;
+}
+
+namespace {
+
+ImGuiDockNode* DockNodeForWindow(const char* name) {
+  if (const ImGuiWindow* window = ImGui::FindWindowByName(name)) {
+    if (window->DockId != 0) {
+      return ImGui::DockBuilderGetNode(window->DockId);
+    }
+  }
+  const ImGuiWindowSettings* settings = ImGui::FindWindowSettingsByID(ImHashStr(name));
+  return settings != nullptr ? ImGui::DockBuilderGetNode(settings->DockId) : nullptr;
+}
+
+bool BelongsToDockspace(const ImGuiDockNode* node, ImGuiID dockspaceId) {
+  if (node == nullptr) {
+    return false;
+  }
+  while (node->ParentNode != nullptr) {
+    node = node->ParentNode;
+  }
+  return node->ID == dockspaceId;
+}
+
+}  // namespace
+
+void EnsureAnimationModeDock(ImGuiID dockspaceId, float height) {
+  if (BelongsToDockspace(DockNodeForWindow(kAnimationModeWindowName), dockspaceId)) {
+    return;
+  }
+  const ImGuiDockNode* layers = DockNodeForWindow(kLayersWindowName);
+  if (!BelongsToDockspace(layers, dockspaceId) || layers->Size.y <= 0.0f) {
+    return;
+  }
+  ImGuiID headerId = 0;
+  ImGuiID layersId = 0;
+  ImGui::DockBuilderSplitNode(layers->ID, ImGuiDir_Up,
+                              std::clamp(height / layers->Size.y, 0.05f, 0.6f), &headerId,
+                              &layersId);
+  ImGui::DockBuilderDockWindow(kAnimationModeWindowName, headerId);
+  ImGui::DockBuilderDockWindow(kLayersWindowName, layersId);
+  if (ImGuiDockNode* header = ImGui::DockBuilderGetNode(headerId)) {
+    header->SetLocalFlags(header->LocalFlags | ImGuiDockNodeFlags_NoTabBar |
+                          ImGuiDockNodeFlags_NoResizeY | ImGuiDockNodeFlags_NoDocking);
+  }
+  ImGui::DockBuilderFinish(dockspaceId);
 }
 
 ImGuiDockNodeFlags EditorDockSpaceFlags(bool locked) {

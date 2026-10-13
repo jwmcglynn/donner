@@ -9,6 +9,8 @@ namespace donner::editor {
 /// DockBuilder binds to a node, so it must match the exact string passed to
 /// `ImGui::Begin()` when the panel is drawn.
 inline constexpr const char* kRenderPaneWindowName = "Render";
+/// Fixed mode selector above the right-hand panels.
+inline constexpr const char* kAnimationModeWindowName = "##editor_animation_mode";
 inline constexpr const char* kLayersWindowName =
     "Layers";  //!< Stable ImGui window name for the layers panel.
 inline constexpr const char* kInspectorWindowName =
@@ -95,5 +97,13 @@ EditorDockNodes BuildDefaultDockLayout(ImGuiID dockspaceId, const EditorDockLayo
  * @param locked Whether the layout is locked.
  */
 [[nodiscard]] ImGuiDockNodeFlags EditorDockSpaceFlags(bool locked);
+
+/**
+ * Reserve a fixed, untabbed mode header above Layers, preserving the existing dock layout.
+ * Safe to call each frame and when adopting a layout saved before the header existed.
+ * @param dockspaceId Desktop dockspace receiving the header.
+ * @param height Preferred header height in logical pixels.
+ */
+void EnsureAnimationModeDock(ImGuiID dockspaceId, float height);
 
 }  // namespace donner::editor
