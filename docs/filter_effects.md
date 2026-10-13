@@ -171,8 +171,9 @@ Shorthand functions map to equivalent filter graph nodes internally.
 ## Convolution Bias
 
 For `feConvolveMatrix` with `preserveAlpha="false"`, alpha is the divided convolution sum plus
-unscaled `bias`, clamped to [0, 1]. RGB receives `bias` multiplied by that resulting alpha, then
-is clamped to [0, alpha]. With `preserveAlpha="true"`, the filter convolves straight RGB,
+unscaled `bias`. RGB receives `bias` multiplied by that raw resulting alpha, before clamping.
+Stored alpha is clamped to [0, 1] and RGB to [0, stored alpha]. With `preserveAlpha="true"`,
+the filter convolves straight RGB,
 adds unscaled bias, and premultiplies by the unchanged source alpha.
 See [Filter Effects 1, section 9.9](https://www.w3.org/TR/filter-effects-1/#feConvolveMatrixElement).
 

@@ -30,8 +30,8 @@ struct ConvolveParams {
 /// Applies a 2D convolution matrix to a premultiplied RGBA pixmap.
 ///
 /// With preserveAlpha=false, convolution uses premultiplied channels. Alpha receives the
-/// unscaled bias and is clamped to [0, 1]; RGB receives bias times that resulting alpha and
-/// is clamped to [0, alpha]. The kernel is rotated 180 degrees before sampling.
+/// unscaled bias; RGB receives bias times that raw resulting alpha. Stored alpha is clamped
+/// to [0, 1] and RGB to [0, stored alpha]. The kernel is rotated 180 degrees before sampling.
 ///
 /// With preserveAlpha=true, convolution uses unpremultiplied RGB with unscaled bias, then
 /// clamps and premultiplies by the unchanged source alpha.

@@ -117,11 +117,12 @@ void convolveMatrix(const Pixmap& src, Pixmap& dst, const ConvolveParams& params
         outB = std::clamp(normalization.apply(sumB) + params.bias, 0.0, 1.0) * srcAlpha;
         outA = srcAlpha;
       } else {
-        // SVG alpha bias is unscaled; color bias uses the resulting alpha.
-        outA = std::clamp(normalization.apply(sumA) + params.bias, 0.0, 1.0);
-        outR = normalization.apply(sumR) + params.bias * outA;
-        outG = normalization.apply(sumG) + params.bias * outA;
-        outB = normalization.apply(sumB) + params.bias * outA;
+        // SVG color bias uses raw convolved alpha, before output clamping.
+        const double rawAlpha = normalization.apply(sumA) + params.bias;
+        outA = std::clamp(rawAlpha, 0.0, 1.0);
+        outR = normalization.apply(sumR) + params.bias * rawAlpha;
+        outG = normalization.apply(sumG) + params.bias * rawAlpha;
+        outB = normalization.apply(sumB) + params.bias * rawAlpha;
         outR = std::clamp(outR, 0.0, outA);
         outG = std::clamp(outG, 0.0, outA);
         outB = std::clamp(outB, 0.0, outA);
@@ -227,10 +228,11 @@ void convolveMatrix(const FloatPixmap& src, FloatPixmap& dst, const ConvolvePara
         outB = std::clamp(normalization.apply(sumB) + params.bias, 0.0, 1.0) * srcAlpha;
         outA = srcAlpha;
       } else {
-        outA = std::clamp(normalization.apply(sumA) + params.bias, 0.0, 1.0);
-        outR = normalization.apply(sumR) + params.bias * outA;
-        outG = normalization.apply(sumG) + params.bias * outA;
-        outB = normalization.apply(sumB) + params.bias * outA;
+        const double rawAlpha = normalization.apply(sumA) + params.bias;
+        outA = std::clamp(rawAlpha, 0.0, 1.0);
+        outR = normalization.apply(sumR) + params.bias * rawAlpha;
+        outG = normalization.apply(sumG) + params.bias * rawAlpha;
+        outB = normalization.apply(sumB) + params.bias * rawAlpha;
         outR = std::clamp(outR, 0.0, outA);
         outG = std::clamp(outG, 0.0, outA);
         outB = std::clamp(outB, 0.0, outA);
