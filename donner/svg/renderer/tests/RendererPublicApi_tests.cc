@@ -511,6 +511,45 @@ TEST(RendererPublicApiTest, ExternalUseInheritedMarkersFailClosedWithoutChildLoo
   EXPECT_THAT(actual.requests, ElementsAre("external.svg"));
 }
 
+#ifdef DONNER_TEXT_ENABLED
+TEST(RendererPublicApiTest, ExternalUseRelativeTextLayoutRestoresAcrossHostsAndFrames) {
+  constexpr std::string_view resource =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="96" height="80" font-size="40" fill="green">
+        <text id="label" x="0" y="70" font-size="150%">M</text>
+      </svg>)svg";
+  auto fixture = MakeExternalUseFixture(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="64" height="80">
+        <use href="external.svg#label" font-size="8" fill="red"/>
+        <use href="external.svg#label" x="32" font-size="16" fill="blue"/>
+      </svg>)svg",
+      resource);
+  SVGDocument inlineDocument = ParseDocument(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="64" height="80">
+        <text x="0" y="70" font-size="12" fill="red">M</text>
+        <text x="32" y="70" font-size="24" fill="blue">M</text>
+      </svg>)svg");
+  const auto expected = RenderPublicDocument(inlineDocument);
+  EXPECT_THAT(expected.pixels, testing::Contains(Gt(0)));
+  Renderer renderer;
+  for (int frame = 0; frame < 3; ++frame) {
+    renderer.draw(fixture.document);
+    const auto actual = NormalizeSnapshot(renderer.takeSnapshot());
+    EXPECT_THAT(actual.pixels, testing::ElementsAreArray(expected.pixels));
+  }
+  EXPECT_THAT(*fixture.requests, ElementsAre("external.svg"));
+  ASSERT_THAT(static_cast<bool>(*fixture.child), testing::IsTrue());
+  SVGDocument child = SVGDocument::CreateFromHandle(*fixture.child);
+  const auto actualCanonical = RenderPublicDocument(child);
+  SVGDocument canonicalDocument = ParseDocument(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="96" height="80">
+        <text x="0" y="70" font-size="60" fill="green">M</text>
+      </svg>)svg");
+  const auto expectedCanonical = RenderPublicDocument(canonicalDocument);
+  EXPECT_THAT(actualCanonical.pixels, testing::ElementsAreArray(expectedCanonical.pixels));
+  EXPECT_EQ(child.source(), resource);
+}
+#endif
+
 TEST(RendererSurfaceBudgetTest, RejectsAggregateBytesAndSurfaceCountWithoutOvershoot) {
   RendererSurfaceBudget byteBudget;
   EXPECT_TRUE(byteBudget.reserve(4096, 4096, 4));
