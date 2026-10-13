@@ -143,10 +143,10 @@ inline std::array<float, 4> ExpectedTexel(const std::array<float, kWidth * kHeig
     return {rgb[0], rgb[1], rgb[2], sourceAlpha};
   }
 
-  const float scaledBias = params.bias * sourceAlpha;
-  alpha = std::clamp(alpha / params.divisor + scaledBias, 0.0f, 1.0f);
+  alpha = std::clamp(alpha / params.divisor + params.bias, 0.0f, 1.0f);
+  const float colorBias = params.bias * alpha;
   for (float& channel : rgb) {
-    channel = std::clamp(channel / params.divisor + scaledBias, 0.0f, alpha);
+    channel = std::clamp(channel / params.divisor + colorBias, 0.0f, alpha);
   }
   return {rgb[0], rgb[1], rgb[2], alpha};
 }

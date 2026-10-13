@@ -69,9 +69,9 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let straightRgb = clamp(((sumRgb / params.divisor) + vec3<f32>(params.bias)), vec3<f32>(0f), vec3<f32>(1f));
     result = vec4<f32>((straightRgb * sourceAlpha), sourceAlpha);
   } else {
-    let biased = (params.bias * sourceAlpha);
-    let outputAlpha = clamp(((sumAlpha / params.divisor) + biased), 0f, 1f);
-    let outputRgb = clamp(((sumRgb / params.divisor) + vec3<f32>(biased)), vec3<f32>(0f), vec3<f32>(outputAlpha));
+    let outputAlpha = clamp(((sumAlpha / params.divisor) + params.bias), 0f, 1f);
+    let colorBias = (params.bias * outputAlpha);
+    let outputRgb = clamp(((sumRgb / params.divisor) + vec3<f32>(colorBias)), vec3<f32>(0f), vec3<f32>(outputAlpha));
     result = vec4<f32>(outputRgb, outputAlpha);
   }
   textureStore(outputTexture, coord, clamp(result, vec4<f32>(0f), vec4<f32>(1f)));
