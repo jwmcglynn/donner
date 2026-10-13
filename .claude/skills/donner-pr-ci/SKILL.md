@@ -105,7 +105,12 @@ gh api repos/jwmcglynn/donner/pulls/<N>/reviews       # review state + top-level
 
 ## 5. main.yml anatomy (what each job means when triaging)
 
-`main.yml` (workflow name "CI") runs on every push and on PRs targeting `main`.
+`main.yml` (workflow name "CI") runs on every push and on PRs targeting `main`. A PR runs it
+when opened, reopened or pushed, not when its title or description is edited: an edit never
+cancels or restarts CI. A base-branch change (retarget) runs the same jobs through
+`pr_base_change.yml` (workflow "CI (base change)"), whose checks are named
+`base-change-ci / <job>`. Once a head's base has changed, later edits of that head rerun that
+workflow, so its newest run always holds real results.
 
 - **gatekeeper** — two outputs:
   - `is_duplicate_push`: a push to a branch that already has an open PR is skipped green
@@ -140,7 +145,9 @@ Workflow map (all in `.github/workflows/`):
 
 | Workflow            | Trigger                                                                                                                      | Role                                                                                                           |
 | ------------------- | ---------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| `main.yml`          | push + PR                                                                                                                    | Required gate: Bazel build/test on Linux + macOS                                                               |
+| `main.yml`          | push + PR (opened/synchronize/reopened) + `workflow_call`                                                                    | Required gate: Bazel build/test on Linux + macOS                                                               |
+| `pr_base_change.yml` | PR edited                                                                                                                   | Calls `main.yml` after a base-branch change (or an edit following one on the same head); otherwise skips      |
+| `pr_metadata.yml`   | PR opened/synchronize/reopened/edited                                                                                        | PR text checks (`tools/check_pr_body.py`); its own concurrency group, never touches CI                         |
 | `cmake.yml`         | push + PR                                                                                                                    | CMake mirror: `gen_cmakelists.py --check` + real CMake build/ctest                                             |
 | `lint.yml`          | push + PR                                                                                                                    | Banned-pattern check for `examples/`, `gen_cmakelists.py --check`                                              |
 | `sanitizers-pr.yml` | PR touching Geode renderer paths                                                                                             | ASan+Geode; currently informational (`continue-on-error`, see doc 0031 M1.2)                                   |

@@ -42,8 +42,9 @@ BASE_CHANGE_RUN_NAME = "Base branch changed"
 
 
 def _read(name):
-    path = runfiles.Create().Rlocation("donner/.github/workflows/%s" % name)
-    return Path(path).read_text(encoding="utf-8")
+    """A workflow's text, or None when the file does not exist."""
+    path = Path(runfiles.Create().Rlocation("donner/.github/workflows/%s" % name))
+    return path.read_text(encoding="utf-8") if path.is_file() else None
 
 
 def _block(text, header):
@@ -216,7 +217,8 @@ def _event(event_name, ref, workflow="CI", action="", number=7, run_id=1001):
 
 
 # Runs of main.yml. A base-change run is main.yml called from pr_base_change.yml, which shares
-# the caller's github context: its workflow name and its `edited` event.
+# the caller's github context: its workflow name and its `edited` event. The group must not
+# depend on that name alone, so the base-change scenarios are checked under both names.
 MAIN_RUNS = {
     "pr-opened": _event("pull_request", "refs/pull/7/merge", action="opened"),
     "pr-push": _event("pull_request", "refs/pull/7/merge", action="synchronize", run_id=1002),
@@ -225,6 +227,8 @@ MAIN_RUNS = {
                           action="edited", run_id=1004),
     "base-change-again": _event("pull_request", "refs/pull/7/merge",
                                 workflow="CI (base change)", action="edited", run_id=1005),
+    "base-change-callee-name": _event("pull_request", "refs/pull/7/merge", action="edited",
+                                      run_id=1010),
     "main-push": _event("push", "refs/heads/main", run_id=1006),
     "main-push-next": _event("push", "refs/heads/main", run_id=1007),
     "branch-push": _event("push", "refs/heads/feature", run_id=1008),
@@ -265,48 +269,54 @@ class CiPullRequestEventsTest(unittest.TestCase):
             "gh", '#!/bin/sh\nprintf "%s\\n" "$@" > "$STUB_GH_ARGS"\n'
                   'printf "%s" "$STUB_GH_OUTPUT"\nexit "${STUB_GH_EXIT:-0}"\n')
 
+    def _workflow(self, name):
+        workflow = self.workflows[name]
+        if workflow is None:
+            self.fail("%s does not exist" % name)
+        return workflow
+
     # --- Triggers --------------------------------------------------------------------------
 
     def test_ci_runs_on_pushes_to_a_pull_request_but_not_on_edits(self):
-        self.assertEqual(_pull_request_types(self.workflows["main.yml"]),
+        self.assertEqual(_pull_request_types(self._workflow("main.yml")),
                          ["opened", "synchronize", "reopened"])
 
     def test_only_reviewed_workflows_trigger_on_pull_request_edits(self):
         edited = {name for name, workflow in self.workflows.items()
-                  if "edited" in (_pull_request_types(workflow) or [])}
+                  if workflow and "edited" in (_pull_request_types(workflow) or [])}
         self.assertEqual(sorted(edited), sorted(EDITED_TRIGGER_ALLOWLIST))
 
     def test_metadata_checks_run_on_every_event_that_changes_the_text(self):
-        workflow = self.workflows["pr_metadata.yml"]
+        workflow = self._workflow("pr_metadata.yml")
         self.assertEqual(_pull_request_types(workflow),
                          ["opened", "synchronize", "reopened", "edited"])
         self.assertIn('run: python3 tools/check_pr_body.py "$GITHUB_EVENT_PATH"', workflow)
-        self.assertNotIn("check_pr_body", self.workflows["main.yml"])
+        self.assertNotIn("check_pr_body", self._workflow("main.yml"))
 
     def test_base_change_workflow_triggers_only_on_edits_and_calls_ci(self):
-        workflow = self.workflows["pr_base_change.yml"]
+        workflow = self._workflow("pr_base_change.yml")
         self.assertEqual(_pull_request_types(workflow), ["edited"])
         self.assertNotRegex(workflow, r"(?m)^  (?:push|schedule|workflow_dispatch):")
         call = workflow.split("\n  base-change-ci:\n", 1)[1]
         self.assertIn("    needs: detect\n", call)
         self.assertIn("    if: ${{ needs.detect.outputs.run_ci == 'true' }}\n", call)
         self.assertIn("    uses: ./.github/workflows/main.yml\n", call)
-        self.assertRegex(self.workflows["main.yml"], r"(?m)^  workflow_call:$")
+        self.assertRegex(self._workflow("main.yml"), r"(?m)^  workflow_call:$")
 
     # --- Concurrency -----------------------------------------------------------------------
 
     def _main_concurrency(self, run):
-        group, cancel = _concurrency(self.workflows["main.yml"])
+        group, cancel = _concurrency(self._workflow("main.yml"))
         context = MAIN_RUNS[run]
         return evaluate(group, context), evaluate(cancel, context) is True
 
     def test_metadata_and_base_change_runs_never_share_a_group_with_ci(self):
-        group, cancel = _concurrency(self.workflows["pr_metadata.yml"])
+        group, cancel = _concurrency(self._workflow("pr_metadata.yml"))
         self.assertIn("github.run_id", group)
         self.assertEqual(cancel, "false")
         # The caller sets no group: the called main.yml's group governs, and an identical
         # caller group would deadlock the call.
-        self.assertIsNone(_concurrency(self.workflows["pr_base_change.yml"]))
+        self.assertIsNone(_concurrency(self._workflow("pr_base_change.yml")))
 
     def test_a_push_supersedes_the_previous_push_run_of_a_pull_request(self):
         first, _ = self._main_concurrency("pr-opened")
@@ -319,6 +329,8 @@ class CiPullRequestEventsTest(unittest.TestCase):
         base_group, cancel = self._main_concurrency("base-change")
         self.assertNotEqual(base_group, push_group)
         self.assertTrue(cancel)
+        callee_group, _ = self._main_concurrency("base-change-callee-name")
+        self.assertNotEqual(callee_group, push_group)
         # A second base change supersedes the first.
         self.assertEqual(self._main_concurrency("base-change-again"), (base_group, True))
 
@@ -343,7 +355,7 @@ class CiPullRequestEventsTest(unittest.TestCase):
     # --- Base-change detection -------------------------------------------------------------
 
     def _detect(self, base_from="", runs=None, gh_exit=0, gh_output=None):
-        workflow = self.workflows["pr_base_change.yml"]
+        workflow = self._workflow("pr_base_change.yml")
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory) / "output"
             output.touch()
@@ -394,7 +406,7 @@ class CiPullRequestEventsTest(unittest.TestCase):
         self.assertEqual(self._detect(gh_output="not json")[0], "run_ci=true")
 
     def test_base_change_runs_are_named_for_detection(self):
-        workflow = self.workflows["pr_base_change.yml"]
+        workflow = self._workflow("pr_base_change.yml")
         self.assertIn("run-name: ${{ github.event.changes.base && '%s' || "
                       "'Pull request edited' }}\n" % BASE_CHANGE_RUN_NAME, workflow)
         self.assertEqual(_detect_env(workflow)["BASE_CHANGE_RUN_NAME"], BASE_CHANGE_RUN_NAME)
