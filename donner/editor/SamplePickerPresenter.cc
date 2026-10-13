@@ -219,7 +219,8 @@ bool SampleThumbnailStartGate::admitFrame(std::uint64_t presentedFrames,
   if (open_) {
     return true;
   }
-  const bool presented = lastPresentedFrames_.has_value() && presentedFrames > *lastPresentedFrames_;
+  const bool presented =
+      lastPresentedFrames_.has_value() && presentedFrames > *lastPresentedFrames_;
   lastPresentedFrames_ = presentedFrames;
   builtFrames_ = std::min(builtFrames_ + 1, kMaxBuiltFrames);
   if (presented) {
