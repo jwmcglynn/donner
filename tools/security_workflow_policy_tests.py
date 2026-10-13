@@ -328,15 +328,29 @@ def _writer_step_problem(condition, inputs, gates):
     return "gives the read-write key to a run that is neither main nor a trusted pull request"
 
 
+# Every job that binds an environment, and the literal name it binds. The BuildBuddy jobs bind
+# the write environment through the reviewed conditional form instead.
+REVIEWED_ENVIRONMENTS = {
+    (".github/workflows/deploy_docs.yaml", "deploy"): "github-pages",
+    (".github/workflows/publish_bcr.yml", "publish-fork"): "bcr-fork-preparation",
+}
+
+
 def _write_environment_violations(path, name, workflow, job):
-    """A job holding the read-write key must bind the write environment exactly when its writer
-    step may run; any other job must never bind that environment."""
+    """Only reviewed jobs bind an environment. A job holding the read-write key binds the write
+    environment exactly when its writer step may run; no other job binds it in any spelling."""
     where = "%s:%s" % (path, name)
     environment = _job_environment(job)
-    binds = bool(environment) and WRITE_ENVIRONMENT in (environment[0] or "")
     writes = "BUILDBUDDY_API_KEY" in _secret_reads(job)
     if not writes:
-        return ["%s binds the write environment without a writer step" % where] if binds else []
+        if environment is None:
+            return []
+        literal = REVIEWED_ENVIRONMENTS.get((path, name))
+        bound = (environment[0] or "").strip().strip("'\"")
+        # Environment names are case-insensitive, and an expression can name any environment.
+        if literal is None or bound.lower() != literal.lower() or "${{" in bound:
+            return ["%s binds an unreviewed environment %s" % (where, environment[0])]
+        return []
     condition = _write_environment_condition(job)
     if condition not in _write_conditions(_trust_gates(workflow, job)):
         return ["%s binds the write environment outside main and trusted pull requests" % where]
@@ -904,19 +918,39 @@ def _unsafe_upload(entry, self_hosted):
     return self_hosted and (entry.endswith("/") or leaf not in SELF_HOSTED_UPLOAD_FILES)
 
 
-# Upload paths taken from a step output, each reviewed: the producing step writes a named
-# subdirectory of runner.temp, never the root that also holds the BuildBuddy key directory.
+# Upload paths taken from a step output in a job that configures BuildBuddy, each reviewed with
+# the one value its producing step writes: a named subdirectory of runner.temp, never the root
+# that also holds the BuildBuddy key directory.
 REVIEWED_OUTPUT_UPLOADS = {
-    "${{ steps.stage-package.outputs.handoff_dir }}",
-    "${{ steps.stage-candidate.outputs.candidate_dir }}",
+    (".github/workflows/editor_wasm.yml", "build",
+     "${{ steps.stage-package.outputs.handoff_dir }}"):
+        'handoff_dir="${RUNNER_TEMP}/editor-wasm-package-geode"',
+    (".github/workflows/editor_wasm.yml", "build",
+     "${{ steps.stage-candidate.outputs.candidate_dir }}"):
+        'candidate_dir="${RUNNER_TEMP}/donner-editor-wasm-geode-${GITHUB_SHA}"',
 }
+
+
+def _reviewed_output_upload(path, name, job, entry):
+    """Whether an upload path is a reviewed step output whose producer writes it exactly once,
+    from the reviewed value."""
+    assignment = REVIEWED_OUTPUT_UPLOADS.get((path, name, entry))
+    match = re.fullmatch(r"\$\{\{ steps\.([A-Za-z0-9_-]+)\.outputs\.([A-Za-z0-9_]+) \}\}", entry)
+    if assignment is None or not match:
+        return False
+    producers = [step for step in _steps(job) if _step_identity_value(step, "id") == match.group(1)]
+    if len(producers) != 1:
+        return False
+    variable = match.group(2)
+    writes = re.findall(r'echo "%s=[^"]*" >> "\$\{GITHUB_OUTPUT\}"' % variable, producers[0])
+    return (writes == ['echo "%s=${%s}" >> "${GITHUB_OUTPUT}"' % (variable, variable)] and
+            producers[0].count(assignment) == 1 and
+            len(re.findall(r"(?m)^\s*%s=" % variable, producers[0])) == 1)
 
 
 def _reaches_buildbuddy_credential(entry):
     """Whether an upload path can reach runner.temp/buildbuddy, where the key file lives."""
     entry = entry.lstrip("!").strip().strip("'\"")
-    if entry in REVIEWED_OUTPUT_UPLOADS:
-        return False
     temp = re.match(r"(?:\$\{\{ runner\.temp \}\}|\$\{?RUNNER_TEMP\}?|/home/runner/work/_temp|"
                     r"/Users/runner/work/_temp)(/.*)?$", entry)
     if temp:
@@ -936,7 +970,8 @@ def _credential_upload_violations(path, name, job):
     upload only paths that can reach neither that directory nor the runner.temp root."""
     return ["%s:%s uploads %s after writing a cache credential" % (path, name, entry)
             for entries in _upload_paths(job) for entry in entries
-            if _reaches_buildbuddy_credential(entry)]
+            if not _reviewed_output_upload(path, name, job, entry.strip())
+            and _reaches_buildbuddy_credential(entry)]
 
 
 def _upload_violations(path, name, job, uploading_actions):
@@ -1748,10 +1783,6 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
                               for gate in gates}
                     self.assertEqual(expected,
                                      bool(_evaluate_condition(condition, event, ref, values)))
-        # The step outputs these jobs upload are named runner.temp subdirectories.
-        wasm = self.supply_chain_files[".github/workflows/editor_wasm.yml"]
-        self.assertIn('handoff_dir="${RUNNER_TEMP}/editor-wasm-package-geode"', wasm)
-        self.assertIn('candidate_dir="${RUNNER_TEMP}/donner-editor-wasm-geode-${GITHUB_SHA}"', wasm)
 
     def test_write_environment_policy_rejects_widened_bindings(self):
         files = self.supply_chain_files
@@ -1759,6 +1790,8 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         wasm = ".github/workflows/editor_wasm.yml"
         nightly = ".github/workflows/github_hosted_nightly.yml"
         lint = ".github/workflows/lint.yml"
+        docs = ".github/workflows/deploy_docs.yaml"
+        bcr = ".github/workflows/publish_bcr.yml"
         main_env = ("      name: ${{ ((github.event_name != 'pull_request' && github.ref == "
                     "'refs/heads/main') || needs.gatekeeper.outputs.trusted_pr == 'true') && "
                     "'buildbuddy-write' || '' }}\n")
@@ -1790,8 +1823,29 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
                 "neither main nor a trusted"),
             "environment in another job": (lint, files[lint].replace(
                 "  lint:\n", "  lint:\n    environment:\n      name: buildbuddy-write\n"
-                "      deployment: false\n", 1), "without a writer step"),
+                "      deployment: false\n", 1), "unreviewed environment"),
+            "inline environment in another job": (lint, files[lint].replace(
+                "  lint:\n", "  lint:\n    environment: BuildBuddy-Write\n", 1),
+                "unreviewed environment"),
+            "format() name in another job": (lint, files[lint].replace(
+                "  lint:\n", "  lint:\n    environment:\n"
+                "      name: ${{ format('{0}-{1}', 'buildbuddy', 'write') }}\n", 1),
+                "unreviewed environment"),
+            "vars name in another job": (lint, files[lint].replace(
+                "  lint:\n", "  lint:\n    environment:\n      name: ${{ vars.ENVIRONMENT }}\n",
+                1), "unreviewed environment"),
+            "reviewed job renamed environment": (docs, files[docs].replace(
+                "      name: github-pages\n", "      name: ${{ vars.PAGES_ENV }}\n", 1),
+                "unreviewed environment"),
+            "reviewed job switched to write environment": (bcr, files[bcr].replace(
+                "    environment: bcr-fork-preparation\n",
+                "    environment: BUILDBUDDY-WRITE\n", 1),
+                "unreviewed environment"),
         })
+        # Case differences in a reviewed literal name are the same environment.
+        cased = files[docs].replace("      name: github-pages\n", "      name: GitHub-Pages\n", 1)
+        self.assertNotEqual(cased, files[docs])
+        self.assertEqual([], _buildbuddy_violations({**files, docs: cased}))
 
     def test_buildbuddy_policy_rejects_widened_key_access(self):
         files = self.supply_chain_files
@@ -2307,6 +2361,7 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         main = ".github/workflows/main.yml"
         coverage = ".github/workflows/coverage.yml"
         sanitizers = ".github/workflows/sanitizers.yml"
+        wasm = ".github/workflows/editor_wasm.yml"
         report = "            ${{ runner.temp }}/donner-ci-diagnostics/report.md\n"
         summary = "${{ runner.temp }}/browser-gpu-serial-summary.json"
         evidence = "      - name: Retain failed test evidence\n"
@@ -2334,6 +2389,17 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
             "credential directory": (main, files[main].replace(
                 summary, "${{ runner.temp }}/buildbuddy/credentials.bazelrc", 1),
                 "after writing a cache credential"),
+            "reviewed output in another job": (main, files[main].replace(
+                summary, "${{ steps.stage-package.outputs.handoff_dir }}", 1),
+                "after writing a cache credential"),
+            "reviewed output written twice": (wasm, files[wasm].replace(
+                '          echo "handoff_dir=${handoff_dir}" >> "${GITHUB_OUTPUT}"\n',
+                '          echo "handoff_dir=${handoff_dir}" >> "${GITHUB_OUTPUT}"\n'
+                '          echo "handoff_dir=${RUNNER_TEMP}" >> "${GITHUB_OUTPUT}"\n', 1),
+                "after writing a cache credential"),
+            "reviewed output retargeted": (wasm, files[wasm].replace(
+                'handoff_dir="${RUNNER_TEMP}/editor-wasm-package-geode"',
+                'handoff_dir="${RUNNER_TEMP}"', 1), "after writing a cache credential"),
             "credential glob": (main, files[main].replace(
                 summary, "${{ runner.temp }}/**", 1), "after writing a cache credential"),
             "credential absolute temp": (main, files[main].replace(

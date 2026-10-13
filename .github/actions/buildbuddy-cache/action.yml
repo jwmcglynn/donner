@@ -19,8 +19,10 @@ inputs:
   read-only-api-key:
     description: >-
       Key whose cache writes are disabled. Pass
-      `secrets.BUILDBUDDY_API_KEY_READONLY`, only from a step limited to
-      Renovate pull requests. The action also turns off result upload.
+      `secrets.BUILDBUDDY_API_KEY_READONLY` from a step limited to Renovate
+      pull requests; the action also turns off result upload. As a repository
+      secret it reaches every same-repository run of the job, so treat it as
+      public: it can only read the cache.
     required: false
     default: ""
   trusted-pr:

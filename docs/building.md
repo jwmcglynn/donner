@@ -248,6 +248,12 @@ environment otherwise. Renovate and untrusted runs never bind it and never recei
 `main.yml` the trust outputs come from the `gatekeeper` job; the Editor WASM and Geode ASan
 workflows run a small `trust` job first, because an environment is chosen before a job's steps run.
 
+**The read-only key is treated as public.** `BUILDBUDDY_API_KEY_READONLY` is a repository secret,
+so GitHub delivers it to every same-repository run of a covered job, not only Renovate's, even
+though the action configures it only for Renovate pull requests. It can only read cache entries,
+which are build outputs of this public source tree, and no build events are uploaded, so its
+exposure reveals nothing private. Rotate it if it leaks; never give it write access.
+
 Renovate pull requests are read-only because a dependency update brings new upstream code into the
 build. Letting that code write results that `main` and other pull requests later reuse would be a
 cache-poisoning path, so those runs use a key that cannot write and also pass
@@ -283,12 +289,16 @@ pull requests) restore a colder snapshot.
    executor or organization-admin rights.
 3. Create the GitHub Environment `buildbuddy-write` (Settings -> Environments) with no protection
    rules or reviewers, and add the read-write key to it as the environment secret
-   `BUILDBUDDY_API_KEY`. Do not add a repository secret with that name.
+   `BUILDBUDDY_API_KEY`. Do not add a repository secret with that name. Leave its deployment
+   branch policy unrestricted: trusted maintainer pull requests run on a pull request merge ref,
+   so a `main`-only policy would block their writes. The workflows' environment expressions decide
+   which runs bind it.
 4. Add the read-only key as the repository secret `BUILDBUDDY_API_KEY_READONLY` (Settings ->
    Secrets and variables -> Actions). No code change is needed; the next hosted run picks them up.
 
-**Deactivation.** Delete the environment secret and the repository secret. The next runs build without the remote cache. Deleting only
-`BUILDBUDDY_API_KEY_READONLY` turns the cache off for Renovate pull requests alone.
+**Deactivation.** Delete the environment secret and the repository secret. The next runs build
+without the remote cache. Deleting only `BUILDBUDDY_API_KEY_READONLY` turns the cache off for
+Renovate pull requests alone.
 
 ## Frequently Asked Questions (FAQ)
 

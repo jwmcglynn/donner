@@ -57,6 +57,7 @@ jobs:
   # BuildBuddy write environment only for runs allowed to write.
   trust:
     runs-on: ubuntu-24.04
+    timeout-minutes: 5
     outputs:
       trusted_pr: ${{ steps.pr_trust.outputs.trusted_pr }}
       renovate_pr: ${{ steps.pr_trust.outputs.renovate_pr }}
@@ -99,7 +100,9 @@ jobs:
 
       # BuildBuddy remote cache (docs/building.md). Main push, schedule and dispatch
       # runs and trusted maintainer pull requests read and write; Renovate pull
-      # requests only read; every other run gets no key and no remote cache.
+      # requests only read; every other run configures no remote cache. The
+      # read-only repository secret still reaches every same-repository run of
+      # this job, so it is treated as public: it can only read the cache.
       - name: Configure BuildBuddy remote cache
         if: (github.event_name != 'pull_request' && github.ref == 'refs/heads/main') || needs.trust.outputs.trusted_pr == 'true'
         uses: ./.github/actions/buildbuddy-cache
