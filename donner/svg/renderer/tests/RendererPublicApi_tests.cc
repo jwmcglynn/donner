@@ -1052,6 +1052,53 @@ TEST(RendererPublicApiTest, ForeignNamespaceStylesheetStopsApplyingItsRules) {
       "foreign_namespace_stylesheet", editor::tests::PixelmatchIdentityParams());
 }
 
+TEST(RendererPublicApiTest, ForeignNamespaceAnimationStopsApplyingItsOverride) {
+  SVGDocument document = ParseDocumentWithExperimental(
+      "<svg xmlns='http://www.w3.org/2000/svg' width='16' height='12'>"
+      "<rect width='16' height='12' fill='green'>"
+      "<set id='animation' attributeName='fill' to='red' begin='0s' dur='10s'/></rect></svg>");
+  SVGDocument green = ParseDocument(
+      "<svg xmlns='http://www.w3.org/2000/svg' width='16' height='12'><rect width='16' height='12' "
+      "fill='green'/></svg>");
+  SVGDocument red = ParseDocument(
+      "<svg xmlns='http://www.w3.org/2000/svg' width='16' height='12'><rect width='16' height='12' "
+      "fill='red'/></svg>");
+  Renderer greenRenderer;
+  greenRenderer.draw(green);
+  const RendererBitmap greenBitmap = NormalizeSnapshot(greenRenderer.takeSnapshot());
+  Renderer redRenderer;
+  redRenderer.draw(red);
+  const RendererBitmap redBitmap = NormalizeSnapshot(redRenderer.takeSnapshot());
+
+  // Anti-vacuity: the SVG-namespace animation applies before the edit.
+  SVGElement animation = *document.querySelector("#animation");
+  document.setTime(1.0);
+  Renderer renderer;
+  renderer.draw(document);
+  editor::tests::CompareBitmapToBitmap(NormalizeSnapshot(renderer.takeSnapshot()), redBitmap,
+                                       "svg_namespace_animation_applies",
+                                       editor::tests::PixelmatchIdentityParams());
+
+  const auto foreign =
+      document.setElementAttribute(animation, "xmlns", "http://example.test/foreign");
+  ASSERT_THAT(foreign.applied, testing::IsTrue());
+  ASSERT_THAT(foreign.diagnostic, testing::Eq(std::nullopt));
+  document.setTime(1.0);
+  renderer.draw(document);
+  editor::tests::CompareBitmapToBitmap(NormalizeSnapshot(renderer.takeSnapshot()), greenBitmap,
+                                       "foreign_namespace_animation_inert",
+                                       editor::tests::PixelmatchIdentityParams());
+
+  const auto restored = document.removeElementAttribute(animation, "xmlns");
+  ASSERT_THAT(restored.applied, testing::IsTrue());
+  ASSERT_THAT(restored.diagnostic, testing::Eq(std::nullopt));
+  document.setTime(1.0);
+  renderer.draw(document);
+  editor::tests::CompareBitmapToBitmap(NormalizeSnapshot(renderer.takeSnapshot()), redBitmap,
+                                       "restored_namespace_animation_applies",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
 TEST(RendererPublicApiTest, ForeignGradientStopIsExcludedAfterNamespaceEdit) {
   SVGDocument document = ParseDocument(
       "<svg xmlns='http://www.w3.org/2000/svg' width='16' height='12'>"
