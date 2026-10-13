@@ -890,6 +890,32 @@ TEST(RendererPublicApiTest, FeImageFragmentUsesItsOwnSubregionOrigin) {
   }
 }
 
+TEST(RendererPublicApiTest, UnknownSvgWrapperDoesNotPaintDescendants) {
+  SVGDocument document = ParseDocument(R"svg(
+      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="12">
+        <rect width="16" height="12" fill="green"/>
+        <unsupported style="display:inline !important" fill="red">
+          <g><rect width="16" height="12"/></g>
+        </unsupported>
+      </svg>
+    )svg");
+  SVGDocument expected = ParseDocument(R"svg(
+      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="12">
+        <rect width="16" height="12" fill="green"/>
+      </svg>
+    )svg");
+
+  ASSERT_THAT(document.querySelector("unsupported"), testing::Ne(std::nullopt));
+  Renderer renderer;
+  renderer.draw(document);
+  Renderer expectedRenderer;
+  expectedRenderer.draw(expected);
+  editor::tests::CompareBitmapToBitmap(NormalizeSnapshot(renderer.takeSnapshot()),
+                                       NormalizeSnapshot(expectedRenderer.takeSnapshot()),
+                                       "unknown_svg_wrapper_does_not_paint_descendants",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
 TEST(RendererPublicApiTest, SnapshotReportsAndReturnsStraightAlpha) {
   // Backends composite in premultiplied space but publish straight alpha, so a
   // half-covered pixel has to come back carrying its full-strength color. A
