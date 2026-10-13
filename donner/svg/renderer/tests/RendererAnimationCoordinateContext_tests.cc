@@ -2,6 +2,7 @@
 #include <gtest/gtest.h>
 
 #include "donner/editor/tests/BitmapGoldenCompare.h"
+#include "donner/svg/SVGPatternElement.h"
 #include "donner/svg/renderer/tests/RendererTestUtils.h"
 #include "donner/svg/tests/ParserTestUtils.h"
 
@@ -125,6 +126,31 @@ TEST(RendererAnimationCoordinateContext, FilterUsesDefaultAndInheritedRegionLeng
         RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(expected),
         inherited ? "filter-inherited-region" : "filter-default-region",
         editor::tests::PixelmatchIdentityParams());
+  }
+}
+
+TEST(RendererAnimationCoordinateContext, PatternBaseUsesStylesheetAndTypedOverridePrecedence) {
+  for (const bool typedOverride : {false, true}) {
+    SCOPED_TRACE(typedOverride);
+    const std::string ending =
+        " height='16'><rect width='2' height='16'/></pattern></defs>"
+        "<rect width='16' height='16' fill='url(#p)'/>";
+    auto document = instantiateSubtree(
+        "<style>#p {width:8}</style><defs><pattern id='p' patternUnits='userSpaceOnUse' width='4'" +
+            ending + "<animate href='#p' attributeName='width' to='12' dur='2s'/>",
+        parser::SVGParser::Options(), Vector2i(16, 16));
+    if (typedOverride) {
+      document.querySelector("#p")->cast<SVGPatternElement>().setWidth(Lengthd(10));
+    }
+    auto expected = instantiateSubtree(
+        std::string("<defs><pattern id='p' patternUnits='userSpaceOnUse' width='") +
+            (typedOverride ? "11'" : "10'") + ending,
+        parser::SVGParser::Options(), Vector2i(16, 16));
+    document.setTime(1);
+    editor::tests::CompareBitmapToBitmap(RenderDocumentWithActiveBackend(document),
+                                         RenderDocumentWithActiveBackend(expected),
+                                         typedOverride ? "pattern-typed-base" : "pattern-css-base",
+                                         editor::tests::PixelmatchIdentityParams());
   }
 }
 
