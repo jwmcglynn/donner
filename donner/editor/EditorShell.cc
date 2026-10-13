@@ -5901,6 +5901,11 @@ std::optional<std::size_t> EditorShell::nextSampleThumbnailIndex() const {
   return std::nullopt;
 }
 
+std::uint64_t EditorShell::presentedUiFrameCount() const {
+  return presentedUiFrameCountForTesting_ ? presentedUiFrameCountForTesting_()
+                                          : window_.presentedUiFrameCount();
+}
+
 void EditorShell::ensureSampleThumbnails() {
   const std::span<const EditorSample> samples = GetEditorSampleCatalog();
   if (sampleThumbnailBitmaps_.empty()) {
@@ -5922,7 +5927,7 @@ void EditorShell::ensureSampleThumbnails() {
   // Submitted GPU work cannot be recalled, so hold the first thumbnail while a click on the picker
   // is likely. The first picker frame always holds, which also paints every card before any
   // sample is parsed. Ask for another frame so the hold advances without input.
-  if (!sampleThumbnailStartGate_.admitFrame(window_.presentedUiFrameCount(),
+  if (!sampleThumbnailStartGate_.admitFrame(presentedUiFrameCount(),
                                             internal::FrameHasUserInput(ImGui::GetIO()))) {
     window_.wakeEventLoop();
     publishSampleThumbnailStats();

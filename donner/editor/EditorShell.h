@@ -624,6 +624,8 @@ private:
   void ensureSampleThumbnails();
   /// First visible sample whose thumbnail has not been attempted and is not waiting on fonts.
   [[nodiscard]] std::optional<std::size_t> nextSampleThumbnailIndex() const;
+  /// UI frames the window has presented, or the test override.
+  [[nodiscard]] std::uint64_t presentedUiFrameCount() const;
   void publishSampleThumbnailStats() const;
   [[nodiscard]] bool sampleThumbnailLaneDrained(const SampleThumbnailRenderStats& stats) const;
   void cancelSampleThumbnailGeneration();
@@ -787,6 +789,8 @@ private:
   std::optional<std::size_t> sampleThumbnailInFlightIndex_;
   /// Holds the first thumbnail while the picker has just opened or is receiving input.
   SampleThumbnailStartGate sampleThumbnailStartGate_;
+  /// Replaces the window's presented-frame count, for tests that model a slow first frame.
+  std::function<std::uint64_t()> presentedUiFrameCountForTesting_;
   /// Set when the worker refused a thumbnail request because its runtime was
   /// still initializing. Nothing else wakes the on-demand loop for that, so the
   /// picker arms its own short idle retry. @see nextIdleWakeSeconds

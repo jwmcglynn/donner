@@ -1157,6 +1157,10 @@ public:
     return shell.sampleThumbnailStartGate_;
   }
 
+  static void SetPresentedUiFrameCount(EditorShell& shell, const std::uint64_t* presentedFrames) {
+    shell.presentedUiFrameCountForTesting_ = [presentedFrames] { return *presentedFrames; };
+  }
+
   static std::size_t SampleThumbnailCursor(const EditorShell& shell) {
     return shell.sampleThumbnailGenerationCursor_;
   }
@@ -7620,7 +7624,9 @@ EditorShellOptions WelcomePickerOptions() {
 
 // A sample clicked in the first frames after the picker appears must reach the render worker, and
 // so the GPU queue, ahead of any thumbnail work. Work on the queue cannot be recalled, so the only
-// way to keep the clicked document from waiting on a thumbnail is not to start one. Counts only.
+// way to keep the clicked document from waiting on a thumbnail is not to start one. The window
+// models a slow GPU: its first frame stays on the GPU for 20 frames, as a software adapter's does
+// while it generates shader code. Counts only.
 TEST(EditorShellTest, SampleClickedRightAfterBootRendersBeforeAnyThumbnail) {
   gui::EditorWindow window(TestWindowOptions({
       .title = "Donner first sample click",
@@ -7633,10 +7639,16 @@ TEST(EditorShellTest, SampleClickedRightAfterBootRendersBeforeAnyThumbnail) {
   EditorShell shell(window, WelcomePickerOptions());
   ASSERT_TRUE(shell.valid());
   AsyncRenderer& renderer = shell.asyncRendererForReplay();
+  std::uint64_t presentedFrames = 0;
+  EditorShellTestAccess::SetPresentedUiFrameCount(shell, &presentedFrames);
 
-  // The first picker frames, where a click right after boot lands.
-  constexpr int kFramesBeforeClick = 5;
-  for (int frame = 0; frame < kFramesBeforeClick; ++frame) {
+  constexpr int kFramesBeforeTheFirstPresents = 20;
+  constexpr int kPresentedFramesBeforeClick = 5;
+  for (int frame = 0; frame < kFramesBeforeTheFirstPresents; ++frame) {
+    RunPickerFrame(window, shell);
+  }
+  for (int frame = 0; frame < kPresentedFramesBeforeClick; ++frame) {
+    ++presentedFrames;
     RunPickerFrame(window, shell);
   }
   ASSERT_TRUE(EditorShellTestAccess::ShowSamplePicker(shell));
@@ -7650,6 +7662,7 @@ TEST(EditorShellTest, SampleClickedRightAfterBootRendersBeforeAnyThumbnail) {
 
   bool displayed = false;
   for (const tests::HangGuard guard; guard.active();) {
+    ++presentedFrames;
     RunPickerFrame(window, shell);
     ASSERT_EQ(renderer.sampleThumbnailRenderStats().started, 0u)
         << "A thumbnail started while the clicked sample's document was pending";
@@ -7667,8 +7680,9 @@ TEST(EditorShellTest, SampleClickedRightAfterBootRendersBeforeAnyThumbnail) {
   EXPECT_EQ(stats.started, 0u);
 }
 
-// When nobody touches the picker, its thumbnails start after a fixed number of frames.
-TEST(EditorShellTest, IdlePickerStartsThumbnailsAfterTheQuietHold) {
+// When nobody touches the picker, its thumbnails start after as many quiet presented frames as
+// the window built while its first frame was on the GPU.
+TEST(EditorShellTest, IdlePickerStartsThumbnailsAfterAHoldScaledByTheFirstFrame) {
   gui::EditorWindow window(TestWindowOptions({
       .title = "Donner idle sample picker",
       .initialWidth = 960,
@@ -7682,19 +7696,59 @@ TEST(EditorShellTest, IdlePickerStartsThumbnailsAfterTheQuietHold) {
   AsyncRenderer& renderer = shell.asyncRendererForReplay();
   const SampleThumbnailStartGate& gate =
       EditorShellTestAccess::SampleThumbnailStartGateState(shell);
+  std::uint64_t presentedFrames = 0;
+  EditorShellTestAccess::SetPresentedUiFrameCount(shell, &presentedFrames);
 
-  for (const tests::HangGuard guard; guard.active() && !gate.open();) {
+  constexpr int kFramesBuiltBeforeTheFirstPresents = 30;
+  for (int frame = 0; frame < kFramesBuiltBeforeTheFirstPresents; ++frame) {
     RunPickerFrame(window, shell);
+    ASSERT_FALSE(gate.open());
+  }
+  int presentedWhileHeld = 0;
+  for (const tests::HangGuard guard; guard.active() && !gate.open();) {
+    ++presentedFrames;
+    RunPickerFrame(window, shell);
+    ++presentedWhileHeld;
     if (!gate.open()) {
       ASSERT_EQ(renderer.sampleThumbnailRenderStats().requested, 0u)
-          << "held frame " << gate.heldFrames();
+          << "held frame " << presentedWhileHeld;
     }
   }
   ASSERT_TRUE(gate.open());
-  EXPECT_EQ(gate.heldFrames(), SampleThumbnailStartGate::kQuietFrames)
-      << "Each picker frame presents once, so the hold is exactly the quiet count";
+  EXPECT_EQ(gate.quietTarget(), kFramesBuiltBeforeTheFirstPresents);
+  EXPECT_EQ(presentedWhileHeld, kFramesBuiltBeforeTheFirstPresents);
   EXPECT_EQ(renderer.sampleThumbnailRenderStats().requested, 1u)
       << "The frame that opens the gate requests the first thumbnail";
+}
+
+// A window that presents each frame as soon as it is built, as a hardware GPU does, holds the
+// thumbnails for only the minimum. This uses the window's real presented-frame count.
+TEST(EditorShellTest, FastWindowStartsThumbnailsAfterTheMinimumHold) {
+  gui::EditorWindow window(TestWindowOptions({
+      .title = "Donner fast sample picker",
+      .initialWidth = 960,
+      .initialHeight = 720,
+  }));
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
+  EditorShell shell(window, WelcomePickerOptions());
+  ASSERT_TRUE(shell.valid());
+  AsyncRenderer& renderer = shell.asyncRendererForReplay();
+  const SampleThumbnailStartGate& gate =
+      EditorShellTestAccess::SampleThumbnailStartGateState(shell);
+
+  int frames = 0;
+  for (const tests::HangGuard guard; guard.active() && !gate.open();) {
+    RunPickerFrame(window, shell);
+    ++frames;
+  }
+  ASSERT_TRUE(gate.open());
+  ASSERT_TRUE(gate.quietTarget().has_value());
+  EXPECT_LE(*gate.quietTarget(), 4) << "a window that presents promptly must not hold for long";
+  EXPECT_GE(gate.heldFrames(), *gate.quietTarget());
+  EXPECT_LE(frames, 8);
+  EXPECT_EQ(renderer.sampleThumbnailRenderStats().requested, 1u);
 }
 
 // Pointer movement over the picker holds the thumbnails, up to the bound.
@@ -7712,10 +7766,13 @@ TEST(EditorShellTest, PointerActivityHoldsThumbnailsUpToTheBound) {
   AsyncRenderer& renderer = shell.asyncRendererForReplay();
   const SampleThumbnailStartGate& gate =
       EditorShellTestAccess::SampleThumbnailStartGateState(shell);
+  std::uint64_t presentedFrames = 0;
+  EditorShellTestAccess::SetPresentedUiFrameCount(shell, &presentedFrames);
 
-  // Move the pointer by one pixel each frame.
+  // Move the pointer by one pixel in each presented frame.
   int moves = 0;
   for (const tests::HangGuard guard; guard.active() && !gate.open();) {
+    ++presentedFrames;
     RunPickerFrame(window, shell,
                    gui::EditorWindowInputOverride{
                        .mousePosition = Vector2d(40.0 + (moves % 2), 600.0),
@@ -7729,7 +7786,6 @@ TEST(EditorShellTest, PointerActivityHoldsThumbnailsUpToTheBound) {
   ASSERT_TRUE(gate.open());
   EXPECT_EQ(gate.heldFrames(), SampleThumbnailStartGate::kMaxHeldFrames)
       << "Continuous input must hold the thumbnails for the whole bound, and no longer";
-  EXPECT_GT(moves, SampleThumbnailStartGate::kQuietFrames);
   EXPECT_EQ(renderer.sampleThumbnailRenderStats().requested, 1u);
 }
 

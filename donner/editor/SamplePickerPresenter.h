@@ -110,28 +110,34 @@ void ApplySamplePickerCommand(bool activated, SamplePickerCommand command,
                               std::string_view sampleId, SamplePickerActions* actions);
 
 /**
- * Holds the sample picker's first thumbnail until the picker has been idle for a few frames.
+ * Holds the sample picker's first thumbnail while a click on the picker is likely.
  *
  * The thumbnails share the render worker and the GPU queue with the document. Work already on the
  * queue cannot be recalled, and on a slow GPU the first thumbnail can hold the queue for seconds:
  * a software adapter generates its shader code when a draw first uses a pipeline state. A sample
- * clicked in that window waits for it. So the picker does not submit thumbnail work in the frames
- * where a click is most likely: right after it appears, and while the pointer or wheel is active.
+ * clicked in that window waits for it. So the picker does not submit thumbnail work right after it
+ * appears, or while the pointer or wheel is active.
  *
- * The hold counts frames that reached the screen, not time and not frames the editor merely
- * built, so it starts once the picker is visible, and a slow device that presents fewer frames
- * holds for longer. It is bounded twice: after \ref kMaxHeldFrames presented frames input no
- * longer delays the thumbnails, and after \ref kMaxBuiltFrames built frames the hold ends even
- * if the window has stopped presenting, so its per-frame wake cannot run forever. Once open, the
- * gate stays open until the picker closes.
+ * The hold is counted in frames that reached the screen, not in time and not in frames the editor
+ * merely built. Its length comes from the device: the picker waits for as many quiet presented
+ * frames as the window built while its first frame was still on the GPU. A device whose first
+ * frame presents at once holds for \ref kMinQuietFrames frames, so its thumbnails start almost
+ * immediately. A device that spent seconds on its first frame, as a software adapter does, holds
+ * for about as long again, up to \ref kMaxQuietFrames frames.
+ *
+ * The hold is bounded twice: after \ref kMaxHeldFrames presented frames input no longer delays the
+ * thumbnails, and after \ref kMaxBuiltFrames built frames the hold ends even if the window has
+ * stopped presenting, so the caller's per-frame wake cannot run forever. Once open, the gate stays
+ * open until the picker closes.
  */
 class SampleThumbnailStartGate {
 public:
-  /// Consecutive presented frames without input after which thumbnail work may start: about a
-  /// second at 60 frames per second.
-  static constexpr int kQuietFrames = 60;
+  /// Fewest quiet presented frames to hold for. The first picker frame always holds.
+  static constexpr int kMinQuietFrames = 2;
+  /// Most quiet presented frames to hold for: about two seconds at 60 frames per second.
+  static constexpr int kMaxQuietFrames = 120;
   /// Presented frames after which thumbnail work starts even while input continues.
-  static constexpr int kMaxHeldFrames = 180;
+  static constexpr int kMaxHeldFrames = 240;
   /// Built frames after which thumbnail work starts even if no frame was presented.
   static constexpr int kMaxBuiltFrames = 600;
 
@@ -155,8 +161,15 @@ public:
   /// Presented frames counted while the gate was closed.
   [[nodiscard]] int heldFrames() const noexcept { return heldFrames_; }
 
+  /// Quiet presented frames this hold waits for, once the first presented frame has set it.
+  [[nodiscard]] std::optional<int> quietTarget() const noexcept { return quietTarget_; }
+
 private:
+  /// Frames presented since the previous observation, clamped to the presented-frame bound.
+  [[nodiscard]] int observePresented(std::uint64_t presentedFrames) noexcept;
+
   std::optional<std::uint64_t> lastPresentedFrames_;
+  std::optional<int> quietTarget_;
   int builtFrames_ = 0;
   int quietFrames_ = 0;
   int heldFrames_ = 0;

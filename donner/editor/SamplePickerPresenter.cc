@@ -214,26 +214,28 @@ SamplePickerActions SamplePickerPresenter::render(
   return actions;
 }
 
+int SampleThumbnailStartGate::observePresented(std::uint64_t presentedFrames) noexcept {
+  const std::uint64_t previous = lastPresentedFrames_.value_or(presentedFrames);
+  lastPresentedFrames_ = presentedFrames;
+  const std::uint64_t presented = presentedFrames > previous ? presentedFrames - previous : 0u;
+  return static_cast<int>(std::min<std::uint64_t>(presented, kMaxHeldFrames));
+}
+
 bool SampleThumbnailStartGate::admitFrame(std::uint64_t presentedFrames,
                                           bool inputActive) noexcept {
   if (open_) {
     return true;
   }
-  if (inputActive) {
-    quietFrames_ = 0;
-  }
-  const std::uint64_t previous = lastPresentedFrames_.value_or(presentedFrames);
-  lastPresentedFrames_ = presentedFrames;
-  const int presented = static_cast<int>(
-      std::min<std::uint64_t>(presentedFrames > previous ? presentedFrames - previous : 0u,
-                              static_cast<std::uint64_t>(kMaxHeldFrames)));
-  heldFrames_ = std::min(heldFrames_ + presented, kMaxHeldFrames);
-  if (!inputActive) {
-    quietFrames_ = std::min(quietFrames_ + presented, kQuietFrames);
-  }
   builtFrames_ = std::min(builtFrames_ + 1, kMaxBuiltFrames);
-  open_ = quietFrames_ >= kQuietFrames || heldFrames_ >= kMaxHeldFrames ||
-          builtFrames_ >= kMaxBuiltFrames;
+  const int presented = observePresented(presentedFrames);
+  if (presented > 0 && !quietTarget_.has_value()) {
+    // Frames built before this one, while the first presented frame was still on the GPU.
+    quietTarget_ = std::clamp(builtFrames_ - 1, kMinQuietFrames, kMaxQuietFrames);
+  }
+  heldFrames_ = std::min(heldFrames_ + presented, kMaxHeldFrames);
+  quietFrames_ = inputActive ? 0 : std::min(quietFrames_ + presented, kMaxQuietFrames);
+  open_ = (quietTarget_.has_value() && quietFrames_ >= *quietTarget_) ||
+          heldFrames_ >= kMaxHeldFrames || builtFrames_ >= kMaxBuiltFrames;
   return open_;
 }
 
