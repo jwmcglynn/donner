@@ -73,7 +73,7 @@ struct PixelRect {
 
 /// Filter primitive parameter types with owning storage.
 ///
-/// All spatial parameters (sigma, offset, radius) are in pixel space — the caller must convert
+/// All spatial parameters (sigma, offset, radius) are in pixel space - the caller must convert
 /// from user space before building graph nodes.
 namespace graph_primitive {
 

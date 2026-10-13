@@ -323,6 +323,13 @@ pixels for complete/partial coordinates, protrusion, and translated source conte
 scale, rotation, skew, and reflection are not established by this bounded coverage; their existing
 exceptions remain tracked separately.
 
+The exact placement oracle is `FeImageFragmentUsesItsOwnSubregionOrigin` in
+`//donner/svg/renderer/tests:renderer_public_api_tests`; the configured GPU target is
+`//donner/svg/renderer/tests:renderer_public_api_tests_geode`. The ordinary-budget corpus gates are
+`//donner/svg/renderer/tests:resvg_test_suite_default_text` and
+`//donner/svg/renderer/tests:resvg_test_suite_geode`; full-text uses the API with `--config=text-full`
+and `//donner/svg/renderer/tests:resvg_test_suite_max`. See [Filter Effects](../filter_effects.md).
+
 ## Needs triage (uncertain `Bug?` entries)
 
 These have a question-mark reason in the file and need a root-cause pass to decide
