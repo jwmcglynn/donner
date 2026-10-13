@@ -517,6 +517,16 @@ py_test(
     deps = ["@rules_python//python/runfiles"],
 )
 
+# Fails when a pull request stops running what a push to main runs: workflow triggers, jobs,
+# steps and the Bazel invocations of jobs that replace a hosted lane on trusted pull requests.
+py_test(
+    name = "ci_lane_parity_tests",
+    size = "small",
+    srcs = ["ci_lane_parity_tests.py"],
+    data = ["//:github_action_definitions"],
+    deps = ["@rules_python//python/runfiles"],
+)
+
 py_test(
     name = "turnstile_admission_tests",
     size = "small",
