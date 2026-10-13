@@ -8,17 +8,16 @@ namespace donner::svg {
 /**
  * @page xml_animate &lt;animate&gt;
  *
- * Animates a target attribute over time. Donner currently supports linear and discrete
- * interpolation for numeric values, number lists, compatible path data, and values that can be
- * represented by the target attribute parser. Non-interpolable values fall back to discrete
- * sampling.
+ * Animates a target attribute over time with linear, discrete, paced, or spline timing.
+ * Supported value types include colors, lengths, numeric lists, and compatible path data.
+ * Non-interpolable values use discrete sampling; rendered attribute coverage depends on the
+ * target element.
  *
  * - DOM object: SVGAnimateElement
  * - SVG Animations spec: https://svgwg.org/specs/animations/#AnimateElement
  *
- * @warning Animation support is experimental. Parse with
- * `SVGParser::Options::enableExperimental = true` to create an SVGAnimateElement. Without that
- * option, the parser preserves `<animate>` as an unknown element.
+ * The default parser recognizes animation elements. Advance the document clock with
+ * `SVGDocument::setTime()` and render to sample them; secure static documents do not animate.
  *
  * ## Example
  *
@@ -54,16 +53,15 @@ namespace donner::svg {
  * | `attributeName` | Attribute to animate. Required for an override. |
  * | `from`, `to`, `by` | Endpoint forms. `values` takes precedence when present. |
  * | `values` | Semicolon-separated keyframe values. |
- * | `calcMode` | `linear` and `discrete`. `paced` and `spline` currently use linear sampling. |
+ * | `calcMode` | `linear`, `discrete`, `paced`, and `spline` with validated `keySplines`. |
  * | `keyTimes` | Normalized keyframe times when its count matches `values`. |
  * | `href`, `xlink:href` | Optional target; otherwise the parent element is targeted. |
  * | `begin`, `dur`, `end`, `fill` | Active-interval timing. |
  * | `repeatCount`, `repeatDur`, `restart`, `min`, `max` | Repeat and active-duration controls. |
  *
- * `begin` and `end` accept offset clock values, including the earliest resolvable value in a
- * semicolon-separated list. Event and syncbase timing expressions are preserved but do not yet
- * resolve. The default `fill="remove"` restores the underlying value; `fill="freeze"` retains
- * the last sampled value.
+ * `begin` and `end` resolve clock lists, host events, syncbase references, and repeat events
+ * with signed offsets. The default `fill="remove"` restores the underlying value; `fill="freeze"`
+ * retains the last sampled value.
  */
 
 /**
@@ -94,8 +92,6 @@ public:
   static constexpr ElementType Type = ElementType::Animate;
   /// XML tag name, \ref xml_animate.
   static constexpr std::string_view Tag{"animate"};
-  /// This is an experimental/incomplete feature.
-  static constexpr bool IsExperimental = true;
 };
 
 }  // namespace donner::svg

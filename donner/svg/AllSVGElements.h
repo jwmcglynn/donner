@@ -10,8 +10,9 @@
 
 #include <entt/entity/fwd.hpp>  // entt::type_list
 
-#include "donner/svg/SVGAElement.h"                    // IWYU pragma: export
-#include "donner/svg/SVGAnimateElement.h"              // IWYU pragma: export
+#include "donner/svg/SVGAElement.h"        // IWYU pragma: export
+#include "donner/svg/SVGAnimateElement.h"  // IWYU pragma: export
+#include "donner/svg/SVGAnimateMotionElement.h"
 #include "donner/svg/SVGAnimateTransformElement.h"     // IWYU pragma: export
 #include "donner/svg/SVGCircleElement.h"               // IWYU pragma: export
 #include "donner/svg/SVGClipPathElement.h"             // IWYU pragma: export
@@ -48,26 +49,27 @@
 #include "donner/svg/SVGImageElement.h"                // IWYU pragma: export
 #include "donner/svg/SVGLineElement.h"                 // IWYU pragma: export
 #include "donner/svg/SVGLinearGradientElement.h"       // IWYU pragma: export
-#include "donner/svg/SVGMarkerElement.h"               // IWYU pragma: export
-#include "donner/svg/SVGMaskElement.h"                 // IWYU pragma: export
-#include "donner/svg/SVGMetadataElement.h"             // IWYU pragma: export
-#include "donner/svg/SVGPathElement.h"                 // IWYU pragma: export
-#include "donner/svg/SVGPatternElement.h"              // IWYU pragma: export
-#include "donner/svg/SVGPolygonElement.h"              // IWYU pragma: export
-#include "donner/svg/SVGPolylineElement.h"             // IWYU pragma: export
-#include "donner/svg/SVGRadialGradientElement.h"       // IWYU pragma: export
-#include "donner/svg/SVGRectElement.h"                 // IWYU pragma: export
-#include "donner/svg/SVGSVGElement.h"                  // IWYU pragma: export
-#include "donner/svg/SVGSetElement.h"                  // IWYU pragma: export
-#include "donner/svg/SVGStopElement.h"                 // IWYU pragma: export
-#include "donner/svg/SVGStyleElement.h"                // IWYU pragma: export
-#include "donner/svg/SVGSwitchElement.h"               // IWYU pragma: export
-#include "donner/svg/SVGSymbolElement.h"               // IWYU pragma: export
-#include "donner/svg/SVGTSpanElement.h"                // IWYU pragma: export
-#include "donner/svg/SVGTextElement.h"                 // IWYU pragma: export
-#include "donner/svg/SVGTextPathElement.h"             // IWYU pragma: export
-#include "donner/svg/SVGTitleElement.h"                // IWYU pragma: export
-#include "donner/svg/SVGUseElement.h"                  // IWYU pragma: export
+#include "donner/svg/SVGMPathElement.h"
+#include "donner/svg/SVGMarkerElement.h"          // IWYU pragma: export
+#include "donner/svg/SVGMaskElement.h"            // IWYU pragma: export
+#include "donner/svg/SVGMetadataElement.h"        // IWYU pragma: export
+#include "donner/svg/SVGPathElement.h"            // IWYU pragma: export
+#include "donner/svg/SVGPatternElement.h"         // IWYU pragma: export
+#include "donner/svg/SVGPolygonElement.h"         // IWYU pragma: export
+#include "donner/svg/SVGPolylineElement.h"        // IWYU pragma: export
+#include "donner/svg/SVGRadialGradientElement.h"  // IWYU pragma: export
+#include "donner/svg/SVGRectElement.h"            // IWYU pragma: export
+#include "donner/svg/SVGSVGElement.h"             // IWYU pragma: export
+#include "donner/svg/SVGSetElement.h"             // IWYU pragma: export
+#include "donner/svg/SVGStopElement.h"            // IWYU pragma: export
+#include "donner/svg/SVGStyleElement.h"           // IWYU pragma: export
+#include "donner/svg/SVGSwitchElement.h"          // IWYU pragma: export
+#include "donner/svg/SVGSymbolElement.h"          // IWYU pragma: export
+#include "donner/svg/SVGTSpanElement.h"           // IWYU pragma: export
+#include "donner/svg/SVGTextElement.h"            // IWYU pragma: export
+#include "donner/svg/SVGTextPathElement.h"        // IWYU pragma: export
+#include "donner/svg/SVGTitleElement.h"           // IWYU pragma: export
+#include "donner/svg/SVGUseElement.h"             // IWYU pragma: export
 
 // Types that are not fully-fledged SVG elements by themselves, so they aren't included in \ref
 // AllSVGElements.
@@ -81,62 +83,63 @@ namespace donner::svg {
  */
 using AllSVGElements = entt::type_list<  //
     SVGAElement,                         //
-    SVGAnimateElement,                   //
-    SVGAnimateTransformElement,          //
-    SVGCircleElement,                    //
-    SVGClipPathElement,                  //
-    SVGDefsElement,                      //
-    SVGDescElement,                      //
-    SVGEllipseElement,                   //
-    SVGFEBlendElement,                   //
-    SVGFEColorMatrixElement,             //
-    SVGFEComponentTransferElement,       //
-    SVGFECompositeElement,               //
-    SVGFEConvolveMatrixElement,          //
-    SVGFEDiffuseLightingElement,         //
-    SVGFEDisplacementMapElement,         //
-    SVGFEDistantLightElement,            //
-    SVGFEDropShadowElement,              //
-    SVGFEFloodElement,                   //
-    SVGFEFuncAElement,                   //
-    SVGFEFuncBElement,                   //
-    SVGFEFuncGElement,                   //
-    SVGFEFuncRElement,                   //
-    SVGFEGaussianBlurElement,            //
-    SVGFEImageElement,                   //
-    SVGFEMergeElement,                   //
-    SVGFEMergeNodeElement,               //
-    SVGFEMorphologyElement,              //
-    SVGFEOffsetElement,                  //
-    SVGFEPointLightElement,              //
-    SVGFESpecularLightingElement,        //
-    SVGFESpotLightElement,               //
-    SVGFETileElement,                    //
-    SVGFETurbulenceElement,              //
-    SVGFilterElement,                    //
-    SVGGElement,                         //
-    SVGImageElement,                     //
-    SVGLineElement,                      //
-    SVGLinearGradientElement,            //
-    SVGMarkerElement,                    //
-    SVGMaskElement,                      //
-    SVGMetadataElement,                  //
-    SVGStopElement,                      //
-    SVGRadialGradientElement,            //
-    SVGPathElement,                      //
-    SVGPatternElement,                   //
-    SVGPolygonElement,                   //
-    SVGPolylineElement,                  //
-    SVGRectElement,                      //
-    SVGSetElement,                       //
-    SVGStyleElement,                     //
-    SVGSVGElement,                       //
-    SVGSwitchElement,                    //
-    SVGSymbolElement,                    //
-    SVGTextElement,                      //
-    SVGTextPathElement,                  //
-    SVGTitleElement,                     //
-    SVGTSpanElement,                     //
+    SVGAnimateMotionElement, SVGMPathElement,
+    SVGAnimateElement,              //
+    SVGAnimateTransformElement,     //
+    SVGCircleElement,               //
+    SVGClipPathElement,             //
+    SVGDefsElement,                 //
+    SVGDescElement,                 //
+    SVGEllipseElement,              //
+    SVGFEBlendElement,              //
+    SVGFEColorMatrixElement,        //
+    SVGFEComponentTransferElement,  //
+    SVGFECompositeElement,          //
+    SVGFEConvolveMatrixElement,     //
+    SVGFEDiffuseLightingElement,    //
+    SVGFEDisplacementMapElement,    //
+    SVGFEDistantLightElement,       //
+    SVGFEDropShadowElement,         //
+    SVGFEFloodElement,              //
+    SVGFEFuncAElement,              //
+    SVGFEFuncBElement,              //
+    SVGFEFuncGElement,              //
+    SVGFEFuncRElement,              //
+    SVGFEGaussianBlurElement,       //
+    SVGFEImageElement,              //
+    SVGFEMergeElement,              //
+    SVGFEMergeNodeElement,          //
+    SVGFEMorphologyElement,         //
+    SVGFEOffsetElement,             //
+    SVGFEPointLightElement,         //
+    SVGFESpecularLightingElement,   //
+    SVGFESpotLightElement,          //
+    SVGFETileElement,               //
+    SVGFETurbulenceElement,         //
+    SVGFilterElement,               //
+    SVGGElement,                    //
+    SVGImageElement,                //
+    SVGLineElement,                 //
+    SVGLinearGradientElement,       //
+    SVGMarkerElement,               //
+    SVGMaskElement,                 //
+    SVGMetadataElement,             //
+    SVGStopElement,                 //
+    SVGRadialGradientElement,       //
+    SVGPathElement,                 //
+    SVGPatternElement,              //
+    SVGPolygonElement,              //
+    SVGPolylineElement,             //
+    SVGRectElement,                 //
+    SVGSetElement,                  //
+    SVGStyleElement,                //
+    SVGSVGElement,                  //
+    SVGSwitchElement,               //
+    SVGSymbolElement,               //
+    SVGTextElement,                 //
+    SVGTextPathElement,             //
+    SVGTitleElement,                //
+    SVGTSpanElement,                //
     SVGUseElement>;
 
 }  // namespace donner::svg

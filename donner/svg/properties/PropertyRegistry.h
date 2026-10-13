@@ -629,11 +629,13 @@ public:
    * @param name Name of the attribute.
    * @param value Value of the attribute, parsed as a CSS value.
    * @param handle Entity handle, needed for `transform` attribute parsing.
+   * @param specificity Cascade level; defaults to a presentation attribute.
    * @return true if the attribute was parsed successfully, false if not recognized, or a \ref
    * ParseDiagnostic if parsing failed.
    */
   ParseResult<bool> parsePresentationAttribute(std::string_view name, std::string_view value,
-                                               EntityHandle handle = EntityHandle());
+                                               EntityHandle handle = EntityHandle(),
+                                               css::Specificity specificity = {});
 
   /**
    * Returns all CSS property names understood by this registry.

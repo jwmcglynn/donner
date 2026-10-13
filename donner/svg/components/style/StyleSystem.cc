@@ -15,6 +15,7 @@
 #include "donner/svg/components/ElementTypeComponent.h"
 #include "donner/svg/components/IdComponent.h"
 #include "donner/svg/components/StylesheetComponent.h"
+#include "donner/svg/components/animation/AnimatedValuesComponent.h"
 #include "donner/svg/components/resources/ResourceManagerContext.h"
 #include "donner/svg/components/shadow/ShadowEntityComponent.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
@@ -349,6 +350,15 @@ void StyleSystem::computePropertiesInto(EntityHandle handle, ComputedStyleCompon
   }
 
   applyStylesheetRules(registry, handle.entity(), dataEntity, properties, styleBudget, warningSink);
+  if (const auto* animationStyle = registry.ctx().find<AnimationStyleContext>();
+      animationStyle && animationStyle->enabled) {
+    if (const auto* animated = registry.try_get<AnimatedValuesComponent>(dataEntity)) {
+      for (const auto& [name, value] : animated->overrides) {
+        std::ignore = properties.parsePresentationAttribute(name, value, EntityHandle(),
+                                                            css::Specificity::Animation());
+      }
+    }
+  }
   properties.resolveElementColors(warningSink);
 
   // Inherit from parent, then charge the dynamic bytes retained by the final computed style.

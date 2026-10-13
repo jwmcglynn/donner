@@ -27,6 +27,7 @@
 #include "donner/svg/SVGMarkerElement.h"
 #include "donner/svg/SVGSetElement.h"
 #include "donner/svg/components/ConditionalProcessingComponent.h"
+#include "donner/svg/components/animation/AnimateMotionComponent.h"
 #include "donner/svg/components/animation/AnimateTransformComponent.h"
 #include "donner/svg/components/animation/AnimateValueComponent.h"
 #include "donner/svg/components/animation/AnimationTimingComponent.h"
@@ -39,6 +40,7 @@
 #include "donner/svg/components/text/TextPathComponent.h"
 #include "donner/svg/core/MaskUnits.h"
 #include "donner/svg/parser/AngleParser.h"
+#include "donner/svg/parser/AnimationAttributeParser.h"
 #include "donner/svg/parser/ClockValueParser.h"
 #include "donner/svg/parser/ListParser.h"
 #include "donner/svg/parser/Number2dParser.h"
@@ -1752,175 +1754,17 @@ std::optional<ParseDiagnostic> ParseAttribute<SVGStopElement>(SVGParserContext& 
 }
 
 namespace {
-
-/// Parse a semicolon-separated list of values, trimming whitespace.
-ParseResult<std::vector<std::string>> parseSemicolonList(std::string_view str) {
-  std::vector<std::string> result;
-  size_t consumed = 0;
-  while (!str.empty()) {
-    const auto pos = str.find(';');
-    std::string_view item = (pos != std::string_view::npos) ? str.substr(0, pos) : str;
-    // Trim whitespace.
-    while (!item.empty() && (item.front() == ' ' || item.front() == '\t')) {
-      item.remove_prefix(1);
-    }
-    while (!item.empty() && (item.back() == ' ' || item.back() == '\t')) {
-      item.remove_suffix(1);
-    }
-    if (!item.empty()) {
-      if (result.size() >= ListParser::kMaximumItems) {
-        return ParseDiagnostic::Error("Animation list item limit exceeded",
-                                      FileOffset::Offset(consumed));
-      }
-      result.emplace_back(item);
-    }
-    if (pos == std::string_view::npos) {
-      break;
-    }
-    str.remove_prefix(pos + 1);
-    consumed += pos + 1;
+std::optional<ParseDiagnostic> ParseAnimationElementAttribute(SVGParserContext& context,
+                                                              SVGElement element,
+                                                              const XMLQualifiedNameRef& name,
+                                                              std::string_view value) {
+  auto parsed = ParseAnimationAttribute(element.entityHandle(), name, value);
+  if (parsed.hasError()) {
+    context.addSubparserWarning(std::move(parsed.error()), context.parserOriginFrom(value));
+    return std::nullopt;
   }
-  return result;
+  return parsed.result() ? std::nullopt : ParseCommonAttribute(context, element, name, value);
 }
-
-/// Parse a semicolon-separated list of doubles. Each semicolon group may contain multiple
-/// whitespace/comma-separated numbers (e.g., keyTimes "0; 0.5; 1").
-ParseResult<std::vector<double>> parseDoubleList(std::string_view str) {
-  auto itemResult = parseSemicolonList(str);
-  if (itemResult.hasError()) {
-    return std::move(itemResult.error());
-  }
-
-  std::vector<double> result;
-  size_t searchOffset = 0;
-  for (const std::string& item : itemResult.result()) {
-    size_t itemOffset = str.find(item, searchOffset);
-    if (itemOffset == std::string_view::npos) {
-      itemOffset = searchOffset;
-    }
-    searchOffset = std::min(str.size(), itemOffset + item.size());
-    std::string_view remaining = item;
-    while (!remaining.empty()) {
-      if (remaining.front() == ' ' || remaining.front() == '\t' || remaining.front() == ',') {
-        remaining.remove_prefix(1);
-        continue;
-      }
-
-      const auto maybeNumber = donner::parser::NumberParser::Parse(remaining);
-      if (maybeNumber.hasError()) {
-        break;  // No more numbers.
-      }
-      if (result.size() >= ListParser::kMaximumItems) {
-        return ParseDiagnostic::Error(
-            "Animation numeric list item limit exceeded",
-            FileOffset::Offset(itemOffset + item.size() - remaining.size()));
-      }
-      result.push_back(maybeNumber.result().number);
-      remaining.remove_prefix(maybeNumber.result().consumedChars);
-    }
-  }
-  return result;
-}
-
-/// Common animation timing attribute parsing shared by <animate>, <animateTransform>, and <set>.
-///
-/// Resolve the earliest clock offset and retain raw lists for runtime mouse-event triggers.
-/// Syncbase references and event offsets remain unresolved.
-void parseAnimationTimingAttribute(SVGParserContext& context,
-                                   components::AnimationTimingComponent& timing,
-                                   const XMLQualifiedNameRef& name, std::string_view value) {
-  auto parseEarliestOffset =
-      [](std::string_view listValue) -> ParseResult<std::optional<components::ClockValue>> {
-    std::optional<components::ClockValue> bestOffset;
-    auto itemResult = parseSemicolonList(listValue);
-    if (itemResult.hasError()) {
-      return std::move(itemResult.error());
-    }
-    for (const std::string& item : itemResult.result()) {
-      if (item == "indefinite") {
-        continue;
-      }
-
-      auto result = ClockValueParser::Parse(item);
-      if (result.hasResult()) {
-        if (!bestOffset.has_value() || result.result().seconds() < bestOffset->seconds()) {
-          bestOffset = result.result();
-        }
-      }
-    }
-    return bestOffset;
-  };
-
-  if (name == XMLQualifiedNameRef("begin")) {
-    timing.beginValue = std::string(value);
-    auto offset = parseEarliestOffset(value);
-    timing.beginOffset.reset();
-    if (offset.hasResult()) {
-      timing.beginOffset = std::move(offset.result());
-    } else {
-      context.addSubparserWarning(std::move(offset.error()), context.parserOriginFrom(value));
-    }
-  } else if (name == XMLQualifiedNameRef("dur")) {
-    auto result = ClockValueParser::Parse(value);
-    if (result.hasResult()) {
-      timing.dur = result.result();
-    }
-  } else if (name == XMLQualifiedNameRef("end")) {
-    timing.endValue = std::string(value);
-    auto offset = parseEarliestOffset(value);
-    timing.endOffset.reset();
-    if (offset.hasResult()) {
-      timing.endOffset = std::move(offset.result());
-    } else {
-      context.addSubparserWarning(std::move(offset.error()), context.parserOriginFrom(value));
-    }
-  } else if (name == XMLQualifiedNameRef("fill")) {
-    if (value == "freeze") {
-      timing.fill = components::AnimationFill::Freeze;
-    } else {
-      timing.fill = components::AnimationFill::Remove;
-    }
-  } else if (name == XMLQualifiedNameRef("repeatCount")) {
-    if (value == "indefinite") {
-      timing.repeatCount = std::numeric_limits<double>::infinity();
-    } else if (auto maybeNumber = ParseNumberNoSuffix(value)) {
-      timing.repeatCount = maybeNumber;
-    }
-  } else if (name == XMLQualifiedNameRef("repeatDur")) {
-    auto result = ClockValueParser::Parse(value);
-    if (result.hasResult()) {
-      timing.repeatDur = result.result();
-    }
-  } else if (name == XMLQualifiedNameRef("restart")) {
-    if (value == "whenNotActive") {
-      timing.restart = components::AnimationRestart::WhenNotActive;
-    } else if (value == "never") {
-      timing.restart = components::AnimationRestart::Never;
-    } else {
-      timing.restart = components::AnimationRestart::Always;
-    }
-  } else if (name == XMLQualifiedNameRef("min")) {
-    auto result = ClockValueParser::Parse(value);
-    if (result.hasResult()) {
-      timing.min = result.result();
-    }
-  } else if (name == XMLQualifiedNameRef("max")) {
-    auto result = ClockValueParser::Parse(value);
-    if (result.hasResult()) {
-      timing.max = result.result();
-    }
-  }
-}
-
-/// Returns true if the given name is one of the shared SMIL timing attributes.
-bool IsAnimationTimingAttribute(const XMLQualifiedNameRef& name) {
-  return name == XMLQualifiedNameRef("begin") || name == XMLQualifiedNameRef("dur") ||
-         name == XMLQualifiedNameRef("end") || name == XMLQualifiedNameRef("fill") ||
-         name == XMLQualifiedNameRef("repeatCount") || name == XMLQualifiedNameRef("repeatDur") ||
-         name == XMLQualifiedNameRef("restart") || name == XMLQualifiedNameRef("min") ||
-         name == XMLQualifiedNameRef("max");
-}
-
 }  // namespace
 
 template <>
@@ -1928,93 +1772,29 @@ std::optional<ParseDiagnostic> ParseAttribute<SVGAnimateElement>(SVGParserContex
                                                                  SVGAnimateElement element,
                                                                  const XMLQualifiedNameRef& name,
                                                                  std::string_view value) {
-  auto& timing = element.entityHandle().get<components::AnimationTimingComponent>();
-  auto& valueComp = element.entityHandle().get<components::AnimateValueComponent>();
-
-  if (name == XMLQualifiedNameRef("attributeName")) {
-    valueComp.attributeName = std::string(value);
-  } else if (name == XMLQualifiedNameRef("from")) {
-    valueComp.from = std::string(value);
-  } else if (name == XMLQualifiedNameRef("to")) {
-    valueComp.to = std::string(value);
-  } else if (name == XMLQualifiedNameRef("by")) {
-    valueComp.by = std::string(value);
-  } else if (name == XMLQualifiedNameRef("values")) {
-    auto result = parseSemicolonList(value);
-    if (result.hasResult()) {
-      valueComp.values = std::move(result.result());
-    } else {
-      valueComp.values.clear();
-      context.addSubparserWarning(std::move(result.error()), context.parserOriginFrom(value));
-    }
-  } else if (name == XMLQualifiedNameRef("calcMode")) {
-    // Supported calcMode values: discrete | linear. paced/spline are deferred and map to linear.
-    if (value == "discrete") {
-      valueComp.calcMode = components::CalcMode::Discrete;
-    } else {
-      valueComp.calcMode = components::CalcMode::Linear;
-    }
-  } else if (name == XMLQualifiedNameRef("keyTimes")) {
-    auto result = parseDoubleList(value);
-    if (result.hasResult()) {
-      valueComp.keyTimes = std::move(result.result());
-    } else {
-      valueComp.keyTimes.clear();
-      context.addSubparserWarning(std::move(result.error()), context.parserOriginFrom(value));
-    }
-  } else if (name == XMLQualifiedNameRef("href") || name == XMLQualifiedNameRef("xlink", "href")) {
-    valueComp.href = std::string(value);
-  } else if (IsAnimationTimingAttribute(name)) {
-    parseAnimationTimingAttribute(context, timing, name, value);
-  } else {
-    return ParseCommonAttribute(context, element, name, value);
-  }
-
-  return std::nullopt;
+  return ParseAnimationElementAttribute(context, element, name, value);
 }
 
 template <>
 std::optional<ParseDiagnostic> ParseAttribute<SVGAnimateTransformElement>(
     SVGParserContext& context, SVGAnimateTransformElement element, const XMLQualifiedNameRef& name,
     std::string_view value) {
-  auto& timing = element.entityHandle().get<components::AnimationTimingComponent>();
-  auto& transformComp = element.entityHandle().get<components::AnimateTransformComponent>();
+  return ParseAnimationElementAttribute(context, element, name, value);
+}
 
-  if (name == XMLQualifiedNameRef("type")) {
-    if (value == "translate") {
-      transformComp.type = components::TransformAnimationType::Translate;
-    } else if (value == "scale") {
-      transformComp.type = components::TransformAnimationType::Scale;
-    } else if (value == "rotate") {
-      transformComp.type = components::TransformAnimationType::Rotate;
-    } else if (value == "skewX") {
-      transformComp.type = components::TransformAnimationType::SkewX;
-    } else if (value == "skewY") {
-      transformComp.type = components::TransformAnimationType::SkewY;
-    }
-  } else if (name == XMLQualifiedNameRef("from")) {
-    transformComp.from = std::string(value);
-  } else if (name == XMLQualifiedNameRef("to")) {
-    transformComp.to = std::string(value);
-  } else if (name == XMLQualifiedNameRef("by")) {
-    transformComp.by = std::string(value);
-  } else if (name == XMLQualifiedNameRef("values")) {
-    auto result = parseSemicolonList(value);
-    if (result.hasResult()) {
-      transformComp.values = std::move(result.result());
-    } else {
-      transformComp.values.clear();
-      context.addSubparserWarning(std::move(result.error()), context.parserOriginFrom(value));
-    }
-  } else if (name == XMLQualifiedNameRef("href") || name == XMLQualifiedNameRef("xlink", "href")) {
-    transformComp.href = std::string(value);
-  } else if (IsAnimationTimingAttribute(name)) {
-    parseAnimationTimingAttribute(context, timing, name, value);
-  } else {
-    return ParseCommonAttribute(context, element, name, value);
-  }
+template <>
+std::optional<ParseDiagnostic> ParseAttribute<SVGAnimateMotionElement>(
+    SVGParserContext& context, SVGAnimateMotionElement element, const XMLQualifiedNameRef& name,
+    std::string_view value) {
+  return ParseAnimationElementAttribute(context, element, name, value);
+}
 
-  return std::nullopt;
+template <>
+std::optional<ParseDiagnostic> ParseAttribute<SVGMPathElement>(SVGParserContext& context,
+                                                               SVGMPathElement element,
+                                                               const XMLQualifiedNameRef& name,
+                                                               std::string_view value) {
+  return ParseAnimationElementAttribute(context, element, name, value);
 }
 
 template <>
@@ -2022,22 +1802,7 @@ std::optional<ParseDiagnostic> ParseAttribute<SVGSetElement>(SVGParserContext& c
                                                              SVGSetElement element,
                                                              const XMLQualifiedNameRef& name,
                                                              std::string_view value) {
-  auto& timing = element.entityHandle().get<components::AnimationTimingComponent>();
-  auto& setComp = element.entityHandle().get<components::SetAnimationComponent>();
-
-  if (name == XMLQualifiedNameRef("attributeName")) {
-    setComp.attributeName = std::string(value);
-  } else if (name == XMLQualifiedNameRef("to")) {
-    setComp.to = std::string(value);
-  } else if (name == XMLQualifiedNameRef("href") || name == XMLQualifiedNameRef("xlink", "href")) {
-    setComp.href = std::string(value);
-  } else if (IsAnimationTimingAttribute(name)) {
-    parseAnimationTimingAttribute(context, timing, name, value);
-  } else {
-    return ParseCommonAttribute(context, element, name, value);
-  }
-
-  return std::nullopt;
+  return ParseAnimationElementAttribute(context, element, name, value);
 }
 
 template <>

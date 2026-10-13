@@ -573,6 +573,15 @@ Path::PointOnPath Path::pointAtArcLength(double distance) const {
   return measure().pointAtArcLength(distance);
 }
 
+std::vector<double> Path::MeasuredPath::segmentEndDistances() const {
+  std::vector<double> result;
+  result.reserve(segments_.size());
+  for (const auto& segment : segments_) {
+    result.push_back(segment.endLength);
+  }
+  return result;
+}
+
 Path::PointOnPath Path::MeasuredPath::pointAtArcLength(double distance) const {
   if (!valid_ || !std::isfinite(distance) || distance < 0.0) {
     return {{}, {}, 0.0, false};

@@ -13,9 +13,6 @@ namespace donner::svg {
  * - DOM object: SVGAnimateTransformElement
  * - SVG Animations spec: https://svgwg.org/specs/animations/#AnimateTransformElement
  *
- * @warning Animation support is experimental. Parse with
- * `SVGParser::Options::enableExperimental = true` to create an SVGAnimateTransformElement.
- *
  * The `type` attribute selects `translate`, `scale`, `rotate`, `skewX`, or `skewY`.
  * Donner interpolates `from`/`to`, `from`/`by`, `by`, and semicolon-separated
  * `values` forms.
@@ -61,8 +58,7 @@ namespace donner::svg {
  * | `href`, `xlink:href` | Optional target; otherwise the parent element is targeted. |
  * | Shared timing | `begin`, `dur`, `end`, `fill`, `repeatCount`, `repeatDur`, `restart`, `min`, and `max`. |
  *
- * Event and syncbase begin/end expressions are not resolved yet. See \ref xml_animate for shared
- * timing behavior and limitations.
+ * See \ref xml_animate for shared timing behavior and limits.
  */
 
 /**
@@ -87,8 +83,6 @@ public:
   static constexpr ElementType Type = ElementType::AnimateTransform;
   /// XML tag name, \ref xml_animateTransform.
   static constexpr std::string_view Tag{"animateTransform"};
-  /// This is an experimental/incomplete feature.
-  static constexpr bool IsExperimental = true;
 };
 
 }  // namespace donner::svg

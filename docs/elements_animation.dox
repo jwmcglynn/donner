@@ -1,10 +1,20 @@
 /**
 @page elements_animation Animation Elements
 
-\details Experimental SVG animation elements. Parsing these concrete element types requires
-`SVGParser::Options::enableExperimental`; otherwise they are represented as unknown elements.
+\details Declarative SVG animation elements recognized by the default parser.
+Use `SVGDocument::setTime()` to select a sample and render the document. The editor's Preview mode
+advances this clock and dispatches pointer events. Secure static documents do not animate.
+
+Clock, event, syncbase and repeat timing are supported, together with linear, discrete, paced and
+spline interpolation. Host applications can schedule begin/end instances and query lifecycle events
+without executing script. CSS Animations, JavaScript, wall-clock/access-key bindings and destructive
+`<discard>` behavior are outside this profile.
+
+See [the animation support matrix](design_docs/animation.md) for rendered attribute coverage.
 
 - \subpage xml_animate
 - \subpage xml_animateTransform
 - \subpage xml_set
+- \subpage xml_animateMotion
+- \subpage xml_mpath
 */

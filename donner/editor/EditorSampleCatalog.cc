@@ -70,7 +70,8 @@ constexpr std::string_view kAnimationSvg =
   </g>
   <path d="M96 175 H544" stroke="#344454" stroke-width="4" stroke-linecap="round" pointer-events="none"/>
   <circle id="orb" cx="96" cy="175" r="24" fill="#75dfbb" pointer-events="none">
-    <animate attributeName="cx" values="96;544;96" dur="4s" repeatCount="indefinite"/>
+    <animateMotion values="0 0;448 0;0 0" calcMode="spline" keyTimes="0;0.5;1"
+      keySplines="0.42 0 0.58 1;0.42 0 0.58 1" dur="4s" repeatCount="indefinite"/>
     <animate attributeName="r" values="24;48;24" begin="pulse.click" dur="0.6s"/>
   </circle>
   <rect id="hover-pad" x="64" y="276" width="240" height="76" rx="16" fill="#263746" stroke="#486074" stroke-width="2">

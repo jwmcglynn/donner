@@ -1,6 +1,17 @@
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include "donner/base/tests/ParseResultTestUtils.h"
+#include "donner/svg/SVGFEOffsetElement.h"
+#include "donner/svg/SVGLineElement.h"
+#include "donner/svg/SVGPolygonElement.h"
+#include "donner/svg/components/animation/AnimationResourceBudget.h"
+#include "donner/svg/components/animation/AnimationSystem.h"
+#include "donner/svg/components/shape/PathComponent.h"
+#include "donner/svg/components/shape/PolyComponent.h"
+#include "donner/svg/renderer/AnimationPresentation.h"
 #include "donner/svg/renderer/tests/RendererTestUtils.h"
+#include "donner/svg/renderer/tests/RgbaTestMatchers.h"
 #include "donner/svg/tests/ParserTestUtils.h"
 
 /// @file
@@ -292,6 +303,267 @@ TEST(RendererAnimation, RepeatCount) {
     @@@@@@@@@@@@@@@@
     @@@@@@@@@@@@@@@@
     )"));
+}
+
+TEST(RendererAnimation, AnimatedGroupFillIsInheritedAndReverts) {
+  auto document = parseAnimated(R"svg(
+    <g fill="white"><set attributeName="fill" to="black" begin="1s" dur="1s"/>
+      <rect width="16" height="16"/></g>)svg");
+  document.setTime(1.5);
+  EXPECT_THAT(RendererTestUtils::renderToAsciiImage(document).generated,
+              testing::StartsWith(std::string(16, '@')));
+  document.setTime(3);
+  EXPECT_THAT(RendererTestUtils::renderToAsciiImage(document).generated,
+              testing::StartsWith(std::string(16, '.')));
+}
+
+TEST(RendererAnimation, AnimatedOpacityOverridesStyleButRespectsImportant) {
+  auto document = parseAnimated(R"svg(
+    <rect width="16" height="16" fill="black" style="opacity:1">
+      <animate attributeName="opacity" from="0" to="0" dur="2s"/>
+    </rect>)svg");
+  document.setTime(1);
+  EXPECT_THAT(RendererTestUtils::renderToAsciiImage(document).generated,
+              testing::StartsWith(std::string(16, '.')));
+  auto important = parseAnimated(R"svg(
+    <rect width="16" height="16" fill="black" style="opacity:1!important">
+      <animate attributeName="opacity" from="0" to="0" dur="2s"/>
+    </rect>)svg");
+  important.setTime(1);
+  EXPECT_THAT(RendererTestUtils::renderToAsciiImage(important).generated,
+              testing::StartsWith(std::string(16, '@')));
+}
+
+TEST(RendererAnimation, AuthoredGeometryChangeSurvivesAnimationRemoval) {
+  auto document = parseAnimated(R"svg(
+    <rect id="r" width="4" height="16" fill="black">
+      <animate attributeName="width" from="4" to="8" dur="1s"/>
+    </rect>)svg");
+  document.setTime(0.5);
+  EXPECT_THAT(RendererTestUtils::renderToAsciiImage(document).generated,
+              testing::StartsWith("@@@@@@.........."));
+  auto rect = document.querySelector("#r");
+  ASSERT_THAT(rect, testing::Ne(std::nullopt));
+  rect->setAttribute("width", "12");
+  document.setTime(2);
+  EXPECT_THAT(RendererTestUtils::renderToAsciiImage(document).generated,
+              testing::StartsWith("@@@@@@@@@@@@...."));
+}
+
+TEST(RendererAnimation, PolygonPointAnimationRendersAndReverts) {
+  auto document = parseAnimated(R"svg(
+    <polygon points="0 0 4 0 4 16 0 16" fill="black">
+      <animate attributeName="points" from="0 0 4 0 4 16 0 16" to="0 0 12 0 12 16 0 16" dur="2s"/>
+    </polygon>)svg");
+  document.setTime(1);
+  EXPECT_THAT(RendererTestUtils::renderToAsciiImage(document).generated,
+              testing::StartsWith("@@@@@@@@........"));
+  document.setTime(3);
+  EXPECT_THAT(RendererTestUtils::renderToAsciiImage(document).generated,
+              testing::StartsWith("@@@@............"));
+}
+
+TEST(RendererAnimation, SecureStaticDoesNotEvaluateAnimation) {
+  parser::SVGParser::Options options;
+  SVGDocument::Settings settings;
+  settings.processingMode = ProcessingMode::SecureStatic;
+  ParseWarningSink warnings;
+  auto parsed = parser::SVGParser::ParseSVG(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16">
+      <rect width="16" height="16" fill="black"><set attributeName="fill" to="white"/></rect>
+    </svg>)svg",
+                                            warnings, options, std::move(settings));
+  ASSERT_THAT(parsed, NoParseError());
+  parsed.result().setTime(1);
+  EXPECT_THAT(RendererTestUtils::renderToAsciiImage(parsed.result()).generated,
+              testing::StartsWith(std::string(16, '@')));
+  EXPECT_THAT(parsed.result().animationEvents(-1, 2).events, testing::IsEmpty());
+}
+
+TEST(RendererAnimation, LinearRgbColorInterpolationUsesLinearLight) {
+  auto document = parseAnimated(R"svg(
+    <rect width="16" height="16" color-interpolation="linearRGB">
+      <animate attributeName="fill" from="black" to="white" dur="2s"/>
+    </rect>)svg");
+  document.setTime(1);
+  const auto bitmap = RenderDocumentWithActiveBackend(document);
+  EXPECT_THAT(test::PixelAt(bitmap, 8, 8), test::Rgba(188, 188, 188, 255));
+}
+
+TEST(RendererAnimation, ToOnlyGeometryUsesStylesheetUnderlyingValue) {
+  auto document = parseAnimated(R"svg(
+    <style>rect { width: 4px; }</style>
+    <rect width="2" height="16" fill="black">
+      <animate attributeName="width" to="12" dur="2s"/>
+    </rect>)svg");
+  document.setTime(1);
+  EXPECT_THAT(RendererTestUtils::renderToAsciiImage(document).generated,
+              testing::StartsWith("@@@@@@@@........"));
+}
+
+TEST(RendererAnimation, FilterOffsetAnimationRendersAndRestores) {
+  auto document = parseAnimated(R"svg(
+    <defs><filter id="f" filterUnits="userSpaceOnUse" x="0" y="0" width="16" height="16">
+      <feOffset dx="0"><animate attributeName="dx" from="0" to="8" dur="2s"/></feOffset>
+    </filter></defs><rect width="4" height="16" fill="black" filter="url(#f)"/>)svg");
+  document.setTime(1);
+  EXPECT_THAT(RendererTestUtils::renderToAsciiImage(document).generated,
+              testing::StartsWith("....@@@@........"));
+  document.setTime(3);
+  EXPECT_THAT(RendererTestUtils::renderToAsciiImage(document).generated,
+              testing::StartsWith("@@@@............"));
+}
+
+TEST(RendererAnimation, GradientGeometryMatchesIndependentStaticGradient) {
+  auto document = parseAnimated(R"svg(
+    <defs><linearGradient id="g" gradientUnits="userSpaceOnUse" x2="8">
+      <animate attributeName="x2" from="8" to="24" dur="2s"/>
+      <stop stop-color="black"/><stop offset="1" stop-color="white"/>
+    </linearGradient></defs><rect width="16" height="16" fill="url(#g)"/>)svg");
+  auto expected = parseAnimated(R"svg(
+    <defs><linearGradient id="g" gradientUnits="userSpaceOnUse" x2="16">
+      <stop stop-color="black"/><stop offset="1" stop-color="white"/>
+    </linearGradient></defs><rect width="16" height="16" fill="url(#g)"/>)svg");
+  document.setTime(1);
+  EXPECT_EQ(RendererTestUtils::renderToAsciiImage(document).generated,
+            RendererTestUtils::renderToAsciiImage(expected).generated);
+}
+
+TEST(RendererAnimation, AnimatedViewBoxMatchesIndependentStaticViewport) {
+  auto document = parseAnimated(R"svg(
+    <svg width="16" height="16" viewBox="0 0 16 16" preserveAspectRatio="none">
+      <animate attributeName="viewBox" from="0 0 16 16" to="0 0 32 16" dur="1s" fill="freeze"/>
+      <rect width="16" height="16" fill="black"/>
+    </svg>)svg");
+  document.setTime(2);
+  EXPECT_THAT(RendererTestUtils::renderToAsciiImage(document).generated,
+              testing::StartsWith("@@@@@@@@........"));
+}
+
+TEST(RendererAnimation, AuthoredShapeEditsDuringPlaybackSurviveRemoval) {
+  struct Case {
+    std::string_view fragment;
+    std::string_view attribute;
+    std::string_view replacement;
+    std::string_view expected;
+    std::string_view removed;
+  };
+  const Case cases[] = {
+      {R"(<path id="s" d="M0 0H4V16H0Z"><set attributeName="d" to="M0 0H8V16H0Z" dur="1s"/></path>)",
+       "d", "M0 0H12V16H0Z", "@@@@@@@@@@@@....", "................"},
+      {R"(<polygon id="s" points="0 0 4 0 4 16 0 16"><set attributeName="points" to="0 0 8 0 8 16 0 16" dur="1s"/></polygon>)",
+       "points", "0 0 12 0 12 16 0 16", "@@@@@@@@@@@@....", "................"},
+      {R"(<line id="s" x2="4" y1="1" y2="1" stroke="black" stroke-width="2"><set attributeName="x2" to="8" dur="1s"/></line>)",
+       "x2", "12", "@@@@@@@@@@@@....", "................"},
+      {R"svg(<rect id="s" width="4" height="16" transform="translate(4)"><set attributeName="transform" to="translate(8)" dur="1s"/></rect>)svg",
+       "transform", "translate(12)", "............@@@@", "@@@@............"}};
+  for (const auto& item : cases) {
+    for (bool remove : {false, true}) {
+      SCOPED_TRACE(testing::Message() << item.attribute << " remove=" << remove);
+      auto document = parseAnimated(item.fragment);
+      document.setTime(0.5);
+      (void)RendererTestUtils::renderToAsciiImage(document);
+      auto element = document.querySelector("#s").value();
+      if (remove) {
+        element.removeAttribute(item.attribute);
+      } else {
+        element.setAttribute(item.attribute, item.replacement);
+      }
+      document.setTime(2);
+      EXPECT_THAT(RendererTestUtils::renderToAsciiImage(document).generated,
+                  testing::StartsWith(std::string(remove ? item.removed : item.expected)));
+    }
+  }
+}
+
+TEST(RendererAnimation, TypedLineEditDuringPlaybackSurvivesRemoval) {
+  auto document = parseAnimated(R"(
+    <line id="s" x2="4" y1="1" y2="1" stroke="black" stroke-width="2">
+      <set attributeName="x2" to="8" dur="1s"/></line>)");
+  document.setTime(0.5);
+  (void)RendererTestUtils::renderToAsciiImage(document);
+  document.querySelector("#s")->cast<SVGLineElement>().setX2(Lengthd(12));
+  document.setTime(2);
+  EXPECT_THAT(RendererTestUtils::renderToAsciiImage(document).generated,
+              testing::StartsWith("@@@@@@@@@@@@...."));
+}
+
+TEST(RendererAnimation, TypedFilterEditDuringPlaybackSurvivesRemoval) {
+  auto document = parseAnimated(R"svg(
+    <defs><filter id="f" filterUnits="userSpaceOnUse" x="0" y="0" width="16" height="16">
+      <feOffset id="s" dx="0"><set attributeName="dx" to="4" dur="1s"/></feOffset>
+    </filter></defs><rect width="4" height="16" fill="black" filter="url(#f)"/>)svg");
+  document.setTime(0.5);
+  (void)RendererTestUtils::renderToAsciiImage(document);
+  document.querySelector("#s")->cast<SVGFEOffsetElement>().setOffset(12, 0);
+  document.setTime(2);
+  EXPECT_THAT(RendererTestUtils::renderToAsciiImage(document).generated,
+              testing::StartsWith("............@@@@"));
+}
+
+TEST(RendererAnimation, GeometryRestorationStorageSharesTheOutputBudget) {
+  for (bool path : {false, true}) {
+    SCOPED_TRACE(path);
+    auto document = parseAnimated(
+        path
+            ? R"(<path id="s" d="M0 0L4 4"><set attributeName="d" to="M0 0L8 8" dur="2s"/></path>)"
+            : R"(<polygon id="s" points="0 0 4 0 4 4"><set attributeName="points" to="0 0 8 0 8 8" dur="2s"/></polygon>)");
+    auto handle = document.querySelector("#s")->entityHandle();
+    components::AnimationSystem().advance(document.registry(), 1);
+    components::AnimationResourceBudget smallGeometry;
+    ASSERT_THAT(smallGeometry.reserveOutput(smallGeometry.kMaximumOutputBytes - 65536),
+                testing::IsTrue());
+    EXPECT_THAT(components::ReserveAnimationGeometryBackups(document.registry(), smallGeometry),
+                testing::IsTrue());
+    if (path) {
+      PathBuilder spline;
+      spline.moveTo({0, 0});
+      for (int i = 0; i < 5000; ++i) {
+        spline.lineTo({double(i), 0});
+      }
+      handle.get<components::PathComponent>().splineOverride = spline.build();
+    } else {
+      handle.get<components::PolyComponent>().points.resize(5000);
+    }
+    components::AnimationResourceBudget largeGeometry;
+    ASSERT_THAT(largeGeometry.reserveOutput(largeGeometry.kMaximumOutputBytes - 65536),
+                testing::IsTrue());
+    EXPECT_THAT(components::ReserveAnimationGeometryBackups(document.registry(), largeGeometry),
+                testing::IsFalse());
+    EXPECT_THAT(largeGeometry.rejected(), testing::IsTrue());
+  }
+}
+
+TEST(RendererAnimation, TypedEditsEqualToPresentationBecomeNewBaseValues) {
+  auto document = parseAnimated(R"svg(
+    <line id="line" x2="4"><set attributeName="x2" to="8" dur="1s"/></line>
+    <polygon id="poly" points="0 0 4 0 4 4"><set attributeName="points" to="0 0 8 0 8 8" dur="1s"/></polygon>
+    <filter><feOffset id="offset" dx="0"><set attributeName="dx" to="4" dur="1s"/></feOffset></filter>)svg");
+  document.setTime(0.5);
+  (void)RendererTestUtils::renderToAsciiImage(document);
+  auto line = document.querySelector("#line")->cast<SVGLineElement>();
+  auto poly = document.querySelector("#poly")->cast<SVGPolygonElement>();
+  auto offset = document.querySelector("#offset")->cast<SVGFEOffsetElement>();
+  line.setX2(Lengthd(8));
+  poly.setPoints({{0, 0}, {8, 0}, {8, 8}});
+  offset.setOffset(4, 0);
+  document.setTime(2);
+  (void)RendererTestUtils::renderToAsciiImage(document);
+  EXPECT_THAT(line.x2(), testing::Eq(Lengthd(8)));
+  EXPECT_THAT(poly.points(), testing::ElementsAre(Vector2d(0, 0), Vector2d(8, 0), Vector2d(8, 8)));
+  EXPECT_EQ(offset.dx(), 4);
+}
+
+TEST(RendererAnimation, RejectedPropertyProbePreservesAnimatedAppearance) {
+  auto document = parseAnimated(
+      R"(<rect id="r" width="4" height="16"><set attributeName="width" to="8" dur="2s"/></rect>)");
+  document.setTime(1);
+  const auto before = RendererTestUtils::renderToAsciiImage(document).generated;
+  auto rect = document.querySelector("#r").value();
+  EXPECT_THAT(rect.trySetPresentationAttribute("unknown-property", "12"), NoParseError());
+  EXPECT_THAT(rect.trySetPresentationAttribute("fill", "this-is-not-a-valid-color").hasError(),
+              testing::IsTrue());
+  EXPECT_EQ(RendererTestUtils::renderToAsciiImage(document).generated, before);
 }
 
 }  // namespace donner::svg

@@ -2956,7 +2956,8 @@ void PropertyRegistry::clearStyleAttributeProperties() {
 
 ParseResult<bool> PropertyRegistry::parsePresentationAttribute(std::string_view name,
                                                                std::string_view value,
-                                                               EntityHandle handle) {
+                                                               EntityHandle handle,
+                                                               css::Specificity specificity) {
   /* TODO(jwmcglynn): The SVG2 spec says the name may be similar to the attribute, not
    * necessarily the same. There may need to be a second mapping.
    */
@@ -2974,6 +2975,7 @@ ParseResult<bool> PropertyRegistry::parsePresentationAttribute(std::string_view 
   }
 
   parser::PropertyParseFnParams params = parser::PropertyParseFnParams::CreateForAttribute(value);
+  params.specificity = specificity;
 
   if (name == "flood-color" || name == "stop-color") {
     return parseResourceColorAttribute(name == "flood-color" ? 0 : 1, params);

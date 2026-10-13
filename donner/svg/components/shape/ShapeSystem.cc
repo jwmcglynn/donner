@@ -69,30 +69,6 @@ FontMetrics fontMetricsForElement(Registry& registry, const ComputedStyleCompone
   return metrics;
 }
 
-/**
- * Parse the string of the 'd' presentation attribute out of CSS, which can be parsed with \ref
- * PathParser.
- *
- * @param components CSS ComponentValue list to parse, the right side of the declaration (e.g.
- * `d: <component-values>`).
- * @return parsed string, or an error if the string could not be parsed
- */
-ParseResult<RcString> ParseD(std::span<const css::ComponentValue> components) {
-  if (auto maybeIdent = parser::TryGetSingleIdent(components);
-      maybeIdent && maybeIdent->equalsLowercase("none")) {
-    return RcString();
-  } else if (components.size() == 1) {
-    if (const auto* str = components[0].tryGetToken<css::Token::String>()) {
-      return str->value;
-    }
-  }
-
-  ParseDiagnostic err;
-  err.reason = "Expected string or 'none'";
-  err.range.start = !components.empty() ? components.front().sourceOffset() : FileOffset::Offset(0);
-  return err;
-}
-
 bool ReserveComputedPathPayload(EntityHandle handle, const Path& path) {
   auto& registryContext = handle.registry()->ctx();
   if (!registryContext.contains<GeometryPreparationResourceBudget>()) {
@@ -128,7 +104,9 @@ std::optional<ParseDiagnostic> ParseDFromAttributes(PathComponent& properties,
   } else {
     auto maybeError = Parse(
         params,
-        [](const parser::PropertyParseFnParams& params) { return ParseD(params.components()); },
+        [](const parser::PropertyParseFnParams& params) {
+          return parser::ParsePathDataProperty(params.components());
+        },
         &properties.d);
     if (maybeError) {
       return std::move(maybeError.value());
@@ -441,7 +419,9 @@ ComputedPathComponent* ShapeSystem::createComputedShapeWithStyle(
     auto maybeError = Parse(
         parser::PropertyParseFnParams::Create(it->second.declaration, it->second.specificity,
                                               parser::PropertyParseBehavior::AllowUserUnits),
-        [](const parser::PropertyParseFnParams& params) { return ParseD(params.components()); },
+        [](const parser::PropertyParseFnParams& params) {
+          return parser::ParsePathDataProperty(params.components());
+        },
         &actualD);
     if (maybeError) {
       warningSink.add(std::move(maybeError.value()));

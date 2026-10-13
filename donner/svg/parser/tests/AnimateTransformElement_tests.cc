@@ -2,11 +2,13 @@
 
 #include "donner/base/tests/ParseResultTestUtils.h"
 #include "donner/svg/SVGDocument.h"
+#include "donner/svg/SVGGraphicsElement.h"
 #include "donner/svg/components/animation/AnimateTransformComponent.h"
 #include "donner/svg/components/animation/AnimatedValuesComponent.h"
 #include "donner/svg/components/animation/AnimationSystem.h"
 #include "donner/svg/parser/ListParser.h"
 #include "donner/svg/parser/SVGParser.h"
+#include "donner/svg/parser/TransformParser.h"
 
 namespace donner::svg {
 
@@ -239,7 +241,7 @@ TEST(SVGAnimateTransformElement, FromByTranslate) {
 }
 
 TEST(SVGAnimateTransformElement, ByOnlyScale) {
-  // For scale, the neutral value is 1, so by="2" animates from scale(1) to scale(3).
+  // The SVG animation additive zero for scale is 0, so by="2" runs from 0 to 2.
   auto document = parseSVGWithExperimental(R"(
     <svg xmlns="http://www.w3.org/2000/svg">
       <rect id="r" width="100" height="100">
@@ -249,10 +251,10 @@ TEST(SVGAnimateTransformElement, ByOnlyScale) {
     </svg>
   )");
 
-  // At t=1s (50%): scale(2)
+  // At t=1s (50%): scale(1)
   auto val = getAnimatedTransform(document, "#r", 1.0);
   ASSERT_TRUE(val.has_value());
-  EXPECT_EQ(val.value(), "scale(2)");
+  EXPECT_EQ(val.value(), "scale(1)");
 }
 
 TEST(SVGAnimateTransformElement, ByOnlyRotate) {
@@ -407,6 +409,55 @@ TEST(SVGAnimateTransformElement, TwoNumberRotatePadsCenterY) {
   auto val = getAnimatedTransform(document, "#r", 1.0);
   ASSERT_TRUE(val.has_value());
   EXPECT_EQ(val.value(), "rotate(45, 25, 0)");
+}
+
+TEST(SVGAnimateTransformElement, RejectsMissingAndNonTransformAttributeNames) {
+  for (const std::string_view name : {"", "fill", "gradientTransform", "patternTransform"}) {
+    SCOPED_TRACE(name);
+    auto document = parseSVGWithExperimental(R"svg(
+      <svg xmlns="http://www.w3.org/2000/svg"><rect id="r">
+        <animateTransform id="a" type="translate" from="0" to="20" dur="2s"/>
+      </rect></svg>)svg");
+    if (!name.empty()) {
+      document.querySelector("#a")->setAttribute("attributeName", name);
+    }
+    EXPECT_THAT(getAnimatedTransform(document, "#r", 1), testing::Eq(std::nullopt));
+  }
+}
+
+TEST(SVGAnimateTransformElement, PaintTransformsRetainTheirUnderlyingValue) {
+  for (const std::string_view tag : {"linearGradient", "pattern"}) {
+    const std::string name = tag == "pattern" ? "patternTransform" : "gradientTransform";
+    auto document = parseSVGWithExperimental(
+        "<svg xmlns='http://www.w3.org/2000/svg'><" + std::string(tag) + " id='r' " + name +
+        "='translate(100)'><animateTransform attributeName='" + name +
+        "' type='translate' from='0' to='20' dur='2s' additive='sum'/></" + std::string(tag) +
+        "></svg>");
+    components::AnimationSystem().advance(document.registry(), 1);
+    const auto& values = document.querySelector("#r")
+                             ->entityHandle()
+                             .get<components::AnimatedValuesComponent>()
+                             .overrides;
+    ASSERT_THAT(values, testing::Contains(testing::Key(name)));
+    auto parsed = parser::TransformParser::Parse(values.at(name));
+    ASSERT_THAT(parsed, NoParseError());
+    EXPECT_EQ(parsed.result().transformPosition(Vector2d()).x, 110);
+  }
+}
+
+TEST(SVGAnimateTransformElement, TypedTransformIsTheUnderlyingValue) {
+  auto document = parseSVGWithExperimental(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg"><rect id="r">
+      <animateTransform attributeName="transform" type="translate" from="0" to="20"
+                        dur="2s" additive="sum"/>
+    </rect></svg>)svg");
+  document.querySelector("#r")->cast<SVGGraphicsElement>().setTransform(
+      Transform2d::Translate({100, 0}));
+  const auto value = getAnimatedTransform(document, "#r", 1);
+  ASSERT_THAT(value, testing::Ne(std::nullopt));
+  auto parsed = parser::TransformParser::Parse(*value);
+  ASSERT_THAT(parsed, NoParseError());
+  EXPECT_EQ(parsed.result().transformPosition(Vector2d()).x, 110);
 }
 
 }  // namespace donner::svg

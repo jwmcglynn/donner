@@ -1035,6 +1035,16 @@ public:
   static std::optional<svg::SVGElement> PreviewHoveredElement(const EditorShell& shell) {
     return shell.previewHoveredElement_;
   }
+  static std::vector<std::pair<svg::EventType, RcString>> HoverTransition(
+      EditorShell& shell, const std::optional<svg::SVGElement>& target) {
+    std::vector<EditorShell::PreviewMouseDispatch> events;
+    shell.collectPreviewHoverEvents(target, events);
+    std::vector<std::pair<svg::EventType, RcString>> result;
+    for (const auto& event : events) {
+      result.emplace_back(event.type, event.target.id());
+    }
+    return result;
+  }
   static Box2d AnimationControlRect(const EditorShell& shell) {
     return shell.animationPreviewControlScreenRect();
   }
@@ -2416,6 +2426,33 @@ TEST(EditorShellTest, PreviewHoverUsesCapturedTargetsWithoutSelectingOrEditing) 
   EXPECT_FALSE(app.hasSelection());
   EXPECT_FALSE(app.isDirty());
   EXPECT_FALSE(app.canUndo());
+}
+
+TEST(EditorShellTest, PreviewHoverDoesNotLeaveTheSharedAncestor) {
+  constexpr std::string_view source = R"svg(
+    <svg id="root" xmlns="http://www.w3.org/2000/svg"><g id="group">
+      <rect id="a" width="10" height="10"/><rect id="b" x="20" width="10" height="10"/>
+    </g></svg>)svg";
+  gui::EditorWindow window = MakeHiddenWindow();
+  ASSERT_TRUE(window.valid());
+  EditorShell shell(window, OptionsWithSource(source));
+  auto& document = EditorShellTestAccess::App(shell).document().document();
+  const auto first = document.querySelector("#a");
+  const auto second = document.querySelector("#b");
+  ASSERT_THAT(first, testing::Ne(std::nullopt));
+  ASSERT_THAT(second, testing::Ne(std::nullopt));
+  const auto pair = [](svg::EventType type, const char* id) {
+    return std::pair(type, RcString(id));
+  };
+  EXPECT_THAT(EditorShellTestAccess::HoverTransition(shell, first),
+              testing::ElementsAre(pair(svg::EventType::MouseOver, "a"),
+                                   pair(svg::EventType::MouseEnter, "root"),
+                                   pair(svg::EventType::MouseEnter, "group"),
+                                   pair(svg::EventType::MouseEnter, "a")));
+  EXPECT_THAT(EditorShellTestAccess::HoverTransition(shell, second),
+              testing::ElementsAre(
+                  pair(svg::EventType::MouseOut, "a"), pair(svg::EventType::MouseLeave, "a"),
+                  pair(svg::EventType::MouseOver, "b"), pair(svg::EventType::MouseEnter, "b")));
 }
 
 TEST(EditorShellTest, ReplacingDocumentStopsAnimationPreview) {

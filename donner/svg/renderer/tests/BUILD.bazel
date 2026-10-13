@@ -584,8 +584,10 @@ donner_cc_test(
 donner_cc_test(
     name = "renderer_animation_tests",
     srcs = [
+        "RendererAnimationFixture_tests.cc",
         "RendererAnimation_tests.cc",
     ],
+    data = ["//donner/svg/renderer/testdata:animation_fixtures"],
     opens_gpu_device = True,
     # Variant lanes (doc 0031 M2.3): tiny / text_full / geode
     # wrappers run automatically under `bazel test //...`.
@@ -596,6 +598,24 @@ donner_cc_test(
     ],
     deps = [
         ":renderer_test_utils",
+        ":rgba_test_matchers",
+        "//donner/base:base_test_utils",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
+    name = "renderer_animation_presentation_tests",
+    srcs = ["RendererAnimationPresentation_tests.cc"],
+    opens_gpu_device = True,
+    variants = [
+        "tiny",
+        "text_full",
+        "geode",
+    ],
+    deps = [
+        ":renderer_test_utils",
+        ":rgba_test_matchers",
         "@com_google_gtest//:gtest_main",
     ],
 )

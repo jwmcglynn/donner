@@ -8,6 +8,8 @@ std::ostream& operator<<(std::ostream& os, ElementType type) {
   switch (type) {
     case ElementType::A: return os << "A";
     case ElementType::Animate: return os << "Animate";
+    case ElementType::AnimateMotion: return os << "AnimateMotion";
+    case ElementType::MPath: return os << "MPath";
     case ElementType::AnimateTransform: return os << "AnimateTransform";
     case ElementType::Circle: return os << "Circle";
     case ElementType::ClipPath: return os << "ClipPath";

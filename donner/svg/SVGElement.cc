@@ -29,6 +29,7 @@
 #include "donner/svg/components/text/TextRootComponent.h"
 #include "donner/svg/properties/PresentationAttributeParsing.h"
 #include "donner/svg/properties/PropertyRegistry.h"
+#include "donner/svg/renderer/AnimationPresentation.h"
 
 namespace donner::svg {
 
@@ -260,6 +261,15 @@ ElementAnchor& ElementAnchor::operator=(ElementAnchor&& other) noexcept {
   return *this;
 }
 
+DocumentMutationBatch ElementAnchor::mutationBatch(bool commitOnScopeExit) const {
+  UTILS_RELEASE_ASSERT_MSG(documentHandle_, "SVGElement has no document state");
+  DocumentMutationBatch mutation(*documentHandle_, commitOnScopeExit);
+  if (const auto handle = resolve()) {
+    components::RestoreAnimationPresentationForMutation(*handle.registry(), handle.entity());
+  }
+  return mutation;
+}
+
 EntityHandle ElementAnchor::resolve() const {
   assertScopedEntityHandleAccessAllowed();
   return unsafeResolve();
@@ -469,7 +479,9 @@ void SVGElement::updateStyle(std::string_view style) {
 
 ParseResult<bool> SVGElement::trySetPresentationAttribute(std::string_view name,
                                                           std::string_view value) {
-  DocumentMutationBatch mutation = handle_.mutationBatch();
+  // A rejected probe must leave the currently presented animation untouched.
+  DocumentWriteAccess probeAccess = handle_.writeAccess();
+  DocumentMutationBatch mutation(probeAccess.documentState(), true);
   DocumentWriteAccess& access = mutation.access();
   std::string_view actualName = name;
 

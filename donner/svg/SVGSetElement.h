@@ -13,9 +13,6 @@ namespace donner::svg {
  * - DOM object: SVGSetElement
  * - SVG Animations spec: https://svgwg.org/specs/animations/#SetElement
  *
- * @warning Animation support is experimental. Parse with
- * `SVGParser::Options::enableExperimental = true` to create an SVGSetElement.
- *
  * `<set>` is the simplest SVG animation element. It sets a target attribute to a specified
  * value when the animation is active. Unlike `<animate>`, it does not interpolate between
  * values.
@@ -82,8 +79,6 @@ public:
   static constexpr ElementType Type = ElementType::Set;
   /// XML tag name, \ref xml_set.
   static constexpr std::string_view Tag{"set"};
-  /// This is an experimental/incomplete feature.
-  static constexpr bool IsExperimental = true;
 };
 
 }  // namespace donner::svg

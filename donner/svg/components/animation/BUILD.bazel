@@ -3,9 +3,11 @@ load("//build_defs:rules.bzl", "donner_cc_library")
 donner_cc_library(
     name = "components",
     hdrs = [
+        "AnimateMotionComponent.h",
         "AnimateTransformComponent.h",
         "AnimateValueComponent.h",
         "AnimatedValuesComponent.h",
+        "AnimationInterpolation.h",
         "AnimationResourceBudget.h",
         "AnimationStateComponent.h",
         "AnimationTimingComponent.h",
@@ -22,8 +24,21 @@ donner_cc_library(
 
 donner_cc_library(
     name = "animation_system",
-    srcs = ["AnimationSystem.cc"],
-    hdrs = ["AnimationSystem.h"],
+    srcs = [
+        "AnimationBaseValue.cc",
+        "AnimationInterpolation.cc",
+        "AnimationMotion.cc",
+        "AnimationSystem.cc",
+        "AnimationTimeline.cc",
+        "AnimationValueMath.cc",
+    ],
+    hdrs = [
+        "AnimationBaseValue.h",
+        "AnimationMotion.h",
+        "AnimationSystem.h",
+        "AnimationTimeline.h",
+        "AnimationValueMath.h",
+    ],
     visibility = [
         "//donner/svg:__subpackages__",
     ],
@@ -32,8 +47,13 @@ donner_cc_library(
         "//donner/base",
         "//donner/base/parser",
         "//donner/base/xml/components",
+        "//donner/css/parser",
         "//donner/svg/components:components_core",
         "//donner/svg/components:svg_document_context",
+        "//donner/svg/components/layout:layout_system",
+        "//donner/svg/components/resources:resource_manager_context",
+        "//donner/svg/components/shape:components",
+        "//donner/svg/components/style:components",
         "//donner/svg/core",
         "//donner/svg/parser:parser_core",
     ],

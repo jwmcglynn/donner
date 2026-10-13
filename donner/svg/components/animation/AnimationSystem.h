@@ -1,6 +1,7 @@
 #pragma once
 /// @file
 
+#include <string_view>
 #include <vector>
 
 #include "donner/base/EcsRegistry.h"
@@ -22,6 +23,17 @@ namespace donner::svg::components {
  * 4. For frozen animations (fill="freeze"), persists the final value.
  * 5. For removed animations (fill="remove"), clears the override.
  */
+/// Collect attached animation declarations in document order.
+/// @param registry Document storage.
+/// @return Bounded declaration list, including one overflow entry when rejected.
+std::vector<Entity> CollectAnimationEntities(Registry& registry);
+
+/// Check that an element and its ancestors resolve to the SVG namespace.
+/// @param registry Document storage.
+/// @param entity Element to validate.
+/// @return False for foreign, unbound-prefix, or excessively deep ancestry.
+bool IsAnimationInSvgNamespace(Registry& registry, Entity entity);
+
 class AnimationSystem {
 public:
   /**
@@ -59,6 +71,16 @@ public:
    */
   bool dispatchMouseEvent(Registry& registry, Entity targetEntity, EventType type,
                           double documentTime);
+  /** Deliver a host event name to declarative timing.
+   * @param registry Document storage.
+   * @param targetEntity Target element.
+   * @param name Event name; no script is executed.
+   * @param bubbles Whether ancestors receive the event.
+   * @param documentTime Current clock time.
+   * @return Whether a runtime instance was retained.
+   */
+  bool dispatchEvent(Registry& registry, Entity targetEntity, std::string_view name, bool bubbles,
+                     double documentTime);
 };
 
 }  // namespace donner::svg::components

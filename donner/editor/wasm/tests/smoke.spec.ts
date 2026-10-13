@@ -3251,3 +3251,129 @@ test("Geode WASM presents selection path overlay pixels", async ({ page }) => {
 
   expect(fatalMessages).toEqual([]);
 });
+
+test(
+  "animation preview plays, dispatches mouse events, and returns to Edit",
+  async ({ page }, testInfo) => {
+    const fatalMessages = await openEditor(page, { postInitializationDwellMs: 0 });
+    const canvas = page.locator("canvas#canvas");
+    const box = await canvas.boundingBox();
+    if (!box) throw new Error("the editor canvas has no bounds");
+    await page.mouse.click(box.x + box.width * 0.76, box.y + 390);
+    const documentRegion = { minX: 150, minY: 150, maxX: box.width - 430, maxY: box.height * 0.58 };
+    let initial: PixelBounds | null = null;
+    let mode: PixelBounds | null = null;
+    await expect.poll(async () => {
+      const png = await canvas.screenshot({ timeout: scaledMs(5000) });
+      initial = readEditorPixelBoundsFromPng(png, "animation-mint", box, documentRegion);
+      mode = readEditorPixelBoundsFromPng(png, "selection-teal", box, {
+        minX: box.width - 410,
+        minY: 0,
+        maxX: box.width - 10,
+        maxY: 120,
+      });
+      return initial !== null && initial.maxY - initial.minY > 30 && mode !== null;
+    }, { timeout: scaledMs(12000), message: "Animation sample and Edit control are visible" }).toBe(
+      true,
+    );
+    if (!initial || !mode) throw new Error("Animation sample did not become visible");
+    const initialOrb: PixelBounds = initial;
+    const edit: PixelBounds = mode;
+    const scale = (initialOrb.maxY - initialOrb.minY + 1) / 48;
+    const originX = (initialOrb.minX + initialOrb.maxX) / 2 - 96 * scale;
+    const originY = (initialOrb.minY + initialOrb.maxY) / 2 - 175 * scale;
+    const editCenter = {
+      x: box.x + (edit.minX + edit.maxX) / 2,
+      y: box.y + (edit.minY + edit.maxY) / 2,
+    };
+    const track = {
+      x: box.x + originX + 48 * scale,
+      y: box.y + originY + 120 * scale,
+      width: 560 * scale,
+      height: 110 * scale,
+    };
+    const orb = async () => {
+      const png = await page.screenshot({ clip: track, timeout: scaledMs(5000) });
+      const result = readEditorPixelBoundsFromPng(png, "animation-mint", track, {
+        minX: 0,
+        minY: 0,
+        maxX: track.width,
+        maxY: track.height,
+      });
+      if (!result) throw new Error("the presented animation orb disappeared");
+      return result;
+    };
+    const start = await orb();
+    await page.mouse.click(editCenter.x + edit.maxX - edit.minX + 1, editCenter.y);
+    await expect.poll(async () => Math.abs((await orb()).minX - start.minX), {
+      timeout: scaledMs(10000),
+      message: "Preview moves the rendered orb",
+    }).toBeGreaterThan(8 * scale);
+
+    // Measure ordinary playback with screenshot/readback probes stopped.
+    const readCadence = () =>
+      page.evaluate(() => ({
+        time: performance.now(),
+        frames: window.__donnerMainLoopRenderedFrames ?? 0,
+        documents: window.__donnerWorkerStats?.completedResults ?? 0,
+      }));
+    const before = await readCadence();
+    await expect.poll(async () => (await readCadence()).time - before.time, {
+      timeout: scaledMs(5000),
+      intervals: [100],
+    }).toBeGreaterThanOrEqual(2000);
+    const after = await readCadence();
+    const seconds = (after.time - before.time) / 1000;
+    await testInfo.attach("animation-cadence.json", {
+      contentType: "application/json",
+      body: Buffer.from(
+        JSON.stringify({
+          seconds,
+          uiFps: (after.frames - before.frames) / seconds,
+          documentFps: (after.documents - before.documents) / seconds,
+        }),
+      ),
+    });
+    expect(after.documents - before.documents).toBeGreaterThan(10);
+
+    const pad = { x: box.x + originX + 184 * scale, y: box.y + originY + 314 * scale };
+    const padRegion = {
+      x: box.x + originX + 80 * scale,
+      y: box.y + originY + 280 * scale,
+      width: 200 * scale,
+      height: 65 * scale,
+    };
+    const padPixels = async (target: "animation-hover" | "animation-pressed") => {
+      const png = await page.screenshot({ clip: padRegion, timeout: scaledMs(5000) });
+      return readEditorPixelBoundsFromPng(png, target, padRegion, {
+        minX: 0,
+        minY: 0,
+        maxX: padRegion.width,
+        maxY: padRegion.height,
+      })?.pixels ?? 0;
+    };
+    await page.mouse.move(pad.x, pad.y);
+    await expect.poll(() => padPixels("animation-hover"), { timeout: scaledMs(5000) })
+      .toBeGreaterThan(1000);
+    await page.mouse.down();
+    await expect.poll(() => padPixels("animation-pressed"), { timeout: scaledMs(5000) })
+      .toBeGreaterThan(1000);
+    await page.mouse.up();
+    await expect.poll(() => padPixels("animation-hover"), { timeout: scaledMs(5000) })
+      .toBeGreaterThan(1000);
+    await expect.poll(async () => {
+      await page.mouse.click(box.x + originX + 456 * scale, pad.y);
+      const bounds = await orb();
+      return bounds.maxY - bounds.minY;
+    }, { timeout: scaledMs(5000), message: "Click triggers the radius pulse" }).toBeGreaterThan(
+      58 * scale,
+    );
+
+    await page.mouse.click(editCenter.x, editCenter.y);
+    await expect.poll(async () => (await orb()).minX, { timeout: scaledMs(5000) }).toBeCloseTo(
+      start.minX,
+      0,
+    );
+    expect(fatalMessages).toEqual([]);
+  },
+);

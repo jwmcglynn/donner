@@ -19,16 +19,43 @@ public:
   /// Maximum source bytes accepted for one animated path value.
   static constexpr std::size_t kMaximumPathValueBytes = 64 * 1024;
 
+  /// Maximum path parsing and arc-length work across one animation sample.
+  static constexpr std::size_t kMaximumGeometryWork = 262144;
+
+  /// Remaining path work for this frame.
+  std::size_t remainingGeometryWork() const { return kMaximumGeometryWork - geometryWork_; }
+
+  /// Charge bounded path parsing or measurement work; reject on exhaustion.
+  bool reserveGeometryWork(std::size_t work) {
+    if (work > remainingGeometryWork()) {
+      rejected_ = true;
+      return false;
+    }
+    geometryWork_ += work;
+    return true;
+  }
+
   /// Charge one animation and its source payload to the frame envelope.
   /// @param sourceBytes Source bytes retained for this animation.
   /// @return False when the animation-count or source-byte limit is exceeded.
   bool reserveAnimation(std::size_t sourceBytes) {
-    if (animations_ >= kMaximumAnimations || sourceBytes > kMaximumSourceBytes - sourceBytes_) {
+    if (animations_ >= kMaximumAnimations) {
       rejected_ = true;
       return false;
     }
     ++animations_;
-    sourceBytes_ += sourceBytes;
+    return reserveSourceBytes(sourceBytes);
+  }
+
+  /// Admit additional source bytes before copying an underlying or referenced value.
+  /// @param bytes Source bytes to retain or parse.
+  /// @return False when the aggregate source envelope is exceeded.
+  bool reserveSourceBytes(std::size_t bytes) {
+    if (bytes > kMaximumSourceBytes - sourceBytes_) {
+      rejected_ = true;
+      return false;
+    }
+    sourceBytes_ += bytes;
     return true;
   }
 
@@ -58,6 +85,7 @@ private:
   std::size_t sourceBytes_ = 0;
   std::size_t outputBytes_ = 0;
   bool rejected_ = false;
+  std::size_t geometryWork_ = 0;
 };
 
 }  // namespace donner::svg::components

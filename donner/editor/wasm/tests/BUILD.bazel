@@ -815,3 +815,68 @@ js_test(
     data = ["@aspect_rules_js//npm/private:npm_package_extract.mjs"],
     entry_point = "npm-archive-permissions.spec.mjs",
 )
+
+playwright_bin.playwright_test(
+    name = "animation_preview_browser_test",
+    size = "large",
+    args = [
+        "test",
+        "$(rootpath :smoke.spec.ts)",
+        "--config=$(rootpath :playwright.animation.bazel.config.js)",
+        "--grep=animation.preview.plays",
+    ],
+    copy_data_to_bin = False,
+    data = [
+        "basic-shapes-capture-gate.ts",
+        "browser-stall-diagnostics.mjs",
+        "browser-stall-diagnostics.ts",
+        "canvas-color-stats.ts",
+        "failure-canvas-evidence.ts",
+        "gesture-streams.ts",
+        "gpu-session-console.ts",
+        "package.json",
+        "playwright.animation.bazel.config.js",
+        "playwright.bazel.config.js",
+        "playwright.config.js",
+        "quarantine-report.mjs",
+        "remote-webserver.mjs",
+        "sample-thumbnail-settle.ts",
+        "smoke.spec.ts",
+        "surface-frame-probe.ts",
+        "surface-probe-requests.mjs",
+        ":node_modules/@playwright/test",
+        "//donner/editor/wasm:_wasm_web_package_for_serve",
+        "@playwright//:chromium",
+        "@playwright//:firefox",
+    ],
+    env = {
+        "CI": "1",
+        "DONNER_WASM_PACKAGE_DIR": "$(rootpath //donner/editor/wasm:_wasm_web_package_for_serve)",
+        "DONNER_WASM_REQUIRE_WEBGPU": "1",
+        "DONNER_WASM_TEST_SERVER": "$(rootpath :remote-webserver.mjs)",
+        # The repo-wide remote Emscripten workaround disables Node's WebAssembly
+        # runtime, but Playwright's HTTP client uses its bundled llhttp Wasm.
+        "NODE_OPTIONS": "",
+        "PLAYWRIGHT_BROWSERS_PATH": "$(rootpath @playwright//:chromium)/../",
+    },
+    # macOS-only: the selected smoke test asserts on presented WebGPU canvas
+    # pixels, and headless Chromium on Linux cannot present a WebGPU
+    # OffscreenCanvas swapchain with the SwiftShader WebGPU adapter. The GPU
+    # service finds no SharedImageBackingFactory for the swapchain allocation
+    # (usage WebgpuSwapChainTexture|DisplayRead|...), fails the first present,
+    # and destroys the device, after which every WebGPU call rejects with "A
+    # valid external Instance reference no longer exists". A browser-only
+    # probe (worker + transferred OffscreenCanvas + clear + present) fails the
+    # same way with no Donner code involved, on both Chromium 147 and 151 and
+    # with ANGLE/SwiftShader GL, Vulkan, and Graphite flag configurations, so
+    # this is an environment capability boundary, not a flag or timing gap.
+    # macOS headless Chromium presents through the real GPU and passes.
+    tags = [
+        "launches-browser",
+        "no-sandbox",
+    ],
+    target_compatible_with = [
+        "@platforms//cpu:aarch64",
+        "@platforms//os:macos",
+    ],
+)

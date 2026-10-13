@@ -6402,6 +6402,7 @@ void EditorShell::resetPreviewPointer() {
   previewPointerInput_ = {};
   previewPointerEdges_.clear();
   previewHoveredElement_.reset();
+  previewHoveredPath_.clear();
   previewPressedElement_.reset();
   previewPreviousPointerPosition_.reset();
   previewPressedDoubleClick_ = false;
@@ -6449,18 +6450,45 @@ void EditorShell::queuePreviewPointerEdge() {
   previewPointerEdges_.push_back(previewPointerInput_);
 }
 
+namespace {
+
+std::vector<svg::SVGElement> PreviewElementAncestry(std::optional<svg::SVGElement> element) {
+  std::vector<svg::SVGElement> path;
+  while (element && path.size() < 128) {
+    path.push_back(*element);
+    element = element->parentElement();
+  }
+  if (element) {
+    path.clear();
+  }
+  return path;
+}
+
+}  // namespace
+
 void EditorShell::collectPreviewHoverEvents(const std::optional<svg::SVGElement>& target,
                                             std::vector<PreviewMouseDispatch>& events) {
   if (target == previewHoveredElement_) {
     return;
   }
+  auto previous = previewHoveredPath_;
+  auto next = PreviewElementAncestry(target);
+  previewHoveredPath_ = next;
+  while (!previous.empty() && !next.empty() && previous.back() == next.back()) {
+    previous.pop_back();
+    next.pop_back();
+  }
   if (previewHoveredElement_) {
     events.push_back({svg::EventType::MouseOut, *previewHoveredElement_});
-    events.push_back({svg::EventType::MouseLeave, *previewHoveredElement_});
+  }
+  for (const auto& element : previous) {
+    events.push_back({svg::EventType::MouseLeave, element});
   }
   if (target) {
     events.push_back({svg::EventType::MouseOver, *target});
-    events.push_back({svg::EventType::MouseEnter, *target});
+  }
+  for (auto it = next.rbegin(); it != next.rend(); ++it) {
+    events.push_back({svg::EventType::MouseEnter, *it});
   }
   previewHoveredElement_ = target;
 }
@@ -6506,6 +6534,16 @@ void EditorShell::collectPreviewPointerEvents(const PreviewPointerInput& input,
   collectPreviewButtonEvents(input, target, events);
 }
 
+void EditorShell::collectPreviewCancellationEvents(std::vector<PreviewMouseDispatch>& events) {
+  if (previewPointerOverflow_) {
+    if (previewPressedElement_) {
+      events.push_back({svg::EventType::MouseUp, *previewPressedElement_});
+    }
+    previewPressedElement_.reset();
+    previewPointerOverflow_ = false;
+  }
+}
+
 void EditorShell::applyPreviewPointerInput() {
   if (!animationPreview_ || animationResetPending_ || !animationFramePresented() ||
       renderCoordinator_.asyncRenderer().isBusy()) {
@@ -6516,20 +6554,22 @@ void EditorShell::applyPreviewPointerInput() {
     return;
   }
   std::vector<PreviewMouseDispatch> events;
-  if (previewPointerOverflow_) {
-    if (previewPressedElement_) {
-      events.push_back({svg::EventType::MouseUp, *previewPressedElement_});
-    }
-    previewPressedElement_.reset();
-    previewPointerOverflow_ = false;
-  }
+  collectPreviewCancellationEvents(events);
   for (const auto& input : previewPointerEdges_) {
     collectPreviewPointerEvents(input, events);
+    if (events.size() > 256) {
+      resetPreviewPointer();
+      return;
+    }
   }
   PreviewPointerInput hoverOnly = previewPointerInput_;
   hoverOnly.pressed = hoverOnly.released = hoverOnly.doubleClick = false;
   collectPreviewPointerEvents(hoverOnly, events);
   previewPointerEdges_.clear();
+  if (events.size() > 256) {
+    resetPreviewPointer();
+    return;
+  }
   // Deliver after UI queries so the render worker sees the resulting dirty state.
   for (const auto& event : events) {
     requestRenderAtEndOfFrame_ |= app_.document().dispatchMouseEvent(event.type, event.target);

@@ -312,7 +312,10 @@ export type EditorPixelTarget =
   | "basic-blue"
   | "selection-teal"
   | "selection-handle-white"
-  | "splash-yellow";
+  | "splash-yellow"
+  | "animation-mint"
+  | "animation-hover"
+  | "animation-pressed";
 
 export function readEditorPixelBoundsFromPng(
   png: Buffer,
@@ -568,6 +571,15 @@ function matchesEditorPixelTarget(
 ): boolean {
   if (alpha < 180) {
     return false;
+  }
+  if (target === "animation-mint") {
+    return red >= 110 && red <= 122 && green >= 216 && green <= 230 && blue >= 180 && blue <= 194;
+  }
+  if (target === "animation-hover") {
+    return red >= 32 && red <= 38 && green >= 84 && green <= 90 && blue >= 70 && blue <= 76;
+  }
+  if (target === "animation-pressed") {
+    return red >= 53 && red <= 59 && green >= 116 && green <= 122 && blue >= 100 && blue <= 106;
   }
   if (target === "basic-blue") {
     return blue > 170 && blue > green + 45 && green > red + 25;

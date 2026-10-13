@@ -14,6 +14,7 @@ namespace donner::svg {
 enum class ElementType : uint8_t {
   A,                    //!< \ref xml_a
   Animate,              //!< \ref xml_animate, value animation element.
+  AnimateMotion,        //!< \ref xml_animateMotion, motion animation.
   AnimateTransform,     //!< \ref xml_animateTransform, transform animation element.
   Circle,               //!< \ref xml_circle
   ClipPath,             //!< \ref xml_clipPath
@@ -52,6 +53,7 @@ enum class ElementType : uint8_t {
   LinearGradient,       //!< \ref xml_linearGradient
   Marker,               //!< \ref xml_marker
   Mask,                 //!< \ref xml_mask
+  MPath,                //!< \ref xml_mpath, motion path reference.
   Metadata,             //!< \ref xml_metadata
   Path,                 //!< \ref xml_path
   Pattern,              //!< \ref xml_pattern
@@ -125,6 +127,9 @@ ReturnType ToConstexpr(ElementType type, FnT fn) {
     case ElementType::A: return fn(std::integral_constant<ElementType, ElementType::A>());
     case ElementType::Animate:
       return fn(std::integral_constant<ElementType, ElementType::Animate>());
+    case ElementType::AnimateMotion:
+      return fn(std::integral_constant<ElementType, ElementType::AnimateMotion>());
+    case ElementType::MPath: return fn(std::integral_constant<ElementType, ElementType::MPath>());
     case ElementType::AnimateTransform:
       return fn(std::integral_constant<ElementType, ElementType::AnimateTransform>());
     case ElementType::Circle: return fn(std::integral_constant<ElementType, ElementType::Circle>());

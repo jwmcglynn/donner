@@ -20,7 +20,8 @@ void SVGStyleElement::setType(const RcStringOrRef& type) {
 }
 
 void SVGStyleElement::setContents(std::string_view style) {
-  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess contentsAccess = handle_.writeAccess();
+  DocumentMutationBatch mutation(contentsAccess.documentState(), true);
   DocumentWriteAccess& access = mutation.access();
   auto& stylesheetComponent = handle_.get_or_emplace<components::StylesheetComponent>(access);
   if (!stylesheetComponent.isCssType()) {

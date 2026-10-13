@@ -12,18 +12,21 @@
 #include "donner/base/StringUtils.h"
 #include "donner/base/parser/NumberParser.h"
 #include "donner/base/xml/components/TreeComponent.h"
+#include "donner/base/xml/components/XMLNamespaceContext.h"
+#include "donner/svg/components/ElementTypeComponent.h"
 #include "donner/svg/components/SVGDocumentContext.h"
 #include "donner/svg/components/animation/AnimateTransformComponent.h"
 #include "donner/svg/components/animation/AnimateValueComponent.h"
 #include "donner/svg/components/animation/AnimatedValuesComponent.h"
+#include "donner/svg/components/animation/AnimationBaseValue.h"
+#include "donner/svg/components/animation/AnimationMotion.h"
 #include "donner/svg/components/animation/AnimationResourceBudget.h"
 #include "donner/svg/components/animation/AnimationStateComponent.h"
+#include "donner/svg/components/animation/AnimationTimeline.h"
 #include "donner/svg/components/animation/AnimationTimingComponent.h"
 #include "donner/svg/components/animation/SetAnimationComponent.h"
+#include "donner/svg/components/resources/ResourceManagerContext.h"
 #include "donner/svg/parser/PathParser.h"
-
-// SMIL animation system, initial subset. Deferred features (paced/spline calcMode, syncbase timing,
-// additive/accumulate, <animateMotion>/<mpath>) are intentionally absent.
 
 namespace donner::svg::components {
 
@@ -48,148 +51,16 @@ Entity resolveTargetByHrefOrParent(Registry& registry, Entity animationEntity,
   return entt::null;
 }
 
-/// Compute the simple duration from the `dur` attribute.
-/// For `<set>` without dur, returns indefinite. For `<animate>` without dur, returns 0 (inactive).
-double computeSimpleDuration(const AnimationTimingComponent& timing, bool isSetElement) {
-  if (timing.dur.has_value()) {
-    return timing.dur->seconds();
-  }
-  // Per spec: if dur is not specified, simple duration is indefinite for <set>,
-  // but for <animate> there's no animation effect without dur.
-  return isSetElement ? std::numeric_limits<double>::infinity() : 0.0;
-}
-
-/// Compute the active duration from timing attributes.
-double computeActiveDuration(const AnimationTimingComponent& timing, double simpleDuration,
-                             double beginTime) {
-  if (simpleDuration == 0.0) {
-    return 0.0;
-  }
-
-  double repeatDuration = std::numeric_limits<double>::infinity();
-  if (timing.repeatCount.has_value() && std::isfinite(simpleDuration)) {
-    repeatDuration = simpleDuration * timing.repeatCount.value();
-  }
-  if (timing.repeatDur.has_value()) {
-    repeatDuration = std::min(repeatDuration, timing.repeatDur->seconds());
-  }
-
-  if (!timing.repeatCount.has_value() && !timing.repeatDur.has_value()) {
-    repeatDuration = simpleDuration;
-  }
-
-  double activeDuration = repeatDuration;
-
-  if (timing.endOffset.has_value()) {
-    double endTime = timing.endOffset->seconds();
-    activeDuration = std::min(activeDuration, endTime - beginTime);
-  }
-
-  if (timing.min.has_value()) {
-    activeDuration = std::max(activeDuration, timing.min->seconds());
-  }
-  if (timing.max.has_value()) {
-    activeDuration = std::min(activeDuration, timing.max->seconds());
-  }
-
-  return activeDuration;
-}
-
-/// Determine the animation phase given the current document time.
-AnimationPhase computePhase(double documentTime, double beginTime, double activeDuration) {
-  if (documentTime < beginTime) {
-    return AnimationPhase::Before;
-  }
-  double elapsed = documentTime - beginTime;
-  if (std::isfinite(activeDuration) && elapsed >= activeDuration) {
-    return AnimationPhase::After;
-  }
-  return AnimationPhase::Active;
-}
-
-/// Compute timing state for an animation entity.
-void computeTimingState(AnimationStateComponent& state, const AnimationTimingComponent& timing,
-                        double documentTime, bool isSetElement) {
-  // A `begin` attribute that yielded no resolvable offset (e.g. begin="indefinite", or a list
-  // containing only unsupported syncbase/event values) means the begin time is unresolved: the
-  // animation never starts. This is distinct from an absent `begin` attribute, which defaults to
-  // an offset of 0.
-  if (timing.beginValue.has_value() && !timing.beginOffset.has_value() &&
-      !state.eventBeginTime.has_value()) {
-    state.phase = AnimationPhase::Before;
-    state.wasActive = false;
-    return;
-  }
-
-  state.beginTime = state.eventBeginTime.value_or(
-      timing.beginOffset.has_value() ? timing.beginOffset->seconds() : 0.0);
-  state.simpleDuration = computeSimpleDuration(timing, isSetElement);
-  state.activeDuration = computeActiveDuration(timing, state.simpleDuration, state.beginTime);
-  if (state.eventEndTime.has_value()) {
-    state.activeDuration =
-        std::min(state.activeDuration, std::max(0.0, *state.eventEndTime - state.beginTime));
-  }
-  AnimationPhase newPhase = computePhase(documentTime, state.beginTime, state.activeDuration);
-
-  // Enforce restart attribute.
-  // restart="never": once the animation has completed, it cannot restart.
-  if (timing.restart == AnimationRestart::Never && state.hasCompleted) {
-    // Keep the After phase; animation stays frozen or removed.
-    newPhase = AnimationPhase::After;
-  }
-  // restart="whenNotActive": can only restart when not currently active.
-  if (timing.restart == AnimationRestart::WhenNotActive && state.wasActive &&
-      newPhase == AnimationPhase::Active && state.phase == AnimationPhase::After) {
-    // Was active, ended, now a new begin wants to make it active again; suppress.
-    newPhase = AnimationPhase::After;
-  }
-
-  // Track completion for restart="never".
-  if (newPhase == AnimationPhase::After && state.phase == AnimationPhase::Active) {
-    state.hasCompleted = true;
-  }
-
-  state.wasActive = (newPhase == AnimationPhase::Active);
-  state.phase = newPhase;
-}
-
 /// Returns true if the animation value should be applied (active or frozen).
 bool shouldApplyValue(AnimationPhase phase, AnimationFill fill) {
   return phase == AnimationPhase::Active ||
          (phase == AnimationPhase::After && fill == AnimationFill::Freeze);
 }
 
-/// Try to parse an entire string as a single number, ignoring surrounding whitespace.
-/// Returns false on failure (trailing garbage or multiple numbers).
-bool tryParseDouble(std::string_view str, double& out) {
-  while (!str.empty() && (str.front() == ' ' || str.front() == '\t')) {
-    str.remove_prefix(1);
-  }
-  while (!str.empty() && (str.back() == ' ' || str.back() == '\t')) {
-    str.remove_suffix(1);
-  }
-
-  const auto maybeNumber = donner::parser::NumberParser::Parse(str);
-  if (maybeNumber.hasError() || maybeNumber.result().consumedChars != str.size()) {
-    return false;
-  }
-
-  out = maybeNumber.result().number;
-  return true;
-}
-
-/// Format a double as string, avoiding unnecessary trailing zeros.
-std::string formatDouble(double value) {
-  std::ostringstream oss;
-  oss.precision(6);
-  oss << value;
-  return oss.str();
-}
-
 /// Compute the interpolation progress [0,1] within the active interval.
 /// Handles repeat iterations and keyTimes.
 double computeProgress(double documentTime, double beginTime, double simpleDuration,
-                       double activeDuration) {
+                       double activeDuration, bool frozen) {
   double elapsed = documentTime - beginTime;
 
   // Clamp to active duration.
@@ -203,7 +74,7 @@ double computeProgress(double documentTime, double beginTime, double simpleDurat
     // Handle repeat: simpleTime = elapsed mod simpleDuration
     simpleTime = std::fmod(elapsed, simpleDuration);
     // At exact end of last iteration, use full duration.
-    if (simpleTime == 0.0 && elapsed > 0.0) {
+    if (frozen && simpleTime == 0.0 && elapsed > 0.0) {
       simpleTime = simpleDuration;
     }
   }
@@ -229,10 +100,10 @@ std::vector<double> parseNumbers(std::string_view str) {
 
     const auto maybeNumber = donner::parser::NumberParser::Parse(str);
     if (maybeNumber.hasError()) {
-      break;
+      return {};
     }
     if (result.size() >= AnimationResourceBudget::kMaximumNumbersPerValue) {
-      break;
+      return {};
     }
     result.push_back(maybeNumber.result().number);
     str.remove_prefix(maybeNumber.result().consumedChars);
@@ -333,115 +204,60 @@ std::string tryInterpolatePaths(const std::string& fromStr, const std::string& t
 
 /// Interpolate a value for `<animate>` at the given progress.
 /// Returns the interpolated value as a string, or empty if interpolation failed.
-std::string interpolateAnimateValue(double progress, const AnimateValueComponent& valueComp) {
-  // Build the effective value list.
-  std::vector<const std::string*> effectiveValues;
-
-  if (!valueComp.values.empty()) {
-    for (const auto& v : valueComp.values) {
-      effectiveValues.push_back(&v);
+std::string interpolateAnimateValue(double progress, const AnimateValueComponent& valueComp,
+                                    const std::string& underlying,
+                                    const AnimationValueContext& context) {
+  std::vector<std::string> values = valueComp.values;
+  if (values.empty()) {
+    if (valueComp.to) {
+      values = {valueComp.from.value_or(underlying), *valueComp.to};
+    } else if (valueComp.by) {
+      const auto from = valueComp.from
+                            ? valueComp.from
+                            : CombineAnimationValues(*valueComp.by, *valueComp.by, 0, 0, context);
+      if (!from) {
+        return {};
+      }
+      const auto to = CombineAnimationValues(*from, *valueComp.by, 1, 1, context);
+      if (!to) {
+        return {};
+      }
+      values = {*from, *to};
     }
-  } else if (valueComp.from.has_value() && valueComp.to.has_value()) {
-    effectiveValues.push_back(&valueComp.from.value());
-    effectiveValues.push_back(&valueComp.to.value());
-  } else if (valueComp.to.has_value()) {
-    // to-only animation: use "to" as a discrete value.
-    return valueComp.to.value();
-  } else if (valueComp.from.has_value() && valueComp.by.has_value()) {
-    // from/by: numeric addition.
-    double fromVal = 0.0;
-    double byVal = 0.0;
-    if (tryParseDouble(valueComp.from.value(), fromVal) &&
-        tryParseDouble(valueComp.by.value(), byVal)) {
-      double result = fromVal + (byVal * progress);
-      return formatDouble(result);
-    }
-    return valueComp.from.value();
-  } else {
-    return {};
   }
-
-  if (effectiveValues.size() < 2) {
-    return effectiveValues.empty() ? std::string{} : *effectiveValues[0];
-  }
-
-  // Discrete mode: jump between values.
-  if (valueComp.calcMode == CalcMode::Discrete) {
-    size_t numValues = effectiveValues.size();
-    size_t index = static_cast<size_t>(progress * static_cast<double>(numValues));
-    if (index >= numValues) {
-      index = numValues - 1;
-    }
-    return *effectiveValues[index];
-  }
-
-  size_t numValues = effectiveValues.size();
-  size_t numIntervals = numValues - 1;
-
-  // Linear mode: interpolate between adjacent values.
-  // Use keyTimes if provided, otherwise evenly space.
-  size_t interval = 0;
-  double localT = 0.0;
-
-  if (!valueComp.keyTimes.empty() && valueComp.keyTimes.size() == numValues) {
-    // Use keyTimes to determine interval.
-    for (size_t i = 0; i < numIntervals; ++i) {
-      if (progress <= valueComp.keyTimes[i + 1] || i == numIntervals - 1) {
-        interval = i;
-        double keyStart = valueComp.keyTimes[i];
-        double keyEnd = valueComp.keyTimes[i + 1];
-        double keyRange = keyEnd - keyStart;
-        localT = (keyRange > 0.0) ? (progress - keyStart) / keyRange : 0.0;
+  std::vector<double> distances;
+  AnimationInterpolation options = valueComp;
+  if (options.calcMode == CalcMode::Paced) {
+    for (std::size_t i = 1; i < values.size(); ++i) {
+      const auto distance = AnimationValueDistance(values[i - 1], values[i], context);
+      if (!distance) {
+        options.calcMode = CalcMode::Discrete;
+        options.keyTimes.clear();
         break;
       }
-    }
-  } else {
-    // Evenly spaced.
-    double scaled = progress * static_cast<double>(numIntervals);
-    interval = static_cast<size_t>(scaled);
-    if (interval >= numIntervals) {
-      interval = numIntervals - 1;
-    }
-    localT = scaled - static_cast<double>(interval);
-  }
-
-  localT = std::clamp(localT, 0.0, 1.0);
-
-  // Try numeric interpolation.
-  double fromVal = 0.0;
-  double toVal = 0.0;
-  if (tryParseDouble(*effectiveValues[interval], fromVal) &&
-      tryParseDouble(*effectiveValues[interval + 1], toVal)) {
-    double result = fromVal + (toVal - fromVal) * localT;
-    return formatDouble(result);
-  }
-
-  // Try path data interpolation (for animating the 'd' attribute).
-  auto pathResult =
-      tryInterpolatePaths(*effectiveValues[interval], *effectiveValues[interval + 1], localT);
-  if (!pathResult.empty()) {
-    return pathResult;
-  }
-
-  // Try number-list interpolation (for dasharray, points, etc.).
-  {
-    auto fromNums = parseNumbers(*effectiveValues[interval]);
-    auto toNums = parseNumbers(*effectiveValues[interval + 1]);
-    if (fromNums.size() >= 2 && fromNums.size() == toNums.size()) {
-      std::ostringstream oss;
-      oss.precision(6);
-      for (size_t i = 0; i < fromNums.size(); ++i) {
-        if (i > 0) {
-          oss << " ";
-        }
-        oss << (fromNums[i] + (toNums[i] - fromNums[i]) * localT);
-      }
-      return oss.str();
+      distances.push_back(*distance);
     }
   }
-
-  // Fall back to discrete for non-interpolable values.
-  return (localT < 0.5) ? *effectiveValues[interval] : *effectiveValues[interval + 1];
+  const auto segment = SelectAnimationSegment(progress, values.size(), options, distances);
+  if (!segment) {
+    return {};
+  }
+  if (segment->from == segment->to) {
+    return values[segment->from];
+  }
+  const auto& from = values[segment->from];
+  const auto& to = values[segment->to];
+  if (auto result =
+          CombineAnimationValues(from, to, 1 - segment->progress, segment->progress, context)) {
+    return *result;
+  }
+  const auto path = tryInterpolatePaths(from, to, segment->progress);
+  if (!path.empty()) {
+    return path;
+  }
+  options.calcMode = CalcMode::Discrete;
+  const auto discrete = SelectAnimationSegment(progress, values.size(), options);
+  return discrete ? values[discrete->from] : std::string{};
 }
 
 /// Get the expected number of values per entry for a given transform type.
@@ -505,12 +321,11 @@ std::string formatTransform(TransformAnimationType type, const std::vector<doubl
   return oss.str();
 }
 
-/// The neutral (identity) value tuple for a transform type: no translation, rotation, or skew,
-/// and unit scale.
-std::vector<double> identityTransformValues(TransformAnimationType type) {
+/// The additive zero tuple, including scale(0) for by-only scale animation.
+std::vector<double> zeroTransformValues(TransformAnimationType type) {
   switch (type) {
     case TransformAnimationType::Translate: return {0.0, 0.0};
-    case TransformAnimationType::Scale: return {1.0, 1.0};
+    case TransformAnimationType::Scale: return {0.0, 0.0};
     case TransformAnimationType::Rotate: return {0.0, 0.0, 0.0};
     case TransformAnimationType::SkewX:
     case TransformAnimationType::SkewY: return {0.0};
@@ -520,7 +335,8 @@ std::vector<double> identityTransformValues(TransformAnimationType type) {
 
 /// Interpolate transform values for <animateTransform>.
 std::string interpolateTransformValue(double progress,
-                                      const AnimateTransformComponent& transformComp) {
+                                      const AnimateTransformComponent& transformComp,
+                                      double iteration = 0) {
   const TransformAnimationType type = transformComp.type;
 
   // Build the effective keyframe list as parsed and padded number tuples. Precedence per SMIL:
@@ -529,6 +345,10 @@ std::string interpolateTransformValue(double progress,
 
   const auto parsePadded = [type](const std::string& str) {
     std::vector<double> nums = parseNumbers(str);
+    if (nums.empty() || nums.size() > static_cast<std::size_t>(expectedNumberCount(type)) ||
+        !std::all_of(nums.begin(), nums.end(), [](double value) { return std::isfinite(value); })) {
+      return std::vector<double>{};
+    }
     padToExpected(nums, type);
     return nums;
   };
@@ -542,11 +362,13 @@ std::string interpolateTransformValue(double progress,
     keyframes.push_back(parsePadded(*transformComp.from));
     keyframes.push_back(parsePadded(*transformComp.to));
   } else if (transformComp.by.has_value()) {
-    // by-animation: from -> from + by. An absent from is the neutral value for this transform
-    // type, so e.g. a by-only scale animates from scale(1) to scale(1 + by).
+    // A by-only transform uses additive zero, including scale(0).
     std::vector<double> fromNums = transformComp.from.has_value() ? parsePadded(*transformComp.from)
-                                                                  : identityTransformValues(type);
+                                                                  : zeroTransformValues(type);
     const std::vector<double> byNums = parsePadded(*transformComp.by);
+    if (fromNums.empty() || byNums.empty()) {
+      return {};
+    }
     std::vector<double> toNums = fromNums;
     for (size_t i = 0; i < toNums.size() && i < byNums.size(); ++i) {
       toNums[i] += byNums[i];
@@ -559,18 +381,36 @@ std::string interpolateTransformValue(double progress,
     return {};
   }
 
-  if (keyframes.size() == 1) {
-    return formatTransform(type, keyframes[0]);
+  if (std::any_of(keyframes.begin(), keyframes.end(),
+                  [](const auto& frame) { return frame.empty(); })) {
+    return {};
   }
-
-  // Find interval and local t (evenly spaced).
-  const size_t numIntervals = keyframes.size() - 1;
-  const double scaled = progress * static_cast<double>(numIntervals);
-  size_t interval = static_cast<size_t>(scaled);
-  if (interval >= numIntervals) {
-    interval = numIntervals - 1;
+  std::vector<double> distances;
+  if (transformComp.calcMode == CalcMode::Paced) {
+    for (std::size_t i = 1; i < keyframes.size(); ++i) {
+      double distance = 0;
+      const std::size_t count = type == TransformAnimationType::Rotate ? 1 : keyframes[i].size();
+      for (std::size_t j = 0; j < count; ++j) {
+        distance = std::hypot(distance, keyframes[i][j] - keyframes[i - 1][j]);
+      }
+      distances.push_back(distance);
+    }
   }
-  const double localT = std::clamp(scaled - static_cast<double>(interval), 0.0, 1.0);
+  const auto segment = SelectAnimationSegment(progress, keyframes.size(), transformComp, distances);
+  if (!segment) {
+    return {};
+  }
+  if (segment->from == segment->to) {
+    auto result = keyframes[segment->from];
+    if (transformComp.accumulate) {
+      for (std::size_t i = 0; i < result.size(); ++i) {
+        result[i] += iteration * keyframes.back()[i];
+      }
+    }
+    return formatTransform(type, result);
+  }
+  const std::size_t interval = segment->from;
+  const double localT = segment->progress;
 
   // Interpolate the number tuples.
   const std::vector<double>& fromNums = keyframes[interval];
@@ -580,6 +420,9 @@ std::string interpolateTransformValue(double progress,
   std::vector<double> result(count);
   for (size_t i = 0; i < count; ++i) {
     result[i] = fromNums[i] + (toNums[i] - fromNums[i]) * localT;
+    if (transformComp.accumulate) {
+      result[i] += iteration * keyframes.back()[i];
+    }
   }
 
   return formatTransform(type, result);
@@ -600,9 +443,11 @@ void AddOptionalAnimationSourceBytes(const std::optional<std::string>& value,
 
 std::size_t AnimationSourceBytes(const SetAnimationComponent* setComp,
                                  const AnimateValueComponent* valueComp,
-                                 const AnimateTransformComponent* transformComp) {
+                                 const AnimateTransformComponent* transformComp,
+                                 const AnimateMotionComponent* motionComp) {
   std::size_t sourceBytes = 0;
   const auto addValues = [&](const auto& component) {
+    sourceBytes += (component.keyTimes.size() + component.keySplines.size()) * sizeof(double);
     AddOptionalAnimationSourceBytes(component.from, sourceBytes);
     AddOptionalAnimationSourceBytes(component.to, sourceBytes);
     AddOptionalAnimationSourceBytes(component.by, sourceBytes);
@@ -621,13 +466,20 @@ std::size_t AnimationSourceBytes(const SetAnimationComponent* setComp,
     addValues(*valueComp);
   } else if (transformComp) {
     addValues(*transformComp);
+    AddAnimationSourceBytes(transformComp->attributeName, sourceBytes);
+  } else if (motionComp) {
+    addValues(*motionComp);
+    AddOptionalAnimationSourceBytes(motionComp->path, sourceBytes);
+    AddAnimationSourceBytes(motionComp->rotate, sourceBytes);
+    sourceBytes += motionComp->keyPoints.size() * sizeof(double);
   }
   return sourceBytes;
 }
 
 std::optional<std::pair<std::string_view, std::string>> SampleAnimationValue(
-    double progress, const SetAnimationComponent* setComp, const AnimateValueComponent* valueComp,
-    const AnimateTransformComponent* transformComp) {
+    double progress, double iteration, const SetAnimationComponent* setComp,
+    const AnimateValueComponent* valueComp, const AnimateTransformComponent* transformComp,
+    const std::string& underlying, const AnimationValueContext& context) {
   if (setComp) {
     if (setComp->attributeName.empty()) {
       return std::nullopt;
@@ -638,11 +490,26 @@ std::optional<std::pair<std::string_view, std::string>> SampleAnimationValue(
     if (valueComp->attributeName.empty()) {
       return std::nullopt;
     }
-    return std::pair<std::string_view, std::string>{valueComp->attributeName,
-                                                    interpolateAnimateValue(progress, *valueComp)};
+    std::string sampled = interpolateAnimateValue(progress, *valueComp, underlying, context);
+    const bool toOnly = valueComp->values.empty() && !valueComp->from && valueComp->to;
+    if (valueComp->accumulate && !toOnly && iteration > 0) {
+      const auto last = interpolateAnimateValue(1, *valueComp, underlying, context);
+      sampled = CombineAnimationValues(sampled, last, 1, iteration, context).value_or(sampled);
+    }
+    const bool byOnly =
+        valueComp->values.empty() && !valueComp->from && !valueComp->to && valueComp->by;
+    if (!sampled.empty() && !toOnly && (valueComp->additive || byOnly)) {
+      sampled = CombineAnimationValues(underlying, sampled, 1, 1, context).value_or(sampled);
+    }
+    return std::pair<std::string_view, std::string>{valueComp->attributeName, std::move(sampled)};
   }
-  return std::pair<std::string_view, std::string>{
-      "transform", interpolateTransformValue(progress, *transformComp)};
+  std::string sampled = interpolateTransformValue(progress, *transformComp, iteration);
+  const bool byOnly = transformComp->values.empty() && !transformComp->from && !transformComp->to &&
+                      transformComp->by;
+  if (!sampled.empty() && !underlying.empty() && (transformComp->additive || byOnly)) {
+    sampled = underlying + " " + sampled;
+  }
+  return std::pair<std::string_view, std::string>{transformComp->attributeName, std::move(sampled)};
 }
 
 /// The `href` of an animation element, taken from whichever animation component carries it.
@@ -653,36 +520,107 @@ const std::optional<std::string>& AnimationHref(Registry& registry, Entity entit
   if (const auto* valueComp = registry.try_get<AnimateValueComponent>(entity)) {
     return valueComp->href;
   }
+  if (const auto* motion = registry.try_get<AnimateMotionComponent>(entity)) {
+    return motion->href;
+  }
   return registry.get<AnimateTransformComponent>(entity).href;
 }
 
+bool ValidTransformAttribute(Registry& registry, Entity target, std::string_view name) {
+  const auto* type = registry.try_get<ElementTypeComponent>(target);
+  if (!type) {
+    return false;
+  }
+  if (name == "transform") {
+    return true;
+  }
+  if (name == "gradientTransform") {
+    return type->type() == ElementType::LinearGradient ||
+           type->type() == ElementType::RadialGradient;
+  }
+  return name == "patternTransform" && type->type() == ElementType::Pattern;
+}
+
 bool ProcessAnimation(Registry& registry, Entity entity, double documentTime,
-                      AnimationResourceBudget& resourceBudget) {
+                      AnimationResourceBudget& resourceBudget,
+                      std::unordered_map<Entity, std::string>& motionBases) {
   const auto& timing = registry.get<AnimationTimingComponent>(entity);
   auto& state = registry.get_or_emplace<AnimationStateComponent>(entity);
   const auto* setComp = registry.try_get<SetAnimationComponent>(entity);
   const auto* valueComp = registry.try_get<AnimateValueComponent>(entity);
   const auto* transformComp = registry.try_get<AnimateTransformComponent>(entity);
+  const auto* motionComp = registry.try_get<AnimateMotionComponent>(entity);
 
-  if (!resourceBudget.reserveAnimation(AnimationSourceBytes(setComp, valueComp, transformComp))) {
+  if (!resourceBudget.reserveAnimation(
+          AnimationSourceBytes(setComp, valueComp, transformComp, motionComp))) {
     return false;
   }
-  if (state.targetEntity == entt::null) {
-    state.targetEntity =
-        resolveTargetByHrefOrParent(registry, entity, AnimationHref(registry, entity));
-  }
-  computeTimingState(state, timing, documentTime, /*isSetElement=*/setComp != nullptr);
+  state.targetEntity =
+      resolveTargetByHrefOrParent(registry, entity, AnimationHref(registry, entity));
   if (!registry.valid(state.targetEntity) || !shouldApplyValue(state.phase, timing.fill)) {
     return true;
   }
 
+  if (transformComp &&
+      !ValidTransformAttribute(registry, state.targetEntity, transformComp->attributeName)) {
+    return true;
+  }
+
+  if (timing.fill == AnimationFill::Remove &&
+      documentTime >= state.beginTime + state.repeatDuration) {
+    return true;
+  }
   const double sampleTime =
       (state.phase == AnimationPhase::Active || !std::isfinite(state.activeDuration))
           ? documentTime
           : state.beginTime + state.activeDuration;
-  const double progress =
-      computeProgress(sampleTime, state.beginTime, state.simpleDuration, state.activeDuration);
-  auto sampled = SampleAnimationValue(progress, setComp, valueComp, transformComp);
+  const double progress = computeProgress(
+      std::min(sampleTime, state.beginTime + state.repeatDuration), state.beginTime,
+      state.simpleDuration, state.activeDuration,
+      state.phase == AnimationPhase::After || sampleTime >= state.beginTime + state.repeatDuration);
+  double iteration = 0;
+  if (std::isfinite(state.simpleDuration) && state.simpleDuration > 0) {
+    const double elapsed = std::min(sampleTime - state.beginTime, state.repeatDuration);
+    iteration = std::floor(elapsed / state.simpleDuration);
+    if (progress == 1 && iteration > 0) {
+      --iteration;
+    }
+  }
+  const std::string_view attribute =
+      setComp
+          ? setComp->attributeName
+          : (valueComp
+                 ? std::string_view(valueComp->attributeName)
+                 : (transformComp ? std::string_view(transformComp->attributeName) : "transform"));
+  const auto context = setComp ? AnimationValueContext{}
+                               : AnimationContextFor(registry, state.targetEntity, attribute);
+  const bool needsUnderlying =
+      motionComp || (valueComp && (valueComp->additive || !valueComp->from)) ||
+      (transformComp && (transformComp->additive || (!transformComp->from && transformComp->by)));
+  const std::string underlying = needsUnderlying
+                                     ? UnderlyingAnimationValue(registry, state.targetEntity,
+                                                                attribute, context, resourceBudget)
+                                     : std::string{};
+  if (resourceBudget.rejected()) {
+    return false;
+  }
+  std::optional<std::pair<std::string_view, std::string>> sampled;
+  if (motionComp) {
+    std::string motion =
+        SampleAnimationMotion(registry, entity, *motionComp, progress, iteration, resourceBudget);
+    const auto [base, inserted] = motionBases.try_emplace(state.targetEntity, underlying);
+    const std::string& prefix = motionComp->additive ? underlying : base->second;
+    if (!motion.empty() && !prefix.empty()) {
+      motion = prefix + " " + motion;
+    }
+    sampled = std::pair<std::string_view, std::string>{"transform", std::move(motion)};
+  } else {
+    sampled = SampleAnimationValue(progress, iteration, setComp, valueComp, transformComp,
+                                   underlying, context);
+  }
+  if (resourceBudget.rejected()) {
+    return false;
+  }
   if (!sampled || sampled->second.empty()) {
     return true;
   }
@@ -709,12 +647,12 @@ std::string_view MouseEventName(EventType type) {
   }
 }
 
-std::unordered_set<Entity> MouseEventPath(Registry& registry, Entity target, EventType type) {
+std::unordered_set<Entity> MouseEventPath(Registry& registry, Entity target, bool bubbles) {
   std::unordered_set<Entity> path;
   constexpr std::size_t kMaximumEventDepth = 4096;
   while (registry.valid(target) && path.size() < kMaximumEventDepth && path.insert(target).second) {
     const auto* tree = registry.try_get<donner::components::TreeComponent>(target);
-    if (!eventBubbles(type) || tree == nullptr) {
+    if (!bubbles || tree == nullptr) {
       break;
     }
     target = tree->parent();
@@ -722,55 +660,31 @@ std::unordered_set<Entity> MouseEventPath(Registry& registry, Entity target, Eve
   return path;
 }
 
-bool MouseTimingItemMatches(Registry& registry, std::string_view item, Entity defaultTarget,
-                            std::string_view eventName, const std::unordered_set<Entity>& path) {
-  const std::size_t dot = item.rfind('.');
-  if (dot == std::string_view::npos) {
-    return item == eventName && path.contains(defaultTarget);
-  }
-  if (item.substr(dot + 1) != eventName || dot == 0) {
+bool RecordMatchingEvents(Registry& registry, const std::optional<std::string>& value,
+                          Entity defaultTarget, std::string_view event,
+                          const std::unordered_set<Entity>& path, double time,
+                          std::vector<double>& instances, bool futureOnly = false) {
+  if (!value) {
     return false;
   }
-  const Entity source =
-      registry.ctx().get<SVGDocumentContext>().getEntityById(RcString(item.substr(0, dot)));
-  return path.contains(source);
-}
-
-bool MouseTimingListMatches(Registry& registry, const std::optional<std::string>& timing,
-                            Entity defaultTarget, std::string_view eventName,
-                            const std::unordered_set<Entity>& path) {
-  if (!timing.has_value()) {
+  const auto specs = ParseAnimationTimeList(*value);
+  if (!specs) {
     return false;
   }
-  std::string_view remaining(*timing);
-  while (!remaining.empty()) {
-    const std::size_t separator = remaining.find(';');
-    const std::string_view item = StringUtils::TrimWhitespace(remaining.substr(0, separator));
-    if (MouseTimingItemMatches(registry, item, defaultTarget, eventName, path)) {
-      return true;
+  bool changed = false;
+  for (const auto& spec : *specs) {
+    if (spec.kind != AnimationTimeSpecifier::Kind::Event || spec.event != event) {
+      continue;
     }
-    if (separator == std::string_view::npos) {
-      break;
+    const Entity source =
+        spec.sourceId.empty()
+            ? defaultTarget
+            : registry.ctx().get<SVGDocumentContext>().getEntityById(RcString(spec.sourceId));
+    if (path.contains(source) && (!futureOnly || spec.offset > 0)) {
+      changed |= InsertAnimationInstance(instances, time + spec.offset);
     }
-    remaining.remove_prefix(separator + 1);
   }
-  return false;
-}
-
-bool AcceptEventBegin(AnimationStateComponent& state, AnimationRestart restart, double time) {
-  if (restart == AnimationRestart::Never &&
-      (state.eventBeginTime.has_value() || state.phase != AnimationPhase::Before)) {
-    return false;
-  }
-  if (restart == AnimationRestart::WhenNotActive && state.phase == AnimationPhase::Active) {
-    return false;
-  }
-  state.eventBeginTime = time;
-  state.eventEndTime.reset();
-  state.hasCompleted = false;
-  state.wasActive = false;
-  state.phase = AnimationPhase::Before;
-  return true;
+  return changed;
 }
 
 bool DispatchAnimationMouseEvent(Registry& registry, Entity entity,
@@ -779,39 +693,91 @@ bool DispatchAnimationMouseEvent(Registry& registry, Entity entity,
   auto& state = registry.get_or_emplace<AnimationStateComponent>(entity);
   const Entity target =
       resolveTargetByHrefOrParent(registry, entity, AnimationHref(registry, entity));
-  computeTimingState(state, timing, time, registry.all_of<SetAnimationComponent>(entity));
   bool changed = false;
-  if (state.phase == AnimationPhase::Active &&
-      MouseTimingListMatches(registry, timing.endValue, target, eventName, path)) {
-    state.eventEndTime = time;
-    changed = true;
-  }
-  if (MouseTimingListMatches(registry, timing.beginValue, target, eventName, path)) {
-    changed |= AcceptEventBegin(state, timing.restart, time);
-  }
+  changed |= RecordMatchingEvents(registry, timing.endValue, target, eventName, path, time,
+                                  state.eventEndTimes, state.phase != AnimationPhase::Active);
+  changed |= RecordMatchingEvents(registry, timing.beginValue, target, eventName, path, time,
+                                  state.eventBeginTimes);
   return changed;
 }
 
-std::vector<Entity> CollectAnimationEntities(Registry& registry) {
-  std::vector<Entity> entities;
-  for (auto [entity, timing] : registry.view<AnimationTimingComponent>().each()) {
-    if (registry.any_of<SetAnimationComponent, AnimateValueComponent, AnimateTransformComponent>(
-            entity)) {
-      entities.push_back(entity);
+}  // namespace
+
+bool IsAnimationInSvgNamespace(Registry& registry, Entity entity) {
+  const auto& namespaces = registry.ctx().get<xml::components::XMLNamespaceContext>();
+  for (std::size_t depth = 0; depth < 4096; ++depth) {
+    const auto* tree = registry.try_get<donner::components::TreeComponent>(entity);
+    if (!tree) {
+      return false;
     }
+    const auto uri = namespaces.getNamespaceUri(registry, entity, tree->tagName().namespacePrefix);
+    if ((uri && *uri != "http://www.w3.org/2000/svg") ||
+        (!uri && !tree->tagName().namespacePrefix.empty())) {
+      return false;
+    }
+    if (tree->parent() == entt::null) {
+      return true;
+    }
+    entity = tree->parent();
   }
-  std::sort(entities.begin(), entities.end());
-  return entities;
+  return false;
 }
 
-}  // namespace
+std::vector<Entity> CollectAnimationEntities(Registry& registry) {
+  std::vector<Entity> result;
+  const Entity root = registry.ctx().get<SVGDocumentContext>().rootEntity;
+  Entity current = root;
+  std::size_t visited = 0;
+  std::size_t declarations = 0;
+  while (current != entt::null && ++visited <= 1024 * 1024) {
+    if (registry.any_of<SetAnimationComponent, AnimateValueComponent, AnimateTransformComponent,
+                        AnimateMotionComponent>(current)) {
+      if (++declarations > AnimationResourceBudget::kMaximumAnimations) {
+        result.resize(AnimationResourceBudget::kMaximumAnimations + 1, entt::null);
+        break;
+      }
+      if (!IsAnimationInSvgNamespace(registry, current)) {
+        registry.remove<AnimationStateComponent>(current);
+      } else {
+        result.push_back(current);
+      }
+      if (result.size() > AnimationResourceBudget::kMaximumAnimations) {
+        break;
+      }
+    }
+    const auto* tree = registry.try_get<donner::components::TreeComponent>(current);
+    if (!tree) {
+      break;
+    }
+    if (tree->firstChild() != entt::null) {
+      current = tree->firstChild();
+      continue;
+    }
+    while (tree && tree->nextSibling() == entt::null) {
+      if (current == root) {
+        return result;
+      }
+      current = tree->parent();
+      tree = registry.try_get<donner::components::TreeComponent>(current);
+    }
+    current = tree ? tree->nextSibling() : entt::null;
+  }
+  if (current != entt::null && visited > 1024 * 1024) {
+    result.resize(AnimationResourceBudget::kMaximumAnimations + 1, entt::null);
+  }
+  return result;
+}
 
 bool AnimationSystem::isAnimationTarget(Registry& registry, Entity targetEntity) const {
   if (targetEntity == entt::null) {
     return false;
   }
 
-  for (const Entity entity : CollectAnimationEntities(registry)) {
+  const auto animations = CollectAnimationEntities(registry);
+  if (animations.size() > AnimationResourceBudget::kMaximumAnimations) {
+    return false;
+  }
+  for (const Entity entity : animations) {
     const auto* state = registry.try_get<AnimationStateComponent>(entity);
     const Entity resolved =
         (state != nullptr && state->targetEntity != entt::null)
@@ -827,22 +793,33 @@ bool AnimationSystem::isAnimationTarget(Registry& registry, Entity targetEntity)
 
 bool AnimationSystem::dispatchMouseEvent(Registry& registry, Entity targetEntity, EventType type,
                                          double documentTime) {
-  const std::string_view name = MouseEventName(type);
-  if (name.empty() || !registry.valid(targetEntity) || !std::isfinite(documentTime)) {
+  return dispatchEvent(registry, targetEntity, MouseEventName(type), eventBubbles(type),
+                       documentTime);
+}
+
+bool AnimationSystem::dispatchEvent(Registry& registry, Entity targetEntity, std::string_view name,
+                                    bool bubbles, double documentTime) {
+  if (name.empty() || name.size() > 128 || !registry.valid(targetEntity) ||
+      !std::isfinite(documentTime)) {
     return false;
   }
-  const auto path = MouseEventPath(registry, targetEntity, type);
+  const auto animations = CollectAnimationEntities(registry);
+  if (!ResolveAnimationTimeline(registry, animations, documentTime)) {
+    return false;
+  }
+  const auto path = MouseEventPath(registry, targetEntity, bubbles);
   AnimationResourceBudget budget;
   bool changed = false;
-  for (auto [entity, timing] : registry.view<AnimationTimingComponent>().each()) {
+  for (Entity entity : animations) {
+    const auto& timing = registry.get<AnimationTimingComponent>(entity);
     std::size_t sourceBytes = 0;
     AddOptionalAnimationSourceBytes(timing.beginValue, sourceBytes);
     AddOptionalAnimationSourceBytes(timing.endValue, sourceBytes);
     if (!budget.reserveAnimation(sourceBytes)) {
       break;
     }
-    if (registry.any_of<SetAnimationComponent, AnimateValueComponent, AnimateTransformComponent>(
-            entity)) {
+    if (registry.any_of<SetAnimationComponent, AnimateValueComponent, AnimateTransformComponent,
+                        AnimateMotionComponent>(entity)) {
       changed |= DispatchAnimationMouseEvent(registry, entity, timing, name, path, documentTime);
     }
   }
@@ -860,8 +837,28 @@ void AnimationSystem::advance(Registry& registry, double documentTime,
     animValues.overrides.clear();
   }
 
-  for (const Entity entity : CollectAnimationEntities(registry)) {
-    if (!ProcessAnimation(registry, entity, documentTime, resourceBudget)) {
+  if (registry.ctx().get<ResourceManagerContext>().processingMode() ==
+      ProcessingMode::SecureStatic) {
+    registry.clear<AnimatedValuesComponent>();
+    return;
+  }
+  auto animations = CollectAnimationEntities(registry);
+  if (!ResolveAnimationTimeline(registry, animations, documentTime)) {
+    return;
+  }
+  std::stable_sort(animations.begin(), animations.end(), [&](Entity first, Entity second) {
+    return registry.get<AnimationStateComponent>(first).beginTime <
+           registry.get<AnimationStateComponent>(second).beginTime;
+  });
+  std::stable_partition(animations.begin(), animations.end(), [&](Entity entity) {
+    return !registry.all_of<AnimateMotionComponent>(entity);
+  });
+  std::unordered_map<Entity, std::string> motionBases;
+  for (const Entity entity : animations) {
+    if (!ProcessAnimation(registry, entity, documentTime, resourceBudget, motionBases)) {
+      for (auto [target, values] : registry.view<AnimatedValuesComponent>().each()) {
+        values.overrides.clear();
+      }
       break;
     }
   }

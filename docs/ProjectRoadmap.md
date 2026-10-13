@@ -167,6 +167,11 @@ Focus: interactive editing, conformance, parser hardening, and ecosystem integra
 
 ### SVG Animation
 
+The animation feature branch implements the declarative timeline, interpolation, motion paths and
+interactive editor Preview. Presentation coverage and qualification remain in progress; see the
+[animation design and support matrix](design_docs/animation.md) and
+[#1239](https://github.com/jwmcglynn/donner/issues/1239).
+
 - Phases 1-9: timing model, interpolation engine, sandwich composition, attribute targeting,
   `<animate>`, `<animateTransform>`, `<animateMotion>`, `<set>`, event-based timing.
 - [ ] **Lottie playback (probable)**: Play back Lottie animations (the JSON-based After
@@ -351,7 +356,7 @@ Production editor scope: a hybrid structured/freeform SVG editor workflow beyond
 - All v1.0 issues closed.
 - SVG2 conformance report published with known limitations documented.
 - Stable API surface for rendering, editing, and authoring operations.
-- >=90% code coverage across production code.
+- At least 90% code coverage across production code.
 - CSS3 gap analysis complete, all SVG2-referenced properties supported.
 - Performance and binary-size profiles documented.
 - Release documentation complete for embedders.

@@ -1,8 +1,10 @@
 #include "donner/svg/SVGDocument.h"
 
+#include <algorithm>
 #include <cmath>
 #include <limits>
 #include <memory>
+#include <sstream>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -31,8 +33,14 @@
 #include "donner/svg/components/ScopedRenderInvalidationRestore.h"
 #include "donner/svg/components/StylesheetComponent.h"
 #include "donner/svg/components/TreeMutation.h"
+#include "donner/svg/components/animation/AnimateMotionComponent.h"
+#include "donner/svg/components/animation/AnimateTransformComponent.h"
+#include "donner/svg/components/animation/AnimateValueComponent.h"
 #include "donner/svg/components/animation/AnimationStateComponent.h"
 #include "donner/svg/components/animation/AnimationSystem.h"
+#include "donner/svg/components/animation/AnimationTimeline.h"
+#include "donner/svg/components/animation/AnimationTimingComponent.h"
+#include "donner/svg/components/animation/SetAnimationComponent.h"
 #include "donner/svg/components/filter/FilterComponent.h"
 #include "donner/svg/components/filter/FilterPrimitiveComponent.h"
 #include "donner/svg/components/layout/LayoutSystem.h"
@@ -216,6 +224,21 @@ std::optional<ParseDiagnostic> ApplyNodeValueChanged(std::string_view source,
 }
 
 ElementType ElementTypeForTag(const xml::XMLQualifiedNameRef& tagName) {
+  if (tagName.name == "animate") {
+    return ElementType::Animate;
+  }
+  if (tagName.name == "animateTransform") {
+    return ElementType::AnimateTransform;
+  }
+  if (tagName.name == "animateMotion") {
+    return ElementType::AnimateMotion;
+  }
+  if (tagName.name == "set") {
+    return ElementType::Set;
+  }
+  if (tagName.name == "mpath") {
+    return ElementType::MPath;
+  }
   if (tagName.name == "a") {
     return ElementType::A;
   }
@@ -287,20 +310,81 @@ bool UsesNoTraverseChildren(ElementType type) {
   }
 }
 
+bool IsSvgProjectionContext(EntityHandle handle) {
+  for (std::size_t depth = 0; handle && depth < 4096; ++depth) {
+    const auto node = xml::XMLNode::TryCast(handle);
+    if (node && node->type() == xml::XMLNode::Type::Element &&
+        node->getNamespaceUri(node->tagName().namespacePrefix) != "http://www.w3.org/2000/svg") {
+      return false;
+    }
+    const auto* tree = handle.try_get<donner::components::TreeComponent>();
+    if (!tree || tree->parent() == entt::null) {
+      return true;
+    }
+    handle = EntityHandle(*handle.registry(), tree->parent());
+  }
+  return false;
+}
+
+bool IsNamespaceDeclaration(const xml::XMLQualifiedNameRef& name) {
+  return name.namespacePrefix == "xmlns" || name == xml::XMLQualifiedNameRef("xmlns");
+}
+
+bool IsAnimationElementType(ElementType type) {
+  return type == ElementType::Animate || type == ElementType::AnimateTransform ||
+         type == ElementType::AnimateMotion || type == ElementType::Set ||
+         type == ElementType::MPath;
+}
+
+void EnsureProjectedAnimationComponents(EntityHandle handle, ElementType type) {
+  if (type != ElementType::Animate && type != ElementType::AnimateTransform &&
+      type != ElementType::AnimateMotion && type != ElementType::Set &&
+      type != ElementType::MPath) {
+    return;
+  }
+  handle
+      .get_or_emplace<components::RenderingBehaviorComponent>(
+          components::RenderingBehavior::Nonrenderable)
+      .behavior = components::RenderingBehavior::Nonrenderable;
+  if (type == ElementType::MPath) {
+    (void)handle.get_or_emplace<components::MPathComponent>();
+    return;
+  }
+  (void)handle.get_or_emplace<components::AnimationTimingComponent>();
+  if (type == ElementType::Animate) {
+    (void)handle.get_or_emplace<components::AnimateValueComponent>();
+  }
+  if (type == ElementType::AnimateTransform) {
+    (void)handle.get_or_emplace<components::AnimateTransformComponent>();
+  }
+  if (type == ElementType::AnimateMotion) {
+    (void)handle.get_or_emplace<components::AnimateMotionComponent>();
+  }
+  if (type == ElementType::Set) {
+    (void)handle.get_or_emplace<components::SetAnimationComponent>();
+  }
+}
+
 void EnsureProjectedElementComponents(EntityHandle handle,
                                       const xml::XMLQualifiedNameRef& tagName) {
-  const ElementType projectedType = ElementTypeForTag(tagName);
+  const ElementType projectedType =
+      IsSvgProjectionContext(handle) ? ElementTypeForTag(tagName) : ElementType::Unknown;
   ElementType type = projectedType;
   if (!handle.all_of<components::ElementTypeComponent>()) {
     handle.emplace<components::ElementTypeComponent>(type);
   } else {
     type = handle.get<components::ElementTypeComponent>().type();
-    if (type == ElementType::Unknown && projectedType != ElementType::Unknown) {
+    if ((type == ElementType::Unknown && projectedType != ElementType::Unknown) ||
+        (IsAnimationElementType(type) && type != projectedType)) {
       type = projectedType;
       handle.emplace_or_replace<components::ElementTypeComponent>(type);
+      if (type == ElementType::Unknown) {
+        handle.remove<components::AnimationStateComponent>();
+      }
     }
   }
 
+  EnsureProjectedAnimationComponents(handle, type);
   [[maybe_unused]] auto& transform = handle.get_or_emplace<components::TransformComponent>();
   if (type == ElementType::Defs) {
     auto& behavior = handle.get_or_emplace<components::RenderingBehaviorComponent>(
@@ -834,6 +918,13 @@ void SVGDocument::setTime(double seconds) {
 }
 
 bool SVGDocument::dispatchMouseEvent(EventType type, const SVGElement& target) {
+  std::ostringstream name;
+  name << type;
+  return dispatchAnimationEvent(name.str(), target, eventBubbles(type));
+}
+
+bool SVGDocument::dispatchAnimationEvent(std::string_view name, const SVGElement& target,
+                                         bool bubbles) {
   DocumentMutationBatch mutation(*documentState_, true);
   Registry& registry = mutation.access().registry();
   if (target.handle_.unsafeRegistry() != &registry) {
@@ -846,14 +937,163 @@ bool SVGDocument::dispatchMouseEvent(EventType type, const SVGElement& target) {
           components::NodeLifetimeComponent::TreeState::Attached ||
       registry.ctx().get<components::ResourceManagerContext>().processingMode() !=
           ProcessingMode::DynamicInteractive ||
-      !components::AnimationSystem().dispatchMouseEvent(
-          registry, handle.entity(), type,
+      !components::AnimationSystem().dispatchEvent(
+          registry, handle.entity(), name, bubbles,
           registry.ctx().get<components::SVGDocumentContext>().documentTime)) {
     mutation.cancel();
     return false;
   }
   components::RenderingContext(registry).invalidateRenderTree();
   return true;
+}
+
+bool SVGDocument::beginAnimation(const SVGElement& animation, double offset) {
+  return scheduleAnimationBoundary(animation, offset, true);
+}
+
+bool SVGDocument::endAnimation(const SVGElement& animation, double offset) {
+  return scheduleAnimationBoundary(animation, offset, false);
+}
+
+namespace {
+
+bool IsAttachedAnimation(EntityHandle handle) {
+  return handle.valid() && handle.all_of<components::AnimationTimingComponent>() &&
+         handle.get<components::NodeLifetimeComponent>().treeState ==
+             components::NodeLifetimeComponent::TreeState::Attached;
+}
+
+bool RecordAnimationBoundary(components::AnimationStateComponent* state, bool begin, double time) {
+  return state && (begin || state->phase == components::AnimationPhase::Active) &&
+         components::InsertAnimationInstance(begin ? state->eventBeginTimes : state->eventEndTimes,
+                                             time);
+}
+
+bool ValidAnimationRepeatStep(double index, double time, double previous, std::size_t steps) {
+  return std::isfinite(index) && index < 9007199254740992.0 && time > previous && steps <= 4096;
+}
+
+class AnimationEventCollector {
+public:
+  AnimationEventCollector(double from, double to) : from_(from), to_(to) {}
+
+  bool interval(const SVGElement& animation, const components::AnimationInterval& interval,
+                double duration) {
+    return add(animation, SVGAnimationEvent::Type::Begin, interval.begin) &&
+           add(animation, SVGAnimationEvent::Type::End, interval.end) &&
+           repeats(animation, interval, duration);
+  }
+
+  SVGAnimationEventBatch finish() {
+    std::stable_sort(events_.begin(), events_.end(),
+                     [](const auto& a, const auto& b) { return a.time < b.time; });
+    return {std::move(events_), true};
+  }
+
+private:
+  bool add(const SVGElement& animation, SVGAnimationEvent::Type type, double time,
+           uint64_t repeat = 0) {
+    if (time <= from_ || time > to_ || !std::isfinite(time)) {
+      return true;
+    }
+    if (events_.size() >= 4096) {
+      return false;
+    }
+    events_.push_back({animation, type, time, repeat});
+    return true;
+  }
+
+  bool repeats(const SVGElement& animation, const components::AnimationInterval& interval,
+               double duration) {
+    if (!(duration > 0) || !std::isfinite(duration) || to_ <= interval.begin) {
+      return true;
+    }
+    const double end = std::min(interval.end, interval.begin + interval.repeatDuration);
+    if (from_ >= end) {
+      return true;
+    }
+    double index = std::max(1.0, std::floor((from_ - interval.begin) / duration) + 1);
+    if (!std::isfinite(index) || index >= 9007199254740992.0) {
+      return false;
+    }
+    double previous = from_;
+    std::size_t steps = 0;
+    for (double time = interval.begin + index * duration; time <= to_ && time < end;
+         time = interval.begin + (++index) * duration) {
+      if (!ValidAnimationRepeatStep(index, time, previous, ++steps) ||
+          !add(animation, SVGAnimationEvent::Type::Repeat, time, static_cast<uint64_t>(index))) {
+        return false;
+      }
+      previous = time;
+    }
+    return true;
+  }
+
+  double from_;
+  double to_;
+  std::vector<SVGAnimationEvent> events_;
+};
+
+}  // namespace
+
+bool SVGDocument::scheduleAnimationBoundary(const SVGElement& animation, double offset,
+                                            bool begin) {
+  DocumentMutationBatch mutation(*documentState_, true);
+  Registry& registry = mutation.access().registry();
+  if (!std::isfinite(offset) || animation.handle_.unsafeRegistry() != &registry ||
+      registry.ctx().get<components::ResourceManagerContext>().processingMode() !=
+          ProcessingMode::DynamicInteractive) {
+    mutation.cancel();
+    return false;
+  }
+  const EntityHandle handle = animation.unsafeEntityHandle();
+  if (!IsAttachedAnimation(handle)) {
+    mutation.cancel();
+    return false;
+  }
+  const double time = registry.ctx().get<components::SVGDocumentContext>().documentTime;
+  const auto animations = components::CollectAnimationEntities(registry);
+  if (std::find(animations.begin(), animations.end(), handle.entity()) == animations.end() ||
+      !components::ResolveAnimationTimeline(registry, animations, time)) {
+    mutation.cancel();
+    return false;
+  }
+  auto* state = registry.try_get<components::AnimationStateComponent>(handle.entity());
+  if (!RecordAnimationBoundary(state, begin, time + offset)) {
+    mutation.cancel();
+    return false;
+  }
+  components::RenderingContext(registry).invalidateRenderTree();
+  return true;
+}
+
+SVGAnimationEventBatch SVGDocument::animationEvents(double from, double to) {
+  if (!std::isfinite(from) || !std::isfinite(to) || from > to) {
+    return {{}, false};
+  }
+  DocumentWriteAccess access = documentState_->write();
+  Registry& registry = access.registry();
+  if (registry.ctx().get<components::ResourceManagerContext>().processingMode() ==
+      ProcessingMode::SecureStatic) {
+    return {};
+  }
+  const auto animations = components::CollectAnimationEntities(registry);
+  if (!components::ResolveAnimationTimeline(
+          registry, animations,
+          registry.ctx().get<components::SVGDocumentContext>().documentTime)) {
+    return {{}, false};
+  }
+  AnimationEventCollector collector(from, to);
+  for (Entity entity : animations) {
+    const auto& state = registry.get<components::AnimationStateComponent>(entity);
+    for (const auto& interval : state.intervals) {
+      if (!collector.interval(SVGElement::CreateFromEntityHandle(EntityHandle(registry, entity)),
+                              interval, state.simpleDuration)) {
+        return {{}, false};
+      }
+    }
+  }
+  return collector.finish();
 }
 
 void SVGDocument::restartAnimations() {
@@ -1547,6 +1787,9 @@ std::optional<ParseDiagnostic> SVGDocument::applyAttributeXMLMutation(
       diagnostic->range = MutationRange(source(), mutation);
       return diagnostic;
     }
+    if (IsNamespaceDeclaration(mutation.attributeName)) {
+      return projectXMLSubtree(mutation.node);
+    }
     return std::nullopt;
   }
 
@@ -1556,6 +1799,9 @@ std::optional<ParseDiagnostic> SVGDocument::applyAttributeXMLMutation(
     return diagnostic;
   }
   element.removeAttributeFromXMLMutation(mutation.attributeName);
+  if (IsNamespaceDeclaration(mutation.attributeName)) {
+    return projectXMLSubtree(mutation.node);
+  }
   return std::nullopt;
 }
 

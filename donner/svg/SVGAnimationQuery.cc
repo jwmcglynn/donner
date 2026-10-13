@@ -7,6 +7,7 @@
 
 #include "donner/base/xml/XMLQualifiedName.h"
 #include "donner/svg/SVGAnimateElement.h"
+#include "donner/svg/SVGAnimateMotionElement.h"
 #include "donner/svg/SVGAnimateTransformElement.h"
 #include "donner/svg/SVGElement.h"
 #include "donner/svg/SVGSetElement.h"
@@ -19,8 +20,9 @@ namespace {
 /// type is deliberate: without experimental parsing an animation element is retained as an unknown
 /// element with its tag intact, and it still animates in a renderer that supports animation.
 bool IsAnimationElementTag(const SVGElement& element) {
-  static constexpr std::array<std::string_view, 3> kAnimationTags = {
+  static constexpr std::array<std::string_view, 4> kAnimationTags = {
       SVGAnimateElement::Tag,
+      SVGAnimateMotionElement::Tag,
       SVGAnimateTransformElement::Tag,
       SVGSetElement::Tag,
   };

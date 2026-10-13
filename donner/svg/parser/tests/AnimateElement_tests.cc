@@ -1,3 +1,4 @@
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -405,7 +406,7 @@ TEST(SVGAnimateElement, RepeatCount) {
   EXPECT_NEAR(std::stod(val7.value()), 100.0, 0.01);
 }
 
-TEST(SVGAnimateElement, NoDurNoEffect) {
+TEST(SVGAnimateElement, OmittedDurationHoldsInitialValue) {
   auto document = parseSVGWithExperimental(R"(
     <svg xmlns="http://www.w3.org/2000/svg">
       <rect id="r" width="100" height="100">
@@ -414,9 +415,9 @@ TEST(SVGAnimateElement, NoDurNoEffect) {
     </svg>
   )");
 
-  // <animate> without dur has simpleDuration=0 → no effect
+  // An indefinite simple duration holds the first value.
   auto val = getAnimatedValue(document, "#r", "width", 1.0);
-  EXPECT_FALSE(val.has_value());
+  EXPECT_THAT(val, testing::Optional(testing::StrEq("100")));
 }
 
 TEST(SVGAnimateElement, KeyTimesInterpolation) {
@@ -726,12 +727,8 @@ TEST(SVGAnimateElement, MinConstraint) {
     </svg>
   )");
 
-  // At t=2s: past dur=1s but within min=3s, so still active.
-  // The simple duration is 1s, so at t=2s we're in repeat iteration 2 (progress within iteration).
-  // With no repeatCount, simple duration stays 1s but active duration is extended to 3s.
-  // fmod(2.0, 1.0) = 0 → simpleTime = 1.0 → progress = 1.0
-  auto val2 = getAnimatedValue(document, "#r", "width", 2.0);
-  ASSERT_TRUE(val2.has_value());
+  // The interval remains active, but fill=remove stops contributing after the simple duration.
+  EXPECT_THAT(getAnimatedValue(document, "#r", "width", 2.0), testing::Eq(std::nullopt));
 }
 
 TEST(SVGAnimateElement, MaxConstraint) {
@@ -943,9 +940,8 @@ TEST(SVGAnimateElement, RestartAlwaysAllowsRerunWhenTimeMovesBackward) {
   EXPECT_NEAR(std::stod(valAgain.value()), 50.0, 0.01);
 }
 
-TEST(SVGAnimateElement, RestartNeverPreventsRerunWhenTimeMovesBackward) {
-  // restart="never": once the animation has completed, sampling an earlier time must not
-  // reactivate it.
+TEST(SVGAnimateElement, RestartNeverAllowsSeekingWithinTheOriginalInterval) {
+  // Restart policy filters begin instances; seeking reconstructs the original interval.
   auto document = parseSVGWithExperimental(R"(
     <svg xmlns="http://www.w3.org/2000/svg">
       <rect id="r" width="100" height="100">
@@ -961,8 +957,9 @@ TEST(SVGAnimateElement, RestartNeverPreventsRerunWhenTimeMovesBackward) {
   // Completes; fill="remove" clears the override.
   EXPECT_FALSE(getAnimatedValue(document, "#r", "width", 2.0).has_value());
 
-  // Unlike the default restart behavior, sampling backwards stays inactive.
-  EXPECT_FALSE(getAnimatedValue(document, "#r", "width", 0.5).has_value());
+  // Seeking samples the existing interval; it does not create a new begin instance.
+  EXPECT_THAT(getAnimatedValue(document, "#r", "width", 0.5),
+              testing::Optional(testing::StrEq("50")));
 }
 
 TEST(SVGAnimateElement, PathQuadCurveCloseInterpolation) {
@@ -1003,8 +1000,8 @@ TEST(SVGAnimateElement, PathVerbMismatchFallsBackToDiscrete) {
   EXPECT_EQ(val15.value(), "M0,0 Q5,5 10,10");
 }
 
-TEST(SVGAnimateElement, NonInterpolableValuesFallBackToDiscrete) {
-  // Values that parse as neither numbers, paths, nor number lists snap at the midpoint.
+TEST(SVGAnimateElement, NamedColorsInterpolateInSrgb) {
+  // Named colors interpolate in the default sRGB color space.
   auto document = parseSVGWithExperimental(R"(
     <svg xmlns="http://www.w3.org/2000/svg">
       <rect id="r" fill="red" width="100" height="100">
@@ -1015,15 +1012,15 @@ TEST(SVGAnimateElement, NonInterpolableValuesFallBackToDiscrete) {
 
   auto val05 = getAnimatedValue(document, "#r", "fill", 0.5);
   ASSERT_TRUE(val05.has_value());
-  EXPECT_EQ(val05.value(), "red");
+  EXPECT_EQ(val05.value(), "#bf0040");
 
   auto val15 = getAnimatedValue(document, "#r", "fill", 1.5);
   ASSERT_TRUE(val15.has_value());
-  EXPECT_EQ(val15.value(), "blue");
+  EXPECT_EQ(val15.value(), "#4000bf");
 }
 
-TEST(SVGAnimateElement, HexColorValuesFallBackToDiscrete) {
-  // Hex colors fail numeric, path, and number-list interpolation, so they snap at the midpoint.
+TEST(SVGAnimateElement, HexColorsInterpolateInSrgb) {
+  // Hex colors use the same typed interpolator as named colors.
   auto document = parseSVGWithExperimental(R"(
     <svg xmlns="http://www.w3.org/2000/svg">
       <rect id="r" fill="#000000" width="100" height="100">
@@ -1034,15 +1031,15 @@ TEST(SVGAnimateElement, HexColorValuesFallBackToDiscrete) {
 
   auto val05 = getAnimatedValue(document, "#r", "fill", 0.5);
   ASSERT_TRUE(val05.has_value());
-  EXPECT_EQ(val05.value(), "#ff0000");
+  EXPECT_EQ(val05.value(), "#bf0040");
 
   auto val15 = getAnimatedValue(document, "#r", "fill", 1.5);
   ASSERT_TRUE(val15.has_value());
-  EXPECT_EQ(val15.value(), "#0000ff");
+  EXPECT_EQ(val15.value(), "#4000bf");
 }
 
-TEST(SVGAnimateElement, ToOnlyAnimationAppliesToValue) {
-  // A to-only animation applies "to" as a discrete value while active.
+TEST(SVGAnimateElement, ToOnlyAnimationInterpolatesUnderlyingValue) {
+  // A to-only animation interpolates from the underlying value.
   auto document = parseSVGWithExperimental(R"(
     <svg xmlns="http://www.w3.org/2000/svg">
       <rect id="r" width="100" height="100">
@@ -1053,14 +1050,14 @@ TEST(SVGAnimateElement, ToOnlyAnimationAppliesToValue) {
 
   auto val = getAnimatedValue(document, "#r", "width", 1.0);
   ASSERT_TRUE(val.has_value());
-  EXPECT_EQ(val.value(), "200");
+  EXPECT_EQ(val.value(), "150");
 
   // After the active interval with fill="remove": no override.
   EXPECT_FALSE(getAnimatedValue(document, "#r", "width", 3.0).has_value());
 }
 
-TEST(SVGAnimateElement, FromByNonNumericFallsBackToFromValue) {
-  // from/by requires numeric addition; non-numeric values fall back to the from value.
+TEST(SVGAnimateElement, FromByColorAddsTheColorChannels) {
+  // Color offsets add channel values before sampling.
   auto document = parseSVGWithExperimental(R"(
     <svg xmlns="http://www.w3.org/2000/svg">
       <rect id="r" fill="green" width="100" height="100">
@@ -1071,7 +1068,7 @@ TEST(SVGAnimateElement, FromByNonNumericFallsBackToFromValue) {
 
   auto val = getAnimatedValue(document, "#r", "fill", 1.0);
   ASSERT_TRUE(val.has_value());
-  EXPECT_EQ(val.value(), "red");
+  EXPECT_EQ(val.value(), "#ff0080");
 }
 
 TEST(SVGAnimateElement, SingleValuesEntryAppliesConstantValue) {
@@ -1168,6 +1165,321 @@ TEST(SVGAnimateElement, NumberListValuesInterpolation) {
   iss >> a >> b;
   EXPECT_NEAR(a, 50.0, 1.0);
   EXPECT_NEAR(b, 100.0, 1.0);
+}
+
+TEST(SVGAnimateElement, TimingListsRestartAndSeek) {
+  auto document = parseSVGWithExperimental(R"(
+    <svg xmlns='http://www.w3.org/2000/svg'><rect id="r"><animate attributeName="width" from="0" to="100"
+      begin="1s;5s" dur="2s" fill="freeze"/></rect></svg>)");
+  EXPECT_THAT(getAnimatedValue(document, "#r", "width", 5.5),
+              testing::Optional(testing::StrEq("25")));
+  EXPECT_THAT(getAnimatedValue(document, "#r", "width", 1.5),
+              testing::Optional(testing::StrEq("25")));
+  EXPECT_THAT(getAnimatedValue(document, "#r", "width", 4.0),
+              testing::Optional(testing::StrEq("100")));
+}
+
+TEST(SVGAnimateElement, EndListsChooseTheEndForEachInterval) {
+  auto document = parseSVGWithExperimental(R"(
+    <svg xmlns='http://www.w3.org/2000/svg'><rect id="r"><animate attributeName="width" from="0" to="100"
+      begin="0s;5s" end="1s;6s" dur="4s" fill="freeze"/></rect></svg>)");
+  EXPECT_THAT(getAnimatedValue(document, "#r", "width", 2.0),
+              testing::Optional(testing::StrEq("25")));
+  EXPECT_THAT(getAnimatedValue(document, "#r", "width", 5.5),
+              testing::Optional(testing::StrEq("12.5")));
+  EXPECT_THAT(getAnimatedValue(document, "#r", "width", 7.0),
+              testing::Optional(testing::StrEq("25")));
+}
+
+TEST(SVGAnimateElement, RestartPolicyAppliesToEveryInstanceTime) {
+  for (const auto& [policy, atOne, atThree] :
+       {std::tuple{"always", "25", "25"}, std::tuple{"whenNotActive", "75", "25"},
+        std::tuple{"never", "75", "100"}}) {
+    auto document = parseSVGWithExperimental(
+        std::string("<svg xmlns='http://www.w3.org/2000/svg'><rect id='r'><animate "
+                    "attributeName='width' from='0' to='100' ") +
+        "begin='0s;1s;3s' dur='2s' fill='freeze' restart='" + policy + "'/></rect></svg>");
+    SCOPED_TRACE(policy);
+    EXPECT_THAT(getAnimatedValue(document, "#r", "width", 1.5), testing::Optional(atOne));
+    EXPECT_THAT(getAnimatedValue(document, "#r", "width", 3.5), testing::Optional(atThree));
+  }
+}
+
+TEST(SVGAnimateElement, ActiveRepeatBoundaryStartsNextIteration) {
+  auto document = parseSVGWithExperimental(R"(
+    <svg xmlns='http://www.w3.org/2000/svg'><rect id="r"><animate attributeName="width" from="0" to="100"
+      dur="2s" repeatCount="2" fill="freeze"/></rect></svg>)");
+  EXPECT_THAT(getAnimatedValue(document, "#r", "width", 2.0),
+              testing::Optional(testing::StrEq("0")));
+  EXPECT_THAT(getAnimatedValue(document, "#r", "width", 4.0),
+              testing::Optional(testing::StrEq("100")));
+}
+
+TEST(SVGAnimateElement, SyncbaseResolvesForwardReferencesAndRepeatedIntervals) {
+  auto document = parseSVGWithExperimental(R"(
+    <svg xmlns='http://www.w3.org/2000/svg'><rect id="r"><animate attributeName="width" from="0" to="100"
+      begin="clock.end+0.5s" dur="2s"/></rect>
+      <rect><set id="clock" attributeName="fill" to="red" begin="0s;4s" dur="1s"/></rect>
+    </svg>)");
+  EXPECT_THAT(getAnimatedValue(document, "#r", "width", 2.0),
+              testing::Optional(testing::StrEq("25")));
+  EXPECT_THAT(getAnimatedValue(document, "#r", "width", 6.0),
+              testing::Optional(testing::StrEq("25")));
+}
+
+TEST(SVGAnimateElement, RepeatEventAndOffsetStartDependentAnimation) {
+  auto document = parseSVGWithExperimental(R"svg(
+    <svg xmlns='http://www.w3.org/2000/svg'><rect><set id="clock" attributeName="fill" to="red" dur="1s" repeatCount="4"/></rect>
+      <rect id="r"><animate attributeName="width" from="0" to="100"
+        begin="clock.repeat(2)+0.5s" dur="2s"/></rect></svg>)svg");
+  EXPECT_THAT(getAnimatedValue(document, "#r", "width", 2.0), testing::Eq(std::nullopt));
+  EXPECT_THAT(getAnimatedValue(document, "#r", "width", 3.0),
+              testing::Optional(testing::StrEq("25")));
+}
+
+TEST(SVGAnimateElement, MouseEventOffsetsRetainIntervalsForSeeking) {
+  auto document = parseSVGWithExperimental(R"(
+    <svg xmlns='http://www.w3.org/2000/svg'><rect id="r"><animate attributeName="width" from="0" to="100"
+      begin="click+0.5s" dur="2s" fill="freeze"/></rect></svg>)");
+  const auto target = document.querySelector("#r");
+  ASSERT_THAT(target, testing::Ne(std::nullopt));
+  components::AnimationSystem system;
+  EXPECT_EQ(system.dispatchMouseEvent(document.registry(), target->entityHandle().entity(),
+                                      EventType::Click, 1.0),
+            true);
+  EXPECT_THAT(getAnimatedValue(document, "#r", "width", 1.25), testing::Eq(std::nullopt));
+  EXPECT_THAT(getAnimatedValue(document, "#r", "width", 2.0),
+              testing::Optional(testing::StrEq("25")));
+  EXPECT_EQ(system.dispatchMouseEvent(document.registry(), target->entityHandle().entity(),
+                                      EventType::Click, 5.0),
+            true);
+  EXPECT_THAT(getAnimatedValue(document, "#r", "width", 6.0),
+              testing::Optional(testing::StrEq("25")));
+  EXPECT_THAT(getAnimatedValue(document, "#r", "width", 2.0),
+              testing::Optional(testing::StrEq("25")));
+}
+
+TEST(SVGAnimateElement, UnseededTimingCycleRemainsUnresolved) {
+  auto document = parseSVGWithExperimental(R"(
+    <svg xmlns="http://www.w3.org/2000/svg"><rect id="r">
+      <animate id="a" attributeName="width" from="0" to="100" begin="b.end" dur="1s"/>
+      <set id="b" attributeName="fill" to="red" begin="a.end" dur="1s"/>
+    </rect></svg>)");
+  EXPECT_THAT(getAnimatedValue(document, "#r", "width", 10.0), testing::Eq(std::nullopt));
+}
+
+TEST(SVGAnimateElement, ExpandingTimingCycleFailsClosedAtTheInstanceBudget) {
+  auto document = parseSVGWithExperimental(R"(
+    <svg xmlns="http://www.w3.org/2000/svg"><rect id="r">
+      <animate id="a" attributeName="width" from="0" to="100" begin="0s;a.end" dur="1s"/>
+    </rect></svg>)");
+  EXPECT_THAT(getAnimatedValue(document, "#r", "width", 0.5), testing::Eq(std::nullopt));
+}
+
+TEST(SVGAnimateElement, PacedValuesUseDistanceAndIgnoreKeyTimes) {
+  auto document = parseSVGWithExperimental(R"(
+    <svg xmlns="http://www.w3.org/2000/svg"><rect id="r">
+      <animate attributeName="width" values="0;10;100" keyTimes="0;0.9;1"
+        calcMode="paced" dur="2s"/>
+    </rect></svg>)");
+  EXPECT_THAT(getAnimatedValue(document, "#r", "width", 1.0),
+              testing::Optional(testing::StrEq("50")));
+}
+
+TEST(SVGAnimateElement, SplineUsesBezierTimeInversion) {
+  auto document = parseSVGWithExperimental(R"(
+    <svg xmlns="http://www.w3.org/2000/svg"><rect id="r">
+      <animate attributeName="width" values="0;100" keySplines="0.42 0 1 1"
+        calcMode="spline" dur="2s"/>
+    </rect></svg>)");
+  const auto value = getAnimatedValue(document, "#r", "width", 1.0);
+  ASSERT_THAT(value, testing::Ne(std::nullopt));
+  EXPECT_NEAR(std::stod(*value), 31.5357, 0.001);
+}
+
+TEST(SVGAnimateElement, InvalidKeyframeTimingDisablesAnimation) {
+  for (const auto* attributes :
+       {"keyTimes='0;0.8;0.5'", "keyTimes='0;1'", "calcMode='spline' keySplines='2 0 1 1;0 0 1 1'",
+        "calcMode='spline' keySplines='0 0 1 1'"}) {
+    auto document = parseSVGWithExperimental(
+        std::string("<svg xmlns='http://www.w3.org/2000/svg'><rect id='r'>") +
+        "<animate attributeName='width' values='0;10;100' dur='2s' " + attributes +
+        "/></rect></svg>");
+    SCOPED_TRACE(attributes);
+    EXPECT_THAT(getAnimatedValue(document, "#r", "width", 1.0), testing::Eq(std::nullopt));
+  }
+}
+
+TEST(SVGAnimateElement, TransformDiscreteUsesNonuniformKeyTimes) {
+  auto document = parseSVGWithExperimental(R"(
+    <svg xmlns="http://www.w3.org/2000/svg"><rect id="r">
+      <animateTransform attributeName="transform" type="translate" values="0 0;10 0;20 0" keyTimes="0;0.25;1"
+        calcMode="discrete" dur="2s"/>
+    </rect></svg>)");
+  EXPECT_THAT(getAnimatedValue(document, "#r", "transform", 0.25),
+              testing::Optional(testing::StrEq("translate(0)")));
+  EXPECT_THAT(getAnimatedValue(document, "#r", "transform", 0.5),
+              testing::Optional(testing::StrEq("translate(10)")));
+  EXPECT_THAT(getAnimatedValue(document, "#r", "transform", 1.5),
+              testing::Optional(testing::StrEq("translate(10)")));
+}
+
+TEST(SVGAnimateElement, ToAndByUseUnderlyingValue) {
+  for (const auto* attributes : {"to='200'", "by='100'"}) {
+    auto document = parseSVGWithExperimental(
+        std::string("<svg xmlns='http://www.w3.org/2000/svg'><rect id='r' width='100'>") +
+        "<animate attributeName='width' dur='2s' " + attributes + "/></rect></svg>");
+    EXPECT_THAT(getAnimatedValue(document, "#r", "width", 1.0),
+                testing::Optional(testing::StrEq("150")));
+  }
+}
+
+TEST(SVGAnimateElement, AdditiveSandwichAndRepeatAccumulation) {
+  auto document = parseSVGWithExperimental(R"(
+    <svg xmlns="http://www.w3.org/2000/svg"><rect id="r" width="100">
+      <animate attributeName="width" from="10" to="20" dur="2s"
+        additive="sum" accumulate="sum" repeatCount="3" fill="freeze"/>
+      <animate attributeName="width" from="0" to="10" dur="2s" additive="sum"/>
+    </rect></svg>)");
+  EXPECT_THAT(getAnimatedValue(document, "#r", "width", 1.0),
+              testing::Optional(testing::StrEq("120")));
+  EXPECT_THAT(getAnimatedValue(document, "#r", "width", 3.0),
+              testing::Optional(testing::StrEq("135")));
+  EXPECT_THAT(getAnimatedValue(document, "#r", "width", 6.0),
+              testing::Optional(testing::StrEq("160")));
+}
+
+TEST(SVGAnimateElement, LaterActivationOverridesLaterDocumentOrder) {
+  auto document = parseSVGWithExperimental(R"(
+    <svg xmlns="http://www.w3.org/2000/svg"><rect id="r">
+      <animate attributeName="width" from="100" to="200" begin="1s" dur="2s"/>
+      <animate attributeName="width" from="0" to="10" begin="0s" dur="4s"/>
+    </rect></svg>)");
+  EXPECT_THAT(getAnimatedValue(document, "#r", "width", 2.0),
+              testing::Optional(testing::StrEq("150")));
+}
+
+TEST(SVGAnimateElement, TypedColorAndUnitInterpolation) {
+  auto document = parseSVGWithExperimental(R"(
+    <svg xmlns="http://www.w3.org/2000/svg"><rect id="r">
+      <animate attributeName="fill" from="red" to="blue" dur="2s"/>
+      <animate attributeName="width" from="1in" to="192px" dur="2s"/>
+      <animate attributeName="height" from="10%" to="50%" dur="2s"/>
+    </rect></svg>)");
+  EXPECT_THAT(getAnimatedValue(document, "#r", "fill", 1.0),
+              testing::Optional(testing::StrEq("#800080")));
+  EXPECT_THAT(getAnimatedValue(document, "#r", "width", 1.0),
+              testing::Optional(testing::StrEq("144")));
+  EXPECT_THAT(getAnimatedValue(document, "#r", "height", 1.0),
+              testing::Optional(testing::StrEq("30%")));
+}
+
+TEST(SVGAnimateElement, AdditiveTransformPreservesUnderlyingTransform) {
+  auto document = parseSVGWithExperimental(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg"><rect id="r" transform="translate(100)">
+      <animateTransform attributeName="transform" type="translate" from="0" to="20" dur="2s" additive="sum"/>
+    </rect></svg>)svg");
+  EXPECT_THAT(getAnimatedValue(document, "#r", "transform", 1.0),
+              testing::Optional(testing::StrEq("translate(100) translate(10)")));
+}
+
+TEST(SVGAnimateElement, OneEventSchedulesDelayedBeginAndEnd) {
+  auto document = parseSVGWithExperimental(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg"><rect id="r">
+      <set attributeName="fill" to="red" begin="click+1s" end="click+2s"/>
+    </rect></svg>)svg");
+  const auto target = document.querySelector("#r");
+  ASSERT_THAT(target, testing::Ne(std::nullopt));
+  EXPECT_EQ(document.dispatchMouseEvent(EventType::Click, *target), true);
+  EXPECT_THAT(getAnimatedValue(document, "#r", "fill", 0.5), testing::Eq(std::nullopt));
+  EXPECT_THAT(getAnimatedValue(document, "#r", "fill", 1.5),
+              testing::Optional(testing::StrEq("red")));
+  EXPECT_THAT(getAnimatedValue(document, "#r", "fill", 2.5), testing::Eq(std::nullopt));
+}
+
+TEST(SVGAnimateElement, HostileTimingNameRemainsUnresolved) {
+  const std::string source =
+      "<svg xmlns='http://www.w3.org/2000/svg'><rect id='r'>"
+      "<animate attributeName='width' from='0' to='100' dur='2s' begin='" +
+      std::string(1024 * 1024, '-') + "'/></rect></svg>";
+  auto document = parseSVGWithExperimental(source);
+  EXPECT_THAT(getAnimatedValue(document, "#r", "width", 1), testing::Eq(std::nullopt));
+}
+
+TEST(SVGAnimateElement, MinimumDurationExtendsAnExplicitEnd) {
+  auto document = parseSVGWithExperimental(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg"><rect id="r">
+      <animate attributeName="width" from="0" to="100" dur="10s" end="1s" min="3s"/>
+    </rect></svg>)svg");
+  EXPECT_THAT(getAnimatedValue(document, "#r", "width", 2),
+              testing::Optional(testing::StrEq("20")));
+  EXPECT_THAT(getAnimatedValue(document, "#r", "width", 3), testing::Eq(std::nullopt));
+}
+
+TEST(SVGAnimateElement, MinimumDurationFreezeHoldsFinalValueAfterRepeats) {
+  auto document = parseSVGWithExperimental(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg"><rect id="r">
+      <animate attributeName="width" from="0" to="100" dur="1s" min="3s" fill="freeze"/>
+    </rect></svg>)svg");
+  EXPECT_THAT(getAnimatedValue(document, "#r", "width", 2),
+              testing::Optional(testing::StrEq("100")));
+}
+
+TEST(SVGAnimateElement, AuthoredAnimationEditsRefreshValuesTimingAndValidation) {
+  auto document = parseSVGWithExperimental(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg"><rect id="r">
+      <animate id="a" attributeName="width" values="0;100" dur="2s"/>
+    </rect></svg>)svg");
+  EXPECT_THAT(getAnimatedValue(document, "#r", "width", 1),
+              testing::Optional(testing::StrEq("50")));
+  auto animation = document.querySelector("#a");
+  ASSERT_THAT(animation, testing::Ne(std::nullopt));
+  animation->setAttribute("values", "0;200");
+  EXPECT_THAT(getAnimatedValue(document, "#r", "width", 1),
+              testing::Optional(testing::StrEq("100")));
+  animation->setAttribute("keyTimes", "0;0.5;1");
+  EXPECT_THAT(getAnimatedValue(document, "#r", "width", 1), testing::Eq(std::nullopt));
+  animation->removeAttribute("keyTimes");
+  animation->setAttribute("dur", "4s");
+  EXPECT_THAT(getAnimatedValue(document, "#r", "width", 1),
+              testing::Optional(testing::StrEq("50")));
+}
+
+TEST(SVGAnimateElement, SourceEditsBeforeFirstSampleAreNotLost) {
+  auto document = parseSVGWithExperimental(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg"><rect id="r">
+      <animate id="a" attributeName="width" from="0" to="10" dur="1s"/>
+    </rect></svg>)svg");
+  auto animation = document.querySelector("#a");
+  ASSERT_THAT(animation, testing::Ne(std::nullopt));
+  animation->setAttribute("to", "20");
+  EXPECT_THAT(getAnimatedValue(document, "#r", "width", 0.5),
+              testing::Optional(testing::StrEq("10")));
+}
+
+TEST(SVGAnimateElement, NamespaceChangesDisableAndRestoreAnimation) {
+  auto document = parseSVGWithExperimental(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg"><rect id="r">
+      <animate id="a" attributeName="width" from="0" to="20" dur="2s"/>
+    </rect></svg>)svg");
+  EXPECT_THAT(getAnimatedValue(document, "#r", "width", 1),
+              testing::Optional(testing::StrEq("10")));
+  auto animation = document.querySelector("#a").value();
+  animation.setAttribute("xmlns", "urn:foreign");
+  EXPECT_THAT(getAnimatedValue(document, "#r", "width", 1), testing::Eq(std::nullopt));
+  animation.removeAttribute("xmlns");
+  EXPECT_THAT(getAnimatedValue(document, "#r", "width", 1),
+              testing::Optional(testing::StrEq("10")));
+}
+
+TEST(SVGAnimateElement, MixedTextPositionUnitsUseTheirOwnViewportAxis) {
+  auto document = parseSVGWithExperimental(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="200" height="100"><text id="r">
+      <animate attributeName="dx" from="10px" to="50%" dur="2s"/>
+      <animate attributeName="dy" from="10px" to="50%" dur="2s"/>
+    </text></svg>)svg");
+  EXPECT_THAT(getAnimatedValue(document, "#r", "dx", 1), testing::Optional(testing::StrEq("55")));
+  EXPECT_THAT(getAnimatedValue(document, "#r", "dy", 1), testing::Optional(testing::StrEq("30")));
 }
 
 }  // namespace donner::svg

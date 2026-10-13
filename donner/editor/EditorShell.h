@@ -620,6 +620,7 @@ private:
   };
   void capturePreviewPointer(bool canvasHovered, bool spaceHeld, bool overScrollbar);
   void queuePreviewPointerEdge();
+  void collectPreviewCancellationEvents(std::vector<PreviewMouseDispatch>& events);
   void applyPreviewPointerInput();
   void collectPreviewPointerEvents(const PreviewPointerInput& input,
                                    std::vector<PreviewMouseDispatch>& events);
@@ -632,6 +633,7 @@ private:
   PreviewPointerInput previewPointerInput_;
   std::vector<PreviewPointerInput> previewPointerEdges_;
   std::optional<svg::SVGElement> previewHoveredElement_;
+  std::vector<svg::SVGElement> previewHoveredPath_;
   std::optional<svg::SVGElement> previewPressedElement_;
   std::optional<Vector2d> previewPreviousPointerPosition_;
   bool previewPressedDoubleClick_ = false;

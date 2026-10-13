@@ -35,6 +35,7 @@ donner_perf_sensitive_cc_library(
         "//donner/base",
         "//donner/css",
         "//donner/svg/components:components_core",
+        "//donner/svg/components/animation:components",
         "//donner/svg/components/resources:resource_manager_context",
         "//donner/svg/components/shadow:components",
     ],

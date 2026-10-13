@@ -12,6 +12,7 @@
 #include "donner/base/Transform.h"
 #include "donner/base/Vector2.h"
 #include "donner/svg/components/RenderingInstanceComponent.h"
+#include "donner/svg/renderer/AnimationPresentation.h"
 
 namespace donner::svg::components {
 

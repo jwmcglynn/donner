@@ -6,16 +6,9 @@
 #include <string>
 #include <vector>
 
-namespace donner::svg::components {
+#include "donner/svg/components/animation/AnimationInterpolation.h"
 
-/// Interpolation mode for `<animate>`.
-///
-/// The current SMIL subset supports `discrete` and `linear` only; `paced` and `spline` are
-/// deferred. The parser maps unsupported modes to `Linear`.
-enum class CalcMode : uint8_t {
-  Discrete,  ///< Jump between values at keyTime boundaries.
-  Linear,    ///< Linear interpolation (default for `<animate>`).
-};
+namespace donner::svg::components {
 
 /**
  * Component storing `<animate>`-specific value data.
@@ -23,7 +16,7 @@ enum class CalcMode : uint8_t {
  * Values can be specified via `from`/`to`/`by` pairs or a `values` list.
  * The `values` list takes precedence when present.
  */
-struct AnimateValueComponent {
+struct AnimateValueComponent : AnimationInterpolation {
   /// The `attributeName` identifying which attribute to animate.
   std::string attributeName;
 
@@ -41,12 +34,6 @@ struct AnimateValueComponent {
 
   /// The `values` list (semicolon-separated keyframes). Takes precedence over from/to/by.
   std::vector<std::string> values;
-
-  /// Interpolation mode.
-  CalcMode calcMode = CalcMode::Linear;
-
-  /// `keyTimes`: maps values to positions in [0,1]. Count must match values count.
-  std::vector<double> keyTimes;
 };
 
 }  // namespace donner::svg::components

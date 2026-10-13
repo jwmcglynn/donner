@@ -58,6 +58,7 @@ public:
     UserAgent,       ///< User agent stylesheet, lowest precedence in CSS.
     None,            ///< No special value.
     StyleAttribute,  ///< Style attribute, second highest precedence in CSS.
+    Animation,       ///< Declarative animation, below important author declarations.
     Important,       ///< `!important` declaration, highest precedence in CSS.
     Override         ///< Values set from C++ API, which overrides all other values.
   };
@@ -68,6 +69,7 @@ public:
       case SpecialType::UserAgent: return os << "UserAgent";
       case SpecialType::None: return os << "None";
       case SpecialType::StyleAttribute: return os << "StyleAttribute";
+      case SpecialType::Animation: return os << "Animation";
       case SpecialType::Important: return os << "Important";
       case SpecialType::Override: return os << "Override";
     }
@@ -159,6 +161,9 @@ public:
   /**
    * Creates a specificity for an `!important` declaration.
    */
+  /// Creates the declarative animation cascade level.
+  static constexpr Specificity Animation() { return Specificity(SpecialType::Animation); }
+
   static constexpr Specificity Important() { return Specificity(SpecialType::Important); }
 
   /**

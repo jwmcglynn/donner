@@ -16,8 +16,6 @@ namespace donner::editor {
 inline svg::parser::SVGParser::Options EditorParseOptions() {
   svg::parser::SVGParser::Options options;
   options.disableUserAttributes = false;
-  // Preview mode evaluates the SVG animation elements guarded by this parser option.
-  options.enableExperimental = true;
   return options;
 }
 

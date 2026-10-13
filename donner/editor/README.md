@@ -44,15 +44,16 @@ run against an isolated source snapshot and are applied only after revision vali
 ## Animation preview
 
 Open the **Animation** sample and choose **Preview** in the mode control above Layers. The pads
-highlight on hover, change while pressed, and pulse the moving circle when clicked. **Edit** stops
+highlight on hover, change while pressed, and pulse the moving circle when clicked. The circle uses
+spline-eased motion. **Edit** stops
 playback and resets animation state without changing SVG source or undo history.
 
 The host drives the document clock and mouse events. Declarative animation `begin` and `end`
 attributes accept mouse event names (`click`, `mouseover`, `mouseout`, `mousedown`, `mouseup`,
 `mousemove`, `mouseenter`, `mouseleave`, `dblclick`) and ID-qualified forms such as
 `begin="pulse.click"`. `mouseover`/`mouseout` and button events bubble through ancestors.
-Event offsets, syncbase timing, CSS interaction pseudo-classes, and script handlers are not part of
-this preview slice. Middle-button or Space dragging and the wheel retain viewport navigation.
+Clock lists, event offsets, syncbase references, and repeat-event timing are supported. CSS
+interaction pseudo-classes and script execution remain separate features. Middle-button or Space dragging and the wheel retain viewport navigation.
 
 Preview captures bounded hit geometry with each rendered frame so queued clicks target the
 visible shape, including when that shape is moving. These geometry snapshots add no GPU readback.

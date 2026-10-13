@@ -122,6 +122,11 @@ std::optional<ParseDiagnostic> Parse(const PropertyParseFnParams& params,
   return std::nullopt;
 }
 
+/// Parse a CSS path-data property using the renderer's string-or-none syntax.
+/// @param components Trimmed CSS component values.
+/// @return Path data, or a diagnostic for an unsupported value.
+ParseResult<RcString> ParsePathDataProperty(std::span<const css::ComponentValue> components);
+
 /**
  * If the components contain only a single ident, returns an RcString for that ident's contents.
  *
