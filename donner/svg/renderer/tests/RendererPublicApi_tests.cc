@@ -1248,6 +1248,31 @@ INSTANTIATE_TEST_SUITE_P(
                                    "fill='black'"}),
     [](const testing::TestParamInfo<DefaultConvolveDivisorCase>& info) { return info.param.name; });
 
+TEST(RendererPublicApiTest, CpuReorderedZeroSumConvolveUsesFallbackDivisor) {
+  if (!ActiveRendererSupportsFeature(RendererBackendFeature::FilterEffects)) {
+    GTEST_SKIP() << "Filter rendering disabled in " << ActiveRendererBackendName();
+  }
+  const auto makeSource = [](std::string_view divisorAttribute) {
+    return std::string(
+               "<svg xmlns='http://www.w3.org/2000/svg' width='4' height='4'>"
+               "<filter id='f' filterUnits='userSpaceOnUse' x='0' y='0' width='4' height='4' "
+               "color-interpolation-filters='sRGB'><feConvolveMatrix order='3' "
+               "kernelMatrix='0.1 0.1 0.1 0.1 0.1 0.1 0.1 0.1 -0.8' "
+               "edgeMode='duplicate' bias='0' preserveAlpha='false' ") +
+           std::string(divisorAttribute) +
+           "/></filter><rect width='4' height='4' fill='#408000' filter='url(#f)'/></svg>";
+  };
+  SVGDocument document = ParseDocument(makeSource(""));
+  SVGDocument reference = ParseDocument(makeSource("divisor='1'"));
+  RendererTinySkia actual;
+  actual.draw(document);
+  RendererTinySkia expected;
+  expected.draw(reference);
+  editor::tests::CompareBitmapToBitmap(
+      NormalizeSnapshot(actual.takeSnapshot()), NormalizeSnapshot(expected.takeSnapshot()),
+      "reordered_zero_sum_default_divisor", editor::tests::PixelmatchIdentityParams());
+}
+
 TEST(RendererPublicApiTest, RejectedFilterSuppressesItsSubtreeAndRestoresParent) {
   if (!ActiveRendererSupportsFeature(RendererBackendFeature::FilterEffects)) {
     GTEST_SKIP() << "Filter rendering disabled in this variant (" << ActiveRendererBackendName()
