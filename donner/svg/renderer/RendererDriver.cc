@@ -3930,8 +3930,11 @@ public:
     }
     child.ctx().emplace<components::ExternalUseStyleContext>(
         root, properties, fill, stroke,
-        host.ctx().get<components::SVGDocumentContext>().getSharedDocumentState(), family, bytes,
-        std::move(work));
+        SVGElement::CreateFromEntityHandle(
+            EntityHandle(host, host.ctx().get<components::SVGDocumentContext>().rootEntity))
+            .ownerDocument()
+            .handle(),
+        family, bytes, std::move(work));
     auto& occurrence = child.ctx().get<components::ExternalUseStyleContext>();
     retainPaintOwner(occurrence.fill, occurrence.resourceOwners[0]);
     retainPaintOwner(occurrence.stroke, occurrence.resourceOwners[1]);
@@ -3966,7 +3969,9 @@ private:
     if (reference && reference->reference.handle.valid()) {
       Registry& registry = *reference->reference.handle.registry();
       if (const auto* context = registry.ctx().find<components::SVGDocumentContext>()) {
-        owner = context->getSharedDocumentState();
+        owner = SVGElement::CreateFromEntityHandle(EntityHandle(registry, context->rootEntity))
+                    .ownerDocument()
+                    .handle();
       }
     }
   }

@@ -58,7 +58,9 @@ Property<T, cascade> InheritExternalProperty(const Property<T, cascade>& local,
     return local;
   }
   Property<T, cascade> result = local;
-  result.set(parent.get().value(), css::Specificity().toUserAgentSpecificity());
+  result.value = parent.get();
+  result.state = PropertyState::Set;
+  result.specificity = css::Specificity().toUserAgentSpecificity();
   return result;
 }
 
@@ -67,7 +69,8 @@ bool BlockExternalReference(Property<Reference, cascade>& property,
                             const Property<Reference, cascade>& local) {
   const bool inherits = cascade == PropertyCascade::None ? local.state == PropertyState::Inherit
                                                          : InheritsExternalPaint(local.state);
-  if (!inherits || property.get().value().href.empty()) {
+  const auto reference = property.get();
+  if (!inherits || !reference || reference->href.empty()) {
     return false;
   }
   property.set(PropertyState::ExplicitInitial, css::Specificity());
