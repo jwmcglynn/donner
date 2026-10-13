@@ -3,10 +3,12 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <span>
 #include <type_traits>
 #include <variant>
 #include <vector>
@@ -307,6 +309,27 @@ struct ConvolveMatrix {
   EdgeMode edgeMode = EdgeMode::Duplicate;  ///< Edge handling mode.
   bool preserveAlpha = false;               ///< If true, only filter RGB channels.
 };
+
+/**
+ * Sum an admitted convolution kernel with compensation for cancellation.
+ *
+ * @param kernel Coefficients admitted by the caller's order and resource checks.
+ * @return Compensated sum, or the nonfinite intermediate when accumulation overflows.
+ */
+inline double ConvolveKernelSum(std::span<const double> kernel) {
+  double sum = 0.0;
+  double correction = 0.0;
+  for (const double coefficient : kernel) {
+    const double updated = sum + coefficient;
+    if (!std::isfinite(updated)) {
+      return updated;
+    }
+    correction += std::abs(sum) >= std::abs(coefficient) ? (sum - updated) + coefficient
+                                                         : (coefficient - updated) + sum;
+    sum = updated;
+  }
+  return sum + correction;
+}
 
 /// Parameters for \c feMorphology.
 struct Morphology {

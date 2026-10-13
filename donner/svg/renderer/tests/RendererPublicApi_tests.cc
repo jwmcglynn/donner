@@ -18,6 +18,7 @@
 #include "donner/svg/SVGRectElement.h"
 #include "donner/svg/SVGTextElement.h"
 #include "donner/svg/SVGUseElement.h"
+#include "donner/svg/components/filter/FilterGraph.h"
 #include "donner/svg/renderer/Renderer.h"
 #include "donner/svg/renderer/RendererDriver.h"
 #include "donner/svg/renderer/RendererTinySkia.h"
@@ -1213,6 +1214,127 @@ TEST(RendererPublicApiTest, FacadeForwardsFrameStateAndPrimitiveCalls) {
 
   EXPECT_GE(renderer.width(), 0);
   EXPECT_GE(renderer.height(), 0);
+}
+
+struct DefaultConvolveDivisorCase {
+  const char* name;
+  const char* kernel;
+  const char* divisorAttribute;
+  const char* preserveAlpha;
+  const char* referencePaint;
+};
+
+void PrintTo(const DefaultConvolveDivisorCase& value, std::ostream* output) {
+  *output << value.name << ": kernel=" << value.kernel << ", divisor=" << value.divisorAttribute
+          << ", preserveAlpha=" << value.preserveAlpha;
+}
+
+class DefaultConvolveDivisorTest : public testing::TestWithParam<DefaultConvolveDivisorCase> {};
+
+template <typename RendererT>
+void ExpectSpecifiedConvolveNormalization(const DefaultConvolveDivisorCase& params,
+                                          std::string_view sourceFill = "red") {
+  const std::string source =
+      std::string(
+          "<svg xmlns='http://www.w3.org/2000/svg' width='4' height='4'>"
+          "<filter id='f' filterUnits='userSpaceOnUse' x='0' y='0' width='4' height='4' "
+          "color-interpolation-filters='sRGB'><feConvolveMatrix order='1' kernelMatrix='") +
+      params.kernel + "' " + params.divisorAttribute + " preserveAlpha='" + params.preserveAlpha +
+      "'/></filter><rect width='4' height='4' fill='" + std::string(sourceFill) +
+      "' filter='url(#f)'/></svg>";
+  SVGDocument document = ParseDocument(source);
+  SVGDocument reference =
+      ParseDocument(std::string("<svg xmlns='http://www.w3.org/2000/svg' width='4' height='4'>"
+                                "<rect width='4' height='4' ") +
+                    params.referencePaint + "/></svg>");
+  RendererT actual;
+  actual.draw(document);
+  RendererT expected;
+  expected.draw(reference);
+  editor::tests::CompareBitmapToBitmap(NormalizeSnapshot(actual.takeSnapshot()),
+                                       NormalizeSnapshot(expected.takeSnapshot()), params.name,
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+TEST_P(DefaultConvolveDivisorTest, MatchesSpecifiedNormalization) {
+  if (!ActiveRendererSupportsFeature(RendererBackendFeature::FilterEffects)) {
+    GTEST_SKIP() << "Filter rendering disabled in " << ActiveRendererBackendName();
+  }
+  ExpectSpecifiedConvolveNormalization<Renderer>(GetParam());
+}
+
+class CpuSubnormalConvolveDivisorTest : public testing::TestWithParam<DefaultConvolveDivisorCase> {
+};
+
+TEST_P(CpuSubnormalConvolveDivisorTest, MatchesSpecifiedNormalization) {
+  if (!ActiveRendererSupportsFeature(RendererBackendFeature::FilterEffects)) {
+    GTEST_SKIP() << "Filter rendering disabled in " << ActiveRendererBackendName();
+  }
+  ExpectSpecifiedConvolveNormalization<RendererTinySkia>(GetParam(), "#408000");
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    FilterCpuSubnormalDivisor, CpuSubnormalConvolveDivisorTest,
+    testing::Values(
+        DefaultConvolveDivisorCase{"PositiveOmitted", "1e-310", "", "false", "fill='#408000'"},
+        DefaultConvolveDivisorCase{"NegativeOmitted", "-1e-310", "", "false", "fill='#408000'"},
+        DefaultConvolveDivisorCase{"PositiveExplicit", "1e-310", "divisor='1e-310'", "false",
+                                   "fill='#408000'"},
+        DefaultConvolveDivisorCase{"NegativeExplicit", "-1e-310", "divisor='-1e-310'", "false",
+                                   "fill='#408000'"}),
+    [](const testing::TestParamInfo<DefaultConvolveDivisorCase>& info) { return info.param.name; });
+
+INSTANTIATE_TEST_SUITE_P(
+    FilterDefaultDivisor, DefaultConvolveDivisorTest,
+    testing::Values(
+        DefaultConvolveDivisorCase{"SmallPositiveOmitted", "5e-11", "", "false", "fill='red'"},
+        DefaultConvolveDivisorCase{"SmallNegativeOmitted", "-5e-11", "", "false", "fill='red'"},
+        DefaultConvolveDivisorCase{"SmallPositiveExplicit", "5e-11", "divisor='5e-11'", "false",
+                                   "fill='red'"},
+        DefaultConvolveDivisorCase{"SmallNegativeExplicit", "-5e-11", "divisor='-5e-11'", "false",
+                                   "fill='red'"},
+        DefaultConvolveDivisorCase{"ZeroSumOmitted", "0", "", "true", "fill='black'"},
+        DefaultConvolveDivisorCase{"ZeroSumExplicitOne", "0", "divisor='1'", "true",
+                                   "fill='black'"}),
+    [](const testing::TestParamInfo<DefaultConvolveDivisorCase>& info) { return info.param.name; });
+
+TEST(ConvolveKernelSumTest, PreservesRealResidualsAfterLargeCancellation) {
+  using components::filter_primitive::ConvolveKernelSum;
+  const std::array positive = {1e16, 5e-11, -1e16};
+  const std::array negative = {-1e16, -5e-11, 1e16};
+  const std::array subnormalPositive = {1e16, 1e-310, -1e16};
+  const std::array subnormalNegative = {-1e16, -1e-310, 1e16};
+  const std::array exactZero = {0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, -0.8};
+  EXPECT_THAT(ConvolveKernelSum(positive), testing::Eq(5e-11));
+  EXPECT_THAT(ConvolveKernelSum(negative), testing::Eq(-5e-11));
+  EXPECT_THAT(ConvolveKernelSum(subnormalPositive), testing::Eq(1e-310));
+  EXPECT_THAT(ConvolveKernelSum(subnormalNegative), testing::Eq(-1e-310));
+  EXPECT_THAT(ConvolveKernelSum(exactZero), testing::Eq(0.0));
+}
+
+TEST(RendererPublicApiTest, ReorderedZeroSumConvolveUsesFallbackDivisor) {
+  if (!ActiveRendererSupportsFeature(RendererBackendFeature::FilterEffects)) {
+    GTEST_SKIP() << "Filter rendering disabled in " << ActiveRendererBackendName();
+  }
+  const auto makeSource = [](std::string_view divisorAttribute) {
+    return std::string(
+               "<svg xmlns='http://www.w3.org/2000/svg' width='4' height='4'>"
+               "<filter id='f' filterUnits='userSpaceOnUse' x='0' y='0' width='4' height='4' "
+               "color-interpolation-filters='sRGB'><feConvolveMatrix order='3' "
+               "kernelMatrix='0.1 0.1 0.1 0.1 0.1 0.1 0.1 0.1 -0.8' "
+               "edgeMode='duplicate' bias='0' preserveAlpha='false' ") +
+           std::string(divisorAttribute) +
+           "/></filter><rect width='4' height='4' fill='#408000' filter='url(#f)'/></svg>";
+  };
+  SVGDocument document = ParseDocument(makeSource(""));
+  SVGDocument reference = ParseDocument(makeSource("divisor='1'"));
+  Renderer actual;
+  actual.draw(document);
+  Renderer expected;
+  expected.draw(reference);
+  editor::tests::CompareBitmapToBitmap(
+      NormalizeSnapshot(actual.takeSnapshot()), NormalizeSnapshot(expected.takeSnapshot()),
+      "reordered_zero_sum_default_divisor", editor::tests::PixelmatchIdentityParams());
 }
 
 TEST(RendererPublicApiTest, RejectedFilterSuppressesItsSubtreeAndRestoresParent) {
