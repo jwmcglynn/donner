@@ -41,9 +41,7 @@ void fetchPixel(const std::span<const std::uint8_t>& srcData, int w, int h, int 
         x = ((x % w) + w) % w;
         y = ((y % h) + h) % h;
         break;
-      case ConvolveEdgeMode::None:
-        r = g = b = a = 0.0;
-        return;
+      case ConvolveEdgeMode::None: r = g = b = a = 0.0; return;
     }
   }
 
@@ -155,9 +153,7 @@ void fetchPixelFloat(const std::span<const float>& srcData, int w, int h, int x,
         x = ((x % w) + w) % w;
         y = ((y % h) + h) % h;
         break;
-      case ConvolveEdgeMode::None:
-        r = g = b = a = 0.0;
-        return;
+      case ConvolveEdgeMode::None: r = g = b = a = 0.0; return;
     }
   }
 

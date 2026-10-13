@@ -57,8 +57,14 @@ inline constexpr std::array<BiasCase, 8> kBiasCases{{
 enum class ArrayIndexMode { Authored, High, Low };
 
 /// Varied premultiplied source whose position, channels, and fractional alpha are independent.
-inline std::array<float, kWidth * kHeight * 4> InputTexels() {
+inline std::array<float, kWidth * kHeight * 4> InputTexels(const BiasCase* biasCase = nullptr) {
   std::array<float, kWidth * kHeight * 4> result{};
+  if (biasCase != nullptr) {
+    for (size_t offset = 0; offset < result.size(); offset += 4) {
+      std::copy(biasCase->input.begin(), biasCase->input.end(), result.begin() + offset);
+    }
+    return result;
+  }
   for (uint32_t y = 0; y < kHeight; ++y) {
     for (uint32_t x = 0; x < kWidth; ++x) {
       const size_t offset = size_t{y * kWidth + x} * 4;
@@ -73,7 +79,11 @@ inline std::array<float, kWidth * kHeight * 4> InputTexels() {
 }
 
 /// Asymmetric kernel and off-center target expose transposition, reversal, and offset errors.
-inline Params Parameters(uint32_t edgeMode, bool preserveAlpha, ArrayIndexMode indexMode) {
+inline Params Parameters(uint32_t edgeMode, bool preserveAlpha, ArrayIndexMode indexMode,
+                         const BiasCase* biasCase = nullptr) {
+  if (biasCase != nullptr) {
+    return Params{1, 1, 0, 0, 1.0f, biasCase->bias, 0u, biasCase->preserveAlpha ? 1u : 0u, {1.0f}};
+  }
   Params result{2, 3, 0, 1, 2.0f, 0.04f, edgeMode, preserveAlpha ? 1u : 0u, {}};
   if (indexMode != ArrayIndexMode::Authored) {
     std::fill(result.kernel, result.kernel + shader::programs::kConvolveMatrixKernelCapacity,
@@ -218,12 +228,7 @@ void CheckConvolveMatrixStorage(DeviceType& device, const ShaderModuleDescriptor
   ASSERT_THAT(inputView, HasResult());
   ASSERT_THAT(outputView, HasResult());
 
-  std::array<float, kWidth * kHeight * 4> inputTexels = InputTexels();
-  if (biasCase != nullptr) {
-    for (size_t offset = 0; offset < inputTexels.size(); offset += 4) {
-      std::copy(biasCase->input.begin(), biasCase->input.end(), inputTexels.begin() + offset);
-    }
-  }
+  const auto inputTexels = InputTexels(biasCase);
   std::array<uint8_t, kBytesPerRow * kHeight> upload{};
   for (uint32_t y = 0; y < kHeight; ++y) {
     std::memcpy(upload.data() + size_t{y} * kBytesPerRow,
@@ -233,11 +238,7 @@ void CheckConvolveMatrixStorage(DeviceType& device, const ShaderModuleDescriptor
       device.writeTexture(input.result(), upload, {0, kBytesPerRow, kHeight}, {kWidth, kHeight}),
       IsOk());
 
-  Params params = Parameters(edgeMode, preserveAlpha, indexMode);
-  if (biasCase != nullptr) {
-    params =
-        Params{1, 1, 0, 0, 1.0f, biasCase->bias, 0u, biasCase->preserveAlpha ? 1u : 0u, {1.0f}};
-  }
+  const Params params = Parameters(edgeMode, preserveAlpha, indexMode, biasCase);
   Params expectedParams = params;
   if (indexMode != ArrayIndexMode::Authored) {
     const float endpoint = indexMode == ArrayIndexMode::High ? params.kernel[24] : params.kernel[0];

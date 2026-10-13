@@ -168,6 +168,14 @@ Shorthand functions map to equivalent filter graph nodes internally.
 - **Numeric overflow:** Intermediate pixel values are clamped to [0, 1] at each pipeline stage.
 - **Parsing:** Filter attribute parsers are fuzz-tested through the SVG parser fuzzing harness.
 
+## Convolution Bias
+
+For `feConvolveMatrix` with `preserveAlpha="false"`, alpha is the divided convolution sum plus
+unscaled `bias`, clamped to [0, 1]. RGB receives `bias` multiplied by that resulting alpha, then
+is clamped to [0, alpha]. With `preserveAlpha="true"`, the filter convolves straight RGB,
+adds unscaled bias, and premultiplies by the unchanged source alpha.
+See [Filter Effects 1, section 9.9](https://www.w3.org/TR/filter-effects-1/#feConvolveMatrixElement).
+
 ## Performance Notes
 
 - **Blur:** Uses 3-pass box blur approximation for sigma >= 2.0 (O(w*h) per pass, using a running sum).
@@ -187,6 +195,7 @@ Shorthand functions map to equivalent filter graph nodes internally.
 | `//donner/svg/renderer/tests:resvg_test_suite_default_text` | TinySkia | Full resvg golden image suite |
 | `//donner/svg/renderer/tests:renderer_tests` | TinySkia | Deterministic golden tests |
 | `//donner/svg/renderer/tests:filter_graph_executor_tests` | TinySkia | Unit tests for executor |
+| `//donner/svg/renderer/tests:convolve_matrix_bias_tests` | TinySkia | Literal byte/float convolution bias expectations |
 | `third_party/tiny-skia-cpp/...` | N/A | Per-primitive pixel math unit tests |
 
 ### Adding Filter Tests
