@@ -973,6 +973,113 @@ TEST(RendererPublicApiTest, ExternalUseInheritedMarkersFailClosedWithoutChildLoo
 }
 
 #ifdef DONNER_TEXT_ENABLED
+TEST(RendererPublicApiTest, ExternalUseTextSpanInheritsHostGradientWithoutChildId) {
+  const auto actual = RenderExternalUse(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="64" height="40">
+        <defs><linearGradient id="paint" gradientUnits="userSpaceOnUse" x1="0" x2="64">
+          <stop stop-color="red"/><stop offset="1" stop-color="blue"/>
+        </linearGradient></defs>
+        <use href="external.svg#label" fill="url(#paint)"/>
+      </svg>)svg",
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="64" height="40">
+        <text id="label" x="4" y="28" font-size="24"><tspan>M</tspan></text>
+      </svg>)svg");
+  SVGDocument inlineDocument = ParseDocument(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="64" height="40">
+        <defs><linearGradient id="paint" gradientUnits="userSpaceOnUse" x1="0" x2="64">
+          <stop stop-color="red"/><stop offset="1" stop-color="blue"/>
+        </linearGradient></defs>
+        <text x="4" y="28" font-size="24" fill="url(#paint)"><tspan>M</tspan></text>
+      </svg>)svg");
+  const auto expected = RenderPublicDocument(inlineDocument);
+  ASSERT_FALSE(expected.empty());
+  EXPECT_THAT(expected.pixels, testing::Contains(Gt(0)));
+  EXPECT_THAT(actual.requests, ElementsAre("external.svg"));
+  editor::tests::CompareBitmapToBitmap(actual.bitmap, expected, "external-span-host-gradient-no-id",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(RendererPublicApiTest, ExternalUseTextSpanHostGradientIgnoresCollidingChildId) {
+  const auto actual = RenderExternalUse(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="64" height="40">
+        <defs><linearGradient id="paint" gradientUnits="userSpaceOnUse" x1="0" x2="64">
+          <stop stop-color="red"/><stop offset="1" stop-color="blue"/>
+        </linearGradient></defs>
+        <use href="external.svg#label" fill="url(#paint)"/>
+      </svg>)svg",
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="64" height="40">
+        <defs><linearGradient id="paint"><stop stop-color="lime"/></linearGradient></defs>
+        <text id="label" x="4" y="28" font-size="24"><tspan>M</tspan></text>
+      </svg>)svg");
+  SVGDocument inlineDocument = ParseDocument(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="64" height="40">
+        <defs><linearGradient id="paint" gradientUnits="userSpaceOnUse" x1="0" x2="64">
+          <stop stop-color="red"/><stop offset="1" stop-color="blue"/>
+        </linearGradient></defs>
+        <text x="4" y="28" font-size="24" fill="url(#paint)"><tspan>M</tspan></text>
+      </svg>)svg");
+  const auto expected = RenderPublicDocument(inlineDocument);
+  ASSERT_FALSE(expected.empty());
+  EXPECT_THAT(expected.pixels, testing::Contains(Gt(0)));
+  EXPECT_THAT(actual.requests, ElementsAre("external.svg"));
+  editor::tests::CompareBitmapToBitmap(actual.bitmap, expected,
+                                       "external-span-host-gradient-collision",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(RendererPublicApiTest, ExternalUseTextSpanExplicitChildGradientWins) {
+  const auto actual = RenderExternalUse(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="64" height="40">
+        <defs><linearGradient id="paint"><stop stop-color="red"/></linearGradient></defs>
+        <use href="external.svg#label" fill="url(#paint)"/>
+      </svg>)svg",
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="64" height="40">
+        <defs><linearGradient id="paint"><stop stop-color="lime"/></linearGradient></defs>
+        <text id="label" x="4" y="28" font-size="24"><tspan fill="url(#paint)">M</tspan></text>
+      </svg>)svg");
+  SVGDocument inlineDocument = ParseDocument(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="64" height="40">
+        <defs><linearGradient id="child-paint"><stop stop-color="lime"/></linearGradient></defs>
+        <text x="4" y="28" font-size="24" fill="red"><tspan fill="url(#child-paint)">M</tspan></text>
+      </svg>)svg");
+  const auto expected = RenderPublicDocument(inlineDocument);
+  ASSERT_FALSE(expected.empty());
+  EXPECT_THAT(expected.pixels, testing::Contains(Gt(0)));
+  EXPECT_THAT(actual.requests, ElementsAre("external.svg"));
+  editor::tests::CompareBitmapToBitmap(actual.bitmap, expected,
+                                       "external-span-explicit-child-gradient",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(RendererPublicApiTest, ExternalUseTextSpanInheritsHostStrokeAndDecorationGradient) {
+  const auto actual = RenderExternalUse(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="64" height="40">
+        <defs><linearGradient id="paint" gradientUnits="userSpaceOnUse" x1="0" x2="64">
+          <stop stop-color="red"/><stop offset="1" stop-color="blue"/>
+        </linearGradient></defs>
+        <use href="external.svg#label" fill="none" stroke="url(#paint)" stroke-width="1.5"/>
+      </svg>)svg",
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="64" height="40">
+        <defs><linearGradient id="paint"><stop stop-color="lime"/></linearGradient></defs>
+        <text id="label" x="4" y="28" font-size="24" text-decoration="underline"><tspan>M</tspan></text>
+      </svg>)svg");
+  SVGDocument inlineDocument = ParseDocument(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="64" height="40">
+        <defs><linearGradient id="paint" gradientUnits="userSpaceOnUse" x1="0" x2="64">
+          <stop stop-color="red"/><stop offset="1" stop-color="blue"/>
+        </linearGradient></defs>
+        <text x="4" y="28" font-size="24" text-decoration="underline" fill="none"
+          stroke="url(#paint)" stroke-width="1.5"><tspan>M</tspan></text>
+      </svg>)svg");
+  const auto expected = RenderPublicDocument(inlineDocument);
+  ASSERT_FALSE(expected.empty());
+  EXPECT_THAT(expected.pixels, testing::Contains(Gt(0)));
+  EXPECT_THAT(actual.requests, ElementsAre("external.svg"));
+  editor::tests::CompareBitmapToBitmap(actual.bitmap, expected,
+                                       "external-span-host-stroke-decoration",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
 TEST(RendererPublicApiTest, ExternalUseRelativeTextLayoutRestoresAcrossHostsAndFrames) {
   constexpr std::string_view resource =
       R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="96" height="80" font-size="40" fill="green">
