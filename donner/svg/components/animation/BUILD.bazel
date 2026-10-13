@@ -33,6 +33,7 @@ donner_cc_library(
         "//donner/base/parser",
         "//donner/base/xml/components",
         "//donner/svg/components:components_core",
+        "//donner/svg/components:element_type_component",
         "//donner/svg/components:svg_document_context",
         "//donner/svg/core",
         "//donner/svg/parser:parser_core",
