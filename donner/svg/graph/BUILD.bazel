@@ -15,5 +15,6 @@ cc_library(
     deps = [
         "//donner/base",
         "//donner/svg/components:attached_id_lookup",
+        "//donner/svg/components:element_type_component",
     ],
 )

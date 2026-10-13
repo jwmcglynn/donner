@@ -337,7 +337,10 @@ including after incremental source insertion. The sample viewer uses a real `g` 
 chrome. `structure/svg/rect-inside-a-non-SVG-element.svg` and `xmlns-validation.svg` use ordinary
 comparisons. The constructors and namespace-aware source projection live in `SVGUnknownElement.cc`
 and `SVGDocument.cc`; `renderer_public_api_tests` covers parsed and edited wrappers, foreign
-namespaces, and promotion of a known SVG container.
+namespaces, and promotion of a known SVG container. Namespace declaration edits re-evaluate
+the affected descendants while retaining their typed state for restoration; foreign shapes, text,
+stylesheets, paint references, filter children, and clip geometry are excluded from their consumers.
+This does not purge previously loaded or queued font faces from the existing resource cache.
 
 The XML byte parser accepts UTF-8 input and rejects declarations naming another encoding rather
 than interpreting those bytes as UTF-8. `structure/svg/not-UTF-8-encoding.svg` is an explicitly

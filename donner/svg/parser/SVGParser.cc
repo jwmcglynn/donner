@@ -21,6 +21,7 @@
 #include "donner/svg/SVGElement.h"
 #include "donner/svg/components/DescriptiveTextComponent.h"
 #include "donner/svg/components/DocumentResourceFamilyBudget.h"
+#include "donner/svg/components/ElementTypeComponent.h"
 #include "donner/svg/components/ParsedPayloadResourceBudget.h"
 #include "donner/svg/components/RenderingBehaviorComponent.h"
 #include "donner/svg/components/SVGDocumentContext.h"
@@ -606,6 +607,7 @@ public:
     }
 
     auto element = SVGUnknownElement::CreateOn(node.entityHandle(), tagName);
+    node.entityHandle().get<components::ElementTypeComponent>().setInSvgNamespace(isSvgNamespace);
     return ParseAttributes(context_, element, node);
   }
 

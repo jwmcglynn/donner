@@ -291,15 +291,31 @@ ElementType ResolveProjectedElementType(EntityHandle handle, const xml::XMLNode&
       node.getNamespaceUri(tagName.namespacePrefix) == "http://www.w3.org/2000/svg";
   const ElementType projectedType =
       isSvgNamespace ? ElementTypeForTag(tagName) : ElementType::Unknown;
-  const auto* current = handle.try_get<components::ElementTypeComponent>();
-  if (current && isSvgNamespace && current->type() != ElementType::Unknown) {
-    return current->type();
+  auto* current = handle.try_get<components::ElementTypeComponent>();
+  if (current && current->parsedType() != ElementType::Unknown) {
+    current->setInSvgNamespace(isSvgNamespace);
+    return current->parsedType();
   }
   if (current && projectedType != ElementType::Unknown) {
     handle.remove<components::RenderingBehaviorComponent>();
   }
-  handle.emplace_or_replace<components::ElementTypeComponent>(projectedType);
+  auto& type = handle.emplace_or_replace<components::ElementTypeComponent>(projectedType);
+  type.setInSvgNamespace(isSvgNamespace);
   return projectedType;
+}
+
+void UpdateNamespaceMembership(const xml::XMLNode& node) {
+  if (node.type() != xml::XMLNode::Type::Element) {
+    return;
+  }
+  if (auto* type = node.entityHandle().try_get<components::ElementTypeComponent>()) {
+    const xml::XMLQualifiedName name(node.tagName());
+    type->setInSvgNamespace(node.getNamespaceUri(name.namespacePrefix) ==
+                            "http://www.w3.org/2000/svg");
+  }
+  for (auto child = node.firstChild(); child; child = child->nextSibling()) {
+    UpdateNamespaceMembership(*child);
+  }
 }
 
 void EnsureProjectedElementComponents(EntityHandle handle, const xml::XMLNode& node) {
@@ -1504,6 +1520,12 @@ std::optional<ParseDiagnostic> SVGDocument::applyXMLMutation(const xml::XMLMutat
 
 std::optional<ParseDiagnostic> SVGDocument::applyAttributeXMLMutation(
     const xml::XMLMutation& mutation, EntityHandle handle) {
+  if (mutation.attributeName == xml::XMLQualifiedNameRef("xmlns") ||
+      mutation.attributeName.namespacePrefix == "xmlns") {
+    UpdateNamespaceMembership(mutation.node);
+    MarkSubtreeReplaced(handle);
+    return projectXMLSubtree(mutation.node);
+  }
   SVGElement element(handle);
   if (mutation.kind == xml::XMLMutation::Kind::AttributeSet) {
     if (!mutation.value.has_value()) {
