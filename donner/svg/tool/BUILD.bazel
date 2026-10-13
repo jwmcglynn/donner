@@ -5,6 +5,7 @@ load(
     "donner_cc_fuzzer",
     "donner_cc_library",
     "donner_cc_test",
+    "identical_code_folding_linkopts",
 )
 load("//tools/rust_boundary:dependency_audit.bzl", "no_rust_dependency_audit_test")
 
@@ -28,6 +29,7 @@ donner_cc_library(
 donner_cc_binary(
     name = "donner-svg",
     srcs = ["donner_svg_tool.cc"],
+    linkopts = identical_code_folding_linkopts(),
     tags = [
         "codeql_default",
         "codeql_text_full",

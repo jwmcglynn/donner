@@ -1,5 +1,5 @@
 load("@emsdk//emscripten_toolchain:wasm_rules.bzl", "wasm_cc_binary")
-load("//build_defs:rules.bzl", "donner_cc_binary", "donner_multi_transitioned_test")
+load("//build_defs:rules.bzl", "donner_cc_binary", "donner_multi_transitioned_test", "identical_code_folding_linkopts")
 load("//tools/rust_boundary:dependency_audit.bzl", "no_rust_dependency_audit_test")
 
 donner_cc_binary(
@@ -15,6 +15,7 @@ donner_cc_binary(
 donner_cc_binary(
     name = "svg_to_png",
     srcs = ["svg_to_png.cc"],
+    linkopts = identical_code_folding_linkopts(),
     tags = [
         "codeql_default",
         "codeql_text_full",

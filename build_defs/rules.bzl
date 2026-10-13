@@ -565,6 +565,24 @@ def donner_variant_cc_test(
         testonly = 1,
     )
 
+def identical_code_folding_linkopts():
+    """
+    Linker options that fold identical functions in optimized Linux links of a shipped binary.
+
+    Apple's linker already folds identical code by default. Safe folding only merges functions
+    whose address is never taken (per clang's address-significance tables), so function-pointer
+    identity is preserved; code generation is unchanged. A crash backtrace can name a folded
+    sibling of the function that actually ran. Requires lld or gold; see
+    `//build_defs:linker_icf` for hosts that link with GNU ld.
+
+    Returns:
+      A select() of linker options.
+    """
+    return select({
+        Label("//build_defs:linux_opt_icf"): ["-Wl,--icf=safe"],
+        "//conditions:default": [],
+    })
+
 def donner_cc_binary(name, srcs = [], linkopts = [], deps = [], tags = [], **kwargs):
     """
     Create a cc_binary with donner-specific defaults.
@@ -580,14 +598,7 @@ def donner_cc_binary(name, srcs = [], linkopts = [], deps = [], tags = [], **kwa
     cc_binary(
         name = name,
         srcs = srcs,
-        # Fold identical functions in optimized Linux links, as Apple's linker already does by
-        # default. Safe folding only merges functions whose address is never taken (per clang's
-        # address-significance tables), so function-pointer identity is preserved. lld and gold,
-        # the linkers the autoconfigured and hermetic toolchains select, both support it.
-        linkopts = linkopts + select({
-            "//build_defs:linux_opt": ["-Wl,--icf=safe"],
-            "//conditions:default": [],
-        }),
+        linkopts = linkopts,
         deps = deps + libc_compat_deps(),
         tags = tags,
         **kwargs
