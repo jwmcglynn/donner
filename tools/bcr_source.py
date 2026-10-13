@@ -21,6 +21,8 @@ VERSION = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+
 COMMIT = re.compile(r"[0-9a-f]{40}")
 MAX_FILES = 100000
 MAX_BYTES = 2 * 1024 * 1024 * 1024
+# Generated reports that `.gitattributes` keeps out of the source archive.
+EXCLUDED_FILES = ("docs/reports/coverage.zip",)
 
 
 def git(*args: str) -> str:
@@ -56,6 +58,8 @@ def require_source_root_files(files: dict[str, tuple[str, int]]) -> None:
         raise ValueError("source archive is missing MODULE.bazel")
     if "LICENSE" not in files or "NOTICE" not in files:
         raise ValueError("source archive is missing LICENSE or NOTICE")
+    if any(name in files for name in EXCLUDED_FILES):
+        raise ValueError("source archive contains a generated report excluded from releases")
 
 
 def archive_members(archive: tarfile.TarFile, prefix: str) -> dict[str, tuple[str, int]]:

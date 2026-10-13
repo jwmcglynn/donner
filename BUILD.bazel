@@ -118,6 +118,7 @@ exports_files(
         ".github/workflows/sanitizers.yml",
         ".bazelversion",
         ".bazelrc",
+        ".gitattributes",
     ],
     visibility = ["//visibility:public"],
 )

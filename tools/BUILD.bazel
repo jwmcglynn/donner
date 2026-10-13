@@ -260,7 +260,11 @@ py_test(
     name = "bcr_source_tests",
     size = "small",
     srcs = ["bcr_source_tests.py"],
-    deps = [":bcr_source"],
+    data = ["//:.gitattributes"],
+    deps = [
+        ":bcr_source",
+        "@rules_python//python/runfiles",
+    ],
 )
 
 py_test(

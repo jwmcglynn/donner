@@ -4,3 +4,6 @@ third_party/woff2_bounded_decode.patch -text -whitespace
 
 # Keep the local Bazel convenience symlink out of source releases.
 /external export-ignore
+
+# The docs site unpacks the coverage report from the checkout; Bazel consumers never read it.
+/docs/reports/coverage.zip export-ignore
