@@ -101,7 +101,7 @@ jobs:
           disk-cache: ${{ github.workflow }}-${{ runner.os }}-perf
           repository-cache: true
           external-cache: true
-          cache-save: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
+          cache-save: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
 
       - name: Discover perf-tagged test targets
         id: discover

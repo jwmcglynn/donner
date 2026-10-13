@@ -73,7 +73,7 @@ struct PixelRect {
 
 /// Filter primitive parameter types with owning storage.
 ///
-/// All spatial parameters (sigma, offset, radius) are in pixel space — the caller must convert
+/// All spatial parameters (sigma, offset, radius) are in pixel space - the caller must convert
 /// from user space before building graph nodes.
 namespace graph_primitive {
 
@@ -247,7 +247,7 @@ struct GraphNode {
   std::optional<std::string> result;   ///< Named output (for `result` attribute).
   std::optional<PixelRect> subregion;  ///< Pixel-space primitive subregion (AABB, for clipping).
 
-  /// User-space subregion for rotation-aware clipping.
+  /// Unclipped user-space primitive subregion for placement and rotation-aware clipping.
   std::optional<PixelRect> userSpaceSubregion;
 
   /// Per-node color space override. When set, overrides the graph-level `useLinearRGB`.

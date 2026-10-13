@@ -39,6 +39,9 @@ jobs:
       is_duplicate_push: ${{ steps.dup_push.outputs.is_duplicate_push }}
       use_self_hosted_linux: ${{ steps.runner_gate.outputs.use_self_hosted_linux }}
       use_self_hosted_macos: ${{ steps.runner_gate.outputs.use_self_hosted_macos }}
+      # The one pull request trust rule (.github/actions/pr-trust), shared with BuildBuddy.
+      trusted_pr: ${{ steps.pr_trust.outputs.trusted_pr }}
+      renovate_pr: ${{ steps.pr_trust.outputs.renovate_pr }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -140,99 +143,48 @@ jobs:
 
           echo "docs_only=${docs_only}" >> "$GITHUB_OUTPUT"
 
+      - id: pr_trust
+        name: Classify pull request trust
+        uses: ./.github/actions/pr-trust
+
       - id: runner_gate
         name: Determine trusted self-hosted runner routing
         env:
-          ACTOR: ${{ github.actor }}
-          EVENT_NAME: ${{ github.event_name }}
-          REPOSITORY: ${{ github.repository }}
-          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+          TRUSTED_PR: ${{ steps.pr_trust.outputs.trusted_pr }}
           SELFHOSTED_LINUX_RUNNER: ${{ vars.SELFHOSTED_LINUX_RUNNER }}
           SELFHOSTED_MACOS_RUNNER: ${{ vars.SELFHOSTED_MACOS_RUNNER }}
         shell: bash
         run: |
           set -euo pipefail
 
-          is_renovate="$(
+          hosted_macos_label="$(
             python3 - <<'PY'
           import json
           import os
 
           event = json.load(open(os.environ["GITHUB_EVENT_PATH"], encoding="utf-8"))
-          paths = [
-              ("sender", "login"),
-              ("pull_request", "user", "login"),
-              ("head_commit", "author", "username"),
-              ("head_commit", "author", "name"),
-              ("head_commit", "author", "email"),
-              ("head_commit", "committer", "username"),
-              ("head_commit", "committer", "name"),
-              ("head_commit", "committer", "email"),
-              ("pusher", "name"),
-              ("pusher", "email"),
-          ]
-
-          values = []
-          for path in paths:
-              value = event
-              for key in path:
-                  if not isinstance(value, dict):
-                      value = None
-                      break
-                  value = value.get(key)
-              if value:
-                  values.append(str(value))
-
-          print("true" if any("renovate" in value.lower() for value in values) else "false")
-          PY
-          )"
-
-          pr_fields="$(
-            python3 - <<'PY'
-          import json
-          import os
-
-          event = json.load(open(os.environ["GITHUB_EVENT_PATH"], encoding="utf-8"))
-          pr = event.get("pull_request") or {}
-          labels = pr.get("labels") or []
-          hosted_macos_label = "true" if isinstance(labels, list) and any(
+          labels = (event.get("pull_request") or {}).get("labels") or []
+          print("true" if isinstance(labels, list) and any(
               isinstance(label, dict) and label.get("name") == "ci:hosted-macos"
               for label in labels
-          ) else "false"
-          fields = (
-              (pr.get("user") or {}).get("login", ""),
-              ((pr.get("head") or {}).get("repo") or {}).get("full_name", ""),
-              ((pr.get("base") or {}).get("repo") or {}).get("full_name", ""),
-              hosted_macos_label,
-          )
-          print("\x1f".join(fields))
+          ) else "false")
           PY
           )"
-          IFS=$'\x1f' read -r pr_author pr_head_repo pr_base_repo hosted_macos_label <<< "$pr_fields"
-
-          trusted_operator=false
-          if [[ "$EVENT_NAME" == "pull_request" && "$REPOSITORY" == "jwmcglynn/donner" &&
-                "$ACTOR" == "jwmcglynn" && "$TRIGGERING_ACTOR" == "jwmcglynn" &&
-                "$pr_author" == "jwmcglynn" && "$pr_head_repo" == "$REPOSITORY" &&
-                "$pr_base_repo" == "$REPOSITORY" &&
-                "$is_renovate" != "true" ]]; then
-            trusted_operator=true
-          fi
 
           use_linux=false
           use_macos=false
-          if [[ "$trusted_operator" == "true" && "$SELFHOSTED_LINUX_RUNNER" == "true" ]]; then
+          if [[ "$TRUSTED_PR" == "true" && "$SELFHOSTED_LINUX_RUNNER" == "true" ]]; then
             use_linux=true
           fi
           # An operator PR can select hosted macOS for this run without changing Linux routing.
-          if [[ "$trusted_operator" == "true" && "$SELFHOSTED_MACOS_RUNNER" == "true" &&
+          if [[ "$TRUSTED_PR" == "true" && "$SELFHOSTED_MACOS_RUNNER" == "true" &&
                 "$hosted_macos_label" != "true" ]]; then
             use_macos=true
           fi
 
           echo "use_self_hosted_linux=$use_linux" >> "$GITHUB_OUTPUT"
           echo "use_self_hosted_macos=$use_macos" >> "$GITHUB_OUTPUT"
-          echo "runner_route event=$EVENT_NAME trusted_operator=$trusted_operator renovate=$is_renovate pr_author=$pr_author head_repo=$pr_head_repo linux=$use_linux macos=$use_macos"
+          echo "runner_route trusted_pr=$TRUSTED_PR linux=$use_linux macos=$use_macos"
 
   determine-targets:
     runs-on: ubuntu-24.04
@@ -314,10 +266,11 @@ jobs:
       # generating them is roughly half of this job's bazel-diff wall time.
       # PRs restore them here; pushes to main generate and save them below so
       # the first PR against any main commit already hits warm. Caches created
-      # on main are visible to all PR branches.
-      - name: Cache bazel-diff base hashes
+      # on main are visible to all PR branches. Only main writes this cache.
+      - name: Restore bazel-diff base hashes
+        id: base-hashes
         if: steps.pr-meta.outputs.base_sha != ''
-        uses: actions/cache@v6
+        uses: actions/cache/restore@v6
         with:
           path: ~/.cache/bazel-diff-base-hashes/${{ steps.pr-meta.outputs.base_sha }}.json
           key: bazel-diff-base-hashes-tt-${{ env.BAZEL_DIFF_TAG }}-${{ steps.pr-meta.outputs.base_sha }}
@@ -543,6 +496,14 @@ jobs:
           echo "fallback=false" >> "$GITHUB_OUTPUT"
           echo "affected=$affected" >> "$GITHUB_OUTPUT"
 
+      # A failed pre-warm removes its partial file; saving a missing path only warns.
+      - name: Save main bazel-diff base hashes
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && steps.pr-meta.outputs.base_sha != '' && steps.base-hashes.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: ~/.cache/bazel-diff-base-hashes/${{ steps.pr-meta.outputs.base_sha }}.json
+          key: ${{ steps.base-hashes.outputs.cache-primary-key }}
+
       - name: Select Linux WebGPU resvg reference
         id: select_wgpu_resvg
         if: github.event_name == 'pull_request'
@@ -563,6 +524,11 @@ jobs:
     runs-on: ubuntu-24.04
     needs: [gatekeeper, determine-targets]
     if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request') && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') }}
+    # The read-write BuildBuddy key is a secret of the buildbuddy-write environment. Only
+    # runs allowed to write bind it, so other runs never receive that key.
+    environment:
+      name: ${{ ((github.event_name != 'pull_request' && github.ref == 'refs/heads/main') || needs.gatekeeper.outputs.trusted_pr == 'true') && 'buildbuddy-write' || '' }}
+      deployment: false
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -583,12 +549,34 @@ jobs:
           bazelisk-cache: true
           repository-cache: true
           external-cache: true
-          cache-save: ${{ github.ref == 'refs/heads/main' }}
+          cache-save: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
 
       - name: Restore Bazel action cache
         uses: ./.github/actions/cache-bazel-actions
         with:
           namespace: native
+
+      # BuildBuddy remote cache (docs/building.md). Main push, schedule and dispatch
+      # runs and trusted maintainer pull requests read and write; Renovate pull
+      # requests only read; every other run configures no remote cache. The
+      # read-only repository secret still reaches every same-repository run of
+      # this job, so it is treated as public: it can only read the cache.
+      - name: Configure BuildBuddy remote cache
+        if: (github.event_name != 'pull_request' && github.ref == 'refs/heads/main') || needs.gatekeeper.outputs.trusted_pr == 'true'
+        uses: ./.github/actions/buildbuddy-cache
+        with:
+          api-key: ${{ secrets.BUILDBUDDY_API_KEY }}
+          trusted-pr: ${{ needs.gatekeeper.outputs.trusted_pr }}
+          renovate-pr: ${{ needs.gatekeeper.outputs.renovate_pr }}
+          download-outputs: minimal
+
+      - name: Configure BuildBuddy read-only cache
+        if: needs.gatekeeper.outputs.renovate_pr == 'true'
+        uses: ./.github/actions/buildbuddy-cache
+        with:
+          read-only-api-key: ${{ secrets.BUILDBUDDY_API_KEY_READONLY }}
+          renovate-pr: ${{ needs.gatekeeper.outputs.renovate_pr }}
+          download-outputs: minimal
 
       - name: Build
         if: ${{ needs.gatekeeper.outputs.use_self_hosted_linux != 'true' }}
@@ -629,7 +617,7 @@ jobs:
           # workspace), which `bazel test` reports as exit 4. The wrapper
           # maps only that status to success; every other failure still fails.
           tools/ci_bazel_test.sh bazelisk test --config=ci --test_output=errors \
-            --test_tag_filters=-manual,-perf,-ci-remote-gpu \
+            --test_tag_filters=-manual,-perf,-ci-remote-gpu,-fuzz_soak \
             $TARGETS
 
       - name: Test Linux WebGPU resvg reference
@@ -658,7 +646,7 @@ jobs:
             exit 1
           fi
           tools/ci_bazel_test.sh bazelisk test --config=ci --nocache_test_results \
-            --test_output=errors --test_tag_filters=requires_xvfb \
+            --test_output=errors --test_tag_filters=requires_xvfb,-fuzz_soak \
             --strategy=TestRunner=local $TARGETS
 
       - name: Upload Bazel test failure artifacts
@@ -1033,7 +1021,7 @@ jobs:
             bazelisk test --config=ci --config=latest_llvm --test_output=errors \
             $BAZEL_SELF_HOSTED_REMOTE_FALLBACK_FLAGS \
             $DIAG_TEST_FLAGS \
-            --test_tag_filters=-manual,-perf,-local-gpu-isolated \
+            --test_tag_filters=-manual,-perf,-local-gpu-isolated,-fuzz_soak \
             --profile="$DIAG_DIR/test/profile.gz" \
             --build_event_json_file="$DIAG_DIR/test/bep.json" \
             --nobuild_event_json_file_path_conversion \
@@ -1095,6 +1083,11 @@ jobs:
     runs-on: macos-26
     needs: [gatekeeper, determine-targets]
     if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request') && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') && needs.gatekeeper.outputs.use_self_hosted_macos != 'true' }}
+    # The read-write BuildBuddy key is a secret of the buildbuddy-write environment. Only
+    # runs allowed to write bind it, so other runs never receive that key.
+    environment:
+      name: ${{ ((github.event_name != 'pull_request' && github.ref == 'refs/heads/main') || needs.gatekeeper.outputs.trusted_pr == 'true') && 'buildbuddy-write' || '' }}
+      deployment: false
     env:
       # Xcode's libc++ marks std::format floating-point support as macOS 13.3+.
       # Set the CI deployment target explicitly so hosted and self-hosted macOS
@@ -1140,12 +1133,34 @@ jobs:
           bazelisk-cache: true
           repository-cache: true
           external-cache: true
-          cache-save: ${{ github.ref == 'refs/heads/main' }}
+          cache-save: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
 
       - name: Restore Bazel action cache
         uses: ./.github/actions/cache-bazel-actions
         with:
           namespace: native
+
+      # BuildBuddy remote cache (docs/building.md). Main push, schedule and dispatch
+      # runs and trusted maintainer pull requests read and write; Renovate pull
+      # requests only read; every other run configures no remote cache. The
+      # read-only repository secret still reaches every same-repository run of
+      # this job, so it is treated as public: it can only read the cache.
+      - name: Configure BuildBuddy remote cache
+        if: (github.event_name != 'pull_request' && github.ref == 'refs/heads/main') || needs.gatekeeper.outputs.trusted_pr == 'true'
+        uses: ./.github/actions/buildbuddy-cache
+        with:
+          api-key: ${{ secrets.BUILDBUDDY_API_KEY }}
+          trusted-pr: ${{ needs.gatekeeper.outputs.trusted_pr }}
+          renovate-pr: ${{ needs.gatekeeper.outputs.renovate_pr }}
+          download-outputs: minimal
+
+      - name: Configure BuildBuddy read-only cache
+        if: needs.gatekeeper.outputs.renovate_pr == 'true'
+        uses: ./.github/actions/buildbuddy-cache
+        with:
+          read-only-api-key: ${{ secrets.BUILDBUDDY_API_KEY_READONLY }}
+          renovate-pr: ${{ needs.gatekeeper.outputs.renovate_pr }}
+          download-outputs: minimal
 
       - name: Fetch Metal validation dependencies
         uses: nick-fields/retry@v4
@@ -1226,11 +1241,12 @@ jobs:
           echo "::notice::Excluding requires_metal_toolchain targets: the hosted macOS image has no offline Metal compiler."
           # Tests that launch a browser run in the next step instead.
           tools/ci_bazel_test.sh bazelisk test --config=ci --test_output=errors \
-            --test_tag_filters=-manual,-perf,-requires_metal_toolchain,-ci-remote-gpu,-launches-browser \
+            --test_tag_filters=-manual,-perf,-requires_metal_toolchain,-ci-remote-gpu,-launches-browser,-fuzz_soak \
             $HOSTED_MACOS_QUARANTINE_TEST_FLAGS \
             $BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS $BROWSER_STALL_TEST_FLAGS $TARGETS
-        # Deterministic fuzzer corpus replay remains in this Bazel suite. Sanitizer-backed mutation
-        # runs nightly or on demand in `.github/workflows/fuzz.yml`.
+        # Deterministic fuzzer corpus replay remains in this Bazel suite. Every lane here excludes
+        # the `fuzz_soak` mutation targets; they run nightly or on demand in
+        # `.github/workflows/fuzz.yml`, under sanitizers.
 
       # Browser tests hold wall-clock deadlines (a 10 s GPU device request, 30 s
       # test timeouts) that a browser starved of CPU cannot meet. On this
@@ -1255,7 +1271,7 @@ jobs:
           fi
           tools/ci_bazel_test.sh bazelisk test --config=ci --test_output=errors \
             --local_test_jobs=1 \
-            --test_tag_filters=launches-browser,-manual,-perf,-requires_metal_toolchain,-ci-remote-gpu \
+            --test_tag_filters=launches-browser,-manual,-perf,-requires_metal_toolchain,-ci-remote-gpu,-fuzz_soak \
             $HOSTED_MACOS_QUARANTINE_TEST_FLAGS \
             $BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS $BROWSER_STALL_TEST_FLAGS $TARGETS
 
@@ -1625,10 +1641,11 @@ jobs:
             exit 1
           fi
           tools/ci_bazel_test.sh bazelisk --nohome_rc test --config=ci --test_output=errors \
-            --test_tag_filters=-manual,-perf,-ci-remote-gpu,-launches-browser \
+            --test_tag_filters=-manual,-perf,-ci-remote-gpu,-launches-browser,-fuzz_soak \
             $BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS $TARGETS
-        # Deterministic fuzzer corpus replay remains in this Bazel suite. Sanitizer-backed mutation
-        # runs nightly or on demand in `.github/workflows/fuzz.yml`.
+        # Deterministic fuzzer corpus replay remains in this Bazel suite. Every lane here excludes
+        # the `fuzz_soak` mutation targets; they run nightly or on demand in
+        # `.github/workflows/fuzz.yml`, under sanitizers.
 
       # Browser tests share the GPU with native replays and need their own serial phase.
       - name: Test (browser targets)
@@ -1648,7 +1665,7 @@ jobs:
           fi
           tools/ci_bazel_test.sh bazelisk --nohome_rc test --config=ci --test_output=errors \
             --local_test_jobs=1 \
-            --test_tag_filters=launches-browser,-manual,-perf,-ci-remote-gpu \
+            --test_tag_filters=launches-browser,-manual,-perf,-ci-remote-gpu,-fuzz_soak \
             $BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS $TARGETS
 
       - name: Test (Geode editor lane)

@@ -23,6 +23,7 @@ class CiRunnerRoutingTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.text = _workflow_text(".github/workflows/main.yml")
+        cls.trust_action = _workflow_text(".github/actions/pr-trust/action.yml")
 
     def _job_body(self, job):
         marker = "\n  %s:\n" % job
@@ -35,6 +36,13 @@ class CiRunnerRoutingTest(unittest.TestCase):
         section = self.text.split("      - id: runner_gate\n", 1)[1]
         section = section.split("\n  determine-targets:\n", 1)[0]
         return textwrap.dedent(section.split("        run: |\n", 1)[1])
+
+    def _trust_script(self):
+        return textwrap.dedent(self.trust_action.split("      run: |\n", 1)[1])
+
+    @staticmethod
+    def _outputs(path):
+        return dict(line.split("=", 1) for line in path.read_text().splitlines())
 
     def _route(self, *, event_name="pull_request", event=None,
                actor="jwmcglynn", triggering_actor="jwmcglynn",
@@ -63,10 +71,18 @@ class CiRunnerRoutingTest(unittest.TestCase):
                        SELFHOSTED_MACOS_RUNNER=macos_enabled,
                        GITHUB_EVENT_PATH=str(event_path), GITHUB_OUTPUT=str(output_path),
                        RUNNER_TEMP=directory, GH_TOKEN="test", PATH=f"{directory}:{os.environ['PATH']}")
-            result = subprocess.run(["bash", "-c", self._routing_script()],
-                                    env=env, text=True, capture_output=True, check=False)
+            # The gatekeeper classifies trust with the shared action, then routes on its output.
+            trust_path = root / "trust"
+            result = subprocess.run(["bash", "-c", self._trust_script()],
+                                    env=dict(env, GITHUB_OUTPUT=str(trust_path)),
+                                    text=True, capture_output=True, check=False)
             self.assertEqual(result.returncode, 0, result.stderr)
-            return dict(line.split("=", 1) for line in output_path.read_text().splitlines())
+            trust = self._outputs(trust_path)
+            result = subprocess.run(["bash", "-c", self._routing_script()],
+                                    env=dict(env, TRUSTED_PR=trust["trusted_pr"]),
+                                    text=True, capture_output=True, check=False)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            return {**trust, **self._outputs(output_path)}
 
     def test_operator_pr_uses_self_hosted_lanes_when_enabled(self):
         route = self._route()
@@ -159,6 +175,40 @@ class CiRunnerRoutingTest(unittest.TestCase):
         collaborator = self._route(event=event, triggering_actor="collaborator")
         self.assertEqual(collaborator["use_self_hosted_linux"], "false")
         self.assertEqual(collaborator["use_self_hosted_macos"], "false")
+
+    def test_trust_rule_separates_maintainer_renovate_and_fork_pull_requests(self):
+        """BuildBuddy write access and self-hosted routing share this one classification."""
+        maintainer = self._route()
+        self.assertEqual(("true", "false"), (maintainer["trusted_pr"], maintainer["renovate_pr"]))
+        renovate = {
+            "sender": {"login": "renovate[bot]"},
+            "pull_request": {
+                "user": {"login": "renovate[bot]"},
+                "head": {"repo": {"full_name": "jwmcglynn/donner"}},
+                "base": {"repo": {"full_name": "jwmcglynn/donner"}, "ref": "main"},
+            },
+        }
+        route = self._route(event=renovate, actor="renovate[bot]",
+                            triggering_actor="renovate[bot]")
+        self.assertEqual(("false", "true"), (route["trusted_pr"], route["renovate_pr"]))
+        # A maintainer rerun of a Renovate pull request stays Renovate, never trusted.
+        rerun = self._route(event=renovate)
+        self.assertEqual(("false", "true"), (rerun["trusted_pr"], rerun["renovate_pr"]))
+        self.assertEqual("false", rerun["use_self_hosted_linux"])
+        fork = dict(renovate, pull_request=dict(
+            renovate["pull_request"], head={"repo": {"full_name": "someone/donner"}}))
+        route = self._route(event=fork, actor="someone", triggering_actor="someone")
+        self.assertEqual(("false", "false"), (route["trusted_pr"], route["renovate_pr"]))
+        push = self._route(event_name="push", event={"sender": {"login": "jwmcglynn"}})
+        self.assertEqual(("false", "false"), (push["trusted_pr"], push["renovate_pr"]))
+
+    def test_gatekeeper_exports_the_shared_trust_rule(self):
+        gatekeeper = self._job_body("gatekeeper")
+        self.assertIn("      - id: pr_trust\n        name: Classify pull request trust\n"
+                      "        uses: ./.github/actions/pr-trust\n", gatekeeper)
+        self.assertIn("      trusted_pr: ${{ steps.pr_trust.outputs.trusted_pr }}\n", gatekeeper)
+        self.assertIn("      renovate_pr: ${{ steps.pr_trust.outputs.renovate_pr }}\n", gatekeeper)
+        self.assertIn("TRUSTED_PR: ${{ steps.pr_trust.outputs.trusted_pr }}", gatekeeper)
 
     def test_change_size_does_not_override_trusted_runner_routing(self):
         """A trusted run follows the runner gate regardless of changed-file count."""

@@ -859,6 +859,7 @@ void RenderCoordinator::resetForLoadedDocument(std::uint64_t documentGeneration)
   overviewDocVersion_ = 0;
   pendingOverviewResult_.reset();
   pendingPresentationRefresh_ = false;
+  pendingRenderTreeRebuild_ = false;
   lastPostedAttempt_.reset();
   selectedPrewarmFallback_.reset();
   selectedPrewarmRecoveryPending_ = false;
@@ -1958,6 +1959,7 @@ void RenderCoordinator::commitCanvasForRender(EditorApp& app, const ViewportStat
   if (!documentPixelCaptureEnabled_ && document.handle()->revision() != revisionBefore) {
     // The old raster can match the viewport while this commit invalidates its render tree.
     requestPresentationRefresh();
+    pendingRenderTreeRebuild_ = true;
     *forcePresentationRefresh = true;
   }
   pendingCanvasSizeSince_ = plan.now;
@@ -2031,6 +2033,7 @@ void RenderCoordinator::postScheduledRender(EditorApp& app, const ViewportState&
   lastPostedAttempt_ = attempt;
   recordPixelCaptureRequest(req, desiredCapture);
   pendingPresentationRefresh_ = false;
+  pendingRenderTreeRebuild_ = false;
 }
 
 bool RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectTool,
@@ -2075,6 +2078,7 @@ bool RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectToo
                                 captureNeeded, input);
   commitCanvasForRender(app, viewport, canvas, &desiredCapture, &captureNeeded,
                         &input.forcePresentationRefresh);
+  input.renderTreeInvalidated = pendingRenderTreeRebuild_;
   prepareRenderPresentation(app, viewport, textures, input);
   // A paced retry retains the render demand consumed by the failed post.
   input.forcePresentationRefresh = input.forcePresentationRefresh || requestOverviewInfill ||

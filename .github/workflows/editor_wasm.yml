@@ -53,8 +53,33 @@ permissions:
   contents: read
 
 jobs:
+  # Classify pull request trust at job level, so the build job can bind the
+  # BuildBuddy write environment only for runs allowed to write.
+  trust:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      trusted_pr: ${{ steps.pr_trust.outputs.trusted_pr }}
+      renovate_pr: ${{ steps.pr_trust.outputs.renovate_pr }}
+    steps:
+      - name: Checkout trust action
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/actions/pr-trust
+
+      - id: pr_trust
+        name: Classify pull request trust
+        uses: ./.github/actions/pr-trust
+
   build:
     runs-on: macos-26
+    needs: trust
+    # The read-write BuildBuddy key is a secret of the buildbuddy-write environment. Only
+    # runs allowed to write bind it, so other runs never receive that key.
+    environment:
+      name: ${{ ((github.event_name != 'pull_request' && github.ref == 'refs/heads/main') || needs.trust.outputs.trusted_pr == 'true') && 'buildbuddy-write' || '' }}
+      deployment: false
     steps:
       - uses: actions/checkout@v7
         with:
@@ -66,12 +91,34 @@ jobs:
           bazelisk-cache: true
           repository-cache: true
           external-cache: true
-          cache-save: ${{ github.event_name != 'pull_request' }}
+          cache-save: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
 
       - name: Restore Bazel action cache
         uses: ./.github/actions/cache-bazel-actions
         with:
           namespace: editor-wasm
+
+      # BuildBuddy remote cache (docs/building.md). Main push, schedule and dispatch
+      # runs and trusted maintainer pull requests read and write; Renovate pull
+      # requests only read; every other run configures no remote cache. The
+      # read-only repository secret still reaches every same-repository run of
+      # this job, so it is treated as public: it can only read the cache.
+      - name: Configure BuildBuddy remote cache
+        if: (github.event_name != 'pull_request' && github.ref == 'refs/heads/main') || needs.trust.outputs.trusted_pr == 'true'
+        uses: ./.github/actions/buildbuddy-cache
+        with:
+          api-key: ${{ secrets.BUILDBUDDY_API_KEY }}
+          trusted-pr: ${{ needs.trust.outputs.trusted_pr }}
+          renovate-pr: ${{ needs.trust.outputs.renovate_pr }}
+          download-outputs: toplevel
+
+      - name: Configure BuildBuddy read-only cache
+        if: needs.trust.outputs.renovate_pr == 'true'
+        uses: ./.github/actions/buildbuddy-cache
+        with:
+          read-only-api-key: ${{ secrets.BUILDBUDDY_API_KEY_READONLY }}
+          renovate-pr: ${{ needs.trust.outputs.renovate_pr }}
+          download-outputs: toplevel
 
       # Repository downloads are the only retried part of this lane. Keeping
       # them separate prevents a compile or test failure from passing on retry.
@@ -146,18 +193,36 @@ jobs:
           bazelisk test --config=wasm-geode --test_output=errors \
             //tools/ci:geode_wasm_browser_default_audit
 
+      # setup-node's own npm cache saves on every event, including pull
+      # requests. Keep its automatic caching off and restore the npm download
+      # cache explicitly; only main pushes save it.
       - name: Setup Node
         uses: actions/setup-node@v7
         with:
           node-version: 24
-          cache: npm
-          cache-dependency-path: donner/editor/wasm/tests/package-lock.json
+          package-manager-cache: false
+
+      - name: Restore npm download cache
+        id: npm-cache
+        uses: actions/cache/restore@v6
+        with:
+          path: ~/.npm
+          key: npm-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('donner/editor/wasm/tests/package-lock.json') }}
+          restore-keys: |
+            npm-${{ runner.os }}-${{ runner.arch }}-
 
       - name: Install Playwright
         working-directory: donner/editor/wasm/tests
         run: |
           npm ci
           npx playwright install chromium firefox webkit
+
+      - name: Save main npm download cache
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && steps.npm-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: ~/.npm
+          key: ${{ steps.npm-cache.outputs.cache-primary-key }}
 
       - name: Verify Geode-only package contracts
         working-directory: donner/editor/wasm/tests

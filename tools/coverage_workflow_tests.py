@@ -93,7 +93,7 @@ class CoverageWorkflowTest(unittest.TestCase):
         self.assertIn("exit 1", guard)
         generate = self._step_body(build, "Generate coverage")
         self.assertIn("if [[ -f coverage-report/coverage_skipped ]]; then", generate)
-        self.assertIn("cache-save: true\n", build)
+        self.assertIn("cache-save: ${{ github.ref == 'refs/heads/main' }}\n", build)
         proof = self._step_body(build, "Generate coverage proof")
         self.assertIn("python3 tools/coverage_run_proof.py", proof)
         self.assertIn('--patterns "$COVERAGE_TARGETS"', proof)

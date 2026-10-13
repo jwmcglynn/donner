@@ -311,6 +311,25 @@ all-curve loops (circle/ellipse).
 
 ---
 
+## Fragment image placement
+
+An `feImage` referencing an SVG element uses the resolved primitive subregion origin for content
+placement, including individually omitted `x` or `y`. Placement uses the unclipped user-space
+origin; clipping the primitive or filter region does not move the referenced artwork. Normal
+referenced geometry retains its natural dimensions. The CPU and Geode paths share this rule.
+`filters/feImage/with-x-y.svg` and both `with-x-y-and-protruding-subregion` comparisons use ordinary
+budgets. The authored renderer oracle pins `image-rendering="crisp-edges"` and compares exact
+pixels for complete/partial coordinates, protrusion, and translated source content. Arbitrary host
+scale, rotation, skew, and reflection are not established by this bounded coverage; their existing
+exceptions remain tracked separately.
+
+The exact placement oracle is `FeImageFragmentUsesItsOwnSubregionOrigin` in
+`//donner/svg/renderer/tests:renderer_public_api_tests`; the configured GPU target is
+`//donner/svg/renderer/tests:renderer_public_api_tests_geode`. The ordinary-budget corpus gates are
+`//donner/svg/renderer/tests:resvg_test_suite_default_text` and
+`//donner/svg/renderer/tests:resvg_test_suite_geode`; full-text uses the API with `--config=text-full`
+and `//donner/svg/renderer/tests:resvg_test_suite_max`. See [Filter Effects](../filter_effects.md).
+
 ## Needs triage (uncertain `Bug?` entries)
 
 These have a question-mark reason in the file and need a root-cause pass to decide

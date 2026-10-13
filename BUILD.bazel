@@ -104,6 +104,7 @@ exports_files(
         "RELEASE_NOTES.md",
         "codecov.yml",
         ".github/actions/apt-install/action.yml",
+        ".github/actions/pr-trust/action.yml",
         ".github/actions/re-turnstile/action.yml",
         ".github/actions/re-turnstile/admission.py",
         ".github/workflows/cmake.yml",

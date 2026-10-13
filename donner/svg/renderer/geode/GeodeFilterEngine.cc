@@ -2953,10 +2953,8 @@ std::optional<gpu::shader::programs::ConvolveMatrixParams> BuildConvolveMatrixPa
   if (primitive.divisor.has_value()) {
     divisor = *primitive.divisor;
   } else {
-    for (double coefficient : primitive.kernelMatrix) {
-      divisor += coefficient;
-    }
-    if (std::abs(divisor) < 1e-10) {
+    divisor = svg::components::filter_primitive::ConvolveKernelSum(primitive.kernelMatrix);
+    if (divisor == 0.0) {
       divisor = 1.0;
     }
   }
@@ -3459,7 +3457,8 @@ std::optional<uint32_t> FilterImageUploadRowPitch(
 
 std::optional<ImageParams> CreateFragmentImageParams(
     const svg::components::filter_primitive::Image& primitive,
-    const svg::components::FilterGraph& graph, const Transform2d& deviceFromFilter) {
+    const svg::components::FilterGraph& graph, const Transform2d& deviceFromFilter,
+    const Vector2d& origin) {
   if (!primitive.isFragmentReference) {
     return std::nullopt;
   }
@@ -3471,8 +3470,7 @@ std::optional<ImageParams> CreateFragmentImageParams(
     const double scaleY = graph.userToPixelScale.y;
     const Transform2d viewBoxScaleInv = Transform2d::Scale(
         NearZero(scaleX, 1e-12) ? 1.0 : 1.0 / scaleX, NearZero(scaleY, 1e-12) ? 1.0 : 1.0 / scaleY);
-    const Transform2d regionOffset = Transform2d::Translate(primitive.fragmentRegionTopLeft.x,
-                                                            primitive.fragmentRegionTopLeft.y);
+    const Transform2d regionOffset = Transform2d::Translate(origin.x, origin.y);
     const Transform2d deviceFromFragment = viewBoxScaleInv * regionOffset * deviceFromFilter;
     const Transform2d fragmentFromDevice = deviceFromFragment.inverse();
     params.m00 = static_cast<float>(fragmentFromDevice.data[0]);
@@ -3489,9 +3487,9 @@ std::optional<ImageParams> CreateFragmentImageParams(
     const double scaleX = graph.userToPixelScale.x > 0.0 ? graph.userToPixelScale.x : 1.0;
     const double scaleY = graph.userToPixelScale.y > 0.0 ? graph.userToPixelScale.y : 1.0;
     params.m00 = 1.0f;
-    params.m02 = static_cast<float>(-primitive.fragmentRegionTopLeft.x * scaleX);
+    params.m02 = static_cast<float>(-origin.x * scaleX);
     params.m11 = 1.0f;
-    params.m12 = static_cast<float>(-primitive.fragmentRegionTopLeft.y * scaleY);
+    params.m12 = static_cast<float>(-origin.y * scaleY);
     params.pixelatedScaleX = 1.0f;
     params.pixelatedScaleY = 1.0f;
   }
@@ -3678,7 +3676,7 @@ FilterTexture GeodeFilterEngine::applyImage(
   }
 
   const std::optional<ImageParams> fragmentParams =
-      CreateFragmentImageParams(primitive, graph, deviceFromFilter);
+      CreateFragmentImageParams(primitive, graph, deviceFromFilter, placementRegionUser.topLeft);
   const ImageParams params =
       fragmentParams ? *fragmentParams
                      : CreateRasterFilterImageParams(primitive, graph, placementRegionUser);
