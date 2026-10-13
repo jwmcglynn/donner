@@ -42,8 +42,18 @@ PUBLIC_LOCK_HOSTS = frozenset({
     "nodejs.org",
     "storage.googleapis.com",
     "commondatastorage.googleapis.com",
+    # Public package registries that module extensions in the production module graph record,
+    # which the docs build retains (rules_python, rules_fuzzing, and the Bazel mirror).
+    "files.pythonhosted.org",
+    "mirror.bazel.build",
+    "repo1.maven.org",
 })
-PRIVATE_PATH = re.compile(r"(?i)(?:file://|/(?:Users|home|private|var|tmp|opt|root|etc|mnt|proc|srv|run)/|(?<![A-Za-z])[A-Za-z]:[\\/])")
+# An absolute host path starts the string or follows a separator; inside a Bazel label or a
+# relative path, such as `@@rules_fuzzing+//fuzzing/private/oss_fuzz:repository.bzl`, the same
+# directory name is not a host path.
+PRIVATE_PATH = re.compile(
+    r"(?i)(?:file://|(?<![A-Za-z0-9_.+@~/-])/(?:Users|home|private|var|tmp|opt|root|etc|mnt|proc|"
+    r"srv|run)/|(?<![A-Za-z])[A-Za-z]:[\\/])")
 SECRET_KEY = re.compile(r"(?i)(?:token|password|secret|credential|authorization|api[_-]?key|private[_-]?key)")
 SECRET_SHAPE = re.compile(
     r"(?i)(?:-----BEGIN|AKIA[0-9A-Z]{16}|github_pat_[A-Za-z0-9_]{16,}|"
@@ -135,6 +145,21 @@ def _validate_public_lockfile(path: Path) -> None:
         raise ValueError("generated Bazel lockfile must be a JSON object")
     for value in _lock_strings(document):
         _validate_lock_string(value)
+
+
+MAX_LOCKFILE_BYTES = 16_000_000
+
+
+def check_public_lockfile(path: Path) -> str:
+    """Return the SHA-256 of a generated lockfile that may be retained in a public artifact.
+
+    The editor package and the docs build retain their generated `MODULE.bazel.lock` beside their
+    provenance, as each CLI does, so every published artifact records its resolved module graph.
+    """
+    if path.is_symlink() or not path.is_file() or not 0 < path.stat().st_size <= MAX_LOCKFILE_BYTES:
+        raise ValueError("generated Bazel lockfile is missing, linked, empty or too large")
+    _validate_public_lockfile(path)
+    return digest(path)
 
 
 def _names(platform: str) -> tuple[str, str, str, str, str]:
@@ -308,7 +333,16 @@ def main() -> None:
             command.add_argument("--output", type=Path, required=True)
         else:
             command.add_argument("--artifacts", type=Path, required=True)
+    lockfile = commands.add_parser(
+        "check-lockfile", help="validate a generated lockfile for a public artifact")
+    lockfile.add_argument("--lockfile", type=Path, required=True)
     args = parser.parse_args()
+    if args.command == "check-lockfile":
+        try:
+            print(f"{check_public_lockfile(args.lockfile)}  {args.lockfile.name}")
+        except (ValueError, OSError, UnicodeDecodeError) as error:
+            raise SystemExit(f"Lockfile check failed: {error}") from None
+        return
     options = dict(root=args.root, platform=args.platform, commit=args.commit,
                    run_id=args.run_id, attempt=args.attempt)
     if args.command == "package":

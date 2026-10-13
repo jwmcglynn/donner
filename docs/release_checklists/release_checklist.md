@@ -106,9 +106,14 @@ concern; the tag never moves retroactively.
       Follow the [BCR runbook](../design_docs/0018-bcr_release.md); a manual dispatch on `main`
       can supply missing preflight evidence while it still points to the exact commit. A main
       push runs only the slim preflight check, which produces no release artifacts.
-- [ ] **Candidate record verified**. Assemble the
-      [immutable release candidate record](../release_candidate.md) for the exact final commit and
-      verify it. Keep the record, its SHA-256 and its retained artifacts together.
+- [ ] **Candidate record assembled**. While `main` still points at the exact final commit,
+      dispatch `Assemble release candidate` on `main` with that commit, the BCR Preflight, Editor
+      WASM, docs build, CI, coverage, fuzz and sanitizer run IDs and attempts, and the issue
+      comment IDs of the two review reports. It verifies the
+      [immutable release candidate record](../release_candidate.md),
+      retains it for 90 days and attests it; it publishes nothing. Copy the
+      `Release-Candidate-Record:` line from its summary. Any change to a bound input means a new
+      commit and a new record, never an edit; publish within 30 days of assembly.
 - [ ] **Rollback assets recorded**. In the release tracking issue, write the artifact IDs and
       ZIP digests of the previous healthy marker-bearing docs build and the previous editor
       package, plus each build's independently reviewed source revision, producer run ID and
@@ -116,7 +121,7 @@ concern; the tag never moves retroactively.
       `producer_attempt` even when it predates the first candidate record; do not derive those
       expected values from the package being verified. The candidate record has no slot for these
       rollback selections. Confirm that neither expires during the intended rollback window;
-      the editor package is retained for only 30 days.
+      both are retained for 90 days after their builds.
 
 - [ ] **Create release tag**. Run `git tag -a vX.Y.Z -m "Donner SVG vX.Y.Z"` on the build-report commit.
 - [ ] **Push tag**. Run `git push origin vX.Y.Z`.
@@ -127,15 +132,16 @@ concern; the tag never moves retroactively.
   Follow the pattern from previous releases:
   - Title: `Donner SVG vX.Y.Z`
   - Body: copy from the RELEASE_NOTES.md entry
-  - Add `Release-Candidate-Preflight: <run-id>/<attempt>` on its own line, using the reviewed
-    successful preflight attempt. The Release workflow rejects a missing or ambiguous marker.
+  - Add `Release-Candidate-Record: <assembly-run-id>/<attempt> sha256:<record-sha256>` on its own
+    line, copied from the assembly summary. The Release workflow rejects a missing, ambiguous or
+    mismatched record, and a body that still names a `Release-Candidate-Preflight:` attempt.
   - Attach binary artifacts (e.g., `donner-svg_darwin_arm64`, `donner-svg_linux_x86_64`)
-    and their `.NOTICE.txt` license notices through the Release workflow, which verifies and
-    uploads the retained preflight bytes.
+    and their `.NOTICE.txt` license notices through the Release workflow, which re-verifies the
+    record and uploads exactly the retained bytes it names, plus `donner-X.Y.Z.candidate.json`.
 - [ ] **Verify release artifacts**. Check that the GitHub release page shows the correct tag,
-      binaries with their `.NOTICE.txt` license notices and `donner-X.Y.Z.tar.gz` with its
-      checksum/provenance are attached, uploaded digests
-      match the qualified artifacts, and the release body renders correctly.
+      binaries with their `.NOTICE.txt` license notices, `donner-X.Y.Z.tar.gz` with its
+      checksum/provenance and `donner-X.Y.Z.candidate.json` are attached, uploaded digests
+      match the record's, and the release body renders correctly.
 - [ ] **BCR submission checked**. For a stable release, manually dispatch `Prepare BCR submission`
       with the reviewed Release run, source commit and archive SHA-256 to prepare the owned fork
       branch after the protected token environment is verified. Confirm the tokenless entry check

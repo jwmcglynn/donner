@@ -140,6 +140,96 @@ class PagesArtifactTest(unittest.TestCase):
             {"source_commit": "a" * 40, "source_run_id": 123, "source_attempt": 1},
         )
 
+    def _write_provenance(self) -> Path:
+        root = Path(self.temp.name) / "source"
+        root.mkdir(exist_ok=True)
+        (root / ".bazelversion").write_text("8.8.1\n", encoding="utf-8")
+        self.lock = root / "MODULE.bazel.lock"
+        self.lock.write_text('{"registryFileHashes": {"https://bcr.bazel.build/x": "0"}}\n')
+        output = Path(self.temp.name) / "docs-provenance"
+        with mock.patch.dict(
+            "os.environ",
+            {"GITHUB_SHA": "a" * 40, "GITHUB_RUN_ID": "123", "GITHUB_RUN_ATTEMPT": "1"},
+        ):
+            pages_artifact.write_provenance(self.archive, self.lock, output, root,
+                                            "1.15.0 (abc123)", "dot - graphviz version 2.43.0 (0)")
+        return output
+
+    def test_docs_provenance_binds_archive_lockfile_and_tools(self) -> None:
+        output = self._write_provenance()
+        self.assertEqual({path.name for path in output.iterdir()},
+                         {"provenance.json", "MODULE.bazel.lock"})
+        lock_sha256 = sha256(self.lock.read_bytes()).hexdigest()
+        provenance = json.loads((output / "provenance.json").read_text())
+        self.assertEqual(provenance, {
+            "schema": 1, "source_commit": "a" * 40, "producer_run_id": 123,
+            "producer_attempt": 1, "pages_archive_sha256": self.selected["archive_sha256"],
+            "generated_lock_sha256": lock_sha256, "bazel_version": "8.8.1",
+            "doxygen_version": "1.15.0 (abc123)",
+            "graphviz_version": "dot - graphviz version 2.43.0 (0)",
+        })
+        self.assertEqual(pages_artifact.verify_provenance(output, self.selected, "8.8.1"),
+                         lock_sha256)
+
+    def test_docs_provenance_rejects_other_builds_locks_and_tools(self) -> None:
+        output = self._write_provenance()
+        path = output / "provenance.json"
+        original = json.loads(path.read_text())
+        changes = {
+            "other attempt": {"producer_attempt": 2},
+            "string run": {"producer_run_id": "123"},
+            "other commit": {"source_commit": "c" * 40},
+            "other archive": {"pages_archive_sha256": "d" * 64},
+            "other lock": {"generated_lock_sha256": "e" * 64},
+            "other Bazel": {"bazel_version": "7.6.0"},
+            "tool newline": {"doxygen_version": "1.15.0\nextra"},
+            "extra field": {"host": "builder"},
+        }
+        for case, change in changes.items():
+            with self.subTest(case=case):
+                path.write_text(json.dumps({**original, **change}))
+                with self.assertRaisesRegex(ValueError, "does not match the selected Pages build"):
+                    pages_artifact.verify_provenance(output, self.selected, "8.8.1")
+        path.write_text(json.dumps(original))
+        (output / "MODULE.bazel.lock").write_text('{"path": "/home/runner/private"}')
+        with self.assertRaisesRegex(ValueError, "non-public"):
+            pages_artifact.verify_provenance(output, self.selected, "8.8.1")
+        (output / "extra.txt").write_text("unexpected")
+        with self.assertRaisesRegex(ValueError, "unexpected files"):
+            pages_artifact.verify_provenance(output, self.selected, "8.8.1")
+
+    def test_docs_provenance_refuses_private_lockfile_or_reused_output(self) -> None:
+        output = self._write_provenance()
+        with mock.patch.dict(
+            "os.environ",
+            {"GITHUB_SHA": "a" * 40, "GITHUB_RUN_ID": "123", "GITHUB_RUN_ATTEMPT": "1"},
+        ):
+            with self.assertRaisesRegex(ValueError, "must be empty"):
+                pages_artifact.write_provenance(self.archive, self.lock, output,
+                                                self.lock.parent, "1.15.0", "2.43.0")
+            self.lock.write_text('{"path": "/home/runner/private"}')
+            with self.assertRaisesRegex(ValueError, "non-public"):
+                pages_artifact.write_provenance(self.archive, self.lock,
+                                                Path(self.temp.name) / "other",
+                                                self.lock.parent, "1.15.0", "2.43.0")
+
+    def test_tool_version_reads_one_ascii_line_or_fails_closed(self) -> None:
+        completed = mock.Mock(returncode=0, stdout=b"", stderr=b"dot - graphviz version 2.43.0 (0)\n")
+        with mock.patch.object(pages_artifact.subprocess, "run", return_value=completed):
+            self.assertEqual(pages_artifact.tool_version(["dot", "-V"]),
+                             "dot - graphviz version 2.43.0 (0)")
+        for result in (mock.Mock(returncode=1, stdout=b"1.15.0\n", stderr=b""),
+                       mock.Mock(returncode=0, stdout=b"", stderr=b""),
+                       mock.Mock(returncode=0, stdout=b"1.15.0 \xff\n", stderr=b""),
+                       mock.Mock(returncode=0, stdout=b"1.15.0; rm\n", stderr=b"")):
+            with self.subTest(result=result.stdout):
+                with mock.patch.object(pages_artifact.subprocess, "run", return_value=result):
+                    with self.assertRaisesRegex(ValueError, "tool version"):
+                        pages_artifact.tool_version(["doxygen", "--version"])
+        with mock.patch.object(pages_artifact.subprocess, "run", side_effect=OSError):
+            with self.assertRaisesRegex(ValueError, "could not be read"):
+                pages_artifact.tool_version(["doxygen", "--version"])
+
 
 if __name__ == "__main__":
     unittest.main()

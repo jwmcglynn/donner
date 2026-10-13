@@ -453,6 +453,7 @@ py_test(
 py_library(
     name = "pages_artifact",
     srcs = ["pages_artifact.py"],
+    deps = [":release_cli"],
 )
 
 py_test(

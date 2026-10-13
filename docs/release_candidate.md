@@ -3,35 +3,39 @@
 A release candidate is a canonical JSON record bound by its SHA-256. It identifies one committed
 source tree and the exact retained artifacts and qualification attempts intended for publication.
 Changing any source, dependency lock, artifact, evidence run, or review report requires a new record
-and a new digest. A successful verification does not publish, deploy, or open a registry pull request.
+and a new digest. A record is never edited: assembling again produces a new record artifact. A
+successful verification does not publish, deploy, or open a registry pull request.
 
 `tools/release_candidate.py` checks a record against a clean checkout at its source commit, local
 copies of the retained artifact ZIPs, the current GitHub Actions API, and the review evidence. It
 recomputes each ZIP and member digest, checks that the source archive and Linux/macOS CLI packages
 pass their existing provenance verifiers, checks the editor package's file manifest, and validates
-the Pages archive and build marker. It rejects missing, expired, mismatched, or cross-commit runs
-and artifacts; artifacts that expire before the [retention window](#ReleaseCandidateRetention)
-ends; evidence files and review reports whose content does not describe the candidate; and
-prerelease versions.
-The source and both CLIs must come from one BCR Preflight attempt.
+the Pages archive, its build marker and the docs build provenance. It rejects missing, expired,
+mismatched, or cross-commit runs and artifacts; artifacts that expire before the
+[retention window](#ReleaseCandidateRetention) ends; evidence files and review reports whose content
+does not describe the candidate; and prerelease versions. The source and both CLIs must come from
+one BCR Preflight attempt, and the Pages artifact and docs provenance from one docs build attempt.
 
 ## Record fields
 
-The top-level fields are `schema` (currently `1`), `source`, `artifacts`, `evidence`, and
+The top-level fields are `schema` (currently `2`), `source`, `artifacts`, `evidence`, and
 `reviews`. The JSON is serialized with sorted keys, compact separators, ASCII escapes, and one
-trailing newline. Record its SHA-256 outside the record; the record cannot contain its own hash.
+trailing newline. Its SHA-256 is recorded outside the record, in `candidate.json.sha256` beside it
+and in the release body; the record cannot contain its own hash.
 
 - `source`: full commit and tree IDs; module version and compatibility level from `MODULE.bazel`
   (the version must be a stable `X.Y.Z`; a prerelease such as `0.8.0-pre` cannot be a candidate);
-  `.bazelversion`; and each CLI platform's retained `MODULE.bazel.lock` SHA-256 and compiler
-  version. The two generated locks are bound separately because their bytes may differ by platform.
-  The compiler version must equal the CLI provenance's `compiler_version` (provenance schema 3),
-  which names the compiler of the C++ toolchain Bazel used for that binary.
-- `artifacts`: exactly `source`, `cli-linux`, `cli-macos`, `editor`, and `docs`. Each has a GitHub run
-  ID and attempt, artifact ID and name, raw ZIP SHA-256, and a map of every ZIP member path to its
-  uncompressed SHA-256. The artifact ID and ZIP digest must match GitHub's metadata. The editor
-  package provenance also records its producer run and attempt; older editor packages without those
-  fields cannot qualify a candidate.
+  `.bazelversion`; the [dependency state](#ReleaseCandidateDependencies) of every published
+  artifact as `module_locks_sha256`; and each CLI platform's compiler version. The compiler
+  version must equal the CLI provenance's `compiler_version` (provenance schema 3), which names
+  the compiler of the C++ toolchain Bazel used for that binary.
+- `artifacts`: exactly `source`, `cli-linux`, `cli-macos`, `editor`, `docs`, and
+  `docs-provenance`. Each has a GitHub run ID and attempt, artifact ID and name, raw ZIP SHA-256,
+  and a map of every ZIP member path to its uncompressed SHA-256. The artifact ID and ZIP digest
+  must match GitHub's metadata. The editor package provenance also records its producer run and
+  attempt; older editor packages without those fields, or without a generated lockfile, cannot
+  qualify a candidate. `docs-provenance` is retained by the docs build beside its Pages artifact
+  and is never published.
 - `evidence`: exactly `ci`, `coverage`, `fuzz`, and `sanitizers`. Each names a successful
   exact-source run ID and attempt, its retained evidence-file SHA-256, and successful/skipped
   **workflow job** counts. The verifier gets those counts from GitHub's attempt-specific jobs API;
@@ -39,18 +43,41 @@ trailing newline. Record its SHA-256 outside the record; the record cannot conta
   each have a successful job, and coverage also needs its successful Codecov upload job; a green
   idle workflow with skipped sanitizer jobs is insufficient. Test-target results stay in the
   bound run's logs and artifacts. See [evidence and review content](#ReleaseCandidateContent).
-- `reviews`: SHA-256 digests of the local `security.md` and `supply-chain.md` reports. The record
-  contains their digests, not the reports' potentially sensitive contents.
+- `reviews`: SHA-256 digests of the `security.md` and `supply-chain.md` reports. The record
+  contains their digests; the record artifact retains the reports beside it.
+
+## Dependency state {#ReleaseCandidateDependencies}
+
+`MODULE.bazel.lock` is not committed. Each build of a published artifact resolves its own
+lockfile, proves it complete with `--lockfile_mode=error`, checks it for non-public content, and
+retains it with its SHA-256 in provenance. `source.module_locks_sha256` binds those digests, and
+the verifier recomputes each one from the retained file:
+
+| Key         | Build                                                     | Retained lockfile and digest                                      |
+| ----------- | --------------------------------------------------------- | ----------------------------------------------------------------- |
+| `cli-linux` | BCR Preflight, `-c opt` CLI build, update then error mode | `donner-svg_linux_x86_64.bazel.lock`; `generated_lock_sha256`     |
+| `cli-macos` | BCR Preflight, `-c opt` CLI build, update then error mode | `donner-svg_darwin_arm64.bazel.lock`; `generated_lock_sha256`     |
+| `editor`    | Editor WASM, `--config=editor-wasm` package build         | `MODULE.bazel.lock` in the package; `generated_lock_sha256`       |
+| `docs`      | Docs build, `bazel mod graph --ignore_dev_dependency`     | `MODULE.bazel.lock` in `docs-provenance`; `generated_lock_sha256` |
+
+The editor package keeps `lockfile_sha256` for the browser harness npm lock; the generated module
+lock is a separate field. The docs site is generated by Doxygen and Graphviz, not by Bazel, so the
+docs build records their versions with the Pages archive digest, and records the production module
+graph of the documented `donner` module, resolved at build time; development-only modules never
+run in that build. The source archive's consumer jobs still resolve with `--lockfile_mode=off`.
 
 ## Retention window {#ReleaseCandidateRetention}
 
-Every artifact named by a record must remain retained for at least **60 days** after verification
-(`MIN_REMAINING_RETENTION` in `tools/release_candidate.py`): up to 30 days from verification to
-publication, then a 30-day post-release rollback window in which the candidate's own docs and editor
-bytes can be promoted again. The verifier reads each artifact's GitHub `expires_at` and rejects one
-that is missing, unparseable, or earlier than that; "not expired yet" is not enough. All five roles
-upload with the 90-day maximum retention, so a record must be verified within 30 days of its oldest
-artifact build. After that, rebuild and assemble a new record rather than extending an old one.
+Every artifact named by a record must remain retained for at least **60 days** when the record is
+assembled (`MIN_REMAINING_RETENTION` in `tools/release_candidate.py`): up to 30 days from
+assembly to publication, then a 30-day post-release rollback window in which the candidate's own
+docs and editor bytes can be promoted again. The verifier reads each artifact's GitHub `expires_at`
+and rejects one that is missing, unparseable, or earlier than that; "not expired yet" is not
+enough. Release verifies the record again and requires at least **30 days**
+(`PUBLICATION_REMAINING_RETENTION`), so publication must follow assembly within 30 days. Every
+role and the record itself upload with the 90-day maximum retention, so a record must be
+assembled within 30 days of its oldest artifact build. After that, rebuild and assemble a new
+record rather than extending an old one.
 
 ## Evidence and review content {#ReleaseCandidateContent}
 
@@ -62,27 +89,51 @@ Digests alone would accept an empty file, so the verifier also checks content:
   attempt's jobs as `{"name": ..., "conclusion": "success" | "skipped"}` objects. Its success and
   skipped counts must equal the record's `passed_jobs` and `skipped_jobs`, its required lanes must
   have succeeded, and its jobs must be the same names and conclusions as GitHub's jobs API returns
-  for that attempt.
-  The `jobs` list can be read with the command after this list.
+  for that attempt. Assembly writes these files from that API.
 - Each `reviews/{name}.md` must be non-empty UTF-8 text without NUL bytes, at most 10 MB, and must
   contain the full 40-character candidate commit SHA. A short SHA or another commit does not count.
 
-```sh
-gh api "repos/jwmcglynn/donner/actions/runs/$RUN_ID/attempts/$ATTEMPT/jobs?per_page=100" \
-  --jq '[.jobs[] | {name, conclusion}]'
-```
+## Assemble a record {#ReleaseCandidateAssembly}
 
-All five artifact ZIPs and four evidence JSON files must be kept alongside the record in a durable
-location. Local filenames are `artifacts/{role}.zip` and `evidence/{role}.json`; the two review
-files live under `reviews/`. The verifier never uses these local paths as published metadata.
+Dispatch **Assemble release candidate** (`.github/workflows/release_candidate.yml`) on `main`
+while `main` points at the candidate commit. It runs only in this repository and only from
+`main`. Its inputs name everything the record binds; nothing is selected implicitly:
 
-## Verification
+- `candidate_commit`: the full candidate commit. Assembly fails if the dispatched commit differs.
+- `preflight_run`, `editor_run`, `docs_run`: `RUN_ID/ATTEMPT` of the successful BCR Preflight,
+  Editor WASM and docs build (a `main` push) attempts whose artifacts the record binds.
+- `ci_run`, `coverage_run`, `fuzz_run`, `sanitizers_run`: `RUN_ID/ATTEMPT` of the qualifying
+  evidence runs.
+- `security_review_comment`, `supply_chain_review_comment`: the IDs of issue comments in this
+  repository, written by the repository owner, whose bodies are the review reports. Their exact
+  bytes become `reviews/security.md` and `reviews/supply-chain.md`. A GitHub comment holds at
+  most 65,536 characters; a longer report links to its detail from that comment.
+
+The `assemble` job has read-only `contents`, `actions` and `issues` scopes and no secrets. It
+downloads each named artifact by ID and checks its bytes against GitHub's digest. The Editor
+WASM package and the Pages artifact are named without the attempt, so a rerun can retain one per
+attempt under the same name; assembly keeps the one built by the named attempt (the package whose
+`provenance.json` names that run and attempt, and the Pages archive that attempt's docs
+provenance names) and fails unless exactly one matches. It then writes the evidence and review
+files, builds the canonical record, and runs the full verifier with the
+60-day window. Only a verified record is written. It retains `candidate.json`,
+`candidate.json.sha256`, `evidence/` and `reviews/` as `donner-release-candidate-<attempt>` for 90
+days. The `attest-record` job runs no checkout or repository code; it rechecks the digest file and
+attests `candidate.json` with GitHub build provenance. Its summary prints the release body line.
+
+The record artifact is bound to the attempt that assembled it. After a failure, rerun all jobs or
+dispatch again; a failed-jobs-only rerun of the attestation job cannot find the record. Each
+attempt is a different record artifact even when its bytes are equal, and only the one named in
+the release body is used.
+
+## Verify locally
 
 Run from a clean checkout at the candidate commit with a GitHub token that can read Actions runs
-and artifacts. Set `CANDIDATE_DIR` to the durable artifact directory outside that checkout:
+and artifacts. Download the record artifact and every ZIP it names by artifact ID into a durable
+directory outside that checkout, as `artifacts/{role}.zip`, and set `CANDIDATE_DIR` to it:
 
 ```sh
-python3 -B -m tools.release_candidate \
+python3 -B -m tools.release_candidate verify \
   --record "$CANDIDATE_DIR/candidate.json" \
   --source-root . \
   --artifacts "$CANDIDATE_DIR/artifacts" \
@@ -90,10 +141,42 @@ python3 -B -m tools.release_candidate \
   --reviews "$CANDIDATE_DIR/reviews"
 ```
 
-Keep the exact canonical record and digest with its retained artifacts. The final v0.8 record can
-be assembled only after the versioned source, editor, docs, CI, fuzz, sanitizer, and review
-attempts are fixed. Publication workflows must be wired to select that record before it becomes
-the release authority.
+The evidence `jobs` list can be read with:
+
+```sh
+gh api "repos/jwmcglynn/donner/actions/runs/$RUN_ID/attempts/$ATTEMPT/jobs?per_page=100" \
+  --jq '[.jobs[] | {name, conclusion}]'
+```
+
+## How Release reads the record {#ReleaseCandidatePublication}
+
+Publication remains a separate, explicit maintainer decision. To publish, put this line in the
+GitHub release body, using the assembly run, its attempt and the record digest from the assembly
+summary:
+
+```text
+Release-Candidate-Record: <assembly-run-id>/<attempt> sha256:<record-sha256>
+```
+
+The `Release` workflow then:
+
+1. Requires exactly one such line, and rejects a body that also names a
+   `Release-Candidate-Preflight:` attempt. It checks that the tag matches the module version and
+   points at a commit on `main`, that the named attempt is a successful manual assembly on `main`
+   of that same commit, and that it retained exactly one unexpired record artifact.
+2. Downloads that artifact by ID, checks it against GitHub's digest, requires exactly the record
+   files, and requires `candidate.json` to match the release body digest and its checksum file.
+3. Downloads every artifact the record names by its recorded artifact ID and runs the full
+   verifier again, with the 30-day publication window, against the tag checkout.
+4. Verifies the record's attestation from this workflow and the preflight attestations of the
+   source archive, binaries, lockfiles and notices.
+5. Uploads exactly the files of the `source`, `cli-linux` and `cli-macos` roles that the record
+   names, plus the record itself as `donner-X.Y.Z.candidate.json`, through the write-once
+   publisher. It builds, repackages and selects nothing else.
+
+A missing, ambiguous, expired, mismatched or rewritten record fails the release before any upload.
+The docs site and BCR fork preparation are published by their own manually dispatched workflows;
+Release does not run them.
 
 ## Rollback
 

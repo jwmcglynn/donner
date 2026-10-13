@@ -23,25 +23,43 @@ def run_record(**overrides):
     return value
 
 
-def retained_artifacts(**overrides):
-    names = [f"donner-bcr-qualified-2", f"donner-svg-linux-x86-64-{SHA}-2",
-             f"donner-svg-darwin-arm64-{SHA}-2"]
-    artifacts = [{"name": name, "expired": False, "size_in_bytes": 100} for name in names]
-    if overrides:
-        artifacts[1].update(overrides)
+DIGEST = "e" * 64
+
+
+def assembly_run(**overrides):
+    return run_record(**{"path": release.CANDIDATE_PATH, "event": "workflow_dispatch",
+                         **overrides})
+
+
+def retained_record(**overrides):
+    artifacts = [{"id": 77, "name": "donner-release-candidate-2", "expired": False,
+                  "size_in_bytes": 100},
+                 {"id": 78, "name": "donner-release-candidate-1", "expired": False,
+                  "size_in_bytes": 100}]
+    artifacts[0].update(overrides)
     return {"artifacts": artifacts}
 
 
 class QualificationTest(unittest.TestCase):
-    def test_release_body_pins_one_preflight_attempt(self):
-        self.assertEqual(
-            release.candidate_ref("Release notes\n\nRelease-Candidate-Preflight: 12/2\n"),
-            ("12", "2"),
-        )
-        for body in ("Release notes", "Release-Candidate-Preflight: 0/2",
-                     "Release-Candidate-Preflight: 12/2\nRelease-Candidate-Preflight: 13/1"):
+    def test_release_body_pins_one_candidate_record(self):
+        line = f"Release-Candidate-Record: 12/2 sha256:{DIGEST}"
+        self.assertEqual(release.candidate_ref(f"Release notes\n\n{line}\n"), ("12", "2", DIGEST))
+        self.assertEqual(release.candidate_ref(f"Notes\r\n{line}\r\n"), ("12", "2", DIGEST))
+        for body in ("Release notes", f"Release-Candidate-Record: 0/2 sha256:{DIGEST}",
+                     "Release-Candidate-Record: 12/2", f"Release-Candidate-Record: 12/2 {DIGEST}",
+                     f"Release-Candidate-Record: 12/2 sha256:{DIGEST.upper()}",
+                     f"Release-Candidate-Record: 12/2 sha256:{DIGEST} extra",
+                     f"{line}\n{line}",
+                     f"{line}\nRelease-Candidate-Record: 13/1 sha256:{'f' * 64}",
+                     f"{line}\nRelease-Candidate-Record: unparsed"):
             with self.subTest(body=body), self.assertRaisesRegex(ValueError, "exactly one"):
                 release.candidate_ref(body)
+
+    def test_release_body_cannot_also_name_a_preflight_attempt(self):
+        body = (f"Release-Candidate-Record: 12/2 sha256:{DIGEST}\n"
+                "Release-Candidate-Preflight: 12/2\n")
+        with self.assertRaisesRegex(ValueError, "name the candidate record instead"):
+            release.candidate_ref(body)
 
     def test_only_expected_successful_source_run_is_accepted(self):
         release.check_run(run_record(), SHA, release.PREFLIGHT_PATH, {"push"})
@@ -53,53 +71,58 @@ class QualificationTest(unittest.TestCase):
 
     @mock.patch.object(release, "gh_json")
     @mock.patch.object(release, "check_source", return_value="1.0.0")
-    def test_manual_preflight_is_accepted_without_an_empty_commit(self, check_source, gh):
-        run = run_record(event="workflow_dispatch")
-        gh.side_effect = [run, [retained_artifacts()]]
-        result = release.select_preflight(SHA, "v1.0.0", "12", "2")
-        self.assertEqual(result, {"run_id": "12", "attempt": "2", "version": "1.0.0",
-                                  "artifact": "donner-bcr-qualified-2",
-                                  "linux_artifact": f"donner-svg-linux-x86-64-{SHA}-2",
-                                  "macos_artifact": f"donner-svg-darwin-arm64-{SHA}-2"})
+    def test_record_of_the_named_assembly_attempt_is_selected(self, check_source, gh):
+        gh.side_effect = [assembly_run(), [retained_record()]]
+        result = release.select_record(SHA, "v1.0.0", "12", "2", DIGEST)
+        self.assertEqual(result, {"run_id": "12", "attempt": "2", "artifact_id": "77",
+                                  "record_sha256": DIGEST, "version": "1.0.0"})
         check_source.assert_called_once_with(SHA, "v1.0.0")
+        self.assertEqual(gh.call_args_list[0].args,
+                         ("api", f"repos/{release.REPOSITORY}/actions/runs/12/attempts/2"))
 
     @mock.patch.object(release, "gh_json")
     @mock.patch.object(release, "check_source", return_value="1.0.0")
-    def test_preflight_requires_all_retained_nonempty_artifacts(self, check_source, gh):
-        for listed in [retained_artifacts(expired=True),
-                       retained_artifacts(size_in_bytes=0),
-                       {"artifacts": retained_artifacts()["artifacts"][:2]},
-                       {"artifacts": retained_artifacts()["artifacts"] * 2}]:
+    def test_record_requires_one_retained_nonempty_artifact(self, check_source, gh):
+        for listed in [retained_record(expired=True), retained_record(size_in_bytes=0),
+                       retained_record(id="77"), retained_record(name="donner-release-candidate-3"),
+                       {"artifacts": retained_record()["artifacts"] * 2}]:
             with self.subTest(listed=listed):
-                gh.side_effect = [run_record(), [listed]]
+                gh.side_effect = [assembly_run(), [listed]]
                 with self.assertRaisesRegex(ValueError, "missing, ambiguous, empty or expired"):
-                    release.select_preflight(SHA, "v1.0.0", "12", "2")
+                    release.select_record(SHA, "v1.0.0", "12", "2", DIGEST)
 
     @mock.patch.object(release, "gh_json")
     @mock.patch.object(release, "check_source", return_value="1.0.0")
-    def test_artifact_lookup_reads_all_pages(self, check_source, gh):
-        gh.side_effect = [run_record(), [{"artifacts": []}, retained_artifacts()]]
-        self.assertEqual(release.select_preflight(SHA, "v1.0.0", "12", "2")["attempt"], "2")
+    def test_record_lookup_reads_all_pages(self, check_source, gh):
+        gh.side_effect = [assembly_run(), [{"artifacts": []}, retained_record()]]
+        self.assertEqual(release.select_record(SHA, "v1.0.0", "12", "2", DIGEST)["artifact_id"],
+                         "77")
 
     @mock.patch.object(release, "gh_json")
     @mock.patch.object(release, "check_source", return_value="1.0.0")
-    def test_failed_selected_preflight_does_not_fall_back(self, check_source, gh):
-        failed = run_record(id=13, conclusion="failure")
-        gh.return_value = failed
-        with self.assertRaisesRegex(ValueError, "successful build"):
-            release.select_preflight(SHA, "v1.0.0", "13", "2")
+    def test_only_a_successful_main_assembly_of_the_release_commit_qualifies(self, check_source, gh):
+        cases = {
+            "failed": (assembly_run(conclusion="failure"), "successful build"),
+            "preflight run": (run_record(), "successful build"),
+            "push event": (assembly_run(event="push"), "successful build"),
+            "other commit": (assembly_run(head_sha="c" * 40), "successful build"),
+            "branch": (assembly_run(head_branch="feature"), "on main"),
+            "other attempt": (assembly_run(run_attempt=1), "selected immutable attempt"),
+            "other run": (assembly_run(id=13), "selected immutable attempt"),
+        }
+        for case, (run, message) in cases.items():
+            with self.subTest(case=case):
+                gh.side_effect = [run, [retained_record()]]
+                with self.assertRaisesRegex(ValueError, message):
+                    release.select_record(SHA, "v1.0.0", "12", "2", DIGEST)
 
-    @mock.patch.object(release, "gh_json", return_value=run_record(event="pull_request"))
+    @mock.patch.object(release, "gh_json")
     @mock.patch.object(release, "check_source", return_value="1.0.0")
-    def test_pr_artifacts_cannot_supply_a_release(self, check_source, gh):
-        with self.assertRaisesRegex(ValueError, "successful build"):
-            release.select_preflight(SHA, "v1.0.0", "12", "2")
-
-    @mock.patch.object(release, "gh_json", return_value=run_record(head_branch="feature"))
-    @mock.patch.object(release, "check_source", return_value="1.0.0")
-    def test_manual_branch_attestation_cannot_supply_a_release(self, check_source, gh):
-        with self.assertRaisesRegex(ValueError, "on main"):
-            release.select_preflight(SHA, "v1.0.0", "12", "2")
+    def test_record_digest_must_be_a_full_sha256(self, check_source, gh):
+        for value in ("e" * 63, "E" * 64, "sha256:" + "e" * 64):
+            with self.subTest(value=value), self.assertRaisesRegex(ValueError, "SHA-256"):
+                release.select_record(SHA, "v1.0.0", "12", "2", value)
+        gh.assert_not_called()
 
     @mock.patch.object(release.release_artifact_publisher, "verify_remote_tag")
     @mock.patch.object(release.subprocess, "run")
