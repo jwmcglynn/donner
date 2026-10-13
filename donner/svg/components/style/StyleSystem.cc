@@ -1,5 +1,6 @@
 #include "donner/svg/components/style/StyleSystem.h"
 
+#include <algorithm>
 #include <array>
 
 #include "donner/base/EcsRegistry.h"
@@ -19,6 +20,7 @@
 #include "donner/svg/components/shadow/ShadowEntityComponent.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
 #include "donner/svg/components/style/DoNotInheritFillOrStrokeTag.h"
+#include "donner/svg/components/style/ExternalUseStyleContext.h"
 #include "donner/svg/components/style/StyleComponent.h"
 
 namespace donner::svg::components {
@@ -27,14 +29,85 @@ namespace {
 
 StyleResourceBudget& GetStyleResourceBudget(Registry& registry) {
   if (registry.ctx().contains<StyleResourceBudget>()) {
-    return registry.ctx().get<StyleResourceBudget>();
+    auto& budget = registry.ctx().get<StyleResourceBudget>();
+    const auto* occurrence = registry.ctx().find<ExternalUseStyleContext>();
+    budget.setAggregateWorkBudget(occurrence ? occurrence->work.get() : nullptr);
+    return budget;
   }
 
   std::shared_ptr<DocumentResourceFamilyBudget> family;
   if (const auto* context = registry.ctx().find<DocumentResourceFamilyContext>()) {
     family = context->budget;
   }
-  return registry.ctx().emplace<StyleResourceBudget>(std::move(family));
+  auto& budget = registry.ctx().emplace<StyleResourceBudget>(std::move(family));
+  const auto* occurrence = registry.ctx().find<ExternalUseStyleContext>();
+  budget.setAggregateWorkBudget(occurrence ? occurrence->work.get() : nullptr);
+  return budget;
+}
+
+bool InheritsExternalPaint(PropertyState state) {
+  return state == PropertyState::NotSet || state == PropertyState::Inherit ||
+         state == PropertyState::ExplicitUnset;
+}
+
+template <typename T, PropertyCascade cascade>
+Property<T, cascade> InheritExternalProperty(const Property<T, cascade>& local,
+                                             const Property<T, cascade>& parent) {
+  const bool inherited = cascade != PropertyCascade::None;
+  if (local.state != PropertyState::Inherit && !(inherited && InheritsExternalPaint(local.state))) {
+    return local;
+  }
+  Property<T, cascade> result = local;
+  result.set(parent.get().value(), css::Specificity().toUserAgentSpecificity());
+  return result;
+}
+
+template <PropertyCascade cascade>
+bool BlockExternalReference(Property<Reference, cascade>& property,
+                            const Property<Reference, cascade>& local) {
+  const bool inherits = cascade == PropertyCascade::None ? local.state == PropertyState::Inherit
+                                                         : InheritsExternalPaint(local.state);
+  if (!inherits || property.get().value().href.empty()) {
+    return false;
+  }
+  property.set(PropertyState::ExplicitInitial, css::Specificity());
+  return true;
+}
+
+bool BlockExternalResources(PropertyRegistry& properties, const PropertyRegistry& local) {
+  bool rejected = BlockExternalReference(properties.markerStart, local.markerStart);
+  rejected |= BlockExternalReference(properties.markerMid, local.markerMid);
+  rejected |= BlockExternalReference(properties.markerEnd, local.markerEnd);
+  rejected |= BlockExternalReference(properties.mask, local.mask);
+  rejected |= BlockExternalReference(properties.clipPath, local.clipPath);
+  if (local.filter.state == PropertyState::Inherit) {
+    const auto& effects = properties.filter.get().value();
+    if (std::any_of(effects.begin(), effects.end(), [](const FilterEffect& effect) {
+          return effect.is<FilterEffect::ElementReference>();
+        })) {
+      properties.filter.set(PropertyState::ExplicitInitial, css::Specificity());
+      rejected = true;
+    }
+  }
+  if (InheritsExternalPaint(local.cursor.state) &&
+      !properties.cursor.get().value().images.empty()) {
+    properties.cursor.set(PropertyState::ExplicitInitial, css::Specificity());
+    rejected = true;
+  }
+  return rejected;
+}
+
+const ExternalUseStyleContext* ExternalRootContext(Registry& registry, Entity entity) {
+  const auto* occurrence = registry.ctx().find<ExternalUseStyleContext>();
+  return occurrence && occurrence->root == entity ? occurrence : nullptr;
+}
+
+bool ExternalPaintOrigin(PropertyState local, bool root, const ComputedStyleComponent* parent,
+                         bool stroke, bool allowPaint) {
+  if (!allowPaint || !InheritsExternalPaint(local)) {
+    return false;
+  }
+  return root || (parent && (stroke ? parent->externalStroke : parent->externalFill));
 }
 
 struct ShadowedElementAdapter {
@@ -296,6 +369,78 @@ void StyleSystem::applyStylesheetRules(Registry& registry, Entity treeEntity, En
   }
 }
 
+ResolvedPaintServer StyleSystem::externalHostPaint(Registry& registry, bool stroke) {
+  const auto* occurrence = registry.ctx().find<ExternalUseStyleContext>();
+  if (!occurrence) {
+    return PaintServer::None();
+  }
+  return stroke ? occurrence->stroke : occurrence->fill;
+}
+
+void StyleSystem::rejectExternalHostResource(Registry& registry) {
+  if (auto* occurrence = registry.ctx().find<ExternalUseStyleContext>()) {
+    occurrence->unsupportedResource = true;
+  }
+}
+
+std::optional<PaintServer> StyleSystem::localPaintForInstantiation(
+    const ComputedStyleComponent& style, bool stroke) {
+  if (stroke ? style.externalStroke : style.externalFill) {
+    return std::nullopt;
+  }
+  return stroke ? style.properties->stroke.get() : style.properties->fill.get();
+}
+
+PropertyRegistry StyleSystem::inheritComputedParent(EntityHandle handle, Entity parent,
+                                                    const PropertyRegistry& properties,
+                                                    ComputedStyleComponent& computed,
+                                                    ParseWarningSink& warningSink) {
+  Registry& registry = *handle.registry();
+  const auto* occurrence = ExternalRootContext(registry, handle.entity());
+  PropertyRegistry result = occurrence
+                                ? inheritExternalParent(properties, *occurrence->parent)
+                                : inheritProperties(registry, parent, properties, warningSink);
+  const auto* parentStyle =
+      parent != entt::null ? registry.try_get<ComputedStyleComponent>(parent) : nullptr;
+  const bool allowPaint = occurrence || !registry.all_of<DoNotInheritFillOrStrokeTag>(parent);
+  computed.externalFill = ExternalPaintOrigin(properties.fill.state, occurrence != nullptr,
+                                              parentStyle, false, allowPaint);
+  computed.externalStroke = ExternalPaintOrigin(properties.stroke.state, occurrence != nullptr,
+                                                parentStyle, true, allowPaint);
+  if (occurrence && BlockExternalResources(result, properties)) {
+    rejectExternalHostResource(registry);
+    warningSink.add(ParseDiagnostic::Error("External-use inherited URL resources are unsupported",
+                                           FileOffset::Offset(0)));
+  }
+  return result;
+}
+
+void StyleSystem::resolveComputedParentFonts(EntityHandle handle, Entity parent,
+                                             PropertyRegistry& properties) {
+  if (const auto* occurrence = ExternalRootContext(*handle.registry(), handle.entity())) {
+    const PropertyRegistry& host = *occurrence->parent;
+    properties.resolveFontSize(host.fontSize.get().value().value);
+    properties.resolveFontWeight(host.fontWeight.get().value());
+    properties.resolveFontStretch(host.fontStretch.get().value());
+  } else {
+    resolveRelativeFontProperties(*handle.registry(), parent, properties);
+  }
+}
+
+PropertyRegistry StyleSystem::inheritExternalParent(const PropertyRegistry& local,
+                                                    const PropertyRegistry& parent) {
+  PropertyRegistry result = local;
+  auto destination = result.allPropertiesMutable();
+  const auto source = local.allProperties();
+  const auto inherited = parent.allProperties();
+  [&]<std::size_t... index>(std::index_sequence<index...>) {
+    ((std::get<index>(destination) =
+          InheritExternalProperty(std::get<index>(source), std::get<index>(inherited))),
+     ...);
+  }(std::make_index_sequence<PropertyRegistry::numProperties()>{});
+  return result;
+}
+
 PropertyRegistry StyleSystem::inheritProperties(Registry& registry, Entity parent,
                                                 PropertyRegistry properties,
                                                 ParseWarningSink& warningSink) {
@@ -331,48 +476,7 @@ void StyleSystem::resolveRelativeFontProperties(Registry& registry, Entity paren
 void StyleSystem::computePropertiesInto(EntityHandle handle, ComputedStyleComponent& computedStyle,
                                         ParseWarningSink& warningSink) {
   if (computedStyle.properties) {
-    return;  // Already computed.
-  }
-
-  Registry& registry = *handle.registry();
-  auto& styleBudget = GetStyleResourceBudget(registry);
-
-  const auto* shadowComponent = handle.try_get<ShadowEntityComponent>();
-  const Entity dataEntity = shadowComponent ? shadowComponent->lightEntity : handle.entity();
-
-  // Apply local style.
-  PropertyRegistry properties;
-  if (auto* styleComponent = registry.try_get<StyleComponent>(dataEntity)) {
-    properties = styleComponent->properties;
-  } else {
-    properties = PropertyRegistry();
-  }
-
-  applyStylesheetRules(registry, handle.entity(), dataEntity, properties, styleBudget, warningSink);
-  properties.resolveElementColors(warningSink);
-
-  // Inherit from parent, then charge the dynamic bytes retained by the final computed style.
-  // Charging the parent's source value alone misses large locally parsed vectors and can also
-  // differ from the actual value selected by the cascade.
-  const Entity parent = handle.get<donner::components::TreeComponent>().parent();
-  PropertyRegistry finalProperties =
-      inheritProperties(registry, parent, std::move(properties), warningSink);
-
-  if (styleBudget.reserveComplexPropertyBytes(handle.entity(),
-                                              finalProperties.complexPropertyBytes())) {
-    computedStyle.properties = std::move(finalProperties);
-  } else {
-    // Once the aggregate retained-byte budget is exhausted, use bounded initial styles for the
-    // remainder of the pass instead of retaining attacker-sized local or inherited vectors.
-    styleBudget.release(handle.entity());
-    computedStyle.properties = PropertyRegistry();
-  }
-
-  // Resolve font-size to absolute pixels. CSS spec requires the computed value of font-size to
-  // always be an absolute length. Relative units (em, %, ex) resolve against the parent's computed
-  // font-size, and percentages resolve against the parent font-size (not the viewBox).
-  if (computedStyle.properties) {
-    resolveRelativeFontProperties(registry, parent, *computedStyle.properties);
+    resolveComputedParentFonts(handle, parent, *computedStyle.properties);
   }
 }
 

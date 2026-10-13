@@ -2,6 +2,7 @@
 /// @file
 
 #include <optional>
+#include <utility>
 #include <vector>
 
 #include "donner/base/Box.h"
@@ -105,6 +106,15 @@ public:
    * renders of the same cached sub-document handle.
    */
   void clearInitialContextPaint();
+
+  /// Owned paint state saved and restored under a sub-document's write guard.
+  using InitialPaintState =
+      std::pair<std::optional<ResolvedPaintServer>, std::optional<ResolvedPaintServer>>;
+  InitialPaintState initialPaintState() const {
+    return {initialContextFill_, initialContextStroke_};
+  }
+  /// Restore the state that preceded a scoped external-use occurrence.
+  void restoreInitialPaintState(InitialPaintState state);
 
 private:
   /**

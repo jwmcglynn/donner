@@ -24,6 +24,7 @@ donner_perf_sensitive_cc_library(
     ],
     hdrs = [
         "StyleSystem.h",
+        "ExternalUseStyleContext.h",
     ],
     visibility = [
         "//donner/editor:__pkg__",

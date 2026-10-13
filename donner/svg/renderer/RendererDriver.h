@@ -22,6 +22,10 @@
 #include "donner/svg/renderer/common/RenderingInstanceView.h"
 
 namespace donner::svg {
+namespace components {
+class StyleResourceBudget;
+struct ComputedStyleComponent;
+}  // namespace components
 
 struct RendererDriverTextFrameCache;
 
@@ -416,6 +420,10 @@ private:
   /// Apply \ref resolvePaintContextRemap to the fill and stroke of @p paint for @p instance.
   void applyDrawTimeContextRemaps(PaintParams& paint,
                                   const components::RenderingInstanceComponent& instance) const;
+  void drawExternalUse(SVGDocument& subDocument, std::string_view fragment,
+                       const components::RenderingInstanceComponent& instance,
+                       const components::ComputedStyleComponent& style, Registry& hostRegistry,
+                       Entity hostEntity);
   void drawSubDocument(SVGDocument& subDocument, const Box2d& viewportBounds,
                        const PreserveAspectRatio& aspectRatio, double opacity,
                        const Transform2d& parentAbsoluteTransform, Registry& hostRegistry,
@@ -496,6 +504,7 @@ private:
   bool earlyLeafViewportCulling_ = false;
   TextPreparationStats textPreparationStats_;
   std::unique_ptr<RendererDriverTextFrameCache> textFrameCache_;
+  std::shared_ptr<components::StyleResourceBudget> externalUseStyleWork_;
 
   /// Recursion guard for feImage fragment rendering. Tracks entity IDs currently being rendered
   /// as feImage fragments to prevent infinite recursion. Shared across nested RendererDriver
