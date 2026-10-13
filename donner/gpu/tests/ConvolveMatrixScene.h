@@ -46,9 +46,9 @@ inline constexpr std::array<BiasCase, 8> kBiasCases{{
     {"positive", 0.25f, false, {0.2f, 0.1f, 0.05f, 0.5f}, {0.3875f, 0.2875f, 0.2375f, 0.75f}},
     {"negative", -0.25f, false, {0.2f, 0.1f, 0.05f, 0.5f}, {0.1375f, 0.0375f, 0.0f, 0.25f}},
     {"transparent", 0.25f, false, {0.0f, 0.0f, 0.0f, 0.0f}, {0.0625f, 0.0625f, 0.0625f, 0.25f}},
-    {"clamp_high", 0.75f, false, {0.2f, 0.1f, 0.05f, 0.5f}, {0.95f, 0.85f, 0.8f, 1.0f}},
+    {"clamp_high", 0.75f, false, {0.2f, 0.1f, 0.05f, 0.5f}, {1.0f, 1.0f, 0.9875f, 1.0f}},
     {"clamp_low", -0.75f, false, {0.2f, 0.1f, 0.05f, 0.5f}, {0.0f, 0.0f, 0.0f, 0.0f}},
-    {"opaque", 0.25f, false, {0.2f, 0.1f, 0.05f, 1.0f}, {0.45f, 0.35f, 0.3f, 1.0f}},
+    {"opaque", 0.25f, false, {0.2f, 0.1f, 0.05f, 1.0f}, {0.5125f, 0.4125f, 0.3625f, 1.0f}},
     {"zero", 0.0f, false, {0.2f, 0.1f, 0.05f, 0.5f}, {0.2f, 0.1f, 0.05f, 0.5f}},
     {"preserved", 0.25f, true, {0.2f, 0.1f, 0.05f, 0.5f}, {0.325f, 0.225f, 0.175f, 0.5f}},
 }};

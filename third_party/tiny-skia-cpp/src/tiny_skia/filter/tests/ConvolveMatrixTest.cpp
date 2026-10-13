@@ -21,8 +21,8 @@ struct BiasCase {
   std::array<std::uint8_t, 4> byteExpected;
 };
 
-// Filter Effects 1, section 9.9: A = sumA/divisor + bias; RGB bias uses resulting A.
-// The byte literals account independently for input quantization and nearest rounding.
+// Filter Effects 1, section 9.9: A = sumA/divisor + bias; RGB bias uses raw resulting A before
+// clamping. The byte literals account independently for input quantization and nearest rounding.
 constexpr std::array<BiasCase, 8> kBiasCases{{
     {"positive",
      0.25,
@@ -49,9 +49,9 @@ constexpr std::array<BiasCase, 8> kBiasCases{{
      0.75,
      false,
      {0.2f, 0.1f, 0.05f, 0.5f},
-     {0.95f, 0.85f, 0.8f, 1.0f},
+     {1.0f, 1.0f, 0.9875f, 1.0f},
      {51, 26, 13, 128},
-     {242, 217, 204, 255}},
+     {255, 255, 252, 255}},
     {"clamp_low",
      -0.75,
      false,
@@ -63,9 +63,9 @@ constexpr std::array<BiasCase, 8> kBiasCases{{
      0.25,
      false,
      {0.2f, 0.1f, 0.05f, 1.0f},
-     {0.45f, 0.35f, 0.3f, 1.0f},
+     {0.5125f, 0.4125f, 0.3625f, 1.0f},
      {51, 26, 13, 255},
-     {115, 90, 77, 255}},
+     {131, 106, 93, 255}},
     {"zero",
      0.0,
      false,
