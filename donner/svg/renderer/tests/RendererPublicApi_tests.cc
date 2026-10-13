@@ -940,7 +940,7 @@ TEST(RendererPublicApiTest, SourceInsertedUnsupportedWrappersDoNotPaint) {
     const auto result = document.applySourceEdit(xml::XMLEditIntent{
         .range = SourceRange{FileOffset::Offset(editStart),
                              FileOffset::Offset(editStart + oldChild.size())},
-        .replacement = RcString(replacement),
+        .replacement = replacement,
         .sourceVersion = document.sourceVersion(),
     });
     ASSERT_THAT(result.applied, testing::IsTrue());
