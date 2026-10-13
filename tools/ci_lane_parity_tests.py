@@ -44,6 +44,36 @@ JOB_REPLACEMENTS = {
     ("main.yml", "macos", "trusted-pr"): "macos-self-hosted",
 }
 
+# Hosted jobs that run some of a replaced job's steps on the replaced job's own runner image, for
+# the pull requests that affect those steps' targets. Keyed like JOB_REPLACEMENTS; the value is
+# (subset job, steps it covers). A covered step must run with exactly main's Bazel invocation, so
+# it is compared with the subset job instead of the replacement. The subset runs only when the
+# PR's affected set reaches the covered tests (or falls back to //...); a PR that cannot change
+# them leaves main's result for them unchanged, apart from flakes main's //... run can still hit.
+HOSTED_SUBSETS = {
+    ("main.yml", "macos", "trusted-pr"): ("macos-browser", ("Test (browser targets)",)),
+}
+
+# Differences between a main step and the hosted subset's copy of it. Keyed by (workflow, main
+# job, subset job, step, kind, value). Only build-scope differences belong here: the subset must
+# test exactly what main tests.
+SUBSET_ALLOWLIST = {
+    ("main.yml", "macos", "macos-browser", "Test (browser targets)", "flag-pr-only",
+     "--build_tests_only"):
+        "Build scope only: main's job builds the whole selection in its Build step first, and "
+        "the subset has no Build step, so it builds only what the selected tests need. The "
+        "tests themselves, their filters and environment are main's.",
+}
+
+# Setup step inputs whose value in a hosted subset is fixed instead of copied from main's job. The
+# subset runs only for pull requests, which must not save the Actions cache, so it states that
+# directly rather than repeating main's main-only expression.
+SUBSET_SETUP_REQUIRED_INPUTS = {("Setup Bazel", "cache-save"): "false"}
+
+# Steps a hosted subset runs that main's job does not, with the reason each cannot change what
+# the covered steps test.
+SUBSET_EXTRA_STEPS = {}
+
 # Jobs that run on a main push and on no kind of pull request, without a replacement.
 MAIN_ONLY_JOBS = {}
 
@@ -199,13 +229,15 @@ COUNTERPART_ALLOWLIST = {
 # Each scenario sets every job output a condition reads; an output not modelled here raises.
 # `trusted_pr` and `renovate_pr` are the .github/actions/pr-trust outputs, which both the
 # self-hosted routing and the remote cache wiring read; a push gets "false" for both. A PR here
-# touches no release inputs, so the BCR preflight runs its slim scope (`full_matrix`), and it
-# does not reach the WebGPU reference corpus (`wgpu_reference`).
+# touches no release inputs, so the BCR preflight runs its slim scope (`full_matrix`), it does
+# not reach the WebGPU reference corpus (`wgpu_reference`), and it does reach a browser test
+# (`browser_affected`).
 _PULL_REQUEST = {
     "github.event_name": "pull_request",
     "github.ref": "refs/pull/1/merge",
     "fallback": "false",
-    "affected": "//donner/base:base_tests",
+    "affected": "//donner/editor/wasm/tests:chromium_remote_smoke",
+    "browser_affected": "true",
     "wgpu_reference": "false",
     "full_matrix": "false",
 }
@@ -225,9 +257,18 @@ SCENARIOS = {
         "affected": "",
         "wgpu_reference": "",
         "full_matrix": "false",
+        "browser_affected": "",
     },
     "trusted-pr": dict(_PULL_REQUEST, use_self_hosted="true", trusted_pr="true",
                        renovate_pr="false"),
+    # A trusted PR whose affected set reaches no browser test.
+    "trusted-pr-native-only": dict(_PULL_REQUEST, use_self_hosted="true", trusted_pr="true",
+                                   renovate_pr="false", affected="//donner/base:base_tests",
+                                   browser_affected="false"),
+    # A trusted PR that falls back to //... (an infrastructure change).
+    "trusted-pr-fallback": dict(_PULL_REQUEST, use_self_hosted="true", trusted_pr="true",
+                                renovate_pr="false", fallback="true", affected="",
+                                browser_affected=""),
     "untrusted-pr": dict(_PULL_REQUEST, use_self_hosted="false", trusted_pr="false",
                          renovate_pr="false"),
     "renovate-pr": dict(_PULL_REQUEST, use_self_hosted="false", trusted_pr="false",
@@ -260,6 +301,7 @@ _MODELLED_OUTPUTS = {
     "needs.determine-targets.outputs.fallback": "fallback",
     "needs.determine-targets.outputs.affected": "affected",
     "needs.determine-targets.outputs.wgpu_reference": "wgpu_reference",
+    "needs.determine-targets.outputs.browser_affected": "browser_affected",
     "needs.prepare.outputs.full_matrix": "full_matrix",
 }
 
@@ -861,6 +903,16 @@ def _step_differences(name, main_runs, pr_runs):
     return differences
 
 
+def _compared_steps(main_steps, pr_steps, only_steps):
+    """Differences in just `only_steps`, each of which both jobs must run."""
+    differences = {(name, "step-missing", "") for name in only_steps
+                   if name not in main_steps or name not in pr_steps}
+    shared = {name for name in only_steps if name in main_steps and name in pr_steps}
+    for name in shared:
+        differences |= _step_differences(name, main_steps[name], pr_steps[name])
+    return _fold_shared(differences, shared)
+
+
 def invocation_differences(workflow, main_job_name, replacement_name, only_steps=None):
     """(step, kind, value) differences between a main job and the job that replaces it.
 
@@ -870,15 +922,7 @@ def invocation_differences(workflow, main_job_name, replacement_name, only_steps
     main_steps, main_writes = _bazel_profile(workflow, jobs[main_job_name], "main-push")
     pr_steps, pr_writes = _bazel_profile(workflow, jobs[replacement_name], "trusted-pr")
     if only_steps is not None:
-        missing = {(name, "step-missing", "") for name in only_steps
-                   if name not in main_steps or name not in pr_steps}
-        main_steps = {name: main_steps[name] for name in only_steps if name in main_steps}
-        pr_steps = {name: pr_steps[name] for name in only_steps if name in pr_steps}
-        shared = set(main_steps) & set(pr_steps)
-        differences = set(missing)
-        for name in shared:
-            differences |= _step_differences(name, main_steps[name], pr_steps[name])
-        return _fold_shared(differences, shared)
+        return _compared_steps(main_steps, pr_steps, only_steps)
     differences = _set_differences("*", "runtime-env", main_writes, pr_writes)
     differences |= {(name, "step-main-only", "") for name in set(main_steps) - set(pr_steps)}
     differences |= _other_step_differences(workflow, jobs[main_job_name], jobs[replacement_name])
@@ -886,6 +930,93 @@ def invocation_differences(workflow, main_job_name, replacement_name, only_steps
     for name in shared:
         differences |= _step_differences(name, main_steps[name], pr_steps[name])
     return _fold_shared(differences, shared)
+
+
+def _setup_view(step):
+    """A setup step's identity: condition, what it runs, and its inputs as a sorted list."""
+    inputs = dict(step.get("with") or {})
+    for step_name, key in SUBSET_SETUP_REQUIRED_INPUTS:
+        if _step_name(step) == step_name:
+            inputs.pop(key, None)
+    return (step.get("if"), step.get("uses"), step.get("run"), sorted(inputs.items()))
+
+
+def _required_input_problems(name, step):
+    return [(name, "%s is not %s" % (key, value))
+            for (step_name, key), value in SUBSET_SETUP_REQUIRED_INPUTS.items()
+            if step_name == name and str((step.get("with") or {}).get(key)) != value]
+
+
+def subset_setup_differences(workflow, main_job_name, subset_name, covered):
+    """Setup steps that main's job runs before a covered step and the subset lacks or changes.
+
+    Setup is every gating step before the first covered step that runs no Bazel build or test:
+    checkout, toolchain installs, cache restores and dependency fetches. Bazel builds and tests
+    there are the work the subset deliberately skips, and its Bazel steps are compared
+    separately.
+    """
+    jobs = _jobs(workflow)
+    main_job, subset = jobs[main_job_name], jobs[subset_name]
+    environment = _environment(workflow, main_job)
+    subset_steps = {_step_name(step): step for step in _gating_steps(subset, "trusted-pr")}
+    # The job-level environment binding decides which cache key the setup steps receive.
+    problems = ([] if subset.get("environment") == main_job.get("environment")
+                else [("environment", "changed")])
+    for step in _gating_steps(main_job, "main-push"):
+        name = _step_name(step)
+        if name in covered:
+            break
+        if bazel_invocations(str(step.get("run") or ""), environment):
+            continue
+        if name not in subset_steps:
+            problems.append((name, "missing"))
+            continue
+        if _setup_view(step) != _setup_view(subset_steps[name]):
+            problems.append((name, "changed"))
+        problems.extend(_required_input_problems(name, subset_steps[name]))
+    return problems + subset_order_problems(main_job, subset)
+
+
+def subset_order_problems(main_job, subset):
+    """Subset steps that main's job does not run, or runs in a different order.
+
+    The subset's gating steps, in order, must be a subsequence of main's: its setup steps (so
+    BuildBuddy and toolchain setup still precede every Bazel step), the Bazel steps it keeps, the
+    covered steps and any later failure handling. A step main's job does not have could change
+    what the covered steps test (for example, by writing a bazelrc), so it needs a reviewed
+    entry in SUBSET_EXTRA_STEPS.
+    """
+    main_names = [_step_name(step) for step in _gating_steps(main_job, "main-push")]
+    problems = []
+    position = -1
+    for step in _gating_steps(subset, "trusted-pr"):
+        name = _step_name(step)
+        if name not in main_names:
+            if name not in SUBSET_EXTRA_STEPS:
+                problems.append((name, "not in main's job"))
+            continue
+        index = main_names.index(name)
+        if index <= position:
+            problems.append((name, "out of order"))
+        position = max(position, index)
+    return problems
+
+
+def subset_differences(workflow, main_job_name, subset_name, covered):
+    """How a hosted subset job's Bazel invocations differ from the main job's.
+
+    Every Bazel step the subset runs must be a main step with the same invocation, every covered
+    step must be among them, and both jobs must rewrite the same flag variables at run time.
+    """
+    jobs = _jobs(workflow)
+    main_steps, main_writes = _bazel_profile(workflow, jobs[main_job_name], "main-push")
+    subset_steps, subset_writes = _bazel_profile(workflow, jobs[subset_name], "trusted-pr")
+    differences = _set_differences("*", "runtime-env", main_writes, subset_writes)
+    differences |= {(name, "step-missing", "") for name in set(covered) - set(subset_steps)}
+    differences |= {(name, "step-subset-only", "") for name in set(subset_steps) - set(main_steps)}
+    for name in set(subset_steps) & set(main_steps):
+        differences |= _step_differences(name, main_steps[name], subset_steps[name])
+    return differences
 
 
 def _fold_shared(differences, shared_steps):
@@ -1244,6 +1375,8 @@ class CiLaneParityTest(unittest.TestCase):
 
     def test_replacement_jobs_run_the_same_bazel_invocations(self):
         observed = set()
+        # A step a hosted subset covers is still compared with the replacement's: the
+        # replacement keeps running it on every trusted PR, including those the subset skips.
         for (name, job_name, _), replacement in JOB_REPLACEMENTS.items():
             workflow = self.workflows[name]
             for step, kind, value in invocation_differences(workflow, job_name, replacement):
@@ -1530,12 +1663,56 @@ class CiLaneParityTest(unittest.TestCase):
             ("x.yml", "build", "Publish", "renovate-pr"),
         })
 
+    def test_hosted_subsets_run_main_steps_unchanged(self):
+        observed = set()
+        for (name, job_name, scenario), (subset, covered) in HOSTED_SUBSETS.items():
+            workflow = self.workflows[name]
+            observed |= {(name, job_name, subset) + difference
+                         for difference in subset_differences(workflow, job_name, subset,
+                                                              covered)}
+            with self.subTest(subset=subset):
+                self.assertEqual(subset_setup_differences(workflow, job_name, subset, covered),
+                                 [])
+                # Every variable the subset defines has main's value.
+                main_environment = _environment(workflow, _jobs(workflow)[job_name])
+                for key, value in _environment(workflow, _jobs(workflow)[subset]).items():
+                    self.assertEqual(main_environment.get(key), value, key)
+        self._assert_matches_allowlist(observed, SUBSET_ALLOWLIST,
+                                       "a hosted subset runs a main step differently")
+
+    def test_subset_order_problems_are_found(self):
+        main = parse_workflow(
+            "steps:\n      - name: Setup\n        run: x\n      - name: Profile\n"
+            "        run: y\n      - name: Test\n        run: z\n")
+        reordered = parse_workflow(
+            "steps:\n      - name: Setup\n        run: x\n      - name: Test\n"
+            "        run: z\n      - name: Profile\n        run: y\n"
+            "      - name: Write bazelrc\n        run: echo test >> .bazelrc\n")
+        self.assertEqual(subset_order_problems(main, reordered), [
+            ("Profile", "out of order"),
+            ("Write bazelrc", "not in main's job"),
+        ])
+        self.assertEqual(subset_order_problems(main, main), [])
+
+    def test_hosted_subsets_run_only_for_affected_trusted_pull_requests(self):
+        for (name, _, scenario), (subset, _) in HOSTED_SUBSETS.items():
+            workflow = self.workflows[name]
+            with self.subTest(subset=subset):
+                # job_gates includes the jobs the subset needs.
+                self.assertTrue(job_gates(workflow, subset, scenario))
+                self.assertFalse(job_gates(workflow, subset, "trusted-pr-native-only"))
+                # Main pushes, untrusted and Renovate PRs already run the whole hosted job.
+                for other in ("main-push", "untrusted-pr", "renovate-pr"):
+                    self.assertFalse(job_gates(workflow, subset, other), other)
+                # An infrastructure change falls back to //..., which reaches every browser test.
+                self.assertTrue(job_gates(workflow, subset, "trusted-pr-fallback"))
+
     def test_every_allowlist_entry_has_a_reason(self):
         for name, (_, reason) in STEP_OUTPUTS.items():
             self.assertGreater(len(reason.strip()), 20, name)
         for allowlist in (TRIGGER_ALLOWLIST, MAIN_ONLY_JOBS, INVOCATION_ALLOWLIST,
                           STEP_ALLOWLIST, COUNTERPART_ALLOWLIST, FAILURE_SWALLOW_ALLOWLIST,
-                          SHARED_JOB_ALLOWLIST):
+                          SHARED_JOB_ALLOWLIST, SUBSET_ALLOWLIST, SUBSET_EXTRA_STEPS):
             for key, reason in allowlist.items():
                 self.assertGreater(len(reason.strip()), 20, key)
 
