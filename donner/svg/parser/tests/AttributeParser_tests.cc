@@ -2259,4 +2259,17 @@ TEST(AttributeParserTest, FilterIntegerAttributesRejectNonFiniteNumbers) {
   EXPECT_EQ(QueryComponent<components::FETurbulenceComponent>(document, "#turb").numOctaves, 1);
 }
 
+TEST(AttributeParserTest, TransferFunctionsParseCommonIdentityAttributes) {
+  for (const std::string tag : {"feFuncR", "feFuncG", "feFuncB", "feFuncA"}) {
+    SCOPED_TRACE(tag);
+    auto document = ParseSVGExperimental(
+        "<svg xmlns='http://www.w3.org/2000/svg'><filter><feComponentTransfer><" + tag +
+        " id='channel' class='transfer' type='linear'/></feComponentTransfer></filter></svg>");
+    auto element = document.querySelector(tag);
+    ASSERT_THAT(element, testing::Ne(std::nullopt));
+    EXPECT_THAT(element->id().str(), testing::Eq("channel"));
+    EXPECT_THAT(element->className().str(), testing::Eq("transfer"));
+  }
+}
+
 }  // namespace donner::svg::parser
