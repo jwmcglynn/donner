@@ -163,6 +163,33 @@ std::optional<ParseDiagnostic> ParseNodeContents(SVGParserContext& context, T el
   return std::nullopt;
 }
 
+SourceRange MapStylesheetWarning(SVGParserContext& context,
+                                 const components::StylesheetSourceMap& sourceMap,
+                                 const SourceRange& range) {
+  std::optional<SourceRange> mapped;
+  if (range.start == range.end) {
+    if (const auto point = sourceMap.mapPointToDocumentSource(range.start)) {
+      mapped = SourceRange{*point, *point};
+    }
+  } else {
+    mapped = sourceMap.mapToDocumentSource(range);
+  }
+  return mapped ? context.documentSourceRange(*mapped) : range;
+}
+
+void ParseStylesheetWithWarnings(SVGParserContext& context,
+                                 components::StylesheetComponent& component,
+                                 std::string_view source,
+                                 components::StylesheetSourceMap sourceMap) {
+  ParseWarningSink warnings =
+      context.warningsEnabled() ? ParseWarningSink() : ParseWarningSink::Disabled();
+  component.parseStylesheet(source, std::move(sourceMap), warnings);
+  warnings.mapSourceRanges([&](const SourceRange& range) {
+    return MapStylesheetWarning(context, component.sourceMap, range);
+  });
+  context.addRecoverableWarnings(std::move(warnings));
+}
+
 template <>
 std::optional<ParseDiagnostic> ParseNodeContents<SVGStyleElement>(SVGParserContext& context,
                                                                   SVGStyleElement element,
@@ -241,7 +268,8 @@ std::optional<ParseDiagnostic> ParseNodeContents<SVGStyleElement>(SVGParserConte
     if (!combined.empty()) {
       auto& stylesheetComponent =
           element.entityHandle().get_or_emplace<components::StylesheetComponent>();
-      stylesheetComponent.parseStylesheet(std::string_view(combined), std::move(sourceMap));
+      ParseStylesheetWithWarnings(context, stylesheetComponent, std::string_view(combined),
+                                  std::move(sourceMap));
 
       const auto& stats = stylesheetComponent.stylesheet.securityStats();
       constexpr std::size_t kEstimatedBytesPerComponentValue = 64;

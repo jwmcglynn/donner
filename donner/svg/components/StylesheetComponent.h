@@ -52,6 +52,14 @@ public:
   std::optional<SourceRange> mapToDocumentSource(const SourceRange& localRange) const;
 
   /**
+   * Map a point diagnostic, preferring the next chunk at a shared CSS boundary.
+   *
+   * @param localOffset Point in the parsed CSS string.
+   * @return Document offset, or nullopt when no source segment covers the point.
+   */
+  std::optional<FileOffset> mapPointToDocumentSource(FileOffset localOffset) const;
+
+  /**
    * Map a document source offset back to this stylesheet's local CSS offset.
    *
    * @param documentOffset Offset in the SVG document source.
@@ -142,6 +150,15 @@ struct StylesheetComponent {
    * @param sourceMap Source map for local CSS offsets in \p str.
    */
   void parseStylesheet(const RcStringOrRef& str, StylesheetSourceMap sourceMap);
+  /**
+   * Parse stylesheet contents while collecting CSS-local diagnostics.
+   *
+   * @param str Stylesheet contents.
+   * @param sourceMap Source provenance for the retained stylesheet.
+   * @param warnings Bounded sink receiving recoverable CSS diagnostics.
+   */
+  void parseStylesheet(const RcStringOrRef& str, StylesheetSourceMap sourceMap,
+                       ParseWarningSink& warnings);
 };
 
 }  // namespace donner::svg::components

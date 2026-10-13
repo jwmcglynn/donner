@@ -5,6 +5,7 @@
 #include <variant>
 #include <vector>
 
+#include "donner/base/FileOffset.h"
 #include "donner/css/ComponentValue.h"
 
 namespace donner::css {
@@ -27,6 +28,9 @@ namespace donner::css {
 struct AtRule {
   /// Name of the at-rule, such as `media`, `font-face`, `keyframes`, etc.
   RcString name;
+
+  /// Source position of the `@` token, when available; excluded from semantic equality.
+  FileOffset sourceOffset = FileOffset::EndOfString();
 
   /// List of component values before the block definition.
   std::vector<ComponentValue> prelude;
