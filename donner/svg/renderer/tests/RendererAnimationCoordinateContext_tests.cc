@@ -75,5 +75,58 @@ TEST(RendererAnimationCoordinateContext, MaskMixedLengthsUseTheSelectedUnits) {
   }
 }
 
+TEST(RendererAnimationCoordinateContext, PatternUsesInheritedBaseAndSampledUnits) {
+  for (const bool sampledUnits : {false, true}) {
+    SCOPED_TRACE(sampledUnits);
+    const std::string prefix =
+        "<defs><pattern id='base' width='100%' height='1'/>"
+        "<pattern id='p' href='#base'";
+    const std::string suffix =
+        "><rect width='2' height='16'/></pattern></defs>"
+        "<rect width='16' height='16' fill='url(#p)'/>";
+    auto document = instantiateSubtree(
+        prefix + suffix + "<animate href='#p' attributeName='width' to='0.5' dur='2s'/>" +
+            (sampledUnits ? "<set href='#base' attributeName='patternUnits' "
+                            "to='userSpaceOnUse' dur='2s'/>"
+                          : ""),
+        parser::SVGParser::Options(), Vector2i(16, 16));
+    auto expected = instantiateSubtree(
+        prefix + (sampledUnits ? " patternUnits='userSpaceOnUse' width='8.25'" : " width='0.75'") +
+            suffix,
+        parser::SVGParser::Options(), Vector2i(16, 16));
+    document.setTime(1);
+    editor::tests::CompareBitmapToBitmap(
+        RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(expected),
+        sampledUnits ? "pattern-sampled-units" : "pattern-inherited-width",
+        editor::tests::PixelmatchIdentityParams());
+  }
+}
+
+TEST(RendererAnimationCoordinateContext, FilterUsesDefaultAndInheritedRegionLengths) {
+  if (!ActiveRendererSupportsFeature(RendererBackendFeature::FilterEffects)) {
+    GTEST_SKIP() << "Filters are disabled in this configuration";
+  }
+  for (const bool inherited : {false, true}) {
+    SCOPED_TRACE(inherited);
+    const std::string prefix =
+        std::string("<defs>") + (inherited
+                                     ? "<filter id='base' width='80%'/><filter id='f' href='#base'"
+                                     : "<filter id='f'");
+    const std::string suffix =
+        "><feOffset/></filter></defs><rect width='16' height='16' filter='url(#f)'/>";
+    auto document = instantiateSubtree(
+        prefix + suffix + "<animate href='#f' attributeName='width' to='0.8' dur='2s'/>",
+        parser::SVGParser::Options(), Vector2i(16, 16));
+    auto expected =
+        instantiateSubtree(prefix + (inherited ? " width='0.8'" : " width='1'") + suffix,
+                           parser::SVGParser::Options(), Vector2i(16, 16));
+    document.setTime(1);
+    editor::tests::CompareBitmapToBitmap(
+        RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(expected),
+        inherited ? "filter-inherited-region" : "filter-default-region",
+        editor::tests::PixelmatchIdentityParams());
+  }
+}
+
 }  // namespace
 }  // namespace donner::svg
