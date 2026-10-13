@@ -530,6 +530,20 @@ js_test(
     node_options = ["--test"],
 )
 
+# Drives pipeline creation in the same library against a stub device with one in-order timeline, on
+# which a synchronous creation holds every later submission until its compile finishes.
+js_test(
+    name = "browser_bridge_pipeline_tests",
+    size = "small",
+    copy_data_to_bin = False,
+    data = [
+        "bridge-library-harness.mjs",
+        "//donner/gpu/browser:library_donner_gpu.js",
+    ],
+    entry_point = "browser-bridge-pipelines.spec.mjs",
+    node_options = ["--test"],
+)
+
 js_test(
     name = "playwright_bazel_config_tests",
     size = "small",
