@@ -392,12 +392,20 @@ public:
   bool refuseOffscreen = false;
   bool refuseSnapshot = false;
   mutable bool corruptNextSnapshot = false;
+  CancellationToken* cancelOnOffscreen = nullptr;
+  CancellationToken* cancelOnSnapshot = nullptr;
 
   std::unique_ptr<RendererInterface> createOffscreenInstance() const override {
+    if (cancelOnOffscreen) {
+      cancelOnOffscreen->cancel();
+    }
     return refuseOffscreen ? nullptr : Renderer::createOffscreenInstance();
   }
 
   RendererBitmap takeSnapshot() const override {
+    if (cancelOnSnapshot) {
+      cancelOnSnapshot->cancel();
+    }
     if (refuseSnapshot) {
       return {};
     }
@@ -438,6 +446,51 @@ TEST_P(CompositorVerificationCaptureTest, MissingDiagnosticCapturePreservesPrese
 }
 
 INSTANTIATE_TEST_SUITE_P(Failures, CompositorVerificationCaptureTest, testing::Bool(),
+                         [](const testing::TestParamInfo<bool>& info) {
+                           return info.param ? "Offscreen" : "Snapshot";
+                         });
+
+class CompositorVerificationCancellationTest : public testing::TestWithParam<bool> {};
+
+TEST_P(CompositorVerificationCancellationTest,
+       CancelledDiagnosticPreservesPresentationWithoutClaimingComparison) {
+#ifndef DONNER_FILTERS_ENABLED
+  GTEST_SKIP() << "External feImage fixture requires filter rendering";
+#endif
+  EXPECT_EXIT(
+      {
+        SVGDocument document = MakeVerificationDocument();
+        VerificationCaptureRenderer renderer;
+        CompositorController compositor(document, renderer, VerificationConfig(true));
+        PrepareVerificationCachedPath(compositor);
+        const auto target = document.querySelector("#target");
+        const CompositorLayer* layer =
+            compositor.findLayerForTest(target->unsafeEntityHandle().entity());
+        ASSERT_NE(layer, nullptr);
+        const uint64_t generation = layer->generation();
+        CancellationToken token;
+        if (GetParam()) {
+          renderer.cancelOnOffscreen = &token;
+        } else {
+          renderer.cancelOnSnapshot = &token;
+          // A cancelled diagnostic must not assert even if its captured comparison data differs.
+          // Only the returned copy changes; the actual presentation remains the literal red scene.
+          renderer.corruptNextSnapshot = true;
+        }
+        EXPECT_FALSE(compositor.renderFrame(RenderViewport{Vector2i(2, 2)}, token));
+        EXPECT_TRUE(token.isCancelled());
+        EXPECT_EQ(compositor.lastRenderFrameStats().pixelIdentityVerification,
+                  PixelIdentityVerificationStatus::NotAttempted);
+        EXPECT_EQ(layer->generation(), generation);
+        editor::tests::CompareBitmapToBitmap(
+            renderer.Renderer::takeSnapshot(), VerificationLiteralReference("red"),
+            "verification_cancelled_preserved", editor::tests::PixelmatchIdentityParams());
+        std::_Exit(testing::Test::HasFailure() ? 1 : 0);
+      },
+      testing::ExitedWithCode(0), "");
+}
+
+INSTANTIATE_TEST_SUITE_P(Stages, CompositorVerificationCancellationTest, testing::Bool(),
                          [](const testing::TestParamInfo<bool>& info) {
                            return info.param ? "Offscreen" : "Snapshot";
                          });
