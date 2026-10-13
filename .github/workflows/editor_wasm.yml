@@ -66,7 +66,7 @@ jobs:
           bazelisk-cache: true
           repository-cache: true
           external-cache: true
-          cache-save: ${{ github.event_name != 'pull_request' }}
+          cache-save: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
 
       - name: Restore Bazel action cache
         uses: ./.github/actions/cache-bazel-actions
@@ -146,18 +146,36 @@ jobs:
           bazelisk test --config=wasm-geode --test_output=errors \
             //tools/ci:geode_wasm_browser_default_audit
 
+      # setup-node's own npm cache saves on every event, including pull
+      # requests. Keep its automatic caching off and restore the npm download
+      # cache explicitly; only main pushes save it.
       - name: Setup Node
         uses: actions/setup-node@v7
         with:
           node-version: 24
-          cache: npm
-          cache-dependency-path: donner/editor/wasm/tests/package-lock.json
+          package-manager-cache: false
+
+      - name: Restore npm download cache
+        id: npm-cache
+        uses: actions/cache/restore@v6
+        with:
+          path: ~/.npm
+          key: npm-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('donner/editor/wasm/tests/package-lock.json') }}
+          restore-keys: |
+            npm-${{ runner.os }}-${{ runner.arch }}-
 
       - name: Install Playwright
         working-directory: donner/editor/wasm/tests
         run: |
           npm ci
           npx playwright install chromium firefox webkit
+
+      - name: Save main npm download cache
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && steps.npm-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: ~/.npm
+          key: ${{ steps.npm-cache.outputs.cache-primary-key }}
 
       - name: Verify Geode-only package contracts
         working-directory: donner/editor/wasm/tests

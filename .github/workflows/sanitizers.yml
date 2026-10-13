@@ -89,7 +89,7 @@ jobs:
           disk-cache: ${{ github.workflow }}-${{ runner.os }}-asan
           repository-cache: true
           external-cache: true
-          cache-save: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
+          cache-save: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
 
       - name: Configure BuildBuddy remote cache
         if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && github.event_name != 'pull_request_target'
@@ -168,7 +168,7 @@ jobs:
           disk-cache: ${{ github.workflow }}-${{ runner.os }}-ubsan
           repository-cache: true
           external-cache: true
-          cache-save: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
+          cache-save: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
 
       - name: Configure BuildBuddy remote cache
         if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && github.event_name != 'pull_request_target'
