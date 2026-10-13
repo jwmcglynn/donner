@@ -132,9 +132,7 @@ public:
   bool built(bool inputActive = false) { return gate_.admitFrame(presented_, inputActive); }
 
   /// A frame built after one more frame reached the screen.
-  bool presented(bool inputActive = false) {
-    return gate_.admitFrame(++presented_, inputActive);
-  }
+  bool presented(bool inputActive = false) { return gate_.admitFrame(++presented_, inputActive); }
 
   /// Present frames until the gate opens and return how many it took, or -1 past \p limit.
   int presentUntilOpen(int limit, bool inputActive = false) {
