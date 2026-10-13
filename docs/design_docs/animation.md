@@ -173,9 +173,14 @@ fuzzer coverage must be expanded whenever a new input form or resource-owning pa
 - [x] Host begin/end controls, named events and bounded lifecycle queries.
 - [x] Rendered inheritance/precedence regressions and three real SVG fixture tests.
 - [x] Default-parser and source-edit regressions, including element insertion/removal.
-- [ ] Finish presentation-attribute coverage and publish the verified support matrix, including
-      remaining typed layout defaults, resource/text unit contexts beyond the verified gradient and mask
-      cases.
+- [x] Qualify inherited pattern/filter regions, typed text-path offsets and filter-primitive regions,
+      and inherited/same-sample primitive-unit selectors with rendered regressions.
+- [ ] Resolve mixed-unit text-path offsets against the final path geometry.
+- [ ] Resolve marker dimensions and inherited filter-primitive children in each referencing
+      instance's coordinate context; a resource's DOM-parent viewport is insufficient.
+- [ ] Supply default filter-primitive subregions as underlying animation values, including defaults
+      derived from primitive inputs and the enclosing filter region.
+- [ ] Finish presentation-attribute coverage and publish the verified support matrix.
 - [ ] Finish independent code/security review and all new hostile-input regressions.
 - [ ] Run affected source lint, formatting, CMake generation checks, and sanitizer/fuzzer gates.
 - [ ] Run native editor interaction tests and live UI verification on the final candidate.
