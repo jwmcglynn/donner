@@ -435,7 +435,8 @@ class PublishedRecordTest(unittest.TestCase):
         execute.assert_called_once_with(
             ["gh", "attestation", "verify", "record.json", "--repo", "jwmcglynn/donner",
              "--signer-workflow", "jwmcglynn/donner/.github/workflows/release_candidate.yml",
-             "--source-digest", SHA], check=True, stdout=subprocess.DEVNULL)
+             "--source-digest", SHA, "--source-ref", "refs/heads/main"], check=True,
+            stdout=subprocess.DEVNULL)
 
     def test_missing_duplicate_or_other_asset_digest_is_rejected(self):
         asset = self.release["assets"][0]
@@ -494,44 +495,132 @@ class EntryPromotionTest(unittest.TestCase):
                 release.fetch_entry(tag, digest, Path("this"), self.base)
         gh.assert_not_called()
 
-    def validated_entry(self):
-        entry = self.base / "entry"
-        for path in release.bcr_source.entry_paths("1.0.0"):
-            target = entry / "registry" / path
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text(f"validated {path.name}\n", encoding="utf-8")
-        return entry
+TEMPLATE = {"homepage": "https://github.com/jwmcglynn/donner",
+            "maintainers": [{"github": "jwmcglynn"}],
+            "repository": ["github:jwmcglynn/donner"],
+            "versions": [], "yanked_versions": {}}
 
-    def registry(self):
-        registry = self.base / "registry"
-        (registry / "modules/donner").mkdir(parents=True)
-        (registry / "modules/donner/metadata.json").write_text("upstream\n", encoding="utf-8")
-        subprocess.run(["git", "init", "-q", str(registry)], check=True)
-        return registry
 
-    def test_stage_entry_copies_exactly_the_validated_files(self):
-        entry, registry = self.validated_entry(), self.registry()
-        release.stage_entry(entry, registry, "1.0.0")
-        staged = subprocess.check_output(["git", "-C", str(registry), "diff", "--cached",
-                                          "--name-only"], text=True).split()
-        self.assertEqual(set(staged), {path.as_posix() for path in
-                                       release.bcr_source.entry_paths("1.0.0")})
+class SubmissionMetadataTest(unittest.TestCase):
+    """Stage the validated entry with metadata derived from the registry submitted to."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        base = Path(self.temp.name)
+        self.source = base / "source"
+        (self.source / ".bcr").mkdir(parents=True)
+        (self.source / "MODULE.bazel").write_text("module(name='donner')\n", encoding="utf-8")
+        (self.source / ".bcr/presubmit.yml").write_text("tasks: []\n", encoding="utf-8")
+        (self.source / ".bcr/metadata.template.json").write_text(json.dumps(TEMPLATE),
+                                                                 encoding="utf-8")
+        self.entry = base / "entry"
+        version = self.entry / "registry/modules/donner/1.0.0"
+        version.mkdir(parents=True)
+        (version / "MODULE.bazel").write_bytes((self.source / "MODULE.bazel").read_bytes())
+        (version / "presubmit.yml").write_bytes((self.source / ".bcr/presubmit.yml").read_bytes())
+        (version / "source.json").write_text(
+            json.dumps(release.bcr_source.expected_source_json("1.0.0", "c" * 64), indent=4))
+        self.registry = base / "registry"
+
+    def preflight(self, **fields):
+        """Write preflight's copy of metadata.json, as validated against the registry then."""
+        value = {**TEMPLATE, "versions": ["0.8.0", "1.0.0"], **fields}
+        (self.entry / "registry/modules/donner/metadata.json").write_text(
+            json.dumps(value, indent=4) + "\n", encoding="utf-8")
+
+    def upstream(self, metadata=None):
+        """Create the registry's HEAD, with this donner metadata if any."""
+        subprocess.run(["git", "init", "-q", str(self.registry)], check=True)
+        (self.registry / "bazel_registry.json").write_text("{}\n", encoding="utf-8")
+        if metadata is not None:
+            (self.registry / "modules/donner").mkdir(parents=True)
+            (self.registry / "modules/donner/metadata.json").write_text(
+                json.dumps(metadata, indent=4) + "\n", encoding="utf-8")
+        subprocess.run(["git", "-C", str(self.registry), "add", "--", "."], check=True)
+        subprocess.run(["git", "-C", str(self.registry), "-c", "user.name=Test",
+                        "-c", "user.email=test@example.com", "commit", "-qm", "base"], check=True)
+
+    def submit(self):
+        release.stage_entry(self.entry, self.registry, self.source, "1.0.0")
+        release.verify_generated_entry(self.registry, self.source, "1.0.0", "c" * 64, self.entry)
+        return json.loads((self.registry / "modules/donner/metadata.json").read_text())
+
+    def test_unchanged_registry_reproduces_preflight_bytes(self):
+        self.preflight()
+        self.upstream({**TEMPLATE, "versions": ["0.8.0"]})
+        self.submit()
         for path in release.bcr_source.entry_paths("1.0.0"):
-            self.assertEqual((registry / path).read_bytes(),
-                             (entry / "registry" / path).read_bytes())
+            self.assertEqual((self.registry / path).read_bytes(),
+                             (self.entry / "registry" / path).read_bytes())
+
+    def test_first_release_derives_initial_history(self):
+        self.preflight(versions=["1.0.0"])
+        self.upstream()
+        self.assertEqual(self.submit()["versions"], ["1.0.0"])
+
+    def test_earlier_version_merged_after_preflight_is_kept(self):
+        self.preflight()
+        self.upstream({**TEMPLATE, "versions": ["0.8.0", "0.8.1"]})
+        self.assertEqual(self.submit()["versions"], ["0.8.0", "0.8.1", "1.0.0"])
+
+    def test_yank_after_preflight_is_carried_forward(self):
+        self.preflight()
+        yanked = {"0.8.0": "Broken archive; use 0.8.1."}
+        self.upstream({**TEMPLATE, "versions": ["0.8.0", "0.8.1"], "yanked_versions": yanked})
+        metadata = self.submit()
+        self.assertEqual(metadata["yanked_versions"], yanked)
+        self.assertEqual(metadata["versions"], ["0.8.0", "0.8.1", "1.0.0"])
+
+    def test_tampered_preflight_field_fails(self):
+        for field in ({"homepage": "https://example.com/other"}, {"maintainers": []},
+                      {"deprecated": "do not use"}, {"versions": ["0.8.0"]},
+                      {"yanked_versions": {"1.0.0": "bad"}}):
+            with self.subTest(field=field):
+                self.preflight(**field)
+                if not self.registry.exists():
+                    self.upstream({**TEMPLATE, "versions": ["0.8.0"]})
+                with self.assertRaisesRegex(ValueError, "admission-validated entry"):
+                    release.stage_entry(self.entry, self.registry, self.source, "1.0.0")
+
+    def test_changed_upstream_fields_or_existing_version_fail(self):
+        self.preflight()
+        self.upstream({**TEMPLATE, "versions": ["0.8.0"], "deprecated": "use another module"})
+        with self.assertRaisesRegex(ValueError, "maintainer fields"):
+            release.stage_entry(self.entry, self.registry, self.source, "1.0.0")
+        (self.registry / "modules/donner/metadata.json").write_text(
+            json.dumps({**TEMPLATE, "versions": ["0.8.0", "1.0.0"]}), encoding="utf-8")
+        subprocess.run(["git", "-C", str(self.registry), "-c", "user.name=Test",
+                        "-c", "user.email=test@example.com", "commit", "-qam", "listed"],
+                       check=True)
+        with self.assertRaisesRegex(ValueError, "already lists this donner version"):
+            release.stage_entry(self.entry, self.registry, self.source, "1.0.0")
+
+    def test_proposed_metadata_must_be_the_derived_file(self):
+        self.preflight()
+        self.upstream({**TEMPLATE, "versions": ["0.8.0", "0.8.1"]})
+        release.stage_entry(self.entry, self.registry, self.source, "1.0.0")
+        # Preflight's frozen history is valid JSON for the template but not the derived file.
+        metadata = self.registry / "modules/donner/metadata.json"
+        metadata.write_bytes((self.entry / "registry/modules/donner/metadata.json").read_bytes())
+        subprocess.run(["git", "-C", str(self.registry), "add", "--", "modules/donner"],
+                       check=True)
+        with self.assertRaisesRegex(ValueError, "metadata derived for this submission"):
+            release.verify_generated_entry(self.registry, self.source, "1.0.0", "c" * 64,
+                                           self.entry)
 
     def test_stage_entry_refuses_an_existing_version_or_linked_file(self):
-        entry, registry = self.validated_entry(), self.registry()
-        (registry / "modules/donner/1.0.0").mkdir()
+        self.preflight()
+        self.upstream({**TEMPLATE, "versions": ["0.8.0"]})
+        (self.registry / "modules/donner/1.0.0").mkdir()
         with self.assertRaisesRegex(ValueError, "already has this donner version"):
-            release.stage_entry(entry, registry, "1.0.0")
-        (registry / "modules/donner/1.0.0").rmdir()
-        source = entry / "registry/modules/donner/1.0.0/source.json"
+            release.stage_entry(self.entry, self.registry, self.source, "1.0.0")
+        (self.registry / "modules/donner/1.0.0").rmdir()
+        source = self.entry / "registry/modules/donner/1.0.0/source.json"
         source.unlink()
-        source.symlink_to(self.base / "elsewhere.json")
-        (self.base / "elsewhere.json").write_text("{}", encoding="utf-8")
+        source.symlink_to(self.source / "MODULE.bazel")
         with self.assertRaisesRegex(ValueError, "missing, linked or too large"):
-            release.stage_entry(entry, registry, "1.0.0")
+            release.stage_entry(self.entry, self.registry, self.source, "1.0.0")
 
 
 class GeneratedEntryTest(unittest.TestCase):
@@ -555,8 +644,8 @@ class GeneratedEntryTest(unittest.TestCase):
                     "repository": ["github:jwmcglynn/donner"],
                     "versions": [], "yanked_versions": {}}
         (self.source / ".bcr/metadata.template.json").write_text(json.dumps(template), encoding="utf-8")
-        (self.registry / "modules/donner/metadata.json").write_text(
-            json.dumps(dict(template, versions=["1.0.0"])), encoding="utf-8")
+        (self.registry / "modules/donner/metadata.json").write_bytes(
+            release.bcr_source.derive_metadata(None, template, "1.0.0"))
         (entry / "MODULE.bazel").write_bytes((self.source / "MODULE.bazel").read_bytes())
         (entry / "presubmit.yml").write_bytes((self.source / ".bcr/presubmit.yml").read_bytes())
         expected = {"url": release.bcr_source.source_url("1.0.0"),
@@ -583,13 +672,13 @@ class GeneratedEntryTest(unittest.TestCase):
             (self.validated / "registry" / path).write_bytes((self.registry / path).read_bytes())
 
     def test_proposed_entry_must_be_the_admission_validated_bytes(self):
-        metadata = self.validated / "registry/modules/donner/metadata.json"
-        original = metadata.read_bytes()
+        source_json = self.validated / "registry/modules/donner/1.0.0/source.json"
+        original = source_json.read_bytes()
         # Equal JSON is not enough: the validated bytes are what upstream checked.
-        metadata.write_text(json.dumps(json.loads(original), indent=4), encoding="utf-8")
+        source_json.write_text(json.dumps(json.loads(original), indent=4), encoding="utf-8")
         with self.assertRaisesRegex(ValueError, "admission-validated entry"):
             self.verify()
-        metadata.write_bytes(original)
+        source_json.write_bytes(original)
         (self.validated / "registry/modules/donner/1.0.0/presubmit.yml").unlink()
         with self.assertRaisesRegex(ValueError, "missing, linked or too large"):
             self.verify()
@@ -617,13 +706,14 @@ class GeneratedEntryTest(unittest.TestCase):
         metadata["versions"] = ["0.9.0", "1.0.0"]
         metadata_file.write_text(json.dumps(metadata), encoding="utf-8")
         self.stage_validated()
-        with self.assertRaisesRegex(ValueError, "initial history"):
+        # The proposal's history must be the registry's own; a changed list is not derived.
+        with self.assertRaisesRegex(ValueError, "metadata derived for this submission"):
             self.verify()
         metadata["versions"] = ["1.0.0"]
         metadata["maintainers"] = []
         metadata_file.write_text(json.dumps(metadata), encoding="utf-8")
         self.stage_validated()
-        with self.assertRaisesRegex(ValueError, "maintainer fields"):
+        with self.assertRaisesRegex(ValueError, "admission-validated entry"):
             self.verify()
 
     def test_committed_entry_is_verified_against_its_base(self):

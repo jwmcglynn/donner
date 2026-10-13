@@ -1179,6 +1179,7 @@ def _release_shape_violations(release):
         (not _build_steps(release), "release builds: %s" % _build_steps(release)),
         (release.count("gh attestation verify") == 2 and
          release.count(signer + "release_candidate.yml") == 1 and
+         release.count('--source-digest "$GITHUB_SHA" --source-ref refs/heads/main') == 1 and
          release.count(signer + "bcr_preflight.yml") == 1,
          "release does not verify the record and preflight attestations"),
         (not any("${{" in body for body in _run_bodies(release)),
@@ -1301,7 +1302,7 @@ BCR_SUBMISSION_INPUTS = ("release_run_id", "record_sha256")
 BCR_SUBMISSION_JOBS = {"validate", "promote-entry", "prepare-fork", "publish-fork"}
 BCR_PLAN_STEP = "Verify the release and its candidate record and plan the submission"
 BCR_PROMOTE_STEPS = ("Fetch the admission-validated entry the record names",
-                     "Stage exactly the validated entry",
+                     "Stage the validated entry with derived metadata",
                      "Verify and bundle the proposed entry without a fork token")
 BCR_RECHECK_STEP = "Verify the exact proposed commit without a fork token"
 BCR_FETCH_ENTRY = "python3 -B -m tools.bcr_release fetch-entry"
@@ -1358,25 +1359,41 @@ def _bcr_submission_violations(workflow):
 
 
 DOCS_WORKFLOW = ".github/workflows/deploy_docs.yaml"
-DOCS_DEPLOY_STEPS = ("Select the docs build to deploy",
+DOCS_DEPLOY_STEPS = ("Fetch the candidate record",
                      "Verify the candidate record attestation",
+                     "Select the docs build to deploy",
                      "Download the retained Pages artifact",
                      "Verify selected source, artifact, and exact archive bytes",
                      "Deploy the selected artifact without rebuilding")
 DOCS_SELECTED = "${{ steps.select.outputs."
+DOCS_RECORD_ONLY = "if: inputs.selection == 'record'"
+# Steps that may read dispatch inputs: the record fetch, the attestation guard and the selection.
+DOCS_INPUT_STEPS = DOCS_DEPLOY_STEPS[:3]
+
+
+def _docs_record_violations(fetch, attest, select):
+    return _failed([
+        ("python3 -B -m tools.release_candidate docs-record" in fetch and
+         '--record-run "$RECORD_RUN"' in fetch and '--record-sha256 "$RECORD_SHA256"' in fetch and
+         DOCS_RECORD_ONLY in fetch,
+         "deploy does not fetch the named candidate record"),
+        ("gh attestation verify" in attest and
+         "--signer-workflow jwmcglynn/donner/.github/workflows/release_candidate.yml" in attest and
+         '--source-digest "$RECORD_COMMIT" --source-ref refs/heads/main' in attest and
+         DOCS_RECORD_ONLY in attest,
+         "deploy does not verify the candidate record attestation"),
+        ("python3 -B -m tools.release_candidate docs-selection" in select and
+         '--selection "$SELECTION"' in select and '--record-path "$RECORD_PATH"' in select and
+         '--record-sha256 "$RECORD_SHA256"' in select,
+         "deploy does not select from the candidate record"),
+    ])
 
 
 def _docs_selection_violations(deploy):
-    select, attest, download, verify, publish = (_named_step(deploy, name)
-                                                 for name in DOCS_DEPLOY_STEPS)
-    return _failed([
-        ("python3 -B -m tools.release_candidate docs-selection" in select and
-         '--selection "$SELECTION"' in select and '--record-sha256 "$RECORD_SHA256"' in select,
-         "deploy does not select from the candidate record"),
-        ("gh attestation verify" in attest and
-         "--signer-workflow jwmcglynn/donner/.github/workflows/release_candidate.yml" in attest and
-         "if: steps.select.outputs.selection == 'record'" in attest,
-         "deploy does not verify the candidate record attestation"),
+    fetch, attest, select, download, verify, publish = (_named_step(deploy, name)
+                                                        for name in DOCS_DEPLOY_STEPS)
+    input_steps = [_named_step(deploy, name) for name in DOCS_INPUT_STEPS]
+    return _docs_record_violations(fetch, attest, select) + _failed([
         ("artifact-ids: %sartifact_id }}" % DOCS_SELECTED in download and
          "run-id: %srun_id }}" % DOCS_SELECTED in download,
          "deploy downloads an artifact the selection did not name"),
@@ -1385,8 +1402,8 @@ def _docs_selection_violations(deploy):
          "deploy does not verify the selected archive"),
         ("DOC_ARTIFACT_ID: %sartifact_id }}" % DOCS_SELECTED in publish,
          "deploy promotes an artifact the selection did not name"),
-        (all("inputs." not in step for step in _steps(deploy) if step != select),
-         "deploy reads dispatch inputs outside the selection step"),
+        (all("inputs." not in step for step in _steps(deploy) if step not in input_steps),
+         "deploy reads dispatch inputs outside the record and selection steps"),
     ])
 
 
@@ -1780,6 +1797,8 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
                                 "actions/upload-artifact@"),
             "no record attestation": (path, release.replace(
                 "release_candidate.yml", "bcr_preflight.yml", 1), "attestations"),
+            "unpinned record ref": (path, release.replace(
+                " --source-ref refs/heads/main", "", 1), "attestations"),
             "upload before verification": (path, release.replace(
                 "      - name: Verify preflight build attestations\n",
                 "      - name: Check preflight build attestations\n", 1), "before its final upload"),
@@ -2183,7 +2202,7 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
     def test_bcr_submission_policy_rejects_regenerated_or_unbound_entries(self):
         path = BCR_SUBMISSION_WORKFLOW
         workflow = self.supply_chain_files[path]
-        stage = "      - name: Stage exactly the validated entry\n"
+        stage = "      - name: Stage the validated entry with derived metadata\n"
         generator = ("      - name: Generate the registry entry\n"
                      "        uses: bazel-contrib/publish-to-bcr@v1.5.1\n"
                      "        with:\n          local-registry: registry\n")
@@ -2239,9 +2258,25 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
             "no record selection": (path, workflow.replace(
                 "python3 -B -m tools.release_candidate docs-selection",
                 "python3 -B -m tools.pages_artifact inputs", 1), "select from the candidate record"),
-            "no attestation": (path, workflow.replace(
+            "no record attestation": (path, workflow.replace(
                 "          gh attestation verify", "          echo", 1),
                 "record attestation"),
+            "unpinned source digest": (path, workflow.replace(
+                '--source-digest "$RECORD_COMMIT"', '--source-digest "$GITHUB_SHA"', 1),
+                "record attestation"),
+            "unpinned source ref": (path, workflow.replace(
+                '"$RECORD_COMMIT" --source-ref refs/heads/main', '"$RECORD_COMMIT"', 1),
+                "record attestation"),
+            "unnamed record run": (path, workflow.replace(
+                '--record-run "$RECORD_RUN" --record-sha256', '--record-sha256', 1),
+                "fetch the named candidate record"),
+            "attestation after selection": (path, workflow.replace(
+                "      - name: Verify the candidate record attestation\n",
+                "      - name: Check the candidate record attestation\n", 1).replace(
+                "      - name: Download the retained Pages artifact\n",
+                "      - name: Verify the candidate record attestation\n        run: true\n"
+                "      - name: Download the retained Pages artifact\n", 1),
+                "select and verify before"),
             "unverified archive": (path, workflow.replace(
                 "python3 -B -m tools.pages_artifact verify", "true", 1),
                 "verify the selected archive"),

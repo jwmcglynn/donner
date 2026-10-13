@@ -310,6 +310,47 @@ def verify_yanked_metadata(yanked, expected_yanked: dict, version: str) -> None:
         raise ValueError("existing registry metadata has different yanked versions")
 
 
+HISTORY_KEYS = ("versions", "yanked_versions")
+
+
+def derive_metadata(upstream: dict | None, template: dict, version: str) -> bytes:
+    """The `metadata.json` a submission proposes, derived from the registry it targets.
+
+    Preflight's copy freezes the registry history at preflight time. Submission instead appends
+    this version to the target registry's current `versions` and carries its `yanked_versions`
+    forward; every other field comes from `.bcr/metadata.template.json`. The result is checked
+    with `check_metadata` against the template, so a changed upstream maintainer or project field
+    still fails closed.
+    """
+    if upstream is None:
+        derived = {**template, "versions": [version],
+                   "yanked_versions": template.get("yanked_versions", {})}
+    else:
+        if not isinstance(upstream, dict) or not isinstance(upstream.get("versions"), list):
+            raise ValueError("registry metadata has a missing or invalid version list")
+        if version in upstream["versions"]:
+            raise ValueError("the registry already lists this donner version")
+        # The registry's own project and maintainer fields must still be the template's.
+        check_metadata({**upstream, "versions": [*upstream["versions"], version]}, template,
+                       version)
+        derived = {**template, "versions": [*upstream["versions"], version],
+                   "yanked_versions": upstream.get("yanked_versions")}
+    check_metadata(derived, template, version)
+    return (json.dumps(derived, indent=4) + "\n").encode()
+
+
+def check_validated_metadata(validated: dict, derived: dict, version: str) -> None:
+    """Require preflight's metadata to agree with the derived file apart from registry history."""
+    if (not isinstance(validated, dict) or
+            {key: value for key, value in validated.items() if key not in HISTORY_KEYS} !=
+            {key: value for key, value in derived.items() if key not in HISTORY_KEYS} or
+            not isinstance(validated.get("versions"), list) or
+            validated["versions"].count(version) != 1 or
+            not isinstance(validated.get("yanked_versions"), dict) or
+            version in validated["yanked_versions"]):
+        raise ValueError("registry metadata differs from the admission-validated entry")
+
+
 def entry_bytes(path: Path) -> bytes:
     if path.is_symlink() or not path.is_file() or path.stat().st_size > MAX_ENTRY_FILE_BYTES:
         raise ValueError("validated registry entry file is missing, linked or too large")

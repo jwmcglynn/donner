@@ -107,12 +107,13 @@ jobs:
           PYTHONPATH=trusted python3 -B -m tools.bcr_release fetch-entry \
             --tag "$TAG" --record-sha256 "$RECORD_SHA256" --source this \
             --work "$RUNNER_TEMP/validated-entry"
-      - name: Stage exactly the validated entry
+      - name: Stage the validated entry with derived metadata
         env:
           VERSION: ${{ needs.validate.outputs.version }}
         run: |
           PYTHONPATH=trusted python3 -B -m tools.bcr_release stage-entry \
-            --entry "$RUNNER_TEMP/validated-entry/entry" --registry registry --version "$VERSION"
+            --entry "$RUNNER_TEMP/validated-entry/entry" --registry registry --source this \
+            --version "$VERSION"
       - name: Verify and bundle the proposed entry without a fork token
         id: commit
         env:

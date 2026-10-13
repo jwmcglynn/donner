@@ -208,13 +208,38 @@ def verify_metadata_history(registry: Path, metadata_file: Path, versions: list[
         raise ValueError("generated registry metadata has unexpected initial history")
 
 
+METADATA_FILE = "modules/donner/metadata.json"
+
+
+def submission_metadata(registry: Path, validated: Path, source: Path, version: str) -> bytes:
+    """Derive the proposed `metadata.json` from the registry's HEAD and the maintainer template.
+
+    The registry history may move after preflight: an earlier donner version can merge or be
+    yanked. The proposal therefore appends this version to HEAD's history instead of reusing
+    preflight's frozen copy, and preflight's copy must agree with it on every other field.
+    """
+    listed = subprocess.check_output(
+        ["git", "-C", str(registry), "ls-tree", "--name-only", "HEAD", "--", METADATA_FILE])
+    upstream = json.loads(subprocess.check_output(
+        ["git", "-C", str(registry), "show", f"HEAD:{METADATA_FILE}"])) if listed else None
+    template = json.loads((source / ".bcr/metadata.template.json").read_text(encoding="utf-8"))
+    derived = bcr_source.derive_metadata(upstream, template, version)
+    try:
+        preflight = json.loads(bcr_source.entry_bytes(validated / "registry" / METADATA_FILE))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        raise ValueError("validated registry entry has malformed JSON") from None
+    bcr_source.check_validated_metadata(preflight, json.loads(derived), version)
+    return derived
+
+
 def verify_generated_entry(registry: Path, source: Path, version: str, sha256: str,
                            validated: Path, proposed_commit: str | None = None) -> None:
     """Check the proposed registry change before any fork token is used.
 
-    The change must be exactly the entry files of `validated`, the entry BCR Preflight generated
-    and admission-validated for the candidate record, byte for byte, and must still match the
-    approved archive, module files, maintainer metadata and existing registry history.
+    `MODULE.bazel`, `presubmit.yml` and `source.json` must be the bytes of `validated`, the entry
+    BCR Preflight generated and admission-validated for the candidate record. `metadata.json`
+    must be the file `submission_metadata` derives from the registry's HEAD. All of it must still
+    match the approved archive, module files, maintainer metadata and existing registry history.
     """
     if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", version) or not re.fullmatch(r"[0-9a-f]{64}", sha256):
         raise ValueError("generated entry needs an approved stable version and archive SHA-256")
@@ -240,9 +265,12 @@ def verify_generated_entry(registry: Path, source: Path, version: str, sha256: s
         ref = proposed_commit if proposed_commit else ""
         return subprocess.check_output(["git", "-C", str(registry), "show", f"{ref}:{label}"])
 
-    for path in sorted(required):
+    for path in sorted(required - {metadata_file}):
         if proposed_bytes(path) != bcr_source.entry_bytes(validated / "registry" / path):
             raise ValueError("proposed registry entry differs from the admission-validated entry")
+    if proposed_bytes(metadata_file) != submission_metadata(registry, validated, source, version):
+        raise ValueError("proposed registry metadata differs from the metadata derived for "
+                         "this submission")
     if json.loads(proposed_bytes(entry / "source.json")) != \
             bcr_source.expected_source_json(version, sha256):
         raise ValueError("generated registry entry does not match the approved source archive")
@@ -282,7 +310,8 @@ def verify_record_attestation(path: Path, commit: str) -> None:
     """Require the record to be the one `Assemble release candidate` attested for this commit."""
     subprocess.run(["gh", "attestation", "verify", str(path), "--repo", REPOSITORY,
                     "--signer-workflow", f"{REPOSITORY}/{CANDIDATE_PATH}",
-                    "--source-digest", commit], check=True, stdout=subprocess.DEVNULL)
+                    "--source-digest", commit, "--source-ref", "refs/heads/main"],
+                   check=True, stdout=subprocess.DEVNULL)
 
 
 def record_source(record: dict, commit: str, version: str) -> tuple[str, str, str]:
@@ -362,14 +391,16 @@ def fetch_entry(tag: str, record_sha256: str, source: Path, work: Path) -> Path:
                                         work / "entry")
 
 
-def stage_entry(entry: Path, registry: Path, version: str) -> None:
-    """Copy exactly the validated entry's files into a registry checkout and stage them."""
+def stage_entry(entry: Path, registry: Path, source: Path, version: str) -> None:
+    """Stage the validated entry's files and the derived metadata in a registry checkout."""
     target_version = registry / "modules/donner" / version
     if target_version.exists() or target_version.is_symlink():
         raise ValueError("the registry already has this donner version")
     paths = bcr_source.entry_paths(version)
+    metadata = submission_metadata(registry, entry, source, version)
     for path in paths:
-        data = bcr_source.entry_bytes(entry / "registry" / path)
+        data = (metadata if path.as_posix() == METADATA_FILE else
+                bcr_source.entry_bytes(entry / "registry" / path))
         target = registry / path
         if target.is_symlink() or (target.exists() and not target.is_file()):
             raise ValueError("registry entry target is not a regular file")
@@ -400,6 +431,7 @@ def main() -> None:
     stage = commands.add_parser("stage-entry")
     stage.add_argument("--entry", type=Path, required=True)
     stage.add_argument("--registry", type=Path, required=True)
+    stage.add_argument("--source", type=Path, required=True)
     stage.add_argument("--version", required=True)
     generated = commands.add_parser("verify-generated")
     generated.add_argument("--registry", type=Path, required=True)
@@ -420,7 +452,7 @@ def main() -> None:
               f"{fetch_entry(args.tag, args.record_sha256, args.source, args.work)}")
         return
     elif args.command == "stage-entry":
-        stage_entry(args.entry, args.registry, args.version)
+        stage_entry(args.entry, args.registry, args.source, args.version)
         return
     else:
         verify_generated_entry(args.registry, args.source, args.version, args.approved_sha256,

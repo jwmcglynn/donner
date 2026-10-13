@@ -95,7 +95,7 @@ jobs:
           gh attestation verify "$RUNNER_TEMP/candidate-work/record/candidate.json" \
             --repo jwmcglynn/donner \
             --signer-workflow jwmcglynn/donner/.github/workflows/release_candidate.yml \
-            --source-digest "$GITHUB_SHA" > /dev/null
+            --source-digest "$GITHUB_SHA" --source-ref refs/heads/main > /dev/null
 
       - name: Verify source artifact provenance and contents
         env:

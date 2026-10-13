@@ -1047,9 +1047,19 @@ class AssemblyAndReleaseTest(unittest.TestCase):
 
     # Docs deployment side.
 
-    def docs_selection(self, record_sha256, run_id=400, attempt=1, name="docs"):
+    def docs_record(self, record_sha256, run_id=400, attempt=1, name="docs"):
         with self.patches():
-            return candidate.docs_selection(record_run_id=run_id, record_attempt=attempt,
+            return candidate.docs_record(record_run_id=run_id, record_attempt=attempt,
+                                         record_sha256=record_sha256,
+                                         work=self.base / f"{name}-record",
+                                         github_json=self.github, download=self.download)
+
+    def docs_selection(self, record_sha256, run_id=400, attempt=1, name="docs"):
+        """Fetch the record, then select from it, as the deploy job does around its attestation."""
+        fetched = self.docs_record(record_sha256, run_id, attempt, name)
+        with self.patches():
+            return candidate.docs_selection(record_path=Path(fetched["record_path"]),
+                                            record_commit=fetched["record_commit"],
                                             record_sha256=record_sha256,
                                             work=self.base / name, github_json=self.github,
                                             download=self.download)
@@ -1059,13 +1069,21 @@ class AssemblyAndReleaseTest(unittest.TestCase):
         record = json.loads(files["candidate.json"])
         docs = record["artifacts"]["docs"]
         self.downloads.clear()
-        result = self.docs_selection(record_sha256)
+        fetched = self.docs_record(record_sha256)
+        self.assertEqual(fetched, {"record_path": str(self.base / "docs-record/record/candidate.json"),
+                                   "record_commit": self.commit})
+        # Fetching the record downloads nothing it names: the job verifies the attestation first.
+        self.assertEqual(self.downloads, [artifact_id])
+        with self.patches():
+            result = candidate.docs_selection(
+                record_path=Path(fetched["record_path"]), record_commit=self.commit,
+                record_sha256=record_sha256, work=self.base / "docs",
+                github_json=self.github, download=self.download)
         self.assertEqual(result, {
             "artifact_id": str(docs["artifact_id"]), "run_id": "102", "attempt": "1",
             "source_commit": self.commit, "artifact_digest": "sha256:" + docs["zip_sha256"],
-            "archive_sha256": docs["files"]["artifact.tar"], "record_sha256": record_sha256,
-            "record_path": str(self.base / "docs/record/candidate.json")})
-        # The record, then the docs provenance; the Pages artifact is promoted by ID, not copied.
+            "archive_sha256": docs["files"]["artifact.tar"], "record_sha256": record_sha256})
+        # Then the docs provenance; the Pages artifact is promoted by ID, not copied.
         self.assertEqual(self.downloads,
                          [artifact_id, record["artifacts"]["docs-provenance"]["artifact_id"]])
 
@@ -1085,6 +1103,22 @@ class AssemblyAndReleaseTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "successful manual assembly"):
             self.docs_selection(record_sha256, attempt=2, name="attempt")
 
+    def test_docs_deploy_rejects_a_record_for_another_commit_than_its_assembly(self):
+        _, record_sha256, _ = self.publish_record()
+        # A consistent assembly run and record artifact of another commit, whose record names
+        # this commit: the record cannot select docs for a commit its assembly did not check.
+        other = "f" * 40
+        self.runs[400]["head_sha"] = other
+        record_artifact = next(item for item in self.artifacts.values()
+                               if item["name"] == "donner-release-candidate-1")
+        record_artifact["workflow_run"]["head_sha"] = other
+        fetched = self.docs_record(record_sha256, name="other")
+        self.assertEqual(fetched["record_commit"], other)
+        with self.patches(), self.assertRaisesRegex(ValueError, "another commit than its assembly"):
+            candidate.docs_selection(record_path=Path(fetched["record_path"]), record_commit=other,
+                                     record_sha256=record_sha256, work=self.base / "other",
+                                     github_json=self.github, download=self.download)
+
     def test_docs_deploy_rejects_changed_or_expired_docs_artifacts(self):
         _, record_sha256, files = self.publish_record()
         record = json.loads(files["candidate.json"])
@@ -1103,27 +1137,38 @@ class AssemblyAndReleaseTest(unittest.TestCase):
         rollback = {"DOC_ARTIFACT_ID": "456", "DOC_SOURCE_RUN_ID": "123", "DOC_SOURCE_ATTEMPT": "1",
                     "DOC_SOURCE_COMMIT": "a" * 40, "DOC_ARTIFACT_DIGEST": "sha256:" + "b" * 64,
                     "DOC_ARCHIVE_SHA256": "c" * 64}
-        def args(selection, run="", sha=""):
+        def args(selection, path="", commit="", sha="", run=""):
             return candidate._parser().parse_args(
                 ["docs-selection", "--selection", selection, "--record-run", run,
-                 "--record-sha256", sha, "--work", str(self.base / "unused")])
+                 "--record-path", path, "--record-commit", commit, "--record-sha256", sha,
+                 "--work", str(self.base / "unused")])
+        record = args("record", "candidate.json", "a" * 40, "e" * 64, "400/1")
         with self.assertRaisesRegex(ValueError, "must not also name rollback values"):
-            candidate._docs_selection_command(args("record", "400/1", "e" * 64), rollback)
-        with self.assertRaisesRegex(ValueError, "must not also name a candidate record"):
-            candidate._docs_selection_command(args("rollback", "400/1"), rollback)
+            candidate._docs_selection_command(record, rollback)
+        for name, value in (("sha", ""), ("commit", ""), ("path", "")):
+            with self.subTest(missing=name), \
+                    self.assertRaisesRegex(ValueError, "needs the fetched record"):
+                values = {"path": "candidate.json", "commit": "a" * 40, "sha": "e" * 64,
+                          name: value}
+                candidate._docs_selection_command(args("record", **values), {})
+        for named in ({"run": "400/1"}, {"sha": "e" * 64}, {"path": "candidate.json"}):
+            with self.subTest(named=named), \
+                    self.assertRaisesRegex(ValueError, "must not also name a candidate record"):
+                candidate._docs_selection_command(args("rollback", **named), rollback)
         with mock.patch.dict(candidate.os.environ, rollback, clear=True):
             self.assertEqual(candidate._docs_selection_command(args("rollback"), rollback), {
                 "selection": "rollback", "artifact_id": "456", "run_id": "123", "attempt": "1",
                 "source_commit": "a" * 40, "artifact_digest": "sha256:" + "b" * 64,
                 "archive_sha256": "c" * 64})
         with mock.patch.object(candidate, "docs_selection", return_value={"run_id": "102"}) as select:
-            self.assertEqual(candidate._docs_selection_command(args("record", "400/1", "e" * 64),
-                                                               {"DOC_ARTIFACT_ID": ""}),
+            self.assertEqual(candidate._docs_selection_command(record, {"DOC_ARTIFACT_ID": ""}),
                              {"selection": "record", "run_id": "102"})
-        select.assert_called_once_with(record_run_id=400, record_attempt=1,
+        select.assert_called_once_with(record_path=Path("candidate.json"), record_commit="a" * 40,
                                        record_sha256="e" * 64, work=self.base / "unused")
         with self.assertRaisesRegex(ValueError, "RUN_ID/ATTEMPT"):
-            candidate._docs_selection_command(args("record", "400", "e" * 64), {})
+            candidate._docs_record_command(candidate._parser().parse_args(
+                ["docs-record", "--record-run", "400", "--record-sha256", "e" * 64,
+                 "--work", str(self.base / "unused")]))
 
     def test_release_rejects_a_record_for_another_commit(self):
         artifact_id, record_sha256, _ = self.publish_record()
