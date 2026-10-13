@@ -6,8 +6,7 @@ import {
   findCanvasOwnerWorker,
   readSurfaceFrameProbe,
 } from "./surface-frame-probe";
-
-const scaledMs = (ms: number) => ms * (process.env.CI ? 4 : 1);
+import { scaledMs } from "./test-timing";
 
 // Follow the Splash D's solid left stem through the same ten-step drag corridor
 // used by the presentation suite. Searching the whole document also finds its

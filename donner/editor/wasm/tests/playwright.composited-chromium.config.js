@@ -1,4 +1,5 @@
 const { defineConfig, devices } = require("@playwright/test");
+const { kStallGuardMs } = require("./test-timing.cjs");
 
 // Hardware-Chromium lane for the composited-output invariant suite.
 //
@@ -13,6 +14,8 @@ module.exports = defineConfig({
   testDir: ".",
   testMatch: ["composited-invariants.spec.ts", "composited-drag-invariants.spec.ts"],
   timeout: 120000,
+  // Web-first assertions wait for a state; bound them by the shared stall guard, not a latency.
+  expect: { timeout: kStallGuardMs },
   use: {
     ...devices["Desktop Chrome"],
     channel: "chromium",

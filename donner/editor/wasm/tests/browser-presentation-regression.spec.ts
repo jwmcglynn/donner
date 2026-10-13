@@ -60,6 +60,7 @@ import {
   type SurfaceFrameProbeReport,
   waitForSubmittedCanvasGpuWork,
 } from "./surface-frame-probe";
+import { scaledMs } from "./test-timing";
 
 installBrowserStallDiagnostics(test);
 installFailureCanvasEvidence(test);
@@ -276,12 +277,6 @@ interface FrameLoopStats {
   /** Page-clock arrival time of the latest frame's sample. */
   lastFrameAtMs?: number;
 }
-
-// Shared CI runners execute this suite 2-4x slower than local development
-// hardware. Scale tight acceptance polls so the timing assertions verify the
-// same invariants without flaking on runner speed; local bounds are unchanged.
-const kCiTimeScale = process.env.CI ? 4 : 1;
-const scaledMs = (ms: number) => ms * kCiTimeScale;
 
 const kBaseUrl = process.env.DONNER_WASM_BASE_URL || "http://127.0.0.1:8000";
 

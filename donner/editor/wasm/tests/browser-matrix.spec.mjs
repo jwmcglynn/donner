@@ -221,7 +221,7 @@ test("the browser lane walk follows every way a module loads a file beside it", 
   });
   assert.doesNotThrow(() =>
     assertListsLoadedFiles("synthetic_lane", target, {
-      runfilesFrom: ["data = [\"playwright.config.js\"],"],
+      runfilesFrom: ["data = [\"playwright.config.js\", \"test-timing.cjs\"],"],
     })
   );
 });
