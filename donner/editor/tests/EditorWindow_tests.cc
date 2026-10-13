@@ -3771,6 +3771,23 @@ TEST(EditorWindowPolicyTest, PresentationDeviceLossReasonPayloadIsBoundedAndOwne
   EXPECT_EQ(copied.back(), 'x');
 }
 
+TEST(EditorWindowPolicyTest, PresentationQueueCountsOnlyRetiredFrames) {
+  internal::PresentationSubmissionQueue queue;
+  const auto now = internal::PresentationSubmissionQueue::Clock::time_point{};
+  for (std::uint64_t serial = 1; serial <= 3; ++serial) {
+    queue.submitted({.serial = serial, .frameId = serial, .submittedAt = now});
+  }
+  EXPECT_EQ(queue.retiredCount(), 0u);
+  (void)queue.observe(/*completedSerial=*/0, now);
+  EXPECT_EQ(queue.retiredCount(), 0u) << "a frame still on the GPU has not been presented";
+  (void)queue.observe(/*completedSerial=*/2, now);
+  EXPECT_EQ(queue.retiredCount(), 2u);
+  (void)queue.observe(/*completedSerial=*/2, now);
+  EXPECT_EQ(queue.retiredCount(), 2u) << "observing the same completion twice counts it once";
+  (void)queue.observe(/*completedSerial=*/9, now);
+  EXPECT_EQ(queue.retiredCount(), 3u);
+}
+
 TEST(EditorWindowPolicyTest, BrowserCompletionConfirmedAfterAnEventLoopPauseIsRetired) {
   internal::PresentationSubmissionQueue queue;
   const auto now = internal::PresentationSubmissionQueue::Clock::time_point{};
