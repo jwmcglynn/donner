@@ -2638,6 +2638,28 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
                 self.assertIn("import %s/runner-temp/buildbuddy/credentials.bazelrc" % directory,
                               lines)
 
+    def test_buildbuddy_cache_partition_replaces_only_the_image_identity(self):
+        write = "write-key-fixture"
+        partition = "macos-ARM64-xcode-26.6-17F113"
+        with tempfile.TemporaryDirectory() as directory:
+            code, fragment, _, output = self._run_buildbuddy_action(
+                Path(directory), event="push", write=write, CACHE_PARTITION=partition,
+                ImageVersion="")
+            self.assertEqual(0, code, output)
+            self.assertIn("build --remote_instance_name=%s" % partition, fragment.splitlines())
+        for name, overrides in {
+            "self-hosted runner": dict(RUNNER_ENVIRONMENT="self-hosted"),
+            "flag injection": dict(CACHE_PARTITION="macos-ARM64 --remote_executor=grpc://x"),
+            "newline injection": dict(CACHE_PARTITION="macos-ARM64\nbuild --config=re"),
+        }.items():
+            arguments = dict(event="push", write=write, CACHE_PARTITION=partition)
+            arguments.update(overrides)
+            with self.subTest(case=name), tempfile.TemporaryDirectory() as directory:
+                code, fragment, _, output = self._run_buildbuddy_action(
+                    Path(directory), **arguments)
+                self.assertEqual(1, code, output)
+                self.assertIsNone(fragment)
+
     def test_sensitive_workflows_use_least_privilege_and_drop_checkout_credentials(self):
         paths = (
             ".github/workflows/badges.yaml",

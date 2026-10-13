@@ -40,6 +40,15 @@ inputs:
       later step reads build outputs from bazel-bin.
     required: false
     default: toplevel
+  cache-partition:
+    description: >-
+      Remote cache partition (`--remote_instance_name`) to use instead of the
+      runner image identity. The macOS lanes pass the `cache_partition` output
+      of tools/ci_select_macos_xcode.sh, which names the pinned Xcode, so the
+      macOS lanes key their cache on the toolchain rather than on the weekly
+      runner image.
+    required: false
+    default: ""
 
 runs:
   using: composite
@@ -54,6 +63,7 @@ runs:
         TRUSTED_PR: ${{ inputs.trusted-pr }}
         RENOVATE_PR: ${{ inputs.renovate-pr }}
         DOWNLOAD_OUTPUTS: ${{ inputs.download-outputs }}
+        CACHE_PARTITION: ${{ inputs.cache-partition }}
         EVENT_NAME: ${{ github.event_name }}
         REF: ${{ github.ref }}
       run: |
@@ -106,11 +116,19 @@ runs:
         # Hosted lanes compile with the runner image's compiler and system
         # headers, which are not action inputs, so an image update changes no
         # cache key. Partition the cache per runner image so an entry is only
-        # ever reused on the image that produced it.
-        image="${ImageOS:-}-${ImageVersion:-}-${RUNNER_ARCH:-}"
-        if [[ ! "${image}" =~ ^[A-Za-z0-9]+-[A-Za-z0-9.]+-[A-Za-z0-9]+$ ]]; then
-          echo "::warning::BuildBuddy: runner image identity unavailable; remote cache disabled."
-          exit 0
+        # ever reused on the image that produced it. The macOS lanes instead
+        # name the pinned Xcode: Apple toolchain actions carry its version and
+        # build in their keys, and both macOS runners build with it.
+        if [[ -n "${CACHE_PARTITION:-}" ]]; then
+          [[ "${CACHE_PARTITION}" =~ ^[A-Za-z0-9]+(-[A-Za-z0-9.]+)+$ ]] ||
+            fail "invalid cache-partition value."
+          image="${CACHE_PARTITION}"
+        else
+          image="${ImageOS:-}-${ImageVersion:-}-${RUNNER_ARCH:-}"
+          if [[ ! "${image}" =~ ^[A-Za-z0-9]+-[A-Za-z0-9.]+-[A-Za-z0-9]+$ ]]; then
+            echo "::warning::BuildBuddy: runner image identity unavailable; remote cache disabled."
+            exit 0
+          fi
         fi
 
         # An unreachable cache must cost nothing: Bazel can stop at startup

@@ -255,6 +255,21 @@ py_test(
     deps = ["@rules_python//python/runfiles"],
 )
 
+# Keeps the hosted and self-hosted macOS lanes on identical Bazel action keys, so they can share
+# one remote cache, and keeps GitHub-hosted jobs off the self-hosted lane's private backend.
+py_test(
+    name = "macos_cache_key_parity_tests",
+    size = "small",
+    srcs = ["macos_cache_key_parity_tests.py"],
+    data = [
+        "ci_macos_xcode.txt",
+        "ci_select_macos_xcode.sh",
+        "//:.bazelrc",
+        "//:github_action_definitions",
+    ],
+    deps = ["@rules_python//python/runfiles"],
+)
+
 py_library(
     name = "test_timing",
     testonly = 1,

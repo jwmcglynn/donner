@@ -244,6 +244,21 @@ build:macos --features=oso_prefix_is_pwd
 # std::filesystem and std::format floating-point formatting.
 build:macos --macos_minimum_os=13.3
 
+# macOS CI lanes that share one remote cache. Every macOS CI job passes
+# --config=ci-macos (through BAZEL_MACOS_BUILD_FLAGS in main.yml) so that the
+# GitHub-hosted and the self-hosted macOS runners compute identical action
+# keys. Without a fixed PATH, Bazel copies the client's PATH into every action
+# environment, and it differs per runner (runner home directories, image tool
+# paths and the Bazelisk download directory, which Bazelisk prepends), so no
+# compile action matched across runners. The value keeps every directory either
+# lane relied on before this was pinned. The selected Xcode is pinned
+# separately, in tools/ci/macos_xcode.txt, because its version and build are
+# part of every Apple toolchain action key. Runner-only settings (remote cache
+# endpoint, timeouts, --jobs) stay out of this config because they do not
+# affect action keys. //tools:macos_cache_key_parity_tests enforces this.
+build:ci-macos --action_env=PATH=/opt/homebrew/opt/llvm@19/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
+build:ci-macos --host_action_env=PATH=/opt/homebrew/opt/llvm@19/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
+
 # apple_support's clang wrapper expects DEVELOPER_DIR. The local Darwin
 # sandbox sets it implicitly; remote execution does not. SDKROOT must NOT be
 # pinned here: the apple toolchain supplies its own (versioned) SDKROOT per
