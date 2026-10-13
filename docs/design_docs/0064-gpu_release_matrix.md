@@ -175,11 +175,13 @@ non-target, listed as out of scope in the tables above rather than counted as a 
 ### What is measured
 
 The native budgets are stated against the shipped products as linked: the macOS editor, the Linux
-editor, and the GPU command-line render tool, `//examples:svg_to_png` built with Geode.
-`//tools/ci:shipped_editor` and `//tools/ci:shipped_svg_to_png` build each one in the configuration
-it ships in: optimized (`-c opt`), with the Geode renderer, without the Tracy profiler client that
-development builds link, and with the default text tier. The editor applies its own full text tier
-on top, as it does in every build.
+editor, the GPU command-line render tool, `//examples:svg_to_png` built with Geode, and the
+released `donner-svg` CLI. `//tools/ci:shipped_editor`, `//tools/ci:shipped_svg_to_png` and
+`//tools/ci:shipped_donner_svg` build each one in the configuration it ships in: optimized
+(`-c opt`), with the Geode renderer, without the Tracy profiler client that development builds
+link, and with the default text tier. The editor applies its own full text tier on top, as it does
+in every build. `donner-svg` links the CPU renderer under every configuration, so its shipped
+build is the same program as the release build.
 
 `tools/ci/native_linked_size.py` measures a product as the program its executable maps from the
 file, split into read-only bytes (code, constants, unwind tables) and writable initialized data.
@@ -203,8 +205,10 @@ budgets and prints one `native-linked-size` line per product.
 
 ### Budgets
 
-Each budget is about 10% over the product measured in the shipped configuration by the lane
-that enforces it, rounded up to a thousand bytes. Read-only includes the shader artifacts.
+Each editor and `svg_to_png` budget is about 10% over the product measured in the shipped
+configuration by the lane that enforces it, rounded up to a thousand bytes. Each `donner-svg`
+budget is about 3% over the released binary for that platform, measured with the same tool.
+Read-only includes the shader artifacts.
 
 | Product      | Platform     | Read-only  | Writable  | Total      | Budget     |
 | ------------ | ------------ | ---------- | --------- | ---------- | ---------- |
@@ -212,6 +216,8 @@ that enforces it, rounded up to a thousand bytes. Read-only includes the shader 
 | `svg_to_png` | macOS arm64  | 3,684,628  | 168,000   | 3,852,628  | 4,238,000  |
 | Editor       | Linux x86_64 | 11,681,667 | 2,494,368 | 14,176,035 | 15,594,000 |
 | `svg_to_png` | Linux x86_64 | 4,766,843  | 113,800   | 4,880,643  | 5,369,000  |
+| `donner-svg` | macOS arm64  | 3,061,224  | 130,576   | 3,191,800  | 3,288,000  |
+| `donner-svg` | Linux x86_64 | 4,049,335  | 111,096   | 4,160,431  | 4,286,000  |
 | Editor       | Linux arm64  | 11,195,371 | 2,534,096 | 13,729,467 | Not gated  |
 | `svg_to_png` | Linux arm64  | 4,716,219  | 144,000   | 4,860,219  | Not gated  |
 
@@ -224,7 +230,7 @@ four libraries are `testonly`, so Bazel analysis rejects them in either product.
 
 ### Where it is enforced
 
-`//tools/ci:native_linked_size_budget_test` checks both products against the budgets for the
+`//tools/ci:native_linked_size_budget_test` checks every product against the budgets for the
 platform it runs on. It is tagged `perf` and `perf_linux`, so the nightly Perf workflow builds and
 runs it in its macOS arm64 and Linux x86_64 jobs, which already build with `-c opt`. It is also
 tagged `manual`, so `bazel test //...` does not build the optimized products. No pull-request lane

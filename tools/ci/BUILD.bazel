@@ -270,6 +270,15 @@ shipped_product(
     tags = ["manual"],
 )
 
+# The released `donner-svg` CLI. It links the CPU renderer under every configuration, so the
+# shipped configuration builds the same program as the release build (`-c opt`).
+shipped_product(
+    name = "shipped_donner_svg",
+    testonly = True,
+    product = "//donner/svg/tool:donner-svg",
+    tags = ["manual"],
+)
+
 config_setting(
     name = "macos_arm64",
     constraint_values = [
@@ -287,7 +296,8 @@ config_setting(
 )
 
 # Linked-size budgets for the shipped native products, each about 10% over the size the nightly
-# Perf workflow measured for that product on that platform in the shipped configuration. That
+# Perf workflow measured for that product on that platform in the shipped configuration; the
+# `donner-svg` budgets are about 3% over the released binaries the release preflight built. That
 # workflow builds and enforces them on its macOS arm64 and Linux x86_64 runners; no pull-request
 # lane builds these products in the shipped configuration.
 py_test(
@@ -295,20 +305,24 @@ py_test(
     size = "small",
     srcs = ["native_linked_size.py"],
     args = [
+        "--product=donner_svg=$(rootpath :shipped_donner_svg)",
         "--product=editor=$(rootpath :shipped_editor)",
         "--product=svg_to_png=$(rootpath :shipped_svg_to_png)",
     ] + select({
         ":macos_arm64": [
+            "--budget=donner_svg=3288000",
             "--budget=editor=13465000",
             "--budget=svg_to_png=4238000",
         ],
         ":linux_x86_64": [
+            "--budget=donner_svg=4286000",
             "--budget=editor=15594000",
             "--budget=svg_to_png=5369000",
         ],
         "//conditions:default": [],
     }),
     data = [
+        ":shipped_donner_svg",
         ":shipped_editor",
         ":shipped_svg_to_png",
     ],
