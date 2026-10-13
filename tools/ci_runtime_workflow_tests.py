@@ -16,6 +16,7 @@ from unittest.mock import patch
 
 from python.runfiles import runfiles
 from test_executable_fixtures import ExecutableFixtureDirectory
+from tools import test_timing
 
 
 # The editor Wasm payload ceilings CI enforces. Changing one means editing the size test's
@@ -543,7 +544,8 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
                 (directory / "system-log-window.txt").write_text(window)
             environment = dict(os.environ, RUNNER_TEMP=str(root))
             result = subprocess.run(["/bin/bash", "-c", prefix + script], cwd=temp_dir,
-                                    env=environment, capture_output=True, text=True, timeout=30)
+                                    env=environment, capture_output=True, text=True,
+                                    timeout=test_timing.STALL_GUARD_SECONDS)
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn("Skipping malformed window: bazel-testlogs/b/", result.stdout)
             self.assertIn("System log slice 3 failed: bazel-testlogs/d/", result.stdout)
