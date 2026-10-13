@@ -21,6 +21,57 @@ namespace {
 
 using nlohmann::json;
 
+TEST(EditorControlSessionTest, AnimationPreviewToolbarCaptureAcrossWorkerHandoff) {
+  repro::ReproFile replay;
+  replay.metadata.svgPath = "animation_toolbar.svg";
+  replay.metadata.svgSource =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="640" height="400">
+<circle cx="40" cy="80" r="20" fill="#72dec2">
+<animate attributeName="cx" from="40" to="600" dur="2s" repeatCount="indefinite"/>
+</circle></svg>)svg";
+  replay.metadata.windowWidth = 1600;
+  replay.metadata.windowHeight = 900;
+  replay.metadata.displayScale = 1.0;
+  for (std::uint64_t index = 0; index <= 30; ++index) {
+    repro::ReproFrame frame;
+    frame.index = index;
+    frame.timestampSeconds = static_cast<double>(index) / 60.0;
+    frame.deltaMs = 1000.0 / 60.0;
+    frame.mouseX = index <= 4 ? 1435.0 : 1100.0;
+    frame.mouseY = index <= 4 ? 20.0 : 800.0;
+    if (index == 3) {
+      frame.mouseButtonMask = 1;
+      frame.events.push_back({.kind = repro::ReproEvent::Kind::MouseDown});
+    } else if (index == 4) {
+      frame.events.push_back({.kind = repro::ReproEvent::Kind::MouseUp});
+    }
+    replay.frames.push_back(std::move(frame));
+  }
+  const std::filesystem::path rnrPath = TestTempDir() / "animation_toolbar.rnr";
+  ASSERT_THAT(repro::WriteReproFile(rnrPath, replay), testing::IsTrue());
+  const char* outputs = std::getenv("TEST_UNDECLARED_OUTPUTS_DIR");
+  const std::filesystem::path outputDir = outputs != nullptr ? outputs : TestTempDir();
+  std::filesystem::copy_file(rnrPath, outputDir / "animation_toolbar.rnr",
+                             std::filesystem::copy_options::overwrite_existing);
+  for (const int frame : {12, 22}) {
+    SCOPED_TRACE(frame);
+    EditorControlSession session;
+    const ToolCallResult result = session.handleToolCall(
+        "replay_rnr", json{{"rnr_path", rnrPath.string()},
+                           {"gl_readback", true},
+                           {"gl_capture_frame", frame},
+                           {"gl_max_frame", 30},
+                           {"gl_crop", "full"},
+                           {"gl_output_dir", (outputDir / std::to_string(frame)).string()},
+                           {"gl_worker_document_hold_start_frame", 15},
+                           {"gl_worker_document_hold_end_frame", 25},
+                           {"gl_pace", true},
+                           {"include_gl_images", false}});
+    ASSERT_THAT(result.isError, testing::IsFalse()) << result.body.dump(2);
+    EXPECT_THAT(result.body.value("capture_count", 0), testing::Eq(1));
+  }
+}
+
 TEST(EditorControlSessionTest, HighDpiEditorStartupCapture) {
   repro::ReproFile replay;
   replay.metadata.svgPath = "font_scale.svg";

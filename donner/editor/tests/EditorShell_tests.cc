@@ -6369,6 +6369,41 @@ INSTANTIATE_TEST_SUITE_P(UnresolvedPaint, PaintSwapFallbackTest,
                            return info.param.name;
                          });
 
+TEST(EditorShellTest, FillStrokeSwapAppearanceDoesNotTrackWorkerBusyState) {
+  for (const bool preview : {false, true}) {
+    SCOPED_TRACE(preview);
+    gui::EditorWindow window = MakeHiddenWindow();
+    ASSERT_THAT(window.valid(), testing::IsTrue());
+    EditorShell shell(window, OptionsWithSource(kInitialSvg, "animation_toolbar.svg"));
+    ASSERT_THAT(shell.valid(), testing::IsTrue());
+    EditorShellTestAccess::ConfigureViewport(shell, Box2d::FromXYWH(0, 0, 120, 80));
+    EditorShellTestAccess::SetAnimationPreview(shell, preview);
+    constexpr ImVec2 kCursor(20.0f, 40.0f);
+    constexpr ImU32 kEnabledSwap = IM_COL32(215, 222, 232, 255);
+    constexpr ImU32 kDisabledSwap = IM_COL32(120, 126, 134, 255);
+    const auto checkAppearance = [&] {
+      EXPECT_THAT(DrawDataContainsColor(kEnabledSwap), testing::Eq(!preview));
+      EXPECT_THAT(DrawDataContainsColor(kDisabledSwap), testing::Eq(preview));
+    };
+    RenderToolbarFrame(window, shell, kCursor, ImVec2(-100, -100), false);
+    checkAppearance();
+    AsyncRenderer& renderer = shell.asyncRendererForReplay();
+    renderer.setReplayDocumentAccessBlockedForTesting(true);
+    EditorShellTestAccess::BeginDelayedRender(shell, std::chrono::milliseconds(0));
+    ASSERT_THAT(renderer.isBusy(), testing::IsTrue());
+    RenderToolbarFrame(window, shell, kCursor, ImVec2(-100, -100), false);
+    checkAppearance();
+    renderer.setReplayDocumentAccessBlockedForTesting(false);
+    renderer.cancelInFlight();
+    ASSERT_THAT(renderer.waitUntilNoRenderInFlightForTesting(std::chrono::steady_clock::now() +
+                                                             std::chrono::seconds(2)),
+                testing::IsTrue());
+    std::ignore = renderer.pollResult();
+    RenderToolbarFrame(window, shell, kCursor, ImVec2(-100, -100), false);
+    checkAppearance();
+  }
+}
+
 TEST(EditorShellTest, FillStrokeToolbarKeepsChosenPaintVisibleWhileRendererIsBusy) {
   gui::EditorWindow window = MakeHiddenWindow();
   if (!window.valid()) {
