@@ -34,5 +34,46 @@ TEST(RendererAnimationCoordinateContext, GradientUsesUnitsSampledAtTheSameTime) 
   }
 }
 
+TEST(RendererAnimationCoordinateContext, GradientUsesSampledReferenceUnits) {
+  const std::string prefix =
+      "<defs><linearGradient id='a'/><linearGradient id='b' gradientUnits='userSpaceOnUse'/>"
+      "<linearGradient id='g'";
+  const std::string suffix =
+      "><stop stop-color='red'/><stop offset='1' stop-color='blue'/></linearGradient>"
+      "</defs><rect width='16' height='16' fill='url(#g)'/>";
+  auto document =
+      instantiateSubtree(prefix + " href='#a'" + suffix +
+                             "<animate href='#g' attributeName='x2' from='100%' to='8' dur='2s'/>"
+                             "<set href='#g' attributeName='href' to='#b' dur='2s'/>",
+                         parser::SVGParser::Options(), Vector2i(16, 16));
+  auto expected = instantiateSubtree(prefix + " href='#b' x2='12'" + suffix,
+                                     parser::SVGParser::Options(), Vector2i(16, 16));
+  document.setTime(1);
+  editor::tests::CompareBitmapToBitmap(
+      RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(expected),
+      "sampled-gradient-reference-units", editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(RendererAnimationCoordinateContext, MaskMixedLengthsUseTheSelectedUnits) {
+  for (const bool userSpace : {false, true}) {
+    SCOPED_TRACE(userSpace);
+    const std::string prefix =
+        std::string("<defs><mask id='p'") + (userSpace ? " maskUnits='userSpaceOnUse'" : "");
+    const std::string suffix =
+        "><rect width='16' height='16' fill='white'/></mask></defs>"
+        "<rect x='4' y='4' width='8' height='8' mask='url(#p)'/>";
+    auto document = instantiateSubtree(
+        prefix + suffix + "<animate href='#p' attributeName='width' to='0.8' dur='2s'/>",
+        parser::SVGParser::Options(), Vector2i(16, 16));
+    auto expected = instantiateSubtree(prefix + (userSpace ? " width='10'" : " width='1'") + suffix,
+                                       parser::SVGParser::Options(), Vector2i(16, 16));
+    document.setTime(1);
+    editor::tests::CompareBitmapToBitmap(RenderDocumentWithActiveBackend(document),
+                                         RenderDocumentWithActiveBackend(expected),
+                                         userSpace ? "mask-user-units" : "mask-bounding-box-units",
+                                         editor::tests::PixelmatchIdentityParams());
+  }
+}
+
 }  // namespace
 }  // namespace donner::svg
