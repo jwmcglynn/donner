@@ -3914,7 +3914,9 @@ public:
                         const components::ResolvedPaintServer& fill,
                         const components::ResolvedPaintServer& stroke,
                         std::shared_ptr<components::StyleResourceBudget> work)
-      : registry_(child) {
+      : registry_(child),
+        hostLease_(
+            EntityHandle(host, host.ctx().get<components::SVGDocumentContext>().rootEntity)) {
     if (child.ctx().contains<components::ExternalUseStyleContext>() ||
         !work->reserveExternalInstanceWork(
             child.storage<donner::components::TreeComponent>().size())) {
@@ -3928,14 +3930,10 @@ public:
          !family->reserve(components::DocumentResourceFamilyBudget::Kind::ComputedStyle, bytes))) {
       return;
     }
-    child.ctx().emplace<components::ExternalUseStyleContext>(
-        root, properties, fill, stroke,
-        ElementAnchor(
-            EntityHandle(host, host.ctx().get<components::SVGDocumentContext>().rootEntity)),
-        family, bytes, std::move(work));
-    auto& occurrence = child.ctx().get<components::ExternalUseStyleContext>();
-    retainPaintOwner(occurrence.fill, occurrence.resourceOwners[0]);
-    retainPaintOwner(occurrence.stroke, occurrence.resourceOwners[1]);
+    child.ctx().emplace<components::ExternalUseStyleContext>(root, properties, fill, stroke, family,
+                                                             bytes, std::move(work));
+    retainPaintOwner(fill, resourceLeases_[0]);
+    retainPaintOwner(stroke, resourceLeases_[1]);
     InvalidateExternalUseDerivedState(child);
     installed_ = true;
   }
@@ -3961,8 +3959,7 @@ public:
   ExternalUseStyleScope& operator=(const ExternalUseStyleScope&) = delete;
 
 private:
-  static void retainPaintOwner(const components::ResolvedPaintServer& paint,
-                               SVGDocumentHandle& owner) {
+  static void retainPaintOwner(const components::ResolvedPaintServer& paint, ElementAnchor& owner) {
     const auto* reference = std::get_if<components::PaintResolvedReference>(&paint);
     if (reference && reference->reference.handle.valid()) {
       owner = ElementAnchor(reference->reference.handle);
@@ -3970,6 +3967,8 @@ private:
   }
 
   Registry& registry_;
+  ElementAnchor hostLease_;
+  std::array<ElementAnchor, 2> resourceLeases_;
   bool installed_ = false;
 };
 
