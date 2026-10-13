@@ -317,7 +317,6 @@ INSTANTIATE_TEST_SUITE_P(
                          "bilinear filtering, whose 1px edge band differs from tiny-skia's CPU "
                          "resampler. Geode's content matches; only the resample edge differs.")},
                 {"with-subregion-5.svg", Params::Skip("Subregion with rotation: filter")},
-
             })),
         ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
