@@ -101,6 +101,7 @@ jobs:
         with:
           bazelisk-cache: true
           repository-cache: true
+          cache-save: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
 
       # Doxygen and Graphviz, not Bazel, generate the site, so their versions are recorded. The
       # module graph recorded is the production graph of the documented `donner` module,
