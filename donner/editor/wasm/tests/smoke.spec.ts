@@ -3324,16 +3324,26 @@ test(
     }).toBeGreaterThanOrEqual(2000);
     const after = await readCadence();
     const seconds = (after.time - before.time) / 1000;
-    await testInfo.attach("animation-cadence.json", {
+    const cadencePath = testInfo.outputPath("animation-cadence.json");
+    const cadence = {
+      browser: testInfo.project.name,
+      seconds,
+      uiFps: (after.frames - before.frames) / seconds,
+      documentFps: (after.documents - before.documents) / seconds,
+      viewport: box,
+      environment: await page.evaluate(() => ({
+        userAgent: navigator.userAgent,
+        devicePixelRatio,
+        worker: window.__donnerWorkerStats,
+        resources: window.__donnerPresentationResourceStats,
+      })),
+    };
+    await writeFile(cadencePath, JSON.stringify(cadence, null, 2));
+    await testInfo.attach("animation-cadence", {
       contentType: "application/json",
-      body: Buffer.from(
-        JSON.stringify({
-          seconds,
-          uiFps: (after.frames - before.frames) / seconds,
-          documentFps: (after.documents - before.documents) / seconds,
-        }),
-      ),
+      path: cadencePath,
     });
+    await page.screenshot({ path: testInfo.outputPath("animation-preview.png") });
     expect(after.documents - before.documents).toBeGreaterThan(10);
 
     const pad = { x: box.x + originX + 184 * scale, y: box.y + originY + 314 * scale };
@@ -3361,8 +3371,8 @@ test(
     await page.mouse.up();
     await expect.poll(() => padPixels("animation-hover"), { timeout: scaledMs(5000) })
       .toBeGreaterThan(1000);
+    await page.mouse.click(box.x + originX + 456 * scale, pad.y);
     await expect.poll(async () => {
-      await page.mouse.click(box.x + originX + 456 * scale, pad.y);
       const bounds = await orb();
       return bounds.maxY - bounds.minY;
     }, { timeout: scaledMs(5000), message: "Click triggers the radius pulse" }).toBeGreaterThan(
