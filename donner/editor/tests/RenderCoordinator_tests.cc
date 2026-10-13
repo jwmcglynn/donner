@@ -15,6 +15,7 @@
 #include "donner/editor/PresentedFrameComposer.h"
 #include "donner/editor/SelectTool.h"
 #include "donner/editor/ViewportState.h"
+#include "donner/editor/tests/AsyncTestPolling.h"
 #include "donner/editor/tests/BitmapGoldenCompare.h"
 #include "donner/editor/tests/FramePresentationTestAccess.h"
 #include "donner/editor/tests/RenderCoordinatorTestAccess.h"
@@ -1442,6 +1443,53 @@ TEST(RenderCoordinatorTest, BusyWorkerDoesNotLoseAHiDpiCanvasCommitRender) {
   EXPECT_THAT(target.resolvedFillPaint(), testing::Eq(representedFill));
   EXPECT_THAT(coordinator.maybeRequestRender(app, selectTool, viewport, nullptr),
               testing::IsFalse());
+}
+
+// The render-tree rebuild after a HiDPI canvas commit replaces the presented result. With a
+// selection, it must still carry the selection hint, as a raster change does; otherwise its result
+// drops the promoted selected layer and the next drag of that selection has no tile to move.
+TEST(RenderCoordinatorTest, HiDpiCanvasCommitRebuildKeepsTheSelectedLayerPromoted) {
+  EditorApp app;
+  ASSERT_THAT(app.loadFromString(kTwoRectSvg), testing::IsTrue());
+  app.document().document().setCanvasSize(100, 100);
+  app.setSelection(QuerySelector(app, "#r1"));
+  RenderCoordinator coordinator;
+  GlTextureCache textures;
+  SelectTool selectTool;
+  RenderCoordinatorTestAccess::useFakeSchedulingClock(coordinator);
+  ViewportState viewport = MakeViewport(app);
+  viewport.devicePixelRatio = 2.0;
+  const auto completeRender = [&]() {
+    const tests::HangGuard guard;
+    ASSERT_THAT(coordinator.asyncRenderer().waitUntilNoRenderInFlightForTesting(guard.deadline()),
+                testing::IsTrue());
+    coordinator.pollRenderResult(app, viewport, textures);
+  };
+
+  ASSERT_THAT(coordinator.maybeRequestRender(app, selectTool, viewport, &textures),
+              testing::IsTrue());
+  const std::optional<RenderAttemptIdentity> warmed =
+      RenderCoordinatorTestAccess::lastPostedAttempt(coordinator);
+  ASSERT_THAT(warmed, testing::Optional(testing::_));
+  ASSERT_THAT(warmed->dragPreview, testing::Optional(testing::_))
+      << "The first render warms the selected layer.";
+  completeRender();
+  ASSERT_THAT(coordinator.documentCanvasCommitTotal(), testing::Eq(0u));
+
+  RenderCoordinatorTestAccess::advanceFakeSchedulingClock(std::chrono::milliseconds(120));
+  ASSERT_THAT(coordinator.maybeRequestRender(app, selectTool, viewport, &textures),
+              testing::IsTrue());
+  ASSERT_THAT(coordinator.documentCanvasCommitTotal(), testing::Eq(1u));
+  const std::optional<RenderAttemptIdentity> rebuilt =
+      RenderCoordinatorTestAccess::lastPostedAttempt(coordinator);
+  ASSERT_THAT(rebuilt, testing::Optional(testing::_));
+  EXPECT_THAT(rebuilt->overviewInfillOnly, testing::IsFalse());
+  ASSERT_THAT(rebuilt->dragPreview, testing::Optional(testing::_))
+      << "The rebuild after the canvas commit dropped the selection hint.";
+  EXPECT_THAT(rebuilt->dragPreview->entity, testing::Eq(warmed->dragPreview->entity));
+  EXPECT_THAT(rebuilt->dragPreview->interactionKind,
+              testing::Eq(svg::compositor::InteractionHint::Selection));
+  completeRender();
 }
 
 // The idle loop wakes for a pending pixel-capture canvas commit; that wake must count down on the

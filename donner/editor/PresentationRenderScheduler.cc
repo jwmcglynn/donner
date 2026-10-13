@@ -74,12 +74,12 @@ PresentationRenderScheduleDecision PresentationRenderScheduler::evaluate(
   const bool selectedLayerNeedsForcedRasterization = !input.activeDragPreview.has_value() &&
                                                      input.selectedEntity != entt::null &&
                                                      input.forceSelectedLayerRasterization;
-  // A selected element needs a selection-hint render whenever the raster window changes. Otherwise
-  // a high-zoom pan/zoom regular render can omit the promoted drag-target tile just before the next
-  // drag starts.
-  const bool selectedViewportRenderNeedsPrewarm = input.selectedEntity != entt::null &&
-                                                  !input.activeDragPreview.has_value() &&
-                                                  (canvasSizeChanged || rasterViewportChanged);
+  // A selected element needs a selection-hint render whenever the raster window changes or its
+  // render tree is rebuilt. Otherwise a high-zoom pan/zoom or canvas-commit regular render can omit
+  // the promoted drag-target tile just before the next drag starts.
+  const bool selectedViewportRenderNeedsPrewarm =
+      input.selectedEntity != entt::null && !input.activeDragPreview.has_value() &&
+      (canvasSizeChanged || rasterViewportChanged || input.renderTreeInvalidated);
   decision.needsRegularRender = input.forcePresentationRefresh || versionChanged ||
                                 canvasSizeChanged || rasterViewportChanged;
   const bool selectionCacheNeedsPrewarm =
