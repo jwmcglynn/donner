@@ -313,9 +313,9 @@ py_test(
             "--budget=svg_to_png=3962000",
         ],
         ":linux_x86_64": [
-            "--budget=donner_svg=4256000",
-            "--budget=editor=14544000",
-            "--budget=svg_to_png=5025000",
+            "--budget=donner_svg=3809000",
+            "--budget=editor=13920000",
+            "--budget=svg_to_png=4537000",
         ],
         "//conditions:default": [],
     }),

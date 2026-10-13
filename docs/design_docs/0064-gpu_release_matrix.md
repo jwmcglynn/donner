@@ -205,30 +205,28 @@ budgets and prints one `native-linked-size` line per product.
 
 ### Budgets
 
-Each budget is about 3% over the product's measured size, less the measured effect of later size
-reductions, rounded up to a thousand bytes. The editor and `svg_to_png` rows are the nightly Perf
-measurement in the shipped configuration and the `donner-svg` rows the released binary for that
-platform, both read with the same tool. Restricting stb_image to the PNG, JPEG and GIF decoders
-Donner uses removed 29,604 bytes from `svg_to_png` and 29,476 from `donner-svg` on macOS arm64,
-and about 29,350 from each product on Linux. Dropping the FreeType drivers Donner cannot reach
-removed a further 88,792 bytes from the Linux arm64 editor and about 78,700 from the macOS
-editor (the 108,276 combined macOS reduction less the stb_image share). Read-only includes the
-shader artifacts.
+Each budget is about 3% over the product's measured size, rounded up to a thousand bytes. The
+Linux x86_64 rows are measured in the shipped configuration with the release toolchain (clang 18
+and lld 18) and include every reduction below. The macOS rows are the nightly Perf measurement
+for the editor and `svg_to_png` and the released binary for `donner-svg`, less the measured effect
+of the later reductions: restricting stb_image to the PNG, JPEG and GIF decoders Donner uses
+removed 29,604 bytes from `svg_to_png` and 29,476 from `donner-svg`, and dropping the FreeType
+drivers Donner cannot reach removed about 78,700 more from the editor (108,276 together). All are
+read with the same tool. Read-only includes the shader artifacts.
 
-Optimized Linux links of `donner_cc_binary` targets also fold identical code (`--icf=safe`), which
-Apple's linker already does by default. On Linux arm64 that removed 378,796 bytes from
-`donner-svg`, 413,144 from `svg_to_png` and 553,144 from the editor. The Linux x86_64 budgets above
-do not yet credit it: no available host builds that target in the shipped configuration, so lower
-them from the first nightly measurement that includes it.
+Optimized Linux links of the shipped binaries also fold identical code (`--icf=safe`), which
+Apple's linker already does by default. On Linux x86_64 that removed 428,232 bytes from
+`donner-svg` (4,125,683 to 3,697,451). `--//build_defs:linker_icf=false` turns it off for a host
+whose linker does not support it.
 
 | Product      | Platform     | Read-only  | Writable  | Total      | Budget     |
 | ------------ | ------------ | ---------- | --------- | ---------- | ---------- |
 | Editor       | macOS arm64  | 9,719,311  | 2,571,924 | 12,291,235 | 12,549,000 |
 | `svg_to_png` | macOS arm64  | 3,707,224  | 168,176   | 3,875,400  | 3,962,000  |
-| Editor       | Linux x86_64 | 11,735,567 | 2,502,224 | 14,237,791 | 14,544,000 |
-| `svg_to_png` | Linux x86_64 | 4,793,843  | 113,896   | 4,907,739  | 5,025,000  |
+| Editor       | Linux x86_64 | 11,021,123 | 2,492,496 | 13,513,619 | 13,920,000 |
+| `svg_to_png` | Linux x86_64 | 4,293,755  | 110,184   | 4,403,939  | 4,537,000  |
 | `donner-svg` | macOS arm64  | 3,061,224  | 130,576   | 3,191,800  | 3,258,000  |
-| `donner-svg` | Linux x86_64 | 4,049,335  | 111,096   | 4,160,431  | 4,256,000  |
+| `donner-svg` | Linux x86_64 | 3,589,755  | 107,696   | 3,697,451  | 3,809,000  |
 | Editor       | Linux arm64  | 11,195,371 | 2,534,096 | 13,729,467 | Not gated  |
 | `svg_to_png` | Linux arm64  | 4,716,219  | 144,000   | 4,860,219  | Not gated  |
 
