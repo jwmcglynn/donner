@@ -1,6 +1,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include "donner/base/encoding/Base64.h"
 #include "donner/svg/SVGUseElement.h"
 #include "donner/svg/components/resources/ImageComponent.h"
 #include "donner/svg/components/resources/ResourceManagerContext.h"
@@ -309,6 +310,59 @@ TEST(RendererAnimationPresentation, RepeatingImageReferencesReuseDecodedFrames) 
       revisions[index] = loaded->revision();
     }
     EXPECT_EQ(loaded->revision(), revisions[index]);
+  }
+}
+
+class AnimationImageLoader final : public ResourceLoaderInterface {
+public:
+  explicit AnimationImageLoader(bool blue) : blue_(blue) {}
+
+  std::variant<std::vector<uint8_t>, ResourceLoaderError> fetchExternalResource(
+      std::string_view) override {
+    return DecodeBase64Data(blue_ ? "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAD0lEQVR4nGNgYP"
+                                    "gPRmAKABf2A/1+6zfzAAAAAElFTkSuQmCC"
+                                  : "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAEElEQVR4nGP4z8"
+                                    "AARAwQCgAf7gP9i18U1AAAAABJRU5ErkJggg==")
+        .result();
+  }
+
+private:
+  bool blue_;
+};
+
+TEST(RendererAnimationPresentation, DecodedAnimationCacheRespectsSecureModeChanges) {
+  auto document = ParsePresentation(R"svg(
+    <image id="i" width="16" height="16"><animate attributeName="href"
+      values="a.png;b.png" dur="2s" repeatCount="indefinite"/></image>)svg");
+  auto& resources = document.registry().ctx().get<components::ResourceManagerContext>();
+  resources.setResourceLoader(std::make_unique<AnimationImageLoader>(false));
+  for (const double time : {0.25, 1.25}) {
+    document.setTime(time);
+    EXPECT_THAT(test::PixelAt(RenderDocumentWithActiveBackend(document), 8, 8),
+                test::Rgba(255, 0, 0, 255));
+  }
+  resources.setProcessingMode(ProcessingMode::SecureAnimated);
+  document.setTime(2.25);
+  EXPECT_THAT(test::PixelAt(RenderDocumentWithActiveBackend(document), 8, 8),
+              test::Rgba(0, 0, 0, 0));
+}
+
+TEST(RendererAnimationPresentation, DecodedAnimationCacheRespectsLoaderReplacement) {
+  auto document = ParsePresentation(R"svg(
+    <image width="16" height="16"><animate attributeName="href"
+      values="a.png;b.png" dur="2s" repeatCount="indefinite"/></image>)svg");
+  auto& resources = document.registry().ctx().get<components::ResourceManagerContext>();
+  resources.setResourceLoader(std::make_unique<AnimationImageLoader>(false));
+  for (const double time : {0.25, 1.25}) {
+    document.setTime(time);
+    EXPECT_THAT(test::PixelAt(RenderDocumentWithActiveBackend(document), 8, 8),
+                test::Rgba(255, 0, 0, 255));
+  }
+  resources.setResourceLoader(std::make_unique<AnimationImageLoader>(true));
+  for (const double time : {2.25, 3.25, 4.25}) {
+    document.setTime(time);
+    EXPECT_THAT(test::PixelAt(RenderDocumentWithActiveBackend(document), 8, 8),
+                test::Rgba(0, 0, 255, 255));
   }
 }
 
