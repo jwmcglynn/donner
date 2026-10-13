@@ -1135,7 +1135,7 @@ public:
                        style.clipRule.get().value_or(ClipRule::NonZero), collection);
   }
 
-  void appendClipChildAndUse(EntityHandle child, ClipPathCollection& collection) {
+  void appendClipChildGeometryAndUse(EntityHandle child, ClipPathCollection& collection) {
     appendClipPathFromEntity(child, true, collection);
     const auto* type = child.try_get<ElementTypeComponent>();
     if (!type || type->type() != ElementType::Use) {
@@ -1154,18 +1154,34 @@ public:
     }
   }
 
+  void appendClipChildAndUse(EntityHandle child, ClipPathCollection& collection) {
+    if (!collection.valid) {
+      return;
+    }
+    const std::size_t pathCount = collection.paths.size();
+    const bool hadChildren = collection.hasAnyChildren;
+    appendClipChildGeometryAndUse(child, collection);
+    if (!collection.valid) {
+      collection.paths.erase(collection.paths.begin() + pathCount, collection.paths.end());
+      collection.hasAnyChildren = hadChildren;
+      collection.valid = true;
+    }
+  }
+
   bool collectClipPathsInReference(EntityHandle clipPathHandle,
                                    std::vector<ComputedClipPathsComponent::ClipPath>& clipPaths,
                                    RecursionGuard guard, int layer,
                                    const Transform2d& rootClipFromReference) {
+    const std::size_t pathCount = clipPaths.size();
     ClipPathCollection collection{clipPaths, std::move(guard), rootClipFromReference, layer};
     collection.valid = collectNestedClipForEntity(clipPathHandle, nullptr, collection);
     donner::components::ForAllChildren(
         clipPathHandle, [&](EntityHandle child) { appendClipChildAndUse(child, collection); });
-    if (!collection.valid) {
-      clipPaths.clear();
+    const bool valid = collection.valid && collection.hasAnyChildren;
+    if (!valid) {
+      clipPaths.erase(clipPaths.begin() + pathCount, clipPaths.end());
     }
-    return collection.valid && collection.hasAnyChildren;
+    return valid;
   }
 
   bool collectClipPaths(EntityHandle clipPathHandle,
