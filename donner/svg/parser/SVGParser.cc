@@ -606,13 +606,6 @@ public:
     }
 
     auto element = SVGUnknownElement::CreateOn(node.entityHandle(), tagName);
-    if (!isSvgNamespace) {
-      // A foreign-namespace element is retained for whole-tree consumers, not for painting: no
-      // conforming SVG consumer renders it or its subtree, and the unknown-element default
-      // ("renders and traverses children") would otherwise make it behave like a <g>.
-      node.entityHandle().emplace_or_replace<components::RenderingBehaviorComponent>(
-          components::RenderingBehavior::Nonrenderable);
-    }
     return ParseAttributes(context_, element, node);
   }
 

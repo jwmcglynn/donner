@@ -330,13 +330,26 @@ The exact placement oracle is `FeImageFragmentUsesItsOwnSubregionOrigin` in
 `//donner/svg/renderer/tests:resvg_test_suite_geode`; full-text uses the API with `--config=text-full`
 and `//donner/svg/renderer/tests:resvg_test_suite_max`. See [Filter Effects](../filter_effects.md).
 
+## Structure and encoding input contracts
+
+Unknown SVG elements retain their DOM descendants but exclude the subtree from rendering,
+including after incremental source insertion. The sample viewer uses a real `g` for its selection
+chrome. `structure/svg/rect-inside-a-non-SVG-element.svg` and `xmlns-validation.svg` use ordinary
+comparisons. The constructors and namespace-aware source projection live in `SVGUnknownElement.cc`
+and `SVGDocument.cc`; `renderer_public_api_tests` covers parsed and edited wrappers, foreign
+namespaces, and promotion of a known SVG container.
+
+The XML byte parser accepts UTF-8 input and rejects declarations naming another encoding rather
+than interpreting those bytes as UTF-8. `structure/svg/not-UTF-8-encoding.svg` is an explicitly
+unsupported Windows-1251 input: transcode the bytes and update or remove the declaration first.
+`//donner/base/xml:xml_tests` and `//donner/svg/parser:parser_tests` cover rejection, UTF-8 BOM and
+case-insensitive declaration acceptance, and unrelated encoding-like content.
+
 ## Needs triage (uncertain `Bug?` entries)
 
 These have a question-mark reason in the file and need a root-cause pass to decide
 bug vs. out-of-scope:
 
-- `structure/svg`: non-UTF-8 encoding, rect-inside-non-SVG-element, xmlns validation
-  (XML entity references ×3 and mixed-namespaces now pass and are enabled)
 - `text/letter-spacing/non-ASCII-character`: different CJK glyph (wrong font? →
   overlaps [B7](#b7-font-substitution--missing-bundled-families))
 - `text/font-family/fallback-1`: fallback from invalid family

@@ -285,22 +285,28 @@ bool UsesNoTraverseChildren(ElementType type) {
   }
 }
 
-void EnsureProjectedElementComponents(EntityHandle handle,
-                                      const xml::XMLQualifiedNameRef& tagName) {
-  const ElementType projectedType = ElementTypeForTag(tagName);
-  ElementType type = projectedType;
-  if (!handle.all_of<components::ElementTypeComponent>()) {
-    handle.emplace<components::ElementTypeComponent>(type);
-  } else {
-    type = handle.get<components::ElementTypeComponent>().type();
-    if (type == ElementType::Unknown && projectedType != ElementType::Unknown) {
-      type = projectedType;
-      handle.emplace_or_replace<components::ElementTypeComponent>(type);
-    }
+ElementType ResolveProjectedElementType(EntityHandle handle, const xml::XMLNode& node) {
+  const xml::XMLQualifiedName tagName(node.tagName());
+  const bool isSvgNamespace =
+      node.getNamespaceUri(tagName.namespacePrefix) == "http://www.w3.org/2000/svg";
+  const ElementType projectedType =
+      isSvgNamespace ? ElementTypeForTag(tagName) : ElementType::Unknown;
+  const auto* current = handle.try_get<components::ElementTypeComponent>();
+  if (current && isSvgNamespace && current->type() != ElementType::Unknown) {
+    return current->type();
   }
+  if (current && projectedType != ElementType::Unknown) {
+    handle.remove<components::RenderingBehaviorComponent>();
+  }
+  handle.emplace_or_replace<components::ElementTypeComponent>(projectedType);
+  return projectedType;
+}
+
+void EnsureProjectedElementComponents(EntityHandle handle, const xml::XMLNode& node) {
+  const ElementType type = ResolveProjectedElementType(handle, node);
 
   [[maybe_unused]] auto& transform = handle.get_or_emplace<components::TransformComponent>();
-  if (type == ElementType::Defs) {
+  if (type == ElementType::Defs || type == ElementType::Unknown) {
     auto& behavior = handle.get_or_emplace<components::RenderingBehaviorComponent>(
         components::RenderingBehavior::Nonrenderable);
     behavior.behavior = components::RenderingBehavior::Nonrenderable;
@@ -1532,7 +1538,7 @@ std::optional<ParseDiagnostic> SVGDocument::projectXMLSubtree(const xml::XMLNode
   }
 
   const EntityHandle handle = node.entityHandle();
-  EnsureProjectedElementComponents(handle, node.tagName());
+  EnsureProjectedElementComponents(handle, node);
 
   if (std::optional<ParseDiagnostic> diagnostic = ReserveProjectedAttributes(handle, node)) {
     return diagnostic;
