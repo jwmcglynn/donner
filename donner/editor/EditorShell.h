@@ -641,6 +641,13 @@ private:
    */
   void noteSidebarPreviewDemand(bool foregroundAcknowledged, bool compactSheet,
                                 bool thumbnailDemand, bool refreshPending, bool rendererWakeArmed);
+  /**
+   * Keep an owed sidebar snapshot refresh scheduled on a frame that cannot take it.
+   *
+   * @param rendererBusy Whether the async renderer was busy when the sidebars began drawing.
+   * @param compactSheet Whether the compact sheet, which renders no raster rows, is showing.
+   */
+  void keepOwedSidebarRefreshScheduled(bool rendererBusy, bool compactSheet);
   void trimFontPreviewMemory();
   [[nodiscard]] FormatBarFontPreview fontPreviewForFamily(std::string_view family);
   void renderSamplePicker(const ImVec2& paneOrigin, const ImVec2& contentRegion);
