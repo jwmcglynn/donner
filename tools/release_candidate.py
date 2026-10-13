@@ -514,7 +514,8 @@ PAYLOAD_VERIFIERS = {
 }
 
 
-def _verify_payload(role: str, directory: Path, entry: dict, record: dict, root: Path) -> None:
+def _verify_payload(role: str, directory: Path, entry: dict, record: dict,
+                    root: Path | None) -> None:
     """Run the role's own verifier on its extracted files and bind its dependency state."""
     PAYLOAD_VERIFIERS[role](role, directory, entry, record, root, record["source"]["commit"],
                             str(entry["run_id"]), str(entry["attempt"]))

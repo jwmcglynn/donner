@@ -1340,6 +1340,12 @@ def _bcr_promotion_violations(promote, prepare):
     ])
 
 
+def _ignored_failures(text):
+    """Ways a job or script can turn a failed check into success."""
+    found = ["continue-on-error"] if "continue-on-error" in text else []
+    return found + ["||" for body in _run_bodies(text) if "||" in body][:1]
+
+
 def _bcr_submission_violations(workflow):
     """BCR submission takes the record's digests and validated entry, and regenerates nothing."""
     jobs = _jobs(workflow)
@@ -1354,6 +1360,8 @@ def _bcr_submission_violations(workflow):
          "BCR submission builds or regenerates: %s" % _build_steps(workflow)),
         (not any("${{" in body for body in _run_bodies(workflow)),
          "BCR submission run blocks must use quoted environment values"),
+        (not _ignored_failures(workflow),
+         "BCR submission ignores a failure: %s" % _ignored_failures(workflow)),
     ]) + _bcr_validation_violations(jobs["validate"]) + _bcr_promotion_violations(
         jobs["promote-entry"], jobs["prepare-fork"])
 
@@ -1366,7 +1374,11 @@ DOCS_DEPLOY_STEPS = ("Fetch the candidate record",
                      "Verify selected source, artifact, and exact archive bytes",
                      "Deploy the selected artifact without rebuilding")
 DOCS_SELECTED = "${{ steps.select.outputs."
-DOCS_RECORD_ONLY = "if: inputs.selection == 'record'"
+# The exact guard line: a substring match would accept `inputs.selection == 'record' && false`.
+DOCS_RECORD_ONLY = re.compile(r"(?m)^        if: inputs\.selection == 'record'$")
+# The record the attestation step verifies is the one the selection step reads.
+DOCS_RECORD_BINDINGS = ("          RECORD_PATH: ${{ steps.record.outputs.record_path }}\n",
+                        "          RECORD_COMMIT: ${{ steps.record.outputs.record_commit }}\n")
 # Steps that may read dispatch inputs: the record fetch, the attestation guard and the selection.
 DOCS_INPUT_STEPS = DOCS_DEPLOY_STEPS[:3]
 
@@ -1375,16 +1387,18 @@ def _docs_record_violations(fetch, attest, select):
     return _failed([
         ("python3 -B -m tools.release_candidate docs-record" in fetch and
          '--record-run "$RECORD_RUN"' in fetch and '--record-sha256 "$RECORD_SHA256"' in fetch and
-         DOCS_RECORD_ONLY in fetch,
+         DOCS_RECORD_ONLY.search(fetch) is not None,
          "deploy does not fetch the named candidate record"),
         ("gh attestation verify" in attest and
          "--signer-workflow jwmcglynn/donner/.github/workflows/release_candidate.yml" in attest and
          '--source-digest "$RECORD_COMMIT" --source-ref refs/heads/main' in attest and
-         DOCS_RECORD_ONLY in attest,
+         DOCS_RECORD_ONLY.search(attest) is not None and
+         all(binding in attest + "\n" for binding in DOCS_RECORD_BINDINGS),
          "deploy does not verify the candidate record attestation"),
         ("python3 -B -m tools.release_candidate docs-selection" in select and
          '--selection "$SELECTION"' in select and '--record-path "$RECORD_PATH"' in select and
-         '--record-sha256 "$RECORD_SHA256"' in select,
+         '--record-sha256 "$RECORD_SHA256"' in select and
+         all(binding in select for binding in DOCS_RECORD_BINDINGS),
          "deploy does not select from the candidate record"),
     ])
 
@@ -1421,6 +1435,7 @@ def _docs_deploy_violations(workflow):
          "deploy does not select and verify before its final Pages step"),
         (not any("${{" in body for body in _run_bodies(deploy)),
          "deploy run blocks must use quoted environment values"),
+        (not _ignored_failures(deploy), "deploy ignores a failure: %s" % _ignored_failures(deploy)),
     ]) + _docs_selection_violations(deploy)
 
 
@@ -2233,6 +2248,16 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
                 '            --validated-entry "$RUNNER_TEMP/validated-entry/entry" \\\n'
                 '            --proposed-commit', '            --proposed-commit', 1),
                 "recheck the commit"),
+            "ignored entry fetch": (path, workflow.replace(
+                "      - name: Fetch the admission-validated entry the record names\n",
+                "      - name: Fetch the admission-validated entry the record names\n"
+                "        continue-on-error: true\n", 1), "ignores a failure"),
+            "entry fetch or true": (path, workflow.replace(
+                '--work "$RUNNER_TEMP/validated-entry"\n',
+                '--work "$RUNNER_TEMP/validated-entry" || true\n', 1), "ignores a failure"),
+            "plan or true": (path, workflow.replace(
+                '            --github-output "$GITHUB_OUTPUT"\n',
+                '            --github-output "$GITHUB_OUTPUT" || true\n', 1), "ignores a failure"),
             "input digest": (path, workflow.replace(
                 BCR_RECORD_DIGEST, "APPROVED_SOURCE_SHA256: ${{ inputs.record_sha256 }}", 1),
                 "compare the proposed entry"),
@@ -2270,6 +2295,35 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
             "unnamed record run": (path, workflow.replace(
                 '--record-run "$RECORD_RUN" --record-sha256', '--record-sha256', 1),
                 "fetch the named candidate record"),
+            "ignored attestation": (path, workflow.replace(
+                "      - name: Verify the candidate record attestation\n",
+                "      - name: Verify the candidate record attestation\n"
+                "        continue-on-error: true\n", 1), "ignores a failure"),
+            "disabled attestation": (path, workflow.replace(
+                "        if: inputs.selection == 'record'\n        env:\n"
+                "          GH_TOKEN: ${{ github.token }}\n          RECORD_PATH:",
+                "        if: inputs.selection == 'record' && false\n        env:\n"
+                "          GH_TOKEN: ${{ github.token }}\n          RECORD_PATH:", 1),
+                "record attestation"),
+            "disabled record fetch": (path, workflow.replace(
+                "        id: record\n        if: inputs.selection == 'record'\n",
+                "        id: record\n        if: inputs.selection == 'record' && false\n", 1),
+                "fetch the named candidate record"),
+            "attestation or true": (path, workflow.replace(
+                "--source-ref refs/heads/main > /dev/null",
+                "--source-ref refs/heads/main > /dev/null || true", 1), "ignores a failure"),
+            "other selected record": (path, workflow.replace(
+                "          SELECTION: ${{ inputs.selection }}\n"
+                "          RECORD_RUN: ${{ inputs.record_run }}\n"
+                "          RECORD_PATH: ${{ steps.record.outputs.record_path }}\n",
+                "          SELECTION: ${{ inputs.selection }}\n"
+                "          RECORD_RUN: ${{ inputs.record_run }}\n"
+                "          RECORD_PATH: ${{ inputs.record_run }}\n", 1),
+                "select from the candidate record"),
+            "other attested record": (path, workflow.replace(
+                "          RECORD_COMMIT: ${{ steps.record.outputs.record_commit }}\n",
+                "          RECORD_COMMIT: ${{ github.sha }}\n", 1),
+                "record attestation"),
             "attestation after selection": (path, workflow.replace(
                 "      - name: Verify the candidate record attestation\n",
                 "      - name: Check the candidate record attestation\n", 1).replace(
