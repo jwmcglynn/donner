@@ -1170,7 +1170,7 @@ struct DefaultConvolveDivisorCase {
   const char* name;
   const char* kernel;
   const char* divisorAttribute;
-  const char* bias;
+  const char* preserveAlpha;
   const char* referencePaint;
 };
 
@@ -1191,7 +1191,7 @@ TEST_P(DefaultConvolveDivisorTest, MatchesSpecifiedNormalization) {
           "<svg xmlns='http://www.w3.org/2000/svg' width='4' height='4'>"
           "<filter id='f' filterUnits='userSpaceOnUse' x='0' y='0' width='4' height='4' "
           "color-interpolation-filters='sRGB'><feConvolveMatrix order='1' kernelMatrix='") +
-      params.kernel + "' " + params.divisorAttribute + " bias='" + params.bias +
+      params.kernel + "' " + params.divisorAttribute + " preserveAlpha='" + params.preserveAlpha +
       "'/></filter><rect width='4' height='4' fill='red' filter='url(#f)'/></svg>";
   SVGDocument document = ParseDocument(source);
   SVGDocument reference =
@@ -1210,11 +1210,11 @@ TEST_P(DefaultConvolveDivisorTest, MatchesSpecifiedNormalization) {
 INSTANTIATE_TEST_SUITE_P(
     FilterDefaultDivisor, DefaultConvolveDivisorTest,
     testing::Values(
-        DefaultConvolveDivisorCase{"SmallPositiveOmitted", "5e-11", "", "0", "fill='red'"},
-        DefaultConvolveDivisorCase{"SmallNegativeOmitted", "-5e-11", "", "0", "fill='red'"},
-        DefaultConvolveDivisorCase{"SmallPositiveExplicit", "5e-11", "divisor='5e-11'", "0",
+        DefaultConvolveDivisorCase{"SmallPositiveOmitted", "5e-11", "", "false", "fill='red'"},
+        DefaultConvolveDivisorCase{"SmallNegativeOmitted", "-5e-11", "", "false", "fill='red'"},
+        DefaultConvolveDivisorCase{"SmallPositiveExplicit", "5e-11", "divisor='5e-11'", "false",
                                    "fill='red'"},
-        DefaultConvolveDivisorCase{"SmallNegativeExplicit", "-5e-11", "divisor='-5e-11'", "0",
+        DefaultConvolveDivisorCase{"SmallNegativeExplicit", "-5e-11", "divisor='-5e-11'", "false",
                                    "fill='red'"},
         DefaultConvolveDivisorCase{"ZeroSumOmitted", "0", "", "0.5",
                                    "fill='white' fill-opacity='0.5'"},
