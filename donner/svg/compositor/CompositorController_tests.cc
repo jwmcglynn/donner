@@ -208,6 +208,46 @@ TEST_P(CompositorStyleAdmissionTest, DirtyTilesAndSegmentsShareFrameAllowance) {
   EXPECT_TRUE(work->rejected());
 }
 
+TEST(CompositorStyleWarmupTest, DeferredWarmupHasOneIndependentAllowance) {
+  SVGDocument document = MakeStyleAdmissionDocument();
+  int bluePaintCommands = 0;
+  auto renderer = MakeStyleAdmissionRenderer(bluePaintCommands);
+  components::StyleResourceBudget::Limits limits;
+  limits.ruleElementMatches = 32;
+  auto work = std::make_shared<components::StyleResourceBudget>(limits);
+  CompositorConfig config;
+  config.complexityBucketing = false;
+  config.mandatoryHintScope = MandatoryHintScope::FilterOnly;
+  config.immediateStaticSpans = false;
+  config.dynamicImmediateStaticSpans = false;
+  config.deferFirstFrameWarmup = true;
+  CompositorController compositor(document, *renderer, config, work);
+
+  compositor.renderFrame(RenderViewport{Vector2i(96, 2)});
+  ASSERT_TRUE(compositor.hasPendingFirstFrameWarmup());
+  EXPECT_GT(bluePaintCommands, 0) << "the flat first draw must traverse external uses";
+  EXPECT_LE(bluePaintCommands, 32);
+  EXPECT_TRUE(work->rejected());
+  const bool rejectedBeforeCancellation = work->rejected();
+
+  bluePaintCommands = 0;
+  CancellationToken cancelled;
+  cancelled.cancel();
+  EXPECT_FALSE(compositor.warmPendingFirstFrameCaches(cancelled));
+  EXPECT_EQ(bluePaintCommands, 0);
+  EXPECT_EQ(work->rejected(), rejectedBeforeCancellation)
+      << "early cancellation must not begin another work invocation";
+  ASSERT_TRUE(compositor.hasPendingFirstFrameWarmup());
+
+  CancellationToken active;
+  EXPECT_TRUE(compositor.warmPendingFirstFrameCaches(active));
+  EXPECT_GT(bluePaintCommands, 0)
+      << "the deferred invocation must replenish the prior flat draw's allowance";
+  EXPECT_LE(bluePaintCommands, 32);
+  EXPECT_TRUE(work->rejected());
+  EXPECT_FALSE(compositor.hasPendingFirstFrameWarmup());
+}
+
 INSTANTIATE_TEST_SUITE_P(RasterPaths, CompositorStyleAdmissionTest, testing::Bool(),
                          [](const testing::TestParamInfo<bool>& info) {
                            return info.param ? "PromotedLayers" : "LayersAndStaticSegments";

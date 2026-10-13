@@ -836,6 +836,94 @@ TEST(RendererPublicApiTest, ExternalUseTwoHostRelativeFontInstancesRemainIndepen
       editor::tests::PixelmatchIdentityParams());
 }
 
+TEST(RendererPublicApiTest, ExternalUseRejectedHostPatternUsesSolidFillFallback) {
+  const auto actual = RenderExternalUse(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8">
+        <defs><pattern id="p" width="8" height="8" patternUnits="userSpaceOnUse">
+          <rect width="8" height="8" fill="blue"/></pattern></defs>
+        <use href="external.svg#tile" fill="url(#p) red"/>
+      </svg>)svg",
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8">
+        <defs><pattern id="p" width="8" height="8" patternUnits="userSpaceOnUse">
+          <rect width="8" height="8" fill="lime"/></pattern></defs>
+        <rect id="tile" width="8" height="8"/>
+      </svg>)svg");
+  const RendererBitmap expected = RenderInlineDocument(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8">
+        <rect width="8" height="8" fill="red"/>
+      </svg>)svg");
+  EXPECT_THAT(actual.requests, ElementsAre("external.svg"));
+  editor::tests::CompareBitmapToBitmap(actual.bitmap, expected,
+                                       "external-use-pattern-fill-fallback",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(RendererPublicApiTest, ExternalUseRejectedHostPatternUsesConsumerCurrentColorFallback) {
+  const auto actual = RenderExternalUse(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8" color="blue">
+        <defs><pattern id="p" width="8" height="8" patternUnits="userSpaceOnUse">
+          <rect width="8" height="8" fill="blue"/></pattern></defs>
+        <use href="external.svg#tile" fill="url(#p) currentColor"/>
+      </svg>)svg",
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8">
+        <defs><pattern id="p" width="8" height="8" patternUnits="userSpaceOnUse">
+          <rect width="8" height="8" fill="lime"/></pattern></defs>
+        <rect id="tile" width="8" height="8" color="red"/>
+      </svg>)svg");
+  const RendererBitmap expected = RenderInlineDocument(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8">
+        <rect width="8" height="8" fill="red"/>
+      </svg>)svg");
+  EXPECT_THAT(actual.requests, ElementsAre("external.svg"));
+  editor::tests::CompareBitmapToBitmap(actual.bitmap, expected,
+                                       "external-use-pattern-current-color-fallback",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(RendererPublicApiTest, ExternalUseRejectedHostPatternUsesStrokeFallback) {
+  const auto actual = RenderExternalUse(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8">
+        <defs><pattern id="p" width="8" height="8" patternUnits="userSpaceOnUse">
+          <rect width="8" height="8" fill="blue"/></pattern></defs>
+        <use href="external.svg#tile" fill="none" stroke="url(#p) red" stroke-width="2"/>
+      </svg>)svg",
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8">
+        <defs><pattern id="p" width="8" height="8" patternUnits="userSpaceOnUse">
+          <rect width="8" height="8" fill="lime"/></pattern></defs>
+        <rect id="tile" x="2" y="2" width="4" height="4"/>
+      </svg>)svg");
+  const RendererBitmap expected = RenderInlineDocument(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8">
+        <rect x="2" y="2" width="4" height="4" fill="none" stroke="red" stroke-width="2"/>
+      </svg>)svg");
+  EXPECT_THAT(actual.requests, ElementsAre("external.svg"));
+  editor::tests::CompareBitmapToBitmap(actual.bitmap, expected,
+                                       "external-use-pattern-stroke-fallback",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(RendererPublicApiTest, ExternalUseExplicitChildPatternOverridesHostFallback) {
+  const auto actual = RenderExternalUse(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8">
+        <defs><pattern id="p" width="8" height="8" patternUnits="userSpaceOnUse">
+          <rect width="8" height="8" fill="blue"/></pattern></defs>
+        <use href="external.svg#tile" fill="url(#p) red"/>
+      </svg>)svg",
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8">
+        <defs><pattern id="p" width="8" height="8" patternUnits="userSpaceOnUse">
+          <rect width="8" height="8" fill="lime"/></pattern></defs>
+        <rect id="tile" width="8" height="8" fill="url(#p)"/>
+      </svg>)svg");
+  const RendererBitmap expected = RenderInlineDocument(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8">
+        <rect width="8" height="8" fill="lime"/>
+      </svg>)svg");
+  EXPECT_THAT(actual.requests, ElementsAre("external.svg"));
+  editor::tests::CompareBitmapToBitmap(actual.bitmap, expected,
+                                       "external-use-explicit-child-pattern",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
 TEST(RendererPublicApiTest, ExternalUseHostPatternsFailClosedDespiteChildIdCollision) {
   testing::internal::CaptureStderr();
   const auto actual = RenderExternalUse(
@@ -854,6 +942,13 @@ TEST(RendererPublicApiTest, ExternalUseHostPatternsFailClosedDespiteChildIdColli
                               "External-use inherited cross-document URL resource is unsupported"));
   EXPECT_THAT(actual.requests, ElementsAre("external.svg"));
   EXPECT_THAT(PixelAt(actual.bitmap, 4, 4), test::IsTransparent());
+  const RendererBitmap expected = RenderInlineDocument(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8">
+        <rect width="8" height="8" fill="none"/>
+      </svg>)svg");
+  editor::tests::CompareBitmapToBitmap(actual.bitmap, expected,
+                                       "external-use-pattern-without-fallback",
+                                       editor::tests::PixelmatchIdentityParams());
 }
 
 TEST(RendererPublicApiTest, ExternalUseInheritedMarkersFailClosedWithoutChildLookup) {
