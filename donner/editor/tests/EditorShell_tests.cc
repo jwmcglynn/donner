@@ -7680,9 +7680,9 @@ TEST(EditorShellTest, SampleClickedRightAfterBootRendersBeforeAnyThumbnail) {
   EXPECT_EQ(stats.started, 0u);
 }
 
-// When nobody touches the picker, its thumbnails start after as many quiet presented frames as
-// the window built while its first frame was on the GPU.
-TEST(EditorShellTest, IdlePickerStartsThumbnailsAfterAHoldScaledByTheFirstFrame) {
+// When nobody touches the picker, its thumbnails start after a fixed number of quiet presented
+// frames. Frames built while the first frame is still on the GPU do not count.
+TEST(EditorShellTest, IdlePickerStartsThumbnailsAfterTheQuietHold) {
   gui::EditorWindow window(TestWindowOptions({
       .title = "Donner idle sample picker",
       .initialWidth = 960,
@@ -7704,6 +7704,7 @@ TEST(EditorShellTest, IdlePickerStartsThumbnailsAfterAHoldScaledByTheFirstFrame)
     RunPickerFrame(window, shell);
     ASSERT_FALSE(gate.open());
   }
+  ASSERT_EQ(gate.heldFrames(), 0);
   int presentedWhileHeld = 0;
   for (const tests::HangGuard guard; guard.active() && !gate.open();) {
     ++presentedFrames;
@@ -7715,24 +7716,18 @@ TEST(EditorShellTest, IdlePickerStartsThumbnailsAfterAHoldScaledByTheFirstFrame)
     }
   }
   ASSERT_TRUE(gate.open());
-  ASSERT_TRUE(gate.quietTarget().has_value());
-  // Every built frame consults the gate unless the renderer was busy, so the target is at most the
-  // frames built before the first presented one, and well above the minimum.
-  EXPECT_LE(*gate.quietTarget(), kFramesBuiltBeforeTheFirstPresents);
-  EXPECT_GT(*gate.quietTarget(), SampleThumbnailStartGate::kMinQuietFrames);
-  EXPECT_EQ(presentedWhileHeld, *gate.quietTarget());
+  EXPECT_EQ(presentedWhileHeld, SampleThumbnailStartGate::kQuietFrames);
   EXPECT_EQ(renderer.sampleThumbnailRenderStats().requested, 1u)
       << "The frame that opens the gate requests the first thumbnail";
 }
 
-// A window that presents each frame as soon as it is built, as a hardware GPU does, holds the
-// thumbnails for only the minimum. This uses the window's real presented-frame count.
-TEST(EditorShellTest, FastWindowStartsThumbnailsAfterTheMinimumHold) {
+// The hold advances on the window's own presented-frame count, here its OpenGL swaps.
+TEST(EditorShellTest, WindowPresentedFramesAdvanceTheHold) {
 #ifdef DONNER_EDITOR_WGPU
   GTEST_SKIP() << "WebGPU frames retire at the GPU's pace; this case pins the OpenGL swap count";
 #endif
   gui::EditorWindow window(TestWindowOptions({
-      .title = "Donner fast sample picker",
+      .title = "Donner presenting sample picker",
       .initialWidth = 960,
       .initialHeight = 720,
   }));
@@ -7751,10 +7746,9 @@ TEST(EditorShellTest, FastWindowStartsThumbnailsAfterTheMinimumHold) {
     ++frames;
   }
   ASSERT_TRUE(gate.open());
-  ASSERT_TRUE(gate.quietTarget().has_value());
-  EXPECT_LE(*gate.quietTarget(), 4) << "a window that presents promptly must not hold for long";
-  EXPECT_GE(gate.heldFrames(), *gate.quietTarget());
-  EXPECT_LE(frames, 8);
+  EXPECT_EQ(gate.heldFrames(), SampleThumbnailStartGate::kQuietFrames);
+  EXPECT_EQ(frames, SampleThumbnailStartGate::kQuietFrames + 1)
+      << "Each frame swaps once; the first observation only records the count";
   EXPECT_EQ(renderer.sampleThumbnailRenderStats().requested, 1u);
 }
 

@@ -119,33 +119,30 @@ void ApplySamplePickerCommand(bool activated, SamplePickerCommand command,
  * appears, or while the pointer or wheel is active.
  *
  * The hold is counted in frames that reached the screen, not in time and not in frames the editor
- * merely built. Its length comes from the device: the picker waits for as many quiet presented
- * frames as the window built while its first frame was still on the GPU. A device whose first
- * frame presents at once holds for \ref kMinQuietFrames frames, so its thumbnails start almost
- * immediately. A device that spent seconds on its first frame, as a software adapter does, holds
- * for about as long again, up to \ref kMaxQuietFrames frames.
+ * merely built, so it starts once the picker is visible. Each observed frame counts at most one
+ * presented frame: frames the picker did not observe could have carried input it did not see, so
+ * they do not count as quiet.
  *
  * The hold is bounded twice: after \ref kMaxHeldFrames presented frames input no longer delays the
- * thumbnails, and after \ref kMaxBuiltFrames built frames the hold ends even if the window has
+ * thumbnails, and after \ref kMaxBuiltFrames observed frames the hold ends even if the window has
  * stopped presenting, so the caller's per-frame wake cannot run forever. Once open, the gate stays
  * open until the picker closes.
  */
 class SampleThumbnailStartGate {
 public:
-  /// Fewest quiet presented frames to hold for. The first picker frame always holds.
-  static constexpr int kMinQuietFrames = 2;
-  /// Most quiet presented frames to hold for: about two seconds at 60 frames per second.
-  static constexpr int kMaxQuietFrames = 120;
+  /// Consecutive quiet presented frames after which thumbnail work may start: about a second at
+  /// 60 frames per second.
+  static constexpr int kQuietFrames = 60;
   /// Presented frames after which thumbnail work starts even while input continues.
-  static constexpr int kMaxHeldFrames = 240;
-  /// Built frames after which thumbnail work starts even if no frame was presented.
+  static constexpr int kMaxHeldFrames = 180;
+  /// Observed frames after which thumbnail work starts even if no frame was presented.
   static constexpr int kMaxBuiltFrames = 600;
 
   /**
    * Observe one frame in which the picker has thumbnail work to start.
    *
    * @param presentedFrames The window's running count of presented UI frames. The first call
-   *     records it; later calls count the frames presented since the previous call.
+   *     records it; a later call counts one presented frame if the count has advanced.
    * @param inputActive Whether this frame received pointer or wheel input.
    * @return True when thumbnail work may start this frame. The caller asks for another frame
    *     when this returns false, so the hold advances without new input.
@@ -161,15 +158,8 @@ public:
   /// Presented frames counted while the gate was closed.
   [[nodiscard]] int heldFrames() const noexcept { return heldFrames_; }
 
-  /// Quiet presented frames this hold waits for, once the first presented frame has set it.
-  [[nodiscard]] std::optional<int> quietTarget() const noexcept { return quietTarget_; }
-
 private:
-  /// Frames presented since the previous observation, clamped to the presented-frame bound.
-  [[nodiscard]] int observePresented(std::uint64_t presentedFrames) noexcept;
-
   std::optional<std::uint64_t> lastPresentedFrames_;
-  std::optional<int> quietTarget_;
   int builtFrames_ = 0;
   int quietFrames_ = 0;
   int heldFrames_ = 0;
