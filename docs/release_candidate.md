@@ -65,8 +65,13 @@ that preflight copied from the upstream registry. The verifier requires:
 - `metadata.json` with the maintainer fields of `.bcr/metadata.template.json`, the version listed
   once and not yanked.
 
-BCR fork preparation submits exactly these bytes; it never regenerates the entry (see
+BCR fork preparation submits `MODULE.bazel`, `presubmit.yml` and `source.json` exactly as validated
+and never regenerates the entry. Only `metadata.json` is derived again at submission, because the
+registry's version history can move after preflight (see
 [the consumers](#ReleaseCandidateConsumers)).
+
+Schema 3 is the only accepted schema, so a schema-2 record cannot be released or used by these
+workflows; assemble a new record instead.
 
 ## Dependency state {#ReleaseCandidateDependencies}
 
@@ -211,19 +216,23 @@ regenerates or repackages anything, and neither edits the record.
   its bytes against the digest and its attestation by the assembly workflow, and takes the
   approved source archive digest and the preflight attempt from the record. The published
   archive's provenance must name exactly that attempt, a successful run on `main`. It then
-  downloads the record's `bcr-entry` artifact by ID, verifies it as above, copies exactly its
-  entry files onto the current registry `main` and requires the proposed commit to equal them
-  byte for byte. A change in upstream `metadata.json` since preflight fails that check; run a new
-  preflight and assemble a new record. The fork branch is prepared from those bytes; no upstream
-  pull request is opened.
+  downloads the record's `bcr-entry` artifact by ID and verifies it as above. On the current
+  registry `main` it stages the entry's `MODULE.bazel`, `presubmit.yml` and `source.json` byte
+  for byte. It derives `metadata.json` from that registry: its current `versions` plus this
+  version, its current `yanked_versions`, and the template's other fields. A version merged or
+  yanked after preflight is carried forward. Preflight's copy must agree with the derived file
+  on every other field, and the registry's own project and maintainer fields must match the
+  template. The fork branch is prepared from those files; no upstream pull request is opened.
 - **Build and manually deploy documentation** (`.github/workflows/deploy_docs.yaml`) with
   `selection: record` takes the assembly `RUN_ID/ATTEMPT` and the record digest. It downloads the
-  record artifact by ID from that successful manual assembly on `main`, checks the digest,
-  checksum file and attestation, and verifies the record's `docs-provenance` artifact against
-  the record. The `docs` entry's artifact ID, run, attempt, commit and digests are the only
-  selection; the job checks them against GitHub and the downloaded `artifact.tar`, then promotes
-  that artifact ID. `selection: rollback` instead takes the six values of a previous healthy
-  build recorded in the release tracking issue, because a record has no rollback slot; see the
+  record artifact by ID from that successful manual assembly on `main`, checks the digest and
+  checksum file, and verifies its attestation before using anything the record names. It then
+  verifies the record's `docs-provenance` artifact against the record. The `docs` entry's
+  artifact ID, run, attempt, commit and digests are the only selection; the job checks them
+  against GitHub and the downloaded `artifact.tar`, then promotes that artifact ID. A docs
+  rollback to the previous release uses the same selection with that release's record.
+  `selection: rollback` instead takes the six values of a build that no record names, recorded
+  in the release tracking issue, because a record has no rollback slot; see the
   [documentation procedure](release_checklists/docs_artifact_promotion.md).
 
 Both need only that the artifacts are still retained when they run. Assembly requires 60 days of

@@ -42,7 +42,7 @@ alone does not submit to BCR. Prereleases do not open BCR PRs.
 | BCR Preflight            | Committed source archive, both lockfile-bound CLI binaries, upstream admission report, Ubuntu/macOS × Bazel 7/8 consumer matrix with its configured dependency audit | Read-only build jobs; scoped OIDC/attestation signer |
 | Assemble candidate       | Manual dispatch on the candidate commit naming every qualifying attempt and both review reports; verified record retained 90 days and attested                       | Read-only token; scoped OIDC/attestation signer      |
 | Release                  | Named record run/attempt and digest, re-verified record and retained source and binary bytes, uploaded asset digests                                                 | Release assets and attestations                      |
-| Prepare BCR fork branch  | Manual dispatch naming the Release run and record digest; attested published record, released bytes and the record's admission-validated entry                       | Fork-scoped token behind a protected environment     |
+| Prepare BCR fork branch  | Manual dispatch naming the Release run and record digest; attested record and released bytes                                                                         | Fork-scoped token behind a protected environment     |
 | File upstream BCR PR     | Reviewed exact fork diff and PR title/body, separate approval of that filing                                                                                         | Maintainer's GitHub session                          |
 | BCR admission and builds | Upstream checks, maintainer review where required, platform matrix                                                                                                   | BCR-owned infrastructure                             |
 | Registry availability    | Merged entry visible at `https://registry.bazel.build/modules/donner`                                                                                                | BCR-owned infrastructure                             |
@@ -119,9 +119,10 @@ integrity, module identity, compatibility level, metadata, presubmit and global 
 remain enabled. The report records the validator revision. Live asset availability is checked after
 release publication. BCR may change its policy before submission, so preflight is not a promise of
 future admission. Preflight retains the entry and its report as `donner-bcr-entry-<attempt>`. The
-candidate record binds that artifact as its `bcr-entry` role, and fork preparation submits exactly
-those bytes: the bytes filed upstream are the bytes the validator checked. Submission never runs
-the generator again.
+candidate record binds that artifact as its `bcr-entry` role. Fork preparation submits its
+`MODULE.bazel`, `presubmit.yml` and `source.json` exactly as the validator checked them, and
+derives only `metadata.json`, whose version history may have moved since preflight, from the
+registry it submits to. Submission never runs the generator again.
 
 Preflight builds the Linux and macOS CLI binaries from the same committed checkout. The repository
 intentionally ignores `MODULE.bazel.lock`, so each platform resolves its lockfile once with
@@ -163,13 +164,17 @@ notice, and admission rejection paths; `//tools:bcr_dependency_closure_tests` co
    checks its digest and its attestation by `Assemble release candidate`, and takes the approved
    source digest and preflight attempt from the record. The published archive's provenance must
    name exactly that attempt, a successful run on `main`. Tokenless jobs download the record's
-   `bcr-entry` artifact by ID, verify it against the record ([registry entry](../release_candidate.md)), copy exactly its entry files onto the current registry
-   `main`, require the staged change to equal them byte for byte along with the source
-   integrity, module files, metadata and existing history, and retain and check a bounded Git
-   bundle. If upstream `metadata.json` changed after preflight, this fails; run a new preflight
-   and assemble a new record. The
-   protected push job runs no external actions; it downloads that artifact with the runner's
-   GitHub CLI and rechecks the digest, base, commit and tree before its final token-bearing step.
+   `bcr-entry` artifact by ID and verify it against the record (see the
+   [registry entry](../release_candidate.md)). They stage its `MODULE.bazel`, `presubmit.yml` and
+   `source.json` byte for byte on the current registry `main`. `metadata.json` is derived there:
+   the registry's current `versions` plus this version, its current `yanked_versions`, and the
+   other fields from `.bcr/metadata.template.json`. An earlier version merged or yanked after
+   preflight is therefore carried forward. Preflight's copy must agree with the derived file on
+   every field but that history, and the registry's own project and maintainer fields must still
+   match the template. The jobs then check source integrity, module files, metadata and history,
+   and retain and check a bounded Git bundle. The protected push job runs no external actions; it
+   downloads that artifact with the runner's GitHub CLI and rechecks the digest, base, commit and
+   tree before its final token-bearing step.
    A Git push with an empty-expected ref lease creates the branch only while absent;
    it cannot replace or advance an existing branch. The job prints a compare URL,
    proposed title and body; it never files upstream.
@@ -326,9 +331,11 @@ version, including those that allow yanked versions.
 
 **Docs site.** Follow the "Roll back" section of the
 [documentation promotion and rollback procedure](../release_checklists/docs_artifact_promotion.md).
-It redeploys the previous retained, marker-bearing Pages build by artifact ID through a
-`deploy_docs.yaml` dispatch with `selection: rollback` and the six values from the release
-tracking issue, without rebuilding, and checks the live `docs-build.json` marker.
+It redeploys a previous retained, marker-bearing Pages build by artifact ID through
+`deploy_docs.yaml`, without rebuilding, and checks the live `docs-build.json` marker. The usual
+target is the previous release's docs build, selected with `selection: record` and that
+release's record. A build that predates candidate records is selected with
+`selection: rollback` and the six values from the release tracking issue.
 
 **Web editor.** **Gap:** no workflow in this repository deploys the editor, and editor hosting is
 outside the repository. `Editor WASM` retains a package named `donner-editor-wasm-geode-<commit>`

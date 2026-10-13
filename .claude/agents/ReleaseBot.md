@@ -109,8 +109,9 @@ check `LicenseEntry` candidates and the fallback tables in `generate_build_repor
 - After the Release succeeds, obtain approval for the specific Release run and candidate record
   digest, then manually dispatch `.github/workflows/publish_bcr.yml`. It takes the approved
   archive digest from the record and submits the BCR entry that preflight admission-validated,
-  byte for byte, before a create-only push to the owned fork. Inspect the fork diff, title and body, and obtain
-  separate explicit approval before opening any upstream BCR PR.
+  with only `metadata.json` derived from the current registry, before a create-only push to the
+  owned fork. Inspect the fork diff, title and body, and obtain separate explicit approval before
+  opening any upstream BCR PR.
 - `third_party/bazel/non_bcr_deps.bzl` is a `dev_dependency` extension hiding non-BCR repos
   (harfbuzz, woff2, wgpu-native) from downstream BCR consumers — this is why text-full and Geode
   are not BCR-published configs.

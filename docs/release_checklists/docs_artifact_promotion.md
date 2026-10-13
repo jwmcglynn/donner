@@ -10,10 +10,11 @@ The dispatch has two selections:
 - `record` deploys the docs build that a verified
   [release candidate record](../release_candidate.md) names. Its inputs are the assembly
   `record_run` (`RUN_ID/ATTEMPT`) and `record_sha256`.
-- `rollback` reselects a previous healthy build. Its inputs are the six values recorded in the
-  release tracking issue: `artifact_id`, `source_run_id`, `source_attempt`, `source_commit`,
-  `artifact_digest` and `archive_sha256`. The record has no rollback slot, so these values live
-  in that issue, never in the record.
+- `rollback` reselects a previous healthy build that no candidate record names, such as one that
+  predates records. Its inputs are the six values recorded in the release tracking issue:
+  `artifact_id`, `source_run_id`, `source_attempt`, `source_commit`, `artifact_digest` and
+  `archive_sha256`. The record has no rollback slot, so these values live in that issue, never in
+  the record.
 
 A selection's inputs must not be mixed with the other's: a record dispatch that also names
 rollback values, or a rollback dispatch that names a record, fails before anything is downloaded.
@@ -62,14 +63,15 @@ assembled. A green push build alone does not publish documentation.
 
 ## Roll back
 
-1. Select the six recorded values for the last healthy, reviewed docs build from the release
-   tracking issue. Reconfirm that the artifact has not expired and that its configuration and
-   content remain acceptable for the current release. To return to a docs build that an earlier
-   candidate record names, a `record` dispatch of that record works the same way while its
-   artifacts are retained.
-2. Obtain the maintainer's rollback approval, then manually dispatch the same workflow on `main`
-   with `selection: rollback` and those six values. Do not run Doxygen or upload a substitute
-   archive.
+1. Select the last healthy, reviewed docs build. When it is the docs build of the previous
+   release, its candidate record names it: use that release's assembly run and attempt and the
+   digest in its `Release-Candidate-Record:` line. A build that predates candidate records has
+   no record; use its six values from the release tracking issue. Reconfirm that the artifact has
+   not expired and that its configuration and content remain acceptable for the current release.
+2. Obtain the maintainer's rollback approval, then manually dispatch the same workflow on `main`:
+   `selection: record` with that record, or `selection: rollback` with the six values. The
+   record path verifies the record, its attestation and its docs provenance exactly as for a
+   publication. Do not run Doxygen or upload a substitute archive.
 3. Require the deployment job to complete green. Confirm the live `docs-build.json` gives the
    previous source commit, run ID, and attempt; check the docs landing page and key links.
    Record the rollback deployment ID and time in the rollback issue described in the
@@ -79,7 +81,7 @@ If selection or archive validation fails before the Pages POST, nothing has cut 
 site selected as it was. If the Pages POST succeeds but status or live-marker verification fails,
 the site may already have changed. Inspect the live marker and landing page immediately. If they
 do not show a healthy reviewed build, obtain the maintainer's rollback approval and dispatch the
-previous retained selection with `selection: rollback`. If that previous artifact has expired, the release is missing a
+previous retained selection. If that previous artifact has expired, the release is missing a
 required rollback asset; obtain a new reviewed candidate and an explicit maintainer decision
 before publication.
 

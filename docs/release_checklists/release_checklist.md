@@ -150,9 +150,10 @@ concern; the tag never moves retroactively.
       with the reviewed Release run and the record digest from its `Release-Candidate-Record:`
       line to prepare the owned fork branch after the protected token environment is verified.
       The approved archive digest, preflight attempt and registry entry come from the record; the
-      entry submitted is the one preflight admission-validated, byte for byte, never regenerated.
-      Confirm the tokenless entry check
-      and the action-free protected push job both verify the bundle digest and commit. Check the
+      entry submitted is the one preflight admission-validated, never regenerated, with only
+      `metadata.json` derived from the current registry history. Confirm the tokenless entry
+      check and the action-free protected push job both verify the bundle digest and commit.
+      Check the
       source digest and create-only branch lease: an existing branch must be inspected,
       never advanced or replaced. A fork no-force-push ruleset adds defense in depth.
       Inspect its exact diff and proposed title/body; obtain separate explicit approval
@@ -180,7 +181,8 @@ decision, and no step builds, deletes or replaces published bytes or edits the c
 - [ ] **GitHub release marked**. Add a notice with the reason and the replacement to the top of
       the release notes with `gh release edit --notes-file`. Keep the tag and every asset.
 - [ ] **Docs site reactivated** if needed, by the
-      [documentation rollback procedure](docs_artifact_promotion.md).
+      [documentation rollback procedure](docs_artifact_promotion.md): the previous release's
+      record when it has one, otherwise the six recorded values.
 - [ ] **Editor reactivated** if needed. No workflow deploys the editor; verify the retained ZIP
       digest, `SHA256SUMS` and source/run/attempt provenance against the independently recorded
       rollback selection before it is served.
