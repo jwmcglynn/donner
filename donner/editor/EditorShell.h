@@ -622,6 +622,8 @@ private:
   void rememberOutputFontDemand(std::span<const svg::FontFaceDependency> dependencies);
   void drainOutputFontDemand();
   void ensureSampleThumbnails();
+  /// First visible sample whose thumbnail has not been attempted and is not waiting on fonts.
+  [[nodiscard]] std::optional<std::size_t> nextSampleThumbnailIndex() const;
   void publishSampleThumbnailStats() const;
   [[nodiscard]] bool sampleThumbnailLaneDrained(const SampleThumbnailRenderStats& stats) const;
   void cancelSampleThumbnailGeneration();
@@ -783,7 +785,8 @@ private:
   std::vector<std::optional<svg::RendererBitmap>> sampleThumbnailBitmaps_;
   std::size_t sampleThumbnailGenerationCursor_ = 0;
   std::optional<std::size_t> sampleThumbnailInFlightIndex_;
-  bool samplePickerHasPresentedFrame_ = false;
+  /// Holds the first thumbnail while the picker has just opened or is receiving input.
+  SampleThumbnailStartGate sampleThumbnailStartGate_;
   /// Set when the worker refused a thumbnail request because its runtime was
   /// still initializing. Nothing else wakes the on-demand loop for that, so the
   /// picker arms its own short idle retry. @see nextIdleWakeSeconds

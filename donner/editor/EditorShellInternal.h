@@ -190,6 +190,9 @@ template <typename Resolver>
 [[nodiscard]] bool ShouldAdvanceSampleThumbnails(bool showSamplePicker,
                                                  bool samplePresentationPending) noexcept;
 
+/// Whether this ImGui frame received pointer movement, a mouse button or wheel input.
+[[nodiscard]] bool FrameHasUserInput(const ImGuiIO& io) noexcept;
+
 /// Choose how to advance a deferred render request from the current document and worker state.
 /// @param hasDocument Whether a document is loaded.
 /// @param penDragFlushed Whether this pass applied a pending pen drag.

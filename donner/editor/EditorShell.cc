@@ -946,6 +946,14 @@ bool ShouldAdvanceSampleThumbnails(bool showSamplePicker, bool samplePresentatio
   return showSamplePicker && !samplePresentationPending;
 }
 
+bool FrameHasUserInput(const ImGuiIO& io) noexcept {
+  if (io.MouseDelta.x != 0.0f || io.MouseDelta.y != 0.0f || io.MouseWheel != 0.0f ||
+      io.MouseWheelH != 0.0f) {
+    return true;
+  }
+  return std::ranges::any_of(io.MouseDown, [](bool down) { return down; });
+}
+
 DeferredRenderAction DeferredRenderActionForState(bool hasDocument, bool penDragFlushed,
                                                   bool rendererBusy) noexcept {
   if (!hasDocument) {
@@ -5877,8 +5885,20 @@ void EditorShell::advanceVisiblePreviews() {
   if (internal::ShouldAdvanceSampleThumbnails(showSamplePicker_, samplePresentationPending_)) {
     ensureSampleThumbnails();
   } else if (!showSamplePicker_) {
+    sampleThumbnailStartGate_.reset();
     advanceFontPreviewGeneration();
   }
+}
+
+std::optional<std::size_t> EditorShell::nextSampleThumbnailIndex() const {
+  const std::size_t sampleCount = GetEditorSampleCatalog().size();
+  for (std::size_t index = 0; index < sampleCount; ++index) {
+    if (visibleSamplePreviewIndices_.contains(index) &&
+        !finishedSamplePreviewIndices_.contains(index) && !waitingSamplePreviews_.contains(index)) {
+      return index;
+    }
+  }
+  return std::nullopt;
 }
 
 void EditorShell::ensureSampleThumbnails() {
@@ -5887,28 +5907,23 @@ void EditorShell::ensureSampleThumbnails() {
     sampleThumbnailBitmaps_.resize(samples.size());
   }
   pollAuxiliaryPreviewResult();
-  if (!samplePickerHasPresentedFrame_) {
-    samplePickerHasPresentedFrame_ = true;
-    window_.wakeEventLoop();
-    publishSampleThumbnailStats();
-    return;
-  }
   auto& asyncRenderer = renderCoordinator_.asyncRenderer();
   if (sampleThumbnailInFlightIndex_ || fontPreviewInFlight_ || asyncRenderer.isBusy()) {
     sampleThumbnailRetryPending_ = false;
     publishSampleThumbnailStats();
     return;
   }
-  std::optional<std::size_t> next;
-  for (std::size_t index = 0; index < samples.size(); ++index) {
-    if (visibleSamplePreviewIndices_.contains(index) &&
-        !finishedSamplePreviewIndices_.contains(index) && !waitingSamplePreviews_.contains(index)) {
-      next = index;
-      break;
-    }
-  }
+  const std::optional<std::size_t> next = nextSampleThumbnailIndex();
   if (!next) {
     sampleThumbnailRetryPending_ = false;
+    publishSampleThumbnailStats();
+    return;
+  }
+  // Submitted GPU work cannot be recalled, so hold the first thumbnail while a click on the picker
+  // is likely. The first picker frame always holds, which also paints every card before any
+  // sample is parsed. Ask for another frame so the hold advances without input.
+  if (!sampleThumbnailStartGate_.admitFrame(internal::FrameHasUserInput(ImGui::GetIO()))) {
+    window_.wakeEventLoop();
     publishSampleThumbnailStats();
     return;
   }

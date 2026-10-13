@@ -1153,6 +1153,10 @@ public:
 
   static bool ShowSamplePicker(const EditorShell& shell) { return shell.showSamplePicker_; }
 
+  static const SampleThumbnailStartGate& SampleThumbnailStartGateState(const EditorShell& shell) {
+    return shell.sampleThumbnailStartGate_;
+  }
+
   static std::size_t SampleThumbnailCursor(const EditorShell& shell) {
     return shell.sampleThumbnailGenerationCursor_;
   }
@@ -7587,6 +7591,143 @@ TEST(EditorShellTest, MainDocumentRenderTakesPriorityOverNewCarouselThumbnailWor
   EXPECT_TRUE(EditorShellTestAccess::RendererBusy(shell));
   EXPECT_EQ(EditorShellTestAccess::SampleThumbnailGeneratedCount(shell), 0u);
   shell.asyncRendererForReplay().setReplayRenderDelayForTesting(std::chrono::milliseconds(0));
+}
+
+namespace {
+
+/// Runs one editor frame the way `RunEditorFrame` does, with \p input when given.
+void RunPickerFrame(gui::EditorWindow& window, EditorShell& shell,
+                    const std::optional<gui::EditorWindowInputOverride>& input = std::nullopt) {
+  shell.prepareFrame();
+  if (input.has_value()) {
+    window.beginFrameWithInput(*input);
+  } else {
+    window.beginFrame();
+  }
+  shell.runFrame();
+  window.endFrame();
+}
+
+/// An editor booted the way the browser editor boots: on the welcome picker.
+EditorShellOptions WelcomePickerOptions() {
+  EditorShellOptions options = OptionsWithSource(
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="640" height="400" viewBox="0 0 640 400"/>)");
+  options.showWelcome = true;
+  return options;
+}
+
+}  // namespace
+
+// A sample clicked in the first frames after the picker appears must reach the render worker, and
+// so the GPU queue, ahead of any thumbnail work. Work on the queue cannot be recalled, so the only
+// way to keep the clicked document from waiting on a thumbnail is not to start one. Counts only.
+TEST(EditorShellTest, SampleClickedRightAfterBootRendersBeforeAnyThumbnail) {
+  gui::EditorWindow window(TestWindowOptions({
+      .title = "Donner first sample click",
+      .initialWidth = 960,
+      .initialHeight = 720,
+  }));
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
+  EditorShell shell(window, WelcomePickerOptions());
+  ASSERT_TRUE(shell.valid());
+  AsyncRenderer& renderer = shell.asyncRendererForReplay();
+
+  // The first picker frames, where a click right after boot lands.
+  constexpr int kFramesBeforeClick = 5;
+  for (int frame = 0; frame < kFramesBeforeClick; ++frame) {
+    RunPickerFrame(window, shell);
+  }
+  ASSERT_TRUE(EditorShellTestAccess::ShowSamplePicker(shell));
+  ASSERT_GT(EditorShellTestAccess::VisibleSamplePreviewCount(shell), 0u);
+  EXPECT_EQ(renderer.sampleThumbnailRenderStats().requested, 0u)
+      << "No thumbnail may be queued in the frames right after the picker appears";
+
+  EditorShellTestAccess::QueueSampleLoad(shell, "basic-shapes");
+  EditorShellTestAccess::ProcessPendingSampleLoad(shell);
+  ASSERT_TRUE(EditorShellTestAccess::SamplePresentationPending(shell));
+
+  bool displayed = false;
+  for (const tests::HangGuard guard; guard.active();) {
+    RunPickerFrame(window, shell);
+    ASSERT_EQ(renderer.sampleThumbnailRenderStats().started, 0u)
+        << "A thumbnail started while the clicked sample's document was pending";
+    if (!EditorShellTestAccess::SamplePresentationPending(shell) &&
+        EditorShellTestAccess::DisplayedDocVersion(shell) ==
+            EditorShellTestAccess::App(shell).document().currentFrameVersion()) {
+      displayed = true;
+      break;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(2));
+  }
+  ASSERT_TRUE(displayed) << "the clicked sample never presented";
+  const SampleThumbnailRenderStats stats = renderer.sampleThumbnailRenderStats();
+  EXPECT_EQ(stats.requested, 0u);
+  EXPECT_EQ(stats.started, 0u);
+}
+
+// When nobody touches the picker, its thumbnails start after a fixed number of frames.
+TEST(EditorShellTest, IdlePickerStartsThumbnailsAfterTheQuietHold) {
+  gui::EditorWindow window(TestWindowOptions({
+      .title = "Donner idle sample picker",
+      .initialWidth = 960,
+      .initialHeight = 720,
+  }));
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
+  EditorShell shell(window, WelcomePickerOptions());
+  ASSERT_TRUE(shell.valid());
+  AsyncRenderer& renderer = shell.asyncRendererForReplay();
+  const SampleThumbnailStartGate& gate = EditorShellTestAccess::SampleThumbnailStartGateState(shell);
+
+  for (const tests::HangGuard guard; guard.active() && !gate.open();) {
+    RunPickerFrame(window, shell);
+    if (!gate.open()) {
+      ASSERT_EQ(renderer.sampleThumbnailRenderStats().requested, 0u)
+          << "held frame " << gate.heldFrames();
+    }
+  }
+  ASSERT_TRUE(gate.open());
+  EXPECT_EQ(gate.heldFrames(), SampleThumbnailStartGate::kQuietFrames);
+  EXPECT_EQ(renderer.sampleThumbnailRenderStats().requested, 1u)
+      << "The frame that opens the gate requests the first thumbnail";
+}
+
+// Pointer movement over the picker holds the thumbnails, up to the bound.
+TEST(EditorShellTest, PointerActivityHoldsThumbnailsUpToTheBound) {
+  gui::EditorWindow window(TestWindowOptions({
+      .title = "Donner busy sample picker",
+      .initialWidth = 960,
+      .initialHeight = 720,
+  }));
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
+  EditorShell shell(window, WelcomePickerOptions());
+  ASSERT_TRUE(shell.valid());
+  AsyncRenderer& renderer = shell.asyncRendererForReplay();
+  const SampleThumbnailStartGate& gate = EditorShellTestAccess::SampleThumbnailStartGateState(shell);
+
+  // Move the pointer by one pixel each frame, inside the picker's background.
+  int moves = 0;
+  for (const tests::HangGuard guard; guard.active() && !gate.open();) {
+    RunPickerFrame(window, shell,
+                   gui::EditorWindowInputOverride{
+                       .mousePosition = Vector2d(40.0 + (moves % 2), 600.0),
+                   });
+    ++moves;
+    if (!gate.open()) {
+      ASSERT_EQ(renderer.sampleThumbnailRenderStats().requested, 0u)
+          << "held frame " << gate.heldFrames();
+    }
+  }
+  ASSERT_TRUE(gate.open());
+  EXPECT_EQ(gate.heldFrames(), SampleThumbnailStartGate::kMaxHeldFrames)
+      << "Continuous input must hold the thumbnails for the whole bound, and no longer";
+  EXPECT_GT(moves, SampleThumbnailStartGate::kQuietFrames);
+  EXPECT_EQ(renderer.sampleThumbnailRenderStats().requested, 1u);
 }
 
 TEST(EditorShellTest, TeardownKeepsFontProviderUntilTextThumbnailWorkerStopsAndDetachesWake) {

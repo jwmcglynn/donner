@@ -214,4 +214,14 @@ SamplePickerActions SamplePickerPresenter::render(
   return actions;
 }
 
+bool SampleThumbnailStartGate::admitFrame(bool inputActive) noexcept {
+  if (open_) {
+    return true;
+  }
+  ++heldFrames_;
+  quietFrames_ = inputActive ? 0 : quietFrames_ + 1;
+  open_ = quietFrames_ >= kQuietFrames || heldFrames_ >= kMaxHeldFrames;
+  return open_;
+}
+
 }  // namespace donner::editor

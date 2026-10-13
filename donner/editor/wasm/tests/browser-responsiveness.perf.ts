@@ -1613,6 +1613,50 @@ async function readGpuTimelineOnPageClock(page: Page) {
   return null;
 }
 
+// Records, on the page clock, when the sample picker's thumbnail lane first requested a thumbnail,
+// first showed one, and finished every visible card. The editor replaces
+// `__donnerSampleThumbnailStats` on each publication, so a setter sees every one of them without
+// polling. Call before navigating.
+async function recordSampleThumbnailMarks(page: Page) {
+  await page.addInitScript(() => {
+    const marks: Record<string, number> = {};
+    let stats: { requested?: number; ready?: number; drained?: boolean } | undefined;
+    Object.defineProperty(window, "__donnerSampleThumbnailStats", {
+      configurable: true,
+      get: () => stats,
+      set: (value) => {
+        stats = value;
+        const now = performance.now();
+        if (marks.firstRequestAt === undefined && (value?.requested ?? 0) > 0) {
+          marks.firstRequestAt = now;
+        }
+        if (marks.firstReadyAt === undefined && (value?.ready ?? 0) > 0) marks.firstReadyAt = now;
+        if (marks.drainedAt === undefined && value?.drained === true && (value?.ready ?? 0) > 0) {
+          marks.drainedAt = now;
+        }
+      },
+    });
+    (window as unknown as { __donnerThumbnailMarks: Record<string, number> })
+      .__donnerThumbnailMarks = marks;
+  });
+}
+
+async function readSampleThumbnailMarks(page: Page) {
+  return page.evaluate(() => {
+    const state = window as unknown as {
+      __donnerThumbnailMarks?: Record<string, number>;
+      __donnerFirstFramePresentedAtMs?: number;
+      __donnerSampleThumbnailStats?: { ready?: number; requested?: number };
+    };
+    return {
+      ...state.__donnerThumbnailMarks,
+      firstFramePresentedAt: state.__donnerFirstFramePresentedAtMs,
+      ready: state.__donnerSampleThumbnailStats?.ready ?? 0,
+      requested: state.__donnerSampleThumbnailStats?.requested ?? 0,
+    };
+  });
+}
+
 // Clicks a sample the moment the editor has presented its first frame, while boot work such as the
 // sample thumbnails is still on the GPU, and splits the wait for the clicked document into the GPU
 // queue backlog left from before the click and the presentation handoff after it. Report only: the
@@ -1626,6 +1670,7 @@ test("first sample click after boot", async ({ page, browser }, info) => {
       failures.push(message.text());
     }
   });
+  await recordSampleThumbnailMarks(page);
   await page.goto(process.env.DONNER_WASM_BASE_URL!, { waitUntil: "domcontentloaded" });
   await expect.poll(
     () => page.evaluate(() => (window as Diagnostics).__donnerFirstFramePresented),
@@ -1656,15 +1701,69 @@ test("first sample click after boot", async ({ page, browser }, info) => {
     completedAt,
     presentedAt: worker!.presentedAtMs!,
   });
+  // When the thumbnail lane first asked the worker for a thumbnail, relative to the click; null
+  // when it had not by the time the clicked document presented.
+  const marks = await readSampleThumbnailMarks(page);
+  const relativeToClick = (at: number | undefined) =>
+    at === undefined ? null : Math.round((at - clickAt) * 10) / 10;
   const report = {
     browser: info.project.name,
     version: browser.version(),
     adapter: process.env.DONNER_BROWSER_WEBGPU_ADAPTER ?? "default",
     ...packageHashes(),
     ...breakdown,
+    clickAfterFirstFrameMs: marks.firstFramePresentedAt === undefined
+      ? null
+      : Math.round((clickAt - marks.firstFramePresentedAt) * 10) / 10,
+    thumbnailRequestMs: relativeToClick(marks.firstRequestAt),
     gpuObjects: gpu!.statistics,
   };
   console.log(`first-click-after-boot ${JSON.stringify(report)}`);
-  await attachJson(info, "first-click-after-boot.json", { ...report, timeline: gpu!.timeline });
+  const rasterPhases = await page.evaluate(() =>
+    (window as unknown as { __donnerRasterWorkPhases?: unknown[] }).__donnerRasterWorkPhases ?? []
+  );
+  await attachJson(info, "first-click-after-boot.json", {
+    ...report,
+    clickAt,
+    thumbnailMarks: marks,
+    rasterPhases,
+    timeline: gpu!.timeline,
+  });
+  expect(failures).toEqual([]);
+});
+
+// Measures how long the sample picker takes to show its thumbnails after boot when nobody clicks:
+// from the editor's first presented frame to the lane's first thumbnail request, to the first
+// thumbnail on screen, and to the last visible card's thumbnail. Report only.
+test("sample thumbnails after boot", async ({ page, browser }, info) => {
+  const failures: string[] = [];
+  page.on("pageerror", (error) => failures.push(error.message));
+  await recordSampleThumbnailMarks(page);
+  await page.goto(process.env.DONNER_WASM_BASE_URL!, { waitUntil: "domcontentloaded" });
+  await expect.poll(
+    () => page.evaluate(() => (window as Diagnostics).__donnerFirstFramePresented),
+    { timeout: 30000, message: "WebGPU must present the production editor" },
+  ).toBe(true);
+  await expect.poll(async () => (await readSampleThumbnailMarks(page)).drainedAt !== undefined, {
+    timeout: 60000,
+    message: "the sample picker must finish its visible thumbnails",
+  }).toBe(true);
+  const marks = await readSampleThumbnailMarks(page);
+  const afterFirstFrame = (at: number | undefined) =>
+    at === undefined || marks.firstFramePresentedAt === undefined
+      ? null
+      : Math.round((at - marks.firstFramePresentedAt) * 10) / 10;
+  const report = {
+    browser: info.project.name,
+    version: browser.version(),
+    adapter: process.env.DONNER_BROWSER_WEBGPU_ADAPTER ?? "default",
+    ...packageHashes(),
+    firstRequestMs: afterFirstFrame(marks.firstRequestAt),
+    firstThumbnailMs: afterFirstFrame(marks.firstReadyAt),
+    allThumbnailsMs: afterFirstFrame(marks.drainedAt),
+    thumbnails: marks.ready,
+  };
+  console.log(`sample-thumbnails-after-boot ${JSON.stringify(report)}`);
+  await attachJson(info, "sample-thumbnails-after-boot.json", report);
   expect(failures).toEqual([]);
 });

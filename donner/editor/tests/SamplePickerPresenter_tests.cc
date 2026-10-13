@@ -121,6 +121,54 @@ TEST(SamplePickerPresenter, CommandsIgnoreEmptySampleAndNullAccumulator) {
   EXPECT_FALSE(actions.openGitHub);
 }
 
+TEST(SampleThumbnailStartGate, OpensAfterQuietFramesAndStaysOpen) {
+  SampleThumbnailStartGate gate;
+  for (int frame = 1; frame < SampleThumbnailStartGate::kQuietFrames; ++frame) {
+    EXPECT_FALSE(gate.admitFrame(/*inputActive=*/false)) << "frame " << frame;
+  }
+  EXPECT_TRUE(gate.admitFrame(/*inputActive=*/false));
+  EXPECT_TRUE(gate.open());
+  EXPECT_EQ(gate.heldFrames(), SampleThumbnailStartGate::kQuietFrames);
+
+  // Input after the gate opened does not stop work that is already allowed to start.
+  EXPECT_TRUE(gate.admitFrame(/*inputActive=*/true));
+  EXPECT_EQ(gate.heldFrames(), SampleThumbnailStartGate::kQuietFrames);
+}
+
+TEST(SampleThumbnailStartGate, InputRestartsTheQuietCount) {
+  SampleThumbnailStartGate gate;
+  for (int frame = 1; frame < SampleThumbnailStartGate::kQuietFrames; ++frame) {
+    ASSERT_FALSE(gate.admitFrame(/*inputActive=*/false));
+  }
+  EXPECT_FALSE(gate.admitFrame(/*inputActive=*/true));
+  for (int frame = 1; frame < SampleThumbnailStartGate::kQuietFrames; ++frame) {
+    EXPECT_FALSE(gate.admitFrame(/*inputActive=*/false)) << "quiet frame " << frame;
+  }
+  EXPECT_TRUE(gate.admitFrame(/*inputActive=*/false));
+  EXPECT_EQ(gate.heldFrames(), 2 * SampleThumbnailStartGate::kQuietFrames);
+}
+
+TEST(SampleThumbnailStartGate, ContinuousInputHoldsAtMostTheBound) {
+  SampleThumbnailStartGate gate;
+  for (int frame = 1; frame < SampleThumbnailStartGate::kMaxHeldFrames; ++frame) {
+    ASSERT_FALSE(gate.admitFrame(/*inputActive=*/true)) << "frame " << frame;
+  }
+  EXPECT_TRUE(gate.admitFrame(/*inputActive=*/true));
+  EXPECT_EQ(gate.heldFrames(), SampleThumbnailStartGate::kMaxHeldFrames);
+}
+
+TEST(SampleThumbnailStartGate, ResetStartsANewHold) {
+  SampleThumbnailStartGate gate;
+  for (int frame = 0; frame < SampleThumbnailStartGate::kQuietFrames; ++frame) {
+    (void)gate.admitFrame(/*inputActive=*/false);
+  }
+  ASSERT_TRUE(gate.open());
+  gate.reset();
+  EXPECT_FALSE(gate.open());
+  EXPECT_EQ(gate.heldFrames(), 0);
+  EXPECT_FALSE(gate.admitFrame(/*inputActive=*/false));
+}
+
 // ---------------------------------------------------------------------------
 // Rendered picker behavior (headless ImGui)
 // ---------------------------------------------------------------------------

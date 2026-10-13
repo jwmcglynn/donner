@@ -107,6 +107,48 @@ enum class SamplePickerCommand {
 void ApplySamplePickerCommand(bool activated, SamplePickerCommand command,
                               std::string_view sampleId, SamplePickerActions* actions);
 
+/**
+ * Holds the sample picker's first thumbnail until the picker has been idle for a few frames.
+ *
+ * The thumbnails share the render worker and the GPU queue with the document. Work already on the
+ * queue cannot be recalled, and on a slow GPU the first thumbnail can hold the queue for seconds:
+ * a software adapter generates its shader code when a draw first uses a pipeline state. A sample
+ * clicked in that window waits for it. So the picker does not submit thumbnail work in the frames
+ * where a click is most likely: right after it opens, and while the pointer or wheel is active. The hold counts frames, not time, so a slow device that presents fewer frames
+ * holds for longer. It is bounded: after \ref kMaxHeldFrames held frames, input no longer delays
+ * the thumbnails. Once open, the gate stays open until the picker closes.
+ */
+class SampleThumbnailStartGate {
+public:
+  /// Consecutive frames without input after which thumbnail work may start.
+  static constexpr int kQuietFrames = 30;
+  /// Held frames after which thumbnail work starts even while input continues.
+  static constexpr int kMaxHeldFrames = 120;
+
+  /**
+   * Count one frame in which the picker has thumbnail work to start.
+   *
+   * @param inputActive Whether this frame received pointer or wheel input.
+   * @return True when thumbnail work may start this frame. The caller asks for another frame
+   *     when this returns false, so the hold advances without new input.
+   */
+  [[nodiscard]] bool admitFrame(bool inputActive) noexcept;
+
+  /// Start a new hold, used when the picker closes.
+  void reset() noexcept { *this = SampleThumbnailStartGate(); }
+
+  /// Whether thumbnail work may start.
+  [[nodiscard]] bool open() const noexcept { return open_; }
+
+  /// Frames counted while the gate was closed.
+  [[nodiscard]] int heldFrames() const noexcept { return heldFrames_; }
+
+private:
+  int quietFrames_ = 0;
+  int heldFrames_ = 0;
+  bool open_ = false;
+};
+
 /// Draw the welcome/sample surface inside the current ImGui pane.
 class SamplePickerPresenter {
 public:
