@@ -2956,7 +2956,7 @@ std::optional<gpu::shader::programs::ConvolveMatrixParams> BuildConvolveMatrixPa
     for (double coefficient : primitive.kernelMatrix) {
       divisor += coefficient;
     }
-    if (std::abs(divisor) < 1e-10) {
+    if (divisor == 0.0) {
       divisor = 1.0;
     }
   }
