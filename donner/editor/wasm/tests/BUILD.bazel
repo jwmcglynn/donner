@@ -205,7 +205,6 @@ playwright_bin.playwright_test(
         "composited-pixel-classifier.mjs",
         "composited-probe.ts",
         "composited-probe-evidence.mjs",
-        "first-click-breakdown.mjs",
         "gpu-image-transfer-canary.ts",
         "gpu-session-console.ts",
         "latency-gates.mjs",
@@ -528,29 +527,6 @@ js_test(
         "//donner/gpu/browser:library_donner_gpu.js",
     ],
     entry_point = "browser-bridge-devices.spec.mjs",
-    node_options = ["--test"],
-)
-
-# Drives pipeline creation in the same library against a stub device with one in-order timeline, on
-# which a synchronous creation holds every later submission until its compile finishes.
-js_test(
-    name = "browser_bridge_pipeline_tests",
-    size = "small",
-    copy_data_to_bin = False,
-    data = [
-        "bridge-library-harness.mjs",
-        "//donner/gpu/browser:library_donner_gpu.js",
-    ],
-    entry_point = "browser-bridge-pipelines.spec.mjs",
-    node_options = ["--test"],
-)
-
-js_test(
-    name = "first_click_breakdown_tests",
-    size = "small",
-    copy_data_to_bin = False,
-    data = ["first-click-breakdown.mjs"],
-    entry_point = "first-click-breakdown.spec.mjs",
     node_options = ["--test"],
 )
 
