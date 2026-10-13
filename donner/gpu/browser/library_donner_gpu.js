@@ -132,6 +132,9 @@ var LibraryDonnerGpu = {
     // Compiled pipelines of the browser device, by what they compile; see compilePipeline.
     pipelines: null,
     shaderSources: null,
+    // Pipelines created in the current task whose asynchronous compile has not started yet, or
+    // null when none are waiting; see startCompiles.
+    compilesToStart: null,
     pipelineCompiles: 0,
     pipelineCompilesShared: 0,
     pipelineCompilesOnFirstUse: 0,
@@ -573,6 +576,7 @@ var LibraryDonnerGpu = {
       // nothing to install into.
       DonnerGpu.pipelines = new Map();
       DonnerGpu.shaderSources = new Map();
+      DonnerGpu.compilesToStart = null;
       DonnerGpu.device = null;
       DonnerGpu.queue = null;
       DonnerGpu.requestStarted = false;
@@ -721,12 +725,12 @@ var LibraryDonnerGpu = {
     //
     // A browser compiles a pipeline created with createRenderPipeline in order with everything
     // else the device does, so the first submission after it, and every submission queued behind
-    // that one, waits for the compile. A pipeline is therefore compiled asynchronously as soon as
-    // it is created, which on the editor's devices is when each renderer starts, well before its
-    // first draw. Its identifier names a compile record: the pipeline once the browser hands it
-    // over, or nothing yet. Nothing waits on the browser's answer. A pass that reaches a pipeline
-    // the browser has not answered for yet creates it synchronously there and then, which costs
-    // what every pipeline used to.
+    // that one, waits for the compile. A pipeline is therefore compiled asynchronously, starting
+    // when the task that created it ends; on the editor's devices that is when each renderer
+    // starts, well before its first draw. Its identifier names a compile record: the pipeline once
+    // the browser hands it over, or nothing yet. Nothing waits on the browser's answer. A pass that
+    // reaches a pipeline the browser has not answered for yet creates it synchronously there and
+    // then, which costs what every pipeline used to.
     //
     // Compiles are shared between the logical devices over one browser device: every renderer
     // builds the same few pipelines, and each one is compiled once. Pipelines are immutable and
@@ -779,37 +783,66 @@ var LibraryDonnerGpu = {
         pipeline: null,
         compiledAt: 0,
       };
-      var traced = ["p", record.handle, DonnerGpu.epochMs(), 0, 0];
-      DonnerGpu.trace(traced);
-      var device = DonnerGpu.device;
-      var compileAsync = kind === DonnerGpu.kRenderPipeline
-        ? device.createRenderPipelineAsync
-        : device.createComputePipelineAsync;
-      if (typeof compileAsync === "function") {
-        var pending;
-        try {
-          pending = compileAsync.call(device, descriptor);
-        } catch (e) {
-          pending = null;
-        }
-        if (pending && typeof pending.then === "function") {
-          DonnerGpu.pipelineCompiles += 1;
-          pending.then(function(pipeline) {
-            if (DonnerGpu.pipelines === cache && compile.pipeline === null && pipeline) {
-              compile.pipeline = pipeline;
-              compile.compiledAt = DonnerGpu.epochMs();
-              traced[3] = compile.compiledAt;
-            }
-          }, function() {
-            // A descriptor the browser refuses is created on first use instead, where the
-            // browser reports the refusal the same way it reports any other.
-          });
-        }
+      compile.traced = ["p", record.handle, DonnerGpu.epochMs(), 0, 0];
+      DonnerGpu.trace(compile.traced);
+      if (DonnerGpu.compilesToStart === null) {
+        var batch = [];
+        DonnerGpu.compilesToStart = batch;
+        Promise.resolve().then(function() {
+          if (DonnerGpu.compilesToStart === batch) {
+            DonnerGpu.compilesToStart = null;
+          }
+          DonnerGpu.startCompiles(cache, batch);
+        });
       }
+      DonnerGpu.compilesToStart.push(compile);
       if (key !== "" && cache.size < DonnerGpu.kMaxSharedPipelines) {
         cache.set(key, compile);
       }
       return DonnerGpu.register(record, kind, id, compile);
+    },
+
+    // Starts the asynchronous compile of each pipeline in `compiles` that has not been created
+    // synchronously in the meantime. It runs once the task that created them ends, so a pipeline
+    // created and used within one task, as the ones built on demand are, is compiled once, at that
+    // use, rather than twice. `cache` is the browser device's pipeline map when the start was
+    // scheduled; a device let go since leaves nothing to start.
+    startCompiles: function(cache, compiles) {
+      if (DonnerGpu.pipelines !== cache || DonnerGpu.device === null || DonnerGpu.lost) {
+        return;
+      }
+      var device = DonnerGpu.device;
+      compiles.forEach(function(compile) {
+        if (compile.pipeline !== null) {
+          return;
+        }
+        var compileAsync = compile.kind === DonnerGpu.kRenderPipeline
+          ? device.createRenderPipelineAsync
+          : device.createComputePipelineAsync;
+        if (typeof compileAsync !== "function") {
+          return;
+        }
+        var pending;
+        try {
+          pending = compileAsync.call(device, compile.descriptor);
+        } catch (e) {
+          pending = null;
+        }
+        if (!pending || typeof pending.then !== "function") {
+          return;
+        }
+        DonnerGpu.pipelineCompiles += 1;
+        pending.then(function(pipeline) {
+          if (DonnerGpu.pipelines === cache && compile.pipeline === null && pipeline) {
+            compile.pipeline = pipeline;
+            compile.compiledAt = DonnerGpu.epochMs();
+            compile.traced[3] = compile.compiledAt;
+          }
+        }, function() {
+          // A descriptor the browser refuses is created on first use instead, where the browser
+          // reports the refusal the same way it reports any other.
+        });
+      });
     },
 
     // The pipeline `id` names in `record` if it is of `kind`, creating it now if the browser has

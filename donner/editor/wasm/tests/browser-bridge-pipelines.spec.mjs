@@ -202,6 +202,7 @@ test("a compiled pipeline's submission completes while another pipeline is still
   const stub = createTimelineDevice();
   const bridge = await openOver(stub, [kFirst]);
   buildPipelines(bridge, kFirst, [[kPipelineA, "fsA"], [kPipelineB, "fsB"]]);
+  await drain();
   stub.finishCompile("fsA");
   await drain();
 
@@ -221,6 +222,8 @@ test("a pipeline used before its compile settles is created at that use, once", 
   const stub = createTimelineDevice();
   const bridge = await openOver(stub, [kFirst]);
   buildPipelines(bridge, kFirst, [[kPipelineA, "fsA"]]);
+  await drain();
+  assert.deepEqual(stub.created.async, ["fsA"]);
 
   submitDraw(bridge, kFirst, 1, kPipelineA);
   submitDraw(bridge, kFirst, 2, kPipelineA);
@@ -243,6 +246,7 @@ test("identical pipelines on two logical devices compile once and share the resu
   const bridge = await openOver(stub, [kFirst, kSecond]);
   buildPipelines(bridge, kFirst, [[kPipelineA, "fsA"]]);
   buildPipelines(bridge, kSecond, [[kPipelineA, "fsA"], [kPipelineB, "fsB"]]);
+  await drain();
   assert.deepEqual(stub.created.async, ["fsA", "fsB"]);
   stub.finishCompile("fsA");
   await drain();
@@ -267,6 +271,7 @@ test("a compile the browser refuses is created at first use, where the browser r
   const stub = createTimelineDevice({ refuseAsync: true });
   const bridge = await openOver(stub, [kFirst]);
   buildPipelines(bridge, kFirst, [[kPipelineA, "fsA"]]);
+  await drain();
   stub.finishCompile("fsA");
   await drain();
 
@@ -279,6 +284,7 @@ test("a browser without asynchronous creation creates each pipeline at first use
   const stub = createTimelineDevice({ asyncCompiles: false });
   const bridge = await openOver(stub, [kFirst]);
   buildPipelines(bridge, kFirst, [[kPipelineA, "fsA"], [kPipelineB, "fsB"]]);
+  await drain();
   assert.deepEqual(stub.created.sync, []);
 
   submitDraw(bridge, kFirst, 1, kPipelineB);
@@ -289,6 +295,7 @@ test("a compile that settles after its device is let go installs nothing", async
   const stub = createTimelineDevice();
   const bridge = await openOver(stub, [kFirst]);
   buildPipelines(bridge, kFirst, [[kPipelineA, "fsA"]]);
+  await drain();
   const { state, entryPoints } = bridge;
   const compile = state.pipelines.values().next().value;
   entryPoints.donner_gpu_release_device(kFirst);
@@ -296,4 +303,24 @@ test("a compile that settles after its device is let go installs nothing", async
   await drain();
   assert.equal(compile.pipeline, null);
   assert.equal(state.pipelines.size, 0);
+});
+
+test("a pipeline created and used within one task is compiled once, at that use", async () => {
+  const stub = createTimelineDevice();
+  const bridge = await openOver(stub, [kFirst]);
+  // Pipelines built on demand are created by the pass that first needs them. Starting an
+  // asynchronous compile as well would make the browser compile them twice.
+  buildPipelines(bridge, kFirst, [[kPipelineA, "fsA"]]);
+  submitDraw(bridge, kFirst, 1, kPipelineA);
+  await drain();
+  assert.deepEqual(stub.created, { sync: ["fsA"], async: [] });
+});
+
+test("a device let go before its compiles start starts none of them", async () => {
+  const first = createTimelineDevice();
+  const bridge = await openOver(first, [kFirst]);
+  buildPipelines(bridge, kFirst, [[kPipelineA, "fsA"]]);
+  bridge.entryPoints.donner_gpu_release_device(kFirst);
+  await drain();
+  assert.deepEqual(first.created.async, []);
 });
