@@ -130,6 +130,12 @@ struct MenuBarActions {
   bool zoomOut = false;
   /// Request a one-to-one viewport zoom.
   bool actualSize = false;
+  /// Request increasing the source editor font size.
+  bool increaseSourceFontSize = false;
+  /// Request decreasing the source editor font size.
+  bool decreaseSourceFontSize = false;
+  /// Request restoring the source editor font size to 100%.
+  bool resetSourceFontSize = false;
   /// Request toggling source-focused editing mode.
   bool toggleSourceFocusMode = false;
   /// Set when the user toggles the Compositor Debug Info panel via the View menu.
@@ -181,6 +187,9 @@ enum class MenuBarCommand {
   ZoomIn,
   ZoomOut,
   ActualSize,
+  IncreaseSourceFontSize,
+  DecreaseSourceFontSize,
+  ResetSourceFontSize,
   ToggleSourceFocusMode,
   ToggleCompositorDebugPanel,
   ToggleCompositorTileOverlay,

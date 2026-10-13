@@ -53,6 +53,9 @@ void ApplyMenuBarCommand(bool activated, MenuBarCommand command, const MenuBarSt
     case MenuBarCommand::ZoomIn: actions->zoomIn = true; return;
     case MenuBarCommand::ZoomOut: actions->zoomOut = true; return;
     case MenuBarCommand::ActualSize: actions->actualSize = true; return;
+    case MenuBarCommand::IncreaseSourceFontSize: actions->increaseSourceFontSize = true; return;
+    case MenuBarCommand::DecreaseSourceFontSize: actions->decreaseSourceFontSize = true; return;
+    case MenuBarCommand::ResetSourceFontSize: actions->resetSourceFontSize = true; return;
     case MenuBarCommand::ToggleSourceFocusMode: actions->toggleSourceFocusMode = true; return;
     case MenuBarCommand::ToggleCompositorDebugPanel:
       actions->toggleCompositorDebugPanel = true;
@@ -130,7 +133,7 @@ void RenderMenuNodes(std::span<const EditorMenuNode> nodes, const MenuBarState& 
       continue;
     }
     const EditorMenuItemPresentation presentation = PresentEditorMenuItem(node, state);
-    const char* shortcut = node.shortcut.empty() ? nullptr : node.shortcut.data();
+    const char* shortcut = presentation.shortcut.empty() ? nullptr : presentation.shortcut.data();
     const bool activated =
         ImGui::MenuItem(node.label.data(), shortcut, presentation.checked, presentation.enabled);
     ApplyMenuBarCommand(activated, node.command, state, actions);

@@ -69,12 +69,19 @@ constexpr std::array kEditItems = {
     Item("Deselect All", "Cmd+Shift+A", MenuBarCommand::DeselectAll),
 };
 
+constexpr std::array kSourceFontSizeItems = {
+    Item("Increase Font Size", "Cmd+=", MenuBarCommand::IncreaseSourceFontSize),
+    Item("Decrease Font Size", "Cmd+-", MenuBarCommand::DecreaseSourceFontSize),
+    Item("Reset Font Size (100%)", "Cmd+0", MenuBarCommand::ResetSourceFontSize),
+};
+
 constexpr std::array kViewItems = {
     Item("Source Focus Mode", "Cmd+Enter", MenuBarCommand::ToggleSourceFocusMode),
     Separator(),
     Item("Zoom In", "Cmd+=", MenuBarCommand::ZoomIn),
     Item("Zoom Out", "Cmd+-", MenuBarCommand::ZoomOut),
     Item("Actual Size", "Cmd+0", MenuBarCommand::ActualSize),
+    Submenu("Source Font Size", kSourceFontSizeItems),
     Separator(),
     Item("Compositor Debug Info", "", MenuBarCommand::ToggleCompositorDebugPanel),
     Item("Compositor Tile Overlay", "", MenuBarCommand::ToggleCompositorTileOverlay),
@@ -222,6 +229,7 @@ EditorMenuItemPresentation PresentEditorMenuItem(const EditorMenuNode& item,
   if (item.kind != EditorMenuNode::Kind::Command) {
     return result;
   }
+  result.shortcut = item.shortcut;
   if (surface == EditorMenuSurface::Native && SuppressNativeMenuShortcuts(state) &&
       NativeTextCaptureDisables(item.command)) {
     result.enabled = false;
@@ -235,13 +243,32 @@ EditorMenuItemPresentation PresentEditorMenuItem(const EditorMenuNode& item,
   }
   result.enabled = CommandEnabled(item.command, state);
   result.checked = CommandChecked(item.command, state);
+  switch (item.command) {
+    case MenuBarCommand::ZoomIn:
+    case MenuBarCommand::ZoomOut:
+    case MenuBarCommand::ActualSize:
+      if (state.sourcePaneFocused) {
+        result.shortcut = {};
+      }
+      break;
+    case MenuBarCommand::IncreaseSourceFontSize:
+    case MenuBarCommand::DecreaseSourceFontSize:
+    case MenuBarCommand::ResetSourceFontSize:
+      if (!state.sourcePaneFocused) {
+        result.shortcut = {};
+      }
+      break;
+    default: break;
+  }
   return result;
 }
 
 bool NativeMenuActivationAllowed(const EditorMenuNode& item, const MenuBarState& state,
                                  bool keyEquivalent) {
-  return !(keyEquivalent && SuppressNativeMenuShortcuts(state)) &&
-         PresentEditorMenuItem(item, state, EditorMenuSurface::Native).enabled;
+  const EditorMenuItemPresentation presentation =
+      PresentEditorMenuItem(item, state, EditorMenuSurface::Native);
+  return presentation.enabled && (!keyEquivalent || (!SuppressNativeMenuShortcuts(state) &&
+                                                     !presentation.shortcut.empty()));
 }
 
 }  // namespace donner::editor

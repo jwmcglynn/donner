@@ -1974,7 +1974,8 @@ float SourceEditorContentHeight() {
 }
 
 void DriveGlobalShortcut(EditorShell& shell, const std::vector<ImGuiKey>& keys, bool ctrl = false,
-                         bool shift = false, bool super = false, bool textInputActive = false) {
+                         bool shift = false, bool super = false, bool textInputActive = false,
+                         const std::function<void()>& renderUi = {}) {
   ImGuiIO& io = ImGui::GetIO();
   io.DisplaySize = ImVec2(640.0f, 480.0f);
   io.ConfigMacOSXBehaviors = false;
@@ -1995,6 +1996,9 @@ void DriveGlobalShortcut(EditorShell& shell, const std::vector<ImGuiKey>& keys, 
   }
 
   ImGui::NewFrame();
+  if (renderUi) {
+    renderUi();
+  }
   if (textInputActive) {
     io.WantTextInput = true;
   }
@@ -2014,6 +2018,9 @@ void DriveGlobalShortcut(EditorShell& shell, const std::vector<ImGuiKey>& keys, 
     io.AddKeyEvent(ImGuiMod_Ctrl, false);
   }
   ImGui::NewFrame();
+  if (renderUi) {
+    renderUi();
+  }
   ImGui::Render();
 }
 
@@ -6908,14 +6915,21 @@ TEST(EditorShellTest, SourceFontShortcutsResizeTextAndPreserveCanvasZoomAndSelec
   }
   EditorShell shell(window, OptionsWithSource(kInitialSvg, "initial.svg"));
   ASSERT_TRUE(shell.valid());
+  ImGui::GetIO().ConfigInputTrickleEventQueue = false;
   EditorShellTestAccess::SetSourcePaneVisible(shell, true);
   EditorShellTestAccess::SetSourceFocusMode(shell, false);
   TextEditor& source = EditorShellTestAccess::Source(shell);
   source.setWordWrapEnabled(false);
   source.selectAndFocus({1, 0}, {1, 4});
+  const auto drawSource = [&] {
+    if (ImGuiWindow* sourceWindow = FindSourceEditorWindow()) {
+      ImGui::FocusWindow(sourceWindow);
+    }
+    EditorShellTestAccess::RenderSourcePane(shell, 0.0f, 400.0f, 500.0f, window.editorFonts().code);
+  };
   const auto renderSource = [&] {
     window.beginFrame();
-    EditorShellTestAccess::RenderSourcePane(shell, 0.0f, 400.0f, 500.0f, window.editorFonts().code);
+    drawSource();
     window.endFrame();
     return SourceEditorContentHeight();
   };
@@ -6929,24 +6943,63 @@ TEST(EditorShellTest, SourceFontShortcutsResizeTextAndPreserveCanvasZoomAndSelec
   ASSERT_FALSE(selectedText.empty());
   const double canvasZoom = shell.viewportForReadback().zoom;
 
-  DriveGlobalShortcut(shell, {ImGuiKey_Equal}, false, true, true);
+  DriveGlobalShortcut(shell, {ImGuiKey_Equal}, false, true, true, false, drawSource);
   const float enlargedHeight = renderSource();
   EXPECT_GT(enlargedHeight, originalHeight);
   EXPECT_DOUBLE_EQ(shell.viewportForReadback().zoom, canvasZoom);
   EXPECT_EQ(source.getSelectedText(), selectedText);
 
-  DriveGlobalShortcut(shell, {ImGuiKey_Minus}, false, false, true);
+  DriveGlobalShortcut(shell, {ImGuiKey_Minus}, false, false, true, false, drawSource);
   EXPECT_NEAR(renderSource(), originalHeight, 0.01f);
-  DriveGlobalShortcut(shell, {ImGuiKey_KeypadSubtract}, true);
+  DriveGlobalShortcut(shell, {ImGuiKey_KeypadSubtract}, true, false, false, false, drawSource);
   EXPECT_LT(renderSource(), originalHeight);
-  DriveGlobalShortcut(shell, {ImGuiKey_0}, false, false, true);
+  DriveGlobalShortcut(shell, {ImGuiKey_0}, false, false, true, false, drawSource);
   EXPECT_NEAR(renderSource(), originalHeight, 0.01f);
-  DriveGlobalShortcut(shell, {ImGuiKey_KeypadAdd}, true);
+  DriveGlobalShortcut(shell, {ImGuiKey_KeypadAdd}, true, false, false, false, drawSource);
   EXPECT_GT(renderSource(), originalHeight);
-  DriveGlobalShortcut(shell, {ImGuiKey_0}, true);
+  DriveGlobalShortcut(shell, {ImGuiKey_0}, true, false, false, false, drawSource);
   EXPECT_NEAR(renderSource(), originalHeight, 0.01f);
   EXPECT_DOUBLE_EQ(shell.viewportForReadback().zoom, canvasZoom);
   EXPECT_EQ(source.getSelectedText(), selectedText);
+}
+
+TEST(EditorShellTest, SourceFontMenuActionsResizeTextClampAndReset) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
+  EditorShell shell(window, OptionsWithSource(kInitialSvg, "initial.svg"));
+  ASSERT_TRUE(shell.valid());
+  EditorShellTestAccess::SetSourcePaneVisible(shell, true);
+  EditorShellTestAccess::SetSourceFocusMode(shell, false);
+  TextEditor& source = EditorShellTestAccess::Source(shell);
+  source.setWordWrapEnabled(false);
+  const auto renderSource = [&] {
+    window.beginFrame();
+    EditorShellTestAccess::RenderSourcePane(shell, 0.0f, 400.0f, 500.0f, window.editorFonts().code);
+    window.endFrame();
+    return SourceEditorContentHeight();
+  };
+  const float originalHeight = renderSource();
+  const double canvasZoom = shell.viewportForReadback().zoom;
+  MenuBarActions actions;
+  actions.increaseSourceFontSize = true;
+  for (int i = 0; i < 30; ++i) {
+    EditorShellTestAccess::ApplyMenuActions(shell, actions);
+  }
+  EXPECT_NEAR(renderSource(), originalHeight * 3.0f, 0.01f);
+  actions = {};
+  actions.decreaseSourceFontSize = true;
+  for (int i = 0; i < 30; ++i) {
+    EditorShellTestAccess::ApplyMenuActions(shell, actions);
+  }
+  EXPECT_NEAR(renderSource(), originalHeight * 0.5f, 0.01f);
+  actions = {};
+  actions.resetSourceFontSize = true;
+  EditorShellTestAccess::ApplyMenuActions(shell, actions);
+  EXPECT_NEAR(renderSource(), originalHeight, 0.01f);
+  EXPECT_DOUBLE_EQ(shell.viewportForReadback().zoom, canvasZoom);
+  EXPECT_FLOAT_EQ(window.editorFonts().code->Scale, 1.0f);
 }
 
 TEST(EditorShellTest, GlobalShortcutsSwitchToolsZoomAndSourceFocus) {
