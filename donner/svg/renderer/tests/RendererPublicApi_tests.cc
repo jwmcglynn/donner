@@ -1237,8 +1237,8 @@ TEST(RendererPublicApiTest, RebindingForeignRectangleBuildsRenderableGeometry) {
       "id='namespace' width='16' height='12'>"
       "<x:rect id='shape' width='16' height='12' fill='green'/></svg>");
   const auto owner = document.querySelector("#namespace");
-  const auto shape = document.querySelector("#shape");
   ASSERT_THAT(owner, testing::Ne(std::nullopt));
+  const auto shape = owner->firstChild();
   ASSERT_THAT(shape, testing::Ne(std::nullopt));
   EXPECT_THAT(shape->type(), testing::Eq(ElementType::Unknown));
   Renderer renderer;
