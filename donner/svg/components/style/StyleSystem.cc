@@ -395,7 +395,7 @@ std::optional<PaintServer> StyleSystem::localPaintForInstantiation(
 }
 
 PropertyRegistry StyleSystem::inheritComputedParent(EntityHandle handle, Entity parent,
-                                                    const PropertyRegistry& properties,
+                                                    PropertyRegistry properties,
                                                     ComputedStyleComponent& computed,
                                                     ParseWarningSink& warningSink) {
   Registry& registry = *handle.registry();
@@ -406,15 +406,10 @@ PropertyRegistry StyleSystem::inheritComputedParent(EntityHandle handle, Entity 
   const auto* parentStyle =
       parent != entt::null ? registry.try_get<ComputedStyleComponent>(parent) : nullptr;
   const bool allowPaint = occurrence || !registry.all_of<DoNotInheritFillOrStrokeTag>(parent);
-  computed.externalFill = ExternalPaintOrigin(properties.fill.state, occurrence != nullptr,
-                                              parentStyle, false, allowPaint);
-  computed.externalStroke = ExternalPaintOrigin(properties.stroke.state, occurrence != nullptr,
-                                                parentStyle, true, allowPaint);
-  if (occurrence && BlockExternalResources(result, properties)) {
-    rejectExternalHostResource(registry);
-    warningSink.add(ParseDiagnostic::Error("External-use inherited URL resources are unsupported",
-                                           FileOffset::Offset(0)));
-  }
+  computed.externalFill =
+      ExternalPaintOrigin(fillState, occurrence != nullptr, parentStyle, false, allowPaint);
+  computed.externalStroke =
+      ExternalPaintOrigin(strokeState, occurrence != nullptr, parentStyle, true, allowPaint);
   return result;
 }
 
@@ -504,7 +499,7 @@ void StyleSystem::computePropertiesInto(EntityHandle handle, ComputedStyleCompon
   // differ from the actual value selected by the cascade.
   const Entity parent = handle.get<donner::components::TreeComponent>().parent();
   PropertyRegistry finalProperties =
-      inheritComputedParent(handle, parent, properties, computedStyle, warningSink);
+      inheritComputedParent(handle, parent, std::move(properties), computedStyle, warningSink);
 
   if (styleBudget.reserveComplexPropertyBytes(handle.entity(),
                                               finalProperties.complexPropertyBytes())) {

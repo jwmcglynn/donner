@@ -409,7 +409,7 @@ private:
                             PropertyRegistry& properties, StyleResourceBudget& styleBudget,
                             ParseWarningSink& warningSink);
   PropertyRegistry inheritComputedParent(EntityHandle handle, Entity parent,
-                                         const PropertyRegistry& properties,
+                                         PropertyRegistry properties,
                                          ComputedStyleComponent& computed,
                                          ParseWarningSink& warningSink);
   static void resolveComputedParentFonts(EntityHandle handle, Entity parent,
