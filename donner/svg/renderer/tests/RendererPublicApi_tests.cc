@@ -1236,14 +1236,13 @@ TEST(RendererPublicApiTest, RebindingForeignRectangleBuildsRenderableGeometry) {
       "<svg xmlns='http://www.w3.org/2000/svg' xmlns:x='http://example.test/foreign' "
       "id='namespace' width='16' height='12'>"
       "<x:rect id='shape' width='16' height='12' fill='green'/></svg>");
-  const auto owner = document.querySelector("#namespace");
-  ASSERT_THAT(owner, testing::Ne(std::nullopt));
-  const auto shape = owner->firstChild();
+  const auto owner = document.svgElement();
+  const auto shape = owner.firstChild();
   ASSERT_THAT(shape, testing::Ne(std::nullopt));
   EXPECT_THAT(shape->type(), testing::Eq(ElementType::Unknown));
   Renderer renderer;
   renderer.draw(document);
-  const auto result = document.setElementAttribute(*owner, "xmlns:x", "http://www.w3.org/2000/svg");
+  const auto result = document.setElementAttribute(owner, "xmlns:x", "http://www.w3.org/2000/svg");
   ASSERT_THAT(result.applied, testing::IsTrue());
   ASSERT_THAT(result.diagnostic, testing::Eq(std::nullopt));
   EXPECT_THAT(shape->type(), testing::Eq(ElementType::Rect));
