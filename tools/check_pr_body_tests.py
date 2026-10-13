@@ -74,5 +74,6 @@ class CheckPrBodyTest(unittest.TestCase):
             "The PR metadata workflow must run the PR-body check",
         )
 
+
 if __name__ == "__main__":
     unittest.main()

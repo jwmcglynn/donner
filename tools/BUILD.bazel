@@ -536,7 +536,7 @@ py_test(
     data = [
         "//:.github/actions/re-turnstile/action.yml",
         "//:.github/actions/re-turnstile/admission.py",
-        "//:.github/workflows/main.yml",
+        "//:github_action_definitions",
     ],
     deps = ["@rules_python//python/runfiles"],
 )

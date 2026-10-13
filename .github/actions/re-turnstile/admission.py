@@ -67,6 +67,18 @@ def workflow_ids(workflows_payload, wanted_names):
     return matches
 
 
+def is_pool_job(name, pool):
+    """Whether a job name is one of the pool's jobs.
+
+    A job of a called (reusable) workflow is named `<calling job> / <job>`, so
+    the pool job `linux-self-hosted` run through a workflow call appears as,
+    for example, `base-change-ci / linux-self-hosted`.
+    """
+    if not isinstance(name, str):
+        return False
+    return any(name == job or name.endswith(" / " + job) for job in pool)
+
+
 def pool_state(jobs_payload, pool):
     """Reduce one run's jobs payload to how it occupies the pool.
 
@@ -77,11 +89,10 @@ def pool_state(jobs_payload, pool):
     if jobs_payload is None:
         return ACTIVE
 
-    pool_names = set(pool)
     states = [
         job.get("status")
         for job in jobs_payload.get("jobs") or []
-        if job.get("name") in pool_names
+        if is_pool_job(job.get("name"), pool)
     ]
     if not states:
         return ABSENT

@@ -12,7 +12,8 @@ env:
 # and restart CI with no code change. A base-branch change (an `edited` event
 # with `changes.base`) still needs full CI against the new base, so
 # pr_base_change.yml calls this workflow for those events (`workflow_call`).
-# The PR body check runs in pr_metadata.yml.
+# After a base change, later edits of the same head also rerun that call (see
+# pr_base_change.yml). The PR body check runs in pr_metadata.yml.
 on:
   push:
     branches: ["*"]
@@ -710,7 +711,9 @@ jobs:
         with:
           lane: linux-self-hosted
           pool: linux-self-hosted
-          pool-workflows: main.yml
+          # pr_base_change.yml runs this workflow as a reusable workflow call
+          # after a base-branch change, so its runs share the pool.
+          pool-workflows: main.yml pr_base_change.yml
           capacity: "4"
           token: ${{ github.token }}
           timeout-minutes: "150"

@@ -26,10 +26,14 @@ from python.runfiles import runfiles
 from test_executable_fixtures import ExecutableFixtureDirectory
 
 
-WORKFLOWS = (
-    "cmake.yml", "editor_wasm.yml", "lint.yml", "main.yml", "pr_base_change.yml",
-    "pr_metadata.yml", "sanitizers-pr.yml",
-)
+# Workflows the tests below read by name; every workflow file is scanned for `edited`.
+WORKFLOWS = ("main.yml", "pr_base_change.yml", "pr_metadata.yml")
+
+
+def _all_workflow_names():
+    directory = Path(runfiles.Create().Rlocation("donner/.github/workflows/main.yml")).parent
+    return sorted(path.name for path in directory.glob("*.y*ml"))
+
 
 # Workflows that may trigger on `edited`, and why an edit there cannot cancel or restart CI.
 EDITED_TRIGGER_ALLOWLIST = {
@@ -282,8 +286,10 @@ class CiPullRequestEventsTest(unittest.TestCase):
                          ["opened", "synchronize", "reopened"])
 
     def test_only_reviewed_workflows_trigger_on_pull_request_edits(self):
-        edited = {name for name, workflow in self.workflows.items()
-                  if workflow and "edited" in (_pull_request_types(workflow) or [])}
+        names = _all_workflow_names()
+        self.assertIn("main.yml", names)
+        edited = {name for name in names
+                  if "edited" in (_pull_request_types(_read(name)) or [])}
         self.assertEqual(sorted(edited), sorted(EDITED_TRIGGER_ALLOWLIST))
 
     def test_metadata_checks_run_on_every_event_that_changes_the_text(self):
