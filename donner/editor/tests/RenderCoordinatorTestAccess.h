@@ -98,6 +98,10 @@ struct RenderCoordinatorTestAccess {
         coordinator.schedulingNow() - std::chrono::milliseconds(200);
   }
 
+  /// The canvas-commit throttle and raster-settle window, as the coordinator applies it.
+  static constexpr std::chrono::milliseconds kCanvasSizeCommitDelay =
+      RenderCoordinator::kCanvasSizeCommitDelay;
+
   /// Replaces the coordinator's scheduling clock (retry pacing and the canvas-commit and
   /// raster-settle windows) with one the test advances.
   static void useFakeSchedulingClock(RenderCoordinator& coordinator) {

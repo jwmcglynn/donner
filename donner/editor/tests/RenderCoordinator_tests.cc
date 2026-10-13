@@ -96,6 +96,38 @@ svg::SVGElement QuerySelector(EditorApp& app, std::string_view selector) {
   return *element;
 }
 
+/**
+ * Runs `snapshot` on another thread while a writer holds the document's write lock, and returns its
+ * result. The writer releases the lock only once the snapshot has returned, so a snapshot that
+ * waits for the writer never returns and this reports no result when the stall guard expires.
+ *
+ * @param app Document owner whose write lock is held.
+ * @param snapshot The call that must not need document access.
+ * @return The snapshot's result, or nothing if it was still blocked when the guard expired.
+ */
+template <typename SnapshotFn>
+auto RunWhileDocumentWriterHolds(EditorApp& app,
+                                 SnapshotFn&& snapshot) -> std::optional<decltype(snapshot())> {
+  std::promise<void> writerReady;
+  std::promise<void> releaseWriter;
+  auto release = releaseWriter.get_future();
+  auto writer = std::async(std::launch::async, [&] {
+    auto access = app.document().document().writeAccess();
+    writerReady.set_value();
+    release.wait();
+  });
+  writerReady.get_future().wait();
+  auto result = std::async(std::launch::async, std::forward<SnapshotFn>(snapshot));
+  const bool returnedWhileHeld =
+      result.wait_until(tests::HangGuard().deadline()) == std::future_status::ready;
+  releaseWriter.set_value();
+  writer.get();
+  if (!returnedWhileHeld) {
+    return std::nullopt;
+  }
+  return result.get();
+}
+
 bool WriteClipGuideHeldFrame(const svg::RendererBitmap& bitmap, std::string_view filename) {
   const char* outputDir = std::getenv("TEST_UNDECLARED_OUTPUTS_DIR");
   if (outputDir == nullptr || bitmap.empty()) {
@@ -664,22 +696,10 @@ TEST(RenderCoordinatorTest, SuppressionSnapshotDoesNotWaitForDocumentWriter) {
   const Entity expected = coordinator.suppressedCompositedLayerEntity(app);
   ASSERT_NE(expected, kNullEntity);
 
-  std::promise<void> writerReady;
-  std::promise<void> releaseWriter;
-  auto release = releaseWriter.get_future();
-  auto writer = std::async(std::launch::async, [&] {
-    auto access = app.document().document().writeAccess();
-    writerReady.set_value();
-    release.wait();
-  });
-  writerReady.get_future().wait();
-  auto suppressed = std::async(std::launch::async,
-                               [&] { return coordinator.suppressedCompositedLayerEntity(app); });
-  const auto status = suppressed.wait_for(std::chrono::milliseconds(100));
-  releaseWriter.set_value();
-  writer.get();
-  EXPECT_EQ(status, std::future_status::ready);
-  EXPECT_EQ(suppressed.get(), expected);
+  EXPECT_THAT(RunWhileDocumentWriterHolds(
+                  app, [&] { return coordinator.suppressedCompositedLayerEntity(app); }),
+              testing::Optional(testing::Eq(expected)))
+      << "The suppression snapshot must not wait for the document writer";
 }
 
 TEST(RenderCoordinatorTest, VisibilitySnapshotDoesNotWaitForDocumentWriter) {
@@ -689,22 +709,10 @@ TEST(RenderCoordinatorTest, VisibilitySnapshotDoesNotWaitForDocumentWriter) {
   RenderCoordinator coordinator;
   app.setSelection(QuerySelector(app, "#hidden"));
   ASSERT_NE(coordinator.suppressedCompositedLayerEntity(app), kNullEntity);
-  std::promise<void> writerReady;
-  std::promise<void> releaseWriter;
-  auto release = releaseWriter.get_future();
-  auto writer = std::async(std::launch::async, [&] {
-    auto access = app.document().document().writeAccess();
-    writerReady.set_value();
-    release.wait();
-  });
-  writerReady.get_future().wait();
-  auto hidden =
-      std::async(std::launch::async, [&] { return coordinator.selectedElementIsDisplayNone(app); });
-  const auto status = hidden.wait_for(std::chrono::milliseconds(100));
-  releaseWriter.set_value();
-  writer.get();
-  EXPECT_EQ(status, std::future_status::ready);
-  EXPECT_TRUE(hidden.get());
+  EXPECT_THAT(RunWhileDocumentWriterHolds(
+                  app, [&] { return coordinator.selectedElementIsDisplayNone(app); }),
+              testing::Optional(testing::IsTrue()))
+      << "The visibility snapshot must not wait for the document writer";
 }
 
 TEST(RenderCoordinatorTest, SuppressedLayerEntityNullForVisibleSelection) {
@@ -975,22 +983,11 @@ TEST(RenderCoordinatorTest, BusyDragProjectsCapturedFrameWithoutDocumentAccess) 
   ASSERT_NE(BuildFrame(coordinator, app, tool, viewport, textures), nullptr);
   tool.onMouseMove(app, Vector2d(25.0, 15.0), true);
   app.document().document().setThreadingMode(svg::ThreadingMode::ConcurrentDom);
-  std::promise<void> writerReady;
-  std::promise<void> releaseWriter;
-  auto release = releaseWriter.get_future();
-  auto writer = std::async(std::launch::async, [&] {
-    auto access = app.document().document().writeAccess();
-    writerReady.set_value();
-    release.wait();
-  });
-  writerReady.get_future().wait();
-  auto presentation = std::async(
-      std::launch::async, [&] { return BuildFrame(coordinator, app, tool, viewport, textures); });
-  const auto status = presentation.wait_for(std::chrono::milliseconds(100));
-  releaseWriter.set_value();
-  writer.get();
-  EXPECT_EQ(status, std::future_status::ready);
-  const auto frame = presentation.get();
+  const auto presentation = RunWhileDocumentWriterHolds(
+      app, [&] { return BuildFrame(coordinator, app, tool, viewport, textures); });
+  ASSERT_THAT(presentation, testing::Optional(testing::_))
+      << "A busy drag frame must project the captured frame without waiting for the writer";
+  const auto& frame = *presentation;
   ASSERT_NE(frame, nullptr);
   ASSERT_THAT(frame->chrome().paths, ::testing::SizeIs(1));
   EXPECT_EQ(frame->chrome().paths.front().pathDoc.bounds(),
@@ -1272,11 +1269,7 @@ TEST(RenderCoordinatorTest, MaybeRequestRenderDispatchesAsyncRenderForSelection)
   // (raw GL), which is unreachable without a GL context. Cancel the in-flight
   // render and drain to idle so the worker thread joins cleanly at teardown.
   coordinator.asyncRenderer().cancelInFlight();
-  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
-  while (coordinator.asyncRenderer().isBusy() && std::chrono::steady_clock::now() < deadline) {
-    std::this_thread::sleep_for(std::chrono::milliseconds(1));
-  }
-  EXPECT_FALSE(coordinator.asyncRenderer().isBusy())
+  EXPECT_TRUE(tests::WaitForIdle(coordinator.asyncRenderer()))
       << "cancelInFlight must return the worker to idle.";
 
   // Committing the canvas size is part of maybeRequestRender's contract; it set
@@ -1295,11 +1288,7 @@ TEST(RenderCoordinatorTest, MaybeRequestRenderDispatchesWithoutTextureCache) {
 
   coordinator.maybeRequestRender(app, selectTool, viewport, /*textures=*/nullptr);
   coordinator.asyncRenderer().cancelInFlight();
-  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
-  while (coordinator.asyncRenderer().isBusy() && std::chrono::steady_clock::now() < deadline) {
-    std::this_thread::sleep_for(std::chrono::milliseconds(1));
-  }
-  EXPECT_FALSE(coordinator.asyncRenderer().isBusy());
+  EXPECT_TRUE(tests::WaitForIdle(coordinator.asyncRenderer()));
   EXPECT_EQ(app.document().document().canvasSize(), viewport.desiredCanvasSize());
 }
 
@@ -1316,11 +1305,7 @@ TEST(RenderCoordinatorTest, CanvasCommitThrottleRunsOnTheSchedulingClock) {
   const auto requestAndSettle = [&] {
     coordinator.maybeRequestRender(app, selectTool, viewport, /*textures=*/nullptr);
     coordinator.asyncRenderer().cancelInFlight();
-    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
-    while (coordinator.asyncRenderer().isBusy() && std::chrono::steady_clock::now() < deadline) {
-      std::this_thread::sleep_for(std::chrono::milliseconds(1));
-    }
-    ASSERT_FALSE(coordinator.asyncRenderer().isBusy());
+    ASSERT_TRUE(tests::WaitForIdle(coordinator.asyncRenderer()));
   };
 
   ASSERT_NO_FATAL_FAILURE(requestAndSettle());
@@ -1361,9 +1346,7 @@ TEST(RenderCoordinatorTest, HiDpiCanvasCommitRebuildsAnAlreadyRenderedTree) {
 
   ASSERT_THAT(coordinator.maybeRequestRender(app, selectTool, viewport, nullptr),
               testing::IsTrue());
-  ASSERT_THAT(coordinator.asyncRenderer().waitUntilNoRenderInFlightForTesting(
-                  std::chrono::steady_clock::now() + std::chrono::seconds(2)),
-              testing::IsTrue());
+  ASSERT_THAT(tests::WaitForNoRenderInFlight(coordinator.asyncRenderer()), testing::IsTrue());
   const std::optional<RenderResult> before = coordinator.asyncRenderer().pollResult();
   ASSERT_THAT(before, testing::Optional(testing::_));
   ASSERT_THAT(before->rasterViewport.outputSizePx, testing::Eq(viewport.desiredCanvasSize()));
@@ -1382,9 +1365,7 @@ TEST(RenderCoordinatorTest, HiDpiCanvasCommitRebuildsAnAlreadyRenderedTree) {
   EXPECT_THAT(app.document().currentFrameVersion(), testing::Eq(versionBefore));
   EXPECT_THAT(requested, testing::IsTrue())
       << "The real canvas commit invalidates the render tree even when its raster is current.";
-  ASSERT_THAT(coordinator.asyncRenderer().waitUntilNoRenderInFlightForTesting(
-                  std::chrono::steady_clock::now() + std::chrono::seconds(2)),
-              testing::IsTrue());
+  ASSERT_THAT(tests::WaitForNoRenderInFlight(coordinator.asyncRenderer()), testing::IsTrue());
   EXPECT_THAT(target.resolvedFillPaint(), testing::Eq(representedFill))
       << "The committed canvas needs a rebuilt rendering instance without another document edit.";
   const std::optional<RenderResult> rebuilt = coordinator.asyncRenderer().pollResult();
@@ -1408,9 +1389,7 @@ TEST(RenderCoordinatorTest, BusyWorkerDoesNotLoseAHiDpiCanvasCommitRender) {
   ViewportState viewport = MakeViewport(app);
   viewport.devicePixelRatio = 2.0;
   const auto completeRender = [&]() {
-    EXPECT_THAT(coordinator.asyncRenderer().waitUntilNoRenderInFlightForTesting(
-                    std::chrono::steady_clock::now() + std::chrono::seconds(2)),
-                testing::IsTrue());
+    EXPECT_THAT(tests::WaitForNoRenderInFlight(coordinator.asyncRenderer()), testing::IsTrue());
     const std::optional<RenderResult> result = coordinator.asyncRenderer().pollResult();
     EXPECT_THAT(result, testing::Optional(testing::_));
     if (result) {
@@ -1519,11 +1498,7 @@ TEST(RenderCoordinatorTest, PixelCaptureCanvasCommitWakeRunsOnTheSchedulingClock
   const auto requestAndSettle = [&] {
     coordinator.maybeRequestRender(app, selectTool, viewport, /*textures=*/nullptr);
     coordinator.asyncRenderer().cancelInFlight();
-    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
-    while (coordinator.asyncRenderer().isBusy() && std::chrono::steady_clock::now() < deadline) {
-      std::this_thread::sleep_for(std::chrono::milliseconds(1));
-    }
-    ASSERT_FALSE(coordinator.asyncRenderer().isBusy());
+    ASSERT_TRUE(tests::WaitForIdle(coordinator.asyncRenderer()));
   };
 
   ASSERT_NO_FATAL_FAILURE(requestAndSettle());
@@ -1569,8 +1544,7 @@ TEST(RenderCoordinatorTest, HeldDragWithoutPromotedTileRendersChangedDocumentVer
   EXPECT_TRUE(coordinator.maybeRequestRender(app, selectTool, viewport, &textures))
       << "A live drag with no presentable target tile must render while the pointer is held";
   coordinator.asyncRenderer().cancelInFlight();
-  EXPECT_TRUE(coordinator.asyncRenderer().waitUntilNoRenderInFlightForTesting(
-      std::chrono::steady_clock::now() + std::chrono::seconds(5)));
+  EXPECT_TRUE(tests::WaitForNoRenderInFlight(coordinator.asyncRenderer()));
 }
 
 TEST(RenderCoordinatorTest, CancelledPixelCaptureRepostsWithoutDocumentOrViewportChange) {
@@ -1586,8 +1560,7 @@ TEST(RenderCoordinatorTest, CancelledPixelCaptureRepostsWithoutDocumentOrViewpor
   ASSERT_TRUE(coordinator.maybeRequestRender(app, selectTool, viewport, &textures));
 
   coordinator.asyncRenderer().cancelInFlight();
-  ASSERT_TRUE(coordinator.asyncRenderer().waitUntilNoRenderInFlightForTesting(
-      std::chrono::steady_clock::now() + std::chrono::seconds(5)));
+  ASSERT_TRUE(tests::WaitForNoRenderInFlight(coordinator.asyncRenderer()));
   ASSERT_FALSE(coordinator.asyncRenderer().isBusy());
   coordinator.pollRenderResult(app, viewport, textures);
   EXPECT_TRUE(coordinator.presentationRefreshPending());
@@ -1595,8 +1568,7 @@ TEST(RenderCoordinatorTest, CancelledPixelCaptureRepostsWithoutDocumentOrViewpor
       << "A dropped worker result must not leave a same-epoch picker permanently pending.";
 
   coordinator.asyncRenderer().cancelInFlight();
-  ASSERT_TRUE(coordinator.asyncRenderer().waitUntilNoRenderInFlightForTesting(
-      std::chrono::steady_clock::now() + std::chrono::seconds(5)));
+  ASSERT_TRUE(tests::WaitForNoRenderInFlight(coordinator.asyncRenderer()));
   EXPECT_FALSE(coordinator.asyncRenderer().isBusy());
 }
 
@@ -1614,15 +1586,13 @@ TEST(RenderCoordinatorTest, SelectedPixelCaptureRepostsAfterPanCancelsInFlightRe
 
   viewport.panScreenPoint.x += 20.0;
   coordinator.asyncRenderer().cancelInFlight();
-  ASSERT_TRUE(coordinator.asyncRenderer().waitUntilNoRenderInFlightForTesting(
-      std::chrono::steady_clock::now() + std::chrono::seconds(5)));
+  ASSERT_TRUE(tests::WaitForNoRenderInFlight(coordinator.asyncRenderer()));
   ASSERT_FALSE(coordinator.asyncRenderer().isBusy());
   coordinator.pollRenderResult(app, viewport, textures);
   EXPECT_TRUE(coordinator.maybeRequestRender(app, selectTool, viewport, &textures));
 
   coordinator.asyncRenderer().cancelInFlight();
-  ASSERT_TRUE(coordinator.asyncRenderer().waitUntilNoRenderInFlightForTesting(
-      std::chrono::steady_clock::now() + std::chrono::seconds(5)));
+  ASSERT_TRUE(tests::WaitForNoRenderInFlight(coordinator.asyncRenderer()));
   EXPECT_FALSE(coordinator.asyncRenderer().isBusy());
 }
 
@@ -1654,8 +1624,7 @@ TEST(RenderCoordinatorTest, DelayedCanvasSizeCommitInvalidatesSameVersionPixelCa
   EXPECT_EQ(coordinator.documentPixelCaptureFor(app, viewport), nullptr)
       << "An elapsed deadline cannot expose the stale raster while the worker delays commit.";
   coordinator.asyncRenderer().cancelInFlight();
-  ASSERT_TRUE(coordinator.asyncRenderer().waitUntilNoRenderInFlightForTesting(
-      std::chrono::steady_clock::now() + std::chrono::seconds(5)));
+  ASSERT_TRUE(tests::WaitForNoRenderInFlight(coordinator.asyncRenderer()));
   EXPECT_THAT(coordinator.nextPixelCaptureCanvasCommitWakeSeconds(),
               ::testing::Optional(::testing::Eq(0.0f)));
   coordinator.maybeRequestRender(app, selectTool, viewport, /*textures=*/nullptr);
@@ -1667,8 +1636,7 @@ TEST(RenderCoordinatorTest, DelayedCanvasSizeCommitInvalidatesSameVersionPixelCa
       << "The post-commit request must name the new layout even when frame version is unchanged.";
 
   coordinator.asyncRenderer().cancelInFlight();
-  ASSERT_TRUE(coordinator.asyncRenderer().waitUntilNoRenderInFlightForTesting(
-      std::chrono::steady_clock::now() + std::chrono::seconds(5)));
+  ASSERT_TRUE(tests::WaitForNoRenderInFlight(coordinator.asyncRenderer()));
 }
 
 // ---------------------------------------------------------------------------
@@ -1681,14 +1649,11 @@ TEST(RenderCoordinatorTest, DelayedCanvasSizeCommitInvalidatesSameVersionPixelCa
 /// without a GPU context as long as every result is withheld.
 bool RunRenderFrame(RenderCoordinator& coordinator, EditorApp& app, SelectTool& selectTool,
                     const ViewportState& viewport, GlTextureCache& textures) {
-  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
-  while (coordinator.asyncRenderer().isBusy() && std::chrono::steady_clock::now() < deadline) {
-    coordinator.pollRenderResult(app, viewport, textures);
-    if (coordinator.asyncRenderer().isBusy()) {
-      std::this_thread::sleep_for(std::chrono::milliseconds(1));
-    }
+  if (coordinator.asyncRenderer().isBusy()) {
+    EXPECT_TRUE(tests::PollUntil([&] { coordinator.pollRenderResult(app, viewport, textures); },
+                                 [&] { return !coordinator.asyncRenderer().isBusy(); }))
+        << "the worker never finished its render";
   }
-  EXPECT_FALSE(coordinator.asyncRenderer().isBusy()) << "the worker never finished its render";
   return coordinator.maybeRequestRender(app, selectTool, viewport, &textures);
 }
 

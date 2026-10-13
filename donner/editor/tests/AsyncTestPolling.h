@@ -8,8 +8,7 @@
 /// The stall guard and the clock-bounded helpers live in
 /// `donner/base/tests/StallGuard.h` so suites outside the editor share them.
 
-#include <optional>
-#include <thread>
+#include <chrono>
 
 #include "donner/base/tests/StallGuard.h"
 
@@ -22,22 +21,30 @@ using donner::tests::PollForResult;
 using donner::tests::PollUntil;
 using donner::tests::WaitUntil;
 
-// Polls until `poll()` yields a value, or `maxPolls` intervals elapse.
-//
-// Iteration-bounded rather than clock-bounded on purpose. The callers this
-// replaced counted iterations, and each iteration also spends the poll's own
-// time, so a wall-clock deadline of `maxPolls * kPollInterval` would be
-// strictly TIGHTER than what they had - a silent timeout reduction is exactly
-// the kind of change that turns into a flake on a loaded runner months later.
-template <typename PollFn>
-auto PollForResult(PollFn&& poll, int maxPolls) -> decltype(poll()) {
-  for (int i = 0; i < maxPolls; ++i) {
-    if (auto result = poll(); result.has_value()) {
-      return result;
-    }
-    std::this_thread::sleep_for(kPollInterval);
-  }
-  return std::nullopt;
+/// A test-injected render or thumbnail delay that no test waits out. Work held by it ends only by
+/// cancellation, so seeing it end shows the cancellation happened, not that the host was fast.
+constexpr std::chrono::milliseconds kUnelapsedDelay = std::chrono::hours(1);
+
+/**
+ * Waits under the stall guard until `renderer` reports it is no longer busy.
+ *
+ * @param renderer An \ref AsyncRenderer, or anything else with `isBusy()`.
+ * @return Whether it went idle before the guard expired.
+ */
+template <typename Renderer>
+bool WaitForIdle(const Renderer& renderer) {
+  return WaitUntil([&] { return !renderer.isBusy(); });
+}
+
+/**
+ * Waits under the stall guard until `renderer` has no render in flight.
+ *
+ * @param renderer An \ref AsyncRenderer.
+ * @return Whether the in-flight render finished before the guard expired.
+ */
+template <typename Renderer>
+bool WaitForNoRenderInFlight(Renderer& renderer) {
+  return renderer.waitUntilNoRenderInFlightForTesting(HangGuard().deadline());
 }
 
 }  // namespace donner::editor::tests
