@@ -21,6 +21,7 @@
 #include "donner/svg/SVGRectElement.h"
 #include "donner/svg/SVGTextElement.h"
 #include "donner/svg/SVGUseElement.h"
+#include "donner/svg/components/style/StyleSystem.h"
 #include "donner/svg/renderer/Renderer.h"
 #include "donner/svg/renderer/RendererDriver.h"
 #include "donner/svg/renderer/RendererTinySkia.h"
@@ -80,12 +81,16 @@ RendererBitmap NormalizeSnapshot(RendererBitmap snapshot) {
 /// A single in-memory SVG resource; unknown URLs never reach a network or filesystem loader.
 class ExternalUseResourceLoader final : public ResourceLoaderInterface {
 public:
-  explicit ExternalUseResourceLoader(std::string_view svgSource)
-      : bytes_(svgSource.begin(), svgSource.end()) {}
+  explicit ExternalUseResourceLoader(std::string_view svgSource,
+                                     std::shared_ptr<std::vector<std::string>> trace = nullptr)
+      : bytes_(svgSource.begin(), svgSource.end()), trace_(std::move(trace)) {}
 
   std::variant<std::vector<uint8_t>, ResourceLoaderError> fetchExternalResource(
       std::string_view url) override {
     requests_.emplace_back(url);
+    if (trace_) {
+      trace_->emplace_back(url);
+    }
     if (url != "external.svg") {
       return ResourceLoaderError::NotFound;
     }
@@ -97,6 +102,7 @@ public:
 private:
   std::vector<uint8_t> bytes_;
   std::vector<std::string> requests_;
+  std::shared_ptr<std::vector<std::string>> trace_;
 };
 
 struct ExternalUseRenderResult {
@@ -187,6 +193,253 @@ TEST(RendererPublicApiTest, ExternalUseExplicitAndContextPaintOverrideInheritedF
   EXPECT_THAT(actual.requests, ElementsAre("external.svg"));
   EXPECT_THAT(PixelAt(actual.bitmap, 4, 4), test::Rgba(0, 255, 0, 255));
   EXPECT_THAT(PixelAt(actual.bitmap, 12, 4), test::Rgba(0, 0, 255, 255));
+}
+
+struct ExternalUseFixture {
+  SVGDocument document;
+  std::shared_ptr<SVGDocumentHandle> child;
+  std::shared_ptr<std::vector<std::string>> requests;
+  std::shared_ptr<components::DocumentResourceFamilyBudget> family;
+};
+
+/// Retains a deterministic secure child for source/cached-state lifetime assertions.
+ExternalUseFixture MakeExternalUseFixture(
+    std::string_view host, std::string_view resource,
+    std::shared_ptr<components::DocumentResourceFamilyBudget> family =
+        std::make_shared<components::DocumentResourceFamilyBudget>()) {
+  auto child = std::make_shared<SVGDocumentHandle>();
+  auto requests = std::make_shared<std::vector<std::string>>();
+  SVGDocument::Settings settings;
+  settings.resourceFamilyBudget = family;
+  settings.resourceLoader = std::make_unique<ExternalUseResourceLoader>(resource, requests);
+  settings.svgParseCallback = [child, family](
+                                  const std::vector<uint8_t>& bytes,
+                                  ParseWarningSink& warnings) -> std::optional<SVGDocumentHandle> {
+    SVGDocument::Settings childSettings;
+    childSettings.processingMode = ProcessingMode::SecureStatic;
+    childSettings.resourceFamilyBudget = family;
+    auto parsed = parser::SVGParser::ParseSVG(
+        std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()), warnings,
+        parser::SVGParser::Options(), std::move(childSettings));
+    if (parsed.hasError()) {
+      return std::nullopt;
+    }
+    *child = parsed.result().handle();
+    return *child;
+  };
+  ParseWarningSink warnings;
+  auto parsed = parser::SVGParser::ParseSVG(host, warnings, parser::SVGParser::Options(),
+                                            std::move(settings));
+  if (parsed.hasError()) {
+    ADD_FAILURE() << parsed.error();
+    return {SVGDocument(), child, requests, family};
+  }
+  return {std::move(parsed.result()), child, requests, family};
+}
+
+RendererBitmap RenderPublicDocument(SVGDocument& document) {
+  Renderer renderer;
+  renderer.draw(document);
+  return NormalizeSnapshot(renderer.takeSnapshot());
+}
+
+void ExpectExternalUseMatchesInline(const ExternalUseRenderResult& actual,
+                                    std::string_view inlineSvg) {
+  ASSERT_THAT(actual.bitmap.empty(), testing::IsFalse());
+  EXPECT_THAT(actual.requests, ElementsAre("external.svg"));
+  SVGDocument expectedDocument = ParseDocument(inlineSvg);
+  const RendererBitmap expected = RenderPublicDocument(expectedDocument);
+  ASSERT_THAT(expected.empty(), testing::IsFalse());
+  EXPECT_THAT(actual.bitmap.pixels, testing::ElementsAreArray(expected.pixels));
+}
+
+TEST(RendererPublicApiTest, ExternalUseHostGradientOwnsSameIdAndConsumerBoundingBox) {
+  const auto actual = RenderExternalUse(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="16" height="8">
+        <defs><linearGradient id="g"><stop stop-color="red"/>
+          <stop offset="1" stop-color="blue"/></linearGradient></defs>
+        <use href="external.svg#tile" fill="url(#g)"/>
+        <use href="external.svg#explicit" x="8" fill="url(#g)"/>
+      </svg>)svg",
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8">
+        <defs><linearGradient id="g"><stop stop-color="#00ff00"/>
+          <stop offset="1" stop-color="#00ff00"/></linearGradient></defs>
+        <rect id="tile" width="8" height="8"/>
+        <rect id="explicit" width="8" height="8" fill="url(#g)"/>
+      </svg>)svg");
+  EXPECT_THAT(PixelAt(actual.bitmap, 4, 4), test::Rgba(Gt(0), 0, Gt(0), 255));
+  EXPECT_THAT(PixelAt(actual.bitmap, 12, 4), test::Rgba(0, 255, 0, 255));
+  ExpectExternalUseMatchesInline(
+      actual,
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="16" height="8">
+        <defs><linearGradient id="g"><stop stop-color="red"/>
+          <stop offset="1" stop-color="blue"/></linearGradient></defs>
+        <rect width="8" height="8" fill="url(#g)"/>
+        <rect x="8" width="8" height="8" fill="#00ff00"/>
+      </svg>)svg");
+}
+
+TEST(RendererPublicApiTest, ExternalUseHostUserSpaceGradientMatchesInlineTransform) {
+  const auto actual = RenderExternalUse(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="16" height="8">
+        <defs><linearGradient id="g" gradientUnits="userSpaceOnUse" x2="16">
+          <stop stop-color="red"/><stop offset="1" stop-color="blue"/>
+        </linearGradient></defs>
+        <use href="external.svg#tile" fill="url(#g)"/>
+        <use href="external.svg#tile" x="8" fill="url(#g)"/>
+      </svg>)svg",
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8">
+        <rect id="tile" width="8" height="8"/>
+      </svg>)svg");
+  ExpectExternalUseMatchesInline(
+      actual,
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="16" height="8">
+        <defs><linearGradient id="g" gradientUnits="userSpaceOnUse" x2="16">
+          <stop stop-color="red"/><stop offset="1" stop-color="blue"/>
+        </linearGradient></defs>
+        <rect width="8" height="8" fill="url(#g)"/>
+        <g transform="translate(8,0)"><rect width="8" height="8" fill="url(#g)"/></g>
+      </svg>)svg");
+}
+
+TEST(RendererPublicApiTest, ExternalUseCurrentColorHonorsHostAndExplicitChildColor) {
+  const auto actual = RenderExternalUse(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="16" height="8" color="blue">
+        <use href="external.svg#tile" fill="currentColor"/>
+        <use href="external.svg#explicit" x="8" fill="currentColor"/>
+      </svg>)svg",
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8" color="green">
+        <rect id="tile" width="8" height="8"/>
+        <rect id="explicit" width="8" height="8" color="red"/>
+      </svg>)svg");
+  EXPECT_THAT(actual.requests, ElementsAre("external.svg"));
+  EXPECT_THAT(PixelAt(actual.bitmap, 4, 4), test::Rgba(0, 0, 255, 255));
+  EXPECT_THAT(PixelAt(actual.bitmap, 12, 4), test::Rgba(255, 0, 0, 255));
+}
+
+TEST(RendererPublicApiTest, ExternalUseRelativeFontSizeUsesHostComputedBaseline) {
+  const auto actual = RenderExternalUse(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="32" height="8" font-size="8">
+        <use href="external.svg#tile" fill="blue"/>
+      </svg>)svg",
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="64" height="8" font-size="40">
+        <rect id="tile" width="1em" height="8" font-size="150%"/>
+      </svg>)svg");
+  EXPECT_THAT(PixelAt(actual.bitmap, 4, 4), test::Rgba(0, 0, 255, 255));
+  EXPECT_THAT(PixelAt(actual.bitmap, 14, 4), test::IsTransparent());
+  ExpectExternalUseMatchesInline(
+      actual,
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="32" height="8">
+        <rect width="12" height="8" fill="blue"/>
+      </svg>)svg");
+}
+
+TEST(RendererPublicApiTest, ExternalUseRepeatedFramesRestoreCachedChildAndSource) {
+  constexpr std::string_view resource =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8" fill="#00ff00">
+        <rect id="tile" width="8" height="8"/>
+      </svg>)svg";
+  auto fixture = MakeExternalUseFixture(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="16" height="8">
+        <use href="external.svg#tile" fill="red"/>
+        <use href="external.svg#tile" x="8" fill="blue"/>
+      </svg>)svg",
+      resource);
+  Renderer renderer;
+  std::size_t retained = 0;
+  for (int frame = 0; frame < 3; ++frame) {
+    renderer.draw(fixture.document);
+    const auto snapshot = NormalizeSnapshot(renderer.takeSnapshot());
+    EXPECT_THAT(PixelAt(snapshot, 4, 4), test::Rgba(255, 0, 0, 255));
+    EXPECT_THAT(PixelAt(snapshot, 12, 4), test::Rgba(0, 0, 255, 255));
+    if (frame == 0) {
+      retained = fixture.family->securityStats().totalRetainedBytes;
+    }
+    EXPECT_EQ(fixture.family->securityStats().totalRetainedBytes, retained);
+  }
+  EXPECT_THAT(*fixture.requests, ElementsAre("external.svg"));
+  ASSERT_THAT(static_cast<bool>(*fixture.child), testing::IsTrue());
+  SVGDocument child = SVGDocument::CreateFromHandle(*fixture.child);
+  EXPECT_EQ(child.source(), resource);
+  const auto canonical = RenderPublicDocument(child);
+  EXPECT_THAT(PixelAt(canonical, 4, 4), test::Rgba(0, 255, 0, 255));
+  EXPECT_EQ(child.source(), resource);
+}
+
+TEST(RendererPublicApiTest, ExternalUseSnapshotReplayOwnsGradientAfterSourceDestruction) {
+  auto fixture = MakeExternalUseFixture(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8">
+        <defs><linearGradient id="g"><stop stop-color="red"/>
+          <stop offset="1" stop-color="blue"/></linearGradient></defs>
+        <use href="external.svg#tile" fill="url(#g)"/>
+      </svg>)svg",
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8">
+        <rect id="tile" width="8" height="8"/>
+      </svg>)svg");
+  Renderer renderer;
+  RendererDriver driver(renderer);
+  RenderSnapshot snapshot = driver.captureRenderSnapshot(fixture.document);
+  driver.draw(snapshot);
+  const auto before = NormalizeSnapshot(renderer.takeSnapshot());
+  ASSERT_THAT(before.empty(), testing::IsFalse());
+  EXPECT_THAT(PixelAt(before, 4, 4), test::Rgba(Gt(0), 0, Gt(0), 255));
+  fixture.document = SVGDocument();
+  fixture.child->reset();
+  driver.draw(snapshot);
+  const auto after = NormalizeSnapshot(renderer.takeSnapshot());
+  EXPECT_THAT(after.pixels, testing::ElementsAreArray(before.pixels));
+}
+
+TEST(RendererPublicApiTest, ExternalUseParentSnapshotRefusesExcessFamilyBytes) {
+  PropertyRegistry sample;
+  sample.fontFamily.set(SmallVector<RcString, 1>{RcString("A")}, css::Specificity());
+  const std::size_t bytes = sample.complexPropertyBytes();
+  ASSERT_GT(bytes, 0u);
+  components::DocumentResourceFamilyBudget::Limits limits;
+  limits.computedStyleBytes = bytes;
+  auto family = std::make_shared<components::DocumentResourceFamilyBudget>(limits);
+  auto fixture = MakeExternalUseFixture(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8">
+        <use href="external.svg#tile" fill="blue" font-family="A"/>
+      </svg>)svg",
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8">
+        <rect id="tile" width="8" height="8"/>
+      </svg>)svg",
+      family);
+  const auto snapshot = RenderPublicDocument(fixture.document);
+  EXPECT_THAT(PixelAt(snapshot, 4, 4), test::IsTransparent());
+  EXPECT_THAT(family->securityStats().rejected, testing::IsTrue());
+  EXPECT_LE(family->securityStats().retainedBytes[static_cast<std::size_t>(
+                components::DocumentResourceFamilyBudget::Kind::ComputedStyle)],
+            bytes);
+}
+
+TEST(RendererPublicApiTest, ExternalUseMissingFragmentDoesNotLeakScopedState) {
+  auto fixture = MakeExternalUseFixture(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8">
+        <use id="host" href="external.svg#missing" fill="blue"/>
+      </svg>)svg",
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8" fill="red">
+        <rect id="tile" width="8" height="8"/>
+      </svg>)svg");
+  const auto missing = RenderPublicDocument(fixture.document);
+  EXPECT_THAT(PixelAt(missing, 4, 4), test::IsTransparent());
+  auto host = fixture.document.querySelector("#host");
+  ASSERT_THAT(host.has_value(), testing::IsTrue());
+  host->cast<SVGUseElement>().setHref("external.svg#tile");
+  const auto valid = RenderPublicDocument(fixture.document);
+  EXPECT_THAT(PixelAt(valid, 4, 4), test::Rgba(0, 0, 255, 255));
+  EXPECT_THAT(*fixture.requests, ElementsAre("external.svg"));
+}
+
+TEST(RendererPublicApiTest, ExternalUseFrameWorkAdmissionStopsAtLimit) {
+  components::StyleResourceBudget work;
+  EXPECT_THAT(
+      work.reserveExternalInstanceWork(components::StyleResourceBudget::kMaximumRuleElementMatches),
+      testing::IsTrue());
+  EXPECT_THAT(work.reserveExternalInstanceWork(1), testing::IsFalse());
+  work.reset();
+  EXPECT_THAT(work.reserveExternalInstanceWork(1), testing::IsTrue());
 }
 
 TEST(RendererSurfaceBudgetTest, RejectsAggregateBytesAndSurfaceCountWithoutOvershoot) {
