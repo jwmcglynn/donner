@@ -3093,58 +3093,96 @@ TEST_F(RendererGeodeTest, MidFrameOffscreenGeometryMutationPreservesRecordedOute
                                        editor::tests::PixelmatchIdentityParams());
 }
 
-TEST_F(RendererGeodeTest, CallScopedFillGeometryIsConsumedBeforePathReplacement) {
-  Registry registry;
-  const EntityHandle source(registry, registry.create());
-  Path borrowed = PathBuilder().addRect(Box2d({8, 8}, {14, 16})).build();
-  RendererGeode renderer = createRenderer();
-  beginFrame(renderer);
-  renderer.setPaint(solidFill(css::RGBA(255, 0, 0, 255)));
-  const uint64_t drawsBefore = sharedDevice()->counters()->drawCalls;
-  renderer.drawPath(
-      PathShape{.path = &borrowed, .sourceEntity = source, .allowDeferredGeometry = false},
-      StrokeParams{});
-  EXPECT_THAT(sharedDevice()->counters()->drawCalls, testing::Gt(drawsBefore))
-      << "Call-scoped geometry must reach the GPU encoder before drawPath returns.";
-  borrowed = Path();
-  renderer.endFrame();
-  const RendererBitmap actual = renderer.takeSnapshot();
-
+TEST_F(RendererGeodeTest, CallScopedFillGeometrySurvivesSourceCacheReplacement) {
   RendererGeode reference = createRenderer();
   beginFrame(reference);
   reference.setPaint(solidFill(css::RGBA(255, 0, 0, 255)));
   reference.drawRect(Box2d({8, 8}, {14, 16}), StrokeParams{});
   reference.endFrame();
-  editor::tests::CompareBitmapToBitmap(actual, reference.takeSnapshot(),
-                                       "call_scoped_fill_geometry",
+  const RendererBitmap expected = reference.takeSnapshot();
+  ASSERT_THAT(expected.empty(), testing::IsFalse());
+  ASSERT_THAT(expected.dimensions, testing::Eq(Vector2i(64, 64)));
+
+  ParseWarningSink warnings;
+  auto parsed = parser::SVGParser::ParseSVG(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64">
+        <rect id="target" x="8" y="8" width="6" height="8" fill="red"/>
+      </svg>)svg",
+      warnings);
+  ASSERT_THAT(parsed.hasError(), testing::IsFalse());
+  SVGDocument document = std::move(parsed).result();
+  auto target = document.querySelector("#target");
+  ASSERT_THAT(target, testing::Optional(testing::_));
+  RendererGeode renderer = createRenderer();
+  renderer.draw(document);
+  editor::tests::CompareBitmapToBitmap(renderer.takeSnapshot(), expected,
+                                       "call_scoped_fill_baseline",
+                                       editor::tests::PixelmatchIdentityParams());
+
+  Path borrowed = PathBuilder().addRect(Box2d({8, 8}, {14, 16})).build();
+  beginFrame(renderer);
+  renderer.setPaint(solidFill(css::RGBA(255, 0, 0, 255)));
+  renderer.drawPath(PathShape{.path = &borrowed,
+                              .sourceEntity = target->unsafeEntityHandle(),
+                              .allowDeferredGeometry = false},
+                    StrokeParams{});
+  // Recompute the source cache without a backend state change that could flush deferred draws.
+  borrowed = Path();
+  target->setAttribute("width", "12");
+  RendererUtils::prepareDocumentForRendering(document, false, warnings);
+  renderer.endFrame();
+  const RendererBitmap actual = renderer.takeSnapshot();
+  ASSERT_THAT(actual.empty(), testing::IsFalse());
+  ASSERT_THAT(actual.dimensions, testing::Eq(Vector2i(64, 64)));
+  editor::tests::CompareBitmapToBitmap(actual, expected, "call_scoped_fill_geometry",
                                        editor::tests::PixelmatchIdentityParams());
 }
 
-TEST_F(RendererGeodeTest, CallScopedStrokeGeometryIsConsumedBeforePathReplacement) {
-  Registry registry;
-  const EntityHandle source(registry, registry.create());
-  Path borrowed = PathBuilder().addRect(Box2d({8, 8}, {14, 16})).build();
+TEST_F(RendererGeodeTest, CallScopedStrokeGeometrySurvivesSourceCacheReplacement) {
   StrokeParams stroke;
   stroke.strokeWidth = 2.0;
-  RendererGeode renderer = createRenderer();
-  beginFrame(renderer);
-  renderer.setPaint(solidStroke(css::RGBA(255, 0, 0, 255)));
-  const uint64_t drawsBefore = sharedDevice()->counters()->drawCalls;
-  renderer.drawPath(
-      PathShape{.path = &borrowed, .sourceEntity = source, .allowDeferredGeometry = false}, stroke);
-  EXPECT_THAT(sharedDevice()->counters()->drawCalls, testing::Gt(drawsBefore))
-      << "Call-scoped stroke geometry must reach the GPU encoder before drawPath returns.";
-  borrowed = Path();
-  renderer.endFrame();
-  const RendererBitmap actual = renderer.takeSnapshot();
-
   RendererGeode reference = createRenderer();
   beginFrame(reference);
   reference.setPaint(solidStroke(css::RGBA(255, 0, 0, 255)));
   reference.drawRect(Box2d({8, 8}, {14, 16}), stroke);
   reference.endFrame();
-  editor::tests::CompareBitmapToBitmap(actual, reference.takeSnapshot(),
-                                       "call_scoped_stroke_geometry",
+  const RendererBitmap expected = reference.takeSnapshot();
+  ASSERT_THAT(expected.empty(), testing::IsFalse());
+  ASSERT_THAT(expected.dimensions, testing::Eq(Vector2i(64, 64)));
+
+  ParseWarningSink warnings;
+  auto parsed = parser::SVGParser::ParseSVG(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64">
+        <rect id="target" x="8" y="8" width="6" height="8" fill="none" stroke="red"
+              stroke-width="2"/>
+      </svg>)svg",
+      warnings);
+  ASSERT_THAT(parsed.hasError(), testing::IsFalse());
+  SVGDocument document = std::move(parsed).result();
+  auto target = document.querySelector("#target");
+  ASSERT_THAT(target, testing::Optional(testing::_));
+  RendererGeode renderer = createRenderer();
+  renderer.draw(document);
+  editor::tests::CompareBitmapToBitmap(renderer.takeSnapshot(), expected,
+                                       "call_scoped_stroke_baseline",
+                                       editor::tests::PixelmatchIdentityParams());
+
+  Path borrowed = PathBuilder().addRect(Box2d({8, 8}, {14, 16})).build();
+  beginFrame(renderer);
+  renderer.setPaint(solidStroke(css::RGBA(255, 0, 0, 255)));
+  renderer.drawPath(PathShape{.path = &borrowed,
+                              .sourceEntity = target->unsafeEntityHandle(),
+                              .allowDeferredGeometry = false},
+                    stroke);
+  // Recompute the source cache without a backend state change that could flush deferred draws.
+  borrowed = Path();
+  target->setAttribute("width", "12");
+  RendererUtils::prepareDocumentForRendering(document, false, warnings);
+  renderer.endFrame();
+  const RendererBitmap actual = renderer.takeSnapshot();
+  ASSERT_THAT(actual.empty(), testing::IsFalse());
+  ASSERT_THAT(actual.dimensions, testing::Eq(Vector2i(64, 64)));
+  editor::tests::CompareBitmapToBitmap(actual, expected, "call_scoped_stroke_geometry",
                                        editor::tests::PixelmatchIdentityParams());
 }
 
