@@ -580,7 +580,14 @@ def donner_cc_binary(name, srcs = [], linkopts = [], deps = [], tags = [], **kwa
     cc_binary(
         name = name,
         srcs = srcs,
-        linkopts = linkopts,
+        # Fold identical functions in optimized Linux links, as Apple's linker already does by
+        # default. Safe folding only merges functions whose address is never taken (per clang's
+        # address-significance tables), so function-pointer identity is preserved. lld and gold,
+        # the linkers the autoconfigured and hermetic toolchains select, both support it.
+        linkopts = linkopts + select({
+            "//build_defs:linux_opt": ["-Wl,--icf=safe"],
+            "//conditions:default": [],
+        }),
         deps = deps + libc_compat_deps(),
         tags = tags,
         **kwargs

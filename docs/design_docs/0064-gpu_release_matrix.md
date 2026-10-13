@@ -215,6 +215,12 @@ removed a further 88,792 bytes from the Linux arm64 editor and about 78,700 from
 editor (the 108,276 combined macOS reduction less the stb_image share). Read-only includes the
 shader artifacts.
 
+Optimized Linux links of `donner_cc_binary` targets also fold identical code (`--icf=safe`), which
+Apple's linker already does by default. On Linux arm64 that removed 378,796 bytes from
+`donner-svg`, 413,144 from `svg_to_png` and 553,144 from the editor. The Linux x86_64 budgets above
+do not yet credit it: no available host builds that target in the shipped configuration, so lower
+them from the first nightly measurement that includes it.
+
 | Product      | Platform     | Read-only  | Writable  | Total      | Budget     |
 | ------------ | ------------ | ---------- | --------- | ---------- | ---------- |
 | Editor       | macOS arm64  | 9,719,311  | 2,571,924 | 12,291,235 | 12,549,000 |

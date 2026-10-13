@@ -242,6 +242,13 @@ config_setting(
     visibility = ["//visibility:public"],
 )
 
+# Optimized Linux builds, where donner_cc_binary folds identical code at link time.
+config_setting(
+    name = "linux_opt",
+    constraint_values = ["@platforms//os:linux"],
+    values = {"compilation_mode": "opt"},
+)
+
 config_setting(
     name = "fuzzers_enabled",
     flag_values = {
