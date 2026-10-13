@@ -77,7 +77,10 @@ public:
    * @param other Budget whose family charge moves to this instance.
    */
   StyleResourceBudget(StyleResourceBudget&& other) noexcept
-      : limits_(other.limits_),
+      : externalInstanceWork_(other.externalInstanceWork_),
+        externalResourceWarning_(other.externalResourceWarning_),
+        aggregateWork_(other.aggregateWork_),
+        limits_(other.limits_),
         selectorTraversal_(std::move(other.selectorTraversal_)),
         ruleElementMatches_(other.ruleElementMatches_),
         declarationApplications_(other.declarationApplications_),
@@ -88,12 +91,14 @@ public:
         family_(std::move(other.family_)),
         reservations_(std::move(other.reservations_)) {
     other.complexPropertyBytes_ = 0;
+    other.aggregateWork_ = nullptr;
+    other.externalInstanceWork_ = 0;
   }
   StyleResourceBudget& operator=(StyleResourceBudget&&) = delete;
 
   /// Admit bounded entity work for one external-use preparation against the frame allowance.
   bool reserveExternalInstanceWork(std::size_t entities) {
-    if (rejected_ || entities > kMaximumRuleElementMatches - externalInstanceWork_) {
+    if (rejected_ || entities > limits_.ruleElementMatches - externalInstanceWork_) {
       rejected_ = true;
       return false;
     }
@@ -225,7 +230,7 @@ public:
   }
   /// Return the selector traversal budget for this computation pass.
   [[nodiscard]] const css::SelectorTraversalBudget& selectorTraversal() const {
-    return selectorTraversal_;
+    return aggregateWork_ ? aggregateWork_->selectorTraversal() : selectorTraversal_;
   }
   /// Return the number of rule-to-element matches charged.
   [[nodiscard]] std::size_t ruleElementMatches() const { return ruleElementMatches_; }

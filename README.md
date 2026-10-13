@@ -98,6 +98,14 @@ settings to resolve external URLs using its own network or file stack, credentia
 access policy. Leaving that loader unset keeps external requests unavailable by design. Embedded
 data URIs remain self-contained; secure processing modes also disable external loading.
 
+External `<use>` fragments inherit supported computed host styles for each occurrence. Explicit
+child declarations and `context-fill`/`context-stroke` keep their own paint semantics. Ordinary
+inherited gradients preserve the host resource identity and use the consuming shape's bounds.
+Inherited host patterns, markers, URL cursors, and URL-based masks, clips or filters are rejected
+at this boundary instead of resolving their IDs in the child document. Full shadow stylesheet
+scoping and merging host `@font-face` catalogs remain unsupported.
+
+
 ### Not yet supported
 
 - Bidirectional text, `textLength` / `lengthAdjust`, and several SVG 2 `textPath` and vertical-text

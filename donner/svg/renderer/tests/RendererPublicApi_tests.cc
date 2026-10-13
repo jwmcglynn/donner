@@ -442,6 +442,75 @@ TEST(RendererPublicApiTest, ExternalUseFrameWorkAdmissionStopsAtLimit) {
   EXPECT_THAT(work.reserveExternalInstanceWork(1), testing::IsTrue());
 }
 
+TEST(RendererPublicApiTest, ExternalUseHostSpecificityDoesNotOverrideExplicitChildPaint) {
+  const auto actual = RenderExternalUse(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8">
+        <use href="external.svg#tile" style="fill:blue !important"/>
+      </svg>)svg",
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8">
+        <rect id="tile" width="8" height="8" fill="red"/>
+      </svg>)svg");
+  EXPECT_THAT(actual.requests, ElementsAre("external.svg"));
+  EXPECT_THAT(PixelAt(actual.bitmap, 4, 4), test::Rgba(255, 0, 0, 255));
+}
+
+TEST(RendererPublicApiTest, ExternalUseTwoHostRelativeFontInstancesRemainIndependent) {
+  const auto actual = RenderExternalUse(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="32" height="8">
+        <use href="external.svg#tile" font-size="4" fill="red"/>
+        <use href="external.svg#tile" x="16" font-size="8" fill="blue"/>
+      </svg>)svg",
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="64" height="8" font-size="40">
+        <rect id="tile" width="1em" height="8" font-size="150%"/>
+      </svg>)svg");
+  ExpectExternalUseMatchesInline(
+      actual,
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="32" height="8">
+        <rect width="6" height="8" fill="red"/>
+        <rect x="16" width="12" height="8" fill="blue"/>
+      </svg>)svg");
+}
+
+TEST(RendererPublicApiTest, ExternalUseHostPatternsFailClosedDespiteChildIdCollision) {
+  testing::internal::CaptureStderr();
+  const auto actual = RenderExternalUse(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8">
+        <defs><pattern id="p" width="8" height="8" patternUnits="userSpaceOnUse">
+          <rect width="8" height="8" fill="blue"/></pattern></defs>
+        <use href="external.svg#tile" fill="url(#p)"/>
+      </svg>)svg",
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8">
+        <defs><pattern id="p" width="8" height="8" patternUnits="userSpaceOnUse">
+          <rect width="8" height="8" fill="red"/></pattern></defs>
+        <rect id="tile" width="8" height="8"/>
+      </svg>)svg");
+  const std::string diagnostic = testing::internal::GetCapturedStderr();
+  EXPECT_THAT(diagnostic, testing::HasSubstr(
+                              "External-use inherited cross-document URL resource is unsupported"));
+  EXPECT_THAT(actual.requests, ElementsAre("external.svg"));
+  EXPECT_THAT(PixelAt(actual.bitmap, 4, 4), test::IsTransparent());
+}
+
+TEST(RendererPublicApiTest, ExternalUseInheritedMarkersFailClosedWithoutChildLookup) {
+  testing::internal::CaptureStderr();
+  const auto actual = RenderExternalUse(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="16" height="8">
+        <defs><marker id="m" markerUnits="userSpaceOnUse" markerWidth="6" markerHeight="6"
+          refX="3" refY="3"><rect width="6" height="6" fill="blue"/></marker></defs>
+        <use href="external.svg#path" fill="none" stroke="black" marker-start="url(#m)"/>
+      </svg>)svg",
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="16" height="8">
+        <defs><marker id="m" markerUnits="userSpaceOnUse" markerWidth="6" markerHeight="6"
+          refX="3" refY="3"><rect width="6" height="6" fill="red"/></marker></defs>
+        <path id="path" d="M4,4 L12,4"/>
+      </svg>)svg");
+  const std::string diagnostic = testing::internal::GetCapturedStderr();
+  EXPECT_THAT(diagnostic, testing::HasSubstr(
+                              "External-use inherited cross-document URL resource is unsupported"));
+  EXPECT_THAT(PixelAt(actual.bitmap, 4, 2), test::IsTransparent());
+  EXPECT_THAT(actual.requests, ElementsAre("external.svg"));
+}
+
 TEST(RendererSurfaceBudgetTest, RejectsAggregateBytesAndSurfaceCountWithoutOvershoot) {
   RendererSurfaceBudget byteBudget;
   EXPECT_TRUE(byteBudget.reserve(4096, 4096, 4));

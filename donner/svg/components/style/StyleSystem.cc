@@ -513,6 +513,8 @@ void StyleSystem::computePropertiesInto(EntityHandle handle, ComputedStyleCompon
     // Once the aggregate retained-byte budget is exhausted, use bounded initial styles for the
     // remainder of the pass instead of retaining attacker-sized local or inherited vectors.
     styleBudget.release(handle.entity());
+    computedStyle.externalFill = false;
+    computedStyle.externalStroke = false;
     computedStyle.properties = PropertyRegistry();
   }
 
