@@ -31,7 +31,7 @@ ENFORCED_PAYLOAD_CEILINGS = {
 }
 PAYLOAD_SIZE_TEST = "//donner/editor/wasm:wasm_geode_package_size_tests"
 SIZE_CHECK_STEP = "- name: Build and size-check Geode editor Wasm package"
-STEP_AFTER_SIZE_CHECK = "- name: Stage package for handoff"
+STEP_AFTER_SIZE_CHECK = "- name: Prove the package's resolved module graph"
 def _repository_text(path):
     resolver = runfiles.Create()
     resolved = resolver.Rlocation("donner/%s" % path)
@@ -1270,6 +1270,8 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         wasm = root / "donner/editor/wasm"
         (wasm / "tests").mkdir(parents=True)
         (wasm / "tests/package-lock.json").write_text("{}")
+        # The proved MODULE.bazel.lock that the module-graph step snapshots into RUNNER_TEMP.
+        (root / "editor-wasm-module.lock").write_text('{"lockFileVersion": 26}\n')
         (wasm / "catalog_package_integrity_test.py").write_text(_repository_text(
             "donner/editor/wasm/catalog_package_integrity_test.py"))
         return package
@@ -1318,6 +1320,14 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
             self.assertEqual(provenance["producer_run_id"], "12")
             self.assertEqual(provenance["producer_attempt"], "2")
             self.assertEqual(provenance["targets"], ["//fixture:package"])
+            # The candidate retains the proved module lock outside the served trees.
+            module_lock = (root / "editor-wasm-module.lock").read_bytes()
+            self.assertEqual((candidate / "MODULE.bazel.lock").read_bytes(), module_lock)
+            self.assertEqual(provenance["generated_lock_sha256"],
+                             hashlib.sha256(module_lock).hexdigest())
+            self.assertEqual(provenance["lockfile_sha256"],
+                             hashlib.sha256(b"{}").hexdigest())
+            self.assertNotIn("MODULE.bazel.lock", "".join(checksums))
 
     def test_editor_wasm_candidate_bounds_checksum_startup_cost(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -1333,10 +1343,12 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
                               for line in (candidate / "SHA256SUMS").read_text().splitlines()]
             self.assertEqual(expected_paths, manifest_paths)
             starts = [int(line) for line in (root / "hash-starts").read_text().splitlines()]
-            self.assertEqual([1, len(expected_paths)], starts)
+            # One process hashes both locks (npm and module), one hashes the whole manifest.
+            self.assertEqual([2, len(expected_paths)], starts)
 
     def test_editor_wasm_candidate_rejects_incomplete_or_unexpected_assets(self):
-        for failure in ("corrupt-font", "extra-font", "extra-root-file", "missing-broker"):
+        for failure in ("corrupt-font", "extra-font", "extra-root-file", "missing-broker",
+                        "missing-module-lock"):
             with self.subTest(failure=failure), tempfile.TemporaryDirectory() as temporary:
                 root = Path(temporary)
                 package = self._catalog_candidate_fixture(root)
@@ -1346,6 +1358,8 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
                     (package / "fonts/extra.woff2").write_bytes(b"unexpected")
                 elif failure == "extra-root-file":
                     (package / "unexpected.txt").write_text("unexpected")
+                elif failure == "missing-module-lock":
+                    (root / "editor-wasm-module.lock").unlink()
                 else:
                     (package / "catalog-fonts.js").unlink()
                 result = self._stage_catalog_candidate(
