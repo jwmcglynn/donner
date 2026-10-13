@@ -228,11 +228,12 @@ class MacosCacheKeyParityTest(unittest.TestCase):
 
     def test_key_parity_policy_rejects_divergence(self):
         hosted_flags = 'BAZEL_MACOS_BUILD_FLAGS: "--config=ci-macos --macos_minimum_os=13.3"\n'
-        self_flags = 'BAZEL_MACOS_BUILD_FLAGS: "--config=ci-macos --macos_minimum_os=13.3 '
+        # Both jobs carry the same line; the self-hosted job's is the last one.
+        before, _, after = self.workflow.rpartition(hosted_flags)
         rc_line = "build:ci-macos --host_action_env=PATH="
         cases = {
-            "self-hosted drops the config": (self.workflow.replace(
-                self_flags, 'BAZEL_MACOS_BUILD_FLAGS: "--macos_minimum_os=13.3 ', 1),
+            "self-hosted drops the config": (
+                before + 'BAZEL_MACOS_BUILD_FLAGS: "--macos_minimum_os=13.3"\n' + after,
                 self.bazelrc, "key-affecting BAZEL_MACOS_BUILD_FLAGS differ"),
             "hosted adds a key-affecting flag": (self.workflow.replace(
                 hosted_flags, hosted_flags.replace("13.3", "13.3 --copt=-O1"), 1),

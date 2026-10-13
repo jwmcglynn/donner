@@ -1833,22 +1833,23 @@ jobs:
     runs-on: [self-hosted, macOS, ARM64]
     needs: [gatekeeper, determine-targets]
     if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request') && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') && needs.gatekeeper.outputs.use_self_hosted_macos == 'true' }}
-    # RE-availability SLA lane. Bound at 60 min so healthy affected-target
-    # runs have buffer while RE degradation still fast-fails instead of tailing
-    # for hours on the capped host.
+    # Bound at 60 min so healthy affected-target runs have buffer while a stuck
+    # run still fails instead of tailing for hours.
     timeout-minutes: 60
+    # Shares the BuildBuddy remote cache with the GitHub-hosted macOS lanes, the
+    # one self-hosted lane allowed to. This job only runs for trusted maintainer
+    # pull requests, so it binds the buildbuddy-write environment exactly as the
+    # `macos` job does for them.
+    environment:
+      name: ${{ ((github.event_name != 'pull_request' && github.ref == 'refs/heads/main') || needs.gatekeeper.outputs.trusted_pr == 'true') && 'buildbuddy-write' || '' }}
+      deployment: false
     env:
-      # The runner host has an operator ~/.bazelrc for interactive RE/cache work.
-      # The invocations below use --nohome_rc so CI matches GitHub-hosted macOS
-      # and only picks up cache settings declared in this workflow. RE/cache
-      # outages now FAST-FAIL (no local fallback) rather than degrading to a
-      # multi-hour local build on the capped host. Backend health monitoring
-      # and a rerun handle recovery.
-      # The first step injects the masked cache setting after registering its diagnostic forms.
+      # The runner host may have a user ~/.bazelrc. The invocations below use
+      # --nohome_rc so CI matches GitHub-hosted macOS and only picks up cache
+      # settings declared in this workflow.
       # --config=ci-macos and --macos_minimum_os=13.3 are the key-affecting
-      # flags, identical to the `macos` job's; the rest only configure this
-      # runner's remote cache client (//tools:macos_cache_key_parity_tests).
-      BAZEL_MACOS_BUILD_FLAGS: "--config=ci-macos --macos_minimum_os=13.3 --remote_upload_local_results=true --remote_local_fallback=false --incompatible_remote_local_fallback_for_remote_cache=false --remote_timeout=5s"
+      # flags, identical to the `macos` job's (//tools:macos_cache_key_parity_tests).
+      BAZEL_MACOS_BUILD_FLAGS: "--config=ci-macos --macos_minimum_os=13.3"
       BAZEL_MACOS_TEST_FLAGS: "--test_env=HOME --test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=1"
       # Keep in sync with the `macos` job: exactly one of the two runs per
       # event, so both need the Geode editor lane. See that job for why these
@@ -1862,40 +1863,6 @@ jobs:
       # intended to cover such a run with margin.
       MIN_FREE_DISK_GIB: "30"
     steps:
-      - name: Configure masked remote cache
-        shell: bash
-        env:
-          REMOTE_CACHE_URL: ${{ secrets.BAZEL_REMOTE_CACHE }}
-        run: |
-          set -euo pipefail
-          python3 - <<'PYTHON'
-          import os
-          from urllib.parse import unquote, urlsplit
-
-          value = os.environ.get("REMOTE_CACHE_URL", "")
-          if not value:
-              raise SystemExit("BAZEL_REMOTE_CACHE secret is required for the self-hosted lane")
-          try:
-              parsed = urlsplit(value)
-              _ = parsed.port
-              valid = parsed.scheme in ("http", "https", "grpc", "grpcs") and parsed.hostname
-          except ValueError:
-              raise SystemExit("Invalid remote cache URL") from None
-          if (not valid or any(char.isspace() for char in value) or parsed.username is not None
-                  or parsed.password is not None or parsed.query or parsed.fragment):
-              raise SystemExit("Invalid remote cache URL")
-          components = (value, parsed.netloc, parsed.hostname,
-                        parsed.path if parsed.path != "/" else "")
-          for component in components:
-              if component:
-                  for form in dict.fromkeys((component, unquote(component))):
-                      escaped = form.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
-                      print("::add-mask::" + escaped, flush=True)
-          flags = os.environ["BAZEL_MACOS_BUILD_FLAGS"]
-          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as output:
-              output.write("\nBAZEL_MACOS_BUILD_FLAGS=" + flags + " --remote_cache=" + value + "\n")
-          PYTHON
-
       # Before Bazel, so a full disk fails in seconds with a clear error instead of
       # minutes to an hour in as a Bazel ENOSPC, a job timeout or a lost
       # runner connection, which read like failures of the change under test.
@@ -1975,6 +1942,31 @@ jobs:
         with:
           persist-credentials: false
 
+      # Builds with the Xcode pinned in tools/ci_macos_xcode.txt when it is
+      # installed, so action keys match the hosted macOS lanes'. Without it the
+      # job warns and keeps the runner's default Xcode; the step never prints
+      # which Xcode the runner has.
+      - name: Select pinned Xcode
+        id: xcode
+        shell: bash
+        run: tools/ci_select_macos_xcode.sh --optional
+
+      # BuildBuddy remote cache, shared with the GitHub-hosted macOS lanes under
+      # the pinned Xcode's partition (docs/building.md). Without the pinned
+      # Xcode the partition is empty and the action leaves the cache off, so
+      # entries built with another Xcode never reach the shared partition. It
+      # runs before "Prepare self-hosted macOS toolchain", the first step that
+      # touches Bazel.
+      - name: Configure BuildBuddy remote cache
+        if: (github.event_name != 'pull_request' && github.ref == 'refs/heads/main') || needs.gatekeeper.outputs.trusted_pr == 'true'
+        uses: ./.github/actions/buildbuddy-cache
+        with:
+          api-key: ${{ secrets.BUILDBUDDY_API_KEY }}
+          trusted-pr: ${{ needs.gatekeeper.outputs.trusted_pr }}
+          renovate-pr: ${{ needs.gatekeeper.outputs.renovate_pr }}
+          cache-partition: ${{ steps.xcode.outputs.cache_partition }}
+          download-outputs: minimal
+
       - name: Prepare self-hosted macOS toolchain
         shell: bash
         run: |
@@ -1984,15 +1976,6 @@ jobs:
           test -x /opt/homebrew/bin/bazelisk
           test -x /opt/homebrew/bin/bazel
           test -x /opt/homebrew/opt/llvm@19/bin/clang-tidy
-
-      # Builds with the Xcode pinned in tools/ci_macos_xcode.txt when it is
-      # installed, so action keys match the hosted macOS lanes'. Without it the
-      # job warns and keeps the runner's default Xcode; the step never prints
-      # which Xcode the runner has.
-      - name: Select pinned Xcode
-        id: xcode
-        shell: bash
-        run: tools/ci_select_macos_xcode.sh --optional
 
       - name: Refresh Xcode toolchain configuration
         shell: bash
@@ -2087,3 +2070,10 @@ jobs:
         uses: ./.github/actions/upload-bazel-test-artifacts
         with:
           name: bazel-test-failure-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}
+
+      # The runner is persistent: remove the BuildBuddy key and the workspace
+      # fragment that imports it, whatever the outcome of the job.
+      - name: Remove BuildBuddy credentials
+        if: always()
+        shell: bash
+        run: rm -rf "${RUNNER_TEMP}/buildbuddy" "${GITHUB_WORKSPACE}/.buildbuddy.bazelrc"

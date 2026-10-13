@@ -1,6 +1,7 @@
 name: Configure BuildBuddy remote cache
 description: >-
-  Point Bazel at the BuildBuddy remote cache on a GitHub-hosted lane. Remote
+  Point Bazel at the BuildBuddy remote cache on a GitHub-hosted lane, or on
+  the self-hosted macOS lane for trusted maintainer pull requests. Remote
   cache only: no remote execution and no build-event upload. The workflow
   passes at most one key, chosen by the event and the shared pull request
   trust rule (.github/actions/pr-trust); this action re-checks that choice and
@@ -83,8 +84,6 @@ runs:
         # The checks below back up the workflow's own step conditions: a key
         # that reaches the wrong run is an error, never a silent downgrade.
         fail() { echo "::error::BuildBuddy: $1"; exit 1; }
-        [[ "${RUNNER_ENVIRONMENT:-}" == "github-hosted" ]] ||
-          fail "keys are only for GitHub-hosted runners."
         [[ -z "${WRITE_KEY}" || -z "${READ_KEY}" ]] || fail "pass one key, not both."
         main_writer=false
         if [[ "${REF}" == "refs/heads/main" ]]; then
@@ -97,6 +96,17 @@ runs:
               "${RENOVATE_PR}" != "true" ]]; then
           trusted_writer=true
         fi
+        # The one self-hosted exception: the macOS runner, for trusted maintainer
+        # pull requests with the read-write key. Every other run is GitHub-hosted.
+        case "${RUNNER_ENVIRONMENT:-}" in
+          github-hosted) ;;
+          self-hosted)
+            [[ "${RUNNER_OS:-}" == "macOS" && "${trusted_writer}" == "true" &&
+               -n "${WRITE_KEY}" ]] ||
+              fail "a self-hosted runner gets a key only on macOS for a trusted maintainer pull request."
+            ;;
+          *) fail "unknown runner environment." ;;
+        esac
         if [[ -n "${WRITE_KEY}" ]]; then
           mode=read-write
           upload=true
@@ -143,7 +153,8 @@ runs:
 
         # The key lives outside the workspace, so no artifact or cache upload
         # of workspace paths can carry it; the workspace fragment only imports
-        # it. The runner deletes RUNNER_TEMP when the job ends.
+        # it. A GitHub-hosted runner is discarded when the job ends; the
+        # self-hosted job removes both files in its last step.
         credentials="${RUNNER_TEMP}/buildbuddy"
         mkdir -p "${credentials}"
         chmod 700 "${credentials}"
