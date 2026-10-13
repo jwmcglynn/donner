@@ -4279,6 +4279,7 @@ test("GPU dispatch progresses while owner pulses are delayed", async ({ page }) 
     dispatches: number;
     pulses: number;
     maximumInlineEpochCalls: number;
+    safePoints: number;
   };
   const initial = before?.stats as DispatchStats;
   const final = after?.stats as DispatchStats;
@@ -4288,6 +4289,9 @@ test("GPU dispatch progresses while owner pulses are delayed", async ({ page }) 
     .toBeGreaterThan(0);
   expect(final.inlineDispatches - initial.inlineDispatches, "inline work must explain progress")
     .toBeGreaterThan(Math.max(32, final.dispatches - initial.dispatches));
+  expect(final.safePoints - initial.safePoints, "presented frames must run GPU safe points")
+    .toBeGreaterThan(0);
+  // Safe-point starts share the inline budget, so this bound also covers them.
   expect(final.maximumInlineEpochCalls).toBeLessThanOrEqual(32);
   expect(failures).toEqual([]);
 });
