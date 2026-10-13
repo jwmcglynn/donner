@@ -1472,8 +1472,8 @@ TEST(RenderCoordinatorTest, HiDpiCanvasCommitRebuildKeepsTheSelectedLayerPromote
     ASSERT_THAT(result, testing::Optional(testing::_));
     RenderCoordinatorTestAccess::noteRenderCompleted(coordinator, result->version,
                                                      result->rasterViewport);
-    coordinator.compositedPresentation().noteCachedTextures(
-        selectedEntity, result->version, result->rasterViewport.outputSizePx);
+    coordinator.compositedPresentation().noteCachedTextures(selectedEntity, result->version,
+                                                            result->rasterViewport.outputSizePx);
   };
 
   ASSERT_THAT(coordinator.maybeRequestRender(app, selectTool, viewport, &textures),
