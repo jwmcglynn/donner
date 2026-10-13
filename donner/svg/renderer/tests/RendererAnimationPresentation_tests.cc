@@ -5,6 +5,8 @@
 #include "donner/editor/tests/BitmapGoldenCompare.h"
 #include "donner/svg/SVGRectElement.h"
 #include "donner/svg/SVGUseElement.h"
+#include "donner/svg/components/animation/AnimationResourceBudget.h"
+#include "donner/svg/components/filter/FilterPrimitiveComponent.h"
 #include "donner/svg/components/resources/ImageComponent.h"
 #include "donner/svg/components/resources/ResourceManagerContext.h"
 #include "donner/svg/components/shadow/ShadowEntityComponent.h"
@@ -586,6 +588,84 @@ TEST(RendererAnimationPresentation, DiscreteToOnlyUsesTheCascadedBaseValue) {
   document.setTime(1.5);
   EXPECT_THAT(test::PixelAt(RenderDocumentWithActiveBackend(document), 8, 8),
               test::Rgba(0, 0, 0, 255));
+}
+
+TEST(RendererAnimationPresentation, MixedGradientUnitsUseTheirCoordinateSystem) {
+  struct Case {
+    const char* base;
+    const char* extra;
+    const char* to;
+    const char* expected;
+  };
+  for (const auto item : {Case{"", "", "0.5", "0.75"},
+                          Case{"<linearGradient id='base' gradientUnits='userSpaceOnUse' x2='16'/>",
+                               " href='#base'", "50%", "12"}}) {
+    SCOPED_TRACE(item.to);
+    const std::string beginning =
+        std::string("<defs>") + item.base + "<linearGradient id='g'" + item.extra;
+    const std::string ending =
+        "><stop stop-color='red'/><stop offset='1' "
+        "stop-color='blue'/></linearGradient></defs><rect width='16' height='16' fill='url(#g)'/>";
+    auto document =
+        ParsePresentation(beginning + ending + "<animate href='#g' attributeName='x2' to='" +
+                          item.to + "' dur='2s'/>");
+    auto expected = ParsePresentation(beginning + " x2='" + item.expected + "'" + ending);
+    document.setTime(1);
+    editor::tests::CompareBitmapToBitmap(RenderDocumentWithActiveBackend(document),
+                                         RenderDocumentWithActiveBackend(expected),
+                                         std::string("gradient-coordinate-system-") + item.expected,
+                                         editor::tests::PixelmatchIdentityParams());
+  }
+}
+
+#ifdef DONNER_TEXT_ENABLED
+TEST(RendererAnimationPresentation, RemovingAnimatedTextPathHrefPreservesInlineGeometry) {
+  auto document = ParsePresentation(R"svg(
+    <defs><path id="a" d="M0 8H16"/><path id="b" d="M0 16H16"/></defs>
+    <text font-size="12"><textPath id="t" href="#a" path="M0 12H16" startOffset="4">H</textPath></text>
+    <set href="#t" attributeName="href" to="#b" dur="1s"/>)svg");
+  auto expected = ParsePresentation(R"svg(
+    <text font-size="12"><textPath path="M0 12H16" startOffset="4">H</textPath></text>)svg");
+  document.setTime(0.5);
+  (void)RenderDocumentWithActiveBackend(document);
+  document.querySelector("#t")->removeAttribute("href");
+  document.setTime(2);
+  EXPECT_EQ(RendererTestUtils::renderToAsciiImage(document).generated,
+            RendererTestUtils::renderToAsciiImage(expected).generated);
+}
+
+TEST(RendererAnimationPresentation, TextPathSourceRestorationHasAnIndependentWorkBudget) {
+  auto document = ParsePresentation(R"svg(
+    <text font-size="12"><textPath id="t" path="M0 12H16">H</textPath></text>
+    <set href="#t" attributeName="path" to="M0 8H16" dur="1s"/>)svg");
+  auto expected = ParsePresentation(R"svg(
+    <text font-size="12"><textPath path="M8 12H16">H</textPath></text>)svg");
+  document.setTime(0.5);
+  (void)RenderDocumentWithActiveBackend(document);
+  auto& budget = document.registry().ctx().get<components::AnimationResourceBudget>();
+  EXPECT_EQ(budget.reserveGeometryWork(budget.remainingGeometryWork()), true);
+  document.querySelector("#t")->setAttribute("path", "M8 12H16");
+  document.setTime(2);
+  EXPECT_EQ(RendererTestUtils::renderToAsciiImage(document).generated,
+            RendererTestUtils::renderToAsciiImage(expected).generated);
+}
+#endif
+
+TEST(RendererAnimationPresentation, RemovingAnimatedFilterImageHrefPreservesAspectRatio) {
+  auto document = ParsePresentation(R"svg(
+    <defs><rect id="a" width="16" height="8"/>
+      <filter id="f"><feImage id="i" href="#a" preserveAspectRatio="none"/></filter>
+    </defs><rect width="16" height="16" filter="url(#f)"/>
+    <set href="#i" attributeName="href" to="#a" dur="1s"/>)svg");
+  document.setTime(0.5);
+  (void)RenderDocumentWithActiveBackend(document);
+  document.querySelector("#i")->removeAttribute("href");
+  document.setTime(2);
+  (void)RenderDocumentWithActiveBackend(document);
+  const auto* image =
+      document.querySelector("#i")->entityHandle().try_get<components::FEImageComponent>();
+  ASSERT_THAT(image, testing::Ne(nullptr));
+  EXPECT_EQ(image->preserveAspectRatio, PreserveAspectRatio::None());
 }
 
 }  // namespace
