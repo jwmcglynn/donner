@@ -295,11 +295,10 @@ config_setting(
     ],
 )
 
-# Linked-size budgets for the shipped native products, each about 10% over the size the nightly
-# Perf workflow measured for that product on that platform in the shipped configuration; the
-# `donner-svg` budgets are about 3% over the released binaries the release preflight built. That
-# workflow builds and enforces them on its macOS arm64 and Linux x86_64 runners; no pull-request
-# lane builds these products in the shipped configuration.
+# Linked-size budgets for the shipped native products. The `donner-svg` and `svg_to_png` budgets
+# are about 3% over the measured size; the editor budgets are about 10% over the size the nightly
+# Perf workflow measured. That workflow builds and enforces them on its macOS arm64 and Linux
+# x86_64 runners; no pull-request lane builds these products in the shipped configuration.
 py_test(
     name = "native_linked_size_budget_test",
     size = "small",
@@ -310,14 +309,14 @@ py_test(
         "--product=svg_to_png=$(rootpath :shipped_svg_to_png)",
     ] + select({
         ":macos_arm64": [
-            "--budget=donner_svg=3288000",
+            "--budget=donner_svg=3258000",
             "--budget=editor=13465000",
-            "--budget=svg_to_png=4238000",
+            "--budget=svg_to_png=3962000",
         ],
         ":linux_x86_64": [
-            "--budget=donner_svg=4286000",
+            "--budget=donner_svg=4256000",
             "--budget=editor=15594000",
-            "--budget=svg_to_png=5369000",
+            "--budget=svg_to_png=5025000",
         ],
         "//conditions:default": [],
     }),

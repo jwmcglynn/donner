@@ -131,7 +131,7 @@ py_test(
 
 # Size gate for the shipped (`--config=wasm-size`) module and its JavaScript glue, run by
 # //tools/ci:wasm_size_tests. Each ceiling is about 2 percent above the measured artifact: Wasm
-# 1,854,541 raw / 734,268 gzip, JS 5,525 raw / 2,711 gzip. Lower them as the module
+# 1,842,628 raw / 728,955 gzip, JS 5,525 raw / 2,711 gzip. Lower them as the module
 # shrinks; raise one only by explicit maintainer decision.
 py_test(
     name = "wasm_size_tests",
@@ -145,9 +145,9 @@ py_test(
         "--js-file",
         "$(rootpath :donner_wasm_bin.js)",
         "--max-wasm-raw-bytes",
-        "1892000",
+        "1880000",
         "--max-wasm-gzip-bytes",
-        "749000",
+        "744000",
         "--max-js-raw-bytes",
         "5700",
         "--max-js-gzip-bytes",
