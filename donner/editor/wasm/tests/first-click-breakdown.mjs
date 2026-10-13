@@ -4,9 +4,10 @@
 // The timeline is what `__donnerReadGpuTimeline` returns, with every time converted to the page
 // clock. A submission entry is ["s", device, serial, buffers, draws, submittedAt, completedAt],
 // with completedAt 0 while it has not completed. A pipeline entry is
-// ["p", device, createdAt, compiledAt, shared], with compiledAt 0 while its asynchronous compile
-// has not settled (or when the browser had none), and a first-use entry ["c", device, at, entryPoint] records
-// a pipeline created synchronously where a pass first needed it.
+// ["p", device, createdAt, compiledAt, shared], with compiledAt 0 until the pipeline is compiled,
+// asynchronously or at first use. A first-use entry ["c", device, at, entryPoint] records a
+// pipeline created synchronously where a pass first needed it. The library keeps the latest 1024
+// entries, so after a busy boot the earliest may be gone and the counts below are lower bounds.
 
 /**
  * @param {Array<Array<string|number>>} timeline Queue timeline on the page clock.
@@ -25,6 +26,8 @@
  *     the last submission made before it; handoffMs is what presentation took once both that
  *     backlog and the result were done. Both are null when a submission made before the click had
  *     not completed by the time the timeline was read, so the backlog end is unknown.
+ *     firstUsePipelineCompiles counts synchronous first-use creations between the click and the
+ *     presentation.
  */
 export function firstClickBreakdown(timeline, { clickAt, completedAt, presentedAt }) {
   let backlogEnd = clickAt;
@@ -48,7 +51,7 @@ export function firstClickBreakdown(timeline, { clickAt, completedAt, presentedA
       const compiling = entry[2] <= clickAt && entry[4] !== 1
         && (compiled <= 0 || compiled > clickAt);
       if (compiling) pipelinesCompilingAtClick += 1;
-    } else if (entry[0] === "c" && entry[2] <= presentedAt) {
+    } else if (entry[0] === "c" && entry[2] >= clickAt && entry[2] <= presentedAt) {
       firstUsePipelineCompiles += 1;
     }
   }

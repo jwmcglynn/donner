@@ -323,4 +323,36 @@ test("a device let go before its compiles start starts none of them", async () =
   bridge.entryPoints.donner_gpu_release_device(kFirst);
   await drain();
   assert.deepEqual(first.created.async, []);
+  assert.equal(bridge.state.debugStatistics()["pipelineCompiles"], 0);
+});
+
+test("a pipeline the browser refuses at first use is not asked for again", async () => {
+  const stub = createTimelineDevice({ asyncCompiles: false });
+  stub.device.createRenderPipeline = () => {
+    throw new Error("refused");
+  };
+  const bridge = await openOver(stub, [kFirst]);
+  buildPipelines(bridge, kFirst, [[kPipelineA, "fsA"]]);
+  const { entryPoints: gpu, state } = bridge;
+  for (const serial of [1, 2]) {
+    assert.equal(gpu.donner_gpu_begin_command_buffer(kFirst, serial, 0), state.kSuccess);
+    assert.equal(gpu.donner_gpu_begin_render_pass(kFirst), state.kSuccess);
+    assert.equal(
+      gpu.donner_gpu_render_pass_attachment(kFirst, kView, 1, 1, 0, 0, 0, 0),
+      state.kSuccess,
+    );
+    assert.equal(gpu.donner_gpu_begin_render_pass_finish(kFirst), state.kSuccess);
+    assert.equal(gpu.donner_gpu_set_render_pipeline(kFirst, kPipelineA), state.kFailed);
+  }
+  assert.equal(state.debugStatistics()["pipelineCompilesOnFirstUse"], 1);
+});
+
+test("an asynchronous compile the browser refuses is reported on the console", async () => {
+  const stub = createTimelineDevice({ refuseAsync: true });
+  const bridge = await openOver(stub, [kFirst]);
+  buildPipelines(bridge, kFirst, [[kPipelineA, "fsA"]]);
+  await drain();
+  stub.finishCompile("fsA");
+  await drain();
+  assert.deepEqual(bridge.consoleErrors, ["[Geode/browser] Pipeline compile refused: refused"]);
 });

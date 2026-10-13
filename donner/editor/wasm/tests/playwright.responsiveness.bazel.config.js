@@ -19,7 +19,8 @@ function firefoxProfileEnvironment() {
 }
 
 // DONNER_BROWSER_WEBGPU_ADAPTER=swiftshader runs Chromium's WebGPU on its software adapter, a slow
-// GPU that makes queue backlog measurable on fast hardware.
+// GPU that makes queue backlog measurable on fast hardware. The flags match the smoke lane's
+// software adapter configuration, so the two measure the same device.
 const chromiumAdapterArgs = process.env.DONNER_BROWSER_WEBGPU_ADAPTER === "swiftshader"
   ? ["--use-webgpu-adapter=swiftshader", "--enable-dawn-features=allow_unsafe_apis"]
   : [];

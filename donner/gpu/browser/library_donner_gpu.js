@@ -726,17 +726,18 @@ var LibraryDonnerGpu = {
     // A browser compiles a pipeline created with createRenderPipeline in order with everything
     // else the device does, so the first submission after it, and every submission queued behind
     // that one, waits for the compile. A pipeline is therefore compiled asynchronously, starting
-    // when the task that created it ends; on the editor's devices that is when each renderer
-    // starts, well before its first draw. Its identifier names a compile record: the pipeline once
-    // the browser hands it over, or nothing yet. Nothing waits on the browser's answer. A pass that
+    // when the task that created it ends; the renderers create most of theirs when they start,
+    // before their first draw. Its identifier names a compile record: the pipeline once the
+    // browser hands it over, or nothing yet. Nothing waits on the browser's answer. A pass that
     // reaches a pipeline the browser has not answered for yet creates it synchronously there and
     // then, which costs what every pipeline used to.
     //
     // Compiles are shared between the logical devices over one browser device: every renderer
-    // builds the same few pipelines, and each one is compiled once. Pipelines are immutable and
-    // their layouts are matched by content, so one compiled for one logical device is valid on
-    // another over the same browser device. What a pipeline compiles is identified by content:
-    // shader text, entry points, binding layouts and fixed-function state.
+    // builds the same few pipelines, and each one is compiled once. Pipelines are immutable, and
+    // explicit bind group layouts with identical entries are group-equivalent, so a pipeline
+    // compiled for one logical device is valid with another's bind groups over the same browser
+    // device. What a pipeline compiles is identified by content: shader text, entry points,
+    // binding layouts and fixed-function state.
     kMaxSharedPipelines: 256,
 
     // A short stable name for WGSL `code`, so a pipeline's identity does not carry its source.
@@ -838,9 +839,17 @@ var LibraryDonnerGpu = {
             compile.compiledAt = DonnerGpu.epochMs();
             compile.traced[3] = compile.compiledAt;
           }
-        }, function() {
-          // A descriptor the browser refuses is created on first use instead, where the browser
-          // reports the refusal the same way it reports any other.
+        }, function(error) {
+          // The pipeline is created synchronously at first use instead, where the browser reports
+          // the refusal as an uncaptured error. A pipeline never used would report nothing, so
+          // the refusal is logged here as well.
+          if (DonnerGpu.lost) {
+            return;
+          }
+          console.error(
+            "[Geode/browser] Pipeline compile refused: "
+              + String(error && error.message ? error.message : error),
+          );
         });
       });
     },
@@ -852,7 +861,7 @@ var LibraryDonnerGpu = {
       if (compile === null) {
         return null;
       }
-      if (compile.pipeline === null) {
+      if (compile.pipeline === null && !compile.failed) {
         DonnerGpu.pipelineCompilesOnFirstUse += 1;
         DonnerGpu.trace(["c", record.handle, DonnerGpu.epochMs(), compile.entryPoint]);
         try {
@@ -862,6 +871,10 @@ var LibraryDonnerGpu = {
         } catch (e) {
           compile.pipeline = null;
         }
+        // Refused once, refused every time: later uses fail without asking again.
+        compile.failed = compile.pipeline === null;
+        compile.compiledAt = DonnerGpu.epochMs();
+        compile.traced[3] = compile.compiledAt;
       }
       return compile.pipeline;
     },
@@ -1793,6 +1806,8 @@ var LibraryDonnerGpu = {
     }
     var pending = record.pending;
     record.pending = null;
+    // The key is built from every field of the descriptor except its three object references,
+    // which are named by their own content keys; a new descriptor field belongs in `shape`.
     var shape = {
       vertex: { entryPoint: pending.vertexEntryPoint, buffers: pending.buffers },
       fragment: { entryPoint: pending.fragmentEntryPoint, targets: pending.targets },

@@ -56,6 +56,7 @@ test("pipelines still compiling at the click and first-use compiles are counted"
     ["p", 1, 6, 0, 0],
     ["p", 1, 7, 900, 0],
     ["p", 2, 8, 50, 1],
+    ["c", 1, 50],
     ["c", 1, 150],
     ["c", 1, 5000],
   ];
