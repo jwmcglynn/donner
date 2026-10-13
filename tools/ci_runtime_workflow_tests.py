@@ -21,13 +21,13 @@ from test_executable_fixtures import ExecutableFixtureDirectory
 # The editor Wasm payload ceilings CI enforces. Changing one means editing the size test's
 # arguments and this table together, so a widened ceiling is always a reviewed change.
 ENFORCED_PAYLOAD_CEILINGS = {
-    "--max-js-gzip-bytes": 54600,
-    "--max-js-raw-bytes": 198200,
-    "--max-total-raw-bytes": 13015000,
+    "--max-js-gzip-bytes": 53000,
+    "--max-js-raw-bytes": 191800,
+    "--max-total-raw-bytes": 12046000,
     "--max-wasm-data-segments": 64,
     "--max-wasm-function-body-bytes": 46000,
-    "--max-wasm-gzip-bytes": 3552000,
-    "--max-wasm-raw-bytes": 10749000,
+    "--max-wasm-gzip-bytes": 3274000,
+    "--max-wasm-raw-bytes": 9937000,
 }
 PAYLOAD_SIZE_TEST = "//donner/editor/wasm:wasm_geode_package_size_tests"
 SIZE_CHECK_STEP = "- name: Build and size-check Geode editor Wasm package"

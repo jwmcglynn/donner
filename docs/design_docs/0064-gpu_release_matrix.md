@@ -205,19 +205,21 @@ budgets and prints one `native-linked-size` line per product.
 
 ### Budgets
 
-Each editor budget is about 10% over the product measured in the shipped configuration by the
-lane that enforces it, rounded up to a thousand bytes. Each `svg_to_png` and `donner-svg` budget is
-about 3% over its measured size, less the measured effect of later size reductions: the
-`svg_to_png` rows are the nightly Perf measurement and the `donner-svg` rows the released binary
-for that platform, both read with the same tool. Restricting stb_image to the PNG, JPEG and GIF
-decoders Donner uses removed 29,604 bytes from `svg_to_png` and 29,476 from `donner-svg` on macOS
-arm64, and about 29,350 from each on Linux. Read-only includes the shader artifacts.
+Each budget is about 3% over the product's measured size, less the measured effect of later size
+reductions, rounded up to a thousand bytes. The editor and `svg_to_png` rows are the nightly Perf
+measurement in the shipped configuration and the `donner-svg` rows the released binary for that
+platform, both read with the same tool. Restricting stb_image to the PNG, JPEG and GIF decoders
+Donner uses removed 29,604 bytes from `svg_to_png` and 29,476 from `donner-svg` on macOS arm64,
+and about 29,350 from each product on Linux. Dropping the FreeType drivers Donner cannot reach
+removed a further 88,792 bytes from the Linux arm64 editor and about 78,700 from the macOS
+editor (the 108,276 combined macOS reduction less the stb_image share). Read-only includes the
+shader artifacts.
 
 | Product      | Platform     | Read-only  | Writable  | Total      | Budget     |
 | ------------ | ------------ | ---------- | --------- | ---------- | ---------- |
-| Editor       | macOS arm64  | 9,676,731  | 2,563,916 | 12,240,647 | 13,465,000 |
+| Editor       | macOS arm64  | 9,719,311  | 2,571,924 | 12,291,235 | 12,549,000 |
 | `svg_to_png` | macOS arm64  | 3,707,224  | 168,176   | 3,875,400  | 3,962,000  |
-| Editor       | Linux x86_64 | 11,681,667 | 2,494,368 | 14,176,035 | 15,594,000 |
+| Editor       | Linux x86_64 | 11,735,567 | 2,502,224 | 14,237,791 | 14,544,000 |
 | `svg_to_png` | Linux x86_64 | 4,793,843  | 113,896   | 4,907,739  | 5,025,000  |
 | `donner-svg` | macOS arm64  | 3,061,224  | 130,576   | 3,191,800  | 3,258,000  |
 | `donner-svg` | Linux x86_64 | 4,049,335  | 111,096   | 4,160,431  | 4,256,000  |
@@ -251,16 +253,16 @@ bazel test --config=editor-wasm --test_output=all \
   //donner/editor/wasm:wasm_geode_package_size_tests
 ```
 
-The size ceilings are about 10% over the measured package, rounded up.
+The size ceilings are about 2% over the measured package, rounded up.
 
 | Metric                     | Measured   | Ceiling    |
 | -------------------------- | ---------- | ---------- |
-| `editor.wasm` raw          | 9,771,416  | 10,749,000 |
-| `editor.wasm` gzip         | 3,228,485  | 3,552,000  |
-| `editor.js` raw            | 180,129    | 198,200    |
-| `editor.js` gzip           | 49,630     | 54,600     |
-| Package raw                | 11,831,400 | 13,015,000 |
-| Largest Wasm function body | 33,047     | 46,000     |
+| `editor.wasm` raw          | 9,741,597  | 9,937,000  |
+| `editor.wasm` gzip         | 3,208,966  | 3,274,000  |
+| `editor.js` raw            | 188,005    | 191,800    |
+| `editor.js` gzip           | 51,894     | 53,000     |
+| Package raw                | 11,809,457 | 12,046,000 |
+| Largest Wasm function body | 33,236     | 46,000     |
 | Passive data segments      | 3          | 64         |
 
 The function-body and data-segment limits are structural limits and are not scaled with the
