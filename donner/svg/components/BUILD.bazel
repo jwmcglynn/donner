@@ -57,6 +57,16 @@ donner_cc_library(
 )
 
 donner_cc_library(
+    name = "element_type_component",
+    hdrs = ["ElementTypeComponent.h"],
+    visibility = ["//donner/svg:__subpackages__"],
+    deps = [
+        "//donner/base",
+        "//donner/svg:element_type",
+    ],
+)
+
+donner_cc_library(
     name = "components_core",
     srcs = [
         "ConditionalProcessingComponent.cc",
@@ -71,7 +81,6 @@ donner_cc_library(
         "DescriptiveTextComponent.h",
         "DirtyFlagsComponent.h",
         "DocumentResourceFamilyBudget.h",
-        "ElementTypeComponent.h",
         "EvaluatedReferenceComponent.h",
         "FontMetricDependenciesComponent.h",
         "FontPaintDependenciesComponent.h",
@@ -92,6 +101,7 @@ donner_cc_library(
         "//donner/svg:__subpackages__",
     ],
     deps = [
+        ":element_type_component",
         ":node_lifetime_component",
         ":svg_document_context",
         "//donner/base",

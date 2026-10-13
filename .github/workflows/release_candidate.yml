@@ -1,0 +1,139 @@
+name: Assemble release candidate
+
+# Keep third-party Bazel module telemetry off, as the telemetry section of .bazelrc explains.
+env:
+  DO_NOT_TRACK: "1"
+  ASPECT_TOOLS_TELEMETRY: "-all"
+
+# A maintainer names every qualifying attempt and both review comments. Assembly downloads the
+# named retained artifacts, verifies the record with tools/release_candidate.py and retains it.
+# It builds nothing and never publishes, deploys or opens a registry pull request. A record is
+# never edited: assembling again produces a new artifact with a new digest. See
+# docs/release_candidate.md.
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_commit:
+        description: Full candidate commit SHA; main must point at it when dispatched
+        required: true
+        type: string
+      preflight_run:
+        description: BCR Preflight run ID/attempt for the source archive and CLIs (e.g. 123/1)
+        required: true
+        type: string
+      editor_run:
+        description: Editor WASM run ID/attempt for the editor package
+        required: true
+        type: string
+      docs_run:
+        description: Docs build (main push) run ID/attempt for the Pages artifact
+        required: true
+        type: string
+      ci_run:
+        description: CI run ID/attempt
+        required: true
+        type: string
+      coverage_run:
+        description: Coverage run ID/attempt
+        required: true
+        type: string
+      fuzz_run:
+        description: Fuzz run ID/attempt
+        required: true
+        type: string
+      sanitizers_run:
+        description: Sanitizers run ID/attempt
+        required: true
+        type: string
+      security_review_comment:
+        description: Issue comment ID of the security review report, posted by the repository owner
+        required: true
+        type: string
+      supply_chain_review_comment:
+        description: Issue comment ID of the supply-chain review report, posted by the repository owner
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  assemble:
+    if: github.repository == 'jwmcglynn/donner' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      actions: read
+      issues: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      CANDIDATE_COMMIT: ${{ inputs.candidate_commit }}
+      PREFLIGHT_RUN: ${{ inputs.preflight_run }}
+      EDITOR_RUN: ${{ inputs.editor_run }}
+      DOCS_RUN: ${{ inputs.docs_run }}
+      CI_RUN: ${{ inputs.ci_run }}
+      COVERAGE_RUN: ${{ inputs.coverage_run }}
+      FUZZ_RUN: ${{ inputs.fuzz_run }}
+      SANITIZERS_RUN: ${{ inputs.sanitizers_run }}
+      SECURITY_REVIEW_COMMENT: ${{ inputs.security_review_comment }}
+      SUPPLY_CHAIN_REVIEW_COMMENT: ${{ inputs.supply_chain_review_comment }}
+    steps:
+      - name: Checkout the dispatched commit
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      # The verifier requires the checkout to be the candidate commit, so main must still point
+      # at it. Every input is validated by the tool; none reaches the shell as an expression.
+      - name: Assemble and verify the candidate record
+        run: |
+          python3 -B -m tools.release_candidate assemble \
+            --commit "$CANDIDATE_COMMIT" \
+            --preflight "$PREFLIGHT_RUN" --editor "$EDITOR_RUN" --docs "$DOCS_RUN" \
+            --ci "$CI_RUN" --coverage "$COVERAGE_RUN" --fuzz "$FUZZ_RUN" \
+            --sanitizers "$SANITIZERS_RUN" \
+            --security-review-comment "$SECURITY_REVIEW_COMMENT" \
+            --supply-chain-review-comment "$SUPPLY_CHAIN_REVIEW_COMMENT" \
+            --source-root . --work "$RUNNER_TEMP/candidate-work" \
+            --output "$RUNNER_TEMP/candidate"
+
+      - name: Retain the candidate record
+        uses: actions/upload-artifact@v7
+        with:
+          name: donner-release-candidate-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/candidate/
+          if-no-files-found: error
+          retention-days: 90
+
+  # Signs the record digest only. No checkout or repository code runs with the OIDC token.
+  attest-record:
+    needs: assemble
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      # The record is bound to the attempt that assembled it; a failed-jobs-only rerun cannot
+      # find it here and fails. Rerun all jobs instead.
+      - uses: actions/download-artifact@v8
+        with:
+          name: donner-release-candidate-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/candidate
+
+      - name: Recheck the retained record digest
+        working-directory: ${{ runner.temp }}/candidate
+        run: |
+          sha256sum --check --strict candidate.json.sha256
+          {
+            echo "### Release candidate record"
+            echo "- Record SHA-256: \`$(cut -d' ' -f1 candidate.json.sha256)\`"
+            echo "- Assembly run: \`$GITHUB_RUN_ID\`, attempt \`$GITHUB_RUN_ATTEMPT\`"
+            echo "- Release body line: \`Release-Candidate-Record: $GITHUB_RUN_ID/$GITHUB_RUN_ATTEMPT sha256:$(cut -d' ' -f1 candidate.json.sha256)\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Attest the candidate record
+        uses: actions/attest-build-provenance@v3.2.0
+        with:
+          subject-path: ${{ runner.temp }}/candidate/candidate.json

@@ -2,6 +2,7 @@
 
 #include "donner/base/Utf8.h"
 #include "donner/svg/components/AttachedIdLookup.h"
+#include "donner/svg/components/ElementTypeComponent.h"
 
 namespace donner::svg {
 
@@ -20,7 +21,7 @@ size_t findFragmentDelimiter(std::string_view href) {
 
 std::optional<ResolvedReference> ResolveAttachedEntityById(Registry& registry, const RcString& id) {
   const Entity entity = components::FindAttachedEntityById(registry, id);
-  if (entity == entt::null) {
+  if (entity == entt::null || !components::HasSvgNamespace(registry, entity)) {
     return std::nullopt;
   }
 

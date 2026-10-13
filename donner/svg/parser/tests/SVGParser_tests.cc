@@ -548,6 +548,15 @@ TEST(SVGParser, RootElementNotSvgFails) {
               ParseErrorIs("Unexpected element <foo> at root, first element must be <svg>"));
 }
 
+TEST(SVGParser, UnsupportedDeclaredEncodingIsReported) {
+  ParseWarningSink warnings;
+  EXPECT_THAT(
+      SVGParser::ParseSVG("<?xml version='1.0' encoding='Windows-1251'?>"
+                          "<svg xmlns='http://www.w3.org/2000/svg'><text>\xCF\xF0</text></svg>",
+                          warnings),
+      ParseErrorIs(testing::HasSubstr("Unsupported XML encoding")));
+}
+
 TEST(SVGParser, UnknownElementInSvgNamespace) {
   ParseWarningSink warnings;
   auto result = SVGParser::ParseSVG(

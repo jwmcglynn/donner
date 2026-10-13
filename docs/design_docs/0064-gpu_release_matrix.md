@@ -175,11 +175,14 @@ non-target, listed as out of scope in the tables above rather than counted as a 
 ### What is measured
 
 The native budgets are stated against the shipped products as linked: the macOS editor, the Linux
-editor, and the GPU command-line render tool, `//examples:svg_to_png` built with Geode.
-`//tools/ci:shipped_editor` and `//tools/ci:shipped_svg_to_png` build each one in the configuration
-it ships in: optimized (`-c opt`), with the Geode renderer, without the Tracy profiler client that
-development builds link, and with the default text tier. The editor applies its own full text tier
-on top, as it does in every build.
+editor, the GPU command-line render tool, `//examples:svg_to_png` built with Geode, and the
+released `donner-svg` CLI. `//tools/ci:shipped_editor`, `//tools/ci:shipped_svg_to_png` and
+`//tools/ci:shipped_donner_svg` build each one in the configuration it ships in: optimized
+(`-c opt`), with the Geode renderer, without the Tracy profiler client that development builds
+link, and with the default text tier. The editor applies its own full text tier on top, as it does
+in every build. `donner-svg` links the CPU renderer under every configuration, so its shipped
+build is the same program as the release build; `//donner/svg/tool:donner_svg_excludes_geode_audit`
+fails if the CLI gains a dependency on the Geode renderer.
 
 `tools/ci/native_linked_size.py` measures a product as the program its executable maps from the
 file, split into read-only bytes (code, constants, unwind tables) and writable initialized data.
@@ -203,15 +206,26 @@ budgets and prints one `native-linked-size` line per product.
 
 ### Budgets
 
-Each budget is about 10% over the product measured in the shipped configuration by the lane
-that enforces it, rounded up to a thousand bytes. Read-only includes the shader artifacts.
+Each budget is about 3% over the product's measured size, rounded up to a thousand bytes. All
+rows are read with `tools/ci/native_linked_size.py`, and read-only includes the shader artifacts.
+The Linux x86_64 rows are measured in the shipped configuration with the release toolchain
+(clang 18 and lld 18). The macOS rows are derived rather than measured directly: they start from
+the nightly Perf measurement for the editor and `svg_to_png` and from the released binary for
+`donner-svg`, and subtract the separately measured size of the stb_image decoders and FreeType
+drivers that the shipped build configuration excludes.
+
+Optimized Linux links of the shipped binaries fold identical code (`--icf=safe`), as Apple's
+linker does by default, and the Linux rows are measured with it.
+`--//build_defs:linker_icf=false` turns it off for a host whose linker does not support it.
 
 | Product      | Platform     | Read-only  | Writable  | Total      | Budget     |
 | ------------ | ------------ | ---------- | --------- | ---------- | ---------- |
-| Editor       | macOS arm64  | 9,676,731  | 2,563,916 | 12,240,647 | 13,465,000 |
-| `svg_to_png` | macOS arm64  | 3,684,628  | 168,000   | 3,852,628  | 4,238,000  |
-| Editor       | Linux x86_64 | 11,681,667 | 2,494,368 | 14,176,035 | 15,594,000 |
-| `svg_to_png` | Linux x86_64 | 4,766,843  | 113,800   | 4,880,643  | 5,369,000  |
+| Editor       | macOS arm64  | 9,719,311  | 2,571,924 | 12,291,235 | 12,549,000 |
+| `svg_to_png` | macOS arm64  | 3,707,224  | 168,176   | 3,875,400  | 3,962,000  |
+| Editor       | Linux x86_64 | 11,021,123 | 2,492,496 | 13,513,619 | 13,920,000 |
+| `svg_to_png` | Linux x86_64 | 4,293,755  | 110,184   | 4,403,939  | 4,537,000  |
+| `donner-svg` | macOS arm64  | 3,061,224  | 130,576   | 3,191,800  | 3,258,000  |
+| `donner-svg` | Linux x86_64 | 3,589,755  | 107,696   | 3,697,451  | 3,809,000  |
 | Editor       | Linux arm64  | 11,195,371 | 2,534,096 | 13,729,467 | Not gated  |
 | `svg_to_png` | Linux arm64  | 4,716,219  | 144,000   | 4,860,219  | Not gated  |
 
@@ -224,7 +238,7 @@ four libraries are `testonly`, so Bazel analysis rejects them in either product.
 
 ### Where it is enforced
 
-`//tools/ci:native_linked_size_budget_test` checks both products against the budgets for the
+`//tools/ci:native_linked_size_budget_test` checks every product against the budgets for the
 platform it runs on. It is tagged `perf` and `perf_linux`, so the nightly Perf workflow builds and
 runs it in its macOS arm64 and Linux x86_64 jobs, which already build with `-c opt`. It is also
 tagged `manual`, so `bazel test //...` does not build the optimized products. No pull-request lane
@@ -242,16 +256,16 @@ bazel test --config=editor-wasm --test_output=all \
   //donner/editor/wasm:wasm_geode_package_size_tests
 ```
 
-The size ceilings are about 10% over the measured package, rounded up.
+The size ceilings are about 2% over the measured package, rounded up.
 
 | Metric                     | Measured   | Ceiling    |
 | -------------------------- | ---------- | ---------- |
-| `editor.wasm` raw          | 9,771,416  | 10,749,000 |
-| `editor.wasm` gzip         | 3,228,485  | 3,552,000  |
-| `editor.js` raw            | 180,129    | 198,200    |
-| `editor.js` gzip           | 49,630     | 54,600     |
-| Package raw                | 11,831,400 | 13,015,000 |
-| Largest Wasm function body | 33,047     | 46,000     |
+| `editor.wasm` raw          | 9,741,597  | 9,937,000  |
+| `editor.wasm` gzip         | 3,208,966  | 3,274,000  |
+| `editor.js` raw            | 188,005    | 191,800    |
+| `editor.js` gzip           | 51,894     | 53,000     |
+| Package raw                | 11,809,457 | 12,046,000 |
+| Largest Wasm function body | 33,236     | 46,000     |
 | Passive data segments      | 3          | 64         |
 
 The function-body and data-segment limits are structural limits and are not scaled with the
@@ -265,6 +279,7 @@ package.
 | The backend solid-fill renders match the same golden                      | `//donner/gpu/metal/tests:metal_solid_fill_tests`, `//donner/gpu/vulkan/tests:vulkan_solid_fill_tests` |
 | The editor Wasm package fits its budgets                                  | `//donner/editor/wasm:wasm_geode_package_size_tests`                                                   |
 | The shipped native products fit the budgets above                         | `//tools/ci:native_linked_size_budget_test`                                                            |
+| `donner-svg` never links the Geode renderer                               | `//donner/svg/tool:donner_svg_excludes_geode_audit`                                                    |
 
 The native gate is **Scheduled**: it runs in the nightly Perf workflow, so a regression lands
 before it fires.

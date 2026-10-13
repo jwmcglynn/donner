@@ -21,17 +21,25 @@ from test_executable_fixtures import ExecutableFixtureDirectory
 # The editor Wasm payload ceilings CI enforces. Changing one means editing the size test's
 # arguments and this table together, so a widened ceiling is always a reviewed change.
 ENFORCED_PAYLOAD_CEILINGS = {
-    "--max-js-gzip-bytes": 54600,
-    "--max-js-raw-bytes": 198200,
-    "--max-total-raw-bytes": 13015000,
+    "--max-js-gzip-bytes": 53000,
+    "--max-js-raw-bytes": 191800,
+    "--max-total-raw-bytes": 12046000,
     "--max-wasm-data-segments": 64,
     "--max-wasm-function-body-bytes": 46000,
-    "--max-wasm-gzip-bytes": 3552000,
-    "--max-wasm-raw-bytes": 10749000,
+    "--max-wasm-gzip-bytes": 3274000,
+    "--max-wasm-raw-bytes": 9937000,
 }
 PAYLOAD_SIZE_TEST = "//donner/editor/wasm:wasm_geode_package_size_tests"
+# The standalone renderer Wasm ceilings CI enforces, changed together with that test's arguments.
+RENDERER_PAYLOAD_CEILINGS = {
+    "--max-js-gzip-bytes": 2800,
+    "--max-js-raw-bytes": 5700,
+    "--max-wasm-gzip-bytes": 744000,
+    "--max-wasm-raw-bytes": 1880000,
+}
+RENDERER_SIZE_TEST = "//donner/svg/renderer/wasm:wasm_size_tests"
 SIZE_CHECK_STEP = "- name: Build and size-check Geode editor Wasm package"
-STEP_AFTER_SIZE_CHECK = "- name: Stage package for handoff"
+STEP_AFTER_SIZE_CHECK = "- name: Prove the package's resolved module graph"
 def _repository_text(path):
     resolver = runfiles.Create()
     resolved = resolver.Rlocation("donner/%s" % path)
@@ -39,7 +47,7 @@ def _repository_text(path):
         return handle.read()
 
 
-def _declared_payload_ceilings(size_test_arguments):
+def _declared_payload_ceilings(size_test_arguments, enforced=ENFORCED_PAYLOAD_CEILINGS):
     """The payload ceilings the size test declares, read from its build-graph arguments.
 
     A flag declared twice is dropped rather than reported: argparse keeps the
@@ -47,8 +55,8 @@ def _declared_payload_ceilings(size_test_arguments):
     test does not enforce.
     """
     ceilings = {}
-    for flag in ENFORCED_PAYLOAD_CEILINGS:
-        values = re.findall(r'"%s", "(\d+)"' % re.escape(flag), size_test_arguments)
+    for flag in enforced:
+        values = re.findall(r'"%s",\s*"(\d+)"' % re.escape(flag), size_test_arguments)
         if len(values) == 1:
             ceilings[flag] = int(values[0])
     return ceilings
@@ -99,6 +107,7 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
             "donner/editor/wasm/wasm_package_size_test_arguments.txt"
         )
         cls.ci_target_definitions = _repository_text("tools/ci/BUILD.bazel")
+        cls.renderer_wasm_build = _repository_text("donner/svg/renderer/wasm/BUILD.bazel")
         cls.editor_tests_build = _repository_text("donner/editor/tests/BUILD.bazel")
         cls.xvfb_runner = _repository_text(
             "donner/editor/tests/RunEditorWindowVulkanSurfaceTests.sh"
@@ -319,6 +328,90 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
             "wgsl_chromium_compilation_tests",
         ])
 
+    def test_browser_affected_is_derived_from_the_affected_set_and_fails_closed(self):
+        determine = self._job_body("determine-targets")
+        self.assertIn(
+            "      browser_affected: ${{ steps.determine.outputs.browser_affected }}\n",
+            determine)
+        script = determine.split("        name: Determine affected Bazel targets\n", 1)[1]
+        script = script.split("\n      - ", 1)[0]
+        query = 'attr(\\"tags\\", \\"launches-browser\\", set($affected))'
+        self.assertIn(query, script)
+        # The query runs on the filtered selection, against the PR's merge graph.
+        self.assertLess(script.index("manual_affected="), script.index(query))
+        self.assertIn('cd "$head_dir"', script.split(query, 1)[0].rsplit("if ", 1)[1])
+        failed = script.split('echo "Browser target query failed', 1)[1].split("fi\n", 1)[0]
+        self.assertIn('echo "browser_affected=true" >> "$GITHUB_OUTPUT"', failed)
+        self.assertEqual(script.count("browser_affected="), 3)
+        # Dependency manifests reach Bazel through module extensions, which bazel-diff cannot
+        # attribute, so a change to any of them adds every browser test to the selection.
+        manifests = script.split("browser_inputs_changed=false\n", 1)[1].split("esac", 1)[0]
+        for path in ("donner/editor/wasm/tests/package.json",
+                     "donner/editor/wasm/tests/package-lock.json",
+                     "donner/editor/wasm/tests/pnpm-lock.yaml",
+                     "donner/editor/wasm/tests/browsers.*.json"):
+            self.assertIn(path, manifests)
+        self.assertIn("browser_inputs_changed=true", manifests)
+        self.assertLess(script.index("browser_inputs_changed=false"),
+                        script.index('if [[ "$should_fallback" == "true" ]]; then'))
+        opening = 'if [[ "$browser_inputs_changed" == "true" ]]; then\n'
+        block = opening + script.split(opening, 1)[1].split("\n\n", 1)[0] + "\n"
+        self.assertLess(script.index(opening), script.index(query))
+        self.assertGreater(script.index(opening), script.index("manual_affected="))
+        for listing, expected_affected, expected_output in (
+            # The browser tests join the selection, so every lane runs them.
+            ("//w:smoke\n//w:regression\n", "//a:b //w:smoke //w:regression", ""),
+            # No listing falls back to //....
+            ("", None, "fallback=true\naffected=\n"),
+        ):
+            with self.subTest(listing=listing), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                (root / "head").mkdir()
+                listing_file = root / "listing.txt"
+                listing_file.write_text(listing)
+                fake = root / "bazelisk"
+                fake.write_text('#!/bin/sh\ncat "%s"\n' % listing_file)
+                fake.chmod(0o755)
+                output = root / "output"
+                output.write_text("")
+                env = {**os.environ, "GITHUB_OUTPUT": str(output),
+                       "PATH": str(root) + os.pathsep + os.environ.get("PATH", "")}
+                result = self._run_script(
+                    "set -euo pipefail\nbrowser_inputs_changed=true\nhead_dir=%s\n"
+                    "affected='//a:b'\n%secho \"affected<$affected>\"\n"
+                    % (root / "head", block), [], env=env)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertEqual(output.read_text(), expected_output)
+                if expected_affected is None:
+                    self.assertNotIn("affected<", result.stdout)
+                else:
+                    shown = result.stdout.split("affected<", 1)[1].split(">", 1)[0]
+                    self.assertEqual(shown.split(), expected_affected.split())
+
+    def test_hosted_browser_subset_keeps_the_hosted_failure_diagnostics(self):
+        # A browser failure in the trusted-PR subset needs the same evidence as one in the
+        # hosted macos job: the stall system-log slice and the serial and parallel GPU probes.
+        # The subset has no native Test step, so its conditions key on the browser step alone.
+        hosted = self._job_body("macos")
+        subset = self._job_body("macos-browser")
+        steps = ("Collect browser stall system log", "Upload browser stall system log",
+                 "Detect browser GPU acquisition failure", "Compare browser GPU tests (serial)",
+                 "Upload browser GPU comparison (serial)", "Compare browser GPU tests (parallel)",
+                 "Upload browser GPU comparison (parallel)",
+                 "Upload bounded browser GPU timing summaries")
+        positions = []
+        for step in steps:
+            expected = self._step_body(hosted, step).replace(
+                "steps.test.outcome == 'failure' || steps.browser_test.outcome == 'failure'",
+                "steps.browser_test.outcome == 'failure'")
+            body = self._step_body(subset, step)
+            # A job's last step body runs on into the next job's leading comments.
+            self.assertEqual(body.split("\n\n", 1)[0], expected.split("\n\n", 1)[0], step)
+            self.assertNotIn("steps.test.", body, step)
+            positions.append(subset.index("      - name: %s\n" % step))
+        self.assertEqual(positions, sorted(positions))
+        self.assertGreater(positions[0], subset.index("      - name: Test (browser targets)\n"))
+
     def test_browser_stall_recorder_is_enabled_only_in_the_hosted_job(self):
         # The recorder publishes host load, memory and call graphs, so only the ephemeral
         # hosted job may enable it; every other lane and local runs leave it inert.
@@ -330,10 +423,19 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         for step in steps:
             self.assertIn("$BAZEL_MACOS_TEST_FLAGS $BROWSER_STALL_TEST_FLAGS",
                           self._step_body(hosted, step), step)
+        # The trusted-PR hosted browser subset runs the same browser step and GPU comparisons
+        # on the same image.
+        subset = self._job_body("macos-browser")
+        self.assertIn('      BROWSER_STALL_TEST_FLAGS: "%s"\n' % switch, subset)
+        subset_steps = steps[1:]
+        for step in subset_steps:
+            self.assertIn("$BAZEL_MACOS_TEST_FLAGS $BROWSER_STALL_TEST_FLAGS",
+                          self._step_body(subset, step), step)
         recorder = _repository_text("donner/editor/wasm/tests/browser-stall-diagnostics.mjs")
         self.assertIn('kEnableVariable = "DONNER_BROWSER_STALL_DIAGNOSTICS"', recorder)
-        self.assertEqual(self.main.count("DONNER_BROWSER_STALL_DIAGNOSTICS"), 1)
-        self.assertEqual(self.main.count("BROWSER_STALL_TEST_FLAGS"), 1 + len(steps))
+        self.assertEqual(self.main.count("DONNER_BROWSER_STALL_DIAGNOSTICS"), 2)
+        self.assertEqual(self.main.count("BROWSER_STALL_TEST_FLAGS"),
+                         2 + len(steps) + len(subset_steps))
         for job in ("macos-self-hosted", "linux", "linux-self-hosted"):
             self.assertNotIn("BROWSER_STALL", self._job_body(job), job)
         resolver = runfiles.Create()
@@ -366,8 +468,15 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
             body = self._step_body(hosted, step)
             self.assertIn("continue-on-error: true", body, step)
             self.assertNotIn("HOSTED_MACOS_QUARANTINE", body, step)
-        self.assertEqual(self.main.count("DONNER_HOSTED_MACOS_QUARANTINE"), 1)
-        self.assertEqual(self.main.count("HOSTED_MACOS_QUARANTINE_TEST_FLAGS"), 1 + len(steps))
+        # The trusted-PR hosted browser subset runs main's hosted browser step, quarantine
+        # included, so it sees exactly what main's hosted job would.
+        subset = self._job_body("macos-browser")
+        self.assertIn('      HOSTED_MACOS_QUARANTINE_TEST_FLAGS: "%s"\n' % switch, subset)
+        self.assertIn("$HOSTED_MACOS_QUARANTINE_TEST_FLAGS",
+                      self._step_body(subset, "Test (browser targets)"))
+        self.assertEqual(self.main.count("DONNER_HOSTED_MACOS_QUARANTINE"), 2)
+        self.assertEqual(self.main.count("HOSTED_MACOS_QUARANTINE_TEST_FLAGS"),
+                         2 + len(steps) + 1)
         for job in ("macos-self-hosted", "linux", "linux-self-hosted"):
             self.assertNotIn("HOSTED_MACOS_QUARANTINE", self._job_body(job), job)
         resolver = runfiles.Create()
@@ -1199,6 +1308,31 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         repeated = self.wasm_size_test_arguments.replace(declared, declared + ", " + declared)
         self.assertNotIn(flag, _declared_payload_ceilings(repeated))
 
+    def _renderer_size_test_definition(self):
+        marker = 'name = "wasm_size_tests"'
+        self.assertEqual(1, self.renderer_wasm_build.count(marker))
+        return self.renderer_wasm_build.split(marker, 1)[1].split("\n)", 1)[0]
+
+    def test_renderer_wasm_payload_ceilings_are_enforced(self):
+        """The renderer module's size test declares each ceiling once, as CI enforces it."""
+        self.assertEqual(
+            _declared_payload_ceilings(
+                self._renderer_size_test_definition(), RENDERER_PAYLOAD_CEILINGS
+            ),
+            RENDERER_PAYLOAD_CEILINGS,
+            "%s and RENDERER_PAYLOAD_CEILINGS must change together" % RENDERER_SIZE_TEST,
+        )
+
+    def test_renderer_wasm_size_test_runs_in_the_size_check_step(self):
+        """The Editor Wasm size-check step runs the suite that contains the renderer gate."""
+        step = self._size_check_step(self.editor_wasm)
+        self.assertIn("--config=wasm-size", step)
+        self.assertIn("//tools/ci:wasm_size_tests", step)
+        suite_name = 'name = "wasm_size_tests"'
+        self.assertIn(suite_name, self.ci_target_definitions)
+        suite = self.ci_target_definitions.split(suite_name, 1)[1].split("\n)", 1)[0]
+        self.assertIn(RENDERER_SIZE_TEST, suite)
+
     def test_editor_wasm_size_check_step_runs_the_gated_size_test(self):
         """The gate reads the ceilings of the target the workflow actually runs."""
         step = self._size_check_step(self.editor_wasm)
@@ -1270,6 +1404,8 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         wasm = root / "donner/editor/wasm"
         (wasm / "tests").mkdir(parents=True)
         (wasm / "tests/package-lock.json").write_text("{}")
+        # The proved MODULE.bazel.lock that the module-graph step snapshots into RUNNER_TEMP.
+        (root / "editor-wasm-module.lock").write_text('{"lockFileVersion": 26}\n')
         (wasm / "catalog_package_integrity_test.py").write_text(_repository_text(
             "donner/editor/wasm/catalog_package_integrity_test.py"))
         return package
@@ -1318,6 +1454,14 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
             self.assertEqual(provenance["producer_run_id"], "12")
             self.assertEqual(provenance["producer_attempt"], "2")
             self.assertEqual(provenance["targets"], ["//fixture:package"])
+            # The candidate retains the proved module lock outside the served trees.
+            module_lock = (root / "editor-wasm-module.lock").read_bytes()
+            self.assertEqual((candidate / "MODULE.bazel.lock").read_bytes(), module_lock)
+            self.assertEqual(provenance["generated_lock_sha256"],
+                             hashlib.sha256(module_lock).hexdigest())
+            self.assertEqual(provenance["lockfile_sha256"],
+                             hashlib.sha256(b"{}").hexdigest())
+            self.assertNotIn("MODULE.bazel.lock", "".join(checksums))
 
     def test_editor_wasm_candidate_bounds_checksum_startup_cost(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -1333,10 +1477,12 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
                               for line in (candidate / "SHA256SUMS").read_text().splitlines()]
             self.assertEqual(expected_paths, manifest_paths)
             starts = [int(line) for line in (root / "hash-starts").read_text().splitlines()]
-            self.assertEqual([1, len(expected_paths)], starts)
+            # One process hashes both locks (npm and module), one hashes the whole manifest.
+            self.assertEqual([2, len(expected_paths)], starts)
 
     def test_editor_wasm_candidate_rejects_incomplete_or_unexpected_assets(self):
-        for failure in ("corrupt-font", "extra-font", "extra-root-file", "missing-broker"):
+        for failure in ("corrupt-font", "extra-font", "extra-root-file", "missing-broker",
+                        "missing-module-lock"):
             with self.subTest(failure=failure), tempfile.TemporaryDirectory() as temporary:
                 root = Path(temporary)
                 package = self._catalog_candidate_fixture(root)
@@ -1346,6 +1492,8 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
                     (package / "fonts/extra.woff2").write_bytes(b"unexpected")
                 elif failure == "extra-root-file":
                     (package / "unexpected.txt").write_text("unexpected")
+                elif failure == "missing-module-lock":
+                    (root / "editor-wasm-module.lock").unlink()
                 else:
                     (package / "catalog-fonts.js").unlink()
                 result = self._stage_catalog_candidate(

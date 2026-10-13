@@ -20,6 +20,8 @@ REPOSITORY = "jwmcglynn/donner"
 REGISTRY_FORK = "jwmcglynn/bazel-central-registry"
 PREFLIGHT_PATH = ".github/workflows/bcr_preflight.yml"
 RELEASE_PATH = ".github/workflows/release.yml"
+CANDIDATE_PATH = ".github/workflows/release_candidate.yml"
+CANDIDATE_ARTIFACT_PREFIX = "donner-release-candidate-"
 
 
 def gh_json(*args: str):
@@ -47,42 +49,50 @@ def check_source(commit: str, tag: str) -> str:
     return version
 
 
-def candidate_ref(release_body: str) -> tuple[str, str]:
+def candidate_ref(release_body: str) -> tuple[str, str, str]:
+    """Return the assembly run, attempt and record digest named by the release body.
+
+    The candidate record is the only release authority. A body that still names a preflight
+    attempt directly is rejected instead of choosing between two selections.
+    """
+    if re.search(r"(?m)^Release-Candidate-Preflight:", release_body):
+        raise ValueError("release body names a preflight attempt; name the candidate record instead")
+    lines = re.findall(r"(?m)^Release-Candidate-Record:.*$", release_body)
     matches = re.findall(
-        r"(?m)^Release-Candidate-Preflight: ([1-9][0-9]*)/([1-9][0-9]*)$",
+        r"(?m)^Release-Candidate-Record: ([1-9][0-9]{0,15})/([1-9][0-9]{0,4}) "
+        r"sha256:([0-9a-f]{64})\r?$",
         release_body,
     )
-    if len(matches) != 1:
-        raise ValueError("release body must name exactly one preflight run and attempt")
+    if len(lines) != 1 or len(matches) != 1:
+        raise ValueError("release body must name exactly one candidate record run, attempt and digest")
     return matches[0]
 
 
-def select_preflight(commit: str, tag: str, run_id: str, attempt: str) -> dict[str, object]:
+def select_record(commit: str, tag: str, run_id: str, attempt: str,
+                  record_sha256: str) -> dict[str, object]:
+    """Select the retained record of one successful assembly attempt on the release commit."""
     version = check_source(commit, tag)
-    if not re.fullmatch(r"[1-9][0-9]*", run_id) or not re.fullmatch(r"[1-9][0-9]*", attempt):
-        raise ValueError("release candidate run and attempt must be numeric")
+    if not re.fullmatch(r"[0-9a-f]{64}", record_sha256):
+        raise ValueError("candidate record digest must be a lowercase SHA-256")
     run = gh_json("api", f"repos/{REPOSITORY}/actions/runs/{run_id}/attempts/{attempt}")
-    check_run(run, commit, PREFLIGHT_PATH, {"push", "workflow_dispatch"})
+    check_run(run, commit, CANDIDATE_PATH, {"workflow_dispatch"})
     if run.get("head_branch") != "main":
-        raise ValueError("release preflight must run on main")
+        raise ValueError("candidate record must be assembled on main")
     if run.get("id") != int(run_id) or run["run_attempt"] != int(attempt):
-        raise ValueError("preflight run does not match the selected immutable attempt")
-    names = {
-        "artifact": f"donner-bcr-qualified-{run['run_attempt']}",
-        "linux_artifact": f"donner-svg-linux-x86-64-{commit}-{run['run_attempt']}",
-        "macos_artifact": f"donner-svg-darwin-arm64-{commit}-{run['run_attempt']}",
-    }
+        raise ValueError("assembly run does not match the selected immutable attempt")
+    name = f"{CANDIDATE_ARTIFACT_PREFIX}{run['run_attempt']}"
     pages = gh_json("api", f"repos/{REPOSITORY}/actions/runs/{run_id}/artifacts?per_page=100",
                     "--paginate", "--slurp")
     artifacts = [artifact for page in pages for artifact in page.get("artifacts", [])]
-    for name in names.values():
-        matching = [item for item in artifacts if item.get("name") == name]
-        if (len(matching) != 1 or matching[0].get("expired") is not False
-                or not isinstance(matching[0].get("size_in_bytes"), int)
-                or matching[0]["size_in_bytes"] <= 0):
-            raise ValueError("preflight release artifact is missing, ambiguous, empty or expired")
+    matching = [item for item in artifacts if item.get("name") == name]
+    if (len(matching) != 1 or matching[0].get("expired") is not False
+            or type(matching[0].get("id")) is not int or matching[0]["id"] < 1
+            or not isinstance(matching[0].get("size_in_bytes"), int)
+            or matching[0]["size_in_bytes"] <= 0):
+        raise ValueError("candidate record artifact is missing, ambiguous, empty or expired")
     return {"run_id": str(run["id"]), "attempt": str(run["run_attempt"]),
-            "version": version, **names}
+            "artifact_id": str(matching[0]["id"]), "record_sha256": record_sha256,
+            "version": version}
 
 
 def check_release(release: dict, tag: str) -> None:
@@ -280,7 +290,7 @@ def plan_submission(release_run_id: str, approved_commit: str,
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
-    select = commands.add_parser("select-preflight")
+    select = commands.add_parser("select-record")
     select.add_argument("--commit", required=True)
     select.add_argument("--tag", required=True)
     select.add_argument("--release-body-file", type=Path, required=True)
@@ -297,9 +307,10 @@ def main() -> None:
     generated.add_argument("--approved-sha256", required=True)
     generated.add_argument("--proposed-commit")
     args = parser.parse_args()
-    if args.command == "select-preflight":
-        run_id, attempt = candidate_ref(args.release_body_file.read_text(encoding="utf-8"))
-        result = select_preflight(args.commit, args.tag, run_id, attempt)
+    if args.command == "select-record":
+        run_id, attempt, record_sha256 = candidate_ref(
+            args.release_body_file.read_text(encoding="utf-8"))
+        result = select_record(args.commit, args.tag, run_id, attempt, record_sha256)
     elif args.command == "plan-submission":
         result = plan_submission(args.release_run_id, args.approved_commit, args.approved_sha256)
     else:

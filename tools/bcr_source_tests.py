@@ -10,6 +10,8 @@ import tempfile
 import unittest
 from unittest import mock
 
+from python.runfiles import runfiles
+
 from tools import bcr_source as source
 
 
@@ -57,6 +59,15 @@ class ArchiveSafetyTest(unittest.TestCase):
             with self.subTest(present=present), self.archive(entries) as archive:
                 with self.assertRaisesRegex(ValueError, "missing LICENSE or NOTICE"):
                     source.archive_members(archive, "donner-1.0.0")
+
+    def test_rejects_the_generated_coverage_report(self):
+        entries = [("donner-1.0.0/MODULE.bazel", tarfile.REGTYPE),
+                   ("donner-1.0.0/LICENSE", tarfile.REGTYPE),
+                   ("donner-1.0.0/NOTICE", tarfile.REGTYPE),
+                   ("donner-1.0.0/docs/reports/coverage.zip", tarfile.REGTYPE)]
+        with self.archive(entries) as archive:
+            with self.assertRaisesRegex(ValueError, "generated report"):
+                source.archive_members(archive, "donner-1.0.0")
 
     def test_module_identity_and_version_are_literal_and_safe(self):
         self.assertEqual(source.module_values('module(name="donner", version="0.8.0-pre")')["version"],
@@ -123,6 +134,26 @@ class SourceFixtureTest(unittest.TestCase):
             source.verify_archive(self.artifacts, self.commit, "123", "3")
         with self.assertRaisesRegex(ValueError, "does not belong"):
             source.qualify_archive(self.artifacts, self.commit, "999", "2")
+
+    def test_repository_attributes_omit_only_the_coverage_report(self):
+        attributes = Path(runfiles.Create().Rlocation("donner/.gitattributes")).read_text()
+        self.write(".gitattributes", attributes)
+        kept = ["docs/reports/binary-size/report.txt", "docs/img/demo.gif",
+                "third_party/resvg-test-suite/tests/shape.svg"]
+        for name in kept:
+            self.write(name, "kept\n")
+        (self.repo / "docs/reports").mkdir(parents=True, exist_ok=True)
+        (self.repo / "docs/reports/coverage.zip").write_bytes(b"PK\x05\x06" + bytes(18))
+        self.git("add", "--", ".gitattributes", "docs", "third_party")
+        self.git("-c", "commit.gpgsign=false", "commit", "-qm", "reports")
+        commit = self.git("rev-parse", "HEAD")
+        receipt = source.create_archive(self.artifacts)
+        with tarfile.open(self.artifacts / receipt["archive"]) as archive:
+            names = {name.split("/", 1)[1] for name in archive.getnames() if "/" in name}
+        self.assertNotIn("docs/reports/coverage.zip", names)
+        for name in ["LICENSE", "NOTICE", "MODULE.bazel", *kept]:
+            self.assertIn(name, names)
+        self.assertEqual(source.verify_archive(self.artifacts, commit)["files"], receipt["files"])
 
     def test_tampered_archive_and_unexpected_files_are_rejected(self):
         receipt = source.create_archive(self.artifacts)

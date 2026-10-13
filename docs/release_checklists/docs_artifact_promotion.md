@@ -14,7 +14,10 @@ It does not rebuild, repack, or re-upload the site.
    `gh api repos/jwmcglynn/donner/actions/artifacts/ARTIFACT_ID --jq .digest`. Record the full
    `sha256:...` value. Confirm the artifact is not expired and the run is a successful main push.
 3. The `docs` role of the [release candidate record](../release_candidate.md) binds the
-   candidate build with the documentation review and security decision. The record has no slot
+   candidate build with the documentation review and security decision. Its `docs-provenance`
+   role binds `donner-docs-provenance-<attempt>` from the same run: the build's Doxygen and
+   Graphviz versions, its `artifact.tar` SHA-256 and its generated module lockfile, which is
+   retained there rather than published on the site. The record has no slot
    for the previous healthy docs build, so write its six values in the release tracking issue
    before any promotion. Both builds must contain a matching `docs-build.json` marker. The
    previous artifact must still be available for rollback; an expired or pre-marker artifact

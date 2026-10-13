@@ -2,6 +2,7 @@ import { expect, type Page, test } from "@playwright/test";
 import { execFileSync } from "node:child_process";
 import { writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { PNG } from "pngjs";
 import { installBrowserStallDiagnostics } from "./browser-stall-diagnostics";
 
 installBrowserStallDiagnostics(test);
@@ -435,10 +436,24 @@ test("standalone Geode wasm selects the browser backend and paints SVG pixels", 
     "the standalone browser module must create only one WebGPU device",
   ).toBe(1);
 
-  const png = await page.locator("#canvas").evaluate((element) =>
-    (element as HTMLCanvasElement).toDataURL("image/png")
-  );
-  expect(png).toMatch(/^data:image\/png;base64,/);
+  // Compare the renderer's RGBA, not a canvas readback: the 2D canvas premultiplies alpha,
+  // and its unpremultiply rounding on export varies between browser releases.
+  const rendered = await page.evaluate(() => {
+    const render = (window as Window & {
+      __donnerLastRender?: { width: number; height: number; rgba: Uint8ClampedArray };
+    }).__donnerLastRender;
+    if (!render) return null;
+    let binary = "";
+    for (let offset = 0; offset < render.rgba.length; offset += 0x8000) {
+      binary += String.fromCharCode(...render.rgba.subarray(offset, offset + 0x8000));
+    }
+    return { width: render.width, height: render.height, rgba: btoa(binary) };
+  });
+  expect(rendered, "the page must expose the renderer's RGBA output").not.toBeNull();
+  const image = new PNG({ width: rendered!.width, height: rendered!.height });
+  const rgba = Buffer.from(rendered!.rgba, "base64");
+  expect(rgba.length).toBe(rendered!.width * rendered!.height * 4);
+  rgba.copy(image.data);
   const outputDirectory = process.env.TEST_UNDECLARED_OUTPUTS_DIR;
   const compare = process.env.DONNER_BROWSER_GOLDEN_COMPARE;
   const golden = process.env.DONNER_BROWSER_GOLDEN_PNG;
@@ -446,7 +461,7 @@ test("standalone Geode wasm selects the browser backend and paints SVG pixels", 
   expect(compare, "the shared pixelmatch comparator is missing").toBeTruthy();
   expect(golden, "the committed SVG golden is missing").toBeTruthy();
   const actual = join(outputDirectory!, "standalone_geode_browser_actual.png");
-  writeFileSync(actual, Buffer.from(png.slice("data:image/png;base64,".length), "base64"));
+  writeFileSync(actual, PNG.sync.write(image));
   execFileSync(resolve(compare!), [], {
     env: {
       ...process.env,
@@ -457,6 +472,37 @@ test("standalone Geode wasm selects the browser backend and paints SVG pixels", 
     stdio: "inherit",
     timeout: 10000,
   });
+
+  // The golden covers the renderer's output; also check that the page presented it. The canvas
+  // keeps alpha exactly and each color channel to within the premultiplied-alpha quantization
+  // step, 255 / alpha, which bounds the browser's rounding without depending on its release.
+  const presented = await page.evaluate(() => {
+    const render = (window as Window & {
+      __donnerLastRender?: { width: number; height: number; rgba: Uint8ClampedArray };
+    }).__donnerLastRender!;
+    const canvas = document.getElementById("canvas") as HTMLCanvasElement;
+    if (canvas.width < render.width || canvas.height < render.height) {
+      return { compared: 0, mismatches: -1 };
+    }
+    const shown = canvas.getContext("2d")!.getImageData(0, 0, render.width, render.height).data;
+    let compared = 0;
+    let mismatches = 0;
+    for (let offset = 0; offset < render.rgba.length; offset += 4) {
+      const alpha = render.rgba[offset + 3];
+      let matches = shown[offset + 3] === alpha;
+      if (alpha > 0) {
+        compared++;
+        const step = Math.ceil(255 / alpha);
+        for (let channel = 0; channel < 3; channel++) {
+          matches &&= Math.abs(shown[offset + channel] - render.rgba[offset + channel]) <= step;
+        }
+      }
+      if (!matches) mismatches++;
+    }
+    return { compared, mismatches };
+  });
+  expect(presented.compared, "the presented canvas must hold covered pixels").toBeGreaterThan(0);
+  expect(presented.mismatches, "the canvas must present the renderer's pixels").toBe(0);
 
   expect(pageErrorCount, `browser page error categories: ${pageErrorCategories.join(",")}`).toBe(0);
 });

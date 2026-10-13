@@ -232,6 +232,19 @@ class CiRunnerRoutingTest(unittest.TestCase):
         self.assertIn("outputs.use_self_hosted_macos != 'true'", hosted)
         self.assertIn("outputs.use_self_hosted_macos == 'true'", self_hosted)
 
+    def test_hosted_browser_subset_follows_the_macos_runner_gate(self):
+        # When the self-hosted macOS lane replaces the hosted job on a trusted PR, a hosted job
+        # still runs main's browser step if the PR reaches a browser test. It never runs when
+        # the hosted job runs anyway (main pushes, untrusted PRs, the ci:hosted-macos label).
+        subset = self._job_body("macos-browser")
+        condition = subset.split("    if: ", 1)[1].split("\n", 1)[0]
+        self.assertIn("    runs-on: macos-26\n", subset)
+        self.assertIn("github.event_name == 'pull_request'", condition)
+        self.assertIn("needs.gatekeeper.outputs.use_self_hosted_macos == 'true'", condition)
+        self.assertIn("(needs.determine-targets.outputs.fallback == 'true' || "
+                      "needs.determine-targets.outputs.browser_affected == 'true')", condition)
+        self.assertNotIn("labels", condition)
+
 
 if __name__ == "__main__":
     unittest.main()
