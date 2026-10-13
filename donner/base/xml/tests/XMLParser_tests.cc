@@ -2306,6 +2306,38 @@ TEST_F(XMLParserTests, ParseXMLDeclaration) {
   EXPECT_THAT(node.getAttribute("version"), Eq("1.0"));
 }
 
+TEST_F(XMLParserTests, Utf8EncodingDeclarationPreservesText) {
+  for (const std::string_view declaration :
+       {"", "<?xml version='1.0' encoding='UTF-8'?>", "<?xml version='1.0' encoding='uTf-8'?>"}) {
+    SCOPED_TRACE(declaration);
+    const std::string source = "\xEF\xBB\xBF" + std::string(declaration) + "<root>\xC3\xA9</root>";
+    auto result = XMLParser::Parse(source);
+    ASSERT_THAT(result, NoParseError());
+    const XMLNode root = result.result().root().lastChild().value();
+    EXPECT_THAT(root.value(), testing::Optional(RcString("\xC3\xA9")));
+  }
+}
+
+TEST_F(XMLParserTests, UnsupportedDeclaredEncodingFailsBeforeReadingLegacyText) {
+  for (const std::string_view encoding : {"Windows-1251", "ISO-8859-1", "UTF-16", "US-ASCII"}) {
+    SCOPED_TRACE(encoding);
+    for (const std::string_view content : {"ASCII", "\xE9"}) {
+      SCOPED_TRACE(content);
+      const std::string source = "<?xml version='1.0' encoding='" + std::string(encoding) +
+                                 "'?><root>" + std::string(content) + "</root>";
+      EXPECT_THAT(XMLParser::Parse(source),
+                  ParseErrorIs("Unsupported XML encoding; transcode input to UTF-8 and update or "
+                               "remove the encoding declaration"));
+    }
+  }
+}
+
+TEST_F(XMLParserTests, EncodingLikeContentDoesNotDeclareDocumentEncoding) {
+  EXPECT_THAT(XMLParser::Parse("<?info encoding='Windows-1251'?><root/>"), NoParseError());
+  EXPECT_THAT(XMLParser::Parse("<!-- encoding='Windows-1251' --><root/>"), NoParseError());
+  EXPECT_THAT(XMLParser::Parse("<root encoding='Windows-1251'/>"), NoParseError());
+}
+
 TEST_F(XMLParserTests, ParseXMLDeclarationErrors) {
   EXPECT_THAT(XMLParser::Parse(R"(<?xml version="1.0")"),
               ParseErrorIs("XML declaration missing closing '?>'"));

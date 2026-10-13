@@ -21,6 +21,7 @@
 #include "donner/svg/SVGElement.h"
 #include "donner/svg/components/DescriptiveTextComponent.h"
 #include "donner/svg/components/DocumentResourceFamilyBudget.h"
+#include "donner/svg/components/ElementTypeComponent.h"
 #include "donner/svg/components/ParsedPayloadResourceBudget.h"
 #include "donner/svg/components/RenderingBehaviorComponent.h"
 #include "donner/svg/components/SVGDocumentContext.h"
@@ -606,13 +607,7 @@ public:
     }
 
     auto element = SVGUnknownElement::CreateOn(node.entityHandle(), tagName);
-    if (!isSvgNamespace) {
-      // A foreign-namespace element is retained for whole-tree consumers, not for painting: no
-      // conforming SVG consumer renders it or its subtree, and the unknown-element default
-      // ("renders and traverses children") would otherwise make it behave like a <g>.
-      node.entityHandle().emplace_or_replace<components::RenderingBehaviorComponent>(
-          components::RenderingBehavior::Nonrenderable);
-    }
+    node.entityHandle().get<components::ElementTypeComponent>().setInSvgNamespace(isSvgNamespace);
     return ParseAttributes(context_, element, node);
   }
 

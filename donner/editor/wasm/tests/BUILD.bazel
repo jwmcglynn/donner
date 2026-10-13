@@ -752,6 +752,7 @@ playwright_bin.playwright_test(
         "remote-webserver.mjs",
         "standalone-geode-browser-renderer.spec.ts",
         ":node_modules/@playwright/test",
+        ":node_modules/pngjs",
         "//donner/editor/tests:standalone_geode_browser_png_compare",
         "//donner/editor/tests:testdata/browser/standalone_geode_browser_renderer.png",
         "//donner/svg/renderer/wasm:_geode_browser_test_package_for_playwright",

@@ -30,16 +30,18 @@ Every Donner target that references one of those hidden repos must be guarded by
 
 ## Release protocol
 
-A maintainer approves and publishes a GitHub release. `Release` promotes its qualified source
-archive and CLI binaries. A separate manual workflow prepares a BCR fork branch without filing
-an upstream PR. Only after the maintainer reviews and approves the exact fork diff and proposed
-PR content does a person open the upstream PR. A completed Release, tag push or main-branch merge
+A maintainer assembles one immutable [release candidate record](../release_candidate.md), then
+approves and publishes a GitHub release that names it. `Release` promotes exactly the qualified
+source archive and CLI binaries that record binds. A separate manual workflow prepares a BCR
+fork branch without filing an upstream PR. Only after the maintainer reviews and approves the
+exact fork diff and proposed PR content does a person open the upstream PR. A completed Release, tag push or main-branch merge
 alone does not submit to BCR. Prereleases do not open BCR PRs.
 
 | Stage                    | Evidence                                                                                                                                                             | Credentials                                          |
 | ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------- |
 | BCR Preflight            | Committed source archive, both lockfile-bound CLI binaries, upstream admission report, Ubuntu/macOS × Bazel 7/8 consumer matrix with its configured dependency audit | Read-only build jobs; scoped OIDC/attestation signer |
-| Release                  | Exact preflight run/attempt, verified retained source and binary bytes, uploaded asset digests                                                                       | Release assets and attestations                      |
+| Assemble candidate       | Manual dispatch on the candidate commit naming every qualifying attempt and both review reports; verified record retained 90 days and attested                       | Read-only token; scoped OIDC/attestation signer      |
+| Release                  | Named record run/attempt and digest, re-verified record and retained source and binary bytes, uploaded asset digests                                                 | Release assets and attestations                      |
 | Prepare BCR fork branch  | Manual dispatch, successful Release run, approved source commit/digest, released bytes and matching remote tag                                                       | Fork-scoped token behind a protected environment     |
 | File upstream BCR PR     | Reviewed exact fork diff and PR title/body, separate approval of that filing                                                                                         | Maintainer's GitHub session                          |
 | BCR admission and builds | Upstream checks, maintainer review where required, platform matrix                                                                                                   | BCR-owned infrastructure                             |
@@ -63,8 +65,16 @@ alone does not submit to BCR. Prereleases do not open BCR PRs.
 5. Confirm `donner-bcr-qualified-<attempt>` and both `donner-svg-<platform>-<commit>-<attempt>`
    artifacts, including each generated Bazel lockfile, are retained. Artifact retention is 90 days; run a fresh preflight before approval if
    any expires. Use a successful manually dispatched full preflight on main for the exact source
-   commit, never a slim push run, a PR or a feature-branch run. Add `Release-Candidate-Preflight: <run-id>/<attempt>` as a line in the release body
-   before publication. The Release workflow accepts only that named run and attempt.
+   commit, never a slim push run, a PR or a feature-branch run.
+6. While `main` still points at the candidate commit, dispatch `Assemble release candidate` with
+   that commit, the preflight, Editor WASM, docs build, CI, coverage, fuzz and sanitizer run IDs
+   and attempts, and the issue comment IDs of the security and supply-chain review reports
+   ([assembly](../release_candidate.md)). It verifies and retains the record, attests it, and
+   prints the release body line. Add that line,
+   `Release-Candidate-Record: <assembly-run-id>/<attempt> sha256:<record-sha256>`, to the release
+   body before publication. The Release workflow accepts only that record, and rejects a body
+   that names a `Release-Candidate-Preflight:` attempt directly. A changed input needs a new
+   commit and a new record; a record is never edited.
 
 ### Source archive and preflight
 
@@ -130,9 +140,12 @@ notice, and admission rejection paths; `//tools:bcr_dependency_closure_tests` co
 ### Publish and observe
 
 1. After release approval, create the intended immutable tag and publish the GitHub release.
-2. Watch `Release` resolve the named preflight attempt and download its source archive, both CLI
-   binaries, and their generated lockfiles and license notices. It verifies their retained bytes and preflight build attestations, then uploads those exact bytes
-   without compiling or repackaging. The source URL is:
+2. Watch `Release` resolve the named record. It downloads the record and every artifact the record
+   binds by artifact ID, checks the record digest, re-runs the candidate verifier with the 30-day
+   publication retention window, and verifies the record attestation and the preflight build
+   attestations. It then uploads exactly the record's source archive, both CLI binaries, their
+   generated lockfiles and license notices, and the record itself as
+   `donner-X.Y.Z.candidate.json`, without compiling or repackaging. The source URL is:
    `https://github.com/jwmcglynn/donner/releases/download/vX.Y.Z/donner-X.Y.Z.tar.gz`.
 3. Require server-reported SHA-256 confirmation for every uploaded asset. An existing identical asset
    is accepted; a conflicting asset stops publication. `//tools:release_artifact_publisher_tests`
@@ -161,9 +174,10 @@ notice, and admission rejection paths; `//tools:bcr_dependency_closure_tests` co
 - For a failed preflight, rerun all jobs. A failed-jobs-only rerun is rejected by the qualification
   job if successful CLI artifacts remain attached to an earlier attempt. For a transient Release
   failure, rerun the failed Release job. It downloads and re-verifies the same
-  preflight attempt named in the release event; it never builds a replacement. Missing, expired, or
-  ambiguous artifacts stop publication. Requalify a new candidate before release approval; after
-  publication, do not silently substitute a later preflight attempt.
+  record named in the release event; it never builds a replacement. A missing, expired,
+  mismatched or ambiguous record or artifact stops publication. Assemble a new record before
+  release approval; after publication, do not silently substitute a later record or preflight
+  attempt.
 - If fork preparation fails before a branch push, start a new manual dispatch with the same
   approved Release run ID, source commit and archive SHA-256, or rerun all jobs. A failed-jobs-only
   rerun cannot find the entry bundle retained under the original run attempt. A competing branch
@@ -289,7 +303,7 @@ version, including those that allow yanked versions.
 
 1. Write the new notes: a notice at the top that states the problem, the date, whether the
    version is yanked or superseded, and links to the replacement release and the rollback issue.
-   Keep the rest of the body, including the `Release-Candidate-Preflight:` line, unchanged.
+   Keep the rest of the body, including the `Release-Candidate-Record:` line, unchanged.
 2. Run `gh release edit vX.Y.Z --notes-file notes.md`. `Release` runs only on the `published`
    event (`.github/workflows/release.yml`), so editing the notes does not run it again.
 3. When a replacement is published, confirm that it, not the withdrawn release, is marked
@@ -305,9 +319,9 @@ It redeploys the previous retained, marker-bearing Pages build by artifact ID th
 
 **Web editor.** **Gap:** no workflow in this repository deploys the editor, and editor hosting is
 outside the repository. `Editor WASM` retains a package named `donner-editor-wasm-geode-<commit>`
-with `SHA256SUMS`, `provenance.json`, the `site/` files and the `deploy/` files. It is retained
-for 30 days, shorter than the 90 days of the other release artifacts, so the editor rollback
-window ends 30 days after that build. To reactivate a previous package by hand:
+with `SHA256SUMS`, `provenance.json`, its generated `MODULE.bazel.lock`, the `site/` files and
+the `deploy/` files. It is retained for 90 days, like the other release artifacts, so the editor
+rollback window ends 90 days after that build. To reactivate a previous package by hand:
 
 1. Set `EDITOR_ARTIFACT_ID`, `EDITOR_ZIP_SHA256` (64 hex digits without the `sha256:` prefix),
    `EDITOR_SOURCE_REVISION`, `EDITOR_PRODUCER_RUN_ID` and `EDITOR_PRODUCER_ATTEMPT` from the
@@ -377,7 +391,7 @@ site or the upstream registry.
 
 - **Fixture tests.** Run
   `bazel test //tools:bcr_release_tests //tools:release_artifact_publisher_tests //tools:pages_artifact_tests //tools:release_candidate_tests`.
-  They cover preflight selection, submission planning, preservation of existing yanks, write-once
+  They cover record selection, record assembly and Release re-verification, submission planning, preservation of existing yanks, write-once
   asset publication with conflicts and lost responses, Pages artifact selection and candidate
   record verification. They use mocked GitHub responses and publish nothing.
 - **Yank PR.** In a local clone of the registry, add a test entry to

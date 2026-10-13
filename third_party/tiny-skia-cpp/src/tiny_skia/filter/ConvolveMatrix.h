@@ -16,26 +16,25 @@ enum class ConvolveEdgeMode {
 
 /// Parameters for the convolve matrix filter.
 struct ConvolveParams {
-  int orderX = 3;                          ///< Kernel width.
-  int orderY = 3;                          ///< Kernel height.
-  std::span<const double> kernel;          ///< Kernel values (orderX * orderY, row-major).
-  double divisor = 1.0;                    ///< Divides the weighted sum.
-  double bias = 0.0;                       ///< Offset added after division.
-  int targetX = 1;                         ///< X offset of kernel center.
-  int targetY = 1;                         ///< Y offset of kernel center.
+  int orderX = 3;                  ///< Kernel width.
+  int orderY = 3;                  ///< Kernel height.
+  std::span<const double> kernel;  ///< Kernel values (orderX * orderY, row-major).
+  double divisor = 1.0;            ///< Divides the weighted sum.
+  double bias = 0.0;               ///< Offset added after division.
+  int targetX = 1;                 ///< X offset of kernel center.
+  int targetY = 1;                 ///< Y offset of kernel center.
   ConvolveEdgeMode edgeMode = ConvolveEdgeMode::Duplicate;  ///< Edge handling.
-  bool preserveAlpha = false;              ///< If true, alpha passes through unchanged.
+  bool preserveAlpha = false;  ///< If true, alpha passes through unchanged.
 };
 
 /// Applies a 2D convolution matrix to a premultiplied RGBA pixmap.
 ///
-/// For each output pixel (x,y):
-///   result[c] = bias + (1/divisor) * sum_{i,j}( kernel[i*orderX+j] * src[...][c] )
-/// where the source pixel is fetched according to edgeMode for out-of-bounds access.
+/// With preserveAlpha=false, convolution uses premultiplied channels. Alpha receives the
+/// unscaled bias; RGB receives bias times that raw resulting alpha. Stored alpha is clamped
+/// to [0, 1] and RGB to [0, stored alpha]. The kernel is rotated 180 degrees before sampling.
 ///
-/// When preserveAlpha is true, only RGB channels are convolved; alpha is copied from src.
-///
-/// The convolution operates on unpremultiplied color values to avoid darkening at edges.
+/// With preserveAlpha=true, convolution uses unpremultiplied RGB with unscaled bias, then
+/// clamps and premultiplies by the unchanged source alpha.
 ///
 /// @param src Source pixmap (premultiplied RGBA).
 /// @param dst Destination pixmap (must be same size as src).

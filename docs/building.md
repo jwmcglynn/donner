@@ -337,6 +337,20 @@ This is a local dev-box workaround, not the default, so it doesn't force an `lld
 dependency onto CI images that already link fine. See
 [#665](https://github.com/jwmcglynn/donner/issues/665).
 
+### `-c opt` link fails with `unrecognized option '--icf=safe'`
+
+Optimized Linux builds of the shipped binaries (`donner-svg`, `svg_to_png` and the editor) fold
+identical functions at link time with `-Wl,--icf=safe`, which `lld` and `ld.gold` support. Bazel's
+autoconfigured toolchain picks one of those whenever it is installed; this error means it fell
+back to GNU `ld` (bfd), which does not. Either install `lld` and build with `--config=lld`, or turn
+the folding off:
+
+```sh
+bazel build -c opt --//build_defs:linker_icf=false //donner/svg/tool:donner-svg
+```
+
+Folding changes only the binary's size, not its behavior.
+
 ### What's with the build times?
 
 Donner builds its rendering implementation from source. Shipped native GPU products have no

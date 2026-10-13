@@ -8,6 +8,7 @@ tiny_skia_dual_mode_cc_test(
     name = "tiny_skia_filter_tests",
     srcs = [
         "ColorSpaceTest.cpp",
+        "ConvolveMatrixTest.cpp",
         "FilterGraphColorSpaceTest.cpp",
         "FilterSimdParityTest.cpp",
         "SimdVecTest.cpp",

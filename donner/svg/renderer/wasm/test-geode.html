@@ -202,6 +202,9 @@
     const numBytes = w * h * 4;
     const pixels = new Uint8ClampedArray(Module.HEAPU8.buffer, ptr, numBytes);
     const imageData = new ImageData(new Uint8ClampedArray(pixels), w, h);
+    // The 2D canvas stores premultiplied alpha, so reading it back is lossy at partial
+    // coverage; keep the renderer's own RGBA for exact comparison.
+    window.__donnerLastRender = { width: w, height: h, rgba: imageData.data };
     ctx.putImageData(imageData, 0, 0);
 
     donnerFreePixels(ptr);

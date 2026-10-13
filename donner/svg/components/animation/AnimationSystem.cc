@@ -10,6 +10,7 @@
 #include "donner/base/Path.h"
 #include "donner/base/parser/NumberParser.h"
 #include "donner/base/xml/components/TreeComponent.h"
+#include "donner/svg/components/ElementTypeComponent.h"
 #include "donner/svg/components/SVGDocumentContext.h"
 #include "donner/svg/components/animation/AnimateTransformComponent.h"
 #include "donner/svg/components/animation/AnimateValueComponent.h"
@@ -686,10 +687,14 @@ bool ProcessAnimation(Registry& registry, Entity entity, double documentTime,
   return true;
 }
 
+/// Collects animation elements in sorted order. An animation element moved into a foreign
+/// namespace by a namespace declaration edit keeps its parsed components so restoring the
+/// namespace restores it, but is inert while foreign, matching a fresh parse of the edited source.
 std::vector<Entity> CollectAnimationEntities(Registry& registry) {
   std::vector<Entity> entities;
   for (auto [entity, timing] : registry.view<AnimationTimingComponent>().each()) {
-    if (registry.any_of<SetAnimationComponent, AnimateValueComponent, AnimateTransformComponent>(
+    if (HasSvgNamespace(registry, entity) &&
+        registry.any_of<SetAnimationComponent, AnimateValueComponent, AnimateTransformComponent>(
             entity)) {
       entities.push_back(entity);
     }

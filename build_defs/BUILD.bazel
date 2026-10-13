@@ -242,6 +242,22 @@ config_setting(
     visibility = ["//visibility:public"],
 )
 
+# Identical code folding (`-Wl,--icf=safe`) for the shipped binaries in optimized Linux links. The
+# autoconfigured toolchain links with lld or gold whenever either is installed, and both accept the
+# flag; a host whose toolchain falls back to GNU ld (bfd), which rejects it, builds with
+# `--//build_defs:linker_icf=false` or `--config=lld`.
+bool_flag(
+    name = "linker_icf",
+    build_setting_default = True,
+)
+
+config_setting(
+    name = "linux_opt_icf",
+    constraint_values = ["@platforms//os:linux"],
+    flag_values = {":linker_icf": "True"},
+    values = {"compilation_mode": "opt"},
+)
+
 config_setting(
     name = "fuzzers_enabled",
     flag_values = {

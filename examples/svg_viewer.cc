@@ -40,10 +40,10 @@
 #include "donner/svg/DonnerController.h"
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/SVGElement.h"
+#include "donner/svg/SVGGElement.h"
 #include "donner/svg/SVGGeometryElement.h"
 #include "donner/svg/SVGPathElement.h"
 #include "donner/svg/SVGRectElement.h"
-#include "donner/svg/SVGUnknownElement.h"
 #include "donner/svg/parser/SVGParser.h"
 #include "donner/svg/renderer/Renderer.h"
 #include "glad/glad.h"
@@ -116,7 +116,7 @@ struct ViewerState {
     // Inject an editor-only container holding the selection chrome as
     // regular SVG elements. The renderer draws them alongside the real
     // document; toggling display:inline/none shows or hides them.
-    auto editorOnly = SVGUnknownElement::Create(document, "editor-only");
+    auto editorOnly = SVGGElement::Create(document);
     document.svgElement().appendChild(editorOnly);
 
     boundsShape = SVGRectElement::Create(document);
