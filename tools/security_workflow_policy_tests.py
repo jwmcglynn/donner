@@ -243,6 +243,7 @@ BUILDBUDDY_JOBS = {
 # Where a job may read the one pull request trust rule (.github/actions/pr-trust).
 TRUST_GATES = ("needs.gatekeeper.outputs", "steps.pr_trust.outputs")
 BUILDBUDDY_DOWNLOADS = {"minimal", "toplevel", "all"}
+SECRET_NAMES_BUILDBUDDY = ("BUILDBUDDY_API_KEY", "BUILDBUDDY_API_KEY_READONLY")
 BAZEL_COMMAND = re.compile(r"\bbazelisk (?:build|test|fetch|query|cquery|coverage|run)\b")
 
 
@@ -266,35 +267,81 @@ def _trust_gates(workflow, job, steps_before):
     return gates
 
 
+def _writer_step_problem(condition, inputs, gates):
+    if inputs["api-key"] != "${{ secrets.BUILDBUDDY_API_KEY }}":
+        return "passes the read-write key through an unreviewed input"
+    if _main_write_only(condition):
+        return None
+    for gate in gates:
+        trusted = "(%s) || %s.trusted_pr == 'true'" % (MAIN_CACHE_WRITE, gate)
+        if (condition == trusted and inputs["trusted-pr"] == "${{ %s.trusted_pr }}" % gate
+                and inputs["renovate-pr"] == "${{ %s.renovate_pr }}" % gate):
+            return None
+    return "gives the read-write key to a run that is neither main nor a trusted pull request"
+
+
+def _reader_step_problem(condition, inputs, gates):
+    if inputs["read-only-api-key"] != "${{ secrets.BUILDBUDDY_API_KEY_READONLY }}":
+        return "passes the read-only key through an unreviewed input"
+    for gate in gates:
+        if (condition == "%s.renovate_pr == 'true'" % gate and
+                inputs["renovate-pr"] == "${{ %s.renovate_pr }}" % gate):
+            return None
+    return "gives the read-only key to a run that is not a Renovate pull request"
+
+
+BUILDBUDDY_STEP_CHECKS = {
+    frozenset({"BUILDBUDDY_API_KEY"}): _writer_step_problem,
+    frozenset({"BUILDBUDDY_API_KEY_READONLY"}): _reader_step_problem,
+}
+
+
 def _buildbuddy_step_problem(workflow, job, steps_before, step):
     """Why one BuildBuddy step could hand a key to the wrong run, or None."""
-    secrets = _secret_reads(step)
-    condition = _step_key(step, "if", 8) or ""
-    gates = _trust_gates(workflow, job, steps_before)
     inputs = {key: _with_key(step, key, 8) for key in
               ("api-key", "read-only-api-key", "trusted-pr", "renovate-pr", "download-outputs")}
     if inputs["download-outputs"] not in BUILDBUDDY_DOWNLOADS:
         return "does not choose --remote_download_outputs"
-    if secrets == {"BUILDBUDDY_API_KEY"}:
-        if inputs["api-key"] != "${{ secrets.BUILDBUDDY_API_KEY }}":
-            return "passes the read-write key through an unreviewed input"
-        if _main_write_only(condition):
-            return None
-        for gate in gates:
-            trusted = "(%s) || %s.trusted_pr == 'true'" % (MAIN_CACHE_WRITE, gate)
-            if (condition == trusted and inputs["trusted-pr"] == "${{ %s.trusted_pr }}" % gate
-                    and inputs["renovate-pr"] == "${{ %s.renovate_pr }}" % gate):
-                return None
-        return "gives the read-write key to a run that is neither main nor a trusted pull request"
-    if secrets == {"BUILDBUDDY_API_KEY_READONLY"}:
-        if inputs["read-only-api-key"] != "${{ secrets.BUILDBUDDY_API_KEY_READONLY }}":
-            return "passes the read-only key through an unreviewed input"
-        for gate in gates:
-            if (condition == "%s.renovate_pr == 'true'" % gate and
-                    inputs["renovate-pr"] == "${{ %s.renovate_pr }}" % gate):
-                return None
-        return "gives the read-only key to a run that is not a Renovate pull request"
-    return "configures BuildBuddy without exactly one reviewed key"
+    check = BUILDBUDDY_STEP_CHECKS.get(frozenset(_secret_reads(step)))
+    if check is None:
+        return "configures BuildBuddy without exactly one reviewed key"
+    return check(_step_key(step, "if", 8) or "", inputs,
+                 _trust_gates(workflow, job, steps_before))
+
+
+def _buildbuddy_step_violations(workflow, where, job):
+    """Problems of each step that configures BuildBuddy or reads one of its keys."""
+    violations = []
+    steps = _steps(job)
+    for index, step in enumerate(steps):
+        uses_action = _step_action(step, 8) == BUILDBUDDY_ACTION
+        if not uses_action and _secret_reads(step) & set(SECRET_NAMES_BUILDBUDDY):
+            violations.append("%s reads a BuildBuddy key outside the action" % where)
+        problem = uses_action and _buildbuddy_step_problem(workflow, job, steps[:index], step)
+        if problem:
+            violations.append("%s %s" % (where, problem))
+    return violations
+
+
+def _buildbuddy_job_violations(path, name, workflow, steps):
+    """Job-level problems of a lane that configures BuildBuddy."""
+    where = "%s:%s" % (path, name)
+    configured = [index for index, step in enumerate(steps)
+                  if _step_action(step, 8) == BUILDBUDDY_ACTION]
+    violations = []
+    if _runs_self_hosted(path, name, _jobs(workflow)[name]):
+        violations.append("%s uses BuildBuddy on a self-hosted runner" % where)
+    if any(BAZEL_COMMAND.search(step) for step in steps[:max(configured)]):
+        violations.append("%s runs Bazel before configuring BuildBuddy" % where)
+    kinds = Counter(frozenset(_secret_reads(steps[index])) for index in configured)
+    pull_requests = "pull_request" in _triggers(workflow)
+    expected = Counter({frozenset({"BUILDBUDDY_API_KEY"}): 1})
+    if pull_requests:
+        expected[frozenset({"BUILDBUDDY_API_KEY_READONLY"})] = 1
+    if kinds != expected:
+        violations.append("%s does not pair one writer with %s" % (
+            where, "one Renovate reader" if pull_requests else "no reader"))
+    return violations
 
 
 def _buildbuddy_violations(files):
@@ -304,33 +351,10 @@ def _buildbuddy_violations(files):
     for path, workflow in sorted(_workflows(files).items()):
         for name, job in _jobs(workflow).items():
             steps = _steps(job)
-            where = "%s:%s" % (path, name)
-            for index, step in enumerate(steps):
-                secrets = _secret_reads(step) & {"BUILDBUDDY_API_KEY", "BUILDBUDDY_API_KEY_READONLY"}
-                if _step_action(step, 8) != BUILDBUDDY_ACTION:
-                    if secrets:
-                        violations.append("%s reads a BuildBuddy key outside the action" % where)
-                    continue
+            violations.extend(_buildbuddy_step_violations(workflow, "%s:%s" % (path, name), job))
+            if BUILDBUDDY_ACTION in [_step_action(step, 8) for step in steps]:
                 seen.add((path, name))
-                problem = _buildbuddy_step_problem(workflow, job, steps[:index], step)
-                if problem:
-                    violations.append("%s %s" % (where, problem))
-            if (path, name) not in seen:
-                continue
-            if _runs_self_hosted(path, name, job):
-                violations.append("%s uses BuildBuddy on a self-hosted runner" % where)
-            configured = [index for index, step in enumerate(steps)
-                          if _step_action(step, 8) == BUILDBUDDY_ACTION]
-            if any(BAZEL_COMMAND.search(step) for step in steps[:max(configured)]):
-                violations.append("%s runs Bazel before configuring BuildBuddy" % where)
-            kinds = Counter(frozenset(_secret_reads(steps[index])) for index in configured)
-            pull_requests = "pull_request" in _triggers(workflow)
-            expected = Counter({frozenset({"BUILDBUDDY_API_KEY"}): 1})
-            if pull_requests:
-                expected[frozenset({"BUILDBUDDY_API_KEY_READONLY"})] = 1
-            if kinds != expected:
-                violations.append("%s does not pair one writer with %s" % (
-                    where, "one Renovate reader" if pull_requests else "no reader"))
+                violations.extend(_buildbuddy_job_violations(path, name, workflow, steps))
     if seen != BUILDBUDDY_JOBS:
         violations.append("BuildBuddy lanes changed: %s" % sorted(seen))
     return violations
@@ -820,22 +844,21 @@ def _reaches_buildbuddy_credential(entry):
         "*" in entry.split("/", 1)[0] or entry.startswith("..")
 
 
+def _credential_upload_violations(path, name, job):
+    """The BuildBuddy key lives under runner.temp/buildbuddy, so a job that configures it may
+    upload only paths that can reach neither that directory nor the runner.temp root."""
+    return ["%s:%s uploads %s after writing a cache credential" % (path, name, entry)
+            for entries in _upload_paths(job) for entry in entries
+            if _reaches_buildbuddy_credential(entry)]
+
+
 def _upload_violations(path, name, job, uploading_actions):
     violations = []
     local = set(re.findall(r"uses: (\./\.github/actions/[A-Za-z0-9_-]+)", job))
-    # The reviewed collector copies only Bazel test logs, never the workspace that holds the
-    # generated credential fragment, so it stays usable in jobs that write one.
-    # The BuildBuddy key lives under runner.temp/buildbuddy, so a job that configures it may
-    # upload only paths that can reach neither that directory nor the runner.temp root.
+    # The reviewed collector copies only Bazel test logs, so it stays usable in jobs that
+    # configure a cache credential.
     if BUILDBUDDY_ACTION in job:
-        if local & uploading_actions - REVIEWED_UPLOAD_ACTIONS:
-            violations.append("%s:%s uploads through an unreviewed action after writing a "
-                              "cache credential" % (path, name))
-        for entries in _upload_paths(job):
-            for entry in entries:
-                if _reaches_buildbuddy_credential(entry):
-                    violations.append("%s:%s uploads %s after writing a cache credential" %
-                                      (path, name, entry))
+        violations.extend(_credential_upload_violations(path, name, job))
     for action in sorted(local & uploading_actions - REVIEWED_UPLOAD_ACTIONS):
         violations.append("%s:%s uploads through unreviewed action %s" % (path, name, action))
     self_hosted = (path, name) in SELF_HOSTED_JOBS
