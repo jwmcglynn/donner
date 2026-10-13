@@ -8,6 +8,7 @@ Actions API payloads, and the workflow wiring that feeds it is pinned here too.
 """
 
 import importlib.util
+from pathlib import Path
 import re
 import unittest
 
@@ -96,8 +97,32 @@ class PoolStateTests(unittest.TestCase):
         payload = _jobs(("some-hosted-job", "in_progress"))
         self.assertEqual(admission.pool_state(payload, _POOL), admission.ABSENT)
 
+    def test_called_workflow_pool_jobs_count(self):
+        # A reusable workflow call names its jobs `<calling job> / <job>`.
+        payload = _jobs(("base-change-ci / " + _LINUX_LANE, "in_progress"))
+        self.assertEqual(admission.pool_state(payload, _POOL), admission.ACTIVE)
+        payload = _jobs(("base-change-ci / " + _LINUX_LANE, "queued"))
+        self.assertEqual(admission.pool_state(payload, _POOL), admission.PENDING)
+
+    def test_called_workflow_names_match_only_whole_pool_jobs(self):
+        payload = _jobs(("base-change-ci / linux", "in_progress"),
+                        ("x" + _LINUX_LANE, "in_progress"),
+                        (_LINUX_LANE + " / gatekeeper", "in_progress"))
+        self.assertEqual(admission.pool_state(payload, _POOL), admission.ABSENT)
+
 
 class AdmissionTests(unittest.TestCase):
+    def test_executing_called_workflow_run_holds_a_slot(self):
+        # A newer run counts only while its pool job executes, so this fails if a called
+        # run's `<calling job> / linux-self-hosted` job is not recognised as a pool job.
+        runs = [
+            _run(10 + index, _jobs((_LINUX_LANE, "in_progress"))) for index in range(3)
+        ] + [_run(101, _jobs(("base-change-ci / " + _LINUX_LANE, "in_progress")))]
+        decision = _decide(100, runs)
+        self.assertEqual(decision["blockers"],
+                         ["10 (active)", "11 (active)", "12 (active)", "101 (active)"])
+        self.assertFalse(decision["admit"])
+
     def test_empty_pool_admits(self):
         self.assertTrue(_decide(100, [])["admit"])
 
@@ -239,8 +264,21 @@ class TurnstileWiringTests(unittest.TestCase):
         (usage,) = usages
         self.assertRegex(usage, r"(?m)^\s+lane: " + _LINUX_LANE + r"$")
         self.assertRegex(usage, r"(?m)^\s+pool: " + _LINUX_LANE + r"$")
-        self.assertRegex(usage, r"(?m)^\s+pool-workflows: main\.yml$")
+        self.assertRegex(usage, r"(?m)^\s+pool-workflows: main\.yml pr_base_change\.yml$")
         self.assertRegex(usage, r"capacity:\s*\"?" + _EXPECTED_CAPACITY)
+
+    def test_every_workflow_that_calls_ci_shares_the_pool(self):
+        directory = Path(_runfile("donner/.github/workflows/main.yml")).parent
+        callers = sorted(
+            path.name for path in directory.glob("*.y*ml")
+            if re.search(r"(?m)^    uses: \./\.github/workflows/main\.yml\s*$",
+                         path.read_text(encoding="utf-8")))
+        self.assertEqual(callers, ["pr_base_change.yml"])
+        (usage,) = self._turnstile_usages(self.workflows["main.yml"])
+        listed = re.search(r"(?m)^\s+pool-workflows: (.+)$", usage).group(1).split()
+        self.assertEqual(sorted(set(listed) - {"main.yml"}), callers,
+                         "a workflow that calls main.yml can run its self-hosted job, so "
+                         "its runs must be counted by the turnstile")
 
     def _job_body(self, text, job):
         match = re.search(

@@ -6,14 +6,34 @@ env:
   ASPECT_TOOLS_TELEMETRY: "-all"
 
 # Validate PRs targeting main or a dependency branch in a stack.
+#
+# Editing a PR's title or description does not run this workflow: an `edited`
+# trigger here would cancel the run in progress through the PR concurrency group
+# and restart CI with no code change. A base-branch change (an `edited` event
+# with `changes.base`) still needs full CI against the new base, so
+# pr_base_change.yml calls this workflow for those events (`workflow_call`).
+# After a base change, later edits of the same head also rerun that call (see
+# pr_base_change.yml). The PR body check runs in pr_metadata.yml.
 on:
   push:
     branches: ["*"]
   pull_request:
-    types: [opened, synchronize, reopened, edited]
+    types: [opened, synchronize, reopened]
+  workflow_call:
+    # The repository secrets a step here reads. A called workflow receives only the
+    # secrets its caller passes; the buildbuddy-write environment's key reaches the
+    # job that binds that environment directly.
+    secrets:
+      BAZEL_REMOTE_CACHE:
+        required: false
+      BUILDBUDDY_API_KEY_READONLY:
+        required: false
 
+# A base-change run (called from pr_base_change.yml, where the event action is
+# `edited`) has its own PR group: it supersedes an earlier base-change run, but
+# neither cancels nor is cancelled by the push-triggered run of this workflow.
 concurrency:
-  group: ${{ github.event_name == 'pull_request' && format('pr-{0}-{1}', github.workflow, github.event.pull_request.number) || (github.ref == 'refs/heads/main' && format('push-{0}-{1}', github.workflow, github.run_id) || format('push-{0}-{1}', github.workflow, github.ref)) }}
+  group: ${{ github.event_name == 'pull_request' && format('pr-{0}-{1}{2}', github.workflow, github.event.pull_request.number, github.event.action == 'edited' && '-base-change' || '') || (github.ref == 'refs/heads/main' && format('push-{0}-{1}', github.workflow, github.run_id) || format('push-{0}-{1}', github.workflow, github.ref)) }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref != 'refs/heads/main') }}
 
 permissions:
@@ -47,10 +67,6 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-
-      - name: Reject tool-session links in PR body
-        if: github.event_name == 'pull_request'
-        run: python3 tools/check_pr_body.py "$GITHUB_EVENT_PATH"
 
       - id: dup_push
         name: Detect duplicate push (PR already open for this branch)
@@ -695,7 +711,9 @@ jobs:
         with:
           lane: linux-self-hosted
           pool: linux-self-hosted
-          pool-workflows: main.yml
+          # pr_base_change.yml runs this workflow as a reusable workflow call
+          # after a base-branch change, so its runs share the pool.
+          pool-workflows: main.yml pr_base_change.yml
           capacity: "4"
           token: ${{ github.token }}
           timeout-minutes: "150"
