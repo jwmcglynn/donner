@@ -859,6 +859,7 @@ void RenderCoordinator::resetForLoadedDocument(std::uint64_t documentGeneration)
   overviewDocVersion_ = 0;
   pendingOverviewResult_.reset();
   pendingPresentationRefresh_ = false;
+  pendingRenderTreeRebuild_ = false;
   lastPostedAttempt_.reset();
   selectedPrewarmFallback_.reset();
   selectedPrewarmRecoveryPending_ = false;
