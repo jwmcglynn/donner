@@ -407,6 +407,12 @@ class CiPullRequestEventsTest(unittest.TestCase):
         pages = json.dumps([{"workflow_runs": []}, {"workflow_runs": [earlier]}])
         self.assertEqual(self._detect(gh_output=pages)[0], "run_ci=true")
 
+    def test_a_later_base_change_does_not_count_as_earlier(self):
+        # An edit whose detect job runs after a later retarget's run exists must not rerun CI
+        # (it would cancel the retarget's run while testing the old base).
+        later = {"id": 600, "display_title": BASE_CHANGE_RUN_NAME}
+        self.assertEqual(self._detect(runs=[later])[0], "run_ci=false")
+
     def test_detection_fails_toward_running_ci(self):
         self.assertEqual(self._detect(gh_exit=1)[0], "run_ci=true")
         self.assertEqual(self._detect(gh_output="not json")[0], "run_ci=true")
