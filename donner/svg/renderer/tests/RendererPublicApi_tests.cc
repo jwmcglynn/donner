@@ -1166,6 +1166,62 @@ TEST(RendererPublicApiTest, FacadeForwardsFrameStateAndPrimitiveCalls) {
   EXPECT_GE(renderer.height(), 0);
 }
 
+struct DefaultConvolveDivisorCase {
+  const char* name;
+  const char* kernel;
+  const char* divisorAttribute;
+  const char* bias;
+  const char* referencePaint;
+};
+
+void PrintTo(const DefaultConvolveDivisorCase& value, std::ostream* output) {
+  *output << value.name << ": kernel=" << value.kernel << ", divisor=" << value.divisorAttribute
+          << ", bias=" << value.bias;
+}
+
+class DefaultConvolveDivisorTest : public testing::TestWithParam<DefaultConvolveDivisorCase> {};
+
+TEST_P(DefaultConvolveDivisorTest, MatchesSpecifiedNormalization) {
+  if (!ActiveRendererSupportsFeature(RendererBackendFeature::FilterEffects)) {
+    GTEST_SKIP() << "Filter rendering disabled in " << ActiveRendererBackendName();
+  }
+  const auto& params = GetParam();
+  const std::string source =
+      std::string(
+          "<svg xmlns='http://www.w3.org/2000/svg' width='4' height='4'>"
+          "<filter id='f' filterUnits='userSpaceOnUse' x='0' y='0' width='4' height='4' "
+          "color-interpolation-filters='sRGB'><feConvolveMatrix order='1' kernelMatrix='") +
+      params.kernel + "' " + params.divisorAttribute + " bias='" + params.bias +
+      "'/></filter><rect width='4' height='4' fill='red' filter='url(#f)'/></svg>";
+  SVGDocument document = ParseDocument(source);
+  SVGDocument reference =
+      ParseDocument(std::string("<svg xmlns='http://www.w3.org/2000/svg' width='4' height='4'>"
+                                "<rect width='4' height='4' ") +
+                    params.referencePaint + "/></svg>");
+  Renderer actual;
+  actual.draw(document);
+  Renderer expected;
+  expected.draw(reference);
+  editor::tests::CompareBitmapToBitmap(NormalizeSnapshot(actual.takeSnapshot()),
+                                       NormalizeSnapshot(expected.takeSnapshot()), params.name,
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    FilterDefaultDivisor, DefaultConvolveDivisorTest,
+    testing::Values(
+        DefaultConvolveDivisorCase{"SmallPositiveOmitted", "5e-11", "", "0", "fill='red'"},
+        DefaultConvolveDivisorCase{"SmallNegativeOmitted", "-5e-11", "", "0", "fill='red'"},
+        DefaultConvolveDivisorCase{"SmallPositiveExplicit", "5e-11", "divisor='5e-11'", "0",
+                                   "fill='red'"},
+        DefaultConvolveDivisorCase{"SmallNegativeExplicit", "-5e-11", "divisor='-5e-11'", "0",
+                                   "fill='red'"},
+        DefaultConvolveDivisorCase{"ZeroSumOmitted", "0", "", "0.5",
+                                   "fill='white' fill-opacity='0.5'"},
+        DefaultConvolveDivisorCase{"ZeroSumExplicitOne", "0", "divisor='1'", "0.5",
+                                   "fill='white' fill-opacity='0.5'"}),
+    [](const testing::TestParamInfo<DefaultConvolveDivisorCase>& info) { return info.param.name; });
+
 TEST(RendererPublicApiTest, RejectedFilterSuppressesItsSubtreeAndRestoresParent) {
   if (!ActiveRendererSupportsFeature(RendererBackendFeature::FilterEffects)) {
     GTEST_SKIP() << "Filter rendering disabled in this variant (" << ActiveRendererBackendName()
