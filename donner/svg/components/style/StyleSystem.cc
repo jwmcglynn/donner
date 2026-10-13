@@ -81,8 +81,8 @@ bool BlockExternalResources(PropertyRegistry& properties, const PropertyRegistry
   rejected |= BlockExternalReference(properties.mask, local.mask);
   rejected |= BlockExternalReference(properties.clipPath, local.clipPath);
   if (local.filter.state == PropertyState::Inherit) {
-    const auto& effects = properties.filter.get().value();
-    if (std::any_of(effects.begin(), effects.end(), [](const FilterEffect& effect) {
+    const auto* effects = properties.filter.getStoredValue();
+    if (effects && std::any_of(effects->begin(), effects->end(), [](const FilterEffect& effect) {
           return effect.is<FilterEffect::ElementReference>();
         })) {
       properties.filter.set(PropertyState::ExplicitInitial, css::Specificity());
@@ -475,6 +475,47 @@ void StyleSystem::resolveRelativeFontProperties(Registry& registry, Entity paren
 
 void StyleSystem::computePropertiesInto(EntityHandle handle, ComputedStyleComponent& computedStyle,
                                         ParseWarningSink& warningSink) {
+  if (computedStyle.properties) {
+    return;  // Already computed.
+  }
+
+  Registry& registry = *handle.registry();
+  auto& styleBudget = GetStyleResourceBudget(registry);
+
+  const auto* shadowComponent = handle.try_get<ShadowEntityComponent>();
+  const Entity dataEntity = shadowComponent ? shadowComponent->lightEntity : handle.entity();
+
+  // Apply local style.
+  PropertyRegistry properties;
+  if (auto* styleComponent = registry.try_get<StyleComponent>(dataEntity)) {
+    properties = styleComponent->properties;
+  } else {
+    properties = PropertyRegistry();
+  }
+
+  applyStylesheetRules(registry, handle.entity(), dataEntity, properties, styleBudget, warningSink);
+  properties.resolveElementColors(warningSink);
+
+  // Inherit from parent, then charge the dynamic bytes retained by the final computed style.
+  // Charging the parent's source value alone misses large locally parsed vectors and can also
+  // differ from the actual value selected by the cascade.
+  const Entity parent = handle.get<donner::components::TreeComponent>().parent();
+  PropertyRegistry finalProperties =
+      inheritComputedParent(handle, parent, properties, computedStyle, warningSink);
+
+  if (styleBudget.reserveComplexPropertyBytes(handle.entity(),
+                                              finalProperties.complexPropertyBytes())) {
+    computedStyle.properties = std::move(finalProperties);
+  } else {
+    // Once the aggregate retained-byte budget is exhausted, use bounded initial styles for the
+    // remainder of the pass instead of retaining attacker-sized local or inherited vectors.
+    styleBudget.release(handle.entity());
+    computedStyle.properties = PropertyRegistry();
+  }
+
+  // Resolve font-size to absolute pixels. CSS spec requires the computed value of font-size to
+  // always be an absolute length. Relative units (em, %, ex) resolve against the parent's computed
+  // font-size, and percentages resolve against the parent font-size (not the viewBox).
   if (computedStyle.properties) {
     resolveComputedParentFonts(handle, parent, *computedStyle.properties);
   }
