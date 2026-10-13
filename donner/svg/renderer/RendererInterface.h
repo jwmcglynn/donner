@@ -906,6 +906,10 @@ struct PathShape {
   /// `<use>` instance in the same frame.
   std::optional<Transform2d> hostFromLocal;
 
+  /// Whether the geometry and its cached derivatives remain stable until deferred draws flush.
+  /// False requires consumption during drawPath, while sourceEntity can still identify a cache.
+  bool allowDeferredGeometry = true;
+
   /// Geometry to draw, with a null `path` reading as the empty path. The returned reference
   /// is not bound to this `PathShape`: it names either the pointee or a shared empty path
   /// with static storage, so it stays valid after the view itself goes away.
