@@ -127,7 +127,7 @@ std::string_view SamplePickerDescription(std::string_view sampleId) noexcept {
     return "Gradients and clipping";
   }
   if (sampleId == "animation") {
-    return "Motion and looping animation";
+    return "Hover, press, and click to animate";
   }
   return "Built-in SVG sample";
 }

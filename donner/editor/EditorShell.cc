@@ -2477,6 +2477,8 @@ bool EditorShell::tryApplyGroupOperation(bool ungroup) {
 void EditorShell::resetPresentationForLoadedDocument(std::string_view canonicalSource) {
   animationPreview_ = false;
   animationResetPending_ = false;
+  renderCoordinator_.setPointerTargetCaptureEnabled(false);
+  resetPreviewPointer();
   cancelEyedropper(true);
   cancelSampleThumbnailGeneration();
   foregroundPresentationObligation_.reset();
@@ -5201,6 +5203,7 @@ void EditorShell::renderRenderPane(ImGuiWindowFlags paneFlags) {
   const bool overCanvasScrollbar = internal::CanvasScrollbarsCaptureInput(
       adaptiveUiLayout_.showCanvasScrollbars, interactionController_.viewport(),
       Vector2d(hoverMousePos.x, hoverMousePos.y));
+  capturePreviewPointer(canvasHovered, spaceHeld, overCanvasScrollbar);
   const bool toolEligible = previewAllowsEditing(canvasHovered) &&
                             !interactionController_.panning() && !spaceHeld && !overCanvasScrollbar;
   const bool selectToolActive = activeTool_ == ActiveTool::Select;
@@ -6395,6 +6398,144 @@ void EditorShell::renderCanvasScrollbars() {
   }
 }
 
+void EditorShell::resetPreviewPointer() {
+  previewPointerInput_ = {};
+  previewPointerEdges_.clear();
+  previewHoveredElement_.reset();
+  previewPressedElement_.reset();
+  previewPreviousPointerPosition_.reset();
+  previewPressedDoubleClick_ = false;
+  previewPointerOverflow_ = false;
+}
+
+void EditorShell::capturePreviewPointer(bool canvasHovered, bool spaceHeld, bool overScrollbar) {
+  if (!animationPreview_) {
+    return;
+  }
+  const bool eligible = canvasHovered && !spaceHeld && !overScrollbar &&
+                        !interactionController_.panning() && !ImGui::GetIO().AppFocusLost;
+  const ImVec2 position = ImGui::GetMousePos();
+  previewPointerInput_ = {
+      .point = eligible ? std::make_optional(Vector2d(position.x, position.y)) : std::nullopt,
+      .pressed = ImGui::IsMouseClicked(ImGuiMouseButton_Left),
+      .released = ImGui::IsMouseReleased(ImGuiMouseButton_Left),
+      .doubleClick = ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left),
+  };
+  const auto frame = renderCoordinator_.framePresentation();
+  if (frame && previewPointerInput_.point) {
+    previewPointerInput_.target = frame->pointerTargetAt(*previewPointerInput_.point);
+    previewPointerInput_.documentGeneration = frame->identity().documentGeneration;
+  } else {
+    previewPointerInput_.documentGeneration = app_.document().documentGeneration();
+  }
+  if (ImGui::GetIO().AppFocusLost) {
+    previewPointerEdges_.clear();
+    previewPointerOverflow_ = true;
+  }
+  queuePreviewPointerEdge();
+}
+
+void EditorShell::queuePreviewPointerEdge() {
+  if ((!previewPointerInput_.pressed && !previewPointerInput_.released) ||
+      previewPointerOverflow_) {
+    return;
+  }
+  constexpr std::size_t kMaximumQueuedPointerEdges = 32;
+  if (previewPointerEdges_.size() == kMaximumQueuedPointerEdges) {
+    previewPointerEdges_.clear();
+    previewPointerOverflow_ = true;
+    return;
+  }
+  previewPointerEdges_.push_back(previewPointerInput_);
+}
+
+void EditorShell::collectPreviewHoverEvents(const std::optional<svg::SVGElement>& target,
+                                            std::vector<PreviewMouseDispatch>& events) {
+  if (target == previewHoveredElement_) {
+    return;
+  }
+  if (previewHoveredElement_) {
+    events.push_back({svg::EventType::MouseOut, *previewHoveredElement_});
+    events.push_back({svg::EventType::MouseLeave, *previewHoveredElement_});
+  }
+  if (target) {
+    events.push_back({svg::EventType::MouseOver, *target});
+    events.push_back({svg::EventType::MouseEnter, *target});
+  }
+  previewHoveredElement_ = target;
+}
+
+void EditorShell::collectPreviewButtonEvents(const PreviewPointerInput& input,
+                                             const std::optional<svg::SVGElement>& target,
+                                             std::vector<PreviewMouseDispatch>& events) {
+  if (input.pressed) {
+    previewPressedElement_ = target;
+    previewPressedDoubleClick_ = input.doubleClick;
+    if (target) {
+      events.push_back({svg::EventType::MouseDown, *target});
+    }
+  }
+  if (!input.released) {
+    return;
+  }
+  const auto releasedTarget = target ? target : previewPressedElement_;
+  if (releasedTarget) {
+    events.push_back({svg::EventType::MouseUp, *releasedTarget});
+  }
+  if (target && target == previewPressedElement_) {
+    events.push_back({svg::EventType::Click, *target});
+    if (previewPressedDoubleClick_) {
+      events.push_back({svg::EventType::DblClick, *target});
+    }
+  }
+  previewPressedElement_.reset();
+  previewPressedDoubleClick_ = false;
+}
+
+void EditorShell::collectPreviewPointerEvents(const PreviewPointerInput& input,
+                                              std::vector<PreviewMouseDispatch>& events) {
+  if (input.documentGeneration != app_.document().documentGeneration()) {
+    return;
+  }
+  const auto& target = input.target;
+  collectPreviewHoverEvents(target, events);
+  if (target && input.point != previewPreviousPointerPosition_) {
+    events.push_back({svg::EventType::MouseMove, *target});
+  }
+  previewPreviousPointerPosition_ = input.point;
+  collectPreviewButtonEvents(input, target, events);
+}
+
+void EditorShell::applyPreviewPointerInput() {
+  if (!animationPreview_ || animationResetPending_ || !animationFramePresented() ||
+      renderCoordinator_.asyncRenderer().isBusy()) {
+    return;
+  }
+  const auto access = app_.document().document().tryWriteAccess();
+  if (!access) {
+    return;
+  }
+  std::vector<PreviewMouseDispatch> events;
+  if (previewPointerOverflow_) {
+    if (previewPressedElement_) {
+      events.push_back({svg::EventType::MouseUp, *previewPressedElement_});
+    }
+    previewPressedElement_.reset();
+    previewPointerOverflow_ = false;
+  }
+  for (const auto& input : previewPointerEdges_) {
+    collectPreviewPointerEvents(input, events);
+  }
+  PreviewPointerInput hoverOnly = previewPointerInput_;
+  hoverOnly.pressed = hoverOnly.released = hoverOnly.doubleClick = false;
+  collectPreviewPointerEvents(hoverOnly, events);
+  previewPointerEdges_.clear();
+  // Deliver after UI queries so the render worker sees the resulting dirty state.
+  for (const auto& event : events) {
+    requestRenderAtEndOfFrame_ |= app_.document().dispatchMouseEvent(event.type, event.target);
+  }
+}
+
 void EditorShell::setAnimationPreview(bool enabled) {
   if (enabled == animationPreview_) {
     return;
@@ -6405,7 +6546,9 @@ void EditorShell::setAnimationPreview(bool enabled) {
   }
   commitTextToolIfNeeded();
   cancelEyedropper(true);
+  resetPreviewPointer();
   animationPreview_ = enabled;
+  renderCoordinator_.setPointerTargetCaptureEnabled(enabled);
   animationResetPending_ = true;
   animationPreviewStartSeconds_ = AnimationPreviewClockSeconds();
   animationPreviewLastTime_ = -1.0;
@@ -6418,6 +6561,8 @@ void EditorShell::advanceAnimationPreview(double nowSeconds) {
       app_.document().documentGeneration() != animationPreviewDocumentGeneration_) {
     animationPreview_ = false;
     animationResetPending_ = false;
+    renderCoordinator_.setPointerTargetCaptureEnabled(false);
+    resetPreviewPointer();
     return;
   }
   if (showSamplePicker_) {
@@ -6489,22 +6634,58 @@ void EditorShell::renderAnimationModePanel() {
     ImGui::SetNextWindowPos(
         ImVec2(static_cast<float>(viewport.paneOrigin.x + viewport.paneSize.x) - 204.0f,
                static_cast<float>(palette.bottomRight.y) + 12.0f));
-    ImGui::SetNextWindowSize(ImVec2(200.0f, 52.0f));
+    ImGui::SetNextWindowSize(ImVec2(200.0f, 40.0f));
   }
   const ImGuiWindowFlags flags =
       ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
       (compact ? ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoSavedSettings : 0);
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8.0f, 4.0f));
   ImGui::Begin(compact ? "##animation_mode_panel" : kAnimationModeWindowName, nullptr, flags);
+  ImGui::PopStyleVar();
   const ImVec2 cursor = ImGui::GetCursorScreenPos();
   const float width = std::min(184.0f, ImGui::GetContentRegionAvail().x);
   const float x = cursor.x + (ImGui::GetContentRegionAvail().x - width) * 0.5f;
   const float y = ImGui::GetWindowPos().y + (ImGui::GetWindowSize().y - 32.0f) * 0.5f;
   animationPreviewControlRect_ = Box2d::FromXYWH(x, y, width, 32.0f);
   renderAnimationPreviewControl();
-  ImGui::SetCursorScreenPos(
-      ImVec2(cursor.x, static_cast<float>(animationPreviewControlRect_.bottomRight.y) + 12.0f));
-  ImGui::Dummy(ImVec2(0.0f, 0.0f));
   ImGui::End();
+}
+
+namespace {
+
+ImU32 AnimationModeSegmentBackground(const EditorTheme& theme, bool selected, bool hovered,
+                                     bool active) {
+  if (selected) {
+    return active ? theme.accentActive : hovered ? theme.accentHover : theme.accentDefault;
+  }
+  return active ? theme.surfaceCanvas : hovered ? theme.surfaceHover : theme.surfaceOverlay;
+}
+
+}  // namespace
+
+void EditorShell::renderAnimationModeSegment(bool preview, const ImVec2& position, float width) {
+  const EditorTheme& theme = EditorTheme::Active();
+  const char* label = preview ? "Preview" : "Edit";
+  ImGui::SetCursorScreenPos(position);
+  if (ImGui::InvisibleButton(label, ImVec2(width, 32.0f), ImGuiButtonFlags_EnableNav)) {
+    setAnimationPreview(preview);
+  }
+  const bool selected = animationPreview_ == preview;
+  const bool hovered = ImGui::IsItemHovered();
+  const ImVec2 min = ImGui::GetItemRectMin();
+  const ImVec2 max = ImGui::GetItemRectMax();
+  ImDrawList* drawList = ImGui::GetWindowDrawList();
+  drawList->AddRectFilled(
+      min, max, AnimationModeSegmentBackground(theme, selected, hovered, ImGui::IsItemActive()),
+      theme.radiusControl, preview ? ImDrawFlags_RoundCornersRight : ImDrawFlags_RoundCornersLeft);
+  const ImVec2 textSize = ImGui::CalcTextSize(label);
+  drawList->AddText(
+      ImVec2(min.x + (width - textSize.x) * 0.5f, min.y + (32.0f - textSize.y) * 0.5f),
+      selected ? theme.accentInk : theme.textPrimary, label);
+  ImGui::RenderNavCursor(ImRect(min, max), ImGui::GetItemID());
+  if (hovered) {
+    ImGui::SetTooltip(preview ? "Play SVG animations from the beginning" : "Stop and edit the SVG");
+  }
 }
 
 void EditorShell::renderAnimationPreviewControl() {
@@ -6512,23 +6693,14 @@ void EditorShell::renderAnimationPreviewControl() {
   const EditorTheme& theme = EditorTheme::Active();
   const float segmentWidth = static_cast<float>(rect.width()) * 0.5f;
   ImGui::PushID("animation_mode");
-  ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 0.0f);
   ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0, 0));
-  for (int index = 0; index < 2; ++index) {
-    const bool preview = index == 1;
-    ImGui::SetCursorScreenPos(ImVec2(static_cast<float>(rect.topLeft.x) + index * segmentWidth,
-                                     static_cast<float>(rect.topLeft.y)));
-    ImGui::PushStyleColor(
-        ImGuiCol_Button, animationPreview_ == preview ? theme.accentDefault : theme.surfaceOverlay);
-    if (ImGui::Button(preview ? "Preview" : "Edit", ImVec2(segmentWidth, 32.0f))) {
-      setAnimationPreview(preview);
-    }
-    ImGui::PopStyleColor();
-    if (ImGui::IsItemHovered()) {
-      ImGui::SetTooltip(preview ? "Play SVG animations from the beginning"
-                                : "Stop and edit the SVG");
-    }
-  }
+  renderAnimationModeSegment(
+      false, ImVec2(static_cast<float>(rect.topLeft.x), static_cast<float>(rect.topLeft.y)),
+      segmentWidth);
+  renderAnimationModeSegment(
+      true,
+      ImVec2(static_cast<float>(rect.topLeft.x) + segmentWidth, static_cast<float>(rect.topLeft.y)),
+      segmentWidth);
   ImDrawList* drawList = ImGui::GetWindowDrawList();
   const float dividerX = static_cast<float>(rect.topLeft.x) + segmentWidth;
   drawList->AddLine(ImVec2(dividerX, static_cast<float>(rect.topLeft.y) + 6.0f),
@@ -6537,8 +6709,8 @@ void EditorShell::renderAnimationPreviewControl() {
   drawList->AddRect(
       ImVec2(static_cast<float>(rect.topLeft.x), static_cast<float>(rect.topLeft.y)),
       ImVec2(static_cast<float>(rect.bottomRight.x), static_cast<float>(rect.bottomRight.y)),
-      theme.borderStrong);
-  ImGui::PopStyleVar(2);
+      theme.borderStrong, theme.radiusControl);
+  ImGui::PopStyleVar();
   ImGui::PopID();
 }
 
@@ -7147,7 +7319,7 @@ void EditorShell::renderDockSpaceHost(float hostX, float hostY, float hostWidth,
     }
   }
   dockSidebarsIncludedInLayout_ = sidebarsIncluded;
-  EnsureAnimationModeDock(dockspaceId, 100.0f);
+  EnsureAnimationModeDock(dockspaceId, 40.0f);
 
   ImGui::DockSpace(dockspaceId, ImVec2(0.0f, 0.0f), EditorDockSpaceFlags(dockLayoutLocked_));
   // Record the central node's rect alongside the host rect the shell just laid out. Comparing the
@@ -8972,6 +9144,7 @@ void EditorShell::runFrame() {
   markPhase(mainFrameCost.splittersMs);
   updateVisiblePreviewTasks();
   adoptCatalogFontResources();
+  applyPreviewPointerInput();
   advanceAnimationPreview(AnimationPreviewClockSeconds());
   applyDeferredRenderRequest();
   advanceVisiblePreviews();

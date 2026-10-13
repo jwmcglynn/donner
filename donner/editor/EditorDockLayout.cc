@@ -107,7 +107,10 @@ bool BelongsToDockspace(const ImGuiDockNode* node, ImGuiID dockspaceId) {
 }  // namespace
 
 void EnsureAnimationModeDock(ImGuiID dockspaceId, float height) {
-  if (BelongsToDockspace(DockNodeForWindow(kAnimationModeWindowName), dockspaceId)) {
+  ImGuiDockNode* existingHeader = DockNodeForWindow(kAnimationModeWindowName);
+  if (BelongsToDockspace(existingHeader, dockspaceId)) {
+    ImGui::DockBuilderSetNodeSize(existingHeader->ID, ImVec2(existingHeader->Size.x, height));
+    existingHeader->WantLockSizeOnce = true;
     return;
   }
   const ImGuiDockNode* layers = DockNodeForWindow(kLayersWindowName);

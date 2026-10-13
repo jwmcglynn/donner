@@ -13,10 +13,10 @@ SVG2 core into its own module). This covers the four animation elements (`<anima
 `<animateTransform>`, `<animateMotion>`), the SMIL-derived timing model, value interpolation
 with multiple calcModes, and the animation sandwich composition model.
 
-Donner is primarily a static/offline SVG renderer, so the implementation focuses on
-**time-based evaluation**: given a document time `t`, compute the presentation value of every
-animated attribute. Interactive event-based triggers (click, mouseover) are deferred to a
-future interactive milestone.
+Donner evaluates animations at a host-supplied document time. The editor also delivers mouse
+events to declarative animation timing through `SVGDocument::dispatchMouseEvent()`. The initial
+interactive subset supports unoffset mouse event names and ID-qualified forms such as
+`button.click`, with source-preserving runtime state and no script execution.
 
 ## Goals
 
@@ -33,8 +33,7 @@ future interactive milestone.
 
 ## Non-Goals
 
-- Interactive event-based triggers (`click`, `mouseover`, `accessKey`, `wallclock`).
-  These require an event dispatch system not yet in Donner.
+- Event offsets, `accessKey`, `wallclock`, and script event handlers.
 - CSS Animations / CSS Transitions / Web Animations API integration.
   These are separate specs with different semantics; they can layer on top later.
 - `<animateColor>` (removed in SVG2, redundant with `<animate>` targeting color properties).
@@ -97,7 +96,8 @@ Default metric is seconds.
 - Syncbase: `other.begin+0.5s`, `other.end` (synchronized to another animation)
 - Repeat: `other.repeat(3)` (triggered on Nth repeat of another animation)
 - `indefinite` (begin only via `beginElement()` API)
-- Event/accessKey/wallclock (deferred — requires interactive event system)
+- Mouse events: `click`, `mouseover`, `mouseout`, press/release, move, enter/leave, and double-click; optional element-ID prefix
+- Event offsets, accessKey, and wallclock remain deferred
 
 **`fill`**: `remove` (revert to base value when done) or `freeze` (persist final value).
 
@@ -490,9 +490,9 @@ elements on their own layers for efficient drag rendering).
 
 ## Open Questions
 
-1. **Event triggers**: Should we stub the event-based begin/end parsing now (silently ignore)
-   or reject with a warning? Recommendation: parse and store, but don't resolve — log a
-   warning when an animation depends on unsupported event triggers.
+1. **Additional timing triggers**: Mouse-event timing resolves through explicit host dispatch.
+   Event offsets, syncbase dependencies, repeat events, access keys, and wallclock timing remain
+   open extensions.
 
 2. **CSS property animation**: `<animate>` can target CSS properties via `attributeName`.
    Should we support the full CSS property set or just SVG presentation attributes?
@@ -527,8 +527,8 @@ resolved computed-style-vs-attribute question.
 - Public API: `SVGDocument::setTime(double)` / `SVGDocument::currentTime()`. `setTime()` stores
   the time on `SVGDocumentContext::documentTime` and calls `invalidateRenderTree()`.
 - Timing model: `ClockValue`, `AnimationTimingComponent`, and `AnimationSystem`. Supported
-  timing attributes: `begin` (offset values only, semicolon list picks the earliest non-negative
-  qualifying offset), `dur`, `end` (offset only), `repeatCount`, `repeatDur`, `fill`
+  timing attributes: `begin` and `end` (clock offsets and host-dispatched unoffset mouse events),
+  `dur`, `repeatCount`, `repeatDur`, `fill`
   (`freeze` | `remove`), `restart` (`always` | `whenNotActive` | `never`), `min`, `max`.
 - Elements: `<animate>`, `<animateTransform>` (`type` in translate | scale | rotate | skewX |
   skewY), and `<set>`. All are experimental (`IsExperimental = true`) and require
@@ -548,19 +548,19 @@ resolved computed-style-vs-attribute question.
 
 - `<animateMotion>` and `<mpath>` (element, component, parser, and system pass all omitted).
 - `calcMode` `paced` and `spline` (and therefore `keySplines`).
-- Syncbase timing (`id.begin` / `id.end` references) and any begin/end value that is not a plain
-  offset. `begin` is offset-only.
+- Syncbase timing (`id.begin` / `id.end` references), event offsets, access keys and wallclock timing.
 - `additive` and `accumulate`.
 - Compositor layer caching for animated elements. `HintSource::Animation` is intentionally left
   unused; animation re-evaluates the full render tree each `setTime()`.
-- CSS Animations / Transitions / Web Animations, and editor UI.
+- CSS Animations / Transitions / Web Animations.
 
 ### Permanently out of scope (non-scripting target)
 
-Donner is an offline, non-scripting renderer with no event-dispatch system. Event, `accessKey`,
-and `wallclock` begin/end triggers (`click`, `mouseover`, `repeat(n)`, `beginElement()`, etc.)
-have no meaning without a scripting/interaction host and are permanently out of scope for the
-time-sampled evaluation model, independent of slice boundaries.
+The host supplies document time and mouse events. Inline scripts and script event attributes do
+not execute. Unoffset mouse event names and `id.event` timing values resolve against the
+animation target and its event ancestry; secure documents reject interactive dispatch. Runtime
+intervals do not author XML or create undo entries. See the editor's animation-preview section
+and `//donner/editor/tests:async_svg_document_tests` for source, restart, and security contracts.
 
 ### Attach point
 

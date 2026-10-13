@@ -31,6 +31,12 @@ struct AnimationStateComponent {
   /// Resolved begin time in seconds (from timing attributes).
   double beginTime = 0.0;
 
+  /// Most recent accepted mouse-event begin time in document seconds.
+  std::optional<double> eventBeginTime;
+
+  /// Most recent accepted mouse-event end time in document seconds.
+  std::optional<double> eventEndTime;
+
   /// Computed simple duration in seconds. 0 means unresolved, infinity means indefinite.
   double simpleDuration = 0.0;
 

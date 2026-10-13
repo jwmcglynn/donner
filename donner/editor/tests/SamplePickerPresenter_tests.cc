@@ -72,7 +72,7 @@ TEST(SamplePickerPresenter, DescriptionsCoverCatalogAndFallback) {
   for (const std::string_view id : kSampleIds) {
     EXPECT_FALSE(SamplePickerDescription(id).empty());
   }
-  EXPECT_EQ(SamplePickerDescription("animation"), "Motion and looping animation");
+  EXPECT_EQ(SamplePickerDescription("animation"), "Hover, press, and click to animate");
   EXPECT_EQ(SamplePickerDescription("unknown"), "Built-in SVG sample");
 }
 

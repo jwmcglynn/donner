@@ -1684,86 +1684,111 @@ void RenderingContext::ensureComputedComponents(ParseWarningSink& warningSink) {
   renderState.hasBeenBuilt = true;
 }
 
-bool RenderingContext::hitTestEntity(Entity entity, const Vector2d& point) {
-  const auto* instance = registry_.try_get<RenderingInstanceComponent>(entity);
-  if (!instance) {
+bool RenderingContext::HitGeometry::contains(const Vector2d& point, const Path* path) const {
+  const Vector2d localPoint = entityFromDocumentTransform.transformPosition(point);
+  if (textBounds) {
+    return textBounds->contains(localPoint);
+  }
+  if (!documentBounds.contains(point)) {
     return false;
   }
-
-  ParseWarningSink disabledSink = ParseWarningSink::Disabled();
-  const ComputedStyleComponent& style =
-      StyleSystem().computeStyle(EntityHandle(registry_, entity), disabledSink);
-  const PointerEvents pointerEvents = style.properties->pointerEvents.get().value();
-
-  if (pointerEvents == PointerEvents::None) {
+  if (boundsOnly) {
+    return true;
+  }
+  if (path == nullptr) {
     return false;
   }
+  return (testFill && path->isInside(localPoint, fillRule)) ||
+         (testStroke && path->isOnPath(localPoint, strokeWidth));
+}
 
-  const HitTestConfig config = configFromPointerEvents(pointerEvents);
+namespace {
+void ConfigureHitPaint(const ComputedStyleComponent& style, const HitTestConfig& config,
+                       RenderingContext::HitGeometry& geometry) {
+  const bool fillPainted = style.properties->fill.get().value() != PaintServer::None();
+  const bool strokePainted = style.properties->stroke.get().value() != PaintServer::None();
+  geometry.strokeWidth = strokePainted ? style.properties->strokeWidth.get().value().value : 0.0;
+  geometry.testFill = config.testFill && (!config.requirePaintedFill || fillPainted);
+  geometry.testStroke = config.testStroke && (!config.requirePaintedStroke || strokePainted);
+  geometry.fillRule = style.properties->fillRule.get().value();
+}
 
-  // Check visibility requirement.
-  if (config.requireVisible && !instance->visible) {
-    return false;
-  }
-
-  const bool hasFillPaint = style.properties->fill.get().value() != PaintServer::None();
-  const bool hasStrokePaint = style.properties->stroke.get().value() != PaintServer::None();
-  const double strokeWidth =
-      hasStrokePaint ? style.properties->strokeWidth.get().value().value : 0.0;
-
+std::optional<Box2d> TextHitBounds(Registry& registry, Entity entity) {
 #ifdef DONNER_TEXT_ENABLED
-  // Text roots hit-test against their laid-out glyph ink bounds: any point
-  // inside the ink box (including the gaps between letters) hits, which is
-  // the pointer contract for selecting text. Text has no ComputedPath, so
-  // the shape-based fill/stroke tests below can never match it.
-  if (registry_.any_of<TextRootComponent>(entity) && registry_.ctx().contains<TextEngine>()) {
-    const Box2d inkBounds =
-        registry_.ctx().get<TextEngine>().computedInkBounds(EntityHandle(registry_, entity));
-    if (!inkBounds.isEmpty()) {
-      const Vector2d pointInLocal =
-          LayoutSystem()
-              .getEntityFromWorldTransform(EntityHandle(registry_, entity))
-              .inverse()
-              .transformPosition(point);
-      return inkBounds.contains(pointInLocal);
-    }
-    return false;
+  if (registry.any_of<TextRootComponent>(entity) && registry.ctx().contains<TextEngine>()) {
+    return registry.ctx().get<TextEngine>().computedInkBounds(EntityHandle(registry, entity));
   }
 #endif
+  return std::nullopt;
+}
+}  // namespace
 
-  if (const auto bounds = ShapeSystem().getShapeWorldBounds(EntityHandle(registry_, entity));
-      bounds && bounds->inflatedBy(strokeWidth).contains(point)) {
-    if (pointerEvents == PointerEvents::BoundingBox) {
-      return true;
-    }
-
-    const Vector2d pointInLocal = LayoutSystem()
-                                      .getEntityFromWorldTransform(EntityHandle(registry_, entity))
-                                      .inverse()
-                                      .transformPosition(point);
-
-    // Test fill intersection.
-    if (config.testFill) {
-      const bool skipBecauseNotPainted = config.requirePaintedFill && !hasFillPaint;
-      if (!skipBecauseNotPainted &&
-          ShapeSystem().pathFillIntersects(EntityHandle(registry_, entity), pointInLocal,
-                                           style.properties->fillRule.get().value())) {
-        return true;
-      }
-    }
-
-    // Test stroke intersection.
-    if (config.testStroke) {
-      const bool skipBecauseNotPainted = config.requirePaintedStroke && !hasStrokePaint;
-      if (!skipBecauseNotPainted &&
-          ShapeSystem().pathStrokeIntersects(EntityHandle(registry_, entity), pointInLocal,
-                                             strokeWidth)) {
-        return true;
-      }
-    }
+bool RenderingContext::prepareHitGeometry(Entity entity, HitGeometry& geometry, const Path*& path) {
+  path = nullptr;
+  const auto* instance = registry_.try_get<RenderingInstanceComponent>(entity);
+  if (instance == nullptr) {
+    return false;
   }
+  ParseWarningSink sink = ParseWarningSink::Disabled();
+  const auto& style = StyleSystem().computeStyle(EntityHandle(registry_, entity), sink);
+  const PointerEvents pointerEvents = style.properties->pointerEvents.get().value();
+  const HitTestConfig config = configFromPointerEvents(pointerEvents);
+  if (pointerEvents == PointerEvents::None || (config.requireVisible && !instance->visible)) {
+    return false;
+  }
+  ConfigureHitPaint(style, config, geometry);
+  geometry.entityFromDocumentTransform =
+      LayoutSystem().getEntityFromWorldTransform(EntityHandle(registry_, entity)).inverse();
+  geometry.textBounds = TextHitBounds(registry_, entity);
+  if (geometry.textBounds) {
+    return !geometry.textBounds->isEmpty();
+  }
+  const auto bounds = ShapeSystem().getShapeWorldBounds(EntityHandle(registry_, entity));
+  if (!bounds) {
+    return false;
+  }
+  geometry.documentBounds = bounds->inflatedBy(geometry.strokeWidth);
+  geometry.boundsOnly = pointerEvents == PointerEvents::BoundingBox;
+  if (const auto* computed = ShapeSystem().createComputedPathIfShape(
+          EntityHandle(registry_, entity), FontMetrics(), sink)) {
+    path = &computed->spline;
+  }
+  return true;
+}
 
-  return false;
+bool RenderingContext::hitTestEntity(Entity entity, const Vector2d& point) {
+  HitGeometry geometry;
+  const Path* path = nullptr;
+  return prepareHitGeometry(entity, geometry, path) && geometry.contains(point, path);
+}
+
+std::optional<std::vector<RenderingContext::HitRecord>> RenderingContext::captureHitGeometry(
+    std::size_t maximumRecords, std::size_t maximumPathBytes) {
+  ParseWarningSink sink = ParseWarningSink::Disabled();
+  instantiateRenderTree(false, sink);
+  maximumRecords = std::min<std::size_t>(maximumRecords, 65536);
+  maximumPathBytes = std::min<std::size_t>(maximumPathBytes, 32 * 1024 * 1024);
+  std::size_t visited = 0;
+  std::size_t retainedBytes = 0;
+  std::vector<HitRecord> records;
+  auto view = registry_.view<RenderingInstanceComponent>();
+  for (auto it = view.rbegin(); it != view.rend(); ++it) {
+    if (++visited > maximumRecords) {
+      return std::nullopt;
+    }
+    HitGeometry geometry;
+    const Path* path = nullptr;
+    if (!prepareHitGeometry(*it, geometry, path)) {
+      continue;
+    }
+    const auto bytes = path != nullptr ? path->retainedBytes() : std::optional<std::size_t>(0);
+    if (!bytes || *bytes > maximumPathBytes - retainedBytes) {
+      return std::nullopt;
+    }
+    retainedBytes += *bytes;
+    records.push_back(HitRecord{*it, geometry, path != nullptr ? *path : Path()});
+  }
+  return records;
 }
 
 Entity RenderingContext::findIntersecting(const Vector2d& point) {

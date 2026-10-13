@@ -10,6 +10,7 @@
 
 #include "donner/editor/OverlayRenderer.h"
 #include "donner/editor/PresentationPose.h"
+#include "donner/svg/DonnerController.h"
 #include "donner/svg/SVGDocument.h"
 
 namespace donner::editor {
@@ -42,6 +43,7 @@ public:
    * @param lockedFlash Rejected-selection feedback to anchor to this scene.
    * @param livePath Optional solid vector replacement supplying both paint and geometry.
    * @param textEditing Text annotations accepted only at the capture's actual mutation revision.
+   * @param capturePointerTargets Capture immutable mouse hit geometry for Preview.
    * @return Immutable paired geometry, or null when a selected handle belongs to another document.
    */
   [[nodiscard]] static std::shared_ptr<const CapturedPresentation> Capture(
@@ -51,7 +53,8 @@ public:
       std::span<const svg::SVGElement> sourceHover = {},
       const std::optional<LockedRejectionFlashInput>& lockedFlash = std::nullopt,
       const std::optional<svg::SVGElement>& livePath = std::nullopt,
-      const std::optional<TextEditing>& textEditing = std::nullopt);
+      const std::optional<TextEditing>& textEditing = std::nullopt,
+      bool capturePointerTargets = false);
 
   /// Capture provenance owned by this immutable snapshot.
   [[nodiscard]] const PresentationIdentity& identity() const UTILS_LIFETIME_BOUND {
@@ -109,7 +112,13 @@ public:
   /// False when selected pixels depend on an ancestor's fixed compositing context.
   [[nodiscard]] bool affinePreviewAllowed() const { return affinePreviewAllowed_; }
 
+  /// Hit geometry belonging to these pixels, or null when interaction capture was disabled.
+  std::shared_ptr<const svg::DonnerController::HitTestSnapshot> pointerTargets() const {
+    return pointerTargets_;
+  }
+
 private:
+  std::shared_ptr<const svg::DonnerController::HitTestSnapshot> pointerTargets_;
   CapturedPresentation() = default;
   bool captureSelected(svg::SVGDocument& document, std::span<const svg::SVGElement> selection,
                        const std::optional<svg::SVGElement>& livePath);

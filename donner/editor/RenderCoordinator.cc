@@ -1826,6 +1826,7 @@ std::optional<SelectTool::ActiveDragPreview> RenderCoordinator::previewWithPrese
 void RenderCoordinator::capturePresentationRequest(RenderRequest& request,
                                                    const EditorApp& app) const {
   request.version = app.document().currentFrameVersion();
+  request.capturePointerTargets = pointerTargetCaptureEnabled_;
   request.documentGeneration = app.document().documentGeneration();
   request.fontResourceRevision = app.document().fontResourceRevision();
   request.geometryRevision = app.document().nonTransformRevision();

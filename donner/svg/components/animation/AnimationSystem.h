@@ -5,6 +5,7 @@
 
 #include "donner/base/EcsRegistry.h"
 #include "donner/base/ParseDiagnostic.h"
+#include "donner/svg/core/Event.h"
 
 namespace donner::svg::components {
 
@@ -47,6 +48,17 @@ public:
    * @return True when an animation element targets \p targetEntity.
    */
   bool isAnimationTarget(Registry& registry, Entity targetEntity) const;
+
+  /**
+   * Apply declarative begin/end mouse-event triggers to animation runtime state.
+   * @param registry Document storage.
+   * @param targetEntity Hit element receiving the event.
+   * @param type Mouse event type.
+   * @param documentTime Event time in document seconds.
+   * @return True when an animation interval changed.
+   */
+  bool dispatchMouseEvent(Registry& registry, Entity targetEntity, EventType type,
+                          double documentTime);
 };
 
 }  // namespace donner::svg::components

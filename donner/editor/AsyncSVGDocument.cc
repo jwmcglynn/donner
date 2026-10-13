@@ -204,6 +204,19 @@ void AsyncSVGDocument::recordAppliedCommand(const EditorCommand& cmd) {
   }
 }
 
+bool AsyncSVGDocument::dispatchMouseEvent(svg::EventType type, const svg::SVGElement& target) {
+  if (!document_) {
+    return false;
+  }
+  const auto access = document_->tryWriteAccess();
+  if (!access.has_value() || !document_->dispatchMouseEvent(type, target)) {
+    return false;
+  }
+  frameVersion_.fetch_add(1, std::memory_order_release);
+  ++nonTransformRevision_;
+  return true;
+}
+
 bool AsyncSVGDocument::restartAnimations() {
   if (!document_) {
     return false;

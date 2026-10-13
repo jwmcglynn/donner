@@ -6,6 +6,44 @@
 
 namespace donner::svg {
 
+struct DonnerController::HitTestSnapshot::Impl {
+  std::optional<std::vector<components::RenderingContext::HitRecord>> records;
+  std::vector<SVGGraphicsElement> targets;
+};
+
+bool DonnerController::HitTestSnapshot::complete() const {
+  return impl_->records.has_value();
+}
+
+std::optional<SVGGraphicsElement> DonnerController::HitTestSnapshot::findIntersecting(
+    const Vector2d& point) const {
+  if (!impl_->records) {
+    return std::nullopt;
+  }
+  for (std::size_t i = 0; i < impl_->records->size(); ++i) {
+    const auto& record = (*impl_->records)[i];
+    if (record.geometry.contains(point, &record.path)) {
+      return impl_->targets[i];
+    }
+  }
+  return std::nullopt;
+}
+
+std::shared_ptr<const DonnerController::HitTestSnapshot> DonnerController::captureHitTest() {
+  const auto access = document_.writeAccess();
+  Registry& registry = access.registry();
+  auto impl = std::make_shared<HitTestSnapshot::Impl>();
+  impl->records = components::RenderingContext(registry).captureHitGeometry();
+  if (impl->records) {
+    impl->targets.reserve(impl->records->size());
+    for (const auto& record : *impl->records) {
+      impl->targets.push_back(
+          SVGElement(EntityHandle(registry, record.entity)).cast<SVGGraphicsElement>());
+    }
+  }
+  return std::shared_ptr<const HitTestSnapshot>(new HitTestSnapshot(std::move(impl)));
+}
+
 DonnerController::DonnerController(SVGDocument document) : document_(std::move(document)) {}
 
 std::optional<SVGGraphicsElement> DonnerController::findIntersecting(const Vector2d& point) {

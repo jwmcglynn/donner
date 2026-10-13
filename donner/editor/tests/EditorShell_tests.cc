@@ -1026,6 +1026,15 @@ public:
     shell.advanceAnimationPreview(nowSeconds);
   }
   static bool IsAnimationPreview(const EditorShell& shell) { return shell.animationPreview_; }
+  static bool AnimationResetPending(const EditorShell& shell) {
+    return shell.animationResetPending_;
+  }
+  static void HoldAnimationAtStart(EditorShell& shell) {
+    shell.animationPreviewStartSeconds_ = std::numeric_limits<double>::max();
+  }
+  static std::optional<svg::SVGElement> PreviewHoveredElement(const EditorShell& shell) {
+    return shell.previewHoveredElement_;
+  }
   static Box2d AnimationControlRect(const EditorShell& shell) {
     return shell.animationPreviewControlScreenRect();
   }
@@ -2362,6 +2371,51 @@ TEST(EditorShellTest, AnimationPreviewPresentsSuccessiveFrames) {
     }
   }
   EXPECT_THAT(presentedVersions, testing::SizeIs(3));
+}
+
+TEST(EditorShellTest, PreviewHoverUsesCapturedTargetsWithoutSelectingOrEditing) {
+  constexpr std::string_view source = R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+      <rect id="pad" x="10" y="10" width="80" height="80" fill="red">
+        <set attributeName="fill" to="blue" begin="mouseover" end="mouseout"/>
+      </rect>
+    </svg>)svg";
+  gui::EditorWindow window = MakeHiddenWindow();
+  ASSERT_TRUE(window.valid());
+  EditorShell shell(window, OptionsWithSource(source));
+  auto& app = EditorShellTestAccess::App(shell);
+  const auto target = app.document().document().querySelector("#pad");
+  ASSERT_TRUE(target.has_value());
+  EditorShellTestAccess::SetAnimationPreview(shell, true);
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(8);
+  std::optional<Vector2d> screenPoint;
+  while (std::chrono::steady_clock::now() < deadline) {
+    RunShellFrame(window, shell);
+    if (!EditorShellTestAccess::AnimationResetPending(shell)) {
+      EditorShellTestAccess::HoldAnimationAtStart(shell);
+    }
+    const auto frame = EditorShellTestAccess::Coordinator(shell).framePresentation();
+    if (frame) {
+      const Vector2d point = frame->viewport().documentToScreen(Vector2d(50, 50));
+      if (frame->pointerTargetAt(point).has_value()) {
+        screenPoint = point;
+        break;
+      }
+    }
+  }
+  ASSERT_TRUE(screenPoint.has_value());
+  const auto versionBefore = app.document().currentFrameVersion();
+  while (EditorShellTestAccess::PreviewHoveredElement(shell) != target &&
+         std::chrono::steady_clock::now() < deadline) {
+    ImGui::GetIO().AddMousePosEvent(static_cast<float>(screenPoint->x),
+                                    static_cast<float>(screenPoint->y));
+    RunShellFrame(window, shell);
+  }
+  EXPECT_EQ(EditorShellTestAccess::PreviewHoveredElement(shell), target);
+  EXPECT_GT(app.document().currentFrameVersion(), versionBefore);
+  EXPECT_FALSE(app.hasSelection());
+  EXPECT_FALSE(app.isDirty());
+  EXPECT_FALSE(app.canUndo());
 }
 
 TEST(EditorShellTest, ReplacingDocumentStopsAnimationPreview) {

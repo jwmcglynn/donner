@@ -32,6 +32,7 @@
 #include "donner/svg/components/StylesheetComponent.h"
 #include "donner/svg/components/TreeMutation.h"
 #include "donner/svg/components/animation/AnimationStateComponent.h"
+#include "donner/svg/components/animation/AnimationSystem.h"
 #include "donner/svg/components/filter/FilterComponent.h"
 #include "donner/svg/components/filter/FilterPrimitiveComponent.h"
 #include "donner/svg/components/layout/LayoutSystem.h"
@@ -830,6 +831,29 @@ void SVGDocument::setTime(double seconds) {
   }
   components::RenderingContext(registry).invalidateRenderTree();
   documentContext.documentTime = seconds;
+}
+
+bool SVGDocument::dispatchMouseEvent(EventType type, const SVGElement& target) {
+  DocumentMutationBatch mutation(*documentState_, true);
+  Registry& registry = mutation.access().registry();
+  if (target.handle_.unsafeRegistry() != &registry) {
+    mutation.cancel();
+    return false;
+  }
+  const EntityHandle handle = target.unsafeEntityHandle();
+  if (!handle.valid() ||
+      registry.get<components::NodeLifetimeComponent>(handle.entity()).treeState !=
+          components::NodeLifetimeComponent::TreeState::Attached ||
+      registry.ctx().get<components::ResourceManagerContext>().processingMode() !=
+          ProcessingMode::DynamicInteractive ||
+      !components::AnimationSystem().dispatchMouseEvent(
+          registry, handle.entity(), type,
+          registry.ctx().get<components::SVGDocumentContext>().documentTime)) {
+    mutation.cancel();
+    return false;
+  }
+  components::RenderingContext(registry).invalidateRenderTree();
+  return true;
 }
 
 void SVGDocument::restartAnimations() {

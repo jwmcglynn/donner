@@ -5,9 +5,11 @@
 #include <limits>
 #include <sstream>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 #include "donner/base/Path.h"
+#include "donner/base/StringUtils.h"
 #include "donner/base/parser/NumberParser.h"
 #include "donner/base/xml/components/TreeComponent.h"
 #include "donner/svg/components/SVGDocumentContext.h"
@@ -58,7 +60,8 @@ double computeSimpleDuration(const AnimationTimingComponent& timing, bool isSetE
 }
 
 /// Compute the active duration from timing attributes.
-double computeActiveDuration(const AnimationTimingComponent& timing, double simpleDuration) {
+double computeActiveDuration(const AnimationTimingComponent& timing, double simpleDuration,
+                             double beginTime) {
   if (simpleDuration == 0.0) {
     return 0.0;
   }
@@ -79,7 +82,6 @@ double computeActiveDuration(const AnimationTimingComponent& timing, double simp
 
   if (timing.endOffset.has_value()) {
     double endTime = timing.endOffset->seconds();
-    double beginTime = timing.beginOffset.has_value() ? timing.beginOffset->seconds() : 0.0;
     activeDuration = std::min(activeDuration, endTime - beginTime);
   }
 
@@ -112,15 +114,21 @@ void computeTimingState(AnimationStateComponent& state, const AnimationTimingCom
   // containing only unsupported syncbase/event values) means the begin time is unresolved: the
   // animation never starts. This is distinct from an absent `begin` attribute, which defaults to
   // an offset of 0.
-  if (timing.beginValue.has_value() && !timing.beginOffset.has_value()) {
+  if (timing.beginValue.has_value() && !timing.beginOffset.has_value() &&
+      !state.eventBeginTime.has_value()) {
     state.phase = AnimationPhase::Before;
     state.wasActive = false;
     return;
   }
 
-  state.beginTime = timing.beginOffset.has_value() ? timing.beginOffset->seconds() : 0.0;
+  state.beginTime = state.eventBeginTime.value_or(
+      timing.beginOffset.has_value() ? timing.beginOffset->seconds() : 0.0);
   state.simpleDuration = computeSimpleDuration(timing, isSetElement);
-  state.activeDuration = computeActiveDuration(timing, state.simpleDuration);
+  state.activeDuration = computeActiveDuration(timing, state.simpleDuration, state.beginTime);
+  if (state.eventEndTime.has_value()) {
+    state.activeDuration =
+        std::min(state.activeDuration, std::max(0.0, *state.eventEndTime - state.beginTime));
+  }
   AnimationPhase newPhase = computePhase(documentTime, state.beginTime, state.activeDuration);
 
   // Enforce restart attribute.
@@ -686,6 +694,104 @@ bool ProcessAnimation(Registry& registry, Entity entity, double documentTime,
   return true;
 }
 
+std::string_view MouseEventName(EventType type) {
+  switch (type) {
+    case EventType::Click: return "click";
+    case EventType::DblClick: return "dblclick";
+    case EventType::MouseDown: return "mousedown";
+    case EventType::MouseUp: return "mouseup";
+    case EventType::MouseMove: return "mousemove";
+    case EventType::MouseEnter: return "mouseenter";
+    case EventType::MouseLeave: return "mouseleave";
+    case EventType::MouseOver: return "mouseover";
+    case EventType::MouseOut: return "mouseout";
+    default: return {};
+  }
+}
+
+std::unordered_set<Entity> MouseEventPath(Registry& registry, Entity target, EventType type) {
+  std::unordered_set<Entity> path;
+  constexpr std::size_t kMaximumEventDepth = 4096;
+  while (registry.valid(target) && path.size() < kMaximumEventDepth && path.insert(target).second) {
+    const auto* tree = registry.try_get<donner::components::TreeComponent>(target);
+    if (!eventBubbles(type) || tree == nullptr) {
+      break;
+    }
+    target = tree->parent();
+  }
+  return path;
+}
+
+bool MouseTimingItemMatches(Registry& registry, std::string_view item, Entity defaultTarget,
+                            std::string_view eventName, const std::unordered_set<Entity>& path) {
+  const std::size_t dot = item.rfind('.');
+  if (dot == std::string_view::npos) {
+    return item == eventName && path.contains(defaultTarget);
+  }
+  if (item.substr(dot + 1) != eventName || dot == 0) {
+    return false;
+  }
+  const Entity source =
+      registry.ctx().get<SVGDocumentContext>().getEntityById(RcString(item.substr(0, dot)));
+  return path.contains(source);
+}
+
+bool MouseTimingListMatches(Registry& registry, const std::optional<std::string>& timing,
+                            Entity defaultTarget, std::string_view eventName,
+                            const std::unordered_set<Entity>& path) {
+  if (!timing.has_value()) {
+    return false;
+  }
+  std::string_view remaining(*timing);
+  while (!remaining.empty()) {
+    const std::size_t separator = remaining.find(';');
+    const std::string_view item = StringUtils::TrimWhitespace(remaining.substr(0, separator));
+    if (MouseTimingItemMatches(registry, item, defaultTarget, eventName, path)) {
+      return true;
+    }
+    if (separator == std::string_view::npos) {
+      break;
+    }
+    remaining.remove_prefix(separator + 1);
+  }
+  return false;
+}
+
+bool AcceptEventBegin(AnimationStateComponent& state, AnimationRestart restart, double time) {
+  if (restart == AnimationRestart::Never &&
+      (state.eventBeginTime.has_value() || state.phase != AnimationPhase::Before)) {
+    return false;
+  }
+  if (restart == AnimationRestart::WhenNotActive && state.phase == AnimationPhase::Active) {
+    return false;
+  }
+  state.eventBeginTime = time;
+  state.eventEndTime.reset();
+  state.hasCompleted = false;
+  state.wasActive = false;
+  state.phase = AnimationPhase::Before;
+  return true;
+}
+
+bool DispatchAnimationMouseEvent(Registry& registry, Entity entity,
+                                 const AnimationTimingComponent& timing, std::string_view eventName,
+                                 const std::unordered_set<Entity>& path, double time) {
+  auto& state = registry.get_or_emplace<AnimationStateComponent>(entity);
+  const Entity target =
+      resolveTargetByHrefOrParent(registry, entity, AnimationHref(registry, entity));
+  computeTimingState(state, timing, time, registry.all_of<SetAnimationComponent>(entity));
+  bool changed = false;
+  if (state.phase == AnimationPhase::Active &&
+      MouseTimingListMatches(registry, timing.endValue, target, eventName, path)) {
+    state.eventEndTime = time;
+    changed = true;
+  }
+  if (MouseTimingListMatches(registry, timing.beginValue, target, eventName, path)) {
+    changed |= AcceptEventBegin(state, timing.restart, time);
+  }
+  return changed;
+}
+
 std::vector<Entity> CollectAnimationEntities(Registry& registry) {
   std::vector<Entity> entities;
   for (auto [entity, timing] : registry.view<AnimationTimingComponent>().each()) {
@@ -717,6 +823,30 @@ bool AnimationSystem::isAnimationTarget(Registry& registry, Entity targetEntity)
   }
 
   return false;
+}
+
+bool AnimationSystem::dispatchMouseEvent(Registry& registry, Entity targetEntity, EventType type,
+                                         double documentTime) {
+  const std::string_view name = MouseEventName(type);
+  if (name.empty() || !registry.valid(targetEntity) || !std::isfinite(documentTime)) {
+    return false;
+  }
+  const auto path = MouseEventPath(registry, targetEntity, type);
+  AnimationResourceBudget budget;
+  bool changed = false;
+  for (auto [entity, timing] : registry.view<AnimationTimingComponent>().each()) {
+    std::size_t sourceBytes = 0;
+    AddOptionalAnimationSourceBytes(timing.beginValue, sourceBytes);
+    AddOptionalAnimationSourceBytes(timing.endValue, sourceBytes);
+    if (!budget.reserveAnimation(sourceBytes)) {
+      break;
+    }
+    if (registry.any_of<SetAnimationComponent, AnimateValueComponent, AnimateTransformComponent>(
+            entity)) {
+      changed |= DispatchAnimationMouseEvent(registry, entity, timing, name, path, documentTime);
+    }
+  }
+  return changed;
 }
 
 void AnimationSystem::advance(Registry& registry, double documentTime,

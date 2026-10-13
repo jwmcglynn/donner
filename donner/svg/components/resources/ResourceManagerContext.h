@@ -79,6 +79,9 @@ public:
    */
   void setProcessingMode(ProcessingMode mode) { processingMode_ = mode; }
 
+  /// Processing policy governing resource loading and interactive event delivery.
+  ProcessingMode processingMode() const { return processingMode_; }
+
   /**
    * Set the callback used to parse SVG content into sub-documents. This is called when an
    * `<image>` element references an SVG file. The callback is injected to avoid circular

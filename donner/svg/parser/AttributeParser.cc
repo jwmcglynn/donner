@@ -1824,9 +1824,8 @@ ParseResult<std::vector<double>> parseDoubleList(std::string_view str) {
 
 /// Common animation timing attribute parsing shared by <animate>, <animateTransform>, and <set>.
 ///
-/// `begin`/`end` support offset (clock) values only. A semicolon-separated list picks the
-/// earliest valid offset. Syncbase references (`id.begin`/`id.end`) and event triggers are
-/// deferred.
+/// Resolve the earliest clock offset and retain raw lists for runtime mouse-event triggers.
+/// Syncbase references and event offsets remain unresolved.
 void parseAnimationTimingAttribute(SVGParserContext& context,
                                    components::AnimationTimingComponent& timing,
                                    const XMLQualifiedNameRef& name, std::string_view value) {

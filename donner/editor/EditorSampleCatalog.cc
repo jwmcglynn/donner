@@ -64,15 +64,29 @@ constexpr std::string_view kGradientsClipSvg =
 constexpr std::string_view kAnimationSvg =
     R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="640" height="400" viewBox="0 0 640 400">
   <rect width="640" height="400" rx="24" fill="#17202a"/>
-  <path d="M96 200 H544" stroke="#344454" stroke-width="4" stroke-linecap="round"/>
-  <circle cx="96" cy="200" r="28" fill="#75dfbb">
+  <g fill="#dce6ee" font-family="sans-serif" pointer-events="none">
+    <text x="40" y="52" font-size="26">Made to move</text>
+    <text x="40" y="84" font-size="16" fill="#a8bac8">Preview: hover, hold, and click the pads below.</text>
+  </g>
+  <path d="M96 175 H544" stroke="#344454" stroke-width="4" stroke-linecap="round" pointer-events="none"/>
+  <circle id="orb" cx="96" cy="175" r="24" fill="#75dfbb" pointer-events="none">
     <animate attributeName="cx" values="96;544;96" dur="4s" repeatCount="indefinite"/>
-    <animate attributeName="r" values="28;42;28" dur="2s" repeatCount="indefinite"/>
+    <animate attributeName="r" values="24;48;24" begin="pulse.click" dur="0.6s"/>
   </circle>
-  <circle cx="320" cy="100" r="12" fill="#f0b429">
-    <animate attributeName="opacity" values="1;0.2;1" dur="2s" repeatCount="indefinite"/>
-  </circle>
-  <text x="320" y="320" text-anchor="middle" fill="#dce6ee" font-family="sans-serif" font-size="22">Made to move</text>
+  <rect id="hover-pad" x="64" y="276" width="240" height="76" rx="16" fill="#263746" stroke="#486074" stroke-width="2">
+    <set attributeName="fill" to="#245849" begin="mouseover" end="mouseout"/>
+    <set attributeName="stroke" to="#75dfbb" begin="mouseover" end="mouseout"/>
+    <set attributeName="fill" to="#387767" begin="mousedown" end="mouseup;mouseout"/>
+  </rect>
+  <rect id="pulse" x="336" y="276" width="240" height="76" rx="16" fill="#263746" stroke="#486074" stroke-width="2">
+    <set attributeName="fill" to="#574628" begin="mouseover" end="mouseout"/>
+    <set attributeName="stroke" to="#f0b429" begin="mouseover" end="mouseout"/>
+    <set attributeName="fill" to="#816638" begin="mousedown" end="mouseup;mouseout"/>
+  </rect>
+  <g fill="#f1f2f4" font-family="sans-serif" font-size="20" text-anchor="middle" pointer-events="none">
+    <text x="184" y="322">Hover and hold</text>
+    <text x="456" y="322">Click to pulse</text>
+  </g>
 </svg>)svg";
 
 std::string_view SourceFromEmbedded(std::span<const unsigned char> bytes) noexcept {

@@ -41,6 +41,24 @@ clipped by their complete route, so the visible middle remains drawn when both e
 and below the fold, while fully offscreen routes retain no simulation state. CSS source annotations
 run against an isolated source snapshot and are applied only after revision validation.
 
+## Animation preview
+
+Open the **Animation** sample and choose **Preview** in the mode control above Layers. The pads
+highlight on hover, change while pressed, and pulse the moving circle when clicked. **Edit** stops
+playback and resets animation state without changing SVG source or undo history.
+
+The host drives the document clock and mouse events. Declarative animation `begin` and `end`
+attributes accept mouse event names (`click`, `mouseover`, `mouseout`, `mousedown`, `mouseup`,
+`mousemove`, `mouseenter`, `mouseleave`, `dblclick`) and ID-qualified forms such as
+`begin="pulse.click"`. `mouseover`/`mouseout` and button events bubble through ancestors.
+Event offsets, syncbase timing, CSS interaction pseudo-classes, and script handlers are not part of
+this preview slice. Middle-button or Space dragging and the wheel retain viewport navigation.
+
+Preview captures bounded hit geometry with each rendered frame so queued clicks target the
+visible shape, including when that shape is moving. These geometry snapshots add no GPU readback.
+Secure SVG subdocuments do not accept interactive event dispatch. Focused contracts are covered by
+`//donner/editor/tests:async_svg_document_tests` and `//donner/editor/tests:editor_shell_tests`.
+
 ## Building
 
 ### Desktop (default - Geode on native Metal or Vulkan)

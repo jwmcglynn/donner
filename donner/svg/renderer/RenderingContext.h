@@ -8,6 +8,8 @@
 #include "donner/base/EcsRegistry.h"
 #include "donner/base/ParseDiagnostic.h"
 #include "donner/base/ParseWarningSink.h"
+#include "donner/base/Path.h"
+#include "donner/base/Transform.h"
 #include "donner/base/Vector2.h"
 #include "donner/svg/components/RenderingInstanceComponent.h"
 
@@ -20,6 +22,32 @@ namespace donner::svg::components {
  */
 class RenderingContext {
 public:
+  /// Evaluated pointer-event geometry shared by live queries and immutable frame captures.
+  struct HitGeometry {
+    Box2d documentBounds;
+    std::optional<Box2d> textBounds;
+    Transform2d entityFromDocumentTransform;
+    FillRule fillRule = FillRule::NonZero;
+    double strokeWidth = 0.0;
+    bool testFill = false;
+    bool testStroke = false;
+    bool boundsOnly = false;
+    /// Test a point using an optional prepared path borrowed for the duration of this call.
+    /// @param point Document-space point. @param path Prepared shape path, or null for bounds.
+    bool contains(const Vector2d& point, const Path* path) const;
+  };
+  /// Owned geometry and internal target identity in front-to-back paint order.
+  struct HitRecord {
+    Entity entity = entt::null;
+    HitGeometry geometry;
+    Path path;
+  };
+  /// Capture bounded hit geometry; nullopt rejects the whole snapshot on budget exhaustion.
+  /// @param maximumRecords Lowerable instance budget, capped at 65536.
+  /// @param maximumPathBytes Lowerable path-storage budget, capped at 32 MiB.
+  std::optional<std::vector<HitRecord>> captureHitGeometry(
+      std::size_t maximumRecords = 65536, std::size_t maximumPathBytes = 32 * 1024 * 1024);
+
   /// Constructor.
   explicit RenderingContext(Registry& registry);
 
@@ -115,6 +143,8 @@ private:
    * @return true if the entity is hit
    */
   bool hitTestEntity(Entity entity, const Vector2d& point);
+  /// Prepare metadata and a path borrowed only until the next document mutation.
+  bool prepareHitGeometry(Entity entity, HitGeometry& geometry, const Path*& path);
 
   /**
    * Create all computed parts of the tree, evaluating styles and creating shadow trees.

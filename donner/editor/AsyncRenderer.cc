@@ -162,7 +162,7 @@ RenderedPresentationCapture CapturePresentationForRequest(const RenderRequest& r
                            .fontResourceRevision = request.fontResourceRevision,
                            .presentationEpoch = request.presentationEpoch},
       request.selectedElements, trackedObjects, independentlyMovable, request.sourceHoverElements,
-      request.lockedFlash, std::nullopt, request.textEditing);
+      request.lockedFlash, std::nullopt, request.textEditing, request.capturePointerTargets);
   captured.fonts = UnresolvedFontDependencies(requestDocument);
   return captured;
 }

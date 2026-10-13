@@ -194,6 +194,13 @@ public:
     return poses_;
   }
 
+  /// Resolve a screen point against the immutable geometry paired with this frame's raster.
+  /// @param point Screen position in logical pixels.
+  std::optional<svg::SVGGraphicsElement> pointerTargetAt(const Vector2d& point) const {
+    const auto snapshot = rasterCapture_ ? rasterCapture_->pointerTargets() : nullptr;
+    return snapshot ? snapshot->findIntersecting(viewport_.screenToDocument(point)) : std::nullopt;
+  }
+
 private:
   FramePresentation() = default;
   void initialize(const FramePresentationInput& input, bool useOverview);

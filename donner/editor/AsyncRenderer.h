@@ -149,6 +149,8 @@ struct RenderRequest {
   /// Document frame version snapshotted at request time so the UI can
   /// match the landed bitmap with other same-version assets.
   std::uint64_t version = 0;
+  /// Pair immutable mouse hit geometry with this render for Preview interaction.
+  bool capturePointerTargets = false;
   /// Generation counter from `AsyncSVGDocument::documentGeneration()`. Bumps
   /// only when the inner document is fully replaced, so the worker can reset
   /// entity-keyed compositor state without treating every frame mutation as a

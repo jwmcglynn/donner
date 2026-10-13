@@ -62,7 +62,7 @@ protected:
       nodes = BuildDefaultDockLayout(dockspaceId, params);
     }
     if (includeModeHeader) {
-      EnsureAnimationModeDock(dockspaceId, 100.0f);
+      EnsureAnimationModeDock(dockspaceId, 40.0f);
     }
     ImGui::DockSpace(dockspaceId, ImVec2(0.0f, 0.0f), EditorDockSpaceFlags(locked));
     ImGui::End();
@@ -145,6 +145,7 @@ TEST_F(EditorDockLayoutTest, AddsFixedModeHeaderWithoutReplacingExistingPanels) 
   EXPECT_NE(headerId, layersId);
   EXPECT_LE(header->Pos.y + header->Size.y, layers->Pos.y);
   EXPECT_TRUE(header->IsNoTabBar());
+  EXPECT_FLOAT_EQ(header->Size.y, 40.0f);
   EXPECT_EQ(DockNodeIdForWindow(kRenderPaneWindowName), nodes.central);
   EXPECT_EQ(DockNodeIdForWindow(kInspectorWindowName), nodes.rightMid);
   RenderDockFrame(dockspaceId, true, false, false, {}, true);

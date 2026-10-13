@@ -601,9 +601,41 @@ private:
   [[nodiscard]] bool previewAllowsEditing(bool allowed) const;
   void applyPreviewMenuState(MenuBarState& state) const;
   void renderAnimationPreviewControl();
+  void renderAnimationModeSegment(bool preview, const ImVec2& position, float width);
   void renderAnimationModePanel();
   [[nodiscard]] bool animationFramePresented() const;
   [[nodiscard]] Box2d animationPreviewControlScreenRect() const;
+
+  struct PreviewPointerInput {
+    std::optional<Vector2d> point;
+    std::optional<svg::SVGElement> target;
+    std::uint64_t documentGeneration = 0;
+    bool pressed = false;
+    bool released = false;
+    bool doubleClick = false;
+  };
+  struct PreviewMouseDispatch {
+    svg::EventType type;
+    svg::SVGElement target;
+  };
+  void capturePreviewPointer(bool canvasHovered, bool spaceHeld, bool overScrollbar);
+  void queuePreviewPointerEdge();
+  void applyPreviewPointerInput();
+  void collectPreviewPointerEvents(const PreviewPointerInput& input,
+                                   std::vector<PreviewMouseDispatch>& events);
+  void collectPreviewHoverEvents(const std::optional<svg::SVGElement>& target,
+                                 std::vector<PreviewMouseDispatch>& events);
+  void collectPreviewButtonEvents(const PreviewPointerInput& input,
+                                  const std::optional<svg::SVGElement>& target,
+                                  std::vector<PreviewMouseDispatch>& events);
+  void resetPreviewPointer();
+  PreviewPointerInput previewPointerInput_;
+  std::vector<PreviewPointerInput> previewPointerEdges_;
+  std::optional<svg::SVGElement> previewHoveredElement_;
+  std::optional<svg::SVGElement> previewPressedElement_;
+  std::optional<Vector2d> previewPreviousPointerPosition_;
+  bool previewPressedDoubleClick_ = false;
+  bool previewPointerOverflow_ = false;
 
   Box2d animationPreviewControlRect_;
   bool animationPreview_ = false;

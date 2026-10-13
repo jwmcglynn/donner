@@ -20,6 +20,7 @@
 #include "donner/base/xml/XMLQualifiedName.h"
 #include "donner/svg/SVGDocumentHandle.h"
 #include "donner/svg/SVGSVGElement.h"
+#include "donner/svg/core/Event.h"
 #include "donner/svg/core/ProcessingMode.h"
 #include "donner/svg/resources/FontCatalogTypes.h"
 #include "donner/svg/resources/ResourceLoaderInterface.h"
@@ -409,6 +410,17 @@ public:
    * Preserves the authored document and element identity. The next render evaluates time zero.
    */
   void restartAnimations();
+
+  /**
+   * Deliver a mouse event to declarative SVG animation begin/end triggers.
+   * Supports event names such as `click` and `mouseover`, optionally prefixed by an element ID
+   * (`button.click`). Bubbling events also reach ancestors. Does not execute scripts or edit
+   * source. Secure documents ignore interactive events.
+   * @param type Event being delivered.
+   * @param target Element under the pointer, belonging to this document.
+   * @return True if an animation interval changed; false for ignored events or invalid targets.
+   */
+  bool dispatchMouseEvent(EventType type, const SVGElement& target);
 
   /**
    * Automatically determine the canvas size from the root `<svg>` element's `width`, `height`,
