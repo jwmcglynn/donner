@@ -5516,13 +5516,24 @@ TEST(EditorShellTest, ReferenceHighlightWaitsForRendererWakeInsteadOfRequestingF
 // browser those frames hold the GPU owner thread that the render, and a press that cancels it, are
 // waiting on.
 TEST(EditorShellTest, SidebarRefreshWaitsForRendererWakeInsteadOfRequestingFrames) {
-  gui::EditorWindow window = MakeHiddenWindow();
+  // The sidebars, and with them the owed refresh, are only drawn in the desktop layout.
+  gui::EditorWindow window(TestWindowOptions({
+      .title = "Sidebar refresh behind a busy renderer",
+      .initialWidth = 1600,
+      .initialHeight = 900,
+  }));
   if (!window.valid()) {
-    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+    GTEST_SKIP() << "Hidden editor window is unavailable on this host";
   }
 
   EditorShell shell(window, OptionsWithSource(kInitialSvg));
   ASSERT_TRUE(shell.valid());
+  EditorShellTestAccess::SetAdaptiveUiLayout(shell, ComputeEditorAdaptiveUiLayout({
+                                                        .windowWidth = 1600.0f,
+                                                        .windowHeight = 900.0f,
+                                                        .preferTouch = false,
+                                                    }));
+  ASSERT_FALSE(EditorShellTestAccess::AdaptiveUiLayout(shell).compactTouch());
   AsyncRenderer& renderer = shell.asyncRendererForReplay();
   const tests::HangGuard settleGuard;
   for (int frame = 0; frame < 40; ++frame) {
