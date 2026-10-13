@@ -25,6 +25,7 @@
 #include <limits>
 #include <memory>
 #include <mutex>
+#include <set>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -2277,7 +2278,7 @@ void RunHiddenWindowShellConstructsAndRunsFrames(double contentScale) {
   EXPECT_TRUE(shell.valid());
 }
 
-TEST(EditorShellTest, AnimationPreviewRunsAtSixtyTicksAndRestartsWithoutEdits) {
+TEST(EditorShellTest, AnimationPreviewWaitsForPresentationAndRestartsWithoutEdits) {
   gui::EditorWindow window = MakeHiddenWindow();
   ASSERT_TRUE(window.valid());
   EditorShell shell(window, OptionsWithSource(kInitialSvg));
@@ -2293,9 +2294,9 @@ TEST(EditorShellTest, AnimationPreviewRunsAtSixtyTicksAndRestartsWithoutEdits) {
   EditorShellTestAccess::AdvanceAnimationPreview(shell, 10.008);
   EXPECT_EQ(app.document().currentFrameVersion(), initialVersion);
   EditorShellTestAccess::AdvanceAnimationPreview(shell, 10.017);
-  EXPECT_DOUBLE_EQ(app.document().document().currentTime(), 1.0 / 60.0);
+  EXPECT_DOUBLE_EQ(app.document().document().currentTime(), 0.0);
   EditorShellTestAccess::AdvanceAnimationPreview(shell, 10.5);
-  EXPECT_DOUBLE_EQ(app.document().document().currentTime(), 0.5);
+  EXPECT_DOUBLE_EQ(app.document().document().currentTime(), 0.0);
 
   EditorShellTestAccess::SetAnimationPreview(shell, false);
   EditorShellTestAccess::AdvanceAnimationPreview(shell, 11.0);
@@ -2309,6 +2310,32 @@ TEST(EditorShellTest, AnimationPreviewRunsAtSixtyTicksAndRestartsWithoutEdits) {
   EXPECT_EQ(app.document().document().source(), source);
   EXPECT_EQ(app.isDirty(), dirty);
   EXPECT_EQ(app.canUndo(), canUndo);
+}
+
+TEST(EditorShellTest, AnimationPreviewPresentsSuccessiveFrames) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  ASSERT_TRUE(window.valid());
+  const EditorSample* sample = FindEditorSample("animation");
+  ASSERT_NE(sample, nullptr);
+  EditorShell shell(window, OptionsWithSource(sample->source));
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(8);
+  while (EditorShellTestAccess::Coordinator(shell).framePresentation() == nullptr &&
+         std::chrono::steady_clock::now() < deadline) {
+    RunShellFrame(window, shell);
+  }
+  ASSERT_NE(EditorShellTestAccess::Coordinator(shell).framePresentation(), nullptr);
+  const auto initialVersion =
+      EditorShellTestAccess::Coordinator(shell).framePresentation()->identity().version;
+  EditorShellTestAccess::SetAnimationPreview(shell, true);
+  std::set<std::uint64_t> presentedVersions;
+  while (presentedVersions.size() < 3 && std::chrono::steady_clock::now() < deadline) {
+    RunShellFrame(window, shell);
+    const auto frame = EditorShellTestAccess::Coordinator(shell).framePresentation();
+    if (frame != nullptr && frame->identity().version > initialVersion) {
+      presentedVersions.insert(frame->identity().version);
+    }
+  }
+  EXPECT_THAT(presentedVersions, testing::SizeIs(3));
 }
 
 TEST(EditorShellTest, ReplacingDocumentStopsAnimationPreview) {
