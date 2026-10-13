@@ -909,6 +909,21 @@ TEST_F(VulkanColorMatrixTest, ConvolveMatrixPreservesSvgSamplingAndAlphaSemantic
   EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
 }
 
+TEST_F(VulkanColorMatrixTest, ConvolveMatrixBiasMatchesLiteralSvgResults) {
+  const shader::CompiledShaderView& convolve = shader::programs::ConvolveMatrixNativeShader();
+  const ShaderModuleDescriptor descriptor =
+      shader::MakeShaderDescriptor(convolve, ShaderSourceKind::Spirv, "ConvolveMatrix");
+  for (const auto& testCase : gpu::tests::convolve_matrix_scene::kBiasCases) {
+    SCOPED_TRACE(testCase.name);
+    gpu::tests::CheckConvolveMatrixStorage(
+        *device_, descriptor,
+        [this](const Buffer& buffer) { return device_->readBackBuffer(buffer); }, 0u,
+        testCase.preserveAlpha, gpu::tests::convolve_matrix_scene::ArrayIndexMode::Authored,
+        &convolve, &testCase);
+  }
+  EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
+}
+
 TEST_F(VulkanColorMatrixTest, ConvolveMatrixUsesReflectedBindingAndWorkgroupMetadata) {
   const shader::CompiledShaderView& convolve = shader::tests::ConvolveMatrixMutatedAllProjections();
   ASSERT_NE(convolve.resource("params"), nullptr);
