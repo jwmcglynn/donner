@@ -177,8 +177,7 @@ revision fields prevent stale edits; they do not authenticate a caller.
 
 The browser editor is a static package. Untrusted SVG is copied into WebAssembly and rendered to
 pixels; it is not inserted as active browser SVG or HTML. The page-to-worker mirror has a fixed,
-asserted memory layout and transfers values rather than native pointers. The VS Code preview uses a
-nonce-based CSP, restricted resource roots, bounded document bytes, and Donner's Wasm renderer.
+asserted memory layout and transfers values rather than native pointers.
 
 WebAssembly threads require cross-origin isolation. The deployment must provide correct TLS,
 COOP/COEP headers or the packaged same-origin isolation worker, immutable versioned asset paths,

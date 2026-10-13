@@ -26,7 +26,7 @@ git_repository = use_repo_rule("@bazel_tools//tools/build_defs/repo:git.bzl", "g
 http_file = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_file")
 
 # Build dependencies
-bazel_dep(name = "apple_support", version = "2.8.2", repo_name = "build_bazel_apple_support")  # Must be before rules_cc
+bazel_dep(name = "apple_support", version = "2.10.1", repo_name = "build_bazel_apple_support")  # Must be before rules_cc
 bazel_dep(name = "rules_cc", version = "0.2.25")
 bazel_dep(name = "bazel_skylib", version = "1.9.2")
 bazel_dep(name = "platforms", version = "1.1.0")
@@ -323,7 +323,7 @@ new_local_repository(
 # resvg-test-suite goldens are now vendored in-tree under
 # third_party/resvg-test-suite/ so they ship in the source archive.
 
-bazel_dep(name = "rules_python", version = "2.3.3", dev_dependency = True)
+bazel_dep(name = "rules_python", version = "2.4.2", dev_dependency = True)
 
 # Hermetic Python toolchain. Without this, rules_python's py_binary targets
 # fall back to `/usr/bin/env python3` on the host — which is fine for local
@@ -344,7 +344,7 @@ use_repo(python, "python_3_12")
 # Toolchain
 #
 
-bazel_dep(name = "toolchains_llvm", version = "1.8.0", dev_dependency = True)
+bazel_dep(name = "toolchains_llvm", version = "1.11.2", dev_dependency = True)
 
 # To use a local copy of the toolchains_llvm repository, uncomment the following.
 # local_path_override(
@@ -429,7 +429,7 @@ use_repo(
 # always keeps the Xcode toolchain.
 # register_toolchains("@llvm_toolchain//:all", dev_dependency = True)
 
-bazel_dep(name = "zstd", version = "1.5.7.bcr.1", dev_dependency = True)
+bazel_dep(name = "zstd", version = "1.5.7.bcr.3", dev_dependency = True)
 
 #
 # Devtools

@@ -714,6 +714,8 @@ private:
   std::optional<RenderResult> pendingOverviewResult_;
   /// Renderer-only state changed and must be represented by the next accepted worker frame.
   bool pendingPresentationRefresh_ = false;
+  /// A canvas commit invalidated the render tree and its rebuild has not been posted yet.
+  bool pendingRenderTreeRebuild_ = false;
   /// Count of presentation refreshes requested, carried by each posted request's identity.
   std::uint64_t presentationEpoch_ = 0;
   /// The last request posted to the worker. A result with nothing to present belongs to it.
