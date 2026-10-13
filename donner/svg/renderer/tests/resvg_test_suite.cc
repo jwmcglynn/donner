@@ -317,13 +317,6 @@ INSTANTIATE_TEST_SUITE_P(
                          "bilinear filtering, whose 1px edge band differs from tiny-skia's CPU "
                          "resampler. Geode's content matches; only the resample edge differs.")},
                 {"with-subregion-5.svg", Params::Skip("Subregion with rotation: filter")},
-
-                {"with-x-y-and-protruding-subregion-1.svg",
-                 Params::Skip("Bug: feImage edge cases / unsupported subregion combinations")},
-                {"with-x-y-and-protruding-subregion-2.svg",
-                 Params::Skip("Bug: feImage edge cases / unsupported subregion combinations")},
-                {"with-x-y.svg",
-                 Params::Skip("Bug: feImage edge cases / unsupported subregion combinations")},
             })),
         ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);

@@ -186,11 +186,12 @@ bool_flag(
 
 # Length of the libFuzzer time budget on the generated `{fuzzer}_soak` tests.
 #
-# Off by default, which is what `bazel test //...` and the PR gate get: each
-# fuzzer replays its whole checked-in corpus (the actual regression guard) plus
-# a short mutation burst. Measured from a full CI run, the 88 fuzz-timer targets
-# were 576 of the suite's 2297 test CPU-seconds - 25% of everything - and almost
-# all of it was wall-clock the flag below now controls.
+# Off by default, which is what a local `bazel test //...` gets: each soak
+# replays its fuzzer's checked-in corpus plus a short mutation burst. Measured
+# from a full CI run, the 88 fuzz-timer targets were 576 of the suite's 2297 test
+# CPU-seconds - 25% of everything - and almost all of it was wall-clock the flag
+# below now controls. PR CI excludes the soaks by their `fuzz_soak` tag and keeps
+# the `{fuzzer}` corpus replay, which is the actual regression guard.
 #
 # The Fuzz workflow sets this to true so exploratory mutation gets a LONGER
 # budget than the old fixed one, in a build that can actually find things (that
@@ -231,6 +232,14 @@ banned_deps_test(
         "//third_party:zlib",
         "//third_party:freetype",
     ],
+)
+
+# `--config=asan-fuzzer` is the only configuration that defines FUZZING_ENGINE. The soak
+# targets use it to select their sanitizer-scaled per-input timeout.
+config_setting(
+    name = "asan_fuzzer_enabled",
+    define_values = {"FUZZING_ENGINE": "libfuzzer"},
+    visibility = ["//visibility:public"],
 )
 
 config_setting(

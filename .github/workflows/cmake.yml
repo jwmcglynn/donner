@@ -163,28 +163,8 @@ jobs:
         with:
           packages: ccache ninja-build
 
-      # Cache key includes both gen_cmakelists.py AND MODULE.bazel because the
-      # generated CMakeLists.txt embeds FetchContent versions extracted from
-      # MODULE.bazel. A version bump must invalidate the cached build/_deps
-      # tree -- otherwise FetchContent's git stash/unstash dance fails when it
-      # tries to retarget a cached source checkout to the new tag.
-      # external_deps.json and the Bazel lock/module-extension files are included
-      # because they can change emitted CMake dependency edges.
-      # restore-keys is intentionally absent: a partial-match restore would
-      # bring in incompatible state.
-      - name: Cache CMake dependencies
-        uses: actions/cache@v6
-        with:
-          path: build/_deps
-          key: cmake-deps-linux-tiny_skia-${{ hashFiles('tools/cmake/gen_cmakelists.py', 'tools/cmake/external_deps.json', 'MODULE.bazel', 'MODULE.bazel.lock', 'third_party/bazel/non_bcr_deps.bzl') }}
-
-      - name: Cache compiler outputs
-        uses: actions/cache@v6
-        with:
-          path: .ccache
-          key: ccache-linux-tiny_skia-${{ github.sha }}
-          restore-keys: |
-            ccache-linux-tiny_skia-
+      # Only main writes the Actions cache, and this job never runs on main, so
+      # it builds without restoring CMake dependency or compiler caches.
 
       - name: Build with CMake (tiny_skia)
         run: |
@@ -223,15 +203,27 @@ jobs:
             brew install "${missing[@]}"
           fi
 
-      # See linux job above for why restore-keys is absent.
-      - name: Cache CMake dependencies
-        uses: actions/cache@v6
+      # Cache key includes both gen_cmakelists.py AND MODULE.bazel because the
+      # generated CMakeLists.txt embeds FetchContent versions extracted from
+      # MODULE.bazel. A version bump must invalidate the cached build/_deps
+      # tree -- otherwise FetchContent's git stash/unstash dance fails when it
+      # tries to retarget a cached source checkout to the new tag.
+      # external_deps.json and the Bazel lock/module-extension files are included
+      # because they can change emitted CMake dependency edges.
+      # restore-keys is intentionally absent: a partial-match restore would
+      # bring in incompatible state.
+      # Every run restores; only main pushes save (below), so pull requests
+      # read main's entries without spending the shared cache budget.
+      - name: Restore CMake dependencies
+        id: cmake-deps
+        uses: actions/cache/restore@v6
         with:
           path: build/_deps
           key: cmake-deps-macos-tiny_skia-${{ hashFiles('tools/cmake/gen_cmakelists.py', 'tools/cmake/external_deps.json', 'MODULE.bazel', 'MODULE.bazel.lock', 'third_party/bazel/non_bcr_deps.bzl') }}
 
-      - name: Cache compiler outputs
-        uses: actions/cache@v6
+      - name: Restore compiler outputs
+        id: ccache
+        uses: actions/cache/restore@v6
         with:
           path: .ccache
           key: ccache-macos-tiny_skia-${{ github.sha }}
@@ -251,3 +243,19 @@ jobs:
           cmake --build build --target donner_cmake_consumer --parallel
           ctest --test-dir build --output-on-failure
           ccache --show-stats
+
+      - name: Save main CMake dependencies
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && steps.cmake-deps.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: build/_deps
+          # The restore step's key: the build writes MODULE.bazel.lock, so
+          # recomputing it here would save under a key no restore requests.
+          key: ${{ steps.cmake-deps.outputs.cache-primary-key }}
+
+      - name: Save main compiler outputs
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && steps.ccache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: .ccache
+          key: ${{ steps.ccache.outputs.cache-primary-key }}

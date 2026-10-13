@@ -260,7 +260,11 @@ py_test(
     name = "bcr_source_tests",
     size = "small",
     srcs = ["bcr_source_tests.py"],
-    deps = [":bcr_source"],
+    data = ["//:.gitattributes"],
+    deps = [
+        ":bcr_source",
+        "@rules_python//python/runfiles",
+    ],
 )
 
 py_test(
@@ -506,7 +510,10 @@ py_test(
     name = "ci_runner_routing_tests",
     size = "small",
     srcs = ["ci_runner_routing_tests.py"],
-    data = ["//:.github/workflows/main.yml"],
+    data = [
+        "//:.github/actions/pr-trust/action.yml",
+        "//:.github/workflows/main.yml",
+    ],
     deps = ["@rules_python//python/runfiles"],
 )
 

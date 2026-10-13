@@ -3,10 +3,12 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <span>
 #include <type_traits>
 #include <variant>
 #include <vector>
@@ -308,6 +310,27 @@ struct ConvolveMatrix {
   bool preserveAlpha = false;               ///< If true, only filter RGB channels.
 };
 
+/**
+ * Sum an admitted convolution kernel with compensation for cancellation.
+ *
+ * @param kernel Coefficients admitted by the caller's order and resource checks.
+ * @return Compensated sum, or the nonfinite intermediate when accumulation overflows.
+ */
+inline double ConvolveKernelSum(std::span<const double> kernel) {
+  double sum = 0.0;
+  double correction = 0.0;
+  for (const double coefficient : kernel) {
+    const double updated = sum + coefficient;
+    if (!std::isfinite(updated)) {
+      return updated;
+    }
+    correction += std::abs(sum) >= std::abs(coefficient) ? (sum - updated) + coefficient
+                                                         : (coefficient - updated) + sum;
+    sum = updated;
+  }
+  return sum + correction;
+}
+
 /// Parameters for \c feMorphology.
 struct Morphology {
   /// Morphology operator.
@@ -372,9 +395,9 @@ struct Image {
   /// filter pixmap without preserveAspectRatio scaling.
   bool isFragmentReference = false;
 
-  /// The filter region top-left in user-space coordinates, used by fragment references to apply
-  /// a device-space post-translation that positions the fragment content at the filter primitive
-  /// subregion origin. Set by the renderer driver during pre-rendering.
+  /// Filter-region origin in user-space coordinates, supplied by the renderer driver. Fragment
+  /// references use this as a placement fallback when primitive-subregion attributes are absent;
+  /// otherwise the resolved primitive subregion supplies the placement origin.
   Vector2d fragmentRegionTopLeft;
 
   /// Resolved sampling policy inherited by the source `<feImage>`.

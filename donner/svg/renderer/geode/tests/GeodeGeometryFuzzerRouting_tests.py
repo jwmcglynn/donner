@@ -32,6 +32,12 @@ class GeodeGeometryFuzzerRoutingTest(unittest.TestCase):
         self.assertNotIn("fuzz_ubsan_geode", routing[BINARY])
         self.assertNotIn("fuzz_ubsan_geode", routing[SOAK])
 
+    def test_only_the_soak_is_excluded_from_pr_ci(self):
+        routing = _routing(sys.argv[1])
+        self.assertIn("fuzz_soak", routing[SOAK])
+        self.assertNotIn("fuzz_soak", routing[CORPUS])
+        self.assertNotIn("fuzz_soak", routing[BINARY])
+
     def test_gpu_opening_targets_are_serialized(self):
         routing = _routing(sys.argv[1])
         self.assertTrue(all("exclusive-if-local" in tags for tags in routing.values()))
@@ -42,9 +48,9 @@ class GeodeGeometryFuzzerRoutingTest(unittest.TestCase):
         self.assertIn("if (!device)", source)
 
     def test_device_creation_is_not_charged_to_a_per_input_timeout(self):
-        # The soak lanes pass -timeout=2. libFuzzer arms that timeout inside the input callback,
-        # so a device created there (it takes seconds on a loaded software-Vulkan runner) trips
-        # the timeout on the empty-input smoke test before any input is actually slow. Creation
+        # The soak lanes pass a per-input -timeout. libFuzzer arms it inside the input callback,
+        # so a device created there (it takes seconds on a loaded software-Vulkan runner) is
+        # charged to the empty-input smoke test before any input is actually slow. Creation
         # belongs in LLVMFuzzerInitialize, which runs before the timer is armed.
         source = Path(sys.argv[2]).read_text(encoding="utf-8")
         initialize_signature = 'extern "C" int LLVMFuzzerInitialize('

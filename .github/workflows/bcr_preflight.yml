@@ -33,6 +33,11 @@ on:
       - "tools/ci/**"
       - tools/release_cli*.py
       - tools/release_artifact_publisher*.py
+  # The full matrix qualifies a release candidate: run it nightly and on
+  # request. Pushes to main run the slim check (see the prepare job).
+  schedule:
+    # After the other nightly workflows (latest: Coverage at 08:15 UTC).
+    - cron: "35 8 * * *"
   workflow_dispatch:
 
 permissions:
@@ -48,12 +53,60 @@ jobs:
       source_commit: ${{ steps.archive.outputs.source_commit }}
       source_artifact: donner-bcr-source-${{ steps.archive.outputs.producer_run_attempt }}
       entry_artifact: donner-bcr-entry-${{ steps.archive.outputs.producer_run_attempt }}
+      full_matrix: ${{ steps.scope.outputs.full_matrix }}
     steps:
       - uses: actions/checkout@v7
         with:
           path: donner
           fetch-depth: 0
           persist-credentials: false
+
+      # Two scopes. The full matrix (Ubuntu and macOS consumers on Bazel 7 and
+      # 8, both CLI builds, attestation and qualification) is what qualifies a
+      # release candidate; it runs on schedule, on manual dispatch, and for a
+      # pull request that changes release or packaging inputs. Pushes to main
+      # and every other pull request run the slim check: this archive, the
+      # registry admission check and one Ubuntu consumer on the newest Bazel,
+      # so archive and basic consumer breakage still shows at once. A diff
+      # that cannot be listed selects the full matrix.
+      - name: Select the preflight scope
+        id: scope
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          full_matrix=true
+          if [[ "$EVENT_NAME" == "push" ]]; then
+            full_matrix=false
+          elif [[ "$EVENT_NAME" == "pull_request" ]]; then
+            if diff_base="$(git merge-base "$BASE_SHA" "$HEAD_SHA")" &&
+                changed="$(git -c core.quotePath=false diff --no-renames --name-only \
+                  "$diff_base" "$HEAD_SHA")" &&
+                [[ -n "$changed" ]]; then
+              full_matrix=false
+              while IFS= read -r path; do
+                case "$path" in
+                  MODULE.bazel|MODULE.bazel.lock|.bazelversion|.bazelrc|.bcr/*|\
+                  examples/bazel_consumer/*|third_party/licenses/*|third_party/bazel/*|\
+                  third_party/BUILD*|third_party/*.BUILD|third_party/*.bzl|\
+                  third_party/patches/*|build_defs/licenses.bzl|build_defs/dep_audit.bzl|\
+                  tools/BUILD.bazel|tools/bcr_*|tools/release_*|tools/notice*|\
+                  tools/render_notice*|tools/default_notice*|tools/ci/BUILD.bazel|\
+                  tools/ci/release_*|.github/workflows/bcr_preflight.yml|\
+                  .github/workflows/publish_bcr.yml|.github/workflows/release.yml)
+                    echo "Full preflight matrix selected by $path"
+                    full_matrix=true
+                    break
+                    ;;
+                esac
+              done <<< "$changed"
+            else
+              echo "Could not list the pull request's changes; selecting the full matrix."
+            fi
+          fi
+          echo "full_matrix=$full_matrix" >> "$GITHUB_OUTPUT"
 
       - name: Prepare committed source archive
         id: archive
@@ -78,6 +131,7 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: '24'
+          package-manager-cache: false
 
       - name: Generate the candidate BCR entry without publishing
         uses: bazel-contrib/publish-to-bcr@v1.5.1
@@ -131,6 +185,11 @@ jobs:
       matrix:
         os: [ubuntu-24.04, macos-26]
         bazel: ['7.x', '8.x']
+        # The slim check keeps only the Ubuntu consumer on the newest Bazel;
+        # the full matrix excludes nothing.
+        exclude:
+          - os: ${{ needs.prepare.outputs.full_matrix == 'true' && 'none' || 'macos-26' }}
+          - bazel: ${{ needs.prepare.outputs.full_matrix == 'true' && 'none' || '7.x' }}
     runs-on: ${{ matrix.os }}
     env:
       USE_BAZEL_VERSION: ${{ matrix.bazel }}
@@ -144,6 +203,7 @@ jobs:
           bazelisk-cache: true
           disk-cache: bcr-${{ matrix.os }}-${{ matrix.bazel }}
           repository-cache: true
+          cache-save: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
       - uses: actions/download-artifact@v8
         with:
           name: ${{ needs.prepare.outputs.source_artifact }}
@@ -186,6 +246,7 @@ jobs:
 
   cli-linux:
     needs: prepare
+    if: ${{ needs.prepare.outputs.full_matrix == 'true' }}
     runs-on: ubuntu-24.04
     env:
       SOURCE_COMMIT: ${{ needs.prepare.outputs.source_commit }}
@@ -196,6 +257,7 @@ jobs:
       - uses: bazel-contrib/setup-bazel@0.19.0
         with:
           bazelisk-cache: true
+          cache-save: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
       - name: Install CLI build dependencies
         run: sudo apt-get install -y libncurses-dev
       - name: Build and bind the Linux CLI to the preflight candidate
@@ -226,6 +288,7 @@ jobs:
 
   cli-macos:
     needs: prepare
+    if: ${{ needs.prepare.outputs.full_matrix == 'true' }}
     runs-on: macos-26
     env:
       SOURCE_COMMIT: ${{ needs.prepare.outputs.source_commit }}
@@ -236,6 +299,7 @@ jobs:
       - uses: bazel-contrib/setup-bazel@0.19.0
         with:
           bazelisk-cache: true
+          cache-save: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
       - name: Build and bind the macOS CLI to the preflight candidate
         run: |
           bazelisk build --lockfile_mode=update -c opt //tools/ci:release_svg //tools/ci:release_svg_notice \
@@ -259,7 +323,7 @@ jobs:
           compression-level: 0
 
   attest-artifacts:
-    if: github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main' && needs.prepare.outputs.full_matrix == 'true'
     needs: [prepare, cli-linux, cli-macos]
     runs-on: ubuntu-24.04
     permissions:
@@ -322,6 +386,7 @@ jobs:
 
   qualify:
     needs: [prepare, consumer, cli-linux, cli-macos]
+    if: ${{ needs.prepare.outputs.full_matrix == 'true' }}
     runs-on: ubuntu-24.04
     env:
       SOURCE_COMMIT: ${{ needs.prepare.outputs.source_commit }}

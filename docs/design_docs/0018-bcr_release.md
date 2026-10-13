@@ -51,16 +51,19 @@ alone does not submit to BCR. Prereleases do not open BCR PRs.
    ordinary CI qualification on the final source commit.
 2. Set the same version in `MODULE.bazel` and `examples/bazel_consumer/MODULE.bazel`. Review any
    compatibility-level change against all supported Bazel versions, including older resolvers.
-3. Require `BCR Preflight` on that exact commit. Main pushes run it automatically. If no run exists
-   and main still points to the intended commit, dispatch the workflow on `main`; a branch or tag
-   dispatch cannot attest or supply release artifacts. An empty source commit is unnecessary.
+3. Require a full `BCR Preflight` run on that exact commit. Pushes to main run only the slim
+   check (source archive, registry admission and one Ubuntu consumer), which cannot qualify a
+   release. The full matrix runs nightly on `main` and on manual dispatch; the release tooling
+   currently accepts only a dispatched run, so while main still points to the intended commit,
+   dispatch the workflow on `main`. A branch or tag dispatch cannot attest or supply release
+   artifacts. An empty source commit is unnecessary.
 4. Inspect its admission report and all four consumer jobs. A generator or checkout-only build is
    not an admission test. Expected BCR maintainer review is reported separately from validation
    errors, and does not imply that upstream builds have run.
 5. Confirm `donner-bcr-qualified-<attempt>` and both `donner-svg-<platform>-<commit>-<attempt>`
    artifacts, including each generated Bazel lockfile, are retained. Artifact retention is 90 days; run a fresh preflight before approval if
-   any expires. Use a successful push or manual preflight on main for the exact source commit,
-   never a PR or feature-branch run. Add `Release-Candidate-Preflight: <run-id>/<attempt>` as a line in the release body
+   any expires. Use a successful manually dispatched full preflight on main for the exact source
+   commit, never a slim push run, a PR or a feature-branch run. Add `Release-Candidate-Preflight: <run-id>/<attempt>` as a line in the release body
    before publication. The Release workflow accepts only that named run and attempt.
 
 ### Source archive and preflight
@@ -114,7 +117,7 @@ notice's SHA-256 and records the compiler version reported by `//tools/ci:releas
 which is built in the same invocation and configuration as the CLI. Bazel compiles with the
 toolchain it resolves (clang, per `.bazelrc`), not the runner's default `c++`, so packaging fails
 when that probe cannot report a compiler. A separate preflight job verifies and signs the source archive, both CLI binaries,
-both generated lockfiles and both notices on main push or manual runs.
+both generated lockfiles and both notices on full-matrix runs on main (nightly or manual).
 Qualification waits for both CLI builds and the audited consumer matrix, re-verifies both CLI
 artifacts from its own attempt, and records that run ID and attempt without changing the archive
 bytes.

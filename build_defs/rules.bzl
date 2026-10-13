@@ -814,7 +814,7 @@ def _fuzzer_routing_manifest_impl(ctx):
     for suffix, tags in [
         ("", ctx.attr.corpus_tags),
         ("_bin", ctx.attr.common_tags),
-        ("_soak", ctx.attr.common_tags),
+        ("_soak", ctx.attr.soak_tags),
     ]:
         for tag in sorted(tags):
             lines.append("%s%s\t%s" % (ctx.attr.fuzzer_name, suffix, tag))
@@ -827,6 +827,7 @@ _fuzzer_routing_manifest = rule(
         "common_tags": attr.string_list(),
         "corpus_tags": attr.string_list(),
         "fuzzer_name": attr.string(mandatory = True),
+        "soak_tags": attr.string_list(),
     },
     outputs = {"out": "%{name}.txt"},
 )
@@ -869,11 +870,15 @@ _fuzzer_soak_test = rule(
     },
 )
 
+# libFuzzer `-timeout` floor for `{fuzzer}_soak` under `--config=asan-fuzzer`. See
+# `per_input_timeout_seconds` on `donner_cc_fuzzer`.
+_ASAN_FUZZER_PER_INPUT_TIMEOUT_SECONDS = 60
+
 def donner_cc_fuzzer(
         name,
         corpus,
         deps = [],
-        per_input_timeout_seconds = 2,
+        per_input_timeout_seconds = 25,
         tags = [],
         routing_manifest = None,
         full_text_only = False,
@@ -885,7 +890,10 @@ def donner_cc_fuzzer(
       name: Rule name.
       corpus: Path to a corpus directory, or a filegroup rule for the corpus.
       deps: List of dependencies.
-      per_input_timeout_seconds: Maximum time for one generated input in the timed fuzz test.
+      per_input_timeout_seconds: libFuzzer `-timeout` for `{name}_soak`. This is a hang guard,
+        not a latency budget: it only has to separate an input that never finishes from a slow
+        one on a loaded runner, including first-input setup under sanitizers. Under
+        `--config=asan-fuzzer` the soak uses at least 60 s. Override it only to go above 25 s.
       tags: Additional Bazel tags used to select configuration-specific corpus and soak lanes.
       full_text_only: Keep the corpus, raw binary, and soak on the full-text configuration.
       routing_manifest: Optional target name for a dependency-free manifest of the exact tags
@@ -897,7 +905,8 @@ def donner_cc_fuzzer(
                       input, no time budget, always on the PR gate. This is the
                       target that catches a regression.
       {name}_bin    - the raw fuzzer binary, for interactive fuzzing.
-      {name}_soak   - exploratory mutation. Time budget is controlled by
+      {name}_soak   - exploratory mutation, tagged `fuzz_soak` so PR CI can
+                      exclude it. Time budget is controlled by
                       `--//build_defs:fuzz_soak` (see build_defs/BUILD.bazel).
     """
     if per_input_timeout_seconds <= 0:
@@ -920,6 +929,7 @@ def donner_cc_fuzzer(
         ubsan_tags.append("fuzz_ubsan_geode")
     common_target_tags = ["fuzz_target"] + common_tags
     corpus_tags = ["fuzz_target", "fuzz_ubsan"] + common_tags + ubsan_tags
+    soak_tags = common_target_tags + ["fuzz_soak"]
 
     if routing_manifest:
         _fuzzer_routing_manifest(
@@ -927,6 +937,7 @@ def donner_cc_fuzzer(
             common_tags = common_target_tags,
             corpus_tags = corpus_tags,
             fuzzer_name = name,
+            soak_tags = soak_tags,
         )
 
     binary_name = name + "_bin_impl" if full_text_only else name + "_bin"
@@ -958,10 +969,10 @@ def donner_cc_fuzzer(
     # before it mutates anything, so the budget below only sizes the exploratory
     # tail. On the PR gate that tail was 25% of the entire test suite's CPU
     # (576 of 2297 CPU-seconds across 88 targets) spent mutating in a build with
-    # no sanitizers. The Fuzz workflow flips `--//build_defs:fuzz_soak=true` and
-    # gets a longer budget than the old fixed 10 s, under `--config=asan-fuzzer`
-    # where a discovered input is actually diagnosable. Net exploration goes up;
-    # it just stops happening on every unrelated pull request.
+    # no sanitizers, so PR CI now excludes the `fuzz_soak` tag entirely. The Fuzz
+    # workflow flips `--//build_defs:fuzz_soak=true` and gets a longer budget than
+    # the old fixed 10 s, under `--config=asan-fuzzer` where a discovered input is
+    # actually diagnosable.
     fuzz_time_args = select({
         "//build_defs:fuzz_soak_enabled": ["-max_total_time=30"],
         "//conditions:default": ["-max_total_time=2"],
@@ -971,14 +982,23 @@ def donner_cc_fuzzer(
         name = name + "_soak",
         binary = ":" + name + "_bin",
         corpus = corpus_name,
-        fuzz_args = fuzz_time_args + ["-timeout=%d" % per_input_timeout_seconds],
+        fuzz_args = fuzz_time_args + select({
+            "//build_defs:asan_fuzzer_enabled": [
+                "-timeout=%d" % max(per_input_timeout_seconds, _ASAN_FUZZER_PER_INPUT_TIMEOUT_SECONDS),
+            ],
+            "//conditions:default": ["-timeout=%d" % per_input_timeout_seconds],
+        }),
         target_compatible_with = fuzzer_compatible_with(),
         size = "small",
+        # An input that starts just before the time budget ends may run for up to
+        # 1.5x the per-input timeout before libFuzzer reports it, so a hang must
+        # still fail as a hang rather than as a Bazel test timeout.
+        timeout = "moderate",
         runtime_data = select({
             "@platforms//os:macos": ["@llvm_toolchain//:linker-components-aarch64-darwin"],
             "//conditions:default": [],
         }),
-        tags = common_target_tags,
+        tags = soak_tags,
     )
 
     donner_cc_test(

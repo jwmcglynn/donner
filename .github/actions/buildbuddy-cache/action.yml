@@ -1,28 +1,45 @@
 name: Configure BuildBuddy remote cache
 description: >-
-  Enable the BuildBuddy remote cache on GitHub-hosted CI lanes when the
-  BUILDBUDDY_API_KEY repo secret is present. This action is a no-op (fully
-  inert) when the key is empty, so every lane behaves byte-for-byte as it did
-  before until an operator adds the secret. It writes a bazelrc fragment that
-  the workspace .bazelrc picks up via `try-import`; it never edits the build
-  or test commands themselves.
+  Point Bazel at the BuildBuddy remote cache on a GitHub-hosted lane. Remote
+  cache only: no remote execution and no build-event upload. The workflow
+  passes at most one key, chosen by the event and the shared pull request
+  trust rule (.github/actions/pr-trust); this action re-checks that choice and
+  fails closed. With no key it writes nothing, and the try-import in .bazelrc
+  leaves the build exactly as it is without a remote cache.
 
 inputs:
   api-key:
     description: >-
-      BuildBuddy API key. Pass `secrets.BUILDBUDDY_API_KEY`. When empty (the
-      default, and the state until the operator adds the secret) this action
-      does nothing and the build runs with no remote cache.
+      Read-write key. Pass `secrets.BUILDBUDDY_API_KEY`, a secret of the
+      buildbuddy-write environment, only from a job that binds that
+      environment and a step limited to main push, schedule and dispatch runs
+      or to a trusted maintainer pull request.
     required: false
     default: ""
-  download-outputs-minimal:
+  read-only-api-key:
     description: >-
-      When "true" (default), add `--remote_download_outputs=minimal` to avoid
-      downloading cache-hit intermediates on the (executor-less) cache lanes.
-      Set "false" for lanes that must materialize all outputs locally, e.g. the
-      coverage lane which collects lcov data from the build tree.
+      Key whose cache writes are disabled. Pass
+      `secrets.BUILDBUDDY_API_KEY_READONLY` from a step limited to Renovate
+      pull requests; the action also turns off result upload. As a repository
+      secret it reaches every same-repository run of the job, so treat it as
+      public: it can only read the cache.
     required: false
-    default: "true"
+    default: ""
+  trusted-pr:
+    description: The `trusted_pr` output of .github/actions/pr-trust.
+    required: false
+    default: "false"
+  renovate-pr:
+    description: The `renovate_pr` output of .github/actions/pr-trust.
+    required: false
+    default: "false"
+  download-outputs:
+    description: >-
+      Value of `--remote_download_outputs`. "minimal" suits lanes that only
+      need test results; use "toplevel" (Bazel's default) or "all" when a
+      later step reads build outputs from bazel-bin.
+    required: false
+    default: toplevel
 
 runs:
   using: composite
@@ -30,52 +47,113 @@ runs:
     - name: Configure BuildBuddy remote cache
       shell: bash
       env:
-        # Secret indirection: GitHub secrets are not readable in `if:`
-        # conditions, so the key is passed in as an env var and the presence
-        # gate is a shell test below (the standard, supported pattern).
-        BUILDBUDDY_API_KEY: ${{ inputs.api-key }}
-        DOWNLOAD_MINIMAL: ${{ inputs.download-outputs-minimal }}
+        # Secrets are not readable in `if:` conditions, so each key arrives as
+        # an environment value and the presence checks below are shell tests.
+        WRITE_KEY: ${{ inputs.api-key }}
+        READ_KEY: ${{ inputs.read-only-api-key }}
+        TRUSTED_PR: ${{ inputs.trusted-pr }}
+        RENOVATE_PR: ${{ inputs.renovate-pr }}
+        DOWNLOAD_OUTPUTS: ${{ inputs.download-outputs }}
         EVENT_NAME: ${{ github.event_name }}
+        REF: ${{ github.ref }}
       run: |
         set -euo pipefail
+        endpoint="remote.buildbuddy.io"
+        fragment="${GITHUB_WORKSPACE}/.buildbuddy.bazelrc"
+        rm -f "${fragment}"
 
-        # No key -> write nothing and exit. This is the inert path: with no
-        # fragment file, the `try-import` in .bazelrc is a silent no-op and the
-        # build is identical to a run without this action. Self-hosted lanes
-        # never call this action, so they are unaffected regardless.
-        if [[ -z "${BUILDBUDDY_API_KEY}" ]]; then
-          echo "BUILDBUDDY_API_KEY not set; BuildBuddy remote cache disabled (inert no-op)."
+        if [[ -z "${WRITE_KEY}" && -z "${READ_KEY}" ]]; then
+          echo "No BuildBuddy key for this run; remote cache disabled."
+          exit 0
+        fi
+        # Never let a key surface in logs, even if a later step prints flags.
+        if [[ -n "${WRITE_KEY}" ]]; then echo "::add-mask::${WRITE_KEY}"; fi
+        if [[ -n "${READ_KEY}" ]]; then echo "::add-mask::${READ_KEY}"; fi
+
+        # The checks below back up the workflow's own step conditions: a key
+        # that reaches the wrong run is an error, never a silent downgrade.
+        fail() { echo "::error::BuildBuddy: $1"; exit 1; }
+        [[ "${RUNNER_ENVIRONMENT:-}" == "github-hosted" ]] ||
+          fail "keys are only for GitHub-hosted runners."
+        [[ -z "${WRITE_KEY}" || -z "${READ_KEY}" ]] || fail "pass one key, not both."
+        main_writer=false
+        if [[ "${REF}" == "refs/heads/main" ]]; then
+          case "${EVENT_NAME}" in
+            push|schedule|workflow_dispatch) main_writer=true ;;
+          esac
+        fi
+        trusted_writer=false
+        if [[ "${EVENT_NAME}" == "pull_request" && "${TRUSTED_PR}" == "true" &&
+              "${RENOVATE_PR}" != "true" ]]; then
+          trusted_writer=true
+        fi
+        if [[ -n "${WRITE_KEY}" ]]; then
+          mode=read-write
+          upload=true
+          [[ "${main_writer}" == "true" || "${trusted_writer}" == "true" ]] ||
+            fail "the read-write key is only for main and trusted maintainer pull requests."
+        else
+          mode=read-only
+          upload=false
+          [[ "${EVENT_NAME}" == "pull_request" && "${RENOVATE_PR}" == "true" ]] ||
+            fail "the read-only key is only for Renovate pull requests."
+        fi
+        case "${DOWNLOAD_OUTPUTS}" in
+          minimal|toplevel|all) ;;
+          *) fail "unsupported download-outputs value." ;;
+        esac
+
+        # Hosted lanes compile with the runner image's compiler and system
+        # headers, which are not action inputs, so an image update changes no
+        # cache key. Partition the cache per runner image so an entry is only
+        # ever reused on the image that produced it.
+        image="${ImageOS:-}-${ImageVersion:-}-${RUNNER_ARCH:-}"
+        if [[ ! "${image}" =~ ^[A-Za-z0-9]+-[A-Za-z0-9.]+-[A-Za-z0-9]+$ ]]; then
+          echo "::warning::BuildBuddy: runner image identity unavailable; remote cache disabled."
           exit 0
         fi
 
-        # Never let the key surface in logs, even if a later step prints flags.
-        echo "::add-mask::${BUILDBUDDY_API_KEY}"
-
-        # Workflow policy must never pass a credential to PR-controlled code.
-        # Keep this guard as a fail-closed backstop for future call sites.
-        if [[ "${EVENT_NAME}" == "pull_request" ]]; then
-          echo "BuildBuddy credentials are disabled for pull requests."
-          exit 1
+        # An unreachable cache must cost nothing: Bazel can stop at startup
+        # when it cannot reach the remote cache, so probe first and build
+        # locally on any transport failure. Without --fail, curl succeeds on
+        # every HTTP response, so any nonzero status means no usable endpoint.
+        if ! curl --silent --output /dev/null --connect-timeout 5 --max-time 10 \
+            "https://${endpoint}"; then
+          echo "::warning::BuildBuddy unreachable; building without the remote cache."
+          exit 0
         fi
-        upload_local_results="true"
 
-        fragment="${GITHUB_WORKSPACE}/.buildbuddy.bazelrc"
+        # The key lives outside the workspace, so no artifact or cache upload
+        # of workspace paths can carry it; the workspace fragment only imports
+        # it. The runner deletes RUNNER_TEMP when the job ends.
+        credentials="${RUNNER_TEMP}/buildbuddy"
+        mkdir -p "${credentials}"
+        chmod 700 "${credentials}"
+        if [[ "${mode}" == "read-write" ]]; then key="${WRITE_KEY}"; else key="${READ_KEY}"; fi
+        (
+          umask 077
+          printf 'build --remote_header=x-buildbuddy-api-key=%s\n' "${key}" \
+            > "${credentials}/credentials.bazelrc"
+        )
         {
           echo "# Generated by .github/actions/buildbuddy-cache. Do not commit."
-          echo "build --remote_cache=grpcs://remote.buildbuddy.io"
-          echo "build --remote_header=x-buildbuddy-api-key=${BUILDBUDDY_API_KEY}"
+          echo "build --remote_cache=grpcs://${endpoint}"
+          echo "build --remote_instance_name=${image}"
           echo "build --remote_timeout=60s"
-          echo "build --remote_upload_local_results=${upload_local_results}"
-          if [[ "${DOWNLOAD_MINIMAL}" == "true" ]]; then
-            echo "build --remote_download_outputs=minimal"
+          echo "build --remote_cache_compression"
+          echo "build --remote_download_outputs=${DOWNLOAD_OUTPUTS}"
+          # rules_playwright unpacks each browser into a directory output. When
+          # that output comes from a cache (remote or disk) and is fetched only
+          # when a test needs it, its macOS app bundle cannot be staged into the
+          # test sandbox. Download the browser trees in full on every cache hit.
+          echo 'build --remote_download_regex=.*/rules_playwright[+][^/]*/browsers/.*'
+          if [[ "${upload}" == "true" ]]; then
+            echo "build --remote_upload_local_results"
+          else
+            echo "build --noremote_upload_local_results"
           fi
+          echo "import ${credentials}/credentials.bazelrc"
         } > "${fragment}"
 
-        # Report the resolved config WITHOUT printing the fragment (it holds the
-        # key). `build` options are inherited by test/coverage/run in Bazel.
-        echo "BuildBuddy remote cache enabled:"
-        echo "  event=${EVENT_NAME}"
-        echo "  remote_cache=grpcs://remote.buildbuddy.io"
-        echo "  remote_upload_local_results=${upload_local_results}"
-        echo "  remote_download_outputs_minimal=${DOWNLOAD_MINIMAL}"
-        echo "  fragment=${fragment} (loaded via try-import in .bazelrc)"
+        echo "BuildBuddy remote cache enabled: mode=${mode} event=${EVENT_NAME}" \
+          "instance=${image} download_outputs=${DOWNLOAD_OUTPUTS} upload=${upload}"

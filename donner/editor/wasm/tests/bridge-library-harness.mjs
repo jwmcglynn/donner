@@ -218,6 +218,8 @@ export function loadLibrary({
       STORAGE_BINDING: 0x08,
     },
     GPUMapMode: { READ: 1 },
+    GPUShaderStage: { VERTEX: 0x1, FRAGMENT: 0x2, COMPUTE: 0x4 },
+    GPUColorWrite: { RED: 0x1, GREEN: 0x2, BLUE: 0x4, ALPHA: 0x8 },
     GPUBufferUsage: {
       MAP_READ: 0x0001,
       COPY_SRC: 0x0004,
