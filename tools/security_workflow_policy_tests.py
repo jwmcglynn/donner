@@ -1296,6 +1296,117 @@ def _candidate_assembly_violations(workflow):
     return _candidate_workflow_violations(workflow) + _candidate_job_violations(jobs)
 
 
+BCR_SUBMISSION_WORKFLOW = ".github/workflows/publish_bcr.yml"
+BCR_SUBMISSION_INPUTS = ("release_run_id", "record_sha256")
+BCR_SUBMISSION_JOBS = {"validate", "promote-entry", "prepare-fork", "publish-fork"}
+BCR_PLAN_STEP = "Verify the release and its candidate record and plan the submission"
+BCR_PROMOTE_STEPS = ("Fetch the admission-validated entry the record names",
+                     "Stage exactly the validated entry",
+                     "Verify and bundle the proposed entry without a fork token")
+BCR_RECHECK_STEP = "Verify the exact proposed commit without a fork token"
+BCR_FETCH_ENTRY = "python3 -B -m tools.bcr_release fetch-entry"
+BCR_VALIDATED_ENTRY = '--validated-entry "$RUNNER_TEMP/validated-entry/entry"'
+BCR_RECORD_DIGEST = "APPROVED_SOURCE_SHA256: ${{ needs.validate.outputs.source_sha256 }}"
+
+
+def _bcr_validation_violations(validate):
+    plan = _named_step(validate, BCR_PLAN_STEP)
+    return _failed([
+        ("python3 -B -m tools.bcr_release plan-submission" in plan and
+         '--record-sha256 "$RECORD_SHA256"' in plan,
+         "submission is not planned from the approved candidate record"),
+        (_permissions(validate, 4) == {"contents": "read", "actions": "read",
+                                       "attestations": "read"},
+         "validation job token scopes changed"),
+    ])
+
+
+def _bcr_promotion_violations(promote, prepare):
+    names = [_step_identity_value(step, "name") for step in _steps(promote)]
+    bundle = _named_step(promote, BCR_PROMOTE_STEPS[2])
+    recheck = _named_step(prepare, BCR_RECHECK_STEP)
+    return _failed([
+        ([name for name in names if name in BCR_PROMOTE_STEPS] == list(BCR_PROMOTE_STEPS),
+         "promotion does not fetch, stage and verify the validated entry in order"),
+        (BCR_FETCH_ENTRY in _named_step(promote, BCR_PROMOTE_STEPS[0]) and
+         "tools.bcr_release stage-entry" in _named_step(promote, BCR_PROMOTE_STEPS[1]),
+         "promotion does not submit the admission-validated entry"),
+        (BCR_VALIDATED_ENTRY in bundle and BCR_RECORD_DIGEST in bundle,
+         "promotion does not compare the proposed entry with the validated entry"),
+        (BCR_FETCH_ENTRY in prepare and BCR_VALIDATED_ENTRY in recheck and
+         BCR_RECORD_DIGEST in recheck and "--proposed-commit" in recheck,
+         "fork preparation does not recheck the commit against the validated entry"),
+    ])
+
+
+def _bcr_submission_violations(workflow):
+    """BCR submission takes the record's digests and validated entry, and regenerates nothing."""
+    jobs = _jobs(workflow)
+    if set(jobs) != BCR_SUBMISSION_JOBS:
+        return ["BCR submission jobs changed: %s" % sorted(jobs)]
+    return _failed([
+        (_triggers(workflow) == {"workflow_dispatch"},
+         "BCR submission runs on an event other than a manual dispatch"),
+        (_candidate_input_names(workflow) == list(BCR_SUBMISSION_INPUTS),
+         "BCR submission inputs changed: %s" % _candidate_input_names(workflow)),
+        (not _build_steps(workflow),
+         "BCR submission builds or regenerates: %s" % _build_steps(workflow)),
+        (not any("${{" in body for body in _run_bodies(workflow)),
+         "BCR submission run blocks must use quoted environment values"),
+    ]) + _bcr_validation_violations(jobs["validate"]) + _bcr_promotion_violations(
+        jobs["promote-entry"], jobs["prepare-fork"])
+
+
+DOCS_WORKFLOW = ".github/workflows/deploy_docs.yaml"
+DOCS_DEPLOY_STEPS = ("Select the docs build to deploy",
+                     "Verify the candidate record attestation",
+                     "Download the retained Pages artifact",
+                     "Verify selected source, artifact, and exact archive bytes",
+                     "Deploy the selected artifact without rebuilding")
+DOCS_SELECTED = "${{ steps.select.outputs."
+
+
+def _docs_selection_violations(deploy):
+    select, attest, download, verify, publish = (_named_step(deploy, name)
+                                                 for name in DOCS_DEPLOY_STEPS)
+    return _failed([
+        ("python3 -B -m tools.release_candidate docs-selection" in select and
+         '--selection "$SELECTION"' in select and '--record-sha256 "$RECORD_SHA256"' in select,
+         "deploy does not select from the candidate record"),
+        ("gh attestation verify" in attest and
+         "--signer-workflow jwmcglynn/donner/.github/workflows/release_candidate.yml" in attest and
+         "if: steps.select.outputs.selection == 'record'" in attest,
+         "deploy does not verify the candidate record attestation"),
+        ("artifact-ids: %sartifact_id }}" % DOCS_SELECTED in download and
+         "run-id: %srun_id }}" % DOCS_SELECTED in download,
+         "deploy downloads an artifact the selection did not name"),
+        ("python3 -B -m tools.pages_artifact verify" in verify and
+         "DOC_ARCHIVE_SHA256: %sarchive_sha256 }}" % DOCS_SELECTED in verify,
+         "deploy does not verify the selected archive"),
+        ("DOC_ARTIFACT_ID: %sartifact_id }}" % DOCS_SELECTED in publish,
+         "deploy promotes an artifact the selection did not name"),
+        (all("inputs." not in step for step in _steps(deploy) if step != select),
+         "deploy reads dispatch inputs outside the selection step"),
+    ])
+
+
+def _docs_deploy_violations(workflow):
+    """Docs deploy promotes exactly the selected retained build and builds nothing."""
+    deploy = _jobs(workflow).get("deploy", "")
+    names = [_step_identity_value(step, "name") for step in _steps(deploy)]
+    guard = "if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'"
+    return _failed([
+        (guard in deploy, "deploy can run without a manual dispatch on main"),
+        (not _build_steps(deploy) and "upload-artifact@" not in deploy,
+         "deploy builds or uploads: %s" % _build_steps(deploy)),
+        ([name for name in names if name in DOCS_DEPLOY_STEPS] == list(DOCS_DEPLOY_STEPS) and
+         names[-1:] == [DOCS_DEPLOY_STEPS[-1]],
+         "deploy does not select and verify before its final Pages step"),
+        (not any("${{" in body for body in _run_bodies(deploy)),
+         "deploy run blocks must use quoted environment values"),
+    ]) + _docs_selection_violations(deploy)
+
+
 class SecurityWorkflowPolicyTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -2024,20 +2135,16 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         workflow = self.supply_chain_files[".github/workflows/publish_bcr.yml"]
         self.assertIn("workflow_dispatch:", workflow)
         self.assertNotIn("workflow_run:", workflow)
-        self.assertIn("approved_source_commit:", workflow)
-        self.assertIn("approved_source_sha256:", workflow)
+        self.assertEqual([], _bcr_submission_violations(workflow))
         self.assertIn("github.ref == 'refs/heads/main'", workflow)
         self.assertIn("ref: ${{ github.sha }}", workflow)
-        self.assertIn("tools.bcr_release plan-submission", workflow)
-        self.assertIn("--approved-commit", workflow)
-        self.assertIn("--approved-sha256", workflow)
-        validate, remainder = workflow.split("\n  generate-entry:\n", 1)
+        validate, remainder = workflow.split("\n  promote-entry:\n", 1)
         generate, remainder = remainder.split("\n  prepare-fork:\n", 1)
         prepare, publish = remainder.split("\n  publish-fork:\n", 1)
         self.assertNotIn("secrets.", validate)
         self.assertNotIn("secrets.", generate)
-        # Any release tag is accepted, so Renovate's tag updates stay green; a commit pin is not.
-        self.assertRegex(generate, r"uses: bazel-contrib/publish-to-bcr@v\d+\.\d+\.\d+\n")
+        # Submission promotes the entry preflight validated; it never runs the generator.
+        self.assertNotIn("publish-to-bcr", workflow)
         self.assertIn("actions/upload-artifact@v7", generate)
         self.assertIn("actions/download-artifact@v8", prepare)
         self.assertEqual(workflow.count("actions/checkout@v7"), 7)
@@ -2047,12 +2154,12 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         self.assertIn("actions/upload-artifact@", generate)
         self.assertIn("fetch-depth: 0", _step_body(generate, "Checkout BCR for the proposed entry"))
         self.assertIn("needs.validate.outputs.prepare == 'true'", prepare)
-        self.assertIn("needs: [validate, generate-entry]", prepare)
+        self.assertIn("needs: [validate, promote-entry]", prepare)
         self.assertNotIn("secrets.", prepare)
         self.assertIn("tools.bcr_release verify-generated", prepare)
         self.assertIn("actions/download-artifact@", prepare)
         self.assertIn("fetch-depth: 0", _step_body(prepare, "Checkout the exact BCR base"))
-        self.assertIn("needs: [validate, generate-entry, prepare-fork]", publish)
+        self.assertIn("needs: [validate, promote-entry, prepare-fork]", publish)
         self.assertIn("environment: bcr-fork-preparation", publish)
         self.assertIn("PUBLISH_TOKEN: ${{ secrets.PUBLISH_TOKEN }}", publish)
         self.assertNotIn("uses:", publish, "the protected token job must run no external action")
@@ -2072,6 +2179,84 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         for path in (".github/workflows/bcr_preflight.yml", ".github/workflows/publish_bcr.yml"):
             for body in _run_bodies(self.supply_chain_files[path]):
                 self.assertNotIn("${{", body, "run blocks must quote environment values")
+
+    def test_bcr_submission_policy_rejects_regenerated_or_unbound_entries(self):
+        path = BCR_SUBMISSION_WORKFLOW
+        workflow = self.supply_chain_files[path]
+        stage = "      - name: Stage exactly the validated entry\n"
+        generator = ("      - name: Generate the registry entry\n"
+                     "        uses: bazel-contrib/publish-to-bcr@v1.5.1\n"
+                     "        with:\n          local-registry: registry\n")
+        approved = ("      approved_source_sha256:\n        description: Reviewed digest\n"
+                    "        required: true\n        type: string\n")
+        self._assert_rejected(lambda files, path: _bcr_submission_violations(files[path]), {
+            "regenerated entry": (path, workflow.replace(stage, generator + stage, 1),
+                                  "regenerates"),
+            "free-form digest": (path, workflow.replace(
+                "      record_sha256:\n", approved + "      record_sha256:\n", 1),
+                "inputs changed"),
+            "no record in plan": (path, workflow.replace(
+                '            --record-sha256 "$RECORD_SHA256" \\\n            --work "$RUNNER_TEMP/bcr-plan"',
+                '            --work "$RUNNER_TEMP/bcr-plan"', 1),
+                "planned from the approved candidate record"),
+            "no attestation scope": (path, workflow.replace(
+                "      attestations: read\n", "", 1), "validation job token scopes"),
+            "unfetched entry": (path, workflow.replace(
+                "python3 -B -m tools.bcr_release fetch-entry", "true", 1),
+                "submit the admission-validated entry"),
+            "unstaged entry": (path, workflow.replace(
+                "tools.bcr_release stage-entry", "tools.bcr_release verify-generated", 1),
+                "submit the admission-validated entry"),
+            "uncompared bundle": (path, workflow.replace(
+                ' \\\n            --validated-entry "$RUNNER_TEMP/validated-entry/entry"\n          TREE=',
+                "\n          TREE=", 1), "compare the proposed entry"),
+            "unchecked fork commit": (path, workflow.replace(
+                '            --validated-entry "$RUNNER_TEMP/validated-entry/entry" \\\n'
+                '            --proposed-commit', '            --proposed-commit', 1),
+                "recheck the commit"),
+            "input digest": (path, workflow.replace(
+                BCR_RECORD_DIGEST, "APPROVED_SOURCE_SHA256: ${{ inputs.record_sha256 }}", 1),
+                "compare the proposed entry"),
+        })
+
+    def test_docs_deploy_promotes_exactly_the_selected_retained_build(self):
+        self.assertEqual([], _docs_deploy_violations(self.supply_chain_files[DOCS_WORKFLOW]))
+
+    def test_docs_deploy_policy_rejects_builds_and_unselected_artifacts(self):
+        path = DOCS_WORKFLOW
+        workflow = self.supply_chain_files[path]
+        download = "      - name: Download the retained Pages artifact\n"
+        self._assert_rejected(lambda files, path: _docs_deploy_violations(files[path]), {
+            "doxygen": (path, workflow.replace(
+                download, "      - name: Rebuild\n        run: tools/build_docs.sh\n" + download,
+                1), "deploy builds"),
+            "upload": (path, workflow.replace(
+                download, "      - uses: actions/upload-pages-artifact@v5\n" + download, 1),
+                "deploy builds"),
+            "input artifact": (path, workflow.replace(
+                "artifact-ids: ${{ steps.select.outputs.artifact_id }}",
+                "artifact-ids: ${{ inputs.artifact_id }}", 1), "did not name"),
+            "no record selection": (path, workflow.replace(
+                "python3 -B -m tools.release_candidate docs-selection",
+                "python3 -B -m tools.pages_artifact inputs", 1), "select from the candidate record"),
+            "no attestation": (path, workflow.replace(
+                "          gh attestation verify", "          echo", 1),
+                "record attestation"),
+            "unverified archive": (path, workflow.replace(
+                "python3 -B -m tools.pages_artifact verify", "true", 1),
+                "verify the selected archive"),
+            "input promotion": (path, workflow.replace(
+                "          DOC_ARTIFACT_ID: ${{ steps.select.outputs.artifact_id }}\n"
+                "          DOC_SOURCE_RUN_ID: ${{ steps.select.outputs.run_id }}\n"
+                "          DOC_SOURCE_ATTEMPT: ${{ steps.select.outputs.attempt }}\n"
+                "          DOC_SOURCE_COMMIT: ${{ steps.select.outputs.source_commit }}\n"
+                "        with:",
+                "          DOC_ARTIFACT_ID: ${{ inputs.artifact_id }}\n        with:", 1),
+                "promotes an artifact"),
+            "push deploy": (path, workflow.replace(
+                "if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'",
+                "if: github.ref == 'refs/heads/main'", 1), "manual dispatch on main"),
+        })
 
     def test_git_dependencies_use_release_tags_or_explicit_commits(self):
         deps = _read("third_party/bazel/non_bcr_deps.bzl")

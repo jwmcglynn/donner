@@ -252,5 +252,94 @@ class SourceFixtureTest(unittest.TestCase):
         self.assertEqual(json.loads((entry / "source.json").read_text()), original)
 
 
+class ValidatedEntryTest(unittest.TestCase):
+    """The entry BCR Preflight generated and admission-validated, as retained for submission."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        base = Path(self.temp.name)
+        self.root = base / "source"
+        (self.root / ".bcr").mkdir(parents=True)
+        (self.root / "MODULE.bazel").write_text('module(name="donner", version="1.0.0")\n')
+        (self.root / ".bcr/presubmit.yml").write_text("tasks: {}\n")
+        self.template = {"homepage": "https://github.com/jwmcglynn/donner",
+                         "maintainers": [{"github": "jwmcglynn"}],
+                         "repository": ["github:jwmcglynn/donner"],
+                         "versions": [], "yanked_versions": {}}
+        (self.root / ".bcr/metadata.template.json").write_text(json.dumps(self.template))
+        self.entry = base / "entry"
+        module, presubmit, source_json, metadata = (self.entry / "registry" / path
+                                                    for path in source.entry_paths("1.0.0"))
+        module.parent.mkdir(parents=True)
+        module.write_bytes((self.root / "MODULE.bazel").read_bytes())
+        presubmit.write_bytes((self.root / ".bcr/presubmit.yml").read_bytes())
+        source_json.write_text(json.dumps(source.expected_source_json("1.0.0", "c" * 64),
+                                          indent=4))
+        self.metadata = metadata
+        self.write_metadata(dict(self.template, versions=["0.9.0", "1.0.0"]))
+        self.report = {"validator_revision": "f" * 40, "module": "donner@1.0.0",
+                       "upstream_exit_code": 42,
+                       "results": [{"result": "GOOD", "message": "ok"},
+                                   {"result": "NEED_BCR_MAINTAINER_REVIEW", "message": "new"}]}
+        self.write_report(self.report)
+
+    def write_metadata(self, value):
+        self.metadata.write_text(json.dumps(value, indent=4))
+
+    def write_report(self, value):
+        (self.entry / "admission.json").write_text(json.dumps(value))
+
+    def verify(self, sha256="c" * 64):
+        source.verify_validated_entry(self.entry, self.root, "1.0.0", sha256)
+
+    def test_retained_preflight_entry_is_accepted(self):
+        self.assertEqual([path.as_posix() for path in source.entry_paths("1.0.0")], [
+            "modules/donner/1.0.0/MODULE.bazel", "modules/donner/1.0.0/presubmit.yml",
+            "modules/donner/1.0.0/source.json", "modules/donner/metadata.json"])
+        self.verify()
+        self.write_report(dict(self.report, upstream_exit_code=0))
+        self.verify()
+
+    def test_failed_or_foreign_admission_report_is_rejected(self):
+        cases = {
+            "failed": {"upstream_exit_code": 1},
+            "boolean code": {"upstream_exit_code": False},
+            "other version": {"module": "donner@0.9.0"},
+            "other module": {"module": "other@1.0.0"},
+            "short revision": {"validator_revision": "f" * 12},
+            "no results": {"results": []},
+            "failed result": {"results": [{"result": "FAILED", "message": "bad"}]},
+        }
+        for case, change in cases.items():
+            with self.subTest(case=case):
+                self.write_report(dict(self.report, **change))
+                with self.assertRaisesRegex(ValueError, "admission report"):
+                    self.verify()
+        (self.entry / "admission.json").write_text("passed\n")
+        with self.assertRaisesRegex(ValueError, "admission report is not JSON"):
+            self.verify()
+
+    def test_entry_must_name_the_archive_and_carry_the_source_files(self):
+        with self.assertRaisesRegex(ValueError, "approved source archive"):
+            self.verify("d" * 64)
+        module = self.entry / "registry" / source.entry_paths("1.0.0")[0]
+        module.write_text("module(name='donner')\n")
+        with self.assertRaisesRegex(ValueError, "approved module files"):
+            self.verify()
+        module.unlink()
+        module.symlink_to(self.root / "MODULE.bazel")
+        with self.assertRaisesRegex(ValueError, "missing, linked or too large"):
+            self.verify()
+
+    def test_entry_metadata_must_match_the_maintainer_template(self):
+        for change in ({"maintainers": []}, {"versions": ["0.9.0"]},
+                       {"yanked_versions": {"1.0.0": "withdrawn"}}):
+            with self.subTest(change=change):
+                self.write_metadata({**self.template, "versions": ["0.9.0", "1.0.0"], **change})
+                with self.assertRaisesRegex(ValueError, "registry metadata"):
+                    self.verify()
+
+
 if __name__ == "__main__":
     unittest.main()
