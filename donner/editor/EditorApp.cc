@@ -2146,9 +2146,10 @@ std::optional<svg::SVGGraphicsElement> EditorApp::hitTest(const Vector2d& docume
   }
 
   if (!editingScope_.has_value()) {
-    return controller_->findIntersecting(documentPoint);
+    return controller_->findIntersecting(documentPoint, svg::HitTestMode::EditorSelection);
   }
-  for (const svg::SVGGraphicsElement& hit : controller_->findAllIntersecting(documentPoint)) {
+  for (const svg::SVGGraphicsElement& hit :
+       controller_->findAllIntersecting(documentPoint, svg::HitTestMode::EditorSelection)) {
     if (isElementInEditingScope(hit)) {
       return hit;
     }

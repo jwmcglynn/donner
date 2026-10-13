@@ -1489,7 +1489,8 @@ std::optional<Box2d> TextHitBounds(Registry& registry, Entity entity) {
 }
 }  // namespace
 
-bool RenderingContext::prepareHitGeometry(Entity entity, HitGeometry& geometry, const Path*& path) {
+bool RenderingContext::prepareHitGeometry(Entity entity, HitGeometry& geometry, const Path*& path,
+                                          HitTestMode mode) {
   path = nullptr;
   const auto* instance = registry_.try_get<RenderingInstanceComponent>(entity);
   if (instance == nullptr) {
@@ -1497,7 +1498,9 @@ bool RenderingContext::prepareHitGeometry(Entity entity, HitGeometry& geometry, 
   }
   ParseWarningSink sink = ParseWarningSink::Disabled();
   const auto& style = StyleSystem().computeStyle(EntityHandle(registry_, entity), sink);
-  const PointerEvents pointerEvents = style.properties->pointerEvents.get().value();
+  const PointerEvents pointerEvents = mode == HitTestMode::EditorSelection
+                                          ? PointerEvents::VisiblePainted
+                                          : style.properties->pointerEvents.get().value();
   const HitTestConfig config = configFromPointerEvents(pointerEvents);
   if (pointerEvents == PointerEvents::None || (config.requireVisible && !instance->visible)) {
     return false;
@@ -1522,10 +1525,10 @@ bool RenderingContext::prepareHitGeometry(Entity entity, HitGeometry& geometry, 
   return true;
 }
 
-bool RenderingContext::hitTestEntity(Entity entity, const Vector2d& point) {
+bool RenderingContext::hitTestEntity(Entity entity, const Vector2d& point, HitTestMode mode) {
   HitGeometry geometry;
   const Path* path = nullptr;
-  return prepareHitGeometry(entity, geometry, path) && geometry.contains(point, path);
+  return prepareHitGeometry(entity, geometry, path, mode) && geometry.contains(point, path);
 }
 
 std::optional<std::vector<RenderingContext::HitRecord>> RenderingContext::captureHitGeometry(
@@ -1557,14 +1560,14 @@ std::optional<std::vector<RenderingContext::HitRecord>> RenderingContext::captur
   return records;
 }
 
-Entity RenderingContext::findIntersecting(const Vector2d& point) {
+Entity RenderingContext::findIntersecting(const Vector2d& point, HitTestMode mode) {
   ParseWarningSink disabledSink = ParseWarningSink::Disabled();
   instantiateRenderTree(false, disabledSink);
 
   // Brute-force reverse scan.
   auto view = registry_.view<RenderingInstanceComponent>();
   for (auto it = view.rbegin(); it != view.rend(); ++it) {
-    if (hitTestEntity(*it, point)) {
+    if (hitTestEntity(*it, point, mode)) {
       return *it;
     }
   }
@@ -1572,7 +1575,7 @@ Entity RenderingContext::findIntersecting(const Vector2d& point) {
   return entt::null;
 }
 
-std::vector<Entity> RenderingContext::findAllIntersecting(const Vector2d& point) {
+std::vector<Entity> RenderingContext::findAllIntersecting(const Vector2d& point, HitTestMode mode) {
   ParseWarningSink disabledSink = ParseWarningSink::Disabled();
   instantiateRenderTree(false, disabledSink);
 
@@ -1580,7 +1583,7 @@ std::vector<Entity> RenderingContext::findAllIntersecting(const Vector2d& point)
 
   auto view = registry_.view<RenderingInstanceComponent>();
   for (auto it = view.rbegin(); it != view.rend(); ++it) {
-    if (hitTestEntity(*it, point)) {
+    if (hitTestEntity(*it, point, mode)) {
       results.push_back(*it);
     }
   }

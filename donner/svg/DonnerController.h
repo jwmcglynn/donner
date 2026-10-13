@@ -10,6 +10,7 @@
 #include "donner/svg/SVGGeometryElement.h"
 #include "donner/svg/SVGGraphicsElement.h"
 #include "donner/svg/core/Cursor.h"
+#include "donner/svg/core/HitTestMode.h"
 
 namespace donner::svg {
 
@@ -86,9 +87,12 @@ public:
    * matching element.
    *
    * @param point Position in document coordinates.
+   * @param mode SVG event targeting by default; EditorSelection ignores pointer-events while
+   * retaining visible painted geometry. Neither mode changes the document's properties.
    * @return The topmost intersecting element, or \c std::nullopt if no element is hit.
    */
-  std::optional<SVGGraphicsElement> findIntersecting(const Vector2d& point);
+  std::optional<SVGGraphicsElement> findIntersecting(
+      const Vector2d& point, HitTestMode mode = HitTestMode::SvgPointerEvents);
 
   /**
    * Return every painted element intersecting \p point, front to back.
@@ -97,9 +101,11 @@ public:
    * outside the active scope to occlude an eligible descendant.
    *
    * @param point Position in document coordinates, as for \ref findIntersecting.
+   * @param mode Hit eligibility policy, with the same semantics as findIntersecting.
    * @return Intersecting elements, topmost first, or an empty vector if no element is hit.
    */
-  std::vector<SVGGraphicsElement> findAllIntersecting(const Vector2d& point);
+  std::vector<SVGGraphicsElement> findAllIntersecting(
+      const Vector2d& point, HitTestMode mode = HitTestMode::SvgPointerEvents);
 
   /**
    * Returns the inherited CSS cursor value for the topmost interactive element at a point. Cursor

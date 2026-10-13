@@ -104,7 +104,9 @@ separate from those authored components.
 
 Edit/Preview sits in a compact fixed header above Layers. Preview starts a fresh session and advances
 a monotonic clock in 60 Hz samples. Edit restores time zero. Authoring controls are disabled during
-Preview while navigation and file menus remain available.
+Preview while navigation and file menus remain available. Edit-mode canvas selection ignores SVG
+`pointer-events` and targets visible painted artwork; Preview event targeting honors the authored
+SVG rules.
 
 Pointer targets are retained with the raster that is actually displayed, its viewport, and its
 document generation. Input edges are queued until safe document access; passive hover is coalesced.

@@ -46,10 +46,11 @@ std::shared_ptr<const DonnerController::HitTestSnapshot> DonnerController::captu
 
 DonnerController::DonnerController(SVGDocument document) : document_(std::move(document)) {}
 
-std::optional<SVGGraphicsElement> DonnerController::findIntersecting(const Vector2d& point) {
+std::optional<SVGGraphicsElement> DonnerController::findIntersecting(const Vector2d& point,
+                                                                     HitTestMode mode) {
   DocumentWriteAccess access = document_.writeAccess();
   Registry& registry = access.registry();
-  Entity entity = components::RenderingContext(registry).findIntersecting(point);
+  Entity entity = components::RenderingContext(registry).findIntersecting(point, mode);
   if (entity != entt::null) {
     SVGElement element(EntityHandle(registry, entity));
     UTILS_RELEASE_ASSERT(element.isa<SVGGraphicsElement>());
@@ -59,11 +60,12 @@ std::optional<SVGGraphicsElement> DonnerController::findIntersecting(const Vecto
   return std::nullopt;
 }
 
-std::vector<SVGGraphicsElement> DonnerController::findAllIntersecting(const Vector2d& point) {
+std::vector<SVGGraphicsElement> DonnerController::findAllIntersecting(const Vector2d& point,
+                                                                      HitTestMode mode) {
   DocumentWriteAccess access = document_.writeAccess();
   Registry& registry = access.registry();
   const std::vector<Entity> entities =
-      components::RenderingContext(registry).findAllIntersecting(point);
+      components::RenderingContext(registry).findAllIntersecting(point, mode);
   std::vector<SVGGraphicsElement> results;
   results.reserve(entities.size());
   for (const Entity entity : entities) {

@@ -23,6 +23,7 @@ cc_library(
         "FontStyle.h",
         "FontVariant.h",
         "Gradient.h",
+        "HitTestMode.h",
         "ImageRendering.h",
         "Isolation.h",
         "LengthAdjust.h",
