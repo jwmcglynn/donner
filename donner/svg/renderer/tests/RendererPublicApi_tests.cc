@@ -840,6 +840,41 @@ TEST(RendererPublicApiTest, ForeignNamespaceWrapperRendersNothing) {
   EXPECT_NE(groupSnapshot.pixels, removedSnapshot.pixels);
 }
 
+TEST(RendererPublicApiTest, FeImageFragmentUsesItsOwnSubregionOrigin) {
+  const std::array<Vector2i, 3> origins = {Vector2i(11, 12), Vector2i(0, 0), Vector2i(21, 23)};
+  for (size_t index = 0; index < origins.size(); ++index) {
+    const Vector2i origin = origins[index];
+    SCOPED_TRACE(origin);
+    const std::string coordinates =
+        " x='" + std::to_string(origin.x) + "' y='" + std::to_string(origin.y) + "'";
+    SVGDocument document = ParseDocument(
+        "<svg xmlns='http://www.w3.org/2000/svg' width='32' height='32'>"
+        "<defs><rect id='source' width='6' height='8' fill='green'/>"
+        "<filter id='f' filterUnits='userSpaceOnUse' x='3' y='4' width='24' height='22'>"
+        "<feImage href='#source'" +
+        coordinates +
+        " width='18' height='16'/>"
+        "</filter></defs><rect x='10' y='10' width='12' height='12' fill='red' filter='url(#f)'/>"
+        "</svg>");
+    SVGDocument expected = ParseDocument(
+        "<svg xmlns='http://www.w3.org/2000/svg' width='32' height='32'>"
+        "<defs><clipPath id='bounds'><rect x='3' y='4' width='24' height='22'/></clipPath></defs>"
+        "<rect" +
+        coordinates +
+        " width='6' height='8' fill='green' clip-path='url(#bounds)'/>"
+        "</svg>");
+    Renderer renderer;
+    renderer.draw(document);
+    Renderer expectedRenderer;
+    expectedRenderer.draw(expected);
+    editor::tests::CompareBitmapToBitmap(
+        NormalizeSnapshot(renderer.takeSnapshot()),
+        NormalizeSnapshot(expectedRenderer.takeSnapshot()),
+        "feimage_fragment_subregion_origin_" + std::to_string(index),
+        editor::tests::PixelmatchIdentityParams());
+  }
+}
+
 TEST(RendererPublicApiTest, SnapshotReportsAndReturnsStraightAlpha) {
   // Backends composite in premultiplied space but publish straight alpha, so a
   // half-covered pixel has to come back carrying its full-strength color. A
