@@ -864,7 +864,7 @@ TEST(RendererPublicApiTest, FeImageFragmentUsesItsOwnSubregionOrigin) {
         "<defs><rect id='source' width='6' height='8' fill='green'" +
         std::string(testCase.sourceTransform) + "/>" +
         "<filter id='f' filterUnits='userSpaceOnUse' x='3' y='4' width='24' height='22'>"
-        "<feImage href='#source' image-rendering='crispEdges'" +
+        "<feImage href='#source' image-rendering='crisp-edges'" +
         std::string(testCase.attributes) +
         "/>"
         "</filter></defs><rect x='10' y='10' width='12' height='12' fill='red' filter='url(#f)'/>"
