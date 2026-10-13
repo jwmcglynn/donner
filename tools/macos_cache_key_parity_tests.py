@@ -114,17 +114,9 @@ def _runs_self_hosted(job):
     return bool(match) and "self-hosted" in match.group(1)
 
 
-def key_parity_problems(workflow, bazelrc):
-    """Every way the two macOS lanes in main.yml could stop computing identical action keys."""
+def _flag_problems(hosted_flags, self_flags):
+    """Problems of the two lanes' BAZEL_MACOS_BUILD_FLAGS."""
     problems = []
-    jobs = _jobs(workflow)
-    hosted, self_hosted = jobs[HOSTED], jobs[SELF_HOSTED]
-
-    hosted_flags = _job_env(hosted, "BAZEL_MACOS_BUILD_FLAGS")
-    self_flags = _job_env(self_hosted, "BAZEL_MACOS_BUILD_FLAGS")
-    if hosted_flags is None or self_flags is None:
-        problems.append("a macOS lane does not declare BAZEL_MACOS_BUILD_FLAGS")
-        return problems
     if _key_flags(hosted_flags) != _key_flags(self_flags):
         problems.append("key-affecting BAZEL_MACOS_BUILD_FLAGS differ: %s vs %s" % (
             _key_flags(hosted_flags), _key_flags(self_flags)))
@@ -132,51 +124,83 @@ def key_parity_problems(workflow, bazelrc):
         problems.append("the hosted macOS lane sets remote cache client flags outside BuildBuddy")
     if "--config=ci-macos" not in shlex.split(hosted_flags):
         problems.append("the macOS lanes do not pass --config=ci-macos")
+    return problems
 
-    lanes = {HOSTED: (hosted, "--required"), SELF_HOSTED: (self_hosted, "--optional")}
-    by_step = {}
-    for name, (job, mode) in lanes.items():
-        steps = _steps(job)
-        names = [step_name for step_name, _ in steps]
-        commands = _bazel_commands(job)
-        for step_name, command in commands:
-            if TOOLCHAIN_REFRESH in command:
-                continue
-            if LANE_FLAGS not in command:
-                problems.append("%s step %r runs Bazel without %s" % (name, step_name, LANE_FLAGS))
-            by_step.setdefault(step_name, {}).setdefault(name, set()).add(
-                tuple(_configs(command)))
-        if "Select pinned Xcode" not in names:
-            problems.append("%s does not select the pinned Xcode" % name)
+
+def _record_commands(name, commands, by_step):
+    """Record each build command's configs by step; problems for commands without the lane flags."""
+    problems = []
+    for step_name, command in commands:
+        if TOOLCHAIN_REFRESH in command:
             continue
-        select_index = names.index("Select pinned Xcode")
-        select = steps[select_index][1]
-        if _logical_commands(select) != ["%s %s" % (SELECT_SCRIPT, mode)] or \
-                "id: xcode" not in select:
-            problems.append("%s selects Xcode other than with %s %s" % (name, SELECT_SCRIPT, mode))
-        first_bazel = min((names.index(step_name) for step_name, _ in commands),
-                          default=len(names))
-        if first_bazel < select_index:
-            problems.append("%s runs Bazel before selecting the pinned Xcode" % name)
-        refresh = [command for _, command in commands if TOOLCHAIN_REFRESH in command]
-        if len(refresh) != 1:
-            problems.append("%s does not refresh the Xcode toolchain repositories once" % name)
-        else:
-            by_step.setdefault("<toolchain refresh>", {}).setdefault(name, set()).add(
-                tuple(sorted(re.findall(r"--repo=(\S+)", refresh[0]))))
-    for step_name, lanes_seen in sorted(by_step.items()):
-        if len(lanes_seen) == 2 and lanes_seen[HOSTED] != lanes_seen[SELF_HOSTED]:
-            problems.append("step %r differs between the lanes: %s" % (step_name, lanes_seen))
+        if LANE_FLAGS not in command:
+            problems.append("%s step %r runs Bazel without %s" % (name, step_name, LANE_FLAGS))
+        by_step.setdefault(step_name, {}).setdefault(name, set()).add(tuple(_configs(command)))
+    return problems
 
+
+def _select_problems(name, steps, commands, mode):
+    """Problems of a lane's pinned-Xcode selection and where it runs."""
+    names = [step_name for step_name, _ in steps]
+    if "Select pinned Xcode" not in names:
+        return ["%s does not select the pinned Xcode" % name]
+    problems = []
+    select_index = names.index("Select pinned Xcode")
+    select = steps[select_index][1]
+    if (_logical_commands(select) != ["%s %s" % (SELECT_SCRIPT, mode)] or
+            "id: xcode" not in select):
+        problems.append("%s selects Xcode other than with %s %s" % (name, SELECT_SCRIPT, mode))
+    first_bazel = min((names.index(step_name) for step_name, _ in commands), default=len(names))
+    if first_bazel < select_index:
+        problems.append("%s runs Bazel before selecting the pinned Xcode" % name)
+    return problems
+
+
+def _refresh_problems(name, commands, by_step):
+    """Problems of a lane's toolchain repository refresh, which must run exactly once."""
+    refresh = [command for _, command in commands if TOOLCHAIN_REFRESH in command]
+    if len(refresh) != 1:
+        return ["%s does not refresh the Xcode toolchain repositories once" % name]
+    by_step.setdefault("<toolchain refresh>", {}).setdefault(name, set()).add(
+        tuple(sorted(re.findall(r"--repo=(\S+)", refresh[0]))))
+    return []
+
+
+def _bazelrc_problems(bazelrc):
+    """Problems of the ci-macos config, which must pin one PATH for actions and tools."""
     rc = [line.split(None, 1)[1] for line in bazelrc.splitlines()
           if re.match(r"^(?:build|common|test):ci-macos\s", line)]
     paths = [re.fullmatch(r"--(action_env|host_action_env)=PATH=(\S+)", line) for line in rc]
-    if len(rc) != 2 or not all(paths) or {match.group(1) for match in paths} != {
-            "action_env", "host_action_env"} or paths[0].group(2) != paths[1].group(2):
-        problems.append("--config=ci-macos must pin exactly one PATH for actions and tools")
-    elif "/Users/" in paths[0].group(2) or "$" in paths[0].group(2):
-        problems.append("the pinned action PATH depends on a runner's home or environment")
-    return problems
+    if (len(rc) != 2 or not all(paths) or
+            {match.group(1) for match in paths} != {"action_env", "host_action_env"} or
+            paths[0].group(2) != paths[1].group(2)):
+        return ["--config=ci-macos must pin exactly one PATH for actions and tools"]
+    if "/Users/" in paths[0].group(2) or "$" in paths[0].group(2):
+        return ["the pinned action PATH depends on a runner's home or environment"]
+    return []
+
+
+def key_parity_problems(workflow, bazelrc):
+    """Every way the two macOS lanes in main.yml could stop computing identical action keys."""
+    jobs = _jobs(workflow)
+    hosted, self_hosted = jobs[HOSTED], jobs[SELF_HOSTED]
+    hosted_flags = _job_env(hosted, "BAZEL_MACOS_BUILD_FLAGS")
+    self_flags = _job_env(self_hosted, "BAZEL_MACOS_BUILD_FLAGS")
+    if hosted_flags is None or self_flags is None:
+        return ["a macOS lane does not declare BAZEL_MACOS_BUILD_FLAGS"]
+    problems = _flag_problems(hosted_flags, self_flags)
+    by_step = {}
+    for name, job, mode in ((HOSTED, hosted, "--required"),
+                            (SELF_HOSTED, self_hosted, "--optional")):
+        commands = _bazel_commands(job)
+        problems += _record_commands(name, commands, by_step)
+        problems += _select_problems(name, _steps(job), commands, mode)
+        if "Select pinned Xcode" in [step_name for step_name, _ in _steps(job)]:
+            problems += _refresh_problems(name, commands, by_step)
+    for step_name, lanes_seen in sorted(by_step.items()):
+        if len(lanes_seen) == 2 and lanes_seen[HOSTED] != lanes_seen[SELF_HOSTED]:
+            problems.append("step %r differs between the lanes: %s" % (step_name, lanes_seen))
+    return problems + _bazelrc_problems(bazelrc)
 
 
 def private_backend_problems(files):
