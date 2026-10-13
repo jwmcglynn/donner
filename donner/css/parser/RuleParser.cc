@@ -14,17 +14,15 @@ using details::ParseMode;
 
 class RuleParserImpl {
 public:
-  RuleParserImpl(std::string_view str, RuleParser::SecurityStats* securityStats = nullptr,
-                 std::size_t sourceOffset = 0)
-      : tokenizer_(str), securityStats_(securityStats), sourceOffset_(sourceOffset) {}
+  RuleParserImpl(std::string_view str, RuleParser::SecurityStats* securityStats = nullptr)
+      : tokenizer_(str), securityStats_(securityStats) {}
 
   std::vector<Rule> parseStylesheet() {
-    return consumeListOfRules(tokenizer_, ListOfRulesFlags::TopLevel, securityStats_,
-                              sourceOffset_);
+    return consumeListOfRules(tokenizer_, ListOfRulesFlags::TopLevel, securityStats_);
   }
 
   std::vector<Rule> parseListOfRules(ListOfRulesFlags flags) {
-    return consumeListOfRules(tokenizer_, flags, securityStats_, sourceOffset_);
+    return consumeListOfRules(tokenizer_, flags, securityStats_);
   }
 
   std::optional<Rule> parseRule() {
@@ -43,7 +41,7 @@ public:
         // rule be the return value.
         auto atRule =
             consumeAtRule(tokenizer_, std::move(token.get<Token::AtKeyword>()), ParseMode::Keep);
-        atRule.sourceOffset = token.offset().addParentOffset(FileOffset::Offset(sourceOffset_));
+        atRule.sourceOffset = token.offset();
         if (!atRule.name.equalsLowercase("charset")) {
           result = Rule(std::move(atRule));
           break;
@@ -105,8 +103,7 @@ public:
 
   /// Consume a list of rules, per https://www.w3.org/TR/css-syntax-3/#consume-list-of-rules
   static std::vector<Rule> consumeListOfRules(details::Tokenizer& tokenizer, ListOfRulesFlags flags,
-                                              RuleParser::SecurityStats* securityStats = nullptr,
-                                              std::size_t sourceOffset = 0) {
+                                              RuleParser::SecurityStats* securityStats = nullptr) {
     std::vector<Rule> result;
     details::ComponentValueParsingBudget aggregateBudget;
 
@@ -140,7 +137,7 @@ public:
         // returned value to the list of rules.
         auto atRule = consumeAtRule(tokenizer, std::move(token.get<Token::AtKeyword>()),
                                     ParseMode::Keep, &aggregateBudget);
-        atRule.sourceOffset = token.offset().addParentOffset(FileOffset::Offset(sourceOffset));
+        atRule.sourceOffset = token.offset();
         if (!atRule.name.equalsLowercase("charset")) {
           result.emplace_back(std::move(atRule));
         } else {
@@ -205,21 +202,30 @@ public:
 private:
   details::Tokenizer tokenizer_;
   RuleParser::SecurityStats* securityStats_ = nullptr;
-  std::size_t sourceOffset_ = 0;
 };
+
+std::vector<Rule> RebaseAtRuleSourceOffsets(std::vector<Rule> rules, std::size_t prefixBytes) {
+  for (Rule& rule : rules) {
+    if (auto* atRule = std::get_if<AtRule>(&rule.value)) {
+      atRule->sourceOffset = atRule->sourceOffset.addParentOffset(FileOffset::Offset(prefixBytes));
+    }
+  }
+  return rules;
+}
 
 }  // namespace
 
 std::vector<Rule> RuleParser::ParseStylesheet(std::string_view str, SecurityStats* securityStats) {
   const std::string_view body = RuleParserImpl::maybeRemoveCharset(str);
-  RuleParserImpl parser(body, securityStats, str.size() - body.size());
-  return parser.parseStylesheet();
+  RuleParserImpl parser(body, securityStats);
+  return RebaseAtRuleSourceOffsets(parser.parseStylesheet(), str.size() - body.size());
 }
 
 std::vector<Rule> RuleParser::ParseListOfRules(std::string_view str, SecurityStats* securityStats) {
   const std::string_view body = RuleParserImpl::maybeRemoveCharset(str);
-  RuleParserImpl parser(body, securityStats, str.size() - body.size());
-  return parser.parseListOfRules(ListOfRulesFlags::None);
+  RuleParserImpl parser(body, securityStats);
+  return RebaseAtRuleSourceOffsets(parser.parseListOfRules(ListOfRulesFlags::None),
+                                   str.size() - body.size());
 }
 
 std::optional<Rule> RuleParser::ParseRule(std::string_view str) {
