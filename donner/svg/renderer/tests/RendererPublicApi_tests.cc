@@ -1075,6 +1075,162 @@ TEST(RendererPublicApiTest, ForeignGradientStopIsExcludedAfterNamespaceEdit) {
       "foreign_namespace_gradient_stop", editor::tests::PixelmatchIdentityParams());
 }
 
+TEST(RendererPublicApiTest, NamespaceSourceValueEditUpdatesMembership) {
+  SVGDocument document = ParseDocument(
+      "<svg xmlns='http://www.w3.org/2000/svg' width='16' height='12'>"
+      "<g id='target' xmlns='http://www.w3.org/2000/svg'><rect width='16' height='12' "
+      "fill='green'/></g></svg>");
+  const std::string_view declaration = "http://www.w3.org/2000/svg";
+  const size_t offset = document.source().rfind(declaration);
+  ASSERT_THAT(offset, testing::Ne(std::string_view::npos));
+  const auto result = document.applySourceEdit(xml::XMLEditIntent{
+      .range =
+          SourceRange{FileOffset::Offset(offset), FileOffset::Offset(offset + declaration.size())},
+      .replacement = "http://example.test/foreign",
+      .sourceVersion = document.sourceVersion(),
+  });
+  ASSERT_THAT(result.applied, testing::IsTrue());
+  ASSERT_THAT(result.diagnostic, testing::Eq(std::nullopt));
+  EXPECT_THAT(document.querySelector("#target")->type(), testing::Eq(ElementType::Unknown));
+  Renderer renderer;
+  renderer.draw(document);
+  SVGDocument empty =
+      ParseDocument("<svg xmlns='http://www.w3.org/2000/svg' width='16' height='12'/>");
+  Renderer expected;
+  expected.draw(empty);
+  editor::tests::CompareBitmapToBitmap(
+      NormalizeSnapshot(renderer.takeSnapshot()), NormalizeSnapshot(expected.takeSnapshot()),
+      "namespace_source_value_edit", editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(RendererPublicApiTest, NamespaceFlipPreservesDescendantOverrideAndMaskBehavior) {
+  SVGDocument document = ParseDocument(
+      "<svg xmlns='http://www.w3.org/2000/svg' width='16' height='12'>"
+      "<mask id='mask' maskUnits='userSpaceOnUse' x='0' y='0' width='16' height='12'>"
+      "<g xmlns='http://www.w3.org/2000/svg'><rect width='16' height='12' fill='white'/></g></mask>"
+      "<rect width='16' height='12' fill='green' mask='url(#mask)'/></svg>");
+  SVGDocument green = ParseDocument(
+      "<svg xmlns='http://www.w3.org/2000/svg' width='16' height='12'><rect width='16' height='12' "
+      "fill='green'/></svg>");
+  SVGElement mask = *document.querySelector("#mask");
+  Renderer renderer;
+  renderer.draw(document);
+  const auto foreign = document.setElementAttribute(mask, "xmlns", "http://example.test/foreign");
+  ASSERT_THAT(foreign.applied, testing::IsTrue());
+  ASSERT_THAT(foreign.diagnostic, testing::Eq(std::nullopt));
+  EXPECT_THAT(document.querySelector("mask g")->type(), testing::Eq(ElementType::G));
+  const auto restored = document.removeElementAttribute(mask, "xmlns");
+  ASSERT_THAT(restored.applied, testing::IsTrue());
+  ASSERT_THAT(restored.diagnostic, testing::Eq(std::nullopt));
+  EXPECT_THAT(mask.type(), testing::Eq(ElementType::Mask));
+  renderer.draw(document);
+  Renderer expected;
+  expected.draw(green);
+  editor::tests::CompareBitmapToBitmap(
+      NormalizeSnapshot(renderer.takeSnapshot()), NormalizeSnapshot(expected.takeSnapshot()),
+      "namespace_mask_restoration", editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(RendererPublicApiTest, ForeignReferencedGradientDoesNotKeepCachedInheritance) {
+  SVGDocument document = ParseDocument(
+      "<svg xmlns='http://www.w3.org/2000/svg' width='16' height='12'>"
+      "<defs><linearGradient id='base'><stop stop-color='green'/></linearGradient>"
+      "<linearGradient id='derived' href='#base'/></defs>"
+      "<rect width='16' height='12' fill='url(#derived) red'/></svg>");
+  Renderer renderer;
+  renderer.draw(document);
+  const auto result = document.setElementAttribute(*document.querySelector("#base"), "xmlns",
+                                                   "http://example.test/foreign");
+  ASSERT_THAT(result.applied, testing::IsTrue());
+  ASSERT_THAT(result.diagnostic, testing::Eq(std::nullopt));
+  renderer.draw(document);
+  SVGDocument empty = ParseDocument(
+      "<svg xmlns='http://www.w3.org/2000/svg' width='16' height='12'>"
+      "<defs><linearGradient id='base' xmlns='http://example.test/foreign'>"
+      "<stop stop-color='green'/></linearGradient>"
+      "<linearGradient id='derived' href='#base'/></defs>"
+      "<rect width='16' height='12' fill='url(#derived) red'/></svg>");
+  Renderer expected;
+  expected.draw(empty);
+  editor::tests::CompareBitmapToBitmap(
+      NormalizeSnapshot(renderer.takeSnapshot()), NormalizeSnapshot(expected.takeSnapshot()),
+      "foreign_cached_gradient_inheritance", editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(RendererPublicApiTest, ForeignTextSpanDoesNotContributeGlyphsAfterNamespaceEdit) {
+  SVGDocument document = ParseDocument(
+      "<svg xmlns='http://www.w3.org/2000/svg' width='64' height='32'>"
+      "<text x='2' y='24' font-size='20'>A<tspan id='span'>B</tspan>C</text></svg>");
+  SVGDocument expectedDocument = ParseDocument(
+      "<svg xmlns='http://www.w3.org/2000/svg' width='64' height='32'>"
+      "<text x='2' y='24' font-size='20'>AC</text></svg>");
+  Renderer renderer;
+  renderer.draw(document);
+  const auto result = document.setElementAttribute(*document.querySelector("#span"), "xmlns",
+                                                   "http://example.test/foreign");
+  ASSERT_THAT(result.applied, testing::IsTrue());
+  ASSERT_THAT(result.diagnostic, testing::Eq(std::nullopt));
+  renderer.draw(document);
+  Renderer expected;
+  expected.draw(expectedDocument);
+  editor::tests::CompareBitmapToBitmap(
+      NormalizeSnapshot(renderer.takeSnapshot()), NormalizeSnapshot(expected.takeSnapshot()),
+      "foreign_text_span_after_namespace_edit", editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(RendererPublicApiTest, ForeignComponentTransferFunctionDoesNotAffectChannels) {
+  SVGDocument document = ParseDocument(
+      "<svg xmlns='http://www.w3.org/2000/svg' width='16' height='12'>"
+      "<filter id='f' color-interpolation-filters='sRGB'><feComponentTransfer>"
+      "<feFuncR id='function' type='linear' slope='0'/></feComponentTransfer></filter>"
+      "<rect width='16' height='12' fill='red' filter='url(#f)'/></svg>");
+  Renderer renderer;
+  renderer.draw(document);
+  const auto filter = document.querySelector("#f");
+  ASSERT_THAT(filter, testing::Ne(std::nullopt));
+  const auto transfer = filter->firstChild();
+  ASSERT_THAT(transfer, testing::Ne(std::nullopt));
+  const auto function = transfer->firstChild();
+  ASSERT_THAT(function, testing::Ne(std::nullopt));
+  const auto result =
+      document.setElementAttribute(*function, "xmlns", "http://example.test/foreign");
+  ASSERT_THAT(result.applied, testing::IsTrue());
+  ASSERT_THAT(result.diagnostic, testing::Eq(std::nullopt));
+  renderer.draw(document);
+  SVGDocument expectedDocument = ParseDocument(
+      "<svg xmlns='http://www.w3.org/2000/svg' width='16' height='12'><rect width='16' height='12' "
+      "fill='red'/></svg>");
+  Renderer expected;
+  expected.draw(expectedDocument);
+  editor::tests::CompareBitmapToBitmap(
+      NormalizeSnapshot(renderer.takeSnapshot()), NormalizeSnapshot(expected.takeSnapshot()),
+      "foreign_component_transfer_function", editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(RendererPublicApiTest, ForeignClipChildDoesNotContributeRetainedGeometry) {
+  SVGDocument document = ParseDocument(
+      "<svg xmlns='http://www.w3.org/2000/svg' width='16' height='12'>"
+      "<clipPath id='clip'><rect id='shape' width='8' height='12'/></clipPath>"
+      "<rect width='16' height='12' fill='green' clip-path='url(#clip)'/></svg>");
+  Renderer renderer;
+  renderer.draw(document);
+  const auto shape = document.querySelector("#shape");
+  ASSERT_THAT(shape, testing::Ne(std::nullopt));
+  const auto result = document.setElementAttribute(*shape, "xmlns", "http://example.test/foreign");
+  ASSERT_THAT(result.applied, testing::IsTrue());
+  ASSERT_THAT(result.diagnostic, testing::Eq(std::nullopt));
+  renderer.draw(document);
+  SVGDocument empty = ParseDocument(
+      "<svg xmlns='http://www.w3.org/2000/svg' width='16' height='12'>"
+      "<clipPath id='clip'/><rect width='16' height='12' fill='green' "
+      "clip-path='url(#clip)'/></svg>");
+  Renderer expected;
+  expected.draw(empty);
+  editor::tests::CompareBitmapToBitmap(
+      NormalizeSnapshot(renderer.takeSnapshot()), NormalizeSnapshot(expected.takeSnapshot()),
+      "foreign_clip_child_after_namespace_edit", editor::tests::PixelmatchIdentityParams());
+}
+
 TEST(RendererPublicApiTest, SnapshotReportsAndReturnsStraightAlpha) {
   // Backends composite in premultiplied space but publish straight alpha, so a
   // half-covered pixel has to come back carrying its full-strength color. A
