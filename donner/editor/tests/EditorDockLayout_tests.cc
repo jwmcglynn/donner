@@ -153,6 +153,19 @@ TEST_F(EditorDockLayoutTest, AddsFixedModeHeaderWithoutReplacingExistingPanels) 
   EXPECT_EQ(DockNodeIdForWindow(kLayersWindowName), layersId);
 }
 
+TEST_F(EditorDockLayoutTest, RestoredHeaderWaitsForResolvedWidth) {
+  const ImGuiID dockspaceId = EditorDockSpaceId();
+  RenderDockFrame(dockspaceId, true, false, true, DefaultParams(false), true);
+  RenderDockFrame(dockspaceId, true, false, false, {}, true);
+  const ImGuiID headerId = DockNodeIdForWindow(kAnimationModeWindowName);
+  ImGuiDockNode* header = ImGui::DockBuilderGetNode(headerId);
+  ASSERT_NE(header, nullptr);
+  header->Size.x = 0.0f;
+  RenderDockFrame(dockspaceId, true, false, false, {}, true);
+  EXPECT_GT(ImGui::DockBuilderGetNode(headerId)->Size.x, 0.0f);
+  EXPECT_EQ(DockNodeIdForWindow(kAnimationModeWindowName), headerId);
+}
+
 TEST_F(EditorDockLayoutTest, DocksEachPanelIntoItsDefaultNode) {
   const ImGuiID dockspaceId = EditorDockSpaceId();
   const EditorDockLayoutParams params = DefaultParams(/*includeCompositorDebug=*/true);
