@@ -41,7 +41,9 @@ void fetchPixel(const std::span<const std::uint8_t>& srcData, int w, int h, int 
         x = ((x % w) + w) % w;
         y = ((y % h) + h) % h;
         break;
-      case ConvolveEdgeMode::None: r = g = b = a = 0.0; return;
+      case ConvolveEdgeMode::None:
+        r = g = b = a = 0.0;
+        return;
     }
   }
 
@@ -117,12 +119,11 @@ void convolveMatrix(const Pixmap& src, Pixmap& dst, const ConvolveParams& params
         outB = std::clamp(normalization.apply(sumB) + params.bias, 0.0, 1.0) * srcAlpha;
         outA = srcAlpha;
       } else {
-        // Standard: convolution on premultiplied RGBA, bias scaled by source alpha.
-        outR = normalization.apply(sumR) + params.bias * srcAlpha;
-        outG = normalization.apply(sumG) + params.bias * srcAlpha;
-        outB = normalization.apply(sumB) + params.bias * srcAlpha;
-        outA = normalization.apply(sumA) + params.bias * srcAlpha;
-        outA = std::clamp(outA, 0.0, 1.0);
+        // SVG alpha bias is unscaled; color bias uses the resulting alpha.
+        outA = std::clamp(normalization.apply(sumA) + params.bias, 0.0, 1.0);
+        outR = normalization.apply(sumR) + params.bias * outA;
+        outG = normalization.apply(sumG) + params.bias * outA;
+        outB = normalization.apply(sumB) + params.bias * outA;
         outR = std::clamp(outR, 0.0, outA);
         outG = std::clamp(outG, 0.0, outA);
         outB = std::clamp(outB, 0.0, outA);
@@ -154,7 +155,9 @@ void fetchPixelFloat(const std::span<const float>& srcData, int w, int h, int x,
         x = ((x % w) + w) % w;
         y = ((y % h) + h) % h;
         break;
-      case ConvolveEdgeMode::None: r = g = b = a = 0.0; return;
+      case ConvolveEdgeMode::None:
+        r = g = b = a = 0.0;
+        return;
     }
   }
 
@@ -228,11 +231,10 @@ void convolveMatrix(const FloatPixmap& src, FloatPixmap& dst, const ConvolvePara
         outB = std::clamp(normalization.apply(sumB) + params.bias, 0.0, 1.0) * srcAlpha;
         outA = srcAlpha;
       } else {
-        outR = normalization.apply(sumR) + params.bias * srcAlpha;
-        outG = normalization.apply(sumG) + params.bias * srcAlpha;
-        outB = normalization.apply(sumB) + params.bias * srcAlpha;
-        outA = normalization.apply(sumA) + params.bias * srcAlpha;
-        outA = std::clamp(outA, 0.0, 1.0);
+        outA = std::clamp(normalization.apply(sumA) + params.bias, 0.0, 1.0);
+        outR = normalization.apply(sumR) + params.bias * outA;
+        outG = normalization.apply(sumG) + params.bias * outA;
+        outB = normalization.apply(sumB) + params.bias * outA;
         outR = std::clamp(outR, 0.0, outA);
         outG = std::clamp(outG, 0.0, outA);
         outB = std::clamp(outB, 0.0, outA);
