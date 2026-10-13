@@ -1996,6 +1996,8 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
                 self.assertIn("build --remote_cache=grpcs://remote.buildbuddy.io", lines)
                 self.assertIn("build --remote_instance_name=ubuntu24-20261005.1-X64", lines)
                 self.assertIn("build --remote_download_outputs=minimal", lines)
+                self.assertIn(r"build --remote_download_regex=.*/rules_playwright[+][^/]*/browsers/.*",
+                              lines)
                 self.assertFalse(any("remote_executor" in line or "bes_" in line
                                      for line in lines))
                 upload = ("build --remote_upload_local_results" if mode == "write"
