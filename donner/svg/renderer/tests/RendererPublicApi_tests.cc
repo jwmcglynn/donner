@@ -840,6 +840,55 @@ TEST(RendererPublicApiTest, ForeignNamespaceWrapperRendersNothing) {
   EXPECT_NE(groupSnapshot.pixels, removedSnapshot.pixels);
 }
 
+TEST(RendererPublicApiTest, FeImageFragmentUsesItsOwnSubregionOrigin) {
+  struct PlacementCase {
+    std::string_view attributes;
+    Vector2i origin;
+    std::string_view sourceTransform;
+  };
+  const std::array<PlacementCase, 6> cases = {{
+      {" x='11' y='12' width='18' height='16'", {11, 12}, ""},
+      {" x='0' y='0' width='18' height='16'", {0, 0}, ""},
+      {" x='21' y='23' width='18' height='16'", {21, 23}, ""},
+      {" x='11' width='18'", {11, 4}, ""},
+      {" y='12' height='16'", {3, 12}, ""},
+      {" x='11' y='12' width='18' height='16'", {11, 12}, " transform='translate(2 1)'"},
+  }};
+  for (size_t index = 0; index < cases.size(); ++index) {
+    const PlacementCase& testCase = cases[index];
+    SCOPED_TRACE(testCase.attributes);
+    const std::string coordinates = " x='" + std::to_string(testCase.origin.x) + "' y='" +
+                                    std::to_string(testCase.origin.y) + "'";
+    SVGDocument document = ParseDocument(
+        "<svg xmlns='http://www.w3.org/2000/svg' width='32' height='32'>"
+        "<defs><rect id='source' width='6' height='8' fill='green'" +
+        std::string(testCase.sourceTransform) + "/>" +
+        "<filter id='f' filterUnits='userSpaceOnUse' x='3' y='4' width='24' height='22'>"
+        "<feImage href='#source' image-rendering='crisp-edges'" +
+        std::string(testCase.attributes) +
+        "/>"
+        "</filter></defs><rect x='10' y='10' width='12' height='12' fill='red' filter='url(#f)'/>"
+        "</svg>");
+    SVGDocument expected = ParseDocument(
+        "<svg xmlns='http://www.w3.org/2000/svg' width='32' height='32'>"
+        "<defs><clipPath id='bounds'><rect x='3' y='4' width='24' height='22'/></clipPath></defs>"
+        "<rect" +
+        coordinates + " width='6' height='8' fill='green' clip-path='url(#bounds)'" +
+        std::string(testCase.sourceTransform) +
+        "/>"
+        "</svg>");
+    Renderer renderer;
+    renderer.draw(document);
+    Renderer expectedRenderer;
+    expectedRenderer.draw(expected);
+    editor::tests::CompareBitmapToBitmap(
+        NormalizeSnapshot(renderer.takeSnapshot()),
+        NormalizeSnapshot(expectedRenderer.takeSnapshot()),
+        "feimage_fragment_subregion_origin_" + std::to_string(index),
+        editor::tests::PixelmatchIdentityParams());
+  }
+}
+
 TEST(RendererPublicApiTest, SnapshotReportsAndReturnsStraightAlpha) {
   // Backends composite in premultiplied space but publish straight alpha, so a
   // half-covered pixel has to come back carrying its full-strength color. A

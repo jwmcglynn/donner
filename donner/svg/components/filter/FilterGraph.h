@@ -372,9 +372,9 @@ struct Image {
   /// filter pixmap without preserveAspectRatio scaling.
   bool isFragmentReference = false;
 
-  /// The filter region top-left in user-space coordinates, used by fragment references to apply
-  /// a device-space post-translation that positions the fragment content at the filter primitive
-  /// subregion origin. Set by the renderer driver during pre-rendering.
+  /// Filter-region origin in user-space coordinates, supplied by the renderer driver. Fragment
+  /// references use this as a placement fallback when primitive-subregion attributes are absent;
+  /// otherwise the resolved primitive subregion supplies the placement origin.
   Vector2d fragmentRegionTopLeft;
 
   /// Resolved sampling policy inherited by the source `<feImage>`.

@@ -4256,11 +4256,7 @@ void RendererDriver::preRenderFeImageFragments(components::FilterGraph& filterGr
     (void)fontCollectionCache();
     subDriver.fontCollectionCache_ = fontCollectionCache_;
 
-    // The fragment is rendered at its natural position in the document coordinate system
-    // (no surfaceFromCanvasTransform_ offset). The filter pipeline applies a device-space
-    // post-translation via SkImageFilters::Offset to position the content at the filter region
-    // origin. This is correct for all transforms (skew, rotation, etc.) because the offset doesn't
-    // interact with the element's transform - it's applied after the element is fully rendered.
+    // Fragment pixels retain document coordinates; filter execution applies the primitive origin.
     if (filterRegion.has_value()) {
       imageNode->fragmentRegionTopLeft = Vector2d(filterRegion->topLeft.x, filterRegion->topLeft.y);
     }
