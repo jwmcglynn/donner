@@ -103,7 +103,9 @@ public:
    * @param renderer Backend receiving prepared draw calls.
    * @param verbose Whether to emit diagnostic warnings.
    * @param securityStats Optional preparation diagnostics destination.
-   * @param externalUseStyleWork Optional shared style-work allowance for admission diagnostics.
+   * @param externalUseStyleWork Optional shared owner-frame work admission context. Current-frame
+   * callers share one fresh context for every backend beginFrame/endFrame pair; persistent drivers
+   * must establish an OwnerScope on that context or be reconstructed for the next frame.
    */
   explicit RendererDriver(
       RendererInterface& renderer, bool verbose = false, SecurityStats* securityStats = nullptr,
@@ -433,6 +435,13 @@ private:
   void drawSubDocumentElement(SVGDocument& subDocument, std::string_view fragmentId,
                               const Transform2d& parentAbsoluteTransform, double opacity,
                               Registry& hostRegistry, Entity hostEntity);
+  void drawAdmittedSubDocument(SVGDocument& subDocument, const Box2d& viewportBounds,
+                               const PreserveAspectRatio& aspectRatio, double opacity,
+                               const Transform2d& parentAbsoluteTransform, Registry& hostRegistry,
+                               Entity hostEntity);
+  void drawAdmittedSubDocumentElement(SVGDocument& subDocument, std::string_view fragmentId,
+                                      const Transform2d& parentAbsoluteTransform, double opacity,
+                                      Registry& hostRegistry, Entity hostEntity);
   bool beginSubDocumentFontTraversal(const SVGDocumentHandle& child, Registry& hostRegistry,
                                      Entity hostEntity);
   void preRenderSvgFeImages(components::FilterGraph& filterGraph, Registry& registry,

@@ -4,6 +4,7 @@
 #include <memory>
 #include <optional>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -74,6 +75,7 @@ public:
   StyleResourceBudget& operator=(const StyleResourceBudget&) = delete;
   /**
    * Transfer counters and retained-property reservations from another budget.
+   * Only move a budget when no OwnerScope or ActiveRegistryScope refers to it.
    * @param other Budget whose family charge moves to this instance.
    */
   StyleResourceBudget(StyleResourceBudget&& other) noexcept
@@ -95,6 +97,62 @@ public:
     other.externalInstanceWork_ = 0;
   }
   StyleResourceBudget& operator=(StyleResourceBudget&&) = delete;
+
+  /** Shared owner scope; nested recording and fallback work preserves the current allowance. */
+  class OwnerScope {
+  public:
+    /**
+     * Begin one logical render operation, resetting only its outermost scope.
+     * @param budget Shared allowance for serialized owner-frame traversal.
+     */
+    explicit OwnerScope(StyleResourceBudget& budget)
+        : budget_(budget), previous_(std::exchange(budget.ownerActive_, true)) {
+      if (!previous_) {
+        budget_.reset();
+      }
+    }
+    ~OwnerScope() { budget_.ownerActive_ = previous_; }
+    OwnerScope(const OwnerScope&) = delete;
+    OwnerScope& operator=(const OwnerScope&) = delete;
+
+  private:
+    StyleResourceBudget& budget_;
+    bool previous_;
+  };
+
+  /** Keep mutable document storage active throughout preparation, drawing and restoration. */
+  class ActiveRegistryScope {
+  public:
+    /**
+     * Mark a registry active without removing an enclosing scope's registration.
+     * @param budget Shared traversal identity context.
+     * @param registry Mutable storage protected by the caller's document access.
+     */
+    ActiveRegistryScope(StyleResourceBudget& budget, const Registry& registry)
+        : budget_(budget),
+          registry_(&registry),
+          inserted_(budget.activeRegistries_.insert(&registry).second) {}
+    ~ActiveRegistryScope() {
+      if (inserted_) {
+        budget_.activeRegistries_.erase(registry_);
+      }
+    }
+    ActiveRegistryScope(const ActiveRegistryScope&) = delete;
+    ActiveRegistryScope& operator=(const ActiveRegistryScope&) = delete;
+
+  private:
+    StyleResourceBudget& budget_;
+    const Registry* registry_;
+    bool inserted_;
+  };
+
+  /**
+   * Return whether mutable storage is already on this render operation's traversal stack.
+   * @param registry Storage considered for child admission.
+   */
+  bool isRegistryActive(const Registry& registry) const {
+    return activeRegistries_.contains(&registry);
+  }
 
   /// Admit bounded entity work for one external-use preparation against the frame allowance.
   bool reserveExternalInstanceWork(std::size_t entities) {
@@ -251,6 +309,8 @@ public:
   [[nodiscard]] const Limits& limits() const { return limits_; }
 
 private:
+  bool ownerActive_ = false;
+  std::unordered_set<const Registry*> activeRegistries_;
   std::size_t externalInstanceWork_ = 0;
   bool externalResourceWarning_ = false;
   StyleResourceBudget* aggregateWork_ = nullptr;

@@ -624,31 +624,18 @@ void resolvePerSpanStyles(Registry& registry, components::ComputedTextComponent&
   }
 }
 
-/// Build the borrowed path view handed to `RendererInterface::drawPath`.
-///
-/// `shape.path` points straight at `path.spline`, so this costs no allocation no matter how
-/// large the geometry is.
-///
-/// The borrow is valid only while \p path keeps its current address AND keeps naming this
-/// entity's geometry. Both hold during traversal, but for different reasons, and the second
-/// is the subtle one. Component storage is paged, so emplacing more `ComputedPathComponent`s
-/// never relocates the existing ones. ERASING one is swap-and-pop: the storage moves its last
-/// element into the freed slot. So an erase during traversal would leave every outstanding
-/// borrow pointing at valid memory that now holds a DIFFERENT entity's spline. The frame
-/// would render the wrong shape, with no crash and nothing for ASAN to catch. The invariant
-/// we rely on is therefore "no `ComputedPathComponent` is erased between the borrow and its
-/// last use", and it holds because every site that removes one runs outside draw traversal:
-/// DOM attribute mutation on the shape elements, shape recomputation in `ShapeSystem`, and
-/// animation-override application in `RenderingContext`. Note that `emplace_or_replace`
-/// during recomputation is fine on its own - it rewrites the component in place - so the
-/// hazard is specifically erasure, not update.
+/// Build a path view consumed during the draw call unless its entity geometry remains stable.
+/// Scoped external-use styles can recompute the same child between draws, so those occurrences
+/// omit the persistent geometry key and use the backend's transient path.
 PathShape toPathShape(EntityHandle sourceEntity,
                       const components::ComputedPathComponent& path UTILS_LIFETIME_BOUND,
                       const components::ComputedStyleComponent& style) {
   PathShape shape;
   shape.path = &path.spline;
   shape.fillRule = style.properties->fillRule.get().value();
-  shape.sourceEntity = sourceEntity;
+  if (!sourceEntity.registry()->ctx().contains<components::ExternalUseStyleContext>()) {
+    shape.sourceEntity = sourceEntity;
+  }
   return shape;
 }
 
@@ -1668,6 +1655,7 @@ void RendererDriver::resetOwnedSecurityBudgets() {
 }
 
 void RendererDriver::draw(SVGDocument& document) {
+  const components::StyleResourceBudget::OwnerScope styleWorkScope(*externalUseStyleWork_);
   if (document.threadingMode() == ThreadingMode::ConcurrentDom) {
     const ScopedFrameResourceScope resourceScope(renderer_);
     RenderSnapshot snapshot = captureRenderSnapshot(document);
@@ -1675,6 +1663,8 @@ void RendererDriver::draw(SVGDocument& document) {
       // A bounded snapshot may omit fonts. Render directly while holding document access so
       // ordinary draw() remains complete even when the snapshot font budget rejects capture.
       DocumentWriteAccess access = document.writeAccess();
+      const components::StyleResourceBudget::ActiveRegistryScope activeRegistry(
+          *externalUseStyleWork_, document.registry());
       ParseWarningSink warnings;
       RendererUtils::prepareDocumentForRendering(document, verbose_, warnings);
       if (warnings.hasWarnings()) {
@@ -1690,6 +1680,8 @@ void RendererDriver::draw(SVGDocument& document) {
   }
 
   DocumentWriteAccess access = document.writeAccess();
+  const components::StyleResourceBudget::ActiveRegistryScope activeRegistry(*externalUseStyleWork_,
+                                                                            document.registry());
 
   ParseWarningSink warnings;
   RendererUtils::prepareDocumentForRendering(document, verbose_, warnings);
@@ -1705,11 +1697,14 @@ void RendererDriver::draw(SVGDocument& document) {
 
 void RendererDriver::draw(SVGDocument& document, const RenderViewport& viewport,
                           const Transform2d& surfaceFromCanvas) {
+  const components::StyleResourceBudget::OwnerScope styleWorkScope(*externalUseStyleWork_);
   if (document.threadingMode() == ThreadingMode::ConcurrentDom) {
     const ScopedFrameResourceScope resourceScope(renderer_);
     RenderSnapshot snapshot;
     {
       DocumentWriteAccess access = document.writeAccess();
+      const components::StyleResourceBudget::ActiveRegistryScope activeRegistry(
+          *externalUseStyleWork_, document.registry());
 
       ParseWarningSink warnings;
       RendererUtils::prepareDocumentForRendering(document, verbose_, warnings);
@@ -1722,11 +1717,13 @@ void RendererDriver::draw(SVGDocument& document, const RenderViewport& viewport,
 
       snapshot.setSourceRevision(document.handle()->revision());
       RenderSnapshotRecorder recorder(snapshot, renderer_);
-      RendererDriver snapshotDriver(recorder, verbose_);
+      RendererDriver snapshotDriver(recorder, verbose_, nullptr, externalUseStyleWork_);
       snapshotDriver.drawPreparedDocument(document, viewport, surfaceFromCanvas);
     }
     if (snapshot.fontPayloadLimitExceeded()) {
       DocumentWriteAccess access = document.writeAccess();
+      const components::StyleResourceBudget::ActiveRegistryScope activeRegistry(
+          *externalUseStyleWork_, document.registry());
       ParseWarningSink warnings;
       RendererUtils::prepareDocumentForRendering(document, verbose_, warnings);
       if (warnings.hasWarnings()) {
@@ -1742,6 +1739,8 @@ void RendererDriver::draw(SVGDocument& document, const RenderViewport& viewport,
   }
 
   DocumentWriteAccess access = document.writeAccess();
+  const components::StyleResourceBudget::ActiveRegistryScope activeRegistry(*externalUseStyleWork_,
+                                                                            document.registry());
 
   ParseWarningSink warnings;
   RendererUtils::prepareDocumentForRendering(document, verbose_, warnings);
@@ -1758,7 +1757,10 @@ void RendererDriver::draw(SVGDocument& document, const RenderViewport& viewport,
 bool RendererDriver::drawInterruptibly(SVGDocument& document, const RenderViewport& viewport,
                                        const Transform2d& surfaceFromCanvas,
                                        const std::function<bool()>& shouldCancel) {
+  const components::StyleResourceBudget::OwnerScope styleWorkScope(*externalUseStyleWork_);
   DocumentWriteAccess access = document.writeAccess();
+  const components::StyleResourceBudget::ActiveRegistryScope activeRegistry(*externalUseStyleWork_,
+                                                                            document.registry());
   components::ScopedFontResourceRender fontRenderScope(
       document.registry(),
       document.registry().ctx().get<components::SVGDocumentContext>().rootEntity);
@@ -1797,9 +1799,12 @@ bool RendererDriver::drawInterruptibly(SVGDocument& document, const RenderViewpo
 }
 
 RenderSnapshot RendererDriver::captureRenderSnapshot(SVGDocument& document) {
+  const components::StyleResourceBudget::OwnerScope styleWorkScope(*externalUseStyleWork_);
   const ScopedFrameResourceScope resourceScope(renderer_);
   RenderSnapshot snapshot;
   DocumentWriteAccess access = document.writeAccess();
+  const components::StyleResourceBudget::ActiveRegistryScope activeRegistry(*externalUseStyleWork_,
+                                                                            document.registry());
 
   ParseWarningSink warnings;
   RendererUtils::prepareDocumentForRendering(document, verbose_, warnings);
@@ -1813,7 +1818,7 @@ RenderSnapshot RendererDriver::captureRenderSnapshot(SVGDocument& document) {
   snapshot.setSourceRevision(document.handle()->revision());
 
   RenderSnapshotRecorder recorder(snapshot, renderer_);
-  RendererDriver snapshotDriver(recorder, verbose_);
+  RendererDriver snapshotDriver(recorder, verbose_, nullptr, externalUseStyleWork_);
   snapshotDriver.drawPreparedDocument(document);
   return snapshot;
 }
@@ -1837,8 +1842,10 @@ void RendererDriver::drawPreparedDocument(SVGDocument& document) {
 
 void RendererDriver::drawPreparedDocument(SVGDocument& document, const RenderViewport& viewport,
                                           const Transform2d& surfaceFromCanvas) {
+  const components::StyleResourceBudget::ActiveRegistryScope activeRegistry(*externalUseStyleWork_,
+                                                                            document.registry());
   textFrameCache_->roots.clear();
-  externalUseStyleWork_->reset();
+  const components::StyleResourceBudget::OwnerScope styleWorkScope(*externalUseStyleWork_);
   components::ScopedFontResourceRender fontRenderScope(
       document.registry(),
       document.registry().ctx().get<components::SVGDocumentContext>().rootEntity);
@@ -1894,8 +1901,10 @@ void RendererDriver::drawPreparedDocument(SVGDocument& document, const RenderVie
 void RendererDriver::drawEntityRange(Registry& registry, Entity firstEntity, Entity lastEntity,
                                      const RenderViewport& viewport,
                                      const Transform2d& surfaceFromCanvas) {
+  const components::StyleResourceBudget::ActiveRegistryScope activeRegistry(*externalUseStyleWork_,
+                                                                            registry);
   textFrameCache_->roots.clear();
-  externalUseStyleWork_->reset();
+  const components::StyleResourceBudget::OwnerScope styleWorkScope(*externalUseStyleWork_);
   components::ScopedFontResourceRender fontRenderScope(registry);
   resetOwnedSecurityBudgets();
   renderingSize_ = CheckedRenderingSize(viewport);
@@ -1918,8 +1927,10 @@ bool RendererDriver::drawEntityRangeInterruptibly(Registry& registry, Entity fir
                                                   Entity lastEntity, const RenderViewport& viewport,
                                                   const Transform2d& surfaceFromCanvas,
                                                   const std::function<bool()>& shouldCancel) {
+  const components::StyleResourceBudget::ActiveRegistryScope activeRegistry(*externalUseStyleWork_,
+                                                                            registry);
   textFrameCache_->roots.clear();
-  externalUseStyleWork_->reset();
+  const components::StyleResourceBudget::OwnerScope styleWorkScope(*externalUseStyleWork_);
   components::ScopedFontResourceRender fontRenderScope(registry);
   resetOwnedSecurityBudgets();
   renderingSize_ = CheckedRenderingSize(viewport);
@@ -1942,6 +1953,8 @@ bool RendererDriver::drawEntityRangeInterruptibly(Registry& registry, Entity fir
 void RendererDriver::drawDocumentIntoCurrentFrame(SVGDocument& document,
                                                   const RenderViewport& viewport,
                                                   const Transform2d& surfaceFromCanvas) {
+  const components::StyleResourceBudget::ActiveRegistryScope activeRegistry(*externalUseStyleWork_,
+                                                                            document.registry());
   ParseWarningSink warnings = ParseWarningSink::Disabled();
   RendererUtils::prepareDocumentForRendering(document, verbose_, warnings);
 
@@ -1969,8 +1982,9 @@ void RendererDriver::drawEntityRangeIntoCurrentFrame(Registry& registry, Entity 
                                                      Entity lastEntity,
                                                      const RenderViewport& viewport,
                                                      const Transform2d& surfaceFromCanvas) {
+  const components::StyleResourceBudget::ActiveRegistryScope activeRegistry(*externalUseStyleWork_,
+                                                                            registry);
   textFrameCache_->roots.clear();
-  externalUseStyleWork_->reset();
   components::ScopedFontResourceRender fontRenderScope(registry);
   renderingSize_ = CheckedRenderingSize(viewport);
   surfaceFromCanvasTransform_ = surfaceFromCanvas;
@@ -2002,8 +2016,9 @@ bool RendererDriver::drawUnderEntityMaskIntoCurrentFrame(Registry& registry, Ent
     return false;
   }
 
+  const components::StyleResourceBudget::ActiveRegistryScope activeRegistry(*externalUseStyleWork_,
+                                                                            registry);
   textFrameCache_->roots.clear();
-  externalUseStyleWork_->reset();
   components::ScopedFontResourceRender fontRenderScope(registry);
   renderingSize_ = CheckedRenderingSize(viewport);
   surfaceFromCanvasTransform_ = surfaceFromCanvas;
@@ -3875,6 +3890,7 @@ bool RendererDriver::beginSubDocumentFontTraversal(const SVGDocumentHandle& chil
     visitedFontSubDocuments_ = std::make_shared<std::unordered_set<const DocumentState*>>();
   }
   if (!child || &child->registry() == &hostRegistry ||
+      externalUseStyleWork_->isRegistryActive(child->registry()) ||
       activeFontSubDocuments_->contains(child.get()) ||
       (!visitedFontSubDocuments_->contains(child.get()) &&
        visitedFontSubDocuments_->size() >= components::kMaximumFontChildDocuments)) {
@@ -3983,6 +3999,13 @@ void RendererDriver::drawExternalUse(SVGDocument& subDocument, std::string_view 
                                      Registry& hostRegistry, Entity hostEntity) {
   const auto access = subDocument.writeAccess();
   Registry& child = subDocument.registry();
+  const auto childHandle = subDocument.handle();
+  if (!beginSubDocumentFontTraversal(childHandle, hostRegistry, hostEntity)) {
+    return;
+  }
+  const ActiveFontSubDocument active(*activeFontSubDocuments_, childHandle.get());
+  const components::StyleResourceBudget::ActiveRegistryScope activeRegistry(*externalUseStyleWork_,
+                                                                            child);
   const Entity root = fragment.empty()
                           ? child.ctx().get<components::SVGDocumentContext>().rootEntity
                           : components::FindAttachedEntityById(child, RcString(fragment));
@@ -4003,13 +4026,14 @@ void RendererDriver::drawExternalUse(SVGDocument& subDocument, std::string_view 
   const Transform2d surfaceFromHost =
       instance.worldFromEntityTransform * surfaceFromCanvasTransform_;
   if (!fragment.empty()) {
-    drawSubDocumentElement(subDocument, fragment, surfaceFromHost,
-                           style.properties->opacity.get().value(), hostRegistry, hostEntity);
+    drawAdmittedSubDocumentElement(subDocument, fragment, surfaceFromHost,
+                                   style.properties->opacity.get().value(), hostRegistry,
+                                   hostEntity);
   } else {
     const Vector2i size = subDocument.canvasSize();
-    drawSubDocument(subDocument, Box2d::WithSize(Vector2d(size.x, size.y)),
-                    PreserveAspectRatio::Default(), style.properties->opacity.get().value(),
-                    surfaceFromHost, hostRegistry, hostEntity);
+    drawAdmittedSubDocument(subDocument, Box2d::WithSize(Vector2d(size.x, size.y)),
+                            PreserveAspectRatio::Default(), style.properties->opacity.get().value(),
+                            surfaceFromHost, hostRegistry, hostEntity);
   }
   if (previousPaint) {
     child.ctx().get<components::RenderingContext>().restoreInitialPaintState(
@@ -4024,12 +4048,22 @@ void RendererDriver::drawSubDocument(SVGDocument& subDocument, const Box2d& view
                                      const PreserveAspectRatio& aspectRatio, double opacity,
                                      const Transform2d& parentAbsoluteTransform,
                                      Registry& hostRegistry, Entity hostEntity) {
+  const auto childAccess = subDocument.writeAccess();
   const auto child = subDocument.handle();
   if (!beginSubDocumentFontTraversal(child, hostRegistry, hostEntity)) {
     return;
   }
   const ActiveFontSubDocument active(*activeFontSubDocuments_, child.get());
-  const auto childAccess = subDocument.writeAccess();
+  const components::StyleResourceBudget::ActiveRegistryScope activeRegistry(*externalUseStyleWork_,
+                                                                            child->registry());
+  drawAdmittedSubDocument(subDocument, viewportBounds, aspectRatio, opacity,
+                          parentAbsoluteTransform, hostRegistry, hostEntity);
+}
+
+void RendererDriver::drawAdmittedSubDocument(SVGDocument& subDocument, const Box2d& viewportBounds,
+                                             const PreserveAspectRatio& aspectRatio, double opacity,
+                                             const Transform2d& parentAbsoluteTransform,
+                                             Registry& hostRegistry, Entity hostEntity) {
   // Prepare the sub-document's render tree (styles, layout, resources).
   prepareSubDocument(subDocument);
   components::ScopedFontResourceRender fontRenderScope(
@@ -4092,12 +4126,23 @@ void RendererDriver::drawSubDocumentElement(SVGDocument& subDocument, std::strin
                                             const Transform2d& parentAbsoluteTransform,
                                             double opacity, Registry& hostRegistry,
                                             Entity hostEntity) {
+  const auto childAccess = subDocument.writeAccess();
   const auto child = subDocument.handle();
   if (!beginSubDocumentFontTraversal(child, hostRegistry, hostEntity)) {
     return;
   }
   const ActiveFontSubDocument active(*activeFontSubDocuments_, child.get());
-  const auto childAccess = subDocument.writeAccess();
+  const components::StyleResourceBudget::ActiveRegistryScope activeRegistry(*externalUseStyleWork_,
+                                                                            child->registry());
+  drawAdmittedSubDocumentElement(subDocument, fragmentId, parentAbsoluteTransform, opacity,
+                                 hostRegistry, hostEntity);
+}
+
+void RendererDriver::drawAdmittedSubDocumentElement(SVGDocument& subDocument,
+                                                    std::string_view fragmentId,
+                                                    const Transform2d& parentAbsoluteTransform,
+                                                    double opacity, Registry& hostRegistry,
+                                                    Entity hostEntity) {
   hostRegistry.get_or_emplace<components::FontPaintDependenciesComponent>(hostEntity).prepared =
       true;
   // Prepare the sub-document's render tree.
@@ -4218,7 +4263,7 @@ void RendererDriver::preRenderSvgFeImages(components::FilterGraph& filterGraph, 
     viewport.devicePixelRatio = 1.0;
     offscreen->beginFrame(viewport);
 
-    RendererDriver subDriver(*offscreen, verbose_);
+    RendererDriver subDriver(*offscreen, verbose_, nullptr, externalUseStyleWork_);
     subDriver.renderingSize_ = targetSize;
     subDriver.filterPreparationBudget_ = filterPreparationBudget_;
     subDriver.clipGeometryCopyBudget_ = clipGeometryCopyBudget_;
@@ -4373,7 +4418,7 @@ void RendererDriver::preRenderFeImageFragments(components::FilterGraph& filterGr
     // Create a sub-driver for offscreen rendering and share the recursion guard. The depth is
     // carried into the sub-driver (one level deeper) so the chain-length cap above accumulates
     // across the whole nested-fragment recursion, not just within a single driver instance.
-    RendererDriver subDriver(*offscreen, verbose_);
+    RendererDriver subDriver(*offscreen, verbose_, nullptr, externalUseStyleWork_);
     subDriver.renderingSize_ = renderingSize_;
     subDriver.feImageFragmentGuard_ = feImageFragmentGuard_;
     subDriver.feImageFragmentDepth_ = feImageFragmentDepth_ + 1;

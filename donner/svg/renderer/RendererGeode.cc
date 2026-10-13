@@ -3304,16 +3304,11 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     /// `drawPath` call that delivered it, so it carries the strictest precondition in this
     /// file.
     ///
-    /// A batch is only started for a draw with a non-null `sourceEntity`, and for those the
-    /// driver points `PathShape::path` at the entity's `ComputedPathComponent::spline`. That
-    /// address is stable while the component exists (component storage is paged, so emplacing
-    /// other components never relocates it), but erasing that component would swap the
-    /// storage's last element into the slot and silently repoint us at another entity's
-    /// geometry - wrong pixels, no crash, invisible to ASAN. What makes the retention safe is
-    /// that nothing erases a `ComputedPathComponent` between the borrow and the flush: every
-    /// removal site runs outside draw traversal, and a flush always happens within the frame
-    /// that started the batch. Draws whose geometry lives on the caller's stack (`drawRect`,
-    /// `drawEllipse`, overlay chrome) have no source entity and never reach here.
+    /// A batch starts only for a non-null `sourceEntity`. Its computed path must remain
+    /// unchanged until the flush: erasure can repoint paged storage at another entity, and
+    /// replacement can change geometry while preserving its address. Scoped external-use styles
+    /// can recompute a child between occurrences, so the driver omits their persistent key;
+    /// those paths and stack geometry are consumed during drawPath and never enter this batch.
     const Path* path = nullptr;
     /// `deviceFromLocalTransform` captured at each `drawPath`. On flush, the
     /// outer encoder transform is set to identity and these are

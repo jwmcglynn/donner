@@ -1,8 +1,7 @@
 /// @file
 /// CompositorController rasterization and composition: dirty layer/segment
 /// rasterization, segment/layer-set reconciliation, per-frame composition of
-/// cached tiles and immediate spans, and the tile snapshot handed to the
-/// editor for GPU upload.
+/// cached tiles and immediate spans, and composition for presentation.
 
 #include <algorithm>
 #include <array>
@@ -26,6 +25,7 @@
 #include "donner/svg/components/filter/FilterPrimitiveComponent.h"
 #include "donner/svg/components/layout/LayoutSystem.h"
 #include "donner/svg/components/shadow/ShadowEntityComponent.h"
+#include "donner/svg/components/style/StyleSystem.h"
 #include "donner/svg/compositor/CompositorControllerInternal.h"
 #include "donner/svg/renderer/PixelFormatUtils.h"
 #include "donner/svg/renderer/RendererDriver.h"
@@ -1677,6 +1677,8 @@ void CompositorController::composeLayers(const RenderViewport& viewport,
 
   const auto composeStart = std::chrono::steady_clock::now();
   ++lastRenderFrameStats_.mainComposeCount;
+  auto styleWork = std::make_shared<components::StyleResourceBudget>();
+  const components::StyleResourceBudget::OwnerScope styleWorkScope(*styleWork);
   renderer().beginFrame(viewport);
 
   const auto drawImmediateSpan = [&](size_t segmentIndex) {
@@ -1690,7 +1692,7 @@ void CompositorController::composeLayers(const RenderViewport& viewport,
     }
 
     const auto directStart = std::chrono::steady_clock::now();
-    RendererDriver driver(renderer());
+    RendererDriver driver(renderer(), false, nullptr, styleWork);
     driver.drawEntityRangeIntoCurrentFrame(document().registry(), spanPlan.firstEntity,
                                            spanPlan.lastEntity, viewport, surfaceFromCanvas);
     const auto directEnd = std::chrono::steady_clock::now();
@@ -1735,7 +1737,7 @@ void CompositorController::composeLayers(const RenderViewport& viewport,
                                          layer.canvasFromBitmap().isTranslation();
     if (shouldDirectComposeLayer && !blitRetainedTranslation) {
       const auto directStart = std::chrono::steady_clock::now();
-      RendererDriver driver(renderer());
+      RendererDriver driver(renderer(), false, nullptr, styleWork);
       driver.drawEntityRangeIntoCurrentFrame(document().registry(), layer.firstEntity(),
                                              layer.lastEntity(), viewport, surfaceFromCanvas);
       const auto directEnd = std::chrono::steady_clock::now();

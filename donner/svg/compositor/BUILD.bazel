@@ -48,6 +48,7 @@ donner_perf_sensitive_cc_library(
         "//donner/base",
         "//donner/svg",
         "//donner/svg/components",
+        "//donner/svg/components/style:style_system",
         "//donner/svg/renderer:pixel_format_utils",
         "//donner/svg/renderer:renderer_driver",
         "//donner/svg/renderer:renderer_interface",
