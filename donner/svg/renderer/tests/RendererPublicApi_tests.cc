@@ -3064,6 +3064,129 @@ TEST(RendererPublicApiTest, ClipPathSelfUnitObjectBoxPreservesIdentity) {
                                        editor::tests::PixelmatchIdentityParams());
 }
 
+RendererBitmap RenderNestedClipSiblingFixture(std::string_view nestedDefinitions,
+                                              std::string_view children,
+                                              std::string_view outerAttributes = "") {
+  std::string source =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="32" height="16"><defs>)svg";
+  source.append(nestedDefinitions);
+  source += R"svg(<clipPath id="outer" clipPathUnits="userSpaceOnUse" )svg";
+  source.append(outerAttributes);
+  source += ">";
+  source.append(children);
+  source += R"svg(</clipPath></defs>
+    <rect width="32" height="16" fill="#204060" clip-path="url(#outer)"/>
+  </svg>)svg";
+  SVGDocument document = ParseDocument(source);
+  Renderer renderer;
+  renderer.draw(document);
+  return NormalizeSnapshot(renderer.takeSnapshot());
+}
+
+RendererBitmap RenderNestedClipSiblingReference() {
+  SVGDocument document = ParseDocument(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="32" height="16">
+      <rect x="2" y="4" width="6" height="8" fill="#204060"/>
+    </svg>
+  )svg");
+  Renderer renderer;
+  renderer.draw(document);
+  return NormalizeSnapshot(renderer.takeSnapshot());
+}
+
+RendererBitmap RenderNestedClipEmptyReference() {
+  SVGDocument document =
+      ParseDocument(R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="32" height="16"/>)svg");
+  Renderer renderer;
+  renderer.draw(document);
+  return NormalizeSnapshot(renderer.takeSnapshot());
+}
+
+TEST(RendererPublicApiTest, NestedClipSiblingFlatControl) {
+  const RendererBitmap actual =
+      RenderNestedClipSiblingFixture("", R"svg(<rect x="2" y="4" width="6" height="8"/>)svg");
+  ASSERT_FALSE(actual.empty());
+  ASSERT_EQ(actual.dimensions, Vector2i(32, 16));
+  EXPECT_THAT(PixelAt(actual, 4, 8), ElementsAre(32, 64, 96, 255));
+  EXPECT_THAT(PixelAt(actual, 22, 8), IsTransparent());
+  editor::tests::CompareBitmapToBitmap(actual, RenderNestedClipSiblingReference(),
+                                       "nested_clip_sibling_flat_control",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(RendererPublicApiTest, NestedClipSiblingSurvivesFollowingEmptyClip) {
+  const RendererBitmap actual =
+      RenderNestedClipSiblingFixture(R"svg(<clipPath id="empty"/>)svg",
+                                     R"svg(<rect x="2" y="4" width="6" height="8"/>
+        <rect x="20" y="4" width="6" height="8" clip-path="url(#empty)"/>)svg");
+  ASSERT_FALSE(actual.empty());
+  ASSERT_EQ(actual.dimensions, Vector2i(32, 16));
+  EXPECT_THAT(PixelAt(actual, 4, 8), ElementsAre(32, 64, 96, 255));
+  EXPECT_THAT(PixelAt(actual, 22, 8), IsTransparent());
+  editor::tests::CompareBitmapToBitmap(actual, RenderNestedClipSiblingReference(),
+                                       "nested_clip_good_before_empty",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(RendererPublicApiTest, NestedClipSiblingSurvivesPrecedingEmptyClip) {
+  const RendererBitmap actual = RenderNestedClipSiblingFixture(
+      R"svg(<clipPath id="empty"/>)svg",
+      R"svg(<rect x="20" y="4" width="6" height="8" clip-path="url(#empty)"/>
+        <rect x="2" y="4" width="6" height="8"/>)svg");
+  ASSERT_FALSE(actual.empty());
+  ASSERT_EQ(actual.dimensions, Vector2i(32, 16));
+  EXPECT_THAT(PixelAt(actual, 4, 8), ElementsAre(32, 64, 96, 255));
+  EXPECT_THAT(PixelAt(actual, 22, 8), IsTransparent());
+  editor::tests::CompareBitmapToBitmap(actual, RenderNestedClipSiblingReference(),
+                                       "nested_clip_good_after_empty",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(RendererPublicApiTest, NestedClipSiblingSurvivesOverflowingChildReference) {
+  const RendererBitmap actual = RenderNestedClipSiblingFixture(
+      R"svg(<clipPath id="huge" clipPathUnits="userSpaceOnUse" transform="scale(1e200)">
+        <rect width="6" height="8"/>
+      </clipPath>)svg",
+      R"svg(<rect x="2" y="4" width="6" height="8"/>
+        <rect width="6" height="8" transform="scale(1e200)" clip-path="url(#huge)"/>)svg");
+  ASSERT_FALSE(actual.empty());
+  ASSERT_EQ(actual.dimensions, Vector2i(32, 16));
+  EXPECT_THAT(PixelAt(actual, 4, 8), ElementsAre(32, 64, 96, 255));
+  EXPECT_THAT(PixelAt(actual, 22, 8), IsTransparent());
+  editor::tests::CompareBitmapToBitmap(actual, RenderNestedClipSiblingReference(),
+                                       "nested_clip_good_before_overflow",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(RendererPublicApiTest, NestedClipSelfEmptyReferenceRemainsEmptyWithValidChild) {
+  const RendererBitmap actual = RenderNestedClipSiblingFixture(
+      R"svg(<clipPath id="empty"/>)svg", R"svg(<rect x="2" y="4" width="6" height="8"/>)svg",
+      R"svg(clip-path="url(#empty)")svg");
+  ASSERT_FALSE(actual.empty());
+  ASSERT_EQ(actual.dimensions, Vector2i(32, 16));
+  EXPECT_THAT(PixelAt(actual, 4, 8), IsTransparent());
+  EXPECT_THAT(PixelAt(actual, 22, 8), IsTransparent());
+  editor::tests::CompareBitmapToBitmap(actual, RenderNestedClipEmptyReference(),
+                                       "nested_clip_self_empty_reference",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(RendererPublicApiTest, NestedClipSelfOverflowingReferenceRemainsEmptyWithValidChild) {
+  const RendererBitmap actual = RenderNestedClipSiblingFixture(
+      R"svg(<clipPath id="huge" clipPathUnits="userSpaceOnUse" transform="scale(1e200)">
+        <rect width="6" height="8"/>
+      </clipPath>)svg",
+      R"svg(<rect x="2" y="4" width="6" height="8"/>)svg",
+      R"svg(transform="scale(1e200)" clip-path="url(#huge)")svg");
+  ASSERT_FALSE(actual.empty());
+  ASSERT_EQ(actual.dimensions, Vector2i(32, 16));
+  EXPECT_THAT(PixelAt(actual, 4, 8), IsTransparent());
+  EXPECT_THAT(PixelAt(actual, 22, 8), IsTransparent());
+  editor::tests::CompareBitmapToBitmap(actual, RenderNestedClipEmptyReference(),
+                                       "nested_clip_self_overflowing_reference",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
 // 20. Mask element
 TEST(RendererPublicApiTest, MaskElement) {
   SVGDocument document = ParseDocument(R"svg(
