@@ -278,7 +278,7 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         self.assertIn(
             "--test_tag_filters=launches-browser,-manual,-perf,-ci-remote-gpu,-fuzz_soak ",
             browser)
-        self.assertIn("bazelisk --nohome_rc test --config=ci", browser)
+        self.assertIn("bazelisk --nohome_rc --nosystem_rc test --config=ci", browser)
         for phase in (main_test, browser):
             self.assertIn("$BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS $TARGETS", phase)
             self.assertNotIn("requires_metal_toolchain", phase)

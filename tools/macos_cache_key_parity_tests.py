@@ -3,9 +3,10 @@
 The two lanes in main.yml can share one remote cache only if every key-affecting input matches:
 the Bazel flags and configs, the action environment (PATH in particular, which Bazel copies from
 the client unless it is pinned), and the Xcode version and build, which Apple toolchain actions
-carry in their environment. Runner-only settings, such as the remote cache client flags, do not
-enter action keys and may differ. Test-only environment (--test_env) is deliberately left to
-each lane: a test result depends on the runner's GPU, so it must not be shared across runners.
+carry in their environment. Both lanes configure the remote cache only through the BuildBuddy
+action, so their build flags must be identical. Test-only flags and environment (--test_env)
+are deliberately left to each lane, and each lane names itself in its test environment: a test
+result depends on the runner's GPU, so it must not be shared across runners.
 
 Every GitHub-hosted job is also kept off the self-hosted lane's private cache and remote
 execution configuration.
@@ -25,11 +26,21 @@ from python.runfiles import runfiles
 
 HOSTED = "macos"
 SELF_HOSTED = "macos-self-hosted"
-# Flags that only configure a runner's remote cache client. None of them changes an action key.
-RUNNER_ONLY_FLAG = re.compile(r"^--(?:no)?(?:remote_|incompatible_remote_)")
+# Remote cache and executor flags. The macOS lanes get their remote cache only from the
+# BuildBuddy action, so neither passes any of these itself.
+REMOTE_FLAG = re.compile(r"^--(?:no)?(?:remote_|incompatible_remote_|credential_helper)")
 LANE_FLAGS = "$BAZEL_MACOS_BUILD_FLAGS"
 BAZEL_INVOCATION = re.compile(
-    r"\bbazelisk(?:\s+--[a-z_]+)*\s+(build|test|fetch|query|cquery|coverage|run)\b")
+    r"\bbazel(?:isk)?(?:\s+--[a-z_]+)*\s+(build|test|fetch|query|cquery|coverage|run)\b")
+# Flags that only select, run or report tests. They never change a build action's key.
+TEST_ONLY_FLAG = re.compile(r"^--(?:no)?(?:test_|cache_test_results|local_test_jobs|"
+                            r"flaky_test_attempts|runs_per_test|keep_going|build_event_json_file)")
+# Job environment values a lane may set for itself; each may hold only test-only flags.
+TEST_ONLY_VARIABLES = ("BAZEL_MACOS_TEST_FLAGS", "BROWSER_STALL_TEST_FLAGS",
+                       "HOSTED_MACOS_QUARANTINE_TEST_FLAGS")
+# Each lane names itself in its test environment, so test results never cross runners.
+LANE_TEST_ENV = {"macos": "--test_env=DONNER_CI_MACOS_LANE=hosted",
+                 "macos-self-hosted": "--test_env=DONNER_CI_MACOS_LANE=self-hosted"}
 # The toolchain repository refresh runs before any build and takes no build flags.
 TOOLCHAIN_REFRESH = "fetch --force --lockfile_mode=off"
 SELECT_SCRIPT = "tools/ci_select_macos_xcode.sh"
@@ -101,12 +112,15 @@ def _bazel_commands(job):
             if BAZEL_INVOCATION.search(command)]
 
 
-def _configs(command):
-    return sorted(re.findall(r"--config[= ](\S+)", command))
-
-
-def _key_flags(value):
-    return [flag for flag in shlex.split(value) if not RUNNER_ONLY_FLAG.match(flag)]
+def _build_flags(command):
+    """The key-affecting words of a Bazel command: build flags and environment lists after the
+    command, without test-only flags, test-only lists or targets."""
+    words = command[BAZEL_INVOCATION.search(command).end():].split()
+    test_lists = {"$" + name for name in TEST_ONLY_VARIABLES}
+    return sorted(word for word in words if (word.startswith("--") and
+                                             not TEST_ONLY_FLAG.match(word)) or
+                  (word.startswith("$") and word not in test_lists and
+                   word.startswith("$BAZEL")))
 
 
 def _runs_self_hosted(job):
@@ -117,13 +131,27 @@ def _runs_self_hosted(job):
 def _flag_problems(hosted_flags, self_flags):
     """Problems of the two lanes' BAZEL_MACOS_BUILD_FLAGS."""
     problems = []
-    if _key_flags(hosted_flags) != _key_flags(self_flags):
+    if shlex.split(hosted_flags) != shlex.split(self_flags):
         problems.append("key-affecting BAZEL_MACOS_BUILD_FLAGS differ: %s vs %s" % (
-            _key_flags(hosted_flags), _key_flags(self_flags)))
-    if [flag for flag in shlex.split(hosted_flags) if RUNNER_ONLY_FLAG.match(flag)]:
-        problems.append("the hosted macOS lane sets remote cache client flags outside BuildBuddy")
+            shlex.split(hosted_flags), shlex.split(self_flags)))
+    if [flag for flag in shlex.split(hosted_flags + " " + self_flags) if REMOTE_FLAG.match(flag)]:
+        problems.append("a macOS lane sets remote cache flags outside BuildBuddy")
     if "--config=ci-macos" not in shlex.split(hosted_flags):
         problems.append("the macOS lanes do not pass --config=ci-macos")
+    return problems
+
+
+def _test_list_problems(name, job):
+    """Problems of a lane's test-only environment lists and its lane name."""
+    problems = []
+    for variable in TEST_ONLY_VARIABLES:
+        value = _job_env(job, variable)
+        if value is not None and not all(TEST_ONLY_FLAG.match(flag)
+                                         for flag in shlex.split(value)):
+            problems.append("%s %s holds a flag that is not test-only" % (name, variable))
+    tests = shlex.split(_job_env(job, "BAZEL_MACOS_TEST_FLAGS") or "")
+    if LANE_TEST_ENV[name] not in tests:
+        problems.append("%s does not name its lane with %s" % (name, LANE_TEST_ENV[name]))
     return problems
 
 
@@ -135,7 +163,8 @@ def _record_commands(name, commands, by_step):
             continue
         if LANE_FLAGS not in command:
             problems.append("%s step %r runs Bazel without %s" % (name, step_name, LANE_FLAGS))
-        by_step.setdefault(step_name, {}).setdefault(name, set()).add(tuple(_configs(command)))
+        by_step.setdefault(step_name, {}).setdefault(name, set()).add(
+            tuple(_build_flags(command)))
     return problems
 
 
@@ -194,6 +223,7 @@ def key_parity_problems(workflow, bazelrc):
                             (SELF_HOSTED, self_hosted, "--optional")):
         commands = _bazel_commands(job)
         problems += _record_commands(name, commands, by_step)
+        problems += _test_list_problems(name, job)
         problems += _select_problems(name, _steps(job), commands, mode)
         if "Select pinned Xcode" in [step_name for step_name, _ in _steps(job)]:
             problems += _refresh_problems(name, commands, by_step)
@@ -264,7 +294,24 @@ class MacosCacheKeyParityTest(unittest.TestCase):
                 self.bazelrc, "key-affecting BAZEL_MACOS_BUILD_FLAGS differ"),
             "hosted carries a private cache flag": (self.workflow.replace(
                 hosted_flags, hosted_flags.replace("13.3", "13.3 --remote_timeout=5s"), 1),
-                self.bazelrc, "remote cache client flags"),
+                self.bazelrc, "remote cache flags outside BuildBuddy"),
+            "self-hosted adds a remote executor": (
+                before + hosted_flags.replace("13.3", "13.3 --remote_executor=grpcs://x") + after,
+                self.bazelrc, "remote cache flags outside BuildBuddy"),
+            "a step adds an inline build flag on one lane": (self.workflow.replace(
+                "bazelisk build --config=ci $BAZEL_MACOS_BUILD_FLAGS $TARGETS",
+                "bazelisk build --config=ci --copt=-O0 $BAZEL_MACOS_BUILD_FLAGS $TARGETS", 1),
+                self.bazelrc, "step 'Build' differs"),
+            "a plain bazel step drops the lane flags": (self.workflow.replace(
+                "bazelisk build --config=ci $BAZEL_MACOS_BUILD_FLAGS $TARGETS",
+                "bazel build --config=ci $TARGETS", 1), self.bazelrc, "runs Bazel without"),
+            "a build flag hidden in the test list": (self.workflow.replace(
+                'BAZEL_MACOS_TEST_FLAGS: "--test_env=HOME',
+                'BAZEL_MACOS_TEST_FLAGS: "--copt=-O0 --test_env=HOME', 1),
+                self.bazelrc, "not test-only"),
+            "a lane shares its test results": (self.workflow.replace(
+                LANE_TEST_ENV["macos-self-hosted"], "--test_env=HOME", 1),
+                self.bazelrc, "does not name its lane"),
             "a step drops the lane flags": (self.workflow.replace(
                 "bazelisk build --config=ci $BAZEL_MACOS_BUILD_FLAGS $TARGETS",
                 "bazelisk build --config=ci $TARGETS", 1),

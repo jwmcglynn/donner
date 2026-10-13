@@ -229,7 +229,9 @@ without a cache.
 `.github/actions/buildbuddy-cache` composite action with at most one key. The action writes a
 git-ignored `.buildbuddy.bazelrc`, loaded by a `try-import` in `.bazelrc`, that points Bazel at
 `grpcs://remote.buildbuddy.io`. The key itself goes to a private file under the runner's temporary
-directory that the fragment imports, so uploads of workspace paths cannot carry it. With no key the
+directory, and Bazel reads it through a small credential helper there that the fragment names with
+`--credential_helper`. The key is never a Bazel flag, because Bazel writes its rc options into its
+server log in the output base, and uploads of workspace paths cannot carry it. With no key the
 action writes nothing and the `try-import` is a silent no-op. The self-hosted runner is persistent,
 so `macos-self-hosted` deletes the key file and the fragment in a last step that runs whatever the
 job's outcome.
@@ -283,9 +285,11 @@ an entry is reused only on the image that produced it. After an image update the
 new image start cold. The macOS lanes instead build with the Xcode pinned in
 `tools/ci_macos_xcode.txt` and use a partition named after it: Apple toolchain actions carry the
 Xcode version and build in their keys, and `--config=ci-macos` pins the action `PATH`, so the hosted
-and self-hosted macOS runners produce identical keys. A self-hosted runner without the pinned Xcode
-gets an empty partition, and the action leaves the cache off for that run. The sanitizer lanes use the hermetic LLVM
-toolchain (`--config=latest_llvm`), whose compiler and sysroot are action inputs.
+and self-hosted macOS runners produce identical build action keys. Test results stay per lane:
+each lane names itself in its test environment, because a result depends on the runner's GPU. A
+self-hosted runner without the pinned Xcode gets no partition, and the action leaves the cache off
+for that run. The sanitizer lanes use the hermetic LLVM toolchain (`--config=latest_llvm`), whose
+compiler and sysroot are action inputs.
 
 **Interplay with the GitHub Actions cache.** Only `main` saves Actions caches. They remain the
 fallback when BuildBuddy is off and are unchanged. While BuildBuddy is on, a remote cache hit with

@@ -1184,7 +1184,7 @@ jobs:
       BAZEL_MACOS_BUILD_FLAGS: "--config=ci-macos --macos_minimum_os=13.3"
       # gen_cmakelists_test invokes Homebrew LLVM from inside Bazel's test
       # sandbox; Homebrew's tool wrappers require HOME.
-      BAZEL_MACOS_TEST_FLAGS: "--test_env=HOME --test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=1"
+      BAZEL_MACOS_TEST_FLAGS: "--test_env=HOME --test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=1 --test_env=DONNER_CI_MACOS_LANE=hosted"
       # Enables the browser tests' timeout recorder (browser-stall-diagnostics.mjs). It
       # records host load, memory and process call graphs, so only this ephemeral hosted
       # job sets it; a persistent self-hosted runner never publishes them.
@@ -1844,13 +1844,13 @@ jobs:
       name: ${{ ((github.event_name != 'pull_request' && github.ref == 'refs/heads/main') || needs.gatekeeper.outputs.trusted_pr == 'true') && 'buildbuddy-write' || '' }}
       deployment: false
     env:
-      # The runner host may have a user ~/.bazelrc. The invocations below use
-      # --nohome_rc so CI matches GitHub-hosted macOS and only picks up cache
-      # settings declared in this workflow.
+      # The runner host may have user or system Bazel rc files. The invocations
+      # below use --nohome_rc --nosystem_rc so CI matches GitHub-hosted macOS
+      # and only picks up settings declared in this repository and workflow.
       # --config=ci-macos and --macos_minimum_os=13.3 are the key-affecting
       # flags, identical to the `macos` job's (//tools:macos_cache_key_parity_tests).
       BAZEL_MACOS_BUILD_FLAGS: "--config=ci-macos --macos_minimum_os=13.3"
-      BAZEL_MACOS_TEST_FLAGS: "--test_env=HOME --test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=1"
+      BAZEL_MACOS_TEST_FLAGS: "--test_env=HOME --test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=1 --test_env=DONNER_CI_MACOS_LANE=self-hosted"
       # Keep in sync with the `macos` job: exactly one of the two runs per
       # event, so both need the Geode editor lane. See that job for why these
       # targets need an explicit invocation.
@@ -1877,15 +1877,9 @@ jobs:
               exit 1
               ;;
           esac
-          if [[ -e /etc/bazel.bazelrc ]] && grep -Eq \
-            '^[^#]*--(output_user_root|output_base|disk_cache|repository_cache)([=[:space:]]|$)' \
-            /etc/bazel.bazelrc; then
-            echo "::error title=Disk space check out of date::/etc/bazel.bazelrc moves Bazel's output root or a cache (--output_user_root, --output_base, --disk_cache or --repository_cache). Update this check to measure that location."
-            exit 1
-          fi
-          # The job sets no --output_user_root and --nohome_rc skips any user
-          # rc, so Bazel writes its macOS default output root and the `build:ci`
-          # repository cache. df follows a symlink at any of these paths; a path
+          # The job sets no --output_user_root, and --nohome_rc --nosystem_rc
+          # skip any user or system rc, so Bazel writes its macOS default output
+          # root and the `build:ci` repository cache. df follows a symlink at any of these paths; a path
           # that does not exist yet is measured at its nearest existing ancestor.
           rows=""
           for location in \
@@ -1980,7 +1974,7 @@ jobs:
       - name: Refresh Xcode toolchain configuration
         shell: bash
         run: |
-          bazelisk --nohome_rc fetch --force --lockfile_mode=off \
+          bazelisk --nohome_rc --nosystem_rc fetch --force --lockfile_mode=off \
             --repo=@@bazel_tools+xcode_configure_extension+local_config_xcode \
             --repo=@@apple_support++apple_cc_configure_extension+local_config_apple_cc \
             --repo=@@apple_support++apple_cc_configure_extension+local_config_apple_cc_toolchains
@@ -1990,7 +1984,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          bazelisk --nohome_rc test --config=ci --nocache_test_results --test_tag_filters= --test_output=errors \
+          bazelisk --nohome_rc --nosystem_rc test --config=ci --nocache_test_results --test_tag_filters= --test_output=errors \
             $BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS \
             //tools/ci:metal_full_validation
 
@@ -1999,7 +1993,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          tools/ci_bazel_test.sh bazelisk --nohome_rc test --config=ci --nocache_test_results --test_output=errors \
+          tools/ci_bazel_test.sh bazelisk --nohome_rc --nosystem_rc test --config=ci --nocache_test_results --test_output=errors \
             $BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS \
             //tools/ci:metal_preflight
 
@@ -2012,7 +2006,7 @@ jobs:
           else
             echo "${{ needs.determine-targets.outputs.affected }}"
           fi)
-          bazelisk --nohome_rc build --config=ci $BAZEL_MACOS_BUILD_FLAGS $TARGETS
+          bazelisk --nohome_rc --nosystem_rc build --config=ci $BAZEL_MACOS_BUILD_FLAGS $TARGETS
 
       - name: Test
         id: test
@@ -2028,7 +2022,7 @@ jobs:
             echo "::error::Empty target selection reached the test step."
             exit 1
           fi
-          tools/ci_bazel_test.sh bazelisk --nohome_rc test --config=ci --test_output=errors \
+          tools/ci_bazel_test.sh bazelisk --nohome_rc --nosystem_rc test --config=ci --test_output=errors \
             --test_tag_filters=-manual,-perf,-ci-remote-gpu,-launches-browser,-fuzz_soak \
             $BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS $TARGETS
         # Deterministic fuzzer corpus replay remains in this Bazel suite. Every lane here excludes
@@ -2051,7 +2045,7 @@ jobs:
             echo "::error::Empty target selection reached the browser test step."
             exit 1
           fi
-          tools/ci_bazel_test.sh bazelisk --nohome_rc test --config=ci --test_output=errors \
+          tools/ci_bazel_test.sh bazelisk --nohome_rc --nosystem_rc test --config=ci --test_output=errors \
             --local_test_jobs=1 \
             --test_tag_filters=launches-browser,-manual,-perf,-ci-remote-gpu,-fuzz_soak \
             $BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS $TARGETS
@@ -2062,7 +2056,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          bazelisk --nohome_rc test --config=ci --config=geode --test_output=errors \
+          bazelisk --nohome_rc --nosystem_rc test --config=ci --config=geode --test_output=errors \
             $BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS $GEODE_EDITOR_TARGETS
 
       - name: Upload Bazel test failure artifacts

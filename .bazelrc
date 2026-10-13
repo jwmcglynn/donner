@@ -252,7 +252,7 @@ build:macos --macos_minimum_os=13.3
 # paths and the Bazelisk download directory, which Bazelisk prepends), so no
 # compile action matched across runners. The value keeps every directory either
 # lane relied on before this was pinned. The selected Xcode is pinned
-# separately, in tools/ci/macos_xcode.txt, because its version and build are
+# separately, in tools/ci_macos_xcode.txt, because its version and build are
 # part of every Apple toolchain action key. Runner-only settings (remote cache
 # endpoint, timeouts, --jobs) stay out of this config because they do not
 # affect action keys. //tools:macos_cache_key_parity_tests enforces this.

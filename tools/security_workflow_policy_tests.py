@@ -1,6 +1,7 @@
 """Pins review-driven security workflow selection and scheduling policy."""
 
 from collections import Counter
+import json
 import os
 from pathlib import Path
 import re
@@ -275,9 +276,8 @@ WRITE_ENVIRONMENT = "buildbuddy-write"
 BUILDBUDDY_DOWNLOADS = {"minimal", "toplevel", "all"}
 SECRET_NAMES_BUILDBUDDY = ("BUILDBUDDY_API_KEY", "BUILDBUDDY_API_KEY_READONLY")
 # Anything that can start Bazel: the client itself, directly or by path, and the repository's
-# wrappers that run it. A name followed by "-" or "." is a path such as bazel-repo or
-# /etc/bazel.bazelrc, not the client.
-BAZEL_COMMAND = re.compile(r"(?:^|[\s/\"'(=])bazel(?:isk)?\b(?![-.])|\$\{?bazel_bin\b|"
+# wrappers that run it.
+BAZEL_COMMAND = re.compile(r"(?:^|[\s/\"'(=])bazel(?:isk)?\b(?!-)|\$\{?bazel_bin\b|"
                            r"ci_bazel_test\.sh|run-browser-ci\.sh|test_with_exclusions\.py")
 
 
@@ -1665,6 +1665,16 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         self.assertIn("cache-partition: ${{ steps.xcode.outputs.cache_partition }}", cache)
         self.assertTrue(self_hosted.rstrip("\n").endswith(BUILDBUDDY_CLEANUP.rstrip("\n")))
 
+    def test_cache_keys_never_reach_bazel_as_flags(self):
+        # Bazel writes every rc option into its server log in the output base, which outlives
+        # the job on a persistent runner, so a key may reach Bazel only through a credential
+        # helper.
+        for path, text in self.supply_chain_files.items():
+            if path.startswith(".github/"):
+                with self.subTest(path=path):
+                    self.assertNotIn("--remote_header", text)
+                    self.assertNotIn("x-buildbuddy-api-key=", text)
+
     def test_external_actions_use_released_version_tags(self):
         """External actions use Renovate-compatible release tags, never branches."""
         action_line = re.compile(r"^\s*(?:-\s*)?uses:\s*(?P<target>\S+)\s*$")
@@ -2581,9 +2591,15 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         result = subprocess.run(["bash", "-c", script], env=env, capture_output=True,
                                 text=True, timeout=10, check=False)
         fragment = workspace / ".buildbuddy.bazelrc"
-        credential = temp / "buildbuddy" / "credentials.bazelrc"
+        helper = temp / "buildbuddy" / "helper"
+        credential = None
+        if helper.exists():
+            # Run the credential helper as Bazel does: `get`, with the request on stdin.
+            answer = subprocess.run([str(helper), "get"], input='{"uri": "grpcs://x"}',
+                                    capture_output=True, text=True, timeout=10, check=True)
+            credential = answer.stdout
         return (result.returncode, fragment.read_text() if fragment.exists() else None,
-                credential.read_text() if credential.exists() else None, result.stdout)
+                credential, result.stdout)
 
     def test_buildbuddy_action_selects_keys_by_event_and_fails_closed(self):
         write, read = "write-key-fixture", "read-key-fixture"
@@ -2618,7 +2634,13 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
                 1, None),
             "self-hosted macOS trusted pull request writes": (dict(
                 event="pull_request", ref="refs/pull/1/merge", write=write, trusted="true",
-                RUNNER_ENVIRONMENT="self-hosted", RUNNER_OS="macOS"), 0, "write"),
+                RUNNER_ENVIRONMENT="self-hosted", RUNNER_OS="macOS",
+                CACHE_PARTITION="ubuntu24-20261005.1-X64"), 0, "write"),
+            "self-hosted macOS without a partition": (dict(
+                event="pull_request", ref="refs/pull/1/merge", write=write, trusted="true",
+                RUNNER_ENVIRONMENT="self-hosted", RUNNER_OS="macOS"), 0, None),
+            "key that could break the helper's JSON": (dict(
+                event="push", write='key"]},"x":["y'), 1, None),
             "self-hosted Linux trusted pull request": (dict(
                 event="pull_request", ref="refs/pull/1/merge", write=write, trusted="true",
                 RUNNER_ENVIRONMENT="self-hosted", RUNNER_OS="Linux"), 1, None),
@@ -2642,8 +2664,9 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
                     continue
                 key = write if mode == "write" else read
                 self.assertNotIn(key, fragment)
-                self.assertEqual("build --remote_header=x-buildbuddy-api-key=%s\n" % key,
-                                 credential)
+                self.assertNotIn("remote_header", fragment)
+                self.assertEqual({"headers": {"x-buildbuddy-api-key": [key]}},
+                                 json.loads(credential))
                 lines = fragment.splitlines()
                 self.assertIn("build --remote_cache=grpcs://remote.buildbuddy.io", lines)
                 self.assertIn("build --remote_instance_name=ubuntu24-20261005.1-X64", lines)
@@ -2656,8 +2679,9 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
                           else "build --noremote_upload_local_results")
                 self.assertIn(upload, lines)
                 self.assertEqual(1, sum("upload_local_results" in line for line in lines))
-                self.assertIn("import %s/runner-temp/buildbuddy/credentials.bazelrc" % directory,
-                              lines)
+                self.assertIn("build --credential_helper=remote.buildbuddy.io="
+                              "%s/runner-temp/buildbuddy/helper" % directory, lines)
+                self.assertFalse(any(line.startswith("import") for line in lines))
 
     def test_buildbuddy_cache_partition_replaces_only_the_image_identity(self):
         write = "write-key-fixture"
