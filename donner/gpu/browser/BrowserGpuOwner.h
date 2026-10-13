@@ -44,11 +44,19 @@ void RunOnBrowserGpuOwner(Function&& operation,
 /// The editor's futex adapter calls this between finite wait slices; it does not run JS promises.
 void ProcessBrowserGpuOwnerWait();
 
+/** Deliver proxied GPU requests and start queued ones within the remaining inline budget.
+ * The editor calls this where a frame is outside canvas acquisition and retirement, so raster
+ * workers progress while the UI runs frames back to back. It never waits and never renews the
+ * budget; entering and leaving a canvas frame run the same safe point.
+ */
+void ServiceBrowserGpuOwnerSafePoint();
+
 /// Whether this owner is already executing a GPU batch; nested editor frames must defer.
 [[nodiscard]] bool IsBrowserGpuOwnerDispatchActive();
 
 /// Defer asynchronous command batches across canvas acquisition, drawing and retirement.
 /// Idle and pre-acquisition waits may service GPU work; futex dependency progress is also allowed.
+/// Entry runs a budgeted safe point before the frame becomes active and exit runs one after it.
 /// @param active True on frame entry, false on exit; called only by the owner, without nesting.
 void SetBrowserGpuOwnerCanvasFrameActive(bool active);
 

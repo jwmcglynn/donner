@@ -251,6 +251,8 @@ void RunWasmEditorFrame(void* userdata, bool forceFrame) {
       (editorRequested ? 1 : 0) | (browserRequested ? 2 : 0) | (timerDue ? 4 : 0);
 
   const double frameStartMs = emscripten_get_now();
+  // A browser may run this frame ahead of queued GPU request deliveries; start them before it.
+  donner::gpu::browser::ServiceBrowserGpuOwnerSafePoint();
   // Every frame is a full frame. The document and the UI are composited by Geode into the same
   // canvas in the same pass, so there is no frame whose only work lives elsewhere: skipping the
   // UI pass would also skip the document. The presentation-only frame the browser build used to

@@ -13,14 +13,17 @@ namespace donner::gpu::browser {
  *
  * The scheduler is single-threaded: every method runs on the owner. It does not wait, allocate or
  * lock; the runtime glue supplies the clock, the pulse message and the proxy-queue drain through
- * \ref Host. Requests reach it in three ways:
+ * \ref Host. Requests reach it in four ways:
  * - a proxied delivery that finds an empty FIFO may start that one request inline;
+ * - a frame safe point delivers pending requests and starts queued ones inline;
  * - a pulse renews the inline budget and executes the detached FIFO;
  * - a runtime wait executes the detached FIFO so dependencies of the waiting owner progress.
  *
  * Inline starts share one budget of \ref kMaximumInlineCalls calls or \ref kMaximumInlineMs of
  * callback time, and only a pulse renews it. No inline start or pulse batch runs while a canvas
- * frame is active.
+ * frame is active. Frame safe points run immediately before a canvas frame acquires its surface
+ * and immediately after it retires, so back-to-back frames cannot starve proxied requests whose
+ * delivery and pulse messages the browser schedules after the next frame.
  */
 class BrowserGpuOwnerScheduler {
 public:
@@ -56,6 +59,10 @@ public:
 
     /// A pulse renewed the budget. @param count Callbacks its batch ran.
     virtual void recordPulse(std::size_t count) = 0;
+
+    /// A frame safe point ran; its starts are also reported as inline starts.
+    /// @param count Callbacks it started.
+    virtual void recordSafePoint([[maybe_unused]] std::size_t count) {}
   };
 
   /// @param host Runtime glue, which must outlive the scheduler.
@@ -75,9 +82,19 @@ public:
   /// @return False when a batch is already executing, so nothing ran.
   bool serviceWait();
 
-  /// Enter or leave a canvas frame. Aborts on a redundant transition or entry during a batch.
-  /// @param active True from before canvas acquisition until after retirement.
+  /** Enter or leave a canvas frame. Aborts on a redundant transition or entry during a batch.
+   * Entry runs a frame safe point before the frame becomes active, and exit runs one after it
+   * ends, so no request starts between canvas acquisition and retirement.
+   * @param active True from before canvas acquisition until after retirement.
+   */
   void setCanvasFrameActive(bool active);
+
+  /** Deliver pending requests and start queued ones within the remaining inline budget.
+   * Does nothing inside a canvas frame or an executing batch. It never waits for more requests
+   * and never renews the budget.
+   * @return Callbacks started.
+   */
+  std::size_t serviceSafePoint();
 
   /// Whether a batch is executing on the owner.
   [[nodiscard]] bool dispatchActive() const { return processingBatch_; }

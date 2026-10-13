@@ -70,13 +70,47 @@ bool BrowserGpuOwnerScheduler::serviceWait() {
   return true;
 }
 
+std::size_t BrowserGpuOwnerScheduler::serviceSafePoint() {
+  if (processingBatch_ || canvasFrameActive_) {
+    return 0;
+  }
+  processingBatch_ = true;
+  host_.deliverPendingRequests();
+  const double started = host_.nowMs();
+  std::size_t admitted = 0;
+  const std::size_t count = ready_.executeBatchWhile([&] {
+    if (inlineCalls_ + admitted >= kMaximumInlineCalls ||
+        inlineMs_ + (host_.nowMs() - started) >= kMaximumInlineMs) {
+      return false;
+    }
+    ++admitted;
+    return true;
+  });
+  processingBatch_ = false;
+  if (count) {
+    const double elapsedMs = host_.nowMs() - started;
+    inlineCalls_ += count;
+    inlineMs_ += elapsedMs;
+    host_.recordBatch(count, elapsedMs);
+    host_.recordInline(count, elapsedMs, inlineCalls_);
+  }
+  host_.recordSafePoint(count);
+  return count;
+}
+
 void BrowserGpuOwnerScheduler::setCanvasFrameActive(bool active) {
   if (canvasFrameActive_ == active || (active && processingBatch_)) {
     std::abort();
   }
+  if (active) {
+    serviceSafePoint();
+  }
   canvasFrameActive_ = active;
-  if (!active && !ready_.empty()) {
-    schedulePulse();
+  if (!active) {
+    serviceSafePoint();
+    if (!ready_.empty()) {
+      schedulePulse();
+    }
   }
 }
 

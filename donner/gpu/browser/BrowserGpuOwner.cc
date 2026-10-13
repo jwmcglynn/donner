@@ -49,7 +49,9 @@ constexpr std::size_t kMaximumInlineCallbackUs = 21;
 constexpr std::size_t kMaximumInlineEpochCalls = 22;
 constexpr std::size_t kPulses = 23;
 constexpr std::size_t kPulseDispatches = 24;
-std::array<std::atomic<uint32_t>, 25> gOwnerWaitStats{};
+constexpr std::size_t kSafePoints = 25;
+constexpr std::size_t kSafePointDispatches = 26;
+std::array<std::atomic<uint32_t>, 27> gOwnerWaitStats{};
 static_assert(sizeof(std::atomic<uint32_t>) == sizeof(uint32_t));
 static_assert(std::atomic<uint32_t>::is_always_lock_free);
 thread_local bool gProcessingOwnerWait = false;
@@ -116,6 +118,11 @@ public:
   void recordPulse(std::size_t count) override {
     gOwnerWaitStats[kPulses].fetch_add(1, std::memory_order_relaxed);
     gOwnerWaitStats[kPulseDispatches].fetch_add(count, std::memory_order_relaxed);
+  }
+
+  void recordSafePoint(std::size_t count) override {
+    gOwnerWaitStats[kSafePoints].fetch_add(1, std::memory_order_relaxed);
+    gOwnerWaitStats[kSafePointDispatches].fetch_add(count, std::memory_order_relaxed);
   }
 };
 
@@ -248,6 +255,8 @@ void RegisterBrowserGpuOwner() {
       'maximumInlineEpochCalls': Atomics.load(HEAPU32, index + 22),
       'pulses': Atomics.load(HEAPU32, index + 23),
       'pulseDispatches': Atomics.load(HEAPU32, index + 24),
+      'safePoints': Atomics.load(HEAPU32, index + 25),
+      'safePointDispatches': Atomics.load(HEAPU32, index + 26),
       'timingSaturated': Atomics.load(HEAPU32, index + 10) === 4294967295 ||
                          Atomics.load(HEAPU32, index + 11) === 4294967295 ||
                          Atomics.load(HEAPU32, index + 20) === 4294967295,
@@ -300,6 +309,14 @@ void ProcessBrowserGpuOwnerWait() {
   gScheduler.serviceWait();
   RecordMaximum(kMaximumPumpUs, (emscripten_get_now() - started) * 1000.0);
   gProcessingOwnerWait = false;
+#endif
+}
+
+void ServiceBrowserGpuOwnerSafePoint() {
+#ifdef __EMSCRIPTEN_PTHREADS__
+  if (IsBrowserGpuOwnerThread()) {
+    gScheduler.serviceSafePoint();
+  }
 #endif
 }
 

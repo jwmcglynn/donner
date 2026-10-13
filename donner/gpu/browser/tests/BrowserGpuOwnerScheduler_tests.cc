@@ -293,5 +293,28 @@ TEST(BrowserGpuOwnerScheduler, FrameSafePointsStopAtTheInlineTimeBudget) {
   EXPECT_THAT(owner.starts, Each(Field(&Start::canvasActive, false)));
 }
 
+TEST(BrowserGpuOwnerScheduler, ASafePointInsideACanvasFrameStartsNothing) {
+  FakeOwner owner;
+  SequentialClient client(owner, 1, 1, 0.01);
+  owner.scheduler.setCanvasFrameActive(true);
+  client.start();
+  EXPECT_EQ(owner.scheduler.serviceSafePoint(), 0u);
+  EXPECT_THAT(owner.mailbox, SizeIs(1)) << "a safe point inside a canvas frame delivered work";
+  owner.scheduler.setCanvasFrameActive(false);
+  EXPECT_THAT(owner.starts, ElementsAre(Field(&Start::canvasActive, false)));
+}
+
+TEST(BrowserGpuOwnerScheduler, AFrameStartSafePointServesRequestsPostedBetweenFrames) {
+  FakeOwner owner;
+  SequentialClient client(owner, 1, 8, 0.01);
+  client.start();
+  EXPECT_EQ(owner.scheduler.serviceSafePoint(), 1u);
+  EXPECT_EQ(owner.scheduler.serviceSafePoint(), 1u)
+      << "a request posted after the previous safe point must start at the next one";
+  EXPECT_EQ(owner.scheduler.serviceSafePoint(), 1u);
+  EXPECT_EQ(client.completed(), 3u);
+  EXPECT_TRUE(owner.pulsePending);
+}
+
 }  // namespace
 }  // namespace donner::gpu::browser
