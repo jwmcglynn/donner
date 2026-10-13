@@ -9,6 +9,7 @@
 #include <unordered_set>
 
 #include "donner/base/xml/components/AttributesComponent.h"
+#include "donner/base/xml/components/TreeComponent.h"
 #include "donner/svg/components/ElementTypeComponent.h"
 #include "donner/svg/components/SVGDocumentContext.h"
 #include "donner/svg/components/animation/AnimatedValuesComponent.h"
@@ -430,6 +431,14 @@ bool ResourceUsesBoundingBoxUnits(Registry& registry, Entity target,
                                   "filterUnits")
                .value_or(FilterUnits::Default) == FilterUnits::ObjectBoundingBox;
   }
+  if (registry.all_of<FilterPrimitiveComponent>(target)) {
+    const auto* tree = registry.try_get<donner::components::TreeComponent>(target);
+    if (tree && registry.all_of<FilterComponent>(tree->parent())) {
+      return InheritedResourceField(registry, tree->parent(), &FilterComponent::primitiveUnits,
+                                    budget, "primitiveUnits")
+                 .value_or(PrimitiveUnits::Default) == PrimitiveUnits::ObjectBoundingBox;
+    }
+  }
   if (const auto* mask = registry.try_get<MaskComponent>(target)) {
     return SampledBoundingBoxUnits(registry, target, "maskUnits")
         .value_or(mask->maskUnits == MaskUnits::ObjectBoundingBox);
@@ -463,6 +472,23 @@ std::optional<std::string> LayoutLengthBaseValue(
 
 std::optional<std::string> LayoutBaseValue(Registry& registry, Entity target, std::string_view name,
                                            const AnimationValueContext& context) {
+  if (const auto* textPath = registry.try_get<TextPathComponent>(target);
+      textPath && name == "startOffset") {
+    return SerializeValue(textPath->startOffset.value_or(Lengthd()), context);
+  }
+  if (const auto* primitive = registry.try_get<FilterPrimitiveComponent>(target)) {
+    using Field = std::optional<Lengthd> FilterPrimitiveComponent::*;
+    const std::pair<std::string_view, Field> fields[] = {
+        {"x", &FilterPrimitiveComponent::x},
+        {"y", &FilterPrimitiveComponent::y},
+        {"width", &FilterPrimitiveComponent::width},
+        {"height", &FilterPrimitiveComponent::height}};
+    for (const auto& [attribute, field] : fields) {
+      if (attribute == name && (primitive->*field).has_value()) {
+        return SerializeValue(*(primitive->*field), context);
+      }
+    }
+  }
   if (auto value =
           LayoutLengthBaseValue<MarkerComponent>(registry, target, name,
                                                  {{"markerWidth", &MarkerComponent::markerWidth},
