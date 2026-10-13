@@ -94,7 +94,7 @@ jobs:
           # disk cache duplicates enough of that data to fill hosted runners.
           repository-cache: true
           external-cache: true
-          cache-save: true
+          cache-save: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Install system dependencies
         run: |

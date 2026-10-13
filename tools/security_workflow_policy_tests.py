@@ -83,6 +83,134 @@ REVIEWED_UPLOAD_ACTIONS = {
 CACHE_SAVE = re.compile(r"uses: (?:actions/cache@|actions/cache/save@|"
                         r"bazel-contrib/setup-bazel@|\./\.github/actions/cache-bazel-actions)")
 
+# Only pushes to main write the shared Actions cache. Pull requests and branch pushes restore
+# main's entries (GitHub lets every branch read the default branch's caches) but never save:
+# a PR-scoped entry is unreadable by other PRs and evicts main's entries from the repository
+# budget. Scheduled and manual runs on main may save under the same condition.
+MAIN_CACHE_WRITE = "github.event_name != 'pull_request' && github.ref == 'refs/heads/main'"
+# A pull_request run's ref is its merge ref, so a bare main-ref test is equally main-only for
+# the workflows' triggers (privileged pull_request_target is banned separately).
+MAIN_CACHE_WRITE_FORMS = (MAIN_CACHE_WRITE, "github.ref == 'refs/heads/main'")
+# External actions whose cache behavior is reviewed: none of them saves an Actions cache except
+# the ones checked below. A new external action must be reviewed and added here, since an
+# action can cache under any name; local composite actions are scanned step by step.
+REVIEWED_EXTERNAL_ACTIONS = {
+    "actions/attest-build-provenance", "actions/cache", "actions/cache/restore",
+    "actions/cache/save", "actions/checkout", "actions/configure-pages",
+    "actions/download-artifact", "actions/github-script", "actions/setup-java",
+    "actions/setup-node", "actions/upload-artifact", "actions/upload-pages-artifact",
+    "bazel-contrib/publish-to-bcr", "bazel-contrib/setup-bazel", "codecov/codecov-action",
+    "github/codeql-action/analyze", "github/codeql-action/init", "nick-fields/retry",
+    "schneegans/dynamic-badges-action",
+}
+# Setup actions with a built-in cache that saves on every event, whatever the trigger.
+SELF_SAVING_SETUP = {"actions/setup-node", "actions/setup-python", "actions/setup-java",
+                     "actions/setup-go", "actions/setup-dotnet"}
+
+
+def _main_write_only(condition, expression_required=False):
+    """Whether a condition can be true only for a main push, schedule or dispatch.
+
+    An `if:` may be a bare expression; an input such as `cache-save` is a literal string
+    unless it is one `${{ }}` expression. Text outside a single expression makes GitHub treat
+    the whole value as a non-empty, always-true string, so any leftover delimiter fails.
+    """
+    condition = condition.strip()
+    wrapped = condition.startswith("${{") and condition.endswith("}}")
+    if wrapped:
+        condition = condition[3:-2].strip()
+    if (expression_required and not wrapped) or "${{" in condition or "}}" in condition:
+        return False
+    for form in MAIN_CACHE_WRITE_FORMS:
+        rest = condition[len(form):] if condition.startswith(form) else None
+        # Further conjuncts may only narrow the main-only condition.
+        if rest == "" or (rest and rest.startswith(" && ") and "||" not in rest
+                          and "(" not in rest):
+            return True
+    return False
+
+
+def _step_key(step, key, indent):
+    """One key of a step at its own indentation (the step's first line included)."""
+    first, _, rest = step.partition("\n")
+    pattern = r"%s:[ \t]*(.*)$" % re.escape(key)
+    match = re.match(pattern, first.strip())
+    if not match:
+        match = re.search(r"(?m)^ {%d}%s" % (indent, pattern), rest)
+    return match.group(1).split(" #", 1)[0].strip() if match else None
+
+
+def _with_key(step, key, indent):
+    """One `with:` input of a step, read only from its `with:` block."""
+    lines = step.splitlines()
+    for index, line in enumerate(lines):
+        if re.match(r"^ {%d}with:\s*$" % indent, line):
+            block = "\n".join(_indented_block(lines[index + 1:], indent))
+            match = re.search(r"(?m)^ {%d}%s:[ \t]*(.*)$" % (indent + 2, re.escape(key)), block)
+            return match.group(1).split(" #", 1)[0].strip() if match else None
+    return None
+
+
+def _step_action(step, indent):
+    """The action a step uses, unquoted and lower-cased without its version, or None."""
+    value = _step_key(step, "uses", indent)
+    return value.strip("'\"").split("@", 1)[0].lower() if value else None
+
+
+def _setup_action_saves(action, step, indent):
+    """Whether a setup action step enables a built-in cache, which saves on every event."""
+    cache = _with_key(step, "cache", indent)
+    automatic = _with_key(step, "package-manager-cache", indent)
+    if action == "actions/setup-node":
+        return cache is not None or automatic != "false"
+    if action == "actions/setup-go":
+        return cache != "false"
+    return cache is not None
+
+
+def _cache_step_problem(step, indent):
+    if not _main_write_only(_step_key(step, "if", indent) or ""):
+        return "saves an Actions cache outside main"
+    return None
+
+
+def _setup_bazel_problem(step, indent):
+    save = _with_key(step, "cache-save", indent) or ""
+    if save != "false" and not _main_write_only(save, expression_required=True):
+        return "lets setup-bazel save outside main"
+    return None
+
+
+def _cache_write_problem(step, indent):
+    """Why one step could save an Actions cache outside main, or None."""
+    if step[:1] in "{\"'*&":
+        return "is written in a step form the cache policy cannot read"
+    action = _step_action(step, indent) or ""
+    checks = {"actions/cache": _cache_step_problem, "actions/cache/save": _cache_step_problem,
+              "bazel-contrib/setup-bazel": _setup_bazel_problem}
+    if action in checks:
+        return checks[action](step, indent)
+    if action in SELF_SAVING_SETUP and _setup_action_saves(action, step, indent):
+        return "uses a setup action cache that saves on every event"
+    if action and not action.startswith("./") and action not in REVIEWED_EXTERNAL_ACTIONS:
+        return "uses an action with unreviewed cache behavior: %s" % action
+    return None
+
+
+def _cache_write_violations(files):
+    """Every step that could save an Actions cache outside a main push, schedule or dispatch."""
+    steps = []
+    for path, text in sorted(files.items()):
+        if path.startswith(".github/workflows/"):
+            steps.extend(("%s:%s" % (path, name), step, 8)
+                         for name, job in _jobs(text).items() for step in _steps(job))
+        else:
+            steps.extend(("%s:<action>" % path, step, 6) for step in _steps(text, indent=4))
+    return ["%s %s" % (where, problem) for where, problem in
+            ((where, _cache_write_problem(step, indent)) for where, step, indent in steps)
+            if problem]
+
+
 # Files a self-hosted job may upload directly. Raw Bazel event streams and execution logs record
 # the runner's effective configuration, so they never leave the runner.
 SELF_HOSTED_UPLOAD_FILES = {"manifest.txt", "profile.gz", "report.md", "stall.txt",
@@ -694,6 +822,82 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
             self.assertNotIn("github.sha", restore)
             self.assertIn("inputs.namespace", restore)
         self.assertNotIn("secrets.", action)
+
+    def test_only_main_pushes_save_actions_caches(self):
+        self.assertEqual([], _cache_write_violations(self.supply_chain_files))
+
+    def test_cache_write_policy_rejects_pull_request_saves(self):
+        files = self.supply_chain_files
+        bcr = ".github/workflows/bcr_preflight.yml"
+        cmake = ".github/workflows/cmake.yml"
+        wasm = ".github/workflows/editor_wasm.yml"
+        lint = ".github/workflows/lint.yml"
+        action = ".github/actions/cache-bazel-actions/action.yml"
+        main_save = "cache-save: ${{ %s }}" % MAIN_CACHE_WRITE
+        save_if = "if: %s" % MAIN_CACHE_WRITE
+        self.assertEqual(3, files[bcr].count(main_save))
+        self._assert_rejected(lambda files, path: _cache_write_violations(files), {
+            "setup-bazel default save": (bcr, files[bcr].replace(
+                "          " + main_save + "\n", "", 1), "lets setup-bazel save outside main"),
+            "setup-bazel saves on pull requests": (bcr, files[bcr].replace(
+                main_save, "cache-save: ${{ github.event_name != 'schedule' }}", 1),
+                "lets setup-bazel save outside main"),
+            "setup-bazel always saves": (wasm, files[wasm].replace(
+                main_save, "cache-save: true", 1), "lets setup-bazel save outside main"),
+            "combined cache step": (cmake, files[cmake].replace(
+                "uses: actions/cache/restore@v6", "uses: actions/cache@v6", 1),
+                "saves an Actions cache outside main"),
+            "ungated save": (lint, files[lint].replace(
+                "        " + save_if + " && steps.bazel-cache.outputs.cache-hit != 'true'\n",
+                "", 1), "saves an Actions cache outside main"),
+            "widened save": (cmake, files[cmake].replace(
+                save_if + " && steps.ccache", save_if + " || github.event_name == 'pull_request'"
+                " && steps.ccache", 1), "saves an Actions cache outside main"),
+            "branch push save": (cmake, files[cmake].replace(
+                save_if + " && steps.ccache", "if: github.event_name != 'pull_request'"
+                " && steps.ccache", 1), "saves an Actions cache outside main"),
+            "composite action writer": (action, files[action].replace(
+                "if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'\n",
+                "if: github.ref == 'refs/heads/main' || github.event_name == 'push'\n", 1),
+                "saves an Actions cache outside main"),
+            "setup-node cache": (wasm, files[wasm].replace(
+                "          package-manager-cache: false\n", "          cache: npm\n", 1),
+                "saves on every event"),
+            "setup-node automatic cache": (wasm, files[wasm].replace(
+                "          package-manager-cache: false\n", "", 1), "saves on every event"),
+            "split expressions": (lint, files[lint].replace(
+                save_if + " && steps.bazel-cache.outputs.cache-hit != 'true'\n",
+                "if: ${{ %s }} && ${{ steps.bazel-cache.outputs.cache-hit }}\n"
+                % MAIN_CACHE_WRITE, 1), "saves an Actions cache outside main"),
+            "literal cache-save string": (bcr, files[bcr].replace(
+                main_save, "cache-save: " + MAIN_CACHE_WRITE, 1),
+                "lets setup-bazel save outside main"),
+            "quoted combined cache": (cmake, files[cmake].replace(
+                "uses: actions/cache/restore@v6", 'uses: "Actions/Cache@v6"', 1),
+                "saves an Actions cache outside main"),
+            "unreviewed cache action": (cmake, files[cmake].replace(
+                "uses: actions/cache/restore@v6", "uses: example/other-cache-action@v1", 1),
+                "unreviewed cache behavior"),
+            "self-caching action without cache in its name": (cmake, files[cmake].replace(
+                "uses: actions/cache/restore@v6", "uses: example/setup-tool@v1", 1),
+                "unreviewed cache behavior"),
+            "cache-save outside the with block": (bcr, files[bcr].replace(
+                "          " + main_save + "\n", "", 1).replace(
+                "      - uses: bazel-contrib/setup-bazel@0.19.0\n",
+                "      - uses: bazel-contrib/setup-bazel@0.19.0\n        env:\n"
+                "          cache-save: false\n", 1), "lets setup-bazel save outside main"),
+            "flow-style step": (lint, files[lint].replace(
+                "      - name: Restore Bazel\n",
+                "      - { uses: actions/cache@v6, with: { path: x, key: y } }\n"
+                "      - name: Restore Bazel\n", 1), "step form the cache policy cannot read"),
+            "aliased step": (lint, files[lint].replace(
+                "      - name: Restore Bazel\n", "      - *save_step\n      - name: Restore Bazel\n",
+                1), "step form the cache policy cannot read"),
+            "setup-go default cache": (lint, files[lint].replace(
+                "      - name: Restore Bazel\n",
+                "      - uses: actions/setup-go@v6\n      - name: Restore Bazel\n", 1),
+                "saves on every event"),
+        })
 
     def test_self_hosted_cache_endpoint_is_absent_from_job_environment(self):
         workflow = self.supply_chain_files[".github/workflows/main.yml"]

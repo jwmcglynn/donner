@@ -49,7 +49,7 @@ jobs:
           disk-cache: ${{ github.workflow }}-${{ runner.os }}-asan-geode
           repository-cache: true
           external-cache: true
-          cache-save: ${{ github.ref == 'refs/heads/main' }}
+          cache-save: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
 
       - name: Test Geode with ASan
         run: |
