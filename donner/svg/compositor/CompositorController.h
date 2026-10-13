@@ -258,14 +258,14 @@ struct CompositorConfig {
   /// latency. When false, the root layer stays monolithic.
   bool complexityBucketing = true;
 
-  /// When true, `renderFrame` additionally runs a full-document reference
-  /// render after the composited path completes and asserts pixel identity
-  /// via `UTILS_RELEASE_ASSERT`. Doubles per-frame cost - intended for CI
-  /// compositor test targets and `--config=compositor-debug` local runs, not
-  /// for interactive editor use. See 0025 § Dual-path debug assertion.
-  ///
-  /// Default is `false`; CI and debug test configurations flip it on for
-  /// the covered test targets.
+  /// When true, optionally compare the composition with an independent offscreen full-document
+  /// render using the same style-work limits. Only complete, compatible captures are compared;
+  /// incomplete style work and unavailable snapshots have explicit outcomes in RenderFrameStats.
+  /// Complete pixel mismatches still fire UTILS_RELEASE_ASSERT. The diagnostic can consume up to
+  /// twice the normal style allowance, with at most two diagnostic snapshots; it does not promise
+  /// a bound of twice the CPU, GPU, or memory cost. Intended for CI and compositor-debug runs.
+  /// This option does not configure the separate DualPathVerifier.
+  /// Default is false.
   bool verifyPixelIdentity = false;
 
   /// When true, `rasterizeDirtyStaticSegments` calls
@@ -1116,6 +1116,18 @@ private:
   CompositorLayer* findLayer(Entity entity);
   const CompositorLayer* findLayer(Entity entity) const;
 
+  /// Check that all parallel retained-segment metadata is sized for this topology.
+  [[nodiscard]] bool staticSegmentStateSized(size_t count) const;
+  /// Draw a retained payload and record its completeness only when it contributes pixels.
+  bool composePayloadWithProvenance(const RendererBitmap* bitmap,
+                                    const std::shared_ptr<const RendererTextureSnapshot>& texture,
+                                    const Transform2d& canvasFromPayload, bool textureMode,
+                                    bool styleWorkIncomplete);
+
+  /// Run the optional bounded diagnostic without replacing the presented frame.
+  void verifyComposedPixelIdentity(const RenderViewport& viewport,
+                                   const Transform2d& surfaceFromCanvas);
+
   /// Rasterize a single promoted layer into its bitmap cache.
   void rasterizeLayer(CompositorLayer& layer, const RenderViewport& viewport,
                       const Transform2d& surfaceFromCanvas);
@@ -1552,6 +1564,8 @@ private:
   /// correct paint order without ever baking promoted content into the
   /// static caches. Empty vector means segments need (re)rasterization.
   std::vector<RendererBitmap> staticSegments_;
+  /// Completeness provenance, moved with each retained segment's payload and generation.
+  std::vector<bool> staticSegmentStyleWorkIncomplete_;
   /// Optional GPU texture payloads parallel to \ref staticSegments_.
   std::vector<std::shared_ptr<const RendererTextureSnapshot>> staticSegmentTextures_;
   /// Per-segment dirty flags. When a non-promoted entity mutates we mark
@@ -1637,6 +1651,8 @@ private:
   /// Canvas size bg/fg were composited at. Mirrors `staticSegmentsCanvas_`
   /// but tracks bg/fg independently so a no-op frame can skip recompositing.
   Vector2i splitStaticLayersViewport_ = Vector2i::Zero();
+  /// Only payloads actually used by the current composition contribute to this decision.
+  bool composedStyleWorkIncomplete_ = false;
   bool rootDirty_ = true;
   bool documentPrepared_ = false;
   /// True once `MandatoryHintDetector` and `ComplexityBucketer` have run
@@ -1729,6 +1745,8 @@ private:
     /// True once the owner's tile has been rebuilt from the pieces, so it must render from source
     /// again when the drag ends.
     bool composed = false;
+    /// Aggregate completeness of the retained below/target/above pieces.
+    bool styleWorkIncomplete = false;
   };
   std::optional<MaskedChildDragPieces> maskedChildDragPieces_;
   /// Held-drag target whose owner tile could not be rebuilt from pieces; the rest of its drag

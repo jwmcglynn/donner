@@ -1409,6 +1409,7 @@ void CompositorController::resetAllLayers(bool documentReplaced) {
   reconcileLayers(registry);
 
   staticSegments_.clear();
+  staticSegmentStyleWorkIncomplete_.clear();
   staticSegmentTextures_.clear();
   staticSegmentBoundaries_.clear();
   staticSegmentDirty_.clear();
@@ -1618,6 +1619,7 @@ void CompositorController::renderFrameImpl(const RenderViewport& viewport,
     lastRenderFrameStats_ = fresh;
   }
   surfaceBudgetExhaustedThisFrame_ = false;
+  composedStyleWorkIncomplete_ = false;
   // Interaction promotes arrive between frames; more than one active-drag entity means a
   // multi-selection drag.
   const bool singleActiveDragThisFrame = activeDragPromotesSinceFrame_.size() <= 1;
@@ -2037,6 +2039,7 @@ void CompositorController::renderFrameImpl(const RenderViewport& viewport,
       registry.ctx().get<components::RenderTreeState>().needsFullRebuild = false;
     }
     staticSegments_.clear();
+    staticSegmentStyleWorkIncomplete_.clear();
     staticSegmentTextures_.clear();
     staticSegmentOffsets_.clear();
     staticSegmentLastRasterizeMs_.clear();
@@ -2152,6 +2155,7 @@ void CompositorController::renderFrameImpl(const RenderViewport& viewport,
     RendererDriver driver(renderer(), false, nullptr, styleWork_);
     driver.draw(document(), viewport, surfaceFromCanvas);
     staticSegments_.clear();
+    staticSegmentStyleWorkIncomplete_.clear();
     staticSegmentTextures_.clear();
     staticSegmentBoundaries_.clear();
     staticSegmentDirty_.clear();
@@ -2360,6 +2364,7 @@ void CompositorController::renderFrameImpl(const RenderViewport& viewport,
   // Rebuild from a reparse that didn't take the structural remap).
   if (rootDirty_) {
     staticSegments_.clear();
+    staticSegmentStyleWorkIncomplete_.clear();
     staticSegmentTextures_.clear();
     staticSegmentBoundaries_.clear();
     staticSegmentDirty_.clear();
@@ -2438,41 +2443,74 @@ void CompositorController::renderFrameImpl(const RenderViewport& viewport,
     composeLayers(viewport, surfaceFromCanvas);
   }
 
-  // Dual-path pixel-identity assertion. When enabled, capture the composited
-  // output, run a full-document reference render to the same renderer, then
-  // compare pixel-by-pixel. Any drift fires a release-assert. Disabled by
-  // default; CI compositor test targets flip this on via `CompositorConfig`.
-  // Cost is 2x per frame, so don't enable for interactive editor use.
   if (config_.verifyPixelIdentity) {
-    RendererBitmap compositedSnapshot = renderer().takeSnapshot();
+    verifyComposedPixelIdentity(viewport, surfaceFromCanvas);
+  }
+}
 
-    RendererDriver referenceDriver(renderer());
-    referenceDriver.draw(document(), viewport, surfaceFromCanvas);
-    RendererBitmap referenceSnapshot = renderer().takeSnapshot();
+namespace {
 
-    if (compositedSnapshot.dimensions == referenceSnapshot.dimensions &&
-        !compositedSnapshot.empty() && !referenceSnapshot.empty()) {
-      size_t mismatch = 0;
-      uint8_t maxDiff = 0;
-      const size_t size =
-          std::min(compositedSnapshot.pixels.size(), referenceSnapshot.pixels.size());
-      for (size_t i = 0; i < size; ++i) {
-        const uint8_t a = compositedSnapshot.pixels[i];
-        const uint8_t b = referenceSnapshot.pixels[i];
-        const uint8_t diff = a > b ? a - b : b - a;
-        if (diff > 0) {
-          ++mismatch;
-          if (diff > maxDiff) {
-            maxDiff = diff;
-          }
-        }
-      }
-      UTILS_RELEASE_ASSERT_MSG(
-          mismatch == 0,
-          "Compositor dual-path pixel-identity assertion failed: composited output "
-          "differs from full-render reference. Check 0025 § Dual-path debug assertion.");
+bool CompatibleIdentitySnapshots(const RendererBitmap& actual, const RendererBitmap& reference) {
+  return !actual.empty() && !reference.empty() && actual.dimensions == reference.dimensions &&
+         actual.rowBytes == reference.rowBytes && actual.alphaType == reference.alphaType &&
+         actual.pixels.size() == reference.pixels.size() &&
+         actual.rowBytes >= uint64_t(actual.dimensions.x) * 4u &&
+         actual.pixels.size() / actual.rowBytes >= size_t(actual.dimensions.y);
+}
+
+void AssertPixelIdentity(const RendererBitmap& actual, const RendererBitmap& reference) {
+  size_t mismatch = 0;
+  for (size_t i = 0; i < actual.pixels.size(); ++i) {
+    if (actual.pixels[i] != reference.pixels[i]) {
+      ++mismatch;
     }
   }
+  UTILS_RELEASE_ASSERT_MSG(
+      mismatch == 0,
+      "Compositor dual-path pixel-identity assertion failed: composited output "
+      "differs from full-render reference. Check 0025 § Dual-path debug assertion.");
+}
+
+}  // namespace
+
+void CompositorController::verifyComposedPixelIdentity(const RenderViewport& viewport,
+                                                       const Transform2d& surfaceFromCanvas) {
+  if (styleWork_->rejected() || composedStyleWorkIncomplete_) {
+    lastRenderFrameStats_.pixelIdentityVerification =
+        PixelIdentityVerificationStatus::InconclusiveStyleWork;
+    return;
+  }
+  // This diagnostic owns an independent allowance with the same limits. Sharing the depleted
+  // frame allowance would change which reference occurrences are admitted. Keep reference pixels
+  // offscreen so a refused diagnostic cannot replace the user's presented composition.
+  auto offscreen = renderer().createOffscreenInstance();
+  if (!offscreen) {
+    lastRenderFrameStats_.pixelIdentityVerification =
+        PixelIdentityVerificationStatus::SnapshotUnavailable;
+    return;
+  }
+  const RendererBitmap actual = renderer().takeSnapshot();
+  if (actual.empty()) {
+    lastRenderFrameStats_.pixelIdentityVerification =
+        PixelIdentityVerificationStatus::SnapshotUnavailable;
+    return;
+  }
+  auto referenceWork = std::make_shared<components::StyleResourceBudget>(styleWork_->limits());
+  RendererDriver referenceDriver(*offscreen, false, nullptr, referenceWork);
+  referenceDriver.draw(document(), viewport, surfaceFromCanvas);
+  if (referenceWork->rejected()) {
+    lastRenderFrameStats_.pixelIdentityVerification =
+        PixelIdentityVerificationStatus::InconclusiveStyleWork;
+    return;
+  }
+  const RendererBitmap reference = offscreen->takeSnapshot();
+  if (!CompatibleIdentitySnapshots(actual, reference)) {
+    lastRenderFrameStats_.pixelIdentityVerification =
+        PixelIdentityVerificationStatus::SnapshotUnavailable;
+    return;
+  }
+  AssertPixelIdentity(actual, reference);
+  lastRenderFrameStats_.pixelIdentityVerification = PixelIdentityVerificationStatus::Compared;
 }
 
 size_t CompositorController::layerCount() const {

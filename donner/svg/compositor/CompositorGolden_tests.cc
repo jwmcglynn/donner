@@ -184,11 +184,13 @@ void PrepareVerificationCachedPath(CompositorController& compositor) {
   ASSERT_GE(compositor.snapshotState().layerCount, 1u);
 }
 
-RendererBitmap VerificationLiteralReference(std::string_view color) {
+RendererBitmap VerificationLiteralReference(std::string_view color, int size = 2) {
+  const std::string extent = std::to_string(size);
   const std::string source =
-      "<svg xmlns='http://www.w3.org/2000/svg' width='2' height='2'>"
-      "<rect width='2' height='2' fill='" +
-      std::string(color) + "'/></svg>";
+      "<svg xmlns='http://www.w3.org/2000/svg' width='" + extent + "' height='" + extent +
+      "'>"
+      "<rect width='" +
+      extent + "' height='" + extent + "' fill='" + std::string(color) + "'/></svg>";
   SVGDocument document = parseDocument(source);
   Renderer renderer;
   renderer.draw(document);
@@ -347,6 +349,113 @@ TEST(CompositorVerificationTest, LimitedCachedReuseRemainsInconclusiveAfterBudge
         std::_Exit(testing::Test::HasFailure() ? 1 : 0);
       },
       testing::ExitedWithCode(0), "");
+}
+
+TEST(CompositorVerificationTest, CompleteReplacementClearsPartialPayloadProvenance) {
+#ifndef DONNER_FILTERS_ENABLED
+  GTEST_SKIP() << "External feImage fixture requires filter rendering";
+#endif
+  SVGDocument document = MakeVerificationDocument();
+  Renderer renderer;
+  auto work = VerificationBudget(32);
+  CompositorController compositor(document, renderer, VerificationConfig(true), work);
+  PrepareVerificationCachedPath(compositor);
+  ASSERT_TRUE(work->rejected());
+  auto target = document.querySelector("#target");
+  const CompositorLayer* layer = compositor.findLayerForTest(target->unsafeEntityHandle().entity());
+  ASSERT_NE(layer, nullptr);
+  const uint64_t previousGeneration = layer->generation();
+  compositor.renderFrame(RenderViewport{Vector2i(2, 2)});
+  ASSERT_EQ(compositor.lastRenderFrameStats().pixelIdentityVerification,
+            PixelIdentityVerificationStatus::InconclusiveStyleWork);
+  target->setAttribute("filter", "blur(0)");
+  target->setAttribute("fill", "green");
+  // A changed raster replaces every retained root/static payload too. Replacing only the layer
+  // cannot certify untouched tiles that were captured after the earlier style refusal.
+  compositor.renderFrame(RenderViewport{Vector2i(4, 4)}, Transform2d::Scale(2));
+  EXPECT_FALSE(work->rejected());
+  const CompositorLayer* replacement =
+      compositor.findLayerForTest(target->unsafeEntityHandle().entity());
+  ASSERT_NE(replacement, nullptr);
+  EXPECT_NE(replacement->generation(), previousGeneration);
+  ASSERT_TRUE(replacement->payloadRaster().has_value());
+  EXPECT_FALSE(replacement->payloadRaster()->styleWorkIncomplete);
+  EXPECT_EQ(compositor.lastRenderFrameStats().pixelIdentityVerification,
+            PixelIdentityVerificationStatus::Compared);
+  editor::tests::CompareBitmapToBitmap(
+      renderer.takeSnapshot(), VerificationLiteralReference("green", 4),
+      "verification_complete_replacement", editor::tests::PixelmatchIdentityParams());
+}
+
+class VerificationCaptureRenderer : public Renderer {
+public:
+  bool refuseOffscreen = false;
+  bool refuseSnapshot = false;
+  mutable bool corruptNextSnapshot = false;
+
+  std::unique_ptr<RendererInterface> createOffscreenInstance() const override {
+    return refuseOffscreen ? nullptr : Renderer::createOffscreenInstance();
+  }
+
+  RendererBitmap takeSnapshot() const override {
+    if (refuseSnapshot) {
+      return {};
+    }
+    RendererBitmap snapshot = Renderer::takeSnapshot();
+    if (corruptNextSnapshot && !snapshot.empty()) {
+      corruptNextSnapshot = false;
+      snapshot.pixels[0] ^= 255u;
+    }
+    return snapshot;
+  }
+};
+
+class CompositorVerificationCaptureTest : public testing::TestWithParam<bool> {};
+
+TEST_P(CompositorVerificationCaptureTest, MissingDiagnosticCapturePreservesPresentationAndCache) {
+#ifndef DONNER_FILTERS_ENABLED
+  GTEST_SKIP() << "External feImage fixture requires filter rendering";
+#endif
+  SVGDocument document = MakeVerificationDocument();
+  VerificationCaptureRenderer renderer;
+  CompositorController compositor(document, renderer, VerificationConfig(true));
+  PrepareVerificationCachedPath(compositor);
+  const auto target = document.querySelector("#target");
+  const CompositorLayer* layer = compositor.findLayerForTest(target->unsafeEntityHandle().entity());
+  ASSERT_NE(layer, nullptr);
+  const uint64_t generation = layer->generation();
+  renderer.refuseOffscreen = GetParam();
+  renderer.refuseSnapshot = !GetParam();
+  compositor.renderFrame(RenderViewport{Vector2i(2, 2)});
+  EXPECT_EQ(compositor.lastRenderFrameStats().pixelIdentityVerification,
+            PixelIdentityVerificationStatus::SnapshotUnavailable);
+  EXPECT_EQ(layer->generation(), generation);
+  EXPECT_EQ(compositor.lastRenderFrameStats().textureAllocationFailureCount, 0u);
+  EXPECT_EQ(compositor.lastRenderFrameStats().composePayloadRefusalCount, 0u);
+  editor::tests::CompareBitmapToBitmap(
+      renderer.Renderer::takeSnapshot(), VerificationLiteralReference("red"),
+      "verification_missing_capture_preserved", editor::tests::PixelmatchIdentityParams());
+}
+
+INSTANTIATE_TEST_SUITE_P(Failures, CompositorVerificationCaptureTest, testing::Bool(),
+                         [](const testing::TestParamInfo<bool>& info) {
+                           return info.param ? "Offscreen" : "Snapshot";
+                         });
+
+TEST(CompositorVerificationTest, CompletePixelMismatchRemainsFatal) {
+#ifndef DONNER_FILTERS_ENABLED
+  GTEST_SKIP() << "External feImage fixture requires filter rendering";
+#endif
+  EXPECT_DEATH(
+      {
+        SVGDocument document = MakeVerificationDocument();
+        VerificationCaptureRenderer renderer;
+        CompositorController compositor(document, renderer, VerificationConfig(true));
+        PrepareVerificationCachedPath(compositor);
+        renderer.corruptNextSnapshot = true;
+        compositor.renderFrame(RenderViewport{Vector2i(2, 2)});
+      },
+      "pixel-identity assertion failed");
 }
 
 // Composited output of a simple document matches the full-render output at
