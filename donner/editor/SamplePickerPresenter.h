@@ -114,9 +114,10 @@ void ApplySamplePickerCommand(bool activated, SamplePickerCommand command,
  * queue cannot be recalled, and on a slow GPU the first thumbnail can hold the queue for seconds:
  * a software adapter generates its shader code when a draw first uses a pipeline state. A sample
  * clicked in that window waits for it. So the picker does not submit thumbnail work in the frames
- * where a click is most likely: right after it opens, and while the pointer or wheel is active. The hold counts frames, not time, so a slow device that presents fewer frames
- * holds for longer. It is bounded: after \ref kMaxHeldFrames held frames, input no longer delays
- * the thumbnails. Once open, the gate stays open until the picker closes.
+ * where a click is most likely: right after it opens, and while the pointer or wheel is active. The
+ * hold counts frames, not time, so a slow device that presents fewer frames holds for longer. It is
+ * bounded: after \ref kMaxHeldFrames held frames, input no longer delays the thumbnails. Once open,
+ * the gate stays open until the picker closes.
  */
 class SampleThumbnailStartGate {
 public:

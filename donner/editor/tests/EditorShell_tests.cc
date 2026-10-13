@@ -7680,7 +7680,8 @@ TEST(EditorShellTest, IdlePickerStartsThumbnailsAfterTheQuietHold) {
   EditorShell shell(window, WelcomePickerOptions());
   ASSERT_TRUE(shell.valid());
   AsyncRenderer& renderer = shell.asyncRendererForReplay();
-  const SampleThumbnailStartGate& gate = EditorShellTestAccess::SampleThumbnailStartGateState(shell);
+  const SampleThumbnailStartGate& gate =
+      EditorShellTestAccess::SampleThumbnailStartGateState(shell);
 
   for (const tests::HangGuard guard; guard.active() && !gate.open();) {
     RunPickerFrame(window, shell);
@@ -7708,7 +7709,8 @@ TEST(EditorShellTest, PointerActivityHoldsThumbnailsUpToTheBound) {
   EditorShell shell(window, WelcomePickerOptions());
   ASSERT_TRUE(shell.valid());
   AsyncRenderer& renderer = shell.asyncRendererForReplay();
-  const SampleThumbnailStartGate& gate = EditorShellTestAccess::SampleThumbnailStartGateState(shell);
+  const SampleThumbnailStartGate& gate =
+      EditorShellTestAccess::SampleThumbnailStartGateState(shell);
 
   // Move the pointer by one pixel each frame, inside the picker's background.
   int moves = 0;
