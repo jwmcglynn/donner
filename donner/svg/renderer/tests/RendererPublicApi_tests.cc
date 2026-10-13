@@ -7,9 +7,12 @@
 #include <filesystem>
 #include <functional>
 #include <limits>
+#include <memory>
 #include <source_location>
 #include <string>
+#include <string_view>
 #include <tuple>
+#include <variant>
 #include <vector>
 
 #include "donner/base/ParseWarningSink.h"
@@ -72,6 +75,118 @@ RendererBitmap NormalizeSnapshot(RendererBitmap snapshot) {
   }
 
   return normalized;
+}
+
+/// A single in-memory SVG resource; unknown URLs never reach a network or filesystem loader.
+class ExternalUseResourceLoader final : public ResourceLoaderInterface {
+public:
+  explicit ExternalUseResourceLoader(std::string_view svgSource)
+      : bytes_(svgSource.begin(), svgSource.end()) {}
+
+  std::variant<std::vector<uint8_t>, ResourceLoaderError> fetchExternalResource(
+      std::string_view url) override {
+    requests_.emplace_back(url);
+    if (url != "external.svg") {
+      return ResourceLoaderError::NotFound;
+    }
+    return bytes_;
+  }
+
+  std::vector<std::string> requests() const { return requests_; }
+
+private:
+  std::vector<uint8_t> bytes_;
+  std::vector<std::string> requests_;
+};
+
+struct ExternalUseRenderResult {
+  RendererBitmap bitmap;
+  std::vector<std::string> requests;
+};
+
+/// Renders an external-use fixture through the public API and captures its resource requests.
+ExternalUseRenderResult RenderExternalUse(std::string_view hostSource,
+                                          std::string_view externalSource) {
+  auto loader = std::make_unique<ExternalUseResourceLoader>(externalSource);
+  const ExternalUseResourceLoader* observedLoader = loader.get();
+  SVGDocument::Settings settings;
+  settings.resourceLoader = std::move(loader);
+  ParseWarningSink warnings;
+  auto parsed = parser::SVGParser::ParseSVG(hostSource, warnings, parser::SVGParser::Options(),
+                                            std::move(settings));
+  if (parsed.hasError()) {
+    ADD_FAILURE() << "External-use host parse failed: " << parsed.error();
+    return {};
+  }
+  SVGDocument document = std::move(parsed.result());
+  Renderer renderer;
+  renderer.draw(document);
+  return {NormalizeSnapshot(renderer.takeSnapshot()), observedLoader->requests()};
+}
+
+TEST(RendererPublicApiTest, ExternalUseInheritsHostFillWithoutExternalAncestors) {
+  const ExternalUseRenderResult actual = RenderExternalUse(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8">
+        <use href="external.svg#tile" fill="#0000ff"/>
+      </svg>)svg",
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8" fill="#ff0000">
+        <rect id="tile" width="8" height="8"/>
+      </svg>)svg");
+  ASSERT_THAT(actual.bitmap.empty(), testing::IsFalse());
+  EXPECT_THAT(actual.requests, ElementsAre("external.svg"));
+  EXPECT_THAT(PixelAt(actual.bitmap, 4, 4), test::Rgba(0, 0, 255, 255));
+
+  SVGDocument expectedDocument = ParseDocument(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8">
+        <rect width="8" height="8" fill="#0000ff"/>
+      </svg>)svg");
+  Renderer expectedRenderer;
+  expectedRenderer.draw(expectedDocument);
+  const RendererBitmap expected = NormalizeSnapshot(expectedRenderer.takeSnapshot());
+  ASSERT_THAT(expected.empty(), testing::IsFalse());
+  EXPECT_THAT(actual.bitmap.pixels, testing::ElementsAreArray(expected.pixels));
+}
+
+TEST(RendererPublicApiTest, ExternalUseCachedFragmentsInheritIndependently) {
+  const ExternalUseRenderResult actual = RenderExternalUse(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="16" height="8">
+        <use href="external.svg#tile" fill="#ff0000"/>
+        <use href="external.svg#tile" x="8" fill="#0000ff"/>
+      </svg>)svg",
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8" fill="#00ff00">
+        <rect id="tile" width="8" height="8"/>
+      </svg>)svg");
+  ASSERT_THAT(actual.bitmap.empty(), testing::IsFalse());
+  EXPECT_THAT(actual.requests, ElementsAre("external.svg"));
+  EXPECT_THAT(PixelAt(actual.bitmap, 4, 4), test::Rgba(255, 0, 0, 255));
+  EXPECT_THAT(PixelAt(actual.bitmap, 12, 4), test::Rgba(0, 0, 255, 255));
+
+  SVGDocument expectedDocument = ParseDocument(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="16" height="8">
+        <rect width="8" height="8" fill="#ff0000"/>
+        <rect x="8" width="8" height="8" fill="#0000ff"/>
+      </svg>)svg");
+  Renderer expectedRenderer;
+  expectedRenderer.draw(expectedDocument);
+  const RendererBitmap expected = NormalizeSnapshot(expectedRenderer.takeSnapshot());
+  ASSERT_THAT(expected.empty(), testing::IsFalse());
+  EXPECT_THAT(actual.bitmap.pixels, testing::ElementsAreArray(expected.pixels));
+}
+
+TEST(RendererPublicApiTest, ExternalUseExplicitAndContextPaintOverrideInheritedFill) {
+  const ExternalUseRenderResult actual = RenderExternalUse(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="16" height="8">
+        <use href="external.svg#explicit" fill="#0000ff"/>
+        <use href="external.svg#context" x="8" fill="#0000ff"/>
+      </svg>)svg",
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8" fill="#ff0000">
+        <rect id="explicit" width="8" height="8" fill="#00ff00"/>
+        <rect id="context" width="8" height="8" fill="context-fill"/>
+      </svg>)svg");
+  ASSERT_THAT(actual.bitmap.empty(), testing::IsFalse());
+  EXPECT_THAT(actual.requests, ElementsAre("external.svg"));
+  EXPECT_THAT(PixelAt(actual.bitmap, 4, 4), test::Rgba(0, 255, 0, 255));
+  EXPECT_THAT(PixelAt(actual.bitmap, 12, 4), test::Rgba(0, 0, 255, 255));
 }
 
 TEST(RendererSurfaceBudgetTest, RejectsAggregateBytesAndSurfaceCountWithoutOvershoot) {
