@@ -110,8 +110,12 @@ while `main` points at the candidate commit. It runs only in this repository and
   most 65,536 characters; a longer report links to its detail from that comment.
 
 The `assemble` job has read-only `contents`, `actions` and `issues` scopes and no secrets. It
-downloads each named artifact by ID, checks its bytes against GitHub's digest, writes the
-evidence and review files, builds the canonical record, and runs the full verifier with the
+downloads each named artifact by ID and checks its bytes against GitHub's digest. The Editor
+WASM package and the Pages artifact are named without the attempt, so a rerun can retain one per
+attempt under the same name; assembly keeps the one built by the named attempt (the package whose
+`provenance.json` names that run and attempt, and the Pages archive that attempt's docs
+provenance names) and fails unless exactly one matches. It then writes the evidence and review
+files, builds the canonical record, and runs the full verifier with the
 60-day window. Only a verified record is written. It retains `candidate.json`,
 `candidate.json.sha256`, `evidence/` and `reviews/` as `donner-release-candidate-<attempt>` for 90
 days. The `attest-record` job runs no checkout or repository code; it rechecks the digest file and

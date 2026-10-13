@@ -63,7 +63,8 @@ RECORD_FILES = frozenset({
 ARTIFACT_RUN_INPUTS = {
     "preflight": ("source", "cli-linux", "cli-macos"),
     "editor": ("editor",),
-    "docs": ("docs", "docs-provenance"),
+    # Docs provenance first: it names the Pages archive that the requested attempt built.
+    "docs": ("docs-provenance", "docs"),
 }
 RUN_REFERENCE = re.compile(r"([1-9][0-9]{0,15})/([1-9][0-9]{0,4})\Z")
 DECIMAL_ID = re.compile(r"[1-9][0-9]{0,15}\Z")
@@ -218,6 +219,10 @@ def _verify_artifact_metadata(artifact: dict, role: str, entry: dict, commit: st
             repository_id is None or run.get("repository_id") != repository_id or
             run.get("head_repository_id") != repository_id):
         raise ValueError(f"{role} artifact metadata does not match the selected retained bytes")
+
+
+# Roles whose producers name the artifact without the run attempt, so a rerun can leave several.
+ATTEMPTLESS_ROLES = ("editor", "docs")
 
 
 def _artifact_name(role: str, commit: str, attempt: int) -> str:
@@ -664,19 +669,54 @@ def _download_checked(artifact_id: int, digest: str, path: Path, download, label
         raise ValueError(f"{label} download differs from its GitHub digest")
 
 
-def _collect_artifact(role: str, commit: str, run_id: int, attempt: int, path: Path,
-                      github_json, download) -> dict:
-    name = _artifact_name(role, commit, attempt)
+def _built_by_attempt(role: str, path: Path, run_id: int, attempt: int) -> bool:
+    """Whether a downloaded editor or docs artifact names the requested attempt as its producer.
+
+    Their names omit the attempt, so a rerun keeps an earlier attempt's artifact under the same
+    name. The editor package records its producer run and attempt; the Pages archive is the one
+    that attempt's docs provenance (collected first, into the same directory) names.
+    """
+    if role == "editor":
+        provenance = _zip_json(path, "provenance.json", "editor provenance")
+        return (provenance.get("producer_run_id") == str(run_id) and
+                provenance.get("producer_attempt") == str(attempt))
+    provenance = _zip_json(path.with_name("docs-provenance.zip"), "provenance.json",
+                           "docs provenance")
+    return _zip_inventory(path).get("artifact.tar") == provenance.get("pages_archive_sha256")
+
+
+def _named_artifacts(role: str, name: str, run_id: int, github_json) -> list[dict]:
+    """The run's retained artifacts named `name`: one, or for an attemptless role one or more."""
     listing = github_json(
         f"repos/{REPOSITORY}/actions/runs/{run_id}/artifacts?per_page=100&name={name}")
     found = listing.get("artifacts") if isinstance(listing, dict) else None
     matches = [item for item in found if isinstance(item, dict) and item.get("name") == name] \
         if isinstance(found, list) else []
-    if len(matches) != 1 or matches[0].get("expired") is not False:
+    if not matches or any(item.get("expired") is not False for item in matches) or \
+            (len(matches) > 1 and role not in ATTEMPTLESS_ROLES):
         raise ValueError(f"{role} needs exactly one retained artifact named {name} in its run")
-    artifact_id = _positive(matches[0].get("id"), f"{role} artifact ID")
-    zip_sha256 = _artifact_digest(matches[0], f"{role} artifact")
-    _download_checked(artifact_id, zip_sha256, path, download, f"{role} artifact")
+    return matches
+
+
+def _collect_artifact(role: str, commit: str, run_id: int, attempt: int, path: Path,
+                      github_json, download) -> dict:
+    name = _artifact_name(role, commit, attempt)
+    matches = _named_artifacts(role, name, run_id, github_json)
+    selected = []
+    for index, item in enumerate(matches):
+        artifact_id = _positive(item.get("id"), f"{role} artifact ID")
+        zip_sha256 = _artifact_digest(item, f"{role} artifact")
+        candidate = path if len(matches) == 1 else path.with_name(f"{role}.{index}.zip")
+        _download_checked(artifact_id, zip_sha256, candidate, download, f"{role} artifact")
+        if len(matches) == 1 or _built_by_attempt(role, candidate, run_id, attempt):
+            selected.append((artifact_id, zip_sha256, candidate))
+        else:
+            candidate.unlink()
+    if len(selected) != 1:
+        raise ValueError(f"{role} needs exactly one retained artifact named {name} built by "
+                         f"attempt {attempt} of its run")
+    artifact_id, zip_sha256, chosen = selected[0]
+    chosen.rename(path)
     return {"run_id": run_id, "attempt": attempt, "artifact_id": artifact_id, "name": name,
             "zip_sha256": zip_sha256, "files": _zip_inventory(path)}
 

@@ -740,6 +740,65 @@ class AssemblyAndReleaseTest(unittest.TestCase):
                 editor = next(item for item in self.artifacts.values()
                               if item["name"].startswith("donner-editor-wasm-geode-"))
 
+    def retain_rerun_artifacts(self, editor_attempts, docs_attempts, provenance_attempt=2):
+        """Retain one editor package and one Pages archive per attempt of runs 101 and 102.
+
+        Their names omit the attempt, so every attempt's artifact shares one name.
+        """
+        for artifact_id, item in list(self.artifacts.items()):
+            if item["workflow_run"]["id"] in (101, 102):
+                del self.artifacts[artifact_id]
+        editor = {}
+        for attempt in editor_attempts:
+            files = self.role_files("editor")
+            files["provenance.json"] = json.dumps({
+                "producer_run_id": "101", "producer_attempt": str(attempt),
+                "generated_lock_sha256": digest(files["MODULE.bazel.lock"])}).encode()
+            editor[attempt] = self.add_artifact("editor", 101, attempt, files)
+        docs = {attempt: self.add_artifact("docs", 102, attempt,
+                                           {"artifact.tar": f"site {attempt}".encode()})
+                for attempt in docs_attempts}
+        files = self.role_files("docs-provenance")
+        files["provenance.json"] = json.dumps({
+            "pages_archive_sha256": digest(f"site {provenance_attempt}".encode()),
+            "generated_lock_sha256": digest(files["MODULE.bazel.lock"])}).encode()
+        self.add_artifact("docs-provenance", 102, provenance_attempt, files)
+        for run_id in (101, 102):
+            self.runs[run_id]["run_attempt"] = 2
+        return editor, docs
+
+    def test_rerun_assembles_from_the_artifacts_the_requested_attempt_built(self):
+        editor, docs = self.retain_rerun_artifacts(editor_attempts=(1, 2), docs_attempts=(1, 2))
+        record = json.loads(self.assemble(runs={**self.RUNS, "editor": (101, 2),
+                                                "docs": (102, 2)}))
+        self.assertEqual(record["artifacts"]["editor"]["artifact_id"], editor[2])
+        self.assertEqual(record["artifacts"]["docs"]["artifact_id"], docs[2])
+        self.assertEqual(record["artifacts"]["docs"]["files"]["artifact.tar"],
+                         digest(b"site 2"))
+        work = self.base / "work" / "artifacts"
+        self.assertEqual(sorted(path.name for path in work.iterdir()),
+                         sorted(f"{role}.zip" for role in candidate.ARTIFACT_WORKFLOWS))
+
+    def test_rerun_without_one_artifact_from_the_requested_attempt_fails_assembly(self):
+        runs = {**self.RUNS, "editor": (101, 2), "docs": (102, 2)}
+        cases = {
+            "editor": dict(editor_attempts=(1, 1), docs_attempts=(1, 2)),
+            "docs": dict(editor_attempts=(1, 2), docs_attempts=(1, 3)),
+            "two editor packages claim the attempt": dict(editor_attempts=(2, 2),
+                                                          docs_attempts=(1, 2)),
+        }
+        for case, attempts in cases.items():
+            with self.subTest(case=case):
+                saved = {key: dict(value) for key, value in self.artifacts.items()}
+                self.retain_rerun_artifacts(**attempts)
+                role = case.split()[-1] if case in ("editor", "docs") else "editor"
+                with self.assertRaisesRegex(ValueError, f"{role} needs exactly one retained "
+                                                        "artifact .* built by attempt 2"):
+                    self.assemble(runs=runs, output=f"out-{case.replace(' ', '-')}",
+                                  work=f"work-{case.replace(' ', '-')}")
+                self.artifacts.clear()
+                self.artifacts.update(saved)
+
     def test_review_must_be_an_owner_comment_naming_the_commit(self):
         comment = self.comments[301]
         cases = {
