@@ -163,12 +163,18 @@ std::unique_ptr<NiceMock<MockRendererInterface>> MakeStyleAdmissionRenderer(int&
   ON_CALL(*renderer, createOffscreenInstance()).WillByDefault([&blueDraws]() {
     return MakeStyleAdmissionRenderer(blueDraws);
   });
-  ON_CALL(*renderer, setPaint(_)).WillByDefault([&blueDraws](const PaintParams& paint) {
+  auto currentPaintIsBlue = std::make_shared<bool>(false);
+  ON_CALL(*renderer, setPaint(_)).WillByDefault([currentPaintIsBlue](const PaintParams& paint) {
     const auto* solid = std::get_if<PaintServer::Solid>(&paint.fill);
-    if (solid && solid->color.resolve(css::RGBA(0, 0, 0, 255), 1.0f) == css::RGBA(0, 0, 255, 255)) {
-      ++blueDraws;
-    }
+    *currentPaintIsBlue =
+        solid && solid->color.resolve(css::RGBA(0, 0, 0, 255), 1.0f) == css::RGBA(0, 0, 255, 255);
   });
+  ON_CALL(*renderer, drawPath(_, _))
+      .WillByDefault([currentPaintIsBlue, &blueDraws](const PathShape&, const StrokeParams&) {
+        if (*currentPaintIsBlue) {
+          ++blueDraws;
+        }
+      });
   return renderer;
 }
 
@@ -210,8 +216,8 @@ TEST_P(CompositorStyleAdmissionTest, DirtyTilesAndSegmentsShareFrameAllowance) {
 
 TEST(CompositorStyleWarmupTest, DeferredWarmupHasOneIndependentAllowance) {
   SVGDocument document = MakeStyleAdmissionDocument();
-  int bluePaintCommands = 0;
-  auto renderer = MakeStyleAdmissionRenderer(bluePaintCommands);
+  int blueDrawCommands = 0;
+  auto renderer = MakeStyleAdmissionRenderer(blueDrawCommands);
   components::StyleResourceBudget::Limits limits;
   limits.ruleElementMatches = 32;
   auto work = std::make_shared<components::StyleResourceBudget>(limits);
@@ -225,25 +231,25 @@ TEST(CompositorStyleWarmupTest, DeferredWarmupHasOneIndependentAllowance) {
 
   compositor.renderFrame(RenderViewport{Vector2i(96, 2)});
   ASSERT_TRUE(compositor.hasPendingFirstFrameWarmup());
-  EXPECT_GT(bluePaintCommands, 0) << "the flat first draw must traverse external uses";
-  EXPECT_LE(bluePaintCommands, 32);
+  EXPECT_GT(blueDrawCommands, 0) << "the flat first draw must traverse external uses";
+  EXPECT_LE(blueDrawCommands, 32);
   EXPECT_TRUE(work->rejected());
   const bool rejectedBeforeCancellation = work->rejected();
 
-  bluePaintCommands = 0;
+  blueDrawCommands = 0;
   CancellationToken cancelled;
   cancelled.cancel();
   EXPECT_FALSE(compositor.warmPendingFirstFrameCaches(cancelled));
-  EXPECT_EQ(bluePaintCommands, 0);
+  EXPECT_EQ(blueDrawCommands, 0);
   EXPECT_EQ(work->rejected(), rejectedBeforeCancellation)
       << "early cancellation must not begin another work invocation";
   ASSERT_TRUE(compositor.hasPendingFirstFrameWarmup());
 
   CancellationToken active;
   EXPECT_TRUE(compositor.warmPendingFirstFrameCaches(active));
-  EXPECT_GT(bluePaintCommands, 0)
+  EXPECT_GT(blueDrawCommands, 0)
       << "the deferred invocation must replenish the prior flat draw's allowance";
-  EXPECT_LE(bluePaintCommands, 32);
+  EXPECT_LE(blueDrawCommands, 32);
   EXPECT_TRUE(work->rejected());
   EXPECT_FALSE(compositor.hasPendingFirstFrameWarmup());
 }
