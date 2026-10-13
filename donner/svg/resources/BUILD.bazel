@@ -384,7 +384,6 @@ donner_cc_fuzzer(
     srcs = ["tests/ImageLoader_fuzzer.cc"],
     copts = ["-DDONNER_IMAGE_LOADER_FUZZ_PRODUCTION_BUDGET=1"],
     corpus = ":image_loader_production_corpus",
-    per_input_timeout_seconds = 10,
     tags = ["manual"],
     deps = [
         ":image_loader",

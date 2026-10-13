@@ -1113,6 +1113,19 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         self.assertIn('"fuzz_geode" in common_tags', rules)
         self.assertIn('ubsan_tags.append("fuzz_ubsan_geode")', rules)
 
+    def test_fuzz_soaks_are_tagged_for_pr_exclusion_with_a_hang_guard_timeout(self):
+        rules = _read("build_defs/rules.bzl")
+        self.assertIn('soak_tags = common_target_tags + ["fuzz_soak"]', rules)
+        self.assertIn("        tags = soak_tags,\n", rules)
+        self.assertIn("        per_input_timeout_seconds = 25,\n", rules)
+        self.assertIn("_ASAN_FUZZER_PER_INPUT_TIMEOUT_SECONDS = 60\n", rules)
+        self.assertIn('"//build_defs:asan_fuzzer_enabled": [', rules)
+        # Every nightly soak runs under the ASan fuzzer config, so it gets the sanitizer timeout.
+        soak_steps = [body for body in _run_bodies(self.fuzz) if "--config=fuzz-soak" in body]
+        self.assertTrue(soak_steps)
+        for body in soak_steps:
+            self.assertIn("--config=asan-fuzzer", body)
+
     def test_pull_requests_never_receive_the_buildbuddy_write_key(self):
         guarded = (
             "github.ref == 'refs/heads/main' && "

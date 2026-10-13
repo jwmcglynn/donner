@@ -629,7 +629,7 @@ jobs:
           # workspace), which `bazel test` reports as exit 4. The wrapper
           # maps only that status to success; every other failure still fails.
           tools/ci_bazel_test.sh bazelisk test --config=ci --test_output=errors \
-            --test_tag_filters=-manual,-perf,-ci-remote-gpu \
+            --test_tag_filters=-manual,-perf,-ci-remote-gpu,-fuzz_soak \
             $TARGETS
 
       - name: Test Linux WebGPU resvg reference
@@ -658,7 +658,7 @@ jobs:
             exit 1
           fi
           tools/ci_bazel_test.sh bazelisk test --config=ci --nocache_test_results \
-            --test_output=errors --test_tag_filters=requires_xvfb \
+            --test_output=errors --test_tag_filters=requires_xvfb,-fuzz_soak \
             --strategy=TestRunner=local $TARGETS
 
       - name: Upload Bazel test failure artifacts
@@ -1033,7 +1033,7 @@ jobs:
             bazelisk test --config=ci --config=latest_llvm --test_output=errors \
             $BAZEL_SELF_HOSTED_REMOTE_FALLBACK_FLAGS \
             $DIAG_TEST_FLAGS \
-            --test_tag_filters=-manual,-perf,-local-gpu-isolated \
+            --test_tag_filters=-manual,-perf,-local-gpu-isolated,-fuzz_soak \
             --profile="$DIAG_DIR/test/profile.gz" \
             --build_event_json_file="$DIAG_DIR/test/bep.json" \
             --nobuild_event_json_file_path_conversion \
@@ -1226,11 +1226,12 @@ jobs:
           echo "::notice::Excluding requires_metal_toolchain targets: the hosted macOS image has no offline Metal compiler."
           # Tests that launch a browser run in the next step instead.
           tools/ci_bazel_test.sh bazelisk test --config=ci --test_output=errors \
-            --test_tag_filters=-manual,-perf,-requires_metal_toolchain,-ci-remote-gpu,-launches-browser \
+            --test_tag_filters=-manual,-perf,-requires_metal_toolchain,-ci-remote-gpu,-launches-browser,-fuzz_soak \
             $HOSTED_MACOS_QUARANTINE_TEST_FLAGS \
             $BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS $BROWSER_STALL_TEST_FLAGS $TARGETS
-        # Deterministic fuzzer corpus replay remains in this Bazel suite. Sanitizer-backed mutation
-        # runs nightly or on demand in `.github/workflows/fuzz.yml`.
+        # Deterministic fuzzer corpus replay remains in this Bazel suite. Every lane here excludes
+        # the `fuzz_soak` mutation targets; they run nightly or on demand in
+        # `.github/workflows/fuzz.yml`, under sanitizers.
 
       # Browser tests hold wall-clock deadlines (a 10 s GPU device request, 30 s
       # test timeouts) that a browser starved of CPU cannot meet. On this
@@ -1255,7 +1256,7 @@ jobs:
           fi
           tools/ci_bazel_test.sh bazelisk test --config=ci --test_output=errors \
             --local_test_jobs=1 \
-            --test_tag_filters=launches-browser,-manual,-perf,-requires_metal_toolchain,-ci-remote-gpu \
+            --test_tag_filters=launches-browser,-manual,-perf,-requires_metal_toolchain,-ci-remote-gpu,-fuzz_soak \
             $HOSTED_MACOS_QUARANTINE_TEST_FLAGS \
             $BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS $BROWSER_STALL_TEST_FLAGS $TARGETS
 
@@ -1625,10 +1626,11 @@ jobs:
             exit 1
           fi
           tools/ci_bazel_test.sh bazelisk --nohome_rc test --config=ci --test_output=errors \
-            --test_tag_filters=-manual,-perf,-ci-remote-gpu,-launches-browser \
+            --test_tag_filters=-manual,-perf,-ci-remote-gpu,-launches-browser,-fuzz_soak \
             $BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS $TARGETS
-        # Deterministic fuzzer corpus replay remains in this Bazel suite. Sanitizer-backed mutation
-        # runs nightly or on demand in `.github/workflows/fuzz.yml`.
+        # Deterministic fuzzer corpus replay remains in this Bazel suite. Every lane here excludes
+        # the `fuzz_soak` mutation targets; they run nightly or on demand in
+        # `.github/workflows/fuzz.yml`, under sanitizers.
 
       # Browser tests share the GPU with native replays and need their own serial phase.
       - name: Test (browser targets)
@@ -1648,7 +1650,7 @@ jobs:
           fi
           tools/ci_bazel_test.sh bazelisk --nohome_rc test --config=ci --test_output=errors \
             --local_test_jobs=1 \
-            --test_tag_filters=launches-browser,-manual,-perf,-ci-remote-gpu \
+            --test_tag_filters=launches-browser,-manual,-perf,-ci-remote-gpu,-fuzz_soak \
             $BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS $TARGETS
 
       - name: Test (Geode editor lane)
