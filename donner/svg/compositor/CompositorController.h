@@ -374,7 +374,7 @@ public:
    * @param document The SVG document to composite.
    * @param renderer The renderer backend to use for rasterization and composition.
    * @param config Runtime feature gates. Default-constructed enables everything.
-   * @param styleWork Optional internal allowance for serialized rendering work.
+   * @param styleWork Optional internal allowance; never share it across concurrent owners.
    */
   CompositorController(SVGDocument& document, RendererInterface& renderer,
                        CompositorConfig config = {},
@@ -510,6 +510,7 @@ public:
   ///
   /// This never writes the main render target. It is intended for a later low-priority worker turn
   /// and leaves unfinished cache work pending when cancelled by interactive rendering.
+  /// Each admitted invocation has one fresh style-work allowance shared by all its tiles.
   [[nodiscard]] bool warmPendingFirstFrameCaches(CancellationToken& token);
 
   /**
@@ -1471,6 +1472,7 @@ private:
   RenderViewport lastViewport_;
   bool hasLastViewport_ = false;
   CompositorConfig config_;
+  /// Shared only across synchronous draws within this controller's current work invocation.
   std::shared_ptr<components::StyleResourceBudget> styleWork_;
   LayerResolver resolver_;
   MandatoryHintDetector mandatoryDetector_;

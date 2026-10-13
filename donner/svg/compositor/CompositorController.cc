@@ -32,6 +32,7 @@
 #include "donner/svg/components/resources/ImageComponent.h"
 #include "donner/svg/components/shape/ComputedPathComponent.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
+#include "donner/svg/components/style/StyleSystem.h"
 #include "donner/svg/components/text/ComputedTextComponent.h"
 #include "donner/svg/compositor/CompositorControllerInternal.h"
 #include "donner/svg/compositor/CompositorHintComponent.h"
@@ -244,7 +245,8 @@ CompositorController::CompositorController(
     : document_(document),
       renderer_(renderer),
       config_(config),
-      styleWork_(std::move(styleWork)),
+      styleWork_(styleWork ? std::move(styleWork)
+                           : std::make_shared<components::StyleResourceBudget>()),
       mandatoryDetector_(config.mandatoryHintScope),
       // Only carve subtrees into bucket layers when they're actually
       // expensive to re-rasterize. `filterPenalty = 16` (default) plus the
@@ -1530,6 +1532,7 @@ bool CompositorController::warmPendingFirstFrameCaches(CancellationToken& token)
     return false;
   }
 
+  const components::StyleResourceBudget::OwnerScope styleScope(*styleWork_);
   lastRenderFrameStats_.firstFrameWarmupMs = 0.0;
   lastRenderFrameStats_.immediateRasterizeMs = 0.0;
   lastRenderFrameStats_.cachedRasterizeMs = 0.0;
@@ -1599,6 +1602,7 @@ bool CompositorController::tryPatchDirtyLayer(
 void CompositorController::renderFrameImpl(const RenderViewport& viewport,
                                            const Transform2d& surfaceFromCanvas) {
   ZoneScopedN("Compositor::renderFrame");
+  const components::StyleResourceBudget::OwnerScope styleScope(*styleWork_);
   const ScopedFrameResourceBudget frameResourceBudget(renderer());
   // Any foreground render supersedes the deferred cold-frame warmup. The normal frame path below
   // will populate whatever retained payloads are still missing, with the current viewport and DOM.
@@ -1640,7 +1644,7 @@ void CompositorController::renderFrameImpl(const RenderViewport& viewport,
     lastSurfaceFromCanvas_ = surfaceFromCanvas;
     hasLastSurfaceFromCanvas_ = true;
 
-    RendererDriver driver(renderer());
+    RendererDriver driver(renderer(), false, nullptr, styleWork_);
     const auto drawStart = std::chrono::steady_clock::now();
     const bool drawCompleted = driver.drawInterruptibly(document(), viewport, surfaceFromCanvas,
                                                         [this]() { return isCancelled(); });
@@ -2018,7 +2022,7 @@ void CompositorController::renderFrameImpl(const RenderViewport& viewport,
   // from a later cancellable worker turn.
   if (layers_.empty()) {
     ZoneScopedN("Compositor::firstFrameEmptyLayersPath");
-    RendererDriver driver(renderer());
+    RendererDriver driver(renderer(), false, nullptr, styleWork_);
     {
       ZoneScopedN("Compositor::driver.draw (first-frame)");
       const auto firstFrameDrawStart = std::chrono::steady_clock::now();
@@ -2145,7 +2149,7 @@ void CompositorController::renderFrameImpl(const RenderViewport& viewport,
 
   if (layers_.empty()) {
     ZoneScopedN("Compositor::emptyLayerSetAfterPrepare");
-    RendererDriver driver(renderer());
+    RendererDriver driver(renderer(), false, nullptr, styleWork_);
     driver.draw(document(), viewport, surfaceFromCanvas);
     staticSegments_.clear();
     staticSegmentTextures_.clear();
@@ -2228,7 +2232,7 @@ void CompositorController::renderFrameImpl(const RenderViewport& viewport,
   }
 
   if (!offscreenSupported_) {
-    RendererDriver driver(renderer());
+    RendererDriver driver(renderer(), false, nullptr, styleWork_);
     driver.draw(document(), viewport, surfaceFromCanvas);
     rootDirty_ = false;
     return;

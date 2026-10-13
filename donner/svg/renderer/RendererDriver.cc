@@ -624,18 +624,17 @@ void resolvePerSpanStyles(Registry& registry, components::ComputedTextComponent&
   }
 }
 
-/// Build a path view consumed during the draw call unless its entity geometry remains stable.
-/// Scoped external-use styles can recompute the same child between draws, so those occurrences
-/// omit the persistent geometry key and use the backend's transient path.
+/// Build a cached path view, allowing deferred borrowing only while its geometry stays stable.
+/// Scoped external-use styles can recompute the same child between draws.
 PathShape toPathShape(EntityHandle sourceEntity,
                       const components::ComputedPathComponent& path UTILS_LIFETIME_BOUND,
                       const components::ComputedStyleComponent& style) {
   PathShape shape;
   shape.path = &path.spline;
   shape.fillRule = style.properties->fillRule.get().value();
-  if (!sourceEntity.registry()->ctx().contains<components::ExternalUseStyleContext>()) {
-    shape.sourceEntity = sourceEntity;
-  }
+  shape.sourceEntity = sourceEntity;
+  shape.allowDeferredGeometry =
+      !sourceEntity.registry()->ctx().contains<components::ExternalUseStyleContext>();
   return shape;
 }
 
@@ -3394,6 +3393,12 @@ void RendererDriver::renderPattern(RenderingInstanceView& view, Registry& regist
     }
   };
 
+  // A pending host pattern would override the child's fallback paint.
+  if (instance.dataHandle(registry).all_of<components::ExternalUseComponent>()) {
+    skipSubtree();
+    return;
+  }
+
   Box2d rect = computedPattern->tileRect;
   if (NearZero(rect.width()) || NearZero(rect.height())) {
     skipSubtree();
@@ -3553,7 +3558,7 @@ void RendererDriver::drawHostSpaceStroke(const components::RenderingInstanceComp
   // stroked after the element CTM has been applied.
   const Transform2d hostFromLocal = instance.worldFromEntityTransform;
   const PathShape hostShape{&path.hostSpaceSpline(hostFromLocal), pathShape.fillRule,
-                            pathShape.sourceEntity, hostFromLocal};
+                            pathShape.sourceEntity, hostFromLocal, pathShape.allowDeferredGeometry};
 
   PaintParams remappedPaint = strokePaint;
   if (auto* hostRef = std::get_if<components::PaintResolvedReference>(&remappedPaint.stroke)) {

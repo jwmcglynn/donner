@@ -558,7 +558,7 @@ bool CompositorController::rasterizeSegmentSlot(
     const StaticSpanPlan& previousPlan, const StaticSpanPlan& freshPlan,
     const Vector2i& canvasSize) {
   {
-    RendererDriver driver(*offscreen);
+    RendererDriver driver(*offscreen, false, nullptr, styleWork_);
     if (!driver.drawEntityRangeInterruptibly(document().registry(), firstEntity, lastEntity,
                                              viewport, surfaceFromCanvas,
                                              [this]() { return isCancelled(); })) {
@@ -645,7 +645,7 @@ void CompositorController::rasterizeLayer(CompositorLayer& layer, const RenderVi
 
   {
     ZoneScopedN("Compositor::rasterizeLayer::drawEntityRange");
-    RendererDriver driver(*offscreen);
+    RendererDriver driver(*offscreen, false, nullptr, styleWork_);
     if (!driver.drawEntityRangeInterruptibly(registry, layer.firstEntity(), layer.lastEntity(),
                                              geometry.viewport, geometry.surfaceFromCanvas,
                                              [this]() { return isCancelled(); })) {
@@ -738,7 +738,7 @@ bool CompositorController::rasterizeLayerDamage(CompositorLayer& layer,
   patchViewport.size = Vector2d(rect->right - rect->left, rect->bottom - rect->top);
   const Transform2d patchSurface =
       geometry.surfaceFromCanvas * Transform2d::Translate(Vector2d(-rect->left, -rect->top));
-  RendererDriver patchDriver(*offscreen);
+  RendererDriver patchDriver(*offscreen, false, nullptr, styleWork_);
   patchDriver.setConservativeEarlyLeafCulling(true);
   if (!patchDriver.drawEntityRangeInterruptibly(registry, layer.firstEntity(), layer.lastEntity(),
                                                 patchViewport, patchSurface,
@@ -856,7 +856,7 @@ CompositorController::drawMaskedChildDragPiece(Registry& registry,
   std::unique_ptr<RendererInterface> offscreen = acquireOffscreen();
   UTILS_RELEASE_ASSERT(offscreen != nullptr);
   offscreen->beginFrame(tileViewport);
-  RendererDriver driver(*offscreen);
+  RendererDriver driver(*offscreen, false, nullptr, styleWork_);
   for (const auto& [first, last] : runs) {
     driver.drawEntityRangeIntoCurrentFrame(registry, first, last, tileViewport,
                                            tileSurfaceFromCanvas);
@@ -914,7 +914,7 @@ bool CompositorController::composeMaskedOwnerFromPieces(CompositorLayer& owner,
   std::unique_ptr<RendererInterface> offscreen = acquireOffscreen();
   UTILS_RELEASE_ASSERT(offscreen != nullptr);
   offscreen->beginFrame(geometry.viewport);
-  RendererDriver driver(*offscreen);
+  RendererDriver driver(*offscreen, false, nullptr, styleWork_);
   const bool drawn = driver.drawUnderEntityMaskIntoCurrentFrame(
       registry, owner.entity(), geometry.viewport, geometry.surfaceFromCanvas,
       [&] { return drawShiftedMaskedChildDragPieces(*offscreen, pieces, targetOffsetPx); });
@@ -1677,8 +1677,6 @@ void CompositorController::composeLayers(const RenderViewport& viewport,
 
   const auto composeStart = std::chrono::steady_clock::now();
   ++lastRenderFrameStats_.mainComposeCount;
-  auto styleWork = std::make_shared<components::StyleResourceBudget>();
-  const components::StyleResourceBudget::OwnerScope styleWorkScope(*styleWork);
   renderer().beginFrame(viewport);
 
   const auto drawImmediateSpan = [&](size_t segmentIndex) {
@@ -1692,7 +1690,7 @@ void CompositorController::composeLayers(const RenderViewport& viewport,
     }
 
     const auto directStart = std::chrono::steady_clock::now();
-    RendererDriver driver(renderer(), false, nullptr, styleWork);
+    RendererDriver driver(renderer(), false, nullptr, styleWork_);
     driver.drawEntityRangeIntoCurrentFrame(document().registry(), spanPlan.firstEntity,
                                            spanPlan.lastEntity, viewport, surfaceFromCanvas);
     const auto directEnd = std::chrono::steady_clock::now();
@@ -1737,7 +1735,7 @@ void CompositorController::composeLayers(const RenderViewport& viewport,
                                          layer.canvasFromBitmap().isTranslation();
     if (shouldDirectComposeLayer && !blitRetainedTranslation) {
       const auto directStart = std::chrono::steady_clock::now();
-      RendererDriver driver(renderer(), false, nullptr, styleWork);
+      RendererDriver driver(renderer(), false, nullptr, styleWork_);
       driver.drawEntityRangeIntoCurrentFrame(document().registry(), layer.firstEntity(),
                                              layer.lastEntity(), viewport, surfaceFromCanvas);
       const auto directEnd = std::chrono::steady_clock::now();

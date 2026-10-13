@@ -1166,6 +1166,9 @@ public:
     if (const auto* reference = std::get_if<PaintResolvedReference>(&resolved);
         reference && reference->reference.handle.all_of<ComputedPatternComponent>()) {
       StyleSystem::rejectExternalHostResource(registry_);
+      if (reference->fallback) {
+        return PaintServer::Solid(*reference->fallback);
+      }
       return PaintServer::None();
     }
     return resolved;

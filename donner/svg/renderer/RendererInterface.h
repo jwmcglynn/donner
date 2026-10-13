@@ -876,8 +876,8 @@ private:
  * crash, and neither ASAN nor a sanitizer build will flag it. The precondition for any borrow
  * held across statements is therefore: no erasure or geometry replacement between the borrow
  * and its last use. Occurrence-specific styles can recompute geometry within one frame; the
- * driver omits the persistent entity key for those paths so the backend consumes the borrow
- * during the draw call.
+ * driver disables deferred geometry borrowing for those paths while preserving their cache key.
+ * The backend consumes the borrow during the draw call.
  *
  * Passing a borrowed path instead of a copy is what keeps a steady-state frame free of
  * per-drawable path allocations: the driver hands every backend a pointer straight at the
@@ -893,8 +893,8 @@ struct PathShape {
   /// Source entity this path was derived from. Set by the driver at the `drawPath` call
   /// site (`RendererDriver::traverseRange`). Backends that cache per-entity state key
   /// off this (see `GeodePathCacheComponent`). A null `EntityHandle` (the default) means
-  /// "no persistent geometry key" - occurrence-specific geometry and non-driver callers
-  /// (overlay drawing, test harnesses) leave it null and backends use the transient path.
+  /// "no persistent geometry key" - non-driver callers (overlay drawing, test harnesses) can
+  /// leave it null to use the transient path. A key does not itself permit deferred borrowing.
   EntityHandle sourceEntity;
 
   /// Set when this geometry is a `vector-effect: non-scaling-stroke` centerline already
@@ -909,6 +909,11 @@ struct PathShape {
   /// Whether the geometry and its cached derivatives remain stable until deferred draws flush.
   /// False requires consumption during drawPath, while sourceEntity can still identify a cache.
   bool allowDeferredGeometry = true;
+
+  /// Whether a persistent source permits retaining this geometry until a deferred draw flushes.
+  [[nodiscard]] bool canDeferGeometry() const {
+    return allowDeferredGeometry && sourceEntity.entity() != entt::null;
+  }
 
   /// Geometry to draw, with a null `path` reading as the empty path. The returned reference
   /// is not bound to this `PathShape`: it names either the pointee or a shared empty path

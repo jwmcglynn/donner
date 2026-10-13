@@ -140,10 +140,9 @@ public:
   const std::shared_ptr<GeodeDocumentGeometryBudget>& documentBudget() const { return budget_; }
 
   /// Merge the previous frame's freed slots into the reusable free list.
-  /// The frame-index guard makes the merge idempotent per frame (mirrors
-  /// the geometry slab's contract: a second renderer on the same device
-  /// has its own frame counter, and a stale-index skip only defers the
-  /// merge in the safe direction).
+  /// The frame-index guard makes the merge idempotent per device-scoped generation.
+  /// Callers defer this merge while an older frame remains open on the device, because its
+  /// unsubmitted commands may still reference freed slots and retired bind groups.
   void beginFrame(uint64_t frameIndex) {
     if (frameIndex == lastMergedFrame_) {
       return;
@@ -550,11 +549,9 @@ public:
   /// (the resident slots hold one buffer range per slot, not one buffer per
   /// draw). Merging at the first touch of frame N is safe because ranges
   /// pending at that point were freed no later than frame N-1, whose
-  /// command buffer was submitted at its endFrame; a second renderer on the
-  /// same device has its own frame counter, and a stale-index skip only
-  /// defers the merge (the safe direction). Frames on one device are
-  /// serialized by contract, so no merge can run under another renderer's
-  /// unsubmitted frame.
+  /// command buffer was submitted at its endFrame. Generations are device-scoped; callers defer
+  /// this merge while an older frame remains open so an offscreen draw cannot recycle ranges or
+  /// retire bind groups still referenced by the enclosing frame's unsubmitted commands.
   void beginFrame(uint64_t frameIndex) {
     if (frameIndex == lastMergedFrame_) {
       return;

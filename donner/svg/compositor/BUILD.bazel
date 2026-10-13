@@ -76,8 +76,7 @@ donner_cc_test(
     srcs = [
         "CompositorController_tests.cc",
     ],
-    # Variant lanes (doc 0031 M2.3): tiny / text_full / geode
-    # wrappers run automatically under `bazel test //...`.
+    # Backend and text variants run automatically under `bazel test //...`.
     variants = [
         "tiny",
         "text_full",
