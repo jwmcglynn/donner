@@ -129,6 +129,12 @@ py_test(
     deps = ["@rules_python//python/runfiles"],
 )
 
+# Read by //tools:ci_runtime_workflow_tests, which pins the size ceilings below.
+exports_files(
+    ["BUILD.bazel"],
+    visibility = ["//tools:__pkg__"],
+)
+
 # Size gate for the shipped (`--config=wasm-size`) module and its JavaScript glue, run by
 # //tools/ci:wasm_size_tests. Each ceiling is about 2 percent above the measured artifact: Wasm
 # 1,842,628 raw / 728,955 gzip, JS 5,525 raw / 2,711 gzip. Lower them as the module
