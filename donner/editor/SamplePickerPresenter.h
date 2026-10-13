@@ -120,15 +120,20 @@ void ApplySamplePickerCommand(bool activated, SamplePickerCommand command,
  *
  * The hold counts frames that reached the screen, not time and not frames the editor merely
  * built, so it starts once the picker is visible, and a slow device that presents fewer frames
- * holds for longer. It is bounded: after \ref kMaxHeldFrames presented frames, input no longer
- * delays the thumbnails. Once open, the gate stays open until the picker closes.
+ * holds for longer. It is bounded twice: after \ref kMaxHeldFrames presented frames input no
+ * longer delays the thumbnails, and after \ref kMaxBuiltFrames built frames the hold ends even
+ * if the window has stopped presenting, so its per-frame wake cannot run forever. Once open, the
+ * gate stays open until the picker closes.
  */
 class SampleThumbnailStartGate {
 public:
-  /// Consecutive presented frames without input after which thumbnail work may start.
-  static constexpr int kQuietFrames = 30;
+  /// Consecutive presented frames without input after which thumbnail work may start: about a
+  /// second at 60 frames per second.
+  static constexpr int kQuietFrames = 60;
   /// Presented frames after which thumbnail work starts even while input continues.
-  static constexpr int kMaxHeldFrames = 120;
+  static constexpr int kMaxHeldFrames = 180;
+  /// Built frames after which thumbnail work starts even if no frame was presented.
+  static constexpr int kMaxBuiltFrames = 600;
 
   /**
    * Observe one frame in which the picker has thumbnail work to start.
@@ -152,6 +157,7 @@ public:
 
 private:
   std::optional<std::uint64_t> lastPresentedFrames_;
+  int builtFrames_ = 0;
   int quietFrames_ = 0;
   int heldFrames_ = 0;
   bool open_ = false;

@@ -231,7 +231,9 @@ bool SampleThumbnailStartGate::admitFrame(std::uint64_t presentedFrames,
   if (!inputActive) {
     quietFrames_ = std::min(quietFrames_ + presented, kQuietFrames);
   }
-  open_ = quietFrames_ >= kQuietFrames || heldFrames_ >= kMaxHeldFrames;
+  builtFrames_ = std::min(builtFrames_ + 1, kMaxBuiltFrames);
+  open_ = quietFrames_ >= kQuietFrames || heldFrames_ >= kMaxHeldFrames ||
+          builtFrames_ >= kMaxBuiltFrames;
   return open_;
 }
 

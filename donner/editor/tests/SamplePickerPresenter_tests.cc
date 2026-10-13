@@ -158,10 +158,22 @@ TEST(SampleThumbnailStartGate, FramesThatWereNotPresentedDoNotCount) {
   SampleThumbnailStartGate gate;
   PresentedFrames frames(gate);
   EXPECT_FALSE(frames.repeat(/*inputActive=*/false));
-  // A window still waiting on the GPU builds frames without presenting them.
-  for (int frame = 0; frame < 4 * SampleThumbnailStartGate::kMaxHeldFrames; ++frame) {
+  // A window still waiting on the GPU builds frames without presenting them. Stay under the
+  // built-frame bound, which a later case covers.
+  static_assert(SampleThumbnailStartGate::kMaxBuiltFrames - 2 >
+                SampleThumbnailStartGate::kMaxHeldFrames);
+  for (int frame = 0; frame < SampleThumbnailStartGate::kMaxBuiltFrames - 2; ++frame) {
     ASSERT_FALSE(frames.repeat(/*inputActive=*/false)) << "frame " << frame;
   }
+  EXPECT_EQ(gate.heldFrames(), 0);
+}
+
+TEST(SampleThumbnailStartGate, AWindowThatNeverPresentsEndsTheHoldAfterTheBuiltFrameBound) {
+  SampleThumbnailStartGate gate;
+  for (int frame = 1; frame < SampleThumbnailStartGate::kMaxBuiltFrames; ++frame) {
+    ASSERT_FALSE(gate.admitFrame(/*presentedFrames=*/0u, /*inputActive=*/false)) << frame;
+  }
+  EXPECT_TRUE(gate.admitFrame(/*presentedFrames=*/0u, /*inputActive=*/false));
   EXPECT_EQ(gate.heldFrames(), 0);
 }
 
