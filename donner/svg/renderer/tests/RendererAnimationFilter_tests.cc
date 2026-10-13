@@ -2,6 +2,7 @@
 #include <gtest/gtest.h>
 
 #include "donner/editor/tests/BitmapGoldenCompare.h"
+#include "donner/svg/components/filter/FilterPrimitiveComponent.h"
 #include "donner/svg/renderer/tests/RendererTestUtils.h"
 #include "donner/svg/tests/ParserTestUtils.h"
 
@@ -177,6 +178,38 @@ TEST(RendererAnimationFilter, InputsAndResultNamesAnimateAndRestore) {
     editor::tests::CompareBitmapToBitmap(
         RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(base),
         std::string(item.name) + "-restored", editor::tests::PixelmatchIdentityParams());
+  }
+}
+
+TEST(RendererAnimationFilter, ToOnlyPreservesImplicitAndTypedInputs) {
+  if (!ActiveRendererSupportsFeature(RendererBackendFeature::FilterEffects)) {
+    GTEST_SKIP() << "Filters are disabled in this configuration";
+  }
+  for (const bool typed : {false, true}) {
+    SCOPED_TRACE(typed);
+    auto document =
+        FilterDocument("<feFlood flood-color='blue' result='blue'/><feOffset id='p'/>",
+                       "<animate href='#p' attributeName='in' to='SourceAlpha' dur='2s'/>");
+    if (typed) {
+      document.querySelector("#p")->entityHandle().get<components::FilterPrimitiveComponent>().in =
+          components::FilterInput(components::FilterStandardInput::SourceGraphic);
+    }
+    auto expected = FilterDocument(typed ? "<feOffset in='SourceGraphic'/>"
+                                         : "<feFlood flood-color='blue'/><feOffset/>");
+    document.setTime(0.5);
+    editor::tests::CompareBitmapToBitmap(RenderDocumentWithActiveBackend(document),
+                                         RenderDocumentWithActiveBackend(expected),
+                                         typed ? "typed-input-base" : "implicit-input-base",
+                                         editor::tests::PixelmatchIdentityParams());
+    auto final = FilterDocument("<feOffset in='SourceAlpha'/>");
+    document.setTime(1.5);
+    editor::tests::CompareBitmapToBitmap(RenderDocumentWithActiveBackend(document),
+                                         RenderDocumentWithActiveBackend(final), "to-input",
+                                         editor::tests::PixelmatchIdentityParams());
+    document.setTime(3);
+    editor::tests::CompareBitmapToBitmap(
+        RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(expected),
+        "restored-input", editor::tests::PixelmatchIdentityParams());
   }
 }
 
