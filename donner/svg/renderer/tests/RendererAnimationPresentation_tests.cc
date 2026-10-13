@@ -2,6 +2,8 @@
 #include <gtest/gtest.h>
 
 #include "donner/base/encoding/Base64.h"
+#include "donner/editor/tests/BitmapGoldenCompare.h"
+#include "donner/svg/SVGRectElement.h"
 #include "donner/svg/SVGUseElement.h"
 #include "donner/svg/components/resources/ImageComponent.h"
 #include "donner/svg/components/resources/ResourceManagerContext.h"
@@ -84,6 +86,7 @@ TEST(RendererAnimationPresentation, FilterPrimitiveWidthRendersAndRestores) {
               testing::StartsWith("@@@@............"));
 }
 
+#ifdef DONNER_TEXT_ENABLED
 TEST(RendererAnimationPresentation, TextPositionMatchesAnIndependentStaticSample) {
   auto document = ParsePresentation(R"svg(
     <text x="0" y="12" font-size="12">H<set attributeName="x" to="8" dur="1s"/></text>)svg");
@@ -97,6 +100,7 @@ TEST(RendererAnimationPresentation, TextPositionMatchesAnIndependentStaticSample
   EXPECT_EQ(RendererTestUtils::renderToAsciiImage(document).generated,
             RendererTestUtils::renderToAsciiImage(base).generated);
 }
+#endif
 
 TEST(RendererAnimationPresentation, EditedPatternWidthRestoresAuthorCascadePriority) {
   auto document = ParsePresentation(R"svg(
@@ -123,6 +127,7 @@ TEST(RendererAnimationPresentation, MotionUsesCssDefinedPathGeometry) {
             RendererTestUtils::renderToAsciiImage(expected).generated);
 }
 
+#ifdef DONNER_TEXT_ENABLED
 TEST(RendererAnimationPresentation, TextLengthAndRotationMatchStaticSamples) {
   struct Case {
     std::string_view attribute;
@@ -139,13 +144,16 @@ TEST(RendererAnimationPresentation, TextLengthAndRotationMatchStaticSamples) {
     auto base = ParsePresentation(opening + ">H</text>");
     document.setTime(0.5);
     const auto expectedAscii = RendererTestUtils::renderToAsciiImage(expected).generated;
-    EXPECT_THAT(expectedAscii, testing::ContainsRegex("[^.\\n]"));
+    EXPECT_THAT(
+        expectedAscii,
+        testing::Contains(testing::Not(testing::AnyOf(testing::Eq('.'), testing::Eq('\n')))));
     EXPECT_EQ(RendererTestUtils::renderToAsciiImage(document).generated, expectedAscii);
     document.setTime(2);
     EXPECT_EQ(RendererTestUtils::renderToAsciiImage(document).generated,
               RendererTestUtils::renderToAsciiImage(base).generated);
   }
 }
+#endif
 
 TEST(RendererAnimationPresentation, UseHrefSwitchesAndRestoresWithoutChangingSource) {
   auto document = ParsePresentation(R"svg(
@@ -204,6 +212,7 @@ TEST(RendererAnimationPresentation, AnimatedMpathHrefChangesTheSameMotionSample)
             RendererTestUtils::renderToAsciiImage(expected).generated);
 }
 
+#ifdef DONNER_TEXT_ENABLED
 TEST(RendererAnimationPresentation, TextPathHrefSwitchesLayout) {
   auto document = ParsePresentation(R"svg(
     <defs><path id="a" d="M0 12H16"/><path id="b" d="M0 16H16"/></defs>
@@ -213,9 +222,12 @@ TEST(RendererAnimationPresentation, TextPathHrefSwitchesLayout) {
     <defs><path id="b" d="M0 16H16"/></defs>
     <text font-size="12"><textPath href="#b">H</textPath></text>)svg");
   document.setTime(1);
-  EXPECT_EQ(RendererTestUtils::renderToAsciiImage(document).generated,
-            RendererTestUtils::renderToAsciiImage(expected).generated);
+  const auto expectedAscii = RendererTestUtils::renderToAsciiImage(expected).generated;
+  EXPECT_THAT(expectedAscii,
+              testing::Contains(testing::Not(testing::AnyOf(testing::Eq('.'), testing::Eq('\n')))));
+  EXPECT_EQ(RendererTestUtils::renderToAsciiImage(document).generated, expectedAscii);
 }
+#endif
 
 TEST(RendererAnimationPresentation, ConstantImageReferenceKeepsItsDecodedResource) {
   auto document = ParsePresentation(R"svg(
@@ -428,6 +440,139 @@ TEST(RendererAnimationPresentation, XlinkReferenceAnimationRespectsHrefPrecedenc
     EXPECT_THAT(RendererTestUtils::renderToAsciiImage(document).generated,
                 testing::StartsWith(preferred ? "@@@@............" : "........@@@@...."));
   }
+}
+
+TEST(RendererAnimationPresentation, MaskBoundsAnimateAndRestore) {
+  auto document = ParsePresentation(R"svg(
+    <defs><mask id="m" maskUnits="userSpaceOnUse" x="0" y="0" width="4" height="16">
+      <rect width="16" height="16" fill="white"/>
+    </mask></defs><rect width="16" height="16" mask="url(#m)"/>
+    <set href="#m" attributeName="width" to="12" dur="1s"/>)svg");
+  document.setTime(0.5);
+  EXPECT_THAT(RendererTestUtils::renderToAsciiImage(document).generated,
+              testing::StartsWith("@@@@@@@@@@@@...."));
+  document.setTime(2);
+  EXPECT_THAT(RendererTestUtils::renderToAsciiImage(document).generated,
+              testing::StartsWith("@@@@............"));
+}
+
+TEST(RendererAnimationPresentation, ClipPathUnitsAnimateAndRestore) {
+  auto document = ParsePresentation(R"svg(
+    <defs><clipPath id="c" clipPathUnits="userSpaceOnUse"><rect width=".5" height="1"/></clipPath></defs>
+    <rect width="8" height="16" clip-path="url(#c)"/>
+    <set href="#c" attributeName="clipPathUnits" to="objectBoundingBox" dur="1s"/>)svg");
+  auto expected = ParsePresentation(R"svg(
+    <defs><clipPath id="c" clipPathUnits="objectBoundingBox"><rect width=".5" height="1"/></clipPath></defs>
+    <rect width="8" height="16" clip-path="url(#c)"/>)svg");
+  document.setTime(2);
+  const auto base = RendererTestUtils::renderToAsciiImage(document).generated;
+  document.setTime(0.5);
+  const auto result = RendererTestUtils::renderToAsciiImage(document).generated;
+  EXPECT_EQ(result, RendererTestUtils::renderToAsciiImage(expected).generated);
+  EXPECT_NE(result, base);
+  document.setTime(2);
+  EXPECT_EQ(RendererTestUtils::renderToAsciiImage(document).generated, base);
+}
+
+TEST(RendererAnimationPresentation, MarkerReferencePointAnimatesAndRestores) {
+  auto document = ParsePresentation(R"svg(
+    <defs><marker id="m" markerUnits="userSpaceOnUse" markerWidth="16" markerHeight="16" refX="0" refY="0" orient="0">
+      <rect width="4" height="4"/>
+    </marker></defs><path d="M8 8H12" stroke="black" marker-start="url(#m)"/>
+    <set href="#m" attributeName="refX" to="4" dur="1s"/>)svg");
+  document.setTime(0.5);
+  EXPECT_THAT(test::PixelAt(RenderDocumentWithActiveBackend(document), 6, 10),
+              test::Rgba(0, 0, 0, 255));
+  document.setTime(2);
+  EXPECT_THAT(test::PixelAt(RenderDocumentWithActiveBackend(document), 6, 10),
+              test::Rgba(0, 0, 0, 0));
+}
+
+TEST(RendererAnimationPresentation, PreserveAspectRatioAnimatesAndRestores) {
+  auto document = ParsePresentation(R"svg(
+    <svg width="16" height="16" viewBox="0 0 8 4" preserveAspectRatio="none">
+      <rect width="8" height="4"/>
+      <set attributeName="preserveAspectRatio" to="xMidYMid meet" dur="1s"/>
+    </svg>)svg");
+  document.setTime(0.5);
+  EXPECT_THAT(test::PixelAt(RenderDocumentWithActiveBackend(document), 8, 1),
+              test::Rgba(0, 0, 0, 0));
+  document.setTime(2);
+  EXPECT_THAT(test::PixelAt(RenderDocumentWithActiveBackend(document), 8, 1),
+              test::Rgba(0, 0, 0, 255));
+}
+
+TEST(RendererAnimationPresentation, PathLengthAnimatesDashCalibration) {
+  auto document = ParsePresentation(R"svg(
+    <path d="M0 8H16" pathLength="16" stroke="black" stroke-width="4" stroke-dasharray="4 4">
+      <set attributeName="pathLength" to="8" dur="1s"/>
+    </path>)svg");
+  document.setTime(0.5);
+  EXPECT_THAT(test::PixelAt(RenderDocumentWithActiveBackend(document), 6, 8),
+              test::Rgba(0, 0, 0, 255));
+  document.setTime(2);
+  EXPECT_THAT(test::PixelAt(RenderDocumentWithActiveBackend(document), 6, 8),
+              test::Rgba(0, 0, 0, 0));
+}
+
+#ifdef DONNER_TEXT_ENABLED
+TEST(RendererAnimationPresentation, TextPathOffsetAnimatesAndRestores) {
+  auto document = ParsePresentation(R"svg(
+    <defs><path id="p" d="M0 12H16"/></defs>
+    <text font-size="12"><textPath id="t" href="#p" startOffset="0">H</textPath></text>
+    <set href="#t" attributeName="startOffset" to="8" dur="1s"/>)svg");
+  auto expected = ParsePresentation(R"svg(
+    <defs><path id="p" d="M0 12H16"/></defs>
+    <text font-size="12"><textPath href="#p" startOffset="8">H</textPath></text>)svg");
+  document.setTime(2);
+  const auto base = RendererTestUtils::renderToAsciiImage(document).generated;
+  document.setTime(0.5);
+  const auto result = RendererTestUtils::renderToAsciiImage(document).generated;
+  EXPECT_EQ(result, RendererTestUtils::renderToAsciiImage(expected).generated);
+  EXPECT_NE(result, base);
+  document.setTime(2);
+  EXPECT_EQ(RendererTestUtils::renderToAsciiImage(document).generated, base);
+}
+#endif
+
+TEST(RendererAnimationPresentation, ToOnlyGeometryStartsFromTypedWidth) {
+  auto document = ParsePresentation(R"svg(
+    <rect id="r" width="4" height="16"><animate attributeName="width" to="20" dur="2s"/></rect>)svg");
+  document.querySelector("#r")->cast<SVGRectElement>().setWidth(Lengthd(12));
+  document.setTime(1);
+  EXPECT_THAT(RendererTestUtils::renderToAsciiImage(document).generated,
+              testing::StartsWith("@@@@@@@@@@@@@@@@"));
+}
+
+TEST(RendererAnimationPresentation, GradientToOnlyUsesTheDefaultEndpoint) {
+  auto document = ParsePresentation(R"svg(
+    <defs><linearGradient id="g"><stop stop-color="red"/><stop offset="1" stop-color="blue"/>
+      <animate attributeName="x2" to="0%" dur="2s"/>
+    </linearGradient></defs><rect width="16" height="16" fill="url(#g)"/>)svg");
+  auto expected = ParsePresentation(R"svg(
+    <defs><linearGradient id="g" x2="50%"><stop stop-color="red"/><stop offset="1" stop-color="blue"/>
+    </linearGradient></defs><rect width="16" height="16" fill="url(#g)"/>)svg");
+  document.setTime(1);
+  editor::tests::CompareBitmapToBitmap(
+      RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(expected),
+      "gradient-underlying-endpoint", editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(RendererAnimationPresentation, FilterImageFragmentHrefAnimatesAndRestores) {
+  auto document = ParsePresentation(R"svg(
+    <defs><rect id="a" width="16" height="16" fill="red"/>
+      <rect id="b" width="16" height="16" fill="blue"/>
+      <filter id="f" filterUnits="userSpaceOnUse" x="0" y="0" width="16" height="16">
+        <feImage id="i" href="#a" x="0" y="0" width="16" height="16"/>
+      </filter>
+    </defs><rect width="16" height="16" filter="url(#f)"/>
+    <set href="#i" attributeName="href" to="#b" dur="1s"/>)svg");
+  document.setTime(0.5);
+  EXPECT_THAT(test::PixelAt(RenderDocumentWithActiveBackend(document), 8, 8),
+              test::Rgba(0, 0, 255, 255));
+  document.setTime(2);
+  EXPECT_THAT(test::PixelAt(RenderDocumentWithActiveBackend(document), 8, 8),
+              test::Rgba(255, 0, 0, 255));
 }
 
 }  // namespace
