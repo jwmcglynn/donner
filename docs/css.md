@@ -134,13 +134,13 @@ If no matcher is specified, the attribute is matched if it is set to any value, 
 
 ##### Examples
 
-| Selector              | Matches                                                                                              |
-| --------------------- | ---------------------------------------------------------------------------------------------------- |
-| `a[href]`             | All `a` elements with an `href` attribute                                                            |
-| `a[href^="https://"]` | All `a` elements with an `href` attribute that begins with "https://"                                |
-| `a[href$=".pdf"]`     | All `a` elements with an `href` attribute that ends with `.pdf`                                      |
-| `a[href*=".pdf"]`     | All `a` elements with an `href` attribute that contains `.pdf`                                       |
-| `a[class~="link"]`    | An alternate way of writing `a.link`, included here to illustrate the `~=` matcher.                  |
+| Selector              | Matches                                                                             |
+| --------------------- | ----------------------------------------------------------------------------------- |
+| `a[href]`             | All `a` elements with an `href` attribute                                           |
+| `a[href^="https://"]` | All `a` elements with an `href` attribute that begins with "https://"               |
+| `a[href$=".pdf"]`     | All `a` elements with an `href` attribute that ends with `.pdf`                     |
+| `a[href*=".pdf"]`     | All `a` elements with an `href` attribute that contains `.pdf`                      |
+| `a[class~="link"]`    | An alternate way of writing `a.link`, included here to illustrate the `~=` matcher. |
 
 #### Pseudo-class selectors
 
