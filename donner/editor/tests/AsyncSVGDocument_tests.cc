@@ -3,6 +3,9 @@
 #include <gmock/gmock.h>
 
 #include <array>
+#include <future>
+#include <limits>
+#include <thread>
 
 #include "donner/svg/SVGGraphicsElement.h"
 #include "donner/svg/renderer/Renderer.h"
@@ -71,6 +74,72 @@ TEST(AsyncSVGDocumentTest, LoadFromStringSucceedsAndBumpsVersion) {
 
   auto rect = doc.document().querySelector("#r1");
   ASSERT_TRUE(rect.has_value());
+}
+
+TEST(AsyncSVGDocumentTest, AnimationClockPreservesSourceIdentityAndCommands) {
+  AsyncSVGDocument doc;
+  ASSERT_TRUE(doc.loadFromString(kTrivialSvg));
+  const std::string source(doc.document().source());
+  const auto handle = doc.document().handle();
+  const std::uint64_t generation = doc.documentGeneration();
+  const std::uint64_t version = doc.currentFrameVersion();
+
+  EXPECT_TRUE(doc.setAnimationTime(0.5));
+  EXPECT_EQ(doc.document().currentTime(), 0.5);
+  EXPECT_EQ(doc.currentFrameVersion(), version + 1);
+  EXPECT_EQ(doc.documentGeneration(), generation);
+  EXPECT_EQ(doc.document().handle(), handle);
+  EXPECT_EQ(doc.document().source(), source);
+  EXPECT_FALSE(doc.hasPendingMutations());
+  EXPECT_FALSE(doc.hasUnmirroredSourceDeltas());
+  EXPECT_FALSE(doc.setAnimationTime(0.5));
+  EXPECT_FALSE(doc.setAnimationTime(std::numeric_limits<double>::infinity()));
+  EXPECT_EQ(doc.currentFrameVersion(), version + 1);
+}
+
+TEST(AsyncSVGDocumentTest, AnimationClockRetriesContendedDocumentAccess) {
+  AsyncSVGDocument doc;
+  ASSERT_TRUE(doc.loadFromString(kTrivialSvg));
+  doc.document().setThreadingMode(svg::ThreadingMode::ConcurrentDom);
+  std::promise<void> acquired;
+  std::promise<void> release;
+  auto released = release.get_future();
+  std::jthread reader([&] {
+    const auto access = doc.document().readAccess();
+    acquired.set_value();
+    released.wait();
+  });
+  acquired.get_future().wait();
+  EXPECT_FALSE(doc.setAnimationTime(0.5));
+  EXPECT_FALSE(doc.restartAnimations());
+  release.set_value();
+  reader.join();
+  EXPECT_TRUE(doc.setAnimationTime(0.5));
+  EXPECT_EQ(doc.document().currentTime(), 0.5);
+}
+
+TEST(AsyncSVGDocumentTest, NewPlaybackSessionRestartsNeverAnimation) {
+  constexpr std::string_view kAnimation = R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16">
+      <rect width="4" height="16" fill="red">
+        <animate attributeName="width" from="4" to="12" dur="1s"
+                 restart="never" fill="freeze"/>
+      </rect>
+    </svg>)svg";
+  AsyncSVGDocument doc;
+  ASSERT_TRUE(doc.loadFromString(kAnimation));
+  const auto handle = doc.document().handle();
+  const std::string source(doc.document().source());
+  EXPECT_THAT(PixelAt(RenderDocument(doc.document()), 8, 8), Rgba(0, 0, 0, 0));
+  EXPECT_TRUE(doc.setAnimationTime(2.0));
+  EXPECT_THAT(PixelAt(RenderDocument(doc.document()), 8, 8), Rgba(255, 0, 0, 255));
+  EXPECT_TRUE(doc.restartAnimations());
+  EXPECT_EQ(doc.document().currentTime(), 0.0);
+  EXPECT_THAT(PixelAt(RenderDocument(doc.document()), 8, 8), Rgba(0, 0, 0, 0));
+  EXPECT_TRUE(doc.setAnimationTime(2.0));
+  EXPECT_THAT(PixelAt(RenderDocument(doc.document()), 8, 8), Rgba(255, 0, 0, 255));
+  EXPECT_EQ(doc.document().handle(), handle);
+  EXPECT_EQ(doc.document().source(), source);
 }
 
 TEST(AsyncSVGDocumentTest, SuccessfulParsePublishesWarnings) {

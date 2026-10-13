@@ -358,21 +358,21 @@ function assertThumbnailDiagnostic(state, initialDeviceState) {
       resultReady: thumbnails.resultReady,
     },
     {
-      rendered: 5,
-      ready: 5,
+      rendered: 6,
+      ready: 6,
       pending: false,
       active: false,
       resultReady: false,
     },
-    "five SVG thumbnails did not settle cleanly",
+    "six SVG thumbnails did not settle cleanly",
   );
   // A thumbnail whose catalog font is still loading completes as FontsPending and is requested
-  // again once the font arrives (Text and Style waits for Inter), so attempts may exceed five, as
+  // again once the font arrives (Text and Style waits for Inter), so attempts may exceed six, as
   // the Playwright smoke suite allows; more than one retry per card is a retry storm. Every attempt
   // must still have started and completed.
   assert.ok(
-    thumbnails.requested >= 5 && thumbnails.requested <= 10,
-    `expected five to ten thumbnail requests, got ${thumbnails.requested}`,
+    thumbnails.requested >= 6 && thumbnails.requested <= 12,
+    `expected six to twelve thumbnail requests, got ${thumbnails.requested}`,
   );
   assert.equal(thumbnails.started, thumbnails.requested, "a thumbnail request never started");
   assert.equal(thumbnails.completed, thumbnails.started, "a thumbnail attempt never completed");
@@ -380,7 +380,7 @@ function assertThumbnailDiagnostic(state, initialDeviceState) {
     thumbnails.firstRequestFrame > thumbnails.carouselFrame,
     "thumbnail rendering did not start asynchronously after the carousel frame",
   );
-  assert.equal(thumbnails.publicationFrames?.length, 5, "expected five publication epochs");
+  assert.equal(thumbnails.publicationFrames?.length, 6, "expected six publication epochs");
   for (let index = 1; index < thumbnails.publicationFrames.length; ++index) {
     assert.ok(
       thumbnails.publicationFrames[index] > thumbnails.publicationFrames[index - 1],
@@ -394,7 +394,7 @@ function assertThumbnailDiagnostic(state, initialDeviceState) {
   );
 
   // The diagnostic readback probes four fixed card regions of the final frame even though the
-  // carousel shows five cards (the publication counts above cover all five), as the Playwright
+  // carousel shows six cards (the publication counts above cover all six), as the Playwright
   // smoke suite expects. The fourth probed card is Text and Style.
   const diagnostics = state.wgpuReadback?.carouselThumbnails;
   assert.equal(diagnostics?.length, 4, "expected final readback diagnostics for four thumbnails");
@@ -724,7 +724,7 @@ async function runRegression(driver, editorUrl, result) {
     async () => {
       const state = await readState(driver);
       assertNoFatal("asynchronous SVG thumbnails", [state]);
-      return state.thumbnailStats?.ready === 5 ? state : null;
+      return state.thumbnailStats?.ready === 6 ? state : null;
     },
     Math.max(kTimeoutMs, 20_000),
     25,
@@ -1349,7 +1349,7 @@ async function runRegression(driver, editorUrl, result) {
       const state = await readState(driver);
       assertNoFatal("Safari reload thumbnails", [state]);
       assertFlatHeap("Safari reload thumbnails", state, initialHeapBytes);
-      return state.thumbnailStats?.ready === 5 ? state : null;
+      return state.thumbnailStats?.ready === 6 ? state : null;
     },
     Math.max(kTimeoutMs, 20_000),
     25,

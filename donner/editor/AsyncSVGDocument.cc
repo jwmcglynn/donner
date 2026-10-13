@@ -1,6 +1,7 @@
 #include "donner/editor/AsyncSVGDocument.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
 
 #include "donner/base/ParseWarningSink.h"
@@ -201,6 +202,34 @@ void AsyncSVGDocument::recordAppliedCommand(const EditorCommand& cmd) {
   if (InvalidatesExistingCompositedPixels(cmd)) {
     lastFlushResult_.cacheInvalidatedElements.push_back(cmd.element->unsafeEntityHandle().entity());
   }
+}
+
+bool AsyncSVGDocument::restartAnimations() {
+  if (!document_) {
+    return false;
+  }
+  const auto access = document_->tryWriteAccess();
+  if (!access.has_value()) {
+    return false;
+  }
+  document_->restartAnimations();
+  frameVersion_.fetch_add(1, std::memory_order_release);
+  ++nonTransformRevision_;
+  return true;
+}
+
+bool AsyncSVGDocument::setAnimationTime(double seconds) {
+  if (!document_ || !std::isfinite(seconds)) {
+    return false;
+  }
+  const auto access = document_->tryWriteAccess();
+  if (!access.has_value() || document_->currentTime() == seconds) {
+    return false;
+  }
+  document_->setTime(seconds);
+  frameVersion_.fetch_add(1, std::memory_order_release);
+  ++nonTransformRevision_;
+  return true;
 }
 
 bool AsyncSVGDocument::refreshFontResources() {

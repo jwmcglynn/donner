@@ -595,6 +595,20 @@ private:
   void publishEyedropperTestStateIfEnabled();
 #endif
   void renderCompactTopBar();
+  void setAnimationPreview(bool enabled);
+  void advanceAnimationPreview(double nowSeconds);
+  void applyAnimationPreviewTime(double seconds);
+  [[nodiscard]] bool previewAllowsEditing(bool allowed) const;
+  void applyPreviewMenuState(MenuBarState& state) const;
+  void renderAnimationPreviewControl();
+  [[nodiscard]] Box2d animationPreviewControlScreenRect() const;
+
+  bool animationPreview_ = false;
+  bool animationResetPending_ = false;
+  double animationPreviewStartSeconds_ = 0.0;
+  double animationPreviewLastTime_ = -1.0;
+  std::uint64_t animationPreviewDocumentGeneration_ = 0;
+
   void renderSidebars();
   /// Poll every auxiliary result through one lifetime/generation-aware handler.
   void pollAuxiliaryPreviewResult();
@@ -707,6 +721,7 @@ private:
   void updatePenLivePreviewTarget();
   void openRenderPaneContextMenu(const Vector2d& documentPoint);
   void renderRenderPaneContextMenu();
+  [[nodiscard]] bool beginRenderPaneContextMenu();
   [[nodiscard]] std::optional<StyleFocus> styleFocusAtSourceOffset(std::size_t sourceOffset) const;
   [[nodiscard]] std::optional<StyleFocus> styleFocusAtSourceCursor();
   void applyStyleFocus(StyleFocus styleFocus);

@@ -1017,6 +1017,14 @@ class EditorShellTestAccess {
 public:
   using NativeSaveOutcome = EditorShell::NativeSaveOutcome;
 
+  static void SetAnimationPreview(EditorShell& shell, bool enabled) {
+    shell.setAnimationPreview(enabled);
+  }
+  static void AdvanceAnimationPreview(EditorShell& shell, double nowSeconds) {
+    shell.advanceAnimationPreview(nowSeconds);
+  }
+  static bool IsAnimationPreview(const EditorShell& shell) { return shell.animationPreview_; }
+
   static EditorApp& App(EditorShell& shell) { return shell.app_; }
   static const EditorApp& App(const EditorShell& shell) { return shell.app_; }
   static std::size_t PendingHistoryActionCount(const EditorShell& shell) {
@@ -2267,6 +2275,52 @@ void RunHiddenWindowShellConstructsAndRunsFrames(double contentScale) {
   window.endFrame();
 
   EXPECT_TRUE(shell.valid());
+}
+
+TEST(EditorShellTest, AnimationPreviewRunsAtSixtyTicksAndRestartsWithoutEdits) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  ASSERT_TRUE(window.valid());
+  EditorShell shell(window, OptionsWithSource(kInitialSvg));
+  EditorApp& app = EditorShellTestAccess::App(shell);
+  const std::string source(app.document().document().source());
+  const bool dirty = app.isDirty();
+  const bool canUndo = app.canUndo();
+
+  EditorShellTestAccess::SetAnimationPreview(shell, true);
+  EXPECT_TRUE(EditorShellTestAccess::IsAnimationPreview(shell));
+  EditorShellTestAccess::AdvanceAnimationPreview(shell, 10.0);
+  const std::uint64_t initialVersion = app.document().currentFrameVersion();
+  EditorShellTestAccess::AdvanceAnimationPreview(shell, 10.008);
+  EXPECT_EQ(app.document().currentFrameVersion(), initialVersion);
+  EditorShellTestAccess::AdvanceAnimationPreview(shell, 10.017);
+  EXPECT_DOUBLE_EQ(app.document().document().currentTime(), 1.0 / 60.0);
+  EditorShellTestAccess::AdvanceAnimationPreview(shell, 10.5);
+  EXPECT_DOUBLE_EQ(app.document().document().currentTime(), 0.5);
+
+  EditorShellTestAccess::SetAnimationPreview(shell, false);
+  EditorShellTestAccess::AdvanceAnimationPreview(shell, 11.0);
+  EXPECT_DOUBLE_EQ(app.document().document().currentTime(), 0.0);
+  const std::uint64_t stoppedVersion = app.document().currentFrameVersion();
+  EditorShellTestAccess::AdvanceAnimationPreview(shell, 20.0);
+  EXPECT_EQ(app.document().currentFrameVersion(), stoppedVersion);
+  EditorShellTestAccess::SetAnimationPreview(shell, true);
+  EditorShellTestAccess::AdvanceAnimationPreview(shell, 20.0);
+  EXPECT_DOUBLE_EQ(app.document().document().currentTime(), 0.0);
+  EXPECT_EQ(app.document().document().source(), source);
+  EXPECT_EQ(app.isDirty(), dirty);
+  EXPECT_EQ(app.canUndo(), canUndo);
+}
+
+TEST(EditorShellTest, ReplacingDocumentStopsAnimationPreview) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  ASSERT_TRUE(window.valid());
+  EditorShell shell(window, OptionsWithSource(kInitialSvg));
+  EditorShellTestAccess::SetAnimationPreview(shell, true);
+  EditorShellTestAccess::AdvanceAnimationPreview(shell, 10.0);
+  ASSERT_TRUE(EditorShellTestAccess::App(shell).loadFromString(kInitialSvg));
+  EditorShellTestAccess::AdvanceAnimationPreview(shell, 11.0);
+  EXPECT_FALSE(EditorShellTestAccess::IsAnimationPreview(shell));
+  EXPECT_DOUBLE_EQ(EditorShellTestAccess::App(shell).document().document().currentTime(), 0.0);
 }
 
 TEST(EditorShellTest, HiddenWindowShellConstructsAndRunsFrames) {

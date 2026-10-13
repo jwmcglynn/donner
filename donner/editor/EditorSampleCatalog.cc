@@ -61,6 +61,20 @@ constexpr std::string_view kGradientsClipSvg =
   <rect x="64" y="48" width="512" height="304" rx="28" fill="none" stroke="#ffffff" stroke-width="8"/>
 </svg>)svg";
 
+constexpr std::string_view kAnimationSvg =
+    R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="640" height="400" viewBox="0 0 640 400">
+  <rect width="640" height="400" rx="24" fill="#17202a"/>
+  <path d="M96 200 H544" stroke="#344454" stroke-width="4" stroke-linecap="round"/>
+  <circle cx="96" cy="200" r="28" fill="#75dfbb">
+    <animate attributeName="cx" values="96;544;96" dur="4s" repeatCount="indefinite"/>
+    <animate attributeName="r" values="28;42;28" dur="2s" repeatCount="indefinite"/>
+  </circle>
+  <circle cx="320" cy="100" r="12" fill="#f0b429">
+    <animate attributeName="opacity" values="1;0.2;1" dur="2s" repeatCount="indefinite"/>
+  </circle>
+  <text x="320" y="320" text-anchor="middle" fill="#dce6ee" font-family="sans-serif" font-size="22">Made to move</text>
+</svg>)svg";
+
 std::string_view SourceFromEmbedded(std::span<const unsigned char> bytes) noexcept {
   if (!bytes.empty() && bytes.back() == '\0') {
     bytes = bytes.first(bytes.size() - 1);
@@ -75,9 +89,10 @@ struct EditorSampleCatalogStorage {
               {"geode-splash", "Geode Splash", SourceFromEmbedded(embedded::kEditorGeodeSplashSvg)},
               {"basic-shapes", "Basic Shapes", kBasicShapesSvg},
               {"text-style", "Text and Style", kTextStyleSvg},
-              {"gradients-clip", "Gradients and Clip", kGradientsClipSvg}}}) {}
+              {"gradients-clip", "Gradients and Clip", kGradientsClipSvg},
+              {"animation", "Animation", kAnimationSvg}}}) {}
 
-  std::array<EditorSample, 5> samples;
+  std::array<EditorSample, 6> samples;
 };
 
 const EditorSampleCatalogStorage& CatalogStorage() {

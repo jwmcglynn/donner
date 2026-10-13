@@ -777,11 +777,11 @@ test("welcome picker paints before asynchronously rendering real SVG thumbnails"
 
   await expect
     .poll(async () => page.evaluate(() => window.__donnerSampleThumbnailStats?.ready || 0), {
-      message: "expected all five catalog SVGs to publish real Donner-rendered thumbnails",
+      message: "expected all six catalog SVGs to publish real Donner-rendered thumbnails",
       timeout: 15000,
       intervals: [0, 25, 50, 100],
     })
-    .toBe(5);
+    .toBe(6);
 
   // The lane reports drained only once every visible thumbnail is on screen and nothing is in
   // flight. Presentation tests rely on that before they click a sample.
@@ -792,7 +792,7 @@ test("welcome picker paints before asynchronously rendering real SVG thumbnails"
     );
   await expect
     .poll(async () => (await readPublications()).some((publication) => publication.drained), {
-      message: "expected the thumbnail lane to report drained once all five thumbnails were ready",
+      message: "expected the thumbnail lane to report drained once all six thumbnails were ready",
       timeout: scaledMs(5000),
       intervals: [16, 25, 50, 100],
     })
@@ -800,12 +800,12 @@ test("welcome picker paints before asynchronously rendering real SVG thumbnails"
   const publications = await readPublications();
   const firstDrained = publications.findIndex((publication) => publication.drained);
   expect(
-    publications.slice(0, firstDrained).some((publication) => publication.ready < 5),
+    publications.slice(0, firstDrained).some((publication) => publication.ready < 6),
     "the lane must report not drained while thumbnails are still outstanding",
   ).toBe(true);
   expect(
     publications.filter((publication) =>
-      publication.drained && (publication.ready < 5 || publication.active || publication.pending)
+      publication.drained && (publication.ready < 6 || publication.active || publication.pending)
     ),
     `no publication may report drained ahead of the thumbnails: ${JSON.stringify(publications)}`,
   ).toEqual([]);
@@ -837,18 +837,18 @@ test("welcome picker paints before asynchronously rendering real SVG thumbnails"
     settled.thumbnails?.carouselFrame || 0,
   );
   expect(settled.thumbnails).toMatchObject({
-    rendered: 5,
-    ready: 5,
+    rendered: 6,
+    ready: 6,
     pending: false,
     active: false,
     resultReady: false,
     drained: true,
   });
-  expect(settled.thumbnails?.requested).toBeGreaterThanOrEqual(5);
+  expect(settled.thumbnails?.requested).toBeGreaterThanOrEqual(6);
   expect(settled.thumbnails?.started).toBe(settled.thumbnails?.requested);
   expect(settled.thumbnails?.completed).toBe(settled.thumbnails?.started);
   expect(await page.evaluate(() => window.__catalogFetchErrors)).toEqual([]);
-  expect(settled.thumbnails?.publicationFrames).toHaveLength(5);
+  expect(settled.thumbnails?.publicationFrames).toHaveLength(6);
   const publicationFrames = settled.thumbnails?.publicationFrames || [];
   for (let index = 1; index < publicationFrames.length; ++index) {
     expect(publicationFrames[index]).toBeGreaterThan(publicationFrames[index - 1]);
@@ -861,6 +861,7 @@ test("welcome picker paints before asynchronously rendering real SVG thumbnails"
     { id: "basic-shapes", column: 2, row: 0 },
     { id: "text-style", column: 0, row: 1 },
     { id: "gradients-clip", column: 1, row: 1 },
+    { id: "animation", column: 2, row: 1 },
   ] as const;
   if (kBackend === "geode") {
     // The diagnostic readback samples at most four thumbnail textures even when the carousel
@@ -1022,7 +1023,7 @@ test("WGPU diagnostics do not block the first carousel interaction", async ({ pa
     .toEqual({
       active: false,
       pending: false,
-      ready: 5,
+      ready: 6,
       resultReady: false,
     });
   await expect
@@ -1358,6 +1359,7 @@ for (
     { id: "basic-shapes", name: "Basic Shapes", xFraction: 0.76, y: 282 },
     { id: "text-style", name: "Text and Style", xFraction: 0.24, y: 390 },
     { id: "gradients-clip", name: "Gradients and Clip", xFraction: 0.5, y: 390 },
+    { id: "animation", name: "Animation", xFraction: 0.76, y: 390 },
     {
       id: "basic-shapes",
       name: "Basic Shapes with delayed animation frames",

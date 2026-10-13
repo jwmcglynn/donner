@@ -193,6 +193,16 @@ public:
   /// advances, but document generation, authored source, and undo history do not change.
   bool refreshFontResources();
 
+  /**
+   * Advance playback without changing source, document identity, or the command queue.
+   * Returns false when document access is busy or the time is unchanged.
+   * @param seconds Finite document time in seconds.
+   */
+  bool setAnimationTime(double seconds);
+
+  /// Start a fresh animation session without source edits; retry when document access is busy.
+  bool restartAnimations();
+
   /// Frame-boundary font adoption identity, distinct from the manager's individual face counter.
   [[nodiscard]] std::uint64_t fontResourceRevision() const { return fontResourceRevision_; }
 

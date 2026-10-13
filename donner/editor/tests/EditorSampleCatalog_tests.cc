@@ -19,10 +19,10 @@ namespace {
 
 TEST(EditorSampleCatalog, HasStableUniqueAsciiIdsInDisplayOrder) {
   const std::span<const EditorSample> samples = GetEditorSampleCatalog();
-  ASSERT_EQ(samples.size(), 5u);
+  ASSERT_EQ(samples.size(), 6u);
 
-  constexpr std::array<std::string_view, 5> kExpectedIds = {
-      "donner-splash", "geode-splash", "basic-shapes", "text-style", "gradients-clip"};
+  constexpr std::array<std::string_view, 6> kExpectedIds = {
+      "donner-splash", "geode-splash", "basic-shapes", "text-style", "gradients-clip", "animation"};
   std::unordered_set<std::string_view> ids;
   for (std::size_t i = 0; i < samples.size(); ++i) {
     EXPECT_EQ(samples[i].id, kExpectedIds[i]);

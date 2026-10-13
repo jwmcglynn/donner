@@ -31,6 +31,7 @@
 #include "donner/svg/components/ScopedRenderInvalidationRestore.h"
 #include "donner/svg/components/StylesheetComponent.h"
 #include "donner/svg/components/TreeMutation.h"
+#include "donner/svg/components/animation/AnimationStateComponent.h"
 #include "donner/svg/components/filter/FilterComponent.h"
 #include "donner/svg/components/filter/FilterPrimitiveComponent.h"
 #include "donner/svg/components/layout/LayoutSystem.h"
@@ -829,6 +830,14 @@ void SVGDocument::setTime(double seconds) {
   }
   components::RenderingContext(registry).invalidateRenderTree();
   documentContext.documentTime = seconds;
+}
+
+void SVGDocument::restartAnimations() {
+  DocumentMutationBatch mutation(*documentState_, true);
+  Registry& registry = mutation.access().registry();
+  registry.clear<components::AnimationStateComponent>();
+  registry.ctx().get<components::SVGDocumentContext>().documentTime = 0.0;
+  components::RenderingContext(registry).invalidateRenderTree();
 }
 
 double SVGDocument::currentTime() const {

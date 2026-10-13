@@ -98,6 +98,10 @@ namespace donner::editor {
 
 namespace {
 
+double AnimationPreviewClockSeconds() {
+  return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
 thread_local std::string gIsolatedReplayClipboard;
 
 bool CanAttemptSelectedRedrag(bool selectToolActive, bool cacheMatchesSelection,
@@ -1719,6 +1723,11 @@ std::optional<float> EditorShell::nextIdleWakeSeconds() const {
     // without running the entire editor frame ten times a second while a save is waiting.
     includeWake(0.25f);
   }
+  if (animationPreview_ || animationResetPending_) {
+    const double elapsed =
+        std::max(0.0, AnimationPreviewClockSeconds() - animationPreviewStartSeconds_);
+    includeWake(static_cast<float>((std::floor(elapsed * 60.0) + 1.0) / 60.0 - elapsed));
+  }
   includeWake(documentSyncController_.nextTextSyncWakeSeconds());
   includeWake(renderCoordinator_.nextPixelCaptureCanvasCommitWakeSeconds());
   includeWake(renderCoordinator_.nextNothingToPresentRetryWakeSeconds());
@@ -2466,6 +2475,8 @@ bool EditorShell::tryApplyGroupOperation(bool ungroup) {
 }
 
 void EditorShell::resetPresentationForLoadedDocument(std::string_view canonicalSource) {
+  animationPreview_ = false;
+  animationResetPending_ = false;
   cancelEyedropper(true);
   cancelSampleThumbnailGeneration();
   foregroundPresentationObligation_.reset();
@@ -5105,9 +5116,11 @@ void EditorShell::renderRenderPane(ImGuiWindowFlags paneFlags) {
       EditingScopeBreadcrumbScreenRect(paneOriginImGui, toolPaletteRect, app_.editingScope());
   const Box2d canvasZoomControlRect = canvasZoomControlScreenRect();
   const std::optional<Box2d> compactPanelRect = compactPanelScreenRect();
-  const bool canvasChromeHovered = CanvasChromeCapturesInput(
+  bool canvasChromeHovered = CanvasChromeCapturesInput(
       ImGui::GetMousePos(), referenceChipRect, toolPaletteRect, textFormatBarRect,
       editingScopeBreadcrumbRect, canvasZoomControlRect, compactPanelRect);
+  canvasChromeHovered |= animationPreviewControlScreenRect().contains(
+      Vector2d(ImGui::GetMousePos().x, ImGui::GetMousePos().y));
 
   const Box2d paneRect = Box2d::FromXYWH(interactionController_.viewport().paneOrigin.x,
                                          interactionController_.viewport().paneOrigin.y,
@@ -5180,15 +5193,16 @@ void EditorShell::renderRenderPane(ImGuiWindowFlags paneFlags) {
       (adaptiveUiLayout_.compactTouch() ? 2.0 : 1.0);
 
   if (ImGui::IsMouseClicked(ImGuiMouseButton_Right, /*repeat=*/false)) {
-    handleRenderPaneRightClick(canvasHovered, screenToDocument(ImGui::GetMousePos()));
+    handleRenderPaneRightClick(previewAllowsEditing(canvasHovered),
+                               screenToDocument(ImGui::GetMousePos()));
   }
 
   const ImVec2 hoverMousePos = ImGui::GetMousePos();
   const bool overCanvasScrollbar = internal::CanvasScrollbarsCaptureInput(
       adaptiveUiLayout_.showCanvasScrollbars, interactionController_.viewport(),
       Vector2d(hoverMousePos.x, hoverMousePos.y));
-  const bool toolEligible =
-      canvasHovered && !interactionController_.panning() && !spaceHeld && !overCanvasScrollbar;
+  const bool toolEligible = previewAllowsEditing(canvasHovered) &&
+                            !interactionController_.panning() && !spaceHeld && !overCanvasScrollbar;
   const bool selectToolActive = activeTool_ == ActiveTool::Select;
   const bool penToolActive = activeTool_ == ActiveTool::Pen;
   const bool textToolActive = activeTool_ == ActiveTool::Text;
@@ -5367,12 +5381,13 @@ void EditorShell::renderRenderPanePresentation(
 #else
   const FramePresentationAdmission admit;
 #endif
-  const auto frame = showSamplePicker_
-                         ? nullptr
-                         : renderCoordinator_.buildFramePresentation(
-                               app_, selectTool_, presentedDocumentViewport, paneRect,
-                               selectionChromeDetailForActiveTool(),
-                               !contentOnlyCaptureThisFrame_ && !showSamplePicker_, admit);
+  const auto frame =
+      showSamplePicker_
+          ? nullptr
+          : renderCoordinator_.buildFramePresentation(
+                app_, selectTool_, presentedDocumentViewport, paneRect,
+                selectionChromeDetailForActiveTool(),
+                previewAllowsEditing(!contentOnlyCaptureThisFrame_ && !showSamplePicker_), admit);
   const auto representedGesturePreview =
       frame != nullptr && frame->followsPointer() ? activeGesturePreview : std::nullopt;
 #ifndef DONNER_EDITOR_WGPU
@@ -5414,13 +5429,16 @@ void EditorShell::renderRenderPanePresentation(
     renderSelectionSizeChip(hoverTransformIntent, representedGesturePreview);
     renderReferenceHighlightChip();
     renderTextToolHint();
+    ImGui::BeginDisabled(animationPreview_);
     renderToolPalette(paneOriginImGui, contentRegion);
+    ImGui::EndDisabled();
+    renderAnimationPreviewControl();
     renderEditingScopeBreadcrumb();
     const FormatBarState formatBarState = computeFormatBarState();
-    const std::optional<Box2d> formatBarRect =
-        TextFormatBarScreenRect(paneOriginImGui, contentRegion, toolPaletteRect,
-                                adaptiveUiLayout_.showTextFormatBar && formatBarState.visible,
-                                TextFormatBarPresenter::BarHeight());
+    const std::optional<Box2d> formatBarRect = TextFormatBarScreenRect(
+        paneOriginImGui, contentRegion, toolPaletteRect,
+        previewAllowsEditing(adaptiveUiLayout_.showTextFormatBar && formatBarState.visible),
+        TextFormatBarPresenter::BarHeight());
     if (formatBarRect.has_value()) {
       const FormatBarActions actions =
           textFormatBarPresenter_.render(formatBarState,
@@ -6378,6 +6396,112 @@ void EditorShell::renderCanvasScrollbars() {
   }
 }
 
+void EditorShell::setAnimationPreview(bool enabled) {
+  if (enabled == animationPreview_) {
+    return;
+  }
+  if (enabled && (!app_.hasDocument() || showSamplePicker_ || selectTool_.isDragging() ||
+                  penTool_.isDrafting() || interactionController_.pendingClick().has_value())) {
+    return;
+  }
+  commitTextToolIfNeeded();
+  cancelEyedropper(true);
+  animationPreview_ = enabled;
+  animationResetPending_ = true;
+  animationPreviewStartSeconds_ = AnimationPreviewClockSeconds();
+  animationPreviewLastTime_ = -1.0;
+  animationPreviewDocumentGeneration_ = app_.document().documentGeneration();
+  window_.wakeEventLoop();
+}
+
+void EditorShell::advanceAnimationPreview(double nowSeconds) {
+  if (!app_.hasDocument() ||
+      app_.document().documentGeneration() != animationPreviewDocumentGeneration_) {
+    animationPreview_ = false;
+    animationResetPending_ = false;
+    return;
+  }
+  if (showSamplePicker_) {
+    setAnimationPreview(false);
+  }
+  if (!animationPreview_ && !animationResetPending_) {
+    return;
+  }
+  if (renderCoordinator_.asyncRenderer().isBusy()) {
+    return;
+  }
+  if (animationResetPending_) {
+    if (!app_.document().restartAnimations()) {
+      return;
+    }
+    animationResetPending_ = false;
+    animationPreviewStartSeconds_ = nowSeconds;
+    animationPreviewLastTime_ = 0.0;
+    requestRenderAtEndOfFrame_ = true;
+    return;
+  }
+  const double seconds =
+      animationPreview_
+          ? std::floor(std::max(0.0, nowSeconds - animationPreviewStartSeconds_) * 60.0) / 60.0
+          : 0.0;
+  if (seconds == animationPreviewLastTime_) {
+    return;
+  }
+  applyAnimationPreviewTime(seconds);
+}
+
+void EditorShell::applyAnimationPreviewTime(double seconds) {
+  if (app_.document().setAnimationTime(seconds)) {
+    requestRenderAtEndOfFrame_ = true;
+  } else {
+    const auto access = app_.document().document().tryReadAccess();
+    if (!access.has_value() || app_.document().document().currentTime() != seconds) {
+      return;
+    }
+  }
+  animationPreviewLastTime_ = seconds;
+  animationResetPending_ = false;
+}
+
+Box2d EditorShell::animationPreviewControlScreenRect() const {
+  const ViewportState& viewport = interactionController_.viewport();
+  const Box2d palette = toolPaletteScreenRect(
+      ImVec2(static_cast<float>(viewport.paneOrigin.x), static_cast<float>(viewport.paneOrigin.y)),
+      ImVec2(static_cast<float>(viewport.paneSize.x), static_cast<float>(viewport.paneSize.y)));
+  return Box2d::FromXYWH(viewport.paneOrigin.x + std::max(0.0, viewport.paneSize.x - 104.0),
+                         palette.bottomRight.y + 52.0, 92.0, 64.0);
+}
+
+void EditorShell::renderAnimationPreviewControl() {
+  const Box2d rect = animationPreviewControlScreenRect();
+  const EditorTheme& theme = EditorTheme::Active();
+  ImGui::PushID("animation_mode");
+  ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, theme.radiusControl);
+  ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0, 0));
+  for (int index = 0; index < 2; ++index) {
+    const bool preview = index == 1;
+    ImGui::SetCursorScreenPos(ImVec2(static_cast<float>(rect.topLeft.x),
+                                     static_cast<float>(rect.topLeft.y) + index * 32.0f));
+    ImGui::PushStyleColor(
+        ImGuiCol_Button, animationPreview_ == preview ? theme.accentDefault : theme.surfaceOverlay);
+    if (ImGui::Button(preview ? "Preview" : "Edit", ImVec2(92.0f, 32.0f))) {
+      setAnimationPreview(preview);
+    }
+    ImGui::PopStyleColor();
+    if (ImGui::IsItemHovered()) {
+      ImGui::SetTooltip(preview ? "Play SVG animations from the beginning"
+                                : "Stop and edit the SVG");
+    }
+  }
+  ImGui::GetWindowDrawList()->AddLine(
+      ImVec2(static_cast<float>(rect.topLeft.x) + 8.0f, static_cast<float>(rect.topLeft.y) + 32.0f),
+      ImVec2(static_cast<float>(rect.bottomRight.x) - 8.0f,
+             static_cast<float>(rect.topLeft.y) + 32.0f),
+      theme.borderStrong);
+  ImGui::PopStyleVar(2);
+  ImGui::PopID();
+}
+
 void EditorShell::renderCompactTopBar() {
   if (!adaptiveUiLayout_.compactTouch()) {
     return;
@@ -6499,11 +6623,13 @@ void EditorShell::renderCompactTopBar() {
     window_.wakeEventLoop();
   }
   ImGui::SameLine(0.0f, kButtonGap);
-  if (button("##compact_undo", CompactIcon::Undo, "Undo", app_.canUndo(), false)) {
+  if (button("##compact_undo", CompactIcon::Undo, "Undo", previewAllowsEditing(app_.canUndo()),
+             false)) {
     requestHistoryAction(HistoryAction::Undo);
   }
   ImGui::SameLine(0.0f, kButtonGap);
-  if (button("##compact_redo", CompactIcon::Redo, "Redo", app_.canRedo(), false)) {
+  if (button("##compact_redo", CompactIcon::Redo, "Redo", previewAllowsEditing(app_.canRedo()),
+             false)) {
     requestHistoryAction(HistoryAction::Redo);
   }
   ImGui::SameLine(0.0f, kButtonGap);
@@ -7759,13 +7885,19 @@ void EditorShell::openRenderPaneContextMenu(const Vector2d& documentPoint) {
   window_.wakeEventLoop();
 }
 
-void EditorShell::renderRenderPaneContextMenu() {
+bool EditorShell::beginRenderPaneContextMenu() {
+  if (animationPreview_) {
+    return false;
+  }
   if (renderContextMenuOpenRequested_) {
     ImGui::OpenPopup(kRenderPaneContextMenuName.data());
     renderContextMenuOpenRequested_ = false;
   }
+  return ImGui::BeginPopup(kRenderPaneContextMenuName.data());
+}
 
-  if (!ImGui::BeginPopup(kRenderPaneContextMenuName.data())) {
+void EditorShell::renderRenderPaneContextMenu() {
+  if (!beginRenderPaneContextMenu()) {
     return;
   }
 
@@ -8263,11 +8395,33 @@ MenuHistoryAvailability MenuHistoryForFocus(const EditorApp& app, const TextEdit
 
 }  // namespace
 
+bool EditorShell::previewAllowsEditing(bool allowed) const {
+  return !animationPreview_ && allowed;
+}
+
+void EditorShell::applyPreviewMenuState(MenuBarState& state) const {
+  if (!animationPreview_) {
+    return;
+  }
+  state.sourcePaneFocused = false;
+  state.textToolEditing = false;
+  state.inspectorTextInputFocused = false;
+  state.canRevert = false;
+  state.canUndo = false;
+  state.canRedo = false;
+  state.hasShapeSelection = false;
+  state.hasShapeClipboard = false;
+  state.hasTextSelection = false;
+  state.canGroup = false;
+  state.canUngroup = false;
+  state.hasSelectableElements = false;
+}
+
 MenuBarState EditorShell::buildMenuBarState(bool compactUi) {
   const bool rendererIdle = !renderCoordinator_.asyncRenderer().isBusy();
   const bool sourcePaneFocused = !compactUi && sourcePaneVisible_ && textEditor_.isFocused();
   const MenuHistoryAvailability history = MenuHistoryForFocus(app_, textEditor_, sourcePaneFocused);
-  return MenuBarState{
+  MenuBarState state{
       .sourcePaneFocused = sourcePaneFocused,
       .textToolEditing =
           !sourcePaneFocused && activeTool_ == ActiveTool::Text && textTool_.isEditing(),
@@ -8290,6 +8444,8 @@ MenuBarState EditorShell::buildMenuBarState(bool compactUi) {
       .compositedRenderingMode = compositedRenderingMode_,
       .panelLayoutLocked = dockLayoutLocked_,
   };
+  applyPreviewMenuState(state);
+  return state;
 }
 
 void EditorShell::renderMenuBarAndDialogs(bool compactUi) {
@@ -8534,6 +8690,9 @@ float EditorShell::menuBarHeightForFrame(bool compactUi) const {
 }
 
 void EditorShell::handleFrameShortcuts([[maybe_unused]] bool compactUi) {
+  if (animationPreview_ && ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+    setAnimationPreview(false);
+  }
   bool nativeKeyEquivalentActivated = false;
 #if defined(__APPLE__) && !defined(__EMSCRIPTEN__)
   if (nativeMenu_ != nullptr) {
@@ -8543,7 +8702,7 @@ void EditorShell::handleFrameShortcuts([[maybe_unused]] bool compactUi) {
     applyMenuActions(activated.actions);
   }
 #endif
-  if (!nativeKeyEquivalentActivated) {
+  if (!nativeKeyEquivalentActivated && !animationPreview_) {
     handleGlobalShortcuts();
   }
 }
@@ -8620,6 +8779,7 @@ void EditorShell::runFrame() {
     }
   }
   processPendingSampleLoad();
+  advanceAnimationPreview(AnimationPreviewClockSeconds());
   const bool documentUiSnapshotRendererBusy = renderCoordinator_.asyncRenderer().isBusy();
   cachedCanvasHasSelectableElements_ = internal::ResolveCachedDocumentBoolForFrame(
       documentUiSnapshotRendererBusy, cachedCanvasHasSelectableElements_,
@@ -8734,9 +8894,13 @@ void EditorShell::runFrame() {
   markPhase(mainFrameCost.menusDialogsMs);
 
   std::ignore = highlightSelectionSourceIfNeeded();
+  textEditor_.setHandleKeyboardInputs(!animationPreview_);
+  textEditor_.setHandleMouseInputs(!animationPreview_);
   if (!compactUi && mainPaneLayout.sourcePaneWidth > 0.0f) {
+    ImGui::BeginDisabled(animationPreview_);
     renderSourcePane(mainPaneLayout.sourcePaneX, paneOriginY, paneHeight,
                      mainPaneLayout.sourcePaneWidth, codeFont_);
+    ImGui::EndDisabled();
   }
   markPhase(mainFrameCost.sourcePaneMs);
   // The canvas pane must never window-scroll: an ImGui scrollbar here would
@@ -8746,7 +8910,9 @@ void EditorShell::runFrame() {
   renderRenderPane(ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoBackground |
                    ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
   markPhase(mainFrameCost.renderPaneMs);
+  ImGui::BeginDisabled(animationPreview_);
   renderSidebars();
+  ImGui::EndDisabled();
   if (highlightSelectionSourceIfNeeded()) {
     window_.wakeEventLoop();
   }

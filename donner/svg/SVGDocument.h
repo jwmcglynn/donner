@@ -405,6 +405,12 @@ public:
   double currentTime() const;
 
   /**
+   * Start a fresh animation session at time zero, including animations with restart="never".
+   * Preserves the authored document and element identity. The next render evaluates time zero.
+   */
+  void restartAnimations();
+
+  /**
    * Automatically determine the canvas size from the root `<svg>` element's `width`, `height`,
    * and `viewBox`. If those do not define a size, falls back to the default size (512x512).
    */
