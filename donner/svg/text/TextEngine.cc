@@ -1349,6 +1349,58 @@ std::optional<Box2d> BitmapGlyphExtent(
   return localFromBitmap.transformBox(Box2d::FromXYWH(0, 0, bitmap->width, bitmap->height));
 }
 
+struct ApiCharacterIndexMappings {
+  std::vector<size_t> byteToFirstUnit;
+  std::vector<size_t> firstUnitByUnit;
+};
+
+/// Associate UTF-16 units with the first unit of their shaped typographic character.
+ApiCharacterIndexMappings BuildApiCharacterIndexMappings(std::string_view text,
+                                                         std::span<const TextGlyph> glyphs) {
+  std::vector<uint8_t> shapedClusterStarts(text.size(), 0);
+  for (const auto& glyph : glyphs) {
+    if (glyph.cluster < text.size()) {
+      shapedClusterStarts[glyph.cluster] = 1;
+    }
+  }
+  ApiCharacterIndexMappings result;
+  result.byteToFirstUnit.resize(text.size());
+  result.firstUnitByUnit.reserve(text.size());
+  size_t firstUnit = 0;
+  size_t position = 0;
+  while (position < text.size()) {
+    const size_t start = position;
+    const uint32_t codepoint = decodeUtf8(text, position);
+    const bool startsCluster =
+        std::find(shapedClusterStarts.begin() + start, shapedClusterStarts.begin() + position, 1) !=
+        shapedClusterStarts.begin() + position;
+    if (startsCluster && !isNonSpacing(codepoint)) {
+      firstUnit = result.firstUnitByUnit.size();
+    }
+    for (size_t byte = start; byte < position; ++byte) {
+      result.byteToFirstUnit[byte] = firstUnit;
+    }
+    const size_t units = codepoint >= 0x10000 ? 2 : 1;
+    for (size_t unit = 0; unit < units; ++unit) {
+      result.firstUnitByUnit.push_back(firstUnit);
+    }
+  }
+  return result;
+}
+
+void ExpandApiCharacterGeometryAliases(components::ComputedTextGeometryComponent& cache,
+                                       size_t baseIndex,
+                                       const ApiCharacterIndexMappings& mappings) {
+  for (size_t unit = 0; unit < mappings.firstUnitByUnit.size(); ++unit) {
+    const size_t firstUnit = mappings.firstUnitByUnit[unit];
+    if (unit != firstUnit) {
+      cache.characters[baseIndex + unit] = cache.characters[baseIndex + firstUnit];
+      // UTF-16 aliases share the glyph cell, but only its first unit contributes advance.
+      cache.characters[baseIndex + unit].advance = 0.0;
+    }
+  }
+}
+
 void addBox(Box2d& accum, bool& initialized, const Box2d& box) {
   if (box.isEmpty()) {
     return;
@@ -2484,26 +2536,9 @@ const components::ComputedTextGeometryComponent& TextEngine::ensureComputedTextG
       emBottom = -static_cast<double>(metrics.descent) * runScale;
     }
 
-    bool firstChar = true;
-    bool prevWasZwj = false;
-    size_t pos = 0;
-    std::vector<size_t> byteToApiCharIdx(spanText.size(), 0);
-    size_t apiCharIdx = 0;
-    while (pos < spanText.size()) {
-      const size_t start = pos;
-      const uint32_t cp = decodeUtf8(spanText, pos);
-      const bool nonSpacing = isNonSpacing(cp) || prevWasZwj;
-      prevWasZwj = (cp == 0x200D);
-      if (!firstChar && !nonSpacing) {
-        ++apiCharIdx;
-      }
-      for (size_t i = start; i < pos; ++i) {
-        byteToApiCharIdx[i] = apiCharIdx;
-      }
-      firstChar = false;
-    }
-
-    const size_t localCharCount = firstChar ? 0 : apiCharIdx + 1;
+    const ApiCharacterIndexMappings apiMappings =
+        BuildApiCharacterIndexMappings(spanText, run.glyphs);
+    const size_t localCharCount = apiMappings.firstUnitByUnit.size();
     const size_t charBaseIndex = cache.characters.size();
     cache.characters.resize(charBaseIndex + localCharCount);
     for (size_t i = 0; i < localCharCount; ++i) {
@@ -2525,8 +2560,9 @@ const components::ComputedTextGeometryComponent& TextEngine::ensureComputedTextG
     }
 
     for (const auto& glyph : PaintedSpanGlyphs(span, run)) {
-      const size_t localCharIndex =
-          glyph.cluster < byteToApiCharIdx.size() ? byteToApiCharIdx[glyph.cluster] : 0;
+      const size_t localCharIndex = glyph.cluster < apiMappings.byteToFirstUnit.size()
+                                        ? apiMappings.byteToFirstUnit[glyph.cluster]
+                                        : 0;
       if (localCharIndex >= localCharCount) {
         continue;
       }
@@ -2572,6 +2608,7 @@ const components::ComputedTextGeometryComponent& TextEngine::ensureComputedTextG
         addBox(charGeom.extent, charGeom.hasExtent, *extent);
       }
     }
+    ExpandApiCharacterGeometryAliases(cache, charBaseIndex, apiMappings);
   }
 
   BuildTextObjectBoundsIndex(registry_, textRootEntity, cache);
