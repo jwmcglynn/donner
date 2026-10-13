@@ -231,6 +231,7 @@ py_test(
         "//donner/editor/wasm/tests:BUILD.bazel",
         "//donner/editor/wasm/tests:browser-stall-diagnostics.mjs",
         "//donner/gpu/shader:BUILD.bazel",
+        "//donner/svg/renderer/wasm:BUILD.bazel",
         "//tools:ci_bazel_test.sh",
         "//tools:coverage.sh",
         "//tools/ci:BUILD.bazel",

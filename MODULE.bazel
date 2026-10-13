@@ -97,13 +97,16 @@ bazel_dep(name = "vulkan_headers", version = "1.4.349")
 bazel_dep(name = "freetype", version = "2.13.3.bcr.1")
 bazel_dep(name = "libpng", version = "1.6.58.bcr.1")
 
-# Enable FreeType's PNG support for CBDT color emoji bitmaps.
+# Enable FreeType's PNG support for CBDT color emoji bitmaps, and drop the font drivers and
+# renderers Donner cannot reach: FontManager admits only sfnt, WOFF and WOFF2 data, so the PFR,
+# Type 42, Windows FNT, PCF and BDF drivers never match, and nothing requests SDF rendering.
 single_version_override(
     module_name = "freetype",
     patch_strip = 1,
     patches = [
         "//third_party/patches:freetype-enable-png-module.patch",
         "//third_party/patches:freetype-enable-png-build.patch",
+        "//third_party/patches:freetype-trim-unreachable-modules.patch",
     ],
     version = "2.13.3.bcr.1",
 )

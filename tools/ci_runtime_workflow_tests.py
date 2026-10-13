@@ -21,15 +21,23 @@ from test_executable_fixtures import ExecutableFixtureDirectory
 # The editor Wasm payload ceilings CI enforces. Changing one means editing the size test's
 # arguments and this table together, so a widened ceiling is always a reviewed change.
 ENFORCED_PAYLOAD_CEILINGS = {
-    "--max-js-gzip-bytes": 54600,
-    "--max-js-raw-bytes": 198200,
-    "--max-total-raw-bytes": 13015000,
+    "--max-js-gzip-bytes": 53000,
+    "--max-js-raw-bytes": 191800,
+    "--max-total-raw-bytes": 12046000,
     "--max-wasm-data-segments": 64,
     "--max-wasm-function-body-bytes": 46000,
-    "--max-wasm-gzip-bytes": 3552000,
-    "--max-wasm-raw-bytes": 10749000,
+    "--max-wasm-gzip-bytes": 3274000,
+    "--max-wasm-raw-bytes": 9937000,
 }
 PAYLOAD_SIZE_TEST = "//donner/editor/wasm:wasm_geode_package_size_tests"
+# The standalone renderer Wasm ceilings CI enforces, changed together with that test's arguments.
+RENDERER_PAYLOAD_CEILINGS = {
+    "--max-js-gzip-bytes": 2800,
+    "--max-js-raw-bytes": 5700,
+    "--max-wasm-gzip-bytes": 744000,
+    "--max-wasm-raw-bytes": 1880000,
+}
+RENDERER_SIZE_TEST = "//donner/svg/renderer/wasm:wasm_size_tests"
 SIZE_CHECK_STEP = "- name: Build and size-check Geode editor Wasm package"
 STEP_AFTER_SIZE_CHECK = "- name: Stage package for handoff"
 def _repository_text(path):
@@ -39,7 +47,7 @@ def _repository_text(path):
         return handle.read()
 
 
-def _declared_payload_ceilings(size_test_arguments):
+def _declared_payload_ceilings(size_test_arguments, enforced=ENFORCED_PAYLOAD_CEILINGS):
     """The payload ceilings the size test declares, read from its build-graph arguments.
 
     A flag declared twice is dropped rather than reported: argparse keeps the
@@ -47,8 +55,8 @@ def _declared_payload_ceilings(size_test_arguments):
     test does not enforce.
     """
     ceilings = {}
-    for flag in ENFORCED_PAYLOAD_CEILINGS:
-        values = re.findall(r'"%s", "(\d+)"' % re.escape(flag), size_test_arguments)
+    for flag in enforced:
+        values = re.findall(r'"%s",\s*"(\d+)"' % re.escape(flag), size_test_arguments)
         if len(values) == 1:
             ceilings[flag] = int(values[0])
     return ceilings
@@ -99,6 +107,7 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
             "donner/editor/wasm/wasm_package_size_test_arguments.txt"
         )
         cls.ci_target_definitions = _repository_text("tools/ci/BUILD.bazel")
+        cls.renderer_wasm_build = _repository_text("donner/svg/renderer/wasm/BUILD.bazel")
         cls.editor_tests_build = _repository_text("donner/editor/tests/BUILD.bazel")
         cls.xvfb_runner = _repository_text(
             "donner/editor/tests/RunEditorWindowVulkanSurfaceTests.sh"
@@ -1298,6 +1307,31 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         )
         repeated = self.wasm_size_test_arguments.replace(declared, declared + ", " + declared)
         self.assertNotIn(flag, _declared_payload_ceilings(repeated))
+
+    def _renderer_size_test_definition(self):
+        marker = 'name = "wasm_size_tests"'
+        self.assertEqual(1, self.renderer_wasm_build.count(marker))
+        return self.renderer_wasm_build.split(marker, 1)[1].split("\n)", 1)[0]
+
+    def test_renderer_wasm_payload_ceilings_are_enforced(self):
+        """The renderer module's size test declares each ceiling once, as CI enforces it."""
+        self.assertEqual(
+            _declared_payload_ceilings(
+                self._renderer_size_test_definition(), RENDERER_PAYLOAD_CEILINGS
+            ),
+            RENDERER_PAYLOAD_CEILINGS,
+            "%s and RENDERER_PAYLOAD_CEILINGS must change together" % RENDERER_SIZE_TEST,
+        )
+
+    def test_renderer_wasm_size_test_runs_in_the_size_check_step(self):
+        """The Editor Wasm size-check step runs the suite that contains the renderer gate."""
+        step = self._size_check_step(self.editor_wasm)
+        self.assertIn("--config=wasm-size", step)
+        self.assertIn("//tools/ci:wasm_size_tests", step)
+        suite_name = 'name = "wasm_size_tests"'
+        self.assertIn(suite_name, self.ci_target_definitions)
+        suite = self.ci_target_definitions.split(suite_name, 1)[1].split("\n)", 1)[0]
+        self.assertIn(RENDERER_SIZE_TEST, suite)
 
     def test_editor_wasm_size_check_step_runs_the_gated_size_test(self):
         """The gate reads the ceilings of the target the workflow actually runs."""
