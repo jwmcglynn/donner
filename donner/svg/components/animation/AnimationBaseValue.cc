@@ -37,8 +37,52 @@
 namespace donner::svg::components {
 namespace {
 
+std::optional<std::string> SerializeReference(const Reference& reference,
+                                              AnimationResourceBudget* budget) {
+  const std::string_view href(reference.href);
+  if (!budget || !reference.hasSafeRepresentation()) {
+    return std::nullopt;
+  }
+  if (!budget->reserveSourceBytes(href.size() * 4 + 32)) {
+    return std::string{};
+  }
+  std::string result = "url(\"";
+  constexpr char hex[] = "0123456789abcdef";
+  for (const unsigned char character : href) {
+    if (character < 32 || character == 127) {
+      result += '\\';
+      result += hex[character >> 4];
+      result += hex[character & 15];
+      result += ' ';
+    } else {
+      if (character == '\\' || character == '"') {
+        result += '\\';
+      }
+      result += static_cast<char>(character);
+    }
+  }
+  result += "\")";
+  return result;
+}
+
+std::optional<std::string> SerializeDasharray(const StrokeDasharray& value,
+                                              AnimationResourceBudget* budget) {
+  if (value.empty()) {
+    return "none";
+  }
+  if (!budget || value.size() > AnimationResourceBudget::kMaximumNumbersPerValue ||
+      !budget->reserveSourceBytes(value.size() * 64)) {
+    return std::string{};
+  }
+  std::ostringstream out;
+  out.precision(12);
+  out << value;
+  return out.str();
+}
+
 template <typename T>
-std::optional<std::string> SerializeValue(const T& value, const AnimationValueContext& context) {
+std::optional<std::string> SerializeValue(const T& value, const AnimationValueContext& context,
+                                          AnimationResourceBudget* budget = nullptr) {
   if constexpr (std::is_arithmetic_v<T> || std::is_same_v<T, Lengthd> || std::is_enum_v<T>) {
     std::ostringstream out;
     out.precision(12);
@@ -55,6 +99,22 @@ std::optional<std::string> SerializeValue(const T& value, const AnimationValueCo
     if (value.template is<PaintServer::None>()) {
       return "none";
     }
+    if (value.template is<PaintServer::ContextFill>()) {
+      return "context-fill";
+    }
+    if (value.template is<PaintServer::ContextStroke>()) {
+      return "context-stroke";
+    }
+    const auto& paint = value.template get<PaintServer::ElementReference>();
+    auto result = SerializeReference(paint.reference, budget);
+    if (result && paint.fallback) {
+      *result += " " + paint.fallback->resolve(context.currentColor, 1).toHexString();
+    }
+    return result;
+  } else if constexpr (std::is_same_v<T, Reference>) {
+    return SerializeReference(value, budget);
+  } else if constexpr (std::is_same_v<T, StrokeDasharray>) {
+    return SerializeDasharray(value, budget);
   }
   return std::nullopt;
 }
@@ -452,14 +512,23 @@ std::optional<std::string> FilterNumberBaseValue(Registry& registry, Entity targ
 
 std::optional<std::string> StyleValue(const PropertyRegistry& properties,
                                       std::string_view attribute,
-                                      const AnimationValueContext& context) {
+                                      const AnimationValueContext& context,
+                                      AnimationResourceBudget& budget) {
   std::optional<std::string> result;
   const auto all = properties.allProperties();
   PropertyRegistry::forEachProperty<0, PropertyRegistry::numProperties()>([&](auto index) {
     const auto& property = std::get<index>(all);
-    if (property.name == attribute) {
-      if (const auto value = property.get()) {
-        result = SerializeValue(*value, context);
+    if (property.name != attribute) {
+      return;
+    }
+    if (const auto* value = property.getStoredValue()) {
+      result = SerializeValue(*value, context, &budget);
+    } else if (const auto value = property.get()) {
+      result = SerializeValue(*value, context, &budget);
+    } else {
+      using Value = std::remove_cvref_t<decltype(*property.getStoredValue())>;
+      if constexpr (std::is_same_v<Value, StrokeDasharray> || std::is_same_v<Value, Reference>) {
+        result = "none";
       }
     }
   });
@@ -608,7 +677,7 @@ std::string UnderlyingAnimationValue(Registry& registry, Entity target, std::str
   }
   if (const auto* style = registry.try_get<ComputedStyleComponent>(target);
       style && style->properties) {
-    if (const auto value = StyleValue(*style->properties, attribute, context)) {
+    if (const auto value = StyleValue(*style->properties, attribute, context, budget)) {
       return *value;
     }
     const auto it = style->properties->unparsedProperties.find(RcString(attribute));
