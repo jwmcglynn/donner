@@ -1634,12 +1634,15 @@ void RendererDriver::syncFilterPreparationStats() {
   securityStats_->filterPreparationRejected = filterPreparationBudget_->rejected();
 }
 
-RendererDriver::RendererDriver(RendererInterface& renderer, bool verbose,
-                               SecurityStats* securityStats)
+RendererDriver::RendererDriver(
+    RendererInterface& renderer, bool verbose, SecurityStats* securityStats,
+    std::shared_ptr<components::StyleResourceBudget> externalUseStyleWork)
     : renderer_(renderer),
       verbose_(verbose),
       textFrameCache_(std::make_unique<RendererDriverTextFrameCache>()),
-      externalUseStyleWork_(std::make_shared<components::StyleResourceBudget>()),
+      externalUseStyleWork_(externalUseStyleWork
+                                ? std::move(externalUseStyleWork)
+                                : std::make_shared<components::StyleResourceBudget>()),
       securityStats_(securityStats) {
   if (RendererFilterPreparationBudget* shared = renderer_.filterPreparationBudget()) {
     filterPreparationBudget_ = shared;

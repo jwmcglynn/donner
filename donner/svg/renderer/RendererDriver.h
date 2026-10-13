@@ -103,9 +103,11 @@ public:
    * @param renderer Backend receiving prepared draw calls.
    * @param verbose Whether to emit diagnostic warnings.
    * @param securityStats Optional preparation diagnostics destination.
+   * @param externalUseStyleWork Optional shared style-work allowance for admission diagnostics.
    */
-  explicit RendererDriver(RendererInterface& renderer, bool verbose = false,
-                          SecurityStats* securityStats = nullptr);
+  explicit RendererDriver(
+      RendererInterface& renderer, bool verbose = false, SecurityStats* securityStats = nullptr,
+      std::shared_ptr<components::StyleResourceBudget> externalUseStyleWork = nullptr);
 
   ~RendererDriver();
 
