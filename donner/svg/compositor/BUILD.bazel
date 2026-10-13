@@ -85,9 +85,11 @@ donner_cc_test(
     ],
     deps = [
         ":compositor",
+        "//donner/svg/components/style:style_system",
         "//donner/svg/renderer:renderer_interface",
         "//donner/svg/renderer:renderer_utils",
         "//donner/svg/renderer/tests:mock_renderer_interface",
+        "//donner/svg/resources:resource_loader_interface",
         "//donner/svg/tests:parser_test_utils",
         "@com_google_gtest//:gtest_main",
     ],

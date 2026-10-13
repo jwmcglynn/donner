@@ -238,11 +238,13 @@ bool CanReuseImmediateDragLayer(const CompositorLayer& layer, bool rootDirty) {
 
 }  // namespace
 
-CompositorController::CompositorController(SVGDocument& document, RendererInterface& renderer,
-                                           CompositorConfig config)
+CompositorController::CompositorController(
+    SVGDocument& document, RendererInterface& renderer, CompositorConfig config,
+    std::shared_ptr<components::StyleResourceBudget> styleWork)
     : document_(document),
       renderer_(renderer),
       config_(config),
+      styleWork_(std::move(styleWork)),
       mandatoryDetector_(config.mandatoryHintScope),
       // Only carve subtrees into bucket layers when they're actually
       // expensive to re-rasterize. `filterPenalty = 16` (default) plus the

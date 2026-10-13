@@ -13,10 +13,12 @@
 
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/SVGGraphicsElement.h"
+#include "donner/svg/components/style/StyleSystem.h"
 #include "donner/svg/compositor/ComputedLayerAssignmentComponent.h"
 #include "donner/svg/renderer/RendererInterface.h"
 #include "donner/svg/renderer/RendererUtils.h"
 #include "donner/svg/renderer/tests/MockRendererInterface.h"
+#include "donner/svg/resources/ResourceLoaderInterface.h"
 #include "donner/svg/tests/ParserTestUtils.h"
 
 using ::testing::_;
@@ -101,6 +103,115 @@ public:
 private:
   Vector2i dimensions_;
 };
+
+class StyleAdmissionResourceLoader : public ResourceLoaderInterface {
+public:
+  std::variant<std::vector<uint8_t>, ResourceLoaderError> fetchExternalResource(
+      std::string_view url) override {
+    const std::string_view source =
+        url == "external.svg" ? R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="2" height="2">
+                <use href="tile.svg#tile" fill="blue"/>
+              </svg>)svg"
+                              : R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="2" height="2">
+                <rect id="tile" width="2" height="2"/>
+              </svg>)svg";
+    if (url != "external.svg" && url != "tile.svg") {
+      return ResourceLoaderError::NotFound;
+    }
+    return std::vector<uint8_t>(source.begin(), source.end());
+  }
+};
+
+SVGDocument MakeStyleAdmissionDocument() {
+  std::string source = R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="96" height="2">
+    <defs><filter id="f" x="0" y="0" width="1" height="1">
+      <feImage href="external.svg"/>
+    </filter></defs>)svg";
+  for (int group = 0; group < 3; ++group) {
+    source += "<g id='group" + std::to_string(group) + "' opacity='0.5'>";
+    for (int i = 0; i < 16; ++i) {
+      source += "<rect x='" + std::to_string((group * 16 + i) * 2) +
+                "' width='2' height='2' filter='url(#f)'/>";
+    }
+    source += "</g>";
+  }
+  source += "</svg>";
+  SVGDocument::Settings settings;
+  settings.resourceLoader = std::make_unique<StyleAdmissionResourceLoader>();
+  settings.svgParseCallback = [](const std::vector<uint8_t>& bytes,
+                                 ParseWarningSink& warnings) -> std::optional<SVGDocumentHandle> {
+    SVGDocument::Settings nested;
+    nested.resourceLoader = std::make_unique<StyleAdmissionResourceLoader>();
+    const std::string_view source(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+    auto parsed = parser::SVGParser::ParseSVG(source, warnings, parser::SVGParser::Options(),
+                                              std::move(nested));
+    if (parsed.hasError()) {
+      return std::nullopt;
+    }
+    return parsed.result().handle();
+  };
+  ParseWarningSink warnings;
+  auto parsed = parser::SVGParser::ParseSVG(source, warnings, parser::SVGParser::Options(),
+                                            std::move(settings));
+  EXPECT_FALSE(parsed.hasError());
+  return std::move(parsed.result());
+}
+
+std::unique_ptr<NiceMock<MockRendererInterface>> MakeStyleAdmissionRenderer(int& blueDraws) {
+  auto renderer = std::make_unique<NiceMock<MockRendererInterface>>();
+  ON_CALL(*renderer, takeSnapshot()).WillByDefault(MockRendererInterface::makeDummyBitmap);
+  ON_CALL(*renderer, createOffscreenInstance()).WillByDefault([&blueDraws]() {
+    return MakeStyleAdmissionRenderer(blueDraws);
+  });
+  ON_CALL(*renderer, setPaint(_)).WillByDefault([&blueDraws](const PaintParams& paint) {
+    const auto* solid = std::get_if<PaintServer::Solid>(&paint.fill);
+    if (solid && solid->color.resolve(css::RGBA(0, 0, 0, 255), 1.0f) == css::RGBA(0, 0, 255, 255)) {
+      ++blueDraws;
+    }
+  });
+  return renderer;
+}
+
+class CompositorStyleAdmissionTest : public testing::TestWithParam<bool> {};
+
+TEST_P(CompositorStyleAdmissionTest, DirtyTilesAndSegmentsShareFrameAllowance) {
+  SVGDocument document = MakeStyleAdmissionDocument();
+  int blueDraws = 0;
+  auto renderer = MakeStyleAdmissionRenderer(blueDraws);
+  components::StyleResourceBudget::Limits limits;
+  limits.ruleElementMatches = 32;
+  auto work = std::make_shared<components::StyleResourceBudget>(limits);
+  CompositorConfig config;
+  config.complexityBucketing = false;
+  config.mandatoryHintScope = MandatoryHintScope::FilterOnly;
+  config.immediateStaticSpans = false;
+  config.dynamicImmediateStaticSpans = false;
+  CompositorController compositor(document, *renderer, config, work);
+  for (int group = 0; group < 3; ++group) {
+    if (GetParam() || group == 1) {
+      auto element = document.querySelector("#group" + std::to_string(group));
+      ASSERT_TRUE(element.has_value());
+      ASSERT_TRUE(compositor.promoteEntity(element->unsafeEntityHandle().entity()));
+    }
+  }
+  compositor.renderFrame(RenderViewport{Vector2i(96, 2)});
+  EXPECT_GE(compositor.lastRenderFrameStats().cachedTileCount, 3);
+  EXPECT_GT(blueDraws, 0) << "actual nested external-use traversal must be reached";
+  EXPECT_LE(blueDraws, 32) << "each admitted external-use scope charges at least one entity";
+  EXPECT_TRUE(work->rejected());
+
+  blueDraws = 0;
+  compositor.renderFrame(RenderViewport{Vector2i(192, 4)});
+  EXPECT_GE(compositor.lastRenderFrameStats().cachedTileCount, 3);
+  EXPECT_GT(blueDraws, 0) << "a new owner frame must replenish the exhausted allowance";
+  EXPECT_LE(blueDraws, 32);
+  EXPECT_TRUE(work->rejected());
+}
+
+INSTANTIATE_TEST_SUITE_P(RasterPaths, CompositorStyleAdmissionTest, testing::Bool(),
+                         [](const testing::TestParamInfo<bool>& info) {
+                           return info.param ? "PromotedLayers" : "LayersAndStaticSegments";
+                         });
 
 }  // namespace
 

@@ -24,6 +24,10 @@
 #include "donner/svg/compositor/ScopedCompositorHint.h"
 #include "donner/svg/renderer/RendererInterface.h"
 
+namespace donner::svg::components {
+class StyleResourceBudget;
+}  // namespace donner::svg::components
+
 namespace donner::svg::compositor {
 
 /// Maximum number of compositor layers that can be simultaneously active.
@@ -370,9 +374,11 @@ public:
    * @param document The SVG document to composite.
    * @param renderer The renderer backend to use for rasterization and composition.
    * @param config Runtime feature gates. Default-constructed enables everything.
+   * @param styleWork Optional internal allowance for serialized rendering work.
    */
   CompositorController(SVGDocument& document, RendererInterface& renderer,
-                       CompositorConfig config = {});
+                       CompositorConfig config = {},
+                       std::shared_ptr<components::StyleResourceBudget> styleWork = nullptr);
 
   /// Returns the runtime config this controller was constructed with.
   [[nodiscard]] const CompositorConfig& config() const { return config_; }
@@ -1465,6 +1471,7 @@ private:
   RenderViewport lastViewport_;
   bool hasLastViewport_ = false;
   CompositorConfig config_;
+  std::shared_ptr<components::StyleResourceBudget> styleWork_;
   LayerResolver resolver_;
   MandatoryHintDetector mandatoryDetector_;
   ComplexityBucketer complexityBucketer_;
