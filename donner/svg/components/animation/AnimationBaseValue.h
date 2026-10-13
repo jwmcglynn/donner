@@ -21,10 +21,12 @@ std::optional<RcString> AnimationReferenceValue(Registry& registry, Entity targe
  * @param registry Document storage.
  * @param target Animation target.
  * @param attribute Animated attribute name.
+ * @param budget Shared budget for resolving inherited coordinate units.
  * @return The target's current unit and color context.
  */
 AnimationValueContext AnimationContextFor(Registry& registry, Entity target,
-                                          std::string_view attribute);
+                                          std::string_view attribute,
+                                          AnimationResourceBudget& budget);
 
 /** Read the underlying presentation value, including lower animation layers.
  * @param registry Document storage.

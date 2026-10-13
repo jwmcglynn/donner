@@ -15,6 +15,7 @@
 #include "donner/svg/components/animation/AnimationResourceBudget.h"
 #include "donner/svg/components/animation/AnimationSystem.h"
 #include "donner/svg/components/filter/FilterComponent.h"
+#include "donner/svg/components/filter/FilterPrimitiveComponent.h"
 #include "donner/svg/components/layout/LayoutSystem.h"
 #include "donner/svg/components/paint/GradientComponent.h"
 #include "donner/svg/components/paint/PaintSystem.h"
@@ -160,8 +161,10 @@ void WriteReference(Registry& registry, Entity entity, const std::optional<RcStr
   if constexpr (std::is_same_v<decltype(Component::href), RcString>) {
     if (value) {
       registry.get_or_emplace<Component>(entity).href = *value;
-    } else {
+    } else if constexpr (std::is_same_v<Component, ImageComponent>) {
       registry.remove<Component>(entity);
+    } else if (auto* component = registry.try_get<Component>(entity)) {
+      component->href = RcString();
     }
   } else {
     registry.get_or_emplace<Component>(entity).href =
@@ -191,8 +194,11 @@ void SetReference(Registry& registry, Entity entity, ElementType type,
       break;
     case ElementType::Pattern: WriteReference<PatternComponent>(registry, entity, value); break;
     case ElementType::Filter: WriteReference<FilterComponent>(registry, entity, value); break;
-    case ElementType::Image:
-    case ElementType::FeImage: WriteReference<ImageComponent>(registry, entity, value); break;
+    case ElementType::Image: WriteReference<ImageComponent>(registry, entity, value); break;
+    case ElementType::FeImage:
+      WriteReference<ImageComponent>(registry, entity, value);
+      WriteReference<FEImageComponent>(registry, entity, value);
+      break;
     case ElementType::TextPath: WriteReference<TextPathComponent>(registry, entity, value); break;
     default: break;
   }

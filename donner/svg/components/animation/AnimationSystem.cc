@@ -598,8 +598,9 @@ bool ProcessAnimation(Registry& registry, Entity entity, double documentTime,
           : (valueComp
                  ? std::string_view(valueComp->attributeName)
                  : (transformComp ? std::string_view(transformComp->attributeName) : "transform"));
-  const auto context = setComp ? AnimationValueContext{}
-                               : AnimationContextFor(registry, state.targetEntity, attribute);
+  const auto context =
+      setComp ? AnimationValueContext{}
+              : AnimationContextFor(registry, state.targetEntity, attribute, resourceBudget);
   const bool needsUnderlying =
       motionComp || (valueComp && (valueComp->additive || !valueComp->from)) ||
       (transformComp && (transformComp->additive || (!transformComp->from && transformComp->by)));

@@ -1,6 +1,7 @@
 #include "donner/svg/renderer/AnimationAttributes.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <functional>
 #include <limits>
@@ -13,6 +14,10 @@
 #include "donner/base/parser/LengthParser.h"
 #include "donner/base/parser/NumberParser.h"
 #include "donner/base/xml/components/AttributesComponent.h"
+#include "donner/css/parser/ValueParser.h"
+#include "donner/svg/components/ElementTypeComponent.h"
+#include "donner/svg/components/PathLengthComponent.h"
+#include "donner/svg/components/PreserveAspectRatioComponent.h"
 #include "donner/svg/components/animation/AnimatedValuesComponent.h"
 #include "donner/svg/components/animation/AnimationResourceBudget.h"
 #include "donner/svg/components/animation/AnimationValueMath.h"
@@ -20,22 +25,31 @@
 #include "donner/svg/components/filter/FilterPrimitiveComponent.h"
 #include "donner/svg/components/layout/LayoutSystem.h"
 #include "donner/svg/components/layout/ViewBoxComponent.h"
+#include "donner/svg/components/paint/ClipPathComponent.h"
 #include "donner/svg/components/paint/GradientComponent.h"
 #include "donner/svg/components/paint/LinearGradientComponent.h"
+#include "donner/svg/components/paint/MarkerComponent.h"
+#include "donner/svg/components/paint/MaskComponent.h"
 #include "donner/svg/components/paint/PatternComponent.h"
 #include "donner/svg/components/paint/RadialGradientComponent.h"
 #include "donner/svg/components/paint/StopComponent.h"
 #include "donner/svg/components/text/ComputedTextComponent.h"
 #include "donner/svg/components/text/TextComponent.h"
 #include "donner/svg/components/text/TextInvalidation.h"
+#include "donner/svg/components/text/TextPathComponent.h"
 #include "donner/svg/components/text/TextPositioningComponent.h"
+#include "donner/svg/parser/AngleParser.h"
 #include "donner/svg/parser/Number2dParser.h"
+#include "donner/svg/parser/PathParser.h"
+#include "donner/svg/parser/PreserveAspectRatioParser.h"
 #include "donner/svg/parser/ViewBoxParser.h"
 
 namespace donner::svg::components {
 namespace {
 
-struct AttributeRestoreContext {};
+struct AttributeRestoreContext {
+  AnimationResourceBudget budget;
+};
 
 template <typename Component>
 Component InitialComponent(const Component& current) {
@@ -64,10 +78,17 @@ std::optional<RcString> SourceAttribute(Registry& registry, Entity entity, std::
 
 template <typename Value>
 std::size_t RetainedValueBytes(const Value& value) {
-  if constexpr (requires {
-                  value.capacity();
-                  typename Value::value_type;
-                }) {
+  if constexpr (requires { value.retainedBytes(); }) {
+    return value.retainedBytes().value_or(AnimationResourceBudget::kMaximumOutputBytes + 1);
+  } else if constexpr (requires {
+                         value.has_value();
+                         *value;
+                       }) {
+    return sizeof(Value) + (value ? RetainedValueBytes(*value) : 0);
+  } else if constexpr (requires {
+                         value.capacity();
+                         typename Value::value_type;
+                       }) {
     return sizeof(Value) + value.capacity() * sizeof(typename Value::value_type);
   } else {
     return sizeof(Value);
@@ -93,7 +114,7 @@ bool PresentationValueMatches(const Property<Value, Cascade>& current,
 }
 
 void InvalidateAnimatedText(Registry& registry, Entity entity) {
-  if (registry.any_of<TextComponent, TextPositioningComponent>(entity)) {
+  if (registry.any_of<TextComponent, TextPositioningComponent, TextPathComponent>(entity)) {
     const Entity root = InvalidateTextLayout(EntityHandle(registry, entity));
     if (root != entt::null) {
       registry.remove<ComputedTextComponent>(root);
@@ -103,10 +124,18 @@ void InvalidateAnimatedText(Registry& registry, Entity entity) {
 
 template <typename Component, typename Value, typename Read, typename Write>
 bool OverrideField(Registry& registry, Entity entity, std::string_view name, const Value& value,
-                   Read read, Write write) {
+                   Read read, Write write, bool create = false) {
   auto* component = registry.try_get<Component>(entity);
+  const bool created = component == nullptr;
   if (!component) {
-    return false;
+    if constexpr (std::is_default_constructible_v<Component>) {
+      if (!create) {
+        return false;
+      }
+      component = &registry.emplace<Component>(entity);
+    } else {
+      return false;
+    }
   }
   if (registry.ctx().contains<AttributeRestoreContext>()) {
     write(*component, value);
@@ -117,22 +146,33 @@ bool OverrideField(Registry& registry, Entity entity, std::string_view name, con
     auto& budget = registry.ctx().get<AnimationResourceBudget>();
     const auto& original = read(*component);
     if (!budget.reserveOutput(RetainedValueBytes(original) + RetainedValueBytes(value))) {
+      if (created) {
+        registry.remove<Component>(entity);
+      }
       return true;
     }
     backup.fields.emplace(
-        name,
-        AttributeRestore{SourceAttribute(registry, entity, name),
-                         [original, value, read, write](Registry& destination, Entity target) {
-                           if (auto* component = destination.try_get<Component>(target);
-                               component && PresentationValueMatches(read(*component), value)) {
-                             write(*component, original);
-                           }
-                         },
-                         [read, write](Registry& destination, Entity target) {
-                           if (auto* component = destination.try_get<Component>(target)) {
-                             write(*component, read(InitialComponent(*component)));
-                           }
-                         }});
+        name, AttributeRestore{
+                  SourceAttribute(registry, entity, name),
+                  [original, value, read, write, created](Registry& destination, Entity target) {
+                    if (auto* component = destination.try_get<Component>(target);
+                        component && PresentationValueMatches(read(*component), value)) {
+                      if (created) {
+                        destination.remove<Component>(target);
+                      } else {
+                        write(*component, original);
+                      }
+                    }
+                  },
+                  [read, write, created](Registry& destination, Entity target) {
+                    if (auto* component = destination.try_get<Component>(target)) {
+                      if (created) {
+                        destination.remove<Component>(target);
+                      } else {
+                        write(*component, read(InitialComponent(*component)));
+                      }
+                    }
+                  }});
   }
   write(*component, value);
   return true;
@@ -140,11 +180,11 @@ bool OverrideField(Registry& registry, Entity entity, std::string_view name, con
 
 template <typename Component, typename Field, typename Value>
 bool SimpleField(Registry& registry, Entity entity, std::string_view name, Field Component::*field,
-                 const Value& value) {
+                 const Value& value, bool create = false) {
   return OverrideField<Component>(
       registry, entity, name, Field(value),
       [field](const Component& component) -> const Field& { return component.*field; },
-      [field](Component& component, const Field& value) { component.*field = value; });
+      [field](Component& component, const Field& value) { component.*field = value; }, create);
 }
 
 std::optional<double> Number(std::string_view value) {
@@ -642,7 +682,9 @@ bool ApplyPatternLength(Registry& registry, Entity entity, std::string_view name
 
 bool ApplyLayoutLength(Registry& registry, Entity entity, std::string_view name,
                        std::string_view value) {
-  if (name != "x" && name != "y" && name != "width" && name != "height" && name != "textLength") {
+  static constexpr std::array<std::string_view, 5> attributes = {"x", "y", "width", "height",
+                                                                 "textLength"};
+  if (std::find(attributes.begin(), attributes.end(), name) == attributes.end()) {
     return false;
   }
   const auto lengths = ParseAnimationLengths(value);
@@ -653,7 +695,8 @@ bool ApplyLayoutLength(Registry& registry, Entity entity, std::string_view name,
   if (name == "textLength") {
     return SimpleField(registry, entity, name, &TextComponent::textLength, length);
   }
-  return ApplyRegionLength<FilterComponent>(registry, entity, name, length) ||
+  return ApplyRegionLength<MaskComponent>(registry, entity, name, length) ||
+         ApplyRegionLength<FilterComponent>(registry, entity, name, length) ||
          ApplyRegionLength<FilterPrimitiveComponent>(registry, entity, name, length) ||
          ApplyPatternLength(registry, entity, name, length);
 }
@@ -734,11 +777,230 @@ bool ApplyLayoutEnumeration(Registry& registry, Entity entity, std::string_view 
   return false;
 }
 
-void ApplyAttribute(Registry& registry, Entity entity, std::string_view name,
-                    std::string_view value) {
+bool ApplyMarkerLength(Registry& registry, Entity entity, std::string_view name,
+                       std::string_view value) {
+  if (!registry.all_of<MarkerComponent>(entity)) {
+    return false;
+  }
+  using Field = Lengthd MarkerComponent::*;
+  static constexpr std::pair<std::string_view, Field> fields[] = {
+      {"markerWidth", &MarkerComponent::markerWidth},
+      {"markerHeight", &MarkerComponent::markerHeight},
+      {"refX", &MarkerComponent::refX},
+      {"refY", &MarkerComponent::refY}};
+  for (const auto& [fieldName, field] : fields) {
+    if (fieldName != name) {
+      continue;
+    }
+    auto lengths = ParseAnimationLengths(value);
+    if (!lengths && (name == "refX" || name == "refY")) {
+      const bool x = name == "refX";
+      if (value == (x ? "left" : "top")) {
+        lengths = std::vector{Lengthd(0, Lengthd::Unit::Percent)};
+      }
+      if (value == "center") {
+        lengths = std::vector{Lengthd(50, Lengthd::Unit::Percent)};
+      }
+      if (value == (x ? "right" : "bottom")) {
+        lengths = std::vector{Lengthd(100, Lengthd::Unit::Percent)};
+      }
+    }
+    if (lengths && lengths->size() == 1) {
+      (void)SimpleField(registry, entity, name, field, lengths->front());
+    }
+    return true;
+  }
+  return false;
+}
+
+bool ApplyMarkerOrientation(Registry& registry, Entity entity, std::string_view name,
+                            std::string_view value) {
+  if (name == "markerUnits") {
+    if (value == "strokeWidth" || value == "userSpaceOnUse") {
+      return SimpleField(
+          registry, entity, name, &MarkerComponent::markerUnits,
+          value == "strokeWidth" ? MarkerUnits::StrokeWidth : MarkerUnits::UserSpaceOnUse);
+    }
+    return false;
+  }
+  if (name != "orient" || !registry.all_of<MarkerComponent>(entity)) {
+    return false;
+  }
+  if (value == "auto" || value == "auto-start-reverse") {
+    return SimpleField(registry, entity, name, &MarkerComponent::orient,
+                       value == "auto" ? MarkerOrient::Auto() : MarkerOrient::AutoStartReverse());
+  }
+  auto tokens = css::parser::ValueParser::Parse(value);
+  if (tokens.size() == 1) {
+    auto angle =
+        parser::ParseAngle(tokens.front(), parser::AngleParseOptions::AllowNumbersInDegrees);
+    if (angle.hasResult() && std::isfinite(angle.result())) {
+      return SimpleField(registry, entity, name, &MarkerComponent::orient,
+                         MarkerOrient::AngleRadians(angle.result()));
+    }
+  }
+  return true;
+}
+
+bool ApplyMaskOrClipUnits(Registry& registry, Entity entity, std::string_view name,
+                          std::string_view value) {
+  if (value != "userSpaceOnUse" && value != "objectBoundingBox") {
+    return false;
+  }
+  const bool user = value == "userSpaceOnUse";
+  if (name == "maskUnits") {
+    return SimpleField(registry, entity, name, &MaskComponent::maskUnits,
+                       user ? MaskUnits::UserSpaceOnUse : MaskUnits::ObjectBoundingBox);
+  }
+  if (name == "maskContentUnits") {
+    return SimpleField(
+        registry, entity, name, &MaskComponent::maskContentUnits,
+        user ? MaskContentUnits::UserSpaceOnUse : MaskContentUnits::ObjectBoundingBox);
+  }
+  if (name == "clipPathUnits") {
+    return SimpleField(registry, entity, name, &ClipPathComponent::clipPathUnits,
+                       user ? ClipPathUnits::UserSpaceOnUse : ClipPathUnits::ObjectBoundingBox);
+  }
+  return false;
+}
+
+bool ApplyTextPathAttribute(Registry& registry, Entity entity, std::string_view name,
+                            std::string_view value) {
+  if (!registry.all_of<TextPathComponent>(entity)) {
+    return false;
+  }
+  if (name == "startOffset") {
+    const auto lengths = ParseAnimationLengths(value);
+    if (lengths && lengths->size() == 1) {
+      return SimpleField(registry, entity, name, &TextPathComponent::startOffset, lengths->front());
+    }
+  }
+  if (name == "side" && (value == "left" || value == "right")) {
+    return SimpleField(registry, entity, name, &TextPathComponent::side,
+                       value == "left" ? TextPathSide::Left : TextPathSide::Right);
+  }
+  if (name == "method" && (value == "align" || value == "stretch")) {
+    return SimpleField(registry, entity, name, &TextPathComponent::method,
+                       value == "align" ? TextPathMethod::Align : TextPathMethod::Stretch);
+  }
+  if (name == "spacing" && (value == "auto" || value == "exact")) {
+    return SimpleField(registry, entity, name, &TextPathComponent::spacing,
+                       value == "auto" ? TextPathSpacing::Auto : TextPathSpacing::Exact);
+  }
+  return false;
+}
+
+bool ApplyTextPathGeometry(Registry& registry, Entity entity, std::string_view name,
+                           std::string_view value) {
+  if (name != "path" || !registry.all_of<TextPathComponent>(entity)) {
+    return false;
+  }
+  auto* restoration = registry.ctx().find<AttributeRestoreContext>();
+  auto& budget = restoration ? restoration->budget : registry.ctx().get<AnimationResourceBudget>();
+  if (value.size() > AnimationResourceBudget::kMaximumPathValueBytes ||
+      !budget.reserveGeometryWork(value.size())) {
+    return true;
+  }
+  auto parsed = parser::PathParser::Parse(value);
+  if (parsed.hasError() || parsed.result().empty()) {
+    return true;
+  }
+  std::optional<Path> path(std::move(parsed.result()));
+  return OverrideField<TextPathComponent>(
+      registry, entity, name, path,
+      [](const TextPathComponent& component) -> const auto& { return component.inlinePath; },
+      [](TextPathComponent& component, const auto& value) { component.inlinePath = value; });
+}
+
+bool IsViewBoxTarget(ElementType type) {
+  switch (type) {
+    case ElementType::SVG:
+    case ElementType::Symbol:
+    case ElementType::Marker:
+    case ElementType::Pattern: return true;
+    default: return false;
+  }
+}
+
+bool IsGeometryTarget(ElementType type) {
+  switch (type) {
+    case ElementType::Circle:
+    case ElementType::Ellipse:
+    case ElementType::Rect:
+    case ElementType::Line:
+    case ElementType::Polyline:
+    case ElementType::Polygon:
+    case ElementType::Path: return true;
+    default: return false;
+  }
+}
+
+bool ApplyViewportGeometry(Registry& registry, Entity entity, std::string_view name,
+                           std::string_view value) {
+  const auto* type = registry.try_get<ElementTypeComponent>(entity);
+  if (!type) {
+    return false;
+  }
+  if (name == "viewBox" && IsViewBoxTarget(type->type())) {
+    auto parsed = parser::ViewBoxParser::Parse(value);
+    if (parsed.hasResult()) {
+      (void)SimpleField(registry, entity, name, &ViewBoxComponent::viewBox, parsed.result(), true);
+    }
+    return true;
+  }
+  if (name != "preserveAspectRatio") {
+    return false;
+  }
+  const auto parsed = parser::PreserveAspectRatioParser::Parse(value);
+  if (parsed.hasError()) {
+    return true;
+  }
+  if (type->type() == ElementType::FeImage) {
+    return SimpleField(registry, entity, name, &FEImageComponent::preserveAspectRatio,
+                       parsed.result());
+  }
+  if (IsViewBoxTarget(type->type()) || type->type() == ElementType::Image) {
+    return SimpleField(registry, entity, name, &PreserveAspectRatioComponent::preserveAspectRatio,
+                       parsed.result(), true);
+  }
+  return false;
+}
+
+bool ApplyPathCalibration(Registry& registry, Entity entity, std::string_view name,
+                          std::string_view value) {
+  const auto* type = registry.try_get<ElementTypeComponent>(entity);
+  if (name != "pathLength" || !type || !IsGeometryTarget(type->type())) {
+    return false;
+  }
+  const auto number = Number(value);
+  if (number && *number >= 0) {
+    return SimpleField(registry, entity, name, &PathLengthComponent::value, *number, true);
+  }
+  return true;
+}
+
+bool ApplyLayoutAttribute(Registry& registry, Entity entity, std::string_view name,
+                          std::string_view value) {
   if (ApplyTextPosition(registry, entity, name, value) ||
       ApplyLayoutLength(registry, entity, name, value) ||
       ApplyLayoutEnumeration(registry, entity, name, value)) {
+    return true;
+  }
+  if (ApplyMarkerLength(registry, entity, name, value) ||
+      ApplyMarkerOrientation(registry, entity, name, value) ||
+      ApplyMaskOrClipUnits(registry, entity, name, value)) {
+    return true;
+  }
+  return ApplyTextPathAttribute(registry, entity, name, value) ||
+         ApplyTextPathGeometry(registry, entity, name, value) ||
+         ApplyViewportGeometry(registry, entity, name, value) ||
+         ApplyPathCalibration(registry, entity, name, value);
+}
+
+void ApplyAttribute(Registry& registry, Entity entity, std::string_view name,
+                    std::string_view value) {
+  if (ApplyLayoutAttribute(registry, entity, name, value)) {
+    LayoutSystem().invalidate(EntityHandle(registry, entity));
     InvalidateAnimatedText(registry, entity);
     return;
   }
@@ -748,14 +1010,6 @@ void ApplyAttribute(Registry& registry, Entity entity, std::string_view name,
     return;
   }
   if (ApplyGradientLength(registry, entity, name, value)) {
-    return;
-  }
-  if (name == "viewBox") {
-    const auto parsed = parser::ViewBoxParser::Parse(value);
-    if (parsed.hasResult()) {
-      (void)SimpleField(registry, entity, name, &ViewBoxComponent::viewBox, parsed.result());
-      LayoutSystem().invalidate(EntityHandle(registry, entity));
-    }
     return;
   }
   if (name == "stdDeviation") {
