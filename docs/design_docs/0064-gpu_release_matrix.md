@@ -181,7 +181,8 @@ released `donner-svg` CLI. `//tools/ci:shipped_editor`, `//tools/ci:shipped_svg_
 (`-c opt`), with the Geode renderer, without the Tracy profiler client that development builds
 link, and with the default text tier. The editor applies its own full text tier on top, as it does
 in every build. `donner-svg` links the CPU renderer under every configuration, so its shipped
-build is the same program as the release build.
+build is the same program as the release build; `//donner/svg/tool:donner_svg_excludes_geode_audit`
+fails if the CLI gains a dependency on the Geode renderer.
 
 `tools/ci/native_linked_size.py` measures a product as the program its executable maps from the
 file, split into read-only bytes (code, constants, unwind tables) and writable initialized data.
@@ -205,19 +206,17 @@ budgets and prints one `native-linked-size` line per product.
 
 ### Budgets
 
-Each budget is about 3% over the product's measured size, rounded up to a thousand bytes. The
-Linux x86_64 rows are measured in the shipped configuration with the release toolchain (clang 18
-and lld 18) and include every reduction below. The macOS rows are the nightly Perf measurement
-for the editor and `svg_to_png` and the released binary for `donner-svg`, less the measured effect
-of the later reductions: restricting stb_image to the PNG, JPEG and GIF decoders Donner uses
-removed 29,604 bytes from `svg_to_png` and 29,476 from `donner-svg`, and dropping the FreeType
-drivers Donner cannot reach removed about 78,700 more from the editor (108,276 together). All are
-read with the same tool. Read-only includes the shader artifacts.
+Each budget is about 3% over the product's measured size, rounded up to a thousand bytes. All
+rows are read with `tools/ci/native_linked_size.py`, and read-only includes the shader artifacts.
+The Linux x86_64 rows are measured in the shipped configuration with the release toolchain
+(clang 18 and lld 18). The macOS rows are derived rather than measured directly: they start from
+the nightly Perf measurement for the editor and `svg_to_png` and from the released binary for
+`donner-svg`, and subtract the separately measured size of the stb_image decoders and FreeType
+drivers that the shipped build configuration excludes.
 
-Optimized Linux links of the shipped binaries also fold identical code (`--icf=safe`), which
-Apple's linker already does by default. On Linux x86_64 that removed 428,232 bytes from
-`donner-svg` (4,125,683 to 3,697,451). `--//build_defs:linker_icf=false` turns it off for a host
-whose linker does not support it.
+Optimized Linux links of the shipped binaries fold identical code (`--icf=safe`), as Apple's
+linker does by default, and the Linux rows are measured with it.
+`--//build_defs:linker_icf=false` turns it off for a host whose linker does not support it.
 
 | Product      | Platform     | Read-only  | Writable  | Total      | Budget     |
 | ------------ | ------------ | ---------- | --------- | ---------- | ---------- |
@@ -280,6 +279,7 @@ package.
 | The backend solid-fill renders match the same golden                      | `//donner/gpu/metal/tests:metal_solid_fill_tests`, `//donner/gpu/vulkan/tests:vulkan_solid_fill_tests` |
 | The editor Wasm package fits its budgets                                  | `//donner/editor/wasm:wasm_geode_package_size_tests`                                                   |
 | The shipped native products fit the budgets above                         | `//tools/ci:native_linked_size_budget_test`                                                            |
+| `donner-svg` never links the Geode renderer                               | `//donner/svg/tool:donner_svg_excludes_geode_audit`                                                    |
 
 The native gate is **Scheduled**: it runs in the nightly Perf workflow, so a regression lands
 before it fires.
