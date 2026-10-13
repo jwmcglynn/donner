@@ -51,6 +51,30 @@ jobs:
           external-cache: true
           cache-save: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
 
+      - id: pr_trust
+        name: Classify pull request trust
+        uses: ./.github/actions/pr-trust
+
+      # BuildBuddy remote cache (docs/building.md). Main push, schedule and dispatch
+      # runs and trusted maintainer pull requests read and write; Renovate pull
+      # requests only read; every other run gets no key and no remote cache.
+      - name: Configure BuildBuddy remote cache
+        if: (github.event_name != 'pull_request' && github.ref == 'refs/heads/main') || steps.pr_trust.outputs.trusted_pr == 'true'
+        uses: ./.github/actions/buildbuddy-cache
+        with:
+          api-key: ${{ secrets.BUILDBUDDY_API_KEY }}
+          trusted-pr: ${{ steps.pr_trust.outputs.trusted_pr }}
+          renovate-pr: ${{ steps.pr_trust.outputs.renovate_pr }}
+          download-outputs: minimal
+
+      - name: Configure BuildBuddy read-only cache
+        if: steps.pr_trust.outputs.renovate_pr == 'true'
+        uses: ./.github/actions/buildbuddy-cache
+        with:
+          read-only-api-key: ${{ secrets.BUILDBUDDY_API_KEY_READONLY }}
+          renovate-pr: ${{ steps.pr_trust.outputs.renovate_pr }}
+          download-outputs: minimal
+
       - name: Test Geode with ASan
         run: |
           bazelisk test --config=asan --config=geode --test_output=errors \

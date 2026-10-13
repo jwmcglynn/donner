@@ -36,12 +36,28 @@ SECRET_USES = {
      "schneegans/dynamic-badges-action@v1.9.0"): {"GIST_SECRET"},
     (".github/workflows/coverage.yml", "upload-coverage", "Upload coverage to Codecov", None,
      "codecov/codecov-action@v7"): {"CODECOV_TOKEN"},
+    (".github/workflows/editor_wasm.yml", "build", "Configure BuildBuddy remote cache", None,
+     "./.github/actions/buildbuddy-cache"): {"BUILDBUDDY_API_KEY"},
+    (".github/workflows/editor_wasm.yml", "build", "Configure BuildBuddy read-only cache", None,
+     "./.github/actions/buildbuddy-cache"): {"BUILDBUDDY_API_KEY_READONLY"},
     (".github/workflows/github_hosted_nightly.yml", "build", "Configure BuildBuddy remote cache", None,
      "./.github/actions/buildbuddy-cache"): {"BUILDBUDDY_API_KEY"},
+    (".github/workflows/main.yml", "linux", "Configure BuildBuddy remote cache", None,
+     "./.github/actions/buildbuddy-cache"): {"BUILDBUDDY_API_KEY"},
+    (".github/workflows/main.yml", "linux", "Configure BuildBuddy read-only cache", None,
+     "./.github/actions/buildbuddy-cache"): {"BUILDBUDDY_API_KEY_READONLY"},
+    (".github/workflows/main.yml", "macos", "Configure BuildBuddy remote cache", None,
+     "./.github/actions/buildbuddy-cache"): {"BUILDBUDDY_API_KEY"},
+    (".github/workflows/main.yml", "macos", "Configure BuildBuddy read-only cache", None,
+     "./.github/actions/buildbuddy-cache"): {"BUILDBUDDY_API_KEY_READONLY"},
     (".github/workflows/main.yml", "macos-self-hosted", "Configure masked remote cache", None,
      "<run>"): {"BAZEL_REMOTE_CACHE"},
     (".github/workflows/publish_bcr.yml", "publish-fork", "Create the fork branch only if absent", None,
      "<run>"): {"PUBLISH_TOKEN"},
+    (".github/workflows/sanitizers-pr.yml", "asan-geode", "Configure BuildBuddy remote cache",
+     None, "./.github/actions/buildbuddy-cache"): {"BUILDBUDDY_API_KEY"},
+    (".github/workflows/sanitizers-pr.yml", "asan-geode", "Configure BuildBuddy read-only cache",
+     None, "./.github/actions/buildbuddy-cache"): {"BUILDBUDDY_API_KEY_READONLY"},
     (".github/workflows/sanitizers.yml", "asan", "Configure BuildBuddy remote cache", None,
      "./.github/actions/buildbuddy-cache"): {"BUILDBUDDY_API_KEY"},
     (".github/workflows/sanitizers.yml", "ubsan", "Configure BuildBuddy remote cache", None,
@@ -209,6 +225,115 @@ def _cache_write_violations(files):
     return ["%s %s" % (where, problem) for where, problem in
             ((where, _cache_write_problem(step, indent)) for where, step, indent in steps)
             if problem]
+
+
+BUILDBUDDY_ACTION = "./.github/actions/buildbuddy-cache"
+PR_TRUST_ACTION = "./.github/actions/pr-trust"
+# Every GitHub-hosted Bazel lane on the BuildBuddy remote cache. The release-candidate CLI builds in
+# bcr_preflight.yml stay off it: their attested bytes must not depend on a third-party cache.
+BUILDBUDDY_JOBS = {
+    (".github/workflows/editor_wasm.yml", "build"),
+    (".github/workflows/github_hosted_nightly.yml", "build"),
+    (".github/workflows/main.yml", "linux"),
+    (".github/workflows/main.yml", "macos"),
+    (".github/workflows/sanitizers-pr.yml", "asan-geode"),
+    (".github/workflows/sanitizers.yml", "asan"),
+    (".github/workflows/sanitizers.yml", "ubsan"),
+}
+# Where a job may read the one pull request trust rule (.github/actions/pr-trust).
+TRUST_GATES = ("needs.gatekeeper.outputs", "steps.pr_trust.outputs")
+BUILDBUDDY_DOWNLOADS = {"minimal", "toplevel", "all"}
+BAZEL_COMMAND = re.compile(r"\bbazelisk (?:build|test|fetch|query|cquery|coverage|run)\b")
+
+
+def _gatekeeper_exports_trust(workflow):
+    gatekeeper = _jobs(workflow).get("gatekeeper", "")
+    return (any(_step_identity_value(step, "id") == "pr_trust" and
+                _step_action(step, 8) == PR_TRUST_ACTION for step in _steps(gatekeeper)) and
+            all("      %s_pr: ${{ steps.pr_trust.outputs.%s_pr }}" % (kind, kind) in gatekeeper
+                for kind in ("trusted", "renovate")))
+
+
+def _trust_gates(workflow, job, steps_before):
+    """The trust gates this step may read: only ones fed by the shared pr-trust action."""
+    gates = set()
+    if "gatekeeper" in _labels(_job_key(job, "needs").strip("[]")) and \
+            _gatekeeper_exports_trust(workflow):
+        gates.add("needs.gatekeeper.outputs")
+    if any(_step_identity_value(step, "id") == "pr_trust" and
+           _step_action(step, 8) == PR_TRUST_ACTION for step in steps_before):
+        gates.add("steps.pr_trust.outputs")
+    return gates
+
+
+def _buildbuddy_step_problem(workflow, job, steps_before, step):
+    """Why one BuildBuddy step could hand a key to the wrong run, or None."""
+    secrets = _secret_reads(step)
+    condition = _step_key(step, "if", 8) or ""
+    gates = _trust_gates(workflow, job, steps_before)
+    inputs = {key: _with_key(step, key, 8) for key in
+              ("api-key", "read-only-api-key", "trusted-pr", "renovate-pr", "download-outputs")}
+    if inputs["download-outputs"] not in BUILDBUDDY_DOWNLOADS:
+        return "does not choose --remote_download_outputs"
+    if secrets == {"BUILDBUDDY_API_KEY"}:
+        if inputs["api-key"] != "${{ secrets.BUILDBUDDY_API_KEY }}":
+            return "passes the read-write key through an unreviewed input"
+        if _main_write_only(condition):
+            return None
+        for gate in gates:
+            trusted = "(%s) || %s.trusted_pr == 'true'" % (MAIN_CACHE_WRITE, gate)
+            if (condition == trusted and inputs["trusted-pr"] == "${{ %s.trusted_pr }}" % gate
+                    and inputs["renovate-pr"] == "${{ %s.renovate_pr }}" % gate):
+                return None
+        return "gives the read-write key to a run that is neither main nor a trusted pull request"
+    if secrets == {"BUILDBUDDY_API_KEY_READONLY"}:
+        if inputs["read-only-api-key"] != "${{ secrets.BUILDBUDDY_API_KEY_READONLY }}":
+            return "passes the read-only key through an unreviewed input"
+        for gate in gates:
+            if (condition == "%s.renovate_pr == 'true'" % gate and
+                    inputs["renovate-pr"] == "${{ %s.renovate_pr }}" % gate):
+                return None
+        return "gives the read-only key to a run that is not a Renovate pull request"
+    return "configures BuildBuddy without exactly one reviewed key"
+
+
+def _buildbuddy_violations(files):
+    """Every way the workflows could widen BuildBuddy access or miss an in-scope hosted lane."""
+    violations = []
+    seen = set()
+    for path, workflow in sorted(_workflows(files).items()):
+        for name, job in _jobs(workflow).items():
+            steps = _steps(job)
+            where = "%s:%s" % (path, name)
+            for index, step in enumerate(steps):
+                secrets = _secret_reads(step) & {"BUILDBUDDY_API_KEY", "BUILDBUDDY_API_KEY_READONLY"}
+                if _step_action(step, 8) != BUILDBUDDY_ACTION:
+                    if secrets:
+                        violations.append("%s reads a BuildBuddy key outside the action" % where)
+                    continue
+                seen.add((path, name))
+                problem = _buildbuddy_step_problem(workflow, job, steps[:index], step)
+                if problem:
+                    violations.append("%s %s" % (where, problem))
+            if (path, name) not in seen:
+                continue
+            if _runs_self_hosted(path, name, job):
+                violations.append("%s uses BuildBuddy on a self-hosted runner" % where)
+            configured = [index for index, step in enumerate(steps)
+                          if _step_action(step, 8) == BUILDBUDDY_ACTION]
+            if any(BAZEL_COMMAND.search(step) for step in steps[:max(configured)]):
+                violations.append("%s runs Bazel before configuring BuildBuddy" % where)
+            kinds = Counter(frozenset(_secret_reads(steps[index])) for index in configured)
+            pull_requests = "pull_request" in _triggers(workflow)
+            expected = Counter({frozenset({"BUILDBUDDY_API_KEY"}): 1})
+            if pull_requests:
+                expected[frozenset({"BUILDBUDDY_API_KEY_READONLY"})] = 1
+            if kinds != expected:
+                violations.append("%s does not pair one writer with %s" % (
+                    where, "one Renovate reader" if pull_requests else "no reader"))
+    if seen != BUILDBUDDY_JOBS:
+        violations.append("BuildBuddy lanes changed: %s" % sorted(seen))
+    return violations
 
 
 # Files a self-hosted job may upload directly. Raw Bazel event streams and execution logs record
@@ -688,14 +813,29 @@ def _unsafe_upload(entry, self_hosted):
     return self_hosted and (entry.endswith("/") or leaf not in SELF_HOSTED_UPLOAD_FILES)
 
 
+def _reaches_buildbuddy_credential(entry):
+    entry = entry.lstrip("!").strip().strip("'\"")
+    temp_root = re.fullmatch(r"\$\{\{ runner\.temp \}\}/?|\$\{?RUNNER_TEMP\}?/?", entry)
+    return bool(temp_root) or entry in WORKSPACE_ROOTS or "buildbuddy" in entry.lower() or \
+        "*" in entry.split("/", 1)[0] or entry.startswith("..")
+
+
 def _upload_violations(path, name, job, uploading_actions):
     violations = []
     local = set(re.findall(r"uses: (\./\.github/actions/[A-Za-z0-9_-]+)", job))
     # The reviewed collector copies only Bazel test logs, never the workspace that holds the
     # generated credential fragment, so it stays usable in jobs that write one.
-    uploads = _upload_paths(job) or local & uploading_actions - REVIEWED_UPLOAD_ACTIONS
-    if "./.github/actions/buildbuddy-cache" in job and uploads:
-        violations.append("%s:%s uploads files after writing a cache credential" % (path, name))
+    # The BuildBuddy key lives under runner.temp/buildbuddy, so a job that configures it may
+    # upload only paths that can reach neither that directory nor the runner.temp root.
+    if BUILDBUDDY_ACTION in job:
+        if local & uploading_actions - REVIEWED_UPLOAD_ACTIONS:
+            violations.append("%s:%s uploads through an unreviewed action after writing a "
+                              "cache credential" % (path, name))
+        for entries in _upload_paths(job):
+            for entry in entries:
+                if _reaches_buildbuddy_credential(entry):
+                    violations.append("%s:%s uploads %s after writing a cache credential" %
+                                      (path, name, entry))
     for action in sorted(local & uploading_actions - REVIEWED_UPLOAD_ACTIONS):
         violations.append("%s:%s uploads through unreviewed action %s" % (path, name, action))
     self_hosted = (path, name) in SELF_HOSTED_JOBS
@@ -1461,29 +1601,167 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         for body in soak_steps:
             self.assertIn("--config=asan-fuzzer", body)
 
-    def test_pull_requests_never_receive_the_buildbuddy_write_key(self):
-        guarded = (
-            "github.ref == 'refs/heads/main' && "
-            "github.event_name != 'pull_request' && "
-            "github.event_name != 'pull_request_target'"
-        )
-        self.assertNotIn(
-            "secrets.BUILDBUDDY_API_KEY",
-            self.supply_chain_files[".github/workflows/sanitizers-pr.yml"],
-        )
-        for path, workflow in self.supply_chain_files.items():
-            if re.search(r"(?m)^  pull_request:", workflow):
-                with self.subTest(path=path, invariant="no-pr-cache-secret"):
-                    self.assertNotIn("secrets.BUILDBUDDY_API_KEY", workflow)
-        for path, workflow in self.supply_chain_files.items():
-            if "uses: ./.github/actions/buildbuddy-cache" not in workflow:
-                continue
-            bodies = workflow.split("      - name: Configure BuildBuddy remote cache\n")[1:]
-            for index, body in enumerate(bodies):
-                step = body.split("\n      - name:", 1)[0]
-                with self.subTest(path=path, step=index):
-                    self.assertIn(guarded, step)
-                    self.assertIn("secrets.BUILDBUDDY_API_KEY", step)
+    def test_buildbuddy_keys_follow_event_and_shared_trust_gate(self):
+        self.assertEqual([], _buildbuddy_violations(self.supply_chain_files))
+        self.assertFalse(BUILDBUDDY_JOBS & set(SELF_HOSTED_JOBS))
+        # A workflow that only runs for pull requests has no main writer of its own.
+        sanitizers_pr = self.supply_chain_files[".github/workflows/sanitizers-pr.yml"]
+        self.assertEqual({"pull_request"}, _triggers(sanitizers_pr))
+
+    def test_buildbuddy_policy_rejects_widened_key_access(self):
+        files = self.supply_chain_files
+        main = ".github/workflows/main.yml"
+        wasm = ".github/workflows/editor_wasm.yml"
+        nightly = ".github/workflows/github_hosted_nightly.yml"
+        writer_if = ("        if: (github.event_name != 'pull_request' && github.ref == "
+                     "'refs/heads/main') || needs.gatekeeper.outputs.trusted_pr == 'true'\n")
+        reader_if = "        if: needs.gatekeeper.outputs.renovate_pr == 'true'\n"
+        read_key = "${{ secrets.BUILDBUDDY_API_KEY_READONLY }}"
+        write_key = "${{ secrets.BUILDBUDDY_API_KEY }}"
+        cases = {
+            "write key for every pull request": (main, files[main].replace(
+                writer_if, "        if: always()\n", 1), "neither main nor a trusted"),
+            "write key for Renovate": (main, files[main].replace(
+                writer_if, writer_if.replace("trusted_pr", "renovate_pr"), 1),
+                "neither main nor a trusted"),
+            "write key without a step condition": (main, files[main].replace(
+                writer_if, "", 1), "neither main nor a trusted"),
+            "write key in the Renovate reader": (main, files[main].replace(
+                "read-only-api-key: " + read_key, "api-key: " + write_key, 1),
+                "neither main nor a trusted"),
+            "read key for any pull request": (main, files[main].replace(
+                reader_if, "        if: github.event_name == 'pull_request'\n", 1),
+                "not a Renovate pull request"),
+            "trust gate not from pr-trust": (main, files[main].replace(
+                "      trusted_pr: ${{ steps.pr_trust.outputs.trusted_pr }}\n",
+                "      trusted_pr: ${{ github.actor == 'jwmcglynn' }}\n", 1),
+                "neither main nor a trusted"),
+            "step trust gate not from pr-trust": (wasm, files[wasm].replace(
+                "        uses: ./.github/actions/pr-trust\n",
+                "        run: echo trusted_pr=true >> \"$GITHUB_OUTPUT\"\n", 1),
+                "neither main nor a trusted"),
+            "trusted input from another gate": (main, files[main].replace(
+                "          trusted-pr: ${{ needs.gatekeeper.outputs.trusted_pr }}\n",
+                "          trusted-pr: 'true'\n", 1), "neither main nor a trusted"),
+            "key outside the action": (nightly, files[nightly].replace(
+                "      - name: Build //...\n", "      - name: Build //...\n        env:\n"
+                "          KEY: ${{ secrets.BUILDBUDDY_API_KEY }}\n", 1), "outside the action"),
+            "pull request lane without Renovate reader": (main, files[main].replace(
+                "      - name: Configure BuildBuddy read-only cache\n" + reader_if +
+                "        uses: ./.github/actions/buildbuddy-cache\n        with:\n"
+                "          read-only-api-key: " + read_key + "\n"
+                "          renovate-pr: ${{ needs.gatekeeper.outputs.renovate_pr }}\n"
+                "          download-outputs: minimal\n\n", "", 1), "does not pair one writer"),
+            "no download choice": (nightly, files[nightly].replace(
+                "          download-outputs: minimal\n", "", 1),
+                "does not choose --remote_download_outputs"),
+            "Bazel before the cache": (wasm, files[wasm].replace(
+                "      - id: pr_trust\n", "      - name: Early build\n"
+                "        run: bazelisk build //donner/base\n\n      - id: pr_trust\n", 1),
+                "runs Bazel before configuring BuildBuddy"),
+            "lane dropped": (wasm, files[wasm].replace(
+                "uses: ./.github/actions/buildbuddy-cache", "uses: ./.github/actions/apt-install"),
+                "BuildBuddy lanes changed"),
+        }
+        self._assert_rejected(lambda files, path: _buildbuddy_violations(files), cases)
+        self_hosted = files[main].replace(
+            "      - name: Configure masked remote cache\n",
+            "      - name: Configure BuildBuddy remote cache\n"
+            "        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'\n"
+            "        uses: ./.github/actions/buildbuddy-cache\n        with:\n"
+            "          api-key: ${{ secrets.BUILDBUDDY_API_KEY }}\n"
+            "          download-outputs: minimal\n\n"
+            "      - name: Configure masked remote cache\n", 1)
+        self.assertNotEqual(self_hosted, files[main])
+        problems = _buildbuddy_violations({**files, main: self_hosted})
+        self.assertTrue(any("self-hosted runner" in problem for problem in problems), problems)
+
+    def _run_buildbuddy_action(self, root, *, event, ref="refs/heads/main", write="",
+                               read="", trusted="false", renovate="false",
+                               download="minimal", curl_status=0, **overrides):
+        script = textwrap.dedent(_run_bodies(
+            self.supply_chain_files[".github/actions/buildbuddy-cache/action.yml"])[0])
+        workspace = root / "workspace"
+        temp = root / "runner-temp"
+        tools = root / "bin"
+        for directory in (workspace, temp, tools):
+            directory.mkdir(exist_ok=True)
+        (workspace / ".buildbuddy.bazelrc").unlink(missing_ok=True)
+        curl = tools / "curl"
+        curl.write_text("#!/bin/sh\nexit %d\n" % curl_status, encoding="utf-8")
+        curl.chmod(0o755)
+        env = {"PATH": "%s:%s" % (tools, os.environ["PATH"]), "GITHUB_WORKSPACE": str(workspace),
+               "RUNNER_TEMP": str(temp), "RUNNER_ENVIRONMENT": "github-hosted",
+               "ImageOS": "ubuntu24", "ImageVersion": "20261005.1", "RUNNER_ARCH": "X64",
+               "WRITE_KEY": write, "READ_KEY": read, "TRUSTED_PR": trusted,
+               "RENOVATE_PR": renovate, "DOWNLOAD_OUTPUTS": download, "EVENT_NAME": event,
+               "REF": ref}
+        env.update(overrides)
+        result = subprocess.run(["bash", "-c", script], env=env, capture_output=True,
+                                text=True, timeout=10, check=False)
+        fragment = workspace / ".buildbuddy.bazelrc"
+        credential = temp / "buildbuddy" / "credentials.bazelrc"
+        return (result.returncode, fragment.read_text() if fragment.exists() else None,
+                credential.read_text() if credential.exists() else None, result.stdout)
+
+    def test_buildbuddy_action_selects_keys_by_event_and_fails_closed(self):
+        write, read = "write-key-fixture", "read-key-fixture"
+        cases = {
+            # name: (arguments, expected exit, expected upload flag or None for no cache)
+            "main push writes": (dict(event="push", write=write), 0, "write"),
+            "main schedule writes": (dict(event="schedule", write=write), 0, "write"),
+            "main dispatch writes": (dict(event="workflow_dispatch", write=write), 0, "write"),
+            "trusted pull request writes": (dict(
+                event="pull_request", ref="refs/pull/1/merge", write=write, trusted="true"),
+                0, "write"),
+            "Renovate pull request reads": (dict(
+                event="pull_request", ref="refs/pull/1/merge", read=read, renovate="true"),
+                0, "read"),
+            "no key is inert": (dict(event="pull_request", ref="refs/pull/1/merge"), 0, None),
+            "branch push with write key": (dict(
+                event="push", ref="refs/heads/topic", write=write), 1, None),
+            "untrusted pull request with write key": (dict(
+                event="pull_request", ref="refs/pull/1/merge", write=write), 1, None),
+            "Renovate pull request with write key": (dict(
+                event="pull_request", ref="refs/pull/1/merge", write=write, trusted="true",
+                renovate="true"), 1, None),
+            "pull_request_target with write key": (dict(
+                event="pull_request_target", write=write, trusted="true"), 1, None),
+            "trusted pull request with read key": (dict(
+                event="pull_request", ref="refs/pull/1/merge", read=read, trusted="true"),
+                1, None),
+            "main push with read key": (dict(event="push", read=read), 1, None),
+            "both keys": (dict(event="push", write=write, read=read), 1, None),
+            "self-hosted runner": (dict(
+                event="push", write=write, RUNNER_ENVIRONMENT="self-hosted"), 1, None),
+            "unknown download mode": (dict(event="push", write=write, download="some"), 1, None),
+            "unreachable cache": (dict(event="push", write=write, curl_status=7), 0, None),
+            "unknown runner image": (dict(event="push", write=write, ImageVersion=""), 0, None),
+        }
+        for name, (arguments, status, mode) in cases.items():
+            with self.subTest(case=name), tempfile.TemporaryDirectory() as directory:
+                code, fragment, credential, output = self._run_buildbuddy_action(
+                    Path(directory), **arguments)
+                self.assertEqual(status, code, output)
+                if mode is None:
+                    self.assertIsNone(fragment)
+                    continue
+                key = write if mode == "write" else read
+                self.assertNotIn(key, fragment)
+                self.assertEqual("build --remote_header=x-buildbuddy-api-key=%s\n" % key,
+                                 credential)
+                lines = fragment.splitlines()
+                self.assertIn("build --remote_cache=grpcs://remote.buildbuddy.io", lines)
+                self.assertIn("build --remote_instance_name=ubuntu24-20261005.1-X64", lines)
+                self.assertIn("build --remote_download_outputs=minimal", lines)
+                self.assertFalse(any("remote_executor" in line or "bes_" in line
+                                     for line in lines))
+                upload = ("build --remote_upload_local_results" if mode == "write"
+                          else "build --noremote_upload_local_results")
+                self.assertIn(upload, lines)
+                self.assertEqual(1, sum("upload_local_results" in line for line in lines))
+                self.assertIn("import %s/runner-temp/buildbuddy/credentials.bazelrc" % directory,
+                              lines)
 
     def test_sensitive_workflows_use_least_privilege_and_drop_checkout_credentials(self):
         paths = (
@@ -1859,8 +2137,15 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
                 summary, "${{ runner.temp }}/browser-gpu-serial.bep.json", 1), "serial.bep.json"),
             "workspace root": (coverage, files[coverage].replace(
                 "path: coverage-report/*.log", "path: .", 1), "uploads ."),
-            "credential job": (sanitizers, files[sanitizers].replace(
-                evidence, upload + evidence, 1), "after writing a cache credential"),
+            "credential job workspace": (sanitizers, files[sanitizers].replace(
+                evidence, upload.replace("logs/test.log", ".") + evidence, 1),
+                "after writing a cache credential"),
+            "credential job temp root": (sanitizers, files[sanitizers].replace(
+                evidence, upload.replace("logs/test.log", "${{ runner.temp }}") + evidence, 1),
+                "after writing a cache credential"),
+            "credential directory": (main, files[main].replace(
+                summary, "${{ runner.temp }}/buildbuddy/credentials.bazelrc", 1),
+                "after writing a cache credential"),
             "cache save event log": (coverage, files[coverage].replace(
                 "      - name: Generate coverage proof\n",
                 cache + "      - name: Generate coverage proof\n", 1), "build/bep.json"),

@@ -92,10 +92,11 @@ jobs:
           cache-save: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
 
       - name: Configure BuildBuddy remote cache
-        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && github.event_name != 'pull_request_target'
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
         uses: ./.github/actions/buildbuddy-cache
         with:
           api-key: ${{ secrets.BUILDBUDDY_API_KEY }}
+          download-outputs: minimal
 
       - name: Test //donner/... with ASan
         run: |
@@ -171,10 +172,11 @@ jobs:
           cache-save: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
 
       - name: Configure BuildBuddy remote cache
-        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && github.event_name != 'pull_request_target'
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
         uses: ./.github/actions/buildbuddy-cache
         with:
           api-key: ${{ secrets.BUILDBUDDY_API_KEY }}
+          download-outputs: minimal
 
       - name: Test //donner/... with UBSan
         run: |
