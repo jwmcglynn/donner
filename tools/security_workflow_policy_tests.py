@@ -1059,7 +1059,8 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         prepare, publish = remainder.split("\n  publish-fork:\n", 1)
         self.assertNotIn("secrets.", validate)
         self.assertNotIn("secrets.", generate)
-        self.assertIn("bazel-contrib/publish-to-bcr@v1.5.0", generate)
+        # Any release tag is accepted, so Renovate's tag updates stay green; a commit pin is not.
+        self.assertRegex(generate, r"uses: bazel-contrib/publish-to-bcr@v\d+\.\d+\.\d+\n")
         self.assertIn("actions/upload-artifact@v7", generate)
         self.assertIn("actions/download-artifact@v8", prepare)
         self.assertEqual(workflow.count("actions/checkout@v7"), 7)
