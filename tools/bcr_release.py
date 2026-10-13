@@ -232,6 +232,21 @@ def submission_metadata(registry: Path, validated: Path, source: Path, version: 
     return derived
 
 
+def check_proposed_files(proposed_bytes, registry: Path, validated: Path, source: Path,
+                         version: str) -> None:
+    """Require the validated entry's bytes and the derived metadata in the proposed change."""
+    for path in bcr_source.entry_paths(version):
+        if path.as_posix() == METADATA_FILE:
+            expected = submission_metadata(registry, validated, source, version)
+            message = "proposed registry metadata differs from the metadata derived for this " \
+                      "submission"
+        else:
+            expected = bcr_source.entry_bytes(validated / "registry" / path)
+            message = "proposed registry entry differs from the admission-validated entry"
+        if proposed_bytes(Path(path)) != expected:
+            raise ValueError(message)
+
+
 def verify_generated_entry(registry: Path, source: Path, version: str, sha256: str,
                            validated: Path, proposed_commit: str | None = None) -> None:
     """Check the proposed registry change before any fork token is used.
@@ -265,12 +280,7 @@ def verify_generated_entry(registry: Path, source: Path, version: str, sha256: s
         ref = proposed_commit if proposed_commit else ""
         return subprocess.check_output(["git", "-C", str(registry), "show", f"{ref}:{label}"])
 
-    for path in sorted(required - {metadata_file}):
-        if proposed_bytes(path) != bcr_source.entry_bytes(validated / "registry" / path):
-            raise ValueError("proposed registry entry differs from the admission-validated entry")
-    if proposed_bytes(metadata_file) != submission_metadata(registry, validated, source, version):
-        raise ValueError("proposed registry metadata differs from the metadata derived for "
-                         "this submission")
+    check_proposed_files(proposed_bytes, registry, validated, source, version)
     if json.loads(proposed_bytes(entry / "source.json")) != \
             bcr_source.expected_source_json(version, sha256):
         raise ValueError("generated registry entry does not match the approved source archive")
