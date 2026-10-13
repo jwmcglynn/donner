@@ -2,7 +2,9 @@
 #include <gtest/gtest.h>
 
 #include "donner/editor/tests/BitmapGoldenCompare.h"
+#include "donner/svg/SVGFEFloodElement.h"
 #include "donner/svg/SVGPatternElement.h"
+#include "donner/svg/SVGTextPathElement.h"
 #include "donner/svg/renderer/tests/RendererTestUtils.h"
 #include "donner/svg/tests/ParserTestUtils.h"
 
@@ -151,6 +153,82 @@ TEST(RendererAnimationCoordinateContext, PatternBaseUsesStylesheetAndTypedOverri
                                          RenderDocumentWithActiveBackend(expected),
                                          typedOverride ? "pattern-typed-base" : "pattern-css-base",
                                          editor::tests::PixelmatchIdentityParams());
+  }
+}
+
+#ifdef DONNER_TEXT_ENABLED
+TEST(RendererAnimationCoordinateContext, TextPathToOnlyUsesTypedOffset) {
+  const std::string prefix = "<text font-size='12'><textPath id='p' path='M0 14H64'";
+  const std::string suffix = ">H</textPath></text>";
+  auto document =
+      instantiateSubtree(prefix + " startOffset='0'" + suffix +
+                             "<animate href='#p' attributeName='startOffset' to='16' dur='2s'/>",
+                         parser::SVGParser::Options(), Vector2i(64, 16));
+  document.querySelector("#p")->cast<SVGTextPathElement>().setStartOffset(Lengthd(8));
+  auto expected = instantiateSubtree(prefix + " startOffset='12'" + suffix,
+                                     parser::SVGParser::Options(), Vector2i(64, 16));
+  document.setTime(1);
+  editor::tests::CompareBitmapToBitmap(
+      RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(expected),
+      "text-path-typed-offset", editor::tests::PixelmatchIdentityParams());
+  auto restored = instantiateSubtree(prefix + " startOffset='8'" + suffix,
+                                     parser::SVGParser::Options(), Vector2i(64, 16));
+  document.setTime(3);
+  editor::tests::CompareBitmapToBitmap(
+      RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(restored),
+      "text-path-typed-offset-restored", editor::tests::PixelmatchIdentityParams());
+}
+#endif
+
+TEST(RendererAnimationCoordinateContext, FilterPrimitiveToOnlyUsesTypedRegion) {
+  if (!ActiveRendererSupportsFeature(RendererBackendFeature::FilterEffects)) {
+    GTEST_SKIP() << "Filters are disabled in this configuration";
+  }
+  const std::string prefix =
+      "<defs><filter id='f' filterUnits='userSpaceOnUse' x='0' y='0' width='16' height='16'>"
+      "<feFlood id='p' flood-color='red' x='0' y='0' height='16'";
+  const std::string suffix = "/></filter></defs><rect width='16' height='16' filter='url(#f)'/>";
+  auto document =
+      instantiateSubtree(prefix + " width='4'" + suffix +
+                             "<animate href='#p' attributeName='width' to='12' dur='2s'/>",
+                         parser::SVGParser::Options(), Vector2i(16, 16));
+  document.querySelector("#p")->cast<SVGFEFloodElement>().setWidth(Lengthd(8));
+  auto expected = instantiateSubtree(prefix + " width='10'" + suffix, parser::SVGParser::Options(),
+                                     Vector2i(16, 16));
+  document.setTime(1);
+  editor::tests::CompareBitmapToBitmap(
+      RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(expected),
+      "filter-primitive-typed-region", editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(RendererAnimationCoordinateContext, FilterPrimitiveUsesInheritedAndSampledUnits) {
+  if (!ActiveRendererSupportsFeature(RendererBackendFeature::FilterEffects)) {
+    GTEST_SKIP() << "Filters are disabled in this configuration";
+  }
+  for (const bool sampled : {false, true}) {
+    SCOPED_TRACE(sampled);
+    const std::string prefix =
+        std::string("<defs><filter id='base' primitiveUnits='") +
+        (sampled ? "userSpaceOnUse" : "objectBoundingBox") +
+        "'/><filter id='f' href='#base'><feFlood id='p' flood-color='red' x='0' y='0' height='1'";
+    const std::string suffix = "/></filter></defs><rect width='16' height='16' filter='url(#f)'/>";
+    auto document = instantiateSubtree(
+        prefix + suffix +
+            "<animate href='#p' attributeName='width' from='100%' to='0.5' dur='2s'/>" +
+            (sampled ? "<set href='#base' attributeName='primitiveUnits' to='objectBoundingBox' "
+                       "dur='2s'/>"
+                     : ""),
+        parser::SVGParser::Options(), Vector2i(16, 16));
+    auto expected = instantiateSubtree(
+        "<defs><filter id='f' primitiveUnits='objectBoundingBox'><feFlood flood-color='red' "
+        "x='0' y='0' height='1' width='0.75'" +
+            suffix,
+        parser::SVGParser::Options(), Vector2i(16, 16));
+    document.setTime(1);
+    editor::tests::CompareBitmapToBitmap(
+        RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(expected),
+        sampled ? "primitive-sampled-units" : "primitive-inherited-units",
+        editor::tests::PixelmatchIdentityParams());
   }
 }
 
