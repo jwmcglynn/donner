@@ -1176,7 +1176,7 @@ struct DefaultConvolveDivisorCase {
 
 void PrintTo(const DefaultConvolveDivisorCase& value, std::ostream* output) {
   *output << value.name << ": kernel=" << value.kernel << ", divisor=" << value.divisorAttribute
-          << ", bias=" << value.bias;
+          << ", preserveAlpha=" << value.preserveAlpha;
 }
 
 class DefaultConvolveDivisorTest : public testing::TestWithParam<DefaultConvolveDivisorCase> {};
@@ -1216,10 +1216,9 @@ INSTANTIATE_TEST_SUITE_P(
                                    "fill='red'"},
         DefaultConvolveDivisorCase{"SmallNegativeExplicit", "-5e-11", "divisor='-5e-11'", "false",
                                    "fill='red'"},
-        DefaultConvolveDivisorCase{"ZeroSumOmitted", "0", "", "0.5",
-                                   "fill='white' fill-opacity='0.5'"},
-        DefaultConvolveDivisorCase{"ZeroSumExplicitOne", "0", "divisor='1'", "0.5",
-                                   "fill='white' fill-opacity='0.5'"}),
+        DefaultConvolveDivisorCase{"ZeroSumOmitted", "0", "", "true", "fill='black'"},
+        DefaultConvolveDivisorCase{"ZeroSumExplicitOne", "0", "divisor='1'", "true",
+                                   "fill='black'"}),
     [](const testing::TestParamInfo<DefaultConvolveDivisorCase>& info) { return info.param.name; });
 
 TEST(RendererPublicApiTest, RejectedFilterSuppressesItsSubtreeAndRestoresParent) {
