@@ -11,6 +11,7 @@
 #include "donner/svg/components/RenderingInstanceComponent.h"
 #include "donner/svg/components/animation/AnimatedValuesComponent.h"
 #include "donner/svg/components/animation/AnimationResourceBudget.h"
+#include "donner/svg/renderer/FilterRegionContext.h"
 #include "donner/svg/renderer/tests/RendererTestUtils.h"
 #include "donner/svg/tests/ParserTestUtils.h"
 
@@ -524,6 +525,86 @@ TEST(RendererAnimationCoordinateContext, BoundingBoxPrimitiveLengthsPreservePosi
                                          RenderDocumentWithActiveBackend(expected), item.name,
                                          editor::tests::PixelmatchIdentityParams());
   }
+}
+
+TEST(RendererAnimationCoordinateContext, AdditivePrimitiveAccumulationKeepsDisplacements) {
+  if (!ActiveRendererSupportsFeature(RendererBackendFeature::FilterEffects)) {
+    GTEST_SKIP() << "Filters are disabled in this configuration";
+  }
+  const std::string prefix =
+      "<defs><filter id='f' filterUnits='userSpaceOnUse' primitiveUnits='objectBoundingBox' "
+      "x='0' y='0' width='32' height='16'><feFlood flood-color='red' y='0' height='1' ";
+  const std::string suffix =
+      "/></filter></defs><rect x='4' y='4' width='8' height='8' filter='url(#f)'/>";
+  auto document =
+      instantiateSubtree(prefix + "id='p' x='0' width='0.5'" + suffix +
+                             "<animate href='#p' attributeName='x' values='0;0;10px' dur='2s' "
+                             "repeatCount='3' additive='sum' accumulate='sum'/>",
+                         parser::SVGParser::Options(), Vector2i(32, 16));
+  auto expected = instantiateSubtree(prefix + "x='14px' width='0.5'" + suffix,
+                                     parser::SVGParser::Options(), Vector2i(32, 16));
+  document.setTime(2.5);
+  editor::tests::CompareBitmapToBitmap(
+      RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(expected),
+      "primitive-additive-accumulated-displacement", editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(RendererAnimationCoordinateContext, SvgFilterImageRasterizesAtAnimatedSize) {
+  if (!ActiveRendererSupportsFeature(RendererBackendFeature::FilterEffects)) {
+    GTEST_SKIP() << "Filters are disabled in this configuration";
+  }
+  const std::string prefix =
+      "<defs><filter id='f' filterUnits='userSpaceOnUse' x='0' y='0' width='32' height='16'>"
+      "<feImage id='p' x='0' y='0' height='16' preserveAspectRatio='none' "
+      "href='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 "
+      "viewBox=%220 0 16 16%22%3E%3Cpath d=%22M0 0L16 16H0Z%22 "
+      "fill=%22red%22/%3E%3C/svg%3E' ";
+  const std::string suffix = "/></filter></defs><rect width='32' height='16' filter='url(#f)'/>";
+  auto document =
+      instantiateSubtree(prefix + "width='4'" + suffix +
+                             "<animate href='#p' attributeName='width' from='4' to='28' dur='2s'/>",
+                         parser::SVGParser::Options(), Vector2i(32, 16));
+  auto expected = instantiateSubtree(prefix + "width='16'" + suffix, parser::SVGParser::Options(),
+                                     Vector2i(32, 16));
+  document.setTime(1);
+  editor::tests::CompareBitmapToBitmap(
+      RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(expected),
+      "svg-filter-image-animated-raster-size", editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(RendererAnimationCoordinateContext, ScaledFilterHistoryRetainsUserBounds) {
+  components::FilterGraph graph;
+  FilterRegionContext context(graph, Vector2i(64, 64), Box2d::FromXYWH(0, 0, 32, 32),
+                              Transform2d::Scale(2));
+  components::FilterNode flood;
+  flood.primitive = components::filter_primitive::Flood{};
+  context.recordSubregion(flood, Box2d::FromXYWH(10, 10, 8, 8));
+  components::FilterNode blur;
+  blur.inputs.emplace_back();
+  blur.primitive = components::filter_primitive::GaussianBlur{1, 1};
+  EXPECT_THAT(context.computeNodeSubregion(blur), testing::Eq(Box2d::FromXYWH(7, 7, 14, 14)));
+}
+
+TEST(RendererAnimationCoordinateContext, PrimitiveUnderlyingBlurBoundsUseUserCoordinates) {
+  if (!ActiveRendererSupportsFeature(RendererBackendFeature::FilterEffects)) {
+    GTEST_SKIP() << "Filters are disabled in this configuration";
+  }
+  const std::string prefix =
+      "<svg width='64' height='64' viewBox='0 0 32 32'><defs>"
+      "<filter id='f' filterUnits='userSpaceOnUse' x='0' y='0' width='32' height='32'>"
+      "<feFlood x='10' y='10' width='8' height='8' flood-color='red'/>"
+      "<feGaussianBlur stdDeviation='1'/><feOffset id='p' ";
+  const std::string suffix =
+      "/></filter></defs><rect width='32' height='32' filter='url(#f)'/></svg>";
+  auto document = instantiateSubtree(
+      prefix + suffix + "<animate href='#p' attributeName='width' to='6' dur='2s'/>",
+      parser::SVGParser::Options(), Vector2i(64, 64));
+  auto expected = instantiateSubtree(prefix + "x='7' y='7' width='10' height='14'" + suffix,
+                                     parser::SVGParser::Options(), Vector2i(64, 64));
+  document.setTime(1);
+  editor::tests::CompareBitmapToBitmap(
+      RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(expected),
+      "primitive-scaled-blur-underlying-region", editor::tests::PixelmatchIdentityParams());
 }
 
 TEST(RendererAnimationCoordinateContext, PrimitiveUnderlyingRegionUsesInputBounds) {
