@@ -7,26 +7,43 @@ The implementation plan is [0057](design_docs/0057-donner_svg2_test_suite.md).
 
 ## Source Identity
 
-The [served SVG2 Editor's Draft](https://svgwg.org/svg2-draft/single-page.html), retrieved on
-2026-10-14 UTC, displays a publication date of **2025-09-14**. Its exact UTF-8 response is 2,990,512
-bytes with SHA-256 `13f29ae860ec726579a35bfa17156eb93a07b07563772c7e23712d1847fa7128`.
-The [overview](https://svgwg.org/svg2-draft/) is 74,250 bytes with SHA-256
-`60c07a57500cef88c7cd0b8b19ac4e50c0c2f4d1836e48248893a1e84433b87e`.
-[Baseline metadata](svg2_audit_baseline.json) records both identities.
+The current [SVG Working Group Editor's Draft](https://w3c.github.io/svgwg/svg2-draft/single-page.html),
+retrieved on 2026-10-14 UTC, displays **14 October 2026**. Its exact response is 4,905,241 bytes with
+SHA-256 `66eb6613c2227b0781b2aab3038657a478ee91548f7966cf4528c1bb1d92cba5`.
+The served bytes match the [immutable publication](https://raw.githubusercontent.com/w3c/svgwg/4387529e585712696584a8cd45859e3dd3f2f8d6/svg2-draft/single-page.html)
+in publication commit `4387529e585712696584a8cd45859e3dd3f2f8d6` exactly. Its revision metadata and
+the publication commit message identify [source revision fc7791bd](https://github.com/w3c/svgwg/tree/fc7791bd6d829cda3ed1502485c38329cbd8b00f).
+This verifies publication-byte identity and upstream source attribution; it is not an independent
+rebuild of Bikeshed and its dependencies. [Baseline metadata](svg2_audit_baseline.json) preserves the binding.
 
-The separately observed [source revision](https://github.com/w3c/svgwg/tree/68ac2a82f74e8cf11fa5185bd82016a4dc35a2aa)
-is `68ac2a82f74e8cf11fa5185bd82016a4dc35a2aa`, committed 2026-10-14T13:37:44Z.
-Its exact relationship to the served draft is **not verified**. Do not claim that this commit
-reproduces the response hash or that newer source changes were audited. Reconcile the generated
-publication with this source revision before closing the latest-draft audit. The formal
-[2018 Candidate Recommendation](https://www.w3.org/TR/2018/CR-SVG2-20181004/) is historical context;
-it does not replace the requested Editor's Draft baseline.
+The initial review used `https://svgwg.org/svg2-draft/single-page.html`, which still serves an older
+2,990,512-byte response, SHA-256 `13f29ae860ec726579a35bfa17156eb93a07b07563772c7e23712d1847fa7128`,
+displaying 2025-09-14. The official [repository README](https://github.com/w3c/svgwg/blob/fc7791bd6d829cda3ed1502485c38329cbd8b00f/README.md)
+now directs readers to the GitHub Pages publication. **The older endpoint is not the current audit target.**
+The navigation inventory and initial requirement rows below retain their older-snapshot scope until
+explicitly reconciled. They must not be counted as complete review of the current draft.
 
-The repository stores hashes, citations, and paraphrased assertions, not a copy of the specification.
-A hash mismatch on a later fetch means the source changed: review the changed requirements before
-updating the baseline. Metadata alone does not make the floating URL immutable or guarantee that the
-old bytes remain available. A retained standards snapshot or reproducible source build is still
-needed for long-term audit reproducibility.
+### Current-draft differences requiring reconciliation
+
+These observations guide the next tests; they are not executed conformance results.
+
+| Surface | Change from the initial snapshot | Audit consequence |
+| --- | --- | --- |
+| [Geometry](https://w3c.github.io/svgwg/svg2-draft/geometry.html) | Negative radius and sizing values now substitute initial values; width/height applicability wording also changed. | Recheck cascade/used-value regressions against current prose and preserve conflicting applicability wording as an open question. Explicit `auto` rectangle coverage remains a separate narrow assertion. |
+| [Paths](https://w3c.github.io/svgwg/svg2-draft/paths.html) | Adds CSS `path-length` mapped from `pathLength`; incompatible additive/from-by path animations produce no effect, including frozen state. Removes segment-completing closepath abstraction. | Add CSS calibration/cascade cases and coordinate animation coverage. Ordinary equivalent paths and marker rules need reconciliation. |
+| [Painting](https://w3c.github.io/svgwg/svg2-draft/painting.html) | Removes `miter-clip` and `arcs` values and their algorithms. | Do not classify their absence as a current SVG2 gap. Existing compatibility features/tests may remain separately identified. |
+| [Text](https://w3c.github.io/svgwg/svg2-draft/text.html) | Removes several shape-wrapping properties; clarifies empty/no-valid-segment textPath fallback and that a valid prefix before an error wins; adds side reflection. | Withdraw older-snapshot shape-property and empty-path hypotheses before assigning fixes. Existing text work needs assertion-level reconciliation. |
+| [Interfaces](https://w3c.github.io/svgwg/svg2-draft/types.html) | Reworks SVG point/rect/matrix interfaces and geometric query behavior. Most `animVal` getters still alias `baseVal`. | Native product animation accessors are not proof of matching Web IDL. Reconcile each interface independently. |
+| [Structure](https://w3c.github.io/svgwg/svg2-draft/struct.html) and [styling](https://w3c.github.io/svgwg/svg2-draft/styling.html) | Removes legacy use-instance accessors, changes language matching and removes the never-rendered UA display rules from the older stylesheet. | Preserve rendering-tree requirements while rechecking the mechanism and host APIs. |
+| [Images](https://w3c.github.io/svgwg/svg2-draft/embedded.html), [scripts](https://w3c.github.io/svgwg/svg2-draft/interact.html), [links](https://w3c.github.io/svgwg/svg2-draft/linking.html) | Adds image/script referrer policy and updates HTML processing/reflection integration. | Keep loader/host scope and no-script execution separate; the audit still records host requirements. |
+| [Paint servers](https://w3c.github.io/svgwg/svg2-draft/pservers.html) | Changes radial focal-coordinate initial-value text. | Reconcile template and default cases before changing rendering or reference images. |
+
+The complete chapter/IDL/index/dependency delta remains open. Existing SVG1.1 resvg fixtures and
+reference images stay unchanged; a current SVG2 disagreement needs a separate case and cited rationale.
+The repository stores citations, hashes and paraphrased assertions rather than a specification copy.
+Use the immutable publication above for reproducibility, and review later changes at the next audit
+checkpoint before moving the baseline. The historical 2018 Candidate Recommendation does not replace
+this Editor's Draft target.
 
 ## Reading the Ledger
 
@@ -42,9 +59,10 @@ A resvg category name, source-code grep, skip reason, or inventory entry is not 
 Record engine implementation and test-coverage gaps separately. Full audit completion cannot be
 inferred from the number of mapped tests.
 
-## Chapter and Section Inventory
+## Historical Chapter and Section Inventory
 
-Section links and HTML table counts below are mechanically inventoried from the hashed response.
+Section links and HTML table counts below are mechanically inventoried from the older `13f29ae8` response.
+They have not been regenerated or admitted as current-draft coverage.
 Counts include informative/example tables; they are navigation aids, not normative-requirement totals.
 Interface-member inspection and table review remain open for every chapter, including chapters with
 selected inspected requirements below. Appendix A contains consolidated IDL; Appendix I is an index.
@@ -123,7 +141,8 @@ unresolved corpus failures remain open.
 
 ## Inspected Requirements and Concrete Gaps
 
-These rows paraphrase selected source passages inspected directly. They are not an exhaustive
+These initial rows paraphrase selected passages in the older `13f29ae8` response. Their current-draft
+reconciliation is pending; they are not an exhaustive
 breakdown of those sections. `audit/...` identifiers are stable local handles, not W3C identifiers.
 
 | ID / source                                                                                                                                                        | Requirement or scope decision                                                                                                             | Existing evidence                                                                                                                             | State / required evidence                                                                                                        |
@@ -146,8 +165,8 @@ case's normative mapping remains unreviewed until an assertion-specific row is a
 
 ## Specifications Referenced by This Work
 
-[Appendix E.1](https://svgwg.org/svg2-draft/refs.html#NormativeReferences) is the complete direct
-normative-reference inventory. The links below identify the principal dependencies for the initial
+The older [Appendix E.1](https://svgwg.org/svg2-draft/refs.html#NormativeReferences) supplied the initial
+direct normative-reference inventory; it is historical and awaits current-draft reconciliation. The links below identify the principal dependencies for the initial
 slices; their full contents, current edition selection, and transitive references are **not audited**.
 A link is not a revision pin. Record the exact section and revision/content hash when an oracle
 actually relies on it. Do not automatically substitute a newer CSS or platform edition when doing

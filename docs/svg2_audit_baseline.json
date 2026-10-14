@@ -1,20 +1,26 @@
 {
-  "purpose": "Identity of the source inspected by docs/svg2_audit.md; not a generated compliance database",
+  "purpose": "Identity of the current audit target and historical initial review; not a generated compliance database",
   "retrieved_date_utc": "2026-10-14",
   "editor_draft": {
+    "url": "https://w3c.github.io/svgwg/svg2-draft/single-page.html",
+    "displayed_date": "2026-10-14",
+    "sha256": "66eb6613c2227b0781b2aab3038657a478ee91548f7966cf4528c1bb1d92cba5",
+    "bytes": 4905241
+  },
+  "publication": {
+    "commit": "4387529e585712696584a8cd45859e3dd3f2f8d6",
+    "immutable_url": "https://raw.githubusercontent.com/w3c/svgwg/4387529e585712696584a8cd45859e3dd3f2f8d6/svg2-draft/single-page.html",
+    "bytes_verified_equal": true
+  },
+  "source_repository": "https://github.com/w3c/svgwg",
+  "source_revision": "fc7791bd6d829cda3ed1502485c38329cbd8b00f",
+  "source_attribution": "Revision metadata matches publication commit message; no independent rebuild",
+  "previous_review_baseline": {
     "url": "https://svgwg.org/svg2-draft/single-page.html",
     "displayed_date": "2025-09-14",
     "sha256": "13f29ae860ec726579a35bfa17156eb93a07b07563772c7e23712d1847fa7128",
     "bytes": 2990512
   },
-  "overview": {
-    "url": "https://svgwg.org/svg2-draft/",
-    "sha256": "60c07a57500cef88c7cd0b8b19ac4e50c0c2f4d1836e48248893a1e84433b87e",
-    "bytes": 74250
-  },
-  "source_repository": "https://github.com/w3c/svgwg",
-  "observed_source_head": "68ac2a82f74e8cf11fa5185bd82016a4dc35a2aa",
-  "observed_source_commit_date_utc": "2026-10-14T13:37:44Z",
-  "source_to_served_document_mapping": "not-verified",
+  "semantic_delta_review": "incomplete",
   "full_normative_audit": "incomplete"
 }
