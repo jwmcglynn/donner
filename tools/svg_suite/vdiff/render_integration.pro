@@ -17,6 +17,7 @@ SOURCES += $$RESVG_SUITE/tools/vdiff/src/render.cpp \
 HEADERS += $$RESVG_SUITE/tools/vdiff/src/render.h $$RESVG_SUITE/tools/vdiff/src/exportdialog.h
 FORMS += $$RESVG_SUITE/tools/vdiff/src/exportdialog.ui
 
-NO_EXCEPTION_SOURCES += $$RESVG_SUITE/tools/vdiff/src/donner.cpp
+NO_EXCEPTION_SOURCES += $$RESVG_SUITE/tools/vdiff/src/donner.cpp \
+    $$RESVG_SUITE/tools/vdiff/src/donner-renderer.cpp
 
 include($$RESVG_SUITE/tools/vdiff/no_exceptions.pri)

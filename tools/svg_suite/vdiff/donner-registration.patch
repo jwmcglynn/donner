@@ -10,20 +10,122 @@ new file mode 100644
 +no_exceptions.variable_out = OBJECTS
 +no_exceptions.dependency_type = TYPE_C
 +QMAKE_EXTRA_COMPILERS += no_exceptions
+diff --git a/tools/vdiff/src/donner-renderer.cpp b/tools/vdiff/src/donner-renderer.cpp
+new file mode 100644
+--- /dev/null
++++ b/tools/vdiff/src/donner-renderer.cpp
+@@ -0,0 +1,76 @@
++#include <QDir>
++#include <QFileInfo>
++#include <QImageReader>
++#include <QProcess>
++
++#include "donner-renderer.h"
++
++QString DonnerCorpusRoot()
++{
++    return QFileInfo(QDir(QString(SRCDIR) + "/../..").absolutePath()).canonicalFilePath();
++}
++
++namespace {
++QString runDonner(const QString &executable, DonnerRenderOutcome &outcome)
++{
++    QProcess process;
++    process.setProcessChannelMode(QProcess::MergedChannels);
++    process.start(executable, outcome.arguments);
++    if (!process.waitForStarted()) {
++        return QString("Donner process failed to start.");
++    }
++    // Keep QProcess's inherited process group so the outer native runner can stop descendants.
++    if (!process.waitForFinished(120000)) {
++        process.kill();
++        process.waitForFinished();
++        outcome.diagnostics = process.readAll();
++        return QString("Donner process exceeded its timeout.");
++    }
++    outcome.diagnostics = process.readAll();
++    if (process.exitStatus() != QProcess::NormalExit || process.exitCode() != 0) {
++        return QString("Donner process failed (exit %1).").arg(process.exitCode());
++    }
++    return {};
++}
++} // namespace
++
++DonnerRenderOutcome RenderDonnerToFile(const QString &inputPath,
++                                      const QString &executable,
++                                      const QString &outputPath)
++{
++    DonnerRenderOutcome outcome;
++    const QFileInfo renderer(executable);
++    if (!renderer.isAbsolute() || !renderer.isExecutable()) {
++        outcome.error = "Set an absolute executable path to DonnerSvgSuiteRenderer.";
++        return outcome;
++    }
++    const QFileInfo output(outputPath);
++    if (output.exists() || output.isSymLink() || !output.absoluteDir().exists()) {
++        outcome.error = "Donner output must be a fresh file in an existing directory.";
++        return outcome;
++    }
++    const QFileInfo input(inputPath);
++    const QString reference = input.absolutePath() + "/" + input.completeBaseName() + ".png";
++    const QSize size = QImageReader(reference).size();
++    const QString root = DonnerCorpusRoot();
++    if (size.isEmpty() || root.isEmpty()) {
++        outcome.error = "Missing or invalid reference PNG or pinned corpus root.";
++        return outcome;
++    }
++    outcome.arguments = {
++        "--input", input.absoluteFilePath(), "--output", output.absoluteFilePath(),
++        "--root", root, "--fonts", root + "/fonts",
++        "--width", QString::number(size.width()), "--height", QString::number(size.height())
++    };
++    outcome.error = runDonner(executable, outcome);
++    if (!outcome.error.isEmpty()) {
++        return outcome;
++    }
++    outcome.image = QImage(output.absoluteFilePath());
++    if (outcome.image.isNull() || outcome.image.size() != size) {
++        outcome.image = QImage();
++        outcome.error = "Donner output is missing, invalid or has unexpected dimensions.";
++    }
++    // The renderer's PNG is left untouched; only the UI caller creates a scaled preview.
++    return outcome;
++}
+diff --git a/tools/vdiff/src/donner-renderer.h b/tools/vdiff/src/donner-renderer.h
+new file mode 100644
+--- /dev/null
++++ b/tools/vdiff/src/donner-renderer.h
+@@ -0,0 +1,19 @@
++#pragma once
++
++#include <QByteArray>
++#include <QImage>
++#include <QString>
++#include <QStringList>
++
++struct DonnerRenderOutcome
++{
++    QImage image;
++    QString error;
++    QByteArray diagnostics;
++    QStringList arguments;
++};
++
++QString DonnerCorpusRoot();
++DonnerRenderOutcome RenderDonnerToFile(const QString &inputPath,
++                                      const QString &executable,
++                                      const QString &outputPath);
 diff --git a/tools/vdiff/src/donner.cpp b/tools/vdiff/src/donner.cpp
 new file mode 100644
 --- /dev/null
 +++ b/tools/vdiff/src/donner.cpp
-@@ -0,0 +1,86 @@
+@@ -0,0 +1,46 @@
 +#include <QDebug>
-+#include <QDir>
-+#include <QFileInfo>
-+#include <QImageReader>
 +#include <QPainter>
-+#include <QProcess>
 +#include <QTemporaryDir>
 +
 +#include "render.h"
++#include "donner-renderer.h"
 +
 +namespace {
 +RenderResult failure(const RenderData &data, const QString &error)
@@ -40,28 +142,6 @@ new file mode 100644
 +    return {data.type, image, error};
 +}
 +
-+QString runDonner(const QString &executable, const QStringList &arguments)
-+{
-+    QProcess process;
-+    process.setProcessChannelMode(QProcess::MergedChannels);
-+    process.start(executable, arguments);
-+    if (!process.waitForStarted()) {
-+        return QString("Donner process failed to start.");
-+    }
-+    if (!process.waitForFinished(120000)) {
-+        process.kill();
-+        process.waitForFinished();
-+        return QString("Donner process exceeded its timeout.");
-+    }
-+    const QByteArray diagnostics = process.readAll();
-+    if (!diagnostics.isEmpty()) {
-+        qDebug().noquote() << "donner:" << diagnostics;
-+    }
-+    if (process.exitStatus() != QProcess::NormalExit || process.exitCode() != 0) {
-+        return QString("Donner process failed (exit %1).").arg(process.exitCode());
-+    }
-+    return {};
-+}
 +} // namespace
 +
 +RenderResult Render::renderViaDonner(const RenderData &data)
@@ -69,35 +149,20 @@ new file mode 100644
 +    if (data.testSuite != TestSuite::Own) {
 +        return failure(data, "Donner requires the pinned resvg corpus and its reference PNGs.");
 +    }
-+    if (!QFileInfo(data.convPath).isAbsolute() || !QFileInfo(data.convPath).isExecutable()) {
-+        return failure(data, "Set an absolute executable path to DonnerSvgSuiteRenderer.");
-+    }
-+    const QFileInfo input(data.imgPath);
-+    const QString reference = input.absolutePath() + "/" + input.completeBaseName() + ".png";
-+    const QSize size = QImageReader(reference).size();
-+    if (size.isEmpty()) {
-+        return failure(data, "Missing or invalid reference PNG.");
-+    }
 +    QTemporaryDir temporary;
 +    if (!temporary.isValid()) {
 +        return failure(data, "Cannot create Donner output directory.");
 +    }
-+    const QString root = QDir(QString(SRCDIR) + "/../..").absolutePath();
-+    const QString output = temporary.filePath("donner.png");
-+    const QString error = runDonner(data.convPath, {
-+        "--input", input.absoluteFilePath(), "--output", output,
-+        "--root", root, "--fonts", root + "/fonts",
-+        "--width", QString::number(size.width()), "--height", QString::number(size.height())
-+    });
-+    if (!error.isEmpty()) {
-+        return failure(data, error);
++    const auto rendered = RenderDonnerToFile(data.imgPath, data.convPath,
++                                             temporary.filePath("donner.png"));
++    if (!rendered.diagnostics.isEmpty()) {
++        qDebug().noquote() << "donner:" << rendered.diagnostics;
 +    }
-+    const QImage image(output);
-+    if (image.isNull() || image.size() != size) {
-+        return failure(data, "Donner output is missing, invalid or has unexpected dimensions.");
++    if (!rendered.error.isEmpty()) {
++        return failure(data, rendered.error);
 +    }
 +    return {data.type,
-+            image.convertToFormat(QImage::Format_ARGB32).scaled(
++            rendered.image.convertToFormat(QImage::Format_ARGB32).scaled(
 +                QSize(data.viewSize, data.viewSize), Qt::KeepAspectRatio, Qt::SmoothTransformation),
 +            QString()};
 +}
@@ -623,5 +688,5 @@ diff --git a/tools/vdiff/vdiff.pro b/tools/vdiff/vdiff.pro
  
  RESOURCES += icons.qrc
 +
-+NO_EXCEPTION_SOURCES += src/donner.cpp src/tests.cpp
++NO_EXCEPTION_SOURCES += src/donner.cpp src/donner-renderer.cpp src/tests.cpp
 +include(no_exceptions.pri)

@@ -100,8 +100,16 @@ selected inspected requirements below. Appendix A contains consolidated IDL; App
 
 ## Executed Static Corpus Evidence
 
-The native suite executes 1,689 cases: all 1,679 paired cases in the pinned resvg corpus and 10
-Donner extension cases. The retained run binds renderer SHA-256
+At commit `4e95ce40f8d1da681fadf9d9b4434adfa2d9bb8d`, discovery contains 1,696 cases: all
+1,679 paired cases in the pinned resvg corpus and 17 Donner extension cases. The native
+`//tools/svg_suite:donner_extension_tests` target completed all 17 extension cases at that revision
+with zero strict comparison failures or skips. This extension-only run does not qualify resvg at
+that revision. Counts and results are revision-specific; later fixtures require fresh evidence.
+
+The table below records a historical 1,689-case run: all 1,679 pinned resvg cases and the 10 extension
+cases present in that snapshot. It predates the seven automatic-radius fixtures and provides no
+result for them. Its totals must not be presented as a run of that 1,696-case corpus or
+combined with the newer extension results into one execution. The retained historical run binds renderer SHA-256
 `66c9e64de7294f3a8d17cb002f96ef8eb4d7ee15c654a3ab01403a1d0cd3b593` to captured PNGs and unchanged
 source/resource fingerprints. Its declared engine revision is
 `696894f6b236364475faa55674741d05407d8252` and declared backend is `tiny-skia-basic`; these labels
@@ -136,8 +144,8 @@ Representative inspection confirms that `structure/style/external-CSS.svg` leave
 instead of the reference green: the source imports a stylesheet that sets that fill, consistent
 with the documented CSS import gap. `shapes/rect/simple-case.svg` has the same visible green
 rectangle in both captures and zero default-policy mismatch despite its strict mismatch. This is
-sample evidence, not a diagnosis of all policy-sensitive cases. All 10 extension cases pass strict
-comparison, including the focused CSS geometry `x` precedence case. The chapter audit and
+sample evidence, not a diagnosis of all policy-sensitive cases. All 10 historical extension cases
+pass strict comparison, including the focused CSS geometry `x` precedence case. The chapter audit and
 unresolved corpus failures remain open.
 
 ## Inspected Requirements and Concrete Gaps
