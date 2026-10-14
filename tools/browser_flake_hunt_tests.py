@@ -51,6 +51,7 @@ class BrowserFlakeHuntTest(unittest.TestCase):
             '#!/bin/bash\n'
             'printf "%s\\n" "$@" > "$FIXTURE_RECORD/args"\n'
             'printf "%s\\n" "$DONNER_WASM_BASE_URL" > "$FIXTURE_RECORD/url"\n'
+            'printf "%s\\n" "$DONNER_WASM_PACKAGE_DIR" > "$FIXTURE_RECORD/package-dir"\n'
             'curl -fsS -o "$FIXTURE_RECORD/served.wasm" "$DONNER_WASM_BASE_URL/editor.wasm"\n'
             'if [[ -n "$FIXTURE_HANG" ]]; then\n'
             '  echo $$ > "$FIXTURE_RECORD/npx.fifo"\n'
@@ -169,6 +170,9 @@ class BrowserFlakeHuntTest(unittest.TestCase):
                          "--grep=case", "--headed"):
             self.assertIn(expected, args)
         self.assertEqual((self.record / "served.wasm").read_bytes(), b"\0asm fixture bytes")
+        package_dir = Path((self.record / "package-dir").read_text(encoding="utf-8").strip())
+        self.assertEqual(package_dir, out.resolve() / "package")
+        self.assertEqual((package_dir / "editor.wasm").read_bytes(), b"\0asm fixture bytes")
 
         summary = (out / "summary.txt").read_text(encoding="utf-8")
         self.assertIn("runs: 4 in ", summary)
