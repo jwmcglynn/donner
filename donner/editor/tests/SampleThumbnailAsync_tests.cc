@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <future>
 #include <memory>
 #include <optional>
 #include <string>
@@ -40,8 +41,14 @@ using tests::WaitUntil;
 
 struct BlockingSnapshotState {
   std::atomic<bool> entered{false};
+  /// Set by the test once its assertions are done; until then a snapshot can only end by cancel.
+  std::atomic<bool> released{false};
+  /// Whether an interruptible snapshot ended because the worker cancelled it.
+  std::atomic<bool> cancelled{false};
 };
 
+/// Holds every snapshot until the worker cancels it or the test releases it, so the test observes
+/// preemption by ordering rather than by how long the readback would otherwise have taken.
 class BlockingSnapshotRenderer : public svg::tests::MockRendererInterface {
 public:
   explicit BlockingSnapshotRenderer(std::shared_ptr<BlockingSnapshotState> state)
@@ -49,25 +56,55 @@ public:
 
   svg::RendererBitmap takeSnapshot() const override {
     state_->entered.store(true, std::memory_order_release);
-    std::this_thread::sleep_for(1500ms);
+    WaitUntil([&] { return state_->released.load(std::memory_order_acquire); });
     return makeDummyBitmap();
   }
 
   svg::RendererBitmap takeSnapshotInterruptibly(
       const std::function<bool()>& shouldCancel) const override {
     state_->entered.store(true, std::memory_order_release);
-    const auto deadline = std::chrono::steady_clock::now() + 1500ms;
-    while (std::chrono::steady_clock::now() < deadline) {
+    WaitUntil([&] {
       if (shouldCancel && shouldCancel()) {
-        return {};
+        state_->cancelled.store(true, std::memory_order_release);
+        return true;
       }
-      std::this_thread::sleep_for(1ms);
-    }
-    return makeDummyBitmap();
+      return state_->released.load(std::memory_order_acquire);
+    });
+    return state_->cancelled.load(std::memory_order_acquire) ? svg::RendererBitmap{}
+                                                             : makeDummyBitmap();
   }
 
 private:
   std::shared_ptr<BlockingSnapshotState> state_;
+};
+
+/// Releases a \ref BlockingSnapshotState when the test ends, including on an early `ASSERT`, so
+/// the worker can join. Declare it after the `AsyncRenderer` so it runs first.
+class ScopedSnapshotRelease {
+public:
+  explicit ScopedSnapshotRelease(std::shared_ptr<BlockingSnapshotState> state)
+      : state_(std::move(state)) {}
+  ~ScopedSnapshotRelease() { state_->released.store(true, std::memory_order_release); }
+
+  ScopedSnapshotRelease(const ScopedSnapshotRelease&) = delete;
+  ScopedSnapshotRelease& operator=(const ScopedSnapshotRelease&) = delete;
+
+private:
+  std::shared_ptr<BlockingSnapshotState> state_;
+};
+
+/// Cancels any thumbnail work still running when the test ends, so an early `ASSERT` does not leave
+/// teardown waiting out a simulated delay. Declare it after the `AsyncRenderer` so it runs first.
+class ScopedThumbnailCancel {
+public:
+  explicit ScopedThumbnailCancel(AsyncRenderer& renderer) : renderer_(renderer) {}
+  ~ScopedThumbnailCancel() { renderer_.cancelSampleThumbnailWork(); }
+
+  ScopedThumbnailCancel(const ScopedThumbnailCancel&) = delete;
+  ScopedThumbnailCancel& operator=(const ScopedThumbnailCancel&) = delete;
+
+private:
+  AsyncRenderer& renderer_;
 };
 
 class ScopedDefaultFontProvider {
@@ -102,10 +139,8 @@ constexpr std::string_view kFilteredSvg = R"svg(
 </svg>
 )svg";
 
-std::optional<SampleThumbnailRenderResult> WaitForThumbnailResult(
-    AsyncRenderer& renderer, std::chrono::seconds timeout = 5s) {
-  return PollForResult([&] { return renderer.pollSampleThumbnailResult(); },
-                       std::chrono::steady_clock::now() + timeout);
+std::optional<SampleThumbnailRenderResult> WaitForThumbnailResult(AsyncRenderer& renderer) {
+  return PollForResult([&] { return renderer.pollSampleThumbnailResult(); });
 }
 
 std::array<std::uint8_t, 4> PixelAt(const svg::RendererBitmap& bitmap, int x, int y) {
@@ -167,18 +202,21 @@ TEST(SampleThumbnailAsyncTest, MainDocumentPreemptsThumbnailDuringSnapshotReadba
   EXPECT_CALL(thumbnailRoot, createOffscreenInstance())
       .WillOnce(Return(ByMove(std::move(blockingSnapshotRenderer))));
 
-  AsyncRenderer renderer;
-  ASSERT_TRUE(renderer.requestSampleThumbnail(ThumbnailRequest(51u, kRedSvg, thumbnailRoot)));
-  ASSERT_TRUE(WaitUntil([&] { return snapshotState->entered.load(std::memory_order_acquire); },
-                        std::chrono::steady_clock::now() + 5s))
-      << "Expected the thumbnail to reach its snapshot/readback phase";
-
+  // The document and its renderer outlive the worker that renders them, so a failed ASSERT below
+  // tears the worker down first.
   ParseWarningSink warnings = ParseWarningSink::Disabled();
   auto parsed = svg::parser::SVGParser::ParseSVG(kBlueSvg, warnings);
   ASSERT_FALSE(parsed.hasError());
   svg::SVGDocument document = std::move(parsed.result());
   document.setCanvasSize(64, 48);
   svg::Renderer documentRenderer;
+
+  AsyncRenderer renderer;
+  const ScopedSnapshotRelease releaseSnapshotAtEnd(snapshotState);
+  ASSERT_TRUE(renderer.requestSampleThumbnail(ThumbnailRequest(51u, kRedSvg, thumbnailRoot)));
+  ASSERT_TRUE(WaitUntil([&] { return snapshotState->entered.load(std::memory_order_acquire); }))
+      << "Expected the thumbnail to reach its snapshot/readback phase";
+
   RenderRequest mainRequest(documentRenderer, document);
   mainRequest.version = 2u;
   mainRequest.documentGeneration = 2u;
@@ -189,19 +227,17 @@ TEST(SampleThumbnailAsyncTest, MainDocumentPreemptsThumbnailDuringSnapshotReadba
       .outputFromDocument = Transform2d(),
   };
 
-  const auto requestTime = std::chrono::steady_clock::now();
+  // The readback never finishes on its own, so the main result can only arrive by preempting it.
   renderer.requestRender(mainRequest);
-  std::optional<RenderResult> mainResult;
-  const auto deadline = requestTime + 700ms;
-  while (std::chrono::steady_clock::now() < deadline && !mainResult.has_value()) {
-    mainResult = renderer.pollResult();
-    std::this_thread::sleep_for(1ms);
-  }
+  const std::optional<RenderResult> mainResult =
+      PollForResult([&] { return renderer.pollResult(); });
 
   ASSERT_TRUE(mainResult.has_value())
       << "Main-document work must not wait behind a low-priority GPU map/readback";
   EXPECT_EQ(mainResult->version, 2u);
-  EXPECT_LT(std::chrono::steady_clock::now() - requestTime, 700ms);
+  EXPECT_TRUE(snapshotState->cancelled.load(std::memory_order_acquire))
+      << "The main render must cancel the held readback, not wait for it";
+  EXPECT_FALSE(snapshotState->released.load(std::memory_order_acquire));
   std::optional<SampleThumbnailRenderResult> cancelled = WaitForThumbnailResult(renderer);
   ASSERT_TRUE(cancelled.has_value());
   EXPECT_EQ(cancelled->key, 51u);
@@ -224,17 +260,17 @@ TEST(SampleThumbnailAsyncTest, FirstOffscreenCreationCompletesBeforeForegroundHa
         return std::make_unique<svg::Renderer>();
       }));
 
-  AsyncRenderer renderer;
-  ASSERT_TRUE(renderer.requestSampleThumbnail(ThumbnailRequest(52u, kRedSvg, thumbnailRoot)));
-  ASSERT_TRUE(WaitUntil([&] { return gate->entered.load(std::memory_order_acquire); },
-                        std::chrono::steady_clock::now() + 5s));
-
+  // The document and its renderer outlive the worker that renders them.
   ParseWarningSink warnings = ParseWarningSink::Disabled();
   auto parsed = svg::parser::SVGParser::ParseSVG(kBlueSvg, warnings);
   ASSERT_FALSE(parsed.hasError());
   svg::SVGDocument document = std::move(parsed.result());
   document.setCanvasSize(64, 48);
   svg::Renderer documentRenderer;
+  AsyncRenderer renderer;
+  ASSERT_TRUE(renderer.requestSampleThumbnail(ThumbnailRequest(52u, kRedSvg, thumbnailRoot)));
+  ASSERT_TRUE(WaitUntil([&] { return gate->entered.load(std::memory_order_acquire); }));
+
   RenderRequest mainRequest(documentRenderer, document);
   mainRequest.version = 3u;
   mainRequest.documentGeneration = 3u;
@@ -248,20 +284,17 @@ TEST(SampleThumbnailAsyncTest, FirstOffscreenCreationCompletesBeforeForegroundHa
   renderer.cancelSampleThumbnailWork();
   renderer.requestRender(mainRequest);
   gate->release.store(true, std::memory_order_release);
-  ASSERT_TRUE(WaitUntil([&] { return renderer.sampleThumbnailRenderStats().completed == 1u; },
-                        std::chrono::steady_clock::now() + 5s));
+  ASSERT_TRUE(WaitUntil([&] { return renderer.sampleThumbnailRenderStats().completed == 1u; }));
 
   const SampleThumbnailRenderStats stats = renderer.sampleThumbnailRenderStats();
   EXPECT_EQ(stats.foregroundHandoffWaits, 1u);
   EXPECT_TRUE(stats.firstAttemptCompleted);
 
   std::optional<RenderResult> mainResult;
-  ASSERT_TRUE(WaitUntil(
-      [&] {
-        mainResult = renderer.pollResult();
-        return mainResult.has_value();
-      },
-      std::chrono::steady_clock::now() + 5s));
+  ASSERT_TRUE(WaitUntil([&] {
+    mainResult = renderer.pollResult();
+    return mainResult.has_value();
+  }));
   EXPECT_EQ(mainResult->version, 3u);
 }
 
@@ -291,19 +324,24 @@ TEST(SampleThumbnailAsyncTest, ShutdownRejectsBothPriorityLanesWithoutResurrecti
 
 TEST(SampleThumbnailAsyncTest, ShutdownCancelsActiveThumbnailJoinsPromptlyAndSuppressesWake) {
   svg::Renderer thumbnailRoot;
-  AsyncRenderer renderer;
+  // Callback state outlives the worker that calls into it.
   std::atomic<int> wakeCount{0};
+  AsyncRenderer renderer;
   renderer.setWakeCallback([&] { wakeCount.fetch_add(1, std::memory_order_relaxed); });
-  renderer.setSampleThumbnailRenderDelayForTesting(5s);
+  renderer.setSampleThumbnailRenderDelayForTesting(tests::kUnelapsedDelay);
   ASSERT_TRUE(renderer.requestSampleThumbnail(ThumbnailRequest(62u, kRedSvg, thumbnailRoot)));
-  ASSERT_TRUE(WaitUntil([&] { return renderer.sampleThumbnailRenderStats().active; },
-                        std::chrono::steady_clock::now() + 5s));
+  ASSERT_TRUE(WaitUntil([&] { return renderer.sampleThumbnailRenderStats().active; }));
 
-  const auto start = std::chrono::steady_clock::now();
-  renderer.shutdown();
-  const auto elapsed = std::chrono::steady_clock::now() - start;
+  // The active thumbnail would sleep for an hour, so shutdown returning at all shows it cancelled
+  // that work instead of waiting for it. Shutdown runs on another thread so a hang is reported here
+  // when the stall guard expires.
+  auto shutdown = std::async(std::launch::async, [&] { renderer.shutdown(); });
+  // Declared after the future so it runs first: if shutdown hangs, cancelling the thumbnail lets it
+  // finish and the case ends with the assertion below instead of a test timeout.
+  const ScopedThumbnailCancel cancelThumbnailIfShutdownHangs(renderer);
+  ASSERT_EQ(shutdown.wait_until(tests::HangGuard().deadline()), std::future_status::ready)
+      << "shutdown() waited for the dispensable thumbnail work instead of cancelling it";
 
-  EXPECT_LT(elapsed, 250ms) << "Shutdown must not wait for dispensable background thumbnail work";
   EXPECT_EQ(wakeCount.load(std::memory_order_relaxed), 0)
       << "No thumbnail completion wake may escape after shutdown begins";
   EXPECT_FALSE(renderer.isBusy());
@@ -402,19 +440,24 @@ TEST(SampleThumbnailAsyncTest, TextAndStyleThumbnailContainsDonnerRenderedGlyphP
 
 TEST(SampleThumbnailAsyncTest, MainDocumentRenderPreemptsAndStaysAheadOfLowPriorityWork) {
   svg::Renderer thumbnailRoot;
-  AsyncRenderer renderer;
-  renderer.setSampleThumbnailRenderDelayForTesting(250ms);
-  ASSERT_TRUE(renderer.requestSampleThumbnail(ThumbnailRequest(31u, kRedSvg, thumbnailRoot)));
-  ASSERT_TRUE(WaitUntil([&] { return renderer.sampleThumbnailRenderStats().active; },
-                        std::chrono::steady_clock::now() + 5s))
-      << "Expected the first thumbnail to enter the worker before posting main-document work";
-
+  // The document and its renderer outlive the worker that renders them.
   ParseWarningSink warnings = ParseWarningSink::Disabled();
   auto parsed = svg::parser::SVGParser::ParseSVG(kBlueSvg, warnings);
   ASSERT_FALSE(parsed.hasError());
   svg::SVGDocument document = std::move(parsed.result());
   document.setCanvasSize(64, 48);
   svg::Renderer documentRenderer;
+  AsyncRenderer renderer;
+  // If an assertion below ends the case while the first thumbnail still waits out its hour-long
+  // delay, cancel it so teardown does not wait for it.
+  const ScopedThumbnailCancel cancelThumbnailAtEnd(renderer);
+  // The first thumbnail can only finish by being preempted, however long the host takes to post
+  // the main request.
+  renderer.setSampleThumbnailRenderDelayForTesting(tests::kUnelapsedDelay);
+  ASSERT_TRUE(renderer.requestSampleThumbnail(ThumbnailRequest(31u, kRedSvg, thumbnailRoot)));
+  ASSERT_TRUE(WaitUntil([&] { return renderer.sampleThumbnailRenderStats().active; }))
+      << "Expected the first thumbnail to enter the worker before posting main-document work";
+
   RenderRequest mainRequest(documentRenderer, document);
   mainRequest.version = 1u;
   mainRequest.documentGeneration = 1u;
@@ -438,8 +481,7 @@ TEST(SampleThumbnailAsyncTest, MainDocumentRenderPreemptsAndStaysAheadOfLowPrior
 
   bool mainResultObserved = false;
   bool secondThumbnailObserved = false;
-  const auto deadline = std::chrono::steady_clock::now() + 5s;
-  while (std::chrono::steady_clock::now() < deadline && !secondThumbnailObserved) {
+  for (const tests::HangGuard guard; guard.active() && !secondThumbnailObserved;) {
     if (std::optional<SampleThumbnailRenderResult> thumbnail =
             renderer.pollSampleThumbnailResult()) {
       EXPECT_TRUE(mainResultObserved)
@@ -462,19 +504,47 @@ TEST(SampleThumbnailAsyncTest, MainDocumentRenderPreemptsAndStaysAheadOfLowPrior
 
 TEST(SampleThumbnailAsyncTest, CompletionWakesOnceThenWorkerRemainsQuiescent) {
   svg::Renderer thumbnailRoot;
-  AsyncRenderer renderer;
+  // Callback state outlives the worker that calls into it, including through an early ASSERT.
   std::atomic<int> wakeCount{0};
+  std::atomic<int> idleCycles{0};
+  // The document and its renderer outlive the worker that renders them.
+  ParseWarningSink warnings = ParseWarningSink::Disabled();
+  auto parsed = svg::parser::SVGParser::ParseSVG(kBlueSvg, warnings);
+  ASSERT_FALSE(parsed.hasError());
+  svg::SVGDocument document = std::move(parsed.result());
+  document.setCanvasSize(32, 24);
+  svg::Renderer documentRenderer;
+  AsyncRenderer renderer;
   renderer.setWakeCallback([&] { wakeCount.fetch_add(1, std::memory_order_relaxed); });
+  // Count the worker's idle cycles: with an idle poll installed, the idle worker wakes on its own
+  // about once a second, runs the poll and parks again, publishing nothing.
+  renderer.setIdleMaintenance([&] { idleCycles.fetch_add(1, std::memory_order_acq_rel); },
+                              [] { return false; });
 
   ASSERT_TRUE(renderer.requestSampleThumbnail(ThumbnailRequest(41u, kRedSvg, thumbnailRoot)));
   ASSERT_TRUE(WaitForThumbnailResult(renderer).has_value());
-  ASSERT_TRUE(WaitUntil([&] { return wakeCount.load(std::memory_order_relaxed) > 0; },
-                        std::chrono::steady_clock::now() + 5s));
+  ASSERT_TRUE(WaitUntil([&] { return wakeCount.load(std::memory_order_relaxed) > 0; }));
   EXPECT_EQ(wakeCount.load(std::memory_order_relaxed), 1)
       << "Each completed thumbnail must issue exactly one host wake";
 
-  std::this_thread::sleep_for(75ms);
-  EXPECT_EQ(wakeCount.load(std::memory_order_relaxed), 1)
+  // Drive the worker back through its idle wait with one main render, which wakes the host once.
+  // Any further wake came from the finished thumbnail. Compositing stays off so no deferred warmup
+  // adds a wake of its own.
+  renderer.setCompositedRenderingMode(CompositedRenderingMode::Off);
+  RenderRequest mainRequest(documentRenderer, document);
+  mainRequest.version = 1u;
+  mainRequest.documentGeneration = 1u;
+  renderer.requestRender(mainRequest);
+  ASSERT_TRUE(PollForResult([&] { return renderer.pollResult(); }).has_value());
+  ASSERT_TRUE(WaitUntil([&] { return wakeCount.load(std::memory_order_relaxed) >= 2; }));
+  ASSERT_TRUE(renderer.waitUntilNoRenderInFlightForTesting(tests::HangGuard().deadline()));
+  // Let the worker park and wake on its own twice with nothing to do. A wake source the thumbnail
+  // left behind, whether tied to worker cycles or a delay, fires during those idle cycles.
+  const int idleCyclesBefore = idleCycles.load(std::memory_order_acquire);
+  ASSERT_TRUE(WaitUntil([&] {
+    return idleCycles.load(std::memory_order_acquire) >= idleCyclesBefore + 2;
+  })) << "the idle worker never cycled";
+  EXPECT_EQ(wakeCount.load(std::memory_order_relaxed), 2)
       << "Completed thumbnail work must not install a recurring frame/update source";
   const SampleThumbnailRenderStats stats = renderer.sampleThumbnailRenderStats();
   EXPECT_FALSE(stats.pending);
@@ -490,9 +560,7 @@ TEST(SampleThumbnailAsyncTest, FontAdoptionWaitsForHeldAuxiliaryResult) {
   request.fontWakeRevision = 12;
   ASSERT_EQ(renderer.requestSampleThumbnail(std::move(request)), true);
   EXPECT_EQ(renderer.isFontResourceAdoptionSafe(), false);
-  ASSERT_EQ(WaitUntil([&] { return renderer.sampleThumbnailRenderStats().resultReady; },
-                      std::chrono::steady_clock::now() + 5s),
-            true);
+  ASSERT_EQ(WaitUntil([&] { return renderer.sampleThumbnailRenderStats().resultReady; }), true);
   EXPECT_EQ(renderer.isFontResourceAdoptionSafe(), false);
   const auto result = renderer.pollSampleThumbnailResult();
   ASSERT_EQ(result.has_value(), true);
@@ -515,8 +583,7 @@ TEST(SampleThumbnailAsyncTest, FontAdoptionWaitsForHeldDocumentResultAndPreserve
   request.documentGeneration = 2;
   request.fontResourceRevision = 3;
   renderer.requestRender(request);
-  ASSERT_EQ(renderer.waitUntilNoRenderInFlightForTesting(std::chrono::steady_clock::now() + 5s),
-            true);
+  ASSERT_EQ(renderer.waitUntilNoRenderInFlightForTesting(tests::HangGuard().deadline()), true);
   EXPECT_EQ(renderer.isFontResourceAdoptionSafe(), false);
   const auto result = renderer.pollResult();
   ASSERT_EQ(result.has_value(), true);
