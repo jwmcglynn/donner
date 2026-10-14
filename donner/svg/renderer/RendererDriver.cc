@@ -411,6 +411,20 @@ components::ResolvedPaintServer resolvePaintServer(Registry& registry, const Pai
   return PaintServer::None();
 }
 
+/// Keep inherited span URLs qualified to the scoped host and reject unsupported host patterns.
+components::ResolvedPaintServer ResolveExternalSpanPaint(Registry& registry, bool stroke) {
+  const auto resolved = components::StyleSystem::externalHostPaint(registry, stroke);
+  if (const auto* reference = std::get_if<components::PaintResolvedReference>(&resolved);
+      reference && reference->reference.handle.all_of<components::ComputedPatternComponent>()) {
+    components::StyleSystem::rejectExternalHostResource(registry);
+    if (reference->fallback) {
+      return PaintServer::Solid(*reference->fallback);
+    }
+    return PaintServer::None();
+  }
+  return resolved;
+}
+
 /// Resolve decoration metrics only when the text engine is available for this draw.
 std::optional<ResolvedTextFont> ResolveDecorationFont(Registry& registry, Entity source,
                                                       const Box2d& viewBox,
@@ -501,7 +515,11 @@ void resolvePerSpanStyles(Registry& registry, components::ComputedTextComponent&
     }
   }
 
-  const auto resolveSpanPaint = [&](const PaintServer& paint) -> components::ResolvedPaintServer {
+  const auto resolveSpanPaint = [&](const PaintServer& paint, bool externalHost,
+                                    bool stroke) -> components::ResolvedPaintServer {
+    if (externalHost) {
+      return ResolveExternalSpanPaint(registry, stroke);
+    }
     if (paint.is<PaintServer::ContextFill>()) {
       return contextFill;
     }
@@ -543,8 +561,10 @@ void resolvePerSpanStyles(Registry& registry, components::ComputedTextComponent&
     }
 
     if (style && style->properties) {
-      span.resolvedFill = resolveSpanPaint(style->properties->fill.get().value());
-      span.resolvedStroke = resolveSpanPaint(style->properties->stroke.get().value());
+      span.resolvedFill =
+          resolveSpanPaint(style->properties->fill.get().value(), style->externalFill, false);
+      span.resolvedStroke =
+          resolveSpanPaint(style->properties->stroke.get().value(), style->externalStroke, true);
       span.fillOpacity = style->properties->fillOpacity.get().value();
       span.strokeOpacity = style->properties->strokeOpacity.get().value();
       span.strokeWidth = style->properties->strokeWidth.get().value().toPixels(
@@ -610,8 +630,10 @@ void resolvePerSpanStyles(Registry& registry, components::ComputedTextComponent&
             registry.try_get<components::ComputedStyleComponent>(decorationPaintEntity);
         if (decoStyle && decoStyle->properties) {
           const auto& decoProps = decoStyle->properties.value();
-          span.resolvedDecorationFill = resolveSpanPaint(decoProps.fill.get().value());
-          span.resolvedDecorationStroke = resolveSpanPaint(decoProps.stroke.get().value());
+          span.resolvedDecorationFill =
+              resolveSpanPaint(decoProps.fill.get().value(), decoStyle->externalFill, false);
+          span.resolvedDecorationStroke =
+              resolveSpanPaint(decoProps.stroke.get().value(), decoStyle->externalStroke, true);
           span.decorationFillOpacity = decoProps.fillOpacity.get().value();
           span.decorationStrokeOpacity = decoProps.strokeOpacity.get().value();
           span.decorationStrokeWidth =
