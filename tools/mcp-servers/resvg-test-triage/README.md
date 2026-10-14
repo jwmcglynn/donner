@@ -67,6 +67,10 @@ nonrepeat records have `iteration: null`. Counts include executions, not unique 
 repetitions are deduplicated only within their iteration, so an earlier failure survives a later
 pass. Reports expose `completed_iterations` as observed evidence and `expected_iterations` as the
 caller-supplied expectation. Exact runner banners inside an active test are retained as diagnostics.
+Iteration numbers identify log records, not image files. A producer that reuses an output path can
+overwrite earlier images. Retain separate iteration artifacts or rerun into a fresh directory before
+using an image to diagnose an earlier failure.
+
 The legacy `completion_rate` field is only the passing fraction of observed cases, not whole-run
 completion or conformance; inspect `run_complete` and `incomplete_tests` separately.
 
