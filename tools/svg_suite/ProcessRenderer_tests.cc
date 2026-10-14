@@ -79,7 +79,8 @@ protected:
     std::string pattern = (std::filesystem::path(temporary) / "process-tests-XXXXXX").string();
     ASSERT_NE(mkdtemp(pattern.data()), nullptr);
     root_ = pattern;
-    test_ = StaticCase{"fixture", root_, root_ / "input ; literal.svg", root_ / "expected.png"};
+    test_ = StaticCase{"fixture", root_, root_ / "input {root} {output} ; literal.svg",
+                       root_ / "expected.png"};
   }
 
   ImageResult render(std::string mode,
@@ -176,7 +177,7 @@ TEST_F(ProcessRendererTest, SymlinkOutputCannotEscape) {
 namespace {
 
 int writeFixtureImage(const char* output, const char* input) {
-  if (!std::string_view(input).ends_with("input ; literal.svg")) {
+  if (!std::string_view(input).ends_with("input {root} {output} ; literal.svg")) {
     return 9;
   }
   const std::vector<uint8_t> pixels{255, 0, 0, 255};
