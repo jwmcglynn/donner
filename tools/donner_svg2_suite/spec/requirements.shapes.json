@@ -109,7 +109,12 @@
       "oracle_kinds": [
         "png"
       ],
-      "test_ids": [],
+      "test_ids": [
+        "donner-svg2/geometry/automatic-radii/rect-both-auto",
+        "donner-svg2/geometry/automatic-radii/rect-css-auto",
+        "donner-svg2/geometry/automatic-radii/rect-rx-auto",
+        "donner-svg2/geometry/automatic-radii/rect-ry-auto"
+      ],
       "review_state": "reviewed",
       "evidence_state": "missing-test",
       "rationale": "",
@@ -311,7 +316,10 @@
         "png"
       ],
       "test_ids": [
-        "donner-svg2/shapes/ellipse/zero-radius-no-render"
+        "donner-svg2/shapes/ellipse/zero-radius-no-render",
+        "donner-svg2/geometry/automatic-radii/ellipse-both-auto-zero",
+        "donner-svg2/geometry/automatic-radii/ellipse-rx-auto-zero",
+        "donner-svg2/geometry/automatic-radii/ellipse-ry-auto-zero"
       ],
       "review_state": "reviewed",
       "evidence_state": "covered-pass",

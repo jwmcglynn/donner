@@ -20,7 +20,21 @@
     "tests/shapes/circle/negative-r-ignored.svg": "sha256:ed60814ae40540f8cf089721f9f42f2ffce721f22d8f1991b811c804de633e9a",
     "tests/shapes/circle/negative-r-ignored.png": "sha256:52b6c0aeba2019069988d0bd0710bd5c94ff80e7252104677832eb66e7f7cb93",
     "tests/shapes/ellipse/zero-radius-no-render.svg": "sha256:46b7fceb1a2dbd6dce2a76d64bde6ff180b3c206f8dc3930bd0dd755c1471d04",
-    "tests/shapes/ellipse/zero-radius-no-render.png": "sha256:52b6c0aeba2019069988d0bd0710bd5c94ff80e7252104677832eb66e7f7cb93"
+    "tests/shapes/ellipse/zero-radius-no-render.png": "sha256:52b6c0aeba2019069988d0bd0710bd5c94ff80e7252104677832eb66e7f7cb93",
+    "tests/geometry/automatic-radii/ellipse-both-auto-zero.svg": "sha256:e6b5bc4c3d1c64573832aeabdaecc4692e31a2338dec33c5e64fdd218e7fccf6",
+    "tests/geometry/automatic-radii/ellipse-both-auto-zero.png": "sha256:c5f96f0eb6263650e86aa59a588ebd4c2b45192c6e701d99bec79d8331faf17a",
+    "tests/geometry/automatic-radii/ellipse-rx-auto-zero.svg": "sha256:9603b04d230a574025e6001e2f9a6d3d3a009a235b00f5ca711f189ffbcbeb4d",
+    "tests/geometry/automatic-radii/ellipse-rx-auto-zero.png": "sha256:c5f96f0eb6263650e86aa59a588ebd4c2b45192c6e701d99bec79d8331faf17a",
+    "tests/geometry/automatic-radii/ellipse-ry-auto-zero.svg": "sha256:026126dee4d6dc6e93a6e13f1acab3c37801ad25031349d7f0c54b9b5d470c5f",
+    "tests/geometry/automatic-radii/ellipse-ry-auto-zero.png": "sha256:c5f96f0eb6263650e86aa59a588ebd4c2b45192c6e701d99bec79d8331faf17a",
+    "tests/geometry/automatic-radii/rect-both-auto.svg": "sha256:7cf90ee54fb2f2b41b17020cf03a02e87375947b8edc56bb1a3739715bd909ff",
+    "tests/geometry/automatic-radii/rect-both-auto.png": "sha256:c5f96f0eb6263650e86aa59a588ebd4c2b45192c6e701d99bec79d8331faf17a",
+    "tests/geometry/automatic-radii/rect-css-auto.svg": "sha256:d84ed3e75590ba88bf7f849866a718fcf13441f0d01ea9e0a7e2cacb4c0af450",
+    "tests/geometry/automatic-radii/rect-css-auto.png": "sha256:c5f96f0eb6263650e86aa59a588ebd4c2b45192c6e701d99bec79d8331faf17a",
+    "tests/geometry/automatic-radii/rect-rx-auto.svg": "sha256:e141bd03ff7e8d450130c98faa0f2b8879c54c7e45aef66fe44dd9f8ef5cd29a",
+    "tests/geometry/automatic-radii/rect-rx-auto.png": "sha256:c5f96f0eb6263650e86aa59a588ebd4c2b45192c6e701d99bec79d8331faf17a",
+    "tests/geometry/automatic-radii/rect-ry-auto.svg": "sha256:4815dd3ff102df39538df02583d4fea046c1a7e99c5e2c841b70a42e998f997d",
+    "tests/geometry/automatic-radii/rect-ry-auto.png": "sha256:c5f96f0eb6263650e86aa59a588ebd4c2b45192c6e701d99bec79d8331faf17a"
   },
   "tests": [
     {
@@ -169,6 +183,118 @@
       "assertion": "An ellipse with a computed radius of zero disables rendering of the ellipse, so only the black control rect renders and no red pixels appear.",
       "spec_requirements": [
         "svg2-cr-20181004/shapes/EllipseElement/req-04"
+      ],
+      "capabilities": []
+    },
+    {
+      "id": "donner-svg2/geometry/automatic-radii/ellipse-both-auto-zero",
+      "input": "tests/geometry/automatic-radii/ellipse-both-auto-zero.svg",
+      "oracle": {
+        "kind": "png",
+        "path": "tests/geometry/automatic-radii/ellipse-both-auto-zero.png",
+        "width": 100,
+        "height": 100,
+        "provenance": "Independently specified analytic RGBA reference: opaque red rectangle [20,60) x [20,60) on a transparent 100x100 canvas. Shared exact reference bytes; see tests/geometry/automatic-radii/README.md."
+      },
+      "assertion": "Explicit automatic ellipse radii resolve to zero when neither axis has a length, so the blue ellipse does not render and only the red control rectangle remains.",
+      "spec_requirements": [
+        "svg2-cr-20181004/shapes/EllipseElement/req-04"
+      ],
+      "capabilities": []
+    },
+    {
+      "id": "donner-svg2/geometry/automatic-radii/ellipse-rx-auto-zero",
+      "input": "tests/geometry/automatic-radii/ellipse-rx-auto-zero.svg",
+      "oracle": {
+        "kind": "png",
+        "path": "tests/geometry/automatic-radii/ellipse-rx-auto-zero.png",
+        "width": 100,
+        "height": 100,
+        "provenance": "Independently specified analytic RGBA reference: opaque red rectangle [20,60) x [20,60) on a transparent 100x100 canvas. Shared exact reference bytes; see tests/geometry/automatic-radii/README.md."
+      },
+      "assertion": "Explicit automatic ellipse radii resolve to zero when neither axis has a length, so the blue ellipse does not render and only the red control rectangle remains.",
+      "spec_requirements": [
+        "svg2-cr-20181004/shapes/EllipseElement/req-04"
+      ],
+      "capabilities": []
+    },
+    {
+      "id": "donner-svg2/geometry/automatic-radii/ellipse-ry-auto-zero",
+      "input": "tests/geometry/automatic-radii/ellipse-ry-auto-zero.svg",
+      "oracle": {
+        "kind": "png",
+        "path": "tests/geometry/automatic-radii/ellipse-ry-auto-zero.png",
+        "width": 100,
+        "height": 100,
+        "provenance": "Independently specified analytic RGBA reference: opaque red rectangle [20,60) x [20,60) on a transparent 100x100 canvas. Shared exact reference bytes; see tests/geometry/automatic-radii/README.md."
+      },
+      "assertion": "Explicit automatic ellipse radii resolve to zero when neither axis has a length, so the blue ellipse does not render and only the red control rectangle remains.",
+      "spec_requirements": [
+        "svg2-cr-20181004/shapes/EllipseElement/req-04"
+      ],
+      "capabilities": []
+    },
+    {
+      "id": "donner-svg2/geometry/automatic-radii/rect-both-auto",
+      "input": "tests/geometry/automatic-radii/rect-both-auto.svg",
+      "oracle": {
+        "kind": "png",
+        "path": "tests/geometry/automatic-radii/rect-both-auto.png",
+        "width": 100,
+        "height": 100,
+        "provenance": "Independently specified analytic RGBA reference: opaque red rectangle [20,60) x [20,60) on a transparent 100x100 canvas. Shared exact reference bytes; see tests/geometry/automatic-radii/README.md."
+      },
+      "assertion": "Explicit automatic corner radii resolve to zero when neither axis has a length, leaving a sharp red rectangle.",
+      "spec_requirements": [
+        "svg2-cr-20181004/shapes/RectElement/req-04"
+      ],
+      "capabilities": []
+    },
+    {
+      "id": "donner-svg2/geometry/automatic-radii/rect-css-auto",
+      "input": "tests/geometry/automatic-radii/rect-css-auto.svg",
+      "oracle": {
+        "kind": "png",
+        "path": "tests/geometry/automatic-radii/rect-css-auto.png",
+        "width": 100,
+        "height": 100,
+        "provenance": "Independently specified analytic RGBA reference: opaque red rectangle [20,60) x [20,60) on a transparent 100x100 canvas. Shared exact reference bytes; see tests/geometry/automatic-radii/README.md."
+      },
+      "assertion": "Explicit automatic corner radii resolve to zero when neither axis has a length, leaving a sharp red rectangle.",
+      "spec_requirements": [
+        "svg2-cr-20181004/shapes/RectElement/req-04"
+      ],
+      "capabilities": []
+    },
+    {
+      "id": "donner-svg2/geometry/automatic-radii/rect-rx-auto",
+      "input": "tests/geometry/automatic-radii/rect-rx-auto.svg",
+      "oracle": {
+        "kind": "png",
+        "path": "tests/geometry/automatic-radii/rect-rx-auto.png",
+        "width": 100,
+        "height": 100,
+        "provenance": "Independently specified analytic RGBA reference: opaque red rectangle [20,60) x [20,60) on a transparent 100x100 canvas. Shared exact reference bytes; see tests/geometry/automatic-radii/README.md."
+      },
+      "assertion": "Explicit automatic corner radii resolve to zero when neither axis has a length, leaving a sharp red rectangle.",
+      "spec_requirements": [
+        "svg2-cr-20181004/shapes/RectElement/req-04"
+      ],
+      "capabilities": []
+    },
+    {
+      "id": "donner-svg2/geometry/automatic-radii/rect-ry-auto",
+      "input": "tests/geometry/automatic-radii/rect-ry-auto.svg",
+      "oracle": {
+        "kind": "png",
+        "path": "tests/geometry/automatic-radii/rect-ry-auto.png",
+        "width": 100,
+        "height": 100,
+        "provenance": "Independently specified analytic RGBA reference: opaque red rectangle [20,60) x [20,60) on a transparent 100x100 canvas. Shared exact reference bytes; see tests/geometry/automatic-radii/README.md."
+      },
+      "assertion": "Explicit automatic corner radii resolve to zero when neither axis has a length, leaving a sharp red rectangle.",
+      "spec_requirements": [
+        "svg2-cr-20181004/shapes/RectElement/req-04"
       ],
       "capabilities": []
     }
