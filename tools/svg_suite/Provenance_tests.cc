@@ -206,7 +206,8 @@ TEST_F(ProvenanceTest, UnexecutedRunCannotClaimExistingXmlAsGeneratedEvidence) {
 }
 
 TEST_F(ProvenanceTest, XmlEvidenceFailuresRejectOtherwiseCompleteRuns) {
-  for (const std::string_view mode : {"missing", "empty", "oversized", "unreadable", "directory"}) {
+  for (const std::string_view mode :
+       {"missing", "empty", "oversized", "unreadable", "directory", "non-xml", "truncated"}) {
     SCOPED_TRACE(mode);
     const auto output = directory_ / std::string(mode);
     const auto run = CreateRunProvenance(options(), output);
@@ -215,7 +216,10 @@ TEST_F(ProvenanceTest, XmlEvidenceFailuresRejectOtherwiseCompleteRuns) {
     if (mode == "directory") {
       std::filesystem::create_directory(reportPath);
     } else if (mode != "missing") {
-      std::ofstream(reportPath) << (mode == "empty" ? "" : "<testsuites/>");
+      std::ofstream(reportPath) << (mode == "empty" ? ""
+                                    : mode == "truncated"
+                                        ? "<?xml version=\"1.0\" encoding=\"UTF-8\"?><testsuites>"
+                                        : "not XML");
       if (mode == "oversized") {
         std::filesystem::resize_file(reportPath, 32u * 1024u * 1024u + 1u);
       } else if (mode == "unreadable") {

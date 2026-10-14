@@ -215,8 +215,8 @@ TEST_F(GtestSuiteTest, SuccessfulAndSkippedSelectionCannotReturnSuccess) {
 
 TEST_F(GtestSuiteTest, JsonOutputCannotCertifyWithoutXml) {
   const auto output = root_ / "chosen.json";
-  EXPECT_EQ(run({"--gtest_filter=SvgSuite.*", "--gtest_output=json:" + output.string()}), 3);
-  EXPECT_TRUE(std::filesystem::is_regular_file(output));
+  EXPECT_EQ(run({"--gtest_filter=SvgSuite.*", "--gtest_output=json:" + output.string()}), 2);
+  EXPECT_FALSE(std::filesystem::exists(output));
   EXPECT_THAT(verification(), testing::HasSubstr("\"accepted\": false"));
   EXPECT_THAT(verification(), testing::HasSubstr("\"complete_corpus_accepted\": false"));
   EXPECT_THAT(verification(), testing::HasSubstr("\"xml_report\": null"));
@@ -224,9 +224,20 @@ TEST_F(GtestSuiteTest, JsonOutputCannotCertifyWithoutXml) {
 
 TEST_F(GtestSuiteTest, DirectoryXmlOutputCannotCertifyAnUnknownReport) {
   const auto output = root_ / "reports";
-  EXPECT_EQ(run({"--gtest_filter=SvgSuite.*", "--gtest_output=xml:" + output.string() + "/"}), 3);
+  EXPECT_EQ(run({"--gtest_filter=SvgSuite.*", "--gtest_output=xml:" + output.string() + "/"}), 2);
   EXPECT_THAT(verification(), testing::HasSubstr("\"accepted\": false"));
   EXPECT_THAT(verification(), testing::HasSubstr("\"xml_report\": null"));
+}
+
+TEST_F(GtestSuiteTest, ExistingExplicitXmlCannotBeOverwrittenOrCertified) {
+  const auto output = root_ / "existing.xml";
+  std::ofstream(output) << "existing-report-sentinel";
+  EXPECT_EQ(run({"--gtest_filter=SvgSuite.*", "--gtest_output=xml:" + output.string()}), 2);
+  std::ifstream input(output);
+  const std::string contents{std::istreambuf_iterator<char>(input),
+                             std::istreambuf_iterator<char>()};
+  EXPECT_EQ(contents, "existing-report-sentinel");
+  EXPECT_THAT(verification(), testing::HasSubstr("\"accepted\": false"));
 }
 
 TEST_F(GtestSuiteTest, RemovedXmlReportCannotCertifyCompletedCases) {
@@ -238,7 +249,7 @@ TEST_F(GtestSuiteTest, RemovedXmlReportCannotCertifyCompletedCases) {
 }
 
 TEST_F(GtestSuiteTest, EmptyXmlSuffixCannotReferenceStaleDefaultReport) {
-  EXPECT_EQ(run({"--fixture-empty-xml", "--gtest_filter=SvgSuite.*", "--gtest_output=xml:"}), 3);
+  EXPECT_EQ(run({"--fixture-empty-xml", "--gtest_filter=SvgSuite.*", "--gtest_output=xml:"}), 2);
   const std::string record = verification();
   EXPECT_THAT(record, testing::HasSubstr("\"gtest_output\": \"xml:\""));
   EXPECT_THAT(record, testing::HasSubstr("\"xml_report\": null"));
@@ -246,11 +257,7 @@ TEST_F(GtestSuiteTest, EmptyXmlSuffixCannotReferenceStaleDefaultReport) {
   const std::string contents{std::istreambuf_iterator<char>(stale),
                              std::istreambuf_iterator<char>()};
   EXPECT_EQ(contents, "stale-report-sentinel");
-  const auto generated = root_ / (root_.filename().string() + ".xml");
-  ASSERT_TRUE(std::filesystem::is_regular_file(generated));
-  std::ifstream report(generated);
-  const std::string xml{std::istreambuf_iterator<char>(report), std::istreambuf_iterator<char>()};
-  EXPECT_THAT(xml, testing::HasSubstr("<testsuites"));
+  EXPECT_FALSE(std::filesystem::exists(root_ / (root_.filename().string() + ".xml")));
 }
 
 }  // namespace
