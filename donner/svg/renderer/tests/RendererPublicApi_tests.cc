@@ -2747,6 +2747,7 @@ TEST(RendererPublicApiTest, RebindingForeignRectangleBuildsRenderableGeometry) {
                                                    "http://www.w3.org/2000/svg");
   ASSERT_THAT(result.applied, testing::IsTrue());
   ASSERT_THAT(result.diagnostic, testing::Eq(std::nullopt));
+  EXPECT_THAT(result.scope, testing::Eq(xml::ReparseScope::AttributeValue));
   EXPECT_THAT(shape->type(), testing::Eq(ElementType::Rect));
   renderer.draw(document);
   SVGDocument expectedDocument = ParseDocument(
@@ -2757,6 +2758,82 @@ TEST(RendererPublicApiTest, RebindingForeignRectangleBuildsRenderableGeometry) {
   editor::tests::CompareBitmapToBitmap(
       NormalizeSnapshot(renderer.takeSnapshot()), NormalizeSnapshot(expected.takeSnapshot()),
       "foreign_rectangle_promotion", editor::tests::PixelmatchIdentityParams());
+}
+
+// An image, a use and a gradient built incrementally, by a namespace rebind or a source insertion,
+// render exactly like a fresh parse of the edited source: translated red image, green used swatch,
+// blue gradient fill.
+TEST(RendererPublicApiTest, IncrementallyBuiltElementsRenderLikeAFreshParse) {
+  constexpr std::string_view kRedPng =
+      "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAEUlEQVR42mP4z8DwH4QZ"
+      "YAwAR8oH+Rq28akAAAAASUVORK5CYII=";
+  const std::string elements =
+      "<x:image width='8' height='12' transform='translate(2 0)' href='" + std::string(kRedPng) +
+      "'/><x:use x='8' href='#swatch'/><x:linearGradient id='paint'>"
+      "<x:stop offset='0' stop-color='blue'/><x:stop offset='1' stop-color='blue'/>"
+      "</x:linearGradient><rect x='16' width='8' height='12' fill='url(#paint)'/>";
+  std::string unprefixed = elements;
+  for (std::size_t pos = unprefixed.find("x:"); pos != std::string::npos;
+       pos = unprefixed.find("x:", pos)) {
+    unprefixed.erase(pos, 2);
+  }
+  constexpr std::string_view kHeader =
+      "<svg xmlns='http://www.w3.org/2000/svg' xmlns:x='http://example.test/foreign' width='24' "
+      "height='12'><defs><rect id='swatch' width='8' height='12' fill='green'/></defs>";
+
+  struct EditCase {
+    std::string_view name;
+    std::string_view label;
+    std::string source;
+    std::function<xml::ApplySourceEditResult(SVGDocument&)> edit;
+    xml::ReparseScope scope;
+  };
+  const std::vector<EditCase> cases = {
+      {"namespace rebind", "incrementally_built_by_rebind",
+       std::string(kHeader) + elements + "</svg>",
+       [](SVGDocument& document) {
+         return document.setElementAttribute(document.svgElement(),
+                                             xml::XMLQualifiedNameRef("xmlns", "x"),
+                                             "http://www.w3.org/2000/svg");
+       },
+       xml::ReparseScope::AttributeValue},
+      {"source insertion", "incrementally_built_by_insertion",
+       std::string(kHeader) + "<g id='host'><rect id='old'/></g></svg>",
+       [&unprefixed](SVGDocument& document) {
+         constexpr std::string_view kOld = "<rect id='old'/>";
+         const std::size_t start = document.source().find(kOld);
+         return document.applySourceEdit(xml::XMLEditIntent{
+             .range =
+                 SourceRange{FileOffset::Offset(start), FileOffset::Offset(start + kOld.size())},
+             .replacement = unprefixed,
+             .sourceVersion = document.sourceVersion(),
+         });
+       },
+       xml::ReparseScope::ElementSubtree},
+  };
+  for (const EditCase& editCase : cases) {
+    SCOPED_TRACE(editCase.name);
+    SVGDocument document = ParseDocument(editCase.source);
+    Renderer renderer;
+    renderer.draw(document);
+
+    const xml::ApplySourceEditResult result = editCase.edit(document);
+    ASSERT_THAT(result.applied, testing::IsTrue());
+    ASSERT_THAT(result.diagnostic, testing::Eq(std::nullopt));
+    EXPECT_THAT(result.scope, testing::Eq(editCase.scope));
+
+    renderer.draw(document);
+    const RendererBitmap actual = NormalizeSnapshot(renderer.takeSnapshot());
+    SVGDocument reparsed = ParseDocument(document.source());
+    Renderer reparsedRenderer;
+    reparsedRenderer.draw(reparsed);
+    const RendererBitmap expected = NormalizeSnapshot(reparsedRenderer.takeSnapshot());
+    EXPECT_THAT(PixelAt(expected, 4, 6), ElementsAre(255, 0, 0, 255));
+    EXPECT_THAT(PixelAt(expected, 12, 6), ElementsAre(0, 128, 0, 255));
+    EXPECT_THAT(PixelAt(expected, 20, 6), ElementsAre(0, 0, 255, 255));
+    editor::tests::CompareBitmapToBitmap(actual, expected, editCase.label,
+                                         editor::tests::PixelmatchIdentityParams());
+  }
 }
 
 TEST(RendererPublicApiTest, SnapshotReportsAndReturnsStraightAlpha) {

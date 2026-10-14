@@ -16,8 +16,12 @@
 #include "donner/editor/TextPatch.h"
 #include "donner/editor/UndoTimeline.h"
 #include "donner/editor/ViewportSvgExport.h"
+#include "donner/editor/tests/BitmapGoldenCompare.h"
 #include "donner/svg/SVGGraphicsElement.h"
 #include "donner/svg/parser/SVGParser.h"
+#include "donner/svg/renderer/Renderer.h"
+#include "donner/svg/renderer/tests/RgbaTestMatchers.h"
+#include "gmock/gmock.h"
 #include "gtest/gtest.h"
 
 namespace donner::editor {
@@ -183,6 +187,39 @@ svg::SVGDocument ParseOrDie(std::string_view source) {
   auto result = svg::parser::SVGParser::ParseSVG(source, sink);
   EXPECT_TRUE(result.hasResult()) << source;
   return std::move(result.result());
+}
+
+/// Replace the first \p needle in \p source, returning the precise intent for that edit.
+SourceEditIntent ReplaceFirstOrFail(std::string* source, std::string_view needle,
+                                    std::string_view replacement) {
+  const std::size_t pos = source->find(needle);
+  EXPECT_NE(pos, std::string::npos) << "missing substring: " << needle;
+  if (pos == std::string::npos) {
+    return {};
+  }
+
+  source->replace(pos, needle.size(), replacement);
+  return SourceEditIntent{
+      .offset = pos, .removedLength = needle.size(), .replacement = std::string(replacement)};
+}
+
+/// Dispatch \p editedSource from the source pane, through precise intents or a whole-text diff.
+DispatchSourceTextChangeResult DispatchSourceEdit(EditorApp& app, bool preciseIntent,
+                                                  const SourceEditIntent& intent,
+                                                  std::string_view editedSource,
+                                                  std::string* previousSourceText) {
+  std::optional<std::string> lastWritebackSourceText;
+  if (preciseIntent) {
+    return DispatchSourceEditIntents(app, {intent}, editedSource, previousSourceText,
+                                     &lastWritebackSourceText);
+  }
+  return DispatchSourceTextChange(app, editedSource, previousSourceText, &lastWritebackSourceText);
+}
+
+svg::RendererBitmap RenderDocument(svg::SVGDocument& document) {
+  svg::Renderer renderer;
+  renderer.draw(document);
+  return renderer.takeSnapshot();
 }
 
 std::optional<SelectTool::CompletedDragWriteback> DragCircleBy(EditorApp& app, SelectTool& tool,
@@ -1318,6 +1355,138 @@ TEST(EditorSyncTest, EmptiedTextInSourcePaneRemountsStaleTreeSoExportSucceeds) {
       ExportViewportAsSvg(app.document().document(), viewport,
                           Recti(Vector2i(0, 0), Vector2i(100, 100)), ViewportExportOptions());
   EXPECT_TRUE(exported.ok()) << exported.error;
+}
+
+constexpr std::string_view kForeignNamespaceUri = "http://example.test/foreign";
+constexpr std::string_view kSvgNamespaceUri = "http://www.w3.org/2000/svg";
+
+constexpr std::string_view kRedPngHref =
+    "href=\"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAEUlEQVR42mP4"
+    "z8DwH4QZYAwAR8oH+Rq28akAAAAASUVORK5CYII=\"";
+
+// A namespace edit that moves an `<image>` and a `<use>` into the SVG namespace builds them in
+// place, with no document reparse: the red image fills the left half and the used green swatch
+// the right half.
+TEST(EditorSyncTest, NamespaceRebindBuildsTypedElementsWithoutReparse) {
+  const std::string foreignSvg =
+      "<svg xmlns=\"http://www.w3.org/2000/svg\" xmlns:x=\"http://example.test/foreign\" "
+      "width=\"16\" height=\"12\"><defs><rect id=\"swatch\" width=\"8\" height=\"12\" "
+      "fill=\"green\"/></defs><x:image id=\"picture\" width=\"8\" height=\"12\" " +
+      std::string(kRedPngHref) + "/><x:use id=\"copy\" x=\"8\" href=\"#swatch\"/></svg>";
+  const std::string expectedSvg =
+      "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"16\" height=\"12\"><defs><rect "
+      "id=\"swatch\" width=\"8\" height=\"12\" fill=\"green\"/></defs><image width=\"8\" "
+      "height=\"12\" " +
+      std::string(kRedPngHref) + "/><use x=\"8\" href=\"#swatch\"/></svg>";
+  svg::SVGDocument expectedDocument = ParseOrDie(expectedSvg);
+  const svg::RendererBitmap expected = RenderDocument(expectedDocument);
+  ASSERT_THAT(svg::test::PixelAt(expected, 2, 6), testing::ElementsAre(255, 0, 0, 255));
+  ASSERT_THAT(svg::test::PixelAt(expected, 12, 6), testing::ElementsAre(0, 128, 0, 255));
+
+  for (const bool preciseIntent : {true, false}) {
+    SCOPED_TRACE(preciseIntent ? "source edit intents" : "whole-text diff");
+    EditorApp app;
+    ASSERT_TRUE(app.loadFromString(foreignSvg));
+    ASSERT_EQ(GetElementByIdOrDie(app.document().document(), "#picture").type(),
+              svg::ElementType::Unknown);
+    const auto pictureEntity =
+        GetElementByIdOrDie(app.document().document(), "#picture").entityHandle().entity();
+    const auto swatchEntity =
+        GetElementByIdOrDie(app.document().document(), "#swatch").entityHandle().entity();
+
+    std::string previousSourceText(foreignSvg);
+    std::string editedSource(foreignSvg);
+    const SourceEditIntent intent =
+        ReplaceFirstOrFail(&editedSource, kForeignNamespaceUri, kSvgNamespaceUri);
+    const auto dispatch =
+        DispatchSourceEdit(app, preciseIntent, intent, editedSource, &previousSourceText);
+
+    EXPECT_TRUE(dispatch.dispatchedMutation);
+    // Incremental: a document reparse would queue a ReplaceDocumentCommand.
+    EXPECT_TRUE(app.document().queue().empty());
+    EXPECT_FALSE(app.flushFrame());
+    EXPECT_EQ(app.document().document().source(), editedSource);
+    const svg::SVGElement picture = GetElementByIdOrDie(app.document().document(), "#picture");
+    EXPECT_EQ(picture.type(), svg::ElementType::Image);
+    EXPECT_EQ(picture.entityHandle().entity(), pictureEntity);
+    EXPECT_EQ(GetElementByIdOrDie(app.document().document(), "#copy").type(),
+              svg::ElementType::Use);
+    EXPECT_EQ(GetElementByIdOrDie(app.document().document(), "#swatch").entityHandle().entity(),
+              swatchEntity);
+    tests::CompareBitmapToBitmap(
+        RenderDocument(app.document().document()), expected,
+        preciseIntent ? "namespace_rebind_through_intents" : "namespace_rebind_through_text_diff",
+        tests::PixelmatchIdentityParams());
+  }
+}
+
+TEST(EditorSyncTest, NamespaceRebindKeepsElementsTheProjectionBuildsIncremental) {
+  constexpr std::string_view kForeignSvg =
+      "<svg xmlns=\"http://www.w3.org/2000/svg\" xmlns:x=\"http://example.test/foreign\" "
+      "width=\"16\" height=\"12\"><x:rect id=\"shape\" width=\"16\" height=\"12\" "
+      "fill=\"green\"/></svg>";
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kForeignSvg));
+  const auto shapeEntity =
+      GetElementByIdOrDie(app.document().document(), "#shape").entityHandle().entity();
+
+  std::string previousSourceText(kForeignSvg);
+  std::string editedSource(kForeignSvg);
+  const SourceEditIntent intent =
+      ReplaceFirstOrFail(&editedSource, kForeignNamespaceUri, kSvgNamespaceUri);
+  const auto dispatch =
+      DispatchSourceEdit(app, /*preciseIntent=*/true, intent, editedSource, &previousSourceText);
+
+  EXPECT_TRUE(dispatch.dispatchedMutation);
+  // Incremental: a document reparse would queue a ReplaceDocumentCommand.
+  EXPECT_TRUE(app.document().queue().empty());
+  EXPECT_FALSE(app.flushFrame());
+  EXPECT_EQ(app.document().document().source(), editedSource);
+  const svg::SVGElement shape = GetElementByIdOrDie(app.document().document(), "#shape");
+  EXPECT_EQ(shape.type(), svg::ElementType::Rect);
+  EXPECT_EQ(shape.entityHandle().entity(), shapeEntity);
+}
+
+// A source insertion of an `<image>` builds it incrementally, with no document reparse, and the
+// untouched sibling keeps its entity.
+TEST(EditorSyncTest, SourceInsertedImageBuildsWithoutReparse) {
+  constexpr std::string_view kSvg =
+      "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"16\" height=\"12\">"
+      "<g id=\"host\"><rect id=\"old\" width=\"4\" height=\"4\"/>"
+      "<rect id=\"kept\" x=\"8\" width=\"8\" height=\"12\" fill=\"green\"/></g></svg>";
+  const std::string expectedSvg =
+      "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"16\" height=\"12\"><g><image width=\"8\" "
+      "height=\"12\" " +
+      std::string(kRedPngHref) +
+      "/><rect x=\"8\" width=\"8\" height=\"12\" fill=\"green\"/></g></svg>";
+  svg::SVGDocument expectedDocument = ParseOrDie(expectedSvg);
+  const svg::RendererBitmap expected = RenderDocument(expectedDocument);
+  ASSERT_THAT(svg::test::PixelAt(expected, 2, 6), testing::ElementsAre(255, 0, 0, 255));
+
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kSvg));
+  const auto keptEntity =
+      GetElementByIdOrDie(app.document().document(), "#kept").entityHandle().entity();
+
+  std::string previousSourceText(kSvg);
+  std::string editedSource(kSvg);
+  const SourceEditIntent intent = ReplaceFirstOrFail(
+      &editedSource, "<rect id=\"old\" width=\"4\" height=\"4\"/>",
+      "<image id=\"picture\" width=\"8\" height=\"12\" " + std::string(kRedPngHref) + "/>");
+  const auto dispatch =
+      DispatchSourceEdit(app, /*preciseIntent=*/true, intent, editedSource, &previousSourceText);
+
+  EXPECT_TRUE(dispatch.dispatchedMutation);
+  // Incremental: a document reparse would queue a ReplaceDocumentCommand.
+  EXPECT_TRUE(app.document().queue().empty());
+  EXPECT_FALSE(app.flushFrame());
+  EXPECT_EQ(app.document().document().source(), editedSource);
+  EXPECT_EQ(GetElementByIdOrDie(app.document().document(), "#picture").type(),
+            svg::ElementType::Image);
+  EXPECT_EQ(GetElementByIdOrDie(app.document().document(), "#kept").entityHandle().entity(),
+            keptEntity);
+  tests::CompareBitmapToBitmap(RenderDocument(app.document().document()), expected,
+                               "source_inserted_image", tests::PixelmatchIdentityParams());
 }
 
 }  // namespace
