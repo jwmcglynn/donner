@@ -31,15 +31,26 @@ struct ChildResult {
   std::string diagnostics;
 };
 
-std::string expandArgument(std::string value, const std::map<std::string, std::string>& tokens) {
-  for (const auto& [token, replacement] : tokens) {
-    size_t offset = 0;
-    while ((offset = value.find(token, offset)) != std::string::npos) {
-      value.replace(offset, token.size(), replacement);
-      offset += replacement.size();
+std::string expandArgument(const std::string& value,
+                           const std::map<std::string, std::string>& tokens) {
+  std::string result;
+  size_t offset = 0;
+  // Inspect only the original template; inserted paths may themselves contain token syntax.
+  while (offset < value.size()) {
+    if (value[offset] == '{') {
+      const size_t end = value.find('}', offset + 1);
+      if (end != std::string::npos) {
+        const auto token = tokens.find(value.substr(offset, end - offset + 1));
+        if (token != tokens.end()) {
+          result += token->second;
+          offset = end + 1;
+          continue;
+        }
+      }
     }
+    result += value[offset++];
   }
-  return value;
+  return result;
 }
 
 void readDiagnostics(int descriptor, std::string& diagnostics) {
