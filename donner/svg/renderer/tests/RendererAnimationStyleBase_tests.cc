@@ -13,6 +13,97 @@
 namespace donner::svg {
 namespace {
 
+TEST(RendererAnimationStyleBase, ScalarPercentagesIgnoreViewportSize) {
+  struct Case {
+    const char* attribute;
+    const char* source;
+  };
+  for (const Case item : {
+           Case{"opacity", "<rect id='r' width='16' height='16' fill='red'/>"},
+           Case{"fill-opacity", "<rect id='r' width='16' height='16' fill='red'/>"},
+           Case{"stroke-opacity", "<path id='r' d='M0 8H16' stroke='red' stroke-width='8'/>"},
+           Case{"stop-opacity",
+                "<defs><linearGradient id='g'><stop id='r' "
+                "stop-color='red'/></linearGradient></defs><rect width='16' height='16' "
+                "fill='url(#g)'/>"},
+           Case{"offset",
+                "<defs><linearGradient id='g'><stop id='r' stop-color='red'/><stop offset='1' "
+                "stop-color='blue'/></linearGradient></defs><rect width='16' height='16' "
+                "fill='url(#g)'/>"},
+           Case{"flood-opacity",
+                "<defs><filter id='f'><feFlood id='r' flood-color='red'/></filter></defs><rect "
+                "width='16' height='16' filter='url(#f)'/>"},
+       }) {
+    for (const int size : {16, 64}) {
+      SCOPED_TRACE(item.attribute);
+      SCOPED_TRACE(size);
+      const std::string animation = "<animate href='#r' attributeName='" +
+                                    std::string(item.attribute) + "' from='100%' to='0' dur='2s'/>";
+      auto document = instantiateSubtree(std::string(item.source) + animation,
+                                         parser::SVGParser::Options(), Vector2i(size, size));
+      auto expected =
+          instantiateSubtree(item.source, parser::SVGParser::Options(), Vector2i(size, size));
+      expected.querySelector("#r")->setAttribute(item.attribute, "0.5");
+      document.setTime(1);
+      editor::tests::CompareBitmapToBitmap(
+          RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(expected),
+          "scalar-percentage-context", editor::tests::PixelmatchIdentityParams());
+    }
+  }
+}
+
+TEST(RendererAnimationStyleBase, ToOnlyResourceOpacityStartsAtOne) {
+  for (const bool flood : {false, true}) {
+    SCOPED_TRACE(flood);
+    const std::string attribute = flood ? "flood-opacity" : "stop-opacity";
+    const std::string source =
+        flood ? "<defs><filter id='f'><feFlood id='r' flood-color='red'/></filter></defs><rect "
+                "width='16' height='16' filter='url(#f)'/>"
+              : "<defs><linearGradient id='g'><stop id='r' "
+                "stop-color='red'/></linearGradient></defs><rect width='16' height='16' "
+                "fill='url(#g)'/>";
+    auto document = instantiateSubtree(
+        source + "<animate href='#r' attributeName='" + attribute + "' to='0' dur='2s'/>",
+        parser::SVGParser::Options(), Vector2i(16, 16));
+    auto expected = instantiateSubtree(source, parser::SVGParser::Options(), Vector2i(16, 16));
+    expected.querySelector("#r")->setAttribute(xml::XMLQualifiedNameRef(attribute), "0.5");
+    document.setTime(1);
+    editor::tests::CompareBitmapToBitmap(
+        RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(expected),
+        "resource-opacity-default", editor::tests::PixelmatchIdentityParams());
+  }
+}
+
+TEST(RendererAnimationStyleBase, NumericOperandsCannotLaunderLengthUnits) {
+  struct Case {
+    const char* attribute;
+    const char* source;
+  };
+  for (const Case item : {
+           Case{"stroke-miterlimit",
+                "<path id='r' d='M4 28L16 4L28 28' fill='none' stroke='red' stroke-width='6' "
+                "stroke-miterlimit='4'/>"},
+           Case{"slope",
+                "<defs><filter id='f'><feComponentTransfer><feFuncR id='r' "
+                "type='linear'/></feComponentTransfer></filter></defs><rect x='8' y='8' width='16' "
+                "height='16' fill='#800000' filter='url(#f)'/>"},
+           Case{"stdDeviation",
+                "<defs><filter id='f'><feGaussianBlur id='r'/></filter></defs><rect x='8' y='8' "
+                "width='16' height='16' fill='red' filter='url(#f)'/>"},
+       }) {
+    SCOPED_TRACE(item.attribute);
+    auto document =
+        instantiateSubtree(std::string(item.source) + "<animate href='#r' attributeName='" +
+                               item.attribute + "' from='1px' to='3' dur='2s'/>",
+                           parser::SVGParser::Options(), Vector2i(32, 32));
+    auto expected = instantiateSubtree(item.source, parser::SVGParser::Options(), Vector2i(32, 32));
+    document.setTime(1);
+    editor::tests::CompareBitmapToBitmap(
+        RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(expected),
+        "numeric-unit-rejection", editor::tests::PixelmatchIdentityParams());
+  }
+}
+
 #ifdef DONNER_TEXT_ENABLED
 TEST(RendererAnimationStyleBase, FontSizeUsesTheSampledParentFontContext) {
   for (const bool animatedParent : {false, true}) {
