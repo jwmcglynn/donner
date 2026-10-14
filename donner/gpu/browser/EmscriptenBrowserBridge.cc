@@ -1,6 +1,7 @@
 #include "donner/gpu/browser/EmscriptenBrowserBridge.h"
 
 #include <emscripten/emscripten.h>
+
 #ifdef __EMSCRIPTEN_PTHREADS__
 #include <emscripten/proxying.h>
 #include <pthread.h>
@@ -23,6 +24,7 @@
 #include <utility>
 #include <vector>
 
+#include "donner/gpu/browser/BrowserBindGroupConstruction.h"
 #include "donner/gpu/browser/BrowserGpuOwner.h"
 #include "donner/gpu/browser/BrowserShareReleaseQueue.h"
 #include "donner/gpu/browser/BrowserWireCodes.h"
@@ -551,49 +553,35 @@ BridgeStatus EmscriptenBrowserBridge::createSampler(BrowserObjectId id, uint32_t
 
 BridgeStatus EmscriptenBrowserBridge::createBindGroupLayout(
     BrowserObjectId id, std::span<const BrowserBindGroupLayoutEntry> entries) {
-  if (const BridgeStatus status = StatusFromBrowser(
-          CallBrowserGpu<donner_gpu_bind_group_layout_begin,
-                         BrowserGpuOperationKind::BindGroupConstruction>(logicalDevice_));
-      status != BridgeStatus::Success) {
-    return status;
-  }
-  for (const BrowserBindGroupLayoutEntry& entry : entries) {
-    if (const BridgeStatus status =
-            StatusFromBrowser(CallBrowserGpu<donner_gpu_bind_group_layout_entry,
-                                             BrowserGpuOperationKind::BindGroupConstruction>(
-                logicalDevice_, entry.binding, entry.visibilityBits, entry.bindingTypeCode,
-                entry.storageTextureFormat));
-        status != BridgeStatus::Success) {
-      return status;
-    }
-  }
-  return StatusFromBrowser(
-      CallBrowserGpu<donner_gpu_bind_group_layout_finish,
-                     BrowserGpuOperationKind::BindGroupConstruction>(logicalDevice_, id));
+  return ConstructBrowserBindGroup(
+      entries,
+      [&] { return StatusFromBrowser(donner_gpu_bind_group_layout_begin(logicalDevice_)); },
+      [&](const BrowserBindGroupLayoutEntry& entry) {
+        return StatusFromBrowser(
+            donner_gpu_bind_group_layout_entry(logicalDevice_, entry.binding, entry.visibilityBits,
+                                               entry.bindingTypeCode, entry.storageTextureFormat));
+      },
+      [&] { return StatusFromBrowser(donner_gpu_bind_group_layout_finish(logicalDevice_, id)); },
+      [](auto&& operation) {
+        RunOnBrowserGpuOwner(operation, BrowserGpuOperationKind::BindGroupConstruction);
+      });
 }
 
 BridgeStatus EmscriptenBrowserBridge::createBindGroup(
     BrowserObjectId id, BrowserObjectId layoutId, std::span<const BrowserBindGroupEntry> entries) {
-  if (const BridgeStatus status = StatusFromBrowser(
-          CallBrowserGpu<donner_gpu_bind_group_begin,
-                         BrowserGpuOperationKind::BindGroupConstruction>(logicalDevice_, layoutId));
-      status != BridgeStatus::Success) {
-    return status;
-  }
-  for (const BrowserBindGroupEntry& entry : entries) {
-    if (const BridgeStatus status =
-            StatusFromBrowser(CallBrowserGpu<donner_gpu_bind_group_entry,
-                                             BrowserGpuOperationKind::BindGroupConstruction>(
-                logicalDevice_, entry.binding, static_cast<unsigned int>(entry.resource),
-                entry.resourceId, static_cast<double>(entry.offsetBytes),
-                static_cast<double>(entry.sizeBytes)));
-        status != BridgeStatus::Success) {
-      return status;
-    }
-  }
-  return StatusFromBrowser(
-      CallBrowserGpu<donner_gpu_bind_group_finish, BrowserGpuOperationKind::BindGroupConstruction>(
-          logicalDevice_, id));
+  return ConstructBrowserBindGroup(
+      entries,
+      [&] { return StatusFromBrowser(donner_gpu_bind_group_begin(logicalDevice_, layoutId)); },
+      [&](const BrowserBindGroupEntry& entry) {
+        return StatusFromBrowser(donner_gpu_bind_group_entry(
+            logicalDevice_, entry.binding, static_cast<unsigned int>(entry.resource),
+            entry.resourceId, static_cast<double>(entry.offsetBytes),
+            static_cast<double>(entry.sizeBytes)));
+      },
+      [&] { return StatusFromBrowser(donner_gpu_bind_group_finish(logicalDevice_, id)); },
+      [](auto&& operation) {
+        RunOnBrowserGpuOwner(operation, BrowserGpuOperationKind::BindGroupConstruction);
+      });
 }
 
 BridgeStatus EmscriptenBrowserBridge::createPipelineLayout(

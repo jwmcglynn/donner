@@ -7,7 +7,8 @@
 namespace donner::gpu::browser {
 
 /// Cross-thread dispatch categories, not object/command counts; owner-local calls are excluded.
-/// Construction counts include descriptor begin/entry/finish calls. CommandBatch counts batches.
+/// BindGroupConstruction counts whole descriptors; PipelineConstruction counts begin/entry/finish
+/// calls. CommandBatch counts batches.
 /// OwnershipQuery includes the combined ownership/loss query.
 enum class BrowserGpuOperationKind {
   Other,
