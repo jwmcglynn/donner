@@ -12,6 +12,7 @@
 #include <chrono>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <string>
 
@@ -126,6 +127,22 @@ TEST_F(ProcessRendererTest, TimedOutRendererDoesNotLeaveDescendantRunning) {
   const auto result = render(probe.mode("timeout"), std::chrono::seconds(1));
   EXPECT_THAT(result.error, testing::HasSubstr("deadline exceeded"));
   EXPECT_TRUE(probe.stopped()) << "timed-out renderer left a live descendant";
+}
+
+TEST_F(ProcessRendererTest, NonExecutableRendererReportsExecStageAndErrno) {
+  const auto blocked = root_ / "not-executable";
+  std::ofstream(blocked) << "not an executable\n";
+  std::error_code error;
+  std::filesystem::permissions(
+      blocked, std::filesystem::perms::owner_read | std::filesystem::perms::owner_write,
+      std::filesystem::perm_options::replace, error);
+  ASSERT_FALSE(error) << error;
+  const auto renderer = MakeProcessRenderer({blocked, root_, {}, std::chrono::seconds(2), true});
+  const auto result = renderer(test_, 1, 1);
+  EXPECT_EQ(result.image, std::nullopt);
+  EXPECT_THAT(result.error, testing::HasSubstr("renderer exit 127"));
+  EXPECT_THAT(result.error,
+              testing::HasSubstr("renderer setup stage=execv errno=" + std::to_string(EACCES)));
 }
 
 TEST_F(ProcessRendererTest, NonzeroExitIsAnError) {
