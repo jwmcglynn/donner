@@ -90,9 +90,35 @@ ProvenanceResult CreateRunProvenance(const ProvenanceOptions& options,
 /// the aggregate run. Concurrent mutate-and-restore attacks require external immutable inputs.
 std::string VerifyRunProvenance(const RunProvenance& run);
 
-/// Preserve final source validation and test exit status in create-only run-verification.json.
+/// Observed execution counts, separate from source discovery and successful selection.
+struct RunExecutionSummary {
+  size_t discoveredCases = 0;       //!< Unique registered corpus cases.
+  size_t selectedCases = 0;         //!< Cases selected by GoogleTest, including sharding.
+  size_t completedCases = 0;        //!< Unique cases whose RunCase invocation returned.
+  size_t completedInvocations = 0;  //!< Completed RunCase invocations across all repeats.
+  size_t skippedInvocations = 0;    //!< GoogleTest skips, including fail-fast skips.
+  int repeatCount = 1;              //!< Requested GoogleTest repeat count; negative means forever.
+  bool listOnly = false;            //!< Whether GoogleTest was asked only to list tests.
+  std::string gtestOutput;          //!< Effective GoogleTest output flag, possibly empty.
+  std::filesystem::path xmlReport;  //!< Generated regular XML file, or empty when unavailable.
+
+  /// Whether all selected cases completed, without skips, during a non-listing invocation.
+  bool selectionComplete() const {
+    return completedCases > 0 && completedCases == selectedCases &&
+           selectedCases <= discoveredCases && completedInvocations >= completedCases &&
+           skippedInvocations == 0 && repeatCount != 0 && !listOnly;
+  }
+
+  /// Whether every discovered case completed at least once without any skipped invocation.
+  bool corpusComplete() const {
+    return discoveredCases > 0 && selectedCases == discoveredCases && selectionComplete();
+  }
+};
+
+/// Preserve source validation, observed execution scope and any generated XML report fingerprint.
+/// Missing execution observations cannot certify an accepted run.
 std::string WriteRunVerification(const RunProvenance& run, std::string_view verificationError,
-                                 int testExitCode);
+                                 int testExitCode, const RunExecutionSummary& execution = {});
 
 /// Return the captured fingerprint at the exact source path, or nullptr if it was not captured.
 const FileFingerprint* FindFingerprint(const RunProvenance& run, const std::filesystem::path& path);

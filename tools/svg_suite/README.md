@@ -68,7 +68,17 @@ The direct callback is portable C++ support; the child-process CLI currently tar
 `run.json` binds the renderer executable and all corpus bytes, including fonts/resources, with SHA-256.
 Optional `--engine-revision`, `--backend`, and `--build-flags` labels are recorded as caller-declared,
 unverified labels. The actual binary hash is measured. `run-verification.json` combines final source
-verification with the test exit code. Checks detect boundary changes, not adversarial mutate-and-restore
+verification with the test exit code and observed execution counts. `accepted` certifies a successful,
+fully completed selection; a filtered or sharded run has `accepted_scope: selected-cases`.
+`complete_corpus_accepted` additionally requires every case discovered from the invocation's configured
+corpora. Read those corpus identities in `run.json`: `--extension-only` does not certify upstream resvg.
+Unique `completed_cases` and repeated `completed_invocations` are separate; listing, zero execution,
+missing observations or skips cannot certify acceptance.
+
+The runner defaults to `gtest.xml` inside the artifact directory. Explicit GoogleTest output choices
+are preserved. `xml_report` fingerprints an available regular XML file, or is null when unavailable
+(including non-XML and directory-form output choices). GoogleTest XML describes its final iteration;
+execution counts include all repeats. Checks detect boundary changes, not adversarial mutate-and-restore
 attacks; use immutable inputs for hostile environments.
 
 Each case writes `expected.png`, `actual.png`, `diff.png` when available, plus `metrics.json`. The

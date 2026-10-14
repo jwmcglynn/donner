@@ -154,6 +154,31 @@ int ReportError(const std::string& issue) {
   return 2;
 }
 
+void ConfigureDefaultGtestOutput(int argc, char** argv) {
+  if (!GTEST_FLAG_GET(output).empty()) {
+    return;
+  }
+  const char* environment = std::getenv("TEST_UNDECLARED_OUTPUTS_DIR");
+  std::filesystem::path artifacts = environment ? environment : "";
+  for (int index = 1; index < argc; ++index) {
+    const std::string_view argument(argv[index]);
+    if (argument.starts_with("--gtest_") || argument == "--trusted-inputs" ||
+        argument == "--extension-only") {
+      continue;
+    }
+    if (index + 1 < argc) {
+      const char* value = argv[++index];
+      if (argument == "--artifact-dir") {
+        artifacts = value;
+      }
+    }
+  }
+  // GoogleTest installs its report listener during initialization; explicit flags override this.
+  if (!artifacts.empty()) {
+    GTEST_FLAG_SET(output, "xml:" + (artifacts / "gtest.xml").string());
+  }
+}
+
 int ExecuteSuite(CommandLine& command) {
   auto discovery = DiscoverCases(command.roots);
   if (!discovery.error.empty()) {
@@ -174,9 +199,10 @@ int ExecuteSuite(CommandLine& command) {
   if (!error.empty()) {
     return ReportError(error);
   }
-  const int result = RunSelectedTests();
+  RunExecutionSummary execution;
+  const int result = RunSelectedTests(&execution);
   const auto verification = VerifyRunProvenance(*provenance.run);
-  const auto evidenceError = WriteRunVerification(*provenance.run, verification, result);
+  const auto evidenceError = WriteRunVerification(*provenance.run, verification, result, execution);
   if (!verification.empty() || !evidenceError.empty()) {
     return ReportError("Run provenance rejected: " + verification + " " + evidenceError);
   }
@@ -189,6 +215,7 @@ int main(int argc, char** argv) {
   namespace suite = donner::svg_suite;
   suite::CommandLine command;
   command.provenance.invocation.assign(argv, argv + argc);
+  suite::ConfigureDefaultGtestOutput(argc, argv);
   testing::InitGoogleTest(&argc, argv);
   std::string issue = suite::ParseArguments(argc, argv, command);
   if (issue.empty()) {

@@ -2,6 +2,7 @@
 /// @file
 /// GoogleTest registration for the renderer-independent static suite.
 
+#include "tools/svg_suite/Provenance.h"
 #include "tools/svg_suite/StaticSuite.h"
 
 namespace donner::svg_suite {
@@ -16,8 +17,9 @@ std::string RegisterTests(const DiscoveryResult& discovery, Renderer renderer,
                           const std::filesystem::path& artifactRoot,
                           const ComparisonOptions& options = {});
 
-/// Run registered GoogleTests; fail if no suite case completes, including list-only or zero
-/// repeats.
-int RunSelectedTests();
+/// Run registered GoogleTests; reject skipped or incomplete selections, including list-only or
+/// zero repeats. A filtered successful run remains valid but reports incomplete corpus coverage.
+/// @param execution Receives observed completion counts and report identity when non-null.
+int RunSelectedTests(RunExecutionSummary* execution = nullptr);
 
 }  // namespace donner::svg_suite

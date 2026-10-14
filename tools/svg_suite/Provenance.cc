@@ -303,14 +303,49 @@ std::string VerifyRunProvenance(const RunProvenance& run) {
   return current == run.files ? "" : "corpus membership or bytes changed during run";
 }
 
+namespace {
+Json ExecutionRecord(const RunExecutionSummary& execution) {
+  return {{"discovered_cases", execution.discoveredCases},
+          {"selected_cases", execution.selectedCases},
+          {"completed_cases", execution.completedCases},
+          {"completed_invocations", execution.completedInvocations},
+          {"skipped_invocations", execution.skippedInvocations},
+          {"requested_repeat_count", execution.repeatCount},
+          {"list_only", execution.listOnly},
+          {"gtest_output", execution.gtestOutput},
+          {"corpus_complete", execution.corpusComplete()}};
+}
+
+Json XmlReportRecord(const RunExecutionSummary& execution) {
+  if (execution.completedInvocations == 0 || execution.xmlReport.empty()) {
+    return nullptr;
+  }
+  const auto report = FingerprintFile(execution.xmlReport, 32u * 1024u * 1024u);
+  if (!report.fingerprint) {
+    return nullptr;
+  }
+  return {{"path", execution.xmlReport.generic_string()},
+          {"sha256", report.fingerprint->sha256},
+          {"bytes", report.fingerprint->bytes},
+          {"scope", "GoogleTest final iteration; execution counts include all repeats"}};
+}
+}  // namespace
+
 std::string WriteRunVerification(const RunProvenance& run, std::string_view verificationError,
-                                 int testExitCode) {
-  const Json record = {{"run_id", run.runId},
-                       {"run_record", "run.json"},
-                       {"sources_unchanged_at_verification", verificationError.empty()},
-                       {"verification_error", verificationError},
-                       {"test_exit_code", testExitCode},
-                       {"accepted", verificationError.empty() && testExitCode == 0}};
+                                 int testExitCode, const RunExecutionSummary& execution) {
+  const bool accepted =
+      verificationError.empty() && testExitCode == 0 && execution.selectionComplete();
+  const Json record = {
+      {"run_id", run.runId},
+      {"run_record", "run.json"},
+      {"sources_unchanged_at_verification", verificationError.empty()},
+      {"verification_error", verificationError},
+      {"test_exit_code", testExitCode},
+      {"accepted", accepted},
+      {"accepted_scope", execution.corpusComplete() ? "complete-corpus" : "selected-cases"},
+      {"complete_corpus_accepted", accepted && execution.corpusComplete()},
+      {"execution", ExecutionRecord(execution)},
+      {"xml_report", XmlReportRecord(execution)}};
   return WriteExclusive(run.recordPath.parent_path() / "run-verification.json",
                         record.dump(2) + "\n");
 }
