@@ -128,6 +128,9 @@ struct ComputedTextComponent {
     /// the layout engine uses this to shape glyphs at the correct size.
     /// Populated by RendererDriver from sourceEntity.
     Lengthd fontSize;
+    /// True when computed style supplied fontSize, including an explicit zero. Unresolved
+    /// programmatic spans keep their root-size fallback when fontSize has the default zero value.
+    bool hasResolvedFontSize = false;
 
     /// CSS font-family list for this span.
     SmallVector<RcString, 1> fontFamilies;
