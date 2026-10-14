@@ -85,6 +85,7 @@ donner_cc_library(
     name = "async_test_polling",
     testonly = 1,
     hdrs = ["AsyncTestPolling.h"],
+    deps = ["//donner/base:stall_guard"],
 )
 
 donner_cc_library(

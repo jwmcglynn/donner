@@ -237,7 +237,10 @@ py_test(
         "//tools/ci:BUILD.bazel",
     ],
     imports = ["."],
-    deps = ["@rules_python//python/runfiles"],
+    deps = [
+        ":test_timing",
+        "@rules_python//python/runfiles",
+    ],
 )
 
 py_test(
@@ -250,6 +253,22 @@ py_test(
         "//third_party:bazel/non_bcr_deps.bzl",
     ],
     deps = ["@rules_python//python/runfiles"],
+)
+
+py_library(
+    name = "test_timing",
+    testonly = 1,
+    srcs = ["test_timing.py"],
+    visibility = ["//tools:__subpackages__"],
+)
+
+py_test(
+    name = "test_timing_tests",
+    size = "small",
+    srcs = ["test_timing_tests.py"],
+    # Every tool module, so the policy case can reject a copied stall guard.
+    data = glob(["*.py"]),
+    deps = [":test_timing"],
 )
 
 py_library(

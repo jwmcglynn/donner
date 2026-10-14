@@ -27,6 +27,7 @@ import {
   findProbedCanvasApplicationWorker,
   holdCanvasCompletionForTest,
 } from "./surface-frame-probe";
+import { scaledMs } from "./test-timing";
 
 installBrowserStallDiagnostics(test);
 installFailureCanvasEvidence(test);
@@ -258,12 +259,6 @@ const kExpectedRasterWaitStrategy = kExpectedHeadlessBackend === "transitional"
   ? "timed-wait-any"
   : "device-poll";
 
-// Shared CI runners execute this suite 2-4x slower than local development
-// hardware. Scale wall-clock budgets and tight acceptance polls so the timing
-// assertions verify the same invariants without flaking on runner speed;
-// local bounds are unchanged (scale 1).
-const kCiTimeScale = process.env.CI ? 4 : 1;
-const scaledMs = (ms: number) => ms * kCiTimeScale;
 const kRequireWebGpu = process.env.DONNER_WASM_REQUIRE_WEBGPU === "1";
 // Match Chromium's webgpu-swiftshader test configuration. Dawn selects
 // SwiftShader for WebGPU while the pixel-validation lane uses explicit texture
