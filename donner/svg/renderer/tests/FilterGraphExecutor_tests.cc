@@ -12,6 +12,9 @@
 #include <utility>
 #include <vector>
 
+#include "donner/editor/tests/BitmapGoldenCompare.h"
+#include "donner/svg/components/animation/AnimationValueSampler.h"
+
 namespace donner::svg {
 namespace {
 
@@ -72,6 +75,59 @@ tiny_skia::Pixmap CreateBlurredDotPixmap(const Transform2d& deviceFromFilterTran
 
   ApplyFilterGraphToPixmap(pixmap, graph, deviceFromFilterTransform, std::nullopt);
   return pixmap;
+}
+
+TEST(FilterGraphExecutorTest, AnimatedDefaultRegionUsesExecutedRasterHistory) {
+  for (const bool shear : {false, true}) {
+    SCOPED_TRACE(shear);
+    components::FilterGraph graph;
+    graph.filterRegion = Box2d::FromXYWH(0, 0, 32, 32);
+    components::FilterNode flood;
+    flood.primitive = components::filter_primitive::Flood{};
+    flood.x = Lengthd(10);
+    flood.y = Lengthd(10);
+    flood.width = Lengthd(8);
+    flood.height = Lengthd(8);
+    graph.nodes.push_back(flood);
+    components::FilterNode blur;
+    blur.inputs.emplace_back();
+    blur.primitive = components::filter_primitive::GaussianBlur{1, 1};
+    graph.nodes.push_back(blur);
+    components::FilterNode offset;
+    offset.inputs.emplace_back();
+    offset.primitive = components::filter_primitive::Offset{};
+    components::AnimateValueComponent value;
+    value.attributeName = "width";
+    value.to = "6";
+    offset.animatedRegion[2] = components::ContextualLengthRecipe::Create({{value, 0.25, 0}});
+    ASSERT_THAT(offset.animatedRegion[2], testing::NotNull());
+    graph.nodes.push_back(offset);
+    components::FilterGraph expectedGraph = graph;
+    auto& expectedNode = expectedGraph.nodes.back();
+    expectedNode.animatedRegion = {};
+    expectedNode.x = Lengthd(shear ? 1.5 : 7);
+    expectedNode.y = Lengthd(7);
+    expectedNode.width = Lengthd(shear ? 20.25 : 12);
+    expectedNode.height = Lengthd(14);
+    auto actual = tiny_skia::Pixmap::fromSize(64, 64);
+    auto expected = tiny_skia::Pixmap::fromSize(64, 64);
+    ASSERT_THAT(actual, testing::Ne(std::nullopt));
+    ASSERT_THAT(expected, testing::Ne(std::nullopt));
+    Transform2d deviceFromFilter = Transform2d::Scale(shear ? 1 : 2);
+    if (shear) {
+      deviceFromFilter.data[2] = 0.5;
+    }
+    ApplyFilterGraphToPixmap(*actual, graph, deviceFromFilter, graph.filterRegion);
+    ApplyFilterGraphToPixmap(*expected, expectedGraph, deviceFromFilter, graph.filterRegion);
+    editor::tests::CompareBitmapToBitmap(
+        RendererBitmap{Vector2i(64, 64),
+                       std::vector<uint8_t>(actual->data().begin(), actual->data().end()), 64 * 4},
+        RendererBitmap{Vector2i(64, 64),
+                       std::vector<uint8_t>(expected->data().begin(), expected->data().end()),
+                       64 * 4},
+        shear ? "animated-default-shear" : "animated-default-scale",
+        editor::tests::PixelmatchIdentityParams());
+  }
 }
 
 TEST(FilterGraphExecutorTest, AppliesOffsetsUsingCapturedFilterTransform) {
