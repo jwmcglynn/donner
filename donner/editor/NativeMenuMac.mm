@@ -160,9 +160,10 @@ void NativeMenuMac::update(const MenuBarState& state) {
     const EditorMenuItemPresentation presentation =
         PresentEditorMenuItem(*definition, state, EditorMenuSurface::Native);
     // Disabled commands must not consume the focused editor's key event.
-    NSString* shortcut = presentation.enabled && !SuppressNativeMenuShortcuts(state)
-                             ? ParseShortcut(presentation.shortcut).key
-                             : @"";
+    NSString* shortcut =
+        presentation.enabled && presentation.shortcutEnabled && !SuppressNativeMenuShortcuts(state)
+            ? ParseShortcut(definition->shortcut).key
+            : @"";
     if (![item.keyEquivalent isEqualToString:shortcut]) {
       item.keyEquivalent = shortcut;
     }

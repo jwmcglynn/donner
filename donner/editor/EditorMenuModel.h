@@ -39,8 +39,8 @@ struct EditorMenuItemPresentation {
   bool enabled = true;
   /// Whether the item displays a selection checkmark.
   bool checked = false;
-  /// Shortcut displayed and registered for the current keyboard focus.
-  std::string_view shortcut;
+  /// Whether the item's shortcut is displayed and registered for the current keyboard focus.
+  bool shortcutEnabled = true;
 };
 
 /// Menu backend; native editing capture disables unsafe canvas actions.

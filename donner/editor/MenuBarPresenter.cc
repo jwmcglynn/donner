@@ -133,7 +133,8 @@ void RenderMenuNodes(std::span<const EditorMenuNode> nodes, const MenuBarState& 
       continue;
     }
     const EditorMenuItemPresentation presentation = PresentEditorMenuItem(node, state);
-    const char* shortcut = presentation.shortcut.empty() ? nullptr : presentation.shortcut.data();
+    const char* shortcut =
+        presentation.shortcutEnabled && !node.shortcut.empty() ? node.shortcut.data() : nullptr;
     const bool activated =
         ImGui::MenuItem(node.label.data(), shortcut, presentation.checked, presentation.enabled);
     ApplyMenuBarCommand(activated, node.command, state, actions);

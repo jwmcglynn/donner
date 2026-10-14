@@ -241,7 +241,6 @@ EditorMenuItemPresentation PresentEditorMenuItem(const EditorMenuNode& item,
   if (item.kind != EditorMenuNode::Kind::Command) {
     return result;
   }
-  result.shortcut = item.shortcut;
   if (surface == EditorMenuSurface::Native && SuppressNativeMenuShortcuts(state) &&
       NativeTextCaptureDisables(item.command)) {
     result.enabled = false;
@@ -255,9 +254,7 @@ EditorMenuItemPresentation PresentEditorMenuItem(const EditorMenuNode& item,
   }
   result.enabled = CommandEnabled(item.command, state);
   result.checked = CommandChecked(item.command, state);
-  if (!ShortcutEnabledForFocus(item.command, state.sourcePaneFocused)) {
-    result.shortcut = {};
-  }
+  result.shortcutEnabled = ShortcutEnabledForFocus(item.command, state.sourcePaneFocused);
   return result;
 }
 
@@ -265,8 +262,9 @@ bool NativeMenuActivationAllowed(const EditorMenuNode& item, const MenuBarState&
                                  bool keyEquivalent) {
   const EditorMenuItemPresentation presentation =
       PresentEditorMenuItem(item, state, EditorMenuSurface::Native);
-  return presentation.enabled && (!keyEquivalent || (!SuppressNativeMenuShortcuts(state) &&
-                                                     !presentation.shortcut.empty()));
+  return presentation.enabled &&
+         (!keyEquivalent || (!SuppressNativeMenuShortcuts(state) && presentation.shortcutEnabled &&
+                             !item.shortcut.empty()));
 }
 
 }  // namespace donner::editor

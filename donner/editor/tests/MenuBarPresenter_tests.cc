@@ -59,9 +59,8 @@ TEST(EditorMenuModelTest, EverySemanticCommandAppearsOnceWithDistinctAccelerator
     state.sourcePaneFocused = sourceFocused;
     std::set<std::string_view> shortcuts;
     for (const EditorMenuNode* node : commands) {
-      const std::string_view shortcut = PresentEditorMenuItem(*node, state).shortcut;
-      if (!shortcut.empty()) {
-        EXPECT_TRUE(shortcuts.insert(shortcut).second) << shortcut;
+      if (PresentEditorMenuItem(*node, state).shortcutEnabled && !node->shortcut.empty()) {
+        EXPECT_TRUE(shortcuts.insert(node->shortcut).second) << node->shortcut;
       }
     }
   }
@@ -91,8 +90,8 @@ TEST(EditorMenuModelTest, SourceFontShortcutsFollowFocusOnBothMenuSurfaces) {
       state.sourcePaneFocused = sourceFocused;
       for (const EditorMenuSurface surface :
            {EditorMenuSurface::ImGui, EditorMenuSurface::Native}) {
-        EXPECT_EQ(PresentEditorMenuItem(*canvas, state, surface).shortcut.empty(), sourceFocused);
-        EXPECT_EQ(PresentEditorMenuItem(*source, state, surface).shortcut.empty(), !sourceFocused);
+        EXPECT_EQ(PresentEditorMenuItem(*canvas, state, surface).shortcutEnabled, !sourceFocused);
+        EXPECT_EQ(PresentEditorMenuItem(*source, state, surface).shortcutEnabled, sourceFocused);
       }
       EXPECT_EQ(NativeMenuActivationAllowed(*canvas, state, true), !sourceFocused);
       EXPECT_EQ(NativeMenuActivationAllowed(*source, state, true), sourceFocused);
