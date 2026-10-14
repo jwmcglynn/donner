@@ -688,13 +688,23 @@ TEST(TextEngineScriptedTest, TextPathUsesAnchorContinuationAndVisibility) {
                         RunGlyphsAre(ElementsAre(GlyphXPositionIs(DoubleNear(100.0, 0.001)))))));
 }
 
+struct ParsedPathRunDetails {
+  std::string text;
+  double computedFontSize = 0.0;
+  float usedFontSizePx = 0.0f;
+  std::vector<TextGlyph> glyphs;
+};
+
 std::vector<TextGlyph> LayoutParsedTextPath(std::string_view markup, bool scripted = true,
                                             std::string_view pathData = "M0 0H500",
-                                            bool clusterCombiningMarks = false) {
+                                            bool clusterCombiningMarks = false,
+                                            std::string_view pathAttributes = {},
+                                            std::vector<ParsedPathRunDetails>* details = nullptr,
+                                            double rootFontSize = 20.0) {
   const std::string source =
-      R"(<svg xmlns="http://www.w3.org/2000/svg" width="500" height="200">
-        <path id="p" d=")" +
-      std::string(pathData) + R"("/><text font-size="20">)" + std::string(markup) + "</text></svg>";
+      "<svg xmlns='http://www.w3.org/2000/svg' width='500' height='200'><path id='p' d='" +
+      std::string(pathData) + "' " + std::string(pathAttributes) + "/><text font-size='" +
+      std::to_string(rootFontSize) + "'>" + std::string(markup) + "</text></svg>";
   ParseWarningSink warnings;
   auto parsed = parser::SVGParser::ParseSVG(source, warnings);
   EXPECT_THAT(parsed.hasResult(), Eq(true));
@@ -714,12 +724,286 @@ std::vector<TextGlyph> LayoutParsedTextPath(std::string_view markup, bool script
   engine->prepareForElement(handle, warnings);
   auto& text = handle.get<components::ComputedTextComponent>();
   engine->resolvePerSpanLayoutStyles(handle, text);
-  const auto runs = engine->layout(text, MakeTextParams(20.0));
+  const auto runs = engine->layout(text, MakeTextParams(rootFontSize));
   std::vector<TextGlyph> result;
-  for (const auto& run : runs) {
+  for (std::size_t index = 0; index < runs.size(); ++index) {
+    const auto& run = runs[index];
+    const auto& span = text.spans[index];
+    if (details && span.end > span.start) {
+      details->push_back({std::string(span.text.data() + span.start, span.end - span.start),
+                          span.fontSize.value, run.usedFontSizePx, run.glyphs});
+    }
     result.insert(result.end(), run.glyphs.begin(), run.glyphs.end());
   }
   return result;
+}
+
+TEST(TextEngineScriptedTest, PostTextPathCursorOpenEndpointIgnoresTextExtent) {
+  for (std::string_view label : {"A", "AAAA"}) {
+    SCOPED_TRACE(label);
+    const std::string markup = "<textPath href='#p'>" + std::string(label) + "</textPath>B";
+    const auto glyphs = LayoutParsedTextPath(markup, true, "M0 50H100");
+    ASSERT_THAT(glyphs, SizeIs(label.size() + 1));
+    EXPECT_THAT(glyphs.back(), AllOf(GlyphXPositionIs(DoubleEq(100.0)),
+                                     GlyphYPositionIs(DoubleEq(50.0)), GlyphIndexIs(Not(Eq(0)))));
+  }
+}
+
+TEST(TextEngineScriptedTest, PostTextPathCursorPolylineEndpoint) {
+  const auto glyphs =
+      LayoutParsedTextPath("<textPath href='#p'>A</textPath>B", true, "M0 0H100V40");
+  ASSERT_THAT(glyphs, SizeIs(2));
+  EXPECT_THAT(glyphs[0], AllOf(GlyphXPositionIs(DoubleEq(0.0)), GlyphYPositionIs(DoubleEq(0.0)),
+                               GlyphIndexIs(Not(Eq(0)))));
+  EXPECT_THAT(glyphs[1], AllOf(GlyphXPositionIs(DoubleEq(100.0)), GlyphYPositionIs(DoubleEq(40.0)),
+                               GlyphIndexIs(Not(Eq(0)))));
+}
+
+TEST(TextEngineScriptedTest, PostTextPathCursorExplicitXYOverridesEndpoint) {
+  const auto glyphs = LayoutParsedTextPath(
+      "<textPath href='#p'>A</textPath><tspan x='40' y='70'>B</tspan>", true, "M0 50H100");
+  ASSERT_THAT(glyphs, SizeIs(2));
+  EXPECT_THAT(glyphs[1], AllOf(GlyphXPositionIs(DoubleEq(40.0)), GlyphYPositionIs(DoubleEq(70.0)),
+                               GlyphIndexIs(Not(Eq(0)))));
+}
+
+TEST(TextEngineScriptedTest, PostTextPathCursorXOnlyUsesOrdinaryUnspecifiedAxis) {
+  const auto ordinary = LayoutParsedTextPath("A<tspan x='40'>B</tspan>");
+  ASSERT_THAT(ordinary, SizeIs(2));
+  EXPECT_THAT(ordinary[1],
+              AllOf(GlyphXPositionIs(DoubleEq(40.0)), GlyphYPositionIs(DoubleEq(0.0))));
+  const auto glyphs = LayoutParsedTextPath(
+      "<textPath href='#p'>A</textPath><tspan x='40'>B</tspan>", true, "M0 50H100");
+  ASSERT_THAT(glyphs, SizeIs(2));
+  EXPECT_THAT(glyphs[1], AllOf(GlyphXPositionIs(DoubleEq(40.0)), GlyphYPositionIs(DoubleEq(0.0)),
+                               GlyphIndexIs(Not(Eq(0)))));
+}
+
+TEST(TextEngineScriptedTest, PostTextPathCursorYOnlyUsesOrdinaryUnspecifiedAxis) {
+  const auto ordinary = LayoutParsedTextPath("A<tspan y='70'>B</tspan>");
+  ASSERT_THAT(ordinary, SizeIs(2));
+  EXPECT_THAT(ordinary[1],
+              AllOf(GlyphXPositionIs(DoubleEq(10.0)), GlyphYPositionIs(DoubleEq(70.0))));
+  const auto glyphs = LayoutParsedTextPath(
+      "<textPath href='#p'>A</textPath><tspan y='70'>B</tspan>", true, "M0 50H100");
+  ASSERT_THAT(glyphs, SizeIs(2));
+  EXPECT_THAT(glyphs[1], AllOf(GlyphXPositionIs(DoubleEq(10.0)), GlyphYPositionIs(DoubleEq(70.0)),
+                               GlyphIndexIs(Not(Eq(0)))));
+}
+
+TEST(TextEngineScriptedTest, PostTextPathCursorFirstRelativeShiftIsAbsorbedByEndpoint) {
+  // B/C share one shaping run: advance 10, within-run kern 1, then C's relative x shift 2.
+  constexpr std::string_view tail = "<tspan dx='7 2' dy='9 3'>BC</tspan>";
+  const auto ordinary = LayoutParsedTextPath(tail);
+  EXPECT_THAT(
+      ordinary,
+      ElementsAre(AllOf(GlyphXPositionIs(DoubleEq(7.0)), GlyphYPositionIs(DoubleEq(9.0))),
+                  AllOf(GlyphXPositionIs(DoubleEq(20.0)), GlyphYPositionIs(DoubleEq(12.0)))));
+  const auto glyphs = LayoutParsedTextPath("<textPath href='#p'>A</textPath>" + std::string(tail),
+                                           true, "M0 50H100");
+  ASSERT_THAT(glyphs, SizeIs(3));
+  EXPECT_THAT(glyphs[1],
+              AllOf(GlyphXPositionIs(DoubleEq(100.0)), GlyphYPositionIs(DoubleEq(50.0))));
+  EXPECT_THAT(glyphs[2],
+              AllOf(GlyphXPositionIs(DoubleEq(113.0)), GlyphYPositionIs(DoubleEq(53.0))));
+}
+
+TEST(TextEngineScriptedTest, PostTextPathCursorConsecutiveOwnersResetPathState) {
+  const auto glyphs = LayoutParsedTextPath(
+      "<textPath href='#p' startOffset='17'><tspan dy='5'>A</tspan></textPath>"
+      "<textPath path='M200 80H300'>B</textPath>",
+      true, "M0 50H100");
+  EXPECT_THAT(
+      glyphs,
+      ElementsAre(AllOf(GlyphXPositionIs(DoubleEq(17.0)), GlyphYPositionIs(DoubleEq(55.0))),
+                  AllOf(GlyphXPositionIs(DoubleEq(200.0)), GlyphYPositionIs(DoubleEq(80.0)))));
+}
+
+TEST(TextEngineScriptedTest, PostTextPathCursorClippedTailStillUsesEndpoint) {
+  const auto glyphs =
+      LayoutParsedTextPath("<textPath href='#p'>ABCD</textPath>E", true, "M20 50H50");
+  ASSERT_THAT(glyphs, SizeIs(5));
+  EXPECT_THAT(glyphs[2], GlyphIndexIs(Not(Eq(0))));
+  EXPECT_THAT(glyphs[3], GlyphIndexIs(Eq(0)));
+  EXPECT_THAT(glyphs[4], AllOf(GlyphXPositionIs(DoubleEq(50.0)), GlyphYPositionIs(DoubleEq(50.0)),
+                               GlyphIndexIs(Not(Eq(0)))));
+}
+
+TEST(TextEngineScriptedTest, PostTextPathCursorAllOffPathStillUsesEndpoint) {
+  const auto glyphs = LayoutParsedTextPath("<textPath href='#p' startOffset='200'>A</textPath>B",
+                                           true, "M0 50H100");
+  EXPECT_THAT(glyphs, ElementsAre(GlyphIndexIs(Eq(0)), AllOf(GlyphXPositionIs(DoubleEq(100.0)),
+                                                             GlyphYPositionIs(DoubleEq(50.0)),
+                                                             GlyphIndexIs(Not(Eq(0))))));
+}
+
+TEST(TextEngineScriptedTest, PostTextPathCursorEmptyTagDoesNotEstablishPathState) {
+  const auto glyphs = LayoutParsedTextPath("<textPath href='#p'/>B", true, "M0 50H100");
+  EXPECT_THAT(glyphs,
+              ElementsAre(AllOf(GlyphXPositionIs(DoubleEq(0.0)), GlyphYPositionIs(DoubleEq(0.0)),
+                                GlyphIndexIs(Not(Eq(0))))));
+}
+
+TEST(TextEngineScriptedTest, PostTextPathCursorEmptyDifferentOwnerDoesNotInventEndpoint) {
+  const auto glyphs = LayoutParsedTextPath(
+      "<textPath href='#p'>A</textPath><textPath path='M200 80H300'/>B", true, "M0 50H100");
+  ASSERT_THAT(glyphs, SizeIs(2));
+  EXPECT_THAT(glyphs[1], AllOf(GlyphXPositionIs(DoubleEq(100.0)), GlyphYPositionIs(DoubleEq(50.0)),
+                               GlyphIndexIs(Not(Eq(0)))));
+}
+
+TEST(TextEngineScriptedTest, PostTextPathCursorNonemptyHiddenTextStillEstablishesScope) {
+  const auto glyphs = LayoutParsedTextPath("<textPath href='#p' visibility='hidden'>A</textPath>B",
+                                           true, "M0 50H100");
+  ASSERT_THAT(glyphs, SizeIs(2));
+  EXPECT_THAT(glyphs[1], AllOf(GlyphXPositionIs(DoubleEq(100.0)), GlyphYPositionIs(DoubleEq(50.0)),
+                               GlyphIndexIs(Not(Eq(0)))));
+}
+
+TEST(TextEngineScriptedTest, PostTextPathCursorDisplayNoneDoesNotEstablishScope) {
+  const auto glyphs =
+      LayoutParsedTextPath("<textPath href='#p' display='none'>A</textPath>B", true, "M0 50H100");
+  EXPECT_THAT(glyphs,
+              ElementsAre(AllOf(GlyphXPositionIs(DoubleEq(0.0)), GlyphYPositionIs(DoubleEq(0.0)),
+                                GlyphIndexIs(Not(Eq(0))))));
+}
+
+TEST(TextEngineScriptedTest, PostTextPathCursorNonemptyZeroSizeTextStillEstablishesScope) {
+  std::vector<ParsedPathRunDetails> parent;
+  LayoutParsedTextPath("<textPath href='#p'>A</textPath>B", true, "M0 50H100", false, {}, &parent);
+  ASSERT_THAT(parent, SizeIs(2));
+  ASSERT_THAT(parent[0].usedFontSizePx, FloatEq(20.0f));
+  ASSERT_THAT(parent[0].glyphs, ElementsAre(GlyphXAdvanceIs(DoubleEq(10.0))));
+  std::vector<ParsedPathRunDetails> details;
+  const auto glyphs = LayoutParsedTextPath("<textPath href='#p' font-size='0'>A</textPath>B", true,
+                                           "M0 50H100", false, {}, &details);
+  ASSERT_THAT(details, SizeIs(2));
+  ASSERT_THAT(details[0].text, Eq("A"));
+  ASSERT_THAT(details[0].computedFontSize, DoubleEq(0.0));
+  // A failed size/addressability premise is a producer defect, not a zero-size cursor proof.
+  ASSERT_THAT(details[0].usedFontSizePx, FloatEq(0.0f));
+  ASSERT_THAT(details[0].glyphs,
+              ElementsAre(AllOf(GlyphIndexIs(Eq(0)), GlyphXAdvanceIs(DoubleEq(0.0)))));
+  ASSERT_THAT(glyphs, Not(IsEmpty()));
+  EXPECT_THAT(glyphs.back(), AllOf(GlyphXPositionIs(DoubleEq(100.0)),
+                                   GlyphYPositionIs(DoubleEq(50.0)), GlyphIndexIs(Not(Eq(0)))));
+}
+
+TEST(TextEngineScriptedTest, PostTextPathCursorChildZeroProducerDoesNotInheritPositiveSize) {
+  std::vector<ParsedPathRunDetails> details;
+  LayoutParsedTextPath("<textPath href='#p' font-size='0'>A</textPath>B", true, "M0 50H100", false,
+                       {}, &details);
+  ASSERT_THAT(details, SizeIs(2));
+  ASSERT_THAT(details[0].text, Eq("A"));
+  ASSERT_THAT(details[0].computedFontSize, DoubleEq(0.0));
+  ASSERT_THAT(details[1].usedFontSizePx, FloatEq(20.0f));
+  EXPECT_THAT(details[0].usedFontSizePx, FloatEq(0.0f));
+  EXPECT_THAT(details[0].glyphs,
+              ElementsAre(AllOf(GlyphIndexIs(Eq(0)), GlyphXAdvanceIs(DoubleEq(0.0)))));
+}
+
+TEST(TextEngineScriptedTest, PostTextPathCursorRootZeroIsolationValidatesAddressabilityFirst) {
+  std::vector<ParsedPathRunDetails> details;
+  const auto glyphs =
+      LayoutParsedTextPath("<textPath href='#p'>A</textPath><tspan font-size='20'>B</tspan>", true,
+                           "M0 50H100", false, {}, &details, 0.0);
+  ASSERT_THAT(details, SizeIs(2));
+  ASSERT_THAT(details[0].text, Eq("A"));
+  ASSERT_THAT(details[0].computedFontSize, DoubleEq(0.0));
+  ASSERT_THAT(details[0].usedFontSizePx, FloatEq(0.0f));
+  ASSERT_THAT(details[1].usedFontSizePx, FloatEq(20.0f));
+  // Unlike child-zero inheritance, an absent zero-size character is an addressability defect.
+  ASSERT_THAT(details[0].glyphs,
+              ElementsAre(AllOf(GlyphIndexIs(Eq(0)), GlyphXAdvanceIs(DoubleEq(0.0)))));
+  ASSERT_THAT(glyphs, Not(IsEmpty()));
+  EXPECT_THAT(glyphs.back(),
+              AllOf(GlyphXPositionIs(DoubleEq(100.0)), GlyphYPositionIs(DoubleEq(50.0))));
+}
+
+TEST(TextEngineScriptedTest, PostTextPathCursorInvalidReferencePreservesOrdinaryCompatibility) {
+  const auto glyphs = LayoutParsedTextPath(
+      "<textPath href='#missing'>A</textPath><tspan x='40' y='70'>B</tspan>", true, "M0 50H100");
+  EXPECT_THAT(glyphs, ElementsAre(AllOf(GlyphXPositionIs(DoubleEq(40.0)),
+                                        GlyphYPositionIs(DoubleEq(70.0)))));
+}
+
+TEST(TextEngineScriptedTest, PostTextPathCursorReferencedTransformUsesEffectiveEndpoint) {
+  const auto glyphs = LayoutParsedTextPath("<textPath href='#p'>A</textPath>B", true, "M0 50H100",
+                                           false, "transform='matrix(0 2 -1 0 70 5)'");
+  ASSERT_THAT(glyphs, SizeIs(2));
+  EXPECT_THAT(glyphs[0], AllOf(GlyphXPositionIs(DoubleNear(20.0, 1e-9)),
+                               GlyphYPositionIs(DoubleNear(5.0, 1e-9)),
+                               GlyphRotateDegreesIs(DoubleNear(90.0, 1e-9))));
+  EXPECT_THAT(glyphs[1],
+              AllOf(GlyphXPositionIs(DoubleEq(20.0)), GlyphYPositionIs(DoubleEq(205.0))));
+}
+
+TEST(TextEngineScriptedTest, PostTextPathCursorReversedPathUsesEffectiveEndpoint) {
+  const auto glyphs =
+      LayoutParsedTextPath("<textPath href='#p' side='right'>A</textPath>B", true, "M40 100H180");
+  ASSERT_THAT(glyphs, SizeIs(2));
+  EXPECT_THAT(glyphs[1],
+              AllOf(GlyphXPositionIs(DoubleEq(40.0)), GlyphYPositionIs(DoubleEq(100.0))));
+}
+
+TEST(TextEngineScriptedTest, PostTextPathCursorCompoundOpenEndIsNotSingleClosedLoop) {
+  const auto glyphs = LayoutParsedTextPath("<textPath href='#p' startOffset='5'>A</textPath>B",
+                                           true, "M0 0H10Z M20 30H100");
+  ASSERT_THAT(glyphs, SizeIs(2));
+  EXPECT_THAT(glyphs[0], GlyphIndexIs(Not(Eq(0))));
+  EXPECT_THAT(glyphs[1],
+              AllOf(GlyphXPositionIs(DoubleEq(100.0)), GlyphYPositionIs(DoubleEq(30.0))));
+}
+
+TEST(TextEngineScriptedTest, PostTextPathCursorTwoClosedContoursUseFinalEndpoint) {
+  const auto glyphs = LayoutParsedTextPath("<textPath href='#p' startOffset='5'>A</textPath>B",
+                                           true, "M0 0H10V10H0Z M20 30H30V40H20Z");
+  ASSERT_THAT(glyphs, SizeIs(2));
+  EXPECT_THAT(glyphs[0], GlyphIndexIs(Not(Eq(0))));
+  EXPECT_THAT(glyphs[1], AllOf(GlyphXPositionIs(DoubleEq(20.0)), GlyphYPositionIs(DoubleEq(30.0))));
+}
+
+TEST(TextEngineScriptedTest, PostTextPathCursorClosedLoopAdjustsStartOffset) {
+  for (const auto& [offset, endpoint] :
+       std::array<std::pair<int, Vector2d>, 2>{{{5, {5.0, 0.0}}, {-5, {0.0, 5.0}}}}) {
+    SCOPED_TRACE(offset);
+    const auto glyphs = LayoutParsedTextPath(
+        "<textPath href='#p' startOffset='" + std::to_string(offset) + "'>A</textPath>B", true,
+        "M0 0H10V10H0Z");
+    ASSERT_THAT(glyphs, SizeIs(2));
+    EXPECT_THAT(glyphs[0], GlyphIndexIs(Not(Eq(0))));
+    EXPECT_THAT(glyphs[1], AllOf(GlyphXPositionIs(DoubleEq(endpoint.x)),
+                                 GlyphYPositionIs(DoubleEq(endpoint.y))));
+  }
+}
+
+TEST(TextEngineScriptedTest, PostTextPathCursorClosedMultiCircuitAlsoRequiresVisibleGlyphWrapping) {
+  for (int offset : {42, -38}) {
+    SCOPED_TRACE(offset);
+    const auto glyphs = LayoutParsedTextPath(
+        "<textPath href='#p' startOffset='" + std::to_string(offset) + "'>A</textPath>B", true,
+        "M0 0H10V10H0Z");
+    ASSERT_THAT(glyphs, SizeIs(2));
+    EXPECT_THAT(glyphs[0], AllOf(GlyphIndexIs(Not(Eq(0))), GlyphXPositionIs(DoubleNear(2.0, 1e-9)),
+                                 GlyphYPositionIs(DoubleNear(0.0, 1e-9)),
+                                 GlyphRotateDegreesIs(DoubleNear(0.0, 1e-9))));
+    EXPECT_THAT(glyphs[1], AllOf(GlyphXPositionIs(DoubleEq(2.0)), GlyphYPositionIs(DoubleEq(0.0))));
+  }
+}
+
+TEST(TextEngineScriptedTest, PostTextPathCursorWrappedCoordinatesAndOrientationAvoidCorners) {
+  for (int offset : {385, -415}) {
+    SCOPED_TRACE(offset);
+    const auto glyphs = LayoutParsedTextPath(
+        "<textPath href='#p' startOffset='" + std::to_string(offset) + "'>A</textPath>B", true,
+        "M0 0H100V100H0Z");
+    ASSERT_THAT(glyphs, SizeIs(2));
+    EXPECT_THAT(glyphs[0], AllOf(GlyphIndexIs(Not(Eq(0))), GlyphXPositionIs(DoubleNear(0.0, 1e-9)),
+                                 GlyphYPositionIs(DoubleNear(15.0, 1e-9)),
+                                 GlyphRotateDegreesIs(DoubleNear(-90.0, 1e-9))));
+    EXPECT_THAT(glyphs[1],
+                AllOf(GlyphXPositionIs(DoubleEq(0.0)), GlyphYPositionIs(DoubleEq(15.0))));
+  }
 }
 
 TEST(TextEngineScriptedTest, TextPathLengthIncludesMixedDirectAndChildContent) {
