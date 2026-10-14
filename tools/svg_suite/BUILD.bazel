@@ -138,6 +138,7 @@ cc_test(
     srcs = ["GtestSuite_tests.cc"],
     deps = [
         ":gtest_suite",
+        ":process_renderer",
         ":provenance",
         "@com_google_gtest//:gtest",
     ] + libc_compat_deps(),

@@ -6,6 +6,7 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -14,6 +15,7 @@
 
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
+#include "tools/svg_suite/ProcessRenderer.h"
 #include "tools/svg_suite/Provenance.h"
 
 namespace donner::svg_suite {
@@ -53,24 +55,39 @@ int RunFixture(int argc, char** argv) {
   if (fixtureMode == "--fixture-skip-second") {
     testing::UnitTest::GetInstance()->listeners().Append(new SkipSecondCase);
   }
-  const auto discovery = DiscoverCases({{"fixture", root / "corpus"}});
+  auto discovery = DiscoverCases({{"fixture", root / "corpus"}});
   ProvenanceOptions options;
   options.corpora = {{"fixture", root / "corpus"}};
   options.renderer = renderer;
   options.workRoot = root / "work";
+  if (fixtureMode == "--fixture-process") {
+    options.rendererArguments = {"--fixture-render-png", "{output}"};
+    options.trustedInputs = true;
+  }
   const auto provenance = CreateRunProvenance(options, root / "artifacts");
   if (!provenance.run) {
     return 3;
   }
-  const auto issue = RegisterTests(
-      discovery,
-      [image, failFirst](const StaticCase& test, int, int) -> ImageResult {
-        if (failFirst && test.svgPath.stem() == "first") {
-          return {{}, "intentional fixture failure"};
-        }
-        return {image, {}};
-      },
-      root / "artifacts");
+  Renderer callback = [image, failFirst, fixtureMode, calls = std::make_shared<int>(0)](
+                          const StaticCase& test, int, int) -> ImageResult {
+    if (failFirst && test.svgPath.stem() == "first") {
+      return {{}, "intentional fixture failure"};
+    }
+    if (fixtureMode == "--fixture-fail-first-iteration" && ++*calls == 1) {
+      return {Image{1, 1, 1, {0, 0, 255, 255}}, {}};
+    }
+    return {image, {}};
+  };
+  if (fixtureMode == "--fixture-process") {
+    callback = MakeProcessRenderer({.executable = renderer,
+                                    .workRoot = root / "work",
+                                    .arguments = options.rendererArguments,
+                                    .trustedInputs = true});
+    for (auto& test : discovery.cases) {
+      test.provenance = provenance.run;
+    }
+  }
+  const auto issue = RegisterTests(discovery, callback, root / "artifacts");
   if (!issue.empty()) {
     return 3;
   }
@@ -131,6 +148,26 @@ protected:
     return {std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
   }
 
+  std::vector<std::string> reports(const std::filesystem::path& directory,
+                                   std::string_view filename) const {
+    std::vector<std::filesystem::path> paths;
+    std::error_code error;
+    for (std::filesystem::recursive_directory_iterator it(directory, error), end;
+         !error && it != end; it.increment(error)) {
+      if (it->path().filename() == filename) {
+        paths.push_back(it->path());
+      }
+    }
+    std::sort(paths.begin(), paths.end());
+    std::vector<std::string> contents;
+    for (const auto& path : paths) {
+      std::ifstream input(path);
+      contents.emplace_back(std::istreambuf_iterator<char>(input),
+                            std::istreambuf_iterator<char>());
+    }
+    return contents;
+  }
+
   std::filesystem::path root_;
 };
 
@@ -179,12 +216,40 @@ TEST_F(GtestSuiteTest, FullCorpusRecordsCompletionAndDefaultXml) {
 }
 
 TEST_F(GtestSuiteTest, RepeatsDoNotCountAsDistinctCompletedCases) {
-  EXPECT_EQ(run({"--gtest_filter=SvgSuite.*_66697273742e737667", "--gtest_repeat=2"}), 1);
+  EXPECT_EQ(run({"--gtest_filter=SvgSuite.*_66697273742e737667", "--gtest_repeat=2"}), 0);
   const std::string record = verification();
   EXPECT_THAT(record, testing::HasSubstr("\"completed_cases\": 1"));
   EXPECT_THAT(record, testing::HasSubstr("\"completed_invocations\": 2"));
   EXPECT_THAT(record, testing::HasSubstr("\"requested_repeat_count\": 2"));
   EXPECT_THAT(record, testing::HasSubstr("\"corpus_complete\": false"));
+}
+
+TEST_F(GtestSuiteTest, RepeatedProcessesRetainEveryInvocation) {
+  EXPECT_EQ(run({"--fixture-process", "--gtest_filter=SvgSuite.*_66697273742e737667",
+                 "--gtest_repeat=2"}),
+            0);
+  const auto cases = reports(root_ / "artifacts", "metrics.json");
+  const auto processes = reports(root_ / "work", "process.json");
+  ASSERT_THAT(cases, testing::SizeIs(2));
+  ASSERT_THAT(processes, testing::SizeIs(2));
+  for (size_t index = 0; index < 2; ++index) {
+    const std::string marker = "\"iteration\": " + std::to_string(index + 1);
+    EXPECT_THAT(cases[index], testing::HasSubstr(marker));
+    EXPECT_THAT(processes[index], testing::HasSubstr(marker));
+    EXPECT_THAT(cases[index], testing::HasSubstr("iteration-" + std::to_string(index + 1)));
+  }
+  EXPECT_THAT(verification(), testing::HasSubstr("\"accepted\": true"));
+}
+
+TEST_F(GtestSuiteTest, RepeatedFailureSurvivesALaterPassingImage) {
+  EXPECT_EQ(run({"--fixture-fail-first-iteration", "--gtest_filter=SvgSuite.*_66697273742e737667",
+                 "--gtest_repeat=2"}),
+            1);
+  const auto cases = reports(root_ / "artifacts", "metrics.json");
+  ASSERT_THAT(cases, testing::SizeIs(2));
+  EXPECT_THAT(cases[0], testing::HasSubstr("\"status\": \"fail\""));
+  EXPECT_THAT(cases[1], testing::HasSubstr("\"status\": \"pass\""));
+  EXPECT_THAT(verification(), testing::HasSubstr("\"accepted\": false"));
 }
 
 TEST_F(GtestSuiteTest, FailFastSkipsDoNotCountAsCompletedCases) {
@@ -264,6 +329,10 @@ TEST_F(GtestSuiteTest, EmptyXmlSuffixCannotReferenceStaleDefaultReport) {
 }  // namespace donner::svg_suite
 
 int main(int argc, char** argv) {
+  if (argc == 3 && std::string_view(argv[1]) == "--fixture-render-png") {
+    const donner::svg_suite::Image image{1, 1, 1, {255, 0, 0, 255}};
+    return donner::svg_suite::WritePng(argv[2], {1, 1, 1, image.data}).empty() ? 0 : 1;
+  }
   if (argc >= 3 && std::string_view(argv[1]) == "--fixture-suite") {
     return donner::svg_suite::RunFixture(argc, argv);
   }

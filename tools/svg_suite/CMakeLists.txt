@@ -79,7 +79,7 @@ endif()
 
 if(UNIX)
   add_executable(gtest-suite-tests GtestSuite_tests.cc)
-  target_link_libraries(gtest-suite-tests PRIVATE suite_provenance GTest::gmock)
+  target_link_libraries(gtest-suite-tests PRIVATE suite_provenance suite_process GTest::gmock)
   add_test(NAME gtest-suite-tests COMMAND gtest-suite-tests)
   set_tests_properties(gtest-suite-tests PROPERTIES ENVIRONMENT "TEST_TMPDIR=${CMAKE_CURRENT_BINARY_DIR}/test-work")
 endif()
