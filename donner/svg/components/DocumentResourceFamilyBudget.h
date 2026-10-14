@@ -8,6 +8,9 @@
 
 namespace donner::svg::components {
 
+class SubDocumentAdmission;
+struct SubDocumentAdmissionState;
+
 /** Shared live-memory envelope for a root SVG document and all cached subdocuments. */
 class DocumentResourceFamilyBudget {
 public:
@@ -141,6 +144,9 @@ public:
   const SecurityStats& securityStats() const { return stats_; }
 
 private:
+  friend class SubDocumentAdmission;
+  std::shared_ptr<SubDocumentAdmissionState> subDocumentAdmission_;
+
   std::size_t maximumFor(Kind kind) const {
     switch (kind) {
       case Kind::ParsedPayload: return limits_.parsedPayloadBytes;

@@ -4,6 +4,7 @@
 
 #include <array>
 #include <functional>
+#include <limits>
 #include <unordered_map>
 #include <vector>
 
@@ -11,6 +12,8 @@
 #include "donner/base/encoding/Base64.h"
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/components/ParsedPayloadResourceBudget.h"
+#include "donner/svg/components/filter/FilterComponent.h"
+#include "donner/svg/components/resources/SubDocumentAdmission.h"
 #define private public
 #include "donner/svg/components/resources/ResourceManagerContext.h"
 #undef private
@@ -1492,4 +1495,389 @@ TEST_F(ResourceManagerContextTest, GetLoadedImageComponentReturnsNullForSvgDataU
 }
 
 }  // namespace
+namespace {
+
+SubDocumentCache& BindAdmissionCache(SVGDocument& document, SubDocumentCache::Limits limits = {}) {
+  auto& registry = document.registry();
+  auto& cache = registry.ctx().emplace<SubDocumentCache>(limits);
+  EXPECT_TRUE(cache.bindFamily(registry));
+  cache.setRootEntityCount(registry.storage<Entity>().size());
+  return cache;
+}
+
+std::shared_ptr<DocumentResourceFamilyBudget> AdmissionFamily(SVGDocument& document) {
+  return document.registry().ctx().get<DocumentResourceFamilyContext>().budget;
+}
+
+SubDocumentAdmission::Stats AdmissionStats(SVGDocument& document) {
+  return SubDocumentAdmission::GetStats(*AdmissionFamily(document));
+}
+
+void AddFilterSvgReference(SVGDocument& document, const SVGDocumentHandle& referenced,
+                           size_t count = 1) {
+  auto& graph =
+      document.svgElement().entityHandle().get_or_emplace<ComputedFilterComponent>().filterGraph;
+  for (size_t index = 0; index < count; ++index) {
+    filter_primitive::Image image;
+    image.svgSubDocument = referenced;
+    FilterNode node;
+    node.primitive = std::move(image);
+    graph.nodes.push_back(std::move(node));
+  }
+}
+
+}  // namespace
+
+TEST(SubDocumentAdmissionTest, FailedReentrantBindCannotPublishCallbackResult) {
+  SVGDocument root;
+  auto& cache = BindAdmissionCache(root, SubDocumentCache::Limits{
+                                             .maximumAggregateEntities = 2,
+                                         });
+  ParseWarningSink warnings;
+  const auto result = cache.getOrParse(
+      "child.svg", {},
+      [&](const std::vector<uint8_t>&, ParseWarningSink&) -> std::optional<SVGDocumentHandle> {
+        EXPECT_EQ(AdmissionStats(root).pending, 1u);
+        (void)root.registry().create();
+        (void)root.registry().create();
+        EXPECT_FALSE(cache.bindFamily(root.registry()));
+        return MakeDocumentWithCanvas(8).handle();
+      },
+      warnings);
+  EXPECT_FALSE(result);
+  EXPECT_EQ(cache.size(), 0u);
+  EXPECT_EQ(AdmissionStats(root).documents, 0u);
+  EXPECT_EQ(AdmissionStats(root).pending, 0u);
+  EXPECT_EQ(AdmissionStats(root).parseAttempts, 1u);
+}
+
+TEST(SubDocumentAdmissionTest, ReentrantRootCountsCannotUnderflowCandidateBounds) {
+  SubDocumentCache cache(SubDocumentCache::Limits{
+      .maximumAggregateEntities = 2,
+      .maximumAggregatePayloadBytes = 4,
+  });
+  ParseWarningSink warnings;
+  const auto result = cache.getOrParse(
+      "child.svg", {},
+      [&](const std::vector<uint8_t>&, ParseWarningSink&) -> std::optional<SVGDocumentHandle> {
+        cache.setRootEntityCount(std::numeric_limits<size_t>::max());
+        cache.setRootPayloadBytes(std::numeric_limits<size_t>::max());
+        return MakeDocumentWithCanvas(8).handle();
+      },
+      warnings);
+  EXPECT_FALSE(result);
+  EXPECT_EQ(cache.size(), 0u);
+}
+
+TEST(SubDocumentAdmissionTest, FailedCallbacksRefundSlotsButRetainAttempts) {
+  SVGDocument root;
+  auto& cache = BindAdmissionCache(root, SubDocumentCache::Limits{
+                                             .maximumDocuments = 1,
+                                             .maximumParseAttempts = 3,
+                                         });
+  ParseWarningSink warnings;
+  EXPECT_FALSE(cache.getOrParse("missing.svg", {}, MakeFailingCallback(), warnings));
+  EXPECT_EQ(AdmissionStats(root).pending, 0u);
+  EXPECT_EQ(AdmissionStats(root).parseAttempts, 1u);
+  const auto nullHandle = [](const std::vector<uint8_t>&,
+                             ParseWarningSink&) -> std::optional<SVGDocumentHandle> {
+    return SVGDocumentHandle{};
+  };
+  EXPECT_FALSE(cache.getOrParse("null.svg", {}, nullHandle, warnings));
+  EXPECT_EQ(AdmissionStats(root).pending, 0u);
+  EXPECT_EQ(AdmissionStats(root).documents, 0u);
+  EXPECT_EQ(AdmissionStats(root).parseAttempts, 2u);
+  EXPECT_TRUE(cache.getOrParse("valid.svg", {}, MakeDocumentCallback(8), warnings));
+  EXPECT_EQ(AdmissionStats(root).documents, 1u);
+  EXPECT_EQ(AdmissionStats(root).pending, 0u);
+  EXPECT_EQ(AdmissionStats(root).parseAttempts, 3u);
+}
+
+TEST(SubDocumentAdmissionTest, ReentrantCallbackCannotSpendReservedDocumentSlot) {
+  SVGDocument root;
+  auto& cache = BindAdmissionCache(root, SubDocumentCache::Limits{
+                                             .maximumDocuments = 1,
+                                         });
+  int nestedCalls = 0;
+  ParseWarningSink warnings;
+  const auto result = cache.getOrParse(
+      "outer.svg", {},
+      [&](const std::vector<uint8_t>&, ParseWarningSink& sink) -> std::optional<SVGDocumentHandle> {
+        EXPECT_EQ(AdmissionStats(root).pending, 1u);
+        EXPECT_FALSE(cache.getOrParse(
+            "nested.svg", {},
+            [&](const std::vector<uint8_t>&,
+                ParseWarningSink&) -> std::optional<SVGDocumentHandle> {
+              ++nestedCalls;
+              return MakeDocumentWithCanvas(9).handle();
+            },
+            sink));
+        return MakeDocumentWithCanvas(8).handle();
+      },
+      warnings);
+  ASSERT_TRUE(result);
+  EXPECT_EQ(nestedCalls, 0);
+  EXPECT_EQ(AdmissionStats(root).documents, 1u);
+  EXPECT_EQ(AdmissionStats(root).pending, 0u);
+  EXPECT_EQ(AdmissionStats(root).parseAttempts, 1u);
+}
+
+TEST(SubDocumentAdmissionTest, NewlyJoinedRequesterRejectsInFlightAndLaterUnreservedCalls) {
+  SVGDocument root;
+  auto& cache = BindAdmissionCache(root);
+  SubDocumentCache sibling;
+  ASSERT_TRUE(sibling.bindFamily(root.registry()));
+  SVGDocument requester;
+  auto& requesterCache = BindAdmissionCache(requester, SubDocumentCache::Limits{
+                                                           .maximumDocuments = 1,
+                                                       });
+  ParseWarningSink warnings;
+  const auto result = cache.getOrParse(
+      "child.svg", {},
+      [&](const std::vector<uint8_t>&, ParseWarningSink& sink) -> std::optional<SVGDocumentHandle> {
+        EXPECT_TRUE(requesterCache.getOrParse(
+            "root.svg", {},
+            [&](const std::vector<uint8_t>&,
+                ParseWarningSink&) -> std::optional<SVGDocumentHandle> { return root.handle(); },
+            sink));
+        return MakeDocumentWithCanvas(8).handle();
+      },
+      warnings);
+  EXPECT_FALSE(result);
+  EXPECT_EQ(cache.size(), 0u);
+  EXPECT_EQ(AdmissionStats(root).pending, 0u);
+  EXPECT_EQ(AdmissionStats(root).documents, 0u);
+  EXPECT_EQ(AdmissionStats(requester).documents, 1u);
+  int laterCalls = 0;
+  EXPECT_FALSE(sibling.getOrParse(
+      "later.svg", {},
+      [&](const std::vector<uint8_t>&, ParseWarningSink&) -> std::optional<SVGDocumentHandle> {
+        ++laterCalls;
+        return MakeDocumentWithCanvas(9).handle();
+      },
+      warnings));
+  EXPECT_EQ(laterCalls, 0);
+}
+
+TEST(SubDocumentAdmissionTest, CacheAliasesMovesAndRawRegistryOwnersRetainOneLease) {
+  SVGDocument root;
+  const Entity imageEntity = root.registry().create();
+  auto& cache = BindAdmissionCache(root, SubDocumentCache::Limits{
+                                             .maximumDocuments = 2,
+                                         });
+  auto child = MakeDocumentWithCanvas(8).handle();
+  auto rawRegistry = child->sharedRegistry();
+  const auto callback = [&](const std::vector<uint8_t>&,
+                            ParseWarningSink&) -> std::optional<SVGDocumentHandle> {
+    return child;
+  };
+  ParseWarningSink warnings;
+  auto first = cache.getOrParse("one.svg", {}, callback, warnings);
+  auto alias = cache.getOrParse("two.svg", {}, callback, warnings);
+  ASSERT_TRUE(first);
+  ASSERT_TRUE(alias);
+  EXPECT_EQ(*first, *alias);
+  EXPECT_EQ(AdmissionStats(root).documents, 1u);
+  EXPECT_EQ(AdmissionStats(root).parseAttempts, 2u);
+  {
+    auto facade = SVGDocument::CreateFromHandle(*first);
+    auto copy = facade;
+    EXPECT_EQ(copy.handle(), *first);
+    EXPECT_EQ(AdmissionStats(root).documents, 1u);
+  }
+  root.registry().emplace<LoadedSVGImageComponent>(imageEntity, child);
+  auto moved = std::move(cache);
+  EXPECT_EQ(moved.get("one.svg"), first);
+  moved = SubDocumentCache();
+  root.registry().ctx().erase<SubDocumentCache>();
+  child.reset();
+  first.reset();
+  alias.reset();
+  EXPECT_EQ(AdmissionStats(root).documents, 1u);
+  root.registry().remove<LoadedSVGImageComponent>(imageEntity);
+  EXPECT_EQ(AdmissionStats(root).documents, 1u);
+  rawRegistry.reset();
+  EXPECT_EQ(AdmissionStats(root).documents, 0u);
+  EXPECT_EQ(AdmissionStats(root).entities, 2u);
+}
+
+TEST(SubDocumentAdmissionTest, ForeignFilterOnlyGraphCannotEscapeDocumentAdmission) {
+  SVGDocument root;
+  auto& cache = BindAdmissionCache(root, SubDocumentCache::Limits{
+                                             .maximumDocuments = 1,
+                                         });
+  SVGDocument::Settings settings;
+  auto foreignFamily = std::make_shared<DocumentResourceFamilyBudget>();
+  settings.resourceFamilyBudget = foreignFamily;
+  SVGDocument foreign(std::move(settings));
+  auto leaf = MakeDocumentWithCanvas(8).handle();
+  AddFilterSvgReference(foreign, leaf);
+  ParseWarningSink warnings;
+  EXPECT_FALSE(cache.getOrParse(
+      "foreign.svg", {},
+      [&](const std::vector<uint8_t>&, ParseWarningSink&) -> std::optional<SVGDocumentHandle> {
+        return foreign.handle();
+      },
+      warnings));
+  EXPECT_EQ(AdmissionStats(root).documents, 0u);
+  EXPECT_EQ(AdmissionStats(root).pending, 0u);
+  EXPECT_EQ(foreign.registry().ctx().get<DocumentResourceFamilyContext>().budget, foreignFamily);
+  EXPECT_EQ(foreign.registry().ctx().get<ResourceManagerContext>().processingMode(),
+            ProcessingMode::DynamicInteractive);
+}
+
+TEST(SubDocumentAdmissionTest, CrossFamilyFailureLeavesNoPartialChargesOrMemberships) {
+  SVGDocument root;
+  auto& cache = BindAdmissionCache(root, SubDocumentCache::Limits{
+                                             .maximumDocuments = 4,
+                                         });
+  SVGDocument requester;
+  auto& requesterCache = BindAdmissionCache(requester, SubDocumentCache::Limits{
+                                                           .maximumDocuments = 2,
+                                                       });
+  ParseWarningSink warnings;
+  ASSERT_TRUE(requesterCache.getOrParse(
+      "root.svg", {},
+      [&](const std::vector<uint8_t>&, ParseWarningSink&) -> std::optional<SVGDocumentHandle> {
+        return root.handle();
+      },
+      warnings));
+  SVGDocument foreign;
+  AddFilterSvgReference(foreign, MakeDocumentWithCanvas(8).handle());
+  const auto callback = [&](const std::vector<uint8_t>&,
+                            ParseWarningSink&) -> std::optional<SVGDocumentHandle> {
+    return foreign.handle();
+  };
+  EXPECT_FALSE(cache.getOrParse("foreign.svg", {}, callback, warnings));
+  EXPECT_EQ(AdmissionStats(root).documents, 0u);
+  EXPECT_EQ(AdmissionStats(root).pending, 0u);
+  EXPECT_EQ(AdmissionStats(requester).documents, 1u);
+  EXPECT_EQ(AdmissionStats(requester).pending, 0u);
+  SVGDocument::Settings settings;
+  settings.resourceFamilyBudget = AdmissionFamily(root);
+  SVGDocument other(std::move(settings));
+  auto& otherCache = BindAdmissionCache(other);
+  EXPECT_TRUE(otherCache.getOrParse("foreign.svg", {}, callback, warnings));
+  EXPECT_EQ(AdmissionStats(root).documents, 3u);
+  EXPECT_EQ(AdmissionStats(requester).documents, 1u);
+}
+
+TEST(SubDocumentAdmissionTest, CyclicReturnedGraphAndOwnerReferenceAreRejected) {
+  SVGDocument root;
+  auto& cache = BindAdmissionCache(root);
+  SVGDocument foreign;
+  AddFilterSvgReference(foreign, foreign.handle());
+  ParseWarningSink warnings;
+  EXPECT_FALSE(cache.getOrParse(
+      "cycle.svg", {},
+      [&](const std::vector<uint8_t>&, ParseWarningSink&) -> std::optional<SVGDocumentHandle> {
+        return foreign.handle();
+      },
+      warnings));
+  foreign.svgElement().entityHandle().remove<ComputedFilterComponent>();
+  SubDocumentCache other;
+  ASSERT_TRUE(other.bindFamily(root.registry()));
+  EXPECT_FALSE(other.getOrParse(
+      "owner.svg", {},
+      [&](const std::vector<uint8_t>&, ParseWarningSink&) -> std::optional<SVGDocumentHandle> {
+        return root.handle();
+      },
+      warnings));
+  EXPECT_EQ(AdmissionStats(root).documents, 0u);
+  EXPECT_EQ(AdmissionStats(root).pending, 0u);
+}
+
+TEST(SubDocumentAdmissionTest, TraversalBoundsAliasedEdgesAsWellAsDistinctDocuments) {
+  SVGDocument root;
+  auto& cache = BindAdmissionCache(root, SubDocumentCache::Limits{
+                                             .maximumDocuments = 2,
+                                             .maximumAggregateEntities = 3,
+                                         });
+  SVGDocument foreign;
+  AddFilterSvgReference(foreign, MakeDocumentWithCanvas(8).handle(), 16);
+  ParseWarningSink warnings;
+  EXPECT_FALSE(cache.getOrParse(
+      "aliases.svg", {},
+      [&](const std::vector<uint8_t>&, ParseWarningSink&) -> std::optional<SVGDocumentHandle> {
+        return foreign.handle();
+      },
+      warnings));
+  EXPECT_EQ(AdmissionStats(root).documents, 0u);
+  EXPECT_EQ(AdmissionStats(root).pending, 0u);
+}
+
+TEST(SubDocumentAdmissionTest, EntityHighWaterPersistsUntilRegistryRetirement) {
+  SVGDocument root;
+  auto& cache = BindAdmissionCache(root, SubDocumentCache::Limits{
+                                             .maximumAggregateEntities = 3,
+                                         });
+  auto child = MakeDocumentWithCanvas(8).handle();
+  ParseWarningSink warnings;
+  auto retained = cache.getOrParse(
+      "child.svg", {},
+      [&](const std::vector<uint8_t>&, ParseWarningSink&) -> std::optional<SVGDocumentHandle> {
+        return child;
+      },
+      warnings);
+  ASSERT_TRUE(retained);
+  const Entity extra = child->registry().create();
+  ASSERT_TRUE(cache.bindFamily(root.registry()));
+  EXPECT_EQ(AdmissionStats(root).entities, 3u);
+  child->registry().destroy(extra);
+  ASSERT_TRUE(cache.bindFamily(root.registry()));
+  EXPECT_EQ(AdmissionStats(root).entities, 3u);
+  (void)child->registry().create();
+  (void)child->registry().create();
+  EXPECT_FALSE(cache.bindFamily(root.registry()));
+  EXPECT_FALSE(cache.get("child.svg"));
+  EXPECT_EQ(AdmissionStats(root).entities, 3u);
+  root.registry().ctx().erase<SubDocumentCache>();
+  retained.reset();
+  child.reset();
+  EXPECT_EQ(AdmissionStats(root).entities, 1u);
+  EXPECT_EQ(AdmissionStats(root).documents, 0u);
+}
+
+TEST(SubDocumentAdmissionTest, ExpiredSecondaryFamilyDoesNotConstrainLaterForeignLoads) {
+  SVGDocument foreign;
+  std::weak_ptr<DocumentResourceFamilyBudget> retiredFamily;
+  ParseWarningSink warnings;
+  {
+    SVGDocument root;
+    auto& cache = BindAdmissionCache(root, SubDocumentCache::Limits{
+                                               .maximumDocuments = 1,
+                                           });
+    retiredFamily = AdmissionFamily(root);
+    ASSERT_TRUE(cache.getOrParse(
+        "foreign.svg", {},
+        [&](const std::vector<uint8_t>&, ParseWarningSink&) -> std::optional<SVGDocumentHandle> {
+          return foreign.handle();
+        },
+        warnings));
+    auto& foreignCache = BindAdmissionCache(foreign);
+    EXPECT_EQ(AdmissionStats(root).documents, 1u);
+    EXPECT_EQ(foreignCache.size(), 0u);
+  }
+  EXPECT_TRUE(retiredFamily.expired());
+  auto& foreignCache = foreign.registry().ctx().get<SubDocumentCache>();
+  ASSERT_TRUE(foreignCache.bindFamily(foreign.registry()));
+  EXPECT_TRUE(foreignCache.getOrParse("child.svg", {}, MakeDocumentCallback(8), warnings));
+  EXPECT_EQ(AdmissionStats(foreign).documents, 1u);
+}
+
+TEST(SubDocumentAdmissionTest, ReentrantLocalCacheCannotExceedDocumentLimit) {
+  SubDocumentCache cache(SubDocumentCache::Limits{.maximumDocuments = 1});
+  ParseWarningSink warnings;
+  const auto outer = cache.getOrParse(
+      "outer.svg", {},
+      [&](const std::vector<uint8_t>&, ParseWarningSink& sink) -> std::optional<SVGDocumentHandle> {
+        EXPECT_TRUE(cache.getOrParse("inner.svg", {}, MakeDocumentCallback(8), sink));
+        return MakeDocumentWithCanvas(9).handle();
+      },
+      warnings);
+  EXPECT_FALSE(outer);
+  EXPECT_EQ(cache.size(), 1u);
+  EXPECT_TRUE(cache.get("inner.svg"));
+}
+
 }  // namespace donner::svg::components

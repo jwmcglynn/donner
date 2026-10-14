@@ -201,6 +201,7 @@ SubDocumentCache& PrepareSubDocumentCache(Registry& registry) {
     registry.ctx().emplace<SubDocumentCache>();
   }
   auto& cache = registry.ctx().get<SubDocumentCache>();
+  cache.bindFamily(registry);
   cache.setRootEntityCount(registry.storage<Entity>().size());
   if (const auto* payload = registry.ctx().find<ParsedPayloadResourceBudget>()) {
     cache.setRootPayloadBytes(payload->securityStats().retainedBytes);
@@ -211,6 +212,9 @@ SubDocumentCache& PrepareSubDocumentCache(Registry& registry) {
 bool AttachCachedSubDocument(Registry& registry, Entity entity, const RcString& href) {
   auto* cache = registry.ctx().find<SubDocumentCache>();
   if (!cache) {
+    return false;
+  }
+  if (!cache->bindFamily(registry)) {
     return false;
   }
   auto cachedDocument = cache->get(href);
@@ -447,15 +451,7 @@ std::optional<SVGDocumentHandle> ResourceManagerContext::loadExternalSVG(
     return std::nullopt;
   }
 
-  // Get or create the SubDocumentCache.
-  if (!registry_.ctx().contains<SubDocumentCache>()) {
-    registry_.ctx().emplace<SubDocumentCache>();
-  }
-  auto& cache = registry_.ctx().get<SubDocumentCache>();
-  cache.setRootEntityCount(registry_.storage<Entity>().size());
-  if (const auto* payload = registry_.ctx().find<ParsedPayloadResourceBudget>()) {
-    cache.setRootPayloadBytes(payload->securityStats().retainedBytes);
-  }
+  auto& cache = PrepareSubDocumentCache(registry_);
 
   // Check if already cached.
   if (auto cached = cache.get(boundedUrl)) {

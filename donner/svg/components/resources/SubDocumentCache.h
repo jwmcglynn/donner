@@ -2,6 +2,7 @@
 /// @file
 
 #include <functional>
+#include <memory>
 #include <optional>
 #include <unordered_map>
 #include <unordered_set>
@@ -14,19 +15,21 @@
 
 namespace donner::svg::components {
 
+class SubDocumentAdmission;
+
 /**
  * Cache for parsed SVG sub-documents referenced by `<image>` or `<use>` elements.
  *
- * Sub-documents are parsed in \ref ProcessingMode::SecureStatic mode, which prevents them from
- * loading their own external resources (per SVG2 §2.7.1). This prevents infinite recursion when
- * document A references document B which references document A.
+ * Default sub-document parsing uses \ref ProcessingMode::SecureStatic, which blocks external
+ * fetching. Nested data resources also pass shared family admission and bounded cycle checks.
  *
  * This stores \ref SVGDocumentHandle values, which are the same shared internal state used by
  * \ref SVGDocument's by-value facade.
  */
 class SubDocumentCache {
 public:
-  /// Sub-document admission limits; entity and parsed-payload ceilings also include the root.
+  /// Local admission ceilings, also tightening the family when bound to a resource registry.
+  /// Entity and parsed-payload admission snapshots include the original root.
   struct Limits {
     size_t maximumDocuments = 64;                 ///< Distinct cached documents.
     size_t maximumParseAttempts = 128;            ///< Parse attempts, including failures.
@@ -115,12 +118,21 @@ public:
   /// Include root-document parsed payload in the aggregate retained-payload envelope.
   void setRootPayloadBytes(size_t count) { rootPayloadBytes_ = count; }
 
+  /// Bind production resource admission to this registry and its requesting families.
+  /// @param registry Registry owning this cache.
+  bool bindFamily(Registry& registry);
+
   /// Current parse, cache, and rejection counters.
   const SecurityStats& securityStats() const { return securityStats_; }
 
 private:
+  friend class SubDocumentAdmission;
+  std::shared_ptr<SubDocumentAdmission> admission_;
+  bool familyBound_ = false;
+
   static constexpr size_t kMaximumRejectedEntries = 256;
 
+  bool acceptsCachedDocument(const SVGDocumentHandle& document) const;
   bool admissionAvailable() const;
   bool candidateFits(size_t entityCount, size_t payloadBytes) const;
 
