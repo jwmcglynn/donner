@@ -233,8 +233,21 @@ TEST(SVGStopElementTests, ComputedStopColorAfterSet) {
   EXPECT_EQ(stop->computedStopColor(), css::Color(css::RGBA(0, 0xFF, 0xFF, 0xFF)));
 }
 
+TEST(SVGStopElementTests, InheritedStopOpacityFollowsParentStyleEdits) {
+  auto doc = instantiateSubtree(
+      "<linearGradient id='parent' style='stop-opacity:0.4'>"
+      "<stop id='s' style='stop-opacity:inherit'/></linearGradient>");
+  auto stop = doc.querySelector("#s")->cast<SVGStopElement>();
+  EXPECT_THAT(stop.computedStopOpacity(), DoubleNear(0.4, 0.001));
+  doc.querySelector("#parent")->setStyle("stop-opacity:0.8");
+  EXPECT_THAT(stop.computedStopOpacity(), DoubleNear(0.8, 0.001));
+  stop.setStopOpacity(0.3);
+  EXPECT_THAT(stop.computedStopOpacity(), DoubleNear(0.3, 0.001));
+}
+
 TEST(SVGStopElementTests, ComputedStopOpacityAfterSet) {
   auto stop = instantiateSubtreeElementAs<SVGStopElement>("<stop />");
+  EXPECT_THAT(stop->computedStopOpacity(), DoubleNear(1.0, 0.001));
   stop->setStopOpacity(0.6);
   EXPECT_THAT(stop->computedStopOpacity(), DoubleNear(0.6, 0.001));
 }

@@ -204,6 +204,102 @@ TEST(RendererAnimationStyleBase, ResourceOpacityPreservesStylesAndTypedPriority)
   }
 }
 
+TEST(RendererAnimationStyleBase, InheritedScalarLayersUseTheSampledParent) {
+  for (const std::string attribute : {"opacity", "fill-opacity"}) {
+    for (const bool important : {false, true}) {
+      for (const std::string keyword : {"inherit", "unset"}) {
+        SCOPED_TRACE(attribute);
+        SCOPED_TRACE(important);
+        SCOPED_TRACE(keyword);
+        const std::string parentValue = important ? "0.6" : "0.4";
+        const std::string childValue = attribute == "opacity" && keyword == "unset" ? "0.5"
+                                       : important                                  ? "0.3"
+                                                                                    : "0.2";
+        auto document = instantiateSubtree(
+            "<g id='parent' style='" + attribute + ":" + (important ? "0.6!important" : "0.8") +
+                "'><rect id='r' width='16' height='16' " + attribute +
+                "='0.9'/></g>"
+                "<set href='#r' attributeName='" +
+                attribute + "' to='" + keyword +
+                "' dur='2s'/>"
+                "<animate href='#r' attributeName='" +
+                attribute +
+                "' to='0' dur='2s'/>"
+                "<animate href='#parent' attributeName='" +
+                attribute + "' from='0.2' to='0.6' dur='2s'/>",
+            parser::SVGParser::Options(), Vector2i(16, 16));
+        auto expected = instantiateSubtree("<g " + attribute + "='" + parentValue +
+                                               "'><rect width='16' height='16' " + attribute +
+                                               "='" + childValue + "'/></g>",
+                                           parser::SVGParser::Options(), Vector2i(16, 16));
+        document.setTime(1);
+        editor::tests::CompareBitmapToBitmap(
+            RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(expected),
+            "scalar-parent-keyword", editor::tests::PixelmatchIdentityParams());
+      }
+    }
+  }
+}
+
+TEST(RendererAnimationStyleBase, InheritedScalarLayersUseEachShadowParent) {
+  auto document = instantiateSubtree(
+      "<defs><rect id='shape' width='16' height='16' fill='red' fill-opacity='0.9'>"
+      "<set attributeName='fill-opacity' to='inherit' dur='2s'/>"
+      "<animate attributeName='fill-opacity' to='0' dur='2s'/></rect></defs>"
+      "<use href='#shape' fill-opacity='0.4'/><use href='#shape' x='16' fill-opacity='0.8'/>",
+      parser::SVGParser::Options(), Vector2i(32, 16));
+  auto expected = instantiateSubtree(
+      "<rect width='16' height='16' fill='red' fill-opacity='0.2'/>"
+      "<rect x='16' width='16' height='16' fill='red' fill-opacity='0.4'/>",
+      parser::SVGParser::Options(), Vector2i(32, 16));
+  document.setTime(1);
+  editor::tests::CompareBitmapToBitmap(
+      RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(expected),
+      "scalar-shadow-parent", editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(RendererAnimationStyleBase, ResourceOpacityInheritsTheSampledParentValue) {
+  for (const bool flood : {false, true}) {
+    SCOPED_TRACE(flood);
+    const std::string attribute = flood ? "flood-opacity" : "stop-opacity";
+    const std::string source =
+        flood ? "<defs><filter id='parent' style='flood-opacity:0.8'><feFlood id='r' "
+                "flood-color='red'/></filter></defs><rect width='16' height='16' "
+                "filter='url(#parent)'/>"
+              : "<defs><linearGradient id='parent' style='stop-opacity:0.8'><stop id='r' "
+                "stop-color='red'/></linearGradient></defs><rect width='16' height='16' "
+                "fill='url(#parent)'/>";
+    auto document = instantiateSubtree(source + "<set href='#r' attributeName='" + attribute +
+                                           "' to='inherit' dur='2s'/>"
+                                           "<animate href='#r' attributeName='" +
+                                           attribute +
+                                           "' to='0' dur='2s'/>"
+                                           "<animate href='#parent' attributeName='" +
+                                           attribute + "' from='0.2' to='0.6' dur='2s'/>",
+                                       parser::SVGParser::Options(), Vector2i(16, 16));
+    std::string reference = source;
+    reference.insert(reference.find("id='r'"), attribute + "='0.2' ");
+    auto expected = instantiateSubtree(reference, parser::SVGParser::Options(), Vector2i(16, 16));
+    document.setTime(1);
+    editor::tests::CompareBitmapToBitmap(
+        RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(expected),
+        "resource-opacity-parent", editor::tests::PixelmatchIdentityParams());
+  }
+}
+
+TEST(RendererAnimationStyleBase, ScalarStackDoesNotClampIntermediateLayers) {
+  auto document = instantiateSubtree(
+      "<rect width='16' height='16' opacity='0.2'><set attributeName='opacity' to='2' dur='2s'/>"
+      "<animate attributeName='opacity' to='0' dur='2s'/></rect>",
+      parser::SVGParser::Options(), Vector2i(16, 16));
+  auto expected = instantiateSubtree("<rect width='16' height='16'/>", parser::SVGParser::Options(),
+                                     Vector2i(16, 16));
+  document.setTime(1);
+  editor::tests::CompareBitmapToBitmap(
+      RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(expected),
+      "scalar-unclamped-stack", editor::tests::PixelmatchIdentityParams());
+}
+
 #ifdef DONNER_TEXT_ENABLED
 TEST(RendererAnimationStyleBase, FontSizeUsesTheSampledParentFontContext) {
   for (const bool animatedParent : {false, true}) {

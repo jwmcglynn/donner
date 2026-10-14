@@ -19,6 +19,8 @@
 #include "donner/svg/components/DirtyFlagsComponent.h"
 #include "donner/svg/components/StylesheetComponent.h"
 #include "donner/svg/components/animation/AnimatedValuesComponent.h"
+#include "donner/svg/components/animation/AnimationResourceBudget.h"
+#include "donner/svg/components/animation/AnimationSystem.h"
 #include "donner/svg/components/resources/ResourceManagerContext.h"
 #include "donner/svg/components/shadow/ComputedShadowTreeComponent.h"
 #include "donner/svg/components/shadow/ShadowTreeComponent.h"
@@ -124,48 +126,35 @@ protected:
 // --- Basic style computation ---
 
 TEST_F(StyleSystemTest, RepeatedAnimatedOpacityReservesWorkBeforeParsing) {
+  const std::string value = std::string(65536, '0') + ".5";
   auto document = ParseSVG(
-      "<svg xmlns='http://www.w3.org/2000/svg'><defs><g id='src'/></defs>"
+      "<svg xmlns='http://www.w3.org/2000/svg'><defs><g id='src' opacity='1'>"
+      "<set attributeName='opacity' to='" +
+      value +
+      "' dur='2s'/></g></defs>"
       "<use id='a' href='#src'/><use id='b' href='#src'/><use id='c' href='#src'/></svg>");
   auto& registry = document.registry();
   const auto source = document.querySelector("#src")->entityHandle();
-  const std::string value = std::string(4096, '0') + ".5";
-  source.get_or_emplace<AnimatedValuesComponent>().overrides["stop-opacity"] = value;
-  registry.ctx().emplace<AnimationStyleContext>().enabled = false;
   ParseWarningSink warnings = ParseWarningSink::Disabled();
+  std::vector<Entity> targets{source.entity()};
   for (const char* id : {"#a", "#b", "#c"}) {
     auto use = document.querySelector(id)->entityHandle();
     auto& shadow = use.get_or_emplace<ComputedShadowTreeComponent>();
     ShadowTreeSystem().populateInstance(use, shadow, ShadowBranchType::Main, source.entity(),
                                         RcString("#src"), warnings);
+    ASSERT_THAT(shadow.mainBranch, testing::Optional(testing::_));
+    targets.push_back(shadow.mainBranch->shadowEntities.front());
   }
+  AnimationSystem().advance(registry, 1, nullptr);
+  registry.ctx().emplace<AnimationStyleContext>().enabled = true;
   styleSystem.computeAllStyles(registry, warnings);
-  const auto baselineApplications =
-      registry.ctx().get<StyleResourceBudget>().declarationApplications();
-  const auto baselineBytes = registry.ctx().get<StyleResourceBudget>().declarationByteWork();
-  registry.clear<ComputedStyleComponent>();
-  registry.ctx().erase<StyleResourceBudget>();
-  StyleResourceBudget::Limits limits;
-  limits.declarationByteWork = baselineBytes + value.size() * 3;
-  registry.ctx().emplace<StyleResourceBudget>(limits);
-  registry.ctx().get<AnimationStyleContext>().enabled = true;
-  styleSystem.computeAllStyles(registry, warnings);
-  const auto& budget = registry.ctx().get<StyleResourceBudget>();
-  EXPECT_THAT(budget.declarationApplications(),
-              testing::AllOf(testing::Ge(3u), testing::Le(baselineApplications + 3)));
-  EXPECT_THAT(
-      budget.declarationByteWork(),
-      testing::AllOf(testing::Ge(value.size() * 3), testing::Le(limits.declarationByteWork)));
-  EXPECT_THAT(budget.rejected(), testing::IsTrue());
-  std::size_t styled = 0;
-  for (const auto entity : registry.view<ComputedStyleComponent>()) {
-    const auto& style = registry.get<ComputedStyleComponent>(entity);
-    if (style.properties &&
-        style.properties->unparsedProperties.contains(RcString("stop-opacity"))) {
-      ++styled;
-    }
+  EXPECT_EQ(registry.ctx().get<AnimationResourceBudget>().remainingContextualWork(), 0u);
+  std::vector<double> opacities;
+  for (const Entity target : targets) {
+    opacities.push_back(
+        registry.get<ComputedStyleComponent>(target).properties->opacity.get().value());
   }
-  EXPECT_EQ(styled, 3u);
+  EXPECT_THAT(opacities, testing::UnorderedElementsAre(0.5, 0.5, 0.5, 1.0));
 }
 
 TEST_F(StyleSystemTest, ComputeAllStylesCreatesComponents) {
