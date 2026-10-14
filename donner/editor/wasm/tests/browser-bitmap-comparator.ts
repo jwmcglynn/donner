@@ -12,9 +12,13 @@ const kComparatorInputs = [
   "DONNER_EXPECTED_PNG",
   "DONNER_GOLDEN_PNG",
 ];
-// googletest writes, creates or deletes these files for the test that owns them: the caller.
+// Bazel test-protocol files belong to the calling test, so the comparator never inherits them.
+// googletest writes XML_OUTPUT_FILE and TEST_WARNINGS_OUTPUT_FILE and creates and deletes
+// TEST_PREMATURE_EXIT_FILE; its shard status file comes from GTEST_SHARD_STATUS_FILE, which the
+// GTEST_ rule removes, and TEST_SHARD_STATUS_FILE is removed as well.
 const kCallerTestFiles = [
   "TEST_PREMATURE_EXIT_FILE",
+  "TEST_SHARD_STATUS_FILE",
   "TEST_WARNINGS_OUTPUT_FILE",
   "XML_OUTPUT_FILE",
 ];
