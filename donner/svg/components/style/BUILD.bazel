@@ -20,13 +20,15 @@ cc_library(
 donner_perf_sensitive_cc_library(
     name = "style_system",
     srcs = [
+        "PaintAnimationStyle.cc",
         "ScalarAnimationStyle.cc",
         "StyleSystem.cc",
     ],
     hdrs = [
+        "ExternalUseStyleContext.h",
+        "PaintAnimationStyle.h",
         "ScalarAnimationStyle.h",
         "StyleSystem.h",
-        "ExternalUseStyleContext.h",
     ],
     visibility = [
         "//donner/editor:__pkg__",

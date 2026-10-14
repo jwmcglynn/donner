@@ -16,6 +16,15 @@ namespace donner::svg::components {
 /// @return True for the supported opacity and miter-limit scalar properties.
 bool IsContextualScalarAttribute(std::string_view attribute);
 
+/// Whether a paint/color stack needs the final instance's cascade.
+/// @param attribute Presentation property name.
+bool IsContextualPaintAttribute(std::string_view attribute);
+
+/// Serialize an escaped, quoted CSS URL within the animation output envelope.
+/// @param href Raw URL. The caller admits copying/escaping work before calling.
+/// @return Owned CSS representation, or nullopt when it exceeds the output envelope.
+std::optional<std::string> SerializeAnimationUrl(std::string_view href);
+
 /// Context required to resolve relative units and currentColor for an animated value.
 struct AnimationValueContext {
   Box2d viewBox{{0, 0}, {300, 150}};  ///< Current SVG viewport in user units.

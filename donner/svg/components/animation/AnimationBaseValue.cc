@@ -47,26 +47,12 @@ std::optional<std::string> SerializeReference(const Reference& reference,
   if (!budget || !reference.hasSafeRepresentation()) {
     return std::nullopt;
   }
-  if (!budget->reserveSourceBytes(href.size() * 4 + 32)) {
+  if (href.size() > (AnimationResourceBudget::kMaximumSourceBytes - 32) / 4 ||
+      !budget->reserveSourceBytes(href.size() * 4 + 32)) {
+    std::ignore = budget->reserveSourceBytes(AnimationResourceBudget::kMaximumSourceBytes + 1);
     return std::string{};
   }
-  std::string result = "url(\"";
-  constexpr char hex[] = "0123456789abcdef";
-  for (const unsigned char character : href) {
-    if (character < 32 || character == 127) {
-      result += '\\';
-      result += hex[character >> 4];
-      result += hex[character & 15];
-      result += ' ';
-    } else {
-      if (character == '\\' || character == '"') {
-        result += '\\';
-      }
-      result += static_cast<char>(character);
-    }
-  }
-  result += "\")";
-  return result;
+  return SerializeAnimationUrl(href);
 }
 
 std::optional<std::string> SerializeDasharray(const StrokeDasharray& value,

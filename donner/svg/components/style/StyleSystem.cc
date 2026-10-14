@@ -28,6 +28,7 @@
 #include "donner/svg/components/style/ComputedStyleComponent.h"
 #include "donner/svg/components/style/DoNotInheritFillOrStrokeTag.h"
 #include "donner/svg/components/style/ExternalUseStyleContext.h"
+#include "donner/svg/components/style/PaintAnimationStyle.h"
 #include "donner/svg/components/style/ScalarAnimationStyle.h"
 #include "donner/svg/components/style/StyleComponent.h"
 
@@ -287,7 +288,7 @@ void ApplyContextualFontSize(Registry& registry, Entity dataEntity,
 }
 
 template <typename PropertyType>
-void PreserveLocalScalar(const PropertyType& local, PropertyType& inherited) {
+void PreserveLocalValue(const PropertyType& local, PropertyType& inherited) {
   if (local.state == PropertyState::Set || local.state == PropertyState::ExplicitInitial) {
     inherited = local;
   }
@@ -702,11 +703,15 @@ PropertyRegistry StyleSystem::inheritProperties(Registry& registry, Entity paren
                                                     : PropertyInheritOptions::All;
   PropertyRegistry inherited =
       properties.inheritFrom(parentStyleComponent.properties.value(), inheritOptions);
-  PreserveLocalScalar(properties.fontSize, inherited.fontSize);
-  PreserveLocalScalar(properties.opacity, inherited.opacity);
-  PreserveLocalScalar(properties.fillOpacity, inherited.fillOpacity);
-  PreserveLocalScalar(properties.strokeOpacity, inherited.strokeOpacity);
-  PreserveLocalScalar(properties.strokeMiterlimit, inherited.strokeMiterlimit);
+  PreserveLocalValue(properties.fontSize, inherited.fontSize);
+  PreserveLocalValue(properties.color, inherited.color);
+  PreserveLocalValue(properties.fill, inherited.fill);
+  PreserveLocalValue(properties.stroke, inherited.stroke);
+  PreserveLocalValue(properties.colorInterpolation, inherited.colorInterpolation);
+  PreserveLocalValue(properties.opacity, inherited.opacity);
+  PreserveLocalValue(properties.fillOpacity, inherited.fillOpacity);
+  PreserveLocalValue(properties.strokeOpacity, inherited.strokeOpacity);
+  PreserveLocalValue(properties.strokeMiterlimit, inherited.strokeMiterlimit);
   return inherited;
 }
 
@@ -760,6 +765,9 @@ void StyleSystem::computePropertiesInto(EntityHandle handle, ComputedStyleCompon
   const auto resourceOpacities = ApplyScalarAnimationStyles(registry, dataEntity, parentStyle,
                                                             properties, styleBudget, warningSink);
   properties.resolveElementColors(warningSink);
+  const bool inheritPaint =
+      occurrence || parent == entt::null || !registry.all_of<DoNotInheritFillOrStrokeTag>(parent);
+  ApplyPaintAnimationStyles(registry, dataEntity, parentStyle, inheritPaint, properties);
 
   // Inherit from parent, then charge the dynamic bytes retained by the final computed style.
   // Charging the parent's source value alone misses large locally parsed vectors and can also

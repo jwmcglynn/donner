@@ -20,6 +20,35 @@ bool IsContextualScalarAttribute(std::string_view attribute) {
   return std::find(names.begin(), names.end(), attribute) != names.end();
 }
 
+bool IsContextualPaintAttribute(std::string_view attribute) {
+  return attribute == "color" || attribute == "fill" || attribute == "stroke" ||
+         attribute == "stop-color" || attribute == "flood-color";
+}
+
+std::optional<std::string> SerializeAnimationUrl(std::string_view href) {
+  if (href.size() > (AnimationResourceBudget::kMaximumOutputBytes - 32) / 4) {
+    return std::nullopt;
+  }
+  std::string result = "url(\"";
+  result.reserve(href.size() * 4 + 32);
+  constexpr char hex[] = "0123456789abcdef";
+  for (const unsigned char character : href) {
+    if (character < 32 || character == 127) {
+      result += '\\';
+      result += hex[character >> 4];
+      result += hex[character & 15];
+      result += ' ';
+    } else {
+      if (character == '\\' || character == '"') {
+        result += '\\';
+      }
+      result += static_cast<char>(character);
+    }
+  }
+  result += "\")";
+  return result;
+}
+
 std::optional<std::vector<Lengthd>> ParseAnimationLengths(std::string_view input) {
   donner::parser::LengthParser::Options options;
   options.unitOptional = true;
