@@ -3394,9 +3394,79 @@ test("Geode WASM presents selection path overlay pixels", async ({ page }) => {
   expect(fatalMessages).toEqual([]);
 });
 
+async function measurePageRaf(page: Page, durationMs: number) {
+  const loadBefore = loadavg();
+  const sample = await boundBrowserDiagnostic(
+    page.evaluate(async (durationMs) => {
+      const startedAtMs = performance.now();
+      const readState = () =>
+        structuredClone({
+          visibilityState: document.visibilityState,
+          hasFocus: document.hasFocus(),
+          frames: window.__donnerMainLoopRenderedFrames ?? 0,
+          worker: window.__donnerWorkerStats ?? null,
+          layerThumbnails: window.__donnerLayerThumbnailStats ?? null,
+          thumbnails: window.__donnerSampleThumbnailStats ?? null,
+        });
+      const before = readState();
+      return await new Promise<{
+        startedAtMs: number;
+        finishedAtMs: number;
+        before: ReturnType<typeof readState>;
+        after: ReturnType<typeof readState>;
+        samples: number[][];
+      }>((resolve) => {
+        const samples: number[][] = [];
+        let frame = 0;
+        let timer = 0;
+        let finished = false;
+        const finish = () => {
+          if (finished) return;
+          finished = true;
+          cancelAnimationFrame(frame);
+          clearTimeout(timer);
+          resolve({
+            startedAtMs,
+            finishedAtMs: performance.now(),
+            before,
+            after: readState(),
+            samples,
+          });
+        };
+        const tick = (timestamp: number) => {
+          if (finished) return;
+          samples.push([timestamp, performance.now()]);
+          if (performance.now() - startedAtMs >= durationMs || samples.length >= 4096) {
+            finish();
+          } else {
+            frame = requestAnimationFrame(tick);
+          }
+        };
+        timer = window.setTimeout(finish, durationMs + 1000);
+        frame = requestAnimationFrame(tick);
+      });
+    }, durationMs),
+    durationMs + 2000,
+  );
+  return { sample, loadBefore, loadAfter: loadavg() };
+}
+
 test(
   "animation preview plays, dispatches mouse events, and returns to Edit",
   async ({ page }, testInfo) => {
+    const rafControls = process.env.DONNER_ANIMATION_RAF_CONTROLS === "1";
+    if (rafControls) testInfo.setTimeout(testInfo.timeout + 21000);
+    const rafControlSamples: Record<string, Awaited<ReturnType<typeof measurePageRaf>>> = {};
+    const captureRafControl = async (name: string) => {
+      rafControlSamples[name] = await measurePageRaf(page, 5000);
+      const controlsPath = testInfo.outputPath("animation-raf-controls.json");
+      await writeFile(controlsPath, JSON.stringify(rafControlSamples, null, 2));
+      await testInfo.attach("animation-raf-controls-" + name, {
+        contentType: "application/json",
+        path: controlsPath,
+      });
+    };
+    if (rafControls) await captureRafControl("blankBefore");
     const frameDriver = process.env.DONNER_ANIMATION_FRAME_DRIVER;
     if (frameDriver !== undefined && frameDriver !== "proxied-main-raf") {
       throw new Error("DONNER_ANIMATION_FRAME_DRIVER must be proxied-main-raf when set");
@@ -3462,6 +3532,7 @@ test(
       return result;
     };
     const start = await orb();
+    if (rafControls) await captureRafControl("editState");
     await page.mouse.click(editCenter.x + edit.maxX - edit.minX + 1, editCenter.y);
     await expect.poll(async () => Math.abs((await orb()).minX - start.minX), {
       timeout: scaledMs(10000),
@@ -3489,6 +3560,7 @@ test(
         layerThumbnails: window.__donnerLayerThumbnailStats,
         explicitCaptureStarts: window.__donnerWgpuReadbackCaptureStarts ?? 0,
         explicitCaptureCompletions: window.__donnerWgpuReadbackCaptureCompletions ?? 0,
+        pageState: { visibilityState: document.visibilityState, hasFocus: document.hasFocus() },
       }));
       if (workerSamples.length < 256) workerSamples.push(sample);
       return sample;
@@ -3586,6 +3658,7 @@ test(
       viewport: box,
       gpuOwner: { before: ownerBefore, after: ownerAfter },
       workerSamples,
+      pageState: { before: before.pageState, after: after.pageState },
       frameLoop: { before: loopBefore, after: loopAfter },
       scheduler: {
         before: schedulerBefore,
@@ -3751,6 +3824,10 @@ test(
         ),
       { timeout: scaledMs(5000), message: "GPU owner shuts down after joining the raster worker" },
     ).toBe(false);
+    if (rafControls) {
+      await page.goto("about:blank");
+      await captureRafControl("blankAfter");
+    }
     expect(fatalMessages).toEqual([]);
   },
 );
