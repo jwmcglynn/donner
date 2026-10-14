@@ -70,6 +70,12 @@ including baseline reset and contextual work exhaustion, are covered by
 Path interpolation requires compatible command structures.
 Underlying values include lower animation layers, resolved style values, and typed resource references.
 URI and filter-input/result names are discrete and non-additive, even when their text resembles a number.
+Opacity and gradient-stop percentages represent fractions of one. Numeric-only filter operands
+reject length units before interpolation, including paced and additive sampling. Stop and flood
+opacity read typed/style bases and apply sampled values below important and typed overrides.
+A lower numeric `initial` layer supplies the resolved default to a subsequent to-only animation;
+resolving a lower `inherit` layer against an animated parent remains a limitation.
+These cases are covered by `//donner/svg/renderer/tests:renderer_animation_presentation_tests`.
 Number-optional-number filter values repeat a single coordinate; integer fields round the final
 interpolated value to the nearest integer. Underlying filter values come from typed components,
 including nonzero defaults and implicit previous-primitive inputs. Explicit empty resource references
@@ -174,6 +180,9 @@ geometry measurement, lifecycle queries, hit geometry, and queued preview input.
   executions and CPU paint-coverage scans.
   Recipe parsing/interpolation and bounded path measurement are admitted before work; a refused
   consumer retains its base value. Owned recipe data is charged to the source/output envelopes.
+- Animated stop/flood opacity charges source and token work to the shared style budget before
+  parsing each instance; repeated-instance exhaustion is covered by
+  `//donner/svg/components/style:style_system_tests`.
 - Lifecycle queries exceeding 4096 events return an incomplete empty result.
 - Decoded animation-image caches admit at most 4096 lifetime URI keys and 1 MiB of URI metadata
   per document; decoded bytes remain charged to the existing document resource budget.

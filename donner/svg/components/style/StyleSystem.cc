@@ -44,6 +44,55 @@ StyleResourceBudget& GetStyleResourceBudget(Registry& registry) {
   return registry.ctx().emplace<StyleResourceBudget>(std::move(family));
 }
 
+void ApplyResourceOpacityAnimation(PropertyRegistry& properties, const std::string& name,
+                                   const std::string& value, StyleResourceBudget& budget) {
+  if (name != "stop-opacity" && name != "flood-opacity") {
+    return;
+  }
+  const auto specificity = css::Specificity::Animation();
+  const auto found = properties.unparsedProperties.find(RcString(name));
+  if (found != properties.unparsedProperties.end() &&
+      (found->second.declaration.important || found->second.specificity > specificity)) {
+    return;
+  }
+  // Source bytes conservatively bound token count before parsing the instance's declaration.
+  if (!budget.reserveDeclarationApplication(value.size(), value.size())) {
+    return;
+  }
+  auto params = parser::PropertyParseFnParams::CreateForAttribute(value);
+  params.specificity = specificity;
+  Property<double> parsed{name, []() -> std::optional<double> { return 1; }};
+  if (Parse(
+          params,
+          [](const parser::PropertyParseFnParams& input) {
+            return parser::ParseAlphaValue(input.components());
+          },
+          &parsed)) {
+    return;
+  }
+  const auto components = params.components();
+  css::Declaration declaration(RcString(name), {components.begin(), components.end()});
+  properties.unparsedProperties.insert_or_assign(
+      RcString(name), parser::UnparsedProperty{std::move(declaration), specificity});
+}
+
+void ApplyAnimatedStyle(Registry& registry, Entity dataEntity, PropertyRegistry& properties,
+                        StyleResourceBudget& styleBudget) {
+  if (const auto* animationStyle = registry.ctx().find<AnimationStyleContext>();
+      animationStyle && animationStyle->enabled) {
+    if (const auto* animated = registry.try_get<AnimatedValuesComponent>(dataEntity)) {
+      for (const auto& [name, value] : animated->overrides) {
+        if (name == "stop-opacity" || name == "flood-opacity") {
+          ApplyResourceOpacityAnimation(properties, name, value, styleBudget);
+        } else {
+          std::ignore = properties.parsePresentationAttribute(name, value, EntityHandle(),
+                                                              css::Specificity::Animation());
+        }
+      }
+    }
+  }
+}
+
 std::optional<Lengthd> ResolveFontOperand(std::string_view value, double parentSize) {
   PropertyRegistry parsed;
   const auto result = parsed.parsePresentationAttribute("font-size", value, EntityHandle(),
@@ -502,15 +551,7 @@ void StyleSystem::computePropertiesInto(EntityHandle handle, ComputedStyleCompon
   }
 
   applyStylesheetRules(registry, handle.entity(), dataEntity, properties, styleBudget, warningSink);
-  if (const auto* animationStyle = registry.ctx().find<AnimationStyleContext>();
-      animationStyle && animationStyle->enabled) {
-    if (const auto* animated = registry.try_get<AnimatedValuesComponent>(dataEntity)) {
-      for (const auto& [name, value] : animated->overrides) {
-        std::ignore = properties.parsePresentationAttribute(name, value, EntityHandle(),
-                                                            css::Specificity::Animation());
-      }
-    }
-  }
+  ApplyAnimatedStyle(registry, dataEntity, properties, styleBudget);
   const Entity parent = handle.get<donner::components::TreeComponent>().parent();
   ApplyContextualFontSize(registry, dataEntity, parent, properties, warningSink);
   properties.resolveElementColors(warningSink);

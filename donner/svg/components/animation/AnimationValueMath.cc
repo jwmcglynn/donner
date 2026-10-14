@@ -42,6 +42,25 @@ std::optional<std::vector<Lengthd>> ParseAnimationLengths(std::string_view input
   return values.empty() ? std::nullopt : std::optional(std::move(values));
 }
 
+bool ValidAnimationNumericOperand(std::string_view input, const AnimationValueContext& context) {
+  if (!context.maximumNumbers) {
+    return true;
+  }
+  input = StringUtils::TrimWhitespace(input);
+  if (context.numericCssKeywords &&
+      (StringUtils::EqualsLowercase(input, std::string_view("inherit")) ||
+       StringUtils::EqualsLowercase(input, std::string_view("initial")) ||
+       StringUtils::EqualsLowercase(input, std::string_view("unset")))) {
+    return true;
+  }
+  const auto values = ParseAnimationLengths(input);
+  return values && values->size() <= context.maximumNumbers &&
+         std::all_of(values->begin(), values->end(), [&](const Lengthd& value) {
+           return value.unit == Lengthd::Unit::None ||
+                  (context.percentageNumbers && value.unit == Lengthd::Unit::Percent);
+         });
+}
+
 std::optional<Lengthd> ParseAnimationLength(std::string_view attribute, std::string_view value) {
   if (const auto lengths = ParseAnimationLengths(value); lengths && lengths->size() == 1) {
     return lengths->front();
@@ -103,6 +122,9 @@ std::optional<std::string> CombineColors(css::RGBA first, css::RGBA second, doub
 
 double ResolveAnimationLength(const Lengthd& length, const AnimationValueContext& context,
                               bool offset) {
+  if (context.percentageNumbers && length.unit == Lengthd::Unit::Percent) {
+    return length.value / 100;
+  }
   if (!context.mappedLengths) {
     return length.toPixels(context.viewBox, context.fontMetrics, context.extent);
   }

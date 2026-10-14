@@ -127,12 +127,29 @@ std::string tryInterpolatePaths(const std::string& fromStr, const std::string& t
   return interpolatePaths(fromPath, toPath, t);
 }
 
+bool ValidNumericDeclaration(const AnimateValueComponent& value, const std::string& underlying,
+                             const AnimationValueContext& context) {
+  const auto valid = [&](std::string_view operand) {
+    return ValidAnimationNumericOperand(operand, context);
+  };
+  if (!value.values.empty()) {
+    return std::all_of(value.values.begin(), value.values.end(), valid);
+  }
+  if (value.to) {
+    return valid(value.from.value_or(underlying)) && valid(*value.to);
+  }
+  return value.by && valid(*value.by) && (!value.from || valid(*value.from));
+}
+
 /// Interpolate a value for `<animate>` at the given progress.
 /// Returns a value (which may be empty), or nullopt if interpolation failed.
 std::optional<std::string> interpolateAnimateValue(double progress,
                                                    const AnimateValueComponent& valueComp,
                                                    const std::string& underlying,
                                                    const AnimationValueContext& context) {
+  if (!ValidNumericDeclaration(valueComp, underlying, context)) {
+    return std::nullopt;
+  }
   std::vector<std::string> values = valueComp.values;
   if (values.empty()) {
     if (valueComp.to) {

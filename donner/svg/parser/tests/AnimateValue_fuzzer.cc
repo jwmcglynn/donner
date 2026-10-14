@@ -38,7 +38,11 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
     std::string_view element;
     std::string_view attribute;
   };
-  constexpr std::array<Target, 13> targets = {{
+  constexpr std::array<Target, 17> targets = {{
+      {"opacity:", "rect", "opacity"},
+      {"stop-opacity:", "stop", "stop-opacity"},
+      {"stop-offset:", "stop", "offset"},
+      {"function-offset:", "feFuncR", "offset"},
       {"font:", "text", "font-size"},
       {"font-by:", "text", "font-size"},
       {"filter-x:", "feFlood", "x"},

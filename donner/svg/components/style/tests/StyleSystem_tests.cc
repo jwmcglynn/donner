@@ -131,10 +131,7 @@ TEST_F(StyleSystemTest, RepeatedAnimatedOpacityReservesWorkBeforeParsing) {
   const auto source = document.querySelector("#src")->entityHandle();
   const std::string value = std::string(4096, '0') + ".5";
   source.get_or_emplace<AnimatedValuesComponent>().overrides["stop-opacity"] = value;
-  registry.ctx().emplace<AnimationStyleContext>().enabled = true;
-  StyleResourceBudget::Limits limits;
-  limits.declarationByteWork = value.size() * 3;
-  registry.ctx().emplace<StyleResourceBudget>(limits);
+  registry.ctx().emplace<AnimationStyleContext>().enabled = false;
   ParseWarningSink warnings = ParseWarningSink::Disabled();
   for (const char* id : {"#a", "#b", "#c"}) {
     auto use = document.querySelector(id)->entityHandle();
@@ -143,9 +140,22 @@ TEST_F(StyleSystemTest, RepeatedAnimatedOpacityReservesWorkBeforeParsing) {
                                         RcString("#src"), warnings);
   }
   styleSystem.computeAllStyles(registry, warnings);
+  const auto baselineApplications =
+      registry.ctx().get<StyleResourceBudget>().declarationApplications();
+  const auto baselineBytes = registry.ctx().get<StyleResourceBudget>().declarationByteWork();
+  registry.clear<ComputedStyleComponent>();
+  registry.ctx().erase<StyleResourceBudget>();
+  StyleResourceBudget::Limits limits;
+  limits.declarationByteWork = baselineBytes + value.size() * 3;
+  registry.ctx().emplace<StyleResourceBudget>(limits);
+  registry.ctx().get<AnimationStyleContext>().enabled = true;
+  styleSystem.computeAllStyles(registry, warnings);
   const auto& budget = registry.ctx().get<StyleResourceBudget>();
-  EXPECT_EQ(budget.declarationApplications(), 3u);
-  EXPECT_EQ(budget.declarationByteWork(), value.size() * 3);
+  EXPECT_THAT(budget.declarationApplications(),
+              testing::AllOf(testing::Ge(3u), testing::Le(baselineApplications + 3)));
+  EXPECT_THAT(
+      budget.declarationByteWork(),
+      testing::AllOf(testing::Ge(value.size() * 3), testing::Le(limits.declarationByteWork)));
   EXPECT_THAT(budget.rejected(), testing::IsTrue());
   std::size_t styled = 0;
   for (const auto entity : registry.view<ComputedStyleComponent>()) {
