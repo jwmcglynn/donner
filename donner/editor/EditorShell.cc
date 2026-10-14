@@ -8994,6 +8994,7 @@ void EditorShell::runFrame() {
   contentOnlyCaptureForNextFrame_ = false;
 #endif
   textures_.advancePresentationFrame();
+  thumbnailTextures_.advancePresentationFrame();
   compositorDebugPanel_.advancePresentationFrame();
   pollAuxiliaryPreviewResult();
 #ifndef __EMSCRIPTEN__

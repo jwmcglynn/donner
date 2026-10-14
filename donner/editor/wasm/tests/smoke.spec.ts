@@ -3376,6 +3376,10 @@ test(
   "animation preview plays, dispatches mouse events, and returns to Edit",
   async ({ page }, testInfo) => {
     const fatalMessages = await openEditor(page, { postInitializationDwellMs: 0 });
+    await expectSampleThumbnailsToSettle(page, {
+      message: "thumbnail capture work is drained before animation measurement",
+      timeout: scaledMs(20000),
+    });
     const canvas = page.locator("canvas#canvas");
     const box = await canvas.boundingBox();
     if (!box) throw new Error("the editor canvas has no bounds");
@@ -3431,6 +3435,8 @@ test(
     }).toBeGreaterThan(8 * scale);
 
     // Measure ordinary playback with screenshot/readback probes stopped.
+    testInfo.setTimeout(testInfo.timeout + 18000);
+    const loopBefore = await page.evaluate(() => window.__donnerFrameLoopStats);
     const workerSamples: unknown[] = [];
     const readCadence = async () => {
       const sample = await page.evaluate(() => ({
@@ -3438,22 +3444,28 @@ test(
         frames: window.__donnerMainLoopRenderedFrames ?? 0,
         documents: window.__donnerWorkerStats?.completedResults ?? 0,
         worker: window.__donnerWorkerStats,
+        resources: window.__donnerPresentationResourceStats,
+        thumbnails: window.__donnerSampleThumbnailStats,
+        layerThumbnails: (window as unknown as Record<string, unknown>).__donnerLayerThumbnailStats,
+        explicitCaptureStarts: window.__donnerWgpuReadbackCaptureStarts ?? 0,
+        explicitCaptureCompletions: window.__donnerWgpuReadbackCaptureCompletions ?? 0,
       }));
-      if (workerSamples.length < 64) workerSamples.push(sample);
+      if (workerSamples.length < 256) workerSamples.push(sample);
       return sample;
     };
     const ownerBefore = await readGpuOwnerDispatchStats(page);
     const before = await readCadence();
     await expect.poll(async () => (await readCadence()).time - before.time, {
-      timeout: scaledMs(5000),
+      timeout: 25000,
       intervals: [100],
-    }).toBeGreaterThanOrEqual(2000);
+    }).toBeGreaterThanOrEqual(20000);
     const after = await readCadence();
     for (const field of ["idleYieldMs", "idleCallbackMs", "idleLockMs", "idleWaitMs"] as const) {
       expect(after.worker?.[field], `worker timing ${field}`).toBeGreaterThanOrEqual(0);
       expect(Number.isFinite(after.worker?.[field]), `finite worker timing ${field}`).toBe(true);
     }
     const ownerAfter = await readGpuOwnerDispatchStats(page);
+    const loopAfter = await page.evaluate(() => window.__donnerFrameLoopStats);
     const seconds = (after.time - before.time) / 1000;
     const cadencePath = testInfo.outputPath("animation-cadence.json");
     const cadence = {
@@ -3464,6 +3476,7 @@ test(
       viewport: box,
       gpuOwner: { before: ownerBefore, after: ownerAfter },
       workerSamples,
+      frameLoop: { before: loopBefore, after: loopAfter },
       timeline: await readCarouselGpuTimeline(page),
       environment: await page.evaluate(() => ({
         userAgent: navigator.userAgent,
@@ -3476,6 +3489,19 @@ test(
     await testInfo.attach("animation-cadence", {
       contentType: "application/json",
       path: cadencePath,
+    });
+    const gpuBefore = ownerBefore?.gpu as
+      | { readbackCopies: number; cpuTextureWrites: number }
+      | undefined;
+    expect(gpuBefore, "GPU residency counters are available").toBeTruthy();
+    for (const field of ["readbackCopies", "cpuTextureWrites"] as const) {
+      expect(Number.isFinite(gpuBefore?.[field]), `finite initial ${field}`).toBe(true);
+      const gpuAfter = ownerAfter?.gpu as typeof gpuBefore;
+      expect(Number.isFinite(gpuAfter?.[field]), `finite final ${field}`).toBe(true);
+    }
+    expect(ownerAfter?.gpu, "ordinary animation stays GPU resident").toMatchObject({
+      readbackCopies: gpuBefore?.readbackCopies,
+      cpuTextureWrites: gpuBefore?.cpuTextureWrites,
     });
     await verifyRasterProgressWithTimersHeld(page);
     await page.screenshot({ path: testInfo.outputPath("animation-preview.png") });
