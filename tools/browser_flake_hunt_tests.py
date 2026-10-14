@@ -11,10 +11,10 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import socket
 import tempfile
 import unittest
-import urllib.error
-import urllib.request
+from urllib.parse import urlsplit
 
 from python.runfiles import runfiles
 from test_executable_fixtures import ExecutableFixtureDirectory
@@ -129,7 +129,9 @@ class BrowserFlakeHuntTest(unittest.TestCase):
         self.assertTrue((nested / "editor.wasm").exists())
 
     def test_an_output_directory_inside_the_package_is_refused(self):
-        result = self.run_script("--package", str(self.package), "--out", str(self.package / "out"))
+        result = self.run_script(
+            "--package", str(self.package), "--out", str(self.package / "out")
+        )
         self.assert_refused(result, "--out must not be in the package")
 
     def test_serves_the_package_and_summarizes_failures(self):
@@ -139,7 +141,9 @@ class BrowserFlakeHuntTest(unittest.TestCase):
                 {"status": "passed"},
                 {
                     "status": "failed",
-                    "errors": [{"message": f"{kAnsiRed}Error: the frame never came{kAnsiReset}\nmore"}],
+                    "errors": [
+                        {"message": f"{kAnsiRed}Error: the frame never came{kAnsiReset}\nmore"}
+                    ],
                     "attachments": [{"path": "/results/case-repeat1/trace.zip"}],
                 },
             ],
@@ -161,7 +165,8 @@ class BrowserFlakeHuntTest(unittest.TestCase):
         self.assertIn("runs: 4 in ", summary)
         self.assertIn("{'passed': 2}  fixture.spec.ts > group > passes [fixture-project]", summary)
         self.assertIn(
-            "{'passed': 1, 'failed': 1}  fixture.spec.ts > group > flakes [fixture-project]", summary
+            "{'passed': 1, 'failed': 1}  fixture.spec.ts > group > flakes [fixture-project]",
+            summary,
         )
         self.assertIn("failures: 1", summary)
         self.assertIn("    Error: the frame never came\n", summary)
@@ -174,9 +179,9 @@ class BrowserFlakeHuntTest(unittest.TestCase):
             "--package", str(self.package), "--out", str(self.root / "out"), report=report
         )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        url = (self.record / "url").read_text(encoding="utf-8").strip()
-        with self.assertRaises(urllib.error.URLError):
-            urllib.request.urlopen(f"{url}/index.html", timeout=5)
+        url = urlsplit((self.record / "url").read_text(encoding="utf-8").strip())
+        with self.assertRaises(ConnectionRefusedError):
+            socket.create_connection((url.hostname, url.port), timeout=5).close()
 
     def test_a_missing_report_fails_with_the_playwright_status(self):
         result = self.run_script(
