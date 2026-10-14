@@ -1088,6 +1088,8 @@ public:
     return shell.pendingFontPreviews_.size();
   }
 
+  static void AdvanceVisiblePreviews(EditorShell& shell) { shell.advanceVisiblePreviews(); }
+
   static void AdvanceFontPreviewGeneration(EditorShell& shell) {
     shell.advanceFontPreviewGeneration();
   }
@@ -6031,6 +6033,69 @@ TEST(EditorShellTest, FormatBarSnapshotDoesNotWaitForDocumentWriter) {
   EXPECT_EQ(state.fontFamily, before.fontFamily);
   EXPECT_EQ(state.fontSize, before.fontSize);
   EXPECT_EQ(state.bold, before.bold);
+}
+
+TEST(EditorShellTest, AnimationPreviewDefersFontPreviewWorkUntilEditIsRestored) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  ASSERT_TRUE(window.valid());
+  EditorShell shell(
+      window,
+      OptionsWithSource(R"(<svg xmlns="http://www.w3.org/2000/svg" width="0" height="0"/>)"));
+  ASSERT_TRUE(shell.valid());
+  EditorShellTestAccess::PrepareSingleFontPreviewRequest(shell, "Bebas Neue");
+  const auto requested = EditorShellTestAccess::RequestedAuxiliaryPreviewCount(shell);
+  EditorShellTestAccess::SetAnimationPreview(shell, true);
+  EditorShellTestAccess::AdvanceAnimationPreview(shell, 10.0);
+  ASSERT_TRUE(EditorShellTestAccess::IsAnimationPreview(shell));
+  ASSERT_FALSE(EditorShellTestAccess::AnimationResetPending(shell));
+  EditorShellTestAccess::AdvanceVisiblePreviews(shell);
+  EXPECT_EQ(EditorShellTestAccess::RequestedAuxiliaryPreviewCount(shell), requested);
+  EXPECT_EQ(EditorShellTestAccess::PendingFontPreviewCount(shell), 1u);
+  EditorShellTestAccess::SetAnimationPreview(shell, false);
+  EditorShellTestAccess::AdvanceVisiblePreviews(shell);
+  EXPECT_EQ(EditorShellTestAccess::RequestedAuxiliaryPreviewCount(shell), requested);
+  EditorShellTestAccess::AdvanceAnimationPreview(shell, 11.0);
+  EditorShellTestAccess::AdvanceVisiblePreviews(shell);
+  EXPECT_GT(EditorShellTestAccess::RequestedAuxiliaryPreviewCount(shell), requested);
+}
+
+TEST(EditorShellTest, AnimationPreviewCancelsAndPreservesActiveFontPreview) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  ASSERT_TRUE(window.valid());
+  EditorShell shell(
+      window,
+      OptionsWithSource(R"(<svg xmlns="http://www.w3.org/2000/svg" width="0" height="0"/>)"));
+  ASSERT_TRUE(shell.valid());
+  auto& worker = EditorShellTestAccess::Coordinator(shell).asyncRenderer();
+  worker.setSampleThumbnailRenderDelayForTesting(std::chrono::seconds(5));
+  EditorShellTestAccess::PrepareSingleFontPreviewRequest(shell, "Bebas Neue");
+  EditorShellTestAccess::AdvanceVisiblePreviews(shell);
+  for (const tests::HangGuard guard;
+       guard.active() && !worker.sampleThumbnailRenderStats().active;) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(2));
+  }
+  ASSERT_TRUE(worker.sampleThumbnailRenderStats().active);
+  EditorShellTestAccess::SetAnimationPreview(shell, true);
+  EXPECT_EQ(EditorShellTestAccess::PendingFontPreviewCount(shell), 1u);
+  for (const tests::HangGuard guard;
+       guard.active() && worker.sampleThumbnailRenderStats().active;) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(2));
+  }
+  EXPECT_FALSE(worker.sampleThumbnailRenderStats().active);
+  EXPECT_EQ(worker.sampleThumbnailRenderStats().cancelled, 1u);
+  EXPECT_EQ(EditorShellTestAccess::CachedFontPreviewCount(shell), 0u);
+  worker.setSampleThumbnailRenderDelayForTesting(std::chrono::milliseconds(0));
+  EditorShellTestAccess::SetAnimationPreview(shell, false);
+  EditorShellTestAccess::AdvanceAnimationPreview(shell, 11.0);
+  FormatBarFontPreview preview;
+  for (const tests::HangGuard guard; guard.active() && !preview.available();) {
+    EditorShellTestAccess::AdvanceVisiblePreviews(shell);
+    preview = EditorShellTestAccess::FontPreviewForFamily(shell, "Bebas Neue");
+    if (!preview.available()) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+  }
+  EXPECT_TRUE(preview.available()) << "Returning to Edit must resume the cancelled font preview";
 }
 
 TEST(EditorShellTest, TextFormatBarPrewarmsCatalogFamilyInItsOwnFace) {
