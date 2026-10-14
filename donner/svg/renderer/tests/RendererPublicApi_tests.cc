@@ -137,6 +137,63 @@ ExternalUseRenderResult RenderExternalUse(std::string_view hostSource,
   return {NormalizeSnapshot(renderer.takeSnapshot()), observedLoader->requests()};
 }
 
+std::string SvgDataUrl(std::string_view source) {
+  constexpr char kHex[] = "0123456789ABCDEF";
+  std::string result = "data:image/svg+xml,";
+  for (const unsigned char value : source) {
+    result += '%';
+    result += kHex[value >> 4];
+    result += kHex[value & 15];
+  }
+  return result;
+}
+
+std::string SvgImageDocument(std::string_view href) {
+  return "<svg xmlns='http://www.w3.org/2000/svg' width='8' height='8'>"
+         "<image width='8' height='8' href='" +
+         std::string(href) + "'/></svg>";
+}
+
+RendererBitmap AnalyticRedImage() {
+  RendererBitmap expected;
+  expected.dimensions = Vector2i(8, 8);
+  expected.rowBytes = 32;
+  expected.pixels.resize(256, 0);
+  for (size_t offset = 0; offset < expected.pixels.size(); offset += 4) {
+    expected.pixels[offset] = 255;
+    expected.pixels[offset + 3] = 255;
+  }
+  return expected;
+}
+
+TEST(RendererPublicApiTest, SecureDataImagesRenderThroughNestedSvgDocuments) {
+  constexpr std::string_view kRedPng =
+      "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAYAAADED76LAAAAEklEQVR4nGP4z8Dw"
+      "Hx9mGBkKAMLXf4EvceABAAAAAElFTkSuQmCC";
+  const RendererBitmap expected = AnalyticRedImage();
+  for (const ProcessingMode mode : {ProcessingMode::DynamicInteractive,
+                                    ProcessingMode::SecureStatic, ProcessingMode::SecureAnimated}) {
+    std::string source = SvgImageDocument(kRedPng);
+    for (int depth = 0; depth != 3; ++depth) {
+      const std::string label = "data-image-mode-" + std::to_string(static_cast<int>(mode)) +
+                                "-depth-" + std::to_string(depth);
+      SCOPED_TRACE(label);
+      SVGDocument::Settings settings;
+      settings.processingMode = mode;
+      ParseWarningSink warnings;
+      auto parsed = parser::SVGParser::ParseSVG(source, warnings, parser::SVGParser::Options(),
+                                                std::move(settings));
+      ASSERT_FALSE(parsed.hasError());
+      SVGDocument document = std::move(parsed.result());
+      Renderer renderer;
+      renderer.draw(document);
+      editor::tests::CompareBitmapToBitmap(NormalizeSnapshot(renderer.takeSnapshot()), expected,
+                                           label, editor::tests::PixelmatchIdentityParams());
+      source = SvgImageDocument(SvgDataUrl(source));
+    }
+  }
+}
+
 TEST(RendererPublicApiTest, ExternalUseInheritsHostFillWithoutExternalAncestors) {
   const ExternalUseRenderResult actual = RenderExternalUse(
       R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8">

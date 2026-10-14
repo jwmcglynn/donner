@@ -930,7 +930,7 @@ TEST(SVGParser, SubDocumentParseErrorsReportedAsWarnings) {
                                        testing::HasSubstr("Unexpected element <notsvg> at root"))));
 }
 
-TEST(SVGParser, SecureStaticModeDisablesSubDocumentParsing) {
+TEST(SVGParser, SecureStaticModeParsesDataSubDocuments) {
   const std::string_view source(
       R"(<svg xmlns="http://www.w3.org/2000/svg">
            <image href="data:image/svg+xml;base64,PG5vdHN2Zy8+" width="10" height="10"/>
@@ -948,9 +948,10 @@ TEST(SVGParser, SecureStaticModeDisablesSubDocumentParsing) {
   SVGDocument document = result.result();
   RendererUtils::prepareDocumentForRendering(document, /*verbose*/ false, renderWarnings);
 
-  // In SecureStatic mode resource loading is skipped entirely (SVG2 section 2.7.1): the
-  // sub-document is not parsed and no warnings are produced.
-  EXPECT_THAT(renderWarnings.warnings(), ElementsAre());
+  EXPECT_THAT(
+      renderWarnings.warnings(),
+      testing::Contains(testing::Field(&ParseDiagnostic::reason,
+                                       testing::HasSubstr("Unexpected element <notsvg> at root"))));
 }
 
 }  // namespace donner::svg::parser

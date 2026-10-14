@@ -833,16 +833,64 @@ TEST_F(ResourceManagerContextTest, LoadExternalSVGCachesResult) {
   EXPECT_EQ(parseCount, 1);
 }
 
-TEST_F(ResourceManagerContextTest, LoadResourcesSecureModeSkipsImages) {
+TEST_F(ResourceManagerContextTest, SecureModesLoadDataImagesWithoutExternalRequests) {
+  int requests = 0;
+  setResourceLoader(std::make_unique<TestResourceLoader>([&requests]() { ++requests; }));
+  for (const ProcessingMode mode : {ProcessingMode::SecureStatic, ProcessingMode::SecureAnimated}) {
+    SCOPED_TRACE(static_cast<int>(mode));
+    setProcessingMode(mode);
+    const Entity dataImage = addImage(kTinyPngDataUrl);
+    std::vector<Entity> denied;
+    for (const std::string_view href :
+         {"relative.png", "/absolute.png", "file:///image.png", "https://example.invalid/image.png",
+          "//example.invalid/a.png", "#same-document"}) {
+      denied.push_back(addImage(href));
+    }
+    ParseWarningSink warnings;
+    resourceManager_->loadResources(warnings);
+    const auto* loaded = registry_.try_get<LoadedImageComponent>(dataImage);
+    ASSERT_NE(loaded, nullptr);
+    EXPECT_TRUE(loaded->image.has_value());
+    for (const Entity image : denied) {
+      EXPECT_FALSE(registry_.all_of<LoadedImageComponent>(image));
+      EXPECT_FALSE(registry_.all_of<LoadedSVGImageComponent>(image));
+    }
+    EXPECT_EQ(requests, 0);
+    EXPECT_EQ(resourceManager_->fetchSecurityStats().attempts, 0u);
+    EXPECT_FALSE(warnings.hasWarnings());
+  }
+}
+
+TEST_F(ResourceManagerContextTest, SecureDataImagesStillConsumeAggregateBudget) {
   setProcessingMode(ProcessingMode::SecureStatic);
-
-  const Entity imageEntity = addImage(kTinyPngDataUrl);
-
+  resourceManager_->remainingResourceBytes_ = 1;
+  const Entity image = addImage(kTinyPngDataUrl);
   ParseWarningSink warnings;
   resourceManager_->loadResources(warnings);
+  const auto* loaded = registry_.try_get<LoadedImageComponent>(image);
+  ASSERT_NE(loaded, nullptr);
+  EXPECT_FALSE(loaded->image.has_value());
+  EXPECT_EQ(resourceManager_->remainingResourceBytes_, 0u);
+  EXPECT_TRUE(warnings.hasWarnings());
+}
 
-  EXPECT_FALSE(registry_.all_of<LoadedImageComponent>(imageEntity));
-  EXPECT_FALSE(warnings.hasWarnings());
+TEST_F(ResourceManagerContextTest, SecureDataImageLoadingCannotReuseCachedExternalSvg) {
+  int requests = 0;
+  auto loader = std::make_unique<TestResourceLoader>([&requests]() { ++requests; });
+  loader->addFile("external.svg", {'<', 's', 'v', 'g', '/', '>'});
+  setResourceLoader(std::move(loader));
+  setSvgParseCallback(MakeDocumentCallback(8));
+  ParseWarningSink warnings;
+  ASSERT_TRUE(resourceManager_->loadExternalSVG("external.svg", warnings).has_value());
+  ASSERT_EQ(requests, 1);
+  setProcessingMode(ProcessingMode::SecureStatic);
+  const Entity external = addImage("external.svg");
+  const Entity dataImage = addImage(kTinyPngDataUrl);
+  resourceManager_->loadResources(warnings);
+  EXPECT_FALSE(registry_.all_of<LoadedSVGImageComponent>(external));
+  ASSERT_TRUE(registry_.all_of<LoadedImageComponent>(dataImage));
+  EXPECT_TRUE(registry_.get<LoadedImageComponent>(dataImage).image.has_value());
+  EXPECT_EQ(requests, 1);
 }
 
 TEST_F(ResourceManagerContextTest, LoadResourcesWithoutLoaderWarnsForExternalImage) {
