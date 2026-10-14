@@ -1274,8 +1274,7 @@ bool isEligibleForTransformedBlurPath(const components::FilterGraph& filterGraph
     }
 
     // No primitive subregions.
-    if (node.x.has_value() || node.y.has_value() || node.width.has_value() ||
-        node.height.has_value()) {
+    if (node.hasExplicitRegion() || node.hasAnimatedRegion()) {
       return false;
     }
 

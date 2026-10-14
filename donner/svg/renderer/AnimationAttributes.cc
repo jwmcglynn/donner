@@ -1038,7 +1038,8 @@ bool ApplyLayoutAttribute(Registry& registry, Entity entity, std::string_view na
 void ApplyAttribute(Registry& registry, Entity entity, std::string_view name,
                     std::string_view value) {
   if (ApplyLayoutAttribute(registry, entity, name, value)) {
-    LayoutSystem().invalidate(EntityHandle(registry, entity));
+    LayoutSystem().invalidate(EntityHandle(registry, entity),
+                              /*viewportChanged=*/name == "viewBox");
     InvalidateAnimatedText(registry, entity);
     return;
   }
@@ -1110,7 +1111,8 @@ void RestoreAttributeBackup(Registry& registry, Entity entity,
       }
     }
   }
-  LayoutSystem().invalidate(EntityHandle(registry, entity));
+  LayoutSystem().invalidate(EntityHandle(registry, entity),
+                            /*viewportChanged=*/backup.fields.contains("viewBox"));
   InvalidateAnimatedText(registry, entity);
 }
 

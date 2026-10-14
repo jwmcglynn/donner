@@ -390,8 +390,7 @@ bool isEligibleForTransformedBlurPath(const components::FilterGraph& filterGraph
     if (node.result.has_value()) {
       return false;  // No named result reuse.
     }
-    if (node.x.has_value() || node.y.has_value() || node.width.has_value() ||
-        node.height.has_value()) {
+    if (node.hasExplicitRegion() || node.hasAnimatedRegion()) {
       return false;  // No primitive subregions.
     }
     if (node.inputs.size() > 1) {

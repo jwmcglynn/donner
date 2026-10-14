@@ -18,6 +18,7 @@
 #include "donner/base/RcString.h"
 #include "donner/css/Color.h"
 #include "donner/svg/SVGDocumentHandle.h"
+#include "donner/svg/components/animation/ContextualLengthRecipe.h"
 #include "donner/svg/components/filter/FilterUnits.h"
 #include "donner/svg/core/ColorInterpolationFilters.h"
 #include "donner/svg/core/ImageRendering.h"
@@ -513,6 +514,18 @@ struct FilterNode {
   std::optional<Lengthd> width;    ///< Primitive subregion width.
   std::optional<Lengthd> height;   ///< Primitive subregion height.
 
+  /// Immutable deferred x/y/width/height stacks, evaluated in the executing filter's context.
+  std::array<std::shared_ptr<const ContextualLengthRecipe>, 4> animatedRegion{};
+
+  /// Whether any authored primitive-region coordinate is present.
+  bool hasExplicitRegion() const { return x || y || width || height; }
+
+  /// Whether a contextual region stack is present, including a stack with no contributing value.
+  bool hasAnimatedRegion() const {
+    return std::any_of(animatedRegion.begin(), animatedRegion.end(),
+                       [](const auto& recipe) { return recipe != nullptr; });
+  }
+
   /// Per-primitive color-interpolation-filters. When set, overrides the graph-level default.
   std::optional<ColorInterpolationFilters> colorInterpolationFilters;
 };
@@ -538,6 +551,9 @@ struct FilterGraph {
 
   /// The filter region in user-space coordinates.
   std::optional<Box2d> filterRegion;
+
+  /// Referencing SVG viewport in user coordinates, independent of filter raster allocation.
+  std::optional<Box2d> primitiveViewport;
 
   /// Scale factor from SVG user-space coordinates to pixel-space coordinates.
   /// Needed by lighting filters to transform light positions from user space to the pixel-space
@@ -712,6 +728,18 @@ inline bool FilterGraphExecutionCost(const FilterGraph& graph, std::uint64_t pix
   }
   std::uint64_t workUnits = 0;
   for (const FilterNode& node : graph.nodes) {
+    for (const auto& recipe : node.animatedRegion) {
+      if (recipe) {
+        if (recipe->evaluationWork > kMaximumFilterWorkUnits / executions) {
+          return false;
+        }
+        const std::uint64_t sampleWork = recipe->evaluationWork * executions;
+        if (sampleWork > kMaximumFilterWorkUnits - workUnits) {
+          return false;
+        }
+        workUnits += sampleWork;
+      }
+    }
     // Every executed node performs its primitive pass plus a mandatory subregion clip. Default
     // linearRGB processing can add input/output conversion passes, and binary primitives convert
     // both inputs. Five full-surface passes is a conservative baseline for the generic case.

@@ -6,6 +6,7 @@
 #include "donner/css/parser/ColorParser.h"
 #include "donner/svg/components/DocumentResourceFamilyBudget.h"
 #include "donner/svg/components/ReferenceResolutionBudget.h"
+#include "donner/svg/components/animation/AnimatedValuesComponent.h"
 #include "donner/svg/components/filter/ComputedFilterResourceBudget.h"
 #include "donner/svg/components/filter/FilterPrimitiveComponent.h"
 #include "donner/svg/components/resources/ImageComponent.h"
@@ -72,6 +73,11 @@ std::optional<std::size_t> ComputedFilterRetainedBytes(
     return std::nullopt;
   }
   for (const FilterNode& node : graph.nodes) {
+    for (const auto& recipe : node.animatedRegion) {
+      if (recipe && !AddRetainedBytes(bytes, recipe->retainedBytes)) {
+        return std::nullopt;
+      }
+    }
     if (!AddRetainedProduct(bytes, node.inputs.capacity(), sizeof(FilterInput)) ||
         !AddRetainedBytes(bytes,
                           static_cast<std::size_t>(FilterPrimitivePayloadBytes(node.primitive)))) {
@@ -458,6 +464,21 @@ void AppendImageNode(Registry& registry, Entity current, FilterGraph& graph,
   graph.nodes.push_back(std::move(node));
 }
 
+void AttachAnimatedRegion(Registry& registry, Entity primitive, FilterGraph& graph,
+                          std::size_t previousSize) {
+  const auto* values = registry.try_get<AnimatedValuesComponent>(primitive);
+  if (!values || graph.nodes.size() == previousSize) {
+    return;
+  }
+  const std::array<std::string_view, 4> names = {"x", "y", "width", "height"};
+  for (std::size_t i = 0; i < names.size(); ++i) {
+    const auto found = values->contextualLengths.find(std::string(names[i]));
+    if (found != values->contextualLengths.end()) {
+      graph.nodes.back().animatedRegion[i] = found->second;
+    }
+  }
+}
+
 void StoreComputedFilter(EntityHandle handle, ComputedFilterResourceBudget& budget,
                          std::vector<FilterEffect> effects, FilterGraph graph, Lengthd x, Lengthd y,
                          Lengthd width, Lengthd height, FilterUnits filterUnits,
@@ -563,6 +584,7 @@ void FilterSystem::createComputedFilter(EntityHandle handle, const FilterCompone
     // Resolve per-primitive color-interpolation-filters (overrides filter-level default).
     const auto primitiveCIF = resolveColorInterpolationFilters(registry, cur);
 
+    const std::size_t previousNodeCount = filterGraph.nodes.size();
     // Determine which filter primitive we have.
     if (const auto* blur = registry.try_get<FEGaussianBlurComponent>(cur)) {
       // Legacy effectChain for backward-compat.
@@ -749,6 +771,7 @@ void FilterSystem::createComputedFilter(EntityHandle handle, const FilterCompone
       AppendImageNode(registry, cur, filterGraph, *feImage, *primitive, primitiveCIF,
                       computedBudget);
     }
+    AttachAnimatedRegion(registry, cur, filterGraph, previousNodeCount);
   }
 
   StoreComputedFilter(handle, computedBudget, std::move(effectChain), std::move(filterGraph),

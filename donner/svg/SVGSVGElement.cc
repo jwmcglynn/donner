@@ -3,6 +3,7 @@
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/components/PreserveAspectRatioComponent.h"
 #include "donner/svg/components/StylesheetComponent.h"
+#include "donner/svg/components/layout/LayoutSystem.h"
 #include "donner/svg/components/layout/SizedElementComponent.h"
 #include "donner/svg/components/layout/ViewBoxComponent.h"
 #include "donner/svg/core/UserAgentStylesheet.h"
@@ -51,7 +52,8 @@ std::optional<Lengthd> SVGSVGElement::height() const {
 }
 
 void SVGSVGElement::setViewBox(std::optional<Box2d> viewBox) {
-  DocumentMutationBatch mutation = handle_.mutationBatch();
+  auto mutation = mutationScope(
+      [this]() { components::LayoutSystem().invalidate(handle_, /*viewportChanged=*/true); });
   DocumentWriteAccess& access = mutation.access();
   handle_.get<components::ViewBoxComponent>(access).viewBox = viewBox;
 }

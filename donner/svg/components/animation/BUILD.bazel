@@ -24,15 +24,33 @@ donner_cc_library(
 )
 
 donner_cc_library(
+    name = "value_sampler",
+    srcs = [
+        "AnimationInterpolation.cc",
+        "AnimationValueMath.cc",
+        "AnimationValueSampler.cc",
+    ],
+    hdrs = [
+        "AnimationValueMath.h",
+        "AnimationValueSampler.h",
+    ],
+    visibility = ["//donner/svg:__subpackages__"],
+    deps = [
+        ":components",
+        "//donner/base",
+        "//donner/base/parser",
+        "//donner/css/parser",
+        "//donner/svg/parser:parser_core",
+    ],
+)
+
+donner_cc_library(
     name = "animation_system",
     srcs = [
         "AnimationBaseValue.cc",
-        "AnimationInterpolation.cc",
         "AnimationMotion.cc",
         "AnimationSystem.cc",
         "AnimationTimeline.cc",
-        "AnimationValueMath.cc",
-        "AnimationValueSampler.cc",
     ],
     hdrs = [
         "AnimationBaseValue.h",
@@ -40,14 +58,13 @@ donner_cc_library(
         "AnimationNumericAttributes.h",
         "AnimationSystem.h",
         "AnimationTimeline.h",
-        "AnimationValueMath.h",
-        "AnimationValueSampler.h",
     ],
     visibility = [
         "//donner/svg:__subpackages__",
     ],
     deps = [
         ":components",
+        ":value_sampler",
         "//donner/base",
         "//donner/base/parser",
         "//donner/base/xml/components",

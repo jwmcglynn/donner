@@ -18,7 +18,13 @@ struct AnimationValueContext {
   bool numberPair = false;            ///< Repeat one coordinate for number-optional-number values.
   bool integerValue = false;          ///< Round interpolated numeric values to the nearest integer.
   bool linearRgb = false;             ///< Interpolate colors in linear-light RGB when requested.
-  FontMetrics fontMetrics;            ///< Font and viewport unit metrics.
+  /// Map mixed-unit filter lengths to user-space pixels while keeping additive offsets origin-free.
+  bool mappedLengths = false;
+  bool lengthValuesAreOffsets = false;  ///< Sample operands are displacements, not positions.
+  double unitlessScale = 1;             ///< User units represented by one unitless coordinate.
+  double unitlessOrigin = 0;            ///< Origin added only to unitless positions.
+  double percentageOrigin = 0;          ///< Origin added only to percentage positions.
+  FontMetrics fontMetrics;              ///< Font and viewport unit metrics.
   Lengthd::Extent extent = Lengthd::Extent::Mixed;   ///< Percentage reference axis.
   css::RGBA currentColor = css::RGBA::RGB(0, 0, 0);  ///< Resolved currentColor.
 };
@@ -39,16 +45,19 @@ std::optional<Lengthd> ParseAnimationLength(std::string_view attribute, std::str
  * @param firstWeight Multiplier of the first value.
  * @param secondWeight Multiplier of the second value.
  * @param context Relative unit and color context.
+ * @param secondIsOffset Treat the second length operand as an additive displacement.
  * @return Serialized result, or nullopt for incompatible/discrete values.
  */
 std::optional<std::string> CombineAnimationValues(std::string_view first, std::string_view second,
                                                   double firstWeight, double secondWeight,
-                                                  const AnimationValueContext& context);
+                                                  const AnimationValueContext& context,
+                                                  bool secondIsOffset = false);
 
 /** Compute the paced distance between compatible values.
  * @param first First value.
  * @param second Second value.
  * @param context Relative unit and color context.
+ * @param secondIsOffset Treat the second length operand as an additive displacement.
  * @return Distance, or nullopt when no distance function is defined.
  */
 std::optional<double> AnimationValueDistance(std::string_view first, std::string_view second,

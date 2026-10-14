@@ -24,6 +24,7 @@
 #include "donner/svg/components/animation/AnimationTimingComponent.h"
 #include "donner/svg/components/animation/AnimationValueSampler.h"
 #include "donner/svg/components/animation/SetAnimationComponent.h"
+#include "donner/svg/components/filter/FilterPrimitiveComponent.h"
 #include "donner/svg/components/resources/ResourceManagerContext.h"
 
 namespace donner::svg::components {
@@ -184,12 +185,17 @@ bool ValidTransformAttribute(Registry& registry, Entity target, std::string_view
 }
 
 using ContextualRecipes =
-    std::unordered_map<Entity, std::unordered_map<std::string, ContextualLengthRecipe>>;
+    std::unordered_map<Entity,
+                       std::unordered_map<std::string, std::vector<ContextualLengthSample>>>;
 
 bool NeedsInstanceLengthContext(Registry& registry, Entity target, std::string_view attribute) {
   const auto* type = registry.try_get<ElementTypeComponent>(target);
   if (!type) {
     return false;
+  }
+  if (registry.all_of<FilterPrimitiveComponent>(target) &&
+      (attribute == "x" || attribute == "y" || attribute == "width" || attribute == "height")) {
+    return true;
   }
   return (type->type() == ElementType::TextPath && attribute == "startOffset") ||
          (type->type() == ElementType::Marker &&
@@ -210,9 +216,7 @@ bool RetainContextualLength(ContextualRecipes& recipes, Entity target, std::stri
   if (!budget.reserveOutput(retained)) {
     return false;
   }
-  auto& recipe = recipes[target][std::string(attribute)];
-  recipe.retainedBytes += retained;
-  recipe.evaluationWork += sourceBytes * 16 + 256;
+  auto& samples = recipes[target][std::string(attribute)];
   ContextualLengthSample sample;
   sample.progress = progress;
   sample.iteration = iteration;
@@ -221,7 +225,7 @@ bool RetainContextualLength(ContextualRecipes& recipes, Entity target, std::stri
   } else {
     sample.declaration = *value;
   }
-  recipe.samples.push_back(std::move(sample));
+  samples.push_back(std::move(sample));
   return true;
 }
 
@@ -345,9 +349,13 @@ void PublishContextualRecipes(Registry& registry, ContextualRecipes& recipes,
   }
   for (auto& [target, attributes] : recipes) {
     auto& values = registry.get_or_emplace<AnimatedValuesComponent>(target);
-    for (auto& [attribute, recipe] : attributes) {
-      values.contextualLengths.emplace(
-          attribute, std::make_shared<const ContextualLengthRecipe>(std::move(recipe)));
+    for (auto& [attribute, samples] : attributes) {
+      const auto recipe = ContextualLengthRecipe::Create(std::move(samples));
+      if (!recipe) {
+        ClearSampledAnimationValues(registry);
+        return;
+      }
+      values.contextualLengths.emplace(attribute, recipe);
     }
   }
 }

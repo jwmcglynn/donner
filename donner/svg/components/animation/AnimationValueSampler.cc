@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <sstream>
+#include <type_traits>
 #include <vector>
 
 #include "donner/base/Path.h"
@@ -143,7 +144,7 @@ std::optional<std::string> interpolateAnimateValue(double progress,
       if (!from) {
         return {};
       }
-      const auto to = CombineAnimationValues(*from, *valueComp.by, 1, 1, context);
+      const auto to = CombineAnimationValues(*from, *valueComp.by, 1, 1, context, true);
       if (!to) {
         return {};
       }
@@ -375,6 +376,94 @@ std::string RoundAnimationIntegers(const std::string& input) {
   return output.str();
 }
 
+bool AddRecipeSourceBytes(std::size_t& total, std::size_t bytes) {
+  if (bytes > AnimationResourceBudget::kMaximumSourceBytes - total) {
+    return false;
+  }
+  total += bytes;
+  return true;
+}
+
+std::optional<std::size_t> RecipeSampleSourceBytes(const ContextualLengthSample& sample) {
+  return std::visit(
+      [](const auto& declaration) -> std::optional<std::size_t> {
+        std::size_t bytes = 0;
+        const auto add = [&](const std::optional<std::string>& value) {
+          return !value || AddRecipeSourceBytes(bytes, value->size());
+        };
+        if (!AddRecipeSourceBytes(bytes, declaration.attributeName.size()) ||
+            !add(declaration.href) || !add(declaration.to)) {
+          return std::nullopt;
+        }
+        if constexpr (std::is_same_v<std::decay_t<decltype(declaration)>, AnimateValueComponent>) {
+          if (declaration.keyTimes.size() >
+                  AnimationResourceBudget::kMaximumSourceBytes / sizeof(double) ||
+              declaration.keySplines.size() >
+                  AnimationResourceBudget::kMaximumSourceBytes / sizeof(double) ||
+              declaration.values.size() >
+                  AnimationResourceBudget::kMaximumOutputBytes / (2 * sizeof(std::string)) ||
+              !AddRecipeSourceBytes(bytes, declaration.keyTimes.size() * sizeof(double)) ||
+              !AddRecipeSourceBytes(bytes, declaration.keySplines.size() * sizeof(double)) ||
+              !add(declaration.from) || !add(declaration.by)) {
+            return std::nullopt;
+          }
+          for (const auto& value : declaration.values) {
+            if (!AddRecipeSourceBytes(bytes, value.size())) {
+              return std::nullopt;
+            }
+          }
+        }
+        return bytes;
+      },
+      sample.declaration);
+}
+
+bool RecipeStorageFits(const std::vector<ContextualLengthSample>& samples, std::size_t limit) {
+  std::size_t retained = sizeof(ContextualLengthRecipe) + 64;
+  const auto add = [&](std::size_t count, std::size_t size = 1) {
+    if (retained > limit || count > (limit - retained) / size) {
+      return false;
+    }
+    retained += count * size;
+    return true;
+  };
+  if (!add(samples.capacity(), sizeof(ContextualLengthSample))) {
+    return false;
+  }
+  for (const auto& sample : samples) {
+    const bool fits = std::visit(
+        [&](const auto& declaration) {
+          const auto addString = [&](const std::optional<std::string>& value) {
+            return !value || add(value->capacity() + 1);
+          };
+          if (!add(declaration.attributeName.capacity() + 1) || !addString(declaration.href) ||
+              !addString(declaration.to)) {
+            return false;
+          }
+          if constexpr (std::is_same_v<std::decay_t<decltype(declaration)>,
+                                       AnimateValueComponent>) {
+            if (!add(declaration.values.capacity(), sizeof(std::string)) ||
+                !add(declaration.keyTimes.capacity(), sizeof(double)) ||
+                !add(declaration.keySplines.capacity(), sizeof(double)) ||
+                !addString(declaration.from) || !addString(declaration.by)) {
+              return false;
+            }
+            for (const auto& value : declaration.values) {
+              if (!add(value.capacity() + 1)) {
+                return false;
+              }
+            }
+          }
+          return true;
+        },
+        sample.declaration);
+    if (!fits) {
+      return false;
+    }
+  }
+  return true;
+}
+
 }  // namespace
 
 std::optional<std::pair<std::string, std::string>> SampleAnimationValue(
@@ -391,22 +480,27 @@ std::optional<std::pair<std::string, std::string>> SampleAnimationValue(
     if (valueComp->attributeName.empty()) {
       return std::nullopt;
     }
-    auto value = interpolateAnimateValue(progress, *valueComp, underlying, context);
+    const bool toOnly = valueComp->values.empty() && !valueComp->from && valueComp->to;
+    const bool byOnly =
+        valueComp->values.empty() && !valueComp->from && !valueComp->to && valueComp->by;
+    AnimationValueContext valueContext = context;
+    valueContext.lengthValuesAreOffsets = !toOnly && (valueComp->additive || byOnly);
+    auto value = interpolateAnimateValue(progress, *valueComp, underlying, valueContext);
     if (!value) {
       return std::nullopt;
     }
     std::string sampled = std::move(*value);
-    const bool toOnly = valueComp->values.empty() && !valueComp->from && valueComp->to;
     if (!context.referenceValue && valueComp->accumulate && !toOnly && iteration > 0) {
-      const auto last = interpolateAnimateValue(1, *valueComp, underlying, context);
+      AnimationValueContext accumulatedContext = valueContext;
+      accumulatedContext.lengthValuesAreOffsets = true;
+      const auto last = interpolateAnimateValue(1, *valueComp, underlying, accumulatedContext);
       if (last) {
-        sampled = CombineAnimationValues(sampled, *last, 1, iteration, context).value_or(sampled);
+        sampled = CombineAnimationValues(sampled, *last, 1, iteration, valueContext, true)
+                      .value_or(sampled);
       }
     }
-    const bool byOnly =
-        valueComp->values.empty() && !valueComp->from && !valueComp->to && valueComp->by;
     if (!context.referenceValue && !sampled.empty() && !toOnly && (valueComp->additive || byOnly)) {
-      sampled = CombineAnimationValues(underlying, sampled, 1, 1, context).value_or(sampled);
+      sampled = CombineAnimationValues(underlying, sampled, 1, 1, context, true).value_or(sampled);
     }
     if (context.integerValue) {
       sampled = RoundAnimationIntegers(sampled);
@@ -420,6 +514,36 @@ std::optional<std::pair<std::string, std::string>> SampleAnimationValue(
     sampled = underlying + " " + sampled;
   }
   return std::pair<std::string, std::string>{transformComp->attributeName, std::move(sampled)};
+}
+
+std::shared_ptr<const ContextualLengthRecipe> ContextualLengthRecipe::Create(
+    std::vector<ContextualLengthSample>&& samples) {
+  if (samples.size() > AnimationResourceBudget::kMaximumAnimations) {
+    return nullptr;
+  }
+  std::size_t source = 0;
+  std::size_t retained = 0;
+  std::size_t work = 0;
+  for (const auto& sample : samples) {
+    const auto bytes = RecipeSampleSourceBytes(sample);
+    if (!bytes || !AddRecipeSourceBytes(source, *bytes)) {
+      return nullptr;
+    }
+    const auto* value = std::get_if<AnimateValueComponent>(&sample.declaration);
+    const std::size_t keyframes = value ? value->values.size() : 0;
+    const std::size_t storage =
+        2 * (sizeof(ContextualLengthSample) + *bytes + keyframes * sizeof(std::string)) + 256;
+    if (storage > AnimationResourceBudget::kMaximumOutputBytes - retained) {
+      return nullptr;
+    }
+    retained += storage;
+    work += *bytes * 16 + keyframes * 64 + 256;
+  }
+  if (!RecipeStorageFits(samples, retained)) {
+    return nullptr;
+  }
+  return std::shared_ptr<const ContextualLengthRecipe>(
+      new ContextualLengthRecipe(std::move(samples), retained, work));
 }
 
 std::optional<Lengthd> SampleContextualLengthRecipe(const ContextualLengthRecipe& recipe,

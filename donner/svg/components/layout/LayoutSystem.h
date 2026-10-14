@@ -155,8 +155,9 @@ public:
    * entity-from-world transform.
    *
    * @param entity Current entity.
+   * @param viewportChanged Also invalidate descendant viewport-dependent layout caches.
    */
-  void invalidate(EntityHandle entity);
+  void invalidate(EntityHandle entity, bool viewportChanged = false);
 
   /// @}
 

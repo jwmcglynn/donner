@@ -9,6 +9,7 @@
 
 #include "donner/base/MathUtils.h"
 #include "donner/base/Transform.h"
+#include "donner/svg/components/animation/AnimationValueSampler.h"
 #include "donner/svg/components/filter/FilterGraph.h"
 
 namespace donner::svg {
@@ -83,6 +84,12 @@ inline Vector2d FilterOffsetInPixels(Vector2d offset, Vector2d bounds, bool obje
   return transform.transformVector(userOffset);
 }
 
+/// Resolved clipping bounds and optional un-clipped animated geometry, in user coordinates.
+struct FilterRegionSample {
+  Box2d bounds;                         ///< Clip region, intersected with the filter region.
+  std::optional<Box2d> animatedRegion;  ///< Un-clipped region for image placement when sampled.
+};
+
 /** Per-invocation filter coordinates and subregion history, independent of GPU resources.
  * Construction snapshots coordinate metadata. The caller records each completed primitive's
  * subregion in execution order; no document handles or borrowed transforms are retained.
@@ -97,8 +104,10 @@ struct FilterRegionContext {
   /// @param sourceSize Source raster dimensions in pixels.
   /// @param filterRegion Filter region in user coordinates.
   /// @param deviceFromFilter Filter-to-device transform, copied into this context.
+  /// @param primitiveBounds Optional backend-resolved percentage reference bounds.
   FilterRegionContext(const FilterGraph& graph, Vector2i sourceSize, const Box2d& filterRegion,
-                      const Transform2d& deviceFromFilter)
+                      const Transform2d& deviceFromFilter,
+                      std::optional<Box2d> primitiveBounds = std::nullopt)
       : filterRegion(filterRegion),
         deviceFromFilter(deviceFromFilter),
         scaleX(FilterDeviceScaleX(deviceFromFilter)),
@@ -113,7 +122,8 @@ struct FilterRegionContext {
         boundingBoxY(graph.elementBoundingBox.has_value() ? graph.elementBoundingBox->topLeft.y
                                                           : 0.0),
         filterFromDevice(deviceFromFilter.inverse()),
-        primitiveUnitsBounds(computePrimitiveUnitsBounds(sourceSize)),
+        primitiveUnitsBounds(primitiveBounds.value_or(
+            computePrimitiveUnitsBounds(sourceSize, graph.primitiveViewport))),
         previousOutputSubregion(filterRegion) {}
 
   /// Resolve an effect length along X. @param value Length in primitive units.
@@ -151,8 +161,7 @@ struct FilterRegionContext {
         std::holds_alternative<filter_primitive::Turbulence>(node.primitive) ||
         std::holds_alternative<filter_primitive::Image>(node.primitive) ||
         std::holds_alternative<filter_primitive::Tile>(node.primitive);
-    const bool explicitSubregion = node.x.has_value() || node.y.has_value() ||
-                                   node.width.has_value() || node.height.has_value();
+    const bool explicitSubregion = node.hasExplicitRegion();
     if (explicitSubregion) {
       return explicitNodeSubregion(node);
     }
@@ -167,6 +176,38 @@ struct FilterRegionContext {
     }
     expandPrimitiveBounds(node, inputBounds);
     return intersect(inputBounds, filterRegion);
+  }
+
+  /// Evaluate admitted region stacks after the default subregion is known.
+  /// @param node Primitive with immutable recipes. Its execution cost must already be admitted.
+  FilterRegionSample sampleNodeSubregion(const FilterNode& node) const {
+    const Box2d base =
+        node.hasExplicitRegion() ? explicitNodeRegion(node) : computeNodeSubregion(node);
+    if (!node.hasAnimatedRegion()) {
+      return {computeNodeSubregion(node), std::nullopt};
+    }
+    const std::array<std::optional<Lengthd>, 4> authored = {node.x, node.y, node.width,
+                                                            node.height};
+    std::array<double, 4> values = {base.topLeft.x, base.topLeft.y, base.width(), base.height()};
+    bool sampled = false;
+    for (std::size_t i = 0; i < values.size(); ++i) {
+      if (const auto result = sampleRegionField(
+              node, i, authored[i].value_or(Lengthd(values[i], Lengthd::Unit::Px)))) {
+        values[i] = *result;
+        sampled = true;
+      }
+    }
+    const Box2d region = Box2d::FromXYWH(values[0], values[1], values[2], values[3]);
+    return {intersect(region, filterRegion), sampled ? std::optional(region) : std::nullopt};
+  }
+
+  /// Retain a primitive's actual region for later input-derived defaults.
+  /// @param node Completed primitive. @param bounds Region used for that primitive.
+  void recordSubregion(const FilterNode& node, const Box2d& bounds) {
+    previousOutputSubregion = bounds;
+    if (node.result) {
+      namedSubregions[node.result->str()] = bounds;
+    }
   }
 
   /// Resolve a position. @param length Value. @param extent Axis. @param origin Object origin.
@@ -197,9 +238,40 @@ struct FilterRegionContext {
   std::unordered_map<std::string, Box2d> namedSubregions;
 
 private:
-  Box2d computePrimitiveUnitsBounds(Vector2i sourceSize) const {
+  double contextOrigin(double origin) const { return isObjectBoundingBox ? origin : 0; }
+
+  std::optional<double> sampleRegionField(const FilterNode& node, std::size_t index,
+                                          Lengthd underlying) const {
+    const auto& recipe = node.animatedRegion[index];
+    if (!recipe) {
+      return std::nullopt;
+    }
+    components::AnimationValueContext context;
+    context.viewBox = primitiveUnitsBounds;
+    context.extent = index % 2 == 0 ? Lengthd::Extent::X : Lengthd::Extent::Y;
+    const double dimension = index % 2 == 0 ? boundingBoxWidth : boundingBoxHeight;
+    const double origin = index % 2 == 0 ? boundingBoxX : boundingBoxY;
+    context.mappedLengths = true;
+    context.unitlessScale = isObjectBoundingBox ? dimension : 1;
+    context.unitlessOrigin = index < 2 ? contextOrigin(origin) : 0;
+    context.percentageOrigin = context.unitlessOrigin;
+    const auto sampled = components::SampleContextualLengthRecipe(*recipe, underlying, context);
+    if (!sampled) {
+      return std::nullopt;
+    }
+    const double value = index < 2 ? resolvePosition(*sampled, context.extent,
+                                                     isObjectBoundingBox ? origin : 0, dimension)
+                                   : resolveSize(*sampled, context.extent, dimension);
+    return std::isfinite(value) ? std::optional(value) : std::nullopt;
+  }
+
+  Box2d computePrimitiveUnitsBounds(Vector2i sourceSize,
+                                    const std::optional<Box2d>& viewport) const {
     if (isObjectBoundingBox) {
       return Box2d::FromXYWH(boundingBoxX, boundingBoxY, boundingBoxWidth, boundingBoxHeight);
+    }
+    if (viewport) {
+      return *viewport;
     }
     const double userWidth = NearZero(scaleX, 1e-12) ? static_cast<double>(sourceSize.x)
                                                      : static_cast<double>(sourceSize.x) / scaleX;
@@ -248,6 +320,10 @@ private:
   }
 
   Box2d explicitNodeSubregion(const FilterNode& node) const {
+    return intersect(explicitNodeRegion(node), filterRegion);
+  }
+
+  Box2d explicitNodeRegion(const FilterNode& node) const {
     const double x = node.x.has_value() ? resolvePosition(*node.x, Lengthd::Extent::X,
                                                           isObjectBoundingBox ? boundingBoxX : 0.0,
                                                           boundingBoxWidth)
@@ -262,7 +338,14 @@ private:
     const double height = node.height.has_value()
                               ? resolveSize(*node.height, Lengthd::Extent::Y, boundingBoxHeight)
                               : filterRegion.height();
-    return intersect(Box2d(Vector2d(x, y), Vector2d(x + width, y + height)), filterRegion);
+    return Box2d(Vector2d(x, y), Vector2d(x + width, y + height));
+  }
+
+  Box2d expandByDeviceSupport(const Box2d& bounds, double x, double y) const {
+    const Vector2d extent(
+        std::abs(filterFromDevice.data[0]) * x + std::abs(filterFromDevice.data[2]) * y,
+        std::abs(filterFromDevice.data[1]) * x + std::abs(filterFromDevice.data[3]) * y);
+    return Box2d(bounds.topLeft - extent, bounds.bottomRight + extent);
   }
 
   void expandPrimitiveBounds(const FilterNode& node, Box2d& inputBounds) const {
@@ -276,8 +359,7 @@ private:
                                       ? BoundedPositiveFilterPixels(toPixelY(blur->stdDeviationY))
                                       : 0.0) *
                                  3.0);
-      inputBounds = Box2d(Vector2d(inputBounds.topLeft.x - x, inputBounds.topLeft.y - y),
-                          Vector2d(inputBounds.bottomRight.x + x, inputBounds.bottomRight.y + y));
+      inputBounds = expandByDeviceSupport(inputBounds, x, y);
       return;
     }
     if (const auto* drop = std::get_if<filter_primitive::DropShadow>(&node.primitive)) {
@@ -286,10 +368,12 @@ private:
     }
     if (const auto* morphology = std::get_if<filter_primitive::Morphology>(&node.primitive);
         morphology && morphology->op == filter_primitive::Morphology::Operator::Dilate) {
-      const double x = BoundedPositiveFilterPixels(toPixelX(morphology->radiusX));
-      const double y = BoundedPositiveFilterPixels(toPixelY(morphology->radiusY));
-      inputBounds = Box2d(Vector2d(inputBounds.topLeft.x - x, inputBounds.topLeft.y - y),
-                          Vector2d(inputBounds.bottomRight.x + x, inputBounds.bottomRight.y + y));
+      if (morphology->radiusX < 0 || morphology->radiusY < 0) {
+        return;
+      }
+      const double x = std::round(BoundedPositiveFilterPixels(toPixelX(morphology->radiusX)));
+      const double y = std::round(BoundedPositiveFilterPixels(toPixelY(morphology->radiusY)));
+      inputBounds = expandByDeviceSupport(inputBounds, x, y);
     }
   }
 
@@ -304,12 +388,11 @@ private:
                                     : 0.0) *
                                3.0);
     const Vector2d offset = toPixelOffset(drop.dx, drop.dy);
-    const Vector2d boundedOffset(BoundedSignedFilterPixels(offset.x),
-                                 BoundedSignedFilterPixels(offset.y));
-    const Box2d shadow(Vector2d(inputBounds.topLeft.x + boundedOffset.x - x,
-                                inputBounds.topLeft.y + boundedOffset.y - y),
-                       Vector2d(inputBounds.bottomRight.x + boundedOffset.x + x,
-                                inputBounds.bottomRight.y + boundedOffset.y + y));
+    const Vector2d boundedOffset =
+        filterFromDevice.transformVector(Vector2d(std::round(BoundedSignedFilterPixels(offset.x)),
+                                                  std::round(BoundedSignedFilterPixels(offset.y))));
+    const Box2d expanded = expandByDeviceSupport(inputBounds, x, y);
+    const Box2d shadow(expanded.topLeft + boundedOffset, expanded.bottomRight + boundedOffset);
     inputBounds = Box2d::Union(inputBounds, shadow);
   }
 };

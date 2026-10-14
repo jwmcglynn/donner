@@ -1417,7 +1417,8 @@ struct FilterNodeExecution {
         arena(execution.arena),
         coordinates(execution.coordinates),
         input(execution.inputFor(node, 0)),
-        subregion(coordinates.computeNodeSubregion(node)),
+        regionSample(coordinates.sampleNodeSubregion(node)),
+        subregion(regionSample.bounds),
         linearRgb(
             node.colorInterpolationFilters.value_or(execution.graph.colorInterpolationFilters) !=
             svg::ColorInterpolationFilters::SRGB),
@@ -1451,6 +1452,7 @@ struct FilterNodeExecution {
   FilterResourceArena& arena;
   FilterExecutionCoordinates& coordinates;
   FilterTexture input;
+  svg::FilterRegionSample regionSample;
   Box2d subregion;
   bool linearRgb;
   bool outputLinear;
@@ -1990,7 +1992,8 @@ FilterTexture FilterNodeExecution::run() {
     return {};
   }
   if (!clipMergedIntoBlur && !finalResolve) {
-    const bool explicitSubregion = node.x || node.y || node.width || node.height;
+    const bool explicitSubregion =
+        node.hasExplicitRegion() || regionSample.animatedRegion.has_value();
     output = execution.clip(output, subregion, explicitSubregion && !execution.axisAligned);
   }
   if (output) {
@@ -2157,6 +2160,11 @@ FilterTexture FilterNodeExecution::apply(const fp::DropShadow& primitive) {
 }
 
 FilterTexture FilterNodeExecution::apply(const fp::Image& primitive) {
+  if (regionSample.animatedRegion) {
+    outputLinear = false;
+    return engine.applyImage(arena, primitive, input.width(), input.height(), execution.graph, node,
+                             coordinates.deviceFromFilter, *regionSample.animatedRegion);
+  }
   const bool isOBB = coordinates.isObjectBoundingBox;
   const double bboxW = coordinates.boundingBoxWidth;
   const double bboxH = coordinates.boundingBoxHeight;

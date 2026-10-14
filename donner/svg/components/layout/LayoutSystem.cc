@@ -570,7 +570,7 @@ Transform2d LayoutSystem::getEntityFromWorldTransform(EntityHandle entity) {
   return getAbsoluteTransformComponent(entity).worldFromEntity;
 }
 
-void LayoutSystem::invalidate(EntityHandle entity) {
+void LayoutSystem::invalidate(EntityHandle entity, bool viewportChanged) {
   entity.remove<components::ComputedLocalTransformComponent>();
   entity.remove<components::ComputedAbsoluteTransformComponent>();
   entity.remove<components::ComputedSizedElementComponent>();
@@ -603,11 +603,12 @@ void LayoutSystem::invalidate(EntityHandle entity) {
     descendantStack.pop_back();
     EntityHandle handle(registry, e);
     handle.remove<components::ComputedAbsoluteTransformComponent>();
-    // Sized-element / viewBox caches can also cascade through a viewport-
-    // bearing ancestor, but those rarely change mid-drag and the RIC
-    // rebuild path already recomputes them via `ensureComputedComponents`.
-    // Keep this cascade narrow to the transform cache - the known
-    // drag-frame offender - to avoid inflating the invalidation surface.
+    if (viewportChanged) {
+      handle.remove<components::ComputedViewBoxComponent>();
+      handle.remove<components::ComputedSizedElementComponent>();
+      handle.remove<components::ComputedShadowSizedElementComponent>();
+      handle.remove<components::ComputedLocalTransformComponent>();
+    }
     if (const auto* childTree = handle.try_get<donner::components::TreeComponent>()) {
       for (Entity grandchild = childTree->firstChild(); grandchild != entt::null;
            grandchild = registry.get<donner::components::TreeComponent>(grandchild).nextSibling()) {

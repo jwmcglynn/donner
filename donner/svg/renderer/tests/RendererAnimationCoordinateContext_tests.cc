@@ -560,16 +560,61 @@ TEST(RendererAnimationCoordinateContext, SvgFilterImageRasterizesAtAnimatedSize)
       "viewBox=%220 0 16 16%22%3E%3Cpath d=%22M0 0L16 16H0Z%22 "
       "fill=%22red%22/%3E%3C/svg%3E' ";
   const std::string suffix = "/></filter></defs><rect width='32' height='16' filter='url(#f)'/>";
-  auto document =
-      instantiateSubtree(prefix + "width='4'" + suffix +
-                             "<animate href='#p' attributeName='width' from='4' to='28' dur='2s'/>",
-                         parser::SVGParser::Options(), Vector2i(32, 16));
-  auto expected = instantiateSubtree(prefix + "width='16'" + suffix, parser::SVGParser::Options(),
-                                     Vector2i(32, 16));
-  document.setTime(1);
-  editor::tests::CompareBitmapToBitmap(
-      RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(expected),
-      "svg-filter-image-animated-raster-size", editor::tests::PixelmatchIdentityParams());
+  for (const bool percentage : {false, true}) {
+    SCOPED_TRACE(percentage);
+    std::string regionPrefix = prefix;
+    if (percentage) {
+      regionPrefix.replace(regionPrefix.find("width='32'"), 10, "width='24'");
+    }
+    const std::string initial = percentage ? "width='25%'" : "width='4'";
+    const std::string sampled = percentage ? "width='50%'" : "width='16'";
+    const std::string animation =
+        percentage ? "<set href='#p' attributeName='width' to='50%' dur='2s'/>"
+                   : "<animate href='#p' attributeName='width' from='4' to='28' dur='2s'/>";
+    auto document = instantiateSubtree(regionPrefix + initial + suffix + animation,
+                                       parser::SVGParser::Options(), Vector2i(32, 16));
+    auto expected = instantiateSubtree(regionPrefix + sampled + suffix,
+                                       parser::SVGParser::Options(), Vector2i(32, 16));
+    auto base = instantiateSubtree(regionPrefix + initial + suffix, parser::SVGParser::Options(),
+                                   Vector2i(32, 16));
+    for (const double time : {1.0, 3.0, 1.0}) {
+      SCOPED_TRACE(time);
+      document.setTime(time);
+      editor::tests::CompareBitmapToBitmap(
+          RenderDocumentWithActiveBackend(document),
+          RenderDocumentWithActiveBackend(time < 2 ? expected : base),
+          percentage ? "svg-filter-image-percentage-size" : "svg-filter-image-animated-raster-size",
+          editor::tests::PixelmatchIdentityParams());
+    }
+  }
+}
+
+TEST(RendererAnimationCoordinateContext, RecipeAdmissionRejectsHiddenRetainedCapacity) {
+  using components::AnimateValueComponent;
+  using components::ContextualLengthRecipe;
+  using components::ContextualLengthSample;
+  for (const int oversizedField : {0, 1, 2, 3, 4}) {
+    SCOPED_TRACE(oversizedField);
+    std::vector<ContextualLengthSample> samples(1);
+    auto& declaration = std::get<AnimateValueComponent>(samples[0].declaration);
+    declaration.attributeName = "width";
+    declaration.to = "4";
+    switch (oversizedField) {
+      case 0: samples.reserve(20000); break;
+      case 1: declaration.to->reserve(100000); break;
+      case 2: declaration.values.reserve(10000); break;
+      case 3: declaration.keyTimes.reserve(10000); break;
+      case 4: declaration.keySplines.reserve(10000); break;
+    }
+    EXPECT_THAT(ContextualLengthRecipe::Create(std::move(samples)), testing::IsNull());
+  }
+  std::vector<ContextualLengthSample> samples(1);
+  auto& declaration = std::get<AnimateValueComponent>(samples[0].declaration);
+  declaration.attributeName = "width";
+  declaration.to = "4";
+  const auto admitted = ContextualLengthRecipe::Create(std::move(samples));
+  ASSERT_THAT(admitted, testing::NotNull());
+  EXPECT_THAT(admitted->evaluationWork, testing::Gt(0));
 }
 
 TEST(RendererAnimationCoordinateContext, ScaledFilterHistoryRetainsUserBounds) {

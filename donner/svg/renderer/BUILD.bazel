@@ -184,6 +184,7 @@ donner_perf_sensitive_cc_library(
         "//donner/svg",
         "//donner/svg/components:attached_id_lookup",
         "//donner/svg/components:font_resource_graph",
+        "//donner/svg/components/animation:value_sampler",
         "//donner/svg/components/filter:computed_filter_resource_budget",
         "//donner/svg/renderer/common",
     ] + select({
@@ -246,6 +247,7 @@ donner_cc_library(
     visibility = ["//donner/svg/renderer:__subpackages__"],
     deps = [
         "//donner/base",
+        "//donner/svg/components/animation:value_sampler",
         "//donner/svg/components/filter:components",
     ],
 )
@@ -261,6 +263,7 @@ donner_perf_sensitive_cc_library(
     # //donner/svg/renderer:geode_excludes_tiny_skia_audit.
     visibility = ["//donner/svg/renderer:__subpackages__"],
     deps = [
+        ":filter_region_context",
         ":image_sampling",
         ":pixel_format_utils",
         ":tiny_skia_deps",

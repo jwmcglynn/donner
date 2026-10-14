@@ -101,10 +101,24 @@ std::optional<std::string> CombineColors(css::RGBA first, css::RGBA second, doub
       .toHexString();
 }
 
+double ResolveAnimationLength(const Lengthd& length, const AnimationValueContext& context,
+                              bool offset) {
+  if (!context.mappedLengths) {
+    return length.toPixels(context.viewBox, context.fontMetrics, context.extent);
+  }
+  const bool displacement = offset || context.lengthValuesAreOffsets;
+  if (length.unit == Lengthd::Unit::None) {
+    return length.value * context.unitlessScale + (displacement ? 0 : context.unitlessOrigin);
+  }
+  const double pixels = length.toPixels(context.viewBox, context.fontMetrics, context.extent);
+  return pixels +
+         (length.unit == Lengthd::Unit::Percent && !displacement ? context.percentageOrigin : 0);
+}
+
 std::optional<std::string> CombineLengths(const std::vector<Lengthd>& first,
                                           const std::vector<Lengthd>& second, double firstWeight,
-                                          double secondWeight,
-                                          const AnimationValueContext& context) {
+                                          double secondWeight, const AnimationValueContext& context,
+                                          bool secondIsOffset) {
   if (first.size() != second.size()) {
     return std::nullopt;
   }
@@ -112,12 +126,9 @@ std::optional<std::string> CombineLengths(const std::vector<Lengthd>& first,
   output.precision(12);
   for (std::size_t i = 0; i < first.size(); ++i) {
     const bool sameUnit = first[i].unit == second[i].unit;
-    const double a = sameUnit
-                         ? first[i].value
-                         : first[i].toPixels(context.viewBox, context.fontMetrics, context.extent);
-    const double b = sameUnit
-                         ? second[i].value
-                         : second[i].toPixels(context.viewBox, context.fontMetrics, context.extent);
+    const double a = sameUnit ? first[i].value : ResolveAnimationLength(first[i], context, false);
+    const double b =
+        sameUnit ? second[i].value : ResolveAnimationLength(second[i], context, secondIsOffset);
     const double value = a * firstWeight + b * secondWeight;
     if (!std::isfinite(value)) {
       return std::nullopt;
@@ -128,6 +139,8 @@ std::optional<std::string> CombineLengths(const std::vector<Lengthd>& first,
     output << value;
     if (sameUnit) {
       output << first[i].unit;
+    } else if (context.mappedLengths) {
+      output << Lengthd::Unit::Px;
     }
   }
   return output.str();
@@ -137,7 +150,8 @@ std::optional<std::string> CombineLengths(const std::vector<Lengthd>& first,
 
 std::optional<std::string> CombineAnimationValues(std::string_view first, std::string_view second,
                                                   double firstWeight, double secondWeight,
-                                                  const AnimationValueContext& context) {
+                                                  const AnimationValueContext& context,
+                                                  bool secondIsOffset) {
   if (!std::isfinite(firstWeight) || !std::isfinite(secondWeight)) {
     return std::nullopt;
   }
@@ -152,7 +166,7 @@ std::optional<std::string> CombineAnimationValues(std::string_view first, std::s
     }
   }
   if (a && b) {
-    return CombineLengths(*a, *b, firstWeight, secondWeight, context);
+    return CombineLengths(*a, *b, firstWeight, secondWeight, context, secondIsOffset);
   }
   const auto firstColor = ParseColor(first, context);
   const auto secondColor = ParseColor(second, context);
@@ -177,9 +191,8 @@ std::optional<double> AnimationValueDistance(std::string_view first, std::string
   if (a && b && a->size() == b->size()) {
     double distance = 0;
     for (std::size_t i = 0; i < a->size(); ++i) {
-      distance = std::hypot(
-          distance, (*a)[i].toPixels(context.viewBox, context.fontMetrics, context.extent) -
-                        (*b)[i].toPixels(context.viewBox, context.fontMetrics, context.extent));
+      distance = std::hypot(distance, ResolveAnimationLength((*a)[i], context, false) -
+                                          ResolveAnimationLength((*b)[i], context, false));
     }
     return distance;
   }

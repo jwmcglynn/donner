@@ -31,6 +31,8 @@
 #include "donner/svg/components/RenderingBehaviorComponent.h"
 #include "donner/svg/components/RenderingInstanceComponent.h"
 #include "donner/svg/components/SVGDocumentContext.h"
+#include "donner/svg/components/animation/AnimationResourceBudget.h"
+#include "donner/svg/components/animation/AnimationValueSampler.h"
 #include "donner/svg/components/filter/ComputedFilterResourceBudget.h"
 #include "donner/svg/components/filter/FilterComponent.h"
 #include "donner/svg/components/layout/LayoutSystem.h"
@@ -925,13 +927,46 @@ std::unordered_set<Entity> collectOffscreenFeImageShadowEntities(Registry& regis
   return result;
 }
 
+void SamplePreparedImageDimension(components::FilterNode& node, std::size_t index,
+                                  std::optional<Lengthd>& dimension,
+                                  const components::AnimationValueContext& context,
+                                  double defaultSize, components::AnimationResourceBudget& budget) {
+  const auto recipe = std::exchange(node.animatedRegion[index], nullptr);
+  if (!recipe || !budget.reserveContextualWork(recipe->evaluationWork)) {
+    return;
+  }
+  if (const auto sampled = components::SampleContextualLengthRecipe(
+          *recipe, dimension.value_or(Lengthd(defaultSize, Lengthd::Unit::Px)), context)) {
+    dimension = *sampled;
+  }
+}
+
+void SamplePreparedImageDimensions(const components::FilterGraph& graph,
+                                   components::FilterNode& node, Registry& registry) {
+  const Box2d region = graph.filterRegion.value_or(Box2d::FromXYWH(0, 0, 1, 1));
+  const bool objectBounds = graph.primitiveUnits == PrimitiveUnits::ObjectBoundingBox &&
+                            graph.elementBoundingBox.has_value();
+  components::AnimationValueContext context;
+  context.viewBox =
+      objectBounds ? *graph.elementBoundingBox : graph.primitiveViewport.value_or(region);
+  context.mappedLengths = true;
+  auto& budget = registry.ctx().emplace<components::AnimationResourceBudget>();
+  context.extent = Lengthd::Extent::X;
+  context.unitlessScale = objectBounds ? context.viewBox.width() : 1;
+  SamplePreparedImageDimension(node, 2, node.width, context, region.width(), budget);
+  context.extent = Lengthd::Extent::Y;
+  context.unitlessScale = objectBounds ? context.viewBox.height() : 1;
+  SamplePreparedImageDimension(node, 3, node.height, context, region.height(), budget);
+}
+
 std::optional<Vector2i> resolveFeImageRenderSize(const components::FilterGraph& filterGraph,
                                                  const components::FilterNode& node) {
   const Box2d defaultSubregion =
       filterGraph.filterRegion.value_or(Box2d::FromXYWH(0.0, 0.0, 1.0, 1.0));
   const bool isOBB = filterGraph.primitiveUnits == PrimitiveUnits::ObjectBoundingBox &&
                      filterGraph.elementBoundingBox.has_value();
-  const Box2d referenceBox = isOBB ? *filterGraph.elementBoundingBox : defaultSubregion;
+  const Box2d referenceBox = isOBB ? *filterGraph.elementBoundingBox
+                                   : filterGraph.primitiveViewport.value_or(defaultSubregion);
 
   auto resolveSize = [&](const std::optional<Lengthd>& len, Lengthd::Extent extent) -> double {
     if (!len.has_value()) {
@@ -2668,6 +2703,7 @@ void RendererDriver::prepareFilterGraphs(Registry& registry, std::span<const Ent
         continue;
       }
       filterGraph->filterRegion = filterRegion;
+      filterGraph->primitiveViewport = filterViewBox;
       if (filterGraph->primitiveUnits == PrimitiveUnits::ObjectBoundingBox) {
         filterGraph->elementBoundingBox =
             RenderingObjectBoundingBox(registry, instance->dataHandle(registry));
@@ -4078,6 +4114,7 @@ void RendererDriver::preRenderSvgFeImages(components::FilterGraph& filterGraph, 
       continue;
     }
 
+    SamplePreparedImageDimensions(filterGraph, node, registry);
     SVGDocument subDoc = SVGDocument::CreateFromHandle(imageNode->svgSubDocument);
     const std::optional<Vector2i> renderSize = resolveFeImageRenderSize(filterGraph, node);
     const Vector2i targetSize = renderSize.value_or(subDoc.canvasSize());

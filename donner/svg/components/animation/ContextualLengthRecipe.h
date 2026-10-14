@@ -2,6 +2,8 @@
 /// @file
 
 #include <cstddef>
+#include <memory>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -20,9 +22,20 @@ struct ContextualLengthSample {
 
 /// Ordered animation stack retained until the referencing instance's length context is known.
 struct ContextualLengthRecipe {
-  std::vector<ContextualLengthSample> samples;  ///< Lower to higher sandwich layers.
-  std::size_t retainedBytes = 0;   ///< Conservative admitted storage, including capacity.
-  std::size_t evaluationWork = 0;  ///< Work charged before each consumer evaluates it.
+  /// Validate owned operands and derive immutable storage/work costs; reject excessive input.
+  /// @param samples Owned sample stack, consumed only after its shape has been checked.
+  /// @return Immutable admitted recipe, or nullptr when its source/storage envelope is exceeded.
+  static std::shared_ptr<const ContextualLengthRecipe> Create(
+      std::vector<ContextualLengthSample>&& samples);
+
+  const std::vector<ContextualLengthSample> samples;  ///< Lower to higher sandwich layers.
+  const std::size_t retainedBytes;                    ///< Conservative admitted storage.
+  const std::size_t evaluationWork;                   ///< Cost charged before consumer evaluation.
+
+private:
+  ContextualLengthRecipe(std::vector<ContextualLengthSample>&& values, std::size_t bytes,
+                         std::size_t work)
+      : samples(std::move(values)), retainedBytes(bytes), evaluationWork(work) {}
 };
 
 }  // namespace donner::svg::components

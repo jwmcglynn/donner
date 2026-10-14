@@ -9,6 +9,7 @@
 #include <type_traits>
 #include <vector>
 
+#include "donner/svg/renderer/FilterRegionContext.h"
 #include "donner/svg/renderer/ImageSampling.h"
 #include "donner/svg/renderer/PixelFormatUtils.h"
 #include "tiny_skia/filter/FilterGraph.h"
@@ -123,6 +124,10 @@ Box2d ComputePrimitiveUnitsBounds(const components::FilterGraph& filterGraph,
     return *filterGraph.elementBoundingBox;
   }
 
+  if (filterGraph.primitiveViewport) {
+    return *filterGraph.primitiveViewport;
+  }
+
   const double userWidth =
       NearZero(filterGraph.userToPixelScale.x, 1e-12)
           ? (NearZero(scaleX, 1e-12) ? static_cast<double>(outputWidth)
@@ -184,10 +189,7 @@ struct FilterConversionContext {
       return boundingBoxOrigin + length.value * boundingBoxDimension;
     }
     if (length.unit == Lengthd::Unit::Percent) {
-      const double referenceOrigin =
-          usesObjectBoundingBox ? boundingBoxOrigin
-                                : (extent == Lengthd::Extent::X ? primitiveUnitsBounds.topLeft.x
-                                                                : primitiveUnitsBounds.topLeft.y);
+      const double referenceOrigin = usesObjectBoundingBox ? boundingBoxOrigin : 0.0;
       const double referenceSize =
           usesObjectBoundingBox ? boundingBoxDimension
                                 : (extent == Lengthd::Extent::X ? primitiveUnitsBounds.width()
@@ -708,7 +710,16 @@ tiny_skia::filter::FilterGraph CreateExecutableGraph(const FilterConversionConte
 
 void PopulateSubregion(const components::FilterNode& node, const FilterConversionContext& context,
                        const tiny_skia::filter::FilterGraph& graph,
-                       tiny_skia::filter::GraphNode& graphNode) {
+                       tiny_skia::filter::GraphNode& graphNode,
+                       const FilterRegionSample& sampledRegion) {
+  if (sampledRegion.animatedRegion) {
+    const Box2d& region = *sampledRegion.animatedRegion;
+    const Box2d pixels = context.deviceFromFilter.transformBox(region);
+    graphNode.subregion = BoundedPixelRect(pixels, context.outputWidth, context.outputHeight);
+    graphNode.userSpaceSubregion = tiny_skia::filter::PixelRect{region.topLeft.x, region.topLeft.y,
+                                                                region.width(), region.height()};
+    return;
+  }
   if (!node.x.has_value() && !node.y.has_value() && !node.width.has_value() &&
       !node.height.has_value()) {
     return;
@@ -739,7 +750,8 @@ void PopulateSubregion(const components::FilterNode& node, const FilterConversio
 
 tiny_skia::filter::GraphNode ConvertNode(const components::FilterNode& node,
                                          const FilterConversionContext& context,
-                                         const tiny_skia::filter::FilterGraph& graph) {
+                                         const tiny_skia::filter::FilterGraph& graph,
+                                         const FilterRegionSample& sampledRegion) {
   tiny_skia::filter::GraphNode graphNode;
   graphNode.inputs.reserve(node.inputs.size());
   for (const components::FilterInput& input : node.inputs) {
@@ -749,7 +761,7 @@ tiny_skia::filter::GraphNode ConvertNode(const components::FilterNode& node,
     graphNode.result = std::string(*node.result);
   }
 
-  PopulateSubregion(node, context, graph, graphNode);
+  PopulateSubregion(node, context, graph, graphNode, sampledRegion);
   const PrimitiveConversionState state{context, graph, graphNode};
   graphNode.primitive =
       std::visit([&state](const auto& primitive) { return ConvertPrimitive(primitive, state); },
@@ -788,8 +800,13 @@ void ApplyFilterGraphToPixmap(tiny_skia::Pixmap& pixmap, const components::Filte
   tiny_skia::filter::FilterGraph graph =
       CreateExecutableGraph(context, clipSourceToFilterRegion, fillPaintInput, strokePaintInput);
   graph.nodes.reserve(filterGraph.nodes.size());
+  FilterRegionContext regions(filterGraph, Vector2i(pixmap.width(), pixmap.height()),
+                              context.filterRegion.value_or(context.primitiveUnitsBounds),
+                              deviceFromFilter, context.primitiveUnitsBounds);
   for (const components::FilterNode& node : filterGraph.nodes) {
-    graph.nodes.push_back(ConvertNode(node, context, graph));
+    const FilterRegionSample sampled = regions.sampleNodeSubregion(node);
+    graph.nodes.push_back(ConvertNode(node, context, graph, sampled));
+    regions.recordSubregion(node, sampled.bounds);
   }
 
   tiny_skia::filter::executeFilterGraph(pixmap, graph);
