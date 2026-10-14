@@ -187,7 +187,7 @@ value. The current presentation surface is:
 | -------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
 | Common CSS presentation properties                 | Animation cascade, inheritance, important author precedence                                                 |
 | Circle, ellipse and rectangle lengths              | Animated geometry with reversible base values                                                               |
-| Line endpoints, polygon/polyline points, path data | Animated geometry; compatible path structures required for interpolation                                    |
+| Line endpoints, polygon/polyline points, path data | Animated geometry; path-value correctness audit remains in progress                                         |
 | Ordinary, gradient and pattern transforms          | Transform sampling and composition; qualification in progress                                               |
 | Gradient coordinates and stop offsets              | Reversible animated values                                                                                  |
 | Viewports and path calibration                     | Reversible `viewBox`, `preserveAspectRatio` and `pathLength`, including initially absent components         |
@@ -200,6 +200,11 @@ value. The current presentation surface is:
 | Pattern tile geometry and units                    | Reversible tile lengths and unit selections                                                                 |
 | Filter regions and primitive regions               | Reversible region lengths and unit selections                                                               |
 | Resource references, including animated `href`     | Discrete use, image, gradient, pattern, filter, textPath and mpath references; normal loader policy applies |
+
+Path-data qualification uses independently constructed references in
+`RendererAnimationPathValue_tests.cc` and the parameter/compatibility rules in
+[SVG2 path animation](https://w3c.github.io/svgwg/svg2-draft/paths.html#TheDProperty).
+The path composition, command, arc, empty-value and precision controls currently expose gaps.
 
 The final coverage gate requires rendered regressions for newly supported families. Unsupported
 attribute families remain gaps in #1239; this table does not redefine them as completed work.
@@ -261,6 +266,11 @@ fuzzer coverage must be expanded whenever a new input form or resource-owning pa
       derived from primitive inputs and the enclosing filter region.
 - [x] Resolve per-instance paint/color stacks, sampled currentColor and interpolation mode,
       resource color priority, inherited URL ownership, and diffuse/specular lighting-color.
+- [ ] Complete compatible path-data by/from-by, additive and accumulated composition; preserve
+      base values for incompatible composition, including freezing.
+- [ ] Preserve authored path command compatibility and interpolate arc parameters/flags before
+      geometric conversion.
+- [ ] Preserve empty path samples and coordinate precision with bounded parsing and arithmetic.
 - [ ] Finish presentation-attribute coverage and publish the verified support matrix.
 - [ ] Finish independent code/security review and all new hostile-input regressions.
 - [ ] Run affected source lint, formatting, CMake generation checks, and sanitizer/fuzzer gates.
