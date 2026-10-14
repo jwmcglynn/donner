@@ -1026,6 +1026,35 @@ public:
   static void AdvanceAnimationPreview(EditorShell& shell, double nowSeconds) {
     shell.advanceAnimationPreview(nowSeconds);
   }
+  static bool PreviewInputReady(const EditorShell& shell) {
+    return shell.animationFramePresented() && !shell.animationResetPending_ &&
+           !shell.renderCoordinator_.asyncRenderer().isBusy();
+  }
+  static void SetPreviewStart(EditorShell& shell, double seconds) {
+    shell.animationPreviewStartSeconds_ = seconds;
+  }
+  static void ClearPreviewPointer(EditorShell& shell) { shell.resetPreviewPointer(); }
+  static void SetPreviewResetPending(EditorShell& shell, bool pending) {
+    shell.animationResetPending_ = pending;
+  }
+  static std::size_t QueuedPreviewEdges(const EditorShell& shell) {
+    return shell.previewPointerEdges_.size();
+  }
+  static void QueuePreviewClick(EditorShell& shell, const svg::SVGElement& target, Vector2d point) {
+    for (bool pressed : {true, false}) {
+      shell.previewPointerInput_ = {
+          .point = point,
+          .target = target,
+          .documentGeneration = shell.app_.document().documentGeneration(),
+          .pressed = pressed,
+          .released = !pressed,
+      };
+      shell.queuePreviewPointerEdge();
+    }
+  }
+  static void ApplyPreviewInputAt(EditorShell& shell, double nowSeconds) {
+    shell.applyPreviewPointerInput(nowSeconds);
+  }
   static bool IsAnimationPreview(const EditorShell& shell) { return shell.animationPreview_; }
   static bool AnimationResetPending(const EditorShell& shell) {
     return shell.animationResetPending_;
@@ -2473,6 +2502,77 @@ TEST(EditorShellTest, PreviewHoverUsesCapturedTargetsWithoutSelectingOrEditing) 
   }
   EXPECT_EQ(EditorShellTestAccess::PreviewHoveredElement(shell), target);
   EXPECT_GT(app.document().currentFrameVersion(), versionBefore);
+  EXPECT_FALSE(app.hasSelection());
+  EXPECT_FALSE(app.isDirty());
+  EXPECT_FALSE(app.canUndo());
+}
+
+TEST(EditorShellTest, QueuedPreviewClickStartsAtCurrentTimeUsingItsCapturedTarget) {
+  constexpr std::string_view source = R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="120" height="120">
+      <circle id="orb" cx="60" cy="45" r="10" pointer-events="none">
+        <animate attributeName="r" values="10;30;10" begin="pad.click" dur="0.6s"/>
+      </circle>
+      <rect id="pad" x="10" y="90" width="40" height="20">
+        <animate attributeName="x" from="10" to="70" dur="1s" fill="freeze"/>
+      </rect>
+    </svg>)svg";
+  gui::EditorWindow window = MakeHiddenWindow();
+  ASSERT_TRUE(window.valid());
+  EditorShell shell(window, OptionsWithSource(source));
+  auto& app = EditorShellTestAccess::App(shell);
+  auto& document = app.document().document();
+  EditorShellTestAccess::SetAnimationPreview(shell, true);
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(8);
+  while (!EditorShellTestAccess::PreviewInputReady(shell) &&
+         std::chrono::steady_clock::now() < deadline) {
+    if (!EditorShellTestAccess::AnimationResetPending(shell)) {
+      EditorShellTestAccess::HoldAnimationAtStart(shell);
+    }
+    RunShellFrame(window, shell);
+  }
+  ASSERT_TRUE(EditorShellTestAccess::PreviewInputReady(shell));
+  ASSERT_DOUBLE_EQ(document.currentTime(), 0);
+  const auto frame = EditorShellTestAccess::Coordinator(shell).framePresentation();
+  const Vector2d point = frame->viewport().documentToScreen(Vector2d(30, 100));
+  const auto target = frame->pointerTargetAt(point);
+  ASSERT_TRUE(target.has_value());
+  ASSERT_EQ(target, document.querySelector("#pad"));
+  const std::string sourceBefore(document.source());
+
+  EditorShellTestAccess::ClearPreviewPointer(shell);
+  EditorShellTestAccess::SetPreviewStart(shell, 10);
+  EditorShellTestAccess::ApplyPreviewInputAt(shell, 20);
+  EXPECT_DOUBLE_EQ(document.currentTime(), 0) << "Empty input leaves normal ticking in charge";
+  EditorShellTestAccess::QueuePreviewClick(shell, *target, point);
+  EditorShellTestAccess::ApplyPreviewInputAt(shell, std::numeric_limits<double>::quiet_NaN());
+  EXPECT_EQ(EditorShellTestAccess::QueuedPreviewEdges(shell), 2u);
+  EXPECT_DOUBLE_EQ(document.currentTime(), 0);
+  EditorShellTestAccess::SetPreviewResetPending(shell, true);
+  EditorShellTestAccess::ApplyPreviewInputAt(shell, 20);
+  EXPECT_EQ(EditorShellTestAccess::QueuedPreviewEdges(shell), 2u);
+  EXPECT_DOUBLE_EQ(document.currentTime(), 0);
+  EditorShellTestAccess::SetPreviewResetPending(shell, false);
+  EditorShellTestAccess::ApplyPreviewInputAt(shell, 20);
+  EXPECT_DOUBLE_EQ(document.currentTime(), 10);
+  EXPECT_EQ(EditorShellTestAccess::QueuedPreviewEdges(shell), 0u);
+
+  svg::Renderer renderer;
+  const auto access = document.tryWriteAccess();
+  ASSERT_TRUE(access.has_value());
+  for (const auto [time, diameter] : {std::pair(10.3, 60.0), std::pair(10.7, 20.0)}) {
+    SCOPED_TRACE(time);
+    document.setTime(time);
+    renderer.draw(document);
+    const auto bounds =
+        document.querySelector("#orb")->cast<svg::SVGGeometryElement>().worldBounds();
+    ASSERT_TRUE(bounds.has_value());
+    EXPECT_NEAR(bounds->width(), diameter, 1e-6);
+    const auto padBounds = target->cast<svg::SVGGeometryElement>().worldBounds();
+    ASSERT_TRUE(padBounds.has_value());
+    EXPECT_NEAR(padBounds->topLeft.x, 70, 1e-6) << "The captured target moved before dispatch";
+  }
+  EXPECT_EQ(document.source(), sourceBefore);
   EXPECT_FALSE(app.hasSelection());
   EXPECT_FALSE(app.isDirty());
   EXPECT_FALSE(app.canUndo());

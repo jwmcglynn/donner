@@ -600,7 +600,9 @@ private:
   void renderCompactTopBar();
   void setAnimationPreview(bool enabled);
   void advanceAnimationPreview(double nowSeconds);
-  void applyAnimationPreviewTime(double seconds);
+  void tickAnimationPreview(double nowSeconds);
+  [[nodiscard]] std::optional<double> animationPreviewTimeAt(double nowSeconds) const;
+  bool applyAnimationPreviewTime(double seconds);
   [[nodiscard]] bool previewAllowsEditing(bool allowed) const;
   void applyPreviewMenuState(MenuBarState& state) const;
   void renderAnimationPreviewControl();
@@ -624,7 +626,10 @@ private:
   void capturePreviewPointer(bool canvasHovered, bool spaceHeld, bool overScrollbar);
   void queuePreviewPointerEdge();
   void collectPreviewCancellationEvents(std::vector<PreviewMouseDispatch>& events);
-  void applyPreviewPointerInput();
+  [[nodiscard]] bool canApplyPreviewPointerInput() const;
+  [[nodiscard]] bool hasPreviewPointerChanges() const;
+  void applyPreviewPointerInput(double nowSeconds);
+  std::optional<std::vector<PreviewMouseDispatch>> collectQueuedPreviewPointerEvents();
   void collectPreviewPointerEvents(const PreviewPointerInput& input,
                                    std::vector<PreviewMouseDispatch>& events);
   void collectPreviewHoverEvents(const std::optional<svg::SVGElement>& target,

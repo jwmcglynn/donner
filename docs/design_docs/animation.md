@@ -151,6 +151,9 @@ SVG rules.
 
 Pointer targets are retained with the raster that is actually displayed, its viewport, and its
 document generation. Input edges are queued until safe document access; passive hover is coalesced.
+Before dispatching queued events, Preview samples the current clock while keeping the captured
+pointer targets. A raster stall therefore does not start a short animation at an obsolete rendered
+time and skip it during catch-up. Invalid clock samples retain the queued input for a later frame.
 Hover transitions exclude the shared ancestor path, and the previous path is retained across DOM
 changes. Focus loss cancels the pending press. Document replacement resets Preview.
 

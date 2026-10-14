@@ -3780,6 +3780,10 @@ test(
 
     let pulseClickStartedEpochMs: number | null = null;
     let pulseClickFinishedEpochMs: number | null = null;
+    let delayedPulseClickStartedEpochMs: number | null = null;
+    let delayedPulseClickFinishedEpochMs: number | null = null;
+    let delayedPulseReleaseEpochMs: number | null = null;
+    let heldPulseHeight: number | null = null;
     try {
       await Promise.all(
         page.workers().map((worker) =>
@@ -3826,6 +3830,39 @@ test(
       }, { timeout: scaledMs(5000), message: "Click triggers the radius pulse" }).toBeGreaterThan(
         58 * scale,
       );
+      await expect.poll(async () => {
+        const bounds = await orb();
+        return Math.abs((bounds.maxY - bounds.minY) - (start.maxY - start.minY));
+      }, { timeout: scaledMs(5000), message: "First pulse returns to its base diameter" })
+        .toBeLessThanOrEqual(2 * scale);
+      // Hold raster progress longer than the pulse before delivering another click. Its target
+      // remains the displayed pad, but its begin time must use the dispatch-time preview clock.
+      const heldForPulse = await holdRasterTaskYield(page);
+      try {
+        const heldBounds = await orb();
+        heldPulseHeight = heldBounds.maxY - heldBounds.minY;
+        expect(
+          Math.abs(heldPulseHeight - (start.maxY - start.minY)),
+          "held frame contains the base orb, not the previous pulse",
+        ).toBeLessThanOrEqual(2 * scale);
+        const heldAt = Date.now();
+        await expect.poll(() => Date.now() - heldAt, {
+          timeout: scaledMs(3000),
+          intervals: [50],
+          message: "raster stall exceeds the short pulse duration",
+        }).toBeGreaterThanOrEqual(1000);
+        delayedPulseClickStartedEpochMs = Date.now();
+        await page.mouse.click(box.x + originX + 456 * scale, pad.y);
+        delayedPulseClickFinishedEpochMs = Date.now();
+      } finally {
+        await heldForPulse.release();
+        delayedPulseReleaseEpochMs = Date.now();
+      }
+      await expect.poll(async () => {
+        const bounds = await orb();
+        return bounds.maxY - bounds.minY;
+      }, { timeout: scaledMs(5000), message: "Queued click pulses after stale-frame catch-up" })
+        .toBeGreaterThan(58 * scale);
     } finally {
       tracePulseScreenshots = false;
       const pointerTraces = await Promise.all(
@@ -3845,7 +3882,16 @@ test(
       await writeFile(
         pulsePath,
         JSON.stringify(
-          { pulseClickStartedEpochMs, pulseClickFinishedEpochMs, pulseScreenshots, pointerTraces },
+          {
+            pulseClickStartedEpochMs,
+            pulseClickFinishedEpochMs,
+            delayedPulseClickStartedEpochMs,
+            delayedPulseClickFinishedEpochMs,
+            delayedPulseReleaseEpochMs,
+            heldPulseHeight,
+            pulseScreenshots,
+            pointerTraces,
+          },
           null,
           2,
         ),

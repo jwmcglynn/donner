@@ -20,6 +20,7 @@
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -6629,34 +6630,68 @@ void EditorShell::collectPreviewCancellationEvents(std::vector<PreviewMouseDispa
   }
 }
 
-void EditorShell::applyPreviewPointerInput() {
-  if (!animationPreview_ || animationResetPending_ || !animationFramePresented() ||
-      renderCoordinator_.asyncRenderer().isBusy()) {
-    return;
-  }
-  const auto access = app_.document().document().tryWriteAccess();
-  if (!access) {
-    return;
-  }
+std::optional<std::vector<EditorShell::PreviewMouseDispatch>>
+EditorShell::collectQueuedPreviewPointerEvents() {
   std::vector<PreviewMouseDispatch> events;
   collectPreviewCancellationEvents(events);
   for (const auto& input : previewPointerEdges_) {
     collectPreviewPointerEvents(input, events);
     if (events.size() > 256) {
       resetPreviewPointer();
-      return;
+      return std::nullopt;
     }
   }
   PreviewPointerInput hoverOnly = previewPointerInput_;
   hoverOnly.pressed = hoverOnly.released = hoverOnly.doubleClick = false;
   collectPreviewPointerEvents(hoverOnly, events);
-  previewPointerEdges_.clear();
   if (events.size() > 256) {
     resetPreviewPointer();
+    return std::nullopt;
+  }
+  return events;
+}
+
+bool EditorShell::canApplyPreviewPointerInput() const {
+  return animationPreview_ && !animationResetPending_ && animationFramePresented() &&
+         !renderCoordinator_.asyncRenderer().isBusy() &&
+         animationPreviewDocumentGeneration_ == app_.document().documentGeneration();
+}
+
+bool EditorShell::hasPreviewPointerChanges() const {
+  return !previewPointerEdges_.empty() || previewPointerOverflow_ ||
+         previewPointerInput_.target != previewHoveredElement_ ||
+         previewPointerInput_.point != previewPreviousPointerPosition_;
+}
+
+void EditorShell::applyPreviewPointerInput(double nowSeconds) {
+  if (!canApplyPreviewPointerInput() || !hasPreviewPointerChanges()) {
     return;
   }
-  // Deliver after UI queries so the render worker sees the resulting dirty state.
-  for (const auto& event : events) {
+  const auto seconds = animationPreviewTimeAt(nowSeconds);
+  if (!seconds) {
+    return;
+  }
+  const auto access = app_.document().document().tryWriteAccess();
+  if (!access) {
+    return;
+  }
+  // Retain interaction state and queued edges until the dispatch clock is admitted.
+  auto previousState = std::make_tuple(previewHoveredElement_, previewHoveredPath_,
+                                       previewPressedElement_, previewPreviousPointerPosition_,
+                                       previewPressedDoubleClick_, previewPointerOverflow_);
+  const auto events = collectQueuedPreviewPointerEvents();
+  if (!events) {
+    return;
+  }
+  if (!events->empty() && !applyAnimationPreviewTime(*seconds)) {
+    std::tie(previewHoveredElement_, previewHoveredPath_, previewPressedElement_,
+             previewPreviousPointerPosition_, previewPressedDoubleClick_, previewPointerOverflow_) =
+        std::move(previousState);
+    return;
+  }
+  previewPointerEdges_.clear();
+  // Targets came from the displayed frame. Updating time must not re-hit-test their positions.
+  for (const auto& event : *events) {
     const bool changed = app_.document().dispatchMouseEvent(event.type, event.target);
     requestRenderAtEndOfFrame_ |= changed;
     TracePreviewPointer(2, static_cast<int>(event.type),
@@ -6719,26 +6754,38 @@ void EditorShell::advanceAnimationPreview(double nowSeconds) {
   if (!animationFramePresented()) {
     return;
   }
-  const double seconds =
-      std::floor(std::max(0.0, nowSeconds - animationPreviewStartSeconds_) * 60.0) / 60.0;
-  if (seconds == animationPreviewLastTime_) {
-    return;
-  }
-  applyAnimationPreviewTime(seconds);
+  tickAnimationPreview(nowSeconds);
 }
 
-void EditorShell::applyAnimationPreviewTime(double seconds) {
+void EditorShell::tickAnimationPreview(double nowSeconds) {
+  const auto seconds = animationPreviewTimeAt(nowSeconds);
+  if (!seconds || *seconds == animationPreviewLastTime_) {
+    return;
+  }
+  applyAnimationPreviewTime(*seconds);
+}
+
+std::optional<double> EditorShell::animationPreviewTimeAt(double nowSeconds) const {
+  if (!std::isfinite(nowSeconds) || !std::isfinite(animationPreviewStartSeconds_)) {
+    return std::nullopt;
+  }
+  const double ticks = std::max(0.0, nowSeconds - animationPreviewStartSeconds_) * 60.0;
+  return std::isfinite(ticks) ? std::optional(std::floor(ticks) / 60.0) : std::nullopt;
+}
+
+bool EditorShell::applyAnimationPreviewTime(double seconds) {
   if (app_.document().setAnimationTime(seconds)) {
     requestRenderAtEndOfFrame_ = true;
   } else {
     const auto access = app_.document().document().tryReadAccess();
     if (!access.has_value() || app_.document().document().currentTime() != seconds) {
-      return;
+      return false;
     }
   }
   animationPreviewLastTime_ = seconds;
   animationResetPending_ = false;
   TracePreviewPointer(3, 0, 0, seconds);
+  return true;
 }
 
 bool EditorShell::animationFramePresented() const {
@@ -9278,8 +9325,9 @@ void EditorShell::runFrame() {
   markPhase(mainFrameCost.splittersMs);
   updateVisiblePreviewTasks();
   adoptCatalogFontResources();
-  applyPreviewPointerInput();
-  advanceAnimationPreview(AnimationPreviewClockSeconds());
+  const double animationNow = AnimationPreviewClockSeconds();
+  applyPreviewPointerInput(animationNow);
+  advanceAnimationPreview(animationNow);
   applyDeferredRenderRequest();
   advanceVisiblePreviews();
   penDragFlushedThisFrame_ = false;
