@@ -483,5 +483,68 @@ TEST(RendererAnimationCoordinateContext, ShadowTextPathRecipeClearsAfterSourceRe
 }
 #endif
 
+TEST(RendererAnimationCoordinateContext, BoundingBoxPrimitiveLengthsPreservePositionsAndDeltas) {
+  if (!ActiveRendererSupportsFeature(RendererBackendFeature::FilterEffects)) {
+    GTEST_SKIP() << "Filters are disabled in this configuration";
+  }
+  struct Case {
+    const char* name;
+    const char* initial;
+    const char* animation;
+    const char* expected;
+    double time = 1;
+  };
+  for (const auto& item : {
+           Case{"width-absolute", "x='0' width='0.5'",
+                "attributeName='width' from='100%' to='4px' dur='2s'", "x='0' width='6px'"},
+           Case{"position-absolute", "x='0' width='0.5'",
+                "attributeName='x' from='0%' to='8px' dur='2s'", "x='6px' width='0.5'"},
+           Case{"position-additive", "x='0.25' width='0.5'",
+                "attributeName='x' from='0px' to='4px' additive='sum' dur='2s'",
+                "x='8px' width='0.5'"},
+           Case{"position-by", "x='0' width='0.5'", "attributeName='x' from='0%' by='4px' dur='2s'",
+                "x='6px' width='0.5'"},
+           Case{"position-accumulated", "x='0' width='0.5'",
+                "attributeName='x' from='0%' to='0.25' dur='1s' repeatCount='2' accumulate='sum'",
+                "x='7px' width='0.5'", 1.5},
+       }) {
+    SCOPED_TRACE(item.name);
+    const std::string prefix =
+        "<defs><filter id='f' filterUnits='userSpaceOnUse' primitiveUnits='objectBoundingBox' "
+        "x='0' y='0' width='16' height='16'><feFlood id='p' flood-color='red' y='0' height='1' ";
+    const std::string suffix =
+        "/></filter></defs><rect x='4' y='4' width='8' height='8' filter='url(#f)'/>";
+    auto document = instantiateSubtree(
+        prefix + item.initial + suffix + "<animate href='#p' " + item.animation + "/>",
+        parser::SVGParser::Options(), Vector2i(16, 16));
+    auto expected = instantiateSubtree(prefix + item.expected + suffix,
+                                       parser::SVGParser::Options(), Vector2i(16, 16));
+    document.setTime(item.time);
+    editor::tests::CompareBitmapToBitmap(RenderDocumentWithActiveBackend(document),
+                                         RenderDocumentWithActiveBackend(expected), item.name,
+                                         editor::tests::PixelmatchIdentityParams());
+  }
+}
+
+TEST(RendererAnimationCoordinateContext, PrimitiveUnderlyingRegionUsesInputBounds) {
+  if (!ActiveRendererSupportsFeature(RendererBackendFeature::FilterEffects)) {
+    GTEST_SKIP() << "Filters are disabled in this configuration";
+  }
+  const std::string prefix =
+      "<defs><filter id='f' filterUnits='userSpaceOnUse' x='0' y='0' width='16' height='16'>"
+      "<feFlood x='2' y='0' width='8' height='16' flood-color='red' result='paint'/>"
+      "<feOffset id='p' in='paint' dx='0' ";
+  const std::string suffix = "/></filter></defs><rect width='16' height='16' filter='url(#f)'/>";
+  auto document = instantiateSubtree(
+      prefix + suffix + "<animate href='#p' attributeName='width' to='4' dur='2s'/>",
+      parser::SVGParser::Options(), Vector2i(16, 16));
+  auto expected = instantiateSubtree(prefix + "x='2' y='0' width='6' height='16'" + suffix,
+                                     parser::SVGParser::Options(), Vector2i(16, 16));
+  document.setTime(1);
+  editor::tests::CompareBitmapToBitmap(
+      RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(expected),
+      "primitive-input-region-base", editor::tests::PixelmatchIdentityParams());
+}
+
 }  // namespace
 }  // namespace donner::svg
