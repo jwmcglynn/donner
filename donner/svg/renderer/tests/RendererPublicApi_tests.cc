@@ -85,6 +85,97 @@ RendererBitmap NormalizeSnapshot(RendererBitmap snapshot) {
   return normalized;
 }
 
+RendererBitmap AnalyticCssGeometryRectangle(int left, int top, int width, int height) {
+  RendererBitmap expected;
+  expected.dimensions = Vector2i(16, 16);
+  expected.rowBytes = 16 * 4;
+  expected.pixels.resize(16 * 16 * 4, 0);
+  for (int y = top; y < top + height; ++y) {
+    for (int x = left; x < left + width; ++x) {
+      const size_t offset = y * expected.rowBytes + x * 4;
+      expected.pixels[offset] = 255;
+      expected.pixels[offset + 3] = 255;
+    }
+  }
+  return expected;
+}
+
+void CheckRectCssX(std::string_view value, Lengthd expectedLength, int expectedX, bool stylesheet) {
+  const std::string declaration = "x:" + std::string(value);
+  const std::string style = stylesheet ? "<style>rect{" + declaration + "}</style>" : "";
+  const std::string attribute = stylesheet ? "" : " style='" + declaration + "'";
+  SVGDocument document = ParseDocument(
+      "<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16'>" + style +
+      "<rect id='target' x='4' y='4' width='4' height='4' fill='red'" + attribute + "/></svg>");
+  const auto element = document.querySelector("#target");
+  ASSERT_THAT(element, testing::Ne(std::nullopt));
+  const SVGRectElement rect = element->cast<SVGRectElement>();
+  EXPECT_THAT(rect.x(), testing::Eq(Lengthd(4, Lengthd::Unit::None)));
+  EXPECT_THAT(rect.computedX(), testing::Eq(expectedLength));
+  Renderer renderer;
+  renderer.draw(document);
+  const std::string label =
+      std::string(stylesheet ? "rect-css-x-stylesheet-" : "rect-css-x-inline-") +
+      std::string(value);
+  editor::tests::CompareBitmapToBitmap(NormalizeSnapshot(renderer.takeSnapshot()),
+                                       AnalyticCssGeometryRectangle(expectedX, 4, 4, 4), label,
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+void CheckRectCssXGrammar(bool stylesheet) {
+  CheckRectCssX("8", Lengthd(4, Lengthd::Unit::None), 4, stylesheet);
+  CheckRectCssX("8px", Lengthd(8, Lengthd::Unit::Px), 8, stylesheet);
+  CheckRectCssX("50%", Lengthd(50, Lengthd::Unit::Percent), 8, stylesheet);
+  for (const std::string_view zero : {"0", "+0", "-0", "0.0", ".0", "0e0"}) {
+    SCOPED_TRACE(zero);
+    CheckRectCssX(zero, Lengthd(0, Lengthd::Unit::None), 0, stylesheet);
+  }
+}
+
+TEST(RendererPublicApiTest, RectCssXInlineLengthGrammar) {
+  CheckRectCssXGrammar(false);
+}
+
+TEST(RendererPublicApiTest, RectCssXStylesheetLengthGrammar) {
+  CheckRectCssXGrammar(true);
+}
+
+TEST(RendererPublicApiTest, RectCssXUnitlessPresentationAttributeRemainsValid) {
+  SVGDocument document = ParseDocument(
+      "<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16'>"
+      "<rect id='target' x='8' y='4' width='4' height='4' fill='red'/></svg>");
+  const auto element = document.querySelector("#target");
+  ASSERT_THAT(element, testing::Ne(std::nullopt));
+  EXPECT_THAT(element->cast<SVGRectElement>().computedX(),
+              testing::Eq(Lengthd(8, Lengthd::Unit::None)));
+  Renderer renderer;
+  renderer.draw(document);
+  editor::tests::CompareBitmapToBitmap(
+      NormalizeSnapshot(renderer.takeSnapshot()), AnalyticCssGeometryRectangle(8, 4, 4, 4),
+      "rect-css-x-unitless-presentation-attribute", editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(RendererPublicApiTest, RectCssXUnitlessStrokeWidthRemainsValid) {
+  RendererBitmap expected = AnalyticCssGeometryRectangle(3, 3, 10, 10);
+  for (int y = 5; y < 11; ++y) {
+    std::fill_n(expected.pixels.begin() + y * expected.rowBytes + 5 * 4, 6 * 4, 0);
+  }
+  for (const bool stylesheet : {false, true}) {
+    SCOPED_TRACE(stylesheet);
+    const std::string style = stylesheet ? "<style>rect{stroke-width:2}</style>" : "";
+    const std::string attribute = stylesheet ? "" : " style='stroke-width:2'";
+    SVGDocument document = ParseDocument(
+        "<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16'>" + style +
+        "<rect x='4' y='4' width='8' height='8' fill='none' stroke='red'" + attribute + "/></svg>");
+    Renderer renderer;
+    renderer.draw(document);
+    editor::tests::CompareBitmapToBitmap(
+        NormalizeSnapshot(renderer.takeSnapshot()), expected,
+        stylesheet ? "rect-css-x-unitless-stroke-stylesheet" : "rect-css-x-unitless-stroke-inline",
+        editor::tests::PixelmatchIdentityParams());
+  }
+}
+
 /// A single in-memory SVG resource; unknown URLs never reach a network or filesystem loader.
 class ExternalUseResourceLoader final : public ResourceLoaderInterface {
 public:

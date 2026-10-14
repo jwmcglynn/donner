@@ -32,14 +32,25 @@ std::map<RcString, parser::UnparsedProperty> ParseUnparsedProperties(std::string
 
 TEST(RectComponent, ComputedRectComponentAppliesUnparsedProperties) {
   ParseWarningSink warningSink;
-  const auto unparsedProperties = ParseUnparsedProperties("x: 15; ry: auto");
+  const auto unparsedProperties = ParseUnparsedProperties("x: 15px; ry: auto");
 
   ComputedRectComponent computed(RectProperties(), unparsedProperties, warningSink);
 
   EXPECT_FALSE(warningSink.hasWarnings());
-  EXPECT_THAT(computed.properties.x.get(), Optional(Lengthd(15, Lengthd::Unit::None)));
+  EXPECT_THAT(computed.properties.x.get(), Optional(Lengthd(15, Lengthd::Unit::Px)));
   EXPECT_TRUE(computed.properties.ry.isSpecified());
   EXPECT_THAT(computed.properties.ry.get(), Eq(std::nullopt));
+}
+
+TEST(RectComponent, UnitlessCssXPreservesPresentationAttribute) {
+  RectProperties input;
+  input.x.set(Lengthd(4, Lengthd::Unit::None), css::Specificity::FromABC(0, 0, 0));
+  ParseWarningSink warnings;
+  const ComputedRectComponent computed(input, ParseUnparsedProperties("x: 8"), warnings);
+
+  EXPECT_THAT(warnings.warnings(),
+              testing::ElementsAre(ParseErrorIs("Invalid length or percentage")));
+  EXPECT_THAT(computed.properties.x.get(), Optional(Lengthd(4, Lengthd::Unit::None)));
 }
 
 TEST(RectComponent, ComputedRectComponentReportsInvalidUnparsedProperty) {
