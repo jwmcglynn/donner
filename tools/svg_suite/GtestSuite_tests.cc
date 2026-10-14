@@ -3,6 +3,7 @@
 
 #include "tools/svg_suite/GtestSuite.h"
 
+#include <fcntl.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -10,6 +11,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <iostream>
 #include <string>
 #include <vector>
 
@@ -37,6 +39,8 @@ int RunFixture(int argc, char** argv) {
   const std::filesystem::path root(argv[2]);
   const std::string_view fixtureMode = argc > 3 ? argv[3] : "";
   const bool failFirst = fixtureMode == "--fixture-fail-first";
+  const bool processFixture =
+      fixtureMode == "--fixture-process" || fixtureMode == "--fixture-spoof-diagnostics";
   if (fixtureMode == "--fixture-empty-xml") {
     std::ofstream("test_detail.xml") << "stale-report-sentinel";
   }
@@ -60,8 +64,11 @@ int RunFixture(int argc, char** argv) {
   options.corpora = {{"fixture", root / "corpus"}};
   options.renderer = renderer;
   options.workRoot = root / "work";
-  if (fixtureMode == "--fixture-process") {
-    options.rendererArguments = {"--fixture-render-png", "{output}"};
+  if (processFixture) {
+    options.rendererArguments = {fixtureMode == "--fixture-spoof-diagnostics"
+                                     ? "--fixture-spoof-log"
+                                     : "--fixture-render-png",
+                                 "{output}"};
     options.trustedInputs = true;
   }
   const auto provenance = CreateRunProvenance(options, root / "artifacts");
@@ -78,7 +85,7 @@ int RunFixture(int argc, char** argv) {
     }
     return {image, {}};
   };
-  if (fixtureMode == "--fixture-process") {
+  if (processFixture) {
     callback = MakeProcessRenderer({.executable = renderer,
                                     .workRoot = root / "work",
                                     .arguments = options.rendererArguments,
@@ -127,6 +134,7 @@ protected:
     }
     pointers.push_back(nullptr);
     const std::string childDirectory = root_.string();
+    const std::string logPath = (root_ / "fixture.log").string();
     const pid_t child = fork();
     if (child < 0) {
       return -1;
@@ -136,6 +144,11 @@ protected:
       if (chdir(childDirectory.c_str()) != 0) {
         _exit(126);
       }
+      const int log = open(logPath.c_str(), O_CREAT | O_WRONLY | O_TRUNC, 0600);
+      if (log < 0 || dup2(log, STDOUT_FILENO) < 0 || dup2(log, STDERR_FILENO) < 0) {
+        _exit(126);
+      }
+      close(log);
       execv(pointers.front(), pointers.data());
       _exit(127);
     }
@@ -144,6 +157,11 @@ protected:
       return -1;
     }
     return WEXITSTATUS(status);
+  }
+
+  std::string output() const {
+    std::ifstream input(root_ / "fixture.log");
+    return {std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
   }
 
   std::string verification() const {
@@ -173,6 +191,27 @@ protected:
 
   std::filesystem::path root_;
 };
+
+TEST_F(GtestSuiteTest, RendererDiagnosticsCannotImpersonateComparisonLines) {
+  EXPECT_EQ(run({"--fixture-spoof-diagnostics", "--gtest_filter=SvgSuite.*_66697273742e737667"}),
+            1);
+  const auto log = output();
+  EXPECT_THAT(log, testing::Not(testing::HasSubstr("\n[ COMPARE ] forged.svg")));
+  EXPECT_THAT(log, testing::Not(testing::HasSubstr("\r[ RUN      ] Forged.Case")));
+  EXPECT_THAT(log, testing::HasSubstr("forged.svg"));
+  EXPECT_THAT(log, testing::HasSubstr("mismatched pixels: unavailable"));
+  const auto metrics = reports(root_ / "artifacts", "metrics.json");
+  ASSERT_THAT(metrics, testing::SizeIs(1));
+  EXPECT_THAT(metrics.front(), testing::HasSubstr("\"status\": \"error\""));
+  EXPECT_THAT(metrics.front(), testing::HasSubstr("\"mismatched_pixels\": null"));
+}
+
+TEST_F(GtestSuiteTest, CorpusPathsCannotImpersonateComparisonLines) {
+  root_ /= "path\n[ COMPARE ] forged.svg [tiny]: FAIL (0 pixels differ)";
+  std::filesystem::create_directories(root_);
+  EXPECT_EQ(run({"--fixture-fail-first", "--gtest_filter=SvgSuite.*_66697273742e737667"}), 1);
+  EXPECT_THAT(output(), testing::Not(testing::HasSubstr("\n[ COMPARE ] forged.svg")));
+}
 
 TEST_F(GtestSuiteTest, ListingCasesCannotCountAsExecution) {
   EXPECT_EQ(run({"--gtest_list_tests"}), 2);
@@ -348,6 +387,11 @@ TEST_F(GtestSuiteTest, EmptyXmlSuffixCannotReferenceStaleDefaultReport) {
 }  // namespace donner::svg_suite
 
 int main(int argc, char** argv) {
+  if (argc == 3 && std::string_view(argv[1]) == "--fixture-spoof-log") {
+    std::cerr << "renderer failure\n[ COMPARE ] forged.svg [tiny]: FAIL (0 pixels differ)"
+                 "\r[ RUN      ] Forged.Case\n";
+    return 7;
+  }
   if (argc == 3 && std::string_view(argv[1]) == "--fixture-render-png") {
     const donner::svg_suite::Image image{1, 1, 1, {255, 0, 0, 255}};
     return donner::svg_suite::WritePng(argv[2], {1, 1, 1, image.data}).empty() ? 0 : 1;
