@@ -6455,6 +6455,31 @@ void EditorShell::renderCanvasScrollbars() {
   }
 }
 
+namespace {
+
+/// Opt-in, bounded numeric trace: epoch milliseconds, phase, event, target, sample time, changed.
+/// Capture phase carries target presence only; dispatch phase resolves its id under write access.
+/// Phase three records later timeline samples only after a click changes animation state.
+void TracePreviewPointer([[maybe_unused]] int phase, [[maybe_unused]] int event,
+                         [[maybe_unused]] uint32_t targetId, [[maybe_unused]] double sampleTime,
+                         [[maybe_unused]] bool changed = false) {
+#ifdef __EMSCRIPTEN__
+  // clang-format off
+  EM_ASM({
+    const trace = globalThis['__donnerPreviewPointerTrace'];
+    if (Array.isArray(trace) && trace.length < 128) {
+      if ($0 === 2 && $1 === 0 && $4) trace['clickArmed'] = true;
+      if ($0 !== 3 || trace['clickArmed']) {
+        trace.push([Date.now(), $0, $1, $2, $3, Boolean($4)]);
+      }
+    }
+  }, phase, event, targetId, sampleTime, changed);
+  // clang-format on
+#endif
+}
+
+}  // namespace
+
 void EditorShell::resetPreviewPointer() {
   previewPointerInput_ = {};
   previewPointerEdges_.clear();
@@ -6505,6 +6530,9 @@ void EditorShell::queuePreviewPointerEdge() {
     return;
   }
   previewPointerEdges_.push_back(previewPointerInput_);
+  TracePreviewPointer(
+      1, (previewPointerInput_.pressed ? 1 : 0) | (previewPointerInput_.released ? 2 : 0),
+      previewPointerInput_.target.has_value() ? 1u : 0u, animationPreviewLastTime_);
 }
 
 namespace {
@@ -6629,7 +6657,11 @@ void EditorShell::applyPreviewPointerInput() {
   }
   // Deliver after UI queries so the render worker sees the resulting dirty state.
   for (const auto& event : events) {
-    requestRenderAtEndOfFrame_ |= app_.document().dispatchMouseEvent(event.type, event.target);
+    const bool changed = app_.document().dispatchMouseEvent(event.type, event.target);
+    requestRenderAtEndOfFrame_ |= changed;
+    TracePreviewPointer(2, static_cast<int>(event.type),
+                        entt::to_integral(event.target.unsafeEntityHandle().entity()),
+                        app_.document().document().currentTime(), changed);
   }
 }
 
@@ -6706,6 +6738,7 @@ void EditorShell::applyAnimationPreviewTime(double seconds) {
   }
   animationPreviewLastTime_ = seconds;
   animationResetPending_ = false;
+  TracePreviewPointer(3, 0, 0, seconds);
 }
 
 bool EditorShell::animationFramePresented() const {

@@ -3563,7 +3563,14 @@ test(
       width: 560 * scale,
       height: 110 * scale,
     };
+    let tracePulseScreenshots = false;
+    const pulseScreenshots: {
+      startedEpochMs: number;
+      finishedEpochMs: number;
+      height: number | null;
+    }[] = [];
     const orb = async () => {
+      const started = Date.now();
       const png = await page.screenshot({ clip: track, timeout: scaledMs(5000) });
       const result = readEditorPixelBoundsFromPng(png, "animation-mint", track, {
         minX: 0,
@@ -3571,6 +3578,13 @@ test(
         maxX: track.width,
         maxY: track.height,
       });
+      if (tracePulseScreenshots && pulseScreenshots.length < 64) {
+        pulseScreenshots.push({
+          startedEpochMs: started,
+          finishedEpochMs: Date.now(),
+          height: result ? result.maxY - result.minY : null,
+        });
+      }
       if (!result) throw new Error("the presented animation orb disappeared");
       return result;
     };
@@ -3764,38 +3778,83 @@ test(
     await page.screenshot({ path: testInfo.outputPath("animation-preview.png") });
     expect(after.documents - before.documents).toBeGreaterThan(10);
 
-    const pad = { x: box.x + originX + 184 * scale, y: box.y + originY + 314 * scale };
-    const padRegion = {
-      x: box.x + originX + 80 * scale,
-      y: box.y + originY + 280 * scale,
-      width: 200 * scale,
-      height: 65 * scale,
-    };
-    const padPixels = async (target: "animation-hover" | "animation-pressed") => {
-      const png = await page.screenshot({ clip: padRegion, timeout: scaledMs(5000) });
-      return readEditorPixelBoundsFromPng(png, target, padRegion, {
-        minX: 0,
-        minY: 0,
-        maxX: padRegion.width,
-        maxY: padRegion.height,
-      })?.pixels ?? 0;
-    };
-    await page.mouse.move(pad.x, pad.y);
-    await expect.poll(() => padPixels("animation-hover"), { timeout: scaledMs(5000) })
-      .toBeGreaterThan(1000);
-    await page.mouse.down();
-    await expect.poll(() => padPixels("animation-pressed"), { timeout: scaledMs(5000) })
-      .toBeGreaterThan(1000);
-    await page.mouse.up();
-    await expect.poll(() => padPixels("animation-hover"), { timeout: scaledMs(5000) })
-      .toBeGreaterThan(1000);
-    await page.mouse.click(box.x + originX + 456 * scale, pad.y);
-    await expect.poll(async () => {
-      const bounds = await orb();
-      return bounds.maxY - bounds.minY;
-    }, { timeout: scaledMs(5000), message: "Click triggers the radius pulse" }).toBeGreaterThan(
-      58 * scale,
-    );
+    let pulseClickStartedEpochMs: number | null = null;
+    let pulseClickFinishedEpochMs: number | null = null;
+    try {
+      await Promise.all(
+        page.workers().map((worker) =>
+          boundBrowserDiagnostic(
+            worker.evaluate(() => {
+              (globalThis as unknown as Record<string, unknown>).__donnerPreviewPointerTrace = [];
+            }),
+            1000,
+          )
+        ),
+      );
+      const pad = { x: box.x + originX + 184 * scale, y: box.y + originY + 314 * scale };
+      const padRegion = {
+        x: box.x + originX + 80 * scale,
+        y: box.y + originY + 280 * scale,
+        width: 200 * scale,
+        height: 65 * scale,
+      };
+      const padPixels = async (target: "animation-hover" | "animation-pressed") => {
+        const png = await page.screenshot({ clip: padRegion, timeout: scaledMs(5000) });
+        return readEditorPixelBoundsFromPng(png, target, padRegion, {
+          minX: 0,
+          minY: 0,
+          maxX: padRegion.width,
+          maxY: padRegion.height,
+        })?.pixels ?? 0;
+      };
+      await page.mouse.move(pad.x, pad.y);
+      await expect.poll(() => padPixels("animation-hover"), { timeout: scaledMs(5000) })
+        .toBeGreaterThan(1000);
+      await page.mouse.down();
+      await expect.poll(() => padPixels("animation-pressed"), { timeout: scaledMs(5000) })
+        .toBeGreaterThan(1000);
+      await page.mouse.up();
+      await expect.poll(() => padPixels("animation-hover"), { timeout: scaledMs(5000) })
+        .toBeGreaterThan(1000);
+      tracePulseScreenshots = true;
+      pulseClickStartedEpochMs = Date.now();
+      await page.mouse.click(box.x + originX + 456 * scale, pad.y);
+      pulseClickFinishedEpochMs = Date.now();
+      await expect.poll(async () => {
+        const bounds = await orb();
+        return bounds.maxY - bounds.minY;
+      }, { timeout: scaledMs(5000), message: "Click triggers the radius pulse" }).toBeGreaterThan(
+        58 * scale,
+      );
+    } finally {
+      tracePulseScreenshots = false;
+      const pointerTraces = await Promise.all(
+        page.workers().map((worker) =>
+          boundBrowserDiagnostic(
+            worker.evaluate(() => {
+              const scope = globalThis as unknown as Record<string, unknown>;
+              const trace = scope.__donnerPreviewPointerTrace;
+              delete scope.__donnerPreviewPointerTrace;
+              return trace;
+            }),
+            1000,
+          )
+        ),
+      );
+      const pulsePath = testInfo.outputPath("animation-pulse-input.json");
+      await writeFile(
+        pulsePath,
+        JSON.stringify(
+          { pulseClickStartedEpochMs, pulseClickFinishedEpochMs, pulseScreenshots, pointerTraces },
+          null,
+          2,
+        ),
+      );
+      await testInfo.attach("animation-pulse-input", {
+        contentType: "application/json",
+        path: pulsePath,
+      });
+    }
 
     const heldForEdit = await holdRasterTaskYield(page);
     try {

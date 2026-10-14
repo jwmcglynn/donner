@@ -6,8 +6,24 @@
 
 namespace donner::gpu::browser {
 
-/// Bounded dispatch categories; OwnershipQuery includes the combined ownership/loss query.
-enum class BrowserGpuOperationKind { Other, OwnershipQuery, DeviceLossQuery, CompletionQuery };
+/// Cross-thread dispatch categories, not object/command counts; owner-local calls are excluded.
+/// Construction counts include descriptor begin/entry/finish calls. CommandBatch counts batches.
+/// OwnershipQuery includes the combined ownership/loss query.
+enum class BrowserGpuOperationKind {
+  Other,
+  OwnershipQuery,
+  DeviceLossQuery,
+  CompletionQuery,
+  ResourceCreation,
+  ResourceDestruction,
+  BufferWrite,
+  TextureWrite,
+  ResourceSharing,
+  CommandBatch,
+  QueueSubmit,
+  BindGroupConstruction,
+  PipelineConstruction,
+};
 
 /// Register the calling application thread before creating any browser GPU devices or workers.
 void RegisterBrowserGpuOwner();

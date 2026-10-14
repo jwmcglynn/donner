@@ -49,7 +49,16 @@ constexpr std::size_t kMaximumInlineCallbackUs = 21;
 constexpr std::size_t kMaximumInlineEpochCalls = 22;
 constexpr std::size_t kPulses = 23;
 constexpr std::size_t kPulseDispatches = 24;
-std::array<std::atomic<uint32_t>, 25> gOwnerWaitStats{};
+constexpr std::size_t kResourceCreation = 25;
+constexpr std::size_t kResourceDestruction = 26;
+constexpr std::size_t kBufferWrite = 27;
+constexpr std::size_t kTextureWrite = 28;
+constexpr std::size_t kResourceSharing = 29;
+constexpr std::size_t kCommandBatch = 30;
+constexpr std::size_t kQueueSubmit = 31;
+constexpr std::size_t kBindGroupConstruction = 32;
+constexpr std::size_t kPipelineConstruction = 33;
+std::array<std::atomic<uint32_t>, 34> gOwnerWaitStats{};
 static_assert(sizeof(std::atomic<uint32_t>) == sizeof(uint32_t));
 static_assert(std::atomic<uint32_t>::is_always_lock_free);
 thread_local bool gProcessingOwnerWait = false;
@@ -101,6 +110,15 @@ std::size_t OperationCounter(BrowserGpuOperationKind kind) {
     case BrowserGpuOperationKind::DeviceLossQuery: return kDeviceLossQueries;
     case BrowserGpuOperationKind::CompletionQuery: return kCompletionQueries;
     case BrowserGpuOperationKind::Other: return kOtherOperations;
+    case BrowserGpuOperationKind::ResourceCreation: return kResourceCreation;
+    case BrowserGpuOperationKind::ResourceDestruction: return kResourceDestruction;
+    case BrowserGpuOperationKind::BufferWrite: return kBufferWrite;
+    case BrowserGpuOperationKind::TextureWrite: return kTextureWrite;
+    case BrowserGpuOperationKind::ResourceSharing: return kResourceSharing;
+    case BrowserGpuOperationKind::CommandBatch: return kCommandBatch;
+    case BrowserGpuOperationKind::QueueSubmit: return kQueueSubmit;
+    case BrowserGpuOperationKind::BindGroupConstruction: return kBindGroupConstruction;
+    case BrowserGpuOperationKind::PipelineConstruction: return kPipelineConstruction;
   }
   std::abort();
 }
@@ -285,6 +303,15 @@ void RegisterBrowserGpuOwner() {
       'maximumInlineEpochCalls': Atomics.load(HEAPU32, index + 22),
       'pulses': Atomics.load(HEAPU32, index + 23),
       'pulseDispatches': Atomics.load(HEAPU32, index + 24),
+      'resourceCreation': Atomics.load(HEAPU32, index + 25),
+      'resourceDestruction': Atomics.load(HEAPU32, index + 26),
+      'bufferWrite': Atomics.load(HEAPU32, index + 27),
+      'textureWrite': Atomics.load(HEAPU32, index + 28),
+      'resourceSharing': Atomics.load(HEAPU32, index + 29),
+      'commandBatch': Atomics.load(HEAPU32, index + 30),
+      'queueSubmit': Atomics.load(HEAPU32, index + 31),
+      'bindGroupConstruction': Atomics.load(HEAPU32, index + 32),
+      'pipelineConstruction': Atomics.load(HEAPU32, index + 33),
       'timingSaturated': Atomics.load(HEAPU32, index + 10) === 4294967295 ||
                          Atomics.load(HEAPU32, index + 11) === 4294967295 ||
                          Atomics.load(HEAPU32, index + 20) === 4294967295,
