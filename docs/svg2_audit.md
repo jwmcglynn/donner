@@ -2,6 +2,7 @@
 
 This ledger is for developers evaluating Donner v1.0 against SVG2. It contains a complete chapter
 navigation inventory and a small set of inspected requirements. **No chapter is fully audited yet.**
+The [current chapter review](svg2_chapter_review.md) records the first-pass findings and concrete native test priorities.
 The inventory counts do not establish coverage. Passing rows identify only the narrow assertions exercised by named tests.
 The implementation plan is [0057](design_docs/0057-donner_svg2_test_suite.md).
 
