@@ -3,6 +3,8 @@
 
 #include "donner/editor/tests/BitmapGoldenCompare.h"
 #include "donner/svg/components/animation/AnimationResourceBudget.h"
+#include "donner/svg/components/filter/FilterPrimitiveComponent.h"
+#include "donner/svg/components/paint/StopComponent.h"
 #include "donner/svg/components/shadow/ShadowEntityComponent.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
 #include "donner/svg/components/style/StyleComponent.h"
@@ -152,6 +154,54 @@ TEST(RendererAnimationStyleBase, LowerInitialOpacityIsResolvedBeforeToOnlyInterp
   editor::tests::CompareBitmapToBitmap(
       RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(expected),
       "scalar-lower-initial", editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(RendererAnimationStyleBase, ResourceOpacityPreservesStylesAndTypedPriority) {
+  for (const bool flood : {false, true}) {
+    for (const bool important : {false, true}) {
+      for (const bool typed : {false, true}) {
+        SCOPED_TRACE(flood);
+        SCOPED_TRACE(important);
+        SCOPED_TRACE(typed);
+        const std::string attribute = flood ? "flood-opacity" : "stop-opacity";
+        const std::string source =
+            flood ? "<defs><filter id='f'><feFlood id='r' flood-color='red' "
+                    "flood-opacity='0.8'/></filter></defs><rect width='16' height='16' "
+                    "filter='url(#f)'/>"
+                  : "<defs><linearGradient id='g'><stop id='r' stop-color='red' "
+                    "stop-opacity='0.8'/></linearGradient></defs><rect width='16' height='16' "
+                    "fill='url(#g)'/>";
+        auto document = instantiateSubtree(
+            source + "<style>#r {" + attribute + ":0.6" + (important ? " !important" : "") +
+                ";}</style><animate href='#r' attributeName='" + attribute + "' to='0' dur='2s'/>",
+            parser::SVGParser::Options(), Vector2i(16, 16));
+        if (typed) {
+          auto target = document.querySelector("#r")->entityHandle();
+          auto& opacity = flood ? target.get<components::FEFloodComponent>().floodOpacity
+                                : target.get<components::StopComponent>().properties.stopOpacity;
+          opacity.set(0.9, css::Specificity::Override());
+        }
+        std::string expectedSource = source;
+        const auto offset = expectedSource.find(attribute + "='0.8'");
+        ASSERT_NE(offset, std::string::npos);
+        expectedSource.replace(offset, attribute.size() + 6,
+                               attribute + "='" +
+                                   (typed       ? "0.9"
+                                    : important ? "0.6"
+                                                : "0.3") +
+                                   "'");
+        auto expected =
+            instantiateSubtree(expectedSource, parser::SVGParser::Options(), Vector2i(16, 16));
+        document.setTime(1);
+        editor::tests::CompareBitmapToBitmap(
+            RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(expected),
+            "resource-opacity-cascade", editor::tests::PixelmatchIdentityParams());
+        document.setTime(3);
+        EXPECT_THAT(document.querySelector("#r")->getAttribute(attribute.c_str()),
+                    testing::Optional(RcString("0.8")));
+      }
+    }
+  }
 }
 
 #ifdef DONNER_TEXT_ENABLED
