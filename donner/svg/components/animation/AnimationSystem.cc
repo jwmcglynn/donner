@@ -189,6 +189,9 @@ using ContextualRecipes =
                        std::unordered_map<std::string, std::vector<ContextualLengthSample>>>;
 
 bool NeedsInstanceLengthContext(Registry& registry, Entity target, std::string_view attribute) {
+  if (attribute == "font-size") {
+    return true;
+  }
   const auto* type = registry.try_get<ElementTypeComponent>(target);
   if (!type) {
     return false;

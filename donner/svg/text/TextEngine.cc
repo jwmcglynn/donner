@@ -292,7 +292,8 @@ TextLayoutParams buildTextLayoutParams(Registry& registry, EntityHandle handle,
 }
 
 void ResolvePerSpanLayoutStyles(Registry& registry, components::ComputedTextComponent& text,
-                                const Box2d& viewBox, const FontMetrics& fontMetrics) {
+                                const Box2d& viewBox, const FontMetrics& fontMetrics,
+                                const TextStyleContext* styleContext = nullptr) {
   using BSK = components::ComputedTextComponent::TextSpan::BaselineShiftKeyword;
 
   for (auto& span : text.spans) {
@@ -300,12 +301,12 @@ void ResolvePerSpanLayoutStyles(Registry& registry, components::ComputedTextComp
       continue;
     }
 
-    auto* style = registry.try_get<components::ComputedStyleComponent>(span.sourceEntity);
-    Entity styleEntity = span.sourceEntity;
+    Entity styleEntity =
+        styleContext ? styleContext->styleEntityFor(span.sourceEntity) : span.sourceEntity;
+    auto* style = registry.try_get<components::ComputedStyleComponent>(styleEntity);
     if ((!style || !style->properties) &&
-        registry.all_of<donner::components::TreeComponent>(span.sourceEntity)) {
-      const Entity parent =
-          registry.get<donner::components::TreeComponent>(span.sourceEntity).parent();
+        registry.all_of<donner::components::TreeComponent>(styleEntity)) {
+      const Entity parent = registry.get<donner::components::TreeComponent>(styleEntity).parent();
       if (parent != entt::null) {
         style = registry.try_get<components::ComputedStyleComponent>(parent);
         styleEntity = parent;
@@ -360,7 +361,11 @@ void ResolvePerSpanLayoutStyles(Registry& registry, components::ComputedTextComp
     span.wordSpacingPx = style->properties->wordSpacing.get().value().toPixels(viewBox, fontMetrics,
                                                                                Lengthd::Extent::X);
 
-    const bool isTextRoot = registry.any_of<components::TextRootComponent>(styleEntity);
+    span.baselineShiftKeyword = BSK::Length;
+    span.ancestorBaselineShifts.clear();
+    const bool isTextRoot = styleContext
+                                ? styleEntity == styleContext->rootEntity
+                                : registry.any_of<components::TextRootComponent>(styleEntity);
     if (isTextRoot) {
       span.baselineShift = Lengthd(0, Lengthd::Unit::None);
     } else {
@@ -370,16 +375,11 @@ void ResolvePerSpanLayoutStyles(Registry& registry, components::ComputedTextComp
         span.baselineShiftKeyword = BSK::Super;
       }
 
-      // Resolve fresh each call: this runs per `draw()` and accumulates ancestor
-      // shifts via push_back, so re-resolving the same span (e.g. two backends
-      // drawing the same document, or any re-draw) would otherwise double the
-      // nested baseline-shift. Clear so the layout is idempotent.
-      span.ancestorBaselineShifts.clear();
-
       Entity ancestor = styleEntity;
       while (registry.all_of<donner::components::TreeComponent>(ancestor)) {
         ancestor = registry.get<donner::components::TreeComponent>(ancestor).parent();
-        if (ancestor == entt::null || registry.any_of<components::TextRootComponent>(ancestor)) {
+        if (ancestor == entt::null || (styleContext && ancestor == styleContext->rootEntity) ||
+            registry.any_of<components::TextRootComponent>(ancestor)) {
           break;
         }
 
@@ -1606,17 +1606,18 @@ void TextEngine::prepareForElement(EntityHandle handle, ParseWarningSink& outWar
 }
 
 void TextEngine::resolvePerSpanLayoutStyles(EntityHandle textRootHandle,
-                                            components::ComputedTextComponent& text) const {
+                                            components::ComputedTextComponent& text,
+                                            const TextStyleContext* styleContext) const {
   const auto* textComp = registry_.try_get<components::TextComponent>(textRootHandle.entity());
-  const auto* style =
-      registry_.try_get<components::ComputedStyleComponent>(textRootHandle.entity());
+  const EntityHandle styleRoot(registry_,
+                               styleContext ? styleContext->rootEntity : textRootHandle.entity());
+  const auto* style = styleRoot.try_get<components::ComputedStyleComponent>();
   if (!textComp || !style || !style->properties) {
     return;
   }
 
-  const TextLayoutParams params =
-      buildTextLayoutParams(registry_, textRootHandle, *style, *textComp);
-  ResolvePerSpanLayoutStyles(registry_, text, params.viewBox, params.fontMetrics);
+  const TextLayoutParams params = buildTextLayoutParams(registry_, styleRoot, *style, *textComp);
+  ResolvePerSpanLayoutStyles(registry_, text, params.viewBox, params.fontMetrics, styleContext);
 }
 
 void TextEngine::addFontFace(const css::FontFace& face) {

@@ -62,7 +62,12 @@ paced, or spline interval. Spline evaluation inverts Bezier time with bounded bi
 uses type-specific distances and ignores key times.
 
 `AnimationValueMath` handles numeric lists, unit-bearing lengths, and colors. Relative units use the
-target's viewport and font context. Path interpolation requires compatible command structures.
+target's viewport and font context. Font-size stacks resolve against the sampled parent font before
+child inheritance, including separate contexts for shared text instances. Shadow text resolves span
+styles per rendered instance without retaining borrowed style maps in prepared draws. These cases,
+including baseline reset and contextual work exhaustion, are covered by
+`//donner/svg/renderer/tests:renderer_animation_presentation_tests`.
+Path interpolation requires compatible command structures.
 Underlying values include lower animation layers, resolved style values, and typed resource references.
 URI and filter-input/result names are discrete and non-additive, even when their text resembles a number.
 Number-optional-number filter values repeat a single coordinate; integer fields round the final
@@ -164,7 +169,7 @@ geometry measurement, lifecycle queries, hit geometry, and queued preview input.
   and 262144 dependency steps.
 - At most 4 MiB of generated values, 64 numeric values per sampled list, and 64 KiB per motion path.
 - A shared 262144-unit path parsing/measurement budget per evaluation.
-- A shared 4 Mi-unit contextual length preparation allowance across text spans, marker references and prepared SVG filter images.
+- A shared 4 Mi-unit contextual length preparation allowance across font-size stacks, text spans, marker references and prepared SVG filter images.
   Raster filter recipes are charged to the existing filter execution budget, including repeat
   executions and CPU paint-coverage scans.
   Recipe parsing/interpolation and bounded path measurement are admitted before work; a refused

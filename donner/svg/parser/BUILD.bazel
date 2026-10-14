@@ -240,6 +240,7 @@ donner_cc_fuzzer(
     deps = [
         ":parser",
         "//donner/svg/components/animation:animation_system",
+        "//donner/svg/components/style:style_system",
     ],
 )
 

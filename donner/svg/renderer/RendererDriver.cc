@@ -45,6 +45,7 @@
 #include "donner/svg/components/resources/ResourceManagerContext.h"
 #include "donner/svg/components/shadow/ComputedShadowTreeComponent.h"
 #include "donner/svg/components/shadow/ShadowBranch.h"
+#include "donner/svg/components/shadow/ShadowEntityComponent.h"
 #include "donner/svg/components/shadow/ShadowTreeComponent.h"
 #include "donner/svg/components/shape/ComputedPathComponent.h"
 #include "donner/svg/components/shape/ShapeSystem.h"
@@ -83,6 +84,8 @@ struct RendererDriverTextFrameCache {
 
   using Roots = std::unordered_map<Entity, Root>;
   std::unordered_map<Registry*, Roots> roots;
+  std::unordered_map<Registry*, std::unordered_map<Entity, std::optional<TextStyleContext>>>
+      shadowStyles;
 
   // A pattern or marker can revisit text in the same registry with a different paint context.
   // Keep its preparations separate without evicting the caller's text between effect runs.
@@ -477,6 +480,13 @@ SpanLayerOwnership ResolveSpanLayerOwnership(Registry& registry, Entity textRoot
   return ownership;
 }
 
+/// Resolve an instance style entity to its authored text data.
+/// @param registry Document storage. @param styleEntity Rendered instance entity.
+Entity AuthoredTextEntity(Registry& registry, Entity styleEntity) {
+  const auto* shadow = registry.try_get<components::ShadowEntityComponent>(styleEntity);
+  return shadow ? shadow->lightEntity : styleEntity;
+}
+
 /// Resolves renderer-facing per-span style properties from each span's sourceEntity.
 /// Layout-facing span state is delegated to TextEngine.
 ///
@@ -493,10 +503,11 @@ void resolvePerSpanStyles(Registry& registry, components::ComputedTextComponent&
                           EntityHandle textRootHandle,
                           const components::ResolvedPaintServer& contextFill,
                           const components::ResolvedPaintServer& contextStroke,
-                          bool spansHaveOwnEffectInstances, bool refreshLayoutAndOwnership) {
+                          bool spansHaveOwnEffectInstances, bool refreshLayoutAndOwnership,
+                          const TextStyleContext* styleContext = nullptr) {
   if (refreshLayoutAndOwnership) {
     if (auto* textEngine = registry.ctx().find<TextEngine>()) {
-      textEngine->resolvePerSpanLayoutStyles(textRootHandle, text);
+      textEngine->resolvePerSpanLayoutStyles(textRootHandle, text, styleContext);
     }
   }
 
@@ -523,12 +534,16 @@ void resolvePerSpanStyles(Registry& registry, components::ComputedTextComponent&
     }
 
     const Box2d viewBox =
-        textRootHandle.registry() ? components::LayoutSystem().getViewBox(textRootHandle) : Box2d();
+        textRootHandle.registry()
+            ? components::LayoutSystem().getViewBox(
+                  styleContext ? EntityHandle(registry, styleContext->rootEntity) : textRootHandle)
+            : Box2d();
     const FontMetrics baseFm = FontMetrics::DefaultsWithFontSize(12.0);
 
     // Walk up to the nearest ancestor with computed style so inherited paint and decoration
     // continue to work for nested tspans with no local ComputedStyleComponent.
-    entt::entity styleEntity = span.sourceEntity;
+    entt::entity styleEntity =
+        styleContext ? styleContext->styleEntityFor(span.sourceEntity) : span.sourceEntity;
     auto* style = registry.try_get<components::ComputedStyleComponent>(styleEntity);
     while ((!style || !style->properties) &&
            registry.all_of<donner::components::TreeComponent>(styleEntity)) {
@@ -570,11 +585,13 @@ void resolvePerSpanStyles(Registry& registry, components::ComputedTextComponent&
 
       Entity decorationPaintEntity = entt::null;
       Entity nearestTextStyleEntity =
-          registry.all_of<components::TextComponent>(styleEntity) ? styleEntity : entt::null;
+          registry.all_of<components::TextComponent>(AuthoredTextEntity(registry, styleEntity))
+              ? styleEntity
+              : entt::null;
 
       Entity walkEntity = styleEntity;
       while (walkEntity != entt::null) {
-        if (registry.all_of<components::TextComponent>(walkEntity)) {
+        if (registry.all_of<components::TextComponent>(AuthoredTextEntity(registry, walkEntity))) {
           nearestTextStyleEntity = walkEntity;
         }
 
@@ -587,7 +604,8 @@ void resolvePerSpanStyles(Registry& registry, components::ComputedTextComponent&
             ++span.decorationDeclarationCount;
 
             if (decorationPaintEntity == entt::null) {
-              decorationPaintEntity = registry.all_of<components::TextComponent>(walkEntity)
+              decorationPaintEntity = registry.all_of<components::TextComponent>(
+                                          AuthoredTextEntity(registry, walkEntity))
                                           ? walkEntity
                                           : nearestTextStyleEntity;
               if (decorationPaintEntity == entt::null) {
@@ -1508,6 +1526,48 @@ void PrepareTextRoot(Registry& registry, EntityHandle textRootHandle,
 }
 #endif
 
+/// Build bounded style identities for one shadow text root, without retaining document references.
+/// @param registry Document storage. @param root Shadow root. @param text Authored spans to map.
+std::optional<TextStyleContext> BuildShadowTextStyles(
+    Registry& registry, Entity root, const components::ComputedTextComponent& text) {
+  TextStyleContext result;
+  result.rootEntity = root;
+  const std::size_t admitted = registry.view<components::ShadowEntityComponent>().size();
+  std::vector<Entity> pending{root};
+  std::size_t visited = 0;
+  while (!pending.empty()) {
+    const Entity entity = pending.back();
+    pending.pop_back();
+    if (++visited > admitted) {
+      return std::nullopt;
+    }
+    const auto* shadow = registry.try_get<components::ShadowEntityComponent>(entity);
+    if (!shadow) {
+      return std::nullopt;
+    }
+    if (entity != root && registry.any_of<components::TextRootComponent>(shadow->lightEntity)) {
+      continue;
+    }
+    if (!result.entities.emplace(shadow->lightEntity, entity).second) {
+      return std::nullopt;
+    }
+    const auto& tree = registry.get<donner::components::TreeComponent>(entity);
+    for (Entity child = tree.firstChild(); child != entt::null;
+         child = registry.get<donner::components::TreeComponent>(child).nextSibling()) {
+      if (pending.size() >= admitted) {
+        return std::nullopt;
+      }
+      pending.push_back(child);
+    }
+  }
+  for (const auto& span : text.spans) {
+    if (span.sourceEntity != entt::null && !result.entities.contains(span.sourceEntity)) {
+      return std::nullopt;
+    }
+  }
+  return result;
+}
+
 /**
  * @brief Draw the spans of \p textRootEntity that \p instance is responsible for.
  *
@@ -1578,10 +1638,25 @@ void DrawInstanceText(RendererInterface& renderer, Registry& registry,
 #else
   (void)textFrameCache;
 #endif
+  const TextStyleContext* styleContext = nullptr;
+  if (!spansHaveOwnEffectInstances) {
+    auto [found, inserted] = textFrameCache.shadowStyles[&registry].try_emplace(entity);
+    if (inserted) {
+      found->second = BuildShadowTextStyles(registry, entity, *text);
+    }
+    if (!found->second) {
+      return;
+    }
+    styleContext = &*found->second;
+    textParams.viewBox = components::LayoutSystem().getViewBox(EntityHandle(registry, entity));
+    // Each instance can shape differently from the original text's cached geometry.
+    textParams.textRootEntity = entt::null;
+  }
   ++textPreparationStats.fullElementStylePasses;
   textPreparationStats.spanStyleVisits += text->spans.size();
   resolvePerSpanStyles(registry, *text, textRootHandle, paint.fill, paint.stroke,
-                       spansHaveOwnEffectInstances, /*refreshLayoutAndOwnership=*/true);
+                       spansHaveOwnEffectInstances, /*refreshLayoutAndOwnership=*/true,
+                       styleContext);
   renderer.drawText(registry, *text, textParams);
 }
 
@@ -1866,6 +1941,7 @@ void RendererDriver::drawPreparedDocument(SVGDocument& document) {
 void RendererDriver::drawPreparedDocument(SVGDocument& document, const RenderViewport& viewport,
                                           const Transform2d& surfaceFromCanvas) {
   textFrameCache_->roots.clear();
+  textFrameCache_->shadowStyles.clear();
   components::ScopedFontResourceRender fontRenderScope(
       document.registry(),
       document.registry().ctx().get<components::SVGDocumentContext>().rootEntity);
@@ -1922,6 +1998,7 @@ void RendererDriver::drawEntityRange(Registry& registry, Entity firstEntity, Ent
                                      const RenderViewport& viewport,
                                      const Transform2d& surfaceFromCanvas) {
   textFrameCache_->roots.clear();
+  textFrameCache_->shadowStyles.clear();
   components::ScopedFontResourceRender fontRenderScope(registry);
   resetOwnedSecurityBudgets();
   renderingSize_ = CheckedRenderingSize(viewport);
@@ -1945,6 +2022,7 @@ bool RendererDriver::drawEntityRangeInterruptibly(Registry& registry, Entity fir
                                                   const Transform2d& surfaceFromCanvas,
                                                   const std::function<bool()>& shouldCancel) {
   textFrameCache_->roots.clear();
+  textFrameCache_->shadowStyles.clear();
   components::ScopedFontResourceRender fontRenderScope(registry);
   resetOwnedSecurityBudgets();
   renderingSize_ = CheckedRenderingSize(viewport);
@@ -1995,6 +2073,7 @@ void RendererDriver::drawEntityRangeIntoCurrentFrame(Registry& registry, Entity 
                                                      const RenderViewport& viewport,
                                                      const Transform2d& surfaceFromCanvas) {
   textFrameCache_->roots.clear();
+  textFrameCache_->shadowStyles.clear();
   components::ScopedFontResourceRender fontRenderScope(registry);
   renderingSize_ = CheckedRenderingSize(viewport);
   surfaceFromCanvasTransform_ = surfaceFromCanvas;
@@ -2027,6 +2106,7 @@ bool RendererDriver::drawUnderEntityMaskIntoCurrentFrame(Registry& registry, Ent
   }
 
   textFrameCache_->roots.clear();
+  textFrameCache_->shadowStyles.clear();
   components::ScopedFontResourceRender fontRenderScope(registry);
   renderingSize_ = CheckedRenderingSize(viewport);
   surfaceFromCanvasTransform_ = surfaceFromCanvas;
@@ -3865,6 +3945,7 @@ void RendererDriver::prepareSubDocument(SVGDocument& document) {
   Registry& registry = document.registry();
   // One child registry can be traversed by several external uses with different context paints.
   textFrameCache_->roots.erase(&registry);
+  textFrameCache_->shadowStyles.erase(&registry);
   const auto* state = registry.ctx().find<components::RenderTreeState>();
   if (!state || !state->hasBeenBuilt || document.hasPendingRenderInvalidation()) {
     components::InvalidateFontResourcePreparation(registry);

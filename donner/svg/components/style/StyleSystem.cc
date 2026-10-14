@@ -1,9 +1,13 @@
 #include "donner/svg/components/style/StyleSystem.h"
 
 #include <array>
+#include <cmath>
+#include <type_traits>
 
 #include "donner/base/EcsRegistry.h"
 #include "donner/base/ParseWarningSink.h"
+#include "donner/base/StringUtils.h"
+#include "donner/base/parser/LengthParser.h"
 #include "donner/base/xml/XMLQualifiedName.h"
 #include "donner/base/xml/components/AttributesComponent.h"
 #include "donner/base/xml/components/TreeComponent.h"
@@ -16,6 +20,8 @@
 #include "donner/svg/components/IdComponent.h"
 #include "donner/svg/components/StylesheetComponent.h"
 #include "donner/svg/components/animation/AnimatedValuesComponent.h"
+#include "donner/svg/components/animation/AnimationResourceBudget.h"
+#include "donner/svg/components/animation/AnimationValueSampler.h"
 #include "donner/svg/components/resources/ResourceManagerContext.h"
 #include "donner/svg/components/shadow/ShadowEntityComponent.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
@@ -36,6 +42,145 @@ StyleResourceBudget& GetStyleResourceBudget(Registry& registry) {
     family = context->budget;
   }
   return registry.ctx().emplace<StyleResourceBudget>(std::move(family));
+}
+
+std::optional<Lengthd> ResolveFontOperand(std::string_view value, double parentSize) {
+  PropertyRegistry parsed;
+  const auto result = parsed.parsePresentationAttribute("font-size", value, EntityHandle(),
+                                                        css::Specificity::Animation());
+  if (result.hasError() || !result.result()) {
+    return std::nullopt;
+  }
+  if (parsed.fontSize.state == PropertyState::Inherit ||
+      parsed.fontSize.state == PropertyState::ExplicitUnset) {
+    parsed.fontSize.set(Lengthd(parentSize, Lengthd::Unit::Px), css::Specificity::Animation());
+  }
+  parsed.resolveFontSize(parentSize);
+  const Lengthd resolved = parsed.fontSize.get().value();
+  return std::isfinite(resolved.value) && resolved.value >= 0 ? std::optional(resolved)
+                                                              : std::nullopt;
+}
+
+std::optional<Lengthd> ResolveFontDelta(std::string_view value, double parentSize) {
+  const std::string_view trimmed = StringUtils::TrimWhitespace(value);
+  donner::parser::LengthParser::Options options;
+  options.unitOptional = true;
+  const auto parsed = donner::parser::LengthParser::Parse(trimmed, options);
+  if (parsed.hasResult() && parsed.result().consumedChars == trimmed.size() &&
+      parsed.result().length.value < 0) {
+    Lengthd magnitude = parsed.result().length;
+    magnitude.value = -magnitude.value;
+    auto resolved = ResolveFontOperand(magnitude.toRcString().str(), parentSize);
+    if (resolved) {
+      resolved->value = -resolved->value;
+    }
+    return resolved;
+  }
+  return ResolveFontOperand(value, parentSize);
+}
+
+bool NormalizeFontOperand(std::optional<std::string>& value, double parentSize,
+                          bool delta = false) {
+  if (!value) {
+    return true;
+  }
+  const auto resolved =
+      delta ? ResolveFontDelta(*value, parentSize) : ResolveFontOperand(*value, parentSize);
+  if (!resolved) {
+    return false;
+  }
+  value = resolved->toRcString().str();
+  return true;
+}
+
+bool NormalizeFontDeclaration(AnimateValueComponent& declaration, double parentSize) {
+  const bool toOnly = declaration.values.empty() && !declaration.from && declaration.to;
+  const bool delta = declaration.additive && !toOnly;
+  if (declaration.values.empty()) {
+    if (declaration.to) {
+      return NormalizeFontOperand(declaration.from, parentSize, delta) &&
+             NormalizeFontOperand(declaration.to, parentSize, delta);
+    }
+    return NormalizeFontOperand(declaration.from, parentSize, delta) &&
+           NormalizeFontOperand(declaration.by, parentSize, true);
+  }
+  for (auto& value : declaration.values) {
+    const auto resolved =
+        delta ? ResolveFontDelta(value, parentSize) : ResolveFontOperand(value, parentSize);
+    if (!resolved) {
+      return false;
+    }
+    value = resolved->toRcString().str();
+  }
+  return true;
+}
+
+std::optional<Lengthd> SampleFontLength(const ContextualLengthSample& sample, Lengthd underlying,
+                                        double parentSize) {
+  ContextualLengthSample normalized = sample;
+  const bool valid = std::visit(
+      [&](auto& declaration) {
+        if constexpr (std::is_same_v<std::decay_t<decltype(declaration)>, AnimateValueComponent>) {
+          return NormalizeFontDeclaration(declaration, parentSize);
+        } else {
+          return NormalizeFontOperand(declaration.to, parentSize);
+        }
+      },
+      normalized.declaration);
+  if (!valid) {
+    return std::nullopt;
+  }
+  const auto sampled =
+      SampleAnimationValue(sample.progress, sample.iteration,
+                           std::get_if<SetAnimationComponent>(&normalized.declaration),
+                           std::get_if<AnimateValueComponent>(&normalized.declaration), nullptr,
+                           underlying.toRcString().str(), AnimationValueContext());
+  return sampled ? ResolveFontOperand(sampled->second, parentSize) : std::nullopt;
+}
+
+Lengthd BaseFontLength(const PropertyRegistry& properties, double parentSize) {
+  switch (properties.fontSize.state) {
+    case PropertyState::NotSet:
+    case PropertyState::Inherit:
+    case PropertyState::ExplicitUnset: return Lengthd(parentSize, Lengthd::Unit::Px);
+    default:
+      return ResolveFontOperand(properties.fontSize.get().value().toRcString().str(), parentSize)
+          .value_or(Lengthd(12, Lengthd::Unit::Px));
+  }
+}
+
+void ApplyContextualFontSize(Registry& registry, Entity dataEntity, Entity parent,
+                             PropertyRegistry& properties, ParseWarningSink& warnings) {
+  const auto* animationStyle = registry.ctx().find<AnimationStyleContext>();
+  const auto* animated = registry.try_get<AnimatedValuesComponent>(dataEntity);
+  if (!animationStyle || !animationStyle->enabled || !animated) {
+    return;
+  }
+  const auto recipe = animated->contextualLengths.find("font-size");
+  if (recipe == animated->contextualLengths.end()) {
+    return;
+  }
+  auto& budget = registry.ctx().get<AnimationResourceBudget>();
+  if (!budget.reserveContextualWork(recipe->second->evaluationWork)) {
+    return;
+  }
+  double parentSize = 12;
+  if (parent != entt::null) {
+    const auto& style = StyleSystem().computeStyle(EntityHandle(registry, parent), warnings);
+    parentSize = style.properties->fontSize.get().value().value;
+  }
+  Lengthd underlying = BaseFontLength(properties, parentSize);
+  std::optional<Lengthd> result;
+  for (const auto& sample : recipe->second->samples) {
+    if (const auto value = SampleFontLength(sample, underlying, parentSize)) {
+      underlying = *value;
+      result = *value;
+    }
+  }
+  if (result) {
+    std::ignore = properties.parsePresentationAttribute(
+        "font-size", result->toRcString().str(), EntityHandle(), css::Specificity::Animation());
+  }
 }
 
 struct ShadowedElementAdapter {
@@ -308,7 +453,14 @@ PropertyRegistry StyleSystem::inheritProperties(Registry& registry, Entity paren
   const PropertyInheritOptions inheritOptions = registry.all_of<DoNotInheritFillOrStrokeTag>(parent)
                                                     ? PropertyInheritOptions::NoPaint
                                                     : PropertyInheritOptions::All;
-  return properties.inheritFrom(parentStyleComponent.properties.value(), inheritOptions);
+  const auto localFontSize = properties.fontSize;
+  PropertyRegistry inherited =
+      properties.inheritFrom(parentStyleComponent.properties.value(), inheritOptions);
+  if (localFontSize.state == PropertyState::Set ||
+      localFontSize.state == PropertyState::ExplicitInitial) {
+    inherited.fontSize = localFontSize;
+  }
+  return inherited;
 }
 
 void StyleSystem::resolveRelativeFontProperties(Registry& registry, Entity parent,
@@ -359,12 +511,13 @@ void StyleSystem::computePropertiesInto(EntityHandle handle, ComputedStyleCompon
       }
     }
   }
+  const Entity parent = handle.get<donner::components::TreeComponent>().parent();
+  ApplyContextualFontSize(registry, dataEntity, parent, properties, warningSink);
   properties.resolveElementColors(warningSink);
 
   // Inherit from parent, then charge the dynamic bytes retained by the final computed style.
   // Charging the parent's source value alone misses large locally parsed vectors and can also
   // differ from the actual value selected by the cascade.
-  const Entity parent = handle.get<donner::components::TreeComponent>().parent();
   PropertyRegistry finalProperties =
       inheritProperties(registry, parent, std::move(properties), warningSink);
 

@@ -7,8 +7,10 @@
 
 #include "donner/base/ParseWarningSink.h"
 #include "donner/svg/components/animation/AnimateValueComponent.h"
+#include "donner/svg/components/animation/AnimatedValuesComponent.h"
 #include "donner/svg/components/animation/AnimationBaseValue.h"
 #include "donner/svg/components/animation/AnimationSystem.h"
+#include "donner/svg/components/style/StyleSystem.h"
 #include "donner/svg/parser/ListParser.h"
 #include "donner/svg/parser/SVGParser.h"
 
@@ -36,7 +38,9 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
     std::string_view element;
     std::string_view attribute;
   };
-  constexpr std::array<Target, 11> targets = {{
+  constexpr std::array<Target, 13> targets = {{
+      {"font:", "text", "font-size"},
+      {"font-by:", "text", "font-size"},
       {"filter-x:", "feFlood", "x"},
       {"filter-width:", "feFlood", "width"},
       {"marker:", "marker", "markerWidth"},
@@ -60,10 +64,12 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
   svg += target.element;
   svg += " id='r'><animate id='budget' attributeName='";
   svg += target.attribute;
-  svg += target.prefix == "reference-to:" ? "' to='" : "' values='";
+  svg += target.prefix == "reference-to:" ? "' to='"
+         : target.prefix == "font-by:"    ? "' by='"
+                                          : "' values='";
   svg.append(values.substr(target.prefix.size()));
   svg += "' begin='0s' dur='2s'";
-  if (target.prefix.starts_with("filter-")) {
+  if (target.prefix.starts_with("filter-") || target.attribute == "font-size") {
     svg += " additive='sum' accumulate='sum' repeatCount='3'";
   }
   svg += "/></";
@@ -88,10 +94,13 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
     // Advance at a few time points to exercise interpolation.
     components::AnimationSystem().advance(registry, 0.5, nullptr);
     components::AnimationSystem().advance(registry, 1.0, nullptr);
-    if (target.prefix.starts_with("filter-")) {
+    if (target.prefix.starts_with("filter-") || target.attribute == "font-size") {
       components::AnimationSystem().advance(registry, 3.0, nullptr);
     }
-    if (const auto element = result.result().querySelector("#r")) {
+    if (target.attribute == "font-size") {
+      registry.ctx().emplace<components::AnimationStyleContext>().enabled = true;
+      components::StyleSystem().computeAllStyles(registry, warnings);
+    } else if (const auto element = result.result().querySelector("#r")) {
       components::AnimationValueContext context;
       for (const double extent : {1.0, 100.0}) {
         context.viewBox = Box2d::FromXYWH(0, 0, extent, extent);
