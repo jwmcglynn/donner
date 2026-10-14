@@ -1,0 +1,86 @@
+# donner-svg-suite
+
+A reusable C++20 GoogleTest harness for plain SVG/PNG pairs, using the same pixelmatch comparison
+core as Donner's renderer tests. Default discovery includes every case in the bundled resvg snapshot
+and the Donner extension. No JavaScript, Qt, Python runner, or manual visual-review UI is required.
+
+The resvg data remains unchanged under `third_party/resvg-test-suite`, including its resources,
+fonts and licenses. Extension files remain under
+`donner/svg/renderer/tests/donner_svg2_corpus/tests`. Each static SVG has a same-stem PNG. A missing
+reference or empty corpus fails discovery. The optional extension manifest is not required to author
+cases; the default packaged extension uses it only as a runfiles root marker.
+
+## Build and run with Donner
+
+```sh
+bazel build //tools/svg_suite:svg_suite //donner/svg/renderer/tests:donner_svg_suite_renderer
+renderer="$(bazel cquery //donner/svg/renderer/tests:donner_svg_suite_renderer --output=files)"
+bazel run //tools/svg_suite:svg_suite -- --renderer "$PWD/$renderer"   --artifact-dir "$PWD/../svg-suite-results/run-001"
+```
+
+Run the command from the repository root. Use the same build configuration for `build` and `cquery`.
+On a host without supported child address-space limits, the runner rejects execution unless
+`--trusted-inputs` is explicitly supplied for a reviewed corpus and trusted executable. That flag
+records the missing memory enforcement; it does not enable a sandbox or certify input safety.
+
+The combined audit intentionally reports existing rendering gaps as failures, using strict identity
+pixelmatch by default. It does not inherit Donner's historical skip/tolerance table. Never turn its
+exit status green by excluding failing upstream cases. Ordinary focused CI targets are:
+
+```sh
+bazel test //tools/svg_suite:svg_suite_tests //tools/svg_suite:process_renderer_tests   //tools/svg_suite:provenance_tests //tools/svg_suite:donner_extension_tests
+```
+
+`--extension-only` selects only authored extension cases. GoogleTest's `--gtest_filter` and XML
+output options select and report individual cases; an empty selection is an error. Case IDs encode
+corpus name and relative path without collisions. `metrics.json` retains the readable input path.
+Each run needs a fresh output directory: evidence is never overwritten.
+
+## Reuse without Donner
+
+```sh
+cmake -S tools/svg_suite -B ../svg-suite-build -DCMAKE_BUILD_TYPE=Release
+cmake --build ../svg-suite-build -j4
+ctest --test-dir ../svg-suite-build --output-on-failure
+cmake --install ../svg-suite-build --prefix ../donner-svg-suite-bundle
+```
+
+The standalone build links GoogleTest, pixelmatch, a bounded PNG decoder and small JSON/SHA helpers;
+it does not build or link Donner. Dependency release archives have SHA-256 pins. The install contains
+the native runner, reusable sources and the complete resvg/extension data with licenses. Run the
+installed binary with `--bundle-root` pointing at the bundle. Network is needed only to obtain build
+dependencies; native execution is offline.
+
+A different renderer can use the C++ `Renderer` callback in `StaticSuite.h`, or the POSIX command
+runner. Pass `--renderer-arg` once for each argv item; placeholders are literal substitutions and
+never shell expressions. For example, a resvg executable accepts:
+
+```sh
+../svg-suite-build/donner-svg-suite --bundle-root . --renderer /path/to/resvg   --renderer-arg '{input}' --renderer-arg '{output}' --renderer-arg '--skip-system-fonts'   --renderer-arg '--font-dir' --renderer-arg '{fonts}'   --artifact-dir ../svg-suite-results/resvg-001
+```
+
+Use explicit matching font-family, sizing and resource policies when comparing engines. A
+successful callback mock proves the API contract only; use a real renderer to qualify integration.
+The direct callback is portable C++ support; the child-process CLI currently targets POSIX hosts.
+
+## Evidence and diagnosis
+
+`run.json` binds the renderer executable and all corpus bytes, including fonts/resources, with SHA-256.
+Optional `--engine-revision`, `--backend`, and `--build-flags` labels are recorded as caller-declared,
+unverified labels. The actual binary hash is measured. `run-verification.json` combines final source
+verification with the test exit code. Checks detect boundary changes, not adversarial mutate-and-restore
+attacks; use immutable inputs for hostile environments.
+
+Each case writes `expected.png`, `actual.png`, `diff.png` when available, plus `metrics.json`. The
+metrics separate mismatch from infrastructure error and reference the exact run, input/reference
+hashes and child `process.json`/`renderer.log`. Failed reads or renders retain diagnostics without
+inventing images. Images and process directories are grouped under collision-free case IDs.
+
+Follow [AGENTS.md](AGENTS.md) for the autonomous reproduce/inspect/fix/verify loop. Pixelmatch provides
+repeatable detection; source/specification analysis establishes cause. Neither a visual model nor a
+small mismatch count can bless a new reference or tolerance.
+
+Native animation/input scenarios and a complete SVG2 requirement audit remain separate work.
+The current static harness does not establish animation, browser-host or full SVG2 conformance.
+See [the SVG2 audit](../../docs/svg2_audit.md) and
+[the suite design](../../docs/design_docs/0057-donner_svg2_test_suite.md).

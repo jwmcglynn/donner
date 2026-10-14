@@ -61,8 +61,8 @@ donner_cc_library(
         "//donner/svg/renderer:renderer_image_io",
         "//donner/svg/renderer:renderer_interface",
         "//donner/svg/renderer/tests:renderer_image_test_utils",
+        "//tools/svg_suite:image_compare",
         "@com_google_gtest//:gtest",
-        "@pixelmatch-cpp17",
     ],
 )
 
@@ -202,13 +202,13 @@ donner_cc_test(
 
 donner_cc_test(
     name = "editor_shell_tests",
-    srcs = ["EditorShell_tests.cc"],
     # The suite renders at 2x content scale. Under AddressSanitizer its heaviest held-drag cases
     # take tens of seconds to minutes each, so a shard exceeds the 60 s the implicit "small"
     # allows while every render is still making progress. Each wait pumps until its condition
     # holds under the shared hang guard in AsyncTestPolling.h, so this ceiling only has to catch
     # a hung process.
     size = "medium",
+    srcs = ["EditorShell_tests.cc"],
     # GPU-backed framebuffer cases need short shards and isolated local device use.
     shard_count = 8,
     tags = ["exclusive-if-local"],

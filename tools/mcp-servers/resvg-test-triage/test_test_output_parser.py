@@ -2,7 +2,7 @@
 Unit tests for test_output_parser module.
 """
 
-import pytest
+import unittest
 from test_output_parser import (
     extract_category_from_path,
     parse_test_output,
@@ -201,5 +201,14 @@ def test_get_next_priority_feature_empty():
     assert get_next_priority_feature({}) is None
 
 
+def load_tests(loader, tests, pattern):
+    """Run the existing function tests under stdlib unittest as well as pytest."""
+    del loader, tests, pattern
+    return unittest.TestSuite(
+        unittest.FunctionTestCase(function)
+        for name, function in globals().items() if name.startswith("test_") and callable(function)
+    )
+
+
 if __name__ == "__main__":
-    pytest.main([__file__, "-v"])
+    unittest.main()

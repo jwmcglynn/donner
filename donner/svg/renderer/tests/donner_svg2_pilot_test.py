@@ -69,12 +69,13 @@ class DonnerSvg2PilotParityTest(unittest.TestCase):
         )
 
         statuses = {r["test"]: r["status"] for r in result.results}
+        diagnostics = {r["test"]: r.get("diagnostics", "") for r in result.results}
         self.assertTrue(statuses, "runner produced no results")
         for test_id, status in statuses.items():
             self.assertEqual(
                 status,
                 "pass",
-                f"{test_id} ended in {status!r}, expected pass (parity with the resvg fixture)",
+                f"{test_id} ended in {status!r}: {diagnostics[test_id]}",
             )
         self.assertTrue(result.ok)
 

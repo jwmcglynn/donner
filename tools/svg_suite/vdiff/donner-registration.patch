@@ -1,0 +1,308 @@
+--- a/tools/vdiff/src/exportdialog.cpp
++++ b/tools/vdiff/src/exportdialog.cpp
+@@ -18,6 +18,7 @@
+     ui->chBoxBInkscape->setEnabled(backends.contains(Backend::Inkscape));
+     ui->chBoxBLibrsvg->setEnabled(backends.contains(Backend::Librsvg));
+     ui->chBoxBQtSvg->setEnabled(backends.contains(Backend::QtSvg));
++    ui->chBoxBDonner->setEnabled(backends.contains(Backend::Donner));
+ 
+     ui->chBoxBResvg->setChecked(backends.contains(Backend::Resvg));
+     ui->chBoxBChrome->setChecked(backends.contains(Backend::Chrome));
+@@ -27,6 +28,7 @@
+     ui->chBoxBInkscape->setChecked(backends.contains(Backend::Inkscape));
+     ui->chBoxBLibrsvg->setChecked(backends.contains(Backend::Librsvg));
+     ui->chBoxBQtSvg->setChecked(backends.contains(Backend::QtSvg));
++    ui->chBoxBDonner->setChecked(backends.contains(Backend::Donner));
+ 
+     ui->buttonBox->button(QDialogButtonBox::Ok)->setText("Export");
+ 
+@@ -54,6 +56,7 @@
+     if (ui->chBoxBInkscape->isChecked())    { opt.backends << Backend::Inkscape; }
+     if (ui->chBoxBLibrsvg->isChecked())     { opt.backends << Backend::Librsvg; }
+     if (ui->chBoxBQtSvg->isChecked())       { opt.backends << Backend::QtSvg; }
++    if (ui->chBoxBDonner->isChecked())      { opt.backends << Backend::Donner; }
+ 
+     return opt;
+ }
+--- a/tools/vdiff/src/exportdialog.ui
++++ b/tools/vdiff/src/exportdialog.ui
+@@ -89,6 +89,13 @@
+         </widget>
+        </item>
+        <item>
++        <widget class="QCheckBox" name="chBoxBDonner">
++         <property name="text">
++          <string>Donner</string>
++         </property>
++        </widget>
++       </item>
++       <item>
+         <spacer name="verticalSpacer">
+          <property name="orientation">
+           <enum>Qt::Vertical</enum>
+--- a/tools/vdiff/src/mainwindow.cpp
++++ b/tools/vdiff/src/mainwindow.cpp
+@@ -84,6 +84,10 @@
+ 
+     backends << Backend::Resvg;
+ 
++    if (m_settings.useDonner) {
++        backends << Backend::Donner;
++    }
++
+     if (m_settings.useChrome) {
+         backends << Backend::Chrome;
+     }
+--- a/tools/vdiff/src/render.cpp
++++ b/tools/vdiff/src/render.cpp
+@@ -1,4 +1,6 @@
+ #include <QFile>
++#include <QDir>
++#include <QTemporaryDir>
+ #include <QFileInfo>
+ #include <QPainter>
+ #include <QImageReader>
+@@ -210,6 +212,46 @@
+     return loadImage(outPath).convertToFormat(QImage::Format_ARGB32);
+ }
+ 
++QImage Render::renderViaDonner(const RenderData &data)
++{
++    if (data.testSuite != TestSuite::Own) {
++        throw QString("Donner requires the pinned resvg corpus and its reference PNGs.");
++    }
++    if (!QFileInfo(data.convPath).isAbsolute() || !QFileInfo(data.convPath).isExecutable()) {
++        throw QString("Set an absolute executable path to DonnerSvgSuiteRenderer.");
++    }
++
++    const QFileInfo input(data.imgPath);
++    const QString reference = input.absolutePath() + "/" + input.completeBaseName() + ".png";
++    const QSize size = QImageReader(reference).size();
++    if (size.isEmpty()) {
++        throw QString("Missing or invalid reference PNG: %1").arg(reference);
++    }
++    const QString root = QDir(QString(SRCDIR) + "/../..").absolutePath();
++    QTemporaryDir temporary;
++    if (!temporary.isValid()) {
++        throw QString("Cannot create Donner output directory.");
++    }
++    const QString output = temporary.filePath("donner.png");
++    const QString log = Process::run(data.convPath, {
++        "--input", input.absoluteFilePath(), "--output", output,
++        "--root", root, "--fonts", root + "/fonts",
++        "--width", QString::number(size.width()),
++        "--height", QString::number(size.height()),
++    }, true);
++    if (!log.isEmpty()) {
++        qDebug().noquote() << "donner:" << log;
++    }
++    QImage image = loadImage(output).convertToFormat(QImage::Format_ARGB32);
++    if (image.size() != size) {
++        throw QString("Donner output dimensions differ from the reference PNG.");
++    }
++    // Preview scaling happens after rendering. Automated comparisons use the
++    // C++ suite at canonical dimensions, never this UI image or its diff.
++    return image.scaled(QSize(data.viewSize, data.viewSize),
++                        Qt::KeepAspectRatio, Qt::SmoothTransformation);
++}
++
+ QImage Render::renderViaSvgNet(const RenderData &data)
+ {
+     const auto outImg = Paths::workDir() + "/" + QFileInfo(data.imgPath).completeBaseName() + ".png";
+@@ -325,6 +367,11 @@
+     }
+ 
+     list.append({ Backend::Resvg, m_viewSize, imageSize, m_imgPath, m_settings->resvgPath(), ts });
++
++    if (m_settings->useDonner) {
++        list.append({ Backend::Donner, m_viewSize, imageSize, m_imgPath,
++                      m_settings->donnerPath, ts });
++    }
+ 
+     auto renderCached = [&](const Backend backend, const QString &renderPath) {
+         if (ts != TestSuite::Custom) {
+@@ -397,6 +444,7 @@
+             case Backend::Firefox     : img = renderViaFirefox(data); break;
+             case Backend::Safari      : img = renderViaSafari(data); break;
+             case Backend::Resvg       : img = renderViaResvg(data); break;
++            case Backend::Donner      : img = renderViaDonner(data); break;
+             case Backend::SvgNet      : img = renderViaSvgNet(data); break;
+             case Backend::Batik       : img = renderViaBatik(data); break;
+             case Backend::Inkscape    : img = renderViaInkscape(data); break;
+@@ -525,7 +573,7 @@
+             }
+         };
+ 
+-        for (int t = (int)Backend::Firefox; t <= (int)Backend::QtSvg; ++t) {
++        for (int t = (int)Backend::Firefox; t <= (int)Backend::Donner; ++t) {
+             append((Backend)t);
+         }
+ 
+@@ -541,7 +589,7 @@
+             }
+         };
+ 
+-        for (int t = (int)Backend::Chrome; t <= (int)Backend::QtSvg; ++t) {
++        for (int t = (int)Backend::Chrome; t <= (int)Backend::Donner; ++t) {
+             append((Backend)t);
+         }
+ 
+--- a/tools/vdiff/src/render.h
++++ b/tools/vdiff/src/render.h
+@@ -66,6 +66,7 @@
+     static QImage renderViaFirefox(const RenderData &data);
+     static QImage renderViaSafari(const RenderData &data);
+     static QImage renderViaResvg(const RenderData &data);
++    static QImage renderViaDonner(const RenderData &data);
+     static QImage renderViaSvgNet(const RenderData &data);
+     static QImage renderViaBatik(const RenderData &data);
+     static QImage renderViaInkscape(const RenderData &data);
+--- a/tools/vdiff/src/settings.cpp
++++ b/tools/vdiff/src/settings.cpp
+@@ -20,6 +20,8 @@
+     static const QString UseSvgNet          = "UseSvgNet";
+     static const QString UseLibrsvg         = "UseLibrsvg";
+     static const QString UseQtSvg           = "UseQtSvg";
++    static const QString UseDonner          = "UseDonner";
++    static const QString DonnerPath         = "DonnerPath";
+     static const QString ViewSize           = "ViewSize";
+ }
+ 
+@@ -72,6 +74,8 @@
+     this->useLibrsvg = appSettings.value(Key::UseLibrsvg).toBool();
+     this->useSvgNet = appSettings.value(Key::UseSvgNet).toBool();
+     this->useQtSvg = appSettings.value(Key::UseQtSvg).toBool();
++    this->useDonner = appSettings.value(Key::UseDonner, false).toBool();
++    this->donnerPath = appSettings.value(Key::DonnerPath).toString();
+ 
+     this->resvgDir = appSettings.value(Key::ResvgDir).toString();
+     this->firefoxPath = appSettings.value(Key::FirefoxPath).toString();
+@@ -95,6 +99,8 @@
+     appSettings.setValue(Key::UseLibrsvg, this->useLibrsvg);
+     appSettings.setValue(Key::UseSvgNet, this->useSvgNet);
+     appSettings.setValue(Key::UseQtSvg, this->useQtSvg);
++    appSettings.setValue(Key::UseDonner, this->useDonner);
++    appSettings.setValue(Key::DonnerPath, this->donnerPath);
+     appSettings.setValue(Key::ResvgDir, this->resvgDir);
+     appSettings.setValue(Key::FirefoxPath, this->firefoxPath);
+     appSettings.setValue(Key::BatikPath, this->batikPath);
+--- a/tools/vdiff/src/settings.h
++++ b/tools/vdiff/src/settings.h
+@@ -33,6 +33,8 @@
+     bool useLibrsvg = true;
+     bool useSvgNet = true;
+     bool useQtSvg = true;
++    bool useDonner = false;
++    QString donnerPath;
+     QString resvgDir; // it's a dir, not a path
+     QString firefoxPath;
+     QString batikPath;
+--- a/tools/vdiff/src/settingsdialog.cpp
++++ b/tools/vdiff/src/settingsdialog.cpp
+@@ -58,6 +58,8 @@
+     ui->chBoxUseSvgNet->setChecked(m_settings->useSvgNet);
+ 
+     ui->chBoxUseQtSvg->setChecked(m_settings->useQtSvg);
++    ui->chBoxUseDonner->setChecked(m_settings->useDonner);
++    ui->lineEditDonner->setText(m_settings->donnerPath);
+ 
+     prepareTestsPathWidgets();
+ }
+@@ -95,6 +97,8 @@
+     m_settings->useLibrsvg = ui->chBoxUseLibrsvg->isChecked();
+     m_settings->useSvgNet = ui->chBoxUseSvgNet->isChecked();
+     m_settings->useQtSvg = ui->chBoxUseQtSvg->isChecked();
++    m_settings->useDonner = ui->chBoxUseDonner->isChecked();
++    m_settings->donnerPath = ui->lineEditDonner->text();
+ 
+     m_settings->resvgDir = ui->lineEditResvg->text();
+     m_settings->firefoxPath = ui->lineEditFirefox->text();
+--- a/tools/vdiff/src/settingsdialog.ui
++++ b/tools/vdiff/src/settingsdialog.ui
+@@ -396,6 +396,19 @@
+        <property name="text">
+         <string>...</string>
+        </property>
++      </widget>
++     </item>
++     <item row="16" column="0">
++      <widget class="QLabel" name="labelDonner">
++       <property name="text"><string>Donner:</string></property>
++      </widget>
++     </item>
++     <item row="16" column="1">
++      <widget class="QCheckBox" name="chBoxUseDonner"/>
++     </item>
++     <item row="16" column="2" colspan="2">
++      <widget class="QLineEdit" name="lineEditDonner">
++       <property name="placeholderText"><string>Absolute path to DonnerSvgSuiteRenderer</string></property>
+       </widget>
+      </item>
+     </layout>
+--- a/tools/vdiff/src/tests.cpp
++++ b/tools/vdiff/src/tests.cpp
+@@ -91,7 +91,7 @@
+ 
+         const auto items = line.split(',');
+ 
+-        if (items.size() != BackendsCount) {
++        if (items.size() != BackendsCount && items.size() != BackendsCount + 1) {
+             throw QString("Invalid columns count at row %1.").arg(row);
+         }
+ 
+@@ -111,6 +111,10 @@
+         item.state.insert(Backend::SvgNet,      stateFormStr(items.at(8)));
+         item.state.insert(Backend::QtSvg,       stateFormStr(items.at(9)));
+ 
++        if (items.size() == BackendsCount + 1) {
++            item.state.insert(Backend::Donner, stateFormStr(items.at(10)));
++        }
++
+         if (testSuite == TestSuite::Own) {
+             item.title = parseTitle(testPath);
+         }
+@@ -150,7 +154,12 @@
+ 
+ void Tests::save(const QString &path)
+ {
+-    QString text = "title,chrome,firefox,safari,resvg,batik,inkscape,librsvg,svgnet,qtsvg\n";
++    bool hasDonner = false;
++    for (const TestItem &item : m_data) {
++        hasDonner = hasDonner || item.state.contains(Backend::Donner);
++    }
++    QString text = "title,chrome,firefox,safari,resvg,batik,inkscape,librsvg,svgnet,qtsvg";
++    text += hasDonner ? ",donner\n" : "\n";
+     for (const TestItem &item : m_data) {
+         text += item.baseName + ',';
+         text += QString::number((int)item.state.value(Backend::Chrome))     + ',';
+@@ -161,7 +170,11 @@
+         text += QString::number((int)item.state.value(Backend::Inkscape))   + ',';
+         text += QString::number((int)item.state.value(Backend::Librsvg))    + ',';
+         text += QString::number((int)item.state.value(Backend::SvgNet))     + ',';
+-        text += QString::number((int)item.state.value(Backend::QtSvg))      + '\n';
++        text += QString::number((int)item.state.value(Backend::QtSvg));
++        if (hasDonner) {
++            text += ',' + QString::number((int)item.state.value(Backend::Donner));
++        }
++        text += '\n';
+     }
+ 
+     QFile file(path);
+@@ -243,6 +256,7 @@
+         case Backend::Librsvg :     return "librsvg";
+         case Backend::SvgNet :      return "SVG.NET";
+         case Backend::QtSvg :       return "QtSvg";
++        case Backend::Donner :      return "Donner";
+     }
+ 
+     Q_UNREACHABLE();
+--- a/tools/vdiff/src/tests.h
++++ b/tools/vdiff/src/tests.h
+@@ -25,6 +25,7 @@
+     Librsvg,
+     SvgNet,
+     QtSvg,
++    Donner,
+ };
+ 
+ QString backendToString(const Backend &t);

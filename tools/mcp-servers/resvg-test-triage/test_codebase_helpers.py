@@ -2,7 +2,7 @@
 Unit tests for codebase_helpers module.
 """
 
-import pytest
+import unittest
 from codebase_helpers import (
     get_file_patterns_for_category,
     get_search_keywords_for_feature,
@@ -96,5 +96,14 @@ def test_rank_file_suggestions_confidence_scores():
         assert 0.0 <= confidence <= 1.0, f"Confidence {confidence} out of range for {file}"
 
 
+def load_tests(loader, tests, pattern):
+    """Run the existing function tests under stdlib unittest as well as pytest."""
+    del loader, tests, pattern
+    return unittest.TestSuite(
+        unittest.FunctionTestCase(function)
+        for name, function in globals().items() if name.startswith("test_") and callable(function)
+    )
+
+
 if __name__ == "__main__":
-    pytest.main([__file__, "-v"])
+    unittest.main()

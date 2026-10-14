@@ -1,7 +1,6 @@
 #include "donner/svg/renderer/tests/ImageComparisonTestFixture.h"
 
 #include <gtest/gtest-spi.h>
-#include <pixelmatch/pixelmatch.h>
 
 #include <algorithm>
 #include <cctype>
@@ -31,6 +30,7 @@
 #include "donner/svg/resources/FontManager.h"
 #include "donner/svg/resources/FontMetadata.h"
 #include "donner/svg/resources/SandboxedFileResourceLoader.h"
+#include "tools/svg_suite/ImageCompare.h"
 
 namespace donner::svg {
 
@@ -652,12 +652,12 @@ void ExpectBitmapsIdentical(const RendererBitmap& actual, const RendererBitmap& 
   const int height = actual.dimensions.y;
   const size_t strideInPixels = actual.rowBytes / 4u;
 
-  std::vector<uint8_t> diffImage(strideInPixels * static_cast<size_t>(height) * 4u);
-  pixelmatch::Options options;
-  options.threshold = 0.0f;
-  options.includeAA = true;  // strict identity - count every differing pixel
-  const int mismatched = pixelmatch::pixelmatch(expected.pixels, actual.pixels, diffImage, width,
-                                                height, strideInPixels, options);
+  auto comparison = svg_suite::CompareImages({width, height, strideInPixels, expected.pixels},
+                                             {width, height, strideInPixels, actual.pixels});
+  ASSERT_TRUE(comparison.error.empty()) << comparison.error;
+  ASSERT_TRUE(comparison.mismatchedPixels.has_value());
+  const int mismatched = *comparison.mismatchedPixels;
+  const auto& diffImage = comparison.diff->data;
   if (mismatched == 0) {
     std::cout << "[" << label << "] PASS bitmap identity (0 px differ)\n";
     return;
@@ -917,16 +917,15 @@ void ImageComparisonTestFixture::renderAndCompare(SVGDocument& document,
   ASSERT_EQ(goldenImage.strideInPixels, strideInPixels);
   ASSERT_EQ(goldenImage.data.size(), snapshot.pixels.size());
 
-  std::vector<uint8_t> diffImage;
-  diffImage.resize(strideInPixels * height * 4);
-
-  pixelmatch::Options options;
-  options.threshold = params.threshold;
-  options.includeAA = params.includeAntiAliasing;
-  const int mismatchedPixels = pixelmatch::pixelmatch(goldenImage.data, snapshot.pixels, diffImage,
-                                                      width, height, strideInPixels, options);
-
   const int maxMismatchedPixels = params.effectiveMaxMismatchedPixels(mode);
+  auto comparison =
+      svg_suite::CompareImages({width, height, strideInPixels, goldenImage.data},
+                               {width, height, strideInPixels, snapshot.pixels},
+                               {params.threshold, maxMismatchedPixels, params.includeAntiAliasing});
+  ASSERT_TRUE(comparison.error.empty()) << comparison.error;
+  ASSERT_TRUE(comparison.mismatchedPixels.has_value());
+  const int mismatchedPixels = *comparison.mismatchedPixels;
+  const auto& diffImage = comparison.diff->data;
   if (mismatchedPixels > maxMismatchedPixels) {
     std::cout << "FAIL (" << mismatchedPixels << " pixels differ, with " << maxMismatchedPixels
               << " max)\n";

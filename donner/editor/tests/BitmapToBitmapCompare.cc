@@ -1,5 +1,3 @@
-#include <pixelmatch/pixelmatch.h>
-
 #include <algorithm>
 #include <cstdint>
 #include <cstdio>
@@ -12,6 +10,7 @@
 #include "donner/editor/tests/BitmapGoldenCompare.h"
 #include "donner/svg/renderer/RendererImageIO.h"
 #include "gtest/gtest.h"
+#include "tools/svg_suite/ImageCompare.h"
 
 namespace donner::editor::tests {
 
@@ -67,14 +66,14 @@ void CompareBitmapToBitmap(const svg::RendererBitmap& actual, const svg::Rendere
   }
   ASSERT_EQ(expected.rowBytes, actual.rowBytes) << "[" << testLabel << "] rowBytes mismatch";
 
-  std::vector<uint8_t> diffImage(actual.pixels.size(), 0u);
-  pixelmatch::Options options;
-  options.threshold = params.threshold;
-  options.includeAA = params.includeAntiAliasing;
-  const int mismatched = pixelmatch::pixelmatch(expected.pixels, actual.pixels, diffImage, width,
-                                                height, strideInPixels, options);
-  // pixelmatch returns -1 when it cannot compare its inputs; never count that as a pass.
-  ASSERT_GE(mismatched, 0) << "[" << testLabel << "] pixelmatch could not compare the bitmaps";
+  auto comparison = svg_suite::CompareImages(
+      {width, height, strideInPixels, expected.pixels},
+      {width, height, strideInPixels, actual.pixels},
+      {params.threshold, params.maxMismatchedPixels, params.includeAntiAliasing});
+  ASSERT_TRUE(comparison.error.empty()) << "[" << testLabel << "] " << comparison.error;
+  ASSERT_TRUE(comparison.mismatchedPixels.has_value());
+  const int mismatched = *comparison.mismatchedPixels;
+  const auto& diffImage = comparison.diff->data;
   if (mismatchedPixels != nullptr) {
     *mismatchedPixels = mismatched;
   }
