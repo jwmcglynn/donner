@@ -1021,6 +1021,38 @@ TEST(RendererPublicApiTest, TextPathPairSplitMatchesUnsplitPixels) {
                                        editor::tests::PixelmatchIdentityParams());
 }
 
+TEST(RendererPublicApiTest, TextPathPairYOnlySpanMatchesUnsplitPixels) {
+  SVGDocument probe = MakeTextPathPairFontProbe();
+  const auto pairedText = probe.querySelector("#pair")->cast<SVGTextElement>();
+  ASSERT_EQ(pairedText.getNumberOfChars(), 2);
+  const double paired =
+      pairedText.getStartPositionOfChar(1).x - pairedText.getStartPositionOfChar(0).x;
+  const auto standaloneText = probe.querySelector("#first")->cast<SVGTextElement>();
+  ASSERT_EQ(standaloneText.getNumberOfChars(), 1);
+  const double separate = standaloneText.getComputedTextLength();
+  ASSERT_GT(paired, 0.0);
+  ASSERT_GT(separate, 0.0);
+  ASSERT_NE(paired, separate) << "The actual font must provide a nonzero A-V kerning adjustment";
+  SVGDocument split = ParseDocument(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="512" height="128"
+        font-family="Public Sans" font-size="64" style="font-kerning:normal">
+        <defs><path id="p" d="M16 88H496"/></defs>
+        <text><textPath href="#p">A<tspan y="20">V</tspan></textPath></text>
+      </svg>)svg");
+  SVGDocument whole = ParseDocument(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="512" height="128"
+        font-family="Public Sans" font-size="64" style="font-kerning:normal">
+        <defs><path id="p" d="M16 88H496"/></defs>
+        <text><textPath href="#p">AV</textPath></text>
+      </svg>)svg");
+  const auto expected = RenderPublicDocument(whole);
+  ASSERT_FALSE(expected.empty());
+  EXPECT_THAT(expected.pixels, testing::Contains(Gt(0)));
+  editor::tests::CompareBitmapToBitmap(RenderPublicDocument(split), expected,
+                                       "textpath-pair-y-only-span",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
 TEST(RendererPublicApiTest, TextPathPairEmptySpanMatchesUnsplitPixels) {
   SVGDocument probe = MakeTextPathPairFontProbe();
   const auto pairedText = probe.querySelector("#pair")->cast<SVGTextElement>();

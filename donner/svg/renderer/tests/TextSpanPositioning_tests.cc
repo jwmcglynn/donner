@@ -259,6 +259,33 @@ TEST(TextSpanPositioningTest, SimpleBackendTextPathSplitPreservesPairKerning) {
   }
 }
 
+TEST(TextSpanPositioningTest, SimpleBackendTextPathYOnlySplitPreservesPairKerning) {
+  TextPathPairFixture fixture;
+  ASSERT_TRUE(static_cast<bool>(fixture.font));
+  const auto shaped = fixture.backend->shapeRun(fixture.font, 64.0f, "Text", 0, 4, false,
+                                                FontVariant::Normal, false);
+  ASSERT_THAT(shaped.glyphs, SizeIs(4));
+  ASSERT_NE(
+      fixture.backend->crossSpanKern(fixture.font, 64.0f, fixture.font, 64.0f, U'e', U'x', false),
+      0.0);
+  const auto expected = StraightPathOrigins(shaped);
+  components::ComputedTextComponent text;
+  text.spans.push_back(MakeStraightPathSpan("Te", true));
+  auto tail = MakeStraightPathSpan("xt", true);
+  tail.yList = {Lengthd(20.0, Lengthd::Unit::Px), Lengthd(40.0, Lengthd::Unit::Px)};
+  ASSERT_THAT(tail.xList, testing::IsEmpty());
+  text.spans.push_back(std::move(tail));
+  const auto glyphs = PathGlyphs(fixture.engine->layout(text, MakeParams()));
+  ASSERT_THAT(glyphs, SizeIs(4));
+  for (size_t i = 0; i < shaped.glyphs.size(); ++i) {
+    SCOPED_TRACE(i);
+    EXPECT_EQ(glyphs[i].glyphIndex, shaped.glyphs[i].glyphIndex);
+    EXPECT_DOUBLE_EQ(glyphs[i].xPosition, expected[i]);
+    EXPECT_DOUBLE_EQ(glyphs[i].yPosition, shaped.glyphs[i].yOffset);
+    EXPECT_DOUBLE_EQ(glyphs[i].xAdvance, shaped.glyphs[i].xAdvance);
+  }
+}
+
 TEST(TextSpanPositioningTest, SimpleBackendTextPathEmptySpanPreservesPairKerning) {
   TextPathPairFixture fixture;
   ASSERT_TRUE(static_cast<bool>(fixture.font));
