@@ -61,7 +61,29 @@ never shell expressions. For example, a resvg executable accepts:
 
 Use explicit matching font-family, sizing and resource policies when comparing engines. A
 successful callback mock proves the API contract only; use a real renderer to qualify integration.
-The direct callback is portable C++ support; the child-process CLI currently targets POSIX hosts.
+The CMake `svg_suite` target provides discovery, image comparison, renderer callbacks, GoogleTest
+registration and bounded file fingerprints without the POSIX run-record writer or process launcher.
+On UNIX hosts, `suite_provenance` adds exclusive, flushed run-record writing and aggregate source
+verification; `suite_process` adds the child-process callback. The CLI links both. The shared
+`Provenance.h` declares both layers: `FingerprintFile`, `VerifyFile` and `FindFingerprint` are in the
+portable target; `CreateRunProvenance`, `VerifyRunProvenance` and `WriteRunVerification` require
+`suite_provenance`. A callback without a run snapshot reports `provenance: not-recorded`; it must not
+claim the CLI's complete run provenance.
+
+The independent callback consumer links only `svg_suite` and checks that its dependency closure
+excludes the POSIX sources. It discovers a fixture, supplies pixels through a callback, and executes
+the GoogleTest comparison with fresh XML output:
+
+```sh
+cmake -S tools/svg_suite/portable_consumer -B ../svg-suite-callback-build
+cmake --build ../svg-suite-callback-build -j4
+ctest --test-dir ../svg-suite-callback-build --output-on-failure
+```
+
+Using `-DCMAKE_SYSTEM_NAME=Generic` with a host compiler exercises the non-UNIX CMake branch and
+callback linkage. It does not establish Windows or another target platform's compiler/runtime
+compatibility. Windows has not been qualified. Process execution and aggregate run-record writing
+remain POSIX-only; the portable fingerprint tests remain enabled on both branches.
 
 ## Evidence and diagnosis
 

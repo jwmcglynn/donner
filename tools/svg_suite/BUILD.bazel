@@ -23,8 +23,8 @@ cc_library(
     srcs = ["StaticSuite.cc"],
     hdrs = ["StaticSuite.h"],
     deps = [
+        ":file_fingerprint",
         ":image_compare",
-        ":provenance",
         "@nlohmann_json//:json",
     ],
 )
@@ -35,6 +35,7 @@ cc_library(
     srcs = ["GtestSuite.cc"],
     hdrs = ["GtestSuite.h"],
     deps = [
+        ":file_fingerprint",
         ":static_suite",
         "@com_google_gtest//:gtest",
     ],
@@ -75,6 +76,7 @@ cc_binary(
     deps = [
         ":gtest_suite",
         ":process_renderer",
+        ":provenance",
         "@com_google_gtest//:gtest",
     ] + libc_compat_deps(),
 )
@@ -104,6 +106,7 @@ cc_test(
     deps = [
         ":gtest_suite",
         ":process_renderer",
+        ":provenance",
         "@com_google_gtest//:gtest",
     ] + libc_compat_deps(),
 )
@@ -112,9 +115,8 @@ cc_library(
     name = "provenance",
     testonly = True,
     srcs = ["Provenance.cc"],
-    hdrs = ["Provenance.h"],
     deps = [
-        ":image_compare",
+        ":file_fingerprint",
         "@nlohmann_json//:json",
         "@picosha2",
     ],
@@ -134,6 +136,36 @@ cc_test(
 cc_test(
     name = "gtest_suite_tests",
     srcs = ["GtestSuite_tests.cc"],
+    deps = [
+        ":gtest_suite",
+        ":provenance",
+        "@com_google_gtest//:gtest",
+    ] + libc_compat_deps(),
+)
+
+cc_library(
+    name = "file_fingerprint",
+    testonly = True,
+    srcs = ["FileFingerprint.cc"],
+    hdrs = ["Provenance.h"],
+    deps = [
+        ":image_compare",
+        "@picosha2",
+    ],
+)
+
+cc_test(
+    name = "file_fingerprint_tests",
+    srcs = ["FileFingerprint_tests.cc"],
+    deps = [
+        ":file_fingerprint",
+        "@com_google_gtest//:gtest_main",
+    ] + libc_compat_deps(),
+)
+
+cc_test(
+    name = "portable_callback_tests",
+    srcs = ["portable_consumer/CallbackConsumer.cc"],
     deps = [
         ":gtest_suite",
         "@com_google_gtest//:gtest",

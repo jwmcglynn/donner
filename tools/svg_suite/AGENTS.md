@@ -41,6 +41,11 @@ of those inputs and references.
   path confinement, timeout handling and source-verification checks enabled while triaging.
 - A registered callback is a convenience API, not a process sandbox. It must enforce its own resource
   and execution policy. The CLI supplies the bounded native-process callback.
+- Keep the portable CMake callback target free of POSIX process and run-record writers. Run the
+  independent `portable_consumer` and fingerprint tests when changing its dependencies. A Generic
+  configuration with a host compiler proves dependency separation, not Windows runtime support.
+  Aggregate run provenance requires the UNIX-only writer; do not label callback-only results as
+  complete CLI run evidence.
 - The optional `../mcp-servers/resvg-test-triage/` tools may help inspect evidence. They are not a
   runtime dependency of the native tests. Their `AGENTS.md` describes safe artifact-root setup.
 

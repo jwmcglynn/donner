@@ -68,29 +68,6 @@ protected:
   std::filesystem::path directory_;
 };
 
-TEST_F(ProvenanceTest, StandardSha256KnownVectorsAndStreaming) {
-  const std::vector<std::pair<std::string, std::string>> vectors = {
-      {"", "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"},
-      {"abc", "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"},
-      {"abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq",
-       "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1"},
-      {std::string(1000000, 'a'),
-       "cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0"}};
-  for (const auto& [input, expected] : vectors) {
-    write("vector", input);
-    const auto result = FingerprintFile(directory_ / "vector", 1000000);
-    ASSERT_TRUE(result.fingerprint) << result.error;
-    EXPECT_EQ(result.fingerprint->sha256, expected);
-    EXPECT_EQ(result.fingerprint->bytes, input.size());
-  }
-}
-
-TEST_F(ProvenanceTest, HashingRejectsNonregularMissingAndOversizedSources) {
-  EXPECT_FALSE(FingerprintFile(directory_ / "corpus", 1024).fingerprint);
-  EXPECT_FALSE(FingerprintFile(directory_ / "missing", 1024).fingerprint);
-  EXPECT_FALSE(FingerprintFile(directory_ / "renderer", 1).fingerprint);
-}
-
 TEST_F(ProvenanceTest, RunBindsActualBytesAndKeepsLabelsUnverified) {
   const auto run = CreateRunProvenance(options(), directory_ / "output");
   ASSERT_TRUE(run.run) << run.error;
@@ -126,14 +103,6 @@ TEST_F(ProvenanceTest, CorpusEscapesAndOutputInsideCorpusAreRejected) {
   EXPECT_FALSE(CreateRunProvenance(options(), directory_ / "output").run);
   std::filesystem::remove(directory_ / "corpus/resources/escape");
   EXPECT_FALSE(CreateRunProvenance(options(), directory_ / "corpus/output").run);
-}
-
-TEST_F(ProvenanceTest, SameLengthSourceMutationIsDetected) {
-  const auto snapshot = FingerprintFile(directory_ / "corpus/tests/a.svg", 1024);
-  ASSERT_TRUE(snapshot.fingerprint);
-  write("corpus/tests/a.svg", "<svg >");
-  EXPECT_THAT(VerifyFile(directory_ / "corpus/tests/a.svg", *snapshot.fingerprint),
-              HasSubstr("changed"));
 }
 
 TEST_F(ProvenanceTest, FinalVerificationIsCreateOnlyAndRecordsRejectedRun) {
