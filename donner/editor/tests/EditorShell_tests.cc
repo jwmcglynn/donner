@@ -1099,6 +1099,10 @@ public:
     return shell.renderCoordinator_.asyncRenderer().sampleThumbnailRenderStats().requested;
   }
 
+  static std::size_t LayerThumbnailCacheInspections(const EditorShell& shell) {
+    return shell.layersPanel_.thumbnailCacheInspectionCountForTesting();
+  }
+
   static std::size_t RenderedLayerThumbnailCount(const EditorShell& shell) {
     return shell.layerInspectorStatusForReadback().thumbnailRefreshStats.renderedCount;
   }
@@ -6055,6 +6059,57 @@ TEST(EditorShellTest, FormatBarSnapshotDoesNotWaitForDocumentWriter) {
   EXPECT_EQ(state.fontFamily, before.fontFamily);
   EXPECT_EQ(state.fontSize, before.fontSize);
   EXPECT_EQ(state.bold, before.bold);
+}
+
+TEST(EditorShellTest, AnimationPreviewDefersSidebarWorkUntilEditIsRestored) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  ASSERT_TRUE(window.valid());
+  EditorShell shell(window, OptionsWithSource(
+                                R"(<svg xmlns="http://www.w3.org/2000/svg" width="32" height="16">
+        <rect width="8" height="8" fill="red">
+          <animate attributeName="x" from="0" to="16" dur="2s"/>
+        </rect>
+      </svg>)"));
+  ASSERT_TRUE(shell.valid());
+  ASSERT_FALSE(EditorShellTestAccess::RendererBusy(shell));
+  auto& document = EditorShellTestAccess::App(shell).document();
+  const std::string source(document.document().source());
+  window.beginFrame();
+  EditorShellTestAccess::RenderSidebars(shell);
+  window.endFrame();
+  const auto inspections = EditorShellTestAccess::LayerThumbnailCacheInspections(shell);
+  ASSERT_GT(inspections, 0u);
+
+  EditorShellTestAccess::SetAnimationPreview(shell, true);
+  EditorShellTestAccess::AdvanceAnimationPreview(shell, 10.0);
+  ASSERT_TRUE(EditorShellTestAccess::IsAnimationPreview(shell));
+  ASSERT_FALSE(EditorShellTestAccess::AnimationResetPending(shell));
+  EditorShellTestAccess::SetSidebarSnapshotRefreshPending(shell, true);
+  for (const double time : {0.5, 1.0, 1.5}) {
+    ASSERT_TRUE(document.setAnimationTime(time));
+    window.beginFrame();
+    const auto wakeSerial = window.wakeEventLoopRequestSerialForTesting();
+    EditorShellTestAccess::RenderSidebars(shell);
+    EXPECT_EQ(window.wakeEventLoopRequestSerialForTesting(), wakeSerial);
+    EXPECT_EQ(EditorShellTestAccess::LayerThumbnailCacheInspections(shell), inspections);
+    EXPECT_TRUE(EditorShellTestAccess::SidebarSnapshotRefreshPending(shell));
+    window.endFrame();
+  }
+
+  EditorShellTestAccess::SetAnimationPreview(shell, false);
+  ASSERT_TRUE(EditorShellTestAccess::AnimationResetPending(shell));
+  window.beginFrame();
+  EditorShellTestAccess::RenderSidebars(shell);
+  EXPECT_EQ(EditorShellTestAccess::LayerThumbnailCacheInspections(shell), inspections);
+  window.endFrame();
+  EditorShellTestAccess::AdvanceAnimationPreview(shell, 11.0);
+  ASSERT_FALSE(EditorShellTestAccess::AnimationResetPending(shell));
+  EXPECT_DOUBLE_EQ(document.document().currentTime(), 0.0);
+  window.beginFrame();
+  EditorShellTestAccess::RenderSidebars(shell);
+  EXPECT_GT(EditorShellTestAccess::LayerThumbnailCacheInspections(shell), inspections);
+  window.endFrame();
+  EXPECT_EQ(document.document().source(), source);
 }
 
 TEST(EditorShellTest, AnimationPreviewDefersFontPreviewWorkUntilEditIsRestored) {
