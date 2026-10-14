@@ -291,6 +291,9 @@ struct LayerInspectorStatusReadback {
   ThumbnailRefreshStats thumbnailRefreshStats;
 };
 
+/// Whether the host scheduled this frame for animation or to service an asynchronous event.
+enum class EditorFrameKind { Scheduled, Event };
+
 /// Stateful advanced editor frontend shell. Owns all long-lived GUI/editor orchestration state.
 class EditorShell {
   friend class EditorShellTestAccess;
@@ -308,7 +311,7 @@ public:
   void prepareFrame();
 
   /// Process one editor UI frame using the host's active ImGui frame.
-  void runFrame();
+  void runFrame(EditorFrameKind frameKind = EditorFrameKind::Scheduled);
 
   /// Font catalog (embedded Google Fonts + macOS system fonts) backing document font resolution
   /// and the font picker (Design 0013 W2 consumes this).
@@ -599,7 +602,8 @@ private:
 #endif
   void renderCompactTopBar();
   void setAnimationPreview(bool enabled);
-  void advanceAnimationPreview(double nowSeconds);
+  void advanceAnimationPreview(double nowSeconds,
+                               EditorFrameKind frameKind = EditorFrameKind::Scheduled);
   void tickAnimationPreview(double nowSeconds);
   [[nodiscard]] std::optional<double> animationPreviewTimeAt(double nowSeconds) const;
   bool applyAnimationPreviewTime(double seconds);

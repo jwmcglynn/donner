@@ -1023,8 +1023,9 @@ public:
   static void SetAnimationPreview(EditorShell& shell, bool enabled) {
     shell.setAnimationPreview(enabled);
   }
-  static void AdvanceAnimationPreview(EditorShell& shell, double nowSeconds) {
-    shell.advanceAnimationPreview(nowSeconds);
+  static void AdvanceAnimationPreview(EditorShell& shell, double nowSeconds,
+                                      EditorFrameKind frameKind = EditorFrameKind::Scheduled) {
+    shell.advanceAnimationPreview(nowSeconds, frameKind);
   }
   static bool PreviewInputReady(const EditorShell& shell) {
     return shell.animationFramePresented() && !shell.animationResetPending_ &&
@@ -2412,6 +2413,41 @@ TEST(EditorShellTest, AnimationPreviewWaitsForPresentationAndRestartsWithoutEdit
   EXPECT_EQ(app.document().document().source(), source);
   EXPECT_EQ(app.isDirty(), dirty);
   EXPECT_EQ(app.canUndo(), canUndo);
+}
+
+TEST(EditorShellTest, AnimationPreviewEventFrameDoesNotStartAnotherOrdinaryTick) {
+  constexpr std::string_view source = R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="32" height="16">
+      <rect width="8" height="8"><animate attributeName="x" from="0" to="16" dur="2s"/></rect>
+    </svg>)svg";
+  gui::EditorWindow window = MakeHiddenWindow();
+  ASSERT_TRUE(window.valid());
+  EditorShell shell(window, OptionsWithSource(source));
+  auto& document = EditorShellTestAccess::App(shell).document();
+  EditorShellTestAccess::SetAnimationPreview(shell, true);
+  const tests::HangGuard guard;
+  while (!EditorShellTestAccess::PreviewInputReady(shell) && guard.active()) {
+    if (!EditorShellTestAccess::AnimationResetPending(shell)) {
+      EditorShellTestAccess::HoldAnimationAtStart(shell);
+    }
+    RunShellFrame(window, shell);
+  }
+  ASSERT_TRUE(EditorShellTestAccess::PreviewInputReady(shell));
+  ASSERT_DOUBLE_EQ(document.document().currentTime(), 0.0);
+  EditorShellTestAccess::SetPreviewStart(shell, 10.0);
+  const auto version = document.currentFrameVersion();
+  EditorShellTestAccess::AdvanceAnimationPreview(shell, 10.25, EditorFrameKind::Event);
+  EXPECT_DOUBLE_EQ(document.document().currentTime(), 0.0);
+  EXPECT_EQ(document.currentFrameVersion(), version);
+  EditorShellTestAccess::AdvanceAnimationPreview(shell, 10.25, EditorFrameKind::Scheduled);
+  EXPECT_DOUBLE_EQ(document.document().currentTime(), 0.25);
+  EXPECT_GT(document.currentFrameVersion(), version);
+
+  EditorShellTestAccess::SetAnimationPreview(shell, false);
+  EditorShellTestAccess::AdvanceAnimationPreview(shell, 11.0, EditorFrameKind::Event);
+  EXPECT_DOUBLE_EQ(document.document().currentTime(), 0.0);
+  EXPECT_FALSE(EditorShellTestAccess::AnimationResetPending(shell));
+  EXPECT_EQ(document.document().source(), source);
 }
 
 TEST(EditorShellTest, AnimationPreviewHeaderRespondsToMouse) {

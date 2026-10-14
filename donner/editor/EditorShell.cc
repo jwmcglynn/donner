@@ -6723,7 +6723,8 @@ void EditorShell::setAnimationPreview(bool enabled) {
   window_.wakeEventLoop();
 }
 
-void EditorShell::advanceAnimationPreview(double nowSeconds) {
+void EditorShell::advanceAnimationPreview(double nowSeconds,
+                                          [[maybe_unused]] EditorFrameKind frameKind) {
   if (!app_.hasDocument() ||
       app_.document().documentGeneration() != animationPreviewDocumentGeneration_) {
     animationPreview_ = false;
@@ -9100,7 +9101,7 @@ void EditorShell::handleFrameShortcuts([[maybe_unused]] bool compactUi) {
   }
 }
 
-void EditorShell::runFrame() {
+void EditorShell::runFrame(EditorFrameKind frameKind) {
   ZoneScopedN("EditorShell::runFrame");
   const ScopedHeapDelta uiFrameHeapDelta(MemoryStage::AppUiFrame);
   ++frameTelemetryFrame_;
@@ -9327,7 +9328,7 @@ void EditorShell::runFrame() {
   adoptCatalogFontResources();
   const double animationNow = AnimationPreviewClockSeconds();
   applyPreviewPointerInput(animationNow);
-  advanceAnimationPreview(animationNow);
+  advanceAnimationPreview(animationNow, frameKind);
   applyDeferredRenderRequest();
   advanceVisiblePreviews();
   penDragFlushedThisFrame_ = false;
