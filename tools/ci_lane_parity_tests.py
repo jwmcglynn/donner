@@ -121,8 +121,10 @@ INVOCATION_ALLOWLIST = {
                     "Test (Geode editor lane)")
        for kind, value in (("test-env-main-only", "DONNER_CI_MACOS_LANE=hosted"),
                            ("test-env-pr-only", "DONNER_CI_MACOS_LANE=self-hosted"))},
-    # A changed non-Bazel step is keyed by a digest of both rendered definitions, so any further
-    # edit to either step changes the digest and needs a new review.
+    # A changed non-Bazel step is keyed by a digest of both rendered definitions, so any edit to
+    # what the step runs (its action, inputs, script, shell, its own env and the variables it
+    # names) changes the digest and needs a new review. Overrides of the Xcode selection's test
+    # hooks from job env or earlier steps are rejected by //tools:macos_cache_key_parity_tests.
     # Both lanes select the pinned Xcode. The hosted image always ships it (--required). The
     # self-hosted runner may not, and then builds with its runner's default Xcode and its remote
     # cache off (--optional): that pull request run then tests a different Xcode than main.

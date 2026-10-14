@@ -21,9 +21,9 @@ on:
     types: [opened, synchronize, reopened]
   workflow_call:
     # The repository secrets a step here reads. A called workflow receives only the
-    # secrets its caller passes. Environment secrets do not reach jobs of a called
-    # workflow, so a base-change run builds without the BuildBuddy write key: its
-    # trusted-PR lanes, including macos-self-hosted, run without the remote cache.
+    # secrets its caller passes. A base-change run's jobs have not received the
+    # buildbuddy-write environment's key, so its trusted-PR lanes, including
+    # macos-self-hosted, build without the remote cache.
     secrets:
       BUILDBUDDY_API_KEY_READONLY:
         required: false

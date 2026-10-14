@@ -209,6 +209,25 @@ def _bazelrc_problems(bazelrc):
     return []
 
 
+# Test hooks of tools/ci_select_macos_xcode.sh, and the variable it sets itself. A workflow
+# that sets any of them (job or workflow env, or a GITHUB_ENV write) can silently replace the
+# pinned Xcode, so no macOS job and no workflow-level env may name them.
+XCODE_OVERRIDES = re.compile(r"\b(?:XCODEBUILD|XCODE_APPLICATIONS_DIR|DEVELOPER_DIR)\b")
+MACOS_JOBS = (HOSTED, SELF_HOSTED, "macos-browser")
+
+
+def _xcode_override_problems(workflow):
+    """Problems where a workflow could override the pinned Xcode selection."""
+    problems = []
+    if XCODE_OVERRIDES.search(workflow.split("\njobs:\n", 1)[0]):
+        problems.append("main.yml sets an Xcode selection override outside a job")
+    jobs = _jobs(workflow)
+    for name in MACOS_JOBS:
+        if name in jobs and XCODE_OVERRIDES.search(jobs[name]):
+            problems.append("%s sets an Xcode selection override" % name)
+    return problems
+
+
 def key_parity_problems(workflow, bazelrc):
     """Every way the two macOS lanes in main.yml could stop computing identical action keys."""
     jobs = _jobs(workflow)
@@ -217,7 +236,7 @@ def key_parity_problems(workflow, bazelrc):
     self_flags = _job_env(self_hosted, "BAZEL_MACOS_BUILD_FLAGS")
     if hosted_flags is None or self_flags is None:
         return ["a macOS lane does not declare BAZEL_MACOS_BUILD_FLAGS"]
-    problems = _flag_problems(hosted_flags, self_flags)
+    problems = _flag_problems(hosted_flags, self_flags) + _xcode_override_problems(workflow)
     by_step = {}
     for name, job, mode in ((HOSTED, hosted, "--required"),
                             (SELF_HOSTED, self_hosted, "--optional")):
@@ -309,6 +328,16 @@ class MacosCacheKeyParityTest(unittest.TestCase):
                 'BAZEL_MACOS_TEST_FLAGS: "--test_env=HOME',
                 'BAZEL_MACOS_TEST_FLAGS: "--copt=-O0 --test_env=HOME', 1),
                 self.bazelrc, "not test-only"),
+            "self-hosted job env overrides xcodebuild": (
+                before + hosted_flags + "      XCODEBUILD: /usr/bin/true\n" + after,
+                self.bazelrc, "macos-self-hosted sets an Xcode selection override"),
+            "an earlier step redirects the Xcode lookup": (
+                before + hosted_flags + after.replace(
+                    "      - name: Checkout\n",
+                    "      - name: Redirect\n"
+                    "        run: echo XCODE_APPLICATIONS_DIR=/x >> \"$GITHUB_ENV\"\n\n"
+                    "      - name: Checkout\n", 1),
+                self.bazelrc, "macos-self-hosted sets an Xcode selection override"),
             "a lane shares its test results": (self.workflow.replace(
                 LANE_TEST_ENV["macos-self-hosted"], "--test_env=HOME", 1),
                 self.bazelrc, "does not name its lane"),

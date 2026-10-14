@@ -223,9 +223,10 @@ lane shares it too: `macos-self-hosted`, which runs only for trusted maintainer 
 the hosted and self-hosted macOS lanes reuse each other's build results. It is a remote cache only:
 no remote execution and no build-event upload. It never affects local builds or the self-hosted
 Linux lane, which never calls the action. Without the secrets it is off and every lane builds
-exactly as it does without a cache. A pull request's base-change run (`pr_base_change.yml`,
-which calls `main.yml`) does not receive the write key, because environment secrets do not reach
-a called workflow's jobs, so its trusted-PR lanes run without the remote cache.
+exactly as it does without a cache. A pull request's base-change run (`pr_base_change.yml`, which
+calls `main.yml` as a reusable workflow) has not received the `buildbuddy-write` environment's
+key, so its trusted-PR lanes, including `macos-self-hosted`, build without the remote cache;
+Renovate base-change runs still get the forwarded read-only key.
 
 **How it works.** Before its first Bazel command each covered job runs the
 `.github/actions/buildbuddy-cache` composite action with at most one key. The action writes a
