@@ -4,6 +4,7 @@
 
 #include <set>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "donner/editor/EditorMenuModel.h"
@@ -49,12 +50,18 @@ TEST(EditorMenuModelTest, EverySemanticCommandAppearsOnceWithDistinctAccelerator
     CollectCommands(menu.items, &commands);
   }
   std::set<int> commandIds;
-  std::set<std::string_view> shortcuts;
   for (const EditorMenuNode* node : commands) {
     EXPECT_FALSE(node->label.empty());
     EXPECT_TRUE(commandIds.insert(static_cast<int>(node->command)).second) << node->label;
-    if (!node->shortcut.empty()) {
-      EXPECT_TRUE(shortcuts.insert(node->shortcut).second) << node->shortcut;
+  }
+  for (const bool sourceFocused : {false, true}) {
+    MenuBarState state;
+    state.sourcePaneFocused = sourceFocused;
+    std::set<std::string_view> shortcuts;
+    for (const EditorMenuNode* node : commands) {
+      if (PresentEditorMenuItem(*node, state).shortcutEnabled && !node->shortcut.empty()) {
+        EXPECT_TRUE(shortcuts.insert(node->shortcut).second) << node->shortcut;
+      }
     }
   }
   EXPECT_EQ(commandIds.size(), static_cast<std::size_t>(MenuBarCommand::ResetLayout) + 1u);
@@ -64,6 +71,58 @@ TEST(EditorMenuModelTest, EverySemanticCommandAppearsOnceWithDistinctAccelerator
   ASSERT_NE(sourceFocus, nullptr);
   EXPECT_EQ(saveAs->shortcut, "Cmd+Shift+S");
   EXPECT_EQ(sourceFocus->shortcut, "Cmd+Enter");
+}
+
+TEST(EditorMenuModelTest, SourceFontShortcutsFollowFocusOnBothMenuSurfaces) {
+  const std::pair<MenuBarCommand, MenuBarCommand> commands[] = {
+      {MenuBarCommand::ZoomIn, MenuBarCommand::IncreaseSourceFontSize},
+      {MenuBarCommand::ZoomOut, MenuBarCommand::DecreaseSourceFontSize},
+      {MenuBarCommand::ActualSize, MenuBarCommand::ResetSourceFontSize},
+  };
+  for (const auto& [canvasCommand, sourceCommand] : commands) {
+    const EditorMenuNode* canvas = FindCommand(canvasCommand);
+    const EditorMenuNode* source = FindCommand(sourceCommand);
+    ASSERT_NE(canvas, nullptr);
+    ASSERT_NE(source, nullptr);
+    EXPECT_EQ(canvas->shortcut, source->shortcut);
+    for (const bool sourceFocused : {false, true}) {
+      MenuBarState state;
+      state.sourcePaneFocused = sourceFocused;
+      for (const EditorMenuSurface surface :
+           {EditorMenuSurface::ImGui, EditorMenuSurface::Native}) {
+        EXPECT_EQ(PresentEditorMenuItem(*canvas, state, surface).shortcutEnabled, !sourceFocused);
+        EXPECT_EQ(PresentEditorMenuItem(*source, state, surface).shortcutEnabled, sourceFocused);
+      }
+      EXPECT_EQ(NativeMenuActivationAllowed(*canvas, state, true), !sourceFocused);
+      EXPECT_EQ(NativeMenuActivationAllowed(*source, state, true), sourceFocused);
+      EXPECT_TRUE(NativeMenuActivationAllowed(*canvas, state, false));
+      EXPECT_TRUE(NativeMenuActivationAllowed(*source, state, false));
+      state.inspectorTextInputFocused = true;
+      EXPECT_FALSE(NativeMenuActivationAllowed(*source, state, true));
+    }
+  }
+}
+
+TEST(EditorMenuModelTest, SourceFontCommandsProduceOnlyTheirRequestedAction) {
+  MenuBarState state;
+  MenuBarActions actions;
+  ApplyMenuBarCommand(true, MenuBarCommand::IncreaseSourceFontSize, state, &actions);
+  EXPECT_TRUE(actions.increaseSourceFontSize);
+  EXPECT_FALSE(actions.decreaseSourceFontSize);
+  EXPECT_FALSE(actions.resetSourceFontSize);
+  EXPECT_FALSE(actions.zoomIn);
+  actions = {};
+  ApplyMenuBarCommand(true, MenuBarCommand::DecreaseSourceFontSize, state, &actions);
+  EXPECT_TRUE(actions.decreaseSourceFontSize);
+  EXPECT_FALSE(actions.increaseSourceFontSize);
+  EXPECT_FALSE(actions.resetSourceFontSize);
+  EXPECT_FALSE(actions.zoomOut);
+  actions = {};
+  ApplyMenuBarCommand(true, MenuBarCommand::ResetSourceFontSize, state, &actions);
+  EXPECT_TRUE(actions.resetSourceFontSize);
+  EXPECT_FALSE(actions.increaseSourceFontSize);
+  EXPECT_FALSE(actions.decreaseSourceFontSize);
+  EXPECT_FALSE(actions.actualSize);
 }
 
 TEST(EditorMenuModelTest, EnabledAndCheckStateFollowFocusAndViewState) {

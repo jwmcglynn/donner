@@ -8,6 +8,8 @@ import sys
 import tempfile
 import unittest
 
+from python.runfiles import runfiles
+
 from tools import bcr_dependency_closure as closure
 
 
@@ -253,6 +255,22 @@ class CommandLineTest(unittest.TestCase):
 
         self.assertNotEqual(result.returncode, 0, result.stdout)
         self.assertIn("no cc_toolchain rule", result.stderr)
+
+
+class RepositoryModuleTest(unittest.TestCase):
+    """Reads the repository's own MODULE.bazel as the BCR consumer job does."""
+
+    def test_repository_module_lists_its_development_only_repositories(self) -> None:
+        path = runfiles.Create().Rlocation("donner/MODULE.bazel")
+        self.assertTrue(path and Path(path).is_file(), "//:MODULE.bazel is not in this test's data")
+
+        dev = closure.dev_repository_names(Path(path).read_text(encoding="utf-8"))
+
+        expected = {"com_google_gtest", "llvm_toolchain", "llvm_toolchain_linux_aarch64",
+                    "llvm_toolchain_linux_x86_64", "sysroot_linux_aarch64", "sysroot_linux_x86_64"}
+        self.assertEqual(expected - dev, set(), "development-only repositories not found")
+        self.assertEqual(dev & {"entt", "rules_cc", "stb", "tiny-skia-cpp", "zlib"}, set(),
+                         "production repositories classified as development-only")
 
 
 if __name__ == "__main__":
