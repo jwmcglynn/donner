@@ -151,6 +151,44 @@ TEST(RendererAnimationStyleBase, AnimatedParentKeepsRelativeSpanFontsAndBaseline
       "animated-parent-relative-span-font", editor::tests::PixelmatchIdentityParams());
 }
 
+TEST(RendererAnimationStyleBase, ShadowBaselineKeywordsDoNotLeakBetweenInstances) {
+  auto document = instantiateSubtree(
+      "<style>.sub .shift {baseline-shift:sub;}</style><defs><text id='label' y='30' "
+      "font-size='20'><tspan class='shift'>H</tspan></text></defs>"
+      "<use href='#label' class='sub'/><use href='#label' x='40'/>"
+      "<use href='#label' class='sub' x='80'/>",
+      parser::SVGParser::Options(), Vector2i(120, 48));
+  auto expected = instantiateSubtree(
+      "<text y='30' font-size='20'><tspan baseline-shift='sub'>H</tspan></text>"
+      "<text x='40' y='30' font-size='20'>H</text>"
+      "<text x='80' y='30' font-size='20'><tspan baseline-shift='sub'>H</tspan></text>",
+      parser::SVGParser::Options(), Vector2i(120, 48));
+  editor::tests::CompareBitmapToBitmap(
+      RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(expected),
+      "shadow-baseline-keyword-order", editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(RendererAnimationStyleBase, MissingSpanStyleKeepsTextRootBaselineFallback) {
+  auto document = instantiateSubtree(
+      "<text id='root' y='30' font-size='20' baseline-shift='super'>"
+      "<tspan id='span'>H</tspan></text>",
+      parser::SVGParser::Options(), Vector2i(48, 48));
+  (void)RenderDocumentWithActiveBackend(document);
+  auto root = document.querySelector("#root")->entityHandle();
+  auto span = document.querySelector("#span")->entityHandle();
+  document.registry().remove<components::ComputedStyleComponent>(span.entity());
+  auto& text = root.get<components::ComputedTextComponent>();
+  document.registry().ctx().get<TextEngine>().resolvePerSpanLayoutStyles(root, text);
+  using Span = components::ComputedTextComponent::TextSpan;
+  ASSERT_THAT(text.spans, testing::Contains(testing::Field(&Span::sourceEntity, span.entity())));
+  const auto found = std::find_if(text.spans.begin(), text.spans.end(), [&](const Span& value) {
+    return value.sourceEntity == span.entity();
+  });
+  EXPECT_THAT(found->baselineShift, testing::Eq(Lengthd(0)));
+  EXPECT_THAT(found->baselineShiftKeyword, testing::Eq(Span::BaselineShiftKeyword::Length));
+  EXPECT_THAT(found->ancestorBaselineShifts, testing::IsEmpty());
+}
+
 TEST(RendererAnimationStyleBase, FontOverrideKeepsTypedPriority) {
   auto document = instantiateSubtree(
       "<text id='label' y='30'>H<animate attributeName='font-size' from='12' to='24' "
