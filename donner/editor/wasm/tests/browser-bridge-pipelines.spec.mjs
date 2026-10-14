@@ -358,6 +358,17 @@ test("an asynchronous compile the browser refuses is reported on the console", a
   assert.deepEqual(bridge.consoleErrors, ["[Geode/browser] Pipeline compile refused: refused"]);
 });
 
+test("a compile refused after its device is let go reports nothing", async () => {
+  const stub = createTimelineDevice({ refuseAsync: true });
+  const bridge = await openOver(stub, [kFirst]);
+  buildPipelines(bridge, kFirst, [[kPipelineA, "fsA"]]);
+  await drain();
+  bridge.entryPoints.donner_gpu_release_device(kFirst);
+  stub.finishCompile("fsA");
+  await drain();
+  assert.deepEqual(bridge.consoleErrors, []);
+});
+
 // Representative user agents in each browser's format.
 const kSafariMac =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) "

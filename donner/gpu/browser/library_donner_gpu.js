@@ -866,8 +866,9 @@ var LibraryDonnerGpu = {
         }, function(error) {
           // The pipeline is created synchronously at first use instead, where the browser reports
           // the refusal as an uncaptured error. A pipeline never used would report nothing, so
-          // the refusal is logged here as well.
-          if (DonnerGpu.lost) {
+          // the refusal is logged here as well, unless the device has been let go or lost since:
+          // a refusal from a retired device describes nothing the runtime still uses.
+          if (DonnerGpu.pipelines !== cache || DonnerGpu.lost) {
             return;
           }
           console.error(
