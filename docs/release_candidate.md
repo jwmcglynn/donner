@@ -219,7 +219,8 @@ regenerates or repackages anything, and neither edits the record.
   downloads the record's `bcr-entry` artifact by ID and verifies it as above. On the current
   registry `main` it stages the entry's `MODULE.bazel`, `presubmit.yml` and `source.json` byte
   for byte. It derives `metadata.json` from that registry: its current `versions` plus this
-  version, its current `yanked_versions`, and the template's other fields. A version merged or
+  version in ascending Bazel version order, as BCR presubmit requires, its current
+  `yanked_versions`, and the template's other fields. A version merged or
   yanked after preflight is carried forward. Preflight's copy must agree with the derived file
   on every other field, and the registry's own project and maintainer fields must match the
   template. The fork branch is prepared from those files; no upstream pull request is opened.

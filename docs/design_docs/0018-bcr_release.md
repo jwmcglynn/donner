@@ -171,10 +171,10 @@ notice, and admission rejection paths; `//tools:bcr_dependency_closure_tests` co
    other fields from `.bcr/metadata.template.json`. An earlier version merged or yanked after
    preflight is therefore carried forward. Preflight's copy must agree with the derived file on
    every field but that history, and the registry's own project and maintainer fields must still
-   match the template. The derived `versions` list is in append order: the new version always
-   goes last, as `verify_metadata_history` requires, while `publish-to-bcr` writes a sorted list.
-   A patch release on an older line, such as `0.8.1` after `0.9.0`, is therefore listed after the
-   newer version; check the proposed `metadata.json` diff with care before such a submission.
+   match the template. The derived `versions` list is in ascending Bazel version order, which BCR
+   presubmit requires, so a patch release on an older line, such as `0.8.1` after `0.9.0`, is
+   listed before the newer version. `verify_metadata_history` requires exactly the registry's
+   history plus this version in that order.
    The jobs then check source integrity, module files, metadata and history,
    and retain and check a bounded Git bundle. The protected push job runs no external actions; it
    downloads that artifact with the runner's GitHub CLI and rechecks the digest, base, commit and

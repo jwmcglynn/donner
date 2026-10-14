@@ -359,6 +359,17 @@ class RegistryVersionOrderTest(unittest.TestCase):
                 derived = json.loads(source.derive_metadata(upstream, self.TEMPLATE, version))
                 self.assertEqual(derived["versions"], expected)
 
+    def test_key_follows_bazel_version_comparison(self):
+        ordered = ["0.8.0", "0.8.1", "0.9.0", "0.10.0", "1.0.0-rc.2", "1.0.0-rc.10", "1.0.0-rc1",
+                   "1.0.0", "1.0.0.1", "1.0.0.bcr.1", "1.0.1", "v1.0.0"]
+        self.assertEqual(sorted(reversed(ordered), key=source.registry_version_key), ordered)
+        self.assertEqual(source.registry_version_key("1.0.0+build.5"),
+                         source.registry_version_key("1.0.0"))
+        for version in ("", "1..0", ".1", "1.0.0-", "1.0.0-rc..1", "1.0 0", "1.0.0\n"):
+            with self.subTest(version=version), \
+                    self.assertRaisesRegex(ValueError, "invalid version list"):
+                source.registry_version_key(version)
+
 
 if __name__ == "__main__":
     unittest.main()

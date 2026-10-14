@@ -202,8 +202,10 @@ def verify_metadata_history(registry: Path, metadata_file: Path, versions: list[
     if old_metadata:
         previous = json.loads(subprocess.check_output(
             ["git", "-C", str(registry), "show", f"HEAD:{metadata_file.as_posix()}"]))
-        if versions != [*previous["versions"], version] or yanked != previous["yanked_versions"]:
-            raise ValueError("generated registry metadata changes existing versions or yanks")
+        if (versions != bcr_source.add_registry_version(previous["versions"], version)
+                or yanked != previous["yanked_versions"]):
+            raise ValueError("generated registry metadata changes existing versions, their order "
+                             "or yanks")
     elif versions != [version] or yanked != template.get("yanked_versions", {}):
         raise ValueError("generated registry metadata has unexpected initial history")
 
