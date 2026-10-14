@@ -106,7 +106,11 @@ directory-form output and the empty `xml:` suffix cannot certify a run. Choose a
 incomplete reports produce rejected verification evidence with `xml_report_error` and a nonzero exit.
 The check recognizes the complete GoogleTest XML envelope and fingerprints the same bytes; it trusts
 GoogleTest as the producer and is not a general XML validator or an adversarial filesystem sandbox.
-GoogleTest XML describes its final iteration; execution counts include all repeats. Source checks
+GoogleTest XML describes its final iteration; execution counts include all repeats.
+Repeated runs keep each case's images and metrics beneath `iteration-N/case` and its renderer
+output beneath `iteration-N/process`, with the same one-based `iteration` in both JSON records.
+Single runs retain the ordinary `case` and `process` layout and record a null iteration. Earlier
+failed iterations remain in their original directories and keep the aggregate run rejected. Source checks
 detect boundary changes, not adversarial mutate-and-restore attacks; use immutable inputs for hostile
 environments.
 

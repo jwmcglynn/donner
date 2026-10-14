@@ -5,6 +5,7 @@
 #include <filesystem>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -27,6 +28,8 @@ struct StaticCase {
   std::filesystem::path svgPath;
   std::filesystem::path expectedPath;
   std::shared_ptr<const RunProvenance> provenance = nullptr;
+  std::optional<size_t>
+      iteration;  //!< One-based GoogleTest repeat ordinal, absent for a single run.
 };
 
 /// Discovery is all-or-error; malformed corpora never produce partial successful runs.
@@ -52,6 +55,12 @@ struct CaseResult {
   std::optional<int> mismatchedPixels;
   std::filesystem::path artifactDirectory;
 };
+
+/// Derive the shared case/process parent directory without filesystem access.
+/// @param root Artifact or process work root.
+/// @param test Case with a validated ID and optional positive repeat ordinal.
+std::filesystem::path CaseOutputDirectory(const std::filesystem::path& root,
+                                          const StaticCase& test);
 
 /// Render and compare once, recording JSON metrics and available PNGs in a fresh case directory.
 /// Existing case directories fail closed to preserve earlier evidence. No golden update path

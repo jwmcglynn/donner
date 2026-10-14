@@ -47,13 +47,6 @@ ImageView View(const Image& image) {
   return {image.width, image.height, image.strideInPixels, image.data};
 }
 
-std::filesystem::path ArtifactPath(const std::filesystem::path& root, std::string_view id) {
-  std::filesystem::path result = root;
-  for (size_t position = 0; position < id.size(); position += 120) {
-    result /= id.substr(position, 120);
-  }
-  return result / "case";
-}
 std::string VerifyCaseSources(const StaticCase& test) {
   if (!test.provenance) {
     return {};
@@ -83,7 +76,7 @@ void AddProvenance(nlohmann::json& metrics, const StaticCase& test) {
   const auto& run = *test.provenance;
   metrics["run_id"] = run.runId;
   metrics["run_record"] = run.recordPath.generic_string();
-  auto process = ArtifactPath(run.workRoot, test.id).parent_path() / "process" / "process.json";
+  auto process = CaseOutputDirectory(run.workRoot, test) / "process" / "process.json";
   metrics["process_record"] = process.generic_string();
   for (const auto& [name, path] : {std::pair("input_fingerprint", test.svgPath),
                                    std::pair("reference_fingerprint", test.expectedPath)}) {
@@ -154,6 +147,9 @@ std::string EnumerateCorpus(const CorpusRoot& corpus, const std::filesystem::pat
 }
 
 std::string CheckCaseInputs(const StaticCase& test) {
+  if (test.iteration && *test.iteration == 0) {
+    return "case iteration must be positive";
+  }
   std::string issue = CheckFile(test.root, test.svgPath, kMaxSvgBytes);
   if (issue.empty()) {
     issue = CheckFile(test.root, test.expectedPath, 32u * 1024u * 1024u);
@@ -180,7 +176,7 @@ std::string PrepareArtifacts(const StaticCase& test, const std::filesystem::path
   if (error) {
     return "cannot create artifact root: " + error.message();
   }
-  const auto caseOutput = ArtifactPath(outputRoot, test.id);
+  const auto caseOutput = CaseOutputDirectory(outputRoot, test) / "case";
   std::filesystem::path componentPath = outputRoot;
   for (const auto& component : caseOutput.lexically_relative(outputRoot)) {
     componentPath /= component;
@@ -252,6 +248,7 @@ void WriteMetrics(const StaticCase& test, const ComparisonOptions& options,
       {"threshold", options.threshold},
       {"include_aa", options.includeAntiAliasing},
       {"max_mismatched_pixels", options.maxMismatchedPixels}};
+  metrics["iteration"] = test.iteration ? nlohmann::json(*test.iteration) : nlohmann::json(nullptr);
   AddProvenance(metrics, test);
   metrics["mismatched_pixels"] =
       result.mismatchedPixels ? nlohmann::json(*result.mismatchedPixels) : nlohmann::json(nullptr);
@@ -270,6 +267,18 @@ void WriteMetrics(const StaticCase& test, const ComparisonOptions& options,
   }
 }
 }  // namespace
+
+std::filesystem::path CaseOutputDirectory(const std::filesystem::path& root,
+                                          const StaticCase& test) {
+  std::filesystem::path result = root;
+  for (size_t position = 0; position < test.id.size(); position += 120) {
+    result /= test.id.substr(position, 120);
+  }
+  if (test.iteration) {
+    result /= "iteration-" + std::to_string(*test.iteration);
+  }
+  return result;
+}
 
 DiscoveryResult DiscoverCases(const std::vector<CorpusRoot>& roots) {
   DiscoveryResult result;

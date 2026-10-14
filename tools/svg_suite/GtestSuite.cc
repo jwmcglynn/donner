@@ -11,6 +11,14 @@ namespace donner::svg_suite {
 namespace {
 size_t completedInvocations = 0;
 std::set<std::string> completedCases;
+size_t currentIteration = 0;
+
+class IterationListener : public testing::EmptyTestEventListener {
+public:
+  void OnTestIterationStart(const testing::UnitTest&, int iteration) override {
+    currentIteration = static_cast<size_t>(iteration) + 1;
+  }
+};
 
 class ExecutionListener : public testing::EmptyTestEventListener {
 public:
@@ -75,6 +83,10 @@ public:
         options_(options) {}
 
   void TestBody() override {
+    if (GTEST_FLAG_GET(repeat) != 1) {
+      ASSERT_GT(currentIteration, 0u);
+      test_.iteration = currentIteration;
+    }
     const CaseResult result = RunCase(test_, renderer_, artifactRoot_, options_);
     ++completedInvocations;
     completedCases.insert(test_.id);
@@ -102,6 +114,11 @@ std::string RegisterTests(const DiscoveryResult& discovery, Renderer renderer,
   if (discovery.cases.empty() || !renderer) {
     return "cannot register empty corpus or missing renderer";
   }
+  static const bool listenerInstalled = [] {
+    testing::UnitTest::GetInstance()->listeners().Append(new IterationListener);
+    return true;
+  }();
+  (void)listenerInstalled;
   for (const StaticCase& test : discovery.cases) {
     testing::RegisterTest("SvgSuite", test.id.c_str(), nullptr, test.svgPath.string().c_str(),
                           __FILE__, __LINE__,

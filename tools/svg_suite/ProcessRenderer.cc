@@ -264,6 +264,9 @@ ChildResult runChild(std::vector<std::string> arguments, const std::filesystem::
 }
 
 std::string validateProcess(const ProcessRendererOptions& options, const StaticCase& test) {
+  if (test.iteration && *test.iteration == 0) {
+    return "case iteration must be positive";
+  }
   if (options.timeout.count() <= 0 || options.timeout.count() > 10000) {
     return "renderer timeout must be in (0, 10000] milliseconds";
   }
@@ -305,11 +308,7 @@ ProcessPaths prepareProcessPaths(const ProcessRendererOptions& options, const St
   if (error) {
     return {{}, {}, "cannot resolve renderer work root"};
   }
-  std::filesystem::path directory = workRoot;
-  for (size_t offset = 0; offset < test.id.size(); offset += 120) {
-    directory /= test.id.substr(offset, 120);
-  }
-  directory /= "process";
+  const auto directory = CaseOutputDirectory(workRoot, test) / "process";
   if (std::filesystem::exists(directory, error) || error ||
       !std::filesystem::create_directories(directory, error) || error) {
     return {{}, {}, "renderer work directory exists or cannot be created"};
@@ -339,7 +338,7 @@ std::vector<std::string> processArguments(const ProcessRendererOptions& options,
   return arguments;
 }
 
-std::string preserveProcessEvidence(const ProcessRendererOptions& options,
+std::string preserveProcessEvidence(const ProcessRendererOptions& options, const StaticCase& test,
                                     const ProcessPaths& paths,
                                     const std::vector<std::string>& arguments,
                                     const ChildResult& outcome) {
@@ -352,6 +351,8 @@ std::string preserveProcessEvidence(const ProcessRendererOptions& options,
 #else
   metadata["memory_enforcement"] = "unavailable_trusted_inputs";
 #endif
+  metadata["iteration"] =
+      test.iteration ? nlohmann::json(*test.iteration) : nlohmann::json(nullptr);
   metadata["succeeded"] = outcome.success;
   std::ofstream record(paths.directory / "process.json");
   record << metadata.dump(2) << '\n';
@@ -378,7 +379,7 @@ ImageResult renderProcess(const ProcessRendererOptions& options, const StaticCas
   const auto arguments = processArguments(options, test, paths, width, height);
   const auto outcome =
       runChild(arguments, paths.directory, options.timeout, options.memoryLimitBytes);
-  const auto evidenceError = preserveProcessEvidence(options, paths, arguments, outcome);
+  const auto evidenceError = preserveProcessEvidence(options, test, paths, arguments, outcome);
   if (!evidenceError.empty()) {
     return {std::nullopt, evidenceError};
   }

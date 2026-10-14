@@ -18,7 +18,8 @@ of those inputs and references.
 3. Read the fixture and cited specification. Inspect expected/actual/diff images at their original
    dimensions and use the recorded pixelmatch count, never a count of colored pixels in a diff PNG.
    The count identifies a difference; it does not identify a cause.
-4. Rerun the exact case into a fresh artifact directory. Preserve the original failure. Reduce the
+4. Rerun the exact case into a fresh artifact directory. For GoogleTest repeats, inspect every
+   `iteration-N` directory; the final-iteration XML alone cannot establish that all repeats passed. Preserve the original failure. Reduce the
    input if necessary, establish a failing regression, fix the authorized underlying defect, and run
    the affected cases and regression controls. Give every case a measured outcome and evidence link.
 5. Classify evidence as engine defect, unsupported feature, environment/resource failure, harness

@@ -91,6 +91,9 @@ int RunFixture(int argc, char** argv) {
   if (!issue.empty()) {
     return 3;
   }
+  if (fixtureMode == "--fixture-direct-run") {
+    return RUN_ALL_TESTS();
+  }
   RunExecutionSummary execution;
   const int result = RunSelectedTests(&execution);
   if (fixtureMode == "--fixture-remove-xml") {
@@ -222,6 +225,22 @@ TEST_F(GtestSuiteTest, RepeatsDoNotCountAsDistinctCompletedCases) {
   EXPECT_THAT(record, testing::HasSubstr("\"completed_invocations\": 2"));
   EXPECT_THAT(record, testing::HasSubstr("\"requested_repeat_count\": 2"));
   EXPECT_THAT(record, testing::HasSubstr("\"corpus_complete\": false"));
+}
+
+TEST_F(GtestSuiteTest, DirectGoogleTestRunnerRetainsEveryIteration) {
+  EXPECT_EQ(run({"--fixture-direct-run", "--gtest_filter=SvgSuite.*_66697273742e737667",
+                 "--gtest_repeat=2"}),
+            0);
+  EXPECT_THAT(reports(root_ / "artifacts", "metrics.json"), testing::SizeIs(2));
+}
+
+TEST_F(GtestSuiteTest, RepeatedFullCorpusKeepsUniqueCounts) {
+  EXPECT_EQ(run({"--fixture-process", "--gtest_filter=SvgSuite.*", "--gtest_repeat=2"}), 0);
+  EXPECT_THAT(reports(root_ / "artifacts", "metrics.json"), testing::SizeIs(4));
+  EXPECT_THAT(reports(root_ / "work", "process.json"), testing::SizeIs(4));
+  EXPECT_THAT(verification(), testing::HasSubstr("\"completed_cases\": 2"));
+  EXPECT_THAT(verification(), testing::HasSubstr("\"completed_invocations\": 4"));
+  EXPECT_THAT(verification(), testing::HasSubstr("\"complete_corpus_accepted\": true"));
 }
 
 TEST_F(GtestSuiteTest, RepeatedProcessesRetainEveryInvocation) {
