@@ -360,6 +360,7 @@ async function readLayerPreviewColorStats(page: Page): Promise<CanvasColorStats>
 }
 
 async function openEditor(page: Page, options: OpenEditorOptions = {}): Promise<string[]> {
+  armFailureCanvasEvidence(page, test.info());
   const baseUrl = process.env.DONNER_WASM_BASE_URL || "http://127.0.0.1:8000";
   const url = new URL(baseUrl);
   // Readback diagnostics are intentionally opt-in: even asynchronous readback
@@ -1339,8 +1340,16 @@ async function readCarouselGpuTimeline(page: Page) {
         return [...fields.slice(0, 5), toPage(fields[5] as number), toPage(fields[6] as number)];
       case "m":
         return [...fields.slice(0, 3), toPage(fields[3] as number), toPage(fields[4] as number)];
+      case "p":
+        return [
+          fields[0],
+          fields[1],
+          toPage(fields[2] as number),
+          toPage(fields[3] as number),
+          fields[4],
+        ];
       default:
-        return [...fields.slice(0, 2), toPage(fields[2] as number)];
+        return [...fields.slice(0, 2), toPage(fields[2] as number), ...fields.slice(3)];
     }
   }) ?? null;
   return { presentation: pageState.presentation, phases: pageState.phases, gpu: gpuOnPageClock };
