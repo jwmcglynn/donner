@@ -266,6 +266,7 @@ py_test(
         "ci_select_macos_xcode.sh",
         "//:.bazelrc",
         "//:github_action_definitions",
+        "//build_defs:macos_app_bundle.bzl",
     ],
     deps = ["@rules_python//python/runfiles"],
 )

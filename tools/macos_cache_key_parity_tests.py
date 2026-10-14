@@ -228,6 +228,18 @@ def _xcode_override_problems(workflow):
     return problems
 
 
+# A Starlark action that runs a host tool by absolute path depends on the host OS, which is not in
+# its action key or in the macOS cache partition, so its output must stay out of the remote cache.
+HOST_TOOL = re.compile(r"(?<![!\w])/usr/bin/(?!env\b)[A-Za-z]")
+
+
+def host_tool_problems(files):
+    """Starlark files that run a host tool by path without keeping the action out of the cache."""
+    return ["%s runs a host tool without no-remote-cache" % path
+            for path, text in sorted(files.items())
+            if HOST_TOOL.search(text) and '"no-remote-cache"' not in text]
+
+
 def key_parity_problems(workflow, bazelrc):
     """Every way the two macOS lanes in main.yml could stop computing identical action keys."""
     jobs = _jobs(workflow)
@@ -368,6 +380,17 @@ class MacosCacheKeyParityTest(unittest.TestCase):
                 self.assertNotEqual((workflow, bazelrc), (self.workflow, self.bazelrc))
                 problems = key_parity_problems(workflow, bazelrc)
                 self.assertTrue(any(expected in problem for problem in problems), problems)
+
+    def test_host_tool_actions_stay_out_of_the_remote_cache(self):
+        bundle = _read("build_defs/macos_app_bundle.bzl")
+        self.assertEqual([], host_tool_problems({"build_defs/macos_app_bundle.bzl": bundle}))
+        self.assertIn("/usr/bin/codesign", bundle)
+        unguarded = bundle.replace('execution_requirements = {"no-remote-cache": "1"},', "")
+        self.assertNotEqual(unguarded, bundle)
+        self.assertEqual(["build_defs/macos_app_bundle.bzl runs a host tool without "
+                          "no-remote-cache"],
+                         host_tool_problems({"build_defs/macos_app_bundle.bzl": unguarded}))
+        self.assertEqual([], host_tool_problems({"x.bzl": "#!/usr/bin/env bash\n"}))
 
     def test_github_hosted_jobs_never_reach_the_private_backend(self):
         files = _workflow_files()
