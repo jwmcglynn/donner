@@ -307,6 +307,14 @@ struct RenderResult {
   struct WorkerTimingBreakdown {
     /// Time from UI-thread request submission until the worker dequeues the request.
     double queueWaitMs = 0.0;
+    /// Browser yield duration in the maintenance pass preceding this render.
+    double idleYieldMs = 0.0;
+    /// Optional maintenance callback duration preceding this render.
+    double idleCallbackMs = 0.0;
+    /// Time acquiring the worker-state lock after idle maintenance.
+    double idleLockMs = 0.0;
+    /// Condition-variable wait duration preceding this render, including time before submission.
+    double idleWaitMs = 0.0;
     /// Worker-thread preflight between dequeue and the measured render iteration.
     double dequeueToStartMs = 0.0;
     /// Time before `CompositorController::renderFrame`, including compositor selection setup.
@@ -990,7 +998,10 @@ private:
   void waitForReplayDocumentAccess(std::unique_lock<std::mutex>& lock);
   /// Poll an idle GPU context, then wait for work with a short completion timer only while needed.
   /// Returns with \p lock held so the worker can consume its state without a race.
-  bool waitForRenderOrIdleMaintenance(std::unique_lock<std::mutex>& lock);
+  /// @param lock Deferred worker-state lock. @param timing Receives the preceding idle-pass
+  /// timings.
+  bool waitForRenderOrIdleMaintenance(std::unique_lock<std::mutex>& lock,
+                                      RenderResult::WorkerTimingBreakdown& timing);
   /// Complete a cancellation dequeued before rendering and notify its waiting owner.
   bool finishCancelledBeforeRender(std::unique_lock<std::mutex>& lock);
   bool prepareSampleThumbnailRendererForRequest(std::unique_ptr<svg::RendererInterface>& renderer,

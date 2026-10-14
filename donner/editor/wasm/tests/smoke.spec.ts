@@ -72,6 +72,10 @@ declare global {
       framesPresentedWithoutResult?: number;
       workerMs: number;
       queueWaitMs: number;
+      idleYieldMs: number;
+      idleCallbackMs: number;
+      idleLockMs: number;
+      idleWaitMs: number;
       dequeueToStartMs: number;
       setupMs: number;
       renderFrameMs: number;
@@ -1224,6 +1228,77 @@ test("Firefox hands a blocked thumbnail renderer to a foreground sample load", a
     });
   expect(fatalMessages).toEqual([]);
 });
+
+async function verifyRasterProgressWithTimersHeld(page: Page) {
+  const raster = await Promise.any(
+    page.workers().map(async (worker) => {
+      await worker.evaluate(() => {
+        const scope = globalThis as typeof globalThis & {
+          __donnerRasterWorker?: boolean;
+          __donnerReleaseHeldTimers?: () => void;
+          __donnerHeldTimerState?: () => { pending: number; probeRan: boolean };
+        };
+        if (!scope.__donnerRasterWorker) throw new Error("not the raster worker");
+        const originalSet = globalThis.setTimeout.bind(globalThis);
+        const originalClear = globalThis.clearTimeout.bind(globalThis);
+        const held = new Map<number, () => void>();
+        let nextId = -1;
+        let probeRan = false;
+        globalThis.setTimeout = (handler, delay, ...args) => {
+          if (Number(delay ?? 0) !== 0) return originalSet(handler, delay, ...args);
+          if (held.size >= 64) throw new Error("held raster timer probe exceeded its bound");
+          const id = nextId--;
+          held.set(id, () => originalSet(handler, 0, ...args));
+          return id;
+        };
+        globalThis.clearTimeout = (id) => {
+          if (!held.delete(Number(id))) originalClear(id);
+        };
+        scope.__donnerHeldTimerState = () => ({ pending: held.size, probeRan });
+        scope.__donnerReleaseHeldTimers = () => {
+          globalThis.setTimeout = originalSet;
+          globalThis.clearTimeout = originalClear;
+          const callbacks = [...held.values()];
+          held.clear();
+          delete scope.__donnerHeldTimerState;
+          delete scope.__donnerReleaseHeldTimers;
+          for (const callback of callbacks) callback();
+        };
+        setTimeout(() => {
+          probeRan = true;
+        }, 0);
+      });
+      return worker;
+    }),
+  );
+  try {
+    const before = await page.evaluate(() => window.__donnerWorkerStats?.completedResults ?? 0);
+    await expect.poll(
+      () => page.evaluate(() => window.__donnerWorkerStats?.completedResults ?? 0),
+      { timeout: scaledMs(3000), message: "raster progresses while zero-delay timers are held" },
+    ).toBeGreaterThanOrEqual(before + 3);
+    const state = await raster.evaluate(() => {
+      const scope = globalThis as typeof globalThis & {
+        __donnerHeldTimerState?: () => { pending: number; probeRan: boolean };
+      };
+      return scope.__donnerHeldTimerState?.();
+    });
+    expect(state?.pending).toBeGreaterThanOrEqual(1);
+    expect(state?.probeRan).toBe(false);
+  } finally {
+    await raster.evaluate(() => {
+      const scope = globalThis as typeof globalThis & { __donnerReleaseHeldTimers?: () => void };
+      scope.__donnerReleaseHeldTimers?.();
+    });
+  }
+  expect(
+    await raster.evaluate(() =>
+      new Promise<boolean>((resolve) => {
+        setTimeout(() => resolve(true), 0);
+      })
+    ),
+  ).toBe(true);
+}
 
 async function delayWorkerAnimationFrames(page: Page, delayMs: number) {
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -3320,6 +3395,10 @@ test(
       intervals: [100],
     }).toBeGreaterThanOrEqual(2000);
     const after = await readCadence();
+    for (const field of ["idleYieldMs", "idleCallbackMs", "idleLockMs", "idleWaitMs"] as const) {
+      expect(after.worker?.[field], `worker timing ${field}`).toBeGreaterThanOrEqual(0);
+      expect(Number.isFinite(after.worker?.[field]), `finite worker timing ${field}`).toBe(true);
+    }
     const ownerAfter = await readGpuOwnerDispatchStats(page);
     const seconds = (after.time - before.time) / 1000;
     const cadencePath = testInfo.outputPath("animation-cadence.json");
@@ -3344,6 +3423,7 @@ test(
       contentType: "application/json",
       path: cadencePath,
     });
+    await verifyRasterProgressWithTimersHeld(page);
     await page.screenshot({ path: testInfo.outputPath("animation-preview.png") });
     expect(after.documents - before.documents).toBeGreaterThan(10);
 

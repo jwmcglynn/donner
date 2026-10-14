@@ -980,7 +980,12 @@ bool NeedsTimedIdleWake(bool hasOwnerPoll) {
 }
 }  // namespace
 
-bool AsyncRenderer::waitForRenderOrIdleMaintenance(std::unique_lock<std::mutex>& lock) {
+bool AsyncRenderer::waitForRenderOrIdleMaintenance(std::unique_lock<std::mutex>& lock,
+                                                   RenderResult::WorkerTimingBreakdown& timing) {
+  const auto elapsedMs = [](std::chrono::steady_clock::time_point start) {
+    return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start)
+        .count();
+  };
   std::function<void()> idlePoll;
   std::function<bool()> idleHasWork;
   {
@@ -992,13 +997,19 @@ bool AsyncRenderer::waitForRenderOrIdleMaintenance(std::unique_lock<std::mutex>&
 #ifdef __EMSCRIPTEN__
   // A blocking pthread wait cannot run the browser's GPU completion or share-release callbacks.
   // Yield without either document or renderer locks, including when no render is requested.
+  const auto yieldStart = std::chrono::steady_clock::now();
   emscripten_sleep(0);
+  timing.idleYieldMs = elapsedMs(yieldStart);
 #endif
   if (idlePoll) {
+    const auto callbackStart = std::chrono::steady_clock::now();
     idlePoll();
+    timing.idleCallbackMs = elapsedMs(callbackStart);
   }
   const bool pollWhileIdle = idleHasWork && idleHasWork();
+  const auto lockStart = std::chrono::steady_clock::now();
   lock.lock();
+  timing.idleLockMs = elapsedMs(lockStart);
   const auto ready = [this] {
     return std::holds_alternative<RenderingState>(workerState_) ||
            std::holds_alternative<CancellingState>(workerState_) ||
@@ -1009,6 +1020,7 @@ bool AsyncRenderer::waitForRenderOrIdleMaintenance(std::unique_lock<std::mutex>&
   const auto wakeRequested = [this, &ready] {
     return ready() || idleWakeRequested_.load(std::memory_order_acquire);
   };
+  const auto waitStart = std::chrono::steady_clock::now();
   if (pollWhileIdle) {
     cv_.wait_for(lock, std::chrono::milliseconds(100), wakeRequested);
   } else if (NeedsTimedIdleWake(static_cast<bool>(idlePoll))) {
@@ -1018,6 +1030,7 @@ bool AsyncRenderer::waitForRenderOrIdleMaintenance(std::unique_lock<std::mutex>&
   } else {
     cv_.wait(lock, wakeRequested);
   }
+  timing.idleWaitMs = elapsedMs(waitStart);
   return ready();
 }
 
@@ -1077,24 +1090,27 @@ void AsyncRenderer::workerLoop() {
 #if defined(__EMSCRIPTEN__)
   // C++ renderer state belongs to this worker; browser GPU primitives run on the app owner.
   svg::Renderer workerRenderer;
+  EM_ASM({ globalThis['__donnerRasterWorker'] = true; });
 #endif
   std::unique_ptr<svg::RendererInterface> sampleThumbnailRenderer;
   svg::RendererInterface* sampleThumbnailRendererRoot = nullptr;
 
   while (true) {
     PublishRasterWorkPhase(RasterWorkPhase::IdleMaintenance);
+    RenderResult::WorkerTimingBreakdown workerTiming;
     std::optional<RenderRequest> requestStorage;
     std::optional<SampleThumbnailRenderRequest> sampleThumbnailStorage;
     bool runCompositorWarmup = false;
     [[maybe_unused]] bool delaySampleThumbnailRendererCreation = false;
     {
       std::unique_lock<std::mutex> lock(mutex_, std::defer_lock);
-      if (!waitForRenderOrIdleMaintenance(lock)) {
+      if (!waitForRenderOrIdleMaintenance(lock, workerTiming)) {
         continue;  // A mailbox wake or completion timer needs maintenance, not a render.
       }
       waitForReplayDocumentAccess(lock);
       if (std::holds_alternative<ShutdownState>(workerState_)) {
 #ifdef __EMSCRIPTEN__
+        EM_ASM({ delete globalThis['__donnerRasterWorker']; });
         // `workerRenderer` is destroyed here in Emscripten builds, i.e. on
         // the worker thread, mirroring its construction.
 #endif
@@ -1308,7 +1324,6 @@ void AsyncRenderer::workerLoop() {
       return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start)
           .count();
     };
-    RenderResult::WorkerTimingBreakdown workerTiming;
     workerTiming.queueWaitMs = queueWaitMs;
     workerTiming.dequeueToStartMs =
         std::chrono::duration<double, std::milli>(workerStart - workerDequeuedAt).count();

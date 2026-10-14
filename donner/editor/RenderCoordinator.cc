@@ -64,7 +64,7 @@ void PublishWorkerTimingStats(
     const RenderResult& result, const EditorApp& app,
     const svg::compositor::CompositorController::RenderFrameStats& compositorStats) {
   const auto& timing = result.workerTiming;
-  constexpr std::size_t kValueCount = 41;
+  constexpr std::size_t kValueCount = 45;
   int bitmapPayloadTiles = 0;
   int texturePayloadTiles = 0;
   if (result.compositedPreview) {
@@ -114,7 +114,11 @@ void PublishWorkerTimingStats(
       static_cast<double>(timing.finalSnapshotReadbackCount),
       static_cast<double>(bitmapPayloadTiles),
       static_cast<double>(texturePayloadTiles),
-      timing.polledAtEpochMs};
+      timing.polledAtEpochMs,
+      timing.idleYieldMs,
+      timing.idleCallbackMs,
+      timing.idleLockMs,
+      timing.idleWaitMs};
   double* buffer = static_cast<double*>(std::malloc(sizeof(values)));
   if (buffer == nullptr) {
     return;
@@ -185,6 +189,10 @@ void PublishWorkerTimingStats(
         stats['finalSnapshotReadbackCount'] = heap[b + 37];
         stats['bitmapPayloadTileCount'] = heap[b + 38];
         stats['texturePayloadTileCount'] = heap[b + 39];
+        stats['idleYieldMs'] = heap[b + 41];
+        stats['idleCallbackMs'] = heap[b + 42];
+        stats['idleLockMs'] = heap[b + 43];
+        stats['idleWaitMs'] = heap[b + 44];
         const totals = ([
           [ 'bitmapPayloadTileTotal', 'bitmapPayloadTileCount' ],
           [ 'texturePayloadTileTotal', 'texturePayloadTileCount' ],
