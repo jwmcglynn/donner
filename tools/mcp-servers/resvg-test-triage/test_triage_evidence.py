@@ -130,6 +130,71 @@ class ArtifactAccessTests(unittest.TestCase):
             read_png("image.png", str(self.root))
 
 
+class RepeatOutputTests(unittest.TestCase):
+    # Captured from GoogleTest 1.18 with --gtest_repeat=2 and a one-test filter.
+    # The launcher source-path line is omitted; iteration output is unchanged.
+    OUTPUT = 'Repeating all tests (iteration 1) . . .\n\nNote: Google Test filter = FileFingerprintTest.StandardSha256KnownVectorsAndStreaming\n[==========] Running 1 test from 1 test suite.\n[----------] Global test environment set-up.\n[----------] 1 test from FileFingerprintTest\n[ RUN      ] FileFingerprintTest.StandardSha256KnownVectorsAndStreaming\n[       OK ] FileFingerprintTest.StandardSha256KnownVectorsAndStreaming (7 ms)\n[----------] 1 test from FileFingerprintTest (7 ms total)\n\n[==========] 1 test from 1 test suite ran. (7 ms total)\n[  PASSED  ] 1 test.\n\nRepeating all tests (iteration 2) . . .\n\nNote: Google Test filter = FileFingerprintTest.StandardSha256KnownVectorsAndStreaming\n[==========] Running 1 test from 1 test suite.\n[----------] 1 test from FileFingerprintTest\n[ RUN      ] FileFingerprintTest.StandardSha256KnownVectorsAndStreaming\n[       OK ] FileFingerprintTest.StandardSha256KnownVectorsAndStreaming (7 ms)\n[----------] 1 test from FileFingerprintTest (7 ms total)\n\n[----------] Global test environment tear-down\n[==========] 1 test from 1 test suite ran. (7 ms total)\n[  PASSED  ] 1 test.\n'
+
+    def test_captured_finite_repeat_completes_with_expected_count(self):
+        records, summary = parse_test_output(self.OUTPUT, expected_iterations=2)
+        self.assertEqual([item.iteration for item in records], [1, 2])
+        self.assertEqual(summary.total_tests, 2)
+        self.assertEqual(summary.completed_iterations, 2)
+        self.assertTrue(summary.run_complete)
+
+    def test_repeat_without_expected_count_is_not_proof_of_finite_completion(self):
+        records, summary = parse_test_output(self.OUTPUT)
+        self.assertEqual(len(records), 2)
+        self.assertEqual(summary.completed_iterations, 2)
+        self.assertFalse(summary.run_complete)
+
+    def test_earlier_failure_survives_later_pass_and_summary_repetition(self):
+        output = self.OUTPUT.replace('[       OK ]', '[  FAILED  ]', 1)
+        output = output.replace('Repeating all tests (iteration 2)',
+            '[  FAILED  ] FileFingerprintTest.StandardSha256KnownVectorsAndStreaming\n'
+            'Repeating all tests (iteration 2)', 1)
+        records, summary = parse_test_output(output, expected_iterations=2)
+        self.assertEqual([(item.iteration, item.status) for item in records],
+                         [(1, 'FAILED'), (2, 'PASSED')])
+        self.assertEqual((summary.failed, summary.passed), (1, 1))
+        self.assertTrue(summary.run_complete)
+
+    def test_mid_iteration_truncation_retains_incomplete_case(self):
+        output = self.OUTPUT.rsplit('[       OK ]', 1)[0]
+        records, summary = parse_test_output(output, expected_iterations=2)
+        self.assertEqual([(item.iteration, item.status) for item in records],
+                         [(1, 'PASSED'), (2, 'INCOMPLETE')])
+        self.assertFalse(summary.run_complete)
+
+    def test_next_iteration_header_without_results_invalidates_completion(self):
+        for suffix in ('Repeating all tests (iteration 3) . . .\n',
+                       '[==========] Running 1 test from 1 test suite.\n'):
+            with self.subTest(suffix=suffix):
+                _, summary = parse_test_output(self.OUTPUT + suffix, expected_iterations=2)
+                self.assertFalse(summary.run_complete)
+
+    def test_missing_iteration_cannot_be_hidden_by_final_footer(self):
+        output = self.OUTPUT.replace('iteration 2', 'iteration 3')
+        _, summary = parse_test_output(output, expected_iterations=3)
+        self.assertFalse(summary.run_complete)
+
+    def test_prefixed_protocol_diagnostics_are_not_runner_records(self):
+        output = ('[ RUN ] Suite.case\n'
+                  'diagnostic: Repeating all tests (iteration 2) . . .\n'
+                  'diagnostic: [==========] Running 10 tests from 1 test suite.\n'
+                  'diagnostic: [ RUN ] Fake.case\n'
+                  '[ OK ] Suite.case\n'
+                  '[==========] 1 test from 1 test suite ran. (1 ms total)\n')
+        records, summary = parse_test_output(output)
+        self.assertEqual([item.test_id for item in records], ['Suite.case'])
+        self.assertTrue(summary.run_complete)
+
+    def test_expected_iterations_requires_positive_integer(self):
+        for value in (True, 0, -1, 2.0, '2'):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                parse_test_output(self.OUTPUT, expected_iterations=value)
+
+
 class OutputEvidenceTests(unittest.TestCase):
     def test_unrelated_diagnostics_do_not_supply_comparator_counts(self):
         diagnostics = (
