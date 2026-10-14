@@ -18,6 +18,7 @@
 #include "donner/css/parser/DeclarationListParser.h"
 #include "donner/svg/components/DirtyFlagsComponent.h"
 #include "donner/svg/components/StylesheetComponent.h"
+#include "donner/svg/components/animation/AnimatedValuesComponent.h"
 #include "donner/svg/components/resources/ResourceManagerContext.h"
 #include "donner/svg/components/shadow/ComputedShadowTreeComponent.h"
 #include "donner/svg/components/shadow/ShadowTreeComponent.h"
@@ -121,6 +122,41 @@ protected:
 };
 
 // --- Basic style computation ---
+
+TEST_F(StyleSystemTest, RepeatedAnimatedOpacityReservesWorkBeforeParsing) {
+  auto document = ParseSVG(
+      "<svg xmlns='http://www.w3.org/2000/svg'><defs><g id='src'/></defs>"
+      "<use id='a' href='#src'/><use id='b' href='#src'/><use id='c' href='#src'/></svg>");
+  auto& registry = document.registry();
+  const auto source = document.querySelector("#src")->entityHandle();
+  const std::string value = std::string(4096, '0') + ".5";
+  source.get_or_emplace<AnimatedValuesComponent>().overrides["stop-opacity"] = value;
+  registry.ctx().emplace<AnimationStyleContext>().enabled = true;
+  StyleResourceBudget::Limits limits;
+  limits.declarationByteWork = value.size() * 3;
+  registry.ctx().emplace<StyleResourceBudget>(limits);
+  ParseWarningSink warnings = ParseWarningSink::Disabled();
+  for (const char* id : {"#a", "#b", "#c"}) {
+    auto use = document.querySelector(id)->entityHandle();
+    auto& shadow = use.get_or_emplace<ComputedShadowTreeComponent>();
+    ShadowTreeSystem().populateInstance(use, shadow, ShadowBranchType::Main, source.entity(),
+                                        RcString("#src"), warnings);
+  }
+  styleSystem.computeAllStyles(registry, warnings);
+  const auto& budget = registry.ctx().get<StyleResourceBudget>();
+  EXPECT_EQ(budget.declarationApplications(), 3u);
+  EXPECT_EQ(budget.declarationByteWork(), value.size() * 3);
+  EXPECT_THAT(budget.rejected(), testing::IsTrue());
+  std::size_t styled = 0;
+  for (const auto entity : registry.view<ComputedStyleComponent>()) {
+    const auto& style = registry.get<ComputedStyleComponent>(entity);
+    if (style.properties &&
+        style.properties->unparsedProperties.contains(RcString("stop-opacity"))) {
+      ++styled;
+    }
+  }
+  EXPECT_EQ(styled, 3u);
+}
 
 TEST_F(StyleSystemTest, ComputeAllStylesCreatesComponents) {
   auto document = ParseAndComputeStyles(R"(
