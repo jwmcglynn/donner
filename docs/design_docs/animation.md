@@ -130,6 +130,12 @@ raster-image references move decoded frames into bounded per-element caches and 
 revisions; they do not repeatedly charge the resource loader for the same decoded frame. Existing
 resource-loader policies and document byte/fetch limits still apply.
 
+The static use-element loader has no document-origin policy and accepts data URLs in dynamic mode
+when a loader and parser callback are configured. These remain existing conformance limitations
+relative to [SVG2 section 5.5](https://www.w3.org/TR/SVG2/struct.html#UseElement); animated references
+use the same admission path. Secure-mode blocking, loader denial and restoration are covered by
+the animated-use regression in //donner/svg/renderer/tests:renderer_animation_presentation_tests.
+
 The default parser recognizes the animation elements. `AnimationAttributeParser` is shared by the
 initial parser and runtime attribute refresh. A bounded source fingerprint avoids reparsing unchanged
 attributes while ensuring source edits update typed values and timing. Runtime event history is kept

@@ -2,6 +2,7 @@
 #include <gtest/gtest.h>
 
 #include "donner/base/encoding/Base64.h"
+#include "donner/base/tests/ParseResultTestUtils.h"
 #include "donner/editor/tests/BitmapGoldenCompare.h"
 #include "donner/svg/SVGRectElement.h"
 #include "donner/svg/SVGUseElement.h"
@@ -280,10 +281,11 @@ TEST(RendererAnimationPresentation, NestedReferenceMutationDoesNotLeakShadowEnti
 class AnimationRecordingLoader final : public ResourceLoaderInterface {
 public:
   std::vector<std::string> requests;
+  ResourceLoaderError failure = ResourceLoaderError::NotFound;
   std::variant<std::vector<uint8_t>, ResourceLoaderError> fetchExternalResource(
       std::string_view url) override {
     requests.emplace_back(url);
-    return ResourceLoaderError::NotFound;
+    return failure;
   }
 };
 
@@ -303,6 +305,56 @@ TEST(RendererAnimationPresentation, AnimatedResourceReferencesRespectSecureLoadi
       EXPECT_THAT(requests, testing::ElementsAre("https://example.invalid/image.png"));
     } else {
       EXPECT_THAT(requests, testing::IsEmpty());
+    }
+  }
+}
+
+TEST(RendererAnimationPresentation, AnimatedUsePreservesSecureModesAndLoaderDenial) {
+  for (const auto mode : {ProcessingMode::DynamicInteractive, ProcessingMode::SecureAnimated,
+                          ProcessingMode::SecureStatic}) {
+    SCOPED_TRACE(static_cast<int>(mode));
+    SVGDocument::Settings settings;
+    settings.processingMode = mode;
+    auto loader = std::make_unique<AnimationRecordingLoader>();
+    loader->failure = ResourceLoaderError::SandboxViolation;
+    const auto& requests = loader->requests;
+    settings.resourceLoader = std::move(loader);
+    int parseCalls = 0;
+    settings.svgParseCallback = [&parseCalls](
+                                    const std::vector<uint8_t>&,
+                                    ParseWarningSink&) -> std::optional<SVGDocumentHandle> {
+      ++parseCalls;
+      return std::nullopt;
+    };
+    ParseWarningSink warnings;
+    auto parsed =
+        parser::SVGParser::ParseSVG(R"svg(
+      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16">
+        <defs><rect id="r" width="16" height="16" fill="red"/></defs>
+        <use href="#r"><set attributeName="href" to="denied.svg#r" begin="1s" dur="1s"/></use>
+      </svg>)svg",
+                                    warnings, parser::SVGParser::Options(), std::move(settings));
+    ASSERT_THAT(parsed, NoParseError());
+    auto& document = parsed.result();
+    const std::string source(document.source());
+    bool requestExpected = false;
+    for (const double time : {0.5, 1.5, 3.0, 1.5}) {
+      SCOPED_TRACE(time);
+      auto expected = ParsePresentation(mode != ProcessingMode::SecureStatic && time == 1.5
+                                            ? "<rect width='0' height='0'/>"
+                                            : "<rect width='16' height='16' fill='red'/>");
+      document.setTime(time);
+      editor::tests::CompareBitmapToBitmap(
+          RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(expected),
+          "animated-use-loader-boundary", editor::tests::PixelmatchIdentityParams());
+      EXPECT_EQ(document.source(), source);
+      requestExpected |= mode == ProcessingMode::DynamicInteractive && time == 1.5;
+      if (requestExpected) {
+        EXPECT_THAT(requests, testing::ElementsAre("denied.svg"));
+      } else {
+        EXPECT_THAT(requests, testing::IsEmpty());
+      }
+      EXPECT_EQ(parseCalls, 0);
     }
   }
 }
