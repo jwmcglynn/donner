@@ -13,6 +13,7 @@ from unittest import mock
 
 from python.runfiles import runfiles
 from test_executable_fixtures import ExecutableFixtureDirectory
+from tools import test_timing
 
 
 class SanitizerAllocatorIsolationTest(unittest.TestCase):
@@ -73,7 +74,7 @@ class SanitizerAllocatorIsolationTest(unittest.TestCase):
                 capture_output=True,
                 text=True,
                 check=False,
-                timeout=10,
+                timeout=test_timing.STALL_GUARD_SECONDS,
             )
             self.assertEqual(result.returncode, 0, result.stderr)
             commands = [json.loads(line) for line in capture.read_text(encoding="utf-8").splitlines()]
