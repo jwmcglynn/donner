@@ -843,7 +843,7 @@ TEST_F(ResourceManagerContextTest, SecureModesLoadDataImagesWithoutExternalReque
     std::vector<Entity> denied;
     for (const std::string_view href :
          {"relative.png", "/absolute.png", "file:///image.png", "https://example.invalid/image.png",
-          "//example.invalid/a.png", "#same-document"}) {
+          "//example.invalid/a.png"}) {
       denied.push_back(addImage(href));
     }
     ParseWarningSink warnings;
@@ -859,6 +859,25 @@ TEST_F(ResourceManagerContextTest, SecureModesLoadDataImagesWithoutExternalReque
     EXPECT_EQ(resourceManager_->fetchSecurityStats().attempts, 0u);
     EXPECT_FALSE(warnings.hasWarnings());
   }
+}
+
+TEST_F(ResourceManagerContextTest, SecureDataImageSupportsUrlEncodedPayload) {
+  const auto decoded = DecodeBase64Data(kTinyPngDataUrl.substr(kTinyPngDataUrl.find(',') + 1));
+  ASSERT_FALSE(decoded.hasError());
+  constexpr char kHex[] = "0123456789ABCDEF";
+  std::string href = "data:image/png,";
+  for (const uint8_t value : decoded.result()) {
+    href += '%';
+    href += kHex[value >> 4];
+    href += kHex[value & 15];
+  }
+  setProcessingMode(ProcessingMode::SecureAnimated);
+  const Entity image = addImage(href);
+  ParseWarningSink warnings;
+  resourceManager_->loadResources(warnings);
+  ASSERT_TRUE(registry_.all_of<LoadedImageComponent>(image));
+  EXPECT_TRUE(registry_.get<LoadedImageComponent>(image).image.has_value());
+  EXPECT_FALSE(warnings.hasWarnings());
 }
 
 TEST_F(ResourceManagerContextTest, SecureDataImagesStillConsumeAggregateBudget) {
@@ -890,6 +909,95 @@ TEST_F(ResourceManagerContextTest, SecureDataImageLoadingCannotReuseCachedExtern
   EXPECT_FALSE(registry_.all_of<LoadedSVGImageComponent>(external));
   ASSERT_TRUE(registry_.all_of<LoadedImageComponent>(dataImage));
   EXPECT_TRUE(registry_.get<LoadedImageComponent>(dataImage).image.has_value());
+  EXPECT_EQ(requests, 1);
+}
+
+Entity LoadDataImageInFamily(Registry& registry,
+                             const std::shared_ptr<DocumentResourceFamilyBudget>& family) {
+  registry.ctx().emplace<DocumentResourceFamilyContext>(family);
+  auto& manager = registry.ctx().emplace<ResourceManagerContext>(registry);
+  manager.setProcessingMode(ProcessingMode::SecureStatic);
+  const Entity entity = registry.create();
+  registry.emplace<ImageComponent>(entity, ImageComponent{RcString(kTinyPngDataUrl)});
+  ParseWarningSink disabled = ParseWarningSink::Disabled();
+  manager.loadResources(disabled);
+  return entity;
+}
+
+TEST(ResourceManagerContextFamilyBudgetTest, SecureDataImagesShareDecodedLimitAcrossDocuments) {
+  DocumentResourceFamilyBudget::Limits limits;
+  limits.maximumTotalRetainedBytes = 24;
+  auto family = std::make_shared<DocumentResourceFamilyBudget>(limits);
+  Registry first;
+  const Entity firstImage = LoadDataImageInFamily(first, family);
+  ASSERT_TRUE(first.get<LoadedImageComponent>(firstImage).image.has_value());
+  EXPECT_EQ(first.get<LoadedImageComponent>(firstImage).image->data.size(), 16u);
+  EXPECT_EQ(family->totalRetainedBytes(), 16u);
+  Registry second;
+  const Entity secondImage = LoadDataImageInFamily(second, family);
+  EXPECT_FALSE(second.get<LoadedImageComponent>(secondImage).image.has_value());
+  EXPECT_EQ(family->totalRetainedBytes(), 16u);
+  first.remove<LoadedImageComponent>(firstImage);
+  EXPECT_EQ(family->totalRetainedBytes(), 0u);
+  Registry replacement;
+  const Entity replacementImage = LoadDataImageInFamily(replacement, family);
+  EXPECT_TRUE(replacement.get<LoadedImageComponent>(replacementImage).image.has_value());
+  EXPECT_EQ(family->totalRetainedBytes(), 16u);
+}
+
+TEST(ResourceManagerContextFamilyBudgetTest, SecureDataImageCopiesAndMovesAccountForOwnedPixels) {
+  DocumentResourceFamilyBudget::Limits limits;
+  limits.maximumTotalRetainedBytes = 32;
+  auto family = std::make_shared<DocumentResourceFamilyBudget>(limits);
+  {
+    Registry registry;
+    const Entity entity = LoadDataImageInFamily(registry, family);
+    const auto& original = registry.get<LoadedImageComponent>(entity);
+    ASSERT_TRUE(original.image.has_value());
+    {
+      LoadedImageComponent copy;
+      copy = original;
+      ASSERT_TRUE(copy.image.has_value());
+      EXPECT_EQ(family->totalRetainedBytes(), 32u);
+      LoadedImageComponent moved(std::move(copy));
+      EXPECT_TRUE(moved.image.has_value());
+      EXPECT_EQ(family->totalRetainedBytes(), 32u);
+      LoadedImageComponent assigned;
+      assigned = std::move(moved);
+      ASSERT_TRUE(assigned.image.has_value());
+      EXPECT_EQ(assigned.image->data, original.image->data);
+      EXPECT_EQ(family->totalRetainedBytes(), 32u);
+      LoadedImageComponent denied(original);
+      EXPECT_FALSE(denied.image.has_value());
+      EXPECT_EQ(family->totalRetainedBytes(), 32u);
+    }
+    EXPECT_EQ(family->totalRetainedBytes(), 16u);
+  }
+  EXPECT_EQ(family->totalRetainedBytes(), 0u);
+}
+
+TEST_F(ResourceManagerContextTest, SecureDataImageLookupCannotInvokeExternalLoader) {
+  int requests = 0;
+  setResourceLoader(std::make_unique<TestResourceLoader>([&requests]() { ++requests; }));
+  setProcessingMode(ProcessingMode::SecureStatic);
+  const Entity entity = addImage("https://example.invalid/image.png");
+  EXPECT_EQ(resourceManager_->getLoadedImageComponent(entity), nullptr);
+  EXPECT_EQ(requests, 0);
+}
+
+TEST_F(ResourceManagerContextTest, SecureImageLookupRejectsLoadedExternalComponent) {
+  const auto decoded = DecodeBase64Data(kTinyPngDataUrl.substr(kTinyPngDataUrl.find(',') + 1));
+  ASSERT_FALSE(decoded.hasError());
+  int requests = 0;
+  auto loader = std::make_unique<TestResourceLoader>([&requests]() { ++requests; });
+  loader->addFile("external.png", decoded.result());
+  setResourceLoader(std::move(loader));
+  const Entity image = addImage("external.png");
+  const auto* loaded = resourceManager_->getLoadedImageComponent(image);
+  ASSERT_NE(loaded, nullptr);
+  ASSERT_TRUE(loaded->image.has_value());
+  setProcessingMode(ProcessingMode::SecureStatic);
+  EXPECT_EQ(resourceManager_->getLoadedImageComponent(image), nullptr);
   EXPECT_EQ(requests, 1);
 }
 

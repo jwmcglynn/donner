@@ -827,7 +827,7 @@ SVGDocument::Settings PrepareDocumentSettings(const SVGParser::Options& options,
             .parsedPayloadBytes = options.maximumParsedPayloadSize,
         });
   }
-  if (settings.svgParseCallback || settings.processingMode != ProcessingMode::DynamicInteractive) {
+  if (settings.svgParseCallback) {
     return settings;
   }
 

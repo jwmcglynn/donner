@@ -1,6 +1,7 @@
 #pragma once
 /// @file
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <memory>
@@ -14,7 +15,14 @@ public:
   static constexpr std::size_t kDefaultMaximumTotalRetainedBytes = 128 * 1024 * 1024;
 
   /// Categories charged against the shared document-family envelope.
-  enum class Kind : std::size_t { ParsedPayload, Geometry, ComputedFilter, ComputedStyle, Count };
+  enum class Kind : std::size_t {
+    ParsedPayload,
+    Geometry,
+    ComputedFilter,
+    ComputedStyle,
+    DecodedImage,
+    Count
+  };
 
   /// Per-kind and aggregate retained-byte ceilings.
   struct Limits {
@@ -28,6 +36,8 @@ public:
     std::size_t computedStyleBytes = 64 * 1024 * 1024;
     /// Maximum bytes retained across every kind combined.
     std::size_t maximumTotalRetainedBytes = kDefaultMaximumTotalRetainedBytes;
+    /// Maximum retained decoded raster-image bytes across the document family.
+    std::size_t decodedImageBytes = 64 * 1024 * 1024;
   };
 
   /// Current charges and sticky refusal state for diagnostics.
@@ -65,6 +75,16 @@ public:
            bytes <= maximum - stats_.retainedBytes[index] &&
            stats_.totalRetainedBytes <= limits_.maximumTotalRetainedBytes &&
            bytes <= limits_.maximumTotalRetainedBytes - stats_.totalRetainedBytes;
+  }
+
+  /// Return the additional bytes currently admissible under both category and total limits.
+  /// @param kind Resource category to inspect.
+  std::size_t availableBytes(Kind kind) const {
+    if (!canReserve(kind, 0)) {
+      return 0;
+    }
+    return std::min(maximumFor(kind) - retainedBytes(kind),
+                    limits_.maximumTotalRetainedBytes - stats_.totalRetainedBytes);
   }
 
   /**
@@ -127,6 +147,7 @@ private:
       case Kind::Geometry: return limits_.geometryBytes;
       case Kind::ComputedFilter: return limits_.computedFilterBytes;
       case Kind::ComputedStyle: return limits_.computedStyleBytes;
+      case Kind::DecodedImage: return limits_.decodedImageBytes;
       case Kind::Count: return 0;
     }
     return 0;
