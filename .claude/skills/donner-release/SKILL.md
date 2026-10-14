@@ -221,10 +221,10 @@ and `third_party/` fetches, which Renovate ignores, follow the same rule by hand
 non-BCR fetch, use the release's published asset, or its tag source archive if it publishes none,
 with its `sha256`.
 
-LLVM toolchain: `MODULE.bazel` declares
-`bazel_dep(name = "toolchains_llvm", version = "1.8.0", dev_dependency = True)`, a plain BCR dep.
-`docs/updating_dependencies.md` describes the version bump and the `local_path_override` flow for
-testing a sibling checkout.
+LLVM toolchain: `MODULE.bazel` declares `toolchains_llvm` as a BCR `bazel_dep` that a
+version-less `single_version_override` patches (`third_party/patches/`).
+`docs/updating_dependencies.md` describes the version bump, the patch, and the
+`local_path_override` flow for testing a sibling checkout.
 
 ## Volatile facts — query, never trust memory
 

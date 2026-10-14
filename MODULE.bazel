@@ -373,7 +373,18 @@ use_repo(python, "python_3_12")
 
 bazel_dep(name = "toolchains_llvm", version = "1.11.2", dev_dependency = True)
 
-# To use a local copy of the toolchains_llvm repository, uncomment the following.
+# Declare only the libc++ headers, not all of the LLVM distribution's include/, as compile inputs.
+# Only Bazel releases before 9 read the patched filegroup. No version is set here, so the patch
+# applies to whichever release the bazel_dep above resolves to.
+single_version_override(
+    module_name = "toolchains_llvm",
+    patch_strip = 1,
+    patches = ["//third_party/patches:toolchains_llvm-libcxx-compile-headers.patch"],
+)
+
+# To use a local copy of the toolchains_llvm repository, comment out the single_version_override
+# above (a module takes only one override, and the local copy does not get the patch), then
+# uncomment the following.
 # local_path_override(
 #     module_name = "toolchains_llvm",
 #     path = "../toolchains_llvm",
@@ -388,20 +399,6 @@ llvm.toolchain(
     llvm_version = "21.1.6",
 )
 
-# Hermetic Linux sysroots: keep the toolchain self-contained on Bazel
-# remote-execution workers that lack system glibc headers. See
-# third_party/bazel/non_bcr_deps.bzl for the tarballs.
-llvm.sysroot(
-    name = "llvm_toolchain",
-    label = "@sysroot_linux_aarch64//:sysroot",
-    targets = ["linux-aarch64"],
-)
-llvm.sysroot(
-    name = "llvm_toolchain",
-    label = "@sysroot_linux_x86_64//:sysroot",
-    targets = ["linux-x86_64"],
-)
-
 # Remote execution needs exec-platform-specific LLVM downloads. Otherwise a
 # macOS client can upload a Mach-O clang to a Linux worker.
 llvm.toolchain(
@@ -409,16 +406,6 @@ llvm.toolchain(
     exec_arch = "aarch64",
     exec_os = "linux",
     llvm_version = "21.1.6",
-)
-llvm.sysroot(
-    name = "llvm_toolchain_linux_aarch64",
-    label = "@sysroot_linux_aarch64//:sysroot",
-    targets = ["linux-aarch64"],
-)
-llvm.sysroot(
-    name = "llvm_toolchain_linux_aarch64",
-    label = "@sysroot_linux_x86_64//:sysroot",
-    targets = ["linux-x86_64"],
 )
 
 # Keep the Linux x86_64 variant ready for future workers and local parity.
@@ -428,6 +415,72 @@ llvm.toolchain(
     exec_os = "linux",
     llvm_version = "21.1.6",
 )
+
+# Hermetic Linux sysroots for each toolchain above, which keep the toolchain
+# self-contained on remote-execution workers without system glibc headers.
+# Compiles and links take only the sysroot files they read; see
+# third_party/bazel/non_bcr_deps.bzl. The tags are spelled out with literal
+# names because tools/bcr_dependency_closure.py reads them statically.
+llvm.sysroot(
+    name = "llvm_toolchain",
+    label = "@sysroot_linux_aarch64//:sysroot",
+    targets = ["linux-aarch64"],
+)
+llvm.sysroot(
+    name = "llvm_toolchain",
+    label = "@sysroot_linux_x86_64//:sysroot",
+    targets = ["linux-x86_64"],
+)
+llvm.extra_compiler_files(
+    name = "llvm_toolchain",
+    label = "@sysroot_linux_aarch64//:compiler_files",
+    targets = ["linux-aarch64"],
+)
+llvm.extra_compiler_files(
+    name = "llvm_toolchain",
+    label = "@sysroot_linux_x86_64//:compiler_files",
+    targets = ["linux-x86_64"],
+)
+llvm.extra_linker_files(
+    name = "llvm_toolchain",
+    label = "@sysroot_linux_aarch64//:linker_files",
+    targets = ["linux-aarch64"],
+)
+llvm.extra_linker_files(
+    name = "llvm_toolchain",
+    label = "@sysroot_linux_x86_64//:linker_files",
+    targets = ["linux-x86_64"],
+)
+llvm.sysroot(
+    name = "llvm_toolchain_linux_aarch64",
+    label = "@sysroot_linux_aarch64//:sysroot",
+    targets = ["linux-aarch64"],
+)
+llvm.sysroot(
+    name = "llvm_toolchain_linux_aarch64",
+    label = "@sysroot_linux_x86_64//:sysroot",
+    targets = ["linux-x86_64"],
+)
+llvm.extra_compiler_files(
+    name = "llvm_toolchain_linux_aarch64",
+    label = "@sysroot_linux_aarch64//:compiler_files",
+    targets = ["linux-aarch64"],
+)
+llvm.extra_compiler_files(
+    name = "llvm_toolchain_linux_aarch64",
+    label = "@sysroot_linux_x86_64//:compiler_files",
+    targets = ["linux-x86_64"],
+)
+llvm.extra_linker_files(
+    name = "llvm_toolchain_linux_aarch64",
+    label = "@sysroot_linux_aarch64//:linker_files",
+    targets = ["linux-aarch64"],
+)
+llvm.extra_linker_files(
+    name = "llvm_toolchain_linux_aarch64",
+    label = "@sysroot_linux_x86_64//:linker_files",
+    targets = ["linux-x86_64"],
+)
 llvm.sysroot(
     name = "llvm_toolchain_linux_x86_64",
     label = "@sysroot_linux_aarch64//:sysroot",
@@ -436,6 +489,26 @@ llvm.sysroot(
 llvm.sysroot(
     name = "llvm_toolchain_linux_x86_64",
     label = "@sysroot_linux_x86_64//:sysroot",
+    targets = ["linux-x86_64"],
+)
+llvm.extra_compiler_files(
+    name = "llvm_toolchain_linux_x86_64",
+    label = "@sysroot_linux_aarch64//:compiler_files",
+    targets = ["linux-aarch64"],
+)
+llvm.extra_compiler_files(
+    name = "llvm_toolchain_linux_x86_64",
+    label = "@sysroot_linux_x86_64//:compiler_files",
+    targets = ["linux-x86_64"],
+)
+llvm.extra_linker_files(
+    name = "llvm_toolchain_linux_x86_64",
+    label = "@sysroot_linux_aarch64//:linker_files",
+    targets = ["linux-aarch64"],
+)
+llvm.extra_linker_files(
+    name = "llvm_toolchain_linux_x86_64",
+    label = "@sysroot_linux_x86_64//:linker_files",
     targets = ["linux-x86_64"],
 )
 
