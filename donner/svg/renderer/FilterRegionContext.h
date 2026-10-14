@@ -105,9 +105,12 @@ struct FilterRegionContext {
   /// @param filterRegion Filter region in user coordinates.
   /// @param deviceFromFilter Filter-to-device transform, copied into this context.
   /// @param primitiveBounds Optional backend-resolved percentage reference bounds.
+  /// @param rasterRegion Raster-space clipping region when default history follows raster
+  /// execution.
   FilterRegionContext(const FilterGraph& graph, Vector2i sourceSize, const Box2d& filterRegion,
                       const Transform2d& deviceFromFilter,
-                      std::optional<Box2d> primitiveBounds = std::nullopt)
+                      std::optional<Box2d> primitiveBounds = std::nullopt,
+                      std::optional<Box2d> rasterRegion = std::nullopt)
       : filterRegion(filterRegion),
         deviceFromFilter(deviceFromFilter),
         scaleX(FilterDeviceScaleX(deviceFromFilter)),
@@ -124,7 +127,11 @@ struct FilterRegionContext {
         filterFromDevice(deviceFromFilter.inverse()),
         primitiveUnitsBounds(primitiveBounds.value_or(
             computePrimitiveUnitsBounds(sourceSize, graph.primitiveViewport))),
-        previousOutputSubregion(filterRegion) {}
+        historyInDeviceSpace(rasterRegion.has_value()),
+        historyFilterRegion(rasterRegion.value_or(filterRegion)),
+        historySourceRegion(rasterRegion ? Box2d::FromXYWH(0, 0, sourceSize.x, sourceSize.y)
+                                         : filterRegion),
+        previousOutputSubregion(historySourceRegion) {}
 
   /// Resolve an effect length along X. @param value Length in primitive units.
   double toPixelX(double value) const {
@@ -150,32 +157,16 @@ struct FilterRegionContext {
       return it != namedSubregions.end() ? it->second : previousOutputSubregion;
     }
     return std::holds_alternative<FilterInput::Previous>(input.value) ? previousOutputSubregion
-                                                                      : filterRegion;
+                                                                      : historySourceRegion;
   }
 
   /// Resolve explicit or input-derived primitive bounds. @param node Primitive to evaluate.
   Box2d computeNodeSubregion(const FilterNode& node) const {
-    using namespace components;
-    const bool sourceGenerator =
-        std::holds_alternative<filter_primitive::Flood>(node.primitive) ||
-        std::holds_alternative<filter_primitive::Turbulence>(node.primitive) ||
-        std::holds_alternative<filter_primitive::Image>(node.primitive) ||
-        std::holds_alternative<filter_primitive::Tile>(node.primitive);
-    const bool explicitSubregion = node.hasExplicitRegion();
-    if (explicitSubregion) {
+    if (node.hasExplicitRegion()) {
       return explicitNodeSubregion(node);
     }
-    const size_t slots = FilterInputSlotCount(node);
-    if (sourceGenerator || slots == 0) {
-      return filterRegion;
-    }
-    Box2d inputBounds = resolveInputSubregion(FilterInputOrDefault(node, 0));
-    for (size_t index = 1; index < slots; ++index) {
-      inputBounds =
-          Box2d::Union(inputBounds, resolveInputSubregion(FilterInputOrDefault(node, index)));
-    }
-    expandPrimitiveBounds(node, inputBounds);
-    return intersect(inputBounds, filterRegion);
+    const Box2d bounds = computeDefaultSubregion(node);
+    return historyInDeviceSpace ? filterFromDevice.transformBox(bounds) : bounds;
   }
 
   /// Evaluate admitted region stacks after the default subregion is known.
@@ -203,10 +194,20 @@ struct FilterRegionContext {
 
   /// Retain a primitive's actual region for later input-derived defaults.
   /// @param node Completed primitive. @param bounds Region used for that primitive.
-  void recordSubregion(const FilterNode& node, const Box2d& bounds) {
-    previousOutputSubregion = bounds;
+  /// @param animatedRegion Un-clipped sampled region, when an animation contributed.
+  void recordSubregion(const FilterNode& node, const Box2d& bounds,
+                       std::optional<Box2d> animatedRegion = std::nullopt) {
+    Box2d retained = bounds;
+    if (historyInDeviceSpace) {
+      retained = animatedRegion || node.hasExplicitRegion()
+                     ? intersect(deviceFromFilter.transformBox(
+                                     animatedRegion.value_or(explicitNodeRegion(node))),
+                                 historyFilterRegion)
+                     : computeDefaultSubregion(node);
+    }
+    previousOutputSubregion = retained;
     if (node.result) {
-      namedSubregions[node.result->str()] = bounds;
+      namedSubregions[node.result->str()] = retained;
     }
   }
 
@@ -234,10 +235,33 @@ struct FilterRegionContext {
   double boundingBoxY = 0.0;
   Transform2d filterFromDevice;
   Box2d primitiveUnitsBounds;
+  bool historyInDeviceSpace = false;
+  Box2d historyFilterRegion;
+  Box2d historySourceRegion;
   Box2d previousOutputSubregion;
   std::unordered_map<std::string, Box2d> namedSubregions;
 
 private:
+  Box2d computeDefaultSubregion(const FilterNode& node) const {
+    using namespace components;
+    const bool sourceGenerator =
+        std::holds_alternative<filter_primitive::Flood>(node.primitive) ||
+        std::holds_alternative<filter_primitive::Turbulence>(node.primitive) ||
+        std::holds_alternative<filter_primitive::Image>(node.primitive) ||
+        std::holds_alternative<filter_primitive::Tile>(node.primitive);
+    const size_t slots = FilterInputSlotCount(node);
+    if (sourceGenerator || slots == 0) {
+      return historyFilterRegion;
+    }
+    Box2d inputBounds = resolveInputSubregion(FilterInputOrDefault(node, 0));
+    for (size_t index = 1; index < slots; ++index) {
+      inputBounds =
+          Box2d::Union(inputBounds, resolveInputSubregion(FilterInputOrDefault(node, index)));
+    }
+    expandPrimitiveBounds(node, inputBounds);
+    return intersect(inputBounds, historyFilterRegion);
+  }
+
   double contextOrigin(double origin) const { return isObjectBoundingBox ? origin : 0; }
 
   std::optional<double> sampleRegionField(const FilterNode& node, std::size_t index,
@@ -342,6 +366,9 @@ private:
   }
 
   Box2d expandByDeviceSupport(const Box2d& bounds, double x, double y) const {
+    if (historyInDeviceSpace) {
+      return Box2d(bounds.topLeft - Vector2d(x, y), bounds.bottomRight + Vector2d(x, y));
+    }
     const Vector2d extent(
         std::abs(filterFromDevice.data[0]) * x + std::abs(filterFromDevice.data[2]) * y,
         std::abs(filterFromDevice.data[1]) * x + std::abs(filterFromDevice.data[3]) * y);
@@ -388,9 +415,10 @@ private:
                                     : 0.0) *
                                3.0);
     const Vector2d offset = toPixelOffset(drop.dx, drop.dy);
+    const Vector2d rasterOffset(std::round(BoundedSignedFilterPixels(offset.x)),
+                                std::round(BoundedSignedFilterPixels(offset.y)));
     const Vector2d boundedOffset =
-        filterFromDevice.transformVector(Vector2d(std::round(BoundedSignedFilterPixels(offset.x)),
-                                                  std::round(BoundedSignedFilterPixels(offset.y))));
+        historyInDeviceSpace ? rasterOffset : filterFromDevice.transformVector(rasterOffset);
     const Box2d expanded = expandByDeviceSupport(inputBounds, x, y);
     const Box2d shadow(expanded.topLeft + boundedOffset, expanded.bottomRight + boundedOffset);
     inputBounds = Box2d::Union(inputBounds, shadow);

@@ -800,13 +800,17 @@ void ApplyFilterGraphToPixmap(tiny_skia::Pixmap& pixmap, const components::Filte
   tiny_skia::filter::FilterGraph graph =
       CreateExecutableGraph(context, clipSourceToFilterRegion, fillPaintInput, strokePaintInput);
   graph.nodes.reserve(filterGraph.nodes.size());
+  const Box2d rasterRegion = graph.filterRegion
+                                 ? Box2d::FromXYWH(graph.filterRegion->x, graph.filterRegion->y,
+                                                   graph.filterRegion->w, graph.filterRegion->h)
+                                 : Box2d::FromXYWH(0, 0, pixmap.width(), pixmap.height());
   FilterRegionContext regions(filterGraph, Vector2i(pixmap.width(), pixmap.height()),
                               context.filterRegion.value_or(context.primitiveUnitsBounds),
-                              deviceFromFilter, context.primitiveUnitsBounds);
+                              deviceFromFilter, context.primitiveUnitsBounds, rasterRegion);
   for (const components::FilterNode& node : filterGraph.nodes) {
     const FilterRegionSample sampled = regions.sampleNodeSubregion(node);
     graph.nodes.push_back(ConvertNode(node, context, graph, sampled));
-    regions.recordSubregion(node, sampled.bounds);
+    regions.recordSubregion(node, sampled.bounds, sampled.animatedRegion);
   }
 
   tiny_skia::filter::executeFilterGraph(pixmap, graph);
