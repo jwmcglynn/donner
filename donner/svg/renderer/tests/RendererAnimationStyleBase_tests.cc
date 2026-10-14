@@ -8,6 +8,38 @@
 namespace donner::svg {
 namespace {
 
+#ifdef DONNER_TEXT_ENABLED
+TEST(RendererAnimationStyleBase, FontSizeUsesTheSampledParentFontContext) {
+  for (const bool animatedParent : {false, true}) {
+    for (const std::string_view from : {"200%", "2em"}) {
+      SCOPED_TRACE(animatedParent);
+      SCOPED_TRACE(from);
+      const std::string source =
+          "<g id='parent' font-size='12'><text id='label' x='0' y='30' font-size='24'>H</text></g>";
+      auto document = instantiateSubtree(
+          source + "<animate href='#label' attributeName='font-size' from='" + std::string(from) +
+              "' to='12px' dur='2s'/>" +
+              (animatedParent ? "<animate href='#parent' attributeName='font-size' from='12' "
+                                "to='20' dur='2s'/>"
+                              : ""),
+          parser::SVGParser::Options(), Vector2i(96, 48));
+      auto expected = instantiateSubtree(std::string("<text x='0' y='30' font-size='") +
+                                             (animatedParent ? "22" : "18") + "'>H</text>",
+                                         parser::SVGParser::Options(), Vector2i(96, 48));
+      document.setTime(1);
+      editor::tests::CompareBitmapToBitmap(
+          RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(expected),
+          "font-size-parent-context", editor::tests::PixelmatchIdentityParams());
+      auto restored = instantiateSubtree(source, parser::SVGParser::Options(), Vector2i(96, 48));
+      document.setTime(3);
+      editor::tests::CompareBitmapToBitmap(
+          RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(restored),
+          "font-size-parent-context-restored", editor::tests::PixelmatchIdentityParams());
+    }
+  }
+}
+#endif
+
 TEST(RendererAnimationStyleBase, ToOnlyPaintKeepsStylesheetReferenceAndFallback) {
   for (const std::string_view paint : {"url('#g')", "url('#quoted\"g')", "url('#missing') red"}) {
     SCOPED_TRACE(paint);
