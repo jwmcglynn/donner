@@ -94,7 +94,13 @@ runner's pass/fail decision. An `error` remains an error even if a retained coun
 
 ## Automated verification
 
-The regression suite runs without MCP, Pillow, numpy or pytest:
+The regression suite runs in the normal Bazel test graph without MCP, Pillow, numpy or pytest:
+
+```sh
+bazel test //tools/mcp-servers/resvg-test-triage:triage_tests
+```
+
+For direct stdlib execution:
 
 ```sh
 PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover \

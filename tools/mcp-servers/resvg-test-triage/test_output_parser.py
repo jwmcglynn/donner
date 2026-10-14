@@ -119,6 +119,22 @@ def _enrich_summary(result: TestResult, path: Optional[str], line: str) -> None:
     result.raw_output += "\n" + line
 
 
+def _comparator_record(line: str) -> Optional[tuple[str, str]]:
+    """Separate the fixed record header and final backend marker from the path."""
+    header = re.match(r"^[ \t]*\[[ \t]*COMPARE[ \t]*\][ \t]+", line)
+    if not header:
+        return None
+    contents = line[header.end():].rstrip(" \t")
+    path, marker, record = contents.rpartition(" [")
+    backend, separator, payload = record.partition("]:")
+    if (marker and separator and path.endswith(".svg") and backend
+            and not any(char in backend for char in "[]")):
+        return path, payload.lstrip(" \t")
+    if not marker and contents.endswith(".svg"):
+        return contents, ""
+    return None
+
+
 class _OutputParser:
     """Keep the active test separate from completed records and summary repeats."""
 
@@ -150,14 +166,15 @@ class _OutputParser:
 
     def observe(self, line: str) -> None:
         self.pending.append(line)
-        compare = re.search(r"\[\s*COMPARE\s*\]\s+(.+?\.svg)(?:\s+\[|$)", line)
-        if compare:
-            self.current_path = compare.group(1)
-        metric = re.search(
-            r"(?<![0-9])([0-9]{1,10})(?![0-9])[ \t]+pixels?[ \t]+differ(?:ent)?\b", line
+        compare = _comparator_record(line)
+        if compare is None:
+            return
+        self.current_path, payload = compare
+        metric = re.match(
+            r"(?:(?:FAIL|PASS)[ \t]+\()?([0-9]{1,10})(?![0-9])"
+            r"[ \t]+pixels?[ \t]+differ(?:ent)?\b", payload
         )
-        if metric:
-            self.current_diff = int(metric.group(1))
+        self.current_diff = int(metric.group(1)) if metric else None
 
     def finish_test(self, test_id: str, status: str, line: str) -> None:
         is_active = self.current_id == test_id

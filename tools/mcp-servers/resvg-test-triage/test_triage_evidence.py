@@ -138,6 +138,7 @@ class OutputEvidenceTests(unittest.TestCase):
             "warning: [ COMPARE ] /tests/shapes/rect/a.svg [TinySkia]: 42 pixels differ",
             "[ COMPARE ] /tests/shapes/rect/a.svg [TinySkia]: parser error: 42 pixels differ",
             "[ COMPARE ] /tests/shapes/rect/42 pixels differ.svg [TinySkia]: PASS",
+            "[ COMPARE ] /tests/a.svg [TinySkia]: 42 pixels differ/final.svg [TinySkia]: PASS",
         )
         for diagnostic in diagnostics:
             with self.subTest(diagnostic=diagnostic):

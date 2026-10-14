@@ -3,6 +3,8 @@ load("//build_defs:rules.bzl", "libc_compat_deps")
 
 package(default_visibility = ["//visibility:public"])
 
+exports_files(["dependencies.bzl"])
+
 cc_library(
     name = "image_compare",
     testonly = True,
