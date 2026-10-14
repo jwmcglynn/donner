@@ -370,23 +370,44 @@ def _workflow_paths():
 
 # One token of a YAML or shell line: an escaped character, a Bash ANSI-C quoted string
 # (`$'...'`, where a backslash escapes the next character), a single- or double-quoted string,
-# a `#` that starts a comment (at the start or after whitespace), or any other character. A
-# backslash escapes the next character except inside plain single quotes, as in Bash and YAML
-# double-quoted strings.
-_COMMENT_SCAN = re.compile(r"""\\.|\$'(?:\\.|[^'\\])*'?|'[^']*'?|"(?:\\.|[^"\\])*"?|"""
-                           r"""(?P<comment>(?:^|(?<=[ \t]))#)|.""", re.DOTALL)
+# or any other character. A backslash escapes the next character except inside plain single
+# quotes, as in Bash and YAML double-quoted strings.
+_COMMENT_SCAN = re.compile(r"""\\.|\$'(?:\\.|[^'\\])*'?|'[^']*'?|"(?:\\.|[^"\\])*"?|.""",
+                           re.DOTALL)
 
 
-def _strip_comment(value):
-    """A YAML or shell line without its trailing comment, outside quotes and escapes."""
+def _strip_comment(value, yaml=False):
+    """A YAML or shell line without its trailing comment, outside quotes and escapes.
+
+    A comment starts at a `#` token at the start of the line or after a space or tab. In shell
+    text the blank must be unescaped, so `label\\ #1` keeps the `#` in the word. A YAML plain
+    scalar has no escapes, so with `yaml` the `#` after an escaped blank still starts a comment.
+    """
+    after_blank = True
     for match in _COMMENT_SCAN.finditer(value):
-        if match.group("comment"):
+        token = match.group()
+        if token == "#" and after_blank:
             return value[:match.start()].rstrip()
+        after_blank = (token[-1] if yaml else token) in (" ", "\t")
     return value
 
 
+_CONTINUATION = re.compile(r"(\\+)\n\s*")
+
+
+def _join_continuations(script):
+    """A shell script with each line that ends in backslashes joined to the next with a space.
+
+    An odd run ends in a continuation, which is removed. An even run ends in an escaped
+    backslash, which is kept, so the join never turns it into an escaped blank. Joining an even
+    run too keeps the text of a quote that is open across the newline on one line.
+    """
+    return _CONTINUATION.sub(lambda match: match.group(1)[:len(match.group(1)) // 2 * 2] + " ",
+                             script)
+
+
 def _scalar(value):
-    value = _strip_comment(value.strip())
+    value = _strip_comment(value.strip(), yaml=True)
     if len(value) >= 2 and value[0] == value[-1] and value[0] in "'\"":
         return value[1:-1]
     if value.startswith("[") and value.endswith("]"):
@@ -754,7 +775,7 @@ def bazel_invocations(script, environment, scenario=None):
     script = _SELECTION.sub(lambda match: match.group("name") + "=" + SELECTED_TARGETS, script)
     if scenario is not None:
         script = render(script, scenario)
-    script = re.sub(r"\\\n\s*", " ", script)
+    script = _join_continuations(script)
     variables = {}
     invocations = []
     for line in script.splitlines():
@@ -1370,7 +1391,7 @@ def failure_masks(script, shell=None):
     # not shell operators.
     script = _TEMPLATE.sub("EXPR", script)
     lines = [" ".join(_strip_comment(line).split())
-             for line in re.sub(r"\\\n\s*", " ", script).splitlines()]
+             for line in _join_continuations(script).splitlines()]
     lines = [line for line in lines if line]
     found.update(line for line in lines if _line_masks(line))
     return found | _group_masks(lines)
@@ -1737,6 +1758,26 @@ class CiLaneParityTest(unittest.TestCase):
             len(bazel_invocations("echo $'label \\' #1'; bazelisk test //...\n", {})), 1)
         self.assertEqual(failure_masks("echo $'label \\' #1'; set +e"),
                          {"echo $'label \\' #1'; set +e"})
+        # An escaped blank continues the word, so the `#` after it starts no comment. An escaped
+        # backslash before the blank leaves the blank unescaped.
+        masked = "echo label\\ #1; bazelisk test //... || true"
+        self.assertEqual(len(bazel_invocations(masked + "\n", {})), 1)
+        self.assertEqual(failure_masks(masked), {masked})
+        self.assertEqual(len(bazel_invocations("echo a\\\t#1; bazelisk test //...\n", {})), 1)
+        self.assertEqual(len(bazel_invocations("echo a\\\\\\ #1; bazelisk test //...\n", {})), 1)
+        self.assertEqual(bazel_invocations("echo a\\\\ # bazelisk test //...\n", {}), [])
+        self.assertEqual(bazel_invocations("echo a\\ #1  # bazelisk test //...\n", {}), [])
+        # An even run of backslashes before a newline is no continuation, so the next line is a
+        # comment of its own.
+        self.assertEqual(bazel_invocations("echo a\\\\\n# bazelisk test //... || true\n", {}), [])
+        self.assertEqual(failure_masks("echo a\\\\\n# bazelisk test //... || true"), set())
+        # Inside an open quote the newline after an even run does not end the command.
+        quoted_newline = 'echo "a\\\\\n# still quoted"; bazelisk test //... || true\n'
+        self.assertEqual(len(bazel_invocations(quoted_newline, {})), 1)
+        self.assertEqual(len(failure_masks(quoted_newline)), 1)
+        # A YAML plain scalar has no escapes, so its ` #` starts a YAML comment.
+        steps = parse_workflow("steps:\n  - run: echo a\\ #1; bazelisk test //... || true\n")
+        self.assertEqual(steps["steps"][0]["run"], "echo a\\")
         quoted = bazel_invocations('bazelisk test --test_arg="a #b" //a\n', {})
         self.assertEqual(quoted[0]["targets"], {"//a"})
         self.assertEqual(failure_masks('echo "lane #1"; set +e\nbazelisk test //...'),
