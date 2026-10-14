@@ -94,7 +94,7 @@ namespace donner::svg {
  * \endhtmlonly
  */
 class SVGPathElement : public SVGGeometryElement {
-  friend class parser::SVGParserImpl;
+  friend class details::ElementFactory;
 
 private:
   /// Create an SVGPathElement wrapper from an entity.

@@ -219,7 +219,7 @@ namespace donner::svg {
  * fragment, providing the result as filter output.
  */
 class SVGFEImageElement : public SVGFilterPrimitiveStandardAttributes {
-  friend class parser::SVGParserImpl;
+  friend class details::ElementFactory;
 
 protected:
   /// Create an SVGFEImageElement wrapper from an entity.

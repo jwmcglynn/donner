@@ -196,7 +196,7 @@ namespace donner::svg {
  * turbulence and fractalNoise types with configurable frequency, octave count, and seed.
  */
 class SVGFETurbulenceElement : public SVGFilterPrimitiveStandardAttributes {
-  friend class parser::SVGParserImpl;
+  friend class details::ElementFactory;
 
 protected:
   /// Create an SVGFETurbulenceElement wrapper from an entity.

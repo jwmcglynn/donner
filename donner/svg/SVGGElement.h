@@ -45,7 +45,7 @@ namespace donner::svg {
  * DOM object for a \ref xml_g element.
  */
 class SVGGElement : public SVGGraphicsElement {
-  friend class parser::SVGParserImpl;
+  friend class details::ElementFactory;
 
 protected:
   /// Create an SVGGElement wrapper from an entity.

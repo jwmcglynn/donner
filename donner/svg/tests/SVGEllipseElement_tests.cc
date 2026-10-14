@@ -3,6 +3,9 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <string>
+#include <string_view>
+
 #include "donner/base/tests/BaseTestUtils.h"
 #include "donner/svg/SVGRadialGradientElement.h"  // used for a negative cast test
 #include "donner/svg/renderer/tests/RendererTestBackend.h"
@@ -286,6 +289,50 @@ TEST(SVGEllipseElementTests, RenderingTransform) {
       ................
       ................
   )"));
+}
+
+TEST(SVGEllipseElementTests, ExplicitAutoRadiiUseOtherAxis) {
+  struct Case {
+    std::string_view attributes;
+    double radius;
+  };
+  for (const Case testcase : {Case{R"(rx="auto" ry="4")", 4}, Case{R"(rx="4" ry="auto")", 4},
+                              Case{R"(rx="auto" ry="25%")", 5}, Case{R"(rx="25%" ry="auto")", 10},
+                              Case{R"(rx="7" ry="4" style="rx:auto")", 4}}) {
+    SCOPED_TRACE(testcase.attributes);
+    auto fragment = instantiateSubtreeElementAs<SVGEllipseElement>(
+        std::string(R"(<ellipse cx="20" cy="10" fill="black" )") +
+            std::string(testcase.attributes) + "/>",
+        {}, Vector2i(40, 20));
+    EXPECT_THAT(fragment->worldBounds(),
+                Optional(Eq(Box2d(Vector2d(20 - testcase.radius, 10 - testcase.radius),
+                                  Vector2d(20 + testcase.radius, 10 + testcase.radius)))));
+    // SVG2's single-axis auto rule makes this ellipse equivalent to an explicit-radius circle.
+    const AsciiImage reference = RendererTestUtils::renderToAsciiImage(
+        std::string(R"(<circle cx="20" cy="10" fill="black" r=")") +
+            std::to_string(testcase.radius) + R"("/>)",
+        Vector2i(40, 20));
+    EXPECT_THAT(RendererTestUtils::renderToAsciiImage(fragment.document).generated,
+                Eq(reference.generated));
+  }
+}
+
+TEST(SVGEllipseElementTests, ExplicitAutoRadiiWithoutLengthDoNotRender) {
+  const std::string blankRow = std::string(16, '.') + "\n";
+  std::string blankImage;
+  for (int row = 0; row < 16; ++row) {
+    blankImage += blankRow;
+  }
+  for (const std::string_view radii : {R"(rx="auto")", R"(ry="auto")", R"(rx="auto" ry="auto")",
+                                       R"(style="rx:initial;ry:unset")"}) {
+    SCOPED_TRACE(radii);
+    auto fragment = instantiateSubtreeElementAs<SVGEllipseElement>(
+        std::string(R"(<ellipse cx="8" cy="8" fill="black" )") + std::string(radii) + "/>");
+    EXPECT_THAT(fragment->computedRx(), LengthIs(0, Lengthd::Unit::None));
+    EXPECT_THAT(fragment->computedRy(), LengthIs(0, Lengthd::Unit::None));
+    EXPECT_THAT(fragment->computedSpline(), Eq(std::nullopt));
+    EXPECT_THAT(RendererTestUtils::renderToAsciiImage(fragment.document).generated, Eq(blankImage));
+  }
 }
 
 }  // namespace donner::svg

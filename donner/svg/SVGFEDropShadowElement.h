@@ -54,7 +54,7 @@ namespace donner::svg {
  * DOM object for a \ref xml_feDropShadow element.
  */
 class SVGFEDropShadowElement : public SVGFilterPrimitiveStandardAttributes {
-  friend class parser::SVGParserImpl;
+  friend class details::ElementFactory;
 
 protected:
   /// Create an SVGFEDropShadowElement wrapper from an entity.

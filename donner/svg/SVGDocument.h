@@ -304,6 +304,11 @@ public:
    *
    * Documents without XML source text are not modified, and the result carries a diagnostic.
    *
+   * Elements that the edit inserts, or moves into the SVG namespace by changing an `xmlns`
+   * declaration, are built through the same element factory and attribute parsing as the parser,
+   * so they get the element type a fresh parse of the new source would give them, at the edit's
+   * incremental scope.
+   *
    * @param intent Source edit request.
    */
   xml::ApplySourceEditResult applySourceEdit(const xml::XMLEditIntent& intent);
@@ -500,24 +505,71 @@ public:
 
 private:
   /**
+   * Apply every XML mutation in \p result to this SVG document's semantic projection, keeping the
+   * first diagnostic.
+   *
+   * @param result XML edit result whose mutations to apply.
+   */
+  void applyXMLMutations(xml::ApplySourceEditResult& result);
+
+  /**
    * Apply a single XML mutation to this SVG document's semantic projection.
    *
    * @param mutation XML mutation emitted by the source-edit layer.
    */
   std::optional<ParseDiagnostic> applyXMLMutation(const xml::XMLMutation& mutation);
+
+  /**
+   * Apply a text or CDATA value change to the SVG projection: the new content of a text or style
+   * element, or the new text of a `<title>`, `<desc>` or `<metadata>` element, which the parser
+   * that built this document parses again.
+   *
+   * @param mutation NodeValueChanged mutation emitted by the source-edit layer.
+   */
+  std::optional<ParseDiagnostic> applyNodeValueXMLMutation(const xml::XMLMutation& mutation);
+
+  /**
+   * Parse the text of a `<title>`, `<desc>` or `<metadata>` element again, through the parser that
+   * built this document, so its current text replaces the old. Does nothing for other elements.
+   *
+   * @param node XML element whose text changed.
+   * @return An error, with the old text kept, if the new text exceeds the document's
+   *   content-projection budget.
+   */
+  std::optional<ParseDiagnostic> reparseDescriptiveText(const xml::XMLNode& node);
+
+  /**
+   * Apply an attribute set or removal to the SVG projection. A namespace declaration change
+   * reprojects the element's subtree, since it can change which descendants are SVG elements.
+   *
+   * @param mutation Attribute mutation emitted by the source-edit layer.
+   * @param handle Entity of the mutated element.
+   */
   std::optional<ParseDiagnostic> applyAttributeXMLMutation(const xml::XMLMutation& mutation,
                                                            EntityHandle handle);
+
+  /**
+   * Apply \p node's attributes to its projected SVG element.
+   *
+   * @param node XML element whose attributes to apply.
+   * @param builtTypedElement Whether the projection just built the element's type, so it also needs
+   *   the parser's type-specific attribute and content parsing.
+   */
+  std::optional<ParseDiagnostic> projectXMLAttributes(const xml::XMLNode& node,
+                                                      bool builtTypedElement);
 
   /**
    * Project an XML element subtree into SVG semantic components.
    *
    * Used after XML-owned element-subtree reparsing has already updated the DOM tree in place.
-   * Existing SVG entities keep their identity; newly cloned XML element nodes receive SVG
-   * components and attributes.
+   * Existing SVG entities keep their identity. Newly cloned XML element nodes, and unknown elements
+   * whose tag now names an SVG element type, are built as the parser builds them.
    *
    * @param node XML element subtree root.
+   * @param contentsReparsed Whether a subtree reparse just synced the subtree from source, so an
+   *   existing `<title>`, `<desc>` or `<metadata>` element in it parses its text again.
    */
-  std::optional<ParseDiagnostic> projectXMLSubtree(const xml::XMLNode& node);
+  std::optional<ParseDiagnostic> projectXMLSubtree(const xml::XMLNode& node, bool contentsReparsed);
 
   void assertScopedRegistryAccessAllowed() const {
     UTILS_RELEASE_ASSERT_MSG(
