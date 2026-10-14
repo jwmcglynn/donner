@@ -63,6 +63,69 @@ void ExpectOffArtboardPixels(const RendererBitmap& fullTile, int rows, const cha
   EXPECT_GT(changedPixels, 100) << label << " must retain source pixels above the artboard";
 }
 
+TEST(CompositorGeodeSplashTest, ConcurrentAnimationRetainsUnchangedTextInstances) {
+  constexpr std::string_view kText =
+      "<text x='8' y='30' font-size='20'>Retained animation text</text>";
+  const std::string prefix = "<svg xmlns='http://www.w3.org/2000/svg' width='256' height='64'>";
+  const std::string source = prefix + std::string(kText) +
+                             "<rect x='8' y='40' width='16' height='16' fill='red'>"
+                             "<animate attributeName='x' from='8' to='24' dur='1s' "
+                             "repeatCount='indefinite'/></rect></svg>";
+  const std::string reference =
+      prefix + std::string(kText) + "<rect x='16' y='40' width='16' height='16' fill='red'/></svg>";
+  ParseWarningSink warnings;
+  auto expectedParsed = parser::SVGParser::ParseSVG(reference, warnings);
+  ASSERT_FALSE(expectedParsed.hasError());
+  SVGDocument expectedDocument = std::move(expectedParsed.result());
+  RenderViewport viewport;
+  viewport.size = Vector2d(256, 64);
+  viewport.devicePixelRatio = 1.0;
+  RendererGeode referenceRenderer;
+  RendererDriver(referenceRenderer).draw(expectedDocument, viewport, Transform2d());
+  ASSERT_GT(referenceRenderer.lastFrameTimings().counters.glyphResidencyUploads, 0u);
+  const RendererBitmap expected = referenceRenderer.takeSnapshot();
+  ASSERT_FALSE(expected.empty());
+
+  uint64_t singleThreadedWrites = 0;
+  uint64_t singleThreadedBytes = 0;
+  for (const ThreadingMode mode : {ThreadingMode::SingleThreaded, ThreadingMode::ConcurrentDom}) {
+    SCOPED_TRACE(static_cast<int>(mode));
+    auto parsed = parser::SVGParser::ParseSVG(source, warnings);
+    ASSERT_FALSE(parsed.hasError());
+    SVGDocument document = std::move(parsed.result());
+    document.setThreadingMode(mode);
+    RendererGeode renderer;
+    CompositorConfig config;
+    config.autoPromoteAnimations = false;
+    config.complexityBucketing = false;
+    config.mandatoryHintScope = MandatoryHintScope::FilterOnly;
+    config.deferFirstFrameWarmup = true;
+    {
+      DocumentWriteAccess access = document.writeAccess();
+      CompositorController compositor(document, renderer, config);
+      for (double time : {0.0, 0.25, 0.5}) {
+        document.setTime(time);
+        compositor.renderFrame(viewport);
+      }
+    }
+    const auto counters = renderer.lastFrameTimings().counters;
+    EXPECT_GT(counters.glyphResidencyHits, 0u);
+    EXPECT_EQ(counters.glyphResidencyUploads, 0u);
+    if (mode == ThreadingMode::SingleThreaded) {
+      singleThreadedWrites = counters.bufferWrites;
+      singleThreadedBytes = counters.bufferWriteBytes;
+    } else {
+      EXPECT_EQ(counters.bufferWrites, singleThreadedWrites);
+      EXPECT_EQ(counters.bufferWriteBytes, singleThreadedBytes);
+    }
+    const RendererBitmap actual = renderer.takeSnapshot();
+    ASSERT_FALSE(actual.empty());
+    editor::tests::CompareBitmapToBitmap(actual, expected, "concurrent_animation_text",
+                                         editor::tests::PixelmatchIdentityParams());
+  }
+  EXPECT_FALSE(warnings.hasWarnings());
+}
+
 TEST(CompositorGeodeSplashTest, OffArtboardShineRetainsSourcePixelsInSelectedTile) {
   const donner::tests::RequiredRunfile source =
       donner::tests::ReadRequiredRunfile("donner_splash.svg");
