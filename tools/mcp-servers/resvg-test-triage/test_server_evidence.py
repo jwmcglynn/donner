@@ -54,6 +54,43 @@ class ServerEvidenceTests(unittest.TestCase):
         response = asyncio.run(self.server.call_tool(name, arguments))
         return json.loads(response[0].text)
 
+    def test_failure_schema_allows_missing_or_null_comparator_count(self):
+        tool = next(tool for tool in asyncio.run(self.server.list_tools())
+                    if tool.name == "analyze_test_failure")
+        self.assertNotIn("pixel_diff", tool.inputSchema["required"])
+        metric = tool.inputSchema["properties"]["pixel_diff"]
+        self.assertEqual(set(metric["type"]), {"integer", "null"})
+        self.assertEqual(metric["minimum"], 0)
+
+    def test_failure_without_comparator_count_stays_unknown(self):
+        for metric in ({}, {"pixel_diff": None}):
+            with self.subTest(metric=metric):
+                result = self.call("analyze_test_failure", {
+                    "test_name": "renderer-failure.svg", "svg_content": "<svg/>", **metric,
+                })
+                self.assertIsNone(result["pixel_diff"])
+                self.assertIsNone(result["metric_source"])
+                self.assertEqual(result["category"], "unresolved")
+                self.assertEqual(result["severity"], "unknown")
+                self.assertIsNone(result["suggested_skip"])
+
+    def test_failure_supplied_count_keeps_zero_distinct_from_missing(self):
+        for count in (0, 7):
+            with self.subTest(count=count):
+                result = self.call("analyze_test_failure", {
+                    "test_name": "comparison.svg", "svg_content": "<svg/>", "pixel_diff": count,
+                })
+                self.assertEqual(result["pixel_diff"], count)
+                self.assertEqual(result["metric_source"], "caller_supplied_comparator")
+                self.assertEqual(result["category"], "unresolved")
+
+    def test_failure_invalid_comparator_count_is_rejected(self):
+        for count in (-1, True, 1.5, "3"):
+            with self.subTest(count=count), self.assertRaisesRegex(ValueError, "pixel_diff"):
+                self.call("analyze_test_failure", {
+                    "test_name": "comparison.svg", "svg_content": "<svg/>", "pixel_diff": count,
+                })
+
     def test_feature_presence_does_not_prove_unsupported(self):
         for count in (1, 100, 500, 999, 10000):
             result = self.call("analyze_test_failure", {
