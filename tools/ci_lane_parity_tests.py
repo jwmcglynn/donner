@@ -1767,6 +1767,10 @@ class CiLaneParityTest(unittest.TestCase):
         # comment of its own.
         self.assertEqual(bazel_invocations("echo a\\\\\n# bazelisk test //... || true\n", {}), [])
         self.assertEqual(failure_masks("echo a\\\\\n# bazelisk test //... || true"), set())
+        # Inside an open quote the newline after an even run does not end the command.
+        quoted_newline = 'echo "a\\\\\n# still quoted"; bazelisk test //... || true\n'
+        self.assertEqual(len(bazel_invocations(quoted_newline, {})), 1)
+        self.assertEqual(len(failure_masks(quoted_newline)), 1)
         # A YAML plain scalar has no escapes, so its ` #` starts a YAML comment.
         steps = parse_workflow("steps:\n  - run: echo a\\ #1; bazelisk test //... || true\n")
         self.assertEqual(steps["steps"][0]["run"], "echo a\\")
