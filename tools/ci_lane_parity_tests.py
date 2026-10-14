@@ -376,23 +376,34 @@ _COMMENT_SCAN = re.compile(r"""\\.|\$'(?:\\.|[^'\\])*'?|'[^']*'?|"(?:\\.|[^"\\])
                            re.DOTALL)
 
 
-def _strip_comment(value):
+def _strip_comment(value, yaml=False):
     """A YAML or shell line without its trailing comment, outside quotes and escapes.
 
-    A comment starts at a `#` token at the start of the line or after an unescaped space or tab.
-    An escaped blank is one token with its backslash, so `label\\ #1` keeps the `#` in the word.
+    A comment starts at a `#` token at the start of the line or after a space or tab. In shell
+    text the blank must be unescaped, so `label\\ #1` keeps the `#` in the word. A YAML plain
+    scalar has no escapes, so with `yaml` the `#` after an escaped blank still starts a comment.
     """
     after_blank = True
     for match in _COMMENT_SCAN.finditer(value):
         token = match.group()
         if token == "#" and after_blank:
             return value[:match.start()].rstrip()
-        after_blank = token in (" ", "\t")
+        after_blank = (token[-1] if yaml else token) in (" ", "\t")
     return value
 
 
+# A backslash-newline continues a shell line only when the run of backslashes before the newline
+# has odd length; an even run ends in an escaped backslash.
+_CONTINUATION = re.compile(r"(?<!\\)((?:\\\\)*)\\\n\s*")
+
+
+def _join_continuations(script):
+    """A shell script with each backslash-newline continuation joined into one line."""
+    return _CONTINUATION.sub(r"\1 ", script)
+
+
 def _scalar(value):
-    value = _strip_comment(value.strip())
+    value = _strip_comment(value.strip(), yaml=True)
     if len(value) >= 2 and value[0] == value[-1] and value[0] in "'\"":
         return value[1:-1]
     if value.startswith("[") and value.endswith("]"):
@@ -760,7 +771,7 @@ def bazel_invocations(script, environment, scenario=None):
     script = _SELECTION.sub(lambda match: match.group("name") + "=" + SELECTED_TARGETS, script)
     if scenario is not None:
         script = render(script, scenario)
-    script = re.sub(r"\\\n\s*", " ", script)
+    script = _join_continuations(script)
     variables = {}
     invocations = []
     for line in script.splitlines():
@@ -1376,7 +1387,7 @@ def failure_masks(script, shell=None):
     # not shell operators.
     script = _TEMPLATE.sub("EXPR", script)
     lines = [" ".join(_strip_comment(line).split())
-             for line in re.sub(r"\\\n\s*", " ", script).splitlines()]
+             for line in _join_continuations(script).splitlines()]
     lines = [line for line in lines if line]
     found.update(line for line in lines if _line_masks(line))
     return found | _group_masks(lines)
@@ -1751,6 +1762,14 @@ class CiLaneParityTest(unittest.TestCase):
         self.assertEqual(len(bazel_invocations("echo a\\\t#1; bazelisk test //...\n", {})), 1)
         self.assertEqual(len(bazel_invocations("echo a\\\\\\ #1; bazelisk test //...\n", {})), 1)
         self.assertEqual(bazel_invocations("echo a\\\\ # bazelisk test //...\n", {}), [])
+        self.assertEqual(bazel_invocations("echo a\\ #1  # bazelisk test //...\n", {}), [])
+        # An even run of backslashes before a newline is no continuation, so the next line is a
+        # comment of its own.
+        self.assertEqual(bazel_invocations("echo a\\\\\n# bazelisk test //... || true\n", {}), [])
+        self.assertEqual(failure_masks("echo a\\\\\n# bazelisk test //... || true"), set())
+        # A YAML plain scalar has no escapes, so its ` #` starts a YAML comment.
+        steps = parse_workflow("steps:\n  - run: echo a\\ #1; bazelisk test //... || true\n")
+        self.assertEqual(steps["steps"][0]["run"], "echo a\\")
         quoted = bazel_invocations('bazelisk test --test_arg="a #b" //a\n', {})
         self.assertEqual(quoted[0]["targets"], {"//a"})
         self.assertEqual(failure_masks('echo "lane #1"; set +e\nbazelisk test //...'),
