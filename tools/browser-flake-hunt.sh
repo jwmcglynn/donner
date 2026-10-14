@@ -28,13 +28,11 @@
 #                      macOS, which also confines it to efficiency cores, or nice -n 19
 #                      elsewhere. A browser helper process the system starts on the browser's
 #                      behalf may not inherit it.
-#   --headless         Run headless. By default browsers run headed, as every CI browser lane
-#                      does.
 #
-# Arguments after -- go to Playwright unchanged. The browser suites scale their bounds by the CI
-# time scale, so CI=true is set unless the caller sets CI. Cases that compare bitmaps need the
-# native comparator that tools/run-browser-ci.sh builds; export DONNER_BROWSER_GOLDEN_COMPARE to
-# run them.
+# Browsers run headed, as every CI browser lane does. Arguments after -- go to Playwright
+# unchanged. The browser suites scale their bounds by the CI time scale, so CI=true is set unless
+# the caller sets CI. Cases that compare bitmaps need the native comparator that
+# tools/run-browser-ci.sh builds; export DONNER_BROWSER_GOLDEN_COMPARE to run them.
 #
 # The summary (summary.txt in --out) counts runs, passes and failures per case, prints each
 # failure's first error line and output directory, and reports runs per hour.
@@ -46,7 +44,7 @@ repo_root="$(cd "${script_dir}/.." && pwd -P)"
 readonly kTestsDir="${repo_root}/donner/editor/wasm/tests"
 
 usage() {
-  sed -n '3,40p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+  sed -n '3,38p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
 }
 
 die() {
@@ -62,7 +60,6 @@ grep_pattern=""
 repeat=10
 cpu_load=0
 low_priority=0
-headed=1
 extra_args=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -80,7 +77,6 @@ while [[ $# -gt 0 ]]; do
       shift 2
       ;;
     --low-priority) low_priority=1; shift ;;
-    --headless) headed=0; shift ;;
     -h|--help) usage; exit 0 ;;
     --) shift; extra_args=("$@"); break ;;
     *) usage >&2; die "unknown argument: $1" ;;
@@ -94,7 +90,10 @@ package_dir="$(cd "${package_dir}" && pwd -P)"
 mkdir -p "${out_dir}"
 out_dir="$(cd "${out_dir}" && pwd -P)"
 pkg_copy="${out_dir}/package"
-[[ "${package_dir}" != "${pkg_copy}" ]] || die "--package must not be ${pkg_copy}: it is replaced"
+# The copy replaces ${pkg_copy}, so the package may not be in it, and --out may not be in the
+# package that is copied.
+[[ "${package_dir}/" != "${pkg_copy}/"* ]] || die "--package must not be in ${pkg_copy}"
+[[ "${out_dir}/" != "${package_dir}/"* ]] || die "--out must not be in the package"
 
 if [[ ! -d "${kTestsDir}/node_modules" ]]; then
   npm --prefix "${kTestsDir}" ci
@@ -114,6 +113,9 @@ cleanup() {
   fi
 }
 trap cleanup EXIT
+# Turn an interrupt or termination into an ordinary exit, so the cleanup above still runs.
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 # Serve a private copy, as tools/run-browser-ci.sh does, on a free port.
 rm -rf "${pkg_copy}"
@@ -166,9 +168,7 @@ fi
 if [[ -n "${grep_pattern}" ]]; then
   command+=("--grep=${grep_pattern}")
 fi
-if [[ "${headed}" == "1" ]]; then
-  command+=(--headed)
-fi
+command+=(--headed)
 command+=(${extra_args[@]+"${extra_args[@]}"})
 if [[ "${low_priority}" == "1" ]]; then
   if [[ "$(uname -s)" == "Darwin" ]]; then
@@ -179,7 +179,7 @@ if [[ "${low_priority}" == "1" ]]; then
 fi
 
 echo "Serving ${package_dir} at ${server_url}; ${repeat} runs per case, cpu-load ${cpu_load}," \
-  "low-priority ${low_priority}, headed ${headed}"
+  "low-priority ${low_priority}"
 started_at="$(date +%s)"
 status=0
 (cd "${kTestsDir}" && "${command[@]}") 2>&1 | tee "${out_dir}/playwright.log" || status=$?
