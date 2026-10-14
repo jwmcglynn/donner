@@ -655,6 +655,8 @@ private:
   void handleSamplePreviewResult(SampleThumbnailRenderResult result, bool pending, bool rendered);
   void invalidateChangedFontPreviews();
   void advanceVisiblePreviews();
+  /// Cancel auxiliary raster work while preserving its obligation for return to Edit.
+  void suspendAuxiliaryPreviewGeneration();
   void installCatalogFonts();
   void initializeFontPreviewCache();
   void queueBackgroundFontPreviews();

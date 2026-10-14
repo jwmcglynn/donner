@@ -520,6 +520,43 @@ js_test(
 )
 
 js_test(
+    name = "owned_process_lifecycle_tests",
+    size = "small",
+    data = ["owned-process-lifecycle.mjs"],
+    entry_point = "owned-process-lifecycle.spec.mjs",
+    node_options = ["--test"],
+)
+
+# Explicit runner-capability qualification; ordinary suites must not require Safari permissions.
+js_test(
+    name = "safari_driver_capability_test",
+    size = "medium",
+    data = ["owned-process-lifecycle.mjs"],
+    entry_point = "safari-driver-capability.spec.mjs",
+    # Node's HTTP client uses its bundled WebAssembly parser.
+    env = {"NODE_OPTIONS": ""},
+    node_options = ["--test"],
+    tags = [
+        "launches-browser",
+        "manual",
+        "no-local",
+    ],
+    target_compatible_with = [
+        "@platforms//cpu:aarch64",
+        "@platforms//os:macos",
+    ],
+)
+
+js_test(
+    name = "presented_document_cadence_tests",
+    size = "small",
+    copy_data_to_bin = False,
+    data = ["//donner/editor:WholeAppWorkerBridge.cc"],
+    entry_point = "presented-document-cadence.spec.mjs",
+    node_options = ["--test"],
+)
+
+js_test(
     name = "raster_task_yield_tests",
     size = "small",
     copy_data_to_bin = False,

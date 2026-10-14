@@ -371,8 +371,10 @@ double BrowserDevicePixelRatio() {
 void PublishFirstPresentedFrame(int headlessDeviceCreations) {
   whole_app_worker::NotifyFirstFramePresented(headlessDeviceCreations);
 }
-void PublishPresentedDocumentFrame(std::uint64_t documentGeneration, std::uint64_t frameVersion) {
-  whole_app_worker::PublishPresentedDocumentFrame(documentGeneration, frameVersion);
+void PublishPresentedDocumentFrame(std::uint64_t documentGeneration, std::uint64_t frameVersion,
+                                   bool surfacePresented) {
+  whole_app_worker::PublishPresentedDocumentFrame(documentGeneration, frameVersion,
+                                                  surfacePresented);
 }
 // The readback diagnostic's page handshake lives in the whole-app bridge: the
 // request/completed ids ride the shared-memory mirror and the stats publishes
@@ -3214,7 +3216,7 @@ struct EditorWindow::GpuFrameSubmission {
 #ifdef __EMSCRIPTEN__
     PublishFirstPresentedFrame(geode::GeodeDevice::headlessCreationCountForTesting());
     PublishPresentedDocumentFrame(documentIdentity.documentGeneration,
-                                  documentIdentity.frameVersion);
+                                  documentIdentity.frameVersion, surfacePresented);
 #endif
     completed = true;
   }

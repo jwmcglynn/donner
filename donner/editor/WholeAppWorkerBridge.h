@@ -231,8 +231,10 @@ void NotifyFirstFramePresented(int headlessDeviceCreations);
  *
  * @param documentGeneration Document generation of the presented frame.
  * @param frameVersion Frame version of the presented frame.
+ * @param surfacePresented Whether a real surface was acquired and successfully presented.
  */
-void PublishPresentedDocumentFrame(std::uint64_t documentGeneration, std::uint64_t frameVersion);
+void PublishPresentedDocumentFrame(std::uint64_t documentGeneration, std::uint64_t frameVersion,
+                                   bool surfacePresented);
 
 /// Mirror one scroll event onto `window.__donnerLastScrollEvent` for the
 /// browser suites.

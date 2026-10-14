@@ -140,6 +140,21 @@ document generation. Input edges are queued until safe document access; passive 
 Hover transitions exclude the shared ancestor path, and the previous path is retained across DOM
 changes. Focus loss cancels the pending press. Document replacement resets Preview.
 
+Preview suspends auxiliary font-preview raster work, cancels an outstanding preview through the
+worker's existing discard contract, and preserves the request for return to Edit. Admission resumes
+after the time-zero reset. The native `editor_shell_tests` cases
+`AnimationPreviewDefersFontPreviewWorkUntilEditIsRestored` and
+`AnimationPreviewCancelsAndPreservesActiveFontPreview` cover this boundary; document animation and
+font-resource adoption continue normally.
+
+Distinct document-presentation diagnostics count identity changes only after a successfully acquired
+surface is presented. They retain a bounded 4096-entry ring of producer timestamps, independently of
+worker-result telemetry. Repeated UI frames and offscreen completions do not increase that count.
+`//donner/editor/wasm/tests:presented_document_cadence_tests` covers those rules and delayed diagnostic
+delivery. The browser animation gate reports producer-time gaps separately from delivery-window
+throughput. These diagnostics measure the application's surface handoff, not physical scanout, and
+do not by themselves qualify sustained 60 fps.
+
 The browser raster worker yields a real task between iterations through one reusable MessageChannel.
 This keeps callback opportunities outside document and renderer locks without a timer delay before
 every frame. One pending continuation belongs to the worker lifetime; cleanup runs on that worker

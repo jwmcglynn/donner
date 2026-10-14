@@ -319,6 +319,35 @@ function assertFontReferenceLane({ lane, tags, specFiles }) {
   );
 }
 
+function assertAnimationLane({ lane, tags, specFiles }) {
+  assert.deepEqual(specFiles, ["smoke.spec.ts"]);
+  assert.ok(tags.includes("launches-browser"));
+  assert.ok(!tags.includes("manual") && !tags.includes("perf"));
+  assert.match(lane, /--config=\$\(rootpath :playwright\.animation\.bazel\.config\.js\)/);
+  assert.match(lane, /--grep=animation\.preview\.plays/);
+  assert.doesNotMatch(
+    lane,
+    /--project(?:=|"|\s)/,
+    "the normal animation gate includes both browsers",
+  );
+  assert.match(lane, /"DONNER_WASM_REQUIRE_WEBGPU": "1"/);
+  assert.match(lane, /"NODE_OPTIONS": ""/);
+  for (const name of ["DONNER_CHROMIUM_ARCHIVE", "DONNER_FIREFOX_ARCHIVE"]) {
+    assert.ok(lane.includes(`"${name}":`));
+  }
+  assert.ok(lane.includes("\"@playwright_chromium_mac_arm64//file\""));
+  assert.ok(lane.includes("\"@playwright-firefox-mac14-arm64//file\""));
+  const config = readFileSync(
+    path.join(testDirectory, "playwright.animation.bazel.config.js"),
+    "utf8",
+  );
+  assert.deepEqual([...config.matchAll(/name: "([^"]+)"/g)].map((match) => match[1]), [
+    "chromium-animation",
+    "firefox-animation",
+  ]);
+  assert.match(config, /globalSetup: require\.resolve\("\.\/prepare-browser-archives\.js"\)/);
+}
+
 function assertBrowserLane(lane) {
   const contract = parseBrowserLane(lane);
   assertCommonBrowserLane(contract);
@@ -329,6 +358,8 @@ function assertBrowserLane(lane) {
     assertCompositedLane(contract, "firefox");
   } else if (laneName === "chromium_composited_invariants_test") {
     assertCompositedLane(contract, "chromium");
+  } else if (laneName === "animation_preview_browser_test") {
+    assertAnimationLane(contract);
   } else if (laneName === "font_reference_probe") {
     assertFontReferenceLane(contract);
   } else {
@@ -386,6 +417,7 @@ test("Bazel owns hermetic browser regression and manual performance lanes", () =
     lanes.map((lane) => /name = "([^"]+)"/.exec(lane)?.[1]).sort(),
     [
       "_browser_responsiveness_perf_driver",
+      "animation_preview_browser_test",
       "boot_presentation_test",
       "browser_presentation_regression_test",
       "catalog_font_loading_test",
@@ -1704,7 +1736,7 @@ test("a report-lane archive that cannot copy warns instead of passing silently",
 test("the delayed-completion baseline waits for the picker's last publication frame", async () => {
   const { pickerPresentationSettled } = await import("./presentation-baseline.mjs");
   const spec = readFileSync(path.join(testDirectory, "browser-responsiveness.perf.ts"), "utf8");
-  const start = spec.indexOf('"delayed UI completion callbacks do not permanently disable');
+  const start = spec.indexOf("\"delayed UI completion callbacks do not permanently disable");
   const body = spec.slice(start, spec.indexOf("await application.evaluate(", start));
   // The baseline is read only from a settled poll after the surface worker is found.
   assert.equal(body.split("pickerPresentationSettled(").length - 1, 2);

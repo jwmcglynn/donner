@@ -5912,7 +5912,23 @@ void EditorShell::updateVisiblePreviewTasks() {
   retryPendingFontPreviews();
 }
 
+void EditorShell::suspendAuxiliaryPreviewGeneration() {
+  renderCoordinator_.asyncRenderer().cancelSampleThumbnailWork();
+  if (fontPreviewInFlight_) {
+    std::string family = std::move(*fontPreviewInFlight_);
+    fontPreviewInFlight_.reset();
+    std::erase(pendingFontPreviews_, family);
+    pendingFontPreviews_.push_front(std::move(family));
+  }
+  sampleThumbnailInFlightIndex_.reset();
+  sampleThumbnailRetryPending_ = false;
+  publishSampleThumbnailStats();
+}
+
 void EditorShell::advanceVisiblePreviews() {
+  if (animationPreview_ || animationResetPending_) {
+    return;
+  }
   if (internal::ShouldAdvanceSampleThumbnails(showSamplePicker_, samplePresentationPending_)) {
     ensureSampleThumbnails();
   } else if (!showSamplePicker_) {
@@ -6607,6 +6623,9 @@ void EditorShell::setAnimationPreview(bool enabled) {
   cancelEyedropper(true);
   resetPreviewPointer();
   animationPreview_ = enabled;
+  if (enabled) {
+    suspendAuxiliaryPreviewGeneration();
+  }
   renderCoordinator_.setPointerTargetCaptureEnabled(enabled);
   animationResetPending_ = true;
   animationPreviewStartSeconds_ = AnimationPreviewClockSeconds();

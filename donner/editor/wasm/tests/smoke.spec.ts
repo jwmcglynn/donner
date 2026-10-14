@@ -1,5 +1,6 @@
 import { errors, expect, type Page, test, type TestInfo, type Worker } from "@playwright/test";
 import { writeFile } from "node:fs/promises";
+import { arch, cpus, loadavg, platform, release, totalmem } from "node:os";
 import {
   captureAfterCanvasGpuCompletion,
   captureReadyBasicShapesFrame,
@@ -124,6 +125,14 @@ declare global {
     __donnerWgpuReadbackCaptureCompletions?: number;
     __donnerWgpuReadbackCaptureFailures?: number;
     __donnerMainLoopRenderedFrames?: number;
+    __donnerPresentedDocumentStats?: {
+      count: number;
+      documentGeneration: number;
+      frameVersion: number;
+      lastPresentedAtMs: number;
+      lastPublicationDelayMs: number;
+      samples: [number, number, number, number][];
+    };
     __donnerHostFrameTiming?: {
       frames: number;
       lastSurfacePresented: boolean;
@@ -3437,12 +3446,17 @@ test(
     // Measure ordinary playback with screenshot/readback probes stopped.
     testInfo.setTimeout(testInfo.timeout + 18000);
     const loopBefore = await page.evaluate(() => window.__donnerFrameLoopStats);
+    const loadBefore = loadavg();
     const workerSamples: unknown[] = [];
     const readCadence = async () => {
       const sample = await page.evaluate(() => ({
         time: performance.now(),
         frames: window.__donnerMainLoopRenderedFrames ?? 0,
         documents: window.__donnerWorkerStats?.completedResults ?? 0,
+        presentedDocuments: window.__donnerPresentedDocumentStats?.count ?? 0,
+        presentedAtMs: window.__donnerPresentedDocumentStats?.lastPresentedAtMs,
+        presentationPublicationDelayMs: window.__donnerPresentedDocumentStats
+          ?.lastPublicationDelayMs,
         worker: window.__donnerWorkerStats,
         resources: window.__donnerPresentationResourceStats,
         thumbnails: window.__donnerSampleThumbnailStats,
@@ -3466,13 +3480,45 @@ test(
     }
     const ownerAfter = await readGpuOwnerDispatchStats(page);
     const loopAfter = await page.evaluate(() => window.__donnerFrameLoopStats);
+    const presentation = await page.evaluate(() => window.__donnerPresentedDocumentStats);
+    const presentedSamples = (presentation?.samples ?? [])
+      .filter((sample) =>
+        sample[0] > before.presentedDocuments && sample[0] <= after.presentedDocuments
+      )
+      .sort((a, b) => a[0] - b[0]);
     const seconds = (after.time - before.time) / 1000;
+    const producerSpanMs = presentedSamples.length > 1
+      ? presentedSamples.at(-1)![3] - presentedSamples[0][3]
+      : 0;
+    const presentationGapsMs = presentedSamples.slice(1)
+      .map((sample, index) => sample[3] - presentedSamples[index][3]);
     const cadencePath = testInfo.outputPath("animation-cadence.json");
     const cadence = {
       browser: testInfo.project.name,
       seconds,
       uiFps: (after.frames - before.frames) / seconds,
       documentFps: (after.documents - before.documents) / seconds,
+      deliveredPresentationFps: (after.presentedDocuments - before.presentedDocuments) / seconds,
+      presentedDocumentFps: producerSpanMs > 0
+        ? (presentedSamples.length - 1) * 1000 / producerSpanMs
+        : null,
+      presentation: {
+        before: before.presentedDocuments,
+        after: after.presentedDocuments,
+        samples: presentedSamples,
+        producerSpanMs,
+        gapsMs: presentationGapsMs,
+      },
+      host: {
+        platform: platform(),
+        release: release(),
+        architecture: arch(),
+        cpuModel: cpus()[0]?.model,
+        logicalCpus: cpus().length,
+        memoryBytes: totalmem(),
+        loadBefore,
+        loadAfter: loadavg(),
+      },
       viewport: box,
       gpuOwner: { before: ownerBefore, after: ownerAfter },
       workerSamples,
@@ -3490,6 +3536,14 @@ test(
       contentType: "application/json",
       path: cadencePath,
     });
+    expect(presentedSamples.length, "complete distinct-presentation sample interval").toBe(
+      after.presentedDocuments - before.presentedDocuments,
+    );
+    expect(presentedSamples.length).toBeGreaterThan(10);
+    for (let index = 1; index < presentedSamples.length; ++index) {
+      expect(presentedSamples[index][0]).toBe(presentedSamples[index - 1][0] + 1);
+      expect(presentedSamples[index][3]).toBeGreaterThanOrEqual(presentedSamples[index - 1][3]);
+    }
     const gpuBefore = ownerBefore?.gpu as
       | { readbackCopies: number; cpuTextureWrites: number }
       | undefined;

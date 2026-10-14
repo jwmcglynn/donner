@@ -1422,10 +1422,28 @@ void NotifyFirstFramePresented(int headlessDeviceCreations) {
   // clang-format on
 }
 
-void PublishPresentedDocumentFrame(std::uint64_t documentGeneration, std::uint64_t frameVersion) {
+void PublishPresentedDocumentFrame(std::uint64_t documentGeneration, std::uint64_t frameVersion,
+                                   bool surfacePresented) {
   // clang-format off
   MAIN_THREAD_ASYNC_EM_ASM(
       {
+        if ($3 && Number.isSafeInteger($0) && $0 > 0 && Number.isSafeInteger($1) && $1 >= 0 &&
+            Number.isFinite($2) && $2 >= performance.timeOrigin) {
+          const presented = window['__donnerPresentedDocumentStats'] || ({
+            'count': 0, 'documentGeneration': 0, 'frameVersion': 0, 'samples': [],
+          });
+          if (presented['documentGeneration'] !== $0 || presented['frameVersion'] !== $1) {
+            const at = $2 - performance.timeOrigin;
+            presented['count'] += 1;
+            presented['documentGeneration'] = $0;
+            presented['frameVersion'] = $1;
+            presented['lastPresentedAtMs'] = at;
+            presented['lastPublicationDelayMs'] = Math.max(0, performance.now() - at);
+            presented['samples'][(presented['count'] - 1) % 4096] =
+                ([presented['count'], $0, $1, at]);
+            window['__donnerPresentedDocumentStats'] = presented;
+          }
+        }
         const stats = window['__donnerWorkerStats'];
         if (!stats || stats['publishReason'] !== 'render-result' || stats['resultFramePresented']) {
           return;
@@ -1437,7 +1455,8 @@ void PublishPresentedDocumentFrame(std::uint64_t documentGeneration, std::uint64
           stats['framesPresentedWithoutResult'] = (stats['framesPresentedWithoutResult'] | 0) + 1;
         }
       },
-      static_cast<double>(documentGeneration), static_cast<double>(frameVersion));
+      static_cast<double>(documentGeneration), static_cast<double>(frameVersion), WorkerEpochNowMs(),
+      static_cast<int>(surfacePresented));
   // clang-format on
 }
 
