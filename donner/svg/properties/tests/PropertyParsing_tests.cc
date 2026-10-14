@@ -14,6 +14,7 @@
 #include "donner/css/Declaration.h"
 #include "donner/css/Token.h"
 #include "donner/svg/parser/SVGParser.h"
+#include "donner/svg/properties/RxRyProperties.h"
 
 using testing::DoubleNear;
 using testing::Eq;
@@ -209,6 +210,45 @@ TEST(PropertyParsingTest, ParseLengthPercentageOrAutoWithAuto) {
   auto result = ParseLengthPercentageOrAuto(params.components(), true);
   ASSERT_TRUE(result.hasResult());
   EXPECT_FALSE(result.result().has_value());
+}
+
+TEST(RxRyPropertiesTest, ExplicitAutoUsesResolvedFallbackAxis) {
+  Property<Lengthd> rx("rx");
+  Property<Lengthd> ry("ry");
+  rx.set(std::nullopt, css::Specificity{});
+  ry.set(Lengthd(25, Lengthd::Unit::Percent), css::Specificity{});
+  const auto radius =
+      CalculateRadiusMaybeAuto(rx, ry, Box2d(Vector2d(), Vector2d(200, 100)), FontMetrics(),
+                               Lengthd::Extent::X, Lengthd::Extent::Y);
+  EXPECT_THAT(radius, testing::FieldsAre(LengthIs(25, Lengthd::Unit::Percent), 25));
+}
+
+TEST(RxRyPropertiesTest, EmptyKeywordValuesFallBackWithoutChangingInheritance) {
+  Property<Lengthd> parent("rx");
+  parent.set(Lengthd(7), css::Specificity{});
+  Property<Lengthd> fallback("ry");
+  fallback.set(Lengthd(3), css::Specificity{});
+  for (const PropertyState state :
+       {PropertyState::ExplicitInitial, PropertyState::ExplicitUnset, PropertyState::Inherit}) {
+    SCOPED_TRACE(static_cast<int>(state));
+    Property<Lengthd> radius("rx");
+    radius.set(state, css::Specificity{});
+    const auto resolved = radius.inheritFrom(parent);
+    const double expected = state == PropertyState::Inherit ? 7 : 3;
+    EXPECT_THAT(CalculateRadiusMaybeAuto(resolved, fallback, Box2d(Vector2d(), Vector2d(200, 100)),
+                                         FontMetrics(), Lengthd::Extent::X, Lengthd::Extent::Y),
+                testing::FieldsAre(LengthIs(expected, Lengthd::Unit::None), expected));
+  }
+}
+
+TEST(RxRyPropertiesTest, ExplicitAutoOnBothAxesResolvesToZero) {
+  Property<Lengthd> rx("rx");
+  Property<Lengthd> ry("ry");
+  rx.set(std::nullopt, css::Specificity{});
+  ry.set(std::nullopt, css::Specificity{});
+  EXPECT_THAT(CalculateRadiusMaybeAuto(rx, ry, Box2d(Vector2d(), Vector2d(200, 100)), FontMetrics(),
+                                       Lengthd::Extent::X, Lengthd::Extent::Y),
+              testing::FieldsAre(LengthIs(0, Lengthd::Unit::None), 0));
 }
 
 }  // namespace donner::svg::parser
