@@ -1312,6 +1312,170 @@ TEST(RendererPublicApiTest, PostTextPathCursorHiddenLogicalMetricsPreserveNoPain
                                        editor::tests::PixelmatchIdentityParams());
 }
 
+SVGDocument MakeTextPathPairFontProbe(bool kerning = true) {
+  if (!kerning) {
+    return ParseDocument(
+        R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="512" height="128"
+          font-family="Public Sans" font-size="64" style="font-kerning:none">
+          <text id="pair">AV</text><text id="first">A</text><text id="second">V</text>
+        </svg>)svg");
+  }
+  return ParseDocument(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="512" height="128"
+        font-family="Public Sans" font-size="64" style="font-kerning:normal">
+        <text id="pair">AV</text><text id="first">A</text><text id="second">V</text>
+      </svg>)svg");
+}
+
+TEST(RendererPublicApiTest, TextPathPairSplitMatchesUnsplitPixels) {
+  SVGDocument probe = MakeTextPathPairFontProbe();
+  const auto pairedText = probe.querySelector("#pair")->cast<SVGTextElement>();
+  ASSERT_EQ(pairedText.getNumberOfChars(), 2);
+  const double paired =
+      pairedText.getStartPositionOfChar(1).x - pairedText.getStartPositionOfChar(0).x;
+  const auto standaloneText = probe.querySelector("#first")->cast<SVGTextElement>();
+  ASSERT_EQ(standaloneText.getNumberOfChars(), 1);
+  const double separate = standaloneText.getComputedTextLength();
+  ASSERT_GT(paired, 0.0);
+  ASSERT_GT(separate, 0.0);
+  ASSERT_NE(paired, separate) << "The actual font must provide a nonzero A-V kerning adjustment";
+  SVGDocument split = ParseDocument(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="512" height="128"
+        font-family="Public Sans" font-size="64" style="font-kerning:normal">
+        <defs><path id="p" d="M16 88H496"/></defs>
+        <text><textPath href="#p">A<tspan paint-order="stroke fill">V</tspan></textPath></text>
+      </svg>)svg");
+  SVGDocument whole = ParseDocument(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="512" height="128"
+        font-family="Public Sans" font-size="64" style="font-kerning:normal">
+        <defs><path id="p" d="M16 88H496"/></defs>
+        <text><textPath href="#p">AV</textPath></text>
+      </svg>)svg");
+  const auto expected = RenderPublicDocument(whole);
+  ASSERT_FALSE(expected.empty());
+  EXPECT_THAT(expected.pixels, testing::Contains(Gt(0)));
+  editor::tests::CompareBitmapToBitmap(RenderPublicDocument(split), expected, "textpath-pair-split",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(RendererPublicApiTest, TextPathPairYOnlySpanMatchesUnsplitPixels) {
+  SVGDocument probe = MakeTextPathPairFontProbe();
+  const auto pairedText = probe.querySelector("#pair")->cast<SVGTextElement>();
+  ASSERT_EQ(pairedText.getNumberOfChars(), 2);
+  const double paired =
+      pairedText.getStartPositionOfChar(1).x - pairedText.getStartPositionOfChar(0).x;
+  const auto standaloneText = probe.querySelector("#first")->cast<SVGTextElement>();
+  ASSERT_EQ(standaloneText.getNumberOfChars(), 1);
+  const double separate = standaloneText.getComputedTextLength();
+  ASSERT_GT(paired, 0.0);
+  ASSERT_GT(separate, 0.0);
+  ASSERT_NE(paired, separate) << "The actual font must provide a nonzero A-V kerning adjustment";
+  SVGDocument split = ParseDocument(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="512" height="128"
+        font-family="Public Sans" font-size="64" style="font-kerning:normal">
+        <defs><path id="p" d="M16 88H496"/></defs>
+        <text><textPath href="#p">A<tspan y="20">V</tspan></textPath></text>
+      </svg>)svg");
+  SVGDocument whole = ParseDocument(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="512" height="128"
+        font-family="Public Sans" font-size="64" style="font-kerning:normal">
+        <defs><path id="p" d="M16 88H496"/></defs>
+        <text><textPath href="#p">AV</textPath></text>
+      </svg>)svg");
+  const auto expected = RenderPublicDocument(whole);
+  ASSERT_FALSE(expected.empty());
+  EXPECT_THAT(expected.pixels, testing::Contains(Gt(0)));
+  editor::tests::CompareBitmapToBitmap(RenderPublicDocument(split), expected,
+                                       "textpath-pair-y-only-span",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(RendererPublicApiTest, TextPathPairEmptySpanMatchesUnsplitPixels) {
+  SVGDocument probe = MakeTextPathPairFontProbe();
+  const auto pairedText = probe.querySelector("#pair")->cast<SVGTextElement>();
+  ASSERT_EQ(pairedText.getNumberOfChars(), 2);
+  const double paired =
+      pairedText.getStartPositionOfChar(1).x - pairedText.getStartPositionOfChar(0).x;
+  const auto standaloneText = probe.querySelector("#first")->cast<SVGTextElement>();
+  ASSERT_EQ(standaloneText.getNumberOfChars(), 1);
+  const double separate = standaloneText.getComputedTextLength();
+  ASSERT_GT(paired, 0.0);
+  ASSERT_GT(separate, 0.0);
+  ASSERT_NE(paired, separate) << "The actual font must provide a nonzero A-V kerning adjustment";
+  SVGDocument split = ParseDocument(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="512" height="128"
+        font-family="Public Sans" font-size="64" style="font-kerning:normal">
+        <defs><path id="p" d="M16 88H496"/></defs>
+        <text><textPath href="#p">A<tspan/><tspan>V</tspan></textPath></text>
+      </svg>)svg");
+  SVGDocument whole = ParseDocument(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="512" height="128"
+        font-family="Public Sans" font-size="64" style="font-kerning:normal">
+        <defs><path id="p" d="M16 88H496"/></defs>
+        <text><textPath href="#p">AV</textPath></text>
+      </svg>)svg");
+  const auto expected = RenderPublicDocument(whole);
+  ASSERT_FALSE(expected.empty());
+  EXPECT_THAT(expected.pixels, testing::Contains(Gt(0)));
+  editor::tests::CompareBitmapToBitmap(RenderPublicDocument(split), expected,
+                                       "textpath-pair-empty-span",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(RendererPublicApiTest, TextPathPairNoKerningMatchesUnsplitPixels) {
+  SVGDocument probe = MakeTextPathPairFontProbe(false);
+  const auto pairedText = probe.querySelector("#pair")->cast<SVGTextElement>();
+  ASSERT_EQ(pairedText.getNumberOfChars(), 2);
+  const double paired =
+      pairedText.getStartPositionOfChar(1).x - pairedText.getStartPositionOfChar(0).x;
+  const auto standaloneText = probe.querySelector("#first")->cast<SVGTextElement>();
+  ASSERT_EQ(standaloneText.getNumberOfChars(), 1);
+  const double separate = standaloneText.getComputedTextLength();
+  ASSERT_GT(paired, 0.0);
+  ASSERT_GT(separate, 0.0);
+  ASSERT_DOUBLE_EQ(paired, separate) << "The SVG property must disable the actual pair kerning";
+  SVGDocument split = ParseDocument(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="512" height="128"
+        font-family="Public Sans" font-size="64" style="font-kerning:none">
+        <defs><path id="p" d="M16 88H496"/></defs>
+        <text><textPath href="#p">A<tspan>V</tspan></textPath></text>
+      </svg>)svg");
+  SVGDocument whole = ParseDocument(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="512" height="128"
+        font-family="Public Sans" font-size="64" style="font-kerning:none">
+        <defs><path id="p" d="M16 88H496"/></defs>
+        <text><textPath href="#p">AV</textPath></text>
+      </svg>)svg");
+  const auto expected = RenderPublicDocument(whole);
+  ASSERT_FALSE(expected.empty());
+  EXPECT_THAT(expected.pixels, testing::Contains(Gt(0)));
+  editor::tests::CompareBitmapToBitmap(RenderPublicDocument(split), expected,
+                                       "textpath-pair-no-kerning",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(RendererPublicApiTest, TextPathPairSeparateOwnersDoNotShareKerning) {
+  SVGDocument sharedText = ParseDocument(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="512" height="128"
+        font-family="Public Sans" font-size="64" style="font-kerning:normal">
+        <defs><path id="p" d="M16 88H496"/></defs>
+        <text><textPath href="#p">A</textPath><textPath href="#p" startOffset="80">V</textPath></text>
+      </svg>)svg");
+  SVGDocument separateText = ParseDocument(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="512" height="128"
+        font-family="Public Sans" font-size="64" style="font-kerning:normal">
+        <defs><path id="p" d="M16 88H496"/></defs>
+        <text><textPath href="#p">A</textPath></text>
+        <text><textPath href="#p" startOffset="80">V</textPath></text>
+      </svg>)svg");
+  const auto expected = RenderPublicDocument(separateText);
+  ASSERT_FALSE(expected.empty());
+  EXPECT_THAT(expected.pixels, testing::Contains(Gt(0)));
+  editor::tests::CompareBitmapToBitmap(RenderPublicDocument(sharedText), expected,
+                                       "textpath-pair-separate-owners",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
 TEST(RendererPublicApiTest, ExternalUseTextSpanInheritsHostGradientWithoutChildId) {
   const auto actual = RenderExternalUse(
       R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="64" height="40">
@@ -2225,6 +2389,175 @@ TEST(RendererPublicApiTest, ForeignNamespaceWrapperRendersNothing) {
   // statement about foreign content and not about an empty fixture.
   ASSERT_EQ(groupSnapshot.pixels.size(), removedSnapshot.pixels.size());
   EXPECT_NE(groupSnapshot.pixels, removedSnapshot.pixels);
+}
+
+SVGDocument RasterFeImageDocument(std::string_view hostTransform) {
+  return ParseDocument(
+      "<svg xmlns='http://www.w3.org/2000/svg' width='16' height='10' viewBox='0 0 16 10'>"
+      "<defs><filter id='f' filterUnits='userSpaceOnUse' primitiveUnits='userSpaceOnUse'"
+      " x='0' y='0' width='12' height='8' color-interpolation-filters='sRGB'>"
+      "<feImage "
+      "href='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAQAAAACCAYAAAB/"
+      "qH1jAAAADklEQVR4nGNg+I8G0QUABykP8RHZtOEAAAAASUVORK5CYII='"
+      " x='2' y='2' width='4' height='2' preserveAspectRatio='none'"
+      " image-rendering='crisp-edges'/></filter></defs>"
+      "<rect width='12' height='8' fill='red' filter='url(#f)' transform='" +
+      std::string(hostTransform) + "'/></svg>");
+}
+
+TEST(RendererPublicApiTest, RasterFeImageUprightMatchesLiteralPlacement) {
+  if (!ActiveRendererSupportsFeature(RendererBackendFeature::FilterEffects)) {
+    GTEST_SKIP() << "Renderer does not support filter effects";
+  }
+  SVGDocument document = RasterFeImageDocument("matrix(1 0 0 1 0 0)");
+  SVGDocument expected = ParseDocument(R"svg(
+      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="10" viewBox="0 0 16 10">
+        <rect x="2" y="2" width="4" height="2" fill="#00ff00"/>
+      </svg>
+    )svg");
+  Renderer renderer;
+  renderer.draw(document);
+  const RendererBitmap actualBitmap = NormalizeSnapshot(renderer.takeSnapshot());
+  Renderer expectedRenderer;
+  expectedRenderer.draw(expected);
+  const RendererBitmap expectedBitmap = NormalizeSnapshot(expectedRenderer.takeSnapshot());
+  ASSERT_THAT(actualBitmap.empty(), testing::IsFalse());
+  ASSERT_THAT(expectedBitmap.empty(), testing::IsFalse());
+  ASSERT_THAT(actualBitmap.dimensions, testing::Eq(Vector2i(16, 10)));
+  ASSERT_THAT(expectedBitmap.dimensions, testing::Eq(Vector2i(16, 10)));
+  EXPECT_THAT(PixelAt(expectedBitmap, 3, 2), test::Rgba(0, 255, 0, 255));
+  EXPECT_THAT(PixelAt(expectedBitmap, 6, 2), test::Rgba(0, 0, 0, 0));
+  editor::tests::CompareBitmapToBitmap(actualBitmap, expectedBitmap, "raster_feimage_upright",
+                                       editor::tests::PixelmatchIdentityParams());
+  EXPECT_THAT(PixelAt(actualBitmap, 3, 2), test::Rgba(0, 255, 0, 255));
+  EXPECT_THAT(PixelAt(actualBitmap, 6, 2), test::Rgba(0, 0, 0, 0));
+}
+
+TEST(RendererPublicApiTest, RasterFeImageTranslatedMatchesLiteralPlacement) {
+  if (!ActiveRendererSupportsFeature(RendererBackendFeature::FilterEffects)) {
+    GTEST_SKIP() << "Renderer does not support filter effects";
+  }
+  SVGDocument document = RasterFeImageDocument("translate(4 1)");
+  SVGDocument expected = ParseDocument(R"svg(
+      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="10" viewBox="0 0 16 10">
+        <rect x="6" y="3" width="4" height="2" fill="#00ff00"/>
+      </svg>
+    )svg");
+  Renderer renderer;
+  renderer.draw(document);
+  const RendererBitmap actualBitmap = NormalizeSnapshot(renderer.takeSnapshot());
+  Renderer expectedRenderer;
+  expectedRenderer.draw(expected);
+  const RendererBitmap expectedBitmap = NormalizeSnapshot(expectedRenderer.takeSnapshot());
+  ASSERT_THAT(actualBitmap.empty(), testing::IsFalse());
+  ASSERT_THAT(expectedBitmap.empty(), testing::IsFalse());
+  ASSERT_THAT(actualBitmap.dimensions, testing::Eq(Vector2i(16, 10)));
+  ASSERT_THAT(expectedBitmap.dimensions, testing::Eq(Vector2i(16, 10)));
+  EXPECT_THAT(PixelAt(expectedBitmap, 7, 3), test::Rgba(0, 255, 0, 255));
+  EXPECT_THAT(PixelAt(expectedBitmap, 3, 2), test::Rgba(0, 0, 0, 0));
+  editor::tests::CompareBitmapToBitmap(actualBitmap, expectedBitmap, "raster_feimage_translated",
+                                       editor::tests::PixelmatchIdentityParams());
+  EXPECT_THAT(PixelAt(actualBitmap, 7, 3), test::Rgba(0, 255, 0, 255));
+  EXPECT_THAT(PixelAt(actualBitmap, 3, 2), test::Rgba(0, 0, 0, 0));
+}
+
+TEST(RendererPublicApiTest, RasterFeImageScaledMatchesLiteralPlacement) {
+  if (!ActiveRendererSupportsFeature(RendererBackendFeature::FilterEffects)) {
+    GTEST_SKIP() << "Renderer does not support filter effects";
+  }
+  SVGDocument document = RasterFeImageDocument("scale(2 1)");
+  SVGDocument expected = ParseDocument(R"svg(
+      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="10" viewBox="0 0 16 10">
+        <rect x="4" y="2" width="8" height="2" fill="#00ff00"/>
+      </svg>
+    )svg");
+  Renderer renderer;
+  renderer.draw(document);
+  const RendererBitmap actualBitmap = NormalizeSnapshot(renderer.takeSnapshot());
+  Renderer expectedRenderer;
+  expectedRenderer.draw(expected);
+  const RendererBitmap expectedBitmap = NormalizeSnapshot(expectedRenderer.takeSnapshot());
+  ASSERT_THAT(actualBitmap.empty(), testing::IsFalse());
+  ASSERT_THAT(expectedBitmap.empty(), testing::IsFalse());
+  ASSERT_THAT(actualBitmap.dimensions, testing::Eq(Vector2i(16, 10)));
+  ASSERT_THAT(expectedBitmap.dimensions, testing::Eq(Vector2i(16, 10)));
+  EXPECT_THAT(PixelAt(expectedBitmap, 9, 2), test::Rgba(0, 255, 0, 255));
+  EXPECT_THAT(PixelAt(expectedBitmap, 3, 2), test::Rgba(0, 0, 0, 0));
+  editor::tests::CompareBitmapToBitmap(actualBitmap, expectedBitmap, "raster_feimage_scaled",
+                                       editor::tests::PixelmatchIdentityParams());
+  EXPECT_THAT(PixelAt(actualBitmap, 9, 2), test::Rgba(0, 255, 0, 255));
+  EXPECT_THAT(PixelAt(actualBitmap, 3, 2), test::Rgba(0, 0, 0, 0));
+}
+
+TEST(RendererPublicApiTest, RasterFeImageQuarterTurnMatchesLiteralPlacement) {
+  if (!ActiveRendererSupportsFeature(RendererBackendFeature::FilterEffects)) {
+    GTEST_SKIP() << "Renderer does not support filter effects";
+  }
+  SVGDocument document = RasterFeImageDocument("matrix(0 1 -1 0 12 0)");
+  SVGDocument expected = ParseDocument(R"svg(
+      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="10" viewBox="0 0 16 10">
+        <rect x="8" y="2" width="2" height="4" fill="#00ff00"/>
+      </svg>
+    )svg");
+  Renderer renderer;
+  renderer.draw(document);
+  const RendererBitmap actualBitmap = NormalizeSnapshot(renderer.takeSnapshot());
+  Renderer expectedRenderer;
+  expectedRenderer.draw(expected);
+  const RendererBitmap expectedBitmap = NormalizeSnapshot(expectedRenderer.takeSnapshot());
+  ASSERT_THAT(actualBitmap.empty(), testing::IsFalse());
+  ASSERT_THAT(expectedBitmap.empty(), testing::IsFalse());
+  ASSERT_THAT(actualBitmap.dimensions, testing::Eq(Vector2i(16, 10)));
+  ASSERT_THAT(expectedBitmap.dimensions, testing::Eq(Vector2i(16, 10)));
+  EXPECT_THAT(PixelAt(expectedBitmap, 9, 3), test::Rgba(0, 255, 0, 255));
+  EXPECT_THAT(PixelAt(expectedBitmap, 4, 2), test::Rgba(0, 0, 0, 0));
+  editor::tests::CompareBitmapToBitmap(actualBitmap, expectedBitmap, "raster_feimage_quarterturn",
+                                       editor::tests::PixelmatchIdentityParams());
+  EXPECT_THAT(PixelAt(actualBitmap, 9, 3), test::Rgba(0, 255, 0, 255));
+  EXPECT_THAT(PixelAt(actualBitmap, 4, 2), test::Rgba(0, 0, 0, 0));
+}
+
+TEST(RendererPublicApiTest, RasterFeImageAsymmetricQuarterTurnMatchesLiteralPlacement) {
+  if (!ActiveRendererSupportsFeature(RendererBackendFeature::FilterEffects)) {
+    GTEST_SKIP() << "Renderer does not support filter effects";
+  }
+  SVGDocument document = ParseDocument(R"svg(
+      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="10" viewBox="0 0 16 10">
+        <defs><filter id="f" filterUnits="userSpaceOnUse" primitiveUnits="userSpaceOnUse"
+                      x="0" y="0" width="12" height="8" color-interpolation-filters="sRGB">
+          <feImage href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAQAAAACCAYAAAB/qH1jAAAAEklEQVR4nGP4z8DwH4SRIKoAAAslD/HAvA0nAAAAAElFTkSuQmCC"
+                   x="2" y="2" width="4" height="2" preserveAspectRatio="none"
+                   image-rendering="crisp-edges"/>
+        </filter></defs>
+        <rect width="12" height="8" fill="red" filter="url(#f)"
+              transform="matrix(0 1 -1 0 12 0)"/>
+      </svg>
+    )svg");
+  SVGDocument expected = ParseDocument(R"svg(
+      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="10" viewBox="0 0 16 10">
+        <rect x="8" y="2" width="2" height="2" fill="#ff0000"/>
+        <rect x="8" y="4" width="2" height="2" fill="#00ff00"/>
+      </svg>
+    )svg");
+  Renderer renderer;
+  renderer.draw(document);
+  const RendererBitmap actualBitmap = NormalizeSnapshot(renderer.takeSnapshot());
+  Renderer expectedRenderer;
+  expectedRenderer.draw(expected);
+  const RendererBitmap expectedBitmap = NormalizeSnapshot(expectedRenderer.takeSnapshot());
+  ASSERT_THAT(actualBitmap.empty(), testing::IsFalse());
+  ASSERT_THAT(expectedBitmap.empty(), testing::IsFalse());
+  ASSERT_THAT(actualBitmap.dimensions, testing::Eq(Vector2i(16, 10)));
+  ASSERT_THAT(expectedBitmap.dimensions, testing::Eq(Vector2i(16, 10)));
+  EXPECT_THAT(PixelAt(expectedBitmap, 8, 3), test::Rgba(255, 0, 0, 255));
+  EXPECT_THAT(PixelAt(expectedBitmap, 9, 4), test::Rgba(0, 255, 0, 255));
+  EXPECT_THAT(PixelAt(expectedBitmap, 4, 2), test::Rgba(0, 0, 0, 0));
+  editor::tests::CompareBitmapToBitmap(actualBitmap, expectedBitmap,
+                                       "raster_feimage_asymmetric_quarterturn",
+                                       editor::tests::PixelmatchIdentityParams());
+  EXPECT_THAT(PixelAt(actualBitmap, 8, 3), test::Rgba(255, 0, 0, 255));
+  EXPECT_THAT(PixelAt(actualBitmap, 9, 4), test::Rgba(0, 255, 0, 255));
+  EXPECT_THAT(PixelAt(actualBitmap, 4, 2), test::Rgba(0, 0, 0, 0));
 }
 
 TEST(RendererPublicApiTest, FeImageFragmentUsesItsOwnSubregionOrigin) {

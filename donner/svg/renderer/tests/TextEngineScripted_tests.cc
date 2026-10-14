@@ -677,13 +677,15 @@ TEST(TextEngineScriptedTest, TextPathUsesAnchorContinuationAndVisibility) {
 
   const auto runs = engine.layout(text, MakeTextParams(20.0));
 
+  const double firstOrigin = 20.0 - (3.0 * 10.0 + 1.0 + 3.0) / 2.0;
   EXPECT_THAT(
       runs,
       ElementsAre(AllOf(RunOnPathIs(Eq(true)),
-                        RunGlyphsAre(ElementsAre(GlyphXPositionIs(DoubleNear(4.5, 0.001)),
-                                                 GlyphXPositionIs(DoubleNear(15.5, 0.001))))),
-                  AllOf(RunOnPathIs(Eq(true)),
-                        RunGlyphsAre(ElementsAre(GlyphXPositionIs(DoubleNear(25.5, 0.001))))),
+                        RunGlyphsAre(ElementsAre(
+                            GlyphXPositionIs(DoubleNear(firstOrigin, 0.001)),
+                            GlyphXPositionIs(DoubleNear(firstOrigin + 10.0 + 1.0, 0.001))))),
+                  AllOf(RunOnPathIs(Eq(true)), RunGlyphsAre(ElementsAre(GlyphXPositionIs(DoubleNear(
+                                                   firstOrigin + 2.0 * 10.0 + 1.0 + 3.0, 0.001))))),
                   AllOf(RunOnPathIs(Eq(true)),
                         RunGlyphsAre(ElementsAre(GlyphXPositionIs(DoubleNear(100.0, 0.001)))))));
 }
@@ -1012,7 +1014,8 @@ TEST(TextEngineScriptedTest, TextPathLengthIncludesMixedDirectAndChildContent) {
   ASSERT_THAT(glyphs, SizeIs(3));
   EXPECT_THAT(glyphs.back().xPosition + glyphs.back().xAdvance - glyphs.front().xPosition,
               DoubleNear(90.0, 1e-6));
-  EXPECT_THAT(glyphs, testing::Each(GlyphStretchScaleXIs(FloatEq(3.0f))));
+  EXPECT_THAT(glyphs,
+              testing::Each(GlyphStretchScaleXIs(FloatEq(90.0f / (3.0f * 10.0f + 2.0f * 3.0f)))));
 }
 
 TEST(TextEngineScriptedTest, TextPathLengthIncludesAllChildContent) {
@@ -1049,9 +1052,11 @@ TEST(TextEngineScriptedTest, TextPathLengthPreservesNestedOverrides) {
     EXPECT_THAT(glyphs[4].xPosition + glyphs[4].xAdvance - glyphs[0].xPosition,
                 DoubleNear(100.0, 1e-6));
     for (size_t i = 1; i <= 3; ++i) {
-      EXPECT_THAT(glyphs[i].stretchScaleX, FloatEq(4.0f / 3.0f));
+      EXPECT_THAT(glyphs[i].stretchScaleX, FloatEq(40.0f / (3.0f * 10.0f + 2.0f * 3.0f)));
     }
-    EXPECT_THAT(glyphs[0].stretchScaleX, FloatEq(adjust == "spacing" ? 1.0f : 3.0f));
+    EXPECT_THAT(
+        glyphs[0].stretchScaleX,
+        FloatEq(adjust == "spacing" ? 1.0f : (100.0f - 40.0f) / (2.0f * 10.0f + 2.0f * 3.0f)));
     EXPECT_THAT(glyphs[4].stretchScaleX, FloatEq(glyphs[0].stretchScaleX));
   }
 }
@@ -1063,7 +1068,9 @@ TEST(TextEngineScriptedTest, TextPathLengthAppliesChildCoordinateResetsAfterAdju
   EXPECT_THAT(glyphs[0].xPosition, DoubleNear(10.0, 1e-6));
   EXPECT_THAT(glyphs[1].xPosition, DoubleNear(60.0, 1e-6));
   EXPECT_THAT(glyphs[2].xPosition, DoubleNear(110.0, 1e-6));
-  EXPECT_THAT(glyphs[3].xPosition, DoubleNear(glyphs[2].xPosition + glyphs[2].xAdvance, 1e-6));
+  EXPECT_THAT(
+      glyphs[3].xPosition,
+      DoubleNear(glyphs[2].xPosition + glyphs[2].xAdvance + 3.0 * 80.0 / (4.0 * 10.0 + 3.0), 1e-6));
   EXPECT_THAT(glyphs, testing::Each(GlyphYPositionIs(DoubleNear(0.0, 1e-6))));
 }
 
@@ -1114,9 +1121,13 @@ TEST(TextEngineScriptedTest, TextPathLengthRetainsHiddenAdvancesAndIgnoresDispla
   EXPECT_THAT(
       glyphs,
       ElementsAre(
-          AllOf(GlyphXPositionIs(DoubleNear(0.0, 1e-6)), GlyphXAdvanceIs(DoubleEq(30.0))),
-          AllOf(GlyphXPositionIs(DoubleNear(30.0, 1e-6)), GlyphXAdvanceIs(DoubleEq(30.0))),
-          AllOf(GlyphXPositionIs(DoubleNear(60.0, 1e-6)), GlyphXAdvanceIs(DoubleEq(30.0)))));
+          AllOf(GlyphXPositionIs(DoubleNear(0.0, 1e-6)),
+                GlyphXAdvanceIs(DoubleEq(10.0 * 90.0 / (3.0 * 10.0 + 2.0 * 3.0)))),
+          AllOf(GlyphXPositionIs(DoubleNear((10.0 + 3.0) * 90.0 / (3.0 * 10.0 + 2.0 * 3.0), 1e-6)),
+                GlyphXAdvanceIs(DoubleEq(10.0 * 90.0 / (3.0 * 10.0 + 2.0 * 3.0)))),
+          AllOf(GlyphXPositionIs(
+                    DoubleNear(2.0 * (10.0 + 3.0) * 90.0 / (3.0 * 10.0 + 2.0 * 3.0), 1e-6)),
+                GlyphXAdvanceIs(DoubleEq(10.0 * 90.0 / (3.0 * 10.0 + 2.0 * 3.0))))));
 }
 
 TEST(TextEngineScriptedTest, TextPathLengthWholeScopeUsesSelectedBackend) {
@@ -1136,7 +1147,8 @@ TEST(TextEngineScriptedTest, TextPathLengthKeepsSpacingOnlyChildWidth) {
   const auto glyphs = LayoutParsedTextPath(
       R"(<textPath href="#p" textLength="100" lengthAdjust="spacingAndGlyphs">A<tspan textLength="40">BC</tspan>D</textPath>)");
   ASSERT_THAT(glyphs, SizeIs(4));
-  EXPECT_THAT(glyphs[0].xAdvance, DoubleNear(30.0, 1e-6));
+  EXPECT_THAT(glyphs[0].xAdvance,
+              DoubleNear(10.0 * (100.0 - 40.0) / (2.0 * 10.0 + 2.0 * 3.0), 1e-6));
   EXPECT_THAT(glyphs[1].xAdvance, DoubleEq(10.0));
   EXPECT_THAT(glyphs[2].xAdvance, DoubleEq(10.0));
   EXPECT_THAT(glyphs[2].xPosition + glyphs[2].xAdvance - glyphs[1].xPosition,
@@ -1197,15 +1209,15 @@ TEST(TextEngineScriptedTest, HorizontalTextPathCarriesDyAlongThePathNormal) {
   const auto glyphs = LayoutParsedTextPath(
       R"(<textPath href="#p" textLength="120" lengthAdjust="spacingAndGlyphs">A<tspan dy="10">B</tspan><tspan dy="-5">C</tspan>D</textPath>)",
       /*scripted=*/true, "M0 0H40V200");
-  EXPECT_THAT(
-      glyphs,
-      ElementsAre(
-          AllOf(GlyphXPositionIs(DoubleNear(0.0, 1e-6)), GlyphYPositionIs(DoubleNear(0.0, 1e-6))),
-          AllOf(GlyphXPositionIs(DoubleNear(30.0, 1e-6)), GlyphYPositionIs(DoubleNear(-10.0, 1e-6)),
-                GlyphRotateDegreesIs(DoubleNear(90.0, 1e-6))),
-          AllOf(GlyphXPositionIs(DoubleNear(35.0, 1e-6)), GlyphYPositionIs(DoubleNear(20.0, 1e-6))),
-          AllOf(GlyphXPositionIs(DoubleNear(35.0, 1e-6)),
-                GlyphYPositionIs(DoubleNear(50.0, 1e-6)))));
+  EXPECT_THAT(glyphs, ElementsAre(AllOf(GlyphXPositionIs(DoubleNear(0.0, 1e-6)),
+                                        GlyphYPositionIs(DoubleNear(0.0, 1e-6))),
+                                  AllOf(GlyphXPositionIs(DoubleNear(30.0, 1e-6)),
+                                        GlyphYPositionIs(DoubleNear(-400.0 / 49.0, 1e-6)),
+                                        GlyphRotateDegreesIs(DoubleNear(90.0, 1e-6))),
+                                  AllOf(GlyphXPositionIs(DoubleNear(35.0, 1e-6)),
+                                        GlyphYPositionIs(DoubleNear(1160.0 / 49.0, 1e-6))),
+                                  AllOf(GlyphXPositionIs(DoubleNear(35.0, 1e-6)),
+                                        GlyphYPositionIs(DoubleNear(2720.0 / 49.0, 1e-6)))));
 }
 
 TEST(TextEngineScriptedTest, TextPathDyResetsForConsecutivePaths) {
@@ -1225,9 +1237,13 @@ TEST(TextEngineScriptedTest, TextPathAbsoluteXPreservesSameGlyphDx) {
 TEST(TextEngineScriptedTest, TextPathAnchorUsesIntermediateGlyphExtents) {
   const auto glyphs = LayoutParsedTextPath(
       R"(<textPath href="#p" startOffset="150" text-anchor="middle">A<tspan dx="100">B</tspan><tspan dx="-100">C</tspan></textPath>)");
-  EXPECT_THAT(glyphs, ElementsAre(GlyphXPositionIs(DoubleNear(90.0, 1e-6)),
-                                  GlyphXPositionIs(DoubleNear(200.0, 1e-6)),
-                                  GlyphXPositionIs(DoubleNear(110.0, 1e-6))));
+  EXPECT_THAT(
+      glyphs,
+      ElementsAre(GlyphXPositionIs(DoubleNear(150.0 - (2.0 * 10.0 + 3.0 + 100.0) / 2.0, 1e-6)),
+                  GlyphXPositionIs(DoubleNear(
+                      150.0 + 10.0 + 3.0 + 100.0 - (2.0 * 10.0 + 3.0 + 100.0) / 2.0, 1e-6)),
+                  GlyphXPositionIs(DoubleNear(
+                      150.0 + 2.0 * (10.0 + 3.0) - (2.0 * 10.0 + 3.0 + 100.0) / 2.0, 1e-6))));
 }
 
 TEST(TextEngineScriptedTest, TextPathLengthPreservesMultiGlyphClusterOffsets) {

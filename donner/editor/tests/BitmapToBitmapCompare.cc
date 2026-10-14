@@ -31,6 +31,16 @@ void CompareBitmapToBitmap(const svg::RendererBitmap& actual, const svg::Rendere
   const int expectedHeight = expected.dimensions.y;
   const std::size_t strideInPixels = actual.rowBytes / 4u;
   const std::size_t expectedStrideInPixels = expected.rowBytes / 4u;
+  ASSERT_EQ(expected.rowBytes % 4u, 0u)
+      << "[" << testLabel << "] expected rowBytes must be RGBA-aligned";
+  ASSERT_GE(strideInPixels, static_cast<std::size_t>(std::max(width, 0)))
+      << "[" << testLabel << "] actual rowBytes is shorter than its width";
+  ASSERT_GE(expectedStrideInPixels, static_cast<std::size_t>(std::max(expectedWidth, 0)))
+      << "[" << testLabel << "] expected rowBytes is shorter than its width";
+  ASSERT_EQ(actual.pixels.size(), actual.rowBytes * static_cast<std::size_t>(height))
+      << "[" << testLabel << "] actual bitmap size is inconsistent with rowBytes x height";
+  ASSERT_EQ(expected.pixels.size(), expected.rowBytes * static_cast<std::size_t>(expectedHeight))
+      << "[" << testLabel << "] expected bitmap size is inconsistent with rowBytes x height";
 
   if (actual.dimensions != expected.dimensions) {
     const std::filesystem::path outDir = detail::DiffOutputDir();
@@ -63,6 +73,8 @@ void CompareBitmapToBitmap(const svg::RendererBitmap& actual, const svg::Rendere
   options.includeAA = params.includeAntiAliasing;
   const int mismatched = pixelmatch::pixelmatch(expected.pixels, actual.pixels, diffImage, width,
                                                 height, strideInPixels, options);
+  // pixelmatch returns -1 when it cannot compare its inputs; never count that as a pass.
+  ASSERT_GE(mismatched, 0) << "[" << testLabel << "] pixelmatch could not compare the bitmaps";
   if (mismatchedPixels != nullptr) {
     *mismatchedPixels = mismatched;
   }
