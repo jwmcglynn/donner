@@ -3302,12 +3302,17 @@ test(
     }).toBeGreaterThan(8 * scale);
 
     // Measure ordinary playback with screenshot/readback probes stopped.
-    const readCadence = () =>
-      page.evaluate(() => ({
+    const workerSamples: unknown[] = [];
+    const readCadence = async () => {
+      const sample = await page.evaluate(() => ({
         time: performance.now(),
         frames: window.__donnerMainLoopRenderedFrames ?? 0,
         documents: window.__donnerWorkerStats?.completedResults ?? 0,
+        worker: window.__donnerWorkerStats,
       }));
+      if (workerSamples.length < 64) workerSamples.push(sample);
+      return sample;
+    };
     const ownerBefore = await readGpuOwnerDispatchStats(page);
     const before = await readCadence();
     await expect.poll(async () => (await readCadence()).time - before.time, {
@@ -3325,6 +3330,8 @@ test(
       documentFps: (after.documents - before.documents) / seconds,
       viewport: box,
       gpuOwner: { before: ownerBefore, after: ownerAfter },
+      workerSamples,
+      timeline: await readCarouselGpuTimeline(page),
       environment: await page.evaluate(() => ({
         userAgent: navigator.userAgent,
         devicePixelRatio,
