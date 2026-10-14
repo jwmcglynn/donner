@@ -11,5 +11,7 @@ STALL_GUARD_SECONDS = 30
 """How long a subprocess in a tool test may run before the test fails as hung.
 
 Matches the C++ stall guard (`kHangGuard` in donner/base/tests/StallGuard.h), and like it stays
-below the 60 s Bazel timeout of a `small` test so a hang fails with the guard's own error.
+below the 60 s Bazel timeout of a `small` test so a hang fails with the guard's own error. A suite
+whose cases together can approach that timeout on a slow host gets a larger size instead, so one
+firing guard still ends before the test runner's timeout.
 """

@@ -84,9 +84,10 @@ py_test(
     ],
 )
 
+# Medium: its cases run coverage.sh end to end, and a slow host stretches the suite past 60 s.
 py_test(
     name = "coverage_script_tests",
-    size = "small",
+    size = "medium",
     srcs = [
         "coverage_script_tests.py",
         "test_executable_fixtures.py",
@@ -99,7 +100,10 @@ py_test(
         "lcov_metrics.py",
     ],
     imports = ["."],
-    deps = ["@rules_python//python/runfiles"],
+    deps = [
+        ":test_timing",
+        "@rules_python//python/runfiles",
+    ],
 )
 
 py_test(
@@ -144,7 +148,10 @@ py_test(
     size = "small",
     srcs = ["ci_bazel_test_tests.py"],
     data = ["ci_bazel_test.sh"],
-    deps = ["@rules_python//python/runfiles"],
+    deps = [
+        ":test_timing",
+        "@rules_python//python/runfiles",
+    ],
 )
 
 py_binary(
@@ -160,7 +167,10 @@ py_test(
         "ci_remote_gpu_targets_tests.py",
     ],
     data = [":ci_remote_gpu_targets"],
-    deps = ["@rules_python//python/runfiles"],
+    deps = [
+        ":test_timing",
+        "@rules_python//python/runfiles",
+    ],
 )
 
 py_test(
@@ -208,9 +218,11 @@ py_test(
     imports = ["."],
 )
 
+# Medium: dozens of shell fixtures run in sequence, and on a slow host their total plus one firing
+# stall guard outlasts the 60 s timeout of a small test.
 py_test(
     name = "ci_runtime_workflow_tests",
-    size = "small",
+    size = "medium",
     srcs = [
         "ci_runtime_workflow_tests.py",
         "test_executable_fixtures.py",
@@ -243,16 +255,21 @@ py_test(
     ],
 )
 
+# Large: its git and shell fixtures take longer than ci_runtime_workflow_tests, and on a slow host
+# the suite approaches the 300 s timeout of a medium test.
 py_test(
     name = "security_workflow_policy_tests",
-    size = "small",
+    size = "large",
     srcs = ["security_workflow_policy_tests.py"],
     data = [
         "//:github_action_definitions",
         "//build_defs:rules.bzl",
         "//third_party:bazel/non_bcr_deps.bzl",
     ],
-    deps = ["@rules_python//python/runfiles"],
+    deps = [
+        ":test_timing",
+        "@rules_python//python/runfiles",
+    ],
 )
 
 # Keeps the hosted and self-hosted macOS lanes on identical Bazel action keys, so they can share
@@ -268,7 +285,10 @@ py_test(
         "//:github_action_definitions",
         "//build_defs:macos_app_bundle.bzl",
     ],
-    deps = ["@rules_python//python/runfiles"],
+    deps = [
+        ":test_timing",
+        "@rules_python//python/runfiles",
+    ],
 )
 
 py_library(
@@ -558,7 +578,10 @@ py_test(
         "//tools/ci:test_with_exclusions.py",
     ],
     imports = ["."],
-    deps = ["@rules_python//python/runfiles"],
+    deps = [
+        ":test_timing",
+        "@rules_python//python/runfiles",
+    ],
 )
 
 py_test(
