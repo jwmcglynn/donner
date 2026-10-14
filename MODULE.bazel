@@ -419,35 +419,98 @@ llvm.toolchain(
 # Hermetic Linux sysroots for each toolchain above, which keep the toolchain
 # self-contained on remote-execution workers without system glibc headers.
 # Compiles and links take only the sysroot files they read; see
-# third_party/bazel/non_bcr_deps.bzl.
-[
-    (
-        llvm.sysroot(
-            name = toolchain,
-            label = "@sysroot_linux_%s//:sysroot" % arch,
-            targets = ["linux-" + arch],
-        ),
-        llvm.extra_compiler_files(
-            name = toolchain,
-            label = "@sysroot_linux_%s//:compiler_files" % arch,
-            targets = ["linux-" + arch],
-        ),
-        llvm.extra_linker_files(
-            name = toolchain,
-            label = "@sysroot_linux_%s//:linker_files" % arch,
-            targets = ["linux-" + arch],
-        ),
-    )
-    for toolchain in [
-        "llvm_toolchain",
-        "llvm_toolchain_linux_aarch64",
-        "llvm_toolchain_linux_x86_64",
-    ]
-    for arch in [
-        "aarch64",
-        "x86_64",
-    ]
-]
+# third_party/bazel/non_bcr_deps.bzl. The tags are spelled out with literal
+# names because tools/bcr_dependency_closure.py reads them statically.
+llvm.sysroot(
+    name = "llvm_toolchain",
+    label = "@sysroot_linux_aarch64//:sysroot",
+    targets = ["linux-aarch64"],
+)
+llvm.sysroot(
+    name = "llvm_toolchain",
+    label = "@sysroot_linux_x86_64//:sysroot",
+    targets = ["linux-x86_64"],
+)
+llvm.extra_compiler_files(
+    name = "llvm_toolchain",
+    label = "@sysroot_linux_aarch64//:compiler_files",
+    targets = ["linux-aarch64"],
+)
+llvm.extra_compiler_files(
+    name = "llvm_toolchain",
+    label = "@sysroot_linux_x86_64//:compiler_files",
+    targets = ["linux-x86_64"],
+)
+llvm.extra_linker_files(
+    name = "llvm_toolchain",
+    label = "@sysroot_linux_aarch64//:linker_files",
+    targets = ["linux-aarch64"],
+)
+llvm.extra_linker_files(
+    name = "llvm_toolchain",
+    label = "@sysroot_linux_x86_64//:linker_files",
+    targets = ["linux-x86_64"],
+)
+llvm.sysroot(
+    name = "llvm_toolchain_linux_aarch64",
+    label = "@sysroot_linux_aarch64//:sysroot",
+    targets = ["linux-aarch64"],
+)
+llvm.sysroot(
+    name = "llvm_toolchain_linux_aarch64",
+    label = "@sysroot_linux_x86_64//:sysroot",
+    targets = ["linux-x86_64"],
+)
+llvm.extra_compiler_files(
+    name = "llvm_toolchain_linux_aarch64",
+    label = "@sysroot_linux_aarch64//:compiler_files",
+    targets = ["linux-aarch64"],
+)
+llvm.extra_compiler_files(
+    name = "llvm_toolchain_linux_aarch64",
+    label = "@sysroot_linux_x86_64//:compiler_files",
+    targets = ["linux-x86_64"],
+)
+llvm.extra_linker_files(
+    name = "llvm_toolchain_linux_aarch64",
+    label = "@sysroot_linux_aarch64//:linker_files",
+    targets = ["linux-aarch64"],
+)
+llvm.extra_linker_files(
+    name = "llvm_toolchain_linux_aarch64",
+    label = "@sysroot_linux_x86_64//:linker_files",
+    targets = ["linux-x86_64"],
+)
+llvm.sysroot(
+    name = "llvm_toolchain_linux_x86_64",
+    label = "@sysroot_linux_aarch64//:sysroot",
+    targets = ["linux-aarch64"],
+)
+llvm.sysroot(
+    name = "llvm_toolchain_linux_x86_64",
+    label = "@sysroot_linux_x86_64//:sysroot",
+    targets = ["linux-x86_64"],
+)
+llvm.extra_compiler_files(
+    name = "llvm_toolchain_linux_x86_64",
+    label = "@sysroot_linux_aarch64//:compiler_files",
+    targets = ["linux-aarch64"],
+)
+llvm.extra_compiler_files(
+    name = "llvm_toolchain_linux_x86_64",
+    label = "@sysroot_linux_x86_64//:compiler_files",
+    targets = ["linux-x86_64"],
+)
+llvm.extra_linker_files(
+    name = "llvm_toolchain_linux_x86_64",
+    label = "@sysroot_linux_aarch64//:linker_files",
+    targets = ["linux-aarch64"],
+)
+llvm.extra_linker_files(
+    name = "llvm_toolchain_linux_x86_64",
+    label = "@sysroot_linux_x86_64//:linker_files",
+    targets = ["linux-x86_64"],
+)
 
 # Do not register a macOS LLVM exec variant. //donner/editor needs ObjC for
 # glfw's Cocoa backend, so macOS exec uses apple_support's Xcode toolchain.
