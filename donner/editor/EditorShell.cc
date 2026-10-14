@@ -541,7 +541,8 @@ void PublishPendingUnderlayDrawStats(int checkerboardDrawCount, int overviewTile
 void PublishLayerThumbnailStats(double rowCount, double renderedCount, double reusedCount,
                                 double deferredCount, double skippedForCanvasInvalidationCount,
                                 double snapshotRebuildCount, double bitmapCount, double bitmapBytes,
-                                double textureSnapshotCount, double textureCount) {
+                                double textureSnapshotCount, double textureCount,
+                                double refreshPasses, double renderAttempts, bool previewPaused) {
   // clang-format off
   MAIN_THREAD_ASYNC_EM_ASM(
       {
@@ -556,10 +557,14 @@ void PublishLayerThumbnailStats(double rowCount, double renderedCount, double re
           'bitmapBytes' : $7,
           'textureSnapshotCount' : $8,
           'textureCount' : $9,
+          'refreshPasses' : $10,
+          'renderAttempts' : $11,
+          'previewPaused' : !!$12,
         });
       },
       rowCount, renderedCount, reusedCount, deferredCount, skippedForCanvasInvalidationCount,
-      snapshotRebuildCount, bitmapCount, bitmapBytes, textureSnapshotCount, textureCount);
+      snapshotRebuildCount, bitmapCount, bitmapBytes, textureSnapshotCount, textureCount,
+      refreshPasses, renderAttempts, previewPaused);
   // clang-format on
 }
 
@@ -934,8 +939,9 @@ bool PendingDocumentReplacementCanProcess(bool hasPendingRequest, bool documentW
   return hasPendingRequest && documentWriteAvailable && !hasPendingMutations;
 }
 
-bool ShouldRefreshSidebarSnapshots(bool rendererBusy, bool interactionActive) noexcept {
-  return !rendererBusy && !interactionActive;
+bool ShouldRefreshSidebarSnapshots(bool rendererBusy, bool interactionActive,
+                                   bool previewsPaused) noexcept {
+  return !rendererBusy && !interactionActive && !previewsPaused;
 }
 
 bool SidebarSnapshotRefreshPendingAfterPass(std::size_t deferredThumbnailCount) noexcept {
@@ -5328,7 +5334,7 @@ void EditorShell::noteSidebarPreviewDemand(bool foregroundAcknowledged, bool com
 }
 
 void EditorShell::keepOwedSidebarRefreshScheduled(bool rendererBusy, bool compactSheet) {
-  if (showSamplePicker_ || !sidebarSnapshotRefreshPending_) {
+  if (showSamplePicker_ || !sidebarSnapshotRefreshPending_ || auxiliaryPreviewWorkPaused()) {
     return;
   }
   // Preserve the refresh obligation across a renderer-busy frame or a trickled mouse transition.
@@ -5937,8 +5943,12 @@ void EditorShell::suspendAuxiliaryPreviewGeneration() {
   publishSampleThumbnailStats();
 }
 
+bool EditorShell::auxiliaryPreviewWorkPaused() const {
+  return animationPreview_ || animationResetPending_;
+}
+
 void EditorShell::advanceVisiblePreviews() {
-  if (animationPreview_ || animationResetPending_) {
+  if (auxiliaryPreviewWorkPaused()) {
     return;
   }
   if (internal::ShouldAdvanceSampleThumbnails(showSamplePicker_, samplePresentationPending_)) {
@@ -7004,7 +7014,8 @@ void EditorShell::renderSidebars() {
   const bool interactionActive = selectTool_.isDragging() || penTool_.isDraggingAnchor() ||
                                  textTool_.isDraggingBox() || textTool_.isAdjustingFrame() ||
                                  textTool_.isSelectingText();
-  if (!showSamplePicker_ && ShouldRefreshSidebarSnapshots(rendererBusy, interactionActive)) {
+  if (!showSamplePicker_ && ShouldRefreshSidebarSnapshots(rendererBusy, interactionActive,
+                                                          auxiliaryPreviewWorkPaused())) {
     sidebarPresenter_.refreshSnapshot(app_);
     // Compact sheets use deterministic fill swatches. Avoiding per-row raster
     // rendering and texture uploads keeps the touch panel responsive and also
@@ -8921,7 +8932,10 @@ void EditorShell::recordFrameTelemetry(
       static_cast<double>(layerThumbnailBitmapCount),
       static_cast<double>(layerThumbnailBitmapBytes),
       static_cast<double>(layerThumbnailTextureSnapshotCount),
-      static_cast<double>(thumbnailTextures_.thumbnailTextureCount()));
+      static_cast<double>(thumbnailTextures_.thumbnailTextureCount()),
+      static_cast<double>(layersPanel_.thumbnailRefreshCount()),
+      static_cast<double>(layersPanel_.thumbnailRenderAttemptCount()),
+      auxiliaryPreviewWorkPaused());
   PublishPresentationResourceStats(
       static_cast<double>(presentationResources.totalTrackedBytes),
       static_cast<double>(presentationResources.peakTrackedBytes),

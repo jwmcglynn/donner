@@ -657,6 +657,8 @@ private:
   void persistFontPreview(const std::string& family, std::string_view outlinedSvg) const;
   void handleSamplePreviewResult(SampleThumbnailRenderResult result, bool pending, bool rendered);
   void invalidateChangedFontPreviews();
+  /// Whether playback or time-zero restoration suspends auxiliary preview work.
+  [[nodiscard]] bool auxiliaryPreviewWorkPaused() const;
   void advanceVisiblePreviews();
   /// Cancel auxiliary raster work while preserving its obligation for return to Edit.
   void suspendAuxiliaryPreviewGeneration();

@@ -161,8 +161,9 @@ enum class DeferredRenderAction {
 /// Refresh sidebar captures only while both rendering and interaction are idle.
 /// @param rendererBusy Whether the renderer owns the document.
 /// @param interactionActive Whether an interaction is in progress.
-[[nodiscard]] bool ShouldRefreshSidebarSnapshots(bool rendererBusy,
-                                                 bool interactionActive) noexcept;
+/// @param previewsPaused Whether animation playback or its reset suspends auxiliary work.
+[[nodiscard]] bool ShouldRefreshSidebarSnapshots(bool rendererBusy, bool interactionActive,
+                                                 bool previewsPaused) noexcept;
 
 /// Report whether deferred thumbnails require another snapshot refresh.
 /// @param deferredThumbnailCount Number of thumbnails left pending by this pass.

@@ -206,6 +206,14 @@ public:
     return thumbnailRefreshStats_;
   }
 
+  /// Number of snapshot refresh passes across this panel's lifetime.
+  [[nodiscard]] std::size_t thumbnailRefreshCount() const { return thumbnailRefreshCount_; }
+
+  /// Number of actual thumbnail render calls across this panel's lifetime.
+  [[nodiscard]] std::size_t thumbnailRenderAttemptCount() const {
+    return thumbnailRenderAttemptCount_;
+  }
+
   /// Whether at least one visible row lacks a thumbnail for the current snapshot version.
   [[nodiscard]] bool hasThumbnailRenderDemand() const;
 
@@ -365,6 +373,8 @@ private:
   std::unordered_map<std::uint64_t, CachedThumbnail> thumbnailByStableId_;
   /// Diagnostics for the most recent thumbnail refresh.
   ThumbnailRefreshStats thumbnailRefreshStats_;
+  std::size_t thumbnailRefreshCount_ = 0;
+  std::size_t thumbnailRenderAttemptCount_ = 0;
   /// Snapshot identity used to avoid repeating the O(N) model/style walk while
   /// an incremental thumbnail batch drains one row per host frame.
   bool snapshotPrepared_ = false;

@@ -588,13 +588,13 @@ TEST(EditorShellInternalTest, StructuralDocumentActionsWaitForExclusiveDomOwners
 
 TEST(EditorShellInternalTest, SidebarSnapshotRefreshYieldsToInteractionAndRenderRequests) {
   EXPECT_TRUE(internal::ShouldRefreshSidebarSnapshots(
-      /*rendererBusy=*/false, /*interactionActive=*/false));
+      /*rendererBusy=*/false, /*interactionActive=*/false, /*previewsPaused=*/false));
   EXPECT_FALSE(internal::ShouldRefreshSidebarSnapshots(
-      /*rendererBusy=*/true, /*interactionActive=*/false));
+      /*rendererBusy=*/true, /*interactionActive=*/false, /*previewsPaused=*/false));
   EXPECT_FALSE(internal::ShouldRefreshSidebarSnapshots(
-      /*rendererBusy=*/false, /*interactionActive=*/true));
+      /*rendererBusy=*/false, /*interactionActive=*/true, /*previewsPaused=*/false));
   EXPECT_FALSE(internal::ShouldRefreshSidebarSnapshots(
-      /*rendererBusy=*/true, /*interactionActive=*/true));
+      /*rendererBusy=*/true, /*interactionActive=*/true, /*previewsPaused=*/false));
 }
 
 TEST(EditorShellInternalTest, DeferredLayerThumbnailsRetainSidebarRefreshObligation) {
@@ -1097,6 +1097,14 @@ public:
 
   static std::size_t RequestedAuxiliaryPreviewCount(const EditorShell& shell) {
     return shell.renderCoordinator_.asyncRenderer().sampleThumbnailRenderStats().requested;
+  }
+
+  static std::size_t LayerThumbnailRefreshCount(const EditorShell& shell) {
+    return shell.layersPanel_.thumbnailRefreshCount();
+  }
+
+  static std::size_t LayerThumbnailRenderAttempts(const EditorShell& shell) {
+    return shell.layersPanel_.thumbnailRenderAttemptCount();
   }
 
   static std::size_t LayerThumbnailCacheInspections(const EditorShell& shell) {
@@ -6079,6 +6087,8 @@ TEST(EditorShellTest, AnimationPreviewDefersSidebarWorkUntilEditIsRestored) {
   window.endFrame();
   const auto inspections = EditorShellTestAccess::LayerThumbnailCacheInspections(shell);
   ASSERT_GT(inspections, 0u);
+  const auto refreshCount = EditorShellTestAccess::LayerThumbnailRefreshCount(shell);
+  const auto renderAttempts = EditorShellTestAccess::LayerThumbnailRenderAttempts(shell);
 
   EditorShellTestAccess::SetAnimationPreview(shell, true);
   EditorShellTestAccess::AdvanceAnimationPreview(shell, 10.0);
@@ -6086,12 +6096,15 @@ TEST(EditorShellTest, AnimationPreviewDefersSidebarWorkUntilEditIsRestored) {
   ASSERT_FALSE(EditorShellTestAccess::AnimationResetPending(shell));
   EditorShellTestAccess::SetSidebarSnapshotRefreshPending(shell, true);
   for (const double time : {0.5, 1.0, 1.5}) {
+    SCOPED_TRACE(time);
     ASSERT_TRUE(document.setAnimationTime(time));
     window.beginFrame();
     const auto wakeSerial = window.wakeEventLoopRequestSerialForTesting();
     EditorShellTestAccess::RenderSidebars(shell);
     EXPECT_EQ(window.wakeEventLoopRequestSerialForTesting(), wakeSerial);
     EXPECT_EQ(EditorShellTestAccess::LayerThumbnailCacheInspections(shell), inspections);
+    EXPECT_EQ(EditorShellTestAccess::LayerThumbnailRefreshCount(shell), refreshCount);
+    EXPECT_EQ(EditorShellTestAccess::LayerThumbnailRenderAttempts(shell), renderAttempts);
     EXPECT_TRUE(EditorShellTestAccess::SidebarSnapshotRefreshPending(shell));
     window.endFrame();
   }
@@ -6099,8 +6112,12 @@ TEST(EditorShellTest, AnimationPreviewDefersSidebarWorkUntilEditIsRestored) {
   EditorShellTestAccess::SetAnimationPreview(shell, false);
   ASSERT_TRUE(EditorShellTestAccess::AnimationResetPending(shell));
   window.beginFrame();
+  const auto resetWakeSerial = window.wakeEventLoopRequestSerialForTesting();
   EditorShellTestAccess::RenderSidebars(shell);
+  EXPECT_EQ(window.wakeEventLoopRequestSerialForTesting(), resetWakeSerial);
   EXPECT_EQ(EditorShellTestAccess::LayerThumbnailCacheInspections(shell), inspections);
+  EXPECT_EQ(EditorShellTestAccess::LayerThumbnailRefreshCount(shell), refreshCount);
+  EXPECT_EQ(EditorShellTestAccess::LayerThumbnailRenderAttempts(shell), renderAttempts);
   window.endFrame();
   EditorShellTestAccess::AdvanceAnimationPreview(shell, 11.0);
   ASSERT_FALSE(EditorShellTestAccess::AnimationResetPending(shell));
@@ -6108,6 +6125,7 @@ TEST(EditorShellTest, AnimationPreviewDefersSidebarWorkUntilEditIsRestored) {
   window.beginFrame();
   EditorShellTestAccess::RenderSidebars(shell);
   EXPECT_GT(EditorShellTestAccess::LayerThumbnailCacheInspections(shell), inspections);
+  EXPECT_GT(EditorShellTestAccess::LayerThumbnailRefreshCount(shell), refreshCount);
   window.endFrame();
   EXPECT_EQ(document.document().source(), source);
 }

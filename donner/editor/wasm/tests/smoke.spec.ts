@@ -50,6 +50,11 @@ declare global {
     __donnerCanStartWasm?: boolean;
     __donnerFirstFramePresented?: boolean;
     __donnerRasterShutdownRequests?: number;
+    __donnerLayerThumbnailStats?: {
+      refreshPasses: number;
+      renderAttempts: number;
+      previewPaused: boolean;
+    };
     __donnerLastScrollEvent?: {
       zoomModifierHeld?: boolean;
       yoffset?: number;
@@ -3464,7 +3469,7 @@ test(
         worker: window.__donnerWorkerStats,
         resources: window.__donnerPresentationResourceStats,
         thumbnails: window.__donnerSampleThumbnailStats,
-        layerThumbnails: (window as unknown as Record<string, unknown>).__donnerLayerThumbnailStats,
+        layerThumbnails: window.__donnerLayerThumbnailStats,
         explicitCaptureStarts: window.__donnerWgpuReadbackCaptureStarts ?? 0,
         explicitCaptureCompletions: window.__donnerWgpuReadbackCaptureCompletions ?? 0,
       }));
@@ -3547,6 +3552,14 @@ test(
     for (let index = 1; index < presentedSamples.length; ++index) {
       expect(presentedSamples[index][0]).toBe(presentedSamples[index - 1][0] + 1);
       expect(presentedSamples[index][3]).toBeGreaterThanOrEqual(presentedSamples[index - 1][3]);
+    }
+    expect(before.layerThumbnails?.previewPaused, "sidebar work is paused in Preview").toBe(true);
+    expect(after.layerThumbnails?.previewPaused, "sidebar work remains paused").toBe(true);
+    for (const field of ["refreshPasses", "renderAttempts"] as const) {
+      expect(Number.isSafeInteger(before.layerThumbnails?.[field]), `initial sidebar ${field}`)
+        .toBe(true);
+      expect(after.layerThumbnails?.[field], `no sidebar ${field} during playback`)
+        .toBe(before.layerThumbnails?.[field]);
     }
     const gpuBefore = ownerBefore?.gpu as
       | { readbackCopies: number; cpuTextureWrites: number }

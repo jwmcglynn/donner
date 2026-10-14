@@ -244,6 +244,7 @@ std::span<const EmbeddedSvgIconRequest> LayersPanelIconPrewarmRequests() {
 
 void LayersPanel::refreshSnapshot(const EditorApp& app, svg::Renderer* renderer,
                                   ThumbnailRefreshMode mode, bool canvasPresentationCurrent) {
+  ++thumbnailRefreshCount_;
   const auto renderStart = std::chrono::steady_clock::now();
   const auto finishTiming = [this, renderStart]() {
     thumbnailRefreshStats_.renderMs =
@@ -371,6 +372,7 @@ void LayersPanel::refreshSnapshot(const EditorApp& app, svg::Renderer* renderer,
     // Donner renderer. Rows whose subtree has no boundable geometry come back
     // empty and fall back to the swatch.
     ++thumbnailRefreshStats_.renderedCount;
+    ++thumbnailRenderAttemptCount_;
     CachedThumbnail& cacheEntry = thumbnailByStableId_[pending.stableId];
     cacheEntry.documentFrameVersion = thumbnailRefreshStats_.documentFrameVersion;
     cacheEntry.maxSizePx = thumbnailMaxSizePx;
