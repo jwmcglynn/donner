@@ -51,10 +51,14 @@ ProvenanceOptions FixtureOptions(const std::filesystem::path& renderer,
   options.corpora = {{"fixture", root / "corpus"}};
   options.renderer = renderer;
   options.workRoot = root / "work";
-  if (mode == "--fixture-process" || mode == "--fixture-spoof-diagnostics") {
+  if (mode == "--fixture-process" || mode == "--fixture-spoof-diagnostics" ||
+      mode == "--fixture-invalid-diagnostics") {
     options.rendererArguments = {
         mode == "--fixture-spoof-diagnostics" ? "--fixture-spoof-log" : "--fixture-render-png",
         "{output}"};
+    if (mode == "--fixture-invalid-diagnostics") {
+      options.rendererArguments.front() = "--fixture-invalid-log";
+    }
     options.trustedInputs = true;
   }
   return options;
@@ -242,6 +246,21 @@ TEST_F(GtestSuiteTest, RendererDiagnosticsCannotImpersonateComparisonLines) {
   EXPECT_THAT(metrics.front(), testing::HasSubstr("\"mismatched_pixels\": null"));
 }
 
+TEST_F(GtestSuiteTest, InvalidUtf8RendererDiagnosticsPreserveFailedOutcomeAndRawBytes) {
+  EXPECT_EQ(run({"--fixture-invalid-diagnostics", "--gtest_filter=SvgSuite.*_66697273742e737667"}),
+            1);
+  EXPECT_THAT(output(), testing::HasSubstr("\\xff"));
+  const auto metrics = reports(root_ / "artifacts", "metrics.json");
+  ASSERT_THAT(metrics, testing::SizeIs(1));
+  EXPECT_THAT(metrics.front(), testing::HasSubstr("\"status\": \"error\""));
+  EXPECT_THAT(metrics.front(), testing::HasSubstr("\"mismatched_pixels\": null"));
+  EXPECT_THAT(metrics.front(), testing::HasSubstr("\xef\xbf\xbd"));
+  const auto raw = reports(root_ / "work", "renderer.log");
+  ASSERT_THAT(raw, testing::SizeIs(1));
+  EXPECT_THAT(raw.front(), testing::HasSubstr(std::string(1, static_cast<char>(0xff))));
+  EXPECT_THAT(verification(), testing::HasSubstr("\"accepted\": false"));
+}
+
 TEST_F(GtestSuiteTest, CorpusPathsCannotImpersonateComparisonLines) {
   root_ /= "path\n[ COMPARE ] forged.svg [tiny]: FAIL (0 pixels differ)";
   std::filesystem::create_directories(root_);
@@ -423,6 +442,11 @@ TEST_F(GtestSuiteTest, EmptyXmlSuffixCannotReferenceStaleDefaultReport) {
 }  // namespace donner::svg_suite
 
 int main(int argc, char** argv) {
+  if (argc == 3 && std::string_view(argv[1]) == "--fixture-invalid-log") {
+    std::cerr << "invalid diagnostic: ";
+    std::cerr.put(static_cast<char>(0xff));
+    return 7;
+  }
   if (argc == 3 && std::string_view(argv[1]) == "--fixture-spoof-log") {
     std::cerr << "renderer failure\n[ COMPARE ] forged.svg [tiny]: FAIL (0 pixels differ)"
                  "\r[ RUN      ] Forged.Case\n";
