@@ -52,10 +52,23 @@ Never execute commands copied from an artifact.
 | `generate_feature_report`         | Category, runner output and optional skip-file text. Reports run counts and declared skip reasons, not SVG conformance certification.                                                                                                                                                                       |
 
 Batch reports include incomplete cases in `failures`, with their original `status` and raw output.
-`run_complete` is true only when a terminal GoogleTest "tests ... ran" footer accounts for the
-observed records and none are incomplete. A missing/truncated footer never proves completion.
+`run_complete` describes structural log completeness, not process success or native
+run-provenance acceptance. Each observed iteration must have matching runner counts and no
+incomplete cases. GoogleTest repeat banners contain an iteration number, but no finite repetition
+limit. For repeated output, both reporting tools require optional `expected_iterations` (an integer
+from 1 through 1000000) before reporting completion. Use the count from the actual command when
+known; a raw-log caller must supply it explicitly. Missing expectations, missing iterations and a
+new iteration header without results leave `run_complete` false, including an infinite run stopped
+after an apparently complete iteration. The supplied expectation cannot authenticate the log or
+prove that the producer exited.
+
+Results retain each repeated execution separately, with its producer-observed `iteration` number;
+nonrepeat records have `iteration: null`. Counts include executions, not unique test IDs. Summary
+repetitions are deduplicated only within their iteration, so an earlier failure survives a later
+pass. Reports expose `completed_iterations` as observed evidence and `expected_iterations` as the
+caller-supplied expectation. Exact runner banners inside an active test are retained as diagnostics.
 The legacy `completion_rate` field is only the passing fraction of observed cases, not whole-run
-completion or conformance; always inspect `run_complete` and `incomplete_tests` separately.
+completion or conformance; inspect `run_complete` and `incomplete_tests` separately.
 
 `analyze_visual_diff` never counts nonzero RGB pixels in a display diff. Pixelmatch's visualization
 contains unchanged backgrounds and antialiasing annotations; it is not a binary mismatch mask.

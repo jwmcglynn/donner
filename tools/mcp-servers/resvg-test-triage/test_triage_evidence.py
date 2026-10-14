@@ -133,7 +133,32 @@ class ArtifactAccessTests(unittest.TestCase):
 class RepeatOutputTests(unittest.TestCase):
     # Captured from GoogleTest 1.18 with --gtest_repeat=2 and a one-test filter.
     # The launcher source-path line is omitted; iteration output is unchanged.
-    OUTPUT = 'Repeating all tests (iteration 1) . . .\n\nNote: Google Test filter = FileFingerprintTest.StandardSha256KnownVectorsAndStreaming\n[==========] Running 1 test from 1 test suite.\n[----------] Global test environment set-up.\n[----------] 1 test from FileFingerprintTest\n[ RUN      ] FileFingerprintTest.StandardSha256KnownVectorsAndStreaming\n[       OK ] FileFingerprintTest.StandardSha256KnownVectorsAndStreaming (7 ms)\n[----------] 1 test from FileFingerprintTest (7 ms total)\n\n[==========] 1 test from 1 test suite ran. (7 ms total)\n[  PASSED  ] 1 test.\n\nRepeating all tests (iteration 2) . . .\n\nNote: Google Test filter = FileFingerprintTest.StandardSha256KnownVectorsAndStreaming\n[==========] Running 1 test from 1 test suite.\n[----------] 1 test from FileFingerprintTest\n[ RUN      ] FileFingerprintTest.StandardSha256KnownVectorsAndStreaming\n[       OK ] FileFingerprintTest.StandardSha256KnownVectorsAndStreaming (7 ms)\n[----------] 1 test from FileFingerprintTest (7 ms total)\n\n[----------] Global test environment tear-down\n[==========] 1 test from 1 test suite ran. (7 ms total)\n[  PASSED  ] 1 test.\n'
+    OUTPUT = """Repeating all tests (iteration 1) . . .
+
+Note: Google Test filter = FileFingerprintTest.StandardSha256KnownVectorsAndStreaming
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from FileFingerprintTest
+[ RUN      ] FileFingerprintTest.StandardSha256KnownVectorsAndStreaming
+[       OK ] FileFingerprintTest.StandardSha256KnownVectorsAndStreaming (7 ms)
+[----------] 1 test from FileFingerprintTest (7 ms total)
+
+[==========] 1 test from 1 test suite ran. (7 ms total)
+[  PASSED  ] 1 test.
+
+Repeating all tests (iteration 2) . . .
+
+Note: Google Test filter = FileFingerprintTest.StandardSha256KnownVectorsAndStreaming
+[==========] Running 1 test from 1 test suite.
+[----------] 1 test from FileFingerprintTest
+[ RUN      ] FileFingerprintTest.StandardSha256KnownVectorsAndStreaming
+[       OK ] FileFingerprintTest.StandardSha256KnownVectorsAndStreaming (7 ms)
+[----------] 1 test from FileFingerprintTest (7 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (7 ms total)
+[  PASSED  ] 1 test.
+"""
 
     def test_captured_finite_repeat_completes_with_expected_count(self):
         records, summary = parse_test_output(self.OUTPUT, expected_iterations=2)
@@ -189,8 +214,24 @@ class RepeatOutputTests(unittest.TestCase):
         self.assertEqual([item.test_id for item in records], ['Suite.case'])
         self.assertTrue(summary.run_complete)
 
+    def test_exact_banner_inside_active_case_is_diagnostic_text(self):
+        output = ('[ RUN ] Suite.case\n'
+                  'Repeating all tests (iteration 2) . . .\n'
+                  '[==========] Running 10 tests from 1 test suite.\n'
+                  '[ OK ] Suite.case\n'
+                  '[==========] 1 test from 1 test suite ran. (1 ms total)\n')
+        records, summary = parse_test_output(output)
+        self.assertIsNone(records[0].iteration)
+        self.assertIn('iteration 2', records[0].raw_output)
+        self.assertTrue(summary.run_complete)
+
+    def test_known_larger_repeat_count_rejects_whole_iteration_truncation(self):
+        _, summary = parse_test_output(self.OUTPUT, expected_iterations=3)
+        self.assertEqual(summary.completed_iterations, 2)
+        self.assertFalse(summary.run_complete)
+
     def test_expected_iterations_requires_positive_integer(self):
-        for value in (True, 0, -1, 2.0, '2'):
+        for value in (True, 0, -1, 1_000_001, 2.0, '2'):
             with self.subTest(value=value), self.assertRaises(ValueError):
                 parse_test_output(self.OUTPUT, expected_iterations=value)
 

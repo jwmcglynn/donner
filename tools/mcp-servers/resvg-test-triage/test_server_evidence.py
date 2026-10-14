@@ -110,6 +110,31 @@ class ServerEvidenceTests(unittest.TestCase):
         self.assertEqual(result["incomplete_tests"], 1)
         self.assertIn("Segmentation fault", result["failures"][0]["raw_output"])
 
+    def test_repeat_contract_reaches_both_parser_handlers(self):
+        iterations = []
+        for number in (1, 2):
+            iterations.append(
+                f'Repeating all tests (iteration {number}) . . .\n'
+                '[==========] Running 1 test from 1 test suite.\n'
+                '[ RUN ] Suite.case\n'
+                '[ COMPARE ] /tests/painting/fill/example.svg [TinySkia]: FAIL (1 pixels differ)\n'
+                '[ FAILED ] Suite.case\n'
+                '[==========] 1 test from 1 test suite ran. (1 ms total)\n')
+        for handler in ('batch_triage_tests', 'generate_feature_report'):
+            arguments = {'test_output': ''.join(iterations), 'category': 'painting/fill'}
+            with self.subTest(handler=handler):
+                self.assertFalse(self.call(handler, arguments)['run_complete'])
+                arguments['expected_iterations'] = 2
+                result = self.call(handler, arguments)
+                self.assertTrue(result['run_complete'])
+                self.assertEqual(result['completed_iterations'], 2)
+                self.assertEqual(result['expected_iterations'], 2)
+                outcomes = result.get('failures', result.get('test_details'))
+                self.assertEqual([item['iteration'] for item in outcomes], [1, 2])
+                arguments['expected_iterations'] = -1
+                with self.assertRaises(ValueError):
+                    self.call(handler, arguments)
+
     def test_batch_keeps_quiet_failures_without_svg_dump(self):
         result = self.call("batch_triage_tests", {"test_output": """[ RUN      ] Suite.Test/case
 renderer failed before compare

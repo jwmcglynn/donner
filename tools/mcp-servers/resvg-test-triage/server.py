@@ -337,6 +337,10 @@ async def list_tools() -> list[Tool]:
                     "test_output": {
                         "type": "string",
                         "description": "Complete test output from bazel run"
+                    },
+                    "expected_iterations": {
+                        "type": "integer", "minimum": 1, "maximum": 1000000,
+                        "description": "Optional caller-known finite GoogleTest repetition count"
                     }
                 },
                 "required": ["test_output"]
@@ -458,6 +462,10 @@ async def list_tools() -> list[Tool]:
                     "test_output": {
                         "type": "string",
                         "description": "Recent test run output from bazel test"
+                    },
+                    "expected_iterations": {
+                        "type": "integer", "minimum": 1, "maximum": 1000000,
+                        "description": "Optional caller-known finite GoogleTest repetition count"
                     },
                     "skip_file_content": {
                         "type": "string",
@@ -605,11 +613,13 @@ def _handle_analyze_test_failure(arguments: dict[str, Any]):
 
 
 def _handle_batch_triage_tests(arguments: dict[str, Any]):
-    results, summary = parse_test_output(arguments["test_output"])
+    results, summary = parse_test_output(
+        arguments["test_output"], expected_iterations=arguments.get("expected_iterations"))
     failures = [
         {
             "test": item.test_name,
             "test_id": item.test_id,
+            "iteration": item.iteration,
             "status": item.status,
             "path": item.svg_path,
             "category_dir": item.category,
@@ -628,6 +638,8 @@ def _handle_batch_triage_tests(arguments: dict[str, Any]):
         "total_failures": len(failures),
         "incomplete_tests": summary.incomplete,
         "run_complete": summary.run_complete,
+        "completed_iterations": summary.completed_iterations,
+        "expected_iterations": summary.expected_iterations,
         "failures": failures,
         "grouped_by_feature": {},
         "summary": {"unresolved": len(failures)},
@@ -758,7 +770,8 @@ def _declared_feature_priority(skip_file_content: str, category: str) -> tuple[l
 
 def _handle_generate_feature_report(arguments: dict[str, Any]):
     category = arguments["category"]
-    results, summary = parse_test_output(arguments["test_output"])
+    results, summary = parse_test_output(
+        arguments["test_output"], expected_iterations=arguments.get("expected_iterations"))
     reports = group_by_category(results)
     if category not in reports:
         return _json_response({
@@ -777,12 +790,15 @@ def _handle_generate_feature_report(arguments: dict[str, Any]):
         "evidence_status": "run_counts_and_declared_skip_reasons_only",
         "completion_rate": f"{int(report.completion_rate * 100)}%",
         "run_complete": summary.run_complete,
+        "completed_iterations": summary.completed_iterations,
+        "expected_iterations": summary.expected_iterations,
         "incomplete_tests": report.incomplete,
         "implemented_features": [],
         "missing_features": missing[:10],
         "next_priority": priority,
         "test_details": [
-            {"name": item.test_name, "status": item.status, "pixel_diff": item.pixel_diff}
+            {"name": item.test_name, "status": item.status, "pixel_diff": item.pixel_diff,
+             "iteration": item.iteration}
             for item in report.test_results[:20]
         ],
     })

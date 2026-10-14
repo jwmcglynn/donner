@@ -19,7 +19,7 @@ from triage_evidence import bounded_text
 
 @dataclass
 class TestResult:
-    """Represents a single test result."""
+    """One observed execution; repeated test IDs retain separate iteration results."""
     test_name: str
     status: str  # "PASSED", "FAILED", "SKIPPED", "INCOMPLETE"
     pixel_diff: Optional[int] = None
@@ -29,6 +29,7 @@ class TestResult:
     test_id: Optional[str] = None
     svg_path: Optional[str] = None
     raw_output: str = ""
+    iteration: Optional[int] = None  # Producer banner number; absent for nonrepeat logs.
 
 
 @dataclass
@@ -41,6 +42,8 @@ class TestSummary:
     completion_rate: float  # Observed passing fraction, not proof of a complete run.
     incomplete: int = 0
     run_complete: bool = False
+    completed_iterations: int = 0
+    expected_iterations: Optional[int] = None  # Caller expectation, not producer evidence.
 
 
 @dataclass
@@ -99,7 +102,7 @@ def extract_category_from_path(svg_path: str) -> Optional[str]:
     return category or None
 
 
-def _result_record(test_id, status, path, diff, raw_output) -> TestResult:
+def _result_record(test_id, status, path, diff, raw_output, iteration=None) -> TestResult:
     return TestResult(
         test_name=path.rsplit("/", 1)[-1] if path else test_id,
         status=status,
@@ -108,6 +111,7 @@ def _result_record(test_id, status, path, diff, raw_output) -> TestResult:
         test_id=test_id,
         svg_path=path,
         raw_output=raw_output,
+        iteration=iteration,
     )
 
 
@@ -138,7 +142,13 @@ def _comparator_record(line: str) -> Optional[tuple[str, str]]:
 class _OutputParser:
     """Keep the active test separate from completed records and summary repeats."""
 
-    def __init__(self):
+    def __init__(self, expected_iterations: Optional[int]):
+        self.expected_iterations = expected_iterations
+        self.iteration: Optional[int] = None
+        self.iteration_start = 0
+        self.header_count: Optional[int] = None
+        self.completed_iterations = 0
+        self.boundaries_valid = True
         self.results: list[TestResult] = []
         self.latest: dict[tuple[str, str], TestResult] = {}
         self.terminal_count: Optional[int] = None
@@ -154,13 +164,14 @@ class _OutputParser:
         if self.current_id is not None:
             self.results.append(_result_record(
                 self.current_id, "INCOMPLETE", self.current_path, self.current_diff,
-                "\n".join(self.pending),
+                "\n".join(self.pending), self.iteration,
             ))
 
     def start(self, test_id: str, line: str) -> None:
         self.retain_incomplete()
         self.reset_active()
-        self.terminal_count = None
+        if self.terminal_count is not None:
+            self.boundaries_valid = False
         self.current_id = test_id
         self.pending = [line]
 
@@ -188,25 +199,67 @@ class _OutputParser:
             return
         result = _result_record(
             test_id, status, path, self.current_diff if is_active else None,
-            "\n".join(self.pending) if is_active else line,
+            "\n".join(self.pending) if is_active else line, self.iteration,
         )
         self.results.append(result)
         self.latest[(test_id, status)] = result
         self.reset_active()
 
+    def iteration_complete(self) -> bool:
+        records = self.results[self.iteration_start:]
+        return (self.current_id is None and self.terminal_count == len(records)
+                and (self.header_count is None or self.header_count == len(records))
+                and all(item.status != "INCOMPLETE" for item in records))
+
+    def begin_iteration(self, number: int) -> None:
+        if self.iteration is None:
+            self.boundaries_valid &= (number == 1 and not self.results
+                                      and self.header_count is None and self.terminal_count is None)
+        else:
+            complete = self.iteration_complete() and self.header_count is not None
+            self.completed_iterations += int(complete)
+            self.boundaries_valid &= complete and number == self.iteration + 1
+        self.iteration = number
+        self.iteration_start = len(self.results)
+        self.header_count = None
+        self.terminal_count = None
+        self.latest.clear()
+
+    def observe_boundary(self, line: str) -> bool:
+        # Test diagnostics cannot start another iteration while a case is active.
+        if self.current_id is not None:
+            return False
+        repeat = re.fullmatch(r"Repeating all tests \(iteration ([0-9]{1,10})\) \. \. \.", line)
+        if repeat:
+            self.begin_iteration(int(repeat.group(1)))
+            return True
+        header = re.fullmatch(
+            r"\[={10}\] Running ([0-9]{1,10}) tests? from [0-9]{1,10} test suites?\.", line
+        )
+        if header:
+            self.boundaries_valid &= self.header_count is None and self.terminal_count is None
+            self.header_count = int(header.group(1))
+            return True
+        footer = re.fullmatch(
+            r"\[={10}\] ([0-9]{1,10}) tests? from [0-9]{1,10} test suites? ran\."
+            r"(?: \([0-9]+ ms total\))?", line
+        )
+        if footer:
+            self.boundaries_valid &= self.terminal_count is None
+            self.terminal_count = int(footer.group(1))
+            return True
+        return False
+
     def consume(self, line: str) -> None:
-        run = re.search(r"\[\s*RUN\s*\]\s+(\S+)", line)
+        if self.observe_boundary(line):
+            return
+        run = re.match(r"^\[\s*RUN\s*\]\s+(\S+)", line)
         if run:
             self.start(run.group(1), line)
             return
-        footer = re.search(
-            r"\[={10}\]\s+([0-9]{1,10})(?![0-9])\s+tests? from .+ ran\.", line
-        )
-        if footer:
-            self.terminal_count = int(footer.group(1))
         if self.current_id:
             self.observe(line)
-        terminal = re.search(r"\[\s*(OK|FAILED|SKIPPED)\s*\]\s+(\S+)", line)
+        terminal = re.match(r"^\[\s*(OK|FAILED|SKIPPED)\s*\]\s+(\S+)", line)
         if terminal and "." in terminal.group(2):
             statuses = {"OK": "PASSED", "FAILED": "FAILED", "SKIPPED": "SKIPPED"}
             self.finish_test(terminal.group(2).rstrip(","), statuses[terminal.group(1)], line)
@@ -217,21 +270,39 @@ class _OutputParser:
         failed = sum(item.status == "FAILED" for item in self.results)
         skipped = sum(item.status == "SKIPPED" for item in self.results)
         incomplete = sum(item.status == "INCOMPLETE" for item in self.results)
+        complete = self.iteration_complete()
+        if self.iteration is not None:
+            complete &= self.header_count is not None
+        completed_iterations = self.completed_iterations + int(complete)
+        expected = self.expected_iterations
+        if expected is None and self.iteration is None:
+            expected = 1
         return TestSummary(
             total, passed, failed, skipped, passed / total if total else 0.0,
             incomplete=incomplete,
-            run_complete=self.terminal_count == total and incomplete == 0,
+            run_complete=(self.boundaries_valid and complete and incomplete == 0
+                          and completed_iterations == expected),
+            completed_iterations=completed_iterations,
+            expected_iterations=self.expected_iterations,
         )
 
 
-def parse_test_output(test_output: str) -> tuple[list[TestResult], TestSummary]:
+def parse_test_output(
+    test_output: str, *, expected_iterations: Optional[int] = None,
+) -> tuple[list[TestResult], TestSummary]:
     """Retain quiet failures, incomplete cases, comparator metrics and raw output.
 
     Full test IDs identify records. Summary repeats enrich existing records; SVG
     paths come only from COMPARE or GetParam, never from reversing sanitized IDs.
+    Repeated logs require a caller-supplied positive expected iteration count to
+    establish structural completeness; banners never identify a finite run limit.
+    This does not establish process success or native run-provenance acceptance.
     """
     bounded_text(test_output)
-    parser = _OutputParser()
+    if expected_iterations is not None and (
+            type(expected_iterations) is not int or not 1 <= expected_iterations <= 1_000_000):
+        raise ValueError("expected_iterations must be an integer between 1 and 1000000")
+    parser = _OutputParser(expected_iterations)
     for line in test_output.splitlines():
         parser.consume(line)
     parser.retain_incomplete()
