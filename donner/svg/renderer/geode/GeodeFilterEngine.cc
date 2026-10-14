@@ -44,6 +44,7 @@
 #include "donner/gpu/shader/programs/Tile.h"
 #include "donner/gpu/shader/programs/Turbulence.h"
 #include "donner/svg/components/filter/FilterGraph.h"
+#include "donner/svg/renderer/FilterRegionContext.h"
 #include "donner/svg/renderer/PixelFormatUtils.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
 #include "donner/svg/renderer/geode/GeodeGpuContext.h"
@@ -546,21 +547,6 @@ private:
 };
 
 namespace {
-
-double boundedPositiveFilterPixels(double value) {
-  if (!std::isfinite(value) || value <= 0.0) {
-    return 0.0;
-  }
-  return std::min(value, static_cast<double>(svg::components::kMaximumFilterPixelRadius));
-}
-
-double boundedSignedFilterPixels(double value) {
-  if (!std::isfinite(value)) {
-    return 0.0;
-  }
-  return std::clamp(value, -static_cast<double>(svg::components::kMaximumFilterPixelOffset),
-                    static_cast<double>(svg::components::kMaximumFilterPixelOffset));
-}
 
 double boundedTurbulenceFrequency(double value) {
   if (!std::isfinite(value)) {
@@ -1078,31 +1064,6 @@ std::span<const uint8_t> UniformBytes(const T& value UTILS_LIFETIME_BOUND) {
                                    (extent.height + shape.y - 1) / shape.y);
 }
 
-/// The number of inputs a primitive reads through the filter attribute surface. feComposite,
-/// feBlend and feDisplacementMap each take a second input (`in2`); feMerge is variadic and reads
-/// exactly the list it was built with, and every other primitive reads at most one input. The cap
-/// of two is deliberate rather than a lower bound: those primitives never sample a third input, so
-/// an extra entry a caller appends must not widen the node's subregion either.
-size_t filterInputSlotCount(const svg::components::FilterNode& node) {
-  using namespace svg::components;
-  if (std::holds_alternative<filter_primitive::Composite>(node.primitive) ||
-      std::holds_alternative<filter_primitive::Blend>(node.primitive) ||
-      std::holds_alternative<filter_primitive::DisplacementMap>(node.primitive)) {
-    return 2;
-  }
-  return node.inputs.size();
-}
-
-/// The input in slot @p index, or the default for a slot the graph left empty. A slot the graph
-/// never populated is an unspecified `in`/`in2` attribute, and both resolve the same way: to the
-/// preceding primitive's result, which is SourceGraphic only when this node is the first
-/// primitive in the filter. Falling back to the node's own first input instead would silently
-/// composite, blend, or displace a buffer against itself.
-svg::components::FilterInput filterInputOrDefault(const svg::components::FilterNode& node,
-                                                  size_t index) {
-  return index < node.inputs.size() ? node.inputs[index] : svg::components::FilterInput{};
-}
-
 /// Resolve an input reference to a texture.
 FilterTexture resolveInput(const svg::components::FilterInput& input,
                            const std::unordered_map<std::string, FilterTexture>& namedBuffers,
@@ -1391,246 +1352,9 @@ void GeodeFilterEngine::beginFrame() {
   }
 }
 
-namespace {
+namespace {}  // namespace
 
-double FilterDeviceScaleX(const Transform2d& transform) {
-  return std::max(transform.transformVector(Vector2d(1.0, 0.0)).length(), 1e-12);
-}
-
-double FilterDeviceScaleY(const Transform2d& transform, double scaleX) {
-  return NearZero(scaleX, 1e-12) ? std::abs(transform.data[3])
-                                 : std::max(std::abs(transform.determinant()) / scaleX, 1e-12);
-}
-
-double FilterLengthInPixels(double value, double bound, double scale, bool objectBounds) {
-  return std::abs(objectBounds ? value * bound : value) * scale;
-}
-
-Vector2d FilterOffsetInPixels(Vector2d offset, Vector2d bounds, bool objectBounds,
-                              const Transform2d& transform) {
-  const Vector2d userOffset =
-      objectBounds ? Vector2d(offset.x * bounds.x, offset.y * bounds.y) : offset;
-  return transform.transformVector(userOffset);
-}
-
-}  // namespace
-
-struct FilterExecutionCoordinates {
-  using FilterGraph = svg::components::FilterGraph;
-  using FilterInput = svg::components::FilterInput;
-  using FilterNode = svg::components::FilterNode;
-
-  FilterExecutionCoordinates(const FilterGraph& graph, FilterTexture sourceGraphic,
-                             const Box2d& filterRegion, const Transform2d& deviceFromFilter)
-      : graph(graph),
-        filterRegion(filterRegion),
-        deviceFromFilter(deviceFromFilter),
-        scaleX(FilterDeviceScaleX(deviceFromFilter)),
-        scaleY(FilterDeviceScaleY(deviceFromFilter, scaleX)),
-        isObjectBoundingBox(graph.primitiveUnits == svg::PrimitiveUnits::ObjectBoundingBox),
-        boundingBoxWidth(graph.elementBoundingBox.has_value() ? graph.elementBoundingBox->width()
-                                                              : 1.0),
-        boundingBoxHeight(graph.elementBoundingBox.has_value() ? graph.elementBoundingBox->height()
-                                                               : 1.0),
-        boundingBoxX(graph.elementBoundingBox.has_value() ? graph.elementBoundingBox->topLeft.x
-                                                          : 0.0),
-        boundingBoxY(graph.elementBoundingBox.has_value() ? graph.elementBoundingBox->topLeft.y
-                                                          : 0.0),
-        filterFromDevice(deviceFromFilter.inverse()),
-        primitiveUnitsBounds(computePrimitiveUnitsBounds(sourceGraphic)),
-        previousOutputSubregion(filterRegion) {}
-
-  double toPixelX(double value) const {
-    return FilterLengthInPixels(value, boundingBoxWidth, scaleX, isObjectBoundingBox);
-  }
-
-  double toPixelY(double value) const {
-    return FilterLengthInPixels(value, boundingBoxHeight, scaleY, isObjectBoundingBox);
-  }
-
-  Vector2d toPixelOffset(double dx, double dy) const {
-    return FilterOffsetInPixels({dx, dy}, {boundingBoxWidth, boundingBoxHeight},
-                                isObjectBoundingBox, deviceFromFilter);
-  }
-
-  Box2d resolveInputSubregion(const FilterInput& input) const {
-    if (const auto* named = std::get_if<FilterInput::Named>(&input.value)) {
-      auto it = namedSubregions.find(named->name.str());
-      return it != namedSubregions.end() ? it->second : previousOutputSubregion;
-    }
-    return std::holds_alternative<FilterInput::Previous>(input.value) ? previousOutputSubregion
-                                                                      : filterRegion;
-  }
-
-  Box2d computeNodeSubregion(const FilterNode& node) const {
-    using namespace svg::components;
-    const bool sourceGenerator =
-        std::holds_alternative<filter_primitive::Flood>(node.primitive) ||
-        std::holds_alternative<filter_primitive::Turbulence>(node.primitive) ||
-        std::holds_alternative<filter_primitive::Image>(node.primitive) ||
-        std::holds_alternative<filter_primitive::Tile>(node.primitive);
-    const bool explicitSubregion = node.x.has_value() || node.y.has_value() ||
-                                   node.width.has_value() || node.height.has_value();
-    if (explicitSubregion) {
-      return explicitNodeSubregion(node);
-    }
-    const size_t slots = filterInputSlotCount(node);
-    if (sourceGenerator || slots == 0) {
-      return filterRegion;
-    }
-    Box2d inputBounds = resolveInputSubregion(filterInputOrDefault(node, 0));
-    for (size_t index = 1; index < slots; ++index) {
-      inputBounds =
-          Box2d::Union(inputBounds, resolveInputSubregion(filterInputOrDefault(node, index)));
-    }
-    expandPrimitiveBounds(node, inputBounds);
-    return intersect(inputBounds, filterRegion);
-  }
-
-  double resolvePrimitivePosition(const Lengthd& length, Lengthd::Extent extent, double origin,
-                                  double boundingBoxDimension) const {
-    return resolvePosition(length, extent, origin, boundingBoxDimension);
-  }
-
-  double resolvePrimitiveSize(const Lengthd& length, Lengthd::Extent extent,
-                              double boundingBoxDimension) const {
-    return resolveSize(length, extent, boundingBoxDimension);
-  }
-
-  const FilterGraph& graph;
-  Box2d filterRegion;
-  const Transform2d& deviceFromFilter;
-  double scaleX = 1.0;
-  double scaleY = 1.0;
-  bool isObjectBoundingBox = false;
-  double boundingBoxWidth = 1.0;
-  double boundingBoxHeight = 1.0;
-  double boundingBoxX = 0.0;
-  double boundingBoxY = 0.0;
-  Transform2d filterFromDevice;
-  Box2d primitiveUnitsBounds;
-  Box2d previousOutputSubregion;
-  std::unordered_map<std::string, Box2d> namedSubregions;
-
-private:
-  Box2d computePrimitiveUnitsBounds(FilterTexture sourceGraphic) const {
-    if (isObjectBoundingBox) {
-      return graph.elementBoundingBox.value_or(Box2d(Vector2d(0.0, 0.0), Vector2d(1.0, 1.0)));
-    }
-    const double userWidth = NearZero(scaleX, 1e-12)
-                                 ? static_cast<double>(sourceGraphic.width())
-                                 : static_cast<double>(sourceGraphic.width()) / scaleX;
-    const double userHeight = NearZero(scaleY, 1e-12)
-                                  ? static_cast<double>(sourceGraphic.height())
-                                  : static_cast<double>(sourceGraphic.height()) / scaleY;
-    return Box2d::FromXYWH(0.0, 0.0, userWidth, userHeight);
-  }
-
-  double resolvePosition(const Lengthd& length, Lengthd::Extent extent, double origin,
-                         double boundingBoxDimension) const {
-    if (isObjectBoundingBox && length.unit == Lengthd::Unit::None) {
-      return origin + length.value * boundingBoxDimension;
-    }
-    if (length.unit == Lengthd::Unit::Percent) {
-      const double referenceOrigin =
-          isObjectBoundingBox ? (extent == Lengthd::Extent::X ? boundingBoxX : boundingBoxY) : 0.0;
-      const double referenceSize =
-          isObjectBoundingBox ? boundingBoxDimension
-                              : (extent == Lengthd::Extent::X ? primitiveUnitsBounds.width()
-                                                              : primitiveUnitsBounds.height());
-      return referenceOrigin + referenceSize * length.value / 100.0;
-    }
-    return length.toPixels(primitiveUnitsBounds, FontMetrics(), extent);
-  }
-
-  double resolveSize(const Lengthd& length, Lengthd::Extent extent,
-                     double boundingBoxDimension) const {
-    if (isObjectBoundingBox && length.unit == Lengthd::Unit::None) {
-      return length.value * boundingBoxDimension;
-    }
-    if (length.unit == Lengthd::Unit::Percent) {
-      const double referenceSize =
-          isObjectBoundingBox ? boundingBoxDimension
-                              : (extent == Lengthd::Extent::X ? primitiveUnitsBounds.width()
-                                                              : primitiveUnitsBounds.height());
-      return referenceSize * length.value / 100.0;
-    }
-    return length.toPixels(primitiveUnitsBounds, FontMetrics(), extent);
-  }
-
-  static Box2d intersect(const Box2d& first, const Box2d& second) {
-    return Box2d(Vector2d(std::max(first.topLeft.x, second.topLeft.x),
-                          std::max(first.topLeft.y, second.topLeft.y)),
-                 Vector2d(std::min(first.bottomRight.x, second.bottomRight.x),
-                          std::min(first.bottomRight.y, second.bottomRight.y)));
-  }
-
-  Box2d explicitNodeSubregion(const FilterNode& node) const {
-    const double x = node.x.has_value() ? resolvePosition(*node.x, Lengthd::Extent::X,
-                                                          isObjectBoundingBox ? boundingBoxX : 0.0,
-                                                          boundingBoxWidth)
-                                        : filterRegion.topLeft.x;
-    const double y = node.y.has_value() ? resolvePosition(*node.y, Lengthd::Extent::Y,
-                                                          isObjectBoundingBox ? boundingBoxY : 0.0,
-                                                          boundingBoxHeight)
-                                        : filterRegion.topLeft.y;
-    const double width = node.width.has_value()
-                             ? resolveSize(*node.width, Lengthd::Extent::X, boundingBoxWidth)
-                             : filterRegion.width();
-    const double height = node.height.has_value()
-                              ? resolveSize(*node.height, Lengthd::Extent::Y, boundingBoxHeight)
-                              : filterRegion.height();
-    return intersect(Box2d(Vector2d(x, y), Vector2d(x + width, y + height)), filterRegion);
-  }
-
-  void expandPrimitiveBounds(const FilterNode& node, Box2d& inputBounds) const {
-    using namespace svg::components;
-    if (const auto* blur = std::get_if<filter_primitive::GaussianBlur>(&node.primitive)) {
-      const double x = std::ceil((blur->stdDeviationX >= 0
-                                      ? boundedPositiveFilterPixels(toPixelX(blur->stdDeviationX))
-                                      : 0.0) *
-                                 3.0);
-      const double y = std::ceil((blur->stdDeviationY >= 0
-                                      ? boundedPositiveFilterPixels(toPixelY(blur->stdDeviationY))
-                                      : 0.0) *
-                                 3.0);
-      inputBounds = Box2d(Vector2d(inputBounds.topLeft.x - x, inputBounds.topLeft.y - y),
-                          Vector2d(inputBounds.bottomRight.x + x, inputBounds.bottomRight.y + y));
-      return;
-    }
-    if (const auto* drop = std::get_if<filter_primitive::DropShadow>(&node.primitive)) {
-      expandDropShadow(*drop, inputBounds);
-      return;
-    }
-    if (const auto* morphology = std::get_if<filter_primitive::Morphology>(&node.primitive);
-        morphology && morphology->op == filter_primitive::Morphology::Operator::Dilate) {
-      const double x = boundedPositiveFilterPixels(toPixelX(morphology->radiusX));
-      const double y = boundedPositiveFilterPixels(toPixelY(morphology->radiusY));
-      inputBounds = Box2d(Vector2d(inputBounds.topLeft.x - x, inputBounds.topLeft.y - y),
-                          Vector2d(inputBounds.bottomRight.x + x, inputBounds.bottomRight.y + y));
-    }
-  }
-
-  void expandDropShadow(const svg::components::filter_primitive::DropShadow& drop,
-                        Box2d& inputBounds) const {
-    const double x = std::ceil((drop.stdDeviationX >= 0
-                                    ? boundedPositiveFilterPixels(toPixelX(drop.stdDeviationX))
-                                    : 0.0) *
-                               3.0);
-    const double y = std::ceil((drop.stdDeviationY >= 0
-                                    ? boundedPositiveFilterPixels(toPixelY(drop.stdDeviationY))
-                                    : 0.0) *
-                               3.0);
-    const Vector2d offset = toPixelOffset(drop.dx, drop.dy);
-    const Vector2d boundedOffset(boundedSignedFilterPixels(offset.x),
-                                 boundedSignedFilterPixels(offset.y));
-    const Box2d shadow(Vector2d(inputBounds.topLeft.x + boundedOffset.x - x,
-                                inputBounds.topLeft.y + boundedOffset.y - y),
-                       Vector2d(inputBounds.bottomRight.x + boundedOffset.x + x,
-                                inputBounds.bottomRight.y + boundedOffset.y + y));
-    inputBounds = Box2d::Union(inputBounds, shadow);
-  }
-};
+using FilterExecutionCoordinates = svg::FilterRegionContext;
 
 namespace fp = svg::components::filter_primitive;
 
@@ -1650,7 +1374,8 @@ struct FilterGraphExecution {
         admittedPlan(admittedPlan),
         arena(engine.device_, textureAllocator, *engine.resourceCache_,
               engine.chunkSubmittedHookForTesting_, frameSink),
-        coordinates(graph, sourceGraphic, filterRegion, deviceFromFilter),
+        coordinates(graph, Vector2i(sourceGraphic.width(), sourceGraphic.height()), filterRegion,
+                    deviceFromFilter),
         currentBuffer(sourceGraphic),
         axisAligned(NearZero(deviceFromFilter.data[1], 1e-6) &&
                     NearZero(deviceFromFilter.data[2], 1e-6)) {}
@@ -1794,8 +1519,8 @@ struct FilterSamplingHalo {
   Vector2d halo = Vector2d::Zero();
 
   double deviation(double value, double bound, double pixelScale) const {
-    return value >= 0 ? boundedPositiveFilterPixels(
-                            FilterLengthInPixels(value, bound, pixelScale, objectBounds))
+    return value >= 0 ? svg::BoundedPositiveFilterPixels(
+                            svg::FilterLengthInPixels(value, bound, pixelScale, objectBounds))
                       : 0;
   }
 
@@ -1836,9 +1561,9 @@ struct FilterSamplingHalo {
 
   bool add(const fp::Offset& value) {
     const Vector2d offset =
-        FilterOffsetInPixels({value.dx, value.dy}, bounds, objectBounds, transform);
-    halo += Vector2d(std::ceil(std::abs(boundedSignedFilterPixels(offset.x))),
-                     std::ceil(std::abs(boundedSignedFilterPixels(offset.y))));
+        svg::FilterOffsetInPixels({value.dx, value.dy}, bounds, objectBounds, transform);
+    halo += Vector2d(std::ceil(std::abs(svg::BoundedSignedFilterPixels(offset.x))),
+                     std::ceil(std::abs(svg::BoundedSignedFilterPixels(offset.y))));
     return true;
   }
 
@@ -1868,8 +1593,8 @@ struct FilterSamplingHalo {
 
 std::optional<Vector2d> ComputeFilterSamplingHalo(const svg::components::FilterGraph& graph,
                                                   const Transform2d& transform) {
-  const double scaleX = FilterDeviceScaleX(transform);
-  const double scaleY = FilterDeviceScaleY(transform, scaleX);
+  const double scaleX = svg::FilterDeviceScaleX(transform);
+  const double scaleY = svg::FilterDeviceScaleY(transform, scaleX);
   const Vector2d bounds =
       graph.elementBoundingBox ? graph.elementBoundingBox->size() : Vector2d(1.0, 1.0);
   FilterSamplingHalo support{Vector2d(scaleX, scaleY), bounds, transform,
@@ -2085,8 +1810,8 @@ FilterExecutionResult GeodeFilterEngine::execute(
 
 FilterTexture FilterGraphExecution::inputFor(const svg::components::FilterNode& node,
                                              size_t index) const {
-  return resolveInput(filterInputOrDefault(node, index), namedBuffers, currentBuffer, sourceGraphic,
-                      sourceAlpha ? &*sourceAlpha : nullptr);
+  return resolveInput(svg::FilterInputOrDefault(node, index), namedBuffers, currentBuffer,
+                      sourceGraphic, sourceAlpha ? &*sourceAlpha : nullptr);
 }
 
 FilterTexture FilterGraphExecution::clip(FilterTexture input, const Box2d& region, bool transformed,
@@ -2310,12 +2035,14 @@ std::optional<Box2d> FilterNodeExecution::blurClip(double sx, double sy) const {
 }
 
 FilterTexture FilterNodeExecution::apply(const fp::GaussianBlur& primitive) {
-  const double sx = primitive.stdDeviationX >= 0
-                        ? boundedPositiveFilterPixels(coordinates.toPixelX(primitive.stdDeviationX))
-                        : 0.0;
-  const double sy = primitive.stdDeviationY >= 0
-                        ? boundedPositiveFilterPixels(coordinates.toPixelY(primitive.stdDeviationY))
-                        : 0.0;
+  const double sx =
+      primitive.stdDeviationX >= 0
+          ? svg::BoundedPositiveFilterPixels(coordinates.toPixelX(primitive.stdDeviationX))
+          : 0.0;
+  const double sy =
+      primitive.stdDeviationY >= 0
+          ? svg::BoundedPositiveFilterPixels(coordinates.toPixelY(primitive.stdDeviationY))
+          : 0.0;
   const std::optional<Box2d> clip = blurClip(sx, sy);
   clipMergedIntoBlur = clip.has_value();
   return engine.applyGaussianBlur(arena, toNodeSpace(input), sx, sy,
@@ -2325,8 +2052,8 @@ FilterTexture FilterNodeExecution::apply(const fp::GaussianBlur& primitive) {
 FilterTexture FilterNodeExecution::apply(const fp::Offset& primitive) {
   const Vector2d offset = coordinates.toPixelOffset(primitive.dx, primitive.dy);
   fp::Offset scaled = primitive;
-  scaled.dx = boundedSignedFilterPixels(offset.x);
-  scaled.dy = boundedSignedFilterPixels(offset.y);
+  scaled.dx = svg::BoundedSignedFilterPixels(offset.x);
+  scaled.dy = svg::BoundedSignedFilterPixels(offset.y);
   outputLinear = arena.isLinearRgb(input);
   return engine.applyOffset(arena, input, scaled);
 }
@@ -2396,34 +2123,37 @@ FilterTexture FilterNodeExecution::apply(const fp::DisplacementMap& primitive) {
   }
   scale *= std::sqrt(coordinates.scaleX * coordinates.scaleY);
   FilterTexture second;
-  return convertBinaryInputs(second) ? engine.applyDisplacementMap(arena, input, second, primitive,
-                                                                   boundedSignedFilterPixels(scale))
-                                     : FilterTexture();
+  return convertBinaryInputs(second)
+             ? engine.applyDisplacementMap(arena, input, second, primitive,
+                                           svg::BoundedSignedFilterPixels(scale))
+             : FilterTexture();
 }
 
 FilterTexture FilterNodeExecution::apply(const fp::DiffuseLighting& primitive) {
-  const Box2d bounds = coordinates.resolveInputSubregion(filterInputOrDefault(node, 0));
+  const Box2d bounds = coordinates.resolveInputSubregion(svg::FilterInputOrDefault(node, 0));
   return engine.applyDiffuseLighting(arena, input, primitive, execution.graph,
                                      coordinates.deviceFromFilter, bounds, linearRgb);
 }
 
 FilterTexture FilterNodeExecution::apply(const fp::SpecularLighting& primitive) {
-  const Box2d bounds = coordinates.resolveInputSubregion(filterInputOrDefault(node, 0));
+  const Box2d bounds = coordinates.resolveInputSubregion(svg::FilterInputOrDefault(node, 0));
   return engine.applySpecularLighting(arena, input, primitive, execution.graph,
                                       coordinates.deviceFromFilter, bounds, linearRgb);
 }
 
 FilterTexture FilterNodeExecution::apply(const fp::DropShadow& primitive) {
-  const double sx = primitive.stdDeviationX >= 0
-                        ? boundedPositiveFilterPixels(coordinates.toPixelX(primitive.stdDeviationX))
-                        : 0.0;
-  const double sy = primitive.stdDeviationY >= 0
-                        ? boundedPositiveFilterPixels(coordinates.toPixelY(primitive.stdDeviationY))
-                        : 0.0;
+  const double sx =
+      primitive.stdDeviationX >= 0
+          ? svg::BoundedPositiveFilterPixels(coordinates.toPixelX(primitive.stdDeviationX))
+          : 0.0;
+  const double sy =
+      primitive.stdDeviationY >= 0
+          ? svg::BoundedPositiveFilterPixels(coordinates.toPixelY(primitive.stdDeviationY))
+          : 0.0;
   const Vector2d offset = coordinates.toPixelOffset(primitive.dx, primitive.dy);
   return engine.applyDropShadow(arena, toNodeSpace(input), primitive, sx, sy,
-                                boundedSignedFilterPixels(offset.x),
-                                boundedSignedFilterPixels(offset.y));
+                                svg::BoundedSignedFilterPixels(offset.x),
+                                svg::BoundedSignedFilterPixels(offset.y));
 }
 
 FilterTexture FilterNodeExecution::apply(const fp::Image& primitive) {
@@ -2451,7 +2181,7 @@ FilterTexture FilterNodeExecution::apply(const fp::Image& primitive) {
 
 FilterTexture FilterNodeExecution::apply(const fp::Tile&) {
   outputLinear = arena.isLinearRgb(input);
-  const Box2d source = coordinates.resolveInputSubregion(filterInputOrDefault(node, 0));
+  const Box2d source = coordinates.resolveInputSubregion(svg::FilterInputOrDefault(node, 0));
   // transformBox normalizes inverted rectangles, so reject empty user-space bounds first.
   if (source.width() <= 0.0 || source.height() <= 0.0) {
     return engine.applyTile(arena, input, 0, 0, 0, 0);
