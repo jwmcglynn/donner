@@ -693,6 +693,8 @@ test("CI discovers Firefox, WebKit, and real Safari compatibility regressions", 
     .replace(/\s+/g, " ");
   assert.match(normalizedBrowserCi, /standalone_geode_browser_png_compare/);
   assert.match(normalizedBrowserCi, /export DONNER_BROWSER_GOLDEN_COMPARE/);
+  // Suites that hash the served package read its directory, including in a local build.
+  assert.match(normalizedBrowserCi, /export DONNER_WASM_PACKAGE_DIR="\$\{pkg_dir\}"/);
   const laneCommands = [
     "run_lane \"chromium-default\" bash donner/editor/wasm/tests/run_tests.sh --headed",
     "run_lane \"firefox-geode-resize\" npm --prefix donner/editor/wasm/tests"
