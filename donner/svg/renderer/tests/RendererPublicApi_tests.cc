@@ -195,6 +195,56 @@ TEST(RendererPublicApiTest, SecureDataImagesRenderThroughNestedSvgDocuments) {
   }
 }
 
+TEST(RendererPublicApiTest, SecureDataSvgDoesNotExecuteExperimentalAnimation) {
+  constexpr std::string_view kChild =
+      "<svg xmlns='http://www.w3.org/2000/svg' width='8' height='8'>"
+      "<rect width='8' height='8' fill='red'>"
+      "<set id='animation' attributeName='fill' to='blue' begin='0s' dur='1s' fill='freeze'/>"
+      "</rect></svg>";
+  parser::SVGParser::Options options;
+  options.enableExperimental = true;
+  ParseWarningSink controlWarnings;
+  auto control = parser::SVGParser::ParseSVG(kChild, controlWarnings, options);
+  ASSERT_FALSE(control.hasError());
+  Renderer controlRenderer;
+  controlRenderer.draw(control.result());
+  RendererBitmap blue = AnalyticRedImage();
+  for (size_t offset = 0; offset < blue.pixels.size(); offset += 4) {
+    blue.pixels[offset] = 0;
+    blue.pixels[offset + 2] = 255;
+  }
+  editor::tests::CompareBitmapToBitmap(NormalizeSnapshot(controlRenderer.takeSnapshot()), blue,
+                                       "dynamic-animation-control",
+                                       editor::tests::PixelmatchIdentityParams());
+
+  for (const ProcessingMode mode : {ProcessingMode::DynamicInteractive,
+                                    ProcessingMode::SecureStatic, ProcessingMode::SecureAnimated}) {
+    const std::string label =
+        "secure-data-static-animation-" + std::to_string(static_cast<int>(mode));
+    SCOPED_TRACE(label);
+    SVGDocument::Settings settings;
+    settings.processingMode = mode;
+    ParseWarningSink warnings;
+    auto parsed = parser::SVGParser::ParseSVG(SvgImageDocument(SvgDataUrl(kChild)), warnings,
+                                              options, std::move(settings));
+    ASSERT_FALSE(parsed.hasError());
+    Renderer renderer;
+    renderer.draw(parsed.result());
+    const auto image = parsed.result().querySelector("image");
+    ASSERT_TRUE(image);
+    const auto* loaded = image->entityHandle().try_get<components::LoadedSVGImageComponent>();
+    ASSERT_NE(loaded, nullptr);
+    ASSERT_TRUE(loaded->subDocument);
+    auto child = SVGDocument::CreateFromHandle(loaded->subDocument);
+    const auto animation = child.querySelector("#animation");
+    ASSERT_TRUE(animation);
+    EXPECT_EQ(animation->type(), ElementType::Set);
+    editor::tests::CompareBitmapToBitmap(NormalizeSnapshot(renderer.takeSnapshot()),
+                                         AnalyticRedImage(), label,
+                                         editor::tests::PixelmatchIdentityParams());
+  }
+}
+
 TEST(RendererPublicApiTest, SecureDataSvgPreservesSameDocumentPaintReferences) {
   const std::string source = SvgImageDocument(
       SvgDataUrl("<svg xmlns='http://www.w3.org/2000/svg' width='8' height='8'>"
