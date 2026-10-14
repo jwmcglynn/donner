@@ -25,6 +25,35 @@ TEST(RendererAnimationFilterViewport, MorphologyHistoryUsesExecutedIntegerRadius
   EXPECT_THAT(context.computeNodeSubregion(morphology), testing::Eq(Box2d::FromXYWH(9, 9, 10, 10)));
 }
 
+TEST(RendererAnimationFilterViewport, ViewportOverrideRestoresDescendantLengths) {
+  for (const bool removeAnimation : {false, true}) {
+    SCOPED_TRACE(removeAnimation);
+    const std::string prefix =
+        "<svg width='32' height='16' viewBox='0 0 32 16' "
+        "preserveAspectRatio='none'>";
+    const std::string content = "<rect width='50%' height='16' fill='red'/>";
+    auto document = instantiateSubtree(
+        prefix + "<set id='a' attributeName='viewBox' to='0 0 64 16' dur='2s'/>" + content +
+            "</svg>",
+        parser::SVGParser::Options(), Vector2i(32, 16));
+    auto expected = instantiateSubtree(prefix + content + "</svg>", parser::SVGParser::Options(),
+                                       Vector2i(32, 16));
+    document.setTime(1);
+    editor::tests::CompareBitmapToBitmap(
+        RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(expected),
+        "active-viewport-relative-length", editor::tests::PixelmatchIdentityParams());
+    if (removeAnimation) {
+      ASSERT_THAT(document.removeElement(*document.querySelector("#a")).applied, testing::IsTrue());
+    } else {
+      document.setTime(3);
+    }
+    editor::tests::CompareBitmapToBitmap(
+        RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(expected),
+        removeAnimation ? "removed-viewport-relative-length" : "expired-viewport-relative-length",
+        editor::tests::PixelmatchIdentityParams());
+  }
+}
+
 TEST(RendererAnimationFilterViewport, SharedFilterTracksEachViewportAndTypedEdits) {
   if (!ActiveRendererSupportsFeature(RendererBackendFeature::FilterEffects)) {
     GTEST_SKIP() << "Filters are disabled in this configuration";
