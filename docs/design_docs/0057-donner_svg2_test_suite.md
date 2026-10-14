@@ -1,8 +1,8 @@
 # Design: Donner SVG Suite and SVG2 Audit
 
 **Status:** Implementing. The native suite and failure-triage workflow are being integrated.
-The complete normative audit, animation integration, second-renderer qualification, and standalone
-publication remain open; the checklist below is the delivery record.
+Static standalone reuse is exercised with a second renderer. The complete normative audit, mainline
+animation integration, and standalone publication remain open; the checklist below is the delivery record.
 **Author:** GPT-6 Astra
 **Drafted by:** GPT-5.6 Sol
 **Prior review:** Claude Fable 5
@@ -195,6 +195,7 @@ A universal schema and cross-process typed protocol can serve a future concrete 
 too much machinery before static cases are useful. A Python rendering/comparison stack duplicates the
 existing C++ fixture. Qt-only triage imposes human work and is unsuitable as the release gate.
 
-Open integration questions are the smallest independently reusable C++ boundary, the second renderer
-used to prove it, and the standalone distribution location. None blocks authoring SVG/PNG fixtures
+The reusable boundary is the image/discovery/GoogleTest library plus a renderer callback; the standalone
+runner also invokes renderer executables without a shell. The installed resvg renderer exercises reuse.
+The standalone publication location remains open. None blocks authoring SVG/PNG fixtures
 or auditing a requirement. Broad WPT imports and scripted browser conformance remain separate work.

@@ -84,3 +84,10 @@ Native animation/input scenarios and a complete SVG2 requirement audit remain se
 The current static harness does not establish animation, browser-host or full SVG2 conformance.
 See [the SVG2 audit](../../docs/svg2_audit.md) and
 [the suite design](../../docs/design_docs/0057-donner_svg2_test_suite.md).
+
+## Sharing evidence
+
+Raw run records, reproduction arguments, diagnostics and images are local evidence. They may contain
+absolute paths or private input content. Review and redact them before external sharing; publish a
+scoped summary with relative test identities and approved artifacts. The tools do not automatically
+make raw evidence safe to publish.

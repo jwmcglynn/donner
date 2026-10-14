@@ -39,3 +39,10 @@ of those inputs and references.
   and execution policy. The CLI supplies the bounded native-process callback.
 - The optional `../mcp-servers/resvg-test-triage/` tools may help inspect evidence. They are not a
   runtime dependency of the native tests. Their `AGENTS.md` describes safe artifact-root setup.
+
+## Sharing evidence
+
+Raw run records, reproduction arguments, diagnostics and images are local evidence. They may contain
+absolute paths or private input content. Review and redact them before external sharing; publish a
+scoped summary with relative test identities and approved artifacts. The tools do not automatically
+make raw evidence safe to publish.

@@ -80,3 +80,9 @@ install(FILES "${pixelmatch_SOURCE_DIR}/third_party/pixelmatch/LICENSE"
   DESTINATION licenses RENAME pixelmatch-original-LICENSE)
 install(FILES "${json_SOURCE_DIR}/LICENSE.MIT" DESTINATION licenses RENAME nlohmann-json-LICENSE)
 install(FILES "${picosha2_SOURCE_DIR}/LICENSE" DESTINATION licenses RENAME picosha2-LICENSE)
+
+install(FILES "${SUITE_ROOT}/docs/svg2_audit.md" "${SUITE_ROOT}/docs/svg2_audit_baseline.json"
+  DESTINATION docs)
+install(FILES "${SUITE_ROOT}/docs/design_docs/0057-donner_svg2_test_suite.md"
+              "${SUITE_ROOT}/docs/design_docs/0026-svg_conformance_testing.md"
+  DESTINATION docs/design_docs)

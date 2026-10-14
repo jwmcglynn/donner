@@ -355,7 +355,7 @@ Production editor scope: a hybrid structured/freeform SVG editor workflow beyond
 - All v1.0 issues closed.
 - SVG2 conformance report published with known limitations documented.
 - Stable API surface for rendering, editing, and authoring operations.
-- =90% code coverage across production code.
+- At least 90% code coverage across production code.
 - CSS3 gap analysis complete, all SVG2-referenced properties supported.
 - Performance and binary-size profiles documented.
 - Release documentation complete for embedders.

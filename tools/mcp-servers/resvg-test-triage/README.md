@@ -114,3 +114,10 @@ readable. Full test IDs and SVG paths preserve identity when different directori
 Only RUN, COMPARE, mismatch count and FAILED lines are retained; the absolute artifact prefix is
 normalized to `/artifacts/tests/`. The runner's test identity, count and GetParam punctuation are
 preserved. It covers quiet failure parsing and summary-only recovery without exposing machine paths.
+
+## Sharing evidence
+
+Raw run records, reproduction arguments, diagnostics and images are local evidence. They may contain
+absolute paths or private input content. Review and redact them before external sharing; publish a
+scoped summary with relative test identities and approved artifacts. The tools do not automatically
+make raw evidence safe to publish.

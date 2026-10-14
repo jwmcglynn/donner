@@ -55,3 +55,10 @@ The helper's focused regression command is:
 PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover \
   -s tools/mcp-servers/resvg-test-triage -p 'test_*.py' -v
 ```
+
+## Sharing evidence
+
+Raw run records, reproduction arguments, diagnostics and images are local evidence. They may contain
+absolute paths or private input content. Review and redact them before external sharing; publish a
+scoped summary with relative test identities and approved artifacts. The tools do not automatically
+make raw evidence safe to publish.
