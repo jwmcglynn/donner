@@ -67,7 +67,7 @@ namespace donner::svg {
  * ```
  */
 class SVGFEGaussianBlurElement : public SVGFilterPrimitiveStandardAttributes {
-  friend class parser::SVGParserImpl;
+  friend class details::ElementFactory;
 
 protected:
   /// Create an SVGFEGaussianBlurElement wrapper from an entity.

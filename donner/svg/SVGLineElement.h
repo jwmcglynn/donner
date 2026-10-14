@@ -72,7 +72,7 @@ namespace donner::svg {
  * \endhtmlonly
  */
 class SVGLineElement : public SVGGeometryElement {
-  friend class parser::SVGParserImpl;
+  friend class details::ElementFactory;
 
 protected:
   /// Create an SVGLineElement wrapper from an entity.

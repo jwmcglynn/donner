@@ -102,7 +102,7 @@ namespace donner::svg {
  * DOM object for a \ref xml_feMergeNode element.
  */
 class SVGFEMergeNodeElement : public SVGElement {
-  friend class parser::SVGParserImpl;
+  friend class details::ElementFactory;
 
 protected:
   /// Create an SVGFEMergeNodeElement wrapper from an entity.

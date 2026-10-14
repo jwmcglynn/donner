@@ -190,7 +190,7 @@ namespace donner::svg {
  * @see \ref SVGLinearGradientElement, \ref SVGStopElement
  */
 class SVGRadialGradientElement : public SVGGradientElement {
-  friend class parser::SVGParserImpl;
+  friend class details::ElementFactory;
 
 protected:
   /// Create an SVGRadialGradientElement wrapper from an entity.

@@ -64,7 +64,7 @@ namespace donner::svg {
  * input graphics to produce an output with a new set of color values.
  */
 class SVGFEColorMatrixElement : public SVGFilterPrimitiveStandardAttributes {
-  friend class parser::SVGParserImpl;
+  friend class details::ElementFactory;
 
 protected:
   /// Create an SVGFEColorMatrixElement wrapper from an entity.

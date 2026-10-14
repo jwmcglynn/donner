@@ -44,7 +44,7 @@ namespace donner::svg {
  * DOM via \ref textContent.
  */
 class SVGMetadataElement : public SVGElement {
-  friend class parser::SVGParserImpl;
+  friend class details::ElementFactory;
 
 protected:
   /// Create an SVGMetadataElement wrapper from an entity.

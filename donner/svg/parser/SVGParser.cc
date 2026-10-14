@@ -10,7 +10,6 @@
 #include <tuple>
 #include <utility>
 
-#include "donner/base/CompileTimeMap.h"
 #include "donner/base/ParseWarningSink.h"
 #include "donner/base/RcString.h"
 #include "donner/base/encoding/Decompress.h"
@@ -18,6 +17,7 @@
 #include "donner/base/xml/XMLParser.h"
 #include "donner/base/xml/XMLQualifiedName.h"
 #include "donner/svg/AllSVGElements.h"
+#include "donner/svg/ElementFactory.h"
 #include "donner/svg/SVGElement.h"
 #include "donner/svg/components/DescriptiveTextComponent.h"
 #include "donner/svg/components/DocumentResourceFamilyBudget.h"
@@ -444,6 +444,61 @@ std::optional<ParseDiagnostic> ParseNodeContents<SVGMetadataElement>(SVGParserCo
   return std::nullopt;
 }
 
+/// Whether \p node has a direct text or CDATA child.
+bool HasTextChild(const XMLNode& node) {
+  for (auto child = node.firstChild(); child; child = child->nextSibling()) {
+    if (child->type() == XMLNode::Type::Data || child->type() == XMLNode::Type::CData) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Parse the text of a descriptive element after the parse, when the element has no text children
+ * left. The SVG parser removes the text children of every element it converts, and the XML parser
+ * keeps an element's last plain-text chunk as its value, which a later source edit of that text
+ * updates. That value is therefore all the text such an element still has, whether it is a parsed
+ * `<title>` whose text is edited or a retained foreign `<x:title>` that an `xmlns` edit moves into
+ * the SVG namespace. As for projected `<text>`, only the last plain-text chunk survives: CDATA
+ * content is lost, and text split by a comment or CDATA section keeps only its last plain-text
+ * chunk.
+ *
+ * @param context The parser context.
+ * @param element The descriptive element.
+ * @param node The element's XML node.
+ */
+void ParseRetainedDescriptiveText(SVGParserContext& context, const SVGElement& element,
+                                  const XMLNode& node) {
+  const RcString value = node.value().value_or(RcString(""));
+  if (!ReserveContentProjection(context, element.entityHandle(), value.size(),
+                                value.empty() ? 0 : 1,
+                                components::ParsedPayloadResourceBudget::Category::ProjectedText,
+                                "Descriptive content") ||
+      value.empty()) {
+    return;
+  }
+  element.entityHandle().get_or_emplace<components::DescriptiveTextComponent>().text = value;
+}
+
+/// Parse the contents that only the parser projects, after the parse: the text of a `<title>`,
+/// `<desc>` or `<metadata>` element.
+void ParseDescriptiveContents(SVGParserContext& context, const SVGElement& element,
+                              const XMLNode& node) {
+  switch (element.type()) {
+    case ElementType::Title:
+    case ElementType::Desc:
+    case ElementType::Metadata:
+      if (HasTextChild(node)) {
+        ParseDescriptiveText(context, element, node);
+      } else {
+        ParseRetainedDescriptiveText(context, element, node);
+      }
+      break;
+    default: break;
+  }
+}
+
 void ParseXmlNsAttribute(SVGParserContext& context, const XMLNode& node) {
   bool hasEmptyNamespacePrefix = false;
 
@@ -477,33 +532,47 @@ void ParseXmlNsAttribute(SVGParserContext& context, const XMLNode& node) {
   }
 }
 
+/// Parse each of \p node's attributes onto \p element, skipping attributes in an unsupported
+/// namespace.
 template <typename T>
-ParseResult<SVGElement> ParseAttributes(SVGParserContext& context, T element, const XMLNode& node) {
-  if (!ReserveAttributePayload(context, element.entityHandle(), node)) {
-    return std::move(element);
-  }
+std::optional<ParseDiagnostic> ParseAttributeList(SVGParserContext& context, T element,
+                                                  const XMLNode& node) {
   for (const XMLQualifiedNameRef& attributeName : node.attributes()) {
     const RcString value = node.getAttribute(attributeName).value();
 
     if (!attributeName.namespacePrefix.empty() && attributeName.namespacePrefix != "xmlns" &&
         attributeName.namespacePrefix != "xlink" &&
         node.getNamespaceUri(attributeName.namespacePrefix) != "http://www.w3.org/2000/svg") {
-      ParseDiagnostic err;
-      std::ostringstream ss;
-      ss << "Ignored attribute '" << attributeName << "' with an unsupported namespace";
-      err.reason = ss.str();
-      if (auto maybeRange = context.getAttributeLocation(element, attributeName)) {
-        err.range.start = maybeRange->start;
-      }
+      if (context.warningsEnabled()) {
+        ParseDiagnostic err;
+        std::ostringstream ss;
+        ss << "Ignored attribute '" << attributeName << "' with an unsupported namespace";
+        err.reason = ss.str();
+        if (auto maybeRange = context.getAttributeLocation(element, attributeName)) {
+          err.range.start = maybeRange->start;
+        }
 
-      context.addWarning(std::move(err));
+        context.addWarning(std::move(err));
+      }
       continue;
     }
 
     if (auto error =
             AttributeParser::ParseAndSetAttribute(context, element, attributeName, value)) {
-      return std::move(error.value());
+      return error;
     }
+  }
+
+  return std::nullopt;
+}
+
+template <typename T>
+ParseResult<SVGElement> ParseAttributes(SVGParserContext& context, T element, const XMLNode& node) {
+  if (!ReserveAttributePayload(context, element.entityHandle(), node)) {
+    return std::move(element);
+  }
+  if (auto error = ParseAttributeList(context, element, node)) {
+    return std::move(error.value());
   }
 
   if (auto error = ParseNodeContents(context, element, node)) {
@@ -513,22 +582,88 @@ ParseResult<SVGElement> ParseAttributes(SVGParserContext& context, T element, co
   return std::move(element);
 }
 
-/// Returns true if an element type is experimental. Element types opt in by declaring
-/// `static constexpr bool IsExperimental = true;`. When a feature ships, remove the
-/// `IsExperimental` declaration entirely rather than setting it to false - the absence of the
-/// member is the default (non-experimental) state.
-template <typename T>
-constexpr bool IsExperimental() {
-  if constexpr (requires { T::IsExperimental; }) {
-    return T::IsExperimental;
-  } else {
-    return false;
+/**
+ * Parse the contents that only the parser projects, as \ref ParseDescriptiveContents does, and
+ * report whether the document's content-projection budget refused them. Every refusal records a
+ * rejection on the budget before anything is stored, so a changed rejection count is exact.
+ *
+ * @param context The parser context.
+ * @param element The element.
+ * @param node The element's XML node.
+ * @return An error if the budget refused the contents.
+ */
+std::optional<ParseDiagnostic> ParseDescriptiveContentsWithinBudget(SVGParserContext& context,
+                                                                    const SVGElement& element,
+                                                                    const XMLNode& node) {
+  const auto& budget =
+      element.entityHandle().registry()->ctx().get<components::ParsedPayloadResourceBudget>();
+  const std::size_t rejectionsBefore = budget.securityStats().rejectedReservations;
+  ParseDescriptiveContents(context, element, node);
+  if (budget.securityStats().rejectedReservations == rejectionsBefore) {
+    return std::nullopt;
   }
+  return ParseDiagnostic::Error(
+      "Descriptive content exceeds the document content-projection budget",
+      node.getNodeLocation().value_or(SourceRange{FileOffset::Offset(0), FileOffset::Offset(0)}));
 }
 
-/// Signature of the per-tag element factory used to create and populate an element.
-using CreateElementFn = ParseResult<SVGElement> (*)(SVGParserContext&, const XMLNode&,
-                                                    const XMLQualifiedNameRef&);
+/**
+ * Parse an element that an incremental source edit has just built, as a full parse would: its
+ * attributes, and the text of a `<title>`, `<desc>` or `<metadata>` element. The parser installs
+ * this as \ref components::SVGDocumentContext::parseBuiltElement.
+ *
+ * @param options Options of the parse that built the document.
+ * @param source Current document source.
+ * @param element The built element.
+ * @param node The element's XML node.
+ * @return The first attribute error, or an error if the budget refuses the element's text.
+ */
+std::optional<ParseDiagnostic> ParseBuiltElement(const SVGParser::Options& options,
+                                                 std::string_view source, const SVGElement& element,
+                                                 const XMLNode& node) {
+  ParseWarningSink warnings = ParseWarningSink::Disabled();
+  SVGParserContext context(source, warnings, options);
+  if (auto error = ParseAttributeList(context, element, node)) {
+    return error;
+  }
+  return ParseDescriptiveContentsWithinBudget(context, element, node);
+}
+
+/**
+ * Parse the contents of an element whose text a source edit has changed, as a full parse would:
+ * the new text of a `<title>`, `<desc>` or `<metadata>` element replaces its old text. If the
+ * document's content-projection budget rejects the new text, the element keeps its old text and
+ * reservation, as projected `<text>` does, and the edit reports an error. The parser installs this
+ * as \ref components::SVGDocumentContext::parseEditedElementContents.
+ *
+ * @param options Options of the parse that built the document.
+ * @param source Current document source.
+ * @param element The edited element.
+ * @param node The element's XML node.
+ * @return An error if the budget rejects the new text.
+ */
+std::optional<ParseDiagnostic> ParseEditedElementContents(const SVGParser::Options& options,
+                                                          std::string_view source,
+                                                          const SVGElement& element,
+                                                          const XMLNode& node) {
+  ParseWarningSink warnings = ParseWarningSink::Disabled();
+  SVGParserContext context(source, warnings, options);
+  const EntityHandle handle = element.entityHandle();
+  std::optional<components::DescriptiveTextComponent> previous;
+  if (auto* component = handle.try_get<components::DescriptiveTextComponent>()) {
+    previous = std::move(*component);
+    handle.remove<components::DescriptiveTextComponent>();
+  }
+
+  std::optional<ParseDiagnostic> error =
+      ParseDescriptiveContentsWithinBudget(context, element, node);
+  // A refusal stores no new text, and a refused reservation leaves the old one in place, so
+  // restoring the old text keeps the two consistent.
+  if (error.has_value() && previous.has_value()) {
+    handle.emplace_or_replace<components::DescriptiveTextComponent>(std::move(*previous));
+  }
+  return error;
+}
 
 }  // namespace
 
@@ -545,49 +680,6 @@ private:
   /// Counted rather than a flag so a foreign element nested in a foreign element restores the
   /// enclosing state instead of clearing it.
   int foreignSubtreeDepth_ = 0;
-
-  /// Creates an element of type \p ElementT on \p node and parses its attributes. Experimental
-  /// types fall back to an unknown element unless experimental support is enabled, matching the
-  /// behavior of the tag scan the factory table replaces. Element constructors are only reachable
-  /// from this class, which is why the factories live here.
-  template <typename ElementT>
-  static ParseResult<SVGElement> createElementAndParseAttributes(
-      SVGParserContext& context, const XMLNode& node, const XMLQualifiedNameRef& tagName) {
-    if constexpr (IsExperimental<ElementT>()) {
-      if (!context.options().enableExperimental) {
-        auto element = SVGUnknownElement::CreateOn(node.entityHandle(), tagName);
-        return ParseAttributes(context, element, node);
-      }
-    }
-
-    auto element = ElementT::CreateOn(node.entityHandle());
-    return ParseAttributes(context, element, node);
-  }
-
-  /// Builds the tag-name to factory entries for a perfect-hash lookup over the known element types.
-  template <typename... Types>
-  static constexpr auto makeElementFactoryEntries(entt::type_list<Types...>) {
-    return std::to_array<std::pair<std::string_view, CreateElementFn>>(
-        {{Types::Tag, &createElementAndParseAttributes<Types>}...});
-  }
-
-  /**
-   * Look up the element factory for an SVG tag name.
-   *
-   * Replaces a linear scan that compared the tag against every element type's tag in turn. Lookup
-   * is exact and case-sensitive, matching the `tagName.name == ElementT::Tag` comparison it
-   * replaces.
-   *
-   * Two element types claiming the same tag is a build error wherever the lookup table is built as
-   * a constant expression, which is every configuration except the one that degrades the table to
-   * runtime initialization to stay inside a lower constexpr step budget. There the duplicate
-   * instead makes the map fall back to a linear scan that returns the first matching key, which is
-   * the entry the replaced scan would also have chosen.
-   *
-   * @param tagName Tag name to look up.
-   * @return Factory for the matching element type, or nullptr when no element type claims the tag.
-   */
-  static const CreateElementFn* lookupElementFactory(std::string_view tagName);
 
 public:
   explicit SVGParserImpl(SVGParserContext& context, std::shared_ptr<Registry> sharedRegistry,
@@ -618,8 +710,8 @@ public:
   std::optional<SVGDocument> document() const { return document_; }
 
   /**
-   * Create the SVG element matching \p tagName on \p node, or an unknown element if no type
-   * matches.
+   * Create the SVG element matching \p tagName on \p node, or an unknown element if no enabled
+   * type matches, and parse its attributes and contents.
    *
    * @param tagName Qualified tag name to match against the known element types.
    * @param node XML node to create the element on.
@@ -630,12 +722,19 @@ public:
   ParseResult<SVGElement> createElement(const XMLQualifiedNameRef& tagName, const XMLNode& node,
                                         bool isSvgNamespace) {
     if (isSvgNamespace) {
-      if (const CreateElementFn* createFn = lookupElementFactory(std::string_view(tagName.name))) {
-        return (*createFn)(context_, node, tagName);
+      std::optional<ParseResult<SVGElement>> typedElement;
+      if (svg::details::ElementFactory::VisitType(
+              std::string_view(tagName.name), context_.options().enableExperimental,
+              [&]<typename ElementT>() {
+                typedElement = ParseAttributes(
+                    context_, svg::details::ElementFactory::CreateOn<ElementT>(node.entityHandle()),
+                    node);
+              })) {
+        return std::move(*typedElement);
       }
     }
 
-    auto element = SVGUnknownElement::CreateOn(node.entityHandle(), tagName);
+    auto element = svg::details::ElementFactory::CreateUnknownOn(node.entityHandle(), tagName);
     node.entityHandle().get<components::ElementTypeComponent>().setInSvgNamespace(isSvgNamespace);
     return ParseAttributes(context_, element, node);
   }
@@ -776,10 +875,21 @@ public:
           }
 
           document_ = SVGDocument(documentState_, std::move(settings_), child->entityHandle());
-          documentState_->registry()
-              .ctx()
-              .get<components::SVGDocumentContext>()
-              .maximumContentProjectionChunks = context_.options().maximumContentProjectionChunks;
+          auto& documentContext =
+              documentState_->registry().ctx().get<components::SVGDocumentContext>();
+          documentContext.maximumContentProjectionChunks =
+              context_.options().maximumContentProjectionChunks;
+          documentContext.experimentalElementsEnabled = context_.options().enableExperimental;
+          documentContext.parseBuiltElement = [options = context_.options()](
+                                                  std::string_view source,
+                                                  const SVGElement& element, const XMLNode& node) {
+            return ParseBuiltElement(options, source, element, node);
+          };
+          documentContext.parseEditedElementContents =
+              [options = context_.options()](std::string_view source, const SVGElement& element,
+                                             const XMLNode& node) {
+                return ParseEditedElementContents(options, source, element, node);
+              };
 
           auto maybeSvgElement = ParseAttributes(context_, document_->svgElement(), child.value());
           if (maybeSvgElement.hasError()) {
@@ -808,14 +918,6 @@ public:
     return std::nullopt;
   }
 };
-
-const CreateElementFn* SVGParserImpl::lookupElementFactory(std::string_view tagName) {
-  // Defined out of line so the table is built where SVGParserImpl is a complete type; the factories
-  // it stores are private members of the class.
-  static DONNER_CONSTEXPR_MAP auto kElementFactories =
-      makeCompileTimeMap(makeElementFactoryEntries(AllSVGElements()));
-  return kElementFactories.find(tagName);
-}
 
 namespace {
 

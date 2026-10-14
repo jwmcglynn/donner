@@ -56,7 +56,7 @@ namespace donner::svg {
  * DOM object for a \ref xml_switch element.
  */
 class SVGSwitchElement : public SVGGraphicsElement {
-  friend class parser::SVGParserImpl;
+  friend class details::ElementFactory;
 
 protected:
   /// Create an SVGSwitchElement wrapper from an entity.

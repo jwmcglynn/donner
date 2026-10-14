@@ -59,7 +59,7 @@ namespace donner::svg {
  * minimum over a rectangular window; dilate computes the maximum.
  */
 class SVGFEMorphologyElement : public SVGFilterPrimitiveStandardAttributes {
-  friend class parser::SVGParserImpl;
+  friend class details::ElementFactory;
 
 protected:
   /// Create an SVGFEMorphologyElement wrapper from an entity.
