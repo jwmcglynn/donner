@@ -2,17 +2,23 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <limits>
 #include <sstream>
 #include <string>
 
 #include "donner/base/tests/ParseResultTestUtils.h"
 #include "donner/svg/SVGDocument.h"
+#include "donner/svg/SVGPathElement.h"
 #include "donner/svg/SVGUseElement.h"
 #include "donner/svg/components/animation/AnimateValueComponent.h"
 #include "donner/svg/components/animation/AnimatedValuesComponent.h"
+#include "donner/svg/components/animation/AnimationPathValue.h"
 #include "donner/svg/components/animation/AnimationSystem.h"
 #include "donner/svg/parser/ListParser.h"
+#include "donner/svg/parser/PathParser.h"
 #include "donner/svg/parser/SVGParser.h"
+#include "donner/svg/properties/PropertyRegistry.h"
+#include "donner/svg/renderer/RendererUtils.h"
 
 namespace donner::svg {
 
@@ -55,6 +61,17 @@ std::optional<std::string> getAnimatedValue(SVGDocument& document, const char* s
     return std::nullopt;
   }
 
+  if (attributeName == "fill" && animValues->contextualLengths.contains("fill")) {
+    // Paint stacks are resolved only after the final inheritance and color context is known.
+    document.setTime(time);
+    ParseWarningSink warnings = ParseWarningSink::Disabled();
+    RendererUtils::prepareDocumentForRendering(document, false, warnings);
+    const auto paint = element->getComputedStyle().fill.get();
+    if (!paint || !paint->is<PaintServer::Solid>()) {
+      return std::nullopt;
+    }
+    return paint->get<PaintServer::Solid>().color.resolve(css::RGBA::RGB(0, 0, 0), 1).toHexString();
+  }
   auto it = animValues->overrides.find(attributeName);
   if (it == animValues->overrides.end()) {
     return std::nullopt;
@@ -298,17 +315,17 @@ TEST(SVGAnimateElement, DiscreteCalcMode) {
   // At t=0: "red"
   auto val0 = getAnimatedValue(document, "#r", "fill", 0.0);
   ASSERT_TRUE(val0.has_value());
-  EXPECT_EQ(val0.value(), "red");
+  EXPECT_EQ(val0.value(), "#ff0000");
 
   // At t=1.5s: "blue" (1/3 to 2/3)
   auto val1 = getAnimatedValue(document, "#r", "fill", 1.5);
   ASSERT_TRUE(val1.has_value());
-  EXPECT_EQ(val1.value(), "blue");
+  EXPECT_EQ(val1.value(), "#0000ff");
 
   // At t=2.5s: "green" (2/3 to 1)
   auto val2 = getAnimatedValue(document, "#r", "fill", 2.5);
   ASSERT_TRUE(val2.has_value());
-  EXPECT_EQ(val2.value(), "green");
+  EXPECT_EQ(val2.value(), "#008000");
 }
 
 TEST(SVGAnimateElement, FromByInterpolation) {
@@ -978,7 +995,11 @@ TEST(SVGAnimateElement, PathQuadCurveCloseInterpolation) {
 
   auto val = getAnimatedValue(document, "#p", "d", 1.0);
   ASSERT_TRUE(val.has_value());
-  EXPECT_EQ(val.value(), "M5,5 L15,5 Q25,5 35,5 C45,5 55,5 65,5 Z");
+  const auto valPath = parser::PathParser::Parse(val.value());
+  const auto valExpected = parser::PathParser::Parse("M5,5 L15,5 Q25,5 35,5 C45,5 55,5 65,5 Z");
+  ASSERT_THAT(valPath, NoParseError());
+  ASSERT_THAT(valExpected, NoParseError());
+  EXPECT_EQ(valPath.result(), valExpected.result());
 }
 
 TEST(SVGAnimateElement, PathVerbMismatchFallsBackToDiscrete) {
@@ -994,11 +1015,19 @@ TEST(SVGAnimateElement, PathVerbMismatchFallsBackToDiscrete) {
 
   auto val05 = getAnimatedValue(document, "#p", "d", 0.5);
   ASSERT_TRUE(val05.has_value());
-  EXPECT_EQ(val05.value(), "M0,0 L10,10");
+  const auto val05Path = parser::PathParser::Parse(val05.value());
+  const auto val05Expected = parser::PathParser::Parse("M0,0 L10,10");
+  ASSERT_THAT(val05Path, NoParseError());
+  ASSERT_THAT(val05Expected, NoParseError());
+  EXPECT_EQ(val05Path.result(), val05Expected.result());
 
   auto val15 = getAnimatedValue(document, "#p", "d", 1.5);
   ASSERT_TRUE(val15.has_value());
-  EXPECT_EQ(val15.value(), "M0,0 Q5,5 10,10");
+  const auto val15Path = parser::PathParser::Parse(val15.value());
+  const auto val15Expected = parser::PathParser::Parse("M0,0 Q5,5 10,10");
+  ASSERT_THAT(val15Path, NoParseError());
+  ASSERT_THAT(val15Expected, NoParseError());
+  EXPECT_EQ(val15Path.result(), val15Expected.result());
 }
 
 TEST(SVGAnimateElement, NamedColorsInterpolateInSrgb) {
@@ -1394,7 +1423,7 @@ TEST(SVGAnimateElement, OneEventSchedulesDelayedBeginAndEnd) {
   EXPECT_EQ(document.dispatchMouseEvent(EventType::Click, *target), true);
   EXPECT_THAT(getAnimatedValue(document, "#r", "fill", 0.5), testing::Eq(std::nullopt));
   EXPECT_THAT(getAnimatedValue(document, "#r", "fill", 1.5),
-              testing::Optional(testing::StrEq("red")));
+              testing::Optional(testing::StrEq("#ff0000")));
   EXPECT_THAT(getAnimatedValue(document, "#r", "fill", 2.5), testing::Eq(std::nullopt));
 }
 
@@ -1502,6 +1531,114 @@ TEST(SVGAnimateElement, ToOnlyReferenceUsesTheTypedBaseValue) {
   document.querySelector("#r")->cast<SVGUseElement>().setHref("#b");
   EXPECT_THAT(getAnimatedValue(document, "#r", "href", 0.25),
               testing::Optional(testing::StrEq("#b")));
+}
+
+TEST(AnimationPathValue, SharedAdmissionRefusesAndRecoversWithoutGlobalRejection) {
+  using namespace components;
+  auto shared = std::make_shared<AnimationContextualWorkBudget>();
+  AnimationResourceBudget first;
+  first.setContextualWorkBudget(shared);
+  AnimateValueComponent value;
+  value.attributeName = "d";
+  value.from = "M1 0L2 0";
+  value.to = "M3 0L4 0";
+  EXPECT_THAT(SampleAnimationPath(0.5, 0, nullptr, &value, "", first),
+              testing::Optional(std::string("M2 0L3 0")));
+  ASSERT_THAT(shared->reserve(shared->remaining()), testing::IsTrue());
+  AnimationResourceBudget refused;
+  refused.setContextualWorkBudget(shared);
+  EXPECT_THAT(SampleAnimationPath(0.5, 0, nullptr, &value, "", refused), testing::Eq(std::nullopt));
+  EXPECT_THAT(refused.rejected(), testing::IsFalse());
+  shared->reset();
+  AnimationResourceBudget nextFrame;
+  nextFrame.setContextualWorkBudget(shared);
+  EXPECT_THAT(SampleAnimationPath(0.5, 0, nullptr, &value, "", nextFrame),
+              testing::Optional(std::string("M2 0L3 0")));
+}
+
+TEST(AnimationPathValue, PathSourceLimitIsCheckedBeforePreparation) {
+  using namespace components;
+  SetAnimationComponent value;
+  value.attributeName = "d";
+  value.to = "M0 0" + std::string(AnimationResourceBudget::kMaximumPathValueBytes - 4, 'Z');
+  AnimationResourceBudget accepted;
+  const auto result = SampleAnimationPath(0.5, 0, &value, nullptr, "", accepted);
+  ASSERT_THAT(result, testing::Ne(std::nullopt));
+  EXPECT_EQ(result->size(), AnimationResourceBudget::kMaximumPathValueBytes);
+  value.to->push_back('Z');
+  AnimationResourceBudget refused;
+  EXPECT_THAT(SampleAnimationPath(0.5, 0, &value, nullptr, "", refused), testing::Eq(std::nullopt));
+  EXPECT_EQ(refused.remainingContextualWork(), AnimationResourceBudget::kMaximumContextualWork);
+  EXPECT_THAT(refused.rejected(), testing::IsFalse());
+}
+
+TEST(AnimationPathValue, NonFiniteCompositionProducesNoEffect) {
+  using namespace components;
+  AnimateValueComponent value;
+  value.attributeName = "d";
+  value.from = "M0 0L1e308 0";
+  value.to = "M0 0L1e308 0";
+  value.additive = true;
+  AnimationResourceBudget budget;
+  EXPECT_THAT(SampleAnimationPath(0.5, 0, nullptr, &value, "M0 0L1e308 0", budget),
+              testing::Eq(std::nullopt));
+  EXPECT_THAT(budget.rejected(), testing::IsFalse());
+}
+
+TEST(AnimationPathValue, TypedGeometryKeepsPrecisionAndEmptyValues) {
+  using namespace components;
+  PathBuilder builder;
+  builder.moveTo({0.12345678901234566, 1e100})
+      .lineTo({2, 3})
+      .quadTo({4, 5}, {6, 7})
+      .curveTo({8, 9}, {10, 11}, {12, 13})
+      .closePath();
+  AnimationResourceBudget budget;
+  EXPECT_THAT(
+      SerializeAnimationPathGeometry(builder.build(), budget),
+      testing::Optional(std::string("M0.12345678901234566 1e+100L2 3Q4 5 6 7C8 9 10 11 12 13Z")));
+  AnimationResourceBudget emptyBudget;
+  EXPECT_THAT(SerializeAnimationPathGeometry(Path{}, emptyBudget),
+              testing::Optional(std::string{}));
+}
+
+TEST(AnimationPathValue, TypedGeometryRefusalDoesNotBecomeAnEmptyPath) {
+  using namespace components;
+  PathBuilder nonfinite;
+  nonfinite.moveTo({std::numeric_limits<double>::infinity(), 0});
+  AnimationResourceBudget invalidBudget;
+  EXPECT_THAT(SerializeAnimationPathGeometry(nonfinite.build(), invalidBudget),
+              testing::Eq(std::nullopt));
+  PathBuilder oversized;
+  oversized.moveTo({0, 0});
+  for (std::size_t i = 0; i < AnimationResourceBudget::kMaximumPathValueBytes / 4; ++i) {
+    oversized.lineTo({1, 1});
+  }
+  AnimationResourceBudget sizeBudget;
+  EXPECT_THAT(SerializeAnimationPathGeometry(oversized.build(), sizeBudget),
+              testing::Eq(std::nullopt));
+  EXPECT_THAT(sizeBudget.rejected(), testing::IsFalse());
+  AnimationResourceBudget workBudget;
+  ASSERT_TRUE(workBudget.reserveContextualWork(workBudget.remainingContextualWork()));
+  PathBuilder small;
+  small.moveTo({0, 0});
+  EXPECT_THAT(SerializeAnimationPathGeometry(small.build(), workBudget), testing::Eq(std::nullopt));
+  EXPECT_THAT(workBudget.rejected(), testing::IsFalse());
+}
+
+TEST(SVGAnimateElement, ReplacementPathValuesDoNotReadAnUnusedTypedBase) {
+  auto document = parseSVGWithExperimental(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg"><path id="p" d="M0 0L4 0">
+      <animate attributeName="d" values="M0 0L4 0;M0 0L8 0" dur="2s"/>
+    </path></svg>)svg");
+  PathBuilder oversized;
+  oversized.moveTo({0, 0});
+  for (std::size_t i = 0; i < components::AnimationResourceBudget::kMaximumPathValueBytes / 4;
+       ++i) {
+    oversized.lineTo({1, 1});
+  }
+  document.querySelector("#p")->cast<SVGPathElement>().setSpline(oversized.build());
+  EXPECT_THAT(getAnimatedValue(document, "#p", "d", 1), testing::Optional(std::string("M0 0L6 0")));
 }
 
 }  // namespace donner::svg

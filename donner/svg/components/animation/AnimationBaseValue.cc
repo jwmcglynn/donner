@@ -14,6 +14,7 @@
 #include "donner/svg/components/SVGDocumentContext.h"
 #include "donner/svg/components/animation/AnimatedValuesComponent.h"
 #include "donner/svg/components/animation/AnimationNumericAttributes.h"
+#include "donner/svg/components/animation/AnimationPathValue.h"
 #include "donner/svg/components/animation/AnimationSystem.h"
 #include "donner/svg/components/animation/AnimationValueSampler.h"
 #include "donner/svg/components/filter/FilterComponent.h"
@@ -34,9 +35,11 @@
 #include "donner/svg/components/shadow/ShadowTreeComponent.h"
 #include "donner/svg/components/shape/CircleComponent.h"
 #include "donner/svg/components/shape/EllipseComponent.h"
+#include "donner/svg/components/shape/PathComponent.h"
 #include "donner/svg/components/shape/RectComponent.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
 #include "donner/svg/components/text/TextPathComponent.h"
+#include "donner/svg/properties/PropertyParsing.h"
 
 namespace donner::svg::components {
 namespace {
@@ -763,9 +766,47 @@ AnimationValueContext AnimationContextFor(Registry& registry, Entity target,
   return result;
 }
 
-std::string UnderlyingAnimationValue(Registry& registry, Entity target, std::string_view attribute,
-                                     const AnimationValueContext& context,
-                                     AnimationResourceBudget& budget) {
+std::optional<RcString> CascadedAnimationPathData(Registry& registry, Entity target,
+                                                  AnimationResourceBudget& budget) {
+  Property<RcString> data("d");
+  if (const auto* path = registry.try_get<PathComponent>(target)) {
+    data = path->d;
+  }
+  if (const auto* animated = registry.try_get<AnimatedValuesComponent>(target);
+      animated && animated->overrides.contains("d")) {
+    const auto& value = registry.get<AnimatedValuesComponent>(target).overrides.at("d");
+    if (value.size() > AnimationResourceBudget::kMaximumPathValueBytes ||
+        !budget.reserveSourceBytes(value.size())) {
+      return std::nullopt;
+    }
+    data.substitute(RcString(value));
+    data.specificity = css::Specificity::Animation();
+  }
+  if (const auto* style = registry.try_get<ComputedStyleComponent>(target);
+      style && style->properties) {
+    const auto it = style->properties->unparsedProperties.find("d");
+    if (it != style->properties->unparsedProperties.end()) {
+      if (!budget.reserveSourceBytes(style->properties->complexPropertyBytes())) {
+        return std::nullopt;
+      }
+      const auto params =
+          parser::PropertyParseFnParams::Create(it->second.declaration, it->second.specificity,
+                                                parser::PropertyParseBehavior::AllowUserUnits);
+      if (parser::Parse(
+              params,
+              [](const auto& params) { return parser::ParsePathDataProperty(params.components()); },
+              &data)) {
+        return std::nullopt;
+      }
+    }
+  }
+  return data.get();
+}
+
+std::optional<std::string> UnderlyingAnimationValue(Registry& registry, Entity target,
+                                                    std::string_view attribute,
+                                                    const AnimationValueContext& context,
+                                                    AnimationResourceBudget& budget) {
   if (const auto* animated = registry.try_get<AnimatedValuesComponent>(target)) {
     if (const auto it = animated->overrides.find(std::string(attribute));
         it != animated->overrides.end()) {
@@ -773,6 +814,17 @@ std::string UnderlyingAnimationValue(Registry& registry, Entity target, std::str
     }
   }
 
+  if (attribute == "d") {
+    if (const auto* path = registry.try_get<PathComponent>(target); path && path->splineOverride) {
+      return SerializeAnimationPathGeometry(*path->splineOverride, budget);
+    }
+    const auto data = CascadedAnimationPathData(registry, target, budget);
+    if (!data || data->size() > AnimationResourceBudget::kMaximumPathValueBytes ||
+        !budget.reserveSourceBytes(data->size())) {
+      return std::nullopt;
+    }
+    return data->str();
+  }
   if (attribute == "offset") {
     if (const auto* stop = registry.try_get<StopComponent>(target)) {
       return SerializeValue(stop->properties.offset, context).value();
@@ -848,7 +900,7 @@ std::string UnderlyingAnimationValue(Registry& registry, Entity target, std::str
   }
   if (attribute == "transform" || attribute == "gradientTransform" ||
       attribute == "patternTransform") {
-    return {};
+    return std::string{};
   }
   if (attribute == "fill" || attribute == "color") {
     return "black";

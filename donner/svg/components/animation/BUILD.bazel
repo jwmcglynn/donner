@@ -27,10 +27,12 @@ donner_cc_library(
     name = "value_sampler",
     srcs = [
         "AnimationInterpolation.cc",
+        "AnimationPathValue.cc",
         "AnimationValueMath.cc",
         "AnimationValueSampler.cc",
     ],
     hdrs = [
+        "AnimationPathValue.h",
         "AnimationValueMath.h",
         "AnimationValueSampler.h",
     ],

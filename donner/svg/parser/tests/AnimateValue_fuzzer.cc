@@ -38,7 +38,11 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
     std::string_view element;
     std::string_view attribute;
   };
-  constexpr std::array<Target, 24> targets = {{
+  constexpr std::array<Target, 28> targets = {{
+      {"path:", "path", "d"},
+      {"path-by:", "path", "d"},
+      {"path-from-by:", "path", "d"},
+      {"path-add:", "path", "d"},
       {"fill:", "rect", "fill"},
       {"stroke:", "rect", "stroke"},
       {"color:", "rect", "color"},
@@ -76,14 +80,21 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
                                components::IsContextualPaintAttribute(target.attribute);
   std::string svg = "<svg xmlns='http://www.w3.org/2000/svg' color='red' fill='blue'><";
   svg += target.element;
-  svg += " id='r'><animate id='budget' attributeName='";
+  if (target.attribute == "d") {
+    svg += " d='M0 0L1 1'";
+  }
+  svg += " id='r'><animate id='budget'";
+  if (target.prefix == "path-from-by:") {
+    svg += " from='M0 0L1 1'";
+  }
+  svg += " attributeName='";
   svg += target.attribute;
-  svg += target.prefix == "reference-to:" ? "' to='"
-         : target.prefix == "font-by:"    ? "' by='"
-                                          : "' values='";
+  const bool by = target.prefix == "font-by:" || target.prefix == "path-by:" ||
+                  target.prefix == "path-from-by:";
+  svg += target.prefix == "reference-to:" ? "' to='" : by ? "' by='" : "' values='";
   svg.append(values.substr(target.prefix.size()));
   svg += "' begin='0s' dur='2s'";
-  if (target.prefix.starts_with("filter-") || contextualStyle) {
+  if (target.prefix.starts_with("filter-") || contextualStyle || target.prefix == "path-add:") {
     svg += " additive='sum' accumulate='sum' repeatCount='3'";
   }
   svg += "/></";
@@ -108,7 +119,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
     // Advance at a few time points to exercise interpolation.
     components::AnimationSystem().advance(registry, 0.5, nullptr);
     components::AnimationSystem().advance(registry, 1.0, nullptr);
-    if (target.prefix.starts_with("filter-") || contextualStyle) {
+    if (target.prefix.starts_with("filter-") || contextualStyle || target.prefix == "path-add:") {
       components::AnimationSystem().advance(registry, 3.0, nullptr);
     }
     if (contextualStyle) {

@@ -16,6 +16,12 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
       pathData.append("L0 0");
     }
 
+    const auto commands = PathParser::ParseCommands(pathData);
+    if (!commands.hasError() || !commands.hasResult() ||
+        commands.result().commands.size() > PathParser::kMaximumCommands ||
+        commands.result().parameters.size() > PathParser::kMaximumParameters) {
+      std::abort();
+    }
     const auto result = PathParser::Parse(pathData);
     if (!result.hasError() || !result.hasResult() ||
         result.result().commands().size() > PathParser::kMaximumCommands ||
@@ -25,6 +31,8 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
   } else {
     const auto result = PathParser::Parse(input);
     (void)result;
+    const auto commands = PathParser::ParseCommands(input);
+    (void)commands;
   }
 
   return 0;

@@ -297,15 +297,20 @@ bool ProcessAnimation(Registry& registry, Entity entity, double documentTime,
       setComp ? AnimationValueContext{}
               : AnimationContextFor(registry, state.targetEntity, attribute, resourceBudget);
   const bool needsUnderlying =
-      motionComp || (valueComp && (valueComp->additive || !valueComp->from)) ||
+      motionComp ||
+      (valueComp && (valueComp->additive || (valueComp->values.empty() && !valueComp->from))) ||
       (transformComp && (transformComp->additive || (!transformComp->from && transformComp->by)));
-  const std::string underlying = needsUnderlying
-                                     ? UnderlyingAnimationValue(registry, state.targetEntity,
-                                                                attribute, context, resourceBudget)
-                                     : std::string{};
+  const auto underlyingValue = needsUnderlying
+                                   ? UnderlyingAnimationValue(registry, state.targetEntity,
+                                                              attribute, context, resourceBudget)
+                                   : std::optional(std::string{});
   if (resourceBudget.rejected()) {
     return false;
   }
+  if (!underlyingValue) {
+    return true;
+  }
+  const std::string& underlying = *underlyingValue;
   std::optional<std::pair<std::string, std::string>> sampled;
   if (motionComp) {
     std::string motion =
@@ -318,7 +323,7 @@ bool ProcessAnimation(Registry& registry, Entity entity, double documentTime,
     sampled = std::pair<std::string, std::string>{"transform", std::move(motion)};
   } else {
     sampled = SampleAnimationValue(progress, iteration, setComp, valueComp, transformComp,
-                                   underlying, context);
+                                   underlying, context, &resourceBudget);
   }
   if (resourceBudget.rejected()) {
     return false;
@@ -326,8 +331,8 @@ bool ProcessAnimation(Registry& registry, Entity entity, double documentTime,
   if (!sampled) {
     return true;
   }
-  const bool acceptsEmpty =
-      sampled->first == "href" || sampled->first == "xlink:href" || sampled->first == "result";
+  const bool acceptsEmpty = sampled->first == "href" || sampled->first == "xlink:href" ||
+                            sampled->first == "result" || sampled->first == "d";
   if (sampled->second.empty() && !acceptsEmpty) {
     return true;
   }

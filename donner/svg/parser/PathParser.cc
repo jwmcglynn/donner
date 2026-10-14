@@ -1,7 +1,11 @@
 #include "donner/svg/parser/PathParser.h"
 
+#include <algorithm>
 #include <array>
+#include <cctype>
 #include <span>
+#include <type_traits>
+#include <utility>
 
 #include "donner/base/parser/NumberParser.h"
 
@@ -9,12 +13,61 @@ namespace donner::svg::parser {
 
 namespace {
 
+/// Syntax output for the shared parser; geometry callbacks intentionally do not expand curves.
+class CommandRecorder {
+public:
+  explicit CommandRecorder(std::size_t) {}
+
+  void reserve(std::size_t sourceBytes) {
+    data_.commands.reserve(std::min(sourceBytes, PathParser::kMaximumCommands));
+    data_.parameters.reserve(std::min(sourceBytes, PathParser::kMaximumParameters));
+  }
+
+  void begin(char letter) {
+    pending_ = {static_cast<std::uint32_t>(data_.parameters.size()), 0, letter};
+  }
+
+  void parameter(double value) {
+    if (pending_.parameterCount >= 7 || data_.parameters.size() >= PathParser::kMaximumParameters) {
+      exceeded_ = true;
+      return;
+    }
+    data_.parameters.push_back(value);
+    ++pending_.parameterCount;
+  }
+
+  void commit() {
+    data_.commands.push_back(pending_);
+    committedParameters_ = data_.parameters.size();
+  }
+
+  PathParser::CommandList build() {
+    data_.parameters.resize(committedParameters_);
+    return std::move(data_);
+  }
+
+  void moveTo(const Vector2d&) {}
+  void lineTo(const Vector2d&) {}
+  void quadTo(const Vector2d&, const Vector2d&) {}
+  void curveTo(const Vector2d&, const Vector2d&, const Vector2d&) {}
+  void arcTo(const Vector2d&, double, bool, bool, const Vector2d&) {}
+  void closePath() {}
+  bool exceededMaximumPoints() const { return exceeded_; }
+
+private:
+  PathParser::CommandList data_;
+  PathParser::Command pending_;
+  std::size_t committedParameters_ = 0;
+  bool exceeded_ = false;
+};
+
 /**
  * Implementation of \ref PathParser.
  *
  * Note that this doesn't inherit from ParserBase, since it has a slightly different interpretation
  * of isWhitespace per the spec.
  */
+template <typename Builder>
 class PathParserImpl {
 public:
   /**
@@ -23,14 +76,18 @@ public:
    * @param d The string to parse.
    */
   explicit PathParserImpl(std::string_view d)
-      : builder_(PathParser::kMaximumPoints), d_(d), remaining_(d) {}
+      : builder_(PathParser::kMaximumPoints), d_(d), remaining_(d) {
+    if constexpr (std::is_same_v<Builder, CommandRecorder>) {
+      builder_.reserve(d.size());
+    }
+  }
 
   /**
    * Parse the path data.
    *
    * @return The parsed path data, or an error if parsing failed.
    */
-  ParseResult<Path> parse() {
+  ParseResult<decltype(std::declval<Builder&>().build())> parse() {
     skipWhitespace();
     if (remaining_.empty()) {
       // Empty string, return empty path.
@@ -77,34 +134,54 @@ public:
   }
 
 private:
-  enum class Token {
-    InvalidCommand,
-
-    //! Positioning.
-    MoveTo,
-    ClosePath,
-
-    //! Straight lines.
-    LineTo,
-    HorizontalLineTo,
-    VerticalLineTo,
-
-    //! Cubic curves.
-    CurveTo,
-    SmoothCurveTo,
-
-    //! Quadratic curves.
-    QuadCurveTo,
-    SmoothQuadCurveTo,
-
-    //! Elliptical arcs.
-    EllipticalArc
+  enum class Token : char {
+    InvalidCommand = 0,
+    MoveTo = 'M',
+    ClosePath = 'Z',
+    LineTo = 'L',
+    HorizontalLineTo = 'H',
+    VerticalLineTo = 'V',
+    CurveTo = 'C',
+    SmoothCurveTo = 'S',
+    QuadCurveTo = 'Q',
+    SmoothQuadCurveTo = 'T',
+    EllipticalArc = 'A'
   };
 
   struct TokenCommand {
     Token token;
     bool relative;
   };
+
+  void beginCapture(TokenCommand command) {
+    if constexpr (std::is_same_v<Builder, CommandRecorder>) {
+      char letter = static_cast<char>(command.token);
+      if (command.relative && command.token != Token::ClosePath) {
+        letter = static_cast<char>(std::tolower(static_cast<unsigned char>(letter)));
+      }
+      builder_.begin(letter);
+    }
+  }
+
+  void captureParameter(double value) {
+    if constexpr (std::is_same_v<Builder, CommandRecorder>) {
+      builder_.parameter(value);
+    }
+  }
+
+  void commitCapture() {
+    if constexpr (std::is_same_v<Builder, CommandRecorder>) {
+      builder_.commit();
+    }
+  }
+
+  const char* capacityError() const {
+    if constexpr (std::is_same_v<Builder, CommandRecorder>) {
+      return "Path parameter limit exceeded";
+    } else {
+      return "Path point limit exceeded";
+    }
+  }
 
   void skipWhitespace() {
     while (!remaining_.empty() && isWhitespace(remaining_[0])) {
@@ -208,6 +285,7 @@ private:
 
     const NumberParser::Result& result = maybeResult.result();
     remaining_.remove_prefix(result.consumedChars);
+    captureParameter(result.number);
     return result.number;
   }
 
@@ -243,6 +321,7 @@ private:
       }
 
       remaining_.remove_prefix(1);
+      captureParameter(*out_flag ? 1.0 : 0.0);
       return std::nullopt;
     } else {
       ParseDiagnostic err;
@@ -310,6 +389,7 @@ private:
       return err;
     }
     ++commandCount_;
+    beginCapture(command);
 
     if (command.token == Token::MoveTo) {
       // 9.3.3 "moveto": https://www.w3.org/TR/SVG/paths.html#PathDataMovetoCommands
@@ -471,11 +551,12 @@ private:
 
     if (builder_.exceededMaximumPoints()) {
       ParseDiagnostic err;
-      err.reason = "Path point limit exceeded";
+      err.reason = capacityError();
       err.range = currentRange(0, 0);
       return err;
     }
 
+    commitCapture();
     lastToken_ = command.token;
     return std::nullopt;
   }
@@ -495,7 +576,7 @@ private:
     return lastToken_ == Token::QuadCurveTo || lastToken_ == Token::SmoothQuadCurveTo;
   }
 
-  PathBuilder builder_;
+  Builder builder_;
   std::size_t commandCount_ = 0;
 
   std::string_view d_;
@@ -511,7 +592,12 @@ private:
 }  // namespace
 
 ParseResult<Path> PathParser::Parse(std::string_view d) {
-  PathParserImpl parser(d);
+  PathParserImpl<PathBuilder> parser(d);
+  return parser.parse();
+}
+
+ParseResult<PathParser::CommandList> PathParser::ParseCommands(std::string_view d) {
+  PathParserImpl<CommandRecorder> parser(d);
   return parser.parse();
 }
 

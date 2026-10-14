@@ -10,6 +10,7 @@
 #include "donner/svg/components/animation/AnimationTimingComponent.h"
 #include "donner/svg/components/animation/SetAnimationComponent.h"
 #include "donner/svg/parser/SVGParser.h"
+#include "donner/svg/properties/PropertyRegistry.h"
 #include "donner/svg/renderer/RendererUtils.h"
 
 namespace donner::svg {
@@ -163,7 +164,9 @@ TEST(SVGSetElement, AnimationDuringActiveInterval) {
   auto& registry = document.registry();
 
   // Advance to t=3s (during active interval: 2s <= 3s < 5s)
-  components::AnimationSystem().advance(registry, 3.0, nullptr);
+  document.setTime(3.0);
+  ParseWarningSink warnings = ParseWarningSink::Disabled();
+  RendererUtils::prepareDocumentForRendering(document, false, warnings);
 
   // The rect should have animated override for fill
   auto rect = document.querySelector("#r");
@@ -171,8 +174,9 @@ TEST(SVGSetElement, AnimationDuringActiveInterval) {
   auto* animValues =
       registry.try_get<components::AnimatedValuesComponent>(rect->entityHandle().entity());
   ASSERT_NE(animValues, nullptr);
-  ASSERT_TRUE(animValues->overrides.count("fill"));
-  EXPECT_EQ(animValues->overrides.at("fill"), "blue");
+  ASSERT_TRUE(animValues->contextualLengths.contains("fill"));
+  EXPECT_EQ(rect->getComputedStyle().fill.get(),
+            PaintServer(PaintServer::Solid(css::Color(css::RGBA::RGB(0, 0, 255)))));
 }
 
 TEST(SVGSetElement, AnimationAfterEndRemove) {
@@ -208,7 +212,9 @@ TEST(SVGSetElement, AnimationAfterEndFreeze) {
   auto& registry = document.registry();
 
   // Advance to t=6s (after end, but fill="freeze")
-  components::AnimationSystem().advance(registry, 6.0, nullptr);
+  document.setTime(6.0);
+  ParseWarningSink warnings = ParseWarningSink::Disabled();
+  RendererUtils::prepareDocumentForRendering(document, false, warnings);
 
   // fill="freeze" persists the value
   auto rect = document.querySelector("#r");
@@ -216,8 +222,9 @@ TEST(SVGSetElement, AnimationAfterEndFreeze) {
   auto* animValues =
       registry.try_get<components::AnimatedValuesComponent>(rect->entityHandle().entity());
   ASSERT_NE(animValues, nullptr);
-  ASSERT_TRUE(animValues->overrides.count("fill"));
-  EXPECT_EQ(animValues->overrides.at("fill"), "blue");
+  ASSERT_TRUE(animValues->contextualLengths.contains("fill"));
+  EXPECT_EQ(rect->getComputedStyle().fill.get(),
+            PaintServer(PaintServer::Solid(css::Color(css::RGBA::RGB(0, 0, 255)))));
 }
 
 TEST(SVGSetElement, IndefiniteDuration) {
@@ -232,14 +239,18 @@ TEST(SVGSetElement, IndefiniteDuration) {
   auto& registry = document.registry();
 
   // With no dur, <set> has indefinite duration, so it's always active after begin
-  components::AnimationSystem().advance(registry, 100.0, nullptr);
+  document.setTime(100.0);
+  ParseWarningSink warnings = ParseWarningSink::Disabled();
+  RendererUtils::prepareDocumentForRendering(document, false, warnings);
 
   auto rect = document.querySelector("#r");
   ASSERT_TRUE(rect.has_value());
   auto* animValues =
       registry.try_get<components::AnimatedValuesComponent>(rect->entityHandle().entity());
   ASSERT_NE(animValues, nullptr);
-  EXPECT_EQ(animValues->overrides.at("fill"), "blue");
+  ASSERT_TRUE(animValues->contextualLengths.contains("fill"));
+  EXPECT_EQ(rect->getComputedStyle().fill.get(),
+            PaintServer(PaintServer::Solid(css::Color(css::RGBA::RGB(0, 0, 255)))));
 }
 
 TEST(SVGSetElement, DocumentSetTime) {

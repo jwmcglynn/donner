@@ -187,7 +187,7 @@ value. The current presentation surface is:
 | -------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
 | Common CSS presentation properties                 | Animation cascade, inheritance, important author precedence                                                 |
 | Circle, ellipse and rectangle lengths              | Animated geometry with reversible base values                                                               |
-| Line endpoints, polygon/polyline points, path data | Animated geometry; path-value correctness audit remains in progress                                         |
+| Line endpoints, polygon/polyline points, path data | Animated geometry; authored path parameter interpolation and composition                                    |
 | Ordinary, gradient and pattern transforms          | Transform sampling and composition; qualification in progress                                               |
 | Gradient coordinates and stop offsets              | Reversible animated values                                                                                  |
 | Viewports and path calibration                     | Reversible `viewBox`, `preserveAspectRatio` and `pathLength`, including initially absent components         |
@@ -204,7 +204,13 @@ value. The current presentation surface is:
 Path-data qualification uses independently constructed references in
 `RendererAnimationPathValue_tests.cc` and the parameter/compatibility rules in
 [SVG2 path animation](https://w3c.github.io/svgwg/svg2-draft/paths.html#TheDProperty).
-The path composition, command, arc, empty-value and precision controls currently expose gaps.
+Compatible authored command sequences support by/from-by, additive and accumulated composition.
+Incompatible composition contributes no value, including after freezing; incompatible interpolation
+uses discrete keyframe timing. Arc parameters are interpolated before geometry conversion, with
+nonzero interpolated flags treated as true. Empty `d` values remain valid samples. Typed and CSS path
+bases, lower animation layers, and motion references share the effective sampled geometry.
+Coordinates use round-trip precision, and parsing, copies, arithmetic and serialization are bounded.
+Path data has no defined paced distance; paced mode uses the permitted linear fallback.
 
 The final coverage gate requires rendered regressions for newly supported families. Unsupported
 attribute families remain gaps in #1239; this table does not redefine them as completed work.
@@ -218,9 +224,9 @@ geometry measurement, lifecycle queries, hit geometry, and queued preview input.
 - At most 4096 animation declarations and 1 MiB of admitted animation source per evaluation.
 - At most 1024 instance times per animation list, 16384 expanded intervals, 65536 dependency updates,
   and 262144 dependency steps.
-- At most 4 MiB of generated values, 64 numeric values per sampled list, and 64 KiB per motion path.
-- A shared 262144-unit path parsing/measurement budget per evaluation.
-- A shared 4 Mi-unit contextual length preparation allowance across scalar/font stacks, text spans, marker references and prepared SVG filter images.
+- At most 4 MiB of generated values, 64 numeric values per sampled list, and 64 KiB per motion or animated path source value.
+- A shared 262144-unit motion path parsing/measurement budget per evaluation.
+- A shared 4 Mi-unit contextual preparation allowance across authored path values, scalar/font stacks, text spans, marker references and prepared SVG filter images.
   Raster filter recipes are charged to the existing filter execution budget, including repeat
   executions and CPU paint-coverage scans.
   Recipe parsing/interpolation and bounded path measurement are admitted before work; a refused
@@ -266,11 +272,11 @@ fuzzer coverage must be expanded whenever a new input form or resource-owning pa
       derived from primitive inputs and the enclosing filter region.
 - [x] Resolve per-instance paint/color stacks, sampled currentColor and interpolation mode,
       resource color priority, inherited URL ownership, and diffuse/specular lighting-color.
-- [ ] Complete compatible path-data by/from-by, additive and accumulated composition; preserve
+- [x] Complete compatible path-data by/from-by, additive and accumulated composition; preserve
       base values for incompatible composition, including freezing.
-- [ ] Preserve authored path command compatibility and interpolate arc parameters/flags before
+- [x] Preserve authored path command compatibility and interpolate arc parameters/flags before
       geometric conversion.
-- [ ] Preserve empty path samples and coordinate precision with bounded parsing and arithmetic.
+- [x] Preserve empty path samples and coordinate precision with bounded parsing and arithmetic.
 - [ ] Finish presentation-attribute coverage and publish the verified support matrix.
 - [ ] Finish independent code/security review and all new hostile-input regressions.
 - [ ] Run affected source lint, formatting, CMake generation checks, and sanitizer/fuzzer gates.

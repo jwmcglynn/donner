@@ -30,17 +30,25 @@ AnimationValueContext AnimationContextFor(Registry& registry, Entity target,
                                           std::string_view attribute,
                                           AnimationResourceBudget& budget);
 
+/// Resolve typed, animated and CSS path data using the rendering cascade.
+/// @param registry Document storage. @param target Path element. @param budget Shared admission.
+/// @return Owning path data, or nullopt on admission refusal.
+std::optional<RcString> CascadedAnimationPathData(Registry& registry, Entity target,
+                                                  AnimationResourceBudget& budget);
+
 /** Read the underlying presentation value, including lower animation layers.
  * @param registry Document storage.
  * @param target Animation target.
  * @param attribute Animated attribute name.
  * @param context Resolved target context.
  * @param budget Shared source budget, charged before any potentially large copy.
- * @return An owning serialized value, empty when unavailable.
+ * @return An owning serialized value (possibly empty), or nullopt when unavailable/refused.
  */
-std::string UnderlyingAnimationValue(Registry& registry, Entity target, std::string_view attribute,
-                                     const AnimationValueContext& context,
-                                     AnimationResourceBudget& budget);
+
+std::optional<std::string> UnderlyingAnimationValue(Registry& registry, Entity target,
+                                                    std::string_view attribute,
+                                                    const AnimationValueContext& context,
+                                                    AnimationResourceBudget& budget);
 
 /// Find an owning contextual recipe, following a shadow entity to its authored source.
 /// @param registry Document storage. @param target Target instance. @param attribute Length field.

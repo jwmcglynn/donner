@@ -6,10 +6,9 @@
 #include <type_traits>
 #include <vector>
 
-#include "donner/base/Path.h"
 #include "donner/base/parser/NumberParser.h"
+#include "donner/svg/components/animation/AnimationPathValue.h"
 #include "donner/svg/components/animation/AnimationResourceBudget.h"
-#include "donner/svg/parser/PathParser.h"
 
 namespace donner::svg::components {
 namespace {
@@ -34,97 +33,6 @@ std::vector<double> parseNumbers(std::string_view str) {
     str.remove_prefix(maybeNumber.result().consumedChars);
   }
   return result;
-}
-
-/// Check if two Paths have structurally compatible command sequences for interpolation.
-bool arePathsCompatible(const Path& a, const Path& b) {
-  const auto aCmds = a.commands();
-  const auto bCmds = b.commands();
-  if (aCmds.size() != bCmds.size()) {
-    return false;
-  }
-  for (size_t i = 0; i < aCmds.size(); ++i) {
-    if (aCmds[i].verb != bCmds[i].verb) {
-      return false;
-    }
-  }
-  return a.points().size() == b.points().size();
-}
-
-/// Interpolate two structurally compatible Paths at parameter t.
-/// Returns the interpolated path as an SVG path data string.
-std::string interpolatePaths(const Path& from, const Path& to, double t) {
-  std::ostringstream oss;
-  oss.precision(6);
-
-  const auto cmds = from.commands();
-  const auto fromPts = from.points();
-  const auto toPts = to.points();
-
-  auto lerpPoint = [&](size_t pi) {
-    double x = fromPts[pi].x + (toPts[pi].x - fromPts[pi].x) * t;
-    double y = fromPts[pi].y + (toPts[pi].y - fromPts[pi].y) * t;
-    return std::pair<double, double>(x, y);
-  };
-
-  for (size_t i = 0; i < cmds.size(); ++i) {
-    if (i > 0) {
-      oss << ' ';
-    }
-
-    const size_t pi = cmds[i].pointIndex;
-    switch (cmds[i].verb) {
-      case Path::Verb::MoveTo: {
-        auto [x, y] = lerpPoint(pi);
-        oss << "M" << x << "," << y;
-        break;
-      }
-      case Path::Verb::LineTo: {
-        auto [x, y] = lerpPoint(pi);
-        oss << "L" << x << "," << y;
-        break;
-      }
-      case Path::Verb::QuadTo: {
-        auto [cx, cy] = lerpPoint(pi);
-        auto [ex, ey] = lerpPoint(pi + 1);
-        oss << "Q" << cx << "," << cy << " " << ex << "," << ey;
-        break;
-      }
-      case Path::Verb::CurveTo: {
-        auto [c1x, c1y] = lerpPoint(pi);
-        auto [c2x, c2y] = lerpPoint(pi + 1);
-        auto [ex, ey] = lerpPoint(pi + 2);
-        oss << "C" << c1x << "," << c1y << " " << c2x << "," << c2y << " " << ex << "," << ey;
-        break;
-      }
-      case Path::Verb::ClosePath: oss << "Z"; break;
-    }
-  }
-
-  return oss.str();
-}
-
-/// Try to interpolate SVG path data strings.
-/// Returns empty string if paths are not structurally compatible.
-std::string tryInterpolatePaths(const std::string& fromStr, const std::string& toStr, double t) {
-  if (fromStr.size() > AnimationResourceBudget::kMaximumPathValueBytes ||
-      toStr.size() > AnimationResourceBudget::kMaximumPathValueBytes) {
-    return {};
-  }
-  auto fromResult = parser::PathParser::Parse(fromStr);
-  auto toResult = parser::PathParser::Parse(toStr);
-  if (!fromResult.hasResult() || !toResult.hasResult()) {
-    return {};
-  }
-
-  const auto& fromPath = fromResult.result();
-  const auto& toPath = toResult.result();
-
-  if (!arePathsCompatible(fromPath, toPath)) {
-    return {};
-  }
-
-  return interpolatePaths(fromPath, toPath, t);
 }
 
 bool ValidNumericDeclaration(const AnimateValueComponent& value, const std::string& underlying,
@@ -196,10 +104,6 @@ std::optional<std::string> interpolateAnimateValue(double progress,
   if (auto result =
           CombineAnimationValues(from, to, 1 - segment->progress, segment->progress, context)) {
     return *result;
-  }
-  const auto path = tryInterpolatePaths(from, to, segment->progress);
-  if (!path.empty()) {
-    return path;
   }
   options.calcMode = CalcMode::Discrete;
   const auto discrete = SelectAnimationSegment(progress, values.size(), options);
@@ -486,7 +390,19 @@ bool RecipeStorageFits(const std::vector<ContextualLengthSample>& samples, std::
 std::optional<std::pair<std::string, std::string>> SampleAnimationValue(
     double progress, double iteration, const SetAnimationComponent* setComp,
     const AnimateValueComponent* valueComp, const AnimateTransformComponent* transformComp,
-    const std::string& underlying, const AnimationValueContext& context) {
+    const std::string& underlying, const AnimationValueContext& context,
+    AnimationResourceBudget* budget) {
+  const std::string_view attribute = setComp     ? std::string_view(setComp->attributeName)
+                                     : valueComp ? std::string_view(valueComp->attributeName)
+                                                 : std::string_view{};
+  if (attribute == "d" || attribute == "path") {
+    AnimationResourceBudget localBudget;
+    auto path = SampleAnimationPath(progress, iteration, setComp, valueComp, underlying,
+                                    budget ? *budget : localBudget);
+    return path ? std::optional(
+                      std::pair<std::string, std::string>{std::string(attribute), std::move(*path)})
+                : std::nullopt;
+  }
   if (setComp) {
     if (setComp->attributeName.empty() || !setComp->to) {
       return std::nullopt;

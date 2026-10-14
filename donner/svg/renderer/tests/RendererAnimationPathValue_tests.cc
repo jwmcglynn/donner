@@ -4,6 +4,8 @@
 #include <string>
 
 #include "donner/editor/tests/BitmapGoldenCompare.h"
+#include "donner/svg/SVGPathElement.h"
+#include "donner/svg/components/text/TextPathComponent.h"
 #include "donner/svg/renderer/tests/RendererTestUtils.h"
 #include "donner/svg/tests/ParserTestUtils.h"
 
@@ -130,6 +132,204 @@ TEST(RendererAnimationPathValue, InterpolationPreservesCoordinatePrecision) {
   editor::tests::CompareBitmapToBitmap(
       RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(expected),
       "path-coordinate-precision", editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(RendererAnimationPathValue, IncompatibleCommandsUseDiscreteKeyframeTiming) {
+  struct Case {
+    const char* name;
+    const char* timing;
+    const char* values;
+    double time;
+    int size;
+  };
+  for (const Case item : {
+           Case{"explicit-key-times", "keyTimes='0;1'", "M0 0H4V4H0Z;M0 0L8 0L8 8L0 8Z", 1.5, 4},
+           Case{"spline-does-not-ease-discrete-values", "calcMode='spline' keySplines='0 0 0 1'",
+                "M0 0H4V4H0Z;M0 0L8 0L8 8L0 8Z", 0.5, 4},
+           Case{"whole-list-compatibility", "", "M0 0L4 0L4 4L0 4Z;M0 0L8 0L8 8L0 8Z;M0 0H12V12H0Z",
+                0.5, 4},
+       }) {
+    SCOPED_TRACE(item.name);
+    auto document =
+        instantiateSubtree("<path><animate attributeName='d' values='" + std::string(item.values) +
+                               "' dur='2s' " + item.timing + "/></path>",
+                           parser::SVGParser::Options(), Vector2i(16, 16));
+    auto expected = instantiateSubtree("<rect width='" + std::to_string(item.size) + "' height='" +
+                                           std::to_string(item.size) + "'/>",
+                                       parser::SVGParser::Options(), Vector2i(16, 16));
+    document.setTime(item.time);
+    editor::tests::CompareBitmapToBitmap(RenderDocumentWithActiveBackend(document),
+                                         RenderDocumentWithActiveBackend(expected), item.name,
+                                         editor::tests::PixelmatchIdentityParams());
+  }
+}
+
+TEST(RendererAnimationPathValue, InlineTextPathRetainsInterpolation) {
+  auto document = instantiateSubtree(
+      "<text font-size='12'><textPath id='t' path='M0 12L32 12'>H"
+      "<animate attributeName='path' from='M0 12L32 12' to='M0 28L32 28' dur='4s'/>"
+      "</textPath></text>",
+      parser::SVGParser::Options(), Vector2i(32, 32));
+  document.setTime(1);
+  const auto actual = RenderDocumentWithActiveBackend(document);
+  const auto& path =
+      document.querySelector("#t")->entityHandle().get<components::TextPathComponent>().inlinePath;
+  ASSERT_THAT(path, testing::Ne(std::nullopt));
+  EXPECT_THAT(path->points(), testing::ElementsAre(Vector2d(0, 16), Vector2d(32, 16)));
+#ifdef DONNER_TEXT_ENABLED
+  auto expected =
+      instantiateSubtree("<text font-size='12'><textPath path='M0 16L32 16'>H</textPath></text>",
+                         parser::SVGParser::Options(), Vector2i(32, 32));
+  EXPECT_THAT(RendererTestUtils::renderToAsciiImage(expected).generated,
+              testing::Contains(testing::Not(testing::AnyOf(testing::Eq('.'), testing::Eq('\n')))));
+  editor::tests::CompareBitmapToBitmap(actual, RenderDocumentWithActiveBackend(expected),
+                                       "inline-text-path-interpolation",
+                                       editor::tests::PixelmatchIdentityParams());
+#endif
+}
+
+TEST(RendererAnimationPathValue, IncompatibleUpperLayerPreservesTheLowerAnimation) {
+  auto document = instantiateSubtree(
+      "<path d='M0 0L4 0L4 4L0 4Z'>"
+      "<set attributeName='d' to='M0 0L8 0L8 8L0 8Z' dur='10s'/>"
+      "<animate attributeName='d' from='M0 0Q2 0 2 2Z' to='M0 0Q4 0 4 4Z' "
+      "additive='sum' dur='2s' fill='freeze'/></path>",
+      parser::SVGParser::Options(), Vector2i(16, 16));
+  auto expected = instantiateSubtree("<rect width='8' height='8'/>", parser::SVGParser::Options(),
+                                     Vector2i(16, 16));
+  for (const double time : {1.0, 3.0, 1.0}) {
+    document.setTime(time);
+    editor::tests::CompareBitmapToBitmap(
+        RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(expected),
+        "incompatible-path-lower-stack", editor::tests::PixelmatchIdentityParams());
+  }
+}
+
+TEST(RendererAnimationPathValue, ToOnlyUsesTheCurrentLowerLayerAndRestores) {
+  auto document = instantiateSubtree(
+      "<path d='M0 0L4 0L4 4L0 4Z'>"
+      "<animate attributeName='d' from='M0 0L4 0L4 4L0 4Z' to='M0 0L8 0L8 8L0 8Z' dur='4s'/>"
+      "<animate attributeName='d' to='M0 0L12 0L12 12L0 12Z' dur='2s' additive='sum'/></path>",
+      parser::SVGParser::Options(), Vector2i(16, 16));
+  const std::string source(document.source());
+  for (const double time : {1.0, 3.0, 1.0}) {
+    auto expected = instantiateSubtree(
+        time == 1 ? "<rect width='8.5' height='8.5'/>" : "<rect width='7' height='7'/>",
+        parser::SVGParser::Options(), Vector2i(16, 16));
+    document.setTime(time);
+    editor::tests::CompareBitmapToBitmap(
+        RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(expected),
+        "to-only-path-lower-stack", editor::tests::PixelmatchIdentityParams());
+    EXPECT_EQ(document.source(), source);
+  }
+}
+
+TEST(RendererAnimationPathValue, PartialPathAndPacedFallbackRemainDefined) {
+  for (const std::string timing : {"", "calcMode='paced' keyTimes='0;0.1'"}) {
+    SCOPED_TRACE(timing);
+    auto document = instantiateSubtree(
+        "<path><animate attributeName='d' from='M0 0L4 0L4 4L0 4Zq5' "
+        "to='M0 0L8 0L8 8L0 8Z' dur='2s' " +
+            timing + "/></path>",
+        parser::SVGParser::Options(), Vector2i(16, 16));
+    auto expected = instantiateSubtree("<rect width='5' height='5'/>", parser::SVGParser::Options(),
+                                       Vector2i(16, 16));
+    document.setTime(0.5);
+    editor::tests::CompareBitmapToBitmap(
+        RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(expected),
+        "path-prefix-and-linear-fallback", editor::tests::PixelmatchIdentityParams());
+  }
+}
+
+TEST(RendererAnimationPathValue, ToOnlyUsesTypedAndStylesheetPathBases) {
+  for (const std::string base :
+       {"attribute", "stylesheet", "important", "typed-d", "typed-spline"}) {
+    SCOPED_TRACE(base);
+    std::string source;
+    if (base == "stylesheet" || base == "important") {
+      source = "<style>#p {d:'M0 0L8 0L8 8L0 8Z'";
+      source += base == "important" ? " !important;}</style>" : ";}</style>";
+    }
+    source +=
+        "<path id='p' d='M0 0L4 0L4 4L0 4Z'>"
+        "<animate attributeName='d' to='M0 0L12 0L12 12L0 12Z' dur='2s'/></path>";
+    auto document = instantiateSubtree(source, parser::SVGParser::Options(), Vector2i(16, 16));
+    auto path = document.querySelector("#p")->cast<SVGPathElement>();
+    if (base == "typed-d") {
+      path.setD("M0 0L8 0L8 8L0 8Z");
+    } else if (base == "typed-spline") {
+      PathBuilder builder;
+      builder.moveTo({0, 0}).lineTo({8, 0}).lineTo({8, 8}).lineTo({0, 8}).closePath();
+      path.setSpline(builder.build());
+    }
+    const std::string sourceBefore(document.source());
+    for (const double time : {1.0, 3.0, 1.0}) {
+      SCOPED_TRACE(time);
+      const int size = base == "important"   ? 8
+                       : base == "attribute" ? (time == 1 ? 8 : 4)
+                                             : (time == 1 ? 10 : 8);
+      auto expected = instantiateSubtree(
+          "<rect width='" + std::to_string(size) + "' height='" + std::to_string(size) + "'/>",
+          parser::SVGParser::Options(), Vector2i(16, 16));
+      document.setTime(time);
+      editor::tests::CompareBitmapToBitmap(
+          RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(expected),
+          "typed-cascaded-path-base", editor::tests::PixelmatchIdentityParams());
+      EXPECT_EQ(document.source(), sourceBefore);
+    }
+  }
+}
+
+TEST(RendererAnimationPathValue, InvalidCssPathRemainsUnavailableToMotion) {
+  for (bool animate : {false, true}) {
+    SCOPED_TRACE(animate);
+    const std::string animation =
+        animate ? "<animate attributeName='d' to='M0 0L24 0' dur='2s'/>" : "";
+    auto document = instantiateSubtree(
+        "<style>#route {d:invalid;}</style><path id='route' d='M0 0L16 0' stroke='red'>" +
+            animation +
+            "</path><rect width='4' height='4'><animateMotion dur='2s'>"
+            "<mpath href='#route'/></animateMotion></rect>",
+        parser::SVGParser::Options(), Vector2i(32, 16));
+    auto expected = instantiateSubtree("<rect width='4' height='4'/>", parser::SVGParser::Options(),
+                                       Vector2i(32, 16));
+    document.setTime(1);
+    editor::tests::CompareBitmapToBitmap(
+        RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(expected),
+        "invalid-css-motion-parity", editor::tests::PixelmatchIdentityParams());
+  }
+}
+
+TEST(RendererAnimationPathValue, CssNoneIsAnEmptyUnderlyingPath) {
+  auto document = instantiateSubtree(
+      "<style>#p {d:none;}</style><path id='p' d='M0 0L4 0L4 4L0 4Z'>"
+      "<animate attributeName='d' to='M0 0L8 0L8 8L0 8Z' dur='2s'/></path>",
+      parser::SVGParser::Options(), Vector2i(16, 16));
+  for (double time : {0.25, 1.5, 3.0, 0.25}) {
+    SCOPED_TRACE(time);
+    auto expected = instantiateSubtree(time == 1.5 ? "<rect width='8' height='8'/>" : "",
+                                       parser::SVGParser::Options(), Vector2i(16, 16));
+    document.setTime(time);
+    editor::tests::CompareBitmapToBitmap(
+        RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(expected),
+        "empty-css-path-base", editor::tests::PixelmatchIdentityParams());
+  }
+}
+
+TEST(RendererAnimationPathValue, MotionUsesSampledTypedPathGeometry) {
+  auto document = instantiateSubtree(
+      "<defs><path id='route' d='M0 0L4 0'>"
+      "<animate attributeName='d' to='M0 0L24 0' dur='2s'/></path></defs>"
+      "<rect width='4' height='4'><animateMotion dur='2s'><mpath href='#route'/>"
+      "</animateMotion></rect>",
+      parser::SVGParser::Options(), Vector2i(32, 16));
+  document.querySelector("#route")->cast<SVGPathElement>().setD("M0 0L8 0");
+  auto expected = instantiateSubtree("<rect x='8' width='4' height='4'/>",
+                                     parser::SVGParser::Options(), Vector2i(32, 16));
+  document.setTime(1);
+  editor::tests::CompareBitmapToBitmap(
+      RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(expected),
+      "sampled-typed-motion-path", editor::tests::PixelmatchIdentityParams());
 }
 
 }  // namespace

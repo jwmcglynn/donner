@@ -13,6 +13,8 @@
 
 namespace donner::svg::components {
 
+class AnimationResourceBudget;
+
 /** Sample one animation without document or timing side effects.
  * @param progress Progress within the current iteration.
  * @param iteration Number of completed iterations.
@@ -21,12 +23,14 @@ namespace donner::svg::components {
  * @param transformComp Transform declaration, or null. Exactly one declaration must be supplied.
  * @param underlying Current lower-layer value.
  * @param context Coordinate and color context.
+ * @param budget Optional shared path admission; borrowed only during this call.
  * @return Owning attribute/value pair, or nullopt when the declaration cannot be sampled.
  */
 std::optional<std::pair<std::string, std::string>> SampleAnimationValue(
     double progress, double iteration, const SetAnimationComponent* setComp,
     const AnimateValueComponent* valueComp, const AnimateTransformComponent* transformComp,
-    const std::string& underlying, const AnimationValueContext& context);
+    const std::string& underlying, const AnimationValueContext& context,
+    AnimationResourceBudget* budget = nullptr);
 
 /** Evaluate an admitted contextual length stack with the shared interpolation rules.
  * @param recipe Immutable, previously admitted samples in sandwich order.

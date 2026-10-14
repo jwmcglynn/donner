@@ -12,6 +12,7 @@
 #include "donner/svg/components/ElementTypeComponent.h"
 #include "donner/svg/components/SVGDocumentContext.h"
 #include "donner/svg/components/animation/AnimatedValuesComponent.h"
+#include "donner/svg/components/animation/AnimationBaseValue.h"
 #include "donner/svg/components/animation/AnimationSystem.h"
 #include "donner/svg/components/shape/PathComponent.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
@@ -43,41 +44,6 @@ std::optional<Path> CopyMotionSpline(const Path& spline, AnimationResourceBudget
 bool HasAnimatedPathData(Registry& registry, Entity target) {
   const auto* animated = registry.try_get<AnimatedValuesComponent>(target);
   return animated && animated->overrides.contains("d");
-}
-
-std::optional<RcString> CascadedMotionPathData(Registry& registry, Entity target,
-                                               AnimationResourceBudget& budget) {
-  Property<RcString> data("d");
-  if (const auto* path = registry.try_get<PathComponent>(target)) {
-    data = path->d;
-  }
-  if (HasAnimatedPathData(registry, target)) {
-    const auto& value = registry.get<AnimatedValuesComponent>(target).overrides.at("d");
-    if (value.size() > AnimationResourceBudget::kMaximumPathValueBytes ||
-        !budget.reserveSourceBytes(value.size())) {
-      return std::nullopt;
-    }
-    data.set(RcString(value), css::Specificity::Animation());
-  }
-  if (const auto* style = registry.try_get<ComputedStyleComponent>(target);
-      style && style->properties) {
-    const auto it = style->properties->unparsedProperties.find("d");
-    if (it != style->properties->unparsedProperties.end()) {
-      if (!budget.reserveSourceBytes(style->properties->complexPropertyBytes())) {
-        return std::nullopt;
-      }
-      const auto params =
-          parser::PropertyParseFnParams::Create(it->second.declaration, it->second.specificity,
-                                                parser::PropertyParseBehavior::AllowUserUnits);
-      if (parser::Parse(
-              params,
-              [](const auto& params) { return parser::ParsePathDataProperty(params.components()); },
-              &data)) {
-        return std::nullopt;
-      }
-    }
-  }
-  return data.get();
 }
 
 std::optional<std::string> MotionPathSource(Registry& registry, Entity entity,
@@ -128,7 +94,7 @@ std::optional<std::string> MotionPathSource(Registry& registry, Entity entity,
       return std::string{};
     }
 
-    const auto data = CascadedMotionPathData(registry, target, budget);
+    const auto data = CascadedAnimationPathData(registry, target, budget);
     if (!data) {
       return std::string{};
     }
