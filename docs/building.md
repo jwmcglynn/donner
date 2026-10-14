@@ -217,13 +217,15 @@ checked-in consumer module against it. See \ref GettingStarted for the `MODULE.b
 ## Continuous integration remote cache
 
 The GitHub-hosted Bazel lanes can share a [BuildBuddy](https://www.buildbuddy.io/) remote cache:
-the `linux` and `macos` jobs in `main.yml`, the Editor WASM build, the Geode ASan pull-request
-lane, and the scheduled nightly full-tree build and sanitizer lanes. One self-hosted lane shares it
-too: `macos-self-hosted`, which runs only for trusted maintainer pull requests, so the hosted and
-self-hosted macOS lanes reuse each other's results. It is a remote cache only: no remote execution
-and no build-event upload. It never affects local builds or the other self-hosted lanes, which
-never call the action. Without the secrets it is off and every lane builds exactly as it does
-without a cache.
+the `linux`, `macos` and `macos-browser` jobs in `main.yml`, the Editor WASM build, the Geode ASan
+pull-request lane, and the scheduled nightly full-tree build and sanitizer lanes. One self-hosted
+lane shares it too: `macos-self-hosted`, which runs only for trusted maintainer pull requests, so
+the hosted and self-hosted macOS lanes reuse each other's build results. It is a remote cache only:
+no remote execution and no build-event upload. It never affects local builds or the self-hosted
+Linux lane, which never calls the action. Without the secrets it is off and every lane builds
+exactly as it does without a cache. A pull request's base-change run (`pr_base_change.yml`,
+which calls `main.yml`) does not receive the write key, because environment secrets do not reach
+a called workflow's jobs, so its trusted-PR lanes run without the remote cache.
 
 **How it works.** Before its first Bazel command each covered job runs the
 `.github/actions/buildbuddy-cache` composite action with at most one key. The action writes a

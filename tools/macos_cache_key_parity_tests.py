@@ -8,7 +8,7 @@ action, so their build flags must be identical. Test-only flags and environment 
 are deliberately left to each lane, and each lane names itself in its test environment: a test
 result depends on the runner's GPU, so it must not be shared across runners.
 
-Every GitHub-hosted job is also kept off the self-hosted lane's private cache and remote
+Every GitHub-hosted job is also kept off any private remote cache and remote
 execution configuration.
 """
 

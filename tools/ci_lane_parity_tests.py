@@ -121,13 +121,18 @@ INVOCATION_ALLOWLIST = {
                     "Test (Geode editor lane)")
        for kind, value in (("test-env-main-only", "DONNER_CI_MACOS_LANE=hosted"),
                            ("test-env-pr-only", "DONNER_CI_MACOS_LANE=self-hosted"))},
-    # Both lanes select the pinned Xcode. The hosted image always ships it (--required); the
-    # self-hosted runner may not yet, and then builds with its remote cache off (--optional).
-    ("main.yml", "macos", "macos-self-hosted", "Select pinned Xcode", "step-changed", ""):
-        "Same pinned Xcode; only the missing-Xcode handling differs per runner.",
+    # A changed non-Bazel step is keyed by a digest of both rendered definitions, so any further
+    # edit to either step changes the digest and needs a new review.
+    # Both lanes select the pinned Xcode. The hosted image always ships it (--required). The
+    # self-hosted runner may not, and then builds with its runner's default Xcode and its remote
+    # cache off (--optional): that pull request run then tests a different Xcode than main.
+    ("main.yml", "macos", "macos-self-hosted", "Select pinned Xcode", "step-changed",
+     "7609f8b75ac703d1"):
+        "Same pinned Xcode when installed; a self-hosted runner without it warns and builds with "
+        "its default Xcode and no remote cache.",
     # The refresh passes the self-hosted lane's rc-skipping startup flags.
     ("main.yml", "macos", "macos-self-hosted", "Refresh Xcode toolchain configuration",
-     "step-changed", ""):
+     "step-changed", "c3adecb0303d2d56"):
         "Same repositories refreshed; only the runner-specific startup flags differ.",
     # The hosted runner has a paravirtual GPU whose Metal validation layer cannot check texture
     # usage, so the hosted lane picks its validation profile at run time. The self-hosted runner
@@ -177,21 +182,21 @@ PULL_REQUEST_SCENARIOS = ("trusted-pr", "untrusted-pr", "renovate-pr")
 # observed digests, so the entry must be reviewed and updated.
 _SHARED_STEP_DIGESTS = {
     ("bcr_preflight.yml", "prepare",
-     "Select the preflight scope"): dict.fromkeys(PULL_REQUEST_SCENARIOS, "642c5d1b39d0fcb8"),
+     "Select the preflight scope"): dict.fromkeys(PULL_REQUEST_SCENARIOS, "20d107de730743dc"),
     ("cmake.yml", "gatekeeper",
-     "Detect docs-only PR"): dict.fromkeys(PULL_REQUEST_SCENARIOS, "9ecf5fb96869b275"),
+     "Detect docs-only PR"): dict.fromkeys(PULL_REQUEST_SCENARIOS, "253f9952f6b681bf"),
     ("cmake.yml", "gatekeeper",
-     "Detect duplicate push (PR already open for this branch)"): dict.fromkeys(PULL_REQUEST_SCENARIOS, "a72c9791c92a41a9"),
+     "Detect duplicate push (PR already open for this branch)"): dict.fromkeys(PULL_REQUEST_SCENARIOS, "8e295cc528e30377"),
     ("lint.yml", "gatekeeper",
-     "Detect duplicate push (PR already open for this branch)"): dict.fromkeys(PULL_REQUEST_SCENARIOS, "a72c9791c92a41a9"),
+     "Detect duplicate push (PR already open for this branch)"): dict.fromkeys(PULL_REQUEST_SCENARIOS, "8e295cc528e30377"),
     ("main.yml", "determine-targets",
-     "Determine affected Bazel targets"): dict.fromkeys(PULL_REQUEST_SCENARIOS, "b2774a4e49fa714f"),
+     "Determine affected Bazel targets"): dict.fromkeys(PULL_REQUEST_SCENARIOS, "b0bc38d4847fafdb"),
     ("main.yml", "determine-targets",
-     "Extract SHA for hash caching"): dict.fromkeys(PULL_REQUEST_SCENARIOS, "75cf06ec1a7a5082"),
+     "Extract SHA for hash caching"): dict.fromkeys(PULL_REQUEST_SCENARIOS, "711b402065f09c27"),
     ("main.yml", "gatekeeper",
-     "Detect docs-only PR"): dict.fromkeys(PULL_REQUEST_SCENARIOS, "9ecf5fb96869b275"),
+     "Detect docs-only PR"): dict.fromkeys(PULL_REQUEST_SCENARIOS, "253f9952f6b681bf"),
     ("main.yml", "gatekeeper",
-     "Detect duplicate push (PR already open for this branch)"): dict.fromkeys(PULL_REQUEST_SCENARIOS, "694bfdca0dd35e4c"),
+     "Detect duplicate push (PR already open for this branch)"): dict.fromkeys(PULL_REQUEST_SCENARIOS, "4f805664ba9b5916"),
 }
 
 SHARED_STEP_ALLOWLIST = {
@@ -924,7 +929,7 @@ def _bazel_profile(workflow, job, scenario):
 
 
 def _other_step_view(workflow, job, step, scenario):
-    """What a non-Bazel step runs in a scenario: action, inputs, command, and the variables read.
+    """What a non-Bazel step runs in a scenario: action, inputs, command, shell, variables read.
 
     `${{ }}` expressions are rendered for the scenario, so a check that is stricter on one event
     than another compares as different. Each variable the command or inputs read is recorded
@@ -938,9 +943,12 @@ def _other_step_view(workflow, job, step, scenario):
     inputs = sorted((key, render(str(value), scenario))
                     for key, value in (step.get("with") or {}).items()
                     if (action, key) not in _POLICY_EVENT_INPUTS)
+    # A step's own `env:` exists only for that step, so every key counts as read, even one the
+    # command reads indirectly (for example a script it runs).
     read = (set(re.findall(r"\$\{?([A-Za-z_][A-Za-z0-9_]*)", script))
-            | set(re.findall(r"\benv\.([A-Za-z_][A-Za-z0-9_]*)", str(inputs))))
-    return (step.get("uses"), inputs, script,
+            | set(re.findall(r"\benv\.([A-Za-z_][A-Za-z0-9_]*)", str(inputs)))
+            | set(step.get("env") or {}))
+    return (step.get("uses"), inputs, script, step.get("shell"),
             sorted((name, environment.get(name)) for name in read))
 
 
@@ -959,7 +967,8 @@ def _other_step_differences(workflow, main_job, pr_job):
     main_other = _other_steps(workflow, main_job, "main-push")
     pr_other = _other_steps(workflow, pr_job, "trusted-pr")
     return ({(name, "step-main-only", "") for name in set(main_other) - set(pr_other)}
-            | {(name, "step-changed", "") for name in set(main_other) & set(pr_other)
+            | {(name, "step-changed", definition_digest(main_other[name], pr_other[name]))
+               for name in set(main_other) & set(pr_other)
                if main_other[name] != pr_other[name]})
 
 
@@ -1246,6 +1255,11 @@ def _scenario_differences(workflow, job, scenario):
     return differences | {(step, "step-changed", definition_digest(main_other[step], pr_other[step]))
                           for step in set(main_other) & set(pr_other)
                           if main_other[step] != pr_other[step]}
+
+
+def _kinds(differences):
+    """(step, kind) of each difference, for tests that do not pin a definition digest."""
+    return {(step, kind) for step, kind, _ in differences}
 
 
 def definition_digest(main_view, pr_view):
@@ -1715,8 +1729,8 @@ class CiLaneParityTest(unittest.TestCase):
                          {("Lint", "step-main-only", "")})
         changed = parse_workflow(
             "jobs:\n  main:\n" + main + "  pr:\n" + main.replace("lint.py", "lint.py --fast"))
-        self.assertEqual(invocation_differences(changed, "main", "pr"),
-                         {("Lint", "step-changed", "")})
+        self.assertEqual(_kinds(invocation_differences(changed, "main", "pr")),
+                         {("Lint", "step-changed")})
 
     def test_shared_jobs_run_bazel_alike_on_main_and_pull_requests(self):
         observed = shared_job_differences(self.workflows, self.main_push_workflows)
@@ -1858,8 +1872,8 @@ class CiLaneParityTest(unittest.TestCase):
         self.assertFalse(observed & shared_job_differences({"x.yml": stricter}, ["x.yml"]))
         replaced = parse_workflow("jobs:\n  main:\n    steps:\n" + lint
                                   + "  pr:\n    steps:\n" + lint)
-        self.assertEqual(invocation_differences(replaced, "main", "pr"),
-                         {("Lint", "step-changed", "")})
+        self.assertEqual(_kinds(invocation_differences(replaced, "main", "pr")),
+                         {("Lint", "step-changed")})
 
     def test_branch_filters_follow_github_pattern_order(self):
         self.assertTrue(branch_filter_includes("main", ["**"]))
@@ -1883,8 +1897,8 @@ class CiLaneParityTest(unittest.TestCase):
         workflow = parse_workflow(
             "jobs:\n  main:\n" + main + "  pr:\n"
             + main.replace("MODE: strict", "MODE: fast").replace("OTHER: a", "OTHER: b"))
-        self.assertEqual(invocation_differences(workflow, "main", "pr"),
-                         {("Lint", "step-changed", "")})
+        self.assertEqual(_kinds(invocation_differences(workflow, "main", "pr")),
+                         {("Lint", "step-changed")})
         unread = parse_workflow("jobs:\n  main:\n" + main + "  pr:\n"
                                 + main.replace("OTHER: a", "OTHER: b"))
         self.assertEqual(invocation_differences(unread, "main", "pr"), set())

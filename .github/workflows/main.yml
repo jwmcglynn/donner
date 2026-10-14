@@ -21,8 +21,9 @@ on:
     types: [opened, synchronize, reopened]
   workflow_call:
     # The repository secrets a step here reads. A called workflow receives only the
-    # secrets its caller passes; the buildbuddy-write environment's key reaches the
-    # job that binds that environment directly.
+    # secrets its caller passes. Environment secrets do not reach jobs of a called
+    # workflow, so a base-change run builds without the BuildBuddy write key: its
+    # trusted-PR lanes, including macos-self-hosted, run without the remote cache.
     secrets:
       BUILDBUDDY_API_KEY_READONLY:
         required: false
@@ -805,8 +806,8 @@ jobs:
     # wedged/degraded backend still fails in about a minute regardless of this
     # backstop.
     timeout-minutes: 210
-    # Admission control on the shared remote-execution backend. Both self-hosted
-    # lanes execute on a backend that an interactive development host also uses
+    # Admission control on the shared remote-execution backend. The self-hosted
+    # Linux lane executes on a backend that an interactive development host also uses
     # with priority; unbounded concurrent operator PRs oversubscribe it and
     # crawl into the 60 min timeout (measured). Admission is enforced by the
     # hosted re-turnstile prerequisite above, NOT by a GitHub concurrency group.
@@ -1573,8 +1574,8 @@ jobs:
         shell: bash
         run: tools/ci_select_macos_xcode.sh --required
 
-      # Not used by browser tests. It keeps PATH, and so Bazel's action keys, equal to
-      # the `macos` job's, which lets main's restored action cache hit.
+      # Not used by browser tests. It keeps this job's setup identical to the `macos`
+      # job's, which the lane parity test requires.
       - name: Install clang-tidy
         uses: nick-fields/retry@v4
         with:
@@ -1896,8 +1897,9 @@ jobs:
           esac
           # The job sets no --output_user_root, and --nohome_rc --nosystem_rc
           # skip any user or system rc, so Bazel writes its macOS default output
-          # root and the `build:ci` repository cache. df follows a symlink at any of these paths; a path
-          # that does not exist yet is measured at its nearest existing ancestor.
+          # root and the `build:ci` repository cache. df follows a symlink at any of
+          # these paths; a path that does not exist yet is measured at its nearest
+          # existing ancestor.
           rows=""
           for location in \
             "workspace=${GITHUB_WORKSPACE}" \
@@ -2082,8 +2084,8 @@ jobs:
         with:
           name: bazel-test-failure-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}
 
-      # The runner is persistent: remove the BuildBuddy key and the workspace
-      # fragment that imports it, whatever the outcome of the job.
+      # The runner is persistent: remove the BuildBuddy key, its credential helper
+      # and the workspace fragment that names the helper, whatever the outcome.
       - name: Remove BuildBuddy credentials
         if: always()
         shell: bash
