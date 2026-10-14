@@ -89,6 +89,7 @@ done
 package_dir="$(cd "${package_dir}" && pwd -P)"
 mkdir -p "${out_dir}"
 out_dir="$(cd "${out_dir}" && pwd -P)"
+[[ "${out_dir}" != "/" ]] || die "--out must not be the root directory"
 pkg_copy="${out_dir}/package"
 # The copy replaces ${pkg_copy}, so the package may not be in it, and --out may not be in the
 # package that is copied.
