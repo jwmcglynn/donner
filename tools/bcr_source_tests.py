@@ -341,5 +341,24 @@ class ValidatedEntryTest(unittest.TestCase):
                     self.verify()
 
 
+class RegistryVersionOrderTest(unittest.TestCase):
+    """BCR presubmit requires `metadata.json` to list versions in ascending Bazel order."""
+
+    TEMPLATE = {"homepage": "https://github.com/jwmcglynn/donner",
+                "maintainers": [{"github": "jwmcglynn"}],
+                "repository": ["github:jwmcglynn/donner"],
+                "versions": [], "yanked_versions": {}}
+
+    def test_derived_metadata_inserts_the_version_in_order(self):
+        upstream = {**self.TEMPLATE, "versions": ["0.8.0", "0.9.0", "0.10.0"]}
+        for version, expected in (
+                ("0.8.1", ["0.8.0", "0.8.1", "0.9.0", "0.10.0"]),
+                ("0.9.1", ["0.8.0", "0.9.0", "0.9.1", "0.10.0"]),
+                ("0.11.0", ["0.8.0", "0.9.0", "0.10.0", "0.11.0"])):
+            with self.subTest(version=version):
+                derived = json.loads(source.derive_metadata(upstream, self.TEMPLATE, version))
+                self.assertEqual(derived["versions"], expected)
+
+
 if __name__ == "__main__":
     unittest.main()

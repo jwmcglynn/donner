@@ -515,13 +515,18 @@ class SubmissionMetadataTest(unittest.TestCase):
         (self.source / ".bcr/metadata.template.json").write_text(json.dumps(TEMPLATE),
                                                                  encoding="utf-8")
         self.entry = base / "entry"
-        version = self.entry / "registry/modules/donner/1.0.0"
-        version.mkdir(parents=True)
-        (version / "MODULE.bazel").write_bytes((self.source / "MODULE.bazel").read_bytes())
-        (version / "presubmit.yml").write_bytes((self.source / ".bcr/presubmit.yml").read_bytes())
-        (version / "source.json").write_text(
-            json.dumps(release.bcr_source.expected_source_json("1.0.0", "c" * 64), indent=4))
+        self.write_entry("1.0.0")
         self.registry = base / "registry"
+
+    def write_entry(self, version):
+        """Write the files preflight validated for `version`, apart from `metadata.json`."""
+        directory = self.entry / "registry/modules/donner" / version
+        directory.mkdir(parents=True)
+        (directory / "MODULE.bazel").write_bytes((self.source / "MODULE.bazel").read_bytes())
+        (directory / "presubmit.yml").write_bytes(
+            (self.source / ".bcr/presubmit.yml").read_bytes())
+        (directory / "source.json").write_text(
+            json.dumps(release.bcr_source.expected_source_json(version, "c" * 64), indent=4))
 
     def preflight(self, **fields):
         """Write preflight's copy of metadata.json, as validated against the registry then."""
@@ -541,9 +546,9 @@ class SubmissionMetadataTest(unittest.TestCase):
         subprocess.run(["git", "-C", str(self.registry), "-c", "user.name=Test",
                         "-c", "user.email=test@example.com", "commit", "-qm", "base"], check=True)
 
-    def submit(self):
-        release.stage_entry(self.entry, self.registry, self.source, "1.0.0")
-        release.verify_generated_entry(self.registry, self.source, "1.0.0", "c" * 64, self.entry)
+    def submit(self, version="1.0.0"):
+        release.stage_entry(self.entry, self.registry, self.source, version)
+        release.verify_generated_entry(self.registry, self.source, version, "c" * 64, self.entry)
         return json.loads((self.registry / "modules/donner/metadata.json").read_text())
 
     def test_unchanged_registry_reproduces_preflight_bytes(self):
@@ -571,6 +576,22 @@ class SubmissionMetadataTest(unittest.TestCase):
         metadata = self.submit()
         self.assertEqual(metadata["yanked_versions"], yanked)
         self.assertEqual(metadata["versions"], ["0.8.0", "0.8.1", "1.0.0"])
+
+    def test_patch_on_an_older_line_is_listed_in_version_order(self):
+        # BCR presubmit fails a `versions` list that is not in ascending version order.
+        self.write_entry("0.8.1")
+        self.preflight(versions=["0.8.0", "0.8.1", "0.9.0"])
+        self.upstream({**TEMPLATE, "versions": ["0.8.0", "0.9.0"]})
+        self.assertEqual(self.submit("0.8.1")["versions"], ["0.8.0", "0.8.1", "0.9.0"])
+
+    def test_history_check_requires_version_order(self):
+        self.upstream({**TEMPLATE, "versions": ["0.8.0", "0.9.0"]})
+        metadata_file = Path(release.METADATA_FILE)
+        release.verify_metadata_history(self.registry, metadata_file, ["0.8.0", "0.8.1", "0.9.0"],
+                                        {}, TEMPLATE, "0.8.1")
+        with self.assertRaisesRegex(ValueError, "existing versions"):
+            release.verify_metadata_history(self.registry, metadata_file,
+                                            ["0.8.0", "0.9.0", "0.8.1"], {}, TEMPLATE, "0.8.1")
 
     def test_tampered_preflight_field_fails(self):
         for field in ({"homepage": "https://example.com/other"}, {"maintainers": []},
