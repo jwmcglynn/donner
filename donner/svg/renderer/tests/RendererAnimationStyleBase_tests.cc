@@ -2,8 +2,13 @@
 #include <gtest/gtest.h>
 
 #include "donner/editor/tests/BitmapGoldenCompare.h"
+#include "donner/svg/components/animation/AnimationResourceBudget.h"
+#include "donner/svg/components/shadow/ShadowEntityComponent.h"
+#include "donner/svg/components/style/ComputedStyleComponent.h"
+#include "donner/svg/components/style/StyleComponent.h"
 #include "donner/svg/renderer/tests/RendererTestUtils.h"
 #include "donner/svg/tests/ParserTestUtils.h"
+#include "donner/svg/text/TextEngine.h"
 
 namespace donner::svg {
 namespace {
@@ -38,6 +43,193 @@ TEST(RendererAnimationStyleBase, FontSizeUsesTheSampledParentFontContext) {
     }
   }
 }
+TEST(RendererAnimationStyleBase, FontStackPreservesKeywordsPrecedenceAndCascade) {
+  struct Case {
+    const char* name;
+    const char* style;
+    const char* animation;
+    int expected;
+  };
+  for (const Case item : {
+           Case{"negative-by", "",
+                "<animate href='#label' attributeName='font-size' by='-4' dur='2s'/>", 6},
+           Case{"negative-from-by", "",
+                "<animate href='#label' attributeName='font-size' from='20' by='-4' dur='2s'/>",
+                18},
+           Case{"negative-relative-by", "",
+                "<animate href='#label' attributeName='font-size' by=' -0.2em ' dur='2s'/>", 6},
+           Case{"negative-additive", "",
+                "<animate href='#label' attributeName='font-size' values='-4;0' additive='sum' "
+                "dur='2s'/>",
+                6},
+           Case{"to-only-child-base", "",
+                "<animate href='#label' attributeName='font-size' to='12px' dur='2s'/>"
+                "<set href='#parent' attributeName='font-size' to='20px' dur='2s'/>",
+                10},
+           Case{"values-precedence", "",
+                "<animate href='#label' attributeName='font-size' values='12px;20px' "
+                "from='invalid' to='invalid' by='invalid' dur='2s'/>",
+                16},
+           Case{"inherit-additive", "",
+                "<set href='#label' attributeName='font-size' to='inherit' dur='2s'/>"
+                "<animate href='#label' attributeName='font-size' from='0' to='4' "
+                "additive='sum' dur='2s'/>",
+                22},
+           Case{"initial-to-only", "",
+                "<set href='#label' attributeName='font-size' to='initial' dur='2s'/>"
+                "<animate href='#label' attributeName='font-size' to='20' dur='2s'/>",
+                16},
+           Case{"important", "style='font-size:18px !important'",
+                "<animate href='#label' attributeName='font-size' from='12' to='20' dur='2s'/>",
+                18},
+           Case{"negative", "", "<set href='#label' attributeName='font-size' to='-4' dur='2s'/>",
+                8},
+       }) {
+    SCOPED_TRACE(item.name);
+    auto document = instantiateSubtree(
+        std::string("<g id='parent' font-size='20'><text id='label' x='0' y='30' font-size='8' ") +
+            item.style + ">H</text></g>" + item.animation,
+        parser::SVGParser::Options(), Vector2i(96, 48));
+    auto expected = instantiateSubtree(
+        "<text x='0' y='30' font-size='" + std::to_string(item.expected) + "'>H</text>",
+        parser::SVGParser::Options(), Vector2i(96, 48));
+    document.setTime(1);
+    editor::tests::CompareBitmapToBitmap(RenderDocumentWithActiveBackend(document),
+                                         RenderDocumentWithActiveBackend(expected), item.name,
+                                         editor::tests::PixelmatchIdentityParams());
+  }
+}
+
+TEST(RendererAnimationStyleBase, SharedTextResolvesFontAnimationPerShadowParent) {
+  auto document = instantiateSubtree(
+      "<defs><text id='label' y='30' fill='red'>H<animate attributeName='font-size' from='100%' "
+      "to='2em' dur='2s'/></text></defs><use href='#label' font-size='12'/>"
+      "<use href='#label' x='48' font-size='20'/>",
+      parser::SVGParser::Options(), Vector2i(96, 48));
+  auto expected = instantiateSubtree(
+      "<text y='30' fill='red' font-size='18'>H</text><text x='48' y='30' fill='red' "
+      "font-size='30'>H</text>",
+      parser::SVGParser::Options(), Vector2i(96, 48));
+  document.setTime(1);
+  const auto actual = RenderDocumentWithActiveBackend(document);
+  const auto label = document.querySelector("#label")->entityHandle().entity();
+  std::vector<double> sizes;
+  for (const auto entity :
+       document.registry()
+           .view<components::ShadowEntityComponent, components::ComputedStyleComponent>()) {
+    if (document.registry().get<components::ShadowEntityComponent>(entity).lightEntity == label) {
+      sizes.push_back(document.registry()
+                          .get<components::ComputedStyleComponent>(entity)
+                          .properties->fontSize.get()
+                          .value()
+                          .value);
+    }
+  }
+  std::sort(sizes.begin(), sizes.end());
+  EXPECT_THAT(sizes, testing::ElementsAre(18, 30));
+  editor::tests::CompareBitmapToBitmap(actual, RenderDocumentWithActiveBackend(expected),
+                                       "shadow-parent-font-context",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(RendererAnimationStyleBase, AnimatedParentKeepsRelativeSpanFontsAndBaselines) {
+  auto document = instantiateSubtree(
+      "<defs><text id='label' y='30' fill='red' text-decoration='underline'>"
+      "<tspan font-size='50%' baseline-shift='0.25em'>Hi</tspan>"
+      "<animate attributeName='font-size' from='100%' to='2em' dur='2s'/></text></defs>"
+      "<use href='#label' font-size='12'/><use href='#label' x='48' font-size='20'/>",
+      parser::SVGParser::Options(), Vector2i(96, 48));
+  auto expected = instantiateSubtree(
+      "<g fill='red' text-decoration='underline'><text y='30' font-size='18'>"
+      "<tspan font-size='9' baseline-shift='0.25em'>Hi</tspan></text>"
+      "<text x='48' y='30' font-size='30'><tspan font-size='15' baseline-shift='0.25em'>Hi</tspan>"
+      "</text></g>",
+      parser::SVGParser::Options(), Vector2i(96, 48));
+  document.setTime(1);
+  editor::tests::CompareBitmapToBitmap(
+      RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(expected),
+      "animated-parent-relative-span-font", editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(RendererAnimationStyleBase, FontOverrideKeepsTypedPriority) {
+  auto document = instantiateSubtree(
+      "<text id='label' y='30'>H<animate attributeName='font-size' from='12' to='24' "
+      "dur='2s'/></text>",
+      parser::SVGParser::Options(), Vector2i(64, 48));
+  document.querySelector("#label")
+      ->entityHandle()
+      .get_or_emplace<components::StyleComponent>()
+      .properties.fontSize.set(Lengthd(20), css::Specificity::Override());
+  auto expected = instantiateSubtree("<text y='30' font-size='20'>H</text>",
+                                     parser::SVGParser::Options(), Vector2i(64, 48));
+  document.setTime(1);
+  editor::tests::CompareBitmapToBitmap(
+      RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(expected),
+      "font-typed-priority", editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(RendererAnimationStyleBase, ShadowFontDrawsIgnorePrewarmedLightGeometry) {
+  auto document = instantiateSubtree(
+      "<text id='label' y='30' fill='red'>H<animate attributeName='font-size' from='100%' "
+      "to='2em' dur='2s'/></text><use href='#label' y='50' font-size='12'/>"
+      "<use href='#label' x='48' y='50' font-size='20'/>"
+      "<use href='#label' x='96' y='50' font-size='12'/>",
+      parser::SVGParser::Options(), Vector2i(144, 96));
+  auto expected = instantiateSubtree(
+      "<g fill='red'><text y='30' font-size='18'>H</text><text y='80' font-size='18'>H</text>"
+      "<text x='48' y='80' font-size='30'>H</text><text x='96' y='80' font-size='18'>H</text></g>",
+      parser::SVGParser::Options(), Vector2i(144, 96));
+  document.setTime(1);
+  (void)RenderDocumentWithActiveBackend(document);
+  auto label = document.querySelector("#label")->entityHandle();
+  document.registry().ctx().get<TextEngine>().ensureComputedTextGeometryComponent(label);
+  for (int redraw = 0; redraw < 2; ++redraw) {
+    SCOPED_TRACE(redraw);
+    editor::tests::CompareBitmapToBitmap(
+        RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(expected),
+        "shadow-font-cache-order", editor::tests::PixelmatchIdentityParams());
+  }
+}
+
+TEST(RendererAnimationStyleBase, RepeatedFontRecipesShareOneWorkAllowance) {
+  std::string values = "16";
+  for (int i = 1; i < 512; ++i) {
+    values += ";16";
+  }
+  std::string source =
+      "<defs><g id='font' font-size='8'><animate attributeName='font-size' "
+      "values='" +
+      values + "' dur='2s'/></g></defs>";
+  for (int i = 0; i < 100; ++i) {
+    source += "<use href='#font'/>";
+  }
+  auto document = instantiateSubtree(source, parser::SVGParser::Options(), Vector2i(16, 16));
+  document.setTime(1);
+  (void)RenderDocumentWithActiveBackend(document);
+  EXPECT_EQ(document.registry()
+                .ctx()
+                .get<components::AnimationResourceBudget>()
+                .remainingContextualWork(),
+            0);
+  const auto target = document.querySelector("#font")->entityHandle().entity();
+  std::vector<double> sizes;
+  for (const auto entity :
+       document.registry()
+           .view<components::ShadowEntityComponent, components::ComputedStyleComponent>()) {
+    if (document.registry().get<components::ShadowEntityComponent>(entity).lightEntity == target) {
+      sizes.push_back(document.registry()
+                          .get<components::ComputedStyleComponent>(entity)
+                          .properties->fontSize.get()
+                          .value()
+                          .value);
+    }
+  }
+  EXPECT_THAT(sizes, testing::SizeIs(100));
+  EXPECT_THAT(sizes, testing::Each(testing::AnyOf(8, 16)));
+  EXPECT_THAT(sizes, testing::Contains(8));
+  EXPECT_THAT(sizes, testing::Contains(16));
+}
+
 #endif
 
 TEST(RendererAnimationStyleBase, ToOnlyPaintKeepsStylesheetReferenceAndFallback) {
