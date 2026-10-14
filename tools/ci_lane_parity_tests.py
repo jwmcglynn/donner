@@ -107,42 +107,45 @@ INVOCATION_ALLOWLIST = {
     ("main.yml", "macos", "macos-self-hosted", "Test (browser targets)", "test-env-main-only",
      "DONNER_BROWSER_STALL_DIAGNOSTICS=1"):
         "Diagnostics only: it changes what a timed-out test records, not whether it passes.",
-    # The self-hosted runner ignores its host's user bazelrc and uses a remote cache that it
-    # must not silently fall back from.
+    # The self-hosted runner ignores its host's user and system bazelrc files.
     ("main.yml", "macos", "macos-self-hosted", "*", "startup-pr-only", "--nohome_rc"):
         "Runner-specific: keeps the host's interactive bazelrc out of CI.",
-    ("main.yml", "macos", "macos-self-hosted", "*", "flag-pr-only",
-     "--remote_upload_local_results=true"):
-        "Runner-specific remote cache setting; it does not change what runs.",
-    ("main.yml", "macos", "macos-self-hosted", "*", "flag-pr-only",
-     "--remote_local_fallback=false"):
-        "Runner-specific remote cache setting; it does not change what runs.",
-    ("main.yml", "macos", "macos-self-hosted", "*", "flag-pr-only",
-     "--incompatible_remote_local_fallback_for_remote_cache=false"):
-        "Runner-specific remote cache setting; it does not change what runs.",
-    ("main.yml", "macos", "macos-self-hosted", "*", "flag-pr-only", "--remote_timeout=5s"):
-        "Runner-specific remote cache setting; it does not change what runs.",
-    # The value is built at run time from the masked secret, so only its empty literal prefix
-    # is compared.
-    ("main.yml", "macos", "macos-self-hosted", "*", "runtime-env-pr-only",
-     "BAZEL_MACOS_BUILD_FLAGS="):
-        "Adds the masked remote cache address to the self-hosted build flags.",
+    ("main.yml", "macos", "macos-self-hosted", "*", "startup-pr-only", "--nosystem_rc"):
+        "Runner-specific: keeps any host system bazelrc out of CI.",
+    # Each macOS lane names itself in its test environment, so test results, which depend on
+    # the runner's GPU, are never shared between the hosted and self-hosted lanes. Build action
+    # keys stay identical (//tools:macos_cache_key_parity_tests).
+    **{("main.yml", "macos", "macos-self-hosted", step, kind, value):
+       "Lane identity for test results only; it does not change what runs."
+       for step in ("Metal validation preflight", "Test", "Test (browser targets)",
+                    "Test (Geode editor lane)")
+       for kind, value in (("test-env-main-only", "DONNER_CI_MACOS_LANE=hosted"),
+                           ("test-env-pr-only", "DONNER_CI_MACOS_LANE=self-hosted"))},
+    # Both lanes select the pinned Xcode. The hosted image always ships it (--required); the
+    # self-hosted runner may not yet, and then builds with its remote cache off (--optional).
+    ("main.yml", "macos", "macos-self-hosted", "Select pinned Xcode", "step-changed", ""):
+        "Same pinned Xcode; only the missing-Xcode handling differs per runner.",
+    # The refresh passes the self-hosted lane's rc-skipping startup flags.
+    ("main.yml", "macos", "macos-self-hosted", "Refresh Xcode toolchain configuration",
+     "step-changed", ""):
+        "Same repositories refreshed; only the runner-specific startup flags differ.",
     # The hosted runner has a paravirtual GPU whose Metal validation layer cannot check texture
     # usage, so the hosted lane picks its validation profile at run time. The self-hosted runner
     # requires full validation instead, which is stricter.
     ("main.yml", "macos", "macos-self-hosted", "*", "runtime-env-main-only",
-     "BAZEL_MACOS_TEST_FLAGS=--test_env=HOME --test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=0"):
+     "BAZEL_MACOS_TEST_FLAGS=--test_env=HOME --test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=0 "
+     "--test_env=DONNER_CI_MACOS_LANE=hosted"):
         "Main may relax one Metal texture check on a paravirtual GPU; the pull request runs "
         "full validation.",
     # Setup the hosted runner needs and the self-hosted runner has already: the host provides
     # Bazelisk, Homebrew LLVM and the Xcode tools ("Prepare self-hosted macOS toolchain"),
-    # keeps Bazel's repository and action state between runs, and uses its own remote cache
-    # ("Configure masked remote cache"). The Bazel steps then fetch what they need.
+    # and keeps Bazel's repository and action state between runs. The Bazel steps then fetch
+    # what they need.
     **{("main.yml", "macos", "macos-self-hosted", step, "step-main-only", ""):
        "Hosted runner setup only; the self-hosted runner is provisioned with it, and it "
        "changes no test, filter or flag."
        for step in ("Install clang-tidy", "Setup Bazel", "Restore Bazel action cache",
-                    "Configure BuildBuddy remote cache", "Fetch Metal validation dependencies")},
+                    "Fetch Metal validation dependencies")},
     ("main.yml", "macos", "macos-self-hosted", "Select Metal validation profile", "step-main-only",
      ""):
         "Main picks its Metal validation profile; the pull request instead requires full "

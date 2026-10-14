@@ -24,8 +24,6 @@ on:
     # secrets its caller passes; the buildbuddy-write environment's key reaches the
     # job that binds that environment directly.
     secrets:
-      BAZEL_REMOTE_CACHE:
-        required: false
       BUILDBUDDY_API_KEY_READONLY:
         required: false
 
@@ -1296,7 +1294,7 @@ jobs:
               echo "Metal shader validation: full." >> "$GITHUB_STEP_SUMMARY"
               ;;
             paravirtual-texture-usage-off)
-              echo "BAZEL_MACOS_TEST_FLAGS=--test_env=HOME --test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=0" >> "$GITHUB_ENV"
+              echo "BAZEL_MACOS_TEST_FLAGS=--test_env=HOME --test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=0 --test_env=DONNER_CI_MACOS_LANE=hosted" >> "$GITHUB_ENV"
               echo "Metal: verified virtual-GPU texture-check exception; API, buffer, threadgroup, and pixel checks remain active. A full-validation receipt for the PR head is required before merge. See docs/metal_validation.md." >> "$GITHUB_STEP_SUMMARY"
               ;;
             *)
@@ -1558,8 +1556,8 @@ jobs:
     # Keep this environment identical to the `macos` job's; ci_lane_parity_tests
     # compares the browser step's Bazel invocation between the two.
     env:
-      BAZEL_MACOS_BUILD_FLAGS: "--macos_minimum_os=13.3"
-      BAZEL_MACOS_TEST_FLAGS: "--test_env=HOME --test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=1"
+      BAZEL_MACOS_BUILD_FLAGS: "--config=ci-macos --macos_minimum_os=13.3"
+      BAZEL_MACOS_TEST_FLAGS: "--test_env=HOME --test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=1 --test_env=DONNER_CI_MACOS_LANE=hosted"
       BROWSER_STALL_TEST_FLAGS: "--test_env=DONNER_BROWSER_STALL_DIAGNOSTICS=1"
       HOSTED_MACOS_QUARANTINE_TEST_FLAGS: "--test_env=DONNER_HOSTED_MACOS_QUARANTINE=1"
     steps:
@@ -1567,6 +1565,13 @@ jobs:
         uses: actions/checkout@v7
         with:
           persist-credentials: false
+
+      # Same pinned Xcode as the `macos` job, so action keys and the BuildBuddy
+      # cache partition match main's hosted macOS lane.
+      - name: Select pinned Xcode
+        id: xcode
+        shell: bash
+        run: tools/ci_select_macos_xcode.sh --required
 
       # Not used by browser tests. It keeps PATH, and so Bazel's action keys, equal to
       # the `macos` job's, which lets main's restored action cache hit.
@@ -1605,6 +1610,7 @@ jobs:
           api-key: ${{ secrets.BUILDBUDDY_API_KEY }}
           trusted-pr: ${{ needs.gatekeeper.outputs.trusted_pr }}
           renovate-pr: ${{ needs.gatekeeper.outputs.renovate_pr }}
+          cache-partition: ${{ steps.xcode.outputs.cache_partition }}
           download-outputs: minimal
 
       - name: Configure BuildBuddy read-only cache
@@ -1613,7 +1619,18 @@ jobs:
         with:
           read-only-api-key: ${{ secrets.BUILDBUDDY_API_KEY_READONLY }}
           renovate-pr: ${{ needs.gatekeeper.outputs.renovate_pr }}
+          cache-partition: ${{ steps.xcode.outputs.cache_partition }}
           download-outputs: minimal
+
+      # Regenerate the Xcode and Apple toolchain repositories for the selected
+      # Xcode, as the `macos` job does.
+      - name: Refresh Xcode toolchain configuration
+        shell: bash
+        run: |
+          bazelisk fetch --force --lockfile_mode=off \
+            --repo=@@bazel_tools+xcode_configure_extension+local_config_xcode \
+            --repo=@@apple_support++apple_cc_configure_extension+local_config_apple_cc \
+            --repo=@@apple_support++apple_cc_configure_extension+local_config_apple_cc_toolchains
 
       - name: Fetch Metal validation dependencies
         uses: nick-fields/retry@v4
@@ -1643,7 +1660,7 @@ jobs:
               echo "Metal shader validation: full." >> "$GITHUB_STEP_SUMMARY"
               ;;
             paravirtual-texture-usage-off)
-              echo "BAZEL_MACOS_TEST_FLAGS=--test_env=HOME --test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=0" >> "$GITHUB_ENV"
+              echo "BAZEL_MACOS_TEST_FLAGS=--test_env=HOME --test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=0 --test_env=DONNER_CI_MACOS_LANE=hosted" >> "$GITHUB_ENV"
               echo "Metal: verified virtual-GPU texture-check exception for the browser subset." >> "$GITHUB_STEP_SUMMARY"
               ;;
             *)

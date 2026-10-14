@@ -77,8 +77,7 @@ SECRET_USES = {
 # pull request's base branch changes; it forwards the repository secrets main.yml's steps read.
 REVIEWED_WORKFLOW_CALLS = {
     (".github/workflows/pr_base_change.yml", "base-change-ci"): (
-        "./.github/workflows/main.yml", frozenset({"BAZEL_REMOTE_CACHE",
-                                                   "BUILDBUDDY_API_KEY_READONLY"})),
+        "./.github/workflows/main.yml", frozenset({"BUILDBUDDY_API_KEY_READONLY"})),
 }
 
 # The only jobs that may run on self-hosted runners, with the gatekeeper output admitting each.
@@ -2910,8 +2909,9 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         files = self.supply_chain_files
         caller = ".github/workflows/pr_base_change.yml"
         main = ".github/workflows/main.yml"
-        forward = "      BAZEL_REMOTE_CACHE: ${{ secrets.BAZEL_REMOTE_CACHE }}\n"
-        declared = "      BAZEL_REMOTE_CACHE:\n        required: false\n"
+        forward = ("      BUILDBUDDY_API_KEY_READONLY: "
+                   "${{ secrets.BUILDBUDDY_API_KEY_READONLY }}\n")
+        declared = "      BUILDBUDDY_API_KEY_READONLY:\n        required: false\n"
         self.assertIn(forward, files[caller])
         self.assertIn(declared, files[main])
         cases = {
@@ -2924,7 +2924,7 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
                 forward, forward + "      CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}\n", 1),
                 "forwards secrets other than"),
             "renamed secret": (caller, files[caller].replace(
-                forward, "      BAZEL_REMOTE_CACHE: ${{ secrets.CODECOV_TOKEN }}\n", 1),
+                forward, "      BUILDBUDDY_API_KEY_READONLY: ${{ secrets.CODECOV_TOKEN }}\n", 1),
                 "forwards secrets other than"),
             "undeclared in callee": (main, files[main].replace(declared, "", 1),
                                      "callee declares workflow_call secrets"),
