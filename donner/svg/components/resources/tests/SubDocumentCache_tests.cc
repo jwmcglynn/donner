@@ -239,6 +239,29 @@ TEST(SubDocumentCacheFamilyTest, CacheHitPreservesAttemptForNestedDataChild) {
   EXPECT_EQ(child.registry().ctx().get<SubDocumentCache>().securityStats().parseAttempts, 1u);
 }
 
+TEST(SubDocumentCacheFamilyTest, RootPayloadLimitIncludesNestedDataDescendants) {
+  const std::string childSource = SvgContainingDataImage(kEmptySvg);
+  auto root = ParseSecureDataDocument(SvgContainingDataImage(childSource));
+  auto probe = ParseSecureDataDocument(childSource);
+  const size_t rootPayload =
+      root.registry().ctx().get<ParsedPayloadResourceBudget>().securityStats().retainedBytes;
+  const size_t childPayload =
+      probe.registry().ctx().get<ParsedPayloadResourceBudget>().securityStats().retainedBytes;
+  ASSERT_GT(rootPayload, 0u);
+  ASSERT_GT(childPayload, 0u);
+  ASSERT_LT(rootPayload + childPayload, 128u * 1024u);
+  auto& rootCache = root.registry().ctx().emplace<SubDocumentCache>(SubDocumentCache::Limits{
+      .maximumAggregatePayloadBytes = rootPayload + childPayload,
+  });
+  ParseWarningSink warnings;
+  auto first = LoadOnlySvgImage(root, warnings);
+  ASSERT_TRUE(first);
+  EXPECT_EQ(rootCache.securityStats().payloadBytes, childPayload);
+  auto child = SVGDocument::CreateFromHandle(first);
+  EXPECT_FALSE(LoadOnlySvgImage(child, warnings));
+  EXPECT_EQ(child.registry().ctx().get<SubDocumentCache>().size(), 0u);
+}
+
 TEST(SubDocumentCacheTest, GetOrParseCachesResult) {
   SubDocumentCache cache;
   const std::vector<uint8_t> content{'h', 'e', 'l', 'l', 'o'};
