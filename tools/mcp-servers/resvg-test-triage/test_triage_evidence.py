@@ -131,11 +131,46 @@ class ArtifactAccessTests(unittest.TestCase):
 
 
 class OutputEvidenceTests(unittest.TestCase):
+    def test_unrelated_diagnostics_do_not_supply_comparator_counts(self):
+        diagnostics = (
+            "parser error: 42 pixels differ",
+            "renderer failure: 42 pixels different.",
+            "warning: [ COMPARE ] /tests/shapes/rect/a.svg [TinySkia]: 42 pixels differ",
+            "[ COMPARE ] /tests/shapes/rect/a.svg [TinySkia]: parser error: 42 pixels differ",
+            "[ COMPARE ] /tests/shapes/rect/42 pixels differ.svg [TinySkia]: PASS",
+        )
+        for diagnostic in diagnostics:
+            with self.subTest(diagnostic=diagnostic):
+                records, _ = parse_test_output(
+                    "[ RUN ] Suite.Test/case\n" + diagnostic
+                    + "\n[ FAILED ] Suite.Test/case\n")
+                self.assertIsNone(records[0].pixel_diff)
+                self.assertIn(diagnostic, records[0].raw_output)
+
+    def test_later_diagnostic_does_not_replace_comparator_count(self):
+        records, _ = parse_test_output(
+            "[ RUN ] Suite.Test/case\n"
+            "[ COMPARE ] /tests/shapes/rect/a.svg [TinySkia]: FAIL (7 pixels differ, with 0 max)\n"
+            "parser diagnostic: 42 pixels differ\n[ FAILED ] Suite.Test/case\n")
+        self.assertEqual(records[0].pixel_diff, 7)
+
+    def test_recognized_comparator_records_retain_counts(self):
+        for payload, expected in (("1234 pixels differ", 1234),
+                                  ("FAIL (7 pixels differ, with 0 max)", 7),
+                                  ("PASS (2 pixels differ, out of 100 max)", 2)):
+            with self.subTest(payload=payload):
+                records, _ = parse_test_output(
+                    "[ RUN ] Suite.Test/case\n"
+                    "[ COMPARE ] /tests/shapes/rect/a.svg [TinySkia]: " + payload
+                    + "\n[ FAILED ] Suite.Test/case\n")
+                self.assertEqual(records[0].pixel_diff, expected)
+
     def test_oversized_numeric_token_is_not_reparsed_from_each_offset(self):
         start = time.monotonic()
         records, summary = parse_test_output(
-            "[ RUN ] Suite.Test/case\n" + "9" * 100000 + " pixels difference\n"
-            + "9" * 100000 + " pixels differ\n[ FAILED ] Suite.Test/case\n"
+            "[ RUN ] Suite.Test/case\n[ COMPARE ] /tests/a.svg [TinySkia]: " + "9" * 100000 + " pixels difference\n"
+            + "[ COMPARE ] /tests/a.svg [TinySkia]: " + "9" * 100000
+            + " pixels differ\n[ FAILED ] Suite.Test/case\n"
         )
         self.assertEqual(summary.failed, 1)
         self.assertIsNone(records[0].pixel_diff)
@@ -143,7 +178,8 @@ class OutputEvidenceTests(unittest.TestCase):
 
     def test_numeric_metric_boundary_does_not_accept_long_token_suffix(self):
         records, _ = parse_test_output("[ RUN ] Suite.Test/case\n"
-            "12345678901 pixels differ\n[ FAILED ] Suite.Test/case\n")
+            "[ COMPARE ] /tests/a.svg [TinySkia]: 12345678901 pixels differ\n"
+            "[ FAILED ] Suite.Test/case\n")
         self.assertIsNone(records[0].pixel_diff)
 
     def test_crash_at_eof_retains_incomplete_test(self):
