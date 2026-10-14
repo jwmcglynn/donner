@@ -14,9 +14,12 @@ namespace donner::editor {
 /// @param previousDeadlineMs Deadline owed before this frame, on the host's monotonic clock.
 /// @param nextDeadlineMs Recomputed deadline after this frame, or no remaining idle work.
 /// @param eventFrame Whether this frame services an event rather than a scheduled tick.
-inline std::optional<double> NextScheduledFrameDeadline(
-    [[maybe_unused]] std::optional<double> previousDeadlineMs, std::optional<double> nextDeadlineMs,
-    [[maybe_unused]] bool eventFrame) {
+inline std::optional<double> NextScheduledFrameDeadline(std::optional<double> previousDeadlineMs,
+                                                        std::optional<double> nextDeadlineMs,
+                                                        bool eventFrame) {
+  if (eventFrame && previousDeadlineMs) {
+    return nextDeadlineMs ? std::min(*previousDeadlineMs, *nextDeadlineMs) : previousDeadlineMs;
+  }
   return nextDeadlineMs;
 }
 

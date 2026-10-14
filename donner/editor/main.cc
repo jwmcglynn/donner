@@ -133,7 +133,8 @@ void RunEditorFrame(
   }
   {
     ZoneScopedN("shell.runFrame");
-    shell.runFrame(frameKind);
+    shell.setNextFrameKind(frameKind);
+    shell.runFrame();
   }
   {
     ZoneScopedN("endFrame");

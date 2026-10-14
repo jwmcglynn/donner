@@ -1527,6 +1527,9 @@ for (
         ),
       ).toBe("worker-raf");
       await delayWorkerAnimationFrames(page, sample.delayWorkerRafMs);
+      await expect.poll(async () => (await readDelayedAnimationFrameCallbacks(page)).length, {
+        message: "the delayed callback chain is active before the click",
+      }).toBeGreaterThan(0);
     }
     const deviceCreationsBeforeClick = await page.evaluate(
       () => window.__donnerHeadlessDeviceCreations ?? -1,
@@ -1652,12 +1655,13 @@ for (
           JSON.stringify(phaseTimings)
         }`,
       ).toEqual([]);
-      await expect.poll(() =>
-        page.evaluate(() =>
-          (window as Window & { __donnerFrameTickStats?: { maxMs: number } })
-            .__donnerFrameTickStats?.maxMs ?? 0
-        )
-      ).toBeGreaterThanOrEqual(sample.delayWorkerRafMs);
+      // Idle scheduled callbacks do not publish the full-frame tick diagnostics.
+      await expect.poll(async () => {
+        const callbacks = await readDelayedAnimationFrameCallbacks(page);
+        return callbacks.some(([startedAt], index) =>
+          index > 0 && startedAt - callbacks[index - 1][0] >= sample.delayWorkerRafMs
+        );
+      }, { message: "the injected delay separates actual scheduled callbacks" }).toBe(true);
     }
     expect(phaseTimings.presentedMs).toBeDefined();
     expect(phaseTimings.completedMs).toBeDefined();

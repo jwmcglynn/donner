@@ -1731,9 +1731,14 @@ std::optional<float> EditorShell::nextIdleWakeSeconds() const {
     includeWake(0.25f);
   }
   if (animationPreview_ || animationResetPending_) {
+#ifdef __EMSCRIPTEN__
+    // Browser scheduled callbacks already follow rAF; a second deadline can discard ready ticks.
+    includeWake(0.0f);
+#else
     const double elapsed =
         std::max(0.0, AnimationPreviewClockSeconds() - animationPreviewStartSeconds_);
     includeWake(static_cast<float>((std::floor(elapsed * 60.0) + 1.0) / 60.0 - elapsed));
+#endif
   }
   includeWake(documentSyncController_.nextTextSyncWakeSeconds());
   includeWake(renderCoordinator_.nextPixelCaptureCanvasCommitWakeSeconds());
@@ -6723,8 +6728,7 @@ void EditorShell::setAnimationPreview(bool enabled) {
   window_.wakeEventLoop();
 }
 
-void EditorShell::advanceAnimationPreview(double nowSeconds,
-                                          [[maybe_unused]] EditorFrameKind frameKind) {
+void EditorShell::advanceAnimationPreview(double nowSeconds, EditorFrameKind frameKind) {
   if (!app_.hasDocument() ||
       app_.document().documentGeneration() != animationPreviewDocumentGeneration_) {
     animationPreview_ = false;
@@ -6752,7 +6756,7 @@ void EditorShell::advanceAnimationPreview(double nowSeconds,
     requestRenderAtEndOfFrame_ = true;
     return;
   }
-  if (!animationFramePresented()) {
+  if (frameKind == EditorFrameKind::Event || !animationFramePresented()) {
     return;
   }
   tickAnimationPreview(nowSeconds);
@@ -9101,7 +9105,8 @@ void EditorShell::handleFrameShortcuts([[maybe_unused]] bool compactUi) {
   }
 }
 
-void EditorShell::runFrame(EditorFrameKind frameKind) {
+void EditorShell::runFrame() {
+  const EditorFrameKind frameKind = std::exchange(nextFrameKind_, EditorFrameKind::Scheduled);
   ZoneScopedN("EditorShell::runFrame");
   const ScopedHeapDelta uiFrameHeapDelta(MemoryStage::AppUiFrame);
   ++frameTelemetryFrame_;

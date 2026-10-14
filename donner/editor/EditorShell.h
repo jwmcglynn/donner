@@ -310,8 +310,12 @@ public:
   /// Perform bounded work that may yield and must run before ImGui::NewFrame().
   void prepareFrame();
 
+  /// Set the cause consumed by the next runFrame call; subsequent frames default to Scheduled.
+  /// @param frameKind Event frames service input/reset and presentation without ordinary ticks.
+  void setNextFrameKind(EditorFrameKind frameKind) { nextFrameKind_ = frameKind; }
+
   /// Process one editor UI frame using the host's active ImGui frame.
-  void runFrame(EditorFrameKind frameKind = EditorFrameKind::Scheduled);
+  void runFrame();
 
   /// Font catalog (embedded Google Fonts + macOS system fonts) backing document font resolution
   /// and the font picker (Design 0013 W2 consumes this).
@@ -652,6 +656,8 @@ private:
   bool previewPointerOverflow_ = false;
 
   Box2d animationPreviewControlRect_;
+  /// One-shot host context; every frame consumes it before any early return.
+  EditorFrameKind nextFrameKind_ = EditorFrameKind::Scheduled;
   bool animationPreview_ = false;
   bool animationResetPending_ = false;
   double animationPreviewStartSeconds_ = 0.0;
