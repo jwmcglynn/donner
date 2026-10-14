@@ -28,6 +28,7 @@
 #include "donner/svg/components/resources/ImageComponent.h"
 #include "donner/svg/components/resources/SubDocumentCache.h"
 #include "donner/svg/components/style/StyleSystem.h"
+#include "donner/svg/components/text/ComputedTextGeometryComponent.h"
 #include "donner/svg/renderer/Renderer.h"
 #include "donner/svg/renderer/RendererDriver.h"
 #include "donner/svg/renderer/RendererTinySkia.h"
@@ -1230,6 +1231,84 @@ TEST(RendererPublicApiTest, PostTextPathCursorClosedSingleLoopOffsetUsesEquivale
   ASSERT_EQ(actual.characters, 2);
   ASSERT_THAT(expected.tailAdvance, Gt(0.0));
   editor::tests::CompareBitmapToBitmap(actual.bitmap, expected.bitmap, "postpath_closed_offset",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(RendererPublicApiTest, PostTextPathCursorWhitespaceCannotInventOriginHit) {
+  SVGDocument document = ParseDocument(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="300" height="120"><text
+        id="label" font-family="sans-serif" font-size="16" text-anchor="start" x="40" y="80">A<tspan
+        x="100" y="20"> </tspan><tspan x="200" y="80">M</tspan></text></svg>)svg");
+  const auto actualBitmap = RenderPublicDocument(document);
+  const auto element = document.querySelector("#label");
+  ASSERT_TRUE(element.has_value());
+  const SVGTextElement label = element->cast<SVGTextElement>();
+
+  ASSERT_EQ(label.getNumberOfChars(), 3);
+  ASSERT_EQ(label.getStartPositionOfChar(1), Vector2d(100.0, 20.0));
+  ASSERT_THAT(label.getSubStringLength(1, 1), Gt(0.0));
+  const auto& geometry = document.registry().get<components::ComputedTextGeometryComponent>(
+      label.unsafeEntityHandle().entity());
+  ASSERT_THAT(geometry.characters, testing::SizeIs(3));
+  ASSERT_TRUE(geometry.characters[1].rendered);
+  ASSERT_FALSE(geometry.characters[1].hasExtent);
+  ASSERT_EQ(geometry.characters[1].extent, Box2d());
+
+  const Box2d visibleExtent = label.getExtentOfChar(2);
+  ASSERT_THAT(visibleExtent.width(), Gt(0.0));
+  ASSERT_THAT(visibleExtent.height(), Gt(0.0));
+  ASSERT_EQ(label.getCharNumAtPosition((visibleExtent.topLeft + visibleExtent.bottomRight) / 2.0),
+            2);
+  EXPECT_EQ(label.getCharNumAtPosition(Vector2d::Zero()), -1);
+
+  SVGDocument reference = ParseDocument(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="300" height="120"><text
+        id="label" font-family="sans-serif" font-size="16" text-anchor="start" x="40" y="80">A<tspan
+        x="200" y="80">M</tspan></text></svg>)svg");
+  const auto expectedBitmap = RenderPublicDocument(reference);
+  ASSERT_FALSE(actualBitmap.empty());
+  ASSERT_FALSE(expectedBitmap.empty());
+  editor::tests::CompareBitmapToBitmap(actualBitmap, expectedBitmap,
+                                       "postpath_whitespace_no_origin_hit",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(RendererPublicApiTest, PostTextPathCursorHiddenLogicalMetricsPreserveNoPaint) {
+  SVGDocument visible = ParseDocument(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="120"><text
+        id="label" font-family="sans-serif" font-size="16" text-anchor="start" x="100"
+        y="60">M</text></svg>)svg");
+  const auto visibleBitmap = RenderPublicDocument(visible);
+  const auto visibleElement = visible.querySelector("#label");
+  ASSERT_TRUE(visibleElement.has_value());
+  const SVGTextElement visibleLabel = visibleElement->cast<SVGTextElement>();
+  ASSERT_EQ(visibleLabel.getNumberOfChars(), 1);
+  ASSERT_EQ(visibleLabel.getStartPositionOfChar(0), Vector2d(100.0, 60.0));
+  ASSERT_THAT(visibleLabel.getSubStringLength(0, 1), Gt(0.0));
+  ASSERT_FALSE(visibleBitmap.empty());
+
+  SVGDocument hidden = ParseDocument(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="120"><text
+        id="label" font-family="sans-serif" font-size="16" text-anchor="start" x="100"
+        y="60" visibility="hidden">M</text></svg>)svg");
+  const auto hiddenBitmap = RenderPublicDocument(hidden);
+  const auto hiddenElement = hidden.querySelector("#label");
+  ASSERT_TRUE(hiddenElement.has_value());
+  const SVGTextElement hiddenLabel = hiddenElement->cast<SVGTextElement>();
+  EXPECT_EQ(hiddenLabel.getNumberOfChars(), visibleLabel.getNumberOfChars());
+  EXPECT_EQ(hiddenLabel.getStartPositionOfChar(0), visibleLabel.getStartPositionOfChar(0));
+  EXPECT_EQ(hiddenLabel.getEndPositionOfChar(0), visibleLabel.getEndPositionOfChar(0));
+  EXPECT_DOUBLE_EQ(hiddenLabel.getSubStringLength(0, 1), visibleLabel.getSubStringLength(0, 1));
+  EXPECT_DOUBLE_EQ(hiddenLabel.getRotationOfChar(0), visibleLabel.getRotationOfChar(0));
+  EXPECT_EQ(hiddenLabel.getCharNumAtPosition(Vector2d::Zero()), -1);
+
+  SVGDocument blank =
+      ParseDocument(R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="120"/>)svg");
+  const auto blankBitmap = RenderPublicDocument(blank);
+  ASSERT_FALSE(hiddenBitmap.empty());
+  ASSERT_FALSE(blankBitmap.empty());
+  editor::tests::CompareBitmapToBitmap(hiddenBitmap, blankBitmap,
+                                       "postpath_hidden_metrics_no_paint",
                                        editor::tests::PixelmatchIdentityParams());
 }
 
