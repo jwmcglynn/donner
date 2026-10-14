@@ -16,6 +16,20 @@ buffered process output, a 120-second process wait and unrestricted CSV input
 paths. It does not inherit the native batch runner's resource/log limits or
 provide an operating-system sandbox.
 
+The Donner adapter, CSV parser and both authored check programs use explicit
+error results. The adapter reports `RenderResult.error` through `renderError`;
+CSV loading returns an error-bearing result, while save/resync return error
+strings. Invalid CSV results cannot overwrite their input. The patch updates
+the UI callers to consume these statuses.
+
+The qmake `no_exceptions.pri` rule compiles those translation units with
+`-fno-exceptions`, including the new `src/donner.cpp` in the full application.
+Donner execution uses QProcess status checks directly and does not call the
+legacy throwing process/image helpers. Unchanged upstream renderer backends
+and UI paths retain their existing exception policy and normal compiler flags.
+This integration does not claim that the entire third-party application or Qt
+libraries are exception-free.
+
 ## Apply to a disposable copy
 
 From the Donner repository root, choose a fresh staging directory. Keep the
@@ -69,7 +83,9 @@ other backends. The patched tool reads both layouts. The unpatched upstream tool
 cannot read the new layout; use a staging copy for Donner work.
 
 The C++ check compiles the patched official CSV implementation and exercises old
-and new round trips, existing-column preservation, and invalid states/counts.
+and new round trips, existing-column preservation, invalid states/counts,
+missing input, and failed saves. Rejected rows leave no partial accepted result
+and cannot be saved over the original input.
 From the Donner repository root after applying the patch above:
 
 ```sh
@@ -92,7 +108,8 @@ checks alone do not complete that gate.
 This offscreen native check links the patched official `Render`, settings, and
 export dialog. It invokes the actual Donner CLI twice using a non-square official
 fixture at different preview sizes, checks image/diff signal completion, settings
-persistence and export registration, and checks a missing-executable control. It
+persistence and export registration, and checks a missing-executable control
+through its explicit error signal as well as its preview dimensions. It
 retains the preview and legacy UI-diff images for inspection. It checks invocation
 and dimensions, not pixel conformance or a complete interactive UI journey. The
 upstream renderer is unconditionally enabled by vdiff; this focused check leaves
@@ -114,6 +131,7 @@ QT_QPA_PLATFORM=offscreen ./render_integration \
 ```
 
 The registration, CSV check and Render integration check have built with Qt 6.12.
-CSV checks and the real-renderer offscreen check passed. The full Qt application
+CSV checks and the real-renderer offscreen check passed with the authored
+translation units compiled using `-fno-exceptions`. The full Qt application
 has compiled; manual visual UI operation and the complete automated corpus
 campaign are separate verification steps.

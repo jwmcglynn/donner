@@ -9,3 +9,4 @@ d1fd5a25e3fb790fbc8499eb0a58dbba54509e3cbf4dedf81c2db93cc316fc06  tools/vdiff/sr
 efa8a80d3ee5f3ba3a6748cc35a71fc2fe681b2668b28d04992b30aee9b30ed7  tools/vdiff/src/settingsdialog.ui
 ace34ac02af1e025c6c51f8c24e1422294fd7fe2d5d50c4e689cb8fb8da7ba41  tools/vdiff/src/tests.cpp
 79a2aacb2fe4e9c91fcb9a12767e9487e10f5de89d50f313e10a906ab3707b2e  tools/vdiff/src/tests.h
+381c9b38ba6ae7cca33f7b1369d1af055f7143d80b6ec9465575a36596a36816  tools/vdiff/vdiff.pro
