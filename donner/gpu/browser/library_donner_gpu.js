@@ -841,9 +841,11 @@ var LibraryDonnerGpu = {
         if (compile.pipeline !== null) {
           return;
         }
-        var compileAsync = compile.kind === DonnerGpu.kRenderPipeline
-          ? device.createRenderPipelineAsync
-          : device.createComputePipelineAsync;
+        var compileAsync = device[
+          compile.kind === DonnerGpu.kRenderPipeline
+            ? "createRenderPipelineAsync"
+            : "createComputePipelineAsync"
+        ];
         if (typeof compileAsync !== "function") {
           return;
         }
@@ -860,8 +862,7 @@ var LibraryDonnerGpu = {
         pending.then(function(pipeline) {
           if (DonnerGpu.pipelines === cache && compile.pipeline === null && pipeline) {
             compile.pipeline = pipeline;
-            compile.compiledAt = DonnerGpu.epochMs();
-            compile.traced[3] = compile.compiledAt;
+            compile.traced[3] = compile.compiledAt = DonnerGpu.epochMs();
           }
         }, function(error) {
           // The pipeline is created synchronously at first use instead, where the browser reports
@@ -872,8 +873,7 @@ var LibraryDonnerGpu = {
             return;
           }
           console.error(
-            "[Geode/browser] Pipeline compile refused: "
-              + String(error && error.message ? error.message : error),
+            "[Geode/browser] Pipeline compile refused: " + String(error && error.message || error),
           );
         });
       });
@@ -891,16 +891,15 @@ var LibraryDonnerGpu = {
         var stage = compile.descriptor.fragment || compile.descriptor.compute;
         DonnerGpu.trace(["c", record.handle, DonnerGpu.epochMs(), stage.entryPoint]);
         try {
-          compile.pipeline = kind === DonnerGpu.kRenderPipeline
-            ? DonnerGpu.device.createRenderPipeline(compile.descriptor)
-            : DonnerGpu.device.createComputePipeline(compile.descriptor);
+          compile.pipeline = DonnerGpu.device[
+            kind === DonnerGpu.kRenderPipeline ? "createRenderPipeline" : "createComputePipeline"
+          ](compile.descriptor);
         } catch (e) {
           compile.pipeline = null;
         }
         // Refused once, refused every time: later uses fail without asking again.
         compile.failed = compile.pipeline === null;
-        compile.compiledAt = DonnerGpu.epochMs();
-        compile.traced[3] = compile.compiledAt;
+        compile.traced[3] = compile.compiledAt = DonnerGpu.epochMs();
       }
       return compile.pipeline;
     },
