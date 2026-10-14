@@ -79,6 +79,8 @@ void CompareBitmapToGolden(const svg::RendererBitmap& bitmap, std::string_view g
   options.includeAA = params.includeAntiAliasing;
   const int mismatched = pixelmatch::pixelmatch(golden.data, bitmap.pixels, diffImage, width,
                                                 height, strideInPixels, options);
+  // pixelmatch returns -1 when it cannot compare its inputs; never count that as a pass.
+  ASSERT_GE(mismatched, 0) << "[" << testLabel << "] pixelmatch could not compare the bitmap";
 
   if (mismatched > params.maxMismatchedPixels) {
     const std::filesystem::path outDir = detail::DiffOutputDir();
