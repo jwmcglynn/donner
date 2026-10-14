@@ -86,15 +86,19 @@ done
 [[ "${repeat}" =~ ^[1-9][0-9]*$ ]] || die "--repeat must be a positive integer"
 [[ "${cpu_load}" =~ ^(0|[1-9][0-9]*)$ ]] || die "--cpu-load must be a non-negative integer"
 [[ -f "${package_dir}/editor.wasm" ]] || die "${package_dir} has no editor.wasm"
-package_dir="$(cd "${package_dir}" && pwd -P)"
-mkdir -p "${out_dir}"
-out_dir="$(cd "${out_dir}" && pwd -P)"
+# Canonical paths, resolved before anything is created, deleted or copied.
+canonical() {
+  python3 -c 'import os, sys; print(os.path.realpath(sys.argv[1]))' "$1"
+}
+package_dir="$(canonical "${package_dir}")"
+out_dir="$(canonical "${out_dir}")"
 [[ "${out_dir}" != "/" ]] || die "--out must not be the root directory"
 pkg_copy="${out_dir}/package"
 # The copy replaces ${pkg_copy}, so the package may not be in it, and --out may not be in the
 # package that is copied.
 [[ "${package_dir}/" != "${pkg_copy}/"* ]] || die "--package must not be in ${pkg_copy}"
 [[ "${out_dir}/" != "${package_dir}/"* ]] || die "--out must not be in the package"
+mkdir -p "${out_dir}"
 
 if [[ ! -d "${kTestsDir}/node_modules" ]]; then
   npm --prefix "${kTestsDir}" ci
@@ -143,10 +147,17 @@ for _ in $(seq 1 100); do
   kill -0 "${server_pid}" 2>/dev/null || break
   sleep 0.1
 done
-if [[ "${ready}" != "1" ]]; then
+if [[ "${ready}" != "1" ]] || ! kill -0 "${server_pid}" 2>/dev/null; then
   cat "${out_dir}/server.log" >&2
   die "the package server did not come up"
 fi
+# The port was free when it was chosen, not necessarily when the server bound it. Prove the
+# listener is this package's server by the bytes it serves.
+curl -fsS -o "${out_dir}/served-editor.wasm" "${server_url}/editor.wasm"
+if ! cmp -s "${out_dir}/served-editor.wasm" "${pkg_copy}/editor.wasm"; then
+  die "${server_url} does not serve this package's editor.wasm"
+fi
+rm -f "${out_dir}/served-editor.wasm"
 
 for ((i = 0; i < cpu_load; i++)); do
   python3 -c 'while True: pass' &

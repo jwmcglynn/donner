@@ -85,6 +85,21 @@ py_test(
 )
 
 py_test(
+    name = "browser_flake_hunt_tests",
+    size = "small",
+    srcs = [
+        "browser_flake_hunt_tests.py",
+        "test_executable_fixtures.py",
+    ],
+    data = [
+        "browser-flake-hunt.sh",
+        "//tools/http:simple_webserver",
+    ],
+    imports = ["."],
+    deps = ["@rules_python//python/runfiles"],
+)
+
+py_test(
     name = "coverage_script_tests",
     size = "small",
     srcs = [
