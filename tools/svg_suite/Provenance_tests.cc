@@ -205,6 +205,39 @@ TEST_F(ProvenanceTest, UnexecutedRunCannotClaimExistingXmlAsGeneratedEvidence) {
   EXPECT_EQ(record["xml_report"], nullptr);
 }
 
+TEST_F(ProvenanceTest, XmlEvidenceFailuresRejectOtherwiseCompleteRuns) {
+  for (const std::string_view mode : {"missing", "empty", "oversized", "unreadable", "directory"}) {
+    SCOPED_TRACE(mode);
+    const auto output = directory_ / std::string(mode);
+    const auto run = CreateRunProvenance(options(), output);
+    ASSERT_TRUE(run.run) << run.error;
+    const auto reportPath = output / "report.xml";
+    if (mode == "directory") {
+      std::filesystem::create_directory(reportPath);
+    } else if (mode != "missing") {
+      std::ofstream(reportPath) << (mode == "empty" ? "" : "<testsuites/>");
+      if (mode == "oversized") {
+        std::filesystem::resize_file(reportPath, 32u * 1024u * 1024u + 1u);
+      } else if (mode == "unreadable") {
+        std::filesystem::permissions(reportPath, std::filesystem::perms::none);
+      }
+    }
+    RunExecutionSummary execution;
+    execution.discoveredCases = 1;
+    execution.selectedCases = 1;
+    execution.completedCases = 1;
+    execution.completedInvocations = 1;
+    execution.gtestOutput = "xml:" + reportPath.string();
+    execution.xmlReport = reportPath;
+    EXPECT_THAT(WriteRunVerification(*run.run, "", 0, execution), Not(IsEmpty()));
+    std::ifstream input(output / "run-verification.json");
+    const auto record = nlohmann::json::parse(input);
+    EXPECT_EQ(record["accepted"], false);
+    EXPECT_EQ(record["complete_corpus_accepted"], false);
+    EXPECT_EQ(record["xml_report"], nullptr);
+  }
+}
+
 TEST_F(ProvenanceTest, ResourceMutationRejectsAggregateRun) {
   const auto run = CreateRunProvenance(options(), directory_ / "output");
   ASSERT_TRUE(run.run) << run.error;

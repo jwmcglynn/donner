@@ -76,6 +76,9 @@ int RunFixture(int argc, char** argv) {
   }
   RunExecutionSummary execution;
   const int result = RunSelectedTests(&execution);
+  if (fixtureMode == "--fixture-remove-xml") {
+    std::filesystem::remove(execution.xmlReport);
+  }
   const auto error = WriteRunVerification(*provenance.run, "", result, execution);
   return error.empty() ? result : 3;
 }
@@ -210,8 +213,32 @@ TEST_F(GtestSuiteTest, SuccessfulAndSkippedSelectionCannotReturnSuccess) {
   EXPECT_THAT(record, testing::HasSubstr("\"accepted\": false"));
 }
 
+TEST_F(GtestSuiteTest, JsonOutputCannotCertifyWithoutXml) {
+  const auto output = root_ / "chosen.json";
+  EXPECT_EQ(run({"--gtest_filter=SvgSuite.*", "--gtest_output=json:" + output.string()}), 3);
+  EXPECT_TRUE(std::filesystem::is_regular_file(output));
+  EXPECT_THAT(verification(), testing::HasSubstr("\"accepted\": false"));
+  EXPECT_THAT(verification(), testing::HasSubstr("\"complete_corpus_accepted\": false"));
+  EXPECT_THAT(verification(), testing::HasSubstr("\"xml_report\": null"));
+}
+
+TEST_F(GtestSuiteTest, DirectoryXmlOutputCannotCertifyAnUnknownReport) {
+  const auto output = root_ / "reports";
+  EXPECT_EQ(run({"--gtest_filter=SvgSuite.*", "--gtest_output=xml:" + output.string() + "/"}), 3);
+  EXPECT_THAT(verification(), testing::HasSubstr("\"accepted\": false"));
+  EXPECT_THAT(verification(), testing::HasSubstr("\"xml_report\": null"));
+}
+
+TEST_F(GtestSuiteTest, RemovedXmlReportCannotCertifyCompletedCases) {
+  EXPECT_EQ(run({"--fixture-remove-xml", "--gtest_filter=SvgSuite.*"}), 3);
+  EXPECT_THAT(verification(), testing::HasSubstr("\"completed_cases\": 2"));
+  EXPECT_THAT(verification(), testing::HasSubstr("\"accepted\": false"));
+  EXPECT_THAT(verification(), testing::HasSubstr("\"complete_corpus_accepted\": false"));
+  EXPECT_THAT(verification(), testing::HasSubstr("\"xml_report\": null"));
+}
+
 TEST_F(GtestSuiteTest, EmptyXmlSuffixCannotReferenceStaleDefaultReport) {
-  EXPECT_EQ(run({"--fixture-empty-xml", "--gtest_filter=SvgSuite.*", "--gtest_output=xml:"}), 0);
+  EXPECT_EQ(run({"--fixture-empty-xml", "--gtest_filter=SvgSuite.*", "--gtest_output=xml:"}), 3);
   const std::string record = verification();
   EXPECT_THAT(record, testing::HasSubstr("\"gtest_output\": \"xml:\""));
   EXPECT_THAT(record, testing::HasSubstr("\"xml_report\": null"));
