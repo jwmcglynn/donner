@@ -11,6 +11,8 @@ Every difference must be listed in an allowlist below with the reason it is acce
 that no longer matches a difference also fails, so the lists shrink as gaps close.
 """
 
+import hashlib
+import json
 from pathlib import Path
 import re
 import shlex
@@ -151,6 +153,50 @@ INVOCATION_ALLOWLIST = {
 # by (workflow, job, scenario, step, kind, value).
 SHARED_JOB_ALLOWLIST = {}
 
+# (action, input) pairs whose value differs between main and pull requests by policy, pinned by
+# the security policy tests: Actions cache saves are main-only, and BuildBuddy write access
+# follows pull request trust. See _other_step_view.
+_POLICY_EVENT_INPUTS = frozenset({
+    ("bazel-contrib/setup-bazel", "cache-save"),
+    ("./.github/actions/buildbuddy-cache", "trusted-pr"),
+})
+
+_EVENT_ROUTING_REASON = (
+    "Event routing: the step decides from the event which targets, scope or runs apply. Its "
+    "outputs are the scenario inputs this test models, so its own script differs by design.")
+
+# The kinds of pull request each check is evaluated for (see SCENARIOS).
+PULL_REQUEST_SCENARIOS = ("trusted-pr", "untrusted-pr", "renovate-pr")
+
+# Non-Bazel steps of a shared job whose rendered definition differs between main and some kind
+# of pull request: (workflow, job, step) to {scenario: digest of the rendered main and pull
+# request definitions}. Any edit to the step, or a difference in another scenario, changes the
+# observed digests, so the entry must be reviewed and updated.
+_SHARED_STEP_DIGESTS = {
+    ("bcr_preflight.yml", "prepare",
+     "Select the preflight scope"): dict.fromkeys(PULL_REQUEST_SCENARIOS, "642c5d1b39d0fcb8"),
+    ("cmake.yml", "gatekeeper",
+     "Detect docs-only PR"): dict.fromkeys(PULL_REQUEST_SCENARIOS, "9ecf5fb96869b275"),
+    ("cmake.yml", "gatekeeper",
+     "Detect duplicate push (PR already open for this branch)"): dict.fromkeys(PULL_REQUEST_SCENARIOS, "a72c9791c92a41a9"),
+    ("lint.yml", "gatekeeper",
+     "Detect duplicate push (PR already open for this branch)"): dict.fromkeys(PULL_REQUEST_SCENARIOS, "a72c9791c92a41a9"),
+    ("main.yml", "determine-targets",
+     "Determine affected Bazel targets"): dict.fromkeys(PULL_REQUEST_SCENARIOS, "b2774a4e49fa714f"),
+    ("main.yml", "determine-targets",
+     "Extract SHA for hash caching"): dict.fromkeys(PULL_REQUEST_SCENARIOS, "75cf06ec1a7a5082"),
+    ("main.yml", "gatekeeper",
+     "Detect docs-only PR"): dict.fromkeys(PULL_REQUEST_SCENARIOS, "9ecf5fb96869b275"),
+    ("main.yml", "gatekeeper",
+     "Detect duplicate push (PR already open for this branch)"): dict.fromkeys(PULL_REQUEST_SCENARIOS, "694bfdca0dd35e4c"),
+}
+
+SHARED_STEP_ALLOWLIST = {
+    (workflow, job, step, scenario, digest): _EVENT_ROUTING_REASON
+    for (workflow, job, step), digests in _SHARED_STEP_DIGESTS.items()
+    for scenario, digest in digests.items()
+}
+
 # Steps of one job that run on a main push but not on one kind of pull request.
 _TRUSTED_LINUX_REASON = (
     "operator decision 2026-10-13: trusted PRs run the Linux Build and Test steps only on the "
@@ -275,7 +321,6 @@ SCENARIOS = {
                         renovate_pr="true"),
 }
 
-PULL_REQUEST_SCENARIOS = ("trusted-pr", "untrusted-pr", "renovate-pr")
 
 # Step outputs a condition may read, with the value used in every scenario and why. A step
 # output not listed here fails the test, so a new one is reviewed before it can gate a check.
@@ -323,16 +368,20 @@ def _workflow_paths():
 # --- A small YAML reader for the subset GitHub workflows here use. -----------------------------
 
 
+# One token of a YAML or shell line: an escaped character, a Bash ANSI-C quoted string
+# (`$'...'`, where a backslash escapes the next character), a single- or double-quoted string,
+# a `#` that starts a comment (at the start or after whitespace), or any other character. A
+# backslash escapes the next character except inside plain single quotes, as in Bash and YAML
+# double-quoted strings.
+_COMMENT_SCAN = re.compile(r"""\\.|\$'(?:\\.|[^'\\])*'?|'[^']*'?|"(?:\\.|[^"\\])*"?|"""
+                           r"""(?P<comment>(?:^|(?<=[ \t]))#)|.""", re.DOTALL)
+
+
 def _strip_comment(value):
-    quote = None
-    for index, char in enumerate(value):
-        if quote:
-            if char == quote:
-                quote = None
-        elif char in "'\"":
-            quote = char
-        elif char == "#" and (index == 0 or value[index - 1] in " \t"):
-            return value[:index].rstrip()
+    """A YAML or shell line without its trailing comment, outside quotes and escapes."""
+    for match in _COMMENT_SCAN.finditer(value):
+        if match.group("comment"):
+            return value[:match.start()].rstrip()
     return value
 
 
@@ -709,6 +758,8 @@ def bazel_invocations(script, environment, scenario=None):
     variables = {}
     invocations = []
     for line in script.splitlines():
+        # A commented-out command runs nothing.
+        line = _strip_comment(line)
         invocation = _invocation(line, environment, variables)
         if invocation:
             invocations.append(invocation)
@@ -848,22 +899,34 @@ def _bazel_profile(workflow, job, scenario):
     return steps, writes
 
 
-def _other_steps(workflow, job, scenario):
-    """Gating steps that run in this scenario and run no Bazel build or test, by name.
+def _other_step_view(workflow, job, step, scenario):
+    """What a non-Bazel step runs in a scenario: action, inputs, command, and the variables read.
 
-    Each maps to what it runs (condition aside): action, inputs, command, and the effective value
-    of every environment variable the command or inputs read, wherever it is set.
+    `${{ }}` expressions are rendered for the scenario, so a check that is stricter on one event
+    than another compares as different. Each variable the command or inputs read is recorded
+    with its effective value, wherever it is set.
     """
+    script = render(str(step.get("run") or ""), scenario)
+    environment = _step_environment(workflow, job, step, scenario)
+    # Inputs that differ between events by policy, for the action that reads them, are not
+    # compared (_POLICY_EVENT_INPUTS).
+    action = str(step.get("uses") or "").split("@", 1)[0]
+    inputs = sorted((key, render(str(value), scenario))
+                    for key, value in (step.get("with") or {}).items()
+                    if (action, key) not in _POLICY_EVENT_INPUTS)
+    read = (set(re.findall(r"\$\{?([A-Za-z_][A-Za-z0-9_]*)", script))
+            | set(re.findall(r"\benv\.([A-Za-z_][A-Za-z0-9_]*)", str(inputs))))
+    return (step.get("uses"), inputs, script,
+            sorted((name, environment.get(name)) for name in read))
+
+
+def _other_steps(workflow, job, scenario):
+    """Gating steps that run in this scenario and run no Bazel build or test, by name."""
     other = {}
     for step in _gating_steps(job, scenario):
-        script = str(step.get("run") or "")
-        environment = _step_environment(workflow, job, step)
-        if runs(step.get("if"), scenario) and not bazel_invocations(script, environment):
-            inputs = sorted((step.get("with") or {}).items())
-            read = (set(re.findall(r"\$\{?([A-Za-z_][A-Za-z0-9_]*)", script))
-                    | set(re.findall(r"\benv\.([A-Za-z_][A-Za-z0-9_]*)", str(inputs))))
-            other[_step_name(step)] = (step.get("uses"), inputs, script,
-                                       sorted((name, environment.get(name)) for name in read))
+        if runs(step.get("if"), scenario) and not bazel_invocations(
+                str(step.get("run") or ""), _step_environment(workflow, job, step)):
+            other[_step_name(step)] = _other_step_view(workflow, job, step, scenario)
     return other
 
 
@@ -1058,8 +1121,22 @@ def branch_filter_includes(branch, branches=None, ignore=None):
     return included
 
 
+def triggers(trigger):
+    """A workflow's `on:` as a mapping, expanding `on: push` and `on: [push, pull_request]`."""
+    if isinstance(trigger, str):
+        return {trigger: None}
+    if isinstance(trigger, list):
+        return {event: None for event in trigger}
+    return trigger if isinstance(trigger, dict) else {}
+
+
+# Pull request activity types that cover every new revision of an open pull request.
+_REVISION_TYPES = {"opened", "synchronize", "reopened"}
+
+
 def _push_runs_on_main(trigger):
-    if not isinstance(trigger, dict) or "push" not in trigger:
+    trigger = triggers(trigger)
+    if "push" not in trigger:
         return False
     push = trigger["push"] or {}
     # A push trigger that filters only tags never runs for branch pushes.
@@ -1070,6 +1147,7 @@ def _push_runs_on_main(trigger):
 
 
 def _pull_request_trigger_differences(name, trigger):
+    trigger = triggers(trigger)
     if "pull_request" not in trigger:
         return {(name, "push-only")}
     observed = set()
@@ -1083,6 +1161,9 @@ def _pull_request_trigger_differences(name, trigger):
         observed.add((name, "pull-request-branches"))
     if pull_request.get("paths-ignore") is not None:
         observed.add((name, "pull-request-paths-ignore"))
+    types = pull_request.get("types")
+    if types is not None and not _REVISION_TYPES <= set(types):
+        observed.add((name, "pull-request-types"))
     return observed
 
 
@@ -1097,7 +1178,7 @@ def trigger_differences(workflows, main_push_workflows):
 def _jobs_on_both_triggers(workflows, main_push_workflows):
     for name in main_push_workflows:
         workflow = workflows[name]
-        if "pull_request" in workflow["on"]:
+        if "pull_request" in triggers(workflow.get("on")):
             for job_name, job in _jobs(workflow).items():
                 yield name, job_name, job
 
@@ -1125,25 +1206,46 @@ def _running_steps(job, scenario):
             if runs(step.get("if"), scenario)}
 
 
-def shared_job_differences(workflows, main_push_workflows):
-    """How a job that runs on both main and a pull request runs Bazel differently on each.
+def _scenario_differences(workflow, job, scenario):
+    """How one shared job's rendered steps differ between a main push and a scenario."""
+    main_steps, _ = _bazel_profile(workflow, job, "main-push")
+    pr_steps, _ = _bazel_profile(workflow, job, scenario)
+    # A step that runs in both scenarios but runs Bazel only on main (its command rendered away
+    # on pull requests). Steps the pull request skips outright are reported by
+    # skipped_main_steps.
+    differences = {(step, "step-main-only", "") for step in set(main_steps) - set(pr_steps)
+                   if step in _running_steps(job, scenario)}
+    for step in set(main_steps) & set(pr_steps):
+        differences |= _step_differences(step, main_steps[step], pr_steps[step])
+    main_other = _other_steps(workflow, job, "main-push")
+    pr_other = _other_steps(workflow, job, scenario)
+    return differences | {(step, "step-changed", definition_digest(main_other[step], pr_other[step]))
+                          for step in set(main_other) & set(pr_other)
+                          if main_other[step] != pr_other[step]}
 
-    A shared step's script or environment can branch on the event through `${{ }}` expressions,
-    so each scenario's rendered invocations are compared step by step.
+
+def definition_digest(main_view, pr_view):
+    """A stable digest of a step's rendered definitions on main and on a pull request."""
+    text = json.dumps([main_view, pr_view], sort_keys=True)
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
+
+
+def shared_job_differences(workflows, main_push_workflows):
+    """How a job that runs on both main and a pull request runs differently on each.
+
+    A shared step's script, inputs or environment can branch on the event through `${{ }}`
+    expressions, so each scenario's rendered Bazel invocations and other checks are compared
+    step by step.
     """
     observed = set()
     for name, job_name, job in _jobs_on_both_triggers(workflows, main_push_workflows):
         workflow = workflows[name]
         if not job_gates(workflow, job_name, "main-push"):
             continue
-        main_steps, _ = _bazel_profile(workflow, job, "main-push")
         for scenario in PULL_REQUEST_SCENARIOS:
-            if not job_gates(workflow, job_name, scenario):
-                continue
-            pr_steps, _ = _bazel_profile(workflow, job, scenario)
-            for step in set(main_steps) & set(pr_steps):
+            if job_gates(workflow, job_name, scenario):
                 observed.update((name, job_name, scenario) + difference for difference in
-                                _step_differences(step, main_steps[step], pr_steps[step]))
+                                _scenario_differences(workflow, job, scenario))
     return observed
 
 
@@ -1179,11 +1281,6 @@ _SET_OPTION_NAMES = {"allexport", "braceexpand", "emacs", "errexit", "errtrace",
                      "hashall", "histexpand", "history", "ignoreeof", "keyword", "monitor",
                      "noclobber", "noexec", "noglob", "nolog", "notify", "nounset", "onecmd",
                      "physical", "pipefail", "posix", "privileged", "verbose", "vi", "xtrace"}
-
-
-def _strip_comment_text(line):
-    """A shell line without a trailing comment (a `#` at the start or after whitespace)."""
-    return re.split(r"(?:^|\s)#", line, maxsplit=1)[0]
 
 
 def _set_option_masks(word):
@@ -1272,7 +1369,7 @@ def failure_masks(script, shell=None):
     # A `${{ }}` expression is evaluated by GitHub before the shell runs, so its operators are
     # not shell operators.
     script = _TEMPLATE.sub("EXPR", script)
-    lines = [" ".join(_strip_comment_text(line).split())
+    lines = [" ".join(_strip_comment(line).split())
              for line in re.sub(r"\\\n\s*", " ", script).splitlines()]
     lines = [line for line in lines if line]
     found.update(line for line in lines if _line_masks(line))
@@ -1598,9 +1695,15 @@ class CiLaneParityTest(unittest.TestCase):
                          {("Lint", "step-changed", "")})
 
     def test_shared_jobs_run_bazel_alike_on_main_and_pull_requests(self):
+        observed = shared_job_differences(self.workflows, self.main_push_workflows)
+        changed = {difference for difference in observed if difference[4] == "step-changed"}
         self._assert_matches_allowlist(
-            shared_job_differences(self.workflows, self.main_push_workflows),
-            SHARED_JOB_ALLOWLIST, "a shared job runs Bazel differently on pull requests")
+            observed - changed, SHARED_JOB_ALLOWLIST,
+            "a shared job runs Bazel differently on pull requests")
+        self._assert_matches_allowlist(
+            {(name, job, step, scenario, digest)
+             for name, job, scenario, step, _, digest in changed}, SHARED_STEP_ALLOWLIST,
+            "a shared job runs a non-Bazel check differently on pull requests")
 
     def test_event_dependent_expressions_are_compared(self):
         workflow = parse_workflow(
@@ -1618,6 +1721,101 @@ class CiLaneParityTest(unittest.TestCase):
                            "--keep_going"), differences)
         self.assertEqual(render("${{ runner.temp }}/x ${{ github.event_name }}", "main-push"),
                          "${{ runner.temp }}/x push")
+
+    def test_commented_out_bazel_commands_run_nothing(self):
+        self.assertEqual(bazel_invocations("# bazelisk test //...\n", {}), [])
+        self.assertEqual(bazel_invocations("echo start  # bazelisk test //...\n", {}), [])
+        # A `#` inside quotes starts no comment, including after an escaped quote.
+        self.assertEqual(len(bazel_invocations('echo "lane #1"; bazelisk test //...\n', {})), 1)
+        self.assertEqual(
+            len(bazel_invocations('echo "label \\" #1"; bazelisk test //...\n', {})), 1)
+        self.assertEqual(failure_masks('echo "label \\" #1"; set +e'),
+                         {'echo "label \\" #1"; set +e'})
+        self.assertEqual(bazel_invocations("echo it\\'s  # bazelisk test //...\n", {}), [])
+        # Bash ANSI-C quoting: a backslash escapes the quote inside $'...'.
+        self.assertEqual(
+            len(bazel_invocations("echo $'label \\' #1'; bazelisk test //...\n", {})), 1)
+        self.assertEqual(failure_masks("echo $'label \\' #1'; set +e"),
+                         {"echo $'label \\' #1'; set +e"})
+        quoted = bazel_invocations('bazelisk test --test_arg="a #b" //a\n', {})
+        self.assertEqual(quoted[0]["targets"], {"//a"})
+        self.assertEqual(failure_masks('echo "lane #1"; set +e\nbazelisk test //...'),
+                         {'echo "lane #1"; set +e'})
+        workflow = parse_workflow(
+            "jobs:\n  main:\n    steps:\n      - name: Test\n        run: bazelisk test //...\n"
+            "  pr:\n    steps:\n      - name: Test\n        run: \"# bazelisk test //...\"\n")
+        self.assertIn(("Test", "step-main-only", ""),
+                      invocation_differences(workflow, "main", "pr"))
+
+    def test_trigger_shorthand_and_activity_types(self):
+        self.assertEqual(triggers("push"), {"push": None})
+        self.assertEqual(triggers(["push", "pull_request"]), {"push": None, "pull_request": None})
+        self.assertTrue(_push_runs_on_main("push"))
+        self.assertTrue(_push_runs_on_main(["push", "pull_request"]))
+        workflows = {
+            "short.yml": parse_workflow("on: push\n"),
+            "both.yml": parse_workflow("on: [push, pull_request]\n"),
+            "closed.yml": parse_workflow(
+                "on:\n  push:\n  pull_request:\n    types: [closed]\n"),
+            "edited.yml": parse_workflow(
+                "on:\n  push:\n  pull_request:\n"
+                "    types: [opened, synchronize, reopened, edited]\n"),
+        }
+        self.assertEqual(trigger_differences(workflows, sorted(workflows)),
+                         {("short.yml", "push-only"), ("closed.yml", "pull-request-types")})
+
+    def test_shared_steps_that_stop_running_bazel_are_reported(self):
+        workflow = parse_workflow(
+            "on:\n  push:\n  pull_request:\n"
+            "jobs:\n  build:\n    steps:\n      - name: Test\n        run: |\n"
+            "          ${{ github.event_name == 'pull_request' && '#' || '' }} bazelisk test //...\n")
+        self.assertEqual(shared_job_differences({"x.yml": workflow}, ["x.yml"]),
+                         {("x.yml", "build", scenario, "Test", "step-main-only", "")
+                          for scenario in PULL_REQUEST_SCENARIOS})
+
+    def test_policy_event_inputs_are_the_only_inputs_ignored(self):
+        step = ("      - name: Cache\n        uses: ./.github/actions/buildbuddy-cache\n"
+                "        with:\n          trusted-pr: ${{ needs.gatekeeper.outputs.trusted_pr }}\n"
+                "          download-outputs: %s\n")
+        workflow = parse_workflow("on:\n  push:\n  pull_request:\njobs:\n  build:\n"
+                                  "    steps:\n" + step % "minimal")
+        self.assertEqual(shared_job_differences({"x.yml": workflow}, ["x.yml"]), set())
+        changed = parse_workflow(
+            "on:\n  push:\n  pull_request:\njobs:\n  build:\n    steps:\n"
+            + step % "${{ github.event_name == 'push' && 'minimal' || 'all' }}")
+        self.assertEqual({difference[:5] for difference in
+                          shared_job_differences({"x.yml": changed}, ["x.yml"])},
+                         {("x.yml", "build", scenario, "Cache", "step-changed")
+                          for scenario in PULL_REQUEST_SCENARIOS})
+        # The exemption belongs to the action that reads the input, not to the input name.
+        other_action = parse_workflow(
+            "on:\n  push:\n  pull_request:\njobs:\n  build:\n    steps:\n"
+            "      - name: Scan\n        uses: ./.github/actions/security-scan\n"
+            "        with:\n          trusted-pr: ${{ github.event_name == 'push' && 'strict' "
+            "|| 'off' }}\n")
+        self.assertEqual({difference[:5] for difference in
+                          shared_job_differences({"x.yml": other_action}, ["x.yml"])},
+                         {("x.yml", "build", scenario, "Scan", "step-changed")
+                          for scenario in PULL_REQUEST_SCENARIOS})
+
+    def test_non_bazel_checks_render_event_expressions(self):
+        lint = ("      - name: Lint\n        run: python3 tools/lint.py "
+                "${{ github.event_name == 'push' && '--strict' || '' }}\n")
+        workflow = parse_workflow("on:\n  push:\n  pull_request:\n"
+                                  "jobs:\n  build:\n    steps:\n" + lint)
+        observed = shared_job_differences({"x.yml": workflow}, ["x.yml"])
+        self.assertEqual({difference[:5] for difference in observed},
+                         {("x.yml", "build", scenario, "Lint", "step-changed")
+                          for scenario in PULL_REQUEST_SCENARIOS})
+        # The digest identifies the rendered definitions: an edit to the step changes it.
+        stricter = parse_workflow("on:\n  push:\n  pull_request:\n"
+                                  "jobs:\n  build:\n    steps:\n"
+                                  + lint.replace("--strict", "--strict --all"))
+        self.assertFalse(observed & shared_job_differences({"x.yml": stricter}, ["x.yml"]))
+        replaced = parse_workflow("jobs:\n  main:\n    steps:\n" + lint
+                                  + "  pr:\n    steps:\n" + lint)
+        self.assertEqual(invocation_differences(replaced, "main", "pr"),
+                         {("Lint", "step-changed", "")})
 
     def test_branch_filters_follow_github_pattern_order(self):
         self.assertTrue(branch_filter_includes("main", ["**"]))
@@ -1712,7 +1910,8 @@ class CiLaneParityTest(unittest.TestCase):
             self.assertGreater(len(reason.strip()), 20, name)
         for allowlist in (TRIGGER_ALLOWLIST, MAIN_ONLY_JOBS, INVOCATION_ALLOWLIST,
                           STEP_ALLOWLIST, COUNTERPART_ALLOWLIST, FAILURE_SWALLOW_ALLOWLIST,
-                          SHARED_JOB_ALLOWLIST, SUBSET_ALLOWLIST, SUBSET_EXTRA_STEPS):
+                          SHARED_JOB_ALLOWLIST, SHARED_STEP_ALLOWLIST, SUBSET_ALLOWLIST,
+                          SUBSET_EXTRA_STEPS):
             for key, reason in allowlist.items():
                 self.assertGreater(len(reason.strip()), 20, key)
 
