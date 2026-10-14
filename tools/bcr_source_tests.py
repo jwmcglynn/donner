@@ -365,10 +365,18 @@ class RegistryVersionOrderTest(unittest.TestCase):
         self.assertEqual(sorted(reversed(ordered), key=source.registry_version_key), ordered)
         self.assertEqual(source.registry_version_key("1.0.0+build.5"),
                          source.registry_version_key("1.0.0"))
+        # BCR's `^...$` match admits a trailing newline; the key fails closed on it.
         for version in ("", "1..0", ".1", "1.0.0-", "1.0.0-rc..1", "1.0 0", "1.0.0\n"):
             with self.subTest(version=version), \
                     self.assertRaisesRegex(ValueError, "invalid version list"):
                 source.registry_version_key(version)
+
+    def test_out_of_order_registry_list_is_refused_not_reordered(self):
+        upstream = {**self.TEMPLATE, "versions": ["0.9.0", "0.8.0"]}
+        with self.assertRaisesRegex(ValueError, "out of order"):
+            source.derive_metadata(upstream, self.TEMPLATE, "0.8.1")
+        with self.assertRaisesRegex(ValueError, "out of order"):
+            source.add_registry_version(["0.10.0", "0.9.0"], "0.11.0")
 
 
 if __name__ == "__main__":

@@ -217,8 +217,9 @@ def submission_metadata(registry: Path, validated: Path, source: Path, version: 
     """Derive the proposed `metadata.json` from the registry's HEAD and the maintainer template.
 
     The registry history may move after preflight: an earlier donner version can merge or be
-    yanked. The proposal therefore appends this version to HEAD's history instead of reusing
-    preflight's frozen copy, and preflight's copy must agree with it on every other field.
+    yanked. The proposal therefore adds this version to HEAD's history, in ascending version
+    order, instead of reusing preflight's frozen copy, and preflight's copy must agree with it on
+    every other field.
     """
     listed = subprocess.check_output(
         ["git", "-C", str(registry), "ls-tree", "--name-only", "HEAD", "--", METADATA_FILE])

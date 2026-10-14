@@ -313,6 +313,7 @@ def verify_yanked_metadata(yanked, expected_yanked: dict, version: str) -> None:
 HISTORY_KEYS = ("versions", "yanked_versions")
 # A Bazel module version as BCR's `tools/registry.py` `Version` parses it: dot-separated release
 # identifiers, an optional `-` prerelease, and a `+` build suffix that does not affect order.
+# Unlike that `^...$` match, a trailing newline is rejected.
 REGISTRY_VERSION = re.compile(r"([A-Za-z0-9.]+)(?:-([A-Za-z0-9.-]+))?(?:\+[A-Za-z0-9.-]+)?")
 
 
@@ -338,7 +339,12 @@ def registry_version_key(version: str) -> tuple:
 
 
 def add_registry_version(versions: list[str], version: str) -> list[str]:
-    """`versions` with `version` added, in the ascending order BCR presubmit requires."""
+    """`versions` with `version` added, in the ascending order BCR presubmit requires.
+
+    The registry's own list must already be in that order; it is never reordered.
+    """
+    if versions != sorted(versions, key=registry_version_key):
+        raise ValueError("registry metadata lists its versions out of order")
     return sorted([*versions, version], key=registry_version_key)
 
 
