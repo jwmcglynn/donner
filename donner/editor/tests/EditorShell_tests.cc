@@ -1917,6 +1917,16 @@ public:
     return snapshot->deviceId();
   }
 
+  static GlTextureCache& ThumbnailTextures(EditorShell& shell) { return shell.thumbnailTextures_; }
+
+  static std::shared_ptr<const svg::RendererTextureSnapshot> RenderProbeThumbnail(
+      EditorShell& shell) {
+    const auto element = shell.app_.document().document().querySelector("#background");
+    return element ? shell.layerThumbnailRenderer_.renderElement(*element, Vector2i(8, 8))
+                         .textureSnapshot()
+                   : nullptr;
+  }
+
   static std::uint64_t RenderLayerThumbnailDeviceId(EditorShell& shell) {
     const std::optional<svg::SVGElement> element =
         shell.app_.document().document().querySelector("#background");
@@ -2476,6 +2486,34 @@ TEST(EditorShellTest, HiddenWindowShellConstructsAndRunsFrames) {
 }
 
 #ifdef DONNER_EDITOR_WGPU
+TEST(EditorShellTest, FramesRetireReplacedLayerThumbnailSnapshots) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  ASSERT_TRUE(window.valid());
+  EditorShell shell(window, OptionsWithSource(kInitialSvg));
+  ASSERT_TRUE(shell.valid());
+  auto& cache = EditorShellTestAccess::ThumbnailTextures(shell);
+  constexpr std::uint64_t kProbeKey = std::numeric_limits<std::uint64_t>::max();
+  std::weak_ptr<const svg::RendererTextureSnapshot> retired;
+  {
+    const auto first = EditorShellTestAccess::RenderProbeThumbnail(shell);
+    const auto second = EditorShellTestAccess::RenderProbeThumbnail(shell);
+    ASSERT_NE(first, nullptr);
+    ASSERT_NE(second, nullptr);
+    ASSERT_NE(first, second);
+    ASSERT_NE(cache.retainThumbnailTextureSnapshot(kProbeKey, first).texture, 0u);
+    ASSERT_NE(cache.retainThumbnailTextureSnapshot(kProbeKey, second).texture, 0u);
+    retired = first;
+  }
+  ASSERT_FALSE(retired.expired());
+  ASSERT_EQ(cache.presentationResourceStats().pendingRetiredTextures, 1);
+  for (int frame = 0; frame < 3; ++frame) {
+    RunShellFrame(window, shell);
+    EXPECT_FALSE(retired.expired()) << "Keep replaced thumbnails through the safety window";
+  }
+  RunShellFrame(window, shell);
+  EXPECT_TRUE(retired.expired()) << "Normal editor frames must retire old layer thumbnails";
+}
+
 TEST(EditorShellTest, UiRuntimeProducersUseFramebufferDevice) {
   gui::EditorWindow window = MakeHiddenWindow();
   if (!window.valid()) {
