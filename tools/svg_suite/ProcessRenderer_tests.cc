@@ -18,6 +18,7 @@
 
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
+#include "tools/svg_suite/ProcessRendererInternal.h"
 
 namespace donner::svg_suite {
 namespace {
@@ -72,6 +73,132 @@ private:
   bool stopped_ = false;
 };
 
+class ScopedChildDisposition {
+public:
+  ScopedChildDisposition() = default;
+  ScopedChildDisposition(const ScopedChildDisposition&) = delete;
+  ScopedChildDisposition& operator=(const ScopedChildDisposition&) = delete;
+  ~ScopedChildDisposition() { restore(); }
+
+  bool install(void (*handler)(int), int flags) {
+    struct sigaction replacement {};
+    replacement.sa_handler = handler;
+    replacement.sa_flags = flags;
+    sigemptyset(&replacement.sa_mask);
+    active_ = sigaction(SIGCHLD, &replacement, &previous_) == 0;
+    return active_;
+  }
+
+  bool restore() {
+    if (!active_) {
+      return true;
+    }
+    if (sigaction(SIGCHLD, &previous_, nullptr) != 0) {
+      return false;
+    }
+    active_ = false;
+    return true;
+  }
+
+private:
+  struct sigaction previous_ {};
+  bool active_ = false;
+};
+
+void NotifyChild(int) {}
+
+bool SameChildDisposition(const struct sigaction& before) {
+  struct sigaction after {};
+  return sigaction(SIGCHLD, nullptr, &after) == 0 && before.sa_handler == after.sa_handler &&
+         before.sa_flags == after.sa_flags;
+}
+
+int CheckPolicyFixtureOutcome(std::string_view mode, const ImageResult& result,
+                              const std::filesystem::path& root) {
+  if (mode == "notify") {
+    return result.image && result.error.empty() ? 0 : 14;
+  }
+  if (result.image || result.error.find("SIGCHLD") == std::string::npos ||
+      std::filesystem::exists(root / "fixture/process/render.png")) {
+    return 15;
+  }
+  return 0;
+}
+
+int ReapingPolicyFixture(std::string_view mode, const std::filesystem::path& root) {
+  ScopedChildDisposition disposition;
+  const auto handler = mode == "ignored" ? SIG_IGN : mode == "notify" ? NotifyChild : SIG_DFL;
+  const int flags = mode == "auto-reap" ? SA_NOCLDWAIT : 0;
+  if (!disposition.install(handler, flags)) {
+    return 10;
+  }
+  struct sigaction before {};
+  if (sigaction(SIGCHLD, nullptr, &before) != 0) {
+    return 11;
+  }
+  const StaticCase test{"fixture", root, root / "input {root} {output} ; literal.svg",
+                        root / "expected.png"};
+  const auto renderer = MakeProcessRenderer({executable,
+                                             root,
+                                             {"--fixture", "success", "{output}", "{input}"},
+                                             std::chrono::seconds(2),
+                                             true});
+  const auto result = renderer(test, 1, 1);
+  if (!SameChildDisposition(before)) {
+    return 12;
+  }
+  if (!disposition.restore()) {
+    return 13;
+  }
+  return CheckPolicyFixtureOutcome(mode, result, root);
+}
+
+struct RecordingChildOperations {
+  internal::ChildObservation observation = internal::ChildObservation::Observed;
+  std::vector<pid_t> signals;
+  bool reaped = false;
+  void killProcessOrGroup(pid_t target) { signals.push_back(target); }
+  internal::ChildObservation observeExit(pid_t) { return observation; }
+  bool reapChild(pid_t, int&) {
+    reaped = true;
+    return true;
+  }
+};
+
+TEST(ProcessCleanupTest, KnownOwnershipLossNeverSignalsOrReaps) {
+  RecordingChildOperations operations;
+  int status = 0;
+  EXPECT_FALSE(internal::FinishChild(42, true, status, operations));
+  EXPECT_TRUE(operations.signals.empty());
+  EXPECT_FALSE(operations.reaped);
+}
+
+TEST(ProcessCleanupTest, LostOwnershipDuringObservationStopsFurtherSignals) {
+  RecordingChildOperations operations;
+  operations.observation = internal::ChildObservation::OwnershipLost;
+  int status = 0;
+  EXPECT_FALSE(internal::FinishChild(42, false, status, operations));
+  EXPECT_THAT(operations.signals, testing::ElementsAre(-42, 42));
+  EXPECT_FALSE(operations.reaped);
+}
+
+TEST(ProcessCleanupTest, FailedObservationOnlyAttemptsNonsignalingCollection) {
+  RecordingChildOperations operations;
+  operations.observation = internal::ChildObservation::Failed;
+  int status = 0;
+  EXPECT_FALSE(internal::FinishChild(42, false, status, operations));
+  EXPECT_THAT(operations.signals, testing::ElementsAre(-42, 42));
+  EXPECT_TRUE(operations.reaped);
+}
+
+TEST(ProcessCleanupTest, ReservedLeaderAllowsFinalGroupCleanupThenReaping) {
+  RecordingChildOperations operations;
+  int status = 0;
+  EXPECT_TRUE(internal::FinishChild(42, false, status, operations));
+  EXPECT_THAT(operations.signals, testing::ElementsAre(-42, 42, -42));
+  EXPECT_TRUE(operations.reaped);
+}
+
 class ProcessRendererTest : public testing::Test {
 protected:
   void SetUp() override {
@@ -91,6 +218,26 @@ protected:
         test_, 1, 1);
   }
 
+  int runPolicyFixture(const char* mode) {
+    const std::string executablePath = executable.string();
+    const std::string directory = root_.string();
+    const pid_t child = fork();
+    if (child < 0) {
+      return -1;
+    }
+    if (child == 0) {
+      execl(executablePath.c_str(), executablePath.c_str(), "--reaping-policy-fixture", mode,
+            directory.c_str(), static_cast<char*>(nullptr));
+      _exit(127);
+    }
+    int status = 0;
+    pid_t collected;
+    do {
+      collected = waitpid(child, &status, 0);
+    } while (collected < 0 && errno == EINTR);
+    return collected == child && WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+  }
+
   std::filesystem::path root_;
   StaticCase test_;
 };
@@ -107,6 +254,53 @@ TEST_F(ProcessRendererTest, InvalidUtf8ArgumentIsRejectedBeforeLaunch) {
   EXPECT_EQ(result.image, std::nullopt);
   EXPECT_THAT(result.error, testing::HasSubstr("UTF-8"));
   EXPECT_FALSE(std::filesystem::exists(root_ / "fixture/process"));
+}
+
+TEST_F(ProcessRendererTest, ValidUnicodeArgumentsRemainExactInProcessEvidence) {
+  test_.svgPath = root_ / "\xC3\xA9" / test_.svgPath.filename();
+  const auto result = render("success");
+  ASSERT_THAT(result.error, testing::IsEmpty());
+  ASSERT_TRUE(result.image);
+  std::ifstream input(root_ / "fixture/process/process.json");
+  const std::string record((std::istreambuf_iterator<char>(input)), {});
+  EXPECT_NE(record.find("\xC3\xA9"), std::string::npos);
+}
+
+TEST_F(ProcessRendererTest, OversizedDirectArgumentsAreRejectedBeforeLaunch) {
+  const auto result = render(std::string(65537, 'x'));
+  EXPECT_EQ(result.image, std::nullopt);
+  EXPECT_THAT(result.error, testing::HasSubstr("bounded"));
+  EXPECT_FALSE(std::filesystem::exists(root_ / "fixture/process"));
+}
+
+TEST_F(ProcessRendererTest, ExpandedArgumentsRemainBoundedBeforeLaunch) {
+  test_.svgPath = root_ / std::string(400, 'x');
+  std::string argument;
+  for (int index = 0; index < 200; ++index) {
+    argument += "{input}";
+  }
+  const auto result = render(argument);
+  EXPECT_EQ(result.image, std::nullopt);
+  EXPECT_THAT(result.error, testing::HasSubstr("bounded"));
+  EXPECT_FALSE(std::filesystem::exists(root_ / "fixture/process/render.png"));
+}
+
+TEST_F(ProcessRendererTest, IgnoredChildSignalsRejectBeforeRendererLaunch) {
+  EXPECT_EQ(runPolicyFixture("ignored"), 0);
+}
+
+TEST_F(ProcessRendererTest, AutoReapedChildrenRejectBeforeRendererLaunch) {
+  EXPECT_EQ(runPolicyFixture("auto-reap"), 0);
+}
+
+TEST_F(ProcessRendererTest, NotificationOnlyChildHandlerRemainsSupported) {
+  EXPECT_EQ(runPolicyFixture("notify"), 0);
+}
+
+TEST_F(ProcessRendererTest, RendererHasOwnGroupWithinParentSession) {
+  const auto result = render("identity");
+  EXPECT_THAT(result.error, testing::IsEmpty());
+  EXPECT_TRUE(result.image);
 }
 
 TEST_F(ProcessRendererTest, SuccessfulRenderPreservesLiteralArguments) {
@@ -208,6 +402,9 @@ TEST_F(ProcessRendererTest, SymlinkOutputCannotEscape) {
 namespace {
 
 int writeFixtureImage(const char* output, const char* input) {
+  if (getpgrp() != getpid()) {
+    return 15;
+  }
   if (!std::string_view(input).ends_with("input {root} {output} ; literal.svg")) {
     return 9;
   }
@@ -245,6 +442,12 @@ int descendantFixture(std::string_view mode, const char* output, const char* inp
 }
 
 int runFixture(std::string_view mode, const char* output, const char* input) {
+  if (mode == "identity") {
+    if (getpgrp() != getpid() || getsid(0) != getsid(getppid())) {
+      return 15;
+    }
+    return writeFixtureImage(output, input);
+  }
   if (mode.starts_with("descendant-")) {
     return descendantFixture(mode, output, input);
   }
@@ -287,10 +490,13 @@ int runFixture(std::string_view mode, const char* output, const char* input) {
 }  // namespace
 
 int main(int argc, char** argv) {
+  donner::svg_suite::executable = std::filesystem::canonical(argv[0]);
+  if (argc == 4 && std::string_view(argv[1]) == "--reaping-policy-fixture") {
+    return donner::svg_suite::ReapingPolicyFixture(argv[2], argv[3]);
+  }
   if (argc == 5 && std::string_view(argv[1]) == "--fixture") {
     return runFixture(argv[2], argv[3], argv[4]);
   }
-  donner::svg_suite::executable = std::filesystem::canonical(argv[0]);
   testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();
 }

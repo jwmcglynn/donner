@@ -77,6 +77,163 @@ TEST_F(ProvenanceTest, InvalidUtf8RevisionIsRejectedBeforeCapture) {
   EXPECT_FALSE(std::filesystem::exists(directory_ / "output/run.json"));
 }
 
+TEST_F(ProvenanceTest, AllDeclaredIdentitiesRejectInvalidEncodingBeforeSourceCapture) {
+  for (int field = 0; field < 8; ++field) {
+    auto config = options();
+    config.invocation = {"suite"};
+    config.rendererArguments = {"{input}"};
+    const std::vector<std::string*> fields = {
+        &config.engineRevision,      &config.backend,
+        &config.buildFlags,          &config.corpora[0].name,
+        &config.corpora[0].revision, &config.corpora[0].revisionEvidence,
+        &config.invocation[0],       &config.rendererArguments[0]};
+    *fields[field] = std::string("invalid-") + char(0xFF);
+    config.renderer = directory_ / "missing-renderer";
+    const auto result = CreateRunProvenance(config, directory_ / "output");
+    EXPECT_FALSE(result.run);
+    EXPECT_THAT(result.error, HasSubstr("UTF-8")) << field;
+  }
+}
+
+TEST_F(ProvenanceTest, UnicodeAndLiteralEscapesKeepDistinctExactIdentities) {
+  auto config = options();
+  config.engineRevision = "revision-\xC3\xA9";
+  config.backend = "\\xff";
+  config.buildFlags = "\xEF\xBF\xBD";
+  write("corpus/resources/unicode-\xC3\xA9.dat", std::string(1, char(0xFF)));
+  const auto result = CreateRunProvenance(config, directory_ / "output");
+  ASSERT_TRUE(result.run) << result.error;
+  std::ifstream input(result.run->recordPath);
+  const auto record = nlohmann::json::parse(input);
+  EXPECT_EQ(record["renderer"]["declared"]["revision"], config.engineRevision);
+  EXPECT_EQ(record["renderer"]["declared"]["backend"], config.backend);
+  EXPECT_EQ(record["renderer"]["declared"]["build_flags"], config.buildFlags);
+  EXPECT_TRUE(record["corpora"][0]["files"].contains("resources/unicode-\xC3\xA9.dat"));
+  EXPECT_THAT(VerifyRunProvenance(*result.run), IsEmpty());
+}
+
+TEST_F(ProvenanceTest, InvalidVerificationDiagnosticsRemainSafeRejectedEvidence) {
+  const auto run = CreateRunProvenance(options(), directory_ / "output");
+  ASSERT_TRUE(run.run) << run.error;
+  RunExecutionSummary execution;
+  execution.gtestOutput = std::string("xml:") + char(0xFF);
+  execution.xmlReport = directory_ / std::string("bad-").append(1, char(0xFF));
+  const auto issue =
+      WriteRunVerification(*run.run, std::string("changed-") + char(0xFF), 0, execution);
+  EXPECT_THAT(issue, HasSubstr("UTF-8"));
+  std::ifstream input(directory_ / "output/run-verification.json");
+  const auto record = nlohmann::json::parse(input);
+  EXPECT_EQ(record["accepted"], false);
+  EXPECT_EQ(record["complete_corpus_accepted"], false);
+  EXPECT_EQ(record["execution"]["gtest_output"], nullptr);
+  EXPECT_EQ(record["xml_report"], nullptr);
+  EXPECT_EQ(record["verification_error"], "changed-\xEF\xBF\xBD");
+  EXPECT_EQ(record["diagnostics_encoding"], "utf8-with-replacement");
+}
+
+#if defined(__linux__)
+TEST_F(ProvenanceTest, InvalidNativeResourceNameRejectsCaptureAndFinalVerification) {
+  write("corpus/resources/bad-\\xff", "literal backslash escape");
+  write("corpus/resources/bad-\xEF\xBF\xBD", "valid replacement scalar");
+  const auto run = CreateRunProvenance(options(), directory_ / "output");
+  ASSERT_TRUE(run.run) << run.error;
+  std::ifstream initial(run.run->recordPath);
+  const auto captured = nlohmann::json::parse(initial);
+  EXPECT_TRUE(captured["corpora"][0]["files"].contains("resources/bad-\\xff"));
+  EXPECT_TRUE(captured["corpora"][0]["files"].contains("resources/bad-\xEF\xBF\xBD"));
+  write(std::filesystem::path("corpus/resources") / std::string("bad-").append(1, char(0xFF)),
+        "data");
+  const auto rejected = CreateRunProvenance(options(), directory_ / "other-output");
+  EXPECT_FALSE(rejected.run);
+  EXPECT_THAT(rejected.error, HasSubstr("UTF-8"));
+  const auto issue = VerifyRunProvenance(*run.run);
+  EXPECT_THAT(issue, HasSubstr("UTF-8"));
+  EXPECT_THAT(WriteRunVerification(*run.run, issue, 0), Not(IsEmpty()));
+  std::ifstream input(directory_ / "output/run-verification.json");
+  EXPECT_EQ(nlohmann::json::parse(input)["accepted"], false);
+}
+#endif
+
+TEST_F(ProvenanceTest, HandcraftedInvalidCaseProvenanceNeverInvokesCallback) {
+  auto discovery = DiscoverCases({{"fixture", directory_ / "corpus"}});
+  ASSERT_THAT(discovery.error, IsEmpty());
+  auto run = std::make_shared<RunProvenance>();
+  run->runId = std::string("bad-") + char(0xFF);
+  run->recordPath = directory_ / "run.json";
+  run->workRoot = directory_ / "work";
+  discovery.cases.front().provenance = run;
+  bool called = false;
+  const auto result = RunCase(
+      discovery.cases.front(),
+      [&called](const StaticCase&, int, int) {
+        called = true;
+        return ImageResult{red(), {}};
+      },
+      directory_ / "output");
+  EXPECT_FALSE(called);
+  EXPECT_FALSE(result.passed);
+  EXPECT_THAT(result.error, HasSubstr("UTF-8"));
+  EXPECT_TRUE(result.artifactDirectory.empty());
+}
+
+TEST_F(ProvenanceTest, CallbackDiagnosticReplacementCannotAlterIdentityFields) {
+  const auto run = CreateRunProvenance(options(), directory_ / "output");
+  ASSERT_TRUE(run.run) << run.error;
+  auto discovery = DiscoverCases({{"fixture", directory_ / "corpus"}});
+  ASSERT_THAT(discovery.error, IsEmpty());
+  auto test = discovery.cases.front();
+  test.provenance = run.run;
+  const auto result = RunCase(
+      test,
+      [](const StaticCase&, int, int) { return ImageResult{{}, std::string(65537, char(0xFF))}; },
+      directory_ / "output");
+  EXPECT_FALSE(result.passed);
+  EXPECT_FALSE(result.mismatchedPixels);
+  std::ifstream input(result.artifactDirectory / "metrics.json");
+  const auto record = nlohmann::json::parse(input);
+  EXPECT_EQ(record["run_id"], run.run->runId);
+  EXPECT_EQ(record["test_id"], test.id);
+  EXPECT_EQ(record["input"], "tests/a.svg");
+  EXPECT_EQ(record["status"], "error");
+  EXPECT_EQ(record["mismatched_pixels"], nullptr);
+  EXPECT_EQ(record["diagnostics_encoding"], "utf8-with-replacement");
+  EXPECT_EQ(record["diagnostics_truncated"], true);
+  EXPECT_EQ(record["diagnostics"].get<std::string>().size(),
+            65536u * 3u + std::string("[diagnostic truncated]").size());
+}
+
+TEST_F(ProvenanceTest, InvalidRunIdentityStillWritesRejectedEvidenceAtValidDestination) {
+  const auto created = CreateRunProvenance(options(), directory_ / "output");
+  ASSERT_TRUE(created.run) << created.error;
+  auto run = *created.run;
+  run.runId = std::string("invalid-") + char(0xFF);
+  EXPECT_THAT(WriteRunVerification(run, "", 0), HasSubstr("UTF-8"));
+  std::ifstream input(directory_ / "output/run-verification.json");
+  const auto record = nlohmann::json::parse(input);
+  EXPECT_EQ(record["run_id"], nullptr);
+  EXPECT_EQ(record["accepted"], false);
+  EXPECT_EQ(record["complete_corpus_accepted"], false);
+  EXPECT_THAT(record["identity_error"].get<std::string>(), HasSubstr("UTF-8"));
+}
+
+TEST_F(ProvenanceTest, SourceErrorReturnsFailureEvenWithValidXmlEvidence) {
+  const auto run = CreateRunProvenance(options(), directory_ / "output");
+  ASSERT_TRUE(run.run) << run.error;
+  write("output/report.xml",
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?><testsuites></testsuites>\n");
+  RunExecutionSummary execution;
+  execution.discoveredCases = execution.selectedCases = execution.completedCases = 1;
+  execution.completedInvocations = 1;
+  execution.gtestOutput = "xml";
+  execution.xmlReport = directory_ / "output/report.xml";
+  EXPECT_THAT(WriteRunVerification(*run.run, std::string("changed-") + char(0xFF), 0, execution),
+              HasSubstr("changed-"));
+  std::ifstream input(directory_ / "output/run-verification.json");
+  const auto record = nlohmann::json::parse(input);
+  EXPECT_EQ(record["accepted"], false);
+  EXPECT_FALSE(record["xml_report"].is_null());
+}
+
 TEST_F(ProvenanceTest, RunBindsActualBytesAndKeepsLabelsUnverified) {
   const auto run = CreateRunProvenance(options(), directory_ / "output");
   ASSERT_TRUE(run.run) << run.error;

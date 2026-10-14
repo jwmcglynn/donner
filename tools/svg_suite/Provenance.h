@@ -83,6 +83,7 @@ struct ProvenanceResult {
 
 /// Hash all corpus files, including fonts/resources, and exclusively create read-only run.json.
 /// Existing run.json is an error. artifactRoot must be outside all source corpora.
+/// Identity text and paths require bounded NUL-free UTF-8; file contents remain arbitrary bytes.
 ProvenanceResult CreateRunProvenance(const ProvenanceOptions& options,
                                      const std::filesystem::path& artifactRoot);
 
@@ -118,7 +119,8 @@ struct RunExecutionSummary {
 
 /// Preserve source validation, observed execution scope and any generated XML report fingerprint.
 /// Acceptance requires execution observations and a nonempty, bounded GoogleTest XML report.
-/// A report failure is recorded in the rejected verification file and returned as an error.
+/// Source, identity and report failures are recorded as rejected evidence and returned as errors.
+/// Invalid execution identities reject the report; diagnostics alone use bounded UTF-8 replacement.
 std::string WriteRunVerification(const RunProvenance& run, std::string_view verificationError,
                                  int testExitCode, const RunExecutionSummary& execution = {});
 

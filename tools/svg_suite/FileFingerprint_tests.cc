@@ -39,6 +39,13 @@ protected:
   std::filesystem::path directory_;
 };
 
+TEST_F(FileFingerprintTest, InvalidPathIsRejectedBeforeFilesystemAccess) {
+  const auto path = directory_ / std::string("bad-").append(1, char(0xFF));
+  const auto result = FingerprintFile(path, 1024);
+  EXPECT_FALSE(result.fingerprint);
+  EXPECT_THAT(result.error, HasSubstr("UTF-8"));
+}
+
 TEST_F(FileFingerprintTest, StandardSha256KnownVectorsAndStreaming) {
   const std::vector<std::pair<std::string, std::string>> vectors = {
       {"", "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"},

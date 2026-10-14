@@ -27,7 +27,11 @@ struct ProcessRendererOptions {
 /// and output files at 32 MiB. Linux enforces RLIMIT_AS; other hosts require explicit trusted
 /// inputs and report that renderer memory is not enforced. Each invocation preserves its own
 /// working directory. This contains crashes/timeouts, not arbitrary native code: use trusted
-/// renderer executables.
+/// renderer executables. Paths and argv must be bounded NUL-free UTF-8; invalid text is rejected
+/// before child launch. Raw renderer diagnostics remain byte-preserving.
+/// The caller must exclusively own reaping these children and keep SIGCHLD disposition unchanged
+/// while callbacks execute. SIG_IGN and SA_NOCLDWAIT are rejected without modifying process state;
+/// custom notification-only handlers are allowed. Known loss of ownership stops cleanup signals.
 /// @param options Explicit executable, argv template, work directory and timeout.
 Renderer MakeProcessRenderer(ProcessRendererOptions options);
 

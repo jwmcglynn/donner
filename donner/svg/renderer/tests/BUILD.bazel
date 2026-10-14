@@ -1243,10 +1243,8 @@ donner_cc_test(
     ],
 )
 
-# Portable SVG2 test suite (design 0057): the Donner render adapter and a thin
-# reuse of Donner's image comparison, plus the pilot parity test that drives the
-# portable reference runner against a small resvg subset. See
-# docs/design_docs/0057-donner_svg2_test_suite.md (Rollout step 4).
+# The compatibility adapter and pilot share the native image comparator. The extension
+# conformance target below runs the reusable GoogleTest suite over plain SVG/PNG pairs.
 
 donner_cc_binary(
     name = "donner_svg2_render_adapter",

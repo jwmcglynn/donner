@@ -7,6 +7,8 @@
 #include <string_view>
 #include <utility>
 
+#include "tools/svg_suite/TextEncoding.h"
+
 namespace donner::svg_suite {
 namespace {
 size_t completedInvocations = 0;
@@ -32,8 +34,13 @@ public:
 };
 
 std::filesystem::path XmlReportPath(std::string_view output) {
+  if (!IsValidIdentityText(output)) {
+    return {};
+  }
   if (output == "xml") {
-    return std::filesystem::absolute("test_detail.xml");
+    std::error_code error;
+    const auto path = std::filesystem::absolute("test_detail.xml", error);
+    return error ? std::filesystem::path{} : path;
   }
   if (!output.starts_with("xml:")) {
     return {};
@@ -47,7 +54,7 @@ std::filesystem::path XmlReportPath(std::string_view output) {
 }
 
 std::string CheckFreshXmlDestination(const std::filesystem::path& path) {
-  if (path.empty()) {
+  if (path.empty() || !Utf8Path(path)) {
     return "XML evidence requires xml or xml:<file>; JSON and directory output are unsupported";
   }
   std::error_code error;
@@ -73,6 +80,11 @@ void RecordCorpusCounts(RunExecutionSummary& summary) {
   }
 }
 
+std::string PathLogText(const std::filesystem::path& path) {
+  const auto text = Utf8Path(path);
+  return text ? EscapeLogText(*text) : "<path requires bounded NUL-free UTF-8>";
+}
+
 class StaticImageTest : public testing::Test {
 public:
   StaticImageTest(StaticCase test, Renderer renderer, std::filesystem::path artifactRoot,
@@ -90,11 +102,12 @@ public:
     const CaseResult result = RunCase(test_, renderer_, artifactRoot_, options_);
     ++completedInvocations;
     completedCases.insert(test_.id);
-    EXPECT_TRUE(result.passed)
-        << EscapeLogText(test_.svgPath.string()) << ": " << EscapeLogText(result.error)
-        << "; mismatched pixels: "
-        << (result.mismatchedPixels ? std::to_string(*result.mismatchedPixels) : "unavailable")
-        << "; artifacts: " << EscapeLogText(result.artifactDirectory.string());
+    EXPECT_TRUE(result.passed) << PathLogText(test_.svgPath) << ": " << EscapeLogText(result.error)
+                               << "; mismatched pixels: "
+                               << (result.mismatchedPixels
+                                       ? std::to_string(*result.mismatchedPixels)
+                                       : "unavailable")
+                               << "; artifacts: " << PathLogText(result.artifactDirectory);
   }
 
 private:
@@ -142,8 +155,8 @@ std::string RegisterTests(const DiscoveryResult& discovery, Renderer renderer,
   }();
   (void)listenerInstalled;
   for (const StaticCase& test : discovery.cases) {
-    testing::RegisterTest("SvgSuite", test.id.c_str(), nullptr,
-                          EscapeLogText(test.svgPath.string()).c_str(), __FILE__, __LINE__,
+    testing::RegisterTest("SvgSuite", test.id.c_str(), nullptr, PathLogText(test.svgPath).c_str(),
+                          __FILE__, __LINE__,
                           [test, renderer, artifactRoot, options]() -> StaticImageTest* {
                             return new StaticImageTest(test, renderer, artifactRoot, options);
                           });

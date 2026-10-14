@@ -26,7 +26,7 @@ add_library(suite_image ImageCompare.cc StbStandalone.cc)
 target_include_directories(suite_image PUBLIC "${SUITE_ROOT}")
 target_include_directories(suite_image SYSTEM PRIVATE "${SUITE_ROOT}/third_party")
 target_link_libraries(suite_image PUBLIC suite_pixelmatch)
-add_library(svg_suite StaticSuite.cc GtestSuite.cc FileFingerprint.cc)
+add_library(svg_suite StaticSuite.cc GtestSuite.cc FileFingerprint.cc TextEncoding.cc)
 target_include_directories(svg_suite SYSTEM PRIVATE "${json_SOURCE_DIR}/include" "${picosha2_SOURCE_DIR}")
 target_link_libraries(svg_suite PUBLIC suite_image GTest::gtest)
 if(UNIX)
@@ -97,3 +97,7 @@ install(FILES "${SUITE_ROOT}/docs/svg2_audit.md" "${SUITE_ROOT}/docs/svg2_audit_
 install(FILES "${SUITE_ROOT}/docs/design_docs/0057-donner_svg2_test_suite.md"
               "${SUITE_ROOT}/docs/design_docs/0026-svg_conformance_testing.md"
   DESTINATION docs/design_docs)
+
+add_executable(text-encoding-tests TextEncoding_tests.cc)
+target_link_libraries(text-encoding-tests PRIVATE svg_suite GTest::gtest_main)
+add_test(NAME text-encoding-tests COMMAND text-encoding-tests)

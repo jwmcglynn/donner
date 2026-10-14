@@ -40,6 +40,7 @@ struct DiscoveryResult {
 
 /// Find lowercase .svg files recursively under root/tests when present, otherwise under root.
 /// Require a same-stem PNG and bounded regular inputs.
+/// Require bounded NUL-free UTF-8 names and paths, preserving accepted bytes exactly.
 /// Reject missing/empty roots, duplicate names and symlink escapes. No directory symlinks followed.
 /// @param roots Named roots, normally the upstream corpus and the extension corpus.
 DiscoveryResult DiscoverCases(const std::vector<CorpusRoot>& roots);

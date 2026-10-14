@@ -126,7 +126,8 @@ int RunFixture(int argc, char** argv) {
   if (fixtureMode == "--fixture-remove-xml") {
     std::filesystem::remove(execution.xmlReport);
   }
-  const auto error = WriteRunVerification(*provenance.run, "", result, execution);
+  const auto sourceError = fixtureMode == "--fixture-source-error" ? "source changed" : "";
+  const auto error = WriteRunVerification(*provenance.run, sourceError, result, execution);
   return error.empty() || result != 0 ? result : 3;
 }
 
@@ -372,6 +373,32 @@ TEST_F(GtestSuiteTest, FailFastSkipsDoNotCountAsCompletedCases) {
   EXPECT_THAT(record, testing::HasSubstr("\"completed_cases\": 1"));
   EXPECT_THAT(record, testing::HasSubstr("\"skipped_invocations\": 1"));
   EXPECT_THAT(record, testing::HasSubstr("\"corpus_complete\": false"));
+}
+
+TEST_F(GtestSuiteTest, InvalidUtf8XmlDestinationRejectsBeforeAnyCaseExecutes) {
+  EXPECT_EQ(run({"--gtest_filter=SvgSuite.*",
+                 "--gtest_output=xml:invalid-" + std::string(1, char(0xFF))}),
+            2);
+  const auto record = verification();
+  EXPECT_THAT(record, testing::HasSubstr("\"accepted\": false"));
+  EXPECT_THAT(record, testing::HasSubstr("\"completed_invocations\": 0"));
+  EXPECT_THAT(record, testing::HasSubstr("\"gtest_output\": null"));
+  EXPECT_TRUE(reports(root_ / "artifacts", "metrics.json").empty());
+}
+
+TEST_F(GtestSuiteTest, UnicodeXmlDestinationKeepsExactEvidenceIdentity) {
+  const auto path = root_ / "chosen-\xC3\xA9.xml";
+  EXPECT_EQ(run({"--gtest_filter=SvgSuite.*", "--gtest_output=xml:" + path.string()}), 0);
+  EXPECT_TRUE(std::filesystem::is_regular_file(path));
+  EXPECT_THAT(verification(), testing::HasSubstr("chosen-\xC3\xA9.xml"));
+}
+
+TEST_F(GtestSuiteTest, SourceErrorWithValidXmlReturnsNonzero) {
+  EXPECT_EQ(run({"--fixture-source-error", "--gtest_filter=SvgSuite.*"}), 3);
+  const auto record = verification();
+  EXPECT_THAT(record, testing::HasSubstr("\"accepted\": false"));
+  EXPECT_THAT(record, testing::HasSubstr("\"completed_invocations\": 2"));
+  EXPECT_THAT(record, testing::HasSubstr("\"xml_report\": {"));
 }
 
 TEST_F(GtestSuiteTest, ExplicitXmlOutputIsPreserved) {

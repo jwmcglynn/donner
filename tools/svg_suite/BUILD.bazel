@@ -6,6 +6,14 @@ package(default_visibility = ["//visibility:public"])
 exports_files(["dependencies.bzl"])
 
 cc_library(
+    name = "text_encoding",
+    testonly = True,
+    srcs = ["TextEncoding.cc"],
+    hdrs = ["TextEncoding.h"],
+)
+
+
+cc_library(
     name = "image_compare",
     testonly = True,
     srcs = ["ImageCompare.cc"],
@@ -23,6 +31,7 @@ cc_library(
     srcs = ["StaticSuite.cc"],
     hdrs = ["StaticSuite.h"],
     deps = [
+        ":text_encoding",
         ":file_fingerprint",
         ":image_compare",
         "@nlohmann_json//:json",
@@ -35,6 +44,7 @@ cc_library(
     srcs = ["GtestSuite.cc"],
     hdrs = ["GtestSuite.h"],
     deps = [
+        ":text_encoding",
         ":file_fingerprint",
         ":static_suite",
         "@com_google_gtest//:gtest",
@@ -55,8 +65,9 @@ cc_library(
     name = "process_renderer",
     testonly = True,
     srcs = ["ProcessRenderer.cc"],
-    hdrs = ["ProcessRenderer.h"],
+    hdrs = ["ProcessRenderer.h", "ProcessRendererInternal.h"],
     deps = [
+        ":text_encoding",
         ":static_suite",
         "@nlohmann_json//:json",
     ],
@@ -74,6 +85,7 @@ cc_binary(
         "//third_party/resvg-test-suite:tests",
     ],
     deps = [
+        ":text_encoding",
         ":gtest_suite",
         ":process_renderer",
         ":provenance",
@@ -104,6 +116,7 @@ cc_test(
         "//donner/svg/renderer/tests:svg_suite_extension",
     ],
     deps = [
+        ":text_encoding",
         ":gtest_suite",
         ":process_renderer",
         ":provenance",
@@ -116,6 +129,7 @@ cc_library(
     testonly = True,
     srcs = ["Provenance.cc"],
     deps = [
+        ":text_encoding",
         ":file_fingerprint",
         "@nlohmann_json//:json",
         "@picosha2",
@@ -150,6 +164,7 @@ cc_library(
     srcs = ["FileFingerprint.cc"],
     hdrs = ["Provenance.h"],
     deps = [
+        ":text_encoding",
         ":image_compare",
         "@picosha2",
     ],
@@ -170,5 +185,14 @@ cc_test(
     deps = [
         ":gtest_suite",
         "@com_google_gtest//:gtest",
+    ] + libc_compat_deps(),
+)
+
+cc_test(
+    name = "text_encoding_tests",
+    srcs = ["TextEncoding_tests.cc"],
+    deps = [
+        ":text_encoding",
+        "@com_google_gtest//:gtest_main",
     ] + libc_compat_deps(),
 )

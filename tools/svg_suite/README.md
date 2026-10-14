@@ -22,6 +22,11 @@ Run the command from the repository root. Use the same build configuration for `
 On a host without supported child address-space limits, the runner rejects execution unless
 `--trusted-inputs` is explicitly supplied for a reviewed corpus and trusted executable. That flag
 records the missing memory enforcement; it does not enable a sandbox or certify input safety.
+The caller must exclusively own reaping the process adapter's children and must not change SIGCHLD
+handling during a callback. The adapter rejects SIG_IGN and SA_NOCLDWAIT without changing them;
+notification-only handlers remain supported. Only the child establishes its process group. Cleanup
+reserves the leader PID until descendant signals finish and stops signaling after known ownership
+loss. Concurrent external reaping violates this contract; a signal-handler check cannot prevent it.
 
 The combined audit intentionally reports existing rendering gaps as failures, using strict identity
 pixelmatch by default. It does not inherit Donner's historical skip/tolerance table. Never turn its
@@ -108,8 +113,20 @@ The check recognizes the complete GoogleTest XML envelope and fingerprints the s
 GoogleTest as the producer and is not a general XML validator or an adversarial filesystem sandbox.
 Untrusted diagnostics and path fields are escaped to printable ASCII in runner output, including
 GoogleTest parameter descriptions. Process `renderer.log` retains the exact diagnostic bytes.
-Case JSON marks `diagnostics_encoding: utf8-with-replacement`: invalid UTF-8 bytes become replacement
-characters in its diagnostic string, so malformed child output cannot abort case-result writing. Escaping
+Suite names, paths, revision labels and argv must be bounded, NUL-free UTF-8. Accepted identities
+retain their exact bytes, including valid Unicode and literal backslash escapes; no Unicode
+normalization or replacement is applied to provenance keys. Invalid identities fail before their
+source is hashed or a renderer is launched. This does not constrain SVG or resource file contents.
+Direct callback and process-adapter callers have the same encoding contract as the CLI.
+Case and verification JSON mark `diagnostics_encoding: utf8-with-replacement`: each malformed byte
+in diagnostic text becomes U+FFFD. Diagnostic displays consume at most 64 KiB of input and append
+`[diagnostic truncated]` when longer, with explicit truncation flags. Process capture retains its
+existing 16 KiB cap and raw `renderer.log` bytes. Identity fields use strict JSON serialization.
+Malformed execution metadata rejects verification; an invalid `execution.gtest_output` or `run_id`
+is null and an invalid XML path has no `xml_report`. A malformed run ID records `identity_error`
+at a valid destination. Source verification errors return failure even when XML evidence is valid. Neither can be replaced into accepted evidence. An invalid
+setup identity or evidence destination returns an error without inventing an alternate output path.
+Escaping
 prevents embedded control bytes from creating log records; it is not redaction or authentication.
 The optional raw-log triage tools explicitly report unverified provenance. Use the trusted run's
 structured metrics and verification artifacts for comparison decisions.

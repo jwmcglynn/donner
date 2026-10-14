@@ -1,7 +1,9 @@
 # SVG2 Audit {#Svg2Audit}
 
-This ledger is for developers evaluating Donner v1.0 against SVG2. It contains a complete chapter
-navigation inventory and a small set of inspected requirements. **No chapter is fully audited yet.**
+This ledger is for developers evaluating Donner v1.0 against SVG2. It contains a historical chapter
+navigation inventory and current requirement reviews for chapters 7 and 12. **The overall audit
+remains incomplete:** dependency closure, host applicability, implementation and test evidence still
+have open items. Local chapter reading is distinct from conformance.
 The [current chapter review](svg2_chapter_review.md) records the first-pass findings and concrete native test priorities.
 The inventory counts do not establish coverage. Passing rows identify only the narrow assertions exercised by named tests.
 The implementation plan is [0057](design_docs/0057-donner_svg2_test_suite.md).
@@ -65,8 +67,9 @@ inferred from the number of mapped tests.
 Section links and HTML table counts below are mechanically inventoried from the older `13f29ae8` response.
 They have not been regenerated or admitted as current-draft coverage.
 Counts include informative/example tables; they are navigation aids, not normative-requirement totals.
-Interface-member inspection and table review remain open for every chapter, including chapters with
-selected inspected requirements below. Appendix A contains consolidated IDL; Appendix I is an index.
+The current local reviews below supersede this historical reading state for chapters 7 and 12.
+Other chapters still need complete interface-member and table inspection. Appendix A contains
+consolidated IDL; Appendix I is an index.
 
 | Chapter / appendix                                                                                                           | Direct sections               | HTML tables | Complete review |
 | ---------------------------------------------------------------------------------------------------------------------------- | ----------------------------- | ----------: | --------------- |
@@ -195,6 +198,195 @@ The source bibliography places some animation references outside its normative-r
 Keep their classification and the requirements that actually invoke them explicit. Draft status is
 reported in the baseline, not converted into an artificial failing test. A supported SVG feature
 can legitimately be specified by a draft; passing evidence remains scoped to that pinned draft.
+
+## Chapter 7: geometry-property requirement review
+
+This completes the local clause review of the pinned current `fc7791bd` draft (`66eb6613` publication
+bytes): all eight subsections, seven property-definition tables, the negative-value table and the
+sizing table. Chapter 7 defines no IDL interfaces; geometry reflection and live objects remain with
+chapters 4, 8 and 10. **The chapter is not implementation- or conformance-complete.**
+
+Foundation source observations refer to `efd169b1`, whose inspected geometry code matches `4e95ce40`.
+The separate CSS-length proposal at `3bfd6270` is identified explicitly below. Source presence,
+loop iterations and wrapper-test counts are not interchangeable with executed native cases.
+
+### Current requirements and bounded evidence
+
+The seven SVG-specific property tables all say non-inherited, visual, and animated by computed
+value. Their computed values retain percentages and otherwise use absolute lengths. This does not
+remove explicit CSS-wide inheritance or establish any particular animation technology. Width and
+height obtain their definitions from CSS2.1 with the SVG-specific applicability and auto resolution
+in 7.8.
+
+| Section / property | Required behavior | Foundation evidence and remaining case |
+| --- | --- | --- |
+| [Negative-value handling](https://w3c.github.io/svgwg/svg2-draft/geometry.html#geometry-negative-values) | Negative coordinates remain valid. Negative r substitutes initial 0; negative rx/ry/width/height substitute initial auto, in attributes **and CSS declarations**. Normal used-value resolution follows. | This supersedes the older audit's proposed negative-declaration fallback oracle. Radius helpers and no-geometry branches show some matching used results, but computed-value normalization and cascade participation need targeted assertions. Compare a positive attribute/lower declaration against a winning negative value, plus negative-coordinate controls. |
+| [7.1 cx](https://w3c.github.io/svgwg/svg2-draft/geometry.html#CX) | Circle/ellipse horizontal center; initial 0; viewport-width percentages; negatives allowed. | `CircleComponent`/`EllipseComponent` and `ShapeSystem` use X extent. `missing-test`: non-square viewport, translated negative center, CSS precedence and computed lengths under nondefault font metrics. |
+| [7.2 cy](https://w3c.github.io/svgwg/svg2-draft/geometry.html#CY) | Circle/ellipse vertical center; initial 0; viewport-height percentages; negatives allowed. | Same path uses Y extent. Pair cx/cy percentages on the same non-square viewport so exchanging axes cannot pass. Existing element unit tests are assertion pointers, not a new executed chapter pass. |
+| [7.3 r](https://w3c.github.io/svgwg/svg2-draft/geometry.html#R) | Circle radius; initial 0; percentages use the normalized viewport diagonal; nonpositive used radius produces no circle. | `Length::toPixels` uses mixed extent and `ShapeSystem` suppresses nonpositive radius. A negative-only blank fixture cannot distinguish initial substitution from invalid-declaration fallback. Add computed-radius/bounds and positive-then-negative cascade controls. |
+| [7.4 rx](https://w3c.github.io/svgwg/svg2-draft/geometry.html#RX) | Ellipse/rect radius; initial auto. Auto copies the other radius's resolved absolute length; both auto use 0. Rect rx is capped at half used width. | Automatic-radius repair is merged and present. Seven named analytic pairs pass in the completed foundation extension run; typed tests also cover fallback-axis resolution. This closes the reproduced explicit-auto crash, not all radius semantics. Rect percentage basis remains disputed below. |
+| [7.5 ry](https://w3c.github.io/svgwg/svg2-draft/geometry.html#RY) | Symmetric auto rules; rect ry is capped at half used height. Its percentage table names viewport height. | Same shared helper and independent clamp. Retain one-auto/one-length and both-auto controls; add unequal radii above their two different clamps. Negative-to-auto computed state remains distinct from a coincidentally matching rendered shape. |
+| [7.6 x](https://w3c.github.io/svgwg/svg2-draft/geometry.html#X) | Initial 0; width-relative percentages; applies to svg/rect/image/foreignObject. | Existing strict CSS-x precedence pair passes. Foundation deferred geometry still admits unitless CSS numbers. Separate `3bfd6270` addresses rect grammar; it does not close general cascade or other element types. ForeignObject remains a host/element gap. |
+| [7.7 y](https://w3c.github.io/svgwg/svg2-draft/geometry.html#Y) | Initial 0; height-relative percentages; same element applicability. | Rect and sized-element paths use Y extent. The separate rect component tests cover y grammar, but no equivalent narrow end-to-end y result is claimed here. Add negative y, stylesheet precedence and non-square percentage controls. |
+| [7.8 width/height](https://w3c.github.io/svgwg/svg2-draft/geometry.html#Sizing), applicability | CSS sizing applies to rect, image, foreignObject and outermost svg. This section excludes nested svg/use/symbol CSS sizing. | The shared sized-element property path does not establish that exclusion. Chapter 5 contains conflicting applicability language; hold that boundary open instead of silently selecting one chapter. Attributes and CSS must be distinguished in the eventual regression. |
+| 7.8, auto used values | SVG uses 100%; image uses intrinsic sizing; other applicable elements use 0. ForeignObject does not shrink-wrap. | Rect/layout width and height parsers accept lengths/percentages, not explicit auto. Omission is not sufficient evidence: test a positive authored size overridden by auto. Audit nullable `isSpecified()`/value accesses before admitting auto into those paths. Outer-svg viewport controls belong with chapter 8. |
+| 7.8, image sizing | Referenced dimensions/ratio and CSS default sizing determine omitted axes. | The independently reviewed chapter-12 probe has 5 passes/8 failures over 13 analytic cases. A separate source issue resolves a specified percentage height with X extent and percentage width with Y extent. Add non-square raster percentage-axis controls; do not count the absolute-size intrinsic probe as that regression. |
+| 7.8, constraints | Applicable min/max width/height constrain used dimensions. | No corresponding registrations or constraint pass were found in the inspected SVG path. Source candidate: one-axis min/max cases with intrinsic image ratios and SVG geometry, pinned to the applicable CSS rules. This does not authorize an unrelated HTML layout implementation. |
+
+Primary source locations are [shape components](../donner/svg/components/shape/RectComponent.cc),
+[radius resolution](../donner/svg/properties/RxRyProperties.cc),
+[shape construction](../donner/svg/components/shape/ShapeSystem.cc),
+[length conversion](../donner/base/Length.h), and
+[sized-element layout](../donner/svg/components/layout/LayoutSystem.cc).
+
+### Executed evidence and integration boundaries
+
+- **Merged automatic radii:** repair merge `5e8f3e69` is an ancestor of foundation `efd169b1`.
+  The completed affected run at `4e95ce40` contains 17 extension cases, including all seven
+  `geometry/automatic-radii` pairs, with no failures or skips. These independently specified
+  references exercise explicit rx/ry/both-auto and CSS rectangle auto; ellipse cases have a visible
+  red control and add no blue geometry. This is the completed affected run, not a subsequently
+  interrupted full invocation. It does not resolve rectangle percentage-radius interpretation.
+- **Separate CSS-length PR [1871](https://github.com/jwmcglynn/donner/pull/1871), `3bfd6270`:**
+  rect component assertions reject nonzero unitless CSS across all six rect geometry properties
+  while preserving unitless zero and explicit units. End-to-end assertions are narrower: inline and
+  stylesheet rect x, percentages, six zero spellings, attribute units and a valid unitless
+  stroke-width control. Earlier source-bound results are 577 C++ tests, four Geode tests and three
+  strict analytic pairs; the implementation/assets are unchanged at `3bfd6270`. The last change
+  changes only three JSON metadata files. Its owning gates have 11 and 18 metadata unittests plus **one**
+  unittest asserting all 19 manifest render cases. These are not 19 JUnit records, a fresh rerun of
+  the 577 tests, foundation coverage, or a completed full-qualification claim.
+- **Shared cascade remains unresolved:** two separate probe runs on the CSS-length candidate
+  completed 25 cases: 13 pass and 12 fail, no skips. They expose ordering/validity/specificity and
+  importance behavior, including parsed fill, not merely geometry parsing. They are coordination
+  evidence for the pending shared repair. Foundation behavior is not inferred from those branch
+  results, and the grammar PR does not claim to fix them.
+
+### Shared requirements still needing evidence
+
+| Surface | Inspected implementation | Narrow next assertions |
+| --- | --- | --- |
+| Attribute versus CSS grammar | Foundation computed rect/circle/ellipse and sized-element parsers use `AllowUserUnits`; the separate rect fix uses CSS grammar and recognizes numerical zero. | Preserve valid attribute numbers and CSS zero while rejecting nonzero unitless CSS on each applicable element/property. `stroke-width` explicitly admits numbers and must remain a positive control. |
+| Cascade validity and priority | Deferred declarations are selected before element parsing; the unresolved probe identifies first-entry retention and shared importance/order issues. | Valid/invalid in both source orders, specificity, important/normal, inline versus stylesheet, multiple style elements and mutation. Do not repair by blind last-write replacement that loses a valid fallback. |
+| Inheritance and computed values | Native properties have non-inherited defaults; `PropertyRegistry::inheritFrom` does not inherit deferred properties. | Separate implicit noninheritance from explicit inherit, initial, unset and revert. Resolve relative units using the right parent/root font metrics and preserve percentage computed values. Compare typed geometry with pixels. |
+| CSS math | The inspected length-percentage parser accepts a single numeric/dimension/percentage token, not a function expression. | Source candidate: positive mixed length/percentage `calc()` with an independent expected value, followed by invalid-expression and out-of-range controls after resolving the range question below. Do not import Level 4-only functions as requirements. |
+| Animation | Property tables specify computed-value interpolation, while supported animation methods are a separate product contract. | Coordination only: animation samples must retain their origin below author-important declarations and preserve explicit native override behavior. Integrate source-bound native clock tests for mixed units, percentage resolution, auto transitions, base restoration and computed queries. No unmerged animation results are credited to this foundation. |
+
+### Specification and dependency boundaries
+
+The bibliography-selected dependencies remain [CSS Values 3 CR 2018-08-14](https://www.w3.org/TR/2018/CR-css-values-3-20180814/),
+[Cascade 4 CR 2016-01-14](https://www.w3.org/TR/2016/CR-css-cascade-4-20160114/),
+[CSS2.1 REC 2011-06-07](https://www.w3.org/TR/2011/REC-CSS2-20110607/), and
+[CSS Images 3 CR 2012-04-17](https://www.w3.org/TR/2012/CR-css3-images-20120417/) for image sizing.
+Use their exact sections: Values 4.3-5 and 8.1 (percentages, dimensions, lengths, math); Cascade 5-7
+(filtering, ranking and defaulting); CSS2.1 4.2 and 10.2/10.4/10.5/10.7 (invalid syntax and sizing);
+Images 5.1-5.3 (intrinsic/default sizing). SVG2 4.2/6.6 governs presentation-attribute parsing and
+cascade position; 8.9 defines viewport percentage bases. No newer undated alias silently replaces
+these editions.
+
+Keep these interpretation questions visible:
+
+- Chapter 7's current negative-value substitution is a specific rule for literal negative geometry
+  values. It must not be replaced with generic invalid-declaration fallback. CSS Values 3's
+  `calc()` range-clamping rule is a different mechanism; negative calculated width versus initial
+  auto needs explicit reconciliation before an oracle is chosen.
+- Chapter 7 assigns rect rx/ry percentages to viewport dimensions, while chapter 10's rect algorithm
+  uses the rectangle's used width/height. The merged auto fix deliberately avoids this conflict.
+- Chapter 7 excludes nested svg/use/symbol CSS width/height while chapter 5 retains geometry-property
+  wording. Its negative-size summary narrows the SVG case to outermost svg, while the auto table
+  simply says svg. Do not broaden a fix across that boundary without resolving applicability.
+- The rx/ry tables list computed length/percentage but their prose explicitly uses computed auto.
+  Preserve auto in the data model; do not use the abbreviated table to erase it. The negative table
+  omits x/y from its coordinate row, but the preceding prose expressly allows both.
+
+This chapter review adds no tests or implementation. It closes the local requirement-reading slice
+while preserving the actual gaps, conflicts and integration boundaries.
+
+## Chapter 12: embedded-content requirement review
+
+This section completes the local chapter reading against the current pinned `fc7791bd` draft
+(`66eb6613` publication bytes). All seven subsection headings, both element summaries, six tables
+and both interfaces were inspected. Three tables are historical requirement/resolution annotations;
+the other three define `crossorigin`, `referrerpolicy` and `href`. The annotations are not extra
+unconditional requirements. The two interface declarations and the image URI-reference mixin agree
+with Appendix A. **Implementation, test coverage and host applicability remain open.** This does not
+supersede the ledger's incomplete-audit warning.
+
+Implementation observations below are bound to Donner `efd169b1`; the inspected production files
+are unchanged from renderer source `4e95ce40`. Existing unit-test pointers describe assertions read
+in source, not newly executed passes. A resvg category or its historical reference image is not a
+normative oracle. The main source locations are [image API](../donner/svg/SVGImageElement.cc),
+[layout](../donner/svg/components/layout/LayoutSystem.cc),
+[resource loading](../donner/svg/components/resources/ResourceManagerContext.cc),
+[image decoding](../donner/svg/resources/ImageLoader.cc),
+[rendering](../donner/svg/renderer/RendererDriver.cc), and
+[request interface](../donner/svg/resources/ResourceLoaderInterface.h).
+
+### Placement and image rendering
+
+| Current section / assertion | Implementation and evidence | Remaining disposition |
+| --- | --- | --- |
+| [12.1](https://w3c.github.io/svgwg/svg2-draft/embedded.html#embedded-Overview), definitions and resource hints | `image` is recognized; `foreignObject` has no dedicated element type. The Resource Hints sentence describes compatibility, not a new mandatory prefetch operation. | Keep image and foreign-content host scope distinct; do not add fetching solely for this sentence. |
+| [12.2](https://w3c.github.io/svgwg/svg2-draft/embedded.html#Placement), geometry and bounds | `LayoutSystem::calculateSizedElementBounds` supplies the positioning rectangle; `SVGImageElementTests` reads parsed lengths/percentages. | `missing-test`: computed bounds after CSS cascade, transforms and overflow, separate from visible ink bounds. Negative/explicit-auto cases depend on chapter 7. |
+| 12.2, intrinsic/automatic sizing | A local analytic probe completed 13 cases on TinySkia: **5 strict passes, 8 failures, no skips or process errors**. Explicit SVG sizes, omitted raster size and zero-width control pass. Omitted/one-axis SVG sizes and no-ratio fitting fail. `ResourceManagerContext::getImageSize` sees raster metadata only; `RendererDriver::drawAdmittedSubDocument` uses concrete child canvas size as an intrinsic ratio. | `covered-fail` for these bounded assertions; implement optional intrinsic metadata and correct viewport sizing. Add non-2:1 ratio-only, explicit `auto`, percentage and shared-child restoration controls. The probe is diagnostic evidence, not 13 additional registered suite cases. |
+| 12.2, zero dimensions | Analytic zero-width SVG image paints nothing; existing resvg zero-size cases provide additional comparison inputs. | Zero height and decoded-but-suppressed resource assertions remain distinct tests. Do not equate a failed load with correct zero-size handling. |
+| 12.2 and [12.3](https://w3c.github.io/svgwg/svg2-draft/embedded.html#ImageElement), fitting and positioning order | No `object-fit`/`object-position` consumers were found in the inspected property/render path. Existing `preserveAspectRatio` API tests inspect values, not CSS fitting. | Source candidate: test fill/contain/cover/none/scale-down and noncenter position, with independent positioning, concrete-object and rendering rectangles. Apply SVG PAR after fitting; `none` and absent intrinsic ratio need separate controls. |
+| 12.3, referenced root PAR | `drawAdmittedSubDocument` prepares an ordinary child and composes its canvas transform; no explicit referenced-root PAR suppression was found. | Source candidate: same child with mismatched absolute-size/viewBox ratios and two root-PAR values, while host image PAR stays fixed. A passing equal-ratio case is insufficient. |
+| 12.2-3, overflow and two clips | UA CSS sets image overflow hidden; raster and SVG drawing paths also push an unconditional image clip. | Source candidate: author-visible versus hidden host overflow, crossed with visible/hidden child-root overflow. Check host positioning clip separately from child viewport clip. |
+| 12.3, formats and channels | `ImageLoader` recognizes PNG/JPEG and SVG content and requests four decoded channels. `LoadsPngDataUrl` checks dimensions and byte count; SVG routing tests check returned bytes. Existing campaign images successfully exercise local raster/SVG loading. | `missing-test`: independent RGB and grayscale PNG/JPEG channel/alpha assertions. Decoder presence and a successful load do not establish complete format conformance. |
+| 12.3, independent secure subdocuments | The default `SVGParser` child callback creates a separate secure-static document. Secure modes currently return early in `ResourceManagerContext::loadResources`. | Test no host fill/font inheritance, denied external calls, allowed embedded data resources and inert embedded events. Secure-animated selection belongs with the animation implementation. Existing secure-data repair work is separate from this source baseline. |
+| 12.3, SVG views and raster fragments | No image-specific view/media-fragment selection pipeline was identified in `ImageLoader`/`UrlLoader`; an image differs from an arbitrary-element `use` reference. | Source candidate: named SVG view and in-bounds pixel `xywh` crop with changed ratio. Add percent-encoding, malformed and out-of-range cases only after resolving the cited dependency's edge arithmetic. Crosslink chapter 16 rather than duplicating its URL algorithms. |
+| 12.3, same-file/target-only image | `LoadImageEntity` returns for href beginning with `#`. This does not implement the chapter's independent same-document image example. | Source candidate: filename and target-only variants, exactly bounded nesting and loader-call assertions. Reconcile secure-mode same-document/data exceptions with chapter 2; do not relax resource restrictions merely to match a recursive golden. |
+| Image element summary | `SVGImageElement::CreateOn` prevents child render traversal. The summary also permits descriptive/animation/style/script/clip/mask children and shared attribute families. | Child nonpainting does not prove metadata, style, referenced-effect, event or animation semantics. Those obligations remain crosslinked to chapters 5/6/13/15 and Appendix D; no-script mode must be tested rather than treated as a blanket exemption. |
+
+The intrinsic probe used a 400x200 white host, an image origin of (10,10), pinned solid-red local
+resources, and independently encoded PNG rectangles. The same 40x20 SVG paints correctly with
+explicit image dimensions but expands to the inherited viewport when they are omitted. One-axis
+cases center the correctly shaped content inside the wrong rectangle. A child with neither size
+nor viewBox is incorrectly treated as square even inside an explicitly sized 300x150 image.
+The renderer was SHA-256 `433b500fd3ef76a169149a1e4839e7cd851997d766cf2a66d6bcc30494083762`;
+authenticated GoogleTest XML was `1291962fc0f0cbd6c32eef40ca5bb89f51673bec62ef663021b12b4b34d13d89`.
+No upstream undefined-behavior golden was used.
+
+### Attributes, host integration and interfaces
+
+| Current surface | Implementation and evidence | Remaining disposition |
+| --- | --- | --- |
+| [12.3 href table](https://w3c.github.io/svgwg/svg2-draft/embedded.html#ImageElementHrefAttribute): absent initial value; animatable URL | `ParseHref` and `ParseXlinkHref` test each spelling separately. `ImageHrefChangeInvalidatesTinySkiaPremultipliedImageCache` compares a mutated raster image against a fresh render. | `missing-test`: empty-present versus absent, href precedence/namespace/base URL, SVG-child invalidation, and supported native animation. Existing mutation coverage is not URL reflection or timing coverage. |
+| [12.3 crossorigin table](https://w3c.github.io/svgwg/svg2-draft/embedded.html#ImageElementCrossoriginAttribute): HTML states; animatable | No image-specific API/request-state binding was found. `ResourceLoaderInterface` receives only a URL. | Host decision pending. For a network-capable profile, test absent/empty/invalid/anonymous/use-credentials states with fake requests and responses, including request mode, credentials and origin outcome. An offline loader is not evidence of CORS implementation. |
+| [12.3 referrerpolicy table](https://w3c.github.io/svgwg/svg2-draft/embedded.html#ImageElementReferrerpolicyAttribute): no initial attribute; not animatable | Current draft adds the attribute and `referrerPolicy` member. No matching request metadata was found. | Host decision pending. Test missing/invalid/known policy state, request propagation and restricted reflection without real outbound requests. Keep the dated policy reference and living HTML/Fetch default selection explicit. |
+| [12.4 foreignObject](https://w3c.github.io/svgwg/svg2-draft/embedded.html#ForeignObjectElement): containing block and SVG effects | It is not in `ElementType`; unknown elements are nonrenderable. No foreign layout/effects adapter was found. | Arbitrary foreign-language rendering, including HTML/MathML, is expressly not universally required here. If supported, test transformed containing-block scale, positioned descendants, overflow, filters, clips, masks and compositing. CSS top/margin do not position the outer SVG element. |
+| 12.4, namespaces and nested SVG | The XML parser retains foreign nodes as unknown. It is not the HTML parser's foreignObject integration-point algorithm. | HTML input scope pending. Separately test forbidden direct SVG children versus a valid nested SVG fragment; suppressing every subtree does not establish the latter behavior. |
+| 12.4, fallback | `SVGSwitchElementTests::RendersOnlyFirstMatchingChild` and `SkipsChildWithFailingRequiredExtensions` inspect rendered fallback behavior. | Add a foreignObject-specific supported/unsupported alternative pair. SVG fallback remains required even when foreign rendering is unsupported. The draft does not prescribe a requiredExtensions-to-language registry. |
+| [12.5.1 image IDL](https://w3c.github.io/svgwg/svg2-draft/embedded.html#InterfaceSVGImageElement) | Reviewed all seven own members: x/y/width/height, preserveAspectRatio, crossOrigin and referrerPolicy; also graphics inheritance and SVGURIReference. Native geometry/PAR getters return values rather than the five specified SameObject animated wrappers. | DOM profile pending. Test computed geometry reflection separately from authored values, stable wrapper identity and delegated baseVal/animVal semantics. Nullable crossOrigin and known-value-only referrerPolicy reflection are separate obligations. C++ setters do not contradict a readonly wrapper attribute by themselves. |
+| [12.5.2 foreignObject IDL](https://w3c.github.io/svgwg/svg2-draft/embedded.html#InterfaceSVGForeignObjectElement) | All four SameObject animated geometry members and graphics inheritance reviewed; no corresponding native element API exists. | DOM/host profile pending. Record Window exposure and live identity/reflection requirements if that binding is promised; native rendering alone does not prove them. |
+
+### Dependency and applicability decisions
+
+The sizing/fitting dependency is **CSS Images 3 CR 2012-04-17**, sections 5.1-5.3 and 5.5-5.6,
+as identified by SVG2's bibliography. CSS2.1 REC 2011-06-07 supplies initial sizing, containing-block,
+positioning and overflow definitions. SVG2's explicit image-overflow rule takes precedence over the
+2012 CSS Images statement that ordinary replaced elements always clip. Its object-position grammar
+links to Values 3 WD 2012-03-08; reconcile edge syntax with SVG2's direct Values 3 CR 2018 dependency
+before choosing a grammar oracle.
+
+The image fragment dependency is Media Fragments REC 2012-09-25, sections 4.2.2, 5.1.1-5.1.2,
+6.1.2, 6.2.3 and 6.3.3. Its dated examples contain apparent percentage and vertical-clamping arithmetic
+inconsistencies; they are an explicit interpretation question, not permission to invent an oracle.
+Start with an in-bounds integer-pixel crop.
+
+Referrer Policy CR 2017-01-26 and WebIDL REC 2016-12-15 retain their bibliography editions. The directly
+linked HTML CORS/referrer attributes, reflection, image request construction and foreign-content
+parsing, plus Fetch request state and URL parsing, were read as separately hashed living snapshots.
+This review identifies the relevant contracts; it does not certify all transitive HTML/Fetch algorithms
+or select a network/DOM host profile. Resource Hints, illustrative foreign vocabularies and historical
+working-group resolution tables do not justify unrequested fetching or an HTML engine.
+
+The native static profile still owes image pixels, resource isolation and applicable SVG fallback.
+Network request semantics, HTML parsing, foreign layout, Window bindings and supported animation
+need explicit product decisions and scoped evidence. None is waived solely because the harness
+contains no JavaScript. These open decisions and the reproduced sizing failures prevent a complete
+chapter conformance claim.
 
 ## Completion Criteria
 

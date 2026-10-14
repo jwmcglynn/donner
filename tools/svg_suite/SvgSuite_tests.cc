@@ -66,6 +66,55 @@ TEST_F(SvgSuiteTest, InvalidUtf8PathValueIsRejectedBeforeFilesystemAccess) {
   EXPECT_THAT(result.error, HasSubstr("UTF-8"));
 }
 
+TEST_F(SvgSuiteTest, ManualCaseInvalidPathNeverInvokesCallback) {
+  addCase("valid.svg");
+  auto discovery = discover();
+  ASSERT_TRUE(discovery.error.empty());
+  auto test = discovery.cases.front();
+  test.expectedPath = directory_ / std::string("bad-").append(1, char(0xFF));
+  bool called = false;
+  const auto result = RunCase(
+      test,
+      [&called](const StaticCase&, int, int) {
+        called = true;
+        return ImageResult{RedImage(), {}};
+      },
+      directory_ / "output");
+  EXPECT_FALSE(called);
+  EXPECT_FALSE(result.passed);
+  EXPECT_THAT(result.error, HasSubstr("UTF-8"));
+  EXPECT_FALSE(result.mismatchedPixels);
+}
+
+TEST_F(SvgSuiteTest, UnicodeDiscoveryKeepsDistinctByteIdentities) {
+  addCase("unicode-\xC3\xA9.svg");
+  addCase("replacement-\xEF\xBF\xBD.svg");
+  const auto discovery = discover();
+  ASSERT_THAT(discovery.error, IsEmpty());
+  ASSERT_EQ(discovery.cases.size(), 2u);
+  EXPECT_NE(discovery.cases[0].id, discovery.cases[1].id);
+  for (const auto& test : discovery.cases) {
+    const auto result = RunCase(
+        test, [](const StaticCase&, int, int) { return ImageResult{RedImage(), {}}; },
+        directory_ / "output");
+    EXPECT_TRUE(result.passed) << result.error;
+  }
+}
+
+#if defined(__linux__)
+TEST_F(SvgSuiteTest, InvalidNativeDirectoryAndSymlinkTargetAreRejected) {
+  addCase("valid.svg");
+  const auto invalid = directory_ / "corpus" / std::string("bad-").append(1, char(0xFF));
+  std::filesystem::create_directory(invalid);
+  EXPECT_THAT(discover().error, HasSubstr("UTF-8"));
+  std::filesystem::remove(invalid);
+  const auto target = directory_ / std::string("target-").append(1, char(0xFF));
+  std::ofstream(target) << "data";
+  std::filesystem::create_symlink(target, directory_ / "corpus/valid-link");
+  EXPECT_THAT(discover().error, HasSubstr("UTF-8"));
+}
+#endif
+
 TEST(ImageCompareTest, StrictComparisonDetectsWrongColor) {
   const Image expected = RedImage();
   Image actual = expected;

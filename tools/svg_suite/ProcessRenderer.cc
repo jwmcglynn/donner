@@ -21,6 +21,8 @@
 #include <vector>
 
 #include "nlohmann/json.hpp"
+#include "tools/svg_suite/ProcessRendererInternal.h"
+#include "tools/svg_suite/TextEncoding.h"
 
 namespace donner::svg_suite {
 namespace {
@@ -32,8 +34,8 @@ struct ChildResult {
   std::string diagnostics;
 };
 
-std::string expandArgument(const std::string& value,
-                           const std::map<std::string, std::string>& tokens) {
+std::optional<std::string> expandArgument(const std::string& value,
+                                          const std::map<std::string, std::string>& tokens) {
   std::string result;
   size_t offset = 0;
   // Inspect only the original template; inserted paths may themselves contain token syntax.
@@ -43,11 +45,17 @@ std::string expandArgument(const std::string& value,
       if (end != std::string::npos) {
         const auto token = tokens.find(value.substr(offset, end - offset + 1));
         if (token != tokens.end()) {
+          if (token->second.size() > kMaxIdentityBytes - result.size()) {
+            return std::nullopt;
+          }
           result += token->second;
           offset = end + 1;
           continue;
         }
       }
+    }
+    if (result.size() == kMaxIdentityBytes) {
+      return std::nullopt;
     }
     result += value[offset++];
   }
@@ -162,6 +170,7 @@ bool openDiagnosticPipe(DiagnosticPipe& pipe) {
 struct WaitResult {
   bool timedOut = false;
   bool failed = false;
+  bool ownershipLost = false;
 };
 
 WaitResult waitForChild(pid_t child, int diagnosticFd, std::chrono::milliseconds timeout,
@@ -174,7 +183,7 @@ WaitResult waitForChild(pid_t child, int diagnosticFd, std::chrono::milliseconds
     // Reserve the leader PID until group cleanup finishes. Reaping first would permit PID reuse.
     if (waitid(P_PID, static_cast<id_t>(child), &information, WEXITED | WNOHANG | WNOWAIT) != 0) {
       if (errno != EINTR) {
-        return {false, true};
+        return {false, true, errno == ECHILD};
       }
     } else if (information.si_pid == child) {
       return {};
@@ -190,30 +199,37 @@ WaitResult waitForChild(pid_t child, int diagnosticFd, std::chrono::milliseconds
   }
 }
 
-bool terminateAndCollect(pid_t child, int& status) {
-  // executeChild establishes its group before exec, so even a successful renderer may leave
-  // descendants in this group. A parent's setpgid result is not proof the group does not exist:
-  // ESRCH can mean the leader has already exited. Kill the group on every completion path.
-  kill(-child, SIGKILL);
-  // The direct child can still be before setpgid when its deadline expires.
-  kill(child, SIGKILL);
-  siginfo_t information{};
-  int observed;
-  do {
-    observed = waitid(P_PID, static_cast<id_t>(child), &information, WEXITED | WNOWAIT);
-  } while (observed < 0 && errno == EINTR);
-  // If the initial group signal raced with child-side setpgid, the now-dead leader cannot spawn
-  // another descendant. Repeat group cleanup while its PID is still reserved.
-  kill(-child, SIGKILL);
-  pid_t collected;
-  do {
-    collected = waitpid(child, &status, 0);
-  } while (collected < 0 && errno == EINTR);
-  return collected == child;
-}
+struct PosixChildOperations {
+  void killProcessOrGroup(pid_t target) { kill(target, SIGKILL); }
+
+  internal::ChildObservation observeExit(pid_t child) {
+    siginfo_t information{};
+    int observed;
+    do {
+      observed = waitid(P_PID, static_cast<id_t>(child), &information, WEXITED | WNOWAIT);
+    } while (observed < 0 && errno == EINTR);
+    if (observed < 0) {
+      return errno == ECHILD ? internal::ChildObservation::OwnershipLost
+                             : internal::ChildObservation::Failed;
+    }
+    return information.si_pid == child ? internal::ChildObservation::Observed
+                                       : internal::ChildObservation::Failed;
+  }
+
+  bool reapChild(pid_t child, int& status) {
+    pid_t collected;
+    do {
+      collected = waitpid(child, &status, 0);
+    } while (collected < 0 && errno == EINTR);
+    return collected == child;
+  }
+};
 
 ChildResult childOutcome(const WaitResult& waited, bool collected, int status,
                          std::string diagnostics) {
+  if (waited.ownershipLost) {
+    return {false, "renderer child ownership lost; cleanup signals skipped\n" + diagnostics};
+  }
   if (waited.timedOut) {
     return {false, "renderer deadline exceeded\n" + diagnostics};
   }
@@ -229,8 +245,23 @@ ChildResult childOutcome(const WaitResult& waited, bool collected, int status,
   return {true, std::move(diagnostics)};
 }
 
+std::string checkChildReapingPolicy() {
+  struct sigaction disposition {};
+  if (sigaction(SIGCHLD, nullptr, &disposition) != 0) {
+    return "cannot query renderer SIGCHLD disposition";
+  }
+  if (disposition.sa_handler == SIG_IGN || (disposition.sa_flags & SA_NOCLDWAIT) != 0) {
+    return "renderer requires waitable children: SIGCHLD must not use SIG_IGN or SA_NOCLDWAIT";
+  }
+  return {};
+}
+
 ChildResult runChild(std::vector<std::string> arguments, const std::filesystem::path& directory,
                      std::chrono::milliseconds timeout, size_t memoryLimitBytes) {
+  const auto reapingPolicy = checkChildReapingPolicy();
+  if (!reapingPolicy.empty()) {
+    return {false, reapingPolicy};
+  }
   std::vector<char*> argv;
   for (auto& argument : arguments) {
     argv.push_back(argument.data());
@@ -251,22 +282,32 @@ ChildResult runChild(std::vector<std::string> arguments, const std::filesystem::
     close(pipe.readFd);
     return {false, "cannot create renderer child"};
   }
-  // Both sides attempt setup to close the pre-exec race. Child-side setup remains mandatory;
-  // EACCES/ESRCH here may simply indicate that a fast renderer has already executed or exited.
-  setpgid(child, child);
+  // Only the child sets its group. Concurrent parent/child setpgid can fail on supported hosts;
+  // deadline cleanup also signals the direct child if its group has not been established yet.
   std::string diagnostics;
   const auto waited = waitForChild(child, pipe.readFd, timeout, diagnostics);
   int status = 0;
-  const bool collected = terminateAndCollect(child, status);
+  PosixChildOperations operations;
+  const bool collected = internal::FinishChild(child, waited.ownershipLost, status, operations);
   readDiagnostics(pipe.readFd, diagnostics);
   close(pipe.readFd);
   return childOutcome(waited, collected, status, std::move(diagnostics));
 }
 
-std::string validateProcess(const ProcessRendererOptions& options, const StaticCase& test) {
-  if (test.iteration && *test.iteration == 0) {
-    return "case iteration must be positive";
+std::string validateProcessText(const ProcessRendererOptions& options, const StaticCase& test) {
+  if (!Utf8Path(options.executable) || !Utf8Path(options.workRoot) ||
+      !ArgumentBytes(options.arguments)) {
+    return "renderer paths and arguments require bounded NUL-free UTF-8";
   }
+  for (const auto* path : {&test.root, &test.svgPath, &test.expectedPath}) {
+    if (!Utf8Path(*path)) {
+      return "renderer case paths require bounded NUL-free UTF-8";
+    }
+  }
+  return {};
+}
+
+std::string validateProcessLimits(const ProcessRendererOptions& options) {
   if (options.timeout.count() <= 0 || options.timeout.count() > 10000) {
     return "renderer timeout must be in (0, 10000] milliseconds";
   }
@@ -280,6 +321,21 @@ std::string validateProcess(const ProcessRendererOptions& options, const StaticC
            "only explicitly trusted input runs are supported";
   }
 #endif
+  return {};
+}
+
+std::string validateProcess(const ProcessRendererOptions& options, const StaticCase& test) {
+  const auto encoding = validateProcessText(options, test);
+  if (!encoding.empty()) {
+    return encoding;
+  }
+  if (test.iteration && *test.iteration == 0) {
+    return "case iteration must be positive";
+  }
+  const auto limits = validateProcessLimits(options);
+  if (!limits.empty()) {
+    return limits;
+  }
   if (test.id.empty() ||
       test.id.find_first_not_of(
           "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_") != std::string::npos) {
@@ -297,7 +353,7 @@ struct ProcessPaths {
 ProcessPaths prepareProcessPaths(const ProcessRendererOptions& options, const StaticCase& test) {
   std::error_code error;
   const auto executable = std::filesystem::canonical(options.executable, error);
-  if (error || !std::filesystem::is_regular_file(executable, error)) {
+  if (error || !Utf8Path(executable) || !std::filesystem::is_regular_file(executable, error)) {
     return {{}, {}, "renderer executable is unavailable"};
   }
   std::filesystem::create_directories(options.workRoot, error);
@@ -305,8 +361,8 @@ ProcessPaths prepareProcessPaths(const ProcessRendererOptions& options, const St
     return {{}, {}, "cannot create renderer work root"};
   }
   const auto workRoot = std::filesystem::canonical(options.workRoot, error);
-  if (error) {
-    return {{}, {}, "cannot resolve renderer work root"};
+  if (error || !Utf8Path(workRoot)) {
+    return {{}, {}, "cannot resolve bounded UTF-8 renderer work root"};
   }
   const auto directory = CaseOutputDirectory(workRoot, test) / "process";
   if (std::filesystem::exists(directory, error) || error ||
@@ -316,9 +372,10 @@ ProcessPaths prepareProcessPaths(const ProcessRendererOptions& options, const St
   return {executable, directory, {}};
 }
 
-std::vector<std::string> processArguments(const ProcessRendererOptions& options,
-                                          const StaticCase& test, const ProcessPaths& paths,
-                                          int width, int height) {
+std::optional<std::vector<std::string>> processArguments(const ProcessRendererOptions& options,
+                                                         const StaticCase& test,
+                                                         const ProcessPaths& paths, int width,
+                                                         int height) {
   std::error_code error;
   const auto& directory = paths.directory;
   const auto& executable = paths.executable;
@@ -332,8 +389,14 @@ std::vector<std::string> processArguments(const ProcessRendererOptions& options,
       {"{width}", std::to_string(width)},
       {"{height}", std::to_string(height)}};
   std::vector<std::string> arguments{executable.string()};
+  size_t bytes = arguments.front().size();
   for (const auto& argument : options.arguments) {
-    arguments.push_back(expandArgument(argument, tokens));
+    auto expanded = expandArgument(argument, tokens);
+    if (!expanded || expanded->size() > kMaxArgumentBytes - bytes) {
+      return std::nullopt;
+    }
+    bytes += expanded->size();
+    arguments.push_back(std::move(*expanded));
   }
   return arguments;
 }
@@ -343,8 +406,8 @@ std::string preserveProcessEvidence(const ProcessRendererOptions& options, const
                                     const std::vector<std::string>& arguments,
                                     const ChildResult& outcome) {
   nlohmann::json metadata = {
-      {"executable", paths.executable.string()},        {"arguments", arguments},
-      {"work_directory", paths.directory.string()},     {"timeout_ms", options.timeout.count()},
+      {"executable", *Utf8Path(paths.executable)},      {"arguments", arguments},
+      {"work_directory", *Utf8Path(paths.directory)},   {"timeout_ms", options.timeout.count()},
       {"memory_limit_bytes", options.memoryLimitBytes}, {"diagnostics_path", "renderer.log"}};
 #if defined(__linux__)
   metadata["memory_enforcement"] = "rlimit_as";
@@ -377,9 +440,12 @@ ImageResult renderProcess(const ProcessRendererOptions& options, const StaticCas
     return {std::nullopt, paths.error};
   }
   const auto arguments = processArguments(options, test, paths, width, height);
+  if (!arguments || !ArgumentBytes(*arguments) || !Utf8Path(paths.directory)) {
+    return {std::nullopt, "expanded renderer arguments require bounded NUL-free UTF-8"};
+  }
   const auto outcome =
-      runChild(arguments, paths.directory, options.timeout, options.memoryLimitBytes);
-  const auto evidenceError = preserveProcessEvidence(options, test, paths, arguments, outcome);
+      runChild(*arguments, paths.directory, options.timeout, options.memoryLimitBytes);
+  const auto evidenceError = preserveProcessEvidence(options, test, paths, *arguments, outcome);
   if (!evidenceError.empty()) {
     return {std::nullopt, evidenceError};
   }

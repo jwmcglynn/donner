@@ -10,6 +10,8 @@
 #include <nlohmann/json.hpp>
 #include <set>
 
+#include "tools/svg_suite/TextEncoding.h"
+
 namespace donner::svg_suite {
 namespace {
 using Json = nlohmann::json;
@@ -31,6 +33,9 @@ struct Budget {
 
 std::string CaptureFile(const std::filesystem::path& path, Budget& budget,
                         std::map<std::filesystem::path, FileFingerprint>& files) {
+  if (!Utf8Path(path)) {
+    return "provenance path requires bounded NUL-free UTF-8";
+  }
   if (budget.files >= budget.limits.maxFiles || budget.bytes > budget.limits.maxTotalBytes) {
     return "provenance file count or byte budget exceeded";
   }
@@ -45,8 +50,44 @@ std::string CaptureFile(const std::filesystem::path& path, Budget& budget,
   return {};
 }
 
+std::string CheckProvenanceDirectory(const std::filesystem::directory_entry& entry) {
+  std::error_code error;
+  const bool symlink = entry.is_symlink(error);
+  return symlink || error ? "directory symlink or unreadable provenance directory" : "";
+}
+
+std::string CaptureEntry(const std::filesystem::directory_entry& entry,
+                         const ProvenanceCorpus& corpus, Budget& budget,
+                         std::map<std::filesystem::path, FileFingerprint>& files) {
+  const auto path = entry.path();
+  if (!Utf8Path(path)) {
+    return "provenance entry requires bounded NUL-free UTF-8";
+  }
+  std::error_code error;
+  const auto resolved = std::filesystem::canonical(path, error);
+  if (!error && !Utf8Path(resolved)) {
+    return "resolved provenance entry requires bounded NUL-free UTF-8";
+  }
+  if (error || !IsWithin(corpus.root, resolved)) {
+    return "missing or escaped provenance source: " + path.generic_string();
+  }
+  if (entry.is_directory(error)) {
+    return CheckProvenanceDirectory(entry);
+  }
+  if (error) {
+    return "cannot inspect provenance entry";
+  }
+  if (entry.is_regular_file(error)) {
+    return CaptureFile(path, budget, files);
+  }
+  return "nonregular or unreadable provenance source: " + path.generic_string();
+}
+
 std::string CaptureCorpus(const ProvenanceCorpus& corpus, Budget& budget,
                           std::map<std::filesystem::path, FileFingerprint>& files) {
+  if (!Utf8Path(corpus.root)) {
+    return "provenance root requires bounded NUL-free UTF-8";
+  }
   std::error_code error;
   std::filesystem::recursive_directory_iterator iterator(corpus.root, error);
   const std::filesystem::recursive_directory_iterator end;
@@ -55,28 +96,42 @@ std::string CaptureCorpus(const ProvenanceCorpus& corpus, Budget& budget,
     if (++entries > 500000 || iterator.depth() > 64) {
       return "provenance directory enumeration limit exceeded";
     }
-    const auto path = iterator->path();
-    const auto resolved = std::filesystem::canonical(path, error);
-    if (error || !IsWithin(corpus.root, resolved)) {
-      return "missing or escaped provenance source: " + path.generic_string();
+    const auto issue = CaptureEntry(*iterator, corpus, budget, files);
+    if (!issue.empty()) {
+      return issue;
     }
-    if (iterator->is_directory(error)) {
-      if (iterator->is_symlink(error)) {
-        return "directory symlink in provenance corpus";
-      }
-    } else if (iterator->is_regular_file(error)) {
-      const auto issue = CaptureFile(path, budget, files);
-      if (!issue.empty()) {
-        return issue;
-      }
-    } else {
-      return "nonregular provenance source: " + path.generic_string();
-    }
-    if (!error) {
-      iterator.increment(error);
-    }
+    iterator.increment(error);
   }
   return error ? "cannot enumerate provenance corpus: " + error.message() : "";
+}
+
+bool ValidCommandMetadata(const ProvenanceOptions& options) {
+  return IsValidIdentityText(options.engineRevision, 4096) &&
+         IsValidIdentityText(options.backend, 4096) && IsValidIdentityText(options.buildFlags) &&
+         Utf8Path(options.renderer).has_value() && Utf8Path(options.workRoot).has_value();
+}
+
+bool ValidInvocation(const ProvenanceOptions& options) {
+  const auto invocationBytes = ArgumentBytes(options.invocation);
+  const auto rendererBytes = ArgumentBytes(options.rendererArguments);
+  return invocationBytes && rendererBytes && *rendererBytes <= kMaxArgumentBytes - *invocationBytes;
+}
+
+std::string ValidateCorpusIdentities(const std::vector<ProvenanceCorpus>& corpora) {
+  if (corpora.size() > kMaxArguments) {
+    return "provenance corpus count exceeds limits";
+  }
+  std::set<std::string> names;
+  for (const auto& corpus : corpora) {
+    if (!IsValidIdentityText(corpus.name, 4096) || !IsValidIdentityText(corpus.revision, 4096) ||
+        !IsValidIdentityText(corpus.revisionEvidence, 4096) || !Utf8Path(corpus.root)) {
+      return "provenance corpus identity requires bounded NUL-free UTF-8";
+    }
+    if (corpus.name.empty() || !names.insert(corpus.name).second) {
+      return "empty or duplicate provenance corpus name";
+    }
+  }
+  return {};
 }
 
 std::string ValidateOptions(const ProvenanceOptions& options) {
@@ -84,19 +139,22 @@ std::string ValidateOptions(const ProvenanceOptions& options) {
       options.limits.maxTotalBytes == 0) {
     return "provenance requires corpora and positive limits";
   }
-  if (options.invocation.size() > 10000 || options.rendererArguments.size() > 10000 ||
-      options.engineRevision.size() > 4096 || options.backend.size() > 4096 ||
-      options.buildFlags.size() > 65536) {
-    return "provenance command metadata exceeds limits";
+  if (!ValidCommandMetadata(options)) {
+    return "provenance metadata requires bounded NUL-free UTF-8";
   }
-  size_t bytes = 0;
-  for (const auto* arguments : {&options.invocation, &options.rendererArguments}) {
-    for (const auto& argument : *arguments) {
-      if (argument.size() > 65536 || bytes > 1024 * 1024 - argument.size()) {
-        return "provenance argument bytes exceed limits";
-      }
-      bytes += argument.size();
-    }
+  if (!ValidInvocation(options)) {
+    return "provenance arguments require bounded NUL-free UTF-8";
+  }
+  return ValidateCorpusIdentities(options.corpora);
+}
+
+std::string ResolveCorpus(ProvenanceCorpus& corpus, const RunProvenance& run,
+                          const std::filesystem::path& outputRoot) {
+  std::error_code error;
+  corpus.root = std::filesystem::canonical(corpus.root, error);
+  if (error || !Utf8Path(corpus.root) || !std::filesystem::is_directory(corpus.root, error) ||
+      error || IsWithin(corpus.root, outputRoot) || IsWithin(corpus.root, run.workRoot)) {
+    return "provenance output must be outside existing corpus directories";
   }
   return {};
 }
@@ -105,8 +163,8 @@ std::string CaptureSources(const ProvenanceOptions& options, RunProvenance& run,
                            const std::filesystem::path& outputRoot) {
   std::error_code error;
   run.renderer = std::filesystem::canonical(options.renderer, error);
-  if (error) {
-    return "cannot resolve renderer for provenance";
+  if (error || !Utf8Path(run.renderer)) {
+    return "cannot resolve bounded UTF-8 renderer for provenance";
   }
   Budget budget{options.limits};
   std::map<std::filesystem::path, FileFingerprint> engine;
@@ -115,16 +173,10 @@ std::string CaptureSources(const ProvenanceOptions& options, RunProvenance& run,
     return issue;
   }
   run.rendererFingerprint = engine.begin()->second;
-  std::set<std::string> names;
   for (auto corpus : options.corpora) {
-    if (corpus.name.empty() || corpus.name.size() > 4096 || corpus.revision.size() > 4096 ||
-        corpus.revisionEvidence.size() > 4096 || !names.insert(corpus.name).second) {
-      return "empty, oversized or duplicate provenance corpus name";
-    }
-    corpus.root = std::filesystem::canonical(corpus.root, error);
-    if (error || !std::filesystem::is_directory(corpus.root, error) || error ||
-        IsWithin(corpus.root, outputRoot) || IsWithin(corpus.root, run.workRoot)) {
-      return "provenance output must be outside existing corpus directories";
+    issue = ResolveCorpus(corpus, run, outputRoot);
+    if (!issue.empty()) {
+      return issue;
     }
     issue = CaptureCorpus(corpus, budget, run.files);
     if (!issue.empty()) {
@@ -135,17 +187,18 @@ std::string CaptureSources(const ProvenanceOptions& options, RunProvenance& run,
   return {};
 }
 
-Json BuildRecord(const ProvenanceOptions& options, const RunProvenance& run) {
+Json BuildRecord(const ProvenanceOptions& options, const RunProvenance& run,
+                 const std::string& invocationDirectory) {
   Json corpora = Json::array();
   for (const auto& corpus : run.corpora) {
     Json files = Json::object();
     for (const auto& [path, fingerprint] : run.files) {
       if (IsWithin(corpus.root, path)) {
-        files[path.lexically_relative(corpus.root).generic_string()] = FingerprintJson(fingerprint);
+        files[*Utf8Path(path.lexically_relative(corpus.root))] = FingerprintJson(fingerprint);
       }
     }
     corpora.push_back({{"name", corpus.name},
-                       {"root", corpus.root.generic_string()},
+                       {"root", *Utf8Path(corpus.root)},
                        {"revision", corpus.revision},
                        {"revision_evidence", corpus.revisionEvidence},
                        {"content_sha256", picosha2::hash256_hex_string(files.dump())},
@@ -153,7 +206,7 @@ Json BuildRecord(const ProvenanceOptions& options, const RunProvenance& run) {
   }
   return {{"format", "donner-svg-suite-run-1"},
           {"renderer",
-           {{"path", run.renderer.generic_string()},
+           {{"path", *Utf8Path(run.renderer)},
             {"fingerprint", FingerprintJson(run.rendererFingerprint)},
             {"declared",
              {{"revision", options.engineRevision},
@@ -162,9 +215,9 @@ Json BuildRecord(const ProvenanceOptions& options, const RunProvenance& run) {
               {"verification", "caller-declared, unverified"}}}}},
           {"corpora", std::move(corpora)},
           {"invocation_argv", options.invocation},
-          {"invocation_directory", std::filesystem::current_path().generic_string()},
+          {"invocation_directory", invocationDirectory},
           {"renderer_arguments_template", options.rendererArguments},
-          {"work_directory", run.workRoot.generic_string()},
+          {"work_directory", *Utf8Path(run.workRoot)},
           {"timeout_ms", options.timeoutMs},
           {"trusted_inputs", options.trustedInputs},
           {"comparison",
@@ -197,6 +250,35 @@ std::string WriteExclusive(const std::filesystem::path& path, std::string_view d
   const bool closed = close(descriptor) == 0;
   return synced && closed ? "" : "cannot finalize run.json";
 }
+struct RunDirectories {
+  std::filesystem::path outputRoot;
+  std::filesystem::path workRoot;
+  std::string invocationDirectory;
+  std::string error;
+};
+
+RunDirectories ResolveRunDirectories(const ProvenanceOptions& options,
+                                     const std::filesystem::path& artifactRoot) {
+  if (!Utf8Path(artifactRoot)) {
+    return {{}, {}, {}, "provenance artifact path requires bounded NUL-free UTF-8"};
+  }
+  std::error_code error;
+  const auto cwd = std::filesystem::current_path(error);
+  const auto invocationDirectory = error ? std::nullopt : Utf8Path(cwd);
+  if (!invocationDirectory) {
+    return {{}, {}, {}, "invocation directory requires bounded NUL-free UTF-8"};
+  }
+  const auto outputRoot = std::filesystem::weakly_canonical(artifactRoot, error);
+  if (error || outputRoot.empty() || !Utf8Path(outputRoot)) {
+    return {{}, {}, {}, "cannot resolve provenance output directory"};
+  }
+  const auto workRoot = std::filesystem::weakly_canonical(options.workRoot, error);
+  if (error || !Utf8Path(workRoot)) {
+    return {{}, {}, {}, "cannot resolve bounded UTF-8 process work directory"};
+  }
+  return {outputRoot, workRoot, *invocationDirectory, {}};
+}
+
 }  // namespace
 
 ProvenanceResult CreateRunProvenance(const ProvenanceOptions& options,
@@ -205,22 +287,20 @@ ProvenanceResult CreateRunProvenance(const ProvenanceOptions& options,
   if (!issue.empty()) {
     return {{}, issue};
   }
-  std::error_code error;
-  const auto outputRoot = std::filesystem::weakly_canonical(artifactRoot, error);
-  if (error || outputRoot.empty()) {
-    return {{}, "cannot resolve provenance output directory"};
-  }
   auto run = std::make_shared<RunProvenance>();
   run->limits = options.limits;
-  run->workRoot = std::filesystem::weakly_canonical(options.workRoot, error);
-  if (error) {
-    return {{}, "cannot resolve process work directory"};
+  const auto directories = ResolveRunDirectories(options, artifactRoot);
+  if (!directories.error.empty()) {
+    return {{}, directories.error};
   }
+  run->workRoot = directories.workRoot;
+  const auto& outputRoot = directories.outputRoot;
+  std::error_code error;
   issue = CaptureSources(options, *run, outputRoot);
   if (!issue.empty()) {
     return {{}, issue};
   }
-  Json record = BuildRecord(options, *run);
+  Json record = BuildRecord(options, *run, directories.invocationDirectory);
   run->runId = picosha2::hash256_hex_string(record.dump());
   record["run_id"] = run->runId;
   std::filesystem::create_directories(outputRoot, error);
@@ -228,6 +308,9 @@ ProvenanceResult CreateRunProvenance(const ProvenanceOptions& options,
     return {{}, "cannot create provenance output directory"};
   }
   run->recordPath = outputRoot / "run.json";
+  if (!Utf8Path(run->recordPath)) {
+    return {{}, "run record path requires bounded NUL-free UTF-8"};
+  }
   issue = WriteExclusive(run->recordPath, record.dump(2) + "\n");
   return issue.empty() ? ProvenanceResult{std::move(run), {}} : ProvenanceResult{{}, issue};
 }
@@ -257,7 +340,8 @@ Json ExecutionRecord(const RunExecutionSummary& execution) {
           {"skipped_invocations", execution.skippedInvocations},
           {"requested_repeat_count", execution.repeatCount},
           {"list_only", execution.listOnly},
-          {"gtest_output", execution.gtestOutput},
+          {"gtest_output", IsValidIdentityText(execution.gtestOutput) ? Json(execution.gtestOutput)
+                                                                      : Json(nullptr)},
           {"corpus_complete", execution.corpusComplete()}};
 }
 
@@ -311,7 +395,7 @@ XmlReportOutcome ReadXmlReport(const std::filesystem::path& path) {
   if (!issue.empty()) {
     return {nullptr, issue};
   }
-  return {{{"path", path.generic_string()},
+  return {{{"path", *Utf8Path(path)},
            {"sha256", report.fingerprint->sha256},
            {"bytes", report.fingerprint->bytes},
            {"scope", "GoogleTest final iteration; execution counts include all repeats"}},
@@ -319,6 +403,9 @@ XmlReportOutcome ReadXmlReport(const std::filesystem::path& path) {
 }
 
 XmlReportOutcome XmlReportRecord(const RunExecutionSummary& execution) {
+  if (!IsValidIdentityText(execution.gtestOutput) || !Utf8Path(execution.xmlReport)) {
+    return {nullptr, "XML evidence identity requires bounded NUL-free UTF-8"};
+  }
   if (!execution.xmlReportError.empty()) {
     return {nullptr, execution.xmlReportError};
   }
@@ -330,28 +417,50 @@ XmlReportOutcome XmlReportRecord(const RunExecutionSummary& execution) {
   }
   return ReadXmlReport(execution.xmlReport);
 }
+bool VerificationAccepted(bool validRunId, std::string_view verificationError, int testExitCode,
+                          const RunExecutionSummary& execution, const XmlReportOutcome& xml) {
+  return validRunId && verificationError.empty() && testExitCode == 0 &&
+         execution.selectionComplete() && xml.error.empty();
+}
 }  // namespace
 
 std::string WriteRunVerification(const RunProvenance& run, std::string_view verificationError,
                                  int testExitCode, const RunExecutionSummary& execution) {
+  const auto destination = run.recordPath.parent_path() / "run-verification.json";
+  if (!Utf8Path(run.recordPath) || !Utf8Path(destination)) {
+    return "verification destination requires bounded NUL-free UTF-8";
+  }
+  const bool validRunId = IsValidIdentityText(run.runId, 4096);
+  const std::string identityError =
+      validRunId ? "" : "run identity requires bounded NUL-free UTF-8";
   const auto xml = XmlReportRecord(execution);
-  const bool accepted = verificationError.empty() && testExitCode == 0 &&
-                        execution.selectionComplete() && xml.error.empty();
+  const bool accepted =
+      VerificationAccepted(validRunId, verificationError, testExitCode, execution, xml);
   const Json record = {
-      {"run_id", run.runId},
+      {"run_id", validRunId ? Json(run.runId) : Json(nullptr)},
+      {"identity_error", identityError},
       {"run_record", "run.json"},
       {"sources_unchanged_at_verification", verificationError.empty()},
-      {"verification_error", verificationError},
+      {"verification_error", DiagnosticUtf8(verificationError)},
+      {"diagnostics_encoding", "utf8-with-replacement"},
+      {"verification_error_truncated", verificationError.size() > kMaxDiagnosticBytes},
       {"test_exit_code", testExitCode},
       {"accepted", accepted},
       {"accepted_scope", execution.corpusComplete() ? "complete-corpus" : "selected-cases"},
       {"complete_corpus_accepted", accepted && execution.corpusComplete()},
       {"execution", ExecutionRecord(execution)},
       {"xml_report", xml.record},
-      {"xml_report_error", xml.error}};
-  const auto writeError =
-      WriteExclusive(run.recordPath.parent_path() / "run-verification.json", record.dump(2) + "\n");
-  return writeError.empty() ? xml.error : writeError;
+      {"xml_report_error", DiagnosticUtf8(xml.error)},
+      {"xml_report_error_truncated", xml.error.size() > kMaxDiagnosticBytes}};
+  const auto writeError = WriteExclusive(destination, record.dump(2) + "\n");
+  for (const std::string_view error :
+       {std::string_view(writeError), std::string_view(identityError), std::string_view(xml.error),
+        verificationError}) {
+    if (!error.empty()) {
+      return DiagnosticUtf8(error);
+    }
+  }
+  return {};
 }
 
 }  // namespace donner::svg_suite

@@ -13,6 +13,7 @@
 #include "tools/svg_suite/GtestSuite.h"
 #include "tools/svg_suite/ProcessRenderer.h"
 #include "tools/svg_suite/Provenance.h"
+#include "tools/svg_suite/TextEncoding.h"
 
 namespace donner::svg_suite {
 namespace {
@@ -149,6 +150,26 @@ void SetProvenanceOptions(CommandLine& command) {
   command.provenance.trustedInputs = command.process.trustedInputs;
 }
 
+bool ValidInitialText(int argc, char** argv) {
+  if (argc < 0 || static_cast<size_t>(argc) > kMaxArguments) {
+    return false;
+  }
+  size_t bytes = 0;
+  for (int index = 0; index < argc; ++index) {
+    const std::string_view argument(argv[index]);
+    if (!IsValidIdentityText(argument) || argument.size() > kMaxArgumentBytes - bytes) {
+      return false;
+    }
+    bytes += argument.size();
+  }
+  for (const char* name : {"GTEST_OUTPUT", "TEST_UNDECLARED_OUTPUTS_DIR"}) {
+    if (const char* value = std::getenv(name); value && !IsValidIdentityText(value)) {
+      return false;
+    }
+  }
+  return true;
+}
+
 int ReportError(const std::string& issue) {
   std::cerr << EscapeLogText(issue) << '\n';
   return 2;
@@ -213,6 +234,10 @@ int ExecuteSuite(CommandLine& command) {
 
 int main(int argc, char** argv) {
   namespace suite = donner::svg_suite;
+  if (!suite::ValidInitialText(argc, argv)) {
+    return suite::ReportError(
+        "command arguments and output environment require bounded NUL-free UTF-8");
+  }
   suite::CommandLine command;
   command.provenance.invocation.assign(argv, argv + argc);
   suite::ConfigureDefaultGtestOutput(argc, argv);
