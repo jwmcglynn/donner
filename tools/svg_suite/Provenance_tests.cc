@@ -68,6 +68,15 @@ protected:
   std::filesystem::path directory_;
 };
 
+TEST_F(ProvenanceTest, InvalidUtf8RevisionIsRejectedBeforeCapture) {
+  auto config = options();
+  config.engineRevision = std::string("invalid-") + char(0xFF);
+  const auto result = CreateRunProvenance(config, directory_ / "output");
+  EXPECT_FALSE(result.run);
+  EXPECT_THAT(result.error, HasSubstr("UTF-8"));
+  EXPECT_FALSE(std::filesystem::exists(directory_ / "output/run.json"));
+}
+
 TEST_F(ProvenanceTest, RunBindsActualBytesAndKeepsLabelsUnverified) {
   const auto run = CreateRunProvenance(options(), directory_ / "output");
   ASSERT_TRUE(run.run) << run.error;

@@ -59,6 +59,13 @@ protected:
   std::filesystem::path directory_;
 };
 
+TEST_F(SvgSuiteTest, InvalidUtf8PathValueIsRejectedBeforeFilesystemAccess) {
+  const auto path = directory_ / std::string("invalid-").append(1, char(0xFF));
+  const auto result = DiscoverCases({{"fixture", path}});
+  EXPECT_TRUE(result.cases.empty());
+  EXPECT_THAT(result.error, HasSubstr("UTF-8"));
+}
+
 TEST(ImageCompareTest, StrictComparisonDetectsWrongColor) {
   const Image expected = RedImage();
   Image actual = expected;

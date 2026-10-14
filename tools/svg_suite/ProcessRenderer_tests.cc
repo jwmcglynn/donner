@@ -95,6 +95,20 @@ protected:
   StaticCase test_;
 };
 
+TEST_F(ProcessRendererTest, EmbeddedNulArgumentIsRejectedBeforeLaunch) {
+  const auto result = render(std::string("success\0unrecorded", 18));
+  EXPECT_EQ(result.image, std::nullopt);
+  EXPECT_THAT(result.error, testing::HasSubstr("UTF-8"));
+  EXPECT_FALSE(std::filesystem::exists(root_ / "fixture/process/render.png"));
+}
+
+TEST_F(ProcessRendererTest, InvalidUtf8ArgumentIsRejectedBeforeLaunch) {
+  const auto result = render(std::string("invalid-") + char(0xFF));
+  EXPECT_EQ(result.image, std::nullopt);
+  EXPECT_THAT(result.error, testing::HasSubstr("UTF-8"));
+  EXPECT_FALSE(std::filesystem::exists(root_ / "fixture/process"));
+}
+
 TEST_F(ProcessRendererTest, SuccessfulRenderPreservesLiteralArguments) {
   const auto result = render("success");
   ASSERT_THAT(result.error, testing::IsEmpty());
