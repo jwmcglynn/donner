@@ -1072,135 +1072,174 @@ TEST(TextEngineScriptedTest, PostTextPathCursorInitialDyEntersNominalPenOnce) {
                                GlyphYPositionIs(DoubleEq(5.0))));
 }
 
+void CheckFiniteOverflowAuthoredDx(const components::ComputedTextComponent::TextSpan& span,
+                                   double displacement) {
+  // Check supported tspan-authored input before any layout consumes positioning entries.
+  const auto authoredDx = span.dxList;
+  ASSERT_THAT(authoredDx, SizeIs(2));
+  for (const auto& value : authoredDx) {
+    ASSERT_TRUE(value.has_value());
+    ASSERT_THAT(value->value, DoubleEq(displacement));
+    ASSERT_TRUE(std::isfinite(value->toPixels(MakeTextParams(20).viewBox,
+                                              MakeTextParams(20).fontMetrics, Lengthd::Extent::X)));
+  }
+}
+
+void FindFiniteOverflowRunIndices(components::ComputedTextComponent& text, Entity pathEntity,
+                                  Entity pathContentEntity, Entity tailEntity, double displacement,
+                                  size_t& pathRun, size_t& tailRun) {
+  const auto pathSpan = std::find_if(text.spans.begin(), text.spans.end(), [&](const auto& span) {
+    return span.textPathSourceEntity == pathEntity && span.sourceEntity == pathContentEntity &&
+           span.end - span.start == 2;
+  });
+  const auto tailSpan = std::find_if(text.spans.begin(), text.spans.end(), [&](const auto& span) {
+    return span.sourceEntity == tailEntity && span.end - span.start == 1;
+  });
+  ASSERT_NE(pathSpan, text.spans.end());
+  ASSERT_NE(tailSpan, text.spans.end());
+  ASSERT_NO_FATAL_FAILURE(CheckFiniteOverflowAuthoredDx(*pathSpan, displacement));
+  pathRun = static_cast<size_t>(pathSpan - text.spans.begin());
+  tailRun = static_cast<size_t>(tailSpan - text.spans.begin());
+}
+
+void CheckFiniteOverflowSuppressedPath(const components::ComputedTextGeometryComponent& cache,
+                                       size_t pathRun, size_t tailRun, bool explicitTail) {
+  ASSERT_LT(pathRun, cache.runs.size());
+  ASSERT_LT(tailRun, cache.runs.size());
+  ASSERT_THAT(cache.runs[pathRun].usedFontSizePx, FloatEq(20.0f));
+  ASSERT_THAT(cache.runs[tailRun].usedFontSizePx, FloatEq(20.0f));
+  ASSERT_THAT(cache.runs[pathRun].glyphs, SizeIs(2));
+  int suppressedNonfinitePathPositions = 0;
+  for (const auto& glyph : cache.runs[pathRun].glyphs) {
+    ASSERT_EQ(glyph.glyphIndex, 0);
+    suppressedNonfinitePathPositions +=
+        !std::isfinite(glyph.xPosition) || !std::isfinite(glyph.yPosition);
+  }
+  // Suppressed path NaNs are an existing, separate debt, not this tail's causal oracle.
+  ::testing::Test::RecordProperty(explicitTail ? "explicit_tail_suppressed_path_nonfinite"
+                                               : "implicit_tail_suppressed_path_nonfinite",
+                                  suppressedNonfinitePathPositions);
+}
+
+void CheckFiniteOverflowTailPositions(const components::ComputedTextGeometryComponent& cache,
+                                      EntityHandle tailHandle, size_t tailRun) {
+  for (const auto& glyph : cache.runs[tailRun].glyphs) {
+    if (glyph.glyphIndex != 0) {
+      EXPECT_TRUE(std::isfinite(glyph.xPosition));
+      EXPECT_TRUE(std::isfinite(glyph.yPosition));
+      EXPECT_TRUE(std::isfinite(glyph.rotateDegrees));
+      EXPECT_TRUE(std::isfinite(glyph.xAdvance));
+      EXPECT_TRUE(std::isfinite(glyph.yAdvance));
+    }
+  }
+  for (const auto& character : cache.characters) {
+    if (character.sourceEntity == tailHandle.entity() && character.rendered) {
+      EXPECT_TRUE(std::isfinite(character.startPosition.x));
+      EXPECT_TRUE(std::isfinite(character.startPosition.y));
+      EXPECT_TRUE(std::isfinite(character.endPosition.x));
+      EXPECT_TRUE(std::isfinite(character.endPosition.y));
+      EXPECT_TRUE(std::isfinite(character.advance));
+      EXPECT_TRUE(std::isfinite(character.rotation));
+    }
+  }
+}
+
+void CheckFiniteOverflowTailInkBounds(const components::ComputedTextGeometryComponent& cache,
+                                      EntityHandle tailHandle) {
+  for (const auto& glyph : cache.glyphs) {
+    if (glyph.sourceEntity == tailHandle.entity()) {
+      EXPECT_TRUE(std::isfinite(glyph.extent.topLeft.x));
+      EXPECT_TRUE(std::isfinite(glyph.extent.topLeft.y));
+      EXPECT_TRUE(std::isfinite(glyph.extent.bottomRight.x));
+      EXPECT_TRUE(std::isfinite(glyph.extent.bottomRight.y));
+      for (const auto& point : glyph.path.points()) {
+        EXPECT_TRUE(std::isfinite(point.x));
+        EXPECT_TRUE(std::isfinite(point.y));
+      }
+    }
+  }
+  const auto tailBounds = cache.objectBoundsByEntity.find(tailHandle.entity());
+  if (tailBounds != cache.objectBoundsByEntity.end()) {
+    EXPECT_TRUE(std::isfinite(tailBounds->second.topLeft.x));
+    EXPECT_TRUE(std::isfinite(tailBounds->second.topLeft.y));
+    EXPECT_TRUE(std::isfinite(tailBounds->second.bottomRight.x));
+    EXPECT_TRUE(std::isfinite(tailBounds->second.bottomRight.y));
+  }
+}
+
+void CheckFiniteOverflowExplicitTail(TextEngine& engine,
+                                     const components::ComputedTextGeometryComponent& cache,
+                                     EntityHandle tailHandle, size_t tailRun) {
+  ASSERT_THAT(cache.runs[tailRun].glyphs, SizeIs(1));
+  EXPECT_THAT(cache.runs[tailRun].glyphs.front(),
+              AllOf(GlyphIndexIs(Not(Eq(0))), GlyphXPositionIs(DoubleEq(40.0)),
+                    GlyphYPositionIs(DoubleEq(70.0)), GlyphXAdvanceIs(DoubleEq(10.0))));
+  EXPECT_EQ(engine.getNumberOfChars(tailHandle), 1);
+  EXPECT_EQ(engine.getStartPositionOfChar(tailHandle, 0), Vector2d(40.0, 70.0));
+  EXPECT_THAT(engine.getSubStringLength(tailHandle, 0, 1), Gt(0.0));
+  const auto tailInk =
+      std::find_if(cache.glyphs.begin(), cache.glyphs.end(),
+                   [&](const auto& glyph) { return glyph.sourceEntity == tailHandle.entity(); });
+  ASSERT_NE(tailInk, cache.glyphs.end());
+  ASSERT_EQ(
+      std::count_if(cache.glyphs.begin(), cache.glyphs.end(),
+                    [&](const auto& glyph) { return glyph.sourceEntity == tailHandle.entity(); }),
+      1);
+  EXPECT_FALSE(tailInk->path.empty());
+  EXPECT_EQ(tailInk->extent, Box2d::FromXYWH(40.0, 62.0, 6.0, 8.0));
+  EXPECT_EQ(engine.getCharNumAtPosition(tailHandle, Vector2d(43.0, 66.0)), 0);
+}
+
+void CheckFiniteOverflowScene(bool explicitTail, double displacement) {
+  const std::string tail =
+      explicitTail ? "<tspan id='tail' x='40' y='70'>C</tspan>" : "<tspan id='tail'>C</tspan>";
+  const std::string source =
+      "<svg xmlns='http://www.w3.org/2000/svg' width='500' height='200'>"
+      "<path id='p' d='M0 50H100'/><text font-size='20'>"
+      "<textPath href='#p'><tspan id='path-content' dx='1e308 1e308'>AB</tspan></textPath>" +
+      tail + "</text></svg>";
+  ParseWarningSink warnings;
+  auto parsed = parser::SVGParser::ParseSVG(source, warnings);
+  ASSERT_TRUE(parsed.hasResult());
+  SVGDocument document = std::move(parsed).result();
+  Registry& registry = document.registry();
+  FontManager manager(registry);
+  TextEngine engine(manager, registry, std::make_unique<ScriptedTextBackend>());
+  const auto root = document.querySelector("text");
+  const auto pathElement = document.querySelector("textPath");
+  const auto pathContent = document.querySelector("#path-content");
+  const auto tailElement = document.querySelector("#tail");
+  ASSERT_TRUE(root.has_value());
+  ASSERT_TRUE(pathElement.has_value());
+  ASSERT_TRUE(pathElement->isa<SVGTextPathElement>());
+  ASSERT_TRUE(pathContent.has_value());
+  ASSERT_TRUE(tailElement.has_value());
+  const EntityHandle rootHandle = root->unsafeEntityHandle();
+  const EntityHandle tailHandle = tailElement->unsafeEntityHandle();
+  engine.prepareForElement(rootHandle, warnings);
+  auto& text = rootHandle.get<components::ComputedTextComponent>();
+  size_t pathRun = 0;
+  size_t tailRun = 0;
+  ASSERT_NO_FATAL_FAILURE(FindFiniteOverflowRunIndices(
+      text, pathElement->unsafeEntityHandle().entity(), pathContent->unsafeEntityHandle().entity(),
+      tailHandle.entity(), displacement, pathRun, tailRun));
+  engine.resolvePerSpanLayoutStyles(rootHandle, text);
+  const auto& cache = engine.ensureComputedTextGeometryComponent(rootHandle);
+  ASSERT_NO_FATAL_FAILURE(CheckFiniteOverflowSuppressedPath(cache, pathRun, tailRun, explicitTail));
+  CheckFiniteOverflowTailPositions(cache, tailHandle, tailRun);
+  CheckFiniteOverflowTailInkBounds(cache, tailHandle);
+  if (explicitTail) {
+    ASSERT_NO_FATAL_FAILURE(CheckFiniteOverflowExplicitTail(engine, cache, tailHandle, tailRun));
+  }
+}
+
 TEST(TextEngineScriptedTest, PostTextPathCursorFiniteDxOverflowQuarantinesOnlyUnrepresentableTail) {
   const double displacement = 1e308;
   ASSERT_TRUE(std::isfinite(displacement));
   ASSERT_FALSE(std::isfinite(displacement + displacement));
   for (bool explicitTail : {false, true}) {
     SCOPED_TRACE(explicitTail);
-    const std::string tail =
-        explicitTail ? "<tspan id='tail' x='40' y='70'>C</tspan>" : "<tspan id='tail'>C</tspan>";
-    const std::string source =
-        "<svg xmlns='http://www.w3.org/2000/svg' width='500' height='200'>"
-        "<path id='p' d='M0 50H100'/><text font-size='20'>"
-        "<textPath href='#p'><tspan id='path-content' dx='1e308 1e308'>AB</tspan></textPath>" +
-        tail + "</text></svg>";
-    ParseWarningSink warnings;
-    auto parsed = parser::SVGParser::ParseSVG(source, warnings);
-    ASSERT_TRUE(parsed.hasResult());
-    SVGDocument document = std::move(parsed).result();
-    Registry& registry = document.registry();
-    FontManager manager(registry);
-    TextEngine engine(manager, registry, std::make_unique<ScriptedTextBackend>());
-    const auto root = document.querySelector("text");
-    const auto pathElement = document.querySelector("textPath");
-    const auto pathContent = document.querySelector("#path-content");
-    const auto tailElement = document.querySelector("#tail");
-    ASSERT_TRUE(root.has_value());
-    ASSERT_TRUE(pathElement.has_value());
-    ASSERT_TRUE(pathElement->isa<SVGTextPathElement>());
-    ASSERT_TRUE(pathContent.has_value());
-    ASSERT_TRUE(tailElement.has_value());
-    const EntityHandle rootHandle = root->unsafeEntityHandle();
-    const EntityHandle tailHandle = tailElement->unsafeEntityHandle();
-    engine.prepareForElement(rootHandle, warnings);
-    auto& text = rootHandle.get<components::ComputedTextComponent>();
-    const auto pathSpan = std::find_if(text.spans.begin(), text.spans.end(), [&](const auto& span) {
-      return span.textPathSourceEntity == pathElement->unsafeEntityHandle().entity() &&
-             span.sourceEntity == pathContent->unsafeEntityHandle().entity() &&
-             span.end - span.start == 2;
-    });
-    const auto tailSpan = std::find_if(text.spans.begin(), text.spans.end(), [&](const auto& span) {
-      return span.sourceEntity == tailHandle.entity() && span.end - span.start == 1;
-    });
-    ASSERT_NE(pathSpan, text.spans.end());
-    ASSERT_NE(tailSpan, text.spans.end());
-    // Check supported tspan-authored input before any layout consumes positioning entries.
-    const auto authoredDx = pathSpan->dxList;
-    ASSERT_THAT(authoredDx, SizeIs(2));
-    for (const auto& value : authoredDx) {
-      ASSERT_TRUE(value.has_value());
-      ASSERT_THAT(value->value, DoubleEq(displacement));
-      ASSERT_TRUE(std::isfinite(value->toPixels(
-          MakeTextParams(20).viewBox, MakeTextParams(20).fontMetrics, Lengthd::Extent::X)));
-    }
-    const size_t pathRun = static_cast<size_t>(pathSpan - text.spans.begin());
-    const size_t tailRun = static_cast<size_t>(tailSpan - text.spans.begin());
-    engine.resolvePerSpanLayoutStyles(rootHandle, text);
-    const auto& cache = engine.ensureComputedTextGeometryComponent(rootHandle);
-    ASSERT_LT(pathRun, cache.runs.size());
-    ASSERT_LT(tailRun, cache.runs.size());
-    ASSERT_THAT(cache.runs[pathRun].usedFontSizePx, FloatEq(20.0f));
-    ASSERT_THAT(cache.runs[tailRun].usedFontSizePx, FloatEq(20.0f));
-    ASSERT_THAT(cache.runs[pathRun].glyphs, SizeIs(2));
-    int suppressedNonfinitePathPositions = 0;
-    for (const auto& glyph : cache.runs[pathRun].glyphs) {
-      ASSERT_EQ(glyph.glyphIndex, 0);
-      suppressedNonfinitePathPositions +=
-          !std::isfinite(glyph.xPosition) || !std::isfinite(glyph.yPosition);
-    }
-    // Suppressed path NaNs are an existing, separate debt, not this tail's causal oracle.
-    RecordProperty(explicitTail ? "explicit_tail_suppressed_path_nonfinite"
-                                : "implicit_tail_suppressed_path_nonfinite",
-                   suppressedNonfinitePathPositions);
-    for (const auto& glyph : cache.runs[tailRun].glyphs) {
-      if (glyph.glyphIndex != 0) {
-        EXPECT_TRUE(std::isfinite(glyph.xPosition));
-        EXPECT_TRUE(std::isfinite(glyph.yPosition));
-        EXPECT_TRUE(std::isfinite(glyph.rotateDegrees));
-        EXPECT_TRUE(std::isfinite(glyph.xAdvance));
-        EXPECT_TRUE(std::isfinite(glyph.yAdvance));
-      }
-    }
-    for (const auto& character : cache.characters) {
-      if (character.sourceEntity == tailHandle.entity() && character.rendered) {
-        EXPECT_TRUE(std::isfinite(character.startPosition.x));
-        EXPECT_TRUE(std::isfinite(character.startPosition.y));
-        EXPECT_TRUE(std::isfinite(character.endPosition.x));
-        EXPECT_TRUE(std::isfinite(character.endPosition.y));
-        EXPECT_TRUE(std::isfinite(character.advance));
-        EXPECT_TRUE(std::isfinite(character.rotation));
-      }
-    }
-    for (const auto& glyph : cache.glyphs) {
-      if (glyph.sourceEntity == tailHandle.entity()) {
-        EXPECT_TRUE(std::isfinite(glyph.extent.topLeft.x));
-        EXPECT_TRUE(std::isfinite(glyph.extent.topLeft.y));
-        EXPECT_TRUE(std::isfinite(glyph.extent.bottomRight.x));
-        EXPECT_TRUE(std::isfinite(glyph.extent.bottomRight.y));
-        for (const auto& point : glyph.path.points()) {
-          EXPECT_TRUE(std::isfinite(point.x));
-          EXPECT_TRUE(std::isfinite(point.y));
-        }
-      }
-    }
-    const auto tailBounds = cache.objectBoundsByEntity.find(tailHandle.entity());
-    if (tailBounds != cache.objectBoundsByEntity.end()) {
-      EXPECT_TRUE(std::isfinite(tailBounds->second.topLeft.x));
-      EXPECT_TRUE(std::isfinite(tailBounds->second.topLeft.y));
-      EXPECT_TRUE(std::isfinite(tailBounds->second.bottomRight.x));
-      EXPECT_TRUE(std::isfinite(tailBounds->second.bottomRight.y));
-    }
-    if (explicitTail) {
-      ASSERT_THAT(cache.runs[tailRun].glyphs, SizeIs(1));
-      EXPECT_THAT(cache.runs[tailRun].glyphs.front(),
-                  AllOf(GlyphIndexIs(Not(Eq(0))), GlyphXPositionIs(DoubleEq(40.0)),
-                        GlyphYPositionIs(DoubleEq(70.0)), GlyphXAdvanceIs(DoubleEq(10.0))));
-      EXPECT_EQ(engine.getNumberOfChars(tailHandle), 1);
-      EXPECT_EQ(engine.getStartPositionOfChar(tailHandle, 0), Vector2d(40.0, 70.0));
-      EXPECT_THAT(engine.getSubStringLength(tailHandle, 0, 1), Gt(0.0));
-      const auto tailInk = std::find_if(
-          cache.glyphs.begin(), cache.glyphs.end(),
-          [&](const auto& glyph) { return glyph.sourceEntity == tailHandle.entity(); });
-      ASSERT_NE(tailInk, cache.glyphs.end());
-      ASSERT_EQ(std::count_if(
-                    cache.glyphs.begin(), cache.glyphs.end(),
-                    [&](const auto& glyph) { return glyph.sourceEntity == tailHandle.entity(); }),
-                1);
-      EXPECT_FALSE(tailInk->path.empty());
-      EXPECT_EQ(tailInk->extent, Box2d::FromXYWH(40.0, 62.0, 6.0, 8.0));
-      EXPECT_EQ(engine.getCharNumAtPosition(tailHandle, Vector2d(43.0, 66.0)), 0);
-    }
+    ASSERT_NO_FATAL_FAILURE(CheckFiniteOverflowScene(explicitTail, displacement));
   }
 }
 
