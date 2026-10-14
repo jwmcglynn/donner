@@ -138,6 +138,15 @@ document generation. Input edges are queued until safe document access; passive 
 Hover transitions exclude the shared ancestor path, and the previous path is retained across DOM
 changes. Focus loss cancels the pending press. Document replacement resets Preview.
 
+The browser raster worker yields a real task between iterations through one reusable MessageChannel.
+This keeps callback opportunities outside document and renderer locks without a timer delay before
+every frame. One pending continuation belongs to the worker lifetime; cleanup runs on that worker
+after the suspended yield resumes. The task yield does not guarantee browser task-source fairness.
+`//donner/editor/wasm/tests:raster_task_yield_tests` covers reentry, stale callbacks and port cleanup.
+`//donner/editor/wasm/tests:animation_preview_browser_test` holds timers to verify continued playback,
+then suspends a task yield across Edit/restart and acknowledged shutdown. Timing diagnostics report
+the preceding idle pass separately; those intervals can overlap the request's queue latency.
+
 ## Presentation support matrix
 
 Timing and interpolation support do not imply that every SVG attribute is rendered as an animated

@@ -47,6 +47,7 @@ declare global {
     __donnerWholeAppWorker?: boolean;
     __donnerCanStartWasm?: boolean;
     __donnerFirstFramePresented?: boolean;
+    __donnerRasterShutdownRequests?: number;
     __donnerLastScrollEvent?: {
       zoomModifierHeld?: boolean;
       yoffset?: number;
@@ -1228,6 +1229,59 @@ test("Firefox hands a blocked thumbnail renderer to a foreground sample load", a
     });
   expect(fatalMessages).toEqual([]);
 });
+
+async function holdRasterTaskYield(page: Page) {
+  const raster = await Promise.any(
+    page.workers().map(async (worker) => {
+      await worker.evaluate(() => {
+        const scope = globalThis as typeof globalThis & {
+          __donnerRasterTaskYield?: {
+            channel: MessageChannel;
+            resume: (() => void) | null;
+            closed: boolean;
+          };
+          __donnerHeldTaskYield?: () => boolean;
+          __donnerReleaseTaskYield?: () => void;
+        };
+        const state = scope.__donnerRasterTaskYield;
+        if (!state || state.closed) throw new Error("not the active raster worker");
+        const original = state.channel.port1.onmessage;
+        if (!original) throw new Error("raster yield handler missing");
+        let held: MessageEvent | undefined;
+        state.channel.port1.onmessage = (event) => {
+          if (held) throw new Error("multiple raster yield messages held");
+          held = event;
+        };
+        scope.__donnerHeldTaskYield = () => held !== undefined && state.resume !== null;
+        scope.__donnerReleaseTaskYield = () => {
+          state.channel.port1.onmessage = original;
+          const event = held;
+          held = undefined;
+          delete scope.__donnerHeldTaskYield;
+          delete scope.__donnerReleaseTaskYield;
+          if (event) original.call(state.channel.port1, event);
+        };
+      });
+      return worker;
+    }),
+  );
+  const release = () =>
+    raster.evaluate(() => {
+      const scope = globalThis as typeof globalThis & { __donnerReleaseTaskYield?: () => void };
+      scope.__donnerReleaseTaskYield?.();
+    });
+  try {
+    await expect.poll(() =>
+      raster.evaluate(() => {
+        const scope = globalThis as typeof globalThis & { __donnerHeldTaskYield?: () => boolean };
+        return scope.__donnerHeldTaskYield?.() ?? false;
+      }), { timeout: scaledMs(3000), message: "one raster task yield is suspended" }).toBe(true);
+  } catch (error) {
+    await release();
+    throw error;
+  }
+  return { raster, release };
+}
 
 async function verifyRasterProgressWithTimersHeld(page: Page) {
   const raster = await Promise.any(
@@ -3460,11 +3514,81 @@ test(
       58 * scale,
     );
 
-    await page.mouse.click(editCenter.x, editCenter.y);
+    const heldForEdit = await holdRasterTaskYield(page);
+    try {
+      const frames = await page.evaluate(() => window.__donnerMainLoopRenderedFrames ?? 0);
+      await page.mouse.click(editCenter.x, editCenter.y);
+      await expect.poll(() => page.evaluate(() => window.__donnerMainLoopRenderedFrames ?? 0), {
+        timeout: scaledMs(3000),
+        message: "Edit remains responsive while a raster yield is held",
+      }).toBeGreaterThan(frames + 1);
+    } finally {
+      await heldForEdit.release();
+    }
     await expect.poll(async () => (await orb()).minX, { timeout: scaledMs(5000) }).toBeCloseTo(
       start.minX,
       0,
     );
+    await page.mouse.click(editCenter.x + edit.maxX - edit.minX + 1, editCenter.y);
+    await expect.poll(async () => Math.abs((await orb()).minX - start.minX), {
+      timeout: scaledMs(5000),
+      message: "Preview restarts after the suspended-yield cancellation",
+    }).toBeGreaterThan(8 * scale);
+    const owner = await Promise.any(
+      page.workers().map(async (worker) => {
+        const owned = await worker.evaluate(() =>
+          Boolean(
+            (globalThis as typeof globalThis & { __donnerGpuOwner?: boolean }).__donnerGpuOwner,
+          )
+        );
+        if (!owned) throw new Error("not the GPU owner");
+        return worker;
+      }),
+    );
+    const shutdowns = await page.evaluate(() => window.__donnerRasterShutdownRequests ?? 0);
+    const heldForQuit = await holdRasterTaskYield(page);
+    try {
+      const frames = await page.evaluate(() => window.__donnerMainLoopRenderedFrames ?? 0);
+      await page.mouse.click(editCenter.x, editCenter.y);
+      await expect.poll(() => page.evaluate(() => window.__donnerMainLoopRenderedFrames ?? 0), {
+        timeout: scaledMs(3000),
+        message: "Edit action is applied before quitting",
+      }).toBeGreaterThan(frames + 1);
+      await page.keyboard.press("Control+q");
+      await expect.poll(() => page.evaluate(() => window.__donnerRasterShutdownRequests ?? 0), {
+        timeout: scaledMs(5000),
+        message: "shutdown begins while the raster yield remains held",
+      }).toBeGreaterThan(shutdowns);
+      expect(
+        await heldForQuit.raster.evaluate(() => {
+          const scope = globalThis as typeof globalThis & { __donnerHeldTaskYield?: () => boolean };
+          return scope.__donnerHeldTaskYield?.() ?? false;
+        }),
+      ).toBe(true);
+    } finally {
+      await heldForQuit.release();
+    }
+    await expect.poll(() =>
+      heldForQuit.raster.evaluate(() => {
+        const scope = globalThis as typeof globalThis & {
+          __donnerRasterWorker?: boolean;
+          __donnerRasterTaskYield?: unknown;
+        };
+        return {
+          marker: Boolean(scope.__donnerRasterWorker),
+          channel: Boolean(scope.__donnerRasterTaskYield),
+        };
+      }), { timeout: scaledMs(5000), message: "raster teardown closes its task channel" })
+      .toEqual({ marker: false, channel: false });
+    await expect.poll(
+      () =>
+        owner.evaluate(() =>
+          Boolean(
+            (globalThis as typeof globalThis & { __donnerGpuOwner?: boolean }).__donnerGpuOwner,
+          )
+        ),
+      { timeout: scaledMs(5000), message: "GPU owner shuts down after joining the raster worker" },
+    ).toBe(false);
     expect(fatalMessages).toEqual([]);
   },
 );

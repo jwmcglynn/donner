@@ -519,6 +519,15 @@ js_test(
     node_options = ["--test"],
 )
 
+js_test(
+    name = "raster_task_yield_tests",
+    size = "small",
+    copy_data_to_bin = False,
+    data = ["//donner/editor:AsyncRenderer.cc"],
+    entry_point = "raster-task-yield.spec.mjs",
+    node_options = ["--test"],
+)
+
 # Drives the device half of the same library with several logical devices in one worker, as the
 # renderer and the snapshot capture context beside it hold: each must keep its own state and
 # never refuse, overwrite or tear down another's.

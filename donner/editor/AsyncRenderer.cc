@@ -27,6 +27,52 @@
 
 namespace donner::editor {
 
+#ifdef __EMSCRIPTEN__
+// clang-format off
+EM_JS(void, InitializeRasterTaskYield, (), {
+  if (globalThis['__donnerRasterTaskYield']) abort('raster task yield already initialized');
+  const channel = new MessageChannel();
+  const state = { channel, resume: null, closed: false };
+  channel.port1.onmessage = () => {
+    if (state.closed) return;
+    const resume = state.resume;
+    state.resume = null;
+    if (resume) resume();
+  };
+  globalThis['__donnerRasterTaskYield'] = state;
+  globalThis['__donnerRasterWorker'] = true;
+});
+
+EM_ASYNC_JS(void, YieldRasterTask, (), {
+  const state = globalThis['__donnerRasterTaskYield'];
+  if (!state || state.closed || state.resume) abort('invalid overlapping raster task yield');
+  await new Promise((resolve) => {
+    state.resume = resolve;
+    state.channel.port2.postMessage(0);
+  });
+});
+
+EM_JS(void, CloseRasterTaskYield, (), {
+  const state = globalThis['__donnerRasterTaskYield'];
+  if (!state || state.resume) abort('raster task yield closed while pending');
+  state.closed = true;
+  state.channel.port1.onmessage = null;
+  state.channel.port1.close();
+  state.channel.port2.close();
+  delete globalThis['__donnerRasterTaskYield'];
+  delete globalThis['__donnerRasterWorker'];
+});
+// clang-format on
+
+namespace {
+/// Own one browser task channel for this raster worker's lifetime.
+struct RasterTaskYieldScope {
+  RasterTaskYieldScope() { InitializeRasterTaskYield(); }
+  ~RasterTaskYieldScope() { CloseRasterTaskYield(); }
+};
+}  // namespace
+#endif
+
 SampleThumbnailRenderOutcome ClassifyTemporaryFontResources(
     std::span<const svg::FontFaceDependency> dependencies,
     svg::FontResourcePreflight::Status status) {
@@ -480,6 +526,11 @@ void AsyncRenderer::shutdown() {
   }
   if (thread_.joinable()) {
 #ifdef __EMSCRIPTEN__
+    // clang-format off
+    MAIN_THREAD_ASYNC_EM_ASM({
+      window['__donnerRasterShutdownRequests'] = (window['__donnerRasterShutdownRequests'] || 0) + 1;
+    });
+    // clang-format on
     // The app owns GPU promises used by explicit worker captures and device initialization.
     const double deadlineMs = emscripten_get_now() + 30000.0;
     while (!workerExited_.load(std::memory_order_acquire)) {
@@ -995,10 +1046,9 @@ bool AsyncRenderer::waitForRenderOrIdleMaintenance(std::unique_lock<std::mutex>&
     idleWakeRequested_.store(false, std::memory_order_release);
   }
 #ifdef __EMSCRIPTEN__
-  // A blocking pthread wait cannot run the browser's GPU completion or share-release callbacks.
-  // Yield without either document or renderer locks, including when no render is requested.
+  // Yield a real browser task outside locks without the timer clamp on repeated setTimeout calls.
   const auto yieldStart = std::chrono::steady_clock::now();
-  emscripten_sleep(0);
+  YieldRasterTask();
   timing.idleYieldMs = elapsedMs(yieldStart);
 #endif
   if (idlePoll) {
@@ -1090,7 +1140,7 @@ void AsyncRenderer::workerLoop() {
 #if defined(__EMSCRIPTEN__)
   // C++ renderer state belongs to this worker; browser GPU primitives run on the app owner.
   svg::Renderer workerRenderer;
-  EM_ASM({ globalThis['__donnerRasterWorker'] = true; });
+  const RasterTaskYieldScope rasterTaskYield;
 #endif
   std::unique_ptr<svg::RendererInterface> sampleThumbnailRenderer;
   svg::RendererInterface* sampleThumbnailRendererRoot = nullptr;
@@ -1110,7 +1160,6 @@ void AsyncRenderer::workerLoop() {
       waitForReplayDocumentAccess(lock);
       if (std::holds_alternative<ShutdownState>(workerState_)) {
 #ifdef __EMSCRIPTEN__
-        EM_ASM({ delete globalThis['__donnerRasterWorker']; });
         // `workerRenderer` is destroyed here in Emscripten builds, i.e. on
         // the worker thread, mirroring its construction.
 #endif
