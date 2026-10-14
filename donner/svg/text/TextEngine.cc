@@ -531,8 +531,9 @@ void StageTextPathRun(TextRun& run, size_t runIndex,
                       const ByteIndexMappings& mappings, const TextLayoutParams& params,
                       const TextBackend& backend, double defaultY,
                       const SmallVector<std::optional<Lengthd>, 1>& dxList,
-                      const SmallVector<std::optional<Lengthd>, 1>& dyList,
+                      const SmallVector<std::optional<Lengthd>, 1>& dyList, double boundaryKern,
                       TextPathStagingState& state) {
+  state.advance += boundaryKern;
   const std::string_view spanText(span.text.data() + span.start, span.end - span.start);
   const bool vertical = isVertical(params.writingMode);
   for (size_t gi = 0; gi < run.glyphs.size(); ++gi) {
@@ -1707,6 +1708,37 @@ bool CompatibleKerningRuns(const FontManager& fontManager, const TextRun& curren
          fontManager.fontsShareFamily(current.font, previousFont);
 }
 
+/// Only adjacent flat runs or runs owned by the same textPath share a pair predecessor.
+bool ContinuesKerningScope(const std::optional<Entity>& previousPath,
+                           const components::ComputedTextComponent::TextSpan& current) {
+  if (!current.pathSpline) {
+    return !previousPath;
+  }
+  return previousPath && *previousPath != entt::null &&
+         *previousPath == current.textPathSourceEntity;
+}
+
+/// An ignored absolute y cannot start a new horizontal path kerning chunk.
+bool StartsNewKerningChunk(const components::ComputedTextComponent::TextSpan& span, bool vertical) {
+  if (span.pathSpline && !vertical) {
+    return !span.xList.empty() && span.xList.front().has_value();
+  }
+  return span.startsNewChunk;
+}
+
+/// Discard predecessor evidence that belongs to a different layout domain.
+uint32_t KerningPredecessorForScope(const std::optional<Entity>& previousPath,
+                                    const components::ComputedTextComponent::TextSpan& current,
+                                    uint32_t codepoint) {
+  return ContinuesKerningScope(previousPath, current) ? codepoint : 0;
+}
+
+/// Distinguish a flat span from an owned or unowned path span.
+std::optional<Entity> SpanKerningPathSource(
+    const components::ComputedTextComponent::TextSpan& span) {
+  return span.pathSpline ? std::optional(span.textPathSourceEntity) : std::nullopt;
+}
+
 /// Keep source clusters in the positioning pipeline without invoking a font backend at size zero.
 TextBackend::ShapedRun ShapeAddressableZeroSizeText(std::string_view text, size_t start,
                                                     size_t length) {
@@ -1883,6 +1915,7 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
   float prevSpanFontSizePx = 0.0f;
   bool prevSpanFontKerning = true;
   FontVariant prevSpanFontVariant = FontVariant::Normal;
+  std::optional<Entity> prevSpanPathSource;
   Entity prevTextPathSource = entt::null;
   std::optional<size_t> firstPathRun;
   TextPathStagingState pathStaging;
@@ -1903,6 +1936,7 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
       prevTextPathSource = entt::null;
       pathStaging.advance = 0.0;
       pathStaging.dy = 0.0;
+      prevSpanLastCodepoint = 0;
     }
   };
 
@@ -1923,6 +1957,8 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
       continue;
     }
 
+    prevSpanLastCodepoint =
+        KerningPredecessorForScope(prevSpanPathSource, span, prevSpanLastCodepoint);
     const std::string_view spanText(span.text.data() + span.start, span.end - span.start);
 
     // ── Per-span font resolution ────────────────────────────────────────────────
@@ -2048,6 +2084,7 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
 
     // ── Iterate the shaped chunks ───────────────────────────────────────────────
     uint32_t lastCodepoint = 0;
+    double pathBoundaryKern = 0.0;
 
     // Track last codepoint per chunk for cross-chunk kerning.
     uint32_t prevChunkLastCodepoint = prevSpanLastCodepoint;
@@ -2093,7 +2130,7 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
                                           spanFontSizePx, prevChunkLastCodepoint, firstCp, vertical)
                 : 0.0;
         appliedCrossKern = true;
-      } else if (ci == 0 && !span.startsNewChunk && prevSpanLastCodepoint != 0 &&
+      } else if (ci == 0 && !StartsNewKerningChunk(span, vertical) && prevSpanLastCodepoint != 0 &&
                  !shaped.glyphs.empty()) {
         // Cross-span kerning for the first chunk.
         size_t firstByteIdx = chunk.byteStart;
@@ -2251,6 +2288,7 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
           if (!hasAbsoluteX && !hasAbsoluteY) {
             if (gi == 0 && appliedCrossKern) {
               penX += crossKern;
+              pathBoundaryKern = crossKern;
             } else if (gi != 0) {
               penX += sg.xKern;
             }
@@ -2341,6 +2379,13 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
       }
     }
 
+    prevSpanLastCodepoint = lastCodepoint;
+    prevSpanFont = spanFont;
+    prevSpanFontSizePx = spanFontSizePx;
+    prevSpanFontKerning = spanFontKerning;
+    prevSpanFontVariant = span.fontVariant;
+    prevSpanPathSource = SpanKerningPathSource(span);
+
     // Stage glyph clusters before placement of the complete textPath.
     if (span.pathSpline) {
       if (!firstPathRun) {
@@ -2348,7 +2393,7 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
         prevTextPathSource = span.textPathSourceEntity;
       }
       StageTextPathRun(run, runs.size(), span, indexMappings, params, *backend_, defaultY,
-                       dxListLocal, dyListLocal, pathStaging);
+                       dxListLocal, dyListLocal, pathBoundaryKern, pathStaging);
       run.onPath = true;
       runExtents.push_back({runPenStartX, runPenStartY, penX, penY});
       runs.push_back(std::move(run));
@@ -2360,11 +2405,6 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
     currentPenY = penY;
     prevDefaultY = defaultY;
     haveCurrentPosition = true;
-    prevSpanLastCodepoint = lastCodepoint;
-    prevSpanFont = spanFont;
-    prevSpanFontSizePx = spanFontSizePx;
-    prevSpanFontKerning = spanFontKerning;
-    prevSpanFontVariant = span.fontVariant;
 
     runExtents.push_back({runPenStartX, runPenStartY, penX, penY});
     runs.push_back(std::move(run));

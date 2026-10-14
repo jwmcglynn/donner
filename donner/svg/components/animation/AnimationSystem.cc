@@ -475,7 +475,7 @@ std::vector<Entity> CollectAnimationEntities(Registry& registry) {
         result.resize(AnimationResourceBudget::kMaximumAnimations + 1, entt::null);
         break;
       }
-      if (!IsAnimationInSvgNamespace(registry, current)) {
+      if (!HasSvgNamespace(registry, current) || !IsAnimationInSvgNamespace(registry, current)) {
         registry.remove<AnimationStateComponent>(current);
       } else {
         result.push_back(current);
@@ -571,6 +571,9 @@ void AnimationSystem::advance(Registry& registry, double documentTime,
     registry.ctx().erase<AnimationResourceBudget>();
   }
   auto& resourceBudget = registry.ctx().emplace<AnimationResourceBudget>();
+  if (const auto* context = registry.ctx().find<AnimationContextualWorkContext>()) {
+    resourceBudget.setContextualWorkBudget(context->budget);
+  }
   ClearSampledAnimationValues(registry);
 
   if (registry.ctx().get<ResourceManagerContext>().processingMode() ==

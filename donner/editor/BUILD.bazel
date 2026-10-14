@@ -15,7 +15,7 @@ graphs via `dev_dependency = True` in `MODULE.bazel`.
 load("@bazel_skylib//lib:selects.bzl", "selects")
 load("//build_defs:embed_resources.bzl", "embed_resources")
 load("//build_defs:macos_app_bundle.bzl", "donner_macos_app_bundle")
-load("//build_defs:rules.bzl", "donner_cc_binary", "donner_cc_library", "donner_multi_transitioned_binary")
+load("//build_defs:rules.bzl", "donner_cc_binary", "donner_cc_library", "donner_multi_transitioned_binary", "identical_code_folding_linkopts")
 load(":editor_product_config.bzl", "EDITOR_RENDERER_BACKEND", "EDITOR_TEXT", "EDITOR_TEXT_FULL", "editor_full_text_compatible_with", "editor_full_text_guard")
 
 #Editor libraries are public so the  // examples:svg_viewer target (in the
@@ -1635,7 +1635,7 @@ donner_cc_binary(
     linkopts = select({
         "@platforms//os:macos": ["-Wl,-rpath,@executable_path/../Frameworks"],
         "//conditions:default": [],
-    }),
+    }) + identical_code_folding_linkopts(),
     tags = ["manual"],
     target_compatible_with = select({
         "@platforms//os:macos": [],

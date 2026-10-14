@@ -39,6 +39,8 @@ struct EditorMenuItemPresentation {
   bool enabled = true;
   /// Whether the item displays a selection checkmark.
   bool checked = false;
+  /// Whether the item's shortcut is displayed and registered for the current keyboard focus.
+  bool shortcutEnabled = true;
 };
 
 /// Menu backend; native editing capture disables unsafe canvas actions.

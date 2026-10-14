@@ -10,13 +10,13 @@ env:
 # toolchain that fights with the main build for cache slots).
 #
 # This lane owns exploratory mutation. `--config=fuzz-soak` raises the
-# `{fuzzer}_soak` targets' libFuzzer budget ABOVE the old fixed 10 s, whereas
-# the PR gate now runs them briefly. That is where the mutation belongs: this
-# lane builds with `--config=asan-fuzzer`, so an input it discovers reports a
-# diagnosable sanitizer failure, while the PR sweep builds without sanitizers
-# and its mutation time was searching with the detectors switched off. The
-# existing `{fuzzer}` corpus targets still replay on PRs. The production-budget
-# image corpus is a separate manual nightly lane so the short PR target stays fast.
+# `{fuzzer}_soak` targets' libFuzzer budget ABOVE the old fixed 10 s, and PR CI
+# excludes those targets by their `fuzz_soak` tag. That is where the mutation
+# belongs: this lane builds with `--config=asan-fuzzer`, so an input it discovers
+# reports a diagnosable sanitizer failure, while the PR sweep builds without
+# sanitizers. The existing `{fuzzer}` corpus targets still replay on PRs. The
+# production-budget image corpus is a separate manual nightly lane so the short PR
+# target stays fast.
 #
 # - Schedule: 06:00 UTC daily — catches new corpus regressions within 24h.
 # - workflow_dispatch — manual trigger for ad-hoc runs.
@@ -66,7 +66,7 @@ jobs:
           disk-cache: ${{ github.workflow }}-${{ runner.os }}-asan-fuzzer
           repository-cache: true
           external-cache: true
-          cache-save: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
+          cache-save: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
 
       - name: Test fuzzers (libFuzzer via LLVM 21 toolchain)
         run: |
@@ -132,7 +132,7 @@ jobs:
           disk-cache: ${{ github.workflow }}-${{ runner.os }}-asan-fuzzer
           repository-cache: true
           external-cache: true
-          cache-save: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
+          cache-save: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
 
       - name: Test fuzzers (libFuzzer via LLVM 21 toolchain)
         run: |

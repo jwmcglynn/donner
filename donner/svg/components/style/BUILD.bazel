@@ -26,6 +26,7 @@ donner_perf_sensitive_cc_library(
     hdrs = [
         "ScalarAnimationStyle.h",
         "StyleSystem.h",
+        "ExternalUseStyleContext.h",
     ],
     visibility = [
         "//donner/editor:__pkg__",

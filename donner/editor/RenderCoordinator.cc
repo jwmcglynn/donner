@@ -274,16 +274,6 @@ bool IsGraphicsElement(const svg::SVGElement& element) {
   });
 }
 
-/// During continuous pinch-zoom, the viewport's `desiredCanvasSize` changes
-/// every wheel event (~60 Hz). Each commit through
-/// `SVGDocument::setCanvasSize` calls `invalidateRenderTree`, which forces
-/// the compositor to re-rasterize every promoted layer at the new canvas
-/// size - at high zoom on the splash that's 7-8 layers × seconds each, so
-/// the editor freezes for the whole gesture. Debouncing the commit lets
-/// the previously-rendered bitmap (at the prior canvas size) keep displaying
-/// stretched until the user stops zooming; the high-quality re-rasterize
-/// then happens once.
-constexpr std::chrono::milliseconds kCanvasSizeCommitDelay{120};
 constexpr double kDragTranslationRecaptureScreenPx = 128.0;
 constexpr bool kSelectionOnlyPrewarmMayTriggerRender = true;
 

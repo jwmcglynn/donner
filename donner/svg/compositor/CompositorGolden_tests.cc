@@ -5,6 +5,7 @@
 #include <array>
 #include <chrono>
 #include <cstdint>
+#include <cstdlib>
 #include <iostream>
 #include <sstream>
 #include <unordered_map>
@@ -14,9 +15,11 @@
 #include "donner/base/Transform.h"
 #include "donner/base/Vector2.h"
 #include "donner/base/tests/RunfileGate.h"
+#include "donner/editor/tests/BitmapGoldenCompare.h"
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/SVGGraphicsElement.h"
 #include "donner/svg/components/RenderingInstanceComponent.h"
+#include "donner/svg/components/style/StyleSystem.h"
 #include "donner/svg/compositor/CompositorController.h"
 #include "donner/svg/compositor/DualPathVerifier.h"
 #include "donner/svg/parser/SVGParser.h"
@@ -24,6 +27,7 @@
 #include "donner/svg/renderer/RendererDriver.h"
 #include "donner/svg/renderer/RendererImageIO.h"
 #include "donner/svg/renderer/common/RenderingInstanceView.h"
+#include "donner/svg/resources/ResourceLoaderInterface.h"
 
 namespace donner::svg::compositor {
 
@@ -83,6 +87,53 @@ MATCHER_P2(Vector2dNear, expected, tolerance, "Vector2d is near expected") {
       arg, result_listener);
 }
 
+class VerificationResourceLoader : public ResourceLoaderInterface {
+public:
+  std::variant<std::vector<uint8_t>, ResourceLoaderError> fetchExternalResource(
+      std::string_view url) override {
+    std::string source = "<svg xmlns='http://www.w3.org/2000/svg' width='2' height='2'>";
+    if (url == "external.svg") {
+      for (int i = 0; i < 32; ++i) {
+        source += "<use href='tile.svg#tile' fill='blue'/>";
+      }
+      source += "<use href='tile.svg#tile' fill='red'/>";
+    } else {
+      source += "<rect id='tile' width='2' height='2'/>";
+    }
+    source += "</svg>";
+    if (url != "external.svg" && url != "tile.svg") {
+      return ResourceLoaderError::NotFound;
+    }
+    return std::vector<uint8_t>(source.begin(), source.end());
+  }
+};
+
+SVGDocument MakeVerificationDocument() {
+  const std::string source = R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="2" height="2">
+    <defs><filter id="f" filterUnits="userSpaceOnUse" x="0" y="0" width="2" height="2">
+      <feImage href="external.svg" x="0" y="0" width="2" height="2"/>
+    </filter></defs><rect id="target" width="2" height="2" filter="url(#f)"/></svg>)svg";
+  SVGDocument::Settings settings;
+  settings.resourceLoader = std::make_unique<VerificationResourceLoader>();
+  settings.svgParseCallback = [](const std::vector<uint8_t>& bytes,
+                                 ParseWarningSink& warnings) -> std::optional<SVGDocumentHandle> {
+    SVGDocument::Settings nested;
+    nested.resourceLoader = std::make_unique<VerificationResourceLoader>();
+    const std::string_view source(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+    auto parsed = parser::SVGParser::ParseSVG(source, warnings, parser::SVGParser::Options(),
+                                              std::move(nested));
+    if (parsed.hasError()) {
+      return std::nullopt;
+    }
+    return parsed.result().handle();
+  };
+  ParseWarningSink warnings;
+  auto parsed = parser::SVGParser::ParseSVG(source, warnings, parser::SVGParser::Options(),
+                                            std::move(settings));
+  EXPECT_FALSE(parsed.hasError());
+  return std::move(parsed.result());
+}
+
 SVGDocument parseDocument(std::string_view svgSource) {
   ParseWarningSink sink;
   auto result = parser::SVGParser::ParseSVG(svgSource, sink);
@@ -106,6 +157,362 @@ protected:
 };
 
 }  // namespace
+
+CompositorConfig VerificationConfig(bool enabled) {
+  CompositorConfig config;
+  config.verifyPixelIdentity = enabled;
+  config.deferFirstFrameWarmup = true;
+  config.complexityBucketing = false;
+  config.mandatoryHintScope = MandatoryHintScope::FilterOnly;
+  config.immediateStaticSpans = false;
+  config.dynamicImmediateStaticSpans = false;
+  return config;
+}
+
+std::shared_ptr<components::StyleResourceBudget> VerificationBudget(std::size_t matches) {
+  components::StyleResourceBudget::Limits limits;
+  limits.ruleElementMatches = matches;
+  return std::make_shared<components::StyleResourceBudget>(limits);
+}
+
+void PrepareVerificationCachedPath(CompositorController& compositor) {
+  compositor.renderFrame(RenderViewport{Vector2i(2, 2)});
+  ASSERT_TRUE(compositor.hasPendingFirstFrameWarmup());
+  CancellationToken active;
+  ASSERT_TRUE(compositor.warmPendingFirstFrameCaches(active));
+  ASSERT_TRUE(compositor.hasCompleteTileSetForPresentation());
+  ASSERT_GE(compositor.snapshotState().layerCount, 1u);
+}
+
+RendererBitmap VerificationLiteralReference(std::string_view color, int size = 2) {
+  const std::string extent = std::to_string(size);
+  const std::string source =
+      "<svg xmlns='http://www.w3.org/2000/svg' width='" + extent + "' height='" + extent +
+      "'>"
+      "<rect width='" +
+      extent + "' height='" + extent + "' fill='" + std::string(color) + "'/></svg>";
+  SVGDocument document = parseDocument(source);
+  Renderer renderer;
+  renderer.draw(document);
+  return renderer.takeSnapshot();
+}
+
+// This reference preserves the normal limited operation's output. It is not an SVG
+// correctness oracle: style refusal can deliberately leave an incomplete retained payload.
+RendererBitmap NormalLimitedVerificationOutput() {
+  SVGDocument document = MakeVerificationDocument();
+  Renderer renderer;
+  auto work = VerificationBudget(32);
+  CompositorController compositor(document, renderer, VerificationConfig(false), work);
+  PrepareVerificationCachedPath(compositor);
+  EXPECT_TRUE(work->rejected());
+  EXPECT_LE(work->ruleElementMatches(), 32u);
+  const auto target = document.querySelector("#target");
+  const CompositorLayer* layer = compositor.findLayerForTest(target->unsafeEntityHandle().entity());
+  EXPECT_NE(layer, nullptr);
+  if (!layer) {
+    return {};
+  }
+  EXPECT_TRUE(layer->hasRenderablePayload());
+  const uint64_t generation = layer->generation();
+  compositor.renderFrame(RenderViewport{Vector2i(2, 2)});
+  EXPECT_FALSE(work->rejected());
+  EXPECT_EQ(layer->generation(), generation);
+  return renderer.takeSnapshot();
+}
+
+class CompositorVerificationSourceTest : public testing::TestWithParam<bool> {};
+
+TEST_P(CompositorVerificationSourceTest, FullAllowanceMatchesLiteralSource) {
+#if !defined(DONNER_FILTERS_ENABLED) && !defined(DONNER_COMPOSITOR_TEST_GEODE)
+  GTEST_SKIP() << "External feImage fixture requires filter rendering";
+#endif
+  SVGDocument document = MakeVerificationDocument();
+  Renderer renderer;
+  auto work = VerificationBudget(components::StyleResourceBudget::kMaximumRuleElementMatches);
+  CompositorController compositor(document, renderer, VerificationConfig(false), work);
+  if (GetParam()) {
+    PrepareVerificationCachedPath(compositor);
+  }
+  compositor.renderFrame(RenderViewport{Vector2i(2, 2)});
+  EXPECT_FALSE(work->rejected());
+  const RendererBitmap actual = renderer.takeSnapshot();
+  ASSERT_FALSE(actual.empty());
+  editor::tests::CompareBitmapToBitmap(
+      actual, VerificationLiteralReference("red"),
+      GetParam() ? "verification_cached_full_control" : "verification_flat_full_control",
+      editor::tests::PixelmatchIdentityParams());
+  if (!GetParam()) {
+    EXPECT_EQ(compositor.lastRenderFrameStats().pixelIdentityVerification,
+              PixelIdentityVerificationStatus::NotAttempted);
+  }
+}
+
+INSTANTIATE_TEST_SUITE_P(Paths, CompositorVerificationSourceTest, testing::Bool(),
+                         [](const testing::TestParamInfo<bool>& info) {
+                           return info.param ? "Cached" : "Flat";
+                         });
+
+TEST(CompositorVerificationTest, LimitedUnverifiedOutputPreservesRetainedPayload) {
+#if !defined(DONNER_FILTERS_ENABLED) && !defined(DONNER_COMPOSITOR_TEST_GEODE)
+  GTEST_SKIP() << "External feImage fixture requires filter rendering";
+#endif
+  SVGDocument document = MakeVerificationDocument();
+  Renderer renderer;
+  auto work = VerificationBudget(32);
+  CompositorController compositor(document, renderer, VerificationConfig(false), work);
+  PrepareVerificationCachedPath(compositor);
+  ASSERT_TRUE(work->rejected());
+  EXPECT_LE(work->ruleElementMatches(), 32u);
+  const auto target = document.querySelector("#target");
+  const CompositorLayer* layer = compositor.findLayerForTest(target->unsafeEntityHandle().entity());
+  ASSERT_NE(layer, nullptr);
+  ASSERT_TRUE(layer->hasRenderablePayload());
+  // This test explicitly reads the retained payload; ordinary composition remains GPU resident.
+  const RendererBitmap retained =
+      layer->hasValidBitmap() ? layer->bitmap() : layer->textureSnapshot()->takeSnapshot();
+  ASSERT_FALSE(retained.empty());
+  const uint64_t generation = layer->generation();
+  compositor.renderFrame(RenderViewport{Vector2i(2, 2)});
+  EXPECT_FALSE(work->rejected());
+  EXPECT_EQ(layer->generation(), generation);
+  const RendererBitmap actual = renderer.takeSnapshot();
+  ASSERT_FALSE(actual.empty());
+  editor::tests::CompareBitmapToBitmap(actual, retained, "verification_partial_retained_control",
+                                       editor::tests::PixelmatchIdentityParams());
+  EXPECT_EQ(compositor.lastRenderFrameStats().pixelIdentityVerification,
+            PixelIdentityVerificationStatus::NotAttempted);
+}
+
+TEST(CompositorVerificationTest, CompleteCachedDiagnosticReportsCompared) {
+#if !defined(DONNER_FILTERS_ENABLED) && !defined(DONNER_COMPOSITOR_TEST_GEODE)
+  GTEST_SKIP() << "External feImage fixture requires filter rendering";
+#endif
+  SVGDocument document = MakeVerificationDocument();
+  Renderer renderer;
+  CompositorController compositor(document, renderer, VerificationConfig(true));
+  PrepareVerificationCachedPath(compositor);
+  compositor.renderFrame(RenderViewport{Vector2i(2, 2)});
+  editor::tests::CompareBitmapToBitmap(renderer.takeSnapshot(), VerificationLiteralReference("red"),
+                                       "verification_complete_compared",
+                                       editor::tests::PixelmatchIdentityParams());
+  EXPECT_EQ(compositor.lastRenderFrameStats().pixelIdentityVerification,
+            PixelIdentityVerificationStatus::Compared);
+}
+
+TEST(CompositorVerificationTest, LimitedCachedDiagnosticIsInconclusiveAndPreservesOutput) {
+#if !defined(DONNER_FILTERS_ENABLED) && !defined(DONNER_COMPOSITOR_TEST_GEODE)
+  GTEST_SKIP() << "External feImage fixture requires filter rendering";
+#endif
+  EXPECT_EXIT(
+      {
+        SVGDocument document = MakeVerificationDocument();
+        Renderer renderer;
+        auto work = VerificationBudget(32);
+        CompositorController compositor(document, renderer, VerificationConfig(true), work);
+        PrepareVerificationCachedPath(compositor);
+        EXPECT_TRUE(work->rejected());
+        compositor.renderFrame(RenderViewport{Vector2i(2, 2)});
+        EXPECT_FALSE(work->rejected());
+        EXPECT_EQ(compositor.lastRenderFrameStats().pixelIdentityVerification,
+                  PixelIdentityVerificationStatus::InconclusiveStyleWork);
+        editor::tests::CompareBitmapToBitmap(
+            renderer.takeSnapshot(), NormalLimitedVerificationOutput(),
+            "verification_limited_preserved", editor::tests::PixelmatchIdentityParams());
+        std::_Exit(testing::Test::HasFailure() ? 1 : 0);
+      },
+      testing::ExitedWithCode(0), "");
+}
+
+TEST(CompositorVerificationTest, LimitedCachedReuseRemainsInconclusiveAfterBudgetReset) {
+#if !defined(DONNER_FILTERS_ENABLED) && !defined(DONNER_COMPOSITOR_TEST_GEODE)
+  GTEST_SKIP() << "External feImage fixture requires filter rendering";
+#endif
+  EXPECT_EXIT(
+      {
+        SVGDocument document = MakeVerificationDocument();
+        Renderer renderer;
+        auto work = VerificationBudget(32);
+        CompositorController compositor(document, renderer, VerificationConfig(true), work);
+        PrepareVerificationCachedPath(compositor);
+        const RenderViewport viewport{Vector2i(2, 2)};
+        compositor.renderFrame(viewport);
+        const auto group = document.querySelector("#target");
+        const CompositorLayer* layer =
+            compositor.findLayerForTest(group->unsafeEntityHandle().entity());
+        const uint64_t generation = layer->generation();
+        compositor.renderFrame(viewport);
+        EXPECT_FALSE(work->rejected());
+        EXPECT_EQ(layer->generation(), generation);
+        EXPECT_EQ(compositor.lastRenderFrameStats().pixelIdentityVerification,
+                  PixelIdentityVerificationStatus::InconclusiveStyleWork);
+        editor::tests::CompareBitmapToBitmap(
+            renderer.takeSnapshot(), NormalLimitedVerificationOutput(),
+            "verification_limited_reused", editor::tests::PixelmatchIdentityParams());
+        std::_Exit(testing::Test::HasFailure() ? 1 : 0);
+      },
+      testing::ExitedWithCode(0), "");
+}
+
+TEST(CompositorVerificationTest, CompleteReplacementClearsPartialPayloadProvenance) {
+#if !defined(DONNER_FILTERS_ENABLED) && !defined(DONNER_COMPOSITOR_TEST_GEODE)
+  GTEST_SKIP() << "External feImage fixture requires filter rendering";
+#endif
+  SVGDocument document = MakeVerificationDocument();
+  Renderer renderer;
+  auto work = VerificationBudget(32);
+  CompositorController compositor(document, renderer, VerificationConfig(true), work);
+  PrepareVerificationCachedPath(compositor);
+  ASSERT_TRUE(work->rejected());
+  auto target = document.querySelector("#target");
+  const CompositorLayer* layer = compositor.findLayerForTest(target->unsafeEntityHandle().entity());
+  ASSERT_NE(layer, nullptr);
+  const uint64_t previousGeneration = layer->generation();
+  compositor.renderFrame(RenderViewport{Vector2i(2, 2)});
+  ASSERT_EQ(compositor.lastRenderFrameStats().pixelIdentityVerification,
+            PixelIdentityVerificationStatus::InconclusiveStyleWork);
+  target->setAttribute("filter", "blur(0)");
+  target->setAttribute("fill", "green");
+  // A changed raster replaces every retained root/static payload too. Replacing only the layer
+  // cannot certify untouched tiles that were captured after the earlier style refusal.
+  compositor.renderFrame(RenderViewport{Vector2i(4, 4)}, Transform2d::Scale(2));
+  EXPECT_FALSE(work->rejected());
+  const CompositorLayer* replacement =
+      compositor.findLayerForTest(target->unsafeEntityHandle().entity());
+  ASSERT_NE(replacement, nullptr);
+  EXPECT_NE(replacement->generation(), previousGeneration);
+  ASSERT_TRUE(replacement->payloadRaster().has_value());
+  EXPECT_FALSE(replacement->payloadRaster()->styleWorkIncomplete);
+  EXPECT_EQ(compositor.lastRenderFrameStats().pixelIdentityVerification,
+            PixelIdentityVerificationStatus::Compared);
+  editor::tests::CompareBitmapToBitmap(
+      renderer.takeSnapshot(), VerificationLiteralReference("green", 4),
+      "verification_complete_replacement", editor::tests::PixelmatchIdentityParams());
+}
+
+class VerificationCaptureRenderer : public Renderer {
+public:
+  bool refuseOffscreen = false;
+  bool refuseSnapshot = false;
+  mutable bool corruptNextSnapshot = false;
+  CancellationToken* cancelOnOffscreen = nullptr;
+  CancellationToken* cancelOnSnapshot = nullptr;
+
+  std::unique_ptr<RendererInterface> createOffscreenInstance() const override {
+    if (cancelOnOffscreen) {
+      cancelOnOffscreen->cancel();
+    }
+    return refuseOffscreen ? nullptr : Renderer::createOffscreenInstance();
+  }
+
+  RendererBitmap takeSnapshot() const override {
+    if (cancelOnSnapshot) {
+      cancelOnSnapshot->cancel();
+    }
+    if (refuseSnapshot) {
+      return {};
+    }
+    RendererBitmap snapshot = Renderer::takeSnapshot();
+    if (corruptNextSnapshot && !snapshot.empty()) {
+      corruptNextSnapshot = false;
+      snapshot.pixels[0] ^= 255u;
+    }
+    return snapshot;
+  }
+};
+
+class CompositorVerificationCaptureTest : public testing::TestWithParam<bool> {};
+
+TEST_P(CompositorVerificationCaptureTest, MissingDiagnosticCapturePreservesPresentationAndCache) {
+#if !defined(DONNER_FILTERS_ENABLED) && !defined(DONNER_COMPOSITOR_TEST_GEODE)
+  GTEST_SKIP() << "External feImage fixture requires filter rendering";
+#endif
+  SVGDocument document = MakeVerificationDocument();
+  VerificationCaptureRenderer renderer;
+  CompositorController compositor(document, renderer, VerificationConfig(true));
+  PrepareVerificationCachedPath(compositor);
+  const auto target = document.querySelector("#target");
+  const CompositorLayer* layer = compositor.findLayerForTest(target->unsafeEntityHandle().entity());
+  ASSERT_NE(layer, nullptr);
+  const uint64_t generation = layer->generation();
+  renderer.refuseOffscreen = GetParam();
+  renderer.refuseSnapshot = !GetParam();
+  compositor.renderFrame(RenderViewport{Vector2i(2, 2)});
+  EXPECT_EQ(compositor.lastRenderFrameStats().pixelIdentityVerification,
+            PixelIdentityVerificationStatus::SnapshotUnavailable);
+  EXPECT_EQ(layer->generation(), generation);
+  EXPECT_EQ(compositor.lastRenderFrameStats().textureAllocationFailureCount, 0u);
+  EXPECT_EQ(compositor.lastRenderFrameStats().composePayloadRefusalCount, 0u);
+  editor::tests::CompareBitmapToBitmap(
+      renderer.Renderer::takeSnapshot(), VerificationLiteralReference("red"),
+      "verification_missing_capture_preserved", editor::tests::PixelmatchIdentityParams());
+}
+
+INSTANTIATE_TEST_SUITE_P(Failures, CompositorVerificationCaptureTest, testing::Bool(),
+                         [](const testing::TestParamInfo<bool>& info) {
+                           return info.param ? "Offscreen" : "Snapshot";
+                         });
+
+class CompositorVerificationCancellationTest : public testing::TestWithParam<bool> {};
+
+TEST_P(CompositorVerificationCancellationTest,
+       CancelledDiagnosticPreservesPresentationWithoutClaimingComparison) {
+#if !defined(DONNER_FILTERS_ENABLED) && !defined(DONNER_COMPOSITOR_TEST_GEODE)
+  GTEST_SKIP() << "External feImage fixture requires filter rendering";
+#endif
+  EXPECT_EXIT(
+      {
+        SVGDocument document = MakeVerificationDocument();
+        VerificationCaptureRenderer renderer;
+        CompositorController compositor(document, renderer, VerificationConfig(true));
+        PrepareVerificationCachedPath(compositor);
+        const auto target = document.querySelector("#target");
+        const CompositorLayer* layer =
+            compositor.findLayerForTest(target->unsafeEntityHandle().entity());
+        ASSERT_NE(layer, nullptr);
+        const uint64_t generation = layer->generation();
+        CancellationToken token;
+        if (GetParam()) {
+          renderer.cancelOnOffscreen = &token;
+        } else {
+          renderer.cancelOnSnapshot = &token;
+          // A cancelled diagnostic must not assert even if its captured comparison data differs.
+          // Only the returned copy changes; the actual presentation remains the literal red scene.
+          renderer.corruptNextSnapshot = true;
+        }
+        EXPECT_FALSE(compositor.renderFrame(RenderViewport{Vector2i(2, 2)}, token));
+        EXPECT_TRUE(token.isCancelled());
+        EXPECT_EQ(compositor.lastRenderFrameStats().pixelIdentityVerification,
+                  PixelIdentityVerificationStatus::NotAttempted);
+        EXPECT_EQ(layer->generation(), generation);
+        editor::tests::CompareBitmapToBitmap(
+            renderer.Renderer::takeSnapshot(), VerificationLiteralReference("red"),
+            "verification_cancelled_preserved", editor::tests::PixelmatchIdentityParams());
+        std::_Exit(testing::Test::HasFailure() ? 1 : 0);
+      },
+      testing::ExitedWithCode(0), "");
+}
+
+INSTANTIATE_TEST_SUITE_P(Stages, CompositorVerificationCancellationTest, testing::Bool(),
+                         [](const testing::TestParamInfo<bool>& info) {
+                           return info.param ? "Offscreen" : "Snapshot";
+                         });
+
+TEST(CompositorVerificationTest, CompletePixelMismatchRemainsFatal) {
+#if !defined(DONNER_FILTERS_ENABLED) && !defined(DONNER_COMPOSITOR_TEST_GEODE)
+  GTEST_SKIP() << "External feImage fixture requires filter rendering";
+#endif
+  EXPECT_DEATH(
+      {
+        SVGDocument document = MakeVerificationDocument();
+        VerificationCaptureRenderer renderer;
+        CompositorController compositor(document, renderer, VerificationConfig(true));
+        PrepareVerificationCachedPath(compositor);
+        renderer.corruptNextSnapshot = true;
+        compositor.renderFrame(RenderViewport{Vector2i(2, 2)});
+      },
+      "pixel-identity assertion failed");
+}
 
 // Composited output of a simple document matches the full-render output at
 // every pixel. Baseline correctness: no compositor optimization preserves

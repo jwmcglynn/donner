@@ -6,6 +6,7 @@
 #include "donner/base/xml/components/TreeComponent.h"
 #include "donner/css/parser/ColorParser.h"
 #include "donner/svg/components/DocumentResourceFamilyBudget.h"
+#include "donner/svg/components/ElementTypeComponent.h"
 #include "donner/svg/components/ReferenceResolutionBudget.h"
 #include "donner/svg/components/animation/AnimatedValuesComponent.h"
 #include "donner/svg/components/filter/ComputedFilterResourceBudget.h"
@@ -276,11 +277,17 @@ std::optional<ColorInterpolationFilters> resolveColorInterpolationFilters(const 
   return std::nullopt;
 }
 
+template <typename Component>
+const Component* ActiveFilterComponent(const Registry& registry, Entity entity) {
+  return HasSvgNamespace(registry, entity) ? registry.try_get<Component>(entity) : nullptr;
+}
+
 bool hasFilterPrimitiveChildren(const Registry& registry, EntityHandle handle) {
   const auto& tree = handle.get<donner::components::TreeComponent>();
   for (auto cur = tree.firstChild(); cur != entt::null;
        cur = registry.get<donner::components::TreeComponent>(cur).nextSibling()) {
-    if (registry.try_get<FilterPrimitiveComponent>(cur) != nullptr) {
+    if (HasSvgNamespace(registry, cur) &&
+        registry.try_get<FilterPrimitiveComponent>(cur) != nullptr) {
       return true;
     }
   }
@@ -369,7 +376,7 @@ void AppendComponentTransferNode(Registry& registry, Entity current, FilterGraph
   const auto& tree = registry.get<donner::components::TreeComponent>(current);
   for (Entity child = tree.firstChild(); child != entt::null;
        child = registry.get<donner::components::TreeComponent>(child).nextSibling()) {
-    const auto* function = registry.try_get<FEFuncComponent>(child);
+    const auto* function = ActiveFilterComponent<FEFuncComponent>(registry, child);
     if (!function || function->tableValues.size() > kMaximumFilterTableValues) {
       continue;
     }
@@ -406,7 +413,7 @@ void AppendMergeNode(Registry& registry, Entity current, FilterGraph& graph,
   for (Entity child = tree.firstChild();
        child != entt::null && node.inputs.size() < kMaximumFilterMergeInputs;
        child = registry.get<donner::components::TreeComponent>(child).nextSibling()) {
-    if (const auto* mergeNode = registry.try_get<FEMergeNodeComponent>(child)) {
+    if (const auto* mergeNode = ActiveFilterComponent<FEMergeNodeComponent>(registry, child)) {
       node.inputs.push_back(mergeNode->in.value_or(FilterInput{FilterInput::Previous{}}));
     }
   }
@@ -537,7 +544,7 @@ std::optional<filter_primitive::LightSource> FindLightSource(const Registry& reg
   const auto& tree = registry.get<donner::components::TreeComponent>(entity);
   for (Entity child = tree.firstChild(); child != entt::null;
        child = registry.get<donner::components::TreeComponent>(child).nextSibling()) {
-    if (const auto* component = registry.try_get<LightSourceComponent>(child)) {
+    if (const auto* component = ActiveFilterComponent<LightSourceComponent>(registry, child)) {
       filter_primitive::LightSource light;
       light.type = static_cast<filter_primitive::LightSource::Type>(component->type);
       light.azimuth = component->azimuth;
@@ -800,7 +807,7 @@ void FilterSystem::createComputedFilter(EntityHandle handle, const FilterCompone
       primitiveSource.get<donner::components::TreeComponent>();
   for (auto cur = tree.firstChild(); cur != entt::null;
        cur = NextFilterChild(registry, cur, filterGraph.nodes.size())) {
-    const auto* primitive = registry.try_get<FilterPrimitiveComponent>(cur);
+    const auto* primitive = ActiveFilterComponent<FilterPrimitiveComponent>(registry, cur);
     if (!primitive) {
       continue;
     }
@@ -825,6 +832,10 @@ void FilterSystem::instantiateAllComputedComponents(Registry& registry,
   GetReferenceResolutionBudget(registry).reset(ReferenceResolutionBudget::Kind::Filter);
   GetComputedFilterResourceBudget(registry);
   for (auto entity : registry.view<FilterComponent>()) {
+    if (!HasSvgNamespace(registry, entity)) {
+      RemoveComputedFilter(EntityHandle(registry, entity));
+      continue;
+    }
     createComputedFilter(EntityHandle(registry, entity), registry.get<FilterComponent>(entity),
                          warningSink);
   }

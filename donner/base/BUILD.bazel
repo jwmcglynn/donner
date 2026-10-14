@@ -141,6 +141,15 @@ donner_cc_library(
     ],
 )
 
+# Stall guards for tests that wait on threads, workers or the GPU: a generous per-wait hang bound
+# and polling helpers, so correctness tests assert ordering instead of a wall-clock deadline.
+donner_cc_library(
+    name = "stall_guard",
+    testonly = 1,
+    hdrs = ["tests/StallGuard.h"],
+    visibility = donner_internal_visibility(),
+)
+
 # Header-only runfiles access for fuzzer binaries and other executable test harnesses whose
 # generated `_bin` target is intentionally not `testonly`.
 donner_cc_library(
@@ -155,7 +164,7 @@ donner_cc_library(
 
 # `gtest_main` replacement that aborts any single test case exceeding
 # `--donner_test_timeout_seconds=N` (or the `DONNER_TEST_TIMEOUT_SECONDS`
-# env var, default 30 s). Use in place of `@com_google_gtest//:gtest_main`
+# env var, default 60 s). Use in place of `@com_google_gtest//:gtest_main`
 # for test targets where a single hung test case could otherwise chew
 # through a 15-minute Bazel `test_timeout` (e.g., GPU-driver hangs on
 # the Geode backend under Intel Arc + Mesa 25.2.8 Xe-KMD).
@@ -205,6 +214,7 @@ donner_cc_test(
         "tests/RunfileGate_tests.cc",
         "tests/Runfiles_tests.cc",
         "tests/SmallVector_tests.cc",
+        "tests/StallGuard_tests.cc",
         "tests/StringUtils_tests.cc",
         "tests/Transform_tests.cc",
         "tests/Utf8_tests.cc",
@@ -222,6 +232,7 @@ donner_cc_test(
         ":base_test_utils",
         ":diagnostic_renderer",
         ":memory_attribution",
+        ":stall_guard",
         "@com_google_gtest//:gtest_main",
     ],
 )
@@ -300,13 +311,6 @@ donner_cc_fuzzer(
         "tests/Path_fuzzer.cc",
     ],
     corpus = "tests/path_corpus",
-    # One input may run measure(), pathLength() and pointAtArcLength(), and each can spend the whole
-    # Path::kMaximumGeometryQueryWork budget. A 54-byte mutated input takes 0.87 s and a 4 KB input
-    # 1.26 s in the unoptimized fastbuild fuzzer build on an idle core; a starved four-vCPU CI
-    # runner stretched the same work past 3 s. libFuzzer reports a hung input 10 to 16 s after it
-    # starts, so a hang at the end of the 30 s fuzz-soak budget still fails by about 46 s (51 s if
-    # the timeout report stalls), inside the 60 s test limit.
-    per_input_timeout_seconds = 10,
     tags = ["fuzz_ubsan"],
     deps = [
         ":base",

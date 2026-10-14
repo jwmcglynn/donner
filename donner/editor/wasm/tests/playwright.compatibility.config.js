@@ -1,4 +1,5 @@
 const { defineConfig, devices } = require("@playwright/test");
+const { stallGuardFor } = require("./test-timing.cjs");
 
 module.exports = defineConfig({
   testDir: ".",
@@ -9,6 +10,8 @@ module.exports = defineConfig({
     "browser-backend-selection.spec.ts",
   ],
   timeout: 30000,
+  // Web-first assertions wait for a state; bound them by the shared stall guard, not a latency.
+  expect: { timeout: stallGuardFor(30000) },
   workers: 1,
   projects: [
     {

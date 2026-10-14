@@ -10,6 +10,8 @@ import tempfile
 import unittest
 from unittest import mock
 
+from python.runfiles import runfiles
+
 from tools import bcr_source as source
 
 
@@ -57,6 +59,15 @@ class ArchiveSafetyTest(unittest.TestCase):
             with self.subTest(present=present), self.archive(entries) as archive:
                 with self.assertRaisesRegex(ValueError, "missing LICENSE or NOTICE"):
                     source.archive_members(archive, "donner-1.0.0")
+
+    def test_rejects_the_generated_coverage_report(self):
+        entries = [("donner-1.0.0/MODULE.bazel", tarfile.REGTYPE),
+                   ("donner-1.0.0/LICENSE", tarfile.REGTYPE),
+                   ("donner-1.0.0/NOTICE", tarfile.REGTYPE),
+                   ("donner-1.0.0/docs/reports/coverage.zip", tarfile.REGTYPE)]
+        with self.archive(entries) as archive:
+            with self.assertRaisesRegex(ValueError, "generated report"):
+                source.archive_members(archive, "donner-1.0.0")
 
     def test_module_identity_and_version_are_literal_and_safe(self):
         self.assertEqual(source.module_values('module(name="donner", version="0.8.0-pre")')["version"],
@@ -123,6 +134,26 @@ class SourceFixtureTest(unittest.TestCase):
             source.verify_archive(self.artifacts, self.commit, "123", "3")
         with self.assertRaisesRegex(ValueError, "does not belong"):
             source.qualify_archive(self.artifacts, self.commit, "999", "2")
+
+    def test_repository_attributes_omit_only_the_coverage_report(self):
+        attributes = Path(runfiles.Create().Rlocation("donner/.gitattributes")).read_text()
+        self.write(".gitattributes", attributes)
+        kept = ["docs/reports/binary-size/report.txt", "docs/img/demo.gif",
+                "third_party/resvg-test-suite/tests/shape.svg"]
+        for name in kept:
+            self.write(name, "kept\n")
+        (self.repo / "docs/reports").mkdir(parents=True, exist_ok=True)
+        (self.repo / "docs/reports/coverage.zip").write_bytes(b"PK\x05\x06" + bytes(18))
+        self.git("add", "--", ".gitattributes", "docs", "third_party")
+        self.git("-c", "commit.gpgsign=false", "commit", "-qm", "reports")
+        commit = self.git("rev-parse", "HEAD")
+        receipt = source.create_archive(self.artifacts)
+        with tarfile.open(self.artifacts / receipt["archive"]) as archive:
+            names = {name.split("/", 1)[1] for name in archive.getnames() if "/" in name}
+        self.assertNotIn("docs/reports/coverage.zip", names)
+        for name in ["LICENSE", "NOTICE", "MODULE.bazel", *kept]:
+            self.assertIn(name, names)
+        self.assertEqual(source.verify_archive(self.artifacts, commit)["files"], receipt["files"])
 
     def test_tampered_archive_and_unexpected_files_are_rejected(self):
         receipt = source.create_archive(self.artifacts)
@@ -219,6 +250,133 @@ class SourceFixtureTest(unittest.TestCase):
         self.assertEqual(rewritten["url"], (self.artifacts / receipt["archive"]).resolve().as_uri())
         self.assertEqual((output / "consumer/main.cc").read_text(), "fixture\n")
         self.assertEqual(json.loads((entry / "source.json").read_text()), original)
+
+
+class ValidatedEntryTest(unittest.TestCase):
+    """The entry BCR Preflight generated and admission-validated, as retained for submission."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        base = Path(self.temp.name)
+        self.root = base / "source"
+        (self.root / ".bcr").mkdir(parents=True)
+        (self.root / "MODULE.bazel").write_text('module(name="donner", version="1.0.0")\n')
+        (self.root / ".bcr/presubmit.yml").write_text("tasks: {}\n")
+        self.template = {"homepage": "https://github.com/jwmcglynn/donner",
+                         "maintainers": [{"github": "jwmcglynn"}],
+                         "repository": ["github:jwmcglynn/donner"],
+                         "versions": [], "yanked_versions": {}}
+        (self.root / ".bcr/metadata.template.json").write_text(json.dumps(self.template))
+        self.entry = base / "entry"
+        module, presubmit, source_json, metadata = (self.entry / "registry" / path
+                                                    for path in source.entry_paths("1.0.0"))
+        module.parent.mkdir(parents=True)
+        module.write_bytes((self.root / "MODULE.bazel").read_bytes())
+        presubmit.write_bytes((self.root / ".bcr/presubmit.yml").read_bytes())
+        source_json.write_text(json.dumps(source.expected_source_json("1.0.0", "c" * 64),
+                                          indent=4))
+        self.metadata = metadata
+        self.write_metadata(dict(self.template, versions=["0.9.0", "1.0.0"]))
+        self.report = {"validator_revision": "f" * 40, "module": "donner@1.0.0",
+                       "upstream_exit_code": 42,
+                       "results": [{"result": "GOOD", "message": "ok"},
+                                   {"result": "NEED_BCR_MAINTAINER_REVIEW", "message": "new"}]}
+        self.write_report(self.report)
+
+    def write_metadata(self, value):
+        self.metadata.write_text(json.dumps(value, indent=4))
+
+    def write_report(self, value):
+        (self.entry / "admission.json").write_text(json.dumps(value))
+
+    def verify(self, sha256="c" * 64):
+        source.verify_validated_entry(self.entry, self.root, "1.0.0", sha256)
+
+    def test_retained_preflight_entry_is_accepted(self):
+        self.assertEqual([path.as_posix() for path in source.entry_paths("1.0.0")], [
+            "modules/donner/1.0.0/MODULE.bazel", "modules/donner/1.0.0/presubmit.yml",
+            "modules/donner/1.0.0/source.json", "modules/donner/metadata.json"])
+        self.verify()
+        self.write_report(dict(self.report, upstream_exit_code=0))
+        self.verify()
+
+    def test_failed_or_foreign_admission_report_is_rejected(self):
+        cases = {
+            "failed": {"upstream_exit_code": 1},
+            "boolean code": {"upstream_exit_code": False},
+            "other version": {"module": "donner@0.9.0"},
+            "other module": {"module": "other@1.0.0"},
+            "short revision": {"validator_revision": "f" * 12},
+            "no results": {"results": []},
+            "failed result": {"results": [{"result": "FAILED", "message": "bad"}]},
+        }
+        for case, change in cases.items():
+            with self.subTest(case=case):
+                self.write_report(dict(self.report, **change))
+                with self.assertRaisesRegex(ValueError, "admission report"):
+                    self.verify()
+        (self.entry / "admission.json").write_text("passed\n")
+        with self.assertRaisesRegex(ValueError, "admission report is not JSON"):
+            self.verify()
+
+    def test_entry_must_name_the_archive_and_carry_the_source_files(self):
+        with self.assertRaisesRegex(ValueError, "approved source archive"):
+            self.verify("d" * 64)
+        module = self.entry / "registry" / source.entry_paths("1.0.0")[0]
+        module.write_text("module(name='donner')\n")
+        with self.assertRaisesRegex(ValueError, "approved module files"):
+            self.verify()
+        module.unlink()
+        module.symlink_to(self.root / "MODULE.bazel")
+        with self.assertRaisesRegex(ValueError, "missing, linked or too large"):
+            self.verify()
+
+    def test_entry_metadata_must_match_the_maintainer_template(self):
+        for change in ({"maintainers": []}, {"versions": ["0.9.0"]},
+                       {"yanked_versions": {"1.0.0": "withdrawn"}}):
+            with self.subTest(change=change):
+                self.write_metadata({**self.template, "versions": ["0.9.0", "1.0.0"], **change})
+                with self.assertRaisesRegex(ValueError, "registry metadata"):
+                    self.verify()
+
+
+class RegistryVersionOrderTest(unittest.TestCase):
+    """BCR presubmit requires `metadata.json` to list versions in ascending Bazel order."""
+
+    TEMPLATE = {"homepage": "https://github.com/jwmcglynn/donner",
+                "maintainers": [{"github": "jwmcglynn"}],
+                "repository": ["github:jwmcglynn/donner"],
+                "versions": [], "yanked_versions": {}}
+
+    def test_derived_metadata_inserts_the_version_in_order(self):
+        upstream = {**self.TEMPLATE, "versions": ["0.8.0", "0.9.0", "0.10.0"]}
+        for version, expected in (
+                ("0.8.1", ["0.8.0", "0.8.1", "0.9.0", "0.10.0"]),
+                ("0.9.1", ["0.8.0", "0.9.0", "0.9.1", "0.10.0"]),
+                ("0.11.0", ["0.8.0", "0.9.0", "0.10.0", "0.11.0"])):
+            with self.subTest(version=version):
+                derived = json.loads(source.derive_metadata(upstream, self.TEMPLATE, version))
+                self.assertEqual(derived["versions"], expected)
+
+    def test_key_follows_bazel_version_comparison(self):
+        ordered = ["0.8.0", "0.8.1", "0.9.0", "0.10.0", "1.0.0-rc.2", "1.0.0-rc.10", "1.0.0-rc1",
+                   "1.0.0", "1.0.0.1", "1.0.0.bcr.1", "1.0.1", "v1.0.0"]
+        self.assertEqual(sorted(reversed(ordered), key=source.registry_version_key), ordered)
+        self.assertEqual(source.registry_version_key("1.0.0+build.5"),
+                         source.registry_version_key("1.0.0"))
+        # BCR's `^...$` match admits a trailing newline; the key fails closed on it.
+        for version in ("", "1..0", ".1", "1.0.0-", "1.0.0-rc..1", "1.0 0", "1.0.0\n"):
+            with self.subTest(version=version), \
+                    self.assertRaisesRegex(ValueError, "invalid version list"):
+                source.registry_version_key(version)
+
+    def test_out_of_order_registry_list_is_refused_not_reordered(self):
+        upstream = {**self.TEMPLATE, "versions": ["0.9.0", "0.8.0"]}
+        with self.assertRaisesRegex(ValueError, "out of order"):
+            source.derive_metadata(upstream, self.TEMPLATE, "0.8.1")
+        with self.assertRaisesRegex(ValueError, "out of order"):
+            source.add_registry_version(["0.10.0", "0.9.0"], "0.11.0")
 
 
 if __name__ == "__main__":

@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Exercise the real soak launcher end to end: seed isolation, flag forwarding, artifact routing,
 # signal exit propagation, timeout reports, and fuzzers that fail to start or exit at once. The
-# fuzzer is a stub script or a system binary, so the checks stay hermetic and fast.
+# fuzzer is a stub script or a system binary, so the checks stay hermetic and fast. Every check is
+# on a status, output, or process state, never on elapsed time: a launcher that hangs fails at the
+# Bazel test timeout instead.
 set -uo pipefail
 
 runner="${TEST_SRCDIR}/${TEST_WORKSPACE}/build_defs/fuzzer_soak_runner"
@@ -84,68 +86,47 @@ cat "${0}.expected" >&2
 exit 70
 REPORT
 chmod +x "${work}/timeout-report"
-start="${SECONDS}"
 TEST_UNDECLARED_OUTPUTS_DIR="${outputs}" "${runner}" "${work}/timeout-report" \
   > /dev/null 2> "${work}/timeout-report.err"
 check "reported timeout keeps its status" "$?" "70"
-check "reported timeout returns at once" "$((SECONDS - start < 4))" "1"
 relayed="$(cmp -s "${work}/timeout-report.expected" "${work}/timeout-report.err" && echo same)"
 check "reported timeout is relayed unchanged" "${relayed:-changed}" "same"
 
 # libFuzzer writes its timeout report from a SIGALRM handler that allocates. When the alarm lands
 # while the fuzz target holds the allocator lock, the handler deadlocks after its ALARM lines and
-# the fuzzer never exits. The launcher must stop it and fail as a timeout well before the stub's
-# 30 s sleep ends; a launcher that waits reports the sleep's success instead.
+# the fuzzer never exits. The stub never exits on its own either, so only the launcher stopping it
+# can end this step, and the launcher must then fail as a timeout.
 cat > "${work}/stalled-report" <<'STALL'
 #!/usr/bin/env bash
 echo "$$" > "${0}.pid"
 printf 'ALARM: working on the last Unit for 3 seconds\n' >&2
-exec sleep 30
+exec sleep 2147483647
 STALL
 chmod +x "${work}/stalled-report"
-start="${SECONDS}"
 TEST_UNDECLARED_OUTPUTS_DIR="${outputs}" "${runner}" "${work}/stalled-report" \
   > /dev/null 2> "${work}/stalled-report.err"
 check "stalled timeout report fails as a timeout" "$?" "70"
-check "stalled timeout report fails promptly" "$((SECONDS - start < 20))" "1"
 check "stalled fuzzer is stopped" \
   "$(kill -0 "$(cat "${work}/stalled-report.pid")" 2> /dev/null && echo running || echo stopped)" \
   "stopped"
 check "stalled timeout report is explained" \
   "$(grep -c 'did not finish its timeout report' "${work}/stalled-report.err")" "1"
+check "complete timeout report is not treated as stalled" \
+  "$(grep -c 'did not finish its timeout report' "${work}/timeout-report.err")" "0"
 
 # A fuzzer that fails to start, or exits at once, finishes while the launcher is still connecting
 # its stderr relay. Bash 3.2 does not retry an open() that SIGCHLD interrupts, and on macOS a FIFO
 # reader can miss end of file when its writer exits that quickly, so a relay built on FIFOs can
-# hang here. Each attempt must promptly return the fuzzer's status and relay its message.
-kill_tree() {
-  local child
-  for child in $(pgrep -P "$1"); do
-    kill_tree "${child}"
-  done
-  kill -KILL "$1" 2> /dev/null
-}
-# Prints the expected result, or the first different one among the attempts; an attempt still
-# running after 10 s is stopped.
+# hang here. Each attempt must return the fuzzer's status and relay its message; a hung attempt
+# holds the test until the Bazel timeout, and the last progress line names it.
+# Prints the expected result, or the first different one among the attempts.
 quick_exits() {
-  local fuzzer="$1" expected="$2" attempts="$3" attempt launcher result
+  local fuzzer="$1" expected="$2" attempts="$3" attempt result
   for ((attempt = 0; attempt < attempts; attempt++)); do
-    launcher=""
-    result=""
-    {
-      IFS= read -r launcher
-      IFS= read -r -t 10 result
-    } < <(
-      TEST_UNDECLARED_OUTPUTS_DIR="${outputs}" "${runner}" "${fuzzer}" \
-        > /dev/null 2> "${work}/quick-exit.err" &
-      echo "$!"
-      wait "$!"
-      echo "status=$? message=$(grep -c 'No such file' "${work}/quick-exit.err")"
-    )
-    if [[ -z "${result}" && -n "${launcher}" ]]; then
-      kill_tree "${launcher}"
-      result="hung on attempt ${attempt}"
-    fi
+    echo "quick exit: ${fuzzer##*/} attempt ${attempt}" >&2
+    TEST_UNDECLARED_OUTPUTS_DIR="${outputs}" "${runner}" "${fuzzer}" \
+      > /dev/null 2> "${work}/quick-exit.err"
+    result="status=$? message=$(grep -c 'No such file' "${work}/quick-exit.err")"
     if [[ "${result}" != "${expected}" ]]; then
       echo "${result}"
       return
@@ -153,9 +134,9 @@ quick_exits() {
   done
   echo "${expected}"
 }
-check "fuzzer that cannot start returns promptly" \
+check "fuzzer that cannot start returns its status" \
   "$(quick_exits "${work}/missing-fuzzer" "status=127 message=1" 25)" "status=127 message=1"
-check "fuzzer that exits at once returns promptly" \
+check "fuzzer that exits at once returns its status" \
   "$(quick_exits "$(type -P false)" "status=1 message=0" 25)" "status=1 message=0"
 
 # A seed that cannot be staged must fail the run. The stub exits zero, so a launcher that ignored

@@ -34,6 +34,8 @@ playwright_bin.playwright_test(
         "smoke.spec.ts",
         "surface-frame-probe.ts",
         "surface-probe-requests.mjs",
+        "test-timing.cjs",
+        "test-timing.ts",
         ":node_modules/@playwright/test",
         "//donner/editor/wasm:_wasm_web_package_for_serve",
         "@playwright//:chromium",
@@ -87,6 +89,7 @@ playwright_bin.playwright_test(
     copy_data_to_bin = False,
     data = [
         "basic-shapes-capture-gate.ts",
+        "browser-bitmap-comparator.ts",
         "browser-presentation-regression.spec.ts",
         "browser-runtime-diagnostics.ts",
         "browser-stall-diagnostics.mjs",
@@ -110,6 +113,8 @@ playwright_bin.playwright_test(
         "sample-thumbnail-settle.ts",
         "surface-frame-probe.ts",
         "surface-probe-requests.mjs",
+        "test-timing.cjs",
+        "test-timing.ts",
         ":node_modules/@playwright/test",
         ":node_modules/pngjs",
         "//donner/editor/tests:standalone_geode_browser_png_compare",
@@ -165,6 +170,8 @@ playwright_bin.playwright_test(
         "smoke.spec.ts",
         "surface-frame-probe.ts",
         "surface-probe-requests.mjs",
+        "test-timing.cjs",
+        "test-timing.ts",
         ":node_modules/@playwright/test",
         "//donner/editor/wasm:_wasm_web_package_for_serve",
         "@playwright//:chromium",
@@ -208,6 +215,7 @@ playwright_bin.playwright_test(
         "composited-pixel-classifier.mjs",
         "composited-probe.ts",
         "composited-probe-evidence.mjs",
+        "first-click-breakdown.mjs",
         "gpu-image-transfer-canary.ts",
         "gpu-session-console.ts",
         "latency-gates.mjs",
@@ -221,6 +229,7 @@ playwright_bin.playwright_test(
         "remote-webserver.mjs",
         "sample-thumbnail-settle.ts",
         "splash-aim.mjs",
+        "test-timing.cjs",
         ":node_modules/@playwright/test",
         ":node_modules/pngjs",
         "//donner/editor/tests:standalone_geode_browser_png_compare",
@@ -319,6 +328,7 @@ playwright_bin.playwright_test(
         "playwright.config.js",
         "remote-webserver.mjs",
         "sample-thumbnail-settle.ts",
+        "test-timing.cjs",
         ":node_modules/@playwright/test",
         "//donner/editor/wasm:_wasm_web_package_for_serve",
         "@playwright//:chromium",
@@ -364,6 +374,8 @@ playwright_bin.playwright_test(
         "playwright.config.js",
         "remote-webserver.mjs",
         "sample-thumbnail-settle.ts",
+        "test-timing.cjs",
+        "test-timing.ts",
         ":node_modules/@playwright/test",
         "//donner/editor/wasm:_wasm_web_package_for_serve",
         "@playwright//:firefox",
@@ -412,6 +424,8 @@ playwright_bin.playwright_test(
         "playwright.config.js",
         "remote-webserver.mjs",
         "sample-thumbnail-settle.ts",
+        "test-timing.cjs",
+        "test-timing.ts",
         ":node_modules/@playwright/test",
         "//donner/editor/wasm:_wasm_web_package_for_serve",
         "@playwright//:chromium",
@@ -580,6 +594,29 @@ js_test(
     node_options = ["--test"],
 )
 
+# Drives pipeline creation in the same library against a stub device with one in-order timeline, on
+# which a synchronous creation holds every later submission until its compile finishes.
+js_test(
+    name = "browser_bridge_pipeline_tests",
+    size = "small",
+    copy_data_to_bin = False,
+    data = [
+        "bridge-library-harness.mjs",
+        "//donner/gpu/browser:library_donner_gpu.js",
+    ],
+    entry_point = "browser-bridge-pipelines.spec.mjs",
+    node_options = ["--test"],
+)
+
+js_test(
+    name = "first_click_breakdown_tests",
+    size = "small",
+    copy_data_to_bin = False,
+    data = ["first-click-breakdown.mjs"],
+    entry_point = "first-click-breakdown.spec.mjs",
+    node_options = ["--test"],
+)
+
 js_test(
     name = "playwright_bazel_config_tests",
     size = "small",
@@ -590,6 +627,7 @@ js_test(
         "playwright.composited-chromium.bazel.config.js",
         "playwright.composited-chromium.config.js",
         "playwright.webkit.bazel.config.js",
+        "test-timing.cjs",
     ],
     entry_point = "playwright-bazel-config.spec.mjs",
     node_options = ["--test"],
@@ -639,6 +677,24 @@ js_test(
         "@platforms//cpu:aarch64",
         "@platforms//os:macos",
     ],
+)
+
+# The shared stall guard and CI time scale, and the policy that no spec or config copies them:
+# every Playwright config, derived ones included, must bound web-first assertions by the guard.
+js_test(
+    name = "test_timing_tests",
+    size = "small",
+    copy_data_to_bin = False,
+    data = glob([
+        "*.cjs",
+        "*.js",
+        "*.mjs",
+        "*.ts",
+    ]) + [":node_modules/@playwright/test"],
+    entry_point = "test-timing.spec.mjs",
+    # Loading Playwright config initializes its llhttp WebAssembly module.
+    env = {"NODE_OPTIONS": ""},
+    node_options = ["--test"],
 )
 
 js_test(
@@ -761,6 +817,7 @@ playwright_bin.playwright_test(
         "font-reference.spec.ts",
         "package.json",
         "playwright.font-reference.config.js",
+        "test-timing.cjs",
         ":node_modules/@playwright/test",
         "//third_party/resvg-test-suite:fonts",
         "@playwright//:chromium",
@@ -793,6 +850,7 @@ playwright_bin.playwright_test(
     ],
     copy_data_to_bin = False,
     data = [
+        "browser-bitmap-comparator.ts",
         "browser-runtime-diagnostics.ts",
         "browser-stall-diagnostics.mjs",
         "browser-stall-diagnostics.ts",
@@ -802,7 +860,9 @@ playwright_bin.playwright_test(
         "playwright.standalone-geode.bazel.config.js",
         "remote-webserver.mjs",
         "standalone-geode-browser-renderer.spec.ts",
+        "test-timing.cjs",
         ":node_modules/@playwright/test",
+        ":node_modules/pngjs",
         "//donner/editor/tests:standalone_geode_browser_png_compare",
         "//donner/editor/tests:testdata/browser/standalone_geode_browser_renderer.png",
         "//donner/svg/renderer/wasm:_geode_browser_test_package_for_playwright",
@@ -897,6 +957,8 @@ playwright_bin.playwright_test(
         "smoke.spec.ts",
         "surface-frame-probe.ts",
         "surface-probe-requests.mjs",
+        "test-timing.cjs",
+        "test-timing.ts",
         ":node_modules/@playwright/test",
         "//donner/editor/wasm:_wasm_web_package_for_serve",
         "@playwright-firefox-mac14-arm64//file",

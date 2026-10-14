@@ -1,0 +1,27 @@
+Subject: [PATCH] Declare only the libc++ headers as LLVM compile inputs
+
+On Bazel releases without the Merkle-tree input cache, the toolchain's
+`include` filegroup feeds every compile action and globbed all of include/,
+about 8,100 files of the LLVM distribution: the LLVM, Clang, MLIR, LLDB,
+Flang, Polly and clang-tidy development headers as well as libc++. The
+toolchain only puts include/c++/v1 and the per-target __config_site on the
+search path, so the rest is never read; a remote executor still stages each of
+those files for each action. Glob include/c++ instead, the same set the
+directory-based `cxx_builtin_include` filegroup declares on newer Bazel.
+
+diff --git a/toolchain/BUILD.llvm_repo.tpl b/toolchain/BUILD.llvm_repo.tpl
+--- a/toolchain/BUILD.llvm_repo.tpl
++++ b/toolchain/BUILD.llvm_repo.tpl
+@@ -56,7 +56,11 @@
+ filegroup(
+     name = "include",
+     srcs = glob([
+-        "include/**",
++        # Compiles search only the libc++ headers in include/c++ and the
++        # per-target __config_site (see extra_config_site). The LLVM, Clang,
++        # MLIR, LLDB and other development headers beside them are never on
++        # the search path, so they are not compile inputs.
++        "include/c++/**",
+         "lib/clang/*/include/**",
+     ]) + glob(
+         [

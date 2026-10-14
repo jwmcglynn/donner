@@ -30,17 +30,19 @@ Every Donner target that references one of those hidden repos must be guarded by
 
 ## Release protocol
 
-A maintainer approves and publishes a GitHub release. `Release` promotes its qualified source
-archive and CLI binaries. A separate manual workflow prepares a BCR fork branch without filing
-an upstream PR. Only after the maintainer reviews and approves the exact fork diff and proposed
-PR content does a person open the upstream PR. A completed Release, tag push or main-branch merge
+A maintainer assembles one immutable [release candidate record](../release_candidate.md), then
+approves and publishes a GitHub release that names it. `Release` promotes exactly the qualified
+source archive and CLI binaries that record binds. A separate manual workflow prepares a BCR
+fork branch without filing an upstream PR. Only after the maintainer reviews and approves the
+exact fork diff and proposed PR content does a person open the upstream PR. A completed Release, tag push or main-branch merge
 alone does not submit to BCR. Prereleases do not open BCR PRs.
 
 | Stage                    | Evidence                                                                                                                                                             | Credentials                                          |
 | ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------- |
 | BCR Preflight            | Committed source archive, both lockfile-bound CLI binaries, upstream admission report, Ubuntu/macOS × Bazel 7/8 consumer matrix with its configured dependency audit | Read-only build jobs; scoped OIDC/attestation signer |
-| Release                  | Exact preflight run/attempt, verified retained source and binary bytes, uploaded asset digests                                                                       | Release assets and attestations                      |
-| Prepare BCR fork branch  | Manual dispatch, successful Release run, approved source commit/digest, released bytes and matching remote tag                                                       | Fork-scoped token behind a protected environment     |
+| Assemble candidate       | Manual dispatch on the candidate commit naming every qualifying attempt and both review reports; verified record retained 90 days and attested                       | Read-only token; scoped OIDC/attestation signer      |
+| Release                  | Named record run/attempt and digest, re-verified record and retained source and binary bytes, uploaded asset digests                                                 | Release assets and attestations                      |
+| Prepare BCR fork branch  | Manual dispatch naming the Release run and record digest; attested record and released bytes                                                                         | Fork-scoped token behind a protected environment     |
 | File upstream BCR PR     | Reviewed exact fork diff and PR title/body, separate approval of that filing                                                                                         | Maintainer's GitHub session                          |
 | BCR admission and builds | Upstream checks, maintainer review where required, platform matrix                                                                                                   | BCR-owned infrastructure                             |
 | Registry availability    | Merged entry visible at `https://registry.bazel.build/modules/donner`                                                                                                | BCR-owned infrastructure                             |
@@ -51,17 +53,29 @@ alone does not submit to BCR. Prereleases do not open BCR PRs.
    ordinary CI qualification on the final source commit.
 2. Set the same version in `MODULE.bazel` and `examples/bazel_consumer/MODULE.bazel`. Review any
    compatibility-level change against all supported Bazel versions, including older resolvers.
-3. Require `BCR Preflight` on that exact commit. Main pushes run it automatically. If no run exists
-   and main still points to the intended commit, dispatch the workflow on `main`; a branch or tag
-   dispatch cannot attest or supply release artifacts. An empty source commit is unnecessary.
+3. Require a full `BCR Preflight` run on that exact commit. Pushes to main run only the slim
+   check (source archive, registry admission and one Ubuntu consumer), which cannot qualify a
+   release. The full matrix runs nightly on `main` and on manual dispatch; the release tooling
+   currently accepts only a dispatched run, so while main still points to the intended commit,
+   dispatch the workflow on `main`. A branch or tag dispatch cannot attest or supply release
+   artifacts. An empty source commit is unnecessary.
 4. Inspect its admission report and all four consumer jobs. A generator or checkout-only build is
    not an admission test. Expected BCR maintainer review is reported separately from validation
    errors, and does not imply that upstream builds have run.
-5. Confirm `donner-bcr-qualified-<attempt>` and both `donner-svg-<platform>-<commit>-<attempt>`
-   artifacts, including each generated Bazel lockfile, are retained. Artifact retention is 90 days; run a fresh preflight before approval if
-   any expires. Use a successful push or manual preflight on main for the exact source commit,
-   never a PR or feature-branch run. Add `Release-Candidate-Preflight: <run-id>/<attempt>` as a line in the release body
-   before publication. The Release workflow accepts only that named run and attempt.
+5. Confirm `donner-bcr-qualified-<attempt>`, `donner-bcr-entry-<attempt>` and both
+   `donner-svg-<platform>-<commit>-<attempt>` artifacts, including each generated Bazel lockfile,
+   are retained. Artifact retention is 90 days; run a fresh preflight before approval if
+   any expires. Use a successful manually dispatched full preflight on main for the exact source
+   commit, never a slim push run, a PR or a feature-branch run.
+6. While `main` still points at the candidate commit, dispatch `Assemble release candidate` with
+   that commit, the preflight, Editor WASM, docs build, CI, coverage, fuzz and sanitizer run IDs
+   and attempts, and the issue comment IDs of the security and supply-chain review reports
+   ([assembly](../release_candidate.md)). It verifies and retains the record, attests it, and
+   prints the release body line. Add that line,
+   `Release-Candidate-Record: <assembly-run-id>/<attempt> sha256:<record-sha256>`, to the release
+   body before publication. The Release workflow accepts only that record, and rejects a body
+   that names a `Release-Candidate-Preflight:` attempt directly. A changed input needs a new
+   commit and a new record; a record is never edited.
 
 ### Source archive and preflight
 
@@ -104,7 +118,11 @@ uses the local candidate bytes, because the approved release does not exist yet.
 integrity, module identity, compatibility level, metadata, presubmit and global admission checks
 remain enabled. The report records the validator revision. Live asset availability is checked after
 release publication. BCR may change its policy before submission, so preflight is not a promise of
-future admission.
+future admission. Preflight retains the entry and its report as `donner-bcr-entry-<attempt>`. The
+candidate record binds that artifact as its `bcr-entry` role. Fork preparation submits its
+`MODULE.bazel`, `presubmit.yml` and `source.json` exactly as the validator checked them, and
+derives only `metadata.json`, whose version history may have moved since preflight, from the
+registry it submits to. Submission never runs the generator again.
 
 Preflight builds the Linux and macOS CLI binaries from the same committed checkout. The repository
 intentionally ignores `MODULE.bazel.lock`, so each platform resolves its lockfile once with
@@ -114,7 +132,7 @@ notice's SHA-256 and records the compiler version reported by `//tools/ci:releas
 which is built in the same invocation and configuration as the CLI. Bazel compiles with the
 toolchain it resolves (clang, per `.bazelrc`), not the runner's default `c++`, so packaging fails
 when that probe cannot report a compiler. A separate preflight job verifies and signs the source archive, both CLI binaries,
-both generated lockfiles and both notices on main push or manual runs.
+both generated lockfiles and both notices on full-matrix runs on main (nightly or manual).
 Qualification waits for both CLI builds and the audited consumer matrix, re-verifies both CLI
 artifacts from its own attempt, and records that run ID and attempt without changing the archive
 bytes.
@@ -127,21 +145,41 @@ notice, and admission rejection paths; `//tools:bcr_dependency_closure_tests` co
 ### Publish and observe
 
 1. After release approval, create the intended immutable tag and publish the GitHub release.
-2. Watch `Release` resolve the named preflight attempt and download its source archive, both CLI
-   binaries, and their generated lockfiles and license notices. It verifies their retained bytes and preflight build attestations, then uploads those exact bytes
-   without compiling or repackaging. The source URL is:
+2. Watch `Release` resolve the named record. It downloads the record and every artifact the record
+   binds by artifact ID, checks the record digest, re-runs the candidate verifier with the 30-day
+   publication retention window, and verifies the record attestation and the preflight build
+   attestations. It then uploads exactly the record's source archive, both CLI binaries, their
+   generated lockfiles and license notices, and the record itself as
+   `donner-X.Y.Z.candidate.json`, without compiling or repackaging. The source URL is:
    `https://github.com/jwmcglynn/donner/releases/download/vX.Y.Z/donner-X.Y.Z.tar.gz`.
 3. Require server-reported SHA-256 confirmation for every uploaded asset. An existing identical asset
    is accepted; a conflicting asset stops publication. `//tools:release_artifact_publisher_tests`
    covers successful uploads, lost responses, retries and conflicts.
-4. Obtain approval to prepare the fork branch from the reviewed Release run, source commit and
-   archive SHA-256. This authorizes fork preparation only, not an upstream PR.
-5. Manually dispatch `Prepare BCR submission` on `main` with those three values. It rechecks the
-   Release event, tag/source identity, published source bytes and preflight attempt before using
-   the fork-scoped token. Tokenless jobs run the release-tagged entry generator, verify the staged
-   source integrity, module files and metadata, and retain and check a bounded Git bundle. The
-   protected push job runs no external actions; it downloads that artifact with the runner's
-   GitHub CLI and rechecks the digest, base, commit and tree before its final token-bearing step.
+4. Obtain approval to prepare the fork branch from the reviewed Release run and the candidate
+   record digest in its `Release-Candidate-Record:` line. This authorizes fork preparation only,
+   not an upstream PR.
+5. Manually dispatch `Prepare BCR submission` on `main` with those two values. Before using the
+   fork-scoped token it rechecks the Release event and tag/source identity, requires the release
+   body to name that record digest, downloads the `donner-X.Y.Z.candidate.json` release asset,
+   checks its digest and its attestation by `Assemble release candidate`, and takes the approved
+   source digest and preflight attempt from the record. The published archive's provenance must
+   name exactly that attempt, a successful run on `main`. Tokenless jobs download the record's
+   `bcr-entry` artifact by ID and verify it against the record (see the
+   [registry entry](../release_candidate.md)). They stage its `MODULE.bazel`, `presubmit.yml` and
+   `source.json` byte for byte on the current registry `main`. `metadata.json` is derived there:
+   the registry's current `versions` plus this version, its current `yanked_versions`, and the
+   other fields from `.bcr/metadata.template.json`. An earlier version merged or yanked after
+   preflight is therefore carried forward. Preflight's copy must agree with the derived file on
+   every field but that history, and the registry's own project and maintainer fields must still
+   match the template. The derived `versions` list is in ascending Bazel version order, which BCR
+   presubmit requires, so a patch release on an older line, such as `0.8.1` after `0.9.0`, is
+   listed before the newer version. `verify_metadata_history` requires exactly the registry's
+   history plus this version in that order, and a registry list that is already out of order is
+   refused rather than reordered.
+   The jobs then check source integrity, module files, metadata and history,
+   and retain and check a bounded Git bundle. The protected push job runs no external actions; it
+   downloads that artifact with the runner's GitHub CLI and rechecks the digest, base, commit and
+   tree before its final token-bearing step.
    A Git push with an empty-expected ref lease creates the branch only while absent;
    it cannot replace or advance an existing branch. The job prints a compare URL,
    proposed title and body; it never files upstream.
@@ -158,11 +196,12 @@ notice, and admission rejection paths; `//tools:bcr_dependency_closure_tests` co
 - For a failed preflight, rerun all jobs. A failed-jobs-only rerun is rejected by the qualification
   job if successful CLI artifacts remain attached to an earlier attempt. For a transient Release
   failure, rerun the failed Release job. It downloads and re-verifies the same
-  preflight attempt named in the release event; it never builds a replacement. Missing, expired, or
-  ambiguous artifacts stop publication. Requalify a new candidate before release approval; after
-  publication, do not silently substitute a later preflight attempt.
+  record named in the release event; it never builds a replacement. A missing, expired,
+  mismatched or ambiguous record or artifact stops publication. Assemble a new record before
+  release approval; after publication, do not silently substitute a later record or preflight
+  attempt.
 - If fork preparation fails before a branch push, start a new manual dispatch with the same
-  approved Release run ID, source commit and archive SHA-256, or rerun all jobs. A failed-jobs-only
+  approved Release run ID and record digest, or rerun all jobs. A failed-jobs-only
   rerun cannot find the entry bundle retained under the original run attempt. A competing branch
   fails the empty-expected ref lease even if its tip could be fast-forwarded. Inspect that branch
   and its proposed PR manually instead.
@@ -286,7 +325,7 @@ version, including those that allow yanked versions.
 
 1. Write the new notes: a notice at the top that states the problem, the date, whether the
    version is yanked or superseded, and links to the replacement release and the rollback issue.
-   Keep the rest of the body, including the `Release-Candidate-Preflight:` line, unchanged.
+   Keep the rest of the body, including the `Release-Candidate-Record:` line, unchanged.
 2. Run `gh release edit vX.Y.Z --notes-file notes.md`. `Release` runs only on the `published`
    event (`.github/workflows/release.yml`), so editing the notes does not run it again.
 3. When a replacement is published, confirm that it, not the withdrawn release, is marked
@@ -297,14 +336,17 @@ version, including those that allow yanked versions.
 
 **Docs site.** Follow the "Roll back" section of the
 [documentation promotion and rollback procedure](../release_checklists/docs_artifact_promotion.md).
-It redeploys the previous retained, marker-bearing Pages build by artifact ID through
-`deploy_docs.yaml`, without rebuilding, and checks the live `docs-build.json` marker.
+It redeploys a previous retained, marker-bearing Pages build by artifact ID through
+`deploy_docs.yaml`, without rebuilding, and checks the live `docs-build.json` marker. The usual
+target is the previous release's docs build, selected with `selection: record` and that
+release's record. A build that predates candidate records is selected with
+`selection: rollback` and the six values from the release tracking issue.
 
 **Web editor.** **Gap:** no workflow in this repository deploys the editor, and editor hosting is
 outside the repository. `Editor WASM` retains a package named `donner-editor-wasm-geode-<commit>`
-with `SHA256SUMS`, `provenance.json`, the `site/` files and the `deploy/` files. It is retained
-for 30 days, shorter than the 90 days of the other release artifacts, so the editor rollback
-window ends 30 days after that build. To reactivate a previous package by hand:
+with `SHA256SUMS`, `provenance.json`, its generated `MODULE.bazel.lock`, the `site/` files and
+the `deploy/` files. It is retained for 90 days, like the other release artifacts, so the editor
+rollback window ends 90 days after that build. To reactivate a previous package by hand:
 
 1. Set `EDITOR_ARTIFACT_ID`, `EDITOR_ZIP_SHA256` (64 hex digits without the `sha256:` prefix),
    `EDITOR_SOURCE_REVISION`, `EDITOR_PRODUCER_RUN_ID` and `EDITOR_PRODUCER_ATTEMPT` from the
@@ -374,9 +416,11 @@ site or the upstream registry.
 
 - **Fixture tests.** Run
   `bazel test //tools:bcr_release_tests //tools:release_artifact_publisher_tests //tools:pages_artifact_tests //tools:release_candidate_tests`.
-  They cover preflight selection, submission planning, preservation of existing yanks, write-once
-  asset publication with conflicts and lost responses, Pages artifact selection and candidate
-  record verification. They use mocked GitHub responses and publish nothing.
+  They cover record selection, record assembly and Release re-verification, submission planning
+  from the published record, promotion of the admission-validated registry entry, preservation of
+  existing yanks, write-once asset publication with conflicts and lost responses, Pages artifact
+  selection from a record and candidate record verification. They use mocked GitHub responses and
+  publish nothing.
 - **Yank PR.** In a local clone of the registry, add a test entry to
   `modules/donner/metadata.json` and run the BCR validator as in step 2 of the yank procedure.
   Do not push the branch.

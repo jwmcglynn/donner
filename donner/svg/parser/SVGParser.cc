@@ -21,6 +21,7 @@
 #include "donner/svg/SVGElement.h"
 #include "donner/svg/components/DescriptiveTextComponent.h"
 #include "donner/svg/components/DocumentResourceFamilyBudget.h"
+#include "donner/svg/components/ElementTypeComponent.h"
 #include "donner/svg/components/ParsedPayloadResourceBudget.h"
 #include "donner/svg/components/RenderingBehaviorComponent.h"
 #include "donner/svg/components/SVGDocumentContext.h"
@@ -163,6 +164,33 @@ std::optional<ParseDiagnostic> ParseNodeContents(SVGParserContext& context, T el
   return std::nullopt;
 }
 
+SourceRange MapStylesheetWarning(SVGParserContext& context,
+                                 const components::StylesheetSourceMap& sourceMap,
+                                 const SourceRange& range) {
+  std::optional<SourceRange> mapped;
+  if (range.start == range.end) {
+    if (const auto point = sourceMap.mapPointToDocumentSource(range.start)) {
+      mapped = SourceRange{*point, *point};
+    }
+  } else {
+    mapped = sourceMap.mapToDocumentSource(range);
+  }
+  return mapped ? context.documentSourceRange(*mapped) : range;
+}
+
+void ParseStylesheetWithWarnings(SVGParserContext& context,
+                                 components::StylesheetComponent& component,
+                                 std::string_view source,
+                                 components::StylesheetSourceMap sourceMap) {
+  ParseWarningSink warnings =
+      context.warningsEnabled() ? ParseWarningSink() : ParseWarningSink::Disabled();
+  component.parseStylesheet(source, std::move(sourceMap), warnings);
+  warnings.mapSourceRanges([&](const SourceRange& range) {
+    return MapStylesheetWarning(context, component.sourceMap, range);
+  });
+  context.addRecoverableWarnings(std::move(warnings));
+}
+
 template <>
 std::optional<ParseDiagnostic> ParseNodeContents<SVGStyleElement>(SVGParserContext& context,
                                                                   SVGStyleElement element,
@@ -238,10 +266,12 @@ std::optional<ParseDiagnostic> ParseNodeContents<SVGStyleElement>(SVGParserConte
         }
       }
     }
+    sourceMap.setCssLength(combined.size());
     if (!combined.empty()) {
       auto& stylesheetComponent =
           element.entityHandle().get_or_emplace<components::StylesheetComponent>();
-      stylesheetComponent.parseStylesheet(std::string_view(combined), std::move(sourceMap));
+      ParseStylesheetWithWarnings(context, stylesheetComponent, std::string_view(combined),
+                                  std::move(sourceMap));
 
       const auto& stats = stylesheetComponent.stylesheet.securityStats();
       constexpr std::size_t kEstimatedBytesPerComponentValue = 64;
@@ -606,13 +636,7 @@ public:
     }
 
     auto element = SVGUnknownElement::CreateOn(node.entityHandle(), tagName);
-    if (!isSvgNamespace) {
-      // A foreign-namespace element is retained for whole-tree consumers, not for painting: no
-      // conforming SVG consumer renders it or its subtree, and the unknown-element default
-      // ("renders and traverses children") would otherwise make it behave like a <g>.
-      node.entityHandle().emplace_or_replace<components::RenderingBehaviorComponent>(
-          components::RenderingBehavior::Nonrenderable);
-    }
+    node.entityHandle().get<components::ElementTypeComponent>().setInSvgNamespace(isSvgNamespace);
     return ParseAttributes(context_, element, node);
   }
 

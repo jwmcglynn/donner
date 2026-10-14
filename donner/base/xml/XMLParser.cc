@@ -1096,6 +1096,14 @@ private:
       return std::move(maybeError.value());
     }
 
+    if (const auto encoding = declaration.getAttribute("encoding");
+        encoding && !encoding->equalsLowercase("utf-8")) {
+      return createParseError(
+          "Unsupported XML encoding; transcode input to UTF-8 and update or "
+          "remove the encoding declaration",
+          startOffset);
+    }
+
     // Skip ?>
     if (!tryConsume(remaining_, "?>")) {
       return createParseError("XML declaration missing closing '?>'");

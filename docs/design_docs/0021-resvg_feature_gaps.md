@@ -281,18 +281,18 @@ content-placement transform.
 
 ### Smaller feature gaps
 
-| Category                  | Tests | Gap                                                                                                                                                                                                                                                                                                                         |
-| ------------------------- | ----: | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Category                  | Tests | Gap                                                                                                                                                                                                                                                                                                                                                            |
+| ------------------------- | ----: | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | structure/svg             |     0 | `structure/svg/funcIRI-with-quotes.svg` compares with ordinary budgets after the [paint URL parsing fix](../../donner/svg/properties/PropertyRegistry.cc#L733), and `structure/svg/nested-svg-one-with-rect-and-one-with-viewBox.svg` compares with ordinary budgets after the [viewport sizing fix](../../donner/svg/components/layout/LayoutSystem.cc#L184). |
-| structure/style           |     1 | CSS `@import` / external CSS                                                                                                                                                                                                                                                                                                |
-| structure/symbol          |     1 | `transform` on `<symbol>` (SVG2)                                                                                                                                                                                                                                                                                            |
-| painting/image-rendering  |     1 | Both backends implement the typed values, including two-stage non-integer `pixelated` scaling. `on-feImage` uses an independently derived nearest reference; `optimizeSpeed` remains pending reference qualification at allowed nearest-sampling ties, rather than missing SVG support. |
-| masking/clipPath          |     5 | Nested clip intersections and shorthand edge cases remain. Vector text children use shared placed glyph outlines. The transformed-text vendored golden uses ink bounds, unlike SVG 2 full-glyph-cell bounds and Firefox, so it remains classified pending broader browser review.                                           |
-| masking/mask              |     0 | Transformed group and rotated mask regions compare with ordinary budgets; `mask-type` alpha/luminance and mask `color-interpolation` sRGB/linearRGB are active. |
-| text/font                 |     2 | `font` shorthand; canvas-size mismatch (test harness)                                                                                                                                                                                                                                                                       |
-| text/tspan                |     3 | tspan interaction with `clip-path`/`filter`/`mask`                                                                                                                                                                                                                                                                          |
-| painting/stroke-dasharray |     4 | `0 n` dash patterns with caps; `40 0` closed-rect dash-seam (see note)                                                                                                                                                                                                                                                      |
-| painting/marker           |     3 | multiple closepaths, recursive-5 (rounded-rect corner fixed, [#623](https://github.com/jwmcglynn/donner/issues/623))                                                                                                                                                                                                        |
+| structure/style           |     1 | CSS `@import` / external CSS remains unsupported: imports are diagnosed and ignored, with no target requests; `UnsupportedCssImportsNeverRequestConfiguredResponses` in `//donner/svg/renderer/tests:renderer_public_api_tests` enforces that.                                                                                                                 |
+| structure/symbol          |     1 | `transform` on `<symbol>` (SVG2)                                                                                                                                                                                                                                                                                                                               |
+| painting/image-rendering  |     1 | Both backends implement the typed values, including two-stage non-integer `pixelated` scaling. `on-feImage` uses an independently derived nearest reference; `optimizeSpeed` remains pending reference qualification at allowed nearest-sampling ties, rather than missing SVG support.                                                                        |
+| masking/clipPath          |     5 | Nested clip intersections and shorthand edge cases remain. Vector text children use shared placed glyph outlines. The transformed-text vendored golden uses ink bounds, unlike SVG 2 full-glyph-cell bounds and Firefox, so it remains classified pending broader browser review.                                                                              |
+| masking/mask              |     0 | Transformed group and rotated mask regions compare with ordinary budgets; `mask-type` alpha/luminance and mask `color-interpolation` sRGB/linearRGB are active.                                                                                                                                                                                                |
+| text/font                 |     2 | `font` shorthand; canvas-size mismatch (test harness)                                                                                                                                                                                                                                                                                                          |
+| text/tspan                |     3 | tspan interaction with `clip-path`/`filter`/`mask`                                                                                                                                                                                                                                                                                                             |
+| painting/stroke-dasharray |     4 | `0 n` dash patterns with caps; `40 0` closed-rect dash-seam (see note)                                                                                                                                                                                                                                                                                         |
+| painting/marker           |     3 | multiple closepaths, recursive-5 (rounded-rect corner fixed, [#623](https://github.com/jwmcglynn/donner/issues/623))                                                                                                                                                                                                                                           |
 
 **`painting/stroke-dasharray/n-0` (`40 0`)** — root-caused under [#623](https://github.com/jwmcglynn/donner/issues/623)
 and intentionally left skipped: an SVG `<rect>` is a _closed_ contour, so tiny-skia
@@ -311,13 +311,53 @@ all-curve loops (circle/ellipse).
 
 ---
 
+## Fragment image placement
+
+An `feImage` referencing an SVG element uses the resolved primitive subregion origin for content
+placement, including individually omitted `x` or `y`. Placement uses the unclipped user-space
+origin; clipping the primitive or filter region does not move the referenced artwork. Normal
+referenced geometry retains its natural dimensions. The CPU and Geode paths share this rule.
+`filters/feImage/with-x-y.svg` and both `with-x-y-and-protruding-subregion` comparisons use ordinary
+budgets. The authored renderer oracle pins `image-rendering="crisp-edges"` and compares exact
+pixels for complete/partial coordinates, protrusion, and translated source content. Arbitrary host
+scale, rotation, skew, and reflection are not established by this bounded coverage; their existing
+exceptions remain tracked separately.
+
+The exact placement oracle is `FeImageFragmentUsesItsOwnSubregionOrigin` in
+`//donner/svg/renderer/tests:renderer_public_api_tests`; the configured GPU target is
+`//donner/svg/renderer/tests:renderer_public_api_tests_geode`. The ordinary-budget corpus gates are
+`//donner/svg/renderer/tests:resvg_test_suite_default_text` and
+`//donner/svg/renderer/tests:resvg_test_suite_geode`; full-text uses the API with `--config=text-full`
+and `//donner/svg/renderer/tests:resvg_test_suite_max`. See [Filter Effects](../filter_effects.md).
+
+## Structure and encoding input contracts
+
+Unknown SVG elements retain their DOM descendants but exclude the subtree from rendering,
+including after incremental source insertion. The sample viewer uses a real `g` for its selection
+chrome. `structure/svg/rect-inside-a-non-SVG-element.svg` and `xmlns-validation.svg` use ordinary
+comparisons. The constructors and namespace-aware source projection live in `SVGUnknownElement.cc`
+and `SVGDocument.cc`; `renderer_public_api_tests` covers parsed and edited wrappers, foreign
+namespaces, and promotion of a known SVG container. Namespace declaration edits re-evaluate
+the affected descendants while retaining their typed state for restoration; foreign shapes, text,
+stylesheets, paint references, filter children, and clip geometry are excluded from their consumers.
+This does not purge previously loaded or queued font faces from the existing resource cache.
+
+The named rendering gates are `//donner/svg/renderer/tests:renderer_public_api_tests` and its
+configured `renderer_public_api_tests_geode` counterpart. Corpus enforcement uses
+`//donner/svg/renderer/tests:resvg_test_suite_default_text`, `resvg_test_suite_geode`, and
+`resvg_test_suite_max` for the configured text lane.
+
+The XML byte parser accepts UTF-8 input and rejects declarations naming another encoding rather
+than interpreting those bytes as UTF-8. `structure/svg/not-UTF-8-encoding.svg` is an explicitly
+unsupported Windows-1251 input: transcode the bytes and update or remove the declaration first.
+`//donner/base/xml:xml_tests` and `//donner/svg/parser:parser_tests` cover rejection, UTF-8 BOM and
+case-insensitive declaration acceptance, and unrelated encoding-like content.
+
 ## Needs triage (uncertain `Bug?` entries)
 
 These have a question-mark reason in the file and need a root-cause pass to decide
 bug vs. out-of-scope:
 
-- `structure/svg`: non-UTF-8 encoding, rect-inside-non-SVG-element, xmlns validation
-  (XML entity references ×3 and mixed-namespaces now pass and are enabled)
 - `text/letter-spacing/non-ASCII-character`: different CJK glyph (wrong font? →
   overlaps [B7](#b7-font-substitution--missing-bundled-families))
 - `text/font-family/fallback-1`: fallback from invalid family

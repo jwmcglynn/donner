@@ -53,8 +53,33 @@ permissions:
   contents: read
 
 jobs:
+  # Classify pull request trust at job level, so the build job can bind the
+  # BuildBuddy write environment only for runs allowed to write.
+  trust:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      trusted_pr: ${{ steps.pr_trust.outputs.trusted_pr }}
+      renovate_pr: ${{ steps.pr_trust.outputs.renovate_pr }}
+    steps:
+      - name: Checkout trust action
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/actions/pr-trust
+
+      - id: pr_trust
+        name: Classify pull request trust
+        uses: ./.github/actions/pr-trust
+
   build:
     runs-on: macos-26
+    needs: trust
+    # The read-write BuildBuddy key is a secret of the buildbuddy-write environment. Only
+    # runs allowed to write bind it, so other runs never receive that key.
+    environment:
+      name: ${{ ((github.event_name != 'pull_request' && github.ref == 'refs/heads/main') || needs.trust.outputs.trusted_pr == 'true') && 'buildbuddy-write' || '' }}
+      deployment: false
     steps:
       - uses: actions/checkout@v7
         with:
@@ -66,12 +91,34 @@ jobs:
           bazelisk-cache: true
           repository-cache: true
           external-cache: true
-          cache-save: ${{ github.event_name != 'pull_request' }}
+          cache-save: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
 
       - name: Restore Bazel action cache
         uses: ./.github/actions/cache-bazel-actions
         with:
           namespace: editor-wasm
+
+      # BuildBuddy remote cache (docs/building.md). Main push, schedule and dispatch
+      # runs and trusted maintainer pull requests read and write; Renovate pull
+      # requests only read; every other run configures no remote cache. The
+      # read-only repository secret still reaches every same-repository run of
+      # this job, so it is treated as public: it can only read the cache.
+      - name: Configure BuildBuddy remote cache
+        if: (github.event_name != 'pull_request' && github.ref == 'refs/heads/main') || needs.trust.outputs.trusted_pr == 'true'
+        uses: ./.github/actions/buildbuddy-cache
+        with:
+          api-key: ${{ secrets.BUILDBUDDY_API_KEY }}
+          trusted-pr: ${{ needs.trust.outputs.trusted_pr }}
+          renovate-pr: ${{ needs.trust.outputs.renovate_pr }}
+          download-outputs: toplevel
+
+      - name: Configure BuildBuddy read-only cache
+        if: needs.trust.outputs.renovate_pr == 'true'
+        uses: ./.github/actions/buildbuddy-cache
+        with:
+          read-only-api-key: ${{ secrets.BUILDBUDDY_API_KEY_READONLY }}
+          renovate-pr: ${{ needs.trust.outputs.renovate_pr }}
+          download-outputs: toplevel
 
       # Repository downloads are the only retried part of this lane. Keeping
       # them separate prevents a compile or test failure from passing on retry.
@@ -111,6 +158,18 @@ jobs:
           bazelisk test --config=editor-wasm --test_output=errors --remote_download_outputs=all \
             //tools/ci:editor_wasm_size_tests
 
+      # The repository ignores MODULE.bazel.lock, so the builds above resolved one in update mode.
+      # Rebuilding the package in error mode proves that generated lockfile is complete for the
+      # package configuration. Later steps may resolve more modules, so the proved lockfile is
+      # snapshotted here; the deployment candidate retains that snapshot and its digest, as the
+      # CLIs do.
+      - name: Prove the package's resolved module graph
+        run: |
+          bazelisk build --config=editor-wasm --lockfile_mode=update //tools/ci:editor_wasm_package
+          bazelisk build --config=editor-wasm --lockfile_mode=error //tools/ci:editor_wasm_package
+          python3 -B -m tools.release_cli check-lockfile --lockfile MODULE.bazel.lock
+          cp MODULE.bazel.lock "$RUNNER_TEMP/editor-wasm-module.lock"
+
       - name: Stage package for handoff
         id: stage-package
         run: |
@@ -146,18 +205,36 @@ jobs:
           bazelisk test --config=wasm-geode --test_output=errors \
             //tools/ci:geode_wasm_browser_default_audit
 
+      # setup-node's own npm cache saves on every event, including pull
+      # requests. Keep its automatic caching off and restore the npm download
+      # cache explicitly; only main pushes save it.
       - name: Setup Node
         uses: actions/setup-node@v7
         with:
           node-version: 24
-          cache: npm
-          cache-dependency-path: donner/editor/wasm/tests/package-lock.json
+          package-manager-cache: false
+
+      - name: Restore npm download cache
+        id: npm-cache
+        uses: actions/cache/restore@v6
+        with:
+          path: ~/.npm
+          key: npm-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('donner/editor/wasm/tests/package-lock.json') }}
+          restore-keys: |
+            npm-${{ runner.os }}-${{ runner.arch }}-
 
       - name: Install Playwright
         working-directory: donner/editor/wasm/tests
         run: |
           npm ci
           npx playwright install chromium firefox webkit
+
+      - name: Save main npm download cache
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && steps.npm-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: ~/.npm
+          key: ${{ steps.npm-cache.outputs.cache-primary-key }}
 
       - name: Verify Geode-only package contracts
         working-directory: donner/editor/wasm/tests
@@ -284,9 +361,16 @@ jobs:
           gzip -n -9 -c "${site_dir}/editor.wasm" > "${deploy_dir}/editor.wasm.gz"
           test "$(wc -c < "${deploy_dir}/editor.wasm.gz")" -le 20971520
 
-          lockfile_sha256=$(shasum -a 256 donner/editor/wasm/tests/package-lock.json | awk '{print $1}')
+          # lockfile_sha256 is the browser harness npm lock; generated_lock_sha256 is the
+          # MODULE.bazel.lock proved by the package build and retained beside the package.
+          cp "${RUNNER_TEMP}/editor-wasm-module.lock" "${candidate_dir}/MODULE.bazel.lock"
+          lock_digests=$(shasum -a 256 donner/editor/wasm/tests/package-lock.json \
+            "${candidate_dir}/MODULE.bazel.lock" | awk '{print $1}')
+          lockfile_sha256=$(sed -n 1p <<< "${lock_digests}")
+          generated_lock_sha256=$(sed -n 2p <<< "${lock_digests}")
+          [[ "${lockfile_sha256}" =~ ^[0-9a-f]{64}$ && "${generated_lock_sha256}" =~ ^[0-9a-f]{64}$ ]]
           printf '%s\n' \
-            "{\"source_revision\":\"${GITHUB_SHA}\",\"producer_run_id\":\"${GITHUB_RUN_ID}\",\"producer_attempt\":\"${GITHUB_RUN_ATTEMPT}\",\"lockfile_sha256\":\"${lockfile_sha256}\",\"bazel_configs\":[\"editor-wasm\"],\"targets\":[\"${PACKAGE_TARGET}\"],\"renderer\":\"geode\",\"transport_encoding\":\"gzip\"}" \
+            "{\"source_revision\":\"${GITHUB_SHA}\",\"producer_run_id\":\"${GITHUB_RUN_ID}\",\"producer_attempt\":\"${GITHUB_RUN_ATTEMPT}\",\"lockfile_sha256\":\"${lockfile_sha256}\",\"generated_lock_sha256\":\"${generated_lock_sha256}\",\"bazel_configs\":[\"editor-wasm\"],\"targets\":[\"${PACKAGE_TARGET}\"],\"renderer\":\"geode\",\"transport_encoding\":\"gzip\"}" \
             > "${candidate_dir}/provenance.json"
 
           (
@@ -315,4 +399,5 @@ jobs:
             echo "### Geode deployment candidate"
             echo "- Source revision: \`${GITHUB_SHA}\`"
             echo "- Artifact digest: \`${{ steps.upload-candidate.outputs.artifact-digest }}\`"
+            echo "- Generated MODULE.bazel.lock SHA-256: \`$(shasum -a 256 < "${RUNNER_TEMP}/editor-wasm-module.lock" | cut -d' ' -f1)\`"
           } >> "${GITHUB_STEP_SUMMARY}"

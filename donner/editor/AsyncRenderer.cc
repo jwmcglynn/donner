@@ -1173,6 +1173,10 @@ void AsyncRenderer::workerLoop() {
                "Rendering worker state requires a pending request while waiting");
         requestStorage.emplace(std::move(*rendering->pendingRequest));
         rendering->pendingRequest.reset();
+        // A cancel from an earlier iteration is stale. Reset it here, under the lock that
+        // `cancelInFlight` and `shutdown` take, so a cancel aimed at this render can never land
+        // before the reset and be lost.
+        cancelRender_.reset();
       } else {
         assert(std::holds_alternative<IdleState>(workerState_));
         if (pendingCompositorWarmup_) {
@@ -1353,12 +1357,6 @@ void AsyncRenderer::workerLoop() {
     // and compositor offscreens. Start each worker iteration from a clean epoch.
     (void)requestRenderer.consumeReadbackStats();
     svg::SVGDocument& requestDocument = request.lease.document();
-
-    // Every iteration starts with a fresh (non-cancelled) token.
-    // The UI thread sets cancel via `requestRender` ONLY when posting
-    // while busy, and we're idle here right before the render runs -
-    // so any cancel signal from a previous iteration is stale.
-    cancelRender_.reset();
 
     // Execute the render outside the lock so the UI thread can poll
     // `isBusy()` / `pollResult()` while we work.

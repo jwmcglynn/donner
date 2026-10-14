@@ -111,7 +111,10 @@ tools/build_docs.sh
 `tools/build_docs.sh` runs `doxygen Doxyfile`, copies
 `docs/reports/binary-size/` into the generated HTML output, and
 extracts `docs/reports/coverage.zip` into `reports/coverage/` so the
-deployed docs site has both reports live.
+deployed docs site has both reports live. The docs site builds from the
+repository checkout; `.gitattributes` leaves `coverage.zip` out of the
+release source archive, so `tools/build_docs.sh` run from that archive
+skips the coverage report.
 
 To collect coverage without generating the local HTML report:
 
@@ -213,28 +216,108 @@ checked-in consumer module against it. See \ref GettingStarted for the `MODULE.b
 
 ## Continuous integration remote cache
 
-The scheduled GitHub-hosted nightly full-tree build and the scheduled
-sanitizer lanes can share a [BuildBuddy](https://www.buildbuddy.io/) remote
-cache. It is off by default and never affects local builds, pull-request runs,
-or the self-hosted runners.
+The GitHub-hosted Bazel lanes can share a [BuildBuddy](https://www.buildbuddy.io/) remote cache:
+the `linux`, `macos` and `macos-browser` jobs in `main.yml`, the Editor WASM build, the Geode ASan
+pull-request lane, and the scheduled nightly full-tree build and sanitizer lanes. One self-hosted
+lane shares it too: `macos-self-hosted`, which runs only for trusted maintainer pull requests, so
+the hosted and self-hosted macOS lanes reuse each other's build results. It is a remote cache only:
+no remote execution and no build-event upload. It never affects local builds or the self-hosted
+Linux lane, which never calls the action. Without the secrets it is off and every lane builds
+exactly as it does without a cache. A pull request's base-change run (`pr_base_change.yml`, which
+calls `main.yml` as a reusable workflow) applies the same trust gate: its jobs bind the
+`buildbuddy-write` environment only for trusted maintainer pull requests, which may write the
+cache, and Renovate base-change runs get only the forwarded read-only key.
 
-**How it works.** The `.github/actions/buildbuddy-cache` composite action runs
-early in each of those lanes. When the `BUILDBUDDY_API_KEY` repository secret is
-present it writes a `.buildbuddy.bazelrc` fragment (loaded by a `try-import` in
-`.bazelrc`) that points Bazel at `grpcs://remote.buildbuddy.io`. When the secret
-is absent the action writes nothing and the `try-import` is a silent no-op, so
-every lane builds exactly as it would without the cache.
+**How it works.** Before its first Bazel command each covered job runs the
+`.github/actions/buildbuddy-cache` composite action with at most one key. The action writes a
+git-ignored `.buildbuddy.bazelrc`, loaded by a `try-import` in `.bazelrc`, that points Bazel at
+`grpcs://remote.buildbuddy.io`. The key itself goes to a private file under the runner's temporary
+directory, and Bazel reads it through a small credential helper there that the fragment names with
+`--credential_helper`. The key is never a Bazel flag, because Bazel writes its rc options into its
+server log in the output base, and uploads of workspace paths cannot carry it. With no key the
+action writes nothing and the `try-import` is a silent no-op. The self-hosted runner is persistent,
+so `macos-self-hosted` deletes the key file and the fragment in a last step that runs whatever the
+job's outcome.
 
-Pull-request runs never receive the key, and the action refuses to configure the
-cache for a pull request, so a PR can never read or poison it. The lanes that
-use it run only on a schedule or by manual dispatch, and they upload results.
+**What each run gets.** Pull request trust comes from one rule,
+`.github/actions/pr-trust`, which also decides self-hosted routing in `main.yml`:
 
-**Activation.** Add a repository secret named `BUILDBUDDY_API_KEY` (Settings ->
-Secrets and variables -> Actions) holding a BuildBuddy API key. No code change
-or redeploy is needed; the next hosted run picks it up automatically.
+| Run | Key | Cache access |
+| --- | --- | --- |
+| Push, schedule or manual dispatch on `main` | `BUILDBUDDY_API_KEY` (environment) | read and write |
+| Trusted pull request: same repository, opened and run by the maintainer | `BUILDBUDDY_API_KEY` (environment) | read and write |
+| Renovate pull request | `BUILDBUDDY_API_KEY_READONLY` | read only |
+| Fork or any other pull request, push to another branch | none | no remote cache |
 
-**Deactivation.** Delete the `BUILDBUDDY_API_KEY` secret. On their next run the
-lanes revert to cache-less builds with no other change.
+**Where the read-write key lives.** `BUILDBUDDY_API_KEY` is a secret of the `buildbuddy-write`
+GitHub Environment, not a repository secret. GitHub delivers a job every secret its definition
+references, even for steps that end up skipped, so a repository-level write key would reach the
+runner of every pull request job that also handles the writer case. Each covered job therefore binds
+`environment: {name: ..., deployment: false}` with an expression that names `buildbuddy-write` only
+for a `main` push, schedule or dispatch run or a trusted maintainer pull request, and names no
+environment otherwise. Renovate and untrusted runs never bind it and never receive the key.
+`deployment: false` uses the environment's secrets without creating deployment records. In
+`main.yml` the trust outputs come from the `gatekeeper` job; the Editor WASM and Geode ASan
+workflows run a small `trust` job first, because an environment is chosen before a job's steps run.
+
+**The read-only key is treated as public.** `BUILDBUDDY_API_KEY_READONLY` is a repository secret,
+so GitHub delivers it to every same-repository run of a covered job, not only Renovate's, even
+though the action configures it only for Renovate pull requests. It can only read cache entries,
+which are build outputs of this public source tree, and no build events are uploaded, so its
+exposure reveals nothing private. Rotate it if it leaks; never give it write access.
+
+Renovate pull requests are read-only because a dependency update brings new upstream code into the
+build. Letting that code write results that `main` and other pull requests later reuse would be a
+cache-poisoning path, so those runs use a key that cannot write and also pass
+`--noremote_upload_local_results`. GitHub does not give secrets to pull requests from forks, and the
+workflows only pass a key to the runs above. The action checks the event, the trust outputs and the
+runner type again, and fails the job if a key reaches any other run, for example the read-write key
+on an untrusted or Renovate pull request, or any key on a self-hosted runner other than macOS for a
+trusted maintainer pull request.
+
+**Bazel settings.** `--remote_timeout=60s`, `--remote_cache_compression`, and
+`--remote_download_outputs=minimal` for lanes that only need test results (`toplevel` for the
+Editor WASM lane, which stages its package from `bazel-bin`). If the cache cannot be reached when a
+job starts, the action leaves it off and the job builds locally. Cache read errors during a build
+fall back to local execution, and results that are no longer available are rebuilt.
+
+**Runner images and hermeticity.** Hosted Linux builds with the runner image's autoconfigured clang
+and system headers. Those files are not Bazel action inputs, so a runner image update changes no
+cache key. The action therefore sets `--remote_instance_name` to the runner image and version, and
+an entry is reused only on the image that produced it. After an image update the first runs on the
+new image start cold. The macOS lanes instead build with the Xcode pinned in
+`tools/ci_macos_xcode.txt` and use a partition named after it: Apple toolchain actions carry the
+Xcode version and build in their keys, and `--config=ci-macos` pins the action `PATH`, so the hosted
+and self-hosted macOS runners produce identical build action keys. Test results stay per lane:
+each lane names itself in its test environment, because a result depends on the runner's GPU. A
+self-hosted runner without the pinned Xcode gets no partition, and the action leaves the cache off
+for that run. The sanitizer lanes use the hermetic LLVM toolchain (`--config=latest_llvm`), whose
+compiler and sysroot are action inputs.
+
+**Interplay with the GitHub Actions cache.** Only `main` saves Actions caches. They remain the
+fallback when BuildBuddy is off and are unchanged. While BuildBuddy is on, a remote cache hit with
+`--remote_download_outputs=minimal` is not written to the local disk cache, so the disk action caches
+that `main` saves hold mostly actions that ran locally, and runs without BuildBuddy (forks, other
+pull requests) restore a colder snapshot.
+
+**Activation.**
+
+1. Create a BuildBuddy organization.
+2. Create two API keys. The read-write key needs cache write access (BuildBuddy's "Read+Write"
+   key type). The read-only key must have no cache write access ("Read-only"). Neither needs
+   executor or organization-admin rights.
+3. Create the GitHub Environment `buildbuddy-write` (Settings -> Environments) with no protection
+   rules or reviewers, and add the read-write key to it as the environment secret
+   `BUILDBUDDY_API_KEY`. Do not add a repository secret with that name. Leave its deployment
+   branch policy unrestricted: trusted maintainer pull requests run on a pull request merge ref,
+   so a `main`-only policy would block their writes. The workflows' environment expressions decide
+   which runs bind it.
+4. Add the read-only key as the repository secret `BUILDBUDDY_API_KEY_READONLY` (Settings ->
+   Secrets and variables -> Actions). No code change is needed; the next hosted run picks them up.
+
+**Deactivation.** Delete the environment secret and the repository secret. The next runs build
+without the remote cache. Deleting only `BUILDBUDDY_API_KEY_READONLY` turns the cache off for
+Renovate pull requests alone.
 
 ## Frequently Asked Questions (FAQ)
 
@@ -269,6 +352,20 @@ bazel test --config=lld //...
 This is a local dev-box workaround, not the default, so it doesn't force an `lld`
 dependency onto CI images that already link fine. See
 [#665](https://github.com/jwmcglynn/donner/issues/665).
+
+### `-c opt` link fails with `unrecognized option '--icf=safe'`
+
+Optimized Linux builds of the shipped binaries (`donner-svg`, `svg_to_png` and the editor) fold
+identical functions at link time with `-Wl,--icf=safe`, which `lld` and `ld.gold` support. Bazel's
+autoconfigured toolchain picks one of those whenever it is installed; this error means it fell
+back to GNU `ld` (bfd), which does not. Either install `lld` and build with `--config=lld`, or turn
+the folding off:
+
+```sh
+bazel build -c opt --//build_defs:linker_icf=false //donner/svg/tool:donner-svg
+```
+
+Folding changes only the binary's size, not its behavior.
 
 ### What's with the build times?
 

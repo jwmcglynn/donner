@@ -63,6 +63,11 @@ jobs:
     runs-on: ubuntu-24.04
     needs: gatekeeper
     if: needs.gatekeeper.outputs.should_run == 'true'
+    # The read-write BuildBuddy key is a secret of the buildbuddy-write environment. Only
+    # runs allowed to write bind it, so other runs never receive that key.
+    environment:
+      name: ${{ (github.event_name != 'pull_request' && github.ref == 'refs/heads/main') && 'buildbuddy-write' || '' }}
+      deployment: false
     # Budget: this job is an uncached full build, and its time appears to track hosted-runner
     # speed; test steps have taken about 68 to 120 minutes. Building only the tests that run under
     # the sanitizer saves an estimated 11 to 15 minutes, and 135 leaves headroom for a slow
@@ -89,13 +94,14 @@ jobs:
           disk-cache: ${{ github.workflow }}-${{ runner.os }}-asan
           repository-cache: true
           external-cache: true
-          cache-save: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
+          cache-save: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
 
       - name: Configure BuildBuddy remote cache
-        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && github.event_name != 'pull_request_target'
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
         uses: ./.github/actions/buildbuddy-cache
         with:
           api-key: ${{ secrets.BUILDBUDDY_API_KEY }}
+          download-outputs: minimal
 
       - name: Test //donner/... with ASan
         run: |
@@ -144,6 +150,11 @@ jobs:
     runs-on: ubuntu-24.04
     needs: gatekeeper
     if: needs.gatekeeper.outputs.should_run == 'true'
+    # The read-write BuildBuddy key is a secret of the buildbuddy-write environment. Only
+    # runs allowed to write bind it, so other runs never receive that key.
+    environment:
+      name: ${{ (github.event_name != 'pull_request' && github.ref == 'refs/heads/main') && 'buildbuddy-write' || '' }}
+      deployment: false
     # A cold sanitizer build plus the full sharded suite has exceeded 60 minutes while still
     # making forward progress. Keep the test command bounded without truncating its results.
     timeout-minutes: 120
@@ -168,13 +179,14 @@ jobs:
           disk-cache: ${{ github.workflow }}-${{ runner.os }}-ubsan
           repository-cache: true
           external-cache: true
-          cache-save: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
+          cache-save: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
 
       - name: Configure BuildBuddy remote cache
-        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && github.event_name != 'pull_request_target'
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
         uses: ./.github/actions/buildbuddy-cache
         with:
           api-key: ${{ secrets.BUILDBUDDY_API_KEY }}
+          download-outputs: minimal
 
       - name: Test //donner/... with UBSan
         run: |

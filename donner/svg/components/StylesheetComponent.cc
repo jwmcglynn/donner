@@ -53,6 +53,27 @@ std::optional<SourceRange> StylesheetSourceMap::mapToDocumentSource(
   return SourceRange{.start = *start, .end = *end};
 }
 
+std::optional<FileOffset> StylesheetSourceMap::mapPointToDocumentSource(
+    FileOffset localOffset) const {
+  if (!localOffset.offset) {
+    return std::nullopt;
+  }
+  for (const StylesheetSourceMapSegment& segment : segments_) {
+    if (*localOffset.offset >= segment.cssStartOffset &&
+        *localOffset.offset < segment.cssEndOffset) {
+      return FileOffset::Offset(*segment.documentStartOffset.offset + *localOffset.offset -
+                                segment.cssStartOffset);
+    }
+  }
+  if (!segments_.empty() && cssLength_ == *localOffset.offset &&
+      segments_.back().cssEndOffset == *cssLength_) {
+    const auto& last = segments_.back();
+    return FileOffset::Offset(*last.documentStartOffset.offset + last.cssEndOffset -
+                              last.cssStartOffset);
+  }
+  return std::nullopt;
+}
+
 std::optional<std::size_t> StylesheetSourceMap::mapToLocalCssOffset(
     std::size_t documentOffset) const {
   for (const StylesheetSourceMapSegment& segment : segments_) {
@@ -76,10 +97,16 @@ void StylesheetComponent::parseStylesheet(const RcStringOrRef& str) {
 
 void StylesheetComponent::parseStylesheet(const RcStringOrRef& str,
                                           StylesheetSourceMap newSourceMap) {
+  ParseWarningSink disabled = ParseWarningSink::Disabled();
+  parseStylesheet(str, std::move(newSourceMap), disabled);
+}
+
+void StylesheetComponent::parseStylesheet(const RcStringOrRef& str,
+                                          StylesheetSourceMap newSourceMap,
+                                          ParseWarningSink& warnings) {
   text = RcString(str);
   sourceMap = std::move(newSourceMap);
-  ParseWarningSink disabled = ParseWarningSink::Disabled();
-  stylesheet = donner::css::parser::StylesheetParser::Parse(str, disabled);
+  stylesheet = donner::css::parser::StylesheetParser::Parse(str, warnings);
 
   // Every path that loads or mutates a stylesheet ends here, so recomputing the cache alongside
   // the parse keeps it from going stale.

@@ -26,6 +26,8 @@ struct ComputedStyleComponent {
   std::optional<PropertyRegistry> properties;
   /// Absent for manually constructed or incomplete styles; populated with the final properties.
   std::optional<ComputedResourceOpacities> resourceOpacities;
+  bool externalFill = false;    ///< Ordinary fill inherited from the scoped external-use host.
+  bool externalStroke = false;  ///< Ordinary stroke inherited from the scoped external-use host.
 };
 
 }  // namespace donner::svg::components

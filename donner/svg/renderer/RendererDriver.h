@@ -22,6 +22,10 @@
 #include "donner/svg/renderer/common/RenderingInstanceView.h"
 
 namespace donner::svg {
+namespace components {
+class StyleResourceBudget;
+struct ComputedStyleComponent;
+}  // namespace components
 
 struct RendererDriverTextFrameCache;
 
@@ -99,9 +103,13 @@ public:
    * @param renderer Backend receiving prepared draw calls.
    * @param verbose Whether to emit diagnostic warnings.
    * @param securityStats Optional preparation diagnostics destination.
+   * @param externalUseStyleWork Optional shared owner-frame work admission context. Current-frame
+   * callers share one fresh context for every backend beginFrame/endFrame pair; persistent drivers
+   * must establish an OwnerScope on that context or be reconstructed for the next frame.
    */
-  explicit RendererDriver(RendererInterface& renderer, bool verbose = false,
-                          SecurityStats* securityStats = nullptr);
+  explicit RendererDriver(
+      RendererInterface& renderer, bool verbose = false, SecurityStats* securityStats = nullptr,
+      std::shared_ptr<components::StyleResourceBudget> externalUseStyleWork = nullptr);
 
   ~RendererDriver();
 
@@ -416,6 +424,10 @@ private:
   /// Apply \ref resolvePaintContextRemap to the fill and stroke of @p paint for @p instance.
   void applyDrawTimeContextRemaps(PaintParams& paint,
                                   const components::RenderingInstanceComponent& instance) const;
+  void drawExternalUse(SVGDocument& subDocument, std::string_view fragment,
+                       const components::RenderingInstanceComponent& instance,
+                       const components::ComputedStyleComponent& style, Registry& hostRegistry,
+                       Entity hostEntity);
   void drawSubDocument(SVGDocument& subDocument, const Box2d& viewportBounds,
                        const PreserveAspectRatio& aspectRatio, double opacity,
                        const Transform2d& parentAbsoluteTransform, Registry& hostRegistry,
@@ -423,6 +435,13 @@ private:
   void drawSubDocumentElement(SVGDocument& subDocument, std::string_view fragmentId,
                               const Transform2d& parentAbsoluteTransform, double opacity,
                               Registry& hostRegistry, Entity hostEntity);
+  void drawAdmittedSubDocument(SVGDocument& subDocument, const Box2d& viewportBounds,
+                               const PreserveAspectRatio& aspectRatio, double opacity,
+                               const Transform2d& parentAbsoluteTransform, Registry& hostRegistry,
+                               Entity hostEntity);
+  void drawAdmittedSubDocumentElement(SVGDocument& subDocument, std::string_view fragmentId,
+                                      const Transform2d& parentAbsoluteTransform, double opacity,
+                                      Registry& hostRegistry, Entity hostEntity);
   bool beginSubDocumentFontTraversal(const SVGDocumentHandle& child, Registry& hostRegistry,
                                      Entity hostEntity);
   void preRenderSvgFeImages(components::FilterGraph& filterGraph, Registry& registry,
@@ -496,6 +515,7 @@ private:
   bool earlyLeafViewportCulling_ = false;
   TextPreparationStats textPreparationStats_;
   std::unique_ptr<RendererDriverTextFrameCache> textFrameCache_;
+  std::shared_ptr<components::StyleResourceBudget> externalUseStyleWork_;
 
   /// Recursion guard for feImage fragment rendering. Tracks entity IDs currently being rendered
   /// as feImage fragments to prevent infinite recursion. Shared across nested RendererDriver

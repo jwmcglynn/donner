@@ -2691,10 +2691,8 @@ std::optional<gpu::shader::programs::ConvolveMatrixParams> BuildConvolveMatrixPa
   if (primitive.divisor.has_value()) {
     divisor = *primitive.divisor;
   } else {
-    for (double coefficient : primitive.kernelMatrix) {
-      divisor += coefficient;
-    }
-    if (std::abs(divisor) < 1e-10) {
+    divisor = svg::components::filter_primitive::ConvolveKernelSum(primitive.kernelMatrix);
+    if (divisor == 0.0) {
       divisor = 1.0;
     }
   }
@@ -3197,7 +3195,8 @@ std::optional<uint32_t> FilterImageUploadRowPitch(
 
 std::optional<ImageParams> CreateFragmentImageParams(
     const svg::components::filter_primitive::Image& primitive,
-    const svg::components::FilterGraph& graph, const Transform2d& deviceFromFilter) {
+    const svg::components::FilterGraph& graph, const Transform2d& deviceFromFilter,
+    const Vector2d& origin) {
   if (!primitive.isFragmentReference) {
     return std::nullopt;
   }
@@ -3209,8 +3208,7 @@ std::optional<ImageParams> CreateFragmentImageParams(
     const double scaleY = graph.userToPixelScale.y;
     const Transform2d viewBoxScaleInv = Transform2d::Scale(
         NearZero(scaleX, 1e-12) ? 1.0 : 1.0 / scaleX, NearZero(scaleY, 1e-12) ? 1.0 : 1.0 / scaleY);
-    const Transform2d regionOffset = Transform2d::Translate(primitive.fragmentRegionTopLeft.x,
-                                                            primitive.fragmentRegionTopLeft.y);
+    const Transform2d regionOffset = Transform2d::Translate(origin.x, origin.y);
     const Transform2d deviceFromFragment = viewBoxScaleInv * regionOffset * deviceFromFilter;
     const Transform2d fragmentFromDevice = deviceFromFragment.inverse();
     params.m00 = static_cast<float>(fragmentFromDevice.data[0]);
@@ -3227,9 +3225,9 @@ std::optional<ImageParams> CreateFragmentImageParams(
     const double scaleX = graph.userToPixelScale.x > 0.0 ? graph.userToPixelScale.x : 1.0;
     const double scaleY = graph.userToPixelScale.y > 0.0 ? graph.userToPixelScale.y : 1.0;
     params.m00 = 1.0f;
-    params.m02 = static_cast<float>(-primitive.fragmentRegionTopLeft.x * scaleX);
+    params.m02 = static_cast<float>(-origin.x * scaleX);
     params.m11 = 1.0f;
-    params.m12 = static_cast<float>(-primitive.fragmentRegionTopLeft.y * scaleY);
+    params.m12 = static_cast<float>(-origin.y * scaleY);
     params.pixelatedScaleX = 1.0f;
     params.pixelatedScaleY = 1.0f;
   }
@@ -3264,103 +3262,65 @@ FilterTexture GeodeFilterEngine::renderTransparentImage(FilterResourceArena& are
 
 namespace {
 
-Vector2d FilterImageAlignment(svg::PreserveAspectRatio::Align align) {
-  using Align = svg::PreserveAspectRatio::Align;
-  switch (align) {
-    case Align::None:
-    case Align::XMinYMin: return {0.0, 0.0};
-    case Align::XMidYMin: return {0.5, 0.0};
-    case Align::XMaxYMin: return {1.0, 0.0};
-    case Align::XMinYMid: return {0.0, 0.5};
-    case Align::XMidYMid: return {0.5, 0.5};
-    case Align::XMaxYMid: return {1.0, 0.5};
-    case Align::XMinYMax: return {0.0, 1.0};
-    case Align::XMidYMax: return {0.5, 1.0};
-    case Align::XMaxYMax: return {1.0, 1.0};
-  }
-  return {0.0, 0.0};
-}
-
-ImageParams CreateRasterFilterImageParams(const svg::components::filter_primitive::Image& primitive,
-                                          const svg::components::FilterGraph& graph,
-                                          const Box2d& placementRegionUser) {
-  const uint32_t imgW = static_cast<uint32_t>(primitive.imageWidth);
-  const uint32_t imgH = static_cast<uint32_t>(primitive.imageHeight);
-  // Work out the placement rectangle in output-pixel coordinates. Prefer
-  // the node's primitive subregion when given; fall back to the filter
-  // region so the image covers the full primitive area.
-  const double scaleX = graph.userToPixelScale.x > 0.0 ? graph.userToPixelScale.x : 1.0;
-  const double scaleY = graph.userToPixelScale.y > 0.0 ? graph.userToPixelScale.y : 1.0;
-
-  // The placement rectangle arrives already resolved in user space (percent/OBB
-  // units handled, absent x/y/width/height defaulted to the filter region by the
-  // caller). Project it into output-pixel coordinates. The previous in-function
-  // logic only honored the subregion when all four attributes were present and
-  // otherwise meet-fit the image to the whole filter region and cropped it,
-  // which broke partial subregions (e.g. `feImage x=.. width=..`) and percent
-  // units (resvg `with-subregion-{1,2,3}`).
-  double regionX = placementRegionUser.topLeft.x * scaleX;
-  double regionY = placementRegionUser.topLeft.y * scaleY;
-  double regionW = placementRegionUser.width() * scaleX;
-  double regionH = placementRegionUser.height() * scaleY;
-
-  if (regionW <= 0.0 || regionH <= 0.0) {
-    regionW = static_cast<double>(imgW);
-    regionH = static_cast<double>(imgH);
+std::optional<ImageParams> CreateRasterFilterImageParams(
+    const svg::components::filter_primitive::Image& primitive, const Transform2d& deviceFromFilter,
+    const Box2d& placementRegionUser) {
+  const std::array<double, 4> regionValues = {
+      placementRegionUser.topLeft.x, placementRegionUser.topLeft.y, placementRegionUser.width(),
+      placementRegionUser.height()};
+  if (placementRegionUser.width() <= 0.0 || placementRegionUser.height() <= 0.0 ||
+      !std::all_of(regionValues.begin(), regionValues.end(),
+                   [](double value) { return std::isfinite(value); })) {
+    return std::nullopt;
   }
 
-  // Compute the src-from-dst transform (image-from-output). For a
-  // straight image placement at (regionX, regionY) with size (regionW,
-  // regionH) and source size (imgW, imgH), the transform is:
-  //   src.x = (dst.x - regionX) * imgW / regionW
-  //   src.y = (dst.y - regionY) * imgH / regionH
-  //
-  // preserveAspectRatio: meet / slice scales isotropically; 'none'
-  // scales independently as above. The simple non-preserveAR case covers
-  // the common resvg test cases - the preserveAspectRatio computation
-  // mirrors the CPU feImage path's convention (fit box to subregion).
-  double scaleImgX = regionW > 0.0 ? static_cast<double>(imgW) / regionW : 1.0;
-  double scaleImgY = regionH > 0.0 ? static_cast<double>(imgH) / regionH : 1.0;
-  double offsetX = -regionX * scaleImgX;
-  double offsetY = -regionY * scaleImgY;
-
-  using PAR = svg::PreserveAspectRatio;
-  if (primitive.preserveAspectRatio.align != PAR::Align::None) {
-    // Uniform scale per preserveAspectRatio semantics. Compute the
-    // meet/slice scale and the alignment offsets, then invert to build
-    // image-from-output.
-    const double scaleMeet =
-        std::min(regionW / static_cast<double>(imgW), regionH / static_cast<double>(imgH));
-    const double scaleSlice =
-        std::max(regionW / static_cast<double>(imgW), regionH / static_cast<double>(imgH));
-    const double s = primitive.preserveAspectRatio.meetOrSlice == PAR::MeetOrSlice::Slice
-                         ? scaleSlice
-                         : scaleMeet;
-    const double drawnW = static_cast<double>(imgW) * s;
-    const double drawnH = static_cast<double>(imgH) * s;
-
-    const Vector2d alignment = FilterImageAlignment(primitive.preserveAspectRatio.align);
-    const double drawX = regionX + (regionW - drawnW) * alignment.x;
-    const double drawY = regionY + (regionH - drawnH) * alignment.y;
-
-    scaleImgX = 1.0 / s;
-    scaleImgY = 1.0 / s;
-    offsetX = -drawX / s;
-    offsetY = -drawY / s;
+  const Box2d imageBox = Box2d::FromXYWH(0.0, 0.0, primitive.imageWidth, primitive.imageHeight);
+  const Transform2d filterFromImage =
+      primitive.preserveAspectRatio.elementContentFromViewBoxTransform(placementRegionUser,
+                                                                       imageBox);
+  const Transform2d deviceFromImage = filterFromImage * deviceFromFilter;
+  const double determinant = deviceFromImage.determinant();
+  if (!std::isfinite(determinant) || determinant == 0.0) {
+    return std::nullopt;
+  }
+  const Transform2d imageFromDevice = deviceFromImage.inverse();
+  const std::array<double, 8> imageValues = {
+      imageFromDevice.data[0],
+      imageFromDevice.data[2],
+      imageFromDevice.data[4],
+      imageFromDevice.data[1],
+      imageFromDevice.data[3],
+      imageFromDevice.data[5],
+      std::hypot(deviceFromImage.data[0], deviceFromImage.data[1]),
+      std::hypot(deviceFromImage.data[2], deviceFromImage.data[3])};
+  if (!std::all_of(imageValues.begin(), imageValues.end(), [](double value) {
+        return std::isfinite(value) && std::abs(value) <= std::numeric_limits<float>::max();
+      })) {
+    return std::nullopt;
   }
 
   ImageParams params{};
-  params.m00 = static_cast<float>(scaleImgX);
-  params.m01 = 0.0f;
-  params.m02 = static_cast<float>(offsetX);
-  params.m10 = 0.0f;
-  params.m11 = static_cast<float>(scaleImgY);
-  params.m12 = static_cast<float>(offsetY);
+  params.m00 = static_cast<float>(imageValues[0]);
+  params.m01 = static_cast<float>(imageValues[1]);
+  params.m02 = static_cast<float>(imageValues[2]);
+  params.m10 = static_cast<float>(imageValues[3]);
+  params.m11 = static_cast<float>(imageValues[4]);
+  params.m12 = static_cast<float>(imageValues[5]);
   params.samplingMode = ImageSamplingMode(primitive.imageRendering);
-  params.pixelatedScaleX = static_cast<float>(1.0 / std::abs(scaleImgX));
-  params.pixelatedScaleY = static_cast<float>(1.0 / std::abs(scaleImgY));
-  params.padding = 0;
+  params.pixelatedScaleX = static_cast<float>(imageValues[6]);
+  params.pixelatedScaleY = static_cast<float>(imageValues[7]);
   return params;
+}
+
+std::optional<ImageParams> CreateFilterImageParams(
+    const svg::components::filter_primitive::Image& primitive,
+    const svg::components::FilterGraph& graph, const Transform2d& deviceFromFilter,
+    const Box2d& placementRegionUser) {
+  if (primitive.isFragmentReference) {
+    return CreateFragmentImageParams(primitive, graph, deviceFromFilter,
+                                     placementRegionUser.topLeft);
+  }
+  return CreateRasterFilterImageParams(primitive, deviceFromFilter, placementRegionUser);
 }
 
 }  // namespace
@@ -3383,6 +3343,12 @@ FilterTexture GeodeFilterEngine::applyImage(
 
   // Empty, malformed, degenerate, or device-oversized sources remain transparent.
   if (!uploadRowPitch) {
+    return renderTransparentImage(arena, output, {width, height});
+  }
+
+  const std::optional<ImageParams> params =
+      CreateFilterImageParams(primitive, graph, deviceFromFilter, placementRegionUser);
+  if (!params) {
     return renderTransparentImage(arena, output, {width, height});
   }
 
@@ -3415,14 +3381,9 @@ FilterTexture GeodeFilterEngine::applyImage(
     return {};
   }
 
-  const std::optional<ImageParams> fragmentParams =
-      CreateFragmentImageParams(primitive, graph, deviceFromFilter);
-  const ImageParams params =
-      fragmentParams ? *fragmentParams
-                     : CreateRasterFilterImageParams(primitive, graph, placementRegionUser);
   if (!dispatchRuntimeInputOutputParameters(
-          arena, imageProgram_, image, output, UniformBytes(params),
-          fragmentParams ? "FilterImageFragRefPass" : "FilterImagePass", nullptr,
+          arena, imageProgram_, image, output, UniformBytes(*params),
+          primitive.isFragmentReference ? "FilterImageFragRefPass" : "FilterImagePass", nullptr,
           gpu::Extent2d{width, height})) {
     return {};
   }

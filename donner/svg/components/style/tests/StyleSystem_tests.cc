@@ -125,6 +125,94 @@ protected:
 
 // --- Basic style computation ---
 
+TEST_F(StyleSystemTest, ContextualAnimationWorkSharesTheOuterRenderAllowance) {
+  auto root = ParseSVG("<svg xmlns='http://www.w3.org/2000/svg'/>");
+  auto child = ParseSVG("<svg xmlns='http://www.w3.org/2000/svg'/>");
+  StyleResourceBudget work;
+  constexpr auto kLimit = AnimationResourceBudget::kMaximumContextualWork;
+  {
+    const StyleResourceBudget::OwnerScope owner(work);
+    const StyleResourceBudget::ActiveRegistryScope activeRoot(work, root.registry());
+    AnimationSystem().advance(root.registry(), 0);
+    auto& rootBudget = root.registry().ctx().get<AnimationResourceBudget>();
+    ASSERT_TRUE(rootBudget.reserveContextualWork(kLimit - 4));
+    {
+      const StyleResourceBudget::OwnerScope nestedOwner(work);
+      const StyleResourceBudget::ActiveRegistryScope activeChild(work, child.registry());
+      AnimationSystem().advance(child.registry(), 0);
+      auto& childBudget = child.registry().ctx().get<AnimationResourceBudget>();
+      EXPECT_EQ(childBudget.remainingContextualWork(), 4u);
+      ASSERT_TRUE(childBudget.reserveContextualWork(4));
+      ParseWarningSink warnings = ParseWarningSink::Disabled();
+      styleSystem.computeAllStyles(child.registry(), warnings);
+      EXPECT_EQ(childBudget.remainingContextualWork(), 0u);
+      EXPECT_FALSE(childBudget.reserveContextualWork(1));
+      EXPECT_FALSE(childBudget.rejected())
+          << "Contextual refusal must preserve base-value fallback";
+    }
+    EXPECT_EQ(rootBudget.remainingContextualWork(), 0u);
+  }
+  auto& rootBudget = root.registry().ctx().get<AnimationResourceBudget>();
+  EXPECT_EQ(rootBudget.remainingContextualWork(), 4u) << "Scope exit must detach its aggregate";
+  ASSERT_TRUE(rootBudget.reserveContextualWork(4));
+  {
+    const StyleResourceBudget::OwnerScope nextFrame(work);
+    const StyleResourceBudget::ActiveRegistryScope cachedRoot(work, root.registry());
+    EXPECT_EQ(rootBudget.remainingContextualWork(), kLimit)
+        << "A new outer frame restores allowance even when cached preparation skips advance";
+  }
+}
+
+TEST_F(StyleSystemTest, NestedContextualScopePreservesAllowanceAndBinding) {
+  auto document = ParseSVG("<svg xmlns='http://www.w3.org/2000/svg'/>");
+  auto& registry = document.registry();
+  StyleResourceBudget work;
+  const StyleResourceBudget::OwnerScope owner(work);
+  const StyleResourceBudget::ActiveRegistryScope outer(work, registry);
+  AnimationSystem().advance(registry, 0);
+  auto& budget = registry.ctx().get<AnimationResourceBudget>();
+  constexpr auto kLimit = AnimationResourceBudget::kMaximumContextualWork;
+  ASSERT_TRUE(budget.reserveContextualWork(kLimit - 1));
+  const auto binding = budget.contextualWorkBudget();
+  {
+    const StyleResourceBudget::ActiveRegistryScope nested(work, registry);
+    EXPECT_EQ(budget.remainingContextualWork(), 1u);
+    ASSERT_TRUE(budget.reserveContextualWork(1));
+  }
+  EXPECT_EQ(budget.contextualWorkBudget(), binding);
+  EXPECT_EQ(registry.ctx().get<AnimationContextualWorkContext>().budget, binding);
+  EXPECT_EQ(budget.remainingContextualWork(), 0u);
+}
+
+TEST_F(StyleSystemTest, ContextualScopeRestoresPreviousBindingsAfterAdvanceAndEarlyReturn) {
+  auto document = ParseSVG("<svg xmlns='http://www.w3.org/2000/svg'/>");
+  auto& registry = document.registry();
+  auto previousContext = std::make_shared<AnimationContextualWorkBudget>();
+  auto previousBudget = std::make_shared<AnimationContextualWorkBudget>();
+  registry.ctx().emplace<AnimationContextualWorkContext>(
+      AnimationContextualWorkContext{previousContext});
+  registry.ctx().emplace<AnimationResourceBudget>().setContextualWorkBudget(previousBudget);
+  ASSERT_TRUE(previousContext->reserve(17));
+  ASSERT_TRUE(previousBudget->reserve(23));
+  StyleResourceBudget work;
+  const auto prepare = [&]() {
+    const StyleResourceBudget::OwnerScope owner(work);
+    const StyleResourceBudget::ActiveRegistryScope active(work, registry);
+    AnimationSystem().advance(registry, 0);
+    auto& budget = registry.ctx().get<AnimationResourceBudget>();
+    EXPECT_NE(budget.contextualWorkBudget(), previousBudget);
+    EXPECT_TRUE(budget.reserveContextualWork(31));
+    return;
+  };
+  prepare();
+  EXPECT_EQ(registry.ctx().get<AnimationContextualWorkContext>().budget, previousContext);
+  EXPECT_EQ(registry.ctx().get<AnimationResourceBudget>().contextualWorkBudget(), previousBudget);
+  EXPECT_EQ(previousContext->remaining(), AnimationContextualWorkBudget::kMaximumWork - 17);
+  EXPECT_EQ(previousBudget->remaining(), AnimationContextualWorkBudget::kMaximumWork - 23);
+  prepare();
+  EXPECT_EQ(registry.ctx().get<AnimationResourceBudget>().contextualWorkBudget(), previousBudget);
+}
+
 TEST_F(StyleSystemTest, RepeatedAnimatedOpacityReservesWorkBeforeParsing) {
   const std::string value = std::string(65536, '0') + ".5";
   auto document = ParseSVG(

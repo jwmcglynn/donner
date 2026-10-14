@@ -172,6 +172,9 @@ struct RenderingInstanceComponent {
   /// The draw order of the element, computed from the traversal order of the tree.
   int drawOrder = 0;
 
+  /// Last rendered descendant, including this instance when it has no rendered children.
+  Entity subtreeLastEntity = entt::null;
+
   /// Whether the element is visible. Note that elements may still influence rendering behavior when
   /// they are hidden, such as \ref xml_pattern elements.
   bool visible = true;

@@ -89,15 +89,28 @@ FilterNode {
    `RenderingContext::createFeImageShadowTree`. A recursion guard (`feImageFragmentGuard_`)
    prevents infinite loops.
 2. The fragment is rendered at its natural document position (no surfaceFromCanvasTransform_ offset).
-3. The filter pipeline positions the content at the filter region origin:
-   - **No host shear:** Device-space offset via `targetRect` (TinySkia) or
-     `SkImageFilters::Offset` (Skia).
-   - **Host has shear/rotation:** Rasterized through
-     `viewBoxScaleInv * Translate(regionTopLeft) * deviceFromFilter` via
-     `RasterizeTransformedImagePremultiplied`.
+3. The filter pipeline resolves the primitive subregion in user space and positions the content
+   at its unclipped origin. Omitted coordinates default individually to the filter region origin;
+   primitive/filter clipping does not shift the content. Normal referenced geometry keeps its
+   natural dimensions.
+   - **No host shear:** TinySkia offsets `targetRect` by the resolved origin converted to pixels.
+     Geode encodes the inverse offset in the fragment image shader parameters.
+   - **Host has shear/rotation:** The existing fragment transform composes
+     `viewBoxScaleInv * Translate(primitiveOrigin) * deviceFromFilter`. The CPU path rasterizes
+     through `RasterizeImagePremultiplied`; Geode encodes its inverse in image parameters.
 
-The `fragmentRegionTopLeft` field on `filter_primitive::Image` carries the filter region origin
-from pre-rendering to the filter pipeline.
+`fragmentRegionTopLeft` on `filter_primitive::Image` carries the fallback filter-region origin.
+Explicit or partially specified primitive subregions retain their unclipped resolved coordinates
+for placement separately from their pixel-space clipping bounds.
+
+`//donner/svg/renderer/tests:renderer_public_api_tests` enforces exact complete/partial-coordinate,
+protrusion and translated-source placement in `FeImageFragmentUsesItsOwnSubregionOrigin`, using
+nearest sampling. `//donner/svg/renderer/tests:resvg_test_suite_default_text` enforces the three
+`with-x-y` comparisons with ordinary budgets. The configured Geode counterparts are
+`//donner/svg/renderer/tests:renderer_public_api_tests_geode` and
+`//donner/svg/renderer/tests:resvg_test_suite_geode`; full-text coverage uses the API target with
+`--config=text-full` and `//donner/svg/renderer/tests:resvg_test_suite_max`. These bounded cases do
+not establish arbitrary host scale, rotation, skew or reflection correctness.
 
 ### Color Space Handling
 
@@ -155,6 +168,15 @@ Shorthand functions map to equivalent filter graph nodes internally.
 - **Numeric overflow:** Intermediate pixel values are clamped to [0, 1] at each pipeline stage.
 - **Parsing:** Filter attribute parsers are fuzz-tested through the SVG parser fuzzing harness.
 
+## Convolution Bias
+
+For `feConvolveMatrix` with `preserveAlpha="false"`, alpha is the divided convolution sum plus
+unscaled `bias`. RGB receives `bias` multiplied by that raw resulting alpha, before clamping.
+Stored alpha is clamped to [0, 1] and RGB to [0, stored alpha]. With `preserveAlpha="true"`,
+the filter convolves straight RGB,
+adds unscaled bias, and premultiplies by the unchanged source alpha.
+See [Filter Effects 1, section 9.9](https://www.w3.org/TR/filter-effects-1/#feConvolveMatrixElement).
+
 ## Performance Notes
 
 - **Blur:** Uses 3-pass box blur approximation for sigma >= 2.0 (O(w*h) per pass, using a running sum).
@@ -174,6 +196,7 @@ Shorthand functions map to equivalent filter graph nodes internally.
 | `//donner/svg/renderer/tests:resvg_test_suite_default_text` | TinySkia | Full resvg golden image suite |
 | `//donner/svg/renderer/tests:renderer_tests` | TinySkia | Deterministic golden tests |
 | `//donner/svg/renderer/tests:filter_graph_executor_tests` | TinySkia | Unit tests for executor |
+| `//donner/svg/renderer/tests:convolve_matrix_bias_tests` | TinySkia | Literal byte/float convolution bias expectations |
 | `third_party/tiny-skia-cpp/...` | N/A | Per-primitive pixel math unit tests |
 
 ### Adding Filter Tests

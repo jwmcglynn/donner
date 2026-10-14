@@ -21,6 +21,14 @@ namespace donner::svg::components {
 
 namespace {
 
+void InvalidateInactivePaintReference(Registry& registry, Entity entity) {
+  const auto* evaluated = registry.try_get<EvaluatedReferenceComponent<PaintSystem>>(entity);
+  if (evaluated && (!HasSvgNamespace(registry, entity) ||
+                    !HasSvgNamespace(registry, evaluated->target.entity()))) {
+    registry.remove<EvaluatedReferenceComponent<PaintSystem>, ShadowTreeComponent>(entity);
+  }
+}
+
 ReferenceResolutionBudget& GetReferenceResolutionBudget(Registry& registry) {
   if (!registry.ctx().contains<ReferenceResolutionBudget>()) {
     registry.ctx().emplace<ReferenceResolutionBudget>();
@@ -86,26 +94,41 @@ void PaintSystem::instantiateAllComputedComponents(Registry& registry,
                                                    ParseWarningSink& warningSink) {
   // Should instantiate <stop> before gradients.
   for (auto view = registry.view<StopComponent, ComputedStyleComponent>(); auto entity : view) {
+    if (!HasSvgNamespace(registry, entity)) {
+      continue;
+    }
     auto [stop, style] = view.get(entity);
     createComputedStopWithStyle(EntityHandle(registry, entity), stop, style, warningSink);
   }
 
   // Create ComputedGradientComponent for all entities in the registry that have a GradientComponent
   for (auto view = registry.view<GradientComponent>(); auto entity : view) {
+    if (!HasSvgNamespace(registry, entity)) {
+      continue;
+    }
     std::ignore = registry.emplace_or_replace<ComputedGradientComponent>(entity);
   }
 
   for (auto view = registry.view<ComputedGradientComponent>(); auto entity : view) {
+    if (!HasSvgNamespace(registry, entity)) {
+      continue;
+    }
     auto [computedGradient] = view.get(entity);
     initializeComputedGradient(EntityHandle(registry, entity), computedGradient, warningSink);
   }
 
   // Create ComputedPatternComponent for all entities in the registry that have a PatternComponent
   for (auto view = registry.view<PatternComponent>(); auto entity : view) {
+    if (!HasSvgNamespace(registry, entity)) {
+      continue;
+    }
     std::ignore = registry.emplace_or_replace<ComputedPatternComponent>(entity);
   }
 
   for (auto view = registry.view<ComputedPatternComponent>(); auto entity : view) {
+    if (!HasSvgNamespace(registry, entity)) {
+      continue;
+    }
     auto [computedPattern] = view.get(entity);
     initializeComputedPattern(EntityHandle(registry, entity), computedPattern, warningSink);
   }
@@ -179,7 +202,8 @@ void PaintSystem::initializeComputedGradient(EntityHandle handle,
   const auto& tree = treeEntity.get<donner::components::TreeComponent>();
   for (auto cur = tree.firstChild(); cur != entt::null;
        cur = registry.get<donner::components::TreeComponent>(cur).nextSibling()) {
-    if (const auto* stop = registry.try_get<ComputedStopComponent>(cur)) {
+    if (const auto* stop = registry.try_get<ComputedStopComponent>(cur);
+        stop && HasSvgNamespace(registry, cur)) {
       computedGradient.stops.emplace_back(
           GradientStop{stop->properties.offset, stop->properties.stopColor.get().value(),
                        NarrowToFloat(stop->properties.stopOpacity.get().value())});
@@ -301,6 +325,10 @@ const ComputedStopComponent& PaintSystem::createComputedStopWithStyle(
 void PaintSystem::createGradientShadowTrees(Registry& registry, ParseWarningSink& warningSink) {
   auto& budget = GetReferenceResolutionBudget(registry);
   for (auto view = registry.view<GradientComponent>(); auto entity : view) {
+    InvalidateInactivePaintReference(registry, entity);
+    if (!HasSvgNamespace(registry, entity)) {
+      continue;
+    }
     const auto& [gradient] = view.get(entity);
 
     if (gradient.href) {
@@ -342,6 +370,10 @@ void PaintSystem::createGradientShadowTrees(Registry& registry, ParseWarningSink
 void PaintSystem::createPatternShadowTrees(Registry& registry, ParseWarningSink& warningSink) {
   auto& budget = GetReferenceResolutionBudget(registry);
   for (auto view = registry.view<PatternComponent>(); auto entity : view) {
+    InvalidateInactivePaintReference(registry, entity);
+    if (!HasSvgNamespace(registry, entity)) {
+      continue;
+    }
     const auto& [pattern] = view.get(entity);
 
     if (pattern.href) {

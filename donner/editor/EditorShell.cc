@@ -3008,23 +3008,7 @@ void EditorShell::applyMenuActions(const MenuBarActions& menuActions) {
     // Same canonical clear path as the Cmd+Shift+A shortcut and Escape.
     app_.clearSelection();
   }
-  if (menuActions.zoomIn) {
-    if (interactionController_.applyZoom(kKeyboardZoomStep,
-                                         interactionController_.viewport().paneCenter())) {
-      requestRenderAtEndOfFrame_ = true;
-    }
-  }
-  if (menuActions.zoomOut) {
-    if (interactionController_.applyZoom(1.0 / kKeyboardZoomStep,
-                                         interactionController_.viewport().paneCenter())) {
-      requestRenderAtEndOfFrame_ = true;
-    }
-  }
-  if (menuActions.actualSize) {
-    if (interactionController_.resetToActualSize()) {
-      requestRenderAtEndOfFrame_ = true;
-    }
-  }
+  applyZoomActions(menuActions);
   if (menuActions.toggleSourceFocusMode) {
     toggleSourceFocusMode();
   }
@@ -3157,6 +3141,35 @@ void EditorShell::handleFileShortcuts(bool anyPopupOpen, bool cmd, bool shift) {
   }
 }
 
+void EditorShell::applyZoomActions(const MenuBarActions& actions) {
+  if (actions.zoomIn) {
+    if (interactionController_.applyZoom(kKeyboardZoomStep,
+                                         interactionController_.viewport().paneCenter())) {
+      requestRenderAtEndOfFrame_ = true;
+    }
+  }
+  if (actions.zoomOut) {
+    if (interactionController_.applyZoom(1.0 / kKeyboardZoomStep,
+                                         interactionController_.viewport().paneCenter())) {
+      requestRenderAtEndOfFrame_ = true;
+    }
+  }
+  if (actions.actualSize) {
+    if (interactionController_.resetToActualSize()) {
+      requestRenderAtEndOfFrame_ = true;
+    }
+  }
+  if (actions.increaseSourceFontSize) {
+    sourceFontSizePercent_ = std::min(sourceFontSizePercent_ + 10, 300);
+  }
+  if (actions.decreaseSourceFontSize) {
+    sourceFontSizePercent_ = std::max(sourceFontSizePercent_ - 10, 50);
+  }
+  if (actions.resetSourceFontSize) {
+    sourceFontSizePercent_ = 100;
+  }
+}
+
 void EditorShell::handleGlobalShortcuts() {
   const bool anyPopupOpen = ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopup);
   const bool cmd = ImGui::GetIO().KeyCtrl || ImGui::GetIO().KeySuper;
@@ -3194,26 +3207,23 @@ void EditorShell::handleGlobalShortcuts() {
     return;
   }
 
-  if (!anyPopupOpen && cmd &&
-      (ImGui::IsKeyPressed(ImGuiKey_Equal, /*repeat=*/false) ||
-       ImGui::IsKeyPressed(ImGuiKey_KeypadAdd, /*repeat=*/false))) {
-    if (interactionController_.applyZoom(kKeyboardZoomStep,
-                                         interactionController_.viewport().paneCenter())) {
-      requestRenderAtEndOfFrame_ = true;
+  if (!anyPopupOpen && cmd) {
+    MenuBarActions zoomActions;
+    const bool increase = ImGui::IsKeyPressed(ImGuiKey_Equal, /*repeat=*/false) ||
+                          ImGui::IsKeyPressed(ImGuiKey_KeypadAdd, /*repeat=*/false);
+    const bool decrease = ImGui::IsKeyPressed(ImGuiKey_Minus, /*repeat=*/false) ||
+                          ImGui::IsKeyPressed(ImGuiKey_KeypadSubtract, /*repeat=*/false);
+    const bool reset = ImGui::IsKeyPressed(ImGuiKey_0, /*repeat=*/false);
+    if (sourcePaneFocused) {
+      zoomActions.increaseSourceFontSize = increase;
+      zoomActions.decreaseSourceFontSize = decrease;
+      zoomActions.resetSourceFontSize = reset;
+    } else {
+      zoomActions.zoomIn = increase;
+      zoomActions.zoomOut = decrease;
+      zoomActions.actualSize = reset;
     }
-  }
-  if (!anyPopupOpen && cmd &&
-      (ImGui::IsKeyPressed(ImGuiKey_Minus, /*repeat=*/false) ||
-       ImGui::IsKeyPressed(ImGuiKey_KeypadSubtract, /*repeat=*/false))) {
-    if (interactionController_.applyZoom(1.0 / kKeyboardZoomStep,
-                                         interactionController_.viewport().paneCenter())) {
-      requestRenderAtEndOfFrame_ = true;
-    }
-  }
-  if (!anyPopupOpen && cmd && ImGui::IsKeyPressed(ImGuiKey_0, /*repeat=*/false)) {
-    if (interactionController_.resetToActualSize()) {
-      requestRenderAtEndOfFrame_ = true;
-    }
+    applyZoomActions(zoomActions);
   }
 
   // Paint-order (z-order) shortcuts on the selected element: Cmd+] forward,
@@ -3775,6 +3785,7 @@ void EditorShell::renderSourcePane(float paneOriginX, float paneOriginY, float p
                                       ? 0.0f
                                       : std::min(std::clamp(paneHeight * 0.30f, 118.0f, 220.0f),
                                                  std::max(0.0f, availableHeight - 80.0f));
+  ImGui::SetWindowFontScale(static_cast<float>(sourceFontSizePercent_) / 100.0f);
   ImGui::PushFont(codeFont);
   textEditor_.setSourceFocusModeContextMenu(sourceFocusMode_);
   updateSourceStyleDecorations();
@@ -3791,6 +3802,7 @@ void EditorShell::renderSourcePane(float paneOriginX, float paneOriginY, float p
   const std::optional<std::uint64_t> sourceHoveredDiagnostic =
       textEditor_.hoveredSourceDiagnosticId();
   ImGui::PopFont();
+  ImGui::SetWindowFontScale(1.0f);
 
   if (diagnosticsHeight > 0.0f) {
     const SourceDiagnosticsPanelAction diagnosticsAction =

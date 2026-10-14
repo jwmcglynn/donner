@@ -10,6 +10,7 @@
 #include "donner/base/xml/components/AttributesComponent.h"
 #include "donner/base/xml/components/TreeComponent.h"
 #include "donner/svg/components/ConditionalProcessingComponent.h"
+#include "donner/svg/components/ElementTypeComponent.h"
 #include "donner/svg/components/SVGDocumentContext.h"
 #include "donner/svg/components/animation/AnimationBaseValue.h"
 #include "donner/svg/components/animation/AnimationValueSampler.h"
@@ -295,6 +296,15 @@ void resolveInheritedRotations(EntityHandle handle, size_t charCount,
 
 }  // namespace
 
+namespace {
+
+bool CanCollectTextSpan(EntityHandle handle) {
+  return handle.all_of<TextComponent, TextPositioningComponent>() &&
+         HasSvgNamespace(*handle.registry(), handle.entity());
+}
+
+}  // namespace
+
 void TextSystem::instantiateAllComputedComponents(Registry& registry,
                                                   ParseWarningSink& warningSink) {
   auto view = registry.view<TextRootComponent, TextComponent, TextPositioningComponent>();
@@ -431,7 +441,7 @@ void TextSystem::instantiateComputedComponent(EntityHandle rootHandle,
   std::function<void(EntityHandle, size_t, bool)> collectSpans = [&](EntityHandle handle,
                                                                      size_t depth,
                                                                      bool parentHidden) {
-    if (!handle.all_of<TextComponent, TextPositioningComponent>()) {
+    if (!CanCollectTextSpan(handle)) {
       return;
     }
 

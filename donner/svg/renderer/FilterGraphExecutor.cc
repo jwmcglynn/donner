@@ -460,12 +460,11 @@ tiny_skia::filter::GraphPrimitive ConvertPrimitive(const fp::ConvolveMatrix& pri
     convolveMatrix.divisor = *primitive.divisor;
   } else {
     const int requiredSize = primitive.orderX * primitive.orderY;
-    double sum = 0.0;
-    for (std::size_t i = 0;
-         i < primitive.kernelMatrix.size() && i < static_cast<std::size_t>(requiredSize); ++i) {
-      sum += primitive.kernelMatrix[i];
-    }
-    convolveMatrix.divisor = std::abs(sum) < 1e-10 ? 1.0 : sum;
+    const std::size_t coefficientCount =
+        std::min(primitive.kernelMatrix.size(), static_cast<std::size_t>(requiredSize));
+    const double sum = fp::ConvolveKernelSum(
+        std::span<const double>(primitive.kernelMatrix).first(coefficientCount));
+    convolveMatrix.divisor = sum == 0.0 ? 1.0 : sum;
   }
   return convolveMatrix;
 }
@@ -532,6 +531,13 @@ gp::Image::Sampling ConvertImageSampling(ImageRendering imageRendering) {
   return gp::Image::Sampling::Smooth;
 }
 
+Vector2d FragmentImageOrigin(const fp::Image& primitive, const PrimitiveConversionState& state) {
+  if (state.node.userSpaceSubregion) {
+    return Vector2d(state.node.userSpaceSubregion->x, state.node.userSpaceSubregion->y);
+  }
+  return primitive.fragmentRegionTopLeft;
+}
+
 void PopulateTransformedFragmentImage(gp::Image& image, const fp::Image& primitive,
                                       const PrimitiveConversionState& state,
                                       std::span<const std::uint8_t> premultiplied) {
@@ -542,8 +548,8 @@ void PopulateTransformedFragmentImage(gp::Image& image, const fp::Image& primiti
                          NearZero(state.context.filterGraph.userToPixelScale.y, 1e-12)
                              ? 1.0
                              : 1.0 / state.context.filterGraph.userToPixelScale.y);
-  const Transform2d regionOffset =
-      Transform2d::Translate(primitive.fragmentRegionTopLeft.x, primitive.fragmentRegionTopLeft.y);
+  const Vector2d origin = FragmentImageOrigin(primitive, state);
+  const Transform2d regionOffset = Transform2d::Translate(origin.x, origin.y);
   const Transform2d deviceFromFragment =
       viewBoxScaleInv * regionOffset * state.context.deviceFromFilter;
 
@@ -563,10 +569,9 @@ void PopulateUntransformedFragmentImage(gp::Image& image, const fp::Image& primi
   image.pixels.assign(premultiplied.begin(), premultiplied.end());
   image.width = primitive.imageWidth;
   image.height = primitive.imageHeight;
-  const double deviceOffsetX =
-      primitive.fragmentRegionTopLeft.x * state.context.filterGraph.userToPixelScale.x;
-  const double deviceOffsetY =
-      primitive.fragmentRegionTopLeft.y * state.context.filterGraph.userToPixelScale.y;
+  const Vector2d origin = FragmentImageOrigin(primitive, state);
+  const double deviceOffsetX = origin.x * state.context.filterGraph.userToPixelScale.x;
+  const double deviceOffsetY = origin.y * state.context.filterGraph.userToPixelScale.y;
   image.targetRect = tiny_skia::filter::PixelRect{deviceOffsetX, deviceOffsetY,
                                                   static_cast<double>(primitive.imageWidth),
                                                   static_cast<double>(primitive.imageHeight)};
@@ -734,7 +739,6 @@ tiny_skia::filter::FilterGraph CreateExecutableGraph(const FilterConversionConte
 }
 
 void PopulateSubregion(const components::FilterNode& node, const FilterConversionContext& context,
-                       const tiny_skia::filter::FilterGraph& graph,
                        tiny_skia::filter::GraphNode& graphNode,
                        const FilterRegionSample& sampledRegion) {
   if (sampledRegion.animatedRegion) {
@@ -767,10 +771,7 @@ void PopulateSubregion(const components::FilterNode& node, const FilterConversio
   const Box2d pixelRegion =
       context.deviceFromFilter.transformBox(Box2d::FromXYWH(userX, userY, userWidth, userHeight));
   graphNode.subregion = BoundedPixelRect(pixelRegion, context.outputWidth, context.outputHeight);
-  if (graph.filterFromDevice.has_value()) {
-    graphNode.userSpaceSubregion =
-        tiny_skia::filter::PixelRect{userX, userY, userWidth, userHeight};
-  }
+  graphNode.userSpaceSubregion = tiny_skia::filter::PixelRect{userX, userY, userWidth, userHeight};
 }
 
 tiny_skia::filter::GraphNode ConvertNode(const components::FilterNode& node,
@@ -786,7 +787,7 @@ tiny_skia::filter::GraphNode ConvertNode(const components::FilterNode& node,
     graphNode.result = std::string(*node.result);
   }
 
-  PopulateSubregion(node, context, graph, graphNode, sampledRegion);
+  PopulateSubregion(node, context, graphNode, sampledRegion);
   const PrimitiveConversionState state{context, graph, graphNode};
   graphNode.primitive =
       std::visit([&state](const auto& primitive) { return ConvertPrimitive(primitive, state); },

@@ -180,7 +180,19 @@ py_test(
         "check_pr_body.py",
         "check_pr_body_tests.py",
     ],
-    data = ["//:.github/workflows/main.yml"],
+    data = ["//:github_action_definitions"],
+    imports = ["."],
+    deps = ["@rules_python//python/runfiles"],
+)
+
+py_test(
+    name = "ci_pull_request_events_tests",
+    size = "small",
+    srcs = [
+        "ci_pull_request_events_tests.py",
+        "test_executable_fixtures.py",
+    ],
+    data = ["//:github_action_definitions"],
     imports = ["."],
     deps = ["@rules_python//python/runfiles"],
 )
@@ -219,12 +231,16 @@ py_test(
         "//donner/editor/wasm/tests:BUILD.bazel",
         "//donner/editor/wasm/tests:browser-stall-diagnostics.mjs",
         "//donner/gpu/shader:BUILD.bazel",
+        "//donner/svg/renderer/wasm:BUILD.bazel",
         "//tools:ci_bazel_test.sh",
         "//tools:coverage.sh",
         "//tools/ci:BUILD.bazel",
     ],
     imports = ["."],
-    deps = ["@rules_python//python/runfiles"],
+    deps = [
+        ":test_timing",
+        "@rules_python//python/runfiles",
+    ],
 )
 
 py_test(
@@ -237,6 +253,38 @@ py_test(
         "//third_party:bazel/non_bcr_deps.bzl",
     ],
     deps = ["@rules_python//python/runfiles"],
+)
+
+# Keeps the hosted and self-hosted macOS lanes on identical Bazel action keys, so they can share
+# one remote cache, and keeps GitHub-hosted jobs off any private remote cache or executor.
+py_test(
+    name = "macos_cache_key_parity_tests",
+    size = "small",
+    srcs = ["macos_cache_key_parity_tests.py"],
+    data = [
+        "ci_macos_xcode.txt",
+        "ci_select_macos_xcode.sh",
+        "//:.bazelrc",
+        "//:github_action_definitions",
+        "//build_defs:macos_app_bundle.bzl",
+    ],
+    deps = ["@rules_python//python/runfiles"],
+)
+
+py_library(
+    name = "test_timing",
+    testonly = 1,
+    srcs = ["test_timing.py"],
+    visibility = ["//tools:__subpackages__"],
+)
+
+py_test(
+    name = "test_timing_tests",
+    size = "small",
+    srcs = ["test_timing_tests.py"],
+    # Every tool module, so the policy case can reject a copied stall guard.
+    data = glob(["*.py"]),
+    deps = [":test_timing"],
 )
 
 py_library(
@@ -260,7 +308,11 @@ py_test(
     name = "bcr_source_tests",
     size = "small",
     srcs = ["bcr_source_tests.py"],
-    deps = [":bcr_source"],
+    data = ["//:.gitattributes"],
+    deps = [
+        ":bcr_source",
+        "@rules_python//python/runfiles",
+    ],
 )
 
 py_test(
@@ -385,7 +437,7 @@ py_test(
         "//:MODULE.bazel",
         "//:github_action_definitions",
         "//config:extensions.bzl",
-        "//donner/editor/wasm/tests:browsers.1.62.1.json",
+        "//donner/editor/wasm/tests:browsers.1.64.0.json",
         "//third_party:bazel/local.bzl",
         "//third_party:bazel/non_bcr_deps.bzl",
         "//third_party/google_fonts:fonts.bzl",
@@ -402,7 +454,11 @@ py_test(
     name = "bcr_dependency_closure_tests",
     size = "small",
     srcs = ["bcr_dependency_closure_tests.py"],
-    deps = [":bcr_dependency_closure"],
+    data = ["//:MODULE.bazel"],
+    deps = [
+        ":bcr_dependency_closure",
+        "@rules_python//python/runfiles",
+    ],
 )
 
 py_library(
@@ -411,6 +467,7 @@ py_library(
     deps = [
         ":bcr_source",
         ":release_artifact_publisher",
+        ":release_candidate",
     ],
 )
 
@@ -436,6 +493,7 @@ py_test(
 py_library(
     name = "pages_artifact",
     srcs = ["pages_artifact.py"],
+    deps = [":release_cli"],
 )
 
 py_test(
@@ -506,7 +564,20 @@ py_test(
     name = "ci_runner_routing_tests",
     size = "small",
     srcs = ["ci_runner_routing_tests.py"],
-    data = ["//:.github/workflows/main.yml"],
+    data = [
+        "//:.github/actions/pr-trust/action.yml",
+        "//:.github/workflows/main.yml",
+    ],
+    deps = ["@rules_python//python/runfiles"],
+)
+
+# Fails when a pull request stops running what a push to main runs: workflow triggers, jobs,
+# steps and the Bazel invocations of jobs that replace a hosted lane on trusted pull requests.
+py_test(
+    name = "ci_lane_parity_tests",
+    size = "small",
+    srcs = ["ci_lane_parity_tests.py"],
+    data = ["//:github_action_definitions"],
     deps = ["@rules_python//python/runfiles"],
 )
 
@@ -517,7 +588,7 @@ py_test(
     data = [
         "//:.github/actions/re-turnstile/action.yml",
         "//:.github/actions/re-turnstile/admission.py",
-        "//:.github/workflows/main.yml",
+        "//:github_action_definitions",
     ],
     deps = ["@rules_python//python/runfiles"],
 )

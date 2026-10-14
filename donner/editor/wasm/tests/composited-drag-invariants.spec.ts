@@ -20,6 +20,7 @@ import {
 } from "./composited-probe";
 import { dragStream, pointerClick, waitForAppliedPointer } from "./gesture-streams";
 import { expectSampleThumbnailsToSettle } from "./sample-thumbnail-settle";
+import { scaledMs } from "./test-timing";
 
 /**
  * Composited-output invariants for SHAPE DRAG and CLICK-SELECT.
@@ -50,9 +51,6 @@ import { expectSampleThumbnailsToSettle } from "./sample-thumbnail-settle";
  * samples in the pop-back test's diagnostic output. No assertion depends on it
  * existing.
  */
-
-const kCiTimeScale = process.env.CI ? 4 : 1;
-const scaledMs = (ms: number) => ms * kCiTimeScale;
 
 const kBaseUrl = process.env.DONNER_WASM_BASE_URL || "http://127.0.0.1:8000";
 

@@ -317,13 +317,6 @@ INSTANTIATE_TEST_SUITE_P(
                          "bilinear filtering, whose 1px edge band differs from tiny-skia's CPU "
                          "resampler. Geode's content matches; only the resample edge differs.")},
                 {"with-subregion-5.svg", Params::Skip("Subregion with rotation: filter")},
-
-                {"with-x-y-and-protruding-subregion-1.svg",
-                 Params::Skip("Bug: feImage edge cases / unsupported subregion combinations")},
-                {"with-x-y-and-protruding-subregion-2.svg",
-                 Params::Skip("Bug: feImage edge cases / unsupported subregion combinations")},
-                {"with-x-y.svg",
-                 Params::Skip("Bug: feImage edge cases / unsupported subregion combinations")},
             })),
         ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
@@ -1170,13 +1163,14 @@ INSTANTIATE_TEST_SUITE_P(
 
 INSTANTIATE_TEST_SUITE_P(
     StructureStyle, ImageComparisonTestFixture,
-    Combine(ValuesIn(getTestsInCategory("structure/style",
-                                        {
-                                            {"external-CSS.svg",
-                                             Params::Skip("Not impl: CSS @import")},
-                                            {"non-presentational-attribute.svg",
-                                             Params::Skip("Not impl: <svg version=\"1.1\">")},
-                                        })),
+    Combine(ValuesIn(getTestsInCategory(
+                "structure/style",
+                {
+                    {"external-CSS.svg",
+                     Params::Skip("Not impl: CSS @import loading (diagnosed and ignored)")},
+                    {"non-presentational-attribute.svg",
+                     Params::Skip("Not impl: <svg version=\"1.1\">")},
+                })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
 
@@ -1202,7 +1196,9 @@ INSTANTIATE_TEST_SUITE_P(
                     {"invalid-id-attribute-1.svg", Params::RenderOnly("UB: Invalid id attribute")},
                     {"invalid-id-attribute-2.svg", Params::RenderOnly("UB: Invalid id attribute")},
                     {"no-size.svg", Params::Skip("Not impl: Computed bounds from content")},
-                    {"not-UTF-8-encoding.svg", Params::Skip("Bug/Not impl? Non-UTF8 encoding")},
+                    {"not-UTF-8-encoding.svg",
+                     Params::Skip("Unsupported input: XML byte parser requires UTF-8; transcode "
+                                  "and update the encoding declaration")},
                     {"preserveAspectRatio-with-viewBox-not-at-zero-pos.svg",
                      Params::WithThreshold(0.13f, 500, "Viewport edge AA")},
                     {"preserveAspectRatio=none.svg",
@@ -1226,12 +1222,9 @@ INSTANTIATE_TEST_SUITE_P(
                     {"proportional-viewBox.svg",
                      Params::WithThreshold(0.14f, kDefaultMismatchedPixels,
                                            "Has anti-aliasing artifacts.")},
-                    {"rect-inside-a-non-SVG-element.svg",
-                     Params::Skip("Bug? Rect inside unknown element")},
                     {"viewBox-not-at-zero-pos.svg",
                      Params::WithThreshold(0.13f, kDefaultMismatchedPixels,
                                            "Has anti-aliasing artifacts.")},
-                    {"xmlns-validation.svg", Params::Skip("Bug? xmlns validation")},
 
                     {"funcIRI-with-quotes.svg", Params{}},
                     {"nested-svg-one-with-rect-and-one-with-viewBox.svg", Params{}},

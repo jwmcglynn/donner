@@ -1,11 +1,43 @@
 #pragma once
 /// @file
 
+#include <algorithm>
 #include <cstddef>
+#include <memory>
+#include <utility>
 
 namespace donner::svg::components {
 
-/** Per-frame work and allocation envelope for untrusted SMIL animation values. */
+/** Shared contextual preparation allowance; used only by serialized document preparation. */
+class AnimationContextualWorkBudget {
+public:
+  static constexpr std::size_t kMaximumWork = 4 * 1024 * 1024;
+
+  /// Remaining preparation work across this render operation's document occurrences.
+  std::size_t remaining() const { return kMaximumWork - work_; }
+  /// Reset only at the outer owner-frame boundary.
+  void reset() { work_ = 0; }
+  /// Admit work before copying or normalization. @param work Conservative work cost.
+  bool reserve(std::size_t work) {
+    if (work > remaining()) {
+      work_ = kMaximumWork;
+      return false;
+    }
+    work_ += work;
+    return true;
+  }
+
+private:
+  std::size_t work_ = 0;
+};
+
+/// Scoped preparation context; never carried by filter graphs, snapshots, or raster replay.
+struct AnimationContextualWorkContext {
+  std::shared_ptr<AnimationContextualWorkBudget>
+      budget;  ///< Owned allowance, without registry links.
+};
+
+/** Per-document animation admission with optional owner-frame contextual preparation admission. */
 class AnimationResourceBudget {
 public:
   /// Maximum number of animation declarations accepted in one frame.
@@ -23,15 +55,30 @@ public:
   static constexpr std::size_t kMaximumGeometryWork = 262144;
 
   /// Aggregate contextual-length evaluation and measurement work during render preparation.
-  static constexpr std::size_t kMaximumContextualWork = 4 * 1024 * 1024;
+  static constexpr std::size_t kMaximumContextualWork = AnimationContextualWorkBudget::kMaximumWork;
 
   /// Remaining contextual work; shared by scalar/font stacks and every contextual length consumer.
-  std::size_t remainingContextualWork() const { return kMaximumContextualWork - contextualWork_; }
+  std::size_t remainingContextualWork() const {
+    const std::size_t local = kMaximumContextualWork - contextualWork_;
+    return sharedContextualWork_ ? std::min(local, sharedContextualWork_->remaining()) : local;
+  }
+
+  /// Begin preparation for another occurrence without replenishing its shared owner allowance.
+  void resetContextualWork() { contextualWork_ = 0; }
+  /// Bind an owner allowance, or detach it. @param budget Shared preparation counter, or null.
+  void setContextualWorkBudget(std::shared_ptr<AnimationContextualWorkBudget> budget) {
+    sharedContextualWork_ = std::move(budget);
+  }
+  /// Return the owned binding so a nested scope can restore only its own changes.
+  std::shared_ptr<AnimationContextualWorkBudget> contextualWorkBudget() const {
+    return sharedContextualWork_;
+  }
 
   /// Admit consumer work before evaluating a recipe. Refused consumers retain their base value.
   /// @param work Conservative parsing/interpolation or measured path-work cost.
   bool reserveContextualWork(std::size_t work) {
-    if (work > remainingContextualWork()) {
+    if (work > kMaximumContextualWork - contextualWork_ ||
+        (sharedContextualWork_ && !sharedContextualWork_->reserve(work))) {
       contextualWork_ = kMaximumContextualWork;
       return false;
     }
@@ -98,6 +145,7 @@ public:
   bool rejected() const { return rejected_; }
 
 private:
+  std::shared_ptr<AnimationContextualWorkBudget> sharedContextualWork_;
   std::size_t contextualWork_ = 0;
   std::size_t animations_ = 0;
   std::size_t sourceBytes_ = 0;

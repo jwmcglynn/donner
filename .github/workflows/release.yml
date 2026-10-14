@@ -5,7 +5,8 @@ env:
   DO_NOT_TRACK: "1"
   ASPECT_TOOLS_TELEMETRY: "-all"
 
-# Publish only immutable artifacts built and qualified before the release event.
+# Publish only the immutable artifacts that one verified release candidate record names. The
+# release body selects that record with `Release-Candidate-Record: <run>/<attempt> sha256:<digest>`.
 on:
   release:
     types: [published]
@@ -19,14 +20,13 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  resolve-source:
+  resolve-candidate:
     runs-on: ubuntu-24.04
     outputs:
-      run_id: ${{ steps.source.outputs.run_id }}
-      attempt: ${{ steps.source.outputs.attempt }}
-      artifact: ${{ steps.source.outputs.artifact }}
-      linux_artifact: ${{ steps.source.outputs.linux_artifact }}
-      macos_artifact: ${{ steps.source.outputs.macos_artifact }}
+      run_id: ${{ steps.record.outputs.run_id }}
+      attempt: ${{ steps.record.outputs.attempt }}
+      artifact_id: ${{ steps.record.outputs.artifact_id }}
+      record_sha256: ${{ steps.record.outputs.record_sha256 }}
     env:
       GH_TOKEN: ${{ github.token }}
       RELEASE_TAG: ${{ github.event.release.tag_name }}
@@ -37,24 +37,26 @@ jobs:
           ref: ${{ github.event.release.tag_name }}
           fetch-depth: 0
           persist-credentials: false
-      - name: Require preflight for the exact release source
-        id: source
+      - name: Require the candidate record for the exact release source
+        id: record
         run: |
           printf '%s' "$RELEASE_BODY" > "$RUNNER_TEMP/donner-release-body.md"
-          python3 -B -m tools.bcr_release select-preflight \
+          python3 -B -m tools.bcr_release select-record \
             --commit "$GITHUB_SHA" --tag "$RELEASE_TAG" \
             --release-body-file "$RUNNER_TEMP/donner-release-body.md" \
             --github-output "$GITHUB_OUTPUT"
 
   publish-release-artifacts:
-    needs: resolve-source
+    needs: resolve-candidate
     runs-on: ubuntu-24.04
     env:
       RELEASE_ID: ${{ github.event.release.id }}
       RELEASE_TAG: ${{ github.event.release.tag_name }}
       RELEASE_UPLOAD_URL: ${{ github.event.release.upload_url }}
-      SOURCE_RUN_ID: ${{ needs.resolve-source.outputs.run_id }}
-      SOURCE_ATTEMPT: ${{ needs.resolve-source.outputs.attempt }}
+      RECORD_RUN_ID: ${{ needs.resolve-candidate.outputs.run_id }}
+      RECORD_ATTEMPT: ${{ needs.resolve-candidate.outputs.attempt }}
+      RECORD_ARTIFACT_ID: ${{ needs.resolve-candidate.outputs.artifact_id }}
+      RECORD_SHA256: ${{ needs.resolve-candidate.outputs.record_sha256 }}
     permissions:
       contents: write
       attestations: read
@@ -72,41 +74,46 @@ jobs:
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           test "$(git rev-list -n 1 "refs/tags/${RELEASE_TAG}")" = "$GITHUB_SHA"
 
-      - name: Download Linux artifact
-        uses: actions/download-artifact@v8
-        with:
-          name: ${{ needs.resolve-source.outputs.linux_artifact }}
-          run-id: ${{ needs.resolve-source.outputs.run_id }}
-          github-token: ${{ github.token }}
-          path: release/linux
+      # Downloads the named record and every artifact it binds by artifact ID, then reruns the
+      # candidate verifier with the publication retention window. Only the source and CLI files
+      # the record names are staged; nothing is selected by name or rebuilt.
+      - name: Reverify the candidate record and stage its release files
+        id: candidate
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 -B -m tools.release_candidate release --source-root . \
+            --record-run-id "$RECORD_RUN_ID" --record-attempt "$RECORD_ATTEMPT" \
+            --record-artifact-id "$RECORD_ARTIFACT_ID" --record-sha256 "$RECORD_SHA256" \
+            --work "$RUNNER_TEMP/candidate-work" --output "$RUNNER_TEMP/release" \
+            --github-output "$GITHUB_OUTPUT"
 
-      - name: Download macOS artifact
-        uses: actions/download-artifact@v8
-        with:
-          name: ${{ needs.resolve-source.outputs.macos_artifact }}
-          run-id: ${{ needs.resolve-source.outputs.run_id }}
-          github-token: ${{ github.token }}
-          path: release/macos
-
-      - name: Download qualified source archive
-        uses: actions/download-artifact@v8
-        with:
-          name: ${{ needs.resolve-source.outputs.artifact }}
-          run-id: ${{ needs.resolve-source.outputs.run_id }}
-          github-token: ${{ github.token }}
-          path: release/source
+      - name: Verify the candidate record attestation
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh attestation verify "$RUNNER_TEMP/candidate-work/record/candidate.json" \
+            --repo jwmcglynn/donner \
+            --signer-workflow jwmcglynn/donner/.github/workflows/release_candidate.yml \
+            --source-digest "$GITHUB_SHA" --source-ref refs/heads/main > /dev/null
 
       - name: Verify source artifact provenance and contents
+        env:
+          SOURCE_RUN_ID: ${{ steps.candidate.outputs.preflight_run_id }}
+          SOURCE_ATTEMPT: ${{ steps.candidate.outputs.preflight_attempt }}
         run: |
-          python3 -B -m tools.bcr_source verify --artifacts release/source \
+          python3 -B -m tools.bcr_source verify --artifacts "$RUNNER_TEMP/release/source" \
             --commit "$GITHUB_SHA" --run-id "$SOURCE_RUN_ID" --attempt "$SOURCE_ATTEMPT"
 
       - name: Verify immutable artifacts
+        env:
+          SOURCE_RUN_ID: ${{ steps.candidate.outputs.preflight_run_id }}
+          SOURCE_ATTEMPT: ${{ steps.candidate.outputs.preflight_attempt }}
         run: |
-          python3 -B -m tools.release_cli verify --artifacts release/linux \
+          python3 -B -m tools.release_cli verify --artifacts "$RUNNER_TEMP/release/cli-linux" \
             --platform linux-x86-64 --commit "$GITHUB_SHA" \
             --run-id "$SOURCE_RUN_ID" --attempt "$SOURCE_ATTEMPT"
-          python3 -B -m tools.release_cli verify --artifacts release/macos \
+          python3 -B -m tools.release_cli verify --artifacts "$RUNNER_TEMP/release/cli-macos" \
             --platform darwin-arm64 --commit "$GITHUB_SHA" \
             --run-id "$SOURCE_RUN_ID" --attempt "$SOURCE_ATTEMPT"
 
@@ -115,13 +122,13 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           for subject in \
-            release/linux/donner-svg_linux_x86_64 \
-            release/linux/donner-svg_linux_x86_64.bazel.lock \
-            release/linux/donner-svg_linux_x86_64.NOTICE.txt \
-            release/macos/donner-svg_darwin_arm64 \
-            release/macos/donner-svg_darwin_arm64.bazel.lock \
-            release/macos/donner-svg_darwin_arm64.NOTICE.txt \
-            release/source/*.tar.gz; do
+            "$RUNNER_TEMP"/release/cli-linux/donner-svg_linux_x86_64 \
+            "$RUNNER_TEMP"/release/cli-linux/donner-svg_linux_x86_64.bazel.lock \
+            "$RUNNER_TEMP"/release/cli-linux/donner-svg_linux_x86_64.NOTICE.txt \
+            "$RUNNER_TEMP"/release/cli-macos/donner-svg_darwin_arm64 \
+            "$RUNNER_TEMP"/release/cli-macos/donner-svg_darwin_arm64.bazel.lock \
+            "$RUNNER_TEMP"/release/cli-macos/donner-svg_darwin_arm64.NOTICE.txt \
+            "$RUNNER_TEMP"/release/source/*.tar.gz; do
             gh attestation verify "$subject" \
               --repo jwmcglynn/donner \
               --signer-workflow jwmcglynn/donner/.github/workflows/bcr_preflight.yml \
@@ -133,14 +140,15 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           python3 tools/release_artifact_publisher.py \
-            release/linux/donner-svg_linux_x86_64 \
-            release/linux/donner-svg_linux_x86_64.sha256 \
-            release/linux/donner-svg_linux_x86_64.provenance \
-            release/linux/donner-svg_linux_x86_64.bazel.lock \
-            release/linux/donner-svg_linux_x86_64.NOTICE.txt \
-            release/macos/donner-svg_darwin_arm64 \
-            release/macos/donner-svg_darwin_arm64.sha256 \
-            release/macos/donner-svg_darwin_arm64.provenance \
-            release/macos/donner-svg_darwin_arm64.bazel.lock \
-            release/macos/donner-svg_darwin_arm64.NOTICE.txt \
-            release/source/*
+            "$RUNNER_TEMP"/release/cli-linux/donner-svg_linux_x86_64 \
+            "$RUNNER_TEMP"/release/cli-linux/donner-svg_linux_x86_64.sha256 \
+            "$RUNNER_TEMP"/release/cli-linux/donner-svg_linux_x86_64.provenance \
+            "$RUNNER_TEMP"/release/cli-linux/donner-svg_linux_x86_64.bazel.lock \
+            "$RUNNER_TEMP"/release/cli-linux/donner-svg_linux_x86_64.NOTICE.txt \
+            "$RUNNER_TEMP"/release/cli-macos/donner-svg_darwin_arm64 \
+            "$RUNNER_TEMP"/release/cli-macos/donner-svg_darwin_arm64.sha256 \
+            "$RUNNER_TEMP"/release/cli-macos/donner-svg_darwin_arm64.provenance \
+            "$RUNNER_TEMP"/release/cli-macos/donner-svg_darwin_arm64.bazel.lock \
+            "$RUNNER_TEMP"/release/cli-macos/donner-svg_darwin_arm64.NOTICE.txt \
+            "$RUNNER_TEMP"/release/source/* \
+            "$RUNNER_TEMP"/release/donner-*.candidate.json

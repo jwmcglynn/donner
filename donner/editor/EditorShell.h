@@ -463,6 +463,9 @@ private:
   void requestHistoryAction(HistoryAction action);
   void applyPendingHistoryActions();
   void applyMenuActions(const MenuBarActions& menuActions);
+  /// Apply canvas zoom and source font size commands from menus or keyboard shortcuts.
+  /// @param actions Commands to apply.
+  void applyZoomActions(const MenuBarActions& actions);
   void applyMenuHistoryActions(const MenuBarActions& menuActions, bool sourcePaneFocused);
   [[nodiscard]] MenuBarState buildMenuBarState(bool compactUi);
   [[gnu::noinline]] void applyOverlayStateChanges(bool compositorTileOverlayBefore,
@@ -815,6 +818,7 @@ private:
   std::uint64_t eyedropperDocumentGeneration_ = 0;
   std::vector<svg::SVGElement> eyedropperSelection_;
   TextEditor textEditor_;
+  int sourceFontSizePercent_ = 100;
   SourceDiagnosticsPanel sourceDiagnosticsPanel_;
   std::optional<svg::SVGElement> sourceStructuralDragElement_;
   std::optional<svg::SVGElement> sourceStructuralMoveTarget_;

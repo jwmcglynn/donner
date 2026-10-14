@@ -213,6 +213,47 @@ SwitchChildScore ScoreSwitchChild(Registry& registry, Entity child,
   return {.eligible = true, .hasLanguage = true, .languageRank = *rank};
 }
 
+bool HasRenderableType(EntityHandle handle) {
+  const auto* type = handle.try_get<ElementTypeComponent>();
+  return type && type->type() != ElementType::Unknown;
+}
+
+struct ClipGeometry {
+  EntityHandle dataEntity;
+  EntityHandle textEntity;
+  const ComputedPathComponent* path;
+  const ComputedStyleComponent* style;
+  bool isText;
+};
+
+std::optional<ClipGeometry> PrepareClipGeometry(EntityHandle entity, bool enforceVisibility) {
+  const auto* shadowEntity = entity.try_get<ShadowEntityComponent>();
+  const EntityHandle dataEntity =
+      shadowEntity ? EntityHandle(*entity.registry(), shadowEntity->lightEntity) : entity;
+  if (!HasRenderableType(dataEntity)) {
+    return std::nullopt;
+  }
+  const auto* path = dataEntity.try_get<ComputedPathComponent>();
+  const auto* style = entity.try_get<ComputedStyleComponent>();
+#ifdef DONNER_TEXT_ENABLED
+  const EntityHandle textEntity =
+      entity.all_of<TextRootComponent, ComputedTextComponent>() ? entity : dataEntity;
+  const bool isText = textEntity.all_of<TextRootComponent, ComputedTextComponent>();
+#else
+  const EntityHandle textEntity = dataEntity;
+  const bool isText = false;
+#endif
+  if ((!path && !isText) || !style) {
+    return std::nullopt;
+  }
+  const auto& properties = style->properties.value();
+  if (enforceVisibility && (properties.visibility.get().value() != Visibility::Visible ||
+                            properties.display.get().value() == Display::None)) {
+    return std::nullopt;
+  }
+  return ClipGeometry{dataEntity, textEntity, path, style, isText};
+}
+
 class RenderingContextImpl {
 public:
   explicit RenderingContextImpl(Registry& registry, bool verbose,
@@ -350,7 +391,7 @@ public:
     std::optional<ContextPaintServers> savedContextPaintServers;
     const bool isShape = dataHandle.all_of<ComputedPathComponent>();
 
-    if (!dataHandle.all_of<ElementTypeComponent>()) {
+    if (!HasRenderableType(dataHandle)) {
       return std::nullopt;
     }
 
@@ -506,13 +547,15 @@ public:
                                                    dataHandle.all_of<ComputedTextComponent>() ||
                                                    instance.textSpanRoot != entt::null))) {
       if (auto fill = properties.fill.get()) {
-        instance.resolvedFill = resolvePaint(ShadowBranchType::OffscreenFill, dataHandle,
-                                             fill.value(), instance.worldFromEntityTransform);
+        instance.resolvedFill =
+            resolvePaint(ShadowBranchType::OffscreenFill, dataHandle, fill.value(),
+                         instance.worldFromEntityTransform, styleComponent.externalFill);
       }
 
       if (auto stroke = properties.stroke.get()) {
-        instance.resolvedStroke = resolvePaint(ShadowBranchType::OffscreenStroke, dataHandle,
-                                               stroke.value(), instance.worldFromEntityTransform);
+        instance.resolvedStroke =
+            resolvePaint(ShadowBranchType::OffscreenStroke, dataHandle, stroke.value(),
+                         instance.worldFromEntityTransform, styleComponent.externalStroke);
       }
 
       // Save the current context paint servers if this is a shadow tree host.
@@ -698,6 +741,9 @@ public:
       }
     }
 
+    registry_.get<RenderingInstanceComponent>(prepared->styleEntity).subtreeLastEntity =
+        lastRenderedEntity_;
+
     if (prepared->layerDepth > 0) {
       registry_.get<RenderingInstanceComponent>(prepared->styleEntity).subtreeInfo =
           SubtreeInfo{prepared->styleEntity, lastRenderedEntity_, prepared->layerDepth};
@@ -750,134 +796,200 @@ public:
     return bestChild;
   }
 
+  struct ClipPathCollection {
+    std::vector<ComputedClipPathsComponent::ClipPath>& paths;
+    RecursionGuard guard;
+    Transform2d rootClipFromReference;
+    int layer;
+    bool hasAnyChildren = false;
+    bool valid = true;
+  };
+
+  static bool isFiniteClipTransform(const Transform2d& clipFromEntity) {
+    for (double value : clipFromEntity.data) {
+      if (!std::isfinite(value)) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  static bool isFiniteNonemptyClipBox(const Box2d& box) {
+    return std::isfinite(box.topLeft.x) && std::isfinite(box.topLeft.y) &&
+           std::isfinite(box.width()) && std::isfinite(box.height()) && box.width() > 0.0 &&
+           box.height() > 0.0;
+  }
+
+  static std::optional<Transform2d> nestedClipReferenceTransform(
+      ClipPathUnits units, const ComputedPathComponent* clipPathData,
+      const Transform2d& rootClipFromEntity) {
+    if (units == ClipPathUnits::UserSpaceOnUse) {
+      return isFiniteClipTransform(rootClipFromEntity) ? std::optional(rootClipFromEntity)
+                                                       : std::nullopt;
+    }
+
+    // Container boxes are unmodeled here; retain their existing definition-space geometry.
+    if (!clipPathData) {
+      return Transform2d();
+    }
+    const Box2d box = clipPathData->localBounds();
+    if (!isFiniteNonemptyClipBox(box)) {
+      return std::nullopt;
+    }
+    const Transform2d entityFromNormalized =
+        Transform2d::Scale(box.size()) * Transform2d::Translate(box.topLeft);
+    const Transform2d rootClipFromNormalized = entityFromNormalized * rootClipFromEntity;
+    return isFiniteClipTransform(rootClipFromNormalized) ? std::optional(rootClipFromNormalized)
+                                                         : std::nullopt;
+  }
+
+  bool collectNestedClipForEntity(EntityHandle entity, const ComputedPathComponent* clipPathData,
+                                  ClipPathCollection& collection) {
+    const auto* computedStyle = entity.try_get<ComputedStyleComponent>();
+    if (!computedStyle || !computedStyle->properties->clipPath.get()) {
+      return true;
+    }
+    const ResolvedClipPath resolved =
+        resolveClipPath(entity, computedStyle->properties->clipPath.get().value());
+    if (!resolved.valid() || collection.guard.hasRecursion(resolved.reference.handle)) {
+      return true;
+    }
+
+    const Transform2d referenceFromEntity =
+        LayoutSystem().getAbsoluteTransformComponent(entity).worldFromEntity;
+    const Transform2d rootClipFromEntity = referenceFromEntity * collection.rootClipFromReference;
+    const auto rootClipFromNestedReference =
+        nestedClipReferenceTransform(resolved.units, clipPathData, rootClipFromEntity);
+    return rootClipFromNestedReference &&
+           collectClipPathsInReference(resolved.reference.handle, collection.paths,
+                                       collection.guard.with(resolved.reference.handle),
+                                       collection.layer + 1, *rootClipFromNestedReference);
+  }
+
+  static bool clipChildIsVisible(const PropertyRegistry& style, bool enforceVisibility) {
+    return !enforceVisibility || (style.visibility.get().value() == Visibility::Visible &&
+                                  style.display.get().value() != Display::None);
+  }
+
+  void recordClipFontDependencies(EntityHandle dataEntity) {
+#ifdef DONNER_TEXT_ENABLED
+    if (const auto* dependencies = dataEntity.try_get<FontMetricDependenciesComponent>()) {
+      if (auto* manager = registry_.ctx().find<FontManager>()) {
+        manager->recordDependencies(dependencies->fontDependencies);
+      }
+    }
+#else
+    (void)dataEntity;
+#endif
+  }
+
+  void appendClipGeometry(const ComputedPathComponent* clipPathData, EntityHandle dataEntity,
+                          EntityHandle textEntity, const Transform2d& rootClipFromEntity,
+                          ClipRule clipRule, ClipPathCollection& collection) {
+    if (!isFiniteClipTransform(rootClipFromEntity)) {
+      collection.valid = false;
+      return;
+    }
+    if (clipPathData) {
+      recordClipFontDependencies(dataEntity);
+      collection.paths.emplace_back(clipPathData->spline, rootClipFromEntity, clipRule,
+                                    collection.layer);
+    }
+#ifdef DONNER_TEXT_ENABLED
+    else if (auto* textEngine = registry_.ctx().find<TextEngine>()) {
+      for (const Path& glyphPath : textEngine->computedGlyphPaths(textEntity)) {
+        if (!glyphPath.empty()) {
+          collection.paths.emplace_back(glyphPath, rootClipFromEntity, clipRule, collection.layer);
+        }
+      }
+    }
+#else
+    (void)textEntity;
+#endif
+  }
+
+  void appendClipPathFromEntity(EntityHandle entity, bool enforceVisibility,
+                                ClipPathCollection& collection) {
+    if (!collection.valid) {
+      return;
+    }
+    const auto geometry = PrepareClipGeometry(entity, enforceVisibility);
+    if (!geometry) {
+      return;
+    }
+    const auto& [dataEntity, textEntity, clipPathData, computedStyle, isTextClipChild] = *geometry;
+    const auto& style = computedStyle->properties.value();
+    // Keep text glyphs separate for evenodd; reject nested clips until layers preserve groups.
+    if (isTextClipChild && style.clipPath.get()) {
+      collection.valid = false;
+      return;
+    }
+    if (!collectNestedClipForEntity(entity, clipPathData, collection)) {
+      collection.valid = false;
+      return;
+    }
+    collection.hasAnyChildren = true;
+    const Transform2d referenceFromEntity =
+        LayoutSystem().getAbsoluteTransformComponent(entity).worldFromEntity;
+    const Transform2d rootClipFromEntity = referenceFromEntity * collection.rootClipFromReference;
+    appendClipGeometry(clipPathData, dataEntity, textEntity, rootClipFromEntity,
+                       style.clipRule.get().value_or(ClipRule::NonZero), collection);
+  }
+
+  void appendClipChildGeometryAndUse(EntityHandle child, ClipPathCollection& collection) {
+    appendClipPathFromEntity(child, true, collection);
+    const auto* type = child.try_get<ElementTypeComponent>();
+    if (!type || type->type() != ElementType::Use) {
+      return;
+    }
+    const auto* useStyle = child.try_get<ComputedStyleComponent>();
+    if (!useStyle || !clipChildIsVisible(useStyle->properties.value(), true)) {
+      return;
+    }
+    const auto* shadow = child.try_get<ComputedShadowTreeComponent>();
+    if (shadow && shadow->mainBranch) {
+      const Entity shadowRoot = shadow->mainBranch->shadowRoot();
+      if (shadowRoot != entt::null) {
+        appendClipPathFromEntity(EntityHandle(registry_, shadowRoot), false, collection);
+      }
+    }
+  }
+
+  void appendClipChildAndUse(EntityHandle child, ClipPathCollection& collection) {
+    if (!collection.valid) {
+      return;
+    }
+    const std::size_t pathCount = collection.paths.size();
+    const bool hadChildren = collection.hasAnyChildren;
+    appendClipChildGeometryAndUse(child, collection);
+    if (!collection.valid) {
+      collection.paths.erase(collection.paths.begin() + pathCount, collection.paths.end());
+      collection.hasAnyChildren = hadChildren;
+      collection.valid = true;
+    }
+  }
+
+  bool collectClipPathsInReference(EntityHandle clipPathHandle,
+                                   std::vector<ComputedClipPathsComponent::ClipPath>& clipPaths,
+                                   RecursionGuard guard, int layer,
+                                   const Transform2d& rootClipFromReference) {
+    const std::size_t pathCount = clipPaths.size();
+    ClipPathCollection collection{clipPaths, std::move(guard), rootClipFromReference, layer};
+    collection.valid = collectNestedClipForEntity(clipPathHandle, nullptr, collection);
+    donner::components::ForAllChildren(
+        clipPathHandle, [&](EntityHandle child) { appendClipChildAndUse(child, collection); });
+    const bool valid = collection.valid && collection.hasAnyChildren;
+    if (!valid) {
+      clipPaths.erase(clipPaths.begin() + pathCount, clipPaths.end());
+    }
+    return valid;
+  }
+
   bool collectClipPaths(EntityHandle clipPathHandle,
                         std::vector<ComputedClipPathsComponent::ClipPath>& clipPaths,
                         RecursionGuard guard, int layer = 0) {
-    bool hasAnyChildren = false;
-    bool encounteredInvalidReference = false;
-    const auto appendClipPathFromEntity = [&](EntityHandle entity, bool enforceVisibility) {
-      if (encounteredInvalidReference) {
-        return;
-      }
-
-      // Shadow entities (from <use>) store data on the light entity but styles on the shadow.
-      const auto* shadowEntity = entity.try_get<ShadowEntityComponent>();
-      const EntityHandle dataEntity =
-          shadowEntity ? EntityHandle(registry_, shadowEntity->lightEntity) : entity;
-
-      const auto* clipPathData = dataEntity.try_get<components::ComputedPathComponent>();
-      const auto* computedStyle = entity.try_get<components::ComputedStyleComponent>();
-#ifdef DONNER_TEXT_ENABLED
-      const EntityHandle textEntity =
-          entity.all_of<TextRootComponent, ComputedTextComponent>() ? entity : dataEntity;
-      const bool isTextClipChild = textEntity.all_of<TextRootComponent, ComputedTextComponent>();
-#else
-      const bool isTextClipChild = false;
-#endif
-      if ((!clipPathData && !isTextClipChild) || !computedStyle) {
-        return;
-      }
-
-      const auto& style = computedStyle->properties.value();
-      if (enforceVisibility && (style.visibility.get().value() != Visibility::Visible ||
-                                style.display.get().value() == Display::None)) {
-        return;
-      }
-
-      // Keep text glyphs separate for evenodd; reject nested clips until layers preserve groups.
-      if (isTextClipChild && style.clipPath.get()) {
-        encounteredInvalidReference = true;
-        return;
-      }
-
-      // Check to see if this element has its own clip paths set.
-      if (style.clipPath.get()) {
-        if (auto resolved = resolveClipPath(entity, style.clipPath.get().value());
-            resolved.valid()) {
-          if (!guard.hasRecursion(resolved.reference.handle)) {
-            if (!collectClipPaths(resolved.reference.handle, clipPaths,
-                                  guard.with(resolved.reference.handle), layer + 1)) {
-              encounteredInvalidReference = true;
-              return;
-            }
-          }
-        }
-      }
-
-      hasAnyChildren = true;
-
-      const Transform2d parentFromEntity = LayoutSystem().getEntityFromWorldTransform(entity);
-      const ClipRule clipRule = style.clipRule.get().value_or(ClipRule::NonZero);
-      if (clipPathData) {
-#ifdef DONNER_TEXT_ENABLED
-        if (const auto* dependencies = dataEntity.try_get<FontMetricDependenciesComponent>()) {
-          if (auto* manager = registry_.ctx().find<FontManager>()) {
-            manager->recordDependencies(dependencies->fontDependencies);
-          }
-        }
-#endif
-        clipPaths.emplace_back(clipPathData->spline, parentFromEntity, clipRule, layer);
-      }
-#ifdef DONNER_TEXT_ENABLED
-      else if (auto* textEngine = registry_.ctx().find<TextEngine>()) {
-        for (const Path& glyphPath : textEngine->computedGlyphPaths(textEntity)) {
-          if (!glyphPath.empty()) {
-            clipPaths.emplace_back(glyphPath, parentFromEntity, clipRule, layer);
-          }
-        }
-      }
-#endif
-    };
-
-    // Check for clip-path on the <clipPath> itself
-    if (const auto* computedStyle = clipPathHandle.try_get<components::ComputedStyleComponent>()) {
-      const auto& style = computedStyle->properties.value();
-      if (style.clipPath.get()) {
-        if (auto resolved = resolveClipPath(clipPathHandle, style.clipPath.get().value());
-            resolved.valid()) {
-          if (!guard.hasRecursion(resolved.reference.handle)) {
-            if (!collectClipPaths(resolved.reference.handle, clipPaths,
-                                  guard.with(resolved.reference.handle), layer + 1)) {
-              return false;
-            }
-          }
-        }
-      }
-    }
-
-    donner::components::ForAllChildren(clipPathHandle, [&](EntityHandle child) {
-      appendClipPathFromEntity(child, true);
-
-      const auto* typeComponent = child.try_get<ElementTypeComponent>();
-      if (!typeComponent || typeComponent->type() != ElementType::Use) {
-        return;
-      }
-
-      const auto* useStyle = child.try_get<components::ComputedStyleComponent>();
-      if (!useStyle) {
-        return;
-      }
-
-      const auto& useProperties = useStyle->properties.value();
-      if (useProperties.visibility.get().value() != Visibility::Visible ||
-          useProperties.display.get().value() == Display::None) {
-        return;
-      }
-
-      if (const auto* computedShadow = child.try_get<ComputedShadowTreeComponent>();
-          computedShadow && computedShadow->mainBranch) {
-        const Entity shadowRoot = computedShadow->mainBranch->shadowRoot();
-        if (shadowRoot != entt::null) {
-          appendClipPathFromEntity(EntityHandle(registry_, shadowRoot), false);
-        }
-      }
-    });
-
-    if (encounteredInvalidReference) {
-      return false;
-    }
-
-    return hasAnyChildren;
+    return collectClipPathsInReference(clipPathHandle, clipPaths, std::move(guard), layer,
+                                       Transform2d());
   }
 
   std::optional<SubtreeInfo> instantiateOffscreenSubtree(EntityHandle shadowHostHandle,
@@ -927,8 +1039,26 @@ public:
     }
   }
 
+  ResolvedPaintServer resolveExternalHostPaint(ShadowBranchType branchType) {
+    const ResolvedPaintServer resolved =
+        StyleSystem::externalHostPaint(registry_, branchType == ShadowBranchType::OffscreenStroke);
+    if (const auto* reference = std::get_if<PaintResolvedReference>(&resolved);
+        reference && reference->reference.handle.all_of<ComputedPatternComponent>()) {
+      StyleSystem::rejectExternalHostResource(registry_);
+      if (reference->fallback) {
+        return PaintServer::Solid(*reference->fallback);
+      }
+      return PaintServer::None();
+    }
+    return resolved;
+  }
+
   ResolvedPaintServer resolvePaint(ShadowBranchType branchType, EntityHandle dataHandle,
-                                   const PaintServer& paint, const Transform2d& worldFromEntity) {
+                                   const PaintServer& paint, const Transform2d& worldFromEntity,
+                                   bool externalHost = false) {
+    if (externalHost) {
+      return resolveExternalHostPaint(branchType);
+    }
     if (paint.is<PaintServer::Solid>()) {
       return paint.get<PaintServer::Solid>();
     } else if (paint.is<PaintServer::ElementReference>()) {
@@ -1418,6 +1548,12 @@ void RenderingContext::setInitialContextPaint(const ResolvedPaintServer& fill,
   getRenderTreeState(registry_).needsFullRebuild = true;
 }
 
+void RenderingContext::restoreInitialPaintState(InitialPaintState state) {
+  initialContextFill_ = std::move(state.first);
+  initialContextStroke_ = std::move(state.second);
+  getRenderTreeState(registry_).needsFullRebuild = true;
+}
+
 void RenderingContext::clearInitialContextPaint() {
   initialContextFill_.reset();
   initialContextStroke_.reset();
@@ -1686,12 +1822,12 @@ void InstantiateStyledPaintTrees(Registry& registry, ParseWarningSink& warningSi
 
     const auto& properties = styleComponent.properties.value();
 
-    if (auto fill = properties.fill.get()) {
+    if (auto fill = StyleSystem::localPaintForInstantiation(styleComponent, false)) {
       InstantiatePaintShadowTree(registry, entity, ShadowBranchType::OffscreenFill, fill.value(),
                                  warningSink);
     }
 
-    if (auto stroke = properties.stroke.get()) {
+    if (auto stroke = StyleSystem::localPaintForInstantiation(styleComponent, true)) {
       InstantiatePaintShadowTree(registry, entity, ShadowBranchType::OffscreenStroke,
                                  stroke.value(), warningSink);
     }

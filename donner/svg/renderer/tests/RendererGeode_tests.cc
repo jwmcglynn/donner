@@ -3026,6 +3026,166 @@ TEST_F(RendererGeodeTest, CubicFillCacheBoundsShapeErrorAfterZoom) {
       << "Zoom inside the same scale bucket must reuse the fill encode.";
 }
 
+TEST_F(RendererGeodeTest, MidFrameOffscreenGeometryMutationPreservesRecordedOuterDraw) {
+  ParseWarningSink warnings;
+  auto parsed = parser::SVGParser::ParseSVG(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="32" height="16">
+        <rect id="target" width="8" height="8" fill="lime"/>
+      </svg>)svg",
+      warnings);
+  ASSERT_THAT(parsed.hasError(), testing::IsFalse());
+  SVGDocument document = std::move(parsed).result();
+  auto target = document.querySelector("#target");
+  ASSERT_THAT(target, testing::Optional(testing::_));
+  RendererGeode outer = createRenderer();
+  outer.draw(document);
+  const RendererBitmap baseline = outer.takeSnapshot();
+  ASSERT_THAT(PixelAt(baseline, 4, 4), RgbaEq(0, 255, 0, 255));
+  ASSERT_THAT(PixelAt(baseline, 12, 4), IsTransparent());
+
+  RenderViewport viewport;
+  viewport.size = Vector2d(32.0, 16.0);
+  RendererGeode reference = createRenderer();
+  reference.beginFrame(viewport);
+  reference.setPaint(solidFill(css::RGBA(0, 255, 0, 255)));
+  reference.drawRect(Box2d::FromXYWH(0, 0, 8, 8), StrokeParams{});
+  reference.setPaint(solidFill(css::RGBA(255, 255, 255, 255)));
+  reference.drawRect(Box2d::FromXYWH(30, 14, 1, 1), StrokeParams{});
+  reference.endFrame();
+  const RendererBitmap expectedOuter = reference.takeSnapshot();
+  ASSERT_THAT(expectedOuter.empty(), testing::IsFalse());
+  ASSERT_THAT(expectedOuter.dimensions, testing::Eq(Vector2i(32, 16)));
+
+  reference.beginFrame(viewport);
+  reference.setPaint(solidFill(css::RGBA(0, 255, 0, 255)));
+  reference.drawRect(Box2d::FromXYWH(0, 0, 16, 8), StrokeParams{});
+  reference.endFrame();
+  const RendererBitmap expectedInner = reference.takeSnapshot();
+  ASSERT_THAT(expectedInner.empty(), testing::IsFalse());
+  ASSERT_THAT(expectedInner.dimensions, testing::Eq(Vector2i(32, 16)));
+
+  outer.beginFrame(viewport);
+  outer.setPaint(solidFill(css::RGBA(0, 255, 0, 255)));
+  const Path original = PathBuilder().addRect(Box2d::FromXYWH(0, 0, 8, 8)).build();
+  outer.drawPath(PathShape{.path = &original, .sourceEntity = target->unsafeEntityHandle()},
+                 StrokeParams{});
+  outer.setPaint(solidFill(css::RGBA(255, 255, 255, 255)));
+  outer.drawRect(Box2d::FromXYWH(30, 14, 1, 1), StrokeParams{});
+
+  // The outer commands already use the old resident range when the inner draw replaces it.
+  target->setAttribute("width", "16");
+  std::unique_ptr<RendererInterface> inner = outer.createOffscreenInstance();
+  ASSERT_THAT(inner, testing::NotNull());
+  inner->draw(document);
+  const RendererBitmap innerBitmap = inner->takeSnapshot();
+  outer.endFrame();
+  const RendererBitmap actual = outer.takeSnapshot();
+
+  ASSERT_THAT(actual.empty(), testing::IsFalse());
+  ASSERT_THAT(actual.dimensions, testing::Eq(Vector2i(32, 16)));
+  ASSERT_THAT(innerBitmap.empty(), testing::IsFalse());
+  ASSERT_THAT(innerBitmap.dimensions, testing::Eq(Vector2i(32, 16)));
+  editor::tests::CompareBitmapToBitmap(actual, expectedOuter,
+                                       "offscreen_geometry_preserves_outer_draw",
+                                       editor::tests::PixelmatchIdentityParams());
+  editor::tests::CompareBitmapToBitmap(innerBitmap, expectedInner,
+                                       "offscreen_geometry_uses_new_bounds",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+TEST_F(RendererGeodeTest, CallScopedFillGeometrySurvivesSourceCacheReplacement) {
+  RendererGeode reference = createRenderer();
+  beginFrame(reference);
+  reference.setPaint(solidFill(css::RGBA(255, 0, 0, 255)));
+  reference.drawRect(Box2d({8, 8}, {14, 16}), StrokeParams{});
+  reference.endFrame();
+  const RendererBitmap expected = reference.takeSnapshot();
+  ASSERT_THAT(expected.empty(), testing::IsFalse());
+  ASSERT_THAT(expected.dimensions, testing::Eq(Vector2i(64, 64)));
+
+  ParseWarningSink warnings;
+  auto parsed = parser::SVGParser::ParseSVG(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64">
+        <rect id="target" x="8" y="8" width="6" height="8" fill="red"/>
+      </svg>)svg",
+      warnings);
+  ASSERT_THAT(parsed.hasError(), testing::IsFalse());
+  SVGDocument document = std::move(parsed).result();
+  auto target = document.querySelector("#target");
+  ASSERT_THAT(target, testing::Optional(testing::_));
+  RendererGeode renderer = createRenderer();
+  renderer.draw(document);
+  editor::tests::CompareBitmapToBitmap(renderer.takeSnapshot(), expected,
+                                       "call_scoped_fill_baseline",
+                                       editor::tests::PixelmatchIdentityParams());
+
+  Path borrowed = PathBuilder().addRect(Box2d({8, 8}, {14, 16})).build();
+  beginFrame(renderer);
+  renderer.setPaint(solidFill(css::RGBA(255, 0, 0, 255)));
+  renderer.drawPath(PathShape{.path = &borrowed,
+                              .sourceEntity = target->unsafeEntityHandle(),
+                              .allowDeferredGeometry = false},
+                    StrokeParams{});
+  // Recompute the source cache without a backend state change that could flush deferred draws.
+  borrowed = Path();
+  target->setAttribute("width", "12");
+  RendererUtils::prepareDocumentForRendering(document, false, warnings);
+  renderer.endFrame();
+  const RendererBitmap actual = renderer.takeSnapshot();
+  ASSERT_THAT(actual.empty(), testing::IsFalse());
+  ASSERT_THAT(actual.dimensions, testing::Eq(Vector2i(64, 64)));
+  editor::tests::CompareBitmapToBitmap(actual, expected, "call_scoped_fill_geometry",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+TEST_F(RendererGeodeTest, CallScopedStrokeGeometrySurvivesSourceCacheReplacement) {
+  StrokeParams stroke;
+  stroke.strokeWidth = 2.0;
+  RendererGeode reference = createRenderer();
+  beginFrame(reference);
+  reference.setPaint(solidStroke(css::RGBA(255, 0, 0, 255)));
+  reference.drawRect(Box2d({8, 8}, {14, 16}), stroke);
+  reference.endFrame();
+  const RendererBitmap expected = reference.takeSnapshot();
+  ASSERT_THAT(expected.empty(), testing::IsFalse());
+  ASSERT_THAT(expected.dimensions, testing::Eq(Vector2i(64, 64)));
+
+  ParseWarningSink warnings;
+  auto parsed = parser::SVGParser::ParseSVG(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64">
+        <rect id="target" x="8" y="8" width="6" height="8" fill="none" stroke="red"
+              stroke-width="2"/>
+      </svg>)svg",
+      warnings);
+  ASSERT_THAT(parsed.hasError(), testing::IsFalse());
+  SVGDocument document = std::move(parsed).result();
+  auto target = document.querySelector("#target");
+  ASSERT_THAT(target, testing::Optional(testing::_));
+  RendererGeode renderer = createRenderer();
+  renderer.draw(document);
+  editor::tests::CompareBitmapToBitmap(renderer.takeSnapshot(), expected,
+                                       "call_scoped_stroke_baseline",
+                                       editor::tests::PixelmatchIdentityParams());
+
+  Path borrowed = PathBuilder().addRect(Box2d({8, 8}, {14, 16})).build();
+  beginFrame(renderer);
+  renderer.setPaint(solidStroke(css::RGBA(255, 0, 0, 255)));
+  renderer.drawPath(PathShape{.path = &borrowed,
+                              .sourceEntity = target->unsafeEntityHandle(),
+                              .allowDeferredGeometry = false},
+                    stroke);
+  // Recompute the source cache without a backend state change that could flush deferred draws.
+  borrowed = Path();
+  target->setAttribute("width", "12");
+  RendererUtils::prepareDocumentForRendering(document, false, warnings);
+  renderer.endFrame();
+  const RendererBitmap actual = renderer.takeSnapshot();
+  ASSERT_THAT(actual.empty(), testing::IsFalse());
+  ASSERT_THAT(actual.dimensions, testing::Eq(Vector2i(64, 64)));
+  editor::tests::CompareBitmapToBitmap(actual, expected, "call_scoped_stroke_geometry",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
 TEST_F(RendererGeodeTest, CubicFillRefinementPreservesPendingInstances) {
   Registry registry;
   const EntityHandle source(registry, registry.create());

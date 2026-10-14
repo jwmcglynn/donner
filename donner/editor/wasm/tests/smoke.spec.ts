@@ -29,6 +29,7 @@ import {
   findProbedCanvasApplicationWorker,
   holdCanvasCompletionForTest,
 } from "./surface-frame-probe";
+import { scaledMs } from "./test-timing";
 
 installBrowserStallDiagnostics(test);
 installFailureCanvasEvidence(test);
@@ -273,12 +274,6 @@ const kExpectedRasterWaitStrategy = kExpectedHeadlessBackend === "transitional"
   ? "timed-wait-any"
   : "device-poll";
 
-// Shared CI runners execute this suite 2-4x slower than local development
-// hardware. Scale wall-clock budgets and tight acceptance polls so the timing
-// assertions verify the same invariants without flaking on runner speed;
-// local bounds are unchanged (scale 1).
-const kCiTimeScale = process.env.CI ? 4 : 1;
-const scaledMs = (ms: number) => ms * kCiTimeScale;
 const kRequireWebGpu = process.env.DONNER_WASM_REQUIRE_WEBGPU === "1";
 // Match Chromium's webgpu-swiftshader test configuration. Dawn selects
 // SwiftShader for WebGPU while the pixel-validation lane uses explicit texture
@@ -380,6 +375,7 @@ async function readLayerPreviewColorStats(page: Page): Promise<CanvasColorStats>
 }
 
 async function openEditor(page: Page, options: OpenEditorOptions = {}): Promise<string[]> {
+  armFailureCanvasEvidence(page, test.info());
   const baseUrl = process.env.DONNER_WASM_BASE_URL || "http://127.0.0.1:8000";
   const url = new URL(baseUrl);
   // Readback diagnostics are intentionally opt-in: even asynchronous readback
@@ -1474,8 +1470,16 @@ async function readCarouselGpuTimeline(page: Page) {
         return [...fields.slice(0, 5), toPage(fields[5] as number), toPage(fields[6] as number)];
       case "m":
         return [...fields.slice(0, 3), toPage(fields[3] as number), toPage(fields[4] as number)];
+      case "p":
+        return [
+          fields[0],
+          fields[1],
+          toPage(fields[2] as number),
+          toPage(fields[3] as number),
+          fields[4],
+        ];
       default:
-        return [...fields.slice(0, 2), toPage(fields[2] as number)];
+        return [...fields.slice(0, 2), toPage(fields[2] as number), ...fields.slice(3)];
     }
   }) ?? null;
   return { presentation: pageState.presentation, phases: pageState.phases, gpu: gpuOnPageClock };

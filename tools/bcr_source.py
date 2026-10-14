@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import base64
 import gzip
 import hashlib
 import json
@@ -21,6 +22,8 @@ VERSION = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+
 COMMIT = re.compile(r"[0-9a-f]{40}")
 MAX_FILES = 100000
 MAX_BYTES = 2 * 1024 * 1024 * 1024
+# Generated reports that `.gitattributes` keeps out of the source archive.
+EXCLUDED_FILES = ("docs/reports/coverage.zip",)
 
 
 def git(*args: str) -> str:
@@ -56,6 +59,8 @@ def require_source_root_files(files: dict[str, tuple[str, int]]) -> None:
         raise ValueError("source archive is missing MODULE.bazel")
     if "LICENSE" not in files or "NOTICE" not in files:
         raise ValueError("source archive is missing LICENSE or NOTICE")
+    if any(name in files for name in EXCLUDED_FILES):
+        raise ValueError("source archive contains a generated report excluded from releases")
 
 
 def archive_members(archive: tarfile.TarFile, prefix: str) -> dict[str, tuple[str, int]]:
@@ -254,6 +259,180 @@ def prepare_consumer(artifacts: Path, registry: Path, output: Path, commit: str)
     source = json.loads(path.read_text())
     source["url"] = (artifacts / receipt["archive"]).resolve().as_uri()
     path.write_text(json.dumps(source, indent=4) + "\n")
+
+
+# BCR Preflight retains the entry it generated and admission-validated beside this report.
+ADMISSION_REPORT = "admission.json"
+MAX_ENTRY_FILE_BYTES = 1_000_000
+# The upstream validator's exit codes for a valid entry: 42 means a BCR maintainer must review it.
+ACCEPTED_ADMISSION_CODES = (0, 42)
+
+
+def entry_paths(version: str) -> tuple[PurePosixPath, ...]:
+    """The registry files one release adds or changes, relative to the registry root."""
+    if not VERSION.fullmatch(version):
+        raise ValueError("invalid module version")
+    root = PurePosixPath("modules/donner")
+    return (root / version / "MODULE.bazel", root / version / "presubmit.yml",
+            root / version / "source.json", root / "metadata.json")
+
+
+def expected_source_json(version: str, sha256: str) -> dict[str, str]:
+    """The `source.json` that points BCR at the released archive with this digest."""
+    return {
+        "integrity": "sha256-" + base64.b64encode(bytes.fromhex(sha256)).decode(),
+        "strip_prefix": f"donner-{version}",
+        "url": source_url(version),
+    }
+
+
+def check_metadata(metadata: dict, template: dict, version: str) -> tuple[list[str], dict]:
+    metadata = metadata.copy()
+    template = template.copy()
+    versions = metadata.pop("versions", None)
+    yanked = metadata.pop("yanked_versions", None)
+    template.pop("versions", None)
+    expected_yanked = template.pop("yanked_versions", {})
+    if metadata != template:
+        raise ValueError("registry metadata has different project or maintainer fields")
+    if (not isinstance(versions, list) or not all(isinstance(item, str) for item in versions)
+            or len(set(versions)) != len(versions) or versions.count(version) != 1):
+        raise ValueError("registry metadata has a missing or invalid version list")
+    verify_yanked_metadata(yanked, expected_yanked, version)
+    return versions, yanked
+
+
+def verify_yanked_metadata(yanked, expected_yanked: dict, version: str) -> None:
+    if (not isinstance(yanked, dict)
+            or any(not isinstance(value, str) for value in yanked.values())
+            or any(yanked.get(key) != value for key, value in expected_yanked.items())
+            or yanked.get(version) != expected_yanked.get(version)):
+        raise ValueError("existing registry metadata has different yanked versions")
+
+
+HISTORY_KEYS = ("versions", "yanked_versions")
+# A Bazel module version as BCR's `tools/registry.py` `Version` parses it: dot-separated release
+# identifiers, an optional `-` prerelease, and a `+` build suffix that does not affect order.
+# Unlike that `^...$` match, a trailing newline is rejected.
+REGISTRY_VERSION = re.compile(r"([A-Za-z0-9.]+)(?:-([A-Za-z0-9.-]+))?(?:\+[A-Za-z0-9.-]+)?")
+
+
+def _version_identifiers(text: str) -> tuple:
+    parts = text.split(".")
+    if not all(parts):
+        raise ValueError("registry metadata has a missing or invalid version list")
+    return tuple((0, int(part)) if part.isdigit() else (1, part) for part in parts)
+
+
+def registry_version_key(version: str) -> tuple:
+    """Sort key that orders module versions the way Bazel and BCR presubmit compare them.
+
+    Identifiers compare numerically when all digits and as text otherwise, with numbers first.
+    A release that is a prefix of another sorts first, and a prerelease sorts before its release.
+    """
+    match = REGISTRY_VERSION.fullmatch(version)
+    if not match:
+        raise ValueError("registry metadata has a missing or invalid version list")
+    release, prerelease = match.groups()
+    return (_version_identifiers(release),
+            (1,) if prerelease is None else (0, _version_identifiers(prerelease)))
+
+
+def add_registry_version(versions: list[str], version: str) -> list[str]:
+    """`versions` with `version` added, in the ascending order BCR presubmit requires.
+
+    The registry's own list must already be in that order; it is never reordered.
+    """
+    if versions != sorted(versions, key=registry_version_key):
+        raise ValueError("registry metadata lists its versions out of order")
+    return sorted([*versions, version], key=registry_version_key)
+
+
+def derive_metadata(upstream: dict | None, template: dict, version: str) -> bytes:
+    """The `metadata.json` a submission proposes, derived from the registry it targets.
+
+    Preflight's copy freezes the registry history at preflight time. Submission instead adds
+    this version to the target registry's current `versions`, in ascending version order, and
+    carries its `yanked_versions` forward; every other field comes from
+    `.bcr/metadata.template.json`. The result is checked with `check_metadata` against the
+    template, so a changed upstream maintainer or project field still fails closed.
+    """
+    if upstream is None:
+        derived = {**template, "versions": [version],
+                   "yanked_versions": template.get("yanked_versions", {})}
+    else:
+        if not isinstance(upstream, dict) or not isinstance(upstream.get("versions"), list):
+            raise ValueError("registry metadata has a missing or invalid version list")
+        if version in upstream["versions"]:
+            raise ValueError("the registry already lists this donner version")
+        # The registry's own project and maintainer fields must still be the template's.
+        check_metadata({**upstream, "versions": [*upstream["versions"], version]}, template,
+                       version)
+        derived = {**template, "versions": add_registry_version(upstream["versions"], version),
+                   "yanked_versions": upstream.get("yanked_versions")}
+    check_metadata(derived, template, version)
+    return (json.dumps(derived, indent=4) + "\n").encode()
+
+
+def check_validated_metadata(validated: dict, derived: dict, version: str) -> None:
+    """Require preflight's metadata to agree with the derived file apart from registry history."""
+    if (not isinstance(validated, dict) or
+            {key: value for key, value in validated.items() if key not in HISTORY_KEYS} !=
+            {key: value for key, value in derived.items() if key not in HISTORY_KEYS} or
+            not isinstance(validated.get("versions"), list) or
+            validated["versions"].count(version) != 1 or
+            not isinstance(validated.get("yanked_versions"), dict) or
+            version in validated["yanked_versions"]):
+        raise ValueError("registry metadata differs from the admission-validated entry")
+
+
+def entry_bytes(path: Path) -> bytes:
+    if path.is_symlink() or not path.is_file() or path.stat().st_size > MAX_ENTRY_FILE_BYTES:
+        raise ValueError("validated registry entry file is missing, linked or too large")
+    return path.read_bytes()
+
+
+def _verify_admission_report(path: Path, version: str) -> None:
+    try:
+        report = json.loads(entry_bytes(path))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        raise ValueError("registry entry admission report is not JSON") from None
+    results = report.get("results") if isinstance(report, dict) else None
+    if (not isinstance(report, dict) or report.get("module") != f"donner@{version}" or
+            type(report.get("upstream_exit_code")) is not int or
+            report["upstream_exit_code"] not in ACCEPTED_ADMISSION_CODES or
+            not isinstance(report.get("validator_revision"), str) or
+            not COMMIT.fullmatch(report["validator_revision"]) or
+            not isinstance(results, list) or not results or
+            any(not isinstance(item, dict) or item.get("result") == "FAILED" for item in results)):
+        raise ValueError("registry entry admission report is not a passing upstream validation "
+                         "of this version")
+
+
+def verify_validated_entry(directory: Path, source_root: Path, version: str, sha256: str) -> None:
+    """Check the entry BCR Preflight generated and ran through the upstream BCR validator.
+
+    The entry must name the approved archive digest, carry the source's exact module and
+    presubmit files and the maintainer metadata of `.bcr/metadata.template.json`, and its
+    retained admission report must be a passing upstream validation of this version.
+    """
+    _verify_admission_report(directory / ADMISSION_REPORT, version)
+    module, presubmit, source, metadata = (directory / "registry" / path
+                                           for path in entry_paths(version))
+    try:
+        source_json = json.loads(entry_bytes(source))
+        metadata_json = json.loads(entry_bytes(metadata))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        raise ValueError("validated registry entry has malformed JSON") from None
+    if source_json != expected_source_json(version, sha256):
+        raise ValueError("validated registry entry does not match the approved source archive")
+    if (entry_bytes(module) != (source_root / "MODULE.bazel").read_bytes() or
+            entry_bytes(presubmit) != (source_root / ".bcr/presubmit.yml").read_bytes()):
+        raise ValueError("validated registry entry differs from the approved module files")
+    template = json.loads((source_root / ".bcr/metadata.template.json").read_text(encoding="utf-8"))
+    if not isinstance(metadata_json, dict):
+        raise ValueError("registry metadata has different project or maintainer fields")
+    check_metadata(metadata_json, template, version)
 
 
 def outputs(values: dict[str, object], path: str | None) -> None:

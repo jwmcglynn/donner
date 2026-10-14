@@ -6,14 +6,33 @@ env:
   ASPECT_TOOLS_TELEMETRY: "-all"
 
 # Validate PRs targeting main or a dependency branch in a stack.
+#
+# Editing a PR's title or description does not run this workflow: an `edited`
+# trigger here would cancel the run in progress through the PR concurrency group
+# and restart CI with no code change. A base-branch change (an `edited` event
+# with `changes.base`) still needs full CI against the new base, so
+# pr_base_change.yml calls this workflow for those events (`workflow_call`).
+# After a base change, later edits of the same head also rerun that call (see
+# pr_base_change.yml). The PR body check runs in pr_metadata.yml.
 on:
   push:
     branches: ["*"]
   pull_request:
-    types: [opened, synchronize, reopened, edited]
+    types: [opened, synchronize, reopened]
+  workflow_call:
+    # The repository secrets a step here reads. A called workflow receives only the
+    # secrets its caller passes. A job that binds the buildbuddy-write environment can
+    # also read that environment's key; base-change runs bind it only for trusted
+    # maintainer pull requests, which may write the cache.
+    secrets:
+      BUILDBUDDY_API_KEY_READONLY:
+        required: false
 
+# A base-change run (called from pr_base_change.yml, where the event action is
+# `edited`) has its own PR group: it supersedes an earlier base-change run, but
+# neither cancels nor is cancelled by the push-triggered run of this workflow.
 concurrency:
-  group: ${{ github.event_name == 'pull_request' && format('pr-{0}-{1}', github.workflow, github.event.pull_request.number) || (github.ref == 'refs/heads/main' && format('push-{0}-{1}', github.workflow, github.run_id) || format('push-{0}-{1}', github.workflow, github.ref)) }}
+  group: ${{ github.event_name == 'pull_request' && format('pr-{0}-{1}{2}', github.workflow, github.event.pull_request.number, github.event.action == 'edited' && '-base-change' || '') || (github.ref == 'refs/heads/main' && format('push-{0}-{1}', github.workflow, github.run_id) || format('push-{0}-{1}', github.workflow, github.ref)) }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref != 'refs/heads/main') }}
 
 permissions:
@@ -39,15 +58,14 @@ jobs:
       is_duplicate_push: ${{ steps.dup_push.outputs.is_duplicate_push }}
       use_self_hosted_linux: ${{ steps.runner_gate.outputs.use_self_hosted_linux }}
       use_self_hosted_macos: ${{ steps.runner_gate.outputs.use_self_hosted_macos }}
+      # The one pull request trust rule (.github/actions/pr-trust), shared with BuildBuddy.
+      trusted_pr: ${{ steps.pr_trust.outputs.trusted_pr }}
+      renovate_pr: ${{ steps.pr_trust.outputs.renovate_pr }}
     steps:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
           persist-credentials: false
-
-      - name: Reject tool-session links in PR body
-        if: github.event_name == 'pull_request'
-        run: python3 tools/check_pr_body.py "$GITHUB_EVENT_PATH"
 
       - id: dup_push
         name: Detect duplicate push (PR already open for this branch)
@@ -140,99 +158,48 @@ jobs:
 
           echo "docs_only=${docs_only}" >> "$GITHUB_OUTPUT"
 
+      - id: pr_trust
+        name: Classify pull request trust
+        uses: ./.github/actions/pr-trust
+
       - id: runner_gate
         name: Determine trusted self-hosted runner routing
         env:
-          ACTOR: ${{ github.actor }}
-          EVENT_NAME: ${{ github.event_name }}
-          REPOSITORY: ${{ github.repository }}
-          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+          TRUSTED_PR: ${{ steps.pr_trust.outputs.trusted_pr }}
           SELFHOSTED_LINUX_RUNNER: ${{ vars.SELFHOSTED_LINUX_RUNNER }}
           SELFHOSTED_MACOS_RUNNER: ${{ vars.SELFHOSTED_MACOS_RUNNER }}
         shell: bash
         run: |
           set -euo pipefail
 
-          is_renovate="$(
+          hosted_macos_label="$(
             python3 - <<'PY'
           import json
           import os
 
           event = json.load(open(os.environ["GITHUB_EVENT_PATH"], encoding="utf-8"))
-          paths = [
-              ("sender", "login"),
-              ("pull_request", "user", "login"),
-              ("head_commit", "author", "username"),
-              ("head_commit", "author", "name"),
-              ("head_commit", "author", "email"),
-              ("head_commit", "committer", "username"),
-              ("head_commit", "committer", "name"),
-              ("head_commit", "committer", "email"),
-              ("pusher", "name"),
-              ("pusher", "email"),
-          ]
-
-          values = []
-          for path in paths:
-              value = event
-              for key in path:
-                  if not isinstance(value, dict):
-                      value = None
-                      break
-                  value = value.get(key)
-              if value:
-                  values.append(str(value))
-
-          print("true" if any("renovate" in value.lower() for value in values) else "false")
-          PY
-          )"
-
-          pr_fields="$(
-            python3 - <<'PY'
-          import json
-          import os
-
-          event = json.load(open(os.environ["GITHUB_EVENT_PATH"], encoding="utf-8"))
-          pr = event.get("pull_request") or {}
-          labels = pr.get("labels") or []
-          hosted_macos_label = "true" if isinstance(labels, list) and any(
+          labels = (event.get("pull_request") or {}).get("labels") or []
+          print("true" if isinstance(labels, list) and any(
               isinstance(label, dict) and label.get("name") == "ci:hosted-macos"
               for label in labels
-          ) else "false"
-          fields = (
-              (pr.get("user") or {}).get("login", ""),
-              ((pr.get("head") or {}).get("repo") or {}).get("full_name", ""),
-              ((pr.get("base") or {}).get("repo") or {}).get("full_name", ""),
-              hosted_macos_label,
-          )
-          print("\x1f".join(fields))
+          ) else "false")
           PY
           )"
-          IFS=$'\x1f' read -r pr_author pr_head_repo pr_base_repo hosted_macos_label <<< "$pr_fields"
-
-          trusted_operator=false
-          if [[ "$EVENT_NAME" == "pull_request" && "$REPOSITORY" == "jwmcglynn/donner" &&
-                "$ACTOR" == "jwmcglynn" && "$TRIGGERING_ACTOR" == "jwmcglynn" &&
-                "$pr_author" == "jwmcglynn" && "$pr_head_repo" == "$REPOSITORY" &&
-                "$pr_base_repo" == "$REPOSITORY" &&
-                "$is_renovate" != "true" ]]; then
-            trusted_operator=true
-          fi
 
           use_linux=false
           use_macos=false
-          if [[ "$trusted_operator" == "true" && "$SELFHOSTED_LINUX_RUNNER" == "true" ]]; then
+          if [[ "$TRUSTED_PR" == "true" && "$SELFHOSTED_LINUX_RUNNER" == "true" ]]; then
             use_linux=true
           fi
           # An operator PR can select hosted macOS for this run without changing Linux routing.
-          if [[ "$trusted_operator" == "true" && "$SELFHOSTED_MACOS_RUNNER" == "true" &&
+          if [[ "$TRUSTED_PR" == "true" && "$SELFHOSTED_MACOS_RUNNER" == "true" &&
                 "$hosted_macos_label" != "true" ]]; then
             use_macos=true
           fi
 
           echo "use_self_hosted_linux=$use_linux" >> "$GITHUB_OUTPUT"
           echo "use_self_hosted_macos=$use_macos" >> "$GITHUB_OUTPUT"
-          echo "runner_route event=$EVENT_NAME trusted_operator=$trusted_operator renovate=$is_renovate pr_author=$pr_author head_repo=$pr_head_repo linux=$use_linux macos=$use_macos"
+          echo "runner_route trusted_pr=$TRUSTED_PR linux=$use_linux macos=$use_macos"
 
   determine-targets:
     runs-on: ubuntu-24.04
@@ -245,6 +212,7 @@ jobs:
       fallback: ${{ steps.determine.outputs.fallback }}
       affected: ${{ steps.determine.outputs.affected }}
       full_test: ${{ steps.determine.outputs.full_test }}
+      browser_affected: ${{ steps.determine.outputs.browser_affected }}
       wgpu_reference: ${{ steps.select_wgpu_resvg.outputs.run }}
     steps:
       - name: Checkout
@@ -314,10 +282,11 @@ jobs:
       # generating them is roughly half of this job's bazel-diff wall time.
       # PRs restore them here; pushes to main generate and save them below so
       # the first PR against any main commit already hits warm. Caches created
-      # on main are visible to all PR branches.
-      - name: Cache bazel-diff base hashes
+      # on main are visible to all PR branches. Only main writes this cache.
+      - name: Restore bazel-diff base hashes
+        id: base-hashes
         if: steps.pr-meta.outputs.base_sha != ''
-        uses: actions/cache@v6
+        uses: actions/cache/restore@v6
         with:
           path: ~/.cache/bazel-diff-base-hashes/${{ steps.pr-meta.outputs.base_sha }}.json
           key: bazel-diff-base-hashes-tt-${{ env.BAZEL_DIFF_TAG }}-${{ steps.pr-meta.outputs.base_sha }}
@@ -416,6 +385,22 @@ jobs:
             esac
           done <<< "$changed_files"
           echo "wgpu_reference_changed=$wgpu_reference_changed" >> "$GITHUB_OUTPUT"
+
+          # The browser tests' npm lockfile and Playwright browser manifest reach Bazel
+          # through module extensions, not as files in the build graph, so bazel-diff
+          # cannot attribute a change to them. A change to them adds every browser test to
+          # the selection below. (The tests list package.json as a data file, so bazel-diff
+          # sees it, but a dependency bump changes it together with the lockfile.)
+          browser_inputs_changed=false
+          while IFS= read -r path; do
+            case "$path" in
+              donner/editor/wasm/tests/package.json|donner/editor/wasm/tests/package-lock.json|donner/editor/wasm/tests/pnpm-lock.yaml|donner/editor/wasm/tests/browsers.*.json)
+                echo "Browser test dependency change selects the hosted browser job: $path"
+                browser_inputs_changed=true
+                break
+                ;;
+            esac
+          done <<< "$changed_files"
 
           should_fallback=false
           while IFS= read -r path; do
@@ -522,8 +507,12 @@ jobs:
           done
 
           manual_affected="$(
+            # Quote each label: npm package labels contain query operators such as `+`.
+            quoted_affected="$(
+              python3 -c 'import pathlib, sys; print(" ".join("\"%s\"" % line.strip() for line in pathlib.Path(sys.argv[1]).read_text(encoding="utf-8").splitlines() if line.strip()))' "$work_dir/affected.txt"
+            )"
             cd "$head_dir"
-            bazelisk query --keep_going "attr(\"tags\", \"manual\", set($affected))"
+            bazelisk query --keep_going "attr(\"tags\", \"manual\", set($quoted_affected))"
           )"
           if [[ -n "$manual_affected" ]]; then
             printf '%s\n' "$manual_affected" > "$work_dir/manual-affected.txt"
@@ -540,8 +529,62 @@ jobs:
             exit 0
           fi
 
+          # Dependency manifests feed every browser test: add them all to the selection, so
+          # every lane, including the hosted browser job, runs them. Fail closed: if they
+          # cannot be listed, fall back to //....
+          if [[ "$browser_inputs_changed" == "true" ]]; then
+            if manifest_tests="$(
+              cd "$head_dir"
+              bazelisk query --keep_going \
+                'attr("tags", "launches-browser", tests(//...)) except attr("tags", "manual", //...)'
+            )" && [[ -n "$manifest_tests" ]]; then
+              manifest_labels=()
+              while IFS= read -r label; do
+                if [[ -n "$label" ]]; then
+                  manifest_labels+=("$label")
+                fi
+              done <<< "$manifest_tests"
+              affected="$affected ${manifest_labels[*]}"
+              echo "Added browser tests for changed dependency manifests: ${manifest_labels[*]}"
+            else
+              echo "Could not list browser tests for changed dependency manifests; falling back to //...."
+              echo "fallback=true" >> "$GITHUB_OUTPUT"
+              echo "affected=" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          fi
+
+          # Trusted PRs run hosted macOS only for browser targets (the macos-browser job). Ask
+          # the PR's merge graph whether any affected test launches a browser. bazel-diff hashes
+          # every transitive input in the build graph, including the Wasm package and the spec
+          # files these tests read; changed dependency manifests added their tests above.
+          # Fail closed: a failed query selects the browser job.
+          if browser_targets="$(
+            cd "$head_dir"
+            bazelisk query --keep_going "attr(\"tags\", \"launches-browser\", set($affected))"
+          )"; then
+            if [[ -n "$browser_targets" ]]; then
+              echo "Affected browser targets:"
+              printf '%s\n' "$browser_targets"
+              echo "browser_affected=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "browser_affected=false" >> "$GITHUB_OUTPUT"
+            fi
+          else
+            echo "Browser target query failed; selecting the hosted browser job."
+            echo "browser_affected=true" >> "$GITHUB_OUTPUT"
+          fi
+
           echo "fallback=false" >> "$GITHUB_OUTPUT"
           echo "affected=$affected" >> "$GITHUB_OUTPUT"
+
+      # A failed pre-warm removes its partial file; saving a missing path only warns.
+      - name: Save main bazel-diff base hashes
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && steps.pr-meta.outputs.base_sha != '' && steps.base-hashes.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: ~/.cache/bazel-diff-base-hashes/${{ steps.pr-meta.outputs.base_sha }}.json
+          key: ${{ steps.base-hashes.outputs.cache-primary-key }}
 
       - name: Select Linux WebGPU resvg reference
         id: select_wgpu_resvg
@@ -563,6 +606,11 @@ jobs:
     runs-on: ubuntu-24.04
     needs: [gatekeeper, determine-targets]
     if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request') && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') }}
+    # The read-write BuildBuddy key is a secret of the buildbuddy-write environment. Only
+    # runs allowed to write bind it, so other runs never receive that key.
+    environment:
+      name: ${{ ((github.event_name != 'pull_request' && github.ref == 'refs/heads/main') || needs.gatekeeper.outputs.trusted_pr == 'true') && 'buildbuddy-write' || '' }}
+      deployment: false
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -583,12 +631,34 @@ jobs:
           bazelisk-cache: true
           repository-cache: true
           external-cache: true
-          cache-save: ${{ github.ref == 'refs/heads/main' }}
+          cache-save: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
 
       - name: Restore Bazel action cache
         uses: ./.github/actions/cache-bazel-actions
         with:
           namespace: native
+
+      # BuildBuddy remote cache (docs/building.md). Main push, schedule and dispatch
+      # runs and trusted maintainer pull requests read and write; Renovate pull
+      # requests only read; every other run configures no remote cache. The
+      # read-only repository secret still reaches every same-repository run of
+      # this job, so it is treated as public: it can only read the cache.
+      - name: Configure BuildBuddy remote cache
+        if: (github.event_name != 'pull_request' && github.ref == 'refs/heads/main') || needs.gatekeeper.outputs.trusted_pr == 'true'
+        uses: ./.github/actions/buildbuddy-cache
+        with:
+          api-key: ${{ secrets.BUILDBUDDY_API_KEY }}
+          trusted-pr: ${{ needs.gatekeeper.outputs.trusted_pr }}
+          renovate-pr: ${{ needs.gatekeeper.outputs.renovate_pr }}
+          download-outputs: minimal
+
+      - name: Configure BuildBuddy read-only cache
+        if: needs.gatekeeper.outputs.renovate_pr == 'true'
+        uses: ./.github/actions/buildbuddy-cache
+        with:
+          read-only-api-key: ${{ secrets.BUILDBUDDY_API_KEY_READONLY }}
+          renovate-pr: ${{ needs.gatekeeper.outputs.renovate_pr }}
+          download-outputs: minimal
 
       - name: Build
         if: ${{ needs.gatekeeper.outputs.use_self_hosted_linux != 'true' }}
@@ -629,7 +699,7 @@ jobs:
           # workspace), which `bazel test` reports as exit 4. The wrapper
           # maps only that status to success; every other failure still fails.
           tools/ci_bazel_test.sh bazelisk test --config=ci --test_output=errors \
-            --test_tag_filters=-manual,-perf,-ci-remote-gpu \
+            --test_tag_filters=-manual,-perf,-ci-remote-gpu,-fuzz_soak \
             $TARGETS
 
       - name: Test Linux WebGPU resvg reference
@@ -658,7 +728,7 @@ jobs:
             exit 1
           fi
           tools/ci_bazel_test.sh bazelisk test --config=ci --nocache_test_results \
-            --test_output=errors --test_tag_filters=requires_xvfb \
+            --test_output=errors --test_tag_filters=requires_xvfb,-fuzz_soak \
             --strategy=TestRunner=local $TARGETS
 
       - name: Upload Bazel test failure artifacts
@@ -707,7 +777,9 @@ jobs:
         with:
           lane: linux-self-hosted
           pool: linux-self-hosted
-          pool-workflows: main.yml
+          # pr_base_change.yml runs this workflow as a reusable workflow call
+          # after a base-branch change, so its runs share the pool.
+          pool-workflows: main.yml pr_base_change.yml
           capacity: "4"
           token: ${{ github.token }}
           timeout-minutes: "150"
@@ -734,8 +806,8 @@ jobs:
     # wedged/degraded backend still fails in about a minute regardless of this
     # backstop.
     timeout-minutes: 210
-    # Admission control on the shared remote-execution backend. Both self-hosted
-    # lanes execute on a backend that an interactive development host also uses
+    # Admission control on the shared remote-execution backend. The self-hosted
+    # Linux lane executes on a backend that an interactive development host also uses
     # with priority; unbounded concurrent operator PRs oversubscribe it and
     # crawl into the 60 min timeout (measured). Admission is enforced by the
     # hosted re-turnstile prerequisite above, NOT by a GitHub concurrency group.
@@ -1033,7 +1105,7 @@ jobs:
             bazelisk test --config=ci --config=latest_llvm --test_output=errors \
             $BAZEL_SELF_HOSTED_REMOTE_FALLBACK_FLAGS \
             $DIAG_TEST_FLAGS \
-            --test_tag_filters=-manual,-perf,-local-gpu-isolated \
+            --test_tag_filters=-manual,-perf,-local-gpu-isolated,-fuzz_soak \
             --profile="$DIAG_DIR/test/profile.gz" \
             --build_event_json_file="$DIAG_DIR/test/bep.json" \
             --nobuild_event_json_file_path_conversion \
@@ -1095,14 +1167,23 @@ jobs:
     runs-on: macos-26
     needs: [gatekeeper, determine-targets]
     if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request') && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') && needs.gatekeeper.outputs.use_self_hosted_macos != 'true' }}
+    # The read-write BuildBuddy key is a secret of the buildbuddy-write environment. Only
+    # runs allowed to write bind it, so other runs never receive that key.
+    environment:
+      name: ${{ ((github.event_name != 'pull_request' && github.ref == 'refs/heads/main') || needs.gatekeeper.outputs.trusted_pr == 'true') && 'buildbuddy-write' || '' }}
+      deployment: false
     env:
       # Xcode's libc++ marks std::format floating-point support as macOS 13.3+.
       # Set the CI deployment target explicitly so hosted and self-hosted macOS
       # compile the same target instead of inheriting host defaults.
-      BAZEL_MACOS_BUILD_FLAGS: "--macos_minimum_os=13.3"
+      # --config=ci-macos pins the action PATH so this job and
+      # macos-self-hosted compute identical action keys; "Select pinned Xcode"
+      # adds --xcode_version. macos-self-hosted passes these same key-affecting
+      # flags (//tools:macos_cache_key_parity_tests).
+      BAZEL_MACOS_BUILD_FLAGS: "--config=ci-macos --macos_minimum_os=13.3"
       # gen_cmakelists_test invokes Homebrew LLVM from inside Bazel's test
       # sandbox; Homebrew's tool wrappers require HOME.
-      BAZEL_MACOS_TEST_FLAGS: "--test_env=HOME --test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=1"
+      BAZEL_MACOS_TEST_FLAGS: "--test_env=HOME --test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=1 --test_env=DONNER_CI_MACOS_LANE=hosted"
       # Enables the browser tests' timeout recorder (browser-stall-diagnostics.mjs). It
       # records host load, memory and process call graphs, so only this ephemeral hosted
       # job sets it; a persistent self-hosted runner never publishes them.
@@ -1124,6 +1205,13 @@ jobs:
         with:
           persist-credentials: false
 
+      # Apple toolchain action keys carry the Xcode version and build, so both
+      # macOS lanes build with the one pinned in tools/ci_macos_xcode.txt.
+      - name: Select pinned Xcode
+        id: xcode
+        shell: bash
+        run: tools/ci_select_macos_xcode.sh --required
+
       - name: Install clang-tidy
         uses: nick-fields/retry@v4
         with:
@@ -1140,12 +1228,47 @@ jobs:
           bazelisk-cache: true
           repository-cache: true
           external-cache: true
-          cache-save: ${{ github.ref == 'refs/heads/main' }}
+          cache-save: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
 
       - name: Restore Bazel action cache
         uses: ./.github/actions/cache-bazel-actions
         with:
           namespace: native
+
+      # BuildBuddy remote cache (docs/building.md). Main push, schedule and dispatch
+      # runs and trusted maintainer pull requests read and write; Renovate pull
+      # requests only read; every other run configures no remote cache. The
+      # read-only repository secret still reaches every same-repository run of
+      # this job, so it is treated as public: it can only read the cache.
+      - name: Configure BuildBuddy remote cache
+        if: (github.event_name != 'pull_request' && github.ref == 'refs/heads/main') || needs.gatekeeper.outputs.trusted_pr == 'true'
+        uses: ./.github/actions/buildbuddy-cache
+        with:
+          api-key: ${{ secrets.BUILDBUDDY_API_KEY }}
+          trusted-pr: ${{ needs.gatekeeper.outputs.trusted_pr }}
+          renovate-pr: ${{ needs.gatekeeper.outputs.renovate_pr }}
+          cache-partition: ${{ steps.xcode.outputs.cache_partition }}
+          download-outputs: minimal
+
+      - name: Configure BuildBuddy read-only cache
+        if: needs.gatekeeper.outputs.renovate_pr == 'true'
+        uses: ./.github/actions/buildbuddy-cache
+        with:
+          read-only-api-key: ${{ secrets.BUILDBUDDY_API_KEY_READONLY }}
+          renovate-pr: ${{ needs.gatekeeper.outputs.renovate_pr }}
+          cache-partition: ${{ steps.xcode.outputs.cache_partition }}
+          download-outputs: minimal
+
+      # Regenerate the Xcode and Apple toolchain repositories for the selected
+      # Xcode, as macos-self-hosted does; a restored external cache must not
+      # carry another Xcode's.
+      - name: Refresh Xcode toolchain configuration
+        shell: bash
+        run: |
+          bazelisk fetch --force --lockfile_mode=off \
+            --repo=@@bazel_tools+xcode_configure_extension+local_config_xcode \
+            --repo=@@apple_support++apple_cc_configure_extension+local_config_apple_cc \
+            --repo=@@apple_support++apple_cc_configure_extension+local_config_apple_cc_toolchains
 
       - name: Fetch Metal validation dependencies
         uses: nick-fields/retry@v4
@@ -1172,7 +1295,7 @@ jobs:
               echo "Metal shader validation: full." >> "$GITHUB_STEP_SUMMARY"
               ;;
             paravirtual-texture-usage-off)
-              echo "BAZEL_MACOS_TEST_FLAGS=--test_env=HOME --test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=0" >> "$GITHUB_ENV"
+              echo "BAZEL_MACOS_TEST_FLAGS=--test_env=HOME --test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=0 --test_env=DONNER_CI_MACOS_LANE=hosted" >> "$GITHUB_ENV"
               echo "Metal: verified virtual-GPU texture-check exception; API, buffer, threadgroup, and pixel checks remain active. A full-validation receipt for the PR head is required before merge. See docs/metal_validation.md." >> "$GITHUB_STEP_SUMMARY"
               ;;
             *)
@@ -1226,11 +1349,12 @@ jobs:
           echo "::notice::Excluding requires_metal_toolchain targets: the hosted macOS image has no offline Metal compiler."
           # Tests that launch a browser run in the next step instead.
           tools/ci_bazel_test.sh bazelisk test --config=ci --test_output=errors \
-            --test_tag_filters=-manual,-perf,-requires_metal_toolchain,-ci-remote-gpu,-launches-browser \
+            --test_tag_filters=-manual,-perf,-requires_metal_toolchain,-ci-remote-gpu,-launches-browser,-fuzz_soak \
             $HOSTED_MACOS_QUARANTINE_TEST_FLAGS \
             $BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS $BROWSER_STALL_TEST_FLAGS $TARGETS
-        # Deterministic fuzzer corpus replay remains in this Bazel suite. Sanitizer-backed mutation
-        # runs nightly or on demand in `.github/workflows/fuzz.yml`.
+        # Deterministic fuzzer corpus replay remains in this Bazel suite. Every lane here excludes
+        # the `fuzz_soak` mutation targets; they run nightly or on demand in
+        # `.github/workflows/fuzz.yml`, under sanitizers.
 
       # Browser tests hold wall-clock deadlines (a 10 s GPU device request, 30 s
       # test timeouts) that a browser starved of CPU cannot meet. On this
@@ -1255,7 +1379,7 @@ jobs:
           fi
           tools/ci_bazel_test.sh bazelisk test --config=ci --test_output=errors \
             --local_test_jobs=1 \
-            --test_tag_filters=launches-browser,-manual,-perf,-requires_metal_toolchain,-ci-remote-gpu \
+            --test_tag_filters=launches-browser,-manual,-perf,-requires_metal_toolchain,-ci-remote-gpu,-fuzz_soak \
             $HOSTED_MACOS_QUARANTINE_TEST_FLAGS \
             $BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS $BROWSER_STALL_TEST_FLAGS $TARGETS
 
@@ -1413,6 +1537,309 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
+  # Hosted macOS browser subset for trusted PRs. Those PRs run every test on the
+  # self-hosted macOS runner, which has more cores and a real GPU, so a browser test
+  # that only meets its deadlines there can pass the PR and then fail main's hosted
+  # `macos` job. When the PR affects a test that launches a browser (or falls back
+  # to //...), this job runs main's hosted browser step on the same runner image,
+  # with the same targets, flags, quarantine and test environment. It runs no
+  # native suite and saves no cache: it restores main's caches only. Untrusted PRs
+  # and main pushes already run the full hosted `macos` job, so it never runs there.
+  macos-browser:
+    runs-on: macos-26
+    needs: [gatekeeper, determine-targets]
+    if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && github.event_name == 'pull_request' && needs.gatekeeper.outputs.docs_only != 'true' && needs.gatekeeper.outputs.use_self_hosted_macos == 'true' && (needs.determine-targets.outputs.fallback == 'true' || needs.determine-targets.outputs.browser_affected == 'true') }}
+    # The read-write BuildBuddy key is a secret of the buildbuddy-write environment. Only
+    # runs allowed to write bind it, so other runs never receive that key.
+    environment:
+      name: ${{ ((github.event_name != 'pull_request' && github.ref == 'refs/heads/main') || needs.gatekeeper.outputs.trusted_pr == 'true') && 'buildbuddy-write' || '' }}
+      deployment: false
+    # Keep this environment identical to the `macos` job's; ci_lane_parity_tests
+    # compares the browser step's Bazel invocation between the two.
+    env:
+      BAZEL_MACOS_BUILD_FLAGS: "--config=ci-macos --macos_minimum_os=13.3"
+      BAZEL_MACOS_TEST_FLAGS: "--test_env=HOME --test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=1 --test_env=DONNER_CI_MACOS_LANE=hosted"
+      BROWSER_STALL_TEST_FLAGS: "--test_env=DONNER_BROWSER_STALL_DIAGNOSTICS=1"
+      HOSTED_MACOS_QUARANTINE_TEST_FLAGS: "--test_env=DONNER_HOSTED_MACOS_QUARANTINE=1"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      # Same pinned Xcode as the `macos` job, so action keys and the BuildBuddy
+      # cache partition match main's hosted macOS lane.
+      - name: Select pinned Xcode
+        id: xcode
+        shell: bash
+        run: tools/ci_select_macos_xcode.sh --required
+
+      # Not used by browser tests. It keeps this job's setup identical to the `macos`
+      # job's, which the lane parity test requires.
+      - name: Install clang-tidy
+        uses: nick-fields/retry@v4
+        with:
+          timeout_minutes: 10
+          max_attempts: 3
+          retry_wait_seconds: 15
+          command: |
+            brew install --quiet llvm@19
+            echo "/opt/homebrew/opt/llvm@19/bin" >> "$GITHUB_PATH"
+
+      - name: Setup Bazel
+        uses: bazel-contrib/setup-bazel@0.19.0
+        with:
+          bazelisk-cache: true
+          repository-cache: true
+          external-cache: true
+          cache-save: false
+
+      - name: Restore Bazel action cache
+        uses: ./.github/actions/cache-bazel-actions
+        with:
+          namespace: native
+
+      # BuildBuddy remote cache (docs/building.md). Main push, schedule and dispatch
+      # runs and trusted maintainer pull requests read and write; Renovate pull
+      # requests only read; every other run configures no remote cache. The
+      # read-only repository secret still reaches every same-repository run of
+      # this job, so it is treated as public: it can only read the cache.
+      - name: Configure BuildBuddy remote cache
+        if: (github.event_name != 'pull_request' && github.ref == 'refs/heads/main') || needs.gatekeeper.outputs.trusted_pr == 'true'
+        uses: ./.github/actions/buildbuddy-cache
+        with:
+          api-key: ${{ secrets.BUILDBUDDY_API_KEY }}
+          trusted-pr: ${{ needs.gatekeeper.outputs.trusted_pr }}
+          renovate-pr: ${{ needs.gatekeeper.outputs.renovate_pr }}
+          cache-partition: ${{ steps.xcode.outputs.cache_partition }}
+          download-outputs: minimal
+
+      - name: Configure BuildBuddy read-only cache
+        if: needs.gatekeeper.outputs.renovate_pr == 'true'
+        uses: ./.github/actions/buildbuddy-cache
+        with:
+          read-only-api-key: ${{ secrets.BUILDBUDDY_API_KEY_READONLY }}
+          renovate-pr: ${{ needs.gatekeeper.outputs.renovate_pr }}
+          cache-partition: ${{ steps.xcode.outputs.cache_partition }}
+          download-outputs: minimal
+
+      # Regenerate the Xcode and Apple toolchain repositories for the selected
+      # Xcode, as the `macos` job does.
+      - name: Refresh Xcode toolchain configuration
+        shell: bash
+        run: |
+          bazelisk fetch --force --lockfile_mode=off \
+            --repo=@@bazel_tools+xcode_configure_extension+local_config_xcode \
+            --repo=@@apple_support++apple_cc_configure_extension+local_config_apple_cc \
+            --repo=@@apple_support++apple_cc_configure_extension+local_config_apple_cc_toolchains
+
+      - name: Fetch Metal validation dependencies
+        uses: nick-fields/retry@v4
+        with:
+          timeout_minutes: 5
+          max_attempts: 3
+          retry_wait_seconds: 15
+          command: >-
+            bazelisk fetch --config=ci $BAZEL_MACOS_BUILD_FLAGS
+            //donner/gpu/metal/tests:all
+
+      # The `macos` job's profile selection can rewrite BAZEL_MACOS_TEST_FLAGS on a
+      # virtual GPU. Run the same selection so the browser tests see the same test
+      # environment main's hosted job gives them.
+      - name: Select Metal validation profile
+        id: metal_profile
+        shell: bash
+        run: |
+          set -euo pipefail
+          bazelisk test --config=ci --nocache_test_results --test_output=errors \
+            $BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS \
+            //tools/ci:metal_profile
+          profile=$(python3 tools/metal_validation_profile.py \
+            bazel-testlogs/donner/gpu/metal/tests/metal_validation_profile/test.log)
+          case "$profile" in
+            full)
+              echo "Metal shader validation: full." >> "$GITHUB_STEP_SUMMARY"
+              ;;
+            paravirtual-texture-usage-off)
+              echo "BAZEL_MACOS_TEST_FLAGS=--test_env=HOME --test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=0 --test_env=DONNER_CI_MACOS_LANE=hosted" >> "$GITHUB_ENV"
+              echo "Metal: verified virtual-GPU texture-check exception for the browser subset." >> "$GITHUB_STEP_SUMMARY"
+              ;;
+            *)
+              echo "::error::Unsupported Metal validation profile."
+              exit 1
+              ;;
+          esac
+
+      # Same command as the `macos` job's browser step: the PR's selected targets,
+      # filtered to tests that launch a browser, one at a time. That job builds the
+      # whole selection in its Build step first; this job has no Build step, and
+      # --build_tests_only keeps it from building anything the browser tests do not
+      # need (on a //... fallback, the rest of the repository).
+      - name: Test (browser targets)
+        id: browser_test
+        shell: bash
+        run: |
+          set -euo pipefail
+          TARGETS=$(if [[ "${{ needs.determine-targets.outputs.fallback }}" == "true" ]]; then
+            echo "//..."
+          else
+            echo "${{ needs.determine-targets.outputs.affected }}"
+          fi)
+          if [[ -z "${TARGETS// /}" ]]; then
+            echo "::error::Empty target selection reached the test step."
+            exit 1
+          fi
+          tools/ci_bazel_test.sh bazelisk test --config=ci --test_output=errors \
+            --local_test_jobs=1 --build_tests_only \
+            --test_tag_filters=launches-browser,-manual,-perf,-requires_metal_toolchain,-ci-remote-gpu,-fuzz_soak \
+            $HOSTED_MACOS_QUARANTINE_TEST_FLAGS \
+            $BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS $BROWSER_STALL_TEST_FLAGS $TARGETS
+
+      - name: Upload Bazel test failure artifacts
+        if: failure() && (steps.metal_profile.outcome == 'failure' || steps.browser_test.outcome == 'failure')
+        uses: ./.github/actions/upload-bazel-test-artifacts
+        with:
+          name: bazel-test-failure-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}
+
+      # A browser test that ended at its deadline records the window from its browser's
+      # launch to that deadline. Slice the runner's system log to those windows for the browser's
+      # own processes and for executable code-signing checks, which can delay a
+      # browser helper's first launch. The unified log is host-wide, so only this
+      # ephemeral hosted job collects it.
+      - name: Collect browser stall system log
+        id: browser_stall_log
+        if: ${{ !cancelled() && (steps.browser_test.outcome == 'failure') }}
+        continue-on-error: true
+        timeout-minutes: 5
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="${RUNNER_TEMP}/browser-stall-system-log"
+          mkdir -p "$out"
+          iso='^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$'
+          predicate='eventType == logEvent AND (process BEGINSWITH "Google Chrome for Testing" OR process == "syspolicyd" OR process == "amfid")'
+          count=0
+          while IFS= read -r -d '' window; do
+            start=""
+            end=""
+            read -r start end _ < "$window" || true
+            if [[ ! "$start" =~ $iso || ! "$end" =~ $iso ]]; then
+              echo "Skipping malformed window: $window"
+              continue
+            fi
+            count=$((count + 1))
+            start="${start/T/ }"
+            end="${end/T/ }"
+            raw="${RUNNER_TEMP}/browser-stall-window-${count}.raw"
+            if ! log show --style compact --timezone UTC \
+                --start "${start%Z}+0000" --end "${end%Z}+0000" \
+                --predicate "$predicate" > "$raw"; then
+              echo "System log slice ${count} failed: $window"
+            fi
+            # Keep the launch end of the window, where a stalled first launch shows.
+            head -c 2097152 "$raw" > "${out}/window-${count}.log"
+            rm -f "$raw"
+            if (( count == 4 )); then
+              break
+            fi
+          done < <(find -H bazel-testlogs -path '*/browser-stall/system-log-window.txt' -type f -print0 2>/dev/null | sort -z)
+          echo "Collected ${count} browser stall system log window(s)."
+
+      - name: Upload browser stall system log
+        if: ${{ !cancelled() && (steps.browser_test.outcome == 'failure') }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: browser-stall-system-log-${{ github.job }}
+          path: ${{ runner.temp }}/browser-stall-system-log
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Detect browser GPU acquisition failure
+        id: browser_gpu_failure
+        if: ${{ !cancelled() && (steps.browser_test.outcome == 'failure' || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'ci:browser-gpu-diagnostics'))) }}
+        shell: bash
+        env:
+          BROWSER_GPU_DIAGNOSTICS_REQUESTED: ${{ github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'ci:browser-gpu-diagnostics') }}
+        run: |
+          set -euo pipefail
+          should_probe="$BROWSER_GPU_DIAGNOSTICS_REQUESTED"
+          for target in chromium_remote_smoke catalog_font_loading_test browser_presentation_regression_test standalone_geode_browser_renderer_test; do
+            log="bazel-testlogs/donner/editor/wasm/tests/${target}/test.log"
+            if [[ -f "$log" ]] && grep -qF 'stage=selection outcome=deadline_pending' "$log"; then
+              should_probe=true
+            fi
+            # A browser test ended at its deadline; its browser process states were recorded.
+            if [[ -f "$log" ]] && grep -qF 'browser-stall-diagnostics deadline' "$log"; then
+              should_probe=true
+            fi
+          done
+          echo "run_probe=$should_probe" >> "$GITHUB_OUTPUT"
+
+      - name: Compare browser GPU tests (serial)
+        id: browser_gpu_serial
+        if: ${{ !cancelled() && steps.browser_gpu_failure.outputs.run_probe == 'true' }}
+        continue-on-error: true
+        timeout-minutes: 10
+        shell: bash
+        run: |
+          set -euo pipefail
+          bazel_status=0
+          bazelisk test --config=ci --test_output=errors --nocache_test_results \
+            --flaky_test_attempts=1 --runs_per_test=1 --local_test_jobs=1 --keep_going \
+            --build_event_json_file="${RUNNER_TEMP}/browser-gpu-serial.bep.json" \
+            $BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS $BROWSER_STALL_TEST_FLAGS \
+            //tools/ci:browser_gpu_comparison || bazel_status=$?
+          report_status=0
+          python3 tools/browser_gpu_test_summary.py \
+            "${RUNNER_TEMP}/browser-gpu-serial.bep.json" \
+            "${RUNNER_TEMP}/browser-gpu-serial-summary.json" || report_status=$?
+          if [[ "$bazel_status" -ne 0 ]]; then exit "$bazel_status"; fi
+          exit "$report_status"
+
+      - name: Upload browser GPU comparison (serial)
+        if: ${{ !cancelled() && steps.browser_gpu_failure.outputs.run_probe == 'true' }}
+        uses: ./.github/actions/upload-bazel-test-artifacts
+        with:
+          name: browser-gpu-serial-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}
+
+      - name: Compare browser GPU tests (parallel)
+        id: browser_gpu_parallel
+        if: ${{ !cancelled() && steps.browser_gpu_failure.outputs.run_probe == 'true' }}
+        continue-on-error: true
+        timeout-minutes: 10
+        shell: bash
+        run: |
+          set -euo pipefail
+          bazel_status=0
+          bazelisk test --config=ci --test_output=errors --nocache_test_results \
+            --flaky_test_attempts=1 --runs_per_test=1 --local_test_jobs=4 --keep_going \
+            --build_event_json_file="${RUNNER_TEMP}/browser-gpu-parallel.bep.json" \
+            $BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS $BROWSER_STALL_TEST_FLAGS \
+            //tools/ci:browser_gpu_comparison || bazel_status=$?
+          report_status=0
+          python3 tools/browser_gpu_test_summary.py \
+            "${RUNNER_TEMP}/browser-gpu-parallel.bep.json" \
+            "${RUNNER_TEMP}/browser-gpu-parallel-summary.json" || report_status=$?
+          if [[ "$bazel_status" -ne 0 ]]; then exit "$bazel_status"; fi
+          exit "$report_status"
+
+      - name: Upload browser GPU comparison (parallel)
+        if: ${{ !cancelled() && steps.browser_gpu_failure.outputs.run_probe == 'true' }}
+        uses: ./.github/actions/upload-bazel-test-artifacts
+        with:
+          name: browser-gpu-parallel-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}
+
+      - name: Upload bounded browser GPU timing summaries
+        if: ${{ !cancelled() && steps.browser_gpu_failure.outputs.run_probe == 'true' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: browser-gpu-timings-${{ github.job }}
+          path: |
+            ${{ runner.temp }}/browser-gpu-serial-summary.json
+            ${{ runner.temp }}/browser-gpu-parallel-summary.json
+          if-no-files-found: warn
+          retention-days: 14
+
   # Operator's ARM64 macOS runs on the operator's self-hosted runner.
   # Replaces `macos` for trusted operator PRs. Main pushes, Renovate, and
   # non-operator runs stay hosted. The host pre-provisions Bazelisk, Homebrew
@@ -1424,20 +1851,24 @@ jobs:
     runs-on: [self-hosted, macOS, ARM64]
     needs: [gatekeeper, determine-targets]
     if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request') && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') && needs.gatekeeper.outputs.use_self_hosted_macos == 'true' }}
-    # RE-availability SLA lane. Bound at 60 min so healthy affected-target
-    # runs have buffer while RE degradation still fast-fails instead of tailing
-    # for hours on the capped host.
+    # Bound at 60 min so healthy affected-target runs have buffer while a stuck
+    # run still fails instead of tailing for hours.
     timeout-minutes: 60
+    # Shares the BuildBuddy remote cache with the GitHub-hosted macOS lanes, the
+    # one self-hosted lane allowed to. This job only runs for trusted maintainer
+    # pull requests, so it binds the buildbuddy-write environment exactly as the
+    # `macos` job does for them.
+    environment:
+      name: ${{ ((github.event_name != 'pull_request' && github.ref == 'refs/heads/main') || needs.gatekeeper.outputs.trusted_pr == 'true') && 'buildbuddy-write' || '' }}
+      deployment: false
     env:
-      # The runner host has an operator ~/.bazelrc for interactive RE/cache work.
-      # The invocations below use --nohome_rc so CI matches GitHub-hosted macOS
-      # and only picks up cache settings declared in this workflow. RE/cache
-      # outages now FAST-FAIL (no local fallback) rather than degrading to a
-      # multi-hour local build on the capped host. Backend health monitoring
-      # and a rerun handle recovery.
-      # The first step injects the masked cache setting after registering its diagnostic forms.
-      BAZEL_MACOS_BUILD_FLAGS: "--macos_minimum_os=13.3 --remote_upload_local_results=true --remote_local_fallback=false --incompatible_remote_local_fallback_for_remote_cache=false --remote_timeout=5s"
-      BAZEL_MACOS_TEST_FLAGS: "--test_env=HOME --test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=1"
+      # The runner host may have user or system Bazel rc files. The invocations
+      # below use --nohome_rc --nosystem_rc so CI matches GitHub-hosted macOS
+      # and only picks up settings declared in this repository and workflow.
+      # --config=ci-macos and --macos_minimum_os=13.3 are the key-affecting
+      # flags, identical to the `macos` job's (//tools:macos_cache_key_parity_tests).
+      BAZEL_MACOS_BUILD_FLAGS: "--config=ci-macos --macos_minimum_os=13.3"
+      BAZEL_MACOS_TEST_FLAGS: "--test_env=HOME --test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=1 --test_env=DONNER_CI_MACOS_LANE=self-hosted"
       # Keep in sync with the `macos` job: exactly one of the two runs per
       # event, so both need the Geode editor lane. See that job for why these
       # targets need an explicit invocation.
@@ -1450,40 +1881,6 @@ jobs:
       # intended to cover such a run with margin.
       MIN_FREE_DISK_GIB: "30"
     steps:
-      - name: Configure masked remote cache
-        shell: bash
-        env:
-          REMOTE_CACHE_URL: ${{ secrets.BAZEL_REMOTE_CACHE }}
-        run: |
-          set -euo pipefail
-          python3 - <<'PYTHON'
-          import os
-          from urllib.parse import unquote, urlsplit
-
-          value = os.environ.get("REMOTE_CACHE_URL", "")
-          if not value:
-              raise SystemExit("BAZEL_REMOTE_CACHE secret is required for the self-hosted lane")
-          try:
-              parsed = urlsplit(value)
-              _ = parsed.port
-              valid = parsed.scheme in ("http", "https", "grpc", "grpcs") and parsed.hostname
-          except ValueError:
-              raise SystemExit("Invalid remote cache URL") from None
-          if (not valid or any(char.isspace() for char in value) or parsed.username is not None
-                  or parsed.password is not None or parsed.query or parsed.fragment):
-              raise SystemExit("Invalid remote cache URL")
-          components = (value, parsed.netloc, parsed.hostname,
-                        parsed.path if parsed.path != "/" else "")
-          for component in components:
-              if component:
-                  for form in dict.fromkeys((component, unquote(component))):
-                      escaped = form.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
-                      print("::add-mask::" + escaped, flush=True)
-          flags = os.environ["BAZEL_MACOS_BUILD_FLAGS"]
-          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as output:
-              output.write("\nBAZEL_MACOS_BUILD_FLAGS=" + flags + " --remote_cache=" + value + "\n")
-          PYTHON
-
       # Before Bazel, so a full disk fails in seconds with a clear error instead of
       # minutes to an hour in as a Bazel ENOSPC, a job timeout or a lost
       # runner connection, which read like failures of the change under test.
@@ -1498,16 +1895,11 @@ jobs:
               exit 1
               ;;
           esac
-          if [[ -e /etc/bazel.bazelrc ]] && grep -Eq \
-            '^[^#]*--(output_user_root|output_base|disk_cache|repository_cache)([=[:space:]]|$)' \
-            /etc/bazel.bazelrc; then
-            echo "::error title=Disk space check out of date::/etc/bazel.bazelrc moves Bazel's output root or a cache (--output_user_root, --output_base, --disk_cache or --repository_cache). Update this check to measure that location."
-            exit 1
-          fi
-          # The job sets no --output_user_root and --nohome_rc skips any user
-          # rc, so Bazel writes its macOS default output root and the `build:ci`
-          # repository cache. df follows a symlink at any of these paths; a path
-          # that does not exist yet is measured at its nearest existing ancestor.
+          # The job sets no --output_user_root, and --nohome_rc --nosystem_rc
+          # skip any user or system rc, so Bazel writes its macOS default output
+          # root and the `build:ci` repository cache. df follows a symlink at any of
+          # these paths; a path that does not exist yet is measured at its nearest
+          # existing ancestor.
           rows=""
           for location in \
             "workspace=${GITHUB_WORKSPACE}" \
@@ -1563,6 +1955,31 @@ jobs:
         with:
           persist-credentials: false
 
+      # Builds with the Xcode pinned in tools/ci_macos_xcode.txt when it is
+      # installed, so action keys match the hosted macOS lanes'. Without it the
+      # job warns and keeps the runner's default Xcode; the step never prints
+      # which Xcode the runner has.
+      - name: Select pinned Xcode
+        id: xcode
+        shell: bash
+        run: tools/ci_select_macos_xcode.sh --optional
+
+      # BuildBuddy remote cache, shared with the GitHub-hosted macOS lanes under
+      # the pinned Xcode's partition (docs/building.md). Without the pinned
+      # Xcode the partition is empty and the action leaves the cache off, so
+      # entries built with another Xcode never reach the shared partition. It
+      # runs before "Prepare self-hosted macOS toolchain", the first step that
+      # touches Bazel.
+      - name: Configure BuildBuddy remote cache
+        if: (github.event_name != 'pull_request' && github.ref == 'refs/heads/main') || needs.gatekeeper.outputs.trusted_pr == 'true'
+        uses: ./.github/actions/buildbuddy-cache
+        with:
+          api-key: ${{ secrets.BUILDBUDDY_API_KEY }}
+          trusted-pr: ${{ needs.gatekeeper.outputs.trusted_pr }}
+          renovate-pr: ${{ needs.gatekeeper.outputs.renovate_pr }}
+          cache-partition: ${{ steps.xcode.outputs.cache_partition }}
+          download-outputs: minimal
+
       - name: Prepare self-hosted macOS toolchain
         shell: bash
         run: |
@@ -1576,7 +1993,7 @@ jobs:
       - name: Refresh Xcode toolchain configuration
         shell: bash
         run: |
-          bazelisk --nohome_rc fetch --force --lockfile_mode=off \
+          bazelisk --nohome_rc --nosystem_rc fetch --force --lockfile_mode=off \
             --repo=@@bazel_tools+xcode_configure_extension+local_config_xcode \
             --repo=@@apple_support++apple_cc_configure_extension+local_config_apple_cc \
             --repo=@@apple_support++apple_cc_configure_extension+local_config_apple_cc_toolchains
@@ -1586,7 +2003,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          bazelisk --nohome_rc test --config=ci --nocache_test_results --test_tag_filters= --test_output=errors \
+          bazelisk --nohome_rc --nosystem_rc test --config=ci --nocache_test_results --test_tag_filters= --test_output=errors \
             $BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS \
             //tools/ci:metal_full_validation
 
@@ -1595,7 +2012,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          tools/ci_bazel_test.sh bazelisk --nohome_rc test --config=ci --nocache_test_results --test_output=errors \
+          tools/ci_bazel_test.sh bazelisk --nohome_rc --nosystem_rc test --config=ci --nocache_test_results --test_output=errors \
             $BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS \
             //tools/ci:metal_preflight
 
@@ -1608,7 +2025,7 @@ jobs:
           else
             echo "${{ needs.determine-targets.outputs.affected }}"
           fi)
-          bazelisk --nohome_rc build --config=ci $BAZEL_MACOS_BUILD_FLAGS $TARGETS
+          bazelisk --nohome_rc --nosystem_rc build --config=ci $BAZEL_MACOS_BUILD_FLAGS $TARGETS
 
       - name: Test
         id: test
@@ -1624,11 +2041,12 @@ jobs:
             echo "::error::Empty target selection reached the test step."
             exit 1
           fi
-          tools/ci_bazel_test.sh bazelisk --nohome_rc test --config=ci --test_output=errors \
-            --test_tag_filters=-manual,-perf,-ci-remote-gpu,-launches-browser \
+          tools/ci_bazel_test.sh bazelisk --nohome_rc --nosystem_rc test --config=ci --test_output=errors \
+            --test_tag_filters=-manual,-perf,-ci-remote-gpu,-launches-browser,-fuzz_soak \
             $BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS $TARGETS
-        # Deterministic fuzzer corpus replay remains in this Bazel suite. Sanitizer-backed mutation
-        # runs nightly or on demand in `.github/workflows/fuzz.yml`.
+        # Deterministic fuzzer corpus replay remains in this Bazel suite. Every lane here excludes
+        # the `fuzz_soak` mutation targets; they run nightly or on demand in
+        # `.github/workflows/fuzz.yml`, under sanitizers.
 
       # Browser tests share the GPU with native replays and need their own serial phase.
       - name: Test (browser targets)
@@ -1646,9 +2064,9 @@ jobs:
             echo "::error::Empty target selection reached the browser test step."
             exit 1
           fi
-          tools/ci_bazel_test.sh bazelisk --nohome_rc test --config=ci --test_output=errors \
+          tools/ci_bazel_test.sh bazelisk --nohome_rc --nosystem_rc test --config=ci --test_output=errors \
             --local_test_jobs=1 \
-            --test_tag_filters=launches-browser,-manual,-perf,-ci-remote-gpu \
+            --test_tag_filters=launches-browser,-manual,-perf,-ci-remote-gpu,-fuzz_soak \
             $BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS $TARGETS
 
       - name: Test (Geode editor lane)
@@ -1657,7 +2075,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          bazelisk --nohome_rc test --config=ci --config=geode --test_output=errors \
+          bazelisk --nohome_rc --nosystem_rc test --config=ci --config=geode --test_output=errors \
             $BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS $GEODE_EDITOR_TARGETS
 
       - name: Upload Bazel test failure artifacts
@@ -1665,3 +2083,10 @@ jobs:
         uses: ./.github/actions/upload-bazel-test-artifacts
         with:
           name: bazel-test-failure-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}
+
+      # The runner is persistent: remove the BuildBuddy key, its credential helper
+      # and the workspace fragment that names the helper, whatever the outcome.
+      - name: Remove BuildBuddy credentials
+        if: always()
+        shell: bash
+        run: rm -rf "${RUNNER_TEMP}/buildbuddy" "${GITHUB_WORKSPACE}/.buildbuddy.bazelrc"

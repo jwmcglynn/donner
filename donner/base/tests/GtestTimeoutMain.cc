@@ -9,7 +9,7 @@
  * Budget source (highest wins):
  *   1. `--donner_test_timeout_seconds=<N>` command-line flag.
  *   2. `DONNER_TEST_TIMEOUT_SECONDS` environment variable.
- *   3. Compile-time default of 30 s.
+ *   3. Compile-time default of 60 s.
  *
  * On timeout, the process prints the offending test-case name to stderr and
  * exits with status 124 (the same code GNU `timeout(1)` uses). Bazel reports

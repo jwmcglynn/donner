@@ -41,6 +41,7 @@ public:
         // rule be the return value.
         auto atRule =
             consumeAtRule(tokenizer_, std::move(token.get<Token::AtKeyword>()), ParseMode::Keep);
+        atRule.sourceOffset = token.offset();
         if (!atRule.name.equalsLowercase("charset")) {
           result = Rule(std::move(atRule));
           break;
@@ -136,6 +137,7 @@ public:
         // returned value to the list of rules.
         auto atRule = consumeAtRule(tokenizer, std::move(token.get<Token::AtKeyword>()),
                                     ParseMode::Keep, &aggregateBudget);
+        atRule.sourceOffset = token.offset();
         if (!atRule.name.equalsLowercase("charset")) {
           result.emplace_back(std::move(atRule));
         } else {
@@ -202,16 +204,28 @@ private:
   RuleParser::SecurityStats* securityStats_ = nullptr;
 };
 
+std::vector<Rule> RebaseAtRuleSourceOffsets(std::vector<Rule> rules, std::size_t prefixBytes) {
+  for (Rule& rule : rules) {
+    if (auto* atRule = std::get_if<AtRule>(&rule.value)) {
+      atRule->sourceOffset = atRule->sourceOffset.addParentOffset(FileOffset::Offset(prefixBytes));
+    }
+  }
+  return rules;
+}
+
 }  // namespace
 
 std::vector<Rule> RuleParser::ParseStylesheet(std::string_view str, SecurityStats* securityStats) {
-  RuleParserImpl parser(RuleParserImpl::maybeRemoveCharset(str), securityStats);
-  return parser.parseStylesheet();
+  const std::string_view body = RuleParserImpl::maybeRemoveCharset(str);
+  RuleParserImpl parser(body, securityStats);
+  return RebaseAtRuleSourceOffsets(parser.parseStylesheet(), str.size() - body.size());
 }
 
 std::vector<Rule> RuleParser::ParseListOfRules(std::string_view str, SecurityStats* securityStats) {
-  RuleParserImpl parser(RuleParserImpl::maybeRemoveCharset(str), securityStats);
-  return parser.parseListOfRules(ListOfRulesFlags::None);
+  const std::string_view body = RuleParserImpl::maybeRemoveCharset(str);
+  RuleParserImpl parser(body, securityStats);
+  return RebaseAtRuleSourceOffsets(parser.parseListOfRules(ListOfRulesFlags::None),
+                                   str.size() - body.size());
 }
 
 std::optional<Rule> RuleParser::ParseRule(std::string_view str) {

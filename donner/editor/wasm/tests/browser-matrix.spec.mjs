@@ -221,7 +221,7 @@ test("the browser lane walk follows every way a module loads a file beside it", 
   });
   assert.doesNotThrow(() =>
     assertListsLoadedFiles("synthetic_lane", target, {
-      runfilesFrom: ["data = [\"playwright.config.js\"],"],
+      runfilesFrom: ["data = [\"playwright.config.js\", \"test-timing.cjs\"],"],
     })
   );
 });
@@ -372,19 +372,28 @@ function assertBrowserLane(lane) {
 
 test("Bazel owns hermetic browser regression and manual performance lanes", () => {
   const moduleFile = readFileSync(path.join(repositoryRoot, "MODULE.bazel"), "utf8");
+  const packageJson = JSON.parse(readFileSync(path.join(testDirectory, "package.json"), "utf8"));
+  const playwrightVersion = packageJson.devDependencies["@playwright/test"];
+  const browserMetadata = JSON.parse(
+    readFileSync(path.join(testDirectory, `browsers.${playwrightVersion}.json`), "utf8"),
+  );
+  const chromiumVersion = browserMetadata.browsers.find(
+    (browser) => browser.name === "chromium",
+  )?.browserVersion;
+  assert.match(chromiumVersion ?? "", /^\d+\.\d+\.\d+\.\d+$/);
   assert.match(
     moduleFile,
     /bazel_dep\(name = "rules_playwright", version = "0\.5\.3"/,
     "MODULE.bazel must pin the browser repository rule",
   );
-  assert.match(
-    moduleFile,
-    /browsers_json = "\/\/donner\/editor\/wasm\/tests:browsers\.1\.62\.1\.json"/,
+  assert.ok(
+    moduleFile.includes(
+      `browsers_json = "//donner/editor/wasm/tests:browsers.${playwrightVersion}.json"`,
+    ),
     "the browser revisions must come from the Playwright version in package-lock.json",
   );
-  assert.match(
-    moduleFile,
-    /builds\/cft\/151\.0\.7922\.34\/mac-arm64\/chrome-mac-arm64\.zip/,
+  assert.ok(
+    moduleFile.includes(`builds/cft/${chromiumVersion}/mac-arm64/chrome-mac-arm64.zip`),
     "macOS remote tests must use Playwright's Chrome-for-Testing artifact path",
   );
   assert.match(
@@ -396,6 +405,11 @@ test("Bazel owns hermetic browser regression and manual performance lanes", () =
     moduleFile,
     /"playwright-chromium-mac15-arm64": "playwright_chromium_mac_arm64"/,
     "the latest supported rules_playwright macOS archive must be replaced hermetically",
+  );
+  assert.match(
+    moduleFile,
+    /"playwright-chromium-ubuntu24\.04-arm64": "playwright_chromium_linux_arm64"/,
+    "the rules_playwright Linux ARM64 archive must be replaced hermetically",
   );
 
   const buildFilePath = path.join(testDirectory, "BUILD.bazel");

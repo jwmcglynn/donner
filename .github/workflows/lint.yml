@@ -78,8 +78,11 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y clang-format-18
 
-      - name: Cache Bazel
-        uses: actions/cache@v6
+      # Every run restores; only main pushes save (end of job), so pull
+      # requests and branch pushes read main's entry without writing their own.
+      - name: Restore Bazel
+        id: bazel-cache
+        uses: actions/cache/restore@v6
         with:
           path: |
             ~/.cache/bazel
@@ -111,6 +114,14 @@ jobs:
 
       - name: No-Rust-dependency verifier (blocking)
         run: python3 tools/rust_boundary/check_no_rust_dependencies.py --blocking default
+
+      - name: Save main Bazel
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && steps.bazel-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: |
+            ~/.cache/bazel
+          key: ${{ steps.bazel-cache.outputs.cache-primary-key }}
 
   cmake-validate:
     runs-on: ubuntu-24.04

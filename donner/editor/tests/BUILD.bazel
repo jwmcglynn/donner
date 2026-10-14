@@ -66,8 +66,19 @@ donner_cc_library(
     ],
 )
 
-# Invoked by the browser Playwright lane after it captures the standalone Geode canvas.
-# Reuses the one pixelmatch golden helper and its inspectable actual/expected/diff artifacts.
+donner_cc_test(
+    name = "bitmap_golden_compare_tests",
+    srcs = ["BitmapGoldenCompare_tests.cc"],
+    deps = [
+        ":bitmap_golden_compare",
+        "//donner/svg/renderer:renderer_interface",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+# Invoked by the browser Playwright lanes to compare captured PNGs with committed goldens, and the
+# standalone Geode canvas readback with the renderer output it presents. Reuses the one pixelmatch
+# helper and its inspectable actual/expected/diff artifacts.
 cc_binary(
     name = "standalone_geode_browser_png_compare",
     testonly = True,
@@ -85,6 +96,7 @@ donner_cc_library(
     name = "async_test_polling",
     testonly = 1,
     hdrs = ["AsyncTestPolling.h"],
+    deps = ["//donner/base:stall_guard"],
 )
 
 donner_cc_library(
@@ -699,10 +711,12 @@ donner_perf_cc_test(
 _ASYNC_RENDERER_TEST_DEPS = [
     ":async_test_polling",
     ":bitmap_golden_compare",
+    ":frame_presentation_test_access",
     ":render_coordinator_test_access",
     "//donner/base:base_test_utils",
     "//donner/editor:async_renderer",
     "//donner/editor:async_svg_document",
+    "//donner/editor:captured_presentation",
     "//donner/editor:command_queue",
     "//donner/editor:editor_app",
     "//donner/editor:gl_texture_cache",
@@ -856,9 +870,6 @@ donner_cc_fuzzer(
     name = "editor_state_machine_fuzzer",
     srcs = ["EditorStateMachine_fuzzer.cc"],
     corpus = "testdata/editor_state_machine_fuzzer_corpus",
-    # Cold startup constructs and parses a complete headless editor document. ASan on hosted macOS
-    # can spend more than two seconds on the empty input before the mutation loop begins.
-    per_input_timeout_seconds = 10,
     deps = [
         "//donner/editor:attribute_writeback",
         "//donner/editor:editor_app",
@@ -876,12 +887,6 @@ donner_cc_fuzzer(
     name = "inspector_ui_fuzzer",
     srcs = ["InspectorUi_fuzzer.cc"],
     corpus = "testdata/inspector_ui_fuzzer_corpus",
-    # The first fuzzed frame stands up the ImGui atlas and table state; under
-    # ASan on a loaded shared runner that setup alone can cross the default
-    # 2-second per-input alarm (observed repeatedly in CI on the trivial
-    # newline input, while passing locally in every run). A genuine hang still
-    # trips comfortably at 10 seconds.
-    per_input_timeout_seconds = 10,
     deps = [
         "//donner/editor:editor_app",
         "//donner/editor:editor_theme",
@@ -944,6 +949,7 @@ donner_perf_cc_test(
     wallclock_srcs = ["AsyncRendererFilterGroupWallclock_tests.cc"],
     deps = [
         "//donner/base:base_test_utils",
+        "//donner/base:stall_guard",
         "//donner/editor:async_renderer",
         "//donner/editor:async_svg_document",
         "//donner/svg/compositor",

@@ -3,6 +3,9 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <array>
+#include <string>
+
 #include "donner/base/ParseWarningSink.h"
 #include "donner/base/tests/ParseResultTestUtils.h"
 #include "donner/base/xml/XMLDocument.h"
@@ -15,6 +18,7 @@
 #include "donner/svg/SVGTextElement.h"
 #include "donner/svg/SVGTextPathElement.h"
 #include "donner/svg/components/DescriptiveTextComponent.h"
+#include "donner/svg/components/ParsedPayloadResourceBudget.h"
 #include "donner/svg/components/StylesheetComponent.h"
 #include "donner/svg/renderer/RendererUtils.h"
 
@@ -121,6 +125,141 @@ TEST(SVGParser, Style) {
   EXPECT_THAT(SVGParser::ParseSVG(simpleXml, warnings), NoParseError());
 
   EXPECT_THAT(warnings.warnings(), ElementsAre());
+}
+
+TEST(SVGParser, CssImportWarningUsesDocumentSourceOffset) {
+  const std::string source =
+      "<svg xmlns='http://www.w3.org/2000/svg'><style>\n "
+      "@import 'hidden.css'; rect { fill: green; }</style><rect/></svg>";
+  ParseWarningSink warnings;
+  EXPECT_THAT(SVGParser::ParseSVG(source, warnings), NoParseError());
+  ASSERT_THAT(warnings.warnings(), testing::SizeIs(1));
+  EXPECT_THAT(warnings.warnings()[0].severity, testing::Eq(DiagnosticSeverity::Warning));
+  EXPECT_THAT(warnings.warnings()[0].reason,
+              testing::Eq("CSS @import is unsupported; imported stylesheets are not loaded"));
+  EXPECT_THAT(warnings.warnings()[0].range.start.offset, testing::Eq(source.find("@import")));
+  EXPECT_THAT(
+      warnings.warnings()[0],
+      ParseWarningIs(
+          2, 1, testing::Eq("CSS @import is unsupported; imported stylesheets are not loaded")));
+}
+
+TEST(SVGParser, CssImportWarningsMapTextCdataAndSplitKeywords) {
+  const std::array<std::string_view, 4> bodies = {
+      "  @import 'hidden.css'; rect { fill: green; }",
+      "<![CDATA[@import 'hidden.css'; rect { fill: green; }]]>",
+      " \n <![CDATA[@import 'hidden.css'; rect { fill: green; }]]>",
+      "  @<![CDATA[import 'hidden.css'; rect { fill: green; }]]>"};
+  for (const std::string_view body : bodies) {
+    SCOPED_TRACE(body);
+    const std::string source = "<svg xmlns='http://www.w3.org/2000/svg'><style>" +
+                               std::string(body) + "</style><rect/></svg>";
+    ParseWarningSink warnings;
+    EXPECT_THAT(SVGParser::ParseSVG(source, warnings), NoParseError());
+    ASSERT_THAT(warnings.warnings(), testing::SizeIs(1));
+    EXPECT_THAT(warnings.warnings().front().range.start.offset, testing::Eq(source.find('@')));
+    EXPECT_THAT(warnings.warnings().front().range.end.offset, testing::Eq(source.find('@')));
+  }
+}
+
+TEST(SVGParser, CssImportSourceOffsetCountsUtf8Bytes) {
+  const std::string source =
+      "<svg xmlns='http://www.w3.org/2000/svg'><style>/* \xc3\xa9 */ @import 'hidden.css';"
+      "rect { fill: green; }</style><rect/></svg>";
+  ParseWarningSink warnings;
+  EXPECT_THAT(SVGParser::ParseSVG(source, warnings), NoParseError());
+  ASSERT_THAT(warnings.warnings(), testing::SizeIs(1));
+  EXPECT_THAT(warnings.warnings().front().range.start.offset, testing::Eq(source.find("@import")));
+  EXPECT_THAT(
+      warnings.warnings().front(),
+      ParseWarningIs(1, source.find("@import"), testing::HasSubstr("@import is unsupported")));
+}
+
+TEST(SVGParser, SourceLessCssImportWarningKeepsCssLocalOffset) {
+  xml::XMLDocument xmlDocument;
+  auto svg = xml::XMLNode::CreateElementNode(xmlDocument, "svg");
+  svg.setAttribute("xmlns", "http://www.w3.org/2000/svg");
+  xmlDocument.root().appendChild(svg);
+  auto style = xml::XMLNode::CreateElementNode(xmlDocument, "style");
+  svg.appendChild(style);
+  auto data = xml::XMLNode::CreateDataNode(xmlDocument, "  @import 'hidden.css';");
+  style.appendChild(data);
+  ParseWarningSink warnings;
+  EXPECT_THAT(SVGParser::ParseXMLDocument(std::move(xmlDocument), warnings), NoParseError());
+  ASSERT_THAT(warnings.warnings(), testing::SizeIs(1));
+  EXPECT_THAT(warnings.warnings().front().range.start.offset, testing::Eq(2u));
+  EXPECT_THAT(warnings.warnings().front().range.start.lineInfo, testing::Eq(std::nullopt));
+}
+
+TEST(SVGParser, CssImportAfterUnmappedChunkBoundaryKeepsCssLocalOffset) {
+  // The entity makes the second chunk's source length differ from its decoded value, so only the
+  // CDATA chunk is mapped. The import starts exactly where that mapped chunk ends, which is not
+  // the end of the stylesheet, so it must not be mapped to the end of the CDATA content.
+  const std::string source =
+      "<svg xmlns='http://www.w3.org/2000/svg'><style><![CDATA[/*x*/]]>@import 'hidden.css'; "
+      "/* &amp; */</style><rect/></svg>";
+  ParseWarningSink warnings;
+  EXPECT_THAT(SVGParser::ParseSVG(source, warnings), NoParseError());
+  ASSERT_THAT(warnings.warnings(), testing::SizeIs(1));
+  EXPECT_THAT(warnings.warnings().front().range.start.offset,
+              testing::Eq(std::string_view("/*x*/").size()));
+  EXPECT_THAT(warnings.warnings().front().range.start.lineInfo, testing::Eq(std::nullopt));
+}
+
+TEST(SVGParser, StylesheetPointMappingUsesSegmentEndOnlyAtStylesheetEnd) {
+  components::StylesheetSourceMap trailingUnmapped;
+  trailingUnmapped.addSegment(0, 3, FileOffset::Offset(100));
+  trailingUnmapped.setCssLength(10);
+  EXPECT_THAT(trailingUnmapped.mapPointToDocumentSource(FileOffset::Offset(3)),
+              testing::Eq(std::nullopt));
+
+  components::StylesheetSourceMap fullyMapped;
+  fullyMapped.addSegment(0, 3, FileOffset::Offset(100));
+  fullyMapped.setCssLength(3);
+  EXPECT_THAT(fullyMapped.mapPointToDocumentSource(FileOffset::Offset(3)),
+              testing::Eq(FileOffset::Offset(103)));
+}
+
+TEST(SVGParser, CssImportWarningRefusalFlagsSurviveSourceMapping) {
+  std::string source = "<svg xmlns='http://www.w3.org/2000/svg'><style>";
+  for (std::size_t i = 0; i <= ParseWarningSink::kMaximumWarnings; ++i) {
+    source += "@import 'hidden.css';";
+  }
+  source += "rect { fill: green; }</style><rect/></svg>";
+  ParseWarningSink warnings;
+  EXPECT_THAT(SVGParser::ParseSVG(source, warnings), NoParseError());
+  EXPECT_THAT(warnings.warnings(), testing::SizeIs(ParseWarningSink::kMaximumWarnings));
+  EXPECT_THAT(warnings.resourceLimitExceeded(), testing::IsTrue());
+  EXPECT_LE(warnings.warningBytes(), ParseWarningSink::kMaximumWarningBytes);
+}
+
+TEST(SVGParser, CssImportDiagnosticsDoNotBypassStylesheetPayloadAdmission) {
+  constexpr std::string_view source =
+      "<svg xmlns='http://www.w3.org/2000/svg'><style>"
+      "@import 'hidden.css'; rect { fill: green; }</style></svg>";
+  SVGParser::Options options;
+  options.maximumParsedPayloadSize = 4096;
+  ParseWarningSink warnings;
+  auto result = SVGParser::ParseSVG(source, warnings, options);
+  ASSERT_THAT(result, NoParseError());
+  const auto* budget =
+      result.result().registry().ctx().find<components::ParsedPayloadResourceBudget>();
+  ASSERT_THAT(budget, testing::NotNull());
+  EXPECT_THAT(budget->securityStats().rejected, testing::IsTrue());
+  EXPECT_THAT(warnings.warnings(),
+              testing::Contains(testing::Field(&ParseDiagnostic::reason,
+                                               testing::HasSubstr("parsed-payload budget"))));
+  EXPECT_THAT(warnings.resourceLimitExceeded(), testing::IsFalse());
+}
+
+TEST(SVGParser, StylesheetPointMappingDoesNotChangeExistingRangeEndSemantics) {
+  components::StylesheetSourceMap map;
+  map.addSegment(0, 3, FileOffset::Offset(100));
+  map.addSegment(3, 10, FileOffset::Offset(300));
+  EXPECT_THAT(map.mapPointToDocumentSource(FileOffset::Offset(3)),
+              testing::Eq(FileOffset::Offset(300)));
+  EXPECT_THAT(map.mapToDocumentSource(SourceRange{FileOffset::Offset(0), FileOffset::Offset(3)}),
+              testing::Eq(SourceRange{FileOffset::Offset(100), FileOffset::Offset(103)}));
 }
 
 TEST(SVGParser, StyleConcatenatesTextAndCDataButRejectsElementChildren) {
@@ -407,6 +546,15 @@ TEST(SVGParser, RootElementNotSvgFails) {
   ParseWarningSink warnings;
   EXPECT_THAT(SVGParser::ParseSVG(R"(<foo xmlns="http://www.w3.org/2000/svg"/>)", warnings),
               ParseErrorIs("Unexpected element <foo> at root, first element must be <svg>"));
+}
+
+TEST(SVGParser, UnsupportedDeclaredEncodingIsReported) {
+  ParseWarningSink warnings;
+  EXPECT_THAT(
+      SVGParser::ParseSVG("<?xml version='1.0' encoding='Windows-1251'?>"
+                          "<svg xmlns='http://www.w3.org/2000/svg'><text>\xCF\xF0</text></svg>",
+                          warnings),
+      ParseErrorIs(testing::HasSubstr("Unsupported XML encoding")));
 }
 
 TEST(SVGParser, UnknownElementInSvgNamespace) {

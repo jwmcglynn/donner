@@ -244,6 +244,21 @@ build:macos --features=oso_prefix_is_pwd
 # std::filesystem and std::format floating-point formatting.
 build:macos --macos_minimum_os=13.3
 
+# macOS CI lanes that share one remote cache. Every macOS CI job passes
+# --config=ci-macos (through BAZEL_MACOS_BUILD_FLAGS in main.yml) so that the
+# GitHub-hosted and the self-hosted macOS runners compute identical action
+# keys. Without a fixed PATH, Bazel copies the client's PATH into every action
+# environment, and it differs per runner (runner home directories, image tool
+# paths and the Bazelisk download directory, which Bazelisk prepends), so no
+# compile action matched across runners. The value keeps every directory either
+# lane relied on before this was pinned. The selected Xcode is pinned
+# separately, in tools/ci_macos_xcode.txt, because its version and build are
+# part of every Apple toolchain action key. Runner-only settings (remote cache
+# endpoint, timeouts, --jobs) stay out of this config because they do not
+# affect action keys. //tools:macos_cache_key_parity_tests enforces this.
+build:ci-macos --action_env=PATH=/opt/homebrew/opt/llvm@19/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
+build:ci-macos --host_action_env=PATH=/opt/homebrew/opt/llvm@19/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
+
 # apple_support's clang wrapper expects DEVELOPER_DIR. The local Darwin
 # sandbox sets it implicitly; remote execution does not. SDKROOT must NOT be
 # pinned here: the apple toolchain supplies its own (versioned) SDKROOT per
@@ -417,7 +432,7 @@ build:tsan --strip=never
 build:tsan --test_env=TSAN_OPTIONS=halt_on_error=1:second_deadlock_stack=1
 
 # Long-budget fuzzing. Raises the `{fuzzer}_soak` targets' libFuzzer time
-# budget above the short PR-gate default. Used by the nightly Fuzz workflow,
+# budget above the short local default. Used by the nightly Fuzz workflow,
 # which pairs it with --config=asan-fuzzer so a discovered input is diagnosable.
 common:fuzz-soak --//build_defs:fuzz_soak=true
 
@@ -487,16 +502,20 @@ build:ci --skip_incompatible_explicit_targets
 # use `perf`. Filtering both tags protects affected-target lists and full `//...`
 # fallbacks even when a runner bazelrc changes wildcard expansion or config
 # precedence. See CLAUDE.md ("wall-clock budgets move to nightly perf targets").
-test:ci --test_tag_filters=-manual,-perf,-ci-remote-gpu
+# `fuzz_soak` marks the time-budgeted `{fuzzer}_soak` mutation targets, which run
+# only in the Fuzz workflow; the `{fuzzer}` corpus replay stays on the PR gate.
+test:ci --test_tag_filters=-manual,-perf,-ci-remote-gpu,-fuzz_soak
 
 # Allow `bazel run` on sharded test targets (sharding only applies to `bazel test`).
 run --test_sharding_strategy=disabled
 
-# GitHub-hosted CI lanes may write a BuildBuddy remote-cache fragment here via
-# the .github/actions/buildbuddy-cache composite action when the
-# BUILDBUDDY_API_KEY repo secret is set. try-import is a silent no-op when the
-# file is absent (the default, and on every self-hosted lane, which never runs
-# that action), so builds are byte-for-byte unchanged unless the secret exists.
+# CI lanes on the BuildBuddy remote cache (the GitHub-hosted lanes and the
+# self-hosted macOS lane) may write a remote-cache fragment here via the
+# .github/actions/buildbuddy-cache composite action when that run receives a
+# BuildBuddy key (see "Continuous integration remote cache" in docs/building.md).
+# try-import is a silent no-op when the file is absent (the default, and on the
+# self-hosted Linux lane, which never runs that action), so builds are
+# byte-for-byte unchanged unless a key is configured.
 try-import %workspace%/.buildbuddy.bazelrc
 
 # Optional per-developer overrides, such as remote-execution endpoints and TLS

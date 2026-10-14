@@ -310,22 +310,6 @@ bool UsesNoTraverseChildren(ElementType type) {
   }
 }
 
-bool IsSvgProjectionContext(EntityHandle handle) {
-  for (std::size_t depth = 0; handle && depth < 4096; ++depth) {
-    const auto node = xml::XMLNode::TryCast(handle);
-    if (node && node->type() == xml::XMLNode::Type::Element &&
-        node->getNamespaceUri(node->tagName().namespacePrefix) != "http://www.w3.org/2000/svg") {
-      return false;
-    }
-    const auto* tree = handle.try_get<donner::components::TreeComponent>();
-    if (!tree || tree->parent() == entt::null) {
-      return true;
-    }
-    handle = EntityHandle(*handle.registry(), tree->parent());
-  }
-  return false;
-}
-
 bool IsNamespaceDeclaration(const xml::XMLQualifiedNameRef& name) {
   return name.namespacePrefix == "xmlns" || name == xml::XMLQualifiedNameRef("xmlns");
 }
@@ -337,9 +321,7 @@ bool IsAnimationElementType(ElementType type) {
 }
 
 void EnsureProjectedAnimationComponents(EntityHandle handle, ElementType type) {
-  if (type != ElementType::Animate && type != ElementType::AnimateTransform &&
-      type != ElementType::AnimateMotion && type != ElementType::Set &&
-      type != ElementType::MPath) {
+  if (!IsAnimationElementType(type)) {
     return;
   }
   handle
@@ -365,28 +347,45 @@ void EnsureProjectedAnimationComponents(EntityHandle handle, ElementType type) {
   }
 }
 
-void EnsureProjectedElementComponents(EntityHandle handle,
-                                      const xml::XMLQualifiedNameRef& tagName) {
+ElementType ResolveProjectedElementType(EntityHandle handle, const xml::XMLNode& node) {
+  const xml::XMLQualifiedName tagName(node.tagName());
+  const bool isSvgNamespace =
+      node.getNamespaceUri(tagName.namespacePrefix) == "http://www.w3.org/2000/svg";
   const ElementType projectedType =
-      IsSvgProjectionContext(handle) ? ElementTypeForTag(tagName) : ElementType::Unknown;
-  ElementType type = projectedType;
-  if (!handle.all_of<components::ElementTypeComponent>()) {
-    handle.emplace<components::ElementTypeComponent>(type);
-  } else {
-    type = handle.get<components::ElementTypeComponent>().type();
-    if ((type == ElementType::Unknown && projectedType != ElementType::Unknown) ||
-        (IsAnimationElementType(type) && type != projectedType)) {
-      type = projectedType;
-      handle.emplace_or_replace<components::ElementTypeComponent>(type);
-      if (type == ElementType::Unknown) {
-        handle.remove<components::AnimationStateComponent>();
-      }
-    }
+      isSvgNamespace ? ElementTypeForTag(tagName) : ElementType::Unknown;
+  auto* current = handle.try_get<components::ElementTypeComponent>();
+  if (current && current->parsedType() != ElementType::Unknown) {
+    current->setInSvgNamespace(isSvgNamespace);
+    return current->parsedType();
   }
+  if (current && projectedType != ElementType::Unknown) {
+    handle.remove<components::RenderingBehaviorComponent>();
+  }
+  auto& type = handle.emplace_or_replace<components::ElementTypeComponent>(projectedType);
+  type.setInSvgNamespace(isSvgNamespace);
+  return projectedType;
+}
+
+void UpdateNamespaceMembership(const xml::XMLNode& node) {
+  if (node.type() != xml::XMLNode::Type::Element) {
+    return;
+  }
+  if (auto* type = node.entityHandle().try_get<components::ElementTypeComponent>()) {
+    const xml::XMLQualifiedName name(node.tagName());
+    type->setInSvgNamespace(node.getNamespaceUri(name.namespacePrefix) ==
+                            "http://www.w3.org/2000/svg");
+  }
+  for (auto child = node.firstChild(); child; child = child->nextSibling()) {
+    UpdateNamespaceMembership(*child);
+  }
+}
+
+void EnsureProjectedElementComponents(EntityHandle handle, const xml::XMLNode& node) {
+  const ElementType type = ResolveProjectedElementType(handle, node);
 
   EnsureProjectedAnimationComponents(handle, type);
   [[maybe_unused]] auto& transform = handle.get_or_emplace<components::TransformComponent>();
-  if (type == ElementType::Defs) {
+  if (type == ElementType::Defs || type == ElementType::Unknown) {
     auto& behavior = handle.get_or_emplace<components::RenderingBehaviorComponent>(
         components::RenderingBehavior::Nonrenderable);
     behavior.behavior = components::RenderingBehavior::Nonrenderable;
@@ -730,6 +729,7 @@ std::optional<ParseDiagnostic> ProjectStyleContents(EntityHandle handle, const x
       sourceMap.addSegment(0, combined.size(), valueLocation->start);
     }
   }
+  sourceMap.setCssLength(combined.size());
 
   components::StylesheetComponent projected;
   projected.type = stylesheet->type;
@@ -1771,6 +1771,11 @@ std::optional<ParseDiagnostic> SVGDocument::applyXMLMutation(const xml::XMLMutat
 
 std::optional<ParseDiagnostic> SVGDocument::applyAttributeXMLMutation(
     const xml::XMLMutation& mutation, EntityHandle handle) {
+  if (IsNamespaceDeclaration(mutation.attributeName)) {
+    UpdateNamespaceMembership(mutation.node);
+    MarkSubtreeReplaced(handle);
+    return projectXMLSubtree(mutation.node);
+  }
   SVGElement element(handle);
   if (mutation.kind == xml::XMLMutation::Kind::AttributeSet) {
     if (!mutation.value.has_value()) {
@@ -1787,9 +1792,6 @@ std::optional<ParseDiagnostic> SVGDocument::applyAttributeXMLMutation(
       diagnostic->range = MutationRange(source(), mutation);
       return diagnostic;
     }
-    if (IsNamespaceDeclaration(mutation.attributeName)) {
-      return projectXMLSubtree(mutation.node);
-    }
     return std::nullopt;
   }
 
@@ -1799,9 +1801,6 @@ std::optional<ParseDiagnostic> SVGDocument::applyAttributeXMLMutation(
     return diagnostic;
   }
   element.removeAttributeFromXMLMutation(mutation.attributeName);
-  if (IsNamespaceDeclaration(mutation.attributeName)) {
-    return projectXMLSubtree(mutation.node);
-  }
   return std::nullopt;
 }
 
@@ -1811,7 +1810,7 @@ std::optional<ParseDiagnostic> SVGDocument::projectXMLSubtree(const xml::XMLNode
   }
 
   const EntityHandle handle = node.entityHandle();
-  EnsureProjectedElementComponents(handle, node.tagName());
+  EnsureProjectedElementComponents(handle, node);
 
   if (std::optional<ParseDiagnostic> diagnostic = ReserveProjectedAttributes(handle, node)) {
     return diagnostic;

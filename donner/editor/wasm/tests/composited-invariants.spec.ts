@@ -14,6 +14,7 @@ import {
 } from "./composited-probe";
 import { burstZoomStorm, panStream, pinchStream } from "./gesture-streams";
 import { expectSampleThumbnailsToSettle } from "./sample-thumbnail-settle";
+import { scaledMs } from "./test-timing";
 
 /**
  * Composited-output invariants for the editor's single-canvas presentation.
@@ -50,12 +51,6 @@ import { expectSampleThumbnailsToSettle } from "./sample-thumbnail-settle";
  * are read from where the document's own chromatic pixels are, not from an
  * element box or a clip inset.
  */
-
-// Shared CI runners execute this suite several times slower than local
-// development hardware. Scale acceptance polls so the invariants are verified
-// at the same strength without flaking on runner speed.
-const kCiTimeScale = process.env.CI ? 4 : 1;
-const scaledMs = (ms: number) => ms * kCiTimeScale;
 
 const kBaseUrl = process.env.DONNER_WASM_BASE_URL || "http://127.0.0.1:8000";
 

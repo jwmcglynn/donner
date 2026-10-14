@@ -154,9 +154,9 @@ so the brackets survive the Markdown-to-HTML conversion.
 
 ### Build and verify locally — there is NO PR-time doc-render gate
 
-CI (`.github/workflows/deploy_docs.yaml`) builds and deploys docs only on push to `main`, pinning
-doxygen 1.15.0 + graphviz. A broken page merges silently and breaks the live site, so verify
-locally before pushing:
+CI (`.github/workflows/deploy_docs.yaml`) builds docs only on push to `main`, pinning
+doxygen 1.15.0 + graphviz, and deploys a retained build only on a manual dispatch. A broken
+page merges silently and can be deployed later, so verify locally before pushing:
 
 ```sh
 tools/doxygen.sh          # quick render → generated-doxygen/html/index.html

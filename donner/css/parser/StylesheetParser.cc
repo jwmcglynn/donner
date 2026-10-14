@@ -405,6 +405,14 @@ Stylesheet StylesheetParser::Parse(std::string_view str, ParseWarningSink& warni
       continue;
     }
     if (AtRule* atRule = std::get_if<AtRule>(&rule.value)) {
+      if (atRule->name.equalsLowercase("import")) {
+        warningSink.add([&] {
+          return ParseDiagnostic::Warning(
+              "CSS @import is unsupported; imported stylesheets are not loaded",
+              atRule->sourceOffset);
+        });
+        continue;
+      }
       if (auto fontFace = ParseFontFaceRule(*atRule, securityStats)) {
         fontFaces.push_back(std::move(*fontFace));
         ++securityStats.rules;
