@@ -26,15 +26,22 @@ Donner uses `toolchains_llvm` from the Bazel Central Registry. To update it, bum
 `MODULE.bazel`:
 
 ```py
-bazel_dep(name = "toolchains_llvm", version = "1.8.0", dev_dependency = True)
+bazel_dep(name = "toolchains_llvm", version = "...", dev_dependency = True)
 ```
+
+A `single_version_override` after it applies
+`third_party/patches/toolchains_llvm-libcxx-compile-headers.patch` to whichever release the
+`bazel_dep` resolves to. It sets no version, so a version bump keeps the patch. If a new release no
+longer accepts the patch, the bump fails while fetching the module; refresh the patch against that
+release. Only Bazel releases before 9 read the filegroup it changes.
 
 The LLVM release itself is selected by `llvm_version` in each `llvm.toolchain(...)` call that
 follows: the host toolchain and the two Linux exec-platform toolchains. Keep all three on the same
 release.
 
-To test changes to `toolchains_llvm` locally, clone it next to the `donner` directory and uncomment
-the `local_path_override` block below the `bazel_dep` in `MODULE.bazel`:
+To test changes to `toolchains_llvm` locally, clone it next to the `donner` directory, comment out
+the `single_version_override` (a module takes only one override, and the local copy does not get the
+patch), and uncomment the `local_path_override` block below it in `MODULE.bazel`:
 
 ```py
 local_path_override(

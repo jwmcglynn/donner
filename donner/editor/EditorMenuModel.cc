@@ -69,12 +69,19 @@ constexpr std::array kEditItems = {
     Item("Deselect All", "Cmd+Shift+A", MenuBarCommand::DeselectAll),
 };
 
+constexpr std::array kSourceFontSizeItems = {
+    Item("Increase Font Size", "Cmd+=", MenuBarCommand::IncreaseSourceFontSize),
+    Item("Decrease Font Size", "Cmd+-", MenuBarCommand::DecreaseSourceFontSize),
+    Item("Reset Font Size (100%)", "Cmd+0", MenuBarCommand::ResetSourceFontSize),
+};
+
 constexpr std::array kViewItems = {
     Item("Source Focus Mode", "Cmd+Enter", MenuBarCommand::ToggleSourceFocusMode),
     Separator(),
     Item("Zoom In", "Cmd+=", MenuBarCommand::ZoomIn),
     Item("Zoom Out", "Cmd+-", MenuBarCommand::ZoomOut),
     Item("Actual Size", "Cmd+0", MenuBarCommand::ActualSize),
+    Submenu("Source Font Size", kSourceFontSizeItems),
     Separator(),
     Item("Compositor Debug Info", "", MenuBarCommand::ToggleCompositorDebugPanel),
     Item("Compositor Tile Overlay", "", MenuBarCommand::ToggleCompositorTileOverlay),
@@ -205,6 +212,18 @@ bool CommandChecked(MenuBarCommand command, const MenuBarState& state) {
   return false;
 }
 
+bool ShortcutEnabledForFocus(MenuBarCommand command, bool sourcePaneFocused) {
+  switch (command) {
+    case MenuBarCommand::ZoomIn:
+    case MenuBarCommand::ZoomOut:
+    case MenuBarCommand::ActualSize: return !sourcePaneFocused;
+    case MenuBarCommand::IncreaseSourceFontSize:
+    case MenuBarCommand::DecreaseSourceFontSize:
+    case MenuBarCommand::ResetSourceFontSize: return sourcePaneFocused;
+    default: return true;
+  }
+}
+
 }  // namespace
 
 std::span<const EditorMenu> EditorMenuModel() {
@@ -235,13 +254,17 @@ EditorMenuItemPresentation PresentEditorMenuItem(const EditorMenuNode& item,
   }
   result.enabled = CommandEnabled(item.command, state);
   result.checked = CommandChecked(item.command, state);
+  result.shortcutEnabled = ShortcutEnabledForFocus(item.command, state.sourcePaneFocused);
   return result;
 }
 
 bool NativeMenuActivationAllowed(const EditorMenuNode& item, const MenuBarState& state,
                                  bool keyEquivalent) {
-  return !(keyEquivalent && SuppressNativeMenuShortcuts(state)) &&
-         PresentEditorMenuItem(item, state, EditorMenuSurface::Native).enabled;
+  const EditorMenuItemPresentation presentation =
+      PresentEditorMenuItem(item, state, EditorMenuSurface::Native);
+  return presentation.enabled &&
+         (!keyEquivalent || (!SuppressNativeMenuShortcuts(state) && presentation.shortcutEnabled &&
+                             !item.shortcut.empty()));
 }
 
 }  // namespace donner::editor

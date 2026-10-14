@@ -15,8 +15,8 @@ shipped over BCR:
 - bazel_clang_tidy: clang-tidy aspect           (--config=clang-tidy)
 - sysroot_linux_*: Hermetic Debian Bullseye sysroots for Bazel remote execution
                    (--config=re). Wired into the `llvm_toolchain` via its
-                   `sysroot` parameter so RE workers without glibc headers
-                   can still compile.
+                   `sysroot`, `extra_compiler_files` and `extra_linker_files`
+                   tags so RE workers without glibc headers can still compile.
 
 When / how to add a new non-BCR dep:
   1. If the dep is load-bearing for the default tiny-skia + text-base build,
@@ -147,27 +147,74 @@ HBEOF""",
     # (URL + "/" + Sha256Sum; see Chromium's build/linux/sysroot_scripts/
     # install-sysroot.py). Bump by pulling the latest sysroots.json from
     # chromium/src and updating both the sha256 + URL fragment.
-    # Exclude non-toolchain subtrees (docs, locale data, systemd units, etc.)
-    # so the filegroup is both smaller and skips files whose names contain
-    # characters Bazel rejects as target names — `lib/systemd/system/` ships
-    # escape-sequence filenames like `system-systemd\x2dcryptsetup.slice`
-    # that trip `glob()`.
+    #
+    # The sysroot holds about 18,000 files, most of them for packages the build
+    # never touches (Qt, GTK, Python, Debian package metadata). A remote
+    # executor stages every declared input file for every action, so MODULE.bazel
+    # gives each action kind only the files it reads:
+    # - `sysroot` only names the --sysroot directory and declares no files.
+    # - `compiler_files` holds the headers compiles include, plus the GCC
+    #   installation files clang inspects. An #include of a header outside it
+    #   fails with "file not found"; add its directory here rather than
+    #   widening the glob to `**`. A __has_include() test or a compiler driver
+    #   check for a file outside it fails silently instead and can change the
+    #   output, so compare objects built before and after narrowing it.
+    # - `linker_files` holds the C runtime objects and the libraries in the
+    #   directories the linker searches.
     _SYSROOT_BUILD_FILE = """\
 filegroup(
     name = "sysroot",
-    srcs = glob(
-        include = ["**"],
-        exclude = [
-            "etc/**",
-            "lib/systemd/**",
-            "usr/lib/systemd/**",
-            "usr/share/doc/**",
-            "usr/share/info/**",
-            "usr/share/locale/**",
-            "usr/share/man/**",
-            "var/**",
-            "**/* *",
+    srcs = [],
+    visibility = ["//visibility:public"],
+)
+
+filegroup(
+    name = "compiler_files",
+    srcs = glob([
+        # The headers directly in usr/include, mostly the C library's, and the
+        # C library and Linux kernel interface header directories.
+        "usr/include/*",
+        "usr/include/*-linux-gnu/*",
+        "usr/include/*-linux-gnu/asm/**",
+        "usr/include/*-linux-gnu/bits/**",
+        "usr/include/*-linux-gnu/gnu/**",
+        "usr/include/*-linux-gnu/sys/**",
+        "usr/include/arpa/**",
+        "usr/include/asm-generic/**",
+        "usr/include/linux/**",
+        "usr/include/net/**",
+        "usr/include/netinet/**",
+        "usr/include/netpacket/**",
+        "usr/include/rpc/**",
+        # X11 and OpenGL, for glfw's X11 backend.
+        "usr/include/GL/**",
+        "usr/include/KHR/**",
+        "usr/include/X11/**",
+        # Clang recognizes the GCC installation by its crtbegin.o and derives
+        # code generation defaults from its version, such as outline atomics
+        # on AArch64. Without these files compiles still succeed but emit
+        # different code.
+        "usr/lib/gcc/*/*/*",
+    ]),
+    visibility = ["//visibility:public"],
+)
+
+filegroup(
+    name = "linker_files",
+    srcs = glob([
+        # Libraries and C runtime objects in the library search directories.
+        "lib/*-linux-gnu/*",
+        "usr/lib/*-linux-gnu/*",
+        # GCC's runtime objects and support libraries.
+        "usr/lib/gcc/*/*/*",
+    ]) + glob(
+        # The dynamic loader named by the C library's linker script: lib/ on
+        # aarch64, lib64/ on x86_64.
+        [
+            "lib/ld-linux*",
+            "lib64/ld-linux*",
         ],
+        allow_empty = True,
     ),
     visibility = ["//visibility:public"],
 )
