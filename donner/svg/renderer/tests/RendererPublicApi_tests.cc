@@ -1890,6 +1890,175 @@ TEST(RendererPublicApiTest, ForeignNamespaceWrapperRendersNothing) {
   EXPECT_NE(groupSnapshot.pixels, removedSnapshot.pixels);
 }
 
+SVGDocument RasterFeImageDocument(std::string_view hostTransform) {
+  return ParseDocument(
+      "<svg xmlns='http://www.w3.org/2000/svg' width='16' height='10' viewBox='0 0 16 10'>"
+      "<defs><filter id='f' filterUnits='userSpaceOnUse' primitiveUnits='userSpaceOnUse'"
+      " x='0' y='0' width='12' height='8' color-interpolation-filters='sRGB'>"
+      "<feImage "
+      "href='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAQAAAACCAYAAAB/"
+      "qH1jAAAADklEQVR4nGNg+I8G0QUABykP8RHZtOEAAAAASUVORK5CYII='"
+      " x='2' y='2' width='4' height='2' preserveAspectRatio='none'"
+      " image-rendering='crisp-edges'/></filter></defs>"
+      "<rect width='12' height='8' fill='red' filter='url(#f)' transform='" +
+      std::string(hostTransform) + "'/></svg>");
+}
+
+TEST(RendererPublicApiTest, RasterFeImageUprightMatchesLiteralPlacement) {
+  if (!ActiveRendererSupportsFeature(RendererBackendFeature::FilterEffects)) {
+    GTEST_SKIP() << "Renderer does not support filter effects";
+  }
+  SVGDocument document = RasterFeImageDocument("matrix(1 0 0 1 0 0)");
+  SVGDocument expected = ParseDocument(R"svg(
+      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="10" viewBox="0 0 16 10">
+        <rect x="2" y="2" width="4" height="2" fill="#00ff00"/>
+      </svg>
+    )svg");
+  Renderer renderer;
+  renderer.draw(document);
+  const RendererBitmap actualBitmap = NormalizeSnapshot(renderer.takeSnapshot());
+  Renderer expectedRenderer;
+  expectedRenderer.draw(expected);
+  const RendererBitmap expectedBitmap = NormalizeSnapshot(expectedRenderer.takeSnapshot());
+  ASSERT_THAT(actualBitmap.empty(), testing::IsFalse());
+  ASSERT_THAT(expectedBitmap.empty(), testing::IsFalse());
+  ASSERT_THAT(actualBitmap.dimensions, testing::Eq(Vector2i(16, 10)));
+  ASSERT_THAT(expectedBitmap.dimensions, testing::Eq(Vector2i(16, 10)));
+  EXPECT_THAT(PixelAt(expectedBitmap, 3, 2), test::Rgba(0, 255, 0, 255));
+  EXPECT_THAT(PixelAt(expectedBitmap, 6, 2), test::Rgba(0, 0, 0, 0));
+  editor::tests::CompareBitmapToBitmap(actualBitmap, expectedBitmap, "raster_feimage_upright",
+                                       editor::tests::PixelmatchIdentityParams());
+  EXPECT_THAT(PixelAt(actualBitmap, 3, 2), test::Rgba(0, 255, 0, 255));
+  EXPECT_THAT(PixelAt(actualBitmap, 6, 2), test::Rgba(0, 0, 0, 0));
+}
+
+TEST(RendererPublicApiTest, RasterFeImageTranslatedMatchesLiteralPlacement) {
+  if (!ActiveRendererSupportsFeature(RendererBackendFeature::FilterEffects)) {
+    GTEST_SKIP() << "Renderer does not support filter effects";
+  }
+  SVGDocument document = RasterFeImageDocument("translate(4 1)");
+  SVGDocument expected = ParseDocument(R"svg(
+      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="10" viewBox="0 0 16 10">
+        <rect x="6" y="3" width="4" height="2" fill="#00ff00"/>
+      </svg>
+    )svg");
+  Renderer renderer;
+  renderer.draw(document);
+  const RendererBitmap actualBitmap = NormalizeSnapshot(renderer.takeSnapshot());
+  Renderer expectedRenderer;
+  expectedRenderer.draw(expected);
+  const RendererBitmap expectedBitmap = NormalizeSnapshot(expectedRenderer.takeSnapshot());
+  ASSERT_THAT(actualBitmap.empty(), testing::IsFalse());
+  ASSERT_THAT(expectedBitmap.empty(), testing::IsFalse());
+  ASSERT_THAT(actualBitmap.dimensions, testing::Eq(Vector2i(16, 10)));
+  ASSERT_THAT(expectedBitmap.dimensions, testing::Eq(Vector2i(16, 10)));
+  EXPECT_THAT(PixelAt(expectedBitmap, 7, 3), test::Rgba(0, 255, 0, 255));
+  EXPECT_THAT(PixelAt(expectedBitmap, 3, 2), test::Rgba(0, 0, 0, 0));
+  editor::tests::CompareBitmapToBitmap(actualBitmap, expectedBitmap, "raster_feimage_translated",
+                                       editor::tests::PixelmatchIdentityParams());
+  EXPECT_THAT(PixelAt(actualBitmap, 7, 3), test::Rgba(0, 255, 0, 255));
+  EXPECT_THAT(PixelAt(actualBitmap, 3, 2), test::Rgba(0, 0, 0, 0));
+}
+
+TEST(RendererPublicApiTest, RasterFeImageScaledMatchesLiteralPlacement) {
+  if (!ActiveRendererSupportsFeature(RendererBackendFeature::FilterEffects)) {
+    GTEST_SKIP() << "Renderer does not support filter effects";
+  }
+  SVGDocument document = RasterFeImageDocument("scale(2 1)");
+  SVGDocument expected = ParseDocument(R"svg(
+      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="10" viewBox="0 0 16 10">
+        <rect x="4" y="2" width="8" height="2" fill="#00ff00"/>
+      </svg>
+    )svg");
+  Renderer renderer;
+  renderer.draw(document);
+  const RendererBitmap actualBitmap = NormalizeSnapshot(renderer.takeSnapshot());
+  Renderer expectedRenderer;
+  expectedRenderer.draw(expected);
+  const RendererBitmap expectedBitmap = NormalizeSnapshot(expectedRenderer.takeSnapshot());
+  ASSERT_THAT(actualBitmap.empty(), testing::IsFalse());
+  ASSERT_THAT(expectedBitmap.empty(), testing::IsFalse());
+  ASSERT_THAT(actualBitmap.dimensions, testing::Eq(Vector2i(16, 10)));
+  ASSERT_THAT(expectedBitmap.dimensions, testing::Eq(Vector2i(16, 10)));
+  EXPECT_THAT(PixelAt(expectedBitmap, 9, 2), test::Rgba(0, 255, 0, 255));
+  EXPECT_THAT(PixelAt(expectedBitmap, 3, 2), test::Rgba(0, 0, 0, 0));
+  editor::tests::CompareBitmapToBitmap(actualBitmap, expectedBitmap, "raster_feimage_scaled",
+                                       editor::tests::PixelmatchIdentityParams());
+  EXPECT_THAT(PixelAt(actualBitmap, 9, 2), test::Rgba(0, 255, 0, 255));
+  EXPECT_THAT(PixelAt(actualBitmap, 3, 2), test::Rgba(0, 0, 0, 0));
+}
+
+TEST(RendererPublicApiTest, RasterFeImageQuarterTurnMatchesLiteralPlacement) {
+  if (!ActiveRendererSupportsFeature(RendererBackendFeature::FilterEffects)) {
+    GTEST_SKIP() << "Renderer does not support filter effects";
+  }
+  SVGDocument document = RasterFeImageDocument("matrix(0 1 -1 0 12 0)");
+  SVGDocument expected = ParseDocument(R"svg(
+      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="10" viewBox="0 0 16 10">
+        <rect x="8" y="2" width="2" height="4" fill="#00ff00"/>
+      </svg>
+    )svg");
+  Renderer renderer;
+  renderer.draw(document);
+  const RendererBitmap actualBitmap = NormalizeSnapshot(renderer.takeSnapshot());
+  Renderer expectedRenderer;
+  expectedRenderer.draw(expected);
+  const RendererBitmap expectedBitmap = NormalizeSnapshot(expectedRenderer.takeSnapshot());
+  ASSERT_THAT(actualBitmap.empty(), testing::IsFalse());
+  ASSERT_THAT(expectedBitmap.empty(), testing::IsFalse());
+  ASSERT_THAT(actualBitmap.dimensions, testing::Eq(Vector2i(16, 10)));
+  ASSERT_THAT(expectedBitmap.dimensions, testing::Eq(Vector2i(16, 10)));
+  EXPECT_THAT(PixelAt(expectedBitmap, 9, 3), test::Rgba(0, 255, 0, 255));
+  EXPECT_THAT(PixelAt(expectedBitmap, 4, 2), test::Rgba(0, 0, 0, 0));
+  editor::tests::CompareBitmapToBitmap(actualBitmap, expectedBitmap, "raster_feimage_quarterturn",
+                                       editor::tests::PixelmatchIdentityParams());
+  EXPECT_THAT(PixelAt(actualBitmap, 9, 3), test::Rgba(0, 255, 0, 255));
+  EXPECT_THAT(PixelAt(actualBitmap, 4, 2), test::Rgba(0, 0, 0, 0));
+}
+
+TEST(RendererPublicApiTest, RasterFeImageAsymmetricQuarterTurnMatchesLiteralPlacement) {
+  if (!ActiveRendererSupportsFeature(RendererBackendFeature::FilterEffects)) {
+    GTEST_SKIP() << "Renderer does not support filter effects";
+  }
+  SVGDocument document = ParseDocument(R"svg(
+      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="10" viewBox="0 0 16 10">
+        <defs><filter id="f" filterUnits="userSpaceOnUse" primitiveUnits="userSpaceOnUse"
+                      x="0" y="0" width="12" height="8" color-interpolation-filters="sRGB">
+          <feImage href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAQAAAACCAYAAAB/qH1jAAAAEklEQVR4nGP4z8DwH4SRIKoAAAslD/HAvA0nAAAAAElFTkSuQmCC"
+                   x="2" y="2" width="4" height="2" preserveAspectRatio="none"
+                   image-rendering="crisp-edges"/>
+        </filter></defs>
+        <rect width="12" height="8" fill="red" filter="url(#f)"
+              transform="matrix(0 1 -1 0 12 0)"/>
+      </svg>
+    )svg");
+  SVGDocument expected = ParseDocument(R"svg(
+      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="10" viewBox="0 0 16 10">
+        <rect x="8" y="2" width="2" height="2" fill="#ff0000"/>
+        <rect x="8" y="4" width="2" height="2" fill="#00ff00"/>
+      </svg>
+    )svg");
+  Renderer renderer;
+  renderer.draw(document);
+  const RendererBitmap actualBitmap = NormalizeSnapshot(renderer.takeSnapshot());
+  Renderer expectedRenderer;
+  expectedRenderer.draw(expected);
+  const RendererBitmap expectedBitmap = NormalizeSnapshot(expectedRenderer.takeSnapshot());
+  ASSERT_THAT(actualBitmap.empty(), testing::IsFalse());
+  ASSERT_THAT(expectedBitmap.empty(), testing::IsFalse());
+  ASSERT_THAT(actualBitmap.dimensions, testing::Eq(Vector2i(16, 10)));
+  ASSERT_THAT(expectedBitmap.dimensions, testing::Eq(Vector2i(16, 10)));
+  EXPECT_THAT(PixelAt(expectedBitmap, 8, 3), test::Rgba(255, 0, 0, 255));
+  EXPECT_THAT(PixelAt(expectedBitmap, 9, 4), test::Rgba(0, 255, 0, 255));
+  EXPECT_THAT(PixelAt(expectedBitmap, 4, 2), test::Rgba(0, 0, 0, 0));
+  editor::tests::CompareBitmapToBitmap(actualBitmap, expectedBitmap,
+                                       "raster_feimage_asymmetric_quarterturn",
+                                       editor::tests::PixelmatchIdentityParams());
+  EXPECT_THAT(PixelAt(actualBitmap, 8, 3), test::Rgba(255, 0, 0, 255));
+  EXPECT_THAT(PixelAt(actualBitmap, 9, 4), test::Rgba(0, 255, 0, 255));
+  EXPECT_THAT(PixelAt(actualBitmap, 4, 2), test::Rgba(0, 0, 0, 0));
+}
+
 TEST(RendererPublicApiTest, FeImageFragmentUsesItsOwnSubregionOrigin) {
   struct PlacementCase {
     std::string_view attributes;
