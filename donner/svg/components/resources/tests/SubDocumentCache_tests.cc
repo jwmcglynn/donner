@@ -113,6 +113,132 @@ constexpr std::string_view kValidWoffBase64 =
     "38vY/n36nSz6mzvKR1vO8gfDXbbXe3x+c8t/P3NA9DvD76OsvwvZZFh7fsTT0AV83d1sP5tEgBHPmSYK"
     "ANvV9+MAAAAC7gAAAu4AAAkAAGQI+wBk";
 
+namespace {
+
+std::string SvgContainingDataImage(std::string_view child) {
+  const std::vector<uint8_t> bytes(child.begin(), child.end());
+  return "<svg xmlns='http://www.w3.org/2000/svg' width='8' height='8'>"
+         "<image width='8' height='8' href='data:image/svg+xml;base64," +
+         EncodeBase64Data(bytes) + "'/></svg>";
+}
+
+SVGDocument ParseSecureDataDocument(std::string_view source) {
+  SVGDocument::Settings settings;
+  settings.processingMode = ProcessingMode::SecureStatic;
+  ParseWarningSink warnings;
+  auto parsed = parser::SVGParser::ParseSVG(source, warnings, parser::SVGParser::Options(),
+                                            std::move(settings));
+  if (parsed.hasError()) {
+    ADD_FAILURE() << parsed.error();
+    return SVGDocument();
+  }
+  return std::move(parsed.result());
+}
+
+SVGDocumentHandle LoadOnlySvgImage(SVGDocument& document, ParseWarningSink& warnings) {
+  document.registry().ctx().get<ResourceManagerContext>().loadResources(warnings);
+  const auto image = document.querySelector("image");
+  if (!image) {
+    ADD_FAILURE() << "The fixture must retain its image element";
+    return {};
+  }
+  const auto* loaded = image->entityHandle().try_get<LoadedSVGImageComponent>();
+  return loaded ? loaded->subDocument : SVGDocumentHandle{};
+}
+
+constexpr std::string_view kEmptySvg = "<svg xmlns='http://www.w3.org/2000/svg'/>";
+
+}  // namespace
+
+TEST(SubDocumentCacheFamilyTest, RootDocumentLimitIncludesNestedDataDescendants) {
+  auto root = ParseSecureDataDocument(SvgContainingDataImage(SvgContainingDataImage(kEmptySvg)));
+  auto& rootCache = root.registry().ctx().emplace<SubDocumentCache>(SubDocumentCache::Limits{
+      .maximumDocuments = 1,
+  });
+  ParseWarningSink warnings;
+  auto first = LoadOnlySvgImage(root, warnings);
+  ASSERT_TRUE(first);
+  auto child = SVGDocument::CreateFromHandle(first);
+  EXPECT_EQ(child.registry().ctx().get<DocumentResourceFamilyContext>().budget,
+            root.registry().ctx().get<DocumentResourceFamilyContext>().budget);
+  EXPECT_EQ(rootCache.size(), 1u);
+  EXPECT_FALSE(LoadOnlySvgImage(child, warnings));
+  EXPECT_EQ(child.registry().ctx().get<SubDocumentCache>().size(), 0u);
+}
+
+TEST(SubDocumentCacheFamilyTest, RootEntityLimitIncludesRootAndNestedDataDescendants) {
+  const std::string childSource = SvgContainingDataImage(kEmptySvg);
+  auto root = ParseSecureDataDocument(SvgContainingDataImage(childSource));
+  auto probe = ParseSecureDataDocument(childSource);
+  const size_t rootEntities = root.registry().storage<Entity>().size();
+  const size_t childEntities = probe.registry().storage<Entity>().size();
+  ASSERT_GT(rootEntities, 0u);
+  ASSERT_GT(childEntities, 0u);
+  ASSERT_LT(rootEntities + childEntities, 16u);
+  auto& rootCache = root.registry().ctx().emplace<SubDocumentCache>(SubDocumentCache::Limits{
+      .maximumAggregateEntities = rootEntities + childEntities,
+  });
+  ParseWarningSink warnings;
+  auto first = LoadOnlySvgImage(root, warnings);
+  ASSERT_TRUE(first);
+  EXPECT_EQ(rootCache.securityStats().entities, childEntities);
+  auto child = SVGDocument::CreateFromHandle(first);
+  EXPECT_FALSE(LoadOnlySvgImage(child, warnings));
+  EXPECT_EQ(child.registry().ctx().get<SubDocumentCache>().size(), 0u);
+}
+
+TEST(SubDocumentCacheFamilyTest, RootParseAttemptLimitAppliesBeforeNestedCallback) {
+  auto root = ParseSecureDataDocument(SvgContainingDataImage(SvgContainingDataImage(kEmptySvg)));
+  auto& rootCache = root.registry().ctx().emplace<SubDocumentCache>(SubDocumentCache::Limits{
+      .maximumParseAttempts = 1,
+  });
+  ParseWarningSink warnings;
+  auto first = LoadOnlySvgImage(root, warnings);
+  ASSERT_TRUE(first);
+  ASSERT_EQ(rootCache.securityStats().parseAttempts, 1u);
+  ASSERT_FALSE(warnings.hasWarnings());
+  auto child = SVGDocument::CreateFromHandle(first);
+  int nestedCalls = 0;
+  child.registry().ctx().get<ResourceManagerContext>().setSvgParseCallback(
+      [&nestedCalls](const std::vector<uint8_t>&,
+                     ParseWarningSink&) -> std::optional<SVGDocumentHandle> {
+        ++nestedCalls;
+        return std::nullopt;
+      });
+  EXPECT_FALSE(LoadOnlySvgImage(child, warnings));
+  EXPECT_EQ(nestedCalls, 0);
+  EXPECT_EQ(child.registry().ctx().get<SubDocumentCache>().securityStats().parseAttempts, 0u);
+}
+
+TEST(SubDocumentCacheFamilyTest, CacheHitPreservesAttemptForNestedDataChild) {
+  auto root = ParseSecureDataDocument(SvgContainingDataImage(SvgContainingDataImage(kEmptySvg)));
+  auto& rootCache = root.registry().ctx().emplace<SubDocumentCache>(SubDocumentCache::Limits{
+      .maximumParseAttempts = 2,
+  });
+  ParseWarningSink warnings;
+  auto first = LoadOnlySvgImage(root, warnings);
+  ASSERT_TRUE(first);
+  const auto image = root.querySelector("image");
+  ASSERT_TRUE(image);
+  const auto& href = image->entityHandle().get<ImageComponent>().href;
+  int cacheHitCalls = 0;
+  const auto cached = rootCache.getOrParse(
+      href, {},
+      [&cacheHitCalls](const std::vector<uint8_t>&,
+                       ParseWarningSink&) -> std::optional<SVGDocumentHandle> {
+        ++cacheHitCalls;
+        return std::nullopt;
+      },
+      warnings);
+  ASSERT_TRUE(cached);
+  EXPECT_EQ(*cached, first);
+  EXPECT_EQ(cacheHitCalls, 0);
+  EXPECT_EQ(rootCache.securityStats().parseAttempts, 1u);
+  auto child = SVGDocument::CreateFromHandle(first);
+  EXPECT_TRUE(LoadOnlySvgImage(child, warnings));
+  EXPECT_EQ(child.registry().ctx().get<SubDocumentCache>().securityStats().parseAttempts, 1u);
+}
+
 TEST(SubDocumentCacheTest, GetOrParseCachesResult) {
   SubDocumentCache cache;
   const std::vector<uint8_t> content{'h', 'e', 'l', 'l', 'o'};
