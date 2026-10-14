@@ -370,18 +370,24 @@ def _workflow_paths():
 
 # One token of a YAML or shell line: an escaped character, a Bash ANSI-C quoted string
 # (`$'...'`, where a backslash escapes the next character), a single- or double-quoted string,
-# a `#` that starts a comment (at the start or after whitespace), or any other character. A
-# backslash escapes the next character except inside plain single quotes, as in Bash and YAML
-# double-quoted strings.
-_COMMENT_SCAN = re.compile(r"""\\.|\$'(?:\\.|[^'\\])*'?|'[^']*'?|"(?:\\.|[^"\\])*"?|"""
-                           r"""(?P<comment>(?:^|(?<=[ \t]))#)|.""", re.DOTALL)
+# or any other character. A backslash escapes the next character except inside plain single
+# quotes, as in Bash and YAML double-quoted strings.
+_COMMENT_SCAN = re.compile(r"""\\.|\$'(?:\\.|[^'\\])*'?|'[^']*'?|"(?:\\.|[^"\\])*"?|.""",
+                           re.DOTALL)
 
 
 def _strip_comment(value):
-    """A YAML or shell line without its trailing comment, outside quotes and escapes."""
+    """A YAML or shell line without its trailing comment, outside quotes and escapes.
+
+    A comment starts at a `#` token at the start of the line or after an unescaped space or tab.
+    An escaped blank is one token with its backslash, so `label\\ #1` keeps the `#` in the word.
+    """
+    after_blank = True
     for match in _COMMENT_SCAN.finditer(value):
-        if match.group("comment"):
+        token = match.group()
+        if token == "#" and after_blank:
             return value[:match.start()].rstrip()
+        after_blank = token in (" ", "\t")
     return value
 
 
