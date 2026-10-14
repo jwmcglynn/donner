@@ -107,7 +107,9 @@ incomplete reports produce rejected verification evidence with `xml_report_error
 The check recognizes the complete GoogleTest XML envelope and fingerprints the same bytes; it trusts
 GoogleTest as the producer and is not a general XML validator or an adversarial filesystem sandbox.
 Untrusted diagnostics and path fields are escaped to printable ASCII in runner output, including
-GoogleTest parameter descriptions. Raw diagnostics remain in case/process artifacts. Escaping
+GoogleTest parameter descriptions. Process `renderer.log` retains the exact diagnostic bytes.
+Case JSON marks `diagnostics_encoding: utf8-with-replacement`: invalid UTF-8 bytes become replacement
+characters in its diagnostic string, so malformed child output cannot abort case-result writing. Escaping
 prevents embedded control bytes from creating log records; it is not redaction or authentication.
 The optional raw-log triage tools explicitly report unverified provenance. Use the trusted run's
 structured metrics and verification artifacts for comparison decisions.

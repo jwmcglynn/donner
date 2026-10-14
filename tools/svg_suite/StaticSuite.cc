@@ -244,6 +244,7 @@ void WriteMetrics(const StaticCase& test, const ComparisonOptions& options,
       {"input", test.svgPath.lexically_relative(test.root).generic_string()},
       {"status", result.error.empty() ? (result.passed ? "pass" : "fail") : "error"},
       {"diagnostics", result.error},
+      {"diagnostics_encoding", "utf8-with-replacement"},
       {"elapsed_ms", elapsedMs},
       {"threshold", options.threshold},
       {"include_aa", options.includeAntiAliasing},
@@ -259,7 +260,7 @@ void WriteMetrics(const StaticCase& test, const ComparisonOptions& options,
     metrics["actual_dimensions"] = {images.actual.image->width, images.actual.image->height};
   }
   std::ofstream report(result.artifactDirectory / "metrics.json");
-  report << metrics.dump(2) << '\n';
+  report << metrics.dump(2, ' ', false, nlohmann::json::error_handler_t::replace) << '\n';
   report.close();
   if (!report) {
     result.passed = false;
