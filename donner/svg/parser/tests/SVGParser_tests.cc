@@ -1069,10 +1069,10 @@ TEST_P(NestedSvgOptionsTest, ContentProjectionLimitAppliesToDataChild) {
 }
 
 TEST_P(NestedSvgOptionsTest, LocalPayloadLimitSurvivesLargerSuppliedFamily) {
-  const std::string uri = SvgDataUrl(
-      "<svg xmlns='http://www.w3.org/2000/svg'><style>rect { fill: green; }</style></svg>");
+  const std::string uri = SvgDataUrl("<svg xmlns='http://www.w3.org/2000/svg'><style>" +
+                                     std::string(128, ' ') + "rect { fill: green; }</style></svg>");
   SVGParser::Options options;
-  options.maximumParsedPayloadSize = 4096;
+  options.maximumParsedPayloadSize = 64 * 1024;
   auto family = std::make_shared<components::DocumentResourceFamilyBudget>();
   SVGDocument::Settings settings;
   settings.resourceFamilyBudget = family;
