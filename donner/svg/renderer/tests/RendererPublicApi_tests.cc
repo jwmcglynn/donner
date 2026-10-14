@@ -3206,6 +3206,176 @@ TEST(RendererPublicApiTest, ReorderedZeroSumConvolveUsesFallbackDivisor) {
       "reordered_zero_sum_default_divisor", editor::tests::PixelmatchIdentityParams());
 }
 
+TEST(RendererPublicApiTest, FilterSingleOperandInlineAmountTailPreservesPriorFilter) {
+  if (!ActiveRendererSupportsFeature(RendererBackendFeature::FilterEffects)) {
+    GTEST_SKIP() << "Filter rendering disabled in " << ActiveRendererBackendName();
+  }
+  SVGDocument document = ParseDocument(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="8" height="4">
+        <rect width="8" height="4" fill="blue"/>
+        <rect x="2" y="1" width="4" height="2" fill="red"
+          style="filter: opacity(0); filter: brightness(1 2)"/>
+      </svg>)svg");
+  Renderer renderer;
+  renderer.draw(document);
+  const RendererBitmap actual = NormalizeSnapshot(renderer.takeSnapshot());
+  ASSERT_THAT(actual.empty(), testing::IsFalse());
+  EXPECT_THAT(actual.dimensions, testing::Eq(Vector2i(8, 4)));
+  EXPECT_THAT(PixelAt(actual, 0, 0), test::Rgba(0, 0, 255, 255));
+  EXPECT_THAT(PixelAt(actual, 3, 2), test::Rgba(0, 0, 255, 255));
+
+  SVGDocument expectedDocument = ParseDocument(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="8" height="4">
+        <rect width="8" height="4" fill="blue"/>
+      </svg>)svg");
+  Renderer expectedRenderer;
+  expectedRenderer.draw(expectedDocument);
+  const RendererBitmap expected = NormalizeSnapshot(expectedRenderer.takeSnapshot());
+  ASSERT_THAT(expected.empty(), testing::IsFalse());
+  EXPECT_THAT(expected.dimensions, testing::Eq(Vector2i(8, 4)));
+  EXPECT_THAT(PixelAt(expected, 3, 2), test::Rgba(0, 0, 255, 255));
+  editor::tests::CompareBitmapToBitmap(
+      actual, expected, ::testing::UnitTest::GetInstance()->current_test_info()->name(),
+      editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(RendererPublicApiTest, FilterSingleOperandInvalidStyleHuePreservesPresentationFilter) {
+  if (!ActiveRendererSupportsFeature(RendererBackendFeature::FilterEffects)) {
+    GTEST_SKIP() << "Filter rendering disabled in " << ActiveRendererBackendName();
+  }
+  SVGDocument document = ParseDocument(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="8" height="4">
+        <rect width="8" height="4" fill="blue"/>
+        <rect x="2" y="1" width="4" height="2" fill="red" filter="opacity(0)"
+          style="filter: hue-rotate(90deg 180deg)"/>
+      </svg>)svg");
+  Renderer renderer;
+  renderer.draw(document);
+  const RendererBitmap actual = NormalizeSnapshot(renderer.takeSnapshot());
+  ASSERT_THAT(actual.empty(), testing::IsFalse());
+  EXPECT_THAT(actual.dimensions, testing::Eq(Vector2i(8, 4)));
+  EXPECT_THAT(PixelAt(actual, 0, 0), test::Rgba(0, 0, 255, 255));
+  EXPECT_THAT(PixelAt(actual, 3, 2), test::Rgba(0, 0, 255, 255));
+
+  SVGDocument expectedDocument = ParseDocument(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="8" height="4">
+        <rect width="8" height="4" fill="blue"/>
+      </svg>)svg");
+  Renderer expectedRenderer;
+  expectedRenderer.draw(expectedDocument);
+  const RendererBitmap expected = NormalizeSnapshot(expectedRenderer.takeSnapshot());
+  ASSERT_THAT(expected.empty(), testing::IsFalse());
+  EXPECT_THAT(expected.dimensions, testing::Eq(Vector2i(8, 4)));
+  EXPECT_THAT(PixelAt(expected, 3, 2), test::Rgba(0, 0, 255, 255));
+  editor::tests::CompareBitmapToBitmap(
+      actual, expected, ::testing::UnitTest::GetInstance()->current_test_info()->name(),
+      editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(RendererPublicApiTest, FilterSingleOperandStylesheetTailRejectsWholeFilterChain) {
+  if (!ActiveRendererSupportsFeature(RendererBackendFeature::FilterEffects)) {
+    GTEST_SKIP() << "Filter rendering disabled in " << ActiveRendererBackendName();
+  }
+  SVGDocument document = ParseDocument(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="8" height="4">
+        <rect width="8" height="4" fill="blue"/>
+        <style>#tile { filter: opacity(0); filter: brightness(1) opacity(50% bogus); }</style>
+        <rect id="tile" x="2" y="1" width="4" height="2" fill="red"/>
+      </svg>)svg");
+  Renderer renderer;
+  renderer.draw(document);
+  const RendererBitmap actual = NormalizeSnapshot(renderer.takeSnapshot());
+  ASSERT_THAT(actual.empty(), testing::IsFalse());
+  EXPECT_THAT(actual.dimensions, testing::Eq(Vector2i(8, 4)));
+  EXPECT_THAT(PixelAt(actual, 0, 0), test::Rgba(0, 0, 255, 255));
+  EXPECT_THAT(PixelAt(actual, 3, 2), test::Rgba(0, 0, 255, 255));
+
+  SVGDocument expectedDocument = ParseDocument(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="8" height="4">
+        <rect width="8" height="4" fill="blue"/>
+      </svg>)svg");
+  Renderer expectedRenderer;
+  expectedRenderer.draw(expectedDocument);
+  const RendererBitmap expected = NormalizeSnapshot(expectedRenderer.takeSnapshot());
+  ASSERT_THAT(expected.empty(), testing::IsFalse());
+  EXPECT_THAT(expected.dimensions, testing::Eq(Vector2i(8, 4)));
+  EXPECT_THAT(PixelAt(expected, 3, 2), test::Rgba(0, 0, 255, 255));
+  editor::tests::CompareBitmapToBitmap(
+      actual, expected, ::testing::UnitTest::GetInstance()->current_test_info()->name(),
+      editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(RendererPublicApiTest, FilterSingleOperandValidOmittedValuesReplacePriorFilter) {
+  if (!ActiveRendererSupportsFeature(RendererBackendFeature::FilterEffects)) {
+    GTEST_SKIP() << "Filter rendering disabled in " << ActiveRendererBackendName();
+  }
+  SVGDocument document = ParseDocument(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="8" height="4">
+        <rect width="8" height="4" fill="blue"/>
+        <rect x="2" y="1" width="4" height="2" fill="red"
+          style="filter: opacity(0);
+                 filter: brightness() contrast() opacity() saturate() hue-rotate()"/>
+      </svg>)svg");
+  Renderer renderer;
+  renderer.draw(document);
+  const RendererBitmap actual = NormalizeSnapshot(renderer.takeSnapshot());
+  ASSERT_THAT(actual.empty(), testing::IsFalse());
+  EXPECT_THAT(actual.dimensions, testing::Eq(Vector2i(8, 4)));
+  EXPECT_THAT(PixelAt(actual, 0, 0), test::Rgba(0, 0, 255, 255));
+  EXPECT_THAT(PixelAt(actual, 3, 2), test::Rgba(255, 0, 0, 255));
+
+  SVGDocument expectedDocument = ParseDocument(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="8" height="4">
+        <rect width="8" height="4" fill="blue"/>
+        <rect x="2" y="1" width="4" height="2" fill="red"/>
+      </svg>)svg");
+  Renderer expectedRenderer;
+  expectedRenderer.draw(expectedDocument);
+  const RendererBitmap expected = NormalizeSnapshot(expectedRenderer.takeSnapshot());
+  ASSERT_THAT(expected.empty(), testing::IsFalse());
+  EXPECT_THAT(expected.dimensions, testing::Eq(Vector2i(8, 4)));
+  EXPECT_THAT(PixelAt(expected, 3, 2), test::Rgba(255, 0, 0, 255));
+  editor::tests::CompareBitmapToBitmap(
+      actual, expected, ::testing::UnitTest::GetInstance()->current_test_info()->name(),
+      editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(RendererPublicApiTest, FilterSingleOperandValidSingleValuesReplacePriorFilter) {
+  if (!ActiveRendererSupportsFeature(RendererBackendFeature::FilterEffects)) {
+    GTEST_SKIP() << "Filter rendering disabled in " << ActiveRendererBackendName();
+  }
+  SVGDocument document = ParseDocument(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="8" height="4">
+        <rect width="8" height="4" fill="blue"/>
+        <rect x="2" y="1" width="4" height="2" fill="red"
+          style="filter: opacity(0);
+                 filter: brightness( /* legal */ 1 ) contrast(100%) grayscale(0) invert(0%)
+                         opacity(100%) saturate(1) sepia(0) hue-rotate( 0deg )"/>
+      </svg>)svg");
+  Renderer renderer;
+  renderer.draw(document);
+  const RendererBitmap actual = NormalizeSnapshot(renderer.takeSnapshot());
+  ASSERT_THAT(actual.empty(), testing::IsFalse());
+  EXPECT_THAT(actual.dimensions, testing::Eq(Vector2i(8, 4)));
+  EXPECT_THAT(PixelAt(actual, 0, 0), test::Rgba(0, 0, 255, 255));
+  EXPECT_THAT(PixelAt(actual, 3, 2), test::Rgba(255, 0, 0, 255));
+
+  SVGDocument expectedDocument = ParseDocument(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="8" height="4">
+        <rect width="8" height="4" fill="blue"/>
+        <rect x="2" y="1" width="4" height="2" fill="red"/>
+      </svg>)svg");
+  Renderer expectedRenderer;
+  expectedRenderer.draw(expectedDocument);
+  const RendererBitmap expected = NormalizeSnapshot(expectedRenderer.takeSnapshot());
+  ASSERT_THAT(expected.empty(), testing::IsFalse());
+  EXPECT_THAT(expected.dimensions, testing::Eq(Vector2i(8, 4)));
+  EXPECT_THAT(PixelAt(expected, 3, 2), test::Rgba(255, 0, 0, 255));
+  editor::tests::CompareBitmapToBitmap(
+      actual, expected, ::testing::UnitTest::GetInstance()->current_test_info()->name(),
+      editor::tests::PixelmatchIdentityParams());
+}
+
 TEST(RendererPublicApiTest, RejectedFilterSuppressesItsSubtreeAndRestoresParent) {
   if (!ActiveRendererSupportsFeature(RendererBackendFeature::FilterEffects)) {
     GTEST_SKIP() << "Filter rendering disabled in this variant (" << ActiveRendererBackendName()
