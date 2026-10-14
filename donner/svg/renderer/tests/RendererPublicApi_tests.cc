@@ -1480,17 +1480,17 @@ TEST(RendererPublicApiTest, PostTextPathCursorClosedChunkUsesFirstAnchorAcrossSt
   const auto reference = RenderPostPathScene(
       "<textPath href='#p'>M<tspan text-anchor='start' fill='blue'>M</tspan></textPath>"
       "<tspan x='200' y='60' fill='green'>M</tspan>",
-      2, "M0 50H100V150H0Z");
+      2, "M0 64H128V192H0Z");
   ASSERT_EQ(reference.characters, 3);
   ASSERT_THAT(reference.tailAdvance, Gt(0.0));
-  ASSERT_EQ(reference.positions[0], Vector2d(0.0, 50.0));
+  ASSERT_EQ(reference.positions[0], Vector2d(0.0, 64.0));
   ASSERT_THAT(reference.positions[1].x, Gt(reference.positions[0].x));
-  ASSERT_EQ(reference.positions[1].y, 50.0);
+  ASSERT_EQ(reference.positions[1].y, 64.0);
   ASSERT_EQ(reference.positions[2], Vector2d(200.0, 60.0));
   const auto actual = RenderPostPathScene(
       "<textPath href='#p'>M<tspan text-anchor='end' fill='blue'>M</tspan></textPath>"
       "<tspan x='200' y='60' fill='green'>M</tspan>",
-      2, "M0 50H100V150H0Z");
+      2, "M0 64H128V192H0Z");
   ASSERT_EQ(actual.characters, 3);
   EXPECT_EQ(actual.positions[1], reference.positions[1]);
   editor::tests::CompareBitmapToBitmap(actual.bitmap, reference.bitmap,
