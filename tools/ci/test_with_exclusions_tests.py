@@ -9,6 +9,7 @@ import tempfile
 import unittest
 
 from python.runfiles import runfiles
+from tools import test_timing
 
 
 class ExclusionSelectionTest(unittest.TestCase):
@@ -41,7 +42,7 @@ class ExclusionSelectionTest(unittest.TestCase):
                 capture_output=True,
                 text=True,
                 check=False,
-                timeout=10,
+                timeout=test_timing.STALL_GUARD_SECONDS,
             )
             commands = [json.loads(line) for line in capture.read_text().splitlines()]
             return result, commands

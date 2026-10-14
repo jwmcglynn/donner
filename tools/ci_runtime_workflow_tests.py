@@ -571,7 +571,7 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         self.assertIsNotNone(match, "heartbeat wrapper heredoc not found")
         return textwrap.dedent(match.group("body"))
 
-    def _run_script(self, text, args, env=None, timeout=10, cwd=None, context=None):
+    def _run_script(self, text, args, env=None, cwd=None, context=None):
         with tempfile.TemporaryDirectory() as temp_dir:
             script = Path(temp_dir) / "fixture.sh"
             # Best-effort builtin markers expose progress without captured script output.
@@ -594,7 +594,7 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
                     capture_output=True,
                     text=True,
                     env=fixture_env,
-                    timeout=timeout,
+                    timeout=test_timing.STALL_GUARD_SECONDS,
                     cwd=cwd,
                 )
             except subprocess.TimeoutExpired as error:
@@ -604,7 +604,8 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
                 entered = b"fixture-stage:entered\n" in stderr
                 exited = b"fixture-stage:exited\n" in stderr
                 raise AssertionError(
-                    f"{context or self.id()}: shell fixture exceeded {timeout} seconds "
+                    f"{context or self.id()}: shell fixture exceeded "
+                    f"{test_timing.STALL_GUARD_SECONDS} seconds "
                     f"(entry_marker_seen={entered}, exit_marker_seen={exited})"
                 ) from None
 
@@ -1512,7 +1513,7 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
             capture_output=True,
             text=True,
             env=env,
-            timeout=5,
+            timeout=test_timing.STALL_GUARD_SECONDS,
         )
 
     def test_heartbeat_fixture_ignores_unrelated_inherited_bash(self):
@@ -1550,6 +1551,8 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
             wrapper.write_text(script)
             wrapper.chmod(0o755)
             env = os.environ.copy()
+            # The 300 s interval far outlasts the stall guard, so a sleeper left holding the pipe
+            # fails the case.
             env["BAZEL_HEARTBEAT_INTERVAL_SECONDS"] = "300"
 
             result = self._run_heartbeat_fixture(wrapper, log, env)
@@ -1581,22 +1584,33 @@ export DONNER_COVERAGE_PROGRESS_INTERVAL_SECONDS
 run_quiet_with_progress "fixture" "$1" bash -c 'exit 23'
 """
             log = str(Path(temp_dir) / "coverage.log")
-            result = self._run_script(fixture, [log], timeout=5)
+            # The 300 s interval far outlasts the stall guard, so a watcher that misses the stop
+            # fails the case.
+            result = self._run_script(fixture, [log])
             self.assertEqual(23, result.returncode, result.stderr)
             self.assertEqual([], list(Path(temp_dir).glob("*.progress-control.*")))
 
     def test_quiet_coverage_progress_hides_raw_targets_and_runner_paths(self):
         functions = self.coverage_script.split("\nTARGETS=()", 1)[0]
+        # The command stays alive until the watcher has reported its progress line, so the
+        # report does not depend on a watcher tick landing within a fixed sleep. It also stops
+        # once the fixture shell is gone, so a hung case leaves no process behind.
         fixture = functions + """
 
 DONNER_COVERAGE_PROGRESS_INTERVAL_SECONDS=1
 export DONNER_COVERAGE_PROGRESS_INTERVAL_SECONDS
-run_quiet_with_progress "fixture" "$1" bash -c \
-  'printf "[1 / 2] Testing //donner/editor:sample_test /runner/secret\\n"; sleep 2; exit 23'
+report="$1.report"
+status=0
+run_quiet_with_progress "fixture" "$1" bash -c '
+  printf "[1 / 2] Testing //donner/editor:sample_test /runner/secret\\n"
+  until grep -qF "[1 / 2]" "$1" || ! kill -0 "$PPID" 2>/dev/null; do sleep 0.1; done
+  exit 23' fixture "$report" > "$report" || status=$?
+cat "$report"
+exit "$status"
 """
         with tempfile.TemporaryDirectory() as temp_dir:
             log = str(Path(temp_dir) / "coverage.log")
-            result = self._run_script(fixture, [log], timeout=8)
+            result = self._run_script(fixture, [log])
             self.assertEqual(23, result.returncode, result.stderr)
             self.assertIn("[1 / 2]", result.stdout)
             self.assertIn("//donner/editor:sample_test", result.stdout)
