@@ -311,16 +311,51 @@ def verify_yanked_metadata(yanked, expected_yanked: dict, version: str) -> None:
 
 
 HISTORY_KEYS = ("versions", "yanked_versions")
+# A Bazel module version as BCR's `tools/registry.py` `Version` parses it: dot-separated release
+# identifiers, an optional `-` prerelease, and a `+` build suffix that does not affect order.
+# Unlike that `^...$` match, a trailing newline is rejected.
+REGISTRY_VERSION = re.compile(r"([A-Za-z0-9.]+)(?:-([A-Za-z0-9.-]+))?(?:\+[A-Za-z0-9.-]+)?")
+
+
+def _version_identifiers(text: str) -> tuple:
+    parts = text.split(".")
+    if not all(parts):
+        raise ValueError("registry metadata has a missing or invalid version list")
+    return tuple((0, int(part)) if part.isdigit() else (1, part) for part in parts)
+
+
+def registry_version_key(version: str) -> tuple:
+    """Sort key that orders module versions the way Bazel and BCR presubmit compare them.
+
+    Identifiers compare numerically when all digits and as text otherwise, with numbers first.
+    A release that is a prefix of another sorts first, and a prerelease sorts before its release.
+    """
+    match = REGISTRY_VERSION.fullmatch(version)
+    if not match:
+        raise ValueError("registry metadata has a missing or invalid version list")
+    release, prerelease = match.groups()
+    return (_version_identifiers(release),
+            (1,) if prerelease is None else (0, _version_identifiers(prerelease)))
+
+
+def add_registry_version(versions: list[str], version: str) -> list[str]:
+    """`versions` with `version` added, in the ascending order BCR presubmit requires.
+
+    The registry's own list must already be in that order; it is never reordered.
+    """
+    if versions != sorted(versions, key=registry_version_key):
+        raise ValueError("registry metadata lists its versions out of order")
+    return sorted([*versions, version], key=registry_version_key)
 
 
 def derive_metadata(upstream: dict | None, template: dict, version: str) -> bytes:
     """The `metadata.json` a submission proposes, derived from the registry it targets.
 
-    Preflight's copy freezes the registry history at preflight time. Submission instead appends
-    this version to the target registry's current `versions` and carries its `yanked_versions`
-    forward; every other field comes from `.bcr/metadata.template.json`. The result is checked
-    with `check_metadata` against the template, so a changed upstream maintainer or project field
-    still fails closed.
+    Preflight's copy freezes the registry history at preflight time. Submission instead adds
+    this version to the target registry's current `versions`, in ascending version order, and
+    carries its `yanked_versions` forward; every other field comes from
+    `.bcr/metadata.template.json`. The result is checked with `check_metadata` against the
+    template, so a changed upstream maintainer or project field still fails closed.
     """
     if upstream is None:
         derived = {**template, "versions": [version],
@@ -333,7 +368,7 @@ def derive_metadata(upstream: dict | None, template: dict, version: str) -> byte
         # The registry's own project and maintainer fields must still be the template's.
         check_metadata({**upstream, "versions": [*upstream["versions"], version]}, template,
                        version)
-        derived = {**template, "versions": [*upstream["versions"], version],
+        derived = {**template, "versions": add_registry_version(upstream["versions"], version),
                    "yanked_versions": upstream.get("yanked_versions")}
     check_metadata(derived, template, version)
     return (json.dumps(derived, indent=4) + "\n").encode()

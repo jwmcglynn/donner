@@ -202,8 +202,10 @@ def verify_metadata_history(registry: Path, metadata_file: Path, versions: list[
     if old_metadata:
         previous = json.loads(subprocess.check_output(
             ["git", "-C", str(registry), "show", f"HEAD:{metadata_file.as_posix()}"]))
-        if versions != [*previous["versions"], version] or yanked != previous["yanked_versions"]:
-            raise ValueError("generated registry metadata changes existing versions or yanks")
+        if (versions != bcr_source.add_registry_version(previous["versions"], version)
+                or yanked != previous["yanked_versions"]):
+            raise ValueError("generated registry metadata changes existing versions, their order "
+                             "or yanks")
     elif versions != [version] or yanked != template.get("yanked_versions", {}):
         raise ValueError("generated registry metadata has unexpected initial history")
 
@@ -215,8 +217,9 @@ def submission_metadata(registry: Path, validated: Path, source: Path, version: 
     """Derive the proposed `metadata.json` from the registry's HEAD and the maintainer template.
 
     The registry history may move after preflight: an earlier donner version can merge or be
-    yanked. The proposal therefore appends this version to HEAD's history instead of reusing
-    preflight's frozen copy, and preflight's copy must agree with it on every other field.
+    yanked. The proposal therefore adds this version to HEAD's history, in ascending version
+    order, instead of reusing preflight's frozen copy, and preflight's copy must agree with it on
+    every other field.
     """
     listed = subprocess.check_output(
         ["git", "-C", str(registry), "ls-tree", "--name-only", "HEAD", "--", METADATA_FILE])
