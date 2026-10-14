@@ -2,6 +2,7 @@
 #include <gtest/gtest.h>
 
 #include "donner/editor/tests/BitmapGoldenCompare.h"
+#include "donner/svg/SVGSVGElement.h"
 #include "donner/svg/renderer/FilterRegionContext.h"
 #include "donner/svg/renderer/tests/RendererTestUtils.h"
 #include "donner/svg/tests/ParserTestUtils.h"
@@ -22,6 +23,43 @@ TEST(RendererAnimationFilterViewport, MorphologyHistoryUsesExecutedIntegerRadius
       .radiusX = 1.4,
       .radiusY = 1.4};
   EXPECT_THAT(context.computeNodeSubregion(morphology), testing::Eq(Box2d::FromXYWH(9, 9, 10, 10)));
+}
+
+TEST(RendererAnimationFilterViewport, SharedFilterTracksEachViewportAndTypedEdits) {
+  if (!ActiveRendererSupportsFeature(RendererBackendFeature::FilterEffects)) {
+    GTEST_SKIP() << "Filters are disabled in this configuration";
+  }
+  const auto filter = [](std::string_view id, std::string_view width, bool animated) {
+    return "<filter id='" + std::string(id) +
+           "' filterUnits='userSpaceOnUse' x='0' y='0' width='64' height='16'>"
+           "<feFlood flood-color='red' x='0%' y='0' height='16' width='" +
+           std::string(width) + "'>" +
+           (animated ? "<animate attributeName='width' from='100%' to='8px' dur='2s'/>" : "") +
+           "</feFlood></filter>";
+  };
+  const auto references = [](int firstWidth, std::string_view secondFilter) {
+    return "<svg id='first' width='32' height='16' preserveAspectRatio='none' viewBox='0 0 " +
+           std::to_string(firstWidth) +
+           " 16'><rect width='64' height='16' filter='url(#f)'/></svg>"
+           "<svg x='32' width='16' height='16' viewBox='8 0 16 16'>"
+           "<rect width='64' height='16' filter='url(#" +
+           std::string(secondFilter) + ")'/></svg>";
+  };
+  auto document =
+      instantiateSubtree("<defs>" + filter("f", "100%", true) + "</defs>" + references(32, "f"),
+                         parser::SVGParser::Options(), Vector2i(48, 16));
+  document.setTime(1);
+  for (const int width : {32, 64, 32}) {
+    SCOPED_TRACE(width);
+    document.querySelector("#first")->cast<SVGSVGElement>().setViewBox(0, 0, width, 16);
+    auto expected =
+        instantiateSubtree("<defs>" + filter("f", std::to_string((width + 8) / 2), false) +
+                               filter("g", "12", false) + "</defs>" + references(width, "g"),
+                           parser::SVGParser::Options(), Vector2i(48, 16));
+    editor::tests::CompareBitmapToBitmap(
+        RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(expected),
+        "shared-filter-referencing-viewports", editor::tests::PixelmatchIdentityParams());
+  }
 }
 
 TEST(RendererAnimationFilterViewport, MixedImageLengthsUseReferencingViewport) {
