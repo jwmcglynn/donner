@@ -438,7 +438,11 @@ py_test(
     name = "bcr_dependency_closure_tests",
     size = "small",
     srcs = ["bcr_dependency_closure_tests.py"],
-    deps = [":bcr_dependency_closure"],
+    data = ["//:MODULE.bazel"],
+    deps = [
+        ":bcr_dependency_closure",
+        "@rules_python//python/runfiles",
+    ],
 )
 
 py_library(
