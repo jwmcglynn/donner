@@ -57,7 +57,8 @@ TEST(RendererAnimationStyleBase, PaintContextUsesSampledInstanceStyles) {
                 "<use href='#shape' x='8' color='blue'/>"
                 "<use href='#shape' x='16' color='red'/>",
                 "<rect width='8' height='16' fill='#800000'/>"
-                "<rect x='8' width='8' height='16' fill='#000080'/>"},
+                "<rect x='8' width='8' height='16' fill='#000080'/>"
+                "<rect x='16' width='8' height='16' fill='#800000'/>"},
            Case{"color-current-color-parent",
                 "<g color='red'><rect width='16' height='16' color='lime' fill='currentColor'>"
                 "<animate attributeName='color' from='currentColor' to='blue' dur='2s'/>"
@@ -109,6 +110,37 @@ TEST(RendererAnimationStyleBase, PaintContextUsesSampledInstanceStyles) {
         RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(expected),
         std::string(item.name) + "-resampled", editor::tests::PixelmatchIdentityParams());
     EXPECT_EQ(document.source(), source);
+  }
+}
+
+TEST(RendererAnimationStyleBase, InvalidPaintEndpointsPreserveLowerLayers) {
+  struct Case {
+    const char* name;
+    const char* operands;
+    double time;
+    const char* expected;
+  };
+  for (const Case item : {
+           Case{"invalid-later-endpoint", "from='blue' to='not-a-color'", 0.5, "red"},
+           Case{"invalid-later-keyframe", "values='blue;lime;not-a-color'", 0.5, "red"},
+           Case{"ignored-operands-with-values",
+                "values='red;blue' from='not-a-color' by='not-a-color'", 1, "#800080"},
+           Case{"ignored-by-with-to", "from='red' to='blue' by='not-a-color'", 1, "#800080"},
+       }) {
+    SCOPED_TRACE(item.name);
+    auto document = instantiateSubtree(
+        "<rect width='16' height='16' fill='black'>"
+        "<set attributeName='fill' to='red'/>"
+        "<animate attributeName='fill' " +
+            std::string(item.operands) + " dur='2s'/></rect>",
+        parser::SVGParser::Options(), Vector2i(16, 16));
+    auto expected = instantiateSubtree(
+        "<rect width='16' height='16' fill='" + std::string(item.expected) + "'/>",
+        parser::SVGParser::Options(), Vector2i(16, 16));
+    document.setTime(item.time);
+    editor::tests::CompareBitmapToBitmap(RenderDocumentWithActiveBackend(document),
+                                         RenderDocumentWithActiveBackend(expected), item.name,
+                                         editor::tests::PixelmatchIdentityParams());
   }
 }
 
