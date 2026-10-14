@@ -90,5 +90,4 @@ jobs:
     uses: ./.github/workflows/main.yml
     # Exactly the repository secrets main.yml declares for workflow_call.
     secrets:
-      BAZEL_REMOTE_CACHE: ${{ secrets.BAZEL_REMOTE_CACHE }}
       BUILDBUDDY_API_KEY_READONLY: ${{ secrets.BUILDBUDDY_API_KEY_READONLY }}

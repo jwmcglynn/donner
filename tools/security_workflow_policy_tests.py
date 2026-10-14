@@ -1,6 +1,7 @@
 """Pins review-driven security workflow selection and scheduling policy."""
 
 from collections import Counter
+import json
 import os
 from pathlib import Path
 import re
@@ -55,8 +56,8 @@ SECRET_USES = {
      "./.github/actions/buildbuddy-cache"): {"BUILDBUDDY_API_KEY"},
     (".github/workflows/main.yml", "macos-browser", "Configure BuildBuddy read-only cache", None,
      "./.github/actions/buildbuddy-cache"): {"BUILDBUDDY_API_KEY_READONLY"},
-    (".github/workflows/main.yml", "macos-self-hosted", "Configure masked remote cache", None,
-     "<run>"): {"BAZEL_REMOTE_CACHE"},
+    (".github/workflows/main.yml", "macos-self-hosted", "Configure BuildBuddy remote cache", None,
+     "./.github/actions/buildbuddy-cache"): {"BUILDBUDDY_API_KEY"},
     (".github/workflows/publish_bcr.yml", "publish-fork", "Create the fork branch only if absent", None,
      "<run>"): {"PUBLISH_TOKEN"},
     (".github/workflows/sanitizers-pr.yml", "asan-geode", "Configure BuildBuddy remote cache",
@@ -76,8 +77,7 @@ SECRET_USES = {
 # pull request's base branch changes; it forwards the repository secrets main.yml's steps read.
 REVIEWED_WORKFLOW_CALLS = {
     (".github/workflows/pr_base_change.yml", "base-change-ci"): (
-        "./.github/workflows/main.yml", frozenset({"BAZEL_REMOTE_CACHE",
-                                                   "BUILDBUDDY_API_KEY_READONLY"})),
+        "./.github/workflows/main.yml", frozenset({"BUILDBUDDY_API_KEY_READONLY"})),
 }
 
 # The only jobs that may run on self-hosted runners, with the gatekeeper output admitting each.
@@ -245,7 +245,7 @@ def _cache_write_violations(files):
 
 BUILDBUDDY_ACTION = "./.github/actions/buildbuddy-cache"
 PR_TRUST_ACTION = "./.github/actions/pr-trust"
-# Every GitHub-hosted Bazel lane on the BuildBuddy remote cache. The release-candidate CLI builds in
+# Every Bazel lane on the BuildBuddy remote cache. The release-candidate CLI builds in
 # bcr_preflight.yml stay off it: their attested bytes must not depend on a third-party cache.
 BUILDBUDDY_JOBS = {
     (".github/workflows/editor_wasm.yml", "build"),
@@ -254,10 +254,20 @@ BUILDBUDDY_JOBS = {
     (".github/workflows/main.yml", "macos"),
     # Hosted macOS browser subset for trusted maintainer PRs, wired exactly like `macos`.
     (".github/workflows/main.yml", "macos-browser"),
+    (".github/workflows/main.yml", "macos-self-hosted"),
     (".github/workflows/sanitizers-pr.yml", "asan-geode"),
     (".github/workflows/sanitizers.yml", "asan"),
     (".github/workflows/sanitizers.yml", "ubsan"),
 }
+# The one self-hosted lane on BuildBuddy. It runs only for trusted maintainer pull requests, so it
+# holds the read-write key and no Renovate reader, and its last step removes the key from the
+# persistent runner whatever the job's outcome.
+SELF_HOSTED_BUILDBUDDY_JOBS = {(".github/workflows/main.yml", "macos-self-hosted")}
+BUILDBUDDY_CLEANUP = ("      - name: Remove BuildBuddy credentials\n"
+                      "        if: always()\n"
+                      "        shell: bash\n"
+                      "        run: rm -rf \"${RUNNER_TEMP}/buildbuddy\" "
+                      "\"${GITHUB_WORKSPACE}/.buildbuddy.bazelrc\"\n")
 # Jobs that may classify pull request trust with the shared rule (.github/actions/pr-trust) for
 # the jobs that need them.
 TRUST_JOBS = ("gatekeeper", "trust")
@@ -427,12 +437,16 @@ def _buildbuddy_job_violations(path, name, workflow, steps):
     configured = [index for index, step in enumerate(steps)
                   if _step_action(step, 8) == BUILDBUDDY_ACTION]
     violations = []
-    if _runs_self_hosted(path, name, _jobs(workflow)[name]):
+    self_hosted = _runs_self_hosted(path, name, _jobs(workflow)[name])
+    if self_hosted and (path, name) not in SELF_HOSTED_BUILDBUDDY_JOBS:
         violations.append("%s uses BuildBuddy on a self-hosted runner" % where)
+    if self_hosted and not (_jobs(workflow)[name].rstrip("\n") + "\n").endswith(
+            "\n" + BUILDBUDDY_CLEANUP):
+        violations.append("%s does not remove the BuildBuddy key in its last step" % where)
     if any(BAZEL_COMMAND.search(step) for step in steps[:max(configured)]):
         violations.append("%s runs Bazel before configuring BuildBuddy" % where)
     kinds = Counter(frozenset(_secret_reads(steps[index])) for index in configured)
-    pull_requests = "pull_request" in _triggers(workflow)
+    pull_requests = "pull_request" in _triggers(workflow) and not self_hosted
     expected = Counter({frozenset({"BUILDBUDDY_API_KEY"}): 1})
     if pull_requests:
         expected[frozenset({"BUILDBUDDY_API_KEY_READONLY"})] = 1
@@ -1636,57 +1650,29 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
                 "saves on every event"),
         })
 
-    def test_self_hosted_cache_endpoint_is_absent_from_job_environment(self):
+    def test_self_hosted_macos_uses_buildbuddy_and_removes_its_key(self):
         workflow = self.supply_chain_files[".github/workflows/main.yml"]
-        hosted, self_hosted = workflow.split("\n  macos-self-hosted:\n", 1)
+        self_hosted = workflow.split("\n  macos-self-hosted:\n", 1)[1]
         header = self_hosted.split("    steps:\n", 1)[0]
         self.assertNotIn("--remote_cache=", header)
-        self.assertNotIn("vars.BAZEL_REMOTE_CACHE", workflow)
-        self.assertNotIn("secrets.BAZEL_REMOTE_CACHE", hosted)
-        mask = _step_body(self_hosted, "Configure masked remote cache")
-        self.assertIn("REMOTE_CACHE_URL: ${{ secrets.BAZEL_REMOTE_CACHE }}", mask)
-        self.assertLess(self_hosted.index("- name: Configure masked remote cache"),
-                        self_hosted.index("- name: Check runner disk space"))
+        self.assertNotIn("BAZEL_REMOTE_CACHE", workflow)
+        order = [self_hosted.index("      - name: %s\n" % name) for name in (
+            "Select pinned Xcode", "Configure BuildBuddy remote cache",
+            "Prepare self-hosted macOS toolchain")]
+        self.assertEqual(order, sorted(order))
+        cache = _step_body(self_hosted, "Configure BuildBuddy remote cache")
+        self.assertIn("cache-partition: ${{ steps.xcode.outputs.cache_partition }}", cache)
+        self.assertTrue(self_hosted.rstrip("\n").endswith(BUILDBUDDY_CLEANUP.rstrip("\n")))
 
-    def test_remote_cache_setup_masks_values_before_export_and_fails_closed(self):
-        workflow = self.supply_chain_files[".github/workflows/main.yml"]
-        body = _step_body(workflow, "Configure masked remote cache")
-        scripts = _run_bodies(body)
-        self.assertEqual(len(scripts), 1)
-        endpoint = "https://cache.example.invalid:9443/fixture"
-        with tempfile.TemporaryDirectory() as directory:
-            environment = Path(directory) / "environment"
-            environment.write_text("EXISTING=preserved")
-            result = subprocess.run(["/bin/bash", "-c", textwrap.dedent(scripts[0])],
-                                    env={**os.environ, "REMOTE_CACHE_URL": endpoint,
-                                         "GITHUB_ENV": str(environment),
-                                         "BAZEL_MACOS_BUILD_FLAGS": "--macos_minimum_os=13.3"},
-                                    text=True, capture_output=True, timeout=10)
-            self.assertEqual(result.returncode, 0, result.stderr)
-            commands = result.stdout.splitlines()
-            self.assertTrue(commands)
-            self.assertTrue(all(line.startswith("::add-mask::") for line in commands))
-            for value in (endpoint, "cache.example.invalid", "cache.example.invalid:9443", "/fixture"):
-                self.assertIn("::add-mask::" + value, commands)
-            self.assertEqual(environment.read_text().splitlines(), [
-                "EXISTING=preserved",
-                "BAZEL_MACOS_BUILD_FLAGS=--macos_minimum_os=13.3 --remote_cache=" + endpoint,
-            ])
-            for invalid in ("", "invalid-cache-value", "https://cache.example.invalid/\ninjected",
-                            "https://fixture-user:fixture-token@cache.example.invalid",
-                            "https://cache.example.invalid?token=fixture-token",
-                            "https://cache.example.invalid#fixture-token"):
-                environment.write_text("EXISTING=preserved")
-                result = subprocess.run(["/bin/bash", "-c", textwrap.dedent(scripts[0])],
-                                        env={**os.environ, "REMOTE_CACHE_URL": invalid,
-                                             "GITHUB_ENV": str(environment),
-                                             "BAZEL_MACOS_BUILD_FLAGS": "--macos_minimum_os=13.3"},
-                                        text=True, capture_output=True, timeout=10)
-                self.assertNotEqual(result.returncode, 0)
-                self.assertEqual(environment.read_text(), "EXISTING=preserved")
-                self.assertEqual(result.stdout, "")
-                if invalid:
-                    self.assertNotIn(invalid, result.stderr)
+    def test_cache_keys_never_reach_bazel_as_flags(self):
+        # Bazel writes every rc option into its server log in the output base, which outlives
+        # the job on a persistent runner, so a key may reach Bazel only through a credential
+        # helper.
+        for path, text in self.supply_chain_files.items():
+            if path.startswith(".github/"):
+                with self.subTest(path=path):
+                    self.assertNotIn("--remote_header", text)
+                    self.assertNotIn("x-buildbuddy-api-key=", text)
 
     def test_external_actions_use_released_version_tags(self):
         """External actions use Renovate-compatible release tags, never branches."""
@@ -2379,7 +2365,7 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
 
     def test_buildbuddy_keys_follow_event_and_shared_trust_gate(self):
         self.assertEqual([], _buildbuddy_violations(self.supply_chain_files))
-        self.assertFalse(BUILDBUDDY_JOBS & set(SELF_HOSTED_JOBS))
+        self.assertEqual(SELF_HOSTED_BUILDBUDDY_JOBS, BUILDBUDDY_JOBS & set(SELF_HOSTED_JOBS))
         # A workflow that only runs for pull requests has no main writer of its own.
         sanitizers_pr = self.supply_chain_files[".github/workflows/sanitizers-pr.yml"]
         self.assertEqual({"pull_request"}, _triggers(sanitizers_pr))
@@ -2536,17 +2522,49 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
                 "BuildBuddy lanes changed"),
         }
         self._assert_rejected(lambda files, path: _buildbuddy_violations(files), cases)
-        self_hosted = files[main].replace(
-            "      - name: Configure masked remote cache\n",
-            "      - name: Configure BuildBuddy remote cache\n"
-            "        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'\n"
-            "        uses: ./.github/actions/buildbuddy-cache\n        with:\n"
-            "          api-key: ${{ secrets.BUILDBUDDY_API_KEY }}\n"
-            "          download-outputs: minimal\n\n"
-            "      - name: Configure masked remote cache\n", 1)
-        self.assertNotEqual(self_hosted, files[main])
-        problems = _buildbuddy_violations({**files, main: self_hosted})
-        self.assertTrue(any("self-hosted runner" in problem for problem in problems), problems)
+        cleanup = BUILDBUDDY_CLEANUP
+        linux_writer = ("      - name: Configure BuildBuddy remote cache\n" + writer_if +
+                        "        uses: ./.github/actions/buildbuddy-cache\n        with:\n"
+                        "          api-key: " + write_key + "\n"
+                        "          trusted-pr: ${{ needs.gatekeeper.outputs.trusted_pr }}\n"
+                        "          renovate-pr: ${{ needs.gatekeeper.outputs.renovate_pr }}\n"
+                        "          download-outputs: minimal\n\n")
+        linux_checkout = ("    steps:\n      - name: Checkout\n        uses: actions/checkout@v7\n"
+                          "        with:\n          persist-credentials: false\n\n"
+                          "      - name: Record target selection\n")
+        self.assertEqual(1, files[main].count(linux_checkout))
+        self._assert_rejected(lambda files, path: _buildbuddy_violations(files), {
+            "another self-hosted lane": (main, files[main].replace(
+                linux_checkout, linux_checkout.replace(
+                    "      - name: Record target selection\n",
+                    linux_writer + "      - name: Record target selection\n"), 1),
+                "uses BuildBuddy on a self-hosted runner"),
+            "self-hosted key left on the runner": (main, files[main].replace(
+                "\n" + cleanup, "\n", 1), "does not remove the BuildBuddy key"),
+            "cleanup skipped on failure": (main, files[main].replace(
+                cleanup, cleanup.replace("if: always()", "if: success()"), 1),
+                "does not remove the BuildBuddy key"),
+            "self-hosted Renovate reader": (main, files[main].replace(
+                "          cache-partition: ${{ steps.xcode.outputs.cache_partition }}\n"
+                "          download-outputs: minimal\n\n"
+                "      - name: Prepare self-hosted macOS toolchain\n",
+                "          cache-partition: ${{ steps.xcode.outputs.cache_partition }}\n"
+                "          download-outputs: minimal\n\n"
+                "      - name: Configure BuildBuddy read-only cache\n" + reader_if +
+                "        uses: ./.github/actions/buildbuddy-cache\n        with:\n"
+                "          read-only-api-key: " + read_key + "\n"
+                "          renovate-pr: ${{ needs.gatekeeper.outputs.renovate_pr }}\n"
+                "          download-outputs: minimal\n\n"
+                "      - name: Prepare self-hosted macOS toolchain\n", 1),
+                "does not pair one writer with no reader"),
+            "Bazel before the self-hosted cache": (main, files[main].replace(
+                "      - name: Select pinned Xcode\n        id: xcode\n        shell: bash\n"
+                "        run: tools/ci_select_macos_xcode.sh --optional\n",
+                "      - name: Early build\n        run: bazelisk --nohome_rc build //donner/base\n\n"
+                "      - name: Select pinned Xcode\n        id: xcode\n        shell: bash\n"
+                "        run: tools/ci_select_macos_xcode.sh --optional\n", 1),
+                "runs Bazel before configuring BuildBuddy"),
+        })
 
     def _run_buildbuddy_action(self, root, *, event, ref="refs/heads/main", write="",
                                read="", trusted="false", renovate="false",
@@ -2572,9 +2590,15 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         result = subprocess.run(["bash", "-c", script], env=env, capture_output=True,
                                 text=True, timeout=10, check=False)
         fragment = workspace / ".buildbuddy.bazelrc"
-        credential = temp / "buildbuddy" / "credentials.bazelrc"
+        helper = temp / "buildbuddy" / "helper"
+        credential = None
+        if helper.exists():
+            # Run the credential helper as Bazel does: `get`, with the request on stdin.
+            answer = subprocess.run([str(helper), "get"], input='{"uri": "grpcs://x"}',
+                                    capture_output=True, text=True, timeout=10, check=True)
+            credential = answer.stdout
         return (result.returncode, fragment.read_text() if fragment.exists() else None,
-                credential.read_text() if credential.exists() else None, result.stdout)
+                credential, result.stdout)
 
     def test_buildbuddy_action_selects_keys_by_event_and_fails_closed(self):
         write, read = "write-key-fixture", "read-key-fixture"
@@ -2604,8 +2628,26 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
                 1, None),
             "main push with read key": (dict(event="push", read=read), 1, None),
             "both keys": (dict(event="push", write=write, read=read), 1, None),
-            "self-hosted runner": (dict(
-                event="push", write=write, RUNNER_ENVIRONMENT="self-hosted"), 1, None),
+            "self-hosted runner on main": (dict(
+                event="push", write=write, RUNNER_ENVIRONMENT="self-hosted", RUNNER_OS="macOS"),
+                1, None),
+            "self-hosted macOS trusted pull request writes": (dict(
+                event="pull_request", ref="refs/pull/1/merge", write=write, trusted="true",
+                RUNNER_ENVIRONMENT="self-hosted", RUNNER_OS="macOS",
+                CACHE_PARTITION="ubuntu24-20261005.1-X64"), 0, "write"),
+            "self-hosted macOS without a partition": (dict(
+                event="pull_request", ref="refs/pull/1/merge", write=write, trusted="true",
+                RUNNER_ENVIRONMENT="self-hosted", RUNNER_OS="macOS"), 0, None),
+            "key that could break the helper's JSON": (dict(
+                event="push", write='key"]},"x":["y'), 1, None),
+            "self-hosted Linux trusted pull request": (dict(
+                event="pull_request", ref="refs/pull/1/merge", write=write, trusted="true",
+                RUNNER_ENVIRONMENT="self-hosted", RUNNER_OS="Linux"), 1, None),
+            "self-hosted macOS Renovate reader": (dict(
+                event="pull_request", ref="refs/pull/1/merge", read=read, renovate="true",
+                RUNNER_ENVIRONMENT="self-hosted", RUNNER_OS="macOS"), 1, None),
+            "unknown runner environment": (dict(
+                event="push", write=write, RUNNER_ENVIRONMENT=""), 1, None),
             "unknown download mode": (dict(event="push", write=write, download="some"), 1, None),
             "unreachable cache": (dict(event="push", write=write, curl_status=7), 0, None),
             "TLS failure": (dict(event="push", write=write, curl_status=35), 0, None),
@@ -2621,8 +2663,9 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
                     continue
                 key = write if mode == "write" else read
                 self.assertNotIn(key, fragment)
-                self.assertEqual("build --remote_header=x-buildbuddy-api-key=%s\n" % key,
-                                 credential)
+                self.assertNotIn("remote_header", fragment)
+                self.assertEqual({"headers": {"x-buildbuddy-api-key": [key]}},
+                                 json.loads(credential))
                 lines = fragment.splitlines()
                 self.assertIn("build --remote_cache=grpcs://remote.buildbuddy.io", lines)
                 self.assertIn("build --remote_instance_name=ubuntu24-20261005.1-X64", lines)
@@ -2635,8 +2678,31 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
                           else "build --noremote_upload_local_results")
                 self.assertIn(upload, lines)
                 self.assertEqual(1, sum("upload_local_results" in line for line in lines))
-                self.assertIn("import %s/runner-temp/buildbuddy/credentials.bazelrc" % directory,
-                              lines)
+                self.assertIn("build --credential_helper=remote.buildbuddy.io="
+                              "%s/runner-temp/buildbuddy/helper" % directory, lines)
+                self.assertFalse(any(line.startswith("import") for line in lines))
+
+    def test_buildbuddy_cache_partition_replaces_only_the_image_identity(self):
+        write = "write-key-fixture"
+        partition = "macos-ARM64-xcode-26.6-17F113"
+        with tempfile.TemporaryDirectory() as directory:
+            code, fragment, _, output = self._run_buildbuddy_action(
+                Path(directory), event="push", write=write, CACHE_PARTITION=partition,
+                ImageVersion="")
+            self.assertEqual(0, code, output)
+            self.assertIn("build --remote_instance_name=%s" % partition, fragment.splitlines())
+        for name, overrides in {
+            "self-hosted runner": dict(RUNNER_ENVIRONMENT="self-hosted"),
+            "flag injection": dict(CACHE_PARTITION="macos-ARM64 --remote_executor=grpc://x"),
+            "newline injection": dict(CACHE_PARTITION="macos-ARM64\nbuild --config=re"),
+        }.items():
+            arguments = dict(event="push", write=write, CACHE_PARTITION=partition)
+            arguments.update(overrides)
+            with self.subTest(case=name), tempfile.TemporaryDirectory() as directory:
+                code, fragment, _, output = self._run_buildbuddy_action(
+                    Path(directory), **arguments)
+                self.assertEqual(1, code, output)
+                self.assertIsNone(fragment)
 
     def test_sensitive_workflows_use_least_privilege_and_drop_checkout_credentials(self):
         paths = (
@@ -2843,8 +2909,9 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         files = self.supply_chain_files
         caller = ".github/workflows/pr_base_change.yml"
         main = ".github/workflows/main.yml"
-        forward = "      BAZEL_REMOTE_CACHE: ${{ secrets.BAZEL_REMOTE_CACHE }}\n"
-        declared = "      BAZEL_REMOTE_CACHE:\n        required: false\n"
+        forward = ("      BUILDBUDDY_API_KEY_READONLY: "
+                   "${{ secrets.BUILDBUDDY_API_KEY_READONLY }}\n")
+        declared = "      BUILDBUDDY_API_KEY_READONLY:\n        required: false\n"
         self.assertIn(forward, files[caller])
         self.assertIn(declared, files[main])
         cases = {
@@ -2857,7 +2924,7 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
                 forward, forward + "      CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}\n", 1),
                 "forwards secrets other than"),
             "renamed secret": (caller, files[caller].replace(
-                forward, "      BAZEL_REMOTE_CACHE: ${{ secrets.CODECOV_TOKEN }}\n", 1),
+                forward, "      BUILDBUDDY_API_KEY_READONLY: ${{ secrets.CODECOV_TOKEN }}\n", 1),
                 "forwards secrets other than"),
             "undeclared in callee": (main, files[main].replace(declared, "", 1),
                                      "callee declares workflow_call secrets"),

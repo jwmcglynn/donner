@@ -1,6 +1,7 @@
 name: Configure BuildBuddy remote cache
 description: >-
-  Point Bazel at the BuildBuddy remote cache on a GitHub-hosted lane. Remote
+  Point Bazel at the BuildBuddy remote cache on a GitHub-hosted lane, or on
+  the self-hosted macOS lane for trusted maintainer pull requests. Remote
   cache only: no remote execution and no build-event upload. The workflow
   passes at most one key, chosen by the event and the shared pull request
   trust rule (.github/actions/pr-trust); this action re-checks that choice and
@@ -40,6 +41,15 @@ inputs:
       later step reads build outputs from bazel-bin.
     required: false
     default: toplevel
+  cache-partition:
+    description: >-
+      Remote cache partition (`--remote_instance_name`) to use instead of the
+      runner image identity. The macOS lanes pass the `cache_partition` output
+      of tools/ci_select_macos_xcode.sh, which names the pinned Xcode, so the
+      macOS lanes key their cache on the toolchain rather than on the weekly
+      runner image.
+    required: false
+    default: ""
 
 runs:
   using: composite
@@ -54,6 +64,7 @@ runs:
         TRUSTED_PR: ${{ inputs.trusted-pr }}
         RENOVATE_PR: ${{ inputs.renovate-pr }}
         DOWNLOAD_OUTPUTS: ${{ inputs.download-outputs }}
+        CACHE_PARTITION: ${{ inputs.cache-partition }}
         EVENT_NAME: ${{ github.event_name }}
         REF: ${{ github.ref }}
       run: |
@@ -73,8 +84,6 @@ runs:
         # The checks below back up the workflow's own step conditions: a key
         # that reaches the wrong run is an error, never a silent downgrade.
         fail() { echo "::error::BuildBuddy: $1"; exit 1; }
-        [[ "${RUNNER_ENVIRONMENT:-}" == "github-hosted" ]] ||
-          fail "keys are only for GitHub-hosted runners."
         [[ -z "${WRITE_KEY}" || -z "${READ_KEY}" ]] || fail "pass one key, not both."
         main_writer=false
         if [[ "${REF}" == "refs/heads/main" ]]; then
@@ -87,6 +96,17 @@ runs:
               "${RENOVATE_PR}" != "true" ]]; then
           trusted_writer=true
         fi
+        # The one self-hosted exception: the macOS runner, for trusted maintainer
+        # pull requests with the read-write key. Every other run is GitHub-hosted.
+        case "${RUNNER_ENVIRONMENT:-}" in
+          github-hosted) ;;
+          self-hosted)
+            [[ "${RUNNER_OS:-}" == "macOS" && "${trusted_writer}" == "true" &&
+               -n "${WRITE_KEY}" ]] ||
+              fail "a self-hosted runner gets a key only on macOS for a trusted maintainer pull request."
+            ;;
+          *) fail "unknown runner environment." ;;
+        esac
         if [[ -n "${WRITE_KEY}" ]]; then
           mode=read-write
           upload=true
@@ -106,11 +126,24 @@ runs:
         # Hosted lanes compile with the runner image's compiler and system
         # headers, which are not action inputs, so an image update changes no
         # cache key. Partition the cache per runner image so an entry is only
-        # ever reused on the image that produced it.
-        image="${ImageOS:-}-${ImageVersion:-}-${RUNNER_ARCH:-}"
-        if [[ ! "${image}" =~ ^[A-Za-z0-9]+-[A-Za-z0-9.]+-[A-Za-z0-9]+$ ]]; then
-          echo "::warning::BuildBuddy: runner image identity unavailable; remote cache disabled."
+        # ever reused on the image that produced it. The macOS lanes instead
+        # name the pinned Xcode: Apple toolchain actions carry its version and
+        # build in their keys, and both macOS runners build with it.
+        # A self-hosted runner has no image identity: it gets a partition only
+        # from the pinned Xcode, and without one the cache stays off.
+        if [[ -n "${CACHE_PARTITION:-}" ]]; then
+          [[ "${CACHE_PARTITION}" =~ ^[A-Za-z0-9]+(-[A-Za-z0-9.]+)+$ ]] ||
+            fail "invalid cache-partition value."
+          image="${CACHE_PARTITION}"
+        elif [[ "${RUNNER_ENVIRONMENT}" == "self-hosted" ]]; then
+          echo "::warning::BuildBuddy: no cache partition for this self-hosted runner; remote cache disabled."
           exit 0
+        else
+          image="${ImageOS:-}-${ImageVersion:-}-${RUNNER_ARCH:-}"
+          if [[ ! "${image}" =~ ^[A-Za-z0-9]+-[A-Za-z0-9.]+-[A-Za-z0-9]+$ ]]; then
+            echo "::warning::BuildBuddy: runner image identity unavailable; remote cache disabled."
+            exit 0
+          fi
         fi
 
         # An unreachable cache must cost nothing: Bazel can stop at startup
@@ -123,18 +156,31 @@ runs:
           exit 0
         fi
 
-        # The key lives outside the workspace, so no artifact or cache upload
-        # of workspace paths can carry it; the workspace fragment only imports
-        # it. The runner deletes RUNNER_TEMP when the job ends.
+        # Bazel gets the key from a credential helper, never as a flag: Bazel
+        # writes every rc option into its server log in the output base, which
+        # outlives the job on a persistent runner. The helper and the key live
+        # outside the workspace, so no artifact or cache upload of workspace
+        # paths can carry them, and Bazel caches the helper's answer only in
+        # memory. A GitHub-hosted runner is discarded when the job ends; the
+        # self-hosted job removes both files in its last step.
+        if [[ "${mode}" == "read-write" ]]; then key="${WRITE_KEY}"; else key="${READ_KEY}"; fi
+        # The helper prints the key inside JSON, so allow only key characters.
+        [[ "${key}" =~ ^[A-Za-z0-9_-]+$ ]] || fail "the key has unexpected characters."
         credentials="${RUNNER_TEMP}/buildbuddy"
         mkdir -p "${credentials}"
         chmod 700 "${credentials}"
-        if [[ "${mode}" == "read-write" ]]; then key="${WRITE_KEY}"; else key="${READ_KEY}"; fi
         (
           umask 077
-          printf 'build --remote_header=x-buildbuddy-api-key=%s\n' "${key}" \
-            > "${credentials}/credentials.bazelrc"
+          printf '%s' "${key}" > "${credentials}/key"
+          {
+            echo '#!/bin/sh'
+            echo '# Bazel credential helper: answers every request with the BuildBuddy key.'
+            echo 'cat > /dev/null'
+            printf 'printf %s "$(cat %q)"\n' "'{\"headers\":{\"x-buildbuddy-api-key\":[\"%s\"]}}\\n'" \
+              "${credentials}/key"
+          } > "${credentials}/helper"
         )
+        chmod 700 "${credentials}/helper"
         {
           echo "# Generated by .github/actions/buildbuddy-cache. Do not commit."
           echo "build --remote_cache=grpcs://${endpoint}"
@@ -152,7 +198,7 @@ runs:
           else
             echo "build --noremote_upload_local_results"
           fi
-          echo "import ${credentials}/credentials.bazelrc"
+          echo "build --credential_helper=${endpoint}=${credentials}/helper"
         } > "${fragment}"
 
         echo "BuildBuddy remote cache enabled: mode=${mode} event=${EVENT_NAME}" \

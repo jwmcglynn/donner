@@ -278,7 +278,7 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         self.assertIn(
             "--test_tag_filters=launches-browser,-manual,-perf,-ci-remote-gpu,-fuzz_soak ",
             browser)
-        self.assertIn("bazelisk --nohome_rc test --config=ci", browser)
+        self.assertIn("bazelisk --nohome_rc --nosystem_rc test --config=ci", browser)
         for phase in (main_test, browser):
             self.assertIn("$BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS $TARGETS", phase)
             self.assertNotIn("requires_metal_toolchain", phase)
@@ -782,7 +782,8 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         for profile, expected_status, expected_flags in (
             ("full", 0, ""),
             ("paravirtual-texture-usage-off", 0,
-             "BAZEL_MACOS_TEST_FLAGS=--test_env=HOME --test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=0\n"),
+             "BAZEL_MACOS_TEST_FLAGS=--test_env=HOME --test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=0 "
+             "--test_env=DONNER_CI_MACOS_LANE=hosted\n"),
             ("unknown", 1, ""),
             ("", 1, ""),
         ):
