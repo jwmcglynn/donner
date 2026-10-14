@@ -84,6 +84,21 @@ inline Vector2d FilterOffsetInPixels(Vector2d offset, Vector2d bounds, bool obje
   return transform.transformVector(userOffset);
 }
 
+/// Invert only finite, nonsingular transforms whose inverse remains finite.
+/// @param deviceFromFilter Transform to validate.
+inline std::optional<Transform2d> FiniteFilterInverse(const Transform2d& deviceFromFilter) {
+  const auto finite = [](const Transform2d& destinationFromSource) {
+    return std::all_of(std::begin(destinationFromSource.data), std::end(destinationFromSource.data),
+                       [](double value) { return std::isfinite(value); });
+  };
+  const double determinant = deviceFromFilter.determinant();
+  if (!finite(deviceFromFilter) || !std::isfinite(determinant) || NearZero(determinant, 1e-12)) {
+    return std::nullopt;
+  }
+  const Transform2d filterFromDevice = deviceFromFilter.inverse();
+  return finite(filterFromDevice) ? std::optional(filterFromDevice) : std::nullopt;
+}
+
 /// Resolved clipping bounds and optional un-clipped animated geometry, in user coordinates.
 struct FilterRegionSample {
   Box2d bounds;                         ///< Clip region, intersected with the filter region.
@@ -124,14 +139,17 @@ struct FilterRegionContext {
                                                           : 0.0),
         boundingBoxY(graph.elementBoundingBox.has_value() ? graph.elementBoundingBox->topLeft.y
                                                           : 0.0),
-        filterFromDevice(deviceFromFilter.inverse()),
         primitiveUnitsBounds(primitiveBounds.value_or(
             computePrimitiveUnitsBounds(sourceSize, graph.primitiveViewport))),
         historyInDeviceSpace(rasterRegion.has_value()),
         historyFilterRegion(rasterRegion.value_or(filterRegion)),
         historySourceRegion(rasterRegion ? Box2d::FromXYWH(0, 0, sourceSize.x, sourceSize.y)
                                          : filterRegion),
-        previousOutputSubregion(historySourceRegion) {}
+        previousOutputSubregion(historySourceRegion) {
+    const auto maybeFilterFromDevice = FiniteFilterInverse(deviceFromFilter);
+    invertible = maybeFilterFromDevice.has_value();
+    filterFromDevice = maybeFilterFromDevice.value_or(Transform2d());
+  }
 
   /// Resolve an effect length along X. @param value Length in primitive units.
   double toPixelX(double value) const {
@@ -156,22 +174,39 @@ struct FilterRegionContext {
       auto it = namedSubregions.find(named->name.str());
       return it != namedSubregions.end() ? it->second : previousOutputSubregion;
     }
-    return std::holds_alternative<FilterInput::Previous>(input.value) ? previousOutputSubregion
-                                                                      : historySourceRegion;
+    if (const auto* standard = std::get_if<components::FilterStandardInput>(&input.value)) {
+      if (*standard == components::FilterStandardInput::FillPaint) {
+        return fillPaintRegion.value_or(historySourceRegion);
+      }
+      if (*standard == components::FilterStandardInput::StrokePaint) {
+        return strokePaintRegion.value_or(historySourceRegion);
+      }
+      return historySourceRegion;
+    }
+    return previousOutputSubregion;
   }
 
   /// Resolve explicit or input-derived primitive bounds. @param node Primitive to evaluate.
   Box2d computeNodeSubregion(const FilterNode& node) const {
+    if (!invertible) {
+      return Box2d::CreateEmpty(Vector2d::Zero());
+    }
     if (node.hasExplicitRegion()) {
       return explicitNodeSubregion(node);
     }
     const Box2d bounds = computeDefaultSubregion(node);
+    if (historyInDeviceSpace && (bounds.width() <= 0 || bounds.height() <= 0)) {
+      return Box2d::CreateEmpty(filterFromDevice.transformPosition(bounds.topLeft));
+    }
     return historyInDeviceSpace ? filterFromDevice.transformBox(bounds) : bounds;
   }
 
   /// Evaluate admitted region stacks after the default subregion is known.
   /// @param node Primitive with immutable recipes. Its execution cost must already be admitted.
   FilterRegionSample sampleNodeSubregion(const FilterNode& node) const {
+    if (!invertible) {
+      return {Box2d::CreateEmpty(Vector2d::Zero()), std::nullopt};
+    }
     const Box2d base =
         node.hasExplicitRegion() ? explicitNodeRegion(node) : computeNodeSubregion(node);
     if (!node.hasAnimatedRegion()) {
@@ -192,23 +227,24 @@ struct FilterRegionContext {
     return {intersect(region, filterRegion), sampled ? std::optional(region) : std::nullopt};
   }
 
-  /// Retain a primitive's actual region for later input-derived defaults.
+  /// Retain a user-space primitive region for later input-derived defaults.
   /// @param node Completed primitive. @param bounds Region used for that primitive.
-  /// @param animatedRegion Un-clipped sampled region, when an animation contributed.
-  void recordSubregion(const FilterNode& node, const Box2d& bounds,
-                       std::optional<Box2d> animatedRegion = std::nullopt) {
-    Box2d retained = bounds;
-    if (historyInDeviceSpace) {
-      retained = animatedRegion || node.hasExplicitRegion()
-                     ? intersect(deviceFromFilter.transformBox(
-                                     animatedRegion.value_or(explicitNodeRegion(node))),
-                                 historyFilterRegion)
-                     : computeDefaultSubregion(node);
-    }
-    previousOutputSubregion = retained;
-    if (node.result) {
-      namedSubregions[node.result->str()] = retained;
-    }
+  void recordSubregion(const FilterNode& node, const Box2d& bounds) {
+    storeSubregion(node, bounds);
+  }
+
+  /// Retain the raster executor's already-converted and bounded primitive region.
+  /// @param node Completed primitive. @param bounds Explicit region, or absent for input defaults.
+  void recordRasterSubregion(const FilterNode& node, std::optional<Box2d> bounds) {
+    storeSubregion(
+        node, bounds ? intersect(*bounds, historyFilterRegion) : computeDefaultSubregion(node));
+  }
+
+  /// Use admitted CPU paint-input coverage for standard-input default regions.
+  /// @param fill FillPaint alpha bounds. @param stroke StrokePaint alpha bounds.
+  void setPaintInputRegions(std::optional<Box2d> fill, std::optional<Box2d> stroke) {
+    fillPaintRegion = fill;
+    strokePaintRegion = stroke;
   }
 
   /// Resolve a position. @param length Value. @param extent Axis. @param origin Object origin.
@@ -233,15 +269,25 @@ struct FilterRegionContext {
   double boundingBoxHeight = 1.0;
   double boundingBoxX = 0.0;
   double boundingBoxY = 0.0;
+  bool invertible = true;
   Transform2d filterFromDevice;
   Box2d primitiveUnitsBounds;
   bool historyInDeviceSpace = false;
   Box2d historyFilterRegion;
   Box2d historySourceRegion;
+  std::optional<Box2d> fillPaintRegion;
+  std::optional<Box2d> strokePaintRegion;
   Box2d previousOutputSubregion;
   std::unordered_map<std::string, Box2d> namedSubregions;
 
 private:
+  void storeSubregion(const FilterNode& node, const Box2d& bounds) {
+    previousOutputSubregion = bounds;
+    if (node.result) {
+      namedSubregions[node.result->str()] = bounds;
+    }
+  }
+
   Box2d computeDefaultSubregion(const FilterNode& node) const {
     using namespace components;
     const bool sourceGenerator =
@@ -337,10 +383,12 @@ private:
   }
 
   static Box2d intersect(const Box2d& first, const Box2d& second) {
-    return Box2d(Vector2d(std::max(first.topLeft.x, second.topLeft.x),
-                          std::max(first.topLeft.y, second.topLeft.y)),
-                 Vector2d(std::min(first.bottomRight.x, second.bottomRight.x),
-                          std::min(first.bottomRight.y, second.bottomRight.y)));
+    const Vector2d minimum(std::max(first.topLeft.x, second.topLeft.x),
+                           std::max(first.topLeft.y, second.topLeft.y));
+    const Vector2d maximum(
+        std::max(minimum.x, std::min(first.bottomRight.x, second.bottomRight.x)),
+        std::max(minimum.y, std::min(first.bottomRight.y, second.bottomRight.y)));
+    return Box2d(minimum, maximum);
   }
 
   Box2d explicitNodeSubregion(const FilterNode& node) const {

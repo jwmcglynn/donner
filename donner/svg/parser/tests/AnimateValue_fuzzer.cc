@@ -36,7 +36,9 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
     std::string_view element;
     std::string_view attribute;
   };
-  constexpr std::array<Target, 9> targets = {{
+  constexpr std::array<Target, 11> targets = {{
+      {"filter-x:", "feFlood", "x"},
+      {"filter-width:", "feFlood", "width"},
       {"marker:", "marker", "markerWidth"},
       {"marker-ref:", "marker", "refX"},
       {"text-offset:", "textPath", "startOffset"},
@@ -60,7 +62,11 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
   svg += target.attribute;
   svg += target.prefix == "reference-to:" ? "' to='" : "' values='";
   svg.append(values.substr(target.prefix.size()));
-  svg += "' begin='0s' dur='2s'/></";
+  svg += "' begin='0s' dur='2s'";
+  if (target.prefix.starts_with("filter-")) {
+    svg += " additive='sum' accumulate='sum' repeatCount='3'";
+  }
+  svg += "/></";
   svg += target.element;
   svg += "></svg>";
 
@@ -82,10 +88,19 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
     // Advance at a few time points to exercise interpolation.
     components::AnimationSystem().advance(registry, 0.5, nullptr);
     components::AnimationSystem().advance(registry, 1.0, nullptr);
+    if (target.prefix.starts_with("filter-")) {
+      components::AnimationSystem().advance(registry, 3.0, nullptr);
+    }
     if (const auto element = result.result().querySelector("#r")) {
       components::AnimationValueContext context;
       for (const double extent : {1.0, 100.0}) {
         context.viewBox = Box2d::FromXYWH(0, 0, extent, extent);
+        if (target.prefix.starts_with("filter-")) {
+          context.mappedLengths = true;
+          context.unitlessScale = extent;
+          context.unitlessOrigin = target.attribute == "x" ? 4 : 0;
+          context.percentageOrigin = context.unitlessOrigin;
+        }
         (void)components::ResolveContextualLength(registry, element->entityHandle().entity(),
                                                   target.attribute, Lengthd(3), context);
       }

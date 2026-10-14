@@ -96,6 +96,13 @@ instance; rasterization consumes the prepared scalars. Both use the same interpo
 ordinary values and retain authored components as their bases. The presentation regression target
 covers mixed units, shared markers, stack ordering, seeking, keyword values and source removal.
 
+Filter-primitive region stacks remain deferred until the referencing filter supplies its units,
+viewport, object bounds and default input regions. Positions and additive displacements use distinct
+origins. SVG image dimensions are sampled before rasterization. CPU default-region history follows
+executed raster bounds, including rounded effect support and paint coverage; animation then resolves
+its underlying value in user coordinates. Invalid transforms and excessive retained recipes are
+rejected before sampling. Viewport edits and animation restoration invalidate dependent layout caches.
+
 Resource references are sampled before shadow-tree expansion. Derived resources are invalidated only
 when the final reference changes, after the previous shadow instances have been removed. Repeated
 raster-image references move decoded frames into bounded per-element caches and retain their resource
@@ -157,7 +164,9 @@ geometry measurement, lifecycle queries, hit geometry, and queued preview input.
   and 262144 dependency steps.
 - At most 4 MiB of generated values, 64 numeric values per sampled list, and 64 KiB per motion path.
 - A shared 262144-unit path parsing/measurement budget per evaluation.
-- A shared 4 Mi-unit contextual length preparation allowance across text spans and marker references.
+- A shared 4 Mi-unit contextual length preparation allowance across text spans, marker references and prepared SVG filter images.
+  Raster filter recipes are charged to the existing filter execution budget, including repeat
+  executions and CPU paint-coverage scans.
   Recipe parsing/interpolation and bounded path measurement are admitted before work; a refused
   consumer retains its base value. Owned recipe data is charged to the source/output envelopes.
 - Lifecycle queries exceeding 4096 events return an incomplete empty result.
@@ -167,8 +176,9 @@ geometry measurement, lifecycle queries, hit geometry, and queued preview input.
 - Public interaction validates document ownership before resolving target storage and rejects detached
   targets and secure processing modes. No script execution is added; animated references use the
   existing resource loader and its URI validation, processing-mode restrictions and budgets.
-- Production rendering retains its existing GPU-resident path. Pixel readback belongs only to explicit
-  diagnostics and rendered tests.
+- Animation sampling transfers metadata and adds no GPU readback or upload fallback. Paint-coverage
+  scans apply only to existing CPU pixmaps in the software backend. Referenced SVG filter images use
+  the renderer's existing image-staging path; removing its readback remains renderer work.
 
 These limits are exercised by `//donner/svg/parser:parser_tests`,
 `//donner/svg/tests:svg_tests`, `//donner/svg/renderer/tests:renderer_animation_presentation_tests`,
@@ -188,8 +198,8 @@ fuzzer coverage must be expanded whenever a new input form or resource-owning pa
       and inherited/same-sample primitive-unit selectors with rendered regressions.
 - [x] Resolve mixed-unit text-path offsets against final path geometry, including shadow instances.
 - [x] Resolve marker dimensions and reference points separately for each referencing viewport.
-- [ ] Resolve inherited filter-primitive children in each referencing filter's coordinate context.
-- [ ] Supply default filter-primitive subregions as underlying animation values, including defaults
+- [x] Resolve inherited filter-primitive children in each referencing filter's coordinate context.
+- [x] Supply default filter-primitive subregions as underlying animation values, including defaults
       derived from primitive inputs and the enclosing filter region.
 - [ ] Finish presentation-attribute coverage and publish the verified support matrix.
 - [ ] Finish independent code/security review and all new hostile-input regressions.

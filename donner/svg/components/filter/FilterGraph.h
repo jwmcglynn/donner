@@ -727,6 +727,14 @@ inline bool FilterGraphExecutionCost(const FilterGraph& graph, std::uint64_t pix
     return false;
   }
   std::uint64_t workUnits = 0;
+  if (memoryModel == FilterMemoryModel::CpuFloatNamedResults &&
+      std::any_of(graph.nodes.begin(), graph.nodes.end(),
+                  [](const auto& node) { return node.hasAnimatedRegion(); })) {
+    if (pixelCount > kMaximumFilterWorkUnits / 2) {
+      return false;
+    }
+    workUnits = pixelCount * 2;  // At most two admitted CPU paint-coverage scans.
+  }
   for (const FilterNode& node : graph.nodes) {
     for (const auto& recipe : node.animatedRegion) {
       if (recipe) {

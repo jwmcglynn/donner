@@ -52,6 +52,31 @@ tiny_skia::filter::PixelRect BoundedPixelRect(const Box2d& box, int width, int h
   return tiny_skia::filter::PixelRect{x0, y0, std::max(0.0, x1 - x0), std::max(0.0, y1 - y0)};
 }
 
+std::optional<Box2d> PaintInputBounds(const tiny_skia::Pixmap* paint) {
+  if (!paint) {
+    return std::nullopt;
+  }
+  std::optional<Box2d> bounds;
+  const auto pixels = paint->data();
+  for (std::size_t y = 0; y < paint->height(); ++y) {
+    for (std::size_t x = 0; x < paint->width(); ++x) {
+      if (pixels[(y * paint->width() + x) * 4 + 3] != 0) {
+        const Box2d pixel = Box2d::FromXYWH(x, y, 1, 1);
+        bounds = bounds ? Box2d::Union(*bounds, pixel) : pixel;
+      }
+    }
+  }
+  return bounds;
+}
+
+std::optional<Box2d> RasterNodeRegion(const tiny_skia::filter::GraphNode& node) {
+  if (!node.subregion) {
+    return std::nullopt;
+  }
+  const auto& region = *node.subregion;
+  return Box2d::FromXYWH(region.x, region.y, region.w, region.h);
+}
+
 namespace fp = components::filter_primitive;
 namespace gp = tiny_skia::filter::graph_primitive;
 
@@ -794,6 +819,19 @@ void ApplyFilterGraphToPixmap(tiny_skia::Pixmap& pixmap, const components::Filte
   if (!fitsBudget) {
     return;
   }
+  const bool samplesRegions =
+      std::any_of(filterGraph.nodes.begin(), filterGraph.nodes.end(),
+                  [](const auto& node) { return node.hasAnimatedRegion(); });
+  if (samplesRegions) {
+    for (const auto* paint : {fillPaintInput, strokePaintInput}) {
+      if (paint && std::uint64_t{paint->width()} * paint->height() > pixelCount) {
+        if (executionBudget) {
+          executionBudget->reject();
+        }
+        return;
+      }
+    }
+  }
   const FilterConversionContext context(filterGraph, deviceFromFilter, filterRegion,
                                         static_cast<int>(pixmap.width()),
                                         static_cast<int>(pixmap.height()));
@@ -807,10 +845,14 @@ void ApplyFilterGraphToPixmap(tiny_skia::Pixmap& pixmap, const components::Filte
   FilterRegionContext regions(filterGraph, Vector2i(pixmap.width(), pixmap.height()),
                               context.filterRegion.value_or(context.primitiveUnitsBounds),
                               deviceFromFilter, context.primitiveUnitsBounds, rasterRegion);
+  if (samplesRegions) {
+    regions.setPaintInputRegions(PaintInputBounds(fillPaintInput),
+                                 PaintInputBounds(strokePaintInput));
+  }
   for (const components::FilterNode& node : filterGraph.nodes) {
     const FilterRegionSample sampled = regions.sampleNodeSubregion(node);
     graph.nodes.push_back(ConvertNode(node, context, graph, sampled));
-    regions.recordSubregion(node, sampled.bounds, sampled.animatedRegion);
+    regions.recordRasterSubregion(node, RasterNodeRegion(graph.nodes.back()));
   }
 
   tiny_skia::filter::executeFilterGraph(pixmap, graph);
