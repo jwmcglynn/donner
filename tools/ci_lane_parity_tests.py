@@ -392,14 +392,18 @@ def _strip_comment(value, yaml=False):
     return value
 
 
-# A backslash-newline continues a shell line only when the run of backslashes before the newline
-# has odd length; an even run ends in an escaped backslash.
-_CONTINUATION = re.compile(r"(?<!\\)((?:\\\\)*)\\\n\s*")
+_CONTINUATION = re.compile(r"(\\+)\n\s*")
 
 
 def _join_continuations(script):
-    """A shell script with each backslash-newline continuation joined into one line."""
-    return _CONTINUATION.sub(r"\1 ", script)
+    """A shell script with each line that ends in backslashes joined to the next with a space.
+
+    An odd run ends in a continuation, which is removed. An even run ends in an escaped
+    backslash, which is kept, so the join never turns it into an escaped blank. Joining an even
+    run too keeps the text of a quote that is open across the newline on one line.
+    """
+    return _CONTINUATION.sub(lambda match: match.group(1)[:len(match.group(1)) // 2 * 2] + " ",
+                             script)
 
 
 def _scalar(value):
