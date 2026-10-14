@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8" viewBox="0 0 8 8">
+  <title>Nested SVG image containing a data URL PNG</title>
+  <desc>Data URLs are exempt from external-resource restrictions in secure processing modes.
+    SVG 2 sections 2.2.1 and 2.5.5 require this nested image to retain all 64 opaque red pixels.
+    https://svgwg.org/svg2-draft/single-page.html#conform-features
+    https://svgwg.org/svg2-draft/single-page.html#conform-ConformingSVGViewers
+  </desc>
+  <image width="8" height="8" href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI4IiBoZWlnaHQ9IjgiIHZpZXdCb3g9IjAgMCA4IDgiPjxpbWFnZSBocmVmPSJkYXRhOmltYWdlL3BuZztiYXNlNjQsaVZCT1J3MEtHZ29BQUFBTlNVaEVVZ0FBQUFnQUFBQUlDQVlBQUFERUQ3NkxBQUFBRWtsRVFWUjRuR1A0ejhEd0h4OW1HQmtLQU1MWGY0RXZjZUFCQUFBQUFFbEZUa1N1UW1DQyIgd2lkdGg9IjgiIGhlaWdodD0iOCIvPjwvc3ZnPg=="/>
+</svg>
