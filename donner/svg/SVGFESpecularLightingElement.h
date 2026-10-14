@@ -278,7 +278,7 @@ namespace donner::svg {
  * original image using feComposite with operator="arithmetic".
  */
 class SVGFESpecularLightingElement : public SVGFilterPrimitiveStandardAttributes {
-  friend class parser::SVGParserImpl;
+  friend class details::ElementFactory;
 
 protected:
   /// Create an SVGFESpecularLightingElement wrapper from an entity.

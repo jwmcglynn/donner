@@ -86,6 +86,21 @@ py_test(
 
 # Medium: its cases run coverage.sh end to end, and a slow host stretches the suite past 60 s.
 py_test(
+    name = "browser_flake_hunt_tests",
+    size = "small",
+    srcs = [
+        "browser_flake_hunt_tests.py",
+        "test_executable_fixtures.py",
+    ],
+    data = [
+        "browser-flake-hunt.sh",
+        "//tools/http:simple_webserver",
+    ],
+    imports = ["."],
+    deps = ["@rules_python//python/runfiles"],
+)
+
+py_test(
     name = "coverage_script_tests",
     size = "medium",
     srcs = [

@@ -55,7 +55,7 @@ namespace donner::svg {
  * discarded; uncovered areas become transparent black.
  */
 class SVGFEOffsetElement : public SVGFilterPrimitiveStandardAttributes {
-  friend class parser::SVGParserImpl;
+  friend class details::ElementFactory;
 
 protected:
   /// Create an SVGFEOffsetElement wrapper from an entity.

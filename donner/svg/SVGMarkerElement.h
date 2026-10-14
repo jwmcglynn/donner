@@ -72,7 +72,7 @@ namespace donner::svg {
  * used repeatedly along a path, such as arrowheads or other markers on paths.
  */
 class SVGMarkerElement : public SVGElement {
-  friend class parser::SVGParserImpl;
+  friend class details::ElementFactory;
 
 private:
   /// Create an SVGMarkerElement wrapper from an entity.

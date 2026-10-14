@@ -65,7 +65,7 @@ namespace donner::svg {
  * feFuncR/G/B/A elements.
  */
 class SVGFEComponentTransferElement : public SVGFilterPrimitiveStandardAttributes {
-  friend class parser::SVGParserImpl;
+  friend class details::ElementFactory;
 
 protected:
   /// Create an SVGFEComponentTransferElement wrapper from an entity.

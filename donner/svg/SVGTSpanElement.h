@@ -101,7 +101,7 @@ namespace donner::svg {
  * \endhtmlonly
  */
 class SVGTSpanElement : public SVGTextPositioningElement {
-  friend class parser::SVGParserImpl;
+  friend class details::ElementFactory;
 
 private:
   /// Create an SVGTSpanElement wrapper from an entity.

@@ -292,7 +292,7 @@ namespace donner::svg {
  * light source.
  */
 class SVGFEDiffuseLightingElement : public SVGFilterPrimitiveStandardAttributes {
-  friend class parser::SVGParserImpl;
+  friend class details::ElementFactory;
 
 protected:
   /// Create an SVGFEDiffuseLightingElement wrapper from an entity.

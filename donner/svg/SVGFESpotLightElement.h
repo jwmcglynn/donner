@@ -184,7 +184,7 @@ namespace donner::svg {
  * specularExponent and limitingConeAngle.
  */
 class SVGFESpotLightElement : public SVGElement {
-  friend class parser::SVGParserImpl;
+  friend class details::ElementFactory;
 
 protected:
   /// Create an SVGFESpotLightElement wrapper from an entity.

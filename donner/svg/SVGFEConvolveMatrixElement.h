@@ -233,7 +233,7 @@ namespace donner::svg {
  * edge detection, sharpening, embossing, and beveling.
  */
 class SVGFEConvolveMatrixElement : public SVGFilterPrimitiveStandardAttributes {
-  friend class parser::SVGParserImpl;
+  friend class details::ElementFactory;
 
 protected:
   /// Create an SVGFEConvolveMatrixElement wrapper from an entity.

@@ -69,7 +69,7 @@ namespace donner::svg {
  * \endhtmlonly
  */
 class SVGCircleElement : public SVGGeometryElement {
-  friend class parser::SVGParserImpl;
+  friend class details::ElementFactory;
 
 private:
   /// Create an SVGCircleElement wrapper from an entity.

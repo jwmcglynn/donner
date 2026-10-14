@@ -67,7 +67,7 @@ namespace donner::svg {
  * elements, via `clip-path`.
  */
 class SVGClipPathElement : public SVGElement {
-  friend class parser::SVGParserImpl;
+  friend class details::ElementFactory;
 
 private:
   /// Create an SVGClipPathElement wrapper from an entity.

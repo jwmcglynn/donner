@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100" viewBox="0 0 100 100">
+  <title>Explicit automatic rect radii</title>
+  <desc>SVG2 geometry rx/ry auto resolve to zero when both axes have no length. https://svgwg.org/svg2-draft/geometry.html#RX https://svgwg.org/svg2-draft/shapes.html#RectElement</desc>
+  <rect x="20" y="20" width="40" height="40" fill="red" rx="auto"/>
+</svg>

@@ -60,7 +60,7 @@ namespace donner::svg {
  * scale*(map[x,y].yChannel - 0.5)]`.
  */
 class SVGFEDisplacementMapElement : public SVGFilterPrimitiveStandardAttributes {
-  friend class parser::SVGParserImpl;
+  friend class details::ElementFactory;
 
 protected:
   /// Create an SVGFEDisplacementMapElement wrapper from an entity.

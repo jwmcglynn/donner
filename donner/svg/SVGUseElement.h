@@ -199,7 +199,7 @@ namespace donner::svg {
  * | `href`    | (none)  | URI to the element to reuse. |
  */
 class SVGUseElement : public SVGElement {
-  friend class parser::SVGParserImpl;
+  friend class details::ElementFactory;
 
 protected:
   /// Create an SVGUseElement object.

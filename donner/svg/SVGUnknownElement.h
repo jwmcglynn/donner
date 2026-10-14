@@ -14,7 +14,7 @@ namespace donner::svg {
  * descendants remain in the DOM but are excluded from rendering.
  */
 class SVGUnknownElement : public SVGGraphicsElement {
-  friend class parser::SVGParserImpl;
+  friend class details::ElementFactory;
 
 protected:
   /// Create an SVGUnknownElement wrapper from an entity.
