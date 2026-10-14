@@ -129,6 +129,15 @@ var LibraryDonnerGpu = {
     surfacePresents: 0,
     completionProgressKicks: 0,
     completionProgressKickMs: 0,
+    // Compiled pipelines of the browser device, by what they compile; see compilePipeline.
+    pipelines: null,
+    shaderSources: null,
+    // Pipelines created in the current task whose asynchronous compile has not started yet, or
+    // null when none are waiting; see startCompiles.
+    compilesToStart: null,
+    pipelineCompiles: 0,
+    pipelineCompilesShared: 0,
+    pipelineCompilesOnFirstUse: 0,
     // Bounded queue timeline for failure diagnostics, on the epoch clock so a page can align it.
     timeline: [],
 
@@ -260,6 +269,9 @@ var LibraryDonnerGpu = {
         "surfacePresents": DonnerGpu.surfacePresents,
         "completionProgressKicks": DonnerGpu.completionProgressKicks,
         "completionProgressKickMs": DonnerGpu.completionProgressKickMs,
+        "pipelineCompiles": DonnerGpu.pipelineCompiles,
+        "pipelineCompilesShared": DonnerGpu.pipelineCompilesShared,
+        "pipelineCompilesOnFirstUse": DonnerGpu.pipelineCompilesOnFirstUse,
       };
       DonnerGpu.logical.forEach(function(record) {
         statistics["objects"] += record.objects.size;
@@ -286,6 +298,8 @@ var LibraryDonnerGpu = {
       if (DonnerGpu.logical === null) {
         DonnerGpu.logical = new Map();
         DonnerGpu.shares = new Map();
+        DonnerGpu.pipelines = new Map();
+        DonnerGpu.shaderSources = new Map();
         globalThis["__donnerReadGpuObjectStats"] = DonnerGpu.debugStatistics;
         globalThis["__donnerReadGpuTimeline"] = function() {
           return DonnerGpu.timeline.slice();
@@ -558,6 +572,11 @@ var LibraryDonnerGpu = {
         }
       });
       DonnerGpu.shares.clear();
+      // A new map rather than a cleared one, so a compile the old device settles late finds
+      // nothing to install into.
+      DonnerGpu.pipelines = new Map();
+      DonnerGpu.shaderSources = new Map();
+      DonnerGpu.compilesToStart = null;
       DonnerGpu.device = null;
       DonnerGpu.queue = null;
       DonnerGpu.requestStarted = false;
@@ -700,6 +719,189 @@ var LibraryDonnerGpu = {
       var written = needed < capacity ? needed : capacity - 1;
       stringToUTF8(text, destination, capacity);
       return written;
+    },
+
+    // ----- Pipeline compilation ------------------------------------------------
+    //
+    // A browser compiles a pipeline created with createRenderPipeline in order with everything
+    // else the device does, so the first submission after it, and every submission queued behind
+    // that one, waits for the compile. A pipeline is therefore compiled asynchronously, starting
+    // when the task that created it ends; the renderers create most of theirs when they start,
+    // before their first draw. Its identifier names a compile record: the pipeline once the
+    // browser hands it over, or nothing yet. Nothing waits on the browser's answer. A pass that
+    // reaches a pipeline the browser has not answered for yet creates it synchronously there and
+    // then, which costs what every pipeline used to.
+    //
+    // WebKit is the exception; see compilesAheadOfUse. There no compile starts ahead of use, and
+    // every pipeline is created synchronously at its first use, as in a browser without
+    // asynchronous creation.
+    //
+    // Compiles are shared between the logical devices over one browser device: every renderer
+    // builds the same few pipelines, and each one is compiled once. Pipelines are immutable, and
+    // explicit bind group layouts with identical entries are group-equivalent, so a pipeline
+    // compiled for one logical device is valid with another's bind groups over the same browser
+    // device. What a pipeline compiles is identified by content: shader text, entry points,
+    // binding layouts and fixed-function state.
+    kMaxSharedPipelines: 256,
+
+    // Whether pipelines are compiled asynchronously ahead of their first use in this browser.
+    //
+    // Not in WebKit. WebKit 26 holds every queue completion (onSubmittedWorkDone, mapAsync) until
+    // every pipeline compile in flight has finished, asynchronous ones included, and its
+    // asynchronous compiles can be far slower than synchronous creation. A compile started ahead
+    // of use therefore delays every wait the runtime makes on the GPU, from the first frame's
+    // presentation on, by the whole backlog of compiles: on hosted CI runners that was seconds per
+    // wait, and the editor timed out at boot. WebKit 27 no longer holds completions, but each of
+    // its asynchronous compiles takes several times longer than synchronously creating the whole
+    // set, so a pipeline needed early is created synchronously at first use anyway and the
+    // asynchronous compile is wasted work.
+    //
+    // No feature reveals this ordering, so the engine is identified by its user agent: WebKit's
+    // token without Chromium's, which Chromium-based browsers also send ("Chrome/", "Chromium/",
+    // "HeadlessChrome/"). That covers Safari and the WebKit-based browsers on iOS, such as Chrome,
+    // Firefox and Edge there.
+    compilesAheadOfUse: function() {
+      return !/^(?!.*Chrom).*AppleWebKit\//.test(navigator.userAgent);
+    },
+
+    // A short stable name for WGSL `code`, so a pipeline's identity does not carry its source.
+    shaderSourceKey: function(code) {
+      var key = DonnerGpu.shaderSources.get(code);
+      if (key === undefined) {
+        key = "m" + DonnerGpu.shaderSources.size;
+        DonnerGpu.shaderSources.set(code, key);
+      }
+      return key;
+    },
+
+    // The content identity of the object `id` names in `record`, recorded when it was created.
+    contentKey: function(record, id) {
+      var entry = record.objects.get(id);
+      return entry === undefined || entry.contentKey === undefined ? "" : entry.contentKey;
+    },
+
+    // Registers `id` in `record` as the pipeline `descriptor` describes, compiling it
+    // asynchronously, where compilesAheadOfUse allows, unless a logical device over the same
+    // browser device already has. `key` is the descriptor's content identity, or empty when it
+    // cannot be shared.
+    compilePipeline: function(record, kind, id, key, descriptor) {
+      var status = DonnerGpu.guard(record);
+      if (status !== DonnerGpu.kSuccess) {
+        return status;
+      }
+      if (id === 0 || record.objects.has(id)) {
+        return DonnerGpu.kFailed;
+      }
+      var cache = DonnerGpu.pipelines;
+      var compile = key === "" ? undefined : cache.get(key);
+      if (compile !== undefined) {
+        DonnerGpu.pipelineCompilesShared += 1;
+        DonnerGpu.trace(["p", record.handle, DonnerGpu.epochMs(), compile.compiledAt, 1]);
+        return DonnerGpu.register(record, kind, id, compile);
+      }
+      compile = {
+        kind: kind,
+        descriptor: descriptor,
+        pipeline: null,
+        compiledAt: 0,
+      };
+      compile.traced = ["p", record.handle, DonnerGpu.epochMs(), 0, 0];
+      DonnerGpu.trace(compile.traced);
+      // Without a compile ahead of use, the pipeline is created at its first use.
+      if (DonnerGpu.compilesAheadOfUse()) {
+        if (DonnerGpu.compilesToStart === null) {
+          var batch = [];
+          DonnerGpu.compilesToStart = batch;
+          Promise.resolve().then(function() {
+            if (DonnerGpu.compilesToStart === batch) {
+              DonnerGpu.compilesToStart = null;
+            }
+            DonnerGpu.startCompiles(cache, batch);
+          });
+        }
+        DonnerGpu.compilesToStart.push(compile);
+      }
+      if (key !== "" && cache.size < DonnerGpu.kMaxSharedPipelines) {
+        cache.set(key, compile);
+      }
+      return DonnerGpu.register(record, kind, id, compile);
+    },
+
+    // Starts the asynchronous compile of each pipeline in `compiles` that has not been created
+    // synchronously in the meantime. It runs once the task that created them ends, so a pipeline
+    // created and used within one task, as the ones built on demand are, is compiled once, at that
+    // use, rather than twice. `cache` is the browser device's pipeline map when the start was
+    // scheduled; a device let go since leaves nothing to start.
+    startCompiles: function(cache, compiles) {
+      if (DonnerGpu.pipelines !== cache || DonnerGpu.device === null || DonnerGpu.lost) {
+        return;
+      }
+      var device = DonnerGpu.device;
+      compiles.forEach(function(compile) {
+        if (compile.pipeline !== null) {
+          return;
+        }
+        var compileAsync = device[
+          compile.kind === DonnerGpu.kRenderPipeline
+            ? "createRenderPipelineAsync"
+            : "createComputePipelineAsync"
+        ];
+        if (typeof compileAsync !== "function") {
+          return;
+        }
+        var pending;
+        try {
+          pending = compileAsync.call(device, compile.descriptor);
+        } catch (e) {
+          pending = null;
+        }
+        if (!pending || typeof pending.then !== "function") {
+          return;
+        }
+        DonnerGpu.pipelineCompiles += 1;
+        pending.then(function(pipeline) {
+          if (DonnerGpu.pipelines === cache && compile.pipeline === null && pipeline) {
+            compile.pipeline = pipeline;
+            compile.traced[3] = compile.compiledAt = DonnerGpu.epochMs();
+          }
+        }, function(error) {
+          // The pipeline is created synchronously at first use instead, where the browser reports
+          // the refusal as an uncaptured error. A pipeline never used would report nothing, so
+          // the refusal is logged here as well, unless the device has been let go or lost since:
+          // a refusal from a retired device describes nothing the runtime still uses.
+          if (DonnerGpu.pipelines !== cache || DonnerGpu.lost) {
+            return;
+          }
+          console.error(
+            "[Geode/browser] Pipeline compile refused: " + String(error && error.message || error),
+          );
+        });
+      });
+    },
+
+    // The pipeline `id` names in `record` if it is of `kind`, creating it now if the browser has
+    // not finished compiling it; null when there is none to use.
+    pipelineFor: function(record, kind, id) {
+      var compile = DonnerGpu.lookup(record, kind, id);
+      if (compile === null) {
+        return null;
+      }
+      if (compile.pipeline === null && !compile.failed) {
+        DonnerGpu.pipelineCompilesOnFirstUse += 1;
+        var stage = compile.descriptor.fragment || compile.descriptor.compute;
+        DonnerGpu.trace(["c", record.handle, DonnerGpu.epochMs(), stage.entryPoint]);
+        try {
+          compile.pipeline = DonnerGpu.device[
+            kind === DonnerGpu.kRenderPipeline ? "createRenderPipeline" : "createComputePipeline"
+          ](compile.descriptor);
+        } catch (e) {
+          compile.pipeline = null;
+        }
+        // Refused once, refused every time: later uses fail without asking again.
+        compile.failed = compile.pipeline === null;
+        compile.traced[3] = compile.compiledAt = DonnerGpu.epochMs();
+      }
+      return compile.pipeline;
     },
 
     textureFormat: function(code) {
@@ -1182,9 +1384,14 @@ var LibraryDonnerGpu = {
   donner_gpu_create_shader_module__deps: ["$DonnerGpu"],
   donner_gpu_create_shader_module: function(handle, id, wgsl, byteCount) {
     var code = UTF8ToString(wgsl, byteCount);
-    return DonnerGpu.create(DonnerGpu.logicalFor(handle), DonnerGpu.kShaderModule, id, function() {
+    var record = DonnerGpu.logicalFor(handle);
+    var status = DonnerGpu.create(record, DonnerGpu.kShaderModule, id, function() {
       return DonnerGpu.device.createShaderModule({ code: code });
     });
+    if (status === DonnerGpu.kSuccess) {
+      record.objects.get(id).contentKey = DonnerGpu.shaderSourceKey(code);
+    }
+    return status;
   },
 
   donner_gpu_destroy_object__deps: ["$DonnerGpu"],
@@ -1358,9 +1565,13 @@ var LibraryDonnerGpu = {
     }
     var pending = record.pending;
     record.pending = null;
-    return DonnerGpu.create(record, DonnerGpu.kBindGroupLayout, id, function() {
+    var status = DonnerGpu.create(record, DonnerGpu.kBindGroupLayout, id, function() {
       return DonnerGpu.device.createBindGroupLayout({ entries: pending.entries });
     });
+    if (status === DonnerGpu.kSuccess) {
+      record.objects.get(id).contentKey = JSON.stringify(pending.entries);
+    }
+    return status;
   },
 
   donner_gpu_bind_group_begin__deps: ["$DonnerGpu"],
@@ -1438,7 +1649,7 @@ var LibraryDonnerGpu = {
     if (status !== DonnerGpu.kSuccess) {
       return status;
     }
-    record.pending = { layouts: [] };
+    record.pending = { layouts: [], keys: [] };
     return DonnerGpu.kSuccess;
   },
 
@@ -1453,6 +1664,7 @@ var LibraryDonnerGpu = {
       return DonnerGpu.refusalFor(record, DonnerGpu.kBindGroupLayout, bindGroupLayoutId);
     }
     record.pending.layouts.push(layout);
+    record.pending.keys.push(DonnerGpu.contentKey(record, bindGroupLayoutId));
     return DonnerGpu.kSuccess;
   },
 
@@ -1464,9 +1676,16 @@ var LibraryDonnerGpu = {
     }
     var pending = record.pending;
     record.pending = null;
-    return DonnerGpu.create(record, DonnerGpu.kPipelineLayout, id, function() {
+    var status = DonnerGpu.create(record, DonnerGpu.kPipelineLayout, id, function() {
       return DonnerGpu.device.createPipelineLayout({ bindGroupLayouts: pending.layouts });
     });
+    if (status === DonnerGpu.kSuccess) {
+      // A layout over a group layout with no identity has none either, so it is never shared.
+      record.objects.get(id).contentKey = pending.keys.indexOf("") < 0
+        ? JSON.stringify(pending.keys)
+        : "";
+    }
+    return status;
   },
 
   // ----- Pipelines ----------------------------------------------------------
@@ -1507,6 +1726,9 @@ var LibraryDonnerGpu = {
       return guarded;
     }
     record.pending = {
+      layoutKey: DonnerGpu.contentKey(record, layoutId),
+      vertexModuleKey: DonnerGpu.contentKey(record, vertexModuleId),
+      fragmentModuleKey: DonnerGpu.contentKey(record, fragmentModuleId),
       layout: layout,
       vertexModule: vertexModule,
       vertexEntryPoint: UTF8ToString(vertexEntryPoint, vertexEntryPointBytes),
@@ -1609,23 +1831,27 @@ var LibraryDonnerGpu = {
     }
     var pending = record.pending;
     record.pending = null;
-    return DonnerGpu.create(record, DonnerGpu.kRenderPipeline, id, function() {
-      DonnerGpu.trace(["p", handle, DonnerGpu.epochMs()]);
-      return DonnerGpu.device.createRenderPipeline({
-        layout: pending.layout,
-        vertex: {
-          module: pending.vertexModule,
-          entryPoint: pending.vertexEntryPoint,
-          buffers: pending.buffers,
-        },
-        fragment: {
-          module: pending.fragmentModule,
-          entryPoint: pending.fragmentEntryPoint,
-          targets: pending.targets,
-        },
-        primitive: { topology: pending.topology, cullMode: pending.cullMode },
-      });
-    });
+    // The key is built from every field of the descriptor except its three object references,
+    // which are named by their own content keys; a new descriptor field belongs in `shape`.
+    var shape = {
+      vertex: { entryPoint: pending.vertexEntryPoint, buffers: pending.buffers },
+      fragment: { entryPoint: pending.fragmentEntryPoint, targets: pending.targets },
+      primitive: { topology: pending.topology, cullMode: pending.cullMode },
+    };
+    var shareable = pending.layoutKey !== "" && pending.vertexModuleKey !== ""
+      && pending.fragmentModuleKey !== "";
+    var key = shareable
+      ? "r" + JSON.stringify([
+        pending.layoutKey,
+        pending.vertexModuleKey,
+        pending.fragmentModuleKey,
+        shape,
+      ])
+      : "";
+    shape.layout = pending.layout;
+    shape.vertex.module = pending.vertexModule;
+    shape.fragment.module = pending.fragmentModule;
+    return DonnerGpu.compilePipeline(record, DonnerGpu.kRenderPipeline, id, key, shape);
   },
 
   donner_gpu_create_compute_pipeline__deps: ["$DonnerGpu"],
@@ -1647,12 +1873,14 @@ var LibraryDonnerGpu = {
       return DonnerGpu.refusalFor(record, DonnerGpu.kShaderModule, moduleId);
     }
     var name = UTF8ToString(entryPoint, entryPointBytes);
-    return DonnerGpu.create(record, DonnerGpu.kComputePipeline, id, function() {
-      DonnerGpu.trace(["p", handle, DonnerGpu.epochMs()]);
-      return DonnerGpu.device.createComputePipeline({
-        layout: layout,
-        compute: { module: module, entryPoint: name },
-      });
+    var layoutKey = DonnerGpu.contentKey(record, layoutId);
+    var moduleKey = DonnerGpu.contentKey(record, moduleId);
+    var key = layoutKey !== "" && moduleKey !== ""
+      ? "c" + JSON.stringify([layoutKey, moduleKey, name])
+      : "";
+    return DonnerGpu.compilePipeline(record, DonnerGpu.kComputePipeline, id, key, {
+      layout: layout,
+      compute: { module: module, entryPoint: name },
     });
   },
 
@@ -1840,11 +2068,18 @@ var LibraryDonnerGpu = {
   donner_gpu_set_render_pipeline__deps: ["$DonnerGpu"],
   donner_gpu_set_render_pipeline: function(handle, pipelineId) {
     var record = DonnerGpu.logicalFor(handle);
-    var pipeline = DonnerGpu.lookup(record, DonnerGpu.kRenderPipeline, pipelineId);
-    if (pipeline === null) {
+    if (DonnerGpu.lookup(record, DonnerGpu.kRenderPipeline, pipelineId) === null) {
       return DonnerGpu.refusalFor(record, DonnerGpu.kRenderPipeline, pipelineId);
     }
     if (record.pass === null) {
+      return DonnerGpu.kFailed;
+    }
+    var guarded = DonnerGpu.guard(record);
+    if (guarded !== DonnerGpu.kSuccess) {
+      return guarded;
+    }
+    var pipeline = DonnerGpu.pipelineFor(record, DonnerGpu.kRenderPipeline, pipelineId);
+    if (pipeline === null) {
       return DonnerGpu.kFailed;
     }
     return DonnerGpu.perform(record, function() {
@@ -1855,11 +2090,18 @@ var LibraryDonnerGpu = {
   donner_gpu_set_compute_pipeline__deps: ["$DonnerGpu"],
   donner_gpu_set_compute_pipeline: function(handle, pipelineId) {
     var record = DonnerGpu.logicalFor(handle);
-    var pipeline = DonnerGpu.lookup(record, DonnerGpu.kComputePipeline, pipelineId);
-    if (pipeline === null) {
+    if (DonnerGpu.lookup(record, DonnerGpu.kComputePipeline, pipelineId) === null) {
       return DonnerGpu.refusalFor(record, DonnerGpu.kComputePipeline, pipelineId);
     }
     if (record.pass === null) {
+      return DonnerGpu.kFailed;
+    }
+    var guarded = DonnerGpu.guard(record);
+    if (guarded !== DonnerGpu.kSuccess) {
+      return guarded;
+    }
+    var pipeline = DonnerGpu.pipelineFor(record, DonnerGpu.kComputePipeline, pipelineId);
+    if (pipeline === null) {
       return DonnerGpu.kFailed;
     }
     return DonnerGpu.perform(record, function() {

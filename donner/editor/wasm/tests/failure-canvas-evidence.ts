@@ -16,6 +16,17 @@ import { writeFile } from "node:fs/promises";
  * of the worker-owned canvas, repeated every frame, has stalled Gecko (#1668), so the readback runs
  * once, last, and only when the page still answered the state read. Every step is bounded, so the
  * whole capture takes at most kFailureEvidenceBudgetMs even if the page stops answering.
+ *
+ * The state read also asks every worker of the page, in the same step, for what it publishes
+ * about the browser GPU bridge: the owning worker's queue timeline, object statistics and owner
+ * wait counters. Together with the raster worker's phase history from the page, that separates a
+ * worker that stopped answering from one waiting on GPU work that never completed. A worker whose
+ * JavaScript is blocked cannot answer; it is recorded as a timeout, with the time it was asked:
+ * on the page clock when the page answered, otherwise in epoch milliseconds.
+ *
+ * An armed case also keeps the fatal console messages and uncaught page errors its page reports
+ * (an Emscripten abort, a worker error), with stacks, and takes the same GPU state snapshot as the
+ * first one arrives, since an abort can end the worker that would otherwise answer at capture.
  */
 
 /** Bound for each evidence step. */
@@ -27,6 +38,29 @@ export const kFailureEvidenceBudgetMs = 3 * kFailureEvidenceStepMs;
 const kReadbackMaxEdge = 1600;
 
 const armedPages = new Map<string, Page>();
+
+/** Console and page errors that signal a fatal runtime failure, as the specs' own filters do. */
+const kFatalMessage =
+  /Aborted|RuntimeError|Assertion failed|sent an error|UTILS_RELEASE_ASSERT|Failed to wake Wasm/i;
+/**
+ * Bounds on what is kept per case: the first messages, which usually name the cause, then the
+ * latest ones up to the total, each cut to this many characters.
+ */
+const kKeptFirstFatalMessages = 10;
+const kMaxFatalMessages = 40;
+const kMaxFatalMessageChars = 4_000;
+
+/**
+ * Fatal messages an armed case's page reported, oldest first, and a snapshot of the GPU state
+ * taken as the first one arrived: an abort can end the worker that would answer later.
+ */
+interface FatalRecord {
+  messages: string[];
+  firstSnapshot: Promise<unknown> | null;
+}
+const fatalRecords = new Map<string, FatalRecord>();
+/** Pages whose fatal messages are already being kept; each is listened to once. */
+const listenedPages = new WeakSet<Page>();
 
 async function bounded<T>(work: Promise<T>, timeoutMs: number): Promise<T | "timeout"> {
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -65,7 +99,57 @@ interface CanvasReadback {
 }
 
 /** The page methods the capture uses, so a test can drive it with a page that never answers. */
-export type EvidencePage = Pick<Page, "evaluate" | "screenshot">;
+export type EvidencePage = Pick<Page, "evaluate" | "screenshot" | "workers">;
+
+/** Epoch milliseconds in `value` or its nested arrays, moved onto the page clock at `origin`. */
+function onPageClock(value: unknown, origin: number): unknown {
+  if (typeof value === "number") {
+    return value > 1e12 ? Math.round((value - origin) * 10) / 10 : value;
+  }
+  if (Array.isArray(value)) return value.map((item) => onPageClock(item, origin));
+  return value;
+}
+
+/** Worker answers with their epoch timestamps moved onto the page clock starting at `origin`. */
+function workersOnPageClock(workers: unknown[], origin: number): unknown[] {
+  return workers.map((worker) =>
+    Object.fromEntries(
+      Object.entries(worker as Record<string, unknown>).map(([key, value]) => [
+        key,
+        key === "gpuTimeline" || key === "answeredAt" || key === "askedAt"
+          ? onPageClock(value, origin)
+          : value,
+      ]),
+    )
+  );
+}
+
+/**
+ * What each worker of the page publishes about the browser GPU bridge, read on demand. Times are
+ * epoch milliseconds; every read is bounded by `stepMs`.
+ */
+async function readWorkerGpuState(page: EvidencePage, stepMs: number): Promise<unknown[]> {
+  return Promise.all(
+    page.workers().map((worker) => {
+      const askedAt = Date.now();
+      return bounded(
+        worker.evaluate(() => {
+          const g = globalThis as unknown as Record<string, unknown>;
+          const read = (name: string) =>
+            typeof g[name] === "function" ? (g[name] as () => unknown)() : null;
+          return {
+            gpuOwner: g.__donnerGpuOwner === true,
+            answeredAt: performance.timeOrigin + performance.now(),
+            ownerWait: read("__donnerReadGpuOwnerWaitStats"),
+            gpuObjects: read("__donnerReadGpuObjectStats"),
+            gpuTimeline: read("__donnerReadGpuTimeline"),
+          };
+        }).catch((error: unknown) => ({ error: String(error) })),
+        stepMs,
+      ).then((answer) => (answer === "timeout" ? { timeout: true, askedAt } : answer));
+    }),
+  );
+}
 
 /**
  * Capture the presentation state, a page screenshot and one canvas readback, and attach them.
@@ -73,19 +157,29 @@ export type EvidencePage = Pick<Page, "evaluate" | "screenshot">;
  * @param page The failed case's page.
  * @param testInfo The failed case's test info.
  * @param stepMs Bound for each step.
+ * @param fatal The fatal messages the armed case's page reported, if any.
  */
 export async function captureFailureCanvasEvidence(
   page: EvidencePage,
   testInfo: TestInfo,
   stepMs = kFailureEvidenceStepMs,
+  fatal?: FatalRecord,
 ): Promise<void> {
   const record: Record<string, unknown> = { stepMs };
   const startedAt = Date.now();
+  // Awaited last, but bounded from here, so it shares the state step's time.
+  const firstFatalSnapshot = fatal?.firstSnapshot ? bounded(fatal.firstSnapshot, stepMs) : null;
 
+  const workersAnswer = readWorkerGpuState(page, stepMs);
   const state = await bounded(
     page.evaluate(() => {
       const w = window as unknown as Record<string, unknown>;
       return {
+        timeOrigin: performance.timeOrigin,
+        nowMs: performance.now(),
+        rasterPhases: w.__donnerRasterWorkPhases ?? null,
+        sampleThumbnails: w.__donnerSampleThumbnailStats ?? null,
+        frameLoop: w.__donnerFrameLoopStats ?? null,
         presentationQueue: w.__donnerPresentationQueueStats ?? null,
         hostFrames: w.__donnerHostFrameTiming ?? null,
         worker: w.__donnerWorkerStats ?? null,
@@ -99,6 +193,24 @@ export async function captureFailureCanvasEvidence(
     stepMs,
   );
   record.presentation = state;
+  const workers = await workersAnswer;
+  record.workers = typeof state === "object" && "timeOrigin" in state
+    ? workersOnPageClock(workers, state.timeOrigin)
+    : workers;
+  // The test output carries the tail of each history; the attached record keeps all of it.
+  const tail = (value: unknown, count: number) =>
+    Array.isArray(value) ? value.slice(-count) : value;
+  console.log(`failure-gpu-state ${
+    JSON.stringify({
+      rasterPhases: typeof state === "object" && "rasterPhases" in state
+        ? tail(state.rasterPhases, 16)
+        : state,
+      workers: (record.workers as Record<string, unknown>[]).map((worker) => ({
+        ...worker,
+        gpuTimeline: tail(worker.gpuTimeline, 32),
+      })),
+    })
+  }`);
 
   const screenshotStartedAt = Date.now();
   const screenshot = await bounded(
@@ -186,6 +298,12 @@ export async function captureFailureCanvasEvidence(
     }
   }
 
+  if (fatal !== undefined && fatal.messages.length > 0) {
+    record.fatalMessages = fatal.messages;
+    record.atFirstFatalMessage = firstFatalSnapshot === null ? null : await firstFatalSnapshot;
+    console.log(`failure-fatal-messages ${JSON.stringify(fatal.messages)}`);
+  }
+
   record.totalMs = Date.now() - startedAt;
   await attachFile(
     testInfo,
@@ -203,6 +321,45 @@ export async function captureFailureCanvasEvidence(
  */
 export function armFailureCanvasEvidence(page: Page, testInfo: TestInfo): void {
   armedPages.set(testInfo.testId, page);
+  if (listenedPages.has(page)) return;
+  listenedPages.add(page);
+  const fatal: FatalRecord = fatalRecords.get(testInfo.testId)
+    ?? { messages: [], firstSnapshot: null };
+  fatalRecords.set(testInfo.testId, fatal);
+  const keep = (text: string) => {
+    if (!kFatalMessage.test(text)) return;
+    fatal.messages.push(text.slice(0, kMaxFatalMessageChars));
+    if (fatal.messages.length > kMaxFatalMessages) {
+      fatal.messages.splice(kKeptFirstFatalMessages, 1);
+    }
+    fatal.firstSnapshot ??= snapshotGpuState(page, kFailureEvidenceStepMs);
+  };
+  page.on("console", (message) => {
+    const { url, lineNumber } = message.location();
+    keep(`[console:${message.type()}] ${message.text()} (${url}:${lineNumber})`);
+  });
+  // An uncaught error keeps its stack, which for a Wasm abort names the frames that reached it.
+  page.on("pageerror", (error) => keep(`[pageerror] ${error.stack ?? error.message}`));
+}
+
+/** The raster phases and every worker's GPU state, read now and bounded by `stepMs` per read. */
+async function snapshotGpuState(page: EvidencePage, stepMs: number): Promise<unknown> {
+  const workersAnswer = readWorkerGpuState(page, stepMs);
+  const state = await bounded(
+    page.evaluate(() => ({
+      timeOrigin: performance.timeOrigin,
+      nowMs: performance.now(),
+      rasterPhases: (window as unknown as Record<string, unknown>).__donnerRasterWorkPhases ?? null,
+    })).catch((error: unknown) => ({ error: String(error) })),
+    stepMs,
+  );
+  const workers = await workersAnswer;
+  return {
+    page: state,
+    workers: typeof state === "object" && "timeOrigin" in state
+      ? workersOnPageClock(workers, state.timeOrigin)
+      : workers,
+  };
 }
 
 /**
@@ -214,10 +371,12 @@ export function installFailureCanvasEvidence(test: typeof baseTest): void {
   test.afterEach(async () => {
     const testInfo = test.info();
     const page = armedPages.get(testInfo.testId);
+    const fatal = fatalRecords.get(testInfo.testId);
     armedPages.delete(testInfo.testId);
+    fatalRecords.delete(testInfo.testId);
     if (page === undefined || testInfo.status === testInfo.expectedStatus) return;
     try {
-      await captureFailureCanvasEvidence(page, testInfo);
+      await captureFailureCanvasEvidence(page, testInfo, kFailureEvidenceStepMs, fatal);
     } catch (error) {
       console.error(`failure canvas evidence capture failed: ${String(error)}`);
     }

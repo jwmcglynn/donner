@@ -18,6 +18,22 @@ function firefoxProfileEnvironment() {
   };
 }
 
+// DONNER_BROWSER_WEBGPU_ADAPTER=swiftshader runs Chromium's WebGPU on its software adapter, a slow
+// GPU that makes queue backlog measurable on fast hardware. The flags match the smoke lane's
+// software adapter configuration, so the two measure the same device.
+const chromiumAdapterArgs = process.env.DONNER_BROWSER_WEBGPU_ADAPTER === "swiftshader"
+  ? ["--use-webgpu-adapter=swiftshader", "--enable-dawn-features=allow_unsafe_apis"]
+  : [];
+
+function chromiumLaunchOptions() {
+  return {
+    ...baseConfig.use.launchOptions,
+    args: [...(baseConfig.use.launchOptions.args ?? []), ...chromiumAdapterArgs],
+    executablePath: executables.chromium,
+    timeout: 15000,
+  };
+}
+
 const sharedUse = {
   headless: process.env.DONNER_BROWSER_HEADLESS === "1",
   ignoreHTTPSErrors: true,
@@ -42,11 +58,7 @@ module.exports = {
         ...baseConfig.use,
         ...sharedUse,
         browserName: "chromium",
-        launchOptions: {
-          ...baseConfig.use.launchOptions,
-          executablePath: executables.chromium,
-          timeout: 15000,
-        },
+        launchOptions: chromiumLaunchOptions(),
       },
     },
     {
@@ -73,11 +85,7 @@ module.exports = {
         ...sharedUse,
         deviceScaleFactor: 1,
         browserName: "chromium",
-        launchOptions: {
-          ...baseConfig.use.launchOptions,
-          executablePath: executables.chromium,
-          timeout: 15000,
-        },
+        launchOptions: chromiumLaunchOptions(),
       },
     },
     {

@@ -1197,6 +1197,7 @@ async function openEditor(
 ): Promise<string[]> {
   const failures: string[] = [];
   echoGpuSessionConsole(page);
+  armFailureCanvasEvidence(page, test.info());
   page.on("console", (message) => {
     if (
       /Failed to wake Wasm renderer pthread|Wasm renderer pthread wake rejected|Aborted|RuntimeError|UTILS_RELEASE_ASSERT/i
@@ -2498,6 +2499,7 @@ test("failure canvas evidence stays within its bound when the page never answers
   const silentPage: EvidencePage = {
     evaluate: () => new Promise<never>(() => {}),
     screenshot: () => new Promise<never>(() => {}),
+    workers: () => [{ evaluate: () => new Promise<never>(() => {}) }],
   } as unknown as EvidencePage;
   const stepMs = 50;
   const startedAt = Date.now();
@@ -2512,6 +2514,8 @@ test("failure canvas evidence stays within its bound when the page never answers
   expect(record.presentation).toBe("timeout");
   expect(record.screenshot).toEqual({ error: "timeout" });
   expect(record.readback).toEqual({ skipped: "the page did not answer the state read" });
+  // A worker that never answers is read in the state step and recorded as a timeout.
+  expect(record.workers).toEqual([{ timeout: true, askedAt: expect.any(Number) }]);
 });
 
 test("a frame account read that never settles records the account as unavailable", async () => {
