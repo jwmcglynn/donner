@@ -16,7 +16,7 @@ ParseResult<Lengthd> ParseLengthPercentage(const css::ComponentValue& component,
   } else if (const auto* percentage = component.tryGetToken<css::Token::Percentage>()) {
     return Lengthd(percentage->value, Lengthd::Unit::Percent);
   } else if (const auto* number = component.tryGetToken<css::Token::Number>()) {
-    if (!allowUserUnits && number->valueString == "0") {
+    if (!allowUserUnits && number->value == 0) {
       return Lengthd(0, Lengthd::Unit::None);
     } else if (allowUserUnits) {
       return Lengthd(number->value, Lengthd::Unit::None);
