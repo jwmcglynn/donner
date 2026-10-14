@@ -41,9 +41,10 @@ TEST(RendererAnimationStyleBase, ScalarPercentagesIgnoreViewportSize) {
                                     std::string(item.attribute) + "' from='100%' to='0' dur='2s'/>";
       auto document = instantiateSubtree(std::string(item.source) + animation,
                                          parser::SVGParser::Options(), Vector2i(size, size));
+      std::string expectedSource = item.source;
+      expectedSource.insert(expectedSource.find("id='r'"), std::string(item.attribute) + "='0.5' ");
       auto expected =
-          instantiateSubtree(item.source, parser::SVGParser::Options(), Vector2i(size, size));
-      expected.querySelector("#r")->setAttribute(item.attribute, "0.5");
+          instantiateSubtree(expectedSource, parser::SVGParser::Options(), Vector2i(size, size));
       document.setTime(1);
       editor::tests::CompareBitmapToBitmap(
           RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(expected),
@@ -65,8 +66,10 @@ TEST(RendererAnimationStyleBase, ToOnlyResourceOpacityStartsAtOne) {
     auto document = instantiateSubtree(
         source + "<animate href='#r' attributeName='" + attribute + "' to='0' dur='2s'/>",
         parser::SVGParser::Options(), Vector2i(16, 16));
-    auto expected = instantiateSubtree(source, parser::SVGParser::Options(), Vector2i(16, 16));
-    expected.querySelector("#r")->setAttribute(xml::XMLQualifiedNameRef(attribute), "0.5");
+    std::string expectedSource = source;
+    expectedSource.insert(expectedSource.find("id='r'"), attribute + "='0.5' ");
+    auto expected =
+        instantiateSubtree(expectedSource, parser::SVGParser::Options(), Vector2i(16, 16));
     document.setTime(1);
     editor::tests::CompareBitmapToBitmap(
         RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(expected),
