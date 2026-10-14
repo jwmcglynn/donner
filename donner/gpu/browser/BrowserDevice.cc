@@ -429,12 +429,19 @@ bool BrowserDevice::onWaitForSerial(uint64_t serial, double timeoutSeconds) {
   }
 }
 
-Status BrowserDevice::checkUsable(std::string_view operation) const {
+Status BrowserDevice::checkCallingThread(std::string_view operation) const {
   if (std::this_thread::get_id() != ownerThread_) {
     return Err(GpuErrorType::InvalidState,
                std::format("{}: this browser device belongs to the context that obtained it and "
                            "cannot be used from another thread",
                            operation));
+  }
+  return OkStatus();
+}
+
+Status BrowserDevice::checkUsable(std::string_view operation) const {
+  if (Status status = checkCallingThread(operation); status.hasError()) {
+    return status;
   }
   const BridgeStatus status = bridge_->deviceStatus();
   if (status == BridgeStatus::NotOwner) {
@@ -1021,28 +1028,50 @@ void BrowserDevice::onDestroyResource(std::string_view resourceName, uint32_t sl
   }
 }
 
+Status BrowserDevice::queueWriteStatus(BridgeStatus status, std::string_view operation) const {
+  if (status == BridgeStatus::DeviceLost) {
+    recordBrowserLoss();
+    return Err(GpuErrorType::InvalidState,
+               std::format("{}: the browser device was lost: {}", operation,
+                           bridge_->deviceLostReason().str()));
+  }
+  return StatusForBridge(status, operation);
+}
+
 Status BrowserDevice::onWriteBuffer(uint32_t slotIndex, uint64_t offsetBytes,
                                     std::span<const uint8_t> data) {
   static constexpr std::string_view kOperation = "writeBuffer";
-  if (Status status = checkUsable(kOperation); status.hasError()) {
+  if (Status status = checkCallingThread(kOperation); status.hasError()) {
     return status;
+  }
+  if (isLost()) {
+    return queueWriteStatus(BridgeStatus::DeviceLost, kOperation);
   }
   Result<BrowserObjectId> bufferId = objectFor(BrowserObjectKind::Buffer, slotIndex, kOperation);
   if (bufferId.hasError()) {
+    if (Status status = checkUsable(kOperation); status.hasError()) {
+      return status;
+    }
     return std::move(bufferId).error();
   }
-  return StatusForBridge(bridge_->writeBuffer(bufferId.result(), offsetBytes, data), kOperation);
+  return queueWriteStatus(bridge_->writeBuffer(bufferId.result(), offsetBytes, data), kOperation);
 }
 
 Status BrowserDevice::onWriteTexture(uint32_t slotIndex, std::span<const uint8_t> data,
                                      const TexelCopyBufferLayout& dataLayout,
                                      const Extent2d& writeSize, const Origin2d& destinationOrigin) {
   static constexpr std::string_view kOperation = "writeTexture";
-  if (Status status = checkUsable(kOperation); status.hasError()) {
+  if (Status status = checkCallingThread(kOperation); status.hasError()) {
     return status;
+  }
+  if (isLost()) {
+    return queueWriteStatus(BridgeStatus::DeviceLost, kOperation);
   }
   Result<BrowserObjectId> textureId = objectFor(BrowserObjectKind::Texture, slotIndex, kOperation);
   if (textureId.hasError()) {
+    if (Status status = checkUsable(kOperation); status.hasError()) {
+      return status;
+    }
     return std::move(textureId).error();
   }
 
@@ -1053,8 +1082,8 @@ Status BrowserDevice::onWriteTexture(uint32_t slotIndex, std::span<const uint8_t
   region.destinationY = destinationOrigin.y;
   region.width = writeSize.width;
   region.height = writeSize.height;
-  return StatusForBridge(bridge_->writeTexture(textureId.result(), data, layout, region),
-                         kOperation);
+  return queueWriteStatus(bridge_->writeTexture(textureId.result(), data, layout, region),
+                          kOperation);
 }
 
 Status BrowserDevice::replay(const BeginRenderPassCommand& command, std::string_view operation) {

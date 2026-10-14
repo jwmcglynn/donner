@@ -277,6 +277,14 @@ private:
    */
   Status checkUsable(std::string_view operation) const;
 
+  /// Reject a foreign C++ caller before reading the local object table.
+  /// @param operation Operation name for diagnostics.
+  Status checkCallingThread(std::string_view operation) const;
+
+  /// Translate the guarded queue operation result and publish any observed device loss.
+  /// @param status Operation status. @param operation Operation name for diagnostics.
+  Status queueWriteStatus(BridgeStatus status, std::string_view operation) const;
+
   /**
    * Returns the identifier of the browser object backing (\p kind, \p slotIndex), failing closed
    * when this device has none.
