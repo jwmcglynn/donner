@@ -139,7 +139,7 @@ TEST_F(ProvenanceTest, SameLengthSourceMutationIsDetected) {
 TEST_F(ProvenanceTest, FinalVerificationIsCreateOnlyAndRecordsRejectedRun) {
   const auto run = CreateRunProvenance(options(), directory_ / "output");
   ASSERT_TRUE(run.run) << run.error;
-  ASSERT_THAT(WriteRunVerification(*run.run, "resource changed", 0), IsEmpty());
+  ASSERT_THAT(WriteRunVerification(*run.run, "resource changed", 0), HasSubstr("XML"));
   std::ifstream input(directory_ / "output/run-verification.json");
   const auto record = nlohmann::json::parse(input);
   EXPECT_EQ(record["accepted"], false);
@@ -151,7 +151,7 @@ TEST_F(ProvenanceTest, FinalVerificationIsCreateOnlyAndRecordsRejectedRun) {
 TEST_F(ProvenanceTest, MissingExecutionObservationsCannotCertifySuccess) {
   const auto run = CreateRunProvenance(options(), directory_ / "output");
   ASSERT_TRUE(run.run) << run.error;
-  ASSERT_THAT(WriteRunVerification(*run.run, "", 0), IsEmpty());
+  ASSERT_THAT(WriteRunVerification(*run.run, "", 0), HasSubstr("XML"));
   std::ifstream input(directory_ / "output/run-verification.json");
   const auto record = nlohmann::json::parse(input);
   EXPECT_EQ(record["accepted"], false);
@@ -163,7 +163,8 @@ TEST_F(ProvenanceTest, MissingExecutionObservationsCannotCertifySuccess) {
 TEST_F(ProvenanceTest, FilteredExecutionRecordsSelectionScopeAndReportFingerprint) {
   const auto run = CreateRunProvenance(options(), directory_ / "output");
   ASSERT_TRUE(run.run) << run.error;
-  write("output/report.xml", "<?xml version=\"1.0\"?><testsuites/>\n");
+  write("output/report.xml",
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?><testsuites></testsuites>\n");
   RunExecutionSummary execution;
   execution.discoveredCases = 5;
   execution.selectedCases = 2;
@@ -171,6 +172,7 @@ TEST_F(ProvenanceTest, FilteredExecutionRecordsSelectionScopeAndReportFingerprin
   execution.completedInvocations = 4;
   execution.repeatCount = 2;
   execution.xmlReport = directory_ / "output/report.xml";
+  execution.gtestOutput = "xml:" + execution.xmlReport.string();
   ASSERT_THAT(WriteRunVerification(*run.run, "", 0, execution), IsEmpty());
   std::ifstream input(directory_ / "output/run-verification.json");
   const auto record = nlohmann::json::parse(input);
@@ -197,7 +199,7 @@ TEST_F(ProvenanceTest, UnexecutedRunCannotClaimExistingXmlAsGeneratedEvidence) {
   execution.selectedCases = 1;
   execution.repeatCount = 0;
   execution.xmlReport = directory_ / "output/stale.xml";
-  ASSERT_THAT(WriteRunVerification(*run.run, "", 0, execution), IsEmpty());
+  ASSERT_THAT(WriteRunVerification(*run.run, "", 0, execution), HasSubstr("XML"));
   std::ifstream input(directory_ / "output/run-verification.json");
   const auto record = nlohmann::json::parse(input);
   EXPECT_EQ(record["accepted"], false);
@@ -239,6 +241,7 @@ TEST_F(ProvenanceTest, XmlEvidenceFailuresRejectOtherwiseCompleteRuns) {
     EXPECT_EQ(record["accepted"], false);
     EXPECT_EQ(record["complete_corpus_accepted"], false);
     EXPECT_EQ(record["xml_report"], nullptr);
+    EXPECT_THAT(record["xml_report_error"].get<std::string>(), Not(IsEmpty()));
   }
 }
 

@@ -80,7 +80,7 @@ int RunFixture(int argc, char** argv) {
     std::filesystem::remove(execution.xmlReport);
   }
   const auto error = WriteRunVerification(*provenance.run, "", result, execution);
-  return error.empty() ? result : 3;
+  return error.empty() || result != 0 ? result : 3;
 }
 
 class GtestSuiteTest : public testing::Test {

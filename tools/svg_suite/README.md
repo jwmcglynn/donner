@@ -75,11 +75,18 @@ corpora. Read those corpus identities in `run.json`: `--extension-only` does not
 Unique `completed_cases` and repeated `completed_invocations` are separate; listing, zero execution,
 missing observations or skips cannot certify acceptance.
 
-The runner defaults to `gtest.xml` inside the artifact directory. Explicit GoogleTest output choices
-are preserved. `xml_report` fingerprints an available regular XML file, or is null when unavailable
-(including non-XML and directory-form output choices). GoogleTest XML describes its final iteration;
-execution counts include all repeats. Checks detect boundary changes, not adversarial mutate-and-restore
-attacks; use immutable inputs for hostile environments.
+Acceptance also requires a generated XML report. The runner defaults to `gtest.xml` inside the
+artifact directory and supports `--gtest_output=xml:<file>` or `--gtest_output=xml`. The chosen file
+must not already exist; existing files and symlinks are rejected without being overwritten. JSON,
+directory-form output and the empty `xml:` suffix cannot certify a run. Choose a fresh XML filename.
+
+`xml_report` binds nonempty regular report bytes up to 32 MiB. Missing, unreadable, oversized or
+incomplete reports produce rejected verification evidence with `xml_report_error` and a nonzero exit.
+The check recognizes the complete GoogleTest XML envelope and fingerprints the same bytes; it trusts
+GoogleTest as the producer and is not a general XML validator or an adversarial filesystem sandbox.
+GoogleTest XML describes its final iteration; execution counts include all repeats. Source checks
+detect boundary changes, not adversarial mutate-and-restore attacks; use immutable inputs for hostile
+environments.
 
 Each case writes `expected.png`, `actual.png`, `diff.png` when available, plus `metrics.json`. The
 metrics separate mismatch from infrastructure error and reference the exact run, input/reference

@@ -38,6 +38,21 @@ std::filesystem::path XmlReportPath(std::string_view output) {
   return std::filesystem::absolute(path, error);
 }
 
+std::string CheckFreshXmlDestination(const std::filesystem::path& path) {
+  if (path.empty()) {
+    return "XML evidence requires xml or xml:<file>; JSON and directory output are unsupported";
+  }
+  std::error_code error;
+  const auto status = std::filesystem::symlink_status(path, error);
+  if (error && error != std::errc::no_such_file_or_directory) {
+    return "Cannot inspect XML report destination: " + error.message();
+  }
+  if (status.type() != std::filesystem::file_type::not_found) {
+    return "XML report destination already exists; choose a fresh file";
+  }
+  return {};
+}
+
 void RecordCorpusCounts(RunExecutionSummary& summary) {
   const auto* unit = testing::UnitTest::GetInstance();
   for (int index = 0; index < unit->total_test_suite_count(); ++index) {
@@ -104,6 +119,16 @@ int RunSelectedTests(RunExecutionSummary* execution) {
   summary.repeatCount = GTEST_FLAG_GET(repeat);
   summary.listOnly = GTEST_FLAG_GET(list_tests);
   summary.gtestOutput = GTEST_FLAG_GET(output);
+  const auto reportPath = XmlReportPath(summary.gtestOutput);
+  summary.xmlReportError = CheckFreshXmlDestination(reportPath);
+  if (!summary.xmlReportError.empty()) {
+    std::cerr << summary.xmlReportError << '\n';
+    RecordCorpusCounts(summary);
+    if (execution != nullptr) {
+      *execution = std::move(summary);
+    }
+    return 2;
+  }
   auto& listeners = testing::UnitTest::GetInstance()->listeners();
   auto* observer = new ExecutionListener;
   listeners.Append(observer);
@@ -114,13 +139,14 @@ int RunSelectedTests(RunExecutionSummary* execution) {
   summary.completedCases = completedCases.size();
   summary.completedInvocations = completedInvocations;
   if (completedInvocations > 0) {
-    const auto path = XmlReportPath(summary.gtestOutput);
     std::error_code error;
-    if (std::filesystem::is_regular_file(std::filesystem::symlink_status(path, error))) {
-      summary.xmlReport = path;
+    if (std::filesystem::is_regular_file(std::filesystem::symlink_status(reportPath, error))) {
+      summary.xmlReport = reportPath;
+    } else {
+      summary.xmlReportError = "XML report was not generated as a regular file";
     }
   }
-  const bool selectionComplete = summary.selectionComplete();
+  const bool selectionComplete = summary.selectionComplete() && summary.xmlReportError.empty();
   if (execution != nullptr) {
     *execution = std::move(summary);
   }

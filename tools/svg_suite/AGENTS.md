@@ -10,7 +10,9 @@ of those inputs and references.
    GoogleTest XML, `run.json`, `run-verification.json`, and every case artifact. Read `README.md` for
    commands. A filtered run proves only its selected cases; inspect the recorded execution counts,
    `accepted_scope` and `complete_corpus_accepted`. Check the configured corpus identities as well:
-   complete extension-only execution is not a complete upstream resvg campaign.
+   complete extension-only execution is not a complete upstream resvg campaign. A passing selection
+   also requires a bound, fresh XML report. Use a previously absent XML filename; JSON/directory output
+   and missing, empty, unreadable or oversized XML evidence must leave the run rejected.
 2. Check run provenance and setup errors before diagnosing rendering. Source drift, a missing font,
    a child crash, a deadline, missing output, or zero selected tests is not a passing comparison.
 3. Read the fixture and cited specification. Inspect expected/actual/diff images at their original

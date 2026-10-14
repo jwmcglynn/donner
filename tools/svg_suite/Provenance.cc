@@ -316,25 +316,82 @@ Json ExecutionRecord(const RunExecutionSummary& execution) {
           {"corpus_complete", execution.corpusComplete()}};
 }
 
-Json XmlReportRecord(const RunExecutionSummary& execution) {
-  if (execution.completedInvocations == 0 || execution.xmlReport.empty()) {
-    return nullptr;
+struct XmlReportOutcome {
+  Json record = nullptr;
+  std::string error;
+};
+
+bool HasGoogleTestXmlEnvelope(std::string_view text) {
+  constexpr std::string_view kDeclaration = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>";
+  if (!text.starts_with(kDeclaration)) {
+    return false;
   }
-  const auto report = FingerprintFile(execution.xmlReport, 32u * 1024u * 1024u);
+  text.remove_prefix(kDeclaration.size());
+  const auto start = text.find_first_not_of(" \t\r\n");
+  if (start == std::string_view::npos) {
+    return false;
+  }
+  text.remove_prefix(start);
+  text = text.substr(0, text.find_last_not_of(" \t\r\n") + 1);
+  return (text.starts_with("<testsuites ") || text.starts_with("<testsuites>")) &&
+         text.ends_with("</testsuites>");
+}
+
+std::string CheckXmlReportEnvelope(const std::filesystem::path& path,
+                                   const FileFingerprint& fingerprint) {
+  std::ifstream input(path, std::ios::binary);
+  std::string text(static_cast<size_t>(fingerprint.bytes), '\0');
+  if (!input.read(text.data(), static_cast<std::streamsize>(text.size())) ||
+      input.peek() != std::char_traits<char>::eof() ||
+      picosha2::hash256_hex_string(text) != fingerprint.sha256) {
+    return "XML report changed or could not be read completely";
+  }
+  // This checks the trusted producer's envelope, not arbitrary XML syntax or filesystem attacks.
+  return HasGoogleTestXmlEnvelope(text) ? "" : "XML report lacks a complete GoogleTest envelope";
+}
+
+XmlReportOutcome ReadXmlReport(const std::filesystem::path& path) {
+  std::error_code error;
+  if (!std::filesystem::is_regular_file(std::filesystem::symlink_status(path, error))) {
+    return {nullptr, "XML report is missing or is not a regular file"};
+  }
+  const auto report = FingerprintFile(path, 32u * 1024u * 1024u);
   if (!report.fingerprint) {
-    return nullptr;
+    return {nullptr, "Cannot fingerprint XML report: " + report.error};
   }
-  return {{"path", execution.xmlReport.generic_string()},
-          {"sha256", report.fingerprint->sha256},
-          {"bytes", report.fingerprint->bytes},
-          {"scope", "GoogleTest final iteration; execution counts include all repeats"}};
+  if (report.fingerprint->bytes == 0) {
+    return {nullptr, "XML report is empty"};
+  }
+  const auto issue = CheckXmlReportEnvelope(path, *report.fingerprint);
+  if (!issue.empty()) {
+    return {nullptr, issue};
+  }
+  return {{{"path", path.generic_string()},
+           {"sha256", report.fingerprint->sha256},
+           {"bytes", report.fingerprint->bytes},
+           {"scope", "GoogleTest final iteration; execution counts include all repeats"}},
+          {}};
+}
+
+XmlReportOutcome XmlReportRecord(const RunExecutionSummary& execution) {
+  if (!execution.xmlReportError.empty()) {
+    return {nullptr, execution.xmlReportError};
+  }
+  if (execution.completedInvocations == 0 || execution.xmlReport.empty()) {
+    return {nullptr, "XML report is unavailable for this invocation"};
+  }
+  if (execution.gtestOutput != "xml" && !execution.gtestOutput.starts_with("xml:")) {
+    return {nullptr, "XML evidence requires XML output"};
+  }
+  return ReadXmlReport(execution.xmlReport);
 }
 }  // namespace
 
 std::string WriteRunVerification(const RunProvenance& run, std::string_view verificationError,
                                  int testExitCode, const RunExecutionSummary& execution) {
-  const bool accepted =
-      verificationError.empty() && testExitCode == 0 && execution.selectionComplete();
+  const auto xml = XmlReportRecord(execution);
+  const bool accepted = verificationError.empty() && testExitCode == 0 &&
+                        execution.selectionComplete() && xml.error.empty();
   const Json record = {
       {"run_id", run.runId},
       {"run_record", "run.json"},
@@ -345,9 +402,11 @@ std::string WriteRunVerification(const RunProvenance& run, std::string_view veri
       {"accepted_scope", execution.corpusComplete() ? "complete-corpus" : "selected-cases"},
       {"complete_corpus_accepted", accepted && execution.corpusComplete()},
       {"execution", ExecutionRecord(execution)},
-      {"xml_report", XmlReportRecord(execution)}};
-  return WriteExclusive(run.recordPath.parent_path() / "run-verification.json",
-                        record.dump(2) + "\n");
+      {"xml_report", xml.record},
+      {"xml_report_error", xml.error}};
+  const auto writeError =
+      WriteExclusive(run.recordPath.parent_path() / "run-verification.json", record.dump(2) + "\n");
+  return writeError.empty() ? xml.error : writeError;
 }
 
 const FileFingerprint* FindFingerprint(const RunProvenance& run,

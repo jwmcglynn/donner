@@ -100,7 +100,8 @@ struct RunExecutionSummary {
   int repeatCount = 1;              //!< Requested GoogleTest repeat count; negative means forever.
   bool listOnly = false;            //!< Whether GoogleTest was asked only to list tests.
   std::string gtestOutput;          //!< Effective GoogleTest output flag, possibly empty.
-  std::filesystem::path xmlReport;  //!< Generated regular XML file, or empty when unavailable.
+  std::filesystem::path xmlReport;  //!< Fresh generated XML file, or empty when unavailable.
+  std::string xmlReportError;       //!< XML destination or generation failure.
 
   /// Whether all selected cases completed, without skips, during a non-listing invocation.
   bool selectionComplete() const {
@@ -116,7 +117,8 @@ struct RunExecutionSummary {
 };
 
 /// Preserve source validation, observed execution scope and any generated XML report fingerprint.
-/// Missing execution observations cannot certify an accepted run.
+/// Acceptance requires execution observations and a nonempty, bounded GoogleTest XML report.
+/// A report failure is recorded in the rejected verification file and returned as an error.
 std::string WriteRunVerification(const RunProvenance& run, std::string_view verificationError,
                                  int testExitCode, const RunExecutionSummary& execution = {});
 
