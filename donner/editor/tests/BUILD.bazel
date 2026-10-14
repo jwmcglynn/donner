@@ -66,6 +66,16 @@ donner_cc_library(
     ],
 )
 
+donner_cc_test(
+    name = "bitmap_golden_compare_tests",
+    srcs = ["BitmapGoldenCompare_tests.cc"],
+    deps = [
+        ":bitmap_golden_compare",
+        "//donner/svg/renderer:renderer_interface",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
 # Invoked by the browser Playwright lane after it captures the standalone Geode canvas.
 # Reuses the one pixelmatch golden helper and its inspectable actual/expected/diff artifacts.
 cc_binary(
