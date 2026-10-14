@@ -107,6 +107,53 @@ TEST(RendererAnimationStyleBase, NumericOperandsCannotLaunderLengthUnits) {
   }
 }
 
+TEST(RendererAnimationStyleBase, ScalarCompositionUsesDimensionlessOperands) {
+  struct Case {
+    const char* animation;
+    const char* expected;
+    double time = 1;
+  };
+  for (const Case item : {
+           Case{"values='100%;0.5;0' calcMode='paced'", "0.5"},
+           Case{"by='-50%'", "0"},
+           Case{"from='0' to='50%' additive='sum'", "0.5"},
+           Case{"from='0' to='25%' accumulate='sum' repeatCount='3'", "0.375", 3},
+           Case{"values='100%;0' from='1px' to='invalid' by='invalid'", "0.5"},
+           Case{"values='INITIAL;0' calcMode='discrete'", "0", 1.5},
+           Case{"values='InHeRiT;0' calcMode='discrete'", "0", 1.5},
+           Case{"values='UnSeT;0' calcMode='discrete'", "0", 1.5},
+           Case{"values='100%;0;1px'", "0.25"},
+           Case{"from='1px' by='3'", "0.25"},
+       }) {
+    SCOPED_TRACE(item.animation);
+    auto document = instantiateSubtree(std::string("<rect width='16' height='16' opacity='0.25'>") +
+                                           "<animate attributeName='opacity' dur='2s' " +
+                                           item.animation + "/></rect>",
+                                       parser::SVGParser::Options(), Vector2i(16, 16));
+    auto expected = instantiateSubtree(
+        std::string("<rect width='16' height='16' opacity='") + item.expected + "'/>",
+        parser::SVGParser::Options(), Vector2i(16, 16));
+    document.setTime(item.time);
+    editor::tests::CompareBitmapToBitmap(
+        RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(expected),
+        "scalar-composition", editor::tests::PixelmatchIdentityParams());
+  }
+}
+
+TEST(RendererAnimationStyleBase, LowerInitialOpacityIsResolvedBeforeToOnlyInterpolation) {
+  auto document = instantiateSubtree(
+      "<rect width='16' height='16' opacity='0.2'><set attributeName='opacity' to='INITIAL' "
+      "dur='2s'/>"
+      "<animate attributeName='opacity' to='0' dur='2s'/></rect>",
+      parser::SVGParser::Options(), Vector2i(16, 16));
+  auto expected = instantiateSubtree("<rect width='16' height='16' opacity='0.5'/>",
+                                     parser::SVGParser::Options(), Vector2i(16, 16));
+  document.setTime(1);
+  editor::tests::CompareBitmapToBitmap(
+      RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(expected),
+      "scalar-lower-initial", editor::tests::PixelmatchIdentityParams());
+}
+
 #ifdef DONNER_TEXT_ENABLED
 TEST(RendererAnimationStyleBase, FontSizeUsesTheSampledParentFontContext) {
   for (const bool animatedParent : {false, true}) {
