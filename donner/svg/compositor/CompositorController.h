@@ -1707,6 +1707,15 @@ private:
     return cancelToken_.has_value() && cancelToken_->get().isCancelled();
   }
 
+  /// Render live identities under document access, then discover and warm retained layers.
+  void renderWithoutPromotedLayers(const RenderViewport& viewport,
+                                   const Transform2d& surfaceFromCanvas,
+                                   const ResolveOptions& resolveOptions, bool needsLayerPlanning);
+
+  /// Finish a flat frame after preparation removes the final promoted layer.
+  void renderAfterLastLayerRemoved(const RenderViewport& viewport,
+                                   const Transform2d& surfaceFromCanvas);
+
   void renderFrameImpl(const RenderViewport& viewport, const Transform2d& surfaceFromCanvas);
 
   /// A complete main frame has been rendered since the last reset. Viewport changes retain it
