@@ -22,6 +22,23 @@ public:
   /// Maximum path parsing and arc-length work across one animation sample.
   static constexpr std::size_t kMaximumGeometryWork = 262144;
 
+  /// Aggregate contextual-length evaluation and measurement work during render preparation.
+  static constexpr std::size_t kMaximumContextualWork = 4 * 1024 * 1024;
+
+  /// Remaining contextual work; shared by every text span and marker reference in this sample.
+  std::size_t remainingContextualWork() const { return kMaximumContextualWork - contextualWork_; }
+
+  /// Admit consumer work before evaluating a recipe. Refused consumers retain their base value.
+  /// @param work Conservative parsing/interpolation or measured path-work cost.
+  bool reserveContextualWork(std::size_t work) {
+    if (work > remainingContextualWork()) {
+      contextualWork_ = kMaximumContextualWork;
+      return false;
+    }
+    contextualWork_ += work;
+    return true;
+  }
+
   /// Remaining path work for this frame.
   std::size_t remainingGeometryWork() const { return kMaximumGeometryWork - geometryWork_; }
 
@@ -77,10 +94,11 @@ public:
   std::size_t sourceBytes() const { return sourceBytes_; }
   /// Aggregate animation output bytes admitted so far.
   std::size_t outputBytes() const { return outputBytes_; }
-  /// Whether any admission exceeded its corresponding limit.
+  /// Whether declaration, source, output or path-work admission rejected the sample.
   bool rejected() const { return rejected_; }
 
 private:
+  std::size_t contextualWork_ = 0;
   std::size_t animations_ = 0;
   std::size_t sourceBytes_ = 0;
   std::size_t outputBytes_ = 0;

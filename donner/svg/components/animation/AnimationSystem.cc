@@ -3,7 +3,9 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <memory>
 #include <string>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -136,13 +138,17 @@ std::size_t AnimationSourceBytes(const SetAnimationComponent* setComp,
     AddOptionalAnimationSourceBytes(setComp->href, sourceBytes);
   } else if (valueComp) {
     addValues(*valueComp);
+    AddAnimationSourceBytes(valueComp->attributeName, sourceBytes);
+    AddOptionalAnimationSourceBytes(valueComp->href, sourceBytes);
   } else if (transformComp) {
     addValues(*transformComp);
     AddAnimationSourceBytes(transformComp->attributeName, sourceBytes);
+    AddOptionalAnimationSourceBytes(transformComp->href, sourceBytes);
   } else if (motionComp) {
     addValues(*motionComp);
     AddOptionalAnimationSourceBytes(motionComp->path, sourceBytes);
     AddAnimationSourceBytes(motionComp->rotate, sourceBytes);
+    AddOptionalAnimationSourceBytes(motionComp->href, sourceBytes);
     sourceBytes += motionComp->keyPoints.size() * sizeof(double);
   }
   return sourceBytes;
@@ -177,9 +183,52 @@ bool ValidTransformAttribute(Registry& registry, Entity target, std::string_view
   return name == "patternTransform" && type->type() == ElementType::Pattern;
 }
 
+using ContextualRecipes =
+    std::unordered_map<Entity, std::unordered_map<std::string, ContextualLengthRecipe>>;
+
+bool NeedsInstanceLengthContext(Registry& registry, Entity target, std::string_view attribute) {
+  const auto* type = registry.try_get<ElementTypeComponent>(target);
+  if (!type) {
+    return false;
+  }
+  return (type->type() == ElementType::TextPath && attribute == "startOffset") ||
+         (type->type() == ElementType::Marker &&
+          (attribute == "markerWidth" || attribute == "markerHeight" || attribute == "refX" ||
+           attribute == "refY"));
+}
+
+bool RetainContextualLength(ContextualRecipes& recipes, Entity target, std::string_view attribute,
+                            const SetAnimationComponent* set, const AnimateValueComponent* value,
+                            double progress, double iteration, AnimationResourceBudget& budget) {
+  const std::size_t sourceBytes = AnimationSourceBytes(set, value, nullptr, nullptr);
+  const std::size_t keyframes = value ? value->values.size() : 0;
+  if (keyframes > AnimationResourceBudget::kMaximumOutputBytes / (2 * sizeof(std::string))) {
+    return budget.reserveOutput(AnimationResourceBudget::kMaximumOutputBytes + 1);
+  }
+  const std::size_t retained =
+      2 * (sizeof(ContextualLengthSample) + sourceBytes + keyframes * sizeof(std::string)) + 256;
+  if (!budget.reserveOutput(retained)) {
+    return false;
+  }
+  auto& recipe = recipes[target][std::string(attribute)];
+  recipe.retainedBytes += retained;
+  recipe.evaluationWork += sourceBytes * 16 + 256;
+  ContextualLengthSample sample;
+  sample.progress = progress;
+  sample.iteration = iteration;
+  if (set) {
+    sample.declaration = *set;
+  } else {
+    sample.declaration = *value;
+  }
+  recipe.samples.push_back(std::move(sample));
+  return true;
+}
+
 bool ProcessAnimation(Registry& registry, Entity entity, double documentTime,
                       AnimationResourceBudget& resourceBudget,
-                      std::unordered_map<Entity, std::string>& motionBases) {
+                      std::unordered_map<Entity, std::string>& motionBases,
+                      ContextualRecipes& recipes) {
   const auto& timing = registry.get<AnimationTimingComponent>(entity);
   auto& state = registry.get_or_emplace<AnimationStateComponent>(entity);
   const auto* setComp = registry.try_get<SetAnimationComponent>(entity);
@@ -231,6 +280,11 @@ bool ProcessAnimation(Registry& registry, Entity entity, double documentTime,
           : (valueComp
                  ? std::string_view(valueComp->attributeName)
                  : (transformComp ? std::string_view(transformComp->attributeName) : "transform"));
+  if ((setComp || valueComp) &&
+      NeedsInstanceLengthContext(registry, state.targetEntity, attribute)) {
+    return RetainContextualLength(recipes, state.targetEntity, attribute, setComp, valueComp,
+                                  progress, iteration, resourceBudget);
+  }
   const auto context =
       setComp ? AnimationValueContext{}
               : AnimationContextFor(registry, state.targetEntity, attribute, resourceBudget);
@@ -275,6 +329,35 @@ bool ProcessAnimation(Registry& registry, Entity entity, double documentTime,
   auto& values = registry.get_or_emplace<AnimatedValuesComponent>(state.targetEntity);
   values.overrides[std::string(sampled->first)] = std::move(sampled->second);
   return true;
+}
+
+void ClearSampledAnimationValues(Registry& registry) {
+  for (auto [entity, values] : registry.view<AnimatedValuesComponent>().each()) {
+    values.overrides.clear();
+    values.contextualLengths.clear();
+  }
+}
+
+void PublishContextualRecipes(Registry& registry, ContextualRecipes& recipes,
+                              const AnimationResourceBudget& budget) {
+  if (budget.rejected()) {
+    return;
+  }
+  for (auto& [target, attributes] : recipes) {
+    auto& values = registry.get_or_emplace<AnimatedValuesComponent>(target);
+    for (auto& [attribute, recipe] : attributes) {
+      values.contextualLengths.emplace(
+          attribute, std::make_shared<const ContextualLengthRecipe>(std::move(recipe)));
+    }
+  }
+}
+
+void RemoveEmptyAnimationValues(Registry& registry) {
+  for (auto [entity, values] : registry.view<AnimatedValuesComponent>().each()) {
+    if (values.overrides.empty() && values.contextualLengths.empty()) {
+      registry.remove<AnimatedValuesComponent>(entity);
+    }
+  }
 }
 
 std::string_view MouseEventName(EventType type) {
@@ -477,10 +560,7 @@ void AnimationSystem::advance(Registry& registry, double documentTime,
     registry.ctx().erase<AnimationResourceBudget>();
   }
   auto& resourceBudget = registry.ctx().emplace<AnimationResourceBudget>();
-  // Clear all animated overrides from previous frame.
-  for (auto [entity, animValues] : registry.view<AnimatedValuesComponent>().each()) {
-    animValues.overrides.clear();
-  }
+  ClearSampledAnimationValues(registry);
 
   if (registry.ctx().get<ResourceManagerContext>().processingMode() ==
       ProcessingMode::SecureStatic) {
@@ -506,21 +586,16 @@ void AnimationSystem::advance(Registry& registry, double documentTime,
     return AnimatesContextAttribute(registry, entity, true);
   });
   std::unordered_map<Entity, std::string> motionBases;
+  ContextualRecipes recipes;
   for (const Entity entity : animations) {
-    if (!ProcessAnimation(registry, entity, documentTime, resourceBudget, motionBases)) {
-      for (auto [target, values] : registry.view<AnimatedValuesComponent>().each()) {
-        values.overrides.clear();
-      }
+    if (!ProcessAnimation(registry, entity, documentTime, resourceBudget, motionBases, recipes)) {
+      ClearSampledAnimationValues(registry);
       break;
     }
   }
 
-  // Clean up empty AnimatedValuesComponent instances.
-  for (auto [entity, animValues] : registry.view<AnimatedValuesComponent>().each()) {
-    if (animValues.overrides.empty()) {
-      registry.remove<AnimatedValuesComponent>(entity);
-    }
-  }
+  PublishContextualRecipes(registry, recipes, resourceBudget);
+  RemoveEmptyAnimationValues(registry);
 }
 
 }  // namespace donner::svg::components

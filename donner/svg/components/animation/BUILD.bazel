@@ -12,6 +12,7 @@ donner_cc_library(
         "AnimationStateComponent.h",
         "AnimationTimingComponent.h",
         "ClockValue.h",
+        "ContextualLengthRecipe.h",
         "SetAnimationComponent.h",
     ],
     visibility = [

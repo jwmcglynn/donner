@@ -15,6 +15,7 @@
 #include "donner/svg/components/animation/AnimatedValuesComponent.h"
 #include "donner/svg/components/animation/AnimationNumericAttributes.h"
 #include "donner/svg/components/animation/AnimationSystem.h"
+#include "donner/svg/components/animation/AnimationValueSampler.h"
 #include "donner/svg/components/filter/FilterComponent.h"
 #include "donner/svg/components/filter/FilterPrimitiveComponent.h"
 #include "donner/svg/components/layout/LayoutSystem.h"
@@ -28,6 +29,7 @@
 #include "donner/svg/components/paint/PatternComponent.h"
 #include "donner/svg/components/paint/RadialGradientComponent.h"
 #include "donner/svg/components/resources/ImageComponent.h"
+#include "donner/svg/components/shadow/ShadowEntityComponent.h"
 #include "donner/svg/components/shadow/ShadowTreeComponent.h"
 #include "donner/svg/components/shape/CircleComponent.h"
 #include "donner/svg/components/shape/EllipseComponent.h"
@@ -849,6 +851,30 @@ std::string UnderlyingAnimationValue(Registry& registry, Entity target, std::str
     return "1";
   }
   return "0";
+}
+
+std::shared_ptr<const ContextualLengthRecipe> ContextualLengthFor(Registry& registry, Entity target,
+                                                                  std::string_view attribute) {
+  if (const auto* shadow = registry.try_get<ShadowEntityComponent>(target)) {
+    target = shadow->lightEntity;
+  }
+  const auto* values = registry.try_get<AnimatedValuesComponent>(target);
+  if (!values) {
+    return nullptr;
+  }
+  const auto found = values->contextualLengths.find(std::string(attribute));
+  return found == values->contextualLengths.end() ? nullptr : found->second;
+}
+
+std::optional<Lengthd> ResolveContextualLength(Registry& registry, Entity target,
+                                               std::string_view attribute, Lengthd underlying,
+                                               const AnimationValueContext& context) {
+  const auto recipe = ContextualLengthFor(registry, target, attribute);
+  auto* budget = registry.ctx().find<AnimationResourceBudget>();
+  if (!recipe || !budget || !budget->reserveContextualWork(recipe->evaluationWork)) {
+    return std::nullopt;
+  }
+  return SampleContextualLengthRecipe(*recipe, underlying, context);
 }
 
 }  // namespace donner::svg::components

@@ -28,6 +28,11 @@ struct AnimationValueContext {
 /// @return Parsed values, or nullopt for an empty, malformed, or excessive list.
 std::optional<std::vector<Lengthd>> ParseAnimationLengths(std::string_view input);
 
+/// Parse one animated length, including axis-appropriate refX/refY reference keywords.
+/// @param attribute Animated field name. @param value Sampled value.
+/// @return One finite length, or nullopt for an invalid field value.
+std::optional<Lengthd> ParseAnimationLength(std::string_view attribute, std::string_view value);
+
 /** Combine compatible numeric, length-list, or color values with linear weights.
  * @param first First value.
  * @param second Second value.

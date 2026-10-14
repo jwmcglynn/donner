@@ -42,6 +42,26 @@ std::optional<std::vector<Lengthd>> ParseAnimationLengths(std::string_view input
   return values.empty() ? std::nullopt : std::optional(std::move(values));
 }
 
+std::optional<Lengthd> ParseAnimationLength(std::string_view attribute, std::string_view value) {
+  if (const auto lengths = ParseAnimationLengths(value); lengths && lengths->size() == 1) {
+    return lengths->front();
+  }
+  if (attribute != "refX" && attribute != "refY") {
+    return std::nullopt;
+  }
+  const bool x = attribute == "refX";
+  if (value == (x ? "left" : "top")) {
+    return Lengthd(0, Lengthd::Unit::Percent);
+  }
+  if (value == "center") {
+    return Lengthd(50, Lengthd::Unit::Percent);
+  }
+  if (value == (x ? "right" : "bottom")) {
+    return Lengthd(100, Lengthd::Unit::Percent);
+  }
+  return std::nullopt;
+}
+
 namespace {
 
 std::optional<css::RGBA> ParseColor(std::string_view input, const AnimationValueContext& context) {

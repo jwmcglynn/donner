@@ -3684,6 +3684,28 @@ void RendererDriver::drawMarkers(RenderingInstanceView& view, Registry& registry
   }
 }
 
+namespace {
+
+Vector2d MarkerDimensions(const components::ResolvedMarker& marker,
+                          const components::MarkerComponent& component, const Box2d& viewport) {
+  if (marker.animatedLengths) {
+    return {marker.animatedLengths->width, marker.animatedLengths->height};
+  }
+  return {component.markerWidth.toPixels(viewport, FontMetrics(), Lengthd::Extent::X),
+          component.markerHeight.toPixels(viewport, FontMetrics(), Lengthd::Extent::Y)};
+}
+
+Vector2d MarkerReferencePoint(const components::ResolvedMarker& marker,
+                              const components::MarkerComponent& component, const Box2d& viewport) {
+  if (marker.animatedLengths) {
+    return {marker.animatedLengths->refX, marker.animatedLengths->refY};
+  }
+  return {component.refX.toPixels(viewport, FontMetrics(), Lengthd::Extent::X),
+          component.refY.toPixels(viewport, FontMetrics(), Lengthd::Extent::Y)};
+}
+
+}  // namespace
+
 void RendererDriver::drawMarker(RenderingInstanceView& view, Registry& registry,
                                 const components::RenderingInstanceComponent& instance,
                                 const components::ResolvedMarker& marker,
@@ -3701,24 +3723,15 @@ void RendererDriver::drawMarker(RenderingInstanceView& view, Registry& registry,
   }
 
   components::LayoutSystem layoutSystem;
-  // markerWidth/markerHeight percentages resolve against the viewport of the *element referencing
-  // the marker* (the painted shape's nearest ancestor viewport), **not** the marker's own
-  // viewBox. Use `instance.dataHandle` (the painted entity) - `getViewBox(markerHandle)` was wrong
-  // for the common case of markers defined in a root `<defs>` and referenced from a nested `<svg>`
-  // viewport (PR #611 Codex P1). markerWidth resolves against the width (Extent::X) and
-  // markerHeight against the height (Extent::Y).
+  // Marker percentages use the referencing shape's viewport, including nested SVG instances.
   const Box2d markerPercentViewport = layoutSystem.getViewBox(instance.dataHandle(registry));
-  const FontMetrics markerFontMetrics;
-  const double markerWidthPx = markerComponent->markerWidth.toPixels(
-      markerPercentViewport, markerFontMetrics, Lengthd::Extent::X);
-  const double markerHeightPx = markerComponent->markerHeight.toPixels(
-      markerPercentViewport, markerFontMetrics, Lengthd::Extent::Y);
+  const Vector2d dimensions = MarkerDimensions(marker, *markerComponent, markerPercentViewport);
 
-  if (markerWidthPx <= 0.0 || markerHeightPx <= 0.0) {
+  if (dimensions.x <= 0.0 || dimensions.y <= 0.0) {
     return;
   }
 
-  const Box2d markerSize = Box2d::FromXYWH(0, 0, markerWidthPx, markerHeightPx);
+  const Box2d markerSize = Box2d::FromXYWH(0, 0, dimensions.x, dimensions.y);
 
   const std::optional<Box2d> markerViewBox =
       layoutSystem.overridesViewBox(markerHandle)
@@ -3731,10 +3744,8 @@ void RendererDriver::drawMarker(RenderingInstanceView& view, Registry& registry,
   // back to the referencing element's viewport - the same basis markerWidth/markerHeight use, and
   // the behavior the resvg reference expects (e.g. painting/marker/percent-values).
   const Box2d refPercentViewport = markerViewBox.value_or(markerPercentViewport);
-  const double refXPx =
-      markerComponent->refX.toPixels(refPercentViewport, markerFontMetrics, Lengthd::Extent::X);
-  const double refYPx =
-      markerComponent->refY.toPixels(refPercentViewport, markerFontMetrics, Lengthd::Extent::Y);
+  const Vector2d referencePoint =
+      MarkerReferencePoint(marker, *markerComponent, refPercentViewport);
   const PreserveAspectRatio preserveAspectRatio =
       markerHandle.get<components::PreserveAspectRatioComponent>().preserveAspectRatio;
 
@@ -3750,8 +3761,9 @@ void RendererDriver::drawMarker(RenderingInstanceView& view, Registry& registry,
   const Transform2d markerUnitsFromViewBox =
       preserveAspectRatio.elementContentFromViewBoxTransform(markerSize, markerViewBox);
 
-  const Transform2d markerOffsetFromVertex = Transform2d::Translate(
-      -refXPx * markerUnitsFromViewBox.data[0], -refYPx * markerUnitsFromViewBox.data[3]);
+  const Transform2d markerOffsetFromVertex =
+      Transform2d::Translate(-referencePoint.x * markerUnitsFromViewBox.data[0],
+                             -referencePoint.y * markerUnitsFromViewBox.data[3]);
 
   const Transform2d vertexFromEntity = Transform2d::Scale(markerScale) *
                                        Transform2d::Rotate(angleRadians) *

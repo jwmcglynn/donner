@@ -831,21 +831,8 @@ bool ApplyReferenceLength(
     if (fieldName != name) {
       continue;
     }
-    auto lengths = ParseAnimationLengths(value);
-    if (!lengths && (name == "refX" || name == "refY")) {
-      const bool x = name == "refX";
-      if (value == (x ? "left" : "top")) {
-        lengths = std::vector{Lengthd(0, Lengthd::Unit::Percent)};
-      }
-      if (value == "center") {
-        lengths = std::vector{Lengthd(50, Lengthd::Unit::Percent)};
-      }
-      if (value == (x ? "right" : "bottom")) {
-        lengths = std::vector{Lengthd(100, Lengthd::Unit::Percent)};
-      }
-    }
-    if (lengths && lengths->size() == 1) {
-      (void)SimpleField(registry, entity, name, field, lengths->front());
+    if (const auto length = ParseAnimationLength(name, value)) {
+      (void)SimpleField(registry, entity, name, field, *length);
     }
     return true;
   }

@@ -1,5 +1,7 @@
 #include "donner/svg/renderer/RenderingContext.h"
 
+#include <algorithm>
+#include <array>
 #include <cassert>
 #include <map>
 #include <optional>
@@ -20,6 +22,7 @@
 #include "donner/svg/components/RenderingInstanceComponent.h"
 #include "donner/svg/components/SVGDocumentContext.h"
 #include "donner/svg/components/animation/AnimatedValuesComponent.h"
+#include "donner/svg/components/animation/AnimationBaseValue.h"
 #include "donner/svg/components/animation/AnimationSystem.h"
 #include "donner/svg/components/filter/FilterComponent.h"
 #include "donner/svg/components/filter/FilterSystem.h"
@@ -543,7 +546,7 @@ public:
       }
 
       if (properties.markerStart.get()) {
-        if (auto resolved = resolveMarker(EntityHandle(registry_, styleEntity),
+        if (auto resolved = resolveMarker(dataHandle, EntityHandle(registry_, styleEntity),
                                           properties.markerStart.get().value(),
                                           ShadowBranchType::OffscreenMarkerStart);
             resolved.valid()) {
@@ -552,7 +555,7 @@ public:
       }
 
       if (properties.markerMid.get()) {
-        if (auto resolved = resolveMarker(EntityHandle(registry_, styleEntity),
+        if (auto resolved = resolveMarker(dataHandle, EntityHandle(registry_, styleEntity),
                                           properties.markerMid.get().value(),
                                           ShadowBranchType::OffscreenMarkerMid);
             resolved.valid()) {
@@ -561,7 +564,7 @@ public:
       }
 
       if (properties.markerEnd.get()) {
-        if (auto resolved = resolveMarker(EntityHandle(registry_, styleEntity),
+        if (auto resolved = resolveMarker(dataHandle, EntityHandle(registry_, styleEntity),
                                           properties.markerEnd.get().value(),
                                           ShadowBranchType::OffscreenMarkerEnd);
             resolved.valid()) {
@@ -1134,8 +1137,37 @@ public:
     return ResolvedMask{ResolvedReference{EntityHandle()}, std::nullopt, MaskContentUnits::Default};
   }
 
-  ResolvedMarker resolveMarker(EntityHandle styleHandle, const Reference& reference,
-                               ShadowBranchType branchType) {
+  std::optional<ResolvedMarkerLengths> resolveMarkerLengths(EntityHandle dataHandle,
+                                                            EntityHandle markerHandle) {
+    Registry& registry = *dataHandle.registry();
+    const Entity target = markerHandle.entity();
+    const std::array<std::string_view, 4> names = {"markerWidth", "markerHeight", "refX", "refY"};
+    if (std::none_of(names.begin(), names.end(), [&](std::string_view name) {
+          return ContextualLengthFor(registry, target, name) != nullptr;
+        })) {
+      return std::nullopt;
+    }
+    LayoutSystem layout;
+    const Box2d viewport = layout.getViewBox(dataHandle);
+    const Box2d referenceViewport =
+        layout.overridesViewBox(markerHandle) ? layout.getViewBox(markerHandle) : viewport;
+    const auto& marker = markerHandle.get<MarkerComponent>();
+    const std::array<Lengthd, 4> bases = {marker.markerWidth, marker.markerHeight, marker.refX,
+                                          marker.refY};
+    std::array<double, 4> resolved;
+    for (std::size_t i = 0; i < names.size(); ++i) {
+      AnimationValueContext context;
+      context.viewBox = i < 2 ? viewport : referenceViewport;
+      context.extent = i % 2 == 0 ? Lengthd::Extent::X : Lengthd::Extent::Y;
+      const Lengthd length =
+          ResolveContextualLength(registry, target, names[i], bases[i], context).value_or(bases[i]);
+      resolved[i] = length.toPixels(context.viewBox, context.fontMetrics, context.extent);
+    }
+    return ResolvedMarkerLengths{resolved[0], resolved[1], resolved[2], resolved[3]};
+  }
+
+  ResolvedMarker resolveMarker(EntityHandle dataHandle, EntityHandle styleHandle,
+                               const Reference& reference, ShadowBranchType branchType) {
     if (auto resolvedRef = reference.resolve(*styleHandle.registry());
         resolvedRef && IsValidMarker(resolvedRef->handle)) {
       const Entity markerElement = resolvedRef->handle.entity();
@@ -1169,7 +1201,8 @@ public:
         activeMarkerElements_.erase(markerElement);
 
         return ResolvedMarker{resolvedRef.value(), std::move(subtree),
-                              resolvedRef->handle.get<MarkerComponent>().markerUnits};
+                              resolvedRef->handle.get<MarkerComponent>().markerUnits,
+                              resolveMarkerLengths(dataHandle, resolvedRef->handle)};
       }
     }
     return ResolvedMarker{ResolvedReference{EntityHandle()}, std::nullopt, MarkerUnits::Default};

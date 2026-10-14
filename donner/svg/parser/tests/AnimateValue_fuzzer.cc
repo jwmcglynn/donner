@@ -7,6 +7,7 @@
 
 #include "donner/base/ParseWarningSink.h"
 #include "donner/svg/components/animation/AnimateValueComponent.h"
+#include "donner/svg/components/animation/AnimationBaseValue.h"
 #include "donner/svg/components/animation/AnimationSystem.h"
 #include "donner/svg/parser/ListParser.h"
 #include "donner/svg/parser/SVGParser.h"
@@ -35,7 +36,10 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
     std::string_view element;
     std::string_view attribute;
   };
-  constexpr std::array<Target, 6> targets = {{
+  constexpr std::array<Target, 9> targets = {{
+      {"marker:", "marker", "markerWidth"},
+      {"marker-ref:", "marker", "refX"},
+      {"text-offset:", "textPath", "startOffset"},
       {"pair:", "feGaussianBlur", "stdDeviation"},
       {"integer:", "feTurbulence", "numOctaves"},
       {"order:", "feConvolveMatrix", "order"},
@@ -78,6 +82,14 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
     // Advance at a few time points to exercise interpolation.
     components::AnimationSystem().advance(registry, 0.5, nullptr);
     components::AnimationSystem().advance(registry, 1.0, nullptr);
+    if (const auto element = result.result().querySelector("#r")) {
+      components::AnimationValueContext context;
+      for (const double extent : {1.0, 100.0}) {
+        context.viewBox = Box2d::FromXYWH(0, 0, extent, extent);
+        (void)components::ResolveContextualLength(registry, element->entityHandle().entity(),
+                                                  target.attribute, Lengthd(3), context);
+      }
+    }
   }
 
   return 0;

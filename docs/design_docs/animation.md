@@ -89,6 +89,13 @@ writing, so an intentional edit equal to the displayed animated value is retaine
 presentation-attribute probes preserve the current presentation. Direct internal storage mutations
 bypass this setter lifecycle and are not part of the supported editing contract.
 
+Text-path offsets and marker lengths retain immutable, admitted value stacks until their instance
+context is available. Text offsets use the final path geometry, including source edits and animated
+referenced paths. Marker dimensions and reference points are resolved once per referencing render
+instance; rasterization consumes the prepared scalars. Both use the same interpolation sampler as
+ordinary values and retain authored components as their bases. The presentation regression target
+covers mixed units, shared markers, stack ordering, seeking, keyword values and source removal.
+
 Resource references are sampled before shadow-tree expansion. Derived resources are invalidated only
 when the final reference changes, after the previous shadow instances have been removed. Repeated
 raster-image references move decoded frames into bounded per-element caches and retain their resource
@@ -150,6 +157,9 @@ geometry measurement, lifecycle queries, hit geometry, and queued preview input.
   and 262144 dependency steps.
 - At most 4 MiB of generated values, 64 numeric values per sampled list, and 64 KiB per motion path.
 - A shared 262144-unit path parsing/measurement budget per evaluation.
+- A shared 4 Mi-unit contextual length preparation allowance across text spans and marker references.
+  Recipe parsing/interpolation and bounded path measurement are admitted before work; a refused
+  consumer retains its base value. Owned recipe data is charged to the source/output envelopes.
 - Lifecycle queries exceeding 4096 events return an incomplete empty result.
 - Decoded animation-image caches admit at most 4096 lifetime URI keys and 1 MiB of URI metadata
   per document; decoded bytes remain charged to the existing document resource budget.
@@ -161,7 +171,8 @@ geometry measurement, lifecycle queries, hit geometry, and queued preview input.
   diagnostics and rendered tests.
 
 These limits are exercised by `//donner/svg/parser:parser_tests`,
-`//donner/svg/tests:svg_tests`, and `//donner/editor/tests:async_svg_document_tests`. Negative cases and
+`//donner/svg/tests:svg_tests`, `//donner/svg/renderer/tests:renderer_animation_presentation_tests`,
+and `//donner/editor/tests:async_svg_document_tests`. Negative cases and
 fuzzer coverage must be expanded whenever a new input form or resource-owning path is added.
 
 ## Implementation and qualification checklist
@@ -175,9 +186,9 @@ fuzzer coverage must be expanded whenever a new input form or resource-owning pa
 - [x] Default-parser and source-edit regressions, including element insertion/removal.
 - [x] Qualify inherited pattern/filter regions, typed text-path offsets and filter-primitive regions,
       and inherited/same-sample primitive-unit selectors with rendered regressions.
-- [ ] Resolve mixed-unit text-path offsets against the final path geometry.
-- [ ] Resolve marker dimensions and inherited filter-primitive children in each referencing
-      instance's coordinate context; a resource's DOM-parent viewport is insufficient.
+- [x] Resolve mixed-unit text-path offsets against final path geometry, including shadow instances.
+- [x] Resolve marker dimensions and reference points separately for each referencing viewport.
+- [ ] Resolve inherited filter-primitive children in each referencing filter's coordinate context.
 - [ ] Supply default filter-primitive subregions as underlying animation values, including defaults
       derived from primitive inputs and the enclosing filter region.
 - [ ] Finish presentation-attribute coverage and publish the verified support matrix.

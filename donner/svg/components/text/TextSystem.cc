@@ -11,6 +11,8 @@
 #include "donner/base/xml/components/TreeComponent.h"
 #include "donner/svg/components/ConditionalProcessingComponent.h"
 #include "donner/svg/components/SVGDocumentContext.h"
+#include "donner/svg/components/animation/AnimationBaseValue.h"
+#include "donner/svg/components/animation/AnimationValueSampler.h"
 #include "donner/svg/components/layout/LayoutSystem.h"
 #include "donner/svg/components/shape/ComputedPathComponent.h"
 #include "donner/svg/components/shape/PathComponent.h"
@@ -107,7 +109,23 @@ bool hasTextPathGeometrySource(const TextPathComponent& textPath) {
 
 /// Resolves `startOffset` against the span's already-resolved path, where a percentage is a
 /// fraction of that path's total length.
-void applyStartOffset(const TextPathComponent& textPath, ComputedTextComponent::TextSpan& span) {
+void applyStartOffset(Registry& registry, Entity textPathEntity, const TextPathComponent& textPath,
+                      ComputedTextComponent::TextSpan& span) {
+  const auto recipe = ContextualLengthFor(registry, textPathEntity, "startOffset");
+  auto* budget = registry.ctx().find<AnimationResourceBudget>();
+  if (recipe && budget && budget->reserveContextualWork(recipe->evaluationWork)) {
+    const auto measured = span.pathSpline->measure(budget->remainingContextualWork());
+    if (budget->reserveContextualWork(measured.measurementWorkUnits()) && measured.valid()) {
+      AnimationValueContext context;
+      context.viewBox = Box2d::FromXYWH(0, 0, measured.pathLength(), measured.pathLength());
+      context.extent = Lengthd::Extent::X;
+      const Lengthd offset =
+          SampleContextualLengthRecipe(*recipe, textPath.startOffset.value_or(Lengthd()), context)
+              .value_or(textPath.startOffset.value_or(Lengthd()));
+      span.pathStartOffset = offset.toPixels(context.viewBox, context.fontMetrics, context.extent);
+      return;
+    }
+  }
   if (!textPath.startOffset) {
     return;
   }
@@ -199,7 +217,7 @@ std::optional<Path> resolveTextPathGeometry(Registry& registry, const TextPathCo
 
 /// Resolves the geometry and start offset a \ref xml_textPath places glyphs on, leaving \p span
 /// unchanged when no usable geometry exists.
-void resolveTextPath(Registry& registry, const TextPathComponent& textPath,
+void resolveTextPath(Registry& registry, Entity textPathEntity, const TextPathComponent& textPath,
                      ComputedTextComponent::TextSpan& span) {
   std::optional<Path> geometry = resolveTextPathGeometry(registry, textPath);
   if (!geometry) {
@@ -210,7 +228,7 @@ void resolveTextPath(Registry& registry, const TextPathComponent& textPath,
   // path backwards: glyphs face the opposite way and `startOffset` counts from what was the end.
   span.pathSpline =
       textPath.side == TextPathSide::Right ? geometry->reversed() : std::move(*geometry);
-  applyStartOffset(textPath, span);
+  applyStartOffset(registry, textPathEntity, textPath, span);
 }
 
 /// Find the textPath entity that applies to the given entity.
@@ -377,7 +395,7 @@ void TextSystem::instantiateComputedComponent(EntityHandle rootHandle,
         findApplicableTextPathEntity(registry, handle.entity(), invalidTextPathNesting);
     if (textPathEntity != entt::null) {
       const auto& textPath = registry.get<TextPathComponent>(textPathEntity);
-      resolveTextPath(registry, textPath, span);
+      resolveTextPath(registry, textPathEntity, textPath, span);
       if (!span.pathSpline) {
         // textPath href could not be resolved - mark as failed so glyphs are hidden.
         span.textPathFailed = true;

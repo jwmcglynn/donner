@@ -422,4 +422,25 @@ std::optional<std::pair<std::string, std::string>> SampleAnimationValue(
   return std::pair<std::string, std::string>{transformComp->attributeName, std::move(sampled)};
 }
 
+std::optional<Lengthd> SampleContextualLengthRecipe(const ContextualLengthRecipe& recipe,
+                                                    Lengthd underlying,
+                                                    const AnimationValueContext& context) {
+  std::optional<Lengthd> result;
+  for (const auto& sample : recipe.samples) {
+    const auto value = SampleAnimationValue(sample.progress, sample.iteration,
+                                            std::get_if<SetAnimationComponent>(&sample.declaration),
+                                            std::get_if<AnimateValueComponent>(&sample.declaration),
+                                            nullptr, underlying.toRcString().str(), context);
+    if (!value) {
+      continue;
+    }
+    const auto parsed = ParseAnimationLength(value->first, value->second);
+    if (parsed) {
+      result = *parsed;
+      underlying = *result;
+    }
+  }
+  return result;
+}
+
 }  // namespace donner::svg::components

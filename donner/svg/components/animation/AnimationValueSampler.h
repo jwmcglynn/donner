@@ -8,6 +8,7 @@
 #include "donner/svg/components/animation/AnimateTransformComponent.h"
 #include "donner/svg/components/animation/AnimateValueComponent.h"
 #include "donner/svg/components/animation/AnimationValueMath.h"
+#include "donner/svg/components/animation/ContextualLengthRecipe.h"
 #include "donner/svg/components/animation/SetAnimationComponent.h"
 
 namespace donner::svg::components {
@@ -26,5 +27,16 @@ std::optional<std::pair<std::string, std::string>> SampleAnimationValue(
     double progress, double iteration, const SetAnimationComponent* setComp,
     const AnimateValueComponent* valueComp, const AnimateTransformComponent* transformComp,
     const std::string& underlying, const AnimationValueContext& context);
+
+/** Evaluate an admitted contextual length stack with the shared interpolation rules.
+ * @param recipe Immutable, previously admitted samples in sandwich order.
+ * @param underlying Authored or typed base value in this instance.
+ * @param context Actual percentage and font context.
+ * @return Final finite single length, or nullopt when no layer contributes.
+ * The caller must admit recipe.evaluationWork before invoking this operation.
+ */
+std::optional<Lengthd> SampleContextualLengthRecipe(const ContextualLengthRecipe& recipe,
+                                                    Lengthd underlying,
+                                                    const AnimationValueContext& context);
 
 }  // namespace donner::svg::components

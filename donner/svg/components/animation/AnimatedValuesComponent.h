@@ -1,8 +1,11 @@
 #pragma once
 /// @file
 
+#include <memory>
 #include <string>
 #include <unordered_map>
+
+#include "donner/svg/components/animation/ContextualLengthRecipe.h"
 
 namespace donner::svg::components {
 
@@ -23,6 +26,8 @@ struct AnimationStyleContext {
 struct AnimatedValuesComponent {
   /// Map from attribute name to its animated value (as a raw string).
   std::unordered_map<std::string, std::string> overrides;
+  /// Immutable recipes for fields whose units depend on the final referencing instance.
+  std::unordered_map<std::string, std::shared_ptr<const ContextualLengthRecipe>> contextualLengths;
 };
 
 }  // namespace donner::svg::components

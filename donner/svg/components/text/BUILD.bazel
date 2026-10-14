@@ -80,6 +80,7 @@ cc_library(
         "//donner/base/xml/components",
         "//donner/svg/components:components_core",
         "//donner/svg/components:svg_document_context",
+        "//donner/svg/components/animation:animation_system",
         "//donner/svg/components/layout:layout_system",
         "//donner/svg/components/shape:components",
         "//donner/svg/components/style:components",
