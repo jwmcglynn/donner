@@ -2710,12 +2710,13 @@ PropertyRegistry& PropertyRegistry::operator=(const PropertyRegistry&) = default
 PropertyRegistry& PropertyRegistry::operator=(PropertyRegistry&&) noexcept = default;
 
 std::span<const std::string_view> PropertyRegistry::propertyNames() {
-  static const std::array<std::string_view, kProperties.kSize + 2> names = [] {
-    std::array<std::string_view, kProperties.kSize + 2> result;
+  static const std::array<std::string_view, kProperties.kSize + 3> names = [] {
+    std::array<std::string_view, kProperties.kSize + 3> result;
     result[0] = kProperties.keys()[0];
     result[1] = "flood-color";
     result[2] = "stop-color";
-    std::copy(kProperties.keys().begin() + 1, kProperties.keys().end(), result.begin() + 3);
+    result[3] = "lighting-color";
+    std::copy(kProperties.keys().begin() + 1, kProperties.keys().end(), result.begin() + 4);
     return result;
   }();
   return names;
@@ -2783,7 +2784,10 @@ std::size_t PropertyRegistry::complexPropertyBytes() const {
 }
 
 Property<css::Color>& PropertyRegistry::resourceColor(std::size_t index) {
-  return index == 0 ? floodColor : stopColor;
+  UTILS_RELEASE_ASSERT(index < kResourceColorCount);
+  const std::array<Property<css::Color>*, kResourceColorCount> colors{&floodColor, &stopColor,
+                                                                      &lightingColor};
+  return *colors[index];
 }
 
 void PropertyRegistry::reconcileResourceColorMutation(std::size_t index) {
@@ -2837,9 +2841,11 @@ std::optional<ParseDiagnostic> PropertyRegistry::parseResourceColor(
 std::optional<ParseDiagnostic> PropertyRegistry::parseProperty(const css::Declaration& declaration,
                                                                css::Specificity specificity) {
   const std::string_view name(declaration.name);
-  if (name == "flood-color" || name == "stop-color") {
+  if (name == "flood-color" || name == "stop-color" || name == "lighting-color") {
     return parseResourceColor(
-        name == "flood-color" ? 0 : 1,
+        name == "flood-color"  ? 0
+        : name == "stop-color" ? 1
+                               : 2,
         parser::PropertyParseFnParams::Create(declaration, specificity,
                                               parser::PropertyParseBehavior::AllowUserUnits));
   }
@@ -2868,7 +2874,8 @@ std::optional<ParseDiagnostic> PropertyRegistry::parseProperty(const css::Declar
 }
 
 bool PropertyRegistry::parseInlineResourceColor(
-    const css::Declaration& declaration, std::array<Property<css::Color>, 2>& selectedColors) {
+    const css::Declaration& declaration,
+    std::array<Property<css::Color>, kResourceColorCount>& selectedColors) {
   auto color =
       std::find_if(selectedColors.begin(), selectedColors.end(),
                    [&](const auto& selected) { return selected.name == declaration.name; });
@@ -2914,7 +2921,8 @@ bool PropertyRegistry::parseStyle(std::string_view str) {
   if (securityStats.rejected) {
     return false;
   }
-  std::array<Property<css::Color>, 2> selectedColors{floodColor, stopColor};
+  std::array<Property<css::Color>, kResourceColorCount> selectedColors{floodColor, stopColor,
+                                                                       lightingColor};
   for (std::size_t index = 0; index < selectedColors.size(); ++index) {
     reconcileResourceColorMutation(index);
     if (inlineResourceColors_[index]) {
@@ -2977,8 +2985,10 @@ ParseResult<bool> PropertyRegistry::parsePresentationAttribute(std::string_view 
   parser::PropertyParseFnParams params = parser::PropertyParseFnParams::CreateForAttribute(value);
   params.specificity = specificity;
 
-  if (name == "flood-color" || name == "stop-color") {
-    return parseResourceColorAttribute(name == "flood-color" ? 0 : 1, params);
+  for (std::size_t index = 0; index < kResourceColorCount; ++index) {
+    if (name == resourceColor(index).name) {
+      return parseResourceColorAttribute(index, params);
+    }
   }
 
   const PropertyParseFn* parseFn = kProperties.find(name);

@@ -233,17 +233,18 @@ struct ExternalUseFixture {
 ExternalUseFixture MakeExternalUseFixture(
     std::string_view host, std::string_view resource,
     std::shared_ptr<components::DocumentResourceFamilyBudget> family =
-        std::make_shared<components::DocumentResourceFamilyBudget>()) {
+        std::make_shared<components::DocumentResourceFamilyBudget>(),
+    ProcessingMode childMode = ProcessingMode::SecureStatic) {
   auto child = std::make_shared<SVGDocumentHandle>();
   auto requests = std::make_shared<std::vector<std::string>>();
   SVGDocument::Settings settings;
   settings.resourceFamilyBudget = family;
   settings.resourceLoader = std::make_unique<ExternalUseResourceLoader>(resource, requests);
-  settings.svgParseCallback = [child, family](
+  settings.svgParseCallback = [child, family, childMode](
                                   const std::vector<uint8_t>& bytes,
                                   ParseWarningSink& warnings) -> std::optional<SVGDocumentHandle> {
     SVGDocument::Settings childSettings;
-    childSettings.processingMode = ProcessingMode::SecureStatic;
+    childSettings.processingMode = childMode;
     childSettings.resourceFamilyBudget = family;
     auto parsed = parser::SVGParser::ParseSVG(
         std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()), warnings,
@@ -511,6 +512,60 @@ TEST(RendererPublicApiTest, ExternalUseAnimatedResourceOpacityUsesCanonicalHostP
   EXPECT_THAT(actual.requests, ElementsAre("external.svg"));
   editor::tests::CompareBitmapToBitmap(actual.bitmap, expected, "external-animated-resource-parent",
                                        editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(RendererPublicApiTest, ExternalUseAnimatedInheritedPaintRetainsHostUrlOwner) {
+  auto fixture = MakeExternalUseFixture(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="24" height="8">
+        <defs>
+          <linearGradient id="a"><stop stop-color="red"/><stop offset="1" stop-color="red"/></linearGradient>
+          <linearGradient id="b"><stop stop-color="blue"/><stop offset="1" stop-color="blue"/></linearGradient>
+        </defs>
+        <use href="external.svg#tile" fill="url(#a)"/>
+        <use href="external.svg#tile" x="8" fill="url(#b)"/>
+        <use href="external.svg#tile" x="16" fill="url(#a)"/>
+      </svg>)svg",
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8">
+        <defs>
+          <linearGradient id="a"><stop stop-color="lime"/><stop offset="1" stop-color="lime"/></linearGradient>
+          <linearGradient id="b"><stop stop-color="lime"/><stop offset="1" stop-color="lime"/></linearGradient>
+        </defs>
+        <rect id="tile" width="8" height="8">
+          <animate attributeName="fill" from="inherit" to="black" calcMode="discrete"
+                   dur="2s" fill="freeze"/>
+        </rect>
+      </svg>)svg",
+      std::make_shared<components::DocumentResourceFamilyBudget>(), ProcessingMode::SecureAnimated);
+  std::ignore = RenderPublicDocument(fixture.document);
+  ASSERT_TRUE(*fixture.child);
+  SVGDocument child = SVGDocument::CreateFromHandle(*fixture.child);
+  const std::string hostSource(fixture.document.source());
+  const std::string childSource(child.source());
+  const auto inherited = RenderInlineDocument(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="24" height="8">
+        <rect width="8" height="8" fill="red"/><rect x="8" width="8" height="8" fill="blue"/>
+        <rect x="16" width="8" height="8" fill="red"/>
+      </svg>)svg");
+  const auto frozen = RenderInlineDocument(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="24" height="8">
+        <rect width="24" height="8" fill="black"/>
+      </svg>)svg");
+  for (const double time : {0.25, 2.5, 0.25}) {
+    SCOPED_TRACE(time);
+    child.setTime(time);
+    fixture.document.setTime(time);
+    editor::tests::CompareBitmapToBitmap(
+        RenderPublicDocument(fixture.document), time < 2 ? inherited : frozen,
+        "external-animated-paint-owner", editor::tests::PixelmatchIdentityParams());
+  }
+  child.restartAnimations();
+  fixture.document.restartAnimations();
+  editor::tests::CompareBitmapToBitmap(RenderPublicDocument(fixture.document), inherited,
+                                       "external-paint-owner-restart",
+                                       editor::tests::PixelmatchIdentityParams());
+  EXPECT_EQ(fixture.document.source(), hostSource);
+  EXPECT_EQ(child.source(), childSource);
+  EXPECT_THAT(*fixture.requests, ElementsAre("external.svg"));
 }
 
 TEST(RendererPublicApiTest, ExternalUseRepeatedFramesRestoreCachedChildAndSource) {

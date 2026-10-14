@@ -22,7 +22,7 @@ bool IsContextualScalarAttribute(std::string_view attribute) {
 
 bool IsContextualPaintAttribute(std::string_view attribute) {
   return attribute == "color" || attribute == "fill" || attribute == "stroke" ||
-         attribute == "stop-color" || attribute == "flood-color";
+         attribute == "stop-color" || attribute == "flood-color" || attribute == "lighting-color";
 }
 
 std::optional<std::string> SerializeAnimationUrl(std::string_view href) {

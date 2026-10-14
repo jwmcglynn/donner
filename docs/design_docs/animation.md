@@ -102,6 +102,14 @@ writing, so an intentional edit equal to the displayed animated value is retaine
 presentation-attribute probes preserve the current presentation. Direct internal storage mutations
 bypass this setter lifecycle and are not part of the supported editing contract.
 
+Paint and color stacks are sampled in the final style pass for each instance. The sampled parent
+and local color supply currentColor, inherited and unset operands; the color property itself uses
+its parent's color for currentColor. Fill, stroke, stop-color, flood-color and lighting-color share
+this path, including sampled color-interpolation, typed overrides and important declarations.
+Inherited URL paints retain their resource owner. Invalid effective operands leave lower valid
+layers intact. The presentation and public-API regression targets cover shared A-B-A instances,
+external paint ownership, seeking, source preservation, and lighting cascade/style removal.
+
 Text-path offsets and marker lengths retain immutable, admitted value stacks until their instance
 context is available. Text offsets use the final path geometry, including source edits and animated
 referenced paths. Marker dimensions and reference points are resolved once per referencing render
@@ -206,6 +214,9 @@ geometry measurement, lifecycle queries, hit geometry, and queued preview input.
   executions and CPU paint-coverage scans.
   Recipe parsing/interpolation and bounded path measurement are admitted before work; a refused
   consumer retains its base value. Owned recipe data is charged to the source/output envelopes.
+- Paint stacks share the contextual allowance and retain base values when admission fails.
+  The animation value fuzzer exercises deferred color and paint consumers with bounded operands;
+  style-system regressions verify recovery on the next sample.
 - Scalar stacks reserve their full contextual work before copying or normalization. Authored
   resource-opacity declarations charge the shared style budget before parsing; repeated-instance
   exhaustion and base-value retention are covered by
@@ -242,6 +253,8 @@ fuzzer coverage must be expanded whenever a new input form or resource-owning pa
 - [x] Resolve inherited filter-primitive children in each referencing filter's coordinate context.
 - [x] Supply default filter-primitive subregions as underlying animation values, including defaults
       derived from primitive inputs and the enclosing filter region.
+- [x] Resolve per-instance paint/color stacks, sampled currentColor and interpolation mode,
+      resource color priority, inherited URL ownership, and diffuse/specular lighting-color.
 - [ ] Finish presentation-attribute coverage and publish the verified support matrix.
 - [ ] Finish independent code/security review and all new hostile-input regressions.
 - [ ] Run affected source lint, formatting, CMake generation checks, and sanitizer/fuzzer gates.

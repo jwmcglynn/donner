@@ -98,6 +98,7 @@ auto as_mutable(const std::tuple<Args...>& tuple) {
  * | `color` | \ref color | `black` |
  * | `flood-color` | \ref floodColor | `black` |
  * | `stop-color` | \ref stopColor | `black` |
+ * | `lighting-color` | \ref lightingColor | `white` |
  * | `display` | \ref display | `inline` |
  * | `opacity` | \ref opacity | `1.0` |
  * | `visibility` | \ref visibility | `visible` |
@@ -147,6 +148,11 @@ public:
   Property<css::Color> stopColor{"stop-color", []() -> std::optional<css::Color> {
                                    return css::Color(css::RGBA(0, 0, 0, 255));
                                  }};
+
+  /// Light-source color for diffuse and specular lighting. Only explicit inheritance propagates it.
+  Property<css::Color> lightingColor{"lighting-color", []() -> std::optional<css::Color> {
+                                       return css::Color(css::RGBA::RGB(255, 255, 255));
+                                     }};
 
   /// `display` property, which determines how the element is rendered. Set to \ref Display::None to
   /// hide the element.
@@ -475,14 +481,15 @@ public:
    */
   auto allProperties() const {
     return std::forward_as_tuple(
-        color, floodColor, stopColor, display, opacity, visibility, overflow, transformOrigin, fill,
-        fillRule, fillOpacity, stroke, strokeOpacity, strokeWidth, strokeLinecap, strokeLinejoin,
-        strokeMiterlimit, strokeDasharray, strokeDashoffset, vectorEffect, clipPath, clipRule, mask,
-        maskType, colorInterpolation, filter, colorInterpolationFilters, pointerEvents, cursor,
-        markerStart, markerMid, markerEnd, fontFamily, fontSize, fontWeight, fontStyle, fontStretch,
-        fontVariant, fontKerning, fontSizeAdjust, textAnchor, textDecoration, dominantBaseline,
-        writingMode, inlineSize, letterSpacing, wordSpacing, baselineShift, alignmentBaseline,
-        mixBlendMode, isolation, imageRendering, paintOrder);
+        color, floodColor, stopColor, lightingColor, display, opacity, visibility, overflow,
+        transformOrigin, fill, fillRule, fillOpacity, stroke, strokeOpacity, strokeWidth,
+        strokeLinecap, strokeLinejoin, strokeMiterlimit, strokeDasharray, strokeDashoffset,
+        vectorEffect, clipPath, clipRule, mask, maskType, colorInterpolation, filter,
+        colorInterpolationFilters, pointerEvents, cursor, markerStart, markerMid, markerEnd,
+        fontFamily, fontSize, fontWeight, fontStyle, fontStretch, fontVariant, fontKerning,
+        fontSizeAdjust, textAnchor, textDecoration, dominantBaseline, writingMode, inlineSize,
+        letterSpacing, wordSpacing, baselineShift, alignmentBaseline, mixBlendMode, isolation,
+        imageRendering, paintOrder);
   }
 
   /**
@@ -689,8 +696,10 @@ private:
     Property<css::Color> value;
   };
 
+  static constexpr std::size_t kResourceColorCount = 3;
+
   /// Inline-origin state is fixed size and independent of the number of declarations.
-  std::array<std::optional<InlineResourceColor>, 2> inlineResourceColors_;
+  std::array<std::optional<InlineResourceColor>, kResourceColorCount> inlineResourceColors_;
 
   /// Returns the stable color property stored in this registry.
   Property<css::Color>& resourceColor(std::size_t index) UTILS_LIFETIME_BOUND;
@@ -702,8 +711,9 @@ private:
   void refreshResourceColor(std::size_t index);
 
   /// Parse one inline resource color, caching selection across the declaration list.
-  bool parseInlineResourceColor(const css::Declaration& declaration,
-                                std::array<Property<css::Color>, 2>& selectedColors);
+  bool parseInlineResourceColor(
+      const css::Declaration& declaration,
+      std::array<Property<css::Color>, kResourceColorCount>& selectedColors);
 
   /// Apply a resource-color presentation attribute and preserve its diagnostic.
   ParseResult<bool> parseResourceColorAttribute(std::size_t index,

@@ -144,6 +144,41 @@ bool NeedsUnderlying(const ContextualLengthSample& sample) {
   return value && (value->additive || (value->values.empty() && !value->from));
 }
 
+bool ValidPaintValue(PropertyRegistry& validator, std::string_view name, std::string_view value) {
+  const auto parsed = validator.parsePresentationAttribute(name, value, EntityHandle(),
+                                                           css::Specificity::Animation());
+  return parsed.hasResult() && parsed.result();
+}
+
+bool ValidDeclaration(const ContextualLengthSample& sample, std::string_view name,
+                      const std::string& underlying, PropertyRegistry& validator) {
+  const auto valid = [&](std::string_view value) {
+    return ValidPaintValue(validator, name, value);
+  };
+  return std::visit(
+      [&](const auto& declaration) {
+        if constexpr (std::is_same_v<std::decay_t<decltype(declaration)>, AnimateValueComponent>) {
+          if (!declaration.values.empty()) {
+            for (const auto& value : declaration.values) {
+              if (!valid(value)) {
+                return false;
+              }
+            }
+            return true;
+          }
+          if (declaration.to) {
+            return valid(declaration.from ? *declaration.from : underlying) &&
+                   valid(*declaration.to);
+          }
+          return declaration.by && valid(*declaration.by) &&
+                 (!declaration.from || valid(*declaration.from));
+        } else {
+          return declaration.to && valid(*declaration.to);
+        }
+      },
+      sample.declaration);
+}
+
 template <typename BaseProvider>
 std::optional<std::string> SamplePaintStack(const ContextualLengthRecipe& recipe,
                                             std::string_view name, const PaintKeywords& keywords,
@@ -170,6 +205,9 @@ std::optional<std::string> SamplePaintStack(const ContextualLengthRecipe& recipe
     if (!NormalizeDeclaration(sample, keywords, budget)) {
       return std::nullopt;
     }
+    if (!ValidDeclaration(sample, name, underlying ? *underlying : empty, validator)) {
+      continue;
+    }
     const auto value = SampleAnimationValue(sample.progress, sample.iteration,
                                             std::get_if<SetAnimationComponent>(&sample.declaration),
                                             std::get_if<AnimateValueComponent>(&sample.declaration),
@@ -177,9 +215,7 @@ std::optional<std::string> SamplePaintStack(const ContextualLengthRecipe& recipe
     if (!value) {
       continue;
     }
-    const auto valid = validator.parsePresentationAttribute(name, value->second, EntityHandle(),
-                                                            css::Specificity::Animation());
-    if (valid.hasResult() && valid.result()) {
+    if (ValidPaintValue(validator, name, value->second)) {
       underlying = value->second;
       contributed = true;
     }
@@ -234,6 +270,11 @@ void SeedResourceColors(Registry& registry, Entity source, PropertyRegistry& pro
   } else if (const auto* shadow = registry.try_get<FEDropShadowComponent>(source)) {
     SeedResourceColor(properties.floodColor, &shadow->floodColor);
   }
+  if (const auto* diffuse = registry.try_get<FEDiffuseLightingComponent>(source)) {
+    SeedResourceColor(properties.lightingColor, &diffuse->lightingColor);
+  } else if (const auto* specular = registry.try_get<FESpecularLightingComponent>(source)) {
+    SeedResourceColor(properties.lightingColor, &specular->lightingColor);
+  }
 }
 
 }  // namespace
@@ -265,6 +306,8 @@ void ApplyPaintAnimationStyles(Registry& registry, Entity source,
   ApplyPaintProperty(registry, *values, properties.stopColor, inherited.stopColor, context,
                      properties);
   ApplyPaintProperty(registry, *values, properties.floodColor, inherited.floodColor, context,
+                     properties);
+  ApplyPaintProperty(registry, *values, properties.lightingColor, inherited.lightingColor, context,
                      properties);
 }
 

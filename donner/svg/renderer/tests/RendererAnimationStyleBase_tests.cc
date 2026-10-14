@@ -98,7 +98,7 @@ TEST(RendererAnimationStyleBase, PaintContextUsesSampledInstanceStyles) {
         instantiateSubtree(item.animated, parser::SVGParser::Options(), Vector2i(24, 16));
     auto expected =
         instantiateSubtree(item.expected, parser::SVGParser::Options(), Vector2i(24, 16));
-    const auto source = document.source();
+    const std::string source(document.source());
     document.setTime(1);
     editor::tests::CompareBitmapToBitmap(RenderDocumentWithActiveBackend(document),
                                          RenderDocumentWithActiveBackend(expected), item.name,
@@ -182,6 +182,52 @@ TEST(RendererAnimationStyleBase, ResourceColorsUseSampledCurrentColor) {
   }
 }
 
+TEST(RendererAnimationStyleBase, ResourcePaintPreservesComponentBasesAndTypedPriority) {
+  for (const bool flood : {false, true}) {
+    for (const std::string declaration : {"", "red", "red !important"}) {
+      for (const bool typed : {false, true}) {
+        SCOPED_TRACE(flood);
+        SCOPED_TRACE(declaration);
+        SCOPED_TRACE(typed);
+        const std::string attribute = flood ? "flood-color" : "stop-color";
+        const std::string source =
+            flood ? "<defs><filter id='f'><feFlood id='r' flood-color='blue'/>"
+                    "</filter></defs><rect width='16' height='16' filter='url(#f)'/>"
+                  : "<defs><linearGradient id='g'><stop id='r' stop-color='blue'/>"
+                    "</linearGradient></defs><rect width='16' height='16' fill='url(#g)'/>";
+        const std::string style =
+            declaration.empty() ? "" : "<style>#r {" + attribute + ":" + declaration + ";}</style>";
+        auto document = instantiateSubtree(source + style + "<animate href='#r' attributeName='" +
+                                               attribute + "' to='black' dur='2s'/>",
+                                           parser::SVGParser::Options(), Vector2i(16, 16));
+        if (typed) {
+          auto target = document.querySelector("#r")->entityHandle();
+          auto& color = flood ? target.get<components::FEFloodComponent>().floodColor
+                              : target.get<components::StopComponent>().properties.stopColor;
+          color.set(css::Color(css::RGBA::RGB(255, 255, 0)), css::Specificity::Override());
+        }
+        const std::string sourceBefore(document.source());
+        for (const double time : {1.0, 3.0, 1.0}) {
+          SCOPED_TRACE(time);
+          const bool active = time < 2;
+          const char* color = typed                             ? "yellow"
+                              : declaration == "red !important" ? "red"
+                              : declaration.empty()             ? (active ? "#000080" : "blue")
+                                                                : (active ? "#800000" : "red");
+          auto expected =
+              instantiateSubtree("<rect width='16' height='16' fill='" + std::string(color) + "'/>",
+                                 parser::SVGParser::Options(), Vector2i(16, 16));
+          document.setTime(time);
+          editor::tests::CompareBitmapToBitmap(
+              RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(expected),
+              "resource-paint-cascade", editor::tests::PixelmatchIdentityParams());
+          EXPECT_EQ(document.source(), sourceBefore);
+        }
+      }
+    }
+  }
+}
+
 TEST(RendererAnimationStyleBase, AnimatedLightingColorMatchesStaticLighting) {
   for (const std::string primitive : {"feDiffuseLighting", "feSpecularLighting"}) {
     SCOPED_TRACE(primitive);
@@ -204,6 +250,76 @@ TEST(RendererAnimationStyleBase, AnimatedLightingColorMatchesStaticLighting) {
     editor::tests::CompareBitmapToBitmap(RenderDocumentWithActiveBackend(document), expectedBitmap,
                                          "animated-" + primitive + "-color",
                                          editor::tests::PixelmatchIdentityParams());
+  }
+}
+
+TEST(RendererAnimationStyleBase, LightingColorRespectsContextPriorityAndStyleRemoval) {
+  struct Case {
+    const char* name;
+    const char* attributes;
+    const char* animation;
+    const char* activeColor;
+    const char* baseColor;
+    bool typed = false;
+  };
+  for (const std::string primitive : {"feDiffuseLighting", "feSpecularLighting"}) {
+    for (const Case item : {
+             Case{
+                 "current-color", "color='black' lighting-color='lime'",
+                 "<set attributeName='color' to='red'/>"
+                 "<animate attributeName='lighting-color' from='currentColor' to='blue' dur='2s'/>",
+                 "#800080", "lime"},
+             Case{"initial-white", "",
+                  "<animate attributeName='lighting-color' to='black' dur='2s'/>", "#808080",
+                  "white"},
+             Case{"explicit-inherit", "lighting-color='inherit'",
+                  "<animate attributeName='lighting-color' to='black' dur='2s'/>", "#800000",
+                  "red"},
+             Case{"important", "style='lighting-color:yellow!important'",
+                  "<animate attributeName='lighting-color' from='red' to='blue' dur='2s'/>",
+                  "yellow", "yellow"},
+             Case{"typed", "lighting-color='red'",
+                  "<animate attributeName='lighting-color' to='black' dur='2s'/>", "yellow",
+                  "yellow", true},
+         }) {
+      SCOPED_TRACE(primitive);
+      SCOPED_TRACE(item.name);
+      const std::string prefix =
+          "<defs><filter id='f' x='0' y='0' width='1' height='1' lighting-color='red'><" +
+          primitive + " id='r' ";
+      const std::string suffix = "<feDistantLight azimuth='0' elevation='90'/></" + primitive +
+                                 "></filter></defs><rect width='16' height='16' filter='url(#f)'/>";
+      auto document = instantiateSubtree(prefix + item.attributes + ">" + item.animation + suffix,
+                                         parser::SVGParser::Options(), Vector2i(16, 16));
+      if (item.typed) {
+        auto target = document.querySelector("#r")->entityHandle();
+        auto& color = primitive == "feDiffuseLighting"
+                          ? target.get<components::FEDiffuseLightingComponent>().lightingColor
+                          : target.get<components::FESpecularLightingComponent>().lightingColor;
+        color.set(css::Color(css::RGBA::RGB(255, 255, 0)), css::Specificity::Override());
+      }
+      const std::string source(document.source());
+      for (const double time : {1.0, 3.0, 1.0}) {
+        SCOPED_TRACE(time);
+        auto expected =
+            instantiateSubtree(prefix + "lighting-color='" +
+                                   (time < 2 ? item.activeColor : item.baseColor) + "'>" + suffix,
+                               parser::SVGParser::Options(), Vector2i(16, 16));
+        document.setTime(time);
+        editor::tests::CompareBitmapToBitmap(
+            RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(expected),
+            "lighting-cascade", editor::tests::PixelmatchIdentityParams());
+        EXPECT_EQ(document.source(), source);
+      }
+      if (std::string_view(item.name) == "important") {
+        document.querySelector("#r")->removeAttribute("style");
+        auto expected = instantiateSubtree(prefix + "lighting-color='#800080'>" + suffix,
+                                           parser::SVGParser::Options(), Vector2i(16, 16));
+        editor::tests::CompareBitmapToBitmap(
+            RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(expected),
+            "lighting-inline-style-removed", editor::tests::PixelmatchIdentityParams());
+      }
+    }
   }
 }
 

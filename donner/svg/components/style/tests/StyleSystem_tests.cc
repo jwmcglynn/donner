@@ -213,6 +213,40 @@ TEST_F(StyleSystemTest, ContextualScopeRestoresPreviousBindingsAfterAdvanceAndEa
   EXPECT_EQ(registry.ctx().get<AnimationResourceBudget>().contextualWorkBudget(), previousBudget);
 }
 
+TEST_F(StyleSystemTest, ExhaustedPaintWorkPreservesBaseAndRecoversOnTheNextSample) {
+  auto document = ParseSVG(
+      "<svg xmlns='http://www.w3.org/2000/svg' color='lime'>"
+      "<rect id='r' fill='red'><set attributeName='fill' to='blue'/>"
+      "<set attributeName='color' to='red'/></rect></svg>");
+  auto& registry = document.registry();
+  const auto target = document.querySelector("#r")->entityHandle();
+  const std::string source(document.source());
+  AnimationSystem().advance(registry, 1);
+  registry.ctx().emplace<AnimationStyleContext>().enabled = true;
+  auto& budget = registry.ctx().get<AnimationResourceBudget>();
+  ASSERT_GT(budget.remainingContextualWork(), 0u);
+  ASSERT_TRUE(budget.reserveContextualWork(budget.remainingContextualWork()));
+  styleSystem.invalidateComputed(target);
+  ParseWarningSink warnings = ParseWarningSink::Disabled();
+  {
+    const auto& properties = *styleSystem.computeStyle(target, warnings).properties;
+    EXPECT_EQ(properties.fill.get(),
+              PaintServer(PaintServer::Solid(css::Color(css::RGBA::RGB(255, 0, 0)))));
+    EXPECT_EQ(properties.color.get(), css::Color(css::RGBA::RGB(0, 255, 0)));
+    EXPECT_FALSE(budget.rejected());
+  }
+  AnimationSystem().advance(registry, 1.5);
+  registry.ctx().emplace<AnimationStyleContext>().enabled = true;
+  styleSystem.invalidateComputed(target);
+  {
+    const auto& properties = *styleSystem.computeStyle(target, warnings).properties;
+    EXPECT_EQ(properties.fill.get(),
+              PaintServer(PaintServer::Solid(css::Color(css::RGBA::RGB(0, 0, 255)))));
+    EXPECT_EQ(properties.color.get(), css::Color(css::RGBA::RGB(255, 0, 0)));
+  }
+  EXPECT_EQ(document.source(), source);
+}
+
 TEST_F(StyleSystemTest, RepeatedAnimatedOpacityReservesWorkBeforeParsing) {
   const std::string value = std::string(65536, '0') + ".5";
   auto document = ParseSVG(

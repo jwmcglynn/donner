@@ -219,12 +219,10 @@ filter_primitive::Flood ResolveFloodPaint(const Registry& registry, Entity entit
   return result;
 }
 
-/// Resolve lighting-color from a lighting component's Property, overlaid with CSS unparsed
-/// properties, following the same pattern as resolveFloodProperties for flood-color.
+/// Resolve lighting-color from component and computed-style values in cascade priority order.
 template <typename LightingComponent>
 css::Color resolveLightingColor(const Registry& registry, entt::entity cur,
                                 ParseWarningSink& warningSink) {
-  // Start with values from the component (set via XML presentation attributes).
   Property<css::Color> lightingColor{"lighting-color", []() -> std::optional<css::Color> {
                                        return css::Color(css::RGBA(0xFF, 0xFF, 0xFF, 0xFF));
                                      }};
@@ -235,6 +233,10 @@ css::Color resolveLightingColor(const Registry& registry, entt::entity cur,
   // Overlay computed CSS properties (from attributes, inline styles, or stylesheet rules).
   if (const auto* style = registry.try_get<ComputedStyleComponent>(cur)) {
     if (style->properties.has_value()) {
+      const auto& computedColor = style->properties->lightingColor;
+      if (computedColor.isSpecified() && computedColor.specificity >= lightingColor.specificity) {
+        lightingColor = computedColor;
+      }
       for (const auto& [name, unparsedProperty] : style->properties->unparsedProperties) {
         if (name == "lighting-color") {
           const parser::PropertyParseFnParams params = parser::PropertyParseFnParams::Create(
