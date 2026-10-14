@@ -116,8 +116,8 @@
         "donner-svg2/geometry/automatic-radii/rect-ry-auto"
       ],
       "review_state": "reviewed",
-      "evidence_state": "missing-test",
-      "rationale": "",
+      "evidence_state": "covered-pass",
+      "rationale": "The four linked automatic-radius rectangle cases pass exact analytic PNG comparison with the radius resolver fixed in 8410ee429bb68770906be43291bda5632d43e56f. They exercise both explicit auto values, each omitted counterpart, and CSS auto under the static image profile. The donner_svg2_suite target passes these committed cases; mode-specific security behavior and other rectangle requirements are outside this assertion.",
       "artifacts": [],
       "source_text_hash": "sha256:32dc85079fb184efa18556063c52d16be55fdd688223a3eec30c4759f65ae9f6",
       "feature_flags": [
