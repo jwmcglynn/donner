@@ -858,3 +858,39 @@ test("a timer or adapter that faults inside the trace leaves the request alone",
   await beginReady(adapterBridge, kFirst);
   assert.notEqual(adapterBridge.state.device, null);
 });
+
+test("queue writes enforce ownership and loss without a prior status query", async () => {
+  for (const lost of [false, true]) {
+    const bridge = loadLibrary();
+    const { entryPoints, state } = bridge;
+    await beginReady(bridge, kFirst);
+    assert.equal(
+      entryPoints.donner_gpu_create_buffer(kFirst, 7, 64, kBufferCopyDst),
+      state.kSuccess,
+    );
+    assert.equal(createTexture(bridge, kFirst, 8), state.kSuccess);
+    const queue = bridge.device.queue;
+    let textureWrites = 0;
+    queue.writeTexture = () => {
+      textureWrites += 1;
+    };
+    const payload = bridge.reserve(1024);
+    const writeBuffer = () => entryPoints.donner_gpu_write_buffer(kFirst, 7, 0, payload, 4);
+    const writeTexture = () =>
+      entryPoints.donner_gpu_write_texture(kFirst, 8, payload, 1024, 0, 256, 4, 0, 0, 4, 4);
+    assert.equal(writeBuffer(), state.kSuccess);
+    assert.equal(writeTexture(), state.kSuccess);
+    assert.equal(queue.writes, 1);
+    assert.equal(textureWrites, 1);
+    if (lost) {
+      bridge.lose({ reason: "destroyed", message: "queue write guard" });
+      await until(() => state.lost, "browser device loss");
+    } else {
+      entryPoints.donner_gpu_release_device(kFirst);
+    }
+    assert.equal(writeBuffer(), lost ? state.kDeviceLost : state.kNotOwner);
+    assert.equal(writeTexture(), lost ? state.kDeviceLost : state.kNotOwner);
+    assert.equal(queue.writes, 1);
+    assert.equal(textureWrites, 1);
+  }
+});
