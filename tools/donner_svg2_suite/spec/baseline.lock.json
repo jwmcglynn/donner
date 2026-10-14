@@ -64,6 +64,20 @@
         "used_by": [
           "svg2-cr-20181004/coordinates/TransformProperty/req-01"
         ]
+      },
+      {
+        "key": "css-values-3",
+        "title": "CSS Values and Units Module Level 3",
+        "organization": "w3c",
+        "url": "https://www.w3.org/TR/2018/CR-css-values-3-20180814/",
+        "status": "Candidate Recommendation",
+        "edition": "2018-08-14",
+        "revision": "sha256:9c3b5d8be8fe0e04c4f0e31ccec2bbde26d3171562c7e6e58d09c081912c5aaf",
+        "stable": false,
+        "used_by": [
+          "svg2-cr-20181004/geometry/XProperty/req-01",
+          "svg2-cr-20181004/geometry/XProperty/req-02"
+        ]
       }
     ]
   }
