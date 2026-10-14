@@ -78,7 +78,7 @@ namespace donner::svg {
  */
 class SVGEllipseElement : public SVGGeometryElement {
 private:
-  friend class parser::SVGParserImpl;
+  friend class details::ElementFactory;
 
   /// Create an SVGEllipseElement wrapper from an entity.
   explicit SVGEllipseElement(EntityHandle handle) : SVGGeometryElement(handle) {}

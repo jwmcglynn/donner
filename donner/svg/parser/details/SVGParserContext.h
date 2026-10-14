@@ -117,7 +117,8 @@ public:
    * @param origin Origin of the subparser.
    */
   void addSubparserWarning(ParseDiagnostic&& warning, ParserOrigin origin) {
-    addWarning(fromSubparser(std::move(warning), origin));
+    // Remapping builds the line table over the whole input, so skip it when warnings are dropped.
+    warningSink_.add([&] { return fromSubparser(std::move(warning), origin); });
   }
 
   /**

@@ -120,7 +120,7 @@ class SVGParser;
  */
 class SVGSVGElement : public SVGGraphicsElement {
   friend class SVGDocument;
-  friend class parser::SVGParserImpl;
+  friend class details::ElementFactory;
 
 protected:
   /// Create an SVGSVGElement wrapper from an entity.

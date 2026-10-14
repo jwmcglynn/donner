@@ -74,7 +74,7 @@ namespace donner::svg {
  * instead, its contents are rendered when referenced.
  */
 class SVGSymbolElement : public SVGGraphicsElement {
-  friend class parser::SVGParserImpl;
+  friend class details::ElementFactory;
 
 private:
   /// Create an SVGSymbolElement wrapper from an entity.

@@ -3,9 +3,13 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
+#include <optional>
+#include <string_view>
 #include <vector>
 
 #include "donner/base/EcsRegistry.h"
+#include "donner/base/ParseDiagnostic.h"
 #include "donner/base/RcString.h"
 #include "donner/base/Utils.h"
 #include "donner/base/Vector2.h"
@@ -20,6 +24,13 @@ class SVGDocument;
 class SVGElement;
 
 }  // namespace donner::svg
+
+namespace donner::xml {
+
+// Forward declaration
+class XMLNode;
+
+}  // namespace donner::xml
 
 /**
  * Contains the implementation of the Donner ECS, \see \ref EcsArchitecture.
@@ -93,6 +104,36 @@ public:
 
   /// Maximum direct content chunks projected by later incremental source edits.
   std::size_t maximumContentProjectionChunks = 4096;
+
+  /// Whether the parse that built this document created experimental element types. Incremental
+  /// source edits build the same element types as that parse.
+  bool experimentalElementsEnabled = false;
+
+  /**
+   * Parses an element that an incremental source edit has just built the way the parser that built
+   * this document does: its attributes, including type-specific ones such as an `<image>`
+   * element's `href` that the generic attribute projection only stores, and the text of a
+   * `<title>`, `<desc>` or `<metadata>` element. Unset for documents the parser did not build.
+   *
+   * Takes the current document source, the built element, and its XML node, and returns the first
+   * error.
+   */
+  std::function<std::optional<ParseDiagnostic>(std::string_view, const SVGElement&,
+                                               const xml::XMLNode&)>
+      parseBuiltElement;
+
+  /**
+   * Parses the contents that only the parser projects, the text of a `<title>`, `<desc>` or
+   * `<metadata>` element, after a source edit has changed them, the way the parser that built this
+   * document does. The new text replaces the old. Unset for documents the parser did not build.
+   *
+   * Takes the current document source, the edited element, and its XML node, and returns an error,
+   * keeping the old text and its reservation, if the new text exceeds the document's
+   * content-projection budget.
+   */
+  std::function<std::optional<ParseDiagnostic>(std::string_view, const SVGElement&,
+                                               const xml::XMLNode&)>
+      parseEditedElementContents;
 
   /**
    * Get the entity with the given ID, using the internal id-to-entity mapping.

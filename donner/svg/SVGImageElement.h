@@ -67,7 +67,7 @@ namespace donner::svg {
  * Use the `href`, `x`, `y`, `width`, and `height` attributes to define the image.
  */
 class SVGImageElement : public SVGGraphicsElement {
-  friend class parser::SVGParserImpl;
+  friend class details::ElementFactory;
 
 private:
   /// Create an SVGImageElement wrapper from an entity.

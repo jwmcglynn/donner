@@ -155,7 +155,7 @@ namespace donner::svg {
  * per pixel based on the position of each surface point relative to the light.
  */
 class SVGFEPointLightElement : public SVGElement {
-  friend class parser::SVGParserImpl;
+  friend class details::ElementFactory;
 
 protected:
   /// Create an SVGFEPointLightElement wrapper from an entity.

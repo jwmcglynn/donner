@@ -14,6 +14,7 @@
 #include "donner/base/xml/components/XMLDocumentContext.h"
 #include "donner/base/xml/components/XMLNamespaceContext.h"
 #include "donner/css/parser/SelectorParser.h"
+#include "donner/svg/ElementFactory.h"
 #include "donner/svg/SVGElement.h"
 #include "donner/svg/SVGQuerySelector.h"
 #include "donner/svg/SVGSVGElement.h"
@@ -31,19 +32,14 @@
 #include "donner/svg/components/ScopedRenderInvalidationRestore.h"
 #include "donner/svg/components/StylesheetComponent.h"
 #include "donner/svg/components/TreeMutation.h"
-#include "donner/svg/components/filter/FilterComponent.h"
-#include "donner/svg/components/filter/FilterPrimitiveComponent.h"
 #include "donner/svg/components/layout/LayoutSystem.h"
 #include "donner/svg/components/layout/TransformComponent.h"
-#include "donner/svg/components/paint/ClipPathComponent.h"
 #include "donner/svg/components/resources/ResourceManagerContext.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
 #include "donner/svg/components/style/StyleSystem.h"
 #include "donner/svg/components/text/ComputedTextGeometryComponent.h"
 #include "donner/svg/components/text/TextComponent.h"
 #include "donner/svg/components/text/TextInvalidation.h"
-#include "donner/svg/components/text/TextPositioningComponent.h"
-#include "donner/svg/components/text/TextRootComponent.h"
 #include "donner/svg/renderer/RenderingContext.h"
 #include "donner/svg/text/TextEngine.h"
 
@@ -139,19 +135,50 @@ SourceRange MutationRange(std::string_view source, const xml::XMLMutation& mutat
       SourceRange{FileOffset::Offset(0), FileOffset::Offset(0)});
 }
 
-std::optional<EntityHandle> TextElementHandleForNodeValueMutation(
-    const xml::XMLMutation& mutation) {
+/// The element whose text a NodeValueChanged mutation edits: the mutated element itself, or the
+/// parent element of a mutated text or CDATA node.
+std::optional<xml::XMLNode> NodeValueMutationElement(const xml::XMLMutation& mutation) {
   if (mutation.node.type() == xml::XMLNode::Type::Element) {
-    return mutation.node.entityHandle();
+    return mutation.node;
   }
-
   if (mutation.node.type() == xml::XMLNode::Type::Data ||
       mutation.node.type() == xml::XMLNode::Type::CData) {
-    if (std::optional<xml::XMLNode> parent = mutation.node.parentElement()) {
-      return parent->entityHandle();
-    }
+    return mutation.node.parentElement();
   }
+  return std::nullopt;
+}
 
+/// Whether \p handle is a `<title>`, `<desc>` or `<metadata>` element, whose text only the parser
+/// projects.
+bool IsDescriptiveElement(EntityHandle handle) {
+  const auto* elementType = handle.try_get<components::ElementTypeComponent>();
+  if (elementType == nullptr) {
+    return false;
+  }
+  switch (elementType->type()) {
+    case ElementType::Title:
+    case ElementType::Desc:
+    case ElementType::Metadata: return true;
+    default: return false;
+  }
+}
+
+/// Whether \p node is a `<title>`, `<desc>` or `<metadata>` element whose text the parser that
+/// built the document can parse again.
+bool CanReparseDescriptiveText(const xml::XMLNode& node) {
+  const EntityHandle handle = node.entityHandle();
+  return handle && IsDescriptiveElement(handle) &&
+         static_cast<bool>(handle.registry()
+                               ->ctx()
+                               .get<components::SVGDocumentContext>()
+                               .parseEditedElementContents);
+}
+
+std::optional<EntityHandle> TextElementHandleForNodeValueMutation(
+    const xml::XMLMutation& mutation) {
+  if (std::optional<xml::XMLNode> element = NodeValueMutationElement(mutation)) {
+    return element->entityHandle();
+  }
   return std::nullopt;
 }
 
@@ -213,95 +240,55 @@ std::optional<ParseDiagnostic> ApplyNodeValueChanged(std::string_view source,
       MutationRange(source, mutation));
 }
 
-ElementType ElementTypeForTag(const xml::XMLQualifiedNameRef& tagName) {
-  if (tagName.name == "a") {
-    return ElementType::A;
-  }
-  if (tagName.name == "circle") {
-    return ElementType::Circle;
-  }
-  if (tagName.name == "clipPath") {
-    return ElementType::ClipPath;
-  }
-  if (tagName.name == "defs") {
-    return ElementType::Defs;
-  }
-  if (tagName.name == "ellipse") {
-    return ElementType::Ellipse;
-  }
-  if (tagName.name == "feGaussianBlur") {
-    return ElementType::FeGaussianBlur;
-  }
-  if (tagName.name == "filter") {
-    return ElementType::Filter;
-  }
-  if (tagName.name == "g") {
-    return ElementType::G;
-  }
-  if (tagName.name == "line") {
-    return ElementType::Line;
-  }
-  if (tagName.name == "path") {
-    return ElementType::Path;
-  }
-  if (tagName.name == "polygon") {
-    return ElementType::Polygon;
-  }
-  if (tagName.name == "polyline") {
-    return ElementType::Polyline;
-  }
-  if (tagName.name == "rect") {
-    return ElementType::Rect;
-  }
-  if (tagName.name == "style") {
-    return ElementType::Style;
-  }
-  if (tagName.name == "switch") {
-    return ElementType::Switch;
-  }
-  if (tagName.name == "text") {
-    return ElementType::Text;
-  }
-  if (tagName.name == "tspan") {
-    return ElementType::TSpan;
-  }
+/// Element type of a projected node, and whether this projection just built its SVG element.
+struct ProjectedElement {
+  ElementType type = ElementType::Unknown;  //!< Retained element type.
+  bool builtTypedElement = false;           //!< True for a new or promoted element of a known type.
+};
 
-  return ElementType::Unknown;
-}
-
-bool UsesNoTraverseChildren(ElementType type) {
-  switch (type) {
-    case ElementType::Circle:
-    case ElementType::Ellipse:
-    case ElementType::Line:
-    case ElementType::Path:
-    case ElementType::Polygon:
-    case ElementType::Polyline:
-    case ElementType::Rect:
-    case ElementType::Text:
-    case ElementType::TSpan: return true;
-
-    default: return false;
-  }
-}
-
-ElementType ResolveProjectedElementType(EntityHandle handle, const xml::XMLNode& node) {
+/**
+ * Build the SVG element for \p node the way the parser does, or update an existing element's
+ * namespace membership.
+ *
+ * A new node gets the element type its tag names in the SVG namespace, or an unknown element. An
+ * existing unknown element is rebuilt in place as that type once its tag names one in the SVG
+ * namespace, such as after an `xmlns` edit; its entity and XML node keep their identity. A typed
+ * element keeps its type when it leaves the SVG namespace.
+ *
+ * @param handle Entity of \p node.
+ * @param node XML element to project.
+ */
+ProjectedElement BuildProjectedElement(EntityHandle handle, const xml::XMLNode& node) {
   const xml::XMLQualifiedName tagName(node.tagName());
   const bool isSvgNamespace =
       node.getNamespaceUri(tagName.namespacePrefix) == "http://www.w3.org/2000/svg";
-  const ElementType projectedType =
-      isSvgNamespace ? ElementTypeForTag(tagName) : ElementType::Unknown;
-  auto* current = handle.try_get<components::ElementTypeComponent>();
-  if (current && current->parsedType() != ElementType::Unknown) {
+  if (auto* current = handle.try_get<components::ElementTypeComponent>();
+      current != nullptr && current->parsedType() != ElementType::Unknown) {
     current->setInSvgNamespace(isSvgNamespace);
-    return current->parsedType();
+    return {.type = current->parsedType()};
   }
-  if (current && projectedType != ElementType::Unknown) {
-    handle.remove<components::RenderingBehaviorComponent>();
+
+  if (isSvgNamespace) {
+    ProjectedElement built;
+    const bool experimentalElementsEnabled =
+        handle.registry()->ctx().get<components::SVGDocumentContext>().experimentalElementsEnabled;
+    if (details::ElementFactory::VisitType(
+            std::string_view(tagName.name), experimentalElementsEnabled, [&]<typename ElementT>() {
+              // Remove the unknown element's own components; the factory adds what its type needs.
+              handle.remove<components::ElementTypeComponent, components::TransformComponent,
+                            components::RenderingBehaviorComponent>();
+              (void)details::ElementFactory::CreateOn<ElementT>(handle);
+              built = {.type = ElementT::Type, .builtTypedElement = true};
+            })) {
+      return built;
+    }
   }
-  auto& type = handle.emplace_or_replace<components::ElementTypeComponent>(projectedType);
-  type.setInSvgNamespace(isSvgNamespace);
-  return projectedType;
+
+  if (!handle.all_of<components::ElementTypeComponent>()) {
+    (void)details::ElementFactory::CreateUnknownOn(handle, tagName);
+  }
+  handle.get<components::ElementTypeComponent>().setInSvgNamespace(isSvgNamespace);
+  return {.type = ElementType::Unknown};
 }
 
 void UpdateNamespaceMembership(const xml::XMLNode& node) {
@@ -318,56 +305,13 @@ void UpdateNamespaceMembership(const xml::XMLNode& node) {
   }
 }
 
-void EnsureProjectedElementComponents(EntityHandle handle, const xml::XMLNode& node) {
-  const ElementType type = ResolveProjectedElementType(handle, node);
-
-  [[maybe_unused]] auto& transform = handle.get_or_emplace<components::TransformComponent>();
-  if (type == ElementType::Defs || type == ElementType::Unknown) {
-    auto& behavior = handle.get_or_emplace<components::RenderingBehaviorComponent>(
-        components::RenderingBehavior::Nonrenderable);
-    behavior.behavior = components::RenderingBehavior::Nonrenderable;
-  }
-  if (type == ElementType::Filter) {
-    auto& behavior = handle.get_or_emplace<components::RenderingBehaviorComponent>(
-        components::RenderingBehavior::Nonrenderable);
-    behavior.behavior = components::RenderingBehavior::Nonrenderable;
-    [[maybe_unused]] auto& filter = handle.get_or_emplace<components::FilterComponent>();
-  }
-  if (type == ElementType::ClipPath) {
-    [[maybe_unused]] auto& clipPath = handle.get_or_emplace<components::ClipPathComponent>();
-    auto& behavior = handle.get_or_emplace<components::RenderingBehaviorComponent>(
-        components::RenderingBehavior::Nonrenderable);
-    behavior.behavior = components::RenderingBehavior::Nonrenderable;
-    behavior.inheritsParentTransform = false;
-  }
-  if (type == ElementType::FeGaussianBlur) {
-    [[maybe_unused]] auto& primitive =
-        handle.get_or_emplace<components::FilterPrimitiveComponent>();
-    [[maybe_unused]] auto& gaussianBlur =
-        handle.get_or_emplace<components::FEGaussianBlurComponent>();
-    auto& behavior = handle.get_or_emplace<components::RenderingBehaviorComponent>(
-        components::RenderingBehavior::Nonrenderable);
-    behavior.behavior = components::RenderingBehavior::Nonrenderable;
-  }
-  if (UsesNoTraverseChildren(type) && !handle.all_of<components::RenderingBehaviorComponent>()) {
-    handle.emplace<components::RenderingBehaviorComponent>(
-        components::RenderingBehavior::NoTraverseChildren);
-  }
-
-  if (type == ElementType::A || type == ElementType::Text || type == ElementType::TSpan) {
-    // `<a>` is a transparent text-content group: when nested in text its children participate in
-    // the text layout (like `<tspan>`), so it needs the text components. Unlike `<tspan>` it is
-    // NOT in UsesNoTraverseChildren - outside of text it groups arbitrary graphics like `<g>`.
-    [[maybe_unused]] auto& text = handle.get_or_emplace<components::TextComponent>();
-    [[maybe_unused]] auto& positioning =
-        handle.get_or_emplace<components::TextPositioningComponent>();
-  }
-  if (type == ElementType::Text) {
-    handle.get_or_emplace<components::TextRootComponent>();
-  }
-  if (type == ElementType::Style) {
+ProjectedElement EnsureProjectedElementComponents(EntityHandle handle, const xml::XMLNode& node) {
+  const ProjectedElement projected = BuildProjectedElement(handle, node);
+  if (projected.type == ElementType::Style) {
+    // The parser creates the stylesheet when it parses the contents; style projection updates it.
     [[maybe_unused]] auto& stylesheet = handle.get_or_emplace<components::StylesheetComponent>();
   }
+  return projected;
 }
 
 SourceRange AttributeRange(std::string_view source, const xml::XMLNode& node,
@@ -1271,12 +1215,7 @@ xml::ApplySourceEditResult SVGDocument::applySourceEdit(const xml::XMLEditIntent
     DetachedNodeCollectionDeferral collectionDeferral =
         documentState_->deferDetachedNodeCollection();
     result = xmlDocument().applySourceEdit(intent);
-    for (const xml::XMLMutation& mutation : result.mutations) {
-      std::optional<ParseDiagnostic> projectionDiagnostic = applyXMLMutation(mutation);
-      if (projectionDiagnostic.has_value() && !result.diagnostic.has_value()) {
-        result.diagnostic = std::move(projectionDiagnostic);
-      }
-    }
+    applyXMLMutations(result);
   }
   components::NodeLifetimeCollector::Collect(documentState_->registry());
 
@@ -1294,12 +1233,7 @@ xml::ApplySourceEditResult SVGDocument::setElementAttribute(const SVGElement& el
     std::optional<xml::XMLNode> xmlNode = xml::XMLNode::TryCast(element.handle_);
     if (xmlNode.has_value()) {
       xml::ApplySourceEditResult result = xmlDocument().setAttribute(*xmlNode, name, value);
-      for (const xml::XMLMutation& mutation : result.mutations) {
-        std::optional<ParseDiagnostic> projectionDiagnostic = applyXMLMutation(mutation);
-        if (projectionDiagnostic.has_value() && !result.diagnostic.has_value()) {
-          result.diagnostic = std::move(projectionDiagnostic);
-        }
-      }
+      applyXMLMutations(result);
       return result;
     }
   }
@@ -1323,12 +1257,7 @@ xml::ApplySourceEditResult SVGDocument::removeElementAttribute(
     std::optional<xml::XMLNode> xmlNode = xml::XMLNode::TryCast(element.handle_);
     if (xmlNode.has_value()) {
       xml::ApplySourceEditResult result = xmlDocument().removeAttribute(*xmlNode, name);
-      for (const xml::XMLMutation& mutation : result.mutations) {
-        std::optional<ParseDiagnostic> projectionDiagnostic = applyXMLMutation(mutation);
-        if (projectionDiagnostic.has_value() && !result.diagnostic.has_value()) {
-          result.diagnostic = std::move(projectionDiagnostic);
-        }
-      }
+      applyXMLMutations(result);
       return result;
     }
   }
@@ -1366,12 +1295,7 @@ xml::ApplySourceEditResult SVGDocument::insertElement(const SVGElement& parent,
       xml::XMLNode insertedNode = EnsureXMLSubtreeForSVGElement(document, element);
       const std::optional<SVGElement> oldParent = element.parentElement();
       result = document.insertNode(*parentNode, insertedNode, referenceNode);
-      for (const xml::XMLMutation& mutation : result.mutations) {
-        std::optional<ParseDiagnostic> projectionDiagnostic = applyXMLMutation(mutation);
-        if (projectionDiagnostic.has_value() && !result.diagnostic.has_value()) {
-          result.diagnostic = std::move(projectionDiagnostic);
-        }
-      }
+      applyXMLMutations(result);
 
       if (result.applied) {
         if (oldParent.has_value() && *oldParent != parent) {
@@ -1398,12 +1322,7 @@ xml::ApplySourceEditResult SVGDocument::removeElement(const SVGElement& element)
     std::optional<xml::XMLNode> xmlNode = xml::XMLNode::TryCast(element.handle_);
     if (xmlNode.has_value()) {
       xml::ApplySourceEditResult result = xmlDocument().removeNode(*xmlNode);
-      for (const xml::XMLMutation& mutation : result.mutations) {
-        std::optional<ParseDiagnostic> projectionDiagnostic = applyXMLMutation(mutation);
-        if (projectionDiagnostic.has_value() && !result.diagnostic.has_value()) {
-          result.diagnostic = std::move(projectionDiagnostic);
-        }
-      }
+      applyXMLMutations(result);
       if (result.applied && parent.has_value()) {
         MarkChildRemoved(parent->entityHandle());
       }
@@ -1448,12 +1367,7 @@ xml::ApplySourceEditResult SVGDocument::setElementTextContent(const SVGElement& 
   }
 
   result = xmlDocument().setElementText(*elementNode, text);
-  for (const xml::XMLMutation& mutation : result.mutations) {
-    std::optional<ParseDiagnostic> projectionDiagnostic = applyXMLMutation(mutation);
-    if (projectionDiagnostic.has_value() && !result.diagnostic.has_value()) {
-      result.diagnostic = std::move(projectionDiagnostic);
-    }
-  }
+  applyXMLMutations(result);
   return result;
 }
 
@@ -1474,6 +1388,15 @@ xml::XMLDocument SVGDocument::xmlDocument() const {
   return xml::XMLDocument::CreateFromRegistry(documentState_->sharedRegistry());
 }
 
+void SVGDocument::applyXMLMutations(xml::ApplySourceEditResult& result) {
+  for (const xml::XMLMutation& mutation : result.mutations) {
+    std::optional<ParseDiagnostic> projectionDiagnostic = applyXMLMutation(mutation);
+    if (projectionDiagnostic.has_value() && !result.diagnostic.has_value()) {
+      result.diagnostic = std::move(projectionDiagnostic);
+    }
+  }
+}
+
 std::optional<ParseDiagnostic> SVGDocument::applyXMLMutation(const xml::XMLMutation& mutation) {
   if (mutation.kind == xml::XMLMutation::Kind::SourceDiagnosticChanged) {
     // Never an edit failure: the wrapped XML result already carries this edit's own failure,
@@ -1483,7 +1406,7 @@ std::optional<ParseDiagnostic> SVGDocument::applyXMLMutation(const xml::XMLMutat
   }
 
   if (mutation.kind == xml::XMLMutation::Kind::NodeValueChanged) {
-    return ApplyNodeValueChanged(source(), mutation);
+    return applyNodeValueXMLMutation(mutation);
   }
 
   if (mutation.kind == xml::XMLMutation::Kind::NodeRemoved) {
@@ -1492,7 +1415,8 @@ std::optional<ParseDiagnostic> SVGDocument::applyXMLMutation(const xml::XMLMutat
   }
 
   if (mutation.kind == xml::XMLMutation::Kind::NodeInserted) {
-    if (std::optional<ParseDiagnostic> diagnostic = projectXMLSubtree(mutation.node)) {
+    if (std::optional<ParseDiagnostic> diagnostic =
+            projectXMLSubtree(mutation.node, /*contentsReparsed=*/false)) {
       return diagnostic;
     }
     MarkSubtreeReplaced(mutation.node.entityHandle());
@@ -1509,7 +1433,8 @@ std::optional<ParseDiagnostic> SVGDocument::applyXMLMutation(const xml::XMLMutat
     return applyAttributeXMLMutation(mutation, handle);
   }
   if (mutation.kind == xml::XMLMutation::Kind::SubtreeReplaced) {
-    if (std::optional<ParseDiagnostic> diagnostic = projectXMLSubtree(mutation.node)) {
+    if (std::optional<ParseDiagnostic> diagnostic =
+            projectXMLSubtree(mutation.node, /*contentsReparsed=*/true)) {
       return diagnostic;
     }
     MarkSubtreeReplaced(handle);
@@ -1519,13 +1444,32 @@ std::optional<ParseDiagnostic> SVGDocument::applyXMLMutation(const xml::XMLMutat
   UTILS_UNREACHABLE();
 }
 
+std::optional<ParseDiagnostic> SVGDocument::applyNodeValueXMLMutation(
+    const xml::XMLMutation& mutation) {
+  const std::optional<xml::XMLNode> element = NodeValueMutationElement(mutation);
+  if (mutation.value.has_value() && element.has_value() && CanReparseDescriptiveText(*element)) {
+    return reparseDescriptiveText(*element);
+  }
+  return ApplyNodeValueChanged(source(), mutation);
+}
+
+std::optional<ParseDiagnostic> SVGDocument::reparseDescriptiveText(const xml::XMLNode& node) {
+  if (!CanReparseDescriptiveText(node)) {
+    return std::nullopt;
+  }
+  return documentState_->registry()
+      .ctx()
+      .get<components::SVGDocumentContext>()
+      .parseEditedElementContents(source(), SVGElement(node.entityHandle()), node);
+}
+
 std::optional<ParseDiagnostic> SVGDocument::applyAttributeXMLMutation(
     const xml::XMLMutation& mutation, EntityHandle handle) {
   if (mutation.attributeName == xml::XMLQualifiedNameRef("xmlns") ||
       mutation.attributeName.namespacePrefix == "xmlns") {
     UpdateNamespaceMembership(mutation.node);
     MarkSubtreeReplaced(handle);
-    return projectXMLSubtree(mutation.node);
+    return projectXMLSubtree(mutation.node, /*contentsReparsed=*/false);
   }
   SVGElement element(handle);
   if (mutation.kind == xml::XMLMutation::Kind::AttributeSet) {
@@ -1555,19 +1499,20 @@ std::optional<ParseDiagnostic> SVGDocument::applyAttributeXMLMutation(
   return std::nullopt;
 }
 
-std::optional<ParseDiagnostic> SVGDocument::projectXMLSubtree(const xml::XMLNode& node) {
-  if (node.type() != xml::XMLNode::Type::Element) {
-    return std::nullopt;
-  }
-
+std::optional<ParseDiagnostic> SVGDocument::projectXMLAttributes(const xml::XMLNode& node,
+                                                                 bool builtTypedElement) {
   const EntityHandle handle = node.entityHandle();
-  EnsureProjectedElementComponents(handle, node);
-
-  if (std::optional<ParseDiagnostic> diagnostic = ReserveProjectedAttributes(handle, node)) {
-    return diagnostic;
+  SVGElement element(handle);
+  // A newly built element needs what only the parser applies, such as an image's `href` or a
+  // title's text; the generic pass below reports attribute diagnostics.
+  const auto& parseBuiltElement =
+      handle.registry()->ctx().get<components::SVGDocumentContext>().parseBuiltElement;
+  if (builtTypedElement && parseBuiltElement) {
+    if (std::optional<ParseDiagnostic> diagnostic = parseBuiltElement(source(), element, node)) {
+      return diagnostic;
+    }
   }
 
-  SVGElement element(handle);
   for (const xml::XMLQualifiedNameRef& attributeName : node.attributes()) {
     std::optional<RcString> value = node.getAttribute(attributeName);
     if (!value.has_value()) {
@@ -1577,6 +1522,34 @@ std::optional<ParseDiagnostic> SVGDocument::projectXMLSubtree(const xml::XMLNode
     if (std::optional<ParseDiagnostic> diagnostic =
             element.setAttributeFromXMLMutation(attributeName, *value)) {
       diagnostic->range = AttributeRange(source(), node, attributeName);
+      return diagnostic;
+    }
+  }
+  return std::nullopt;
+}
+
+std::optional<ParseDiagnostic> SVGDocument::projectXMLSubtree(const xml::XMLNode& node,
+                                                              bool contentsReparsed) {
+  if (node.type() != xml::XMLNode::Type::Element) {
+    return std::nullopt;
+  }
+
+  const EntityHandle handle = node.entityHandle();
+  const ProjectedElement projected = EnsureProjectedElementComponents(handle, node);
+
+  if (std::optional<ParseDiagnostic> diagnostic = ReserveProjectedAttributes(handle, node)) {
+    return diagnostic;
+  }
+
+  if (std::optional<ParseDiagnostic> diagnostic =
+          projectXMLAttributes(node, projected.builtTypedElement)) {
+    return diagnostic;
+  }
+  // A subtree reparse syncs a kept element's children and value from source, so a kept descriptive
+  // element parses its text again. Elsewhere, such as under an ancestor reprojected for an `xmlns`
+  // edit, an existing element keeps the text its parse gave it.
+  if (!projected.builtTypedElement && contentsReparsed) {
+    if (std::optional<ParseDiagnostic> diagnostic = reparseDescriptiveText(node)) {
       return diagnostic;
     }
   }
@@ -1590,7 +1563,7 @@ std::optional<ParseDiagnostic> SVGDocument::projectXMLSubtree(const xml::XMLNode
 
   for (std::optional<xml::XMLNode> child = node.firstChild(); child.has_value();
        child = child->nextSibling()) {
-    if (std::optional<ParseDiagnostic> diagnostic = projectXMLSubtree(*child)) {
+    if (std::optional<ParseDiagnostic> diagnostic = projectXMLSubtree(*child, contentsReparsed)) {
       return diagnostic;
     }
   }

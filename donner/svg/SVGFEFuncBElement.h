@@ -59,7 +59,7 @@ namespace donner::svg {
  * DOM object for a \ref xml_feFuncB element.
  */
 class SVGFEFuncBElement : public SVGElement {
-  friend class parser::SVGParserImpl;
+  friend class details::ElementFactory;
 
 protected:
   /// Create an SVGFEFuncBElement wrapper from an entity.
