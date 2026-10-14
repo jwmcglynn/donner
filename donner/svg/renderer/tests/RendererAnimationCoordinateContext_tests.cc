@@ -232,5 +232,100 @@ TEST(RendererAnimationCoordinateContext, FilterPrimitiveUsesInheritedAndSampledU
   }
 }
 
+#ifdef DONNER_TEXT_ENABLED
+TEST(RendererAnimationCoordinateContext, MixedTextPathOffsetUsesFinalPathLength) {
+  for (const bool animatedPath : {false, true}) {
+    SCOPED_TRACE(animatedPath);
+    const std::string geometry =
+        animatedPath ? "<defs><path id='curve' d='M0 20H40'><animate attributeName='d' from='M0 "
+                       "20H40' to='M0 20H80' dur='2s'/></path></defs>"
+                     : "";
+    auto document = instantiateSubtree(
+        geometry + "<text font-size='12'><textPath id='label' " +
+            (animatedPath ? "href='#curve'" : "path='M0 20H40'") +
+            ">H<animate attributeName='startOffset' from='50%' to='0' dur='2s'/></textPath></text>",
+        parser::SVGParser::Options(), Vector2i(100, 40));
+    auto expected =
+        instantiateSubtree(std::string("<text font-size='12'><textPath path='M0 20H") +
+                               (animatedPath ? "60' startOffset='15'" : "40' startOffset='10'") +
+                               ">H</textPath></text>",
+                           parser::SVGParser::Options(), Vector2i(100, 40));
+    document.setTime(1);
+    editor::tests::CompareBitmapToBitmap(
+        RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(expected),
+        animatedPath ? "text-offset-final-animated-path" : "text-offset-inline-path",
+        editor::tests::PixelmatchIdentityParams());
+  }
+}
+#endif
+
+TEST(RendererAnimationCoordinateContext, SharedMarkerMixedLengthsUseEachReferencingViewport) {
+  const std::string marker =
+      " markerHeight='10' markerUnits='userSpaceOnUse' viewBox='0 0 10 10' "
+      "preserveAspectRatio='none'>"
+      "<rect width='10' height='10'/>";
+  const std::string shapes =
+      "<path d='M0 10H20' marker-end='url(#a)'/>"
+      "<svg y='40' width='50' height='30' viewBox='0 0 50 30'>"
+      "<path d='M0 10H20' marker-end='url(#b)'/></svg>";
+  auto document =
+      instantiateSubtree("<defs><marker id='a'" + marker +
+                             "<animate attributeName='markerWidth' from='50%' to='10' dur='2s'/>"
+                             "</marker></defs><path d='M0 10H20' marker-end='url(#a)'/>"
+                             "<svg y='40' width='50' height='30' viewBox='0 0 50 30'>"
+                             "<path d='M0 10H20' marker-end='url(#a)'/></svg>",
+                         parser::SVGParser::Options(), Vector2i(100, 80));
+  auto expected = instantiateSubtree("<defs><marker id='a' markerWidth='30'" + marker +
+                                         "</marker>"
+                                         "<marker id='b' markerWidth='17.5'" +
+                                         marker + "</marker></defs>" + shapes,
+                                     parser::SVGParser::Options(), Vector2i(100, 80));
+  document.setTime(1);
+  editor::tests::CompareBitmapToBitmap(
+      RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(expected),
+      "marker-per-reference-viewport", editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(RendererAnimationCoordinateContext, InheritedPrimitiveUsesReferencingFilterUnits) {
+  if (!ActiveRendererSupportsFeature(RendererBackendFeature::FilterEffects)) {
+    GTEST_SKIP() << "Filters are disabled in this configuration";
+  }
+  auto document = instantiateSubtree(
+      "<defs><filter id='base' primitiveUnits='userSpaceOnUse'>"
+      "<feFlood x='0' y='0' height='1' flood-color='red'>"
+      "<animate attributeName='width' from='100%' to='0.5' dur='2s'/></feFlood></filter>"
+      "<filter id='f' href='#base' primitiveUnits='objectBoundingBox'/></defs>"
+      "<rect width='16' height='16' filter='url(#f)'/>",
+      parser::SVGParser::Options(), Vector2i(16, 16));
+  auto expected = instantiateSubtree(
+      "<defs><filter id='f' primitiveUnits='objectBoundingBox'>"
+      "<feFlood x='0' y='0' width='0.75' height='1' flood-color='red'/></filter></defs>"
+      "<rect width='16' height='16' filter='url(#f)'/>",
+      parser::SVGParser::Options(), Vector2i(16, 16));
+  document.setTime(1);
+  editor::tests::CompareBitmapToBitmap(
+      RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(expected),
+      "primitive-reference-context", editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(RendererAnimationCoordinateContext, PrimitiveToOnlyStartsAtDefaultSubregion) {
+  if (!ActiveRendererSupportsFeature(RendererBackendFeature::FilterEffects)) {
+    GTEST_SKIP() << "Filters are disabled in this configuration";
+  }
+  const std::string prefix =
+      "<defs><filter id='f' filterUnits='userSpaceOnUse' x='0' y='0' width='16' height='16'>"
+      "<feFlood id='p' x='0' y='0' flood-color='red'";
+  const std::string suffix = "/></filter></defs><rect width='16' height='16' filter='url(#f)'/>";
+  auto document = instantiateSubtree(
+      prefix + suffix + "<animate href='#p' attributeName='width' to='8' dur='2s'/>",
+      parser::SVGParser::Options(), Vector2i(16, 16));
+  auto expected = instantiateSubtree(prefix + " width='12'" + suffix, parser::SVGParser::Options(),
+                                     Vector2i(16, 16));
+  document.setTime(1);
+  editor::tests::CompareBitmapToBitmap(
+      RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(expected),
+      "primitive-default-subregion", editor::tests::PixelmatchIdentityParams());
+}
+
 }  // namespace
 }  // namespace donner::svg
