@@ -32,6 +32,7 @@
 #include "donner/svg/components/resources/ImageComponent.h"
 #include "donner/svg/components/shape/ComputedPathComponent.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
+#include "donner/svg/components/style/StyleSystem.h"
 #include "donner/svg/components/text/ComputedTextComponent.h"
 #include "donner/svg/compositor/CompositorControllerInternal.h"
 #include "donner/svg/compositor/CompositorHintComponent.h"
@@ -238,11 +239,14 @@ bool CanReuseImmediateDragLayer(const CompositorLayer& layer, bool rootDirty) {
 
 }  // namespace
 
-CompositorController::CompositorController(SVGDocument& document, RendererInterface& renderer,
-                                           CompositorConfig config)
+CompositorController::CompositorController(
+    SVGDocument& document, RendererInterface& renderer, CompositorConfig config,
+    std::shared_ptr<components::StyleResourceBudget> styleWork)
     : document_(document),
       renderer_(renderer),
       config_(config),
+      styleWork_(styleWork ? std::move(styleWork)
+                           : std::make_shared<components::StyleResourceBudget>()),
       mandatoryDetector_(config.mandatoryHintScope),
       // Only carve subtrees into bucket layers when they're actually
       // expensive to re-rasterize. `filterPenalty = 16` (default) plus the
@@ -1405,6 +1409,7 @@ void CompositorController::resetAllLayers(bool documentReplaced) {
   reconcileLayers(registry);
 
   staticSegments_.clear();
+  staticSegmentStyleWorkIncomplete_.clear();
   staticSegmentTextures_.clear();
   staticSegmentBoundaries_.clear();
   staticSegmentDirty_.clear();
@@ -1528,6 +1533,7 @@ bool CompositorController::warmPendingFirstFrameCaches(CancellationToken& token)
     return false;
   }
 
+  const components::StyleResourceBudget::OwnerScope styleScope(*styleWork_);
   lastRenderFrameStats_.firstFrameWarmupMs = 0.0;
   lastRenderFrameStats_.immediateRasterizeMs = 0.0;
   lastRenderFrameStats_.cachedRasterizeMs = 0.0;
@@ -1560,9 +1566,14 @@ bool CompositorController::renderFrame(const RenderViewport& viewport, Cancellat
   // `isCancelled()`. The reference is active only for this render attempt.
   cancelToken_.emplace(token);
   renderFrameImpl(viewport, surfaceFromCanvas);
-  const bool cancelled = token.isCancelled();
-  if (!cancelled) {
+  if (!token.isCancelled()) {
     recoverFailedExclusivePromotion();
+  }
+  // Report the final observed cancellation state, including cancellation during recovery or
+  // after the diagnostic's last checkpoint. No cancelled result may claim a comparison.
+  const bool cancelled = token.isCancelled();
+  if (cancelled) {
+    lastRenderFrameStats_.pixelIdentityVerification = PixelIdentityVerificationStatus::NotAttempted;
   }
   cancelToken_.reset();
   return !cancelled;
@@ -1597,6 +1608,7 @@ bool CompositorController::tryPatchDirtyLayer(
 void CompositorController::renderFrameImpl(const RenderViewport& viewport,
                                            const Transform2d& surfaceFromCanvas) {
   ZoneScopedN("Compositor::renderFrame");
+  const components::StyleResourceBudget::OwnerScope styleScope(*styleWork_);
   const ScopedFrameResourceBudget frameResourceBudget(renderer());
   // Any foreground render supersedes the deferred cold-frame warmup. The normal frame path below
   // will populate whatever retained payloads are still missing, with the current viewport and DOM.
@@ -1612,6 +1624,7 @@ void CompositorController::renderFrameImpl(const RenderViewport& viewport,
     lastRenderFrameStats_ = fresh;
   }
   surfaceBudgetExhaustedThisFrame_ = false;
+  composedStyleWorkIncomplete_ = false;
   // Interaction promotes arrive between frames; more than one active-drag entity means a
   // multi-selection drag.
   const bool singleActiveDragThisFrame = activeDragPromotesSinceFrame_.size() <= 1;
@@ -1638,7 +1651,7 @@ void CompositorController::renderFrameImpl(const RenderViewport& viewport,
     lastSurfaceFromCanvas_ = surfaceFromCanvas;
     hasLastSurfaceFromCanvas_ = true;
 
-    RendererDriver driver(renderer());
+    RendererDriver driver(renderer(), false, nullptr, styleWork_);
     const auto drawStart = std::chrono::steady_clock::now();
     const bool drawCompleted = driver.drawInterruptibly(document(), viewport, surfaceFromCanvas,
                                                         [this]() { return isCancelled(); });
@@ -2016,7 +2029,7 @@ void CompositorController::renderFrameImpl(const RenderViewport& viewport,
   // from a later cancellable worker turn.
   if (layers_.empty()) {
     ZoneScopedN("Compositor::firstFrameEmptyLayersPath");
-    RendererDriver driver(renderer());
+    RendererDriver driver(renderer(), false, nullptr, styleWork_);
     {
       ZoneScopedN("Compositor::driver.draw (first-frame)");
       const auto firstFrameDrawStart = std::chrono::steady_clock::now();
@@ -2031,6 +2044,7 @@ void CompositorController::renderFrameImpl(const RenderViewport& viewport,
       registry.ctx().get<components::RenderTreeState>().needsFullRebuild = false;
     }
     staticSegments_.clear();
+    staticSegmentStyleWorkIncomplete_.clear();
     staticSegmentTextures_.clear();
     staticSegmentOffsets_.clear();
     staticSegmentLastRasterizeMs_.clear();
@@ -2143,9 +2157,10 @@ void CompositorController::renderFrameImpl(const RenderViewport& viewport,
 
   if (layers_.empty()) {
     ZoneScopedN("Compositor::emptyLayerSetAfterPrepare");
-    RendererDriver driver(renderer());
+    RendererDriver driver(renderer(), false, nullptr, styleWork_);
     driver.draw(document(), viewport, surfaceFromCanvas);
     staticSegments_.clear();
+    staticSegmentStyleWorkIncomplete_.clear();
     staticSegmentTextures_.clear();
     staticSegmentBoundaries_.clear();
     staticSegmentDirty_.clear();
@@ -2226,7 +2241,7 @@ void CompositorController::renderFrameImpl(const RenderViewport& viewport,
   }
 
   if (!offscreenSupported_) {
-    RendererDriver driver(renderer());
+    RendererDriver driver(renderer(), false, nullptr, styleWork_);
     driver.draw(document(), viewport, surfaceFromCanvas);
     rootDirty_ = false;
     return;
@@ -2354,6 +2369,7 @@ void CompositorController::renderFrameImpl(const RenderViewport& viewport,
   // Rebuild from a reparse that didn't take the structural remap).
   if (rootDirty_) {
     staticSegments_.clear();
+    staticSegmentStyleWorkIncomplete_.clear();
     staticSegmentTextures_.clear();
     staticSegmentBoundaries_.clear();
     staticSegmentDirty_.clear();
@@ -2432,40 +2448,127 @@ void CompositorController::renderFrameImpl(const RenderViewport& viewport,
     composeLayers(viewport, surfaceFromCanvas);
   }
 
-  // Dual-path pixel-identity assertion. When enabled, capture the composited
-  // output, run a full-document reference render to the same renderer, then
-  // compare pixel-by-pixel. Any drift fires a release-assert. Disabled by
-  // default; CI compositor test targets flip this on via `CompositorConfig`.
-  // Cost is 2x per frame, so don't enable for interactive editor use.
   if (config_.verifyPixelIdentity) {
-    RendererBitmap compositedSnapshot = renderer().takeSnapshot();
+    verifyComposedPixelIdentity(viewport, surfaceFromCanvas);
+  }
+}
 
-    RendererDriver referenceDriver(renderer());
-    referenceDriver.draw(document(), viewport, surfaceFromCanvas);
-    RendererBitmap referenceSnapshot = renderer().takeSnapshot();
+namespace {
 
-    if (compositedSnapshot.dimensions == referenceSnapshot.dimensions &&
-        !compositedSnapshot.empty() && !referenceSnapshot.empty()) {
-      size_t mismatch = 0;
-      uint8_t maxDiff = 0;
-      const size_t size =
-          std::min(compositedSnapshot.pixels.size(), referenceSnapshot.pixels.size());
-      for (size_t i = 0; i < size; ++i) {
-        const uint8_t a = compositedSnapshot.pixels[i];
-        const uint8_t b = referenceSnapshot.pixels[i];
-        const uint8_t diff = a > b ? a - b : b - a;
-        if (diff > 0) {
-          ++mismatch;
-          if (diff > maxDiff) {
-            maxDiff = diff;
-          }
-        }
-      }
-      UTILS_RELEASE_ASSERT_MSG(
-          mismatch == 0,
-          "Compositor dual-path pixel-identity assertion failed: composited output "
-          "differs from full-render reference. Check 0025 § Dual-path debug assertion.");
+bool CompatibleIdentitySnapshots(const RendererBitmap& actual, const RendererBitmap& reference) {
+  return !actual.empty() && !reference.empty() && actual.dimensions == reference.dimensions &&
+         actual.rowBytes == reference.rowBytes && actual.alphaType == reference.alphaType &&
+         actual.pixels.size() == reference.pixels.size() &&
+         actual.rowBytes >= uint64_t(actual.dimensions.x) * 4u &&
+         actual.pixels.size() / actual.rowBytes >= size_t(actual.dimensions.y);
+}
+
+}  // namespace
+
+std::unique_ptr<RendererInterface> CompositorController::createPixelIdentityReference() {
+  if (isCancelled()) {
+    return nullptr;
+  }
+  auto offscreen = renderer().createOffscreenInstance();
+  if (isCancelled()) {
+    return nullptr;
+  }
+  if (!offscreen) {
+    lastRenderFrameStats_.pixelIdentityVerification =
+        PixelIdentityVerificationStatus::SnapshotUnavailable;
+  }
+  return offscreen;
+}
+
+bool CompositorController::drawPixelIdentityReference(
+    RendererInterface& reference, const std::shared_ptr<components::StyleResourceBudget>& work,
+    const RenderViewport& viewport, const Transform2d& surfaceFromCanvas) {
+  if (isCancelled()) {
+    return false;
+  }
+  // Keep full-document traversal: the separate interruptible range dispatcher does not implement
+  // every full-document operation. Poll around this existing bounded operation instead.
+  RendererDriver driver(reference, false, nullptr, work);
+  driver.draw(document(), viewport, surfaceFromCanvas);
+  return !isCancelled();
+}
+
+std::optional<RendererBitmap> CompositorController::capturePixelIdentitySnapshot(
+    RendererInterface& source) {
+  if (isCancelled()) {
+    return std::nullopt;
+  }
+  RendererBitmap snapshot = source.takeSnapshot();
+  if (isCancelled()) {
+    return std::nullopt;
+  }
+  if (snapshot.empty()) {
+    lastRenderFrameStats_.pixelIdentityVerification =
+        PixelIdentityVerificationStatus::SnapshotUnavailable;
+    return std::nullopt;
+  }
+  return snapshot;
+}
+
+bool CompositorController::assertPixelIdentityUnlessCancelled(const RendererBitmap& actual,
+                                                              const RendererBitmap& reference) {
+  if (isCancelled()) {
+    return false;
+  }
+  size_t mismatch = 0;
+  for (size_t i = 0; i < actual.pixels.size(); ++i) {
+    if (actual.pixels[i] != reference.pixels[i]) {
+      ++mismatch;
     }
+  }
+  if (isCancelled()) {
+    return false;
+  }
+  UTILS_RELEASE_ASSERT_MSG(
+      mismatch == 0,
+      "Compositor dual-path pixel-identity assertion failed: composited output "
+      "differs from full-render reference. Check 0025 § Dual-path debug assertion.");
+  return true;
+}
+
+void CompositorController::verifyComposedPixelIdentity(const RenderViewport& viewport,
+                                                       const Transform2d& surfaceFromCanvas) {
+  if (styleWork_->rejected() || composedStyleWorkIncomplete_) {
+    lastRenderFrameStats_.pixelIdentityVerification =
+        PixelIdentityVerificationStatus::InconclusiveStyleWork;
+    return;
+  }
+  // This diagnostic owns an independent allowance with the same limits. Sharing the depleted
+  // frame allowance would change which reference occurrences are admitted. Keep reference pixels
+  // offscreen so a refused diagnostic cannot replace the user's presented composition.
+  auto offscreen = createPixelIdentityReference();
+  if (!offscreen) {
+    return;
+  }
+  const auto actual = capturePixelIdentitySnapshot(renderer());
+  if (!actual) {
+    return;
+  }
+  auto referenceWork = std::make_shared<components::StyleResourceBudget>(styleWork_->limits());
+  if (!drawPixelIdentityReference(*offscreen, referenceWork, viewport, surfaceFromCanvas)) {
+    return;
+  }
+  if (referenceWork->rejected()) {
+    lastRenderFrameStats_.pixelIdentityVerification =
+        PixelIdentityVerificationStatus::InconclusiveStyleWork;
+    return;
+  }
+  const auto reference = capturePixelIdentitySnapshot(*offscreen);
+  if (!reference) {
+    return;
+  }
+  if (!CompatibleIdentitySnapshots(*actual, *reference)) {
+    lastRenderFrameStats_.pixelIdentityVerification =
+        PixelIdentityVerificationStatus::SnapshotUnavailable;
+    return;
+  }
+  if (assertPixelIdentityUnlessCancelled(*actual, *reference)) {
+    lastRenderFrameStats_.pixelIdentityVerification = PixelIdentityVerificationStatus::Compared;
   }
 }
 

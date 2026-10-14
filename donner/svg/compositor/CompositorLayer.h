@@ -211,12 +211,19 @@ public:
   struct PayloadRaster {
     Vector2i canvasSize = Vector2i::Zero();  //!< Canvas size in device pixels.
     Transform2d surfaceFromCanvas;           //!< The frame's canvas-to-surface transform.
+    /// Style work was refused while producing this retained payload. Survives cache reuse.
+    bool styleWorkIncomplete = false;
   };
 
   /// Raster the current payload was drawn under, or nullopt when the layer holds no payload. Each
   /// payload setter records it with the payload.
   [[nodiscard]] const std::optional<PayloadRaster>& payloadRaster() const UTILS_LIFETIME_BOUND {
     return payloadRaster_;
+  }
+
+  /// True when the retained payload was produced after a style-work refusal.
+  [[nodiscard]] bool styleWorkIncomplete() const {
+    return payloadRaster_ && payloadRaster_->styleWorkIncomplete;
   }
 
   /// Returns the entity's absolute transform at the moment the cached

@@ -778,13 +778,15 @@ public:
                                                    dataHandle.all_of<ComputedTextComponent>() ||
                                                    instance.textSpanRoot != entt::null))) {
       if (auto fill = properties.fill.get()) {
-        instance.resolvedFill = resolvePaint(ShadowBranchType::OffscreenFill, dataHandle,
-                                             fill.value(), instance.worldFromEntityTransform);
+        instance.resolvedFill =
+            resolvePaint(ShadowBranchType::OffscreenFill, dataHandle, fill.value(),
+                         instance.worldFromEntityTransform, styleComponent.externalFill);
       }
 
       if (auto stroke = properties.stroke.get()) {
-        instance.resolvedStroke = resolvePaint(ShadowBranchType::OffscreenStroke, dataHandle,
-                                               stroke.value(), instance.worldFromEntityTransform);
+        instance.resolvedStroke =
+            resolvePaint(ShadowBranchType::OffscreenStroke, dataHandle, stroke.value(),
+                         instance.worldFromEntityTransform, styleComponent.externalStroke);
       }
 
       // Save the current context paint servers if this is a shadow tree host.
@@ -1265,8 +1267,26 @@ public:
     }
   }
 
+  ResolvedPaintServer resolveExternalHostPaint(ShadowBranchType branchType) {
+    const ResolvedPaintServer resolved =
+        StyleSystem::externalHostPaint(registry_, branchType == ShadowBranchType::OffscreenStroke);
+    if (const auto* reference = std::get_if<PaintResolvedReference>(&resolved);
+        reference && reference->reference.handle.all_of<ComputedPatternComponent>()) {
+      StyleSystem::rejectExternalHostResource(registry_);
+      if (reference->fallback) {
+        return PaintServer::Solid(*reference->fallback);
+      }
+      return PaintServer::None();
+    }
+    return resolved;
+  }
+
   ResolvedPaintServer resolvePaint(ShadowBranchType branchType, EntityHandle dataHandle,
-                                   const PaintServer& paint, const Transform2d& worldFromEntity) {
+                                   const PaintServer& paint, const Transform2d& worldFromEntity,
+                                   bool externalHost = false) {
+    if (externalHost) {
+      return resolveExternalHostPaint(branchType);
+    }
     if (paint.is<PaintServer::Solid>()) {
       return paint.get<PaintServer::Solid>();
     } else if (paint.is<PaintServer::ElementReference>()) {
@@ -1726,6 +1746,12 @@ void RenderingContext::setInitialContextPaint(const ResolvedPaintServer& fill,
   getRenderTreeState(registry_).needsFullRebuild = true;
 }
 
+void RenderingContext::restoreInitialPaintState(InitialPaintState state) {
+  initialContextFill_ = std::move(state.first);
+  initialContextStroke_ = std::move(state.second);
+  getRenderTreeState(registry_).needsFullRebuild = true;
+}
+
 void RenderingContext::clearInitialContextPaint() {
   initialContextFill_.reset();
   initialContextStroke_.reset();
@@ -1994,12 +2020,12 @@ void RenderingContext::createComputedComponents(ParseWarningSink& warningSink) {
 
     const auto& properties = styleComponent.properties.value();
 
-    if (auto fill = properties.fill.get()) {
+    if (auto fill = StyleSystem::localPaintForInstantiation(styleComponent, false)) {
       InstantiatePaintShadowTree(registry_, entity, ShadowBranchType::OffscreenFill, fill.value(),
                                  warningSink);
     }
 
-    if (auto stroke = properties.stroke.get()) {
+    if (auto stroke = StyleSystem::localPaintForInstantiation(styleComponent, true)) {
       InstantiatePaintShadowTree(registry_, entity, ShadowBranchType::OffscreenStroke,
                                  stroke.value(), warningSink);
     }

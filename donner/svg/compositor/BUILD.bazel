@@ -48,6 +48,7 @@ donner_perf_sensitive_cc_library(
         "//donner/base",
         "//donner/svg",
         "//donner/svg/components",
+        "//donner/svg/components/style:style_system",
         "//donner/svg/renderer:pixel_format_utils",
         "//donner/svg/renderer:renderer_driver",
         "//donner/svg/renderer:renderer_interface",
@@ -75,8 +76,7 @@ donner_cc_test(
     srcs = [
         "CompositorController_tests.cc",
     ],
-    # Variant lanes (doc 0031 M2.3): tiny / text_full / geode
-    # wrappers run automatically under `bazel test //...`.
+    # Backend and text variants run automatically under `bazel test //...`.
     variants = [
         "tiny",
         "text_full",
@@ -84,9 +84,11 @@ donner_cc_test(
     ],
     deps = [
         ":compositor",
+        "//donner/svg/components/style:style_system",
         "//donner/svg/renderer:renderer_interface",
         "//donner/svg/renderer:renderer_utils",
         "//donner/svg/renderer/tests:mock_renderer_interface",
+        "//donner/svg/resources:resource_loader_interface",
         "//donner/svg/tests:parser_test_utils",
         "@com_google_gtest//:gtest_main",
     ],
@@ -212,15 +214,24 @@ donner_cc_test(
     data = [
         "//:donner_splash.svg",
     ],
-    # 80 independent golden cases (perf cases excluded via the filter above
+    # Independent golden cases (perf cases excluded via the filter above
     # and split into compositor_golden_perf_tests); shard for parallelism.
     shard_count = 4,
+    # Geode implements filters independently of the TinySkia filter build flag. Keep this
+    # test-only backend selection in configured defines so the CMake model carries it too.
+    defines = select({
+        "//donner/svg/renderer:renderer_backend_geode": ["DONNER_COMPOSITOR_TEST_GEODE"],
+        "//conditions:default": [],
+    }),
     deps = [
         ":compositor",
         ":dual_path_verifier",
         "//donner/base:base_test_utils",
+        "//donner/editor/tests:bitmap_golden_compare",
+        "//donner/svg/components/style:style_system",
         "//donner/svg/renderer",
         "//donner/svg/renderer:renderer_interface",
+        "//donner/svg/resources:resource_loader_interface",
         "@com_google_gtest//:gtest_main",
     ],
 )

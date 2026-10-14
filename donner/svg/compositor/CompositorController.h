@@ -7,6 +7,7 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <ostream>
 #include <span>
 #include <string>
 #include <unordered_map>
@@ -23,6 +24,10 @@
 #include "donner/svg/compositor/MandatoryHintDetector.h"
 #include "donner/svg/compositor/ScopedCompositorHint.h"
 #include "donner/svg/renderer/RendererInterface.h"
+
+namespace donner::svg::components {
+class StyleResourceBudget;
+}  // namespace donner::svg::components
 
 namespace donner::svg::compositor {
 
@@ -50,6 +55,29 @@ enum class StaticSpanMode : uint8_t {
   /// Re-rasterize as a transient tile and do not publish metadata-only reuse.
   Immediate,
 };
+
+/// Outcome of the optional compositor pixel-identity diagnostic.
+enum class PixelIdentityVerificationStatus : uint8_t {
+  NotAttempted,           //!< Disabled or not reached by this render path.
+  Compared,               //!< Complete, compatible captures passed the strict comparison.
+  InconclusiveStyleWork,  //!< Style admission left either rendering incomplete.
+  SnapshotUnavailable,    //!< A diagnostic renderer or compatible capture was unavailable.
+};
+
+/// Print a compositor pixel-verification outcome.
+/// @param stream Output stream.
+/// @param status Outcome to print.
+inline std::ostream& operator<<(std::ostream& stream, PixelIdentityVerificationStatus status) {
+  switch (status) {
+    case PixelIdentityVerificationStatus::NotAttempted: return stream << "NotAttempted";
+    case PixelIdentityVerificationStatus::Compared: return stream << "Compared";
+    case PixelIdentityVerificationStatus::InconclusiveStyleWork:
+      return stream << "InconclusiveStyleWork";
+    case PixelIdentityVerificationStatus::SnapshotUnavailable:
+      return stream << "SnapshotUnavailable";
+  }
+  return stream;
+}
 
 /// A single bitmap cache unit the compositor exposes for GPU upload -
 /// either a static segment (non-promoted content between promoted
@@ -230,14 +258,16 @@ struct CompositorConfig {
   /// latency. When false, the root layer stays monolithic.
   bool complexityBucketing = true;
 
-  /// When true, `renderFrame` additionally runs a full-document reference
-  /// render after the composited path completes and asserts pixel identity
-  /// via `UTILS_RELEASE_ASSERT`. Doubles per-frame cost - intended for CI
-  /// compositor test targets and `--config=compositor-debug` local runs, not
-  /// for interactive editor use. See 0025 § Dual-path debug assertion.
-  ///
-  /// Default is `false`; CI and debug test configurations flip it on for
-  /// the covered test targets.
+  /// When true, optionally compare the composition with an independent offscreen full-document
+  /// render using the same style-work limits. Only complete, compatible captures are compared;
+  /// incomplete style work and unavailable snapshots have explicit outcomes in RenderFrameStats.
+  /// Complete pixel mismatches still fire UTILS_RELEASE_ASSERT. The diagnostic can consume up to
+  /// twice the normal style allowance, with at most two diagnostic snapshots; it does not promise
+  /// a bound of twice the CPU, GPU, or memory cost. Intended for CI and compositor-debug runs.
+  /// Cancellation is sampled around drawing/capture/comparison; an operation already running
+  /// is not preempted, and the style allowance does not provide a time guarantee.
+  /// This option does not configure the separate DualPathVerifier.
+  /// Default is false.
   bool verifyPixelIdentity = false;
 
   /// When true, `rasterizeDirtyStaticSegments` calls
@@ -370,9 +400,11 @@ public:
    * @param document The SVG document to composite.
    * @param renderer The renderer backend to use for rasterization and composition.
    * @param config Runtime feature gates. Default-constructed enables everything.
+   * @param styleWork Optional internal allowance; never share it across concurrent owners.
    */
   CompositorController(SVGDocument& document, RendererInterface& renderer,
-                       CompositorConfig config = {});
+                       CompositorConfig config = {},
+                       std::shared_ptr<components::StyleResourceBudget> styleWork = nullptr);
 
   /// Returns the runtime config this controller was constructed with.
   [[nodiscard]] const CompositorConfig& config() const { return config_; }
@@ -504,6 +536,7 @@ public:
   ///
   /// This never writes the main render target. It is intended for a later low-priority worker turn
   /// and leaves unfinished cache work pending when cancelled by interactive rendering.
+  /// Each admitted invocation has one fresh style-work allowance shared by all its tiles.
   [[nodiscard]] bool warmPendingFirstFrameCaches(CancellationToken& token);
 
   /**
@@ -845,6 +878,9 @@ public:
   /// Worker render costs from the most recent `renderFrame` call, split by whether the work was
   /// caused by immediate-mode transient spans or retained cached tiles.
   struct RenderFrameStats {
+    /// Result of Config.verifyPixelIdentity for this render attempt.
+    PixelIdentityVerificationStatus pixelIdentityVerification =
+        PixelIdentityVerificationStatus::NotAttempted;
     /// First-frame full-document draw that produces the immediately presentable surface.
     double firstFrameDrawMs = 0.0;
     /// First-frame detector, resolver, and layer-plan construction after the initial draw.
@@ -1081,6 +1117,29 @@ private:
   /// Find the layer for a given entity, or nullptr if not promoted.
   CompositorLayer* findLayer(Entity entity);
   const CompositorLayer* findLayer(Entity entity) const;
+
+  /// Check that all parallel retained-segment metadata is sized for this topology.
+  [[nodiscard]] bool staticSegmentStateSized(size_t count) const;
+  /// Draw a retained payload and record its completeness only when it contributes pixels.
+  bool composePayloadWithProvenance(const RendererBitmap* bitmap,
+                                    const std::shared_ptr<const RendererTextureSnapshot>& texture,
+                                    const Transform2d& canvasFromPayload, bool textureMode,
+                                    bool styleWorkIncomplete);
+
+  /// Diagnostic checkpoints observe cancellation around existing operations; they do not preempt
+  /// a draw or capture that is already running.
+  [[nodiscard]] std::unique_ptr<RendererInterface> createPixelIdentityReference();
+  [[nodiscard]] bool drawPixelIdentityReference(
+      RendererInterface& reference, const std::shared_ptr<components::StyleResourceBudget>& work,
+      const RenderViewport& viewport, const Transform2d& surfaceFromCanvas);
+  [[nodiscard]] std::optional<RendererBitmap> capturePixelIdentitySnapshot(
+      RendererInterface& source);
+  [[nodiscard]] bool assertPixelIdentityUnlessCancelled(const RendererBitmap& actual,
+                                                        const RendererBitmap& reference);
+
+  /// Run the optional bounded diagnostic without replacing the presented frame.
+  void verifyComposedPixelIdentity(const RenderViewport& viewport,
+                                   const Transform2d& surfaceFromCanvas);
 
   /// Rasterize a single promoted layer into its bitmap cache.
   void rasterizeLayer(CompositorLayer& layer, const RenderViewport& viewport,
@@ -1465,6 +1524,8 @@ private:
   RenderViewport lastViewport_;
   bool hasLastViewport_ = false;
   CompositorConfig config_;
+  /// Shared only across synchronous draws within this controller's current work invocation.
+  std::shared_ptr<components::StyleResourceBudget> styleWork_;
   LayerResolver resolver_;
   MandatoryHintDetector mandatoryDetector_;
   ComplexityBucketer complexityBucketer_;
@@ -1516,6 +1577,8 @@ private:
   /// correct paint order without ever baking promoted content into the
   /// static caches. Empty vector means segments need (re)rasterization.
   std::vector<RendererBitmap> staticSegments_;
+  /// Completeness provenance, moved with each retained segment's payload and generation.
+  std::vector<bool> staticSegmentStyleWorkIncomplete_;
   /// Optional GPU texture payloads parallel to \ref staticSegments_.
   std::vector<std::shared_ptr<const RendererTextureSnapshot>> staticSegmentTextures_;
   /// Per-segment dirty flags. When a non-promoted entity mutates we mark
@@ -1601,6 +1664,8 @@ private:
   /// Canvas size bg/fg were composited at. Mirrors `staticSegmentsCanvas_`
   /// but tracks bg/fg independently so a no-op frame can skip recompositing.
   Vector2i splitStaticLayersViewport_ = Vector2i::Zero();
+  /// Only payloads actually used by the current composition contribute to this decision.
+  bool composedStyleWorkIncomplete_ = false;
   bool rootDirty_ = true;
   bool documentPrepared_ = false;
   /// True once `MandatoryHintDetector` and `ComplexityBucketer` have run
@@ -1693,6 +1758,8 @@ private:
     /// True once the owner's tile has been rebuilt from the pieces, so it must render from source
     /// again when the drag ends.
     bool composed = false;
+    /// Aggregate completeness of the retained below/target/above pieces.
+    bool styleWorkIncomplete = false;
   };
   std::optional<MaskedChildDragPieces> maskedChildDragPieces_;
   /// Held-drag target whose owner tile could not be rebuilt from pieces; the rest of its drag

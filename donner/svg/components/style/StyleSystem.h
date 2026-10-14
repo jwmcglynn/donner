@@ -4,6 +4,8 @@
 #include <memory>
 #include <optional>
 #include <unordered_map>
+#include <unordered_set>
+#include <utility>
 #include <vector>
 
 #include "donner/base/EcsRegistry.h"
@@ -13,6 +15,7 @@
 #include "donner/css/selectors/SelectorMatchOptions.h"
 #include "donner/svg/components/DocumentResourceFamilyBudget.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
+#include "donner/svg/components/style/ExternalUseStyleContext.h"
 
 namespace donner::svg::components {
 
@@ -72,10 +75,14 @@ public:
   StyleResourceBudget& operator=(const StyleResourceBudget&) = delete;
   /**
    * Transfer counters and retained-property reservations from another budget.
+   * Only move a budget when no OwnerScope or ActiveRegistryScope refers to it.
    * @param other Budget whose family charge moves to this instance.
    */
   StyleResourceBudget(StyleResourceBudget&& other) noexcept
-      : limits_(other.limits_),
+      : externalInstanceWork_(other.externalInstanceWork_),
+        externalResourceWarning_(other.externalResourceWarning_),
+        aggregateWork_(other.aggregateWork_),
+        limits_(other.limits_),
         selectorTraversal_(std::move(other.selectorTraversal_)),
         ruleElementMatches_(other.ruleElementMatches_),
         declarationApplications_(other.declarationApplications_),
@@ -86,8 +93,82 @@ public:
         family_(std::move(other.family_)),
         reservations_(std::move(other.reservations_)) {
     other.complexPropertyBytes_ = 0;
+    other.aggregateWork_ = nullptr;
+    other.externalInstanceWork_ = 0;
   }
   StyleResourceBudget& operator=(StyleResourceBudget&&) = delete;
+
+  /** Shared owner scope; nested recording and fallback work preserves the current allowance. */
+  class OwnerScope {
+  public:
+    /**
+     * Begin one logical render operation, resetting only its outermost scope.
+     * @param budget Shared allowance for serialized owner-frame traversal.
+     */
+    explicit OwnerScope(StyleResourceBudget& budget)
+        : budget_(budget), previous_(std::exchange(budget.ownerActive_, true)) {
+      if (!previous_) {
+        budget_.reset();
+      }
+    }
+    ~OwnerScope() { budget_.ownerActive_ = previous_; }
+    OwnerScope(const OwnerScope&) = delete;
+    OwnerScope& operator=(const OwnerScope&) = delete;
+
+  private:
+    StyleResourceBudget& budget_;
+    bool previous_;
+  };
+
+  /** Keep mutable document storage active throughout preparation, drawing and restoration. */
+  class ActiveRegistryScope {
+  public:
+    /**
+     * Mark a registry active without removing an enclosing scope's registration.
+     * @param budget Shared traversal identity context.
+     * @param registry Mutable storage protected by the caller's document access.
+     */
+    ActiveRegistryScope(StyleResourceBudget& budget, const Registry& registry)
+        : budget_(budget),
+          registry_(&registry),
+          inserted_(budget.activeRegistries_.insert(&registry).second) {}
+    ~ActiveRegistryScope() {
+      if (inserted_) {
+        budget_.activeRegistries_.erase(registry_);
+      }
+    }
+    ActiveRegistryScope(const ActiveRegistryScope&) = delete;
+    ActiveRegistryScope& operator=(const ActiveRegistryScope&) = delete;
+
+  private:
+    StyleResourceBudget& budget_;
+    const Registry* registry_;
+    bool inserted_;
+  };
+
+  /**
+   * Return whether mutable storage is already on this render operation's traversal stack.
+   * @param registry Storage considered for child admission.
+   */
+  bool isRegistryActive(const Registry& registry) const {
+    return activeRegistries_.contains(&registry);
+  }
+
+  /// Admit bounded entity work for one external-use preparation against the frame allowance.
+  bool reserveExternalInstanceWork(std::size_t entities) {
+    if (rejected_ || entities > limits_.ruleElementMatches - externalInstanceWork_) {
+      rejected_ = true;
+      return false;
+    }
+    externalInstanceWork_ += entities;
+    return true;
+  }
+
+  /// Return true once per frame when an unsupported inherited resource needs a diagnostic.
+  bool reportExternalResourceWarning() { return !std::exchange(externalResourceWarning_, true); }
+
+  /// Set a frame-wide aggregate work allowance while an external-use scope is active.
+  void setAggregateWorkBudget(StyleResourceBudget* budget) { aggregateWork_ = budget; }
 
   /// Reset traversal, match/declaration counters and local refusal; retained bytes remain.
   void reset() {
@@ -97,12 +178,18 @@ public:
     declarationComponentWork_ = 0;
     declarationByteWork_ = 0;
     rejected_ = false;
+    externalInstanceWork_ = 0;
+    externalResourceWarning_ = false;
   }
 
   /// Charge one rule-to-element match, or latch rejection when a limit has been reached.
   [[nodiscard]] bool reserveRuleElementMatch() {
     if (rejected_ || selectorTraversal_.rejected() ||
         ruleElementMatches_ >= limits_.ruleElementMatches) {
+      rejected_ = true;
+      return false;
+    }
+    if (aggregateWork_ && !aggregateWork_->reserveRuleElementMatch()) {
       rejected_ = true;
       return false;
     }
@@ -124,6 +211,11 @@ public:
         componentCount > limits_.declarationComponentWork - declarationComponentWork_ ||
         declarationByteWork_ > limits_.declarationByteWork ||
         sourceBytes > limits_.declarationByteWork - declarationByteWork_) {
+      rejected_ = true;
+      return false;
+    }
+    if (aggregateWork_ &&
+        !aggregateWork_->reserveDeclarationApplication(componentCount, sourceBytes)) {
       rejected_ = true;
       return false;
     }
@@ -191,10 +283,12 @@ public:
   }
 
   /// Return the mutable selector traversal budget for this computation pass.
-  [[nodiscard]] css::SelectorTraversalBudget& selectorTraversal() { return selectorTraversal_; }
+  [[nodiscard]] css::SelectorTraversalBudget& selectorTraversal() {
+    return aggregateWork_ ? aggregateWork_->selectorTraversal() : selectorTraversal_;
+  }
   /// Return the selector traversal budget for this computation pass.
   [[nodiscard]] const css::SelectorTraversalBudget& selectorTraversal() const {
-    return selectorTraversal_;
+    return aggregateWork_ ? aggregateWork_->selectorTraversal() : selectorTraversal_;
   }
   /// Return the number of rule-to-element matches charged.
   [[nodiscard]] std::size_t ruleElementMatches() const { return ruleElementMatches_; }
@@ -207,11 +301,19 @@ public:
   /// Return retained complex-property bytes charged to this budget.
   [[nodiscard]] std::size_t complexPropertyBytes() const { return complexPropertyBytes_; }
   /// Return whether this budget or its selector traversal budget refused work.
-  [[nodiscard]] bool rejected() const { return rejected_ || selectorTraversal_.rejected(); }
+  [[nodiscard]] bool rejected() const {
+    return rejected_ || selectorTraversal_.rejected() ||
+           (aggregateWork_ && aggregateWork_->rejected());
+  }
   /// Return the active cascade, traversal, and retained-property ceilings.
   [[nodiscard]] const Limits& limits() const { return limits_; }
 
 private:
+  bool ownerActive_ = false;
+  std::unordered_set<const Registry*> activeRegistries_;
+  std::size_t externalInstanceWork_ = 0;
+  bool externalResourceWarning_ = false;
+  StyleResourceBudget* aggregateWork_ = nullptr;
   Limits limits_;
   css::SelectorTraversalBudget selectorTraversal_;
   std::size_t ruleElementMatches_ = 0;
@@ -330,6 +432,18 @@ public:
    */
   void invalidateComputed(EntityHandle handle);
 
+  /// Inherit fallback values from an external-use computed parent without transferring specificity.
+  /// Resolved ordinary host paint, retained only during the guarded occurrence.
+  static ResolvedPaintServer externalHostPaint(Registry& registry, bool stroke);
+  /// Record a refused inherited resource for the occurrence's static diagnostic.
+  static void rejectExternalHostResource(Registry& registry);
+  /// Local paints alone create child-registry resource shadow trees.
+  static std::optional<PaintServer> localPaintForInstantiation(const ComputedStyleComponent& style,
+                                                               bool stroke);
+
+  static PropertyRegistry inheritExternalParent(const PropertyRegistry& local,
+                                                const PropertyRegistry& parent);
+
   /**
    * Returns true if any stylesheet loaded into \p registry contains an attribute selector that
    * could match an attribute with the given local name.
@@ -354,6 +468,12 @@ private:
   void applyStylesheetRules(Registry& registry, Entity treeEntity, Entity dataEntity,
                             PropertyRegistry& properties, StyleResourceBudget& styleBudget,
                             ParseWarningSink& warningSink);
+  PropertyRegistry inheritComputedParent(EntityHandle handle, Entity parent,
+                                         PropertyRegistry properties,
+                                         ComputedStyleComponent& computed,
+                                         ParseWarningSink& warningSink);
+  static void resolveComputedParentFonts(EntityHandle handle, Entity parent,
+                                         PropertyRegistry& properties);
   PropertyRegistry inheritProperties(Registry& registry, Entity parent, PropertyRegistry properties,
                                      ParseWarningSink& warningSink);
   static void resolveRelativeFontProperties(Registry& registry, Entity parent,

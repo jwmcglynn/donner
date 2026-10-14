@@ -3304,16 +3304,10 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     /// `drawPath` call that delivered it, so it carries the strictest precondition in this
     /// file.
     ///
-    /// A batch is only started for a draw with a non-null `sourceEntity`, and for those the
-    /// driver points `PathShape::path` at the entity's `ComputedPathComponent::spline`. That
-    /// address is stable while the component exists (component storage is paged, so emplacing
-    /// other components never relocates it), but erasing that component would swap the
-    /// storage's last element into the slot and silently repoint us at another entity's
-    /// geometry - wrong pixels, no crash, invisible to ASAN. What makes the retention safe is
-    /// that nothing erases a `ComputedPathComponent` between the borrow and the flush: every
-    /// removal site runs outside draw traversal, and a flush always happens within the frame
-    /// that started the batch. Draws whose geometry lives on the caller's stack (`drawRect`,
-    /// `drawEllipse`, overlay chrome) have no source entity and never reach here.
+    /// A batch requires `PathShape::canDeferGeometry()`. Its computed path and cached derivatives
+    /// must remain unchanged until the flush: erasure can repoint paged storage at another entity,
+    /// and replacement can change geometry while preserving its address. External-use occurrences
+    /// keep their cache identity but decline deferral, so drawPath consumes their geometry.
     const Path* path = nullptr;
     /// `deviceFromLocalTransform` captured at each `drawPath`. On flush, the
     /// outer encoder transform is set to identity and these are
@@ -4107,13 +4101,10 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
       slab = std::make_shared<geode::GeodeResidentSlab>(
           device->deviceId(), device->handleRetirement(), std::move(documentBudget));
     }
-    // Merge the previous frame's freed ranges, at most once per frame (the
-    // slab gates on the index). Gating here rather than at one draw entry
-    // point covers every path that can record resident draws, including
-    // multi-document tile frames that bypass draw(), and keeps a repeated
-    // draw() of the same document within one frame from prematurely
-    // recycling ranges its own recorded draws still reference.
-    slab->beginFrame(currentFrameIndex);
+    // An older open frame may still reference the retired bind groups and geometry ranges.
+    if (device->oldestOpenFrameGeneration() >= currentFrameIndex) {
+      slab->beginFrame(currentFrameIndex);
+    }
     return slab;
   }
 
@@ -5474,11 +5465,8 @@ void RendererGeode::Impl::onComputedPathChanged(Registry& registry, Entity entit
   // cheap no-op in that case. We don't need an `all_of` guard.
   registry.remove<geode::GeodePathCacheComponent>(entity);
   // Drop the GPU residence in lock-step with the CPU encode cache.
-  // Removing the component runs `GeodeResidentSlot::reset()`, which frees
-  // the persistent buffer and settles the live-bytes gauge. This fires on
-  // geometry change (on_update) and entity/registry teardown (on_destroy),
-  // both after the previous frame's submit, so destroying the buffer is
-  // safe (wgpu-native keeps submitted resources alive until GPU-complete).
+  // Slot reset parks bind groups and buffer ranges in their slabs until no older frame is open.
+  // Geometry can change during a shared-device offscreen draw before the outer frame submits.
   registry.remove<geode::GeodeResidentPathComponent>(entity);
 }
 
@@ -5648,12 +5636,6 @@ void RendererGeode::draw(SVGDocument& document) {
   // change between draws would silently leave a stale encode in
   // `GeodePathCacheComponent`.
   impl_->ensureCacheInvalidationWired(document.registry());
-
-  // Merge the previous frame's freed slab ranges before any draw records
-  // against this frame's command buffer (a range freed this frame is never
-  // reused this frame; see GeodeResidentSlab::beginFrame).
-  impl_->residentSlab(document.registry())->beginFrame(impl_->currentFrameIndex);
-  impl_->recordSlab(document.registry())->beginFrame(impl_->currentFrameIndex);
 
   RendererDriver driver(*this, impl_->verbose);
   driver.draw(document);
@@ -6820,9 +6802,8 @@ void RendererGeode::drawPath(const PathShape& path, const StrokeParams& stroke) 
   impl_->lastDrawSourceEntity = path.sourceEntity.entity();
 
   // `PathShape` borrows its geometry; resolve it once here. `pathOrEmpty` substitutes a
-  // shared empty path for a null pointer, and that substitute has static storage, so the
-  // reference stays valid for as long as a driver-supplied path would (this matters for the
-  // pending batch, which retains the address past the end of this call).
+  // shared empty path for a null pointer. Deferred batches require canDeferGeometry(); other
+  // paths are consumed before this call returns, even when they retain a persistent cache key.
   const Path& drawPathGeometry = path.pathOrEmpty();
 
   // Path-encode cache lookup for the fill. Null `sourceEntity` (editor
@@ -6833,7 +6814,7 @@ void RendererGeode::drawPath(const PathShape& path, const StrokeParams& stroke) 
   const geode::EncodedPath* fillEncoded = fillAdmission.encoded;
 
   // Try to append to a pending batch. Preconditions:
-  //  - Source entity valid (non-null handle).
+  //  - Source entity valid and geometry stable until the deferred draw flushes.
   //  - Fill encode cache hit (shared across all instances).
   //  - Solid paint (gradient / pattern need per-draw uniforms today).
   //  - No active pattern-fill handoff from the driver.
@@ -6861,8 +6842,7 @@ void RendererGeode::drawPath(const PathShape& path, const StrokeParams& stroke) 
   const bool solidFill = std::holds_alternative<PaintServer::Solid>(impl_->paint.fill);
   const bool referenceFill =
       std::holds_alternative<components::PaintResolvedReference>(impl_->paint.fill);
-  const bool fillShapeBatchable = fillAdmission.persistent &&
-                                  path.sourceEntity.entity() != entt::null &&
+  const bool fillShapeBatchable = fillAdmission.persistent && path.canDeferGeometry() &&
                                   !impl_->patternFillPaint.has_value() &&
                                   impl_->encoder != nullptr && impl_->paint.drawFillComponent;
 
@@ -7027,12 +7007,10 @@ void RendererGeode::drawPath(const PathShape& path, const StrokeParams& stroke) 
   // ending the run.
   //
   // The stroked outline is retained by the batch until it flushes. That is
-  // safe for the same reason the fill geometry is: the outline lives in this
-  // entity's `GeodePathCacheComponent::strokeSlot`, which is only replaced by
-  // a `getStrokeDerived` miss on this same entity, and the pending batch is
-  // always flushed within the frame that started it.
+  // safe only when the caller permits deferral: an occurrence may replace this entity's
+  // GeodePathCacheComponent::strokeSlot before another draw or the frame's eventual flush.
   if (kEnableSceneBatching && residentStroke != nullptr && strokeDerived.persistent &&
-      path.sourceEntity.entity() != entt::null && !impl_->patternStrokePaint.has_value()) {
+      path.canDeferGeometry() && !impl_->patternStrokePaint.has_value()) {
     const auto& solidStroke = std::get<PaintServer::Solid>(strokeServer);
     geode::GeoEncoder::ScenePaint strokePaint;
     strokePaint.color = solidStroke.color.resolve(impl_->paint.currentColor.rgba(),
