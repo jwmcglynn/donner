@@ -212,6 +212,18 @@ bool CommandChecked(MenuBarCommand command, const MenuBarState& state) {
   return false;
 }
 
+bool ShortcutEnabledForFocus(MenuBarCommand command, bool sourcePaneFocused) {
+  switch (command) {
+    case MenuBarCommand::ZoomIn:
+    case MenuBarCommand::ZoomOut:
+    case MenuBarCommand::ActualSize: return !sourcePaneFocused;
+    case MenuBarCommand::IncreaseSourceFontSize:
+    case MenuBarCommand::DecreaseSourceFontSize:
+    case MenuBarCommand::ResetSourceFontSize: return sourcePaneFocused;
+    default: return true;
+  }
+}
+
 }  // namespace
 
 std::span<const EditorMenu> EditorMenuModel() {
@@ -243,22 +255,8 @@ EditorMenuItemPresentation PresentEditorMenuItem(const EditorMenuNode& item,
   }
   result.enabled = CommandEnabled(item.command, state);
   result.checked = CommandChecked(item.command, state);
-  switch (item.command) {
-    case MenuBarCommand::ZoomIn:
-    case MenuBarCommand::ZoomOut:
-    case MenuBarCommand::ActualSize:
-      if (state.sourcePaneFocused) {
-        result.shortcut = {};
-      }
-      break;
-    case MenuBarCommand::IncreaseSourceFontSize:
-    case MenuBarCommand::DecreaseSourceFontSize:
-    case MenuBarCommand::ResetSourceFontSize:
-      if (!state.sourcePaneFocused) {
-        result.shortcut = {};
-      }
-      break;
-    default: break;
+  if (!ShortcutEnabledForFocus(item.command, state.sourcePaneFocused)) {
+    result.shortcut = {};
   }
   return result;
 }
