@@ -732,6 +732,10 @@ var LibraryDonnerGpu = {
     // reaches a pipeline the browser has not answered for yet creates it synchronously there and
     // then, which costs what every pipeline used to.
     //
+    // WebKit is the exception; see compilesAheadOfUse. There no compile starts ahead of use, and
+    // every pipeline is created synchronously at its first use, as in a browser without
+    // asynchronous creation.
+    //
     // Compiles are shared between the logical devices over one browser device: every renderer
     // builds the same few pipelines, and each one is compiled once. Pipelines are immutable, and
     // explicit bind group layouts with identical entries are group-equivalent, so a pipeline
@@ -739,6 +743,26 @@ var LibraryDonnerGpu = {
     // device. What a pipeline compiles is identified by content: shader text, entry points,
     // binding layouts and fixed-function state.
     kMaxSharedPipelines: 256,
+
+    // Whether pipelines are compiled asynchronously ahead of their first use in this browser.
+    //
+    // Not in WebKit. WebKit 26 holds every queue completion (onSubmittedWorkDone, mapAsync) until
+    // every pipeline compile in flight has finished, asynchronous ones included, and its
+    // asynchronous compiles can be far slower than synchronous creation. A compile started ahead
+    // of use therefore delays every wait the runtime makes on the GPU, from the first frame's
+    // presentation on, by the whole backlog of compiles: on hosted CI runners that was seconds per
+    // wait, and the editor timed out at boot. WebKit 27 no longer holds completions, but each of
+    // its asynchronous compiles takes several times longer than synchronously creating the whole
+    // set, so a pipeline needed early is created synchronously at first use anyway and the
+    // asynchronous compile is wasted work.
+    //
+    // No feature reveals this ordering, so the engine is identified by its user agent: WebKit's
+    // token without Chromium's, which Chromium-based browsers also send ("Chrome/", "Chromium/",
+    // "HeadlessChrome/"). That covers Safari and the WebKit-based browsers on iOS, such as Chrome,
+    // Firefox and Edge there.
+    compilesAheadOfUse: function() {
+      return !/^(?!.*Chrom).*AppleWebKit\//.test(navigator.userAgent);
+    },
 
     // A short stable name for WGSL `code`, so a pipeline's identity does not carry its source.
     shaderSourceKey: function(code) {
@@ -757,8 +781,9 @@ var LibraryDonnerGpu = {
     },
 
     // Registers `id` in `record` as the pipeline `descriptor` describes, compiling it
-    // asynchronously unless a logical device over the same browser device already has. `key` is
-    // the descriptor's content identity, or empty when it cannot be shared.
+    // asynchronously, where compilesAheadOfUse allows, unless a logical device over the same
+    // browser device already has. `key` is the descriptor's content identity, or empty when it
+    // cannot be shared.
     compilePipeline: function(record, kind, id, key, descriptor) {
       var status = DonnerGpu.guard(record);
       if (status !== DonnerGpu.kSuccess) {
@@ -774,29 +799,28 @@ var LibraryDonnerGpu = {
         DonnerGpu.trace(["p", record.handle, DonnerGpu.epochMs(), compile.compiledAt, 1]);
         return DonnerGpu.register(record, kind, id, compile);
       }
-      var entryPoint = kind === DonnerGpu.kRenderPipeline
-        ? descriptor.fragment.entryPoint
-        : descriptor.compute.entryPoint;
       compile = {
         kind: kind,
         descriptor: descriptor,
-        entryPoint: entryPoint,
         pipeline: null,
         compiledAt: 0,
       };
       compile.traced = ["p", record.handle, DonnerGpu.epochMs(), 0, 0];
       DonnerGpu.trace(compile.traced);
-      if (DonnerGpu.compilesToStart === null) {
-        var batch = [];
-        DonnerGpu.compilesToStart = batch;
-        Promise.resolve().then(function() {
-          if (DonnerGpu.compilesToStart === batch) {
-            DonnerGpu.compilesToStart = null;
-          }
-          DonnerGpu.startCompiles(cache, batch);
-        });
+      // Without a compile ahead of use, the pipeline is created at its first use.
+      if (DonnerGpu.compilesAheadOfUse()) {
+        if (DonnerGpu.compilesToStart === null) {
+          var batch = [];
+          DonnerGpu.compilesToStart = batch;
+          Promise.resolve().then(function() {
+            if (DonnerGpu.compilesToStart === batch) {
+              DonnerGpu.compilesToStart = null;
+            }
+            DonnerGpu.startCompiles(cache, batch);
+          });
+        }
+        DonnerGpu.compilesToStart.push(compile);
       }
-      DonnerGpu.compilesToStart.push(compile);
       if (key !== "" && cache.size < DonnerGpu.kMaxSharedPipelines) {
         cache.set(key, compile);
       }
@@ -863,7 +887,8 @@ var LibraryDonnerGpu = {
       }
       if (compile.pipeline === null && !compile.failed) {
         DonnerGpu.pipelineCompilesOnFirstUse += 1;
-        DonnerGpu.trace(["c", record.handle, DonnerGpu.epochMs(), compile.entryPoint]);
+        var stage = compile.descriptor.fragment || compile.descriptor.compute;
+        DonnerGpu.trace(["c", record.handle, DonnerGpu.epochMs(), stage.entryPoint]);
         try {
           compile.pipeline = kind === DonnerGpu.kRenderPipeline
             ? DonnerGpu.device.createRenderPipeline(compile.descriptor)

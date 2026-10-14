@@ -115,9 +115,10 @@ function createTimelineDevice({ asyncCompiles = true, refuseAsync = false } = {}
 }
 
 /** Loads the library over `stub` and makes `handles` ready on its device. */
-async function openOver(stub, handles) {
+async function openOver(stub, handles, { userAgent = undefined } = {}) {
   const bridge = loadLibrary({
     requestAdapterForTesting: async () => ({ requestDevice: async () => stub.device }),
+    userAgentForTesting: userAgent,
   });
   const { entryPoints, state } = bridge;
   for (const handle of handles) {
@@ -355,4 +356,99 @@ test("an asynchronous compile the browser refuses is reported on the console", a
   stub.finishCompile("fsA");
   await drain();
   assert.deepEqual(bridge.consoleErrors, ["[Geode/browser] Pipeline compile refused: refused"]);
+});
+
+// Representative user agents in each browser's format.
+const kSafariMac =
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) "
+  + "Version/26.5 Safari/605.1.15";
+const kSafariIPhone =
+  "Mozilla/5.0 (iPhone; CPU iPhone OS 26_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) "
+  + "Version/26.5 Mobile/15E148 Safari/604.1";
+const kChromeIPhone =
+  "Mozilla/5.0 (iPhone; CPU iPhone OS 26_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) "
+  + "CriOS/156.0.8078.4 Mobile/15E148 Safari/604.1";
+const kFirefoxIPhone =
+  "Mozilla/5.0 (iPhone; CPU iPhone OS 26_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) "
+  + "FxiOS/157.0 Mobile/15E148 Safari/605.1.15";
+const kChromeMac =
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) "
+  + "Chrome/156.0.0.0 Safari/537.36";
+const kEdgeWindows =
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
+  + "Chrome/156.0.0.0 Safari/537.36 Edg/156.0.0.0";
+const kChromiumLinux =
+  "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Ubuntu "
+  + "Chromium/156.0.0.0 Chrome/156.0.0.0 Safari/537.36";
+const kHeadlessChrome =
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) "
+  + "HeadlessChrome/156.0.0.0 Safari/537.36";
+const kOperaWindows =
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
+  + "Chrome/156.0.0.0 Safari/537.36 OPR/141.0.0.0";
+const kSamsungAndroid =
+  "Mozilla/5.0 (Linux; Android 15; SM-S928B) AppleWebKit/537.36 (KHTML, like Gecko) "
+  + "SamsungBrowser/29.0 Chrome/156.0.0.0 Mobile Safari/537.36";
+const kAndroidWebView =
+  "Mozilla/5.0 (Linux; Android 15; Pixel 9; wv) AppleWebKit/537.36 (KHTML, like Gecko) "
+  + "Version/4.0 Chrome/156.0.0.0 Mobile Safari/537.36";
+const kEdgeIPhone =
+  "Mozilla/5.0 (iPhone; CPU iPhone OS 26_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) "
+  + "EdgiOS/156.0.0.0 Version/26.0 Mobile/15E148 Safari/604.1";
+const kFirefoxMac =
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:157.0) Gecko/20100101 Firefox/157.0";
+
+test("only WebKit, recognized by its user agent, skips the compile ahead of use", () => {
+  const aheadOfUse = (userAgent) =>
+    loadLibrary({ userAgentForTesting: userAgent }).state.compilesAheadOfUse();
+  const webKit = [kSafariMac, kSafariIPhone, kChromeIPhone, kFirefoxIPhone, kEdgeIPhone];
+  const other = [
+    kChromeMac,
+    kHeadlessChrome,
+    kEdgeWindows,
+    kOperaWindows,
+    kSamsungAndroid,
+    kAndroidWebView,
+    kChromiumLinux,
+    kFirefoxMac,
+    "",
+    undefined,
+  ];
+  assert.deepEqual(webKit.map(aheadOfUse), webKit.map(() => false));
+  assert.deepEqual(other.map(aheadOfUse), other.map(() => true));
+});
+
+test("WebKit starts no compile ahead of use and creates each pipeline once, at its first use", async () => {
+  const stub = createTimelineDevice();
+  const bridge = await openOver(stub, [kFirst, kSecond], { userAgent: kSafariMac });
+  buildPipelines(bridge, kFirst, [[kPipelineA, "fsA"], [kPipelineB, "fsB"]]);
+  buildPipelines(bridge, kSecond, [[kPipelineA, "fsA"]]);
+  await drain();
+  assert.deepEqual(stub.created, { sync: [], async: [] });
+
+  submitDraw(bridge, kFirst, 1, kPipelineA);
+  submitDraw(bridge, kSecond, 1, kPipelineA);
+  assert.deepEqual(stub.created, { sync: ["fsA"], async: [] });
+  const [first, second] = stub.device.draws;
+  assert.equal(first, second, "both logical devices drew with the one pipeline");
+  const statistics = bridge.state.debugStatistics();
+  assert.deepEqual(
+    {
+      compiles: statistics["pipelineCompiles"],
+      shared: statistics["pipelineCompilesShared"],
+      onFirstUse: statistics["pipelineCompilesOnFirstUse"],
+    },
+    { compiles: 0, shared: 1, onFirstUse: 1 },
+  );
+});
+
+test("Chromium and Firefox still compile ahead of use", async () => {
+  for (const userAgent of [kChromeMac, kFirefoxMac]) {
+    const stub = createTimelineDevice();
+    const bridge = await openOver(stub, [kFirst], { userAgent });
+    buildPipelines(bridge, kFirst, [[kPipelineA, "fsA"], [kPipelineB, "fsB"]]);
+    await drain();
+    assert.deepEqual(stub.created, { sync: [], async: ["fsA", "fsB"] }, userAgent);
+    assert.equal(bridge.state.debugStatistics()["pipelineCompiles"], 2, userAgent);
+  }
 });

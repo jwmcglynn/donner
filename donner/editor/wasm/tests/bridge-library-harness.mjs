@@ -164,13 +164,15 @@ export async function drain() {
  * Evaluates the library with a stub browser around it and returns what a test drives it through:
  * its entry points, its shared state, the canvases it can resolve, the devices the stub adapter has
  * handed out and how many times one was asked for, and a heap to pass strings and out-parameters
- * through.
+ * through. `userAgentForTesting` is the user agent the stub browser reports; by default it reports
+ * none.
  */
 export function loadLibrary({
   requestAdapterForTesting,
   navigatorGpuAvailable = true,
   nowForTesting = () => performance.now(),
   timersForTesting = null,
+  userAgentForTesting = undefined,
 } = {}) {
   const heap = new ArrayBuffer(64 * 1024);
   const bytes = new Uint8Array(heap);
@@ -230,6 +232,7 @@ export function loadLibrary({
       STORAGE: 0x0080,
     },
     navigator: {
+      userAgent: userAgentForTesting,
       gpu: {
         getPreferredCanvasFormat: () => "bgra8unorm",
         requestAdapter: () => {
