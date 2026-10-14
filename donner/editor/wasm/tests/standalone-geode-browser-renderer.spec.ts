@@ -1,8 +1,8 @@
 import { expect, type Page, test } from "@playwright/test";
-import { execFileSync } from "node:child_process";
 import { writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { PNG } from "pngjs";
+import { type BitmapComparatorResult, runBitmapComparator } from "./browser-bitmap-comparator";
 import { installBrowserStallDiagnostics } from "./browser-stall-diagnostics";
 
 installBrowserStallDiagnostics(test);
@@ -246,6 +246,42 @@ function browserDiagnosticStage(line: string): string | null {
   return null;
 }
 
+type RgbaCapture = { width: number; height: number; rgba: string };
+
+/** Write base64 RGBA bytes read from the page as a PNG for the native comparator. */
+function writeRgbaPng(path: string, capture: RgbaCapture): void {
+  const rgba = Buffer.from(capture.rgba, "base64");
+  expect(rgba.length, `${path} must hold one RGBA value per pixel`).toBe(
+    capture.width * capture.height * 4,
+  );
+  const image = new PNG({ width: capture.width, height: capture.height });
+  rgba.copy(image.data);
+  writeFileSync(path, PNG.sync.write(image));
+}
+
+/**
+ * Run one comparison through the shared pixelmatch comparator. A mismatch fails the test with the
+ * comparison's description and lets the test go on to its other comparisons; the comparator
+ * leaves its actual, expected and diff PNGs with the test outputs. A comparator that cannot run
+ * or complete its case stops the test with the description and the comparator's output.
+ */
+function expectBitmapsMatch(
+  description: string,
+  comparator: string,
+  reportPath: string,
+  comparison: Record<string, string>,
+): void {
+  let result: BitmapComparatorResult;
+  try {
+    result = runBitmapComparator({ executable: comparator, comparison, reportPath });
+  } catch (error) {
+    throw new Error(`${description}: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  console.log(result.detail);
+  expect.soft(result.matched, `${description}; the comparator output above names its diff PNGs`)
+    .toBe(true);
+}
+
 function pageErrorCategory(error: Error): string {
   const message = error.message;
   if (/device.{0,24}lost|lost.{0,24}device/i.test(message)) {
@@ -436,73 +472,64 @@ test("standalone Geode wasm selects the browser backend and paints SVG pixels", 
     "the standalone browser module must create only one WebGPU device",
   ).toBe(1);
 
-  // Compare the renderer's RGBA, not a canvas readback: the 2D canvas premultiplies alpha,
-  // and its unpremultiply rounding on export varies between browser releases.
-  const rendered = await page.evaluate(() => {
+  // Read the renderer's RGBA and the canvas the page presented it on. The golden covers the
+  // renderer's output rather than the canvas: the 2D canvas premultiplies alpha, and browser
+  // releases round its readback differently. The readback then shows that the page presented it.
+  const captured = await page.evaluate(() => {
+    const encode = (rgba: Uint8ClampedArray): string => {
+      let binary = "";
+      for (let offset = 0; offset < rgba.length; offset += 0x8000) {
+        binary += String.fromCharCode(...rgba.subarray(offset, offset + 0x8000));
+      }
+      return btoa(binary);
+    };
     const render = (window as Window & {
       __donnerLastRender?: { width: number; height: number; rgba: Uint8ClampedArray };
     }).__donnerLastRender;
     if (!render) return null;
-    let binary = "";
-    for (let offset = 0; offset < render.rgba.length; offset += 0x8000) {
-      binary += String.fromCharCode(...render.rgba.subarray(offset, offset + 0x8000));
-    }
-    return { width: render.width, height: render.height, rgba: btoa(binary) };
+    const canvas = document.getElementById("canvas") as HTMLCanvasElement;
+    const shown = canvas.getContext("2d")!.getImageData(0, 0, canvas.width, canvas.height);
+    return {
+      rendered: { width: render.width, height: render.height, rgba: encode(render.rgba) },
+      presented: { width: shown.width, height: shown.height, rgba: encode(shown.data) },
+    };
   });
-  expect(rendered, "the page must expose the renderer's RGBA output").not.toBeNull();
-  const image = new PNG({ width: rendered!.width, height: rendered!.height });
-  const rgba = Buffer.from(rendered!.rgba, "base64");
-  expect(rgba.length).toBe(rendered!.width * rendered!.height * 4);
-  rgba.copy(image.data);
+  expect(captured, "the page must expose the renderer's RGBA output").not.toBeNull();
   const outputDirectory = process.env.TEST_UNDECLARED_OUTPUTS_DIR;
   const compare = process.env.DONNER_BROWSER_GOLDEN_COMPARE;
   const golden = process.env.DONNER_BROWSER_GOLDEN_PNG;
   expect(outputDirectory, "Bazel must provide an artifact directory").toBeTruthy();
   expect(compare, "the shared pixelmatch comparator is missing").toBeTruthy();
   expect(golden, "the committed SVG golden is missing").toBeTruthy();
+  // Keep both images with the test outputs before either comparison can fail.
   const actual = join(outputDirectory!, "standalone_geode_browser_actual.png");
-  writeFileSync(actual, PNG.sync.write(image));
-  execFileSync(resolve(compare!), [], {
-    env: {
-      ...process.env,
+  const presented = join(outputDirectory!, "standalone_geode_browser_presented.png");
+  writeRgbaPng(actual, captured!.rendered);
+  writeRgbaPng(presented, captured!.presented);
+  expectBitmapsMatch(
+    "the renderer output must match the committed golden",
+    compare!,
+    join(outputDirectory!, "standalone_geode_browser_golden_comparison.json"),
+    {
       DONNER_ACTUAL_PNG: actual,
       // The golden helper uses this path in diff filenames; keep the runfiles path short.
       DONNER_GOLDEN_PNG: golden!,
     },
-    stdio: "inherit",
-    timeout: 10000,
-  });
+  );
 
-  // The golden covers the renderer's output; also check that the page presented it. The canvas
-  // keeps alpha exactly and each color channel to within the premultiplied-alpha quantization
-  // step, 255 / alpha, which bounds the browser's rounding without depending on its release.
-  const presented = await page.evaluate(() => {
-    const render = (window as Window & {
-      __donnerLastRender?: { width: number; height: number; rgba: Uint8ClampedArray };
-    }).__donnerLastRender!;
-    const canvas = document.getElementById("canvas") as HTMLCanvasElement;
-    if (canvas.width < render.width || canvas.height < render.height) {
-      return { compared: 0, mismatches: -1 };
-    }
-    const shown = canvas.getContext("2d")!.getImageData(0, 0, render.width, render.height).data;
-    let compared = 0;
-    let mismatches = 0;
-    for (let offset = 0; offset < render.rgba.length; offset += 4) {
-      const alpha = render.rgba[offset + 3];
-      let matches = shown[offset + 3] === alpha;
-      if (alpha > 0) {
-        compared++;
-        const step = Math.ceil(255 / alpha);
-        for (let channel = 0; channel < 3; channel++) {
-          matches &&= Math.abs(shown[offset + channel] - render.rgba[offset + channel]) <= step;
-        }
-      }
-      if (!matches) mismatches++;
-    }
-    return { compared, mismatches };
-  });
-  expect(presented.compared, "the presented canvas must hold covered pixels").toBeGreaterThan(0);
-  expect(presented.mismatches, "the canvas must present the renderer's pixels").toBe(0);
+  // The canvas readback must reproduce the renderer output exactly, so a skipped, blank,
+  // misplaced or altered putImageData() fails. A browser whose readback rounds partially covered
+  // pixels differently also fails here; see the comparator's presented_canvas mode.
+  expectBitmapsMatch(
+    "the canvas must present the renderer output",
+    compare!,
+    join(outputDirectory!, "standalone_geode_browser_presented_comparison.json"),
+    {
+      DONNER_BROWSER_COMPARE_MODE: "presented_canvas",
+      DONNER_ACTUAL_PNG: presented,
+      DONNER_EXPECTED_PNG: actual,
+    },
+  );
 
   expect(pageErrorCount, `browser page error categories: ${pageErrorCategories.join(",")}`).toBe(0);
 });

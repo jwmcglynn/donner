@@ -76,8 +76,9 @@ donner_cc_test(
     ],
 )
 
-# Invoked by the browser Playwright lane after it captures the standalone Geode canvas.
-# Reuses the one pixelmatch golden helper and its inspectable actual/expected/diff artifacts.
+# Invoked by the browser Playwright lanes to compare captured PNGs with committed goldens, and the
+# standalone Geode canvas readback with the renderer output it presents. Reuses the one pixelmatch
+# helper and its inspectable actual/expected/diff artifacts.
 cc_binary(
     name = "standalone_geode_browser_png_compare",
     testonly = True,
