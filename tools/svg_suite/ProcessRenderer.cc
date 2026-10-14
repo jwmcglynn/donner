@@ -16,6 +16,7 @@
 #include <fstream>
 #include <map>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -66,34 +67,76 @@ void readDiagnostics(int descriptor, std::string& diagnostics) {
   }
 }
 
+void writeChildDiagnostic(int descriptor, std::string_view text) {
+  while (!text.empty()) {
+    const ssize_t count = write(descriptor, text.data(), text.size());
+    if (count < 0 && errno == EINTR) {
+      continue;
+    }
+    if (count <= 0) {
+      return;
+    }
+    text.remove_prefix(static_cast<size_t>(count));
+  }
+}
+
+[[noreturn]] void failChildSetup(int descriptor, std::string_view stage, int error, int exitCode) {
+  // No allocation or libc formatting is safe between fork and exec in a threaded caller.
+  char digits[16];
+  size_t start = sizeof(digits);
+  unsigned int remaining = static_cast<unsigned int>(error);
+  do {
+    digits[--start] = static_cast<char>('0' + remaining % 10);
+    remaining /= 10;
+  } while (remaining != 0);
+  writeChildDiagnostic(descriptor, "renderer setup stage=");
+  writeChildDiagnostic(descriptor, stage);
+  writeChildDiagnostic(descriptor, " errno=");
+  writeChildDiagnostic(descriptor, {digits + start, sizeof(digits) - start});
+  writeChildDiagnostic(descriptor, "\n");
+  _exit(exitCode);
+}
+
 [[noreturn]] void executeChild(const std::vector<char*>& argv, const std::string& directory,
                                int readFd, int writeFd, int timeoutSeconds,
                                size_t memoryLimitBytes) {
   close(readFd);
-  if (setpgid(0, 0) != 0 || dup2(writeFd, STDOUT_FILENO) < 0 || dup2(writeFd, STDERR_FILENO) < 0 ||
-      chdir(directory.c_str()) != 0) {
-    _exit(126);
+  if (setpgid(0, 0) != 0) {
+    failChildSetup(writeFd, "setpgid", errno, 126);
   }
-  close(writeFd);
+  if (dup2(writeFd, STDOUT_FILENO) < 0) {
+    failChildSetup(writeFd, "dup2_stdout", errno, 126);
+  }
+  if (dup2(writeFd, STDERR_FILENO) < 0) {
+    failChildSetup(writeFd, "dup2_stderr", errno, 126);
+  }
+  if (chdir(directory.c_str()) != 0) {
+    failChildSetup(writeFd, "chdir", errno, 126);
+  }
   const rlimit fileLimit{32u * 1024u * 1024u, 32u * 1024u * 1024u};
   const rlimit coreLimit{0, 0};
   const rlimit cpuLimit{static_cast<rlim_t>(timeoutSeconds),
                         static_cast<rlim_t>(timeoutSeconds + 1)};
-  if (setrlimit(RLIMIT_FSIZE, &fileLimit) != 0 || setrlimit(RLIMIT_CORE, &coreLimit) != 0 ||
-      setrlimit(RLIMIT_CPU, &cpuLimit) != 0) {
-    _exit(126);
+  if (setrlimit(RLIMIT_FSIZE, &fileLimit) != 0) {
+    failChildSetup(writeFd, "setrlimit_fsize", errno, 126);
+  }
+  if (setrlimit(RLIMIT_CORE, &coreLimit) != 0) {
+    failChildSetup(writeFd, "setrlimit_core", errno, 126);
+  }
+  if (setrlimit(RLIMIT_CPU, &cpuLimit) != 0) {
+    failChildSetup(writeFd, "setrlimit_cpu", errno, 126);
   }
 #if defined(__linux__)
   const rlimit memoryLimit{static_cast<rlim_t>(memoryLimitBytes),
                            static_cast<rlim_t>(memoryLimitBytes)};
   if (setrlimit(RLIMIT_AS, &memoryLimit) != 0) {
-    _exit(126);
+    failChildSetup(writeFd, "setrlimit_as", errno, 126);
   }
 #else
   (void)memoryLimitBytes;
 #endif
   execv(argv[0], argv.data());
-  _exit(127);
+  failChildSetup(writeFd, "execv", errno, 127);
 }
 
 struct DiagnosticPipe {
@@ -106,7 +149,8 @@ bool openDiagnosticPipe(DiagnosticPipe& pipe) {
   if (::pipe(descriptors) != 0) {
     return false;
   }
-  if (fcntl(descriptors[0], F_SETFL, O_NONBLOCK) != 0) {
+  if (fcntl(descriptors[0], F_SETFL, O_NONBLOCK) != 0 ||
+      fcntl(descriptors[1], F_SETFD, FD_CLOEXEC) != 0) {
     close(descriptors[0]);
     close(descriptors[1]);
     return false;
