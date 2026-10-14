@@ -14,6 +14,7 @@
 
 #include "donner/editor/tests/BitmapGoldenCompare.h"
 #include "donner/svg/components/animation/AnimationValueSampler.h"
+#include "donner/svg/renderer/FilterRegionContext.h"
 
 namespace donner::svg {
 namespace {
@@ -126,6 +127,93 @@ TEST(FilterGraphExecutorTest, AnimatedDefaultRegionUsesExecutedRasterHistory) {
                        std::vector<uint8_t>(expected->data().begin(), expected->data().end()),
                        64 * 4},
         shear ? "animated-default-shear" : "animated-default-scale",
+        editor::tests::PixelmatchIdentityParams());
+  }
+}
+
+TEST(FilterGraphExecutorTest, EmptyInputRegionDoesNotBecomePositiveDuringSampling) {
+  components::FilterGraph graph;
+  const Box2d clip = Box2d::FromXYWH(0, 0, 16, 16);
+  FilterRegionContext regions(graph, Vector2i(16, 16), clip, Transform2d(), clip, clip);
+  components::FilterNode flood;
+  flood.x = Lengthd(20);
+  flood.y = Lengthd(0);
+  flood.width = Lengthd(8);
+  flood.height = Lengthd(8);
+  flood.primitive = components::filter_primitive::Flood{};
+  regions.recordSubregion(flood, Box2d::FromXYWH(20, 0, 8, 8));
+  components::FilterNode offset;
+  offset.inputs.emplace_back();
+  offset.primitive = components::filter_primitive::Offset{};
+  components::AnimateValueComponent value;
+  value.attributeName = "width";
+  value.to = "4";
+  offset.animatedRegion[2] = components::ContextualLengthRecipe::Create({{value, 0.5, 0}});
+  const auto sampled = regions.sampleNodeSubregion(offset);
+  ASSERT_THAT(sampled.animatedRegion, testing::Ne(std::nullopt));
+  EXPECT_DOUBLE_EQ(sampled.animatedRegion->width(), 2);
+}
+
+TEST(FilterGraphExecutorTest, SingularContextDoesNotPublishAnimatedGeometry) {
+  components::FilterGraph graph;
+  const Box2d clip = Box2d::FromXYWH(0, 0, 16, 16);
+  FilterRegionContext regions(graph, Vector2i(16, 16), clip, Transform2d::Scale(0), clip, clip);
+  components::FilterNode node;
+  components::AnimateValueComponent value;
+  value.attributeName = "width";
+  value.from = "4";
+  value.to = "8";
+  node.animatedRegion[2] = components::ContextualLengthRecipe::Create({{value, 0.5, 0}});
+  const auto sampled = regions.sampleNodeSubregion(node);
+  EXPECT_THAT(sampled.animatedRegion, testing::Eq(std::nullopt));
+  EXPECT_THAT(sampled.bounds, testing::Eq(Box2d::FromXYWH(0, 0, 0, 0)));
+}
+
+TEST(FilterGraphExecutorTest, AnimatedPaintInputDefaultsUsePaintCoverage) {
+  for (const bool stroke : {false, true}) {
+    SCOPED_TRACE(stroke);
+    components::FilterGraph graph;
+    graph.filterRegion = Box2d::FromXYWH(0, 0, 16, 16);
+    components::FilterNode offset;
+    offset.primitive = components::filter_primitive::Offset{};
+    offset.inputs.emplace_back(stroke ? components::FilterStandardInput::StrokePaint
+                                      : components::FilterStandardInput::FillPaint);
+    components::AnimateValueComponent value;
+    value.attributeName = "width";
+    value.to = "4";
+    offset.animatedRegion[2] = components::ContextualLengthRecipe::Create({{value, 0.25, 0}});
+    graph.nodes.push_back(offset);
+    components::FilterGraph expectedGraph = graph;
+    auto& expectedNode = expectedGraph.nodes.back();
+    expectedNode.animatedRegion = {};
+    expectedNode.x = Lengthd(4);
+    expectedNode.y = Lengthd(4);
+    expectedNode.width = Lengthd(7);
+    expectedNode.height = Lengthd(8);
+    auto paint = tiny_skia::Pixmap::fromSize(16, 16);
+    auto actual = tiny_skia::Pixmap::fromSize(16, 16);
+    auto expected = tiny_skia::Pixmap::fromSize(16, 16);
+    ASSERT_THAT(paint, testing::Ne(std::nullopt));
+    ASSERT_THAT(actual, testing::Ne(std::nullopt));
+    ASSERT_THAT(expected, testing::Ne(std::nullopt));
+    for (int y = 4; y < 12; ++y) {
+      for (int x = 4; x < 12; ++x) {
+        SetPixel(*paint, x, y, Pixel{255, 0, 0, 255});
+      }
+    }
+    const auto* fillInput = stroke ? nullptr : &*paint;
+    const auto* strokeInput = stroke ? &*paint : nullptr;
+    ApplyFilterGraphToPixmap(*actual, graph, Transform2d(), graph.filterRegion, false, fillInput,
+                             strokeInput);
+    ApplyFilterGraphToPixmap(*expected, expectedGraph, Transform2d(), graph.filterRegion, false,
+                             fillInput, strokeInput);
+    editor::tests::CompareBitmapToBitmap(
+        RendererBitmap{Vector2i(16, 16),
+                       std::vector<uint8_t>(actual->data().begin(), actual->data().end()), 16 * 4},
+        RendererBitmap{Vector2i(16, 16),
+                       std::vector<uint8_t>(expected->data().begin(), expected->data().end()),
+                       16 * 4},
+        stroke ? "animated-stroke-region" : "animated-fill-region",
         editor::tests::PixelmatchIdentityParams());
   }
 }
