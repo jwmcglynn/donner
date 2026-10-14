@@ -3394,6 +3394,48 @@ test("Geode WASM presents selection path overlay pixels", async ({ page }) => {
   expect(fatalMessages).toEqual([]);
 });
 
+async function readChromiumGpuInfo(page: Page) {
+  const browser = page.context().browser();
+  if (!browser || browser.browserType().name() !== "chromium") return null;
+  const creation = browser.newBrowserCDPSession();
+  const session = await boundBrowserDiagnostic(creation, 2000);
+  if (!session) {
+    void creation.then((late) => boundBrowserDiagnostic(late.detach(), 2000), () => null);
+    return null;
+  }
+  try {
+    const info = await boundBrowserDiagnostic(session.send("SystemInfo.getInfo"), 2000);
+    if (!info?.gpu) return null;
+    const gpu = info.gpu;
+    const bounded = (value: unknown) =>
+      typeof value === "string"
+        ? value.slice(0, 256)
+        : typeof value === "number" && Number.isFinite(value)
+        ? value
+        : typeof value === "boolean"
+        ? value
+        : null;
+    return {
+      devices: (gpu.devices ?? []).slice(0, 8).map((device: Record<string, unknown>) =>
+        Object.fromEntries(
+          ["vendorId", "deviceId", "vendorString", "deviceString", "driverVendor", "driverVersion"]
+            .map((key) => [key, bounded(device[key])]),
+        )
+      ),
+      gl: Object.fromEntries(
+        ["glVendor", "glRenderer", "glVersion", "displayType"]
+          .map((key) => [key, bounded(gpu.auxAttributes?.[key])]),
+      ),
+      features: Object.fromEntries(
+        ["gpu_compositing", "rasterization", "webgl", "webgl2", "webgpu"]
+          .map((key) => [key, bounded(gpu.featureStatus?.[key])]),
+      ),
+    };
+  } finally {
+    await boundBrowserDiagnostic(session.detach(), 2000);
+  }
+}
+
 async function measurePageRaf(page: Page, durationMs: number) {
   const loadBefore = loadavg();
   const sample = await boundBrowserDiagnostic(
@@ -3472,6 +3514,7 @@ test(
       throw new Error("DONNER_ANIMATION_FRAME_DRIVER must be proxied-main-raf when set");
     }
     const fatalMessages = await openEditor(page, { postInitializationDwellMs: 0, frameDriver });
+    const browserGpuInfo = rafControls ? await readChromiumGpuInfo(page) : null;
     if (frameDriver) {
       expect(
         await page.evaluate(() =>
@@ -3631,6 +3674,11 @@ test(
     const cadencePath = testInfo.outputPath("animation-cadence.json");
     const cadence = {
       browser: testInfo.project.name,
+      launch: {
+        headless: testInfo.project.use.headless ?? null,
+        launchHeadless: testInfo.project.use.launchOptions?.headless ?? null,
+      },
+      browserGpuInfo,
       seconds,
       uiFps: (after.frames - before.frames) / seconds,
       documentFps: (after.documents - before.documents) / seconds,
