@@ -45,6 +45,10 @@ done
 """,
         mnemonic = "DonnerMacosAppBundle",
         progress_message = "Bundling Donner.app",
+        # /usr/bin/codesign comes from the host macOS, not an action input, so its version is
+        # not in the action key. Runners on different macOS builds share one remote cache
+        # partition (the pinned Xcode), so the signed bundle must never come from that cache.
+        execution_requirements = {"no-remote-cache": "1"},
     )
 
     ctx.actions.write(

@@ -11,6 +11,7 @@ exports_files(
     [
         "fuzzer_soak.sh",
         "check_banned_patterns.py",
+        "macos_app_bundle.bzl",
         "rules.bzl",
     ],
     visibility = ["//visibility:public"],
