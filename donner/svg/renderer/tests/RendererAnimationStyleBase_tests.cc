@@ -1,6 +1,8 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <tuple>
+
 #include "donner/editor/tests/BitmapGoldenCompare.h"
 #include "donner/svg/components/animation/AnimationResourceBudget.h"
 #include "donner/svg/components/filter/FilterPrimitiveComponent.h"
@@ -9,11 +11,169 @@
 #include "donner/svg/components/style/ComputedStyleComponent.h"
 #include "donner/svg/components/style/StyleComponent.h"
 #include "donner/svg/renderer/tests/RendererTestUtils.h"
+#include "donner/svg/renderer/tests/RgbaTestMatchers.h"
 #include "donner/svg/tests/ParserTestUtils.h"
 #include "donner/svg/text/TextEngine.h"
 
 namespace donner::svg {
 namespace {
+
+TEST(RendererAnimationStyleBase, PaintContextUsesSampledInstanceStyles) {
+  struct Case {
+    const char* name;
+    const char* animated;
+    const char* expected;
+  };
+  for (const Case item : {
+           Case{"same-frame-current-color",
+                "<rect width='16' height='16' color='black'>"
+                "<animate attributeName='fill' from='currentColor' to='blue' dur='2s'/>"
+                "<set attributeName='color' to='red'/></rect>",
+                "<rect width='16' height='16' fill='#800080'/>"},
+           Case{"stroke-sampled-current-color",
+                "<path d='M0 8H16' stroke-width='16' color='black'>"
+                "<animate attributeName='stroke' from='currentColor' to='blue' dur='2s'/>"
+                "<set attributeName='color' to='red'/></path>",
+                "<rect width='16' height='16' fill='#800080'/>"},
+           Case{"sampled-parent-declared-after-child",
+                "<g color='black'><rect width='16' height='16'>"
+                "<animate attributeName='fill' from='currentColor' to='blue' dur='2s'/>"
+                "</rect><set attributeName='color' to='red'/></g>",
+                "<rect width='16' height='16' fill='#800080'/>"},
+           Case{"important-current-color",
+                "<rect width='16' height='16' style='color:lime!important'>"
+                "<animate attributeName='fill' from='currentColor' to='blue' dur='2s'/>"
+                "<set attributeName='color' to='red'/></rect>",
+                "<rect width='16' height='16' fill='#008080'/>"},
+           Case{"important-fill",
+                "<rect width='16' height='16' style='fill:yellow!important'>"
+                "<animate attributeName='fill' from='currentColor' to='blue' dur='2s'/>"
+                "<set attributeName='color' to='red'/></rect>",
+                "<rect width='16' height='16' fill='yellow'/>"},
+           Case{"shadow-instance-colors",
+                "<defs><rect id='shape' width='8' height='16'>"
+                "<animate attributeName='fill' from='currentColor' to='black' dur='2s'/>"
+                "</rect></defs><use href='#shape' color='red'/>"
+                "<use href='#shape' x='8' color='blue'/>"
+                "<use href='#shape' x='16' color='red'/>",
+                "<rect width='8' height='16' fill='#800000'/>"
+                "<rect x='8' width='8' height='16' fill='#000080'/>"},
+           Case{"color-current-color-parent",
+                "<g color='red'><rect width='16' height='16' color='lime' fill='currentColor'>"
+                "<animate attributeName='color' from='currentColor' to='blue' dur='2s'/>"
+                "</rect></g>",
+                "<rect width='16' height='16' fill='#800080'/>"},
+           Case{"lower-inherited-paint",
+                "<g fill='red'><rect width='16' height='16' fill='lime'>"
+                "<set attributeName='fill' to='inherit'/>"
+                "<animate attributeName='fill' to='black' dur='2s'/></rect></g>",
+                "<rect width='16' height='16' fill='#800000'/>"},
+           Case{"lower-unset-paint",
+                "<g fill='red'><rect width='16' height='16' fill='lime'>"
+                "<set attributeName='fill' to='unset'/>"
+                "<animate attributeName='fill' to='black' dur='2s'/></rect></g>",
+                "<rect width='16' height='16' fill='#800000'/>"},
+           Case{"explicit-child-paint",
+                "<g><set attributeName='fill' to='red'/>"
+                "<set attributeName='stroke' to='red'/><set attributeName='color' to='red'/>"
+                "<rect width='8' height='8' fill='blue' stroke='none'/>"
+                "<path d='M8 4H16' stroke='blue' stroke-width='8'/>"
+                "<rect y='8' width='16' height='8' color='blue' fill='currentColor' "
+                "stroke='none'/></g>",
+                "<rect width='16' height='16' fill='blue'/>"},
+           Case{"sampled-interpolation-mode",
+                "<rect width='16' height='16' color-interpolation='sRGB'>"
+                "<animate attributeName='fill' from='black' to='white' dur='2s'/>"
+                "<set attributeName='color-interpolation' to='linearRGB'/></rect>",
+                "<rect width='16' height='16' fill='#bcbcbc'/>"},
+           Case{"contextual-url-fallback",
+                "<rect width='16' height='16' color='black' fill='url(#missing) currentColor'>"
+                "<animate attributeName='fill' to='none' calcMode='discrete' dur='4s'/>"
+                "<set attributeName='color' to='red'/></rect>",
+                "<rect width='16' height='16' fill='red'/>"},
+       }) {
+    SCOPED_TRACE(item.name);
+    auto document =
+        instantiateSubtree(item.animated, parser::SVGParser::Options(), Vector2i(24, 16));
+    auto expected =
+        instantiateSubtree(item.expected, parser::SVGParser::Options(), Vector2i(24, 16));
+    const auto source = document.source();
+    document.setTime(1);
+    editor::tests::CompareBitmapToBitmap(RenderDocumentWithActiveBackend(document),
+                                         RenderDocumentWithActiveBackend(expected), item.name,
+                                         editor::tests::PixelmatchIdentityParams());
+    document.setTime(0.5);
+    std::ignore = RenderDocumentWithActiveBackend(document);
+    document.setTime(1);
+    editor::tests::CompareBitmapToBitmap(
+        RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(expected),
+        std::string(item.name) + "-resampled", editor::tests::PixelmatchIdentityParams());
+    EXPECT_EQ(document.source(), source);
+  }
+}
+
+TEST(RendererAnimationStyleBase, ResourceColorsUseSampledCurrentColor) {
+  struct Case {
+    const char* name;
+    const char* animated;
+    const char* expected;
+  };
+  for (const Case item : {
+           Case{"animated-stop-current-color",
+                "<defs><linearGradient id='g'><stop color='black'>"
+                "<animate attributeName='stop-color' from='currentColor' to='blue' dur='2s'/>"
+                "<set attributeName='color' to='red'/></stop></linearGradient></defs>"
+                "<rect width='16' height='16' fill='url(#g)'/>",
+                "<rect width='16' height='16' fill='#800080'/>"},
+           Case{"important-stop-color",
+                "<defs><linearGradient id='g'><stop style='stop-color:yellow!important'>"
+                "<animate attributeName='stop-color' from='currentColor' to='blue' dur='2s'/>"
+                "<set attributeName='color' to='red'/></stop></linearGradient></defs>"
+                "<rect width='16' height='16' fill='url(#g)'/>",
+                "<rect width='16' height='16' fill='yellow'/>"},
+           Case{"animated-flood-current-color",
+                "<defs><filter id='f'><feFlood color='black'>"
+                "<animate attributeName='flood-color' from='currentColor' to='blue' dur='2s'/>"
+                "<set attributeName='color' to='red'/></feFlood></filter></defs>"
+                "<rect width='16' height='16' filter='url(#f)'/>",
+                "<rect width='16' height='16' fill='#800080'/>"},
+       }) {
+    SCOPED_TRACE(item.name);
+    auto document =
+        instantiateSubtree(item.animated, parser::SVGParser::Options(), Vector2i(16, 16));
+    auto expected =
+        instantiateSubtree(item.expected, parser::SVGParser::Options(), Vector2i(16, 16));
+    document.setTime(1);
+    editor::tests::CompareBitmapToBitmap(RenderDocumentWithActiveBackend(document),
+                                         RenderDocumentWithActiveBackend(expected), item.name,
+                                         editor::tests::PixelmatchIdentityParams());
+  }
+}
+
+TEST(RendererAnimationStyleBase, AnimatedLightingColorMatchesStaticLighting) {
+  for (const std::string primitive : {"feDiffuseLighting", "feSpecularLighting"}) {
+    SCOPED_TRACE(primitive);
+    const std::string prefix =
+        "<defs><filter id='f' x='0' y='0' width='1' height='1'><" + primitive;
+    const std::string suffix = "<feDistantLight azimuth='0' elevation='90'/></" + primitive +
+                               "></filter></defs><rect width='16' height='16' filter='url(#f)'/>";
+    auto document = instantiateSubtree(
+        prefix +
+            " lighting-color='black'>"
+            "<animate attributeName='lighting-color' from='red' to='blue' dur='2s'/>" +
+            suffix,
+        parser::SVGParser::Options(), Vector2i(16, 16));
+    auto expected = instantiateSubtree(prefix + " lighting-color='#800080'>" + suffix,
+                                       parser::SVGParser::Options(), Vector2i(16, 16));
+    const auto expectedBitmap = RenderDocumentWithActiveBackend(expected);
+    EXPECT_THAT(test::PixelAt(expectedBitmap, 8, 8),
+                test::Rgba(testing::Gt(0), 0, testing::Gt(0), testing::Gt(0)));
+    document.setTime(1);
+    editor::tests::CompareBitmapToBitmap(RenderDocumentWithActiveBackend(document), expectedBitmap,
+                                         "animated-" + primitive + "-color",
+                                         editor::tests::PixelmatchIdentityParams());
+  }
+}
 
 TEST(RendererAnimationStyleBase, ScalarPercentagesIgnoreViewportSize) {
   struct Case {
