@@ -6,6 +6,7 @@ import unittest
 
 from python.runfiles import runfiles
 
+from tools import test_timing
 from tools.ci_remote_gpu_targets import REMOTE_TARGETS, select_remote_targets
 
 
@@ -18,7 +19,7 @@ class CiRemoteGpuTargetsTest(unittest.TestCase):
             check=False,
             capture_output=True,
             text=True,
-            timeout=10,
+            timeout=test_timing.STALL_GUARD_SECONDS,
         )
 
     def test_mapping_is_limited_to_measured_sharded_suites(self):
