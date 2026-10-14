@@ -341,5 +341,43 @@ class ValidatedEntryTest(unittest.TestCase):
                     self.verify()
 
 
+class RegistryVersionOrderTest(unittest.TestCase):
+    """BCR presubmit requires `metadata.json` to list versions in ascending Bazel order."""
+
+    TEMPLATE = {"homepage": "https://github.com/jwmcglynn/donner",
+                "maintainers": [{"github": "jwmcglynn"}],
+                "repository": ["github:jwmcglynn/donner"],
+                "versions": [], "yanked_versions": {}}
+
+    def test_derived_metadata_inserts_the_version_in_order(self):
+        upstream = {**self.TEMPLATE, "versions": ["0.8.0", "0.9.0", "0.10.0"]}
+        for version, expected in (
+                ("0.8.1", ["0.8.0", "0.8.1", "0.9.0", "0.10.0"]),
+                ("0.9.1", ["0.8.0", "0.9.0", "0.9.1", "0.10.0"]),
+                ("0.11.0", ["0.8.0", "0.9.0", "0.10.0", "0.11.0"])):
+            with self.subTest(version=version):
+                derived = json.loads(source.derive_metadata(upstream, self.TEMPLATE, version))
+                self.assertEqual(derived["versions"], expected)
+
+    def test_key_follows_bazel_version_comparison(self):
+        ordered = ["0.8.0", "0.8.1", "0.9.0", "0.10.0", "1.0.0-rc.2", "1.0.0-rc.10", "1.0.0-rc1",
+                   "1.0.0", "1.0.0.1", "1.0.0.bcr.1", "1.0.1", "v1.0.0"]
+        self.assertEqual(sorted(reversed(ordered), key=source.registry_version_key), ordered)
+        self.assertEqual(source.registry_version_key("1.0.0+build.5"),
+                         source.registry_version_key("1.0.0"))
+        # BCR's `^...$` match admits a trailing newline; the key fails closed on it.
+        for version in ("", "1..0", ".1", "1.0.0-", "1.0.0-rc..1", "1.0 0", "1.0.0\n"):
+            with self.subTest(version=version), \
+                    self.assertRaisesRegex(ValueError, "invalid version list"):
+                source.registry_version_key(version)
+
+    def test_out_of_order_registry_list_is_refused_not_reordered(self):
+        upstream = {**self.TEMPLATE, "versions": ["0.9.0", "0.8.0"]}
+        with self.assertRaisesRegex(ValueError, "out of order"):
+            source.derive_metadata(upstream, self.TEMPLATE, "0.8.1")
+        with self.assertRaisesRegex(ValueError, "out of order"):
+            source.add_registry_version(["0.10.0", "0.9.0"], "0.11.0")
+
+
 if __name__ == "__main__":
     unittest.main()
