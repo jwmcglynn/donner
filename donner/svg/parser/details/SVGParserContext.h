@@ -87,6 +87,28 @@ public:
    */
   void addWarning(ParseDiagnostic&& warning) { warningSink_.add(std::move(warning)); }
 
+  /// Whether the document parser collects diagnostics.
+  bool warningsEnabled() const { return warningSink_.isEnabled(); }
+
+  /**
+   * Forward recovered parser diagnostics directly, preserving bounded sink refusal flags.
+   *
+   * @param warnings Diagnostics whose semantic failure has already been recovered.
+   */
+  void addRecoverableWarnings(ParseWarningSink&& warnings) {
+    warningSink_.merge(std::move(warnings));
+  }
+
+  /**
+   * Annotate a known document source range when original input is available.
+   *
+   * @param range Range already mapped to document source bytes.
+   * @return Range with document line information, or unchanged for source-less documents.
+   */
+  SourceRange documentSourceRange(SourceRange range) const {
+    return input_.empty() ? range : addLineInfo(range);
+  }
+
   /**
    * Add a warning from a subparser to the list of warnings, remapping the error back to the
    * original input string.

@@ -87,6 +87,20 @@ public:
   /// Aggregate bytes retained for warning messages.
   std::size_t warningBytes() const { return warningBytes_; }
 
+  /**
+   * Remap stored source ranges without changing warning text, severity, or admission accounting.
+   *
+   * @param mapper Callable taking a source range and returning its replacement range.
+   */
+  template <typename Mapper>
+    requires std::invocable<Mapper&, const SourceRange&> &&
+             std::same_as<std::invoke_result_t<Mapper&, const SourceRange&>, SourceRange>
+  void mapSourceRanges(Mapper&& mapper) {
+    for (ParseDiagnostic& warning : warnings_) {
+      warning.range = mapper(warning.range);
+    }
+  }
+
   /// Merge all warnings from another sink into this one.
   void merge(ParseWarningSink&& other) {
     if (enabled_) {

@@ -666,6 +666,7 @@ std::optional<ParseDiagnostic> ProjectStyleContents(EntityHandle handle, const x
       sourceMap.addSegment(0, combined.size(), valueLocation->start);
     }
   }
+  sourceMap.setCssLength(combined.size());
 
   components::StylesheetComponent projected;
   projected.type = stylesheet->type;

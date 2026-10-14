@@ -1163,13 +1163,14 @@ INSTANTIATE_TEST_SUITE_P(
 
 INSTANTIATE_TEST_SUITE_P(
     StructureStyle, ImageComparisonTestFixture,
-    Combine(ValuesIn(getTestsInCategory("structure/style",
-                                        {
-                                            {"external-CSS.svg",
-                                             Params::Skip("Not impl: CSS @import")},
-                                            {"non-presentational-attribute.svg",
-                                             Params::Skip("Not impl: <svg version=\"1.1\">")},
-                                        })),
+    Combine(ValuesIn(getTestsInCategory(
+                "structure/style",
+                {
+                    {"external-CSS.svg",
+                     Params::Skip("Not impl: CSS @import loading (diagnosed and ignored)")},
+                    {"non-presentational-attribute.svg",
+                     Params::Skip("Not impl: <svg version=\"1.1\">")},
+                })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
 
