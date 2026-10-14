@@ -22,6 +22,7 @@ import textwrap
 import unittest
 
 from python.runfiles import runfiles
+from tools import test_timing
 
 
 HOSTED = "macos"
@@ -442,7 +443,8 @@ class MacosCacheKeyParityTest(unittest.TestCase):
                      "GITHUB_OUTPUT": str(output_file), "RUNNER_ARCH": "ARM64",
                      "BAZEL_MACOS_BUILD_FLAGS": "--config=ci-macos",
                      "XCODE_APPLICATIONS_DIR": str(root), "XCODEBUILD": str(xcodebuild)},
-                capture_output=True, text=True, timeout=60, check=False)
+                capture_output=True, text=True, timeout=test_timing.STALL_GUARD_SECONDS,
+                check=False)
             return (result.returncode, env_file.read_text(), output_file.read_text(),
                     result.stdout + result.stderr, version, build, root)
 
@@ -475,7 +477,8 @@ class MacosCacheKeyParityTest(unittest.TestCase):
 
     def test_select_script_rejects_an_unknown_mode(self):
         result = subprocess.run(["/bin/bash", str(_path(SELECT_SCRIPT))], capture_output=True,
-                                text=True, timeout=60, check=False)
+                                text=True, timeout=test_timing.STALL_GUARD_SECONDS,
+                                check=False)
         self.assertEqual(2, result.returncode)
 
 
