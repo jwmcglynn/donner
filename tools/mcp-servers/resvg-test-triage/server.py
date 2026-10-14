@@ -301,9 +301,12 @@ async def list_tools() -> list[Tool]:
                         "description": "Complete SVG source code"
                     },
                     "pixel_diff": {
-                        "type": "integer",
+                        "type": ["integer", "null"],
                         "minimum": 0,
-                        "description": "Mismatch count from the comparator, never display-diff RGB"
+                        "description": (
+                            "Mismatch count from the comparator, never display-diff RGB; "
+                            "omit or use null when comparison did not produce a count"
+                        )
                     },
                     "actual_image_path": {
                         "type": "string",
@@ -322,7 +325,7 @@ async def list_tools() -> list[Tool]:
                         "description": "Path to diff image PNG (visual comparison)"
                     }
                 },
-                "required": ["test_name", "svg_content", "pixel_diff"]
+                "required": ["test_name", "svg_content"]
             }
         ),
         Tool(
@@ -542,7 +545,7 @@ def _handle_detect_svg_features(arguments: dict[str, Any]):
 def _handle_analyze_test_failure(arguments: dict[str, Any]):
     test_name = arguments["test_name"]
     svg_content = arguments["svg_content"]
-    pixel_diff = comparator_count(arguments["pixel_diff"])
+    pixel_diff = comparator_count(arguments.get("pixel_diff"))
 
     # Optional image paths
     actual_path = arguments.get("actual_image_path")
@@ -561,7 +564,7 @@ def _handle_analyze_test_failure(arguments: dict[str, Any]):
     result = {
         "test_name": test_name,
         "pixel_diff": pixel_diff,
-        "metric_source": "caller_supplied_comparator",
+        "metric_source": "caller_supplied_comparator" if pixel_diff is not None else None,
         "hypotheses": [],
         "features": [
             {
