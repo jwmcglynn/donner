@@ -31,6 +31,7 @@ donner_cc_library(
         "AnimationSystem.cc",
         "AnimationTimeline.cc",
         "AnimationValueMath.cc",
+        "AnimationValueSampler.cc",
     ],
     hdrs = [
         "AnimationBaseValue.h",
@@ -39,6 +40,7 @@ donner_cc_library(
         "AnimationSystem.h",
         "AnimationTimeline.h",
         "AnimationValueMath.h",
+        "AnimationValueSampler.h",
     ],
     visibility = [
         "//donner/svg:__subpackages__",
