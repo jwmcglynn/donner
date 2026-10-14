@@ -90,11 +90,11 @@ public:
     const CaseResult result = RunCase(test_, renderer_, artifactRoot_, options_);
     ++completedInvocations;
     completedCases.insert(test_.id);
-    EXPECT_TRUE(result.passed) << test_.svgPath << ": " << result.error << "; mismatched pixels: "
-                               << (result.mismatchedPixels
-                                       ? std::to_string(*result.mismatchedPixels)
-                                       : "unavailable")
-                               << "; artifacts: " << result.artifactDirectory;
+    EXPECT_TRUE(result.passed)
+        << EscapeLogText(test_.svgPath.string()) << ": " << EscapeLogText(result.error)
+        << "; mismatched pixels: "
+        << (result.mismatchedPixels ? std::to_string(*result.mismatchedPixels) : "unavailable")
+        << "; artifacts: " << EscapeLogText(result.artifactDirectory.string());
   }
 
 private:
@@ -105,6 +105,21 @@ private:
 };
 }  // namespace
 
+std::string EscapeLogText(std::string_view text) {
+  constexpr char kHex[] = "0123456789abcdef";
+  std::string result;
+  for (const unsigned char value : text) {
+    if (value >= 32 && value < 127 && value != '\\') {
+      result += static_cast<char>(value);
+    } else {
+      result += "\\x";
+      result += kHex[value >> 4];
+      result += kHex[value & 15];
+    }
+  }
+  return result;
+}
+
 std::string RegisterTests(const DiscoveryResult& discovery, Renderer renderer,
                           const std::filesystem::path& artifactRoot,
                           const ComparisonOptions& options) {
@@ -114,14 +129,21 @@ std::string RegisterTests(const DiscoveryResult& discovery, Renderer renderer,
   if (discovery.cases.empty() || !renderer) {
     return "cannot register empty corpus or missing renderer";
   }
+  for (const auto& test : discovery.cases) {
+    if (test.id.empty() || test.id.find_first_not_of(
+                               "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_") !=
+                               std::string::npos) {
+      return "cannot register invalid case identity";
+    }
+  }
   static const bool listenerInstalled = [] {
     testing::UnitTest::GetInstance()->listeners().Append(new IterationListener);
     return true;
   }();
   (void)listenerInstalled;
   for (const StaticCase& test : discovery.cases) {
-    testing::RegisterTest("SvgSuite", test.id.c_str(), nullptr, test.svgPath.string().c_str(),
-                          __FILE__, __LINE__,
+    testing::RegisterTest("SvgSuite", test.id.c_str(), nullptr,
+                          EscapeLogText(test.svgPath.string()).c_str(), __FILE__, __LINE__,
                           [test, renderer, artifactRoot, options]() -> StaticImageTest* {
                             return new StaticImageTest(test, renderer, artifactRoot, options);
                           });
@@ -139,7 +161,7 @@ int RunSelectedTests(RunExecutionSummary* execution) {
   const auto reportPath = XmlReportPath(summary.gtestOutput);
   summary.xmlReportError = CheckFreshXmlDestination(reportPath);
   if (!summary.xmlReportError.empty()) {
-    std::cerr << summary.xmlReportError << '\n';
+    std::cerr << EscapeLogText(summary.xmlReportError) << '\n';
     RecordCorpusCounts(summary);
     if (execution != nullptr) {
       *execution = std::move(summary);

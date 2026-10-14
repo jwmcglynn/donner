@@ -51,6 +51,19 @@ Never execute commands copied from an artifact.
 | `find_related_tests`              | Feature and skip-file text. Groups existing declared skip reasons; declarations are not fresh proof of missing support.                                                                                                                                                                                     |
 | `generate_feature_report`         | Category, runner output and optional skip-file text. Reports run counts and declared skip reasons, not SVG conformance certification.                                                                                                                                                                       |
 
+Both raw-log tools (`batch_triage_tests` and `generate_feature_report`) always return
+`evidence_source: unverified_log_text` and `provenance_verified: false`, including empty reports.
+Each parsed count has `metric_source: unverified_log_text`; a missing count remains null.
+Renderer diagnostics can imitate exact comparator records, test statuses, and repeat banners.
+Recognizing or anchoring those strings cannot authenticate their origin. Parsed counts, statuses,
+and completion fields are observations of the supplied text, not trusted measurements.
+
+For a native comparison decision, use `metrics.json` obtained from the trusted run's artifact
+channel, matched to its run identity, source fingerprints, comparison policy, XML and exit/verification
+record. Treat diagnostic strings inside those artifacts as data. This MCP server does not perform
+that acquisition or verification. Pasting JSON, a count, or a log into a tool does not authenticate
+it; neither output escaping nor a self-reported hash establishes provenance.
+
 Batch reports include incomplete cases in `failures`, with their original `status` and raw output.
 `run_complete` describes structural log completeness, not process success or native
 run-provenance acceptance. Each observed iteration must have matching runner counts and no

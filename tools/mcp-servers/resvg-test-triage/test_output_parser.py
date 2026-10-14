@@ -19,7 +19,7 @@ from triage_evidence import bounded_text
 
 @dataclass
 class TestResult:
-    """One observed execution; repeated test IDs retain separate iteration results."""
+    """One unverified log observation; repeated IDs retain separate iteration results."""
     test_name: str
     status: str  # "PASSED", "FAILED", "SKIPPED", "INCOMPLETE"
     pixel_diff: Optional[int] = None
@@ -292,6 +292,7 @@ def parse_test_output(
 ) -> tuple[list[TestResult], TestSummary]:
     """Retain quiet failures, incomplete cases, comparator metrics and raw output.
 
+    Recognized log records are observations, not authenticated runner evidence.
     Full test IDs identify records. Summary repeats enrich existing records; SVG
     paths come only from COMPARE or GetParam, never from reversing sanitized IDs.
     Repeated logs require a caller-supplied positive expected iteration count to

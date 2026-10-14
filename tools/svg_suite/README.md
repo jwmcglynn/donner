@@ -106,6 +106,12 @@ directory-form output and the empty `xml:` suffix cannot certify a run. Choose a
 incomplete reports produce rejected verification evidence with `xml_report_error` and a nonzero exit.
 The check recognizes the complete GoogleTest XML envelope and fingerprints the same bytes; it trusts
 GoogleTest as the producer and is not a general XML validator or an adversarial filesystem sandbox.
+Untrusted diagnostics and path fields are escaped to printable ASCII in runner output, including
+GoogleTest parameter descriptions. Raw diagnostics remain in case/process artifacts. Escaping
+prevents embedded control bytes from creating log records; it is not redaction or authentication.
+The optional raw-log triage tools explicitly report unverified provenance. Use the trusted run's
+structured metrics and verification artifacts for comparison decisions.
+
 GoogleTest XML describes its final iteration; execution counts include all repeats.
 Repeated runs keep each case's images and metrics beneath `iteration-N/case` and its renderer
 output beneath `iteration-N/process`, with the same one-based `iteration` in both JSON records.

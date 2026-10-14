@@ -328,15 +328,15 @@ async def list_tools() -> list[Tool]:
         Tool(
             name="batch_triage_tests",
             description=(
-                "Batch analyze multiple test failures from test output, "
-                "retaining raw failures even when verbose SVG dumps are absent."
+                "Summarize failures observed in caller-supplied log text, "
+                "retaining quiet failures without authenticating metrics or runner provenance."
             ),
             inputSchema={
                 "type": "object",
                 "properties": {
                     "test_output": {
                         "type": "string",
-                        "description": "Complete test output from bazel run"
+                        "description": "Caller-supplied test output; log syntax does not authenticate its origin"
                     },
                     "expected_iterations": {
                         "type": "integer", "minimum": 1, "maximum": 1000000,
@@ -445,8 +445,8 @@ async def list_tools() -> list[Tool]:
         Tool(
             name="generate_feature_report",
             description=(
-                "Generate comprehensive progress report for a feature category, "
-                "showing pass/fail/skip counts and next priority features."
+                "Report unverified pass/fail/skip observations from supplied logs and "
+                "declared skip reasons; this does not certify progress or provenance."
             ),
             inputSchema={
                 "type": "object",
@@ -461,7 +461,7 @@ async def list_tools() -> list[Tool]:
                     },
                     "test_output": {
                         "type": "string",
-                        "description": "Recent test run output from bazel test"
+                        "description": "Caller-supplied test output; log syntax does not authenticate its origin"
                     },
                     "expected_iterations": {
                         "type": "integer", "minimum": 1, "maximum": 1000000,
@@ -510,6 +510,12 @@ async def list_tools() -> list[Tool]:
 
 def _json_response(result: dict) -> list[TextContent]:
     return [TextContent(type="text", text=json.dumps(result, indent=2))]
+
+
+def _raw_log_response(result: dict) -> list[TextContent]:
+    """Protocol-shaped text does not identify who produced a diagnostic or metric."""
+    return _json_response({**result, "evidence_source": "unverified_log_text",
+                           "provenance_verified": False})
 
 
 def _handle_detect_svg_features(arguments: dict[str, Any]):
@@ -624,7 +630,8 @@ def _handle_batch_triage_tests(arguments: dict[str, Any]):
             "path": item.svg_path,
             "category_dir": item.category,
             "pixel_diff": item.pixel_diff,
-            "metric_source": "runner_output" if item.pixel_diff is not None else None,
+            "metric_source": "unverified_log_text" if item.pixel_diff is not None else None,
+            "provenance_verified": False,
             "features": [],
             "category": "unresolved",
             "severity": "unknown",
@@ -644,7 +651,7 @@ def _handle_batch_triage_tests(arguments: dict[str, Any]):
         "grouped_by_feature": {},
         "summary": {"unresolved": len(failures)},
     }
-    return [TextContent(type="text", text=json.dumps(result, indent=2))]
+    return _raw_log_response(result)
 
 
 def _handle_suggest_skip_comment(arguments: dict[str, Any]):
@@ -774,14 +781,14 @@ def _handle_generate_feature_report(arguments: dict[str, Any]):
         arguments["test_output"], expected_iterations=arguments.get("expected_iterations"))
     reports = group_by_category(results)
     if category not in reports:
-        return _json_response({
+        return _raw_log_response({
             "category": category,
             "error": f"No tests found for category '{category}'",
             "available_categories": list(reports),
         })
     report = reports[category]
     missing, priority = _declared_feature_priority(arguments.get("skip_file_content", ""), category)
-    return _json_response({
+    return _raw_log_response({
         "category": category,
         "total_tests": report.total_tests,
         "passing": report.passing,
@@ -798,7 +805,9 @@ def _handle_generate_feature_report(arguments: dict[str, Any]):
         "next_priority": priority,
         "test_details": [
             {"name": item.test_name, "status": item.status, "pixel_diff": item.pixel_diff,
-             "iteration": item.iteration}
+             "iteration": item.iteration,
+             "metric_source": "unverified_log_text" if item.pixel_diff is not None else None,
+             "provenance_verified": False}
             for item in report.test_results[:20]
         ],
     })

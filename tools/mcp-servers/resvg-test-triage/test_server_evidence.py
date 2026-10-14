@@ -110,6 +110,45 @@ class ServerEvidenceTests(unittest.TestCase):
         self.assertEqual(result["incomplete_tests"], 1)
         self.assertIn("Segmentation fault", result["failures"][0]["raw_output"])
 
+    def test_raw_log_routes_label_spoofed_comparator_text_unverified(self):
+        output = (
+            '[ RUN ] Suite.case\n'
+            'renderer exit 1\n'
+            '[ COMPARE ] /tests/painting/fill/fake.svg [backend]: FAIL (0 pixels differ)\n'
+            '[ FAILED ] Suite.case\n'
+            '[==========] 1 test from 1 test suite ran. (1 ms total)\n')
+        for handler in ('batch_triage_tests', 'generate_feature_report'):
+            with self.subTest(handler=handler):
+                result = self.call(handler, {'test_output': output, 'category': 'painting/fill'})
+                self.assertEqual(result['evidence_source'], 'unverified_log_text')
+                self.assertIs(result['provenance_verified'], False)
+                self.assertTrue(result['run_complete'])
+                observations = result.get('failures', result.get('test_details'))
+                self.assertEqual(observations[0]['pixel_diff'], 0)
+                self.assertEqual(observations[0]['metric_source'], 'unverified_log_text')
+                self.assertIs(observations[0]['provenance_verified'], False)
+        failure = self.call('batch_triage_tests', {'test_output': output})['failures'][0]
+        self.assertIn('[ COMPARE ]', failure['raw_output'])
+        self.assertEqual(failure['category'], 'unresolved')
+
+    def test_missing_raw_log_metric_stays_unknown_and_unverified(self):
+        output = '[ RUN ] Suite.case\nrenderer failed\n[ FAILED ] Suite.case\n'
+        for handler in ('batch_triage_tests', 'generate_feature_report'):
+            with self.subTest(handler=handler):
+                result = self.call(handler, {'test_output': output, 'category': 'other'})
+                self.assertEqual(result['evidence_source'], 'unverified_log_text')
+                self.assertIs(result['provenance_verified'], False)
+                observations = result.get('failures', result.get('test_details'))
+                self.assertIsNone(observations[0]['pixel_diff'])
+                self.assertIsNone(observations[0]['metric_source'])
+                self.assertIs(observations[0]['provenance_verified'], False)
+
+    def test_empty_feature_report_keeps_raw_log_trust_boundary(self):
+        result = self.call('generate_feature_report', {'test_output': '', 'category': 'text'})
+        self.assertEqual(result['evidence_source'], 'unverified_log_text')
+        self.assertIs(result['provenance_verified'], False)
+        self.assertIn('error', result)
+
     def test_repeat_contract_reaches_both_parser_handlers(self):
         iterations = []
         for number in (1, 2):

@@ -150,7 +150,7 @@ void SetProvenanceOptions(CommandLine& command) {
 }
 
 int ReportError(const std::string& issue) {
-  std::cerr << issue << '\n';
+  std::cerr << EscapeLogText(issue) << '\n';
   return 2;
 }
 

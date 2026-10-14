@@ -34,23 +34,62 @@ public:
   }
 };
 
+bool CreateFixtureCorpus(const std::filesystem::path& root, const Image& image) {
+  std::filesystem::create_directories(root / "corpus");
+  for (const char* name : {"first", "second"}) {
+    std::ofstream(root / "corpus" / (std::string(name) + ".svg")) << "<svg/>";
+    if (!WritePng(root / "corpus" / (std::string(name) + ".png"), {1, 1, 1, image.data}).empty()) {
+      return false;
+    }
+  }
+  return true;
+}
+
+ProvenanceOptions FixtureOptions(const std::filesystem::path& renderer,
+                                 const std::filesystem::path& root, std::string_view mode) {
+  ProvenanceOptions options;
+  options.corpora = {{"fixture", root / "corpus"}};
+  options.renderer = renderer;
+  options.workRoot = root / "work";
+  if (mode == "--fixture-process" || mode == "--fixture-spoof-diagnostics") {
+    options.rendererArguments = {
+        mode == "--fixture-spoof-diagnostics" ? "--fixture-spoof-log" : "--fixture-render-png",
+        "{output}"};
+    options.trustedInputs = true;
+  }
+  return options;
+}
+
+Renderer FixtureRenderer(const ProvenanceOptions& options, const Image& image,
+                         std::string_view mode) {
+  if (!options.rendererArguments.empty()) {
+    return MakeProcessRenderer({.executable = options.renderer,
+                                .workRoot = options.workRoot,
+                                .arguments = options.rendererArguments,
+                                .trustedInputs = true});
+  }
+  return [image, mode, calls = std::make_shared<int>(0)](const StaticCase& test, int,
+                                                         int) -> ImageResult {
+    if (mode == "--fixture-fail-first" && test.svgPath.stem() == "first") {
+      return {{}, "intentional fixture failure"};
+    }
+    if (mode == "--fixture-fail-first-iteration" && ++*calls == 1) {
+      return {Image{1, 1, 1, {0, 0, 255, 255}}, {}};
+    }
+    return {image, {}};
+  };
+}
+
 int RunFixture(int argc, char** argv) {
   const std::filesystem::path renderer = std::filesystem::absolute(argv[0]);
   const std::filesystem::path root(argv[2]);
   const std::string_view fixtureMode = argc > 3 ? argv[3] : "";
-  const bool failFirst = fixtureMode == "--fixture-fail-first";
-  const bool processFixture =
-      fixtureMode == "--fixture-process" || fixtureMode == "--fixture-spoof-diagnostics";
   if (fixtureMode == "--fixture-empty-xml") {
     std::ofstream("test_detail.xml") << "stale-report-sentinel";
   }
-  std::filesystem::create_directories(root / "corpus");
   const Image image{1, 1, 1, {255, 0, 0, 255}};
-  for (const char* name : {"first", "second"}) {
-    std::ofstream(root / "corpus" / (std::string(name) + ".svg")) << "<svg/>";
-    if (!WritePng(root / "corpus" / (std::string(name) + ".png"), {1, 1, 1, image.data}).empty()) {
-      return 3;
-    }
+  if (!CreateFixtureCorpus(root, image)) {
+    return 3;
   }
   argc -= 2;
   argv += 2;
@@ -60,36 +99,13 @@ int RunFixture(int argc, char** argv) {
     testing::UnitTest::GetInstance()->listeners().Append(new SkipSecondCase);
   }
   auto discovery = DiscoverCases({{"fixture", root / "corpus"}});
-  ProvenanceOptions options;
-  options.corpora = {{"fixture", root / "corpus"}};
-  options.renderer = renderer;
-  options.workRoot = root / "work";
-  if (processFixture) {
-    options.rendererArguments = {fixtureMode == "--fixture-spoof-diagnostics"
-                                     ? "--fixture-spoof-log"
-                                     : "--fixture-render-png",
-                                 "{output}"};
-    options.trustedInputs = true;
-  }
+  const auto options = FixtureOptions(renderer, root, fixtureMode);
   const auto provenance = CreateRunProvenance(options, root / "artifacts");
   if (!provenance.run) {
     return 3;
   }
-  Renderer callback = [image, failFirst, fixtureMode, calls = std::make_shared<int>(0)](
-                          const StaticCase& test, int, int) -> ImageResult {
-    if (failFirst && test.svgPath.stem() == "first") {
-      return {{}, "intentional fixture failure"};
-    }
-    if (fixtureMode == "--fixture-fail-first-iteration" && ++*calls == 1) {
-      return {Image{1, 1, 1, {0, 0, 255, 255}}, {}};
-    }
-    return {image, {}};
-  };
-  if (processFixture) {
-    callback = MakeProcessRenderer({.executable = renderer,
-                                    .workRoot = root / "work",
-                                    .arguments = options.rendererArguments,
-                                    .trustedInputs = true});
+  Renderer callback = FixtureRenderer(options, image, fixtureMode);
+  if (!options.rendererArguments.empty()) {
     for (auto& test : discovery.cases) {
       test.provenance = provenance.run;
     }
@@ -191,6 +207,26 @@ protected:
 
   std::filesystem::path root_;
 };
+
+TEST(GtestLogTextTest, EscapesEveryNonPrintableByteAndBackslash) {
+  std::string bytes;
+  for (int value = 0; value < 256; ++value) {
+    bytes += static_cast<char>(value);
+  }
+  const auto escaped = EscapeLogText(bytes);
+  EXPECT_TRUE(std::all_of(escaped.begin(), escaped.end(),
+                          [](unsigned char value) { return value >= 32 && value < 127; }));
+  EXPECT_EQ(EscapeLogText("line\nnext\r\t\x1b\\"), "line\\x0anext\\x0d\\x09\\x1b\\x5c");
+  EXPECT_EQ(EscapeLogText("\xe2\x80\xa8\xff"), "\\xe2\\x80\\xa8\\xff");
+}
+
+TEST(GtestLogTextTest, RejectsUntrustedRegisteredNamesBeforeExecution) {
+  StaticCase test;
+  test.id = "case\n[ RUN      ] Forged.Case";
+  const auto error = RegisterTests(
+      {{test}, {}}, [](const StaticCase&, int, int) { return ImageResult{}; }, "unused-artifacts");
+  EXPECT_THAT(error, testing::HasSubstr("invalid case identity"));
+}
 
 TEST_F(GtestSuiteTest, RendererDiagnosticsCannotImpersonateComparisonLines) {
   EXPECT_EQ(run({"--fixture-spoof-diagnostics", "--gtest_filter=SvgSuite.*_66697273742e737667"}),

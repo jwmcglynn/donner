@@ -2,10 +2,17 @@
 /// @file
 /// GoogleTest registration for the renderer-independent static suite.
 
+#include <string_view>
+
 #include "tools/svg_suite/Provenance.h"
 #include "tools/svg_suite/StaticSuite.h"
 
 namespace donner::svg_suite {
+
+/// Escape untrusted text as one printable ASCII log field; raw evidence is retained separately.
+/// @param text Diagnostic or path bytes, including possibly invalid UTF-8.
+/// @return Text with control/non-ASCII bytes and backslashes escaped. This is not redaction.
+std::string EscapeLogText(std::string_view text);
 
 /// Register a discovered corpus before RUN_ALL_TESTS. Each case has its own GoogleTest outcome.
 /// @param discovery Successful complete discovery result.
