@@ -73,8 +73,10 @@ URI and filter-input/result names are discrete and non-additive, even when their
 Opacity and gradient-stop percentages represent fractions of one. Numeric-only filter operands
 reject length units before interpolation, including paced and additive sampling. Stop and flood
 opacity read typed/style bases and apply sampled values below important and typed overrides.
-A lower numeric `initial` layer supplies the resolved default to a subsequent to-only animation;
-resolving a lower `inherit` layer against an animated parent remains a limitation.
+The opacity and miter-limit stacks resolve `inherit`, `initial` and `unset` in each instance's final
+parent cascade. Intermediate numeric layers remain unclamped; the final property parser applies
+its range and priority. Resource opacity values and winning priorities are cached with the computed
+style, and typed/source edits invalidate their dependent computed queries.
 These cases are covered by `//donner/svg/renderer/tests:renderer_animation_presentation_tests`.
 Number-optional-number filter values repeat a single coordinate; integer fields round the final
 interpolated value to the nearest integer. Underlying filter values come from typed components,
@@ -184,13 +186,14 @@ geometry measurement, lifecycle queries, hit geometry, and queued preview input.
   and 262144 dependency steps.
 - At most 4 MiB of generated values, 64 numeric values per sampled list, and 64 KiB per motion path.
 - A shared 262144-unit path parsing/measurement budget per evaluation.
-- A shared 4 Mi-unit contextual length preparation allowance across font-size stacks, text spans, marker references and prepared SVG filter images.
+- A shared 4 Mi-unit contextual length preparation allowance across scalar/font stacks, text spans, marker references and prepared SVG filter images.
   Raster filter recipes are charged to the existing filter execution budget, including repeat
   executions and CPU paint-coverage scans.
   Recipe parsing/interpolation and bounded path measurement are admitted before work; a refused
   consumer retains its base value. Owned recipe data is charged to the source/output envelopes.
-- Animated stop/flood opacity charges source and token work to the shared style budget before
-  parsing each instance; repeated-instance exhaustion is covered by
+- Scalar stacks reserve their full contextual work before copying or normalization. Authored
+  resource-opacity declarations charge the shared style budget before parsing; repeated-instance
+  exhaustion and base-value retention are covered by
   `//donner/svg/components/style:style_system_tests`.
 - Lifecycle queries exceeding 4096 events return an incomplete empty result.
 - Decoded animation-image caches admit at most 4096 lifetime URI keys and 1 MiB of URI metadata

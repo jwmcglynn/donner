@@ -1,6 +1,7 @@
 #include "donner/svg/components/animation/AnimationValueMath.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <sstream>
 #include <vector>
@@ -11,6 +12,13 @@
 #include "donner/svg/components/animation/AnimationResourceBudget.h"
 
 namespace donner::svg::components {
+
+bool IsContextualScalarAttribute(std::string_view attribute) {
+  static constexpr std::array<std::string_view, 6> names = {"opacity",        "fill-opacity",
+                                                            "stroke-opacity", "stop-opacity",
+                                                            "flood-opacity",  "stroke-miterlimit"};
+  return std::find(names.begin(), names.end(), attribute) != names.end();
+}
 
 std::optional<std::vector<Lengthd>> ParseAnimationLengths(std::string_view input) {
   donner::parser::LengthParser::Options options;
@@ -47,12 +55,6 @@ bool ValidAnimationNumericOperand(std::string_view input, const AnimationValueCo
     return true;
   }
   input = StringUtils::TrimWhitespace(input);
-  if (context.numericCssKeywords &&
-      (StringUtils::EqualsLowercase(input, std::string_view("inherit")) ||
-       StringUtils::EqualsLowercase(input, std::string_view("initial")) ||
-       StringUtils::EqualsLowercase(input, std::string_view("unset")))) {
-    return true;
-  }
   const auto values = ParseAnimationLengths(input);
   return values && values->size() <= context.maximumNumbers &&
          std::all_of(values->begin(), values->end(), [&](const Lengthd& value) {

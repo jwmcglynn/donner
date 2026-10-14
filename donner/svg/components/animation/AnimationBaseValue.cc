@@ -8,7 +8,6 @@
 #include <type_traits>
 #include <unordered_set>
 
-#include "donner/base/StringUtils.h"
 #include "donner/base/xml/components/AttributesComponent.h"
 #include "donner/base/xml/components/TreeComponent.h"
 #include "donner/svg/components/ElementTypeComponent.h"
@@ -646,64 +645,11 @@ std::optional<std::string> FilterNumberBaseValue(Registry& registry, Entity targ
   return result;
 }
 
-std::optional<std::string> ResourceScalarBaseValue(Registry& registry, Entity target,
-                                                   std::string_view attribute,
-                                                   const AnimationValueContext& context,
-                                                   AnimationResourceBudget& budget) {
-  const Property<double>* opacity = nullptr;
-  if (const auto* stop = registry.try_get<StopComponent>(target)) {
-    if (attribute == "offset") {
-      return SerializeValue(stop->properties.offset, context);
-    }
-    if (attribute == "stop-opacity") {
-      opacity = &stop->properties.stopOpacity;
-    }
-  }
-  if (attribute == "flood-opacity") {
-    if (const auto* flood = registry.try_get<FEFloodComponent>(target)) {
-      opacity = &flood->floodOpacity;
-    } else if (const auto* shadow = registry.try_get<FEDropShadowComponent>(target)) {
-      opacity = &shadow->floodOpacity;
-    }
-  }
-  if (!opacity) {
-    return std::nullopt;
-  }
-  Property<double> resolved = *opacity;
-  if (const auto* style = registry.try_get<ComputedStyleComponent>(target);
-      style && style->properties) {
-    const auto& properties = *style->properties;
-    const auto it = properties.unparsedProperties.find(RcString(attribute));
-    if (it != properties.unparsedProperties.end()) {
-      const auto bytes = properties.complexPropertyBytes();
-      if (bytes > AnimationResourceBudget::kMaximumSourceBytes / 6 ||
-          !budget.reserveSourceBytes(bytes * 6)) {
-        return std::string{};
-      }
-      const auto params =
-          parser::PropertyParseFnParams::Create(it->second.declaration, it->second.specificity,
-                                                parser::PropertyParseBehavior::AllowUserUnits);
-      (void)Parse(
-          params,
-          [](const parser::PropertyParseFnParams& input) {
-            return parser::ParseAlphaValue(input.components());
-          },
-          &resolved);
-    }
-  }
-  return SerializeValue(resolved.get().value_or(1), context);
-}
-
 void ConfigureNumericContext(Registry& registry, Entity target, std::string_view name,
                              AnimationValueContext& context) {
-  const bool opacity = name == "opacity" || name == "fill-opacity" || name == "stroke-opacity" ||
-                       name == "stop-opacity" || name == "flood-opacity";
-  context.percentageNumbers =
-      opacity || (name == "offset" && registry.all_of<StopComponent>(target));
-  context.numericCssKeywords = opacity || name == "stroke-miterlimit";
+  context.percentageNumbers = name == "offset" && registry.all_of<StopComponent>(target);
   const bool scalar =
-      context.percentageNumbers || name == "stroke-miterlimit" || name == "pathLength" ||
-      context.integerValue ||
+      context.percentageNumbers || name == "pathLength" || context.integerValue ||
       VisitAnimationNumberAttribute(registry, target, name, [](const auto&, auto) {});
   if (scalar || context.numberPair) {
     context.maximumNumbers = context.numberPair ? 2 : 1;
@@ -837,20 +783,14 @@ std::string UnderlyingAnimationValue(Registry& registry, Entity target, std::str
   if (const auto* animated = registry.try_get<AnimatedValuesComponent>(target)) {
     if (const auto it = animated->overrides.find(std::string(attribute));
         it != animated->overrides.end()) {
-      const auto value = StringUtils::TrimWhitespace(std::string_view(it->second));
-      const bool initial = StringUtils::EqualsLowercase(value, std::string_view("initial"));
-      const bool unset = StringUtils::EqualsLowercase(value, std::string_view("unset")) &&
-                         !PropertyRegistry::isPresentationAttributeInherited(attribute);
-      if (context.numericCssKeywords && (initial || unset)) {
-        const PropertyRegistry defaults;
-        return StyleValue(defaults, attribute, context, budget).value_or("1");
-      }
       return budget.reserveSourceBytes(it->second.size()) ? it->second : std::string{};
     }
   }
 
-  if (auto value = ResourceScalarBaseValue(registry, target, attribute, context, budget)) {
-    return *value;
+  if (attribute == "offset") {
+    if (const auto* stop = registry.try_get<StopComponent>(target)) {
+      return SerializeValue(stop->properties.offset, context).value();
+    }
   }
   if (auto value = GeometryBaseValue(registry, target, attribute, context, budget)) {
     return *value;
@@ -929,9 +869,6 @@ std::string UnderlyingAnimationValue(Registry& registry, Entity target, std::str
   }
   if (attribute == "stroke") {
     return "none";
-  }
-  if (attribute == "opacity" || attribute == "fill-opacity" || attribute == "stroke-opacity") {
-    return "1";
   }
   return "0";
 }

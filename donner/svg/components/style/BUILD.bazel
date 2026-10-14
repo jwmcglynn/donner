@@ -20,9 +20,11 @@ cc_library(
 donner_perf_sensitive_cc_library(
     name = "style_system",
     srcs = [
+        "ScalarAnimationStyle.cc",
         "StyleSystem.cc",
     ],
     hdrs = [
+        "ScalarAnimationStyle.h",
         "StyleSystem.h",
     ],
     visibility = [
@@ -38,6 +40,8 @@ donner_perf_sensitive_cc_library(
         "//donner/svg/components:components_core",
         "//donner/svg/components/animation:components",
         "//donner/svg/components/animation:value_sampler",
+        "//donner/svg/components/filter:components",
+        "//donner/svg/components/paint:components",
         "//donner/svg/components/resources:resource_manager_context",
         "//donner/svg/components/shadow:components",
     ],

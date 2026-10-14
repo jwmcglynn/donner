@@ -11,6 +11,11 @@
 
 namespace donner::svg::components {
 
+/// Whether a CSS scalar stack needs the final instance's parent cascade.
+/// @param attribute Presentation property name.
+/// @return True for the supported opacity and miter-limit scalar properties.
+bool IsContextualScalarAttribute(std::string_view attribute);
+
 /// Context required to resolve relative units and currentColor for an animated value.
 struct AnimationValueContext {
   Box2d viewBox{{0, 0}, {300, 150}};  ///< Current SVG viewport in user units.
@@ -18,11 +23,10 @@ struct AnimationValueContext {
   /// Zero accepts general values; otherwise only this many dimensionless operands are allowed.
   std::size_t maximumNumbers = 0;
   bool percentageNumbers =
-      false;  ///< Percentages represent fractions of one, not viewport lengths.
-  bool numericCssKeywords = false;  ///< CSS-wide keywords remain valid discrete property values.
-  bool numberPair = false;          ///< Repeat one coordinate for number-optional-number values.
-  bool integerValue = false;        ///< Round interpolated numeric values to the nearest integer.
-  bool linearRgb = false;           ///< Interpolate colors in linear-light RGB when requested.
+      false;                  ///< Percentages represent fractions of one, not viewport lengths.
+  bool numberPair = false;    ///< Repeat one coordinate for number-optional-number values.
+  bool integerValue = false;  ///< Round interpolated numeric values to the nearest integer.
+  bool linearRgb = false;     ///< Interpolate colors in linear-light RGB when requested.
   /// Map mixed-unit filter lengths to user-space pixels while keeping additive offsets origin-free.
   bool mappedLengths = false;
   bool lengthValuesAreOffsets = false;  ///< Sample operands are displacements, not positions.

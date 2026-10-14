@@ -300,6 +300,51 @@ TEST(RendererAnimationStyleBase, ScalarStackDoesNotClampIntermediateLayers) {
       "scalar-unclamped-stack", editor::tests::PixelmatchIdentityParams());
 }
 
+TEST(RendererAnimationStyleBase, InheritedScalarStacksRestoreAfterSeekingAndSourceRemoval) {
+  auto document = instantiateSubtree(
+      "<g fill-opacity='0.6'><rect width='16' height='16' fill-opacity='0.8'>"
+      "<set id='lower' attributeName='fill-opacity' to='inherit' dur='2s'/>"
+      "<animate id='upper' attributeName='fill-opacity' to='0' dur='2s'/></rect></g>",
+      parser::SVGParser::Options(), Vector2i(16, 16));
+  for (const double time : {1.0, 3.0, 1.0}) {
+    SCOPED_TRACE(time);
+    document.setTime(time);
+    auto expected = instantiateSubtree(std::string("<rect width='16' height='16' fill-opacity='") +
+                                           (time == 1 ? "0.3" : "0.8") + "'/>",
+                                       parser::SVGParser::Options(), Vector2i(16, 16));
+    editor::tests::CompareBitmapToBitmap(
+        RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(expected),
+        "scalar-inherit-seeking", editor::tests::PixelmatchIdentityParams());
+  }
+  for (const std::string id : {"#upper", "#lower"}) {
+    SCOPED_TRACE(id);
+    const auto animation = document.querySelector(id);
+    ASSERT_THAT(animation, testing::Optional(testing::_));
+    ASSERT_THAT(document.removeElement(*animation).applied, testing::IsTrue());
+    auto expected = instantiateSubtree(std::string("<rect width='16' height='16' fill-opacity='") +
+                                           (id == "#upper" ? "0.6" : "0.8") + "'/>",
+                                       parser::SVGParser::Options(), Vector2i(16, 16));
+    editor::tests::CompareBitmapToBitmap(
+        RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(expected),
+        "scalar-inherit-source-removal", editor::tests::PixelmatchIdentityParams());
+  }
+}
+
+TEST(RendererAnimationStyleBase, ScalarInheritanceUsesTheParentsFinalClampedValue) {
+  auto document = instantiateSubtree(
+      "<g id='parent' opacity='0.2'><rect id='r' width='16' height='16'/></g>"
+      "<set href='#r' attributeName='opacity' to='inherit' dur='2s'/>"
+      "<animate href='#r' attributeName='opacity' to='0' dur='2s'/>"
+      "<set href='#parent' attributeName='opacity' to='2' dur='2s'/>",
+      parser::SVGParser::Options(), Vector2i(16, 16));
+  auto expected = instantiateSubtree("<rect width='16' height='16' opacity='0.5'/>",
+                                     parser::SVGParser::Options(), Vector2i(16, 16));
+  document.setTime(1);
+  editor::tests::CompareBitmapToBitmap(
+      RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(expected),
+      "scalar-parent-final-clamp", editor::tests::PixelmatchIdentityParams());
+}
+
 #ifdef DONNER_TEXT_ENABLED
 TEST(RendererAnimationStyleBase, FontSizeUsesTheSampledParentFontContext) {
   for (const bool animatedParent : {false, true}) {

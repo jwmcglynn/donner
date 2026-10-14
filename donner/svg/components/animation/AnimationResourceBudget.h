@@ -25,7 +25,7 @@ public:
   /// Aggregate contextual-length evaluation and measurement work during render preparation.
   static constexpr std::size_t kMaximumContextualWork = 4 * 1024 * 1024;
 
-  /// Remaining contextual work; shared by every text span and marker reference in this sample.
+  /// Remaining contextual work; shared by scalar/font stacks and every contextual length consumer.
   std::size_t remainingContextualWork() const { return kMaximumContextualWork - contextualWork_; }
 
   /// Admit consumer work before evaluating a recipe. Refused consumers retain their base value.

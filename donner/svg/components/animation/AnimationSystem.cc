@@ -188,8 +188,8 @@ using ContextualRecipes =
     std::unordered_map<Entity,
                        std::unordered_map<std::string, std::vector<ContextualLengthSample>>>;
 
-bool NeedsInstanceLengthContext(Registry& registry, Entity target, std::string_view attribute) {
-  if (attribute == "font-size") {
+bool NeedsInstanceValueContext(Registry& registry, Entity target, std::string_view attribute) {
+  if (attribute == "font-size" || IsContextualScalarAttribute(attribute)) {
     return true;
   }
   const auto* type = registry.try_get<ElementTypeComponent>(target);
@@ -288,7 +288,7 @@ bool ProcessAnimation(Registry& registry, Entity entity, double documentTime,
                  ? std::string_view(valueComp->attributeName)
                  : (transformComp ? std::string_view(transformComp->attributeName) : "transform"));
   if ((setComp || valueComp) &&
-      NeedsInstanceLengthContext(registry, state.targetEntity, attribute)) {
+      NeedsInstanceValueContext(registry, state.targetEntity, attribute)) {
     return RetainContextualLength(recipes, state.targetEntity, attribute, setComp, valueComp,
                                   progress, iteration, resourceBudget);
   }

@@ -26,6 +26,7 @@
 #include "donner/svg/components/shadow/ShadowEntityComponent.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
 #include "donner/svg/components/style/DoNotInheritFillOrStrokeTag.h"
+#include "donner/svg/components/style/ScalarAnimationStyle.h"
 #include "donner/svg/components/style/StyleComponent.h"
 
 namespace donner::svg::components {
@@ -44,50 +45,13 @@ StyleResourceBudget& GetStyleResourceBudget(Registry& registry) {
   return registry.ctx().emplace<StyleResourceBudget>(std::move(family));
 }
 
-void ApplyResourceOpacityAnimation(PropertyRegistry& properties, const std::string& name,
-                                   const std::string& value, StyleResourceBudget& budget) {
-  if (name != "stop-opacity" && name != "flood-opacity") {
-    return;
-  }
-  const auto specificity = css::Specificity::Animation();
-  const auto found = properties.unparsedProperties.find(RcString(name));
-  if (found != properties.unparsedProperties.end() &&
-      (found->second.declaration.important || found->second.specificity > specificity)) {
-    return;
-  }
-  // Source bytes conservatively bound token count before parsing the instance's declaration.
-  if (!budget.reserveDeclarationApplication(value.size(), value.size())) {
-    return;
-  }
-  auto params = parser::PropertyParseFnParams::CreateForAttribute(value);
-  params.specificity = specificity;
-  Property<double> parsed{name, []() -> std::optional<double> { return 1; }};
-  if (Parse(
-          params,
-          [](const parser::PropertyParseFnParams& input) {
-            return parser::ParseAlphaValue(input.components());
-          },
-          &parsed)) {
-    return;
-  }
-  const auto components = params.components();
-  css::Declaration declaration(RcString(name), {components.begin(), components.end()});
-  properties.unparsedProperties.insert_or_assign(
-      RcString(name), parser::UnparsedProperty{std::move(declaration), specificity});
-}
-
-void ApplyAnimatedStyle(Registry& registry, Entity dataEntity, PropertyRegistry& properties,
-                        StyleResourceBudget& styleBudget) {
+void ApplyAnimatedStyle(Registry& registry, Entity dataEntity, PropertyRegistry& properties) {
   if (const auto* animationStyle = registry.ctx().find<AnimationStyleContext>();
       animationStyle && animationStyle->enabled) {
     if (const auto* animated = registry.try_get<AnimatedValuesComponent>(dataEntity)) {
       for (const auto& [name, value] : animated->overrides) {
-        if (name == "stop-opacity" || name == "flood-opacity") {
-          ApplyResourceOpacityAnimation(properties, name, value, styleBudget);
-        } else {
-          std::ignore = properties.parsePresentationAttribute(name, value, EntityHandle(),
-                                                              css::Specificity::Animation());
-        }
+        std::ignore = properties.parsePresentationAttribute(name, value, EntityHandle(),
+                                                            css::Specificity::Animation());
       }
     }
   }
@@ -229,6 +193,13 @@ void ApplyContextualFontSize(Registry& registry, Entity dataEntity, Entity paren
   if (result) {
     std::ignore = properties.parsePresentationAttribute(
         "font-size", result->toRcString().str(), EntityHandle(), css::Specificity::Animation());
+  }
+}
+
+template <typename PropertyType>
+void PreserveLocalScalar(const PropertyType& local, PropertyType& inherited) {
+  if (local.state == PropertyState::Set || local.state == PropertyState::ExplicitInitial) {
+    inherited = local;
   }
 }
 
@@ -502,13 +473,13 @@ PropertyRegistry StyleSystem::inheritProperties(Registry& registry, Entity paren
   const PropertyInheritOptions inheritOptions = registry.all_of<DoNotInheritFillOrStrokeTag>(parent)
                                                     ? PropertyInheritOptions::NoPaint
                                                     : PropertyInheritOptions::All;
-  const auto localFontSize = properties.fontSize;
   PropertyRegistry inherited =
       properties.inheritFrom(parentStyleComponent.properties.value(), inheritOptions);
-  if (localFontSize.state == PropertyState::Set ||
-      localFontSize.state == PropertyState::ExplicitInitial) {
-    inherited.fontSize = localFontSize;
-  }
+  PreserveLocalScalar(properties.fontSize, inherited.fontSize);
+  PreserveLocalScalar(properties.opacity, inherited.opacity);
+  PreserveLocalScalar(properties.fillOpacity, inherited.fillOpacity);
+  PreserveLocalScalar(properties.strokeOpacity, inherited.strokeOpacity);
+  PreserveLocalScalar(properties.strokeMiterlimit, inherited.strokeMiterlimit);
   return inherited;
 }
 
@@ -551,9 +522,13 @@ void StyleSystem::computePropertiesInto(EntityHandle handle, ComputedStyleCompon
   }
 
   applyStylesheetRules(registry, handle.entity(), dataEntity, properties, styleBudget, warningSink);
-  ApplyAnimatedStyle(registry, dataEntity, properties, styleBudget);
+  ApplyAnimatedStyle(registry, dataEntity, properties);
   const Entity parent = handle.get<donner::components::TreeComponent>().parent();
   ApplyContextualFontSize(registry, dataEntity, parent, properties, warningSink);
+  const ComputedStyleComponent* parentStyle =
+      parent == entt::null ? nullptr : &computeStyle(EntityHandle(registry, parent), warningSink);
+  const auto resourceOpacities = ApplyScalarAnimationStyles(registry, dataEntity, parentStyle,
+                                                            properties, styleBudget, warningSink);
   properties.resolveElementColors(warningSink);
 
   // Inherit from parent, then charge the dynamic bytes retained by the final computed style.
@@ -565,11 +540,13 @@ void StyleSystem::computePropertiesInto(EntityHandle handle, ComputedStyleCompon
   if (styleBudget.reserveComplexPropertyBytes(handle.entity(),
                                               finalProperties.complexPropertyBytes())) {
     computedStyle.properties = std::move(finalProperties);
+    computedStyle.resourceOpacities = resourceOpacities;
   } else {
     // Once the aggregate retained-byte budget is exhausted, use bounded initial styles for the
     // remainder of the pass instead of retaining attacker-sized local or inherited vectors.
     styleBudget.release(handle.entity());
     computedStyle.properties = PropertyRegistry();
+    computedStyle.resourceOpacities = ComputedResourceOpacities();
   }
 
   // Resolve font-size to absolute pixels. CSS spec requires the computed value of font-size to

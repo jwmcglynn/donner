@@ -38,7 +38,8 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
     std::string_view element;
     std::string_view attribute;
   };
-  constexpr std::array<Target, 17> targets = {{
+  constexpr std::array<Target, 18> targets = {{
+      {"miter:", "rect", "stroke-miterlimit"},
       {"opacity:", "rect", "opacity"},
       {"stop-opacity:", "stop", "stop-opacity"},
       {"stop-offset:", "stop", "offset"},
@@ -73,7 +74,9 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
                                           : "' values='";
   svg.append(values.substr(target.prefix.size()));
   svg += "' begin='0s' dur='2s'";
-  if (target.prefix.starts_with("filter-") || target.attribute == "font-size") {
+  if (target.prefix.starts_with("filter-") ||
+      (target.attribute == "font-size" ||
+       components::IsContextualScalarAttribute(target.attribute))) {
     svg += " additive='sum' accumulate='sum' repeatCount='3'";
   }
   svg += "/></";
@@ -98,10 +101,13 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
     // Advance at a few time points to exercise interpolation.
     components::AnimationSystem().advance(registry, 0.5, nullptr);
     components::AnimationSystem().advance(registry, 1.0, nullptr);
-    if (target.prefix.starts_with("filter-") || target.attribute == "font-size") {
+    if (target.prefix.starts_with("filter-") ||
+        (target.attribute == "font-size" ||
+         components::IsContextualScalarAttribute(target.attribute))) {
       components::AnimationSystem().advance(registry, 3.0, nullptr);
     }
-    if (target.attribute == "font-size") {
+    if ((target.attribute == "font-size" ||
+         components::IsContextualScalarAttribute(target.attribute))) {
       registry.ctx().emplace<components::AnimationStyleContext>().enabled = true;
       components::StyleSystem().computeAllStyles(registry, warnings);
     } else if (const auto element = result.result().querySelector("#r")) {
