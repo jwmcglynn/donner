@@ -202,13 +202,13 @@ donner_cc_test(
 
 donner_cc_test(
     name = "editor_shell_tests",
-    srcs = ["EditorShell_tests.cc"],
     # The suite renders at 2x content scale. Under AddressSanitizer its heaviest held-drag cases
     # take tens of seconds to minutes each, so a shard exceeds the 60 s the implicit "small"
     # allows while every render is still making progress. Each wait pumps until its condition
     # holds under the shared hang guard in AsyncTestPolling.h, so this ceiling only has to catch
     # a hung process.
     size = "medium",
+    srcs = ["EditorShell_tests.cc"],
     # GPU-backed framebuffer cases need short shards and isolated local device use.
     shard_count = 8,
     tags = ["exclusive-if-local"],
@@ -1724,6 +1724,25 @@ donner_cc_test(
     srcs = ["FrameCallbackAdmission_tests.cc"],
     deps = [
         "//donner/editor:whole_app_worker_bridge",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
+    name = "svg_suite_animation_tests",
+    srcs = ["SvgSuiteAnimation_tests.cc"],
+    data = glob(["svg_suite_animation/*"]),
+    opens_gpu_device = True,
+    variants = ["geode"],
+    deps = [
+        ":bitmap_golden_compare",
+        ":frame_presentation_test_access",
+        "//donner/base:base_test_utils",
+        "//donner/editor:captured_presentation",
+        "//donner/editor:frame_presentation",
+        "//donner/svg",
+        "//donner/svg/parser",
+        "//donner/svg/renderer",
         "@com_google_gtest//:gtest_main",
     ],
 )
