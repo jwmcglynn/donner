@@ -129,6 +129,7 @@ py_test(
         "manual",
     ],
     target_compatible_with = EDITOR_CONTROL_COMPATIBLE_WITH,
+    deps = ["//tools:test_timing"],
 )
 
 py_test(

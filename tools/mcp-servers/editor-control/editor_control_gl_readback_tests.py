@@ -11,6 +11,8 @@ import subprocess
 import time
 import unittest
 
+from tools import test_timing
+
 
 def runfile(path: str) -> Path:
   """Resolve a Bazel runfile path for local and sandboxed test execution."""
@@ -62,12 +64,14 @@ class McpClient:
   def close(self) -> None:
     self.proc.terminate()
     try:
+      # A grace period before escalating, not a stall guard: a slow exit is killed below.
       self.proc.wait(timeout=2)
     except subprocess.TimeoutExpired:
       self.proc.kill()
-      self.proc.wait(timeout=2)
+      self.proc.wait(timeout=test_timing.STALL_GUARD_SECONDS)
 
-  def call(self, method: str, params: dict, timeout_seconds: float = 10.0) -> dict:
+  def call(self, method: str, params: dict,
+           timeout_seconds: float = test_timing.STALL_GUARD_SECONDS) -> dict:
     self.next_id += 1
     message = {
         "jsonrpc": "2.0",
@@ -159,7 +163,6 @@ class EditorControlGlReadbackTests(unittest.TestCase):
               "capabilities": {},
               "clientInfo": {"name": "editor-control-gl-readback-test", "version": "0"},
           },
-          timeout_seconds=5.0,
       )
 
       response = client.call(

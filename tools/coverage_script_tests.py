@@ -11,6 +11,7 @@ import unittest
 
 from python.runfiles import runfiles
 from test_executable_fixtures import ExecutableFixtureDirectory
+from tools import test_timing
 
 
 class CoverageScriptTest(unittest.TestCase):
@@ -161,7 +162,7 @@ class CoverageScriptTest(unittest.TestCase):
                 },
                 capture_output=True,
                 text=True,
-                timeout=20,
+                timeout=test_timing.STALL_GUARD_SECONDS,
                 check=False,
             )
         except subprocess.TimeoutExpired as error:
@@ -170,7 +171,9 @@ class CoverageScriptTest(unittest.TestCase):
                 f"failed_target={failed_target} failed_test={failed_test} "
                 f"geode_failed={geode_failed} remote_failure={remote_failure}"
             )
-            raise AssertionError(f"{context}: coverage fixture exceeded 20 seconds") from error
+            raise AssertionError(
+                f"{context}: coverage fixture exceeded {test_timing.STALL_GUARD_SECONDS} seconds"
+            ) from error
         self.assertEqual(
             "invoked\n",
             (root / "coverage-invoked").read_text(encoding="utf-8")
