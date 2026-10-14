@@ -3,7 +3,10 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <array>
 #include <map>
+#include <string>
+#include <string_view>
 #include <utility>
 
 #include "donner/base/tests/ParseResultTestUtils.h"
@@ -51,6 +54,39 @@ TEST(RectComponent, UnitlessCssXPreservesPresentationAttribute) {
   EXPECT_THAT(warnings.warnings(),
               testing::ElementsAre(ParseErrorIs("Invalid length or percentage")));
   EXPECT_THAT(computed.properties.x.get(), Optional(Lengthd(4, Lengthd::Unit::None)));
+}
+
+TEST(RectComponent, CssLengthGrammarForAllRectProperties) {
+  const std::array<std::pair<std::string_view, Property<Lengthd> RectProperties::*>, 6> properties{{
+      {"x", &RectProperties::x},
+      {"y", &RectProperties::y},
+      {"width", &RectProperties::width},
+      {"height", &RectProperties::height},
+      {"rx", &RectProperties::rx},
+      {"ry", &RectProperties::ry},
+  }};
+  for (const auto& [name, member] : properties) {
+    SCOPED_TRACE(name);
+    RectProperties input;
+    (input.*member).set(Lengthd(4, Lengthd::Unit::None), css::Specificity::FromABC(0, 0, 0));
+    for (const std::string_view value : {"8", "0", "+0", "8px"}) {
+      SCOPED_TRACE(value);
+      ParseWarningSink warnings;
+      const auto declarations =
+          ParseUnparsedProperties(std::string(name) + ":" + std::string(value));
+      const ComputedRectComponent computed(input, declarations, warnings);
+      if (value == "8") {
+        EXPECT_THAT(warnings.warnings(),
+                    testing::ElementsAre(ParseErrorIs("Invalid length or percentage")));
+        EXPECT_THAT((computed.properties.*member).get(), Optional(Lengthd(4, Lengthd::Unit::None)));
+      } else {
+        EXPECT_THAT(warnings.warnings(), testing::IsEmpty());
+        const Lengthd expected =
+            value == "8px" ? Lengthd(8, Lengthd::Unit::Px) : Lengthd(0, Lengthd::Unit::None);
+        EXPECT_THAT((computed.properties.*member).get(), Optional(expected));
+      }
+    }
+  }
 }
 
 TEST(RectComponent, ComputedRectComponentReportsInvalidUnparsedProperty) {
