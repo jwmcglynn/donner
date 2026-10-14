@@ -975,6 +975,138 @@ TEST(RendererPublicApiTest, ExternalUseInheritedMarkersFailClosedWithoutChildLoo
 }
 
 #ifdef DONNER_TEXT_ENABLED
+SVGDocument MakeTextPathPairFontProbe(bool kerning = true) {
+  if (!kerning) {
+    return ParseDocument(
+        R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="512" height="128"
+          font-family="Public Sans" font-size="64" style="font-kerning:none">
+          <text id="pair">AV</text><text id="first">A</text><text id="second">V</text>
+        </svg>)svg");
+  }
+  return ParseDocument(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="512" height="128"
+        font-family="Public Sans" font-size="64" style="font-kerning:normal">
+        <text id="pair">AV</text><text id="first">A</text><text id="second">V</text>
+      </svg>)svg");
+}
+
+TEST(RendererPublicApiTest, TextPathPairSplitMatchesUnsplitPixels) {
+  SVGDocument probe = MakeTextPathPairFontProbe();
+  const auto pairedText = probe.querySelector("#pair")->cast<SVGTextElement>();
+  ASSERT_EQ(pairedText.getNumberOfChars(), 2);
+  const double paired =
+      pairedText.getStartPositionOfChar(1).x - pairedText.getStartPositionOfChar(0).x;
+  const auto standaloneText = probe.querySelector("#first")->cast<SVGTextElement>();
+  ASSERT_EQ(standaloneText.getNumberOfChars(), 1);
+  const double separate = standaloneText.getComputedTextLength();
+  ASSERT_GT(paired, 0.0);
+  ASSERT_GT(separate, 0.0);
+  ASSERT_NE(paired, separate) << "The actual font must provide a nonzero A-V kerning adjustment";
+  SVGDocument split = ParseDocument(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="512" height="128"
+        font-family="Public Sans" font-size="64" style="font-kerning:normal">
+        <defs><path id="p" d="M16 88H496"/></defs>
+        <text><textPath href="#p">A<tspan paint-order="stroke fill">V</tspan></textPath></text>
+      </svg>)svg");
+  SVGDocument whole = ParseDocument(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="512" height="128"
+        font-family="Public Sans" font-size="64" style="font-kerning:normal">
+        <defs><path id="p" d="M16 88H496"/></defs>
+        <text><textPath href="#p">AV</textPath></text>
+      </svg>)svg");
+  const auto expected = RenderPublicDocument(whole);
+  ASSERT_FALSE(expected.empty());
+  EXPECT_THAT(expected.pixels, testing::Contains(Gt(0)));
+  editor::tests::CompareBitmapToBitmap(RenderPublicDocument(split), expected, "textpath-pair-split",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(RendererPublicApiTest, TextPathPairEmptySpanMatchesUnsplitPixels) {
+  SVGDocument probe = MakeTextPathPairFontProbe();
+  const auto pairedText = probe.querySelector("#pair")->cast<SVGTextElement>();
+  ASSERT_EQ(pairedText.getNumberOfChars(), 2);
+  const double paired =
+      pairedText.getStartPositionOfChar(1).x - pairedText.getStartPositionOfChar(0).x;
+  const auto standaloneText = probe.querySelector("#first")->cast<SVGTextElement>();
+  ASSERT_EQ(standaloneText.getNumberOfChars(), 1);
+  const double separate = standaloneText.getComputedTextLength();
+  ASSERT_GT(paired, 0.0);
+  ASSERT_GT(separate, 0.0);
+  ASSERT_NE(paired, separate) << "The actual font must provide a nonzero A-V kerning adjustment";
+  SVGDocument split = ParseDocument(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="512" height="128"
+        font-family="Public Sans" font-size="64" style="font-kerning:normal">
+        <defs><path id="p" d="M16 88H496"/></defs>
+        <text><textPath href="#p">A<tspan/><tspan>V</tspan></textPath></text>
+      </svg>)svg");
+  SVGDocument whole = ParseDocument(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="512" height="128"
+        font-family="Public Sans" font-size="64" style="font-kerning:normal">
+        <defs><path id="p" d="M16 88H496"/></defs>
+        <text><textPath href="#p">AV</textPath></text>
+      </svg>)svg");
+  const auto expected = RenderPublicDocument(whole);
+  ASSERT_FALSE(expected.empty());
+  EXPECT_THAT(expected.pixels, testing::Contains(Gt(0)));
+  editor::tests::CompareBitmapToBitmap(RenderPublicDocument(split), expected,
+                                       "textpath-pair-empty-span",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(RendererPublicApiTest, TextPathPairNoKerningMatchesUnsplitPixels) {
+  SVGDocument probe = MakeTextPathPairFontProbe(false);
+  const auto pairedText = probe.querySelector("#pair")->cast<SVGTextElement>();
+  ASSERT_EQ(pairedText.getNumberOfChars(), 2);
+  const double paired =
+      pairedText.getStartPositionOfChar(1).x - pairedText.getStartPositionOfChar(0).x;
+  const auto standaloneText = probe.querySelector("#first")->cast<SVGTextElement>();
+  ASSERT_EQ(standaloneText.getNumberOfChars(), 1);
+  const double separate = standaloneText.getComputedTextLength();
+  ASSERT_GT(paired, 0.0);
+  ASSERT_GT(separate, 0.0);
+  ASSERT_DOUBLE_EQ(paired, separate) << "The SVG property must disable the actual pair kerning";
+  SVGDocument split = ParseDocument(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="512" height="128"
+        font-family="Public Sans" font-size="64" style="font-kerning:none">
+        <defs><path id="p" d="M16 88H496"/></defs>
+        <text><textPath href="#p">A<tspan>V</tspan></textPath></text>
+      </svg>)svg");
+  SVGDocument whole = ParseDocument(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="512" height="128"
+        font-family="Public Sans" font-size="64" style="font-kerning:none">
+        <defs><path id="p" d="M16 88H496"/></defs>
+        <text><textPath href="#p">AV</textPath></text>
+      </svg>)svg");
+  const auto expected = RenderPublicDocument(whole);
+  ASSERT_FALSE(expected.empty());
+  EXPECT_THAT(expected.pixels, testing::Contains(Gt(0)));
+  editor::tests::CompareBitmapToBitmap(RenderPublicDocument(split), expected,
+                                       "textpath-pair-no-kerning",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(RendererPublicApiTest, TextPathPairSeparateOwnersDoNotShareKerning) {
+  SVGDocument sharedText = ParseDocument(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="512" height="128"
+        font-family="Public Sans" font-size="64" style="font-kerning:normal">
+        <defs><path id="p" d="M16 88H496"/></defs>
+        <text><textPath href="#p">A</textPath><textPath href="#p" startOffset="80">V</textPath></text>
+      </svg>)svg");
+  SVGDocument separateText = ParseDocument(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="512" height="128"
+        font-family="Public Sans" font-size="64" style="font-kerning:normal">
+        <defs><path id="p" d="M16 88H496"/></defs>
+        <text><textPath href="#p">A</textPath></text>
+        <text><textPath href="#p" startOffset="80">V</textPath></text>
+      </svg>)svg");
+  const auto expected = RenderPublicDocument(separateText);
+  ASSERT_FALSE(expected.empty());
+  EXPECT_THAT(expected.pixels, testing::Contains(Gt(0)));
+  editor::tests::CompareBitmapToBitmap(RenderPublicDocument(sharedText), expected,
+                                       "textpath-pair-separate-owners",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
 TEST(RendererPublicApiTest, ExternalUseTextSpanInheritsHostGradientWithoutChildId) {
   const auto actual = RenderExternalUse(
       R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="64" height="40">
