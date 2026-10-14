@@ -58,7 +58,12 @@ constexpr std::size_t kCommandBatch = 30;
 constexpr std::size_t kQueueSubmit = 31;
 constexpr std::size_t kBindGroupConstruction = 32;
 constexpr std::size_t kPipelineConstruction = 33;
-std::array<std::atomic<uint32_t>, 34> gOwnerWaitStats{};
+constexpr std::size_t kBufferWriteSizeBucketStart = 34;  // Seven disjoint size buckets.
+constexpr std::size_t kBufferWrite256 = 41;
+constexpr std::size_t kBufferWrite448 = 42;
+constexpr std::size_t kBufferWriteBytes = 43;
+std::array<std::atomic<uint32_t>, 44> gOwnerWaitStats{};
+static_assert(kBufferWriteSizeBucketStart + 7 == kBufferWrite256);
 static_assert(sizeof(std::atomic<uint32_t>) == sizeof(uint32_t));
 static_assert(std::atomic<uint32_t>::is_always_lock_free);
 thread_local bool gProcessingOwnerWait = false;
@@ -94,7 +99,7 @@ void RecordMaximum(std::size_t index, double value) {
                 std::memory_order_relaxed);
 }
 
-void AddSaturatingMicros(std::size_t index, double value) {
+void AddSaturatingCounter(std::size_t index, double value) {
   const auto increment = static_cast<uint32_t>(
       std::clamp(value, 0.0, static_cast<double>(std::numeric_limits<uint32_t>::max())));
   auto& total = gOwnerWaitStats[index];
@@ -131,7 +136,7 @@ std::size_t ExecuteReadyBatch() {
     RecordMaximum(kMaximumBatchSize, static_cast<double>(count));
     const double elapsedUs = (emscripten_get_now() - started) * 1000.0;
     RecordMaximum(kMaximumBatchUs, elapsedUs);
-    AddSaturatingMicros(kTotalBatchUs, elapsedUs);
+    AddSaturatingCounter(kTotalBatchUs, elapsedUs);
   }
   if (!gReady.empty()) {
     SchedulePulse();
@@ -152,7 +157,7 @@ void TryInlineDispatch(bool wasEmpty) {
   gInlineCalls += count;
   gInlineMs += elapsedMs;
   gOwnerWaitStats[kInlineDispatches].fetch_add(count, std::memory_order_relaxed);
-  AddSaturatingMicros(kTotalInlineUs, elapsedMs * 1000.0);
+  AddSaturatingCounter(kTotalInlineUs, elapsedMs * 1000.0);
   RecordMaximum(kMaximumInlineCallbackUs, elapsedMs * 1000.0);
   RecordMaximum(kMaximumInlineEpochCalls, static_cast<double>(gInlineCalls));
   gProcessingBatch = false;
@@ -195,7 +200,7 @@ void WaitForRequest(OwnerRequest& request, double requestStartedMs) {
       gOwnerWaitStats[kWakeBeforeCompletion].fetch_add(1, std::memory_order_relaxed);
     }
   }
-  AddSaturatingMicros(kTotalDispatchWaitUs, (emscripten_get_now() - requestStartedMs) * 1000.0);
+  AddSaturatingCounter(kTotalDispatchWaitUs, (emscripten_get_now() - requestStartedMs) * 1000.0);
 }
 
 void Invoke(void* context) {
@@ -312,12 +317,46 @@ void RegisterBrowserGpuOwner() {
       'queueSubmit': Atomics.load(HEAPU32, index + 31),
       'bindGroupConstruction': Atomics.load(HEAPU32, index + 32),
       'pipelineConstruction': Atomics.load(HEAPU32, index + 33),
+      'bufferWriteSizes': ({
+        'zero': Atomics.load(HEAPU32, index + 34),
+        'bytes1To64': Atomics.load(HEAPU32, index + 35),
+        'bytes65To256': Atomics.load(HEAPU32, index + 36),
+        'bytes257To512': Atomics.load(HEAPU32, index + 37),
+        'bytes513To4096': Atomics.load(HEAPU32, index + 38),
+        'bytes4097To65536': Atomics.load(HEAPU32, index + 39),
+        'bytesAbove65536': Atomics.load(HEAPU32, index + 40),
+        'exact256': Atomics.load(HEAPU32, index + 41),
+        'exact448': Atomics.load(HEAPU32, index + 42),
+        'totalBytes': Atomics.load(HEAPU32, index + 43),
+        'bytesSaturated': Atomics.load(HEAPU32, index + 43) === 4294967295,
+      }),
       'timingSaturated': Atomics.load(HEAPU32, index + 10) === 4294967295 ||
                          Atomics.load(HEAPU32, index + 11) === 4294967295 ||
                          Atomics.load(HEAPU32, index + 20) === 4294967295,
     });
   }, gOwnerWaitStats.data());
   // clang-format on
+#endif
+}
+
+void RecordBrowserBufferWriteSize([[maybe_unused]] std::size_t bytes) {
+#ifdef __EMSCRIPTEN_PTHREADS__
+  const pthread_t owner = gOwner.load(std::memory_order_acquire);
+  if (!owner || pthread_equal(owner, pthread_self()) || gStopped.load(std::memory_order_acquire)) {
+    return;
+  }
+  constexpr std::array<std::size_t, 7> limits = {
+      0, 64, 256, 512, 4096, 65536, std::numeric_limits<std::size_t>::max()};
+  const auto bucket = static_cast<std::size_t>(
+      std::lower_bound(limits.begin(), limits.end(), bytes) - limits.begin());
+  gOwnerWaitStats[kBufferWriteSizeBucketStart + bucket].fetch_add(1, std::memory_order_relaxed);
+  if (bytes == 256) {
+    gOwnerWaitStats[kBufferWrite256].fetch_add(1, std::memory_order_relaxed);
+  }
+  if (bytes == 448) {
+    gOwnerWaitStats[kBufferWrite448].fetch_add(1, std::memory_order_relaxed);
+  }
+  AddSaturatingCounter(kBufferWriteBytes, static_cast<double>(bytes));
 #endif
 }
 

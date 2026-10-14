@@ -689,6 +689,7 @@ BridgeStatus EmscriptenBrowserBridge::destroyObject(BrowserObjectKind kind, Brow
 
 BridgeStatus EmscriptenBrowserBridge::writeBuffer(BrowserObjectId bufferId, uint64_t offsetBytes,
                                                   std::span<const uint8_t> data) {
+  RecordBrowserBufferWriteSize(data.size());
   return StatusFromBrowser(
       CallBrowserGpu<donner_gpu_write_buffer, BrowserGpuOperationKind::BufferWrite>(
           logicalDevice_, bufferId, static_cast<double>(offsetBytes), data.data(),

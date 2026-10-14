@@ -2,6 +2,7 @@
 /// @file
 /// Dispatches browser GPU primitives to the editor's canvas-owning application thread.
 
+#include <cstddef>
 #include <type_traits>
 
 namespace donner::gpu::browser {
@@ -25,6 +26,10 @@ enum class BrowserGpuOperationKind {
   BindGroupConstruction,
   PipelineConstruction,
 };
+
+/// Record an attempted cross-owner buffer-write size without reading payloads or resource ids.
+/// Owner-local calls are excluded. @param bytes Borrowed payload size before dispatch.
+void RecordBrowserBufferWriteSize(std::size_t bytes);
 
 /// Register the calling application thread before creating any browser GPU devices or workers.
 void RegisterBrowserGpuOwner();
