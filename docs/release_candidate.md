@@ -218,11 +218,13 @@ regenerates or repackages anything, and neither edits the record.
   archive's provenance must name exactly that attempt, a successful run on `main`. It then
   downloads the record's `bcr-entry` artifact by ID and verifies it as above. On the current
   registry `main` it stages the entry's `MODULE.bazel`, `presubmit.yml` and `source.json` byte
-  for byte. It derives `metadata.json` from that registry: its current `versions` plus this
-  version, its current `yanked_versions`, and the template's other fields. A version merged or
-  yanked after preflight is carried forward. Preflight's copy must agree with the derived file
-  on every other field, and the registry's own project and maintainer fields must match the
-  template. The fork branch is prepared from those files; no upstream pull request is opened.
+  for byte. It derives `metadata.json` from that registry: its current `versions` with this
+  version added in ascending Bazel version order (BCR presubmit requires that order), its current
+  `yanked_versions`, and the template's other fields. A version merged or yanked after preflight
+  is carried forward, and a registry list that is already out of order is refused. Preflight's
+  copy must agree with the derived file on every other field, and the registry's own project and
+  maintainer fields must match the template. The fork branch is prepared from those files; no
+  upstream pull request is opened.
 - **Build and manually deploy documentation** (`.github/workflows/deploy_docs.yaml`) with
   `selection: record` takes the assembly `RUN_ID/ATTEMPT` and the record digest. It downloads the
   record artifact by ID from that successful manual assembly on `main`, checks the digest and
