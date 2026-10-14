@@ -55,7 +55,7 @@ namespace donner::svg {
  * defined by the content within the input filter primitive's primitive subregion.
  */
 class SVGFETileElement : public SVGFilterPrimitiveStandardAttributes {
-  friend class parser::SVGParserImpl;
+  friend class details::ElementFactory;
 
 protected:
   /// Create an SVGFETileElement wrapper from an entity.

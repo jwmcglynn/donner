@@ -61,7 +61,7 @@ namespace donner::svg {
  * \see https://www.w3.org/TR/SVG2/linking.html#AElement
  */
 class SVGAElement : public SVGTextPositioningElement {
-  friend class parser::SVGParserImpl;
+  friend class details::ElementFactory;
 
 private:
   /// Create an SVGAElement wrapper from an entity.

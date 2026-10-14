@@ -93,7 +93,7 @@ namespace donner::svg {
  * \endhtmlonly
  */
 class SVGPolygonElement : public SVGGeometryElement {
-  friend class parser::SVGParserImpl;
+  friend class details::ElementFactory;
 
 private:
   /// Create an SVGPolygonElement wrapper from an entity.

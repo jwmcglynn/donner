@@ -174,7 +174,7 @@ namespace donner::svg {
  * Composites input image `in` over `in2` using a CSS blend mode.
  */
 class SVGFEBlendElement : public SVGFilterPrimitiveStandardAttributes {
-  friend class parser::SVGParserImpl;
+  friend class details::ElementFactory;
 
 protected:
   /// Create an SVGFEBlendElement wrapper from an entity.

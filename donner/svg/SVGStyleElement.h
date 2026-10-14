@@ -134,7 +134,7 @@ namespace donner::svg {
  * Use \ref SVGStyleElement::setContents and pass a CSS stylesheet string.
  */
 class SVGStyleElement : public SVGElement {
-  friend class parser::SVGParserImpl;
+  friend class details::ElementFactory;
 
 protected:
   /// Create an SVGStyleElement wrapper from an entity.

@@ -76,7 +76,7 @@ namespace donner::svg {
  * elements.
  */
 class SVGMaskElement : public SVGElement {
-  friend class parser::SVGParserImpl;
+  friend class details::ElementFactory;
 
 private:
   explicit SVGMaskElement(EntityHandle handle) : SVGElement(handle) {}

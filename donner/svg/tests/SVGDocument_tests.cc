@@ -3,6 +3,8 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <array>
+#include <functional>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -13,6 +15,7 @@
 #include "donner/base/tests/ParseResultTestUtils.h"
 #include "donner/base/xml/XMLDocument.h"
 #include "donner/base/xml/XMLNode.h"
+#include "donner/svg/AllSVGElements.h"
 #include "donner/svg/SVGRectElement.h"
 #include "donner/svg/SVGStyleElement.h"
 #include "donner/svg/SVGStyleQuery.h"
@@ -57,6 +60,46 @@ components::RenderTreeState& EnsureRenderTreeState(Registry& registry) {
     registry.ctx().emplace<components::RenderTreeState>();
   }
   return registry.ctx().get<components::RenderTreeState>();
+}
+
+constexpr std::string_view kSvgNamespaceUri = "http://www.w3.org/2000/svg";
+constexpr std::string_view kForeignNamespaceUri = "http://example.test/foreign";
+
+/// Apply a source edit that replaces the first \p needle in \p document's source.
+xml::ApplySourceEditResult ReplaceInSource(SVGDocument& document, std::string_view needle,
+                                           std::string_view replacement) {
+  const std::size_t start = document.source().find(needle);
+  if (start == std::string_view::npos) {
+    ADD_FAILURE() << "missing source text: " << needle;
+    return {};
+  }
+  return document.applySourceEdit(xml::XMLEditIntent{
+      .range = SourceRange{FileOffset::Offset(start), FileOffset::Offset(start + needle.size())},
+      .replacement = replacement,
+      .sourceVersion = document.sourceVersion(),
+  });
+}
+
+/// A descriptive element type and its tag.
+struct DescriptiveCase {
+  std::string_view tag;
+  ElementType type;
+};
+
+constexpr std::array<DescriptiveCase, 3> kDescriptiveCases = {{
+    {"title", ElementType::Title},
+    {"desc", ElementType::Desc},
+    {"metadata", ElementType::Metadata},
+}};
+
+/// The text of a `<title>`, `<desc>` or `<metadata>` element.
+RcString DescriptiveText(SVGElement element) {
+  switch (element.type()) {
+    case ElementType::Title: return element.cast<SVGTitleElement>().textContent();
+    case ElementType::Desc: return element.cast<SVGDescElement>().textContent();
+    case ElementType::Metadata: return element.cast<SVGMetadataElement>().textContent();
+    default: ADD_FAILURE() << "not a descriptive element: " << element.type(); return RcString();
+  }
 }
 
 }  // namespace
@@ -675,6 +718,450 @@ TEST(SVGDocument, ApplySourceEditReportsOpeningTagRenameUnsupported) {
               testing::HasSubstr("Opening tag element rename is not implemented"));
   ASSERT_THAT(document.querySelector("#shape"), Optional(ElementIdEq("shape")));
   EXPECT_EQ(document.querySelector("#shape")->type(), ElementType::Unknown);
+}
+
+// A namespace edit that moves elements into the SVG namespace builds them in place, as the parser
+// would, at the edit's own incremental scope.
+TEST(SVGDocument, NamespaceRebindBuildsTypedElementsIncrementally) {
+  constexpr std::string_view kSource =
+      "<svg xmlns='http://www.w3.org/2000/svg' xmlns:x='http://example.test/foreign'>"
+      "<defs><rect id='swatch' width='8' height='12'/></defs>"
+      "<x:image id='picture' width='8' height='12' href='picture.png'/>"
+      "<x:use id='copy' href='#swatch'/>"
+      "<x:linearGradient id='paint' x2='0.5'><x:stop id='stop' offset='1'/></x:linearGradient>"
+      "</svg>";
+  for (const bool throughSourceEdit : {false, true}) {
+    SCOPED_TRACE(throughSourceEdit ? "applySourceEdit" : "setElementAttribute");
+    auto document = ParseSVG(kSource);
+    ASSERT_THAT(document.querySelector("#picture"), Optional(ElementIdEq("picture")));
+    ASSERT_EQ(document.querySelector("#picture")->type(), ElementType::Unknown);
+    ASSERT_THAT(document.querySelector("#swatch"), Optional(ElementIdEq("swatch")));
+    const Entity picture = document.querySelector("#picture")->entityHandle().entity();
+    const Entity swatch = document.querySelector("#swatch")->entityHandle().entity();
+
+    const xml::ApplySourceEditResult result =
+        throughSourceEdit
+            ? ReplaceInSource(document, kForeignNamespaceUri, kSvgNamespaceUri)
+            : document.setElementAttribute(
+                  document.svgElement(), xml::XMLQualifiedNameRef("xmlns", "x"), kSvgNamespaceUri);
+
+    EXPECT_TRUE(result.applied);
+    EXPECT_THAT(result.diagnostic, Eq(std::nullopt));
+    EXPECT_EQ(result.scope, xml::ReparseScope::AttributeValue);
+    ASSERT_EQ(document.querySelector("#picture")->type(), ElementType::Image);
+    EXPECT_EQ(document.querySelector("#picture")->cast<SVGImageElement>().href(), "picture.png");
+    ASSERT_THAT(document.querySelector("#copy"), Optional(ElementIdEq("copy")));
+    ASSERT_EQ(document.querySelector("#copy")->type(), ElementType::Use);
+    EXPECT_EQ(document.querySelector("#copy")->cast<SVGUseElement>().href(), "#swatch");
+    ASSERT_THAT(document.querySelector("#paint"), Optional(ElementIdEq("paint")));
+    ASSERT_EQ(document.querySelector("#paint")->type(), ElementType::LinearGradient);
+    EXPECT_THAT(document.querySelector("#paint")->cast<SVGLinearGradientElement>().x2(),
+                Optional(Lengthd(0.5)));
+    ASSERT_THAT(document.querySelector("#stop"), Optional(ElementIdEq("stop")));
+    EXPECT_EQ(document.querySelector("#stop")->type(), ElementType::Stop);
+    EXPECT_EQ(document.querySelector("#picture")->entityHandle().entity(), picture);
+    EXPECT_EQ(document.querySelector("#swatch")->entityHandle().entity(), swatch);
+  }
+}
+
+TEST(SVGDocument, NamespaceRebindKeepsProjectedElementsIncremental) {
+  auto document = ParseSVG(
+      "<svg xmlns='http://www.w3.org/2000/svg' xmlns:x='http://example.test/foreign'>"
+      "<x:rect id='shape' width='8' height='12'/></svg>");
+  ASSERT_THAT(document.querySelector("#shape"), Optional(ElementIdEq("shape")));
+  const Entity shape = document.querySelector("#shape")->entityHandle().entity();
+
+  const xml::ApplySourceEditResult result =
+      ReplaceInSource(document, kForeignNamespaceUri, kSvgNamespaceUri);
+
+  EXPECT_TRUE(result.applied);
+  EXPECT_THAT(result.diagnostic, Eq(std::nullopt));
+  EXPECT_EQ(result.scope, xml::ReparseScope::AttributeValue);
+  ASSERT_THAT(document.querySelector("#shape"), Optional(ElementIdEq("shape")));
+  EXPECT_EQ(document.querySelector("#shape")->type(), ElementType::Rect);
+  EXPECT_EQ(document.querySelector("#shape")->entityHandle().entity(), shape);
+}
+
+TEST(SVGDocument, SourceInsertedElementsAreBuiltIncrementally) {
+  struct InsertionCase {
+    std::string_view replacement;
+    ElementType type;
+  };
+  for (const InsertionCase& insertion : {
+           InsertionCase{"<rect id='new' width='4' height='4'/>", ElementType::Rect},
+           InsertionCase{"<image id='new' width='4' height='4' href='picture.png'/>",
+                         ElementType::Image},
+           InsertionCase{"<use id='new' href='#swatch'/>", ElementType::Use},
+           InsertionCase{"<linearGradient id='new'><stop offset='1'/></linearGradient>",
+                         ElementType::LinearGradient},
+           InsertionCase{"<radialGradient id='new'/>", ElementType::RadialGradient},
+           InsertionCase{"<mask id='new'><rect width='4' height='4'/></mask>", ElementType::Mask},
+           InsertionCase{"<marker id='new' markerWidth='4'/>", ElementType::Marker},
+           InsertionCase{"<svg id='new' width='4' height='4'/>", ElementType::SVG},
+       }) {
+    SCOPED_TRACE(insertion.replacement);
+    auto document = ParseSVG(
+        R"(<svg xmlns="http://www.w3.org/2000/svg"><rect id="swatch"/><g id="host"><rect id="old"/><rect id="kept"/></g></svg>)");
+    const Entity swatch = document.querySelector("#swatch")->entityHandle().entity();
+    const Entity kept = document.querySelector("#kept")->entityHandle().entity();
+
+    const xml::ApplySourceEditResult result =
+        ReplaceInSource(document, R"(<rect id="old"/>)", insertion.replacement);
+
+    EXPECT_TRUE(result.applied);
+    EXPECT_THAT(result.diagnostic, Eq(std::nullopt));
+    EXPECT_EQ(result.scope, xml::ReparseScope::ElementSubtree);
+    ASSERT_THAT(document.querySelector("#new"), Optional(ElementIdEq("new")));
+    EXPECT_EQ(document.querySelector("#new")->type(), insertion.type);
+    EXPECT_EQ(document.querySelector("#swatch")->entityHandle().entity(), swatch);
+    EXPECT_EQ(document.querySelector("#kept")->entityHandle().entity(), kept);
+  }
+}
+
+// A built `<title>`, `<desc>` or `<metadata>` element gets its text, as the parser gives it. A
+// rebound element reads the text the parser kept as its node value.
+TEST(SVGDocument, BuiltDescriptiveElementsKeepTheirText) {
+  for (const DescriptiveCase& descriptive : kDescriptiveCases) {
+    const std::string tag(descriptive.tag);
+    SCOPED_TRACE(tag);
+
+    auto inserted = ParseSVG(
+        R"(<svg xmlns="http://www.w3.org/2000/svg"><g id="host"><rect id="old"/></g></svg>)");
+    const xml::ApplySourceEditResult insertion = ReplaceInSource(
+        inserted, R"(<rect id="old"/>)", "<" + tag + " id='new'>Hello</" + tag + ">");
+    EXPECT_TRUE(insertion.applied);
+    EXPECT_EQ(insertion.scope, xml::ReparseScope::ElementSubtree);
+    EXPECT_THAT(insertion.diagnostic, Eq(std::nullopt));
+    ASSERT_THAT(inserted.querySelector("#new"), Optional(ElementIdEq("new")));
+    ASSERT_EQ(inserted.querySelector("#new")->type(), descriptive.type);
+    EXPECT_EQ(DescriptiveText(*inserted.querySelector("#new")), "Hello");
+
+    auto rebound = ParseSVG(
+        "<svg xmlns='http://www.w3.org/2000/svg' xmlns:x='http://example.test/foreign'><x:" + tag +
+        " id='new'>Hello</x:" + tag + "></svg>");
+    const xml::ApplySourceEditResult rebind = rebound.setElementAttribute(
+        rebound.svgElement(), xml::XMLQualifiedNameRef("xmlns", "x"), kSvgNamespaceUri);
+    EXPECT_TRUE(rebind.applied);
+    EXPECT_EQ(rebind.scope, xml::ReparseScope::AttributeValue);
+    EXPECT_THAT(rebind.diagnostic, Eq(std::nullopt));
+    ASSERT_THAT(rebound.querySelector("#new"), Optional(ElementIdEq("new")));
+    ASSERT_EQ(rebound.querySelector("#new")->type(), descriptive.type);
+    EXPECT_EQ(DescriptiveText(*rebound.querySelector("#new")), "Hello");
+  }
+}
+
+// Editing the text of a `<title>`, `<desc>` or `<metadata>` element updates its text, whether the
+// parser built the element, a source insertion did, or a namespace rebind promoted it.
+TEST(SVGDocument, DescriptiveTextFollowsTextEdits) {
+  for (const DescriptiveCase& descriptive : kDescriptiveCases) {
+    const std::string tag(descriptive.tag);
+    SCOPED_TRACE(tag);
+    const auto expectEditedText = [&](SVGDocument& document) {
+      const xml::ApplySourceEditResult edit = ReplaceInSource(document, "Hello", "World");
+      EXPECT_TRUE(edit.applied);
+      EXPECT_EQ(edit.scope, xml::ReparseScope::TextNode);
+      EXPECT_THAT(edit.diagnostic, Eq(std::nullopt));
+      ASSERT_THAT(document.querySelector("#t"), Optional(ElementIdEq("t")));
+      ASSERT_EQ(document.querySelector("#t")->type(), descriptive.type);
+      EXPECT_EQ(DescriptiveText(*document.querySelector("#t")), "World");
+    };
+
+    {
+      SCOPED_TRACE("parsed");
+      auto document = ParseSVG("<svg xmlns='http://www.w3.org/2000/svg'><" + tag +
+                               " id='t'>Hello</" + tag + "></svg>");
+      expectEditedText(document);
+    }
+    {
+      SCOPED_TRACE("inserted");
+      auto document =
+          ParseSVG(R"(<svg xmlns="http://www.w3.org/2000/svg"><g><rect id="old"/></g></svg>)");
+      ASSERT_TRUE(ReplaceInSource(document, R"(<rect id="old"/>)",
+                                  "<" + tag + " id='t'>Hello</" + tag + ">")
+                      .applied);
+      expectEditedText(document);
+    }
+    {
+      SCOPED_TRACE("rebound");
+      auto document = ParseSVG(
+          "<svg xmlns='http://www.w3.org/2000/svg' xmlns:x='http://example.test/foreign'><x:" +
+          tag + " id='t'>Hello</x:" + tag + "></svg>");
+      ASSERT_TRUE(document
+                      .setElementAttribute(document.svgElement(),
+                                           xml::XMLQualifiedNameRef("xmlns", "x"), kSvgNamespaceUri)
+                      .applied);
+      expectEditedText(document);
+    }
+  }
+}
+
+// A subtree reparse that keeps a `<title>`, `<desc>` or `<metadata>` element, as the edit's target
+// or as a descendant kept by its id, updates the element's text in place, as a fresh parse would.
+TEST(SVGDocument, SubtreeReparseUpdatesKeptDescriptiveText) {
+  struct SubtreeEdit {
+    const char* label;
+    const char* content;      //!< Element content before the edit.
+    const char* needle;       //!< Source text to replace, with `TAG` for the tag name.
+    const char* replacement;  //!< Replacement, with `TAG` for the tag name.
+    const char* expected;     //!< Text a fresh parse of the edited source gives.
+  };
+  const SubtreeEdit kEdits[] = {
+      {"kept by id", "Hello", "<TAG id='t'>Hello</TAG>", "<TAG id='t'>World</TAG><rect/>", "World"},
+      {"kept by id, last chunk unchanged", "first<!--c-->last",
+       "<TAG id='t'>first<!--c-->last</TAG>", "<TAG id='t'>new<!--c-->last</TAG><rect/>",
+       "newlast"},
+      {"CDATA text", "<![CDATA[Hello]]>", "Hello", "World", "World"},
+      {"text before a comment", "first<!--c-->last", "first", "new", "newlast"},
+      {"emptied CDATA", "<![CDATA[Hello]]>", "<![CDATA[Hello]]>", "", ""},
+      {"kept by id, CDATA emptied", "<![CDATA[Hello]]>", "<TAG id='t'><![CDATA[Hello]]></TAG>",
+       "<TAG id='t'></TAG><rect/>", ""},
+  };
+  const auto withTag = [](std::string text, const std::string& tag) {
+    for (std::size_t at = text.find("TAG"); at != std::string::npos; at = text.find("TAG", at)) {
+      text.replace(at, 3, tag);
+    }
+    return text;
+  };
+
+  for (const DescriptiveCase& descriptive : kDescriptiveCases) {
+    const std::string tag(descriptive.tag);
+    for (const SubtreeEdit& subtreeEdit : kEdits) {
+      SCOPED_TRACE(tag + ": " + subtreeEdit.label);
+      auto document = ParseSVG("<svg xmlns='http://www.w3.org/2000/svg'><g id='host'><" + tag +
+                               " id='t'>" + subtreeEdit.content + "</" + tag + "></g></svg>");
+      ASSERT_THAT(document.querySelector("#t"), Optional(ElementIdEq("t")));
+      const Entity kept = document.querySelector("#t")->entityHandle().entity();
+
+      const xml::ApplySourceEditResult edit = ReplaceInSource(
+          document, withTag(subtreeEdit.needle, tag), withTag(subtreeEdit.replacement, tag));
+      EXPECT_TRUE(edit.applied);
+      EXPECT_EQ(edit.scope, xml::ReparseScope::ElementSubtree);
+      EXPECT_THAT(edit.diagnostic, Eq(std::nullopt));
+      ASSERT_THAT(document.querySelector("#t"), Optional(ElementIdEq("t")));
+      EXPECT_EQ(document.querySelector("#t")->entityHandle().entity(), kept);
+      ASSERT_EQ(document.querySelector("#t")->type(), descriptive.type);
+      EXPECT_EQ(DescriptiveText(*document.querySelector("#t")), subtreeEdit.expected);
+
+      auto fresh = ParseSVG(document.source());
+      ASSERT_THAT(fresh.querySelector("#t"), Optional(ElementIdEq("t")));
+      EXPECT_EQ(DescriptiveText(*fresh.querySelector("#t")), subtreeEdit.expected);
+    }
+  }
+}
+
+// A `<title>`, `<desc>` or `<metadata>` text edit that the content-projection budget rejects keeps
+// the element's old text and reservation, as projected `<text>` does, and reports an error.
+TEST(SVGDocument, RejectedDescriptiveTextEditKeepsTheOldText) {
+  const auto retainedBytes = [](const SVGDocument& document) {
+    return document.registry()
+        .ctx()
+        .get<components::ParsedPayloadResourceBudget>()
+        .securityStats()
+        .retainedBytes;
+  };
+  const auto expectKeptText = [&](SVGDocument& document, const xml::ApplySourceEditResult& edit,
+                                  ElementType type, std::size_t bytesBefore) {
+    EXPECT_TRUE(edit.applied);
+    ASSERT_TRUE(edit.diagnostic.has_value());
+    EXPECT_THAT(edit.diagnostic->reason, testing::HasSubstr("content-projection budget"));
+    ASSERT_THAT(document.querySelector("#t"), Optional(ElementIdEq("t")));
+    ASSERT_EQ(document.querySelector("#t")->type(), type);
+    EXPECT_EQ(DescriptiveText(*document.querySelector("#t")), "Hello");
+    EXPECT_EQ(retainedBytes(document), bytesBefore);
+  };
+
+  for (const DescriptiveCase& descriptive : kDescriptiveCases) {
+    const std::string tag(descriptive.tag);
+    {
+      SCOPED_TRACE(tag + ": payload budget");
+      const std::string source =
+          "<svg xmlns='http://www.w3.org/2000/svg'><" + tag + " id='t'>Hello</" + tag + "></svg>";
+      parser::SVGParser::Options options;
+      options.maximumParsedPayloadSize = retainedBytes(ParseSVG(source));
+      auto document = ParseSVG(source, options);
+      const std::size_t bytesBefore = retainedBytes(document);
+      ASSERT_EQ(bytesBefore, options.maximumParsedPayloadSize);
+
+      expectKeptText(document, ReplaceInSource(document, "Hello", "Hello, world"), descriptive.type,
+                     bytesBefore);
+    }
+    {
+      SCOPED_TRACE(tag + ": chunk limit");
+      parser::SVGParser::Options options;
+      options.maximumContentProjectionChunks = 1;
+      auto document = ParseSVG("<svg xmlns='http://www.w3.org/2000/svg'><g id='host'><" + tag +
+                                   " id='t'>Hello</" + tag + "></g></svg>",
+                               options);
+      const std::size_t bytesBefore = retainedBytes(document);
+
+      expectKeptText(document,
+                     ReplaceInSource(document, "<" + tag + " id='t'>Hello</" + tag + ">",
+                                     "<" + tag + " id='t'>Hello<![CDATA[, world]]></" + tag + ">"),
+                     descriptive.type, bytesBefore);
+    }
+  }
+}
+
+// A `<title>`, `<desc>` or `<metadata>` element that a source edit builds reports an error when the
+// content-projection budget refuses its text, as an inserted `<text>` does, and stays empty, as a
+// fresh parse leaves it.
+TEST(SVGDocument, RejectedBuiltDescriptiveTextReportsAnError) {
+  for (const DescriptiveCase& descriptive : kDescriptiveCases) {
+    const std::string tag(descriptive.tag);
+    SCOPED_TRACE(tag);
+    parser::SVGParser::Options options;
+    options.maximumContentProjectionChunks = 1;
+    auto document = ParseSVG(
+        R"(<svg xmlns="http://www.w3.org/2000/svg"><g><rect id="old"/></g></svg>)", options);
+
+    const xml::ApplySourceEditResult insertion =
+        ReplaceInSource(document, R"(<rect id="old"/>)",
+                        "<" + tag + " id='t'>Hello<![CDATA[, world]]></" + tag + ">");
+    EXPECT_TRUE(insertion.applied);
+    ASSERT_TRUE(insertion.diagnostic.has_value());
+    EXPECT_THAT(insertion.diagnostic->reason, testing::HasSubstr("content-projection budget"));
+    ASSERT_THAT(document.querySelector("#t"), Optional(ElementIdEq("t")));
+    ASSERT_EQ(document.querySelector("#t")->type(), descriptive.type);
+    EXPECT_EQ(DescriptiveText(*document.querySelector("#t")), "");
+  }
+}
+
+// Experimental element types are built only when the document's parse enabled them, as the parser
+// builds them.
+TEST(SVGDocument, SourceInsertedExperimentalElementFollowsParseOptions) {
+  for (const bool experimental : {false, true}) {
+    SCOPED_TRACE(experimental ? "experimental enabled" : "experimental disabled");
+    parser::SVGParser::Options options;
+    options.enableExperimental = experimental;
+    auto document = ParseSVG(
+        R"(<svg xmlns="http://www.w3.org/2000/svg"><g id="host"><rect id="old"/></g></svg>)",
+        options);
+
+    const xml::ApplySourceEditResult result = ReplaceInSource(
+        document, R"(<rect id="old"/>)", "<set id='new' attributeName='opacity' to='0.5'/>");
+
+    EXPECT_TRUE(result.applied);
+    EXPECT_THAT(result.diagnostic, Eq(std::nullopt));
+    EXPECT_EQ(result.scope, xml::ReparseScope::ElementSubtree);
+    ASSERT_THAT(document.querySelector("#new"), Optional(ElementIdEq("new")));
+    EXPECT_EQ(document.querySelector("#new")->type(),
+              experimental ? ElementType::Set : ElementType::Unknown);
+  }
+}
+
+// Each entry point that can move an element into the SVG namespace builds it in place.
+TEST(SVGDocument, NamespaceMembershipEntryPointsBuildTypedElements) {
+  constexpr std::string_view kDefaultNamespaceSource =
+      "<svg xmlns='http://www.w3.org/2000/svg'><g id='host' xmlns='http://example.test/foreign'>"
+      "<image id='target' width='4' height='4' href='picture.png'/></g></svg>";
+  struct EntryPointCase {
+    std::string_view name;
+    std::string_view source;
+    std::function<xml::ApplySourceEditResult(SVGDocument&)> edit;
+    xml::ReparseScope scope;
+  };
+  const std::vector<EntryPointCase> cases = {
+      {"removeElementAttribute of a default xmlns", kDefaultNamespaceSource,
+       [](SVGDocument& document) {
+         return document.removeElementAttribute(*document.querySelector("#host"),
+                                                xml::XMLQualifiedNameRef("xmlns"));
+       },
+       xml::ReparseScope::OpeningTag},
+      {"applySourceEdit of a default xmlns", kDefaultNamespaceSource,
+       [](SVGDocument& document) {
+         return ReplaceInSource(document, kForeignNamespaceUri, kSvgNamespaceUri);
+       },
+       xml::ReparseScope::AttributeValue},
+      {"insertElement out of a foreign default namespace", kDefaultNamespaceSource,
+       [](SVGDocument& document) {
+         return document.insertElement(document.svgElement(), *document.querySelector("#target"));
+       },
+       xml::ReparseScope::ElementSubtree},
+      {"setElementAttribute rebinding inside a foreign subtree",
+       "<svg xmlns='http://www.w3.org/2000/svg' xmlns:x='http://example.test/foreign' "
+       "xmlns:y='http://example.test/other'><x:wrapper id='host'><y:image id='target' width='4' "
+       "height='4' href='picture.png'/></x:wrapper></svg>",
+       [](SVGDocument& document) {
+         return document.setElementAttribute(
+             document.svgElement(), xml::XMLQualifiedNameRef("xmlns", "y"), kSvgNamespaceUri);
+       },
+       xml::ReparseScope::AttributeValue},
+  };
+  for (const EntryPointCase& entryPoint : cases) {
+    SCOPED_TRACE(entryPoint.name);
+    auto document = ParseSVG(entryPoint.source);
+    ASSERT_THAT(document.querySelector("#target"), Optional(ElementIdEq("target")));
+    ASSERT_EQ(document.querySelector("#target")->type(), ElementType::Unknown);
+    const Entity target = document.querySelector("#target")->entityHandle().entity();
+
+    const xml::ApplySourceEditResult result = entryPoint.edit(document);
+
+    EXPECT_TRUE(result.applied);
+    EXPECT_THAT(result.diagnostic, Eq(std::nullopt));
+    EXPECT_EQ(result.scope, entryPoint.scope);
+    ASSERT_THAT(document.querySelector("#target"), Optional(ElementIdEq("target")));
+    ASSERT_EQ(document.querySelector("#target")->type(), ElementType::Image);
+    EXPECT_EQ(document.querySelector("#target")->cast<SVGImageElement>().href(), "picture.png");
+    EXPECT_EQ(document.querySelector("#target")->entityHandle().entity(), target);
+  }
+}
+
+// The projection builds every element type the parser builds, for a source insertion and for a
+// namespace rebind, so adding an element type cannot leave the projection falling back to an
+// unknown element.
+TEST(SVGDocument, ProjectionBuildsEveryParserElementType) {
+  for (const bool experimental : {false, true}) {
+    parser::SVGParser::Options options;
+    options.enableExperimental = experimental;
+    [&]<typename... Types>(entt::type_list<Types...>) {
+      (
+          [&]<typename ElementT>() {
+            const std::string tag(ElementT::Tag);
+            SCOPED_TRACE(tag + (experimental ? " (experimental enabled)" : ""));
+            constexpr bool kExperimentalType = [] {
+              if constexpr (requires { ElementT::IsExperimental; }) {
+                return ElementT::IsExperimental;
+              } else {
+                return false;
+              }
+            }();
+            const ElementType expected =
+                experimental || !kExperimentalType ? ElementT::Type : ElementType::Unknown;
+
+            auto inserted = ParseSVG(
+                R"(<svg xmlns="http://www.w3.org/2000/svg"><g id="host"><rect id="old"/></g></svg>)",
+                options);
+            const xml::ApplySourceEditResult insertion =
+                ReplaceInSource(inserted, R"(<rect id="old"/>)", "<" + tag + " id='new'/>");
+            EXPECT_TRUE(insertion.applied);
+            EXPECT_THAT(insertion.diagnostic, Eq(std::nullopt));
+            EXPECT_EQ(insertion.scope, xml::ReparseScope::ElementSubtree);
+            ASSERT_THAT(inserted.querySelector("#new"), Optional(ElementIdEq("new")));
+            EXPECT_EQ(inserted.querySelector("#new")->type(), expected);
+            // Found by position: the parser does not apply `id` to every type, such as feFuncA.
+            auto reparsed = ParseSVG(inserted.source(), options);
+            ASSERT_THAT(reparsed.querySelector("#host"), Optional(ElementIdEq("host")));
+            const std::optional<SVGElement> freshElement =
+                reparsed.querySelector("#host")->firstChild();
+            ASSERT_THAT(freshElement, testing::Ne(std::nullopt));
+            EXPECT_EQ(freshElement->type(), expected);
+
+            auto rebound = ParseSVG(
+                "<svg xmlns='http://www.w3.org/2000/svg' "
+                "xmlns:x='http://example.test/foreign'><x:" +
+                    tag + " id='new'/></svg>",
+                options);
+            const xml::ApplySourceEditResult rebind = rebound.setElementAttribute(
+                rebound.svgElement(), xml::XMLQualifiedNameRef("xmlns", "x"), kSvgNamespaceUri);
+            EXPECT_TRUE(rebind.applied);
+            EXPECT_THAT(rebind.diagnostic, Eq(std::nullopt));
+            EXPECT_EQ(rebind.scope, xml::ReparseScope::AttributeValue);
+            ASSERT_THAT(rebound.querySelector("#new"), Optional(ElementIdEq("new")));
+            EXPECT_EQ(rebound.querySelector("#new")->type(), expected);
+          }.template operator()<Types>(),
+          ...);
+    }(AllSVGElements{});
+  }
 }
 
 TEST(SVGDocument, SourceBackedElementAttributeHelpersUpdateSourceAndProjection) {

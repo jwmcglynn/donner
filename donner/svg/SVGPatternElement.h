@@ -175,7 +175,7 @@ namespace donner::svg {
  * | `href`   | (none)  | Reference to another pattern element to use as a template. |
  */
 class SVGPatternElement : public SVGElement {
-  friend class parser::SVGParserImpl;
+  friend class details::ElementFactory;
 
 protected:
   /// Create an SVGPatternElement wrapper from an entity.

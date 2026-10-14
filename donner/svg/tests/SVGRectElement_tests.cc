@@ -3,8 +3,12 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <string>
+#include <string_view>
+
 #include "donner/base/tests/BaseTestUtils.h"
 #include "donner/svg/core/tests/PathTestUtils.h"
+#include "donner/svg/renderer/tests/RendererTestUtils.h"
 #include "donner/svg/tests/ParserTestUtils.h"
 
 using testing::AllOf;
@@ -184,6 +188,42 @@ TEST(SVGRectElementTests, SplineRoundedCorners) {
                       Command{CommandType::CurveTo, 6}, Command{CommandType::LineTo, 9},
                       Command{CommandType::CurveTo, 10}, Command{CommandType::LineTo, 13},
                       Command{CommandType::CurveTo, 14}, Command{CommandType::ClosePath, 0}))));
+}
+
+TEST(SVGRectElementTests, ExplicitAutoRadiiProduceSquareCorners) {
+  constexpr std::string_view kSquare =
+      "................\n................\n................\n................\n"
+      "....@@@@@@@@....\n....@@@@@@@@....\n....@@@@@@@@....\n....@@@@@@@@....\n"
+      "....@@@@@@@@....\n....@@@@@@@@....\n....@@@@@@@@....\n....@@@@@@@@....\n"
+      "................\n................\n................\n................\n";
+  for (const std::string_view radii :
+       {R"(rx="auto")", R"(ry="auto")", R"(rx="auto" ry="auto")", R"(style="rx:auto;ry:auto")",
+        R"(style="rx:initial;ry:unset")"}) {
+    SCOPED_TRACE(radii);
+    auto fragment = instantiateSubtreeElementAs<SVGRectElement>(
+        std::string(R"(<rect x="4" y="4" width="8" height="8" fill="black" )") +
+        std::string(radii) + "/>");
+    EXPECT_THAT(fragment->computedRx(), LengthIs(0, Lengthd::Unit::None));
+    EXPECT_THAT(fragment->computedRy(), LengthIs(0, Lengthd::Unit::None));
+    EXPECT_THAT(RendererTestUtils::renderToAsciiImage(fragment.document).generated,
+                Eq(std::string(kSquare)));
+  }
+}
+
+TEST(SVGRectElementTests, ExplicitAutoRadiiUseOtherAxis) {
+  const AsciiImage reference = RendererTestUtils::renderToAsciiImage(
+      R"(<rect x="4" y="4" width="8" height="8" rx="2" ry="2" fill="black"/>)");
+  for (const std::string_view radii :
+       {R"(rx="auto" ry="2")", R"(rx="2" ry="auto")", R"(rx="5" ry="2" style="rx:auto")"}) {
+    SCOPED_TRACE(radii);
+    auto fragment = instantiateSubtreeElementAs<SVGRectElement>(
+        std::string(R"(<rect x="4" y="4" width="8" height="8" fill="black" )") +
+        std::string(radii) + "/>");
+    EXPECT_THAT(fragment->computedRx(), LengthIs(2, Lengthd::Unit::None));
+    EXPECT_THAT(fragment->computedRy(), LengthIs(2, Lengthd::Unit::None));
+    EXPECT_THAT(RendererTestUtils::renderToAsciiImage(fragment.document).generated,
+                Eq(reference.generated));
+  }
 }
 
 }  // namespace donner::svg

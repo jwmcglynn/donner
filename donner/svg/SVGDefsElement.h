@@ -83,7 +83,7 @@ namespace donner::svg {
  * elements, such as \ref xml_use.
  */
 class SVGDefsElement : public SVGGraphicsElement {
-  friend class parser::SVGParserImpl;
+  friend class details::ElementFactory;
 
 private:
   /// Create an SVGDefsElement wrapper from an entity.
