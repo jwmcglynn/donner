@@ -413,7 +413,9 @@ class MacosCacheKeyParityTest(unittest.TestCase):
             output_file.write_text("")
             result = subprocess.run(
                 ["/bin/bash", str(_path(SELECT_SCRIPT)), mode],
-                env={"PATH": "/usr/bin:/bin", "GITHUB_ENV": str(env_file),
+                # The test's own PATH: a fixed /usr/bin:/bin lacks coreutils on hosts that
+                # keep them elsewhere, such as NixOS remote-execution workers.
+                env={"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "GITHUB_ENV": str(env_file),
                      "GITHUB_OUTPUT": str(output_file), "RUNNER_ARCH": "ARM64",
                      "BAZEL_MACOS_BUILD_FLAGS": "--config=ci-macos",
                      "XCODE_APPLICATIONS_DIR": str(root), "XCODEBUILD": str(xcodebuild)},
