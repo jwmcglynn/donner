@@ -613,6 +613,7 @@ donner_cc_test(
         "RendererAnimationFilterViewport_tests.cc",
         "RendererAnimationFilter_tests.cc",
         "RendererAnimationLayoutBase_tests.cc",
+        "RendererAnimationPathValue_tests.cc",
         "RendererAnimationPresentation_tests.cc",
         "RendererAnimationReferenceValue_tests.cc",
         "RendererAnimationStyleBase_tests.cc",
