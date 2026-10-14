@@ -9,9 +9,10 @@ report the test supplies and exits with the status the test asks for.
 import json
 import os
 from pathlib import Path
+import select
 import shutil
-import subprocess
 import socket
+import subprocess
 import tempfile
 import unittest
 from urllib.parse import urlsplit
@@ -51,6 +52,10 @@ class BrowserFlakeHuntTest(unittest.TestCase):
             'printf "%s\\n" "$@" > "$FIXTURE_RECORD/args"\n'
             'printf "%s\\n" "$DONNER_WASM_BASE_URL" > "$FIXTURE_RECORD/url"\n'
             'curl -fsS -o "$FIXTURE_RECORD/served.wasm" "$DONNER_WASM_BASE_URL/editor.wasm"\n'
+            'if [[ -n "$FIXTURE_HANG" ]]; then\n'
+            '  echo $$ > "$FIXTURE_RECORD/npx.fifo"\n'
+            '  exec sleep 300\n'
+            'fi\n'
             'if [[ -n "$FIXTURE_REPORT" ]]; then\n'
             '  cp "$FIXTURE_REPORT" "$PLAYWRIGHT_JSON_OUTPUT_NAME"\n'
             'fi\n'
@@ -79,23 +84,27 @@ class BrowserFlakeHuntTest(unittest.TestCase):
         self.record = self.root / "record"
         self.record.mkdir()
 
-    def run_script(self, *args, status=0, report=None):
-        report_path = ""
-        if report is not None:
-            report_path = str(self.root / "fixture-report.json")
-            Path(report_path).write_text(json.dumps(report), encoding="utf-8")
+    def environment(self, status=0, report_path="", hang=False):
         environment = dict(os.environ)
         environment.update({
             "PATH": f"{self.executables.path}{os.pathsep}{environment.get('PATH', '')}",
             "FIXTURE_RECORD": str(self.record),
             "FIXTURE_REPORT": report_path,
             "FIXTURE_STATUS": str(status),
+            "FIXTURE_HANG": "1" if hang else "",
         })
+        return environment
+
+    def run_script(self, *args, status=0, report=None):
+        report_path = ""
+        if report is not None:
+            report_path = str(self.root / "fixture-report.json")
+            Path(report_path).write_text(json.dumps(report), encoding="utf-8")
         return subprocess.run(
             ["bash", str(self.root / "tools/browser-flake-hunt.sh"), *args],
             capture_output=True,
             text=True,
-            env=environment,
+            env=self.environment(status, report_path),
             timeout=60,
         )
 
@@ -179,6 +188,33 @@ class BrowserFlakeHuntTest(unittest.TestCase):
             "--package", str(self.package), "--out", str(self.root / "out"), report=report
         )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        url = urlsplit((self.record / "url").read_text(encoding="utf-8").strip())
+        with self.assertRaises(ConnectionRefusedError):
+            socket.create_connection((url.hostname, url.port), timeout=5).close()
+
+    def test_termination_stops_playwright_and_the_server(self):
+        fifo = self.record / "npx.fifo"
+        os.mkfifo(fifo)
+        # Opened before the script starts, so the stub's write waits for this reader.
+        reader = os.open(fifo, os.O_RDONLY | os.O_NONBLOCK)
+        self.addCleanup(os.close, reader)
+        script = subprocess.Popen(
+            ["bash", str(self.root / "tools/browser-flake-hunt.sh"), "--package", str(self.package),
+             "--out", str(self.root / "out")],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            env=self.environment(hang=True),
+        )
+        self.addCleanup(script.kill)
+        # The stub writes its pid once Playwright would be running. The bound only turns a script
+        # that never gets there into a failure instead of a hang.
+        readable, _, _ = select.select([reader], [], [], 30)
+        self.assertEqual(readable, [reader], "the stub never started")
+        npx_pid = int(os.read(reader, 64).decode().strip())
+        script.terminate()
+        self.assertEqual(script.wait(timeout=30), 143)
+        with self.assertRaises(ProcessLookupError):
+            os.kill(npx_pid, 0)
         url = urlsplit((self.record / "url").read_text(encoding="utf-8").strip())
         with self.assertRaises(ConnectionRefusedError):
             socket.create_connection((url.hostname, url.port), timeout=5).close()

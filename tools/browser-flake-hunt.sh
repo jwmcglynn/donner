@@ -105,10 +105,23 @@ if [[ ! -d "${kTestsDir}/node_modules" ]]; then
 fi
 
 server_pid=""
+playwright_pid=""
 load_pids=()
+# Stops `$1` and every process under it, children first.
+# shellcheck disable=SC2329  # invoked by cleanup below.
+stop_tree() {
+  local child
+  for child in $(pgrep -P "$1" 2>/dev/null); do
+    stop_tree "${child}"
+  done
+  kill "$1" 2>/dev/null || true
+}
 # shellcheck disable=SC2329  # invoked by the EXIT trap below.
 cleanup() {
   local pid
+  if [[ -n "${playwright_pid}" ]]; then
+    stop_tree "${playwright_pid}"
+  fi
   for pid in ${load_pids[@]+"${load_pids[@]}"}; do
     kill "${pid}" 2>/dev/null || true
   done
@@ -194,7 +207,12 @@ echo "Serving ${package_dir} at ${server_url}; ${repeat} runs per case, cpu-load
   "low-priority ${low_priority}"
 started_at="$(date +%s)"
 status=0
-(cd "${kTestsDir}" && "${command[@]}") 2>&1 | tee "${out_dir}/playwright.log" || status=$?
+# Playwright runs in the background and the script waits for it, so an interrupt or termination
+# runs the cleanup at once instead of after Playwright finishes.
+(cd "${kTestsDir}" && exec "${command[@]}") > >(tee "${out_dir}/playwright.log") 2>&1 &
+playwright_pid=$!
+wait "${playwright_pid}" || status=$?
+playwright_pid=""
 elapsed_s=$(( $(date +%s) - started_at ))
 
 if [[ ! -f "${PLAYWRIGHT_JSON_OUTPUT_NAME}" ]]; then
