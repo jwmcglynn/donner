@@ -1737,6 +1737,14 @@ class CiLaneParityTest(unittest.TestCase):
             len(bazel_invocations("echo $'label \\' #1'; bazelisk test //...\n", {})), 1)
         self.assertEqual(failure_masks("echo $'label \\' #1'; set +e"),
                          {"echo $'label \\' #1'; set +e"})
+        # An escaped blank continues the word, so the `#` after it starts no comment. An escaped
+        # backslash before the blank leaves the blank unescaped.
+        masked = "echo label\\ #1; bazelisk test //... || true"
+        self.assertEqual(len(bazel_invocations(masked + "\n", {})), 1)
+        self.assertEqual(failure_masks(masked), {masked})
+        self.assertEqual(len(bazel_invocations("echo a\\\t#1; bazelisk test //...\n", {})), 1)
+        self.assertEqual(len(bazel_invocations("echo a\\\\\\ #1; bazelisk test //...\n", {})), 1)
+        self.assertEqual(bazel_invocations("echo a\\\\ # bazelisk test //...\n", {}), [])
         quoted = bazel_invocations('bazelisk test --test_arg="a #b" //a\n', {})
         self.assertEqual(quoted[0]["targets"], {"//a"})
         self.assertEqual(failure_masks('echo "lane #1"; set +e\nbazelisk test //...'),
