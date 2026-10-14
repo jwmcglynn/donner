@@ -42,7 +42,7 @@ alone does not submit to BCR. Prereleases do not open BCR PRs.
 | BCR Preflight            | Committed source archive, both lockfile-bound CLI binaries, upstream admission report, Ubuntu/macOS × Bazel 7/8 consumer matrix with its configured dependency audit | Read-only build jobs; scoped OIDC/attestation signer |
 | Assemble candidate       | Manual dispatch on the candidate commit naming every qualifying attempt and both review reports; verified record retained 90 days and attested                       | Read-only token; scoped OIDC/attestation signer      |
 | Release                  | Named record run/attempt and digest, re-verified record and retained source and binary bytes, uploaded asset digests                                                 | Release assets and attestations                      |
-| Prepare BCR fork branch  | Manual dispatch, successful Release run, approved source commit/digest, released bytes and matching remote tag                                                       | Fork-scoped token behind a protected environment     |
+| Prepare BCR fork branch  | Manual dispatch naming the Release run and record digest; attested record and released bytes                                                                         | Fork-scoped token behind a protected environment     |
 | File upstream BCR PR     | Reviewed exact fork diff and PR title/body, separate approval of that filing                                                                                         | Maintainer's GitHub session                          |
 | BCR admission and builds | Upstream checks, maintainer review where required, platform matrix                                                                                                   | BCR-owned infrastructure                             |
 | Registry availability    | Merged entry visible at `https://registry.bazel.build/modules/donner`                                                                                                | BCR-owned infrastructure                             |
@@ -62,8 +62,9 @@ alone does not submit to BCR. Prereleases do not open BCR PRs.
 4. Inspect its admission report and all four consumer jobs. A generator or checkout-only build is
    not an admission test. Expected BCR maintainer review is reported separately from validation
    errors, and does not imply that upstream builds have run.
-5. Confirm `donner-bcr-qualified-<attempt>` and both `donner-svg-<platform>-<commit>-<attempt>`
-   artifacts, including each generated Bazel lockfile, are retained. Artifact retention is 90 days; run a fresh preflight before approval if
+5. Confirm `donner-bcr-qualified-<attempt>`, `donner-bcr-entry-<attempt>` and both
+   `donner-svg-<platform>-<commit>-<attempt>` artifacts, including each generated Bazel lockfile,
+   are retained. Artifact retention is 90 days; run a fresh preflight before approval if
    any expires. Use a successful manually dispatched full preflight on main for the exact source
    commit, never a slim push run, a PR or a feature-branch run.
 6. While `main` still points at the candidate commit, dispatch `Assemble release candidate` with
@@ -117,7 +118,11 @@ uses the local candidate bytes, because the approved release does not exist yet.
 integrity, module identity, compatibility level, metadata, presubmit and global admission checks
 remain enabled. The report records the validator revision. Live asset availability is checked after
 release publication. BCR may change its policy before submission, so preflight is not a promise of
-future admission.
+future admission. Preflight retains the entry and its report as `donner-bcr-entry-<attempt>`. The
+candidate record binds that artifact as its `bcr-entry` role. Fork preparation submits its
+`MODULE.bazel`, `presubmit.yml` and `source.json` exactly as the validator checked them, and
+derives only `metadata.json`, whose version history may have moved since preflight, from the
+registry it submits to. Submission never runs the generator again.
 
 Preflight builds the Linux and macOS CLI binaries from the same committed checkout. The repository
 intentionally ignores `MODULE.bazel.lock`, so each platform resolves its lockfile once with
@@ -150,14 +155,30 @@ notice, and admission rejection paths; `//tools:bcr_dependency_closure_tests` co
 3. Require server-reported SHA-256 confirmation for every uploaded asset. An existing identical asset
    is accepted; a conflicting asset stops publication. `//tools:release_artifact_publisher_tests`
    covers successful uploads, lost responses, retries and conflicts.
-4. Obtain approval to prepare the fork branch from the reviewed Release run, source commit and
-   archive SHA-256. This authorizes fork preparation only, not an upstream PR.
-5. Manually dispatch `Prepare BCR submission` on `main` with those three values. It rechecks the
-   Release event, tag/source identity, published source bytes and preflight attempt before using
-   the fork-scoped token. Tokenless jobs run the release-tagged entry generator, verify the staged
-   source integrity, module files and metadata, and retain and check a bounded Git bundle. The
-   protected push job runs no external actions; it downloads that artifact with the runner's
-   GitHub CLI and rechecks the digest, base, commit and tree before its final token-bearing step.
+4. Obtain approval to prepare the fork branch from the reviewed Release run and the candidate
+   record digest in its `Release-Candidate-Record:` line. This authorizes fork preparation only,
+   not an upstream PR.
+5. Manually dispatch `Prepare BCR submission` on `main` with those two values. Before using the
+   fork-scoped token it rechecks the Release event and tag/source identity, requires the release
+   body to name that record digest, downloads the `donner-X.Y.Z.candidate.json` release asset,
+   checks its digest and its attestation by `Assemble release candidate`, and takes the approved
+   source digest and preflight attempt from the record. The published archive's provenance must
+   name exactly that attempt, a successful run on `main`. Tokenless jobs download the record's
+   `bcr-entry` artifact by ID and verify it against the record (see the
+   [registry entry](../release_candidate.md)). They stage its `MODULE.bazel`, `presubmit.yml` and
+   `source.json` byte for byte on the current registry `main`. `metadata.json` is derived there:
+   the registry's current `versions` plus this version, its current `yanked_versions`, and the
+   other fields from `.bcr/metadata.template.json`. An earlier version merged or yanked after
+   preflight is therefore carried forward. Preflight's copy must agree with the derived file on
+   every field but that history, and the registry's own project and maintainer fields must still
+   match the template. The derived `versions` list is in append order: the new version always
+   goes last, as `verify_metadata_history` requires, while `publish-to-bcr` writes a sorted list.
+   A patch release on an older line, such as `0.8.1` after `0.9.0`, is therefore listed after the
+   newer version; check the proposed `metadata.json` diff with care before such a submission.
+   The jobs then check source integrity, module files, metadata and history,
+   and retain and check a bounded Git bundle. The protected push job runs no external actions; it
+   downloads that artifact with the runner's GitHub CLI and rechecks the digest, base, commit and
+   tree before its final token-bearing step.
    A Git push with an empty-expected ref lease creates the branch only while absent;
    it cannot replace or advance an existing branch. The job prints a compare URL,
    proposed title and body; it never files upstream.
@@ -179,7 +200,7 @@ notice, and admission rejection paths; `//tools:bcr_dependency_closure_tests` co
   release approval; after publication, do not silently substitute a later record or preflight
   attempt.
 - If fork preparation fails before a branch push, start a new manual dispatch with the same
-  approved Release run ID, source commit and archive SHA-256, or rerun all jobs. A failed-jobs-only
+  approved Release run ID and record digest, or rerun all jobs. A failed-jobs-only
   rerun cannot find the entry bundle retained under the original run attempt. A competing branch
   fails the empty-expected ref lease even if its tip could be fast-forwarded. Inspect that branch
   and its proposed PR manually instead.
@@ -314,8 +335,11 @@ version, including those that allow yanked versions.
 
 **Docs site.** Follow the "Roll back" section of the
 [documentation promotion and rollback procedure](../release_checklists/docs_artifact_promotion.md).
-It redeploys the previous retained, marker-bearing Pages build by artifact ID through
-`deploy_docs.yaml`, without rebuilding, and checks the live `docs-build.json` marker.
+It redeploys a previous retained, marker-bearing Pages build by artifact ID through
+`deploy_docs.yaml`, without rebuilding, and checks the live `docs-build.json` marker. The usual
+target is the previous release's docs build, selected with `selection: record` and that
+release's record. A build that predates candidate records is selected with
+`selection: rollback` and the six values from the release tracking issue.
 
 **Web editor.** **Gap:** no workflow in this repository deploys the editor, and editor hosting is
 outside the repository. `Editor WASM` retains a package named `donner-editor-wasm-geode-<commit>`
@@ -391,9 +415,11 @@ site or the upstream registry.
 
 - **Fixture tests.** Run
   `bazel test //tools:bcr_release_tests //tools:release_artifact_publisher_tests //tools:pages_artifact_tests //tools:release_candidate_tests`.
-  They cover record selection, record assembly and Release re-verification, submission planning, preservation of existing yanks, write-once
-  asset publication with conflicts and lost responses, Pages artifact selection and candidate
-  record verification. They use mocked GitHub responses and publish nothing.
+  They cover record selection, record assembly and Release re-verification, submission planning
+  from the published record, promotion of the admission-validated registry entry, preservation of
+  existing yanks, write-once asset publication with conflicts and lost responses, Pages artifact
+  selection from a record and candidate record verification. They use mocked GitHub responses and
+  publish nothing.
 - **Yank PR.** In a local clone of the registry, add a test entry to
   `modules/donner/metadata.json` and run the BCR validator as in step 2 of the yank procedure.
   Do not push the branch.

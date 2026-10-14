@@ -78,6 +78,26 @@ class ZipValidationTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "digest differs"):
             candidate._extract_verified(self.path, {"payload": digest(b"expected")}, self.output)
 
+    def test_registry_entry_inventory_is_the_validated_entry_and_earlier_versions(self):
+        required = candidate._fixed_role_files("bcr-entry", "0.8.0")
+        self.assertEqual(required, {
+            "admission.json", "registry/bazel_registry.json",
+            "registry/modules/donner/metadata.json",
+            "registry/modules/donner/0.8.0/MODULE.bazel",
+            "registry/modules/donner/0.8.0/presubmit.yml",
+            "registry/modules/donner/0.8.0/source.json"})
+        previous = {"registry/modules/donner/0.7.0/MODULE.bazel",
+                    "registry/modules/donner/0.7.0/source.json"}
+        candidate._verify_role_files("bcr-entry", required | previous, "0.8.0")
+        for name in ("registry/modules/donner/0.8.0/patches/fix.patch",
+                     "registry/modules/other/1.0.0/MODULE.bazel",
+                     "registry/modules/donner/notes.txt",
+                     "registry/modules/donner/latest/MODULE.bazel", "extra.json"):
+            with self.subTest(name=name), self.assertRaisesRegex(ValueError, "publishable role"):
+                candidate._verify_role_files("bcr-entry", required | {name}, "0.8.0")
+        with self.assertRaisesRegex(ValueError, "publishable role"):
+            candidate._verify_role_files("bcr-entry", required - {"admission.json"}, "0.8.0")
+
     def test_private_shaped_or_control_character_names_are_rejected_without_echo(self):
         with self.assertRaisesRegex(ValueError, "publishable role"):
             candidate._verify_role_files("source", {"home/user/private.txt"}, "0.8.0")
@@ -103,7 +123,7 @@ class RecordValidationTest(unittest.TestCase):
         for name in ("artifacts", "evidence", "reviews", "source"):
             (self.root / name).mkdir()
         self.record = {
-            "schema": 2,
+            "schema": 3,
             "source": {"commit": COMMIT, "tree": TREE, "version": "0.8.0",
                        "compatibility_level": 0, "bazel_version": "8.8.1",
                        "module_locks_sha256": LOCKS.copy(),
@@ -206,13 +226,35 @@ class RecordValidationTest(unittest.TestCase):
                              **options)
 
     def test_previous_schema_without_dependency_state_is_rejected(self):
-        self.record["schema"] = 1
-        with self.assertRaisesRegex(ValueError, "unsupported schema"):
-            self.verify()
-        self.record["schema"] = 2
+        for schema in (1, 2):
+            self.record["schema"] = schema
+            with self.subTest(schema=schema), self.assertRaisesRegex(ValueError, "unsupported schema"):
+                self.verify()
+        self.record["schema"] = 3
         self.verify()
         del self.record["artifacts"]["docs-provenance"]
         with self.assertRaisesRegex(ValueError, "every publishable artifact"):
+            self.verify()
+
+    def test_record_binds_the_admission_validated_registry_entry(self):
+        self.assertEqual(candidate.SCHEMA, 3)
+        self.assertEqual(candidate.ARTIFACT_WORKFLOWS["bcr-entry"],
+                         ".github/workflows/bcr_preflight.yml")
+        self.assertEqual(self.record["artifacts"]["bcr-entry"]["name"], "donner-bcr-entry-1")
+        self.verify()
+        entry = self.record["artifacts"].pop("bcr-entry")
+        with self.assertRaisesRegex(ValueError, "every publishable artifact"):
+            self.verify()
+        self.record["artifacts"]["bcr-entry"] = dict(entry, name="donner-bcr-entry-2")
+        with self.assertRaisesRegex(ValueError, "artifact name"):
+            self.verify()
+
+    def test_registry_entry_must_come_from_the_qualifying_preflight_attempt(self):
+        entry = self.record["artifacts"]["bcr-entry"]
+        entry["run_id"] = 103
+        self.runs[103] = self.fixture_run(103, candidate.ARTIFACT_WORKFLOWS["bcr-entry"])
+        self.metadata[entry["artifact_id"]]["workflow_run"]["id"] = 103
+        with self.assertRaisesRegex(ValueError, "registry entry artifacts must share one"):
             self.verify()
 
     def test_docs_provenance_must_come_from_the_docs_build_attempt(self):
@@ -524,10 +566,21 @@ class SourceAndEditorTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "lockfile is missing"):
             candidate._verify_editor(directory, COMMIT, self.root, expected, "12", "2")
 
+    def test_registry_entry_payload_is_checked_against_the_record_archive(self):
+        record = {"source": {"commit": COMMIT, "version": "0.8.0"},
+                  "artifacts": {"source": {"files": {"donner-0.8.0.tar.gz": "4" * 64}}}}
+        entry = {"run_id": 100, "attempt": 1}
+        with mock.patch.object(candidate.bcr_source, "verify_validated_entry") as check:
+            candidate._verify_payload("bcr-entry", self.root / "entry", entry, record, self.root)
+        check.assert_called_once_with(self.root / "entry", self.root, "0.8.0", "4" * 64)
+
     def test_editor_and_docs_locks_must_equal_the_record_dependency_state(self):
-        record = {"source": {"commit": COMMIT, "module_locks_sha256": LOCKS.copy()},
+        # Docs provenance is checked against the record's Bazel version, which the source check
+        # binds to `.bazelversion`, so docs deployment needs no checkout of the candidate.
+        record = {"source": {"commit": COMMIT, "module_locks_sha256": LOCKS.copy(),
+                             "bazel_version": "8.8.1"},
                   "artifacts": {"docs": {"files": {"artifact.tar": "3" * 64}}}}
-        (self.root / ".bazelversion").write_text("8.8.1\n", encoding="utf-8")
+        (self.root / ".bazelversion").write_text("9.0.0\n", encoding="utf-8")
         entry = {"run_id": 102, "attempt": 1, "files": {}}
         cases = (("editor", "_verify_editor", candidate, ()),
                  ("docs-provenance", "verify_provenance", candidate.pages_artifact, ("docs",)))
@@ -682,7 +735,9 @@ class AssemblyAndReleaseTest(unittest.TestCase):
                          f"{hashlib.sha256(raw).hexdigest()}  candidate.json\n")
         self.assertEqual({path.relative_to(output).as_posix() for path in output.rglob("*")
                           if path.is_file()}, candidate.RECORD_FILES)
-        self.assertEqual(record["schema"], 2)
+        self.assertEqual(record["schema"], 3)
+        self.assertEqual(record["artifacts"]["bcr-entry"]["name"], "donner-bcr-entry-2")
+        self.assertEqual(record["artifacts"]["bcr-entry"]["run_id"], 100)
         self.assertEqual(record["source"]["commit"], self.commit)
         self.assertEqual(record["source"]["version"], "0.8.0")
         self.assertEqual(record["source"]["compatibility_level"], 1)
@@ -932,6 +987,188 @@ class AssemblyAndReleaseTest(unittest.TestCase):
             self.release(artifact_id, record_sha256, name="expiring")
         self.artifacts[editor]["expires_at"] = github_time(NOW + timedelta(days=31))
         self.release(artifact_id, record_sha256, name="within-window")
+
+    def test_published_role_is_fetched_by_recorded_id_and_verified(self):
+        _, _, files = self.publish_record()
+        record = json.loads(files["candidate.json"])
+        entry = record["artifacts"]["bcr-entry"]
+        self.downloads.clear()
+        with self.patches() as stack:
+            payload = stack.enter_context(mock.patch.object(candidate, "_verify_payload"))
+            output = candidate.fetch_role(record, "bcr-entry", self.root, self.base / "entry.zip",
+                                          self.base / "entry", self.github, self.download)
+        self.assertEqual(self.downloads, [entry["artifact_id"]])
+        self.assertEqual({path.relative_to(output).as_posix() for path in output.rglob("*")
+                          if path.is_file()}, set(entry["files"]))
+        payload.assert_called_once_with("bcr-entry", output, entry, record, self.root)
+
+    def test_published_role_must_still_be_retained_and_unchanged(self):
+        _, _, files = self.publish_record()
+        record = json.loads(files["candidate.json"])
+        entry = record["artifacts"]["bcr-entry"]
+        metadata = self.artifacts[entry["artifact_id"]]
+        # Past the publication window an artifact is still usable until it expires.
+        metadata["expires_at"] = github_time(NOW + timedelta(days=1))
+        with self.patches():
+            candidate.fetch_role(record, "bcr-entry", self.root, self.base / "ok.zip",
+                                 self.base / "ok", self.github, self.download)
+        cases = {
+            "expired": (lambda: metadata.update(expires_at=github_time(NOW - timedelta(days=1))),
+                        "expires before"),
+            "changed bytes": (lambda: (self.remote / f"{entry['artifact_id']}.zip").write_bytes(
+                b"other"), "download differs"),
+            "other run": (lambda: metadata["workflow_run"].update(id=999), "metadata"),
+        }
+        for case, (change, message) in cases.items():
+            with self.subTest(case=case):
+                saved = json.loads(json.dumps(metadata))
+                original = (self.remote / f"{entry['artifact_id']}.zip").read_bytes()
+                change()
+                with self.patches(), self.assertRaisesRegex(ValueError, message):
+                    candidate.fetch_role(record, "bcr-entry", self.root,
+                                         self.base / f"{case}.zip", self.base / case,
+                                         self.github, self.download)
+                metadata.clear()
+                metadata.update(saved)
+                (self.remote / f"{entry['artifact_id']}.zip").write_bytes(original)
+
+    def test_load_record_requires_the_approved_canonical_bytes(self):
+        _, record_sha256, files = self.publish_record()
+        raw = files["candidate.json"]
+        self.assertEqual(candidate.load_record(raw, record_sha256), json.loads(raw))
+        with self.assertRaisesRegex(ValueError, "differs from the approved record"):
+            candidate.load_record(raw, "0" * 64)
+        pretty = (json.dumps(json.loads(raw), indent=2) + "\n").encode()
+        with self.assertRaisesRegex(ValueError, "canonical"):
+            candidate.load_record(pretty, digest(pretty))
+        old = candidate._canonical_bytes({**json.loads(raw), "schema": 2})
+        with self.assertRaisesRegex(ValueError, "unsupported schema"):
+            candidate.load_record(old, digest(old))
+
+    # Docs deployment side.
+
+    def docs_record(self, record_sha256, run_id=400, attempt=1, name="docs"):
+        with self.patches():
+            return candidate.docs_record(record_run_id=run_id, record_attempt=attempt,
+                                         record_sha256=record_sha256,
+                                         work=self.base / f"{name}-record",
+                                         github_json=self.github, download=self.download)
+
+    def docs_selection(self, record_sha256, run_id=400, attempt=1, name="docs"):
+        """Fetch the record, then select from it, as the deploy job does around its attestation."""
+        fetched = self.docs_record(record_sha256, run_id, attempt, name)
+        with self.patches():
+            return candidate.docs_selection(record_path=Path(fetched["record_path"]),
+                                            record_commit=fetched["record_commit"],
+                                            record_sha256=record_sha256,
+                                            work=self.base / name, github_json=self.github,
+                                            download=self.download)
+
+    def test_docs_deploy_selects_exactly_the_record_docs_build(self):
+        artifact_id, record_sha256, files = self.publish_record()
+        record = json.loads(files["candidate.json"])
+        docs = record["artifacts"]["docs"]
+        self.downloads.clear()
+        fetched = self.docs_record(record_sha256)
+        self.assertEqual(fetched, {"record_path": str(self.base / "docs-record/record/candidate.json"),
+                                   "record_commit": self.commit})
+        # Fetching the record downloads nothing it names: the job verifies the attestation first.
+        self.assertEqual(self.downloads, [artifact_id])
+        with self.patches():
+            result = candidate.docs_selection(
+                record_path=Path(fetched["record_path"]), record_commit=self.commit,
+                record_sha256=record_sha256, work=self.base / "docs",
+                github_json=self.github, download=self.download)
+        self.assertEqual(result, {
+            "artifact_id": str(docs["artifact_id"]), "run_id": "102", "attempt": "1",
+            "source_commit": self.commit, "artifact_digest": "sha256:" + docs["zip_sha256"],
+            "archive_sha256": docs["files"]["artifact.tar"], "record_sha256": record_sha256})
+        # Then the docs provenance; the Pages artifact is promoted by ID, not copied.
+        self.assertEqual(self.downloads,
+                         [artifact_id, record["artifacts"]["docs-provenance"]["artifact_id"]])
+
+    def test_docs_deploy_rejects_an_unapproved_or_unassembled_record(self):
+        _, record_sha256, _ = self.publish_record()
+        with self.assertRaisesRegex(ValueError, "differs from the dispatch input"):
+            self.docs_selection("0" * 64, name="digest")
+        for case, change in {"push": {"event": "push"}, "branch": {"head_branch": "feature"},
+                             "failed": {"conclusion": "failure"},
+                             "other workflow": {"path": candidate.ARTIFACT_WORKFLOWS["docs"]}}.items():
+            with self.subTest(case=case):
+                saved = dict(self.runs[400])
+                self.runs[400].update(change)
+                with self.assertRaisesRegex(ValueError, "successful manual assembly on main"):
+                    self.docs_selection(record_sha256, name=f"run-{case}")
+                self.runs[400] = saved
+        with self.assertRaisesRegex(ValueError, "successful manual assembly"):
+            self.docs_selection(record_sha256, attempt=2, name="attempt")
+
+    def test_docs_deploy_rejects_a_record_for_another_commit_than_its_assembly(self):
+        _, record_sha256, _ = self.publish_record()
+        # A consistent assembly run and record artifact of another commit, whose record names
+        # this commit: the record cannot select docs for a commit its assembly did not check.
+        other = "f" * 40
+        self.runs[400]["head_sha"] = other
+        record_artifact = next(item for item in self.artifacts.values()
+                               if item["name"] == "donner-release-candidate-1")
+        record_artifact["workflow_run"]["head_sha"] = other
+        fetched = self.docs_record(record_sha256, name="other")
+        self.assertEqual(fetched["record_commit"], other)
+        with self.patches(), self.assertRaisesRegex(ValueError, "another commit than its assembly"):
+            candidate.docs_selection(record_path=Path(fetched["record_path"]), record_commit=other,
+                                     record_sha256=record_sha256, work=self.base / "other",
+                                     github_json=self.github, download=self.download)
+
+    def test_docs_deploy_rejects_changed_or_expired_docs_artifacts(self):
+        _, record_sha256, files = self.publish_record()
+        record = json.loads(files["candidate.json"])
+        provenance = record["artifacts"]["docs-provenance"]["artifact_id"]
+        original = (self.remote / f"{provenance}.zip").read_bytes()
+        (self.remote / f"{provenance}.zip").write_bytes(original + b"tail")
+        with self.assertRaisesRegex(ValueError, "docs-provenance artifact download differs"):
+            self.docs_selection(record_sha256, name="changed")
+        (self.remote / f"{provenance}.zip").write_bytes(original)
+        docs = self.artifacts[record["artifacts"]["docs"]["artifact_id"]]
+        docs["expires_at"] = github_time(NOW - timedelta(hours=1))
+        with self.assertRaisesRegex(ValueError, "docs artifact expires"):
+            self.docs_selection(record_sha256, name="expired")
+
+    def test_docs_selection_modes_are_exclusive(self):
+        rollback = {"DOC_ARTIFACT_ID": "456", "DOC_SOURCE_RUN_ID": "123", "DOC_SOURCE_ATTEMPT": "1",
+                    "DOC_SOURCE_COMMIT": "a" * 40, "DOC_ARTIFACT_DIGEST": "sha256:" + "b" * 64,
+                    "DOC_ARCHIVE_SHA256": "c" * 64}
+        def args(selection, path="", commit="", sha="", run=""):
+            return candidate._parser().parse_args(
+                ["docs-selection", "--selection", selection, "--record-run", run,
+                 "--record-path", path, "--record-commit", commit, "--record-sha256", sha,
+                 "--work", str(self.base / "unused")])
+        record = args("record", "candidate.json", "a" * 40, "e" * 64, "400/1")
+        with self.assertRaisesRegex(ValueError, "must not also name rollback values"):
+            candidate._docs_selection_command(record, rollback)
+        for name, value in (("sha", ""), ("commit", ""), ("path", "")):
+            with self.subTest(missing=name), \
+                    self.assertRaisesRegex(ValueError, "needs the fetched record"):
+                values = {"path": "candidate.json", "commit": "a" * 40, "sha": "e" * 64,
+                          name: value}
+                candidate._docs_selection_command(args("record", **values), {})
+        for named in ({"run": "400/1"}, {"sha": "e" * 64}, {"path": "candidate.json"}):
+            with self.subTest(named=named), \
+                    self.assertRaisesRegex(ValueError, "must not also name a candidate record"):
+                candidate._docs_selection_command(args("rollback", **named), rollback)
+        with mock.patch.dict(candidate.os.environ, rollback, clear=True):
+            self.assertEqual(candidate._docs_selection_command(args("rollback"), rollback), {
+                "selection": "rollback", "artifact_id": "456", "run_id": "123", "attempt": "1",
+                "source_commit": "a" * 40, "artifact_digest": "sha256:" + "b" * 64,
+                "archive_sha256": "c" * 64})
+        with mock.patch.object(candidate, "docs_selection", return_value={"run_id": "102"}) as select:
+            self.assertEqual(candidate._docs_selection_command(record, {"DOC_ARTIFACT_ID": ""}),
+                             {"selection": "record", "run_id": "102"})
+        select.assert_called_once_with(record_path=Path("candidate.json"), record_commit="a" * 40,
+                                       record_sha256="e" * 64, work=self.base / "unused")
+        with self.assertRaisesRegex(ValueError, "RUN_ID/ATTEMPT"):
+            candidate._docs_record_command(candidate._parser().parse_args(
+                ["docs-record", "--record-run", "400", "--record-sha256", "e" * 64,
+                 "--work", str(self.base / "unused")]))
 
     def test_release_rejects_a_record_for_another_commit(self):
         artifact_id, record_sha256, _ = self.publish_record()

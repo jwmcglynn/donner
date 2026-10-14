@@ -447,6 +447,7 @@ py_library(
     deps = [
         ":bcr_source",
         ":release_artifact_publisher",
+        ":release_candidate",
     ],
 )
 

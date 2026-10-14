@@ -153,11 +153,15 @@ gh run view <run-id> --repo jwmcglynn/donner --log-failed
 
 `BCR Preflight` qualifies the source archive and CLI binaries for an exact main commit. The
 Release workflow publishes those retained bytes. A separate, manually dispatched
-`.github/workflows/publish_bcr.yml` checks the successful Release run, approved full source
-commit and archive SHA-256. Tokenless jobs run the release-tagged entry generator against `.bcr/`
-templates, verify approved source integrity, module files and metadata, and retain and recheck a
-Git bundle. The protected push job uses no external actions: it downloads the same artifact with
-the runner's GitHub CLI and verifies its digest, base, commit and tree before the final push step.
+`.github/workflows/publish_bcr.yml` checks the successful Release run and its candidate record
+(`donner-X.Y.Z.candidate.json`, the digest in the release body, and its attestation), and takes
+the approved archive SHA-256 and preflight attempt from the record. Tokenless jobs stage the
+registry entry that preflight generated and admission-validated (the record's `bcr-entry`),
+never regenerating it: its module, presubmit and source files byte for byte, and `metadata.json`
+derived from the current registry's history and the template. They verify source integrity,
+module files and metadata, and retain and recheck a Git bundle. The protected push job uses no
+external actions: it downloads the same artifact with the runner's GitHub CLI and verifies its
+digest, base, commit and tree before the final push step.
 Only that step receives the fork-only contents-write `PUBLISH_TOKEN` from the
 `bcr-fork-preparation` environment. The empty-expected ref lease rejects any existing branch.
 The workflow prints a compare link and suggested title/body. Opening an upstream PR requires a
@@ -228,7 +232,7 @@ testing a sibling checkout.
 | ------------------------ | --------------------------------------------------------------------------- |
 | Current module version   | `grep -n '^module(' MODULE.bazel`                                           |
 | Existing release tags    | `git tag -l 'v*'`                                                           |
-| BCR generator pin        | `grep -n 'bazel-contrib/publish-to-bcr@' .github/workflows/publish_bcr.yml` |
+| BCR generator pin        | `grep -n -e 'contrib/publish-to-bcr@v' .github/workflows/bcr_preflight.yml` |
 | Unreleased notes section | `grep -n 'unreleased' RELEASE_NOTES.md`                                     |
 | BCR presubmit allowlist  | `grep -A40 'build_targets' .bcr/presubmit.yml`                              |
 

@@ -106,10 +106,12 @@ check `LicenseEntry` candidates and the fallback tables in `generate_build_repor
   `0.8.0-pre` → final `0.8.0` at stamp time). Module version must match the git tag.
 - Qualify the exact main commit with `BCR Preflight` before release. The Release workflow attaches
   its qualified source archive and CLI binaries by digest. It does not publish to BCR.
-- After the Release succeeds, obtain approval for the specific source commit and archive SHA-256,
-  then manually dispatch `.github/workflows/publish_bcr.yml`. It generates and verifies the BCR
-  entry before a create-only push to the owned fork. Inspect the fork diff, title and body, and obtain
-  separate explicit approval before opening any upstream BCR PR.
+- After the Release succeeds, obtain approval for the specific Release run and candidate record
+  digest, then manually dispatch `.github/workflows/publish_bcr.yml`. It takes the approved
+  archive digest from the record and submits the BCR entry that preflight admission-validated,
+  with only `metadata.json` derived from the current registry, before a create-only push to the
+  owned fork. Inspect the fork diff, title and body, and obtain separate explicit approval before
+  opening any upstream BCR PR.
 - `third_party/bazel/non_bcr_deps.bzl` is a `dev_dependency` extension hiding non-BCR repos
   (harfbuzz, woff2, wgpu-native) from downstream BCR consumers — this is why text-full and Geode
   are not BCR-published configs.

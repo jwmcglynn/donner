@@ -8,6 +8,7 @@ from collections import Counter
 from datetime import datetime, timedelta, timezone
 import hashlib
 import json
+import os
 from pathlib import Path, PurePosixPath
 import re
 import stat
@@ -20,11 +21,15 @@ from tools import bcr_source, pages_artifact, release_cli
 
 REPOSITORY = "jwmcglynn/donner"
 # Schema 2 added the `docs-provenance` role and the editor and docs generated lockfile digests.
-SCHEMA = 2
+# Schema 3 added the `bcr-entry` role: the registry entry BCR Preflight admission-validated.
+SCHEMA = 3
 ARTIFACT_WORKFLOWS = {
     "source": ".github/workflows/bcr_preflight.yml",
     "cli-linux": ".github/workflows/bcr_preflight.yml",
     "cli-macos": ".github/workflows/bcr_preflight.yml",
+    # The entry preflight generated and ran through the upstream BCR validator. BCR fork
+    # preparation submits exactly these bytes; it never regenerates the entry.
+    "bcr-entry": ".github/workflows/bcr_preflight.yml",
     "editor": ".github/workflows/editor_wasm.yml",
     "docs": ".github/workflows/deploy_docs.yaml",
     # Retained beside the Pages artifact by the same docs build run; never published.
@@ -33,6 +38,8 @@ ARTIFACT_WORKFLOWS = {
 # Release publishes exactly these roles' files. Docs deployment and BCR preparation are separate
 # maintainer decisions with their own workflows.
 RELEASE_ROLES = ("source", "cli-linux", "cli-macos")
+# One BCR Preflight attempt produces all of these.
+PREFLIGHT_ROLES = (*RELEASE_ROLES, "bcr-entry")
 # Each published artifact's build records its generated MODULE.bazel.lock digest in provenance.
 LOCK_ROLES = ("cli-linux", "cli-macos", "editor", "docs")
 CLI_PLATFORMS = {"cli-linux": "linux-x86-64", "cli-macos": "darwin-arm64"}
@@ -61,7 +68,7 @@ RECORD_FILES = frozenset({
 # Dispatch inputs that name the qualifying attempts: one per artifact-producing workflow, then one
 # per evidence role.
 ARTIFACT_RUN_INPUTS = {
-    "preflight": ("source", "cli-linux", "cli-macos"),
+    "preflight": PREFLIGHT_ROLES,
     "editor": ("editor",),
     # Docs provenance first: it names the Pages archive that the requested attempt built.
     "docs": ("docs-provenance", "docs"),
@@ -230,6 +237,7 @@ def _artifact_name(role: str, commit: str, attempt: int) -> str:
         "source": f"donner-bcr-qualified-{attempt}",
         "cli-linux": f"donner-svg-linux-x86-64-{commit}-{attempt}",
         "cli-macos": f"donner-svg-darwin-arm64-{commit}-{attempt}",
+        "bcr-entry": f"donner-bcr-entry-{attempt}",
         "editor": f"donner-editor-wasm-geode-{commit}",
         "docs": pages_artifact.ARTIFACT_NAME,
         "docs-provenance": f"{pages_artifact.PROVENANCE_ARTIFACT_PREFIX}{attempt}",
@@ -258,7 +266,21 @@ def _fixed_role_files(role: str, version: str) -> set[str] | None:
         return {"artifact.tar"}
     if role == "docs-provenance":
         return set(pages_artifact.PROVENANCE_FILES)
+    if role == "bcr-entry":
+        return {bcr_source.ADMISSION_REPORT, "registry/bazel_registry.json",
+                *(f"registry/{path}" for path in bcr_source.entry_paths(version))}
     return None
+
+
+def _previous_registry_versions(names: set[str], version: str) -> set[str]:
+    """Files of earlier donner versions that preflight copied from upstream into its registry."""
+    previous = set()
+    for name in names:
+        parts = PurePosixPath(name).parts
+        if (len(parts) >= 5 and parts[:3] == ("registry", "modules", "donner") and
+                parts[3] != version and bcr_source.VERSION.fullmatch(parts[3])):
+            previous.add(name)
+    return previous
 
 
 def _editor_font_files(names: set[str]) -> set[str]:
@@ -278,6 +300,8 @@ def _verify_role_files(role: str, names: set[str], version: str) -> None:
         required.update(f"{prefix}/{name}" for prefix in ("site", "deploy")
                         for name in EDITOR_COMMON_FILES)
         required.update(_editor_font_files(names))
+    elif role == "bcr-entry":
+        required |= _previous_registry_versions(names - required, version)
     if names != required:
         raise ValueError("candidate artifact inventory differs from its publishable role")
 
@@ -459,7 +483,9 @@ def _verify_editor_payload(role, directory, entry, record, root, commit, run_id,
 def _verify_docs_provenance_payload(role, directory, entry, record, root, commit, run_id, attempt):
     selected = {"run_id": entry["run_id"], "attempt": entry["attempt"], "source_commit": commit,
                 "archive_sha256": record["artifacts"]["docs"]["files"]["artifact.tar"]}
-    bazel_version = (root / ".bazelversion").read_text(encoding="utf-8").strip()
+    # The source check binds this to the checkout's `.bazelversion`; reading it from the record
+    # lets docs deployment check provenance without a checkout of the candidate commit.
+    bazel_version = record["source"]["bazel_version"]
     _require_lock(role, pages_artifact.verify_provenance(directory, selected, bazel_version), record)
 
 
@@ -471,17 +497,25 @@ def _verify_docs_payload(role, directory, entry, record, root, commit, run_id, a
     pages_artifact.verify_archive(directory / "artifact.tar", selected["archive_sha256"], selected)
 
 
+def _verify_bcr_entry_payload(role, directory, entry, record, root, commit, run_id, attempt):
+    version = record["source"]["version"]
+    archive = record["artifacts"]["source"]["files"][f"donner-{version}.tar.gz"]
+    bcr_source.verify_validated_entry(directory, root, version, archive)
+
+
 PAYLOAD_VERIFIERS = {
     "source": _verify_source_payload,
     "cli-linux": _verify_cli_payload,
     "cli-macos": _verify_cli_payload,
+    "bcr-entry": _verify_bcr_entry_payload,
     "editor": _verify_editor_payload,
     "docs": _verify_docs_payload,
     "docs-provenance": _verify_docs_provenance_payload,
 }
 
 
-def _verify_payload(role: str, directory: Path, entry: dict, record: dict, root: Path) -> None:
+def _verify_payload(role: str, directory: Path, entry: dict, record: dict,
+                    root: Path | None) -> None:
     """Run the role's own verifier on its extracted files and bind its dependency state."""
     PAYLOAD_VERIFIERS[role](role, directory, entry, record, root, record["source"]["commit"],
                             str(entry["run_id"]), str(entry["attempt"]))
@@ -535,9 +569,9 @@ def _verify_evidence_content(path: Path, kind: str, entry: dict, commit: str,
         raise ValueError(f"{kind} evidence jobs differ from the GitHub attempt")
 
 
-def _verify_one_artifact(role: str, entry: dict, record: dict, root: Path,
-                         artifacts: Path, github_json, now: datetime,
-                         min_remaining: timedelta) -> tuple[int, int]:
+def _check_artifact_entry(role: str, entry: dict, record: dict, github_json, now: datetime,
+                          min_remaining: timedelta) -> tuple[int, int]:
+    """Check one role's record entry against GitHub; return its run ID and attempt."""
     if not isinstance(entry, dict) or set(entry) != {
         "run_id", "attempt", "artifact_id", "name", "zip_sha256", "files"
     } or not isinstance(entry["files"], dict):
@@ -561,6 +595,13 @@ def _verify_one_artifact(role: str, entry: dict, record: dict, root: Path,
             "source_commit": commit, "artifact_digest": "sha256:" + entry["zip_sha256"],
             "archive_sha256": entry["files"]["artifact.tar"],
         })
+    return run_id, attempt
+
+
+def _verify_one_artifact(role: str, entry: dict, record: dict, root: Path,
+                         artifacts: Path, github_json, now: datetime,
+                         min_remaining: timedelta) -> tuple[int, int]:
+    identity = _check_artifact_entry(role, entry, record, github_json, now, min_remaining)
     zip_path = artifacts / f"{role}.zip"
     if not zip_path.is_file() or zip_path.is_symlink() or zip_path.stat().st_size > MAX_ZIP_BYTES:
         raise ValueError(f"{role} artifact ZIP is missing, linked, or too large")
@@ -570,7 +611,7 @@ def _verify_one_artifact(role: str, entry: dict, record: dict, root: Path,
         directory = Path(temporary)
         _extract_verified(zip_path, entry["files"], directory)
         _verify_payload(role, directory, entry, record, root)
-    return run_id, attempt
+    return identity
 
 
 def _verify_artifacts(record: dict, root: Path, artifacts: Path, github_json,
@@ -581,8 +622,9 @@ def _verify_artifacts(record: dict, root: Path, artifacts: Path, github_json,
     for role in ARTIFACT_WORKFLOWS:
         identities[role] = _verify_one_artifact(role, record["artifacts"][role], record, root,
                                                 artifacts, github_json, now, min_remaining)
-    if len({identities[role] for role in RELEASE_ROLES}) != 1:
-        raise ValueError("source and CLI artifacts must share one qualified preflight attempt")
+    if len({identities[role] for role in PREFLIGHT_ROLES}) != 1:
+        raise ValueError("source, CLI and registry entry artifacts must share one qualified "
+                         "preflight attempt")
     if identities["docs"] != identities["docs-provenance"]:
         raise ValueError("docs provenance must come from the docs build attempt")
 
@@ -832,8 +874,19 @@ def _load_canonical(raw: bytes) -> dict:
     return record
 
 
+def load_record(raw: bytes, record_sha256: str) -> dict:
+    """Parse record bytes that must have exactly the digest that names them."""
+    _digest(record_sha256, "candidate record digest")
+    if len(raw) > MAX_RECORD_BYTES or hashlib.sha256(raw).hexdigest() != record_sha256:
+        raise ValueError("candidate record digest differs from the approved record")
+    record = _load_canonical(raw)
+    _record_shape(record)
+    return record
+
+
 def _verify_record_artifact(metadata: dict, artifact_id: int, run_id: int, attempt: int,
-                            commit: str, now: datetime) -> str:
+                            commit: str, now: datetime,
+                            minimum: timedelta = PUBLICATION_REMAINING_RETENTION) -> str:
     run = metadata.get("workflow_run") or {}
     size = metadata.get("size_in_bytes")
     if (metadata.get("id") != artifact_id or
@@ -845,8 +898,56 @@ def _verify_record_artifact(metadata: dict, artifact_id: int, run_id: int, attem
             run.get("repository_id") is None or
             run.get("head_repository_id") != run.get("repository_id")):
         raise ValueError("candidate record artifact does not belong to the named assembly attempt")
-    _verify_retention(metadata, "candidate record", now, PUBLICATION_REMAINING_RETENTION)
+    _verify_retention(metadata, "candidate record", now, minimum)
     return _artifact_digest(metadata, "candidate record artifact")
+
+
+def _fetch_record(artifact_id: int, run_id: int, attempt: int, commit: str, record_sha256: str,
+                  named_by: str, work: Path, github_json, download,
+                  minimum: timedelta = PUBLICATION_REMAINING_RETENTION) -> tuple[bytes, dict, Path]:
+    """Download the record artifact of one assembly attempt; return its bytes, record and files."""
+    metadata = github_json(f"repos/{REPOSITORY}/actions/artifacts/{artifact_id}")
+    zip_sha256 = _verify_record_artifact(metadata, artifact_id, run_id, attempt, commit,
+                                         datetime.now(timezone.utc), minimum)
+    record_zip = work / "record.zip"
+    _download_checked(artifact_id, zip_sha256, record_zip, download, "candidate record artifact")
+    files = _zip_inventory(record_zip)
+    if set(files) != RECORD_FILES:
+        raise ValueError("candidate record artifact has missing or unexpected files")
+    record_dir = work / "record"
+    _extract_verified(record_zip, files, record_dir)
+    raw = _read_bounded(record_dir / RECORD_NAME, MAX_RECORD_BYTES, "candidate record")
+    if hashlib.sha256(raw).hexdigest() != record_sha256:
+        raise ValueError(f"candidate record digest differs from the {named_by}")
+    if (record_dir / f"{RECORD_NAME}.sha256").read_bytes() != \
+            f"{record_sha256}  {RECORD_NAME}\n".encode():
+        raise ValueError("candidate record checksum file differs from the record")
+    record = _load_canonical(raw)
+    _record_shape(record)
+    return raw, record, record_dir
+
+
+# The `root` of a role whose checks read no source files, such as docs provenance, which is
+# checked against the record's Bazel version.
+NO_SOURCE_CHECKOUT = None
+
+
+def fetch_role(record: dict, role: str, root: Path | None, zip_path: Path, output: Path,
+               github_json=_github_json, download=_download_artifact) -> Path:
+    """Download one role's artifact by its recorded ID, verify it and extract it to `output`.
+
+    This runs the same checks as the verifier for that role. It is used after a record was
+    published, so the artifact only has to be retained still, not for the assembly window.
+    """
+    entry = record["artifacts"][role]
+    _check_artifact_entry(role, entry, record, github_json, datetime.now(timezone.utc),
+                          timedelta(0))
+    _download_checked(entry["artifact_id"], entry["zip_sha256"], zip_path, download,
+                      f"{role} artifact")
+    _empty_directory(output, f"{role} output")
+    _extract_verified(zip_path, entry["files"], output)
+    _verify_payload(role, output, entry, record, root)
+    return output
 
 
 def release(*, root: Path, record_run_id: int, record_attempt: int, record_artifact_id: int,
@@ -862,25 +963,9 @@ def release(*, root: Path, record_run_id: int, record_attempt: int, record_artif
     commit = _git(root, "rev-parse", "HEAD")
     _empty_directory(work, "release work")
     _empty_directory(output, "release output")
-    metadata = github_json(f"repos/{REPOSITORY}/actions/artifacts/{record_artifact_id}")
-    zip_sha256 = _verify_record_artifact(metadata, record_artifact_id, record_run_id,
-                                         record_attempt, commit, datetime.now(timezone.utc))
-    record_zip = work / "record.zip"
-    _download_checked(record_artifact_id, zip_sha256, record_zip, download,
-                      "candidate record artifact")
-    files = _zip_inventory(record_zip)
-    if set(files) != RECORD_FILES:
-        raise ValueError("candidate record artifact has missing or unexpected files")
-    record_dir = work / "record"
-    _extract_verified(record_zip, files, record_dir)
-    raw = _read_bounded(record_dir / RECORD_NAME, MAX_RECORD_BYTES, "candidate record")
-    if hashlib.sha256(raw).hexdigest() != record_sha256:
-        raise ValueError("candidate record digest differs from the release body")
-    if (record_dir / f"{RECORD_NAME}.sha256").read_bytes() != \
-            f"{record_sha256}  {RECORD_NAME}\n".encode():
-        raise ValueError("candidate record checksum file differs from the record")
-    record = _load_canonical(raw)
-    _record_shape(record)
+    raw, record, record_dir = _fetch_record(record_artifact_id, record_run_id, record_attempt,
+                                            commit, record_sha256, "release body", work,
+                                            github_json, download)
     zips = work / "artifacts"
     zips.mkdir()
     for role in ARTIFACT_WORKFLOWS:
@@ -900,6 +985,108 @@ def release(*, root: Path, record_run_id: int, record_attempt: int, record_artif
     return {"preflight_run_id": str(preflight["run_id"]),
             "preflight_attempt": str(preflight["attempt"]), "version": version,
             "record_sha256": record_sha256}
+
+
+# The docs deploy job's outputs, in either selection mode.
+DOCS_SELECTION_KEYS = ("artifact_id", "run_id", "attempt", "source_commit", "artifact_digest",
+                       "archive_sha256")
+# The rollback selection's environment, validated by `pages_artifact.selection_from_environment`.
+DOCS_ROLLBACK_ENVIRONMENT = ("DOC_ARTIFACT_ID", "DOC_SOURCE_RUN_ID", "DOC_SOURCE_ATTEMPT",
+                             "DOC_SOURCE_COMMIT", "DOC_ARTIFACT_DIGEST", "DOC_ARCHIVE_SHA256")
+
+
+def _assembly_record_id(run_id: int, attempt: int, github_json) -> tuple[int, str]:
+    """Return the record artifact ID and commit of one successful manual assembly on main."""
+    run = github_json(f"repos/{REPOSITORY}/actions/runs/{run_id}/attempts/{attempt}")
+    if (not isinstance(run, dict) or run.get("id") != run_id or
+            run.get("run_attempt") != attempt or
+            run.get("repository", {}).get("full_name") != REPOSITORY or
+            run.get("path") != ASSEMBLY_WORKFLOW or run.get("event") != "workflow_dispatch" or
+            run.get("head_branch") != "main" or run.get("status") != "completed" or
+            run.get("conclusion") != "success"):
+        raise ValueError("candidate record must come from a successful manual assembly on main")
+    commit = _commit(run.get("head_sha"), "assembly commit")
+    name = f"{RECORD_ARTIFACT_PREFIX}{attempt}"
+    listing = github_json(
+        f"repos/{REPOSITORY}/actions/runs/{run_id}/artifacts?per_page=100&name={name}")
+    found = listing.get("artifacts") if isinstance(listing, dict) else None
+    matches = [item for item in found if isinstance(item, dict) and item.get("name") == name] \
+        if isinstance(found, list) else []
+    if len(matches) != 1:
+        raise ValueError("assembly attempt must retain exactly one candidate record artifact")
+    return _positive(matches[0].get("id"), "candidate record artifact ID"), commit
+
+
+def docs_record(*, record_run_id: int, record_attempt: int, record_sha256: str, work: Path,
+                github_json=_github_json, download=_download_artifact) -> dict[str, str]:
+    """Download the record of one successful manual assembly attempt for a docs deploy.
+
+    Only the record artifact is fetched and its digest checked; nothing it names is used yet. The
+    deploy job verifies the record's attestation before `docs_selection` reads its contents.
+    """
+    _digest(record_sha256, "candidate record digest")
+    _empty_directory(work, "docs record work")
+    artifact_id, commit = _assembly_record_id(record_run_id, record_attempt, github_json)
+    # A rollback may reselect this record after its publication window; it only must exist.
+    _, _, record_dir = _fetch_record(artifact_id, record_run_id, record_attempt, commit,
+                                     record_sha256, "dispatch input", work, github_json,
+                                     download, timedelta(0))
+    return {"record_path": str(record_dir / RECORD_NAME), "record_commit": commit}
+
+
+def docs_selection(*, record_path: Path, record_commit: str, record_sha256: str, work: Path,
+                   github_json=_github_json, download=_download_artifact) -> dict[str, str]:
+    """Select the docs build that an attested candidate record names, for Pages promotion.
+
+    `record_path` and `record_commit` come from `docs_record`. The `docs-provenance` artifact is
+    downloaded and verified against the record; the `docs` entry's IDs and digests become the
+    deployment selection, which the deploy job then checks against GitHub and the downloaded
+    `artifact.tar` before promoting it.
+    """
+    commit = _commit(record_commit, "assembly commit")
+    record = load_record(_read_bounded(record_path, MAX_RECORD_BYTES, "candidate record"),
+                         record_sha256)
+    if record["source"]["commit"] != commit:
+        raise ValueError("candidate record names another commit than its assembly run")
+    _empty_directory(work, "docs selection work")
+    docs = record["artifacts"]["docs"]
+    provenance = record["artifacts"]["docs-provenance"]
+    if not isinstance(docs, dict) or not isinstance(provenance, dict) or \
+            (docs.get("run_id"), docs.get("attempt")) != \
+            (provenance.get("run_id"), provenance.get("attempt")):
+        raise ValueError("docs provenance must come from the docs build attempt")
+    now = datetime.now(timezone.utc)
+    _check_artifact_entry("docs", docs, record, github_json, now, timedelta(0))
+    fetch_role(record, "docs-provenance", NO_SOURCE_CHECKOUT, work / "docs-provenance.zip",
+               work / "docs-provenance", github_json, download)
+    return {"artifact_id": str(docs["artifact_id"]), "run_id": str(docs["run_id"]),
+            "attempt": str(docs["attempt"]), "source_commit": commit,
+            "artifact_digest": "sha256:" + docs["zip_sha256"],
+            "archive_sha256": docs["files"]["artifact.tar"], "record_sha256": record_sha256}
+
+
+def _docs_selection_command(args: argparse.Namespace, environment: dict[str, str]) -> dict:
+    """Resolve the deploy selection: an attested candidate record, or a recorded rollback build."""
+    rollback_values = [environment.get(name, "") for name in DOCS_ROLLBACK_ENVIRONMENT]
+    record_values = (args.record_path, args.record_commit, args.record_sha256)
+    if args.selection == "record":
+        if any(rollback_values):
+            raise ValueError("a record selection must not also name rollback values")
+        if not all(record_values):
+            raise ValueError("a record selection needs the fetched record, its commit and digest")
+        result = docs_selection(record_path=Path(args.record_path),
+                                record_commit=args.record_commit,
+                                record_sha256=args.record_sha256, work=args.work)
+    elif args.selection == "rollback":
+        if any(record_values) or args.record_run:
+            raise ValueError("a rollback selection must not also name a candidate record")
+        selected = pages_artifact.selection_from_environment()
+        result = {key: str(selected[name]) for key, name in zip(
+            DOCS_SELECTION_KEYS, ("artifact_id", "run_id", "attempt", "source_commit",
+                                  "artifact_digest", "archive_sha256"))}
+    else:
+        raise ValueError("docs selection must be record or rollback")
+    return {"selection": args.selection, **result}
 
 
 def _run_reference(value: str, label: str) -> tuple[int, int]:
@@ -935,6 +1122,21 @@ def _parser() -> argparse.ArgumentParser:
     for name in ("source-root", "work", "output"):
         stage.add_argument(f"--{name}", type=Path, required=True)
     stage.add_argument("--github-output")
+    fetch = commands.add_parser("docs-record", help="download a record for a docs deploy")
+    fetch.add_argument("--record-run", required=True, metavar="RUN_ID/ATTEMPT")
+    fetch.add_argument("--record-sha256", required=True)
+    fetch.add_argument("--work", type=Path, required=True)
+    fetch.add_argument("--github-output")
+    docs = commands.add_parser("docs-selection",
+                               help="select the docs build a record names, or a rollback build")
+    docs.add_argument("--selection", required=True, choices=("record", "rollback"))
+    docs.add_argument("--record-run", default="", metavar="RUN_ID/ATTEMPT",
+                      help="only checked to be empty for a rollback selection")
+    docs.add_argument("--record-path", default="")
+    docs.add_argument("--record-commit", default="")
+    docs.add_argument("--record-sha256", default="")
+    docs.add_argument("--work", type=Path, required=True)
+    docs.add_argument("--github-output")
     return parser
 
 
@@ -967,10 +1169,25 @@ def _release_command(args: argparse.Namespace) -> str:
     return result["record_sha256"]
 
 
+def _docs_command(args: argparse.Namespace) -> str:
+    result = _docs_selection_command(args, dict(os.environ))
+    bcr_source.outputs(result, args.github_output)
+    return result.get("record_sha256", "")
+
+
+def _docs_record_command(args: argparse.Namespace) -> str:
+    run_id, attempt = _run_reference(args.record_run, "record run")
+    result = docs_record(record_run_id=run_id, record_attempt=attempt,
+                         record_sha256=args.record_sha256, work=args.work)
+    bcr_source.outputs(result, args.github_output)
+    return args.record_sha256
+
+
 def main() -> None:
     args = _parser().parse_args()
     commands = {"verify": _verify_command, "assemble": _assemble_command,
-                "release": _release_command}
+                "release": _release_command, "docs-selection": _docs_command,
+                "docs-record": _docs_record_command}
     try:
         outcome = commands[args.command](args)
     except ValueError as error:
@@ -978,6 +1195,12 @@ def main() -> None:
     except (OSError, KeyError, TypeError, AttributeError, subprocess.CalledProcessError,
             zipfile.BadZipFile) as error:
         raise SystemExit(f"Candidate verification failed: {type(error).__name__}") from None
+    if args.command == "docs-selection":
+        print(f"Selected the {args.selection} docs build")
+        return
+    if args.command == "docs-record":
+        print(f"Fetched release candidate sha256:{outcome}; verify its attestation before use")
+        return
     digest = outcome if isinstance(outcome, str) else hashlib.sha256(outcome).hexdigest()
     print(f"Verified release candidate sha256:{digest}")
 
