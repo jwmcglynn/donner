@@ -249,6 +249,7 @@ interface WgpuCarouselThumbnailStats extends WgpuReadbackColorStats {
 }
 
 interface OpenEditorOptions {
+  frameDriver?: "proxied-main-raf";
   wgpuReadbackStats?: boolean;
   postInitializationDwellMs?: number;
   sampleThumbnailRendererCreationRequest?: number;
@@ -383,6 +384,9 @@ async function openEditor(page: Page, options: OpenEditorOptions = {}): Promise<
   armFailureCanvasEvidence(page, test.info());
   const baseUrl = process.env.DONNER_WASM_BASE_URL || "http://127.0.0.1:8000";
   const url = new URL(baseUrl);
+  if (options.frameDriver) {
+    url.searchParams.set("frameDriver", options.frameDriver);
+  }
   // Readback diagnostics are intentionally opt-in: even asynchronous readback
   // copies and scans the framebuffer, so production interaction tests should
   // not include that debug-only work unless they are explicitly guarding it.
@@ -3393,7 +3397,19 @@ test("Geode WASM presents selection path overlay pixels", async ({ page }) => {
 test(
   "animation preview plays, dispatches mouse events, and returns to Edit",
   async ({ page }, testInfo) => {
-    const fatalMessages = await openEditor(page, { postInitializationDwellMs: 0 });
+    const frameDriver = process.env.DONNER_ANIMATION_FRAME_DRIVER;
+    if (frameDriver !== undefined && frameDriver !== "proxied-main-raf") {
+      throw new Error("DONNER_ANIMATION_FRAME_DRIVER must be proxied-main-raf when set");
+    }
+    const fatalMessages = await openEditor(page, { postInitializationDwellMs: 0, frameDriver });
+    if (frameDriver) {
+      expect(
+        await page.evaluate(() =>
+          (window as unknown as { __donnerFrameDriver?: string }).__donnerFrameDriver
+        ),
+        "the requested frame driver is active",
+      ).toBe(frameDriver);
+    }
     await expectSampleThumbnailsToSettle(page, {
       message: "thumbnail capture work is drained before animation measurement",
       timeout: scaledMs(20000),
@@ -3455,6 +3471,7 @@ test(
     // Measure ordinary playback with screenshot/readback probes stopped.
     testInfo.setTimeout(testInfo.timeout + 18000);
     const loopBefore = await page.evaluate(() => window.__donnerFrameLoopStats);
+    const schedulerBefore = await readCarouselFrameDiagnostics(page);
     const loadBefore = loadavg();
     const workerSamples: unknown[] = [];
     const readCadence = async () => {
@@ -3478,17 +3495,55 @@ test(
     };
     const ownerBefore = await readGpuOwnerDispatchStats(page);
     const before = await readCadence();
-    await expect.poll(async () => (await readCadence()).time - before.time, {
-      timeout: 25000,
-      intervals: [100],
-    }).toBeGreaterThanOrEqual(20000);
-    const after = await readCadence();
+    const probeMainRaf = process.env.DONNER_ANIMATION_RAF_PROBE === "1";
+    if (probeMainRaf) {
+      await page.evaluate(() => {
+        const state = window as unknown as Record<string, unknown>;
+        const samples: number[][] = [];
+        const deadline = performance.now() + 25000;
+        let request = 0;
+        const tick = (timestamp: number) => {
+          samples.push([timestamp, performance.now()]);
+          if (samples.length < 4096 && performance.now() < deadline) {
+            request = requestAnimationFrame(tick);
+          }
+        };
+        request = requestAnimationFrame(tick);
+        state.__donnerStopAnimationRafProbe = () => {
+          cancelAnimationFrame(request);
+          delete state.__donnerStopAnimationRafProbe;
+          return samples;
+        };
+      });
+    }
+    let after: Awaited<ReturnType<typeof readCadence>>;
+    let mainRafSamples: number[][] | null = null;
+    try {
+      await expect.poll(async () => (await readCadence()).time - before.time, {
+        timeout: 25000,
+        intervals: [100],
+      }).toBeGreaterThanOrEqual(20000);
+      after = await readCadence();
+    } finally {
+      if (probeMainRaf) {
+        mainRafSamples = await boundBrowserDiagnostic(
+          page.evaluate(() => {
+            const state = window as unknown as Record<string, unknown>;
+            const stop = state.__donnerStopAnimationRafProbe as () => number[][];
+            return stop();
+          }),
+          2000,
+        );
+      }
+    }
+
     for (const field of ["idleYieldMs", "idleCallbackMs", "idleLockMs", "idleWaitMs"] as const) {
       expect(after.worker?.[field], `worker timing ${field}`).toBeGreaterThanOrEqual(0);
       expect(Number.isFinite(after.worker?.[field]), `finite worker timing ${field}`).toBe(true);
     }
     const ownerAfter = await readGpuOwnerDispatchStats(page);
     const loopAfter = await page.evaluate(() => window.__donnerFrameLoopStats);
+    const schedulerAfter = await readCarouselFrameDiagnostics(page);
     const presentation = await page.evaluate(() => window.__donnerPresentedDocumentStats);
     const presentedSamples = (presentation?.samples ?? [])
       .filter((sample) =>
@@ -3532,6 +3587,16 @@ test(
       gpuOwner: { before: ownerBefore, after: ownerAfter },
       workerSamples,
       frameLoop: { before: loopBefore, after: loopAfter },
+      scheduler: {
+        before: schedulerBefore,
+        after: schedulerAfter,
+        mainRafProbeEnabled: probeMainRaf,
+        intervalStartMs: before.time,
+        intervalEndMs: after.time,
+        mainRafSamples:
+          mainRafSamples?.filter((sample) => sample[1] >= before.time && sample[1] <= after.time)
+            ?? null,
+      },
       timeline: await readCarouselGpuTimeline(page),
       environment: await page.evaluate(() => ({
         userAgent: navigator.userAgent,
