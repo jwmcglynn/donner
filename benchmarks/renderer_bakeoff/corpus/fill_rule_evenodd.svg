@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="400" height="400" viewBox="0 0 400 400">
+  <rect width="400" height="400" fill="#fafafa"/>
+  <path fill-rule="evenodd" fill="#d62828"
+        d="M200 20 L250 170 L390 170 L280 260 L320 390 L200 310 L80 390 L120 260 L10 170 L150 170 Z"/>
+  <path fill-rule="evenodd" fill="#003049" fill-opacity="0.7"
+        d="M60 60 h120 v120 h-120 z M90 90 h60 v60 h-60 z M105 105 h30 v30 h-30 z"/>
+  <path fill-rule="nonzero" fill="#f77f00" fill-opacity="0.7"
+        d="M240 260 h120 v120 h-120 z M270 290 h60 v60 h-60 z"/>
+</svg>

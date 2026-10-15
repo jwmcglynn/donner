@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="400" height="400" viewBox="0 0 400 400">
+  <rect width="400" height="400" fill="#ffffff"/>
+  <text x="30" y="80" font-family="sans-serif" font-size="40" fill="#14213d">Renderer</text>
+  <text x="30" y="150" font-family="serif" font-size="28" fill="#fca311">bakeoff corpus</text>
+  <text x="30" y="220" font-size="18" fill="none" stroke="#000" stroke-width="1">Stroked text sample</text>
+  <text x="200" y="320" font-size="32" text-anchor="middle" transform="rotate(-10 200 320)"
+        fill="#e5383b">Rotated</text>
+</svg>

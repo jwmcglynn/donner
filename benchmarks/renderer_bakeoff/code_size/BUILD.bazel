@@ -1,0 +1,19 @@
+load("@rules_cc//cc:defs.bzl", "cc_binary")
+
+# Code-size binaries: identical source and flags, one backend each. Build with --config=codesize
+# (see .bazelrc) through tools/measure_code_size.sh, which strips them and records the results.
+# `code_size_baseline` links only the null recorder, so each delta is the backend's own cost:
+# its adapter plus every library it pulls in.
+[cc_binary(
+    name = "code_size_" + backend,
+    srcs = ["MinimalMain.cc"],
+    deps = [
+        target,
+        "//harness",
+        "@donner//donner/svg",
+    ],
+) for backend, target in [
+    ("baseline", "//backends/donner:null"),
+    ("tiny_skia", "//backends/donner:tiny_skia"),
+    ("geode", "//backends/donner:geode"),
+]]
