@@ -487,9 +487,13 @@ flowchart TD
   Normally that is one section. Any `]]>` in the Mermaid bytes, wherever it occurs (a label, a
   `%%` comment, or a preserved unsupported statement), is encoded by splitting it across adjacent
   sections: `]]` ends one section and `<![CDATA[>` starts the next, so the stored form is
-  `]]]]><![CDATA[>`. The reader concatenates adjacent CDATA and text children, so any Mermaid bytes
-  import, and `.mmd` export reproduces them exactly. Files another tool split into several sections
-  read the same way.
+  `]]]]><![CDATA[>`. The reader concatenates adjacent CDATA and text children, and files another
+  tool split into several sections read the same way.
+- `.mmd` import accepts only UTF-8 whose characters are all valid XML 1.0 characters. Input with
+  malformed UTF-8, NUL, other disallowed control characters or noncharacters is rejected as a whole
+  with a diagnostic naming the first offending offset; nothing is partially imported. Every
+  accepted file exports byte-for-byte. The Mermaid pane applies the same check before committing
+  an edit.
 - The Mermaid text is the source of truth for structure (which nodes and edges exist, labels,
   shapes, subgraphs, `classDef`). The SVG elements are its rendering plus everything Mermaid cannot
   express: manual positions (`dgm:pin` and the node's `transform`), waypoints, port choices, and
@@ -516,11 +520,11 @@ possible, analogous to how `XMLSourceStore` preserves SVG formatting.
    - Edges match by explicit edge id when present (recent Mermaid releases accept an id prefix on
      an edge; the subset accepts that syntax when the pinned grammar reference does).
    - An edge without an id gets an opaque generated key (`e7`) that never encodes its position.
-     Identity is carried by edit continuity: statements outside the edited byte range keep their
-     edges unchanged, shifted like source anchors. Only edges inside the edited range are
-     re-matched, first by `(from, to, label)` and then, among identical candidates, by their order
-     within that range, so inserting or deleting one parallel edge cannot re-associate the
-     waypoints, ports or styling of edges elsewhere.
+     Identity is carried by edit continuity at edge-token granularity: every edge whose tokens lie
+     outside the replaced bytes keeps its key, with its range shifted like a source anchor, even
+     when it sits in the same statement as the edit. Only edges whose tokens intersect the replaced
+     bytes are new or re-matched (by `(from, to, label)`). Inserting an identical parallel edge
+     before existing ones therefore creates one new key and moves no waypoints, ports or styling.
    - When there is no edit history to follow (opening a file whose Mermaid text another tool
      changed), unmatched parallel edges fall back to document order and the editor reports the
      ambiguity. An "Assign edge ids" action writes explicit ids so identity no longer depends on
@@ -662,6 +666,13 @@ resource-exhaustion surface.
   parsing Mermaid keeps the last valid model. This follows the threat model's refusal rule: never a
   partly applied edit.
 - **Checked arithmetic** for all coordinate and fraction parsing; non-finite numbers are rejected.
+- **`classDef` values are parsed, never interpolated.** Mermaid style text is untrusted CSS input.
+  Each `classDef` and `style` declaration is parsed with Donner's existing CSS declaration parser,
+  limited to an allowlist of properties (fill, stroke, stroke-width, stroke-dasharray, color,
+  opacity, font-weight, font-style), and each value must parse as a color, length or keyword. Any
+  function (including `url(...)`), at-rule, braces, semicolons or other rule-breaking tokens make
+  that declaration rejected with a diagnostic. Generated rules are serialized from the validated
+  typed values, so Mermaid bytes never reach the `<style>` element directly.
 - **No external loading.** The Mermaid subset has no directive that fetches a URL, loads an icon or
   image, or includes another file. `click` and other interaction statements are preserved as opaque
   text and never acted on.
@@ -702,28 +713,31 @@ Corpora are checked in and run under `bazel test //...` like the existing fuzzer
 Every invariant below names its enforcing CI target. Targets marked _planned_ are created by the
 milestone that introduces the behavior; until then the invariant is a gap, not a guarantee.
 
-| Invariant                                                     | Enforcing target                                                              |
-| ------------------------------------------------------------- | ----------------------------------------------------------------------------- |
-| Unknown and known diagram content round-trips byte-exactly    | _planned_ `//donner/diagram:namespace_roundtrip_tests`                        |
-| Stripping the namespace leaves rendered pixels unchanged      | _planned_ `//donner/diagram:downgrade_render_tests`                           |
-| Diagram attribute writes do not trigger style recompute       | _planned_ addition to `//donner/svg/tests:svg_tests`                          |
-| Qualified diagram attributes update in place, never duplicate | _planned_ addition to `//donner/editor/tests:command_queue_tests`             |
-| Diagram ops never issue `ReplaceDocument` or source undo      | _planned_ `//donner/editor/tests:diagram_tool_tests`                          |
-| Every diagram op is undone exactly by its inverse plan        | _planned_ `//donner/diagram:diagram_op_fuzzer`                                |
-| A plan that fails partway leaves the source unchanged         | _planned_ `//donner/diagram:diagram_op_fuzzer`                                |
-| Removing metadata never deletes SVG, and vice versa           | _planned_ `//donner/diagram:reconcile_tests`                                  |
-| Canvas, SVG pane and Mermaid pane converge, with no echo      | _planned_ addition to `//donner/editor/tests:structured_editing_stress_tests` |
-| Source deltas mirror into the SVG pane                        | `//donner/editor/tests:document_sync_controller_tests`                        |
-| Anchors and deltas stay correct under diagram edits           | `//donner/base/xml:xml_source_store_tests`                                    |
-| Unmodified Mermaid prints byte-identically                    | _planned_ `//donner/diagram/mermaid:mermaid_parser_fuzzer`                    |
-| Incremental Mermaid reparse matches a fresh parse             | _planned_ `//donner/diagram/mermaid:mermaid_parser_fuzzer`                    |
-| Mermaid round trip stays parseable and equivalent             | _planned_ `//donner/diagram/mermaid:mermaid_roundtrip_fuzzer`                 |
-| Unsupported Mermaid text is preserved, never dropped          | _planned_ `//donner/diagram/mermaid:mermaid_tests`                            |
-| Layout and routing respect pins, waypoints and caps           | _planned_ `//donner/diagram/layout:layout_tests`                              |
-| Layout and routing are deterministic                          | _planned_ `//donner/diagram/layout:layout_tests`                              |
-| Divergence is detected and never auto-repaired on load        | _planned_ `//donner/diagram:reconcile_tests`                                  |
-| Exact-limit and one-past-limit refusals are atomic            | _planned_ `//donner/diagram:limits_tests`                                     |
-| Diagram libraries have no network or loader dependency        | _planned_ `//donner/diagram:dependency_tests`                                 |
+| Invariant                                                        | Enforcing target                                                              |
+| ---------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| Unknown and known diagram content round-trips byte-exactly       | _planned_ `//donner/diagram:namespace_roundtrip_tests`                        |
+| Stripping the namespace leaves rendered pixels unchanged         | _planned_ `//donner/diagram:downgrade_render_tests`                           |
+| Diagram attribute writes do not trigger style recompute          | _planned_ addition to `//donner/svg/tests:svg_tests`                          |
+| Qualified diagram attributes update in place, never duplicate    | _planned_ addition to `//donner/editor/tests:command_queue_tests`             |
+| Diagram ops never issue `ReplaceDocument` or source undo         | _planned_ `//donner/editor/tests:diagram_tool_tests`                          |
+| Every diagram op is undone exactly by its inverse plan           | _planned_ `//donner/diagram:diagram_op_fuzzer`                                |
+| A plan that fails partway leaves the source unchanged            | _planned_ `//donner/diagram:diagram_op_fuzzer`                                |
+| Removing metadata never deletes SVG, and vice versa              | _planned_ `//donner/diagram:reconcile_tests`                                  |
+| Canvas, SVG pane and Mermaid pane converge, with no echo         | _planned_ addition to `//donner/editor/tests:structured_editing_stress_tests` |
+| Source deltas mirror into the SVG pane                           | `//donner/editor/tests:document_sync_controller_tests`                        |
+| Anchors and deltas stay correct under diagram edits              | `//donner/base/xml:xml_source_store_tests`                                    |
+| Unmodified Mermaid prints byte-identically                       | _planned_ `//donner/diagram/mermaid:mermaid_parser_fuzzer`                    |
+| Incremental Mermaid reparse matches a fresh parse                | _planned_ `//donner/diagram/mermaid:mermaid_parser_fuzzer`                    |
+| Mermaid round trip stays parseable and equivalent                | _planned_ `//donner/diagram/mermaid:mermaid_roundtrip_fuzzer`                 |
+| Unsupported Mermaid text is preserved, never dropped             | _planned_ `//donner/diagram/mermaid:mermaid_tests`                            |
+| Non-XML-representable `.mmd` input is rejected whole             | _planned_ `//donner/diagram/mermaid:mermaid_tests`                            |
+| `classDef` values with URLs or rule-breaking tokens are rejected | _planned_ `//donner/diagram/mermaid:mermaid_tests`                            |
+| Inserting a parallel edge keeps existing edge keys               | _planned_ `//donner/diagram/mermaid:mermaid_tests`                            |
+| Layout and routing respect pins, waypoints and caps              | _planned_ `//donner/diagram/layout:layout_tests`                              |
+| Layout and routing are deterministic                             | _planned_ `//donner/diagram/layout:layout_tests`                              |
+| Divergence is detected and never auto-repaired on load           | _planned_ `//donner/diagram:reconcile_tests`                                  |
+| Exact-limit and one-past-limit refusals are atomic               | _planned_ `//donner/diagram:limits_tests`                                     |
+| Diagram libraries have no network or loader dependency           | _planned_ `//donner/diagram:dependency_tests`                                 |
 
 Additional validation:
 
