@@ -71,6 +71,28 @@ void ExpectOpeningTagInputLimitBoundary(std::string_view openingTag) {
   }
 }
 
+TEST(XMLIncrementalLimits, RawInputFragmentEntryPointsRejectMalformedBytes) {
+  EXPECT_THAT(XMLIncrementalParser::ParseAttribute("a='\x80'"),
+              ParseErrorIs(HasSubstr("Invalid UTF-8")));
+  EXPECT_THAT(XMLIncrementalParser::ParseOpeningTag("<node a='\x80'>"),
+              ParseErrorIs(HasSubstr("Invalid UTF-8")));
+  EXPECT_THAT(XMLIncrementalParser::ParsePcdata("\x80"), ParseErrorIs(HasSubstr("Invalid UTF-8")));
+  EXPECT_THAT(XMLIncrementalParser::ParseTextLikeNode("<!--\x80-->"),
+              ParseErrorIs(HasSubstr("Invalid UTF-8")));
+  EXPECT_THAT(XMLIncrementalParser::ParseElement("<node>\x80</node>"),
+              ParseErrorIs(HasSubstr("Invalid UTF-8")));
+}
+
+TEST(XMLIncrementalLimits, RawInputOpeningTagRespectsCallerLimitBeforeValidation) {
+  const std::string valid = "<node a='\xC3\xA9'>";
+  EXPECT_THAT(ParseOpeningTagWithInputLimit(valid, valid.size()), NoParseError());
+  const std::string invalid = "<node a='\x80'>";
+  EXPECT_THAT(ParseOpeningTagWithInputLimit(invalid, invalid.size()),
+              ParseErrorIs(HasSubstr("Invalid UTF-8")));
+  EXPECT_THAT(ParseOpeningTagWithInputLimit(invalid, invalid.size() - 1),
+              ParseErrorIs("XML source exceeds maximum input size"));
+}
+
 TEST(XMLIncrementalLimits, ParsedAttributeLimitRejectsOpeningTagGrowthTransactionally) {
   XMLParser::Options options;
   options.maxElements = 2;

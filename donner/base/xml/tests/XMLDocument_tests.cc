@@ -136,6 +136,160 @@ void ExpectRejectedInsert(XMLDocument& doc, XMLNode parent, XMLNode node,
 
 class XMLDocumentTests : public testing::Test {};
 
+namespace {
+
+void ExpectInvalidRawEditAndValidReplacement(std::string_view source, std::string_view marker,
+                                             bool insertOnly, std::string_view prefix,
+                                             std::string_view suffix, ReparseScope scope,
+                                             std::string_view invalid) {
+  XMLDocument document = ParseDocument(source, XMLParser::Options::ParseAll());
+  XMLNode root = document.root().firstChild().value();
+  XMLNode tracked = root.firstChild().value();
+  const RcString treeBefore = document.root().serializeToString();
+  const auto versionBefore = document.sourceVersion();
+  const size_t start = document.source().find(marker);
+  ASSERT_NE(start, std::string_view::npos);
+  const SourceRange range{FileOffset::Offset(start),
+                          FileOffset::Offset(start + (insertOnly ? 0 : marker.size()))};
+  const auto rejected = document.applySourceEdit(XMLEditIntent{
+      .range = range,
+      .replacement = std::string(prefix) + std::string(invalid) + std::string(suffix),
+      .sourceVersion = versionBefore,
+  });
+  EXPECT_FALSE(rejected.applied);
+  EXPECT_EQ(rejected.scope, scope);
+  EXPECT_THAT(rejected, DiagnosticReasonContains("Invalid source replacement"));
+  EXPECT_TRUE(rejected.sourceDeltas.empty());
+  EXPECT_TRUE(rejected.mutations.empty());
+  EXPECT_EQ(document.source(), source);
+  EXPECT_EQ(document.sourceVersion(), versionBefore);
+  EXPECT_EQ(root.firstChild(), tracked);
+  EXPECT_EQ(document.root().serializeToString(), treeBefore);
+  EXPECT_FALSE(document.sourceDiagnostic());
+
+  const auto accepted = document.applySourceEdit(XMLEditIntent{
+      .range = range,
+      .replacement = std::string(prefix) + "fixed\xC3\xA9" + std::string(suffix),
+      .sourceVersion = versionBefore,
+  });
+  EXPECT_TRUE(accepted.applied);
+  EXPECT_EQ(accepted.scope, scope);
+  EXPECT_FALSE(accepted.diagnostic);
+  EXPECT_FALSE(document.sourceDiagnostic());
+  EXPECT_EQ(root.firstChild(), tracked);
+  EXPECT_THAT(document.root().serializeToString(), testing::HasSubstr("fixed\xC3\xA9"));
+}
+
+}  // namespace
+
+TEST_F(XMLDocumentTests, RawInputEditsRejectInvalidBytesTransactionallyEveryLocalScope) {
+  for (const std::string_view invalid : {"\x80", "\x0B"}) {
+    SCOPED_TRACE(static_cast<unsigned int>(static_cast<unsigned char>(invalid.front())));
+    ExpectInvalidRawEditAndValidReplacement("<root><child a='ok'/><other/></root>", "ok", false, "",
+                                            "", ReparseScope::AttributeValue, invalid);
+    ExpectInvalidRawEditAndValidReplacement("<root><child a='ok'/><other/></root>", "/>", true,
+                                            " b='", "'", ReparseScope::OpeningTag, invalid);
+    ExpectInvalidRawEditAndValidReplacement("<root><child>ok</child><other/></root>", "ok", false,
+                                            "", "", ReparseScope::TextNode, invalid);
+    ExpectInvalidRawEditAndValidReplacement("<root><!--ok--><other/></root>", "ok", false, "", "",
+                                            ReparseScope::TextNode, invalid);
+    ExpectInvalidRawEditAndValidReplacement("<root><![CDATA[ok]]><other/></root>", "ok", false, "",
+                                            "", ReparseScope::TextNode, invalid);
+    ExpectInvalidRawEditAndValidReplacement("<root><?p ok?><other/></root>", "ok", false, "", "",
+                                            ReparseScope::TextNode, invalid);
+    ExpectInvalidRawEditAndValidReplacement("<root><host><old/></host><other/></root>", "<old/>",
+                                            true, "<more>", "</more>", ReparseScope::ElementSubtree,
+                                            invalid);
+  }
+}
+
+TEST_F(XMLDocumentTests, RawInputMalformedDraftDoesNotBlockUnrelatedLocalEdit) {
+  XMLDocument document = ParseDocument("<root><a v='old'/><b v='good'/></root>");
+  XMLNode first = document.root().firstChild()->firstChild().value();
+  XMLNode second = first.nextSibling().value();
+  const size_t firstOffset = document.source().find("old");
+  const auto failed = document.applySourceEdit(XMLEditIntent{
+      .range = {FileOffset::Offset(firstOffset), FileOffset::Offset(firstOffset + 3)},
+      .replacement = "&#xB;",
+      .sourceVersion = document.sourceVersion(),
+  });
+  ASSERT_TRUE(failed.applied);
+  ASSERT_TRUE(failed.diagnostic);
+  EXPECT_THAT(failed, DiagnosticReasonContains("Invalid numeric character entity"));
+  EXPECT_EQ(failed.scope, ReparseScope::AttributeValue);
+  EXPECT_THAT(first.getAttribute("v"), Optional(RcString("old")));
+  const size_t secondOffset = document.source().find("good");
+  const auto accepted = document.applySourceEdit(XMLEditIntent{
+      .range = {FileOffset::Offset(secondOffset), FileOffset::Offset(secondOffset + 4)},
+      .replacement = "new",
+      .sourceVersion = document.sourceVersion(),
+  });
+  EXPECT_TRUE(accepted.applied);
+  EXPECT_EQ(accepted.scope, ReparseScope::AttributeValue);
+  EXPECT_FALSE(accepted.diagnostic);
+  EXPECT_TRUE(document.sourceDiagnostic());
+  EXPECT_THAT(second.getAttribute("v"), Optional(RcString("new")));
+  EXPECT_THAT(first.getAttribute("v"), Optional(RcString("old")));
+  EXPECT_EQ(document.root().firstChild()->firstChild(), first);
+  EXPECT_EQ(first.nextSibling(), second);
+  const auto attributeLocation = first.getAttributeSourceLocation("v");
+  ASSERT_TRUE(attributeLocation);
+  ASSERT_TRUE(attributeLocation->valueRange.start.offset);
+  ASSERT_TRUE(attributeLocation->valueRange.end.offset);
+  EXPECT_EQ(failed.diagnostic->range.start.offset, attributeLocation->valueRange.start.offset);
+  EXPECT_EQ(failed.diagnostic->range.end.offset, attributeLocation->valueRange.end.offset);
+
+  const size_t repairOffset = document.source().find("&#xB;");
+  ASSERT_NE(repairOffset, std::string_view::npos);
+  const auto repaired = document.applySourceEdit(XMLEditIntent{
+      .range = {FileOffset::Offset(repairOffset), FileOffset::Offset(repairOffset + 5)},
+      .replacement = "fixed",
+      .sourceVersion = document.sourceVersion(),
+  });
+  EXPECT_TRUE(repaired.applied);
+  EXPECT_FALSE(repaired.diagnostic);
+  EXPECT_FALSE(document.sourceDiagnostic());
+  EXPECT_THAT(first.getAttribute("v"), Optional(RcString("fixed")));
+  EXPECT_EQ(document.root().firstChild()->firstChild(), first);
+  EXPECT_EQ(first.nextSibling(), second);
+}
+
+TEST_F(XMLDocumentTests, RawInputSplitUtf8ScalarIsRejectedBeforeWholeScalarReplacement) {
+  constexpr std::string_view source = "<root><child>\xC3\xA9</child></root>";
+  XMLDocument document = ParseDocument(source);
+  XMLNode child = document.root().firstChild()->firstChild().value();
+  XMLNode text = child.firstChild().value();
+  const auto versionBefore = document.sourceVersion();
+  const RcString treeBefore = document.root().serializeToString();
+  const size_t lead = document.source().find("\xC3\xA9");
+  const auto rejected = document.applySourceEdit(XMLEditIntent{
+      .range = {FileOffset::Offset(lead + 1), FileOffset::Offset(lead + 2)},
+      .replacement = "",
+      .sourceVersion = versionBefore,
+  });
+  EXPECT_FALSE(rejected.applied);
+  EXPECT_THAT(rejected, DiagnosticReasonContains("Invalid source replacement"));
+  EXPECT_EQ(rejected.scope, ReparseScope::TextNode);
+  EXPECT_TRUE(rejected.sourceDeltas.empty());
+  EXPECT_TRUE(rejected.mutations.empty());
+  EXPECT_EQ(document.source(), source);
+  EXPECT_EQ(document.sourceVersion(), versionBefore);
+  EXPECT_EQ(document.root().serializeToString(), treeBefore);
+  EXPECT_FALSE(document.sourceDiagnostic());
+  EXPECT_EQ(child.firstChild(), text);
+
+  const auto accepted = document.applySourceEdit(XMLEditIntent{
+      .range = {FileOffset::Offset(lead), FileOffset::Offset(lead + 2)},
+      .replacement = "\xF0\x9F\x99\x82",
+      .sourceVersion = versionBefore,
+  });
+  EXPECT_TRUE(accepted.applied);
+  EXPECT_FALSE(accepted.diagnostic);
+  EXPECT_FALSE(document.sourceDiagnostic());
+  EXPECT_EQ(child.firstChild(), text);
+  EXPECT_THAT(text.value(), Optional(RcString("\xF0\x9F\x99\x82")));
+}
+
 //
 // Construction / accessors.
 //
