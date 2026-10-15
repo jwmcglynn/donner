@@ -274,6 +274,11 @@ BUILDBUDDY_CLEANUP = ("      - name: Remove BuildBuddy credentials\n"
 TRUST_JOBS = ("gatekeeper", "trust")
 WRITE_ENVIRONMENT = "buildbuddy-write"
 BUILDBUDDY_DOWNLOADS = {"minimal", "toplevel", "all"}
+# The probe in the action sees the cache only at setup. When a later Bazel command cannot reach
+# it, Bazel ends the build (exit code 34) unless both of these let the action run locally.
+BUILDBUDDY_FALLBACK = ("build --remote_local_fallback",
+                       "build --incompatible_remote_local_fallback_for_remote_cache")
+REMOTE_FALLBACK_FLAG = re.compile(r"--(?:no)?(?:incompatible_)?remote_local_fallback")
 SECRET_NAMES_BUILDBUDDY = ("BUILDBUDDY_API_KEY", "BUILDBUDDY_API_KEY_READONLY")
 # Anything that can start Bazel: the client itself, directly or by path, and the repository's
 # wrappers that run it.
@@ -446,6 +451,8 @@ def _buildbuddy_job_violations(path, name, workflow, steps):
         violations.append("%s does not remove the BuildBuddy key in its last step" % where)
     if any(BAZEL_COMMAND.search(step) for step in steps[:max(configured)]):
         violations.append("%s runs Bazel before configuring BuildBuddy" % where)
+    if REMOTE_FALLBACK_FLAG.search(_jobs(workflow)[name]):
+        violations.append("%s overrides the BuildBuddy local fallback" % where)
     kinds = Counter(frozenset(_secret_reads(steps[index])) for index in configured)
     pull_requests = "pull_request" in _triggers(workflow) and not self_hosted
     expected = Counter({frozenset({"BUILDBUDDY_API_KEY"}): 1})
@@ -2522,6 +2529,16 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
             "lane dropped": (wasm, files[wasm].replace(
                 "uses: ./.github/actions/buildbuddy-cache", "uses: ./.github/actions/apt-install"),
                 "BuildBuddy lanes changed"),
+            "fallback turned off for one step": (main, files[main].replace(
+                "bazelisk build --config=ci $BAZEL_MACOS_BUILD_FLAGS $TARGETS",
+                "bazelisk build --config=ci --remote_local_fallback=false "
+                "$BAZEL_MACOS_BUILD_FLAGS $TARGETS", 1),
+                "overrides the BuildBuddy local fallback"),
+            "fallback turned off for the job": (nightly, files[nightly].replace(
+                "        linker: [default, gold]\n    steps:\n",
+                "        linker: [default, gold]\n    env:\n      FLAGS: "
+                "--noincompatible_remote_local_fallback_for_remote_cache\n    steps:\n", 1),
+                "overrides the BuildBuddy local fallback"),
         }
         self._assert_rejected(lambda files, path: _buildbuddy_violations(files), cases)
         cleanup = BUILDBUDDY_CLEANUP
@@ -2685,6 +2702,8 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
                 self.assertIn("build --credential_helper=remote.buildbuddy.io="
                               "%s/runner-temp/buildbuddy/helper" % directory, lines)
                 self.assertFalse(any(line.startswith("import") for line in lines))
+                self.assertEqual(sorted(BUILDBUDDY_FALLBACK),
+                                 sorted(line for line in lines if "fallback" in line))
 
     def test_buildbuddy_cache_partition_replaces_only_the_image_identity(self):
         write = "write-key-fixture"
