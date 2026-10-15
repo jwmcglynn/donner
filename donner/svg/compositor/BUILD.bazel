@@ -8,6 +8,33 @@ COMPOSITOR_GOLDEN_PERF_TESTS = [
     "CompositorGoldenTest.SplashDragEndReplaceDocumentReplayLatency",
 ]
 
+# compositor_golden_tests and compositor_golden_perf_tests build the same source and split its
+# cases with a gtest filter, so both take everything that source needs from here. The perf target
+# builds only in the nightly Perf lane, where a dependency added to one copy alone would go
+# unnoticed until that lane fails to build.
+_COMPOSITOR_GOLDEN_TEST_SRCS = ["CompositorGolden_tests.cc"]
+
+_COMPOSITOR_GOLDEN_TEST_DATA = ["//:donner_splash.svg"]
+
+# Geode implements filters independently of the TinySkia filter build flag, so under the Geode
+# backend the filter verification cases run instead of skipping.
+_COMPOSITOR_GOLDEN_TEST_DEFINES = select({
+    "//donner/svg/renderer:renderer_backend_geode": ["DONNER_COMPOSITOR_TEST_GEODE"],
+    "//conditions:default": [],
+})
+
+_COMPOSITOR_GOLDEN_TEST_DEPS = [
+    ":compositor",
+    ":dual_path_verifier",
+    "//donner/base:base_test_utils",
+    "//donner/editor/tests:bitmap_golden_compare",
+    "//donner/svg/components/style:style_system",
+    "//donner/svg/renderer",
+    "//donner/svg/renderer:renderer_interface",
+    "//donner/svg/resources:resource_loader_interface",
+    "@com_google_gtest//:gtest_main",
+]
+
 donner_perf_sensitive_cc_library(
     name = "compositor",
     srcs = [
@@ -207,33 +234,14 @@ donner_cc_test(
 
 donner_cc_test(
     name = "compositor_golden_tests",
-    srcs = [
-        "CompositorGolden_tests.cc",
-    ],
+    srcs = _COMPOSITOR_GOLDEN_TEST_SRCS,
     args = ["--gtest_filter=-" + ":".join(COMPOSITOR_GOLDEN_PERF_TESTS)],
-    data = [
-        "//:donner_splash.svg",
-    ],
+    data = _COMPOSITOR_GOLDEN_TEST_DATA,
     # Independent golden cases (perf cases excluded via the filter above
     # and split into compositor_golden_perf_tests); shard for parallelism.
     shard_count = 4,
-    # Geode implements filters independently of the TinySkia filter build flag. Keep this
-    # test-only backend selection in configured defines so the CMake model carries it too.
-    defines = select({
-        "//donner/svg/renderer:renderer_backend_geode": ["DONNER_COMPOSITOR_TEST_GEODE"],
-        "//conditions:default": [],
-    }),
-    deps = [
-        ":compositor",
-        ":dual_path_verifier",
-        "//donner/base:base_test_utils",
-        "//donner/editor/tests:bitmap_golden_compare",
-        "//donner/svg/components/style:style_system",
-        "//donner/svg/renderer",
-        "//donner/svg/renderer:renderer_interface",
-        "//donner/svg/resources:resource_loader_interface",
-        "@com_google_gtest//:gtest_main",
-    ],
+    defines = _COMPOSITOR_GOLDEN_TEST_DEFINES,
+    deps = _COMPOSITOR_GOLDEN_TEST_DEPS,
 )
 
 donner_cc_test(
@@ -264,25 +272,15 @@ donner_cc_test(
 donner_cc_test(
     name = "compositor_golden_perf_tests",
     size = "large",
-    srcs = [
-        "CompositorGolden_tests.cc",
-    ],
+    srcs = _COMPOSITOR_GOLDEN_TEST_SRCS,
     args = ["--gtest_filter=" + ":".join(COMPOSITOR_GOLDEN_PERF_TESTS)],
-    data = [
-        "//:donner_splash.svg",
-    ],
+    data = _COMPOSITOR_GOLDEN_TEST_DATA,
+    defines = _COMPOSITOR_GOLDEN_TEST_DEFINES,
     tags = [
         "manual",
         "perf",
     ],
-    deps = [
-        ":compositor",
-        ":dual_path_verifier",
-        "//donner/base:base_test_utils",
-        "//donner/svg/renderer",
-        "//donner/svg/renderer:renderer_interface",
-        "@com_google_gtest//:gtest_main",
-    ],
+    deps = _COMPOSITOR_GOLDEN_TEST_DEPS,
 )
 
 donner_cc_test(
