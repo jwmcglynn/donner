@@ -1,7 +1,7 @@
 # Project Roadmap {#DonnerProjectRoadmap}
 
 **Status:** Active
-**Updated:** 2026-09-14
+**Updated:** 2026-10-14
 
 ## Summary
 
@@ -18,7 +18,8 @@ since v0.5, plus the editor showcase work needed to demonstrate Donner deriving 
 composition from its own splash: a complete Layers panel, shape cut/copy/paste, a tuned Pen tool, text creation,
 text-to-outline conversion, viewport SVG export, and optional editor overlay export. The broader
 production-quality v1.0 milestone remains the follow-up release for animation, scripting,
-conformance completion, parser hardening, and ecosystem integration.
+multiplayer editing, diagramming, an embeddable runtime, conformance completion, parser hardening,
+and ecosystem integration.
 
 ---
 
@@ -163,16 +164,18 @@ retrospective.
 
 The production-quality milestone that follows the v0.8 **Donner SVG Editor & Engine** release.
 
-Focus: interactive editing, conformance, parser hardening, and ecosystem integration.
+Focus: interactive editing, multiplayer editing, diagramming, conformance, parser hardening, an
+embeddable runtime, and ecosystem integration.
 
 ### SVG Animation
 
 - Phases 1-9: timing model, interpolation engine, sandwich composition, attribute targeting,
   `<animate>`, `<animateTransform>`, `<animateMotion>`, `<set>`, event-based timing.
-- [ ] **Lottie playback (probable)**: Play back Lottie animations (the JSON-based After
-      Effects export format, `.json`/`.lottie`) on top of the same animation timeline
-      machinery. Lottie is the dominant interchange format for production vector animation,
-      and runtimes such as ThorVG and dotLottie demonstrate the demand.
+- [ ] **Lottie playback (probable)**: Play back Lottie animations (the JSON-based After Effects
+      export format, `.json`/`.lottie`) on an ECS-free timeline and interpolation module that the
+      SVG animation system and the Donner Tiny runtime also use. Lottie is the dominant interchange
+      format for production vector animation, and runtimes such as ThorVG and dotLottie demonstrate
+      the demand.
 
 ### Composited Rendering
 
@@ -216,6 +219,82 @@ Production editor scope: a hybrid structured/freeform SVG editor workflow beyond
       transiently invalid source, covered by
       `DocumentSyncControllerTest.PartialOpeningTagEditPreservesSelectionWhileInvalid` and the
       editor state-machine fuzzer.
+
+### Multiplayer Editing
+
+Real-time multi-user editing of one SVG document, modeled on Excalidraw's collaboration design:
+element-level highest-version-wins reconciliation over a relay that only forwards end-to-end
+encrypted messages. Local and remote changes both flow through the structured editing API, so
+collaboration attaches at that mutation seam instead of introducing a second document model. This
+section does not gate the v1.0 release criteria.
+
+- [ ] **Per-element versioning**: Each element carries a stable collaboration ID, a monotonically
+      increasing `version`, and a random `versionNonce` that changes with every version bump. Any
+      edit to an element's attributes, style, text content, or position in the tree bumps its
+      version. Element granularity is a deliberate tradeoff: concurrent edits to different
+      attributes of one element keep only the winning version, and per-attribute versioning is a
+      possible refinement. The collaboration ID is separate from the SVG `id` attribute, and
+      collaboration state records the collaboration ID that each IRI reference (`href`, `url(#...)`)
+      targets. Concurrent edits that produce duplicate `id` values are repaired deterministically by
+      renaming one element and rewriting only the references bound to it.
+- [ ] **Deterministic reconciliation**: Merging incoming state takes the union of element IDs. For
+      the same ID the higher `version` wins, equal versions break ties by the lower `versionNonce`,
+      and equal nonces break ties by the editing peer's unique session ID, so every peer converges
+      without a coordinating server. Deletions are tombstones retained in collaboration state until
+      every active peer has acknowledged them. Session membership is itself versioned collaboration
+      state: a peer that leaves, or stops acknowledging for longer than a documented retention
+      window, is retired by a membership update, so tombstone storage stays bounded. Compacting
+      acknowledged tombstones advances a session epoch; a peer whose state predates that epoch,
+      including a retired peer that rejoins, resynchronizes from current state instead of merging
+      its stale copy. On replay of its unsent edits, updates to elements that existed before its
+      last sync but are absent from the current state are rejected and reported as conflicts, while
+      elements it created after that sync are inserted, so a deleted element is never resurrected.
+      The saved SVG never contains deleted elements.
+- [ ] **Tree ordering**: SVG is a tree whose document order is paint order, unlike Excalidraw's flat
+      element list. Each element records its parent ID and a fractional index among its siblings, so
+      concurrent inserts and reorders merge without renumbering. Equal indices are ordered by
+      collaboration ID, and invalid or colliding indices are repaired deterministically. Reparenting
+      is an ordinary versioned update. Cycle and missing-parent repair runs on the complete merged
+      state, not in arrival order: within each parent cycle, the element whose winning record sorts
+      lowest under the reconciliation order (`version`, `versionNonce`, peer ID) is detached to the
+      document root, and an element whose parent is missing is detached the same way, so every peer
+      reaches the same tree.
+- [ ] **Incremental application**: Remote updates apply through the same structured edits and
+      incremental invalidation as local edits, never a full document reparse, and the source pane
+      mirrors them through reverse serialization.
+- [ ] **Relay and encryption**: A stateless relay scopes messages to a room and forwards encrypted
+      payloads without decrypting or ordering them. The room key travels only in the share link's
+      URL fragment, which browsers never send to the server. The native editor and the WebAssembly
+      build use the same protocol.
+- [ ] **Presence**: Cursors, selections, and in-progress gestures travel on a volatile channel that
+      is never persisted or recorded in undo history.
+- [ ] **Undo**: Undo is per user. Undoing a local change emits a new versioned edit instead of
+      rewinding shared state, and it skips elements a peer has changed since.
+- [ ] **Local-first persistence**: Each peer holds a full copy, keeps editing while offline, and
+      reconciles on reconnect. The saved file stays plain SVG; collaboration metadata (versions,
+      nonces, fractional indices, tombstones) lives in session or workspace state, not in exported
+      markup.
+- [ ] **Trust boundary**: Remote payloads are untrusted input. They pass the same parsers, resource
+      limits, and secure processing mode as file open, with message size caps, schema validation,
+      and no external resource loading on a peer's behalf. Fuzzers cover payload decoding and
+      reconciliation.
+
+### Diagramming
+
+Structured diagramming as sugar over real SVG. Diagram semantics (nodes, ports, connectors, layout
+constraints) live in a Donner XML namespace attached to ordinary SVG shapes, so any SVG viewer
+renders the diagram and a tool that drops the namespace keeps the picture, losing only the
+diagram editing semantics. This section does not gate the v1.0 release criteria.
+
+- [ ] **Diagram namespace**: Namespaced metadata on real `<g>`, `<rect>`, `<path>`, and `<text>`
+      elements describing node types, connection points, and connector endpoints. The metadata is
+      re-validated against the geometry on load.
+- [ ] **Diagram editing**: Shape libraries, connectors that follow their endpoints with
+      obstacle-avoiding routing and waypoints, auto-layout, and templates.
+- [ ] **Mermaid-compatible mode**: A Mermaid text view of the representable subset of the
+      diagram. Edits in either view update the other; layout and styling that Mermaid cannot
+      express stay in the Donner namespace, and the Mermaid parser follows the same resource limits
+      and fuzzing as other parsers.
 
 ### Parser Improvements
 
@@ -326,12 +405,38 @@ Production editor scope: a hybrid structured/freeform SVG editor workflow beyond
 - [ ] **Compile time**: Reduce build times. Audit heavy template instantiations, consider
       explicit template instantiation, forward declarations, and pimpl patterns where header
       fan-out is excessive.
-- [ ] **"Donner Tiny" build profile**: A minimal-footprint tier that strips text, filters,
+- [ ] **SVG engine build profiles**: A minimal-footprint SVG engine tier that strips text, filters,
       animation, and JavaScript, producing the smallest possible binary for embedded/constrained
       environments. Each feature is independently opt-in through build flags (CMake options / Bazel
       configs), so users can compose exactly the feature set they need. Document the size impact of
       each optional module and provide pre-defined profiles: `tiny` (core rendering only), `standard`
-      (current default), `full` (everything including JS).
+      (current default), `full` (everything including JS). The `tiny` engine profile keeps the SVG
+      DOM and CSS cascade; the Donner Tiny runtime below drops the SVG stack entirely.
+
+### Embeddable Runtime: Donner Tiny
+
+A small embeddable vector runtime in ThorVG's class, built from Donner's renderer layer instead of
+its SVG document stack. Donner Tiny does not parse SVG; SVG content goes through the SVG engine in
+any of its build profiles, so there is only one SVG front end to keep conformant. This section does
+not gate the v1.0 release criteria.
+
+- [ ] **Renderer core**: Factor a renderer core out of the current renderer backend interface:
+      paths, paints, clips, and transforms, with no SVG components or ECS types. tiny-skia and
+      Geode implement it, and the SVG renderer is built on it.
+- [ ] **Canvas-style 2D API**: An immediate-mode path, paint, gradient, clip, and transform API over
+      the renderer core, comparable to an HTML canvas 2D context.
+- [ ] **Lottie player (probable)**: Play Lottie animations through the same runtime, using the
+      ECS-free Lottie module shared with the Lottie item under SVG Animation.
+- [ ] **Backends**: tiny-skia software rendering by default, with its SIMD paths and no external
+      dependencies; Geode as an optional GPU backend for hosts that already own a GPU device.
+- [ ] **Footprint target**: Measure the minimal Donner Tiny build against ThorVG's minimal build and
+      target the same size class, using LTO, dead-section elimination, and per-module size
+      accounting published with each release.
+- [ ] **Embedding surface**: A stable C++ API plus a C API for language bindings, with WebAssembly
+      and embedded targets. Consumers do not depend on the SVG parser, CSS engine, or ECS.
+- [ ] **ThorVG comparison**: Publish a reproducible comparison against ThorVG covering binary size,
+      render time, memory use, and output quality for the shared vector-drawing and Lottie feature
+      set.
 
 ### Ecosystem
 
@@ -364,7 +469,6 @@ Production editor scope: a hybrid structured/freeform SVG editor workflow beyond
 
 ## Future Work (post-v1.0)
 
-- Multi-user collaboration patch protocol.
 - Game-runtime suitability profile (latency, frame pacing, memory budgets).
 
 ---
@@ -376,8 +480,10 @@ flowchart TD
   A[Core Parser + DOM + CSS Cascade] --> B[Computed Style + Layout]
   B --> C[Rendering Instance Graph]
   C --> D[Renderer Backend Interface]
-  D --> E1[tiny-skia Software Backend]
-  D --> E2[Geode GPU Backend]
+  RC --> E1[tiny-skia Software Backend]
+  RC --> E2[Geode GPU Backend]
+  T[Donner Tiny: Canvas 2D API + Lottie Player] --> RC[Renderer Core]
+  D --> RC
 
   A --> F[Partial Re-parse / Live Patch Engine]
   F --> C
@@ -390,6 +496,7 @@ flowchart TD
   J --> J1[Spatial Index / Hit Testing]
   J --> J2[Event System]
   J --> J3[Structured Editing API]
+  J3 --> J4[Multiplayer Sync]
 
   K[Optional Extensions] --> K1[JavaScript Runtime]
   K1 --> C

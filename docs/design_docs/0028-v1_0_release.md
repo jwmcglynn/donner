@@ -53,7 +53,7 @@ in [0011-v0_5_release.md](0011-v0_5_release.md#v05-retrospective):
   Doxygen sidebar grouping, condensed element/filter index, binary-size report rendering,
   public-target visibility audit, Markdown element-list cleanup.
 - **Security, optimization, and ecosystem** — AI-assisted security pass, perf/size/memory/
-  compile-time audits, the "Donner Tiny" build profile, and the published comparison against
+  compile-time audits, the SVG engine build profiles, and the published comparison against
   lunasvg/resvg.
 
 The user's top-of-mind list for v1.0 (in priority order) drives the first phases below:
@@ -89,7 +89,8 @@ re-scoped down later if the schedule demands it.
   - CSS3 gap analysis complete; every SVG2-referenced CSS property supported.
   - Published SVG2 conformance report (from the new conformance suite) with known limitations
     documented.
-  - Performance and binary-size profiles documented; the "Donner Tiny" tier is usable.
+  - Performance and binary-size profiles documented; the minimal SVG engine build profile is
+    usable.
   - Release documentation complete for embedders (embedding guide).
   - Native GPU builds use the Donner-owned Metal/Vulkan runtime and the complete release build passes
     the no-Rust-dependency gate from [0053](0053-native_gpu_hal.md).
@@ -148,7 +149,7 @@ this doc only tracks "is the v1.0-gating slice of that work done".
   [0026-svg_conformance_testing.md](0026-svg_conformance_testing.md), plus resvg suite cleanup
   and upstream resvg harness contribution.
 - [ ] **Phase 12** — Security pass (AI-assisted audit + fuzzer expansion).
-- [ ] **Phase 13** — Performance, binary size, memory, compile time, "Donner Tiny" profile.
+- [ ] **Phase 13** — Performance, binary size, memory, compile time, SVG engine build profiles.
 - [ ] **Phase 14** — Ecosystem: comparison publication against lunasvg / resvg.
 - [ ] **Phase 15** — Documentation: design-docs-to-developer-docs conversion, embedding guide,
   in-code docs audit.
@@ -375,9 +376,10 @@ gate is completion of M1–M4 from that doc, plus the two roadmap items on resvg
   steady-state vs peak.
 - [ ] **Compile time** — Forward-declaration headers, modular EnTT (B4), split monolithic
   `svg_core` / renderer files (B11, B14).
-- [ ] **"Donner Tiny" build profile** — Minimal-footprint tier stripping text/filters/
+- [ ] **SVG engine build profiles** — Minimal-footprint tier stripping text/filters/
   animation/JS. Document size impact per optional module. Pre-defined profiles: `tiny`,
-  `standard`, `full`.
+  `standard`, `full`. The separate Donner Tiny runtime (no SVG parsing) is tracked in the
+  project roadmap and does not gate v1.0.
 
 ### Phase 14: Ecosystem comparison
 
