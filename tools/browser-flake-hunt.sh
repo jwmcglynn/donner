@@ -178,6 +178,8 @@ for ((i = 0; i < cpu_load; i++)); do
 done
 
 export DONNER_WASM_BASE_URL="${server_url}"
+# Suites that hash the served package read it from here, as they do in CI.
+export DONNER_WASM_PACKAGE_DIR="${pkg_copy}"
 export DONNER_WASM_BACKEND="geode"
 export DONNER_WASM_REQUIRE_WEBGPU="1"
 export DONNER_WASM_EXPECTED_HEADLESS_BACKEND="browser"
