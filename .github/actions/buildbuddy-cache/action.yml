@@ -146,10 +146,10 @@ runs:
           fi
         fi
 
-        # An unreachable cache must cost nothing: Bazel can stop at startup
-        # when it cannot reach the remote cache, so probe first and build
-        # locally on any transport failure. Without --fail, curl succeeds on
-        # every HTTP response, so any nonzero status means no usable endpoint.
+        # An unreachable cache must cost nothing, so probe first and build
+        # without it on any transport failure; the fallback flags below cover
+        # an outage later in the job. Without --fail, curl succeeds on every
+        # HTTP response, so any nonzero status means no usable endpoint.
         if ! curl --silent --output /dev/null --connect-timeout 5 --max-time 10 \
             "https://${endpoint}"; then
           echo "::warning::BuildBuddy unreachable; building without the remote cache."
@@ -187,6 +187,12 @@ runs:
           echo "build --remote_instance_name=${image}"
           echo "build --remote_timeout=60s"
           echo "build --remote_cache_compression"
+          # The probe sees the cache only now. When a later Bazel command
+          # cannot reach it, the command's first cache lookup fails ("Failed
+          # to query remote execution capabilities", exit code 34) unless both
+          # flags let Bazel run the action locally instead.
+          echo "build --remote_local_fallback"
+          echo "build --incompatible_remote_local_fallback_for_remote_cache"
           echo "build --remote_download_outputs=${DOWNLOAD_OUTPUTS}"
           # rules_playwright unpacks each browser into a directory output. When
           # that output comes from a cache (remote or disk) and is fetched only

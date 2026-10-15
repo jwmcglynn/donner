@@ -278,8 +278,16 @@ trusted maintainer pull request.
 **Bazel settings.** `--remote_timeout=60s`, `--remote_cache_compression`, and
 `--remote_download_outputs=minimal` for lanes that only need test results (`toplevel` for the
 Editor WASM lane, which stages its package from `bazel-bin`). If the cache cannot be reached when a
-job starts, the action leaves it off and the job builds locally. Cache read errors during a build
-fall back to local execution, and results that are no longer available are rebuilt.
+job starts, the action leaves it off and the job builds locally. An outage later in the job also
+degrades to local execution. Each Bazel command first asks the cache for its capabilities, and when
+that query fails, Bazel ends the build with exit code 34 ("Failed to query remote execution
+capabilities") unless both `--remote_local_fallback` and
+`--incompatible_remote_local_fallback_for_remote_cache` are set, so the fragment sets both. Other
+cache read errors and failed uploads are warnings, and an output that an earlier command left only
+in the cache is rebuilt locally when an action needs it (`--rewind_lost_inputs`). When the endpoint
+does not answer at all, each Bazel command first waits out one connection attempt, about 30
+seconds. The self-hosted Linux lane never loads this fragment and keeps local fallback off on its
+command line, so a remote-execution outage there still fails fast.
 
 **Runner images and hermeticity.** Hosted Linux builds with the runner image's autoconfigured clang
 and system headers. Those files are not Bazel action inputs, so a runner image update changes no
