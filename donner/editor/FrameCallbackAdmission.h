@@ -3,6 +3,7 @@
 /// Coalesces browser frame notifications and invalidates callbacks across shutdown/restart.
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cstdint>
 #include <cstdlib>
@@ -22,6 +23,30 @@ inline std::optional<double> NextScheduledFrameDeadline(std::optional<double> pr
   }
   return nextDeadlineMs;
 }
+
+/// Owner-thread counters; index zero is scheduled work and index one is an event frame.
+struct FrameAttemptStats {
+  std::array<uint64_t, 2> attempts{};
+  std::array<uint64_t, 2> idle{};
+  std::array<uint64_t, 2> rendered{};
+  uint64_t blockedByFrame = 0;
+  uint64_t blockedByGpu = 0;
+
+  /// Record the existing admission decision without changing either guard.
+  /// @param eventFrame Whether this is a completion-event callback.
+  /// @param frameActive Whether another UI frame is active.
+  /// @param gpuActive Whether a GPU owner callback is active.
+  bool admit(bool eventFrame, bool frameActive, bool gpuActive) {
+    ++attempts[eventFrame];
+    blockedByFrame += frameActive;
+    blockedByGpu += gpuActive;
+    return !frameActive && !gpuActive;
+  }
+
+  /// Count an admitted callback's outcome. @param eventFrame Event vs scheduled callback.
+  /// @param didRender Whether the callback ran a full UI frame (not proof of surface presentation).
+  void finish(bool eventFrame, bool didRender) { ++(didRender ? rendered : idle)[eventFrame]; }
+};
 
 /// Start/stop and callback execution belong to the app thread; admission may run on another thread.
 class FrameCallbackAdmission {

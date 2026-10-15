@@ -6466,6 +6466,17 @@ namespace {
 /// Opt-in, bounded numeric trace: epoch milliseconds, phase, event, target, sample time, changed.
 /// Capture phase carries target presence only; dispatch phase resolves its id under write access.
 /// Phase three records later timeline samples only after a click changes animation state.
+void TracePreviewAdvance([[maybe_unused]] int outcome, [[maybe_unused]] bool eventFrame = false) {
+#ifdef __EMSCRIPTEN__
+  // clang-format off
+  EM_ASM({
+    const counts = globalThis['__donnerPreviewAdvanceCounts'];
+    if (Array.isArray(counts) && counts.length === 9) ++counts[$0 + Number($1)];
+  }, outcome, eventFrame);
+  // clang-format on
+#endif
+}
+
 void TracePreviewPointer([[maybe_unused]] int phase, [[maybe_unused]] int event,
                          [[maybe_unused]] uint32_t targetId, [[maybe_unused]] double sampleTime,
                          [[maybe_unused]] bool changed = false) {
@@ -6744,12 +6755,15 @@ void EditorShell::advanceAnimationPreview(double nowSeconds, EditorFrameKind fra
     return;
   }
   if (renderCoordinator_.asyncRenderer().isBusy()) {
+    TracePreviewAdvance(0);
     return;
   }
   if (animationResetPending_) {
     if (!app_.document().restartAnimations()) {
+      TracePreviewAdvance(8);
       return;
     }
+    TracePreviewAdvance(1);
     animationResetPending_ = false;
     animationPreviewStartSeconds_ = nowSeconds;
     animationPreviewLastTime_ = 0.0;
@@ -6757,6 +6771,7 @@ void EditorShell::advanceAnimationPreview(double nowSeconds, EditorFrameKind fra
     return;
   }
   if (frameKind == EditorFrameKind::Event || !animationFramePresented()) {
+    TracePreviewAdvance(2, frameKind == EditorFrameKind::Event);
     return;
   }
   tickAnimationPreview(nowSeconds);
@@ -6765,6 +6780,7 @@ void EditorShell::advanceAnimationPreview(double nowSeconds, EditorFrameKind fra
 void EditorShell::tickAnimationPreview(double nowSeconds) {
   const auto seconds = animationPreviewTimeAt(nowSeconds);
   if (!seconds || *seconds == animationPreviewLastTime_) {
+    TracePreviewAdvance(seconds ? 4 : 5);
     return;
   }
   applyAnimationPreviewTime(*seconds);
@@ -6784,9 +6800,11 @@ bool EditorShell::applyAnimationPreviewTime(double seconds) {
   } else {
     const auto access = app_.document().document().tryReadAccess();
     if (!access.has_value() || app_.document().document().currentTime() != seconds) {
+      TracePreviewAdvance(7);
       return false;
     }
   }
+  TracePreviewAdvance(6);
   animationPreviewLastTime_ = seconds;
   animationResetPending_ = false;
   TracePreviewPointer(3, 0, 0, seconds);

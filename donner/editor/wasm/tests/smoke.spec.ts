@@ -1368,6 +1368,89 @@ async function verifyRasterProgressWithTimersHeld(page: Page) {
   ).toBe(true);
 }
 
+async function startOwnerFrameProbe(page: Page, sampleRaf: boolean): Promise<Worker> {
+  const startup = Promise.any(
+    page.workers().map(async (worker) => {
+      await worker.evaluate((sampleRaf) => {
+        const state = globalThis as unknown as Record<string, unknown>;
+        if (!state.__donnerGpuOwner) throw new Error("not the GPU owner");
+        const counts = Array(9).fill(0);
+        state.__donnerPreviewAdvanceCounts = counts;
+        const samples: number[][] = [];
+        const registrations: number[][] = [];
+        const deadline = performance.now() + 25000;
+        const callbackIds = new Map<FrameRequestCallback, number>();
+        const originalRaf = globalThis.requestAnimationFrame.bind(globalThis);
+        const previousRaf = globalThis.requestAnimationFrame;
+        let recording = true;
+        const tracedRaf: typeof requestAnimationFrame = (callback) => {
+          if (!recording || registrations.length >= 4096 || performance.now() >= deadline) {
+            return originalRaf(callback);
+          }
+          if (!callbackIds.has(callback) && callbackIds.size < 16) {
+            callbackIds.set(callback, callbackIds.size + 1);
+          }
+          const record = [callbackIds.get(callback) ?? 0, performance.now(), -1, -1, -1];
+          if (recording && registrations.length < 4096) registrations.push(record);
+          return originalRaf(function(this: unknown, timestamp) {
+            record[2] = timestamp;
+            record[3] = performance.now();
+            try {
+              return callback.call(this, timestamp);
+            } finally {
+              record[4] = performance.now();
+            }
+          });
+        };
+        globalThis.requestAnimationFrame = tracedRaf;
+        let request = 0;
+        const tick = (timestamp: number) => {
+          samples.push([timestamp, performance.now()]);
+          if (samples.length < 4096 && performance.now() < deadline) {
+            request = requestAnimationFrame(tick);
+          }
+        };
+        if (sampleRaf) request = requestAnimationFrame(tick);
+        state.__donnerStopOwnerRafProbe = () => {
+          cancelAnimationFrame(request);
+          recording = false;
+          if (globalThis.requestAnimationFrame === tracedRaf) {
+            globalThis.requestAnimationFrame = previousRaf;
+          }
+          delete state.__donnerStopOwnerRafProbe;
+          delete state.__donnerPreviewAdvanceCounts;
+          return { timeOrigin: performance.timeOrigin, samples, counts, registrations };
+        };
+      }, sampleRaf);
+      return worker;
+    }),
+  );
+  const owner = await boundBrowserDiagnostic(startup, 2000);
+  if (!owner) {
+    void startup.then(stopOwnerFrameProbe).catch(() => null);
+    throw new Error("GPU owner rAF probe did not start");
+  }
+  return owner;
+}
+
+async function stopOwnerFrameProbe(worker: Worker) {
+  return boundBrowserDiagnostic(
+    worker.evaluate(() => {
+      const state = globalThis as unknown as Record<string, unknown>;
+      const stop = state.__donnerStopOwnerRafProbe as
+        | (() => {
+          timeOrigin: number;
+          samples: number[][];
+          counts: number[];
+          registrations: number[][];
+        })
+        | undefined;
+      return stop?.() ?? null;
+    }),
+    2000,
+  );
+}
+
 async function delayWorkerAnimationFrames(page: Page, delayMs: number) {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
@@ -1428,6 +1511,7 @@ async function readCarouselFrameDiagnostics(page: Page) {
           "__donnerFrameLoopStats",
           "__donnerHostFrameTiming",
           "__donnerFrameTickStats",
+          "__donnerFrameAdmissionStats",
           "__donnerAsyncifySuspendStats",
           "__donnerSampleThumbnailStats",
           "__donnerPresentationQueueStats",
@@ -3609,6 +3693,7 @@ test(
     const readCadence = async () => {
       const sample = await page.evaluate(() => ({
         time: performance.now(),
+        timeOrigin: performance.timeOrigin,
         frames: window.__donnerMainLoopRenderedFrames ?? 0,
         documents: window.__donnerWorkerStats?.completedResults ?? 0,
         presentedDocuments: window.__donnerPresentedDocumentStats?.count ?? 0,
@@ -3629,6 +3714,7 @@ test(
     const ownerBefore = await readGpuOwnerDispatchStats(page);
     const before = await readCadence();
     const probeMainRaf = process.env.DONNER_ANIMATION_RAF_PROBE === "1";
+    const probeOwnerRaf = probeMainRaf && process.env.DONNER_ANIMATION_OWNER_RAF_PROBE !== "0";
     if (probeMainRaf) {
       await page.evaluate(() => {
         const state = window as unknown as Record<string, unknown>;
@@ -3651,13 +3737,24 @@ test(
     }
     let after: Awaited<ReturnType<typeof readCadence>>;
     let mainRafSamples: number[][] | null = null;
+    let ownerProbe: Worker | undefined;
+    let ownerRaf: {
+      timeOrigin: number;
+      samples: number[][];
+      counts: number[];
+      registrations: number[][];
+    } | null = null;
     try {
+      if (probeMainRaf) ownerProbe = await startOwnerFrameProbe(page, probeOwnerRaf);
       await expect.poll(async () => (await readCadence()).time - before.time, {
         timeout: 25000,
         intervals: [100],
       }).toBeGreaterThanOrEqual(20000);
       after = await readCadence();
     } finally {
+      if (ownerProbe) {
+        ownerRaf = await stopOwnerFrameProbe(ownerProbe);
+      }
       if (probeMainRaf) {
         mainRafSamples = await boundBrowserDiagnostic(
           page.evaluate(() => {
@@ -3689,6 +3786,7 @@ test(
       : 0;
     const presentationGapsMs = presentedSamples.slice(1)
       .map((sample, index) => sample[3] - presentedSamples[index][3]);
+    const ownerTimeOrigin = ownerRaf?.timeOrigin ?? 0;
     const cadencePath = testInfo.outputPath("animation-cadence.json");
     const cadence = {
       browser: testInfo.project.name,
@@ -3730,6 +3828,21 @@ test(
         before: schedulerBefore,
         after: schedulerAfter,
         mainRafProbeEnabled: probeMainRaf,
+        ownerRafProbeEnabled: probeOwnerRaf,
+        ownerRaf: ownerRaf
+          ? {
+            timeOrigin: ownerTimeOrigin,
+            previewAdvanceCounts: ownerRaf.counts,
+            registrations: ownerRaf.registrations.filter((record) => {
+              const observedMs = ownerTimeOrigin + record[3] - before.timeOrigin;
+              return record[4] >= 0 && observedMs >= before.time && observedMs <= after.time;
+            }),
+            samples: ownerRaf.samples.filter((sample) => {
+              const observedMs = ownerTimeOrigin + sample[1] - before.timeOrigin;
+              return observedMs >= before.time && observedMs <= after.time;
+            }),
+          }
+          : null,
         intervalStartMs: before.time,
         intervalEndMs: after.time,
         mainRafSamples:

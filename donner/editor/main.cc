@@ -209,7 +209,9 @@ void RunWasmEditorFrame(void* userdata, bool forceFrame) {
   // A nested frame would call ImGui::NewFrame() twice without an intervening
   // Render() and recurse until the JS stack overflows. Drop that callback; the
   // active frame will finish and the browser will schedule the next one.
-  if (!CanRunWasmEditorFrame(userdata)) {
+  if (!donner::editor::whole_app_worker::RecordFrameAdmission(
+          forceFrame, state->frameActive,
+          donner::gpu::browser::IsBrowserGpuOwnerDispatchActive())) {
     return;
   }
   if (state->window->shouldClose()) {
@@ -249,6 +251,7 @@ void RunWasmEditorFrame(void* userdata, bool forceFrame) {
   const bool timerDue = state->nextIdleWakeAtMs.has_value() && nowMs >= *state->nextIdleWakeAtMs;
   if (!editorRequested && !browserRequested && !timerDue) {
     // Idle completion confirmation can yield to the browser and deliver another scheduler callback.
+    donner::editor::whole_app_worker::RecordFrameOutcome(forceFrame, false);
     state->window->pollIdleGpu();
     return;
   }
@@ -263,6 +266,7 @@ void RunWasmEditorFrame(void* userdata, bool forceFrame) {
   state->renderFrame(*state->window, *state->shell,
                      forceFrame ? donner::editor::EditorFrameKind::Event
                                 : donner::editor::EditorFrameKind::Scheduled);
+  donner::editor::whole_app_worker::RecordFrameOutcome(forceFrame, true);
   RecordWasmFrameLoopSample(triggerBits, emscripten_get_now() - frameStartMs);
   std::optional<double> nextDeadlineMs;
   if (const std::optional<float> wakeSeconds = state->shell->nextIdleWakeSeconds()) {

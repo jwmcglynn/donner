@@ -160,6 +160,17 @@ enum class FrameDriver : int {
 FrameDriver InstallFrameDriver(void (*frameFn)(void*, bool), void* userData,
                                bool (*canRunFrame)(void*), bool (*pollPresentation)(void*));
 
+/// Record frame admission on the owner thread, returning the unchanged guard decision.
+/// @param eventFrame Event vs scheduled callback.
+/// @param frameActive Whether another UI frame is active.
+/// @param gpuActive Whether GPU owner dispatch is active.
+bool RecordFrameAdmission(bool eventFrame, bool frameActive, bool gpuActive);
+
+/// Record an admitted callback's outcome on the owner thread.
+/// @param eventFrame Event vs scheduled callback.
+/// @param didRender Whether a full UI frame ran, independent of surface acquisition.
+void RecordFrameOutcome(bool eventFrame, bool didRender);
+
 /// Request an event frame for a raster-worker state change, independently of delayed browser rAF.
 /// Safe from any thread, including before installation and after shutdown. Ordinary UI/animation
 /// wakes keep using the rAF-paced request flag; this is not a self-driven animation loop.

@@ -1,9 +1,28 @@
 #include "donner/editor/FrameCallbackAdmission.h"
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 namespace donner::editor {
 namespace {
+
+TEST(FrameCallbackAdmissionTest, DiagnosticCountersPreserveGuardAndSeparateFrameOutcomes) {
+  FrameAttemptStats stats;
+  for (bool event : {false, true}) {
+    EXPECT_TRUE(stats.admit(event, false, false));
+    stats.finish(event, true);
+    EXPECT_TRUE(stats.admit(event, false, false));
+    stats.finish(event, false);
+    EXPECT_FALSE(stats.admit(event, true, false));
+    EXPECT_FALSE(stats.admit(event, false, true));
+    EXPECT_FALSE(stats.admit(event, true, true));
+  }
+  EXPECT_THAT(stats.attempts, testing::ElementsAre(5, 5));
+  EXPECT_THAT(stats.rendered, testing::ElementsAre(1, 1));
+  EXPECT_THAT(stats.idle, testing::ElementsAre(1, 1));
+  EXPECT_EQ(stats.blockedByFrame, 4u);
+  EXPECT_EQ(stats.blockedByGpu, 4u);
+}
 
 TEST(FrameCallbackAdmissionTest, EventFrameCannotPostponeAnOwedAnimationBoundary) {
   const double boundaryMs = 1000.0 / 60.0;

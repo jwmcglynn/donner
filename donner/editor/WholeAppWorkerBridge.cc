@@ -602,6 +602,8 @@ struct FrameDriverState {
   double progressDeadlineMs = 0;
   std::atomic<std::uint32_t> wakeSerial{0};
   bool eventDeferred = false;
+  FrameAttemptStats frameAttempts;
+  uint64_t eventDeferrals = 0;
   std::atomic<std::uint32_t> pendingFrames{0};
   std::atomic<std::uint32_t> peakPendingFrames{0};
 
@@ -662,6 +664,7 @@ void RunEventFrame(void* token) {
     return;
   }
   if (!state.canRunFrame(state.userData)) {
+    ++state.eventDeferrals;
     state.eventDeferred = true;
     return;
   }
@@ -886,6 +889,14 @@ void StopFrameDriver() {
   state.frameFn = nullptr;
   state.userData = nullptr;
   emscripten_cancel_main_loop();
+}
+
+bool RecordFrameAdmission(bool eventFrame, bool frameActive, bool gpuActive) {
+  return Driver().frameAttempts.admit(eventFrame, frameActive, gpuActive);
+}
+
+void RecordFrameOutcome(bool eventFrame, bool didRender) {
+  Driver().frameAttempts.finish(eventFrame, didRender);
 }
 
 FrameTickStats TickStats() {
@@ -1283,6 +1294,7 @@ void PublishMemoryAttribution() {
 
 void RecordFrameSample(int triggerBits, double frameMs, int callbacks) {
   const double completedAtEpochMs = WorkerEpochNowMs();
+  const FrameAttemptStats& attempts = Driver().frameAttempts;
   // clang-format off
   MAIN_THREAD_ASYNC_EM_ASM(
       {
@@ -1290,6 +1302,12 @@ void RecordFrameSample(int triggerBits, double frameMs, int callbacks) {
         if (!stats) {
           return;
         }
+        window['__donnerFrameAdmissionStats'] = ({
+          'scheduledAttempts': $5, 'eventAttempts': $6,
+          'scheduledIdle': $7, 'eventIdle': $8,
+          'scheduledRendered': $9, 'eventRendered': $10,
+          'blockedByFrame': $11, 'blockedByGpu': $12, 'eventDeferrals': $13,
+        });
         stats['callbacks'] = (stats['callbacks'] | 0) + $2;
         stats['renderedFrames'] = (stats['renderedFrames'] | 0) + 1;
         if ($0 & 1) {
@@ -1327,7 +1345,12 @@ void RecordFrameSample(int triggerBits, double frameMs, int callbacks) {
             Math.max(Number(window['__donnerHeapBytesHighWater'] || 0), $3);
       },
       triggerBits, frameMs, callbacks, static_cast<double>(emscripten_get_heap_size()),
-      completedAtEpochMs);
+      completedAtEpochMs,
+      static_cast<double>(attempts.attempts[0]), static_cast<double>(attempts.attempts[1]),
+      static_cast<double>(attempts.idle[0]), static_cast<double>(attempts.idle[1]),
+      static_cast<double>(attempts.rendered[0]), static_cast<double>(attempts.rendered[1]),
+      static_cast<double>(attempts.blockedByFrame), static_cast<double>(attempts.blockedByGpu),
+      static_cast<double>(Driver().eventDeferrals));
   // clang-format on
 
   PublishSuspendAndTickStats();
