@@ -9,6 +9,7 @@
 
 #include "donner/base/StringUtils.h"
 #include "donner/svg/components/SVGDocumentContext.h"
+#include "donner/svg/components/animation/AnimationReference.h"
 #include "donner/svg/components/animation/AnimationResourceBudget.h"
 #include "donner/svg/components/animation/AnimationStateComponent.h"
 #include "donner/svg/components/animation/AnimationTimingComponent.h"
@@ -89,12 +90,12 @@ struct TimelineNode {
 using NodeIndices = std::unordered_map<Entity, std::size_t>;
 
 std::optional<std::size_t> SourceIndex(Registry& registry, const NodeIndices& indices,
-                                       const AnimationTimeSpecifier& specifier) {
+                                       const AnimationTimeSpecifier& specifier,
+                                       AnimationResourceBudget& budget) {
   if (specifier.kind == AnimationTimeSpecifier::Kind::Event || specifier.sourceId.empty()) {
     return std::nullopt;
   }
-  const Entity entity =
-      registry.ctx().get<SVGDocumentContext>().getEntityById(RcString(specifier.sourceId));
+  const Entity entity = FindAnimationReference(registry, specifier.sourceId, budget);
   const auto it = indices.find(entity);
   return it == indices.end() ? std::nullopt : std::optional(it->second);
 }
@@ -117,7 +118,7 @@ bool AppendInstance(std::vector<double>& times, double time) {
 bool ResolveInstances(Registry& registry, const NodeIndices& indices,
                       const std::vector<TimelineNode>& nodes,
                       const std::vector<AnimationTimeSpecifier>& specs, std::vector<double>& times,
-                      std::size_t& steps) {
+                      std::size_t& steps, AnimationResourceBudget& budget) {
   for (const auto& spec : specs) {
     if (++steps > kMaximumDependencySteps) {
       return false;
@@ -128,7 +129,10 @@ bool ResolveInstances(Registry& registry, const NodeIndices& indices,
       }
       continue;
     }
-    const auto sourceIndex = SourceIndex(registry, indices, spec);
+    const auto sourceIndex = SourceIndex(registry, indices, spec, budget);
+    if (budget.rejected()) {
+      return false;
+    }
     if (!sourceIndex) {
       continue;
     }
@@ -201,7 +205,8 @@ std::vector<AnimationInterval> BuildIntervals(const AnimationTimingComponent& ti
 }
 
 bool InitializeNodes(Registry& registry, std::span<const Entity> animations,
-                     std::vector<TimelineNode>& nodes, NodeIndices& indices) {
+                     std::vector<TimelineNode>& nodes, NodeIndices& indices,
+                     AnimationResourceBudget& budget) {
   std::size_t bytes = 0;
   for (Entity entity : animations) {
     const auto& timing = registry.get<AnimationTimingComponent>(entity);
@@ -226,11 +231,14 @@ bool InitializeNodes(Registry& registry, std::span<const Entity> animations,
   for (std::size_t i = 0; i < nodes.size(); ++i) {
     for (const auto* specs : {&nodes[i].begins, &nodes[i].ends}) {
       for (const auto& spec : *specs) {
-        if (const auto source = SourceIndex(registry, indices, spec)) {
+        if (const auto source = SourceIndex(registry, indices, spec, budget)) {
           auto& dependents = nodes[*source].dependents;
           if (std::find(dependents.begin(), dependents.end(), i) == dependents.end()) {
             dependents.push_back(i);
           }
+        }
+        if (budget.rejected()) {
+          return false;
         }
       }
     }
@@ -290,6 +298,12 @@ bool InsertAnimationInstance(std::vector<double>& times, double time) {
 }
 
 bool ResolveAnimationTimeline(Registry& registry, std::span<const Entity> animations, double time) {
+  AnimationResourceBudget budget;
+  return ResolveAnimationTimeline(registry, animations, time, budget);
+}
+
+bool ResolveAnimationTimeline(Registry& registry, std::span<const Entity> animations, double time,
+                              AnimationResourceBudget& budget) {
   if (animations.size() > AnimationResourceBudget::kMaximumAnimations ||
       !parser::RefreshAnimationAttributes(registry, animations)) {
     return false;
@@ -304,7 +318,7 @@ bool ResolveAnimationTimeline(Registry& registry, std::span<const Entity> animat
   }
   std::vector<TimelineNode> nodes;
   NodeIndices indices;
-  if (!InitializeNodes(registry, animations, nodes, indices)) {
+  if (!InitializeNodes(registry, animations, nodes, indices, budget)) {
     return false;
   }
   std::deque<std::size_t> queue;
@@ -325,8 +339,8 @@ bool ResolveAnimationTimeline(Registry& registry, std::span<const Entity> animat
     const auto& state = registry.get<AnimationStateComponent>(node.entity);
     auto begins = state.eventBeginTimes;
     auto ends = state.eventEndTimes;
-    if (!ResolveInstances(registry, indices, nodes, node.begins, begins, steps) ||
-        !ResolveInstances(registry, indices, nodes, node.ends, ends, steps)) {
+    if (!ResolveInstances(registry, indices, nodes, node.begins, begins, steps, budget) ||
+        !ResolveInstances(registry, indices, nodes, node.ends, ends, steps, budget)) {
       return false;
     }
     auto intervals = BuildIntervals(registry.get<AnimationTimingComponent>(node.entity),

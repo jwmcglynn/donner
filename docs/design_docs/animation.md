@@ -130,11 +130,11 @@ raster-image references move decoded frames into bounded per-element caches and 
 revisions; they do not repeatedly charge the resource loader for the same decoded frame. Existing
 resource-loader policies and document byte/fetch limits still apply.
 
-The static use-element loader has no document-origin policy and accepts data URLs in dynamic mode
-when a loader and parser callback are configured. These remain existing conformance limitations
-relative to [SVG2 section 5.5](https://www.w3.org/TR/SVG2/struct.html#UseElement); animated references
-use the same admission path. Secure-mode blocking, loader denial and restoration are covered by
-the animated-use regression in //donner/svg/renderer/tests:renderer_animation_presentation_tests.
+The static use-element loader rejects data URLs as external document references. It still has no
+document-origin policy, an existing conformance limitation relative to
+[SVG2 section 5.5](https://www.w3.org/TR/SVG2/struct.html#UseElement). Animated references use the same
+admission path. Secure-mode blocking, loader denial and restoration are covered by the animated-use
+regression in //donner/svg/renderer/tests:renderer_animation_presentation_tests.
 
 The default parser recognizes the animation elements. `AnimationAttributeParser` is shared by the
 initial parser and runtime attribute refresh. A bounded source fingerprint avoids reparsing unchanged
@@ -229,6 +229,14 @@ geometry measurement, lifecycle queries, hit geometry, and queued preview input.
   and 262144 dependency steps.
 - At most 4 MiB of generated values, 64 numeric values per sampled list, and 64 KiB per motion or animated path source value.
 - A shared 262144-unit motion path parsing/measurement budget per evaluation.
+- A shared 4 Mi-unit ID lookup allowance across timing dependencies, animation targets, motion paths
+  and event sources, including event-history comparisons and insertion work. Lookups ignore
+  detached nodes, charge ID bytes and iterative tree traversal,
+  and fail closed on exhaustion. Event instances are staged within the output allowance and
+  published only after all lookups and per-history admission succeed. Staging reserves capacity
+  before allocation and copies only changed histories; reaching a history or staging limit rejects
+  the entire event without changing any runtime instance list. The structural-edit target query
+  conservatively reports a possible target on exhausted analysis, preventing unsafe promotion.
 - A shared 4 Mi-unit contextual preparation allowance across authored path values, scalar/font stacks, text spans, marker references and prepared SVG filter images.
   Raster filter recipes are charged to the existing filter execution budget, including repeat
   executions and CPU paint-coverage scans.

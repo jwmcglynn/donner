@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "donner/base/EcsRegistry.h"
+#include "donner/svg/components/animation/AnimationResourceBudget.h"
 
 namespace donner::svg::components {
 
@@ -35,6 +36,16 @@ std::optional<std::vector<AnimationTimeSpecifier>> ParseAnimationTimeList(std::s
  * @return False if dependency expansion exceeds the bounded timing budget.
  */
 bool ResolveAnimationTimeline(Registry& registry, std::span<const Entity> animations, double time);
+
+/** Resolve intervals using the caller's shared reference allowance.
+ * @param registry Document storage.
+ * @param animations Admitted declarations in document order.
+ * @param time Document time in seconds.
+ * @param budget Shared sample or event allowance.
+ * @return False on timing or reference-work exhaustion.
+ */
+bool ResolveAnimationTimeline(Registry& registry, std::span<const Entity> animations, double time,
+                              AnimationResourceBudget& budget);
 
 /** Retain a finite event instance time, without discarding earlier intervals.
  * @param times Sorted runtime instance times.

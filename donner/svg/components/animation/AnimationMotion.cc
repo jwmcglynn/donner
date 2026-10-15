@@ -13,6 +13,7 @@
 #include "donner/svg/components/SVGDocumentContext.h"
 #include "donner/svg/components/animation/AnimatedValuesComponent.h"
 #include "donner/svg/components/animation/AnimationBaseValue.h"
+#include "donner/svg/components/animation/AnimationReference.h"
 #include "donner/svg/components/animation/AnimationSystem.h"
 #include "donner/svg/components/shape/PathComponent.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
@@ -86,8 +87,7 @@ std::optional<std::string> MotionPathSource(Registry& registry, Entity entity,
     if (!href.starts_with('#') || !budget.reserveGeometryWork(href.size())) {
       return std::string{};
     }
-    const auto target =
-        registry.ctx().get<SVGDocumentContext>().getEntityById(RcString(href.substr(1)));
+    const auto target = FindAnimationReference(registry, href.substr(1), budget);
     const auto* type = registry.try_get<ElementTypeComponent>(target);
     if (!type || type->type() != ElementType::Path ||
         !IsAnimationInSvgNamespace(registry, target)) {

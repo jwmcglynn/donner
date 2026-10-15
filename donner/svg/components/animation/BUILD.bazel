@@ -51,6 +51,7 @@ donner_cc_library(
     srcs = [
         "AnimationBaseValue.cc",
         "AnimationMotion.cc",
+        "AnimationReference.cc",
         "AnimationSystem.cc",
         "AnimationTimeline.cc",
     ],
@@ -58,6 +59,7 @@ donner_cc_library(
         "AnimationBaseValue.h",
         "AnimationMotion.h",
         "AnimationNumericAttributes.h",
+        "AnimationReference.h",
         "AnimationSystem.h",
         "AnimationTimeline.h",
     ],
@@ -73,6 +75,7 @@ donner_cc_library(
         "//donner/css/parser",
         "//donner/svg/components:components_core",
         "//donner/svg/components:element_type_component",
+        "//donner/svg/components:node_lifetime_component",
         "//donner/svg/components:svg_document_context",
         "//donner/svg/components/filter:components",
         "//donner/svg/components/layout:layout_system",

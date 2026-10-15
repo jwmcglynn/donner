@@ -12,12 +12,14 @@
 #include "donner/base/xml/components/TreeComponent.h"
 #include "donner/base/xml/components/XMLNamespaceContext.h"
 #include "donner/svg/components/ElementTypeComponent.h"
+#include "donner/svg/components/NodeLifetimeComponent.h"
 #include "donner/svg/components/SVGDocumentContext.h"
 #include "donner/svg/components/animation/AnimateTransformComponent.h"
 #include "donner/svg/components/animation/AnimateValueComponent.h"
 #include "donner/svg/components/animation/AnimatedValuesComponent.h"
 #include "donner/svg/components/animation/AnimationBaseValue.h"
 #include "donner/svg/components/animation/AnimationMotion.h"
+#include "donner/svg/components/animation/AnimationReference.h"
 #include "donner/svg/components/animation/AnimationResourceBudget.h"
 #include "donner/svg/components/animation/AnimationStateComponent.h"
 #include "donner/svg/components/animation/AnimationTimeline.h"
@@ -33,14 +35,14 @@ namespace {
 
 /// Resolve the target entity for an animation by href or parent.
 Entity resolveTargetByHrefOrParent(Registry& registry, Entity animationEntity,
-                                   const std::optional<std::string>& href) {
+                                   const std::optional<std::string>& href,
+                                   AnimationResourceBudget& budget) {
   if (href.has_value()) {
-    const auto& docContext = registry.ctx().get<SVGDocumentContext>();
     std::string_view id = href.value();
     if (!id.empty() && id[0] == '#') {
       id.remove_prefix(1);
     }
-    return docContext.getEntityById(RcString(id));
+    return FindAnimationReference(registry, id, budget);
   }
 
   if (auto* tree = registry.try_get<donner::components::TreeComponent>(animationEntity)) {
@@ -248,8 +250,11 @@ bool ProcessAnimation(Registry& registry, Entity entity, double documentTime,
           AnimationSourceBytes(setComp, valueComp, transformComp, motionComp))) {
     return false;
   }
-  state.targetEntity =
-      resolveTargetByHrefOrParent(registry, entity, AnimationHref(registry, entity));
+  state.targetEntity = resolveTargetByHrefOrParent(registry, entity,
+                                                   AnimationHref(registry, entity), resourceBudget);
+  if (resourceBudget.rejected()) {
+    return false;
+  }
   if (!registry.valid(state.targetEntity) || !shouldApplyValue(state.phase, timing.fill)) {
     return true;
   }
@@ -405,45 +410,110 @@ std::unordered_set<Entity> MouseEventPath(Registry& registry, Entity target, boo
   return path;
 }
 
-bool RecordMatchingEvents(Registry& registry, const std::optional<std::string>& value,
-                          Entity defaultTarget, std::string_view event,
-                          const std::unordered_set<Entity>& path, double time,
-                          std::vector<double>& instances, bool futureOnly = false) {
-  if (!value) {
+struct PendingAnimationEvent {
+  Entity animation;
+  bool begin;
+  std::vector<double> instances;
+};
+
+bool ReservePendingHistory(std::vector<PendingAnimationEvent>& pending,
+                           AnimationResourceBudget& budget) {
+  if (pending.size() == pending.capacity()) {
+    const std::size_t capacity = std::max<std::size_t>(16, pending.capacity() * 2);
+    if (!budget.reserveOutput(capacity * sizeof(PendingAnimationEvent))) {
+      return false;
+    }
+    pending.reserve(capacity);
+  }
+  return budget.reserveOutput(1024 * sizeof(double));
+}
+
+bool StageEventInstance(Registry& registry, Entity animation, bool begin, double time,
+                        AnimationResourceBudget& budget,
+                        std::vector<PendingAnimationEvent>& pending,
+                        std::optional<std::size_t>& historyIndex) {
+  if (!std::isfinite(time)) {
+    return true;
+  }
+  const auto& state = registry.get<AnimationStateComponent>(animation);
+  const auto& original = begin ? state.eventBeginTimes : state.eventEndTimes;
+  const auto& instances = historyIndex ? pending[*historyIndex].instances : original;
+  if (!budget.reserveReferenceWork(2 * instances.size() + 1)) {
     return false;
+  }
+  if (std::binary_search(instances.begin(), instances.end(), time)) {
+    return true;
+  }
+  if (instances.size() >= 1024) {
+    return false;
+  }
+  if (!historyIndex) {
+    if (!ReservePendingHistory(pending, budget)) {
+      return false;
+    }
+    PendingAnimationEvent history{animation, begin, {}};
+    history.instances.reserve(1024);
+    history.instances.assign(original.begin(), original.end());
+    historyIndex = pending.size();
+    pending.push_back(std::move(history));
+  }
+  return InsertAnimationInstance(pending[*historyIndex].instances, time);
+}
+
+bool StageMatchingEvents(Registry& registry, Entity animation,
+                         const std::optional<std::string>& value, Entity defaultTarget,
+                         std::string_view event, const std::unordered_set<Entity>& path,
+                         double time, bool begin, bool futureOnly, AnimationResourceBudget& budget,
+                         std::vector<PendingAnimationEvent>& pending) {
+  if (!value) {
+    return true;
   }
   const auto specs = ParseAnimationTimeList(*value);
   if (!specs) {
     return false;
   }
-  bool changed = false;
+  std::optional<std::size_t> historyIndex;
   for (const auto& spec : *specs) {
     if (spec.kind != AnimationTimeSpecifier::Kind::Event || spec.event != event) {
       continue;
     }
-    const Entity source =
-        spec.sourceId.empty()
-            ? defaultTarget
-            : registry.ctx().get<SVGDocumentContext>().getEntityById(RcString(spec.sourceId));
-    if (path.contains(source) && (!futureOnly || spec.offset > 0)) {
-      changed |= InsertAnimationInstance(instances, time + spec.offset);
+    const Entity source = spec.sourceId.empty()
+                              ? defaultTarget
+                              : FindAnimationReference(registry, spec.sourceId, budget);
+    if (budget.rejected()) {
+      return false;
+    }
+    if (path.contains(source) && (!futureOnly || spec.offset > 0) &&
+        !StageEventInstance(registry, animation, begin, time + spec.offset, budget, pending,
+                            historyIndex)) {
+      return false;
     }
   }
-  return changed;
+  return true;
 }
 
-bool DispatchAnimationMouseEvent(Registry& registry, Entity entity,
-                                 const AnimationTimingComponent& timing, std::string_view eventName,
-                                 const std::unordered_set<Entity>& path, double time) {
-  auto& state = registry.get_or_emplace<AnimationStateComponent>(entity);
+bool StageAnimationMouseEvent(Registry& registry, Entity entity,
+                              const AnimationTimingComponent& timing, std::string_view eventName,
+                              const std::unordered_set<Entity>& path, double time,
+                              AnimationResourceBudget& budget,
+                              std::vector<PendingAnimationEvent>& pending) {
+  const auto& state = registry.get<AnimationStateComponent>(entity);
   const Entity target =
-      resolveTargetByHrefOrParent(registry, entity, AnimationHref(registry, entity));
-  bool changed = false;
-  changed |= RecordMatchingEvents(registry, timing.endValue, target, eventName, path, time,
-                                  state.eventEndTimes, state.phase != AnimationPhase::Active);
-  changed |= RecordMatchingEvents(registry, timing.beginValue, target, eventName, path, time,
-                                  state.eventBeginTimes);
-  return changed;
+      resolveTargetByHrefOrParent(registry, entity, AnimationHref(registry, entity), budget);
+  return !budget.rejected() &&
+         StageMatchingEvents(registry, entity, timing.endValue, target, eventName, path, time,
+                             false, state.phase != AnimationPhase::Active, budget, pending) &&
+         StageMatchingEvents(registry, entity, timing.beginValue, target, eventName, path, time,
+                             true, false, budget, pending);
+}
+
+bool CommitAnimationEvents(Registry& registry, std::vector<PendingAnimationEvent>& pending) {
+  for (auto& event : pending) {
+    auto& state = registry.get<AnimationStateComponent>(event.animation);
+    auto& instances = event.begin ? state.eventBeginTimes : state.eventEndTimes;
+    instances.swap(event.instances);
+  }
+  return !pending.empty();
 }
 
 }  // namespace
@@ -468,7 +538,7 @@ bool IsAnimationInSvgNamespace(Registry& registry, Entity entity) {
   return false;
 }
 
-std::vector<Entity> CollectAnimationEntities(Registry& registry) {
+std::vector<Entity> CollectAnimationEntities(Registry& registry, AnimationCollectionMode mode) {
   std::vector<Entity> result;
   const Entity root = registry.ctx().get<SVGDocumentContext>().rootEntity;
   Entity current = root;
@@ -481,10 +551,10 @@ std::vector<Entity> CollectAnimationEntities(Registry& registry) {
         result.resize(AnimationResourceBudget::kMaximumAnimations + 1, entt::null);
         break;
       }
-      if (!HasSvgNamespace(registry, current) || !IsAnimationInSvgNamespace(registry, current)) {
-        registry.remove<AnimationStateComponent>(current);
-      } else {
+      if (HasSvgNamespace(registry, current) && IsAnimationInSvgNamespace(registry, current)) {
         result.push_back(current);
+      } else if (mode == AnimationCollectionMode::DiscardExcludedState) {
+        registry.remove<AnimationStateComponent>(current);
       }
       if (result.size() > AnimationResourceBudget::kMaximumAnimations) {
         break;
@@ -514,20 +584,22 @@ std::vector<Entity> CollectAnimationEntities(Registry& registry) {
 }
 
 bool AnimationSystem::isAnimationTarget(Registry& registry, Entity targetEntity) const {
-  if (targetEntity == entt::null) {
+  if (!IsEntityAttachedToDocument(registry, targetEntity) ||
+      !IsAnimationInSvgNamespace(registry, targetEntity)) {
     return false;
   }
 
   const auto animations = CollectAnimationEntities(registry);
   if (animations.size() > AnimationResourceBudget::kMaximumAnimations) {
-    return false;
+    return true;
   }
+  AnimationResourceBudget budget;
   for (const Entity entity : animations) {
-    const auto* state = registry.try_get<AnimationStateComponent>(entity);
     const Entity resolved =
-        (state != nullptr && state->targetEntity != entt::null)
-            ? state->targetEntity
-            : resolveTargetByHrefOrParent(registry, entity, AnimationHref(registry, entity));
+        resolveTargetByHrefOrParent(registry, entity, AnimationHref(registry, entity), budget);
+    if (budget.rejected()) {
+      return true;
+    }
     if (resolved == targetEntity) {
       return true;
     }
@@ -548,27 +620,26 @@ bool AnimationSystem::dispatchEvent(Registry& registry, Entity targetEntity, std
       !std::isfinite(documentTime)) {
     return false;
   }
-  const auto animations = CollectAnimationEntities(registry);
-  if (!ResolveAnimationTimeline(registry, animations, documentTime)) {
+  const auto animations =
+      CollectAnimationEntities(registry, AnimationCollectionMode::DiscardExcludedState);
+  AnimationResourceBudget budget;
+  if (!ResolveAnimationTimeline(registry, animations, documentTime, budget)) {
     return false;
   }
   const auto path = MouseEventPath(registry, targetEntity, bubbles);
-  AnimationResourceBudget budget;
-  bool changed = false;
+  std::vector<PendingAnimationEvent> pending;
   for (Entity entity : animations) {
     const auto& timing = registry.get<AnimationTimingComponent>(entity);
     std::size_t sourceBytes = 0;
     AddOptionalAnimationSourceBytes(timing.beginValue, sourceBytes);
     AddOptionalAnimationSourceBytes(timing.endValue, sourceBytes);
-    if (!budget.reserveAnimation(sourceBytes)) {
-      break;
-    }
-    if (registry.any_of<SetAnimationComponent, AnimateValueComponent, AnimateTransformComponent,
-                        AnimateMotionComponent>(entity)) {
-      changed |= DispatchAnimationMouseEvent(registry, entity, timing, name, path, documentTime);
+    if (!budget.reserveAnimation(sourceBytes) ||
+        !StageAnimationMouseEvent(registry, entity, timing, name, path, documentTime, budget,
+                                  pending)) {
+      return false;
     }
   }
-  return changed;
+  return CommitAnimationEvents(registry, pending);
 }
 
 void AnimationSystem::advance(Registry& registry, double documentTime,
@@ -587,8 +658,9 @@ void AnimationSystem::advance(Registry& registry, double documentTime,
     registry.clear<AnimatedValuesComponent>();
     return;
   }
-  auto animations = CollectAnimationEntities(registry);
-  if (!ResolveAnimationTimeline(registry, animations, documentTime)) {
+  auto animations =
+      CollectAnimationEntities(registry, AnimationCollectionMode::DiscardExcludedState);
+  if (!ResolveAnimationTimeline(registry, animations, documentTime, resourceBudget)) {
     return;
   }
   std::stable_sort(animations.begin(), animations.end(), [&](Entity first, Entity second) {
@@ -610,6 +682,7 @@ void AnimationSystem::advance(Registry& registry, double documentTime,
   for (const Entity entity : animations) {
     if (!ProcessAnimation(registry, entity, documentTime, resourceBudget, motionBases, recipes)) {
       ClearSampledAnimationValues(registry);
+      recipes.clear();
       break;
     }
   }

@@ -51,6 +51,82 @@ TEST(RendererAnimationReferenceValue, MissingOrInvalidReferenceAnimationKeepsBas
   }
 }
 
+TEST(RendererAnimationReferenceValue, TargetSkipsRetainedDetachedDuplicateId) {
+  auto document = instantiateSubtree(
+      "<rect id='target' width='4' height='16'/><rect id='target' x='8' width='4' height='16'/>"
+      "<set href='#target' attributeName='width' to='8' dur='2s'/>",
+      parser::SVGParser::Options(), Vector2i(16, 16));
+  auto detached = document.querySelector("#target");
+  ASSERT_THAT(detached, testing::Ne(std::nullopt));
+  ASSERT_EQ(document.removeElement(*detached).applied, true);
+  auto expected = instantiateSubtree("<rect x='8' width='8' height='16'/>",
+                                     parser::SVGParser::Options(), Vector2i(16, 16));
+  for (const bool release : {false, true}) {
+    SCOPED_TRACE(release);
+    if (release) {
+      detached.reset();
+    }
+    document.setTime(1);
+    editor::tests::CompareBitmapToBitmap(
+        RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(expected),
+        "attached-animation-target", editor::tests::PixelmatchIdentityParams());
+  }
+}
+
+TEST(RendererAnimationReferenceValue, MotionSkipsRetainedDetachedDuplicateId) {
+  auto document = instantiateSubtree(
+      "<defs><path id='route' d='M0 0H0'/><path id='route' d='M0 0H8'/></defs>"
+      "<rect width='4' height='16'><animateMotion dur='2s'><mpath href='#route'/>"
+      "</animateMotion></rect>",
+      parser::SVGParser::Options(), Vector2i(16, 16));
+  auto detached = document.querySelector("#route");
+  ASSERT_THAT(detached, testing::Ne(std::nullopt));
+  ASSERT_EQ(document.removeElement(*detached).applied, true);
+  document.setTime(1);
+  auto expected = instantiateSubtree("<rect x='4' width='4' height='16'/>",
+                                     parser::SVGParser::Options(), Vector2i(16, 16));
+  editor::tests::CompareBitmapToBitmap(
+      RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(expected),
+      "attached-motion-reference", editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(RendererAnimationReferenceValue, SyncbaseSkipsRetainedDetachedDuplicateId) {
+  auto document = instantiateSubtree(
+      "<rect width='4' height='16'><set id='clock' attributeName='opacity' to='1' dur='10s'/>"
+      "<set id='clock' attributeName='opacity' to='1' dur='1s'/>"
+      "<set attributeName='width' to='12' begin='clock.end' dur='2s'/></rect>",
+      parser::SVGParser::Options(), Vector2i(16, 16));
+  auto detached = document.querySelector("#clock");
+  ASSERT_THAT(detached, testing::Ne(std::nullopt));
+  ASSERT_EQ(document.removeElement(*detached).applied, true);
+  document.setTime(1.5);
+  auto expected = instantiateSubtree("<rect width='12' height='16'/>", parser::SVGParser::Options(),
+                                     Vector2i(16, 16));
+  editor::tests::CompareBitmapToBitmap(
+      RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(expected),
+      "attached-syncbase-reference", editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(RendererAnimationReferenceValue, EventSkipsRetainedDetachedDuplicateId) {
+  auto document = instantiateSubtree(
+      "<rect id='button' width='4' height='16'/><rect id='button' width='4' height='16'>"
+      "<set attributeName='width' to='12' begin='button.click' dur='2s'/></rect>",
+      parser::SVGParser::Options(), Vector2i(16, 16));
+  auto detached = document.querySelector("#button");
+  ASSERT_THAT(detached, testing::Ne(std::nullopt));
+  ASSERT_EQ(document.removeElement(*detached).applied, true);
+  const auto attached = document.querySelector("#button");
+  ASSERT_THAT(attached, testing::Ne(std::nullopt));
+  document.setTime(0);
+  EXPECT_EQ(document.dispatchAnimationEvent("click", *attached), true);
+  document.setTime(1);
+  auto expected = instantiateSubtree("<rect width='12' height='16'/>", parser::SVGParser::Options(),
+                                     Vector2i(16, 16));
+  editor::tests::CompareBitmapToBitmap(
+      RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(expected),
+      "attached-event-reference", editor::tests::PixelmatchIdentityParams());
+}
+
 TEST(RendererAnimationReferenceValue, EmptyResultNameClearsAndRestoresBinding) {
   if (!ActiveRendererSupportsFeature(RendererBackendFeature::FilterEffects)) {
     GTEST_SKIP() << "Filters are disabled in this configuration";

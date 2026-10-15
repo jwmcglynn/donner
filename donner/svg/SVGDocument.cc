@@ -943,7 +943,8 @@ bool SVGDocument::scheduleAnimationBoundary(const SVGElement& animation, double 
     return false;
   }
   const double time = registry.ctx().get<components::SVGDocumentContext>().documentTime;
-  const auto animations = components::CollectAnimationEntities(registry);
+  const auto animations = components::CollectAnimationEntities(
+      registry, components::AnimationCollectionMode::DiscardExcludedState);
   if (std::find(animations.begin(), animations.end(), handle.entity()) == animations.end() ||
       !components::ResolveAnimationTimeline(registry, animations, time)) {
     mutation.cancel();
@@ -968,7 +969,8 @@ SVGAnimationEventBatch SVGDocument::animationEvents(double from, double to) {
       ProcessingMode::SecureStatic) {
     return {};
   }
-  const auto animations = components::CollectAnimationEntities(registry);
+  const auto animations = components::CollectAnimationEntities(
+      registry, components::AnimationCollectionMode::DiscardExcludedState);
   if (!components::ResolveAnimationTimeline(
           registry, animations,
           registry.ctx().get<components::SVGDocumentContext>().documentTime)) {

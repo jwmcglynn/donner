@@ -57,6 +57,23 @@ public:
   /// Aggregate contextual-length evaluation and measurement work during render preparation.
   static constexpr std::size_t kMaximumContextualWork = AnimationContextualWorkBudget::kMaximumWork;
 
+  /// Maximum ID hashing, comparison and document traversal work per sample or event.
+  static constexpr std::size_t kMaximumReferenceWork = 4 * 1024 * 1024;
+
+  /// Remaining shared reference lookup work.
+  std::size_t remainingReferenceWork() const { return kMaximumReferenceWork - referenceWork_; }
+
+  /// Admit reference work before copying IDs, comparing bytes, or advancing the tree.
+  /// @param work Conservative byte or node-operation count.
+  bool reserveReferenceWork(std::size_t work) {
+    if (rejected_ || work > remainingReferenceWork()) {
+      rejected_ = true;
+      return false;
+    }
+    referenceWork_ += work;
+    return true;
+  }
+
   /// Remaining contextual work; shared by scalar/font stacks and every contextual length consumer.
   std::size_t remainingContextualWork() const {
     const std::size_t local = kMaximumContextualWork - contextualWork_;
@@ -152,6 +169,7 @@ private:
   std::size_t outputBytes_ = 0;
   bool rejected_ = false;
   std::size_t geometryWork_ = 0;
+  std::size_t referenceWork_ = 0;
 };
 
 }  // namespace donner::svg::components

@@ -2501,6 +2501,23 @@ TEST(EditorAppReorderTest, BringToFrontLiftsNestedLeafToDocumentFront) {
   EXPECT_EQ(ParentIdOf(app, "a2"), std::optional<std::string>("<svg>"));
 }
 
+TEST(EditorAppReorderTest, BringToFrontKeepsGroupWhenAnimationLookupIsExhausted) {
+  std::string source = "<svg xmlns='http://www.w3.org/2000/svg' width='100' height='100'>";
+  for (int i = 0; i < 1500; ++i) {
+    source += "<set href='#missing' attributeName='opacity' to='1'/>";
+  }
+  source +=
+      "<g id='group'><set attributeName='opacity' to='0.5'/>"
+      "<rect id='child' width='10' height='10'/></g>"
+      "<rect id='front' x='20' width='10' height='10'/></svg>";
+  EditorApp app;
+  ASSERT_EQ(app.loadFromString(source), true);
+  SelectById(app, "child");
+  app.reorderSelectedElement(EditorApp::ZOrder::BringToFront);
+  app.flushFrame();
+  EXPECT_THAT(ParentIdOf(app, "child"), ::testing::Optional(std::string("group")));
+}
+
 TEST(EditorAppReorderTest, SendToBackLiftsNestedLeafToDocumentBack) {
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(std::string(kNestedGroups)));
