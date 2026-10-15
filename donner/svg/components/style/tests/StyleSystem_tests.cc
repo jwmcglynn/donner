@@ -39,6 +39,16 @@ using ::testing::AllOf;
 using ::testing::ElementsAre;
 using ::testing::Field;
 
+std::vector<bool> UserAgentMatchFlags(const SVGElement& element) {
+  const std::vector<SVGMatchedStyleRule> matches = CollectMatchedStyleRules(element);
+  std::vector<bool> result;
+  result.reserve(matches.size());
+  for (const SVGMatchedStyleRule& match : matches) {
+    result.push_back(match.isUserAgentStylesheet);
+  }
+  return result;
+}
+
 void SetRenderTreeState(Registry& registry, const RenderTreeState& state) {
   if (registry.ctx().contains<RenderTreeState>()) {
     registry.ctx().erase<RenderTreeState>();
@@ -792,11 +802,9 @@ TEST_F(StyleSystemTest, UserAgentNamespaceMatchesComputedAndDiagnosticStyles) {
   ASSERT_THAT(symbol, testing::Optional(testing::_));
   ASSERT_THAT(foreign, testing::Optional(testing::_));
   ASSERT_THAT(foreignStyle, testing::Optional(testing::_));
-  const auto builtIn =
-      testing::Field("isUserAgentStylesheet", &SVGMatchedStyleRule::isUserAgentStylesheet, true);
-  EXPECT_THAT(CollectMatchedStyleRules(*symbol), testing::Contains(builtIn));
-  EXPECT_THAT(CollectMatchedStyleRules(*foreign), testing::Not(testing::Contains(builtIn)));
-  EXPECT_THAT(CollectMatchedStyleRules(*foreignStyle), testing::Not(testing::Contains(builtIn)));
+  EXPECT_THAT(UserAgentMatchFlags(*symbol), testing::Contains(true));
+  EXPECT_THAT(UserAgentMatchFlags(*foreign), testing::Not(testing::Contains(true)));
+  EXPECT_THAT(UserAgentMatchFlags(*foreignStyle), testing::Not(testing::Contains(true)));
   EXPECT_EQ(symbol->getComputedStyle().overflow.get(), Overflow::Hidden);
   EXPECT_EQ(foreign->getComputedStyle().overflow.get(), Overflow::Visible);
   EXPECT_EQ(foreign->getComputedStyle().display.get(), Display::Inline);
@@ -816,8 +824,6 @@ TEST_F(StyleSystemTest, UserAgentDisplayRulesResolveSvgNamespaceAliases) {
       <f:style id="foreign-style" style="display:inline!important"/>
     </svg>
   )");
-  const auto builtIn =
-      testing::Field("isUserAgentStylesheet", &SVGMatchedStyleRule::isUserAgentStylesheet, true);
   const css::Specificity requiredPriority =
       css::Specificity::Important(css::Specificity::FromABC(0, 0, 1).toUserAgentSpecificity());
   for (const std::string_view selector : {"#sheet", "#symbol"}) {
@@ -826,7 +832,7 @@ TEST_F(StyleSystemTest, UserAgentDisplayRulesResolveSvgNamespaceAliases) {
     ASSERT_THAT(element, testing::Optional(testing::_));
     EXPECT_EQ(element->getComputedStyle().display.get(), Display::None);
     EXPECT_EQ(element->getComputedStyle().display.specificity, requiredPriority);
-    EXPECT_THAT(CollectMatchedStyleRules(*element), testing::Contains(builtIn));
+    EXPECT_THAT(UserAgentMatchFlags(*element), testing::Contains(true));
   }
   const auto overridden = document.querySelector("#overridden");
   ASSERT_THAT(overridden, testing::Optional(testing::_));
@@ -839,7 +845,7 @@ TEST_F(StyleSystemTest, UserAgentDisplayRulesResolveSvgNamespaceAliases) {
     const auto element = document.querySelector(selector);
     ASSERT_THAT(element, testing::Optional(testing::_));
     EXPECT_EQ(element->getComputedStyle().display.get(), Display::Inline);
-    EXPECT_THAT(CollectMatchedStyleRules(*element), testing::Not(testing::Contains(builtIn)));
+    EXPECT_THAT(UserAgentMatchFlags(*element), testing::Not(testing::Contains(true)));
   }
 }
 

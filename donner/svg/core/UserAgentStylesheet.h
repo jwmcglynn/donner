@@ -13,8 +13,8 @@ constexpr std::string_view kUserAgentStylesheet = R"(
 @namespace url(http://www.w3.org/2000/svg);
 @namespace xml url(http://www.w3.org/XML/1998/namespace);
 
-style { display: none !important; }
-symbol { display: none !important; }
+*|style { display: none !important; }
+*|symbol { display: none !important; }
 
 svg:not(:root), image, marker, pattern, symbol { overflow: hidden; }
 
