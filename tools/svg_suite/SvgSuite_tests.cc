@@ -228,6 +228,24 @@ TEST(ImageCompareTest, InvalidBuffersNeverPassWithGenerousTolerance) {
   EXPECT_THAT(result.mismatchedPixels.has_value(), Eq(false));
 }
 
+TEST(ImageCompareTest, InvalidPaddedBuffersRemainRejected) {
+  const Image expected = VerticalEdgeImage();
+  Image actual = WithRowPadding(expected, 5, 0xA5);
+  actual.data.pop_back();
+  const auto truncated = CompareImages(View(expected), View(actual));
+  EXPECT_THAT(truncated.error, HasSubstr("byte length"));
+  EXPECT_FALSE(truncated.passed);
+  EXPECT_FALSE(truncated.mismatchedPixels);
+  EXPECT_FALSE(truncated.diff);
+
+  actual.strideInPixels = std::numeric_limits<size_t>::max();
+  const auto oversized = CompareImages(View(expected), View(actual));
+  EXPECT_THAT(oversized.error, HasSubstr("dimensions/stride"));
+  EXPECT_FALSE(oversized.passed);
+  EXPECT_FALSE(oversized.mismatchedPixels);
+  EXPECT_FALSE(oversized.diff);
+}
+
 TEST(ImageCompareTest, RejectsNegativeBudgetAndNonfiniteThreshold) {
   const Image image = RedImage();
   EXPECT_THAT(CompareImages(View(image), View(image), {0.0, -1, true}).error, HasSubstr("options"));

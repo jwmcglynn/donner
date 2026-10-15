@@ -260,7 +260,7 @@ std::optional<std::filesystem::path> ResolveCanonicalRoot(const std::filesystem:
 }
 
 std::optional<std::filesystem::path> ResolveDocumentDirectory(
-    const std::filesystem::path& root, const std::filesystem::path& documentPath) {
+    const std::filesystem::path& documentPath) {
   if (PathContainsNull(documentPath)) {
     return std::nullopt;
   }
@@ -280,7 +280,7 @@ std::optional<std::filesystem::path> ResolveDocumentDirectory(
     error.clear();
     directory = std::filesystem::canonical(absoluteDocumentPath.parent_path(), error);
   }
-  if (error || !directory.is_absolute() || !IsPathUnderRoot(root, directory)) {
+  if (error || !directory.is_absolute()) {
     return std::nullopt;
   }
   return directory;
@@ -340,7 +340,7 @@ SandboxedFileResourceLoader::SandboxedFileResourceLoader(const std::filesystem::
     return;
   }
   root_ = *canonicalRoot;
-  const auto documentDirectory = ResolveDocumentDirectory(root_, documentPath);
+  const auto documentDirectory = ResolveDocumentDirectory(documentPath);
   if (!documentDirectory) {
     root_.clear();
     return;
