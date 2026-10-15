@@ -446,7 +446,8 @@ public:
    * gives up only when the outstanding work makes no progress for \p stallBound, so a long but
    * advancing backlog on a slow device is waited out. Giving up is treated as a hung device: the
    * device is declared lost, exactly as an internal queue-idle wait would declare it, and
-   * `deviceLost()` reports true afterwards. A renderer without a device has submitted nothing and
+   * `deviceLost()` reports true afterwards. Renderers sharing this device through the shared-device
+   * constructor observe the same loss. A renderer without a device has submitted nothing and
    * completes at once.
    *
    * Call it on the thread that drives this renderer, like the other `RendererGeode` methods. Work
