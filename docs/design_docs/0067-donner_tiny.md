@@ -85,7 +85,8 @@ incremental: each step keeps the existing renderer test suites green and pixel o
         `//donner/base` depends on `@entt` for every consumer.
   - [ ] Add `donner/render/core/` with the renderer-core value types (color, paint, gradient,
         stroke style, clip, layer, image view, geometry cache key) and the moved
-        `RendererSurfaceBudget` and `RendererDrawBudget`.
+        `RendererSurfaceBudget` and `RendererDrawBudget`, plus the raster dimension and decoded-byte
+        limit constants from `ImageLoader.h` and `ImageSampling.h`.
   - [ ] Add `configured_dependency_audit_test` audits for the core, animation, and Lottie
         targets that forbid `@entt` and the `//donner/svg`, `//donner/css`, and
         `//donner/base/xml` packages.
@@ -231,7 +232,8 @@ flowchart TD
 - `donner/tiny/`: canvas API, player API, C API, and Wasm exports. Depends on the core, and
   optionally on the Lottie player and Geode.
 - `donner/svg/`: the SVG engine, `RendererDriver`, the SVG extensions, and the SVG paint resolver.
-  Depends on everything above except `donner/tiny/`.
+  Depends on the core, the GPU core, and the animation module; it does not depend on
+  `donner/lottie/` or `donner/tiny/`.
 
 The dependency direction is one-way: nothing under `donner/render/`, `donner/animation/`,
 `donner/lottie/`, or `donner/tiny/` depends on `donner/svg/`, `donner/css/`, `donner/base/xml/`, or
@@ -384,10 +386,11 @@ is unchanged at every step:
 
 `RendererInterface` is a public target, and third-party backends may implement it. Milestones 2
 through 4 keep it source-compatible: new resolved-paint fields are added alongside the existing
-ones, and backends switch over internally. Milestone 5 is the one intentional break: it removes
-the generic methods that move to the core and ships with a release note describing how a custom
-backend implements `RendererCore` instead. Whether to also ship an adapter from the old interface
-is an open question.
+ones, `PathShape` and `ImageParams` keep `sourceEntity`, and the forwarding layer inside each
+backend derives the `GeometryKey` from it. Backends switch over internally. Milestone 5 is the one
+intentional break: it removes the generic methods that move to the core and ships with a release
+note describing how a custom backend implements `RendererCore` instead. Whether to also ship an
+adapter from the old interface is an open question.
 
 A step that changes a golden is a bug in that step, not a golden update. The exception is a
 documented, intentional fix found during extraction (for example a gradient-resolution divergence
@@ -487,7 +490,9 @@ instead of approximating it.
 Images in Lottie assets resolve only through an embedder-installed image provider. The runtime
 never fetches a URL or opens a path named by content. Embedded base64 image data is handed to the
 provider as bytes; with no provider installed, image layers render nothing. The provider returns
-decoded pixels, which pass the same dimension and byte limits as Donner's raster input.
+decoded pixels, which pass the same dimension and byte limits as Donner's raster input. Those
+limits live under `//donner/svg` today (`ImageLoader.h`, `ImageSampling.h`), so Milestone 1 moves
+the constants into the core.
 
 ### Backends
 
@@ -512,12 +517,12 @@ roadmap already separates them in prose ("SVG engine build profiles" with `tiny`
   wrappers for every test that opts into it; and
 - current-state docs such as `docs/faq.md` refer to `--config=tiny`.
 
-This design recommends renaming the SVG engine profile to `svg-minimal` across all of those
-surfaces in one change, with `--config=tiny` forwarding to it for one release, so "tiny" in a
-build command never means the SVG engine. `standard` remains the default build and `full`
-remains `--config=text-full`; this design does not add new profiles. The rename is an open
-question for the project owner. Until it is decided, docs say "the SVG engine's `tiny` profile"
-and "Donner Tiny" explicitly.
+This design recommends renaming the SVG engine profile to `svg-minimal` across all of those surfaces
+in one change, with `--config=tiny` forwarding to it for one release, so "tiny" in a build command
+never means the SVG engine. `standard` remains the default build, and the closest existing
+configuration to the roadmap's `full` profile is `--config=text-full`; this design does not add new
+profiles. The rename is an open question for the project owner. Until it is decided, docs say "the
+SVG engine's `tiny` profile" and "Donner Tiny" explicitly.
 
 Donner Tiny itself is selected by depending on `//donner/tiny` targets, not by a global
 configuration flag; build flags under `//donner/tiny` select optional pieces (Lottie, Geode).
@@ -629,16 +634,17 @@ New targets (names are proposals):
 
 - **The core, animation, and Lottie libraries have no ECS, CSS, XML, or SVG dependency:**
   `//donner/render:core_dependency_audit`, `//donner/animation:animation_dependency_audit`, and
-  `//donner/lottie:lottie_dependency_audit`, each a `configured_dependency_audit_test` with
-  `@entt` in `forbidden` and `//donner/svg`, `//donner/css`, and `//donner/base/xml` in
-  `forbidden_packages`. These must be configured audits: `forbidden_transitive_dep_test` queries
-  the unconfigured graph, where every `select` branch is present.
+  `//donner/lottie:lottie_dependency_audit`, each a `configured_dependency_audit_test` with `@entt`
+  (the whole repository), `//donner/svg`, `//donner/css`, and `//donner/base/xml` in
+  `forbidden_packages`, so an alias such as `@entt//:entt` cannot slip past an exact-label match.
+  Each audit counts as enforcement only after a deliberate red run. These must be configured audits:
+  `forbidden_transitive_dep_test` queries the unconfigured graph, where every `select` branch is
+  present.
 - **Donner Tiny excludes the SVG stack, CSS, and ECS:** `//donner/tiny:tiny_dependency_audit`, the
   same configured audit anchored on the shipped Donner Tiny products.
 - **A minimal Donner Tiny build does not link Geode:** `//donner/tiny:tiny_excludes_geode_audit`, a
   configured audit of the minimal product in its default configuration (Geode selected off).
 - **Lottie image assets never reach a loader on their own:**
-  `//donner/lottie:lottie_dependency_audit` also forbids `//donner/svg/resources`, and
   `//donner/lottie/tests:lottie_loader_tests` checks that image layers with no provider render
   nothing and that the provider receives only embedded bytes, never a URL or path to open.
 - **Both backends implement core semantics within shared golden tolerances, and a zero geometry
@@ -666,11 +672,11 @@ New targets (names are proposals):
 
 The core conformance suite is new and backend-neutral: it draws through `RendererCore` only (fills,
 strokes, joins and caps, dashes, gradients with every spread mode, clip nesting and mixed clip rules
-within one clip, layers with each blend mode, all four mask modes in both luminance spaces, image
-sampling, zero versus nonzero geometry keys) and compares each backend against shared goldens with
-the existing tolerance helpers in `donner/svg/renderer/tests`. It replaces nothing; the SVG suites
-keep guarding SVG semantics, and the core suite pins what Donner Tiny can rely on independent of
-SVG.
+within one clip, layers with each blend mode, all four mask modes, both luminance spaces for the
+luminance modes, image sampling, zero versus nonzero geometry keys) and compares each backend
+against shared goldens with the existing tolerance helpers in `donner/svg/renderer/tests`. It
+replaces nothing; the SVG suites keep guarding SVG semantics, and the core suite pins what Donner
+Tiny can rely on independent of SVG.
 
 The Lottie golden corpus is authored in-repo or drawn from permissively licensed sources with
 recorded provenance, one small file per feature plus a few composite animations, rendered at fixed
