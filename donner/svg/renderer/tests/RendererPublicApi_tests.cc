@@ -6,9 +6,12 @@
 #include <array>
 #include <filesystem>
 #include <functional>
+#include <iomanip>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <source_location>
+#include <sstream>
 #include <string>
 #include <string_view>
 #include <tuple>
@@ -19,6 +22,7 @@
 #include "donner/editor/tests/BitmapGoldenCompare.h"
 #include "donner/svg/SVG.h"
 #include "donner/svg/SVGRectElement.h"
+#include "donner/svg/SVGTextContentElement.h"
 #include "donner/svg/SVGTextElement.h"
 #include "donner/svg/SVGUnknownElement.h"
 #include "donner/svg/SVGUseElement.h"
@@ -26,6 +30,8 @@
 #include "donner/svg/components/resources/ImageComponent.h"
 #include "donner/svg/components/resources/SubDocumentCache.h"
 #include "donner/svg/components/style/StyleSystem.h"
+#include "donner/svg/components/text/ComputedTextComponent.h"
+#include "donner/svg/components/text/ComputedTextGeometryComponent.h"
 #include "donner/svg/renderer/Renderer.h"
 #include "donner/svg/renderer/RendererDriver.h"
 #include "donner/svg/renderer/RendererTinySkia.h"
@@ -1066,6 +1072,364 @@ TEST(RendererPublicApiTest, ExternalUseInheritedMarkersFailClosedWithoutChildLoo
 }
 
 #ifdef DONNER_TEXT_ENABLED
+struct PostPathSceneResult {
+  RendererBitmap bitmap;
+  long characters = 0;
+  double tailAdvance = 0.0;
+  double firstAdvance = 0.0;
+  Box2d tailExtent;
+  std::vector<Vector2d> positions;
+  std::optional<double> authoredOffsetX;
+  double offsetAdvance = 0.0;
+  bool offsetOwnerMatches = false;
+};
+
+std::string PostPathCoordinate(double value) {
+  std::ostringstream result;
+  result << std::setprecision(std::numeric_limits<double>::max_digits10) << value;
+  return result.str();
+}
+
+void ReadPostPathOffsetPremises(SVGDocument& document, PostPathSceneResult& result) {
+  const auto offset = document.querySelector("#offset");
+  const auto owner = document.querySelector("#owner");
+  const auto label = document.querySelector("#label");
+  if (!offset || !owner || !label) {
+    return;
+  }
+  const auto offsetHandle = offset->unsafeEntityHandle();
+  const auto& text = label->unsafeEntityHandle().get<components::ComputedTextComponent>();
+  for (const auto& span : text.spans) {
+    if (span.sourceEntity == offsetHandle.entity()) {
+      result.offsetOwnerMatches = span.textPathSourceEntity == owner->unsafeEntityHandle().entity();
+      if (!span.xList.empty() && span.xList[0].has_value()) {
+        result.authoredOffsetX = span.xList[0]->value;
+      }
+    }
+  }
+  result.offsetAdvance = offset->cast<SVGTextContentElement>().getSubStringLength(0, 1);
+}
+
+/// Prepares self-contained scenes and public text metrics; comparisons remain at each call site.
+PostPathSceneResult RenderPostPathScene(std::string_view markup, std::size_t tailIndex,
+                                        std::string_view pathData = "M0 50H100",
+                                        std::string_view pathAttributes = {},
+                                        std::string_view pathAncestorAttributes = {},
+                                        double rootFontSize = 16.0) {
+  const std::string source =
+      "<svg xmlns='http://www.w3.org/2000/svg' width='384' height='320'><defs><g " +
+      std::string(pathAncestorAttributes) + "><path id='p' d='" + std::string(pathData) + "' " +
+      std::string(pathAttributes) +
+      "/></g></defs><g transform='translate(20 80)'>"
+      "<text id='label' font-family='sans-serif' font-size='" +
+      PostPathCoordinate(rootFontSize) + "' text-anchor='start'>" + std::string(markup) +
+      "</text></g></svg>";
+  SVGDocument document = ParseDocument(source);
+  const auto element = document.querySelector("#label");
+  EXPECT_THAT(element, testing::Ne(std::nullopt));
+  if (!element) {
+    return {};
+  }
+  Renderer renderer;
+  renderer.draw(document);
+  const SVGTextElement label = element->cast<SVGTextElement>();
+  PostPathSceneResult result;
+  result.bitmap = NormalizeSnapshot(renderer.takeSnapshot());
+  result.characters = label.getNumberOfChars();
+  EXPECT_THAT(result.characters, Gt(0));
+  const std::size_t visibleTailIndex =
+      result.characters > 0 ? std::min(tailIndex, static_cast<std::size_t>(result.characters - 1))
+                            : 0;
+  result.tailAdvance = label.getSubStringLength(visibleTailIndex, 1);
+  result.firstAdvance = label.getSubStringLength(0, 1);
+  result.tailExtent = label.getExtentOfChar(visibleTailIndex);
+  EXPECT_THAT(result.tailAdvance, Gt(0.0));
+  EXPECT_THAT(result.tailExtent.size().x, Gt(0.0));
+  EXPECT_THAT(result.tailExtent.size().y, Gt(0.0));
+  for (long index = 0; index < result.characters; ++index) {
+    result.positions.push_back(label.getStartPositionOfChar(static_cast<std::size_t>(index)));
+  }
+  ReadPostPathOffsetPremises(document, result);
+  return result;
+}
+
+TEST(RendererPublicApiTest, PostTextPathCursorOpenEndpointMatchesExplicitTail) {
+  const auto actual =
+      RenderPostPathScene("<textPath href='#p'>M</textPath><tspan fill='blue'>M</tspan>", 1);
+  const auto expected = RenderPostPathScene(
+      "<textPath href='#p'>M</textPath><tspan x='100' y='50' fill='blue'>M</tspan>", 1);
+  ASSERT_EQ(actual.characters, 2);
+  ASSERT_EQ(expected.characters, 2);
+  ASSERT_THAT(expected.tailAdvance, Gt(0.0));
+  ASSERT_THAT(expected.tailExtent.size().x, Gt(0.0));
+  ASSERT_THAT(expected.tailExtent.size().y, Gt(0.0));
+  editor::tests::CompareBitmapToBitmap(actual.bitmap, expected.bitmap, "postpath_open_endpoint",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(RendererPublicApiTest, PostTextPathCursorExplicitXYRemainsIndependent) {
+  const auto actual = RenderPostPathScene(
+      "<textPath href='#p'>M</textPath><tspan x='40' y='30' fill='blue'>M</tspan>", 1);
+  const auto expected = RenderPostPathScene(
+      "<textPath href='#p'>M</textPath><tspan x='40' y='30' fill='blue'>M</tspan>", 1);
+  ASSERT_EQ(actual.characters, 2);
+  ASSERT_THAT(expected.tailAdvance, Gt(0.0));
+  EXPECT_THAT(actual.positions[1], testing::Eq(Vector2d(40.0, 30.0)));
+  editor::tests::CompareBitmapToBitmap(actual.bitmap, expected.bitmap,
+                                       "postpath_explicit_xy_control",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(RendererPublicApiTest, PostTextPathCursorXOnlyMatchesOrdinaryAxis) {
+  const auto ordinary = RenderPostPathScene("M<tspan x='40'>M</tspan>", 1);
+  ASSERT_EQ(ordinary.characters, 2);
+  EXPECT_THAT(ordinary.positions[1], testing::Eq(Vector2d(40.0, 0.0)));
+  const auto actual =
+      RenderPostPathScene("<textPath href='#p'>M</textPath><tspan x='40' fill='blue'>M</tspan>", 1);
+  const auto expected = RenderPostPathScene(
+      "<textPath href='#p'>M</textPath><tspan x='40' y='0' fill='blue'>M</tspan>", 1);
+  ASSERT_EQ(actual.characters, 2);
+  ASSERT_THAT(expected.tailAdvance, Gt(0.0));
+  editor::tests::CompareBitmapToBitmap(actual.bitmap, expected.bitmap, "postpath_x_only_axis",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(RendererPublicApiTest, PostTextPathCursorYOnlyMatchesOrdinaryAxis) {
+  const auto ordinary = RenderPostPathScene("M<tspan y='30'>M</tspan>", 1);
+  ASSERT_EQ(ordinary.characters, 2);
+  ASSERT_THAT(ordinary.positions[1].x, Gt(0.0));
+  EXPECT_THAT(ordinary.positions[1].y, testing::Eq(30.0));
+  const auto actual =
+      RenderPostPathScene("<textPath href='#p'>M</textPath><tspan y='30' fill='blue'>M</tspan>", 1);
+  const auto expected = RenderPostPathScene("<textPath href='#p'>M</textPath><tspan x='" +
+                                                PostPathCoordinate(ordinary.positions[1].x) +
+                                                "' y='30' fill='blue'>M</tspan>",
+                                            1);
+  ASSERT_EQ(actual.characters, 2);
+  ASSERT_THAT(expected.tailAdvance, Gt(0.0));
+  editor::tests::CompareBitmapToBitmap(actual.bitmap, expected.bitmap, "postpath_y_only_axis",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(RendererPublicApiTest, PostTextPathCursorRelativeTailUsesOneNominalTranslation) {
+  const auto ordinary = RenderPostPathScene("<tspan dx='7 2' dy='9 3'>MM</tspan>", 1);
+  ASSERT_EQ(ordinary.characters, 2);
+  const Vector2d separation = ordinary.positions[1] - ordinary.positions[0];
+  ASSERT_THAT(separation.x, Gt(0.0));
+  EXPECT_THAT(separation.y, testing::Eq(3.0));
+  const auto actual = RenderPostPathScene(
+      "<textPath href='#p'>M</textPath><tspan dx='7 2' dy='9 3' fill='blue'>MM</tspan>", 2);
+  const auto expected = RenderPostPathScene(
+      "<textPath href='#p'>M</textPath><tspan x='100' y='50' fill='blue'>M</tspan><tspan x='" +
+          PostPathCoordinate(100.0 + separation.x) + "' y='53' fill='blue'>M</tspan>",
+      2);
+  ASSERT_EQ(actual.characters, 3);
+  ASSERT_THAT(expected.tailAdvance, Gt(0.0));
+  editor::tests::CompareBitmapToBitmap(actual.bitmap, expected.bitmap,
+                                       "postpath_nominal_translation",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(RendererPublicApiTest, PostTextPathCursorDistinctPathOwnerDoesNotInheritOffset) {
+  const auto actual = RenderPostPathScene(
+      "<textPath href='#p' startOffset='17'><tspan dy='5'>M</tspan></textPath>"
+      "<textPath path='M200 80H300' fill='blue'>M</textPath>",
+      1);
+  const auto expected = RenderPostPathScene(
+      "<textPath href='#p' startOffset='17'><tspan dy='5'>M</tspan></textPath>"
+      "<tspan x='200' y='80' fill='blue'>M</tspan>",
+      1);
+  ASSERT_EQ(actual.characters, 2);
+  ASSERT_THAT(expected.tailAdvance, Gt(0.0));
+  editor::tests::CompareBitmapToBitmap(actual.bitmap, expected.bitmap, "postpath_distinct_owner",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(RendererPublicApiTest, PostTextPathCursorAllOffPathUsesEndpoint) {
+  const auto actual = RenderPostPathScene(
+      "<textPath href='#p' startOffset='200'>M</textPath><tspan fill='blue'>M</tspan>", 1);
+  const auto expected = RenderPostPathScene(
+      "<textPath href='#p' startOffset='200'>M</textPath><tspan x='100' y='50' "
+      "fill='blue'>M</tspan>",
+      1);
+  ASSERT_EQ(actual.characters, 2);
+  ASSERT_THAT(expected.tailAdvance, Gt(0.0));
+  editor::tests::CompareBitmapToBitmap(actual.bitmap, expected.bitmap, "postpath_all_clipped",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(RendererPublicApiTest, PostTextPathCursorEmptyTagRetainsOrdinaryPosition) {
+  const auto actual = RenderPostPathScene("<textPath href='#p'/><tspan fill='blue'>M</tspan>", 0);
+  const auto expected = RenderPostPathScene("<tspan fill='blue'>M</tspan>", 0);
+  ASSERT_EQ(actual.characters, 1);
+  ASSERT_THAT(expected.tailAdvance, Gt(0.0));
+  editor::tests::CompareBitmapToBitmap(actual.bitmap, expected.bitmap, "postpath_empty_tag",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(RendererPublicApiTest, PostTextPathCursorNonemptyHiddenTextUsesEndpoint) {
+  const auto actual = RenderPostPathScene(
+      "<textPath href='#p' visibility='hidden'>M</textPath><tspan fill='blue'>M</tspan>", 1);
+  const auto expected = RenderPostPathScene(
+      "<textPath href='#p' visibility='hidden'>M</textPath>"
+      "<tspan x='100' y='50' fill='blue'>M</tspan>",
+      1);
+  ASSERT_EQ(actual.characters, 2);
+  ASSERT_THAT(expected.tailAdvance, Gt(0.0));
+  editor::tests::CompareBitmapToBitmap(actual.bitmap, expected.bitmap, "postpath_hidden_nonempty",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(RendererPublicApiTest, PostTextPathCursorChildZeroProducerHasNoPaintWithExplicitTail) {
+  const auto actual = RenderPostPathScene(
+      "<textPath href='#p' font-size='0'>M</textPath>"
+      "<tspan x='100' y='50' font-size='16' fill='blue'>M</tspan>",
+      1);
+  const auto expected =
+      RenderPostPathScene("<tspan x='100' y='50' font-size='16' fill='blue'>M</tspan>", 0);
+  EXPECT_EQ(actual.characters, 2);
+  EXPECT_THAT(actual.firstAdvance, testing::DoubleEq(0.0));
+  ASSERT_THAT(expected.tailAdvance, Gt(0.0));
+  editor::tests::CompareBitmapToBitmap(actual.bitmap, expected.bitmap,
+                                       "postpath_child_zero_producer",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(RendererPublicApiTest, PostTextPathCursorRootZeroProducerRetainsAddressableCharacter) {
+  const auto actual = RenderPostPathScene(
+      "<textPath href='#p'>M</textPath><tspan x='100' y='50' font-size='16' fill='blue'>M</tspan>",
+      1, "M0 50H100", {}, {}, 0.0);
+  const auto expected = RenderPostPathScene(
+      "<tspan x='100' y='50' font-size='16' fill='blue'>M</tspan>", 0, "M0 50H100", {}, {}, 0.0);
+  EXPECT_EQ(actual.characters, 2);
+  EXPECT_THAT(actual.firstAdvance, testing::DoubleEq(0.0));
+  ASSERT_THAT(expected.tailAdvance, Gt(0.0));
+  editor::tests::CompareBitmapToBitmap(actual.bitmap, expected.bitmap,
+                                       "postpath_root_zero_producer",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(RendererPublicApiTest, PostTextPathCursorRootZeroCursorRequiresProducerPremises) {
+  const auto actual = RenderPostPathScene(
+      "<textPath href='#p'>M</textPath><tspan font-size='16' fill='blue'>M</tspan>", 1, "M0 50H100",
+      {}, {}, 0.0);
+  const auto expected = RenderPostPathScene(
+      "<tspan x='100' y='50' font-size='16' fill='blue'>M</tspan>", 0, "M0 50H100", {}, {}, 0.0);
+  // Failed zero-advance/addressability premises remain producer failures, not cursor evidence.
+  ASSERT_EQ(actual.characters, 2);
+  ASSERT_THAT(actual.firstAdvance, testing::DoubleEq(0.0));
+  ASSERT_THAT(expected.tailAdvance, Gt(0.0));
+  editor::tests::CompareBitmapToBitmap(actual.bitmap, expected.bitmap, "postpath_root_zero_cursor",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(RendererPublicApiTest, PostTextPathCursorReferencedOwnTransformExcludesOriginalAncestor) {
+  constexpr std::string_view attributes = "transform='matrix(0 2 -1 0 70 5)'";
+  constexpr std::string_view ancestor = "transform='translate(100 100)'";
+  const auto actual =
+      RenderPostPathScene("<textPath href='#p'>M</textPath><tspan fill='blue'>M</tspan>", 1,
+                          "M0 50H100", attributes, ancestor);
+  const auto expected = RenderPostPathScene(
+      "<textPath href='#p'>M</textPath><tspan x='20' y='205' fill='blue'>M</tspan>", 1, "M0 50H100",
+      attributes, ancestor);
+  ASSERT_EQ(actual.characters, 2);
+  ASSERT_THAT(expected.tailAdvance, Gt(0.0));
+  editor::tests::CompareBitmapToBitmap(actual.bitmap, expected.bitmap,
+                                       "postpath_effective_transform",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(RendererPublicApiTest, PostTextPathCursorClosedSingleLoopOffsetUsesEquivalentEndpoint) {
+  const auto actual = RenderPostPathScene(
+      "<textPath href='#p' startOffset='30'>M</textPath><tspan fill='blue'>M</tspan>", 1,
+      "M20 60H100V100H20Z");
+  const auto expected = RenderPostPathScene(
+      "<textPath href='#p' startOffset='30'>M</textPath><tspan x='50' y='60' fill='blue'>M</tspan>",
+      1, "M20 60H100V100H20Z");
+  ASSERT_EQ(actual.characters, 2);
+  ASSERT_THAT(expected.tailAdvance, Gt(0.0));
+  editor::tests::CompareBitmapToBitmap(actual.bitmap, expected.bitmap, "postpath_closed_offset",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(RendererPublicApiTest, PostTextPathCursorWhitespaceCannotInventOriginHit) {
+  SVGDocument document = ParseDocument(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="300" height="120"><text
+        id="label" font-family="sans-serif" font-size="16" text-anchor="start" x="40" y="80">A<tspan
+        x="100" y="20"> </tspan><tspan x="200" y="80">M</tspan></text></svg>)svg");
+  const auto actualBitmap = RenderPublicDocument(document);
+  const auto element = document.querySelector("#label");
+  ASSERT_TRUE(element.has_value());
+  const SVGTextElement label = element->cast<SVGTextElement>();
+
+  ASSERT_EQ(label.getNumberOfChars(), 3);
+  ASSERT_EQ(label.getStartPositionOfChar(1), Vector2d(100.0, 20.0));
+  ASSERT_THAT(label.getSubStringLength(1, 1), Gt(0.0));
+  const auto& geometry = document.registry().get<components::ComputedTextGeometryComponent>(
+      label.unsafeEntityHandle().entity());
+  ASSERT_THAT(geometry.characters, testing::SizeIs(3));
+  ASSERT_TRUE(geometry.characters[1].rendered);
+  ASSERT_FALSE(geometry.characters[1].hasExtent);
+  ASSERT_EQ(geometry.characters[1].extent, Box2d());
+
+  const Box2d visibleExtent = label.getExtentOfChar(2);
+  ASSERT_THAT(visibleExtent.width(), Gt(0.0));
+  ASSERT_THAT(visibleExtent.height(), Gt(0.0));
+  ASSERT_EQ(label.getCharNumAtPosition((visibleExtent.topLeft + visibleExtent.bottomRight) / 2.0),
+            2);
+  EXPECT_EQ(label.getCharNumAtPosition(Vector2d::Zero()), -1);
+
+  SVGDocument reference = ParseDocument(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="300" height="120"><text
+        id="label" font-family="sans-serif" font-size="16" text-anchor="start" x="40" y="80">A<tspan
+        x="200" y="80">M</tspan></text></svg>)svg");
+  const auto expectedBitmap = RenderPublicDocument(reference);
+  ASSERT_FALSE(actualBitmap.empty());
+  ASSERT_FALSE(expectedBitmap.empty());
+  editor::tests::CompareBitmapToBitmap(actualBitmap, expectedBitmap,
+                                       "postpath_whitespace_no_origin_hit",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(RendererPublicApiTest, PostTextPathCursorHiddenLogicalMetricsPreserveNoPaint) {
+  SVGDocument visible = ParseDocument(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="120"><text
+        id="label" font-family="sans-serif" font-size="16" text-anchor="start" x="100"
+        y="60">M</text></svg>)svg");
+  const auto visibleBitmap = RenderPublicDocument(visible);
+  const auto visibleElement = visible.querySelector("#label");
+  ASSERT_TRUE(visibleElement.has_value());
+  const SVGTextElement visibleLabel = visibleElement->cast<SVGTextElement>();
+  ASSERT_EQ(visibleLabel.getNumberOfChars(), 1);
+  ASSERT_EQ(visibleLabel.getStartPositionOfChar(0), Vector2d(100.0, 60.0));
+  ASSERT_THAT(visibleLabel.getSubStringLength(0, 1), Gt(0.0));
+  ASSERT_FALSE(visibleBitmap.empty());
+
+  SVGDocument hidden = ParseDocument(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="120"><text
+        id="label" font-family="sans-serif" font-size="16" text-anchor="start" x="100"
+        y="60" visibility="hidden">M</text></svg>)svg");
+  const auto hiddenBitmap = RenderPublicDocument(hidden);
+  const auto hiddenElement = hidden.querySelector("#label");
+  ASSERT_TRUE(hiddenElement.has_value());
+  const SVGTextElement hiddenLabel = hiddenElement->cast<SVGTextElement>();
+  EXPECT_EQ(hiddenLabel.getNumberOfChars(), visibleLabel.getNumberOfChars());
+  EXPECT_EQ(hiddenLabel.getStartPositionOfChar(0), visibleLabel.getStartPositionOfChar(0));
+  EXPECT_EQ(hiddenLabel.getEndPositionOfChar(0), visibleLabel.getEndPositionOfChar(0));
+  EXPECT_DOUBLE_EQ(hiddenLabel.getSubStringLength(0, 1), visibleLabel.getSubStringLength(0, 1));
+  EXPECT_DOUBLE_EQ(hiddenLabel.getRotationOfChar(0), visibleLabel.getRotationOfChar(0));
+  EXPECT_EQ(hiddenLabel.getCharNumAtPosition(Vector2d::Zero()), -1);
+
+  SVGDocument blank =
+      ParseDocument(R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="120"/>)svg");
+  const auto blankBitmap = RenderPublicDocument(blank);
+  ASSERT_FALSE(hiddenBitmap.empty());
+  ASSERT_FALSE(blankBitmap.empty());
+  editor::tests::CompareBitmapToBitmap(hiddenBitmap, blankBitmap,
+                                       "postpath_hidden_metrics_no_paint",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
 SVGDocument MakeTextPathPairFontProbe(bool kerning = true) {
   if (!kerning) {
     return ParseDocument(
@@ -1228,6 +1592,74 @@ TEST(RendererPublicApiTest, TextPathPairSeparateOwnersDoNotShareKerning) {
   editor::tests::CompareBitmapToBitmap(RenderPublicDocument(sharedText), expected,
                                        "textpath-pair-separate-owners",
                                        editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(RendererPublicApiTest, PostTextPathCursorClosedChunkUsesFirstAnchorAcrossStyleSpan) {
+  const auto reference = RenderPostPathScene(
+      "<textPath href='#p'>M<tspan text-anchor='start' fill='blue'>M</tspan></textPath>"
+      "<tspan x='200' y='60' fill='green'>M</tspan>",
+      2, "M0 64H128V192H0Z");
+  ASSERT_EQ(reference.characters, 3);
+  ASSERT_THAT(reference.tailAdvance, Gt(0.0));
+  ASSERT_EQ(reference.positions[0], Vector2d(0.0, 64.0));
+  ASSERT_THAT(reference.positions[1].x, Gt(reference.positions[0].x));
+  ASSERT_EQ(reference.positions[1].y, 64.0);
+  ASSERT_EQ(reference.positions[2], Vector2d(200.0, 60.0));
+  const auto actual = RenderPostPathScene(
+      "<textPath href='#p'>M<tspan text-anchor='end' fill='blue'>M</tspan></textPath>"
+      "<tspan x='200' y='60' fill='green'>M</tspan>",
+      2, "M0 64H128V192H0Z");
+  ASSERT_EQ(actual.characters, 3);
+  EXPECT_EQ(actual.positions[1], reference.positions[1]);
+  editor::tests::CompareBitmapToBitmap(actual.bitmap, reference.bitmap,
+                                       "postpath_closed_chunk_first_anchor",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(RendererPublicApiTest, ClosedTextPathAbsoluteXOutsideCircuitHasNoInk) {
+  constexpr std::string_view path = "M20 30H45V55H20Z";
+  const auto visible = RenderPostPathScene(
+      "<textPath id='owner' href='#p'><tspan id='first'>A</tspan>"
+      "<tspan id='offset' x='10' fill='red'>B</tspan></textPath>"
+      "<tspan x='40' y='70' fill='green'>C</tspan>",
+      2, path);
+  const auto flatReference = RenderPostPathScene(
+      "<textPath href='#p'><tspan>A</tspan></textPath>"
+      "<tspan x='30' y='30' fill='red'>B</tspan>"
+      "<tspan x='40' y='70' fill='green'>C</tspan>",
+      2, path);
+  ASSERT_TRUE(visible.authoredOffsetX.has_value());
+  ASSERT_EQ(*visible.authoredOffsetX, 10.0);
+  ASSERT_TRUE(visible.offsetOwnerMatches);
+  ASSERT_GT(visible.offsetAdvance, 0.0);
+  ASSERT_LT(visible.offsetAdvance, 30.0);
+  ASSERT_FALSE(visible.bitmap.empty());
+  ASSERT_FALSE(flatReference.bitmap.empty());
+  editor::tests::CompareBitmapToBitmap(visible.bitmap, flatReference.bitmap,
+                                       "closed_absolute_x_visible_control",
+                                       editor::tests::PixelmatchIdentityParams());
+  for (int absoluteX : {1000, -1000}) {
+    SCOPED_TRACE(absoluteX);
+    const std::string prefix =
+        "<textPath id='owner' href='#p'><tspan>A</tspan>"
+        "<tspan id='offset' x='" +
+        std::to_string(absoluteX) + "' fill='red' ";
+    const std::string suffix = ">B</tspan></textPath><tspan x='40' y='70' fill='green'>C</tspan>";
+    const auto actual = RenderPostPathScene(prefix + suffix, 2, path);
+    const auto expected = RenderPostPathScene(prefix + "visibility='hidden'" + suffix, 2, path);
+    ASSERT_TRUE(actual.authoredOffsetX.has_value());
+    ASSERT_EQ(*actual.authoredOffsetX, static_cast<double>(absoluteX));
+    ASSERT_TRUE(actual.offsetOwnerMatches);
+    ASSERT_GT(actual.offsetAdvance, 0.0);
+    ASSERT_LT(actual.offsetAdvance, 30.0);
+    ASSERT_FALSE(actual.bitmap.empty());
+    ASSERT_FALSE(expected.bitmap.empty());
+    ASSERT_THAT(actual.tailAdvance, Gt(0.0));
+    ASSERT_THAT(expected.tailAdvance, Gt(0.0));
+    editor::tests::CompareBitmapToBitmap(actual.bitmap, expected.bitmap,
+                                         "closed_absolute_x_" + std::to_string(absoluteX),
+                                         editor::tests::PixelmatchIdentityParams());
+  }
 }
 
 TEST(RendererPublicApiTest, ExternalUseTextSpanInheritsHostGradientWithoutChildId) {

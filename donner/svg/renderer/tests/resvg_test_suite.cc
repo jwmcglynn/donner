@@ -1764,7 +1764,7 @@ INSTANTIATE_TEST_SUITE_P(
                 {"mixed-children-1.svg",
                  Params::WithGoldenOverride(
                      "donner/svg/renderer/testdata/golden/resvg-mixed-children-1.png")
-                     .withReason("AA diffs")},
+                     .withReason("SVG2 endpoint continuation and anti-aliasing differences")},
                 {"mixed-children-2.svg", Params::Skip("Bug: Kerning on textPath")},
                 {"nested.svg",
                  Params::WithGoldenOverride("donner/svg/renderer/testdata/golden/resvg-nested.png")
@@ -1817,7 +1817,7 @@ INSTANTIATE_TEST_SUITE_P(
                 {"very-long-text.svg",
                  Params::WithGoldenOverride(
                      "donner/svg/renderer/testdata/golden/resvg-very-long-text.png")
-                     .withReason("AA diffs")},
+                     .withReason("SVG2 endpoint continuation and anti-aliasing differences")},
                 {"with-baseline-shift-and-rotate.svg",
                  Params::RenderOnly("UB: baseline-shift + rotate")},
                 {"with-baseline-shift.svg",

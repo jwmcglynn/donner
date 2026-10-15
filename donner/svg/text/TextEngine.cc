@@ -46,6 +46,14 @@ float CheckedFontSizePx(double sizePx) {
   return std::isfinite(result) ? result : 0.0f;
 }
 
+/// Resolve a computed zero independently of the default unresolved span-size sentinel.
+double ResolvedSpanFontSizePx(const components::ComputedTextComponent::TextSpan& span,
+                              const TextLayoutParams& params) {
+  const Lengthd& size =
+      span.hasResolvedFontSize || span.fontSize.value != 0.0 ? span.fontSize : params.fontSize;
+  return size.toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::Mixed);
+}
+
 /// Zero or unrepresentable used sizes consume positioning without producing glyphs.
 bool HasRenderableSpanText(std::string_view text, float usedSizePx) {
   return !text.empty() && usedSizePx > 0.0f && std::isfinite(usedSizePx);
@@ -98,7 +106,8 @@ bool fontSupportsCodepoint(const TextBackend& backend, FontHandle font, float fo
 /// Finds a registered font that covers \p cp, preserving \p currentFont when it already does.
 FontHandle findCoverageFallbackFont(const TextBackend& backend, FontManager& fontManager,
                                     FontHandle currentFont, float fontSizePx, uint32_t cp) {
-  if (cp == 0 || fontSupportsCodepoint(backend, currentFont, fontSizePx, cp)) {
+  if (fontSizePx <= 0.0f || cp == 0 ||
+      fontSupportsCodepoint(backend, currentFont, fontSizePx, cp)) {
     return currentFont;
   }
 
@@ -353,6 +362,7 @@ void ResolvePerSpanLayoutStyles(Registry& registry, components::ComputedTextComp
     span.fontKerning = style->properties->fontKerning.get().value();
     span.fontSizeAdjust.emplace(style->properties->fontSizeAdjust.get().value());
     span.fontSize = style->properties->fontSize.get().value();
+    span.hasResolvedFontSize = true;
     span.fontFamilies = style->properties->fontFamily.get().value();
     span.visibility = style->properties->visibility.get().value();
     span.letterSpacingPx = style->properties->letterSpacing.get().value().toPixels(
@@ -497,6 +507,7 @@ struct TextPathCluster {
   double pathOffset;
   double baselineOffset;
   double advance = 0.0;
+  TextAnchor circuitAnchor = TextAnchor::Start;
 };
 
 /// Reusable path pen and cluster storage for the current textPath scope.
@@ -783,20 +794,70 @@ void AnchorTextPathClusters(const components::ComputedTextComponent& text,
     const double shift = clusters[first].pathOffset - alignment;
     for (size_t ci = first; ci < end; ++ci) {
       clusters[ci].pathOffset += shift;
+      clusters[ci].circuitAnchor = anchor;
     }
     first = end;
   }
 }
 
+/// Only one closed contour can be sampled as one equivalent circuit.
+bool IsSingleClosedTextPath(const Path& source) {
+  const auto commands = source.commands();
+  if (commands.empty() || commands.size() > Path::kMaximumGeometryQueryWork ||
+      commands.front().verb != Path::Verb::MoveTo ||
+      commands.back().verb != Path::Verb::ClosePath) {
+    return false;
+  }
+  size_t moves = 0;
+  size_t closes = 0;
+  for (const auto& command : commands) {
+    moves += command.verb == Path::Verb::MoveTo;
+    closes += command.verb == Path::Verb::ClosePath;
+  }
+  return moves == 1 && closes == 1;
+}
+
+/// Normalize finite distances without changing the open-path clipping policy.
+double NormalizeTextPathDistance(double distance, double length) {
+  const double normalized = std::fmod(distance, length);
+  return normalized < 0.0 ? normalized + length : normalized;
+}
+
+/// Closed text is admitted for one circuit about its anchored start, not arbitrary repeats.
+bool IsWithinClosedTextCircuit(double midpoint, double length, TextAnchor anchor) {
+  const double start = anchor == TextAnchor::Middle ? -length * 0.5
+                       : anchor == TextAnchor::End  ? -length
+                                                    : 0.0;
+  return midpoint >= start && midpoint <= start + length;
+}
+
+/// Sample a midpoint, wrapping only admitted finite single-contour positions.
+Path::PointOnPath SampleTextPathCluster(const Path::MeasuredPath& path, double startOffset,
+                                        double midpoint, bool closed, TextAnchor anchor) {
+  const double length = path.pathLength();
+  if (!closed) {
+    return path.pointAtArcLength(startOffset + midpoint);
+  }
+  // This midpoint already excludes startOffset; authored x still counts toward the circuit.
+  if (!std::isfinite(startOffset) || !std::isfinite(midpoint) ||
+      !IsWithinClosedTextCircuit(midpoint, length, anchor)) {
+    return {.valid = false};
+  }
+  const double start = NormalizeTextPathDistance(startOffset, length);
+  const double offset = NormalizeTextPathDistance(midpoint, length);
+  // Add two normalized distances without overflowing a large finite path length.
+  const double distance = offset >= length - start ? offset - (length - start) : start + offset;
+  return path.pointAtArcLength(distance);
+}
+
 /// Samples each cluster once and places all of its glyphs with their shaped offsets.
-std::optional<Vector2d> PlaceTextPathClusters(const Path::MeasuredPath& path, double startOffset,
-                                              std::vector<TextRun>& runs,
-                                              const std::vector<TextPathCluster>& clusters) {
-  std::optional<Vector2d> lastPosition;
+void PlaceTextPathClusters(const Path::MeasuredPath& path, double startOffset, bool closed,
+                           std::vector<TextRun>& runs,
+                           const std::vector<TextPathCluster>& clusters) {
   for (const TextPathCluster& cluster : clusters) {
     const double halfAdvance = cluster.advance * 0.5;
-    const double midpoint = startOffset + cluster.pathOffset + halfAdvance;
-    const auto sample = path.pointAtArcLength(midpoint);
+    const auto sample = SampleTextPathCluster(path, startOffset, cluster.pathOffset + halfAdvance,
+                                              closed, cluster.circuitAnchor);
     auto& run = runs[cluster.runIndex];
     if (sample.valid) {
       const Vector2d origin(sample.point.x - halfAdvance * std::cos(sample.angle) -
@@ -812,32 +873,165 @@ std::optional<Vector2d> PlaceTextPathClusters(const Path::MeasuredPath& path, do
         glyph.yPosition = origin.y + localX * std::sin(angle) + localY * std::cos(angle);
         glyph.rotateDegrees += sample.angle * MathConstants<double>::kRadToDeg;
       }
-      lastPosition = Vector2d(sample.point.x + cluster.advance, sample.point.y);
     } else {
       for (size_t gi = cluster.glyphStart; gi < cluster.glyphEnd; ++gi) {
         run.glyphs[gi].glyphIndex = 0;
       }
     }
   }
-  return lastPosition;
 }
 
-/// Places shaped clusters after length adjustments and absolute coordinate resets.
-Vector2d placeTextPath(Registry& registry, const components::ComputedTextComponent& text,
-                       const TextLayoutParams& params, size_t firstRun, std::vector<TextRun>& runs,
-                       std::vector<TextPathCluster>& clusters) {
+/// Places shaped clusters and returns geometry-based continuation independent of glyph visibility.
+std::optional<Vector2d> placeTextPath(Registry& registry,
+                                      const components::ComputedTextComponent& text,
+                                      const TextLayoutParams& params, size_t firstRun,
+                                      std::vector<TextRun>& runs,
+                                      std::vector<TextPathCluster>& clusters) {
   applyTextPathLengths(registry, text, params, firstRun, runs, clusters);
   ResetTextPathCoordinates(text, params, clusters);
   AnchorTextPathClusters(text, clusters);
   const auto& firstSpan = text.spans[firstRun];
   const Path::MeasuredPath path = firstSpan.pathSpline->measure();
-  const std::optional<Vector2d> lastPosition =
-      PlaceTextPathClusters(path, firstSpan.pathStartOffset, runs, clusters);
-  if (lastPosition) {
-    return *lastPosition;
+  const double length = path.pathLength();
+  const bool closed = path.valid() && std::isfinite(length) && length > 0.0 &&
+                      IsSingleClosedTextPath(*firstSpan.pathSpline);
+  PlaceTextPathClusters(path, firstSpan.pathStartOffset, closed, runs, clusters);
+  if (closed && !std::isfinite(firstSpan.pathStartOffset)) {
+    return std::nullopt;
   }
-  const auto end = path.pointAtArcLength(path.pathLength());
-  return end.valid ? end.point : Vector2d::Zero();
+  const double distance =
+      closed ? NormalizeTextPathDistance(firstSpan.pathStartOffset, length) : length;
+  const auto end = path.pointAtArcLength(distance);
+  return end.valid ? std::optional(end.point) : std::nullopt;
+}
+
+/// A retired owning path establishes an endpoint for the next unanchored flat character.
+struct PostTextPathBoundary {
+  size_t runIndex;
+  std::optional<Vector2d> endpoint;
+};
+
+struct PostTextPathTranslation {
+  std::optional<Vector2d> endpoint;
+  std::optional<Vector2d> origin;
+
+  void clear() {
+    endpoint.reset();
+    origin.reset();
+  }
+};
+
+bool IsFiniteTextPosition(const Vector2d& position) {
+  return std::isfinite(position.x) && std::isfinite(position.y);
+}
+
+/// A quarantined flat glyph must not enter logical metrics, ink, or object bounds.
+bool HasFiniteFlatGlyphGeometry(const TextGlyph& glyph) {
+  return std::isfinite(glyph.xPosition) && std::isfinite(glyph.yPosition) &&
+         std::isfinite(glyph.xAdvance) && std::isfinite(glyph.yAdvance) &&
+         std::isfinite(glyph.rotateDegrees) && std::isfinite(glyph.xPosition + glyph.xAdvance) &&
+         std::isfinite(glyph.yPosition + glyph.yAdvance);
+}
+
+/// Keep subtraction local to the nominal origin, avoiding cancellation at the first character.
+bool TranslatePostPathGlyph(TextGlyph& glyph, const PostTextPathTranslation& state) {
+  const Vector2d position =
+      *state.endpoint + (Vector2d(glyph.xPosition, glyph.yPosition) - *state.origin);
+  if (!IsFiniteTextPosition(position)) {
+    return false;
+  }
+  glyph.xPosition = position.x;
+  glyph.yPosition = position.y;
+  return HasFiniteFlatGlyphGeometry(glyph);
+}
+
+/// Absolute x or y belongs to a typographic positioning group, not a UTF-16 API alias.
+bool HasAbsoluteFlatPosition(const components::ComputedTextComponent::TextSpan& span,
+                             const ByteIndexMappings& mappings, const TextGlyph& glyph) {
+  const size_t byte = GetPositioningCluster(glyph);
+  if (byte >= mappings.byteToCharIdx.size()) {
+    return false;
+  }
+  const size_t index = mappings.byteToCharIdx[byte];
+  return (index < span.xList.size() && span.xList[index].has_value()) ||
+         (index < span.yList.size() && span.yList[index].has_value());
+}
+
+/// Find the first anchored source group even when unpositioned shaping uses visual glyph order.
+std::optional<uint32_t> FirstAnchoredFlatCluster(
+    const TextRun& run, const components::ComputedTextComponent::TextSpan& span,
+    const ByteIndexMappings& mappings) {
+  std::optional<uint32_t> first;
+  for (const auto& glyph : run.glyphs) {
+    if (HasAbsoluteFlatPosition(span, mappings, glyph)) {
+      const uint32_t cluster = GetPositioningCluster(glyph);
+      first = first ? std::min(*first, cluster) : cluster;
+    }
+  }
+  return first;
+}
+
+/// Preserve finite glyph order while translating and quarantining in existing storage.
+void TranslateAndQuarantineFlatPrefix(TextRun& run, const PostTextPathTranslation& state,
+                                      std::optional<uint32_t> anchored) {
+  size_t retained = 0;
+  for (size_t index = 0; index < run.glyphs.size(); ++index) {
+    TextGlyph& glyph = run.glyphs[index];
+    const bool anchoredSuffix = anchored && GetPositioningCluster(glyph) >= *anchored;
+    const bool keep = anchoredSuffix ? HasFiniteFlatGlyphGeometry(glyph)
+                                     : IsFiniteTextPosition(*state.origin) &&
+                                           TranslatePostPathGlyph(glyph, state);
+    if (keep) {
+      if (retained != index) {
+        run.glyphs[retained] = std::move(glyph);
+      }
+      ++retained;
+    }
+  }
+  run.glyphs.resize(retained);
+}
+
+/// Translate an unanchored source prefix once; an anchored group retires both components.
+void TranslateAfterTextPathRun(TextRun& run,
+                               const components::ComputedTextComponent::TextSpan& span,
+                               PostTextPathTranslation& state) {
+  if (run.glyphs.empty() || !state.endpoint) {
+    return;
+  }
+  const std::string_view spanText(span.text.data() + span.start, span.end - span.start);
+  const auto mappings = buildByteIndexMappings(spanText);
+  const auto anchored = FirstAnchoredFlatCluster(run, span, mappings);
+  if (!state.origin) {
+    const auto first = std::min_element(
+        run.glyphs.begin(), run.glyphs.end(), [](const TextGlyph& a, const TextGlyph& b) {
+          return GetPositioningCluster(a) < GetPositioningCluster(b);
+        });
+    state.origin = Vector2d(first->xPosition, first->yPosition);
+  }
+  TranslateAndQuarantineFlatPrefix(run, state, anchored);
+  if (anchored) {
+    state.clear();
+  }
+}
+
+/// Walk retired owners and flat glyphs in order after ordinary length/anchor adjustments.
+void ApplyPostTextPathTranslations(std::vector<TextRun>& runs,
+                                   const components::ComputedTextComponent& text,
+                                   const std::vector<PostTextPathBoundary>& boundaries) {
+  PostTextPathTranslation state;
+  size_t boundary = 0;
+  for (size_t run = 0; run < runs.size() && run < text.spans.size(); ++run) {
+    while (boundary < boundaries.size() && boundaries[boundary].runIndex == run) {
+      state.endpoint = boundaries[boundary].endpoint;
+      state.origin.reset();
+      ++boundary;
+    }
+    if (runs[run].onPath) {
+      state.clear();
+    } else {
+      TranslateAfterTextPathRun(runs[run], text.spans[run], state);
+    }
+  }
 }
 
 void applyTextLength(std::vector<TextRun>& runs, const components::ComputedTextComponent& text,
@@ -1154,11 +1348,7 @@ double computeSpanBaselineShiftPx(const TextBackend& backend,
   using BSK = components::ComputedTextComponent::TextSpan::BaselineShiftKeyword;
 
   FontMetrics spanFontMetrics = params.fontMetrics;
-  const float spanFontSizePx =
-      span.fontSize.value != 0.0 ? CheckedFontSizePx(span.fontSize.toPixels(
-                                       params.viewBox, params.fontMetrics, Lengthd::Extent::Mixed))
-                                 : CheckedFontSizePx(params.fontSize.toPixels(
-                                       params.viewBox, params.fontMetrics, Lengthd::Extent::Mixed));
+  const float spanFontSizePx = CheckedFontSizePx(ResolvedSpanFontSizePx(span, params));
   spanFontMetrics.fontSize = spanFontSizePx;
 
   double spanBaselineShiftPx;
@@ -1643,8 +1833,8 @@ namespace {
  *
  * `visibility: hidden` and `visibility: collapse` suppress painting only. The span is still laid
  * out and keeps its positioned glyphs so it contributes to the element's object bounding box, per
- * the SVG object-bounding-box definition, but it produces no ink geometry and no per-character
- * paint records. Returns an empty span for such a run.
+ * the SVG object-bounding-box definition, but it produces no ink geometry. Logical character
+ * metrics are recorded separately. Returns an empty span for such a run.
  *
  * @param span The span that produced \p run.
  * @param run The positioned layout run.
@@ -1654,6 +1844,12 @@ std::span<const TextGlyph> PaintedSpanGlyphs(
     const components::ComputedTextComponent::TextSpan& span, const TextRun& run) {
   return span.visibility == Visibility::Visible ? std::span<const TextGlyph>(run.glyphs)
                                                 : std::span<const TextGlyph>();
+}
+
+/// Painting visibility and used size gate ink, not positioned logical character records.
+bool HasPaintedTextGlyphs(const components::ComputedTextComponent::TextSpan& span,
+                          const TextRun& run) {
+  return run.usedFontSizePx > 0.0f && !PaintedSpanGlyphs(span, run).empty();
 }
 
 /// Resolves a span's inherited font family and face attributes.
@@ -1847,10 +2043,16 @@ std::optional<Lengthd> PositionForGroup(const SmallVector<std::optional<Lengthd>
   return firstGlyph && index < values.size() ? values[index] : std::nullopt;
 }
 
-/// Valid zero adjustment retains characters; other unusable sizes do not reach layout.
-bool HasAddressableSpanText(std::string_view text, float size,
+/// A valid computed zero retains logical characters without shaping at size zero.
+bool HasAddressableSpanText(std::string_view text, float size, double specifiedSize,
                             const std::optional<double>& adjustment) {
-  return !text.empty() && (HasRenderableSpanText(text, size) || adjustment == 0.0);
+  return !text.empty() &&
+         (HasRenderableSpanText(text, size) || specifiedSize == 0.0 || adjustment == 0.0);
+}
+
+/// A zero used size needs no font scale query.
+float UsedSpanEmScale(const TextBackend& backend, FontHandle font, float size) {
+  return size > 0.0f ? backend.scaleForEmToPixels(font, size) : 0.0f;
 }
 
 /// Nonempty unshaped text interrupts kerning; an empty span keeps the previous pair.
@@ -1918,19 +2120,17 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
   Entity prevTextPathSource = entt::null;
   std::optional<size_t> firstPathRun;
   TextPathStagingState pathStaging;
+  std::vector<PostTextPathBoundary> postPathBoundaries;
 
   std::vector<ChunkBoundary> chunkBoundaries;
   std::vector<RunPenExtent> runExtents;
 
   auto finishTextPath = [&]() {
     if (firstPathRun) {
-      const Vector2d end =
+      const auto endpoint =
           placeTextPath(registry_, text, params, *firstPathRun, runs, pathStaging.clusters);
+      postPathBoundaries.push_back({runs.size(), endpoint});
       pathStaging.clusters.clear();
-      currentPenX = end.x;
-      currentPenY = end.y;
-      prevDefaultY = 0.0;
-      haveCurrentPosition = true;
       firstPathRun.reset();
       prevTextPathSource = entt::null;
       pathStaging.advance = 0.0;
@@ -1964,10 +2164,8 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
     FontHandle spanFont = ResolveSpanFace(fontManager_, span, params.fontFamilies, font);
 
     // Per-span font size: use the span's fontSize if set, otherwise the text element's.
-    float spanFontSizePx = span.fontSize.value != 0.0
-                               ? CheckedFontSizePx(span.fontSize.toPixels(
-                                     params.viewBox, params.fontMetrics, Lengthd::Extent::Mixed))
-                               : fontSizePx;
+    const double specifiedSpanFontSizePx = ResolvedSpanFontSizePx(span, params);
+    float spanFontSizePx = CheckedFontSizePx(specifiedSpanFontSizePx);
 
     const uint32_t spanTestCodepoint = firstNonAsciiCodepoint(spanText);
     spanFont = selectBackendSafeFont(*backend_, fontManager_, spanFont);
@@ -1983,7 +2181,7 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
     // The simple backend can't handle them but produces empty shapeRun results,
     // which the renderer gracefully skips.
 
-    const float spanScale = backend_->scaleForEmToPixels(spanFont, spanFontSizePx);
+    const float spanScale = UsedSpanEmScale(*backend_, spanFont, spanFontSizePx);
 
     // ── Per-span baseline-shift ─────────────────────────────────────────────────
     const double spanBaselineShiftPx =
@@ -2048,7 +2246,8 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
 
     const bool spanFontKerning = span.fontKerning.value_or(params.fontKerning) != FontKerning::None;
     // Propagate the span-start position even when the span produces no glyphs.
-    if (!HasAddressableSpanText(spanText, spanFontSizePx, fontSizeAdjust)) {
+    if (!HasAddressableSpanText(spanText, spanFontSizePx, specifiedSpanFontSizePx,
+                                fontSizeAdjust)) {
       currentPenX = penX;
       currentPenY = penY;
       prevDefaultY = defaultY;
@@ -2385,6 +2584,12 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
     prevSpanFontVariant = span.fontVariant;
     prevSpanPathSource = SpanKerningPathSource(span);
 
+    // Keep the ordinary pen independent of later path projection and continuation offsets.
+    currentPenX = penX;
+    currentPenY = penY;
+    prevDefaultY = defaultY;
+    haveCurrentPosition = true;
+
     // Stage glyph clusters before placement of the complete textPath.
     if (span.pathSpline) {
       if (!firstPathRun) {
@@ -2398,12 +2603,6 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
       runs.push_back(std::move(run));
       continue;
     }
-
-    // ── Update cross-span state ─────────────────────────────────────────────────
-    currentPenX = penX;
-    currentPenY = penY;
-    prevDefaultY = defaultY;
-    haveCurrentPosition = true;
 
     runExtents.push_back({runPenStartX, runPenStartY, penX, penY});
     runs.push_back(std::move(run));
@@ -2434,6 +2633,7 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
     applyTextLength(runs, text, runExtents, params, vertical, currentPenX, currentPenY);
     applyTextAnchor(runs, chunkBoundaries, text, vertical);
   }
+  ApplyPostTextPathTranslations(runs, text, postPathBoundaries);
 
   return runs;
 }
@@ -2599,7 +2799,8 @@ const components::ComputedTextGeometryComponent& TextEngine::ensureComputedTextG
       AddTextObjectBounds(cache, span.sourceEntity, runEmBounds);
     }
 
-    for (const auto& glyph : PaintedSpanGlyphs(span, run)) {
+    const bool hasPaintedGlyphs = HasPaintedTextGlyphs(span, run);
+    for (const auto& glyph : run.glyphs) {
       const size_t localCharIndex = glyph.cluster < apiMappings.byteToFirstUnit.size()
                                         ? apiMappings.byteToFirstUnit[glyph.cluster]
                                         : 0;
@@ -2618,7 +2819,7 @@ const components::ComputedTextGeometryComponent& TextEngine::ensureComputedTextG
           Vector2d(glyph.xPosition + glyph.xAdvance, glyph.yPosition + glyph.yAdvance);
       charGeom.advance += std::hypot(glyph.xAdvance, glyph.yAdvance);
 
-      if (runFontSizePx == 0.0f) {
+      if (!hasPaintedGlyphs) {
         continue;
       }
 
@@ -2774,7 +2975,7 @@ long TextEngine::getCharNumAtPosition(EntityHandle handle, const Vector2d& point
   const auto& cache = ensureComputedTextGeometryComponent(handle);
   const auto characters = filteredCharacters(registry_, handle, cache);
   for (size_t i = 0; i < characters.size(); ++i) {
-    if (characters[i]->extent.contains(point)) {
+    if (characters[i]->hasExtent && characters[i]->extent.contains(point)) {
       return static_cast<long>(i);
     }
   }
