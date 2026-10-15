@@ -541,6 +541,33 @@ js_test(
     node_options = ["--test"],
 )
 
+# Capability only: this does not qualify pixels, animation cadence, or a hardware adapter.
+js_test(
+    name = "firefox_linux_gpu_capability_test",
+    size = "medium",
+    copy_data_to_bin = False,
+    data = [
+        "owned-process-lifecycle.mjs",
+        ":node_modules/@playwright/test",
+        "@playwright//:firefox",
+    ],
+    entry_point = "firefox-gpu-capability.spec.mjs",
+    env = {
+        "NODE_OPTIONS": "",
+        "PLAYWRIGHT_BROWSERS_PATH": "$(rootpath @playwright//:firefox)/../",
+    },
+    node_options = ["--test"],
+    tags = [
+        "launches-browser",
+        "manual",
+        "no-local",
+    ],
+    target_compatible_with = [
+        "@platforms//cpu:aarch64",
+        "@platforms//os:linux",
+    ],
+)
+
 # Explicit runner-capability qualification; ordinary suites must not require Safari permissions.
 js_test(
     name = "safari_driver_capability_test",
