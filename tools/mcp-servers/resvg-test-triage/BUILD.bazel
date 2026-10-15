@@ -1,0 +1,20 @@
+load("@rules_python//python:defs.bzl", "py_test")
+
+py_test(
+    name = "triage_tests",
+    size = "small",
+    srcs = [
+        "codebase_helpers.py",
+        "run_tests.py",
+        "server.py",
+        "test_codebase_helpers.py",
+        "test_output_parser.py",
+        "test_server_evidence.py",
+        "test_test_output_parser.py",
+        "test_triage_evidence.py",
+        "triage_evidence.py",
+    ],
+    data = ["fixtures/resvg_quiet_failure.txt"],
+    imports = ["."],
+    main = "run_tests.py",
+)

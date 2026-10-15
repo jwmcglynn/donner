@@ -476,6 +476,7 @@ py_test(
         "//third_party:bazel/local.bzl",
         "//third_party:bazel/non_bcr_deps.bzl",
         "//third_party/google_fonts:fonts.bzl",
+        "//tools/svg_suite:dependencies.bzl",
     ],
     deps = ["@rules_python//python/runfiles"],
 )

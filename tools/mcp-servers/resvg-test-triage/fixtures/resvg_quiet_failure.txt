@@ -1,0 +1,4 @@
+[ RUN      ] TextTspan/ImageComparisonTestFixture.ResvgTest/DISABLED_with_filter
+[  COMPARE ] /artifacts/tests/text/tspan/with-filter.svg [TinySkia]: FAIL (37354 pixels differ, with 100 max)
+37354 pixels different.
+[  FAILED  ] TextTspan/ImageComparisonTestFixture.ResvgTest/DISABLED_with_filter, where GetParam() = /artifacts/tests/text/tspan/with-filter.svg, 1-byte object <00>) (184 ms)

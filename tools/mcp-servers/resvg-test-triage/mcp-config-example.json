@@ -5,7 +5,9 @@
       "args": [
         "${workspaceDir}/donner/tools/mcp-servers/resvg-test-triage/server.py"
       ],
-      "env": {}
+      "env": {
+        "DONNER_TRIAGE_ARTIFACT_ROOT": "/absolute/canonical/path/to/retained-pngs"
+      }
     }
   }
 }

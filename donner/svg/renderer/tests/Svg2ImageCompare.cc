@@ -1,27 +1,5 @@
 /// @file
-/// Thin CLI over Donner's existing image comparison, for the portable SVG2 test
-/// suite runner (design 0057, Rollout step 4).
-///
-/// The portable runner compares an adapter's rendered PNG against a corpus
-/// oracle PNG. So the Donner parity lane applies the SAME comparison as the
-/// existing resvg C++ fixture (donner/svg/renderer/tests/resvg_test_suite.cc),
-/// this tool reuses Donner's own pieces rather than adding a second
-/// implementation: it loads both PNGs with
-/// RendererImageTestUtils::readRgbaImageFromPngFile and compares them with
-/// pixelmatch::pixelmatch, exactly as ImageComparisonTestFixture does.
-///
-/// Usage:
-///   svg2_image_compare --expected golden.png --actual out.png
-///                      --threshold 0.02 --max-mismatched-pixels 100
-///                      [--include-aa]
-///
-/// It writes a one-line JSON verdict to stdout:
-///   {"status":"ok","mismatched_pixels":N,"max_mismatched_pixels":M,
-///    "threshold":T,"passed":bool}
-/// A read/parse failure reports {"status":"infrastructure-error",...} and a
-/// non-zero exit. The verdict never depends on process exit status alone.
-
-#include <pixelmatch/pixelmatch.h>
+/// JSON command-line wrapper over the shared bounded PNG and pixelmatch helper.
 
 #include <cerrno>
 #include <charconv>
@@ -32,12 +10,12 @@
 #include <string_view>
 #include <vector>
 
-#include "donner/svg/renderer/tests/RendererImageTestUtils.h"
 #include "nlohmann/json.hpp"
+#include "tools/svg_suite/ImageCompare.h"
 
 namespace {
 
-using donner::svg::RendererImageTestUtils;
+namespace suite = donner::svg_suite;
 
 int emitInfrastructureError(const std::string& message) {
   nlohmann::json document;
@@ -112,40 +90,34 @@ int main(int argc, char** argv) {
     return emitInfrastructureError("both --expected and --actual are required");
   }
 
-  const auto expected = RendererImageTestUtils::readRgbaImageFromPngFile(expectedPath.c_str());
-  if (!expected) {
-    return emitInfrastructureError("cannot read expected PNG: " + expectedPath);
+  const auto expected = suite::ReadPng(expectedPath);
+  if (!expected.image) {
+    return emitInfrastructureError("cannot read expected PNG: " + expected.error);
   }
-  const auto actual = RendererImageTestUtils::readRgbaImageFromPngFile(actualPath.c_str());
-  if (!actual) {
-    return emitInfrastructureError("cannot read actual PNG: " + actualPath);
+  const auto actual = suite::ReadPng(actualPath);
+  if (!actual.image) {
+    return emitInfrastructureError("cannot read actual PNG: " + actual.error);
   }
-
-  nlohmann::json document;
-  document["status"] = "ok";
-  document["threshold"] = threshold;
-  document["max_mismatched_pixels"] = maxMismatchedPixels;
-
-  if (expected->width != actual->width || expected->height != actual->height ||
-      expected->strideInPixels != actual->strideInPixels) {
-    document["passed"] = false;
-    document["reason"] = "dimension-mismatch";
-    document["expected"] = {expected->width, expected->height};
-    document["actual"] = {actual->width, actual->height};
-    std::cout << document.dump() << "\n";
-    return 0;
+  const auto& reference = *expected.image;
+  const auto& rendered = *actual.image;
+  const auto comparison = suite::CompareImages(
+      {reference.width, reference.height, reference.strideInPixels, reference.data},
+      {rendered.width, rendered.height, rendered.strideInPixels, rendered.data},
+      {threshold, maxMismatchedPixels, includeAntiAliasing});
+  if (!comparison.error.empty() && comparison.error != "dimension-mismatch") {
+    return emitInfrastructureError(comparison.error);
   }
-
-  std::vector<uint8_t> diff(expected->data.size());
-  pixelmatch::Options options;
-  options.threshold = threshold;
-  options.includeAA = includeAntiAliasing;
-  const int mismatchedPixels =
-      pixelmatch::pixelmatch(expected->data, actual->data, diff, expected->width, expected->height,
-                             expected->strideInPixels, options);
-
-  document["mismatched_pixels"] = mismatchedPixels;
-  document["passed"] = mismatchedPixels <= maxMismatchedPixels;
+  nlohmann::json document = {{"status", "ok"},
+                             {"threshold", threshold},
+                             {"max_mismatched_pixels", maxMismatchedPixels},
+                             {"passed", comparison.passed}};
+  if (comparison.error == "dimension-mismatch") {
+    document["reason"] = comparison.error;
+    document["expected"] = {reference.width, reference.height};
+    document["actual"] = {rendered.width, rendered.height};
+  } else {
+    document["mismatched_pixels"] = *comparison.mismatchedPixels;
+  }
   std::cout << document.dump() << "\n";
   return 0;
 }

@@ -14,16 +14,22 @@ import re
 from dataclasses import dataclass
 from typing import Optional
 
+from triage_evidence import bounded_text
+
 
 @dataclass
 class TestResult:
-    """Represents a single test result."""
+    """One unverified log observation; repeated IDs retain separate iteration results."""
     test_name: str
-    status: str  # "PASSED", "FAILED", "SKIPPED"
+    status: str  # "PASSED", "FAILED", "SKIPPED", "INCOMPLETE"
     pixel_diff: Optional[int] = None
     # Category directory in the new layout (e.g. "text/textPath",
     # "painting/fill"). Replaces the old category_prefix field.
     category: Optional[str] = None
+    test_id: Optional[str] = None
+    svg_path: Optional[str] = None
+    raw_output: str = ""
+    iteration: Optional[int] = None  # Producer banner number; absent for nonrepeat logs.
 
 
 @dataclass
@@ -33,7 +39,11 @@ class TestSummary:
     passed: int
     failed: int
     skipped: int
-    completion_rate: float  # 0.0 to 1.0
+    completion_rate: float  # Observed passing fraction, not proof of a complete run.
+    incomplete: int = 0
+    run_complete: bool = False
+    completed_iterations: int = 0
+    expected_iterations: Optional[int] = None  # Caller expectation, not producer evidence.
 
 
 @dataclass
@@ -46,6 +56,7 @@ class CategoryReport:
     skipped: int
     completion_rate: float
     test_results: list[TestResult]
+    incomplete: int = 0
 
 
 def extract_category_from_path(svg_path: str) -> Optional[str]:
@@ -91,148 +102,212 @@ def extract_category_from_path(svg_path: str) -> Optional[str]:
     return category or None
 
 
-def parse_test_output(test_output: str) -> tuple[list[TestResult], TestSummary]:
-    """
-    Parse bazel test output to extract test results.
-
-    Handles the current GoogleTest format used by the resvg test suite:
-
-        [ RUN      ] TextTextPath/ImageComparisonTestFixture.ResvgTest/simple_case
-        [  COMPARE ] /.../tests/text/textPath/simple-case.svg [TinySkia]: ...
-        [       OK ] TextTextPath/ImageComparisonTestFixture.ResvgTest/simple_case
-        [  FAILED  ] TextTextPath/ImageComparisonTestFixture.ResvgTest/x, where GetParam() = /.../tests/text/textPath/x.svg
-
-    The SVG filename (and therefore category) is extracted from the COMPARE
-    line or from the ``where GetParam() = <path>`` suffix on the summary
-    FAILED line — not from the mangled test ID, which has ``_`` swapped for
-    ``/`` / ``-`` / ``=`` and is not round-trippable.
-
-    Args:
-        test_output: Complete output from 'bazel test' command
-
-    Returns:
-        Tuple of (test_results, summary)
-    """
-    results = []
-    current_status: Optional[str] = None
-    current_diff: Optional[int] = None
-    current_svg_path: Optional[str] = None
-    current_test_id: Optional[str] = None
-    seen: set[tuple[str, str]] = set()  # (key, status) to dedupe summary lines
-
-    def flush() -> None:
-        """Emit a TestResult for the in-flight test, then reset state.
-
-        Prefers the SVG path (rich: filename + category) but falls back to
-        the GoogleTest test ID (e.g. ``Suite/Fixture.ResvgTest/param``) when
-        no path was emitted — common for tests that hit ``GTEST_SKIP()``
-        before the fixture prints its ``[ COMPARE ]`` line. Without the
-        fallback, every runtime-skipped test was being silently dropped.
-        """
-        nonlocal current_status, current_diff, current_svg_path, current_test_id
-        if current_status:
-            key: Optional[str] = None
-            test_name: Optional[str] = None
-            category: Optional[str] = None
-            if current_svg_path:
-                test_name = current_svg_path.rsplit("/", 1)[-1]
-                category = extract_category_from_path(current_svg_path)
-                key = current_svg_path
-            elif current_test_id:
-                # Best-effort recovery — we can't reverse the GoogleTest
-                # name sanitization to recover the SVG filename, but we
-                # can keep the record so callers see accurate skip counts
-                # and the test ID for triage cross-reference.
-                test_name = current_test_id
-                key = current_test_id
-            if key is not None and (key, current_status) not in seen:
-                seen.add((key, current_status))
-                results.append(TestResult(
-                    test_name=test_name,
-                    status=current_status,
-                    pixel_diff=current_diff,
-                    category=category,
-                ))
-        current_status = None
-        current_diff = None
-        current_svg_path = None
-        current_test_id = None
-
-    for line in test_output.split('\n'):
-        # [ RUN ] Suite/Fixture.TestName/param_id — starts a new test.
-        run_match = re.search(r'\[\s*RUN\s*\].*ResvgTest/(\S+)', line)
-        if run_match:
-            flush()
-            current_test_id = run_match.group(1)
-            continue
-
-        # [  COMPARE ] /absolute/path/to/foo.svg [Backend]: ...
-        # This is where we learn the actual SVG filename + category.
-        compare_match = re.search(
-            r'\[\s*COMPARE\s*\]\s+(\S+\.svg)', line)
-        if compare_match:
-            current_svg_path = compare_match.group(1)
-            # Pixel diff, if present on the same line.
-            diff_match = re.search(r'(\d+)\s+pixels?\s+differ', line)
-            if diff_match:
-                current_diff = int(diff_match.group(1))
-            continue
-
-        # Result lines: [       OK ], [  FAILED  ], [  SKIPPED ].
-        # Both FAILED and SKIPPED summary lines may carry the SVG path
-        # via ``where GetParam() = /x``; check for it before flushing
-        # so callers see the correct path even when the in-test
-        # [ COMPARE ] line was never emitted (e.g. GTEST_SKIP() fires
-        # before the fixture body runs).
-        if re.search(r'\[\s*OK\s*\]', line):
-            current_status = "PASSED"
-            flush()
-            continue
-        if re.search(r'\[\s*FAILED\s*\]', line):
-            where_match = re.search(
-                r'where\s+GetParam\(\)\s*=\s*(\S+\.svg)', line)
-            if where_match:
-                current_svg_path = where_match.group(1)
-            current_status = "FAILED"
-            flush()
-            continue
-        if re.search(r'\[\s*SKIPPED\s*\]', line):
-            where_match = re.search(
-                r'where\s+GetParam\(\)\s*=\s*(\S+\.svg)', line)
-            if where_match:
-                current_svg_path = where_match.group(1)
-            # Pull the test ID off the SKIPPED line if we don't already
-            # have one — the summary block at end-of-output emits one
-            # SKIPPED line per test without a preceding [ RUN ].
-            if current_test_id is None:
-                id_match = re.search(r'ResvgTest/(\S+)', line)
-                if id_match:
-                    current_test_id = id_match.group(1)
-            current_status = "SKIPPED"
-            flush()
-            continue
-        # GTest also emits a bare "Skipped" message on disabled tests:
-        if current_test_id and "DISABLED_" in line:
-            current_status = "SKIPPED"
-            flush()
-
-    # Any trailing in-flight entry.
-    flush()
-
-    total = len(results)
-    passed = sum(1 for r in results if r.status == "PASSED")
-    failed = sum(1 for r in results if r.status == "FAILED")
-    skipped = sum(1 for r in results if r.status == "SKIPPED")
-    completion_rate = passed / total if total > 0 else 0.0
-
-    summary = TestSummary(
-        total_tests=total,
-        passed=passed,
-        failed=failed,
-        skipped=skipped,
-        completion_rate=completion_rate,
+def _result_record(test_id, status, path, diff, raw_output, iteration=None) -> TestResult:
+    return TestResult(
+        test_name=path.rsplit("/", 1)[-1] if path else test_id,
+        status=status,
+        pixel_diff=diff,
+        category=extract_category_from_path(path) if path else None,
+        test_id=test_id,
+        svg_path=path,
+        raw_output=raw_output,
+        iteration=iteration,
     )
-    return results, summary
+
+
+def _enrich_summary(result: TestResult, path: Optional[str], line: str) -> None:
+    if path and result.svg_path is None:
+        result.svg_path = path
+        result.test_name = path.rsplit("/", 1)[-1]
+        result.category = extract_category_from_path(path)
+    result.raw_output += "\n" + line
+
+
+def _comparator_record(line: str) -> Optional[tuple[str, str]]:
+    """Separate the fixed record header and final backend marker from the path."""
+    header = re.match(r"^[ \t]*\[[ \t]*COMPARE[ \t]*\][ \t]+", line)
+    if not header:
+        return None
+    contents = line[header.end():].rstrip(" \t")
+    path, marker, record = contents.rpartition(" [")
+    backend, separator, payload = record.partition("]:")
+    if (marker and separator and path.endswith(".svg") and backend
+            and not any(char in backend for char in "[]")):
+        return path, payload.lstrip(" \t")
+    if not marker and contents.endswith(".svg"):
+        return contents, ""
+    return None
+
+
+class _OutputParser:
+    """Keep the active test separate from completed records and summary repeats."""
+
+    def __init__(self, expected_iterations: Optional[int]):
+        self.expected_iterations = expected_iterations
+        self.iteration: Optional[int] = None
+        self.iteration_start = 0
+        self.header_count: Optional[int] = None
+        self.completed_iterations = 0
+        self.boundaries_valid = True
+        self.results: list[TestResult] = []
+        self.latest: dict[tuple[str, str], TestResult] = {}
+        self.terminal_count: Optional[int] = None
+        self.reset_active()
+
+    def reset_active(self) -> None:
+        self.current_id: Optional[str] = None
+        self.pending: list[str] = []
+        self.current_path: Optional[str] = None
+        self.current_diff: Optional[int] = None
+
+    def retain_incomplete(self) -> None:
+        if self.current_id is not None:
+            self.results.append(_result_record(
+                self.current_id, "INCOMPLETE", self.current_path, self.current_diff,
+                "\n".join(self.pending), self.iteration,
+            ))
+
+    def start(self, test_id: str, line: str) -> None:
+        self.retain_incomplete()
+        self.reset_active()
+        if self.terminal_count is not None:
+            self.boundaries_valid = False
+        self.current_id = test_id
+        self.pending = [line]
+
+    def observe(self, line: str) -> None:
+        self.pending.append(line)
+        compare = _comparator_record(line)
+        if compare is None:
+            return
+        self.current_path, payload = compare
+        metric = re.match(
+            r"(?:(?:FAIL|PASS)[ \t]+\()?([0-9]{1,10})(?![0-9])"
+            r"[ \t]+pixels?[ \t]+differ(?:ent)?\b", payload
+        )
+        self.current_diff = int(metric.group(1)) if metric else None
+
+    def finish_test(self, test_id: str, status: str, line: str) -> None:
+        is_active = self.current_id == test_id
+        path = self.current_path if is_active else None
+        where = re.search(r"where\s+GetParam\(\)\s*=\s*(.+?\.svg)(?:$|[,\s])", line)
+        if where:
+            path = where.group(1)
+        previous = self.latest.get((test_id, status))
+        if previous is not None and not is_active:
+            _enrich_summary(previous, path, line)
+            return
+        result = _result_record(
+            test_id, status, path, self.current_diff if is_active else None,
+            "\n".join(self.pending) if is_active else line, self.iteration,
+        )
+        self.results.append(result)
+        self.latest[(test_id, status)] = result
+        self.reset_active()
+
+    def iteration_complete(self) -> bool:
+        records = self.results[self.iteration_start:]
+        return (self.current_id is None and self.terminal_count == len(records)
+                and (self.header_count is None or self.header_count == len(records))
+                and all(item.status != "INCOMPLETE" for item in records))
+
+    def begin_iteration(self, number: int) -> None:
+        if self.iteration is None:
+            self.boundaries_valid &= (number == 1 and not self.results
+                                      and self.header_count is None and self.terminal_count is None)
+        else:
+            complete = self.iteration_complete() and self.header_count is not None
+            self.completed_iterations += int(complete)
+            self.boundaries_valid &= complete and number == self.iteration + 1
+        self.iteration = number
+        self.iteration_start = len(self.results)
+        self.header_count = None
+        self.terminal_count = None
+        self.latest.clear()
+
+    def observe_boundary(self, line: str) -> bool:
+        # Test diagnostics cannot start another iteration while a case is active.
+        if self.current_id is not None:
+            return False
+        repeat = re.fullmatch(r"Repeating all tests \(iteration ([0-9]{1,10})\) \. \. \.", line)
+        if repeat:
+            self.begin_iteration(int(repeat.group(1)))
+            return True
+        header = re.fullmatch(
+            r"\[={10}\] Running ([0-9]{1,10}) tests? from [0-9]{1,10} test suites?\.", line
+        )
+        if header:
+            self.boundaries_valid &= self.header_count is None and self.terminal_count is None
+            self.header_count = int(header.group(1))
+            return True
+        footer = re.fullmatch(
+            r"\[={10}\] ([0-9]{1,10}) tests? from [0-9]{1,10} test suites? ran\."
+            r"(?: \([0-9]+ ms total\))?", line
+        )
+        if footer:
+            self.boundaries_valid &= self.terminal_count is None
+            self.terminal_count = int(footer.group(1))
+            return True
+        return False
+
+    def consume(self, line: str) -> None:
+        if self.observe_boundary(line):
+            return
+        run = re.match(r"^\[\s*RUN\s*\]\s+(\S+)", line)
+        if run:
+            self.start(run.group(1), line)
+            return
+        if self.current_id:
+            self.observe(line)
+        terminal = re.match(r"^\[\s*(OK|FAILED|SKIPPED)\s*\]\s+(\S+)", line)
+        if terminal and "." in terminal.group(2):
+            statuses = {"OK": "PASSED", "FAILED": "FAILED", "SKIPPED": "SKIPPED"}
+            self.finish_test(terminal.group(2).rstrip(","), statuses[terminal.group(1)], line)
+
+    def summary(self) -> TestSummary:
+        total = len(self.results)
+        passed = sum(item.status == "PASSED" for item in self.results)
+        failed = sum(item.status == "FAILED" for item in self.results)
+        skipped = sum(item.status == "SKIPPED" for item in self.results)
+        incomplete = sum(item.status == "INCOMPLETE" for item in self.results)
+        complete = self.iteration_complete()
+        if self.iteration is not None:
+            complete &= self.header_count is not None
+        completed_iterations = self.completed_iterations + int(complete)
+        expected = self.expected_iterations
+        if expected is None and self.iteration is None:
+            expected = 1
+        return TestSummary(
+            total, passed, failed, skipped, passed / total if total else 0.0,
+            incomplete=incomplete,
+            run_complete=(self.boundaries_valid and complete and incomplete == 0
+                          and completed_iterations == expected),
+            completed_iterations=completed_iterations,
+            expected_iterations=self.expected_iterations,
+        )
+
+
+def parse_test_output(
+    test_output: str, *, expected_iterations: Optional[int] = None,
+) -> tuple[list[TestResult], TestSummary]:
+    """Retain quiet failures, incomplete cases, comparator metrics and raw output.
+
+    Recognized log records are observations, not authenticated runner evidence.
+    Full test IDs identify records. Summary repeats enrich existing records; SVG
+    paths come only from COMPARE or GetParam, never from reversing sanitized IDs.
+    Repeated logs require a caller-supplied positive expected iteration count to
+    establish structural completeness; banners never identify a finite run limit.
+    This does not establish process success or native run-provenance acceptance.
+    """
+    bounded_text(test_output)
+    if expected_iterations is not None and (
+            type(expected_iterations) is not int or not 1 <= expected_iterations <= 1_000_000):
+        raise ValueError("expected_iterations must be an integer between 1 and 1000000")
+    parser = _OutputParser(expected_iterations)
+    for line in test_output.splitlines():
+        parser.consume(line)
+    parser.retain_incomplete()
+    return parser.results, parser.summary()
 
 
 def parse_skip_file(skip_file_content: str) -> dict[str, str]:
@@ -273,56 +348,27 @@ def parse_skip_file(skip_file_content: str) -> dict[str, str]:
     return skip_map
 
 
+def _category_report(category: str, tests: list[TestResult]) -> CategoryReport:
+    total = len(tests)
+    passing = sum(item.status == "PASSED" for item in tests)
+    return CategoryReport(
+        category=category,
+        total_tests=total,
+        passing=passing,
+        failing=sum(item.status == "FAILED" for item in tests),
+        skipped=sum(item.status == "SKIPPED" for item in tests),
+        completion_rate=passing / total if total else 0.0,
+        test_results=tests,
+        incomplete=sum(item.status == "INCOMPLETE" for item in tests),
+    )
+
+
 def group_by_category(results: list[TestResult]) -> dict[str, CategoryReport]:
-    """
-    Group test results by category directory (e.g. ``text/textPath``).
-
-    Args:
-        results: List of test results
-
-    Returns:
-        Dictionary mapping category directory -> CategoryReport
-    """
-    categories = {}
-
+    """Group observed results by category, preserving incomplete cases in totals."""
+    categories: dict[str, list[TestResult]] = {}
     for result in results:
-        category = result.category or "other"
-
-        if category not in categories:
-            categories[category] = {
-                "tests": [],
-                "passed": 0,
-                "failed": 0,
-                "skipped": 0,
-            }
-
-        categories[category]["tests"].append(result)
-
-        if result.status == "PASSED":
-            categories[category]["passed"] += 1
-        elif result.status == "FAILED":
-            categories[category]["failed"] += 1
-        elif result.status == "SKIPPED":
-            categories[category]["skipped"] += 1
-
-    # Convert to CategoryReport objects
-    reports = {}
-    for category, data in categories.items():
-        total = len(data["tests"])
-        passing = data["passed"]
-        completion_rate = passing / total if total > 0 else 0.0
-
-        reports[category] = CategoryReport(
-            category=category,
-            total_tests=total,
-            passing=passing,
-            failing=data["failed"],
-            skipped=data["skipped"],
-            completion_rate=completion_rate,
-            test_results=data["tests"]
-        )
-
-    return reports
+        categories.setdefault(result.category or "other", []).append(result)
+    return {name: _category_report(name, tests) for name, tests in categories.items()}
 
 
 def identify_missing_features(skip_map: dict[str, str], category: Optional[str] = None) -> dict[str, list[str]]:

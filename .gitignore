@@ -51,6 +51,7 @@ imgui.ini
 # vendored third-party CMake files are allowed.
 **/CMakeLists.txt
 !examples/**/CMakeLists.txt
+!tools/svg_suite/CMakeLists.txt
 !third_party/entt/**/CMakeLists.txt
 !third_party/tiny-skia-cpp/CMakeLists.txt
 third_party/public-sans/embed_resources/

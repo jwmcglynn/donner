@@ -332,6 +332,13 @@ UPDATE_GOLDEN_IMAGES_DIR=$(bazel info workspace) bazel run //donner/svg/renderer
 
 ## Working with Resvg Test Suite
 
+The reusable native C++ GoogleTest/pixelmatch harness is documented in
+[`tools/svg_suite/README.md`](tools/svg_suite/README.md). Its default bundle includes the pinned
+resvg corpus and Donner extension cases. Follow its scoped `AGENTS.md` for autonomous triage: keep
+measured outcomes and source hashes, distinguish incomplete execution from failure, and do not infer
+causes or propose tolerances from pixel counts alone. The optional MCP helper presents evidence and
+unverified hypotheses; it never authorizes changing references, thresholds or skips.
+
 The resvg test suite (`//donner/svg/renderer/tests:resvg_test_suite`) provides comprehensive SVG validation.
 
 ### Test-Driven Development
