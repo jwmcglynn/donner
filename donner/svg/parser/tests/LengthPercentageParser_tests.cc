@@ -71,6 +71,17 @@ TEST(LengthPercentageParserTest, UnitlessZero) {
               ParseResultIs(Lengthd(0.0, Lengthd::Unit::None)));
 }
 
+TEST(LengthPercentageParserTest, UnitlessZeroSpellings) {
+  for (const std::string_view value : {"0", "+0", "-0", "0.0", ".0", "0e0"}) {
+    SCOPED_TRACE(value);
+    const css::ComponentValue component = ParseComponentValue(value);
+    EXPECT_THAT(ParseLengthPercentage(component, kNoUserUnits),
+                ParseResultIs(Lengthd(0, Lengthd::Unit::None)));
+    EXPECT_THAT(ParseLengthPercentage(component, kAllowUserUnits),
+                ParseResultIs(Lengthd(0, Lengthd::Unit::None)));
+  }
+}
+
 TEST(LengthPercentageParserTest, UserUnits) {
   css::ComponentValue component("10"_cv);
   EXPECT_THAT(ParseLengthPercentage(component, kAllowUserUnits),

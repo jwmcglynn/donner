@@ -13,6 +13,7 @@ donner_cc_library(
         "//donner/svg:__subpackages__",
     ],
     deps = [
+        ":node_lifetime_component",
         "//donner/base",
         "//donner/svg:svg_document_handle",
     ],

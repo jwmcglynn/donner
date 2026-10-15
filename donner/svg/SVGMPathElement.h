@@ -20,7 +20,7 @@ namespace donner::svg {
 
 /// DOM wrapper for the \ref xml_mpath element.
 class SVGMPathElement : public SVGElement {
-  friend class parser::SVGParserImpl;
+  friend class details::ElementFactory;
 
 protected:
   /// Wrap an existing element.

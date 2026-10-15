@@ -9,6 +9,8 @@ cc_test(
         "@donner//donner/editor/tests:BitmapCompareCommon.h",
         "@donner//donner/editor/tests:BitmapGoldenCompare.h",
         "@donner//donner/editor/tests:BitmapToBitmapCompare.cc",
+        "@donner//tools/svg_suite:ImageCompare.cc",
+        "@donner//tools/svg_suite:ImageCompare.h",
     ],
     deps = [
         "@com_google_gtest//:gtest_main",

@@ -65,7 +65,7 @@ namespace donner::svg {
  * DOM object for a \ref xml_animateTransform element.
  */
 class SVGAnimateTransformElement : public SVGElement {
-  friend class parser::SVGParserImpl;
+  friend class details::ElementFactory;
 
 protected:
   /// Create an SVGAnimateTransformElement wrapper from an entity.

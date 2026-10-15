@@ -165,7 +165,7 @@ namespace donner::svg {
  * `flood-opacity`. This primitive does not use any input image.
  */
 class SVGFEFloodElement : public SVGFilterPrimitiveStandardAttributes {
-  friend class parser::SVGParserImpl;
+  friend class details::ElementFactory;
 
 protected:
   /// Create an SVGFEFloodElement wrapper from an entity.

@@ -230,7 +230,10 @@ py_test(
     size = "small",
     srcs = ["test_with_exclusions_tests.py"],
     data = ["test_with_exclusions.py"],
-    deps = ["@rules_python//python/runfiles"],
+    deps = [
+        "//tools:test_timing",
+        "@rules_python//python/runfiles",
+    ],
 )
 
 # Explicit comparisons reuse the production browser tests with unchanged test settings.

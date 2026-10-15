@@ -93,7 +93,7 @@ namespace donner::svg {
  * ```
  */
 class SVGFilterElement : public SVGElement {
-  friend class parser::SVGParserImpl;
+  friend class details::ElementFactory;
 
 protected:
   /// Create an SVGFilterElement wrapper from an entity.

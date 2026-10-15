@@ -61,8 +61,8 @@ donner_cc_library(
         "//donner/svg/renderer:renderer_image_io",
         "//donner/svg/renderer:renderer_interface",
         "//donner/svg/renderer/tests:renderer_image_test_utils",
+        "//tools/svg_suite:image_compare",
         "@com_google_gtest//:gtest",
-        "@pixelmatch-cpp17",
     ],
 )
 
@@ -1015,6 +1015,7 @@ donner_cc_test(
     name = "editor_sync_tests",
     srcs = ["EditorSync_tests.cc"],
     deps = [
+        ":bitmap_golden_compare",
         "//donner/editor:attribute_writeback",
         "//donner/editor:editor_app",
         "//donner/editor:select_tool",
@@ -1024,6 +1025,8 @@ donner_cc_test(
         "//donner/editor:viewport_svg_export",
         "//donner/svg",
         "//donner/svg/parser",
+        "//donner/svg/renderer",
+        "//donner/svg/renderer/tests:rgba_test_matchers",
         "@com_google_gtest//:gtest_main",
     ],
 )

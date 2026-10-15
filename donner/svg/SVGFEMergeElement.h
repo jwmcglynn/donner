@@ -160,7 +160,7 @@ namespace donner::svg {
  * DOM object for a \ref xml_feMerge element.
  */
 class SVGFEMergeElement : public SVGFilterPrimitiveStandardAttributes {
-  friend class parser::SVGParserImpl;
+  friend class details::ElementFactory;
 
 protected:
   /// Create an SVGFEMergeElement wrapper from an entity.

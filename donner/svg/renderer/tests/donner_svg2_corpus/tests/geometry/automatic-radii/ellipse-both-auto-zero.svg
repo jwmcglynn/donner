@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100" viewBox="0 0 100 100">
+  <title>Explicit automatic ellipse radii</title>
+  <desc>SVG2 geometry rx/ry auto resolve to zero when both axes have no length. https://svgwg.org/svg2-draft/geometry.html#RX https://svgwg.org/svg2-draft/shapes.html#EllipseElement</desc>
+  <rect x="20" y="20" width="40" height="40" fill="red"/><ellipse cx="80" cy="80" fill="blue" rx="auto" ry="auto"/>
+</svg>

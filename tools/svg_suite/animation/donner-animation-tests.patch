@@ -1,0 +1,576 @@
+diff --git a/donner/editor/tests/BUILD.bazel b/donner/editor/tests/BUILD.bazel
+index 0a6a0f52..b299b520 100644
+--- a/donner/editor/tests/BUILD.bazel
++++ b/donner/editor/tests/BUILD.bazel
+@@ -1721,3 +1721,22 @@ donner_cc_test(
+         "@com_google_gtest//:gtest_main",
+     ],
+ )
++
++donner_cc_test(
++    name = "svg_suite_animation_tests",
++    srcs = ["SvgSuiteAnimation_tests.cc"],
++    data = glob(["svg_suite_animation/*"]),
++    opens_gpu_device = True,
++    variants = ["geode"],
++    deps = [
++        ":bitmap_golden_compare",
++        ":frame_presentation_test_access",
++        "//donner/base:base_test_utils",
++        "//donner/editor:captured_presentation",
++        "//donner/editor:frame_presentation",
++        "//donner/svg:svg",
++        "//donner/svg/parser:parser",
++        "//donner/svg/renderer",
++        "@com_google_gtest//:gtest_main",
++    ],
++)
+diff --git a/donner/editor/tests/SvgSuiteAnimation_tests.cc b/donner/editor/tests/SvgSuiteAnimation_tests.cc
+new file mode 100644
+index 00000000..35bce4d6
+--- /dev/null
++++ b/donner/editor/tests/SvgSuiteAnimation_tests.cc
+@@ -0,0 +1,197 @@
++#include <gmock/gmock.h>
++#include <gtest/gtest.h>
++
++#include <cstdlib>
++#include <limits>
++#include <optional>
++#include <string>
++
++#include "donner/base/tests/ParseResultTestUtils.h"
++#include "donner/base/tests/RunfileGate.h"
++#include "donner/editor/FramePresentation.h"
++#include "donner/editor/tests/BitmapGoldenCompare.h"
++#include "donner/editor/tests/FramePresentationTestAccess.h"
++#include "donner/svg/SVGRectElement.h"
++#include "donner/svg/parser/SVGParser.h"
++#include "donner/svg/renderer/Renderer.h"
++
++namespace donner::editor {
++namespace {
++
++using testing::AllOf;
++using testing::ElementsAre;
++using testing::Field;
++using testing::IsEmpty;
++using testing::IsFalse;
++using testing::IsTrue;
++using testing::Ne;
++using testing::Optional;
++using Event = svg::SVGAnimationEvent;
++
++constexpr std::string_view kFixtureRoot = "donner/editor/tests/svg_suite_animation/";
++
++class SvgSuiteAnimation : public testing::Test {
++protected:
++  void load(std::string_view fixture,
++            svg::ProcessingMode mode = svg::ProcessingMode::DynamicInteractive) {
++    const auto file = ::donner::tests::ReadRequiredRunfile(std::string(kFixtureRoot) +
++                                                           std::string(fixture) + ".svg");
++    DONNER_REQUIRE_RUNFILE(file);
++    svg::parser::SVGParser::Options options;
++    options.enableExperimental = true;
++    svg::SVGDocument::Settings settings;
++    settings.processingMode = mode;
++    ParseWarningSink warnings;
++    auto parsed =
++        svg::parser::SVGParser::ParseSVG(file.contents, warnings, options, std::move(settings));
++    ASSERT_THAT(parsed, NoParseError());
++    document_ = std::move(parsed.result());
++    source_ = document_->source();
++  }
++
++  void compare(std::string_view reference) {
++    // These independently derived oracles must never enter the helper's update mode.
++    ASSERT_EQ(std::getenv("UPDATE_GOLDEN_IMAGES_DIR"), nullptr);
++    const auto golden = ::donner::tests::ResolveRequiredRunfile(std::string(kFixtureRoot) +
++                                                                std::string(reference) + ".png");
++    DONNER_REQUIRE_RUNFILE(golden);
++    svg::Renderer renderer;
++    renderer.draw(*document_);
++    const auto bitmap = renderer.takeSnapshot();
++    tests::CompareBitmapToGolden(bitmap, golden.path, reference, tests::PixelmatchIdentityParams());
++    EXPECT_EQ(document_->source(), source_);
++  }
++
++  void sample(double time, std::string_view reference) {
++    document_->setTime(time);
++    compare(reference);
++    EXPECT_DOUBLE_EQ(document_->currentTime(), time);
++  }
++
++  std::shared_ptr<const FramePresentation> captureFrame(std::uint64_t id) {
++    const auto access = document_->writeAccess();
++    const PresentationIdentity identity{.captureId = id, .documentGeneration = 1};
++    const auto capture = CapturedPresentation::Capture(
++        *document_, identity, {}, {}, {}, {}, std::nullopt, std::nullopt, std::nullopt, true);
++    FramePresentationInput input;
++    input.frameId = id;
++    input.documentIdentity = identity;
++    input.viewport.documentViewBox = Box2d::FromXYWH(0, 0, 16, 16);
++    input.viewport.paneSize = Vector2d(32, 32);
++    input.viewport.zoom = 2;
++    input.paneClipRect = Box2d::FromXYWH(0, 0, 32, 32);
++    const auto result =
++        FramePresentation::Build(FramePresentationTestAccess::resources(capture, {}), input);
++    EXPECT_EQ(result.failure, FramePresentationFailure::None);
++    return result.frame;
++  }
++
++  std::optional<svg::SVGDocument> document_;
++  std::string source_;
++};
++
++TEST_F(SvgSuiteAnimation, AbsoluteTimeInterpolatesFreezesRemovesAndResets) {
++  ASSERT_NO_FATAL_FAILURE(load("absolute-time"));
++  const auto frozen = document_->querySelector("#freeze");
++  const auto removed = document_->querySelector("#remove");
++  ASSERT_THAT(frozen, Ne(std::nullopt));
++  ASSERT_THAT(removed, Ne(std::nullopt));
++  sample(0, "absolute-time");
++  sample(1, "absolute-mid");
++  EXPECT_DOUBLE_EQ(frozen->cast<svg::SVGRectElement>().computedX().value, 6);
++  EXPECT_DOUBLE_EQ(removed->cast<svg::SVGRectElement>().computedX().value, 6);
++  sample(2, "absolute-end");
++  sample(3, "absolute-end");
++  EXPECT_DOUBLE_EQ(frozen->cast<svg::SVGRectElement>().computedX().value, 10);
++  EXPECT_DOUBLE_EQ(removed->cast<svg::SVGRectElement>().computedX().value, 2);
++  sample(0.5, "absolute-seek");
++  document_->restartAnimations();
++  EXPECT_DOUBLE_EQ(document_->currentTime(), 0);
++  compare("absolute-time");
++  EXPECT_THAT(document_->querySelector("#freeze"), Optional(*frozen));
++}
++
++TEST_F(SvgSuiteAnimation, TargetClickHasBoundedLifecycleAndFreshRestartNeverSession) {
++  ASSERT_NO_FATAL_FAILURE(load("click-start"));
++  const auto trigger = document_->querySelector("#trigger");
++  const auto response = document_->querySelector("#response");
++  const auto animation = document_->querySelector("#motion");
++  ASSERT_THAT(trigger, Ne(std::nullopt));
++  ASSERT_THAT(response, Ne(std::nullopt));
++  ASSERT_THAT(animation, Ne(std::nullopt));
++  sample(5, "click-start");
++  EXPECT_THAT(document_->animationEvents(0, 5).events, IsEmpty());
++  EXPECT_THAT(document_->dispatchMouseEvent(svg::EventType::Click, *response), IsFalse());
++  compare("click-start");
++  EXPECT_THAT(document_->dispatchMouseEvent(svg::EventType::Click, *trigger), IsTrue());
++  sample(6, "click-mid");
++  const auto batch = document_->animationEvents(4, 9);
++  EXPECT_THAT(batch.complete, IsTrue());
++  EXPECT_THAT(batch.events,
++              ElementsAre(AllOf(Field(&Event::animation, *animation),
++                                Field(&Event::type, Event::Type::Begin), Field(&Event::time, 5)),
++                          AllOf(Field(&Event::type, Event::Type::Repeat),
++                                Field(&Event::repeatIndex, 1), Field(&Event::time, 7)),
++                          AllOf(Field(&Event::type, Event::Type::End), Field(&Event::time, 9))));
++  EXPECT_DOUBLE_EQ(document_->currentTime(), 6);
++  EXPECT_THAT(document_->animationEvents(5, 7).events,
++              ElementsAre(AllOf(Field(&Event::type, Event::Type::Repeat), Field(&Event::time, 7))));
++  sample(9, "click-end");
++  document_->setTime(10);
++  document_->dispatchMouseEvent(svg::EventType::Click, *trigger);
++  sample(11, "click-end");
++  EXPECT_THAT(document_->animationEvents(9, 12).events, IsEmpty());
++  for (const double end : {10.0, std::numeric_limits<double>::infinity()}) {
++    const auto invalid = document_->animationEvents(11, end);
++    EXPECT_THAT(invalid.complete, IsFalse());
++    EXPECT_THAT(invalid.events, IsEmpty());
++    EXPECT_DOUBLE_EQ(document_->currentTime(), 11);
++  }
++  document_->restartAnimations();
++  compare("click-start");
++  EXPECT_THAT(document_->animationEvents(-1, 1).events, IsEmpty());
++  EXPECT_THAT(document_->dispatchMouseEvent(svg::EventType::Click, *trigger), IsTrue());
++  sample(1, "click-mid");
++  ASSERT_NO_FATAL_FAILURE(load("click-start", svg::ProcessingMode::SecureAnimated));
++  const auto secureTrigger = document_->querySelector("#trigger");
++  ASSERT_THAT(secureTrigger, Ne(std::nullopt));
++  EXPECT_THAT(document_->dispatchMouseEvent(svg::EventType::Click, *secureTrigger), IsFalse());
++  sample(1, "click-start");
++  ASSERT_NO_FATAL_FAILURE(load("lifecycle-bounds"));
++  sample(1, "hover-hit");
++  const auto excessive = document_->animationEvents(-1, 100);
++  EXPECT_THAT(excessive.complete, IsFalse());
++  EXPECT_THAT(excessive.events, IsEmpty());
++  EXPECT_DOUBLE_EQ(document_->currentTime(), 1);
++  compare("hover-hit");
++}
++
++TEST_F(SvgSuiteAnimation, HoverUsesRetainedRenderedGeometryInsteadOfLiveTargetLookup) {
++  ASSERT_NO_FATAL_FAILURE(load("hover-hit"));
++  const auto moving = document_->querySelector("#moving");
++  ASSERT_THAT(moving, Ne(std::nullopt));
++  sample(0, "hover-hit");
++  const auto oldFrame = captureFrame(1);
++  ASSERT_THAT(oldFrame, Ne(nullptr));
++  const Vector2d oldPoint(6, 6);
++  const Vector2d newPoint(22, 6);
++  EXPECT_THAT(oldFrame->pointerTargetAt(oldPoint),
++              Optional(moving->cast<svg::SVGGraphicsElement>()));
++  EXPECT_THAT(oldFrame->pointerTargetAt(newPoint), testing::Eq(std::nullopt));
++  sample(2, "hover-end");
++  const auto newFrame = captureFrame(2);
++  ASSERT_THAT(newFrame, Ne(nullptr));
++  EXPECT_THAT(oldFrame->pointerTargetAt(oldPoint),
++              Optional(moving->cast<svg::SVGGraphicsElement>()));
++  EXPECT_THAT(newFrame->pointerTargetAt(oldPoint), testing::Eq(std::nullopt));
++  const auto target = newFrame->pointerTargetAt(newPoint);
++  ASSERT_THAT(target, Optional(moving->cast<svg::SVGGraphicsElement>()));
++  EXPECT_THAT(document_->dispatchMouseEvent(svg::EventType::MouseOver, *target), IsTrue());
++  compare("hover-active");
++  document_->setTime(3);
++  EXPECT_THAT(document_->dispatchMouseEvent(svg::EventType::MouseOut, *target), IsTrue());
++  compare("hover-end");
++}
++
++}  // namespace
++}  // namespace donner::editor
+diff --git a/donner/editor/tests/svg_suite_animation/README.md b/donner/editor/tests/svg_suite_animation/README.md
+new file mode 100644
+index 00000000..f14f99c0
+--- /dev/null
++++ b/donner/editor/tests/svg_suite_animation/README.md
+@@ -0,0 +1,69 @@
++# Native animation and pointer pilot
++
++Run `bazel test //donner/editor/tests:svg_suite_animation_tests` for the software
++renderer, or `bazel test //donner/editor/tests:svg_suite_animation_tests_geode` for
++Geode. Both use the production Renderer facade, GoogleTest and the existing
++pixelmatch identity comparator (threshold 0, mismatch allowance 0, includeAA true).
++No browser, JavaScript, Python, sleep, or wall clock is used by these tests.
++
++The tests exercise `SVGDocument::setTime`, `restartAnimations`, explicit-target
++`dispatchMouseEvent` and bounded `(from,to]` `animationEvents`. Setting time samples
++on the next render; lifecycle queries neither advance time nor dispatch callbacks.
++The 4,096-event cap and fresh-session restart are Donner API contracts, not SVG
++requirements. SecureAnimated event rejection is checked separately.
++
++The hover case renders the document, captures production hit geometry through
++CapturedPresentation, and queries FramePresentation at a 2x screen transform. The
++old frame must retain its old hit geometry after document time advances. Empty
++resource tiles use the existing geometry test helper: this proves pointer-target
++geometry and event delivery, not GPU presentation, editor mouse-edge synthesis,
++focus-loss cancellation, or stale-document-generation rejection. Those remain
++editor integration coverage obligations. The click case is explicitly target-based
++and does not stand in for pointer hit testing.
++
++## Independently authored references
++
++Every image is 16 by 16 pixels, opaque RGBA8, on white. Each colored shape occupies
++exactly `[x,x+4) * [y,y+4)` with integer coordinates, no strokes or filters. Red is
++(255,0,0,255), blue is (0,0,255,255), white is (255,255,255,255). PNG bytes were
++constructed directly from those rectangles; no Donner render produced a reference.
++Each PNG has a same-stem `.reference.svg` with those static rectangles so a reviewer
++can inspect the oracle independently. Dynamic SVGs also have a same-stem PNG for
++their time-zero scene; `lifecycle-bounds.svg` uses `hover-hit.png` because only the
++query's bounded result changes, not its red pixels.
++
++| Case / checkpoint | Expected rectangle x coordinates |
++| --- | --- |
++| absolute-time, time 0 / restart | red 2, blue 2 |
++| absolute-mid, time 1 | red 6, blue 6 |
++| absolute-end, time 2 and 3 | red 10 (freeze), blue 2 (remove) |
++| absolute-seek, time 0.5 after time 3 | red 4, blue 4 |
++| click-start, no event / wrong target / secure mode | red 2, blue 2 |
++| click-mid, one second after accepted click | red 2, blue 6 |
++| click-end, four seconds after click | red 2, blue 10 |
++| hover-hit, time 0 | red 2 |
++| hover-end, time 2 / after mouseout | red 10 |
++| hover-active, mouseover at time 2 | blue 10 |
++
++Red rectangles are at y=2; blue response rectangles are at y=10. Hover's blue
++rectangle remains at y=2. Linear interpolation is x=2+4t during a two-second
++simple duration. The click occurs at document time 5: begin=5, repeat=7, end=9.
++The query `(5,7]` contains only repeat=7. A later click cannot restart
++`restart="never"` until `restartAnimations()` begins a new Donner session.
++
++Specification sources: [SVG Animations timing](https://svgwg.org/specs/animations/#TimingAttributes),
++[animation values](https://svgwg.org/specs/animations/#AnimationValueAttributes),
++[set](https://svgwg.org/specs/animations/#SetElement), and
++[SVG2 pointer events](https://svgwg.org/svg2-draft/interact.html#PointerEventsProperty).
++The animation draft viewed for authoring is dated 14 September 2025. These links
++justify assertions; they are not a cryptographically pinned audit baseline.
++
++## Failure triage
++
++Read the named checkpoint, exact source fixture, static reference and original-size
++actual/expected/diff images in `TEST_UNDECLARED_OUTPUTS_DIR`. Check semantic failures
++alongside pixels: correct pixels alone cannot establish correct target identity or
++event timing. Keep rejected-event and pre-event checkpoints as negative controls.
++Do not set `UPDATE_GOLDEN_IMAGES_DIR`: the tests fail explicitly if it is present.
++Do not loosen identity, regenerate goldens from Donner output, or skip failures.
++Report engine, harness or oracle findings with evidence and preserve the failed run.
+diff --git a/donner/editor/tests/svg_suite_animation/absolute-end.png b/donner/editor/tests/svg_suite_animation/absolute-end.png
+new file mode 100644
+index 0000000000000000000000000000000000000000..a57b3daeacbca47da6c927da8a6eda7ce400ce09
+GIT binary patch
+literal 94
+zcmeAS@N?(olHy`uVBq!ia0vp^0wB!61|;P_|4#%`s-7;6Ar*6yfA}jVESS&8!?U77
+rMXKTSox~J|J_D&hwh7!CW(*A5f9=V8RK1cJsDZ)L)z4*}Q$iB}1F0FL
+
+literal 0
+HcmV?d00001
+
+diff --git a/donner/editor/tests/svg_suite_animation/absolute-end.reference.svg b/donner/editor/tests/svg_suite_animation/absolute-end.reference.svg
+new file mode 100644
+index 00000000..267d55d8
+--- /dev/null
++++ b/donner/editor/tests/svg_suite_animation/absolute-end.reference.svg
+@@ -0,0 +1,5 @@
++<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
++  <rect width="16" height="16" fill="white"/>
++  <rect x="10" y="2" width="4" height="4" fill="red"/>
++  <rect x="2" y="10" width="4" height="4" fill="blue"/>
++</svg>
+diff --git a/donner/editor/tests/svg_suite_animation/absolute-mid.png b/donner/editor/tests/svg_suite_animation/absolute-mid.png
+new file mode 100644
+index 0000000000000000000000000000000000000000..99bd9d5580f9776ef2d9e22fc245cdea5bb84494
+GIT binary patch
+literal 94
+zcmeAS@N?(olHy`uVBq!ia0vp^0wB!61|;P_|4#%`s-7;6Ar*6yfA}jVESSs4!?U77
+qMan@%;vAcRWZU6e3`vYffvUIv+LOn=?DY$v1_n=8KbLh*2~7a<P#Mnv
+
+literal 0
+HcmV?d00001
+
+diff --git a/donner/editor/tests/svg_suite_animation/absolute-mid.reference.svg b/donner/editor/tests/svg_suite_animation/absolute-mid.reference.svg
+new file mode 100644
+index 00000000..6754c8dd
+--- /dev/null
++++ b/donner/editor/tests/svg_suite_animation/absolute-mid.reference.svg
+@@ -0,0 +1,5 @@
++<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
++  <rect width="16" height="16" fill="white"/>
++  <rect x="6" y="2" width="4" height="4" fill="red"/>
++  <rect x="6" y="10" width="4" height="4" fill="blue"/>
++</svg>
+diff --git a/donner/editor/tests/svg_suite_animation/absolute-seek.png b/donner/editor/tests/svg_suite_animation/absolute-seek.png
+new file mode 100644
+index 0000000000000000000000000000000000000000..9bf8eaf566e6440c1b5d26aef3a04ddec5266c68
+GIT binary patch
+literal 94
+zcmeAS@N?(olHy`uVBq!ia0vp^0wB!61|;P_|4#%`s-7;6Ar*6yfA}jVEZE1$!?U77
+qMan@*qK|EYMBCv@3_*-XfvR`j*^?*B_U|B21B0ilpUXO@geCy-vl&|e
+
+literal 0
+HcmV?d00001
+
+diff --git a/donner/editor/tests/svg_suite_animation/absolute-seek.reference.svg b/donner/editor/tests/svg_suite_animation/absolute-seek.reference.svg
+new file mode 100644
+index 00000000..16fddccc
+--- /dev/null
++++ b/donner/editor/tests/svg_suite_animation/absolute-seek.reference.svg
+@@ -0,0 +1,5 @@
++<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
++  <rect width="16" height="16" fill="white"/>
++  <rect x="4" y="2" width="4" height="4" fill="red"/>
++  <rect x="4" y="10" width="4" height="4" fill="blue"/>
++</svg>
+diff --git a/donner/editor/tests/svg_suite_animation/absolute-time.png b/donner/editor/tests/svg_suite_animation/absolute-time.png
+new file mode 100644
+index 0000000000000000000000000000000000000000..1ec49b69ba4ea28957d8859748824fb8e7562261
+GIT binary patch
+literal 94
+zcmeAS@N?(olHy`uVBq!ia0vp^0wB!61|;P_|4#%`s-7;6Ar*6yfA}jVESSg0!?U77
+qMan@<!jEl&WZU6W3`LAbfvR`!+mqMB%6%57fx*+&&t;ucLK6Vq!x)1A
+
+literal 0
+HcmV?d00001
+
+diff --git a/donner/editor/tests/svg_suite_animation/absolute-time.reference.svg b/donner/editor/tests/svg_suite_animation/absolute-time.reference.svg
+new file mode 100644
+index 00000000..97b2a5e8
+--- /dev/null
++++ b/donner/editor/tests/svg_suite_animation/absolute-time.reference.svg
+@@ -0,0 +1,5 @@
++<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
++  <rect width="16" height="16" fill="white"/>
++  <rect x="2" y="2" width="4" height="4" fill="red"/>
++  <rect x="2" y="10" width="4" height="4" fill="blue"/>
++</svg>
+diff --git a/donner/editor/tests/svg_suite_animation/absolute-time.svg b/donner/editor/tests/svg_suite_animation/absolute-time.svg
+new file mode 100644
+index 00000000..10615819
+--- /dev/null
++++ b/donner/editor/tests/svg_suite_animation/absolute-time.svg
+@@ -0,0 +1,9 @@
++<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
++  <rect width="16" height="16" fill="white" pointer-events="none"/>
++  <rect id="freeze" x="2" y="2" width="4" height="4" fill="red">
++    <animate attributeName="x" from="2" to="10" dur="2s" fill="freeze"/>
++  </rect>
++  <rect id="remove" x="2" y="10" width="4" height="4" fill="blue">
++    <animate attributeName="x" from="2" to="10" dur="2s" fill="remove"/>
++  </rect>
++</svg>
+diff --git a/donner/editor/tests/svg_suite_animation/click-end.png b/donner/editor/tests/svg_suite_animation/click-end.png
+new file mode 100644
+index 0000000000000000000000000000000000000000..02efe2e85c9580aa6b296c0c796a7ad5592cd414
+GIT binary patch
+literal 94
+zcmeAS@N?(olHy`uVBq!ia0vp^0wB!61|;P_|4#%`s-7;6Ar*6yfA}jVESSg0!?U77
+rMan@<!jtU**W-yP41Ud;rVI?*f9=VOeIRoLsDZ)L)z4*}Q$iB}?SUC#
+
+literal 0
+HcmV?d00001
+
+diff --git a/donner/editor/tests/svg_suite_animation/click-end.reference.svg b/donner/editor/tests/svg_suite_animation/click-end.reference.svg
+new file mode 100644
+index 00000000..29524b39
+--- /dev/null
++++ b/donner/editor/tests/svg_suite_animation/click-end.reference.svg
+@@ -0,0 +1,5 @@
++<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
++  <rect width="16" height="16" fill="white"/>
++  <rect x="2" y="2" width="4" height="4" fill="red"/>
++  <rect x="10" y="10" width="4" height="4" fill="blue"/>
++</svg>
+diff --git a/donner/editor/tests/svg_suite_animation/click-mid.png b/donner/editor/tests/svg_suite_animation/click-mid.png
+new file mode 100644
+index 0000000000000000000000000000000000000000..f8f2c12d012726a9bdf0ba135e2e138b1b84ca15
+GIT binary patch
+literal 94
+zcmeAS@N?(olHy`uVBq!ia0vp^0wB!61|;P_|4#%`s-7;6Ar*6yfA}jVESSg0!?U77
+qMan@<;vAcR^s>V@8Il-}0#)z4vnOvE^MVUN4Gf;HelF{r5}E+-rWtSm
+
+literal 0
+HcmV?d00001
+
+diff --git a/donner/editor/tests/svg_suite_animation/click-mid.reference.svg b/donner/editor/tests/svg_suite_animation/click-mid.reference.svg
+new file mode 100644
+index 00000000..ba29a9cf
+--- /dev/null
++++ b/donner/editor/tests/svg_suite_animation/click-mid.reference.svg
+@@ -0,0 +1,5 @@
++<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
++  <rect width="16" height="16" fill="white"/>
++  <rect x="2" y="2" width="4" height="4" fill="red"/>
++  <rect x="6" y="10" width="4" height="4" fill="blue"/>
++</svg>
+diff --git a/donner/editor/tests/svg_suite_animation/click-start.png b/donner/editor/tests/svg_suite_animation/click-start.png
+new file mode 100644
+index 0000000000000000000000000000000000000000..1ec49b69ba4ea28957d8859748824fb8e7562261
+GIT binary patch
+literal 94
+zcmeAS@N?(olHy`uVBq!ia0vp^0wB!61|;P_|4#%`s-7;6Ar*6yfA}jVESSg0!?U77
+qMan@<!jEl&WZU6W3`LAbfvR`!+mqMB%6%57fx*+&&t;ucLK6Vq!x)1A
+
+literal 0
+HcmV?d00001
+
+diff --git a/donner/editor/tests/svg_suite_animation/click-start.reference.svg b/donner/editor/tests/svg_suite_animation/click-start.reference.svg
+new file mode 100644
+index 00000000..97b2a5e8
+--- /dev/null
++++ b/donner/editor/tests/svg_suite_animation/click-start.reference.svg
+@@ -0,0 +1,5 @@
++<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
++  <rect width="16" height="16" fill="white"/>
++  <rect x="2" y="2" width="4" height="4" fill="red"/>
++  <rect x="2" y="10" width="4" height="4" fill="blue"/>
++</svg>
+diff --git a/donner/editor/tests/svg_suite_animation/click-start.svg b/donner/editor/tests/svg_suite_animation/click-start.svg
+new file mode 100644
+index 00000000..3a5b1cb5
+--- /dev/null
++++ b/donner/editor/tests/svg_suite_animation/click-start.svg
+@@ -0,0 +1,8 @@
++<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
++  <rect width="16" height="16" fill="white" pointer-events="none"/>
++  <rect id="trigger" x="2" y="2" width="4" height="4" fill="red"/>
++  <rect id="response" x="2" y="10" width="4" height="4" fill="blue">
++    <animate id="motion" attributeName="x" from="2" to="10" begin="trigger.click"
++             dur="2s" repeatCount="2" restart="never" fill="freeze"/>
++  </rect>
++</svg>
+diff --git a/donner/editor/tests/svg_suite_animation/hover-active.png b/donner/editor/tests/svg_suite_animation/hover-active.png
+new file mode 100644
+index 0000000000000000000000000000000000000000..2d273f64fb11ec1eccb822d6d6649bbf9eb77840
+GIT binary patch
+literal 88
+zcmeAS@N?(olHy`uVBq!ia0vp^0wB!61|;P_|4#%_o-U3d6?2k*_$wwXn9az;v!X&p
+ks^Rj3KxQ}I1#OHB;_Y|*wAY_g0V-wiboFyt=akR{0B55YHvj+t
+
+literal 0
+HcmV?d00001
+
+diff --git a/donner/editor/tests/svg_suite_animation/hover-active.reference.svg b/donner/editor/tests/svg_suite_animation/hover-active.reference.svg
+new file mode 100644
+index 00000000..e4d2cb31
+--- /dev/null
++++ b/donner/editor/tests/svg_suite_animation/hover-active.reference.svg
+@@ -0,0 +1,4 @@
++<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
++  <rect width="16" height="16" fill="white"/>
++  <rect x="10" y="2" width="4" height="4" fill="blue"/>
++</svg>
+diff --git a/donner/editor/tests/svg_suite_animation/hover-end.png b/donner/editor/tests/svg_suite_animation/hover-end.png
+new file mode 100644
+index 0000000000000000000000000000000000000000..9f792c517cd8ab921834830c8dfcb9de78406883
+GIT binary patch
+literal 88
+zcmeAS@N?(olHy`uVBq!ia0vp^0wB!61|;P_|4#%_o-U3d6?2k*_$wwXn9s<=v!X&p
+ks^RpVKxQ}I1#OHB=IM9*UU8=_2P$RoboFyt=akR{0BS}TWdHyG
+
+literal 0
+HcmV?d00001
+
+diff --git a/donner/editor/tests/svg_suite_animation/hover-end.reference.svg b/donner/editor/tests/svg_suite_animation/hover-end.reference.svg
+new file mode 100644
+index 00000000..ce160595
+--- /dev/null
++++ b/donner/editor/tests/svg_suite_animation/hover-end.reference.svg
+@@ -0,0 +1,4 @@
++<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
++  <rect width="16" height="16" fill="white"/>
++  <rect x="10" y="2" width="4" height="4" fill="red"/>
++</svg>
+diff --git a/donner/editor/tests/svg_suite_animation/hover-hit.png b/donner/editor/tests/svg_suite_animation/hover-hit.png
+new file mode 100644
+index 0000000000000000000000000000000000000000..7163c6d5ac562abdabdf316a8df97592de4c3a59
+GIT binary patch
+literal 88
+zcmeAS@N?(olHy`uVBq!ia0vp^0wB!61|;P_|4#%_o-U3d6?2k*_$wwXn8(P&v!X&p
+k%0W%SG~o)vDhUP#YwbIJ6C7?_0xD(jboFyt=akR{07Z2cSO5S3
+
+literal 0
+HcmV?d00001
+
+diff --git a/donner/editor/tests/svg_suite_animation/hover-hit.reference.svg b/donner/editor/tests/svg_suite_animation/hover-hit.reference.svg
+new file mode 100644
+index 00000000..7341c513
+--- /dev/null
++++ b/donner/editor/tests/svg_suite_animation/hover-hit.reference.svg
+@@ -0,0 +1,4 @@
++<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
++  <rect width="16" height="16" fill="white"/>
++  <rect x="2" y="2" width="4" height="4" fill="red"/>
++</svg>
+diff --git a/donner/editor/tests/svg_suite_animation/hover-hit.svg b/donner/editor/tests/svg_suite_animation/hover-hit.svg
+new file mode 100644
+index 00000000..6f8ae49b
+--- /dev/null
++++ b/donner/editor/tests/svg_suite_animation/hover-hit.svg
+@@ -0,0 +1,7 @@
++<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
++  <rect width="16" height="16" fill="white" pointer-events="none"/>
++  <rect id="moving" x="2" y="2" width="4" height="4" fill="red">
++    <animate attributeName="x" from="2" to="10" dur="2s" fill="freeze"/>
++    <set attributeName="fill" to="blue" begin="mouseover" end="mouseout"/>
++  </rect>
++</svg>
+diff --git a/donner/editor/tests/svg_suite_animation/lifecycle-bounds.svg b/donner/editor/tests/svg_suite_animation/lifecycle-bounds.svg
+new file mode 100644
+index 00000000..799da098
+--- /dev/null
++++ b/donner/editor/tests/svg_suite_animation/lifecycle-bounds.svg
+@@ -0,0 +1,6 @@
++<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
++  <rect width="16" height="16" fill="white" pointer-events="none"/>
++  <rect x="2" y="2" width="4" height="4" fill="red">
++    <set attributeName="fill" to="red" dur="0.001s" repeatCount="indefinite"/>
++  </rect>
++</svg>

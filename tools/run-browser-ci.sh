@@ -41,7 +41,8 @@
 #   DONNER_WASM_PACKAGE_DIR  Serve this prebuilt package directory and skip the
 #                            bazel build entirely (how CI calls this script: it
 #                            downloads the package as an artifact from the
-#                            build job).
+#                            build job). The suites then see the served copy
+#                            under this name.
 #   DONNER_BAZEL             bazel binary to use (default: bazelisk, else bazel).
 #   DONNER_BAZEL_FLAGS       Extra bazel flags, word-split, applied before any
 #                            flags passed as script arguments.
@@ -182,6 +183,9 @@ fi
 expected_wasm_sha256="$(sha256_of "${pkg_dir}/editor.wasm")"
 log "Serving copy at ${pkg_dir}"
 echo "editor.wasm sha256: ${expected_wasm_sha256}"
+# Suites that hash the served package read it from here; point them at the copy that is served,
+# including when this script built the package itself.
+export DONNER_WASM_PACKAGE_DIR="${pkg_dir}"
 export DONNER_WASM_EXPECTED_HEADLESS_BACKEND=browser
 
 # ---------------------------------------------------------------------------

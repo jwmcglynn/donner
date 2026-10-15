@@ -1077,11 +1077,33 @@ std::optional<double> ParseAngleDegrees(const css::Token::Dimension& dimension) 
   return std::nullopt;
 }
 
+/// Reject extra operands in a filter function that accepts at most one argument.
+std::optional<ParseDiagnostic> ValidateSingleFilterOperand(
+    std::span<const css::ComponentValue> values) {
+  SkipWhitespace(values);
+  if (values.empty()) {
+    return std::nullopt;
+  }
+  values = values.subspan(1);
+  SkipWhitespace(values);
+  if (!values.empty()) {
+    ParseDiagnostic err;
+    err.reason = "Unexpected extra values in filter function";
+    err.range.start = values.front().sourceOffset();
+    return err;
+  }
+  return std::nullopt;
+}
+
 /// Parse a number-or-percentage argument from a filter function's values.
 /// Returns the amount as a decimal (e.g. 50% → 0.5, 2 → 2.0).
 /// If values are empty, returns the default value.
 ParseResult<double> ParseNumberPercentage(std::span<const css::ComponentValue> values,
                                           double defaultValue) {
+  if (auto error = ValidateSingleFilterOperand(values)) {
+    return std::move(*error);
+  }
+
   if (values.empty()) {
     return defaultValue;
   }
@@ -1119,6 +1141,41 @@ ParseResult<double> ParseFilterAmount(const css::Function& function, std::string
     return err;
   }
   return result.result();
+}
+
+/// Parse hue rotation while preserving zero and omitted-angle defaults.
+ParseResult<FilterEffect> ParseHueRotate(const css::Function& function) {
+  if (auto error = ValidateSingleFilterOperand(function.values)) {
+    return std::move(*error);
+  }
+  if (function.values.empty()) {
+    return FilterEffect(FilterEffect::HueRotate{0.0});
+  }
+  std::span<const css::ComponentValue> remaining = function.values;
+  SkipWhitespace(remaining);
+  if (remaining.empty()) {
+    return FilterEffect(FilterEffect::HueRotate{0.0});
+  }
+  const auto& arg = remaining.front();
+  if (const auto* dimension = arg.tryGetToken<css::Token::Dimension>()) {
+    if (auto degrees = ParseAngleDegrees(*dimension)) {
+      return FilterEffect(FilterEffect::HueRotate{*degrees});
+    }
+    ParseDiagnostic err;
+    err.reason = "Invalid angle unit for hue-rotate";
+    err.range.start = arg.sourceOffset();
+    return err;
+  }
+  // Accept bare 0 as 0deg.
+  if (const auto* number = arg.tryGetToken<css::Token::Number>()) {
+    if (number->value == 0.0) {
+      return FilterEffect(FilterEffect::HueRotate{0.0});
+    }
+  }
+  ParseDiagnostic err;
+  err.reason = "Invalid hue-rotate value";
+  err.range.start = arg.sourceOffset();
+  return err;
 }
 
 /// Parse a single CSS filter function and return the corresponding FilterEffect.
@@ -1183,34 +1240,7 @@ ParseResult<FilterEffect> ParseFilterFunction(const css::Function& function, boo
   }
 
   if (function.name.equalsLowercase("hue-rotate")) {
-    if (function.values.empty()) {
-      return FilterEffect(FilterEffect::HueRotate{0.0});
-    }
-    std::span<const css::ComponentValue> remaining = function.values;
-    SkipWhitespace(remaining);
-    if (remaining.empty()) {
-      return FilterEffect(FilterEffect::HueRotate{0.0});
-    }
-    const auto& arg = remaining.front();
-    if (const auto* dimension = arg.tryGetToken<css::Token::Dimension>()) {
-      if (auto degrees = ParseAngleDegrees(*dimension)) {
-        return FilterEffect(FilterEffect::HueRotate{*degrees});
-      }
-      ParseDiagnostic err;
-      err.reason = "Invalid angle unit for hue-rotate";
-      err.range.start = arg.sourceOffset();
-      return err;
-    }
-    // Accept bare 0 as 0deg.
-    if (const auto* number = arg.tryGetToken<css::Token::Number>()) {
-      if (number->value == 0.0) {
-        return FilterEffect(FilterEffect::HueRotate{0.0});
-      }
-    }
-    ParseDiagnostic err;
-    err.reason = "Invalid hue-rotate value";
-    err.range.start = arg.sourceOffset();
-    return err;
+    return ParseHueRotate(function);
   }
 
   if (function.name.equalsLowercase("brightness")) {

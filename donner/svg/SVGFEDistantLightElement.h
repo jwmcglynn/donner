@@ -166,7 +166,7 @@ namespace donner::svg {
  * is specified by azimuth (angle in the XY plane) and elevation (angle above the XY plane).
  */
 class SVGFEDistantLightElement : public SVGElement {
-  friend class parser::SVGParserImpl;
+  friend class details::ElementFactory;
 
 protected:
   /// Create an SVGFEDistantLightElement wrapper from an entity.

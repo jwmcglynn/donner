@@ -1,0 +1,82 @@
+{
+  "schema": "https://donner.graphics/svg2-suite/requirement-v1.schema.json",
+  "baseline": "svg2-cr-20181004",
+  "requirements": [
+    {
+      "id": "svg2-cr-20181004/geometry/XProperty/req-01",
+      "spec_revision": "CR-SVG2-20181004",
+      "section": "7.6. Horizontal coordinate: The 'x' property",
+      "anchor": "XProperty",
+      "assertion": "A nonzero unitless CSS x declaration on a rect is invalid and ignored; with no other valid overriding declaration, the valid x presentation attribute remains effective.",
+      "strength": "must",
+      "subject": "user-agent",
+      "software_classes": [
+        "interpreter",
+        "viewer",
+        "high-quality-viewer"
+      ],
+      "processing_modes": [
+        "static",
+        "secure-static"
+      ],
+      "dependencies": [
+        "css-values-3"
+      ],
+      "oracle_kinds": [
+        "png"
+      ],
+      "test_ids": [
+        "donner-svg2/geometry/css-length-values/rect-inline-unitless-invalid",
+        "donner-svg2/geometry/css-length-values/rect-stylesheet-unitless-invalid"
+      ],
+      "review_state": "reviewed",
+      "evidence_state": "covered-pass",
+      "rationale": "Narrow legacy-2018 compatibility mapping only, not a claim about the complete current SVG2 audit or general cascading. The named literal fixtures have independently constructed 16x16 RGBA references and passed strict zero-difference native comparisons on source 5b2f9a185e1fb06bba752878a715fa57adc6800d. SVG2 2018 defines x as length-percentage, separates presentation-attribute number syntax and CSS syntax, and assigns presentation attributes specificity zero. Its bibliography cites CSS Values 3 dated 2018-08-14. The source_text_hash covers normalized text from the listed support passages in their listed order.",
+      "artifacts": [
+        "https://www.w3.org/TR/2018/CR-SVG2-20181004/geometry.html#XProperty",
+        "https://www.w3.org/TR/2018/CR-SVG2-20181004/types.html#TermInvalidValue",
+        "https://www.w3.org/TR/2018/CR-SVG2-20181004/types.html#presentation-attribute-css-value",
+        "https://www.w3.org/TR/2018/CR-SVG2-20181004/styling.html#PresentationAttributes",
+        "https://www.w3.org/TR/2018/CR-css-values-3-20180814/#lengths"
+      ],
+      "source_text_hash": "sha256:a4502c6948a42daef36b0e09c618c9d8d679e4f1ae44a83eb4355ea47340b9e9"
+    },
+    {
+      "id": "svg2-cr-20181004/geometry/XProperty/req-02",
+      "spec_revision": "CR-SVG2-20181004",
+      "section": "7.6. Horizontal coordinate: The 'x' property",
+      "anchor": "XProperty",
+      "assertion": "With no other x declarations, inline x:.0 is a valid zero length that overrides x=\"4\" on a rect.",
+      "strength": "must",
+      "subject": "user-agent",
+      "software_classes": [
+        "interpreter",
+        "viewer",
+        "high-quality-viewer"
+      ],
+      "processing_modes": [
+        "static",
+        "secure-static"
+      ],
+      "dependencies": [
+        "css-values-3"
+      ],
+      "oracle_kinds": [
+        "png"
+      ],
+      "test_ids": [
+        "donner-svg2/geometry/css-length-values/rect-inline-unitless-zero"
+      ],
+      "review_state": "reviewed",
+      "evidence_state": "covered-pass",
+      "rationale": "Narrow legacy-2018 compatibility mapping only, not a claim about the complete current SVG2 audit or general cascading. The named literal fixtures have independently constructed 16x16 RGBA references and passed strict zero-difference native comparisons on source 5b2f9a185e1fb06bba752878a715fa57adc6800d. SVG2 2018 defines x as length-percentage, separates presentation-attribute number syntax and CSS syntax, and assigns presentation attributes specificity zero. Its bibliography cites CSS Values 3 dated 2018-08-14. The source_text_hash covers normalized text from the listed support passages in their listed order.",
+      "artifacts": [
+        "https://www.w3.org/TR/2018/CR-SVG2-20181004/geometry.html#XProperty",
+        "https://www.w3.org/TR/2018/CR-SVG2-20181004/styling.html#PresentationAttributes",
+        "https://www.w3.org/TR/2018/CR-css-values-3-20180814/#lengths",
+        "https://www.w3.org/TR/2018/CR-css-values-3-20180814/#numbers"
+      ],
+      "source_text_hash": "sha256:5566ba7385dc2533a845bac04bff0eb056b646eb8b33a9b3a666942c9517695d"
+    }
+  ]
+}

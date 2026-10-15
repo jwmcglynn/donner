@@ -3,10 +3,14 @@
 
 #include "donner/base/encoding/Base64.h"
 #include "donner/base/tests/ParseResultTestUtils.h"
+#include "donner/base/xml/components/TreeComponent.h"
 #include "donner/editor/tests/BitmapGoldenCompare.h"
 #include "donner/svg/SVGRectElement.h"
 #include "donner/svg/SVGUseElement.h"
+#include "donner/svg/components/SVGDocumentContext.h"
+#include "donner/svg/components/animation/AnimateMotionComponent.h"
 #include "donner/svg/components/animation/AnimationResourceBudget.h"
+#include "donner/svg/components/animation/AnimationStateComponent.h"
 #include "donner/svg/components/filter/FilterPrimitiveComponent.h"
 #include "donner/svg/components/resources/ImageComponent.h"
 #include "donner/svg/components/resources/ResourceManagerContext.h"
@@ -45,6 +49,72 @@ TEST(RendererAnimationPresentation, DefaultParserSourceInsertionAndRemovalUpdate
   ASSERT_EQ(document.removeElement(*animation).applied, true);
   EXPECT_THAT(RendererTestUtils::renderToAsciiImage(document).generated,
               testing::StartsWith("@@@@............"));
+}
+
+TEST(RendererAnimationPresentation, SourceInsertedMotionReferenceUsesSharedElementFactory) {
+  auto document = ParsePresentation(
+      "<defs><path id='route' d='M0 0H8'/></defs><rect id='r' width='4' height='16'/>");
+  const auto rectangle = document.querySelector("#r");
+  ASSERT_TRUE(rectangle.has_value());
+  const std::string source(document.source());
+  const auto start = source.find("<rect");
+  const auto end = source.find("/>", start) + 2;
+  ASSERT_NE(start, std::string::npos);
+  const auto inserted = document.applySourceEdit(xml::XMLEditIntent{
+      .range = {FileOffset::Offset(start), FileOffset::Offset(end)},
+      .replacement = "<rect id='r' width='4' height='16'><animateMotion id='motion' dur='2s'>"
+                     "<mpath id='reference' href='#route'/></animateMotion></rect>",
+      .sourceVersion = document.sourceVersion(),
+  });
+  ASSERT_TRUE(inserted.applied);
+  EXPECT_EQ(document.querySelector("#r"), rectangle);
+  const auto motion = document.querySelector("#motion");
+  const auto reference = document.querySelector("#reference");
+  ASSERT_TRUE(motion.has_value());
+  ASSERT_TRUE(reference.has_value());
+  EXPECT_EQ(motion->type(), ElementType::AnimateMotion);
+  EXPECT_EQ(reference->type(), ElementType::MPath);
+  EXPECT_THAT(reference->getAttribute("href"), testing::Optional(RcString("#route")));
+  EXPECT_EQ(reference->entityHandle().get<components::MPathComponent>().href, "#route");
+  EXPECT_THAT(motion->getAttribute("dur"), testing::Optional(RcString("2s")));
+  EXPECT_EQ(reference->entityHandle().get<donner::components::TreeComponent>().parent(),
+            motion->entityHandle().entity());
+  EXPECT_EQ(motion->entityHandle().get<donner::components::TreeComponent>().parent(),
+            rectangle->entityHandle().entity());
+  EXPECT_EQ(document.registry().ctx().get<components::SVGDocumentContext>().getEntityById(
+                RcString("route")),
+            document.querySelector("#route")->entityHandle().entity());
+  auto fresh = ParsePresentation(
+      "<defs><path id='route' d='M0 0H8'/></defs><rect width='4' height='16'>"
+      "<animateMotion dur='2s'><mpath href='#route'/></animateMotion></rect>");
+  const std::string insertedSource(document.source());
+  for (double time : {1.0, 3.0, 1.0}) {
+    SCOPED_TRACE(time);
+    document.setTime(time);
+    fresh.setTime(time);
+    auto expected = ParsePresentation(time == 1.0 ? "<rect x='4' width='4' height='16'/>"
+                                                  : "<rect width='4' height='16'/>");
+    editor::tests::CompareBitmapToBitmap(
+        RenderDocumentWithActiveBackend(fresh), RenderDocumentWithActiveBackend(expected),
+        "fresh-motion-reference", editor::tests::PixelmatchIdentityParams());
+    const auto actual = RenderDocumentWithActiveBackend(document);
+    if (time == 1.0) {
+      const auto* state = motion->entityHandle().try_get<components::AnimationStateComponent>();
+      ASSERT_NE(state, nullptr);
+      EXPECT_EQ(state->phase, components::AnimationPhase::Active);
+      EXPECT_EQ(state->simpleDuration, 2.0);
+      EXPECT_EQ(state->targetEntity, rectangle->entityHandle().entity());
+    }
+    editor::tests::CompareBitmapToBitmap(actual, RenderDocumentWithActiveBackend(expected),
+                                         "inserted-motion-reference",
+                                         editor::tests::PixelmatchIdentityParams());
+    EXPECT_EQ(document.source(), insertedSource);
+  }
+  ASSERT_TRUE(document.removeElement(*motion).applied);
+  auto expected = ParsePresentation("<rect width='4' height='16'/>");
+  editor::tests::CompareBitmapToBitmap(
+      RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(expected),
+      "removed-motion-reference", editor::tests::PixelmatchIdentityParams());
 }
 
 TEST(RendererAnimationPresentation, PatternTileWidthRendersAndRestores) {

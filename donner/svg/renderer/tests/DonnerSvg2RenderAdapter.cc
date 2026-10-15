@@ -1,138 +1,54 @@
 /// @file
-/// Donner render adapter for the portable SVG2 test suite (design 0057,
-/// "Adapter protocol" and Rollout step 4).
-///
-/// The portable reference runner invokes a render adapter as an executable plus
-/// an argument array (never a shell string):
-///
-///   donner_svg2_render_adapter render --request request.json --response response.json
-///
-/// This adapter renders one case through Donner's existing tiny-skia renderer
-/// configuration, the same RenderDocumentWithBackend(..., TinySkia) path the
-/// resvg C++ fixture uses, and applies the same font wiring, so its output is
-/// identical to what donner/svg/renderer/tests/resvg_test_suite.cc renders.
-/// It writes an 8-bit RGBA PNG and a typed response document. It does not
-/// compare images; comparison is a separate step in the runner (which reuses
-/// Donner's pixelmatch via svg2_image_compare).
+/// Legacy JSON request entry point for the shared native suite renderer.
 
-#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
-#include <map>
-#include <memory>
 #include <optional>
-#include <sstream>
 #include <string>
 #include <string_view>
-#include <vector>
 
-#include "donner/base/ParseWarningSink.h"
-#include "donner/base/RcString.h"
-#include "donner/css/FontFace.h"
-#include "donner/svg/SVGDocument.h"
-#include "donner/svg/components/resources/ResourceManagerContext.h"
-#include "donner/svg/parser/SVGParser.h"
-#include "donner/svg/renderer/RendererImageIO.h"
-#include "donner/svg/renderer/tests/RendererTestBackend.h"
-#include "donner/svg/resources/FontManager.h"
-#include "donner/svg/resources/FontMetadata.h"
-#include "donner/svg/resources/SandboxedFileResourceLoader.h"
+#include "donner/svg/renderer/tests/SvgSuiteRender.h"
 #include "nlohmann/json.hpp"
 
 namespace donner::svg {
 namespace {
 
-// Load all regular/bold TTF/OTF fonts from a directory and register them as
-// @font-face rules on the document, plus the resvg-suite generic-family
-// mappings. This mirrors the wiring in ImageComparisonTestFixture so text cases
-// render with the same fonts the resvg fixture uses.
-std::vector<css::FontFace> loadFontsFromDirectory(const std::filesystem::path& fontsDir) {
-  std::vector<css::FontFace> faces;
-  std::error_code error;
-  for (const auto& entry : std::filesystem::directory_iterator(fontsDir, error)) {
-    if (!entry.is_regular_file()) {
-      continue;
-    }
-    const auto extension = entry.path().extension().string();
-    if (extension != ".ttf" && extension != ".otf") {
-      continue;
-    }
-
-    std::ifstream fontFile(entry.path(), std::ios::binary);
-    if (!fontFile) {
-      continue;
-    }
-    fontFile.seekg(0, std::ios::end);
-    const auto size = fontFile.tellg();
-    fontFile.seekg(0);
-    std::vector<uint8_t> fontData(static_cast<size_t>(size));
-    fontFile.read(reinterpret_cast<char*>(fontData.data()), size);
-
-    const auto metadata = ParseFontMetadata(fontData);
-    if (!metadata.has_value()) {
-      continue;
-    }
-
-    // Only register regular (400) and bold (700) weights; other weights use
-    // glyph shapes the stb_truetype renderer cannot match to the reference.
-    if (metadata->fontWeight != 400 && metadata->fontWeight != 700) {
-      continue;
-    }
-
-    css::FontFaceSource source;
-    source.kind = css::FontFaceSource::Kind::Data;
-    source.payload = std::make_shared<const std::vector<uint8_t>>(std::move(fontData));
-    source.trusted = true;
-
-    css::FontFace face;
-    face.familyName = RcString(metadata->familyName);
-    face.fontWeight = metadata->fontWeight;
-    face.fontStyle = metadata->fontStyle;
-    face.fontStretch = metadata->fontStretch;
-    face.sources.push_back(std::move(source));
-    faces.push_back(std::move(face));
-  }
-  return faces;
-}
-
-void registerFontsFromDirectory(SVGDocument& document, const std::filesystem::path& fontsDir) {
-  const std::vector<css::FontFace> faces = loadFontsFromDirectory(fontsDir);
-  if (!faces.empty()) {
-    auto& resourceManager = document.registry().ctx().get<components::ResourceManagerContext>();
-    resourceManager.addFontFaces(faces);
-  }
-
-  auto& registry = document.registry();
-  auto& fontManager = registry.ctx().contains<FontManager>()
-                          ? registry.ctx().get<FontManager>()
-                          : registry.ctx().emplace<FontManager>(registry);
-  fontManager.setGenericFamilyMapping("serif", "Noto Serif");
-  fontManager.setGenericFamilyMapping("sans-serif", "Noto Sans");
-  fontManager.setGenericFamilyMapping("monospace", "Noto Mono");
-  fontManager.setGenericFamilyMapping("cursive", "Yellowtail");
-  fontManager.setGenericFamilyMapping("fantasy", "Sedgwick Ave Display");
-}
-
 std::optional<std::string> readFile(const std::string& path) {
-  std::ifstream file(path, std::ios::binary);
+  std::ifstream file(path, std::ios::binary | std::ios::ate);
   if (!file) {
     return std::nullopt;
   }
-  file.seekg(0, std::ios::end);
-  const std::streamsize length = file.tellg();
-  file.seekg(0);
-  if (length < 0) {
+  const auto size = file.tellg();
+  if (size < 0 || size > 1024 * 1024) {
     return std::nullopt;
   }
-  std::string data(static_cast<size_t>(length), '\0');
-  file.read(data.data(), length);
+  std::string data(static_cast<size_t>(size), '\0');
+  file.seekg(0);
+  if (!file.read(data.data(), size)) {
+    return std::nullopt;
+  }
   return data;
 }
 
 void writeResponse(const std::string& path, const nlohmann::json& document) {
   std::ofstream out(path, std::ios::binary);
   out << document.dump(2) << "\n";
+}
+
+std::optional<int> readDimension(const nlohmann::json& value) {
+  if (value.is_number_unsigned()) {
+    const auto number = value.get<uint64_t>();
+    if (number > 0 && number <= 16384) {
+      return static_cast<int>(number);
+    }
+  } else if (value.is_number_integer()) {
+    const auto number = value.get<int64_t>();
+    if (number > 0 && number <= 16384) {
+      return static_cast<int>(number);
+    }
+  }
+  return std::nullopt;
 }
 
 int runRender(const std::string& requestPath, const std::string& responsePath) {
@@ -174,65 +90,38 @@ int runRender(const std::string& requestPath, const std::string& responsePath) {
   const std::string inputPath = request["input"].get<std::string>();
   const std::string outputPath = request["output"].get<std::string>();
   const std::string resourceRoot = request.value("resource_root", std::string());
-  const std::string fontRoot = request.value("font_root", std::string());
-  const int width = request["width"].get<int>();
-  const int height = request["height"].get<int>();
-
-  RegisterTinySkiaBackend();
-
-  const auto svgData = readFile(inputPath);
-  if (!svgData) {
-    nlohmann::json response;
-    response["status"] = "error";
-    response["diagnostics"] = "cannot read input SVG: " + inputPath;
-    writeResponse(responsePath, response);
-    return 1;
+  std::string fontRoot = request.value("font_root", std::string());
+  const auto width = readDimension(request["width"]);
+  const auto height = readDimension(request["height"]);
+  if (!width || !height) {
+    return requestError("invalid bounded dimensions");
+  }
+  if (!fontRoot.empty()) {
+    std::error_code error;
+    const bool empty = std::filesystem::is_empty(fontRoot, error);
+    if (error) {
+      return requestError("cannot inspect staged font directory");
+    }
+    if (empty) {
+      fontRoot.clear();
+    }
   }
 
-  // Resource lookups (external images, etc.) are rooted at the runner-provided
-  // resource root, matching the resvg fixture's SandboxedFileResourceLoader.
   const std::filesystem::path resourceDir = resourceRoot.empty()
                                                 ? std::filesystem::path(inputPath).parent_path()
                                                 : std::filesystem::path(resourceRoot);
-
-  SVGDocument::Settings settings;
-  settings.resourceLoader =
-      std::make_unique<SandboxedFileResourceLoader>(resourceDir, std::filesystem::path(inputPath));
-
-  ParseWarningSink warningSink = ParseWarningSink::Disabled();
-  parser::SVGParser::Options parserOptions;
-  auto parseResult =
-      parser::SVGParser::ParseSVG(*svgData, warningSink, parserOptions, std::move(settings));
-  if (parseResult.hasError()) {
-    std::ostringstream diagnostics;
-    diagnostics << "parse error: " << parseResult.error();
-    nlohmann::json response;
-    response["status"] = "error";
-    response["diagnostics"] = diagnostics.str();
-    writeResponse(responsePath, response);
-    return 1;
+  const auto rendered = RenderSvgSuiteCase({inputPath, resourceDir, fontRoot, *width, *height,
+                                            std::filesystem::path(requestPath).parent_path()});
+  if (!rendered.image) {
+    return requestError(rendered.error);
   }
-
-  SVGDocument document = std::move(parseResult.result());
-
-  if (!fontRoot.empty() && std::filesystem::is_directory(fontRoot)) {
-    registerFontsFromDirectory(document, fontRoot);
-  }
-
-  document.setCanvasSize(width, height);
-
-  const RendererBitmap snapshot = RenderDocumentWithBackend(document, RendererBackend::TinySkia);
-  const int renderedWidth = snapshot.dimensions.x;
-  const int renderedHeight = snapshot.dimensions.y;
-  const size_t strideInPixels = snapshot.rowBytes / 4u;
-
-  if (!RendererImageIO::writeRgbaPixelsToPngFile(outputPath.c_str(), snapshot.pixels, renderedWidth,
-                                                 renderedHeight, strideInPixels)) {
-    nlohmann::json response;
-    response["status"] = "error";
-    response["diagnostics"] = "failed to write output PNG: " + outputPath;
-    writeResponse(responsePath, response);
-    return 1;
+  const auto& image = *rendered.image;
+  const int renderedWidth = image.width;
+  const int renderedHeight = image.height;
+  const auto writeError = svg_suite::WritePng(
+      outputPath, {image.width, image.height, image.strideInPixels, image.data});
+  if (!writeError.empty()) {
+    return requestError(writeError);
   }
 
   nlohmann::json response;

@@ -1,7 +1,7 @@
 {
   "schema": "https://donner.graphics/svg2-suite/corpus-v1.schema.json",
   "corpus": "donner-svg2",
-  "revision": "donner-svg2-m4-seed-v1",
+  "revision": "donner-svg2-m4-seed-v2",
   "integrity": {
     "tests/painting/fill/default-black.svg": "sha256:c4ac6cd200f3bc0187a73144cdf1d79372231e747a3ef5277f5bd63aa8045550",
     "tests/painting/fill/default-black.png": "sha256:52b6c0aeba2019069988d0bd0710bd5c94ff80e7252104677832eb66e7f7cb93",
@@ -20,7 +20,27 @@
     "tests/shapes/circle/negative-r-ignored.svg": "sha256:ed60814ae40540f8cf089721f9f42f2ffce721f22d8f1991b811c804de633e9a",
     "tests/shapes/circle/negative-r-ignored.png": "sha256:52b6c0aeba2019069988d0bd0710bd5c94ff80e7252104677832eb66e7f7cb93",
     "tests/shapes/ellipse/zero-radius-no-render.svg": "sha256:46b7fceb1a2dbd6dce2a76d64bde6ff180b3c206f8dc3930bd0dd755c1471d04",
-    "tests/shapes/ellipse/zero-radius-no-render.png": "sha256:52b6c0aeba2019069988d0bd0710bd5c94ff80e7252104677832eb66e7f7cb93"
+    "tests/shapes/ellipse/zero-radius-no-render.png": "sha256:52b6c0aeba2019069988d0bd0710bd5c94ff80e7252104677832eb66e7f7cb93",
+    "tests/geometry/automatic-radii/ellipse-both-auto-zero.svg": "sha256:e6b5bc4c3d1c64573832aeabdaecc4692e31a2338dec33c5e64fdd218e7fccf6",
+    "tests/geometry/automatic-radii/ellipse-both-auto-zero.png": "sha256:c5f96f0eb6263650e86aa59a588ebd4c2b45192c6e701d99bec79d8331faf17a",
+    "tests/geometry/automatic-radii/ellipse-rx-auto-zero.svg": "sha256:9603b04d230a574025e6001e2f9a6d3d3a009a235b00f5ca711f189ffbcbeb4d",
+    "tests/geometry/automatic-radii/ellipse-rx-auto-zero.png": "sha256:c5f96f0eb6263650e86aa59a588ebd4c2b45192c6e701d99bec79d8331faf17a",
+    "tests/geometry/automatic-radii/ellipse-ry-auto-zero.svg": "sha256:026126dee4d6dc6e93a6e13f1acab3c37801ad25031349d7f0c54b9b5d470c5f",
+    "tests/geometry/automatic-radii/ellipse-ry-auto-zero.png": "sha256:c5f96f0eb6263650e86aa59a588ebd4c2b45192c6e701d99bec79d8331faf17a",
+    "tests/geometry/automatic-radii/rect-both-auto.svg": "sha256:7cf90ee54fb2f2b41b17020cf03a02e87375947b8edc56bb1a3739715bd909ff",
+    "tests/geometry/automatic-radii/rect-both-auto.png": "sha256:c5f96f0eb6263650e86aa59a588ebd4c2b45192c6e701d99bec79d8331faf17a",
+    "tests/geometry/automatic-radii/rect-css-auto.svg": "sha256:d84ed3e75590ba88bf7f849866a718fcf13441f0d01ea9e0a7e2cacb4c0af450",
+    "tests/geometry/automatic-radii/rect-css-auto.png": "sha256:c5f96f0eb6263650e86aa59a588ebd4c2b45192c6e701d99bec79d8331faf17a",
+    "tests/geometry/automatic-radii/rect-rx-auto.svg": "sha256:e141bd03ff7e8d450130c98faa0f2b8879c54c7e45aef66fe44dd9f8ef5cd29a",
+    "tests/geometry/automatic-radii/rect-rx-auto.png": "sha256:c5f96f0eb6263650e86aa59a588ebd4c2b45192c6e701d99bec79d8331faf17a",
+    "tests/geometry/automatic-radii/rect-ry-auto.svg": "sha256:4815dd3ff102df39538df02583d4fea046c1a7e99c5e2c841b70a42e998f997d",
+    "tests/geometry/automatic-radii/rect-ry-auto.png": "sha256:c5f96f0eb6263650e86aa59a588ebd4c2b45192c6e701d99bec79d8331faf17a",
+    "tests/geometry/css-length-values/rect-inline-unitless-invalid.svg": "sha256:24a74b32ecc1fa76eaefeced5e345999627163e48597d7a7314be5bf62151202",
+    "tests/geometry/css-length-values/rect-inline-unitless-invalid.png": "sha256:557a27608856288948e56c52d6e53e785ea66b5ffd1284883431c7961eaa2526",
+    "tests/geometry/css-length-values/rect-inline-unitless-zero.svg": "sha256:03baf937d4f99af653071358ee64c7645a59cd927e91d9d6b908c32e059c56ec",
+    "tests/geometry/css-length-values/rect-inline-unitless-zero.png": "sha256:8166481dd11e8cbcd8abfce8921f5df33815998f401c85a5b1387f492a15aaad",
+    "tests/geometry/css-length-values/rect-stylesheet-unitless-invalid.svg": "sha256:9cd71f8fa0a62d278deb519f54f3a7fd317ac8383a599f5e2d544406795d0d04",
+    "tests/geometry/css-length-values/rect-stylesheet-unitless-invalid.png": "sha256:557a27608856288948e56c52d6e53e785ea66b5ffd1284883431c7961eaa2526"
   },
   "tests": [
     {
@@ -169,6 +189,166 @@
       "assertion": "An ellipse with a computed radius of zero disables rendering of the ellipse, so only the black control rect renders and no red pixels appear.",
       "spec_requirements": [
         "svg2-cr-20181004/shapes/EllipseElement/req-04"
+      ],
+      "capabilities": []
+    },
+    {
+      "id": "donner-svg2/geometry/automatic-radii/ellipse-both-auto-zero",
+      "input": "tests/geometry/automatic-radii/ellipse-both-auto-zero.svg",
+      "oracle": {
+        "kind": "png",
+        "path": "tests/geometry/automatic-radii/ellipse-both-auto-zero.png",
+        "width": 100,
+        "height": 100,
+        "provenance": "Independently specified analytic RGBA reference: opaque red rectangle [20,60) x [20,60) on a transparent 100x100 canvas. Shared exact reference bytes; see tests/geometry/automatic-radii/README.md."
+      },
+      "assertion": "Explicit automatic ellipse radii resolve to zero when neither axis has a length, so the blue ellipse does not render and only the red control rectangle remains.",
+      "spec_requirements": [
+        "svg2-cr-20181004/shapes/EllipseElement/req-04"
+      ],
+      "capabilities": []
+    },
+    {
+      "id": "donner-svg2/geometry/automatic-radii/ellipse-rx-auto-zero",
+      "input": "tests/geometry/automatic-radii/ellipse-rx-auto-zero.svg",
+      "oracle": {
+        "kind": "png",
+        "path": "tests/geometry/automatic-radii/ellipse-rx-auto-zero.png",
+        "width": 100,
+        "height": 100,
+        "provenance": "Independently specified analytic RGBA reference: opaque red rectangle [20,60) x [20,60) on a transparent 100x100 canvas. Shared exact reference bytes; see tests/geometry/automatic-radii/README.md."
+      },
+      "assertion": "Explicit automatic ellipse radii resolve to zero when neither axis has a length, so the blue ellipse does not render and only the red control rectangle remains.",
+      "spec_requirements": [
+        "svg2-cr-20181004/shapes/EllipseElement/req-04"
+      ],
+      "capabilities": []
+    },
+    {
+      "id": "donner-svg2/geometry/automatic-radii/ellipse-ry-auto-zero",
+      "input": "tests/geometry/automatic-radii/ellipse-ry-auto-zero.svg",
+      "oracle": {
+        "kind": "png",
+        "path": "tests/geometry/automatic-radii/ellipse-ry-auto-zero.png",
+        "width": 100,
+        "height": 100,
+        "provenance": "Independently specified analytic RGBA reference: opaque red rectangle [20,60) x [20,60) on a transparent 100x100 canvas. Shared exact reference bytes; see tests/geometry/automatic-radii/README.md."
+      },
+      "assertion": "Explicit automatic ellipse radii resolve to zero when neither axis has a length, so the blue ellipse does not render and only the red control rectangle remains.",
+      "spec_requirements": [
+        "svg2-cr-20181004/shapes/EllipseElement/req-04"
+      ],
+      "capabilities": []
+    },
+    {
+      "id": "donner-svg2/geometry/automatic-radii/rect-both-auto",
+      "input": "tests/geometry/automatic-radii/rect-both-auto.svg",
+      "oracle": {
+        "kind": "png",
+        "path": "tests/geometry/automatic-radii/rect-both-auto.png",
+        "width": 100,
+        "height": 100,
+        "provenance": "Independently specified analytic RGBA reference: opaque red rectangle [20,60) x [20,60) on a transparent 100x100 canvas. Shared exact reference bytes; see tests/geometry/automatic-radii/README.md."
+      },
+      "assertion": "Explicit automatic corner radii resolve to zero when neither axis has a length, leaving a sharp red rectangle.",
+      "spec_requirements": [
+        "svg2-cr-20181004/shapes/RectElement/req-04"
+      ],
+      "capabilities": []
+    },
+    {
+      "id": "donner-svg2/geometry/automatic-radii/rect-css-auto",
+      "input": "tests/geometry/automatic-radii/rect-css-auto.svg",
+      "oracle": {
+        "kind": "png",
+        "path": "tests/geometry/automatic-radii/rect-css-auto.png",
+        "width": 100,
+        "height": 100,
+        "provenance": "Independently specified analytic RGBA reference: opaque red rectangle [20,60) x [20,60) on a transparent 100x100 canvas. Shared exact reference bytes; see tests/geometry/automatic-radii/README.md."
+      },
+      "assertion": "Explicit automatic corner radii resolve to zero when neither axis has a length, leaving a sharp red rectangle.",
+      "spec_requirements": [
+        "svg2-cr-20181004/shapes/RectElement/req-04"
+      ],
+      "capabilities": []
+    },
+    {
+      "id": "donner-svg2/geometry/automatic-radii/rect-rx-auto",
+      "input": "tests/geometry/automatic-radii/rect-rx-auto.svg",
+      "oracle": {
+        "kind": "png",
+        "path": "tests/geometry/automatic-radii/rect-rx-auto.png",
+        "width": 100,
+        "height": 100,
+        "provenance": "Independently specified analytic RGBA reference: opaque red rectangle [20,60) x [20,60) on a transparent 100x100 canvas. Shared exact reference bytes; see tests/geometry/automatic-radii/README.md."
+      },
+      "assertion": "Explicit automatic corner radii resolve to zero when neither axis has a length, leaving a sharp red rectangle.",
+      "spec_requirements": [
+        "svg2-cr-20181004/shapes/RectElement/req-04"
+      ],
+      "capabilities": []
+    },
+    {
+      "id": "donner-svg2/geometry/automatic-radii/rect-ry-auto",
+      "input": "tests/geometry/automatic-radii/rect-ry-auto.svg",
+      "oracle": {
+        "kind": "png",
+        "path": "tests/geometry/automatic-radii/rect-ry-auto.png",
+        "width": 100,
+        "height": 100,
+        "provenance": "Independently specified analytic RGBA reference: opaque red rectangle [20,60) x [20,60) on a transparent 100x100 canvas. Shared exact reference bytes; see tests/geometry/automatic-radii/README.md."
+      },
+      "assertion": "Explicit automatic corner radii resolve to zero when neither axis has a length, leaving a sharp red rectangle.",
+      "spec_requirements": [
+        "svg2-cr-20181004/shapes/RectElement/req-04"
+      ],
+      "capabilities": []
+    },
+    {
+      "id": "donner-svg2/geometry/css-length-values/rect-inline-unitless-invalid",
+      "input": "tests/geometry/css-length-values/rect-inline-unitless-invalid.svg",
+      "oracle": {
+        "kind": "png",
+        "path": "tests/geometry/css-length-values/rect-inline-unitless-invalid.png",
+        "width": 16,
+        "height": 16,
+        "provenance": "Independently specified analytic RGBA reference: opaque red rectangle [4,8) x [4,8) on a transparent black 16x16 canvas. Constructed directly from integer coordinate intervals; see tests/geometry/css-length-values/README.md."
+      },
+      "assertion": "The invalid nonzero unitless inline CSS declaration x:8 leaves the rectangle presentation attribute x=4 effective.",
+      "spec_requirements": [
+        "svg2-cr-20181004/geometry/XProperty/req-01"
+      ],
+      "capabilities": []
+    },
+    {
+      "id": "donner-svg2/geometry/css-length-values/rect-inline-unitless-zero",
+      "input": "tests/geometry/css-length-values/rect-inline-unitless-zero.svg",
+      "oracle": {
+        "kind": "png",
+        "path": "tests/geometry/css-length-values/rect-inline-unitless-zero.png",
+        "width": 16,
+        "height": 16,
+        "provenance": "Independently specified analytic RGBA reference: opaque red rectangle [0,4) x [4,8) on a transparent black 16x16 canvas. Constructed directly from integer coordinate intervals; see tests/geometry/css-length-values/README.md."
+      },
+      "assertion": "The valid unitless-zero inline CSS declaration x:.0 overrides the rectangle presentation attribute x=4 and places the rectangle at x=0.",
+      "spec_requirements": [
+        "svg2-cr-20181004/geometry/XProperty/req-02"
+      ],
+      "capabilities": []
+    },
+    {
+      "id": "donner-svg2/geometry/css-length-values/rect-stylesheet-unitless-invalid",
+      "input": "tests/geometry/css-length-values/rect-stylesheet-unitless-invalid.svg",
+      "oracle": {
+        "kind": "png",
+        "path": "tests/geometry/css-length-values/rect-stylesheet-unitless-invalid.png",
+        "width": 16,
+        "height": 16,
+        "provenance": "Independently specified analytic RGBA reference: opaque red rectangle [4,8) x [4,8) on a transparent black 16x16 canvas. Constructed directly from integer coordinate intervals; see tests/geometry/css-length-values/README.md."
+      },
+      "assertion": "The invalid nonzero unitless stylesheet declaration x:8 leaves the rectangle presentation attribute x=4 effective.",
+      "spec_requirements": [
+        "svg2-cr-20181004/geometry/XProperty/req-01"
       ],
       "capabilities": []
     }

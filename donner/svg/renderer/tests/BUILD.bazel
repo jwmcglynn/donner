@@ -128,8 +128,8 @@ donner_cc_library(
         "//donner/svg:__subpackages__",
     ],
     deps = [
+        "//tools/svg_suite:image_compare",
         "@com_google_gtest//:gtest",
-        "@stb//:image",
     ],
 )
 
@@ -269,8 +269,8 @@ donner_cc_library(
         "//donner/svg/renderer:renderer_image_io",
         "//donner/svg/renderer:terminal_image_viewer",
         "//donner/svg/resources:font_metadata",
+        "//tools/svg_suite:image_compare",
         "@com_google_gtest//:gtest",
-        "@pixelmatch-cpp17",
     ],
 )
 
@@ -298,8 +298,8 @@ donner_cc_library(
         "//donner/svg/renderer:renderer_interface",
         "//donner/svg/renderer:terminal_image_viewer",
         "//donner/svg/resources:font_metadata",
+        "//tools/svg_suite:image_compare",
         "@com_google_gtest//:gtest",
-        "@pixelmatch-cpp17",
     ],
 )
 
@@ -1277,26 +1277,16 @@ donner_cc_test(
     ],
 )
 
-# Portable SVG2 test suite (design 0057): the Donner render adapter and a thin
-# reuse of Donner's image comparison, plus the pilot parity test that drives the
-# portable reference runner against a small resvg subset. See
-# docs/design_docs/0057-donner_svg2_test_suite.md (Rollout step 4).
+# The compatibility adapter and pilot share the native image comparator. The extension
+# conformance target below runs the reusable GoogleTest suite over plain SVG/PNG pairs.
 
 donner_cc_binary(
     name = "donner_svg2_render_adapter",
     testonly = 1,
     srcs = ["DonnerSvg2RenderAdapter.cc"],
     deps = [
-        ":renderer_test_backend",
-        "//donner/base",
-        "//donner/css:core",
-        "//donner/svg",
-        "//donner/svg/components/resources:resource_manager_context",
-        "//donner/svg/parser",
-        "//donner/svg/renderer:renderer_image_io",
-        "//donner/svg/resources:font_manager",
-        "//donner/svg/resources:font_metadata",
-        "//donner/svg/resources:sandboxed_file_resource_loader",
+        ":svg_suite_render",
+        "//tools/svg_suite:image_compare",
         "@nlohmann_json//:json",
     ],
 )
@@ -1307,8 +1297,8 @@ donner_cc_binary(
     srcs = ["Svg2ImageCompare.cc"],
     deps = [
         ":renderer_image_test_utils",
+        "//tools/svg_suite:image_compare",
         "@nlohmann_json//:json",
-        "@pixelmatch-cpp17",
     ],
 )
 
@@ -1353,24 +1343,10 @@ py_test(
     ],
 )
 
-# Donner adapter against the Donner-authored SVG2 extension seed corpus (design
-# 0057, Milestone 4): cases for SVG 2 behavior the resvg base suite does not
-# isolate, each with a manually-constructed exact PNG reference.
-py_test(
+# Keep the existing conformance target name while executing native GoogleTest/pixelmatch cases.
+alias(
     name = "donner_svg2_suite",
-    size = "small",
-    srcs = ["donner_svg2_suite_test.py"],
-    data = [
-        ":donner_svg2_render_adapter",
-    ] + glob([
-        "donner_svg2_corpus/manifest.json",
-        "donner_svg2_corpus/tests/**",
-    ]),
-    main = "donner_svg2_suite_test.py",
-    deps = [
-        "//tools/donner_svg2_suite:runner_lib",
-        "@rules_python//python/runfiles",
-    ],
+    actual = "//tools/svg_suite:donner_extension_tests",
 )
 
 # Direct primitive coverage also runs in Donner's dependency graph.
@@ -1380,5 +1356,54 @@ donner_cc_test(
     deps = [
         "@com_google_gtest//:gtest_main",
         "@tiny-skia-cpp//src/tiny_skia/filter",
+    ],
+)
+
+donner_cc_library(
+    name = "svg_suite_render",
+    testonly = 1,
+    srcs = ["SvgSuiteRender.cc"],
+    hdrs = [
+        "SvgSuiteReferenceFonts.h",
+        "SvgSuiteRender.h",
+    ],
+    deps = [
+        ":renderer_test_backend",
+        "//donner/base",
+        "//donner/css:core",
+        "//donner/svg",
+        "//donner/svg/components/resources:resource_manager_context",
+        "//donner/svg/parser",
+        "//donner/svg/resources:font_manager",
+        "//donner/svg/resources:font_metadata",
+        "//donner/svg/resources:sandboxed_file_resource_loader",
+        "//tools/svg_suite:image_compare",
+        "@picosha2",
+    ],
+)
+
+donner_cc_binary(
+    name = "donner_svg_suite_renderer",
+    testonly = 1,
+    srcs = ["DonnerSvgSuiteRenderer.cc"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":svg_suite_render",
+        "//tools/svg_suite:image_compare",
+    ],
+)
+
+filegroup(
+    name = "svg_suite_extension",
+    srcs = glob(["donner_svg2_corpus/**"]),
+    visibility = ["//visibility:public"],
+)
+
+donner_cc_test(
+    name = "svg_suite_render_tests",
+    srcs = ["SvgSuiteRender_tests.cc"],
+    deps = [
+        ":svg_suite_render",
+        "@com_google_gtest//:gtest_main",
     ],
 )

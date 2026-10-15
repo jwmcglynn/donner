@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100" viewBox="0 0 100 100">
+  <title>CSS x overrides the presentation attribute</title>
+  <desc>SVG2 geometry x and styling presentation attributes: the red rectangle occupies [20,60) x [20,60).
+    https://svgwg.org/svg2-draft/geometry.html#XProperty
+    https://svgwg.org/svg2-draft/styling.html#PresentationAttributes
+  </desc>
+  <rect x="0" y="20" width="40" height="40" fill="red" style="x:20px"/>
+</svg>

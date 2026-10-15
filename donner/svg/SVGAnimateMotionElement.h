@@ -26,7 +26,7 @@ namespace donner::svg {
 
 /// DOM wrapper for the \ref xml_animateMotion element.
 class SVGAnimateMotionElement : public SVGElement {
-  friend class parser::SVGParserImpl;
+  friend class details::ElementFactory;
 
 protected:
   /// Wrap an existing element.

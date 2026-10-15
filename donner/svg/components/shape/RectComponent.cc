@@ -89,7 +89,7 @@ ComputedRectComponent::ComputedRectComponent(
     if (parseFn != nullptr) {
       auto maybeError = (*parseFn)(properties, parser::PropertyParseFnParams::Create(
                                                    property.declaration, property.specificity,
-                                                   parser::PropertyParseBehavior::AllowUserUnits));
+                                                   parser::PropertyParseBehavior::Default));
       if (maybeError) {
         warningSink.add(std::move(maybeError.value()));
       }

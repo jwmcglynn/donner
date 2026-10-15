@@ -348,12 +348,14 @@ void ParsePresentationAttribute(SVGParserContext& context, SVGElement& element,
     if (error.has_value()) {
       context.addSubparserWarning(std::move(error.value()), context.parserOriginFrom(value));
     } else if (!consumedAsPresentationAttribute && context.options().disableUserAttributes) {
-      ParseDiagnostic err;
-      err.reason = "Unknown attribute '" + name.toString() + "' (disableUserAttributes: true)";
-      if (auto maybeLocation = context.getAttributeLocation(element, name)) {
-        err.range.start = maybeLocation->start;
+      if (context.warningsEnabled()) {
+        ParseDiagnostic err;
+        err.reason = "Unknown attribute '" + name.toString() + "' (disableUserAttributes: true)";
+        if (auto maybeLocation = context.getAttributeLocation(element, name)) {
+          err.range.start = maybeLocation->start;
+        }
+        context.addWarning(std::move(err));
       }
-      context.addWarning(std::move(err));
       AttributeParser::RemoveParsedAttribute(element, name);
     }
   }

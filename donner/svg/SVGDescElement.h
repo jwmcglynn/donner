@@ -42,7 +42,7 @@ namespace donner::svg {
  * textContent.
  */
 class SVGDescElement : public SVGElement {
-  friend class parser::SVGParserImpl;
+  friend class details::ElementFactory;
 
 protected:
   /// Create an SVGDescElement wrapper from an entity.

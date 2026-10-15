@@ -266,8 +266,11 @@ Production editor scope: a hybrid structured/freeform SVG editor workflow beyond
 
 ### Conformance & Testing
 
-- [ ] **SVG2 conformance pass**: Systematic audit of SVG2 spec coverage. Identify and close
-      high-impact gaps across all element categories.
+- [ ] **SVG2 conformance pass**: Audit the pinned latest SVG2 Editor's Draft and close applicable
+      gaps across chapters, tables, algorithms, and interfaces. See [audit](svg2_audit.md) and
+      [suite design](design_docs/0057-donner_svg2_test_suite.md).
+- [ ] **donner-svg-suite**: Reusable full resvg superset plus SVG2 SVG/PNG cases, sharing a C++
+      GoogleTest/pixelmatch harness and native animation/input scenarios with autonomous triage.
 - [ ] **90% code coverage**: Achieve and maintain >=90% line coverage across all production code.
       Identify under-covered subsystems and add targeted tests.
 - [ ] **Animation test suite**: Comprehensive test coverage for the animation system
@@ -281,8 +284,9 @@ Production editor scope: a hybrid structured/freeform SVG editor workflow beyond
       `e-textPath-*` tests passing plus per-character positioning, letter-spacing, baseline-shift,
       writing-mode, and alignment-baseline coverage. Remaining gaps (e.g. bidi, complex emoji)
       tracked in the feature-gaps doc.
-- [ ] **Add Donner to resvg test harness**: Contribute Donner as a backend in the upstream resvg
-      test suite repository (external repo contribution).
+- [ ] **Add Donner to resvg test harness**: Prepare and execute Donner backend integration with
+      automated pixel comparison and agent triage; upstream contribution has a separate submission
+      review. See [suite design](design_docs/0057-donner_svg2_test_suite.md).
 
 ### SVG Feature Gaps
 

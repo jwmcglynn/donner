@@ -74,7 +74,7 @@ namespace donner::svg {
  * ```
  */
 class SVGAnimateElement : public SVGElement {
-  friend class parser::SVGParserImpl;
+  friend class details::ElementFactory;
 
 protected:
   /// Create an SVGAnimateElement wrapper from an entity.

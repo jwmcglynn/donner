@@ -1,0 +1,198 @@
+load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_library", "cc_test")
+load("//build_defs:rules.bzl", "libc_compat_deps")
+
+package(default_visibility = ["//visibility:public"])
+
+exports_files(["dependencies.bzl"])
+
+cc_library(
+    name = "text_encoding",
+    testonly = True,
+    srcs = ["TextEncoding.cc"],
+    hdrs = ["TextEncoding.h"],
+)
+
+
+cc_library(
+    name = "image_compare",
+    testonly = True,
+    srcs = ["ImageCompare.cc"],
+    hdrs = ["ImageCompare.h"],
+    deps = [
+        "@pixelmatch-cpp17",
+        "@stb//:image",
+        "@stb//:image_write",
+    ],
+)
+
+cc_library(
+    name = "static_suite",
+    testonly = True,
+    srcs = ["StaticSuite.cc"],
+    hdrs = ["StaticSuite.h"],
+    deps = [
+        ":text_encoding",
+        ":file_fingerprint",
+        ":image_compare",
+        "@nlohmann_json//:json",
+    ],
+)
+
+cc_library(
+    name = "gtest_suite",
+    testonly = True,
+    srcs = ["GtestSuite.cc"],
+    hdrs = ["GtestSuite.h"],
+    deps = [
+        ":text_encoding",
+        ":file_fingerprint",
+        ":static_suite",
+        "@com_google_gtest//:gtest",
+    ],
+)
+
+cc_test(
+    name = "svg_suite_tests",
+    srcs = ["SvgSuite_tests.cc"],
+    deps = [
+        ":image_compare",
+        ":static_suite",
+        "@com_google_gtest//:gtest_main",
+    ] + libc_compat_deps(),
+)
+
+cc_library(
+    name = "process_renderer",
+    testonly = True,
+    srcs = ["ProcessRenderer.cc"],
+    hdrs = ["ProcessRenderer.h", "ProcessRendererInternal.h"],
+    deps = [
+        ":text_encoding",
+        ":static_suite",
+        "@nlohmann_json//:json",
+    ],
+)
+
+cc_binary(
+    name = "svg_suite",
+    testonly = True,
+    srcs = ["SuiteMain.cc"],
+    data = [
+        "//donner/svg/renderer/tests:svg_suite_extension",
+        "//third_party/resvg-test-suite:LICENSE",
+        "//third_party/resvg-test-suite:fonts",
+        "//third_party/resvg-test-suite:resources",
+        "//third_party/resvg-test-suite:tests",
+    ],
+    deps = [
+        ":text_encoding",
+        ":gtest_suite",
+        ":process_renderer",
+        ":provenance",
+        "@com_google_gtest//:gtest",
+    ] + libc_compat_deps(),
+)
+
+cc_test(
+    name = "process_renderer_tests",
+    srcs = ["ProcessRenderer_tests.cc"],
+    deps = [
+        ":process_renderer",
+        "@com_google_gtest//:gtest",
+    ] + libc_compat_deps(),
+)
+
+cc_test(
+    name = "donner_extension_tests",
+    srcs = ["SuiteMain.cc"],
+    args = [
+        "--extension-only",
+        "--trusted-inputs",
+        "--renderer",
+        "$(location //donner/svg/renderer/tests:donner_svg_suite_renderer)",
+    ],
+    data = [
+        "//donner/svg/renderer/tests:donner_svg_suite_renderer",
+        "//donner/svg/renderer/tests:svg_suite_extension",
+    ],
+    deps = [
+        ":text_encoding",
+        ":gtest_suite",
+        ":process_renderer",
+        ":provenance",
+        "@com_google_gtest//:gtest",
+    ] + libc_compat_deps(),
+)
+
+cc_library(
+    name = "provenance",
+    testonly = True,
+    srcs = ["Provenance.cc"],
+    deps = [
+        ":text_encoding",
+        ":file_fingerprint",
+        "@nlohmann_json//:json",
+        "@picosha2",
+    ],
+)
+
+cc_test(
+    name = "provenance_tests",
+    srcs = ["Provenance_tests.cc"],
+    deps = [
+        ":provenance",
+        ":static_suite",
+        "@com_google_gtest//:gtest_main",
+        "@nlohmann_json//:json",
+    ] + libc_compat_deps(),
+)
+
+cc_test(
+    name = "gtest_suite_tests",
+    srcs = ["GtestSuite_tests.cc"],
+    deps = [
+        ":gtest_suite",
+        ":process_renderer",
+        ":provenance",
+        "@com_google_gtest//:gtest",
+    ] + libc_compat_deps(),
+)
+
+cc_library(
+    name = "file_fingerprint",
+    testonly = True,
+    srcs = ["FileFingerprint.cc"],
+    hdrs = ["Provenance.h"],
+    deps = [
+        ":text_encoding",
+        ":image_compare",
+        "@picosha2",
+    ],
+)
+
+cc_test(
+    name = "file_fingerprint_tests",
+    srcs = ["FileFingerprint_tests.cc"],
+    deps = [
+        ":file_fingerprint",
+        "@com_google_gtest//:gtest_main",
+    ] + libc_compat_deps(),
+)
+
+cc_test(
+    name = "portable_callback_tests",
+    srcs = ["portable_consumer/CallbackConsumer.cc"],
+    deps = [
+        ":gtest_suite",
+        "@com_google_gtest//:gtest",
+    ] + libc_compat_deps(),
+)
+
+cc_test(
+    name = "text_encoding_tests",
+    srcs = ["TextEncoding_tests.cc"],
+    deps = [
+        ":text_encoding",
+        "@com_google_gtest//:gtest_main",
+    ] + libc_compat_deps(),
+)

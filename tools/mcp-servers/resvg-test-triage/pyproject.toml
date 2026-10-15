@@ -10,8 +10,6 @@ readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
     "mcp>=0.9.0",
-    "Pillow>=10.0.0",
-    "numpy>=1.24.0",
 ]
 
 [project.optional-dependencies]
@@ -27,6 +25,7 @@ include = [
     "server.py",
     "codebase_helpers.py",
     "test_output_parser.py",
+    "triage_evidence.py",
 ]
 
 [tool.hatch.build.targets.sdist]
@@ -34,6 +33,7 @@ include = [
     "server.py",
     "codebase_helpers.py",
     "test_output_parser.py",
+    "triage_evidence.py",
     "README.md",
     "pyproject.toml",
 ]

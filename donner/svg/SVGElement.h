@@ -60,6 +60,13 @@ class SVGParserImpl;
 
 }  // namespace parser
 
+namespace details {
+
+// Forward declaration, for friend access to element factories.
+class ElementFactory;
+
+}  // namespace details
+
 /**
  * Lifetime-aware reference to an SVG element entity.
  *

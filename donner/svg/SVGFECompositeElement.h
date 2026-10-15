@@ -189,7 +189,7 @@ namespace donner::svg {
  * uses the formula: `result = k1*in*in2 + k2*in + k3*in2 + k4`.
  */
 class SVGFECompositeElement : public SVGFilterPrimitiveStandardAttributes {
-  friend class parser::SVGParserImpl;
+  friend class details::ElementFactory;
 
 protected:
   /// Create an SVGFECompositeElement wrapper from an entity.

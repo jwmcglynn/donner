@@ -11,6 +11,7 @@ import textwrap
 import unittest
 
 from python.runfiles import runfiles
+from tools import test_timing
 
 
 BAZEL_DIFF_TAG = "v18.1.0"
@@ -1494,7 +1495,7 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
                 env={**os.environ, "RUNNER_TEMP": str(runner)},
                 capture_output=True,
                 text=True,
-                timeout=10,
+                timeout=test_timing.STALL_GUARD_SECONDS,
                 check=False,
             )
             self.assertEqual(0, result.returncode, result.stdout + result.stderr)
@@ -1550,7 +1551,8 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
             original = "common --repository_cache=/fixture/repository"
             rc.write_text(original)
             result = subprocess.run(["/bin/bash", "-c", script], env={"HOME": directory},
-                                    text=True, capture_output=True, timeout=10)
+                                    text=True, capture_output=True,
+                                    timeout=test_timing.STALL_GUARD_SECONDS)
             self.assertEqual(result.returncode, 0, result.stderr)
             lines = rc.read_text().splitlines()
             self.assertEqual(lines[0], original)
@@ -2046,7 +2048,7 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
                 ["/bin/bash", "-c", script], cwd=repo, text=True, capture_output=True,
                 env=dict(env, EVENT_NAME=event_name, BASE_SHA=base or base_sha,
                          HEAD_SHA=git("rev-parse", "HEAD"), GITHUB_OUTPUT=str(output)),
-                timeout=60)
+                timeout=test_timing.STALL_GUARD_SECONDS)
             self.assertEqual(0, result.returncode, result.stderr)
             values = dict(line.split("=", 1) for line in output.read_text().splitlines())
             return values["full_matrix"]
@@ -2588,14 +2590,16 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
                "REF": ref}
         env.update(overrides)
         result = subprocess.run(["bash", "-c", script], env=env, capture_output=True,
-                                text=True, timeout=10, check=False)
+                                text=True, timeout=test_timing.STALL_GUARD_SECONDS,
+                                check=False)
         fragment = workspace / ".buildbuddy.bazelrc"
         helper = temp / "buildbuddy" / "helper"
         credential = None
         if helper.exists():
             # Run the credential helper as Bazel does: `get`, with the request on stdin.
             answer = subprocess.run([str(helper), "get"], input='{"uri": "grpcs://x"}',
-                                    capture_output=True, text=True, timeout=10, check=True)
+                                    capture_output=True, text=True,
+                                    timeout=test_timing.STALL_GUARD_SECONDS, check=True)
             credential = answer.stdout
         return (result.returncode, fragment.read_text() if fragment.exists() else None,
                 credential, result.stdout)
@@ -2750,7 +2754,8 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
                    "ARGUMENT_RECEIPT": str(receipt)}
             command = ["/bin/bash", "-e", "-o", "pipefail", "-c", script]
             result = subprocess.run(command, cwd=root, env=env,
-                                    capture_output=True, text=True, timeout=10)
+                                    capture_output=True, text=True,
+                                    timeout=test_timing.STALL_GUARD_SECONDS)
             self.assertEqual(0, result.returncode, result.stdout + result.stderr)
             calls = [part.splitlines() for part in receipt.read_text().split("\0") if part]
             self.assertEqual(len(tags), len(calls))
@@ -2765,7 +2770,8 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
                         self.assertIn(required, args)
             receipt.write_text("")
             result = subprocess.run(command, cwd=root, env={**env, "FAKE_BAZEL_EXIT": "17"},
-                                    capture_output=True, text=True, timeout=10)
+                                    capture_output=True, text=True,
+                                    timeout=test_timing.STALL_GUARD_SECONDS)
             self.assertEqual(17, result.returncode, result.stdout + result.stderr)
             self.assertEqual(1, receipt.read_text().count("\0"))
         self.assertNotRegex(body.replace("//...", ""), r"//[^\s]+")

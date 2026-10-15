@@ -1,7 +1,5 @@
 #include "donner/editor/tests/BitmapGoldenCompare.h"
 
-#include <pixelmatch/pixelmatch.h>
-
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -15,6 +13,7 @@
 #include "donner/svg/renderer/RendererInterface.h"
 #include "donner/svg/renderer/tests/RendererImageTestUtils.h"
 #include "gtest/gtest.h"
+#include "tools/svg_suite/ImageCompare.h"
 
 namespace donner::editor::tests {
 
@@ -73,14 +72,13 @@ void CompareBitmapToGolden(const svg::RendererBitmap& bitmap, std::string_view g
     return;
   }
 
-  std::vector<uint8_t> diffImage(bitmap.pixels.size(), 0u);
-  pixelmatch::Options options;
-  options.threshold = params.threshold;
-  options.includeAA = params.includeAntiAliasing;
-  const int mismatched = pixelmatch::pixelmatch(golden.data, bitmap.pixels, diffImage, width,
-                                                height, strideInPixels, options);
-  // pixelmatch returns -1 when it cannot compare its inputs; never count that as a pass.
-  ASSERT_GE(mismatched, 0) << "[" << testLabel << "] pixelmatch could not compare the bitmap";
+  auto comparison = svg_suite::CompareImages(
+      {width, height, strideInPixels, golden.data}, {width, height, strideInPixels, bitmap.pixels},
+      {params.threshold, params.maxMismatchedPixels, params.includeAntiAliasing});
+  ASSERT_TRUE(comparison.error.empty()) << "[" << testLabel << "] " << comparison.error;
+  ASSERT_TRUE(comparison.mismatchedPixels.has_value());
+  const int mismatched = *comparison.mismatchedPixels;
+  const auto& diffImage = comparison.diff->data;
 
   if (mismatched > params.maxMismatchedPixels) {
     const std::filesystem::path outDir = detail::DiffOutputDir();

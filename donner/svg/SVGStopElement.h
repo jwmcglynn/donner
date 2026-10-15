@@ -98,7 +98,7 @@ namespace donner::svg {
  * @see \ref SVGLinearGradientElement, \ref SVGRadialGradientElement
  */
 class SVGStopElement : public SVGElement {
-  friend class parser::SVGParserImpl;
+  friend class details::ElementFactory;
 
 protected:
   /// Create an SVGStopElement wrapper from an entity.

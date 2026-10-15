@@ -2348,6 +2348,173 @@ TEST(PropertyRegistry, FilterAmountErrorsUseCanonicalFunctionNames) {
   }
 }
 
+TEST(PropertyRegistry, FilterSingleOperandAmountsRejectStyleTrailingValues) {
+  for (std::string_view function :
+       {"brightness", "contrast", "grayscale", "invert", "opacity", "saturate", "sepia"}) {
+    for (std::string_view first : {"0.5", "50%"}) {
+      for (std::string_view tail : {" 2", " \t2\n", ",2", " bogus", " calc(2)", " [2]"}) {
+        const std::string input =
+            "filter: " + std::string(function) + "(" + std::string(first) + std::string(tail) + ")";
+        SCOPED_TRACE(input);
+        PropertyRegistry registry;
+        ASSERT_THAT(registry.parseStyle("filter: opacity(0)"), testing::IsTrue());
+        ASSERT_THAT(registry.filter.get(), Optional(testing::ElementsAre(FilterOpacityIs(0.0))));
+        const auto declarations = css::CSS::ParseStyleAttribute(input);
+        ASSERT_THAT(declarations, testing::SizeIs(1));
+        EXPECT_THAT(registry.parseProperty(declarations.front(), Specificity::StyleAttribute()),
+                    ParseErrorIs(testing::_));
+        EXPECT_THAT(registry.filter.get(), Optional(testing::ElementsAre(FilterOpacityIs(0.0))));
+      }
+    }
+  }
+}
+
+TEST(PropertyRegistry, FilterSingleOperandAmountsRejectPresentationTrailingValues) {
+  for (std::string_view function :
+       {"brightness", "contrast", "grayscale", "invert", "opacity", "saturate", "sepia"}) {
+    for (std::string_view first : {"0.5", "50%"}) {
+      for (std::string_view tail : {" 2", " \t2\n", ",2", " bogus", " calc(2)", " [2]"}) {
+        const std::string input =
+            std::string(function) + "(" + std::string(first) + std::string(tail) + ")";
+        SCOPED_TRACE(input);
+        PropertyRegistry registry;
+        ASSERT_THAT(registry.parsePresentationAttribute("filter", "opacity(0)"),
+                    ParseResultIs(true));
+        ASSERT_THAT(registry.filter.get(), Optional(testing::ElementsAre(FilterOpacityIs(0.0))));
+        EXPECT_THAT(registry.parsePresentationAttribute("filter", input), ParseErrorIs(testing::_));
+        EXPECT_THAT(registry.filter.get(), Optional(testing::ElementsAre(FilterOpacityIs(0.0))));
+      }
+    }
+  }
+}
+
+TEST(PropertyRegistry, FilterSingleOperandHueRejectsStyleTrailingValues) {
+  for (std::string_view first : {"0", "90deg", "0.25turn"}) {
+    for (std::string_view tail :
+         {" 180deg", " \t180deg\n", ",180deg", " bogus", " calc(180deg)", " [180deg]"}) {
+      const std::string input =
+          "filter: hue-rotate(" + std::string(first) + std::string(tail) + ")";
+      SCOPED_TRACE(input);
+      PropertyRegistry registry;
+      ASSERT_THAT(registry.parseStyle("filter: opacity(0)"), testing::IsTrue());
+      ASSERT_THAT(registry.filter.get(), Optional(testing::ElementsAre(FilterOpacityIs(0.0))));
+      const auto declarations = css::CSS::ParseStyleAttribute(input);
+      ASSERT_THAT(declarations, testing::SizeIs(1));
+      EXPECT_THAT(registry.parseProperty(declarations.front(), Specificity::StyleAttribute()),
+                  ParseErrorIs(testing::_));
+      EXPECT_THAT(registry.filter.get(), Optional(testing::ElementsAre(FilterOpacityIs(0.0))));
+    }
+  }
+}
+
+TEST(PropertyRegistry, FilterSingleOperandHueRejectsPresentationTrailingValues) {
+  for (std::string_view first : {"0", "90deg", "0.25turn"}) {
+    for (std::string_view tail :
+         {" 180deg", " \t180deg\n", ",180deg", " bogus", " calc(180deg)", " [180deg]"}) {
+      const std::string input = "hue-rotate(" + std::string(first) + std::string(tail) + ")";
+      SCOPED_TRACE(input);
+      PropertyRegistry registry;
+      ASSERT_THAT(registry.parsePresentationAttribute("filter", "opacity(0)"), ParseResultIs(true));
+      ASSERT_THAT(registry.filter.get(), Optional(testing::ElementsAre(FilterOpacityIs(0.0))));
+      EXPECT_THAT(registry.parsePresentationAttribute("filter", input), ParseErrorIs(testing::_));
+      EXPECT_THAT(registry.filter.get(), Optional(testing::ElementsAre(FilterOpacityIs(0.0))));
+    }
+  }
+}
+
+TEST(PropertyRegistry, FilterSingleOperandStyleRejectsWholeChain) {
+  for (std::string_view function : {"brightness", "contrast", "grayscale", "invert", "opacity",
+                                    "saturate", "sepia", "hue-rotate"}) {
+    const std::string input =
+        "filter: brightness(1) " + std::string(function) + "(0 bogus) opacity(1)";
+    SCOPED_TRACE(input);
+    PropertyRegistry registry;
+    ASSERT_THAT(registry.parseStyle("filter: opacity(0)"), testing::IsTrue());
+    ASSERT_THAT(registry.filter.get(), Optional(testing::ElementsAre(FilterOpacityIs(0.0))));
+    const auto declarations = css::CSS::ParseStyleAttribute(input);
+    ASSERT_THAT(declarations, testing::SizeIs(1));
+    EXPECT_THAT(registry.parseProperty(declarations.front(), Specificity::StyleAttribute()),
+                ParseErrorIs(testing::_));
+    EXPECT_THAT(registry.filter.get(), Optional(testing::ElementsAre(FilterOpacityIs(0.0))));
+  }
+}
+
+TEST(PropertyRegistry, FilterSingleOperandPresentationRejectsWholeChain) {
+  for (std::string_view function : {"brightness", "contrast", "grayscale", "invert", "opacity",
+                                    "saturate", "sepia", "hue-rotate"}) {
+    const std::string input = "brightness(1) " + std::string(function) + "(0 bogus) opacity(1)";
+    SCOPED_TRACE(input);
+    PropertyRegistry registry;
+    ASSERT_THAT(registry.parsePresentationAttribute("filter", "opacity(0)"), ParseResultIs(true));
+    ASSERT_THAT(registry.filter.get(), Optional(testing::ElementsAre(FilterOpacityIs(0.0))));
+    EXPECT_THAT(registry.parsePresentationAttribute("filter", input), ParseErrorIs(testing::_));
+    EXPECT_THAT(registry.filter.get(), Optional(testing::ElementsAre(FilterOpacityIs(0.0))));
+  }
+}
+
+TEST(PropertyRegistry, FilterSingleOperandValidStyleValuesReplacePriorFilter) {
+  struct Operands {
+    std::string_view amount;
+    double amountValue;
+    std::string_view angle;
+    double angleDegrees;
+  };
+  for (const Operands args :
+       {Operands{"", 1.0, "", 0.0}, Operands{" /* comment */ ", 1.0, " /* comment */ 0 ", 0.0},
+        Operands{" \t0.5 /* comment */ ", 0.5, " \t90deg /* comment */ ", 90.0},
+        Operands{" \t50%\n", 0.5, " \t0.25turn\n", 90.0}}) {
+    const std::string amount(args.amount);
+    const std::string input = "filter: brightness(" + amount + ") contrast(" + amount +
+                              ") grayscale(" + amount + ") invert(" + amount + ") opacity(" +
+                              amount + ") saturate(" + amount + ") sepia(" + amount +
+                              ") hue-rotate(" + std::string(args.angle) + ")";
+    SCOPED_TRACE(input);
+    PropertyRegistry registry;
+    ASSERT_THAT(registry.parseStyle("filter: opacity(0)"), testing::IsTrue());
+    ASSERT_THAT(registry.filter.get(), Optional(testing::ElementsAre(FilterOpacityIs(0.0))));
+    const auto declarations = css::CSS::ParseStyleAttribute(input);
+    ASSERT_THAT(declarations, testing::SizeIs(1));
+    EXPECT_THAT(registry.parseProperty(declarations.front(), Specificity::StyleAttribute()),
+                Eq(std::nullopt));
+    EXPECT_THAT(registry.filter.get(),
+                Optional(testing::ElementsAre(
+                    FilterBrightnessIs(args.amountValue), FilterContrastIs(args.amountValue),
+                    FilterGrayscaleIs(args.amountValue), FilterInvertIs(args.amountValue),
+                    FilterOpacityIs(args.amountValue), FilterSaturateIs(args.amountValue),
+                    FilterSepiaIs(args.amountValue), FilterHueRotateIs(args.angleDegrees, 0.0))));
+  }
+}
+
+TEST(PropertyRegistry, FilterSingleOperandValidPresentationValuesReplacePriorFilter) {
+  struct Operands {
+    std::string_view amount;
+    double amountValue;
+    std::string_view angle;
+    double angleDegrees;
+  };
+  for (const Operands args :
+       {Operands{"", 1.0, "", 0.0}, Operands{" /* comment */ ", 1.0, " /* comment */ 0 ", 0.0},
+        Operands{" \t0.5 /* comment */ ", 0.5, " \t90deg /* comment */ ", 90.0},
+        Operands{" \t50%\n", 0.5, " \t0.25turn\n", 90.0}}) {
+    const std::string amount(args.amount);
+    const std::string input = "brightness(" + amount + ") contrast(" + amount + ") grayscale(" +
+                              amount + ") invert(" + amount + ") opacity(" + amount +
+                              ") saturate(" + amount + ") sepia(" + amount + ") hue-rotate(" +
+                              std::string(args.angle) + ")";
+    SCOPED_TRACE(input);
+    PropertyRegistry registry;
+    ASSERT_THAT(registry.parsePresentationAttribute("filter", "opacity(0)"), ParseResultIs(true));
+    ASSERT_THAT(registry.filter.get(), Optional(testing::ElementsAre(FilterOpacityIs(0.0))));
+    EXPECT_THAT(registry.parsePresentationAttribute("filter", input), ParseResultIs(true));
+    EXPECT_THAT(registry.filter.get(),
+                Optional(testing::ElementsAre(
+                    FilterBrightnessIs(args.amountValue), FilterContrastIs(args.amountValue),
+                    FilterGrayscaleIs(args.amountValue), FilterInvertIs(args.amountValue),
+                    FilterOpacityIs(args.amountValue), FilterSaturateIs(args.amountValue),
+                    FilterSepiaIs(args.amountValue), FilterHueRotateIs(args.angleDegrees, 0.0))));
+  }
+}
+
 TEST(PropertyRegistry, FilterParsing) {
   {
     PropertyRegistry registry;

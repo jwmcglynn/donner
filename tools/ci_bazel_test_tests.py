@@ -15,6 +15,7 @@ import tempfile
 import unittest
 
 from python.runfiles import runfiles
+from tools import test_timing
 
 # Bazel's exit status for "Build successful but no tests were found even though
 # testing was requested".
@@ -72,7 +73,7 @@ class CiBazelTestWrapperTest(unittest.TestCase):
             check=False,
             capture_output=True,
             text=True,
-            timeout=60,
+            timeout=test_timing.STALL_GUARD_SECONDS,
         )
 
     def _run_fake(self, exit_code, args=("test", "//pkg:target"), compose=False):
