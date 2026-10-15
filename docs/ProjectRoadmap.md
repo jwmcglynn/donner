@@ -238,9 +238,11 @@ section does not gate the v1.0 release criteria.
 - [ ] **Deterministic reconciliation**: Merging incoming state takes the union of element IDs. For
       the same ID the higher `version` wins, and equal versions break ties by the lower
       `versionNonce`, so every peer converges without a coordinating server. Deletions are
-      tombstones retained in collaboration state until every peer in the session has seen them,
-      or until a documented retention window expires; the saved SVG never contains deleted
-      elements.
+      tombstones retained in collaboration state until every peer in the session has
+      acknowledged them. Compacting acknowledged tombstones advances a session epoch; a peer
+      whose state predates that epoch resynchronizes from current state and replays only its own
+      unsent edits instead of merging its stale copy, so a deleted element is never resurrected.
+      The saved SVG never contains deleted elements.
 - [ ] **Tree ordering**: SVG is a tree whose document order is paint order, unlike Excalidraw's flat
       element list. Each element records its parent ID and a fractional index among its siblings,
       so concurrent inserts and reorders merge without renumbering. Equal indices are ordered by
