@@ -6,6 +6,37 @@ none of Donner's `dev_dependency` repositories, can still load the Geode product
 
 load("@rules_python//python:defs.bzl", "py_test")
 
+py_test(
+    name = "geode_geometry_fuzzer_routing_tests",
+    srcs = ["GeodeGeometryFuzzerRouting_tests.py"],
+    args = [
+        "$(rootpath //donner/svg/renderer/geode:geode_geometry_fuzzer_routing_manifest)",
+        "$(rootpath //donner/svg/renderer/geode:tests/GeodeSvgGeometryBudget_fuzzer.cc)",
+    ],
+    data = [
+        "//donner/svg/renderer/geode:geode_geometry_fuzzer_routing_manifest",
+        "//donner/svg/renderer/geode:tests/GeodeSvgGeometryBudget_fuzzer.cc",
+    ],
+    main = "GeodeGeometryFuzzerRouting_tests.py",
+)
+
+# Production sources reach every backend through the GPU runtime alone and never name the
+# test-only wgpu reference, and the runtime device source seam stays private to the production
+# package, whose BUILD file the test reads.
+py_test(
+    name = "geode_production_source_boundary_tests",
+    srcs = ["GeodeProductionSourceBoundary_tests.py"],
+    args = [
+        "--build=$(rootpath //donner/svg/renderer/geode:BUILD.bazel)",
+        "$(rootpaths //donner/svg/renderer/geode:geode_production_sources)",
+    ],
+    data = [
+        "//donner/svg/renderer/geode:BUILD.bazel",
+        "//donner/svg/renderer/geode:geode_production_sources",
+    ],
+    main = "GeodeProductionSourceBoundary_tests.py",
+)
+
 # One target from each package that the Geode production closure adds to the default renderer's.
 # `buildfiles` reports those packages' BUILD files and every .bzl file they load, transitively.
 _GEODE_PRODUCTION_PACKAGE_ROOTS = [

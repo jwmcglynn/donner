@@ -257,7 +257,7 @@ py_test(
         "//donner/editor/wasm:wasm_package_size_test_arguments",
         "//donner/editor/wasm/tests:BUILD.bazel",
         "//donner/editor/wasm/tests:browser-stall-diagnostics.mjs",
-        "//donner/gpu/shader:BUILD.bazel",
+        "//donner/gpu/shader/browser_tests:BUILD.bazel",
         "//donner/svg/renderer/wasm:BUILD.bazel",
         "//tools:ci_bazel_test.sh",
         "//tools:coverage.sh",
