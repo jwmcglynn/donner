@@ -57,7 +57,8 @@ struct ContributionKeyHash {
 };
 
 struct CascadeEntry {
-  std::size_t contributionIndex = 0;
+  std::optional<std::size_t> contributionIndex;
+  std::string propertyName;
   css::Specificity specificity;
   std::optional<css::Declaration> declaration;
   std::string presentationValue;
@@ -66,7 +67,7 @@ struct CascadeEntry {
 struct Winner {
   css::Specificity specificity;
   std::size_t order = 0;
-  std::size_t contributionIndex = 0;
+  std::optional<std::size_t> contributionIndex;
 };
 
 struct FragmentReference {
@@ -278,7 +279,7 @@ void AppendHrefFragmentReference(std::string_view value,
 
 [[nodiscard]] css::Specificity SpecificityForDeclaration(const css::Declaration& declaration,
                                                          css::Specificity baseSpecificity) {
-  return declaration.important ? css::Specificity::Important() : baseSpecificity;
+  return declaration.important ? css::Specificity::Important(baseSpecificity) : baseSpecificity;
 }
 
 [[nodiscard]] bool IsPropertyDeclarationValid(const css::Declaration& declaration,
@@ -668,6 +669,7 @@ void AddLocalCascadeEntries(const svg::SVGElement& element,
 
     entries->push_back(CascadeEntry{
         .contributionIndex = contributionIter->second,
+        .propertyName = propertyName,
         .specificity = kPresentationSpecificity,
         .presentationValue = std::string(*attrValue),
     });
@@ -694,6 +696,7 @@ void AddLocalCascadeEntries(const svg::SVGElement& element,
 
     entries->push_back(CascadeEntry{
         .contributionIndex = contributionIter->second,
+        .propertyName = std::string(declaration.name),
         .specificity = SpecificityForDeclaration(declaration, css::Specificity::StyleAttribute()),
         .declaration = declaration,
     });
@@ -707,10 +710,6 @@ void AddStylesheetCascadeEntries(
     std::vector<CascadeEntry>* entries) {
   const std::vector<svg::SVGMatchedStyleRule> matches = svg::CollectMatchedStyleRules(element);
   for (const svg::SVGMatchedStyleRule& match : matches) {
-    if (match.isUserAgentStylesheet) {
-      continue;
-    }
-
     const svg::SVGStylesheetRule* rule =
         FindStylesheetRule(styleRules, match.stylesheetEntity, match.ruleIndex);
     if (rule == nullptr) {
@@ -726,12 +725,14 @@ void AddStylesheetCascadeEntries(
           .declarationIndex = stylesheetDeclaration.declarationIndex,
           .propertyName = std::string(declaration.name),
       });
-      if (contributionIter == contributionIndexByKey.end()) {
+      if (!match.isUserAgentStylesheet && contributionIter == contributionIndexByKey.end()) {
         continue;
       }
 
       entries->push_back(CascadeEntry{
-          .contributionIndex = contributionIter->second,
+          .contributionIndex =
+              match.isUserAgentStylesheet ? std::nullopt : std::optional(contributionIter->second),
+          .propertyName = std::string(declaration.name),
           .specificity = SpecificityForDeclaration(declaration, match.specificity),
           .declaration = declaration,
       });
@@ -752,26 +753,23 @@ void MarkEffectiveContributionsForElement(
   std::size_t order = 0;
   for (const CascadeEntry& entry : entries) {
     ++order;
-    const StyleSourceContribution& contribution =
-        annotations->contributions[entry.contributionIndex];
-
     bool valid = false;
-    if (contribution.kind == StyleContributionKind::PresentationAttribute) {
-      valid = IsPresentationAttributeValid(contribution.propertyName, entry.presentationValue,
-                                           element.entityHandle());
-    } else if (entry.declaration.has_value()) {
+    if (entry.declaration.has_value()) {
       valid = IsPropertyDeclarationValid(*entry.declaration, entry.specificity);
+    } else {
+      valid = IsPresentationAttributeValid(entry.propertyName, entry.presentationValue,
+                                           element.entityHandle());
     }
 
     if (!valid) {
       continue;
     }
 
-    auto winnerIter = winnersByProperty.find(contribution.propertyName);
+    auto winnerIter = winnersByProperty.find(entry.propertyName);
     if (winnerIter == winnersByProperty.end() ||
         entry.specificity > winnerIter->second.specificity ||
         (entry.specificity == winnerIter->second.specificity && order > winnerIter->second.order)) {
-      winnersByProperty[contribution.propertyName] = Winner{
+      winnersByProperty[entry.propertyName] = Winner{
           .specificity = entry.specificity,
           .order = order,
           .contributionIndex = entry.contributionIndex,
@@ -780,7 +778,9 @@ void MarkEffectiveContributionsForElement(
   }
 
   for (const auto& [propertyName, winner] : winnersByProperty) {
-    annotations->contributions[winner.contributionIndex].effective = true;
+    if (winner.contributionIndex) {
+      annotations->contributions[*winner.contributionIndex].effective = true;
+    }
   }
 }
 
@@ -795,7 +795,8 @@ StyleSourceAnnotations ComputeStyleSourceAnnotations(svg::SVGDocument& document,
   return document.withWriteAccess([&document, source](svg::DocumentWriteAccess&) {
     StyleSourceAnnotations annotations;
     std::unordered_map<ContributionKey, std::size_t, ContributionKeyHash> contributionIndexByKey;
-    const std::vector<svg::SVGStylesheetRule> styleRules = svg::CollectStylesheetRules(document);
+    const std::vector<svg::SVGStylesheetRule> styleRules =
+        svg::CollectStylesheetRules(document, /*includeUserAgent=*/true);
     AddStylesheetContributions(styleRules, source, &annotations, &contributionIndexByKey);
 
     std::vector<svg::SVGElement> elements;

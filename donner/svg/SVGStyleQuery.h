@@ -30,15 +30,16 @@ struct SVGMatchedStyleRule {
   bool operator==(const SVGMatchedStyleRule& other) const = default;
 };
 
-/// Source-backed declaration within a stylesheet rule.
+/// Parsed declaration within a stylesheet rule, with an optional document source range.
 struct SVGStylesheetDeclaration {
   std::size_t declarationIndex = 0;                   ///< Index within the rule.
   css::Declaration declaration;                       ///< Parsed CSS declaration.
   std::optional<SourceRange> declarationSourceRange;  ///< Declaration range in SVG source.
 };
 
-/// Source-backed author stylesheet rule in a document.
+/// Stylesheet rule in a document; built-in rules have no document source ranges.
 struct SVGStylesheetRule {
+  bool isUserAgentStylesheet = false;  ///< True for a built-in rule without document source ranges.
   Entity stylesheetEntity = entt::null;                ///< Entity carrying the stylesheet.
   std::size_t ruleIndex = 0;                           ///< Index within the stylesheet.
   std::optional<SourceRange> ruleSourceRange;          ///< Rule range in SVG source.
@@ -69,8 +70,11 @@ std::vector<SVGMatchedStyleRule> CollectMatchedStyleRules(const SVGElement& elem
 /// Collect source-backed author stylesheet rules in \p document.
 ///
 /// @param document SVG document to inspect.
-/// @return Source-backed stylesheet rules in document scan order.
-std::vector<SVGStylesheetRule> CollectStylesheetRules(const SVGDocument& document);
+/// @param includeUserAgent Include built-in rules without document source ranges. Defaults to
+/// false.
+/// @return Author rules and optionally built-in rules in the existing stylesheet scan order.
+std::vector<SVGStylesheetRule> CollectStylesheetRules(const SVGDocument& document,
+                                                      bool includeUserAgent = false);
 
 /// Return true when an author stylesheet rule in \p document matches on tree position.
 ///
@@ -79,8 +83,8 @@ std::vector<SVGStylesheetRule> CollectStylesheetRules(const SVGDocument& documen
 /// must not change how the document paints has to treat a move as unsafe while one exists.
 ///
 /// The user agent stylesheet is excluded. It is a fixed part of every document, and each of its
-/// position-based rules keys on the document root (`svg:not(:root)`), on a shadow host
-/// (`:host(use) > symbol`), or on having a `foreignObject` parent (`*:not(foreignObject) > svg`).
+/// position-based rules keys on the document root (`svg:not(:root)`) or on having a
+/// `foreignObject` parent (`*:not(foreignObject) > svg`).
 /// Moving an element between a `<g>` and the document root changes none of those, so excluding
 /// them does not weaken the answer for a caller asking about such a move.
 ///

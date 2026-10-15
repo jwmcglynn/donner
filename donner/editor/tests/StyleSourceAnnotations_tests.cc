@@ -11,6 +11,7 @@
 #include "donner/base/xml/XMLNode.h"
 #include "donner/svg/DocumentState.h"
 #include "donner/svg/parser/SVGParser.h"
+#include "donner/svg/properties/PropertyRegistry.h"
 
 namespace donner::editor {
 namespace {
@@ -45,6 +46,79 @@ const StyleSourceContribution* FindContribution(const StyleSourceAnnotations& an
   }
 
   return nullptr;
+}
+
+TEST(StyleSourceAnnotations, CascadePriorityUserAgentStyleDisplaySuppressesAuthoredWinners) {
+  constexpr std::string_view source =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8">
+    <rect width="4" height="8"/>
+    <style id="sheet" display="inline" style="display: inline !important">
+      #sheet { display: inline !important; }
+      rect { fill: red; }
+    </style>
+  </svg>)svg";
+  auto document = ParseSvg(source);
+  auto stylesheet = document.querySelector("#sheet");
+  ASSERT_TRUE(stylesheet);
+  EXPECT_EQ(stylesheet->getComputedStyle().display.get(), svg::Display::None);
+  const auto annotations = ComputeStyleSourceAnnotations(document, source);
+  const auto* inlineDisplay =
+      FindContribution(annotations, StyleContributionKind::InlineStyleDeclaration, "display",
+                       "display: inline", source);
+  const auto* stylesheetDisplay =
+      FindContribution(annotations, StyleContributionKind::StylesheetDeclaration, "display",
+                       "display: inline", source);
+  const auto* presentationDisplay = FindContribution(
+      annotations, StyleContributionKind::PresentationAttribute, "display", "display=", source);
+  ASSERT_NE(inlineDisplay, nullptr);
+  ASSERT_NE(stylesheetDisplay, nullptr);
+  ASSERT_NE(presentationDisplay, nullptr);
+  EXPECT_FALSE(inlineDisplay->effective);
+  EXPECT_FALSE(stylesheetDisplay->effective);
+  EXPECT_FALSE(presentationDisplay->effective);
+  for (const auto& contribution : annotations.contributions) {
+    EXPECT_LT(contribution.sourceRange.start, contribution.sourceRange.end);
+    EXPECT_LE(contribution.sourceRange.end, source.size());
+  }
+}
+
+TEST(StyleSourceAnnotations, CascadePriorityImportantSelectorsKeepAbcInBothOrders) {
+  const std::string high = "#target { fill: #ff0000 !important; }";
+  const std::string low = "rect { fill: #0000ff !important; }";
+  for (const bool highFirst : {false, true}) {
+    const std::string source =
+        "<svg xmlns='http://www.w3.org/2000/svg' width='8' height='8'><style>" +
+        (highFirst ? high + low : low + high) +
+        "</style><rect id='target' width='8' height='8'/></svg>";
+    auto document = ParseSvg(source);
+    const auto annotations = ComputeStyleSourceAnnotations(document, source);
+    const auto* red = FindContribution(annotations, StyleContributionKind::StylesheetDeclaration,
+                                       "fill", "fill: #ff0000", source);
+    const auto* blue = FindContribution(annotations, StyleContributionKind::StylesheetDeclaration,
+                                        "fill", "fill: #0000ff", source);
+    ASSERT_NE(red, nullptr);
+    ASSERT_NE(blue, nullptr);
+    EXPECT_TRUE(red->effective) << highFirst;
+    EXPECT_FALSE(blue->effective) << highFirst;
+  }
+}
+
+TEST(StyleSourceAnnotations, CascadePriorityImportantInlineOutranksImportantSelector) {
+  constexpr std::string_view source =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8">
+    <style>#target { fill: #0000ff !important; }</style>
+    <rect id="target" width="8" height="8" style="fill: #00ff00 !important"/>
+  </svg>)svg";
+  auto document = ParseSvg(source);
+  const auto annotations = ComputeStyleSourceAnnotations(document, source);
+  const auto* inlineFill = FindContribution(
+      annotations, StyleContributionKind::InlineStyleDeclaration, "fill", "fill: #00ff00", source);
+  const auto* stylesheetFill = FindContribution(
+      annotations, StyleContributionKind::StylesheetDeclaration, "fill", "fill: #0000ff", source);
+  ASSERT_NE(inlineFill, nullptr);
+  ASSERT_NE(stylesheetFill, nullptr);
+  EXPECT_TRUE(inlineFill->effective);
+  EXPECT_FALSE(stylesheetFill->effective);
 }
 
 TEST(StyleSourceAnnotations, StylesheetRuleReportsSelectorMatchedElementChipCount) {
