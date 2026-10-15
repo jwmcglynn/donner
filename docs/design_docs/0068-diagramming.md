@@ -431,8 +431,8 @@ contains `ReplaceDocument`, `CutShapes` or `PasteShapes`, and the reparse-free i
 Mermaid text patches use the milestone 1 `ReplaceTextRange` command: a byte range inside the
 `dgm:mermaid` CDATA value plus replacement bytes, applied through `SVGDocument::applySourceEdit`.
 The range lies inside one CDATA node, so the edit classifies as `TextNode` scope and emits a minimal
-source delta. The printer guarantees the replacement contains no `]]>`; when one is needed it
-splits the CDATA section with a structured insert instead.
+source delta. Stored Mermaid text never contains the CDATA terminator `]]>` (see below), so a
+patch can never end the CDATA section early.
 
 ### Hard rules
 
@@ -464,8 +464,12 @@ flowchart TD
 ```
 
 - The text lives in one CDATA section so Mermaid operators such as `-->` and `<-->` need no XML
-  escaping. A literal `]]>` in Mermaid text is written by splitting the CDATA section
-  (`]]]]><![CDATA[>`); the reader concatenates adjacent CDATA and text children.
+  escaping. The sequence `]]>` can only occur inside a Mermaid label, where Mermaid's entity codes
+  express the same characters (`#93;` for `]`). The printer always uses that form; `.mmd` import
+  rewrites such label text to it; and a Mermaid pane edit that would store a raw `]]>` is not
+  committed and shows a diagnostic suggesting the entity form. The reader still concatenates
+  adjacent CDATA and text children, so a file another tool split into several sections reads
+  correctly.
 - The Mermaid text is the source of truth for structure (which nodes and edges exist, labels,
   shapes, subgraphs, `classDef`). The SVG elements are its rendering plus everything Mermaid cannot
   express: manual positions (`dgm:pin` and the node's `transform`), waypoints, port choices, and
