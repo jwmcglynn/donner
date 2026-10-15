@@ -15,8 +15,8 @@ struct SvgSuiteRenderSettings {
   std::filesystem::path fontRoot;
   int width = 0;
   int height = 0;
-  /// Optional separate root for an explicitly staged input; resources remain confined
-  /// independently.
+  /// Optional separate root for an explicitly staged input. Relative resources still resolve
+  /// from the input's directory, and fetched resources remain confined to resourceRoot.
   std::filesystem::path inputRoot;
 };
 

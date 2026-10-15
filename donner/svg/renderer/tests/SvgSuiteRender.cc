@@ -187,7 +187,7 @@ svg_suite::ImageResult RenderSvgSuiteCase(const SvgSuiteRenderSettings& settings
   if (!resolved.error.empty()) {
     return {std::nullopt, resolved.error};
   }
-  const auto svgData = readFile(settings.input.string());
+  const auto svgData = readFile(resolved.input.string());
   if (!svgData) {
     return {std::nullopt, "cannot read bounded SVG input"};
   }

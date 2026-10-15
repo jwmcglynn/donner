@@ -49,7 +49,8 @@ struct ComparisonResult {
   std::string error;
 };
 
-/// Compare validated RGBA views through pixelmatch. Dimensions and row strides must match.
+/// Compare validated RGBA views through pixelmatch. Visible dimensions must match; row strides
+/// may differ. Padding is ignored, with at most one bounded input normalization buffer.
 /// @param expected Expected pixels; borrowed for this call only.
 /// @param actual Actual pixels; borrowed for this call only.
 /// @param options Reviewed comparison policy.
