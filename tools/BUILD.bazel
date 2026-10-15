@@ -484,6 +484,7 @@ py_test(
 py_library(
     name = "bcr_dependency_closure",
     srcs = ["bcr_dependency_closure.py"],
+    visibility = ["//donner/svg/renderer/geode/boundary_tests:__pkg__"],
 )
 
 py_test(
