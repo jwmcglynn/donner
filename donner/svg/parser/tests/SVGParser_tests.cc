@@ -5,6 +5,7 @@
 
 #include <array>
 #include <string>
+#include <utility>
 
 #include "donner/base/ParseWarningSink.h"
 #include "donner/base/tests/ParseResultTestUtils.h"
@@ -49,6 +50,29 @@ TEST(SVGParser, Simple) {
   EXPECT_THAT(SVGParser::ParseSVG(simpleXml, warnings), NoParseError());
 
   EXPECT_THAT(warnings.warnings(), ElementsAre());
+}
+
+TEST(SVGParser, RawInputMetadataAcceptanceRequiresValidUtf8XmlCharacters) {
+  const std::array<std::pair<std::string, bool>, 10> values{{{"ASCII", true},
+                                                             {"\xC3\xA9\xF0\x9F\x99\x82", true},
+                                                             {"\x80", false},
+                                                             {"\xC0\xAF", false},
+                                                             {"\xE2\x82", false},
+                                                             {"\xED\xA0\x80", false},
+                                                             {"\xF4\x90\x80\x80", false},
+                                                             {"\x0B", false},
+                                                             {"\xEF\xBF\xBE", false},
+                                                             {std::string(1, '\0'), false}}};
+  for (size_t index = 0; index < values.size(); ++index) {
+    SCOPED_TRACE(index);
+    const auto& [value, accepted] = values[index];
+    ParseWarningSink warnings;
+    const auto result = SVGParser::ParseSVG(
+        "<svg xmlns='http://www.w3.org/2000/svg'><metadata>" + value + "</metadata></svg>",
+        warnings);
+    EXPECT_EQ(result.hasResult(), accepted);
+    EXPECT_EQ(result.hasError(), !accepted);
+  }
 }
 
 TEST(SVGParser, Svgz) {
@@ -548,13 +572,15 @@ TEST(SVGParser, RootElementNotSvgFails) {
               ParseErrorIs("Unexpected element <foo> at root, first element must be <svg>"));
 }
 
-TEST(SVGParser, UnsupportedDeclaredEncodingIsReported) {
+TEST(SVGParser, UnsupportedDeclaredEncodingFollowsRawByteValidation) {
   ParseWarningSink warnings;
-  EXPECT_THAT(
-      SVGParser::ParseSVG("<?xml version='1.0' encoding='Windows-1251'?>"
-                          "<svg xmlns='http://www.w3.org/2000/svg'><text>\xCF\xF0</text></svg>",
-                          warnings),
-      ParseErrorIs(testing::HasSubstr("Unsupported XML encoding")));
+  constexpr std::string_view prefix =
+      "<?xml version='1.0' encoding='Windows-1251'?>"
+      "<svg xmlns='http://www.w3.org/2000/svg'><text>";
+  EXPECT_THAT(SVGParser::ParseSVG(std::string(prefix) + "ASCII</text></svg>", warnings),
+              ParseErrorIs(testing::HasSubstr("Unsupported XML encoding")));
+  EXPECT_THAT(SVGParser::ParseSVG(std::string(prefix) + "\xCF\xF0</text></svg>", warnings),
+              ParseErrorIs("Invalid UTF-8 sequence"));
 }
 
 TEST(SVGParser, UnknownElementInSvgNamespace) {

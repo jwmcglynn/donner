@@ -95,6 +95,17 @@ TEST_F(SvgSuiteRenderTest, ExplicitStagedInputRootDoesNotExpandResourceRoot) {
       testing::HasSubstr("escapes resource root"));
 }
 
+TEST_F(SvgSuiteRenderTest, RawInputFileRejectsMalformedMetadataBeforeRendering) {
+  {
+    std::ofstream input(root_ / "input.svg", std::ios::binary);
+    input << "<svg xmlns='http://www.w3.org/2000/svg' width='1' height='1'>"
+             "<metadata>\x80</metadata><rect width='1' height='1' fill='red'/></svg>";
+  }
+  const auto result = RenderSvgSuiteCase({root_ / "input.svg", root_, {}, 1, 1});
+  EXPECT_THAT(result.error, testing::HasSubstr("Invalid UTF-8"));
+  EXPECT_FALSE(result.image);
+}
+
 TEST_F(SvgSuiteRenderTest, StagedInputUsesItsDocumentDirectoryForRelativeResources) {
   writeRedResource(resourceRoot() / "sub/red.png");
   writeStagedInput("../../resources/sub/red.png");
