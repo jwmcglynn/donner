@@ -236,20 +236,25 @@ section does not gate the v1.0 release criteria.
       possible refinement. The collaboration ID is separate from the SVG `id` attribute, and
       concurrent edits that produce duplicate `id` values are repaired deterministically.
 - [ ] **Deterministic reconciliation**: Merging incoming state takes the union of element IDs. For
-      the same ID the higher `version` wins, equal versions break ties by the lower
-      `versionNonce`, and equal nonces break ties by the editing peer's unique session ID, so every
-      peer converges without a coordinating server. Deletions are
-      tombstones retained in collaboration state until every peer in the session has
-      acknowledged them. Compacting acknowledged tombstones advances a session epoch; a peer
-      whose state predates that epoch resynchronizes from current state and replays only its own
-      unsent edits instead of merging its stale copy, so a deleted element is never resurrected.
+      the same ID the higher `version` wins, equal versions break ties by the lower `versionNonce`,
+      and equal nonces break ties by the editing peer's unique session ID, so every peer converges
+      without a coordinating server. Deletions are tombstones retained in collaboration state until
+      every active peer has acknowledged them. Session membership is itself versioned collaboration
+      state: a peer that leaves, or stops acknowledging for longer than a documented retention
+      window, is retired by a membership update, so tombstone storage stays bounded. Compacting
+      acknowledged tombstones advances a session epoch; a peer whose state predates that epoch,
+      including a retired peer that rejoins, resynchronizes from current state and replays only its
+      own unsent edits instead of merging its stale copy, so a deleted element is never resurrected.
       The saved SVG never contains deleted elements.
 - [ ] **Tree ordering**: SVG is a tree whose document order is paint order, unlike Excalidraw's flat
-      element list. Each element records its parent ID and a fractional index among its siblings,
-      so concurrent inserts and reorders merge without renumbering. Equal indices are ordered by
-      collaboration ID, and invalid or colliding indices are repaired deterministically.
-      Reparenting is an ordinary versioned update; an element whose move would create a cycle or
-      whose parent is missing is detached to the document root by a deterministic rule.
+      element list. Each element records its parent ID and a fractional index among its siblings, so
+      concurrent inserts and reorders merge without renumbering. Equal indices are ordered by
+      collaboration ID, and invalid or colliding indices are repaired deterministically. Reparenting
+      is an ordinary versioned update. Cycle and missing-parent repair runs on the complete merged
+      state, not in arrival order: within each parent cycle, the element whose winning record sorts
+      lowest under the reconciliation order (`version`, `versionNonce`, peer ID) is detached to the
+      document root, and an element whose parent is missing is detached the same way, so every peer
+      reaches the same tree.
 - [ ] **Incremental application**: Remote updates apply through the same structured edits and
       incremental invalidation as local edits, never a full document reparse, and the source pane
       mirrors them through reverse serialization.
