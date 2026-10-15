@@ -239,6 +239,29 @@ bool IsValidXmlCharacter(std::uint64_t codepoint) {
          (codepoint >= 0x10000 && codepoint <= 0x10FFFF);
 }
 
+/// Reject invalid source bytes before allocating parser-owned source or document state.
+std::optional<ParseDiagnostic> ValidateXmlSource(std::string_view source) {
+  size_t offset = 0;
+  while (offset < source.size()) {
+    // The decoder uses an int length internally. A four-byte window avoids narrowing even
+    // when a caller allows inputs larger than INT_MAX, and preserves truncated EOF checks.
+    const auto [codepoint, length] = Utf8::NextCodepoint(source.substr(offset, 4));
+    const char* error = nullptr;
+    if (codepoint == Utf8::kUnicodeReplacementCharacter && length == 1) {
+      error = "Invalid UTF-8 sequence";
+    } else if (!IsValidXmlCharacter(codepoint)) {
+      error = "Invalid XML character";
+    }
+    if (error) {
+      return ParseDiagnostic::Error(error, parser::LineOffsets(source).fileOffset(offset));
+    }
+
+    // Nonempty valid input consumes one complete scalar; encoded U+FFFD consumes three bytes.
+    offset += static_cast<size_t>(length);
+  }
+  return std::nullopt;
+}
+
 /// Append a codepoint as a new string to the pieces vector.
 std::optional<ParseDiagnostic> AppendUnicodeCharToNewString(std::uint64_t codepoint,
                                                             ChunkedString& chunkedString,
@@ -1840,6 +1863,10 @@ private:
 ParseResult<XMLDocument> XMLParser::Parse(std::string_view str, const Options& options) {
   if (str.size() > options.maximumInputSize) {
     return ParseDiagnostic::Error("XML source exceeds maximum input size", FileOffset::Offset(0));
+  }
+
+  if (auto diagnostic = ValidateXmlSource(str)) {
+    return std::move(*diagnostic);
   }
 
   XMLParserImpl parser(str, options);
