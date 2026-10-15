@@ -220,6 +220,38 @@ TEST(RendererPublicApiTest, CascadePrioritySymbolRootRetiresWithoutChangingDefin
   }
 }
 
+TEST(RendererPublicApiTest, CascadePriorityPrefixedSymbolRootRetiresWithoutChangingDefinition) {
+  auto document = ParseDocument(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" xmlns:s="http://www.w3.org/2000/svg" width="8" height="8">
+    <defs>
+      <s:symbol id="symbol" viewBox="0 0 8 8" style="display:inline!important">
+        <rect width="8" height="8" fill="red"/>
+      </s:symbol>
+      <g id="group"><rect width="8" height="8" fill="blue"/></g>
+    </defs>
+    <s:use id="instance" href="#symbol" width="8" height="8"/>
+  </svg>)svg");
+  const auto symbol = document.querySelector("#symbol");
+  auto instance = document.querySelector("#instance");
+  ASSERT_THAT(symbol, testing::Optional(_));
+  ASSERT_THAT(instance, testing::Optional(_));
+  for (const bool useSymbol : {true, false, true}) {
+    SVGUseElement use = instance->cast<SVGUseElement>();
+    const RcString href = useSymbol ? "#symbol" : "#group";
+    use.setHref(href);
+    EXPECT_EQ(use.href(), href);
+    const auto actual = RenderCascadePriorityFixture(document);
+    const auto expected =
+        CascadePriorityExpectedBitmap(useSymbol ? std::array<uint8_t, 4>{255, 0, 0, 255}
+                                                : std::array<uint8_t, 4>{0, 0, 255, 255});
+    editor::tests::CompareBitmapToBitmap(
+        actual, expected,
+        useSymbol ? "prefixed-symbol-root-current" : "prefixed-symbol-root-retired",
+        editor::tests::PixelmatchIdentityParams());
+    EXPECT_EQ(symbol->getComputedStyle().display.get(), Display::None);
+  }
+}
+
 TEST(RendererPublicApiTest, CascadePriorityNestedSymbolRemainsDefinition) {
   auto document = ParseDocument(R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8">
     <defs><g id="group">

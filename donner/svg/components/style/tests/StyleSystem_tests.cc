@@ -805,6 +805,44 @@ TEST_F(StyleSystemTest, UserAgentNamespaceMatchesComputedAndDiagnosticStyles) {
             PaintServer(PaintServer::Solid(css::Color(css::RGBA(255, 0, 0, 255)))));
 }
 
+TEST_F(StyleSystemTest, UserAgentDisplayRulesResolveSvgNamespaceAliases) {
+  auto document = ParseSVG(R"(
+    <svg xmlns="http://www.w3.org/2000/svg" xmlns:s="http://www.w3.org/2000/svg"
+         xmlns:f="urn:example:foreign">
+      <s:style id="sheet" style="display:inline!important">#symbol { display:inline!important; }</s:style>
+      <s:symbol id="symbol" style="display:inline!important"/>
+      <s:symbol id="overridden"/>
+      <f:symbol id="foreign-symbol" style="display:inline!important"/>
+      <f:style id="foreign-style" style="display:inline!important"/>
+    </svg>
+  )");
+  const auto builtIn =
+      testing::Field("isUserAgentStylesheet", &SVGMatchedStyleRule::isUserAgentStylesheet, true);
+  const css::Specificity requiredPriority =
+      css::Specificity::Important(css::Specificity::FromABC(0, 0, 1).toUserAgentSpecificity());
+  for (const std::string_view selector : {"#sheet", "#symbol"}) {
+    SCOPED_TRACE(selector);
+    const auto element = document.querySelector(selector);
+    ASSERT_THAT(element, testing::Optional(testing::_));
+    EXPECT_EQ(element->getComputedStyle().display.get(), Display::None);
+    EXPECT_EQ(element->getComputedStyle().display.specificity, requiredPriority);
+    EXPECT_THAT(CollectMatchedStyleRules(*element), testing::Contains(builtIn));
+  }
+  const auto overridden = document.querySelector("#overridden");
+  ASSERT_THAT(overridden, testing::Optional(testing::_));
+  overridden->entityHandle().get_or_emplace<StyleComponent>().properties.display.set(
+      Display::Inline, css::Specificity::Override());
+  EXPECT_EQ(overridden->getComputedStyle().display.get(), Display::Inline);
+  EXPECT_EQ(overridden->getComputedStyle().display.specificity, css::Specificity::Override());
+  for (const std::string_view selector : {"#foreign-symbol", "#foreign-style"}) {
+    SCOPED_TRACE(selector);
+    const auto element = document.querySelector(selector);
+    ASSERT_THAT(element, testing::Optional(testing::_));
+    EXPECT_EQ(element->getComputedStyle().display.get(), Display::Inline);
+    EXPECT_THAT(CollectMatchedStyleRules(*element), testing::Not(testing::Contains(builtIn)));
+  }
+}
+
 TEST_F(StyleSystemTest, SymbolDirectUseRootPreservesNativeDisplayOverride) {
   auto document = ParseSVG(R"(
     <svg xmlns="http://www.w3.org/2000/svg">
