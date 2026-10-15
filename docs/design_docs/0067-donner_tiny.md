@@ -340,7 +340,11 @@ Design rules for the core:
   `RendererCore::releaseCached(id)` drops an entry when the front end destroys its source (an erased
   entity, a destroyed retained path or image, an unloaded composition), and the backend additionally
   evicts least-recently-used entries past a fixed byte budget, so animated geometry that bumps its
-  generation every frame cannot accumulate.
+  generation every frame cannot accumulate. Removal is retirement, not immediate destruction: a
+  GPU backend parks released, replaced, and evicted entries until every submission that may
+  reference them has completed, following the deferred release Geode already applies to
+  resident-path slabs and pooled buffers (`GeodeResidentPathComponent.h`, `GeodeBufferPool.h`); the
+  software backend frees them at the next frame boundary.
 - **Borrowing stays opt-in.** As with `PathShape` today, a key alone does not permit deferral: a
   backend may retain the geometry past the call only when `allowDeferred` is set and the key is
   nonzero, and the front end guarantees that geometry stays alive and unchanged until the deferred
@@ -422,17 +426,18 @@ namespace donner::tiny {
 class Canvas {
 public:
   static std::unique_ptr<Canvas> CreateSoftware(int width, int height, const Limits& limits = {});
-  bool beginFrame();                 // Resets per-frame budgets; false if refused.
-  void endFrame();                   // Unwinds unbalanced save/layer state, then presents.
-  void save();                       // Transform, clip, and layer state.
-  void restore();
-  void transform(const Transform2d& t);
-  void clip(const PathRef& path, FillRule rule = FillRule::NonZero);
-  void fill(const PathRef& path, const Paint& paint, FillRule rule = FillRule::NonZero);
-  void stroke(const PathRef& path, const Paint& paint, const Stroke& stroke);
-  void drawImage(const ImageRef& image, const Box2d& target);
-  void beginLayer(double opacity, BlendMode blend);
-  void endLayer();
+  Status beginFrame();               // Resets per-frame budgets.
+  Status endFrame();                 // Commits an admitted frame, or discards a refused one.
+  Status save();                     // Transform, clip, and layer state.
+  Status restore();
+  Status transform(const Transform2d& t);
+  Status clip(const PathRef& path, FillRule rule = FillRule::NonZero);
+  Status fill(const PathRef& path, const Paint& paint, FillRule rule = FillRule::NonZero);
+  Status stroke(const PathRef& path, const Paint& paint, const Stroke& stroke);
+  Status drawImage(const ImageRef& image, const Box2d& target);
+  Status beginLayer(double opacity, BlendMode blend);
+  Status endLayer();
+  Status frameStatus() const;        // Sticky: first refusal or misuse in the current frame.
   PixelView pixels() const UTILS_LIFETIME_BOUND;  // Premultiplied RGBA8, row stride exposed.
 };
 
@@ -441,8 +446,16 @@ public:
 
 Drawing happens between `beginFrame()` and `endFrame()`, which map to the core's frame calls, so
 each presented frame (including GPU frames that never read pixels back) gets its own draw and
-surface budgets. Draw calls outside a frame return an error. `save`/`restore` and layers must
-balance within one frame; `endFrame` unwinds any that do not and reports it.
+surface budgets. Every call returns a `Status` (the C API returns the same codes), and the first
+refusal or misuse in a frame also latches in `frameStatus()`, so hosts that ignore per-call
+results still see it at `endFrame()`. Draw calls outside a frame return an error. `save`/`restore`
+and layers must balance within one frame; `endFrame` unwinds any that do not and reports it.
+
+Frames are transactional. Each frame renders into a staging target (the software backend's back
+buffer, or a GPU frame that is not yet presented); `endFrame()` publishes it only when every call
+in the frame was admitted. A refusal latches, later draws in that frame become no-ops, and
+`endFrame()` discards the staging target, so the published pixels stay those of the last admitted
+frame. The software canvas pays one extra frame buffer for this guarantee.
 
 `PixelView` borrows the canvas's pixel storage: it is valid until the canvas is destroyed or the
 next drawing call, and `UTILS_LIFETIME_BOUND` lets the compiler flag a view that outlives a
@@ -680,8 +693,11 @@ New targets (names are proposals):
   share a cache entry:** `//donner/render/tests:core_conformance_tests`,
   run per backend through `donner_multi_transitioned_test`.
 - **Geometry and image caches stay within their byte budget under generation churn and release
-  entries for destroyed sources:** `//donner/render/tests:render_cache_tests`, run per backend.
-- **Canvas frames reset budgets, reject draws outside a frame, and unwind unbalanced state:**
+  entries for destroyed sources, and GPU entries released or evicted before submission or while
+  earlier submissions are in flight are retired only after those submissions complete:**
+  `//donner/render/tests:render_cache_tests`, run per backend.
+- **Canvas frames reset budgets, reject draws outside a frame with an error status, unwind
+  unbalanced state, and leave the last admitted frame published when a frame is refused:**
   `//donner/tiny/tests:canvas_tests`.
 - **The shared animation module matches its documented interpolation and easing:**
   `//donner/animation:animation_tests`.
