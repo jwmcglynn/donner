@@ -1043,7 +1043,8 @@ void CheckClosedAbsoluteXPathCase(double absoluteX, bool visible) {
       "<svg xmlns='http://www.w3.org/2000/svg' width='500' height='200'>"
       "<path id='p' d='M20 30H45V55H20Z'/><text font-size='20'>"
       "<textPath id='owner' href='#p'><tspan id='first'>A</tspan><tspan id='offset' x='" +
-      std::to_string(absoluteX) + "'>B</tspan></textPath><tspan id='tail' x='40' y='70'>C</tspan>"
+      std::to_string(absoluteX) +
+      "'>B</tspan></textPath><tspan id='tail' x='40' y='70'>C</tspan>"
       "</text></svg>";
   ParseWarningSink warnings;
   auto parsed = parser::SVGParser::ParseSVG(source, warnings);

@@ -856,9 +856,8 @@ void PlaceTextPathClusters(const Path::MeasuredPath& path, double startOffset, b
                            const std::vector<TextPathCluster>& clusters) {
   for (const TextPathCluster& cluster : clusters) {
     const double halfAdvance = cluster.advance * 0.5;
-    const auto sample =
-        SampleTextPathCluster(path, startOffset, cluster.pathOffset + halfAdvance, closed,
-                              cluster.circuitAnchor);
+    const auto sample = SampleTextPathCluster(path, startOffset, cluster.pathOffset + halfAdvance,
+                                              closed, cluster.circuitAnchor);
     auto& run = runs[cluster.runIndex];
     if (sample.valid) {
       const Vector2d origin(sample.point.x - halfAdvance * std::cos(sample.angle) -

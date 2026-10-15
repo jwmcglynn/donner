@@ -1007,8 +1007,10 @@ TEST(Path, MeasuredCubicExactTotalAdmitsAuthoredEndpoint) {
     const auto direct = path.pointAtArcLength(path.pathLength());
     EXPECT_TRUE(direct.valid);
     EXPECT_EQ(direct.point, Vector2d(100, 100));
-    EXPECT_FALSE(measured.pointAtArcLength(
-        std::nextafter(measured.pathLength(), std::numeric_limits<double>::infinity())).valid);
+    EXPECT_FALSE(measured
+                     .pointAtArcLength(std::nextafter(measured.pathLength(),
+                                                      std::numeric_limits<double>::infinity()))
+                     .valid);
   }
 }
 
@@ -1037,8 +1039,10 @@ TEST(Path, MeasuredMultipleCubicsExactTotalAdmitsFinalAuthoredEndpoint) {
     const auto direct = path.pointAtArcLength(path.pathLength());
     EXPECT_TRUE(direct.valid);
     EXPECT_EQ(direct.point, Vector2d(180, 100));
-    EXPECT_FALSE(measured.pointAtArcLength(
-        std::nextafter(measured.pathLength(), std::numeric_limits<double>::infinity())).valid);
+    EXPECT_FALSE(measured
+                     .pointAtArcLength(std::nextafter(measured.pathLength(),
+                                                      std::numeric_limits<double>::infinity()))
+                     .valid);
   }
 }
 

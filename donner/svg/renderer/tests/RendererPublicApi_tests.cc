@@ -22,8 +22,8 @@
 #include "donner/editor/tests/BitmapGoldenCompare.h"
 #include "donner/svg/SVG.h"
 #include "donner/svg/SVGRectElement.h"
-#include "donner/svg/SVGTextElement.h"
 #include "donner/svg/SVGTextContentElement.h"
+#include "donner/svg/SVGTextElement.h"
 #include "donner/svg/SVGUnknownElement.h"
 #include "donner/svg/SVGUseElement.h"
 #include "donner/svg/components/filter/FilterGraph.h"
@@ -1530,11 +1530,13 @@ TEST(RendererPublicApiTest, ClosedTextPathAbsoluteXOutsideCircuitHasNoInk) {
   const auto visible = RenderPostPathScene(
       "<textPath id='owner' href='#p'><tspan id='first'>A</tspan>"
       "<tspan id='offset' x='10' fill='red'>B</tspan></textPath>"
-      "<tspan x='40' y='70' fill='green'>C</tspan>", 2, path);
+      "<tspan x='40' y='70' fill='green'>C</tspan>",
+      2, path);
   const auto flatReference = RenderPostPathScene(
       "<textPath href='#p'><tspan>A</tspan></textPath>"
       "<tspan x='30' y='30' fill='red'>B</tspan>"
-      "<tspan x='40' y='70' fill='green'>C</tspan>", 2, path);
+      "<tspan x='40' y='70' fill='green'>C</tspan>",
+      2, path);
   ASSERT_TRUE(visible.authoredOffsetX.has_value());
   ASSERT_EQ(*visible.authoredOffsetX, 10.0);
   ASSERT_TRUE(visible.offsetOwnerMatches);
@@ -1547,8 +1549,10 @@ TEST(RendererPublicApiTest, ClosedTextPathAbsoluteXOutsideCircuitHasNoInk) {
                                        editor::tests::PixelmatchIdentityParams());
   for (int absoluteX : {1000, -1000}) {
     SCOPED_TRACE(absoluteX);
-    const std::string prefix = "<textPath id='owner' href='#p'><tspan>A</tspan>"
-                               "<tspan id='offset' x='" + std::to_string(absoluteX) + "' fill='red' ";
+    const std::string prefix =
+        "<textPath id='owner' href='#p'><tspan>A</tspan>"
+        "<tspan id='offset' x='" +
+        std::to_string(absoluteX) + "' fill='red' ";
     const std::string suffix = ">B</tspan></textPath><tspan x='40' y='70' fill='green'>C</tspan>";
     const auto actual = RenderPostPathScene(prefix + suffix, 2, path);
     const auto expected = RenderPostPathScene(prefix + "visibility='hidden'" + suffix, 2, path);
