@@ -9,6 +9,7 @@
 #include <iomanip>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <source_location>
 #include <sstream>
 #include <string>
@@ -22,12 +23,14 @@
 #include "donner/svg/SVG.h"
 #include "donner/svg/SVGRectElement.h"
 #include "donner/svg/SVGTextElement.h"
+#include "donner/svg/SVGTextContentElement.h"
 #include "donner/svg/SVGUnknownElement.h"
 #include "donner/svg/SVGUseElement.h"
 #include "donner/svg/components/filter/FilterGraph.h"
 #include "donner/svg/components/resources/ImageComponent.h"
 #include "donner/svg/components/resources/SubDocumentCache.h"
 #include "donner/svg/components/style/StyleSystem.h"
+#include "donner/svg/components/text/ComputedTextComponent.h"
 #include "donner/svg/components/text/ComputedTextGeometryComponent.h"
 #include "donner/svg/renderer/Renderer.h"
 #include "donner/svg/renderer/RendererDriver.h"
@@ -985,12 +988,35 @@ struct PostPathSceneResult {
   double firstAdvance = 0.0;
   Box2d tailExtent;
   std::vector<Vector2d> positions;
+  std::optional<double> authoredOffsetX;
+  double offsetAdvance = 0.0;
+  bool offsetOwnerMatches = false;
 };
 
 std::string PostPathCoordinate(double value) {
   std::ostringstream result;
   result << std::setprecision(std::numeric_limits<double>::max_digits10) << value;
   return result.str();
+}
+
+void ReadPostPathOffsetPremises(SVGDocument& document, PostPathSceneResult& result) {
+  const auto offset = document.querySelector("#offset");
+  const auto owner = document.querySelector("#owner");
+  const auto label = document.querySelector("#label");
+  if (!offset || !owner || !label) {
+    return;
+  }
+  const auto offsetHandle = offset->unsafeEntityHandle();
+  const auto& text = label->unsafeEntityHandle().get<components::ComputedTextComponent>();
+  for (const auto& span : text.spans) {
+    if (span.sourceEntity == offsetHandle.entity()) {
+      result.offsetOwnerMatches = span.textPathSourceEntity == owner->unsafeEntityHandle().entity();
+      if (!span.xList.empty() && span.xList[0].has_value()) {
+        result.authoredOffsetX = span.xList[0]->value;
+      }
+    }
+  }
+  result.offsetAdvance = offset->cast<SVGTextContentElement>().getSubStringLength(0, 1);
 }
 
 /// Prepares self-contained scenes and public text metrics; comparisons remain at each call site.
@@ -1032,6 +1058,7 @@ PostPathSceneResult RenderPostPathScene(std::string_view markup, std::size_t tai
   for (long index = 0; index < result.characters; ++index) {
     result.positions.push_back(label.getStartPositionOfChar(static_cast<std::size_t>(index)));
   }
+  ReadPostPathOffsetPremises(document, result);
   return result;
 }
 
@@ -1496,6 +1523,48 @@ TEST(RendererPublicApiTest, PostTextPathCursorClosedChunkUsesFirstAnchorAcrossSt
   editor::tests::CompareBitmapToBitmap(actual.bitmap, reference.bitmap,
                                        "postpath_closed_chunk_first_anchor",
                                        editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(RendererPublicApiTest, ClosedTextPathAbsoluteXOutsideCircuitHasNoInk) {
+  constexpr std::string_view path = "M20 30H45V55H20Z";
+  const auto visible = RenderPostPathScene(
+      "<textPath id='owner' href='#p'><tspan id='first'>A</tspan>"
+      "<tspan id='offset' x='10' fill='red'>B</tspan></textPath>"
+      "<tspan x='40' y='70' fill='green'>C</tspan>", 2, path);
+  const auto flatReference = RenderPostPathScene(
+      "<textPath href='#p'><tspan>A</tspan></textPath>"
+      "<tspan x='30' y='30' fill='red'>B</tspan>"
+      "<tspan x='40' y='70' fill='green'>C</tspan>", 2, path);
+  ASSERT_TRUE(visible.authoredOffsetX.has_value());
+  ASSERT_EQ(*visible.authoredOffsetX, 10.0);
+  ASSERT_TRUE(visible.offsetOwnerMatches);
+  ASSERT_GT(visible.offsetAdvance, 0.0);
+  ASSERT_LT(visible.offsetAdvance, 30.0);
+  ASSERT_FALSE(visible.bitmap.empty());
+  ASSERT_FALSE(flatReference.bitmap.empty());
+  editor::tests::CompareBitmapToBitmap(visible.bitmap, flatReference.bitmap,
+                                       "closed_absolute_x_visible_control",
+                                       editor::tests::PixelmatchIdentityParams());
+  for (int absoluteX : {1000, -1000}) {
+    SCOPED_TRACE(absoluteX);
+    const std::string prefix = "<textPath id='owner' href='#p'><tspan>A</tspan>"
+                               "<tspan id='offset' x='" + std::to_string(absoluteX) + "' fill='red' ";
+    const std::string suffix = ">B</tspan></textPath><tspan x='40' y='70' fill='green'>C</tspan>";
+    const auto actual = RenderPostPathScene(prefix + suffix, 2, path);
+    const auto expected = RenderPostPathScene(prefix + "visibility='hidden'" + suffix, 2, path);
+    ASSERT_TRUE(actual.authoredOffsetX.has_value());
+    ASSERT_EQ(*actual.authoredOffsetX, static_cast<double>(absoluteX));
+    ASSERT_TRUE(actual.offsetOwnerMatches);
+    ASSERT_GT(actual.offsetAdvance, 0.0);
+    ASSERT_LT(actual.offsetAdvance, 30.0);
+    ASSERT_FALSE(actual.bitmap.empty());
+    ASSERT_FALSE(expected.bitmap.empty());
+    ASSERT_THAT(actual.tailAdvance, Gt(0.0));
+    ASSERT_THAT(expected.tailAdvance, Gt(0.0));
+    editor::tests::CompareBitmapToBitmap(actual.bitmap, expected.bitmap,
+                                         "closed_absolute_x_" + std::to_string(absoluteX),
+                                         editor::tests::PixelmatchIdentityParams());
+  }
 }
 
 TEST(RendererPublicApiTest, ExternalUseTextSpanInheritsHostGradientWithoutChildId) {

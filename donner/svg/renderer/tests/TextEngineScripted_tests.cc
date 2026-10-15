@@ -1030,14 +1030,97 @@ TEST(TextEngineScriptedTest, PostTextPathCursorClosedChunkUsesItsActualAnchorAnd
               AllOf(GlyphIndexIs(Not(Eq(0))), GlyphXPositionIs(DoubleEq(13.0)),
                     GlyphYPositionIs(DoubleEq(0.0)), GlyphRotateDegreesIs(DoubleNear(0.0, 1e-9))));
 
-  // Absolute x starts an end-anchored chunk at 40: origin 40 - 10, midpoint 35.
+  // Absolute x40 and end anchor give midpoint35; it lies outside the end window[-400,0].
   const auto newChunk = LayoutParsedTextPath(
       "<textPath href='#p'>A<tspan x='40' text-anchor='end'>B</tspan></textPath>", true,
       "M0 0H100V100H0Z");
   ASSERT_THAT(newChunk, SizeIs(2));
-  EXPECT_THAT(newChunk[1],
-              AllOf(GlyphIndexIs(Not(Eq(0))), GlyphXPositionIs(DoubleEq(30.0)),
-                    GlyphYPositionIs(DoubleEq(0.0)), GlyphRotateDegreesIs(DoubleNear(0.0, 1e-9))));
+  EXPECT_THAT(newChunk[1], GlyphIndexIs(Eq(0)));
+}
+
+void CheckClosedAbsoluteXPathCase(double absoluteX, bool visible) {
+  const std::string source =
+      "<svg xmlns='http://www.w3.org/2000/svg' width='500' height='200'>"
+      "<path id='p' d='M20 30H45V55H20Z'/><text font-size='20'>"
+      "<textPath id='owner' href='#p'><tspan id='first'>A</tspan><tspan id='offset' x='" +
+      std::to_string(absoluteX) + "'>B</tspan></textPath><tspan id='tail' x='40' y='70'>C</tspan>"
+      "</text></svg>";
+  ParseWarningSink warnings;
+  auto parsed = parser::SVGParser::ParseSVG(source, warnings);
+  ASSERT_TRUE(parsed.hasResult());
+  SVGDocument document = std::move(parsed).result();
+  Registry& registry = document.registry();
+  FontManager manager(registry);
+  TextEngine engine(manager, registry, std::make_unique<ScriptedTextBackend>());
+  const auto root = document.querySelector("text");
+  const auto owner = document.querySelector("#owner");
+  const auto first = document.querySelector("#first");
+  const auto offset = document.querySelector("#offset");
+  const auto tail = document.querySelector("#tail");
+  ASSERT_TRUE(root.has_value());
+  ASSERT_TRUE(owner.has_value());
+  ASSERT_TRUE(first.has_value());
+  ASSERT_TRUE(offset.has_value());
+  ASSERT_TRUE(tail.has_value());
+  const auto handle = root->unsafeEntityHandle();
+  const auto ownerEntity = owner->unsafeEntityHandle().entity();
+  engine.prepareForElement(handle, warnings);
+  auto& text = handle.get<components::ComputedTextComponent>();
+  const auto firstSpan = std::find_if(text.spans.begin(), text.spans.end(), [&](const auto& span) {
+    return span.sourceEntity == first->unsafeEntityHandle().entity();
+  });
+  const auto offsetSpan = std::find_if(text.spans.begin(), text.spans.end(), [&](const auto& span) {
+    return span.sourceEntity == offset->unsafeEntityHandle().entity();
+  });
+  const auto tailSpan = std::find_if(text.spans.begin(), text.spans.end(), [&](const auto& span) {
+    return span.sourceEntity == tail->unsafeEntityHandle().entity();
+  });
+  ASSERT_NE(firstSpan, text.spans.end());
+  ASSERT_NE(offsetSpan, text.spans.end());
+  ASSERT_NE(tailSpan, text.spans.end());
+  ASSERT_EQ(firstSpan->textPathSourceEntity, ownerEntity);
+  ASSERT_EQ(offsetSpan->textPathSourceEntity, ownerEntity);
+  ASSERT_THAT(offsetSpan->xList, SizeIs(1));
+  ASSERT_TRUE(offsetSpan->xList[0].has_value());
+  ASSERT_THAT(offsetSpan->xList[0]->value, DoubleEq(absoluteX));
+  ASSERT_TRUE(std::isfinite(offsetSpan->xList[0]->toPixels(
+      MakeTextParams(20).viewBox, MakeTextParams(20).fontMetrics, Lengthd::Extent::X)));
+  // Save integer indices before cache preparation can mutate the span container.
+  const size_t firstRun = static_cast<size_t>(firstSpan - text.spans.begin());
+  const size_t offsetRun = static_cast<size_t>(offsetSpan - text.spans.begin());
+  const size_t tailRun = static_cast<size_t>(tailSpan - text.spans.begin());
+  engine.resolvePerSpanLayoutStyles(handle, text);
+  const auto& cache = engine.ensureComputedTextGeometryComponent(handle);
+  ASSERT_LT(firstRun, cache.runs.size());
+  ASSERT_LT(offsetRun, cache.runs.size());
+  ASSERT_LT(tailRun, cache.runs.size());
+  ASSERT_THAT(cache.runs[firstRun].glyphs, SizeIs(1));
+  ASSERT_THAT(cache.runs[offsetRun].glyphs, SizeIs(1));
+  ASSERT_THAT(cache.runs[tailRun].glyphs, SizeIs(1));
+  ASSERT_THAT(cache.runs[offsetRun].usedFontSizePx, FloatEq(20.0f));
+  ASSERT_THAT(cache.runs[offsetRun].glyphs[0].xAdvance, DoubleEq(10.0));
+  ASSERT_THAT(cache.runs[firstRun].glyphs[0],
+              AllOf(GlyphIndexIs(Not(Eq(0))), GlyphXPositionIs(DoubleEq(20.0)),
+                    GlyphYPositionIs(DoubleEq(30.0)), GlyphRotateDegreesIs(DoubleEq(0.0))));
+  ASSERT_THAT(cache.runs[tailRun].glyphs[0],
+              AllOf(GlyphIndexIs(Not(Eq(0))), GlyphXPositionIs(DoubleEq(40.0)),
+                    GlyphYPositionIs(DoubleEq(70.0))));
+  if (visible) {
+    EXPECT_THAT(cache.runs[offsetRun].glyphs[0],
+                AllOf(GlyphIndexIs(Not(Eq(0))), GlyphXPositionIs(DoubleEq(30.0)),
+                      GlyphYPositionIs(DoubleEq(30.0)), GlyphRotateDegreesIs(DoubleEq(0.0))));
+  } else {
+    EXPECT_THAT(cache.runs[offsetRun].glyphs[0], GlyphIndexIs(Eq(0)));
+  }
+}
+
+TEST(TextEngineScriptedTest, ClosedTextPathAbsoluteXRetainsSingleCircuitClipping) {
+  // L100: B midpoints1005/-995 are outside [0,100]; x10 gives admitted midpoint15.
+  for (double absoluteX : {1000.0, -1000.0}) {
+    SCOPED_TRACE(absoluteX);
+    ASSERT_NO_FATAL_FAILURE(CheckClosedAbsoluteXPathCase(absoluteX, false));
+  }
+  ASSERT_NO_FATAL_FAILURE(CheckClosedAbsoluteXPathCase(10.0, true));
 }
 
 TEST(TextEngineScriptedTest, PostTextPathCursorInitialDxEntersNominalPenOnce) {
