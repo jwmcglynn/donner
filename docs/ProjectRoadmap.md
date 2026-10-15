@@ -234,7 +234,9 @@ section does not gate the v1.0 release criteria.
       version. Element granularity is a deliberate tradeoff: concurrent edits to different
       attributes of one element keep only the winning version, and per-attribute versioning is a
       possible refinement. The collaboration ID is separate from the SVG `id` attribute, and
-      concurrent edits that produce duplicate `id` values are repaired deterministically.
+      collaboration state records the collaboration ID that each IRI reference (`href`, `url(#...)`)
+      targets. Concurrent edits that produce duplicate `id` values are repaired deterministically by
+      renaming one element and rewriting only the references bound to it.
 - [ ] **Deterministic reconciliation**: Merging incoming state takes the union of element IDs. For
       the same ID the higher `version` wins, equal versions break ties by the lower `versionNonce`,
       and equal nonces break ties by the editing peer's unique session ID, so every peer converges
@@ -243,8 +245,10 @@ section does not gate the v1.0 release criteria.
       state: a peer that leaves, or stops acknowledging for longer than a documented retention
       window, is retired by a membership update, so tombstone storage stays bounded. Compacting
       acknowledged tombstones advances a session epoch; a peer whose state predates that epoch,
-      including a retired peer that rejoins, resynchronizes from current state and replays only its
-      own unsent edits instead of merging its stale copy, so a deleted element is never resurrected.
+      including a retired peer that rejoins, resynchronizes from current state instead of merging
+      its stale copy. On replay of its unsent edits, updates to elements that existed before its
+      last sync but are absent from the current state are rejected and reported as conflicts, while
+      elements it created after that sync are inserted, so a deleted element is never resurrected.
       The saved SVG never contains deleted elements.
 - [ ] **Tree ordering**: SVG is a tree whose document order is paint order, unlike Excalidraw's flat
       element list. Each element records its parent ID and a fractional index among its siblings, so
