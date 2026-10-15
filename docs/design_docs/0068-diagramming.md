@@ -95,6 +95,8 @@ text stay in sync without a full document reparse.
   - [ ] Add byte-exact load, edit and save round-trip tests for known and unknown diagram content.
 - [ ] Milestone 2: Node and connector editing
   - [ ] Typed diagram operations compiled to `EditorCommand` sequences.
+  - [ ] Byte-exact inverse plans: capture removed or overwritten source spans with anchors, and
+        restore them through local `applySourceEdit` insertions.
   - [ ] Inverse-command undo entries so diagram undo never restores a full source snapshot, and
         rollback of a partly applied plan by replaying the inverse of its applied prefix.
   - [ ] Port model, connector attach and detach, divergence detection and the repair command.
@@ -246,7 +248,7 @@ instead (see [Alternatives Considered](#alternatives-considered)).
 | `dgm:mermaid`           | child of `dgm:diagram`  | Mermaid source text in a CDATA section (Mermaid mode only).              |
 | `dgm:node`              | attribute on `<g>`      | Stencil type, for example `flowchart.decision` or `aws.lambda`.          |
 | `dgm:key`               | node `<g>`, connector   | Stable identity within the diagram; Mermaid node ids map here.           |
-| `dgm:diagram-ref`       | node `<g>`, connector   | Key of the owning `dgm:diagram`, when a document holds several diagrams. |
+| `dgm:diagram-ref`       | content `<g>`           | Marks the wrapper `<g>` holding one diagram's nodes and connectors.      |
 | `dgm:ports`             | node `<g>`              | Named ports as fractions of the node box: `n:0.5,0 e:1,0.5`.             |
 | `dgm:pin`               | node `<g>`              | `pinned` keeps the user position during auto-layout; absent means auto.  |
 | `dgm:label-ref`         | node `<g>`, connector   | Optional SVG id of the `<text>` holding the label, when not the default. |
@@ -255,6 +257,9 @@ instead (see [Alternatives Considered](#alternatives-considered)).
 | `dgm:waypoints`         | connector `<path>`      | User-pinned waypoints in user units: `120,40 120,200`.                   |
 | `dgm:route-fingerprint` | connector `<path>`      | Hash of the `d` attribute Donner last wrote, for divergence detection.   |
 | `dgm:constraints`       | node `<g>`              | Reserved for future layout constraints; preserved if present.            |
+
+Each diagram's nodes and connectors live inside one wrapper `<g>` carrying `dgm:diagram-ref` and
+a unique SVG `id`, so membership is structural and stylesheet selectors can be scoped to it.
 
 The label of a node is the text content of its first `<text>` descendant unless `dgm:label-ref`
 names another element. The node's box is the SVG bounding box of the `<g>`, so ports stay correct
@@ -277,23 +282,25 @@ when another tool resizes the shape.
     </marker>
   </defs>
   <style>
-    .dgm-flowchart-process rect { fill: #e8f0fe; stroke: #1a73e8; }
-    .dgm-flowchart-decision path { fill: #fef7e0; stroke: #f9ab00; }
-    .dgm-connector { fill: none; stroke: #5f6368; marker-end: url(#dgm-arrow); }
+    #dgm-main .dgm-flowchart-process rect { fill: #e8f0fe; stroke: #1a73e8; }
+    #dgm-main .dgm-flowchart-decision path { fill: #fef7e0; stroke: #f9ab00; }
+    #dgm-main .dgm-connector { fill: none; stroke: #5f6368; marker-end: url(#dgm-arrow); }
   </style>
-  <g class="dgm-flowchart-process" dgm:node="flowchart.process" dgm:key="A"
-     dgm:ports="n:0.5,0 s:0.5,1" transform="translate(140,20)">
-    <rect width="120" height="48" rx="6"/>
-    <text x="60" y="29" text-anchor="middle">Start</text>
+  <g id="dgm-main" dgm:diagram-ref="main">
+    <g class="dgm-flowchart-process" dgm:node="flowchart.process" dgm:key="A"
+       dgm:ports="n:0.5,0 s:0.5,1" transform="translate(140,20)">
+      <rect width="120" height="48" rx="6"/>
+      <text x="60" y="29" text-anchor="middle">Start</text>
+    </g>
+    <g class="dgm-flowchart-decision" dgm:node="flowchart.decision" dgm:key="B"
+       dgm:ports="n:0.5,0 s:0.5,1 e:1,0.5" dgm:pin="pinned" transform="translate(140,120)">
+      <path d="M60,0 L120,40 L60,80 L0,40 z"/>
+      <text x="60" y="45" text-anchor="middle">Valid?</text>
+    </g>
+    <path class="dgm-connector" dgm:connector="orthogonal" dgm:key="A-B"
+          dgm:from="A#s" dgm:to="B#n" dgm:route-fingerprint="9c1f3a2e"
+          d="M200,68 L200,120"/>
   </g>
-  <g class="dgm-flowchart-decision" dgm:node="flowchart.decision" dgm:key="B"
-     dgm:ports="n:0.5,0 s:0.5,1 e:1,0.5" dgm:pin="pinned" transform="translate(140,120)">
-    <path d="M60,0 L120,40 L60,80 L0,40 z"/>
-    <text x="60" y="45" text-anchor="middle">Valid?</text>
-  </g>
-  <path class="dgm-connector" dgm:connector="orthogonal" dgm:key="A-B"
-        dgm:from="A#s" dgm:to="B#n" dgm:route-fingerprint="9c1f3a2e"
-        d="M200,68 L200,120"/>
 </svg>
 ```
 
@@ -419,10 +426,21 @@ untouched. Stencils with multi-line labels relabel by replacing the label `<text
 `InsertElement` and `DeleteElement` pair; single-line labels use `setElementTextContent`.
 
 Each plan is applied as a group that the undo timeline records as one entry with the inverse plan.
+An inverse plan restores the exact original bytes, not a re-serialization. Before a removal or an
+attribute overwrite, the plan captures the affected source span from the parser's own locations
+(`XMLNode::getNodeLocation`, `getAttributeSourceLocation`) plus an `XMLSourceStore` anchor at its
+position. `XMLDocument::removeNode` clears a detached node's source locations, and reinserting it
+through `insertElement` would use the normalizing `XMLNode::serializeToString`, so undo instead
+re-inserts the captured bytes at the resolved anchor through `applySourceEdit`. That edit is parsed
+locally (`ElementSubtree` or `AttributeValue` scope) like any source-pane edit, so it involves no
+hand-written markup scanning and no document reparse. A restored node is a new entity;
+`DiagramModel` re-associates it by `dgm:key`.
+
 An `ApplySourceEditResult` may report a failure after committing some source replacements, so a
 plan that fails partway is rolled back by replaying the inverse of the commands it already applied.
 A diagram operation is therefore either fully applied or not applied, as the threat model's refusal
 rule requires.
+
 `CommandQueue` coalescing (repeated `SetAttribute` of the same element and attribute collapses to
 the latest value) keeps a 60 fps node drag to one attribute write per element per frame. No plan
 contains `ReplaceDocument`, `CutShapes` or `PasteShapes`, and the reparse-free invariant is tested
@@ -496,8 +514,17 @@ possible, analogous to how `XMLSourceStore` preserves SVG formatting.
      remove plus add unless the edit is a pure rename of every occurrence, which the reconciler
      detects and maps to a key rename that preserves position and pins.
    - Edges match by explicit edge id when present (recent Mermaid releases accept an id prefix on
-     an edge; the subset accepts that syntax when the pinned grammar reference does) and otherwise
-     by `(from, to, occurrence index)`, stored in the connector's `dgm:key`.
+     an edge; the subset accepts that syntax when the pinned grammar reference does).
+   - An edge without an id gets an opaque generated key (`e7`) that never encodes its position.
+     Identity is carried by edit continuity: statements outside the edited byte range keep their
+     edges unchanged, shifted like source anchors. Only edges inside the edited range are
+     re-matched, first by `(from, to, label)` and then, among identical candidates, by their order
+     within that range, so inserting or deleting one parallel edge cannot re-associate the
+     waypoints, ports or styling of edges elsewhere.
+   - When there is no edit history to follow (opening a file whose Mermaid text another tool
+     changed), unmatched parallel edges fall back to document order and the editor reports the
+     ambiguity. An "Assign edge ids" action writes explicit ids so identity no longer depends on
+     inference.
 3. Only the differences become `DiagramOp`s. Adding one node inserts one `<g>`, places it with
    incremental layout, and leaves pinned nodes untouched.
 
@@ -577,10 +604,13 @@ All of this is native C++ with no new third-party dependency (see
 - Family themes live in one `<style>` element per diagram. Restyling every decision node is one
   rule edit in that element, made through `setElementTextContent` or the source pane. Donner
   already reparses `<style>` content on text edits, and every SVG viewer honors the result.
-- Mermaid `classDef warn fill:#f96,stroke:#333` maps to a rule for a namespaced class
-  (`.dgm-mm-warn`) in the diagram's `<style>`; `class A warn` and `A:::warn` add that class to
-  node `A`. Direct per-node overrides use ordinary SVG presentation attributes on the node's
-  children, which stay out of the Mermaid text.
+- Every generated selector is scoped by the diagram wrapper's id, for example
+  `#dgm-main .dgm-flowchart-decision`, so two diagrams of the same family in one document can carry
+  different themes without either stylesheet affecting the other.
+- Mermaid `classDef warn fill:#f96,stroke:#333` maps to a rule for a namespaced class, scoped the
+  same way as `#dgm-main .dgm-mm-warn`, in the diagram's `<style>`; `class A warn` and `A:::warn`
+  add that class to node `A`. Direct per-node overrides use ordinary SVG presentation attributes on
+  the node's children, which stay out of the Mermaid text.
 
 ## Relationship to Multiplayer Editing
 
