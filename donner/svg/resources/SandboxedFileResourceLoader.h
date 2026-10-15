@@ -24,8 +24,9 @@ public:
   /**
    * Create a new resource loader that loads files sandboxed within the given root directory.
    *
-   * Paths should be relative to the documentPath directory. Paths that use ".." to escape the root
-   * directory will be rejected.
+   * Relative resource paths resolve from the documentPath directory, which may lie outside root.
+   * The document path is trusted configuration; every fetched resource must remain within root,
+   * including after resolving ".." components.
    *
    * @param root Sandbox directory, loads outside of this directory will be rejected.
    * @param documentPath Path to the document being loaded, used to resolve relative paths.

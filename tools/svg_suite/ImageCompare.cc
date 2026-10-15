@@ -104,6 +104,19 @@ bool ValidDimensions(int width, int height) {
   return width > 0 && height > 0 && width <= kMaxDimension && height <= kMaxDimension &&
          static_cast<size_t>(width) <= kMaxDecodedBytes / 4 / static_cast<size_t>(height);
 }
+
+void NormalizeStride(ImageView& image, size_t stride, std::vector<uint8_t>& storage) {
+  if (image.strideInPixels == stride) {
+    return;
+  }
+  storage.resize(stride * static_cast<size_t>(image.height) * 4);
+  for (size_t row = 0; row < static_cast<size_t>(image.height); ++row) {
+    std::copy_n(image.data.begin() + row * image.strideInPixels * 4,
+                static_cast<size_t>(image.width) * 4, storage.begin() + row * stride * 4);
+  }
+  image.strideInPixels = stride;
+  image.data = storage;
+}
 }  // namespace
 
 std::string ValidateImage(ImageView image) {
@@ -133,18 +146,21 @@ ComparisonResult CompareImages(ImageView expected, ImageView actual,
   if (!result.error.empty()) {
     return result;
   }
-  if (expected.width != actual.width || expected.height != actual.height ||
-      expected.strideInPixels != actual.strideInPixels) {
+  if (expected.width != actual.width || expected.height != actual.height) {
     result.error = "dimension-mismatch";
     return result;
   }
-  Image diff{expected.width, expected.height, expected.strideInPixels,
-             std::vector<uint8_t>(expected.data.size())};
+  const size_t stride = std::min(expected.strideInPixels, actual.strideInPixels);
+  std::vector<uint8_t> normalized;
+  NormalizeStride(expected.strideInPixels > actual.strideInPixels ? expected : actual, stride,
+                  normalized);
+  Image diff{expected.width, expected.height, stride,
+             std::vector<uint8_t>(stride * static_cast<size_t>(expected.height) * 4)};
   pixelmatch::Options policy;
   policy.threshold = options.threshold;
   policy.includeAA = options.includeAntiAliasing;
   const int count = pixelmatch::pixelmatch(expected.data, actual.data, diff.data, expected.width,
-                                           expected.height, expected.strideInPixels, policy);
+                                           expected.height, stride, policy);
   if (count < 0) {
     result.error = "pixelmatch rejected the image buffers";
     return result;

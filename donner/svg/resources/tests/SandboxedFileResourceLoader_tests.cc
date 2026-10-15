@@ -44,6 +44,42 @@ TEST_F(SandboxedFileResourceLoaderTests, LoadFileFromRoot) {
   EXPECT_THAT(data, testing::VariantWith<std::vector<uint8_t>>(testing::ElementsAreArray("test")));
 }
 
+TEST_F(SandboxedFileResourceLoaderTests, OutsideDocumentBaseResolvesParentPathInsideRoot) {
+  createTestFileUnder(root_, "outside-base-resource.txt");
+  SandboxedFileResourceLoader loader(root_, secondaryDir_ / "document.svg");
+
+  EXPECT_THAT(loader.fetchExternalResource("../root/outside-base-resource.txt"),
+              testing::VariantWith<std::vector<uint8_t>>(testing::ElementsAreArray("test")));
+}
+
+TEST_F(SandboxedFileResourceLoaderTests, OutsideDocumentBaseCannotReadOutsideAllowedRoot) {
+  createTestFileUnder(secondaryDir_, "outside-base-secret.txt");
+  const auto prefixSibling = root_.parent_path() / "root-outside-base";
+  std::filesystem::create_directories(prefixSibling);
+  createTestFileUnder(prefixSibling, "secret.txt");
+  SandboxedFileResourceLoader loader(root_, secondaryDir_ / "document.svg");
+
+  for (const std::string& uri :
+       {std::string("outside-base-secret.txt"), std::string("../root-outside-base/secret.txt"),
+        (secondaryDir_ / "outside-base-secret.txt").string()}) {
+    SCOPED_TRACE(uri);
+    EXPECT_THAT(loader.fetchExternalResource(uri),
+                testing::VariantWith<ResourceLoaderError>(ResourceLoaderError::SandboxViolation));
+  }
+}
+
+TEST_F(SandboxedFileResourceLoaderTests, OutsideDocumentBaseCannotFollowSymlinkOutsideRoot) {
+  createTestFileUnder(secondaryDir_, "outside-base-secret.txt");
+  std::error_code error;
+  std::filesystem::create_directory_symlink(secondaryDir_, root_ / "outside-base-link", error);
+  DONNER_REQUIRE_ENVIRONMENT_CAPABILITY(error ? error.message() : std::string(),
+                                        "the ability to create filesystem symlinks");
+  SandboxedFileResourceLoader loader(root_, secondaryDir_ / "document.svg");
+
+  EXPECT_THAT(loader.fetchExternalResource("../root/outside-base-link/outside-base-secret.txt"),
+              testing::VariantWith<ResourceLoaderError>(ResourceLoaderError::SandboxViolation));
+}
+
 TEST_F(SandboxedFileResourceLoaderTests, RootDoesNotExit) {
   SandboxedFileResourceLoader loader(root_ / "doesnotexist", root_ / "doc.svg");
   EXPECT_THAT(loader.fetchExternalResource("test.txt"),
