@@ -84,7 +84,7 @@ incremental: each step keeps the existing renderer test suites green and pixel o
         transitive base dependencies such as `BezierUtils`, `Utils`, and `RcString`); today
         `//donner/base` depends on `@entt` for every consumer.
   - [ ] Add `donner/render/core/` with the renderer-core value types (color, paint, gradient,
-        stroke style, clip, layer, image view, geometry cache key) and the moved
+        stroke style, clip, layer, shared image source, cache key) and the moved
         `RendererSurfaceBudget` and `RendererDrawBudget`, plus the raster dimension and decoded-byte
         limit constants from `ImageLoader.h` and `ImageSampling.h`.
   - [ ] Add `configured_dependency_audit_test` audits for the core, animation, and Lottie
@@ -246,7 +246,7 @@ The core is a backend-neutral drawing interface whose inputs are fully resolved 
 ```cpp
 namespace donner::render {
 
-struct GeometryKey {          // Opaque cache identity chosen by the front end.
+struct GeometryKey {          // Opaque cache identity for geometry or images.
   uint64_t id = 0;            // 0 means "no persistent identity".
   uint64_t generation = 0;    // Bumped by the front end when the geometry changes.
 };
@@ -257,7 +257,11 @@ struct LinearGradient { Vector2d start, end; SmallVector<GradientStop, 4> stops;
 struct RadialGradient { Vector2d center; double radius; Vector2d focus; double focusRadius;
                         SmallVector<GradientStop, 4> stops; SpreadMode spread;
                         Transform2d gradientFromUser; };
-struct ImagePaint { ImageView image; Transform2d imageFromUser; SpreadMode spread;
+struct ImageSource {          // Shared ownership: a stored Paint keeps its pixels alive.
+  std::shared_ptr<const ImagePixels> pixels;  // Immutable premultiplied RGBA8 and row stride.
+  GeometryKey key;            // Cache identity for converted or uploaded forms.
+};
+struct ImagePaint { ImageSource image; Transform2d imageFromUser; SpreadMode spread;
                     ImageSampling sampling; };
 using Paint = std::variant<NoPaint, RGBA8, LinearGradient, RadialGradient, ImagePaint>;
 
@@ -301,8 +305,8 @@ public:
   virtual void popMask() = 0;
   virtual void fillPath(const DrawGeometry& geometry, const FillStyle& style) = 0;
   virtual void strokePath(const DrawGeometry& geometry, const StrokeStyle& style) = 0;
-  virtual void drawImage(const ImageView& image, const Box2d& target, ImageSampling s) = 0;
-  virtual void releaseGeometry(uint64_t id) = 0;
+  virtual void drawImage(const ImageSource& image, const Box2d& target, ImageSampling s) = 0;
+  virtual void releaseCached(uint64_t id) = 0;  // Geometry or image entry for this id.
   [[nodiscard]] virtual RendererBitmap takeSnapshot() const = 0;
   [[nodiscard]] virtual RendererSurfaceBudget& surfaceBudget() = 0;
   [[nodiscard]] virtual RendererDrawBudget& drawBudget() = 0;
@@ -331,15 +335,19 @@ Design rules for the core:
   gets a distinct id that the SVG layer derives from the entity and that transform. A zero key
   disables caching; the conformance suite checks that a zero key and a nonzero key render the
   same pixels.
-- **Cache retention is bounded.** A key's cache entry holds one generation: drawing a newer
-  generation replaces the older entry. `RendererCore::releaseGeometry(id)` drops an entry when the
-  front end destroys its source (an erased entity, a destroyed retained path, an unloaded
-  composition), and the backend additionally evicts least-recently-used entries past a fixed
-  byte budget, so animated geometry that bumps its generation every frame cannot accumulate.
+- **Cache retention is bounded.** Geometry and images share the key and retention rules. A key's
+  cache entry holds one generation: drawing a newer generation replaces the older entry.
+  `RendererCore::releaseCached(id)` drops an entry when the front end destroys its source (an erased
+  entity, a destroyed retained path or image, an unloaded composition), and the backend additionally
+  evicts least-recently-used entries past a fixed byte budget, so animated geometry that bumps its
+  generation every frame cannot accumulate.
 - **Borrowing stays opt-in.** As with `PathShape` today, a key alone does not permit deferral: a
   backend may retain the geometry past the call only when `allowDeferred` is set and the key is
   nonzero, and the front end guarantees that geometry stays alive and unchanged until the deferred
-  draws flush.
+  draws flush. Images need no such rule: `ImageSource` shares ownership of immutable pixels, so a
+  stored `Paint` or a deferred draw keeps them alive. This replaces the SVG renderer's
+  `ImageResource` copies and the entity-keyed `TinySkiaImageCacheComponent` with one image
+  contract.
 - **Budgets live in the core.** `RendererSurfaceBudget` and `RendererDrawBudget` move to the core
   unchanged, so every front end, including untrusted Lottie, gets the same per-frame admission
   limits. `RendererFilterPreparationBudget` and `RendererTextMaterializationBudget` stay with the
@@ -414,13 +422,15 @@ namespace donner::tiny {
 class Canvas {
 public:
   static std::unique_ptr<Canvas> CreateSoftware(int width, int height, const Limits& limits = {});
+  bool beginFrame();                 // Resets per-frame budgets; false if refused.
+  void endFrame();                   // Unwinds unbalanced save/layer state, then presents.
   void save();                       // Transform, clip, and layer state.
   void restore();
   void transform(const Transform2d& t);
   void clip(const PathRef& path, FillRule rule = FillRule::NonZero);
   void fill(const PathRef& path, const Paint& paint, FillRule rule = FillRule::NonZero);
   void stroke(const PathRef& path, const Paint& paint, const Stroke& stroke);
-  void drawImage(const ImageView& image, const Box2d& target);
+  void drawImage(const ImageRef& image, const Box2d& target);
   void beginLayer(double opacity, BlendMode blend);
   void endLayer();
   PixelView pixels() const UTILS_LIFETIME_BOUND;  // Premultiplied RGBA8, row stride exposed.
@@ -429,12 +439,18 @@ public:
 }  // namespace donner::tiny
 ```
 
+Drawing happens between `beginFrame()` and `endFrame()`, which map to the core's frame calls, so
+each presented frame (including GPU frames that never read pixels back) gets its own draw and
+surface budgets. Draw calls outside a frame return an error. `save`/`restore` and layers must
+balance within one frame; `endFrame` unwinds any that do not and reports it.
+
 `PixelView` borrows the canvas's pixel storage: it is valid until the canvas is destroyed or the
 next drawing call, and `UTILS_LIFETIME_BOUND` lets the compiler flag a view that outlives a
 temporary canvas. Hosts that need to keep pixels copy them out.
 
 `PathRef` is either a transient `Path` or a retained path object that carries a stable
-`GeometryKey`, so hosts that redraw the same icon every frame get cache reuse. A GPU canvas is
+`GeometryKey`, so hosts that redraw the same icon every frame get cache reuse. `ImageRef` is the
+same for images: a retained image object wraps an `ImageSource` with a stable key. A GPU canvas is
 created from a host-supplied device through the Geode backend when it is compiled in.
 
 The C API mirrors it with opaque handles, explicit create and destroy, status-code returns, and
@@ -663,8 +679,10 @@ New targets (names are proposals):
   key renders the same pixels as a nonzero one, and two front ends drawing through one core never
   share a cache entry:** `//donner/render/tests:core_conformance_tests`,
   run per backend through `donner_multi_transitioned_test`.
-- **Geometry caches stay within their byte budget under generation churn and release entries for
-  destroyed sources:** `//donner/render/tests:geometry_cache_tests`, run per backend.
+- **Geometry and image caches stay within their byte budget under generation churn and release
+  entries for destroyed sources:** `//donner/render/tests:render_cache_tests`, run per backend.
+- **Canvas frames reset budgets, reject draws outside a frame, and unwind unbalanced state:**
+  `//donner/tiny/tests:canvas_tests`.
 - **The shared animation module matches its documented interpolation and easing:**
   `//donner/animation:animation_tests`.
 - **Lottie limits admit exactly at and refuse one past each limit, and a refused load or frame
@@ -688,14 +706,16 @@ New targets (names are proposals):
 The core conformance suite is new and backend-neutral: it draws through `RendererCore` only (fills,
 strokes, joins and caps, dashes, gradients with every spread mode, clip nesting and mixed clip rules
 within one clip, layers with each blend mode, all four mask modes, both luminance spaces for the
-luminance modes, image sampling, zero versus nonzero geometry keys) and compares each backend
-against shared goldens with the existing tolerance helpers in `donner/svg/renderer/tests`. It
+luminance modes, image sampling, zero versus nonzero geometry keys). It compares each backend
+against shared goldens by calling the canonical `bitmap_golden_compare` API directly
+(`CompareBitmapToGolden`), and compares zero-key and nonzero-key renders with
+`CompareBitmapToBitmap` and `PixelmatchIdentityParams`; it adds no local tolerance wrapper. It
 replaces nothing; the SVG suites keep guarding SVG semantics, and the core suite pins what Donner
 Tiny can rely on independent of SVG.
 
 The Lottie golden corpus is authored in-repo or drawn from permissively licensed sources with
 recorded provenance, one small file per feature plus a few composite animations, rendered at fixed
-frame times.
+frame times and compared with `CompareBitmapToGolden`.
 
 Known gaps:
 
