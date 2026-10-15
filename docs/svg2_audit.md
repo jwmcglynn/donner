@@ -103,20 +103,20 @@ consolidated IDL; Appendix I is an index.
 
 ## Executed Static Corpus Evidence
 
-At commit `4e95ce40f8d1da681fadf9d9b4434adfa2d9bb8d`, discovery contains 1,696 cases: all
+A historical discovery inventory contained 1,696 cases: all
 1,679 paired cases in the pinned resvg corpus and 17 Donner extension cases. The native
-`//tools/svg_suite:donner_extension_tests` target completed all 17 extension cases at that revision
-with zero strict comparison failures or skips. This extension-only run does not qualify resvg at
-that revision. Counts and results are revision-specific; later fixtures require fresh evidence.
+`//tools/svg_suite:donner_extension_tests` target completed all 17 extension cases in that inventory
+with zero strict comparison failures or skips. This extension-only run does not qualify resvg.
+It predates later fixtures and is not a claim about current discovery or a fresh run of merged main.
 
 The table below records a historical 1,689-case run: all 1,679 pinned resvg cases and the 10 extension
 cases present in that snapshot. It predates the seven automatic-radius fixtures and provides no
 result for them. Its totals must not be presented as a run of that 1,696-case corpus or
 combined with the newer extension results into one execution. The retained historical run binds renderer SHA-256
 `66c9e64de7294f3a8d17cb002f96ef8eb4d7ee15c654a3ab01403a1d0cd3b593` to captured PNGs and unchanged
-source/resource fingerprints. Its declared engine revision is
-`696894f6b236364475faa55674741d05407d8252` and declared backend is `tiny-skia-basic`; these labels
-are caller-supplied, while the binary hash measures the executable bytes. Build flags are unspecified.
+source/resource fingerprints. Its source-revision label was caller-supplied and is not used as a
+public source baseline. The declared backend `tiny-skia-basic` is also caller-supplied; the binary
+hash measures executable bytes. Build flags are unspecified.
 
 | Corpus | Cases | Strict pass | Strict pixel mismatch | Render error | Default-policy pass | Default-policy mismatch |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
@@ -209,7 +209,7 @@ It requires UTF-8/UTF-16 support and fatal rejection of malformed UTF-8; other e
 Its [Char production](https://www.w3.org/TR/2008/REC-xml-20081126/#charsets) separately excludes
 forbidden XML characters. These rules concern XML processing, not HTML replacement behavior.
 
-The official campaign's `structure/svg/not-UTF-8-encoding.svg` declares Windows-1251. A private
+The official campaign's `structure/svg/not-UTF-8-encoding.svg` declares Windows-1251. A
 diagnostic preserved that original and its reference, then ran equivalent decoded content in three
 encodings through the same native Donner child. The Windows-1251 input reports unsupported encoding;
 a UTF-16 BOM copy fails at the first node; the UTF-8 copy renders but still has 6,580 strict mismatch
@@ -230,9 +230,9 @@ and U+FFFE). Only NUL was rejected. The other seven rendered the reference exact
 ten input-acceptance assertions were satisfied**, despite nine passing static image comparisons.
 A matching PNG cannot prove that malformed XML was rejected.
 
-The immutable renderer was built from `4e95ce40`; the relevant XML parser and native render-entry
-source bytes are unchanged in `9a896a09`. These observations are not a fresh build of the latter
-revision. The raw-text scanner can consume metadata without a complete UTF-8/XML-character check;
+The diagnostic used an earlier renderer build. Its inspected XML parser and native render-entry
+source files match the public [merged suite baseline](https://github.com/jwmcglynn/donner/commit/ddcf539107d6644bebb2fbe281d555a0819615f4).
+This establishes correspondence of those source files, not a fresh build or execution of that merge. The raw-text scanner can consume metadata without a complete UTF-8/XML-character check;
 validation of names and numeric references does not establish validation of raw character data.
 
 Required repair evidence remains open: native parser and file-entrypoint regressions for raw data,
@@ -252,9 +252,10 @@ closure and conformance remain incomplete.** Core attributes, global event attri
 SVGElement members stay with their defining chapters; listing them in the style-element summary
 does not establish their implementation.
 
-Source observations below refer to foundation `9a896a09`; the inspected styling files are byte-identical
-to `509f9d46`, whose completed full invocation supplies the named native-test evidence. Existing tests
-are narrow assertions, not proof that every property, stylesheet route or host behavior works.
+The inspected styling files match the public [merged suite baseline](https://github.com/jwmcglynn/donner/commit/ddcf539107d6644bebb2fbe281d555a0819615f4).
+Named native-test evidence comes from an earlier completed invocation with those same styling files;
+it is not a fresh execution of the merge. Existing tests are narrow assertions, not proof that every
+property, stylesheet route or host behavior works.
 
 ### Current requirements and evidence
 
@@ -269,7 +270,7 @@ are narrow assertions, not proof that every property, stylesheet route or host b
 | [6.5 class/style](https://w3c.github.io/svgwg/svg2-draft/styling.html#ElementSpecificStyling) | All SVG elements support class tokens and declaration-list style. Class is animatable; style is not. HTML semantics apply except SVG className reflection. | `CSSClassSelector`, `CSSIdSelector`, `InlineStyleOverridesAttribute` and `ComputedStyleAfterClassMutation` assert narrow computed-color behavior. Add multiple-token/whitespace/case controls, malformed declaration recovery, relative URLs and mutation/query-before-draw. Native class setters are not proof of animated className/Web IDL. |
 | [6.6 presentation cascade](https://w3c.github.io/svgwg/svg2-draft/styling.html#PresentationAttributes) | Presentation values occupy author origin before other author sheets, specificity zero; embedded !important is invalid because the attribute contains a value, not a declaration. SVG attribute grammar extensions remain governed by 4.2. | `PresentationAttribute`, `StylesheetOverridesPresentationAttribute` and `InlineStyleOverridesAttribute` pass for fill. Add attribute `!important`, invalid-value recovery and equal-rank order controls. Unitless attribute lengths versus CSS lengths remain the separately scoped chapter-7/PR-1871 work. |
 | 6.6 mapping table | Geometry attributes apply only to listed elements: cx/cy circle/ellipse; r circle; rx/ry ellipse/rect; d path; x/y/width/height foreignObject/image/rect/svg/symbol/use. Fill excludes animation-element fill. Transform maps through patternTransform/gradientTransform on the designated paint servers; the remaining listed common attributes apply to SVG-namespace elements. Nonmatching/foreign attributes must not affect CSS inheritance or cascade. | Registry allowlists and element parsing are source seams, not proof of the entire table. Add text/tspan x and radialGradient r negative controls, foreign-namespace controls, transform mapping and animation-fill disambiguation. Audit the full common-attribute list against actual consumers; parser acceptance alone is insufficient. New CSS properties do not automatically gain presentation attributes. Chapter-7 CSS sizing applicability conflicts remain open. |
-| 6.6 animation | Animating a presentation attribute has the effect of animating its mapped property. | Main base `6f197042` and this foundation lack the Animation specificity tier. The separately developed animation branch `756165046` is coordination evidence only. Integration must preserve normal-author < animation < author-important and explicit native overrides; class animation, mapped paint-server transforms, base restoration and computed queries need source-bound native clock tests. |
+| 6.6 animation | Animating a presentation attribute has the effect of animating its mapped property. | The merged baseline has no dedicated Animation specificity tier. Animation integration remains open and must preserve normal-author < animation < author-important and explicit native overrides; class animation, mapped paint-server transforms, base restoration and computed queries need source-bound native clock tests. |
 | [6.7 required properties](https://w3c.github.io/svgwg/svg2-draft/styling.html#RequiredProperties) | All SVG-defined properties and every listed external property family are required, subject to the consuming feature's applicability. | Keep the complete family routing below. Broad resvg passes, registered names and optional text backend presence do not establish these semantics. |
 | [6.8 UA sheet](https://w3c.github.io/svgwg/svg2-draft/styling.html#UAStyleSheet) | SVG/default and XML namespace selectors, overflow clipping for the listed elements, transform-origin defaults/exceptions, xml:space preservation, and link/visited cursor styling. Interactive UAs also need distinct focus and selection styling. | `UserAgentStylesheet.h` resembles the block but uses text-space-collapse where the pinned SVG2 block uses white-space-collapse. Resolve the dependency conflict below before choosing an oracle. Add non-square transform-origin and nested/root/foreignObject namespace controls, overflow pixels, preserved spaces and link cursor state. Selector state registration/dependency tracking does not prove matching or input-driven invalidation. |
 | 6.8 OpenType note | The cited OpenType embedding profile adds text/foreignObject suppression and root context paint, opacity and stroke values adjusted for glyph coordinates. | This is an informative note pointing to a separate profile's requirements. Font availability or ordinary text rendering is not SVG-in-OpenType coverage. Pin the chosen OpenType profile and host contract before claiming applicability or testing context-value propagation. |
@@ -291,10 +292,11 @@ inheritance, and equal specificity within one style element. They do not establi
 multiple style elements, preservation of selector specificity within important declarations, or
 valid deferred-property selection.
 
-The separate CSS-length candidate `5b2f9a18` has 25 previously executed analytic cascade probes:
+A diagnostic campaign associated with [CSS-length PR #1871](https://github.com/jwmcglynn/donner/pull/1871) executed 25 analytic cascade probes:
 13 pass and 12 fail, no skips. These reproduce deferred x validity/ordering/priority failures and a
-parsed-fill cross-stylesheet-order failure. They are branch-bound evidence, not new results from this
-audit and not proof that every foundation path behaves identically.
+parsed-fill cross-stylesheet-order failure. The inspected cascade and length-grammar source files
+match the public [CSS-length merge](https://github.com/jwmcglynn/donner/commit/c366058d43d0d681cc438ef8da45e12953ff8edc).
+These are historical diagnostic results, not a fresh execution of that merge or proof of every path.
 
 The importance/origin repair is a separate implementation unit: preserve selector specificity,
 inline identity, UA-important precedence and editor winner annotations in the existing rank type.
@@ -360,8 +362,8 @@ bytes): all eight subsections, seven property-definition tables, the negative-va
 sizing table. Chapter 7 defines no IDL interfaces; geometry reflection and live objects remain with
 chapters 4, 8 and 10. **The chapter is not implementation- or conformance-complete.**
 
-Foundation source observations refer to `efd169b1`, whose inspected geometry code matches `4e95ce40`.
-The separate CSS-length proposal at `3bfd6270` is identified explicitly below. Source presence,
+Initial geometry source observations match the public [pre-grammar-fix baseline](https://github.com/jwmcglynn/donner/commit/6f1970424e7234561d2ec573446e9c195559b399).
+The subsequently merged CSS-length repair [#1871](https://github.com/jwmcglynn/donner/pull/1871) is identified below. Source presence,
 loop iterations and wrapper-test counts are not interchangeable with executed native cases.
 
 ### Current requirements and bounded evidence
@@ -380,7 +382,7 @@ in 7.8.
 | [7.3 r](https://w3c.github.io/svgwg/svg2-draft/geometry.html#R) | Circle radius; initial 0; percentages use the normalized viewport diagonal; nonpositive used radius produces no circle. | `Length::toPixels` uses mixed extent and `ShapeSystem` suppresses nonpositive radius. A negative-only blank fixture cannot distinguish initial substitution from invalid-declaration fallback. Add computed-radius/bounds and positive-then-negative cascade controls. |
 | [7.4 rx](https://w3c.github.io/svgwg/svg2-draft/geometry.html#RX) | Ellipse/rect radius; initial auto. Auto copies the other radius's resolved absolute length; both auto use 0. Rect rx is capped at half used width. | Automatic-radius repair is merged and present. Seven named analytic pairs pass in the completed foundation extension run; typed tests also cover fallback-axis resolution. This closes the reproduced explicit-auto crash, not all radius semantics. Rect percentage basis remains disputed below. |
 | [7.5 ry](https://w3c.github.io/svgwg/svg2-draft/geometry.html#RY) | Symmetric auto rules; rect ry is capped at half used height. Its percentage table names viewport height. | Same shared helper and independent clamp. Retain one-auto/one-length and both-auto controls; add unequal radii above their two different clamps. Negative-to-auto computed state remains distinct from a coincidentally matching rendered shape. |
-| [7.6 x](https://w3c.github.io/svgwg/svg2-draft/geometry.html#X) | Initial 0; width-relative percentages; applies to svg/rect/image/foreignObject. | Existing strict CSS-x precedence pair passes. Foundation deferred geometry still admits unitless CSS numbers. Separate `3bfd6270` addresses rect grammar; it does not close general cascade or other element types. ForeignObject remains a host/element gap. |
+| [7.6 x](https://w3c.github.io/svgwg/svg2-draft/geometry.html#X) | Initial 0; width-relative percentages; applies to svg/rect/image/foreignObject. | Existing strict CSS-x precedence pair passes. Merged [#1871](https://github.com/jwmcglynn/donner/pull/1871) rejects nonzero unitless CSS for rect geometry; it does not close general cascade or other element types. ForeignObject remains a host/element gap. |
 | [7.7 y](https://w3c.github.io/svgwg/svg2-draft/geometry.html#Y) | Initial 0; height-relative percentages; same element applicability. | Rect and sized-element paths use Y extent. The separate rect component tests cover y grammar, but no equivalent narrow end-to-end y result is claimed here. Add negative y, stylesheet precedence and non-square percentage controls. |
 | [7.8 width/height](https://w3c.github.io/svgwg/svg2-draft/geometry.html#Sizing), applicability | CSS sizing applies to rect, image, foreignObject and outermost svg. This section excludes nested svg/use/symbol CSS sizing. | The shared sized-element property path does not establish that exclusion. Chapter 5 contains conflicting applicability language; hold that boundary open instead of silently selecting one chapter. Attributes and CSS must be distinguished in the eventual regression. |
 | 7.8, auto used values | SVG uses 100%; image uses intrinsic sizing; other applicable elements use 0. ForeignObject does not shrink-wrap. | Rect/layout width and height parsers accept lengths/percentages, not explicit auto. Omission is not sufficient evidence: test a positive authored size overridden by auto. Audit nullable `isSpecified()`/value accesses before admitting auto into those paths. Outer-svg viewport controls belong with chapter 8. |
@@ -395,26 +397,27 @@ Primary source locations are [shape components](../donner/svg/components/shape/R
 
 ### Executed evidence and integration boundaries
 
-- **Merged automatic radii:** repair merge `5e8f3e69` is an ancestor of foundation `efd169b1`.
-  The completed affected run at `4e95ce40` contains 17 extension cases, including all seven
+- **Merged automatic radii:** [repair merge](https://github.com/jwmcglynn/donner/commit/5e8f3e69e1bbf35c8d40a38464e820f8a783e585) is included in the merged suite baseline.
+  A historical completed affected run contains 17 extension cases, including all seven
   `geometry/automatic-radii` pairs, with no failures or skips. These independently specified
   references exercise explicit rx/ry/both-auto and CSS rectangle auto; ellipse cases have a visible
   red control and add no blue geometry. This is the completed affected run, not a subsequently
   interrupted full invocation. It does not resolve rectangle percentage-radius interpretation.
-- **Separate CSS-length PR [1871](https://github.com/jwmcglynn/donner/pull/1871), `3bfd6270`:**
+- **Merged CSS-length PR [1871](https://github.com/jwmcglynn/donner/pull/1871):**
   rect component assertions reject nonzero unitless CSS across all six rect geometry properties
   while preserving unitless zero and explicit units. End-to-end assertions are narrower: inline and
   stylesheet rect x, percentages, six zero spellings, attribute units and a valid unitless
   stroke-width control. Earlier source-bound results are 577 C++ tests, four Geode tests and three
-  strict analytic pairs; the implementation/assets are unchanged at `3bfd6270`. The last change
-  changes only three JSON metadata files. Its owning gates have 11 and 18 metadata unittests plus **one**
+  strict analytic pairs; the implementation/assets are preserved in its public
+  [merge](https://github.com/jwmcglynn/donner/commit/c366058d43d0d681cc438ef8da45e12953ff8edc). Its final compatibility registration
+  changed only three JSON metadata files. Its owning gates have 11 and 18 metadata unittests plus **one**
   unittest asserting all 19 manifest render cases. These are not 19 JUnit records, a fresh rerun of
   the 577 tests, foundation coverage, or a completed full-qualification claim.
 - **Shared cascade remains unresolved:** two separate probe runs on the CSS-length candidate
   completed 25 cases: 13 pass and 12 fail, no skips. They expose ordering/validity/specificity and
   importance behavior, including parsed fill, not merely geometry parsing. They are coordination
-  evidence for the pending shared repair. Foundation behavior is not inferred from those branch
-  results, and the grammar PR does not claim to fix them.
+  evidence for the unresolved shared repair, not a fresh execution of merged main; the grammar PR
+  does not claim to fix them.
 
 ### Shared requirements still needing evidence
 
@@ -466,9 +469,8 @@ unconditional requirements. The two interface declarations and the image URI-ref
 with Appendix A. **Implementation, test coverage and host applicability remain open.** This does not
 supersede the ledger's incomplete-audit warning.
 
-Implementation observations below are bound to Donner `efd169b1`; the inspected production files
-are unchanged from renderer source `4e95ce40`. Existing unit-test pointers describe assertions read
-in source, not newly executed passes. A resvg category or its historical reference image is not a
+The inspected production files match the public [merged suite baseline](https://github.com/jwmcglynn/donner/commit/ddcf539107d6644bebb2fbe281d555a0819615f4).
+Existing unit-test pointers describe assertions read in source, not newly executed passes. A resvg category or its historical reference image is not a
 normative oracle. The main source locations are [image API](../donner/svg/SVGImageElement.cc),
 [layout](../donner/svg/components/layout/LayoutSystem.cc),
 [resource loading](../donner/svg/components/resources/ResourceManagerContext.cc),
