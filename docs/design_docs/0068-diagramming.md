@@ -62,8 +62,8 @@ text stay in sync without a full document reparse.
   icon or image fetches, and `%%{init}%%` options beyond a small allowlisted styling subset.
 - Importing or exporting proprietary diagram file formats from other structured diagramming tools.
   Interchange happens through SVG and `.mmd` files.
-- Real-time collaboration. Multiplayer editing is tracked by the project roadmap; this design only
-  ensures diagram metadata is compatible with element-level reconciliation.
+- Real-time collaboration. Multi-user editing is a roadmap item; this design only ensures diagram
+  metadata is compatible with element-level reconciliation.
 - A general constraint solver (alignment, distribution and equal-spacing constraints beyond pins).
   Those are future work.
 - Any new trigger for a full document reparse. Every diagram path uses incremental edits.
@@ -80,17 +80,23 @@ text stay in sync without a full document reparse.
 
 - [ ] Milestone 1: Namespace recognition and preservation
   - [ ] Recognize the diagram namespace URI in `SVGParser.cc` so its `xmlns` declaration,
-        attributes and elements no longer emit "unsupported namespace" warnings, while staying out
-        of the SVG semantic projection.
+        attributes and elements no longer emit the three unsupported-namespace warnings ("Unexpected
+        namespace", "Ignored attribute", "Retaining element"), while staying out of the SVG
+        semantic projection.
   - [ ] Make `SVGElement::setAttributeFromXMLMutation` skip diagram-namespace attributes the same
         way the parser does (no generic attribute storage, no full style recompute).
   - [ ] Make an `xmlns` declaration of a non-SVG namespace whose prefix is unused in the subtree
         skip the root re-projection in `SVGDocument::applyAttributeXMLMutation`.
+  - [ ] Carry namespace-qualified attribute names through `EditorCommand` and the
+        `CommandQueue` coalescing key, resolving the document's actual prefix for the diagram URI.
+  - [ ] Add a `ReplaceTextRange` editor command that applies a byte-range edit inside an element's
+        text or CDATA value through `SVGDocument::applySourceEdit` (`TextNode` scope).
   - [ ] Add `donner/diagram` with a read-only `DiagramModel` reader over `xml::XMLNode`.
   - [ ] Add byte-exact load, edit and save round-trip tests for known and unknown diagram content.
 - [ ] Milestone 2: Node and connector editing
   - [ ] Typed diagram operations compiled to `EditorCommand` sequences.
-  - [ ] Inverse-command undo entries so diagram undo never restores a full source snapshot.
+  - [ ] Inverse-command undo entries so diagram undo never restores a full source snapshot, and
+        rollback of a partly applied plan by replaying the inverse of its applied prefix.
   - [ ] Port model, connector attach and detach, divergence detection and the repair command.
 - [ ] Milestone 3: Orthogonal connector routing with waypoints and incremental re-routing.
 - [ ] Milestone 4: Layered auto-layout with pins and incremental relayout.
@@ -169,10 +175,11 @@ Verified against the current parser and DOM:
 - Foreign-namespace elements are retained as unknown, non-rendering elements rather than detached
   (`createElement` and `resolveSvgNamespace` in `SVGParser.cc`), so the shared XML tree stays
   complete.
-- `XMLNode::serializeToString` (`donner/base/xml/XMLNode.cc`) emits every attribute and child,
-  including prefixed ones, for programmatically created nodes.
+- `XMLNode::serializeToString` (`donner/base/xml/XMLNode.cc`) emits prefixed attributes and
+  foreign children like any others for programmatically created nodes. It omits only attribute
+  values that cannot be represented in well-formed XML.
 
-Two edit-path behaviors need fixing in milestone 1:
+Four edit-path gaps need fixing in milestone 1:
 
 - `SVGElement::setAttributeFromXMLMutation` (`donner/svg/SVGElement.cc`) only treats unprefixed
   names as presentation attributes; any other name, including a diagram-namespace attribute, is
@@ -183,6 +190,19 @@ Two edit-path behaviors need fixing in milestone 1:
   attribute changes. Adding the diagram namespace declaration to the root `<svg>` would re-project
   the entire document. A declaration of a non-SVG URI whose prefix is unused below the element
   cannot change any element's SVG namespace membership, so it can skip the re-projection.
+- `EditorCommand` stores `attributeName` as a plain string, and `AsyncSVGDocument` applies it as
+  `xml::XMLQualifiedNameRef(command.attributeName)`, whose string constructors assume no namespace
+  prefix. A `SetAttribute` command for `dgm:route-fingerprint` would therefore address an
+  unprefixed attribute literally named `dgm:route-fingerprint` rather than the parsed
+  (`dgm`, `route-fingerprint`) attribute. `SetAttribute` and `RemoveAttribute` commands, and the
+  `CommandQueue` coalescing key, need a qualified name. Because the prefix is not significant, the
+  diagram writer resolves the prefix the document actually binds to the diagram URI.
+- `SVGDocument::setElementTextContent` cannot maintain a CDATA section.
+  `XMLDocument::setElementText` escapes `<`, `>` and `&` (so Mermaid's `-->` would become `--&gt;`),
+  and it replaces in place only when the element has a tracked text value range, which the parser
+  records for plain character data but not for CDATA. For a CDATA child it would insert new escaped
+  text and leave the old CDATA in place. Mermaid text therefore needs a byte-range edit inside the
+  CDATA value through `applySourceEdit`, which classifies as `TextNode` scope.
 
 ### Precedent
 
@@ -386,19 +406,33 @@ Examples of how operations compile:
 - `Reconnect(A-B, to = C#n)`: `SetAttribute(dgm:to)`, `SetAttribute(d)`,
   `SetAttribute(dgm:route-fingerprint)`.
 - `AddNode(stencil)`: one `InsertElement` of a fully built detached `<g>` subtree, serialized by
-  `XMLDocument::insertNode`.
+  `XMLDocument::insertNode`. The first diagram operation in a document first declares the diagram
+  namespace on the root `<svg>`, so every later prefixed attribute or element is in scope.
+- `RemoveNode(B)`: `DeleteElement` of the node, plus `SetAttribute` on attached connectors to mark
+  them dangling (or `DeleteElement` when the user removes them too). Today a `NodeRemoved` mutation
+  marks the whole document's projection replaced (`MarkSubtreeReplaced(rootEntityHandle())` in
+  `SVGDocument::applyXMLMutation`); this is not a reparse, but narrowing it to the removed node's
+  parent is a performance follow-up for large diagrams.
+
+Multi-line labels use `<tspan>` children, which `setElementTextContent` intentionally leaves
+untouched. Stencils with multi-line labels relabel by replacing the label `<text>` element with an
+`InsertElement` and `DeleteElement` pair; single-line labels use `setElementTextContent`.
 
 Each plan is applied as a group that the undo timeline records as one entry with the inverse plan.
+An `ApplySourceEditResult` may report a failure after committing some source replacements, so a
+plan that fails partway is rolled back by replaying the inverse of the commands it already applied.
+A diagram operation is therefore either fully applied or not applied, as the threat model's refusal
+rule requires.
 `CommandQueue` coalescing (repeated `SetAttribute` of the same element and attribute collapses to
 the latest value) keeps a 60 fps node drag to one attribute write per element per frame. No plan
 contains `ReplaceDocument`, `CutShapes` or `PasteShapes`, and the reparse-free invariant is tested
 (see [Testing and Validation](#testing-and-validation)).
 
-Mermaid CDATA patches need a command that edits a byte range inside an element's text value. Today
-`setElementTextContent` replaces the whole value. Milestone 6 either adds an `EditNodeText`
-command that maps onto `XMLDocument::applySourceEdit` with a range inside the CDATA value, or uses
-whole-value replacement (still formatting-preserving, just a larger delta). See
-[Open Questions](#open-questions).
+Mermaid text patches use the milestone 1 `ReplaceTextRange` command: a byte range inside the
+`dgm:mermaid` CDATA value plus replacement bytes, applied through `SVGDocument::applySourceEdit`.
+The range lies inside one CDATA node, so the edit classifies as `TextNode` scope and emits a minimal
+source delta. The printer guarantees the replacement contains no `]]>`; when one is needed it
+splits the CDATA section with a structured insert instead.
 
 ### Hard rules
 
@@ -544,14 +578,14 @@ All of this is native C++ with no new third-party dependency (see
 
 ## Relationship to Multiplayer Editing
 
-The project roadmap plans multiplayer editing with element-level reconciliation. Because diagram
-metadata rides on the elements it describes, it needs no separate synchronization channel: moving
-a node is attribute edits on that node and its connectors, exactly what element-level
-reconciliation already merges. Cross-element invariants (a connector references a node another
-peer just deleted) resolve through the same divergence policy as a foreign-tool edit: the connector
-keeps rendering, the reference is preserved, and a diagnostic is shown. The Mermaid CDATA section
-is a single text node; concurrent Mermaid text edits need text-level merging, which is an open
-question for the multiplayer design.
+Multi-user editing is on the [project roadmap](../ProjectRoadmap.md). This design assumes that work
+reconciles edits at element granularity. Because diagram metadata rides on the elements it
+describes, it then needs no separate synchronization channel: moving a node is attribute edits on
+that node and its connectors, exactly what element-level reconciliation merges. Cross-element
+invariants (a connector references a node another peer just deleted) resolve through the same
+divergence policy as a foreign-tool edit: the connector keeps rendering, the reference is preserved,
+and a diagnostic is shown. The Mermaid CDATA section is a single text node; concurrent Mermaid text
+edits need text-level merging, which is an open question for the multiplayer design.
 
 ## Security / Privacy
 
@@ -596,26 +630,31 @@ resource-exhaustion surface.
   image, or includes another file. `click` and other interaction statements are preserved as opaque
   text and never acted on.
 - **No script.** No JavaScript runtime exists in this path. Labels are plain text written through
-  `setElementTextContent`; Mermaid label markup (HTML in labels) is treated as literal text.
+  the structured API; Mermaid label markup (HTML in labels) is treated as literal text.
 - **Escaping is structural.** Untrusted strings reach SVG only through the structured API, which
-  escapes attribute and text values (`EscapeAttributeValue`), so a hostile label cannot inject
-  markup. The Mermaid printer is the only Mermaid writer and quotes labels that contain Mermaid
-  syntax characters.
+  escapes attribute values (`EscapeAttributeValue`) and text content (`EscapeTextContent`), so a
+  hostile label cannot inject markup. Mermaid CDATA patches are the one raw-bytes write; the printer
+  guarantees they never contain `]]>`, and the round-trip fuzzer checks it. The Mermaid printer is
+  the only Mermaid writer and quotes labels that contain Mermaid syntax characters.
 - **Reference graphs are acyclic by construction.** Connectors reference nodes, never other
   connectors, so endpoint resolution cannot recurse.
-- **Privacy.** No telemetry, no network, and no data beyond the document itself.
+- **Privacy.** The diagram libraries add no telemetry and no network access, and they handle no
+  data beyond the document itself. They depend on no networking or resource-loader code, which a
+  dependency test asserts.
 
 ### Fuzzing
 
-- `mermaid_parser_fuzzer`: arbitrary bytes into the lexer and parser; asserts no crash and that the
-  unmodified tree prints back byte-identically.
-- `mermaid_roundtrip_fuzzer`: text to syntax tree to diagram model to printed text; asserts the
-  printed text parses and describes the same node and edge set.
-- `diagram_namespace_fuzzer`: structured SVG documents with random diagram metadata through the
-  reader; asserts no crash, bounded work, and that save output re-parses (the same oracle as the
-  existing `//donner/editor/tests:viewport_svg_export_roundtrip_fuzzer`).
-- `diagram_op_fuzzer`: random operation sequences against random diagrams; asserts every resulting
-  source re-parses and that undoing every operation restores the original bytes.
+- `//donner/diagram/mermaid:mermaid_parser_fuzzer`: arbitrary bytes into the lexer and parser;
+  asserts no crash, that the unmodified tree prints back byte-identically, and that an incremental
+  statement reparse after a random edit matches a fresh parse of the edited text.
+- `//donner/diagram/mermaid:mermaid_roundtrip_fuzzer`: text to syntax tree to diagram model to
+  printed text; asserts the printed text parses and describes the same node and edge set.
+- `//donner/diagram:diagram_namespace_fuzzer`: structured SVG documents with random diagram metadata
+  through the reader; asserts no crash, bounded work, and that save output re-parses (the same
+  oracle as the existing `//donner/editor/tests:viewport_svg_export_roundtrip_fuzzer`).
+- `//donner/diagram:diagram_op_fuzzer`: random operation sequences against random diagrams;
+  asserts every resulting source re-parses, that undoing every operation restores the original
+  bytes, and that an injected mid-plan failure leaves the source unchanged.
 
 Corpora are checked in and run under `bazel test //...` like the existing fuzzers described in
 [Fuzzing](../fuzzing.md).
@@ -625,23 +664,28 @@ Corpora are checked in and run under `bazel test //...` like the existing fuzzer
 Every invariant below names its enforcing CI target. Targets marked _planned_ are created by the
 milestone that introduces the behavior; until then the invariant is a gap, not a guarantee.
 
-| Invariant                                                  | Enforcing target                                        |
-| ---------------------------------------------------------- | ------------------------------------------------------- |
-| Unknown and known diagram content round-trips byte-exactly | _planned_ `//donner/diagram:namespace_roundtrip_tests`  |
-| Stripping the namespace leaves rendered pixels unchanged   | _planned_ `//donner/diagram:downgrade_render_tests`     |
-| Diagram attribute writes do not trigger style recompute    | _planned_ addition to `//donner/svg/tests:svg_tests`    |
-| Diagram ops never issue `ReplaceDocument` or source undo   | _planned_ `//donner/editor/tests:diagram_tool_tests`    |
-| Every diagram op is undone exactly by its inverse plan     | _planned_ `diagram_op_fuzzer`                           |
-| Canvas, SVG pane and Mermaid pane converge after each edit | _planned_ addition to `structured_editing_stress_tests` |
-| Source deltas mirror into the SVG pane                     | `//donner/editor/tests:document_sync_controller_tests`  |
-| Anchors and deltas stay correct under diagram edits        | `//donner/base/xml:xml_source_store_tests`              |
-| Unmodified Mermaid prints byte-identically                 | _planned_ `mermaid_parser_fuzzer`                       |
-| Mermaid round trip stays parseable and equivalent          | _planned_ `mermaid_roundtrip_fuzzer`                    |
-| Unsupported Mermaid text is preserved, never dropped       | _planned_ `//donner/diagram/mermaid:mermaid_tests`      |
-| Layout and routing respect pins, waypoints and caps        | _planned_ `//donner/diagram/layout:layout_tests`        |
-| Layout and routing are deterministic                       | _planned_ `//donner/diagram/layout:layout_tests`        |
-| Divergence is detected and never auto-repaired on load     | _planned_ `//donner/diagram:reconcile_tests`            |
-| Exact-limit and one-past-limit refusals are atomic         | _planned_ `//donner/diagram:limits_tests`               |
+| Invariant                                                     | Enforcing target                                                              |
+| ------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| Unknown and known diagram content round-trips byte-exactly    | _planned_ `//donner/diagram:namespace_roundtrip_tests`                        |
+| Stripping the namespace leaves rendered pixels unchanged      | _planned_ `//donner/diagram:downgrade_render_tests`                           |
+| Diagram attribute writes do not trigger style recompute       | _planned_ addition to `//donner/svg/tests:svg_tests`                          |
+| Qualified diagram attributes update in place, never duplicate | _planned_ addition to `//donner/editor/tests:command_queue_tests`             |
+| Diagram ops never issue `ReplaceDocument` or source undo      | _planned_ `//donner/editor/tests:diagram_tool_tests`                          |
+| Every diagram op is undone exactly by its inverse plan        | _planned_ `//donner/diagram:diagram_op_fuzzer`                                |
+| A plan that fails partway leaves the source unchanged         | _planned_ `//donner/diagram:diagram_op_fuzzer`                                |
+| Removing metadata never deletes SVG, and vice versa           | _planned_ `//donner/diagram:reconcile_tests`                                  |
+| Canvas, SVG pane and Mermaid pane converge, with no echo      | _planned_ addition to `//donner/editor/tests:structured_editing_stress_tests` |
+| Source deltas mirror into the SVG pane                        | `//donner/editor/tests:document_sync_controller_tests`                        |
+| Anchors and deltas stay correct under diagram edits           | `//donner/base/xml:xml_source_store_tests`                                    |
+| Unmodified Mermaid prints byte-identically                    | _planned_ `//donner/diagram/mermaid:mermaid_parser_fuzzer`                    |
+| Incremental Mermaid reparse matches a fresh parse             | _planned_ `//donner/diagram/mermaid:mermaid_parser_fuzzer`                    |
+| Mermaid round trip stays parseable and equivalent             | _planned_ `//donner/diagram/mermaid:mermaid_roundtrip_fuzzer`                 |
+| Unsupported Mermaid text is preserved, never dropped          | _planned_ `//donner/diagram/mermaid:mermaid_tests`                            |
+| Layout and routing respect pins, waypoints and caps           | _planned_ `//donner/diagram/layout:layout_tests`                              |
+| Layout and routing are deterministic                          | _planned_ `//donner/diagram/layout:layout_tests`                              |
+| Divergence is detected and never auto-repaired on load        | _planned_ `//donner/diagram:reconcile_tests`                                  |
+| Exact-limit and one-past-limit refusals are atomic            | _planned_ `//donner/diagram:limits_tests`                                     |
+| Diagram libraries have no network or loader dependency        | _planned_ `//donner/diagram:dependency_tests`                                 |
 
 Additional validation:
 
@@ -677,9 +721,8 @@ the planned `diagram_tool_tests` covers only diagram paths. A repository-wide gu
 - **Namespace URI host.** The URI uses the project documentation site. Should the project register
   a dedicated domain first so the identifier never depends on a hosting provider? Changing it later
   means a new URI and a migration.
-- **Byte-range text command.** Add an `EditNodeText` command for minimal CDATA patches, or accept
-  whole-value replacement through `setElementTextContent`? The former gives smaller deltas and
-  better multiplayer merging.
+- **Text range command scope.** Should `ReplaceTextRange` stay limited to text and CDATA values,
+  or also serve the source pane's own text edits so both share one queued path?
 - **Undo for multi-command plans.** `UndoTimeline` groups transform snapshots today. Inverse-plan
   entries are new; confirm they compose with existing transform entries in one gesture.
 - **Repository-wide reparse guard.** Should a test or lint fail whenever any editor path issues
