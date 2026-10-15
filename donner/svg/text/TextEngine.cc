@@ -508,7 +508,6 @@ struct TextPathCluster {
   double baselineOffset;
   double advance = 0.0;
   TextAnchor circuitAnchor = TextAnchor::Start;
-  double circuitReference = 0.0;
 };
 
 /// Reusable path pen and cluster storage for the current textPath scope.
@@ -775,7 +774,6 @@ void ResetTextPathCoordinates(const components::ComputedTextComponent& text,
 
 /// Anchors each horizontal path chunk against all of its typographic extents.
 void AnchorTextPathClusters(const components::ComputedTextComponent& text,
-                            const TextLayoutParams& params,
                             std::vector<TextPathCluster>& clusters) {
   for (size_t first = 0; first < clusters.size();) {
     size_t end = first + 1;
@@ -794,16 +792,9 @@ void AnchorTextPathClusters(const components::ComputedTextComponent& text,
                              : anchor == TextAnchor::End  ? maximum
                                                           : minimum;
     const double shift = clusters[first].pathOffset - alignment;
-    const auto& firstCluster = clusters[first];
-    const double reference =
-        HasAbsoluteTextPathX(text, firstCluster)
-            ? text.spans[firstCluster.runIndex].xList[firstCluster.charIndex]->toPixels(
-                  params.viewBox, params.fontMetrics, Lengthd::Extent::X)
-            : 0.0;
     for (size_t ci = first; ci < end; ++ci) {
       clusters[ci].pathOffset += shift;
       clusters[ci].circuitAnchor = anchor;
-      clusters[ci].circuitReference = reference;
     }
     first = end;
   }
@@ -842,15 +833,14 @@ bool IsWithinClosedTextCircuit(double midpoint, double length, TextAnchor anchor
 
 /// Sample a midpoint, wrapping only admitted finite single-contour positions.
 Path::PointOnPath SampleTextPathCluster(const Path::MeasuredPath& path, double startOffset,
-                                        double midpoint, bool closed, TextAnchor anchor,
-                                        double reference) {
+                                        double midpoint, bool closed, TextAnchor anchor) {
   const double length = path.pathLength();
   if (!closed) {
     return path.pointAtArcLength(startOffset + midpoint);
   }
-  const double relativeMidpoint = midpoint - reference;
-  if (!std::isfinite(startOffset) || !std::isfinite(midpoint) || !std::isfinite(relativeMidpoint) ||
-      !IsWithinClosedTextCircuit(relativeMidpoint, length, anchor)) {
+  // This midpoint already excludes startOffset; authored x still counts toward the circuit.
+  if (!std::isfinite(startOffset) || !std::isfinite(midpoint) ||
+      !IsWithinClosedTextCircuit(midpoint, length, anchor)) {
     return {.valid = false};
   }
   const double start = NormalizeTextPathDistance(startOffset, length);
@@ -868,7 +858,7 @@ void PlaceTextPathClusters(const Path::MeasuredPath& path, double startOffset, b
     const double halfAdvance = cluster.advance * 0.5;
     const auto sample =
         SampleTextPathCluster(path, startOffset, cluster.pathOffset + halfAdvance, closed,
-                              cluster.circuitAnchor, cluster.circuitReference);
+                              cluster.circuitAnchor);
     auto& run = runs[cluster.runIndex];
     if (sample.valid) {
       const Vector2d origin(sample.point.x - halfAdvance * std::cos(sample.angle) -
@@ -900,7 +890,7 @@ std::optional<Vector2d> placeTextPath(Registry& registry,
                                       std::vector<TextPathCluster>& clusters) {
   applyTextPathLengths(registry, text, params, firstRun, runs, clusters);
   ResetTextPathCoordinates(text, params, clusters);
-  AnchorTextPathClusters(text, params, clusters);
+  AnchorTextPathClusters(text, clusters);
   const auto& firstSpan = text.spans[firstRun];
   const Path::MeasuredPath path = firstSpan.pathSpline->measure();
   const double length = path.pathLength();
