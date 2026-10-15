@@ -9,6 +9,7 @@ on:
   pull_request:
     paths:
       - "tools/ci/**"
+      - ".github/actions/buildbuddy-cache/**"
       - "donner/gpu/shader/**"
       - "donner/svg/renderer/geode/**"
       - "donner/svg/renderer/RendererDriver.*"
