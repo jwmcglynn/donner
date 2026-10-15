@@ -18,10 +18,10 @@ Donner Tiny does not parse SVG. It has two front ends:
   and layers, comparable to an HTML canvas 2D context; and
 - a **Lottie player** (probable): loads Lottie JSON and renders frames through the same API.
 
-SVG content continues to go through the SVG engine (parser, DOM, CSS cascade, ECS, renderer
-driver) in whichever build profile an embedder selects. Keeping SVG out of Donner Tiny means there
-is exactly one SVG front end to keep conformant, and the two products divide the space cleanly:
-Donner Tiny competes on Lottie playback and embedded drawing, while the SVG engine keeps the SVG
+SVG content continues to go through the SVG engine (parser, DOM, CSS cascade, ECS, renderer driver)
+in whichever build profile an embedder selects. Keeping SVG out of Donner Tiny means there is
+exactly one SVG front end to keep conformant, and the two products divide the space cleanly: Donner
+Tiny competes on embedded drawing and (probably) Lottie playback, while the SVG engine keeps the SVG
 document niche (styling, DOM, editing, round-trip).
 
 The enabling work is a **renderer core**: an ECS-free, SVG-free drawing interface factored out of
@@ -73,21 +73,22 @@ incremental: each step keeps the existing renderer test suites green and pixel o
 - Move gradient resolution out of the backends into an SVG-side resolver so backends consume
   resolved paint values (Milestone 2); this is the first step that removes registry reads from
   `RendererTinySkia.cc`.
-- Rename the SVG engine's `tiny` build profile so the Donner Tiny name is unambiguous
-  (Milestone 9 can run in parallel with everything else).
+- Decide whether to rename the SVG engine's `tiny` build profile so the Donner Tiny name is
+  unambiguous (Milestone 9, independent of the other milestones).
 
 ## Implementation Plan
 
 - [ ] Milestone 1: ECS-free foundations
   - [ ] Split an ECS-free geometry target out of `//donner/base` (`Path`, `PathOps`,
-        `Transform`, `Box`, `Vector2`, `FillRule`, `MathUtils`, `SmallVector`); today
+        `Transform`, `Box`, `Vector2`, `FillRule`, `MathUtils`, `SmallVector`, and their
+        transitive base dependencies such as `BezierUtils`, `Utils`, and `RcString`); today
         `//donner/base` depends on `@entt` for every consumer.
   - [ ] Add `donner/render/core/` with the renderer-core value types (color, paint, gradient,
         stroke style, clip, layer, image view, geometry cache key) and the moved
         `RendererSurfaceBudget` and `RendererDrawBudget`.
-  - [ ] Extend `build_defs/dep_audit.bzl` with a list form of `forbidden_transitive_dep_test` and
-        audit the core against `@entt`, `//donner/css:core`, `//donner/svg/components`,
-        `//donner/base/xml`, and the SVG parser.
+  - [ ] Add `configured_dependency_audit_test` audits for the core, animation, and Lottie
+        targets that forbid `@entt` and the `//donner/svg`, `//donner/css`, and
+        `//donner/base/xml` packages.
 - [ ] Milestone 2: Resolved paints for the existing backends
   - [ ] Add an SVG-side paint resolver that turns `components::ResolvedPaintServer` plus the
         gradient components into core `LinearGradient` and `RadialGradient` values, including
@@ -95,14 +96,16 @@ incremental: each step keeps the existing renderer test suites green and pixel o
   - [ ] Switch `RendererTinySkia` and `RendererGeode` to consume resolved gradients; delete their
         direct reads of `GradientComponent`, `LinearGradientComponent`, and
         `RadialGradientComponent`.
-  - [ ] Record resolved paints in `RenderSnapshot` so recorded commands no longer name entities.
+  - [ ] Record resolved paint values in `RenderSnapshot`, so recorded commands stop naming even
+        the snapshot-owned entities it copies paint servers into today.
 - [ ] Milestone 3: Renderer core interface on tiny-skia
   - [ ] Define `render::RendererCore` (frame, transform stack, clips, layers, alpha and luminance
         masks, fill, stroke, image, snapshot).
   - [ ] Extract `render::TinySkiaCore` from `RendererTinySkia`; `RendererTinySkia` forwards its
         path, shape, image, clip, layer, and mask methods to it.
-  - [ ] Replace `EntityHandle` cache keys with core geometry keys and explicit invalidation; keep
-        ECS-driven invalidation in the SVG layer.
+  - [ ] Replace `EntityHandle` cache keys with core geometry keys and explicit invalidation; move
+        `TinySkiaPathCacheComponent` and `TinySkiaImageCacheComponent` storage from entities
+        into the backend; keep ECS-driven invalidation in the SVG layer.
   - [ ] Add the shared core conformance suite and run it on `TinySkiaCore`.
 - [ ] Milestone 4: Renderer core interface on Geode
   - [ ] Extract `render::GeodeCore`; move `GeodePathCacheComponent`-style caches to
@@ -111,7 +114,8 @@ incremental: each step keeps the existing renderer test suites green and pixel o
 - [ ] Milestone 5: SVG renderer built on the core
   - [ ] `RendererDriver` issues path, shape, image, clip, layer, and mask work to the core.
   - [ ] Narrow `RendererInterface` to SVG extensions (document entry point, filter layers, text,
-        pattern tiles) that compose on top of the core.
+        pattern tiles) that compose on top of the core, with a release note for third-party
+        implementers.
 - [ ] Milestone 6: Donner Tiny canvas runtime
   - [ ] `donner/tiny/` C++ canvas API over `RendererCore`, tiny-skia by default.
   - [ ] C API (`donner_tiny.h`) with ABI versioning, plus a WebAssembly build of it.
@@ -126,10 +130,10 @@ incremental: each step keeps the existing renderer test suites green and pixel o
   - [ ] Bounded JSON reader with resource limits and a fuzzer.
   - [ ] Lottie model, loader, and frame evaluator for the Phase 1 subset.
   - [ ] Golden corpus and per-feature tests; Phase 2 features behind the same gates.
-- [ ] Milestone 9: Naming and footprint
-  - [ ] Rename the SVG engine's `--config=tiny` profile to `--config=svg-minimal` (keeping `tiny`
-        as a forwarding alias for one release) and update `tools/cmake/gen_cmakelists.py`,
-        `.bazelrc` comments, and docs.
+- [ ] Milestone 9: Naming (independent of the other milestones)
+  - [ ] Decide the SVG engine profile name (see Naming and build profiles); if renamed, update
+        every surface listed there in one change.
+- [ ] Milestone 10: Footprint (after Milestone 6 and the bakeoff harness)
   - [ ] Add Donner Tiny products to the renderer bakeoff harness and measure them against
         ThorVG's minimal build with identical feature sets.
   - [ ] Commit a Donner Tiny size budget enforced by `tools/ci/native_linked_size.py`.
@@ -144,8 +148,9 @@ binary size as small as approximately 170KB" ([ThorVG README](https://github.com
 Its published [Lottie support matrix](https://github.com/thorvg/thorvg/wiki/Lottie-Support) covers
 shape layers, trim paths, masks, track mattes, precomps, repeaters, offset paths, text, image
 layers, time remapping, a set of layer effects, and a large share of expressions, which it disables
-by default behind a build option. The [dotLottie](https://dotlottie.io/) packaging format's player
-renders through ThorVG. These are public context for scope, not targets this design commits to.
+by default behind a build option. LottieFiles' dotLottie player
+([dotlottie-rs](https://github.com/LottieFiles/dotlottie-rs)) renders through ThorVG. These are
+public context for scope, not targets this design commits to.
 
 A feature-stripped SVG engine that keeps the XML parser, DOM, CSS cascade, and ECS can shrink a
 long way (design [0055](0055-binary_size.md) measures it), but it still carries a document stack
@@ -167,8 +172,9 @@ that a canvas or Lottie consumer never uses. Donner Tiny removes that stack inst
   `LinearGradientComponent.h`, and `RadialGradientComponent.h` and read them from the registry.
 - `PathShape::sourceEntity` and `ImageParams::sourceEntity` are `EntityHandle` cache keys.
   `RendererTinySkia` installs `on_update`/`on_destroy` listeners for `ComputedPathComponent` and
-  `LoadedImageComponent` (`EnsureCacheInvalidationWired`), and Geode keeps per-entity caches in
-  components (`GeodePathCacheComponent`).
+  `LoadedImageComponent` (`EnsureCacheInvalidationWired`). Both backends keep per-entity caches in
+  components: `TinySkiaPathCacheComponent` and `TinySkiaImageCacheComponent` for tiny-skia,
+  `GeodePathCacheComponent` for Geode.
 - `ResolvedClip::mask` is a `components::ResolvedMask` (an entity reference plus subtree info),
   `pushFilterLayer` takes a `components::FilterGraph`, `drawText` takes a `Registry&` and a
   `ComputedTextComponent`, and `StrokeParams` includes SVG's `donner/svg/core/Stroke.h` and carries
@@ -220,7 +226,8 @@ flowchart TD
 - `donner/animation/`: timeline, keyframe tracks, easing, and path morphing. Depends on the
   ECS-free geometry target.
 - `donner/lottie/`: bounded JSON reader, Lottie model, loader, and frame evaluator. Depends on the
-  core and the animation module.
+  core and the animation module. It is a standalone library: Donner Tiny packages it, and an SVG
+  engine host can link it too and render Lottie through the same backend.
 - `donner/tiny/`: canvas API, player API, C API, and Wasm exports. Depends on the core, and
   optionally on the Lottie player and Geode.
 - `donner/svg/`: the SVG engine, `RendererDriver`, the SVG extensions, and the SVG paint resolver.
@@ -242,7 +249,7 @@ struct GeometryKey {          // Opaque cache identity chosen by the front end.
   uint64_t generation = 0;    // Bumped by the front end when the geometry changes.
 };
 
-struct GradientStop { float offset; RGBA8 color; };
+struct GradientStop { double offset; RGBA8 color; };
 struct LinearGradient { Vector2d start, end; SmallVector<GradientStop, 4> stops;
                         SpreadMode spread; Transform2d gradientFromUser; };
 struct RadialGradient { Vector2d center; double radius; Vector2d focus; double focusRadius;
@@ -252,14 +259,27 @@ struct ImagePaint { ImageView image; Transform2d imageFromUser; SpreadMode sprea
                     ImageSampling sampling; };
 using Paint = std::variant<NoPaint, RGBA8, LinearGradient, RadialGradient, ImagePaint>;
 
-struct FillStyle { Paint paint; FillRule rule = FillRule::NonZero; float opacity = 1.0f; };
+struct FillStyle { Paint paint; FillRule rule = FillRule::NonZero; double opacity = 1.0; };
 struct StrokeStyle { Paint paint; double width = 1.0; LineCap cap; LineJoin join;
                      double miterLimit = 4.0; SmallVector<double, 4> dashes;
-                     double dashOffset = 0.0; float opacity = 1.0f; };
+                     double dashOffset = 0.0; double opacity = 1.0; };
 
-struct LayerParams { float opacity = 1.0f; BlendMode blend = BlendMode::Normal;
+struct DrawGeometry {         // Borrowed for the call unless allowDeferred is set.
+  const Path* path = nullptr;
+  GeometryKey key;
+  bool allowDeferred = false; // Mirrors PathShape::allowDeferredGeometry.
+};
+
+struct ClipShape { Path path; FillRule rule; Transform2d clipFromShape; int layer = 0; };
+struct ClipSpec {             // Shapes on one layer are unioned; layers are intersected.
+  std::optional<Box2d> rect;
+  std::vector<ClipShape> shapes;
+};
+
+struct LayerParams { double opacity = 1.0; BlendMode blend = BlendMode::Normal;
                      std::optional<Box2d> bounds; };
 enum class MaskMode { Alpha, AlphaInverted, Luminance, LuminanceInverted };
+enum class LuminanceSpace { SRGB, LinearRGB };
 
 class RendererCore {
 public:
@@ -269,16 +289,16 @@ public:
   virtual void setTransform(const Transform2d& t) = 0;
   virtual void pushTransform(const Transform2d& t) = 0;
   virtual void popTransform() = 0;
-  virtual void pushClipRect(const Box2d& rect) = 0;
-  virtual void pushClipPath(const Path& path, FillRule rule, GeometryKey key = {}) = 0;
+  virtual void pushClip(const ClipSpec& clip) = 0;
   virtual void popClip() = 0;
   virtual bool pushLayer(const LayerParams& layer) = 0;
   virtual void popLayer() = 0;
-  virtual bool pushMask(MaskMode mode, const std::optional<Box2d>& bounds) = 0;
+  virtual bool pushMask(MaskMode mode, LuminanceSpace space,
+                        const std::optional<Box2d>& bounds) = 0;
   virtual void transitionMaskToContent() = 0;
   virtual void popMask() = 0;
-  virtual void fillPath(const Path& path, const FillStyle& style, GeometryKey key = {}) = 0;
-  virtual void strokePath(const Path& path, const StrokeStyle& style, GeometryKey key = {}) = 0;
+  virtual void fillPath(const DrawGeometry& geometry, const FillStyle& style) = 0;
+  virtual void strokePath(const DrawGeometry& geometry, const StrokeStyle& style) = 0;
   virtual void drawImage(const ImageView& image, const Box2d& target, ImageSampling s) = 0;
   [[nodiscard]] virtual RendererBitmap takeSnapshot() const = 0;
   [[nodiscard]] virtual RendererSurfaceBudget& surfaceBudget() = 0;
@@ -293,19 +313,32 @@ Design rules for the core:
 - **Resolved inputs only.** Units, `objectBoundingBox` mapping, `currentColor`, paint fallback,
   `pathLength` dash scaling, `paint-order`, and `context-fill`/`context-stroke` are resolved by the
   SVG layer before a core call. The core never sees an entity, a CSS value, or a reference.
+- **SVG clip semantics fit in one push.** `ClipSpec` carries what `ResolvedClip` carries today:
+  an optional rectangle and a list of shapes, each with its own clip rule and transform, unioned
+  within a layer and intersected across layers. The SVG resolver folds `clipPathUnitsTransform`
+  into each shape's transform. A clip that references a mask (`ResolvedClip::mask`) is lowered by
+  the SVG layer to a core mask.
 - **Explicit cache identity.** `GeometryKey` replaces `EntityHandle` as the cache key. The SVG
   layer derives the id from the entity and bumps the generation where it currently relies on
   `ComputedPathComponent`/`LoadedImageComponent` listeners; the canvas API derives it from retained
-  path objects. A zero key is always correct, only slower. Borrowing rules from `PathShape` carry
-  over: a backend that defers a draw past the call may do so only for a nonzero key whose
-  generation is unchanged at flush.
+  path objects. Geometry that is a distinct variant of the same entity, such as a
+  `vector-effect: non-scaling-stroke` centerline already transformed by `PathShape::hostFromLocal`,
+  gets a distinct id that the SVG layer derives from the entity and that transform. A zero key
+  disables caching; the conformance suite checks that a zero key and a nonzero key render the
+  same pixels.
+- **Borrowing stays opt-in.** As with `PathShape` today, a key alone does not permit deferral: a
+  backend may retain the geometry past the call only when `allowDeferred` is set and the key is
+  nonzero, and the front end guarantees that geometry stays alive and unchanged until the deferred
+  draws flush.
 - **Budgets live in the core.** `RendererSurfaceBudget` and `RendererDrawBudget` move to the core
   unchanged, so every front end, including untrusted Lottie, gets the same per-frame admission
   limits. `RendererFilterPreparationBudget` and `RendererTextMaterializationBudget` stay with the
   SVG extensions that use them.
-- **No iostream, exceptions, or RTTI.** The repository already builds with `-fno-exceptions` and
-  `-fno-rtti`; the core and Donner Tiny additionally avoid iostream and other static-initializer
-  heavy facilities so they do not pull them into a minimal link.
+- **Static-initializer cost is measured.** The repository already builds with `-fno-exceptions`
+  and `-fno-rtti`. The geometry headers (`Path.h`, `Transform.h`, `Box.h`, `Vector2.h`) include
+  `<ostream>` for their `operator<<` overloads; if the footprint measurement attributes iostream
+  cost to a minimal Donner Tiny link, those operators move into separate headers. This is a
+  measured target, not an enforced rule.
 - **Double-precision geometry by default.** The core uses Donner's existing double-precision
   `Path` and `Transform2d` so the SVG engine is unaffected. Whether Donner Tiny wants a float
   geometry variant for size or speed is an open question, answered by measurement.
@@ -334,17 +367,27 @@ is unchanged at every step:
    `resolveGradientTransform` in `RendererTinySkia.cc`, and the equivalent code in
    `RendererGeode.cc`) into one SVG-side resolver that produces core gradient values. Both backends
    consume the resolved values. This step changes the most visible behavior surface, so it is gated
-   on the full golden suites for both backends; it also removes a source of tiny-skia/Geode
+   on the full golden suites for both backends, with the resvg `paint-servers/linearGradient` and
+   `paint-servers/radialGradient` categories (including focal-point and spread-method cases) as
+   the explicit acceptance set; it also removes a source of tiny-skia/Geode
    divergence, because both backends share one resolution.
 3. **Core on tiny-skia.** `TinySkiaCore` owns the pixmap, the clip and layer stacks, and the
    tiny-skia painting code. `RendererTinySkia` keeps implementing `RendererInterface` and forwards
    generic operations to its `TinySkiaCore`. Cache invalidation moves from registry listeners in
-   the backend to generation bumps issued by the SVG layer.
+   the backend to generation bumps issued by the SVG layer, and the tiny-skia cache components move
+   into backend-owned storage.
 4. **Core on Geode.** The same split for `RendererGeode`. Geode's per-entity component caches move
    to backend-owned maps keyed by `GeometryKey`, which also lets Geode serve Donner Tiny.
 5. **SVG renderer on the core.** `RendererDriver` calls the core directly for generic operations.
    `RendererInterface` shrinks to the SVG extensions. `MockRendererInterface` and
    `RenderSnapshotRecorder` split accordingly.
+
+`RendererInterface` is a public target, and third-party backends may implement it. Milestones 2
+through 4 keep it source-compatible: new resolved-paint fields are added alongside the existing
+ones, and backends switch over internally. Milestone 5 is the one intentional break: it removes
+the generic methods that move to the core and ships with a release note describing how a custom
+backend implements `RendererCore` instead. Whether to also ship an adapter from the old interface
+is an open question.
 
 A step that changes a golden is a bug in that step, not a golden update. The exception is a
 documented, intentional fix found during extraction (for example a gradient-resolution divergence
@@ -367,7 +410,7 @@ public:
   void fill(const PathRef& path, const Paint& paint, FillRule rule = FillRule::NonZero);
   void stroke(const PathRef& path, const Paint& paint, const Stroke& stroke);
   void drawImage(const ImageView& image, const Box2d& target);
-  void beginLayer(float opacity, BlendMode blend);
+  void beginLayer(double opacity, BlendMode blend);
   void endLayer();
   PixelView pixels() const;          // Premultiplied RGBA8, row stride exposed.
 };
@@ -382,9 +425,10 @@ created from a host-supplied device through the Geode backend when it is compile
 The C API mirrors it with opaque handles, explicit create and destroy, status-code returns, and
 caller-owned pixel buffers: `donner_tiny_canvas_create`, `donner_tiny_path_*`,
 `donner_tiny_canvas_fill`, `donner_tiny_lottie_load`, `donner_tiny_lottie_render_frame`, and so on.
-Every pointer and length pair is validated, dimensions are checked before allocation, and no C++
-type crosses the boundary. The header exposes `donner_tiny_abi_version()`; the C ABI is
-append-only within a major version. The WebAssembly build exports the C API and follows the
+Every pointer and length pair is validated, dimensions are checked before allocation, and the
+header compiles as C: no C++ type crosses the boundary. The header exposes
+`donner_tiny_abi_version()`, and the policy is that the C ABI is append-only within a major
+version. The WebAssembly build exports the C API and follows the
 standalone renderer Wasm rules in the [threat model](../threat-model.md).
 
 ### Shared animation module
@@ -412,7 +456,10 @@ easing and interpolation implementation means one set of numeric edge cases to t
 ### Lottie player (probable)
 
 The Lottie player is probable, not committed: it lands if the renderer core and canvas runtime
-meet their footprint and quality gates. The model follows the
+meet their footprint and quality gates. The player is ECS-free and does not import Lottie into the
+SVG DOM. It ships with Donner Tiny and is also usable by SVG engine hosts, which satisfies the
+roadmap's Lottie item under SVG Animation; what it shares with the SVG animation system is the
+timeline and interpolation module below the player. The model follows the
 [Lottie specification](https://lottie.github.io/) published by the Lottie Animation Community.
 
 The loader parses JSON into an immutable composition model (layers, shapes, keyframe tracks,
@@ -434,7 +481,8 @@ mutable playback state.
 
 Expressions are out of scope because they require a script engine, which conflicts with both the
 footprint target and the security model. Unsupported features are reported through a load
-diagnostic that names the feature; the player renders the remaining content and never guesses.
+diagnostic that names the feature, and the player skips that element and renders the rest
+instead of approximating it.
 
 Images in Lottie assets resolve only through an embedder-installed image provider. The runtime
 never fetches a URL or opens a path named by content. Embedded base64 image data is handed to the
@@ -453,17 +501,26 @@ decoded pixels, which pass the same dimension and byte limits as Donner's raster
 
 ### Naming and build profiles
 
-Two things are currently called "tiny": the `--config=tiny` SVG engine profile in `.bazelrc`
-(filters and text off, documented there as `donner-tiny`, mirrored by the `tiny` configuration in
-`tools/cmake/gen_cmakelists.py` and mentioned in `docs/faq.md`), and this runtime. To keep them
-apart:
+Two things are currently called "tiny": the SVG engine's `tiny` profile and this runtime. The
+roadmap already separates them in prose ("SVG engine build profiles" with `tiny`, `standard`, and
+`full`, versus "Embeddable Runtime: Donner Tiny"), but the build surface still uses the bare name:
 
-- The SVG engine's profiles become `svg-minimal`, `standard` (the default), and `full`.
-  `--config=tiny` forwards to `--config=svg-minimal` for one release, then is removed. The CMake
-  configuration and docs are renamed in the same change.
-- "Donner Tiny" names only this runtime. It is selected by depending on `//donner/tiny` targets,
-  not by a global configuration flag; build flags under `//donner/tiny` select optional pieces
-  (Lottie, Geode).
+- `.bazelrc` defines `--config=tiny` (filters and text off) and documents it as `donner-tiny`,
+  next to `donner-max` for `--config=text-full`;
+- `tools/cmake/gen_cmakelists.py` generates a `tiny` CMake configuration;
+- `build_defs/rules.bzl` has a `tiny` entry in `_VARIANT_SPECS` that generates `{name}_tiny` test
+  wrappers for every test that opts into it; and
+- current-state docs such as `docs/faq.md` refer to `--config=tiny`.
+
+This design recommends renaming the SVG engine profile to `svg-minimal` across all of those
+surfaces in one change, with `--config=tiny` forwarding to it for one release, so "tiny" in a
+build command never means the SVG engine. `standard` remains the default build and `full`
+remains `--config=text-full`; this design does not add new profiles. The rename is an open
+question for the project owner. Until it is decided, docs say "the SVG engine's `tiny` profile"
+and "Donner Tiny" explicitly.
+
+Donner Tiny itself is selected by depending on `//donner/tiny` targets, not by a global
+configuration flag; build flags under `//donner/tiny` select optional pieces (Lottie, Geode).
 
 ### Footprint
 
@@ -473,16 +530,16 @@ compared against ThorVG built with its Lottie loader. ThorVG's ~170 KB figure is
 published claim for its core library; this design does not claim a Donner number until it is
 measured.
 
-Measurement uses the renderer bakeoff harness being built in design 0066
-(`benchmarks/renderer_bakeoff/`, a nested Bazel module). Donner Tiny adds products to it, built
-with matched optimization settings for both libraries. Linked size is read the way
-`tools/ci/native_linked_size.py` reads it (allocated program bytes, read-only and writable,
-excluding debug and dynamic-linking metadata), and WebAssembly is reported raw and gzip-compressed
-as in `tools/binary_size.sh`. Levers available from design [0055](0055-binary_size.md) and the
-existing toolchain: ThinLTO, identical-code folding, `-Oz`, dead-section elimination, and
-per-module attribution with bloaty. Once measured, Donner Tiny gets a committed budget enforced by
-the same linked-size check that design [0064](0064-gpu_release_matrix.md) uses for shipped
-products.
+Measurement uses the renderer bakeoff harness proposed in design 0066, which is in review alongside
+this design and is planned as a nested Bazel module under `benchmarks/renderer_bakeoff/`. Donner
+Tiny adds products to it, built with matched optimization settings for both libraries. Linked size
+is read the way `tools/ci/native_linked_size.py` reads it (allocated program bytes, read-only and
+writable, excluding debug and dynamic-linking metadata), and WebAssembly is reported raw and
+gzip-compressed as in `tools/binary_size.sh`. Levers available from design
+[0055](0055-binary_size.md) and the existing toolchain: ThinLTO, identical-code folding, `-Oz`,
+dead-section elimination, and per-module attribution with bloaty. Once measured, Donner Tiny gets a
+committed budget enforced by the same linked-size check that design
+[0064](0064-gpu_release_matrix.md) uses for shipped products.
 
 ## Security / Privacy
 
@@ -534,8 +591,8 @@ defaults are proposals to be calibrated against a real-world corpus before relea
 Per-frame work is bounded by the core's `RendererDrawBudget` (draw calls, path commands, gradient
 stops, image draws and bytes) and `RendererSurfaceBudget` (layer, mask, and matte surfaces), so a
 small file that expands into heavy work through precomp reuse, repeaters, or nested mattes is
-refused at render time as well as at load. A refusal is an expected error: it never aborts, never
-leaves a half-loaded composition visible, and the previous frame remains valid.
+refused at render time as well as at load. A refusal is an expected error: it must not abort or
+expose a half-loaded composition, and the previous frame must remain valid.
 
 ### Fuzzing and negative tests
 
@@ -557,8 +614,12 @@ Existing targets that guard the extraction:
 - **Driver call sequences change only where intended:**
   `//donner/svg/renderer/tests:renderer_driver_tests` (through `MockRendererInterface`).
 - **Recorded snapshots replay identically:** `//donner/svg/renderer/tests:renderer_snapshot_tests`.
-- **The public renderer API stays source-compatible:**
-  `//donner/svg/renderer/tests:renderer_public_api_tests`.
+- **Rendering through the public API is unchanged:**
+  `//donner/svg/renderer/tests:renderer_public_api_tests`. This is a behavioral test; it does not
+  check `RendererInterface` source compatibility (see Known gaps).
+- **Snapshots hold no live registry references:** the
+  `liveRegistryReferenceCountForTesting` checks in
+  `//donner/svg/renderer/tests:renderer_snapshot_tests`.
 - **SVG animation output is unchanged by the shared animation module:**
   `//donner/svg/renderer/tests:renderer_animation_tests`.
 - **Hostile SVG input stays memory-safe through the refactor:** the corpus regression tests of
@@ -566,18 +627,29 @@ Existing targets that guard the extraction:
 
 New targets (names are proposals):
 
-- **The core has no ECS, CSS, XML, or SVG dependency:** `//donner/render:core_dependency_audit`,
-  using a list form of `forbidden_transitive_dep_test` so one target audits every forbidden label.
-- **Donner Tiny excludes the SVG stack, CSS, and ECS:** `//donner/tiny:tiny_dependency_audit`.
-- **A minimal Donner Tiny build does not link Geode:** `//donner/tiny:tiny_excludes_geode_audit`,
-  following `//donner/svg/renderer:geode_excludes_tiny_skia_audit`.
-- **Both backends implement core semantics within shared golden tolerances:**
-  `//donner/render/tests:core_conformance_tests`, run per backend through
-  `donner_multi_transitioned_test`.
+- **The core, animation, and Lottie libraries have no ECS, CSS, XML, or SVG dependency:**
+  `//donner/render:core_dependency_audit`, `//donner/animation:animation_dependency_audit`, and
+  `//donner/lottie:lottie_dependency_audit`, each a `configured_dependency_audit_test` with
+  `@entt` in `forbidden` and `//donner/svg`, `//donner/css`, and `//donner/base/xml` in
+  `forbidden_packages`. These must be configured audits: `forbidden_transitive_dep_test` queries
+  the unconfigured graph, where every `select` branch is present.
+- **Donner Tiny excludes the SVG stack, CSS, and ECS:** `//donner/tiny:tiny_dependency_audit`, the
+  same configured audit anchored on the shipped Donner Tiny products.
+- **A minimal Donner Tiny build does not link Geode:** `//donner/tiny:tiny_excludes_geode_audit`, a
+  configured audit of the minimal product in its default configuration (Geode selected off).
+- **Lottie image assets never reach a loader on their own:**
+  `//donner/lottie:lottie_dependency_audit` also forbids `//donner/svg/resources`, and
+  `//donner/lottie/tests:lottie_loader_tests` checks that image layers with no provider render
+  nothing and that the provider receives only embedded bytes, never a URL or path to open.
+- **Both backends implement core semantics within shared golden tolerances, and a zero geometry
+  key renders the same pixels as a nonzero one:** `//donner/render/tests:core_conformance_tests`,
+  run per backend through `donner_multi_transitioned_test`.
 - **The shared animation module matches its documented interpolation and easing:**
   `//donner/animation:animation_tests`.
-- **Lottie limits refuse exactly at and one past each limit:**
-  `//donner/lottie/tests:lottie_limits_tests`.
+- **Lottie limits admit exactly at and refuse one past each limit, and a refused load or frame
+  leaves the player and its last frame unchanged:** `//donner/lottie/tests:lottie_limits_tests`.
+- **Unsupported Lottie features produce a named diagnostic and are skipped:**
+  `//donner/lottie/tests:lottie_loader_tests`.
 - **The JSON reader, loader, and frame evaluator are memory-safe on hostile input:**
   `//donner/lottie:json_reader_fuzzer`, `:lottie_loader_fuzzer`, and `:lottie_frame_fuzzer`; each
   `donner_cc_fuzzer` target also yields a corpus regression test that runs in CI.
@@ -585,17 +657,20 @@ New targets (names are proposals):
   in-repo corpus, on both backends.
 - **The C API validates handles, pointers, and lengths:** `//donner/tiny/tests:c_api_tests` and
   `//donner/tiny:c_api_fuzzer`.
+- **`donner_tiny.h` is a C header:** `//donner/tiny/tests:c_header_compile_test`, a C translation
+  unit that includes the header and calls every entry point.
 - **The WebAssembly build loads and renders:** a Donner Tiny Wasm render test modeled on
   `//donner/svg/renderer/wasm:render_test`.
 - **Donner Tiny stays within its size budget:** a Donner Tiny product budget checked by
   `tools/ci/native_linked_size.py`, added once a baseline is measured. Until then this is a gap.
 
-The core conformance suite is new and backend-neutral: it draws through `RendererCore` only
-(fills, strokes, joins and caps, dashes, gradients with every spread mode, clip nesting, layers
-with each blend mode, all four mask modes, image sampling) and compares each backend against
-shared goldens with the existing tolerance helpers in `donner/svg/renderer/tests`. It replaces
-nothing; the SVG suites keep guarding SVG semantics, and the core suite pins what Donner Tiny can
-rely on independent of SVG.
+The core conformance suite is new and backend-neutral: it draws through `RendererCore` only (fills,
+strokes, joins and caps, dashes, gradients with every spread mode, clip nesting and mixed clip rules
+within one clip, layers with each blend mode, all four mask modes in both luminance spaces, image
+sampling, zero versus nonzero geometry keys) and compares each backend against shared goldens with
+the existing tolerance helpers in `donner/svg/renderer/tests`. It replaces nothing; the SVG suites
+keep guarding SVG semantics, and the core suite pins what Donner Tiny can rely on independent of
+SVG.
 
 The Lottie golden corpus is authored in-repo or drawn from permissively licensed sources with
 recorded provenance, one small file per feature plus a few composite animations, rendered at fixed
@@ -609,6 +684,15 @@ Known gaps:
 - Nightly performance regressions are advisory today, so "no performance regression" from the
   extraction is reviewed evidence rather than a failing CI target. Follow-up: decide whether the
   extraction milestones get a temporary blocking perf comparison.
+- `RendererInterface` source compatibility for third-party backends has no CI check; the
+  compatibility policy in Incremental extraction is enforced by review.
+- The append-only C ABI policy has no ABI-diff check yet. Follow-up: add one before the first
+  release that promises ABI stability.
+- Sharing one loaded composition across threads is a documented contract without a CI target.
+  A shared-composition test under `--config=tsan` is planned, but no CI lane runs that
+  configuration today.
+- Whether iostream reaches a minimal Donner Tiny link is measured by the footprint work, not
+  enforced.
 - Lottie conformance has no external test suite in the repository comparable to the resvg suite;
   coverage is bounded by the in-repo corpus.
 
@@ -620,7 +704,7 @@ Known gaps:
 - **An SVG importer in Donner Tiny (NanoSVG-style flattening).** Attractive for icons, but it is a
   second SVG front end with its own conformance gaps, which is exactly what this design avoids.
   Hosts that need SVG icons can rasterize them offline with the SVG engine or link the SVG engine.
-- **Lottie on the SVG engine (translate Lottie into SVG DOM and animate it).** Reuses the
+- **Lottie through the SVG DOM (translate Lottie into SVG elements and animate them).** Reuses the
   animation system, but Lottie semantics (mattes, trim paths, precomp time remapping) map poorly
   onto SMIL and the cost of the DOM defeats the footprint goal. The shared animation module keeps
   the reuse without the DOM.
@@ -643,6 +727,10 @@ Known gaps:
   zlib dependency, or left to hosts that unpack it and pass JSON and images separately?
 - Should Lottie layer effects (blur, drop shadow) reuse the SVG filter executors through a small
   core effect interface, or stay out to protect the footprint?
+- Rename the SVG engine's `tiny` profile to `svg-minimal`? The recommendation and the affected
+  surfaces are in Naming and build profiles.
+- When `RendererInterface` narrows in Milestone 5, should Donner ship an adapter that runs an
+  old-style third-party backend on top of the core, or only a migration note?
 - Is `donner/render/` the right home for the core, given the existing `donner/svg/renderer/` and
   `donner/gpu/` packages, or should the core live under `donner/svg/renderer/core/` until the SVG
   renderer has fully moved onto it?
