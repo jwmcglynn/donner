@@ -359,16 +359,21 @@ donner_cc_fuzzer(
     ],
 )
 
+# image_loader_fuzzer and image_loader_production_fuzzer build the same source, so both take its
+# sources and dependencies from here. The production variant is manual and builds only in the
+# nightly Fuzz soak, where a dependency added to one copy alone would go unnoticed.
+_IMAGE_LOADER_FUZZER_SRCS = ["tests/ImageLoader_fuzzer.cc"]
+
+_IMAGE_LOADER_FUZZER_DEPS = [
+    ":image_loader",
+    ":resource_loader_interface",
+]
+
 donner_cc_fuzzer(
     name = "image_loader_fuzzer",
-    srcs = [
-        "tests/ImageLoader_fuzzer.cc",
-    ],
+    srcs = _IMAGE_LOADER_FUZZER_SRCS,
     corpus = "tests/image_loader_corpus",
-    deps = [
-        ":image_loader",
-        ":resource_loader_interface",
-    ],
+    deps = _IMAGE_LOADER_FUZZER_DEPS,
 )
 
 filegroup(
@@ -381,12 +386,9 @@ filegroup(
 
 donner_cc_fuzzer(
     name = "image_loader_production_fuzzer",
-    srcs = ["tests/ImageLoader_fuzzer.cc"],
+    srcs = _IMAGE_LOADER_FUZZER_SRCS,
     copts = ["-DDONNER_IMAGE_LOADER_FUZZ_PRODUCTION_BUDGET=1"],
     corpus = ":image_loader_production_corpus",
     tags = ["manual"],
-    deps = [
-        ":image_loader",
-        ":resource_loader_interface",
-    ],
+    deps = _IMAGE_LOADER_FUZZER_DEPS,
 )
