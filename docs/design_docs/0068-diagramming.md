@@ -387,8 +387,8 @@ flowchart LR
   content) patch the Mermaid text, and everything is re-checked for divergence.
 - **Mermaid text to everything.** A Mermaid edit reparses the affected statements, the reconciler
   diffs the new syntax tree against the model, and emits a `DiagramOp` batch. The same edit is
-  written into the `dgm:mermaid` CDATA section as a source edit whose range lies inside that
-  section's value, which classifies as `ReparseScope::TextNode`.
+  written into the `dgm:mermaid` CDATA content as a source edit, normally inside one section's
+  value (`ReparseScope::TextNode`; see the `ReplaceTextRange` rules below).
 
 All three directions are echo-suppressed the same way `mirrorSourceDeltas` already suppresses
 DOM-originated source changes: each sync records the source version it produced, and a view never
@@ -428,11 +428,13 @@ the latest value) keeps a 60 fps node drag to one attribute write per element pe
 contains `ReplaceDocument`, `CutShapes` or `PasteShapes`, and the reparse-free invariant is tested
 (see [Testing and Validation](#testing-and-validation)).
 
-Mermaid text patches use the milestone 1 `ReplaceTextRange` command: a byte range inside the
-`dgm:mermaid` CDATA value plus replacement bytes, applied through `SVGDocument::applySourceEdit`.
-The range lies inside one CDATA node, so the edit classifies as `TextNode` scope and emits a minimal
-source delta. Stored Mermaid text never contains the CDATA terminator `]]>` (see below), so a
-patch can never end the CDATA section early.
+Mermaid text patches use the milestone 1 `ReplaceTextRange` command: a byte range plus replacement
+bytes, applied through `SVGDocument::applySourceEdit`. Mermaid offsets are logical offsets into the
+concatenated text; the command maps them to source offsets through each CDATA node's value
+location. A patch that stays inside one CDATA node and introduces no `]]>` classifies as `TextNode`
+scope and emits a minimal source delta. A patch that introduces `]]>`, or spans a section boundary,
+is written as the re-encoded content of the `dgm:mermaid` element and classifies as
+`ElementSubtree` scope: a local reparse of that one element, never of the document.
 
 ### Hard rules
 
@@ -463,13 +465,13 @@ flowchart TD
 </metadata>
 ```
 
-- The text lives in one CDATA section so Mermaid operators such as `-->` and `<-->` need no XML
-  escaping. The sequence `]]>` can only occur inside a Mermaid label, where Mermaid's entity codes
-  express the same characters (`#93;` for `]`). The printer always uses that form; `.mmd` import
-  rewrites such label text to it; and a Mermaid pane edit that would store a raw `]]>` is not
-  committed and shows a diagnostic suggesting the entity form. The reader still concatenates
-  adjacent CDATA and text children, so a file another tool split into several sections reads
-  correctly.
+- The text lives in CDATA so Mermaid operators such as `-->` and `<-->` need no XML escaping.
+  Normally that is one section. Any `]]>` in the Mermaid bytes, wherever it occurs (a label, a
+  `%%` comment, or a preserved unsupported statement), is encoded by splitting it across adjacent
+  sections: `]]` ends one section and `<![CDATA[>` starts the next, so the stored form is
+  `]]]]><![CDATA[>`. The reader concatenates adjacent CDATA and text children, so any Mermaid bytes
+  import, and `.mmd` export reproduces them exactly. Files another tool split into several sections
+  read the same way.
 - The Mermaid text is the source of truth for structure (which nodes and edges exist, labels,
   shapes, subgraphs, `classDef`). The SVG elements are its rendering plus everything Mermaid cannot
   express: manual positions (`dgm:pin` and the node's `transform`), waypoints, port choices, and
@@ -637,9 +639,11 @@ resource-exhaustion surface.
   the structured API; Mermaid label markup (HTML in labels) is treated as literal text.
 - **Escaping is structural.** Untrusted strings reach SVG only through the structured API, which
   escapes attribute values (`EscapeAttributeValue`) and text content (`EscapeTextContent`), so a
-  hostile label cannot inject markup. Mermaid CDATA patches are the one raw-bytes write; the printer
-  guarantees they never contain `]]>`, and the round-trip fuzzer checks it. The Mermaid printer is
-  the only Mermaid writer and quotes labels that contain Mermaid syntax characters.
+  hostile label cannot inject markup. Mermaid CDATA patches are the one raw-bytes write; one
+  CDATA encoder splits every `]]>` across sections so a patch can never end a section early or
+  inject markup, and the round-trip fuzzer feeds it `]]>` sequences in labels, comments and
+  unsupported statements. The Mermaid printer is the only Mermaid writer and quotes labels that
+  contain Mermaid syntax characters.
 - **Reference graphs are acyclic by construction.** Connectors reference nodes, never other
   connectors, so endpoint resolution cannot recurse.
 - **Privacy.** The diagram libraries add no telemetry and no network access, and they handle no
