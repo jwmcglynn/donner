@@ -480,12 +480,20 @@ def _buildbuddy_violations(files):
                 violations.extend(_buildbuddy_job_violations(path, name, workflow, steps))
     if seen != BUILDBUDDY_JOBS:
         violations.append("BuildBuddy lanes changed: %s" % sorted(seen))
-    for path in sorted({path for path, _ in seen}):
-        for trigger, entries in sorted(_trigger_paths(files[path]).items()):
-            if BUILDBUDDY_ACTION_FILES not in entries:
-                violations.append("%s has a BuildBuddy lane, but its %s paths skip the action"
-                                  % (path, trigger))
-    return violations
+    return violations + _buildbuddy_path_filter_violations(files, seen)
+
+
+def _fallback_lines(fragment):
+    """A generated fragment's lines that name any local fallback flag, sorted."""
+    return sorted(line for line in fragment.splitlines() if "fallback" in line)
+
+
+def _buildbuddy_path_filter_violations(files, lanes):
+    """Path filters that would let the BuildBuddy action change without running its lanes."""
+    return ["%s has a BuildBuddy lane, but its %s paths skip the action" % (path, trigger)
+            for path in sorted({path for path, _ in lanes})
+            for trigger, entries in sorted(_trigger_paths(files[path]).items())
+            if BUILDBUDDY_ACTION_FILES not in entries]
 
 
 # Files a self-hosted job may upload directly. Raw Bazel event streams and execution logs record
@@ -604,31 +612,42 @@ def _triggers(workflow):
             if match}
 
 
+def _flow_mapping(text):
+    """Whether a YAML value starts a flow mapping, ignoring a trailing comment."""
+    return text.split("#", 1)[0].strip().startswith("{")
+
+
+def _paths_entries(body):
+    """The entries of a trigger body's `paths:` filter, or None when it has no such filter.
+
+    An inline value is kept as one entry, so a flow-style list never matches a single path.
+    """
+    for offset, entry in enumerate(body):
+        key, _, inline = entry.split("#", 1)[0].partition(":")
+        if key == "    paths":
+            items = [item.strip()[1:].strip() for item in _indented_block(body[offset + 1:], 4)
+                     if item.strip().startswith("- ")]
+            values = [inline.strip()] if inline.strip() else items
+            return [value.strip("\"'") for value in values]
+    return None
+
+
 def _trigger_paths(workflow):
     """Each trigger's `paths:` entries, by trigger name; a trigger without the filter is absent.
 
-    An inline `paths:` value is kept as one entry, so a flow-style list never matches a single
-    path. A flow mapping for `on:` or a trigger, which could hide a filter, raises instead.
+    A flow mapping for `on:` or a trigger, which could hide a filter, raises instead.
     """
     block = _top_level_block(workflow, "on") or []
-    if any(line.split("#", 1)[0].strip().startswith("{") for line in block[:1]):
+    if block and _flow_mapping(block[0]):
         raise ValueError("unsupported flow mapping for on:")
     paths = {}
     for index, line in enumerate(block):
         trigger = re.match(r"^  ([a-z_]+):(.*)$", line)
-        if not trigger:
-            continue
-        if trigger.group(2).split("#", 1)[0].strip().startswith("{"):
+        if trigger and _flow_mapping(trigger.group(2)):
             raise ValueError("unsupported flow mapping for trigger %s" % trigger.group(1))
-        body = _indented_block(block[index + 1:], 2)
-        for offset, entry in enumerate(body):
-            key, _, inline = entry.split("#", 1)[0].partition(":")
-            if key != "    paths":
-                continue
-            items = [item.strip()[1:].strip() for item in _indented_block(body[offset + 1:], 4)
-                     if item.strip().startswith("- ")]
-            paths[trigger.group(1)] = [value.strip("\"'")
-                                       for value in ([inline.strip()] if inline.strip() else items)]
+        entries = _paths_entries(_indented_block(block[index + 1:], 2)) if trigger else None
+        if entries is not None:
+            paths[trigger.group(1)] = entries
     return paths
 
 
@@ -2765,8 +2784,7 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
                 self.assertIn("build --credential_helper=remote.buildbuddy.io="
                               "%s/runner-temp/buildbuddy/helper" % directory, lines)
                 self.assertFalse(any(line.startswith("import") for line in lines))
-                self.assertEqual(sorted(BUILDBUDDY_FALLBACK),
-                                 sorted(line for line in lines if "fallback" in line))
+                self.assertEqual(sorted(BUILDBUDDY_FALLBACK), _fallback_lines(fragment))
 
     def test_bazelrc_leaves_the_buildbuddy_fallback_to_the_fragment(self):
         # A later rc line, a command section such as `test`, or a config such as --config=ci
