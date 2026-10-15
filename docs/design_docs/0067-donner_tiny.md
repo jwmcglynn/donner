@@ -302,6 +302,7 @@ public:
   virtual void fillPath(const DrawGeometry& geometry, const FillStyle& style) = 0;
   virtual void strokePath(const DrawGeometry& geometry, const StrokeStyle& style) = 0;
   virtual void drawImage(const ImageView& image, const Box2d& target, ImageSampling s) = 0;
+  virtual void releaseGeometry(uint64_t id) = 0;
   [[nodiscard]] virtual RendererBitmap takeSnapshot() const = 0;
   [[nodiscard]] virtual RendererSurfaceBudget& surfaceBudget() = 0;
   [[nodiscard]] virtual RendererDrawBudget& drawBudget() = 0;
@@ -320,14 +321,21 @@ Design rules for the core:
   within a layer and intersected across layers. The SVG resolver folds `clipPathUnitsTransform`
   into each shape's transform. A clip that references a mask (`ResolvedClip::mask`) is lowered by
   the SVG layer to a core mask.
-- **Explicit cache identity.** `GeometryKey` replaces `EntityHandle` as the cache key. The SVG
-  layer derives the id from the entity and bumps the generation where it currently relies on
+- **Explicit cache identity.** `GeometryKey` replaces `EntityHandle` as the cache key. Ids are
+  unique per core instance, not per front end: the core hands out id namespaces, and the SVG layer
+  derives an id from its registry's namespace plus the entity, so two documents drawn by one core
+  never collide. The SVG layer bumps the generation where it currently relies on
   `ComputedPathComponent`/`LoadedImageComponent` listeners; the canvas API derives it from retained
   path objects. Geometry that is a distinct variant of the same entity, such as a
   `vector-effect: non-scaling-stroke` centerline already transformed by `PathShape::hostFromLocal`,
   gets a distinct id that the SVG layer derives from the entity and that transform. A zero key
   disables caching; the conformance suite checks that a zero key and a nonzero key render the
   same pixels.
+- **Cache retention is bounded.** A key's cache entry holds one generation: drawing a newer
+  generation replaces the older entry. `RendererCore::releaseGeometry(id)` drops an entry when the
+  front end destroys its source (an erased entity, a destroyed retained path, an unloaded
+  composition), and the backend additionally evicts least-recently-used entries past a fixed
+  byte budget, so animated geometry that bumps its generation every frame cannot accumulate.
 - **Borrowing stays opt-in.** As with `PathShape` today, a key alone does not permit deferral: a
   backend may retain the geometry past the call only when `allowDeferred` is set and the key is
   nonzero, and the front end guarantees that geometry stays alive and unchanged until the deferred
@@ -415,11 +423,15 @@ public:
   void drawImage(const ImageView& image, const Box2d& target);
   void beginLayer(double opacity, BlendMode blend);
   void endLayer();
-  PixelView pixels() const;          // Premultiplied RGBA8, row stride exposed.
+  PixelView pixels() const UTILS_LIFETIME_BOUND;  // Premultiplied RGBA8, row stride exposed.
 };
 
 }  // namespace donner::tiny
 ```
+
+`PixelView` borrows the canvas's pixel storage: it is valid until the canvas is destroyed or the
+next drawing call, and `UTILS_LIFETIME_BOUND` lets the compiler flag a view that outlives a
+temporary canvas. Hosts that need to keep pixels copy them out.
 
 `PathRef` is either a transient `Path` or a retained path object that carries a stable
 `GeometryKey`, so hosts that redraw the same icon every frame get cache reuse. A GPU canvas is
@@ -648,8 +660,11 @@ New targets (names are proposals):
   `//donner/lottie/tests:lottie_loader_tests` checks that image layers with no provider render
   nothing and that the provider receives only embedded bytes, never a URL or path to open.
 - **Both backends implement core semantics within shared golden tolerances, and a zero geometry
-  key renders the same pixels as a nonzero one:** `//donner/render/tests:core_conformance_tests`,
+  key renders the same pixels as a nonzero one, and two front ends drawing through one core never
+  share a cache entry:** `//donner/render/tests:core_conformance_tests`,
   run per backend through `donner_multi_transitioned_test`.
+- **Geometry caches stay within their byte budget under generation churn and release entries for
+  destroyed sources:** `//donner/render/tests:geometry_cache_tests`, run per backend.
 - **The shared animation module matches its documented interpolation and easing:**
   `//donner/animation:animation_tests`.
 - **Lottie limits admit exactly at and refuse one past each limit, and a refused load or frame
