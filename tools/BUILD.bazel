@@ -277,6 +277,7 @@ py_test(
     size = "large",
     srcs = ["security_workflow_policy_tests.py"],
     data = [
+        "//:.bazelrc",
         "//:github_action_definitions",
         "//build_defs:rules.bzl",
         "//third_party:bazel/non_bcr_deps.bzl",
