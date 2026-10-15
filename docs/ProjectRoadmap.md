@@ -236,8 +236,9 @@ section does not gate the v1.0 release criteria.
       possible refinement. The collaboration ID is separate from the SVG `id` attribute, and
       concurrent edits that produce duplicate `id` values are repaired deterministically.
 - [ ] **Deterministic reconciliation**: Merging incoming state takes the union of element IDs. For
-      the same ID the higher `version` wins, and equal versions break ties by the lower
-      `versionNonce`, so every peer converges without a coordinating server. Deletions are
+      the same ID the higher `version` wins, equal versions break ties by the lower
+      `versionNonce`, and equal nonces break ties by the editing peer's unique session ID, so every
+      peer converges without a coordinating server. Deletions are
       tombstones retained in collaboration state until every peer in the session has
       acknowledged them. Compacting acknowledged tombstones advances a session epoch; a peer
       whose state predates that epoch resynchronizes from current state and replays only its own
