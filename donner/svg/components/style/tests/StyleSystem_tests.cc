@@ -16,13 +16,16 @@
 #include "donner/base/tests/BaseTestUtils.h"
 #include "donner/base/tests/ParseResultTestUtils.h"
 #include "donner/css/parser/DeclarationListParser.h"
+#include "donner/svg/SVGStyleQuery.h"
 #include "donner/svg/components/DirtyFlagsComponent.h"
 #include "donner/svg/components/StylesheetComponent.h"
 #include "donner/svg/components/resources/ResourceManagerContext.h"
 #include "donner/svg/components/shadow/ComputedShadowTreeComponent.h"
+#include "donner/svg/components/shadow/ShadowEntityComponent.h"
 #include "donner/svg/components/shadow/ShadowTreeComponent.h"
 #include "donner/svg/components/shadow/ShadowTreeSystem.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
+#include "donner/svg/components/style/ExternalUseStyleContext.h"
 #include "donner/svg/components/style/StyleComponent.h"
 #include "donner/svg/parser/SVGParser.h"
 
@@ -207,6 +210,47 @@ TEST_F(StyleSystemTest, StylesheetSourceMapMapsRuleBackToSvgSource) {
       stylesheet.sourceMap.mapToDocumentSource(rule.ruleSourceRange);
   ASSERT_TRUE(mappedRule.has_value());
   EXPECT_EQ(SourceSlice(document.source(), *mappedRule), ".cls { fill: red; }");
+}
+
+TEST_F(StyleSystemTest, StylesheetQueryIncludesUserAgentRulesOnlyWhenRequested) {
+  auto document = ParseSVG(R"(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <style id="sheet">rect { fill: red; }</style>
+      <rect/>
+    </svg>
+  )");
+
+  const std::vector<SVGStylesheetRule> authored = CollectStylesheetRules(document);
+  ASSERT_THAT(authored, testing::SizeIs(1));
+  EXPECT_THAT(authored.front().isUserAgentStylesheet, testing::IsFalse());
+  EXPECT_THAT(authored.front().ruleSourceRange, testing::Optional(testing::_));
+  EXPECT_THAT(authored.front().selectorSourceRange, testing::Optional(testing::_));
+  ASSERT_THAT(authored.front().declarations, testing::SizeIs(1));
+  EXPECT_THAT(authored.front().declarations.front().declarationSourceRange,
+              testing::Optional(testing::_));
+
+  const std::vector<SVGStylesheetRule> all =
+      CollectStylesheetRules(document, /*includeUserAgent=*/true);
+  std::size_t authorCount = 0;
+  std::size_t userAgentCount = 0;
+  for (const SVGStylesheetRule& rule : all) {
+    if (!rule.isUserAgentStylesheet) {
+      ++authorCount;
+      EXPECT_EQ(rule.stylesheetEntity, authored.front().stylesheetEntity);
+      EXPECT_EQ(rule.ruleIndex, authored.front().ruleIndex);
+      EXPECT_EQ(rule.ruleSourceRange, authored.front().ruleSourceRange);
+      continue;
+    }
+    ++userAgentCount;
+    EXPECT_THAT(rule.ruleSourceRange, testing::Eq(std::nullopt));
+    EXPECT_THAT(rule.selectorSourceRange, testing::Eq(std::nullopt));
+    EXPECT_THAT(rule.declarations, testing::Not(testing::IsEmpty()));
+    for (const SVGStylesheetDeclaration& declaration : rule.declarations) {
+      EXPECT_THAT(declaration.declarationSourceRange, testing::Eq(std::nullopt));
+    }
+  }
+  EXPECT_EQ(authorCount, 1u);
+  EXPECT_GT(userAgentCount, 0u);
 }
 
 TEST_F(StyleSystemTest, CollectMatchedStyleRulesReportsSelectorBranchAndSourceRanges) {
@@ -710,6 +754,135 @@ TEST(StyleResourceBudgetTest, ChargesDeclarationSourceBytesPerApplication) {
   EXPECT_EQ(budget.declarationApplications(), 1u);
   EXPECT_EQ(budget.declarationByteWork(), 768u);
   EXPECT_TRUE(budget.rejected());
+}
+
+TEST_F(StyleSystemTest, SymbolDefinitionDisplayExcludesForeignNamesAndPreservesOverride) {
+  auto document = ParseSVG(R"(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <symbol id="definition" style="display:inline!important"/>
+      <symbol id="overridden"/>
+      <symbol xmlns="urn:example:foreign" id="foreign" style="display:inline!important"/>
+    </svg>
+  )");
+  const auto definition = document.querySelector("#definition");
+  const auto overridden = document.querySelector("#overridden");
+  const auto foreign = document.querySelector("#foreign");
+  ASSERT_THAT(definition, testing::Optional(testing::_));
+  ASSERT_THAT(overridden, testing::Optional(testing::_));
+  ASSERT_THAT(foreign, testing::Optional(testing::_));
+  overridden->entityHandle().get_or_emplace<StyleComponent>().properties.display.set(
+      Display::Inline, css::Specificity::Override());
+  EXPECT_EQ(definition->getComputedStyle().display.get(), Display::None);
+  EXPECT_EQ(overridden->getComputedStyle().display.get(), Display::Inline);
+  EXPECT_EQ(foreign->getComputedStyle().display.get(), Display::Inline);
+}
+
+TEST_F(StyleSystemTest, UserAgentNamespaceMatchesComputedAndDiagnosticStyles) {
+  auto document = ParseSVG(R"(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <style>#foreign { fill: red; }</style>
+      <symbol id="svg-symbol"/>
+      <symbol xmlns="urn:example:foreign" id="foreign"/>
+      <style xmlns="urn:example:foreign" id="foreign-style"/>
+    </svg>
+  )");
+  const auto symbol = document.querySelector("#svg-symbol");
+  const auto foreign = document.querySelector("#foreign");
+  const auto foreignStyle = document.querySelector("#foreign-style");
+  ASSERT_THAT(symbol, testing::Optional(testing::_));
+  ASSERT_THAT(foreign, testing::Optional(testing::_));
+  ASSERT_THAT(foreignStyle, testing::Optional(testing::_));
+  const auto builtIn =
+      testing::Field("isUserAgentStylesheet", &SVGMatchedStyleRule::isUserAgentStylesheet, true);
+  EXPECT_THAT(CollectMatchedStyleRules(*symbol), testing::Contains(builtIn));
+  EXPECT_THAT(CollectMatchedStyleRules(*foreign), testing::Not(testing::Contains(builtIn)));
+  EXPECT_THAT(CollectMatchedStyleRules(*foreignStyle), testing::Not(testing::Contains(builtIn)));
+  EXPECT_EQ(symbol->getComputedStyle().overflow.get(), Overflow::Hidden);
+  EXPECT_EQ(foreign->getComputedStyle().overflow.get(), Overflow::Visible);
+  EXPECT_EQ(foreign->getComputedStyle().display.get(), Display::Inline);
+  EXPECT_EQ(foreignStyle->getComputedStyle().display.get(), Display::Inline);
+  EXPECT_EQ(foreign->getComputedStyle().fill.get(),
+            PaintServer(PaintServer::Solid(css::Color(css::RGBA(255, 0, 0, 255)))));
+}
+
+TEST_F(StyleSystemTest, SymbolDirectUseRootPreservesNativeDisplayOverride) {
+  auto document = ParseSVG(R"(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <defs><symbol id="definition"/></defs><use id="instance" href="#definition"/>
+    </svg>
+  )");
+  const auto definition = document.querySelector("#definition");
+  const auto instance = document.querySelector("#instance");
+  ASSERT_THAT(definition, testing::Optional(testing::_));
+  ASSERT_THAT(instance, testing::Optional(testing::_));
+  definition->entityHandle().get_or_emplace<StyleComponent>().properties.display.set(
+      Display::None, css::Specificity::Override());
+  auto& shadowTree = instance->entityHandle().get_or_emplace<ComputedShadowTreeComponent>();
+  ParseWarningSink warnings;
+  ShadowTreeSystem().populateInstance(instance->entityHandle(), shadowTree, ShadowBranchType::Main,
+                                      definition->entityHandle().entity(), RcString("#definition"),
+                                      warnings);
+  ASSERT_THAT(shadowTree.mainBranch, testing::Optional(testing::_));
+  ASSERT_THAT(shadowTree.mainBranch->shadowEntities, testing::Not(testing::IsEmpty()));
+  EntityHandle root(document.registry(), shadowTree.mainBranch->shadowEntities.front());
+  const auto& properties = styleSystem.computeStyle(root, warnings).properties;
+  ASSERT_THAT(properties, testing::Optional(testing::_));
+  EXPECT_EQ(properties->display.get(), Display::None);
+  EXPECT_EQ(properties->display.specificity, css::Specificity::Override());
+}
+
+TEST_F(StyleSystemTest, SymbolShadowRootFromNonUseRemainsDefinition) {
+  auto document = ParseSVG(R"(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <defs><symbol id="definition" style="display:inline!important"/></defs><g id="host"/>
+    </svg>
+  )");
+  const auto definition = document.querySelector("#definition");
+  const auto host = document.querySelector("#host");
+  ASSERT_THAT(definition, testing::Optional(testing::_));
+  ASSERT_THAT(host, testing::Optional(testing::_));
+  auto& shadowTree = host->entityHandle().get_or_emplace<ComputedShadowTreeComponent>();
+  ParseWarningSink warnings;
+  ShadowTreeSystem().populateInstance(host->entityHandle(), shadowTree, ShadowBranchType::Main,
+                                      definition->entityHandle().entity(), RcString("#definition"),
+                                      warnings);
+  ASSERT_THAT(shadowTree.mainBranch, testing::Optional(testing::_));
+  ASSERT_THAT(shadowTree.mainBranch->shadowEntities, testing::Not(testing::IsEmpty()));
+  EntityHandle root(document.registry(), shadowTree.mainBranch->shadowEntities.front());
+  const auto& properties = styleSystem.computeStyle(root, warnings).properties;
+  ASSERT_THAT(properties, testing::Optional(testing::_));
+  EXPECT_EQ(properties->display.get(), Display::None);
+}
+
+TEST_F(StyleSystemTest, SymbolExternalOccurrenceAppliesOnlyToExactRootAndRetires) {
+  auto document = ParseSVG(R"(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <symbol id="root" style="display:none!important">
+        <symbol id="nested" style="display:inline!important"/>
+      </symbol>
+      <symbol id="outside" style="display:inline!important"/>
+    </svg>
+  )");
+  const auto root = document.querySelector("#root");
+  const auto nested = document.querySelector("#nested");
+  const auto outside = document.querySelector("#outside");
+  ASSERT_THAT(root, testing::Optional(testing::_));
+  ASSERT_THAT(nested, testing::Optional(testing::_));
+  ASSERT_THAT(outside, testing::Optional(testing::_));
+  EXPECT_EQ(root->getComputedStyle().display.get(), Display::None);
+  {
+    auto access = document.writeAccess();
+    access.registry().ctx().emplace<ExternalUseStyleContext>(
+        root->entityHandle().entity(), PropertyRegistry(), ResolvedPaintServer(),
+        ResolvedPaintServer(), nullptr, 0, nullptr);
+    styleSystem.invalidateComputed(root->entityHandle());
+    EXPECT_EQ(root->getComputedStyle().display.get(), Display::Inline);
+    EXPECT_EQ(nested->getComputedStyle().display.get(), Display::None);
+    EXPECT_EQ(outside->getComputedStyle().display.get(), Display::None);
+    access.registry().ctx().erase<ExternalUseStyleContext>();
+    styleSystem.invalidateComputed(root->entityHandle());
+  }
+  EXPECT_EQ(root->getComputedStyle().display.get(), Display::None);
 }
 
 TEST_F(StyleSystemTest, ShadowTreeSelectorsMatchSiblingAndAttributeState) {

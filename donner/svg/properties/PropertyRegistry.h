@@ -606,14 +606,13 @@ public:
   /**
    * Clear every property that was set from a `style=""` attribute, leaving presentation
    * attributes (specificity `0,0,0`) and stylesheet-origin declarations intact. Identifies
-   * style-origin properties by their stored \ref css::Specificity::StyleAttribute() tag -
-   * the same tag \ref parseStyle applies when it writes them.
+   * style-origin properties by \ref css::Specificity::isStyleAttribute(), including both normal
+   * and important inline declarations.
    *
    * Use this before re-calling \ref parseStyle on the same registry to get "replace the
    * `style=""` contribution" semantics while preserving `fill="red"` and the like.
    *
-   * Also clears entries from \ref unparsedProperties whose specificity matches
-   * `StyleAttribute()`.
+   * Also clears entries from \ref unparsedProperties with either inline-origin priority.
    */
   void clearStyleAttributeProperties();
 
