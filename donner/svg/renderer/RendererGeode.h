@@ -22,6 +22,7 @@
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/renderer/RendererInterface.h"
 #include "donner/svg/renderer/geode/GeodeCounters.h"
+#include "donner/svg/renderer/geode/GeodeGpuWait.h"
 
 namespace donner::geode {
 class GeodeDevice;
@@ -435,6 +436,31 @@ public:
    * the renderer before resuming GPU rendering.
    */
   [[nodiscard]] bool deviceLost() const;
+
+  /**
+   * Wait, bounded by lack of progress, until the GPU has finished all the work this renderer's
+   * device has submitted, such as the frames completed by `endFrame()`.
+   *
+   * This is the device's own queue-idle wait, exposed so an embedder or benchmark can time work to
+   * GPU completion without a snapshot. It reads back no pixels and presents nothing. The wait
+   * gives up only when the outstanding work makes no progress for \p stallBound, so a long but
+   * advancing backlog on a slow device is waited out. Giving up is treated as a hung device: the
+   * device is declared lost, exactly as an internal queue-idle wait would declare it, and
+   * `deviceLost()` reports true afterwards. A renderer without a device has submitted nothing and
+   * completes at once.
+   *
+   * Call it on the thread that drives this renderer, like the other `RendererGeode` methods. Work
+   * recorded in a frame that is still open has not been submitted and is not waited for.
+   *
+   * @param stallBound Longest the outstanding work may go without progress before the wait gives
+   *   up; defaults to the shared bound for GPU waits.
+   * @return `Complete` once the submitted work has finished (or there was none), `TimedOut` when
+   *   it stopped progressing or the backend failed before finishing (the device is now lost), or
+   *   `DeviceLost` when the device was already lost and no wait was performed, or a loss was
+   *   declared while the wait was running.
+   */
+  [[nodiscard]] geode::GpuWaitResult waitForSubmittedWork(
+      std::chrono::milliseconds stallBound = geode::kDefaultGpuWaitTimeout);
 
   /**
    * Enable or disable GPU timestamp capture. No-op today; reserved for

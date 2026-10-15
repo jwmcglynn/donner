@@ -944,6 +944,79 @@ TEST_F(RendererGeodeTest, LostHeadlessDeviceIsNotReused) {
                                        editor::tests::PixelmatchIdentityParams());
 }
 
+/// Draws one opaque frame through \p renderer, which submits it to the GPU.
+/// @param renderer Renderer to draw with.
+void DrawOpaqueFrame(RendererGeode& renderer) {
+  RenderViewport viewport;
+  viewport.size = Vector2d(kViewportSize, kViewportSize);
+  viewport.devicePixelRatio = 1.0;
+  renderer.beginFrame(viewport);
+  renderer.setPaint(solidFill(css::RGBA(0, 128, 255, 255)));
+  renderer.drawRect(Box2d({0, 0}, {kViewportSize, kViewportSize}), StrokeParams{});
+  renderer.endFrame();
+}
+
+TEST_F(RendererGeodeTest, WaitForSubmittedWorkCompletesAfterADrawnFrameWithoutReadback) {
+  std::shared_ptr<geode::GeodeDevice> device = sharedDevice();
+  ASSERT_THAT(device, testing::NotNull());
+  RendererGeode renderer(device);
+  (void)renderer.consumeReadbackStats();
+
+  DrawOpaqueFrame(renderer);
+  const uint64_t frameSerial = device->runtimeDevice().lastSubmittedSerial();
+  ASSERT_THAT(frameSerial, testing::Gt(0u)) << "the frame must reach the GPU, or this pins nothing";
+
+  EXPECT_THAT(renderer.waitForSubmittedWork(), testing::Eq(geode::GpuWaitResult::Complete));
+  EXPECT_THAT(device->runtimeDevice().completedSerial(), testing::Ge(frameSerial))
+      << "a completed wait must leave the frame's submission finished on the GPU";
+  EXPECT_THAT(renderer.deviceLost(), testing::IsFalse());
+  const RendererReadbackStats stats = renderer.consumeReadbackStats();
+  EXPECT_THAT(stats.count, testing::Eq(0)) << "waiting for GPU completion must not read pixels";
+  EXPECT_THAT(stats.bufferCreates, testing::Eq(0u));
+}
+
+TEST_F(RendererGeodeTest, WaitForSubmittedWorkWithNothingOutstandingCompletesAtOnce) {
+  RendererGeode withoutDevice(std::shared_ptr<geode::GeodeDevice>{});
+  EXPECT_THAT(withoutDevice.waitForSubmittedWork(std::chrono::milliseconds::zero()),
+              testing::Eq(geode::GpuWaitResult::Complete))
+      << "a renderer without a device has submitted nothing";
+
+  RendererGeode renderer = createRenderer();
+  ASSERT_THAT(renderer.waitForSubmittedWork(), testing::Eq(geode::GpuWaitResult::Complete));
+  // With everything already finished there is nothing left to make progress, so even a zero stall
+  // bound must report completion rather than a stall.
+  EXPECT_THAT(renderer.waitForSubmittedWork(std::chrono::milliseconds::zero()),
+              testing::Eq(geode::GpuWaitResult::Complete));
+  EXPECT_THAT(renderer.deviceLost(), testing::IsFalse());
+}
+
+TEST_F(RendererGeodeTest, WaitForSubmittedWorkReportsALostDeviceWithoutWaiting) {
+  RendererGeode renderer;
+  DrawOpaqueFrame(renderer);
+  renderer.injectDeviceLossForTesting();
+  ASSERT_THAT(renderer.deviceLost(), testing::IsTrue());
+
+  EXPECT_THAT(renderer.waitForSubmittedWork(), testing::Eq(geode::GpuWaitResult::DeviceLost));
+}
+
+TEST_F(RendererGeodeTest, WaitForSubmittedWorkThatStallsDeclaresTheDeviceLost) {
+  std::shared_ptr<geode::GeodeDevice> device = geode::GeodeDevice::CreateHeadless();
+  ASSERT_THAT(device, testing::NotNull());
+  RendererGeode renderer(device);
+  DrawOpaqueFrame(renderer);
+  (void)renderer.consumeReadbackStats();
+  // Stands in for outstanding work that stops progressing; the device's queue-idle wait applies
+  // the same loss declaration it applies to a real stall.
+  device->setQueueWaitResultForTesting(geode::GpuWaitResult::TimedOut);
+
+  EXPECT_THAT(renderer.waitForSubmittedWork(), testing::Eq(geode::GpuWaitResult::TimedOut));
+  EXPECT_THAT(renderer.deviceLost(), testing::IsTrue());
+  const RendererReadbackStats stats = renderer.consumeReadbackStats();
+  EXPECT_THAT(stats.timedOutWaitSite, testing::Eq(GpuWaitTimeoutSite::QueueIdle));
+  EXPECT_THAT(renderer.waitForSubmittedWork(), testing::Eq(geode::GpuWaitResult::DeviceLost))
+      << "a later wait on the lost device must report the loss without waiting again";
+}
+
 TEST_F(RendererGeodeTest, NestedParameterGrowthPreservesOuterStripAdmission) {
   using namespace components;
   constexpr uint32_t kWidth = 1024;
