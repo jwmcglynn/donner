@@ -306,17 +306,16 @@ bool PixelSpanFits(size_t spanSize, size_t width, size_t height, size_t stride) 
   return spanSize / 4 >= (height - 1) * stride + width;
 }
 
-/// Resolved frame pixels, packed as 0xAARRGGBB with alpha either 0xFF or fully transparent 0.
-struct ResolvedFrame {
-  std::vector<uint32_t> pixels;
-  bool hasTransparency = false;
-};
-
-/// Composite \p rgbaPixels over \p background, or threshold alpha to binary transparency.
-ResolvedFrame ResolveAlpha(std::span<const uint8_t> rgbaPixels, size_t width, size_t height,
-                           size_t stride, const std::optional<GifEncoder::Rgb>& background) {
-  ResolvedFrame frame;
-  frame.pixels.resize(width * height);
+/**
+ * Composite \p rgbaPixels over \p background, or threshold alpha to binary transparency.
+ *
+ * @return Pixels packed as 0xAARRGGBB with alpha either 0xFF or, for a transparent pixel, all
+ *   zero.
+ */
+std::vector<uint32_t> ResolveAlpha(std::span<const uint8_t> rgbaPixels, size_t width, size_t height,
+                                   size_t stride,
+                                   const std::optional<GifEncoder::Rgb>& background) {
+  std::vector<uint32_t> pixels(width * height);
   for (size_t y = 0; y < height; ++y) {
     const uint8_t* row = rgbaPixels.data() + y * stride * 4;
     for (size_t x = 0; x < width; ++x) {
@@ -331,13 +330,11 @@ ResolvedFrame ResolveAlpha(std::span<const uint8_t> rgbaPixels, size_t width, si
                (blend(px[1], background->g) << 8) | blend(px[2], background->b);
       } else if (px[3] >= 128) {
         argb = kOpaqueAlpha | (uint32_t{px[0]} << 16) | (uint32_t{px[1]} << 8) | px[2];
-      } else {
-        frame.hasTransparency = true;
       }
-      frame.pixels[y * width + x] = argb;
+      pixels[y * width + x] = argb;
     }
   }
-  return frame;
+  return pixels;
 }
 
 /// Smallest rectangle containing every pixel that differs between two distinct frames.
@@ -517,28 +514,29 @@ bool GifEncoder::addFrame(std::span<const uint8_t> rgbaPixels, size_t strideInPi
     return false;
   }
 
-  ResolvedFrame current = ResolveAlpha(rgbaPixels, width, height, stride, options_.background);
-  if (pending_ && current.pixels == previous_) {
+  std::vector<uint32_t> current =
+      ResolveAlpha(rgbaPixels, width, height, stride, options_.background);
+  if (pending_ && current == previous_) {
     extendPendingDelay(delayCentiseconds);
     return true;
   }
 
-  const PixelRect rect =
-      StoredRect(options_, pending_.has_value() ? &previous_ : nullptr, current.pixels);
-  const FramePalette palette =
-      BuildPalette(current.pixels, width, rect, current.hasTransparency ? 255 : 256);
+  const PixelRect rect = StoredRect(options_, pending_.has_value() ? &previous_ : nullptr, current);
+  // Disposal 2 restores the logical screen background, which has no color without a global
+  // table, so every frame of a transparent GIF defines a transparent index for it to restore.
+  const bool transparent = !options_.background.has_value();
+  const FramePalette palette = BuildPalette(current, width, rect, transparent ? 255 : 256);
 
   PendingFrame frame;
-  frame.disposal = options_.background ? 1 : 2;
-  frame.transparent = current.hasTransparency;
-  frame.transparentIndex =
-      current.hasTransparency ? static_cast<uint8_t>(palette.colors.size()) : 0;
+  frame.disposal = transparent ? 2 : 1;
+  frame.transparent = transparent;
+  frame.transparentIndex = transparent ? static_cast<uint8_t>(palette.colors.size()) : 0;
   frame.delayCentiseconds = delayCentiseconds;
-  frame.encoded = EncodeImageBlock(current.pixels, width, rect, palette, current.hasTransparency);
+  frame.encoded = EncodeImageBlock(current, width, rect, palette, transparent);
 
   flushPending();
   pending_ = std::move(frame);
-  previous_ = std::move(current.pixels);
+  previous_ = std::move(current);
   ++storedFrameCount_;
   return true;
 }
