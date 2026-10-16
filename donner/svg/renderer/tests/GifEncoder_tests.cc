@@ -1,5 +1,6 @@
 #include "donner/svg/renderer/GifEncoder.h"
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <limits>
@@ -7,6 +8,8 @@
 #include <string>
 #include <vector>
 
+#include "donner/editor/tests/BitmapGoldenCompare.h"
+#include "donner/svg/renderer/RendererInterface.h"
 #include "donner/svg/renderer/tests/GifTestDecoder.h"
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
@@ -14,9 +17,7 @@
 using testing::AllOf;
 using testing::Each;
 using testing::ElementsAre;
-using testing::ElementsAreArray;
 using testing::Field;
-using testing::IsEmpty;
 using testing::Optional;
 using testing::SizeIs;
 
@@ -52,38 +53,43 @@ DecodedGif Decode(const std::vector<uint8_t>& gif) {
   return decoded.value_or(DecodedGif{});
 }
 
-/// Squared RGB distance between the pixels at byte offsets \p a and \p b.
-int SquaredDistance(const uint8_t* a, const uint8_t* b) {
-  int distance = 0;
-  for (int c = 0; c < 3; ++c) {
-    const int d = int{a[c]} - int{b[c]};
-    distance += d * d;
-  }
-  return distance;
+/// Wrap a tightly packed straight-alpha RGBA8 buffer as a bitmap for pixelmatch comparison.
+RendererBitmap ToBitmap(const std::vector<uint8_t>& rgba, int width, int height) {
+  RendererBitmap bitmap;
+  bitmap.dimensions = Vector2i(width, height);
+  bitmap.pixels = rgba;
+  bitmap.rowBytes = static_cast<size_t>(width) * 4;
+  bitmap.alphaType = AlphaType::Unpremultiplied;
+  return bitmap;
 }
 
-/**
- * Pixel indices whose decoded color is not a nearest color, among all colors the decoded image
- * uses, to the source pixel. Empty when every pixel was mapped to its nearest palette entry.
- */
-std::vector<size_t> PixelsNotMappedToNearestColor(const std::vector<uint8_t>& source,
-                                                  const std::vector<uint8_t>& decoded) {
-  std::set<std::array<uint8_t, 3>> usedColors;
-  for (size_t i = 0; i + 3 < decoded.size(); i += 4) {
-    usedColors.insert({decoded[i], decoded[i + 1], decoded[i + 2]});
-  }
+/// Expect decoded frame \p index of \p gif to be identical to \p expected, which has the GIF's
+/// logical screen size. Mismatches write diff images to the test outputs.
+void ExpectFrameIdentical(const DecodedGif& gif, size_t index,
+                          const std::vector<uint8_t>& expected) {
+  ASSERT_LT(index, gif.frames.size());
+  const std::string label =
+      std::string(testing::UnitTest::GetInstance()->current_test_info()->name()) + "_frame" +
+      std::to_string(index);
+  editor::tests::CompareBitmapToBitmap(ToBitmap(gif.frames[index].rgba, gif.width, gif.height),
+                                       ToBitmap(expected, gif.width, gif.height), label,
+                                       editor::tests::PixelmatchIdentityParams());
+}
 
-  std::vector<size_t> mismatches;
-  for (size_t i = 0; i + 3 < source.size() && i + 3 < decoded.size(); i += 4) {
-    int nearest = std::numeric_limits<int>::max();
-    for (const std::array<uint8_t, 3>& color : usedColors) {
-      nearest = std::min(nearest, SquaredDistance(&source[i], color.data()));
-    }
-    if (SquaredDistance(&source[i], &decoded[i]) != nearest) {
-      mismatches.push_back(i / 4);
-    }
+/// Distinct RGBA colors in a tightly packed RGBA8 buffer.
+std::set<std::array<uint8_t, 4>> DistinctColors(const std::vector<uint8_t>& rgba) {
+  std::set<std::array<uint8_t, 4>> colors;
+  for (size_t i = 0; i + 3 < rgba.size(); i += 4) {
+    colors.insert({rgba[i], rgba[i + 1], rgba[i + 2], rgba[i + 3]});
   }
-  return mismatches;
+  return colors;
+}
+
+/// Encode \p rgba as a single-frame GIF and decode it again.
+DecodedGif ReencodeFrame(const std::vector<uint8_t>& rgba, int width, int height) {
+  GifEncoder encoder({.width = width, .height = height});
+  EXPECT_TRUE(encoder.addFrame(rgba, 0, 1));
+  return Decode(encoder.finish());
 }
 
 TEST(GifEncoder, WritesHeaderScreenDescriptorLoopExtensionAndTrailer) {
@@ -126,9 +132,9 @@ TEST(GifEncoder, RoundTripsFramesDelaysAndExactPalette) {
   EXPECT_EQ(gif.height, 3);
   EXPECT_THAT(gif.loopCount, Optional(0));
   ASSERT_THAT(gif.frames, SizeIs(3));
-  EXPECT_THAT(gif.frames[0].rgba, ElementsAreArray(first.rgba));
-  EXPECT_THAT(gif.frames[1].rgba, ElementsAreArray(second.rgba));
-  EXPECT_THAT(gif.frames[2].rgba, ElementsAreArray(third.rgba));
+  ExpectFrameIdentical(gif, 0, first.rgba);
+  ExpectFrameIdentical(gif, 1, second.rgba);
+  ExpectFrameIdentical(gif, 2, third.rgba);
   EXPECT_THAT(gif.frames, ElementsAre(Field(&DecodedGifFrame::delayCentiseconds, 5),
                                       Field(&DecodedGifFrame::delayCentiseconds, 7),
                                       Field(&DecodedGifFrame::delayCentiseconds, 9)));
@@ -191,7 +197,7 @@ TEST(GifEncoder, SplitsMergedDelayThatOverflowsSixteenBits) {
   const DecodedGif gif = Decode(encoder.finish());
   EXPECT_THAT(gif.frames, ElementsAre(Field(&DecodedGifFrame::delayCentiseconds, 65535),
                                       Field(&DecodedGifFrame::delayCentiseconds, 465)));
-  EXPECT_THAT(gif.frames[1].rgba, ElementsAreArray(a.rgba));
+  ExpectFrameIdentical(gif, 1, a.rgba);
 }
 
 TEST(GifEncoder, OpaqueFramesStoreOnlyTheChangedRectangle) {
@@ -212,7 +218,7 @@ TEST(GifEncoder, OpaqueFramesStoreOnlyTheChangedRectangle) {
               AllOf(Field(&DecodedGifFrame::left, 2), Field(&DecodedGifFrame::top, 3),
                     Field(&DecodedGifFrame::width, 3), Field(&DecodedGifFrame::height, 2),
                     Field(&DecodedGifFrame::disposal, 1)));
-  EXPECT_THAT(gif.frames[1].rgba, ElementsAreArray(second.rgba));
+  ExpectFrameIdentical(gif, 1, second.rgba);
 }
 
 TEST(GifEncoder, CompositesOverBackgroundColor) {
@@ -244,7 +250,7 @@ TEST(GifEncoder, KeepsBinaryTransparencyWithoutBackground) {
   EXPECT_THAT(gif.frames, Each(Field(&DecodedGifFrame::disposal, 2)));
 }
 
-TEST(GifEncoder, QuantizesManyColorsToTheirNearestPaletteEntry) {
+TEST(GifEncoder, QuantizesManyColorsIntoOneFullColorTable) {
   constexpr int kSize = 64;
   Image gradient(kSize, kSize, 0, 0, 0);
   for (int y = 0; y < kSize; ++y) {
@@ -259,7 +265,11 @@ TEST(GifEncoder, QuantizesManyColorsToTheirNearestPaletteEntry) {
   const DecodedGif gif = Decode(encoder.finish());
   ASSERT_THAT(gif.frames, SizeIs(1));
   EXPECT_EQ(gif.frames[0].colorTableSize, 256);
-  EXPECT_THAT(PixelsNotMappedToNearestColor(gradient.rgba, gif.frames[0].rgba), IsEmpty());
+  EXPECT_THAT(DistinctColors(gif.frames[0].rgba),
+              SizeIs(testing::AllOf(testing::Gt(128u), testing::Le(256u))));
+
+  // The quantized frame fits one table, so encoding it again is lossless.
+  ExpectFrameIdentical(ReencodeFrame(gif.frames[0].rgba, kSize, kSize), 0, gif.frames[0].rgba);
 }
 
 TEST(GifEncoder, QuantizationKeepsFlatColorsExact) {
@@ -282,20 +292,12 @@ TEST(GifEncoder, QuantizationKeepsFlatColorsExact) {
   const DecodedGif gif = Decode(encoder.finish());
   ASSERT_THAT(gif.frames, SizeIs(1));
 
-  std::vector<uint8_t> expectedFlat;
-  std::vector<uint8_t> actualFlat;
-  for (int y = 0; y < kHeight; ++y) {
-    if (y == kHeight / 2) {
-      continue;
-    }
-    const size_t begin = static_cast<size_t>(y * kWidth * 4);
-    const size_t end = begin + static_cast<size_t>(kWidth * 4);
-    expectedFlat.insert(expectedFlat.end(), diagram.rgba.begin() + begin,
-                        diagram.rgba.begin() + end);
-    actualFlat.insert(actualFlat.end(), gif.frames[0].rgba.begin() + begin,
-                      gif.frames[0].rgba.begin() + end);
-  }
-  EXPECT_THAT(actualFlat, ElementsAreArray(expectedFlat));
+  // Every row except the many-colored one keeps its flat colors exactly.
+  std::vector<uint8_t> expected = diagram.rgba;
+  const auto edgeRowBegin = static_cast<std::ptrdiff_t>(kHeight / 2 * kWidth * 4);
+  std::copy_n(gif.frames[0].rgba.begin() + edgeRowBegin, kWidth * 4,
+              expected.begin() + edgeRowBegin);
+  ExpectFrameIdentical(gif, 0, expected);
 }
 
 TEST(GifEncoder, RoundTripsAcrossLzwDictionaryResets) {
@@ -314,7 +316,7 @@ TEST(GifEncoder, RoundTripsAcrossLzwDictionaryResets) {
   ASSERT_TRUE(encoder.addFrame(noise.rgba, 0, 1));
   const DecodedGif gif = Decode(encoder.finish());
   ASSERT_THAT(gif.frames, SizeIs(1));
-  EXPECT_THAT(gif.frames[0].rgba, ElementsAreArray(noise.rgba));
+  ExpectFrameIdentical(gif, 0, noise.rgba);
 }
 
 TEST(GifEncoder, RoundTripsTwoColorImageAcrossLzwDictionaryResets) {
@@ -336,7 +338,7 @@ TEST(GifEncoder, RoundTripsTwoColorImageAcrossLzwDictionaryResets) {
   const DecodedGif gif = Decode(encoder.finish());
   ASSERT_THAT(gif.frames, SizeIs(1));
   EXPECT_EQ(gif.frames[0].colorTableSize, 2);
-  EXPECT_THAT(gif.frames[0].rgba, ElementsAreArray(noise.rgba));
+  ExpectFrameIdentical(gif, 0, noise.rgba);
 }
 
 TEST(GifEncoder, QuantizesWithTransparencyReservingTheLastIndex) {
@@ -358,13 +360,16 @@ TEST(GifEncoder, QuantizesWithTransparencyReservingTheLastIndex) {
   EXPECT_THAT(std::vector<uint8_t>(gif.frames[0].rgba.begin(), gif.frames[0].rgba.begin() + 4),
               ElementsAre(0, 0, 0, 0));
 
-  // Every other pixel is opaque and mapped to its nearest color.
-  std::vector<uint8_t> opaqueSource(gradient.rgba.begin() + 4, gradient.rgba.end());
-  std::vector<uint8_t> opaqueDecoded(gif.frames[0].rgba.begin() + 4, gif.frames[0].rgba.end());
-  EXPECT_THAT(PixelsNotMappedToNearestColor(opaqueSource, opaqueDecoded), IsEmpty());
-  for (size_t i = 3; i < opaqueDecoded.size(); i += 4) {
-    ASSERT_EQ(opaqueDecoded[i], 255) << "pixel " << (i / 4 + 1) << " is not opaque";
+  // Every other pixel stays opaque: 255 opaque colors plus the transparent one.
+  EXPECT_THAT(DistinctColors(gif.frames[0].rgba), SizeIs(testing::Le(256u)));
+  std::set<uint8_t> alphas;
+  for (size_t i = 3; i < gif.frames[0].rgba.size(); i += 4) {
+    alphas.insert(gif.frames[0].rgba[i]);
   }
+  EXPECT_THAT(alphas, ElementsAre(0, 255));
+
+  // The quantized frame fits one table, so encoding it again is lossless.
+  ExpectFrameIdentical(ReencodeFrame(gif.frames[0].rgba, kSize, kSize), 0, gif.frames[0].rgba);
 }
 
 TEST(GifEncoder, QuantizedOpaqueFramesCropToTheChangedRectangle) {
@@ -392,7 +397,7 @@ TEST(GifEncoder, QuantizedOpaqueFramesCropToTheChangedRectangle) {
   expected[changedOffset] = 1;
   expected[changedOffset + 1] = 2;
   expected[changedOffset + 2] = 3;
-  EXPECT_THAT(gif.frames[1].rgba, ElementsAreArray(expected));
+  ExpectFrameIdentical(gif, 1, expected);
 }
 
 TEST(GifEncoder, RepeatsCroppedFrameWhoseMergedDelayOverflows) {
@@ -409,7 +414,7 @@ TEST(GifEncoder, RepeatsCroppedFrameWhoseMergedDelayOverflows) {
                                       Field(&DecodedGifFrame::delayCentiseconds, 65535),
                                       Field(&DecodedGifFrame::delayCentiseconds, 465)));
   ASSERT_THAT(gif.frames, SizeIs(3));
-  EXPECT_THAT(gif.frames[2].rgba, ElementsAreArray(second.rgba));
+  ExpectFrameIdentical(gif, 2, second.rgba);
 }
 
 TEST(GifEncoder, RejectsInvalidInput) {
