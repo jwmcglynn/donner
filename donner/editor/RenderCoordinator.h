@@ -359,7 +359,7 @@ public:
   /// Registers a completion wake before hiding a deadline behind speculative warmup.
   [[nodiscard]] std::optional<float> nextViewportSettleWakeSeconds();
   /// Pure pending-work observation, including deadlines hidden behind a busy worker.
-  [[nodiscard]] bool hasPendingViewportSettle() const { return false; }
+  [[nodiscard]] bool hasPendingViewportSettle() const { return viewportSettleDue_.has_value(); }
   /// Wake deadline for the paced re-render of a request whose result had nothing to present.
   [[nodiscard]] std::optional<float> nextNothingToPresentRetryWakeSeconds() const;
   /// Whether a renderer-presentation setting still needs a worker frame.

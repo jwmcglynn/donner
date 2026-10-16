@@ -394,7 +394,8 @@ void PublishSampleThumbnailStats(int requested, int started, int completed, int 
 
 void PublishInteractionStats(int selectedCount, int pendingClick, int workerBusy, int dragging,
                              int dragHasVisualChange, double pointerX, double pointerY,
-                             int eyedropperArmed, int eyedropperReady, int eyedropperUnavailable) {
+                             int eyedropperArmed, int eyedropperReady, int eyedropperUnavailable,
+                             bool renderRequestPending, bool viewportSettlePending) {
   // `pointerX`/`pointerY` is the pointer position this frame's input processing
   // actually used, in page CSS pixels. A DOM mouse move reaches the app thread
   // through the proxying queue, so under load a press can be dispatched before
@@ -415,10 +416,12 @@ void PublishInteractionStats(int selectedCount, int pendingClick, int workerBusy
           'eyedropperArmed' : !!$7,
           'eyedropperReady' : !!$8,
           'eyedropperUnavailable' : !!$9,
+          'renderRequestPending' : !!$10,
+          'viewportSettlePending' : !!$11,
         });
       },
       selectedCount, pendingClick, workerBusy, dragging, dragHasVisualChange, pointerX, pointerY,
-      eyedropperArmed, eyedropperReady, eyedropperUnavailable);
+      eyedropperArmed, eyedropperReady, eyedropperUnavailable, renderRequestPending, viewportSettlePending);
   // clang-format on
 }
 
@@ -8525,17 +8528,18 @@ void EditorShell::recordFrameTelemetry(
   {
     const ImVec2 imguiMousePos = ImGui::GetIO().MousePos;
     const bool pointerValid = ImGui::IsMousePosValid(&imguiMousePos);
-    PublishInteractionStats(static_cast<int>(app_.selectedElements().size()),
-                            interactionController_.pendingClick().has_value() ? 1 : 0,
-                            renderCoordinator_.asyncRenderer().isBusy() ? 1 : 0,
-                            selectTool_.isDragging() ? 1 : 0,
-                            selectTool_.dragHasVisualChange() ? 1 : 0,
-                            pointerValid ? static_cast<double>(imguiMousePos.x) : -1.0,
-                            pointerValid ? static_cast<double>(imguiMousePos.y) : -1.0,
-                            activeTool_ == ActiveTool::Eyedropper,
-                            renderCoordinator_.documentPixelCaptureFor(
-                                app_, interactionController_.viewport()) != nullptr,
-                            renderCoordinator_.documentPixelCaptureUnavailable());
+    PublishInteractionStats(
+        static_cast<int>(app_.selectedElements().size()),
+        interactionController_.pendingClick().has_value() ? 1 : 0,
+        renderCoordinator_.asyncRenderer().isBusy() ? 1 : 0, selectTool_.isDragging() ? 1 : 0,
+        selectTool_.dragHasVisualChange() ? 1 : 0,
+        pointerValid ? static_cast<double>(imguiMousePos.x) : -1.0,
+        pointerValid ? static_cast<double>(imguiMousePos.y) : -1.0,
+        activeTool_ == ActiveTool::Eyedropper,
+        renderCoordinator_.documentPixelCaptureFor(app_, interactionController_.viewport()) !=
+            nullptr,
+        renderCoordinator_.documentPixelCaptureUnavailable(), requestRenderAtEndOfFrame_,
+        renderCoordinator_.hasPendingViewportSettle());
   }
   publishEyedropperTestStateIfEnabled();
   {

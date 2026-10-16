@@ -58,6 +58,8 @@ interface Diagnostics extends Window {
     pointerY: number;
     pendingClick: boolean;
     workerBusy: boolean;
+    renderRequestPending?: boolean;
+    viewportSettlePending?: boolean;
     selectedCount: number;
     dragging: boolean;
     moved: boolean;
@@ -254,10 +256,20 @@ async function dispatchPointer(page: Page, point: { x: number; y: number }, clic
 }
 
 async function waitForIdle(page: Page) {
+  // Historical baseline bundles predate queued-work telemetry. Candidates must explicitly report
+  // both flags false: an idle worker alone can still be waiting for the zoom debounce deadline.
+  const expected = process.env.DONNER_BROWSER_BASELINE === "1"
+    ? { pendingClick: false, workerBusy: false }
+    : {
+      pendingClick: false,
+      workerBusy: false,
+      renderRequestPending: false,
+      viewportSettlePending: false,
+    };
   await expect.poll(async () => (await snapshot(page)).interaction, {
-    message: "the editor must consume pending input and finish its foreground render",
+    message: "the editor must consume pending input and finish queued and active viewport work",
     timeout: 15000,
-  }).toEqual(expect.objectContaining({ pendingClick: false, workerBusy: false }));
+  }).toEqual(expect.objectContaining(expected));
 }
 
 // Opening a sample is observable before the editor displays it: the sample attribute changes, and
