@@ -348,7 +348,7 @@ TEST(DonnerSvgTool, RejectsInvalidAnimationValues) {
 
   err.str("");
   EXPECT_EQ(RunTool({"--gif", "out.gif", "--end", "100000", "input.svg"}, &out, &err), 1);
-  EXPECT_THAT(err.str(), testing::HasSubstr("the limit is 10000"));
+  EXPECT_THAT(err.str(), testing::HasSubstr("more than 10000 frames"));
 }
 
 TEST(DonnerSvgTool, ScaleCannotCombineWithWidth) {
@@ -415,6 +415,24 @@ TEST_F(DonnerSvgToolFileTest, GifFrameCountCoversEveryFrameBeforeEnd) {
             0)
       << err.str();
   EXPECT_THAT(out.str(), testing::HasSubstr("Frames: 3 rendered"));
+
+  // The sample at t = 1 s is still before an end of 1.0000005 s.
+  out.str("");
+  ASSERT_EQ(RunTool({"--gif", gifPath.string(), "--end", "1.0000005", "--fps", "1", "--background",
+                     "white", inputPath.string()},
+                    &out, &err),
+            0)
+      << err.str();
+  EXPECT_THAT(out.str(), testing::HasSubstr("Frames: 2 rendered"));
+
+  // An exact multiple of the frame period does not gain a frame at the end time.
+  out.str("");
+  ASSERT_EQ(RunTool({"--gif", gifPath.string(), "--end", "1", "--fps", "30", "--background",
+                     "white", inputPath.string()},
+                    &out, &err),
+            0)
+      << err.str();
+  EXPECT_THAT(out.str(), testing::HasSubstr("Frames: 30 rendered"));
 }
 
 TEST_F(DonnerSvgToolFileTest, GifKeepsCanvasSizeWhenRootSizeAnimates) {
