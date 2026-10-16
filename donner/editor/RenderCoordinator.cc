@@ -1919,9 +1919,7 @@ bool RenderCoordinator::canPostViewportRender(bool selectedViewportDeferred,
     return false;
   }
   // Speculative warmup only wakes callers that register their pending demand.
-  const bool busy = viewportSettleDue_.has_value()
-                        ? renderWorker_.asyncRenderer.isBusyWithIdleWake()
-                        : renderWorker_.asyncRenderer.isBusy();
+  const bool busy = renderWorker_.asyncRenderer.isBusyWithIdleWake();
   return !busy || supersedeInFlight;
 }
 
