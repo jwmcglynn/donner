@@ -6419,7 +6419,7 @@ TEST(RenderCoordinatorTest, BufferedSelectionPressDefersCanvasCommitUntilConsume
     return coordinator.maybeRequestRender(app, selectTool, viewport, &textures, false,
                                           SelectionChromeDetail::Full, pendingPress);
   };
-  // Buffered input must not prevent the first document canvas from being established.
+  // Buffered input still allows preparation that does not resize the existing document canvas.
   ASSERT_TRUE(request(true));
   ASSERT_TRUE(DrainCoordinator(coordinator, app, viewport, textures));
   const auto canvas = app.document().document().canvasSize();

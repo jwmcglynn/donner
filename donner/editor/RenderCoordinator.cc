@@ -1866,7 +1866,8 @@ void RenderCoordinator::configurePresentationRepair(RenderRequest& request) cons
 }
 
 RenderCoordinator::CanvasCommitPlan RenderCoordinator::prepareCanvasCommit(
-    const EditorRasterViewport& rasterViewport, Vector2i actualDocumentCanvas, bool hasActiveDrag) {
+    const EditorRasterViewport& rasterViewport, Vector2i actualDocumentCanvas, bool hasActiveDrag,
+    bool pendingCanvasSelectionPress) {
   const Vector2i desiredCanvasSize = rasterViewport.semanticCanvasSizePx;
   // Compare desired size against the live document size. Document replacement
   // can reset the stored canvas size, and LayoutSystem readback can round by a
@@ -1892,7 +1893,8 @@ RenderCoordinator::CanvasCommitPlan RenderCoordinator::prepareCanvasCommit(
   // the overlay. Committing a zoom-driven canvas size here invalidates the render tree and can
   // rerasterize every cached span before the next pointer frame; defer that crisp refresh until
   // mouse-up unless the document still needs its first canvas.
-  const bool deferCanvasCommitForActiveDrag = hasActiveDrag && !firstCommit;
+  const bool deferCanvasCommitForActiveDrag =
+      (hasActiveDrag || pendingCanvasSelectionPress) && !firstCommit;
   updateCanvasCommitWakes(wouldChange, firstCommit, deferCanvasCommitForActiveDrag);
   return {.now = now,
           .willCommit =
@@ -2049,7 +2051,7 @@ bool RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectToo
                                            const ViewportState& viewport, GlTextureCache* textures,
                                            bool supersedeInFlight,
                                            SelectionChromeDetail directSurfaceSelectionDetail,
-                                           [[maybe_unused]] bool pendingCanvasSelectionPress) {
+                                           bool pendingCanvasSelectionPress) {
   ZoneScopedN("RenderCoordinator::maybeRequestRender");
   if (!app.hasDocument() || viewport.paneSize.x <= 0.0 || viewport.paneSize.y <= 0.0) {
     viewportSettleDue_.reset();
@@ -2059,8 +2061,8 @@ bool RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectToo
   const EditorRasterViewport rasterViewport = viewport.rasterViewport();
   const Vector2i actualDocumentCanvas = app.document().document().canvasSize();
   const auto dragPreview = previewWithPresentationEpoch(selectTool.activeDragPreview());
-  const CanvasCommitPlan canvas =
-      prepareCanvasCommit(rasterViewport, actualDocumentCanvas, dragPreview.has_value());
+  const CanvasCommitPlan canvas = prepareCanvasCommit(
+      rasterViewport, actualDocumentCanvas, dragPreview.has_value(), pendingCanvasSelectionPress);
   const auto currentVersion = app.document().currentFrameVersion();
   DocumentPixelCaptureIdentity desiredCapture;
   bool captureNeeded = preparePixelCaptureRequest(app, viewport, &desiredCapture);

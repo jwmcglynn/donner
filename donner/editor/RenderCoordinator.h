@@ -546,7 +546,8 @@ private:
     bool forceRasterization = false;
   };
   CanvasCommitPlan prepareCanvasCommit(const EditorRasterViewport& rasterViewport,
-                                       Vector2i actualDocumentCanvas, bool hasActiveDrag);
+                                       Vector2i actualDocumentCanvas, bool hasActiveDrag,
+                                       bool pendingCanvasSelectionPress);
   bool needsOverviewForRender(EditorApp& app, const EditorRasterViewport& rasterViewport,
                               bool hasActiveDrag, const GlTextureCache* textures,
                               bool willCommitCanvas);
