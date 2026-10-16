@@ -6425,6 +6425,7 @@ TEST(RenderCoordinatorTest, ContinuousSelectedZoomDefersViewportPrewarmUntilStab
 
   RenderCoordinatorTestAccess::advanceFakeSchedulingClock(
       RenderCoordinatorTestAccess::kCanvasSizeCommitDelay);
+  EXPECT_THAT(coordinator.nextViewportSettleWakeSeconds(), testing::Optional(testing::Eq(0.0f)));
   coordinator.maybeRequestRender(app, selectTool, viewport, &textures);
   EXPECT_TRUE(coordinator.asyncRenderer().isBusy())
       << "Once the viewport has settled, the coordinator should request one crisp selected "
@@ -6436,6 +6437,7 @@ TEST(RenderCoordinatorTest, ContinuousSelectedZoomDefersViewportPrewarmUntilStab
   ASSERT_TRUE(waitForCoordinator());
   ASSERT_TRUE(textures.presentationResources()->capture()->identity().sameScene(
       textures.presentationResources()->overviewCapture()->identity()));
+  EXPECT_FALSE(coordinator.nextViewportSettleWakeSeconds().has_value());
   const Vector2i visibleCanvas = viewport.rasterViewport().outputSizePx;
   const Vector2i paddedCanvas = viewport.selectedPrewarmRasterViewport().outputSizePx;
   ASSERT_NE(visibleCanvas, paddedCanvas)

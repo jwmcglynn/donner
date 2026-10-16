@@ -1641,6 +1641,20 @@ public:
         shell.renderCoordinator_.schedulingNow() - std::chrono::milliseconds(1);
   }
 
+  static void ExpireViewportSettleWake(EditorShell& shell) {
+    shell.viewportInitialized_ = true;
+    shell.showSamplePicker_ = false;
+    shell.samplePresentationPending_ = false;
+    shell.renderCoordinator_.viewportSettleDue_ =
+        shell.renderCoordinator_.schedulingNow() - std::chrono::milliseconds(1);
+  }
+
+  static void QueueIdleRenderRefresh(EditorShell& shell) { shell.queueIdleRenderRefreshIfNeeded(); }
+
+  static std::optional<float> ViewportRenderWake(const EditorShell& shell) {
+    return shell.nextViewportRenderWakeSeconds();
+  }
+
   static bool EyedropperCanvasCommitWakePending(const EditorShell& shell) {
     return shell.renderCoordinator_.pixelCaptureCanvasCommitDue_.has_value();
   }
@@ -8292,6 +8306,27 @@ TEST(EditorShellTest, ReplayToolSwitchCancelsEyedropperCapture) {
     EXPECT_THAT(EditorShellTestAccess::EyedropperCaptureEnabled(shell), testing::Eq(false));
     EXPECT_THAT(EditorShellTestAccess::ActiveToolIsEyedropper(shell), testing::Eq(false));
   }
+}
+
+TEST(EditorShellTest, IdleViewportSettleWakeQueuesRenderAndWaitsBehindPicker) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "Hidden editor window is unavailable on this host";
+  }
+  EditorShell shell(window, OptionsWithSource(kInitialSvg));
+  ASSERT_TRUE(shell.valid());
+  EditorShellTestAccess::ClearRequestRenderAtEndOfFrame(shell);
+  EditorShellTestAccess::ExpireViewportSettleWake(shell);
+  ASSERT_THAT(shell.nextIdleWakeSeconds(), testing::Optional(testing::Eq(0.0f)));
+  EditorShellTestAccess::QueueIdleRenderRefresh(shell);
+  EXPECT_TRUE(EditorShellTestAccess::RequestRenderAtEndOfFrame(shell));
+
+  EditorShellTestAccess::ClearRequestRenderAtEndOfFrame(shell);
+  EditorShellTestAccess::SetShowSamplePicker(shell, true);
+  EXPECT_EQ(EditorShellTestAccess::ViewportRenderWake(shell), std::nullopt);
+  EditorShellTestAccess::SetShowSamplePicker(shell, false);
+  EXPECT_THAT(EditorShellTestAccess::ViewportRenderWake(shell),
+              testing::Optional(testing::Eq(0.0f)));
 }
 
 TEST(EditorShellTest, IdleEyedropperArmingAndCanvasCommitWakeDispatchRender) {

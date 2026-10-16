@@ -520,6 +520,7 @@ private:
   [[gnu::noinline]] void snapshotReproFrame();
 #endif
   [[gnu::noinline]] void renderMenuBarAndDialogs(bool compactUi);
+  [[nodiscard]] std::optional<float> nextViewportRenderWakeSeconds() const;
   void queueIdleRenderRefreshIfNeeded();
   [[gnu::noinline]] void applyDeferredRenderRequest();
   [[gnu::noinline]] void recordFrameTelemetry(

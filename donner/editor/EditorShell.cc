@@ -1696,6 +1696,22 @@ EditorShell::EditorShell(gui::EditorWindow& window, EditorShellOptions options)
   queueBackgroundFontPreviews();
 }
 
+std::optional<float> EditorShell::nextViewportRenderWakeSeconds() const {
+  const auto captureWake = renderCoordinator_.nextPixelCaptureCanvasCommitWakeSeconds();
+  std::optional<float> settleWake;
+  if (app_.hasDocument() && viewportInitialized_ &&
+      (!showSamplePicker_ || samplePresentationPending_)) {
+    settleWake = renderCoordinator_.nextViewportSettleWakeSeconds();
+  }
+  if (!captureWake.has_value()) {
+    return settleWake;
+  }
+  if (!settleWake.has_value()) {
+    return captureWake;
+  }
+  return std::min(*captureWake, *settleWake);
+}
+
 std::optional<float> EditorShell::nextIdleWakeSeconds() const {
   std::optional<float> result;
   const auto includeWake = [&result](std::optional<float> wakeSeconds) {
@@ -1720,7 +1736,7 @@ std::optional<float> EditorShell::nextIdleWakeSeconds() const {
     includeWake(0.25f);
   }
   includeWake(documentSyncController_.nextTextSyncWakeSeconds());
-  includeWake(renderCoordinator_.nextPixelCaptureCanvasCommitWakeSeconds());
+  includeWake(nextViewportRenderWakeSeconds());
   includeWake(renderCoordinator_.nextNothingToPresentRetryWakeSeconds());
   includeWake(textEditor_.nextFlashWakeSeconds());
   includeWake(textEditor_.nextRopeAnimationWakeSeconds());
@@ -8353,8 +8369,7 @@ void EditorShell::renderMenuBarAndDialogs(bool compactUi) {
 }
 
 void EditorShell::queueIdleRenderRefreshIfNeeded() {
-  const std::optional<float> canvasCommitWake =
-      renderCoordinator_.nextPixelCaptureCanvasCommitWakeSeconds();
+  const std::optional<float> canvasCommitWake = nextViewportRenderWakeSeconds();
   if (canvasCommitWake.has_value() && *canvasCommitWake <= 0.0f) {
     requestRenderAtEndOfFrame_ = true;
   }

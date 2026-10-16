@@ -846,6 +846,7 @@ void RenderCoordinator::resetForLoadedDocument(std::uint64_t documentGeneration)
   pendingCanvasSizeSince_ = std::chrono::steady_clock::time_point{};
   pendingRasterViewport_.reset();
   pendingRasterViewportSince_ = std::chrono::steady_clock::time_point{};
+  viewportSettleDue_.reset();
   overviewDocVersion_ = 0;
   pendingOverviewResult_.reset();
   pendingPresentationRefresh_ = false;
@@ -984,7 +985,11 @@ void RenderCoordinator::noteSelectedPromotionAvailability(const RenderResult& re
 }
 
 std::optional<float> RenderCoordinator::nextViewportSettleWakeSeconds() const {
-  return std::nullopt;
+  if (!viewportSettleDue_.has_value() || renderWorker_.asyncRenderer.isBusy()) {
+    return std::nullopt;
+  }
+  const auto remaining = *viewportSettleDue_ - schedulingNow();
+  return std::max(0.0f, std::chrono::duration<float>(remaining).count());
 }
 
 std::optional<float> RenderCoordinator::nextPixelCaptureCanvasCommitWakeSeconds() const {
@@ -1114,21 +1119,30 @@ void RenderCoordinator::recordPixelCaptureRequest(const RenderRequest& request,
   }
 }
 
-void RenderCoordinator::updatePixelCaptureCanvasCommitWake(bool wouldChange, bool firstCommit,
-                                                           bool deferForActiveDrag) {
-  if (documentPixelCaptureEnabled_ && wouldChange && !firstCommit && !deferForActiveDrag) {
-    pixelCaptureCanvasCommitDue_ = pendingCanvasSizeSince_ + kCanvasSizeCommitDelay;
-  } else {
-    pixelCaptureCanvasCommitDue_.reset();
+void RenderCoordinator::noteSelectedViewportDeferral(bool deferred) {
+  if (deferred) {
+    // This deferral must settle even if the canvas-size deadline has already elapsed.
+    viewportSettleDue_ = pendingRasterViewportSince_ + kCanvasSizeCommitDelay;
   }
 }
 
-void RenderCoordinator::noteCanvasSizeCommitForPixelCapture(const EditorApp& app,
-                                                            const ViewportState& viewport,
-                                                            DocumentPixelCaptureIdentity* desired,
-                                                            bool* captureNeeded,
-                                                            bool* forcePresentationRefresh) {
+void RenderCoordinator::updateCanvasCommitWakes(bool wouldChange, bool firstCommit,
+                                                bool deferForActiveDrag) {
+  viewportSettleDue_.reset();
   pixelCaptureCanvasCommitDue_.reset();
+  if (wouldChange && !firstCommit && !deferForActiveDrag) {
+    viewportSettleDue_ = pendingCanvasSizeSince_ + kCanvasSizeCommitDelay;
+    if (documentPixelCaptureEnabled_) {
+      pixelCaptureCanvasCommitDue_ = viewportSettleDue_;
+    }
+  }
+}
+
+void RenderCoordinator::noteCanvasSizeCommit(const EditorApp& app, const ViewportState& viewport,
+                                             DocumentPixelCaptureIdentity* desired,
+                                             bool* captureNeeded, bool* forcePresentationRefresh) {
+  pixelCaptureCanvasCommitDue_.reset();
+  viewportSettleDue_.reset();
   if (!documentPixelCaptureEnabled_) {
     return;
   }
@@ -1879,7 +1893,7 @@ RenderCoordinator::CanvasCommitPlan RenderCoordinator::prepareCanvasCommit(
   // rerasterize every cached span before the next pointer frame; defer that crisp refresh until
   // mouse-up unless the document still needs its first canvas.
   const bool deferCanvasCommitForActiveDrag = hasActiveDrag && !firstCommit;
-  updatePixelCaptureCanvasCommitWake(wouldChange, firstCommit, deferCanvasCommitForActiveDrag);
+  updateCanvasCommitWakes(wouldChange, firstCommit, deferCanvasCommitForActiveDrag);
   return {.now = now,
           .willCommit =
               ShouldCommitCanvas(pendingCanvasSize_, wouldChange, deferCanvasCommitForActiveDrag,
@@ -1904,7 +1918,11 @@ bool RenderCoordinator::canPostViewportRender(bool selectedViewportDeferred,
     }
     return false;
   }
-  return !renderWorker_.asyncRenderer.isBusy() || supersedeInFlight;
+  // Speculative warmup only wakes callers that register their pending demand.
+  const bool busy = viewportSettleDue_.has_value()
+                        ? renderWorker_.asyncRenderer.isBusyWithIdleWake()
+                        : renderWorker_.asyncRenderer.isBusy();
+  return !busy || supersedeInFlight;
 }
 
 void RenderCoordinator::prepareSelectedRenderSchedule(EditorApp& app, const ViewportState& viewport,
@@ -1960,8 +1978,7 @@ void RenderCoordinator::commitCanvasForRender(EditorApp& app, const ViewportStat
   ++lastFrameCostBreakdown_.documentCanvasCommitCount;
   ++documentCanvasCommitTotal_;
   lastFrameCostBreakdown_.lastCommittedCanvasSize = pendingCanvasSize_;
-  noteCanvasSizeCommitForPixelCapture(app, viewport, desiredCapture, captureNeeded,
-                                      forcePresentationRefresh);
+  noteCanvasSizeCommit(app, viewport, desiredCapture, captureNeeded, forcePresentationRefresh);
 }
 
 void RenderCoordinator::prepareRenderPresentation(EditorApp& app, const ViewportState& viewport,
@@ -2036,6 +2053,7 @@ bool RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectToo
                                            SelectionChromeDetail directSurfaceSelectionDetail) {
   ZoneScopedN("RenderCoordinator::maybeRequestRender");
   if (!app.hasDocument() || viewport.paneSize.x <= 0.0 || viewport.paneSize.y <= 0.0) {
+    viewportSettleDue_.reset();
     return false;
   }
 
@@ -2059,6 +2077,7 @@ bool RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectToo
       selection.entity, dragPreview.has_value(), currentVersion, displayedDocVersion_,
       compositedPresentation_.hasCachedTextures(), canvas.rasterViewportSettled,
       requestOverviewInfill, selection.forceRasterization || selectedPrewarmRecoveryPending_);
+  noteSelectedViewportDeferral(deferSelectedViewportRefresh);
   if (!canPostViewportRender(deferSelectedViewportRefresh, requestOverviewInfill, captureNeeded,
                              supersedeInFlight)) {
     return false;
