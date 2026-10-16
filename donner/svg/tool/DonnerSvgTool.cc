@@ -887,10 +887,12 @@ int RunDonnerSvgTool(int argc, char* argv[], std::ostream& out, std::ostream& er
   // single-frame output. The GPU backend serves interactive, multi-frame
   // rendering such as the editor.
   RendererTinySkia renderer(options.verbose);
+  // Animated root width and height are applied when drawing, so size the canvas from the
+  // document as drawn at the time being rendered: --start for a GIF, the initial time for PNG.
   if (!options.gifFile.empty()) {
-    // Animated root width and height are applied when drawing, so size the canvas from the
-    // document as drawn at --start.
     document.setTime(options.startSeconds);
+  }
+  if (!options.gifFile.empty() || options.scale || options.width > 0 || options.height > 0) {
     renderer.draw(document);
   }
 
