@@ -1,3 +1,4 @@
+import { dispatchCanvasPointer } from "./canvas-pointer";
 import { expect, type Page, type TestInfo, type Worker } from "@playwright/test";
 import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
@@ -202,7 +203,7 @@ async function openBasicShapes(page: Page, priorResults: number) {
   const canvas = page.locator("canvas#canvas");
   const bounds = await canvas.boundingBox();
   expect(bounds, "the editor canvas is missing").not.toBeNull();
-  await page.mouse.click(bounds!.x + bounds!.width * 0.76, bounds!.y + 282);
+  await dispatchCanvasPointer(page, { x: bounds!.x + bounds!.width * 0.76, y: bounds!.y + 282 }, true);
   await expect(canvas).toHaveAttribute("data-active-sample-id", "basic-shapes");
   await expect.poll(async () => (await readWorkerStats(page))?.completedResults, { timeout: 10000 })
     .toBeGreaterThan(priorResults);
