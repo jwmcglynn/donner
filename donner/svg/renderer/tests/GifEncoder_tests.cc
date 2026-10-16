@@ -354,6 +354,7 @@ TEST(GifEncoder, QuantizesWithTransparencyReservingTheLastIndex) {
   const DecodedGif gif = Decode(encoder.finish());
   ASSERT_THAT(gif.frames, SizeIs(1));
   EXPECT_EQ(gif.frames[0].colorTableSize, 256);
+  EXPECT_THAT(gif.frames[0].transparentIndex, Optional(255));
   EXPECT_THAT(std::vector<uint8_t>(gif.frames[0].rgba.begin(), gif.frames[0].rgba.begin() + 4),
               ElementsAre(0, 0, 0, 0));
 

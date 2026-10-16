@@ -22,6 +22,8 @@ struct DecodedGifFrame {
   int disposal = 0;           //!< Disposal method from the graphic control extension.
   int delayCentiseconds = 0;  //!< Frame delay from the graphic control extension.
   int colorTableSize = 0;     //!< Entries in the color table used by this frame.
+  /// Transparent color index from the graphic control extension, if transparency is enabled.
+  std::optional<int> transparentIndex;
 };
 
 /// A decoded GIF file.

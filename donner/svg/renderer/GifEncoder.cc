@@ -559,6 +559,7 @@ void GifEncoder::extendPendingDelay(uint16_t delayCentiseconds) {
   pending_ = std::move(repeat);
   ++storedFrameCount_;
 }
+
 void GifEncoder::flushPending() {
   if (!pending_) {
     return;
