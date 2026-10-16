@@ -173,8 +173,11 @@ export function loadLibrary({
   nowForTesting = () => performance.now(),
   timersForTesting = null,
   userAgentForTesting = undefined,
+  sharedHeapForTesting = false,
 } = {}) {
-  const heap = new ArrayBuffer(64 * 1024);
+  const heap = sharedHeapForTesting
+    ? new SharedArrayBuffer(64 * 1024)
+    : new ArrayBuffer(64 * 1024);
   const bytes = new Uint8Array(heap);
   const words = new Uint32Array(heap);
   const encoder = new TextEncoder();
@@ -198,6 +201,8 @@ export function loadLibrary({
       info: (...parts) => consoleInfo.push(parts.map(String).join(" ")),
     },
     ...(timersForTesting ?? {}),
+    SharedArrayBuffer,
+    Atomics,
     HEAPU8: bytes,
     HEAPU32: words,
     UTF8ToString(pointer, byteCount) {

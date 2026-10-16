@@ -833,3 +833,65 @@ test("a timer or adapter that faults inside the trace leaves the request alone",
   await beginReady(adapterBridge, kFirst);
   assert.notEqual(adapterBridge.state.device, null);
 });
+
+
+test("shared device status follows ready, loss and per-client release", async () => {
+  const bridge = loadLibrary({ sharedHeapForTesting: true });
+  const { entryPoints: api, state, words } = bridge;
+  const first = bridge.reserve(4);
+  const second = bridge.reserve(4);
+  state.openLogical(kFirst);
+  assert.equal(api.donner_gpu_register_device_status(kFirst, first), state.kSuccess);
+  assert.equal(Atomics.load(words, first / 4), state.kNotOwner);
+  await beginReady(bridge, kFirst);
+  assert.equal(Atomics.load(words, first / 4), state.kSuccess);
+  state.openLogical(kSecond);
+  assert.equal(api.donner_gpu_register_device_status(kSecond, second), state.kSuccess);
+  assert.equal(Atomics.load(words, second / 4), state.kSuccess);
+  await beginReady(bridge, kSecond);
+  bridge.lose({ reason: "destroyed", message: "status publication test" });
+  await until(() => Atomics.load(words, first / 4) === state.kDeviceLost, "published loss");
+  assert.equal(Atomics.load(words, second / 4), state.kDeviceLost);
+  api.donner_gpu_release_device(kFirst);
+  assert.equal(Atomics.load(words, first / 4), state.kNotOwner);
+  assert.equal(Atomics.load(words, second / 4), state.kDeviceLost);
+});
+
+test("release detaches a status address before a later loss callback", async () => {
+  const bridge = loadLibrary({ sharedHeapForTesting: true });
+  const { entryPoints: api, state, words } = bridge;
+  await beginReady(bridge, kFirst);
+  await beginReady(bridge, kSecond);
+  const first = bridge.reserve(4);
+  const second = bridge.reserve(4);
+  assert.equal(api.donner_gpu_register_device_status(kFirst, first), state.kSuccess);
+  assert.equal(api.donner_gpu_register_device_status(kSecond, second), state.kSuccess);
+  api.donner_gpu_release_device(kFirst);
+  Atomics.store(words, first / 4, 0x12345678);
+  bridge.lose({ reason: "destroyed", message: "after first client release" });
+  await until(() => Atomics.load(words, second / 4) === state.kDeviceLost, "remaining client loss");
+  assert.equal(Atomics.load(words, first / 4), 0x12345678);
+  api.donner_gpu_release_device(kSecond);
+  assert.equal(Atomics.load(words, second / 4), state.kNotOwner);
+});
+
+test("status registration rejects invalid, replaced and aliased addresses", async () => {
+  const bridge = loadLibrary({ sharedHeapForTesting: true });
+  const { entryPoints: api, state, words } = bridge;
+  const first = bridge.reserve(4);
+  const second = bridge.reserve(4);
+  assert.equal(api.donner_gpu_register_device_status(kFirst, first), state.kNotOwner);
+  await beginReady(bridge, kFirst);
+  await beginReady(bridge, kSecond);
+  for (const address of [0, -4, 2, words.byteLength, NaN, Infinity]) {
+    assert.equal(api.donner_gpu_register_device_status(kFirst, address), state.kFailed);
+  }
+  assert.equal(api.donner_gpu_register_device_status(kFirst, first), state.kSuccess);
+  assert.equal(api.donner_gpu_register_device_status(kFirst, first), state.kSuccess);
+  assert.equal(api.donner_gpu_register_device_status(kFirst, second), state.kFailed);
+  assert.equal(api.donner_gpu_register_device_status(kSecond, first), state.kFailed);
+  assert.equal(Atomics.load(words, first / 4), state.kSuccess);
+  const local = loadLibrary();
+  await beginReady(local, kFirst);
+  assert.equal(local.entryPoints.donner_gpu_register_device_status(kFirst, local.reserve(4)), local.state.kFailed);
+});

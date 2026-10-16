@@ -3,6 +3,7 @@
 /// \c donner::gpu::browser::EmscriptenBrowserBridge - the bridge implementation that calls the
 /// browser.
 
+#include <atomic>
 #include <cstdint>
 #include <functional>
 #include <map>
@@ -17,9 +18,10 @@ namespace donner::gpu::browser {
  * The \ref BrowserBridge implementation that actually calls the browser's GPU service.
  *
  * Every method forwards to one entry point of `library_donner_gpu.js`, which owns the browser
- * objects and performs the identifier, kind and ownership checks on its side. This class holds no
- * browser state of its own beyond the mapped bytes it copies out of the browser's heap, so what
- * exists is recorded in one place rather than in two that could disagree.
+ * objects and performs the identifier, kind and ownership checks on its side. The owner publishes
+ * ownership/loss transitions into a registered atomic word; callers read that authoritative
+ * publication without a round trip. Release clears and detaches the word before this bridge dies.
+ * Other browser state stays on the owner, apart from explicitly mapped bytes.
  *
  * Each bridge is one logical device and names itself to the library by a handle it is given at
  * construction, which every entry point takes first. Handles come from one counter shared by every
@@ -153,6 +155,11 @@ private:
 
   /// The handle this bridge names its logical device by in every library call.
   uint32_t logicalDevice_;
+
+  /// Protocol status written only by the browser owner while registered, detached on release.
+  std::atomic<uint32_t> deviceStatusWord_{0};
+  bool deviceStatusRegistered_ = false;
+  [[nodiscard]] BridgeStatus readPublishedDeviceStatus() const;
 
   /// Identity of the browser device this logical device runs on, held once the library first
   /// names it; shared with every bridge and every share over the same browser device in this

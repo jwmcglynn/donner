@@ -350,6 +350,7 @@ var LibraryDonnerGpu = {
       record = {
         handle: handle,
         requested: false,
+        deviceStatusAddress: 0,
         // Why this logical device's own request was refused, which is its alone: a protocol table
         // that disagrees with this library, or a second request on one handle.
         failure: "",
@@ -375,6 +376,8 @@ var LibraryDonnerGpu = {
       if (record === null) {
         return;
       }
+      DonnerGpu.publishDeviceStatus(record, DonnerGpu.kNotOwner);
+      record.deviceStatusAddress = 0;
       record.objects.forEach(function(entry) {
         DonnerGpu.releaseProducerHold(entry);
       });
@@ -382,6 +385,20 @@ var LibraryDonnerGpu = {
       if (DonnerGpu.logical.size === 0) {
         DonnerGpu.releaseSharedDevice();
       }
+    },
+
+    publishDeviceStatus: function(record, status) {
+      if (record.deviceStatusAddress !== 0) {
+        Atomics.store(HEAPU32, record.deviceStatusAddress / 4, status);
+      }
+    },
+
+    publishDeviceStatuses: function() {
+      var status = DonnerGpu.device === null ? DonnerGpu.kNotOwner
+        : DonnerGpu.lost ? DonnerGpu.kDeviceLost : DonnerGpu.kSuccess;
+      DonnerGpu.logical.forEach(function(record) {
+        DonnerGpu.publishDeviceStatus(record, status);
+      });
     },
 
     // The acquisition trace is observation only: it must never change a request or its outcome.
@@ -544,6 +561,7 @@ var LibraryDonnerGpu = {
         if (DonnerGpu.device === device) {
           DonnerGpu.lost = true;
           DonnerGpu.lostReason = String(info.reason) + ": " + String(info.message);
+          DonnerGpu.publishDeviceStatuses();
           // The browser's free-text message stays in lostReason, which the runtime reports; the
           // trace line carries only the reason token, so no message can read as a failure pattern.
           DonnerGpu.traceGuarded(function() {
@@ -555,6 +573,7 @@ var LibraryDonnerGpu = {
         }
       });
       DonnerGpu.requestState = DonnerGpu.kRequestReady;
+      DonnerGpu.publishDeviceStatuses();
     },
 
     // Lets the browser device go once no logical device is left over it. The shares go with it: no
@@ -1231,6 +1250,27 @@ var LibraryDonnerGpu = {
       return DonnerGpu.kSuccess;
     }
     DonnerGpu.requestBrowserDevice();
+    return DonnerGpu.kSuccess;
+  },
+
+  donner_gpu_register_device_status__deps: ["$DonnerGpu"],
+  donner_gpu_register_device_status: function(handle, address) {
+    var record = DonnerGpu.logicalFor(handle);
+    if (record === null) return DonnerGpu.kNotOwner;
+    if (
+      typeof SharedArrayBuffer === "undefined" || !(HEAPU32.buffer instanceof SharedArrayBuffer)
+      || !Number.isSafeInteger(address) || address <= 0 || address % 4 !== 0
+      || address > HEAPU32.byteLength - 4
+      || (record.deviceStatusAddress !== 0 && record.deviceStatusAddress !== address)
+    ) return DonnerGpu.kFailed;
+    var alreadyRegistered = false;
+    DonnerGpu.logical.forEach(function(other) {
+      if (other !== record && other.deviceStatusAddress === address) alreadyRegistered = true;
+    });
+    if (alreadyRegistered) return DonnerGpu.kFailed;
+    record.deviceStatusAddress = address;
+    DonnerGpu.publishDeviceStatus(record, DonnerGpu.device === null ? DonnerGpu.kNotOwner
+      : DonnerGpu.lost ? DonnerGpu.kDeviceLost : DonnerGpu.kSuccess);
     return DonnerGpu.kSuccess;
   },
 

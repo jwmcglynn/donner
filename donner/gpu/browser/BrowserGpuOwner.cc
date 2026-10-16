@@ -376,6 +376,14 @@ void StopBrowserGpuOwner() {
 #endif
 }
 
+bool HasBrowserGpuOwnerStopped() {
+#ifdef __EMSCRIPTEN_PTHREADS__
+  return gStopped.load(std::memory_order_acquire);
+#else
+  return false;
+#endif
+}
+
 bool UsesBrowserGpuOwner() {
 #ifdef __EMSCRIPTEN_PTHREADS__
   return gOwner.load(std::memory_order_acquire) != pthread_t{};

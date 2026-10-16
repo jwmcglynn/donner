@@ -10,6 +10,7 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdio>
+#include <cstdlib>
 #include <functional>
 #include <limits>
 #include <map>
@@ -40,6 +41,7 @@ extern "C" {
 
 int donner_gpu_check_protocol(unsigned int device, const unsigned int* codes, int count);
 void donner_gpu_release_device(unsigned int device);
+int donner_gpu_register_device_status(unsigned int device, void* address);
 int donner_gpu_begin_device_request(unsigned int device);
 int donner_gpu_device_request_state(unsigned int device);
 int donner_gpu_read_request_error(unsigned int device, char* destination, int capacity);
@@ -450,6 +452,16 @@ BridgeStatus EmscriptenBrowserBridge::beginDeviceRequest() {
       status != BridgeStatus::Success) {
     return status;
   }
+  if (UsesBrowserGpuOwner()) {
+    static_assert(sizeof(std::atomic<uint32_t>) == sizeof(uint32_t));
+    static_assert(std::atomic<uint32_t>::is_always_lock_free);
+    const BridgeStatus status = StatusFromBrowser(
+        CallBrowserGpu<donner_gpu_register_device_status>(logicalDevice_, &deviceStatusWord_));
+    if (status != BridgeStatus::Success) {
+      return status;
+    }
+    deviceStatusRegistered_ = true;
+  }
   return StatusFromBrowser(CallBrowserGpu<donner_gpu_begin_device_request>(logicalDevice_));
 }
 
@@ -461,15 +473,32 @@ RcString EmscriptenBrowserBridge::deviceRequestError() const {
   return ReadMessage(logicalDevice_, &CallBrowserGpu<donner_gpu_read_request_error>);
 }
 
+BridgeStatus EmscriptenBrowserBridge::readPublishedDeviceStatus() const {
+  if (HasBrowserGpuOwnerStopped()) {
+    std::abort();
+  }
+  return StatusFromBrowser(static_cast<int>(deviceStatusWord_.load(std::memory_order_acquire)));
+}
+
 bool EmscriptenBrowserBridge::ownsDevice() const {
+  if (deviceStatusRegistered_) {
+    const BridgeStatus status = readPublishedDeviceStatus();
+    return status == BridgeStatus::Success || status == BridgeStatus::DeviceLost;
+  }
   return CallBrowserGpu<donner_gpu_owns_device>(logicalDevice_) != 0;
 }
 
 bool EmscriptenBrowserBridge::isDeviceLost() const {
+  if (deviceStatusRegistered_) {
+    return readPublishedDeviceStatus() == BridgeStatus::DeviceLost;
+  }
   return CallBrowserGpu<donner_gpu_is_device_lost>(logicalDevice_) != 0;
 }
 
 BridgeStatus EmscriptenBrowserBridge::deviceStatus() const {
+  if (deviceStatusRegistered_) {
+    return readPublishedDeviceStatus();
+  }
   return CallBrowserGpuBatch([&] {
     if (!ownsDevice()) {
       return BridgeStatus::NotOwner;

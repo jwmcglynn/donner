@@ -56,6 +56,9 @@ void SetBrowserGpuOwnerCanvasFrameActive(bool active);
 /// This is terminal: later GPU calls fail closed instead of reverting to standalone dispatch.
 void StopBrowserGpuOwner();
 
+/// Whether the registered owner has permanently stopped accepting work.
+[[nodiscard]] bool HasBrowserGpuOwnerStopped();
+
 /// Whether this module has registered a shared browser GPU owner.
 [[nodiscard]] bool UsesBrowserGpuOwner();
 
