@@ -455,6 +455,21 @@ TEST_F(DonnerSvgToolFileTest, GifRejectsExcessiveTotalRenderWork) {
   EXPECT_FALSE(std::filesystem::exists(gifPath));
 }
 
+TEST_F(DonnerSvgToolFileTest, GifRejectsCanvasAboveTheRendererSurfaceBudget) {
+  const std::filesystem::path inputPath = WriteSvg("animated.svg", kAnimatedSvg);
+  const std::filesystem::path gifPath = tmpDir_ / "huge.gif";
+
+  std::ostringstream out;
+  std::ostringstream err;
+  // One 20000x10000 frame needs 800 MB, within the GIF side and total pixel limits.
+  EXPECT_EQ(RunTool({"--gif", gifPath.string(), "--end", "1", "--fps", "1", "--width", "20000",
+                     "--height", "10000", inputPath.string()},
+                    &out, &err),
+            4);
+  EXPECT_THAT(err.str(), testing::HasSubstr("above the renderer's surface budget"));
+  EXPECT_FALSE(std::filesystem::exists(gifPath));
+}
+
 TEST_F(DonnerSvgToolFileTest, GifKeepsCanvasSizeWhenRootSizeAnimates) {
   const std::filesystem::path inputPath = WriteSvg("growing.svg", R"(
 <svg xmlns="http://www.w3.org/2000/svg" width="20" height="10" viewBox="0 0 20 10">

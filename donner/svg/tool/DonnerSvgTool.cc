@@ -820,6 +820,14 @@ int RenderAnimatedGif(const CliOptions& options, SVGDocument& document, Renderer
         << kMaxScaledDimension << " pixels on a side\n";
     return 4;
   }
+  const std::uint64_t frameBytes =
+      static_cast<std::uint64_t>(gifSize.x) * static_cast<std::uint64_t>(gifSize.y) * 4;
+  if (frameBytes > RendererSurfaceBudget::kMaximumBytes) {
+    err << "GIF canvas " << gifSize.x << "x" << gifSize.y << " needs " << frameBytes
+        << " bytes per frame, above the renderer's surface budget of "
+        << RendererSurfaceBudget::kMaximumBytes << " bytes\n";
+    return 4;
+  }
   const std::uint64_t totalPixels = static_cast<std::uint64_t>(frameCount) *
                                     static_cast<std::uint64_t>(gifSize.x) *
                                     static_cast<std::uint64_t>(gifSize.y);
