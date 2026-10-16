@@ -145,7 +145,7 @@ TEST(GifEncoder, WritesSpecConformingLzwData) {
   // end = 5 with 3-bit codes. The codes are clear, 0, 6 (black black), 1, end, packed LSB first:
   // 0b10000100 = 0x84 and 0b01010011 = 0x53. These bytes were checked against an independent
   // decoder.
-  GifEncoder encoder({.width = 4, .height = 1});
+  GifEncoder encoder({.width = 4, .height = 1, .background = GifEncoder::Rgb{0, 0, 0}});
   Image frame(4, 1, 0, 0, 0);
   frame.set(3, 0, 255, 255, 255);
   ASSERT_TRUE(encoder.addFrame(frame.rgba, 0, 1));
@@ -250,6 +250,24 @@ TEST(GifEncoder, KeepsBinaryTransparencyWithoutBackground) {
   EXPECT_THAT(gif.frames, Each(Field(&DecodedGifFrame::disposal, 2)));
 }
 
+TEST(GifEncoder, OpaqueFramesOfATransparentGifStillDefineATransparentIndex) {
+  // Disposal 2 restores the logical screen background, which has no color without a global table.
+  // Every frame of a transparent GIF therefore carries a transparent index, so decoders that
+  // restore to it clear an opaque frame to transparency before a frame with transparent pixels.
+  GifEncoder encoder({.width = 2, .height = 1});
+  const Image opaque(2, 1, 0, 0, 255);
+  Image transparent = opaque;
+  transparent.set(0, 0, 0, 0, 0, 0);
+  ASSERT_TRUE(encoder.addFrame(opaque.rgba, 0, 2));
+  ASSERT_TRUE(encoder.addFrame(transparent.rgba, 0, 2));
+
+  const DecodedGif gif = Decode(encoder.finish());
+  ASSERT_THAT(gif.frames, SizeIs(2));
+  EXPECT_THAT(gif.frames[0].transparentIndex, Optional(1));
+  EXPECT_THAT(gif.frames[1].transparentIndex, Optional(1));
+  EXPECT_THAT(gif.frames[1].rgba, ElementsAre(0, 0, 0, 0, 0, 0, 255, 255));
+}
+
 TEST(GifEncoder, QuantizesManyColorsIntoOneFullColorTable) {
   constexpr int kSize = 64;
   Image gradient(kSize, kSize, 0, 0, 0);
@@ -312,7 +330,8 @@ TEST(GifEncoder, RoundTripsAcrossLzwDictionaryResets) {
     }
   }
 
-  GifEncoder encoder({.width = kSize, .height = kSize});
+  // Opaque, so all 256 colors fit the table exactly.
+  GifEncoder encoder({.width = kSize, .height = kSize, .background = GifEncoder::Rgb{0, 0, 0}});
   ASSERT_TRUE(encoder.addFrame(noise.rgba, 0, 1));
   const DecodedGif gif = Decode(encoder.finish());
   ASSERT_THAT(gif.frames, SizeIs(1));
@@ -333,7 +352,8 @@ TEST(GifEncoder, RoundTripsTwoColorImageAcrossLzwDictionaryResets) {
     }
   }
 
-  GifEncoder encoder({.width = kSize, .height = kSize});
+  // Opaque, so the table has exactly 2 entries.
+  GifEncoder encoder({.width = kSize, .height = kSize, .background = GifEncoder::Rgb{0, 0, 0}});
   ASSERT_TRUE(encoder.addFrame(noise.rgba, 0, 1));
   const DecodedGif gif = Decode(encoder.finish());
   ASSERT_THAT(gif.frames, SizeIs(1));
