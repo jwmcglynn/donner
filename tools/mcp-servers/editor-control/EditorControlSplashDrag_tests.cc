@@ -7,6 +7,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <sstream>
 #include <string>
 #include <utility>
 
@@ -137,30 +138,52 @@ TEST(EditorControlSessionTest, FractionalZoomFirstDragCapture) {
   options.rnrPath = rnrPath;
   options.svgPathOverride = root / "donner_splash.svg";
   options.outputDir = outputDir / "drained";
-  options.captureFrames = {9};
+  options.captureFrames = {9, 12};
   options.cropMode = repro::GlRnrReplayCropMode::DocumentCanvas;
   options.workerScheduling = repro::GlRnrReplayWorkerScheduling::DrainEachFrame;
   repro::GlRnrReplayResult result;
   std::string error;
   ASSERT_THAT(repro::RunGlRnrReplay(options, &result, &error), testing::IsTrue()) << error;
   ASSERT_THAT(result.finalSelectedElementLabel, testing::Optional(testing::HasSubstr("Donner_D")));
-  ASSERT_THAT(result.frameDiagnostics.size(), testing::Eq(10u));
-  const auto& released = result.frameDiagnostics.back();
+  ASSERT_THAT(result.frameDiagnostics.size(), testing::Eq(13u));
+  const auto& released = result.frameDiagnostics.at(9);
+  const auto& settled = result.frameDiagnostics.at(12);
+  std::ostringstream frameTrace;
+  for (const auto& frame : result.frameDiagnostics) {
+    frameTrace << "frame=" << frame.frameIndex << " document=" << frame.documentFrameVersion
+               << " presented=" << frame.presentationIdentity.version
+               << " epoch=" << frame.presentationIdentity.presentationEpoch
+               << " canvas=" << frame.documentCanvas
+               << " request=" << frame.requestRenderAtEndOfFrame
+               << " posted=" << frame.frameCost.renderRequestsPosted
+               << " repair=" << frame.frameCost.compositedRender.presentationRepairReason << '\n';
+  }
+  SCOPED_TRACE(frameTrace.str());
   EXPECT_GT(released.documentFrameVersion, result.frameDiagnostics.front().documentFrameVersion);
-  EXPECT_EQ(released.presentationIdentity.version, released.documentFrameVersion);
+  // DrainEachFrame waits before mouse-up dispatch; that frame may still carry a retained pose.
+  // Quiet frames cross canvas debounce and adopt overview plus crisp results without snap-back.
+  EXPECT_EQ(settled.presentationIdentity.version, settled.documentFrameVersion);
   const auto& held = result.frameDiagnostics.at(8);
   ASSERT_THAT(held.activeDragPreview,
               testing::Optional(testing::Field(&SelectTool::ActiveDragPreview::entity,
                                                held.selectedCompositedEntity)));
   EXPECT_THAT(held.selectionDragging, testing::IsTrue());
   EXPECT_THAT(released.selectionDragging, testing::IsFalse());
-  EXPECT_THAT(released.displayedDragPreview, testing::Eq(std::nullopt));
+  EXPECT_THAT(settled.selectionDragging, testing::IsFalse());
+  // Captured request metadata may retain a selection-prewarm hint; no live or settling intent
+  // may remain after the committed capture is adopted.
+  EXPECT_THAT(settled.activeDragPreview, testing::Eq(std::nullopt));
   for (const auto& requested : held.activeDragPreview->poses) {
     const auto presented = std::ranges::find_if(
         released.presentedPoses, [&](const auto& pose) { return pose.entity == requested.entity; });
     ASSERT_NE(presented, released.presentedPoses.end());
     EXPECT_TRUE(
         SamePresentationTransform(presented->documentFromElement, requested.documentFromElement));
+    const auto adopted = std::ranges::find_if(
+        settled.presentedPoses, [&](const auto& pose) { return pose.entity == requested.entity; });
+    ASSERT_NE(adopted, settled.presentedPoses.end());
+    EXPECT_TRUE(
+        SamePresentationTransform(adopted->documentFromElement, requested.documentFromElement));
   }
   EXPECT_GT(released.presentationFrameId, 0u);
   EXPECT_THAT(released.presentedPoses,
