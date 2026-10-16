@@ -1348,7 +1348,7 @@ void PublishFrameRepairDetails(const FramePresentationInput& input,
     window['__donnerPresentationRepairStats'] = ({
       'failure': $0, 'current': [$1, $2, $3, $4],
       'active': [$5, $6, $7, $8, $9], 'overview': [$10, $11, $12, $13, $14],
-      'bounded': Boolean($15), 'frameFailure': $16, 'pointerFailure': $17,
+      'bounded': Boolean($15),
     });
   }, static_cast<int>(failure), static_cast<double>(current.documentRevision),
       static_cast<double>(current.version), static_cast<double>(current.geometryRevision),
@@ -1357,14 +1357,14 @@ void PublishFrameRepairDetails(const FramePresentationInput& input,
       static_cast<double>(active.geometryRevision), static_cast<double>(active.presentationEpoch),
       static_cast<double>(overview.captureId), static_cast<double>(overview.documentRevision),
       static_cast<double>(overview.version), static_cast<double>(overview.geometryRevision),
-      static_cast<double>(overview.presentationEpoch), resources.coverage().activeTilesViewportBounded,
-      static_cast<int>(outcome.failure),
-      outcome.frame ? static_cast<int>(outcome.frame->pointerFailure()) : -1);
+      static_cast<double>(overview.presentationEpoch), resources.coverage().activeTilesViewportBounded);
   MAIN_THREAD_ASYNC_EM_ASM({
     const stats = window['__donnerPresentationRepairStats'];
     if (stats && Object.is(stats['active'][0], $0)) {
       stats['pendingMutations'] = Boolean($1);
       stats['adoptionFailure'] = $10;
+      stats['frameFailure'] = $11;
+      stats['pointerFailure'] = $12;
       stats['activeCoverage'] = ([$2, $3, $4, $5]);
       stats['overviewCoverage'] = ([$6, $7, $8, $9]);
     }
@@ -1376,7 +1376,9 @@ void PublishFrameRepairDetails(const FramePresentationInput& input,
       resources.coverage().overviewRasterDocumentRect.topLeft.x,
       resources.coverage().overviewRasterDocumentRect.topLeft.y,
       resources.coverage().overviewRasterDocumentRect.bottomRight.x,
-      resources.coverage().overviewRasterDocumentRect.bottomRight.y, static_cast<int>(adoptionFailure));
+      resources.coverage().overviewRasterDocumentRect.bottomRight.y, static_cast<int>(adoptionFailure),
+      static_cast<int>(outcome.failure),
+      outcome.frame ? static_cast<int>(outcome.frame->pointerFailure()) : -1);
   // clang-format on
 }
 #endif
