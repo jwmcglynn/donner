@@ -850,9 +850,6 @@ int RunDonnerSvgTool(int argc, char* argv[], std::ostream& out, std::ostream& er
   }
 
   SVGDocument document = std::move(*maybeDocument);
-  if (!ApplyCanvasSize(options, &document, err)) {
-    return 1;
-  }
 
   // donner-svg always renders on the CPU (tiny-skia) backend. A one-shot
   // command-line render cannot amortize the GPU backend's fixed device and
@@ -860,6 +857,17 @@ int RunDonnerSvgTool(int argc, char* argv[], std::ostream& out, std::ostream& er
   // single-frame output. The GPU backend serves interactive, multi-frame
   // rendering such as the editor.
   RendererTinySkia renderer(options.verbose);
+  if (!options.gifFile.empty()) {
+    // Animated root width and height are applied when drawing, so size the canvas from the
+    // document as drawn at --start.
+    document.setTime(options.startSeconds);
+    renderer.draw(document);
+  }
+
+  if (!ApplyCanvasSize(options, &document, err)) {
+    return 1;
+  }
+
   if (!options.gifFile.empty()) {
     return RenderAnimatedGif(options, document, renderer, out, err);
   }
