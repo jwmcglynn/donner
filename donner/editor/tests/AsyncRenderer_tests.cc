@@ -6488,6 +6488,7 @@ TEST(RenderCoordinatorTest, ContinuousSelectedZoomDefersViewportPrewarmUntilStab
   EXPECT_EQ(app.document().document().canvasSize(), warmCanvasSize)
       << "Continuous zoom should debounce SVGDocument::setCanvasSize instead of invalidating the "
          "render tree immediately.";
+  EXPECT_TRUE(coordinator.hasPendingViewportSettle());
   const auto settleWake = coordinator.nextViewportSettleWakeSeconds();
   ASSERT_TRUE(settleWake.has_value())
       << "An idle host needs a deadline to finish the deferred zoom without another input event.";
@@ -6498,6 +6499,7 @@ TEST(RenderCoordinatorTest, ContinuousSelectedZoomDefersViewportPrewarmUntilStab
 
   RenderCoordinatorTestAccess::advanceFakeSchedulingClock(
       RenderCoordinatorTestAccess::kCanvasSizeCommitDelay);
+  EXPECT_TRUE(coordinator.hasPendingViewportSettle());
   EXPECT_THAT(coordinator.nextViewportSettleWakeSeconds(), testing::Optional(testing::Eq(0.0f)));
   coordinator.maybeRequestRender(app, selectTool, viewport, &textures);
   EXPECT_TRUE(coordinator.asyncRenderer().isBusy())
@@ -6511,6 +6513,7 @@ TEST(RenderCoordinatorTest, ContinuousSelectedZoomDefersViewportPrewarmUntilStab
   ASSERT_TRUE(textures.presentationResources()->capture()->identity().sameScene(
       textures.presentationResources()->overviewCapture()->identity()));
   EXPECT_FALSE(coordinator.nextViewportSettleWakeSeconds().has_value());
+  EXPECT_FALSE(coordinator.hasPendingViewportSettle());
   const Vector2i visibleCanvas = viewport.rasterViewport().outputSizePx;
   const Vector2i paddedCanvas = viewport.selectedPrewarmRasterViewport().outputSizePx;
   ASSERT_NE(visibleCanvas, paddedCanvas)
