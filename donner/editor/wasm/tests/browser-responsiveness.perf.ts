@@ -390,6 +390,27 @@ async function completionCheck(
   });
 }
 
+async function gpuOwnerDiagnostic(page: Page) {
+  return Promise.any(page.workers().map(async (worker) => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const result = await Promise.race([
+        worker.evaluate(() => {
+          const scope = globalThis as typeof globalThis & {
+            __donnerReadGpuOwnerWaitStats?: () => unknown;
+          };
+          return scope.__donnerReadGpuOwnerWaitStats?.() ?? null;
+        }),
+        new Promise<null>((resolve) => { timer = setTimeout(() => resolve(null), 1000); }),
+      ]);
+      if (!result) throw new Error("owner unavailable");
+      return result;
+    } finally {
+      clearTimeout(timer);
+    }
+  })).catch(() => null);
+}
+
 async function continuousDrag(
   page: Page,
   start: { x: number; y: number },
@@ -846,6 +867,7 @@ test(
       }
       // Separate the selection click from the drag so it cannot become a group-isolation double click.
       await page.waitForTimeout(400);
+      report.ownerBeforeDrag = await gpuOwnerDiagnostic(page);
       const firstDrag = await continuousDrag(page, dragStart, -1, "first-drag-193");
       report["first-drag-193"] = firstDrag;
       console.log(
@@ -889,6 +911,7 @@ test(
         }),
       ]).catch(() => null);
       clearTimeout(deadline);
+      report.ownerAfterDrag = await gpuOwnerDiagnostic(page);
       report.failures = failures;
       console.log(`responsiveness ${JSON.stringify(report)}`);
       await attachJson(info, "responsiveness.json", report);
