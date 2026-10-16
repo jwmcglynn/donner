@@ -7779,7 +7779,8 @@ bool EditorShell::flushInteractiveDragMutationAndRequestRender() {
   renderCoordinator_.requestSelectionGeometryRefresh();
   const bool posted = renderCoordinator_.maybeRequestRender(
       app_, selectTool_, interactionController_.viewport(), &textures_,
-      /*supersedeInFlight=*/false);
+      /*supersedeInFlight=*/false, selectionChromeDetailForActiveTool(),
+      activeTool_ == ActiveTool::Select && interactionController_.pendingClick().has_value());
   requestRenderAtEndOfFrame_ = !posted;
   window_.wakeEventLoop();
   return true;
@@ -8410,9 +8411,10 @@ void EditorShell::applyDeferredRenderRequest() {
       window_.wakeEventLoop();
       break;
     case internal::DeferredRenderAction::SubmitRender:
-      renderCoordinator_.maybeRequestRender(app_, selectTool_, interactionController_.viewport(),
-                                            &textures_, /*supersedeInFlight=*/false,
-                                            selectionChromeDetailForActiveTool());
+      renderCoordinator_.maybeRequestRender(
+          app_, selectTool_, interactionController_.viewport(), &textures_,
+          /*supersedeInFlight=*/false, selectionChromeDetailForActiveTool(),
+          activeTool_ == ActiveTool::Select && interactionController_.pendingClick().has_value());
       requestRenderAtEndOfFrame_ = false;
       break;
     case internal::DeferredRenderAction::WaitForRendererCompletion:
