@@ -450,6 +450,26 @@ TEST_F(DonnerSvgToolFileTest, GifKeepsCanvasSizeWhenRootSizeAnimates) {
   EXPECT_EQ(totalDelay, 100);
 }
 
+TEST_F(DonnerSvgToolFileTest, GifScaleUsesTheCanvasSizeAtStart) {
+  const std::filesystem::path inputPath = WriteSvg("growing.svg", R"(
+<svg xmlns="http://www.w3.org/2000/svg" width="20" height="10" viewBox="0 0 20 10">
+  <animate attributeName="width" from="30" to="40" dur="1s" fill="freeze"/>
+  <rect width="20" height="10" fill="blue"/>
+</svg>
+)");
+  const std::filesystem::path gifPath = tmpDir_ / "scaled.gif";
+
+  std::ostringstream out;
+  std::ostringstream err;
+  ASSERT_EQ(RunTool({"--gif", gifPath.string(), "--end", "1", "--fps", "4", "--scale", "2",
+                     inputPath.string()},
+                    &out, &err),
+            0)
+      << err.str();
+  // Twice the 30x10 size at --start, not twice the authored 20x10.
+  EXPECT_THAT(out.str(), testing::HasSubstr("Rendered size: 60x20"));
+}
+
 TEST_F(DonnerSvgToolFileTest, ScaleAppliesToPngAndRejectsOversizedCanvas) {
   const std::filesystem::path inputPath = WriteSvg("input.svg", kSimpleSvg);
   const std::filesystem::path outputPath = tmpDir_ / "scaled.png";
