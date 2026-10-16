@@ -69,6 +69,24 @@ donner_cc_test(
     ],
 )
 
+donner_cc_library(
+    name = "gif_test_decoder",
+    testonly = 1,
+    srcs = ["GifTestDecoder.cc"],
+    hdrs = ["GifTestDecoder.h"],
+    visibility = ["//donner/svg/tool:__pkg__"],
+)
+
+donner_cc_test(
+    name = "gif_encoder_tests",
+    srcs = ["GifEncoder_tests.cc"],
+    deps = [
+        ":gif_test_decoder",
+        "//donner/svg/renderer:gif_encoder",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
 donner_cc_test(
     name = "renderer_image_io_tests",
     srcs = ["RendererImageIO_tests.cc"],

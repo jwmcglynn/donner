@@ -275,6 +275,16 @@ donner_perf_sensitive_cc_library(
 )
 
 donner_cc_library(
+    name = "gif_encoder",
+    srcs = ["GifEncoder.cc"],
+    hdrs = ["GifEncoder.h"],
+    visibility = [
+        "//donner/svg/renderer/tests:__pkg__",
+        "//donner/svg/tool:__pkg__",
+    ],
+)
+
+donner_cc_library(
     name = "renderer_image_io",
     srcs = ["RendererImageIO.cc"],
     hdrs = ["RendererImageIO.h"],
