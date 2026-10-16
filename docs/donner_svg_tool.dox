@@ -42,17 +42,20 @@
  * a PNG. Frames sample document time `start + i / fps` for every frame index `i` that falls before
  * `--end`. When `(end - start) * fps` is a whole number, the animation loops seamlessly from `end`
  * back to `start`; otherwise the last frame is shown for a full frame period. The canvas keeps its
- * size at `--start` for every frame, and each side is limited to 65535 pixels.
+ * size at `--start` for every frame, and each side is limited to 65535 pixels. An export is limited
+ * to 10000 frames and 2^32 rendered pixels in total.
  *
  * - `--end <s>`: Animation end time in seconds (required).
  * - `--start <s>`: First frame's document time in seconds (default 0).
- * - `--fps <n>`: Frames per second (default 20). GIF delays are whole centiseconds, so the delays
- *   alternate as needed to keep the total duration exact.
+ * - `--fps <n>`: Frames per second (default 20, at least about 0.0016, the slowest rate a GIF frame
+ *   delay can represent). GIF delays are whole centiseconds, so the delays alternate as needed to
+ *   keep the total duration exact.
  * - `--scale`, `--width` and `--height` set the GIF size as they do for PNG output.
  * - `--background <color>`: Composite onto an opaque CSS color and produce an opaque GIF. Without
  *   it, the GIF keeps binary transparency: pixels below 50% opacity become transparent.
  *
- * Each frame gets its own color table. Frames with at most 256 colors are stored exactly; busier
+ * Each frame gets its own color table. Frames with at most 256 colors (255 without
+ * `--background`, which reserves one entry for transparency) are stored exactly; busier
  * frames are reduced with median cut, which keeps large flat colors exact. Identical consecutive
  * frames are merged into one longer frame, and opaque GIFs store only the changed region of each
  * frame.
