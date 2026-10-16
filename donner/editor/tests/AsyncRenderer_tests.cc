@@ -6315,6 +6315,31 @@ TEST(RenderCoordinatorTest, NothingToPresentKeepsThePresentedFrameUntilARenderPr
       << "once the renderer produces tiles again, the owed version presents";
 }
 
+TEST(RenderCoordinatorTest, DeferredRenderDemandWakesAfterSpeculativeWarmup) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+      <rect id="target" x="8" y="8" width="24" height="24" fill="blue"/>
+    </svg>
+  )svg"));
+  app.setSelection(*app.document().document().querySelector("#target"));
+  ViewportState viewport;
+  viewport.paneSize = Vector2d(128.0, 128.0);
+  viewport.documentViewBox = Box2d::FromXYWH(0.0, 0.0, 64.0, 64.0);
+  viewport.resetTo100Percent();
+  SelectTool selectTool;
+  std::atomic<int> wakes = 0;
+  RenderCoordinator coordinator;
+  coordinator.asyncRenderer().setWakeCallback([&] { ++wakes; });
+  coordinator.asyncRenderer().stageCompositorWarmupForTesting(/*pending=*/false, /*active=*/true);
+
+  EXPECT_FALSE(coordinator.maybeRequestRender(app, selectTool, viewport));
+  EXPECT_EQ(wakes.load(), 0);
+  coordinator.asyncRenderer().completeCompositorWarmupForTesting();
+  EXPECT_EQ(wakes.load(), 1)
+      << "A render deferred behind speculative warmup needs a retry even without a zoom deadline.";
+}
+
 TEST(RenderCoordinatorTest, StableSelectedFullDocumentPrewarmStaysIdle) {
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(R"svg(
