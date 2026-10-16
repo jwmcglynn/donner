@@ -421,7 +421,7 @@ RenderAttemptIdentity MakeRenderAttempt(
       .rasterViewport = rasterViewport,
       .overviewInfillOnly = overviewInfillOnly,
       .selectedEntity = selectedEntity,
-      .dragPreview = scheduledDragPreview,
+      .dragPreview = overviewInfillOnly ? std::nullopt : scheduledDragPreview,
       .presentationEpoch = presentationEpoch,
   };
 }
@@ -1534,12 +1534,9 @@ std::shared_ptr<const FramePresentation> RenderCoordinator::buildFramePresentati
 
 bool RenderCoordinator::canReplaceWithOverview(const RenderResult& result,
                                                const EditorApp& app) const {
-  const auto currentIdentity = currentPresentationIdentity(app);
-  const bool stalePresentedContent =
-      framePresentation_ != nullptr && !framePresentation_->identity().sameContent(currentIdentity);
-  const bool repairsCoverage = pendingRepair_ && CompleteOverviewCanRepair(pendingRepair_->failure);
-  if ((!stalePresentedContent && !repairsCoverage) || result.capturedPresentation == nullptr ||
-      !result.capturedPresentation->identity().sameContent(currentIdentity)) {
+  if (!pendingRepair_ || !CompleteOverviewCanRepair(pendingRepair_->failure) ||
+      result.capturedPresentation == nullptr ||
+      !result.capturedPresentation->identity().sameContent(currentPresentationIdentity(app))) {
     return false;
   }
   const std::span<const RenderResult::CompositedTile> tiles =
@@ -1934,10 +1931,10 @@ void RenderCoordinator::prepareSelectedRenderSchedule(EditorApp& app, const View
                                                       bool requestOverviewInfill,
                                                       bool captureNeeded,
                                                       PresentationRenderScheduleInput& input) {
-  // A complete overview may replace stale tiles after a canvas commit. Preserve selection
-  // promotion and represented poses so that replacement can also serve the next pointer frame.
-  input.selectedEntity = selection.entity;
-  input.selectedExtraEntities = selectedCompositedExtraEntities(app, selection.entity);
+  input.selectedEntity = requestOverviewInfill ? entt::null : selection.entity;
+  input.selectedExtraEntities = requestOverviewInfill
+                                    ? std::vector<Entity>{}
+                                    : selectedCompositedExtraEntities(app, selection.entity);
   input.forceSelectedLayerRasterization = selection.forceRasterization;
   input.forcePresentationRefresh = hasForcedRenderReason(captureNeeded);
   const bool independentRenderReason = HasIndependentSelectedPrewarmRenderReason(
