@@ -6443,6 +6443,75 @@ TEST(RenderCoordinatorTest, BufferedSelectionPressDefersCanvasCommitUntilConsume
   EXPECT_NE(app.document().document().canvasSize(), canvas);
 }
 
+TEST(RenderCoordinatorTest, CameraChangesPreserveResolvedSvgLayout) {
+  const std::array<std::string_view, 7> sources = {
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="300" height="150" viewBox="10 20 100 50"><rect id="target" x="20" y="30" width="30" height="20"/></svg>)svg",
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="300" height="150" viewBox="0 0 100 100"><rect id="target" x="10%" y="10%" width="50%" height="50%"/></svg>)svg",
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="300" height="150" viewBox="0 0 100 100" preserveAspectRatio="none"><rect id="target" x="10%" y="10%" width="50%" height="50%"/></svg>)svg",
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="300" height="150"><rect id="target" x="10%" y="10%" width="50%" height="50%"/></svg>)svg",
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="300" height="150"><svg x="10%" width="70%" height="80%" viewBox="0 0 100 100"><rect id="target" x="10%" y="10%" width="50%" height="50%"/></svg></svg>)svg",
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="300" height="150" viewBox="0 0 100 100"><path id="target" d="M20 20L70 70" stroke="red" stroke-width="8" vector-effect="non-scaling-stroke"/></svg>)svg",
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="300" height="150" viewBox="0 0 100 100"><defs><filter id="blur"><feGaussianBlur stdDeviation="3"/></filter></defs><rect id="target" x="20" y="20" width="40" height="40" filter="url(#blur)"/></svg>)svg",
+  };
+  for (const auto source : sources) {
+    SCOPED_TRACE(source);
+    EditorApp app;
+    ASSERT_TRUE(app.loadFromString(source));
+    const auto target = app.document().document().querySelector("#target");
+    ASSERT_TRUE(target.has_value());
+    app.setSelection(*target);
+    const auto resolvedCanvas = app.document().document().canvasSize();
+    const auto revision = app.document().document().handle()->revision();
+    ViewportState viewport;
+    viewport.paneSize = Vector2d(400, 240);
+    viewport.documentViewBox = app.document().document().svgElement().viewBox().value_or(
+        Box2d::FromXYWH(0, 0, resolvedCanvas.x, resolvedCanvas.y));
+    viewport.resetTo100Percent();
+    SelectTool tool;
+    GlTextureCache textures;
+    RenderCoordinator coordinator;
+    if (!coordinator.renderer().requiresTextureSnapshotPresentation()) {
+      GTEST_SKIP() << "Requires retained texture presentation";
+    }
+    RenderCoordinatorTestAccess::useFakeSchedulingClock(coordinator);
+    const auto render = [&] {
+      RenderCoordinatorTestAccess::makeRasterViewportSettled(coordinator);
+      coordinator.maybeRequestRender(app, tool, viewport, &textures);
+      const bool drained = DrainCoordinator(coordinator, app, viewport, textures);
+      RenderCoordinatorTestAccess::advanceFakeSchedulingClock(
+          RenderCoordinatorTestAccess::kCanvasSizeCommitDelay);
+      return drained;
+    };
+    ASSERT_TRUE(render());
+    ASSERT_TRUE(render());
+    ASSERT_TRUE(textures.presentationResources());
+    const auto original = textures.presentationResources()->capture();
+    ASSERT_TRUE(original);
+    const Entity entity = target->unsafeEntityHandle().entity();
+    const auto originalPose = original->pose(entity);
+    ASSERT_TRUE(originalPose);
+    const auto originalPaint = original->paintBounds(entity);
+    for (const auto camera : {Vector2d(2.17, 2), Vector2d(6, 1), Vector2d(0.75, 2)}) {
+      viewport.zoomAround(camera.x, viewport.paneCenter());
+      viewport.devicePixelRatio = camera.y;
+      ASSERT_TRUE(render());
+      ASSERT_TRUE(render());
+      EXPECT_EQ(app.document().document().canvasSize(), resolvedCanvas);
+      EXPECT_EQ(app.document().document().handle()->revision(), revision);
+      EXPECT_EQ(coordinator.documentCanvasCommitTotal(), 0u);
+      const auto capture = textures.presentationResources()->capture();
+      ASSERT_TRUE(capture);
+      EXPECT_EQ(capture->canvasSize(), resolvedCanvas);
+      EXPECT_TRUE(capture->identity().sameContent(original->identity()));
+      const auto pose = capture->pose(entity);
+      ASSERT_TRUE(pose);
+      EXPECT_TRUE(
+          SamePresentationTransform(pose->documentFromElement, originalPose->documentFromElement));
+      EXPECT_EQ(capture->paintBounds(entity), originalPaint);
+    }
+  }
+}
+
 TEST(RenderCoordinatorTest, CanvasCommitOverviewKeepsSelectedArtworkMovable) {
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(R"svg(
