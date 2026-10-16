@@ -6415,6 +6415,13 @@ TEST(RenderCoordinatorTest, ContinuousSelectedZoomDefersViewportPrewarmUntilStab
   EXPECT_EQ(app.document().document().canvasSize(), warmCanvasSize)
       << "Continuous zoom should debounce SVGDocument::setCanvasSize instead of invalidating the "
          "render tree immediately.";
+  const auto settleWake = coordinator.nextViewportSettleWakeSeconds();
+  ASSERT_TRUE(settleWake.has_value())
+      << "An idle host needs a deadline to finish the deferred zoom without another input event.";
+  EXPECT_GT(*settleWake, 0.0f);
+  EXPECT_LE(
+      *settleWake,
+      std::chrono::duration<float>(RenderCoordinatorTestAccess::kCanvasSizeCommitDelay).count());
 
   RenderCoordinatorTestAccess::advanceFakeSchedulingClock(
       RenderCoordinatorTestAccess::kCanvasSizeCommitDelay);

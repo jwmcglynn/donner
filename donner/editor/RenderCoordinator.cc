@@ -983,6 +983,10 @@ void RenderCoordinator::noteSelectedPromotionAvailability(const RenderResult& re
   };
 }
 
+std::optional<float> RenderCoordinator::nextViewportSettleWakeSeconds() const {
+  return std::nullopt;
+}
+
 std::optional<float> RenderCoordinator::nextPixelCaptureCanvasCommitWakeSeconds() const {
   if (!documentPixelCaptureEnabled_ || !pixelCaptureCanvasCommitDue_.has_value() ||
       renderWorker_.asyncRenderer.isBusy()) {

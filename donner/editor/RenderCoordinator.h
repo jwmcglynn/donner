@@ -355,6 +355,8 @@ public:
   [[nodiscard]] bool documentPixelCaptureUnavailable() const { return captureUnavailable_; }
   /// Wake deadline for an armed picker waiting on a delayed semantic canvas-size commit.
   [[nodiscard]] std::optional<float> nextPixelCaptureCanvasCommitWakeSeconds() const;
+  /// Seconds until deferred viewport work is eligible, absent while its worker is busy.
+  [[nodiscard]] std::optional<float> nextViewportSettleWakeSeconds() const;
   /// Wake deadline for the paced re-render of a request whose result had nothing to present.
   [[nodiscard]] std::optional<float> nextNothingToPresentRetryWakeSeconds() const;
   /// Whether a renderer-presentation setting still needs a worker frame.
