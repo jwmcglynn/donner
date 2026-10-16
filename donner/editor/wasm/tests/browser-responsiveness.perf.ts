@@ -447,6 +447,12 @@ async function continuousDrag(
       readbackPollIterations?: unknown;
       presentation?: Diagnostics["__donnerPresentationQueueStats"];
     }[] = [];
+    const workerCompletions: {
+      observedAtMs: number;
+      worker: NonNullable<Diagnostics["__donnerWorkerStats"]>;
+      repair: unknown;
+    }[] = [];
+    let previousWorkerCompletion = -1;
     const dispatchTimes: number[] = [];
     const dispatchPoints: { x: number; y: number }[] = [];
     let previousCompletedSerial = 0;
@@ -454,6 +460,17 @@ async function continuousDrag(
     let observing = true;
     let sampleId = 0;
     const observe = () => {
+      const worker = state.__donnerWorkerStats;
+      if (worker && worker.completedResults !== previousWorkerCompletion) {
+        previousWorkerCompletion = worker.completedResults;
+        if (workerCompletions.length < 64) {
+          workerCompletions.push({
+            observedAtMs: performance.now(),
+            worker: { ...worker },
+            repair: structuredClone(state.__donnerPresentationRepairStats),
+          });
+        }
+      }
       const loop = state.__donnerFrameLoopStats;
       const presentation = state.__donnerPresentationQueueStats;
       if (
@@ -528,6 +545,7 @@ async function continuousDrag(
       finishedAtMs: performance.now(),
       dispatchTimes,
       dispatchPoints,
+      workerCompletions,
       frames,
       end,
     };
