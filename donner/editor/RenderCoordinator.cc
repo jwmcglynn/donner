@@ -621,8 +621,7 @@ bool ShouldPresentCompositedPreviewForViewport(const RenderResult::CompositedPre
 }
 
 bool PresentationRepairNeedsCoverage(FramePresentationFailure buildFailure,
-                                     FramePresentationFailure adoptionFailure,
-                                     const FramePresentationBuildResult& outcome) {
+                                     FramePresentationFailure adoptionFailure) {
   return IsCoverageFailure(buildFailure) || IsCoverageFailure(adoptionFailure);
 }
 

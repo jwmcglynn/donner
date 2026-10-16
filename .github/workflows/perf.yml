@@ -120,19 +120,21 @@ jobs:
         run: |
           set -euo pipefail
 
-          if [[ "$DIAGNOSTIC_CASE" == "true" ]]; then
-            if [[ "$TARGET_TAG" == "perf" ]]; then
-              echo "targets=//donner/editor/wasm/tests:browser_responsiveness_perf_test" >> "$GITHUB_OUTPUT"
-            else
-              echo "targets=" >> "$GITHUB_OUTPUT"
-            fi
-            exit 0
-          fi
-
           targets="$(
             bazelisk query "tests(//...) intersect attr(\"tags\", \"${TARGET_TAG}\", //...)" |
               python3 -c 'import sys; print(" ".join(line.strip() for line in sys.stdin if line.strip()))'
           )"
+
+          if [[ "$DIAGNOSTIC_CASE" == "true" ]]; then
+            if [[ "$TARGET_TAG" == "perf" ]]; then
+              targets="$(printf '%s\n' "$targets" | tr ' ' '\n' | grep ':browser_responsiveness_perf_test$')"
+              [[ -n "$targets" ]] || { echo "Responsiveness target is missing from perf metadata."; exit 1; }
+            else
+              targets=""
+            fi
+            echo "targets=$targets" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
 
           if [[ -z "$targets" ]]; then
             if [[ "$TARGET_TAG" == "perf_linux" ]]; then
