@@ -1,3 +1,4 @@
+import { dispatchCanvasPointer } from "./canvas-pointer";
 import { expect, type Page, test } from "@playwright/test";
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -235,26 +236,6 @@ function phaseReport(before: Snapshot, after: Snapshot, inputToFrameMs: number[]
   };
 }
 
-async function dispatchPointer(page: Page, point: { x: number; y: number }, click = false) {
-  // Headed Firefox on macOS can offset native automation moves but not button events.
-  await page.evaluate(({ x, y, click }) => {
-    const canvas = document.querySelector("canvas#canvas")!;
-    for (const type of click ? ["mousemove", "mousedown", "mouseup"] : ["mousemove"]) {
-      canvas.dispatchEvent(
-        new MouseEvent(type, {
-          bubbles: true,
-          cancelable: true,
-          view: window,
-          clientX: x,
-          clientY: y,
-          button: 0,
-          buttons: type === "mousedown" ? 1 : 0,
-        }),
-      );
-    }
-  }, { ...point, click });
-}
-
 async function waitForIdle(page: Page) {
   // Historical baseline bundles predate queued-work telemetry. Candidates must explicitly report
   // both flags false: an idle worker alone can still be waiting for the zoom debounce deadline.
@@ -299,7 +280,7 @@ async function aimAtSplashD(page: Page) {
   expect(point.x).toBeLessThan(viewport.paneX + viewport.paneWidth);
   expect(point.y).toBeGreaterThan(viewport.paneY);
   expect(point.y).toBeLessThan(viewport.paneY + viewport.paneHeight);
-  await dispatchPointer(page, point);
+  await dispatchCanvasPointer(page, point);
   await expect.poll(async () => (await snapshot(page)).interaction, {
     timeout: 10000,
     message: "the D aiming move must be applied before a press or zoom",
@@ -723,7 +704,7 @@ test(
       const bounds = await canvas.boundingBox();
       expect(bounds).not.toBeNull();
       report.sampleBounds = bounds;
-      await dispatchPointer(
+      await dispatchCanvasPointer(
         page,
         { x: bounds!.x + bounds!.width * 0.24, y: bounds!.y + 282 },
         true,
@@ -786,7 +767,7 @@ test(
           const prior = await snapshot(page);
           const point = { x: center.x + step * 3, y: center.y + step * 2 };
           if (kind === "pointer") {
-            await dispatchPointer(page, point);
+            await dispatchCanvasPointer(page, point);
           } else {
             await page.evaluate(({ x, y, deltaY }) => {
               document.querySelector("canvas#canvas")!.dispatchEvent(
@@ -838,7 +819,7 @@ test(
       }
       const dragStart = await zoomSplashForDrag(page);
       const beforeClick = await snapshot(page);
-      await dispatchPointer(page, dragStart, true);
+      await dispatchCanvasPointer(page, dragStart, true);
       let clicked: Snapshot | undefined;
       await expect.poll(async () => {
         const current = await snapshot(page);
@@ -1003,7 +984,7 @@ test(
     };
     const samples: unknown[] = [];
     try {
-      await dispatchPointer(page, { x: 1280 * 0.24, y: 282 }, true);
+      await dispatchCanvasPointer(page, { x: 1280 * 0.24, y: 282 }, true);
       await expect(page.locator("canvas#canvas")).toHaveAttribute(
         "data-active-sample-id",
         "donner-splash",
@@ -1011,7 +992,7 @@ test(
       await waitForSplashDisplayed(page);
       let point = await zoomSplashForDrag(page);
       const beforeSelection = await snapshot(page);
-      await dispatchPointer(page, point, true);
+      await dispatchCanvasPointer(page, point, true);
       await expect.poll(async () => {
         const state = await snapshot(page);
         return state.interaction?.selectedCount === 1 && state.presentation?.inputRepresented
@@ -1122,7 +1103,7 @@ test(
     };
     const samples = [];
     try {
-      await dispatchPointer(page, { x: 1280 * 0.24, y: 282 }, true);
+      await dispatchCanvasPointer(page, { x: 1280 * 0.24, y: 282 }, true);
       await expect(page.locator("canvas#canvas")).toHaveAttribute(
         "data-active-sample-id",
         "donner-splash",
@@ -1436,7 +1417,7 @@ test.describe("UI presentation diagnosis", () => {
         const canvas = await page.locator("canvas#canvas").boundingBox();
         expect(canvas).not.toBeNull();
         if (canvas === null) throw new Error("missing editor canvas");
-        await dispatchPointer(page, { x: canvas.x + canvas.width * 0.24, y: canvas.y + 282 }, true);
+        await dispatchCanvasPointer(page, { x: canvas.x + canvas.width * 0.24, y: canvas.y + 282 }, true);
         await expect(page.locator("canvas#canvas")).toHaveAttribute(
           "data-active-sample-id",
           "donner-splash",
@@ -1445,7 +1426,7 @@ test.describe("UI presentation diagnosis", () => {
         await waitForSplashDisplayed(page);
         const start = await aimAtSplashD(page);
         checkpoint("selecting D");
-        await dispatchPointer(page, start, true);
+        await dispatchCanvasPointer(page, start, true);
         await expect.poll(async () => (await snapshot(page)).interaction, { timeout: 15000 })
           .toEqual(
             expect.objectContaining({ selectedCount: 1, pendingClick: false, workerBusy: false }),
@@ -1648,7 +1629,7 @@ test("first sample click after boot", async ({ page, browser }, info) => {
   if (canvas === null) throw new Error("missing editor canvas");
   const beforeResults = (await snapshot(page)).worker?.completedResults ?? 0;
   const clickAt = await page.evaluate(() => performance.now());
-  await dispatchPointer(page, { x: canvas.x + canvas.width * 0.76, y: canvas.y + 282 }, true);
+  await dispatchCanvasPointer(page, { x: canvas.x + canvas.width * 0.76, y: canvas.y + 282 }, true);
   await expect(page.locator("canvas#canvas")).toHaveAttribute(
     "data-active-sample-id",
     "basic-shapes",
