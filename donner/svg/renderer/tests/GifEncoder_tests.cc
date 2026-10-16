@@ -1,7 +1,9 @@
 #include "donner/svg/renderer/GifEncoder.h"
 
+#include <array>
 #include <cstdint>
-#include <cstdlib>
+#include <limits>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -14,6 +16,7 @@ using testing::Each;
 using testing::ElementsAre;
 using testing::ElementsAreArray;
 using testing::Field;
+using testing::IsEmpty;
 using testing::Optional;
 using testing::SizeIs;
 
@@ -49,13 +52,38 @@ DecodedGif Decode(const std::vector<uint8_t>& gif) {
   return decoded.value_or(DecodedGif{});
 }
 
-/// Largest absolute per-channel difference between two equally sized RGBA buffers.
-int MaxChannelError(const std::vector<uint8_t>& expected, const std::vector<uint8_t>& actual) {
-  int maxError = 0;
-  for (size_t i = 0; i < expected.size() && i < actual.size(); ++i) {
-    maxError = std::max(maxError, std::abs(int{expected[i]} - int{actual[i]}));
+/// Squared RGB distance between the pixels at byte offsets \p a and \p b.
+int SquaredDistance(const uint8_t* a, const uint8_t* b) {
+  int distance = 0;
+  for (int c = 0; c < 3; ++c) {
+    const int d = int{a[c]} - int{b[c]};
+    distance += d * d;
   }
-  return maxError;
+  return distance;
+}
+
+/**
+ * Pixel indices whose decoded color is not a nearest color, among all colors the decoded image
+ * uses, to the source pixel. Empty when every pixel was mapped to its nearest palette entry.
+ */
+std::vector<size_t> PixelsNotMappedToNearestColor(const std::vector<uint8_t>& source,
+                                                  const std::vector<uint8_t>& decoded) {
+  std::set<std::array<uint8_t, 3>> usedColors;
+  for (size_t i = 0; i + 3 < decoded.size(); i += 4) {
+    usedColors.insert({decoded[i], decoded[i + 1], decoded[i + 2]});
+  }
+
+  std::vector<size_t> mismatches;
+  for (size_t i = 0; i + 3 < source.size() && i + 3 < decoded.size(); i += 4) {
+    int nearest = std::numeric_limits<int>::max();
+    for (const std::array<uint8_t, 3>& color : usedColors) {
+      nearest = std::min(nearest, SquaredDistance(&source[i], color.data()));
+    }
+    if (SquaredDistance(&source[i], &decoded[i]) != nearest) {
+      mismatches.push_back(i / 4);
+    }
+  }
+  return mismatches;
 }
 
 TEST(GifEncoder, WritesHeaderScreenDescriptorLoopExtensionAndTrailer) {
@@ -104,6 +132,25 @@ TEST(GifEncoder, RoundTripsFramesDelaysAndExactPalette) {
   EXPECT_THAT(gif.frames, ElementsAre(Field(&DecodedGifFrame::delayCentiseconds, 5),
                                       Field(&DecodedGifFrame::delayCentiseconds, 7),
                                       Field(&DecodedGifFrame::delayCentiseconds, 9)));
+}
+
+TEST(GifEncoder, WritesSpecConformingLzwData) {
+  // Pixels black, black, black, white with a 2-entry table: minimum code size 2, so clear = 4 and
+  // end = 5 with 3-bit codes. The codes are clear, 0, 6 (black black), 1, end, packed LSB first:
+  // 0b10000100 = 0x84 and 0b01010011 = 0x53. These bytes were checked against an independent
+  // decoder.
+  GifEncoder encoder({.width = 4, .height = 1});
+  Image frame(4, 1, 0, 0, 0);
+  frame.set(3, 0, 255, 255, 255);
+  ASSERT_TRUE(encoder.addFrame(frame.rgba, 0, 1));
+  const std::vector<uint8_t> gif = encoder.finish();
+
+  ASSERT_THAT(gif, SizeIs(testing::Gt(22u)));
+  EXPECT_THAT(std::vector<uint8_t>(gif.end() - 22, gif.end()),
+              ElementsAre(0x2C, 0, 0, 0, 0, 4, 0, 1, 0, 0x80,  // Image descriptor, 2-entry table.
+                          0, 0, 0, 255, 255, 255,              // Color table: black, white.
+                          0x02, 0x02, 0x84, 0x53, 0x00,        // LZW data.
+                          0x3B));
 }
 
 TEST(GifEncoder, RespectsRowStride) {
@@ -197,7 +244,7 @@ TEST(GifEncoder, KeepsBinaryTransparencyWithoutBackground) {
   EXPECT_THAT(gif.frames, Each(Field(&DecodedGifFrame::disposal, 2)));
 }
 
-TEST(GifEncoder, QuantizesManyColorsWithBoundedError) {
+TEST(GifEncoder, QuantizesManyColorsToTheirNearestPaletteEntry) {
   constexpr int kSize = 64;
   Image gradient(kSize, kSize, 0, 0, 0);
   for (int y = 0; y < kSize; ++y) {
@@ -212,7 +259,7 @@ TEST(GifEncoder, QuantizesManyColorsWithBoundedError) {
   const DecodedGif gif = Decode(encoder.finish());
   ASSERT_THAT(gif.frames, SizeIs(1));
   EXPECT_EQ(gif.frames[0].colorTableSize, 256);
-  EXPECT_LE(MaxChannelError(gradient.rgba, gif.frames[0].rgba), 16);
+  EXPECT_THAT(PixelsNotMappedToNearestColor(gradient.rgba, gif.frames[0].rgba), IsEmpty());
 }
 
 TEST(GifEncoder, QuantizationKeepsFlatColorsExact) {
@@ -248,7 +295,7 @@ TEST(GifEncoder, QuantizationKeepsFlatColorsExact) {
     actualFlat.insert(actualFlat.end(), gif.frames[0].rgba.begin() + begin,
                       gif.frames[0].rgba.begin() + end);
   }
-  EXPECT_EQ(MaxChannelError(expectedFlat, actualFlat), 0);
+  EXPECT_THAT(actualFlat, ElementsAreArray(expectedFlat));
 }
 
 TEST(GifEncoder, RoundTripsAcrossLzwDictionaryResets) {
@@ -270,6 +317,100 @@ TEST(GifEncoder, RoundTripsAcrossLzwDictionaryResets) {
   EXPECT_THAT(gif.frames[0].rgba, ElementsAreArray(noise.rgba));
 }
 
+TEST(GifEncoder, RoundTripsTwoColorImageAcrossLzwDictionaryResets) {
+  // A 1-bit table starts at 3-bit codes, so this covers every code width up to 12 bits and resets.
+  constexpr int kSize = 256;
+  Image noise(kSize, kSize, 0, 0, 0);
+  uint32_t state = 777;
+  for (int y = 0; y < kSize; ++y) {
+    for (int x = 0; x < kSize; ++x) {
+      state = state * 1664525u + 1013904223u;
+      if ((state >> 31) != 0) {
+        noise.set(x, y, 255, 255, 255);
+      }
+    }
+  }
+
+  GifEncoder encoder({.width = kSize, .height = kSize});
+  ASSERT_TRUE(encoder.addFrame(noise.rgba, 0, 1));
+  const DecodedGif gif = Decode(encoder.finish());
+  ASSERT_THAT(gif.frames, SizeIs(1));
+  EXPECT_EQ(gif.frames[0].colorTableSize, 2);
+  EXPECT_THAT(gif.frames[0].rgba, ElementsAreArray(noise.rgba));
+}
+
+TEST(GifEncoder, QuantizesWithTransparencyReservingTheLastIndex) {
+  constexpr int kSize = 32;
+  Image gradient(kSize, kSize, 0, 0, 0);
+  for (int y = 0; y < kSize; ++y) {
+    for (int x = 0; x < kSize; ++x) {
+      gradient.set(x, y, static_cast<uint8_t>(x * 8), static_cast<uint8_t>(y * 8), 100);
+    }
+  }
+  gradient.set(0, 0, 0, 0, 0, 0);
+
+  GifEncoder encoder({.width = kSize, .height = kSize});
+  ASSERT_TRUE(encoder.addFrame(gradient.rgba, 0, 1));
+  const DecodedGif gif = Decode(encoder.finish());
+  ASSERT_THAT(gif.frames, SizeIs(1));
+  EXPECT_EQ(gif.frames[0].colorTableSize, 256);
+  EXPECT_THAT(std::vector<uint8_t>(gif.frames[0].rgba.begin(), gif.frames[0].rgba.begin() + 4),
+              ElementsAre(0, 0, 0, 0));
+
+  // Every other pixel is opaque and mapped to its nearest color.
+  std::vector<uint8_t> opaqueSource(gradient.rgba.begin() + 4, gradient.rgba.end());
+  std::vector<uint8_t> opaqueDecoded(gif.frames[0].rgba.begin() + 4, gif.frames[0].rgba.end());
+  EXPECT_THAT(PixelsNotMappedToNearestColor(opaqueSource, opaqueDecoded), IsEmpty());
+  for (size_t i = 3; i < opaqueDecoded.size(); i += 4) {
+    ASSERT_EQ(opaqueDecoded[i], 255) << "pixel " << (i / 4 + 1) << " is not opaque";
+  }
+}
+
+TEST(GifEncoder, QuantizedOpaqueFramesCropToTheChangedRectangle) {
+  constexpr int kSize = 32;
+  Image gradient(kSize, kSize, 0, 0, 0);
+  for (int y = 0; y < kSize; ++y) {
+    for (int x = 0; x < kSize; ++x) {
+      gradient.set(x, y, static_cast<uint8_t>(x * 8), static_cast<uint8_t>(y * 8), 100);
+    }
+  }
+  Image changed = gradient;
+  changed.set(5, 6, 1, 2, 3);
+
+  GifEncoder encoder({.width = kSize, .height = kSize, .background = GifEncoder::Rgb{0, 0, 0}});
+  ASSERT_TRUE(encoder.addFrame(gradient.rgba, 0, 1));
+  ASSERT_TRUE(encoder.addFrame(changed.rgba, 0, 1));
+  const DecodedGif gif = Decode(encoder.finish());
+  ASSERT_THAT(gif.frames, SizeIs(2));
+  EXPECT_THAT(gif.frames[1],
+              AllOf(Field(&DecodedGifFrame::left, 5), Field(&DecodedGifFrame::top, 6),
+                    Field(&DecodedGifFrame::width, 1), Field(&DecodedGifFrame::height, 1)));
+  // Only the changed pixel is redrawn, exactly; the quantized remainder carries over.
+  std::vector<uint8_t> expected = gif.frames[0].rgba;
+  const size_t changedOffset = (6 * kSize + 5) * 4;
+  expected[changedOffset] = 1;
+  expected[changedOffset + 1] = 2;
+  expected[changedOffset + 2] = 3;
+  EXPECT_THAT(gif.frames[1].rgba, ElementsAreArray(expected));
+}
+
+TEST(GifEncoder, RepeatsCroppedFrameWhoseMergedDelayOverflows) {
+  GifEncoder encoder({.width = 2, .height = 1, .background = GifEncoder::Rgb{0, 0, 0}});
+  const Image first(2, 1, 10, 10, 10);
+  Image second = first;
+  second.set(1, 0, 20, 20, 20);
+  ASSERT_TRUE(encoder.addFrame(first.rgba, 0, 1));
+  ASSERT_TRUE(encoder.addFrame(second.rgba, 0, 65000));
+  ASSERT_TRUE(encoder.addFrame(second.rgba, 0, 1000));
+
+  const DecodedGif gif = Decode(encoder.finish());
+  EXPECT_THAT(gif.frames, ElementsAre(Field(&DecodedGifFrame::delayCentiseconds, 1),
+                                      Field(&DecodedGifFrame::delayCentiseconds, 65535),
+                                      Field(&DecodedGifFrame::delayCentiseconds, 465)));
+  ASSERT_THAT(gif.frames, SizeIs(3));
+  EXPECT_THAT(gif.frames[2].rgba, ElementsAreArray(second.rgba));
+}
+
 TEST(GifEncoder, RejectsInvalidInput) {
   GifEncoder zeroSized({.width = 0, .height = 4});
   const Image tiny(1, 1, 0, 0, 0);
@@ -280,6 +421,14 @@ TEST(GifEncoder, RejectsInvalidInput) {
   EXPECT_FALSE(encoder.addFrame(tiny.rgba, 0, 1));
   EXPECT_FALSE(encoder.addFrame(Image(2, 2, 0, 0, 0).rgba, 1, 1));
   EXPECT_THAT(encoder.finish(), SizeIs(0));
+
+  GifEncoder tooWide({.width = 65536, .height = 1});
+  EXPECT_FALSE(tooWide.addFrame(tiny.rgba, 0, 1));
+
+  // A stride whose size computation would overflow is rejected rather than wrapping.
+  GifEncoder strided({.width = 1, .height = 2});
+  EXPECT_FALSE(
+      strided.addFrame(Image(1, 2, 0, 0, 0).rgba, std::numeric_limits<size_t>::max() / 2, 1));
 
   GifEncoder finished({.width = 1, .height = 1});
   ASSERT_TRUE(finished.addFrame(tiny.rgba, 0, 1));
@@ -297,6 +446,11 @@ TEST(GifEncoder, FrameDelaysDistributeRoundingWithoutDrift) {
     total += delay;
   }
   EXPECT_EQ(total, 100);
+
+  // Above 100 fps some frames round to 0 centiseconds; the total still matches the duration.
+  EXPECT_THAT(GifEncoder::FrameDelaysCentiseconds(300, 3), ElementsAre(0, 1, 0));
+  // Frames longer than the largest GIF delay are clamped.
+  EXPECT_THAT(GifEncoder::FrameDelaysCentiseconds(0.001, 2), ElementsAre(65535, 65535));
 
   EXPECT_THAT(GifEncoder::FrameDelaysCentiseconds(0, 3), SizeIs(0));
   EXPECT_THAT(GifEncoder::FrameDelaysCentiseconds(10, 0), SizeIs(0));

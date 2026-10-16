@@ -26,6 +26,9 @@
  *
  * - `--output <png>`: Output filename (default `output.png`).
  * - `--width <px>` / `--height <px>`: Override render size.
+ * - `--scale <factor>`: Scale the document's intrinsic size, for example `--scale 2` for a 2x
+ *   render. Cannot be combined with `--width` or `--height`, and each scaled side must be at most
+ *   65535 pixels.
  * - `--preview`: Show a terminal preview.
  * - `--interactive`: Enable mouse-driven terminal selection mode (implies `--preview`).
  * - `--quiet`: Suppress parser warnings.
@@ -37,16 +40,17 @@
  *
  * `--gif <file.gif>` renders a declarative (SMIL) animation to a looping animated GIF instead of
  * a PNG. Frames sample document time `start + i / fps` for every frame index `i` that falls before
- * `--end`, so the animation loops seamlessly from `end` back to `start`.
+ * `--end`. When `(end - start) * fps` is a whole number, the animation loops seamlessly from `end`
+ * back to `start`; otherwise the last frame is shown for a full frame period. The canvas keeps its
+ * size at `--start` for every frame, and each side is limited to 65535 pixels.
  *
  * - `--end <s>`: Animation end time in seconds (required).
  * - `--start <s>`: First frame's document time in seconds (default 0).
  * - `--fps <n>`: Frames per second (default 20). GIF delays are whole centiseconds, so the delays
  *   alternate as needed to keep the total duration exact.
- * - `--scale <factor>`: Scale the document's intrinsic size, for example `--scale 2` for a 2x GIF.
- *   `--width` and `--height` also apply.
- * - `--background <color>`: Composite onto a CSS color and produce an opaque GIF. Without it, the
- *   GIF keeps binary transparency: pixels below 50% opacity become transparent.
+ * - `--scale`, `--width` and `--height` set the GIF size as they do for PNG output.
+ * - `--background <color>`: Composite onto an opaque CSS color and produce an opaque GIF. Without
+ *   it, the GIF keeps binary transparency: pixels below 50% opacity become transparent.
  *
  * Each frame gets its own color table. Frames with at most 256 colors are stored exactly; busier
  * frames are reduced with median cut, which keeps large flat colors exact. Identical consecutive
