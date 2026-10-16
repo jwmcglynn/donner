@@ -196,6 +196,38 @@ std::string TerminalDiagnostic(const ParseDiagnostic& diagnostic) {
   return EscapeTerminalText(formatted.str(), /*preserveNewlines=*/true);
 }
 
+/// Document time of GIF frame \p index; the renderer samples exactly these times.
+double GifFrameTime(double startSeconds, double fps, int index) {
+  return startSeconds + static_cast<double>(index) / fps;
+}
+
+/**
+ * Count the GIF frames: one for each index `i` whose sample time `start + i / fps` is before
+ * \p endSeconds, and at least one.
+ *
+ * @return The frame count, or std::nullopt if it would exceed \ref kMaxGifFrames.
+ */
+std::optional<int> GifFrameCount(double startSeconds, double endSeconds, double fps) {
+  const double estimate = std::ceil((endSeconds - startSeconds) * fps);
+  if (!(estimate <= kMaxGifFrames + 1.0)) {
+    return std::nullopt;
+  }
+
+  // The estimate can be off by one in either direction through rounding; settle it against the
+  // exact sample times.
+  int count = std::max(1, static_cast<int>(estimate));
+  while (count > 1 && GifFrameTime(startSeconds, fps, count - 1) >= endSeconds) {
+    --count;
+  }
+  while (GifFrameTime(startSeconds, fps, count) < endSeconds) {
+    ++count;
+  }
+  if (count > kMaxGifFrames) {
+    return std::nullopt;
+  }
+  return count;
+}
+
 /**
  * Parse command line arguments.
  *
@@ -357,15 +389,13 @@ bool ParseArgs(int argc, char* argv[], CliOptions* options, std::ostream& out, s
     err << "--end must be greater than --start\n";
     return false;
   }
-  // Count the indices i with start + i / fps < end. The tolerance keeps an exact multiple of the
-  // frame period, such as 1 s at 30 fps, from gaining a frame through floating-point error.
-  const double frames = std::max(
-      1.0, std::ceil((*options->endSeconds - options->startSeconds) * options->fps - 1e-6));
-  if (frames > static_cast<double>(kMaxGifFrames)) {
-    err << "Animation would have " << frames << " frames; the limit is " << kMaxGifFrames << "\n";
+  const std::optional<int> frames =
+      GifFrameCount(options->startSeconds, *options->endSeconds, options->fps);
+  if (!frames) {
+    err << "Animation would have more than " << kMaxGifFrames << " frames\n";
     return false;
   }
-  options->gifFrameCount = static_cast<int>(frames);
+  options->gifFrameCount = *frames;
 
   return true;
 }
@@ -783,7 +813,7 @@ int RenderAnimatedGif(const CliOptions& options, SVGDocument& document, Renderer
   GifEncoder encoder(GifEncoder::Options{
       .width = gifSize.x, .height = gifSize.y, .background = options.background});
   for (int i = 0; i < frameCount; ++i) {
-    document.setTime(options.startSeconds + static_cast<double>(i) / options.fps);
+    document.setTime(GifFrameTime(options.startSeconds, options.fps, i));
     renderer.draw(document);
     const RendererBitmap frame = renderer.takeSnapshot();
     if (frame.empty()) {
