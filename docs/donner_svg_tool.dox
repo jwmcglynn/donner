@@ -43,7 +43,8 @@
  * `--end`. When `(end - start) * fps` is a whole number, the animation loops seamlessly from `end`
  * back to `start`; otherwise the last frame is shown for a full frame period. The canvas keeps its
  * size at `--start` for every frame, and each side is limited to 65535 pixels. An export is limited
- * to 10000 frames and 2^32 rendered pixels in total.
+ * to 10000 frames and 2^32 rendered pixels in total, and each frame to the renderer's 256 MiB
+ * surface budget.
  *
  * - `--end <s>`: Animation end time in seconds (required).
  * - `--start <s>`: First frame's document time in seconds (default 0).
