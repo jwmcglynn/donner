@@ -12,9 +12,11 @@ namespace donner::svg {
  * Streaming encoder for looping animated GIF89a images.
  *
  * Frames are RGBA8 bitmaps with straight (non-premultiplied) alpha, all the size given in \ref
- * Options. Each frame gets its own color table: a frame with at most 256 distinct colors is stored
- * losslessly, and a frame with more colors is reduced with weighted median cut, which keeps the
- * dominant flat colors of a diagram exact and spends the remaining entries on anti-aliased edges.
+ * Options. Each frame gets its own color table: a frame with at most 256 distinct colors (255
+ * without \ref Options::background, since every frame of a transparent GIF reserves one entry for
+ * transparency) is stored losslessly, and a frame with more colors is reduced with weighted median
+ * cut, which keeps the dominant flat colors of a diagram exact and spends the remaining entries on
+ * anti-aliased edges.
  *
  * Output size is reduced in two ways:
  * - A frame identical to its predecessor extends the previous frame's delay instead of being

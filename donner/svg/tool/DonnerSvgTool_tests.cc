@@ -349,6 +349,11 @@ TEST(DonnerSvgTool, RejectsInvalidAnimationValues) {
   err.str("");
   EXPECT_EQ(RunTool({"--gif", "out.gif", "--end", "100000", "input.svg"}, &out, &err), 1);
   EXPECT_THAT(err.str(), testing::HasSubstr("more than 10000 frames"));
+
+  err.str("");
+  EXPECT_EQ(
+      RunTool({"--gif", "out.gif", "--end", "1000", "--fps", "0.001", "input.svg"}, &out, &err), 1);
+  EXPECT_THAT(err.str(), testing::HasSubstr("--fps must be at least"));
 }
 
 TEST(DonnerSvgTool, ScaleCannotCombineWithWidth) {
@@ -433,6 +438,21 @@ TEST_F(DonnerSvgToolFileTest, GifFrameCountCoversEveryFrameBeforeEnd) {
             0)
       << err.str();
   EXPECT_THAT(out.str(), testing::HasSubstr("Frames: 30 rendered"));
+}
+
+TEST_F(DonnerSvgToolFileTest, GifRejectsExcessiveTotalRenderWork) {
+  const std::filesystem::path inputPath = WriteSvg("animated.svg", kAnimatedSvg);
+  const std::filesystem::path gifPath = tmpDir_ / "huge.gif";
+
+  std::ostringstream out;
+  std::ostringstream err;
+  // 10000 frames of a 2000x1000 canvas is 2e10 pixels.
+  EXPECT_EQ(RunTool({"--gif", gifPath.string(), "--end", "500", "--fps", "20", "--width", "2000",
+                     "--height", "1000", inputPath.string()},
+                    &out, &err),
+            4);
+  EXPECT_THAT(err.str(), testing::HasSubstr("the limit is 4294967296"));
+  EXPECT_FALSE(std::filesystem::exists(gifPath));
 }
 
 TEST_F(DonnerSvgToolFileTest, GifKeepsCanvasSizeWhenRootSizeAnimates) {

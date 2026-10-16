@@ -11,6 +11,7 @@
 #include <charconv>
 #include <chrono>
 #include <cmath>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <limits>
@@ -74,6 +75,12 @@ struct CliOptions {
 
 /// Upper bound on rendered GIF frames, so a typo in --end or --fps cannot run for hours.
 constexpr int kMaxGifFrames = 10000;
+
+/// Upper bound on frames times canvas pixels for a GIF, bounding render and encode work.
+constexpr std::uint64_t kMaxGifTotalPixels = std::uint64_t{1} << 32;
+
+/// Longest GIF frame delay, in centiseconds; slower frame rates cannot be represented.
+constexpr double kMaxGifDelayCentiseconds = 65535.0;
 
 /// Largest canvas side that --scale may produce, and the largest GIF side.
 constexpr int kMaxScaledDimension = 0xFFFF;
@@ -387,6 +394,11 @@ bool ParseArgs(int argc, char* argv[], CliOptions* options, std::ostream& out, s
   }
   if (*options->endSeconds <= options->startSeconds) {
     err << "--end must be greater than --start\n";
+    return false;
+  }
+  if (100.0 / options->fps > kMaxGifDelayCentiseconds) {
+    err << "--fps must be at least " << 100.0 / kMaxGifDelayCentiseconds
+        << " for GIF export, the slowest rate a GIF frame delay can represent\n";
     return false;
   }
   const std::optional<int> frames =
@@ -806,6 +818,15 @@ int RenderAnimatedGif(const CliOptions& options, SVGDocument& document, Renderer
   if (gifSize.x > kMaxScaledDimension || gifSize.y > kMaxScaledDimension) {
     err << "GIF canvas " << gifSize.x << "x" << gifSize.y << " exceeds the GIF limit of "
         << kMaxScaledDimension << " pixels on a side\n";
+    return 4;
+  }
+  const std::uint64_t totalPixels = static_cast<std::uint64_t>(frameCount) *
+                                    static_cast<std::uint64_t>(gifSize.x) *
+                                    static_cast<std::uint64_t>(gifSize.y);
+  if (totalPixels > kMaxGifTotalPixels) {
+    err << "GIF of " << frameCount << " frames at " << gifSize.x << "x" << gifSize.y
+        << " would render " << totalPixels << " pixels; the limit is " << kMaxGifTotalPixels
+        << "\n";
     return 4;
   }
   document.setCanvasSize(gifSize.x, gifSize.y);
