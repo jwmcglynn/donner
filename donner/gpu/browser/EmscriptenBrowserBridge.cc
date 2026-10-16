@@ -469,6 +469,15 @@ bool EmscriptenBrowserBridge::isDeviceLost() const {
   return CallBrowserGpu<donner_gpu_is_device_lost>(logicalDevice_) != 0;
 }
 
+BridgeStatus EmscriptenBrowserBridge::deviceStatus() const {
+  return CallBrowserGpuBatch([&] {
+    if (!ownsDevice()) {
+      return BridgeStatus::NotOwner;
+    }
+    return isDeviceLost() ? BridgeStatus::DeviceLost : BridgeStatus::Success;
+  });
+}
+
 RcString EmscriptenBrowserBridge::deviceLostReason() const {
   return ReadMessage(logicalDevice_, &CallBrowserGpu<donner_gpu_read_lost_reason>);
 }

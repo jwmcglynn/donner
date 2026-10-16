@@ -432,14 +432,22 @@ Status BrowserDevice::checkUsable(std::string_view operation) const {
                            "cannot be used from another thread",
                            operation));
   }
-  if (!bridge_->ownsDevice()) {
+  const BridgeStatus status = bridge_->deviceStatus();
+  if (status == BridgeStatus::NotOwner) {
     return Err(GpuErrorType::InvalidState,
                std::format("{}: the browser device belongs to another worker", operation));
   }
-  if (observeBrowserLoss()) {
+  if (status == BridgeStatus::DeviceLost) {
+    if (DeclareDeviceLost(*sharedLoss_)) {
+      LogDeclaredDeviceLoss("the browser reported its GPU device lost");
+    }
     return Err(GpuErrorType::InvalidState,
                std::format("{}: the browser device was lost: {}", operation,
                            bridge_->deviceLostReason().str()));
+  }
+  if (status != BridgeStatus::Success) {
+    return Err(GpuErrorType::InvalidState,
+               std::format("{}: the browser device status is unavailable", operation));
   }
   return OkStatus();
 }

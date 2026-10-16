@@ -58,6 +58,7 @@ public:
 
   bool ownsDevice() const override;
   bool isDeviceLost() const override;
+  BridgeStatus deviceStatus() const override;
   RcString deviceLostReason() const override;
   uint64_t completedSerial() const override;
   uint32_t maxTextureDimension2D() const override;

@@ -257,6 +257,14 @@ public:
   /// Whether the browser has reported the device lost. Once true it never becomes false again.
   virtual bool isDeviceLost() const = 0;
 
+  /// Samples usability, returning Success, NotOwner, or DeviceLost, in that refusal order.
+  virtual BridgeStatus deviceStatus() const {
+    if (!ownsDevice()) {
+      return BridgeStatus::NotOwner;
+    }
+    return isDeviceLost() ? BridgeStatus::DeviceLost : BridgeStatus::Success;
+  }
+
   /// What the browser said when it reported the device lost. Empty while the device is alive.
   virtual RcString deviceLostReason() const = 0;
 
