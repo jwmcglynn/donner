@@ -8343,6 +8343,7 @@ TEST(EditorShellTest, ViewportDeadlineRegistersWarmupWakeWithoutPendingRenderReq
   EditorShellTestAccess::ClearRequestRenderAtEndOfFrame(shell);
   EditorShellTestAccess::ExpireViewportSettleWake(shell);
   renderer.stageCompositorWarmupForTesting(/*pending=*/false, /*active=*/true);
+  EXPECT_TRUE(EditorShellTestAccess::Coordinator(shell).hasPendingViewportSettle());
   EXPECT_EQ(EditorShellTestAccess::ViewportRenderWake(shell), std::nullopt);
   EXPECT_EQ(EditorShellTestAccess::ViewportRenderWake(shell), std::nullopt);
   EXPECT_FALSE(EditorShellTestAccess::RequestRenderAtEndOfFrame(shell));
