@@ -8395,8 +8395,9 @@ void EditorShell::applyDeferredRenderRequest() {
     // document guard.
     renderCoordinator_.asyncRenderer().cancelInFlight();
   }
-  switch (internal::DeferredRenderActionForState(app_.hasDocument(), penDragFlushedThisFrame_,
-                                                 renderCoordinator_.asyncRenderer().isBusy())) {
+  switch (internal::DeferredRenderActionForState(
+      app_.hasDocument(), penDragFlushedThisFrame_,
+      renderCoordinator_.asyncRenderer().isBusyWithIdleWake())) {
     case internal::DeferredRenderAction::ClearRequest: requestRenderAtEndOfFrame_ = false; break;
     case internal::DeferredRenderAction::WakeForPenDrag:
       // An actively-moving pen drag flushed new path geometry this frame. The
