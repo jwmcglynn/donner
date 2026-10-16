@@ -34,18 +34,17 @@ namespace donner::editor {
 
 /// Raster target derived from an editor viewport.
 ///
-/// `semanticCanvasSizePx` is the canvas size used for SVG layout / render-tree
-/// preparation. `outputSizePx` is the bitmap or texture size actually rendered
-/// for presentation. At low zoom they are the same full-document raster. At
-/// high zoom, `outputSizePx` is capped to the pane plus margin and
-/// `outputFromDocument` maps the visible document window into that smaller
-/// surface.
+/// `semanticCanvasSizePx` is the legacy name for the nominal full-document raster target;
+/// it does not change the document's resolved SVG layout viewport. `outputSizePx` is the size
+/// rendered for presentation. At low zoom they are the same full-document raster. At high zoom,
+/// `outputSizePx` is capped to the pane plus margin and `outputFromDocument` maps the visible
+/// document window into that smaller surface.
 struct EditorRasterViewport {
   /// Document-space rectangle covered by the output raster.
   Box2d documentRect;
   /// Output raster size in device pixels.
   Vector2i outputSizePx = Vector2i::Zero();
-  /// Full-document canvas size in device pixels used for SVG layout semantics.
+  /// Nominal full-document raster size in device pixels; not a document-layout mutation.
   Vector2i semanticCanvasSizePx = Vector2i::Zero();
   /// Transform from document/viewBox coordinates to output raster pixels.
   Transform2d outputFromDocument;

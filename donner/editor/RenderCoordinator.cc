@@ -1868,6 +1868,8 @@ void RenderCoordinator::configurePresentationRepair(RenderRequest& request) cons
 RenderCoordinator::CanvasCommitPlan RenderCoordinator::prepareCanvasCommit(
     const EditorRasterViewport& rasterViewport, Vector2i actualDocumentCanvas, bool hasActiveDrag,
     bool pendingCanvasSelectionPress) {
+  // Camera zoom and DPR change the raster target, never the document's resolved SVG viewport.
+  // Keep the existing commit bookkeeping for callers/diagnostics without changing layout here.
   const Vector2i desiredCanvasSize = actualDocumentCanvas;
   // Compare desired size against the live document size. Document replacement
   // can reset the stored canvas size, and LayoutSystem readback can round by a

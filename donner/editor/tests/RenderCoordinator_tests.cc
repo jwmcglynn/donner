@@ -1292,10 +1292,9 @@ TEST(RenderCoordinatorTest, MaybeRequestRenderDispatchesWithoutTextureCache) {
   EXPECT_EQ(app.document().document().canvasSize(), viewport.desiredCanvasSize());
 }
 
-// A deterministic replay drives the coordinator's scheduling clock from recorded frame time, so a
-// canvas-size change must wait on that clock, not on the steady clock: otherwise a faster host
-// commits the canvas, and posts the renders that depend on it, on a different replay frame.
-TEST(RenderCoordinatorTest, CanvasCommitThrottleRunsOnTheSchedulingClock) {
+// Camera-only raster settling must preserve SVG layout both before and after its scheduling
+// deadline, independently of host speed or replay pacing.
+TEST(RenderCoordinatorTest, CameraSettleDeadlineDoesNotMutateSvgLayout) {
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(kTwoRectSvg));
   RenderCoordinator coordinator;
@@ -1317,20 +1316,20 @@ TEST(RenderCoordinatorTest, CanvasCommitThrottleRunsOnTheSchedulingClock) {
   ASSERT_NE(viewport.desiredCanvasSize(), firstCanvas);
   ASSERT_NO_FATAL_FAILURE(requestAndSettle());
   EXPECT_EQ(app.document().document().canvasSize(), firstCanvas)
-      << "a changed canvas size waits for the commit throttle";
+      << "camera raster size must not change SVG layout";
 
   RenderCoordinatorTestAccess::advanceFakeSchedulingClock(std::chrono::milliseconds(119));
   ASSERT_NO_FATAL_FAILURE(requestAndSettle());
   EXPECT_EQ(app.document().document().canvasSize(), firstCanvas)
-      << "119 ms on the scheduling clock is still inside the throttle";
+      << "layout stays unchanged before the raster-settle deadline";
 
   RenderCoordinatorTestAccess::advanceFakeSchedulingClock(std::chrono::milliseconds(1));
   ASSERT_NO_FATAL_FAILURE(requestAndSettle());
-  EXPECT_EQ(app.document().document().canvasSize(), viewport.desiredCanvasSize())
-      << "the throttle elapses on the scheduling clock, whatever the steady clock says";
+  EXPECT_EQ(app.document().document().canvasSize(), firstCanvas)
+      << "layout stays unchanged after the raster-settle deadline";
 }
 
-TEST(RenderCoordinatorTest, HiDpiCanvasCommitRebuildsAnAlreadyRenderedTree) {
+TEST(RenderCoordinatorTest, HiDpiRasterDoesNotRebuildResolvedSvgLayout) {
   EditorApp app;
   ASSERT_THAT(app.loadFromString(kTwoRectSvg), testing::IsTrue());
   app.document().document().setCanvasSize(100, 100);
@@ -1360,25 +1359,16 @@ TEST(RenderCoordinatorTest, HiDpiCanvasCommitRebuildsAnAlreadyRenderedTree) {
               testing::IsFalse());
   EXPECT_THAT(coordinator.documentCanvasCommitTotal(), testing::Eq(0u));
   RenderCoordinatorTestAccess::advanceFakeSchedulingClock(std::chrono::milliseconds(1));
-  const bool requested = coordinator.maybeRequestRender(app, selectTool, viewport, nullptr);
-  EXPECT_THAT(coordinator.documentCanvasCommitTotal(), testing::Eq(1u));
-  EXPECT_THAT(app.document().currentFrameVersion(), testing::Eq(versionBefore));
-  EXPECT_THAT(requested, testing::IsTrue())
-      << "The real canvas commit invalidates the render tree even when its raster is current.";
-  ASSERT_THAT(tests::WaitForNoRenderInFlight(coordinator.asyncRenderer()), testing::IsTrue());
-  EXPECT_THAT(target.resolvedFillPaint(), testing::Eq(representedFill))
-      << "The committed canvas needs a rebuilt rendering instance without another document edit.";
-  const std::optional<RenderResult> rebuilt = coordinator.asyncRenderer().pollResult();
-  ASSERT_THAT(rebuilt, testing::Optional(testing::_));
-  RenderCoordinatorTestAccess::noteRenderCompleted(coordinator, rebuilt->version,
-                                                   rebuilt->rasterViewport);
-  EXPECT_THAT(coordinator.maybeRequestRender(app, selectTool, viewport, nullptr),
-              testing::IsFalse())
-      << "An unchanged, represented canvas must not keep requesting renders.";
-  EXPECT_THAT(coordinator.documentCanvasCommitTotal(), testing::Eq(1u));
+  EXPECT_FALSE(coordinator.maybeRequestRender(app, selectTool, viewport, nullptr));
+  EXPECT_EQ(coordinator.documentCanvasCommitTotal(), 0u);
+  EXPECT_EQ(app.document().document().canvasSize(), Vector2i(100, 100));
+  EXPECT_EQ(app.document().currentFrameVersion(), versionBefore);
+  EXPECT_EQ(target.resolvedFillPaint(), representedFill);
+  EXPECT_FALSE(coordinator.asyncRenderer().pollResult().has_value())
+      << "A completed HiDPI raster must not schedule a redundant layout rebuild.";
 }
 
-TEST(RenderCoordinatorTest, BusyWorkerDoesNotLoseAHiDpiCanvasCommitRender) {
+TEST(RenderCoordinatorTest, BusyHiDpiRefreshDoesNotQueueLayoutMutation) {
   EditorApp app;
   ASSERT_THAT(app.loadFromString(kTwoRectSvg), testing::IsTrue());
   app.document().document().setCanvasSize(100, 100);
@@ -1414,20 +1404,14 @@ TEST(RenderCoordinatorTest, BusyWorkerDoesNotLoseAHiDpiCanvasCommitRender) {
   EXPECT_THAT(coordinator.documentCanvasCommitTotal(), testing::Eq(0u));
   completeRender();
   coordinator.asyncRenderer().setReplayRenderDelayForTesting(std::chrono::milliseconds(0));
-
-  EXPECT_THAT(coordinator.maybeRequestRender(app, selectTool, viewport, nullptr),
-              testing::IsTrue());
-  EXPECT_THAT(coordinator.documentCanvasCommitTotal(), testing::Eq(1u));
-  completeRender();
-  EXPECT_THAT(target.resolvedFillPaint(), testing::Eq(representedFill));
-  EXPECT_THAT(coordinator.maybeRequestRender(app, selectTool, viewport, nullptr),
-              testing::IsFalse());
+  EXPECT_FALSE(coordinator.maybeRequestRender(app, selectTool, viewport, nullptr));
+  EXPECT_EQ(coordinator.documentCanvasCommitTotal(), 0u);
+  EXPECT_EQ(app.document().document().canvasSize(), Vector2i(100, 100));
+  EXPECT_EQ(target.resolvedFillPaint(), representedFill);
 }
 
-// The render-tree rebuild after a HiDPI canvas commit replaces the presented result. With a
-// selection, it must still carry the selection hint, as a raster change does; otherwise its result
-// drops the promoted selected layer and the next drag of that selection has no tile to move.
-TEST(RenderCoordinatorTest, HiDpiCanvasCommitRebuildKeepsTheSelectedLayerPromoted) {
+// Changing raster resolution must retain the promoted selection without changing SVG layout.
+TEST(RenderCoordinatorTest, HiDpiRasterRefreshKeepsTheSelectedLayerPromoted) {
   EditorApp app;
   ASSERT_THAT(app.loadFromString(kTwoRectSvg), testing::IsTrue());
   app.document().document().setCanvasSize(100, 100);
@@ -1466,28 +1450,33 @@ TEST(RenderCoordinatorTest, HiDpiCanvasCommitRebuildKeepsTheSelectedLayerPromote
   completeRender();
   ASSERT_THAT(coordinator.maybeRequestRender(app, selectTool, viewport, &textures),
               testing::IsFalse())
-      << "The warmed selection is current until the canvas commit falls due.";
+      << "The warmed selection stays current while the camera is unchanged.";
   ASSERT_THAT(coordinator.documentCanvasCommitTotal(), testing::Eq(0u));
 
   RenderCoordinatorTestAccess::advanceFakeSchedulingClock(std::chrono::milliseconds(120));
-  ASSERT_THAT(coordinator.maybeRequestRender(app, selectTool, viewport, &textures),
-              testing::IsTrue());
-  ASSERT_THAT(coordinator.documentCanvasCommitTotal(), testing::Eq(1u));
+  EXPECT_FALSE(coordinator.maybeRequestRender(app, selectTool, viewport, &textures));
+  viewport.devicePixelRatio = 3.0;
+  bool requested = coordinator.maybeRequestRender(app, selectTool, viewport, &textures);
+  if (!requested) {
+    RenderCoordinatorTestAccess::advanceFakeSchedulingClock(std::chrono::milliseconds(120));
+    requested = coordinator.maybeRequestRender(app, selectTool, viewport, &textures);
+  }
+  ASSERT_TRUE(requested);
+  ASSERT_THAT(coordinator.documentCanvasCommitTotal(), testing::Eq(0u));
   const std::optional<RenderAttemptIdentity> rebuilt =
       RenderCoordinatorTestAccess::lastPostedAttempt(coordinator);
   ASSERT_THAT(rebuilt, testing::Optional(testing::_));
   EXPECT_THAT(rebuilt->overviewInfillOnly, testing::IsFalse());
   ASSERT_THAT(rebuilt->dragPreview, testing::Optional(testing::_))
-      << "The rebuild after the canvas commit dropped the selection hint.";
+      << "The new raster resolution must retain the selection hint.";
   EXPECT_THAT(rebuilt->dragPreview->entity, testing::Eq(selectedEntity));
   EXPECT_THAT(rebuilt->dragPreview->interactionKind,
               testing::Eq(svg::compositor::InteractionHint::Selection));
   completeRender();
 }
 
-// The idle loop wakes for a pending pixel-capture canvas commit; that wake must count down on the
-// same scheduling clock as the throttle it waits for.
-TEST(RenderCoordinatorTest, PixelCaptureCanvasCommitWakeRunsOnTheSchedulingClock) {
+// Pixel capture follows camera identity without scheduling a document-layout mutation.
+TEST(RenderCoordinatorTest, PixelCaptureZoomNeedsNoCanvasMutationTimer) {
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(kTwoRectSvg));
   RenderCoordinator coordinator;
@@ -1504,14 +1493,10 @@ TEST(RenderCoordinatorTest, PixelCaptureCanvasCommitWakeRunsOnTheSchedulingClock
   ASSERT_NO_FATAL_FAILURE(requestAndSettle());
   viewport.zoomAround(2.0, viewport.paneCenter());
   ASSERT_NO_FATAL_FAILURE(requestAndSettle());
-  EXPECT_THAT(coordinator.nextPixelCaptureCanvasCommitWakeSeconds(),
-              ::testing::Optional(::testing::FloatNear(0.120f, 1e-4f)))
-      << "the wake is the whole throttle away";
-
-  RenderCoordinatorTestAccess::advanceFakeSchedulingClock(std::chrono::milliseconds(119));
-  EXPECT_THAT(coordinator.nextPixelCaptureCanvasCommitWakeSeconds(),
-              ::testing::Optional(::testing::FloatNear(0.001f, 1e-4f)))
-      << "the wake counts down on the scheduling clock, whatever the steady clock says";
+  EXPECT_FALSE(coordinator.nextPixelCaptureCanvasCommitWakeSeconds().has_value());
+  RenderCoordinatorTestAccess::advanceFakeSchedulingClock(std::chrono::milliseconds(120));
+  EXPECT_FALSE(coordinator.nextPixelCaptureCanvasCommitWakeSeconds().has_value());
+  EXPECT_EQ(coordinator.documentCanvasCommitTotal(), 0u);
 }
 
 TEST(RenderCoordinatorTest, HeldDragWithoutPromotedTileRendersChangedDocumentVersion) {
@@ -1596,7 +1581,7 @@ TEST(RenderCoordinatorTest, SelectedPixelCaptureRepostsAfterPanCancelsInFlightRe
   EXPECT_FALSE(coordinator.asyncRenderer().isBusy());
 }
 
-TEST(RenderCoordinatorTest, DelayedCanvasSizeCommitInvalidatesSameVersionPixelCapture) {
+TEST(RenderCoordinatorTest, ZoomInvalidatesPixelCaptureWithoutMutatingSvgLayout) {
   constexpr std::string_view kPercentSvg =
       R"(<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="100%">
            <rect id="percent" width="50%" height="50%" fill="red"/></svg>)";
@@ -1605,35 +1590,36 @@ TEST(RenderCoordinatorTest, DelayedCanvasSizeCommitInvalidatesSameVersionPixelCa
   app.document().document().setCanvasSize(100, 100);
   const std::uint64_t versionBefore = app.document().currentFrameVersion();
   ViewportState viewport = MakeViewport(app);
-  viewport.zoom = 2.0;
   RenderCoordinator coordinator;
   SelectTool selectTool;
   coordinator.asyncRenderer().setReplayRenderDelayForTesting(std::chrono::milliseconds(500));
   RenderCoordinatorTestAccess::seedPreCommitPixelCapture(coordinator, app, viewport);
   ASSERT_NE(coordinator.documentPixelCaptureFor(app, viewport), nullptr);
+  viewport.zoomAround(2.0, viewport.paneCenter());
+  EXPECT_EQ(coordinator.documentPixelCaptureFor(app, viewport), nullptr);
 
   ASSERT_TRUE(coordinator.maybeRequestRender(app, selectTool, viewport, /*textures=*/nullptr));
   EXPECT_EQ(coordinator.documentPixelCaptureFor(app, viewport), nullptr)
-      << "A raster made before the semantic canvas commit cannot become Ready during debounce.";
+      << "A raster from the old camera cannot satisfy a new-camera pixel request.";
   EXPECT_FALSE(coordinator.nextPixelCaptureCanvasCommitWakeSeconds().has_value())
       << "Worker completion wakes the shell; no timer should spin while it is busy.";
 
-  RenderCoordinatorTestAccess::makeCanvasCommitDue(coordinator);
   ASSERT_TRUE(coordinator.asyncRenderer().isBusy());
-  EXPECT_FALSE(coordinator.maybeRequestRender(app, selectTool, viewport, /*textures=*/nullptr));
-  EXPECT_EQ(coordinator.documentPixelCaptureFor(app, viewport), nullptr)
-      << "An elapsed deadline cannot expose the stale raster while the worker delays commit.";
+  EXPECT_FALSE(coordinator.maybeRequestRender(app, selectTool, viewport, nullptr));
+  EXPECT_EQ(coordinator.documentPixelCaptureFor(app, viewport), nullptr);
+
   coordinator.asyncRenderer().cancelInFlight();
   ASSERT_TRUE(tests::WaitForNoRenderInFlight(coordinator.asyncRenderer()));
-  EXPECT_THAT(coordinator.nextPixelCaptureCanvasCommitWakeSeconds(),
-              ::testing::Optional(::testing::Eq(0.0f)));
-  coordinator.maybeRequestRender(app, selectTool, viewport, /*textures=*/nullptr);
-  EXPECT_EQ(coordinator.documentCanvasCommitTotal(), 1u);
+  EXPECT_FALSE(coordinator.nextPixelCaptureCanvasCommitWakeSeconds().has_value());
+  GlTextureCache textures;
+  coordinator.pollRenderResult(app, viewport, textures);
+  coordinator.maybeRequestRender(app, selectTool, viewport, nullptr);
+  EXPECT_EQ(coordinator.documentCanvasCommitTotal(), 0u);
+  EXPECT_EQ(app.document().document().canvasSize(), Vector2i(100, 100));
   EXPECT_EQ(app.document().currentFrameVersion(), versionBefore);
   EXPECT_EQ(coordinator.documentPixelCaptureFor(app, viewport), nullptr);
   EXPECT_THAT(RenderCoordinatorTestAccess::requestedCommitGeneration(coordinator),
-              ::testing::Optional(1u))
-      << "The post-commit request must name the new layout even when frame version is unchanged.";
+              ::testing::Optional(0u));
 
   coordinator.asyncRenderer().cancelInFlight();
   ASSERT_TRUE(tests::WaitForNoRenderInFlight(coordinator.asyncRenderer()));

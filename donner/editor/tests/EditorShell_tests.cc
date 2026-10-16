@@ -2828,12 +2828,9 @@ TEST(EditorShellTest, LayerInspectorReadbackIncludesSelectedStyleAndPathDiagnost
   ASSERT_TRUE(coordinator.asyncRenderer().waitUntilNoRenderInFlightForTesting(
       initialRenderGuard.deadline()));
   RunShellFrame(window, shell);
-  const tests::HangGuard commitGuard;
-  while (coordinator.documentCanvasCommitTotal() == 0 && commitGuard.active()) {
-    RunShellFrame(window, shell);
-    std::this_thread::sleep_for(std::chrono::milliseconds(5));
-  }
-  ASSERT_THAT(coordinator.documentCanvasCommitTotal(), testing::Gt(0u));
+  EXPECT_EQ(coordinator.documentCanvasCommitTotal(), 0u);
+  EXPECT_EQ(EditorShellTestAccess::App(shell).document().document().canvasSize(),
+            Vector2i(120, 80));
   const tests::HangGuard rebuildGuard;
   ASSERT_THAT(
       coordinator.asyncRenderer().waitUntilNoRenderInFlightForTesting(rebuildGuard.deadline()),
