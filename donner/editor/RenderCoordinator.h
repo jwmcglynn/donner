@@ -613,11 +613,11 @@ private:
                                     const EditorRasterViewport& rasterViewport) const;
   void recordPixelCaptureRequest(const RenderRequest& request,
                                  const DocumentPixelCaptureIdentity& desired);
-  void noteCanvasSizeCommitForPixelCapture(const EditorApp& app, const ViewportState& viewport,
-                                           DocumentPixelCaptureIdentity* desired,
-                                           bool* captureNeeded, bool* forcePresentationRefresh);
-  void updatePixelCaptureCanvasCommitWake(bool wouldChange, bool firstCommit,
-                                          bool deferForActiveDrag);
+  void noteCanvasSizeCommit(const EditorApp& app, const ViewportState& viewport,
+                            DocumentPixelCaptureIdentity* desired, bool* captureNeeded,
+                            bool* forcePresentationRefresh);
+  void noteSelectedViewportDeferral(bool deferred);
+  void updateCanvasCommitWakes(bool wouldChange, bool firstCommit, bool deferForActiveDrag);
   [[nodiscard]] Entity selectedCompositedEntity(EditorApp& app) const;
   [[nodiscard]] bool activeDragNeedsRenderedPresentation(
       EditorApp& app, const std::optional<SelectTool::ActiveDragPreview>& dragPreview,
@@ -760,6 +760,7 @@ private:
   std::optional<DocumentPixelCaptureIdentity> requestedPixelCapture_;
   std::optional<DocumentPixelCapture> documentPixelCapture_;
   std::optional<std::chrono::steady_clock::time_point> pixelCaptureCanvasCommitDue_;
+  std::optional<std::chrono::steady_clock::time_point> viewportSettleDue_;
   FrameCostBreakdown lastFrameCostBreakdown_;
   /// Cumulative canvas-size commits; see `documentCanvasCommitTotal`.
   std::uint64_t documentCanvasCommitTotal_ = 0;
