@@ -2048,7 +2048,8 @@ void RenderCoordinator::postScheduledRender(EditorApp& app, const ViewportState&
 bool RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectTool,
                                            const ViewportState& viewport, GlTextureCache* textures,
                                            bool supersedeInFlight,
-                                           SelectionChromeDetail directSurfaceSelectionDetail) {
+                                           SelectionChromeDetail directSurfaceSelectionDetail,
+                                           [[maybe_unused]] bool pendingCanvasSelectionPress) {
   ZoneScopedN("RenderCoordinator::maybeRequestRender");
   if (!app.hasDocument() || viewport.paneSize.x <= 0.0 || viewport.paneSize.y <= 0.0) {
     viewportSettleDue_.reset();

@@ -6395,6 +6395,54 @@ TEST(RenderCoordinatorTest, StableSelectedFullDocumentPrewarmStaysIdle) {
   }
 }
 
+TEST(RenderCoordinatorTest, BufferedSelectionPressDefersCanvasCommitUntilConsumed) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+      <rect id="target" x="40" y="40" width="20" height="20" fill="red"/>
+    </svg>
+  )svg"));
+  app.setSelection(*app.document().document().querySelector("#target"));
+  ViewportState viewport;
+  viewport.paneSize = Vector2d(200, 120);
+  viewport.documentViewBox = Box2d::FromXYWH(0, 0, 100, 100);
+  viewport.devicePixelRatio = 2;
+  viewport.resetTo100Percent();
+  SelectTool selectTool;
+  GlTextureCache textures;
+  RenderCoordinator coordinator;
+  if (!coordinator.renderer().requiresTextureSnapshotPresentation()) {
+    GTEST_SKIP() << "Geode-only presentation regression requires retained texture upload.";
+  }
+  RenderCoordinatorTestAccess::useFakeSchedulingClock(coordinator);
+  const auto request = [&](bool pendingPress) {
+    return coordinator.maybeRequestRender(app, selectTool, viewport, &textures, false,
+                                          SelectionChromeDetail::Full, pendingPress);
+  };
+  // Buffered input must not prevent the first document canvas from being established.
+  ASSERT_TRUE(request(true));
+  ASSERT_TRUE(DrainCoordinator(coordinator, app, viewport, textures));
+  const auto canvas = app.document().document().canvasSize();
+  ASSERT_NE(canvas, Vector2i::Zero());
+  const auto commits = coordinator.documentCanvasCommitTotal();
+  viewport.zoomAround(6, viewport.paneCenter());
+  request(true);
+  ASSERT_TRUE(DrainCoordinator(coordinator, app, viewport, textures));
+  RenderCoordinatorTestAccess::advanceFakeSchedulingClock(
+      RenderCoordinatorTestAccess::kCanvasSizeCommitDelay);
+  ASSERT_FALSE(selectTool.activeDragPreview().has_value());
+  request(true);
+  EXPECT_EQ(app.document().document().canvasSize(), canvas);
+  EXPECT_EQ(coordinator.documentCanvasCommitTotal(), commits)
+      << "A buffered selection press must protect retained tiles before a drag preview exists.";
+  ASSERT_TRUE(DrainCoordinator(coordinator, app, viewport, textures));
+  EXPECT_EQ(coordinator.nextViewportSettleWakeSeconds(), std::nullopt);
+  request(false);
+  ASSERT_TRUE(DrainCoordinator(coordinator, app, viewport, textures));
+  EXPECT_GT(coordinator.documentCanvasCommitTotal(), commits);
+  EXPECT_NE(app.document().document().canvasSize(), canvas);
+}
+
 TEST(RenderCoordinatorTest, ContinuousSelectedZoomDefersViewportPrewarmUntilStable) {
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(R"svg(

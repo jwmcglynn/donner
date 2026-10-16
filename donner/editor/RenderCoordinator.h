@@ -453,11 +453,14 @@ public:
   /// @param textures Optional cache for viewport-coverage diagnostics.
   /// @param supersedeInFlight Whether an in-flight worker render may be replaced.
   /// @param directSurfaceSelectionDetail Reserved; scheduling currently ignores this value.
+  /// @param pendingCanvasSelectionPress Buffered canvas selection input not yet consumed by the
+  /// tool.
   /// @return True only when a new worker request was posted.
   bool maybeRequestRender(
       EditorApp& app, SelectTool& selectTool, const ViewportState& viewport,
       GlTextureCache* textures = nullptr, bool supersedeInFlight = false,
-      SelectionChromeDetail directSurfaceSelectionDetail = SelectionChromeDetail::Full);
+      SelectionChromeDetail directSurfaceSelectionDetail = SelectionChromeDetail::Full,
+      bool pendingCanvasSelectionPress = false);
   /// Record document-flush invalidation that depends on the live selected element.
   ///
   /// @param app Editor application state containing the live selection.
