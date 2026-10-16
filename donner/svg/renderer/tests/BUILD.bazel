@@ -82,7 +82,9 @@ donner_cc_test(
     srcs = ["GifEncoder_tests.cc"],
     deps = [
         ":gif_test_decoder",
+        "//donner/editor/tests:bitmap_golden_compare",
         "//donner/svg/renderer:gif_encoder",
+        "//donner/svg/renderer:renderer_interface",
         "@com_google_gtest//:gtest_main",
     ],
 )
