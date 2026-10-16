@@ -1761,6 +1761,8 @@ public:
     shell.requestRenderAtEndOfFrame_ = false;
   }
 
+  static void ApplyDeferredRenderRequest(EditorShell& shell) { shell.applyDeferredRenderRequest(); }
+
   static void SetRequestRenderAtEndOfFrame(EditorShell& shell) {
     shell.requestRenderAtEndOfFrame_ = true;
   }
@@ -8306,6 +8308,26 @@ TEST(EditorShellTest, ReplayToolSwitchCancelsEyedropperCapture) {
     EXPECT_THAT(EditorShellTestAccess::EyedropperCaptureEnabled(shell), testing::Eq(false));
     EXPECT_THAT(EditorShellTestAccess::ActiveToolIsEyedropper(shell), testing::Eq(false));
   }
+}
+
+TEST(EditorShellTest, DeferredRenderRegistersWarmupReleaseWake) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "Hidden editor window is unavailable on this host";
+  }
+  std::atomic<int> wakes = 0;
+  EditorShell shell(window, OptionsWithSource(kInitialSvg));
+  ASSERT_TRUE(shell.valid());
+  auto& renderer = shell.asyncRendererForReplay();
+  renderer.setWakeCallback([&] { ++wakes; });
+  renderer.stageCompositorWarmupForTesting(/*pending=*/false, /*active=*/true);
+  EditorShellTestAccess::SetRequestRenderAtEndOfFrame(shell);
+  EditorShellTestAccess::ApplyDeferredRenderRequest(shell);
+  EXPECT_TRUE(EditorShellTestAccess::RequestRenderAtEndOfFrame(shell));
+  EXPECT_EQ(wakes.load(), 0);
+  renderer.completeCompositorWarmupForTesting();
+  EXPECT_EQ(wakes.load(), 1)
+      << "The shell must register its retained render demand before waiting for warmup.";
 }
 
 TEST(EditorShellTest, IdleViewportSettleWakeQueuesRenderAndWaitsBehindPicker) {
