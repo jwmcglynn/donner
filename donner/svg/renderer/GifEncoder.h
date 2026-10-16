@@ -16,11 +16,12 @@ namespace donner::svg {
  * losslessly, and a frame with more colors is reduced with weighted median cut, which keeps the
  * dominant flat colors of a diagram exact and spends the remaining entries on anti-aliased edges.
  *
- * Output size is reduced in two ways that never change decoded pixels:
+ * Output size is reduced in two ways:
  * - A frame identical to its predecessor extends the previous frame's delay instead of being
- *   stored again.
+ *   stored again. This never changes decoded pixels.
  * - With an opaque background, each frame stores only the rectangle that changed since the
- *   previous frame.
+ *   previous frame. The frame's color table then only has to cover that rectangle, so a frame
+ *   that needs quantization may quantize differently than it would uncropped.
  *
  * Usage:
  * ```
@@ -94,7 +95,9 @@ public:
    *
    * GIF delays are whole centiseconds. Rounding each frame independently would drift (30 fps
    * would play at 33.3 fps), so frame `i` lasts `round((i + 1) * 100 / fps) - round(i * 100 /
-   * fps)` centiseconds and the total stays within half a centisecond of the true duration.
+   * fps)` centiseconds and the total stays within half a centisecond of the true duration. Above
+   * 100 fps some delays are 0. Frames longer than the largest GIF delay, 65535 centiseconds, are
+   * clamped to it.
    *
    * @param fps Frames per second, positive.
    * @param frameCount Number of frames.
@@ -112,7 +115,12 @@ private:
     uint32_t delayCentiseconds = 0;  //!< Accumulated delay.
   };
 
+  /// Write the pending frame's graphic control extension and image block to the output.
   void flushPending();
+
+  /// Extend the pending frame by \p delayCentiseconds, repeating it if the total no longer fits
+  /// in one GIF delay.
+  void extendPendingDelay(uint16_t delayCentiseconds);
 
   Options options_;
   bool valid_ = false;

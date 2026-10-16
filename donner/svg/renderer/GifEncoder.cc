@@ -5,7 +5,10 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdint>
 #include <limits>
+#include <optional>
+#include <span>
 #include <string_view>
 #include <unordered_map>
 
@@ -293,11 +296,188 @@ void WriteLzw(std::vector<uint8_t>& out, const std::vector<uint8_t>& indices, in
   writer.finish();
 }
 
+/// Whether a span of \p spanSize bytes holds \p height rows of \p width RGBA8 pixels spaced
+/// \p stride pixels apart, without the size computation overflowing.
+bool PixelSpanFits(size_t spanSize, size_t width, size_t height, size_t stride) {
+  constexpr size_t kMaxPixels = std::numeric_limits<size_t>::max() / 4;
+  if (stride < width || (height > 1 && stride > (kMaxPixels - width) / (height - 1))) {
+    return false;
+  }
+  return spanSize / 4 >= (height - 1) * stride + width;
+}
+
+/// Resolved frame pixels, packed as 0xAARRGGBB with alpha either 0xFF or fully transparent 0.
+struct ResolvedFrame {
+  std::vector<uint32_t> pixels;
+  bool hasTransparency = false;
+};
+
+/// Composite \p rgbaPixels over \p background, or threshold alpha to binary transparency.
+ResolvedFrame ResolveAlpha(std::span<const uint8_t> rgbaPixels, size_t width, size_t height,
+                           size_t stride, const std::optional<GifEncoder::Rgb>& background) {
+  ResolvedFrame frame;
+  frame.pixels.resize(width * height);
+  for (size_t y = 0; y < height; ++y) {
+    const uint8_t* row = rgbaPixels.data() + y * stride * 4;
+    for (size_t x = 0; x < width; ++x) {
+      const uint8_t* px = row + x * 4;
+      uint32_t argb = kTransparentPixel;
+      if (background) {
+        const uint32_t a = px[3];
+        const auto blend = [a](uint8_t src, uint8_t dst) {
+          return (uint32_t{src} * a + uint32_t{dst} * (255 - a) + 127) / 255;
+        };
+        argb = kOpaqueAlpha | (blend(px[0], background->r) << 16) |
+               (blend(px[1], background->g) << 8) | blend(px[2], background->b);
+      } else if (px[3] >= 128) {
+        argb = kOpaqueAlpha | (uint32_t{px[0]} << 16) | (uint32_t{px[1]} << 8) | px[2];
+      } else {
+        frame.hasTransparency = true;
+      }
+      frame.pixels[y * width + x] = argb;
+    }
+  }
+  return frame;
+}
+
+/// Smallest rectangle containing every pixel that differs between two distinct frames.
+PixelRect ChangedRect(const std::vector<uint32_t>& previous, const std::vector<uint32_t>& current,
+                      int width, int height) {
+  int minX = width;
+  int minY = height;
+  int maxX = -1;
+  int maxY = -1;
+  for (int y = 0; y < height; ++y) {
+    for (int x = 0; x < width; ++x) {
+      const size_t i = static_cast<size_t>(y) * static_cast<size_t>(width) + static_cast<size_t>(x);
+      if (current[i] != previous[i]) {
+        minX = std::min(minX, x);
+        maxX = std::max(maxX, x);
+        minY = std::min(minY, y);
+        maxY = std::max(maxY, y);
+      }
+    }
+  }
+  return PixelRect{minX, minY, maxX - minX + 1, maxY - minY + 1};
+}
+
+/**
+ * Rectangle of \p current to store. An opaque animation only needs the rectangle that changed
+ * since \p previous drawn over it. With transparency, a pixel may turn transparent, which drawing
+ * over the previous frame cannot express, so each frame replaces the whole canvas instead.
+ *
+ * @param options Encoder configuration.
+ * @param previous The previous frame, or nullptr for the first frame.
+ * @param current The frame being added, which differs from \p previous.
+ */
+PixelRect StoredRect(const GifEncoder::Options& options, const std::vector<uint32_t>* previous,
+                     const std::vector<uint32_t>& current) {
+  if (!options.background || !previous) {
+    return PixelRect{0, 0, options.width, options.height};
+  }
+  return ChangedRect(*previous, current, options.width, options.height);
+}
+
+/// Calls \p visit with every pixel of \p rect, in row-major order.
+template <typename Visitor>
+void ForEachPixel(const std::vector<uint32_t>& pixels, size_t width, const PixelRect& rect,
+                  Visitor&& visit) {
+  for (int y = rect.top; y < rect.top + rect.height; ++y) {
+    for (int x = rect.left; x < rect.left + rect.width; ++x) {
+      visit(pixels[static_cast<size_t>(y) * width + static_cast<size_t>(x)]);
+    }
+  }
+}
+
+/// A frame's color table and the table index of each of its opaque colors.
+struct FramePalette {
+  std::vector<uint32_t> colors;
+  /// Maps each opaque RGB color in the frame to its index in \ref colors.
+  std::unordered_map<uint32_t, uint32_t> indexOf;
+};
+
+/// Choose at most \p maxColors table entries for the opaque pixels of \p rect, exactly when they
+/// fit and with weighted median cut otherwise.
+FramePalette BuildPalette(const std::vector<uint32_t>& pixels, size_t width, const PixelRect& rect,
+                          size_t maxColors) {
+  FramePalette palette;
+  // The histogram counts are replaced by palette indices once the table is chosen.
+  std::unordered_map<uint32_t, uint32_t>& histogram = palette.indexOf;
+  ForEachPixel(pixels, width, rect, [&histogram](uint32_t argb) {
+    if (argb != kTransparentPixel) {
+      ++histogram[argb & 0xFFFFFFu];
+    }
+  });
+
+  if (histogram.size() <= maxColors) {
+    for (const auto& [rgb, count] : histogram) {
+      palette.colors.push_back(rgb);
+    }
+    std::sort(palette.colors.begin(), palette.colors.end());
+  } else {
+    std::vector<ColorCount> colors;
+    colors.reserve(histogram.size());
+    for (const auto& [rgb, count] : histogram) {
+      colors.push_back({rgb, count});
+    }
+    palette.colors = MedianCut(std::move(colors), maxColors);
+  }
+
+  for (auto& [rgb, index] : histogram) {
+    index = NearestIndex(palette.colors, rgb);
+  }
+  return palette;
+}
+
+/// Write the image descriptor, local color table and LZW data for \p rect of \p pixels.
+std::vector<uint8_t> EncodeImageBlock(const std::vector<uint32_t>& pixels, size_t width,
+                                      const PixelRect& rect, const FramePalette& palette,
+                                      bool hasTransparency) {
+  const auto transparentIndex = static_cast<uint8_t>(palette.colors.size());
+  const size_t tableEntries = palette.colors.size() + (hasTransparency ? 1 : 0);
+  int tableBits = 1;
+  while ((size_t{1} << tableBits) < tableEntries) {
+    ++tableBits;
+  }
+
+  std::vector<uint8_t> indices;
+  indices.reserve(static_cast<size_t>(rect.width) * static_cast<size_t>(rect.height));
+  uint32_t lastColor = kTransparentPixel;
+  uint8_t lastIndex = transparentIndex;
+  ForEachPixel(pixels, width, rect, [&](uint32_t argb) {
+    if (argb != lastColor) {
+      lastColor = argb;
+      lastIndex = argb == kTransparentPixel
+                      ? transparentIndex
+                      : static_cast<uint8_t>(palette.indexOf.find(argb & 0xFFFFFFu)->second);
+    }
+    indices.push_back(lastIndex);
+  });
+
+  std::vector<uint8_t> data;
+  data.push_back(0x2C);
+  WriteU16(data, static_cast<uint32_t>(rect.left));
+  WriteU16(data, static_cast<uint32_t>(rect.top));
+  WriteU16(data, static_cast<uint32_t>(rect.width));
+  WriteU16(data, static_cast<uint32_t>(rect.height));
+  data.push_back(static_cast<uint8_t>(0x80 | (tableBits - 1)));  // Local color table present.
+  for (size_t i = 0; i < (size_t{1} << tableBits); ++i) {
+    const uint32_t rgb = i < palette.colors.size() ? palette.colors[i] : 0;
+    data.push_back(Red(rgb));
+    data.push_back(Green(rgb));
+    data.push_back(Blue(rgb));
+  }
+  WriteLzw(data, indices, std::max(2, tableBits));
+  return data;
+}
 }  // namespace
 
 GifEncoder::GifEncoder(const Options& options) : options_(options) {
+  // The frame buffers hold width * height 32-bit pixels, which must be addressable.
   valid_ = options.width > 0 && options.height > 0 && options.width <= 0xFFFF &&
-           options.height <= 0xFFFF;
+           options.height <= 0xFFFF &&
+           static_cast<std::uint64_t>(options.width) * static_cast<std::uint64_t>(options.height) <=
+               std::numeric_limits<size_t>::max() / sizeof(uint32_t);
   if (!valid_) {
     return;
   }
@@ -330,167 +510,55 @@ bool GifEncoder::addFrame(std::span<const uint8_t> rgbaPixels, size_t strideInPi
     return false;
   }
 
-  const size_t width = static_cast<size_t>(options_.width);
-  const size_t height = static_cast<size_t>(options_.height);
+  const auto width = static_cast<size_t>(options_.width);
+  const auto height = static_cast<size_t>(options_.height);
   const size_t stride = strideInPixels == 0 ? width : strideInPixels;
-  if (stride < width || rgbaPixels.size() < ((height - 1) * stride + width) * 4) {
+  if (!PixelSpanFits(rgbaPixels.size(), width, height, stride)) {
     return false;
   }
 
-  // Resolve alpha: composite over the background, or threshold to binary transparency.
-  std::vector<uint32_t> current(width * height);
-  bool hasTransparency = false;
-  for (size_t y = 0; y < height; ++y) {
-    const uint8_t* row = rgbaPixels.data() + y * stride * 4;
-    for (size_t x = 0; x < width; ++x) {
-      const uint8_t* px = row + x * 4;
-      uint32_t argb = 0;
-      if (options_.background) {
-        const uint32_t a = px[3];
-        const auto blend = [a](uint8_t src, uint8_t dst) {
-          return (uint32_t{src} * a + uint32_t{dst} * (255 - a) + 127) / 255;
-        };
-        argb = kOpaqueAlpha | (blend(px[0], options_.background->r) << 16) |
-               (blend(px[1], options_.background->g) << 8) | blend(px[2], options_.background->b);
-      } else if (px[3] >= 128) {
-        argb = kOpaqueAlpha | (uint32_t{px[0]} << 16) | (uint32_t{px[1]} << 8) | px[2];
-      } else {
-        argb = kTransparentPixel;
-        hasTransparency = true;
-      }
-      current[y * width + x] = argb;
-    }
-  }
-
-  if (pending_ && current == previous_) {
-    uint32_t total = pending_->delayCentiseconds + delayCentiseconds;
-    if (total > kMaxDelayCentiseconds) {
-      // Re-drawing the same frame is idempotent under both disposal methods used here, so the
-      // overflow is carried by a repeat of the pending frame.
-      PendingFrame repeat = *pending_;
-      pending_->delayCentiseconds = kMaxDelayCentiseconds;
-      flushPending();
-      repeat.delayCentiseconds = total - kMaxDelayCentiseconds;
-      pending_ = std::move(repeat);
-      ++storedFrameCount_;
-    } else {
-      pending_->delayCentiseconds = total;
-    }
+  ResolvedFrame current = ResolveAlpha(rgbaPixels, width, height, stride, options_.background);
+  if (pending_ && current.pixels == previous_) {
+    extendPendingDelay(delayCentiseconds);
     return true;
   }
 
-  // An opaque animation only needs the changed rectangle drawn over the previous frame. With
-  // transparency, a pixel may turn transparent, which drawing over the previous frame cannot
-  // express, so each frame replaces the whole canvas instead.
-  PixelRect rect{0, 0, options_.width, options_.height};
-  const bool cropToChanges = options_.background.has_value() && pending_.has_value();
-  if (cropToChanges) {
-    int minX = options_.width;
-    int minY = options_.height;
-    int maxX = -1;
-    int maxY = -1;
-    for (int y = 0; y < options_.height; ++y) {
-      for (int x = 0; x < options_.width; ++x) {
-        const size_t i = static_cast<size_t>(y) * width + static_cast<size_t>(x);
-        if (current[i] != previous_[i]) {
-          minX = std::min(minX, x);
-          maxX = std::max(maxX, x);
-          minY = std::min(minY, y);
-          maxY = std::max(maxY, y);
-        }
-      }
-    }
-    rect = PixelRect{minX, minY, maxX - minX + 1, maxY - minY + 1};
-  }
-
-  // Histogram of the opaque colors inside the rectangle.
-  std::unordered_map<uint32_t, uint32_t> histogram;
-  for (int y = rect.top; y < rect.top + rect.height; ++y) {
-    for (int x = rect.left; x < rect.left + rect.width; ++x) {
-      const uint32_t argb = current[static_cast<size_t>(y) * width + static_cast<size_t>(x)];
-      if (argb != kTransparentPixel) {
-        ++histogram[argb & 0xFFFFFFu];
-      }
-    }
-  }
-
-  const size_t maxColors = hasTransparency ? 255 : 256;
-  std::vector<uint32_t> palette;
-  if (histogram.size() <= maxColors) {
-    for (const auto& [rgb, count] : histogram) {
-      palette.push_back(rgb);
-    }
-    std::sort(palette.begin(), palette.end());
-  } else {
-    std::vector<ColorCount> colors;
-    colors.reserve(histogram.size());
-    for (const auto& [rgb, count] : histogram) {
-      colors.push_back({rgb, count});
-    }
-    palette = MedianCut(std::move(colors), maxColors);
-  }
-
-  // Map each distinct color to its palette index once; the histogram is reused as the lookup.
-  for (auto& [rgb, index] : histogram) {
-    index = NearestIndex(palette, rgb);
-  }
-
-  const uint8_t transparentIndex = static_cast<uint8_t>(palette.size());
-  const size_t tableEntries = palette.size() + (hasTransparency ? 1 : 0);
-  int tableBits = 1;
-  while ((size_t{1} << tableBits) < tableEntries) {
-    ++tableBits;
-  }
-
-  std::vector<uint8_t> indices;
-  indices.reserve(static_cast<size_t>(rect.width) * static_cast<size_t>(rect.height));
-  uint32_t lastColor = 0;
-  uint8_t lastIndex = 0;
-  bool haveLast = false;
-  for (int y = rect.top; y < rect.top + rect.height; ++y) {
-    for (int x = rect.left; x < rect.left + rect.width; ++x) {
-      const uint32_t argb = current[static_cast<size_t>(y) * width + static_cast<size_t>(x)];
-      if (argb == kTransparentPixel) {
-        indices.push_back(transparentIndex);
-        continue;
-      }
-      if (!haveLast || argb != lastColor) {
-        lastColor = argb;
-        lastIndex = static_cast<uint8_t>(histogram[argb & 0xFFFFFFu]);
-        haveLast = true;
-      }
-      indices.push_back(lastIndex);
-    }
-  }
+  const PixelRect rect =
+      StoredRect(options_, pending_.has_value() ? &previous_ : nullptr, current.pixels);
+  const FramePalette palette =
+      BuildPalette(current.pixels, width, rect, current.hasTransparency ? 255 : 256);
 
   PendingFrame frame;
   frame.disposal = options_.background ? 1 : 2;
-  frame.transparent = hasTransparency;
-  frame.transparentIndex = hasTransparency ? transparentIndex : 0;
+  frame.transparent = current.hasTransparency;
+  frame.transparentIndex =
+      current.hasTransparency ? static_cast<uint8_t>(palette.colors.size()) : 0;
   frame.delayCentiseconds = delayCentiseconds;
-
-  std::vector<uint8_t>& data = frame.encoded;
-  data.push_back(0x2C);
-  WriteU16(data, static_cast<uint32_t>(rect.left));
-  WriteU16(data, static_cast<uint32_t>(rect.top));
-  WriteU16(data, static_cast<uint32_t>(rect.width));
-  WriteU16(data, static_cast<uint32_t>(rect.height));
-  data.push_back(static_cast<uint8_t>(0x80 | (tableBits - 1)));  // Local color table present.
-  for (size_t i = 0; i < (size_t{1} << tableBits); ++i) {
-    const uint32_t rgb = i < palette.size() ? palette[i] : 0;
-    data.push_back(Red(rgb));
-    data.push_back(Green(rgb));
-    data.push_back(Blue(rgb));
-  }
-  WriteLzw(data, indices, std::max(2, tableBits));
+  frame.encoded = EncodeImageBlock(current.pixels, width, rect, palette, current.hasTransparency);
 
   flushPending();
   pending_ = std::move(frame);
-  previous_ = std::move(current);
+  previous_ = std::move(current.pixels);
   ++storedFrameCount_;
   return true;
 }
 
+void GifEncoder::extendPendingDelay(uint16_t delayCentiseconds) {
+  const uint32_t total = pending_->delayCentiseconds + delayCentiseconds;
+  if (total <= kMaxDelayCentiseconds) {
+    pending_->delayCentiseconds = total;
+    return;
+  }
+
+  // Re-drawing the same frame is idempotent under both disposal methods used here, so the
+  // overflow is carried by a repeat of the pending frame.
+  PendingFrame repeat = *pending_;
+  pending_->delayCentiseconds = kMaxDelayCentiseconds;
+  flushPending();
+  repeat.delayCentiseconds = total - kMaxDelayCentiseconds;
+  pending_ = std::move(repeat);
+  ++storedFrameCount_;
+}
 void GifEncoder::flushPending() {
   if (!pending_) {
     return;
@@ -527,11 +595,19 @@ std::vector<uint16_t> GifEncoder::FrameDelaysCentiseconds(double fps, int frameC
     return delays;
   }
 
+  // A frame longer than the largest GIF delay is clamped; this also keeps the boundaries below
+  // in range for any frame count.
+  if (100.0 / fps >= kMaxDelayCentiseconds) {
+    return std::vector<uint16_t>(static_cast<size_t>(frameCount),
+                                 static_cast<uint16_t>(kMaxDelayCentiseconds));
+  }
+
   delays.reserve(static_cast<size_t>(frameCount));
-  const auto boundary = [fps](int frame) { return std::llround(frame * 100.0 / fps); };
+  const auto boundary = [fps](int frame) {
+    return static_cast<std::int64_t>(std::llround(frame * 100.0 / fps));
+  };
   for (int i = 0; i < frameCount; ++i) {
-    const long long delay = boundary(i + 1) - boundary(i);
-    delays.push_back(static_cast<uint16_t>(std::clamp<long long>(delay, 0, kMaxDelayCentiseconds)));
+    delays.push_back(static_cast<uint16_t>(boundary(i + 1) - boundary(i)));
   }
   return delays;
 }
