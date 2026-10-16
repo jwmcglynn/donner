@@ -470,6 +470,31 @@ TEST(ViewportStateTest, SelectedPrewarmDoesNotExpandFullyCoveredAxisBeyondDocume
          "document.";
 }
 
+TEST(ViewportStateTest, FractionalBoundedRasterCoversTheWholeUncroppedAxis) {
+  for (const double dpr : {1.0, 2.0}) {
+    for (const double zoom : {1.93, 2.17}) {
+      for (const bool transpose : {false, true}) {
+        const auto orient = [transpose](Vector2d value) {
+          return transpose ? Vector2d(value.y, value.x) : value;
+        };
+        ViewportState viewport =
+            MakeFreshState(orient(Vector2d(40, 8)), orient(Vector2d(1025, 884)),
+                           Box2d(Vector2d::Zero(), orient(Vector2d(892, 512))), dpr);
+        viewport.zoom = zoom;
+        viewport.panDocPoint = orient(Vector2d(302, 390));
+        viewport.panScreenPoint = orient(Vector2d(550, 440));
+        for (const auto& raster :
+             {viewport.rasterViewport(), viewport.selectedPrewarmRasterViewport()}) {
+          ASSERT_TRUE(raster.viewportBounded);
+          EXPECT_LE(orient(raster.documentRect.topLeft).y, 0.0);
+          EXPECT_GE(orient(raster.documentRect.bottomRight).y, 512.0)
+              << "A rounded pixel dimension must not leave an artboard edge uncovered.";
+        }
+      }
+    }
+  }
+}
+
 TEST(ViewportStateTest, FractionalZoomSelectedPrewarmPreservesFullyCoveredAxis) {
   for (const bool transpose : {false, true}) {
     SCOPED_TRACE(transpose ? "fully covered width" : "fully covered height");
