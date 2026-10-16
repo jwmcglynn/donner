@@ -420,7 +420,7 @@ TEST_F(DonnerSvgToolFileTest, GifFrameCountCoversEveryFrameBeforeEnd) {
 TEST_F(DonnerSvgToolFileTest, GifKeepsCanvasSizeWhenRootSizeAnimates) {
   const std::filesystem::path inputPath = WriteSvg("growing.svg", R"(
 <svg xmlns="http://www.w3.org/2000/svg" width="20" height="10" viewBox="0 0 20 10">
-  <animate attributeName="width" from="20" to="40" dur="1s" fill="freeze"/>
+  <animate attributeName="width" from="30" to="40" dur="1s" fill="freeze"/>
   <rect width="20" height="10" fill="blue"/>
 </svg>
 )");
@@ -438,9 +438,16 @@ TEST_F(DonnerSvgToolFileTest, GifKeepsCanvasSizeWhenRootSizeAnimates) {
   const std::optional<DecodedGif> gif = DecodeGifForTesting(
       std::span(reinterpret_cast<const uint8_t*>(bytes.data()), bytes.size()), &error);
   ASSERT_TRUE(gif.has_value()) << error;
-  EXPECT_EQ(gif->width, 20);
+  // The size at --start, where the animated width is 30.
+  EXPECT_EQ(gif->width, 30);
   EXPECT_EQ(gif->height, 10);
-  EXPECT_THAT(gif->frames, testing::SizeIs(4));
+  EXPECT_THAT(out.str(), testing::HasSubstr("Frames: 4 rendered"));
+  // Frames whose fitted pixels match their predecessor are merged; the loop still lasts 1 s.
+  int totalDelay = 0;
+  for (const DecodedGifFrame& frame : gif->frames) {
+    totalDelay += frame.delayCentiseconds;
+  }
+  EXPECT_EQ(totalDelay, 100);
 }
 
 TEST_F(DonnerSvgToolFileTest, ScaleAppliesToPngAndRejectsOversizedCanvas) {

@@ -206,6 +206,9 @@ std::optional<DecodedGif> DecodeGifForTesting(std::span<const uint8_t> data, std
     frame.width = reader.u16();
     frame.height = reader.u16();
     frame.disposal = disposal;
+    if (transparent) {
+      frame.transparentIndex = transparentIndex;
+    }
     frame.delayCentiseconds = delay;
     const uint8_t imageFlags = reader.u8();
     if (imageFlags & 0x40) {

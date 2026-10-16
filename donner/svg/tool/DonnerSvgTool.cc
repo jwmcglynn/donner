@@ -768,13 +768,15 @@ int RenderAnimatedGif(const CliOptions& options, SVGDocument& document, Renderer
   }
 
   // Pin the canvas to its size at the first frame: the root element's width and height are
-  // animatable, and every GIF frame must have the logical screen's size.
+  // animatable, and every GIF frame must have the logical screen's size. Animated values are
+  // applied when drawing, so draw the first frame before reading the size.
   document.setTime(options.startSeconds);
+  renderer.draw(document);
   const Vector2i gifSize = document.canvasSize();
   if (gifSize.x > kMaxScaledDimension || gifSize.y > kMaxScaledDimension) {
     err << "GIF canvas " << gifSize.x << "x" << gifSize.y << " exceeds the GIF limit of "
         << kMaxScaledDimension << " pixels on a side\n";
-    return 1;
+    return 4;
   }
   document.setCanvasSize(gifSize.x, gifSize.y);
 
