@@ -8330,6 +8330,32 @@ TEST(EditorShellTest, DeferredRenderRegistersWarmupReleaseWake) {
       << "The shell must register its retained render demand before waiting for warmup.";
 }
 
+TEST(EditorShellTest, ViewportDeadlineRegistersWarmupWakeWithoutPendingRenderRequest) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "Hidden editor window is unavailable on this host";
+  }
+  std::atomic<int> wakes = 0;
+  EditorShell shell(window, OptionsWithSource(kInitialSvg));
+  ASSERT_TRUE(shell.valid());
+  auto& renderer = shell.asyncRendererForReplay();
+  renderer.setWakeCallback([&] { ++wakes; });
+  EditorShellTestAccess::ClearRequestRenderAtEndOfFrame(shell);
+  EditorShellTestAccess::ExpireViewportSettleWake(shell);
+  renderer.stageCompositorWarmupForTesting(/*pending=*/false, /*active=*/true);
+  EXPECT_EQ(EditorShellTestAccess::ViewportRenderWake(shell), std::nullopt);
+  EXPECT_EQ(EditorShellTestAccess::ViewportRenderWake(shell), std::nullopt);
+  EXPECT_FALSE(EditorShellTestAccess::RequestRenderAtEndOfFrame(shell));
+  EXPECT_EQ(wakes.load(), 0);
+  renderer.completeCompositorWarmupForTesting();
+  EXPECT_EQ(wakes.load(), 1)
+      << "Hiding the deadline behind warmup must register one wake before the host parks.";
+  EXPECT_THAT(EditorShellTestAccess::ViewportRenderWake(shell),
+              testing::Optional(testing::Eq(0.0f)));
+  EditorShellTestAccess::QueueIdleRenderRefresh(shell);
+  EXPECT_TRUE(EditorShellTestAccess::RequestRenderAtEndOfFrame(shell));
+}
+
 TEST(EditorShellTest, IdleViewportSettleWakeQueuesRenderAndWaitsBehindPicker) {
   gui::EditorWindow window = MakeHiddenWindow();
   if (!window.valid()) {
