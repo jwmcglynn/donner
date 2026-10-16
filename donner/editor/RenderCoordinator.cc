@@ -1894,7 +1894,8 @@ void RenderCoordinator::configurePresentationRepair(RenderRequest& request) cons
 RenderCoordinator::CanvasCommitPlan RenderCoordinator::prepareCanvasCommit(
     const EditorRasterViewport& rasterViewport, Vector2i actualDocumentCanvas, bool hasActiveDrag,
     bool pendingCanvasSelectionPress) {
-  const Vector2i desiredCanvasSize = rasterViewport.semanticCanvasSizePx;
+  // Camera changes raster resolution, not the document's resolved SVG viewport.
+  const Vector2i desiredCanvasSize = actualDocumentCanvas;
   // Compare desired size against the live document size. Document replacement
   // can reset the stored canvas size, and LayoutSystem readback can round by a
   // pixel, so a separate last-set tracker is not authoritative here.
