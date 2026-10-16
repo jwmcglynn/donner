@@ -867,7 +867,6 @@ test(
       }
       // Separate the selection click from the drag so it cannot become a group-isolation double click.
       await page.waitForTimeout(400);
-      report.ownerBeforeDrag = await gpuOwnerDiagnostic(page);
       const firstDrag = await continuousDrag(page, dragStart, -1, "first-drag-193");
       report["first-drag-193"] = firstDrag;
       console.log(

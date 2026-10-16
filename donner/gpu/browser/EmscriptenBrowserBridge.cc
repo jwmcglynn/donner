@@ -206,6 +206,14 @@ auto CallBrowserGpu(Args... args) -> decltype(Function(args...)) {
   }
 }
 
+/// Keep a resource descriptor's primitives in one synchronous owner dispatch.
+template <typename Function>
+BridgeStatus CallBrowserGpuBatch(Function&& function) {
+  BridgeStatus result = BridgeStatus::Success;
+  RunOnBrowserGpuOwner([&] { result = function(); });
+  return result;
+}
+
 /// Largest message this bridge reads back from the browser. A browser's own failure text is a
 /// diagnostic, so it is truncated rather than allowed to size an allocation.
 constexpr int kMaxMessageBytes = 512;
@@ -537,57 +545,64 @@ BridgeStatus EmscriptenBrowserBridge::createSampler(BrowserObjectId id, uint32_t
 
 BridgeStatus EmscriptenBrowserBridge::createBindGroupLayout(
     BrowserObjectId id, std::span<const BrowserBindGroupLayoutEntry> entries) {
-  if (const BridgeStatus status =
-          StatusFromBrowser(CallBrowserGpu<donner_gpu_bind_group_layout_begin>(logicalDevice_));
-      status != BridgeStatus::Success) {
-    return status;
-  }
-  for (const BrowserBindGroupLayoutEntry& entry : entries) {
+  return CallBrowserGpuBatch([&] {
     if (const BridgeStatus status =
-            StatusFromBrowser(CallBrowserGpu<donner_gpu_bind_group_layout_entry>(
-                logicalDevice_, entry.binding, entry.visibilityBits, entry.bindingTypeCode,
-                entry.storageTextureFormat));
+            StatusFromBrowser(CallBrowserGpu<donner_gpu_bind_group_layout_begin>(logicalDevice_));
         status != BridgeStatus::Success) {
       return status;
     }
-  }
-  return StatusFromBrowser(CallBrowserGpu<donner_gpu_bind_group_layout_finish>(logicalDevice_, id));
+    for (const BrowserBindGroupLayoutEntry& entry : entries) {
+      if (const BridgeStatus status =
+              StatusFromBrowser(CallBrowserGpu<donner_gpu_bind_group_layout_entry>(
+                  logicalDevice_, entry.binding, entry.visibilityBits, entry.bindingTypeCode,
+                  entry.storageTextureFormat));
+          status != BridgeStatus::Success) {
+        return status;
+      }
+    }
+    return StatusFromBrowser(
+        CallBrowserGpu<donner_gpu_bind_group_layout_finish>(logicalDevice_, id));
+  });
 }
 
 BridgeStatus EmscriptenBrowserBridge::createBindGroup(
     BrowserObjectId id, BrowserObjectId layoutId, std::span<const BrowserBindGroupEntry> entries) {
-  if (const BridgeStatus status =
-          StatusFromBrowser(CallBrowserGpu<donner_gpu_bind_group_begin>(logicalDevice_, layoutId));
-      status != BridgeStatus::Success) {
-    return status;
-  }
-  for (const BrowserBindGroupEntry& entry : entries) {
-    if (const BridgeStatus status = StatusFromBrowser(CallBrowserGpu<donner_gpu_bind_group_entry>(
-            logicalDevice_, entry.binding, static_cast<unsigned int>(entry.resource),
-            entry.resourceId, static_cast<double>(entry.offsetBytes),
-            static_cast<double>(entry.sizeBytes)));
+  return CallBrowserGpuBatch([&] {
+    if (const BridgeStatus status = StatusFromBrowser(
+            CallBrowserGpu<donner_gpu_bind_group_begin>(logicalDevice_, layoutId));
         status != BridgeStatus::Success) {
       return status;
     }
-  }
-  return StatusFromBrowser(CallBrowserGpu<donner_gpu_bind_group_finish>(logicalDevice_, id));
+    for (const BrowserBindGroupEntry& entry : entries) {
+      if (const BridgeStatus status = StatusFromBrowser(CallBrowserGpu<donner_gpu_bind_group_entry>(
+              logicalDevice_, entry.binding, static_cast<unsigned int>(entry.resource),
+              entry.resourceId, static_cast<double>(entry.offsetBytes),
+              static_cast<double>(entry.sizeBytes)));
+          status != BridgeStatus::Success) {
+        return status;
+      }
+    }
+    return StatusFromBrowser(CallBrowserGpu<donner_gpu_bind_group_finish>(logicalDevice_, id));
+  });
 }
 
 BridgeStatus EmscriptenBrowserBridge::createPipelineLayout(
     BrowserObjectId id, std::span<const BrowserObjectId> groupLayoutIds) {
-  if (const BridgeStatus status =
-          StatusFromBrowser(CallBrowserGpu<donner_gpu_pipeline_layout_begin>(logicalDevice_));
-      status != BridgeStatus::Success) {
-    return status;
-  }
-  for (const BrowserObjectId layoutId : groupLayoutIds) {
-    if (const BridgeStatus status = StatusFromBrowser(
-            CallBrowserGpu<donner_gpu_pipeline_layout_group>(logicalDevice_, layoutId));
+  return CallBrowserGpuBatch([&] {
+    if (const BridgeStatus status =
+            StatusFromBrowser(CallBrowserGpu<donner_gpu_pipeline_layout_begin>(logicalDevice_));
         status != BridgeStatus::Success) {
       return status;
     }
-  }
-  return StatusFromBrowser(CallBrowserGpu<donner_gpu_pipeline_layout_finish>(logicalDevice_, id));
+    for (const BrowserObjectId layoutId : groupLayoutIds) {
+      if (const BridgeStatus status = StatusFromBrowser(
+              CallBrowserGpu<donner_gpu_pipeline_layout_group>(logicalDevice_, layoutId));
+          status != BridgeStatus::Success) {
+        return status;
+      }
+    }
+    return StatusFromBrowser(CallBrowserGpu<donner_gpu_pipeline_layout_finish>(logicalDevice_, id));
+  });
 }
 
 BridgeStatus EmscriptenBrowserBridge::createShaderModule(BrowserObjectId id,
@@ -600,48 +615,50 @@ BridgeStatus EmscriptenBrowserBridge::createRenderPipeline(
     BrowserObjectId id, const BrowserRenderPipelineRequest& request) {
   const std::string vertexEntryPoint = request.vertexEntryPoint.str();
   const std::string fragmentEntryPoint = request.fragmentEntryPoint.str();
-  if (const BridgeStatus status =
-          StatusFromBrowser(CallBrowserGpu<donner_gpu_render_pipeline_begin>(
-              logicalDevice_, request.layoutId, request.vertexModuleId, vertexEntryPoint.data(),
-              static_cast<int>(vertexEntryPoint.size()), request.fragmentModuleId,
-              fragmentEntryPoint.data(), static_cast<int>(fragmentEntryPoint.size()),
-              request.topologyCode, request.cullModeCode));
-      status != BridgeStatus::Success) {
-    return status;
-  }
-
-  for (const BrowserVertexBufferLayout& layout : request.vertexBuffers) {
+  return CallBrowserGpuBatch([&] {
     if (const BridgeStatus status =
-            StatusFromBrowser(CallBrowserGpu<donner_gpu_render_pipeline_vertex_buffer>(
-                logicalDevice_, layout.strideBytes, layout.stepModeCode));
+            StatusFromBrowser(CallBrowserGpu<donner_gpu_render_pipeline_begin>(
+                logicalDevice_, request.layoutId, request.vertexModuleId, vertexEntryPoint.data(),
+                static_cast<int>(vertexEntryPoint.size()), request.fragmentModuleId,
+                fragmentEntryPoint.data(), static_cast<int>(fragmentEntryPoint.size()),
+                request.topologyCode, request.cullModeCode));
         status != BridgeStatus::Success) {
       return status;
     }
-    for (const BrowserVertexAttribute& attribute : layout.attributes) {
+
+    for (const BrowserVertexBufferLayout& layout : request.vertexBuffers) {
       if (const BridgeStatus status =
-              StatusFromBrowser(CallBrowserGpu<donner_gpu_render_pipeline_vertex_attribute>(
-                  logicalDevice_, attribute.formatCode, attribute.offsetBytes,
-                  attribute.shaderLocation));
+              StatusFromBrowser(CallBrowserGpu<donner_gpu_render_pipeline_vertex_buffer>(
+                  logicalDevice_, layout.strideBytes, layout.stepModeCode));
+          status != BridgeStatus::Success) {
+        return status;
+      }
+      for (const BrowserVertexAttribute& attribute : layout.attributes) {
+        if (const BridgeStatus status =
+                StatusFromBrowser(CallBrowserGpu<donner_gpu_render_pipeline_vertex_attribute>(
+                    logicalDevice_, attribute.formatCode, attribute.offsetBytes,
+                    attribute.shaderLocation));
+            status != BridgeStatus::Success) {
+          return status;
+        }
+      }
+    }
+
+    for (const BrowserColorTarget& target : request.colorTargets) {
+      if (const BridgeStatus status =
+              StatusFromBrowser(CallBrowserGpu<donner_gpu_render_pipeline_color_target>(
+                  logicalDevice_, target.formatCode, target.blendEnabled ? 1u : 0u,
+                  target.colorBlend.srcFactorCode, target.colorBlend.dstFactorCode,
+                  target.colorBlend.operationCode, target.alphaBlend.srcFactorCode,
+                  target.alphaBlend.dstFactorCode, target.alphaBlend.operationCode,
+                  target.writeMaskBits));
           status != BridgeStatus::Success) {
         return status;
       }
     }
-  }
 
-  for (const BrowserColorTarget& target : request.colorTargets) {
-    if (const BridgeStatus status =
-            StatusFromBrowser(CallBrowserGpu<donner_gpu_render_pipeline_color_target>(
-                logicalDevice_, target.formatCode, target.blendEnabled ? 1u : 0u,
-                target.colorBlend.srcFactorCode, target.colorBlend.dstFactorCode,
-                target.colorBlend.operationCode, target.alphaBlend.srcFactorCode,
-                target.alphaBlend.dstFactorCode, target.alphaBlend.operationCode,
-                target.writeMaskBits));
-        status != BridgeStatus::Success) {
-      return status;
-    }
-  }
-
-  return StatusFromBrowser(CallBrowserGpu<donner_gpu_render_pipeline_finish>(logicalDevice_, id));
+    return StatusFromBrowser(CallBrowserGpu<donner_gpu_render_pipeline_finish>(logicalDevice_, id));
+  });
 }
 
 BridgeStatus EmscriptenBrowserBridge::createComputePipeline(
