@@ -621,7 +621,8 @@ bool ShouldPresentCompositedPreviewForViewport(const RenderResult::CompositedPre
 }
 
 bool PresentationRepairNeedsCoverage(FramePresentationFailure buildFailure,
-                                     FramePresentationFailure adoptionFailure) {
+                                     FramePresentationFailure adoptionFailure,
+                                     const FramePresentationBuildResult& outcome) {
   return IsCoverageFailure(buildFailure) || IsCoverageFailure(adoptionFailure);
 }
 
@@ -1337,7 +1338,8 @@ namespace {
 void PublishFrameRepairDetails(const FramePresentationInput& input,
                                const GlTextureCache::PresentationResources& resources,
                                FramePresentationFailure failure,
-                               FramePresentationFailure adoptionFailure) {
+                               FramePresentationFailure adoptionFailure,
+                               const FramePresentationBuildResult& outcome) {
   const auto current = input.documentIdentity;
   const auto active = resources.capture()->identity();
   const auto overview = resources.overviewCapture() ? resources.overviewCapture()->identity()
@@ -1347,7 +1349,7 @@ void PublishFrameRepairDetails(const FramePresentationInput& input,
     window['__donnerPresentationRepairStats'] = ({
       'failure': $0, 'current': [$1, $2, $3, $4],
       'active': [$5, $6, $7, $8, $9], 'overview': [$10, $11, $12, $13, $14],
-      'bounded': Boolean($15),
+      'bounded': Boolean($15), 'frameFailure': $16, 'pointerFailure': $17,
     });
   }, static_cast<int>(failure), static_cast<double>(current.documentRevision),
       static_cast<double>(current.version), static_cast<double>(current.geometryRevision),
@@ -1356,7 +1358,9 @@ void PublishFrameRepairDetails(const FramePresentationInput& input,
       static_cast<double>(active.geometryRevision), static_cast<double>(active.presentationEpoch),
       static_cast<double>(overview.captureId), static_cast<double>(overview.documentRevision),
       static_cast<double>(overview.version), static_cast<double>(overview.geometryRevision),
-      static_cast<double>(overview.presentationEpoch), resources.coverage().activeTilesViewportBounded);
+      static_cast<double>(overview.presentationEpoch), resources.coverage().activeTilesViewportBounded,
+      static_cast<int>(outcome.failure),
+      outcome.frame ? static_cast<int>(outcome.frame->pointerFailure()) : -1);
   MAIN_THREAD_ASYNC_EM_ASM({
     const stats = window['__donnerPresentationRepairStats'];
     if (stats && Object.is(stats['active'][0], $0)) {
@@ -1442,7 +1446,7 @@ void RenderCoordinator::updateFrameRepairStatus(
   presentationNeedsRender_ = failure != FramePresentationFailure::None;
   presentationNeedsCoverage_ = PresentationRepairNeedsCoverage(outcome.failure, adoptionFailure_);
 #ifdef __EMSCRIPTEN__
-  PublishFrameRepairDetails(input, *resources, failure, adoptionFailure_);
+  PublishFrameRepairDetails(input, *resources, failure, adoptionFailure_, outcome);
 #endif
   if (presentationNeedsRender_) {
     pendingRepair_ = PresentationRepairIdentity{

@@ -56,6 +56,18 @@ enum class FramePresentationFailure {
   UploadRefused
 };
 
+/// Why a requested pointer pose could not be projected onto retained pixels.
+enum class PointerPresentationFailure {
+  None,
+  SelectionGeometry,
+  ContentIdentity,
+  AffinePreview,
+  PoseCount,
+  MissingPose,
+  ImmovablePose,
+  RasterCoverage
+};
+
 /// A sealed frame, when available, and the exact work needed to complete its presentation.
 struct FramePresentationBuildResult {
   std::shared_ptr<const FramePresentation> frame;  //!< Sealed frame, or null when none was built.
@@ -189,6 +201,8 @@ public:
   [[nodiscard]] bool hasSelectionGeometry() const { return hasSelectionGeometry_; }
   /// Whether the frame applied pointer intent to independently movable captured pixels.
   [[nodiscard]] bool followsPointer() const { return followsPointer_; }
+  /// Missing proof for a requested pointer pose, independent of background repair work.
+  [[nodiscard]] PointerPresentationFailure pointerFailure() const { return pointerFailure_; }
   /// Chosen absolute object poses, also used to derive selection geometry.
   [[nodiscard]] const std::vector<PresentationPose>& poses() const UTILS_LIFETIME_BOUND {
     return poses_;
@@ -200,6 +214,8 @@ private:
   bool retainDisplayedPoses(const FramePresentation* previous);
   bool chosenPosesHaveCoverage(const FramePresentationInput& input) const;
   void applyPointerIntent(const FramePresentationInput& input);
+  PointerPresentationFailure validatePointerPose(const CapturedPresentation::Object& object,
+                                                 const FramePresentationInput& input) const;
   void projectSelectionGeometry();
   void resolveSelectionBounds(const FramePresentationInput& input);
   void resolveTiles(const FramePresentationInput& input);
@@ -234,6 +250,7 @@ private:
   std::shared_ptr<const CapturedPresentation> livePathCapture_;
   bool hasSelectionGeometry_ = false;
   bool followsPointer_ = false;
+  PointerPresentationFailure pointerFailure_ = PointerPresentationFailure::None;
 };
 
 }  // namespace donner::editor

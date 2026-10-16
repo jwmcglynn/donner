@@ -446,6 +446,7 @@ async function continuousDrag(
       readbackCount?: unknown;
       readbackPollIterations?: unknown;
       presentation?: Diagnostics["__donnerPresentationQueueStats"];
+      repair?: unknown;
     }[] = [];
     const workerCompletions: {
       observedAtMs: number;
@@ -491,6 +492,7 @@ async function continuousDrag(
             workerMs: state.__donnerWorkerStats?.workerMs,
             completedResults: state.__donnerWorkerStats?.completedResults,
             presentation,
+            repair: structuredClone(state.__donnerPresentationRepairStats),
             readbackCount: state.__donnerWorkerStats?.readbackCount,
             readbackPollIterations: state.__donnerWorkerStats?.readbackPollIterations,
           });

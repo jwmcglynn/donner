@@ -131,6 +131,7 @@ TEST(FramePresentationTest, FlattenedSelectionKeepsPixelsAndChromeAtCapturedPose
   const auto frame = FramePresentation::Build(resources, Input(app, tool, 1)).frame;
   ASSERT_THAT(frame, Ne(nullptr));
   EXPECT_THAT(frame->followsPointer(), IsFalse());
+  EXPECT_EQ(frame->pointerFailure(), PointerPresentationFailure::ImmovablePose);
   ExpectRectAt(*frame, 10.0);
 }
 
@@ -166,6 +167,7 @@ TEST(FramePresentationTest, PartialRasterCannotMoveAnUncapturedRegionIntoView) {
   const auto frame = FramePresentation::Build(resources, Input(app, tool, 1)).frame;
   ASSERT_NE(frame, nullptr);
   EXPECT_FALSE(frame->followsPointer());
+  EXPECT_EQ(frame->pointerFailure(), PointerPresentationFailure::RasterCoverage);
   EXPECT_EQ(frame->chrome().paths.front().pathDoc.bounds(),
             Box2d::FromXYWH(10.0, 10.0, 20.0, 20.0));
   EXPECT_TRUE(
@@ -294,6 +296,7 @@ TEST(FramePresentationTest, ProjectionRequiresRendererOwnershipCertificate) {
   const auto frame = FramePresentation::Build(resources, Input(app, tool, 1)).frame;
   ASSERT_NE(frame, nullptr);
   EXPECT_FALSE(frame->followsPointer());
+  EXPECT_EQ(frame->pointerFailure(), PointerPresentationFailure::ImmovablePose);
   ExpectRectAt(*frame, 10);
 }
 

@@ -475,19 +475,41 @@ bool FramePresentation::chosenPosesHaveCoverage(const FramePresentationInput& in
   return true;
 }
 
+PointerPresentationFailure FramePresentation::validatePointerPose(
+    const CapturedPresentation::Object& object, const FramePresentationInput& input) const {
+  const auto target = FindPose(input.desired->poses, object.entity);
+  if (!target) {
+    return PointerPresentationFailure::MissingPose;
+  }
+  if (!MovablePose(*selectionCapture_, tiles_, *target)) {
+    return PointerPresentationFailure::ImmovablePose;
+  }
+  if (!RasterCoversProjection(*selectionCapture_, object, *target,
+                              resources_->objectCoverage(object.entity, useOverview_), input)) {
+    return PointerPresentationFailure::RasterCoverage;
+  }
+  return PointerPresentationFailure::None;
+}
+
 void FramePresentation::applyPointerIntent(const FramePresentationInput& input) {
   hasSelectionGeometry_ =
       identity_.documentGeneration == input.documentIdentity.documentGeneration &&
       SameSelection(selectionCapture_->selection(), input.selection);
-  if (hasSelectionGeometry_ && input.desired.has_value() &&
-      identity_.sameContent(input.desired->contentIdentity) &&
-      selectionCapture_->affinePreviewAllowed() &&
-      input.desired->poses.size() == input.selection.size()) {
+  if (!input.desired) {
+    return;
+  }
+  if (!hasSelectionGeometry_) {
+    pointerFailure_ = PointerPresentationFailure::SelectionGeometry;
+  } else if (!identity_.sameContent(input.desired->contentIdentity)) {
+    pointerFailure_ = PointerPresentationFailure::ContentIdentity;
+  } else if (!selectionCapture_->affinePreviewAllowed()) {
+    pointerFailure_ = PointerPresentationFailure::AffinePreview;
+  } else if (input.desired->poses.size() != input.selection.size()) {
+    pointerFailure_ = PointerPresentationFailure::PoseCount;
+  } else {
     followsPointer_ = std::ranges::all_of(selectionCapture_->objects(), [&](const auto& object) {
-      const auto target = FindPose(input.desired->poses, object.entity);
-      return target.has_value() && MovablePose(*selectionCapture_, tiles_, *target) &&
-             RasterCoversProjection(*selectionCapture_, object, *target,
-                                    resources_->objectCoverage(object.entity, useOverview_), input);
+      pointerFailure_ = validatePointerPose(object, input);
+      return pointerFailure_ == PointerPresentationFailure::None;
     });
     if (followsPointer_) {
       for (const auto& pose : input.desired->poses) {
