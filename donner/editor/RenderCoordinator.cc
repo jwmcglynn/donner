@@ -410,6 +410,15 @@ bool IsCoverageFailure(FramePresentationFailure failure) {
          failure == FramePresentationFailure::MissingOverview;
 }
 
+bool IsEpochRefreshOfSameContent(const PresentationIdentity& candidate,
+                                 const PresentationIdentity& previous) {
+  return candidate.documentGeneration == previous.documentGeneration &&
+         candidate.version == previous.version &&
+         candidate.geometryRevision == previous.geometryRevision &&
+         candidate.fontResourceRevision == previous.fontResourceRevision &&
+         candidate.presentationEpoch != previous.presentationEpoch;
+}
+
 RenderAttemptIdentity MakeRenderAttempt(
     std::uint64_t documentGeneration, std::uint64_t version,
     const EditorRasterViewport& rasterViewport, bool overviewInfillOnly, Entity selectedEntity,
@@ -1540,11 +1549,20 @@ std::shared_ptr<const FramePresentation> RenderCoordinator::buildFramePresentati
 bool RenderCoordinator::canReplaceWithOverview(const RenderResult& result,
                                                const EditorApp& app) const {
   const auto currentIdentity = currentPresentationIdentity(app);
-  const bool stalePresentedContent =
-      framePresentation_ != nullptr && !framePresentation_->identity().sameContent(currentIdentity);
-  const bool repairsCoverage = pendingRepair_ && CompleteOverviewCanRepair(pendingRepair_->failure);
-  if ((!stalePresentedContent && !repairsCoverage) || result.capturedPresentation == nullptr ||
+  if (result.capturedPresentation == nullptr ||
       !result.capturedPresentation->identity().sameContent(currentIdentity)) {
+    return false;
+  }
+  // An epoch-only refresh of the same committed content can replace stale pixels before the
+  // next detailed render.
+  // Do not extend this shortcut across committed edits: their normal overview/detail pairing
+  // preserves the existing raster quality while those edits settle.
+  const auto& candidate = result.capturedPresentation->identity();
+  const bool refreshesPresentedEpoch =
+      framePresentation_ != nullptr &&
+      IsEpochRefreshOfSameContent(candidate, framePresentation_->identity());
+  const bool repairsCoverage = pendingRepair_ && CompleteOverviewCanRepair(pendingRepair_->failure);
+  if (!refreshesPresentedEpoch && !repairsCoverage) {
     return false;
   }
   const std::span<const RenderResult::CompositedTile> tiles =
