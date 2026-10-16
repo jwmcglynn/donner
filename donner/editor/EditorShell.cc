@@ -1696,7 +1696,7 @@ EditorShell::EditorShell(gui::EditorWindow& window, EditorShellOptions options)
   queueBackgroundFontPreviews();
 }
 
-std::optional<float> EditorShell::nextViewportRenderWakeSeconds() const {
+std::optional<float> EditorShell::nextViewportRenderWakeSeconds() {
   const auto captureWake = renderCoordinator_.nextPixelCaptureCanvasCommitWakeSeconds();
   std::optional<float> settleWake;
   if (app_.hasDocument() && viewportInitialized_ &&
@@ -1712,7 +1712,7 @@ std::optional<float> EditorShell::nextViewportRenderWakeSeconds() const {
   return std::min(*captureWake, *settleWake);
 }
 
-std::optional<float> EditorShell::nextIdleWakeSeconds() const {
+std::optional<float> EditorShell::nextIdleWakeSeconds() {
   std::optional<float> result;
   const auto includeWake = [&result](std::optional<float> wakeSeconds) {
     if (!wakeSeconds.has_value()) {

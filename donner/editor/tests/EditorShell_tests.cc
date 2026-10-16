@@ -1651,7 +1651,7 @@ public:
 
   static void QueueIdleRenderRefresh(EditorShell& shell) { shell.queueIdleRenderRefreshIfNeeded(); }
 
-  static std::optional<float> ViewportRenderWake(const EditorShell& shell) {
+  static std::optional<float> ViewportRenderWake(EditorShell& shell) {
     return shell.nextViewportRenderWakeSeconds();
   }
 

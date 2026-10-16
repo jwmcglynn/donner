@@ -984,8 +984,8 @@ void RenderCoordinator::noteSelectedPromotionAvailability(const RenderResult& re
   };
 }
 
-std::optional<float> RenderCoordinator::nextViewportSettleWakeSeconds() const {
-  if (!viewportSettleDue_.has_value() || renderWorker_.asyncRenderer.isBusy()) {
+std::optional<float> RenderCoordinator::nextViewportSettleWakeSeconds() {
+  if (!viewportSettleDue_.has_value() || renderWorker_.asyncRenderer.isBusyWithIdleWake()) {
     return std::nullopt;
   }
   const auto remaining = *viewportSettleDue_ - schedulingNow();
