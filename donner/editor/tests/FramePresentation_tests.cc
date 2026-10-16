@@ -238,6 +238,7 @@ TEST(FramePresentationTest, FractionalRasterKeepsMovableTilesInsteadOfFlattenedO
   ASSERT_NE(frame, nullptr);
   EXPECT_TRUE(frame->followsPointer())
       << "Subpixel artboard rounding must not replace the complete movable tile with an overview.";
+  ASSERT_THAT(frame->tiles(), SizeIs(1));
   EXPECT_EQ(frame->tiles().front().layerEntity, capture->selection().front());
 }
 
