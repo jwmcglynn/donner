@@ -6443,6 +6443,59 @@ TEST(RenderCoordinatorTest, BufferedSelectionPressDefersCanvasCommitUntilConsume
   EXPECT_NE(app.document().document().canvasSize(), canvas);
 }
 
+TEST(RenderCoordinatorTest, CanvasCommitOverviewKeepsSelectedArtworkMovable) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+      <rect width="100" height="100" fill="white"/>
+      <rect id="target" x="40" y="40" width="20" height="20" fill="red"/>
+    </svg>
+  )svg"));
+  const auto target = app.document().document().querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  app.setSelection(*target);
+  ViewportState viewport;
+  viewport.paneSize = Vector2d(200.0, 120.0);
+  viewport.documentViewBox = Box2d::FromXYWH(0.0, 0.0, 100.0, 100.0);
+  viewport.devicePixelRatio = 2.0;
+  viewport.resetTo100Percent();
+  const Box2d pane(viewport.paneOrigin, viewport.paneOrigin + viewport.paneSize);
+  SelectTool tool;
+  GlTextureCache textures;
+  RenderCoordinator coordinator;
+  if (!coordinator.renderer().requiresTextureSnapshotPresentation()) {
+    GTEST_SKIP() << "Requires retained texture presentation";
+  }
+  RenderCoordinatorTestAccess::useFakeSchedulingClock(coordinator);
+  ASSERT_TRUE(coordinator.maybeRequestRender(app, tool, viewport, &textures));
+  ASSERT_TRUE(DrainCoordinator(coordinator, app, viewport, textures));
+  ASSERT_NE(
+      coordinator.buildFramePresentation(app, tool, viewport, pane, SelectionChromeDetail::Full),
+      nullptr);
+  viewport.zoomAround(6.0, viewport.paneCenter());
+  coordinator.maybeRequestRender(app, tool, viewport, &textures);
+  RenderCoordinatorTestAccess::advanceFakeSchedulingClock(
+      RenderCoordinatorTestAccess::kCanvasSizeCommitDelay);
+  ASSERT_TRUE(coordinator.maybeRequestRender(app, tool, viewport, &textures));
+  // The canvas update has already been admitted before a new press. Mark the old scene stale
+  // while its complete replacement is pending, as the normal frame pass does.
+  coordinator.buildFramePresentation(app, tool, viewport, pane, SelectionChromeDetail::Full);
+  ASSERT_TRUE(DrainCoordinator(coordinator, app, viewport, textures));
+  ASSERT_TRUE(RenderCoordinatorTestAccess::lastPostedAttempt(coordinator)->overviewInfillOnly);
+  ASSERT_FALSE(textures.activeTilesViewportBounded());
+  const Entity entity = target->unsafeEntityHandle().entity();
+  EXPECT_TRUE(std::ranges::any_of(textures.tiles(), [&](const auto& tile) {
+    return tile.kind == RenderResult::CompositedTile::Kind::Layer && tile.layerEntity == entity;
+  })) << "The first complete replacement must preserve a movable selection, not flatten it.";
+  tool.onMouseDown(app, Vector2d(50.0, 50.0), MouseModifiers{});
+  tool.onMouseMove(app, Vector2d(55.0, 50.0), true);
+  ASSERT_TRUE(tool.activeDragPreview().has_value());
+  const auto frame =
+      coordinator.buildFramePresentation(app, tool, viewport, pane, SelectionChromeDetail::Full);
+  ASSERT_NE(frame, nullptr);
+  EXPECT_TRUE(frame->followsPointer());
+}
+
 TEST(RenderCoordinatorTest, ContinuousSelectedZoomDefersViewportPrewarmUntilStable) {
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(R"svg(
