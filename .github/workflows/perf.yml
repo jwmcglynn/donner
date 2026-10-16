@@ -1,4 +1,5 @@
 name: Perf
+run-name: ${{ inputs.diagnostic_case && 'Perf (diagnostic case)' || 'Perf' }}
 
 # Keep third-party Bazel module telemetry off, as the telemetry section of .bazelrc explains.
 env:
@@ -11,6 +12,11 @@ on:
   schedule:
     - cron: "30 7 * * *"
   workflow_dispatch:
+    inputs:
+      diagnostic_case:
+        description: Run only the Chromium responsiveness case
+        type: boolean
+        default: false
 
 permissions:
   actions: read
@@ -41,8 +47,10 @@ jobs:
 
           git fetch --no-tags --depth=1 origin main
           main_sha="$(git rev-parse origin/main)"
+          # A diagnostic dispatch must never suppress a full scheduled run.
           last_success_sha="$(gh run list \
             --workflow=perf.yml \
+            --event=schedule \
             --status=success \
             --limit=1 \
             --json headSha \
@@ -108,8 +116,18 @@ jobs:
         shell: bash
         env:
           TARGET_TAG: ${{ matrix.target_tag }}
+          DIAGNOSTIC_CASE: ${{ inputs.diagnostic_case }}
         run: |
           set -euo pipefail
+
+          if [[ "$DIAGNOSTIC_CASE" == "true" ]]; then
+            if [[ "$TARGET_TAG" == "perf" ]]; then
+              echo "targets=//donner/editor/wasm/tests:browser_responsiveness_perf_test" >> "$GITHUB_OUTPUT"
+            else
+              echo "targets=" >> "$GITHUB_OUTPUT"
+            fi
+            exit 0
+          fi
 
           targets="$(
             bazelisk query "tests(//...) intersect attr(\"tags\", \"${TARGET_TAG}\", //...)" |
@@ -133,7 +151,12 @@ jobs:
         if: steps.discover.outputs.targets != ''
         env:
           TARGET_TAG: ${{ matrix.target_tag }}
+          DIAGNOSTIC_CASE: ${{ inputs.diagnostic_case }}
         run: |
+          diagnostic_args=()
+          if [[ "$DIAGNOSTIC_CASE" == "true" ]]; then
+            diagnostic_args+=(--test_arg=--project=chromium --test_arg=--grep=matching)
+          fi
           # -c opt: budgets assume production-speed codegen, not fastbuild's default.
           # Successful test output carries the measured nanoseconds per draw.
           bazelisk test \
@@ -144,6 +167,7 @@ jobs:
             --test_tag_filters="$TARGET_TAG" \
             --test_env=DONNER_BROWSER_LATENCY_GATES=${{ matrix.latency_gates }} \
             --test_env=DONNER_BROWSER_COMPLETION_CHECKS=${{ matrix.completion_checks }} \
+            "${diagnostic_args[@]}" \
             ${{ steps.discover.outputs.targets }}
 
       - name: Summarize interaction latency gates

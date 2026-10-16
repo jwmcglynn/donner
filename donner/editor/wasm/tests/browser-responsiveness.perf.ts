@@ -390,6 +390,27 @@ async function completionCheck(
   });
 }
 
+async function gpuOwnerDiagnostic(page: Page) {
+  return Promise.any(page.workers().map(async (worker) => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const result = await Promise.race([
+        worker.evaluate(() => {
+          const scope = globalThis as typeof globalThis & {
+            __donnerReadGpuOwnerWaitStats?: () => unknown;
+          };
+          return scope.__donnerReadGpuOwnerWaitStats?.() ?? null;
+        }),
+        new Promise<null>((resolve) => { timer = setTimeout(() => resolve(null), 1000); }),
+      ]);
+      if (!result) throw new Error("owner unavailable");
+      return result;
+    } finally {
+      clearTimeout(timer);
+    }
+  })).catch(() => null);
+}
+
 async function continuousDrag(
   page: Page,
   start: { x: number; y: number },
@@ -426,6 +447,12 @@ async function continuousDrag(
       readbackPollIterations?: unknown;
       presentation?: Diagnostics["__donnerPresentationQueueStats"];
     }[] = [];
+    const workerCompletions: {
+      observedAtMs: number;
+      worker: NonNullable<Diagnostics["__donnerWorkerStats"]>;
+      repair: unknown;
+    }[] = [];
+    let previousWorkerCompletion = -1;
     const dispatchTimes: number[] = [];
     const dispatchPoints: { x: number; y: number }[] = [];
     let previousCompletedSerial = 0;
@@ -433,6 +460,17 @@ async function continuousDrag(
     let observing = true;
     let sampleId = 0;
     const observe = () => {
+      const worker = state.__donnerWorkerStats;
+      if (worker && worker.completedResults !== previousWorkerCompletion) {
+        previousWorkerCompletion = worker.completedResults;
+        if (workerCompletions.length < 64) {
+          workerCompletions.push({
+            observedAtMs: performance.now(),
+            worker: { ...worker },
+            repair: structuredClone(state.__donnerPresentationRepairStats),
+          });
+        }
+      }
       const loop = state.__donnerFrameLoopStats;
       const presentation = state.__donnerPresentationQueueStats;
       if (
@@ -507,6 +545,7 @@ async function continuousDrag(
       finishedAtMs: performance.now(),
       dispatchTimes,
       dispatchPoints,
+      workerCompletions,
       frames,
       end,
     };
@@ -889,6 +928,7 @@ test(
         }),
       ]).catch(() => null);
       clearTimeout(deadline);
+      report.ownerAfterDrag = await gpuOwnerDiagnostic(page);
       report.failures = failures;
       console.log(`responsiveness ${JSON.stringify(report)}`);
       await attachJson(info, "responsiveness.json", report);
