@@ -1,0 +1,10 @@
+load("@rules_cc//cc:defs.bzl", "cc_binary")
+
+cc_binary(
+    name = "bakeoff_report",
+    srcs = ["ReportMain.cc"],
+    deps = [
+        "//harness:image_compare",
+        "@nlohmann_json//:json",
+    ],
+)

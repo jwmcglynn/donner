@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="400" height="400" viewBox="0 0 400 400">
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#0b132b"/>
+      <stop offset="0.6" stop-color="#3a506b"/>
+      <stop offset="1" stop-color="#6fffe9"/>
+    </linearGradient>
+    <linearGradient id="diag" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ff595e"/>
+      <stop offset="0.5" stop-color="#ffca3a" stop-opacity="0.6"/>
+      <stop offset="1" stop-color="#8ac926"/>
+    </linearGradient>
+    <linearGradient id="user" gradientUnits="userSpaceOnUse" x1="40" y1="0" x2="120" y2="0"
+                    spreadMethod="reflect">
+      <stop offset="0" stop-color="#1982c4"/>
+      <stop offset="1" stop-color="#6a4c93"/>
+    </linearGradient>
+    <linearGradient id="rep" x1="0" y1="0" x2="0.2" y2="0" spreadMethod="repeat"
+                    gradientTransform="rotate(20)">
+      <stop offset="0" stop-color="#000"/>
+      <stop offset="1" stop-color="#fff"/>
+    </linearGradient>
+  </defs>
+  <rect width="400" height="400" fill="url(#sky)"/>
+  <circle cx="110" cy="110" r="80" fill="url(#diag)"/>
+  <rect x="210" y="40" width="160" height="140" fill="url(#user)"/>
+  <rect x="40" y="230" width="320" height="130" rx="30" fill="url(#rep)" stroke="url(#diag)"
+        stroke-width="8"/>
+</svg>
