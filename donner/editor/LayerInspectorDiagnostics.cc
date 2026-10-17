@@ -382,7 +382,8 @@ bool AppendCompositorHeuristicTelemetry(std::string_view path, std::string_view 
 }
 
 bool SaveCompositorHeuristicTelemetry(std::string_view path, std::string_view json,
-                                      std::string* error) {
+                                      std::string* error,
+                                      const CompositorTelemetryFileAccess& /*access*/) {
   if (path.empty()) {
     if (error != nullptr) {
       *error = "telemetry path is empty";
