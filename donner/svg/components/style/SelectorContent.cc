@@ -103,6 +103,10 @@ void RejectSelectorContentProjection(EntityHandle parent) {
   }
 }
 
+void AcceptSelectorTextValueProjection(EntityHandle parent) {
+  parent.remove<SelectorRejectedTextTag, ProjectedNonWhitespaceTextTag>();
+}
+
 void CompleteSelectorContentProjection(EntityHandle parent, bool contentsReparsed) {
   if (contentsReparsed) {
     parent.remove<ProjectedNonWhitespaceTextTag, SelectorRawTextAuthorityTag,

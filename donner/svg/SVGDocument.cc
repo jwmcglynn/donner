@@ -1479,7 +1479,8 @@ std::optional<ParseDiagnostic> SVGDocument::applyNodeValueXMLMutation(
     if (diagnostic) {
       components::RejectSelectorContentProjection(element->entityHandle());
     } else {
-      components::CompleteSelectorContentProjection(element->entityHandle(), true);
+      components::AcceptSelectorTextValueProjection(element->entityHandle());
+      components::TreeMutation::InvalidateTextContentStyles(element->entityHandle());
     }
   }
   return diagnostic;
