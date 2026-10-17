@@ -3,6 +3,7 @@
 **Status:** Draft. No implementation exists; this doc proposes the file format, editing model,
 Mermaid view, layout and routing engines, and their trust boundaries.
 **Author:** Jeff McGlynn
+**Model:** Not recorded
 **Created:** 2026-10-14
 
 ## Summary
@@ -249,7 +250,8 @@ instead (see [Alternatives Considered](#alternatives-considered)).
 | `dgm:node`              | attribute on `<g>`      | Stencil type, for example `flowchart.decision` or `aws.lambda`.          |
 | `dgm:key`               | node `<g>`, connector   | Stable identity within the diagram; Mermaid node ids map here.           |
 | `dgm:diagram-ref`       | content `<g>`           | Marks the wrapper `<g>` holding one diagram's nodes and connectors.      |
-| `dgm:ports`             | node `<g>`              | Named ports as fractions of the node box: `n:0.5,0 e:1,0.5`.             |
+| `dgm:ports`             | node `<g>`              | Named ports as fractions of the shape box: `n:0.5,0 e:1,0.5`.             |
+| `dgm:shape-ref`         | node `<g>`              | SVG id of the stencil geometry defining port bounds, excluding labels. |
 | `dgm:pin`               | node `<g>`              | `pinned` keeps the user position during auto-layout; absent means auto.  |
 | `dgm:label-ref`         | node `<g>`, connector   | Optional SVG id of the `<text>` holding the label, when not the default. |
 | `dgm:connector`         | attribute on `<path>`   | Connector kind: `orthogonal`, `straight` or `curved`.                    |
@@ -262,8 +264,14 @@ Each diagram's nodes and connectors live inside one wrapper `<g>` carrying `dgm:
 a unique SVG `id`, so membership is structural and stylesheet selectors can be scoped to it.
 
 The label of a node is the text content of its first `<text>` descendant unless `dgm:label-ref`
-names another element. The node's box is the SVG bounding box of the `<g>`, so ports stay correct
-when another tool resizes the shape.
+names another element. `dgm:shape-ref` identifies the stencil geometry whose local geometric bounds
+define fractional ports; map those points through that element's transform into diagram coordinates.
+Labels and decorative descendants outside that geometry do not contribute. Without an explicit
+reference, use the first direct non-text geometry child; ambiguous or missing geometry produces a
+diagnostic and disables automatic attachment. A shape reference must remain inside its node and
+must not target text or reference-bearing content. Relabeling cannot move ports; resizing the
+referenced geometry updates them. The planned `//donner/diagram:port_geometry_tests` covers long
+labels, transformed stencils, resize, missing and invalid references.
 
 ### Example
 
@@ -437,9 +445,13 @@ hand-written markup scanning and no document reparse. A restored node is a new e
 `DiagramModel` re-associates it by `dgm:key`.
 
 An `ApplySourceEditResult` may report a failure after committing some source replacements, so a
-plan that fails partway is rolled back by replaying the inverse of the commands it already applied.
-A diagram operation is therefore either fully applied or not applied, as the threat model's refusal
-rule requires.
+plan that fails partway must include every committed `sourceDeltas` entry from the failing command
+in its rollback, followed by the successful prefix in reverse order. Capture inverse bytes before
+each replacement, including replacements that precede a command failure. Rollback must restore both
+source and DOM before publishing the operation or its undo entry. If inverse replay cannot itself
+be guaranteed to succeed, stage the entire plan in isolated document state and publish only on
+success. Atomic refusal remains a planned requirement, covered by injected failures after every
+committed replacement in `//donner/diagram:diagram_op_fuzzer`.
 
 `CommandQueue` coalescing (repeated `SetAttribute` of the same element and attribute collapses to
 the latest value) keeps a 60 fps node drag to one attribute write per element per frame. No plan
@@ -685,8 +697,11 @@ resource-exhaustion surface.
   inject markup, and the round-trip fuzzer feeds it `]]>` sequences in labels, comments and
   unsupported statements. The Mermaid printer is the only Mermaid writer and quotes labels that
   contain Mermaid syntax characters.
-- **Reference graphs are acyclic by construction.** Connectors reference nodes, never other
-  connectors, so endpoint resolution cannot recurse.
+- **Reference resolution is planned to be non-recursive.** Resolve connector endpoints only to
+  nodes in the same diagram; reject connector targets and reference-bearing shape targets. This
+  remains an unenforced design requirement until the planned
+  `//donner/diagram:reference_resolution_tests` covers self-links, connector cycles, chained
+  references, cross-diagram references and valid node endpoints.
 - **Privacy.** The diagram libraries add no telemetry and no network access, and they handle no
   data beyond the document itself. They depend on no networking or resource-loader code, which a
   dependency test asserts.
@@ -715,6 +730,8 @@ milestone that introduces the behavior; until then the invariant is a gap, not a
 
 | Invariant                                                        | Enforcing target                                                              |
 | ---------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| Endpoint resolution rejects recursive or cross-diagram targets | _planned_ `//donner/diagram:reference_resolution_tests` |
+| Port positions depend on stencil geometry, not label bounds | _planned_ `//donner/diagram:port_geometry_tests` |
 | Unknown and known diagram content round-trips byte-exactly       | _planned_ `//donner/diagram:namespace_roundtrip_tests`                        |
 | Stripping the namespace leaves rendered pixels unchanged         | _planned_ `//donner/diagram:downgrade_render_tests`                           |
 | Diagram attribute writes do not trigger style recompute          | _planned_ addition to `//donner/svg/tests:svg_tests`                          |
