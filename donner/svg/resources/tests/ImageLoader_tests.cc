@@ -1,5 +1,6 @@
 #include "donner/svg/resources/ImageLoader.h"
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include <cstdint>
@@ -200,6 +201,21 @@ TEST(ImageLoader, RejectsPngHeadersWithInvalidDimensions) {
     ImageLoader imageLoader(resourceLoader);
     ExpectImageLoaderError(imageLoader.fromUri("zero-height.png"), UrlLoaderError::DataCorrupt);
   }
+}
+
+TEST(ImageLoader, EmptyIdatBeforePixelData) {
+  NullResourceLoader resourceLoader;
+  ImageLoader imageLoader(resourceLoader);
+  const auto result = imageLoader.fromUri(
+      "data:image/"
+      "png;base64,"
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAAElEQVQ1rwYeAAAADUlEQVR4nGMQ0bD5DwACRAF4aig0"
+      "hQAAAABJRU5ErkJggg==");
+  const auto* image = std::get_if<ImageResource>(&result);
+  ASSERT_THAT(image, testing::NotNull());
+  EXPECT_EQ(image->width, 1);
+  EXPECT_EQ(image->height, 1);
+  EXPECT_THAT(image->data, testing::ElementsAre(20, 40, 60, 255));
 }
 
 TEST(ImageLoader, RejectsDecodedImageBeforeAllocationWhenOverConfiguredLimit) {

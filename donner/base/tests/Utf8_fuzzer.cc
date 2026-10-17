@@ -1,7 +1,7 @@
-#include <cassert>
 #include <string>
 
 #include "donner/base/Utf8.h"
+#include "donner/base/Utils.h"
 
 namespace donner {
 
@@ -19,9 +19,9 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
     std::string_view remaining = buffer;
     while (!remaining.empty()) {
       const auto [codepoint, consumed] = Utf8::NextCodepoint(remaining);
-      assert(consumed >= 0 && "consumed length should be non-negative");
-      assert(static_cast<size_t>(consumed) <= remaining.size() &&
-             "consumed length should not exceed remaining buffer size");
+      UTILS_RELEASE_ASSERT(consumed >= 0 && "consumed length should be non-negative");
+      UTILS_RELEASE_ASSERT(static_cast<size_t>(consumed) <= remaining.size() &&
+                           "consumed length should not exceed remaining buffer size");
       if (consumed <= 0) {
         break;
       }
@@ -42,9 +42,9 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
     while (!remaining.empty()) {
       const auto [codepoint, consumed] = Utf8::NextCodepointLenient(remaining);
       (void)codepoint;
-      assert(consumed >= 0 && "consumed length should be non-negative");
-      assert(static_cast<size_t>(consumed) <= remaining.size() &&
-             "consumed length should not exceed remaining buffer size");
+      UTILS_RELEASE_ASSERT(consumed >= 0 && "consumed length should be non-negative");
+      UTILS_RELEASE_ASSERT(static_cast<size_t>(consumed) <= remaining.size() &&
+                           "consumed length should not exceed remaining buffer size");
       if (consumed <= 0) {
         break;
       }
@@ -55,7 +55,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
   // SequenceLength should never crash for any byte value.
   if (!buffer.empty()) {
     const int len = Utf8::SequenceLength(buffer[0]);
-    assert(len >= 0 && len <= 4 && "SequenceLength should return 0-4");
+    UTILS_RELEASE_ASSERT(len >= 0 && len <= 4 && "SequenceLength should return 0-4");
   }
 
   return 0;

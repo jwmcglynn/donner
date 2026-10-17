@@ -3,6 +3,10 @@
 The parsers and subparsers in Donner SVG have fuzzers that harden the implementation and surface
 new edge cases. Fuzzing uses [libFuzzer](https://llvm.org/docs/LibFuzzer.html).
 
+Keep fuzzer invariants active in optimized builds with `UTILS_RELEASE_ASSERT`; debug-only assertions
+disappear under `NDEBUG`. macOS fuzzers link the pinned LLVM libFuzzer archive against the platform
+C++ runtime, preserving the configured deployment target.
+
 ## Running a Fuzzer
 
 To run a fuzzer, first build it with `--config=asan-fuzzer`:

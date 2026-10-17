@@ -11,8 +11,8 @@
 /// hatch for regenerating goldens after intentional pixel-output
 /// changes:
 ///
-///   UPDATE_GOLDEN_IMAGES_DIR=$(bazel info workspace) \
-///     bazel run //donner/editor/tests:rnr_replay_tests
+///   export UPDATE_GOLDEN_IMAGES_DIR=$(bazel info workspace)
+///   bazel run //donner/editor/tests:rnr_replay_tests
 
 #include <string_view>
 

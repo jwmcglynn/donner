@@ -1,6 +1,6 @@
 #include "donner/base/fonts/WoffParser.h"
 
-#include <cstring>
+#include <cstddef>
 
 #include "donner/base/encoding/Decompress.h"
 
@@ -100,7 +100,7 @@ std::optional<std::string> ParseNameTable(std::span<const uint8_t> nameTable) {
   const uint16_t length = ReadBE16(record + 8);
   const uint16_t offset = ReadBE16(record + 10);
 
-  if (stringOffset + offset + length > nameTable.size()) {
+  if (static_cast<std::size_t>(stringOffset) + offset + length > nameTable.size()) {
     return std::nullopt;
   }
   std::span<const uint8_t> raw(nameTable.data() + stringOffset + offset, length);
@@ -188,7 +188,7 @@ ParseResult<WoffFont> WoffParser::Parse(std::span<const uint8_t> bytes, const Op
     return ParseDiagnostic::Error("WOFF length mismatch", FileOffset::Offset(0));
   }
 
-  if (44 + numTables * 20 > bytes.size()) {
+  if (44 + static_cast<std::size_t>(numTables) * 20 > bytes.size()) {
     return ParseDiagnostic::Error("Truncated WOFF table directory", FileOffset::Offset(0));
   }
 
@@ -232,8 +232,7 @@ ParseResult<WoffFont> WoffParser::Parse(std::span<const uint8_t> bytes, const Op
 
     const uint8_t* src = bytes.data() + rec.offset;
     if (rec.compLength == rec.origLength) {
-      table.resize(rec.origLength);
-      std::memcpy(table.data(), src, rec.origLength);
+      table.assign(src, src + rec.origLength);
     } else {
       auto maybeDecompressedData = Decompress::Zlib(
           std::string_view(reinterpret_cast<const char*>(src), rec.compLength), rec.origLength);

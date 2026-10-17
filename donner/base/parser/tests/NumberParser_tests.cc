@@ -105,6 +105,45 @@ TEST(NumberParser, Exponent) {
   EXPECT_THAT(NumberParser::Parse("1E2"), ParseResultIs(Result{100.0, 3}));
 }
 
+TEST(NumberParser, HugeExponentKeepsItsSign) {
+  NumberParser::Options permissive;
+  permissive.forbidOutOfRange = false;
+  for (const std::string_view magnitude :
+       {"9223372036854775807", "9223372036854775808", "9223372036854775809", "18446744073709551615",
+        "18446744073709551616", "999999999999999999999999"}) {
+    SCOPED_TRACE(magnitude);
+    for (const std::string_view sign : {"", "-"}) {
+      const std::string positive = std::string(sign) + "0.8777771e" + std::string(magnitude);
+      EXPECT_THAT(NumberParser::Parse(positive),
+                  ParseErrorIs("Failed to parse number: Out of range"));
+      const double infinity = std::numeric_limits<double>::infinity();
+      EXPECT_THAT(NumberParser::Parse(positive, permissive),
+                  ParseResultIs(Result{sign.empty() ? infinity : -infinity, positive.size()}));
+      const std::string negative = std::string(sign) + "0.8777771e-" + std::string(magnitude);
+      const auto underflow = NumberParser::Parse(negative);
+      ASSERT_THAT(underflow, NoParseError());
+      EXPECT_THAT(underflow, ParseResultIs(Result{0.0, negative.size()}));
+      EXPECT_EQ(std::signbit(underflow.result().number), !sign.empty());
+      EXPECT_THAT(NumberParser::Parse(negative, permissive),
+                  ParseResultIs(Result{0.0, negative.size()}));
+      const std::string zero = std::string(sign) + "0e" + std::string(magnitude);
+      const auto zeroResult = NumberParser::Parse(zero);
+      ASSERT_THAT(zeroResult, NoParseError());
+      EXPECT_THAT(zeroResult, ParseResultIs(Result{0.0, zero.size()}));
+      EXPECT_EQ(std::signbit(zeroResult.result().number), !sign.empty());
+    }
+  }
+}
+
+TEST(NumberParser, LongIntegerExponentCancellationPrecedesClamp) {
+  const std::string integer = "1" + std::string(25000, '0');
+  const std::string input = integer + "e-25000";
+  const auto parsed = NumberParser::Parse(input);
+  ASSERT_THAT(parsed, NoParseError());
+  EXPECT_EQ(parsed.result().consumedChars, input.size());
+  EXPECT_THAT(parsed.result().number, testing::DoubleNear(1.0, 1e-14));
+}
+
 TEST(NumberParser, StopsParsingAtCharacter) {
   EXPECT_THAT(NumberParser::Parse("100L200"), ParseResultIs(Result{100.0, 3}));
   EXPECT_THAT(NumberParser::Parse("1e1M1"), ParseResultIs(Result{10.0, 3}));

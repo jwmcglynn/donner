@@ -1,5 +1,6 @@
 #include "donner/base/parser/NumberParser.h"
 
+#include <algorithm>
 #include <cctype>
 #include <cmath>
 #include <cstdint>
@@ -73,6 +74,7 @@ struct ParseDigitsResult {
   uint64_t value = 0;         ///< Parsed numeric value.
   size_t valueNumDigits = 0;  ///< The total number of digits contributing to the value (base 10).
   size_t consumedChars = 0;   ///< The number of characters consumed from the input.
+  bool saturated = false;     ///< Further digits exceeded the stored magnitude.
 };
 
 /**
@@ -118,7 +120,35 @@ ParseDigitsResult ParseDigitsSaturating(std::string_view str) {
     ++result.consumedChars;
   }
 
+  result.saturated = saturated;
   return result;
+}
+
+/// Combines decimal scales before clamping, retaining cancellation for long integer inputs.
+int AdjustExponent(uint64_t magnitude, bool negative, bool overflow, size_t integerDigits,
+                   size_t fractionDigits) {
+  constexpr uint64_t kLimit = 20000;
+  // An exponent beyond uint64_t dominates the digit count of an addressable input string.
+  if (overflow) {
+    return negative ? -static_cast<int>(kLimit) : static_cast<int>(kLimit);
+  }
+  const bool adjustmentNegative = fractionDigits > integerDigits;
+  const uint64_t adjustment =
+      adjustmentNegative ? fractionDigits - integerDigits : integerDigits - fractionDigits;
+  if (negative != adjustmentNegative) {
+    if (magnitude < adjustment) {
+      magnitude = adjustment - magnitude;
+      negative = adjustmentNegative;
+    } else {
+      magnitude -= adjustment;
+    }
+  } else if (adjustment > std::numeric_limits<uint64_t>::max() - magnitude) {
+    magnitude = kLimit;
+  } else {
+    magnitude += adjustment;
+  }
+  const int bounded = static_cast<int>(std::min(magnitude, kLimit));
+  return negative ? -bounded : bounded;
 }
 
 }  // namespace
@@ -233,7 +263,9 @@ ParseResult<NumberParser::Result> NumberParser::Parse(std::string_view str, Opti
 
   // 3) Optionally parse exponent
   // If next char is 'e' or 'E', check if there's a digit after optional sign.
-  int64_t exponentVal = 0;
+  uint64_t exponentMagnitude = 0;
+  bool exponentNegative = false;
+  bool exponentOverflow = false;
 
   if (!str.empty() && (str.front() == 'e' || str.front() == 'E')) {
     // We'll only consume exponent if there's a digit after optional sign.
@@ -264,7 +296,9 @@ ParseResult<NumberParser::Result> NumberParser::Parse(std::string_view str, Opti
         str.remove_prefix(expResult.consumedChars);
         totalConsumed += expResult.consumedChars;
 
-        exponentVal = static_cast<int64_t>(expNeg ? -expResult.value : expResult.value);
+        exponentMagnitude = expResult.value;
+        exponentNegative = expNeg;
+        exponentOverflow = expResult.saturated;
       }
     }
     // else "1e" => partial parse => ignore
@@ -300,25 +334,12 @@ ParseResult<NumberParser::Result> NumberParser::Parse(std::string_view str, Opti
     }
   }
 
-  // Adjust exponent for the number of digits consumed
-  exponentVal += static_cast<int64_t>(digitsResult.consumedChars - digitsResult.valueNumDigits);
-  exponentVal -= static_cast<int64_t>(fracDigits);
-
-  // For extremely large exponentVal (e.g. 1e999999999999999999), we'd normally do
-  // pow(10, huge_double) => inf. But if exponentVal won't fit in an int => it overflows.
-  // We'll clamp exponentVal so it doesn't overflow an int, and then rely on pow(10.0, large)
-  // to produce ±∞. Then the parse logic below (checking isfinite) can produce a parse error or ±∞.
-  //
-  // If forbidOutOfRange==true, large exponent => "Out of range".
-  // else => ±∞. We'll detect that after computing the final value.
-
-  // Bound exponentVal to a safe range for a subsequent cast to int, small enough to yield 0 and
-  // large enough to yield inf.
-  exponentVal = Clamp<int64_t>(exponentVal, -20000, 20000);
+  const int exponentVal =
+      AdjustExponent(exponentMagnitude, exponentNegative, exponentOverflow,
+                     digitsResult.consumedChars - digitsResult.valueNumDigits, fracDigits);
 
   // Do the final double computation
-  const double finalVal =
-      ConvertMantissaAndExponent(mantissa, static_cast<int>(exponentVal), negative);
+  const double finalVal = ConvertMantissaAndExponent(mantissa, exponentVal, negative);
 
   assert(!std::isnan(finalVal) && "Final value should not be NaN");
 
