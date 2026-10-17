@@ -553,6 +553,45 @@ TEST(RendererAnimation, TypedEditsEqualToPresentationBecomeNewBaseValues) {
   EXPECT_EQ(offset.dx(), 4);
 }
 
+TEST(RendererAnimation, SetNoneClearsStrokeDashesAndRestoresAfterSeeking) {
+  auto document = parseAnimated(R"svg(
+    <line id="line" x2="16" y1="8" y2="8" stroke="black" stroke-width="4"
+          stroke-dasharray="4 4">
+      <set attributeName="stroke-dasharray" to="none" begin="1s" dur="1s"/>
+    </line>)svg");
+  const std::string source(document.source());
+  document.setTime(0);
+  const auto dashed = RendererTestUtils::renderToAsciiImage(document).generated;
+  EXPECT_THAT(dashed, testing::HasSubstr("@@@@....@@@@...."));
+  document.setTime(1.5);
+  const auto solid = RendererTestUtils::renderToAsciiImage(document).generated;
+  EXPECT_THAT(solid, testing::HasSubstr("@@@@@@@@@@@@@@@@"));
+  EXPECT_NE(solid, dashed);
+  for (double time : {2.0, 0.5}) {
+    document.setTime(time);
+    EXPECT_EQ(RendererTestUtils::renderToAsciiImage(document).generated, dashed);
+  }
+  EXPECT_EQ(document.source(), source);
+}
+
+TEST(RendererAnimation, FractionalDurationFreezeRetainsEndpointAcrossSeeks) {
+  auto document = parseAnimated(R"svg(
+    <rect width="4" height="16">
+      <animate attributeName="x" from="0" to="8" begin="0.1s" dur="0.3s" fill="freeze"/>
+    </rect>)svg");
+  for (double time : {0.4, 0.9, 100.0}) {
+    document.setTime(time);
+    EXPECT_THAT(RendererTestUtils::renderToAsciiImage(document).generated,
+                testing::StartsWith("........@@@@...."));
+  }
+  document.setTime(0.25);
+  EXPECT_THAT(RendererTestUtils::renderToAsciiImage(document).generated,
+              testing::StartsWith("....@@@@........"));
+  document.setTime(0.4);
+  EXPECT_THAT(RendererTestUtils::renderToAsciiImage(document).generated,
+              testing::StartsWith("........@@@@...."));
+}
+
 TEST(RendererAnimation, RejectedPropertyProbePreservesAnimatedAppearance) {
   auto document = parseAnimated(
       R"(<rect id="r" width="4" height="16"><set attributeName="width" to="8" dur="2s"/></rect>)");

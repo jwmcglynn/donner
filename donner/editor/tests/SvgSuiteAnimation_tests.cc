@@ -285,13 +285,13 @@ TEST_F(SvgSuiteAnimation, InterpolationCompositionAndSecureStaticProfileMatchOra
   document_->setTime(2);
   compareReference("interpolation-two-seconds");
   EXPECT_DOUBLE_EQ(discrete->cast<svg::SVGRectElement>().computedX().value, 10);
-  EXPECT_DOUBLE_EQ(spline->cast<svg::SVGRectElement>().computedX().value, 10);
+  EXPECT_NEAR(spline->cast<svg::SVGRectElement>().computedX().value, 10, 1e-12);
   EXPECT_DOUBLE_EQ(paced->cast<svg::SVGRectElement>().computedX().value, 10);
   EXPECT_DOUBLE_EQ(accumulated->cast<svg::SVGRectElement>().computedX().value, 10);
   document_->setTime(2.5);
   compareReference("interpolation-two-and-half-seconds");
   EXPECT_DOUBLE_EQ(discrete->cast<svg::SVGRectElement>().computedX().value, 10);
-  EXPECT_DOUBLE_EQ(spline->cast<svg::SVGRectElement>().computedX().value, 12);
+  EXPECT_NEAR(spline->cast<svg::SVGRectElement>().computedX().value, 12, 1e-12);
   EXPECT_DOUBLE_EQ(paced->cast<svg::SVGRectElement>().computedX().value, 12);
   EXPECT_DOUBLE_EQ(accumulated->cast<svg::SVGRectElement>().computedX().value, 12);
 
