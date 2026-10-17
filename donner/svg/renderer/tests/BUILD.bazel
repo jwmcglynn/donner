@@ -86,6 +86,7 @@ donner_cc_test(
         "//donner/svg/renderer:gif_encoder",
         "//donner/svg/renderer:renderer_interface",
         "@com_google_gtest//:gtest_main",
+        "@stb//:image",
     ],
 )
 

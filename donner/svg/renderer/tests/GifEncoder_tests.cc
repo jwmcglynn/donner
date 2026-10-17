@@ -4,7 +4,9 @@
 #include <array>
 #include <cstdint>
 #include <limits>
+#include <optional>
 #include <set>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -13,6 +15,7 @@
 #include "donner/svg/renderer/tests/GifTestDecoder.h"
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
+#include "stb/stb_image.h"
 
 using testing::AllOf;
 using testing::Each;
@@ -90,6 +93,107 @@ DecodedGif ReencodeFrame(const std::vector<uint8_t>& rgba, int width, int height
   GifEncoder encoder({.width = width, .height = height});
   EXPECT_TRUE(encoder.addFrame(rgba, 0, 1));
   return Decode(encoder.finish());
+}
+
+/// A GIF decoded by stb_image, independently of GifTestDecoder.
+struct StbDecodedGif {
+  int width = 0;
+  int height = 0;
+  int frameCount = 0;
+  std::vector<int> delaysMilliseconds;
+  std::vector<uint8_t> rgba;
+};
+
+std::optional<StbDecodedGif> DecodeWithStb(std::span<const uint8_t> gif) {
+  if (gif.size() > static_cast<size_t>(std::numeric_limits<int>::max())) {
+    ADD_FAILURE() << "GIF is too large for stb_image";
+    return std::nullopt;
+  }
+
+  int* delays = nullptr;
+  StbDecodedGif decoded;
+  int components = 0;
+  stbi_uc* rgba =
+      stbi_load_gif_from_memory(gif.data(), static_cast<int>(gif.size()), &delays, &decoded.width,
+                                &decoded.height, &decoded.frameCount, &components, 4);
+  if (!rgba) {
+    ADD_FAILURE() << "stb_image GIF decode failed: " << stbi_failure_reason();
+    return std::nullopt;
+  }
+
+  const size_t frameBytes =
+      static_cast<size_t>(decoded.width) * static_cast<size_t>(decoded.height) * 4;
+  decoded.rgba.assign(rgba, rgba + frameBytes * static_cast<size_t>(decoded.frameCount));
+  if (delays) {
+    decoded.delaysMilliseconds.assign(delays, delays + decoded.frameCount);
+  }
+  stbi_image_free(delays);
+  stbi_image_free(rgba);
+  return decoded;
+}
+
+void ExpectStbFrameIdentical(const StbDecodedGif& gif, int index,
+                             const std::vector<uint8_t>& expected) {
+  ASSERT_GE(index, 0);
+  ASSERT_LT(index, gif.frameCount);
+  const size_t frameBytes = static_cast<size_t>(gif.width) * static_cast<size_t>(gif.height) * 4;
+  ASSERT_EQ(expected.size(), frameBytes);
+  const auto begin = gif.rgba.begin() + static_cast<std::ptrdiff_t>(frameBytes * index);
+  const std::vector<uint8_t> actual(begin, begin + static_cast<std::ptrdiff_t>(frameBytes));
+  const std::string label =
+      std::string(testing::UnitTest::GetInstance()->current_test_info()->name()) + "_stb_frame" +
+      std::to_string(index);
+  editor::tests::CompareBitmapToBitmap(ToBitmap(actual, gif.width, gif.height),
+                                       ToBitmap(expected, gif.width, gif.height), label,
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+std::vector<uint8_t> FirstLocalColorTable(std::span<const uint8_t> gif) {
+  if (gif.size() < 13) {
+    ADD_FAILURE() << "GIF is shorter than its logical screen descriptor";
+    return {};
+  }
+  size_t position = 13;
+  if ((gif[10] & 0x80) != 0) {
+    position += 3 * (size_t{1} << ((gif[10] & 0x07) + 1));
+  }
+  while (position < gif.size()) {
+    if (gif[position] == 0x21) {
+      position += 2;
+      while (position < gif.size() && gif[position] != 0) {
+        position += 1 + gif[position];
+      }
+      ++position;
+      continue;
+    }
+    if (gif[position] == 0x2C && position + 10 <= gif.size()) {
+      const uint8_t packed = gif[position + 9];
+      if ((packed & 0x80) == 0) {
+        ADD_FAILURE() << "first GIF frame has no local color table";
+        return {};
+      }
+      const size_t bytes = 3 * (size_t{1} << ((packed & 0x07) + 1));
+      const size_t begin = position + 10;
+      if (bytes > gif.size() - begin) {
+        ADD_FAILURE() << "first GIF frame has a truncated local color table";
+        return {};
+      }
+      return std::vector<uint8_t>(gif.begin() + static_cast<std::ptrdiff_t>(begin),
+                                  gif.begin() + static_cast<std::ptrdiff_t>(begin + bytes));
+    }
+    ADD_FAILURE() << "unexpected GIF block before first image";
+    return {};
+  }
+  ADD_FAILURE() << "GIF has no image block";
+  return {};
+}
+
+uint64_t Fnv1a64(std::span<const uint8_t> bytes) {
+  uint64_t hash = 14695981039346656037ull;
+  for (uint8_t byte : bytes) {
+    hash = (hash ^ byte) * 1099511628211ull;
+  }
+  return hash;
 }
 
 TEST(GifEncoder, WritesHeaderScreenDescriptorLoopExtensionAndTrailer) {
@@ -242,12 +346,26 @@ TEST(GifEncoder, KeepsBinaryTransparencyWithoutBackground) {
   ASSERT_TRUE(encoder.addFrame(first.rgba, 0, 2));
   ASSERT_TRUE(encoder.addFrame(second.rgba, 0, 2));
 
-  const DecodedGif gif = Decode(encoder.finish());
+  const std::vector<uint8_t> encoded = encoder.finish();
+  ASSERT_GE(encoded.size(), 19u);
+  EXPECT_NE(encoded[10] & 0x80, 0);  // Global color table present.
+  EXPECT_EQ(encoded[11], 0);         // Logical background uses the conventional clear index.
+
+  const DecodedGif gif = Decode(encoded);
   ASSERT_THAT(gif.frames, SizeIs(2));
-  EXPECT_THAT(gif.frames[0].rgba, ElementsAre(0, 0, 255, 255, 0, 0, 0, 0));
+  const std::vector<uint8_t> expectedFirst = {0, 0, 255, 255, 0, 0, 0, 0};
+  EXPECT_EQ(gif.frames[0].rgba, expectedFirst);
   // The first pixel turned transparent, so the previous frame must not show through.
   EXPECT_THAT(gif.frames[1].rgba, ElementsAre(0, 0, 0, 0, 255, 0, 0, 255));
   EXPECT_THAT(gif.frames, Each(Field(&DecodedGifFrame::disposal, 2)));
+  EXPECT_THAT(gif.frames, Each(Field(&DecodedGifFrame::transparentIndex, Optional(0))));
+
+  const std::optional<StbDecodedGif> stb = DecodeWithStb(encoded);
+  ASSERT_TRUE(stb.has_value());
+  EXPECT_THAT(stb->delaysMilliseconds, ElementsAre(20, 20));
+  ExpectStbFrameIdentical(*stb, 0, expectedFirst);
+  std::vector<uint8_t> expectedSecond = {0, 0, 0, 0, 255, 0, 0, 255};
+  ExpectStbFrameIdentical(*stb, 1, expectedSecond);
 }
 
 TEST(GifEncoder, OpaqueFramesOfATransparentGifStillDefineATransparentIndex) {
@@ -263,8 +381,8 @@ TEST(GifEncoder, OpaqueFramesOfATransparentGifStillDefineATransparentIndex) {
 
   const DecodedGif gif = Decode(encoder.finish());
   ASSERT_THAT(gif.frames, SizeIs(2));
-  EXPECT_THAT(gif.frames[0].transparentIndex, Optional(1));
-  EXPECT_THAT(gif.frames[1].transparentIndex, Optional(1));
+  EXPECT_THAT(gif.frames[0].transparentIndex, Optional(0));
+  EXPECT_THAT(gif.frames[1].transparentIndex, Optional(0));
   EXPECT_THAT(gif.frames[1].rgba, ElementsAre(0, 0, 0, 0, 0, 0, 255, 255));
 }
 
@@ -288,6 +406,28 @@ TEST(GifEncoder, QuantizesManyColorsIntoOneFullColorTable) {
 
   // The quantized frame fits one table, so encoding it again is lossless.
   ExpectFrameIdentical(ReencodeFrame(gif.frames[0].rgba, kSize, kSize), 0, gif.frames[0].rgba);
+}
+
+TEST(GifEncoder, QuantizedPaletteHasCanonicalFullRgbOrdering) {
+  constexpr int kColors = 300;
+  Image forward(kColors, 1, 0, 0, 0);
+  Image reverse = forward;
+  for (int i = 0; i < kColors; ++i) {
+    const auto red = static_cast<uint8_t>(i);
+    const auto green = static_cast<uint8_t>(i >> 8);
+    const auto blue = static_cast<uint8_t>(i * 37);
+    forward.set(i, 0, red, green, blue);
+    reverse.set(kColors - i - 1, 0, red, green, blue);
+  }
+
+  GifEncoder first({.width = kColors, .height = 1});
+  GifEncoder second({.width = kColors, .height = 1});
+  ASSERT_TRUE(first.addFrame(forward.rgba, 0, 1));
+  ASSERT_TRUE(second.addFrame(reverse.rgba, 0, 1));
+  const std::vector<uint8_t> firstPalette = FirstLocalColorTable(first.finish());
+  const std::vector<uint8_t> secondPalette = FirstLocalColorTable(second.finish());
+  EXPECT_EQ(firstPalette, secondPalette);
+  EXPECT_EQ(Fnv1a64(firstPalette), 0xA15DBC4A41D0411Dull);
 }
 
 TEST(GifEncoder, QuantizationKeepsFlatColorsExact) {
@@ -355,13 +495,17 @@ TEST(GifEncoder, RoundTripsTwoColorImageAcrossLzwDictionaryResets) {
   // Opaque, so the table has exactly 2 entries.
   GifEncoder encoder({.width = kSize, .height = kSize, .background = GifEncoder::Rgb{0, 0, 0}});
   ASSERT_TRUE(encoder.addFrame(noise.rgba, 0, 1));
-  const DecodedGif gif = Decode(encoder.finish());
+  const std::vector<uint8_t> encoded = encoder.finish();
+  const DecodedGif gif = Decode(encoded);
   ASSERT_THAT(gif.frames, SizeIs(1));
   EXPECT_EQ(gif.frames[0].colorTableSize, 2);
   ExpectFrameIdentical(gif, 0, noise.rgba);
+  const std::optional<StbDecodedGif> stb = DecodeWithStb(encoded);
+  ASSERT_TRUE(stb.has_value());
+  ExpectStbFrameIdentical(*stb, 0, noise.rgba);
 }
 
-TEST(GifEncoder, QuantizesWithTransparencyReservingTheLastIndex) {
+TEST(GifEncoder, QuantizesWithTransparencyReservingTheClearIndex) {
   constexpr int kSize = 32;
   Image gradient(kSize, kSize, 0, 0, 0);
   for (int y = 0; y < kSize; ++y) {
@@ -376,7 +520,7 @@ TEST(GifEncoder, QuantizesWithTransparencyReservingTheLastIndex) {
   const DecodedGif gif = Decode(encoder.finish());
   ASSERT_THAT(gif.frames, SizeIs(1));
   EXPECT_EQ(gif.frames[0].colorTableSize, 256);
-  EXPECT_THAT(gif.frames[0].transparentIndex, Optional(255));
+  EXPECT_THAT(gif.frames[0].transparentIndex, Optional(0));
   EXPECT_THAT(std::vector<uint8_t>(gif.frames[0].rgba.begin(), gif.frames[0].rgba.begin() + 4),
               ElementsAre(0, 0, 0, 0));
 
@@ -406,7 +550,8 @@ TEST(GifEncoder, QuantizedOpaqueFramesCropToTheChangedRectangle) {
   GifEncoder encoder({.width = kSize, .height = kSize, .background = GifEncoder::Rgb{0, 0, 0}});
   ASSERT_TRUE(encoder.addFrame(gradient.rgba, 0, 1));
   ASSERT_TRUE(encoder.addFrame(changed.rgba, 0, 1));
-  const DecodedGif gif = Decode(encoder.finish());
+  const std::vector<uint8_t> encoded = encoder.finish();
+  const DecodedGif gif = Decode(encoded);
   ASSERT_THAT(gif.frames, SizeIs(2));
   EXPECT_THAT(gif.frames[1],
               AllOf(Field(&DecodedGifFrame::left, 5), Field(&DecodedGifFrame::top, 6),
@@ -418,6 +563,24 @@ TEST(GifEncoder, QuantizedOpaqueFramesCropToTheChangedRectangle) {
   expected[changedOffset + 1] = 2;
   expected[changedOffset + 2] = 3;
   ExpectFrameIdentical(gif, 1, expected);
+  const std::optional<StbDecodedGif> stb = DecodeWithStb(encoded);
+  ASSERT_TRUE(stb.has_value());
+  ExpectStbFrameIdentical(*stb, 1, expected);
+}
+
+TEST(GifEncoder, RejectsEncodedOutputAndWorkspaceAboveConfiguredLimits) {
+  const Image frame(4, 4, 10, 20, 30);
+  GifEncoder outputLimited(
+      {.width = 4, .height = 4, .maximumOutputBytes = 48, .maximumWorkspaceBytes = 4096});
+  EXPECT_FALSE(outputLimited.addFrame(frame.rgba, 0, 1));
+  EXPECT_EQ(outputLimited.error(), GifEncoder::Error::ResourceLimit);
+  EXPECT_THAT(outputLimited.finish(), SizeIs(0));
+
+  GifEncoder workspaceLimited(
+      {.width = 4, .height = 4, .maximumOutputBytes = 4096, .maximumWorkspaceBytes = 32});
+  EXPECT_FALSE(workspaceLimited.addFrame(frame.rgba, 0, 1));
+  EXPECT_EQ(workspaceLimited.error(), GifEncoder::Error::ResourceLimit);
+  EXPECT_THAT(workspaceLimited.finish(), SizeIs(0));
 }
 
 TEST(GifEncoder, RepeatsCroppedFrameWhoseMergedDelayOverflows) {

@@ -446,12 +446,29 @@ TEST_F(DonnerSvgToolFileTest, GifRejectsExcessiveTotalRenderWork) {
 
   std::ostringstream out;
   std::ostringstream err;
-  // 10000 frames of a 2000x1000 canvas is 2e10 pixels.
-  EXPECT_EQ(RunTool({"--gif", gifPath.string(), "--end", "500", "--fps", "20", "--width", "2000",
-                     "--height", "1000", inputPath.string()},
+  // 65 frames of a 2048x2048 canvas exceed the 2^28 sampled-pixel limit.
+  EXPECT_EQ(RunTool({"--gif", gifPath.string(), "--end", "65", "--fps", "1", "--width", "2048",
+                     "--height", "2048", inputPath.string()},
                     &out, &err),
             4);
-  EXPECT_THAT(err.str(), testing::HasSubstr("the limit is 4294967296"));
+  EXPECT_THAT(err.str(), testing::HasSubstr("the limit is 268435456"));
+  EXPECT_FALSE(std::filesystem::exists(gifPath));
+}
+
+TEST_F(DonnerSvgToolFileTest, GifRejectsEncoderWorkingSetBeforeRenderingFrames) {
+  const std::filesystem::path inputPath = WriteSvg("animated.svg", kAnimatedSvg);
+  const std::filesystem::path gifPath = tmpDir_ / "large-working-set.gif";
+
+  std::ostringstream out;
+  std::ostringstream err;
+  // One 4096x4096 RGBA frame fits the renderer surface limit, but the renderer snapshot,
+  // fitted frame and encoder scratch cannot coexist inside the 256 MiB GIF workspace limit.
+  EXPECT_EQ(RunTool({"--gif", gifPath.string(), "--end", "1", "--fps", "1", "--width", "4096",
+                     "--height", "4096", inputPath.string()},
+                    &out, &err),
+            4);
+  EXPECT_THAT(err.str(), testing::HasSubstr("GIF working set"));
+  EXPECT_THAT(err.str(), testing::HasSubstr("268435456 bytes"));
   EXPECT_FALSE(std::filesystem::exists(gifPath));
 }
 
