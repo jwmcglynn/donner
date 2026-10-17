@@ -3584,6 +3584,26 @@ TEST_F(XMLDocumentTests, SetElementTextReplacesExistingTextAndEscapesSource) {
   EXPECT_THAT(MutationKinds(result), testing::ElementsAre(XMLMutation::Kind::NodeValueChanged));
 }
 
+TEST_F(XMLDocumentTests, SetElementTextReplacesAllTextOnlyContent) {
+  for (const std::string_view content :
+       {"one<![CDATA[two]]>", "<![CDATA[one]]>", "one<!-- comment -->two"}) {
+    for (const std::string_view value : {"new & <text>", ""}) {
+      SCOPED_TRACE(content);
+      SCOPED_TRACE(value);
+      XMLDocument doc = ParseDocument("<svg><text>" + std::string(content) + "</text></svg>");
+      XMLNode text = doc.root().firstChild()->firstChild().value();
+      auto result = doc.setElementText(text, value);
+      ASSERT_TRUE(result.applied);
+      ASSERT_THAT(result.diagnostic, Eq(std::nullopt));
+      EXPECT_THAT(text.value(), Optional(Eq(value)));
+      EXPECT_FALSE(text.firstChild().has_value());
+      EXPECT_EQ(doc.source(), value.empty() ? "<svg><text></text></svg>"
+                                            : "<svg><text>new &amp; &lt;text&gt;</text></svg>");
+      EXPECT_THAT(MutationKinds(result), testing::ElementsAre(XMLMutation::Kind::NodeValueChanged));
+    }
+  }
+}
+
 TEST_F(XMLDocumentTests, SetElementTextClearsExistingText) {
   XMLDocument doc = ParseDocument(R"(<svg><text>hello</text></svg>)");
   XMLNode text = doc.root().firstChild()->firstChild().value();

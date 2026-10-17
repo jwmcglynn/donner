@@ -494,6 +494,26 @@ TEST(SVGDocument, EmptySelectorIgnoresRejectedRawTextProjection) {
 }
 
 TEST(SVGDocument, EmptySelectorSourceSetterReplacesMaterializedRawText) {
+  for (const std::string_view content :
+       {"word<![CDATA[other]]>", "<![CDATA[word]]>", " <![CDATA[ ]]>"}) {
+    SCOPED_TRACE(content);
+    auto document =
+        ParseSVG(R"(<svg xmlns="http://www.w3.org/2000/svg"><text id="t">seed</text></svg>)");
+    const std::string replacement = "<text id=\"t\">" + std::string(content) + "</text>";
+    auto changed = ReplaceInSource(document, "<text id=\"t\">seed</text>", replacement);
+    ASSERT_FALSE(changed.diagnostic.has_value());
+    auto text = document.querySelector("#t").value();
+    for (const std::string_view value : {" ", "new & <text>", ""}) {
+      auto replaced = document.setElementTextContent(text, value);
+      ASSERT_TRUE(replaced.applied);
+      ASSERT_FALSE(replaced.diagnostic.has_value());
+      auto fresh = ParseSVG(document.source());
+      EXPECT_EQ(text.isEmptyForSelector(nullptr),
+                fresh.querySelector("#t")->isEmptyForSelector(nullptr));
+      EXPECT_EQ(text.cast<SVGTextElement>().textContent(), value);
+      EXPECT_EQ(fresh.querySelector("#t")->cast<SVGTextElement>().textContent(), value);
+    }
+  }
   for (const bool initiallyEmpty : {false, true}) {
     SCOPED_TRACE(initiallyEmpty);
     auto document =
