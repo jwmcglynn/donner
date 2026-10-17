@@ -13,15 +13,15 @@ class XMLNode;
 }
 namespace donner::svg::components {
 
-/// Non-whitespace authored text not represented by the active raw-text child view.
-/// Covers conversion pruning and typed appends after incremental source projection.
-struct ProjectedNonWhitespaceTextTag {};
-
-/// Incremental content projection retained a complete raw-text child view for selectors.
-struct SelectorRawTextAuthorityTag {};
-
-/// A rejected source projection leaves retained typed text authoritative.
-struct SelectorRejectedTextTag {};
+/// Authored text state used while incremental source and typed content are reconciled.
+struct SelectorContentComponent {
+  /// Non-whitespace authored text missing from the active raw-text child view.
+  bool projectedNonWhitespace = false;
+  /// Incremental content projection retained the complete raw-text child view.
+  bool rawTextAuthority = false;
+  /// A rejected source projection leaves retained typed text authoritative.
+  bool rejectedText = false;
+};
 
 /**
  * Preserve the last accepted typed text when source projection rejects its replacement.
