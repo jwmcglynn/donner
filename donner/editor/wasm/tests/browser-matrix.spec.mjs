@@ -212,7 +212,8 @@ test("the browser lane walk follows every way a module loads a file beside it", 
   const target = [
     "name = \"synthetic_lane\",",
     "args = [\"--config=$(rootpath :playwright.boot-presentation.bazel.config.js)\"],",
-    "data = [\"playwright.boot-presentation.bazel.config.js\", \"playwright.bazel.config.js\"],",
+    "data = [\"playwright.boot-presentation.bazel.config.js\", \"playwright.bazel.config.js\", "
+    + "\"chromium-launch-env.cjs\"],",
   ].join("\n");
   assert.throws(() => assertListsLoadedFiles("synthetic_lane", target), {
     message: "synthetic_lane is missing playwright.config.js, loaded through "
@@ -1720,7 +1721,7 @@ test("a report-lane archive that cannot copy warns instead of passing silently",
 test("the delayed-completion baseline waits for the picker's last publication frame", async () => {
   const { pickerPresentationSettled } = await import("./presentation-baseline.mjs");
   const spec = readFileSync(path.join(testDirectory, "browser-responsiveness.perf.ts"), "utf8");
-  const start = spec.indexOf('"delayed UI completion callbacks do not permanently disable');
+  const start = spec.indexOf("\"delayed UI completion callbacks do not permanently disable");
   const body = spec.slice(start, spec.indexOf("await application.evaluate(", start));
   // The baseline is read only from a settled poll after the surface worker is found.
   assert.equal(body.split("pickerPresentationSettled(").length - 1, 2);
