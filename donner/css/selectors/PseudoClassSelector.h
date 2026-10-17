@@ -198,7 +198,9 @@ private:
         return true;
       }
       if constexpr (requires { matchingType->matches(child, options); }) {
-        return matchingType->matches(child, options).matched;
+        SelectorMatchOptions<T> filterOptions = options;
+        filterOptions.allowScopeOnlyMatch = true;
+        return matchingType->matches(child, filterOptions).matched;
       } else {
         return matchingType->matches(child);
       }

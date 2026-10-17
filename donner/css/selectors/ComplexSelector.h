@@ -173,8 +173,8 @@ private:
     if (options.traversalBudget != nullptr && !options.traversalBudget->consume()) {
       return false;
     }
-    return entries[index].compoundSelector.matches(candidate, index + 1 == entries.size(),
-                                                   options) &&
+    return entries[index].compoundSelector.matches(
+               candidate, index + 1 == entries.size() && !options.allowScopeOnlyMatch, options) &&
            !budgetRejected(options);
   }
 
