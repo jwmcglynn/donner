@@ -1,9 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
-  <rect width="16" height="16" fill="white" pointer-events="none"/>
-  <rect id="freeze" x="2" y="2" width="4" height="4" fill="red">
-    <animate attributeName="x" from="2" to="10" dur="2s" fill="freeze"/>
-  </rect>
-  <rect id="remove" x="2" y="10" width="4" height="4" fill="blue">
-    <animate attributeName="x" from="2" to="10" dur="2s" fill="remove"/>
-  </rect>
-</svg>

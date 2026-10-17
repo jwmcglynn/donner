@@ -148,8 +148,10 @@ Follow [AGENTS.md](AGENTS.md) for the autonomous reproduce/inspect/fix/verify lo
 repeatable detection; source/specification analysis establishes cause. Neither a visual model nor a
 small mismatch count can bless a new reference or tolerance.
 
-Native animation/input scenarios and a complete SVG2 requirement audit remain separate work.
-The current static harness does not establish animation, browser-host or full SVG2 conformance.
+The [native animation extension](animation/README.md) uses production clock/event APIs alongside
+this static corpus. Its timing, interpolation, motion and interaction scenarios have independent
+static references and semantic assertions. The static harness alone does not establish animation,
+browser-host or full SVG2 conformance; the complete requirement audit remains open.
 See [the SVG2 audit](../../docs/svg2_audit.md) and
 [the suite design](../../docs/design_docs/0057-donner_svg2_test_suite.md).
 
