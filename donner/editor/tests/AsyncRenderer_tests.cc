@@ -7686,7 +7686,7 @@ std::optional<std::chrono::steady_clock::duration> TimeWhileDocumentWriterHolds(
   const auto elapsed = std::chrono::steady_clock::now() - start;
   releaseWriter.set_value();
   writer.get();
-  result.get();
+  (void)result.get();
   if (!returned) {
     return std::nullopt;
   }
