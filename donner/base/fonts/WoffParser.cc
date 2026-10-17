@@ -1,7 +1,6 @@
 #include "donner/base/fonts/WoffParser.h"
 
 #include <cstddef>
-#include <cstring>
 
 #include "donner/base/encoding/Decompress.h"
 
@@ -233,8 +232,7 @@ ParseResult<WoffFont> WoffParser::Parse(std::span<const uint8_t> bytes, const Op
 
     const uint8_t* src = bytes.data() + rec.offset;
     if (rec.compLength == rec.origLength) {
-      table.resize(rec.origLength);
-      std::memcpy(table.data(), src, rec.origLength);
+      table.assign(src, src + rec.origLength);
     } else {
       auto maybeDecompressedData = Decompress::Zlib(
           std::string_view(reinterpret_cast<const char*>(src), rec.compLength), rec.origLength);
