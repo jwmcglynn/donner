@@ -191,7 +191,7 @@ private:
   int pixelWidth_ = 0;
   int pixelHeight_ = 0;
   Transform2d deviceFromLocal_;
-  std::vector<Transform2d> transformStack_;
+  std::vector<Transform2d> deviceFromLocalStack_;
   std::vector<PushRecord> pushStack_;
   /// Depth of unsupported masks whose definition content is currently being skipped.
   int suppressDepth_ = 0;

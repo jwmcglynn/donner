@@ -25,13 +25,11 @@ constexpr const char kScene[] = R"svg(
 
 }  // namespace
 
-int main() {
-  const auto backends = donner::bakeoff::RegisteredBackends();
-  if (backends.empty()) {
-    std::fprintf(stderr, "no backend linked\n");
-    return 2;
-  }
-  std::unique_ptr<donner::bakeoff::BenchBackend> backend = backends.front().create();
+/// Renders and validates one code-size smoke frame.
+/// @param info Backend to instantiate and validate.
+/// @return Zero on success, otherwise a diagnostic exit code.
+int RunCodeSize(const donner::bakeoff::BackendInfo& info) {
+  std::unique_ptr<donner::bakeoff::BenchBackend> backend = info.create();
   if (backend == nullptr) {
     return 3;
   }
@@ -43,13 +41,28 @@ int main() {
   }
   donner::svg::SVGDocument document = std::move(parsed.result());
   backend->renderer().draw(document);
-  backend->finishGpuWork();
+  if (!backend->finishGpuWork()) {
+    std::fprintf(stderr, "GPU completion failed\n");
+    return 5;
+  }
 
   const donner::svg::RendererBitmap bitmap = backend->renderer().takeSnapshot();
+  if (bitmap.pixels.empty() && info.suite != donner::bakeoff::Suite::Reference) {
+    std::fprintf(stderr, "renderer returned an empty snapshot\n");
+    return 6;
+  }
   std::uint32_t checksum = 2166136261u;
   for (const std::uint8_t byte : bitmap.pixels) {
     checksum = (checksum ^ byte) * 16777619u;
   }
-  std::printf("%s %08x\n", backends.front().name.c_str(), checksum);
+  std::printf("%s %08x\n", info.name.c_str(), checksum);
   return 0;
+}
+int main() {
+  const auto backends = donner::bakeoff::RegisteredBackends();
+  if (backends.empty()) {
+    std::fprintf(stderr, "no backend linked\n");
+    return 2;
+  }
+  return RunCodeSize(backends.front());
 }

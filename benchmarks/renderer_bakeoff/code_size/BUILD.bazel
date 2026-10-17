@@ -1,4 +1,4 @@
-load("@rules_cc//cc:defs.bzl", "cc_binary")
+load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_library", "cc_test")
 
 # Code-size binaries: identical source and flags, one backend each. Build with --config=codesize
 # (see .bazelrc) through tools/measure_code_size.sh, which strips them and records the results.
@@ -17,3 +17,24 @@ load("@rules_cc//cc:defs.bzl", "cc_binary")
     ("tiny_skia", "//backends/donner:tiny_skia"),
     ("geode", "//backends/donner:geode"),
 ]]
+
+cc_library(
+    name = "minimal_main_test_source",
+    textual_hdrs = ["MinimalMain.cc"],
+    deps = [
+        "//harness",
+        "@donner//donner/svg",
+    ],
+)
+
+cc_test(
+    name = "minimal_main_tests",
+    size = "small",
+    srcs = ["MinimalMain_tests.cc"],
+    deps = [
+        ":minimal_main_test_source",
+        "//harness",
+        "@com_google_gtest//:gtest_main",
+        "@donner//donner/svg",
+    ],
+)

@@ -14,21 +14,16 @@ All design documents live under `docs/design_docs/`.
 
 ## Model Provenance
 
-- Every new model-authored design or retrospective must include an `**Author:**` line containing the
-  exact accountable model identifier, for example `GPT-5.6 Sol`. Generic surface names such as
-  `Codex`, broad family names, tier aliases, team names, and `Owner` fields are not substitutes.
-  Put context-window, role, helper-agent, and requester annotations on separate metadata lines; they
-  are not part of the model identifier.
-- If a later model performs a real upgrade review and becomes accountable for the design, update
-  `Author` to that exact model identifier and preserve the drafting model in a `**Drafted by:**`
-  line. Never erase or guess provenance.
-- Human requesters, sponsors, and project owners are not written into the model `Author` field. A
-  human-led, model-assisted design may keep the person in `Author` only when an exact `**Model:**`
-  line records the assisting model. A genuinely human-only design uses the person's name and
-  `**Model:** None (human-only)` so future
-  upgrade audits can distinguish it from missing metadata.
-- When touching an older design with incomplete metadata, backfill only identifiers supported by the
-  document or repository history. Leave unknown provenance explicit instead of inventing a model.
+- Every design or retrospective includes `**Author:**` metadata. Record an exact model identifier
+  in `Author` or a separate `**Model:**` line when it is known and may be disclosed. Generic surface
+  names and guessed identifiers are not substitutes.
+- When the original model identifier is unavailable, use `**Model:** Not recorded`. When attribution
+  cannot be disclosed, use `**Model:** Withheld`. These are explicit provenance states, not claims
+  of human-only authorship. Do not explain confidential circumstances in public metadata.
+- A human-led, model-assisted design may keep the person in `Author` with the appropriate `Model`
+  entry. A genuinely human-only design uses `**Model:** None (human-only)`.
+- Preserve supported drafting attribution when a later reviewer takes responsibility. Never erase,
+  guess, or invent provenance; backfill older documents only from reliable evidence.
 
 ## Workflow
 

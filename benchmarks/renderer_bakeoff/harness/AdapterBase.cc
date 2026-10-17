@@ -71,7 +71,7 @@ void AdapterBase::beginFrame(const svg::RenderViewport& viewport) {
   pixelWidth_ = PixelDimension(viewport.size.x, viewport.devicePixelRatio);
   pixelHeight_ = PixelDimension(viewport.size.y, viewport.devicePixelRatio);
   deviceFromLocal_ = Transform2d();
-  transformStack_.clear();
+  deviceFromLocalStack_.clear();
   pushStack_.clear();
   patternStates_.assign(1, PatternState{});
   tileDepth_ = 0;
@@ -99,16 +99,16 @@ void AdapterBase::pushTransform(const Transform2d& parentFromChild) {
   if (!parentFromChild.isIdentity()) {
     admit(Feature::Transform);
   }
-  transformStack_.push_back(deviceFromLocal_);
+  deviceFromLocalStack_.push_back(deviceFromLocal_);
   deviceFromLocal_ = parentFromChild * deviceFromLocal_;
 }
 
 void AdapterBase::popTransform() {
-  if (transformStack_.empty()) {
+  if (deviceFromLocalStack_.empty()) {
     return;
   }
-  deviceFromLocal_ = transformStack_.back();
-  transformStack_.pop_back();
+  deviceFromLocal_ = deviceFromLocalStack_.back();
+  deviceFromLocalStack_.pop_back();
 }
 
 void AdapterBase::pushClip(const svg::ResolvedClip& clip) {
