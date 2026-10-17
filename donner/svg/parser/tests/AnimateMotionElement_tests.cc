@@ -70,7 +70,7 @@ TEST(SVGAnimateMotionElement, MpathHrefPrecedesXlinkHrefIncludingEmptyAndMutatio
       <rect id="r"><animateMotion dur="2s"><mpath id="reference"
         href="#primary" xlink:href="#legacy"/></animateMotion></rect>
     </svg>)svg");
-  const auto reference = document.querySelector("#reference");
+  auto reference = document.querySelector("#reference");
   ASSERT_THAT(reference, testing::Ne(std::nullopt));
   const auto href = [&]() {
     return reference->entityHandle().get<components::MPathComponent>().href;
