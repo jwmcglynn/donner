@@ -732,3 +732,13 @@ py_test(
     ],
     main = "browser_gpu_test_summary_tests.py",
 )
+
+py_test(
+    name = "ci_metal_toolchain_tests",
+    size = "small",
+    srcs = [
+        "ci_metal_toolchain.py",
+        "ci_metal_toolchain_tests.py",
+    ],
+    main = "ci_metal_toolchain_tests.py",
+)

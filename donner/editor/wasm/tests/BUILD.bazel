@@ -26,6 +26,7 @@ playwright_bin.playwright_test(
         "gpu-session-console.ts",
         "package.json",
         "playwright.bazel.config.js",
+        "chromium-launch-env.cjs",
         "playwright.config.js",
         "quarantine-report.mjs",
         "remote-webserver.mjs",
@@ -100,6 +101,7 @@ playwright_bin.playwright_test(
         "overlay-bitmap-compare.ts",
         "package.json",
         "playwright.bazel.config.js",
+        "chromium-launch-env.cjs",
         "playwright.compatibility.config.js",
         "playwright.config.js",
         "playwright.webkit.bazel.config.js",
@@ -160,6 +162,7 @@ playwright_bin.playwright_test(
         "gpu-session-console.ts",
         "package.json",
         "playwright.bazel.config.js",
+        "chromium-launch-env.cjs",
         "playwright.config.js",
         "quarantine-report.mjs",
         "remote-webserver.mjs",
@@ -219,6 +222,7 @@ playwright_bin.playwright_test(
         "latency-gates.mjs",
         "package.json",
         "playwright.bazel.config.js",
+        "chromium-launch-env.cjs",
         "playwright.config.js",
         "playwright.responsiveness.bazel.config.js",
         "prepare-browser-archives.js",
@@ -324,6 +328,7 @@ playwright_bin.playwright_test(
         "canvas-pointer.ts",
         "package.json",
         "playwright.bazel.config.js",
+        "chromium-launch-env.cjs",
         "playwright.boot-presentation.bazel.config.js",
         "playwright.config.js",
         "remote-webserver.mjs",
@@ -369,6 +374,7 @@ playwright_bin.playwright_test(
         "gesture-streams.ts",
         "package.json",
         "playwright.bazel.config.js",
+        "chromium-launch-env.cjs",
         "playwright.composited-firefox.bazel.config.js",
         "playwright.composited-firefox.config.js",
         "playwright.config.js",
@@ -419,6 +425,7 @@ playwright_bin.playwright_test(
         "gesture-streams.ts",
         "package.json",
         "playwright.bazel.config.js",
+        "chromium-launch-env.cjs",
         "playwright.composited-chromium.bazel.config.js",
         "playwright.composited-chromium.config.js",
         "playwright.config.js",
@@ -576,6 +583,7 @@ js_test(
     copy_data_to_bin = False,
     data = [
         "playwright.bazel.config.js",
+        "chromium-launch-env.cjs",
         "playwright.boot-presentation.bazel.config.js",
         "playwright.composited-chromium.bazel.config.js",
         "playwright.composited-chromium.config.js",
@@ -593,6 +601,7 @@ js_test(
     size = "medium",
     copy_data_to_bin = False,
     data = [
+        "chromium-launch-env.cjs",
         ":node_modules/@playwright/test",
         "@playwright//:chromium",
         "@playwright//:chromium-headless-shell",
@@ -615,6 +624,7 @@ js_test(
     size = "medium",
     copy_data_to_bin = False,
     data = [
+        "chromium-launch-env.cjs",
         ":node_modules/@playwright/test",
         "@playwright//:chromium",
         "@playwright//:chromium-headless-shell",
@@ -808,6 +818,7 @@ playwright_bin.playwright_test(
         "browser-stall-diagnostics.ts",
         "package.json",
         "playwright.bazel.config.js",
+        "chromium-launch-env.cjs",
         "playwright.config.js",
         "playwright.standalone-geode.bazel.config.js",
         "remote-webserver.mjs",
@@ -877,4 +888,18 @@ js_test(
     copy_data_to_bin = False,
     data = ["@aspect_rules_js//npm/private:npm_package_extract.mjs"],
     entry_point = "npm-archive-permissions.spec.mjs",
+)
+
+exports_files(
+    ["chromium-launch-env.cjs"],
+    visibility = ["//donner/gpu/shader/browser_tests:__pkg__"],
+)
+
+js_test(
+    name = "chromium_launch_env_tests",
+    size = "small",
+    copy_data_to_bin = False,
+    data = ["chromium-launch-env.cjs"],
+    entry_point = "chromium-launch-env.spec.mjs",
+    node_options = ["--test"],
 )

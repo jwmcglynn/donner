@@ -4,6 +4,7 @@ import { createServer } from "node:http";
 import { createRequire } from "node:module";
 import { resolve } from "node:path";
 import test from "node:test";
+import launchHelpers from "../../../editor/wasm/tests/chromium-launch-env.cjs";
 
 function requiredPath(name) {
   const value = process.env[name];
@@ -29,7 +30,7 @@ function shippedTargets() {
 }
 
 async function openWebGpuPage(context) {
-  const browser = await playwright.chromium.launch({
+  const browser = await launchHelpers.launchChromiumForTest(playwright.chromium, {
     channel: "chromium",
     headless: true,
     args: ["--enable-unsafe-webgpu", "--use-gl=angle"],
