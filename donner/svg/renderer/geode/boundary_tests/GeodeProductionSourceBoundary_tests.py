@@ -5,9 +5,10 @@ reference, adopted as an external runtime device source. The production sources 
 backend through the GPU runtime contract alone, so none of them may name the reference's types,
 its build macro, the retired transitional backend, or a WebGPU C or C++ API.
 
-The seam that adopts a runtime device source is internal to this package. `geode_device` links
-its library as an implementation dependency, so the header does not reach the compile inputs of
-anything that depends on `geode_device`; the public root header only forward-declares the source.
+The seam that adopts a runtime device source is internal to the production Geode package.
+`geode_device` links its library as an implementation dependency, so the header does not reach the
+compile inputs of anything that depends on `geode_device`; the public root header only
+forward-declares the source.
 """
 
 import ast

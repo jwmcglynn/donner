@@ -899,6 +899,7 @@ def donner_cc_fuzzer(
         per_input_timeout_seconds = 25,
         tags = [],
         routing_manifest = None,
+        routing_manifest_visibility = None,
         full_text_only = False,
         **kwargs):
     """
@@ -916,6 +917,7 @@ def donner_cc_fuzzer(
       full_text_only: Keep the corpus, raw binary, and soak on the full-text configuration.
       routing_manifest: Optional target name for a dependency-free manifest of the exact tags
         assigned to each generated fuzzer target.
+      routing_manifest_visibility: Visibility of the routing manifest; private by default.
       **kwargs: Additional arguments, matching the implementation of cc_test.
 
     Generated targets:
@@ -956,6 +958,7 @@ def donner_cc_fuzzer(
             corpus_tags = corpus_tags,
             fuzzer_name = name,
             soak_tags = soak_tags,
+            visibility = routing_manifest_visibility,
         )
 
     binary_name = name + "_bin_impl" if full_text_only else name + "_bin"

@@ -8404,6 +8404,13 @@ bool RendererGeode::deviceLost() const {
   return impl_->device && impl_->device->isDeviceLost();
 }
 
+geode::GpuWaitResult RendererGeode::waitForSubmittedWork(std::chrono::milliseconds stallBound) {
+  if (!impl_->device) {
+    return geode::GpuWaitResult::Complete;
+  }
+  return impl_->device->waitForQueueIdle(stallBound);
+}
+
 namespace {
 
 /// Translate the Geode wait vocabulary into the backend-neutral one the
