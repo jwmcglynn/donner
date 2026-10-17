@@ -321,6 +321,7 @@ void TextSystem::instantiateComputedComponent(EntityHandle rootHandle,
 
   auto& computed = registry.get_or_emplace<ComputedTextComponent>(rootHandle.entity());
   computed.spans.clear();
+  computed.textLengthOwnerFontSizes.clear();
 
   std::unordered_map<Entity, size_t> entitySubtreeCharOffset;
 
@@ -447,6 +448,11 @@ void TextSystem::instantiateComputedComponent(EntityHandle rootHandle,
 
     if (depth > 0 && handle.all_of<TextRootComponent>()) {
       return;
+    }
+
+    if (const auto* style = handle.try_get<ComputedStyleComponent>(); style && style->properties) {
+      computed.textLengthOwnerFontSizes.try_emplace(handle.entity(),
+                                                    style->properties.fontSize.get().value());
     }
 
     bool isHidden = parentHidden;

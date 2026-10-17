@@ -15,6 +15,9 @@
 #include "donner/svg/components/FontMetricDependenciesComponent.h"
 #include "donner/svg/components/FontPaintDependenciesComponent.h"
 #include "donner/svg/components/StylesheetComponent.h"
+#include "donner/svg/components/animation/AnimationBaseValue.h"
+#include "donner/svg/components/animation/AnimationResourceBudget.h"
+#include "donner/svg/components/animation/AnimationValueSampler.h"
 #include "donner/svg/components/layout/LayoutSystem.h"
 #include "donner/svg/components/resources/ResourceManagerContext.h"
 #include "donner/svg/components/shape/ComputedPathComponent.h"
@@ -305,6 +308,15 @@ void ResolvePerSpanLayoutStyles(Registry& registry, components::ComputedTextComp
                                 const TextStyleContext* styleContext = nullptr) {
   using BSK = components::ComputedTextComponent::TextSpan::BaselineShiftKeyword;
 
+  for (auto& [owner, fontSize] : text.textLengthOwnerFontSizes) {
+    const Entity styleEntity = styleContext ? styleContext->styleEntityFor(owner) : owner;
+    if (styleEntity != entt::null) {
+      if (const auto* style = registry.try_get<components::ComputedStyleComponent>(styleEntity)) {
+        fontSize = style->properties.fontSize.get().value();
+      }
+    }
+  }
+
   for (auto& span : text.spans) {
     if (span.sourceEntity == entt::null) {
       continue;
@@ -517,6 +529,15 @@ struct TextPathStagingState {
   std::vector<TextPathCluster> clusters;
 };
 
+struct DeferredTextPath {
+  size_t firstRun = 0;
+  Path::MeasuredPath measuredPath;
+  bool closed = false;
+  std::vector<TextPathCluster> clusters;
+};
+
+constexpr size_t kMaximumDeferredTextPathBytes = Path::kMaximumMeasuredPathRetainedBytes;
+
 /// Resolves a per-character displacement, returning zero when it is absent.
 double TextPathDisplacement(const SmallVector<std::optional<Lengthd>, 1>& positions,
                             unsigned int charIndex, const TextLayoutParams& params,
@@ -576,172 +597,6 @@ void StageTextPathRun(TextRun& run, size_t runIndex,
       }
       if (codepoint == 0x20) {
         state.advance += span.wordSpacingPx;
-      }
-    }
-  }
-}
-
-/// A textLength owner contains typographic clusters and nested owners in document order.
-struct PathLengthScope {
-  struct Item {
-    size_t index;
-    bool scope;
-    double start = 0.0;
-    double end = 0.0;
-    double position = 0.0;
-  };
-  std::optional<double> target;
-  LengthAdjust adjust = LengthAdjust::Default;
-  std::vector<Item> items;
-  double start = 0.0;
-  double end = 0.0;
-  double length = 0.0;
-  double scale = 1.0;
-  double position = 0.0;
-};
-
-/// Adjusts path-local glyph positions before any path sampling, visiting each scope once.
-void applyTextPathLengths(Registry& registry, const components::ComputedTextComponent& text,
-                          const TextLayoutParams& params, size_t firstRun,
-                          std::vector<TextRun>& runs, std::vector<TextPathCluster>& clusters) {
-  std::vector<PathLengthScope> scopes(1);
-  std::unordered_map<Entity, size_t> ownerScopes;
-  const Entity pathEntity = text.spans[firstRun].textPathSourceEntity;
-  auto setLength = [&](PathLengthScope& scope, const std::optional<Lengthd>& length,
-                       LengthAdjust adjust) {
-    if (length) {
-      const double value = length->toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::X);
-      if (std::isfinite(value) && value >= 0.0) {
-        scope.target = value;
-        scope.adjust = adjust;
-      }
-    }
-  };
-  if (pathEntity != entt::null && registry.valid(pathEntity)) {
-    ownerScopes.emplace(pathEntity, 0);
-    if (const auto* component = registry.try_get<components::TextComponent>(pathEntity)) {
-      setLength(scopes[0], component->textLength, component->lengthAdjust);
-    }
-  }
-
-  size_t clusterIndex = 0;
-  for (size_t ri = firstRun; ri < runs.size(); ++ri) {
-    const auto& span = text.spans[ri];
-    size_t owner = 0;
-    Entity current = span.sourceEntity;
-    std::vector<Entity> ancestors;
-    while (current != entt::null && registry.valid(current) && !ownerScopes.contains(current)) {
-      ancestors.push_back(current);
-      const auto* tree = registry.try_get<donner::components::TreeComponent>(current);
-      current = tree ? tree->parent() : entt::null;
-    }
-    if (const auto found = ownerScopes.find(current); found != ownerScopes.end()) {
-      owner = found->second;
-    }
-    for (auto it = ancestors.rbegin(); it != ancestors.rend(); ++it) {
-      PathLengthScope scope;
-      if (const auto* component = registry.try_get<components::TextComponent>(*it)) {
-        setLength(scope, component->textLength, component->lengthAdjust);
-      }
-      if (scope.target) {
-        const size_t child = scopes.size();
-        scopes[owner].items.push_back({child, true});
-        scopes.push_back(std::move(scope));
-        owner = child;
-      }
-      ownerScopes.emplace(*it, owner);
-    }
-    // Direct layout callers may supply spans without a source tree.
-    if (span.sourceEntity == entt::null && span.textLength) {
-      PathLengthScope scope;
-      setLength(scope, span.textLength, span.lengthAdjust);
-      const size_t child = scopes.size();
-      scopes[0].items.push_back({child, true});
-      scopes.push_back(std::move(scope));
-      owner = child;
-    }
-    while (clusterIndex < clusters.size() && clusters[clusterIndex].runIndex == ri) {
-      const TextPathCluster& cluster = clusters[clusterIndex];
-      scopes[owner].items.push_back(
-          {clusterIndex, false, cluster.pathOffset, cluster.pathOffset + cluster.advance});
-      ++clusterIndex;
-    }
-    runs[ri].textLengthAppliedOnPath = true;
-  }
-
-  // Children have larger indices, so both traversals are iterative and linear in the tree size.
-  for (size_t si = scopes.size(); si-- > 0;) {
-    PathLengthScope& scope = scopes[si];
-    std::erase_if(scope.items, [&](const PathLengthScope::Item& item) {
-      return item.scope && scopes[item.index].items.empty();
-    });
-    if (scope.items.empty()) {
-      continue;
-    }
-    double fixedLength = 0.0;
-    double cursor = 0.0;
-    double previousEnd = 0.0;
-    for (size_t ii = 0; ii < scope.items.size(); ++ii) {
-      auto& item = scope.items[ii];
-      if (item.scope) {
-        item.start = scopes[item.index].start;
-        item.end = scopes[item.index].end;
-      }
-      if (ii == 0) {
-        scope.start = item.start;
-      } else {
-        cursor += item.start - previousEnd;
-      }
-      item.position = cursor;
-      const double length = item.scope ? scopes[item.index].length : item.end - item.start;
-      cursor += length;
-      if (item.scope) {
-        fixedLength += length;
-      }
-      previousEnd = item.end;
-    }
-    scope.end = previousEnd;
-    scope.length = cursor;
-    double extraSpacing = 0.0;
-    const double adjustableLength = cursor - fixedLength;
-    if (scope.target && cursor > 0.0) {
-      if (scope.adjust == LengthAdjust::Spacing && scope.items.size() > 1) {
-        extraSpacing = (*scope.target - cursor) / static_cast<double>(scope.items.size() - 1);
-      } else if (scope.adjust == LengthAdjust::SpacingAndGlyphs && adjustableLength > 0.0) {
-        const double scale = std::max(0.0, *scope.target - fixedLength) / adjustableLength;
-        if (std::isfinite(scale) && scale <= std::numeric_limits<float>::max()) {
-          scope.scale = scale;
-        }
-      }
-    }
-    cursor = 0.0;
-    previousEnd = scope.start;
-    for (auto& item : scope.items) {
-      cursor += (item.start - previousEnd) * scope.scale;
-      item.position = cursor;
-      cursor += item.scope ? scopes[item.index].length : (item.end - item.start) * scope.scale;
-      cursor += extraSpacing;
-      previousEnd = item.end;
-    }
-    scope.length = cursor - extraSpacing;
-  }
-  scopes[0].position = scopes[0].start;
-  for (PathLengthScope& scope : scopes) {
-    for (const auto& item : scope.items) {
-      const double position = scope.position + item.position;
-      if (item.scope) {
-        scopes[item.index].position = position;
-      } else {
-        TextPathCluster& cluster = clusters[item.index];
-        cluster.pathOffset = position;
-        cluster.advance *= scope.scale;
-        auto& run = runs[cluster.runIndex];
-        for (size_t gi = cluster.glyphStart; gi < cluster.glyphEnd; ++gi) {
-          TextGlyph& glyph = run.glyphs[gi];
-          glyph.xPosition *= scope.scale;
-          glyph.xAdvance *= scope.scale;
-          glyph.stretchScaleX *= NarrowToFloat(scope.scale);
-        }
       }
     }
   }
@@ -882,27 +737,24 @@ void PlaceTextPathClusters(const Path::MeasuredPath& path, double startOffset, b
 }
 
 /// Places shaped clusters and returns geometry-based continuation independent of glyph visibility.
-std::optional<Vector2d> placeTextPath(Registry& registry,
-                                      const components::ComputedTextComponent& text,
-                                      const TextLayoutParams& params, size_t firstRun,
-                                      std::vector<TextRun>& runs,
-                                      std::vector<TextPathCluster>& clusters) {
-  applyTextPathLengths(registry, text, params, firstRun, runs, clusters);
-  ResetTextPathCoordinates(text, params, clusters);
-  AnchorTextPathClusters(text, clusters);
-  const auto& firstSpan = text.spans[firstRun];
-  const Path::MeasuredPath path = firstSpan.pathSpline->measure();
+std::optional<Vector2d> TextPathContinuation(const Path::MeasuredPath& path, bool closed,
+                                             double startOffset) {
   const double length = path.pathLength();
-  const bool closed = path.valid() && std::isfinite(length) && length > 0.0 &&
-                      IsSingleClosedTextPath(*firstSpan.pathSpline);
-  PlaceTextPathClusters(path, firstSpan.pathStartOffset, closed, runs, clusters);
-  if (closed && !std::isfinite(firstSpan.pathStartOffset)) {
+  if (closed && !std::isfinite(startOffset)) {
     return std::nullopt;
   }
-  const double distance =
-      closed ? NormalizeTextPathDistance(firstSpan.pathStartOffset, length) : length;
+  const double distance = closed ? NormalizeTextPathDistance(startOffset, length) : length;
   const auto end = path.pointAtArcLength(distance);
   return end.valid ? std::optional(end.point) : std::nullopt;
+}
+
+void placeTextPath(const components::ComputedTextComponent& text, const TextLayoutParams& params,
+                   DeferredTextPath& path, std::vector<TextRun>& runs) {
+  ResetTextPathCoordinates(text, params, path.clusters);
+  AnchorTextPathClusters(text, path.clusters);
+  const auto& firstSpan = text.spans[path.firstRun];
+  PlaceTextPathClusters(path.measuredPath, firstSpan.pathStartOffset, path.closed, runs,
+                        path.clusters);
 }
 
 /// A retired owning path establishes an endpoint for the next unanchored flat character.
@@ -1032,6 +884,302 @@ void ApplyPostTextPathTranslations(std::vector<TextRun>& runs,
       TranslateAfterTextPathRun(runs[run], text.spans[run], state);
     }
   }
+}
+
+struct OrdinaryLengthScope {
+  struct Item {
+    size_t index = 0;
+    bool scope = false;
+    bool path = false;
+    size_t group = 0;
+    double start = 0;
+    double end = 0;
+    double position = 0;
+    size_t spacingIndex = 0;
+  };
+  Entity owner = entt::null;
+  std::optional<Lengthd> authoredTarget;
+  std::shared_ptr<const components::ContextualLengthRecipe> recipe;
+  LengthAdjust adjust = LengthAdjust::Default;
+  FontMetrics metrics;
+  std::vector<Item> items;
+  double start = 0;
+  double end = 0;
+  double length = 0;
+  double scale = 1;
+  double spacing = 0;
+  double position = 0;
+};
+
+bool ApplyTextLengthOwnerPlan(Registry& registry, std::vector<TextRun>& runs,
+                              const components::ComputedTextComponent& text,
+                              const std::vector<RunPenExtent>& runExtents,
+                              const TextLayoutParams& params, bool vertical,
+                              std::vector<DeferredTextPath>& paths) {
+  struct PathClusterRange {
+    size_t group = 0;
+    size_t begin = 0;
+    size_t end = 0;
+  };
+
+  std::vector<std::optional<PathClusterRange>> pathClustersByRun(runs.size());
+  for (size_t group = 0; group < paths.size(); ++group) {
+    const auto& clusters = paths[group].clusters;
+    for (size_t begin = 0; begin < clusters.size();) {
+      const size_t runIndex = clusters[begin].runIndex;
+      size_t end = begin + 1;
+      while (end < clusters.size() && clusters[end].runIndex == runIndex) {
+        ++end;
+      }
+      if (runIndex < pathClustersByRun.size()) {
+        pathClustersByRun[runIndex] = PathClusterRange{group, begin, end};
+      }
+      begin = end;
+    }
+  }
+
+  std::vector<OrdinaryLengthScope> scopes(1);
+  std::unordered_map<Entity, size_t> ownerScopes;
+  bool hasManagedScope = false;
+  size_t structuralWork = 0;
+
+  const auto initializeScope = [&](OrdinaryLengthScope& scope, Entity owner,
+                                   const components::ComputedTextComponent::TextSpan& span) {
+    scope.owner = owner;
+    scope.metrics = params.fontMetrics;
+    std::optional<Lengthd> ownerFontSize;
+    if (const auto occurrence = text.textLengthOwnerFontSizes.find(owner);
+        occurrence != text.textLengthOwnerFontSizes.end()) {
+      ownerFontSize = occurrence->second;
+    } else if (span.sourceEntity == owner && span.hasResolvedFontSize) {
+      ownerFontSize = span.fontSize;
+    } else if (const auto* style = registry.try_get<components::ComputedStyleComponent>(owner)) {
+      ownerFontSize = style->properties.fontSize.get().value();
+    }
+    if (ownerFontSize) {
+      const double size =
+          ownerFontSize->toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::Y);
+      if (std::isfinite(size) && size >= 0) {
+        scope.metrics.fontSize = size;
+      }
+    }
+    if (const auto* component = registry.try_get<components::TextComponent>(owner)) {
+      scope.authoredTarget = component->textLength;
+      scope.adjust = component->lengthAdjust;
+    }
+    scope.recipe = components::ContextualLengthFor(registry, owner, "textLength");
+    hasManagedScope |= scope.authoredTarget.has_value() || scope.recipe != nullptr;
+  };
+
+  for (size_t runIndex = 0; runIndex < runs.size() && runIndex < text.spans.size(); ++runIndex) {
+    const auto& span = text.spans[runIndex];
+    if (span.sourceEntity == entt::null) {
+      continue;
+    }
+
+    Entity current = span.sourceEntity;
+    std::vector<Entity> ancestors;
+    while (current != entt::null && registry.valid(current) && !ownerScopes.contains(current)) {
+      ancestors.push_back(current);
+      if (structuralWork == std::numeric_limits<size_t>::max()) {
+        return false;
+      }
+      ++structuralWork;
+      const auto* tree = registry.try_get<donner::components::TreeComponent>(current);
+      current = tree ? tree->parent() : entt::null;
+    }
+
+    size_t owner =
+        current != entt::null && ownerScopes.contains(current) ? ownerScopes[current] : 0;
+    for (auto it = ancestors.rbegin(); it != ancestors.rend(); ++it) {
+      OrdinaryLengthScope candidate;
+      initializeScope(candidate, *it, span);
+      if (candidate.authoredTarget || candidate.recipe) {
+        const size_t child = scopes.size();
+        scopes[owner].items.push_back({.index = child, .scope = true});
+        scopes.push_back(std::move(candidate));
+        owner = child;
+      }
+      ownerScopes.emplace(*it, owner);
+    }
+
+    if (runs[runIndex].glyphs.empty()) {
+      continue;
+    }
+    if (const auto& range = pathClustersByRun[runIndex]) {
+      for (size_t clusterIndex = range->begin; clusterIndex < range->end; ++clusterIndex) {
+        const auto& cluster = paths[range->group].clusters[clusterIndex];
+        scopes[owner].items.push_back({.index = clusterIndex,
+                                       .path = true,
+                                       .group = range->group,
+                                       .start = cluster.pathOffset,
+                                       .end = cluster.pathOffset + cluster.advance});
+      }
+    } else {
+      const auto& extent = runExtents[runIndex];
+      scopes[owner].items.push_back({.index = runIndex,
+                                     .start = vertical ? extent.startY : extent.startX,
+                                     .end = vertical ? extent.endY : extent.endX});
+    }
+  }
+
+  if (!hasManagedScope) {
+    return false;
+  }
+
+  auto* budget = registry.ctx().find<components::AnimationResourceBudget>();
+  size_t evaluationWork = structuralWork;
+  bool admitted = budget != nullptr;
+  for (const auto& scope : scopes) {
+    if (scope.recipe &&
+        scope.recipe->evaluationWork > std::numeric_limits<size_t>::max() - evaluationWork) {
+      admitted = false;
+      break;
+    }
+    if (scope.recipe) {
+      evaluationWork += scope.recipe->evaluationWork;
+    }
+  }
+  admitted = admitted && budget->reserveContextualWork(evaluationWork);
+
+  const auto plan = [&](bool sampleRecipes) {
+    bool samplesValid = true;
+    for (size_t scopeIndex = scopes.size(); scopeIndex-- > 0;) {
+      auto& scope = scopes[scopeIndex];
+      std::erase_if(scope.items, [&](const OrdinaryLengthScope::Item& item) {
+        return item.scope && scopes[item.index].items.empty();
+      });
+      scope.start = 0;
+      scope.end = 0;
+      scope.length = 0;
+      scope.scale = 1;
+      scope.spacing = 0;
+      if (scope.items.empty()) {
+        continue;
+      }
+
+      double fixedLength = 0;
+      double cursor = 0;
+      double previousEnd = 0;
+      size_t spacingUnits = 0;
+      for (size_t itemIndex = 0; itemIndex < scope.items.size(); ++itemIndex) {
+        auto& item = scope.items[itemIndex];
+        if (item.scope) {
+          item.start = scopes[item.index].start;
+          item.end = scopes[item.index].end;
+        }
+        if (itemIndex == 0) {
+          scope.start = item.start;
+        } else {
+          cursor += item.start - previousEnd;
+        }
+        item.position = cursor;
+        item.spacingIndex = spacingUnits;
+        const double length = item.scope ? scopes[item.index].length : item.end - item.start;
+        cursor += length;
+        fixedLength += item.scope ? length : 0;
+        spacingUnits += item.scope || item.path ? 1 : runs[item.index].glyphs.size();
+        previousEnd = item.end;
+      }
+      scope.end = previousEnd;
+      scope.length = cursor;
+
+      std::optional<Lengthd> target = scope.authoredTarget;
+      if (sampleRecipes && scope.recipe) {
+        components::AnimationValueContext context;
+        context.viewBox = params.viewBox;
+        context.fontMetrics = scope.metrics;
+        context.extent = vertical ? Lengthd::Extent::Y : Lengthd::Extent::X;
+        const Lengthd underlying = target.value_or(Lengthd(scope.length));
+        const auto sampled =
+            components::SampleContextualLengthRecipe(*scope.recipe, underlying, context);
+        if (!sampled) {
+          samplesValid = false;
+        } else {
+          const double pixels = sampled->toPixels(params.viewBox, scope.metrics, context.extent);
+          if (!std::isfinite(pixels) || pixels < 0) {
+            samplesValid = false;
+          } else {
+            target = sampled;
+          }
+        }
+      }
+
+      if (target && cursor > 0) {
+        const double pixels = target->toPixels(params.viewBox, scope.metrics,
+                                               vertical ? Lengthd::Extent::Y : Lengthd::Extent::X);
+        const double adjustableLength = cursor - fixedLength;
+        if (std::isfinite(pixels) && pixels >= 0 && scope.adjust == LengthAdjust::Spacing &&
+            spacingUnits > 1) {
+          scope.spacing = (pixels - cursor) / static_cast<double>(spacingUnits - 1);
+        } else if (std::isfinite(pixels) && pixels >= 0 &&
+                   scope.adjust == LengthAdjust::SpacingAndGlyphs && adjustableLength > 0) {
+          scope.scale = std::max(0.0, pixels - fixedLength) / adjustableLength;
+        }
+      }
+
+      cursor = 0;
+      previousEnd = scope.start;
+      for (auto& item : scope.items) {
+        cursor += (item.start - previousEnd) * scope.scale;
+        item.position = cursor;
+        const double length = item.scope ? scopes[item.index].length : item.end - item.start;
+        cursor += item.scope ? length : length * scope.scale;
+        if (!item.scope && !item.path && runs[item.index].glyphs.size() > 1) {
+          cursor += scope.spacing * static_cast<double>(runs[item.index].glyphs.size() - 1);
+        }
+        cursor += scope.spacing;
+        previousEnd = item.end;
+      }
+      scope.length = cursor - scope.spacing;
+    }
+    return samplesValid;
+  };
+
+  if (!plan(admitted)) {
+    plan(false);
+  }
+
+  scopes[0].position = scopes[0].start;
+  for (auto& scope : scopes) {
+    for (const auto& item : scope.items) {
+      const double position = scope.position + item.position;
+      if (item.scope) {
+        scopes[item.index].position = position;
+        continue;
+      }
+      if (item.path) {
+        auto& cluster = paths[item.group].clusters[item.index];
+        cluster.pathOffset = position;
+        cluster.advance *= scope.scale;
+        auto& run = runs[cluster.runIndex];
+        for (size_t glyphIndex = cluster.glyphStart; glyphIndex < cluster.glyphEnd; ++glyphIndex) {
+          auto& glyph = run.glyphs[glyphIndex];
+          glyph.xPosition *= scope.scale;
+          glyph.xAdvance *= scope.scale;
+          glyph.stretchScaleX *= NarrowToFloat(scope.scale);
+        }
+        continue;
+      }
+
+      auto& run = runs[item.index];
+      for (size_t glyphIndex = 0; glyphIndex < run.glyphs.size(); ++glyphIndex) {
+        auto& glyph = run.glyphs[glyphIndex];
+        if (vertical) {
+          glyph.yPosition = position + (glyph.yPosition - item.start) * scope.scale +
+                            scope.spacing * static_cast<double>(glyphIndex);
+          glyph.yAdvance *= scope.scale;
+          glyph.stretchScaleY *= NarrowToFloat(scope.scale);
+        } else {
+          glyph.xPosition = position + (glyph.xPosition - item.start) * scope.scale +
+                            scope.spacing * static_cast<double>(glyphIndex);
+          glyph.xAdvance *= scope.scale;
+          glyph.stretchScaleX *= NarrowToFloat(scope.scale);
+        }
+      }
+    }
+  }
+  return true;
 }
 
 void applyTextLength(std::vector<TextRun>& runs, const components::ComputedTextComponent& text,
@@ -2121,6 +2269,8 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
   Entity prevTextPathSource = entt::null;
   std::optional<size_t> firstPathRun;
   TextPathStagingState pathStaging;
+  std::vector<DeferredTextPath> deferredTextPaths;
+  size_t deferredTextPathBytes = 0;
   std::vector<PostTextPathBoundary> postPathBoundaries;
 
   std::vector<ChunkBoundary> chunkBoundaries;
@@ -2128,9 +2278,32 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
 
   auto finishTextPath = [&]() {
     if (firstPathRun) {
-      const auto endpoint =
-          placeTextPath(registry_, text, params, *firstPathRun, runs, pathStaging.clusters);
+      const auto& firstSpan = text.spans[*firstPathRun];
+      Path::MeasuredPath measuredPath = firstSpan.pathSpline->measure();
+      const double length = measuredPath.pathLength();
+      const bool closed = measuredPath.valid() && std::isfinite(length) && length > 0.0 &&
+                          IsSingleClosedTextPath(*firstSpan.pathSpline);
+      const auto endpoint = TextPathContinuation(measuredPath, closed, firstSpan.pathStartOffset);
       postPathBoundaries.push_back({runs.size(), endpoint});
+
+      const auto measuredBytes = measuredPath.retainedBytes();
+      const bool clustersFit = pathStaging.clusters.capacity() <=
+                               kMaximumDeferredTextPathBytes / sizeof(TextPathCluster);
+      const size_t clusterBytes =
+          clustersFit ? pathStaging.clusters.capacity() * sizeof(TextPathCluster) : 0;
+      const bool retained =
+          measuredBytes && clustersFit && *measuredBytes <= kMaximumDeferredTextPathBytes &&
+          clusterBytes <= kMaximumDeferredTextPathBytes - *measuredBytes &&
+          deferredTextPathBytes <= kMaximumDeferredTextPathBytes - *measuredBytes - clusterBytes;
+      if (retained) {
+        deferredTextPathBytes += *measuredBytes + clusterBytes;
+        deferredTextPaths.push_back(
+            {*firstPathRun, std::move(measuredPath), closed, std::move(pathStaging.clusters)});
+      } else {
+        for (size_t runIndex = *firstPathRun; runIndex < runs.size(); ++runIndex) {
+          runs[runIndex].glyphs.clear();
+        }
+      }
       pathStaging.clusters.clear();
       firstPathRun.reset();
       prevTextPathSource = entt::null;
@@ -2631,7 +2804,14 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
   // ── textLength and text-anchor adjustments ────────────────────────────────────
   if (!runs.empty() && !wrapped) {
     const bool vertical = isVertical(params.writingMode);
-    applyTextLength(runs, text, runExtents, params, vertical, currentPenX, currentPenY);
+    const bool ownerHandled = ApplyTextLengthOwnerPlan(registry_, runs, text, runExtents, params,
+                                                       vertical, deferredTextPaths);
+    if (!ownerHandled) {
+      applyTextLength(runs, text, runExtents, params, vertical, currentPenX, currentPenY);
+    }
+    for (auto& path : deferredTextPaths) {
+      placeTextPath(text, params, path, runs);
+    }
     applyTextAnchor(runs, chunkBoundaries, text, vertical);
   }
   ApplyPostTextPathTranslations(runs, text, postPathBoundaries);

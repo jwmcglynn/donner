@@ -632,6 +632,9 @@ donner_cc_test(
         "//donner/base:base_test_utils",
         "//donner/base/encoding:base64",
         "//donner/editor/tests:bitmap_golden_compare",
+        "//donner/svg/components/style:style_system",
+        "//donner/svg/renderer:renderer_driver",
+        "//donner/svg/renderer:renderer_tiny_skia",
         "@com_google_gtest//:gtest_main",
     ],
 )
