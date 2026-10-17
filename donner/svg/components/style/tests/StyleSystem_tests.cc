@@ -851,7 +851,7 @@ TEST_F(StyleSystemTest, UserAgentDisplayRulesResolveSvgNamespaceAliases) {
 
 TEST_F(StyleSystemTest, EmptySelectorUsesAuthoredChildrenAfterShadowInstantiation) {
   auto document = ParseSVG(R"svg(<svg xmlns="http://www.w3.org/2000/svg">
-    <style>use { opacity: .2 } use:empty { opacity: .8 }</style>
+    <style>use, g { opacity: .2 } use:empty, g:empty { opacity: .8 }</style>
     <defs><g id="shape"><rect/></g></defs>
     <use id="empty" href="#shape"/>
     <use id="titled" href="#shape"><title>name</title></use>
@@ -865,6 +865,11 @@ TEST_F(StyleSystemTest, EmptySelectorUsesAuthoredChildrenAfterShadowInstantiatio
                                         shape.entityHandle().entity(), RcString("#shape"),
                                         warnings);
     ASSERT_THAT(shadow.mainBranch, testing::Optional(testing::_));
+    ASSERT_FALSE(shadow.mainBranch->shadowEntities.empty());
+    EntityHandle proxy(document.registry(), shadow.mainBranch->shadowEntities.front());
+    const auto& proxyProperties = styleSystem.computeStyle(proxy, warnings).properties;
+    ASSERT_THAT(proxyProperties, testing::Optional(testing::_));
+    EXPECT_THAT(proxyProperties->opacity.get(), testing::Optional(.2));
     const bool empty = std::string_view(id) == "empty";
     EXPECT_EQ(host.isEmptyForSelector(nullptr), empty);
     const auto& properties = styleSystem.computeStyle(host.entityHandle(), warnings).properties;

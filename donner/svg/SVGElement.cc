@@ -736,7 +736,7 @@ bool SVGElement::isEmptyForSelector(css::SelectorTraversalBudget* budget) const 
   }
   [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   const EntityHandle handle = unsafeEntityHandle();
-  return components::IsSelectorEmpty(*handle.registry(), handle.entity(), handle.entity(), budget);
+  return components::IsSelectorEmpty(*handle.registry(), handle.entity(), budget);
 }
 
 std::optional<SVGElement> SVGElement::lastChild() const {

@@ -410,7 +410,8 @@ TEST(SVGDocument, EmptySelectorPreservesAndRefreshesProjectedGenericText) {
   auto replacement = ReplaceInSource(document, "<g id=\"generic\" class=\"new\">word<!--c--> </g>",
                                      "<g id=\"generic\"/>");
   ASSERT_TRUE(replacement.applied);
-  ASSERT_FALSE(replacement.diagnostic.has_value());
+  ASSERT_FALSE(replacement.diagnostic.has_value())
+      << (replacement.diagnostic ? replacement.diagnostic->reason : "");
   EXPECT_TRUE(document.querySelector("#generic:empty").has_value());
   EXPECT_FALSE(document.querySelector("#data:empty").has_value());
 }
@@ -419,9 +420,11 @@ TEST(SVGDocument, EmptySelectorTextAuthoritySurvivesSourceAndTypedEdits) {
   auto document = ParseSVG(R"svg(<svg xmlns="http://www.w3.org/2000/svg">
     <text id="text">initial</text><title id="title">title</title>
   </svg>)svg");
-  auto replacement = ReplaceInSource(document, "initial", "new<!--c--><![CDATA[word]]>");
+  auto replacement = ReplaceInSource(document, "<text id=\"text\">initial</text>",
+                                     "<text id=\"text\">new<!--c--><![CDATA[word]]></text>");
   ASSERT_TRUE(replacement.applied);
-  ASSERT_FALSE(replacement.diagnostic.has_value());
+  ASSERT_FALSE(replacement.diagnostic.has_value())
+      << (replacement.diagnostic ? replacement.diagnostic->reason : "");
   auto text = document.querySelector("#text")->cast<SVGTextElement>();
   auto node = xml::XMLNode::TryCast(text.unsafeEntityHandle()).value();
   for (auto child = node.firstChild(); child; child = child->nextSibling()) {
@@ -440,7 +443,8 @@ TEST(SVGDocument, EmptySelectorTextAuthoritySurvivesSourceAndTypedEdits) {
   EXPECT_TRUE(text.isEmptyForSelector(nullptr));
   replacement = ReplaceInSource(document, "title</title>", "new<![CDATA[word]]></title>");
   ASSERT_TRUE(replacement.applied);
-  ASSERT_FALSE(replacement.diagnostic.has_value());
+  ASSERT_FALSE(replacement.diagnostic.has_value())
+      << (replacement.diagnostic ? replacement.diagnostic->reason : "");
   auto title = document.querySelector("#title")->cast<SVGTitleElement>();
   EXPECT_FALSE(title.isEmptyForSelector(nullptr));
   title.setTextContent("");

@@ -10,7 +10,6 @@
 #include "donner/svg/components/ElementTypeComponent.h"
 #include "donner/svg/components/StylesheetComponent.h"
 #include "donner/svg/components/shadow/ShadowEntityComponent.h"
-#include "donner/svg/components/shadow/ShadowTreeComponent.h"
 #include "donner/svg/components/text/TextComponent.h"
 
 namespace donner::svg::components {
@@ -127,8 +126,7 @@ void RecordDiscardedSelectorText(EntityHandle parent, const xml::XMLNode& node) 
   }
 }
 
-bool IsSelectorEmpty(Registry& registry, Entity treeEntity, Entity dataEntity,
-                     css::SelectorTraversalBudget* budget) {
+bool IsSelectorEmpty(Registry& registry, Entity dataEntity, css::SelectorTraversalBudget* budget) {
   const EntityHandle data(registry, dataEntity);
   if (data.all_of<ProjectedNonWhitespaceTextTag>()) {
     return false;
@@ -138,8 +136,7 @@ bool IsSelectorEmpty(Registry& registry, Entity treeEntity, Entity dataEntity,
       return false;
     }
   }
-  const Entity authoredTree = data.all_of<ShadowTreeComponent>() ? dataEntity : treeEntity;
-  return ChildrenAreEmpty(registry, authoredTree, budget);
+  return ChildrenAreEmpty(registry, dataEntity, budget);
 }
 
 }  // namespace donner::svg::components

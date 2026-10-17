@@ -223,7 +223,7 @@ struct ShadowedElementAdapter {
   }
 
   bool isEmptyForSelector(css::SelectorTraversalBudget* budget) const {
-    return IsSelectorEmpty(registry_.get(), treeEntity_, dataEntity_, budget);
+    return IsSelectorEmpty(registry_.get(), dataEntity_, budget);
   }
 
   bool isKnownType() const {
@@ -407,7 +407,7 @@ void StyleSystem::updateStyle(EntityHandle handle, std::string_view style) {
   invalidateComputed(handle);
 }
 
-void StyleSystem::applyStylesheetRules(Registry& registry, Entity treeEntity, Entity dataEntity,
+void StyleSystem::applyStylesheetRules(Registry& registry, Entity dataEntity,
                                        PropertyRegistry& properties,
                                        StyleResourceBudget& styleBudget,
                                        ParseWarningSink& warningSink) {
