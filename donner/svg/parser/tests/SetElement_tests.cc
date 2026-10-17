@@ -46,7 +46,7 @@ std::optional<std::string> AnimatedOverride(SVGDocument& document, std::string_v
   if (!values) {
     return std::nullopt;
   }
-  const auto value = values->overrides.find(attribute);
+  const auto value = values->overrides.find(std::string(attribute));
   return value == values->overrides.end() ? std::nullopt : std::optional(value->second);
 }
 
