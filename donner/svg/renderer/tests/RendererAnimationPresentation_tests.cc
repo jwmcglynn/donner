@@ -480,6 +480,18 @@ TEST(RendererAnimationPresentation, NestedFixedOwnerDoesNotCreateParentScalingGa
       "nested-fixed-owner-parent-scaling", editor::tests::PixelmatchIdentityParams());
 }
 
+TEST(RendererAnimationPresentation, NestedOwnerAbsoluteResetStopsPriorLengthCarry) {
+  auto document = ParsePresentation(
+      "<text y='12' font-size='10'><tspan lengthAdjust='spacingAndGlyphs' "
+      "textLength='40'>AB</tspan><tspan x='100' textLength='20'>C</tspan></text>");
+  auto expected = ParsePresentation(
+      "<text y='12' font-size='10'><tspan lengthAdjust='spacingAndGlyphs' "
+      "textLength='40'>AB</tspan><tspan x='100'>C</tspan></text>");
+  editor::tests::CompareBitmapToBitmap(
+      RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(expected),
+      "nested-owner-absolute-reset", editor::tests::PixelmatchIdentityParams());
+}
+
 TEST(RendererAnimationPresentation, InvalidNestedTextLengthKeepsOwnBaseOnly) {
   auto document = ParsePresentation(
       "<text id='owner' x='1' y='12' font-size='10' lengthAdjust='spacingAndGlyphs'>H"
@@ -561,6 +573,19 @@ TEST(RendererAnimationPresentation, InvalidUpperTextLengthKeepsValidLowerLayer) 
       "invalid-upper-text-length-keeps-lower", editor::tests::PixelmatchIdentityParams());
 }
 
+TEST(RendererAnimationPresentation, TextLengthValuesIgnoreInvalidFromOperand) {
+  auto document = ParsePresentation(
+      "<text x='1' y='12' font-size='10' lengthAdjust='spacingAndGlyphs' textLength='8'>HH"
+      "<animate attributeName='textLength' from='-1' values='10;20' dur='2s'/></text>");
+  document.setTime(1);
+  auto expected = ParsePresentation(
+      "<text x='1' y='12' font-size='10' lengthAdjust='spacingAndGlyphs' "
+      "textLength='15'>HH</text>");
+  editor::tests::CompareBitmapToBitmap(
+      RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(expected),
+      "text-length-values-precedence", editor::tests::PixelmatchIdentityParams());
+}
+
 TEST(RendererAnimationPresentation, TextPositionBaseUsesAnimatedListArity) {
   auto document = ParsePresentation(
       "<text id='owner' y='12' font-size='10' dx='2'>AB</text>"
@@ -581,6 +606,40 @@ TEST(RendererAnimationPresentation, AnimatedTextPositionListReplacesAuthoredTail
   editor::tests::CompareBitmapToBitmap(
       RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(expected),
       "text-position-list-replaces-tail", editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(RendererAnimationPresentation, NonemptyDeltaListIsNotTruncatedForInterpolation) {
+  auto document = ParsePresentation(
+      "<text id='owner' y='12' font-size='10' dx='1 2'>AB</text>"
+      "<animate href='#owner' attributeName='dx' to='10' dur='2s'/>");
+  document.setTime(0.5);
+  auto expected = ParsePresentation("<text y='12' font-size='10' dx='1 2'>AB</text>");
+  editor::tests::CompareBitmapToBitmap(
+      RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(expected),
+      "nonempty-delta-list-is-not-truncated", editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(RendererAnimationPresentation, InvalidUpperTextPositionKeepsValidLowerLayer) {
+  auto document = ParsePresentation(
+      "<text id='owner' y='12' font-size='10' dx='2'>AB</text>"
+      "<animate href='#owner' attributeName='dx' from='2' to='6' dur='2s'/>"
+      "<set href='#owner' attributeName='dx' to='invalid' dur='2s'/>");
+  document.setTime(1);
+  auto expected = ParsePresentation("<text y='12' font-size='10' dx='4'>AB</text>");
+  editor::tests::CompareBitmapToBitmap(
+      RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(expected),
+      "invalid-upper-text-position-keeps-lower", editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(RendererAnimationPresentation, TextPositionValuesIgnoreInvalidFromOperand) {
+  auto document = ParsePresentation(
+      "<text id='owner' y='12' font-size='10' dx='2'>AB</text>"
+      "<animate href='#owner' attributeName='dx' from='invalid' values='10;14' dur='2s'/>");
+  document.setTime(1);
+  auto expected = ParsePresentation("<text y='12' font-size='10' dx='12'>AB</text>");
+  editor::tests::CompareBitmapToBitmap(
+      RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(expected),
+      "text-position-values-precedence", editor::tests::PixelmatchIdentityParams());
 }
 #endif
 
