@@ -1,11 +1,17 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <functional>
+
 #include "donner/base/encoding/Base64.h"
 #include "donner/base/tests/ParseResultTestUtils.h"
 #include "donner/base/xml/components/TreeComponent.h"
 #include "donner/editor/tests/BitmapGoldenCompare.h"
+#include "donner/svg/SVGMarkerElement.h"
+#include "donner/svg/SVGPathElement.h"
 #include "donner/svg/SVGRectElement.h"
+#include "donner/svg/SVGSVGElement.h"
+#include "donner/svg/SVGTextElement.h"
 #include "donner/svg/SVGUseElement.h"
 #include "donner/svg/components/SVGDocumentContext.h"
 #include "donner/svg/components/animation/AnimateMotionComponent.h"
@@ -115,6 +121,192 @@ TEST(RendererAnimationPresentation, SourceInsertedMotionReferenceUsesSharedEleme
   editor::tests::CompareBitmapToBitmap(
       RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(expected),
       "removed-motion-reference", editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(RendererAnimationPresentation, MixedFontUnitsUseTheSameSampledFont) {
+  for (const std::string_view from : {"0px", "0em"}) {
+    SCOPED_TRACE(from);
+    auto document = ParsePresentation(
+        "<rect width='2' height='16' font-size='12'>"
+        "<set attributeName='font-size' to='24' dur='2s'/>"
+        "<animate attributeName='x' from='" +
+        std::string(from) + "' to='1em' dur='2s'/></rect>");
+    for (const double time : {1.0, 3.0, 1.0}) {
+      SCOPED_TRACE(time);
+      document.setTime(time);
+      auto expected = ParsePresentation(time == 1.0 ? "<rect x='12' width='2' height='16'/>"
+                                                    : "<rect width='2' height='16'/>");
+      editor::tests::CompareBitmapToBitmap(
+          RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(expected),
+          "same-sample-font-geometry", editor::tests::PixelmatchIdentityParams());
+    }
+  }
+}
+
+TEST(RendererAnimationPresentation, MarkerAngleUnitsInterpolateContinuously) {
+  const std::string prefix =
+      "<defs><marker id='m' markerUnits='userSpaceOnUse' markerWidth='16' markerHeight='16' "
+      "refX='0' refY='0' orient='";
+  const std::string suffix =
+      "'><rect width='6' height='2'/></marker></defs><path d='M8 8H12' marker-start='url(#m)'/>";
+  for (const auto& [from, to] :
+       {std::pair{"0", "90"}, std::pair{"0deg", "90deg"}, std::pair{"0rad", "90deg"}}) {
+    SCOPED_TRACE(from);
+    auto document = ParsePresentation(prefix + "0" + suffix +
+                                      "<animate href='#m' attributeName='orient' from='" + from +
+                                      "' to='" + to + "' dur='2s'/>");
+    for (const double time : {0.5, 3.0, 0.5}) {
+      SCOPED_TRACE(time);
+      document.setTime(time);
+      auto expected = ParsePresentation(prefix + (time == 0.5 ? "22.5" : "0") + suffix);
+      editor::tests::CompareBitmapToBitmap(
+          RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(expected),
+          "marker-angle-interpolation", editor::tests::PixelmatchIdentityParams());
+    }
+  }
+}
+
+#ifdef DONNER_TEXT_ENABLED
+TEST(RendererAnimationPresentation, ToOnlyTextPositionUsesTypedBase) {
+  auto document = ParsePresentation(
+      "<text id='t' x='2' y='12' font-size='10'>H"
+      "<animate attributeName='x' to='10' dur='2s'/></text>");
+  auto text = document.querySelector("#t");
+  ASSERT_THAT(text, testing::Ne(std::nullopt));
+  text->cast<SVGTextElement>().setX(Lengthd(6));
+  for (const double time : {1.0, 3.0, 1.0}) {
+    SCOPED_TRACE(time);
+    document.setTime(time);
+    auto expected = ParsePresentation(time == 1.0 ? "<text x='8' y='12' font-size='10'>H</text>"
+                                                  : "<text x='6' y='12' font-size='10'>H</text>");
+    editor::tests::CompareBitmapToBitmap(
+        RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(expected),
+        "typed-text-position-base", editor::tests::PixelmatchIdentityParams());
+  }
+}
+#endif
+
+TEST(RendererAnimationPresentation, ToOnlyPathCalibrationUsesTypedBase) {
+  const std::string prefix =
+      "<path id='p' d='M0 8H16' stroke='black' stroke-width='4' "
+      "stroke-dasharray='2 2' pathLength='";
+  auto document = ParsePresentation(
+      prefix + "16'><animate attributeName='pathLength' to='12' dur='2s'/></path>");
+  auto path = document.querySelector("#p");
+  ASSERT_THAT(path, testing::Ne(std::nullopt));
+  path->cast<SVGPathElement>().setPathLength(8);
+  for (const double time : {1.0, 3.0, 1.0}) {
+    SCOPED_TRACE(time);
+    document.setTime(time);
+    auto expected = ParsePresentation(prefix + (time == 1.0 ? "10" : "8") + "'/>");
+    editor::tests::CompareBitmapToBitmap(
+        RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(expected),
+        "typed-path-calibration-base", editor::tests::PixelmatchIdentityParams());
+  }
+}
+
+#ifdef DONNER_TEXT_ENABLED
+TEST(RendererAnimationPresentation, TypedTextFieldsRestoreAndAcceptEdits) {
+  struct Case {
+    const char* attribute;
+    const char* opening;
+    double authored;
+    double typed;
+    double to;
+    double midpoint;
+    std::function<void(SVGTextElement&, double)> write;
+  };
+  for (const auto& item :
+       {Case{"y", "<text id='t' x='2' font-size='10'", 12, 10, 14, 12,
+             [](SVGTextElement& text, double value) { text.setY(Lengthd(value)); }},
+        Case{"rotate", "<text id='t' x='2' y='12' font-size='10'", 0, 10, 30, 20,
+             [](SVGTextElement& text, double value) { text.setRotate(value); }},
+        Case{"textLength",
+             "<text id='t' x='2' y='12' font-size='10' lengthAdjust='spacingAndGlyphs'", 4, 8, 12,
+             10, [](SVGTextElement& text, double value) { text.setTextLength(Lengthd(value)); }}}) {
+    SCOPED_TRACE(item.attribute);
+    const std::string prefix = std::string(item.opening) + " " + item.attribute + "='";
+    auto document = ParsePresentation(prefix + std::to_string(item.authored) +
+                                      "'>H<animate attributeName='" + item.attribute + "' to='" +
+                                      std::to_string(item.to) + "' dur='2s'/></text>");
+    auto text = document.querySelector("#t");
+    ASSERT_THAT(text, testing::Ne(std::nullopt));
+    auto typed = text->cast<SVGTextElement>();
+    item.write(typed, item.typed);
+    for (const double time : {1.0, 3.0, 1.0}) {
+      SCOPED_TRACE(time);
+      document.setTime(time);
+      auto expected = ParsePresentation(
+          prefix + std::to_string(time == 1 ? item.midpoint : item.typed) + "'>H</text>");
+      editor::tests::CompareBitmapToBitmap(
+          RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(expected),
+          "typed-text-fields", editor::tests::PixelmatchIdentityParams());
+    }
+    item.write(typed, item.to);
+    for (const double time : {1.0, 3.0}) {
+      document.setTime(time);
+      auto expected = ParsePresentation(prefix + std::to_string(item.to) + "'>H</text>");
+      editor::tests::CompareBitmapToBitmap(
+          RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(expected),
+          "edited-text-fields", editor::tests::PixelmatchIdentityParams());
+    }
+  }
+}
+#endif
+
+TEST(RendererAnimationPresentation, ToOnlyViewBoxUsesTypedBase) {
+  auto document = ParsePresentation(
+      "<svg id='v' width='16' height='16' viewBox='0 0 16 16'><rect x='1' y='1' width='2' "
+      "height='2'/>"
+      "<animate attributeName='viewBox' to='0 0 12 12' dur='2s'/></svg>");
+  auto viewport = document.querySelector("#v");
+  ASSERT_THAT(viewport, testing::Ne(std::nullopt));
+  viewport->cast<SVGSVGElement>().setViewBox(0, 0, 8, 8);
+  for (const double time : {1.0, 3.0, 1.0}) {
+    SCOPED_TRACE(time);
+    document.setTime(time);
+    const std::string box = time == 1 ? "0 0 10 10" : "0 0 8 8";
+    auto expected = ParsePresentation("<svg width='16' height='16' viewBox='" + box +
+                                      "'><rect x='1' y='1' width='2' height='2'/></svg>");
+    editor::tests::CompareBitmapToBitmap(
+        RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(expected),
+        "typed-viewbox-base", editor::tests::PixelmatchIdentityParams());
+  }
+}
+
+TEST(RendererAnimationPresentation, MarkerAngleCompositionPacingAndTypedBase) {
+  const std::string prefix =
+      "<defs><marker id='m' markerUnits='userSpaceOnUse' markerWidth='16' markerHeight='16' "
+      "refX='0' refY='0' orient='";
+  const std::string suffix =
+      "'><rect width='6' height='2'/></marker></defs><path d='M8 8H12' marker-start='url(#m)'/>";
+  struct Case {
+    const char* attributes;
+    double typed;
+    double time;
+    const char* expected;
+  };
+  for (const auto& item :
+       {Case{"to='90deg'", 45, 1, "67.5"}, Case{"by='90deg'", 45, .5, "67.5"},
+        Case{"values='0deg;90deg;0.5turn' calcMode='paced'", 0, .5, "45"},
+        Case{"from='0rad' to='90deg' accumulate='sum' repeatCount='2'", 0, 2.5, "112.5"}}) {
+    SCOPED_TRACE(item.attributes);
+    auto document =
+        ParsePresentation(prefix + "0" + suffix + "<animate href='#m' attributeName='orient' " +
+                          item.attributes + " dur='2s'/>");
+    auto marker = document.querySelector("#m");
+    ASSERT_THAT(marker, testing::Ne(std::nullopt));
+    marker->cast<SVGMarkerElement>().setOrient(MarkerOrient::AngleDegrees(item.typed));
+    for (const double time : {item.time, 5.0, item.time}) {
+      SCOPED_TRACE(time);
+      document.setTime(time);
+      auto expected = ParsePresentation(
+          prefix + (time == 5 ? std::to_string(item.typed) : item.expected) + suffix);
+      editor::tests::CompareBitmapToBitmap(
+          RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(expected),
+          "marker-composition", editor::tests::PixelmatchIdentityParams());
+    }
+  }
 }
 
 TEST(RendererAnimationPresentation, PatternTileWidthRendersAndRestores) {

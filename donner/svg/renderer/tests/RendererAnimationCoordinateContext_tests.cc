@@ -672,5 +672,49 @@ TEST(RendererAnimationCoordinateContext, PrimitiveUnderlyingRegionUsesInputBound
       "primitive-input-region-base", editor::tests::PixelmatchIdentityParams());
 }
 
+TEST(RendererAnimationCoordinateContext, ShapeFontUnitsUseEachTransformedInstanceAndPaintBounds) {
+  const std::string paint =
+      "<defs><linearGradient id='g'><stop stop-color='red'/>"
+      "<stop offset='1' stop-color='blue'/></linearGradient></defs>";
+  auto document = instantiateSubtree(
+      paint +
+          "<defs><rect id='tile' width='4' height='4' fill='url(#g)'>"
+          "<animate attributeName='width' from='2px' to='1em' dur='2s'/></rect></defs>"
+          "<use href='#tile' x='1' font-size='4'/><use href='#tile' x='8' y='4' font-size='12'/>"
+          "<use href='#tile' x='3' y='8' font-size='4'/>",
+      parser::SVGParser::Options(), Vector2i(16, 16));
+  for (const double time : {1.0, 3.0, 1.0}) {
+    SCOPED_TRACE(time);
+    document.setTime(time);
+    const std::string a = time == 1 ? "3" : "4";
+    const std::string b = time == 1 ? "7" : "4";
+    auto expected = instantiateSubtree(paint + "<rect x='1' width='" + a +
+                                           "' height='4' fill='url(#g)'/>"
+                                           "<rect x='8' y='4' width='" +
+                                           b +
+                                           "' height='4' fill='url(#g)'/>"
+                                           "<rect x='3' y='8' width='" +
+                                           a + "' height='4' fill='url(#g)'/>",
+                                       parser::SVGParser::Options(), Vector2i(16, 16));
+    editor::tests::CompareBitmapToBitmap(
+        RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(expected),
+        "instance-font-geometry-and-paint", editor::tests::PixelmatchIdentityParams());
+  }
+}
+
+TEST(RendererAnimationCoordinateContext, EmptyAnimatedShadowDoesNotUseVisibleLightGeometry) {
+  auto document = instantiateSubtree(
+      "<g font-size='4'><defs><rect id='tile' width='4' height='4'>"
+      "<animate attributeName='width' by='-1em' dur='2s'/></rect></defs>"
+      "<use href='#tile' font-size='8'/><use href='#tile' y='8' font-size='4'/></g>",
+      parser::SVGParser::Options(), Vector2i(16, 16));
+  document.setTime(1);
+  auto expected = instantiateSubtree("<rect y='8' width='2' height='4'/>",
+                                     parser::SVGParser::Options(), Vector2i(16, 16));
+  editor::tests::CompareBitmapToBitmap(
+      RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(expected),
+      "empty-instance-geometry", editor::tests::PixelmatchIdentityParams());
+}
+
 }  // namespace
 }  // namespace donner::svg

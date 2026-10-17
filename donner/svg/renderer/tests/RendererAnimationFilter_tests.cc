@@ -1,6 +1,11 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <ostream>
+#include <string>
+#include <string_view>
+#include <vector>
+
 #include "donner/editor/tests/BitmapGoldenCompare.h"
 #include "donner/svg/components/filter/FilterPrimitiveComponent.h"
 #include "donner/svg/renderer/tests/RendererTestUtils.h"
@@ -212,6 +217,106 @@ TEST(RendererAnimationFilter, ToOnlyPreservesImplicitAndTypedInputs) {
         "restored-input", editor::tests::PixelmatchIdentityParams());
   }
 }
+
+struct NumericFilterCase {
+  std::string name;
+  std::string primitive;
+  std::string attribute;
+  std::string base;
+  std::string to;
+  std::string midpoint;
+};
+
+void PrintTo(const NumericFilterCase& value, std::ostream* os) {
+  *os << value.name;
+}
+
+std::string NumericFilterPrimitive(const NumericFilterCase& item, std::string_view value) {
+  std::string primitive = item.primitive;
+  primitive.replace(
+      primitive.find('@'), 1,
+      value.empty() ? std::string{} : item.attribute + "='" + std::string(value) + "'");
+  return primitive;
+}
+
+class RendererAnimationNumericFilter : public testing::TestWithParam<NumericFilterCase> {};
+
+TEST_P(RendererAnimationNumericFilter, InterpolationSeekRestorationAndAuthoredEdit) {
+  if (!ActiveRendererSupportsFeature(RendererBackendFeature::FilterEffects)) {
+    GTEST_SKIP() << "Filters are disabled in this configuration";
+  }
+  const auto& item = GetParam();
+  auto document = FilterDocument(
+      NumericFilterPrimitive(item, item.base),
+      "<animate href='#p' attributeName='" + item.attribute + "' to='" + item.to + "' dur='2s'/>");
+  const std::string authoredSource(document.source());
+  for (const double time : {1.0, 3.0, 1.0}) {
+    SCOPED_TRACE(time);
+    document.setTime(time);
+    auto expected =
+        FilterDocument(NumericFilterPrimitive(item, time == 1.0 ? item.midpoint : item.base));
+    editor::tests::CompareBitmapToBitmap(RenderDocumentWithActiveBackend(document),
+                                         RenderDocumentWithActiveBackend(expected),
+                                         item.name + (time == 1.0 ? "-midpoint" : "-restored"),
+                                         editor::tests::PixelmatchIdentityParams());
+    EXPECT_EQ(document.source(), authoredSource);
+  }
+
+  auto target = document.querySelector("#p");
+  ASSERT_THAT(target, testing::Ne(std::nullopt));
+  target->setAttribute(xml::XMLQualifiedNameRef(item.attribute), item.to);
+  const std::string editedSource(document.source());
+  for (const double time : {1.0, 3.0}) {
+    SCOPED_TRACE(time);
+    document.setTime(time);
+    auto expected = FilterDocument(NumericFilterPrimitive(item, item.to));
+    editor::tests::CompareBitmapToBitmap(
+        RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(expected),
+        item.name + "-authored-edit", editor::tests::PixelmatchIdentityParams());
+    EXPECT_EQ(document.source(), editedSource);
+  }
+}
+
+std::vector<NumericFilterCase> NumericFilterCases() {
+  const std::string inputs =
+      "<feFlood flood-color='red' flood-opacity='.4' result='red'/>"
+      "<feFlood flood-color='blue' flood-opacity='.6' result='blue'/>";
+  const std::string composite =
+      inputs + "<feComposite id='p' in='red' in2='blue' operator='arithmetic' ";
+  return {
+      {"GammaAmplitude",
+       "<feComponentTransfer><feFuncR id='p' type='gamma' @/></feComponentTransfer>", "amplitude",
+       "1", "0", ".5"},
+      {"GammaExponent",
+       "<feComponentTransfer><feFuncR id='p' type='gamma' @/></feComponentTransfer>", "exponent",
+       "1", "3", "2"},
+      {"GammaOffset", "<feComponentTransfer><feFuncR id='p' type='gamma' @/></feComponentTransfer>",
+       "offset", "0", ".4", ".2"},
+      {"LinearIntercept",
+       "<feComponentTransfer><feFuncG id='p' type='linear' @/></feComponentTransfer>", "intercept",
+       "0", ".4", ".2"},
+      {"ArithmeticK1", composite + "k2='.25' k3='.25' @/>", "k1", "0", "1", ".5"},
+      {"ArithmeticK2", composite + "k1='.25' k3='.25' @/>", "k2", ".25", ".75", ".5"},
+      {"ArithmeticK3", composite + "k1='.25' k2='.25' @/>", "k3", ".25", ".75", ".5"},
+      {"ArithmeticK4", composite + "k2='.25' k3='.25' @/>", "k4", "0", ".25", ".125"},
+      {"ConvolutionBias", "<feConvolveMatrix id='p' order='1' kernelMatrix='1' @/>", "bias", "0",
+       ".4", ".2"},
+      {"ConvolutionImplicitDivisor", "<feConvolveMatrix id='p' order='1' kernelMatrix='2' @/>",
+       "divisor", "", "6", "4"},
+      {"DisplacementScale",
+       "<feFlood flood-color='red' result='map'/>"
+       "<feDisplacementMap id='p' in='SourceGraphic' in2='map' xChannelSelector='R' "
+       "yChannelSelector='G' @/>",
+       "scale", "0", "8", "4"},
+      {"TurbulenceSeed", "<feTurbulence id='p' baseFrequency='.13 .17' @/>", "seed", "1", "3", "2"},
+  };
+}
+
+INSTANTIATE_TEST_SUITE_P(NumericFields, RendererAnimationNumericFilter,
+                         testing::ValuesIn(NumericFilterCases()),
+                         [](const testing::TestParamInfo<NumericFilterCase>& info) {
+                           return info.param.name;
+                         });
 
 }  // namespace
 }  // namespace donner::svg
