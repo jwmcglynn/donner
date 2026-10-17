@@ -20,6 +20,15 @@ struct ProjectedNonWhitespaceTextTag {};
 /// Incremental content projection retained a complete raw-text child view for selectors.
 struct SelectorRawTextAuthorityTag {};
 
+/// A rejected source projection leaves retained typed text authoritative.
+struct SelectorRejectedTextTag {};
+
+/**
+ * Preserve the last accepted typed text when source projection rejects its replacement.
+ * @param parent Element whose source content projection failed.
+ */
+void RejectSelectorContentProjection(EntityHandle parent);
+
 /**
  * Replace typed text, discarding direct raw text left by incremental source projection.
  * Call under document write access, before assigning the replacement retained string.
