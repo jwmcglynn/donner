@@ -1778,8 +1778,8 @@ std::vector<Entity> RenderingContext::findIntersectingRect(const Box2d& rect) {
       continue;
     }
 
-    const auto bounds =
-        ShapeSystem().getShapeWorldBounds(EntityHandle(registry_, instance.dataEntity));
+    const auto bounds = ShapeSystem().getShapeWorldBounds(
+        ShapeSystem::geometryHandle(instance.styleHandle(registry_)));
     if (bounds && bounds->topLeft.x <= rect.bottomRight.x &&
         bounds->bottomRight.x >= rect.topLeft.x && bounds->topLeft.y <= rect.bottomRight.y &&
         bounds->bottomRight.y >= rect.topLeft.y) {
@@ -1799,7 +1799,8 @@ std::optional<Box2d> RenderingContext::getWorldBounds(Entity entity) {
     return std::nullopt;
   }
 
-  return ShapeSystem().getShapeWorldBounds(EntityHandle(registry_, instance->dataEntity));
+  return ShapeSystem().getShapeWorldBounds(
+      ShapeSystem::geometryHandle(instance->styleHandle(registry_)));
 }
 
 void RenderingContext::invalidateRenderTree() {

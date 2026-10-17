@@ -172,28 +172,28 @@ auto EffectiveShapeProperties(EntityHandle handle, const Component& shape,
       !ReserveShapeStyleWork(handle, style)) {
     return std::nullopt;
   }
-  auto bases = handle
-                   .get_or_emplace<Computed>(shape.properties, style.properties->unparsedProperties,
-                                             warningSink)
-                   .properties;
-  if (!HasContextualShapeLengths(handle) || !ReserveShapeRecipeWork(handle, style)) {
-    return bases;
+  Computed computed(shape.properties, style.properties->unparsedProperties, warningSink);
+  auto bases = computed.properties;
+  if (HasContextualShapeLengths(handle) && ReserveShapeRecipeWork(handle, style)) {
+    auto properties = shape.properties;
+    auto source = bases.allProperties();
+    auto destination = properties.allProperties();
+    AnimationValueContext context;
+    context.viewBox = LayoutSystem().getViewBox(handle);
+    context.fontMetrics = metrics;
+    bool changed = false;
+    [&]<std::size_t... I>(std::index_sequence<I...>) {
+      ((changed |=
+        SampleShapeProperty(handle, bases, std::get<I>(source), std::get<I>(destination), context)),
+       ...);
+    }(std::make_index_sequence<std::tuple_size_v<decltype(source)>>{});
+    if (changed) {
+      computed = Computed(properties, style.properties->unparsedProperties, warningSink);
+    }
   }
-  auto properties = shape.properties;
-  auto source = bases.allProperties();
-  auto destination = properties.allProperties();
-  AnimationValueContext context;
-  context.viewBox = LayoutSystem().getViewBox(handle);
-  context.fontMetrics = metrics;
-  bool changed = false;
-  [&]<std::size_t... I>(std::index_sequence<I...>) {
-    ((changed |=
-      SampleShapeProperty(handle, bases, std::get<I>(source), std::get<I>(destination), context)),
-     ...);
-  }(std::make_index_sequence<std::tuple_size_v<decltype(source)>>{});
-  return changed
-             ? Computed(properties, style.properties->unparsedProperties, warningSink).properties
-             : bases;
+  auto result = computed.properties;
+  handle.emplace_or_replace<Computed>(std::move(computed));
+  return result;
 }
 
 LineComponent EffectiveLine(EntityHandle handle, const LineComponent& line,
@@ -379,7 +379,8 @@ void ShapeSystem::instantiateShadowComputedPath(EntityHandle handle,
   if (!shadow || !style || !style->properties) {
     return;
   }
-  if (!HasContextualShapeLengths(handle)) {
+  const EntityHandle light(*handle.registry(), shadow->lightEntity);
+  if (!light.any_of<CircleComponent, EllipseComponent, LineComponent, RectComponent>()) {
     if (handle.all_of<ComputedInstanceGeometryComponent>()) {
       RemoveComputedPath(handle);
       handle.remove<ComputedInstanceGeometryComponent, ComputedCircleComponent,
@@ -393,7 +394,6 @@ void ShapeSystem::instantiateShadowComputedPath(EntityHandle handle,
   }
   prepared.prepared = true;
   handle.remove<ComputedCircleComponent, ComputedEllipseComponent, ComputedRectComponent>();
-  const EntityHandle light(*handle.registry(), shadow->lightEntity);
   const FontMetrics metrics = fontMetricsForElement(*handle.registry(), *style, handle.entity());
   ForEachShape<entt::type_list<CircleComponent, EllipseComponent, LineComponent, RectComponent>>(
       [&]<typename Shape>() {
