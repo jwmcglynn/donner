@@ -17,6 +17,7 @@ playwright_bin.playwright_test(
     ],
     copy_data_to_bin = False,
     data = [
+        "animation-pulse-observation.mjs",
         "basic-shapes-capture-gate.ts",
         "browser-runtime-diagnostics.ts",
         "browser-stall-diagnostics.mjs",
@@ -156,6 +157,7 @@ playwright_bin.playwright_test(
     ],
     copy_data_to_bin = False,
     data = [
+        "animation-pulse-observation.mjs",
         "basic-shapes-capture-gate.ts",
         "browser-runtime-diagnostics.ts",
         "browser-stall-diagnostics.mjs",
@@ -519,6 +521,7 @@ js_test(
     size = "small",
     copy_data_to_bin = False,
     data = [
+        "animation-pulse-observation.mjs",
         "browser-presentation-regression.spec.ts",
         "browser-runtime-diagnostics.ts",
         "browser-stall-diagnostics.mjs",
@@ -977,6 +980,7 @@ playwright_bin.playwright_test(
     ],
     copy_data_to_bin = False,
     data = [
+        "animation-pulse-observation.mjs",
         "basic-shapes-capture-gate.ts",
         "browser-runtime-diagnostics.ts",
         "browser-stall-diagnostics.mjs",
@@ -1046,5 +1050,14 @@ js_test(
     copy_data_to_bin = False,
     data = ["flat-capture-retake.mjs"],
     entry_point = "flat-capture-retake.spec.mjs",
+    node_options = ["--test"],
+)
+
+js_test(
+    name = "animation_pulse_observation_tests",
+    size = "small",
+    copy_data_to_bin = False,
+    data = ["animation-pulse-observation.mjs"],
+    entry_point = "animation-pulse-observation.spec.mjs",
     node_options = ["--test"],
 )
