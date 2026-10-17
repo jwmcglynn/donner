@@ -628,7 +628,7 @@ void StyleSystem::updateStyle(EntityHandle handle, std::string_view style) {
   invalidateComputed(handle);
 }
 
-void StyleSystem::applyStylesheetRules(Registry& registry, Entity dataEntity,
+void StyleSystem::applyStylesheetRules(Registry& registry, Entity treeEntity, Entity dataEntity,
                                        PropertyRegistry& properties,
                                        StyleResourceBudget& styleBudget,
                                        ParseWarningSink& warningSink) {

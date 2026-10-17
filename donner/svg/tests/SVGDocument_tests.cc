@@ -1621,13 +1621,13 @@ TEST(SVGDocument, RejectedTextProjectionPreservesLastValidText) {
   auto document = ParseSVG(
       R"(<svg xmlns="http://www.w3.org/2000/svg"><text id="label">stable<tspan id="a"/><tspan id="b"/></text></svg>)",
       options);
-  const std::size_t editStart = document.source().find(R"(<tspan id="a"/>)");
+  const std::size_t editStart = document.source().find("stable");
   const std::size_t lastChild = document.source().find(R"(<tspan id="b"/>)");
   ASSERT_NE(editStart, std::string_view::npos);
   ASSERT_NE(lastChild, std::string_view::npos);
   const std::size_t editEnd = lastChild + std::string_view(R"(<tspan id="b"/>)").size();
 
-  std::string oversizedReplacement;
+  std::string oversizedReplacement = "new";
   for (std::size_t i = 0; i <= options.maximumContentProjectionChunks; ++i) {
     oversizedReplacement += "<tspan/>";
   }
@@ -1719,7 +1719,7 @@ TEST(SVGDocument, IncrementalTextPayloadReplacementReleasesAfterDetachedHandle) 
   std::optional<SVGElement> text = document.querySelector("#t");
   ASSERT_TRUE(text.has_value());
 
-  const std::string acceptedText(2112, 'a');
+  const std::string acceptedText(2112, ' ');
   xml::ApplySourceEditResult accepted = document.setElementTextContent(*text, acceptedText);
   ASSERT_TRUE(accepted.applied);
   ASSERT_THAT(accepted.diagnostic, Eq(std::nullopt));
@@ -1734,6 +1734,7 @@ TEST(SVGDocument, IncrementalTextPayloadReplacementReleasesAfterDetachedHandle) 
   ASSERT_TRUE(rejected.diagnostic.has_value());
   EXPECT_THAT(rejected.diagnostic->reason, testing::HasSubstr("parsed-payload budget"));
   EXPECT_EQ(text->entityHandle().get<components::TextComponent>().text, acceptedText);
+  EXPECT_TRUE(text->isEmptyForSelector(nullptr));
   EXPECT_EQ(budget->securityStats().retainedBytes, options.maximumParsedPayloadSize);
 
   xml::ApplySourceEditResult removed = document.removeElement(*text);
