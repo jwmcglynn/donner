@@ -82,6 +82,25 @@ protected:
   SVGDocument document_;
 };
 
+TEST_F(SVGElementTests, EmptySelectorIncludesTextAndCDataContent) {
+  auto doc = parseSVG(R"svg(<svg xmlns="http://www.w3.org/2000/svg">
+    <text id="word">hello</text>
+    <text id="cdata"><![CDATA[hello]]></text>
+    <text id="entity">&amp;</text>
+    <text id="nbsp">&#xA0;</text>
+    <text id="spaces"> 	
+ </text>
+    <g id="comment"><!-- content does not affect emptiness --></g>
+    <g id="child"><rect/></g>
+  </svg>)svg");
+  for (const char* id : {"word", "cdata", "entity", "nbsp", "child"}) {
+    SCOPED_TRACE(id);
+    EXPECT_FALSE(doc.querySelector(std::string("#") + id + ":empty").has_value());
+  }
+  EXPECT_TRUE(doc.querySelector("#spaces:empty").has_value());
+  EXPECT_TRUE(doc.querySelector("#comment:empty").has_value());
+}
+
 TEST_F(SVGElementTests, QuerySelectorSharesTraversalBudgetAcrossCandidates) {
   SVGDocument document = parseSVG(R"(<svg><rect/><circle/></svg>)");
   auto maybeSelector = css::parser::SelectorParser::Parse("*");

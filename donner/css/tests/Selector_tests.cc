@@ -56,6 +56,97 @@ protected:
   }
 };
 
+TEST_F(SelectorTests, HasRelativeSiblingArguments) {
+  FakeElement parent("parent");
+  FakeElement anchor("anchor");
+  FakeElement a("a");
+  FakeElement b("b");
+  FakeElement inner("inner");
+  FakeElement leaf("leaf");
+  parent.appendChild(anchor);
+  parent.appendChild(a);
+  parent.appendChild(b);
+  a.appendChild(inner);
+  inner.appendChild(leaf);
+
+  for (const char* selector :
+       {":has(+ a)", ":has(~ b)", ":has(+ a inner)", ":has(+ a > inner > leaf)", ":has(+ a + b)",
+        ":has(+ a:is(a))", ":has(+ :where(a))"}) {
+    SCOPED_TRACE(selector);
+    EXPECT_TRUE(matches(selector, anchor));
+  }
+  EXPECT_FALSE(matches(":has(+ b)", anchor));
+  EXPECT_FALSE(matches(":has(+ a > leaf)", anchor));
+  EXPECT_FALSE(matches(":has(~ anchor)", b));
+}
+
+TEST_F(SelectorTests, HasAnchorsTheLeadingCompound) {
+  FakeElement root("root");
+  FakeElement branch("branch");
+  FakeElement a("a");
+  FakeElement nestedA("a");
+  FakeElement b("b");
+  root.appendChild(branch);
+  branch.appendChild(a);
+  a.appendChild(nestedA);
+  nestedA.appendChild(b);
+
+  EXPECT_FALSE(matches(":has(> a b)", root));
+  EXPECT_TRUE(matches(":has(> a b)", branch));
+  EXPECT_TRUE(matches(":has(a > b)", root));
+  EXPECT_TRUE(matches(":has(> branch a > b)", root));
+}
+
+TEST_F(SelectorTests, SupportedPseudoClassesSurviveForgivingLists) {
+  FakeElement root("root");
+  FakeElement a("a");
+  root.appendChild(a);
+  for (const char* selector :
+       {":is(:not(.missing))", ":where(:defined)", ":is(:has(> a))", ":has(> :is(a))",
+        ":has(> :where(a))", ":has(:is(:has(a), a))", ":has(:is(::before, a))"}) {
+    SCOPED_TRACE(selector);
+    EXPECT_TRUE(matches(selector, root));
+  }
+  EXPECT_TRUE(matches(":nth-child(1 of :is(a))", a));
+  EXPECT_TRUE(matches(":is(.missing, :root)", root));
+  EXPECT_FALSE(matches(":is(:not(:unsupported))", root));
+}
+
+TEST_F(SelectorTests, HasSiblingTraversalSharesTheWorkBudget) {
+  FakeElement parent("parent");
+  FakeElement a("a");
+  FakeElement b("b");
+  parent.appendChild(a);
+  parent.appendChild(b);
+  auto parsed = SelectorParser::Parse(":has(~ b)");
+  ASSERT_THAT(parsed, NoParseError());
+  SelectorTraversalBudget budget(1);
+  SelectorMatchOptions<FakeElement> options;
+  options.traversalBudget = &budget;
+  EXPECT_FALSE(parsed.result().matches(a, options).matched);
+  EXPECT_TRUE(budget.rejected());
+  EXPECT_EQ(budget.steps(), 1u);
+}
+
+TEST_F(SelectorTests, ClassAndIncludesUseCssWhitespace) {
+  FakeElement element("g");
+  for (const char separator : {' ', '\t', '\n', '\r', '\f'}) {
+    SCOPED_TRACE(static_cast<int>(separator));
+    const std::string tokens = std::string("first") + separator + "second";
+    element.setClassName(tokens);
+    element.setAttribute("tokens", tokens);
+    EXPECT_TRUE(matches(".second", element));
+    EXPECT_TRUE(matches("[tokens~=second]", element));
+    EXPECT_TRUE(matches("[tokens~=SECOND i]", element));
+  }
+  element.setClassName("first\vsecond");
+  element.setAttribute("tokens", "first\vsecond");
+  EXPECT_FALSE(matches(".second", element));
+  EXPECT_FALSE(matches("[tokens~=second]", element));
+  element.setAttribute("tokens", "");
+  EXPECT_FALSE(matches("[tokens~='']", element));
+}
+
 TEST_F(SelectorTests, TypeMatch) {
   FakeElement root("rect");
   FakeElement child1("a");

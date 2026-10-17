@@ -25,6 +25,22 @@ std::vector<ComponentValue> TokenizeString(std::string_view str) {
 
 }  // namespace
 
+TEST(SelectorParser, Level4StrictPseudoClassArguments) {
+  for (const char* selector :
+       {":unsupported", ":unsupported(x)", ":hover", ":not(:hover)", ":not(.ok, :unsupported)",
+        ":has(> .ok, :unsupported)", ":has(:has(a))", ":has(::before)", ":has(a::before)", ":has()",
+        ":not()", ":nth-child(1 of .ok, :unsupported)"}) {
+    SCOPED_TRACE(selector);
+    EXPECT_TRUE(SelectorParser::Parse(selector).hasError());
+  }
+  for (const char* selector :
+       {":is(.ok, :unsupported)", ":where(.ok, :unsupported)", ":is()", ":is(:not(.other))",
+        ":is(:has(> a))", ":has(> :is(a, :unsupported))", ":nth-child(1 of :is(.ok))"}) {
+    SCOPED_TRACE(selector);
+    EXPECT_THAT(SelectorParser::Parse(selector), NoParseError());
+  }
+}
+
 TEST(SelectorParser, Empty) {
   EXPECT_THAT(SelectorParser::Parse(""),
               AllOf(ParseErrorPos(0, 0), ParseErrorIs("No selectors found")));
