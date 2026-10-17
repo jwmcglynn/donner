@@ -1,3 +1,4 @@
+diff --git a/emscripten_toolchain/toolchain.bzl b/emscripten_toolchain/toolchain.bzl
 --- a/emscripten_toolchain/toolchain.bzl
 +++ b/emscripten_toolchain/toolchain.bzl
 @@ -83,6 +83,8 @@
@@ -54,6 +55,7 @@
 +        ),
 +    },
 +)
+diff --git a/remote_emscripten_repository.bzl b/remote_emscripten_repository.bzl
 --- a/remote_emscripten_repository.bzl
 +++ b/remote_emscripten_repository.bzl
 @@ -1,6 +1,6 @@
@@ -90,6 +92,7 @@
              common_files_target,
          ],
      )
+diff --git a/emscripten_toolchain/env.sh b/emscripten_toolchain/env.sh
 --- a/emscripten_toolchain/env.sh
 +++ b/emscripten_toolchain/env.sh
 @@ -10,3 +10,13 @@
