@@ -3685,6 +3685,24 @@ TEST_F(XMLDocumentTests, SetElementTextReplacesAllTextOnlyContent) {
   }
 }
 
+TEST_F(XMLDocumentTests, SetElementTextOwnsSourceViewAndClearsSourcelessText) {
+  XMLDocument doc = ParseDocument("<svg><text>source-backed text</text></svg>");
+  XMLNode text = doc.root().firstChild()->firstChild().value();
+  const std::string_view value = doc.source().substr(doc.source().find("source-backed"), 18);
+  auto replaced = doc.setElementText(text, value);
+  ASSERT_TRUE(replaced.applied);
+  EXPECT_THAT(text.value(), Optional(Eq("source-backed text")));
+  EXPECT_EQ(doc.source(), "<svg><text>source-backed text</text></svg>");
+
+  XMLDocument emptyDoc = ParseDocument("<svg><text/></svg>");
+  XMLNode empty = emptyDoc.root().firstChild()->firstChild().value();
+  empty.appendChild(XMLNode::CreateDataNode(emptyDoc, "word"));
+  auto cleared = emptyDoc.setElementText(empty, "");
+  ASSERT_TRUE(cleared.applied);
+  EXPECT_FALSE(empty.firstChild().has_value());
+  EXPECT_EQ(emptyDoc.source(), "<svg><text/></svg>");
+}
+
 TEST_F(XMLDocumentTests, SetElementTextClearsExistingText) {
   XMLDocument doc = ParseDocument(R"(<svg><text>hello</text></svg>)");
   XMLNode text = doc.root().firstChild()->firstChild().value();
