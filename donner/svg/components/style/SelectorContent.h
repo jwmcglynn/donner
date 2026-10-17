@@ -30,6 +30,12 @@ struct SelectorRejectedTextTag {};
 void RejectSelectorContentProjection(EntityHandle parent);
 
 /**
+ * Accept a value-only edit without inferring a complete raw view from attached text deltas.
+ * @param parent Element whose typed value projection succeeded.
+ */
+void AcceptSelectorTextValueProjection(EntityHandle parent);
+
+/**
  * Replace typed text, discarding direct raw text left by incremental source projection.
  * Call under document write access, before assigning the replacement retained string.
  * @param parent Element whose typed text is being replaced.
