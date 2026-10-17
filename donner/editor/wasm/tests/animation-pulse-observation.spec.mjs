@@ -13,6 +13,22 @@ test("a second admitted tick proves an in-window sample was presented", () => {
     latestTime: 10.2,
   });
 });
+
+test("60 Hz sampling and a delayed proof remain inside the expanded pulse", () => {
+  const dispatched = 40.46666666666667;
+  const value = snapshot([
+    [100, 2, 0, 32, dispatched, true],
+    tick(40.583333333333336),
+    tick(40.9),
+  ]);
+  assert.deepEqual(read(value), {
+    dispatchEpochMs: 100,
+    dispatchTime: dispatched,
+    presentedTime: 40.583333333333336,
+    latestTime: 40.9,
+  });
+});
+
 test("one tick and repeated identical ticks do not prove presentation", () => {
   assert.equal(read(snapshot([click, tick(10.15)])), null);
   assert.equal(read(snapshot([click, tick(10.15), tick(10.15)])), null);
@@ -40,12 +56,14 @@ test("reversed sample time and intervening dispatch invalidate the event identit
   );
 });
 
-test("post-hold verification remains within the expanded part of the 600 ms pulse", () => {
+test("proof and post-hold verification remain within the expanded part of the pulse", () => {
   const value = snapshot([click, tick(10.15), tick(10.43)]);
-  assert.equal(read(value), null);
+  assert.notEqual(read(value), null);
   assert.notEqual(presentedPulseWindow(value, "current", 32, 90, 0.5), null);
   assert.equal(
     presentedPulseWindow(snapshot([click, tick(10.15), tick(10.6)]), "current", 32, 90, 0.5),
     null,
   );
+  assert.equal(read(snapshot([click, tick(10.09), tick(10.2)])), null);
+  assert.equal(read(snapshot([click, tick(10.15), tick(10.5001)])), null);
 });

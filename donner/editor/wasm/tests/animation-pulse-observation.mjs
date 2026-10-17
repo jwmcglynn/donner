@@ -4,7 +4,7 @@ export function presentedPulseWindow(
   generation,
   target,
   notBeforeEpochMs,
-  maximumElapsed = 0.4,
+  maximumElapsed = 0.5,
 ) {
   if (snapshot?.generation !== generation || !Array.isArray(snapshot.entries)) return null;
   const rows = snapshot.entries;
@@ -29,12 +29,12 @@ export function presentedPulseWindow(
   }
   if (samples.length < 2) return null;
   const latest = samples.at(-1)[4];
-  // The fixture's pulse lasts 600 ms. Leave time to install the raster hold before it ends.
+  // The 600 ms fixture is above the >58 px oracle throughout this 100-500 ms window.
   if (latest - click[4] > maximumElapsed) return null;
   for (let index = 0; index + 1 < samples.length; ++index) {
     const presented = samples[index][4];
     if (
-      presented - click[4] >= 0.12 && presented - click[4] <= 0.35
+      presented - click[4] >= 0.1 && presented - click[4] <= 0.35
       && samples[index + 1][4] > presented
     ) {
       return {
