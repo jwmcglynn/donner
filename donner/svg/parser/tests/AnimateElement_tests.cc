@@ -9,6 +9,7 @@
 #include "donner/base/tests/ParseResultTestUtils.h"
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/SVGPathElement.h"
+#include "donner/svg/SVGRectElement.h"
 #include "donner/svg/SVGUseElement.h"
 #include "donner/svg/components/animation/AnimateValueComponent.h"
 #include "donner/svg/components/animation/AnimatedValuesComponent.h"
@@ -71,6 +72,22 @@ std::optional<std::string> getAnimatedValue(SVGDocument& document, const char* s
       return std::nullopt;
     }
     return paint->get<PaintServer::Solid>().color.resolve(css::RGBA::RGB(0, 0, 0), 1).toHexString();
+  }
+  const bool supportedRectLength = element->type() == ElementType::Rect &&
+                                   (attributeName == "width" || attributeName == "height");
+  if (supportedRectLength && animValues->contextualLengths.contains(attributeName)) {
+    document.setTime(time);
+    ParseWarningSink warnings = ParseWarningSink::Disabled();
+    RendererUtils::prepareDocumentForRendering(document, false, warnings);
+    const auto rect = element->cast<SVGRectElement>();
+    std::ostringstream output;
+    output.precision(12);
+    if (attributeName == "width") {
+      output << rect.computedWidth();
+    } else {
+      output << rect.computedHeight();
+    }
+    return output.str();
   }
   auto it = animValues->overrides.find(attributeName);
   if (it == animValues->overrides.end()) {
@@ -1443,6 +1460,10 @@ TEST(SVGAnimateElement, TypedColorAndUnitInterpolation) {
               testing::Optional(testing::StrEq("144")));
   EXPECT_THAT(getAnimatedValue(document, "#r", "height", 1.0),
               testing::Optional(testing::StrEq("30%")));
+  const auto rect = document.querySelector("#r");
+  ASSERT_THAT(rect, testing::Ne(std::nullopt));
+  EXPECT_THAT(rect->cast<SVGRectElement>().computedHeight(),
+              testing::Eq(Lengthd(30, Lengthd::Unit::Percent)));
 }
 
 TEST(SVGAnimateElement, AdditiveTransformPreservesUnderlyingTransform) {

@@ -1,7 +1,10 @@
 #include <gtest/gtest.h>
 
+#include <sstream>
+
 #include "donner/base/tests/ParseResultTestUtils.h"
 #include "donner/svg/SVGDocument.h"
+#include "donner/svg/SVGRectElement.h"
 #include "donner/svg/SVGSetElement.h"
 #include "donner/svg/components/animation/AnimatedValuesComponent.h"
 #include "donner/svg/components/animation/AnimationResourceBudget.h"
@@ -41,10 +44,24 @@ Entity EntityById(SVGDocument& document, std::string_view id) {
 std::optional<std::string> AnimatedOverride(SVGDocument& document, std::string_view id,
                                             std::string_view attribute, double time) {
   components::AnimationSystem().advance(document.registry(), time);
-  const auto* values =
-      document.registry().try_get<components::AnimatedValuesComponent>(EntityById(document, id));
+  const auto element = document.querySelector(id);
+  if (!element) {
+    return std::nullopt;
+  }
+  const auto* values = document.registry().try_get<components::AnimatedValuesComponent>(
+      element->entityHandle().entity());
   if (!values) {
     return std::nullopt;
+  }
+  const bool supportedRectWidth = element->type() == ElementType::Rect && attribute == "width";
+  if (supportedRectWidth && values->contextualLengths.contains(std::string(attribute))) {
+    document.setTime(time);
+    ParseWarningSink warnings = ParseWarningSink::Disabled();
+    RendererUtils::prepareDocumentForRendering(document, false, warnings);
+    std::ostringstream output;
+    output.precision(12);
+    output << element->cast<SVGRectElement>().computedWidth();
+    return output.str();
   }
   const auto value = values->overrides.find(std::string(attribute));
   return value == values->overrides.end() ? std::nullopt : std::optional(value->second);
