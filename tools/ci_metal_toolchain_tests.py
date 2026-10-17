@@ -55,6 +55,29 @@ class MetalSetupTests(unittest.TestCase):
                 with patch.object(setup.subprocess, "run", return_value=response, side_effect=effect):
                     self.assertEqual(setup.component_status(), expected)
 
+    def test_lookup_receipt_compares_only_fixed_read_only_modes(self):
+        calls = []
+        def run(argv, **kwargs):
+            calls.append((argv, kwargs))
+            if "--no-cache" in argv:
+                Path(argv[-1]).write_bytes(b"air")
+                return subprocess.CompletedProcess(argv, 0, "private stdout", "private stderr")
+            return subprocess.CompletedProcess(argv, 3, "private stdout", "private stderr")
+        with patch.object(setup.subprocess, "run", side_effect=run):
+            self.assertEqual(setup.lookup_probe_status(), {
+                "uncached": {"exit_code": 0, "air_output": True},
+                "named_metal": {"exit_code": 3, "air_output": False}})
+        self.assertEqual(calls[0][0][:4], ["/usr/bin/xcrun", "--no-cache", "--sdk", "macosx"])
+        self.assertEqual(calls[1][0][:5], ["/usr/bin/xcrun", "--toolchain", "Metal", "--sdk", "macosx"])
+        self.assertEqual([call[1]["timeout"] for call in calls], [30, 30])
+
+    def test_lookup_probe_errors_never_echo_raw_output(self):
+        failure = subprocess.TimeoutExpired("probe", 30, stderr=b"private compiler output")
+        with patch.object(setup.subprocess, "run", side_effect=failure):
+            self.assertEqual(setup.lookup_probe_status(), {
+                "uncached": {"status": "probe-unavailable"},
+                "named_metal": {"status": "probe-unavailable"}})
+
     def test_existing_compiler_does_not_install(self):
         installed, calls = self.run_setup([(0, "", True)])
         self.assertFalse(installed)

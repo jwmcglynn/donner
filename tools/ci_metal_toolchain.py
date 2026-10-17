@@ -29,14 +29,14 @@ def run_tool(command, timeout, description):
         raise RuntimeError(f"{description} timed out after {timeout}s: " + diagnostics(error)) from error
 
 
-def probe(directory):
+def probe(directory, lookup_options=()):
     """Compile an actual kernel, rather than accepting the downloadable tool's shim."""
     source = directory / "probe.metal"
     output = directory / "probe.air"
     source.write_text("kernel void donnerProbe() {}\n")
     output.unlink(missing_ok=True)
     result = run_tool(
-        ["/usr/bin/xcrun", "--sdk", "macosx", "metal", "-std=metal3.0", "-c", str(source), "-o", str(output)],
+        ["/usr/bin/xcrun", *lookup_options, "--sdk", "macosx", "metal", "-std=metal3.0", "-c", str(source), "-o", str(output)],
         30, "Metal compiler probe",
     )
     return result, output.is_file()
@@ -94,6 +94,21 @@ def component_status():
     return receipt
 
 
+def lookup_probe_status():
+    """Compare two fixed lookup modes without changing the required compiler gate."""
+    receipt = {}
+    with tempfile.TemporaryDirectory(prefix="donner-metal-lookup-") as temporary:
+        directory = Path(temporary)
+        for name, options in (("uncached", ("--no-cache",)),
+                              ("named_metal", ("--toolchain", "Metal"))):
+            try:
+                result, emitted = probe(directory, options)
+                receipt[name] = {"exit_code": result.returncode, "air_output": emitted}
+            except (OSError, RuntimeError):
+                receipt[name] = {"status": "probe-unavailable"}
+    return receipt
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     mode = parser.add_mutually_exclusive_group()
@@ -101,7 +116,9 @@ def main():
     mode.add_argument("--describe", action="store_true")
     args = parser.parse_args()
     if args.describe:
-        print("Metal component status: " + json.dumps(component_status(), sort_keys=True))
+        receipt = component_status()
+        receipt["lookup_probes"] = lookup_probe_status()
+        print("Metal component status: " + json.dumps(receipt, sort_keys=True))
         return 0
     try:
         installed = ensure_compiler(args.install_missing)

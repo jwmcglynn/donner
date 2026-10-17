@@ -2052,7 +2052,7 @@ jobs:
 
       - name: Report Metal component status
         if: ${{ failure() && steps.metal_setup.outcome == 'failure' }}
-        timeout-minutes: 1
+        timeout-minutes: 2
         run: python3 tools/ci_metal_toolchain.py --describe
 
       - name: Require full Metal shader validation
