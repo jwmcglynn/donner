@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32">
+  <rect width="32" height="32" fill="white" pointer-events="none"/>
+  <rect id="discrete" x="2" y="2" width="4" height="4" fill="red">
+    <animate attributeName="x" values="2;10;18" keyTimes="0;0.25;1"
+             calcMode="discrete" dur="4s" fill="freeze"/>
+  </rect>
+  <rect id="spline" x="2" y="10" width="4" height="4" fill="blue">
+    <animate attributeName="x" values="2;18" keyTimes="0;1"
+             keySplines="0 0 1 1" calcMode="spline" dur="4s" fill="freeze"/>
+  </rect>
+  <rect id="paced" x="2" y="18" width="4" height="4" fill="green">
+    <animate attributeName="x" values="2;4;18" calcMode="paced" dur="4s" fill="freeze"/>
+  </rect>
+  <rect id="accumulated" x="2" y="26" width="4" height="4" fill="purple">
+    <animate attributeName="x" by="4" dur="1s" repeatCount="3"
+             additive="sum" accumulate="sum" fill="freeze"/>
+  </rect>
+</svg>

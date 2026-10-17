@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="32" height="24" viewBox="0 0 32 24">
+  <rect width="32" height="24" fill="white" pointer-events="none"/>
+  <rect id="boundary" x="2" y="2" width="4" height="4" fill="red">
+    <animate attributeName="x" values="2;10" begin="1s" dur="1s"
+             repeatCount="2" fill="freeze"/>
+  </rect>
+  <rect id="always" x="2" y="10" width="4" height="4" fill="blue">
+    <animate id="always-animation" attributeName="x" from="2" to="10"
+             begin="indefinite" dur="2s" restart="always" fill="freeze"/>
+  </rect>
+  <rect id="when" x="2" y="18" width="4" height="4" fill="green">
+    <animate id="when-animation" attributeName="x" from="2" to="10"
+             begin="indefinite" dur="2s" restart="whenNotActive" fill="freeze"/>
+  </rect>
+</svg>

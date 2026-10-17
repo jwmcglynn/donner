@@ -1,4 +1,4 @@
-# Native animation and pointer pilot
+# Native animation and pointer scenarios
 
 Run `bazel test //donner/editor/tests:svg_suite_animation_tests` for the software
 renderer, or `bazel test //donner/editor/tests:svg_suite_animation_tests_geode` for
@@ -6,11 +6,19 @@ Geode. Both use the production Renderer facade, GoogleTest and the existing
 pixelmatch identity comparator (threshold 0, mismatch allowance 0, includeAA true).
 No browser, JavaScript, Python, sleep, or wall clock is used by these tests.
 
-The tests exercise `SVGDocument::setTime`, `restartAnimations`, explicit-target
-`dispatchMouseEvent` and bounded `(from,to]` `animationEvents`. Setting time samples
-on the next render; lifecycle queries neither advance time nor dispatch callbacks.
-The 4,096-event cap and fresh-session restart are Donner API contracts, not SVG
-requirements. SecureAnimated event rejection is checked separately.
+The tests exercise `SVGDocument::setTime`, `restartAnimations`, `beginAnimation`,
+explicit-target `dispatchMouseEvent` and bounded `(from,to]` `animationEvents`.
+Setting time samples on the next render; lifecycle queries neither advance time nor
+dispatch callbacks. The 4,096-event cap and fresh-session restart are Donner API
+contracts, not SVG requirements. SecureAnimated event rejection and SecureStatic
+sampling suppression are checked separately.
+
+The deterministic scenarios cover exact begin, repeat and end boundaries; freeze,
+remove, always/when-not-active/never restart; backward seeks; discrete nonuniform,
+spline and paced interpolation; additive accumulated values; transform, inline
+motion and `<mpath>` sampling; and animation inside two `<use>` instances with
+different inherited color contexts. Each scenario checks public semantic state where
+the API exposes it and compares rendered output with an independently authored oracle.
 
 The hover case renders the document, captures production hit geometry through
 CapturedPresentation, and queries FramePresentation at a 2x screen transform. The
@@ -30,7 +38,10 @@ constructed directly from those rectangles; no Donner render produced a referenc
 Each PNG has a same-stem `.reference.svg` with those static rectangles so a reviewer
 can inspect the oracle independently. Dynamic SVGs also have a same-stem PNG for
 their time-zero scene; `lifecycle-bounds.svg` uses `hover-hit.png` because only the
-query's bounded result changes, not its red pixels.
+query's bounded result changes, not its red pixels. Extended scenarios compare the
+live animation bitmap directly with a static `.reference.svg` bitmap through
+`CompareBitmapToBitmap` and strict identity parameters. This keeps the expected
+geometry and color reviewable without deriving a binary golden from Donner output.
 
 | Case / checkpoint | Expected rectangle x coordinates |
 | --- | --- |
@@ -53,10 +64,18 @@ The query `(5,7]` contains only repeat=7. A later click cannot restart
 
 Specification sources: [SVG Animations timing](https://svgwg.org/specs/animations/#TimingAttributes),
 [animation values](https://svgwg.org/specs/animations/#AnimationValueAttributes),
+[additive animation](https://svgwg.org/specs/animations/#AdditionAttributes),
+[motion](https://svgwg.org/specs/animations/#AnimateMotionElement),
+[transform](https://svgwg.org/specs/animations/#AnimateTransformElement),
 [set](https://svgwg.org/specs/animations/#SetElement), and
 [SVG2 pointer events](https://svgwg.org/svg2-draft/interact.html#PointerEventsProperty).
 The animation draft viewed for authoring is dated 14 September 2025. These links
 justify assertions; they are not a cryptographically pinned audit baseline.
+
+CSS Animations, CSS Transitions, Web Animations, JavaScript handlers, access-key and
+wall-clock timing, `<discard>`, focus/keyboard navigation, browser event synthesis,
+and frame-pacing behavior remain outside this native suite profile. The tests do not
+claim complete SVG dynamic-interactive conformance or editor UI qualification.
 
 ## Failure triage
 

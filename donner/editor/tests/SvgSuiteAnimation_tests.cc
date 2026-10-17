@@ -61,6 +61,25 @@ protected:
     EXPECT_EQ(document_->source(), source_);
   }
 
+  void compareReference(std::string_view reference) {
+    const auto file = ::donner::tests::ReadRequiredRunfile(
+        std::string(kFixtureRoot) + std::string(reference) + ".reference.svg");
+    DONNER_REQUIRE_RUNFILE(file);
+    svg::parser::SVGParser::Options options;
+    ParseWarningSink warnings;
+    auto parsed = svg::parser::SVGParser::ParseSVG(file.contents, warnings, options);
+    ASSERT_THAT(parsed, NoParseError());
+
+    svg::Renderer actualRenderer;
+    actualRenderer.draw(*document_);
+    const auto actual = actualRenderer.takeSnapshot();
+    svg::Renderer expectedRenderer;
+    expectedRenderer.draw(parsed.result());
+    const auto expected = expectedRenderer.takeSnapshot();
+    tests::CompareBitmapToBitmap(actual, expected, reference, tests::PixelmatchIdentityParams());
+    EXPECT_EQ(document_->source(), source_);
+  }
+
   void sample(double time, std::string_view reference) {
     document_->setTime(time);
     compare(reference);
@@ -190,6 +209,113 @@ TEST_F(SvgSuiteAnimation, HoverUsesRetainedRenderedGeometryInsteadOfLiveTargetLo
   document_->setTime(3);
   EXPECT_THAT(document_->dispatchMouseEvent(svg::EventType::MouseOut, *target), IsTrue());
   compare("hover-end");
+}
+
+TEST_F(SvgSuiteAnimation, TimingBoundariesRestartModesAndBackwardSeekAreDeterministic) {
+  ASSERT_NO_FATAL_FAILURE(load("timing"));
+  const auto boundary = document_->querySelector("#boundary");
+  const auto always = document_->querySelector("#always");
+  const auto when = document_->querySelector("#when");
+  const auto alwaysAnimation = document_->querySelector("#always-animation");
+  const auto whenAnimation = document_->querySelector("#when-animation");
+  ASSERT_THAT(boundary, Ne(std::nullopt));
+  ASSERT_THAT(always, Ne(std::nullopt));
+  ASSERT_THAT(when, Ne(std::nullopt));
+  ASSERT_THAT(alwaysAnimation, Ne(std::nullopt));
+  ASSERT_THAT(whenAnimation, Ne(std::nullopt));
+
+  document_->setTime(0.999);
+  compareReference("timing-before");
+  document_->setTime(1);
+  EXPECT_DOUBLE_EQ(boundary->cast<svg::SVGRectElement>().computedX().value, 2);
+  document_->setTime(1.5);
+  EXPECT_DOUBLE_EQ(boundary->cast<svg::SVGRectElement>().computedX().value, 6);
+  document_->setTime(2);
+  EXPECT_DOUBLE_EQ(boundary->cast<svg::SVGRectElement>().computedX().value, 2);
+  document_->setTime(3);
+  EXPECT_DOUBLE_EQ(boundary->cast<svg::SVGRectElement>().computedX().value, 10);
+  compareReference("timing-end");
+  document_->setTime(1.5);
+  EXPECT_DOUBLE_EQ(boundary->cast<svg::SVGRectElement>().computedX().value, 6);
+  compareReference("timing-backward");
+
+  document_->setTime(5);
+  EXPECT_THAT(document_->beginAnimation(*alwaysAnimation), IsTrue());
+  EXPECT_THAT(document_->beginAnimation(*whenAnimation), IsTrue());
+  document_->setTime(6);
+  EXPECT_DOUBLE_EQ(always->cast<svg::SVGRectElement>().computedX().value, 6);
+  EXPECT_DOUBLE_EQ(when->cast<svg::SVGRectElement>().computedX().value, 6);
+  compareReference("restart-mid");
+  EXPECT_THAT(document_->beginAnimation(*alwaysAnimation), IsTrue());
+  EXPECT_THAT(document_->beginAnimation(*whenAnimation), IsTrue());
+  document_->setTime(7);
+  EXPECT_DOUBLE_EQ(always->cast<svg::SVGRectElement>().computedX().value, 6);
+  EXPECT_DOUBLE_EQ(when->cast<svg::SVGRectElement>().computedX().value, 10);
+  compareReference("restart-filtered");
+  document_->setTime(8);
+  EXPECT_THAT(document_->beginAnimation(*whenAnimation), IsTrue());
+  document_->setTime(9);
+  EXPECT_DOUBLE_EQ(always->cast<svg::SVGRectElement>().computedX().value, 10);
+  EXPECT_DOUBLE_EQ(when->cast<svg::SVGRectElement>().computedX().value, 6);
+  compareReference("restart-later");
+}
+
+TEST_F(SvgSuiteAnimation, InterpolationCompositionAndSecureStaticProfileMatchOracles) {
+  ASSERT_NO_FATAL_FAILURE(load("interpolation"));
+  const auto discrete = document_->querySelector("#discrete");
+  const auto spline = document_->querySelector("#spline");
+  const auto paced = document_->querySelector("#paced");
+  const auto accumulated = document_->querySelector("#accumulated");
+  ASSERT_THAT(discrete, Ne(std::nullopt));
+  ASSERT_THAT(spline, Ne(std::nullopt));
+  ASSERT_THAT(paced, Ne(std::nullopt));
+  ASSERT_THAT(accumulated, Ne(std::nullopt));
+
+  document_->setTime(0.999);
+  EXPECT_DOUBLE_EQ(discrete->cast<svg::SVGRectElement>().computedX().value, 2);
+  document_->setTime(1);
+  EXPECT_DOUBLE_EQ(discrete->cast<svg::SVGRectElement>().computedX().value, 10);
+  document_->setTime(2);
+  EXPECT_DOUBLE_EQ(discrete->cast<svg::SVGRectElement>().computedX().value, 10);
+  EXPECT_DOUBLE_EQ(spline->cast<svg::SVGRectElement>().computedX().value, 10);
+  EXPECT_DOUBLE_EQ(paced->cast<svg::SVGRectElement>().computedX().value, 10);
+  EXPECT_DOUBLE_EQ(accumulated->cast<svg::SVGRectElement>().computedX().value, 10);
+  compareReference("interpolation-two-seconds");
+  document_->setTime(2.5);
+  EXPECT_DOUBLE_EQ(discrete->cast<svg::SVGRectElement>().computedX().value, 10);
+  EXPECT_DOUBLE_EQ(spline->cast<svg::SVGRectElement>().computedX().value, 12);
+  EXPECT_DOUBLE_EQ(paced->cast<svg::SVGRectElement>().computedX().value, 12);
+  EXPECT_DOUBLE_EQ(accumulated->cast<svg::SVGRectElement>().computedX().value, 12);
+  compareReference("interpolation-two-and-half-seconds");
+
+  ASSERT_NO_FATAL_FAILURE(load("interpolation", svg::ProcessingMode::SecureStatic));
+  document_->setTime(2);
+  compareReference("interpolation-static");
+}
+
+TEST_F(SvgSuiteAnimation, TransformMotionMpathAndBackwardSeekMatchStaticGeometry) {
+  ASSERT_NO_FATAL_FAILURE(load("transform-motion"));
+  const auto transformed = document_->querySelector("#transformed");
+  ASSERT_THAT(transformed, Ne(std::nullopt));
+  document_->setTime(1);
+  EXPECT_DOUBLE_EQ(transformed->cast<svg::SVGRectElement>().transform().data[4], 4);
+  compareReference("transform-motion-mid");
+  document_->setTime(2);
+  EXPECT_DOUBLE_EQ(transformed->cast<svg::SVGRectElement>().transform().data[4], 8);
+  compareReference("transform-motion-end");
+  document_->setTime(1);
+  EXPECT_DOUBLE_EQ(transformed->cast<svg::SVGRectElement>().transform().data[4], 4);
+  compareReference("transform-motion-mid");
+}
+
+TEST_F(SvgSuiteAnimation, UseShadowInstancesResolveAnimationInEachContext) {
+  ASSERT_NO_FATAL_FAILURE(load("contextual-use"));
+  document_->setTime(1);
+  compareReference("contextual-use-mid");
+  document_->setTime(2);
+  compareReference("contextual-use-end");
+  document_->setTime(1);
+  compareReference("contextual-use-mid");
 }
 
 }  // namespace
