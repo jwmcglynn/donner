@@ -493,6 +493,24 @@ TEST(SVGDocument, EmptySelectorIgnoresRejectedRawTextProjection) {
   EXPECT_TRUE(text.isEmptyForSelector(nullptr));
 }
 
+TEST(SVGDocument, EmptySelectorSourceSetterReplacesMaterializedRawText) {
+  for (const bool initiallyEmpty : {false, true}) {
+    SCOPED_TRACE(initiallyEmpty);
+    auto document =
+        ParseSVG(R"(<svg xmlns="http://www.w3.org/2000/svg"><text id="t">seed</text></svg>)");
+    auto changed =
+        ReplaceInSource(document, "<text id=\"t\">seed</text>",
+                        initiallyEmpty ? "<text id=\"t\"> </text>" : "<text id=\"t\">word</text>");
+    ASSERT_FALSE(changed.diagnostic.has_value());
+    auto text = document.querySelector("#t").value();
+    EXPECT_EQ(text.isEmptyForSelector(nullptr), initiallyEmpty);
+    auto replaced = document.setElementTextContent(text, initiallyEmpty ? "new" : " ");
+    ASSERT_TRUE(replaced.applied);
+    ASSERT_FALSE(replaced.diagnostic.has_value());
+    EXPECT_EQ(text.isEmptyForSelector(nullptr), !initiallyEmpty);
+  }
+}
+
 TEST(SVGDocument, ApplySourceEditProjectsTextMutation) {
   auto document =
       ParseSVG(R"(<svg xmlns="http://www.w3.org/2000/svg"><text id="label">hello</text></svg>)");
