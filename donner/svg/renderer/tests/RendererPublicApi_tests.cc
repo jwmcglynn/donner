@@ -1449,8 +1449,10 @@ TEST(RendererPublicApiTest, SharedMaskReplaysForSecondUseInCurrentFrame) {
   for (const auto& [drawOrder, entity] : maskedInstances) {
     SCOPED_TRACE(drawOrder);
     EXPECT_TRUE(driver.drawUnderEntityMaskIntoCurrentFrame(
-        document.registry(), entity, viewport, Transform2d(),
-        [&] { return driver.drawDocumentIntoCurrentFrame(content, viewport, Transform2d()); }));
+        document.registry(), entity, viewport, Transform2d(), [&] {
+          driver.drawDocumentIntoCurrentFrame(content, viewport, Transform2d());
+          return true;
+        }));
   }
   renderer.endFrame();
 
