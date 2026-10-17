@@ -8,6 +8,7 @@
 #include "donner/base/Utils.h"
 #include "donner/base/xml/components/TreeComponent.h"
 #include "donner/svg/components/ElementTypeComponent.h"
+#include "donner/svg/components/GeometryPreparationResourceBudget.h"
 #include "donner/svg/components/layout/SizedElementComponent.h"
 #include "donner/svg/components/shadow/OffscreenShadowTreeComponent.h"
 #include "donner/svg/components/shadow/ShadowBranch.h"
@@ -19,6 +20,12 @@
 namespace donner::svg::components {
 
 namespace {
+
+void ReleaseShadowGeometry(Registry& registry, Entity entity) {
+  if (auto* budget = registry.ctx().find<GeometryPreparationResourceBudget>()) {
+    budget->release(entity);
+  }
+}
 
 struct ShadowExpansionCost {
   std::size_t generatedEntities = 0;
@@ -170,6 +177,7 @@ void ShadowTreeSystem::teardown(Registry& registry, ComputedShadowTreeComponent&
   // deleted.
   if (shadow.mainBranch) {
     for (const auto& shadow : shadow.mainBranch->shadowEntities) {
+      ReleaseShadowGeometry(registry, shadow);
       registry.get<donner::components::TreeComponent>(shadow).remove(registry);
     }
 
@@ -179,6 +187,7 @@ void ShadowTreeSystem::teardown(Registry& registry, ComputedShadowTreeComponent&
 
   for (const auto& branch : shadow.branches) {
     for (const auto& shadow : branch.shadowEntities) {
+      ReleaseShadowGeometry(registry, shadow);
       registry.get<donner::components::TreeComponent>(shadow).remove(registry);
     }
 

@@ -3,13 +3,16 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <limits>
 #include <sstream>
 #include <vector>
 
 #include "donner/base/StringUtils.h"
 #include "donner/base/parser/LengthParser.h"
 #include "donner/css/parser/ColorParser.h"
+#include "donner/css/parser/ValueParser.h"
 #include "donner/svg/components/animation/AnimationResourceBudget.h"
+#include "donner/svg/parser/AngleParser.h"
 
 namespace donner::svg::components {
 
@@ -79,7 +82,47 @@ std::optional<std::vector<Lengthd>> ParseAnimationLengths(std::string_view input
   return values.empty() ? std::nullopt : std::optional(std::move(values));
 }
 
+namespace {
+
+std::optional<double> ParseAnimationAngle(std::string_view input) {
+  if (input.size() > AnimationResourceBudget::kMaximumPathValueBytes) {
+    return std::nullopt;
+  }
+  const auto tokens = css::parser::ValueParser::Parse(StringUtils::TrimWhitespace(input));
+  if (tokens.size() != 1) {
+    return std::nullopt;
+  }
+  const auto angle =
+      parser::ParseAngle(tokens.front(), parser::AngleParseOptions::AllowNumbersInDegrees);
+  return angle.hasResult() && std::isfinite(angle.result()) ? std::optional(angle.result())
+                                                            : std::nullopt;
+}
+
+std::optional<std::string> CombineAngles(std::string_view first, std::string_view second,
+                                         double firstWeight, double secondWeight) {
+  const auto a = ParseAnimationAngle(first);
+  const auto b = ParseAnimationAngle(second);
+  if (!a || !b) {
+    return std::nullopt;
+  }
+  const double result = *a * firstWeight + *b * secondWeight;
+  if (!std::isfinite(result)) {
+    return std::nullopt;
+  }
+  std::ostringstream output;
+  output.precision(std::numeric_limits<double>::max_digits10);
+  output << result << "rad";
+  return output.str();
+}
+
+}  // namespace
+
 bool ValidAnimationNumericOperand(std::string_view input, const AnimationValueContext& context) {
+  if (context.angleValue) {
+    input = StringUtils::TrimWhitespace(input);
+    return input == "auto" || input == "auto-start-reverse" ||
+           ParseAnimationAngle(input).has_value();
+  }
   if (!context.maximumNumbers) {
     return true;
   }
@@ -208,6 +251,9 @@ std::optional<std::string> CombineAnimationValues(std::string_view first, std::s
   if (!std::isfinite(firstWeight) || !std::isfinite(secondWeight)) {
     return std::nullopt;
   }
+  if (context.angleValue) {
+    return CombineAngles(first, second, firstWeight, secondWeight);
+  }
   auto a = ParseAnimationLengths(first);
   auto b = ParseAnimationLengths(second);
   if (context.numberPair) {
@@ -231,6 +277,14 @@ std::optional<std::string> CombineAnimationValues(std::string_view first, std::s
 
 std::optional<double> AnimationValueDistance(std::string_view first, std::string_view second,
                                              const AnimationValueContext& context) {
+  if (context.angleValue) {
+    const auto a = ParseAnimationAngle(first);
+    const auto b = ParseAnimationAngle(second);
+    if (!a || !b || !std::isfinite(*b - *a)) {
+      return std::nullopt;
+    }
+    return std::abs(*b - *a);
+  }
   auto a = ParseAnimationLengths(first);
   auto b = ParseAnimationLengths(second);
   if (context.numberPair) {

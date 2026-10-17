@@ -233,7 +233,7 @@ std::optional<ClipGeometry> PrepareClipGeometry(EntityHandle entity, bool enforc
   if (!HasRenderableType(dataEntity)) {
     return std::nullopt;
   }
-  const auto* path = dataEntity.try_get<ComputedPathComponent>();
+  const auto* path = ShapeSystem::geometryHandle(entity).try_get<ComputedPathComponent>();
   const auto* style = entity.try_get<ComputedStyleComponent>();
 #ifdef DONNER_TEXT_ENABLED
   const EntityHandle textEntity =
@@ -251,7 +251,7 @@ std::optional<ClipGeometry> PrepareClipGeometry(EntityHandle entity, bool enforc
                             properties.display.get().value() == Display::None)) {
     return std::nullopt;
   }
-  return ClipGeometry{dataEntity, textEntity, path, style, isText};
+  return ClipGeometry{ShapeSystem::geometryHandle(entity), textEntity, path, style, isText};
 }
 
 class RenderingContextImpl {
@@ -389,7 +389,9 @@ public:
     std::optional<Box2d> clipRect;
     int layerDepth = 0;
     std::optional<ContextPaintServers> savedContextPaintServers;
-    const bool isShape = dataHandle.all_of<ComputedPathComponent>();
+    const EntityHandle geometryHandle =
+        ShapeSystem::geometryHandle(EntityHandle(registry_, styleEntity));
+    const bool isShape = geometryHandle.all_of<ComputedPathComponent>();
 
     if (!HasRenderableType(dataHandle)) {
       return std::nullopt;
@@ -543,7 +545,7 @@ public:
     const ShadowTreeComponent* shadowTree = dataHandle.try_get<ShadowTreeComponent>();
     const bool setsContextColors = shadowTree && shadowTree->setsContextColors;
 
-    if (setsContextColors || (instance.visible && (dataHandle.all_of<ComputedPathComponent>() ||
+    if (setsContextColors || (instance.visible && (geometryHandle.all_of<ComputedPathComponent>() ||
                                                    dataHandle.all_of<ComputedTextComponent>() ||
                                                    instance.textSpanRoot != entt::null))) {
       if (auto fill = properties.fill.get()) {
@@ -580,7 +582,8 @@ public:
       contextPaintServers_.contextFill = instance.resolvedFill;
       contextPaintServers_.contextStroke = instance.resolvedStroke;
       contextPaintServers_.worldFromContextTransform = instance.worldFromEntityTransform;
-      contextPaintServers_.contextBounds = dataHandle.get<ComputedPathComponent>().localBounds();
+      contextPaintServers_.contextBounds =
+          geometryHandle.get<ComputedPathComponent>().localBounds();
       contextPaintServers_.resolveAtDrawTime = true;
 
       const bool ownsMarkerResolutionSession = activeMarkerStack_.empty();
@@ -1181,7 +1184,8 @@ public:
       const auto* shadowEntityComponent = registry_.try_get<ShadowEntityComponent>(entity);
       const EntityHandle dataHandle(
           registry_, shadowEntityComponent ? shadowEntityComponent->lightEntity : entity);
-      if (const auto* path = dataHandle.try_get<ComputedPathComponent>();
+      if (const auto* path = ShapeSystem::geometryHandle(EntityHandle(registry_, entity))
+                                 .try_get<ComputedPathComponent>();
           path && !path->spline.empty()) {
         addBox(path->localBounds());
       }
@@ -2025,6 +2029,7 @@ std::optional<RenderingContext::FeImageSubtreeResult> RenderingContext::createFe
   const std::span<const Entity> shadowEntities =
       computedShadow.offscreenShadowEntities(maybeIndex.value());
   StyleSystem().computeStylesFor(registry_, shadowEntities, disabledSink);
+  ShapeSystem().instantiateShadowComputedPaths(registry_, shadowEntities, disabledSink);
 
   const Entity shadowRoot = computedShadow.offscreenShadowRoot(maybeIndex.value());
   if (shadowRoot == entt::null) {

@@ -11,6 +11,7 @@
 #include "donner/base/xml/components/AttributesComponent.h"
 #include "donner/base/xml/components/TreeComponent.h"
 #include "donner/svg/components/ElementTypeComponent.h"
+#include "donner/svg/components/PathLengthComponent.h"
 #include "donner/svg/components/SVGDocumentContext.h"
 #include "donner/svg/components/animation/AnimatedValuesComponent.h"
 #include "donner/svg/components/animation/AnimationNumericAttributes.h"
@@ -23,6 +24,7 @@
 #include "donner/svg/components/layout/SizedElementComponent.h"
 #include "donner/svg/components/layout/SymbolComponent.h"
 #include "donner/svg/components/layout/TransformComponent.h"
+#include "donner/svg/components/layout/ViewBoxComponent.h"
 #include "donner/svg/components/paint/GradientComponent.h"
 #include "donner/svg/components/paint/LinearGradientComponent.h"
 #include "donner/svg/components/paint/MarkerComponent.h"
@@ -38,7 +40,9 @@
 #include "donner/svg/components/shape/PathComponent.h"
 #include "donner/svg/components/shape/RectComponent.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
+#include "donner/svg/components/text/TextComponent.h"
 #include "donner/svg/components/text/TextPathComponent.h"
+#include "donner/svg/components/text/TextPositioningComponent.h"
 #include "donner/svg/properties/PropertyParsing.h"
 
 namespace donner::svg::components {
@@ -462,6 +466,90 @@ std::optional<std::string> LayoutLengthBaseValue(
   return std::nullopt;
 }
 
+template <typename Values>
+std::string SerializeTextPositionBase(const Values& values, AnimationResourceBudget& budget) {
+  if (values.empty()) {
+    return "0";
+  }
+  if (values.size() > AnimationResourceBudget::kMaximumNumbersPerValue ||
+      !budget.reserveSourceBytes(values.size() * 64)) {
+    return {};
+  }
+  std::ostringstream output;
+  output.precision(12);
+  bool first = true;
+  for (const auto& value : values) {
+    if (!first) {
+      output << ' ';
+    }
+    output << value;
+    first = false;
+  }
+  return output.str();
+}
+
+std::optional<std::string> TextPositionBaseValue(Registry& registry, Entity target,
+                                                 std::string_view name,
+                                                 AnimationResourceBudget& budget) {
+  const auto* text = registry.try_get<TextPositioningComponent>(target);
+  if (!text) {
+    return std::nullopt;
+  }
+  if (name == "rotate") {
+    return SerializeTextPositionBase(text->rotateDegrees, budget);
+  }
+  using Field = SmallVector<Lengthd, 1> TextPositioningComponent::*;
+  const std::pair<std::string_view, Field> fields[] = {{"x", &TextPositioningComponent::x},
+                                                       {"y", &TextPositioningComponent::y},
+                                                       {"dx", &TextPositioningComponent::dx},
+                                                       {"dy", &TextPositioningComponent::dy}};
+  for (const auto& [attribute, field] : fields) {
+    if (name == attribute) {
+      return SerializeTextPositionBase(text->*field, budget);
+    }
+  }
+  return std::nullopt;
+}
+
+std::optional<std::string> TypedPresentationBaseValue(Registry& registry, Entity target,
+                                                      std::string_view name,
+                                                      const AnimationValueContext& context) {
+  if (const auto* length = registry.try_get<PathLengthComponent>(target);
+      length && name == "pathLength") {
+    return SerializeValue(length->value, context);
+  }
+  if (const auto* box = registry.try_get<ViewBoxComponent>(target);
+      box && box->viewBox && name == "viewBox") {
+    std::ostringstream output;
+    output.precision(12);
+    output << box->viewBox->topLeft.x << ' ' << box->viewBox->topLeft.y << ' '
+           << box->viewBox->width() << ' ' << box->viewBox->height();
+    return output.str();
+  }
+  if (const auto* text = registry.try_get<TextComponent>(target);
+      text && text->textLength && name == "textLength") {
+    return SerializeValue(*text->textLength, context);
+  }
+  return std::nullopt;
+}
+
+std::optional<std::string> MarkerOrientBaseValue(Registry& registry, Entity target,
+                                                 std::string_view name,
+                                                 const AnimationValueContext& context) {
+  const auto* marker = registry.try_get<MarkerComponent>(target);
+  if (!marker || name != "orient") {
+    return std::nullopt;
+  }
+  if (marker->orient.type() == MarkerOrient::Type::Auto) {
+    return "auto";
+  }
+  if (marker->orient.type() == MarkerOrient::Type::AutoStartReverse) {
+    return "auto-start-reverse";
+  }
+  return SerializeValue(marker->orient.computeAngleRadians(Vector2d(1, 0)), context).value() +
+         "rad";
+}
+
 std::optional<std::string> LayoutBaseValue(Registry& registry, Entity target, std::string_view name,
                                            const AnimationValueContext& context) {
   if (const auto* textPath = registry.try_get<TextPathComponent>(target);
@@ -721,6 +809,7 @@ AnimationValueContext AnimationContextFor(Registry& registry, Entity target,
                                           std::string_view attribute,
                                           AnimationResourceBudget& budget) {
   AnimationValueContext result;
+  result.angleValue = attribute == "orient" && registry.all_of<MarkerComponent>(target);
   result.referenceValue = attribute == "href" || attribute == "xlink:href" || attribute == "in" ||
                           attribute == "in2" || attribute == "result";
   result.numberPair = attribute == "stdDeviation" || attribute == "radius" ||
@@ -829,6 +918,15 @@ std::optional<std::string> UnderlyingAnimationValue(Registry& registry, Entity t
     if (const auto* stop = registry.try_get<StopComponent>(target)) {
       return SerializeValue(stop->properties.offset, context).value();
     }
+  }
+  if (auto value = TextPositionBaseValue(registry, target, attribute, budget)) {
+    return *value;
+  }
+  if (auto value = TypedPresentationBaseValue(registry, target, attribute, context)) {
+    return *value;
+  }
+  if (auto value = MarkerOrientBaseValue(registry, target, attribute, context)) {
+    return *value;
   }
   if (auto value = GeometryBaseValue(registry, target, attribute, context, budget)) {
     return *value;

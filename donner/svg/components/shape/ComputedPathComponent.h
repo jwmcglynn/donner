@@ -9,6 +9,11 @@
 
 namespace donner::svg::components {
 
+/// Selects instance-owned geometry, including an intentionally empty or refused path.
+struct ComputedInstanceGeometryComponent {
+  bool prepared = false;  ///< Cleared at the next global shape preparation pass.
+};
+
 /**
  * Stores a Path used for rendering a shape, which may be generated from the parameters of
  * shapes such as circle, rect, line, poly, and path.

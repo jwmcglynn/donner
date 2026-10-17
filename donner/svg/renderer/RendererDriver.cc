@@ -687,7 +687,7 @@ std::optional<PatternPlacement> ResolvePatternPlacement(
   const Box2d pathBounds =
       ref.contextRemap
           ? ref.contextRemap->contextBounds
-          : RenderingObjectBoundingBox(registry, instance.dataHandle(registry)).value_or(Box2d());
+          : RenderingObjectBoundingBox(registry, instance.styleHandle(registry)).value_or(Box2d());
 
   const bool objectBoundingBox = pattern.patternUnits == PatternUnits::ObjectBoundingBox;
   const bool patternContentObjectBoundingBox =
@@ -918,7 +918,7 @@ ResolvedClip toResolvedClip(const components::RenderingInstanceComponent& instan
           instance.styleHandle(registry).try_get<components::ComputedClipPathsComponent>()) {
     // Compute objectBoundingBox transform if needed.
     if (instance.clipPath && instance.clipPath->units == ClipPathUnits::ObjectBoundingBox) {
-      if (auto maybeBounds = RenderingObjectBoundingBox(registry, instance.dataHandle(registry))) {
+      if (auto maybeBounds = RenderingObjectBoundingBox(registry, instance.styleHandle(registry))) {
         const Box2d bounds = maybeBounds.value();
         clip.clipPathUnitsTransform =
             Transform2d::Scale(bounds.size()) * Transform2d::Translate(bounds.topLeft);
@@ -1405,7 +1405,7 @@ std::optional<Box2d> computeFilterRegion(Registry& registry,
 
     // Mixed list with url() references: use the default filter region.
     const std::optional<Box2d> shapeBounds =
-        RenderingObjectBoundingBox(registry, instance.dataHandle(registry));
+        RenderingObjectBoundingBox(registry, instance.styleHandle(registry));
     if (!shapeBounds) {
       return std::nullopt;
     }
@@ -1423,7 +1423,7 @@ std::optional<Box2d> computeFilterRegion(Registry& registry,
 
   // Determine the bounds reference for resolving percentages.
   const Box2d shapeBounds =
-      RenderingObjectBoundingBox(registry, instance.dataHandle(registry)).value_or(Box2d());
+      RenderingObjectBoundingBox(registry, instance.styleHandle(registry)).value_or(Box2d());
 
   if (computed->filterUnits == FilterUnits::ObjectBoundingBox) {
     // In objectBoundingBox mode, x/y/width/height are fractions/percentages of the bbox.
@@ -2288,8 +2288,9 @@ bool RendererDriver::shouldCullEarlyLeaf(Registry& registry,
     return false;
   }
   const auto bounds = DeviceDrawableBoundsWithStroke(
-      instance.dataHandle(registry), style, ShapeNonScalingStrokeMode(instance, style),
-      instance.worldFromEntityTransform, surfaceFromCanvasTransform_);
+      components::ShapeSystem::geometryHandle(instance.styleHandle(registry)), style,
+      ShapeNonScalingStrokeMode(instance, style), instance.worldFromEntityTransform,
+      surfaceFromCanvasTransform_);
   return bounds.has_value() && ShouldCullDeviceBox(*bounds, renderingSize_);
 }
 
@@ -2436,8 +2437,8 @@ bool RendererDriver::drawPreparedEntityRange(Registry& registry, Entity firstEnt
     renderer_.setPaint(paint);
 
     if (instance.visible && !filterHidesElement) {
-      if (const auto* path =
-              instance.dataHandle(registry).try_get<components::ComputedPathComponent>()) {
+      if (const auto* path = components::ShapeSystem::geometryHandle(instance.styleHandle(registry))
+                                 .try_get<components::ComputedPathComponent>()) {
         drawPathWithPaintOrder(view, registry, instance, *path, style, paint,
                                instance.worldFromEntityTransform * surfaceFromCanvasTransform_);
       } else if (const Entity textRootEntity = InstanceTextRootEntity(registry, instance);
@@ -2638,7 +2639,8 @@ RangeBoundContribution BoundVisibleEntity(Registry& registry, Entity entity,
     return {.unknown = true};
   }
   const EntityHandle data = instance.dataHandle(registry);
-  if (const auto* path = data.try_get<components::ComputedPathComponent>()) {
+  if (const auto* path = components::ShapeSystem::geometryHandle(instance.styleHandle(registry))
+                             .try_get<components::ComputedPathComponent>()) {
     return BoundPathEntity(registry, entity, instance, style, finalTransform, *path);
   }
   if (data.try_get<components::ComputedTextComponent>()) {
@@ -2903,7 +2905,7 @@ void RendererDriver::prepareFilterGraphs(Registry& registry, std::span<const Ent
       filterGraph->primitiveViewport = filterViewBox;
       if (filterGraph->primitiveUnits == PrimitiveUnits::ObjectBoundingBox) {
         filterGraph->elementBoundingBox =
-            RenderingObjectBoundingBox(registry, instance->dataHandle(registry));
+            RenderingObjectBoundingBox(registry, instance->styleHandle(registry));
       }
       if (filterViewBox.width() > 0 && filterViewBox.height() > 0) {
         filterGraph->userToPixelScale = Vector2d(renderingSize_.x / filterViewBox.width(),
@@ -3037,8 +3039,9 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
                       [](const DeferredPop& m) { return m.hasFilterLayer; });
       if (!insideFilterLayer) {
         if (const auto deviceBounds = DeviceDrawableBoundsWithStroke(
-                instance.dataHandle(registry), style, ShapeNonScalingStrokeMode(instance, style),
-                instance.worldFromEntityTransform, surfaceFromCanvasTransform_);
+                components::ShapeSystem::geometryHandle(instance.styleHandle(registry)), style,
+                ShapeNonScalingStrokeMode(instance, style), instance.worldFromEntityTransform,
+                surfaceFromCanvasTransform_);
             deviceBounds.has_value()) {
           cullDraw = ShouldCullDeviceBox(*deviceBounds, renderingSize_);
         }
@@ -3047,8 +3050,8 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
 
     components::ScopedFontResourceRender::recordDraw(registry, entity, cullDraw);
     if (instance.visible && !filterHidesElement && !cullDraw) {
-      if (const auto* path =
-              instance.dataHandle(registry).try_get<components::ComputedPathComponent>()) {
+      if (const auto* path = components::ShapeSystem::geometryHandle(instance.styleHandle(registry))
+                                 .try_get<components::ComputedPathComponent>()) {
         drawPathWithPaintOrder(view, registry, instance, *path, style, paint,
                                instance.worldFromEntityTransform * surfaceFromCanvasTransform_);
       } else if (const Entity textRootEntity = InstanceTextRootEntity(registry, instance);
@@ -3284,8 +3287,9 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
                       [](const DeferredPop& m) { return m.hasFilterLayer; });
       if (!insideFilterLayer) {
         if (const auto deviceBounds = DeviceDrawableBoundsWithStroke(
-                instance.dataHandle(registry), style, ShapeNonScalingStrokeMode(instance, style),
-                instance.worldFromEntityTransform, surfaceFromCanvasTransform_);
+                components::ShapeSystem::geometryHandle(instance.styleHandle(registry)), style,
+                ShapeNonScalingStrokeMode(instance, style), instance.worldFromEntityTransform,
+                surfaceFromCanvasTransform_);
             deviceBounds.has_value()) {
           cullDraw = ShouldCullDeviceBox(*deviceBounds, renderingSize_);
         }
@@ -3294,8 +3298,8 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
 
     components::ScopedFontResourceRender::recordDraw(registry, entity, cullDraw);
     if (instance.visible && !filterHidesElement && !cullDraw) {
-      if (const auto* path =
-              instance.dataHandle(registry).try_get<components::ComputedPathComponent>()) {
+      if (const auto* path = components::ShapeSystem::geometryHandle(instance.styleHandle(registry))
+                                 .try_get<components::ComputedPathComponent>()) {
         drawPathWithPaintOrder(view, registry, instance, *path, style, paint,
                                instance.worldFromEntityTransform * surfaceFromCanvasTransform_);
       } else if (const Entity textRootEntity = InstanceTextRootEntity(registry, instance);
@@ -3471,7 +3475,7 @@ int RendererDriver::renderMask(RenderingInstanceView& view, Registry& registry,
   // Text geometry is not a computed path, so ask for the element's object bounding box rather than
   // the shape bounds, which would be empty for a text element or a text span.
   const Box2d shapeLocalBounds =
-      RenderingObjectBoundingBox(registry, instance.dataHandle(registry)).value_or(Box2d());
+      RenderingObjectBoundingBox(registry, instance.styleHandle(registry)).value_or(Box2d());
 
   for (const auto* m : chain) {
     if (!m->subtreeInfo || !m->reference.handle.valid()) {
@@ -3653,7 +3657,8 @@ void RendererDriver::drawPathWithPaintOrder(RenderingInstanceView& view, Registr
                                             const PaintParams& paint,
                                             const Transform2d& deviceFromLocalForShape) {
   const PaintOrder paintOrder = style.properties->paintOrder.get().value();
-  const PathShape pathShape = toPathShape(instance.dataHandle(registry), path, style);
+  const PathShape pathShape = toPathShape(
+      components::ShapeSystem::geometryHandle(instance.styleHandle(registry)), path, style);
 
   // `vector-effect: non-scaling-stroke` strokes the centerline in host (root canvas) space, so an
   // anisotropic CTM or shear cannot distort the width or dash geometry. The fill still uses the
