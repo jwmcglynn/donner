@@ -297,6 +297,7 @@ py_test(
     data = [
         "ci_macos_xcode.txt",
         "ci_select_macos_xcode.sh",
+        "ci_xcode_discoverable.m",
         "//:.bazelrc",
         "//:github_action_definitions",
         "//build_defs:macos_app_bundle.bzl",
