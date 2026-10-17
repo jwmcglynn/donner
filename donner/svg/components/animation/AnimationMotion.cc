@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <sstream>
 
 #include "donner/base/MathUtils.h"
@@ -246,7 +247,7 @@ std::string SampleAnimationMotion(Registry& registry, Entity entity,
     return {};
   }
   std::ostringstream result;
-  result.precision(12);
+  result.precision(std::numeric_limits<double>::max_digits10);
   result << "translate(" << sample.point.x << ", " << sample.point.y << ")";
   if (*angle != 0) {
     result << " rotate(" << *angle << ")";
