@@ -2442,7 +2442,8 @@ bool EditorWindow::observePresentationCompletion() {
         });
         // Bounded admission timeline for failure diagnostics: time, admission, frames in flight,
         // device completed serial, submitted serial, oldest pending serial.
-        const timeline = (window['__donnerPresentationTimeline'] ??= []);
+        const timeline = window['__donnerPresentationTimeline'] ??
+                         (window['__donnerPresentationTimeline'] = []);
         timeline.push([ Math.round(performance.now() * 10) / 10, $14, $2, $11, $1, $12 ]);
         timeline.splice(0, timeline.length - 512);
       },

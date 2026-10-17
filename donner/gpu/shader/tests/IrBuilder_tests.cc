@@ -568,7 +568,7 @@ TEST(IrExprFactoryContracts, SelectPreservesBranchShapeAndOrdering) {
 TEST(IrExprFactoryContracts, TextureLoadsRetainIntegerCoordinatesAndLevel) {
   const IrExpr texture = MakeRef(RefKind::Resource, "image", IrType::Texture2dF32());
   const IrExpr coords = MakeRef(RefKind::Param, "coords", IrType::Vec2i());
-  for (const IrType levelType : {IrType::I32(), IrType::U32()}) {
+  for (const IrType& levelType : {IrType::I32(), IrType::U32()}) {
     SCOPED_TRACE(levelType);
     const IrExpr level = MakeRef(RefKind::Param, "level", levelType);
     const auto result = CallBuiltin(BuiltinFn::TextureLoad, {texture, coords, level});
