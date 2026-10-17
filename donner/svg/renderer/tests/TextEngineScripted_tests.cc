@@ -1475,6 +1475,34 @@ TEST(TextEngineScriptedTest, TextPathLengthKeepsSpacingOnlyChildWidth) {
   EXPECT_THAT(glyphs[3].xPosition + glyphs[3].xAdvance, DoubleNear(100.0, 1e-6));
 }
 
+TEST(TextEngineScriptedTest, FirstNestedLengthOwnerKeepsThePathOrigin) {
+  const auto glyphs = LayoutParsedTextPath(
+      R"(<textPath href="#p"><tspan textLength="40" lengthAdjust="spacingAndGlyphs">AB</tspan>C</textPath>)");
+  ASSERT_THAT(glyphs, SizeIs(3));
+  EXPECT_THAT(glyphs[0].xPosition, DoubleNear(0.0, 1e-6));
+  EXPECT_THAT(glyphs[1].xPosition + glyphs[1].xAdvance, DoubleNear(40.0, 1e-6));
+  EXPECT_THAT(glyphs[2].xPosition, DoubleNear(43.0, 1e-6));
+  EXPECT_THAT(glyphs[2].xAdvance, DoubleEq(10.0));
+}
+
+TEST(TextEngineScriptedTest, AbsoluteResetOnLengthOwnerStopsPreviousLengthCarry) {
+  const auto glyphs = LayoutParsedTextPath(
+      R"(<tspan textLength="40" lengthAdjust="spacingAndGlyphs">AB</tspan><tspan x="100" textLength="20" lengthAdjust="spacingAndGlyphs">C</tspan>)");
+  ASSERT_THAT(glyphs, SizeIs(3));
+  EXPECT_THAT(glyphs[1].xPosition + glyphs[1].xAdvance - glyphs[0].xPosition,
+              DoubleNear(40.0, 1e-6));
+  EXPECT_THAT(glyphs[2].xPosition, DoubleNear(100.0, 1e-6));
+  EXPECT_THAT(glyphs[2].xAdvance, DoubleNear(20.0, 1e-6));
+}
+
+TEST(TextEngineScriptedTest, AbsoluteResetWithinLengthOwnerIsNotAppliedTwice) {
+  const auto glyphs = LayoutParsedTextPath(
+      R"(<textPath href="#p"><tspan textLength="40" lengthAdjust="spacingAndGlyphs" x="0 100">AB</tspan></textPath>)");
+  ASSERT_THAT(glyphs, SizeIs(2));
+  EXPECT_THAT(glyphs[0].xPosition, DoubleNear(0.0, 1e-6));
+  EXPECT_THAT(glyphs[1].xPosition, DoubleNear(100.0, 1e-6));
+}
+
 TEST(TextEngineScriptedTest, TextPathLengthKeepsThreeLevelsOfOverrides) {
   const auto glyphs = LayoutParsedTextPath(
       R"(<textPath href="#p" textLength="120" lengthAdjust="spacingAndGlyphs">A<tspan textLength="60" lengthAdjust="spacingAndGlyphs">B<tspan textLength="20" lengthAdjust="spacingAndGlyphs">CD</tspan>E</tspan>F</textPath>)");
