@@ -2,10 +2,14 @@
 
 #include <string>
 #include <string_view>
+#include <utility>
 
 #include "donner/editor/tests/BitmapGoldenCompare.h"
 #include "donner/svg/renderer/tests/RendererTestUtils.h"
 #include "donner/svg/tests/ParserTestUtils.h"
+
+/// @file
+/// Text-position regressions follow https://svgwg.org/svg2-draft/text.html#TSpanAttributes.
 
 namespace donner::svg {
 namespace {
@@ -63,6 +67,22 @@ TEST(RendererAnimationTextPosition, InheritedListsUseAddressableCharacterOffsets
       CompareTextPosition(document, prefix + "<tspan" + sampled + suffix,
                           std::string("inherited-text-") + item.name + "-" + std::to_string(time));
     }
+  }
+}
+
+TEST(RendererAnimationTextPosition, RotationReplacesLowerValuesWhenAdditionIsRequested) {
+  auto document = ParseTextPosition(
+      "<text y='24' font-size='12' rotate='0 30'>A<tspan id='target'>B</tspan></text>"
+      "<animate href='#target' attributeName='rotate' from='40' to='60' dur='2s'/>"
+      "<animate href='#target' attributeName='rotate' from='10' to='20' additive='sum' dur='2s'/>");
+  for (const auto& [time, angle] :
+       {std::pair{0.0, 10}, std::pair{1.0, 15}, std::pair{3.0, 30}, std::pair{1.0, 15}}) {
+    SCOPED_TRACE(time);
+    document.setTime(time);
+    CompareTextPosition(document,
+                        "<text y='24' font-size='12'>A<tspan rotate='" + std::to_string(angle) +
+                            "'>B</tspan></text>",
+                        "text-rotation-replacement-" + std::to_string(time));
   }
 }
 
