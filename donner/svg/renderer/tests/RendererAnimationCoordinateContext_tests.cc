@@ -705,6 +705,63 @@ TEST(RendererAnimationCoordinateContext, ShapeFontUnitsUseEachTransformedInstanc
   }
 }
 
+TEST(RendererAnimationCoordinateContext, InstanceGeometryReachesBoundingBoxEffects) {
+  struct EffectCase {
+    const char* name;
+    const char* definition;
+    const char* attribute;
+    bool filter;
+  };
+  const EffectCase cases[] = {
+      {"clip",
+       "<clipPath id='effect' clipPathUnits='objectBoundingBox'>"
+       "<rect width='0.5' height='1'/></clipPath>",
+       "clip-path='url(#effect)'", false},
+      {"mask",
+       "<mask id='effect' maskUnits='objectBoundingBox' "
+       "maskContentUnits='objectBoundingBox' x='0' y='0' width='1' height='1'>"
+       "<rect width='0.5' height='1' fill='white'/></mask>",
+       "mask='url(#effect)'", false},
+      {"pattern",
+       "<pattern id='effect' width='0.5' height='1' "
+       "patternContentUnits='objectBoundingBox'>"
+       "<rect width='0.25' height='1' fill='red'/></pattern>",
+       "fill='url(#effect)'", false},
+      {"filter",
+       "<filter id='effect' x='0' y='0' width='0.5' height='1'>"
+       "<feOffset dx='0' dy='0'/></filter>",
+       "filter='url(#effect)'", true},
+  };
+  for (const auto& effect : cases) {
+    SCOPED_TRACE(effect.name);
+    if (effect.filter && !ActiveRendererSupportsFeature(RendererBackendFeature::FilterEffects)) {
+      continue;
+    }
+    const std::string definitions = std::string("<defs>") + effect.definition + "</defs>";
+    auto document = instantiateSubtree(
+        definitions + "<defs><rect id='tile' width='4' height='4' " + effect.attribute +
+            "><animate attributeName='width' from='2px' to='1em' dur='2s'/></rect></defs>"
+            "<use href='#tile' x='2' y='2' font-size='4'/>"
+            "<use href='#tile' x='12' y='8' font-size='12'/>",
+        parser::SVGParser::Options(), Vector2i(24, 16));
+    for (const double time : {1.0, 3.0, 1.0}) {
+      SCOPED_TRACE(time);
+      document.setTime(time);
+      const std::string firstWidth = time == 1 ? "3" : "4";
+      const std::string secondWidth = time == 1 ? "7" : "4";
+      auto expected = instantiateSubtree(definitions + "<rect x='2' y='2' width='" + firstWidth +
+                                             "' height='4' " + effect.attribute +
+                                             "/><rect x='12' y='8' width='" + secondWidth +
+                                             "' height='4' " + effect.attribute + "/>",
+                                         parser::SVGParser::Options(), Vector2i(24, 16));
+      editor::tests::CompareBitmapToBitmap(
+          RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(expected),
+          std::string("instance-bounds-") + effect.name + "-" + std::to_string(time),
+          editor::tests::PixelmatchIdentityParams());
+    }
+  }
+}
+
 TEST(RendererAnimationCoordinateContext, EmptyAnimatedShadowDoesNotUseVisibleLightGeometry) {
   auto document = instantiateSubtree(
       "<g font-size='4'><defs><rect id='tile' width='4' height='4'>"
@@ -789,8 +846,8 @@ TEST(RendererAnimationCoordinateContext, RelativeBasesAndWorldBoundsSurviveInact
         "relative-shape-base-" + std::to_string(time), editor::tests::PixelmatchIdentityParams());
     const Entity first = context.findIntersecting(Vector2d(2, 2));
     const Entity second = context.findIntersecting(Vector2d(26, 8));
-    ASSERT_NE(first, entt::null);
-    ASSERT_NE(second, entt::null);
+    ASSERT_NE(first, static_cast<Entity>(entt::null));
+    ASSERT_NE(second, static_cast<Entity>(entt::null));
     ASSERT_NE(first, second);
     EXPECT_THAT(context.getWorldBounds(first),
                 testing::Optional(Box2d::FromXYWH(1, 0, firstWidth, 4)));
