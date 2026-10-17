@@ -47,7 +47,7 @@ def libc_compat_deps():
     as a non-default-versioned symbol, so unversioned references from
     `toolchains_llvm`'s prebuilt libc++.a don't auto-resolve. The tiny shim in
     `//third_party/libc_compat` provides an unversioned `copy_file_range`
-    that forwards to the versioned glibc entry point.
+    that invokes the kernel without rebinding to itself.
     """
     return select({
         "//build_defs:llvm_latest_linux": ["//third_party/libc_compat:libc_compat"],
@@ -94,9 +94,7 @@ def fuzzer_linkopts():
         "//build_defs:llvm_latest_macos": [
             "-fsanitize=fuzzer-no-link",
             llvm_lib + "/clang/21/lib/darwin/libclang_rt.fuzzer_osx.a",
-            "-nostdlib++",
-            llvm_lib + "/libc++.a",
-            llvm_lib + "/libc++abi.a",
+            # Use the platform C++ runtime; bundled LLVM archives target a newer macOS.
         ],
         "//conditions:default": ["-fsanitize=fuzzer"],
     })
@@ -899,6 +897,7 @@ def donner_cc_fuzzer(
         per_input_timeout_seconds = 25,
         tags = [],
         routing_manifest = None,
+        routing_manifest_visibility = None,
         full_text_only = False,
         **kwargs):
     """
@@ -916,6 +915,7 @@ def donner_cc_fuzzer(
       full_text_only: Keep the corpus, raw binary, and soak on the full-text configuration.
       routing_manifest: Optional target name for a dependency-free manifest of the exact tags
         assigned to each generated fuzzer target.
+      routing_manifest_visibility: Visibility of the routing manifest; private by default.
       **kwargs: Additional arguments, matching the implementation of cc_test.
 
     Generated targets:
@@ -956,6 +956,7 @@ def donner_cc_fuzzer(
             corpus_tags = corpus_tags,
             fuzzer_name = name,
             soak_tags = soak_tags,
+            visibility = routing_manifest_visibility,
         )
 
     binary_name = name + "_bin_impl" if full_text_only else name + "_bin"

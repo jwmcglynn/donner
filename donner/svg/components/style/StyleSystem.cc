@@ -50,6 +50,19 @@ bool IsActiveAuthorStylesheet(const Registry& registry, Entity entity,
          !stylesheet.sourceMap.empty();
 }
 
+bool IsApplicableStylesheet(const Registry& registry, const StylesheetComponent& stylesheet,
+                            Entity stylesheetEntity, Entity dataEntity) {
+  if (!HasSvgNamespace(registry, stylesheetEntity)) {
+    return false;
+  }
+  if (!stylesheet.isUserAgentStylesheet) {
+    return true;
+  }
+  // The built-in sheet has an SVG default namespace; authored namespace handling is separate.
+  const auto* type = registry.try_get<ElementTypeComponent>(dataEntity);
+  return type && type->inSvgNamespace();
+}
+
 StyleResourceBudget& GetStyleResourceBudget(Registry& registry) {
   if (registry.ctx().contains<StyleResourceBudget>()) {
     auto& budget = registry.ctx().get<StyleResourceBudget>();
@@ -126,6 +139,35 @@ bool BlockExternalResources(PropertyRegistry& properties, const PropertyRegistry
 const ExternalUseStyleContext* ExternalRootContext(Registry& registry, Entity entity) {
   const auto* occurrence = registry.ctx().find<ExternalUseStyleContext>();
   return occurrence && occurrence->root == entity ? occurrence : nullptr;
+}
+
+bool IsDirectUseInstanceRoot(EntityHandle handle) {
+  if (ExternalRootContext(*handle.registry(), handle.entity())) {
+    return true;
+  }
+  const auto* root = handle.try_get<ShadowTreeRootComponent>();
+  if (!root || !handle.all_of<ShadowEntityComponent>()) {
+    return false;
+  }
+  Entity source = root->sourceEntity;
+  if (const auto* shadow = handle.registry()->try_get<ShadowEntityComponent>(source)) {
+    source = shadow->lightEntity;
+  }
+  const auto* type = handle.registry()->try_get<ElementTypeComponent>(source);
+  return type && type->type() == ElementType::Use;
+}
+
+void ApplySymbolInstanceDisplay(EntityHandle handle, Entity dataEntity,
+                                PropertyRegistry& properties) {
+  const auto* type = handle.registry()->try_get<ElementTypeComponent>(dataEntity);
+  if (!type || type->type() != ElementType::Symbol || !IsDirectUseInstanceRoot(handle)) {
+    return;
+  }
+  const css::Specificity priority =
+      css::Specificity::Important(css::Specificity::FromABC(0, 0, 1).toUserAgentSpecificity());
+  if (properties.display.specificity <= priority) {
+    properties.display.set(Display::Inline, priority);
+  }
 }
 
 bool ExternalPaintOrigin(PropertyState local, bool root, const ComputedStyleComponent* parent,
@@ -452,25 +494,13 @@ bool LocalRangeContainsOffset(const SourceRange& range, std::size_t localOffset)
   return start.has_value() && end.has_value() && *start <= localOffset && localOffset < *end;
 }
 
-void ApplyRuleDeclarations(
-    const css::SelectorRule& rule, css::Specificity specificity, PropertyRegistry& properties,
-    StyleResourceBudget& styleBudget, ParseWarningSink& warningSink,
-    std::array<std::optional<css::Specificity>, 2>& importantResourceColors) {
+void ApplyRuleDeclarations(const css::SelectorRule& rule, css::Specificity specificity,
+                           PropertyRegistry& properties, StyleResourceBudget& styleBudget,
+                           ParseWarningSink& warningSink) {
   for (const auto& declaration : rule.declarations) {
     if (!styleBudget.reserveDeclarationApplication(declaration.values.size(),
                                                    declaration.sourceByteSize)) {
       return;
-    }
-    std::optional<css::Specificity>* importantSource = nullptr;
-    if (declaration.name == "flood-color") {
-      importantSource = &importantResourceColors[0];
-    } else if (declaration.name == "stop-color") {
-      importantSource = &importantResourceColors[1];
-    }
-    // The generic important rank omits selector specificity, so retain it for resource colors.
-    if (declaration.important && importantSource && importantSource->has_value() &&
-        specificity < **importantSource) {
-      continue;
     }
     if (auto error = properties.parseProperty(declaration, specificity)) {
       constexpr std::size_t kMaximumStyleDiagnosticBytes = 4096;
@@ -479,8 +509,6 @@ void ApplyRuleDeclarations(
             RcString(std::string_view(error->reason).substr(0, kMaximumStyleDiagnosticBytes));
       }
       warningSink.add(std::move(*error));
-    } else if (declaration.important && importantSource) {
-      *importantSource = specificity;
     }
   }
 }
@@ -589,12 +617,11 @@ void StyleSystem::applyStylesheetRules(Registry& registry, Entity treeEntity, En
                                        StyleResourceBudget& styleBudget,
                                        ParseWarningSink& warningSink) {
   const ShadowedElementAdapter adapter(registry, treeEntity, dataEntity);
-  std::array<std::optional<css::Specificity>, 2> importantResourceColors;
   for (auto view = registry.view<StylesheetComponent>(); auto stylesheetEntity : view) {
-    if (!HasSvgNamespace(registry, stylesheetEntity)) {
+    const auto& stylesheet = view.get<StylesheetComponent>(stylesheetEntity);
+    if (!IsApplicableStylesheet(registry, stylesheet, stylesheetEntity, dataEntity)) {
       continue;
     }
-    const auto& stylesheet = view.get<StylesheetComponent>(stylesheetEntity);
     for (const css::SelectorRule& rule : stylesheet.stylesheet.rules()) {
       if (!styleBudget.reserveRuleElementMatch()) {
         return;
@@ -607,8 +634,7 @@ void StyleSystem::applyStylesheetRules(Registry& registry, Entity treeEntity, En
       if (stylesheet.isUserAgentStylesheet) {
         specificity = specificity.toUserAgentSpecificity();
       }
-      ApplyRuleDeclarations(rule, specificity, properties, styleBudget, warningSink,
-                            importantResourceColors);
+      ApplyRuleDeclarations(rule, specificity, properties, styleBudget, warningSink);
     }
   }
 }
@@ -764,6 +790,7 @@ void StyleSystem::computePropertiesInto(EntityHandle handle, ComputedStyleCompon
   ApplyContextualFontSize(registry, dataEntity, parentStyle, properties);
   const auto resourceOpacities = ApplyScalarAnimationStyles(registry, dataEntity, parentStyle,
                                                             properties, styleBudget, warningSink);
+  ApplySymbolInstanceDisplay(handle, dataEntity, properties);
   properties.resolveElementColors(warningSink);
   const bool inheritPaint =
       occurrence || parent == entt::null || !registry.all_of<DoNotInheritFillOrStrokeTag>(parent);
@@ -806,10 +833,10 @@ std::vector<MatchedStyleRule> StyleSystem::collectMatchedStyleRules(EntityHandle
   std::vector<MatchedStyleRule> result;
   StyleResourceBudget styleBudget;
   for (auto view = registry.view<StylesheetComponent>(); auto stylesheetEntity : view) {
-    if (!HasSvgNamespace(registry, stylesheetEntity)) {
+    const auto& stylesheet = view.get<StylesheetComponent>(stylesheetEntity);
+    if (!IsApplicableStylesheet(registry, stylesheet, stylesheetEntity, dataEntity)) {
       continue;
     }
-    const auto& stylesheet = view.get<StylesheetComponent>(stylesheetEntity);
     const std::span<const css::SelectorRule> rules = stylesheet.stylesheet.rules();
 
     for (std::size_t ruleIndex = 0; ruleIndex < rules.size(); ++ruleIndex) {

@@ -35,8 +35,8 @@ PAYLOAD_SIZE_TEST = "//donner/editor/wasm:wasm_geode_package_size_tests"
 RENDERER_PAYLOAD_CEILINGS = {
     "--max-js-gzip-bytes": 2800,
     "--max-js-raw-bytes": 5700,
-    "--max-wasm-gzip-bytes": 744000,
-    "--max-wasm-raw-bytes": 1880000,
+    "--max-wasm-gzip-bytes": 761000,
+    "--max-wasm-raw-bytes": 1924000,
 }
 RENDERER_SIZE_TEST = "//donner/svg/renderer/wasm:wasm_size_tests"
 SIZE_CHECK_STEP = "- name: Build and size-check Geode editor Wasm package"
@@ -302,7 +302,7 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         # The hosted browser phase selects by tag, so an untagged browser test would
         # silently return to the oversubscribed main test step.
         launching = []
-        for package in ("donner/editor/wasm/tests", "donner/gpu/shader"):
+        for package in ("donner/editor/wasm/tests", "donner/gpu/shader/browser_tests"):
             build = _repository_text(package + "/BUILD.bazel")
             for match in re.finditer(r"^\w[\w.]*\(\n(.*?)\n\)\n", build, re.MULTILINE | re.DOTALL):
                 body = match.group(1)

@@ -2248,6 +2248,46 @@ TEST(PropertyRegistry, BaselineShiftSpacingAndDasharray) {
   }
 }
 
+TEST(PropertyRegistry, CascadePriorityImportantInlineClearsWithoutClearingExplicitOverrides) {
+  PropertyRegistry registry;
+  registry.parseStyle("fill: red !important; opacity: 0.25 !important; x: 2px !important");
+  EXPECT_TRUE(registry.fill.isSpecified());
+  EXPECT_TRUE(registry.opacity.isSpecified());
+  registry.clearStyleAttributeProperties();
+  EXPECT_FALSE(registry.fill.isSpecified());
+  EXPECT_FALSE(registry.opacity.isSpecified());
+  EXPECT_TRUE(registry.unparsedProperties.empty());
+
+  const PaintServer explicitFill(PaintServer::Solid(Color(RGBA(0, 0, 255, 255))));
+  registry.fill.set(explicitFill, Specificity::Override());
+  registry.parseStyle("fill: red !important");
+  registry.clearStyleAttributeProperties();
+  EXPECT_THAT(registry.fill.get(), Optional(explicitFill));
+  EXPECT_EQ(registry.fill.specificity, Specificity::Override());
+}
+
+TEST(PropertyRegistry, CascadePriorityImportantResourceColorsUseSelectorRankInBothOrders) {
+  for (const std::string_view property : {"stop-color", "flood-color"}) {
+    const auto high =
+        css::CSS::ParseStyleAttribute(std::string(property) + ": red !important").front();
+    const auto low =
+        css::CSS::ParseStyleAttribute(std::string(property) + ": blue !important").front();
+    for (const bool highFirst : {false, true}) {
+      SCOPED_TRACE(std::string(property) + (highFirst ? " high-first" : " low-first"));
+      PropertyRegistry registry;
+      if (highFirst) {
+        EXPECT_EQ(registry.parseProperty(high, Specificity::FromABC(1, 0, 0)), std::nullopt);
+      }
+      EXPECT_EQ(registry.parseProperty(low, Specificity::FromABC(0, 0, 1)), std::nullopt);
+      if (!highFirst) {
+        EXPECT_EQ(registry.parseProperty(high, Specificity::FromABC(1, 0, 0)), std::nullopt);
+      }
+      const auto& color = property == "stop-color" ? registry.stopColor : registry.floodColor;
+      EXPECT_THAT(color.get(), Optional(Color(RGBA(255, 0, 0, 255))));
+    }
+  }
+}
+
 TEST(PropertyRegistry, ResourceColorStyleParsingExposesTypedValues) {
   PropertyRegistry registry;
   registry.parseStyle("flood-color: red; stop-color: lime; lighting-color: blue");

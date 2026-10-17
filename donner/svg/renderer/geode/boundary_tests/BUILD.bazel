@@ -1,0 +1,76 @@
+"""Checks over the production Geode packages that load development-only rule sets.
+
+These tests live outside the production packages so that a module depending on Donner, which sees
+none of Donner's `dev_dependency` repositories, can still load the Geode production closure.
+"""
+
+load("@rules_python//python:defs.bzl", "py_test")
+
+py_test(
+    name = "geode_geometry_fuzzer_routing_tests",
+    srcs = ["GeodeGeometryFuzzerRouting_tests.py"],
+    args = [
+        "$(rootpath //donner/svg/renderer/geode:geode_geometry_fuzzer_routing_manifest)",
+        "$(rootpath //donner/svg/renderer/geode:tests/GeodeSvgGeometryBudget_fuzzer.cc)",
+    ],
+    data = [
+        "//donner/svg/renderer/geode:geode_geometry_fuzzer_routing_manifest",
+        "//donner/svg/renderer/geode:tests/GeodeSvgGeometryBudget_fuzzer.cc",
+    ],
+    main = "GeodeGeometryFuzzerRouting_tests.py",
+)
+
+# Production sources reach every backend through the GPU runtime alone and never name the
+# test-only wgpu reference, and the runtime device source seam stays private to the production
+# package, whose BUILD file the test reads.
+py_test(
+    name = "geode_production_source_boundary_tests",
+    srcs = ["GeodeProductionSourceBoundary_tests.py"],
+    args = [
+        "--build=$(rootpath //donner/svg/renderer/geode:BUILD.bazel)",
+        "$(rootpaths //donner/svg/renderer/geode:geode_production_sources)",
+    ],
+    data = [
+        "//donner/svg/renderer/geode:BUILD.bazel",
+        "//donner/svg/renderer/geode:geode_production_sources",
+    ],
+    main = "GeodeProductionSourceBoundary_tests.py",
+)
+
+# One target from each package that the Geode production closure adds to the default renderer's.
+# `buildfiles` reports those packages' BUILD files and every .bzl file they load, transitively.
+_GEODE_PRODUCTION_PACKAGE_ROOTS = [
+    "//donner/gpu:gpu",
+    "//donner/gpu/metal:metal_device",
+    "//donner/gpu/shader:compiled_shader",
+    "//donner/gpu/shader/wgsl:compiler",
+    "//donner/gpu/vulkan:vulkan_device",
+    "//donner/svg/renderer:renderer_geode",
+    "//donner/svg/renderer/geode:enable_geode",
+]
+
+genquery(
+    name = "geode_production_build_files",
+    testonly = True,
+    expression = "buildfiles(%s)" % " + ".join(_GEODE_PRODUCTION_PACKAGE_ROOTS),
+    scope = _GEODE_PRODUCTION_PACKAGE_ROOTS,
+)
+
+# A module that depends on Donner resolves Donner's loads against its non-development
+# repositories only, so a production package that loads a development-only rule set fails to load
+# for every such module while still loading in Donner's own workspace.
+py_test(
+    name = "geode_consumer_load_tests",
+    size = "small",
+    srcs = ["GeodeConsumerLoads_tests.py"],
+    args = [
+        "--module=$(rootpath //:MODULE.bazel)",
+        "--build-files=$(rootpath :geode_production_build_files)",
+    ],
+    data = [
+        ":geode_production_build_files",
+        "//:MODULE.bazel",
+    ],
+    main = "GeodeConsumerLoads_tests.py",
+    deps = ["//tools:bcr_dependency_closure"],
+)

@@ -153,12 +153,15 @@ TEST(SVGDocument, RenderingDiagnosticsDoesNotBuildOrConsumeRenderingState) {
 TEST(SVGDocument, CanvasSize) {
   SVGDocument document;
   EXPECT_EQ(document.canvasSize(), Vector2i(512, 512));
+  EXPECT_EQ(document.canvasSizeOverride(), std::nullopt);
 
   document.setCanvasSize(100, 200);
   EXPECT_EQ(document.canvasSize(), Vector2i(100, 200));
+  EXPECT_EQ(document.canvasSizeOverride(), std::optional(Vector2i(100, 200)));
 
   document.useAutomaticCanvasSize();
   EXPECT_EQ(document.canvasSize(), Vector2i(512, 512));
+  EXPECT_EQ(document.canvasSizeOverride(), std::nullopt);
 }
 
 TEST(SVGDocument, SetCanvasSizeNoOpDoesNotInvalidateBuiltRenderTree) {

@@ -86,6 +86,7 @@ inline std::ostream& operator<<(std::ostream& os, Combinator combinator) {
     case Combinator::SubsequentSibling: return os << "'~'";
     case Combinator::Column: return os << "'||'";
   }
+  UTILS_UNREACHABLE();
 }
 
 /**

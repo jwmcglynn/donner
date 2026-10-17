@@ -5,6 +5,7 @@
 
 #include <array>
 #include <string>
+#include <utility>
 
 #include "donner/base/ParseWarningSink.h"
 #include "donner/base/tests/ParseResultTestUtils.h"
@@ -20,6 +21,7 @@
 #include "donner/svg/components/DescriptiveTextComponent.h"
 #include "donner/svg/components/ParsedPayloadResourceBudget.h"
 #include "donner/svg/components/StylesheetComponent.h"
+#include "donner/svg/components/resources/ResourceManagerContext.h"
 #include "donner/svg/renderer/RendererUtils.h"
 
 using testing::AllOf;
@@ -49,6 +51,29 @@ TEST(SVGParser, Simple) {
   EXPECT_THAT(SVGParser::ParseSVG(simpleXml, warnings), NoParseError());
 
   EXPECT_THAT(warnings.warnings(), ElementsAre());
+}
+
+TEST(SVGParser, RawInputMetadataAcceptanceRequiresValidUtf8XmlCharacters) {
+  const std::array<std::pair<std::string, bool>, 10> values{{{"ASCII", true},
+                                                             {"\xC3\xA9\xF0\x9F\x99\x82", true},
+                                                             {"\x80", false},
+                                                             {"\xC0\xAF", false},
+                                                             {"\xE2\x82", false},
+                                                             {"\xED\xA0\x80", false},
+                                                             {"\xF4\x90\x80\x80", false},
+                                                             {"\x0B", false},
+                                                             {"\xEF\xBF\xBE", false},
+                                                             {std::string(1, '\0'), false}}};
+  for (size_t index = 0; index < values.size(); ++index) {
+    SCOPED_TRACE(index);
+    const auto& [value, accepted] = values[index];
+    ParseWarningSink warnings;
+    const auto result = SVGParser::ParseSVG(
+        "<svg xmlns='http://www.w3.org/2000/svg'><metadata>" + value + "</metadata></svg>",
+        warnings);
+    EXPECT_EQ(result.hasResult(), accepted);
+    EXPECT_EQ(result.hasError(), !accepted);
+  }
 }
 
 TEST(SVGParser, Svgz) {
@@ -548,13 +573,15 @@ TEST(SVGParser, RootElementNotSvgFails) {
               ParseErrorIs("Unexpected element <foo> at root, first element must be <svg>"));
 }
 
-TEST(SVGParser, UnsupportedDeclaredEncodingIsReported) {
+TEST(SVGParser, UnsupportedDeclaredEncodingFollowsRawByteValidation) {
   ParseWarningSink warnings;
-  EXPECT_THAT(
-      SVGParser::ParseSVG("<?xml version='1.0' encoding='Windows-1251'?>"
-                          "<svg xmlns='http://www.w3.org/2000/svg'><text>\xCF\xF0</text></svg>",
-                          warnings),
-      ParseErrorIs(testing::HasSubstr("Unsupported XML encoding")));
+  constexpr std::string_view prefix =
+      "<?xml version='1.0' encoding='Windows-1251'?>"
+      "<svg xmlns='http://www.w3.org/2000/svg'><text>";
+  EXPECT_THAT(SVGParser::ParseSVG(std::string(prefix) + "ASCII</text></svg>", warnings),
+              ParseErrorIs(testing::HasSubstr("Unsupported XML encoding")));
+  EXPECT_THAT(SVGParser::ParseSVG(std::string(prefix) + "\xCF\xF0</text></svg>", warnings),
+              ParseErrorIs("Invalid UTF-8 sequence"));
 }
 
 TEST(SVGParser, UnknownElementInSvgNamespace) {
@@ -930,7 +957,7 @@ TEST(SVGParser, SubDocumentParseErrorsReportedAsWarnings) {
                                        testing::HasSubstr("Unexpected element <notsvg> at root"))));
 }
 
-TEST(SVGParser, SecureStaticModeDisablesSubDocumentParsing) {
+TEST(SVGParser, SecureStaticModeParsesDataSubDocuments) {
   const std::string_view source(
       R"(<svg xmlns="http://www.w3.org/2000/svg">
            <image href="data:image/svg+xml;base64,PG5vdHN2Zy8+" width="10" height="10"/>
@@ -948,9 +975,229 @@ TEST(SVGParser, SecureStaticModeDisablesSubDocumentParsing) {
   SVGDocument document = result.result();
   RendererUtils::prepareDocumentForRendering(document, /*verbose*/ false, renderWarnings);
 
-  // In SecureStatic mode resource loading is skipped entirely (SVG2 section 2.7.1): the
-  // sub-document is not parsed and no warnings are produced.
-  EXPECT_THAT(renderWarnings.warnings(), ElementsAre());
+  EXPECT_THAT(
+      renderWarnings.warnings(),
+      testing::Contains(testing::Field(&ParseDiagnostic::reason,
+                                       testing::HasSubstr("Unexpected element <notsvg> at root"))));
 }
+
+namespace {
+
+std::string SvgDataUrl(std::string_view source) {
+  constexpr char kHex[] = "0123456789ABCDEF";
+  std::string result = "data:image/svg+xml,";
+  for (const unsigned char byte : source) {
+    result += '%';
+    result += kHex[byte >> 4];
+    result += kHex[byte & 15];
+  }
+  return result;
+}
+
+std::string SvgImageDocument(std::string_view uri) {
+  return "<svg xmlns='http://www.w3.org/2000/svg'><image id='image' href='" + std::string(uri) +
+         "' width='8' height='8'/></svg>";
+}
+
+class NestedSvgOptionsTest : public testing::TestWithParam<ProcessingMode> {
+protected:
+  ParseResult<SVGDocument> parseParent(std::string_view uri, SVGParser::Options options = {},
+                                       SVGDocument::Settings settings = {}) {
+    settings.processingMode = GetParam();
+    return SVGParser::ParseSVG(SvgImageDocument(uri), warnings_, options, std::move(settings));
+  }
+
+  SVGDocumentHandle loadChild(SVGDocument& document) {
+    document.registry().ctx().get<components::ResourceManagerContext>().loadResources(warnings_);
+    auto image = document.querySelector("#image");
+    if (!image) {
+      ADD_FAILURE() << "The parent image must survive parsing";
+      return {};
+    }
+    const auto* loaded = image->entityHandle().try_get<components::LoadedSVGImageComponent>();
+    return loaded ? loaded->subDocument : SVGDocumentHandle{};
+  }
+
+  ParseWarningSink warnings_;
+};
+
+TEST_P(NestedSvgOptionsTest, TreeNodeLimitAppliesToDataChild) {
+  const std::string uri =
+      SvgDataUrl("<svg xmlns='http://www.w3.org/2000/svg'><rect/><circle/></svg>");
+  SVGParser::Options options;
+  options.maximumTreeNodes = 2;
+  auto parent = parseParent(uri, options);
+  ASSERT_THAT(parent, NoParseError());
+  EXPECT_FALSE(loadChild(parent.result()));
+  EXPECT_THAT(warnings_.warnings(),
+              testing::Contains(
+                  testing::Field(&ParseDiagnostic::reason, testing::HasSubstr("element count"))));
+  auto unrestricted = parseParent(uri);
+  ASSERT_THAT(unrestricted, NoParseError());
+  EXPECT_TRUE(loadChild(unrestricted.result()));
+}
+
+TEST_P(NestedSvgOptionsTest, TreeDepthLimitAppliesToDataChild) {
+  const std::string uri =
+      SvgDataUrl("<svg xmlns='http://www.w3.org/2000/svg'><g><rect/></g></svg>");
+  SVGParser::Options options;
+  options.maximumTreeDepth = 2;
+  auto parent = parseParent(uri, options);
+  ASSERT_THAT(parent, NoParseError());
+  EXPECT_FALSE(loadChild(parent.result()));
+  EXPECT_THAT(warnings_.warnings(), testing::Contains(testing::Field(&ParseDiagnostic::reason,
+                                                                     testing::HasSubstr("depth"))));
+  auto unrestricted = parseParent(uri);
+  ASSERT_THAT(unrestricted, NoParseError());
+  EXPECT_TRUE(loadChild(unrestricted.result()));
+}
+
+TEST_P(NestedSvgOptionsTest, ExpandedInputLimitAppliesToDataChild) {
+  // SVGZ expands to a namespace-qualified SVG containing 1024 'A' bytes in a desc element.
+  constexpr std::string_view kUri =
+      "data:image/svg+xml;base64,"
+      "H4sIAAAAAAAC/7MpLktXqMjNySu2Vc8oKSmw0tcvLy/XKzfWyy9K1zcyMDDQB6pQt7NJSS1OtnMcBaNg"
+      "FIxYYKMPLgZsQGWCHQCOY7VtOwQAAA==";
+  SVGParser::Options options;
+  options.maximumInputSize = 512;
+  ASSERT_LT(SvgImageDocument(kUri).size(), options.maximumInputSize);
+  auto parent = parseParent(kUri, options);
+  ASSERT_THAT(parent, NoParseError());
+  EXPECT_FALSE(loadChild(parent.result()));
+  EXPECT_THAT(warnings_.warnings(),
+              testing::Contains(testing::Field(&ParseDiagnostic::reason,
+                                               testing::HasSubstr("maximum input size"))));
+  auto unrestricted = parseParent(kUri);
+  ASSERT_THAT(unrestricted, NoParseError());
+  EXPECT_TRUE(loadChild(unrestricted.result()));
+}
+
+TEST_P(NestedSvgOptionsTest, ContentProjectionLimitAppliesToDataChild) {
+  const std::string uri = SvgDataUrl(
+      "<svg xmlns='http://www.w3.org/2000/svg'><text id='t'>one<![CDATA[two]]></text></svg>");
+  SVGParser::Options options;
+  options.maximumContentProjectionChunks = 1;
+  auto parent = parseParent(uri, options);
+  ASSERT_THAT(parent, NoParseError());
+  auto childHandle = loadChild(parent.result());
+  ASSERT_TRUE(childHandle);
+  auto child = SVGDocument::CreateFromHandle(childHandle);
+  ASSERT_TRUE(child.querySelector("#t"));
+  EXPECT_TRUE(child.querySelector("#t")->cast<SVGTextElement>().textContent().empty());
+  EXPECT_TRUE(child.registry()
+                  .ctx()
+                  .get<components::ParsedPayloadResourceBudget>()
+                  .securityStats()
+                  .rejected);
+  EXPECT_THAT(warnings_.warnings(),
+              testing::Contains(testing::Field(&ParseDiagnostic::reason,
+                                               testing::HasSubstr("content-projection budget"))));
+}
+
+TEST_P(NestedSvgOptionsTest, LocalPayloadLimitSurvivesLargerSuppliedFamily) {
+  const std::string uri = SvgDataUrl("<svg xmlns='http://www.w3.org/2000/svg'><style>" +
+                                     std::string(128, ' ') + "rect { fill: green; }</style></svg>");
+  SVGParser::Options options;
+  options.maximumParsedPayloadSize = 64 * 1024;
+  auto family = std::make_shared<components::DocumentResourceFamilyBudget>();
+  SVGDocument::Settings settings;
+  settings.resourceFamilyBudget = family;
+  auto parent = parseParent(uri, options, std::move(settings));
+  ASSERT_THAT(parent, NoParseError());
+  EXPECT_FALSE(parent.result()
+                   .registry()
+                   .ctx()
+                   .get<components::ParsedPayloadResourceBudget>()
+                   .securityStats()
+                   .rejected);
+  auto childHandle = loadChild(parent.result());
+  ASSERT_TRUE(childHandle);
+  auto child = SVGDocument::CreateFromHandle(childHandle);
+  EXPECT_EQ(child.registry().ctx().get<components::DocumentResourceFamilyContext>().budget, family);
+  EXPECT_TRUE(child.registry()
+                  .ctx()
+                  .get<components::ParsedPayloadResourceBudget>()
+                  .securityStats()
+                  .rejected);
+  EXPECT_THAT(warnings_.warnings(),
+              testing::Contains(testing::Field(&ParseDiagnostic::reason,
+                                               testing::HasSubstr("parsed-payload budget"))));
+}
+
+TEST_P(NestedSvgOptionsTest, LimitSnapshotReachesGrandchild) {
+  const std::string grandchild = "<svg xmlns='http://www.w3.org/2000/svg'><rect/><circle/></svg>";
+  const std::string childSource = SvgImageDocument(SvgDataUrl(grandchild));
+  SVGParser::Options options;
+  options.maximumTreeNodes = 2;
+  auto parent = parseParent(SvgDataUrl(childSource), options);
+  ASSERT_THAT(parent, NoParseError());
+  options.maximumTreeNodes = SVGParser::kDefaultMaximumTreeNodes;
+  auto childHandle = loadChild(parent.result());
+  ASSERT_TRUE(childHandle);
+  auto child = SVGDocument::CreateFromHandle(childHandle);
+  EXPECT_FALSE(loadChild(child));
+  EXPECT_THAT(warnings_.warnings(),
+              testing::Contains(
+                  testing::Field(&ParseDiagnostic::reason, testing::HasSubstr("element count"))));
+}
+
+TEST_P(NestedSvgOptionsTest, FeatureAndAttributeOptionsReachGrandchild) {
+  const std::string grandchild =
+      "<svg xmlns='http://www.w3.org/2000/svg'><animate id='a' attributeName='x'/>"
+      "<rect id='r' user-attribute='value'/></svg>";
+  SVGParser::Options options;
+  options.enableExperimental = true;
+  options.disableUserAttributes = true;
+  auto parent = parseParent(SvgDataUrl(SvgImageDocument(SvgDataUrl(grandchild))), options);
+  ASSERT_THAT(parent, NoParseError());
+  auto childHandle = loadChild(parent.result());
+  ASSERT_TRUE(childHandle);
+  auto child = SVGDocument::CreateFromHandle(childHandle);
+  auto grandchildHandle = loadChild(child);
+  ASSERT_TRUE(grandchildHandle);
+  auto nested = SVGDocument::CreateFromHandle(grandchildHandle);
+  ASSERT_TRUE(nested.querySelector("#a"));
+  EXPECT_EQ(nested.querySelector("#a")->type(), ElementType::Animate);
+  ASSERT_TRUE(nested.querySelector("#r"));
+  EXPECT_EQ(nested.querySelector("#r")->getAttribute("user-attribute"), std::nullopt);
+}
+
+TEST_P(NestedSvgOptionsTest, InlineParentDoesNotMakeDataChildInline) {
+  SVGParser::Options options;
+  options.parseAsInlineSVG = true;
+  auto parent = parseParent(SvgDataUrl("<svg><rect/></svg>"), options);
+  ASSERT_THAT(parent, NoParseError());
+  EXPECT_FALSE(loadChild(parent.result()));
+  EXPECT_THAT(warnings_.warnings(),
+              testing::Contains(testing::Field(&ParseDiagnostic::reason,
+                                               testing::HasSubstr("empty namespace URI"))));
+}
+
+TEST_P(NestedSvgOptionsTest, ExplicitCallbackRetainsItsOwnParsingPolicy) {
+  const std::string childSource = "<svg xmlns='http://www.w3.org/2000/svg'><rect/><circle/></svg>";
+  int callbackCount = 0;
+  SVGDocument suppliedChild;
+  SVGDocument::Settings settings;
+  settings.svgParseCallback = [&callbackCount, &childSource, &suppliedChild](
+                                  const std::vector<uint8_t>& bytes,
+                                  ParseWarningSink&) -> std::optional<SVGDocumentHandle> {
+    ++callbackCount;
+    EXPECT_EQ(std::string(bytes.begin(), bytes.end()), childSource);
+    return suppliedChild.handle();
+  };
+  SVGParser::Options options;
+  options.maximumTreeNodes = 2;
+  auto parent = parseParent(SvgDataUrl(childSource), options, std::move(settings));
+  ASSERT_THAT(parent, NoParseError());
+  EXPECT_EQ(loadChild(parent.result()), suppliedChild.handle());
+  EXPECT_EQ(callbackCount, 1);
+}
+
+INSTANTIATE_TEST_SUITE_P(ProcessingModes, NestedSvgOptionsTest,
+                         testing::Values(ProcessingMode::DynamicInteractive,
+                                         ProcessingMode::SecureStatic,
+                                         ProcessingMode::SecureAnimated));
+
+}  // namespace
 
 }  // namespace donner::svg::parser

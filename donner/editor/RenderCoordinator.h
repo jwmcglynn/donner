@@ -358,6 +358,11 @@ public:
   [[nodiscard]] bool documentPixelCaptureUnavailable() const { return captureUnavailable_; }
   /// Wake deadline for an armed picker waiting on a delayed semantic canvas-size commit.
   [[nodiscard]] std::optional<float> nextPixelCaptureCanvasCommitWakeSeconds() const;
+  /// Seconds until deferred viewport work is eligible, absent while its worker is busy.
+  /// Registers a completion wake before hiding a deadline behind speculative warmup.
+  [[nodiscard]] std::optional<float> nextViewportSettleWakeSeconds();
+  /// Pure pending-work observation, including deadlines hidden behind a busy worker.
+  [[nodiscard]] bool hasPendingViewportSettle() const { return viewportSettleDue_.has_value(); }
   /// Wake deadline for the paced re-render of a request whose result had nothing to present.
   [[nodiscard]] std::optional<float> nextNothingToPresentRetryWakeSeconds() const;
   /// Whether a renderer-presentation setting still needs a worker frame.
@@ -454,11 +459,14 @@ public:
   /// @param textures Optional cache for viewport-coverage diagnostics.
   /// @param supersedeInFlight Whether an in-flight worker render may be replaced.
   /// @param directSurfaceSelectionDetail Reserved; scheduling currently ignores this value.
+  /// @param pendingCanvasSelectionPress Buffered canvas selection input not yet consumed by the
+  /// tool.
   /// @return True only when a new worker request was posted.
   bool maybeRequestRender(
       EditorApp& app, SelectTool& selectTool, const ViewportState& viewport,
       GlTextureCache* textures = nullptr, bool supersedeInFlight = false,
-      SelectionChromeDetail directSurfaceSelectionDetail = SelectionChromeDetail::Full);
+      SelectionChromeDetail directSurfaceSelectionDetail = SelectionChromeDetail::Full,
+      bool pendingCanvasSelectionPress = false);
   /// Record document-flush invalidation that depends on the live selected element.
   ///
   /// @param app Editor application state containing the live selection.
@@ -544,7 +552,8 @@ private:
     bool forceRasterization = false;
   };
   CanvasCommitPlan prepareCanvasCommit(const EditorRasterViewport& rasterViewport,
-                                       Vector2i actualDocumentCanvas, bool hasActiveDrag);
+                                       Vector2i actualDocumentCanvas, bool hasActiveDrag,
+                                       bool pendingCanvasSelectionPress);
   bool needsOverviewForRender(EditorApp& app, const EditorRasterViewport& rasterViewport,
                               bool hasActiveDrag, const GlTextureCache* textures,
                               bool willCommitCanvas);
@@ -614,11 +623,11 @@ private:
                                     const EditorRasterViewport& rasterViewport) const;
   void recordPixelCaptureRequest(const RenderRequest& request,
                                  const DocumentPixelCaptureIdentity& desired);
-  void noteCanvasSizeCommitForPixelCapture(const EditorApp& app, const ViewportState& viewport,
-                                           DocumentPixelCaptureIdentity* desired,
-                                           bool* captureNeeded, bool* forcePresentationRefresh);
-  void updatePixelCaptureCanvasCommitWake(bool wouldChange, bool firstCommit,
-                                          bool deferForActiveDrag);
+  void noteCanvasSizeCommit(const EditorApp& app, const ViewportState& viewport,
+                            DocumentPixelCaptureIdentity* desired, bool* captureNeeded,
+                            bool* forcePresentationRefresh);
+  void noteSelectedViewportDeferral(bool deferred);
+  void updateCanvasCommitWakes(bool wouldChange, bool firstCommit, bool deferForActiveDrag);
   [[nodiscard]] Entity selectedCompositedEntity(EditorApp& app) const;
   [[nodiscard]] bool activeDragNeedsRenderedPresentation(
       EditorApp& app, const std::optional<SelectTool::ActiveDragPreview>& dragPreview,
@@ -762,6 +771,7 @@ private:
   std::optional<DocumentPixelCaptureIdentity> requestedPixelCapture_;
   std::optional<DocumentPixelCapture> documentPixelCapture_;
   std::optional<std::chrono::steady_clock::time_point> pixelCaptureCanvasCommitDue_;
+  std::optional<std::chrono::steady_clock::time_point> viewportSettleDue_;
   FrameCostBreakdown lastFrameCostBreakdown_;
   /// Cumulative canvas-size commits; see `documentCanvasCommitTotal`.
   std::uint64_t documentCanvasCommitTotal_ = 0;

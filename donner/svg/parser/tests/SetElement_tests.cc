@@ -9,6 +9,7 @@
 #include "donner/svg/components/animation/AnimationSystem.h"
 #include "donner/svg/components/animation/AnimationTimingComponent.h"
 #include "donner/svg/components/animation/SetAnimationComponent.h"
+#include "donner/svg/components/resources/ResourceManagerContext.h"
 #include "donner/svg/parser/SVGParser.h"
 #include "donner/svg/properties/PropertyRegistry.h"
 #include "donner/svg/renderer/RendererUtils.h"
@@ -129,6 +130,48 @@ TEST(SVGSetElement, ParseFillFreeze) {
   auto entity = *view.begin();
   auto& timing = registry.get<components::AnimationTimingComponent>(entity);
   EXPECT_EQ(timing.fill, components::AnimationFill::Freeze);
+}
+
+TEST(SVGSetElement, ProcessingModesControlAnimationEvaluation) {
+  constexpr std::string_view kSource =
+      "<svg xmlns='http://www.w3.org/2000/svg'><rect id='r' fill='red'>"
+      "<set attributeName='fill' to='blue' begin='0s' dur='1s' fill='freeze'/></rect></svg>";
+  for (const ProcessingMode mode : {ProcessingMode::DynamicInteractive,
+                                    ProcessingMode::SecureStatic, ProcessingMode::SecureAnimated}) {
+    SCOPED_TRACE(static_cast<int>(mode));
+    SVGDocument::Settings settings;
+    settings.processingMode = mode;
+    parser::SVGParser::Options options;
+    options.enableExperimental = true;
+    ParseWarningSink warnings;
+    auto parsed = parser::SVGParser::ParseSVG(kSource, warnings, options, std::move(settings));
+    ASSERT_THAT(parsed, NoParseError());
+    auto& registry = parsed.result().registry();
+    components::AnimationSystem().advance(registry, 0.0);
+    const auto* values =
+        registry.try_get<components::AnimatedValuesComponent>(EntityById(parsed.result(), "#r"));
+    if (mode == ProcessingMode::SecureStatic) {
+      EXPECT_EQ(values, nullptr);
+    } else {
+      ASSERT_NE(values, nullptr);
+      ASSERT_TRUE(values->overrides.contains("fill"));
+      EXPECT_EQ(values->overrides.at("fill"), "blue");
+    }
+  }
+}
+
+TEST(SVGSetElement, SecureStaticClearsPreviouslySampledOverrides) {
+  auto document = parseSVGWithExperimental(
+      "<svg xmlns='http://www.w3.org/2000/svg'><rect id='r' fill='red'>"
+      "<set attributeName='fill' to='blue' begin='0s' dur='1s' fill='freeze'/></rect></svg>");
+  auto& registry = document.registry();
+  const Entity target = EntityById(document, "#r");
+  components::AnimationSystem().advance(registry, 0.0);
+  ASSERT_NE(registry.try_get<components::AnimatedValuesComponent>(target), nullptr);
+  registry.ctx().get<components::ResourceManagerContext>().setProcessingMode(
+      ProcessingMode::SecureStatic);
+  components::AnimationSystem().advance(registry, 0.0);
+  EXPECT_EQ(registry.try_get<components::AnimatedValuesComponent>(target), nullptr);
 }
 
 TEST(SVGSetElement, AnimationBeforeBeginTime) {

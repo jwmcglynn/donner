@@ -161,6 +161,10 @@ bool NeedsExternalLoader(std::string_view uri) {
   return !uri.empty() && !uri.starts_with("data:") && !uri.starts_with("#");
 }
 
+bool IsBlockedImageReference(const ImageComponent* image, bool allowExternalResources) {
+  return image != nullptr && !allowExternalResources && NeedsExternalLoader(image->href);
+}
+
 bool HasExternalImagesToLoad(Registry& registry) {
   for (auto view = registry.view<ImageComponent>(); auto entity : view) {
     if (registry.all_of<LoadedImageComponent>(entity) ||
@@ -198,6 +202,7 @@ SubDocumentCache& PrepareSubDocumentCache(Registry& registry) {
     registry.ctx().emplace<SubDocumentCache>();
   }
   auto& cache = registry.ctx().get<SubDocumentCache>();
+  cache.bindFamily(registry);
   cache.setRootEntityCount(registry.storage<Entity>().size());
   if (const auto* payload = registry.ctx().find<ParsedPayloadResourceBudget>()) {
     cache.setRootPayloadBytes(payload->securityStats().retainedBytes);
@@ -208,6 +213,9 @@ SubDocumentCache& PrepareSubDocumentCache(Registry& registry) {
 bool AttachCachedSubDocument(Registry& registry, Entity entity, const RcString& href) {
   auto* cache = registry.ctx().find<SubDocumentCache>();
   if (!cache) {
+    return false;
+  }
+  if (!cache->bindFamily(registry)) {
     return false;
   }
   auto cachedDocument = cache->get(href);
@@ -244,6 +252,31 @@ void LoadSvgImage(Registry& registry, Entity entity, const ImageComponent& image
   registry.emplace<LoadedImageComponent>(entity);
 }
 
+ImageLoader::Result LoadBudgetedImage(Registry& registry, ResourceLoaderInterface& loader,
+                                      std::string_view href, size_t& remainingResourceBytes,
+                                      std::shared_ptr<DecodedImageReservation>& reservation) {
+  size_t decodedLimit = ImageLoader::kDefaultMaximumDecodedImageSize;
+  if (const auto* context = registry.ctx().find<DocumentResourceFamilyContext>();
+      context != nullptr && context->budget) {
+    decodedLimit =
+        std::min(decodedLimit,
+                 context->budget->availableBytes(DocumentResourceFamilyBudget::Kind::DecodedImage));
+    reservation = DecodedImageReservation::Create(context->budget, decodedLimit);
+    if (!reservation) {
+      return UrlLoaderError::ResourceTooLarge;
+    }
+  }
+  ImageLoader imageLoader(loader, UrlLoader::kDefaultMaximumResourceSize, &remainingResourceBytes,
+                          decodedLimit);
+  auto result = imageLoader.fromUri(href);
+  if (const auto* pixels = std::get_if<ImageResource>(&result); pixels != nullptr && reservation) {
+    reservation->shrinkTo(pixels->data.size());
+  } else {
+    reservation.reset();
+  }
+  return result;
+}
+
 void LoadImageEntity(Registry& registry, Entity entity, ResourceLoaderInterface& loader,
                      const SubDocumentCache::ParseCallback& svgParseCallback,
                      size_t& remainingResourceBytes, std::unordered_set<RcString>& failedUrls,
@@ -266,8 +299,9 @@ void LoadImageEntity(Registry& registry, Entity entity, ResourceLoaderInterface&
     return;
   }
 
-  ImageLoader imageLoader(loader, UrlLoader::kDefaultMaximumResourceSize, &remainingResourceBytes);
-  auto imageResult = imageLoader.fromUri(image.href);
+  std::shared_ptr<DecodedImageReservation> reservation;
+  auto imageResult =
+      LoadBudgetedImage(registry, loader, image.href, remainingResourceBytes, reservation);
   if (const auto* error = std::get_if<UrlLoaderError>(&imageResult)) {
     warningSink.add(
         ParseDiagnostic::Error(RcString(std::string(ToString(*error))), FileOffset::Offset(0)));
@@ -280,15 +314,20 @@ void LoadImageEntity(Registry& registry, Entity entity, ResourceLoaderInterface&
                  failedUrls, warningSink);
     return;
   }
-  registry.emplace<LoadedImageComponent>(entity, std::get<ImageResource>(std::move(imageResult)));
+  registry.emplace<LoadedImageComponent>(entity, std::get<ImageResource>(std::move(imageResult)),
+                                         std::move(reservation));
 }
 
 void LoadImages(Registry& registry, ResourceLoaderInterface& loader,
                 const SubDocumentCache::ParseCallback& svgParseCallback,
                 size_t& remainingResourceBytes, std::unordered_set<RcString>& failedUrls,
                 ResourceManagerContext::FetchSecurityStats& securityStats,
-                ParseWarningSink& warningSink) {
+                bool allowExternalResources, ParseWarningSink& warningSink) {
   for (auto view = registry.view<ImageComponent>(); auto entity : view) {
+    // Secure-mode external references must not consult either the loader or a warmed cache.
+    if (IsBlockedImageReference(&view.get<ImageComponent>(entity), allowExternalResources)) {
+      continue;
+    }
     LoadImageEntity(registry, entity, loader, svgParseCallback, remainingResourceBytes, failedUrls,
                     securityStats, warningSink);
   }
@@ -356,13 +395,14 @@ void ResourceManagerContext::setResourceLoader(std::unique_ptr<ResourceLoaderInt
 }
 
 void ResourceManagerContext::loadResources(ParseWarningSink& warningSink) {
-  // In SecureStatic mode, sub-documents are not allowed to load external resources (SVG2 §2.7.1).
+  NullResourceLoader nullLoader;
   if (processingMode_ == ProcessingMode::SecureStatic ||
       processingMode_ == ProcessingMode::SecureAnimated) {
+    LoadImages(registry_, nullLoader, svgParseCallback_, remainingResourceBytes_, failedImageUrls_,
+               fetchSecurityStats_, false, warningSink);
     return;
   }
 
-  NullResourceLoader nullLoader;
   WriteAccessGuardedResourceLoader guardedLoader(
       registry_, loader_ ? *loader_ : static_cast<ResourceLoaderInterface&>(nullLoader));
   ResourceLoaderInterface& uncappedLoader =
@@ -379,7 +419,7 @@ void ResourceManagerContext::loadResources(ParseWarningSink& warningSink) {
   }
 
   LoadImages(registry_, cachedLoader, svgParseCallback_, remainingResourceBytes_, failedImageUrls_,
-             fetchSecurityStats_, warningSink);
+             fetchSecurityStats_, true, warningSink);
   LoadFontFaces(fontFaces_, fontFaceIndexesToLoad_, loader_ != nullptr, cachedLoader,
                 remainingResourceBytes_, warningSink);
 
@@ -418,15 +458,7 @@ std::optional<SVGDocumentHandle> ResourceManagerContext::loadExternalSVG(
     return std::nullopt;
   }
 
-  // Get or create the SubDocumentCache.
-  if (!registry_.ctx().contains<SubDocumentCache>()) {
-    registry_.ctx().emplace<SubDocumentCache>();
-  }
-  auto& cache = registry_.ctx().get<SubDocumentCache>();
-  cache.setRootEntityCount(registry_.storage<Entity>().size());
-  if (const auto* payload = registry_.ctx().find<ParsedPayloadResourceBudget>()) {
-    cache.setRootPayloadBytes(payload->securityStats().retainedBytes);
-  }
+  auto& cache = PrepareSubDocumentCache(registry_);
 
   // Check if already cached.
   if (auto cached = cache.get(boundedUrl)) {
@@ -512,12 +544,14 @@ std::optional<Vector2i> ResourceManagerContext::getImageSize(Entity entity) cons
 }
 
 const LoadedImageComponent* ResourceManagerContext::getLoadedImageComponent(Entity entity) const {
-  // For now, skip the entity if there is already a LoadedImageComponent.
+  const auto* image = registry_.try_get<ImageComponent>(entity);
+  const bool allowExternalResources = processingMode_ == ProcessingMode::DynamicInteractive;
+  if (IsBlockedImageReference(image, allowExternalResources)) {
+    return nullptr;
+  }
   if (const auto* loadedImage = registry_.try_get<LoadedImageComponent>(entity)) {
     return loadedImage;
   }
-
-  const auto* image = registry_.try_get<ImageComponent>(entity);
   if (!image) {
     return nullptr;
   }
@@ -535,12 +569,15 @@ const LoadedImageComponent* ResourceManagerContext::getLoadedImageComponent(Enti
   BudgetedCachingResourceLoader cachedLoader(
       uncappedLoader, externalFetchCache_, fetchSecurityStats_, remainingResourceFetchAttempts_,
       UrlLoader::kDefaultMaximumResourceSize, remainingResourceBytes_);
-  ImageLoader imageLoader(cachedLoader, UrlLoader::kDefaultMaximumResourceSize,
-                          &remainingResourceBytes_);
-
-  auto imageResult = imageLoader.fromUri(image->href);
+  ResourceLoaderInterface& imageLoader = allowExternalResources
+                                             ? static_cast<ResourceLoaderInterface&>(cachedLoader)
+                                             : static_cast<ResourceLoaderInterface&>(nullLoader);
+  std::shared_ptr<DecodedImageReservation> reservation;
+  auto imageResult =
+      LoadBudgetedImage(registry_, imageLoader, image->href, remainingResourceBytes_, reservation);
   if (std::holds_alternative<ImageResource>(imageResult)) {
-    return &registry_.emplace<LoadedImageComponent>(entity, std::get<ImageResource>(imageResult));
+    return &registry_.emplace<LoadedImageComponent>(
+        entity, std::get<ImageResource>(std::move(imageResult)), std::move(reservation));
   }
 
   if (failedImageUrls_.size() < kMaximumResourceFetchAttempts) {

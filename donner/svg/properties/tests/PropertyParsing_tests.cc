@@ -29,6 +29,44 @@ css::ComponentValue makeToken(css::Token::TokenValue&& value) {
 
 }  // namespace
 
+namespace {
+css::Specificity CascadeImportantRank(css::Specificity base) {
+  css::Declaration declaration("fill");
+  declaration.important = true;
+  return PropertyParseFnParams::Create(declaration, base).specificity;
+}
+}  // namespace
+
+TEST(PropertyParsingTest, CascadePriorityImportantRetainsSelectorAbc) {
+  const auto high = CascadeImportantRank(css::Specificity::FromABC(1, 2, 3));
+  const auto low = CascadeImportantRank(css::Specificity::FromABC(1, 2, 2));
+  EXPECT_EQ(high.abc().a, 1u);
+  EXPECT_EQ(high.abc().b, 2u);
+  EXPECT_EQ(high.abc().c, 3u);
+  EXPECT_GT(high, low);
+}
+
+TEST(PropertyParsingTest, CascadePriorityImportantRetainsInlineAndUserAgentOrigins) {
+  const auto selector = CascadeImportantRank(css::Specificity::FromABC(100, 100, 100));
+  const auto inlineStyle = CascadeImportantRank(css::Specificity::StyleAttribute());
+  const auto userAgent = CascadeImportantRank(css::Specificity().toUserAgentSpecificity());
+  EXPECT_GT(inlineStyle, selector);
+  EXPECT_GT(userAgent, inlineStyle);
+}
+
+TEST(PropertyParsingTest, CascadePriorityPromotionIsIdempotentAndPreservesOverride) {
+  const auto rank = CascadeImportantRank(css::Specificity::FromABC(1, 2, 3));
+  EXPECT_EQ(CascadeImportantRank(rank), rank);
+  EXPECT_EQ(CascadeImportantRank(css::Specificity::Override()), css::Specificity::Override());
+}
+
+TEST(PropertyParsingTest, CascadePriorityImportantBeatsNormalAndEqualRanksStayEqual) {
+  const auto rank = CascadeImportantRank(css::Specificity::FromABC(0, 0, 1));
+  EXPECT_GT(rank, css::Specificity::StyleAttribute());
+  EXPECT_LT(css::Specificity::FromABC(100, 100, 100), rank);
+  EXPECT_EQ(rank, CascadeImportantRank(css::Specificity::FromABC(0, 0, 1)));
+}
+
 // --- ParseAlphaValue ---
 
 TEST(PropertyParsingTest, ParseAlphaValueNumber) {

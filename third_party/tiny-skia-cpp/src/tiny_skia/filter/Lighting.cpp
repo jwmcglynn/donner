@@ -254,7 +254,7 @@ void diffuseLighting(const Pixmap& src, Pixmap& dst, const DiffuseLightingParams
       computeNormal(src, x, y, params.surfaceScale, nx, ny, nz);
       normalize3(nx, ny, nz);
 
-      double lx, ly, lz;
+      double lx = 0.0, ly = 0.0, lz = 0.0;
       double spotFactor = 1.0;
 
       switch (params.light.type) {
@@ -325,7 +325,7 @@ void specularLighting(const Pixmap& src, Pixmap& dst, const SpecularLightingPara
       computeNormal(src, x, y, params.surfaceScale, nx, ny, nz);
       normalize3(nx, ny, nz);
 
-      double lx, ly, lz;
+      double lx = 0.0, ly = 0.0, lz = 0.0;
       double spotFactor = 1.0;
 
       switch (params.light.type) {
@@ -494,7 +494,7 @@ void diffuseLighting(const FloatPixmap& src, FloatPixmap& dst,
       computeNormalFloat(src, x, y, params.surfaceScale, nx, ny, nz);
       normalize3(nx, ny, nz);
 
-      double lx, ly, lz;
+      double lx = 0.0, ly = 0.0, lz = 0.0;
       double spotFactor = 1.0;
 
       switch (params.light.type) {
@@ -561,7 +561,7 @@ void specularLighting(const FloatPixmap& src, FloatPixmap& dst,
       computeNormalFloat(src, x, y, params.surfaceScale, nx, ny, nz);
       normalize3(nx, ny, nz);
 
-      double lx, ly, lz;
+      double lx = 0.0, ly = 0.0, lz = 0.0;
       double spotFactor = 1.0;
 
       switch (params.light.type) {

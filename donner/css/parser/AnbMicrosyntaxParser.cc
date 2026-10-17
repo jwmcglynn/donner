@@ -304,7 +304,7 @@ private:
   }
 
   void skipWhitespace() {
-    const int numSkipped = skipWhitespace(0);
+    const std::size_t numSkipped = skipWhitespace(0);
     components_ = components_.subspan(numSkipped);
   }
 
@@ -439,7 +439,7 @@ private:
     return ParseDiagnostic::Error("Unexpected token when parsing An+B microsyntax", tokenOffset);
   }
 
-  int skipWhitespace(int nextToken) {
+  std::size_t skipWhitespace(std::size_t nextToken) {
     while (nextToken < components_.size() && components_[nextToken].isToken<Token::Whitespace>()) {
       nextToken++;
     }

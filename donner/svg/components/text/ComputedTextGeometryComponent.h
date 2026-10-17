@@ -44,7 +44,7 @@ struct ComputedTextGeometryComponent {
     Box2d extent = Box2d();                     ///< Character ink bounds in local coords.
     double rotation = 0.0;                      ///< Rotation in degrees.
     double advance = 0.0;                       ///< Advance magnitude.
-    bool rendered = false;                      ///< True if any glyph geometry was produced.
+    bool rendered = false;                      ///< True if a logical positioned record exists.
     bool hasExtent = false;                     ///< True if extent contains real glyph bounds.
   };
 

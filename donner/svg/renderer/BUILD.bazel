@@ -445,7 +445,10 @@ donner_cc_library(
         "//conditions:default": ["@platforms//:incompatible"],
     }),
     visibility = ["//visibility:public"],
-    deps = _RENDERER_GEODE_COMMON_DEPS + ["//donner/svg/renderer/geode:geode_device"],
+    deps = _RENDERER_GEODE_COMMON_DEPS + [
+        "//donner/svg/renderer/geode:geode_device",
+        "//donner/svg/renderer/geode:geode_gpu_wait",
+    ],
 )
 
 no_rust_dependency_audit_test(

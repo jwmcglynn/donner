@@ -1,6 +1,8 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
@@ -22,6 +24,24 @@ Image RedImage() {
 
 ImageView View(const Image& image) {
   return {image.width, image.height, image.strideInPixels, image.data};
+}
+
+Image WithRowPadding(const Image& image, size_t stride, uint8_t padding) {
+  Image result{image.width, image.height, stride,
+               std::vector<uint8_t>(stride * image.height * 4, padding)};
+  for (int row = 0; row < image.height; ++row) {
+    std::copy_n(image.data.begin() + row * image.strideInPixels * 4, image.width * 4,
+                result.data.begin() + row * stride * 4);
+  }
+  return result;
+}
+
+Image VerticalEdgeImage() {
+  Image image{3, 3, 3, {}};
+  for (int row = 0; row < 3; ++row) {
+    image.data.insert(image.data.end(), {0, 0, 0, 255, 255, 255, 255, 255, 255, 255, 255, 255});
+  }
+  return image;
 }
 
 class SvgSuiteTest : public testing::Test {
@@ -136,12 +156,94 @@ TEST(ImageCompareTest, IdentityPassesAndRetainsDiff) {
   EXPECT_THAT(result.diff.has_value(), Eq(true));
 }
 
+TEST(ImageCompareTest, IndependentRowStridesIgnorePoisonedPadding) {
+  const Image tight = VerticalEdgeImage();
+  for (const auto strides : {std::array<size_t, 2>{3, 5}, {5, 3}, {4, 6}, {6, 4}, {5, 5}}) {
+    SCOPED_TRACE(testing::Message() << strides[0] << ", " << strides[1]);
+    const Image expected = WithRowPadding(tight, strides[0], 0xA5);
+    const Image actual = WithRowPadding(tight, strides[1], 0x5A);
+    const auto result = CompareImages(View(expected), View(actual));
+    ASSERT_THAT(result.error, IsEmpty());
+    EXPECT_TRUE(result.passed);
+    EXPECT_EQ(result.mismatchedPixels, 0);
+    ASSERT_TRUE(result.diff);
+    EXPECT_THAT(ValidateImage(View(*result.diff)), IsEmpty());
+  }
+}
+
+TEST(ImageCompareTest, TightEdgeControlUsesNeighborRows) {
+  const Image expected = VerticalEdgeImage();
+  Image actual = expected;
+  std::fill_n(actual.data.begin() + 16, 3, 128);
+  EXPECT_EQ(CompareImages(View(expected), View(actual), {0.0, 0, true}).mismatchedPixels, 1);
+  EXPECT_EQ(CompareImages(View(expected), View(actual), {0.0, 0, false}).mismatchedPixels, 0);
+}
+
+TEST(ImageCompareTest, IndependentStridesPreserveNeighborRowComparison) {
+  const Image tightExpected = VerticalEdgeImage();
+  Image tightActual = tightExpected;
+  std::fill_n(tightActual.data.begin() + 16, 3, 128);
+  for (const bool includeEdges : {true, false}) {
+    const ComparisonOptions options{0.0, 0, includeEdges};
+    const auto control = CompareImages(View(tightExpected), View(tightActual), options);
+    ASSERT_THAT(control.error, IsEmpty());
+    ASSERT_TRUE(control.diff);
+    EXPECT_EQ(control.mismatchedPixels, includeEdges ? 1 : 0);
+    for (const auto strides : {std::array<size_t, 2>{3, 5}, {5, 3}, {4, 6}, {6, 4}}) {
+      SCOPED_TRACE(testing::Message() << includeEdges << ": " << strides[0] << ", " << strides[1]);
+      const Image expected = WithRowPadding(tightExpected, strides[0], 0xA5);
+      const Image actual = WithRowPadding(tightActual, strides[1], 0x5A);
+      const auto result = CompareImages(View(expected), View(actual), options);
+      ASSERT_THAT(result.error, IsEmpty());
+      EXPECT_EQ(result.passed, control.passed);
+      EXPECT_EQ(result.mismatchedPixels, control.mismatchedPixels);
+      ASSERT_TRUE(result.diff);
+      const Image tightDiff = WithRowPadding(*result.diff, 3, 0);
+      EXPECT_EQ(tightDiff.data, control.diff->data);
+    }
+  }
+}
+
+TEST_F(SvgSuiteTest, CallbackWithPaddedRowsMatchesTightPngReference) {
+  addCase("padded.svg");
+  const auto discovery = discover();
+  ASSERT_THAT(discovery.error, IsEmpty());
+  ASSERT_EQ(discovery.cases.size(), 1u);
+  const auto result = RunCase(
+      discovery.cases.front(),
+      [](const StaticCase&, int, int) {
+        return ImageResult{WithRowPadding(RedImage(), 4, 0xA5), {}};
+      },
+      directory_ / "padded-output");
+  EXPECT_TRUE(result.passed) << result.error;
+  EXPECT_THAT(result.error, IsEmpty());
+  EXPECT_EQ(result.mismatchedPixels, 0);
+}
+
 TEST(ImageCompareTest, InvalidBuffersNeverPassWithGenerousTolerance) {
   const Image empty;
   const ComparisonResult result = CompareImages(View(empty), View(empty), {1.0, 100, false});
   EXPECT_THAT(result.passed, Eq(false));
   EXPECT_THAT(result.error, Not(IsEmpty()));
   EXPECT_THAT(result.mismatchedPixels.has_value(), Eq(false));
+}
+
+TEST(ImageCompareTest, InvalidPaddedBuffersRemainRejected) {
+  const Image expected = VerticalEdgeImage();
+  Image actual = WithRowPadding(expected, 5, 0xA5);
+  actual.data.pop_back();
+  const auto truncated = CompareImages(View(expected), View(actual));
+  EXPECT_THAT(truncated.error, HasSubstr("byte length"));
+  EXPECT_FALSE(truncated.passed);
+  EXPECT_FALSE(truncated.mismatchedPixels);
+  EXPECT_FALSE(truncated.diff);
+
+  actual.strideInPixels = std::numeric_limits<size_t>::max();
+  const auto oversized = CompareImages(View(expected), View(actual));
+  EXPECT_THAT(oversized.error, HasSubstr("dimensions/stride"));
+  EXPECT_FALSE(oversized.passed);
+  EXPECT_FALSE(oversized.mismatchedPixels);
+  EXPECT_FALSE(oversized.diff);
 }
 
 TEST(ImageCompareTest, RejectsNegativeBudgetAndNonfiniteThreshold) {

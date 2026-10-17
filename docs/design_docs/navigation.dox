@@ -50,6 +50,7 @@ investigations.
 - \subpage md_docs_2design__docs_20053-native__gpu__hal
 - \subpage md_docs_2design__docs_20060-tinyskia__retained__raster__cache
 - \subpage md_docs_2design__docs_20061-multithreaded__rendering
+- \subpage md_docs_2design__docs_20067-donner__tiny
 */
 
 /**
@@ -93,6 +94,7 @@ investigations.
 - \subpage md_docs_2design__docs_20054-editor__design__language
 - \subpage md_docs_2design__docs_20056-geode__only__web__editor__runtime
 - \subpage md_docs_2design__docs_20065-editor__eyedropper
+- \subpage md_docs_2design__docs_20068-diagramming
 */
 
 /**

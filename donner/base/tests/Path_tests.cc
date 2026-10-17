@@ -982,6 +982,70 @@ TEST(Path, PointAtArcLengthCurveStartAndEnd) {
   ExpectNear(cubicEnd.point, Vector2d(100, 0), 1e-6);
 }
 
+// Proposed test-only insertion into donner/base/tests/Path_tests.cc, namespace donner.
+// Exact authored endpoints; no observed length/renderer position determines an oracle.
+TEST(Path, MeasuredCubicExactTotalAdmitsAuthoredEndpoint) {
+  for (bool trailingMove : {false, true}) {
+    SCOPED_TRACE(trailingMove);
+    PathBuilder builder;
+    builder.moveTo({20, 100}).curveTo({35, 135}, {85, 135}, {100, 100});
+    if (trailingMove) {
+      builder.moveTo({777, 888});
+    }
+    const Path path = builder.build();
+    const Path::MeasuredPath measured = path.measure();
+    ASSERT_TRUE(measured.valid());
+    ASSERT_EQ(measured.segmentCount(), 1u);
+    ASSERT_TRUE(std::isfinite(measured.pathLength()));
+    ASSERT_GT(measured.pathLength(), 0.0);
+    ASSERT_GT(measured.measurementWorkUnits(), 0u);
+    ASSERT_LE(measured.measurementWorkUnits(), Path::kMaximumGeometryQueryWork);
+    const auto end = measured.pointAtArcLength(measured.pathLength());
+    EXPECT_TRUE(end.valid);
+    EXPECT_EQ(end.point, Vector2d(100, 100));
+    EXPECT_EQ(end.tangent, Vector2d(45, -105));
+    const auto direct = path.pointAtArcLength(path.pathLength());
+    EXPECT_TRUE(direct.valid);
+    EXPECT_EQ(direct.point, Vector2d(100, 100));
+    EXPECT_FALSE(measured
+                     .pointAtArcLength(std::nextafter(measured.pathLength(),
+                                                      std::numeric_limits<double>::infinity()))
+                     .valid);
+  }
+}
+
+TEST(Path, MeasuredMultipleCubicsExactTotalAdmitsFinalAuthoredEndpoint) {
+  for (bool trailingMove : {false, true}) {
+    SCOPED_TRACE(trailingMove);
+    PathBuilder builder;
+    builder.moveTo({20, 100})
+        .curveTo({35, 135}, {85, 135}, {100, 100})
+        .curveTo({115, 65}, {165, 65}, {180, 100});
+    if (trailingMove) {
+      builder.moveTo({777, 888});
+    }
+    const Path path = builder.build();
+    const Path::MeasuredPath measured = path.measure();
+    ASSERT_TRUE(measured.valid());
+    ASSERT_EQ(measured.segmentCount(), 2u);
+    ASSERT_TRUE(std::isfinite(measured.pathLength()));
+    ASSERT_GT(measured.pathLength(), 0.0);
+    ASSERT_GT(measured.measurementWorkUnits(), 0u);
+    ASSERT_LE(measured.measurementWorkUnits(), Path::kMaximumGeometryQueryWork);
+    const auto end = measured.pointAtArcLength(measured.pathLength());
+    EXPECT_TRUE(end.valid);
+    EXPECT_EQ(end.point, Vector2d(180, 100));
+    EXPECT_EQ(end.tangent, Vector2d(45, 105));
+    const auto direct = path.pointAtArcLength(path.pathLength());
+    EXPECT_TRUE(direct.valid);
+    EXPECT_EQ(direct.point, Vector2d(180, 100));
+    EXPECT_FALSE(measured
+                     .pointAtArcLength(std::nextafter(measured.pathLength(),
+                                                      std::numeric_limits<double>::infinity()))
+                     .valid);
+  }
+}
+
 TEST(Path, PointAtArcLengthCurvesUseBinarySearchAwayFromEndpoints) {
   Path quad = PathBuilder().moveTo({0, 0}).quadTo({50, 100}, {100, 0}).build();
   Path::PointOnPath quadMid = quad.pointAtArcLength(quad.pathLength() * 0.5);

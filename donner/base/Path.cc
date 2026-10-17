@@ -386,17 +386,18 @@ void AppendMeasuredCubic(SegmentVector& segments, ArcSampleVector& arcSamples,
     valid = false;
     return;
   }
-  if (!std::isfinite(*segmentLength) ||
-      *segmentLength > std::numeric_limits<double>::max() - totalLength) {
+  // Use the same ordered cumulative length retained by the arc samples.
+  if (!std::isfinite(cumulativeLength) ||
+      cumulativeLength > std::numeric_limits<double>::max() - totalLength) {
     arcSamples.resize(firstSample);
     valid = false;
     totalLength = std::numeric_limits<double>::infinity();
     return;
   }
   segments.push_back(typename SegmentVector::value_type{cubicType, cubicPoints, totalLength,
-                                                        totalLength + *segmentLength, firstSample,
+                                                        totalLength + cumulativeLength, firstSample,
                                                         arcSamples.size() - firstSample});
-  totalLength += *segmentLength;
+  totalLength += cumulativeLength;
 }
 
 template <typename AddLine, typename AddCubic>
@@ -605,6 +606,11 @@ Path::PointOnPath Path::MeasuredPath::pointAtArcLength(double distance) const {
   const double remaining = distance - it->startLength;
   if (it->type == SegmentType::Line) {
     return PointOnMeasuredLine(*it, remaining, segmentLength);
+  }
+  if (distance == it->endLength) {
+    // Global-to-local subtraction can round beyond the last retained sample.
+    const Vector2d tangent = evalCubicTangent(it->points, 1.0);
+    return {it->points[3], tangent, std::atan2(tangent.y, tangent.x), true};
   }
   return PointOnMeasuredCubic(*it, arcSamples_, remaining, endpoint_);
 }

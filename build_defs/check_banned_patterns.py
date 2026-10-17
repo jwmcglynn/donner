@@ -126,7 +126,15 @@ _RULES: List[_Rule] = [
         # Only donner/svg and donner/base are allowed to include these
         # component headers. Notably the editor, examples, and any future
         # non-core consumer must go through the SVG public API surface.
-        exempt_path_prefixes=("donner/svg/", "donner/base/"),
+        # The renderer bakeoff's paint resolver is a RendererInterface backend
+        # like the in-tree renderers: the interface hands it gradient
+        # references whose resolved geometry and stops live on these
+        # components, so it reads them the same way the in-tree backends do.
+        exempt_path_prefixes=(
+            "donner/svg/",
+            "donner/base/",
+            "benchmarks/renderer_bakeoff/harness/PaintResolver.",
+        ),
     ),
     _Rule(
         pattern=re.compile(r"\bAddImageQuad\s*\("),

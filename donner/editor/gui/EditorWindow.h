@@ -1242,7 +1242,9 @@ private:
   std::uint64_t presentationTimeoutSerial_ = 0;
   std::chrono::milliseconds presentationTimeoutAge_{};
   internal::PresentationDeviceLossRecord presentationDeviceLoss_;
+#ifdef __EMSCRIPTEN__
   std::uint64_t presentationCompletionConfirmations_ = 0;
+#endif
   std::uint64_t presentationFrameId_ = 0;
   std::uint64_t presentationCaptureId_ = 0;
   internal::PresentationSubmissionQueue::Fence presentationInputStamp_;

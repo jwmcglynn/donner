@@ -87,7 +87,7 @@ AsyncSVGDocument::ReplaceKind AsyncSVGDocument::setDocumentMaybeStructural(
     setDocument(std::move(newDocument));
     return ReplaceKind::FullReplace;
   }
-  const Vector2i preservedCanvasSize = document_->canvasSize();
+  const std::optional<Vector2i> preservedCanvasSize = document_->canvasSizeOverride();
 
   // Build the remap BEFORE the swap. The walker needs both documents'
   // XML trees live; once we move `newDocument` into `document_`, the
@@ -96,16 +96,10 @@ AsyncSVGDocument::ReplaceKind AsyncSVGDocument::setDocumentMaybeStructural(
   // only the UI thread touches the document outside a render.
   auto remap = svg::compositor::BuildStructuralEntityRemap(*document_, newDocument);
   const bool structural = !remap.empty();
-  if (structural) {
-    // The editor owns the raster canvas size independently from the SVG
-    // source. A structural source writeback reparses into a fresh
-    // document whose canvas would otherwise fall back to intrinsic SVG
-    // dimensions, forcing `RenderCoordinator` to call setCanvasSize on
-    // the next frame. That late resize invalidates the whole render tree
-    // and dirties every preserved compositor layer. Carry the canvas
-    // size into the new document before the worker consumes the remap so
-    // it prepares the replacement at the already-displayed size.
-    newDocument.setCanvasSize(preservedCanvasSize.x, preservedCanvasSize.y);
+  if (structural && preservedCanvasSize.has_value()) {
+    // Preserve only an explicit canvas constraint, including its original aspect-fit bounds.
+    // Copying the derived canvasSize() would freeze automatic SVG sizing across source edits.
+    newDocument.setCanvasSize(preservedCanvasSize->x, preservedCanvasSize->y);
   }
 
   // Swap the document. We can't call `setDocument` directly because it

@@ -1,0 +1,31 @@
+load("@rules_cc//cc:defs.bzl", "cc_library")
+
+package(default_visibility = ["//visibility:public"])
+
+# Each backend is its own alwayslink library so a binary links exactly the backends it names.
+cc_library(
+    name = "null",
+    srcs = ["NullBackend.cc"],
+    deps = ["//harness"],
+    alwayslink = True,
+)
+
+cc_library(
+    name = "tiny_skia",
+    srcs = ["TinySkiaBackend.cc"],
+    deps = [
+        "//harness",
+        "@donner//donner/svg/renderer:renderer_tiny_skia",
+    ],
+    alwayslink = True,
+)
+
+cc_library(
+    name = "geode",
+    srcs = ["GeodeBackend.cc"],
+    deps = [
+        "//harness",
+        "@donner//donner/svg/renderer:renderer_geode",
+    ],
+    alwayslink = True,
+)

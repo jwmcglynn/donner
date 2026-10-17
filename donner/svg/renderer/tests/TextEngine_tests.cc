@@ -1347,7 +1347,7 @@ TEST(TextEngineTest, FullBackendPaintOnlySplitMatchesUnsplitGlyphPositions) {
   }
 }
 
-TEST(TextEngineTest, TextAfterTextPathStartsAfterLastVisiblePathGlyph) {
+TEST(TextEngineTest, TextAfterTextPathStartsAtGeometricEndpoint) {
   Registry registry;
   FontManager fontManager(registry);
   TextEngine engine(fontManager, registry);
@@ -1373,7 +1373,7 @@ TEST(TextEngineTest, TextAfterTextPathStartsAfterLastVisiblePathGlyph) {
   ASSERT_THAT(runs, ElementsAre(RunGlyphsAre(Not(IsEmpty())), RunGlyphsAre(Not(IsEmpty()))));
   const double lastPathGlyphX = runs[0].glyphs.back().xPosition;
   EXPECT_THAT(runs[1].glyphs,
-              FirstGlyphMatches(GlyphXPositionIs(AllOf(Gt(lastPathGlyphX), Lt(180.0)))));
+              FirstGlyphMatches(GlyphXPositionIs(AllOf(Gt(lastPathGlyphX), DoubleEq(200.0)))));
 }
 
 // End-to-end (engine.layout) coverage of the SVG2 inline-size auto-flow path, exercising the

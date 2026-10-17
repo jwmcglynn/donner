@@ -106,7 +106,7 @@ TEST(EditorControlSessionTest, HighDpiEditorStartupCapture) {
   EXPECT_THAT(result.body.value("capture_count", 0), testing::Eq(1)) << result.body.dump(2);
 }
 
-TEST(EditorControlSessionTest, HiDpiInspectorCaptureAfterCanvasCommit) {
+TEST(EditorControlSessionTest, HiDpiInspectorCapturePreservesResolvedLayout) {
   repro::ReproFile replay;
   replay.metadata.svgPath = "hidpi_inspector.svg";
   replay.metadata.svgSource =
@@ -166,7 +166,7 @@ TEST(EditorControlSessionTest, HiDpiInspectorCaptureAfterCanvasCommit) {
   for (const auto& frame : result.frameDiagnostics) {
     commits += frame.frameCost.documentCanvasCommitCount;
   }
-  ASSERT_THAT(commits, testing::Gt(0u));
+  EXPECT_THAT(commits, testing::Eq(0u));
   // Frame 35 has no capture selector: its rendering instance must already be fresh before
   // frame 36 reads the framebuffer. Capture barriers cannot supply the missing render.
   ASSERT_THAT(result.frameDiagnostics.size(), testing::Eq(37u));

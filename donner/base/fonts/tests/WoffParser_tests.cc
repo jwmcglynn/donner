@@ -182,6 +182,14 @@ TEST(WoffParser, ExtractsFamilyName) {
   EXPECT_THAT(font.familyName, testing::Eq("WOFF Test CFF"));
 }
 
+TEST(WoffParser, EmptyUncompressedTable) {
+  const auto result = WoffParser::Parse(MakeWoff({{.tag = Tag("test"), .data = {}}}));
+  ASSERT_THAT(result, NoParseError());
+  ASSERT_THAT(result.result().tables, testing::SizeIs(1));
+  EXPECT_EQ(result.result().tables[0].tag, Tag("test"));
+  EXPECT_THAT(result.result().tables[0].data, testing::IsEmpty());
+}
+
 TEST(WoffParser, RejectsMalformedHeadersAndDirectories) {
   const std::vector<uint8_t> tooShortBytes(43, 0);
   auto tooShort = WoffParser::Parse(tooShortBytes);

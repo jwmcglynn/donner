@@ -42,7 +42,8 @@ PropertyParseFnParams PropertyParseFnParams::Create(const css::Declaration& decl
     }
   }
 
-  params.specificity = declaration.important ? css::Specificity::Important() : specificity;
+  params.specificity =
+      declaration.important ? css::Specificity::Important(specificity) : specificity;
 
   return params;
 }

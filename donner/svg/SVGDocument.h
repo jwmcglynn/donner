@@ -489,6 +489,12 @@ public:
   Vector2i canvasSize() const;
 
   /**
+   * Return the exact bounds requested by setCanvasSize(), or nullopt for automatic sizing.
+   * Unlike canvasSize(), this value is not reduced to fit the document's aspect ratio.
+   */
+  std::optional<Vector2i> canvasSizeOverride() const;
+
+  /**
    * Get the width of the SVG document, in pixels.
    *
    * This is the width of the canvas, which may be different from the width of the SVG content.

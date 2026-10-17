@@ -112,12 +112,6 @@ common --//third_party/google_fonts:google_fonts_available=true
 common:latest_llvm --extra_toolchains=@llvm_toolchain_linux_aarch64//:all
 common:latest_llvm --extra_toolchains=@llvm_toolchain_linux_x86_64//:all
 common:latest_llvm --//build_defs:llvm_latest=1
-# Disable V8's JIT in the emscripten Node runtime. Some remote-execution
-# sandboxes forbid creating executable memory pages (W+X), so V8 aborts with
-# SIGTRAP in `OS::SetPermissions` the moment it tries to baseline-compile
-# anything. `--jitless` keeps Node in the interpreter-only mode, which
-# emscripten's `compiler.mjs` is happy with.
-common:latest_llvm --action_env=NODE_OPTIONS=--jitless
 # toolchains_llvm selects builtin libc++ with a clang driver argument. On
 # self-hosted Linux, compile-only actions can report that stdlib-selection
 # argument as unused even though the toolchain has already supplied the libc++
@@ -233,10 +227,11 @@ common:editor-wasm-geode --config=editor-wasm
 # at one standard whichever platform a given binary is built for.
 build:c++20 --cxxopt=-std=c++20 --host_cxxopt=-std=c++20
 
-# Host toolchain using libstdc++ instead of libc++, for libclang support
+# Opt-in host libstdc++ selection for integrations that require its ABI.
+# Normal Linux builds let the selected toolchain choose matching headers and runtime.
 build:host_libstdc++ --host_cxxopt=-std=c++20 --host_cxxopt=-stdlib=libstdc++ --host_linkopt=-lstdc++
 
-build:linux --config=host_libstdc++ --copt=-fno-modules
+build:linux --copt=-fno-modules
 
 # Fixes symbols when debugging on mac.
 build:macos --features=oso_prefix_is_pwd
@@ -392,6 +387,9 @@ test:coverage --experimental_split_coverage_postprocessing
 
 # Basic ASAN/UBSAN that works for gcc
 build:asan --config=latest_llvm
+# Select sanitizer-aware toolchain defaults as well as the instrumentation flags below.
+# Apple toolchains omit their conflicting _FORTIFY_SOURCE definition when this feature is on.
+build:asan --features=asan
 build:asan --linkopt=-ldl
 build:asan --copt=-fsanitize=address,undefined
 build:asan --linkopt=-fsanitize=address,undefined
