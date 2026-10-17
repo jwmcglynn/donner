@@ -29,7 +29,7 @@ void CompareTextPosition(SVGDocument& document, std::string_view expectedSource,
   EXPECT_EQ(document.source(), source);
 }
 
-TEST(RendererAnimationTextPosition, InheritedListsUseAddressableCharacterOffsets) {
+TEST(RendererAnimationTextPosition, LocalListAnimationRetainsAncestorFallback) {
   struct Case {
     const char* name;
     const char* parent;
@@ -39,16 +39,16 @@ TEST(RendererAnimationTextPosition, InheritedListsUseAddressableCharacterOffsets
     const char* attribute;
     const char* to;
     const char* midpoint;
+    const char* start;
   };
   const Case cases[] = {
-      {"preceding-character", "dx='0 4'", "A", "B", "", "dx", "8", "6"},
-      {"two-dx-values", "dx='0 4 8'", "A", "BC", "", "dx", "8 12", "6 10"},
-      {"two-dy-values", "dy='0 2 4'", "A", "BC", "", "dy", "6 8", "4 6"},
-      {"nested-anchor", "dx='0 4 8'", "A<a>B", "C", "</a>", "dx", "12", "10"},
-      {"repeat-last-rotation", "rotate='0 30'", "A", "BC", "", "rotate", "90 150", "60 90"},
-      {"multibyte-character", "dx='0 4'", "&#xE9;", "H", "", "dx", "8", "6"},
-      {"collapsed-whitespace", "dx='0 2 4'", "A   ", "B", "", "dx", "8", "6"},
-      {"split-owner", "dx='0 2 4 6'", "A", "B<a>C</a>D", "", "dx", "6 8 10", "4 6 8"},
+      {"preceding-character", "dx='0 4'", "A", "B", "", "dx", "8", "4", "0"},
+      {"two-dx-values", "dx='0 4 8'", "A", "BC", "", "dx", "8 12", "4 6", "0 0"},
+      {"two-dy-values", "dy='0 2 4'", "A", "BC", "", "dy", "6 8", "3 4", "0 0"},
+      {"nested-anchor", "dx='0 4 8'", "A<a>B", "C", "</a>", "dx", "12", "6", "0"},
+      {"multibyte-character", "dx='0 4'", "&#xE9;", "H", "", "dx", "8", "4", "0"},
+      {"collapsed-whitespace", "dx='0 2 4'", "A   ", "B", "", "dx", "8", "4", "0"},
+      {"split-owner", "dx='0 2 4 6'", "A", "B<a>C</a>D", "", "dx", "6 8 10", "3 4 5", "0 0 0"},
   };
   for (const auto& item : cases) {
     SCOPED_TRACE(item.name);
@@ -62,12 +62,38 @@ TEST(RendererAnimationTextPosition, InheritedListsUseAddressableCharacterOffsets
     for (const double time : {0.0, 1.0, 3.0, 1.0}) {
       SCOPED_TRACE(time);
       document.setTime(time);
+      const char* value = time == 0 ? item.start : item.midpoint;
       const std::string sampled =
-          time == 1 ? std::string(" ") + item.attribute + "='" + item.midpoint + "'" : "";
+          time <= 1 ? std::string(" ") + item.attribute + "='" + value + "'" : "";
       CompareTextPosition(document, prefix + "<tspan" + sampled + suffix,
                           std::string("inherited-text-") + item.name + "-" + std::to_string(time));
     }
   }
+}
+
+TEST(RendererAnimationTextPosition, LocalRotationListRepeatsItsLastSampleAcrossDescendants) {
+  auto document = ParseTextPosition(
+      "<text y='24' font-size='12'>A<tspan id='target' rotate='10 30'>B<a>C</a>D</tspan></text>"
+      "<animate href='#target' attributeName='rotate' to='50 90' dur='2s'/>");
+  for (const double time : {1.0, 3.0, 1.0}) {
+    document.setTime(time);
+    const std::string angles = time == 1 ? "30 60" : "10 30";
+    CompareTextPosition(
+        document,
+        "<text y='24' font-size='12'>A<tspan rotate='" + angles + "'>B<a>C</a>D</tspan></text>",
+        "text-local-rotation-list-" + std::to_string(time));
+  }
+}
+
+TEST(RendererAnimationTextPosition, UnanimatedLongOwnerDoesNotSuppressShortDescendantAnimation) {
+  const std::string prefix =
+      "<text y='12' font-size='10'><tspan>" + std::string(80, 'A') + "</tspan>";
+  auto document = ParseTextPosition(prefix +
+                                    "<tspan id='target' x='0' y='40' dx='4'>B</tspan></text>"
+                                    "<animate href='#target' attributeName='dx' to='8' dur='2s'/>");
+  document.setTime(1);
+  CompareTextPosition(document, prefix + "<tspan x='0' y='40' dx='6'>B</tspan></text>",
+                      "text-short-animation-in-long-owner");
 }
 
 TEST(RendererAnimationTextPosition, RotationReplacesLowerValuesWhenAdditionIsRequested) {
@@ -86,18 +112,18 @@ TEST(RendererAnimationTextPosition, RotationReplacesLowerValuesWhenAdditionIsReq
   }
 }
 
-TEST(RendererAnimationTextPosition, ParentListEditsRemainTheBaseAfterAnimationRemoval) {
+TEST(RendererAnimationTextPosition, ParentListEditsAffectFallbackAfterAnimationRemoval) {
   auto document = ParseTextPosition(
       "<text id='root' y='24' font-size='12' dx='0 4'>A<tspan id='target'>B</tspan></text>"
       "<animate id='animation' href='#target' attributeName='dx' to='12' dur='2s'/>");
   document.setTime(1);
-  CompareTextPosition(document, "<text y='24' font-size='12'>A<tspan dx='8'>B</tspan></text>",
+  CompareTextPosition(document, "<text y='24' font-size='12'>A<tspan dx='6'>B</tspan></text>",
                       "text-list-before-edit");
   auto root = document.querySelector("#root");
   ASSERT_TRUE(root.has_value());
   root->setAttribute("dx", "0 8");
   document.setTime(1);
-  CompareTextPosition(document, "<text y='24' font-size='12'>A<tspan dx='10'>B</tspan></text>",
+  CompareTextPosition(document, "<text y='24' font-size='12'>A<tspan dx='6'>B</tspan></text>",
                       "text-list-after-edit");
   auto animation = document.querySelector("#animation");
   ASSERT_TRUE(animation.has_value());
@@ -106,9 +132,10 @@ TEST(RendererAnimationTextPosition, ParentListEditsRemainTheBaseAfterAnimationRe
                       "text-list-after-removal");
 }
 
-TEST(RendererAnimationTextPosition, InheritedRelativeListsUseEachTextInstanceFont) {
+TEST(RendererAnimationTextPosition, LocalRelativeListsUseEachTextInstanceFont) {
   auto document = ParseTextPosition(
-      "<defs><text id='label' y='24' dx='0 1em'>A<tspan id='target'>B</tspan></text></defs>"
+      "<defs><text id='label' y='24' dx='0 7em'>A<tspan id='target' "
+      "dx='1em'>B</tspan></text></defs>"
       "<animate href='#target' attributeName='dx' to='20px' dur='2s'/>"
       "<use href='#label' font-size='8'/><use href='#label' x='60' font-size='16'/>");
   for (const double time : {1.0, 3.0, 1.0}) {
