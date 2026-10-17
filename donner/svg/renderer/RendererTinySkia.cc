@@ -619,7 +619,8 @@ PixelatedSamplingPlan MakePixelatedSamplingPlan(const Box2d& targetRect, int sou
       scaleY.roundedScale <= kMaxImageSamplingDimension &&
       result.intermediateWidth <= kMaxImageSamplingDimension &&
       result.intermediateHeight <= kMaxImageSamplingDimension &&
-      result.intermediateWidth * result.intermediateHeight <= kMaxImageSamplingSurfacePixels;
+      static_cast<std::size_t>(result.intermediateWidth * result.intermediateHeight) <=
+          kMaxImageSamplingSurfacePixels;
   return result;
 }
 

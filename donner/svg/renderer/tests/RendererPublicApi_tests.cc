@@ -449,6 +449,246 @@ ExternalUseRenderResult RenderExternalUse(std::string_view hostSource,
   return {NormalizeSnapshot(renderer.takeSnapshot()), observedLoader->requests()};
 }
 
+constexpr std::string_view kAnalyticRedPngDataUrl =
+    "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAYAAADED76LAAAAEklEQVR4nGP4z8Dw"
+    "Hx9mGBkKAMLXf4EvceABAAAAAElFTkSuQmCC";
+
+std::string SvgDataUrl(std::string_view source) {
+  constexpr char kHex[] = "0123456789ABCDEF";
+  std::string result = "data:image/svg+xml,";
+  for (const unsigned char value : source) {
+    result += '%';
+    result += kHex[value >> 4];
+    result += kHex[value & 15];
+  }
+  return result;
+}
+
+std::string SvgImageDocument(std::string_view href) {
+  return "<svg xmlns='http://www.w3.org/2000/svg' width='8' height='8'>"
+         "<image width='8' height='8' href='" +
+         std::string(href) + "'/></svg>";
+}
+
+RendererBitmap AnalyticRedImage(int width = 8) {
+  RendererBitmap expected;
+  expected.dimensions = Vector2i(width, 8);
+  expected.rowBytes = static_cast<size_t>(width) * 4;
+  expected.pixels.resize(expected.rowBytes * 8, 0);
+  for (size_t offset = 0; offset < expected.pixels.size(); offset += 4) {
+    expected.pixels[offset] = 255;
+    expected.pixels[offset + 3] = 255;
+  }
+  return expected;
+}
+
+TEST(RendererPublicApiTest, SecureDataImagesRenderThroughNestedSvgDocuments) {
+  const RendererBitmap expected = AnalyticRedImage();
+  for (const ProcessingMode mode : {ProcessingMode::DynamicInteractive,
+                                    ProcessingMode::SecureStatic, ProcessingMode::SecureAnimated}) {
+    std::string source = SvgImageDocument(kAnalyticRedPngDataUrl);
+    for (int depth = 0; depth != 3; ++depth) {
+      const std::string label = "data-image-mode-" + std::to_string(static_cast<int>(mode)) +
+                                "-depth-" + std::to_string(depth);
+      SCOPED_TRACE(label);
+      SVGDocument::Settings settings;
+      settings.processingMode = mode;
+      ParseWarningSink warnings;
+      auto parsed = parser::SVGParser::ParseSVG(source, warnings, parser::SVGParser::Options(),
+                                                std::move(settings));
+      ASSERT_FALSE(parsed.hasError());
+      SVGDocument document = std::move(parsed.result());
+      Renderer renderer;
+      renderer.draw(document);
+      editor::tests::CompareBitmapToBitmap(NormalizeSnapshot(renderer.takeSnapshot()), expected,
+                                           label, editor::tests::PixelmatchIdentityParams());
+      source = SvgImageDocument(SvgDataUrl(source));
+    }
+  }
+}
+
+TEST(RendererPublicApiTest, SecureDataSvgDoesNotExecuteExperimentalAnimation) {
+  constexpr std::string_view kChild =
+      "<svg xmlns='http://www.w3.org/2000/svg' width='8' height='8'>"
+      "<rect width='8' height='8' fill='red'>"
+      "<set id='animation' attributeName='fill' to='blue' begin='0s' dur='1s' fill='freeze'/>"
+      "</rect></svg>";
+  parser::SVGParser::Options options;
+  options.enableExperimental = true;
+  ParseWarningSink controlWarnings;
+  auto control = parser::SVGParser::ParseSVG(kChild, controlWarnings, options);
+  ASSERT_FALSE(control.hasError());
+  Renderer controlRenderer;
+  controlRenderer.draw(control.result());
+  RendererBitmap blue = AnalyticRedImage();
+  for (size_t offset = 0; offset < blue.pixels.size(); offset += 4) {
+    blue.pixels[offset] = 0;
+    blue.pixels[offset + 2] = 255;
+  }
+  editor::tests::CompareBitmapToBitmap(NormalizeSnapshot(controlRenderer.takeSnapshot()), blue,
+                                       "dynamic-animation-control",
+                                       editor::tests::PixelmatchIdentityParams());
+
+  for (const ProcessingMode mode : {ProcessingMode::DynamicInteractive,
+                                    ProcessingMode::SecureStatic, ProcessingMode::SecureAnimated}) {
+    const std::string label =
+        "secure-data-static-animation-" + std::to_string(static_cast<int>(mode));
+    SCOPED_TRACE(label);
+    SVGDocument::Settings settings;
+    settings.processingMode = mode;
+    ParseWarningSink warnings;
+    auto parsed = parser::SVGParser::ParseSVG(SvgImageDocument(SvgDataUrl(kChild)), warnings,
+                                              options, std::move(settings));
+    ASSERT_FALSE(parsed.hasError());
+    Renderer renderer;
+    renderer.draw(parsed.result());
+    const auto image = parsed.result().querySelector("image");
+    ASSERT_TRUE(image);
+    const auto* loaded = image->entityHandle().try_get<components::LoadedSVGImageComponent>();
+    ASSERT_NE(loaded, nullptr);
+    ASSERT_TRUE(loaded->subDocument);
+    auto child = SVGDocument::CreateFromHandle(loaded->subDocument);
+    const auto animation = child.querySelector("#animation");
+    ASSERT_TRUE(animation);
+    EXPECT_EQ(animation->type(), ElementType::Set);
+    editor::tests::CompareBitmapToBitmap(NormalizeSnapshot(renderer.takeSnapshot()),
+                                         AnalyticRedImage(), label,
+                                         editor::tests::PixelmatchIdentityParams());
+  }
+}
+
+TEST(RendererPublicApiTest, SecureDataSvgPreservesSameDocumentPaintReferences) {
+  const std::string source = SvgImageDocument(
+      SvgDataUrl("<svg xmlns='http://www.w3.org/2000/svg' width='8' height='8'>"
+                 "<defs><linearGradient id='paint'><stop stop-color='red'/></linearGradient></defs>"
+                 "<rect width='8' height='8' fill='url(#paint)'/></svg>"));
+  SVGDocument::Settings settings;
+  settings.processingMode = ProcessingMode::SecureStatic;
+  ParseWarningSink warnings;
+  auto parsed = parser::SVGParser::ParseSVG(source, warnings, parser::SVGParser::Options(),
+                                            std::move(settings));
+  ASSERT_FALSE(parsed.hasError());
+  SVGDocument document = std::move(parsed.result());
+  Renderer renderer;
+  renderer.draw(document);
+  editor::tests::CompareBitmapToBitmap(NormalizeSnapshot(renderer.takeSnapshot()),
+                                       AnalyticRedImage(), "secure-data-same-document-paint",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(RendererPublicApiTest, SecureDataSvgCannotBypassSharedParsedPayloadBudget) {
+  const std::string source =
+      SvgImageDocument(SvgDataUrl("<svg xmlns='http://www.w3.org/2000/svg' width='8' height='8'>"
+                                  "<rect width='8' height='8' fill='red'/></svg>"));
+  components::DocumentResourceFamilyBudget::Limits limits;
+  limits.parsedPayloadBytes = 65536;
+  auto family = std::make_shared<components::DocumentResourceFamilyBudget>(limits);
+  SVGDocument::Settings settings;
+  settings.processingMode = ProcessingMode::SecureStatic;
+  settings.resourceFamilyBudget = family;
+  ParseWarningSink warnings;
+  auto parsed = parser::SVGParser::ParseSVG(source, warnings, parser::SVGParser::Options(),
+                                            std::move(settings));
+  ASSERT_FALSE(parsed.hasError());
+  ASSERT_FALSE(warnings.hasWarnings());
+  const auto image = parsed.result().querySelector("image");
+  ASSERT_TRUE(image.has_value());
+  ASSERT_FALSE(image->unsafeEntityHandle().get<components::ImageComponent>().href.empty());
+  const auto kind = components::DocumentResourceFamilyBudget::Kind::ParsedPayload;
+  const size_t retained = family->retainedBytes(kind);
+  ASSERT_GT(retained, 0u);
+  ASSERT_LT(retained, limits.parsedPayloadBytes);
+  ASSERT_TRUE(family->reserve(kind, limits.parsedPayloadBytes - retained));
+  SVGDocument document = std::move(parsed.result());
+  RendererUtils::prepareDocumentForRendering(document, false, warnings);
+  EXPECT_TRUE(warnings.hasWarnings());
+  Renderer renderer;
+  renderer.draw(document);
+  RendererBitmap expected = AnalyticRedImage();
+  std::fill(expected.pixels.begin(), expected.pixels.end(), 0);
+  editor::tests::CompareBitmapToBitmap(NormalizeSnapshot(renderer.takeSnapshot()), expected,
+                                       "secure-data-family-budget",
+                                       editor::tests::PixelmatchIdentityParams());
+  EXPECT_LE(family->retainedBytes(kind), limits.parsedPayloadBytes);
+}
+
+RendererBitmap AnalyticHalfRedImage(bool firstAdmitted) {
+  RendererBitmap expected = AnalyticRedImage(16);
+  const size_t transparentStart = firstAdmitted ? 32 : 0;
+  for (size_t row = 0; row < 8; ++row) {
+    std::fill_n(expected.pixels.begin() + row * expected.rowBytes + transparentStart, 32, 0);
+  }
+  return expected;
+}
+
+void CompareAdmittedDataImage(const RendererBitmap& actual, bool firstAdmitted,
+                              std::string_view label) {
+  editor::tests::CompareBitmapToBitmap(actual, AnalyticHalfRedImage(firstAdmitted), label,
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(RendererPublicApiTest, SecureDataImageOracleRejectsWrongColorAndExtraAlpha) {
+  RendererBitmap wrongColor = AnalyticHalfRedImage(true);
+  wrongColor.pixels[0] = 0;
+  EXPECT_NONFATAL_FAILURE(
+      CompareAdmittedDataImage(wrongColor, true, "secure-data-oracle-wrong-color"),
+      "pixels differ");
+  RendererBitmap extraAlpha = AnalyticHalfRedImage(true);
+  extraAlpha.pixels[35] = 128;
+  EXPECT_NONFATAL_FAILURE(
+      CompareAdmittedDataImage(extraAlpha, true, "secure-data-oracle-extra-alpha"),
+      "pixels differ");
+}
+
+TEST(RendererPublicApiTest, SecureDataSvgSharesDecodedBudgetAndCachedImageOwnership) {
+  for (const bool reuseChild : {false, true}) {
+    SCOPED_TRACE(reuseChild);
+    const std::string child = SvgImageDocument(kAnalyticRedPngDataUrl);
+    const std::string firstUrl = SvgDataUrl(child);
+    const std::string secondUrl = SvgDataUrl(reuseChild ? child : child + " ");
+    const std::string source =
+        "<svg xmlns='http://www.w3.org/2000/svg' width='16' height='8'>"
+        "<image id='first' width='8' height='8' href='" +
+        firstUrl +
+        "'/>"
+        "<image x='8' width='8' height='8' href='" +
+        secondUrl + "'/></svg>";
+    components::DocumentResourceFamilyBudget::Limits limits;
+    limits.decodedImageBytes = 256;
+    auto family = std::make_shared<components::DocumentResourceFamilyBudget>(limits);
+    SVGDocument::Settings settings;
+    settings.processingMode = ProcessingMode::SecureStatic;
+    settings.resourceFamilyBudget = family;
+    ParseWarningSink warnings;
+    auto parsed = parser::SVGParser::ParseSVG(source, warnings, parser::SVGParser::Options(),
+                                              std::move(settings));
+    ASSERT_FALSE(parsed.hasError());
+    SVGDocument document = std::move(parsed.result());
+    Renderer renderer;
+    renderer.draw(document);
+    const RendererBitmap actual = NormalizeSnapshot(renderer.takeSnapshot());
+    EXPECT_EQ(family->retainedBytes(components::DocumentResourceFamilyBudget::Kind::DecodedImage),
+              256u);
+    if (reuseChild) {
+      editor::tests::CompareBitmapToBitmap(actual, AnalyticRedImage(16),
+                                           "secure-data-cached-family-image",
+                                           editor::tests::PixelmatchIdentityParams());
+    } else {
+      const auto first = document.querySelector("#first");
+      ASSERT_TRUE(first.has_value());
+      const auto* childImage =
+          first->unsafeEntityHandle().try_get<components::LoadedSVGImageComponent>();
+      ASSERT_NE(childImage, nullptr);
+      SVGDocument childDocument = SVGDocument::CreateFromHandle(childImage->subDocument);
+      const auto raster = childDocument.querySelector("image");
+      ASSERT_TRUE(raster.has_value());
+      const auto* loaded = raster->unsafeEntityHandle().try_get<components::LoadedImageComponent>();
+      ASSERT_NE(loaded, nullptr);
+      CompareAdmittedDataImage(actual, loaded->image.has_value(), "secure-data-family-one-image");
+    }
+  }
+}
+
 TEST(RendererPublicApiTest, ExternalUseInheritsHostFillWithoutExternalAncestors) {
   const ExternalUseRenderResult actual = RenderExternalUse(
       R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8">

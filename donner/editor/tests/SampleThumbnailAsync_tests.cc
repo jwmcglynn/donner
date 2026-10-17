@@ -33,7 +33,6 @@ namespace {
 using namespace std::chrono_literals;
 using svg::test::RgbaEq;
 using testing::ByMove;
-using testing::Invoke;
 using testing::NiceMock;
 using testing::Return;
 using tests::PollForResult;
@@ -252,13 +251,13 @@ TEST(SampleThumbnailAsyncTest, FirstOffscreenCreationCompletesBeforeForegroundHa
   const auto gate = std::make_shared<CreationGate>();
   NiceMock<svg::tests::MockRendererInterface> thumbnailRoot;
   EXPECT_CALL(thumbnailRoot, createOffscreenInstance())
-      .WillOnce(Invoke([gate]() -> std::unique_ptr<svg::RendererInterface> {
+      .WillOnce([gate]() -> std::unique_ptr<svg::RendererInterface> {
         gate->entered.store(true, std::memory_order_release);
         while (!gate->release.load(std::memory_order_acquire)) {
           std::this_thread::sleep_for(1ms);
         }
         return std::make_unique<svg::Renderer>();
-      }));
+      });
 
   // The document and its renderer outlive the worker that renders them.
   ParseWarningSink warnings = ParseWarningSink::Disabled();

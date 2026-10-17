@@ -701,8 +701,9 @@ bool FontResourceGraphCache::Entry::matches(const SVGDocumentHandle& currentDocu
                                             uint64_t epoch,
                                             const std::vector<FontFaceDependency>& currentFaces,
                                             bool scopeComplete) const {
-  return graph && document.lock() == currentDocument &&
-         documentRevision == currentDocument->revision() && preparationEpoch == epoch &&
+  const auto cachedDocument = document.lock();
+  return graph && cachedDocument && cachedDocument == currentDocument &&
+         documentRevision == cachedDocument->revision() && preparationEpoch == epoch &&
          faces == currentFaces && completedScope == scopeComplete;
 }
 

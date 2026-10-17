@@ -392,6 +392,9 @@ test:coverage --experimental_split_coverage_postprocessing
 
 # Basic ASAN/UBSAN that works for gcc
 build:asan --config=latest_llvm
+# Select sanitizer-aware toolchain defaults as well as the instrumentation flags below.
+# Apple toolchains omit their conflicting _FORTIFY_SOURCE definition when this feature is on.
+build:asan --features=asan
 build:asan --linkopt=-ldl
 build:asan --copt=-fsanitize=address,undefined
 build:asan --linkopt=-fsanitize=address,undefined

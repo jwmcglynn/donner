@@ -1,9 +1,9 @@
-#include <cassert>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
 
 #include "donner/base/PathOps.h"
+#include "donner/base/Utils.h"
 
 namespace donner {
 namespace {
@@ -175,13 +175,14 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size
 
   const PathBooleanResult result = ApplyPathBoolean(OpFromByte(opByte), inputs, options);
   if (result.status == PathBooleanStatus::Ok) {
-    assert(!result.paths.empty() && "Ok result must include output paths");
+    UTILS_RELEASE_ASSERT(!result.paths.empty() && "Ok result must include output paths");
     for (const Path& path : result.paths) {
-      assert(path.verbCount() <= options.maxOutputCommands);
-      assert(PathHasFinitePoints(path));
+      UTILS_RELEASE_ASSERT(path.verbCount() <= options.maxOutputCommands);
+      UTILS_RELEASE_ASSERT(PathHasFinitePoints(path));
     }
   } else {
-    assert(result.paths.empty() && "Non-Ok result must not expose partial output paths");
+    UTILS_RELEASE_ASSERT(result.paths.empty() &&
+                         "Non-Ok result must not expose partial output paths");
   }
 
   return 0;

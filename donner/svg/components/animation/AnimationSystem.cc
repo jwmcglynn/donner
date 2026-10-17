@@ -19,6 +19,7 @@
 #include "donner/svg/components/animation/AnimationStateComponent.h"
 #include "donner/svg/components/animation/AnimationTimingComponent.h"
 #include "donner/svg/components/animation/SetAnimationComponent.h"
+#include "donner/svg/components/resources/ResourceManagerContext.h"
 #include "donner/svg/parser/PathParser.h"
 
 // SMIL animation system, initial subset. Deferred features (paced/spline calcMode, syncbase timing,
@@ -733,6 +734,12 @@ void AnimationSystem::advance(Registry& registry, double documentTime,
   // Clear all animated overrides from previous frame.
   for (auto [entity, animValues] : registry.view<AnimatedValuesComponent>().each()) {
     animValues.overrides.clear();
+  }
+
+  if (registry.ctx().get<ResourceManagerContext>().processingMode() ==
+      ProcessingMode::SecureStatic) {
+    registry.clear<AnimatedValuesComponent>();
+    return;
   }
 
   for (const Entity entity : CollectAnimationEntities(registry)) {

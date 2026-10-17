@@ -47,7 +47,7 @@ def libc_compat_deps():
     as a non-default-versioned symbol, so unversioned references from
     `toolchains_llvm`'s prebuilt libc++.a don't auto-resolve. The tiny shim in
     `//third_party/libc_compat` provides an unversioned `copy_file_range`
-    that forwards to the versioned glibc entry point.
+    that invokes the kernel without rebinding to itself.
     """
     return select({
         "//build_defs:llvm_latest_linux": ["//third_party/libc_compat:libc_compat"],
@@ -94,9 +94,7 @@ def fuzzer_linkopts():
         "//build_defs:llvm_latest_macos": [
             "-fsanitize=fuzzer-no-link",
             llvm_lib + "/clang/21/lib/darwin/libclang_rt.fuzzer_osx.a",
-            "-nostdlib++",
-            llvm_lib + "/libc++.a",
-            llvm_lib + "/libc++abi.a",
+            # Use the platform C++ runtime; bundled LLVM archives target a newer macOS.
         ],
         "//conditions:default": ["-fsanitize=fuzzer"],
     })

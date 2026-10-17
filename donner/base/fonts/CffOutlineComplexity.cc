@@ -531,7 +531,8 @@ std::optional<std::vector<uint16_t>> ParseCff1Charset(std::span<const uint8_t> t
     offset += 2;
     const std::size_t left = leftBytes == 1 ? table[offset] : ReadBe16(table.data() + offset);
     offset += leftBytes;
-    if (left > std::numeric_limits<uint16_t>::max() - firstSid || left + 1 > glyphCount - glyph) {
+    if (left > static_cast<std::size_t>(std::numeric_limits<uint16_t>::max()) - firstSid ||
+        left + 1 > glyphCount - glyph) {
       return std::nullopt;
     }
     for (std::size_t item = 0; item <= left; ++item) {

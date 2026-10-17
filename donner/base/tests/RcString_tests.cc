@@ -616,7 +616,7 @@ TEST(RcString, HashMap) {
   EXPECT_EQ(map.count(invalidKey), 0);
 
 #if UTILS_EXCEPTIONS_ENABLED()
-  EXPECT_THROW(map.at(invalidKey), std::out_of_range);
+  EXPECT_THROW((void)map.at(invalidKey), std::out_of_range);
 #endif
 }
 
