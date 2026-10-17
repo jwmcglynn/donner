@@ -6,7 +6,6 @@
 #include <vector>
 
 #include "donner/base/Utils.h"
-#include "donner/base/element/ElementTraversalGenerators.h"
 #include "donner/css/ComponentValue.h"
 #include "donner/css/Specificity.h"
 #include "donner/css/selectors/CompoundSelector.h"
@@ -138,7 +137,12 @@ struct ComplexSelector {
     if (entries.empty()) {
       return SelectorMatchResult::None();
     }
-    return matchChain(entries.size() - 1, 0, false, singleElementGenerator(targetElement), options);
+    return matchChain(
+               entries.size() - 1, 0, false,
+               CandidateCursor<T>(targetElement, std::nullopt, false, options.traversalBudget),
+               options)
+               ? SelectorMatchResult::Match(Specificity(computeSpecificity()))
+               : SelectorMatchResult::None();
   }
 
   /**
@@ -153,10 +157,9 @@ struct ComplexSelector {
       return false;
     }
     return matchChain(
-               0, entries.size() - 1, true,
-               relatedElements(anchor, entries.front().combinator, true, options.traversalBudget),
-               options)
-        .matched;
+        0, entries.size() - 1, true,
+        CandidateCursor<T>(anchor, entries.front().combinator, true, options.traversalBudget),
+        options);
   }
 
   /// Ostream output operator for \ref ComplexSelector, outputs debug strings e.g.
@@ -164,6 +167,85 @@ struct ComplexSelector {
   friend std::ostream& operator<<(std::ostream& os, const ComplexSelector& obj);
 
 private:
+  // Parent links let a descendant cursor backtrack without allocating a coroutine or child stack.
+  template <ElementLike T>
+  class CandidateCursor {
+  public:
+    CandidateCursor(T anchor, std::optional<Combinator> relation, bool forward,
+                    SelectorTraversalBudget* budget)
+        : anchor_(std::move(anchor)), relation_(relation), forward_(forward), budget_(budget) {}
+
+    bool next() {
+      if (!started_) {
+        started_ = true;
+        current_ = first();
+      } else if (current_ && relation_) {
+        const SelectorTraversalNavigation<T> navigation(budget_);
+        switch (*relation_) {
+          case Combinator::Descendant:
+            current_ = forward_ ? nextDescendant() : current_->parentElement();
+            break;
+          case Combinator::Child:
+            current_ = forward_ ? navigation.nextSibling(*current_) : std::nullopt;
+            break;
+          case Combinator::SubsequentSibling:
+            current_ = forward_ ? navigation.nextSibling(*current_)
+                                : navigation.previousSibling(*current_);
+            break;
+          default: current_.reset(); break;
+        }
+      } else {
+        current_.reset();
+      }
+      return current_.has_value();
+    }
+
+    T getValue() const { return *current_; }
+
+  private:
+    std::optional<T> first() const {
+      if (!relation_) {
+        return anchor_;
+      }
+      const SelectorTraversalNavigation<T> navigation(budget_);
+      switch (*relation_) {
+        case Combinator::Descendant:
+        case Combinator::Child:
+          return forward_ ? navigation.firstChild(anchor_) : anchor_.parentElement();
+        case Combinator::NextSibling:
+        case Combinator::SubsequentSibling:
+          return forward_ ? navigation.nextSibling(anchor_) : navigation.previousSibling(anchor_);
+        default: return std::nullopt;
+      }
+    }
+
+    std::optional<T> nextDescendant() const {
+      const SelectorTraversalNavigation<T> navigation(budget_);
+      if (auto child = navigation.firstChild(*current_)) {
+        return child;
+      }
+      T ancestor = *current_;
+      while (!(ancestor == anchor_) && !(budget_ != nullptr && budget_->rejected())) {
+        if (auto sibling = navigation.nextSibling(ancestor)) {
+          return sibling;
+        }
+        const auto parent = ancestor.parentElement();
+        if (!parent) {
+          break;
+        }
+        ancestor = *parent;
+      }
+      return std::nullopt;
+    }
+
+    T anchor_;
+    std::optional<Combinator> relation_;
+    bool forward_;
+    SelectorTraversalBudget* budget_;
+    bool started_ = false;
+    std::optional<T> current_;
+  };
+
   template <ElementLike T>
   static bool budgetRejected(const SelectorMatchOptions<T>& options) {
     return options.traversalBudget != nullptr && options.traversalBudget->rejected();
@@ -193,12 +275,11 @@ private:
   // An explicit search stack permits backtracking without recursive native-stack growth.
   // Every candidate shares the caller's aggregate work budget, including nested functions.
   template <ElementLike T>
-  SelectorMatchResult matchChain(std::size_t startIndex, std::size_t endIndex, bool forward,
-                                 ElementTraversalGenerator<T> initial,
-                                 const SelectorMatchOptions<T>& options) const {
+  bool matchChain(std::size_t startIndex, std::size_t endIndex, bool forward,
+                  CandidateCursor<T> initial, const SelectorMatchOptions<T>& options) const {
     struct Frame {
       std::size_t index;
-      ElementTraversalGenerator<T> candidates;
+      CandidateCursor<T> candidates;
     };
     std::vector<Frame> frames;
     frames.push_back({startIndex, std::move(initial)});
@@ -217,7 +298,7 @@ private:
       }
       if (frame.index == endIndex) {
         if (matchesBoundary(candidate, forward, options)) {
-          return SelectorMatchResult::Match(Specificity(computeSpecificity()));
+          return true;
         }
         continue;
       }
@@ -225,58 +306,9 @@ private:
       const Combinator combinator =
           forward ? entries[next].combinator : entries[frame.index].combinator;
       frames.push_back(
-          {next, relatedElements(candidate, combinator, forward, options.traversalBudget)});
+          {next, CandidateCursor<T>(candidate, combinator, forward, options.traversalBudget)});
     }
-    return SelectorMatchResult::None();
-  }
-
-  template <ElementLike T>
-  static ElementTraversalGenerator<T> optionalElement(std::optional<T> element) {
-    if (element) {
-      co_yield *element;
-    }
-  }
-
-  template <ElementLike T>
-  static ElementTraversalGenerator<T> directChildren(T element, SelectorTraversalBudget* budget) {
-    const SelectorTraversalNavigation<T> navigation(budget);
-    for (auto child = navigation.firstChild(element); child;
-         child = navigation.nextSibling(*child)) {
-      co_yield *child;
-    }
-  }
-
-  template <ElementLike T>
-  static ElementTraversalGenerator<T> followingSiblings(T element,
-                                                        SelectorTraversalBudget* budget) {
-    const SelectorTraversalNavigation<T> navigation(budget);
-    for (auto sibling = navigation.nextSibling(element); sibling;
-         sibling = navigation.nextSibling(*sibling)) {
-      co_yield *sibling;
-    }
-  }
-
-  template <ElementLike T>
-  static ElementTraversalGenerator<T> relatedElements(T element, Combinator combinator,
-                                                      bool forward,
-                                                      SelectorTraversalBudget* budget) {
-    const SelectorTraversalNavigation<T> navigation(budget);
-    switch (combinator) {
-      case Combinator::Descendant:
-        return forward ? allChildrenRecursiveGenerator(element, navigation)
-                       : parentsGenerator(element);
-      case Combinator::Child:
-        return forward ? directChildren(element, budget) : optionalElement(element.parentElement());
-      case Combinator::NextSibling:
-        return optionalElement(forward ? navigation.nextSibling(element)
-                                       : navigation.previousSibling(element));
-      case Combinator::SubsequentSibling:
-        return forward ? followingSiblings(element, budget)
-                       : previousSiblingsGenerator(element, navigation);
-      default:
-        // Column relationships do not apply to SVG.
-        return optionalElement(std::optional<T>());
-    }
+    return false;
   }
 
   /**
@@ -296,7 +328,7 @@ private:
     const SelectorTraversalNavigation<T> navigation(traversalBudget);
     switch (combinator) {
       case Combinator::Descendant: {
-        auto elements = parentsGenerator<T>(currentElement);
+        CandidateCursor<T> elements(currentElement, Combinator::Descendant, false, traversalBudget);
         while (elements.next()) {
           if (traversalBudget != nullptr && !traversalBudget->consume()) {
             return false;
@@ -311,7 +343,8 @@ private:
       case Combinator::NextSibling:
         return (navigation.previousSibling(currentElement) == relativeToElement);
       case Combinator::SubsequentSibling: {
-        auto elements = previousSiblingsGenerator<T>(currentElement, navigation);
+        CandidateCursor<T> elements(currentElement, Combinator::SubsequentSibling, false,
+                                    traversalBudget);
         while (elements.next()) {
           if (traversalBudget != nullptr && !traversalBudget->consume()) {
             return false;
