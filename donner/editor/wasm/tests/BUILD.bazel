@@ -261,6 +261,7 @@ js_test(
     timeout = "long",
     copy_data_to_bin = False,
     data = [
+        "browser-heartbeat.cjs",
         "browser-process-snapshot.cjs",
         "browser-responsiveness.perf.ts",
         "browser-watchdog-anchor.mjs",
