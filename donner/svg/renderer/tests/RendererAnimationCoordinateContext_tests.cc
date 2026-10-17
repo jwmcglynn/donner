@@ -8,10 +8,13 @@
 #include "donner/svg/SVGMarkerElement.h"
 #include "donner/svg/SVGPatternElement.h"
 #include "donner/svg/SVGTextPathElement.h"
+#include "donner/svg/components/GeometryPreparationResourceBudget.h"
 #include "donner/svg/components/RenderingInstanceComponent.h"
 #include "donner/svg/components/animation/AnimatedValuesComponent.h"
 #include "donner/svg/components/animation/AnimationResourceBudget.h"
+#include "donner/svg/components/shape/ComputedPathComponent.h"
 #include "donner/svg/renderer/FilterRegionContext.h"
+#include "donner/svg/renderer/RenderingContext.h"
 #include "donner/svg/renderer/tests/RendererTestUtils.h"
 #include "donner/svg/tests/ParserTestUtils.h"
 
@@ -714,6 +717,170 @@ TEST(RendererAnimationCoordinateContext, EmptyAnimatedShadowDoesNotUseVisibleLig
   editor::tests::CompareBitmapToBitmap(
       RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(expected),
       "empty-instance-geometry", editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(RendererAnimationCoordinateContext, EveryBasicShapeUsesItsInstanceFontDuringSampling) {
+  struct Case {
+    const char* tag;
+    const char* attribute;
+    const char* prefix;
+    const char* suffix;
+    const char* target;
+    const char* first;
+    const char* second;
+  };
+  for (const auto& item : {
+           Case{"rect", "x", "<rect x='", "' y='2' width='4' height='4'>", "1em", "4", "8"},
+           Case{"circle", "cx", "<circle cx='", "' cy='8' r='2'>", "1em", "4", "8"},
+           Case{"ellipse", "cx", "<ellipse cx='", "' cy='8' rx='2' ry='1'>", "1em", "4", "8"},
+           Case{"line", "x1", "<line x1='",
+                "' x2='16' y1='8' y2='8' stroke='black' stroke-width='2'>", "1em", "4", "8"},
+           Case{"rect", "rx", "<rect rx='", "' width='12' height='12'>", "0.5em", "2", "4"},
+       }) {
+    SCOPED_TRACE(item.attribute);
+    const auto shape = [&](std::string_view value, std::string_view child = "") {
+      return std::string(item.prefix) + std::string(value) + item.suffix + std::string(child) +
+             "</" + item.tag + ">";
+    };
+    const std::string animation = "<animate attributeName='" + std::string(item.attribute) +
+                                  "' from='0' to='" + item.target + "' begin='1s' dur='2s'/>";
+    auto document = instantiateSubtree(
+        "<defs><g id='shape'>" + shape("0", animation) +
+            "</g></defs>"
+            "<use href='#shape' x='4' font-size='8'/><use href='#shape' x='36' font-size='16'/>",
+        parser::SVGParser::Options(), Vector2i(64, 16));
+    const std::string source(document.source());
+    for (const double time : {0.0, 2.0, 4.0, 2.0}) {
+      SCOPED_TRACE(time);
+      document.setTime(time);
+      auto expected = instantiateSubtree(
+          "<g transform='translate(4)'>" + shape(time == 2 ? item.first : "0") +
+              "</g><g transform='translate(36)'>" + shape(time == 2 ? item.second : "0") + "</g>",
+          parser::SVGParser::Options(), Vector2i(64, 16));
+      editor::tests::CompareBitmapToBitmap(RenderDocumentWithActiveBackend(document),
+                                           RenderDocumentWithActiveBackend(expected),
+                                           std::string("shape-context-") + item.tag + "-" +
+                                               item.attribute + "-" + std::to_string(time),
+                                           editor::tests::PixelmatchIdentityParams());
+      EXPECT_EQ(document.source(), source);
+    }
+  }
+}
+
+TEST(RendererAnimationCoordinateContext, RelativeBasesAndWorldBoundsSurviveInactiveIntervals) {
+  auto document = instantiateSubtree(
+      "<defs><rect id='tile' width='1em' height='4'>"
+      "<animate attributeName='width' to='20' begin='1s' dur='2s'/></rect></defs>"
+      "<use href='#tile' x='1' font-size='4'/><use href='#tile' x='24' y='6' font-size='12'/>",
+      parser::SVGParser::Options(), Vector2i(48, 16));
+  components::RenderingContext context(document.registry());
+  for (const double time : {0.0, 2.0, 4.0, 2.0}) {
+    SCOPED_TRACE(time);
+    document.setTime(time);
+    const double firstWidth = time == 2 ? 12 : 4;
+    const double secondWidth = time == 2 ? 16 : 12;
+    auto expected = instantiateSubtree("<rect x='1' width='" + std::to_string(firstWidth) +
+                                           "' height='4'/>"
+                                           "<rect x='24' y='6' width='" +
+                                           std::to_string(secondWidth) + "' height='4'/>",
+                                       parser::SVGParser::Options(), Vector2i(48, 16));
+    editor::tests::CompareBitmapToBitmap(
+        RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(expected),
+        "relative-shape-base-" + std::to_string(time), editor::tests::PixelmatchIdentityParams());
+    const Entity first = context.findIntersecting(Vector2d(2, 2));
+    const Entity second = context.findIntersecting(Vector2d(26, 8));
+    ASSERT_NE(first, entt::null);
+    ASSERT_NE(second, entt::null);
+    ASSERT_NE(first, second);
+    EXPECT_THAT(context.getWorldBounds(first),
+                testing::Optional(Box2d::FromXYWH(1, 0, firstWidth, 4)));
+    EXPECT_THAT(context.getWorldBounds(second),
+                testing::Optional(Box2d::FromXYWH(24, 6, secondWidth, 4)));
+    const auto hits = context.findIntersectingRect(Box2d::FromXYWH(38, 7, 1, 1));
+    EXPECT_THAT(hits, testing::Not(testing::Contains(first)));
+    if (time == 2) {
+      EXPECT_THAT(hits, testing::Contains(second));
+    } else {
+      EXPECT_THAT(hits, testing::Not(testing::Contains(second)));
+    }
+  }
+}
+
+TEST(RendererAnimationCoordinateContext, RefusedShadowGeometryRecoversWithoutLightFallback) {
+  auto baseline = instantiateSubtree("<rect width='4' height='4'/>", parser::SVGParser::Options(),
+                                     Vector2i(16, 16));
+  (void)RenderDocumentWithActiveBackend(baseline);
+  const size_t onePath = baseline.registry()
+                             .ctx()
+                             .get<components::GeometryPreparationResourceBudget>()
+                             .retainedBytes();
+  ASSERT_GT(onePath, 0u);
+  auto document = instantiateSubtree(
+      "<defs><rect id='tile' width='4' height='4'>"
+      "<animate attributeName='width' to='1em' dur='2s'/></rect></defs>"
+      "<use href='#tile' x='2' y='2' font-size='8'/>",
+      parser::SVGParser::Options(), Vector2i(16, 16));
+  auto& registry = document.registry();
+  registry.ctx().emplace<components::GeometryPreparationResourceBudget>(
+      nullptr, components::GeometryPreparationResourceBudget::Limits{.maximumBytes = onePath});
+  document.setTime(1);
+  auto empty = instantiateSubtree("", parser::SVGParser::Options(), Vector2i(16, 16));
+  editor::tests::CompareBitmapToBitmap(
+      RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(empty),
+      "refused-shadow-does-not-fallback", editor::tests::PixelmatchIdentityParams());
+  EXPECT_TRUE(registry.ctx().get<components::GeometryPreparationResourceBudget>().rejected());
+  registry.ctx().erase<components::GeometryPreparationResourceBudget>();
+  registry.ctx().emplace<components::GeometryPreparationResourceBudget>();
+  document.setTime(0.5);
+  auto expected = instantiateSubtree("<rect x='2' y='2' width='5' height='4'/>",
+                                     parser::SVGParser::Options(), Vector2i(16, 16));
+  editor::tests::CompareBitmapToBitmap(
+      RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(expected),
+      "shadow-recovers-next-pass", editor::tests::PixelmatchIdentityParams());
+  EXPECT_FALSE(registry.ctx().get<components::GeometryPreparationResourceBudget>().rejected());
+}
+
+TEST(RendererAnimationCoordinateContext, ShadowRebuildsReleaseTheirGeometryReservations) {
+  auto document = instantiateSubtree(
+      "<defs><rect id='a' width='4' height='4'><animate attributeName='width' to='1em' dur='2s'/>"
+      "</rect><rect id='b' width='4' height='4'><animate attributeName='width' to='1em' dur='2s'/>"
+      "</rect></defs><use id='instance' href='#a' font-size='8'/>",
+      parser::SVGParser::Options(), Vector2i(16, 16));
+  auto instance = document.querySelector("#instance");
+  ASSERT_TRUE(instance.has_value());
+  document.setTime(1);
+  (void)RenderDocumentWithActiveBackend(document);
+  const size_t initial = document.registry()
+                             .ctx()
+                             .get<components::GeometryPreparationResourceBudget>()
+                             .retainedBytes();
+  size_t lightBaseline = 0;
+  for (const char* selector : {"#a", "#b"}) {
+    const auto element = document.querySelector(selector);
+    ASSERT_TRUE(element.has_value());
+    const auto* path = element->entityHandle().try_get<components::ComputedPathComponent>();
+    ASSERT_NE(path, nullptr);
+    ASSERT_TRUE(path->spline.retainedBytes().has_value());
+    lightBaseline += *path->spline.retainedBytes();
+  }
+  ASSERT_GT(initial, lightBaseline);
+  for (int iteration = 0; iteration < 24; ++iteration) {
+    instance->setAttribute("href", iteration % 2 ? "#a" : "#b");
+    document.setTime(iteration % 2 ? 1 : 0.5);
+    (void)RenderDocumentWithActiveBackend(document);
+    EXPECT_EQ(document.registry()
+                  .ctx()
+                  .get<components::GeometryPreparationResourceBudget>()
+                  .retainedBytes(),
+              initial);
+  }
+  ASSERT_TRUE(document.removeElement(*instance).applied);
+  instance.reset();
+  (void)RenderDocumentWithActiveBackend(document);
+  const auto& budget =
+      document.registry().ctx().get<components::GeometryPreparationResourceBudget>();
+  EXPECT_EQ(budget.retainedBytes(), lightBaseline);
+  EXPECT_FALSE(budget.rejected());
 }
 
 }  // namespace
