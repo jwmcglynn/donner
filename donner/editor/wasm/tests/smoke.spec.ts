@@ -3143,18 +3143,21 @@ test("Firefox renders every visible Splash layer thumbnail", async ({ browserNam
     settledStats?.textureSnapshotCount || 0,
   );
 
+  // The 40 px Edit/Preview dock sits above the Layers panel. Keep the probes inside
+  // the same named thumbnail rows after that dock shifts the panel down.
+  const animationModeDockHeight = 40;
   const thumbnailRegions = [
     {
       name: "Sunburst",
       x: bounds.width - kRightPaneWidth + 60,
-      y: 112,
+      y: 112 + animationModeDockHeight,
       width: 30,
       height: 26,
     },
     {
       name: "Blue_center_burst",
       x: bounds.width - kRightPaneWidth + 60,
-      y: 172,
+      y: 172 + animationModeDockHeight,
       width: 30,
       height: 26,
     },

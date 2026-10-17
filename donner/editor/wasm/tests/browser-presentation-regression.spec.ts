@@ -1920,6 +1920,9 @@ async function openBasicShapes(
   );
   await page.mouse.click(canvasBounds.x + canvasBounds.width * 0.76, canvasBounds.y + 282);
   await expect(editorCanvas).toHaveAttribute("data-active-sample-id", "basic-shapes");
+  // The picker click can remain over a layer row after it closes. Clear that hover before
+  // capturing the baseline or overlays: layer preview deliberately tints its matching shape.
+  await page.mouse.move(canvasBounds.x + 8, canvasBounds.y + 8);
   await expectWorkerResultsToReach(
     page,
     (completedResults) => completedResults > beforeSampleResults,
