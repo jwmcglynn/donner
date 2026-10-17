@@ -1036,7 +1036,7 @@ TEST_F(StyleSystemTest, UserAgentDisplayRulesResolveSvgNamespaceAliases) {
 TEST_F(StyleSystemTest, EmptySelectorUsesAuthoredChildrenAfterShadowInstantiation) {
   auto document = ParseSVG(R"svg(<svg xmlns="http://www.w3.org/2000/svg">
     <style>use, g { opacity: .2 } use:empty, g:empty { opacity: .8 }</style>
-    <defs><g id="shape"><rect/></g></defs>
+    <defs><g id="shape"><rect/><use id="nested" href="#leaf"/></g><rect id="leaf"/></defs>
     <use id="empty" href="#shape"/>
     <use id="titled" href="#shape"><title>name</title></use>
   </svg>)svg");
@@ -1054,6 +1054,25 @@ TEST_F(StyleSystemTest, EmptySelectorUsesAuthoredChildrenAfterShadowInstantiatio
     const auto& proxyProperties = styleSystem.computeStyle(proxy, warnings).properties;
     ASSERT_THAT(proxyProperties, testing::Optional(testing::_));
     EXPECT_THAT(proxyProperties->opacity.get(), testing::Optional(.2));
+    const auto nested = document.querySelector("#nested").value();
+    const auto leaf = document.querySelector("#leaf").value();
+    const std::vector<Entity> proxies = shadow.mainBranch->shadowEntities;
+    bool testedNested = false;
+    for (const Entity entity : proxies) {
+      if (document.registry().get<ShadowEntityComponent>(entity).lightEntity != nested.entity()) {
+        continue;
+      }
+      EntityHandle nestedProxy(document.registry(), entity);
+      auto& nestedShadow = nestedProxy.get_or_emplace<ComputedShadowTreeComponent>();
+      ShadowTreeSystem().populateInstance(nestedProxy, nestedShadow, ShadowBranchType::Main,
+                                          leaf.entity(), RcString("#leaf"), warnings);
+      ASSERT_THAT(nestedShadow.mainBranch, testing::Optional(testing::_));
+      const auto& nestedProperties = styleSystem.computeStyle(nestedProxy, warnings).properties;
+      ASSERT_THAT(nestedProperties, testing::Optional(testing::_));
+      EXPECT_THAT(nestedProperties->opacity.get(), testing::Optional(.8));
+      testedNested = true;
+    }
+    EXPECT_TRUE(testedNested);
     const bool empty = std::string_view(id) == "empty";
     EXPECT_EQ(host.isEmptyForSelector(nullptr), empty);
     const auto& properties = styleSystem.computeStyle(host.entityHandle(), warnings).properties;
