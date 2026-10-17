@@ -1,7 +1,8 @@
 #pragma once
 /// @file
 
-#include <functional>
+#include <cstddef>
+#include <utility>
 #include <vector>
 
 #include "donner/base/Utils.h"
@@ -98,7 +99,7 @@ inline std::ostream& operator<<(std::ostream& os, Combinator combinator) {
 struct ComplexSelector {
   /// A single entry in a complex selector, which is a compound selector and a combinator.
   struct Entry {
-    /// The combinator between this compound selector and the next. For regular selector lists,
+    /// The combinator before this compound selector. For regular selector lists,
     /// the first entry is set to \ref Combinator::Descendant but it has no effect. For relative
     /// selector lists, the first entry is the leading combinator, for example "> div".
     Combinator combinator;
@@ -134,79 +135,26 @@ struct ComplexSelector {
   template <ElementLike T>
   SelectorMatchResult matches(const T& targetElement,
                               const SelectorMatchOptions<T>& options) const {
-    using GeneratorCreator = std::function<ElementTraversalGenerator<T>()>;
-    GeneratorCreator elementsGenerator = std::bind(&singleElementGenerator<T>, targetElement);
-
-    // "To match a complex selector against an element, process it compound selector at a time, in
-    // right-to-left order."
-    for (auto it = entries.rbegin(); it != entries.rend(); ++it) {
-      const Entry& entry = *it;
-
-      // "If any simple selectors in the rightmost compound selector does not match the element,
-      // return failure."
-      std::optional<T> currentElement;
-      ElementTraversalGenerator<T> elements = elementsGenerator();
-      while (elements.next()) {
-        if (options.traversalBudget != nullptr && !options.traversalBudget->consume()) {
-          return SelectorMatchResult::None();
-        }
-        const T element = elements.getValue();
-        if (entry.compoundSelector.matches(element, /* requirePrimary */ it == entries.rbegin(),
-                                           options)) {
-          currentElement = element;
-          break;
-        }
-      }
-
-      if (!currentElement) {
-        return SelectorMatchResult::None();
-      }
-
-      // If this is the last entry (first in reverse order) and relativeToElement is set,
-      // we need to check the combinator against the relativeToElement
-      if (it == entries.rbegin() && options.relativeToElement) {
-        if (!matchesRelativeTo(currentElement.value(), *options.relativeToElement, entry.combinator,
-                               options.traversalBudget)) {
-          return SelectorMatchResult::None();
-        }
-      }
-
-      // "Otherwise, if there is only one compound selector in the complex selector, return
-      // success."
-      // In this case, return success once we've reached the leftmost compound selector.
-      if (it + 1 == entries.rend()) {
-        return SelectorMatchResult::Match(Specificity(computeSpecificity()));
-      }
-
-      // "Otherwise, consider all possible elements that could be related to this element by the
-      // rightmost combinator. If the operation of matching the selector consisting of this
-      // selector with the rightmost compound selector and rightmost combinator removed against
-      // any one of these elements returns success, then return success. Otherwise, return
-      // failure."
-      if (entry.combinator == Combinator::Descendant) {
-        elementsGenerator = std::bind(&parentsGenerator<T>, currentElement.value());
-      } else if (entry.combinator == Combinator::Child) {
-        if (auto parent = currentElement->parentElement()) {
-          elementsGenerator = std::bind(&singleElementGenerator<T>, parent.value());
-        } else {
-          return SelectorMatchResult::None();
-        }
-      } else if (entry.combinator == Combinator::NextSibling) {
-        if (auto previous = currentElement->previousSibling()) {
-          elementsGenerator = std::bind(&singleElementGenerator<T>, previous.value());
-        } else {
-          return SelectorMatchResult::None();
-        }
-      } else if (entry.combinator == Combinator::SubsequentSibling) {
-        elementsGenerator = std::bind(&previousSiblingsGenerator<T>, currentElement.value());
-      } else {
-        // NOTE: Combinator::Column does not apply to SVG so it never matches.
-        return SelectorMatchResult::None();
-      }
+    if (entries.empty()) {
+      return SelectorMatchResult::None();
     }
+    return matchChain(entries.size() - 1, 0, false, singleElementGenerator(targetElement), options);
+  }
 
-    // Default to not match.
-    return SelectorMatchResult::None();
+  /**
+   * Match this relative selector forward from its anchor, including sibling relationships.
+   * @param anchor Reference element for the leading combinator.
+   * @param options Scope and shared traversal budget for the match.
+   * @return True if a complete selector chain matches from the anchor.
+   */
+  template <ElementLike T>
+  bool matchesRelativeToAnchor(const T& anchor, const SelectorMatchOptions<T>& options) const {
+    if (entries.empty()) {
+      return false;
+    }
+    return matchChain(0, entries.size() - 1, true,
+                      relatedElements(anchor, entries.front().combinator, true), options)
+        .matched;
   }
 
   /// Ostream output operator for \ref ComplexSelector, outputs debug strings e.g.
@@ -214,6 +162,110 @@ struct ComplexSelector {
   friend std::ostream& operator<<(std::ostream& os, const ComplexSelector& obj);
 
 private:
+  template <ElementLike T>
+  static bool budgetRejected(const SelectorMatchOptions<T>& options) {
+    return options.traversalBudget != nullptr && options.traversalBudget->rejected();
+  }
+
+  template <ElementLike T>
+  bool matchesCandidate(const T& candidate, std::size_t index,
+                        const SelectorMatchOptions<T>& options) const {
+    if (options.traversalBudget != nullptr && !options.traversalBudget->consume()) {
+      return false;
+    }
+    return entries[index].compoundSelector.matches(candidate, index + 1 == entries.size(),
+                                                   options) &&
+           !budgetRejected(options);
+  }
+
+  template <ElementLike T>
+  bool matchesBoundary(const T& candidate, bool forward,
+                       const SelectorMatchOptions<T>& options) const {
+    if (forward || !options.relativeToElement) {
+      return true;
+    }
+    return matchesRelativeTo(candidate, *options.relativeToElement, entries.front().combinator,
+                             options.traversalBudget);
+  }
+
+  // An explicit search stack permits backtracking without recursive native-stack growth.
+  // Every candidate shares the caller's aggregate work budget, including nested functions.
+  template <ElementLike T>
+  SelectorMatchResult matchChain(std::size_t startIndex, std::size_t endIndex, bool forward,
+                                 ElementTraversalGenerator<T> initial,
+                                 const SelectorMatchOptions<T>& options) const {
+    struct Frame {
+      std::size_t index;
+      ElementTraversalGenerator<T> candidates;
+    };
+    std::vector<Frame> frames;
+    frames.push_back({startIndex, std::move(initial)});
+    SelectorMatchOptions<T> compoundOptions = options;
+    // Nested :is/:not/nth selector arguments are ordinary selectors, not relative lists.
+    compoundOptions.relativeToElement = nullptr;
+    while (!frames.empty() && !budgetRejected(options)) {
+      Frame& frame = frames.back();
+      if (!frame.candidates.next()) {
+        frames.pop_back();
+        continue;
+      }
+      const T candidate = frame.candidates.getValue();
+      if (!matchesCandidate(candidate, frame.index, compoundOptions)) {
+        continue;
+      }
+      if (frame.index == endIndex) {
+        if (matchesBoundary(candidate, forward, options)) {
+          return SelectorMatchResult::Match(Specificity(computeSpecificity()));
+        }
+        continue;
+      }
+      const std::size_t next = forward ? frame.index + 1 : frame.index - 1;
+      const Combinator combinator =
+          forward ? entries[next].combinator : entries[frame.index].combinator;
+      frames.push_back({next, relatedElements(candidate, combinator, forward)});
+    }
+    return SelectorMatchResult::None();
+  }
+
+  template <ElementLike T>
+  static ElementTraversalGenerator<T> optionalElement(std::optional<T> element) {
+    if (element) {
+      co_yield *element;
+    }
+  }
+
+  template <ElementLike T>
+  static ElementTraversalGenerator<T> directChildren(T element) {
+    for (auto child = element.firstChild(); child; child = child->nextSibling()) {
+      co_yield *child;
+    }
+  }
+
+  template <ElementLike T>
+  static ElementTraversalGenerator<T> followingSiblings(T element) {
+    for (auto sibling = element.nextSibling(); sibling; sibling = sibling->nextSibling()) {
+      co_yield *sibling;
+    }
+  }
+
+  template <ElementLike T>
+  static ElementTraversalGenerator<T> relatedElements(T element, Combinator combinator,
+                                                      bool forward) {
+    switch (combinator) {
+      case Combinator::Descendant:
+        return forward ? allChildrenRecursiveGenerator(element) : parentsGenerator(element);
+      case Combinator::Child:
+        return forward ? directChildren(element) : optionalElement(element.parentElement());
+      case Combinator::NextSibling:
+        return optionalElement(forward ? element.nextSibling() : element.previousSibling());
+      case Combinator::SubsequentSibling:
+        return forward ? followingSiblings(element) : previousSiblingsGenerator(element);
+      default:
+        // Column relationships do not apply to SVG.
+        return optionalElement(std::optional<T>());
+    }
+  }
+
   /**
    * For relative selectors, check if the current element matches the relativeToElement with the
    * given combinator.

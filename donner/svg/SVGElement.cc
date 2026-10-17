@@ -3,9 +3,11 @@
 #include <atomic>
 
 #include "donner/base/ParseWarningSink.h"
+#include "donner/base/xml/XMLNode.h"
 #include "donner/base/xml/components/AttributesComponent.h"
 #include "donner/base/xml/components/TreeComponent.h"
 #include "donner/css/parser/SelectorParser.h"
+#include "donner/css/selectors/SelectorMatchOptions.h"
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/SVGQuerySelector.h"
 #include "donner/svg/components/ClassComponent.h"
@@ -132,6 +134,25 @@ std::optional<EntityHandle> ElementEntityHandle(Registry& registry, Entity entit
   EntityHandle handle(registry, entity);
   return handle.all_of<components::ElementTypeComponent>() ? std::make_optional(handle)
                                                            : std::nullopt;
+}
+
+bool HasSelectorContent(EntityHandle handle) {
+  if (handle.all_of<components::ElementTypeComponent>()) {
+    return true;
+  }
+  const auto node = xml::XMLNode::TryCast(handle);
+  if (!node) {
+    return false;
+  }
+  if (node->type() == xml::XMLNode::Type::Element) {
+    return true;
+  }
+  if (node->type() != xml::XMLNode::Type::Data && node->type() != xml::XMLNode::Type::CData) {
+    return false;
+  }
+  const auto value = node->value();
+  return value && std::string_view(value->data(), value->size()).find_first_not_of(" \t\r\n") !=
+                      std::string_view::npos;
 }
 
 std::optional<EntityHandle> FirstElementChild(EntityHandle handle) {
@@ -726,6 +747,29 @@ std::optional<SVGElement> SVGElement::firstChild() const {
   }
 
   return std::nullopt;
+}
+
+bool SVGElement::isEmptyForSelector(css::SelectorTraversalBudget* budget) const {
+  if (!handle_) {
+    return true;
+  }
+  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
+  const EntityHandle handle = handle_;
+  if (handle.all_of<components::ShadowTreeComponent>()) {
+    return true;
+  }
+  const auto& tree = handle.get<donner::components::TreeComponent>();
+  Registry& registry = *handle.registry();
+  for (Entity child = tree.firstChild(); child != entt::null;
+       child = registry.get<donner::components::TreeComponent>(child).nextSibling()) {
+    if (budget != nullptr && !budget->consume()) {
+      return false;
+    }
+    if (HasSelectorContent(EntityHandle(registry, child))) {
+      return false;
+    }
+  }
+  return true;
 }
 
 std::optional<SVGElement> SVGElement::lastChild() const {
