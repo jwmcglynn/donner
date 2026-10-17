@@ -161,7 +161,7 @@ def _record_commands(name, commands, by_step):
     problems = []
     for step_name, command in commands:
         if (TOOLCHAIN_REFRESH in command or
-                BAZEL_INVOCATION.search(command).group(1) == "query"):
+                all(match.group(1) == "query" for match in BAZEL_INVOCATION.finditer(command))):
             continue
         if LANE_FLAGS not in command:
             problems.append("%s step %r runs Bazel without %s" % (name, step_name, LANE_FLAGS))
@@ -320,10 +320,11 @@ class MacosCacheKeyParityTest(unittest.TestCase):
         self.assertEqual({}, recorded)
         for operation in ("build", "test", "cquery"):
             with self.subTest(operation=operation):
-                problems = _record_commands(HOSTED, [
-                    ("Configured", "bazelisk %s //..." % operation)], {})
-                self.assertEqual(1, len(problems), problems)
-                self.assertIn("runs Bazel without", problems[0])
+                for command in ("bazelisk %s //..." % operation,
+                                "bazelisk query //... && bazelisk %s //..." % operation):
+                    problems = _record_commands(HOSTED, [("Configured", command)], {})
+                    self.assertEqual(1, len(problems), problems)
+                    self.assertIn("runs Bazel without", problems[0])
 
     def test_key_parity_policy_rejects_divergence(self):
         hosted_flags = 'BAZEL_MACOS_BUILD_FLAGS: "--config=ci-macos --macos_minimum_os=13.3"\n'
