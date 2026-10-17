@@ -29,6 +29,7 @@ import { sampleThumbnailLaneQuiescent } from "./sample-thumbnail-quiescence.mjs"
 import { expectSampleThumbnailsToSettle } from "./sample-thumbnail-settle";
 import {
   expectSurfaceFrameProbeReady,
+  findCanvasOwnerWorker,
   findProbedCanvasApplicationWorker,
   holdCanvasCompletionForTest,
 } from "./surface-frame-probe";
@@ -3625,16 +3626,25 @@ test(
     const box = await canvas.boundingBox();
     if (!box) throw new Error("the editor canvas has no bounds");
     await page.mouse.click(box.x + box.width * 0.76, box.y + 390);
+    let interactionCaptureOwner: Worker | null = null;
     const captureAnimationRegion = async (region: CssRegion) => {
       const viewport = page.viewportSize();
       if (!viewport) throw new Error("the animation capture viewport is unavailable");
       // Firefox can omit the transferred WebGPU canvas from clipped captures. Use the same
       // un-clipped viewport capture as the presentation regressions, then score the original region.
       const unclipped = browserName === "firefox";
-      const png = await page.screenshot({
-        ...(unclipped ? {} : { clip: region }),
-        timeout: scaledMs(5000),
-      });
+      const capture = (timeout: number) =>
+        page.screenshot({
+          ...(unclipped ? {} : { clip: region }),
+          timeout,
+        });
+      const png = interactionCaptureOwner === null
+        ? await capture(scaledMs(5000))
+        : await captureAfterCanvasGpuCompletion(
+          interactionCaptureOwner,
+          performance.now() + scaledMs(5000),
+          capture,
+        );
       const offsetX = unclipped ? region.x : 0;
       const offsetY = unclipped ? region.y : 0;
       const read = (
@@ -3965,7 +3975,14 @@ test(
       cpuTextureWrites: gpuBefore?.cpuTextureWrites,
     });
     await verifyRasterProgressWithTimersHeld(page);
-    await page.screenshot({ path: testInfo.outputPath("animation-preview.png") });
+    // Observe completion only after the uninstrumented playback interval has finished.
+    await expectSurfaceFrameProbeReady(page);
+    await expect.poll(async () => {
+      interactionCaptureOwner = await findCanvasOwnerWorker(page);
+      return interactionCaptureOwner !== null;
+    }, { message: "interaction captures observe the canvas GPU owner" }).toBe(true);
+    const previewCapture = await captureAnimationRegion(box);
+    await writeFile(testInfo.outputPath("animation-preview.png"), previewCapture.png);
     expect(after.documents - before.documents).toBeGreaterThan(10);
 
     let pulseClickStartedEpochMs: number | null = null;
@@ -3993,7 +4010,16 @@ test(
         height: 65 * scale,
       };
       const padPixels = async (target: "animation-hover" | "animation-pressed") => {
-        return (await captureAnimationRegion(padRegion)).read(target)?.pixels ?? 0;
+        const capture = await captureAnimationRegion(padRegion);
+        const pixels = capture.read(target)?.pixels ?? 0;
+        if (pixels <= 1000) {
+          await writeFile(testInfo.outputPath(`${target}-probe.png`), capture.png);
+          await writeFile(
+            testInfo.outputPath(`${target}-probe.json`),
+            JSON.stringify({ padRegion, viewport: capture.viewport, pixels }, null, 2),
+          );
+        }
+        return pixels;
       };
       await page.mouse.move(pad.x, pad.y);
       await expect.poll(() => padPixels("animation-hover"), { timeout: scaledMs(5000) })
