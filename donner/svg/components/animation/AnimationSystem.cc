@@ -235,7 +235,11 @@ bool NeedsInstanceValueContext(Registry& registry, Entity target, std::string_vi
       attribute == "textLength" &&
       (type->type() == ElementType::Text || type->type() == ElementType::TSpan ||
        type->type() == ElementType::TextPath || type->type() == ElementType::A);
-  return shapeLength || textLength ||
+  const bool textPosition = (attribute == "x" || attribute == "y" || attribute == "dx" ||
+                             attribute == "dy" || attribute == "rotate") &&
+                            (type->type() == ElementType::Text ||
+                             type->type() == ElementType::TSpan || type->type() == ElementType::A);
+  return shapeLength || textLength || textPosition ||
          (type->type() == ElementType::TextPath && attribute == "startOffset") ||
          (type->type() == ElementType::Marker &&
           (attribute == "markerWidth" || attribute == "markerHeight" || attribute == "refX" ||

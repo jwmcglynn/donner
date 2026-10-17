@@ -322,6 +322,7 @@ void TextSystem::instantiateComputedComponent(EntityHandle rootHandle,
   auto& computed = registry.get_or_emplace<ComputedTextComponent>(rootHandle.entity());
   computed.spans.clear();
   computed.textLengthOwnerFontSizes.clear();
+  computed.ownerSpanRanges.clear();
 
   std::unordered_map<Entity, size_t> entitySubtreeCharOffset;
 
@@ -450,6 +451,8 @@ void TextSystem::instantiateComputedComponent(EntityHandle rootHandle,
       return;
     }
 
+    const size_t firstSpan = pendingSpans.size();
+
     if (const auto* style = handle.try_get<ComputedStyleComponent>(); style && style->properties) {
       computed.textLengthOwnerFontSizes.try_emplace(handle.entity(),
                                                     style->properties->fontSize.get().value());
@@ -517,6 +520,7 @@ void TextSystem::instantiateComputedComponent(EntityHandle rootHandle,
         emitChunk(text.textChunks[chunkIndex]);
       }
     });
+    computed.ownerSpanRanges[handle.entity()] = {firstSpan, pendingSpans.size()};
   };
 
   collectSpans(rootHandle, 0, false);

@@ -476,19 +476,28 @@ TEST(RendererAnimationPresentation, NestedFixedOwnerDoesNotCreateParentScalingGa
       "nested-fixed-owner-parent-scaling", editor::tests::PixelmatchIdentityParams());
 }
 
-TEST(RendererAnimationPresentation, InvalidNestedTextLengthSuppressesEveryRecipeAtomically) {
+TEST(RendererAnimationPresentation, InvalidNestedTextLengthKeepsOwnBaseOnly) {
   auto document = ParsePresentation(
-      "<text x='1' y='12' font-size='10' lengthAdjust='spacingAndGlyphs'>H"
+      "<text id='owner' x='1' y='12' font-size='10' lengthAdjust='spacingAndGlyphs'>H"
       "<tspan lengthAdjust='spacingAndGlyphs' textLength='8'>HH"
       "<animate attributeName='textLength' to='-1' dur='2s'/></tspan>H"
       "<animate attributeName='textLength' to='40' dur='2s'/></text>");
+  auto owner = document.querySelector("#owner");
+  ASSERT_TRUE(owner.has_value());
+  document.setTime(3);
+  const double natural = owner->cast<SVGTextElement>().getComputedTextLength();
   document.setTime(1);
+  std::ostringstream midpoint;
+  midpoint.precision(std::numeric_limits<double>::max_digits10);
+  midpoint << (natural + 40) / 2;
   auto expected = ParsePresentation(
-      "<text x='1' y='12' font-size='10'>H"
+      "<text x='1' y='12' font-size='10' lengthAdjust='spacingAndGlyphs' textLength='" +
+      midpoint.str() +
+      "'>H"
       "<tspan lengthAdjust='spacingAndGlyphs' textLength='8'>HH</tspan>H</text>");
   editor::tests::CompareBitmapToBitmap(
       RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(expected),
-      "invalid-nested-text-length-atomic", editor::tests::PixelmatchIdentityParams());
+      "invalid-nested-text-length-own-base", editor::tests::PixelmatchIdentityParams());
 }
 
 TEST(RendererAnimationPresentation, VerticalNaturalTextLengthMatchesStaticTarget) {

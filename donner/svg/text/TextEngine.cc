@@ -1,11 +1,15 @@
 #include "donner/svg/text/TextEngine.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <limits>
 #include <span>
+#include <sstream>
 #include <string>
+#include <type_traits>
 #include <unordered_map>
+#include <variant>
 
 #include "donner/base/MathUtils.h"
 #include "donner/base/Utf8.h"
@@ -15,6 +19,7 @@
 #include "donner/svg/components/FontMetricDependenciesComponent.h"
 #include "donner/svg/components/FontPaintDependenciesComponent.h"
 #include "donner/svg/components/StylesheetComponent.h"
+#include "donner/svg/components/animation/AnimatedValuesComponent.h"
 #include "donner/svg/components/animation/AnimationBaseValue.h"
 #include "donner/svg/components/animation/AnimationResourceBudget.h"
 #include "donner/svg/components/animation/AnimationValueSampler.h"
@@ -25,6 +30,7 @@
 #include "donner/svg/components/style/StyleSystem.h"
 #include "donner/svg/components/text/TextComponent.h"
 #include "donner/svg/components/text/TextInvalidation.h"
+#include "donner/svg/components/text/TextPositioningComponent.h"
 #include "donner/svg/components/text/TextRootComponent.h"
 #include "donner/svg/components/text/TextSystem.h"
 #include "donner/svg/core/DominantBaseline.h"
@@ -303,6 +309,363 @@ TextLayoutParams buildTextLayoutParams(Registry& registry, EntityHandle handle,
   return params;
 }
 
+constexpr std::array<std::string_view, 4> kTextLengthListNames = {"x", "y", "dx", "dy"};
+
+struct SampledTextPositions {
+  std::array<std::optional<std::vector<Lengthd>>, kTextLengthListNames.size()> lengths;
+  std::optional<std::vector<double>> rotations;
+};
+
+size_t TextSpanCodepointCount(const components::ComputedTextComponent::TextSpan& span) {
+  if (span.hidden) {
+    return 0;
+  }
+  const std::string_view text(span.text.data() + span.start, span.end - span.start);
+  size_t count = 0;
+  size_t offset = 0;
+  while (offset < text.size()) {
+    const auto [codepoint, bytes] = Utf8::NextCodepoint(text.substr(offset));
+    (void)codepoint;
+    offset += static_cast<size_t>(bytes);
+    ++count;
+  }
+  return count;
+}
+
+std::string SerializeTextPositionLengths(std::span<const Lengthd> values) {
+  std::ostringstream output;
+  output.precision(std::numeric_limits<double>::max_digits10);
+  for (size_t index = 0; index < values.size(); ++index) {
+    if (index != 0) {
+      output << ' ';
+    }
+    output << values[index];
+  }
+  return output.str();
+}
+
+std::string SerializeTextPositionRotations(std::span<const double> values) {
+  std::ostringstream output;
+  output.precision(std::numeric_limits<double>::max_digits10);
+  for (size_t index = 0; index < values.size(); ++index) {
+    if (index != 0) {
+      output << ' ';
+    }
+    output << values[index];
+  }
+  return output.str();
+}
+
+std::optional<std::string> SampleTextPositionRecipe(
+    const components::ContextualLengthRecipe& recipe, std::string underlying,
+    const components::AnimationValueContext& context, bool nonAdditive) {
+  std::optional<std::string> result;
+  for (const auto& sample : recipe.samples) {
+    const auto sampled = std::visit(
+        [&](const auto& declaration) {
+          using Declaration = std::decay_t<decltype(declaration)>;
+          if constexpr (std::is_same_v<Declaration, components::SetAnimationComponent>) {
+            return components::SampleAnimationValue(sample.progress, sample.iteration, &declaration,
+                                                    nullptr, nullptr, underlying, context);
+          } else {
+            components::AnimateValueComponent effective = declaration;
+            if (nonAdditive) {
+              effective.additive = false;
+              effective.accumulate = false;
+            }
+            return components::SampleAnimationValue(sample.progress, sample.iteration, nullptr,
+                                                    &effective, nullptr, underlying, context);
+          }
+        },
+        sample.declaration);
+    if (!sampled) {
+      return std::nullopt;
+    }
+    result = sampled->second;
+    underlying = *result;
+  }
+  return result;
+}
+
+template <typename Values>
+const Values* TextPositionValues(Registry& registry, Entity owner, size_t attributeIndex);
+
+template <>
+const SmallVector<Lengthd, 1>* TextPositionValues(Registry& registry, Entity owner,
+                                                  size_t attributeIndex) {
+  const auto* positioning = registry.try_get<components::TextPositioningComponent>(owner);
+  if (!positioning || registry.any_of<components::TextPathComponent>(owner)) {
+    return nullptr;
+  }
+  switch (attributeIndex) {
+    case 0: return &positioning->x;
+    case 1: return &positioning->y;
+    case 2: return &positioning->dx;
+    case 3: return &positioning->dy;
+    default: return nullptr;
+  }
+}
+
+template <>
+const SmallVector<double, 1>* TextPositionValues(Registry& registry, Entity owner, size_t) {
+  const auto* positioning = registry.try_get<components::TextPositioningComponent>(owner);
+  return positioning && !registry.any_of<components::TextPathComponent>(owner)
+             ? &positioning->rotateDegrees
+             : nullptr;
+}
+
+template <typename Value>
+std::optional<Value> ResolveOwnerTextPositionBase(Registry& registry,
+                                                  const components::ComputedTextComponent& text,
+                                                  std::span<const size_t> spanPrefix, Entity owner,
+                                                  size_t ownerCharacterIndex, size_t attributeIndex,
+                                                  bool repeatLast) {
+  const auto ownerRange = text.ownerSpanRanges.find(owner);
+  if (ownerRange == text.ownerSpanRanges.end() || ownerRange->second.begin >= spanPrefix.size()) {
+    return std::nullopt;
+  }
+  const size_t ownerStart = spanPrefix[ownerRange->second.begin];
+  Entity current = owner;
+  while (current != entt::null && registry.valid(current)) {
+    const auto range = text.ownerSpanRanges.find(current);
+    if (range == text.ownerSpanRanges.end() || range->second.begin >= spanPrefix.size()) {
+      break;
+    }
+    const size_t currentStart = spanPrefix[range->second.begin];
+    const size_t index = ownerStart - currentStart + ownerCharacterIndex;
+    if (const auto* values =
+            TextPositionValues<SmallVector<Value, 1>>(registry, current, attributeIndex);
+        values && !values->empty()) {
+      if (index < values->size()) {
+        return (*values)[index];
+      }
+      if (repeatLast) {
+        return values->back();
+      }
+    }
+    if (registry.any_of<components::TextRootComponent>(current)) {
+      break;
+    }
+    const auto* tree = registry.try_get<donner::components::TreeComponent>(current);
+    current = tree ? tree->parent() : entt::null;
+  }
+  return std::nullopt;
+}
+
+template <typename Value>
+std::optional<Value> ResolveSpanTextPosition(
+    Registry& registry, const components::ComputedTextComponent& text,
+    std::span<const size_t> spanPrefix,
+    const std::unordered_map<Entity, SampledTextPositions>& sampled, size_t spanIndex,
+    size_t characterIndex, size_t attributeIndex, bool repeatLast) {
+  Entity current = text.spans[spanIndex].sourceEntity;
+  while (current != entt::null && registry.valid(current)) {
+    const auto range = text.ownerSpanRanges.find(current);
+    if (range == text.ownerSpanRanges.end() || range->second.begin >= spanPrefix.size()) {
+      break;
+    }
+    const size_t index = spanPrefix[spanIndex] - spanPrefix[range->second.begin] + characterIndex;
+    if (const auto replacement = sampled.find(current); replacement != sampled.end()) {
+      if constexpr (std::is_same_v<Value, double>) {
+        if (replacement->second.rotations && !replacement->second.rotations->empty()) {
+          const auto& values = *replacement->second.rotations;
+          if (index < values.size()) {
+            return values[index];
+          }
+          if (repeatLast) {
+            return values.back();
+          }
+        }
+      } else {
+        const auto& values = replacement->second.lengths[attributeIndex];
+        if (values && index < values->size()) {
+          return (*values)[index];
+        }
+      }
+    }
+    if (const auto* values =
+            TextPositionValues<SmallVector<Value, 1>>(registry, current, attributeIndex);
+        values && !values->empty()) {
+      if (index < values->size()) {
+        return (*values)[index];
+      }
+      if (repeatLast) {
+        return values->back();
+      }
+    }
+    if (registry.any_of<components::TextRootComponent>(current)) {
+      break;
+    }
+    const auto* tree = registry.try_get<donner::components::TreeComponent>(current);
+    current = tree ? tree->parent() : entt::null;
+  }
+  return std::nullopt;
+}
+
+void ResolveAnimatedTextPositions(Registry& registry, components::ComputedTextComponent& text,
+                                  const Box2d& viewBox, const FontMetrics& fontMetrics) {
+  std::vector<size_t> spanPrefix(text.spans.size() + 1);
+  for (size_t index = 0; index < text.spans.size(); ++index) {
+    spanPrefix[index + 1] = spanPrefix[index] + TextSpanCodepointCount(text.spans[index]);
+  }
+
+  struct Recipe {
+    Entity owner = entt::null;
+    size_t attributeIndex = 0;
+    size_t characterCount = 0;
+    bool rotate = false;
+    std::shared_ptr<const components::ContextualLengthRecipe> value;
+  };
+  std::vector<Recipe> recipes;
+  size_t evaluationWork = 0;
+  for (const auto& [owner, range] : text.ownerSpanRanges) {
+    if (range.end >= spanPrefix.size()) {
+      return;
+    }
+    const size_t characterCount = spanPrefix[range.end] - spanPrefix[range.begin];
+    if (characterCount > components::AnimationResourceBudget::kMaximumNumbersPerValue ||
+        characterCount > std::numeric_limits<size_t>::max() / 16) {
+      return;
+    }
+    const size_t serializationWork = characterCount * 16;
+    const auto* animated = registry.try_get<components::AnimatedValuesComponent>(owner);
+    if (!animated) {
+      continue;
+    }
+    for (size_t attributeIndex = 0; attributeIndex < kTextLengthListNames.size();
+         ++attributeIndex) {
+      const auto found =
+          animated->contextualLengths.find(std::string(kTextLengthListNames[attributeIndex]));
+      if (found == animated->contextualLengths.end()) {
+        continue;
+      }
+      if (found->second->evaluationWork > std::numeric_limits<size_t>::max() - evaluationWork) {
+        return;
+      }
+      evaluationWork += found->second->evaluationWork;
+      if (serializationWork > std::numeric_limits<size_t>::max() - evaluationWork) {
+        return;
+      }
+      evaluationWork += serializationWork;
+      recipes.push_back({owner, attributeIndex, characterCount, false, found->second});
+    }
+    if (const auto found = animated->contextualLengths.find("rotate");
+        found != animated->contextualLengths.end()) {
+      if (found->second->evaluationWork > std::numeric_limits<size_t>::max() - evaluationWork) {
+        return;
+      }
+      evaluationWork += found->second->evaluationWork;
+      if (serializationWork > std::numeric_limits<size_t>::max() - evaluationWork) {
+        return;
+      }
+      evaluationWork += serializationWork;
+      recipes.push_back({owner, 0, characterCount, true, found->second});
+    }
+  }
+  if (recipes.empty()) {
+    return;
+  }
+
+  auto* budget = registry.ctx().find<components::AnimationResourceBudget>();
+  if (!budget || !budget->reserveContextualWork(evaluationWork)) {
+    return;
+  }
+
+  std::unordered_map<Entity, SampledTextPositions> sampled;
+  for (const Recipe& recipe : recipes) {
+    const auto range = text.ownerSpanRanges.find(recipe.owner);
+    if (range == text.ownerSpanRanges.end() || range->second.end >= spanPrefix.size()) {
+      return;
+    }
+    const size_t characterCount = recipe.characterCount;
+    components::AnimationValueContext context;
+    context.viewBox = viewBox;
+    context.fontMetrics = fontMetrics;
+    if (const auto fontSize = text.textLengthOwnerFontSizes.find(recipe.owner);
+        fontSize != text.textLengthOwnerFontSizes.end()) {
+      context.fontMetrics.fontSize =
+          fontSize->second.toPixels(viewBox, fontMetrics, Lengthd::Extent::Y);
+    }
+
+    if (recipe.rotate) {
+      std::vector<double> underlying(characterCount);
+      for (size_t index = 0; index < characterCount; ++index) {
+        underlying[index] = ResolveOwnerTextPositionBase<double>(registry, text, spanPrefix,
+                                                                 recipe.owner, index, 0, true)
+                                .value_or(0);
+      }
+      const auto result = SampleTextPositionRecipe(
+          *recipe.value, SerializeTextPositionRotations(underlying), context, true);
+      const auto parsed = result ? components::ParseAnimationLengths(*result) : std::nullopt;
+      if (!parsed) {
+        continue;
+      }
+      std::vector<double> rotations;
+      rotations.reserve(parsed->size());
+      bool valid = true;
+      for (const Lengthd value : *parsed) {
+        if (value.unit != Lengthd::Unit::None) {
+          valid = false;
+          break;
+        }
+        rotations.push_back(value.value);
+      }
+      if (valid) {
+        sampled[recipe.owner].rotations = std::move(rotations);
+      }
+      continue;
+    }
+
+    context.extent = recipe.attributeIndex % 2 == 0 ? Lengthd::Extent::X : Lengthd::Extent::Y;
+    std::vector<Lengthd> underlying(characterCount);
+    for (size_t index = 0; index < characterCount; ++index) {
+      underlying[index] =
+          ResolveOwnerTextPositionBase<Lengthd>(registry, text, spanPrefix, recipe.owner, index,
+                                                recipe.attributeIndex, false)
+              .value_or(Lengthd());
+    }
+    const auto result = SampleTextPositionRecipe(
+        *recipe.value, SerializeTextPositionLengths(underlying), context, false);
+    auto parsed = result ? components::ParseAnimationLengths(*result) : std::nullopt;
+    if (parsed) {
+      sampled[recipe.owner].lengths[recipe.attributeIndex] = std::move(*parsed);
+    }
+  }
+
+  for (size_t spanIndex = 0; spanIndex < text.spans.size(); ++spanIndex) {
+    auto& span = text.spans[spanIndex];
+    const size_t count = spanPrefix[spanIndex + 1] - spanPrefix[spanIndex];
+    if (span.hidden || span.sourceEntity == entt::null) {
+      continue;
+    }
+    span.xList.resize(count);
+    span.yList.resize(count);
+    span.dxList.resize(count);
+    span.dyList.resize(count);
+    for (size_t index = 0; index < count; ++index) {
+      span.xList[index] = ResolveSpanTextPosition<Lengthd>(registry, text, spanPrefix, sampled,
+                                                           spanIndex, index, 0, false);
+      span.yList[index] = ResolveSpanTextPosition<Lengthd>(registry, text, spanPrefix, sampled,
+                                                           spanIndex, index, 1, false);
+      span.dxList[index] = ResolveSpanTextPosition<Lengthd>(registry, text, spanPrefix, sampled,
+                                                            spanIndex, index, 2, false);
+      span.dyList[index] = ResolveSpanTextPosition<Lengthd>(registry, text, spanPrefix, sampled,
+                                                            spanIndex, index, 3, false);
+    }
+    span.rotateList.clear();
+    for (size_t index = 0; index < count; ++index) {
+      const auto rotation = ResolveSpanTextPosition<double>(registry, text, spanPrefix, sampled,
+                                                            spanIndex, index, 0, true);
+      if (rotation) {
+        span.rotateList.push_back(*rotation);
+      }
+    }
+    const bool textPath = span.pathSpline.has_value();
+    span.startsNewChunk = !textPath && !span.xList.empty() &&
+                          (span.xList.front().has_value() || span.yList.front().has_value());
+  }
+}
+
 void ResolvePerSpanLayoutStyles(Registry& registry, components::ComputedTextComponent& text,
                                 const Box2d& viewBox, const FontMetrics& fontMetrics,
                                 const TextStyleContext* styleContext = nullptr) {
@@ -433,6 +796,8 @@ void ResolvePerSpanLayoutStyles(Registry& registry, components::ComputedTextComp
       }
     }
   }
+
+  ResolveAnimatedTextPositions(registry, text, viewBox, fontMetrics);
 }
 
 }  // namespace
@@ -892,9 +1257,13 @@ struct OrdinaryLengthScope {
     size_t index = 0;
     bool scope = false;
     bool path = false;
+    bool absoluteReset = false;
     size_t group = 0;
+    size_t glyphBegin = 0;
+    size_t glyphEnd = 0;
     double start = 0;
     double end = 0;
+    double pathLocalStart = 0;
     double position = 0;
     size_t spacingIndex = 0;
   };
@@ -911,6 +1280,42 @@ struct OrdinaryLengthScope {
   double spacing = 0;
   double position = 0;
 };
+
+bool HasNegativeAbsoluteTextLength(const components::ContextualLengthRecipe& recipe) {
+  const auto negative = [](const std::optional<std::string>& value) {
+    if (!value) {
+      return false;
+    }
+    const auto parsed = components::ParseAnimationLength("textLength", *value);
+    return parsed && parsed->value < 0;
+  };
+  for (const auto& sample : recipe.samples) {
+    const bool invalid = std::visit(
+        [&](const auto& declaration) {
+          using Declaration = std::decay_t<decltype(declaration)>;
+          if constexpr (std::is_same_v<Declaration, components::SetAnimationComponent>) {
+            return negative(declaration.to);
+          } else {
+            const bool toOnly = declaration.values.empty() && !declaration.from && declaration.to;
+            if (!declaration.additive) {
+              if (negative(declaration.from) || negative(declaration.to) ||
+                  std::any_of(declaration.values.begin(), declaration.values.end(),
+                              [&](const std::string& value) {
+                                return negative(std::optional<std::string>(value));
+                              })) {
+                return true;
+              }
+            }
+            return toOnly && negative(declaration.to);
+          }
+        },
+        sample.declaration);
+    if (invalid) {
+      return true;
+    }
+  }
+  return false;
+}
 
 bool ApplyTextLengthOwnerPlan(Registry& registry, std::vector<TextRun>& runs,
                               const components::ComputedTextComponent& text,
@@ -943,6 +1348,10 @@ bool ApplyTextLengthOwnerPlan(Registry& registry, std::vector<TextRun>& runs,
   std::unordered_map<Entity, size_t> ownerScopes;
   bool hasManagedScope = false;
   size_t structuralWork = 0;
+  bool hasLogicalEnd = false;
+  double logicalEnd = 0;
+  std::optional<size_t> previousPathGroup;
+  double previousPathLocalEnd = 0;
 
   const auto initializeScope = [&](OrdinaryLengthScope& scope, Entity owner,
                                    const components::ComputedTextComponent::TextSpan& span) {
@@ -975,34 +1384,46 @@ bool ApplyTextLengthOwnerPlan(Registry& registry, std::vector<TextRun>& runs,
 
   for (size_t runIndex = 0; runIndex < runs.size() && runIndex < text.spans.size(); ++runIndex) {
     const auto& span = text.spans[runIndex];
+    size_t owner = 0;
     if (span.sourceEntity == entt::null) {
-      continue;
-    }
-
-    Entity current = span.sourceEntity;
-    std::vector<Entity> ancestors;
-    while (current != entt::null && registry.valid(current) && !ownerScopes.contains(current)) {
-      ancestors.push_back(current);
-      if (structuralWork == std::numeric_limits<size_t>::max()) {
-        return false;
-      }
-      ++structuralWork;
-      const auto* tree = registry.try_get<donner::components::TreeComponent>(current);
-      current = tree ? tree->parent() : entt::null;
-    }
-
-    size_t owner =
-        current != entt::null && ownerScopes.contains(current) ? ownerScopes[current] : 0;
-    for (auto it = ancestors.rbegin(); it != ancestors.rend(); ++it) {
-      OrdinaryLengthScope candidate;
-      initializeScope(candidate, *it, span);
-      if (candidate.authoredTarget || candidate.recipe) {
+      if (span.textLength) {
+        OrdinaryLengthScope candidate;
+        candidate.authoredTarget = span.textLength;
+        candidate.adjust = span.lengthAdjust;
+        candidate.metrics = params.fontMetrics;
         const size_t child = scopes.size();
         scopes[owner].items.push_back({.index = child, .scope = true});
         scopes.push_back(std::move(candidate));
         owner = child;
+        hasManagedScope = true;
+      } else {
+        continue;
       }
-      ownerScopes.emplace(*it, owner);
+    } else {
+      Entity current = span.sourceEntity;
+      std::vector<Entity> ancestors;
+      while (current != entt::null && registry.valid(current) && !ownerScopes.contains(current)) {
+        ancestors.push_back(current);
+        if (structuralWork == std::numeric_limits<size_t>::max()) {
+          return false;
+        }
+        ++structuralWork;
+        const auto* tree = registry.try_get<donner::components::TreeComponent>(current);
+        current = tree ? tree->parent() : entt::null;
+      }
+
+      owner = current != entt::null && ownerScopes.contains(current) ? ownerScopes[current] : 0;
+      for (auto it = ancestors.rbegin(); it != ancestors.rend(); ++it) {
+        OrdinaryLengthScope candidate;
+        initializeScope(candidate, *it, span);
+        if (candidate.authoredTarget || candidate.recipe) {
+          const size_t child = scopes.size();
+          scopes[owner].items.push_back({.index = child, .scope = true});
+          scopes.push_back(std::move(candidate));
+          owner = child;
+        }
+        ownerScopes.emplace(*it, owner);
+      }
     }
 
     if (runs[runIndex].glyphs.empty()) {
@@ -1011,17 +1432,67 @@ bool ApplyTextLengthOwnerPlan(Registry& registry, std::vector<TextRun>& runs,
     if (const auto& range = pathClustersByRun[runIndex]) {
       for (size_t clusterIndex = range->begin; clusterIndex < range->end; ++clusterIndex) {
         const auto& cluster = paths[range->group].clusters[clusterIndex];
+        double start = hasLogicalEnd ? logicalEnd : cluster.pathOffset;
+        if (previousPathGroup && *previousPathGroup == range->group) {
+          start += cluster.pathOffset - previousPathLocalEnd;
+        }
+        const double end = start + cluster.advance;
         scopes[owner].items.push_back({.index = clusterIndex,
                                        .path = true,
                                        .group = range->group,
-                                       .start = cluster.pathOffset,
-                                       .end = cluster.pathOffset + cluster.advance});
+                                       .start = start,
+                                       .end = end,
+                                       .pathLocalStart = cluster.pathOffset});
+        logicalEnd = end;
+        hasLogicalEnd = true;
+        previousPathGroup = range->group;
+        previousPathLocalEnd = cluster.pathOffset + cluster.advance;
       }
     } else {
       const auto& extent = runExtents[runIndex];
-      scopes[owner].items.push_back({.index = runIndex,
-                                     .start = vertical ? extent.startY : extent.startX,
-                                     .end = vertical ? extent.endY : extent.endX});
+      const auto& inlinePositions = vertical ? span.yList : span.xList;
+      const std::string_view spanText(span.text.data() + span.start, span.end - span.start);
+      const auto mappings = buildByteIndexMappings(spanText);
+      std::vector<size_t> boundaries{0};
+      for (size_t glyphIndex = 1; glyphIndex < runs[runIndex].glyphs.size(); ++glyphIndex) {
+        const size_t byte = GetPositioningCluster(runs[runIndex].glyphs[glyphIndex]);
+        const size_t character =
+            byte < mappings.byteToCharIdx.size() ? mappings.byteToCharIdx[byte] : 0;
+        const size_t previousByte = GetPositioningCluster(runs[runIndex].glyphs[glyphIndex - 1]);
+        const size_t previousCharacter = previousByte < mappings.byteToCharIdx.size()
+                                             ? mappings.byteToCharIdx[previousByte]
+                                             : 0;
+        if (character != previousCharacter && character < inlinePositions.size() &&
+            inlinePositions[character]) {
+          boundaries.push_back(glyphIndex);
+        }
+      }
+      boundaries.push_back(runs[runIndex].glyphs.size());
+      for (size_t segment = 0; segment + 1 < boundaries.size(); ++segment) {
+        const size_t glyphBegin = boundaries[segment];
+        const size_t glyphEnd = boundaries[segment + 1];
+        const auto& firstGlyph = runs[runIndex].glyphs[glyphBegin];
+        const auto& lastGlyph = runs[runIndex].glyphs[glyphEnd - 1];
+        const double start =
+            glyphBegin == 0 ? (vertical ? extent.startY : extent.startX)
+                            : (vertical ? firstGlyph.yPosition : firstGlyph.xPosition);
+        const double end =
+            glyphEnd == runs[runIndex].glyphs.size()
+                ? (vertical ? extent.endY : extent.endX)
+                : (vertical ? lastGlyph.yPosition + lastGlyph.yAdvance
+                            : lastGlyph.xPosition + lastGlyph.xAdvance);
+        const bool absoluteReset =
+            segment > 0 || (!inlinePositions.empty() && inlinePositions.front());
+        scopes[owner].items.push_back({.index = runIndex,
+                                       .absoluteReset = absoluteReset,
+                                       .glyphBegin = glyphBegin,
+                                       .glyphEnd = glyphEnd,
+                                       .start = start,
+                                       .end = end});
+        logicalEnd = end;
+      }
+      hasLogicalEnd = true;
+      previousPathGroup.reset();
     }
   }
 
@@ -1045,7 +1516,6 @@ bool ApplyTextLengthOwnerPlan(Registry& registry, std::vector<TextRun>& runs,
   admitted = admitted && budget->reserveContextualWork(evaluationWork);
 
   const auto plan = [&](bool sampleRecipes) {
-    bool samplesValid = true;
     for (size_t scopeIndex = scopes.size(); scopeIndex-- > 0;) {
       auto& scope = scopes[scopeIndex];
       std::erase_if(scope.items, [&](const OrdinaryLengthScope::Item& item) {
@@ -1072,6 +1542,8 @@ bool ApplyTextLengthOwnerPlan(Registry& registry, std::vector<TextRun>& runs,
         }
         if (itemIndex == 0) {
           scope.start = item.start;
+        } else if (item.absoluteReset) {
+          cursor = item.start - scope.start;
         } else {
           cursor += item.start - previousEnd;
         }
@@ -1087,7 +1559,7 @@ bool ApplyTextLengthOwnerPlan(Registry& registry, std::vector<TextRun>& runs,
       scope.length = cursor;
 
       std::optional<Lengthd> target = scope.authoredTarget;
-      if (sampleRecipes && scope.recipe) {
+      if (sampleRecipes && scope.recipe && !HasNegativeAbsoluteTextLength(*scope.recipe)) {
         components::AnimationValueContext context;
         context.viewBox = params.viewBox;
         context.fontMetrics = scope.metrics;
@@ -1095,13 +1567,9 @@ bool ApplyTextLengthOwnerPlan(Registry& registry, std::vector<TextRun>& runs,
         const Lengthd underlying = target.value_or(Lengthd(scope.length));
         const auto sampled =
             components::SampleContextualLengthRecipe(*scope.recipe, underlying, context);
-        if (!sampled) {
-          samplesValid = false;
-        } else {
+        if (sampled) {
           const double pixels = sampled->toPixels(params.viewBox, scope.metrics, context.extent);
-          if (!std::isfinite(pixels) || pixels < 0) {
-            samplesValid = false;
-          } else {
+          if (std::isfinite(pixels) && pixels >= 0) {
             target = sampled;
           }
         }
@@ -1116,14 +1584,21 @@ bool ApplyTextLengthOwnerPlan(Registry& registry, std::vector<TextRun>& runs,
           scope.spacing = (pixels - cursor) / static_cast<double>(spacingUnits - 1);
         } else if (std::isfinite(pixels) && pixels >= 0 &&
                    scope.adjust == LengthAdjust::SpacingAndGlyphs && adjustableLength > 0) {
-          scope.scale = std::max(0.0, pixels - fixedLength) / adjustableLength;
+          const double scale = std::max(0.0, pixels - fixedLength) / adjustableLength;
+          if (std::isfinite(scale) && scale <= std::numeric_limits<float>::max()) {
+            scope.scale = scale;
+          }
         }
       }
 
       cursor = 0;
       previousEnd = scope.start;
       for (auto& item : scope.items) {
-        cursor += (item.start - previousEnd) * scope.scale;
+        if (item.absoluteReset) {
+          cursor = item.start - scope.start;
+        } else {
+          cursor += (item.start - previousEnd) * scope.scale;
+        }
         item.position = cursor;
         const double length = item.scope ? scopes[item.index].length : item.end - item.start;
         cursor += item.scope ? length : length * scope.scale;
@@ -1135,14 +1610,16 @@ bool ApplyTextLengthOwnerPlan(Registry& registry, std::vector<TextRun>& runs,
       }
       scope.length = cursor - scope.spacing;
     }
-    return samplesValid;
   };
 
-  if (!plan(admitted)) {
-    plan(false);
-  }
+  plan(admitted);
 
   scopes[0].position = scopes[0].start;
+  struct PathOutputOrigin {
+    double output = 0;
+    double local = 0;
+  };
+  std::vector<std::optional<PathOutputOrigin>> pathOrigins(paths.size());
   for (auto& scope : scopes) {
     for (const auto& item : scope.items) {
       const double position = scope.position + item.position;
@@ -1152,7 +1629,11 @@ bool ApplyTextLengthOwnerPlan(Registry& registry, std::vector<TextRun>& runs,
       }
       if (item.path) {
         auto& cluster = paths[item.group].clusters[item.index];
-        cluster.pathOffset = position;
+        auto& origin = pathOrigins[item.group];
+        if (!origin) {
+          origin = PathOutputOrigin{position, item.pathLocalStart};
+        }
+        cluster.pathOffset = origin->local + position - origin->output;
         cluster.advance *= scope.scale;
         auto& run = runs[cluster.runIndex];
         for (size_t glyphIndex = cluster.glyphStart; glyphIndex < cluster.glyphEnd; ++glyphIndex) {
