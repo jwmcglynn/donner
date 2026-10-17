@@ -35,6 +35,7 @@ import {
   findCanvasOwnerWorker,
   findProbedCanvasApplicationWorker,
   holdCanvasCompletionForTest,
+  observeSubmittedCanvasGpuWork,
 } from "./surface-frame-probe";
 import { scaledMs } from "./test-timing";
 
@@ -3644,17 +3645,47 @@ test(
         });
       const deadline = performance.now() + scaledMs(5000);
       let captureTiming: { startedEpochMs: number; finishedEpochMs: number };
-      const captureCompleted = async (remaining: number) => {
+      let completionObserved = false;
+      let completion: Awaited<ReturnType<typeof observeSubmittedCanvasGpuWork>> | null = null;
+      const captureAttempts: Record<string, unknown>[] = [];
+      const sequence = flatCaptureSequence++;
+      const captureCompleted = async (_remaining: number) => {
         const startedEpochMs = Date.now();
-        const image = interactionCaptureOwner === null
-          ? await capture(remaining)
-          : await captureAfterCanvasGpuCompletion(interactionCaptureOwner, deadline, capture);
-        captureTiming = { startedEpochMs, finishedEpochMs: Date.now() };
-        return image;
+        const attempt: Record<string, unknown> = { startedEpochMs };
+        captureAttempts.push(attempt);
+        try {
+          // Both captures belong to one observation. Do not wait for newer animation
+          // submissions again when retaking an exact-background screenshot.
+          if (interactionCaptureOwner !== null && !completionObserved) {
+            attempt.completionDispatchEpochMs = Date.now();
+            completion = await awaitBeforeBlueDeadline(
+              observeSubmittedCanvasGpuWork(interactionCaptureOwner),
+              deadline,
+            );
+            completionObserved = true;
+          }
+          attempt.completion = completion;
+          const remaining = deadline - performance.now();
+          if (remaining < 1) throw new Error("animation capture deadline exceeded");
+          attempt.screenshotStartedEpochMs = Date.now();
+          const image = await capture(remaining);
+          attempt.screenshotFinishedEpochMs = Date.now();
+          captureTiming = { startedEpochMs, finishedEpochMs: Date.now() };
+          if (performance.now() >= deadline) throw new Error("animation capture deadline exceeded");
+          return image;
+        } catch (error) {
+          attempt.error = String(error);
+          throw error;
+        } finally {
+          attempt.finishedEpochMs = Date.now();
+          await writeFile(
+            testInfo.outputPath(`animation-capture-${sequence}-timing.json`),
+            JSON.stringify({ region, viewport, captureAttempts }, null, 2),
+          );
+        }
       };
       // Retain a single exact-background retake as evidence. This does not establish that
       // the application never flickered; every nonuniform image still reaches the pixel oracle.
-      const sequence = flatCaptureSequence++;
       const png: Buffer = unclipped
         ? await retakeFlatCapture({
           capture: captureCompleted,
@@ -3695,6 +3726,7 @@ test(
           },
         })
         : await captureCompleted(deadline - performance.now());
+      if (performance.now() >= deadline) throw new Error("animation capture deadline exceeded");
       const offsetX = unclipped ? region.x : 0;
       const offsetY = unclipped ? region.y : 0;
       const read = (
