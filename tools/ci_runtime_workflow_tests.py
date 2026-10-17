@@ -276,7 +276,8 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
             "steps.test.outcome == 'failure') }}", browser)
         self.assertIn("--local_test_jobs=1", browser)
         self.assertIn(
-            "--test_tag_filters=launches-browser,-manual,-perf,-ci-remote-gpu,-fuzz_soak ",
+            "--test_tag_filters=launches-browser,-manual,-perf,-requires_desktop_session,"
+            "-ci-remote-gpu,-fuzz_soak ",
             browser)
         self.assertIn("bazelisk --nohome_rc --nosystem_rc test --config=ci", browser)
         for phase in (main_test, browser):
@@ -519,6 +520,18 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
             self.assertNotIn("DONNER_BROWSER_QUARANTINE_REPORT", path.read_text(encoding="utf-8"),
                              path.name)
         self.assertNotIn("DONNER_BROWSER_QUARANTINE_REPORT", self.bazelrc)
+
+    def test_headed_browser_tests_keep_required_hosted_coverage(self):
+        for job_name in ("macos", "macos-browser", "macos-self-hosted"):
+            with self.subTest(job=job_name):
+                body = self._step_body(self._job_body(job_name), "Test (browser targets)")
+                match = re.search(r"--test_tag_filters=([^\s]+)", body)
+                self.assertIsNotNone(match)
+                tags = match.group(1).split(",")
+                self.assertIn("launches-browser", tags)
+                self.assertEqual("-requires_desktop_session" in tags,
+                                 job_name == "macos-self-hosted")
+                self.assertNotIn("continue-on-error: true", body)
 
     def test_browser_stall_system_log_slices_only_well_formed_windows(self):
         collect = self._step_body(self._job_body("macos"), "Collect browser stall system log")

@@ -322,6 +322,7 @@ function assertFontReferenceLane({ lane, tags, specFiles }) {
 function assertAnimationLane({ lane, tags, specFiles }) {
   assert.deepEqual(specFiles, ["smoke.spec.ts"]);
   assert.ok(tags.includes("launches-browser"));
+  assert.ok(tags.includes("requires_desktop_session"));
   assert.ok(!tags.includes("manual") && !tags.includes("perf"));
   assert.match(lane, /--config=\$\(rootpath :playwright\.animation\.bazel\.config\.js\)/);
   assert.match(lane, /--grep=animation\.preview\.plays/);
