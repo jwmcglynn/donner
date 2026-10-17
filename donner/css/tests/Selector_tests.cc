@@ -133,8 +133,8 @@ TEST_F(SelectorTests, ClassAndIncludesUseCssWhitespace) {
   for (const char separator : {' ', '\t', '\n', '\r', '\f'}) {
     SCOPED_TRACE(static_cast<int>(separator));
     const std::string tokens = std::string("first") + separator + "second";
-    element.setClassName(tokens);
-    element.setAttribute("tokens", tokens);
+    element.setClassName(RcString(tokens));
+    element.setAttribute("tokens", RcString(tokens));
     EXPECT_TRUE(matches(".second", element));
     EXPECT_TRUE(matches("[tokens~=second]", element));
     EXPECT_TRUE(matches("[tokens~=SECOND i]", element));
