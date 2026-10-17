@@ -1,6 +1,7 @@
 import { errors, expect, type Page, test, type TestInfo, type Worker } from "@playwright/test";
 import { writeFile } from "node:fs/promises";
 import { arch, cpus, loadavg, platform, release, totalmem } from "node:os";
+import { presentedPulseWindow } from "./animation-pulse-observation.mjs";
 import {
   awaitBeforeBlueDeadline,
   captureAfterCanvasGpuCompletion,
@@ -1303,6 +1304,98 @@ async function holdRasterTaskYield(page: Page) {
     throw error;
   }
   return { raster, release };
+}
+
+// A finite worker-side lease cleans up even if an installation reply arrives after the caller deadline.
+async function holdKnownRasterUntil(raster: Worker, deadlineAtMs: number) {
+  const remaining = deadlineAtMs - performance.now();
+  if (remaining < 1) throw new Error("raster hold deadline exceeded");
+  const lease = { id: `${Date.now()}-${deadlineAtMs}`, expiresEpochMs: Date.now() + remaining };
+  const installed = raster.evaluate(({ id, expiresEpochMs }) => {
+    const scope = globalThis as typeof globalThis & {
+      __donnerRasterTaskYield?: {
+        channel: MessageChannel;
+        resume: (() => void) | null;
+        closed: boolean;
+      };
+      __donnerPulseHold?: { id: string; held: () => boolean; release: () => void };
+    };
+    if (Date.now() >= expiresEpochMs) throw new Error("late raster hold installation");
+    if (scope.__donnerPulseHold) throw new Error("raster hold already installed");
+    const state = scope.__donnerRasterTaskYield;
+    const original = state?.channel.port1.onmessage;
+    if (!state || state.closed || !original) throw new Error("raster yield unavailable");
+    let held: MessageEvent | undefined;
+    let released = false;
+    let timer: ReturnType<typeof setTimeout>;
+    const release = () => {
+      if (released) return;
+      released = true;
+      clearTimeout(timer);
+      state.channel.port1.onmessage = original;
+      if (scope.__donnerPulseHold?.id === id) delete scope.__donnerPulseHold;
+      const event = held;
+      held = undefined;
+      if (event) original.call(state.channel.port1, event);
+    };
+    scope.__donnerPulseHold = {
+      id,
+      held: () => held !== undefined && state.resume !== null,
+      release,
+    };
+    state.channel.port1.onmessage = (event) => {
+      if (Date.now() >= expiresEpochMs) {
+        release();
+        original.call(state.channel.port1, event);
+        return;
+      }
+      if (held) {
+        release();
+        throw new Error("multiple raster yield messages held");
+      }
+      held = event;
+    };
+    timer = setTimeout(release, Math.max(1, expiresEpochMs - Date.now()));
+  }, lease);
+  const release = async () => {
+    await awaitBeforeBlueDeadline(
+      raster.evaluate((id) => {
+        const scope = globalThis as unknown as {
+          __donnerPulseHold?: { id: string; release: () => void };
+        };
+        if (scope.__donnerPulseHold?.id === id) scope.__donnerPulseHold.release();
+      }, lease.id),
+      performance.now() + 1000,
+    );
+  };
+  try {
+    await awaitBeforeBlueDeadline(installed, deadlineAtMs);
+    await expect.poll(() =>
+      awaitBeforeBlueDeadline(
+        raster.evaluate((id) => {
+          const scope = globalThis as unknown as {
+            __donnerPulseHold?: { id: string; held: () => boolean };
+          };
+          return scope.__donnerPulseHold?.id === id && scope.__donnerPulseHold.held();
+        }, lease.id),
+        deadlineAtMs,
+      ), {
+      timeout: Math.max(1, deadlineAtMs - performance.now()),
+      intervals: [16],
+      message: "the known raster worker retains a pulse frame",
+    }).toBe(true);
+    return { release };
+  } catch (error) {
+    try {
+      await release();
+    } catch (cleanupError) {
+      throw new AggregateError(
+        [error, cleanupError],
+        "raster hold and cleanup failed; finite lease remains",
+      );
+    }
+    throw error;
+  }
 }
 
 async function verifyRasterProgressWithTimersHeld(page: Page) {
@@ -3632,7 +3725,7 @@ test(
     await page.mouse.click(box.x + box.width * 0.76, box.y + 390);
     let interactionCaptureOwner: Worker | null = null;
     let flatCaptureSequence = 0;
-    const captureAnimationRegion = async (region: CssRegion) => {
+    const captureAnimationRegion = async (region: CssRegion, deadlineAtMs?: number) => {
       const viewport = page.viewportSize();
       if (!viewport) throw new Error("the animation capture viewport is unavailable");
       // Firefox can omit the transferred WebGPU canvas from clipped captures. Use the same
@@ -3643,7 +3736,7 @@ test(
           ...(unclipped ? {} : { clip: region }),
           timeout,
         });
-      const deadline = performance.now() + scaledMs(5000);
+      const deadline = deadlineAtMs ?? (performance.now() + scaledMs(5000));
       let captureTiming: { startedEpochMs: number; finishedEpochMs: number };
       let completionObserved = false;
       let completion: Awaited<ReturnType<typeof observeSubmittedCanvasGpuWork>> | null = null;
@@ -3805,15 +3898,17 @@ test(
       width: 560 * scale,
       height: 110 * scale,
     };
+    let preQueuedPointerTrace: unknown;
+    let queuedPulseObservation: unknown = null;
     let tracePulseScreenshots = false;
     const pulseScreenshots: {
       startedEpochMs: number;
       finishedEpochMs: number;
       height: number | null;
     }[] = [];
-    const orb = async () => {
+    const orb = async (deadlineAtMs?: number) => {
       const started = Date.now();
-      const capture = await captureAnimationRegion(track);
+      const capture = await captureAnimationRegion(track, deadlineAtMs);
       const result = capture.read("animation-mint");
       if (tracePulseScreenshots && pulseScreenshots.length < 64) {
         pulseScreenshots.push({
@@ -4131,6 +4226,18 @@ test(
         .toBeLessThanOrEqual(2 * scale);
       // Hold raster progress longer than the pulse before delivering another click. Its target
       // remains the displayed pad, but its begin time must use the dispatch-time preview clock.
+      const pulseTraceGeneration = Date.now();
+      if (interactionCaptureOwner === null) throw new Error("animation owner is unavailable");
+      preQueuedPointerTrace = await interactionCaptureOwner.evaluate((generation) => {
+        const scope = globalThis as unknown as Record<string, unknown>;
+        const previous = scope.__donnerPreviewPointerTrace;
+        scope.__donnerPreviewPointerTrace = Object.assign([], { generation });
+        return previous;
+      }, pulseTraceGeneration);
+      const firstClick = Array.isArray(preQueuedPointerTrace)
+        ? preQueuedPointerTrace.find((row) => row[1] === 2 && row[2] === 0 && row[5] === true)
+        : undefined;
+      if (!firstClick) throw new Error("the normal pulse dispatch trace is unavailable");
       const heldForPulse = await holdRasterTaskYield(page);
       try {
         const heldBounds = await orb();
@@ -4152,15 +4259,85 @@ test(
         await heldForPulse.release();
         delayedPulseReleaseEpochMs = Date.now();
       }
+      const queuedPulseDeadline = performance.now() + scaledMs(5000);
+      // Avoid screenshot-induced stalls while queued input is delivered. A later admitted
+      // timeline sample proves an earlier in-window sample was presented; retain that frame
+      // with the existing raster hold before reading pixels. Playback cadence was measured
+      // above without holds or screenshots, independently of this queued-event correctness probe.
       await expect.poll(async () => {
-        const bounds = await orb();
-        return bounds.maxY - bounds.minY;
+        const snapshot = await awaitBeforeBlueDeadline(
+          interactionCaptureOwner.evaluate(() => {
+            const trace = (globalThis as unknown as Record<string, unknown>)
+              .__donnerPreviewPointerTrace as (unknown[] & { generation?: number }) | undefined;
+            return {
+              generation: trace?.generation,
+              entries: Array.isArray(trace) ? [...trace] : [],
+            };
+          }),
+          queuedPulseDeadline,
+        );
+        queuedPulseObservation = presentedPulseWindow(
+          snapshot,
+          pulseTraceGeneration,
+          firstClick[3],
+          delayedPulseClickStartedEpochMs,
+        );
+        return queuedPulseObservation !== null;
       }, {
-        timeout: scaledMs(5000),
-        intervals: [50],
-        message: "Queued click pulses after stale-frame catch-up",
-      })
-        .toBeGreaterThan(58 * scale);
+        timeout: Math.max(1, queuedPulseDeadline - performance.now()),
+        intervals: [16],
+        message: "a queued-click pulse sample reaches presentation",
+      }).toBe(true);
+      const heldPulseFrame = await holdKnownRasterUntil(heldForPulse.raster, queuedPulseDeadline);
+      const pulseErrors: unknown[] = [];
+      try {
+        const heldTrace = await awaitBeforeBlueDeadline(
+          interactionCaptureOwner.evaluate(() => {
+            const trace = (globalThis as unknown as Record<string, unknown>)
+              .__donnerPreviewPointerTrace as (unknown[] & { generation?: number }) | undefined;
+            return {
+              generation: trace?.generation,
+              entries: Array.isArray(trace) ? [...trace] : [],
+            };
+          }),
+          queuedPulseDeadline,
+        );
+        const retainedObservation = presentedPulseWindow(
+          heldTrace,
+          pulseTraceGeneration,
+          firstClick[3],
+          delayedPulseClickStartedEpochMs,
+          0.5,
+        );
+        expect(retainedObservation, "the acknowledged hold is still inside the same pulse").not
+          .toBeNull();
+        queuedPulseObservation = {
+          beforeHold: queuedPulseObservation,
+          afterHold: retainedObservation,
+        };
+        await expect.poll(async () => {
+          const bounds = await orb(queuedPulseDeadline);
+          return bounds.maxY - bounds.minY;
+        }, {
+          timeout: Math.max(1, queuedPulseDeadline - performance.now()),
+          intervals: [50],
+          message: "Queued click pulses after stale-frame catch-up",
+        }).toBeGreaterThan(58 * scale);
+        if (performance.now() >= queuedPulseDeadline) {
+          throw new Error("queued pulse deadline exceeded");
+        }
+      } catch (error) {
+        pulseErrors.push(error);
+      } finally {
+        try {
+          await heldPulseFrame.release();
+        } catch (error) {
+          pulseErrors.push(error);
+        }
+      }
+      if (pulseErrors.length > 0) {
+        throw new AggregateError(pulseErrors, "queued pulse observation failed");
+      }
     } finally {
       tracePulseScreenshots = false;
       const pointerTraces = await Promise.all(
@@ -4187,6 +4364,8 @@ test(
             delayedPulseClickFinishedEpochMs,
             delayedPulseReleaseEpochMs,
             heldPulseHeight,
+            preQueuedPointerTrace,
+            queuedPulseObservation,
             pulseScreenshots,
             pointerTraces,
           },
