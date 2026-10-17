@@ -122,6 +122,7 @@ public:
     double bearingY = 0;           ///< Scaled upward bearing from baseline.
     double scale = 1.0;            ///< Native bitmap pixel scale.
     float requestedScale = 0;      ///< Scale used for this metadata query.
+    /// @fn bool BitmapGlyphMetrics::operator==(const BitmapGlyphMetrics& other) const
     /// Compare all cost and placement fields exactly.
     /// @param other Metrics to compare.
     /// @return True when every field matches.
