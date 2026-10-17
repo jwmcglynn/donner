@@ -10,6 +10,8 @@
 #include <string>
 #include <string_view>
 
+#include "donner/editor/DocumentSave.h"
+
 namespace donner::editor {
 namespace {
 
@@ -383,7 +385,16 @@ bool AppendCompositorHeuristicTelemetry(std::string_view path, std::string_view 
 
 bool SaveCompositorHeuristicTelemetry(std::string_view path, std::string_view json,
                                       std::string* error,
-                                      const CompositorTelemetryFileAccess& /*access*/) {
+                                      const CompositorTelemetryFileAccess& access) {
+  if (!access.allowFileSystemActions) {
+    if (error != nullptr) {
+      *error = "diagnostic filesystem actions are disabled";
+    }
+    return false;
+  }
+  if (access.fixedOutputPath.has_value()) {
+    path = *access.fixedOutputPath;
+  }
   if (path.empty()) {
     if (error != nullptr) {
       *error = "telemetry path is empty";
@@ -391,20 +402,12 @@ bool SaveCompositorHeuristicTelemetry(std::string_view path, std::string_view js
     return false;
   }
 
-  const std::string pathString(path);
-  std::ofstream output(pathString, std::ios::out | std::ios::trunc);
-  if (!output.is_open()) {
+  const DocumentSaveResult result = SaveSourceToPath(std::string(path), json);
+  if (!result.ok()) {
     if (error != nullptr) {
-      *error = "failed to open telemetry path: " + pathString;
-    }
-    return false;
-  }
-
-  output << json;
-  output.flush();
-  if (!output.good()) {
-    if (error != nullptr) {
-      *error = "failed to write telemetry path: " + pathString;
+      *error = result.status == DocumentSaveStatus::OpenFailed
+                   ? "failed to open telemetry path: " + std::string(path)
+                   : result.message;
     }
     return false;
   }
