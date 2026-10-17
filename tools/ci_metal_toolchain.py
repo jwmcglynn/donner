@@ -1,6 +1,8 @@
 """Verify the selected Xcode's offline Metal compiler before native CI work."""
 
 import argparse
+import json
+import re
 from pathlib import Path
 import subprocess
 import sys
@@ -62,10 +64,45 @@ def ensure_compiler(install_missing=False):
         return True
 
 
+def component_status():
+    """Read a public-field receipt without exposing asset paths or raw status output."""
+    try:
+        result = subprocess.run(
+            ["/usr/bin/xcodebuild", "-showComponent", "MetalToolchain", "-json"],
+            capture_output=True, text=True, timeout=30, check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return {"status": "query-timeout", "timeout_seconds": 30}
+    except OSError:
+        return {"status": "query-unavailable"}
+    if result.returncode != 0:
+        return {"status": "query-failed", "exit_code": result.returncode}
+    try:
+        data = json.loads(result.stdout)
+    except (TypeError, ValueError):
+        return {"status": "invalid-response"}
+    if not isinstance(data, dict):
+        return {"status": "invalid-response"}
+    receipt = {"status": data.get("status") if data.get("status") in
+               ("installed", "available", "not_installed", "not installed", "unavailable")
+               else "unrecognized"}
+    for key, pattern in (("buildVersion", r"[0-9]{1,3}[A-Z][0-9]{1,6}[a-z]?"),
+                         ("toolchainIdentifier", r"com\.apple\.dt\.toolchain\.Metal(?:\.[0-9]+){1,6}")):
+        value = data.get(key)
+        if isinstance(value, str) and re.fullmatch(pattern, value):
+            receipt[key] = value
+    return receipt
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--install-missing", action="store_true")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--install-missing", action="store_true")
+    mode.add_argument("--describe", action="store_true")
     args = parser.parse_args()
+    if args.describe:
+        print("Metal component status: " + json.dumps(component_status(), sort_keys=True))
+        return 0
     try:
         installed = ensure_compiler(args.install_missing)
     except (OSError, RuntimeError, subprocess.TimeoutExpired) as error:

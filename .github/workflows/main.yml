@@ -2046,8 +2046,14 @@ jobs:
             --repo=@@apple_support++apple_cc_configure_extension+local_config_apple_cc_toolchains
 
       - name: Ensure offline Metal compiler
+        id: metal_setup
         timeout-minutes: 12
         run: python3 tools/ci_metal_toolchain.py --install-missing
+
+      - name: Report Metal component status
+        if: ${{ failure() && steps.metal_setup.outcome == 'failure' }}
+        timeout-minutes: 1
+        run: python3 tools/ci_metal_toolchain.py --describe
 
       - name: Require full Metal shader validation
         id: metal_profile

@@ -1,4 +1,5 @@
 """Control the Metal dependency setup without downloading or installing software."""
+import json
 import subprocess
 import unittest
 from pathlib import Path
@@ -19,6 +20,40 @@ class MetalSetupTests(unittest.TestCase):
         with patch.object(setup.subprocess, "run", side_effect=run):
             result = setup.ensure_compiler(install)
         return result, calls
+
+    def test_component_receipt_omits_paths_and_private_fields(self):
+        data = {"status": "installed", "buildVersion": "27A266a",
+                "toolchainIdentifier": "com.apple.dt.toolchain.Metal.32023.921.5",
+                "assetPath": "/private/asset", "toolchainSearchPath": "/private/mount",
+                "other": "private-extra-field"}
+        response = subprocess.CompletedProcess([], 0, json.dumps(data), "")
+        with patch.object(setup.subprocess, "run", return_value=response) as run:
+            self.assertEqual(setup.component_status(), {
+                "status": "installed", "buildVersion": "27A266a",
+                "toolchainIdentifier": "com.apple.dt.toolchain.Metal.32023.921.5"})
+        self.assertEqual(run.call_args.args[0],
+                         ["/usr/bin/xcodebuild", "-showComponent", "MetalToolchain", "-json"])
+        self.assertEqual(run.call_args.kwargs["timeout"], 30)
+
+    def test_component_receipt_rejects_unrecognized_field_values(self):
+        response = subprocess.CompletedProcess([], 0, json.dumps({
+            "status": "private-user", "buildVersion": "/private/build",
+            "toolchainIdentifier": "private-host"}), "")
+        with patch.object(setup.subprocess, "run", return_value=response):
+            self.assertEqual(setup.component_status(), {"status": "unrecognized"})
+
+    def test_component_receipt_failures_never_echo_raw_output(self):
+        cases = [(subprocess.CompletedProcess([], 4, "/private/output", "/private/error"),
+                  {"status": "query-failed", "exit_code": 4}),
+                 (subprocess.CompletedProcess([], 0, "not JSON /private/output", ""),
+                  {"status": "invalid-response"}),
+                 (subprocess.TimeoutExpired("query", 30, output=b"/private/partial"),
+                  {"status": "query-timeout", "timeout_seconds": 30})]
+        for response, expected in cases:
+            with self.subTest(expected=expected):
+                effect = response if isinstance(response, Exception) else None
+                with patch.object(setup.subprocess, "run", return_value=response, side_effect=effect):
+                    self.assertEqual(setup.component_status(), expected)
 
     def test_existing_compiler_does_not_install(self):
         installed, calls = self.run_setup([(0, "", True)])
