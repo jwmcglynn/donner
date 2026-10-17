@@ -26,6 +26,10 @@ class ParseResult;
 
 }  // namespace donner
 
+namespace donner::css {
+class SelectorTraversalBudget;
+}  // namespace donner::css
+
 namespace donner::editor {
 
 class AsyncSVGDocument;
@@ -499,6 +503,14 @@ public:
    * @return The first child element, or \c std::nullopt if the element has no children.
    */
   std::optional<SVGElement> firstChild() const;
+
+  /**
+   * Whether this element is empty under the CSS :empty content rules.
+   * Comments and processing instructions do not count; document whitespace is ignored.
+   * @param budget Optional shared node-visit budget; exhaustion returns false.
+   * @return True when no element or non-whitespace text children exist.
+   */
+  bool isEmptyForSelector(css::SelectorTraversalBudget* budget = nullptr) const;
 
   /**
    * Get the last child of this element, if it exists.

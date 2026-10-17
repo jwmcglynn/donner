@@ -134,6 +134,11 @@ std::optional<PseudoClassSelector::PseudoMatchResult> PseudoClassSelector::match
     return PseudoMatchResult(matched, /* isPrimary */ false);
   }
   if (ident.equalsLowercase("empty")) {
+    if constexpr (requires {
+                    { element.isEmptyForSelector(options.traversalBudget) } -> std::same_as<bool>;
+                  }) {
+      return element.isEmptyForSelector(options.traversalBudget);
+    }
     return !element.firstChild().has_value();
   }
   if (ident.equalsLowercase("first-child")) {
@@ -197,15 +202,12 @@ PseudoClassSelector::PseudoMatchResult PseudoClassSelector::matchesHasFunction(
     return PseudoMatchResult(false);
   }
 
-  SelectorMatchOptions<T> optionsOverride = options;
-  optionsOverride.relativeToElement = &element;
-  ElementTraversalGenerator<T> elements = allChildrenRecursiveGenerator(element);
-  while (elements.next()) {
-    if (options.traversalBudget != nullptr && !options.traversalBudget->consume()) {
-      return PseudoMatchResult(false);
-    }
-    if (selector->matches(elements.getValue(), optionsOverride).matched) {
+  for (const ComplexSelector& relative : selector->entries) {
+    if (relative.matchesRelativeToAnchor(element, options)) {
       return PseudoMatchResult(true);
+    }
+    if (options.traversalBudget != nullptr && options.traversalBudget->rejected()) {
+      return PseudoMatchResult(false);
     }
   }
   return PseudoMatchResult(false);

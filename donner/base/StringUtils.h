@@ -335,6 +335,26 @@ public:
   }
 
   /**
+   * Split at ASCII whitespace: space, tab, line feed, form feed and carriage return.
+   * Empty tokens are omitted and the returned views alias the input.
+   * @param str String to split, which must outlive the returned views.
+   * @return Non-empty whitespace-separated tokens.
+   */
+  template <StringLike T>
+  static std::vector<std::string_view> SplitAsciiWhitespace(const T& str) {
+    const std::string_view value(str.data(), str.size());
+    constexpr std::string_view kSeparators = " \t\n\f\r";
+    std::vector<std::string_view> result;
+    for (std::size_t start = value.find_first_not_of(kSeparators);
+         start != std::string_view::npos;) {
+      const std::size_t end = value.find_first_of(kSeparators, start);
+      result.push_back(value.substr(start, end == std::string_view::npos ? end : end - start));
+      start = end == std::string_view::npos ? end : value.find_first_not_of(kSeparators, end);
+    }
+    return result;
+  }
+
+  /**
    * Trims leading and trailing whitespace from a string, returning a view of the trimmed string.
    *
    * The returned view aliases \p str, so \p str must outlive it.
