@@ -38,6 +38,18 @@ Entity EntityById(SVGDocument& document, std::string_view id) {
   return element.has_value() ? element->entityHandle().entity() : entt::null;
 }
 
+std::optional<std::string> AnimatedOverride(SVGDocument& document, std::string_view id,
+                                            std::string_view attribute, double time) {
+  components::AnimationSystem().advance(document.registry(), time);
+  const auto* values =
+      document.registry().try_get<components::AnimatedValuesComponent>(EntityById(document, id));
+  if (!values) {
+    return std::nullopt;
+  }
+  const auto value = values->overrides.find(attribute);
+  return value == values->overrides.end() ? std::nullopt : std::optional(value->second);
+}
+
 }  // namespace
 
 TEST(SVGSetElement, IsAnimationTargetResolvesParentAndHref) {
@@ -86,6 +98,40 @@ TEST(SVGSetElement, IsAnimationTargetMatchesBeforeAndAfterAdvance) {
 
   components::AnimationSystem().advance(registry, 0.0);
   EXPECT_TRUE(system.isAnimationTarget(registry, layer)) << "after the state was resolved";
+}
+
+TEST(SVGSetElement, HrefPrecedesXlinkHrefIncludingEmptyAndMutationFallback) {
+  auto document = parseSVGWithExperimental(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+      <rect id="primary" width="10"/><rect id="legacy" width="20"/>
+      <set id="animation" href="#primary" xlink:href="#legacy"
+           attributeName="width" to="40" dur="2s"/>
+    </svg>)svg");
+  const auto animation = document.querySelector("#animation");
+  ASSERT_THAT(animation, testing::Ne(std::nullopt));
+  const auto href = [&]() {
+    return animation->entityHandle().get<components::SetAnimationComponent>().href;
+  };
+
+  EXPECT_THAT(href(), testing::Optional(testing::StrEq("#primary")));
+  EXPECT_THAT(AnimatedOverride(document, "#primary", "width", 1),
+              testing::Optional(testing::StrEq("40")));
+  EXPECT_THAT(AnimatedOverride(document, "#legacy", "width", 1), testing::Eq(std::nullopt));
+
+  animation->setAttribute("href", "");
+  EXPECT_THAT(AnimatedOverride(document, "#primary", "width", 1), testing::Eq(std::nullopt));
+  EXPECT_THAT(AnimatedOverride(document, "#legacy", "width", 1), testing::Eq(std::nullopt));
+  EXPECT_THAT(href(), testing::Optional(testing::IsEmpty()));
+
+  animation->removeAttribute("href");
+  EXPECT_THAT(AnimatedOverride(document, "#legacy", "width", 1),
+              testing::Optional(testing::StrEq("40")));
+  EXPECT_THAT(href(), testing::Optional(testing::StrEq("#legacy")));
+
+  animation->setAttribute("href", "#primary");
+  EXPECT_THAT(AnimatedOverride(document, "#primary", "width", 1),
+              testing::Optional(testing::StrEq("40")));
+  EXPECT_THAT(href(), testing::Optional(testing::StrEq("#primary")));
 }
 
 TEST(SVGSetElement, ParseBasic) {

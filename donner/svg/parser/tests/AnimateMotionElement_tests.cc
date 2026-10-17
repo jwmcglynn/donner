@@ -4,6 +4,7 @@
 #include "donner/base/tests/ParseResultTestUtils.h"
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/SVGPathElement.h"
+#include "donner/svg/components/animation/AnimateMotionComponent.h"
 #include "donner/svg/components/animation/AnimatedValuesComponent.h"
 #include "donner/svg/components/animation/AnimationResourceBudget.h"
 #include "donner/svg/components/animation/AnimationSystem.h"
@@ -58,6 +59,32 @@ TEST(SVGAnimateMotionElement, MpathOverridesPathAndTracksGeometryChanges) {
   route->setAttribute("d", "M0 0L0 200");
   EXPECT_THAT(MotionAt(document, 1),
               testing::Optional(testing::StrEq("translate(0, 100) rotate(90)")));
+}
+
+TEST(SVGAnimateMotionElement, MpathHrefPrecedesXlinkHrefIncludingEmptyAndMutationFallback) {
+  auto document = ParseMotion(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+      <path id="primary" d="M0 0V100"/><path id="legacy" d="M0 0H100"/>
+      <rect id="r"><animateMotion dur="2s"><mpath id="reference"
+        href="#primary" xlink:href="#legacy"/></animateMotion></rect>
+    </svg>)svg");
+  const auto reference = document.querySelector("#reference");
+  ASSERT_THAT(reference, testing::Ne(std::nullopt));
+  const auto href = [&]() {
+    return reference->entityHandle().get<components::MPathComponent>().href;
+  };
+
+  EXPECT_EQ(href(), "#primary");
+  EXPECT_THAT(MotionAt(document, 1), testing::Optional(testing::StrEq("translate(0, 50)")));
+  reference->setAttribute("href", "");
+  EXPECT_THAT(MotionAt(document, 1), testing::Eq(std::nullopt));
+  EXPECT_THAT(href(), testing::IsEmpty());
+  reference->removeAttribute("href");
+  EXPECT_THAT(MotionAt(document, 1), testing::Optional(testing::StrEq("translate(50, 0)")));
+  EXPECT_EQ(href(), "#legacy");
+  reference->setAttribute("href", "#primary");
+  EXPECT_THAT(MotionAt(document, 1), testing::Optional(testing::StrEq("translate(0, 50)")));
+  EXPECT_EQ(href(), "#primary");
 }
 
 TEST(SVGAnimateMotionElement, KeyPointsAndTimesControlPathProgress) {

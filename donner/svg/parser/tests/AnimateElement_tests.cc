@@ -481,6 +481,40 @@ TEST(SVGAnimateElement, HrefTarget) {
   EXPECT_NEAR(std::stod(val.value()), 150.0, 0.01);
 }
 
+TEST(SVGAnimateElement, HrefPrecedesXlinkHrefIncludingEmptyAndMutationFallback) {
+  auto document = parseSVGWithExperimental(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+      <rect id="primary" width="10"/><rect id="legacy" width="20"/>
+      <animate id="animation" href="#primary" xlink:href="#legacy"
+               attributeName="width" from="0" to="100" dur="2s"/>
+    </svg>)svg");
+  const auto animation = document.querySelector("#animation");
+  ASSERT_THAT(animation, testing::Ne(std::nullopt));
+  const auto href = [&]() {
+    return animation->entityHandle().get<components::AnimateValueComponent>().href;
+  };
+
+  EXPECT_THAT(href(), testing::Optional(testing::StrEq("#primary")));
+  EXPECT_THAT(getAnimatedValue(document, "#primary", "width", 1),
+              testing::Optional(testing::StrEq("50")));
+  EXPECT_THAT(getAnimatedValue(document, "#legacy", "width", 1), testing::Eq(std::nullopt));
+
+  animation->setAttribute("href", "");
+  EXPECT_THAT(getAnimatedValue(document, "#primary", "width", 1), testing::Eq(std::nullopt));
+  EXPECT_THAT(getAnimatedValue(document, "#legacy", "width", 1), testing::Eq(std::nullopt));
+  EXPECT_THAT(href(), testing::Optional(testing::IsEmpty()));
+
+  animation->removeAttribute("href");
+  EXPECT_THAT(getAnimatedValue(document, "#legacy", "width", 1),
+              testing::Optional(testing::StrEq("50")));
+  EXPECT_THAT(href(), testing::Optional(testing::StrEq("#legacy")));
+
+  animation->setAttribute("href", "#primary");
+  EXPECT_THAT(getAnimatedValue(document, "#primary", "width", 1),
+              testing::Optional(testing::StrEq("50")));
+  EXPECT_THAT(href(), testing::Optional(testing::StrEq("#primary")));
+}
+
 // --- Animation sandwich model tests (replace mode; additive/accumulate deferred) ---
 
 TEST(SVGAnimateElement, MultipleAnimationsLastWins) {
