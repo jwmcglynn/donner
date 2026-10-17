@@ -300,7 +300,7 @@ new image start cold. The macOS lanes instead build with the Xcode pinned in
 Xcode version and build in their keys, and `--config=ci-macos` pins the action `PATH`, so the hosted
 and self-hosted macOS runners produce identical build action keys. Test results stay per lane:
 each lane names itself in its test environment, because a result depends on the runner's GPU. A
-self-hosted runner without the pinned Xcode gets no partition, and the action leaves the cache off
+self-hosted runner without a pinned Xcode discoverable by Bazel gets no partition, and the action leaves the cache off
 for that run. The sanitizer lanes use the hermetic LLVM toolchain (`--config=latest_llvm`), whose
 compiler and sysroot are action inputs.
 
