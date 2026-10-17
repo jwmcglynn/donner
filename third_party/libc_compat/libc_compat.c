@@ -9,23 +9,25 @@
 // already default-versioned, so this is a one-symbol fix rather than a
 // broader ABI mismatch.
 //
-// This shim defines `copy_file_range` as an ordinary symbol in our own code,
-// pointed at the versioned glibc entry point via `.symver`. The linker picks
-// up our definition, libc++ is happy, and the call forwards to glibc at
-// runtime.
+// Call the kernel directly: a versioned glibc reference can bind back to this
+// interposed symbol when the shim is a shared library, causing infinite recursion.
 
 #if defined(__linux__) && !defined(__APPLE__)
 
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE
+#endif
+#include <stdint.h>
+#include <sys/syscall.h>
 #include <sys/types.h>
+#include <unistd.h>
 
-extern ssize_t donner_libc_compat_copy_file_range(int, off_t *, int, off_t *,
-                                                  size_t, unsigned int);
-__asm__(".symver donner_libc_compat_copy_file_range,copy_file_range@GLIBC_2.27");
+_Static_assert(sizeof(off_t) == sizeof(int64_t), "copy_file_range requires 64-bit offsets");
 
+// Kernel errors are preserved; this shim does not add pthread cancellation handling.
 ssize_t copy_file_range(int fd_in, off_t *off_in, int fd_out, off_t *off_out,
                         size_t len, unsigned int flags) {
-  return donner_libc_compat_copy_file_range(fd_in, off_in, fd_out, off_out,
-                                            len, flags);
+  return syscall(SYS_copy_file_range, fd_in, off_in, fd_out, off_out, len, flags);
 }
 
 #endif

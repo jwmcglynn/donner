@@ -47,7 +47,7 @@ def libc_compat_deps():
     as a non-default-versioned symbol, so unversioned references from
     `toolchains_llvm`'s prebuilt libc++.a don't auto-resolve. The tiny shim in
     `//third_party/libc_compat` provides an unversioned `copy_file_range`
-    that forwards to the versioned glibc entry point.
+    that invokes the kernel without rebinding to itself.
     """
     return select({
         "//build_defs:llvm_latest_linux": ["//third_party/libc_compat:libc_compat"],
