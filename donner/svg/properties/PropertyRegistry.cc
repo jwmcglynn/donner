@@ -899,6 +899,11 @@ ParseResult<StrokeDasharray> ParseStrokeDasharray(std::span<const css::Component
   // https://www.w3.org/TR/css-values-4/#mult-comma
   StrokeDasharray result;
 
+  if (const auto ident = parser::TryGetSingleIdent(components);
+      ident && ident->equalsLowercase("none")) {
+    return result;
+  }
+
   while (!components.empty()) {
     if (!result.empty()) {
       if (TrySkipToken<css::Token::Whitespace>(components) ||

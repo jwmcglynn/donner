@@ -4,6 +4,7 @@
 #include <cmath>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -73,6 +74,22 @@ bool shouldApplyValue(AnimationPhase phase, AnimationFill fill) {
          (phase == AnimationPhase::After && fill == AnimationFill::Freeze);
 }
 
+std::optional<double> CompletedIterationCount(double elapsed, double simpleDuration) {
+  if (!(elapsed > 0.0) || !(simpleDuration > 0.0) || !std::isfinite(simpleDuration)) {
+    return std::nullopt;
+  }
+  const double iterations = elapsed / simpleDuration;
+  if (!std::isfinite(iterations)) {
+    return std::nullopt;
+  }
+  const double nearestIteration = std::round(iterations);
+  const double tolerance =
+      8 * std::numeric_limits<double>::epsilon() * std::max(1.0, std::abs(iterations));
+  return nearestIteration >= 1.0 && std::abs(iterations - nearestIteration) <= tolerance
+             ? std::optional(nearestIteration)
+             : std::nullopt;
+}
+
 /// Compute the interpolation progress [0,1] within the active interval.
 /// Handles repeat iterations and keyTimes.
 double computeProgress(double documentTime, double beginTime, double simpleDuration,
@@ -89,8 +106,9 @@ double computeProgress(double documentTime, double beginTime, double simpleDurat
   if (std::isfinite(simpleDuration) && simpleDuration > 0.0) {
     // Handle repeat: simpleTime = elapsed mod simpleDuration
     simpleTime = std::fmod(elapsed, simpleDuration);
-    // At exact end of last iteration, use full duration.
-    if (frozen && simpleTime == 0.0 && elapsed > 0.0) {
+    // At the end of the last iteration, use full duration. Decimal clock values can put the
+    // quotient a few ULPs from its mathematical integer, so exact remainder equality is unsafe.
+    if (frozen && CompletedIterationCount(elapsed, simpleDuration)) {
       simpleTime = simpleDuration;
     }
   }
@@ -203,7 +221,17 @@ bool NeedsInstanceValueContext(Registry& registry, Entity target, std::string_vi
       (attribute == "x" || attribute == "y" || attribute == "width" || attribute == "height")) {
     return true;
   }
-  return (type->type() == ElementType::TextPath && attribute == "startOffset") ||
+  const bool shapeLength =
+      (type->type() == ElementType::Rect &&
+       (attribute == "x" || attribute == "y" || attribute == "width" || attribute == "height" ||
+        attribute == "rx" || attribute == "ry")) ||
+      (type->type() == ElementType::Circle &&
+       (attribute == "cx" || attribute == "cy" || attribute == "r")) ||
+      (type->type() == ElementType::Ellipse &&
+       (attribute == "cx" || attribute == "cy" || attribute == "rx" || attribute == "ry")) ||
+      (type->type() == ElementType::Line &&
+       (attribute == "x1" || attribute == "y1" || attribute == "x2" || attribute == "y2"));
+  return shapeLength || (type->type() == ElementType::TextPath && attribute == "startOffset") ||
          (type->type() == ElementType::Marker &&
           (attribute == "markerWidth" || attribute == "markerHeight" || attribute == "refX" ||
            attribute == "refY"));
@@ -284,7 +312,11 @@ bool ProcessAnimation(Registry& registry, Entity entity, double documentTime,
     const double elapsed = std::min(sampleTime - state.beginTime, state.repeatDuration);
     iteration = std::floor(elapsed / state.simpleDuration);
     if (progress == 1 && iteration > 0) {
-      --iteration;
+      if (const auto completed = CompletedIterationCount(elapsed, state.simpleDuration)) {
+        iteration = *completed - 1;
+      } else {
+        --iteration;
+      }
     }
   }
   const std::string_view attribute =

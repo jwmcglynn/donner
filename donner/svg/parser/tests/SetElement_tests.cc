@@ -1,13 +1,18 @@
 #include <gtest/gtest.h>
 
+#include <sstream>
+
 #include "donner/base/tests/ParseResultTestUtils.h"
 #include "donner/svg/SVGDocument.h"
+#include "donner/svg/SVGRectElement.h"
 #include "donner/svg/SVGSetElement.h"
 #include "donner/svg/components/animation/AnimatedValuesComponent.h"
+#include "donner/svg/components/animation/AnimationBaseValue.h"
 #include "donner/svg/components/animation/AnimationResourceBudget.h"
 #include "donner/svg/components/animation/AnimationStateComponent.h"
 #include "donner/svg/components/animation/AnimationSystem.h"
 #include "donner/svg/components/animation/AnimationTimingComponent.h"
+#include "donner/svg/components/animation/AnimationValueSampler.h"
 #include "donner/svg/components/animation/SetAnimationComponent.h"
 #include "donner/svg/components/resources/ResourceManagerContext.h"
 #include "donner/svg/parser/SVGParser.h"
@@ -41,10 +46,33 @@ Entity EntityById(SVGDocument& document, std::string_view id) {
 std::optional<std::string> AnimatedOverride(SVGDocument& document, std::string_view id,
                                             std::string_view attribute, double time) {
   components::AnimationSystem().advance(document.registry(), time);
-  const auto* values =
-      document.registry().try_get<components::AnimatedValuesComponent>(EntityById(document, id));
+  const auto element = document.querySelector(id);
+  if (!element) {
+    return std::nullopt;
+  }
+  const auto* values = document.registry().try_get<components::AnimatedValuesComponent>(
+      element->entityHandle().entity());
   if (!values) {
     return std::nullopt;
+  }
+  const bool supportedRectWidth = element->type() == ElementType::Rect && attribute == "width";
+  if (supportedRectWidth && values->contextualLengths.contains(std::string(attribute))) {
+    const auto recipe = values->contextualLengths.at(std::string(attribute));
+    const auto rect = element->cast<SVGRectElement>();
+    auto& budget = document.registry().ctx().get<components::AnimationResourceBudget>();
+    auto context = components::AnimationContextFor(
+        document.registry(), element->entityHandle().entity(), attribute, budget);
+    context.extent = Lengthd::Extent::X;
+    if (!components::SampleContextualLengthRecipe(*recipe, rect.width(), context)) {
+      return std::nullopt;
+    }
+    document.setTime(time);
+    ParseWarningSink warnings = ParseWarningSink::Disabled();
+    RendererUtils::prepareDocumentForRendering(document, false, warnings);
+    std::ostringstream output;
+    output.precision(12);
+    output << rect.computedWidth();
+    return output.str();
   }
   const auto value = values->overrides.find(std::string(attribute));
   return value == values->overrides.end() ? std::nullopt : std::optional(value->second);
@@ -207,9 +235,17 @@ TEST(SVGSetElement, ProcessingModesControlAnimationEvaluation) {
       EXPECT_EQ(values, nullptr);
     } else {
       ASSERT_NE(values, nullptr);
-      ASSERT_TRUE(values->overrides.contains("fill"));
-      EXPECT_EQ(values->overrides.at("fill"), "blue");
+      ASSERT_TRUE(values->contextualLengths.contains("fill"));
     }
+    ParseWarningSink renderingWarnings = ParseWarningSink::Disabled();
+    RendererUtils::prepareDocumentForRendering(parsed.result(), false, renderingWarnings);
+    const auto target = parsed.result().querySelector("#r");
+    ASSERT_TRUE(target.has_value());
+    const auto paint = target->getComputedStyle().fill.get();
+    ASSERT_TRUE(paint && paint->is<PaintServer::Solid>());
+    const auto expected = mode == ProcessingMode::SecureStatic ? css::RGBA::RGB(255, 0, 0)
+                                                               : css::RGBA::RGB(0, 0, 255);
+    EXPECT_EQ(paint->get<PaintServer::Solid>().color.resolve(css::RGBA::RGB(0, 0, 0), 1), expected);
   }
 }
 

@@ -3,6 +3,8 @@
 #include <atomic>
 
 #include "donner/base/ParseWarningSink.h"
+#include "donner/base/StringUtils.h"
+#include "donner/base/parser/LengthParser.h"
 #include "donner/base/xml/components/AttributesComponent.h"
 #include "donner/base/xml/components/TreeComponent.h"
 #include "donner/css/parser/SelectorParser.h"
@@ -22,6 +24,8 @@
 #include "donner/svg/components/layout/TransformComponent.h"
 #include "donner/svg/components/paint/StopComponent.h"
 #include "donner/svg/components/shadow/ShadowTreeComponent.h"
+#include "donner/svg/components/shape/ComputedPathComponent.h"
+#include "donner/svg/components/shape/LineComponent.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
 #include "donner/svg/components/style/StyleComponent.h"
 #include "donner/svg/components/style/StyleSystem.h"
@@ -57,6 +61,89 @@ void markStyleCascadeDirty(EntityHandle handle, uint16_t extraFlags = 0) {
 bool ShouldInvalidateDescendantStyles(std::string_view name) {
   return PropertyRegistry::isPresentationAttributeInherited(name) || name == "flood-color" ||
          name == "stop-color";
+}
+
+void markNeedsFullStyleRecompute(EntityHandle handle);
+
+Lengthd components::LineComponent::*LineCoordinateField(std::string_view name) {
+  if (name == "x1") {
+    return &components::LineComponent::x1;
+  }
+  if (name == "y1") {
+    return &components::LineComponent::y1;
+  }
+  if (name == "x2") {
+    return &components::LineComponent::x2;
+  }
+  if (name == "y2") {
+    return &components::LineComponent::y2;
+  }
+  return nullptr;
+}
+
+bool SetCoreXMLAttribute(SVGElement& element, const xml::XMLQualifiedNameRef& name,
+                         std::string_view value) {
+  if (name == xml::XMLQualifiedNameRef("id")) {
+    element.setId(value);
+  } else if (name == xml::XMLQualifiedNameRef("class")) {
+    element.setClassName(value);
+  } else if (name == xml::XMLQualifiedNameRef("style")) {
+    element.setStyle(value);
+  } else {
+    return false;
+  }
+  return true;
+}
+
+struct LineAttributeMutationResult {
+  bool handled = false;
+  std::optional<ParseDiagnostic> diagnostic;
+};
+
+LineAttributeMutationResult SetLineCoordinateAttribute(EntityHandle handle,
+                                                       const xml::XMLQualifiedNameRef& name,
+                                                       std::string_view value) {
+  const auto* type = handle.try_get<components::ElementTypeComponent>();
+  const auto field = name.namespacePrefix.empty() ? LineCoordinateField(name.name) : nullptr;
+  if (!type || type->type() != ElementType::Line || !field) {
+    return {};
+  }
+
+  donner::parser::LengthParser::Options options;
+  options.unitOptional = true;
+  const std::string_view trimmed = StringUtils::TrimWhitespace(value);
+  auto parsed = donner::parser::LengthParser::Parse(trimmed, options);
+  handle.get_or_emplace<donner::components::AttributesComponent>().setAttribute(
+      *handle.registry(), name, RcString(value));
+  markNeedsFullStyleRecompute(handle);
+  handle.remove<components::ComputedPathComponent>();
+  markDirty(handle, components::DirtyFlagsComponent::Shape);
+  auto& line = handle.get_or_emplace<components::LineComponent>();
+  line.*field = Lengthd();
+  if (parsed.hasError()) {
+    return {true, std::move(parsed.error())};
+  }
+  if (parsed.result().consumedChars != trimmed.size()) {
+    ParseDiagnostic diagnostic;
+    diagnostic.reason = "Unexpected data at end of attribute";
+    diagnostic.range.start = FileOffset::Offset(parsed.result().consumedChars);
+    return {true, std::move(diagnostic)};
+  }
+  line.*field = parsed.result().length;
+  return {true, std::nullopt};
+}
+
+bool RemoveLineCoordinateAttribute(EntityHandle handle, const xml::XMLQualifiedNameRef& name) {
+  const auto* type = handle.try_get<components::ElementTypeComponent>();
+  const auto field = name.namespacePrefix.empty() ? LineCoordinateField(name.name) : nullptr;
+  if (!type || type->type() != ElementType::Line || !field) {
+    return false;
+  }
+  handle.get_or_emplace<components::LineComponent>().*field = Lengthd();
+  handle.remove<components::ComputedPathComponent>();
+  markDirty(handle, components::DirtyFlagsComponent::Shape);
+  markNeedsFullStyleRecompute(handle);
+  return true;
 }
 
 void invalidateComputedStyle(EntityHandle handle) {
@@ -615,14 +702,7 @@ std::optional<ParseDiagnostic> SVGElement::setAttributeFromXMLMutation(
   }
   // TODO: Namespace support for these attributes
   // First check some special cases which will never be presentation attributes.
-  if (name == xml::XMLQualifiedNameRef("id")) {
-    setId(value);
-    return std::nullopt;
-  } else if (name == xml::XMLQualifiedNameRef("class")) {
-    setClassName(value);
-    return std::nullopt;
-  } else if (name == xml::XMLQualifiedNameRef("style")) {
-    setStyle(value);
+  if (SetCoreXMLAttribute(*this, name, value)) {
     return std::nullopt;
   }
 
@@ -633,6 +713,10 @@ std::optional<ParseDiagnostic> SVGElement::setAttributeFromXMLMutation(
         *handle_.registry(), name, RcString(value));
     markConditionalProcessingChanged(handle_);
     return std::nullopt;
+  }
+
+  if (auto lineResult = SetLineCoordinateAttribute(handle_, name, value); lineResult.handled) {
+    return std::move(lineResult.diagnostic);
   }
 
   // If it's not in the list above, it may be presentation attribute.
@@ -695,6 +779,7 @@ void SVGElement::removeAttributeFromXMLMutation(const xml::XMLQualifiedNameRef& 
       }
     }
     markConditionalProcessingChanged(handle_);
+  } else if (RemoveLineCoordinateAttribute(handle_, name)) {
   } else {
     // TODO(jwmcglynn): Add support for namespace when parsing presentation attributes.
     // Only parse empty namespaces for now.

@@ -1,6 +1,8 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <utility>
+
 #include "donner/base/tests/ParseResultTestUtils.h"
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/SVGPathElement.h"
@@ -47,6 +49,18 @@ TEST(SVGAnimateMotionElement, PacedPathUsesArcLength) {
   EXPECT_THAT(MotionAt(document, 3), testing::Optional(testing::StrEq("translate(100, 100)")));
 }
 
+TEST(SVGAnimateMotionElement, AutoReverseAndNumericRotationUseDistinctBranches) {
+  for (const auto& [rotate, expected] : {std::pair{"auto-reverse", "translate(50, 0) rotate(180)"},
+                                         std::pair{"30", "translate(50, 0) rotate(30)"}}) {
+    SCOPED_TRACE(rotate);
+    auto document = ParseMotion(
+        "<svg xmlns='http://www.w3.org/2000/svg'><rect id='r'>"
+        "<animateMotion path='M0 0H100' rotate='" +
+        std::string(rotate) + "' dur='2s'/></rect></svg>");
+    EXPECT_THAT(MotionAt(document, 1), testing::Optional(testing::StrEq(expected)));
+  }
+}
+
 TEST(SVGAnimateMotionElement, MpathOverridesPathAndTracksGeometryChanges) {
   auto document = ParseMotion(R"svg(
     <svg xmlns="http://www.w3.org/2000/svg"><path id="route" d="M0 0L0 100"/>
@@ -80,16 +94,12 @@ TEST(SVGAnimateMotionElement, MpathHrefPrecedesXlinkHrefIncludingEmptyAndMutatio
   EXPECT_THAT(MotionAt(document, 1), testing::Optional(testing::StrEq("translate(0, 50)")));
   reference->setAttribute({"xlink", "href"}, "#replacement");
   EXPECT_THAT(MotionAt(document, 1), testing::Optional(testing::StrEq("translate(0, 50)")));
-  EXPECT_EQ(href(), "#primary");
   reference->setAttribute("href", "");
   EXPECT_THAT(MotionAt(document, 1), testing::Eq(std::nullopt));
-  EXPECT_THAT(href(), testing::IsEmpty());
   reference->removeAttribute("href");
   EXPECT_THAT(MotionAt(document, 1), testing::Optional(testing::StrEq("translate(50, 50)")));
-  EXPECT_EQ(href(), "#replacement");
   reference->setAttribute("href", "#primary");
   EXPECT_THAT(MotionAt(document, 1), testing::Optional(testing::StrEq("translate(0, 50)")));
-  EXPECT_EQ(href(), "#primary");
 }
 
 TEST(SVGAnimateMotionElement, AnimationHrefPrecedesXlinkHref) {

@@ -1,10 +1,14 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <utility>
+
 #include "donner/base/tests/ParseResultTestUtils.h"
+#include "donner/editor/tests/BitmapGoldenCompare.h"
 #include "donner/svg/SVGFEOffsetElement.h"
 #include "donner/svg/SVGLineElement.h"
 #include "donner/svg/SVGPolygonElement.h"
+#include "donner/svg/SVGRectElement.h"
 #include "donner/svg/components/animation/AnimationResourceBudget.h"
 #include "donner/svg/components/animation/AnimationSystem.h"
 #include "donner/svg/components/shape/PathComponent.h"
@@ -31,6 +35,23 @@ SVGDocument parseAnimated(std::string_view fragment) {
 }
 
 }  // namespace
+
+TEST(RendererAnimation, MotionRetainsSmallOffsetsOnLargeCoordinates) {
+  auto document = parseAnimated(
+      "<rect width='4' height='4' transform='translate(-1000000000000)'>"
+      "<animateMotion path='M1000000000002 0H1000000000010' dur='2s' fill='freeze'/>"
+      "</rect>");
+  for (const auto& [time, x] :
+       {std::pair{0.0, 2}, std::pair{1.0, 6}, std::pair{3.0, 10}, std::pair{0.5, 4}}) {
+    SCOPED_TRACE(time);
+    document.setTime(time);
+    auto expected = parseAnimated("<rect x='" + std::to_string(x) + "' width='4' height='4'/>");
+    editor::tests::CompareBitmapToBitmap(RenderDocumentWithActiveBackend(document),
+                                         RenderDocumentWithActiveBackend(expected),
+                                         "motion-coordinate-precision-" + std::to_string(time),
+                                         editor::tests::PixelmatchIdentityParams());
+  }
+}
 
 TEST(RendererAnimation, GeometryGrowFreeze) {
   // <animate> on rect width from 4 to 12 over 2s, frozen after.
@@ -576,9 +597,14 @@ TEST(RendererAnimation, SetNoneClearsStrokeDashesAndRestoresAfterSeeking) {
 
 TEST(RendererAnimation, FractionalDurationFreezeRetainsEndpointAcrossSeeks) {
   auto document = parseAnimated(R"svg(
-    <rect width="4" height="16">
+    <rect id="target" width="4" height="16">
       <animate attributeName="x" from="0" to="8" begin="0.1s" dur="0.3s" fill="freeze"/>
     </rect>)svg");
+  const auto target = document.querySelector("#target");
+  ASSERT_THAT(target, testing::Ne(std::nullopt));
+  document.setTime(0.25);
+  (void)RendererTestUtils::renderToAsciiImage(document);
+  EXPECT_NEAR(target->cast<SVGRectElement>().computedX().value, 4, 1e-12);
   for (double time : {0.4, 0.9, 100.0}) {
     document.setTime(time);
     EXPECT_THAT(RendererTestUtils::renderToAsciiImage(document).generated,
@@ -590,6 +616,53 @@ TEST(RendererAnimation, FractionalDurationFreezeRetainsEndpointAcrossSeeks) {
   document.setTime(0.4);
   EXPECT_THAT(RendererTestUtils::renderToAsciiImage(document).generated,
               testing::StartsWith("........@@@@...."));
+}
+
+TEST(RendererAnimation, FractionalExplicitEndFreezesMidIterationAcrossSeeks) {
+  auto document = parseAnimated(R"svg(
+    <rect id="target" width="4" height="16">
+      <animate attributeName="x" from="0" to="8" begin="0.1s" dur="0.3s" end="0.25s"
+               fill="freeze"/>
+    </rect>)svg");
+  const auto target = document.querySelector("#target");
+  ASSERT_THAT(target, testing::Ne(std::nullopt));
+  for (double time : {0.25, 1.0, 0.25}) {
+    document.setTime(time);
+    EXPECT_THAT(RendererTestUtils::renderToAsciiImage(document).generated,
+                testing::StartsWith("....@@@@........"));
+    EXPECT_NEAR(target->cast<SVGRectElement>().computedX().value, 4, 1e-12);
+  }
+}
+
+TEST(RendererAnimation, TinyExplicitEndDoesNotCompleteAnIteration) {
+  auto document = parseAnimated(R"svg(
+    <rect id="target" width="4" height="16">
+      <animate attributeName="x" from="0" to="8" dur="1s" end="0.0000000000000001s"
+               fill="freeze"/>
+    </rect>)svg");
+  const auto target = document.querySelector("#target");
+  ASSERT_THAT(target, testing::Ne(std::nullopt));
+  for (double time : {0.0000000000000001, 1.0}) {
+    document.setTime(time);
+    (void)RendererTestUtils::renderToAsciiImage(document);
+    EXPECT_NEAR(target->cast<SVGRectElement>().computedX().value, 0, 1e-12);
+  }
+}
+
+TEST(RendererAnimation, FractionalRepeatedAccumulationRetainsEveryCompletedIteration) {
+  auto document = parseAnimated(R"svg(
+    <rect id="target" x="2" width="2" height="16">
+      <animate attributeName="x" by="4" begin="0.2s" dur="0.1s" repeatCount="3"
+               additive="sum" accumulate="sum" fill="freeze"/>
+    </rect>)svg");
+  const auto target = document.querySelector("#target");
+  ASSERT_THAT(target, testing::Ne(std::nullopt));
+  for (const auto& [time, x] : {std::pair{0.45, 12.0}, std::pair{0.5, 14.0}, std::pair{1.0, 14.0},
+                                std::pair{0.45, 12.0}, std::pair{0.5, 14.0}}) {
+    document.setTime(time);
+    (void)RendererTestUtils::renderToAsciiImage(document);
+    EXPECT_NEAR(target->cast<SVGRectElement>().computedX().value, x, 1e-12);
+  }
 }
 
 TEST(RendererAnimation, RejectedPropertyProbePreservesAnimatedAppearance) {

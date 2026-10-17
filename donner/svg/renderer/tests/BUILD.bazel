@@ -623,6 +623,7 @@ donner_cc_test(
         ":renderer_test_utils",
         ":rgba_test_matchers",
         "//donner/base:base_test_utils",
+        "//donner/editor/tests:bitmap_golden_compare",
         "@com_google_gtest//:gtest_main",
     ],
 )

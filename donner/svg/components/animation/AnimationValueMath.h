@@ -28,6 +28,7 @@ std::optional<std::string> SerializeAnimationUrl(std::string_view href);
 /// Context required to resolve relative units and currentColor for an animated value.
 struct AnimationValueContext {
   Box2d viewBox{{0, 0}, {300, 150}};  ///< Current SVG viewport in user units.
+  bool angleValue = false;            ///< Marker orientation operands use SVG angle units.
   bool referenceValue = false;        ///< References are discrete and non-additive.
   /// Zero accepts general values; otherwise only this many dimensionless operands are allowed.
   std::size_t maximumNumbers = 0;
