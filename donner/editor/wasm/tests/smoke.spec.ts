@@ -2,6 +2,7 @@ import { errors, expect, type Page, test, type TestInfo, type Worker } from "@pl
 import { writeFile } from "node:fs/promises";
 import { arch, cpus, loadavg, platform, release, totalmem } from "node:os";
 import {
+  awaitBeforeBlueDeadline,
   captureAfterCanvasGpuCompletion,
   captureReadyBasicShapesFrame,
   hasPresentedBasicShapesHostFrame,
@@ -14,6 +15,7 @@ import {
   type CssRegion,
   type EditorPixelTarget,
   findElementColoredPixel,
+  isOnlyEditorPageBackground,
   type PixelBounds,
   readCanvasColorStats,
   readEditorPixelBoundsFromPng,
@@ -22,6 +24,7 @@ import {
   type ScreenshotTimeoutStage,
 } from "./canvas-color-stats";
 import { armFailureCanvasEvidence, installFailureCanvasEvidence } from "./failure-canvas-evidence";
+import { retakeFlatCapture } from "./flat-capture-retake.mjs";
 import { waitForAppliedPointer } from "./gesture-streams";
 import { echoGpuSessionConsole } from "./gpu-session-console";
 import { quarantineStillSkips } from "./quarantine-report.mjs";
@@ -3627,6 +3630,7 @@ test(
     if (!box) throw new Error("the editor canvas has no bounds");
     await page.mouse.click(box.x + box.width * 0.76, box.y + 390);
     let interactionCaptureOwner: Worker | null = null;
+    let flatCaptureSequence = 0;
     const captureAnimationRegion = async (region: CssRegion) => {
       const viewport = page.viewportSize();
       if (!viewport) throw new Error("the animation capture viewport is unavailable");
@@ -3638,13 +3642,59 @@ test(
           ...(unclipped ? {} : { clip: region }),
           timeout,
         });
-      const png = interactionCaptureOwner === null
-        ? await capture(scaledMs(5000))
-        : await captureAfterCanvasGpuCompletion(
-          interactionCaptureOwner,
-          performance.now() + scaledMs(5000),
-          capture,
-        );
+      const deadline = performance.now() + scaledMs(5000);
+      let captureTiming: { startedEpochMs: number; finishedEpochMs: number };
+      const captureCompleted = async (remaining: number) => {
+        const startedEpochMs = Date.now();
+        const image = interactionCaptureOwner === null
+          ? await capture(remaining)
+          : await captureAfterCanvasGpuCompletion(interactionCaptureOwner, deadline, capture);
+        captureTiming = { startedEpochMs, finishedEpochMs: Date.now() };
+        return image;
+      };
+      // Retain a single exact-background retake as evidence. This does not establish that
+      // the application never flickered; every nonuniform image still reaches the pixel oracle.
+      const sequence = flatCaptureSequence++;
+      const png: Buffer = unclipped
+        ? await retakeFlatCapture({
+          capture: captureCompleted,
+          isFlat: isOnlyEditorPageBackground,
+          deadline,
+          retain: async (image: Buffer, attempt: number) => {
+            const stem = `animation-flat-capture-${sequence}-${attempt}`;
+            const pngPath = testInfo.outputPath(`${stem}.png`);
+            await writeFile(pngPath, image);
+            let presentation: unknown;
+            try {
+              presentation = await awaitBeforeBlueDeadline(
+                page.evaluate(() => ({
+                  queue: window.__donnerPresentationQueueStats,
+                  worker: window.__donnerWorkerStats,
+                })),
+                deadline,
+              );
+            } catch (error) {
+              presentation = { diagnosticError: String(error) };
+            }
+            await writeFile(
+              testInfo.outputPath(`${stem}.json`),
+              JSON.stringify(
+                {
+                  ...captureTiming,
+                  presentationObservedAfterCapture: presentation,
+                  region,
+                  viewport,
+                  exactPageBackground: isOnlyEditorPageBackground(image),
+                  pageBackgroundRgba: [16, 19, 23, 255],
+                },
+                null,
+                2,
+              ),
+            );
+            await testInfo.attach(stem, { path: pngPath, contentType: "image/png" });
+          },
+        })
+        : await captureCompleted(deadline - performance.now());
       const offsetX = unclipped ? region.x : 0;
       const offsetY = unclipped ? region.y : 0;
       const read = (
