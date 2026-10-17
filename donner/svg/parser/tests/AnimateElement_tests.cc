@@ -1336,6 +1336,31 @@ TEST(SVGAnimateElement, RepeatEventAndOffsetStartDependentAnimation) {
               testing::Optional(testing::StrEq("25")));
 }
 
+TEST(SVGAnimateElement, MinimumExtensionDoesNotCreateRepeatDependencies) {
+  auto document = parseSVGWithExperimental(R"svg(
+    <svg xmlns='http://www.w3.org/2000/svg'>
+      <rect><set id='clock' attributeName='fill' to='red' dur='1s' repeatCount='2' min='10s'/></rect>
+      <rect id='late'><animate attributeName='width' from='0' to='100'
+        begin='clock.repeat(5)' dur='2s'/></rect>
+      <rect id='offset'><animate attributeName='width' from='0' to='100'
+        begin='clock.repeat(5)-5s' dur='2s'/></rect>
+      <rect id='ending'><animate attributeName='width' from='0' to='100'
+        end='clock.repeat(5)' dur='10s'/></rect>
+      <rect id='valid'><animate attributeName='width' from='0' to='100'
+        begin='clock.repeat(1)+0.25s' dur='2s'/></rect>
+      <rect id='after'><animate attributeName='width' from='0' to='100'
+        begin='clock.end' dur='2s'/></rect>
+    </svg>)svg");
+  EXPECT_THAT(getAnimatedValue(document, "#late", "width", 5.5), testing::Eq(std::nullopt));
+  EXPECT_THAT(getAnimatedValue(document, "#offset", "width", 1), testing::Eq(std::nullopt));
+  EXPECT_THAT(getAnimatedValue(document, "#ending", "width", 6),
+              testing::Optional(testing::StrEq("60")));
+  EXPECT_THAT(getAnimatedValue(document, "#valid", "width", 1.75),
+              testing::Optional(testing::StrEq("25")));
+  EXPECT_THAT(getAnimatedValue(document, "#after", "width", 10.5),
+              testing::Optional(testing::StrEq("25")));
+}
+
 TEST(SVGAnimateElement, MouseEventOffsetsRetainIntervalsForSeeking) {
   auto document = parseSVGWithExperimental(R"(
     <svg xmlns='http://www.w3.org/2000/svg'><rect id="r"><animate attributeName="width" from="0" to="100"
