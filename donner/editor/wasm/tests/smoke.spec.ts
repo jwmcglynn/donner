@@ -2232,12 +2232,15 @@ test(
         async () => hasPresentedBasicShapesHostFrame(await readState(), before.results),
         { timeout: scaledMs(5_000) },
       ).toBe(true);
+      let readyState: Awaited<ReturnType<typeof readState>> | undefined;
       await expect.poll(async () => {
         const state = await readState();
-        return hasPresentedBasicShapesHostFrame(state, before.results) && state.framesInFlight === 0
-          && state.completedSerial === state.submittedSerial;
+        const ready = hasPresentedBasicShapesHostFrame(state, before.results)
+          && state.framesInFlight === 0 && state.completedSerial === state.submittedSerial;
+        if (ready) readyState = state;
+        return ready;
       }, { timeout: scaledMs(5_000) }).toBe(true);
-      const readyState = await readState();
+      if (!readyState) throw new Error("the completed Basic Shapes frame was not observed");
       expect(readyState.renderedFrames).toBeGreaterThan(before.frames);
       // Hold a fresh document frame, not welcome frames that can occupy all presentation slots.
       const completionHold = await holdCanvasCompletionForTest(page, [applicationOwner!]);
