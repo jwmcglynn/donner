@@ -10,9 +10,9 @@ import { boundBrowserDiagnostic, readGpuOwnerDispatchStats } from "./browser-run
 import { installBrowserStallDiagnostics } from "./browser-stall-diagnostics";
 import {
   type CanvasColorStats,
+  captureEditorPage,
   type CssRegion,
   type EditorPixelTarget,
-  captureEditorPage,
   findElementColoredPixel,
   type PixelBounds,
   readCanvasColorStats,
@@ -3654,7 +3654,7 @@ test(
           maxY: bounds.maxY - offsetY,
         };
       };
-      return { png, read };
+      return { png, read, viewport };
     };
     const documentRegion = { minX: 150, minY: 150, maxX: box.width - 430, maxY: box.height * 0.58 };
     let initial: PixelBounds | null = null;
@@ -3706,8 +3706,18 @@ test(
         });
       }
       if (!result) {
+        const missingPath = testInfo.outputPath("animation-orb-missing.png");
+        await writeFile(missingPath, capture.png);
+        await writeFile(
+          testInfo.outputPath("animation-orb-missing-region.json"),
+          JSON.stringify(
+            { track, box, viewport: capture.viewport, browserName, initialOrb },
+            null,
+            2,
+          ),
+        );
         await testInfo.attach("animation-orb-missing", {
-          body: capture.png,
+          path: missingPath,
           contentType: "image/png",
         });
         throw new Error("the presented animation orb disappeared");
