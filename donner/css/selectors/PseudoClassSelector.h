@@ -205,10 +205,11 @@ private:
         return matchingType->matches(child);
       }
     };
+    const SelectorTraversalNavigation<T> navigation(options.traversalBudget);
     int childIndex = 1;
     if (!fromEnd) {
-      for (std::optional<T> child = parent.firstChild(); child;
-           child = child.value().nextSibling()) {
+      for (std::optional<T> child = navigation.firstChild(parent); child;
+           child = navigation.nextSibling(*child)) {
         if (options.traversalBudget != nullptr && !options.traversalBudget->consume()) {
           return -1;
         }
@@ -223,8 +224,8 @@ private:
         }
       }
     } else {
-      for (std::optional<T> child = parent.lastChild(); child;
-           child = child.value().previousSibling()) {
+      for (std::optional<T> child = navigation.lastChild(parent); child;
+           child = navigation.previousSibling(*child)) {
         if (options.traversalBudget != nullptr && !options.traversalBudget->consume()) {
           return -1;
         }
@@ -240,16 +241,16 @@ private:
       }
     }
 
-    assert(matchingType &&
-           "Should only reach end of child list if there is a Selector skipping elements");
+    // A filter or exhausted navigation can finish before reaching this element.
     return -1;
   }
 
   template <ElementLike T>
   static bool isFirstOfType(const T& element, const xml::XMLQualifiedNameRef& type,
                             SelectorTraversalBudget* traversalBudget) {
-    for (std::optional<T> child = element.previousSibling(); child;
-         child = child.value().previousSibling()) {
+    const SelectorTraversalNavigation<T> navigation(traversalBudget);
+    for (std::optional<T> child = navigation.previousSibling(element); child;
+         child = navigation.previousSibling(*child)) {
       if (traversalBudget != nullptr && !traversalBudget->consume()) {
         return false;
       }
@@ -264,8 +265,9 @@ private:
   template <ElementLike T>
   static bool isLastOfType(const T& element, const xml::XMLQualifiedNameRef& type,
                            SelectorTraversalBudget* traversalBudget) {
-    for (std::optional<T> child = element.nextSibling(); child;
-         child = child.value().nextSibling()) {
+    const SelectorTraversalNavigation<T> navigation(traversalBudget);
+    for (std::optional<T> child = navigation.nextSibling(element); child;
+         child = navigation.nextSibling(*child)) {
       if (traversalBudget != nullptr && !traversalBudget->consume()) {
         return false;
       }

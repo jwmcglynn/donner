@@ -164,17 +164,27 @@ ElementTraversalGenerator<T> parentsGenerator(T element) {
   }
 }
 
+/** Default navigation for element-only traversal generators. @tparam T Element-like value. */
+template <ElementLike T>
+struct ElementTraversalNavigation {
+  /// Get the last child. @param element Parent to inspect.
+  std::optional<T> lastChild(const T& element) const { return element.lastChild(); }
+  /// Get the preceding sibling. @param element Reference element.
+  std::optional<T> previousSibling(const T& element) const { return element.previousSibling(); }
+};
+
 /**
  * A generator that yields all siblings of an element, in reverse order. This repeatedly follows
  * `previousSibling()`.
+ * @param navigation Navigation policy, optionally accounting for hidden traversal work.
  *
  * @param element The element to start from, which is not yielded.
  */
-template <ElementLike T>
-ElementTraversalGenerator<T> previousSiblingsGenerator(T element) {
+template <ElementLike T, typename Navigation = ElementTraversalNavigation<T>>
+ElementTraversalGenerator<T> previousSiblingsGenerator(T element, Navigation navigation = {}) {
   T currentElement = element;
 
-  while (auto previousSibling = currentElement.previousSibling()) {
+  while (auto previousSibling = navigation.previousSibling(currentElement)) {
     currentElement = previousSibling.value();
     co_yield currentElement;
   }
@@ -182,14 +192,17 @@ ElementTraversalGenerator<T> previousSiblingsGenerator(T element) {
 
 /**
  * A generator that yields all children of an element recursively with pre-order traversal.
+ * @param element Parent whose descendants are yielded.
+ * @param navigation Navigation policy, optionally accounting for hidden traversal work.
  */
-template <ElementLike T>
-ElementTraversalGenerator<T> allChildrenRecursiveGenerator(T element) {
+template <ElementLike T, typename Navigation = ElementTraversalNavigation<T>>
+ElementTraversalGenerator<T> allChildrenRecursiveGenerator(T element, Navigation navigation = {}) {
   SmallVector<T, 16> stack;
 
   // Add children in reverse order, so that the children are yielded in the same order as they
   // appear in the document.
-  for (auto child = element.lastChild(); child; child = child->previousSibling()) {
+  for (auto child = navigation.lastChild(element); child;
+       child = navigation.previousSibling(*child)) {
     stack.push_back(child.value());
   }
 
@@ -200,7 +213,8 @@ ElementTraversalGenerator<T> allChildrenRecursiveGenerator(T element) {
     co_yield current;
 
     // Add children in reverse order.
-    for (auto child = current.lastChild(); child; child = child->previousSibling()) {
+    for (auto child = navigation.lastChild(current); child;
+         child = navigation.previousSibling(*child)) {
       stack.push_back(child.value());
     }
   }

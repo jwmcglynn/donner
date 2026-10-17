@@ -125,6 +125,7 @@ struct Selector {
 template <ElementLike T>
 std::optional<PseudoClassSelector::PseudoMatchResult> PseudoClassSelector::matchesSimpleState(
     const T& element, const SelectorMatchOptions<T>& options) const {
+  const SelectorTraversalNavigation<T> navigation(options.traversalBudget);
   if (ident.equalsLowercase("root")) {
     return !element.parentElement().has_value();
   }
@@ -139,16 +140,17 @@ std::optional<PseudoClassSelector::PseudoMatchResult> PseudoClassSelector::match
                   }) {
       return element.isEmptyForSelector(options.traversalBudget);
     }
-    return !element.firstChild().has_value();
+    return !navigation.firstChild(element).has_value();
   }
   if (ident.equalsLowercase("first-child")) {
-    return !element.previousSibling().has_value();
+    return !navigation.previousSibling(element).has_value();
   }
   if (ident.equalsLowercase("last-child")) {
-    return !element.nextSibling().has_value();
+    return !navigation.nextSibling(element).has_value();
   }
   if (ident.equalsLowercase("only-child")) {
-    return !element.previousSibling().has_value() && !element.nextSibling().has_value();
+    return !navigation.previousSibling(element).has_value() &&
+           !navigation.nextSibling(element).has_value();
   }
   if (ident.equalsLowercase("defined")) {
     return element.isKnownType();

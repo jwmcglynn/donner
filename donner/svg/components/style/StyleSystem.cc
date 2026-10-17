@@ -358,28 +358,32 @@ struct ShadowedElementAdapter {
     return isSVGElement ? std::make_optional(create(target)) : std::nullopt;
   }
 
-  std::optional<ShadowedElementAdapter> firstChild() const {
+  std::optional<ShadowedElementAdapter> firstChild(
+      css::SelectorTraversalBudget* budget = nullptr) const {
     const Entity target =
         registry_.get().get<donner::components::TreeComponent>(treeEntity_).firstChild();
-    return findElementSibling(target, true);
+    return findElementSibling(target, true, budget);
   }
 
-  std::optional<ShadowedElementAdapter> lastChild() const {
+  std::optional<ShadowedElementAdapter> lastChild(
+      css::SelectorTraversalBudget* budget = nullptr) const {
     const Entity target =
         registry_.get().get<donner::components::TreeComponent>(treeEntity_).lastChild();
-    return findElementSibling(target, false);
+    return findElementSibling(target, false, budget);
   }
 
-  std::optional<ShadowedElementAdapter> previousSibling() const {
+  std::optional<ShadowedElementAdapter> previousSibling(
+      css::SelectorTraversalBudget* budget = nullptr) const {
     const Entity target =
         registry_.get().get<donner::components::TreeComponent>(treeEntity_).previousSibling();
-    return findElementSibling(target, false);
+    return findElementSibling(target, false, budget);
   }
 
-  std::optional<ShadowedElementAdapter> nextSibling() const {
+  std::optional<ShadowedElementAdapter> nextSibling(
+      css::SelectorTraversalBudget* budget = nullptr) const {
     const Entity target =
         registry_.get().get<donner::components::TreeComponent>(treeEntity_).nextSibling();
-    return findElementSibling(target, true);
+    return findElementSibling(target, true, budget);
   }
 
   xml::XMLQualifiedName tagName() const {
@@ -440,7 +444,8 @@ struct ShadowedElementAdapter {
   }
 
 private:
-  std::optional<ShadowedElementAdapter> findElementSibling(Entity target, bool forward) const {
+  std::optional<ShadowedElementAdapter> findElementSibling(
+      Entity target, bool forward, css::SelectorTraversalBudget* budget) const {
     for (; target != entt::null;
          target = forward
                       ? registry_.get().get<donner::components::TreeComponent>(target).nextSibling()
@@ -449,6 +454,9 @@ private:
                             .previousSibling()) {
       if (registry_.get().all_of<ElementTypeComponent>(resolveData(target))) {
         return create(target);
+      }
+      if (budget != nullptr && !budget->consume()) {
+        return std::nullopt;
       }
     }
     return std::nullopt;

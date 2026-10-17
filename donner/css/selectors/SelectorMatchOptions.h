@@ -47,6 +47,59 @@ private:
   std::size_t maximumSteps_ = kMaximumSteps;
 };
 
+/** Navigation that charges both visible elements and adapter-specific skipped nodes.
+ * @tparam T Element-like value.
+ */
+template <ElementLike T>
+class SelectorTraversalNavigation {
+public:
+  /// Bind navigation to one aggregate match budget. @param budget Shared work budget.
+  explicit SelectorTraversalNavigation(SelectorTraversalBudget* budget) : budget_(budget) {}
+  /// Get the first child under the shared budget. @param element Reference element.
+  std::optional<T> firstChild(const T& element) const {
+    if (budget_ != nullptr && !budget_->consume()) {
+      return std::nullopt;
+    }
+    if constexpr (requires { element.firstChild(budget_); }) {
+      return element.firstChild(budget_);
+    }
+    return element.firstChild();
+  }
+  /// Get the last child under the shared budget. @param element Reference element.
+  std::optional<T> lastChild(const T& element) const {
+    if (budget_ != nullptr && !budget_->consume()) {
+      return std::nullopt;
+    }
+    if constexpr (requires { element.lastChild(budget_); }) {
+      return element.lastChild(budget_);
+    }
+    return element.lastChild();
+  }
+  /// Get the preceding sibling under the shared budget. @param element Reference element.
+  std::optional<T> previousSibling(const T& element) const {
+    if (budget_ != nullptr && !budget_->consume()) {
+      return std::nullopt;
+    }
+    if constexpr (requires { element.previousSibling(budget_); }) {
+      return element.previousSibling(budget_);
+    }
+    return element.previousSibling();
+  }
+  /// Get the following sibling under the shared budget. @param element Reference element.
+  std::optional<T> nextSibling(const T& element) const {
+    if (budget_ != nullptr && !budget_->consume()) {
+      return std::nullopt;
+    }
+    if constexpr (requires { element.nextSibling(budget_); }) {
+      return element.nextSibling(budget_);
+    }
+    return element.nextSibling();
+  }
+
+private:
+  SelectorTraversalBudget* budget_;
+};
+
 /**
  * Options for matching a selector against an element.
  *

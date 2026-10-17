@@ -504,6 +504,9 @@ public:
    */
   std::optional<SVGElement> firstChild() const;
 
+  /// Selector navigation charging skipped non-element nodes. @param budget Shared work budget.
+  std::optional<SVGElement> firstChild(css::SelectorTraversalBudget* budget) const;
+
   /**
    * Whether this element is empty under the CSS :empty content rules.
    * Comments and processing instructions do not count; document whitespace is ignored.
@@ -519,6 +522,9 @@ public:
    */
   std::optional<SVGElement> lastChild() const;
 
+  /// Selector navigation charging skipped non-element nodes. @param budget Shared work budget.
+  std::optional<SVGElement> lastChild(css::SelectorTraversalBudget* budget) const;
+
   /**
    * Get the previous sibling of this element, if it exists.
    *
@@ -526,6 +532,9 @@ public:
    * sibling.
    */
   std::optional<SVGElement> previousSibling() const;
+
+  /// Selector navigation charging skipped non-element nodes. @param budget Shared work budget.
+  std::optional<SVGElement> previousSibling(css::SelectorTraversalBudget* budget) const;
 
   /**
    * Get the next sibling of this element, if it exists.
@@ -536,6 +545,9 @@ public:
    * @return The next sibling element, or \c std::nullopt if the element has no next sibling.
    */
   std::optional<SVGElement> nextSibling() const;
+
+  /// Selector navigation charging skipped non-element nodes. @param budget Shared work budget.
+  std::optional<SVGElement> nextSibling(css::SelectorTraversalBudget* budget) const;
 
   /**
    * Insert \p newNode as a child, before \p referenceNode. If \p referenceNode is std::nullopt,

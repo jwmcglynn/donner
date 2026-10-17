@@ -224,7 +224,8 @@ std::optional<EntityHandle> ElementEntityHandle(Registry& registry, Entity entit
                                                            : std::nullopt;
 }
 
-std::optional<EntityHandle> FirstElementChild(EntityHandle handle) {
+std::optional<EntityHandle> FirstElementChild(EntityHandle handle,
+                                              css::SelectorTraversalBudget* budget) {
   if (handle.all_of<components::ShadowTreeComponent>()) {
     return std::nullopt;
   }
@@ -236,12 +237,16 @@ std::optional<EntityHandle> FirstElementChild(EntityHandle handle) {
     if (std::optional<EntityHandle> element = ElementEntityHandle(registry, child)) {
       return element;
     }
+    if (budget != nullptr && !budget->consume()) {
+      return std::nullopt;
+    }
   }
 
   return std::nullopt;
 }
 
-std::optional<EntityHandle> LastElementChild(EntityHandle handle) {
+std::optional<EntityHandle> LastElementChild(EntityHandle handle,
+                                             css::SelectorTraversalBudget* budget) {
   if (handle.all_of<components::ShadowTreeComponent>()) {
     return std::nullopt;
   }
@@ -253,12 +258,16 @@ std::optional<EntityHandle> LastElementChild(EntityHandle handle) {
     if (std::optional<EntityHandle> element = ElementEntityHandle(registry, child)) {
       return element;
     }
+    if (budget != nullptr && !budget->consume()) {
+      return std::nullopt;
+    }
   }
 
   return std::nullopt;
 }
 
-std::optional<EntityHandle> PreviousElementSibling(EntityHandle handle) {
+std::optional<EntityHandle> PreviousElementSibling(EntityHandle handle,
+                                                   css::SelectorTraversalBudget* budget) {
   const auto& tree = handle.get<donner::components::TreeComponent>();
   Registry& registry = *handle.registry();
   for (Entity sibling = tree.previousSibling(); sibling != entt::null;
@@ -266,18 +275,25 @@ std::optional<EntityHandle> PreviousElementSibling(EntityHandle handle) {
     if (std::optional<EntityHandle> element = ElementEntityHandle(registry, sibling)) {
       return element;
     }
+    if (budget != nullptr && !budget->consume()) {
+      return std::nullopt;
+    }
   }
 
   return std::nullopt;
 }
 
-std::optional<EntityHandle> NextElementSibling(EntityHandle handle) {
+std::optional<EntityHandle> NextElementSibling(EntityHandle handle,
+                                               css::SelectorTraversalBudget* budget) {
   const auto& tree = handle.get<donner::components::TreeComponent>();
   Registry& registry = *handle.registry();
   for (Entity sibling = tree.nextSibling(); sibling != entt::null;
        sibling = registry.get<donner::components::TreeComponent>(sibling).nextSibling()) {
     if (std::optional<EntityHandle> element = ElementEntityHandle(registry, sibling)) {
       return element;
+    }
+    if (budget != nullptr && !budget->consume()) {
+      return std::nullopt;
     }
   }
 
@@ -815,12 +831,16 @@ std::optional<SVGElement> SVGElement::parentElement() const {
 }
 
 std::optional<SVGElement> SVGElement::firstChild() const {
+  return firstChild(nullptr);
+}
+
+std::optional<SVGElement> SVGElement::firstChild(css::SelectorTraversalBudget* budget) const {
   if (!handle_) {
     return std::nullopt;
   }
 
   [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
-  if (std::optional<EntityHandle> handle = FirstElementChild(handle_)) {
+  if (std::optional<EntityHandle> handle = FirstElementChild(handle_, budget)) {
     return SVGElement(*handle);
   }
 
@@ -837,12 +857,16 @@ bool SVGElement::isEmptyForSelector(css::SelectorTraversalBudget* budget) const 
 }
 
 std::optional<SVGElement> SVGElement::lastChild() const {
+  return lastChild(nullptr);
+}
+
+std::optional<SVGElement> SVGElement::lastChild(css::SelectorTraversalBudget* budget) const {
   if (!handle_) {
     return std::nullopt;
   }
 
   [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
-  if (std::optional<EntityHandle> handle = LastElementChild(handle_)) {
+  if (std::optional<EntityHandle> handle = LastElementChild(handle_, budget)) {
     return SVGElement(*handle);
   }
 
@@ -850,12 +874,16 @@ std::optional<SVGElement> SVGElement::lastChild() const {
 }
 
 std::optional<SVGElement> SVGElement::previousSibling() const {
+  return previousSibling(nullptr);
+}
+
+std::optional<SVGElement> SVGElement::previousSibling(css::SelectorTraversalBudget* budget) const {
   if (!handle_) {
     return std::nullopt;
   }
 
   [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
-  if (std::optional<EntityHandle> handle = PreviousElementSibling(handle_)) {
+  if (std::optional<EntityHandle> handle = PreviousElementSibling(handle_, budget)) {
     return SVGElement(*handle);
   }
 
@@ -863,12 +891,16 @@ std::optional<SVGElement> SVGElement::previousSibling() const {
 }
 
 std::optional<SVGElement> SVGElement::nextSibling() const {
+  return nextSibling(nullptr);
+}
+
+std::optional<SVGElement> SVGElement::nextSibling(css::SelectorTraversalBudget* budget) const {
   if (!handle_) {
     return std::nullopt;
   }
 
   [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
-  if (std::optional<EntityHandle> handle = NextElementSibling(handle_)) {
+  if (std::optional<EntityHandle> handle = NextElementSibling(handle_, budget)) {
     return SVGElement(*handle);
   }
 

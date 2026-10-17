@@ -152,8 +152,10 @@ struct ComplexSelector {
     if (entries.empty()) {
       return false;
     }
-    return matchChain(0, entries.size() - 1, true,
-                      relatedElements(anchor, entries.front().combinator, true), options)
+    return matchChain(
+               0, entries.size() - 1, true,
+               relatedElements(anchor, entries.front().combinator, true, options.traversalBudget),
+               options)
         .matched;
   }
 
@@ -222,7 +224,8 @@ private:
       const std::size_t next = forward ? frame.index + 1 : frame.index - 1;
       const Combinator combinator =
           forward ? entries[next].combinator : entries[frame.index].combinator;
-      frames.push_back({next, relatedElements(candidate, combinator, forward)});
+      frames.push_back(
+          {next, relatedElements(candidate, combinator, forward, options.traversalBudget)});
     }
     return SelectorMatchResult::None();
   }
@@ -235,31 +238,41 @@ private:
   }
 
   template <ElementLike T>
-  static ElementTraversalGenerator<T> directChildren(T element) {
-    for (auto child = element.firstChild(); child; child = child->nextSibling()) {
+  static ElementTraversalGenerator<T> directChildren(T element, SelectorTraversalBudget* budget) {
+    const SelectorTraversalNavigation<T> navigation(budget);
+    for (auto child = navigation.firstChild(element); child;
+         child = navigation.nextSibling(*child)) {
       co_yield *child;
     }
   }
 
   template <ElementLike T>
-  static ElementTraversalGenerator<T> followingSiblings(T element) {
-    for (auto sibling = element.nextSibling(); sibling; sibling = sibling->nextSibling()) {
+  static ElementTraversalGenerator<T> followingSiblings(T element,
+                                                        SelectorTraversalBudget* budget) {
+    const SelectorTraversalNavigation<T> navigation(budget);
+    for (auto sibling = navigation.nextSibling(element); sibling;
+         sibling = navigation.nextSibling(*sibling)) {
       co_yield *sibling;
     }
   }
 
   template <ElementLike T>
   static ElementTraversalGenerator<T> relatedElements(T element, Combinator combinator,
-                                                      bool forward) {
+                                                      bool forward,
+                                                      SelectorTraversalBudget* budget) {
+    const SelectorTraversalNavigation<T> navigation(budget);
     switch (combinator) {
       case Combinator::Descendant:
-        return forward ? allChildrenRecursiveGenerator(element) : parentsGenerator(element);
+        return forward ? allChildrenRecursiveGenerator(element, navigation)
+                       : parentsGenerator(element);
       case Combinator::Child:
-        return forward ? directChildren(element) : optionalElement(element.parentElement());
+        return forward ? directChildren(element, budget) : optionalElement(element.parentElement());
       case Combinator::NextSibling:
-        return optionalElement(forward ? element.nextSibling() : element.previousSibling());
+        return optionalElement(forward ? navigation.nextSibling(element)
+                                       : navigation.previousSibling(element));
       case Combinator::SubsequentSibling:
-        return forward ? followingSiblings(element) : previousSiblingsGenerator(element);
+        return forward ? followingSiblings(element, budget)
+                       : previousSiblingsGenerator(element, navigation);
       default:
         // Column relationships do not apply to SVG.
         return optionalElement(std::optional<T>());
@@ -280,6 +293,7 @@ private:
   template <ElementLike T>
   bool matchesRelativeTo(const T& currentElement, const T& relativeToElement, Combinator combinator,
                          SelectorTraversalBudget* traversalBudget) const {
+    const SelectorTraversalNavigation<T> navigation(traversalBudget);
     switch (combinator) {
       case Combinator::Descendant: {
         auto elements = parentsGenerator<T>(currentElement);
@@ -294,9 +308,10 @@ private:
         return false;
       }
       case Combinator::Child: return (currentElement.parentElement() == relativeToElement);
-      case Combinator::NextSibling: return (currentElement.previousSibling() == relativeToElement);
+      case Combinator::NextSibling:
+        return (navigation.previousSibling(currentElement) == relativeToElement);
       case Combinator::SubsequentSibling: {
-        auto elements = previousSiblingsGenerator<T>(currentElement);
+        auto elements = previousSiblingsGenerator<T>(currentElement, navigation);
         while (elements.next()) {
           if (traversalBudget != nullptr && !traversalBudget->consume()) {
             return false;
