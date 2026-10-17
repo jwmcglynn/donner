@@ -117,7 +117,10 @@ EditorRasterViewport ViewportState::rasterViewport() const {
 
   const double marginScreenPx = static_cast<double>(kHighZoomRasterMarginScreenPx);
   const Vector2d outputScreenTopLeft = paneOrigin - Vector2d(marginScreenPx, marginScreenPx);
-  const Vector2i outputSizePx(ClampRasterDim(boundedTarget->x), ClampRasterDim(boundedTarget->y));
+  // A complete artboard axis must include its final fractional pixel. Rounding down would
+  // incorrectly select the coarse overview even when the crisp tile covers the visible shape.
+  const Vector2i outputSizePx(ClampRasterDim(std::ceil(boundedTarget->x)),
+                              ClampRasterDim(std::ceil(boundedTarget->y)));
   const Vector2d requestedDocumentTopLeft = screenToDocument(outputScreenTopLeft);
   const Vector2d preferredDocumentTopLeft(
       boundedTarget->x >= fullTarget.x ? documentViewBox.topLeft.x : requestedDocumentTopLeft.x,
@@ -159,7 +162,8 @@ EditorRasterViewport ViewportState::selectedPrewarmRasterViewport() const {
       std::min({fullTarget.y, static_cast<double>(kMaxCanvasDim),
                 std::max(static_cast<double>(result.outputSizePx.y),
                          paneSize.y * devicePixelRatio + 2.0 * marginY * devicePixelRatio)}));
-  const Vector2i outputSizePx(ClampRasterDim(paddedTarget.x), ClampRasterDim(paddedTarget.y));
+  const Vector2i outputSizePx(ClampRasterDim(std::ceil(paddedTarget.x)),
+                              ClampRasterDim(std::ceil(paddedTarget.y)));
   if (outputSizePx == result.outputSizePx) {
     return result;
   }
