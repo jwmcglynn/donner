@@ -213,7 +213,8 @@ def _bazelrc_problems(bazelrc):
 # Test hooks of tools/ci_select_macos_xcode.sh, and the variable it sets itself. A workflow
 # that sets any of them (job or workflow env, or a GITHUB_ENV write) can silently replace the
 # pinned Xcode, so no macOS job and no workflow-level env may name them.
-XCODE_OVERRIDES = re.compile(r"\b(?:XCODEBUILD|XCODE_APPLICATIONS_DIR|DEVELOPER_DIR)\b")
+XCODE_OVERRIDES = re.compile(
+    r"\b(?:XCODEBUILD|XCODE_APPLICATIONS_DIR|XCODE_LSREGISTER|DEVELOPER_DIR)\b")
 MACOS_JOBS = (HOSTED, SELF_HOSTED, "macos-browser")
 
 
@@ -343,6 +344,9 @@ class MacosCacheKeyParityTest(unittest.TestCase):
                 self.bazelrc, "not test-only"),
             "self-hosted job env overrides xcodebuild": (
                 before + hosted_flags + "      XCODEBUILD: /usr/bin/true\n" + after,
+                self.bazelrc, "macos-self-hosted sets an Xcode selection override"),
+            "self-hosted job env overrides Xcode registration": (
+                before + hosted_flags + "      XCODE_LSREGISTER: /usr/bin/true\n" + after,
                 self.bazelrc, "macos-self-hosted sets an Xcode selection override"),
             "an earlier step redirects the Xcode lookup": (
                 before + hosted_flags + after.replace(
