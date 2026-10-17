@@ -295,6 +295,7 @@ py_test(
     size = "small",
     srcs = ["macos_cache_key_parity_tests.py"],
     data = [
+        "BUILD.bazel",
         "ci_macos_xcode.txt",
         "ci_select_macos_xcode.sh",
         "//:.bazelrc",

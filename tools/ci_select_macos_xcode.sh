@@ -11,7 +11,7 @@
 # writes an empty cache_partition and a warning, leaving the runner's default
 # Xcode in place; it never prints which Xcode the runner does have.
 #
-# XCODE_APPLICATIONS_DIR, XCODEBUILD and XCODE_LSREGISTER override platform tools
+# XCODE_APPLICATIONS_DIR and XCODEBUILD override /Applications and xcodebuild
 # for tests.
 set -euo pipefail
 
@@ -52,13 +52,6 @@ if [[ "${installed}" != "true" ]]; then
     "This job keeps the runner's default Xcode, so its action keys cannot match the" \
     "GitHub-hosted macOS lanes'."
   exit 0
-fi
-
-# Bazel discovers installed Xcode bundles through the current user's LaunchServices registry.
-registrar="${XCODE_LSREGISTER:-/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister}"
-if ! "${registrar}" -f "${developer_dir%/Contents/Developer}"; then
-  echo "::error::Could not register the pinned Xcode ${version} (${build}) for Bazel discovery."
-  exit 1
 fi
 
 {
