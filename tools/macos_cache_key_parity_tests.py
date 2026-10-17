@@ -213,7 +213,7 @@ def _bazelrc_problems(bazelrc):
 # Test hooks of tools/ci_select_macos_xcode.sh, and the variable it sets itself. A workflow
 # that sets any of them (job or workflow env, or a GITHUB_ENV write) can silently replace the
 # pinned Xcode, so no macOS job and no workflow-level env may name them.
-XCODE_OVERRIDES = re.compile(r"\b(?:XCODEBUILD|XCODE_APPLICATIONS_DIR|DEVELOPER_DIR)\b")
+XCODE_OVERRIDES = re.compile(r"\b(?:XCODEBUILD|XCODE_APPLICATIONS_DIR|XCODE_LOCATOR|DEVELOPER_DIR)\b")
 MACOS_JOBS = (HOSTED, SELF_HOSTED, "macos-browser")
 
 
@@ -344,6 +344,9 @@ class MacosCacheKeyParityTest(unittest.TestCase):
             "self-hosted job env overrides xcodebuild": (
                 before + hosted_flags + "      XCODEBUILD: /usr/bin/true\n" + after,
                 self.bazelrc, "macos-self-hosted sets an Xcode selection override"),
+            "self-hosted job env overrides the locator": (
+                before + hosted_flags + "      XCODE_LOCATOR: /usr/bin/true\n" + after,
+                self.bazelrc, "macos-self-hosted sets an Xcode selection override"),
             "an earlier step redirects the Xcode lookup": (
                 before + hosted_flags + after.replace(
                     "      - name: Checkout\n",
@@ -413,31 +416,28 @@ class MacosCacheKeyParityTest(unittest.TestCase):
                 self.assertNotEqual(text, files[main])
                 self.assertTrue(private_backend_problems({**files, main: text}))
 
-    def test_pin_names_one_hosted_xcode_version_build_and_sdk(self):
+    def test_pin_names_one_hosted_xcode_version_and_build(self):
         lines = [line for line in _read(PIN_FILE).splitlines()
                  if line.strip() and not line.lstrip().startswith("#")]
         self.assertEqual(1, len(lines))
-        self.assertRegex(lines[0], r"^\d+\.\d+(?:\.\d+)? \d+[A-Z]\d+[a-z]? \d+\.\d+(?:\.\d+)?$")
+        self.assertRegex(lines[0], r"^\d+\.\d+(?:\.\d+)? \d+[A-Z]\d+[a-z]?$")
 
-    def _select(self, mode, installed, sdk_reported=None):
+    def _select(self, mode, installed, locator_status=0):
         """Runs the selection script against a fake Applications directory."""
-        pin = [line for line in _read(PIN_FILE).splitlines()
-               if line.strip() and not line.startswith("#")][0].split()
-        version, build = pin[:2]
-        sdk = pin[2]
+        version, build = [line for line in _read(PIN_FILE).splitlines()
+                          if line.strip() and not line.startswith("#")][0].split()
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             if installed is not None:
                 (root / ("Xcode_%s.app" % version) / "Contents" / "Developer").mkdir(parents=True)
             xcodebuild = root / "xcodebuild"
             reported = installed or ""
-            reported = reported.replace("{version}", version).replace("{build}", build)
-            xcodebuild.write_text(
-                "#!/bin/sh\nif [ \"$*\" = '-version -sdk macosx SDKVersion' ]; then\n"
-                "  printf '%%s' %s\nelse\n  printf '%%s' %s\nfi\n" %
-                (shlex.quote(sdk if sdk_reported is None else sdk_reported), shlex.quote(reported)),
-                encoding="utf-8")
+            xcodebuild.write_text("#!/bin/sh\nprintf '%%s' '%s'\n" % reported.replace(
+                "{version}", version).replace("{build}", build), encoding="utf-8")
             xcodebuild.chmod(0o755)
+            locator = root / "xcode-locator"
+            locator.write_text("#!/bin/sh\nexit %d\n" % locator_status, encoding="utf-8")
+            locator.chmod(0o755)
             env_file, output_file = root / "env", root / "output"
             env_file.write_text("")
             output_file.write_text("")
@@ -448,7 +448,8 @@ class MacosCacheKeyParityTest(unittest.TestCase):
                 env={"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "GITHUB_ENV": str(env_file),
                      "GITHUB_OUTPUT": str(output_file), "RUNNER_ARCH": "ARM64",
                      "BAZEL_MACOS_BUILD_FLAGS": "--config=ci-macos",
-                     "XCODE_APPLICATIONS_DIR": str(root), "XCODEBUILD": str(xcodebuild)},
+                     "XCODE_APPLICATIONS_DIR": str(root), "XCODEBUILD": str(xcodebuild),
+                     "XCODE_LOCATOR": str(locator)},
                 capture_output=True, text=True, timeout=test_timing.STALL_GUARD_SECONDS,
                 check=False)
             return (result.returncode, env_file.read_text(), output_file.read_text(),
@@ -463,9 +464,7 @@ class MacosCacheKeyParityTest(unittest.TestCase):
                 self.assertEqual(0, code, log)
                 self.assertEqual(env.splitlines(), [
                     "DEVELOPER_DIR=%s/Xcode_%s.app/Contents/Developer" % (root, version),
-                    "BAZEL_MACOS_BUILD_FLAGS=--config=ci-macos --xcode_version=%s "
-                    "--xcode_version_config=//tools:ci_macos_xcode "
-                    "--action_env=DEVELOPER_DIR --host_action_env=DEVELOPER_DIR" % version])
+                    "BAZEL_MACOS_BUILD_FLAGS=--config=ci-macos --xcode_version=%s" % version])
                 self.assertEqual(output, "cache_partition=macos-ARM64-xcode-%s-%s\n" % (
                     version, build))
         for case, installed in (("absent", None), ("other build", other_build)):
@@ -483,30 +482,17 @@ class MacosCacheKeyParityTest(unittest.TestCase):
                 # The warning names only the public pin, never what the runner has.
                 self.assertNotIn("99Z999", log)
 
-    def test_explicit_xcode_configuration_matches_the_pin(self):
-        pin = [line for line in _read(PIN_FILE).splitlines()
-               if line.strip() and not line.startswith("#")][0].split()
-        version, build = pin[:2]
-        sdk = pin[2]
-        config = _read("tools/BUILD.bazel")
-        self.assertIn('name = "ci_macos_xcode_version"', config)
-        expanded = version if version.count(".") == 2 else version + ".0"
-        self.assertIn('version = "%s.%s"' % (expanded, build), config)
-        self.assertIn('default_macos_sdk_version = "%s"' % sdk, config)
-        self.assertIn('name = "ci_macos_xcode"', config)
-        self.assertIn('default = ":ci_macos_xcode_version"', config)
-        self.assertIn('versions = [":ci_macos_xcode_version"]', config)
-
-    def test_sdk_mismatch_cannot_export_a_pinned_configuration(self):
-        for mode in ("--required", "--optional"):
-            with self.subTest(mode=mode):
-                code, env, output, log, *_ = self._select(
-                    mode, "Xcode {version}\nBuild version {build}", sdk_reported="99.9")
-                self.assertEqual(1, code, log)
-                self.assertEqual("", env)
-                self.assertEqual("", output)
-                self.assertIn("::error::", log)
-                self.assertNotIn("99.9", log)
+    def test_undiscoverable_pin_does_not_select_toolchain_or_shared_cache(self):
+        for status in (1, 2):
+            for mode in ("--required", "--optional"):
+                with self.subTest(status=status, mode=mode):
+                    code, env, output, log, *_ = self._select(
+                        mode, "Xcode {version}\nBuild version {build}", locator_status=status)
+                    self.assertEqual(1 if mode == "--required" else 0, code, log)
+                    self.assertEqual("", env)
+                    self.assertEqual("cache_partition=\n", output)
+                    self.assertIn("::error::" if mode == "--required" else "::warning::", log)
+                    self.assertIn("cannot be discovered" if status == 1 else "probe failed", log)
 
     def test_select_script_rejects_an_unknown_mode(self):
         result = subprocess.run(["/bin/bash", str(_path(SELECT_SCRIPT))], capture_output=True,
