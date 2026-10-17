@@ -849,6 +849,29 @@ TEST_F(StyleSystemTest, UserAgentDisplayRulesResolveSvgNamespaceAliases) {
   }
 }
 
+TEST_F(StyleSystemTest, EmptySelectorUsesAuthoredChildrenAfterShadowInstantiation) {
+  auto document = ParseSVG(R"svg(<svg xmlns="http://www.w3.org/2000/svg">
+    <style>use { opacity: .2 } use:empty { opacity: .8 }</style>
+    <defs><g id="shape"><rect/></g></defs>
+    <use id="empty" href="#shape"/>
+    <use id="titled" href="#shape"><title>name</title></use>
+  </svg>)svg");
+  auto shape = document.querySelector("#shape").value();
+  ParseWarningSink warnings;
+  for (const char* id : {"empty", "titled"}) {
+    auto host = document.querySelector(std::string("#") + id).value();
+    auto& shadow = host.entityHandle().get_or_emplace<ComputedShadowTreeComponent>();
+    ShadowTreeSystem().populateInstance(host.entityHandle(), shadow, ShadowBranchType::Main,
+                                        shape.entityHandle().entity(), RcString("#shape"), warnings);
+    ASSERT_THAT(shadow.mainBranch, testing::Optional(testing::_));
+    const bool empty = std::string_view(id) == "empty";
+    EXPECT_EQ(host.isEmptyForSelector(nullptr), empty);
+    const auto& properties = styleSystem.computeStyle(host.entityHandle(), warnings).properties;
+    ASSERT_THAT(properties, testing::Optional(testing::_));
+    EXPECT_THAT(properties->opacity.get(), testing::Optional(empty ? .8 : .2));
+  }
+}
+
 TEST_F(StyleSystemTest, SymbolDirectUseRootPreservesNativeDisplayOverride) {
   auto document = ParseSVG(R"(
     <svg xmlns="http://www.w3.org/2000/svg">

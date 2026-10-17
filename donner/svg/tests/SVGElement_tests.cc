@@ -177,6 +177,32 @@ TEST_F(SVGElementTests, EmptySelectorTracksRawTextValueChanges) {
   EXPECT_TRUE(doc.querySelector("#target:empty").has_value());
 }
 
+TEST_F(SVGElementTests, EmptySelectorTracksRawTextUnderTypedElements) {
+  auto doc = parseSVG(R"svg(<svg xmlns="http://www.w3.org/2000/svg">
+    <style>text:empty, title:empty { opacity: .8 } text, title { opacity: .2 }</style>
+    <text id="text"/><title id="title"/>
+  </svg>)svg");
+  for (const char* id : {"text", "title"}) {
+    SCOPED_TRACE(id);
+    auto target = doc.querySelector(std::string("#") + id).value();
+    auto node = xml::XMLNode::TryCast(target.unsafeEntityHandle()).value();
+    auto xmlDocument = doc.xmlDocument();
+    auto text = xml::XMLNode::CreateDataNode(xmlDocument, "word");
+    EXPECT_THAT(target.getComputedStyle().opacity.get(), Optional(.8));
+    node.appendChild(text);
+    EXPECT_FALSE(target.isEmptyForSelector(nullptr));
+    EXPECT_THAT(target.getComputedStyle().opacity.get(), Optional(.2));
+    text.setValue(" ");
+    EXPECT_TRUE(target.isEmptyForSelector(nullptr));
+    EXPECT_THAT(target.getComputedStyle().opacity.get(), Optional(.8));
+    text.setValue("again");
+    EXPECT_FALSE(target.isEmptyForSelector(nullptr));
+    node.removeChild(text);
+    EXPECT_TRUE(target.isEmptyForSelector(nullptr));
+    EXPECT_THAT(target.getComputedStyle().opacity.get(), Optional(.8));
+  }
+}
+
 TEST_F(SVGElementTests, EmptySelectorChargesTextInspectionToTheSharedBudget) {
   auto doc = parseSVG(R"(<svg xmlns="http://www.w3.org/2000/svg"><text id="text"/></svg>)");
   auto text = doc.querySelector("#text")->cast<SVGTextElement>();
