@@ -567,11 +567,14 @@ git_override(
 
 bazel_dep(name = "emsdk", version = "5.0.5", dev_dependency = True)
 
-# Keep emsdk's hermetic Python runnable under macOS remote execution.
+# Keep Python runnable remotely and declare Closure's execution-platform Java runtime.
 single_version_override(
     module_name = "emsdk",
     patch_strip = 1,
-    patches = ["//third_party/patches:emsdk_env_sh_dyld_library_path.patch"],
+    patches = [
+        "//third_party/patches:emsdk_env_sh_dyld_library_path.patch",
+        "//third_party/patches:emsdk_declared_java_runtime.patch",
+    ],
     version = "5.0.5",
 )
 

@@ -47,7 +47,7 @@ test_suite(
         "//donner/gpu/metal/tests:metal_color_matrix_tests",
         "//donner/gpu/metal/tests:metal_queue_writes_tests",
         "//donner/gpu/metal/tests:metal_shader_memory_validation_tests",
-        "//donner/gpu/metal/tests:metal_solid_fill_tests",
+        "//donner/gpu/metal/tests:metal_solid_fill_tests_geode",
         "//donner/gpu/metal/tests:metal_sub_rectangle_copy_tests",
     ],
 )

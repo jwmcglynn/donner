@@ -103,6 +103,8 @@ struct EditorShellOptions {
 
   /// Permit open, save, save-as, and export actions to access the host filesystem.
   bool allowFileSystemActions = true;
+  /// Optional host-selected diagnostic destination; UI input cannot replace it.
+  std::optional<std::string> diagnosticTelemetryOutputPath;
   /// Permit source and shape clipboard actions to access the host clipboard.
   bool allowHostClipboardAccess = true;
   /// Show the in-workspace welcome and sample picker on the first frame.

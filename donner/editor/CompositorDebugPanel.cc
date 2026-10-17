@@ -158,9 +158,12 @@ std::string TelemetrySampleKey(
 }  // namespace
 
 CompositorDebugPanel::CompositorDebugPanel(
-    std::shared_ptr<::donner::geode::GeodeDevice> geodeDevice)
+    std::shared_ptr<::donner::geode::GeodeDevice> geodeDevice,
+    CompositorTelemetryFileAccess fileAccess)
+    : telemetryFileAccess_(std::move(fileAccess))
 #ifdef DONNER_EDITOR_WGPU
-    : geodeDevice_(std::move(geodeDevice))
+      ,
+      geodeDevice_(std::move(geodeDevice))
 #endif
 {
 #ifndef DONNER_EDITOR_WGPU
@@ -450,6 +453,18 @@ void CompositorDebugPanel::advancePresentationFrame() {
 #endif
 }
 
+bool CompositorDebugPanel::saveHeuristicTelemetry() {
+  const std::string json = heuristicTelemetryHistoryJson();
+  std::string error;
+  if (!SaveCompositorHeuristicTelemetry(std::string_view(telemetryPathBuffer_.data()), json, &error,
+                                        telemetryFileAccess_)) {
+    telemetryStatus_ = std::move(error);
+    return false;
+  }
+  telemetryStatus_ = "saved " + std::to_string(telemetryHistory_.size()) + " samples";
+  return true;
+}
+
 void CompositorDebugPanel::render(
     std::span<const svg::compositor::CompositorController::CompositeTileSnapshot> tiles,
     const svg::compositor::CompositorController::StateSnapshot& state,
@@ -553,19 +568,20 @@ void CompositorDebugPanel::render(
       .renderStats = renderStats,
   };
   recordHeuristicTelemetrySamples(tiles, telemetryContext);
-  ImGui::SetNextItemWidth(-1.0f);
-  ImGui::InputText("Telemetry path", telemetryPathBuffer_.data(), telemetryPathBuffer_.size());
-  ImGui::TextDisabled("Telemetry history: %zu segment samples", telemetryHistory_.size());
-  if (ImGui::Button("Save heuristic telemetry history")) {
-    const std::string json = heuristicTelemetryHistoryJson();
-    std::string error;
-    if (SaveCompositorHeuristicTelemetry(std::string_view(telemetryPathBuffer_.data()), json,
-                                         &error)) {
-      telemetryStatus_ = "saved " + std::to_string(telemetryHistory_.size()) + " samples";
-    } else {
-      telemetryStatus_ = std::move(error);
-    }
+  if (telemetryFileAccess_.fixedOutputPath.has_value()) {
+    ImGui::TextWrapped("Telemetry path: %s", telemetryFileAccess_.fixedOutputPath->c_str());
+  } else {
+    ImGui::BeginDisabled(!telemetryFileAccess_.allowFileSystemActions);
+    ImGui::SetNextItemWidth(-1.0f);
+    ImGui::InputText("Telemetry path", telemetryPathBuffer_.data(), telemetryPathBuffer_.size());
+    ImGui::EndDisabled();
   }
+  ImGui::TextDisabled("Telemetry history: %zu segment samples", telemetryHistory_.size());
+  ImGui::BeginDisabled(!telemetryFileAccess_.allowFileSystemActions);
+  if (ImGui::Button("Save heuristic telemetry history")) {
+    (void)saveHeuristicTelemetry();
+  }
+  ImGui::EndDisabled();
   ImGui::SameLine();
   if (ImGui::Button("Clear telemetry")) {
     telemetryHistory_.clear();

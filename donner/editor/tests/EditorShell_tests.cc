@@ -45,6 +45,7 @@
 #include "donner/editor/repro/ReproFile.h"
 #include "donner/editor/tests/AsyncTestPolling.h"
 #include "donner/editor/tests/BitmapGoldenCompare.h"
+#include "donner/editor/tests/CompositorDebugPanelTestAccess.h"
 #include "donner/editor/tests/RenderCoordinatorTestAccess.h"
 #include "donner/svg/SVGGeometryElement.h"
 #include "donner/svg/SVGRectElement.h"
@@ -1773,6 +1774,10 @@ public:
     return shell.layersPanel_.visibleRowCount();
   }
 
+  static CompositorDebugPanel& DiagnosticPanel(EditorShell& shell) {
+    return shell.compositorDebugPanel_;
+  }
+
   static void SetShowCompositorDebugPanel(EditorShell& shell, bool value) {
     shell.showCompositorDebugPanel_ = value;
   }
@@ -3366,6 +3371,53 @@ TEST(EditorShellTest, RevertRequestIgnoresGuardStates) {
 
   EXPECT_EQ(EditorShellTestAccess::Source(dirtyWithoutCleanSource).getText(), "<svg>dirty</svg>");
   EXPECT_TRUE(EditorShellTestAccess::App(dirtyWithoutCleanSource).isDirty());
+}
+
+TEST(EditorShellTest, DiagnosticSaveHonorsShellAuthorityAndHostDestination) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
+  const std::filesystem::path sentinel = TempPathForTest("diagnostic-sentinel.jsonl");
+  const std::filesystem::path destination = TempPathForTest("diagnostic-output.jsonl");
+  {
+    std::ofstream output(sentinel);
+    output << "dummy user data";
+    ASSERT_TRUE(output.good());
+  }
+  std::error_code error;
+  std::filesystem::remove(destination, error);
+  ASSERT_FALSE(error) << error.message();
+  {
+    EditorShellOptions options = OptionsWithSource(kInitialSvg);
+    options.allowFileSystemActions = false;
+    options.diagnosticTelemetryOutputPath = destination.string();
+    EditorShell shell(window, std::move(options));
+    ASSERT_TRUE(shell.valid());
+    CompositorDebugPanel& panel = EditorShellTestAccess::DiagnosticPanel(shell);
+    CompositorDebugPanelTestAccess::setTelemetryPath(panel, sentinel.string());
+    EXPECT_FALSE(CompositorDebugPanelTestAccess::saveTelemetry(panel));
+    EXPECT_FALSE(std::filesystem::exists(destination));
+  }
+  {
+    EditorShellOptions options = OptionsWithSource(kInitialSvg);
+    options.diagnosticTelemetryOutputPath = destination.string();
+    EditorShell shell(window, std::move(options));
+    ASSERT_TRUE(shell.valid());
+    CompositorDebugPanel& panel = EditorShellTestAccess::DiagnosticPanel(shell);
+    CompositorDebugPanelTestAccess::setTelemetryPath(panel, sentinel.string());
+    ASSERT_TRUE(CompositorDebugPanelTestAccess::saveTelemetry(panel));
+    EXPECT_TRUE(std::filesystem::exists(destination));
+  }
+  std::ifstream victim(sentinel);
+  const std::string after((std::istreambuf_iterator<char>(victim)),
+                          std::istreambuf_iterator<char>());
+  EXPECT_EQ(after, "dummy user data");
+  victim.close();
+  std::filesystem::remove(sentinel, error);
+  EXPECT_FALSE(error) << error.message();
+  std::filesystem::remove(destination, error);
+  EXPECT_FALSE(error) << error.message();
 }
 
 TEST(EditorShellTest, SaveRequestsUseCurrentPathAndFallbackToSaveAs) {

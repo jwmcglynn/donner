@@ -2,6 +2,7 @@
 /// @file
 
 #include <cstdint>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -93,13 +94,23 @@ struct CompositorHeuristicTelemetryContext {
 [[nodiscard]] bool AppendCompositorHeuristicTelemetry(std::string_view path, std::string_view json,
                                                       std::string* error);
 
+/// Host authority for diagnostic telemetry exports. Replay input must not populate these fields.
+struct CompositorTelemetryFileAccess {
+  /// Permit the diagnostic action to open an output file.
+  bool allowFileSystemActions = true;
+  /// Optional host-selected destination, replacing the editable UI path when supplied.
+  std::optional<std::string> fixedOutputPath;
+};
+
 /// Save compositor heuristic telemetry to a JSONL file, replacing any existing contents.
 ///
 /// @param path Destination file path.
 /// @param json JSONL payload to write.
 /// @param error Optional destination for a human-readable failure message.
+/// @param access Host filesystem authority and optional fixed destination.
 /// @return True when the payload was written.
-[[nodiscard]] bool SaveCompositorHeuristicTelemetry(std::string_view path, std::string_view json,
-                                                    std::string* error);
+[[nodiscard]] bool SaveCompositorHeuristicTelemetry(
+    std::string_view path, std::string_view json, std::string* error,
+    const CompositorTelemetryFileAccess& access = {});
 
 }  // namespace donner::editor
