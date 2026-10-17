@@ -227,10 +227,11 @@ common:editor-wasm-geode --config=editor-wasm
 # at one standard whichever platform a given binary is built for.
 build:c++20 --cxxopt=-std=c++20 --host_cxxopt=-std=c++20
 
-# Host toolchain using libstdc++ instead of libc++, for libclang support
+# Opt-in host libstdc++ selection for integrations that require its ABI.
+# Normal Linux builds let the selected toolchain choose matching headers and runtime.
 build:host_libstdc++ --host_cxxopt=-std=c++20 --host_cxxopt=-stdlib=libstdc++ --host_linkopt=-lstdc++
 
-build:linux --config=host_libstdc++ --copt=-fno-modules
+build:linux --copt=-fno-modules
 
 # Fixes symbols when debugging on mac.
 build:macos --features=oso_prefix_is_pwd
