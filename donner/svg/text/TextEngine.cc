@@ -455,44 +455,6 @@ const SmallVector<double, 1>* TextPositionValues(Registry& registry, Entity owne
 }
 
 template <typename Value>
-std::optional<Value> ResolveOwnerTextPositionBase(Registry& registry,
-                                                  const components::ComputedTextComponent& text,
-                                                  std::span<const size_t> spanPrefix, Entity owner,
-                                                  size_t ownerCharacterIndex, size_t attributeIndex,
-                                                  bool repeatLast) {
-  const auto ownerRange = text.ownerSpanRanges.find(owner);
-  if (ownerRange == text.ownerSpanRanges.end() || ownerRange->second.begin >= spanPrefix.size()) {
-    return std::nullopt;
-  }
-  const size_t ownerStart = spanPrefix[ownerRange->second.begin];
-  Entity current = owner;
-  while (current != entt::null && registry.valid(current)) {
-    const auto range = text.ownerSpanRanges.find(current);
-    if (range == text.ownerSpanRanges.end() || range->second.begin >= spanPrefix.size()) {
-      break;
-    }
-    const size_t currentStart = spanPrefix[range->second.begin];
-    const size_t index = ownerStart - currentStart + ownerCharacterIndex;
-    if (const auto* values =
-            TextPositionValues<SmallVector<Value, 1>>(registry, current, attributeIndex);
-        values && !values->empty()) {
-      if (index < values->size()) {
-        return (*values)[index];
-      }
-      if (repeatLast) {
-        return values->back();
-      }
-    }
-    if (registry.any_of<components::TextRootComponent>(current)) {
-      break;
-    }
-    const auto* tree = registry.try_get<donner::components::TreeComponent>(current);
-    current = tree ? tree->parent() : entt::null;
-  }
-  return std::nullopt;
-}
-
-template <typename Value>
 std::optional<Value> ResolveSpanTextPosition(
     Registry& registry, const components::ComputedTextComponent& text,
     std::span<const size_t> spanPrefix,
@@ -644,11 +606,13 @@ void ResolveAnimatedTextPositions(Registry& registry, components::ComputedTextCo
     }
 
     if (recipe.rotate) {
-      std::vector<double> underlying(characterCount);
-      for (size_t index = 0; index < characterCount; ++index) {
-        underlying[index] = ResolveOwnerTextPositionBase<double>(registry, text, spanPrefix,
-                                                                 recipe.owner, index, 0, true)
-                                .value_or(0);
+      std::vector<double> underlying;
+      if (const auto* local =
+              TextPositionValues<SmallVector<double, 1>>(registry, recipe.owner, 0)) {
+        underlying.assign(local->begin(), local->end());
+      }
+      if (underlying.size() > components::AnimationResourceBudget::kMaximumNumbersPerValue) {
+        continue;
       }
       const auto result = SampleTextPositionRecipe(
           *recipe.value, SerializeTextPositionRotations(underlying), context, true);
@@ -673,12 +637,16 @@ void ResolveAnimatedTextPositions(Registry& registry, components::ComputedTextCo
     }
 
     context.extent = recipe.attributeIndex % 2 == 0 ? Lengthd::Extent::X : Lengthd::Extent::Y;
-    std::vector<Lengthd> underlying(characterCount);
-    for (size_t index = 0; index < characterCount; ++index) {
-      underlying[index] =
-          ResolveOwnerTextPositionBase<Lengthd>(registry, text, spanPrefix, recipe.owner, index,
-                                                recipe.attributeIndex, false)
-              .value_or(Lengthd());
+    std::vector<Lengthd> underlying;
+    if (const auto* local = TextPositionValues<SmallVector<Lengthd, 1>>(registry, recipe.owner,
+                                                                        recipe.attributeIndex)) {
+      underlying.assign(local->begin(), local->end());
+    }
+    if (underlying.size() > components::AnimationResourceBudget::kMaximumNumbersPerValue) {
+      continue;
+    }
+    if (recipe.attributeIndex >= 2) {
+      underlying.resize(characterCount, Lengthd());
     }
     const auto result = SampleTextPositionRecipe(
         *recipe.value, SerializeTextPositionLengths(underlying), context, false);

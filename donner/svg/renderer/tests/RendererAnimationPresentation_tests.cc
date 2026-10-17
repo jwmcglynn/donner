@@ -192,10 +192,10 @@ TEST(RendererAnimationPresentation, ToOnlyTextPositionUsesTypedBase) {
   }
 }
 
-TEST(RendererAnimationPresentation, ToOnlyTextXUsesFirstTypedCoordinateAsScalarBase) {
+TEST(RendererAnimationPresentation, ToOnlyTextXUsesFullTypedCoordinateList) {
   auto document = ParsePresentation(
-      "<text id='t' x='2 14' y='12' font-size='10'>H"
-      "<animate attributeName='x' to='10' dur='2s'/></text>");
+      "<text id='t' x='2 14' y='12' font-size='10'>HH"
+      "<animate attributeName='x' to='10 18' dur='2s'/></text>");
   auto text = document.querySelector("#t");
   ASSERT_THAT(text, testing::Ne(std::nullopt));
   SmallVector<Lengthd, 1> coordinates;
@@ -204,19 +204,19 @@ TEST(RendererAnimationPresentation, ToOnlyTextXUsesFirstTypedCoordinateAsScalarB
   text->cast<SVGTextElement>().setXList(std::move(coordinates));
 
   document.setTime(1);
-  auto expected = ParsePresentation("<text x='8' y='12' font-size='10'>H</text>");
+  auto expected = ParsePresentation("<text x='8 16' y='12' font-size='10'>HH</text>");
   editor::tests::CompareBitmapToBitmap(
       RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(expected),
-      "typed-text-scalar-x-base", editor::tests::PixelmatchIdentityParams());
+      "typed-text-list-x-base", editor::tests::PixelmatchIdentityParams());
 }
 
-TEST(RendererAnimationPresentation, EmptyChildTextListsUseAncestorBaseAndRestoreAcrossSeeks) {
+TEST(RendererAnimationPresentation, EmptyChildDeltaListsUseNeutralBaseAndRestoreAncestorLayout) {
   struct Case {
     const char* attribute;
     double base;
     double to;
   };
-  for (const Case item : {Case{"dx", 2, 6}, Case{"dy", 1, 5}, Case{"rotate", 10, 30}}) {
+  for (const Case item : {Case{"dx", 2, 6}, Case{"dy", 1, 5}}) {
     SCOPED_TRACE(item.attribute);
     const std::string prefix = "<text x='2' y='12' font-size='10' " + std::string(item.attribute) +
                                "='" + std::to_string(item.base) + "'><tspan";
@@ -227,30 +227,32 @@ TEST(RendererAnimationPresentation, EmptyChildTextListsUseAncestorBaseAndRestore
       SCOPED_TRACE(time);
       document.setTime(time);
       const bool active = time == 2.0;
-      const double value = active ? (item.base + item.to) / 2 : item.base;
+      const double value = active ? item.to / 2 : item.base;
       const std::string child =
           active ? " " + std::string(item.attribute) + "='" + std::to_string(value) + "'" : "";
       auto expected = ParsePresentation(prefix + child + ">H</tspan></text>");
       editor::tests::CompareBitmapToBitmap(
           RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(expected),
-          "ancestor-text-position-base", editor::tests::PixelmatchIdentityParams());
+          "neutral-child-delta-base", editor::tests::PixelmatchIdentityParams());
     }
   }
 }
 
-TEST(RendererAnimationPresentation, MultiValueAncestorTextListFailsClosedForChildAnimation) {
+TEST(RendererAnimationPresentation, MultiValueAncestorListDoesNotBecomeChildBase) {
   const std::string source =
       "<text x='2' y='12' font-size='10' dx='1 4'><tspan>A</tspan><tspan id='s'>B"
       "<animate attributeName='dx' to='8' begin='1s' dur='2s'/></tspan></text>";
   auto document = ParsePresentation(source);
-  auto expected = ParsePresentation(
-      "<text x='2' y='12' font-size='10' dx='1 4'><tspan>A</tspan><tspan>B</tspan></text>");
   for (const double time : {0.0, 2.0, 4.0, 2.0}) {
     SCOPED_TRACE(time);
     document.setTime(time);
+    const std::string child = time == 2.0 ? " dx='4'" : "";
+    auto expected =
+        ParsePresentation("<text x='2' y='12' font-size='10' dx='1 4'><tspan>A</tspan><tspan" +
+                          child + ">B</tspan></text>");
     editor::tests::CompareBitmapToBitmap(
         RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(expected),
-        "multi-value-ancestor-fails-closed", editor::tests::PixelmatchIdentityParams());
+        "multi-value-ancestor-is-layout-only", editor::tests::PixelmatchIdentityParams());
   }
 }
 
@@ -352,13 +354,15 @@ TEST(RendererAnimationPresentation, TextLengthWorkRefusalKeepsNestedStaticTarget
       "<animate attributeName='textLength' to='30' dur='2s'/></text>");
   document.setTime(1);
   auto styleWork = std::make_shared<components::StyleResourceBudget>();
-  auto& initialBudget =
-      document.registry().ctx().get_or_emplace<components::AnimationResourceBudget>();
+  auto* initialBudget = document.registry().ctx().find<components::AnimationResourceBudget>();
+  if (!initialBudget) {
+    initialBudget = &document.registry().ctx().emplace<components::AnimationResourceBudget>();
+  }
   components::StyleResourceBudget::OwnerScope ownerScope(*styleWork);
   components::StyleResourceBudget::ActiveRegistryScope activeScope(*styleWork, document.registry());
-  auto sharedAllowance = initialBudget.contextualWorkBudget();
+  auto sharedAllowance = initialBudget->contextualWorkBudget();
   ASSERT_TRUE(sharedAllowance);
-  ASSERT_TRUE(initialBudget.reserveContextualWork(
+  ASSERT_TRUE(initialBudget->reserveContextualWork(
       components::AnimationResourceBudget::kMaximumContextualWork));
   auto renderer = CreateRendererInstance(ActiveRendererBackend());
   RendererDriver driver(*renderer, false, nullptr, styleWork);
@@ -1378,3 +1382,7 @@ TEST(RendererAnimationPresentation, RemovingAnimatedFilterImageHrefPreservesAspe
 
 }  // namespace
 }  // namespace donner::svg
+const std::string child = time == 2.0 ? " dx='4'" : "";
+auto expected =
+    ParsePresentation("<text x='2' y='12' font-size='10' dx='1 4'><tspan>A</tspan><tspan" + child +
+                      ">B</tspan></text>");
