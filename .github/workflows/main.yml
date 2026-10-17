@@ -1363,6 +1363,7 @@ jobs:
       # while the same targets passed when rerun as a separate phase. Run every
       # test that launches a browser after the rest of the suite, one at a time.
       - name: Qualify pinned Chromium archive
+        id: browser_preflight
         if: ${{ !cancelled() && (steps.test.outcome == 'success' || steps.test.outcome == 'failure') }}
         shell: bash
         run: |
@@ -1372,14 +1373,18 @@ jobs:
           else
             echo "${{ needs.determine-targets.outputs.affected }}"
           fi)
-          browser_targets=$(bazelisk --nohome_rc --nosystem_rc query "attr('tags', 'launches-browser', tests(set($TARGETS)))")
+          if [[ -z "${TARGETS// /}" ]]; then
+            echo "::error::Empty target selection reached the browser preflight."
+            exit 1
+          fi
+          browser_targets=$(bazelisk query "attr('tags', 'launches-browser', tests(set($TARGETS)))")
           if [[ -z "$browser_targets" ]]; then
             echo "No browser targets selected."
-            exit 0
+          else
+            tools/ci_bazel_test.sh bazelisk test --config=ci --nocache_test_results --test_output=errors \
+              $BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS \
+              //tools/ci:mac_browser_archive
           fi
-          tools/ci_bazel_test.sh bazelisk --nohome_rc --nosystem_rc test --config=ci --nocache_test_results --test_output=errors \
-            $BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS \
-            //donner/editor/wasm/tests:mac_browser_archive_tests
 
       - name: Test (browser targets)
         id: browser_test
@@ -1412,7 +1417,7 @@ jobs:
             $BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS $GEODE_EDITOR_TARGETS
 
       - name: Upload Bazel test failure artifacts
-        if: failure() && (steps.metal_profile.outcome == 'failure' || steps.metal_preflight.outcome == 'failure' || steps.test.outcome == 'failure' || steps.browser_test.outcome == 'failure' || steps.geode_test.outcome == 'failure')
+        if: failure() && (steps.browser_preflight.outcome == 'failure' || steps.metal_profile.outcome == 'failure' || steps.metal_preflight.outcome == 'failure' || steps.test.outcome == 'failure' || steps.browser_test.outcome == 'failure' || steps.geode_test.outcome == 'failure')
         uses: ./.github/actions/upload-bazel-test-artifacts
         with:
           name: bazel-test-failure-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}
@@ -1695,6 +1700,7 @@ jobs:
       # --build_tests_only keeps it from building anything the browser tests do not
       # need (on a //... fallback, the rest of the repository).
       - name: Qualify pinned Chromium archive
+        id: browser_preflight
         shell: bash
         run: |
           set -euo pipefail
@@ -1703,14 +1709,18 @@ jobs:
           else
             echo "${{ needs.determine-targets.outputs.affected }}"
           fi)
-          browser_targets=$(bazelisk --nohome_rc --nosystem_rc query "attr('tags', 'launches-browser', tests(set($TARGETS)))")
+          if [[ -z "${TARGETS// /}" ]]; then
+            echo "::error::Empty target selection reached the browser preflight."
+            exit 1
+          fi
+          browser_targets=$(bazelisk query "attr('tags', 'launches-browser', tests(set($TARGETS)))")
           if [[ -z "$browser_targets" ]]; then
             echo "No browser targets selected."
-            exit 0
+          else
+            tools/ci_bazel_test.sh bazelisk test --config=ci --nocache_test_results --test_output=errors \
+              $BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS \
+              //tools/ci:mac_browser_archive
           fi
-          tools/ci_bazel_test.sh bazelisk --nohome_rc --nosystem_rc test --config=ci --nocache_test_results --test_output=errors \
-            $BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS \
-            //donner/editor/wasm/tests:mac_browser_archive_tests
 
       - name: Test (browser targets)
         id: browser_test
@@ -1733,7 +1743,7 @@ jobs:
             $BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS $BROWSER_STALL_TEST_FLAGS $TARGETS
 
       - name: Upload Bazel test failure artifacts
-        if: failure() && (steps.metal_profile.outcome == 'failure' || steps.browser_test.outcome == 'failure')
+        if: failure() && (steps.browser_preflight.outcome == 'failure' || steps.metal_profile.outcome == 'failure' || steps.browser_test.outcome == 'failure')
         uses: ./.github/actions/upload-bazel-test-artifacts
         with:
           name: bazel-test-failure-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}
@@ -2058,12 +2068,13 @@ jobs:
             //tools/ci:metal_preflight
 
       - name: Validate offline Metal compiler
+        id: metal_compiler
         shell: bash
         run: |
           set -euo pipefail
           tools/ci_bazel_test.sh bazelisk --nohome_rc --nosystem_rc test --config=ci --nocache_test_results --test_output=errors \
             $BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS \
-            //donner/gpu/shader:msl_xcrun_validation_tests
+            //tools/ci:metal_offline_compiler
 
       - name: Build
         shell: bash
@@ -2099,6 +2110,7 @@ jobs:
 
       # Browser tests share the GPU with native replays and need their own serial phase.
       - name: Qualify pinned Chromium archive
+        id: browser_preflight
         if: ${{ !cancelled() && (steps.test.outcome == 'success' || steps.test.outcome == 'failure') }}
         shell: bash
         run: |
@@ -2108,14 +2120,18 @@ jobs:
           else
             echo "${{ needs.determine-targets.outputs.affected }}"
           fi)
+          if [[ -z "${TARGETS// /}" ]]; then
+            echo "::error::Empty target selection reached the browser preflight."
+            exit 1
+          fi
           browser_targets=$(bazelisk --nohome_rc --nosystem_rc query "attr('tags', 'launches-browser', tests(set($TARGETS)))")
           if [[ -z "$browser_targets" ]]; then
             echo "No browser targets selected."
-            exit 0
+          else
+            tools/ci_bazel_test.sh bazelisk --nohome_rc --nosystem_rc test --config=ci --nocache_test_results --test_output=errors \
+              $BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS \
+              //tools/ci:mac_browser_archive
           fi
-          tools/ci_bazel_test.sh bazelisk --nohome_rc --nosystem_rc test --config=ci --nocache_test_results --test_output=errors \
-            $BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS \
-            //donner/editor/wasm/tests:mac_browser_archive_tests
 
       - name: Test (browser targets)
         id: browser_test
@@ -2147,7 +2163,7 @@ jobs:
             $BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS $GEODE_EDITOR_TARGETS
 
       - name: Upload Bazel test failure artifacts
-        if: failure() && (steps.metal_profile.outcome == 'failure' || steps.metal_preflight.outcome == 'failure' || steps.test.outcome == 'failure' || steps.browser_test.outcome == 'failure' || steps.geode_test.outcome == 'failure')
+        if: failure() && (steps.metal_compiler.outcome == 'failure' || steps.browser_preflight.outcome == 'failure' || steps.metal_profile.outcome == 'failure' || steps.metal_preflight.outcome == 'failure' || steps.test.outcome == 'failure' || steps.browser_test.outcome == 'failure' || steps.geode_test.outcome == 'failure')
         uses: ./.github/actions/upload-bazel-test-artifacts
         with:
           name: bazel-test-failure-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}

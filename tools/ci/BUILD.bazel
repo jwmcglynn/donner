@@ -53,6 +53,18 @@ test_suite(
 )
 
 test_suite(
+    name = "metal_offline_compiler",
+    tags = ["manual"],
+    tests = ["//donner/gpu/shader:msl_xcrun_validation_tests"],
+)
+
+test_suite(
+    name = "mac_browser_archive",
+    tags = ["manual"],
+    tests = ["//donner/editor/wasm/tests:mac_browser_archive_tests"],
+)
+
+test_suite(
     name = "metal_profile",
     tags = ["manual"],
     tests = ["//donner/gpu/metal/tests:metal_validation_profile"],
