@@ -36,6 +36,7 @@
 #include "donner/svg/components/layout/TransformComponent.h"
 #include "donner/svg/components/resources/ResourceManagerContext.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
+#include "donner/svg/components/style/SelectorContent.h"
 #include "donner/svg/components/style/StyleSystem.h"
 #include "donner/svg/components/text/ComputedTextGeometryComponent.h"
 #include "donner/svg/components/text/TextComponent.h"
@@ -676,6 +677,7 @@ SVGDocument::SVGDocument(SVGDocumentHandle documentState, Settings settings,
   treeMutations.replaceChild = components::TreeMutation::ReplaceChild;
   treeMutations.removeChild = components::TreeMutation::RemoveChild;
   treeMutations.remove = components::TreeMutation::Remove;
+  treeMutations.setValue = components::TreeMutation::SetValue;
 
   auto& ctx = registry.ctx().emplace<components::SVGDocumentContext>(
       components::SVGDocumentContext::InternalCtorTag{}, documentState_);
@@ -1372,6 +1374,14 @@ xml::ApplySourceEditResult SVGDocument::setElementTextContent(const SVGElement& 
   }
 
   result = xmlDocument().setElementText(*elementNode, text);
+  const EntityHandle handle = elementNode->entityHandle();
+  const bool typedText =
+      handle.all_of<components::TextComponent>() || IsDescriptiveElement(handle) ||
+      handle.get<components::ElementTypeComponent>().type() == ElementType::Style;
+  // This setter replaces all text; its parent-value receipt supersedes any old raw snapshot.
+  if (result.applied && !result.diagnostic && typedText) {
+    components::ResetSelectorTextContent(handle);
+  }
   applyXMLMutations(result);
   return result;
 }
@@ -1394,10 +1404,25 @@ xml::XMLDocument SVGDocument::xmlDocument() const {
 }
 
 void SVGDocument::applyXMLMutations(xml::ApplySourceEditResult& result) {
+  std::unordered_set<Entity> projectedRoots;
   for (const xml::XMLMutation& mutation : result.mutations) {
+    // Subtree projection already consumes the final child/value state in this XML edit batch.
+    bool covered = false;
+    for (std::optional<xml::XMLNode> node = mutation.node; node; node = node->parentElement()) {
+      if (projectedRoots.contains(node->entityHandle().entity())) {
+        covered = true;
+        break;
+      }
+    }
+    if (covered && mutation.kind == xml::XMLMutation::Kind::NodeValueChanged) {
+      continue;
+    }
     std::optional<ParseDiagnostic> projectionDiagnostic = applyXMLMutation(mutation);
     if (projectionDiagnostic.has_value() && !result.diagnostic.has_value()) {
       result.diagnostic = std::move(projectionDiagnostic);
+    }
+    if (mutation.kind == xml::XMLMutation::Kind::SubtreeReplaced) {
+      projectedRoots.insert(mutation.node.entityHandle().entity());
     }
   }
 }
@@ -1421,7 +1446,7 @@ std::optional<ParseDiagnostic> SVGDocument::applyXMLMutation(const xml::XMLMutat
 
   if (mutation.kind == xml::XMLMutation::Kind::NodeInserted) {
     if (std::optional<ParseDiagnostic> diagnostic =
-            projectXMLSubtree(mutation.node, /*contentsReparsed=*/false)) {
+            projectXMLSubtree(mutation.node, /*contentsReparsed=*/true)) {
       return diagnostic;
     }
     MarkSubtreeReplaced(mutation.node.entityHandle());
@@ -1452,10 +1477,21 @@ std::optional<ParseDiagnostic> SVGDocument::applyXMLMutation(const xml::XMLMutat
 std::optional<ParseDiagnostic> SVGDocument::applyNodeValueXMLMutation(
     const xml::XMLMutation& mutation) {
   const std::optional<xml::XMLNode> element = NodeValueMutationElement(mutation);
+  std::optional<ParseDiagnostic> diagnostic;
   if (mutation.value.has_value() && element.has_value() && CanReparseDescriptiveText(*element)) {
-    return reparseDescriptiveText(*element);
+    diagnostic = reparseDescriptiveText(*element);
+  } else {
+    diagnostic = ApplyNodeValueChanged(source(), mutation);
   }
-  return ApplyNodeValueChanged(source(), mutation);
+  if (element) {
+    if (diagnostic) {
+      components::RejectSelectorContentProjection(element->entityHandle());
+    } else {
+      components::AcceptSelectorTextValueProjection(element->entityHandle());
+      components::TreeMutation::InvalidateTextContentStyles(element->entityHandle());
+    }
+  }
+  return diagnostic;
 }
 
 std::optional<ParseDiagnostic> SVGDocument::reparseDescriptiveText(const xml::XMLNode& node) {
@@ -1535,6 +1571,15 @@ std::optional<ParseDiagnostic> SVGDocument::projectXMLAttributes(const xml::XMLN
 
 std::optional<ParseDiagnostic> SVGDocument::projectXMLSubtree(const xml::XMLNode& node,
                                                               bool contentsReparsed) {
+  std::optional<ParseDiagnostic> diagnostic = projectXMLSubtreeContents(node, contentsReparsed);
+  if (diagnostic && contentsReparsed && node.type() == xml::XMLNode::Type::Element) {
+    components::RejectSelectorContentProjection(node.entityHandle());
+  }
+  return diagnostic;
+}
+
+std::optional<ParseDiagnostic> SVGDocument::projectXMLSubtreeContents(const xml::XMLNode& node,
+                                                                      bool contentsReparsed) {
   if (node.type() != xml::XMLNode::Type::Element) {
     return std::nullopt;
   }
@@ -1566,6 +1611,7 @@ std::optional<ParseDiagnostic> SVGDocument::projectXMLSubtree(const xml::XMLNode
     return diagnostic;
   }
 
+  components::CompleteSelectorContentProjection(handle, contentsReparsed);
   for (std::optional<xml::XMLNode> child = node.firstChild(); child.has_value();
        child = child->nextSibling()) {
     if (std::optional<ParseDiagnostic> diagnostic = projectXMLSubtree(*child, contentsReparsed)) {

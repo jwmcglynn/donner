@@ -1,8 +1,48 @@
 #include "donner/css/selectors/PseudoClassSelector.h"
 
+#include <algorithm>
+#include <array>
+
 #include "donner/css/Selector.h"
 
 namespace donner::css {
+
+namespace {
+
+bool IsAnbPseudoClass(const RcString& ident) {
+  constexpr std::array<std::string_view, 4> kNames = {"nth-child", "nth-last-child", "nth-of-type",
+                                                      "nth-last-of-type"};
+  return std::ranges::any_of(
+      kNames, [&ident](std::string_view name) { return ident.equalsLowercase(name); });
+}
+
+bool ValidSelectorArguments(const Selector* selector, bool allowEmpty) {
+  return selector && (allowEmpty || !selector->entries.empty()) &&
+         std::ranges::all_of(selector->entries,
+                             [](const ComplexSelector& entry) { return entry.isValid(); });
+}
+
+}  // namespace
+
+bool PseudoClassSelector::isValid() const {
+  if (!argsIfFunction) {
+    constexpr std::array<std::string_view, 10> kSimpleNames = {
+        "root",       "scope",      "defined",       "empty",        "first-child",
+        "last-child", "only-child", "first-of-type", "last-of-type", "only-of-type"};
+    return std::ranges::any_of(
+        kSimpleNames, [this](std::string_view name) { return ident.equalsLowercase(name); });
+  }
+  if (anbValueIfAnb) {
+    return IsAnbPseudoClass(ident) && (!selector || ValidSelectorArguments(selector.get(), false));
+  }
+  if (ident.equalsLowercase("is") || ident.equalsLowercase("where")) {
+    return ValidSelectorArguments(selector.get(), true);
+  }
+  if (ident.equalsLowercase("not") || ident.equalsLowercase("has")) {
+    return ValidSelectorArguments(selector.get(), false);
+  }
+  return false;
+}
 
 PseudoClassSelector::PseudoClassSelector(const RcString& ident) : ident(ident) {}
 

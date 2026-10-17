@@ -161,7 +161,7 @@ private:
       case AttrMatcher::Includes:
         // Returns true if attribute value is a whitespace-separated list of values, and one of
         // them exactly matches the matcher value.
-        for (auto&& str : StringUtils::Split(value, ' ')) {
+        for (auto&& str : StringUtils::SplitAsciiWhitespace(value)) {
           if (m.caseInsensitive) {
             if (StringUtils::Equals<StringComparison::IgnoreCase>(str, m.value)) {
               return true;

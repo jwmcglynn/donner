@@ -31,6 +31,7 @@
 #include "donner/svg/components/text/TextRootComponent.h"
 #include "donner/svg/internal/RenderingDiagnostics.h"
 #include "donner/svg/parser/SVGParser.h"
+#include "donner/svg/properties/PropertyRegistry.h"
 #include "donner/svg/renderer/Renderer.h"
 
 using testing::Eq;
@@ -396,6 +397,154 @@ TEST(SVGDocument, ApplySourceEditProjectsAttributeValueMutation) {
   EXPECT_THAT(result.diagnostic, Eq(std::nullopt));
   EXPECT_THAT(rect.getAttribute("fill"), Optional(Eq("blue")));
   EXPECT_THAT(document.source(), testing::HasSubstr(R"(fill="blue")"));
+}
+
+TEST(SVGDocument, EmptySelectorPreservesAndRefreshesProjectedGenericText) {
+  auto document = ParseSVG(R"svg(<svg xmlns="http://www.w3.org/2000/svg">
+    <g id="generic">word<!--c--> </g><g id="data"><![CDATA[word]]></g>
+  </svg>)svg");
+  EXPECT_FALSE(document.querySelector("#generic:empty").has_value());
+  auto attribute = ReplaceInSource(document, "id=\"generic\"", "id=\"generic\" class=\"new\"");
+  ASSERT_TRUE(attribute.applied);
+  ASSERT_FALSE(attribute.diagnostic.has_value());
+  EXPECT_FALSE(document.querySelector("#generic:empty").has_value());
+  auto replacement = ReplaceInSource(document, "<g id=\"generic\" class=\"new\">word<!--c--> </g>",
+                                     "<g id=\"generic\"/>");
+  ASSERT_TRUE(replacement.applied);
+  ASSERT_FALSE(replacement.diagnostic.has_value())
+      << (replacement.diagnostic ? replacement.diagnostic->reason : "");
+  EXPECT_TRUE(document.querySelector("#generic:empty").has_value());
+  EXPECT_FALSE(document.querySelector("#data:empty").has_value());
+}
+
+TEST(SVGDocument, EmptySelectorTextAuthoritySurvivesSourceAndTypedEdits) {
+  auto document = ParseSVG(R"svg(<svg xmlns="http://www.w3.org/2000/svg">
+    <text id="text">initial</text><title id="title">title</title>
+  </svg>)svg");
+  auto replacement = ReplaceInSource(document, "<text id=\"text\">initial</text>",
+                                     "<text id=\"text\">new<!--c--><![CDATA[word]]></text>");
+  ASSERT_TRUE(replacement.applied);
+  ASSERT_FALSE(replacement.diagnostic.has_value())
+      << (replacement.diagnostic ? replacement.diagnostic->reason : "");
+  auto text = document.querySelector("#text")->cast<SVGTextElement>();
+  auto node = xml::XMLNode::TryCast(text.unsafeEntityHandle()).value();
+  for (auto child = node.firstChild(); child; child = child->nextSibling()) {
+    if (child->type() == xml::XMLNode::Type::Data || child->type() == xml::XMLNode::Type::CData) {
+      child->setValue(" ");
+    }
+  }
+  EXPECT_TRUE(text.isEmptyForSelector(nullptr));
+  text.appendText(" ");
+  EXPECT_TRUE(text.isEmptyForSelector(nullptr));
+  text.appendText("append");
+  EXPECT_FALSE(text.isEmptyForSelector(nullptr));
+  text.appendText("");
+  EXPECT_FALSE(text.isEmptyForSelector(nullptr));
+  text.setTextContent("");
+  EXPECT_TRUE(text.isEmptyForSelector(nullptr));
+  replacement = ReplaceInSource(document, "title</title>", "new<![CDATA[word]]></title>");
+  ASSERT_TRUE(replacement.applied);
+  ASSERT_FALSE(replacement.diagnostic.has_value())
+      << (replacement.diagnostic ? replacement.diagnostic->reason : "");
+  auto title = document.querySelector("#title")->cast<SVGTitleElement>();
+  EXPECT_FALSE(title.isEmptyForSelector(nullptr));
+  title.setTextContent("");
+  EXPECT_TRUE(title.isEmptyForSelector(nullptr));
+}
+
+TEST(SVGDocument, EmptySelectorKeepsRetainedAuthorityForRawTextDeltas) {
+  auto document = ParseSVG(R"svg(<svg xmlns="http://www.w3.org/2000/svg">
+    <style>
+      text { opacity: .2 } text:empty { opacity: .8 }
+      #parent { opacity: .4 } #parent:has(> text:empty) { opacity: .6 }
+    </style>
+    <g id="parent"><text id="text">word</text></g>
+  </svg>)svg");
+  auto text = document.querySelector("#text").value();
+  auto parent = document.querySelector("#parent").value();
+  auto xmlDocument = document.xmlDocument();
+  auto delta = xml::XMLNode::CreateDataNode(xmlDocument, " ");
+  xml::XMLNode::TryCast(text.unsafeEntityHandle())->appendChild(delta);
+  EXPECT_THAT(text.getComputedStyle().opacity.get(), Optional(.2));
+  EXPECT_THAT(parent.getComputedStyle().opacity.get(), Optional(.4));
+  auto changed = ReplaceInSource(document, "word", "new");
+  ASSERT_FALSE(changed.diagnostic.has_value());
+  EXPECT_FALSE(text.isEmptyForSelector(nullptr));
+  changed = ReplaceInSource(document, "new", " ");
+  ASSERT_FALSE(changed.diagnostic.has_value());
+  EXPECT_TRUE(text.isEmptyForSelector(nullptr));
+  EXPECT_THAT(text.getComputedStyle().opacity.get(), Optional(.8));
+  EXPECT_THAT(parent.getComputedStyle().opacity.get(), Optional(.6));
+}
+
+TEST(SVGDocument, EmptySelectorIgnoresRejectedRawTextProjection) {
+  parser::SVGParser::Options options;
+  options.maximumContentProjectionChunks = 1;
+  auto document =
+      ParseSVG(R"(<svg xmlns="http://www.w3.org/2000/svg"><text id="t"> </text></svg>)", options);
+  auto text = document.querySelector("#t").value();
+  EXPECT_TRUE(text.isEmptyForSelector(nullptr));
+  auto changed = ReplaceInSource(document, "<text id=\"t\"> </text>",
+                                 "<text id=\"t\">word<![CDATA[other]]></text>");
+  ASSERT_TRUE(changed.applied);
+  ASSERT_TRUE(changed.diagnostic.has_value());
+  EXPECT_THAT(changed.diagnostic->reason, testing::HasSubstr("too many chunks"));
+  EXPECT_EQ(text.entityHandle().get<components::TextComponent>().text, " ");
+  EXPECT_TRUE(text.isEmptyForSelector(nullptr));
+}
+
+TEST(SVGDocument, EmptySelectorSourceSetterReplacesMaterializedRawText) {
+  for (const std::string_view content :
+       {"word<![CDATA[other]]>", "<![CDATA[word]]>", " <![CDATA[ ]]>"}) {
+    SCOPED_TRACE(content);
+    auto document =
+        ParseSVG(R"(<svg xmlns="http://www.w3.org/2000/svg"><text id="t">seed</text></svg>)");
+    const std::string replacement = "<text id=\"t\">" + std::string(content) + "</text>";
+    auto changed = ReplaceInSource(document, "<text id=\"t\">seed</text>", replacement);
+    ASSERT_FALSE(changed.diagnostic.has_value());
+    auto text = document.querySelector("#t").value();
+    for (const std::string_view value : {" ", "new & <text>", ""}) {
+      auto replaced = document.setElementTextContent(text, value);
+      ASSERT_TRUE(replaced.applied);
+      ASSERT_FALSE(replaced.diagnostic.has_value());
+      auto fresh = ParseSVG(document.source());
+      EXPECT_EQ(text.isEmptyForSelector(nullptr),
+                fresh.querySelector("#t")->isEmptyForSelector(nullptr));
+      EXPECT_EQ(text.cast<SVGTextElement>().textContent(), value);
+      EXPECT_EQ(fresh.querySelector("#t")->cast<SVGTextElement>().textContent(), value);
+    }
+  }
+  for (const bool initiallyEmpty : {false, true}) {
+    SCOPED_TRACE(initiallyEmpty);
+    auto document =
+        ParseSVG(R"(<svg xmlns="http://www.w3.org/2000/svg"><text id="t">seed</text></svg>)");
+    auto changed =
+        ReplaceInSource(document, "<text id=\"t\">seed</text>",
+                        initiallyEmpty ? "<text id=\"t\"> </text>" : "<text id=\"t\">word</text>");
+    ASSERT_FALSE(changed.diagnostic.has_value());
+    auto text = document.querySelector("#t").value();
+    EXPECT_EQ(text.isEmptyForSelector(nullptr), initiallyEmpty);
+    auto replaced = document.setElementTextContent(text, initiallyEmpty ? "new" : " ");
+    ASSERT_TRUE(replaced.applied);
+    ASSERT_FALSE(replaced.diagnostic.has_value());
+    EXPECT_EQ(text.isEmptyForSelector(nullptr), !initiallyEmpty);
+  }
+}
+
+TEST(SVGDocument, QuerySelectorSkipsRetainedRawTextAndComments) {
+  auto document =
+      ParseSVG(R"(<svg xmlns="http://www.w3.org/2000/svg"><text id="t">seed</text></svg>)");
+  auto changed = ReplaceInSource(document, "<text id=\"t\">seed</text>",
+                                 "<text id=\"t\">word<![CDATA[other]]><!--c--></text>");
+  ASSERT_FALSE(changed.diagnostic.has_value());
+  auto text = document.querySelector("#t").value();
+  ASSERT_FALSE(text.querySelector("*").has_value());
+  EXPECT_FALSE(text.querySelector(":defined").has_value());
+  changed = ReplaceInSource(document, "word<![CDATA[other]]><!--c-->",
+                            "word<![CDATA[other]]><!--c--><tspan id=\"real\"/>");
+  ASSERT_FALSE(changed.diagnostic.has_value());
+  EXPECT_THAT(text.querySelector("*")->id(), Eq("real"));
+  EXPECT_THAT(text.querySelector(":defined")->id(), Eq("real"));
 }
 
 TEST(SVGDocument, ApplySourceEditProjectsTextMutation) {
@@ -1567,13 +1716,13 @@ TEST(SVGDocument, RejectedTextProjectionPreservesLastValidText) {
   auto document = ParseSVG(
       R"(<svg xmlns="http://www.w3.org/2000/svg"><text id="label">stable<tspan id="a"/><tspan id="b"/></text></svg>)",
       options);
-  const std::size_t editStart = document.source().find(R"(<tspan id="a"/>)");
+  const std::size_t editStart = document.source().find("stable");
   const std::size_t lastChild = document.source().find(R"(<tspan id="b"/>)");
   ASSERT_NE(editStart, std::string_view::npos);
   ASSERT_NE(lastChild, std::string_view::npos);
   const std::size_t editEnd = lastChild + std::string_view(R"(<tspan id="b"/>)").size();
 
-  std::string oversizedReplacement;
+  std::string oversizedReplacement = "new";
   for (std::size_t i = 0; i <= options.maximumContentProjectionChunks; ++i) {
     oversizedReplacement += "<tspan/>";
   }
@@ -1665,7 +1814,7 @@ TEST(SVGDocument, IncrementalTextPayloadReplacementReleasesAfterDetachedHandle) 
   std::optional<SVGElement> text = document.querySelector("#t");
   ASSERT_TRUE(text.has_value());
 
-  const std::string acceptedText(2112, 'a');
+  const std::string acceptedText(2112, ' ');
   xml::ApplySourceEditResult accepted = document.setElementTextContent(*text, acceptedText);
   ASSERT_TRUE(accepted.applied);
   ASSERT_THAT(accepted.diagnostic, Eq(std::nullopt));
@@ -1680,6 +1829,7 @@ TEST(SVGDocument, IncrementalTextPayloadReplacementReleasesAfterDetachedHandle) 
   ASSERT_TRUE(rejected.diagnostic.has_value());
   EXPECT_THAT(rejected.diagnostic->reason, testing::HasSubstr("parsed-payload budget"));
   EXPECT_EQ(text->entityHandle().get<components::TextComponent>().text, acceptedText);
+  EXPECT_TRUE(text->isEmptyForSelector(nullptr));
   EXPECT_EQ(budget->securityStats().retainedBytes, options.maximumParsedPayloadSize);
 
   xml::ApplySourceEditResult removed = document.removeElement(*text);

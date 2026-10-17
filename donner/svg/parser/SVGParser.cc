@@ -26,6 +26,7 @@
 #include "donner/svg/components/RenderingBehaviorComponent.h"
 #include "donner/svg/components/SVGDocumentContext.h"
 #include "donner/svg/components/StylesheetComponent.h"
+#include "donner/svg/components/style/SelectorContent.h"
 #include "donner/svg/components/text/TextComponent.h"
 #include "donner/svg/parser/AttributeParser.h"
 #include "donner/svg/parser/details/SVGParserContext.h"
@@ -101,6 +102,12 @@ bool ReserveAttributePayload(SVGParserContext& context, EntityHandle handle, con
   warning.reason = "Attributes exceed the document parsed-payload budget";
   context.addWarning(std::move(warning));
   return false;
+}
+
+void RecordDiscardedTextForParent(const std::optional<SVGElement>& element, const XMLNode& node) {
+  if (element) {
+    components::RecordDiscardedSelectorText(element->unsafeEntityHandle(), node);
+  }
 }
 
 template <typename T>
@@ -794,6 +801,7 @@ public:
   std::optional<ParseDiagnostic> walkChildren(std::optional<SVGElement> element,
                                               const XMLNode& rootNode, std::size_t parentDepth) {
     bool foundRootSvg = false;
+    RecordDiscardedTextForParent(element, rootNode);
 
     for (auto child = rootNode.firstChild(); child;) {
       if (visitedTreeNodes_ >= context_.options().maximumTreeNodes) {

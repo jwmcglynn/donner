@@ -2,6 +2,8 @@
 
 #include "donner/base/ParseWarningSink.h"
 #include "donner/base/Vector2.h"
+#include "donner/svg/components/TreeMutation.h"
+#include "donner/svg/components/style/SelectorContent.h"
 #include "donner/svg/components/text/TextComponent.h"
 #include "donner/svg/components/text/TextInvalidation.h"
 #include "donner/svg/text/TextEngine.h"
@@ -142,6 +144,10 @@ void SVGTextContentElement::selectSubString(std::size_t /*charnum*/, std::size_t
 void SVGTextContentElement::appendText(std::string_view text) {
   DocumentMutationBatch mutation = handle_.mutationBatch();
   DocumentWriteAccess& access = mutation.access();
+  const EntityHandle selectorHandle = unsafeEntityHandle();
+  const bool wasEmpty =
+      components::IsSelectorEmpty(*selectorHandle.registry(), selectorHandle.entity(), nullptr);
+  components::RecordAppendedSelectorText(selectorHandle, text);
   auto& textComponent = handle_.get_or_emplace<components::TextComponent>(access);
 
   if (textComponent.text.empty()) {
@@ -159,6 +165,10 @@ void SVGTextContentElement::appendText(std::string_view text) {
   }
 
   invalidateTextGeometry();
+  if (wasEmpty !=
+      components::IsSelectorEmpty(*selectorHandle.registry(), selectorHandle.entity(), nullptr)) {
+    components::TreeMutation::InvalidateTextContentStyles(selectorHandle);
+  }
 }
 
 void SVGTextContentElement::advanceTextChunk() {
@@ -175,11 +185,19 @@ void SVGTextContentElement::advanceTextChunk() {
 void SVGTextContentElement::setTextContent(std::string_view text) {
   DocumentMutationBatch mutation = handle_.mutationBatch();
   DocumentWriteAccess& access = mutation.access();
+  const EntityHandle selectorHandle = unsafeEntityHandle();
+  const bool wasEmpty =
+      components::IsSelectorEmpty(*selectorHandle.registry(), selectorHandle.entity(), nullptr);
+  components::ResetSelectorTextContent(unsafeEntityHandle());
   auto& textComponent = handle_.get_or_emplace<components::TextComponent>(access);
   textComponent.text = text;
   textComponent.textChunks.clear();
   textComponent.textChunks.emplace_back(text);
   invalidateTextGeometry();
+  if (wasEmpty !=
+      components::IsSelectorEmpty(*selectorHandle.registry(), selectorHandle.entity(), nullptr)) {
+    components::TreeMutation::InvalidateTextContentStyles(selectorHandle);
+  }
 }
 
 RcString SVGTextContentElement::textContent() const {
