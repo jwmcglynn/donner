@@ -202,10 +202,11 @@ TEST(GifEncoder, WritesHeaderScreenDescriptorLoopExtensionAndTrailer) {
   ASSERT_TRUE(encoder.addFrame(frame.rgba, 0, 5));
   const std::vector<uint8_t> gif = encoder.finish();
 
-  ASSERT_THAT(gif, SizeIs(testing::Gt(32u)));
-  EXPECT_THAT(std::vector<uint8_t>(gif.begin(), gif.begin() + 32),
+  ASSERT_THAT(gif, SizeIs(testing::Gt(38u)));
+  EXPECT_THAT(std::vector<uint8_t>(gif.begin(), gif.begin() + 38),
               ElementsAre('G', 'I', 'F', '8', '9', 'a',  //
-                          3, 0, 2, 0, 0x00, 0x00, 0x00,  // Logical screen, no global table.
+                          3, 0, 2, 0, 0x80, 0x00, 0x00,  // Logical screen, 2-entry global table.
+                          0, 0, 0, 0, 0, 0,              // Conventional index-0 clear table.
                           0x21, 0xFF, 11, 'N', 'E', 'T', 'S', 'C', 'A', 'P', 'E', '2', '.', '0', 3,
                           1, 0, 0, 0));  // Loop forever.
   EXPECT_EQ(gif.back(), 0x3B);
@@ -348,13 +349,15 @@ TEST(GifEncoder, KeepsBinaryTransparencyWithoutBackground) {
 
   const std::vector<uint8_t> encoded = encoder.finish();
   ASSERT_GE(encoded.size(), 19u);
-  EXPECT_NE(encoded[10] & 0x80, 0);  // Global color table present.
-  EXPECT_EQ(encoded[11], 0);         // Logical background uses the conventional clear index.
+  EXPECT_EQ(encoded[10], 0x80);  // Two-entry global color table present.
+  EXPECT_EQ(encoded[11], 0);     // Logical background uses the conventional clear index.
+  EXPECT_THAT(std::vector<uint8_t>(encoded.begin() + 13, encoded.begin() + 19),
+              ElementsAre(0, 0, 0, 0, 0, 0));
 
   const DecodedGif gif = Decode(encoded);
   ASSERT_THAT(gif.frames, SizeIs(2));
   const std::vector<uint8_t> expectedFirst = {0, 0, 255, 255, 0, 0, 0, 0};
-  EXPECT_EQ(gif.frames[0].rgba, expectedFirst);
+  ExpectFrameIdentical(gif, 0, expectedFirst);
   // The first pixel turned transparent, so the previous frame must not show through.
   EXPECT_THAT(gif.frames[1].rgba, ElementsAre(0, 0, 0, 0, 255, 0, 0, 255));
   EXPECT_THAT(gif.frames, Each(Field(&DecodedGifFrame::disposal, 2)));
@@ -369,9 +372,8 @@ TEST(GifEncoder, KeepsBinaryTransparencyWithoutBackground) {
 }
 
 TEST(GifEncoder, OpaqueFramesOfATransparentGifStillDefineATransparentIndex) {
-  // Disposal 2 restores the logical screen background, which has no color without a global table.
-  // Every frame of a transparent GIF therefore carries a transparent index, so decoders that
-  // restore to it clear an opaque frame to transparency before a frame with transparent pixels.
+  // The global background and every local transparent entry conventionally share index 0, so
+  // decoders clear an opaque disposed frame before drawing a frame with transparent pixels.
   GifEncoder encoder({.width = 2, .height = 1});
   const Image opaque(2, 1, 0, 0, 255);
   Image transparent = opaque;
@@ -427,6 +429,8 @@ TEST(GifEncoder, QuantizedPaletteHasCanonicalFullRgbOrdering) {
   const std::vector<uint8_t> firstPalette = FirstLocalColorTable(first.finish());
   const std::vector<uint8_t> secondPalette = FirstLocalColorTable(second.finish());
   EXPECT_EQ(firstPalette, secondPalette);
+  // FNV-1a over all 768 canonical table bytes, calculated directly from the documented split
+  // rules rather than captured from an encoder result.
   EXPECT_EQ(Fnv1a64(firstPalette), 0xA15DBC4A41D0411Dull);
 }
 
@@ -570,8 +574,8 @@ TEST(GifEncoder, QuantizedOpaqueFramesCropToTheChangedRectangle) {
 
 TEST(GifEncoder, RejectsEncodedOutputAndWorkspaceAboveConfiguredLimits) {
   const Image frame(4, 4, 10, 20, 30);
-  GifEncoder outputLimited(
-      {.width = 4, .height = 4, .maximumOutputBytes = 48, .maximumWorkspaceBytes = 4096});
+  GifEncoder outputLimited({.width = 4, .height = 4, .maximumOutputBytes = 48});
+  EXPECT_EQ(outputLimited.error(), GifEncoder::Error::None);
   EXPECT_FALSE(outputLimited.addFrame(frame.rgba, 0, 1));
   EXPECT_EQ(outputLimited.error(), GifEncoder::Error::ResourceLimit);
   EXPECT_THAT(outputLimited.finish(), SizeIs(0));
@@ -581,6 +585,13 @@ TEST(GifEncoder, RejectsEncodedOutputAndWorkspaceAboveConfiguredLimits) {
   EXPECT_FALSE(workspaceLimited.addFrame(frame.rgba, 0, 1));
   EXPECT_EQ(workspaceLimited.error(), GifEncoder::Error::ResourceLimit);
   EXPECT_THAT(workspaceLimited.finish(), SizeIs(0));
+
+  GifEncoder repeatLimited({.width = 1, .height = 1, .maximumOutputBytes = 90});
+  const Image repeated(1, 1, 1, 2, 3);
+  ASSERT_TRUE(repeatLimited.addFrame(repeated.rgba, 0, 65000));
+  EXPECT_FALSE(repeatLimited.addFrame(repeated.rgba, 0, 1000));
+  EXPECT_EQ(repeatLimited.error(), GifEncoder::Error::ResourceLimit);
+  EXPECT_THAT(repeatLimited.finish(), SizeIs(0));
 }
 
 TEST(GifEncoder, RepeatsCroppedFrameWhoseMergedDelayOverflows) {
@@ -613,6 +624,11 @@ TEST(GifEncoder, RejectsInvalidInput) {
 
   GifEncoder tooWide({.width = 65536, .height = 1});
   EXPECT_FALSE(tooWide.addFrame(tiny.rgba, 0, 1));
+
+  GifEncoder outputBypass(
+      {.width = 1, .height = 1, .maximumOutputBytes = GifEncoder::kMaximumOutputBytes + 1});
+  EXPECT_EQ(outputBypass.error(), GifEncoder::Error::InvalidConfiguration);
+  EXPECT_FALSE(outputBypass.addFrame(tiny.rgba, 0, 1));
 
   // A stride whose size computation would overflow is rejected rather than wrapping.
   GifEncoder strided({.width = 1, .height = 2});

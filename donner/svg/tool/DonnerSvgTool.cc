@@ -77,7 +77,7 @@ struct CliOptions {
 constexpr int kMaxGifFrames = 10000;
 
 /// Upper bound on frames times canvas pixels for a GIF, bounding render and encode work.
-constexpr std::uint64_t kMaxGifTotalPixels = std::uint64_t{1} << 32;
+constexpr std::uint64_t kMaxGifTotalPixels = std::uint64_t{1} << 28;
 
 /// Longest GIF frame delay, in centiseconds; slower frame rates cannot be represented.
 constexpr double kMaxGifDelayCentiseconds = 65535.0;
@@ -809,30 +809,42 @@ int RenderAnimatedGif(const CliOptions& options, SVGDocument& document, Renderer
            "fps)\n";
   }
 
-  // Pin the canvas to its size at the first frame: the root element's width and height are
-  // animatable, and every GIF frame must have the logical screen's size. Animated values are
-  // applied when drawing, so draw the first frame before reading the size.
-  document.setTime(options.startSeconds);
-  renderer.draw(document);
+  // The caller has drawn --start to apply animated root dimensions, then applied size overrides.
+  // Admit that pinned size before the frame loop performs another render or snapshot allocation.
   const Vector2i gifSize = document.canvasSize();
-  if (gifSize.x > kMaxScaledDimension || gifSize.y > kMaxScaledDimension) {
-    err << "GIF canvas " << gifSize.x << "x" << gifSize.y << " exceeds the GIF limit of "
-        << kMaxScaledDimension << " pixels on a side\n";
+  // Explicit dimensions remain resource claims even if an animated root currently reports less.
+  const Vector2i admissionSize(std::max(gifSize.x, options.width),
+                               std::max(gifSize.y, options.height));
+  if (admissionSize.x > kMaxScaledDimension || admissionSize.y > kMaxScaledDimension) {
+    err << "GIF canvas " << admissionSize.x << "x" << admissionSize.y
+        << " exceeds the GIF limit of " << kMaxScaledDimension << " pixels on a side\n";
     return 4;
   }
   const std::uint64_t frameBytes =
-      static_cast<std::uint64_t>(gifSize.x) * static_cast<std::uint64_t>(gifSize.y) * 4;
+      static_cast<std::uint64_t>(admissionSize.x) * static_cast<std::uint64_t>(admissionSize.y) * 4;
   if (frameBytes > RendererSurfaceBudget::kMaximumBytes) {
-    err << "GIF canvas " << gifSize.x << "x" << gifSize.y << " needs " << frameBytes
+    err << "GIF canvas " << admissionSize.x << "x" << admissionSize.y << " needs " << frameBytes
         << " bytes per frame, above the renderer's surface budget of "
         << RendererSurfaceBudget::kMaximumBytes << " bytes\n";
     return 4;
   }
+  const std::optional<size_t> encoderWorkspace =
+      GifEncoder::WorkspaceUpperBound(admissionSize.x, admissionSize.y);
+  const std::uint64_t callerBuffers = frameBytes * 2;
+  if (!encoderWorkspace || *encoderWorkspace > GifEncoder::kMaximumWorkspaceBytes ||
+      callerBuffers > GifEncoder::kMaximumWorkspaceBytes - *encoderWorkspace) {
+    const std::uint64_t required =
+        encoderWorkspace ? static_cast<std::uint64_t>(*encoderWorkspace) + callerBuffers
+                         : std::numeric_limits<std::uint64_t>::max();
+    err << "GIF working set needs " << required << " bytes for renderer, fitted-frame and encoder "
+        << "buffers; the limit is " << GifEncoder::kMaximumWorkspaceBytes << " bytes\n";
+    return 4;
+  }
   const std::uint64_t totalPixels = static_cast<std::uint64_t>(frameCount) *
-                                    static_cast<std::uint64_t>(gifSize.x) *
-                                    static_cast<std::uint64_t>(gifSize.y);
+                                    static_cast<std::uint64_t>(admissionSize.x) *
+                                    static_cast<std::uint64_t>(admissionSize.y);
   if (totalPixels > kMaxGifTotalPixels) {
-    err << "GIF of " << frameCount << " frames at " << gifSize.x << "x" << gifSize.y
+    err << "GIF of " << frameCount << " frames at " << admissionSize.x << "x" << admissionSize.y
         << " would render " << totalPixels << " pixels; the limit is " << kMaxGifTotalPixels
         << "\n";
     return 4;
@@ -853,7 +865,12 @@ int RenderAnimatedGif(const CliOptions& options, SVGDocument& document, Renderer
     // An animated root aspect ratio can fit the document into less than the pinned canvas.
     const std::vector<uint8_t> pixels = FitFrameToCanvas(frame, gifSize);
     if (!encoder.addFrame(pixels, 0, delays[static_cast<size_t>(i)])) {
-      err << "Failed to encode GIF frame " << i << "\n";
+      if (encoder.error() == GifEncoder::Error::ResourceLimit) {
+        err << "Encoded GIF exceeds the " << GifEncoder::kMaximumOutputBytes
+            << "-byte output limit at frame " << i << "\n";
+      } else {
+        err << "Failed to encode GIF frame " << i << "\n";
+      }
       return 4;
     }
   }
@@ -865,7 +882,12 @@ int RenderAnimatedGif(const CliOptions& options, SVGDocument& document, Renderer
   const std::string displayPath =
       EscapeTerminalText(absoluteError ? options.gifFile : absolute.string());
   if (gif.empty()) {
-    err << "Failed to encode GIF: " << displayPath << "\n";
+    if (encoder.error() == GifEncoder::Error::ResourceLimit) {
+      err << "Encoded GIF exceeds the " << GifEncoder::kMaximumOutputBytes
+          << "-byte output limit: " << displayPath << "\n";
+    } else {
+      err << "Failed to encode GIF: " << displayPath << "\n";
+    }
     return 4;
   }
 

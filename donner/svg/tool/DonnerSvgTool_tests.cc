@@ -446,8 +446,8 @@ TEST_F(DonnerSvgToolFileTest, GifRejectsExcessiveTotalRenderWork) {
 
   std::ostringstream out;
   std::ostringstream err;
-  // 65 frames of a 2048x2048 canvas exceed the 2^28 sampled-pixel limit.
-  EXPECT_EQ(RunTool({"--gif", gifPath.string(), "--end", "65", "--fps", "1", "--width", "2048",
+  // 66 frames of a 2048x2048 canvas exceed the 2^28 sampled-pixel limit.
+  EXPECT_EQ(RunTool({"--gif", gifPath.string(), "--end", "66", "--fps", "1", "--width", "2048",
                      "--height", "2048", inputPath.string()},
                     &out, &err),
             4);
@@ -455,7 +455,7 @@ TEST_F(DonnerSvgToolFileTest, GifRejectsExcessiveTotalRenderWork) {
   EXPECT_FALSE(std::filesystem::exists(gifPath));
 }
 
-TEST_F(DonnerSvgToolFileTest, GifRejectsEncoderWorkingSetBeforeRenderingFrames) {
+TEST_F(DonnerSvgToolFileTest, GifRejectsEncoderWorkingSetAboveLimit) {
   const std::filesystem::path inputPath = WriteSvg("animated.svg", kAnimatedSvg);
   const std::filesystem::path gifPath = tmpDir_ / "large-working-set.gif";
 

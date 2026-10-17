@@ -8,9 +8,9 @@
 #include <cstdint>
 #include <limits>
 #include <optional>
+#include <ostream>
 #include <span>
 #include <string_view>
-#include <unordered_map>
 
 namespace donner::svg {
 namespace {
@@ -19,6 +19,12 @@ constexpr uint32_t kTransparentPixel = 0;
 constexpr uint32_t kOpaqueAlpha = 0xFF000000u;
 constexpr int kMaxLzwCodes = 4096;
 constexpr uint32_t kMaxDelayCentiseconds = std::numeric_limits<uint16_t>::max();
+constexpr size_t kGraphicControlBytes = 8;
+constexpr size_t kTrailerBytes = 1;
+// LZW hash tables use 48 KiB; palette boxes, tables, and vector-growth slack share the remainder.
+constexpr size_t kWorkspaceFixedBytes = 128 * 1024;
+constexpr size_t kBaseHeaderBytes = 32;
+constexpr size_t kTransparentGlobalTableBytes = 6;
 
 void WriteU16(std::vector<uint8_t>& out, uint32_t value) {
   out.push_back(static_cast<uint8_t>(value & 0xFF));
@@ -58,7 +64,7 @@ struct ColorCount {
  * pixels, otherwise the weighted mean; this keeps large flat regions bit-exact even when they
  * share a box with their anti-aliased edge colors.
  */
-std::vector<uint32_t> MedianCut(std::vector<ColorCount> colors, size_t maxColors) {
+std::vector<uint32_t> MedianCut(std::vector<ColorCount>& colors, size_t maxColors) {
   struct Box {
     size_t begin = 0;
     size_t end = 0;
@@ -117,7 +123,8 @@ std::vector<uint32_t> MedianCut(std::vector<ColorCount> colors, size_t maxColors
     std::sort(colors.begin() + static_cast<std::ptrdiff_t>(box.begin),
               colors.begin() + static_cast<std::ptrdiff_t>(box.end),
               [&](const ColorCount& a, const ColorCount& b) {
-                return channel(a.rgb, shift) < channel(b.rgb, shift);
+                const int channelDifference = channel(a.rgb, shift) - channel(b.rgb, shift);
+                return channelDifference != 0 ? channelDifference < 0 : a.rgb < b.rgb;
               });
 
     // Split after the color that reaches half of the box weight, keeping both halves non-empty.
@@ -145,7 +152,8 @@ std::vector<uint32_t> MedianCut(std::vector<ColorCount> colors, size_t maxColors
     const ColorCount* dominant = &colors[box.begin];
     std::array<uint64_t, 3> sums = {0, 0, 0};
     for (size_t i = box.begin; i < box.end; ++i) {
-      if (colors[i].count > dominant->count) {
+      if (colors[i].count > dominant->count ||
+          (colors[i].count == dominant->count && colors[i].rgb < dominant->rgb)) {
         dominant = &colors[i];
       }
       sums[0] += uint64_t{Red(colors[i].rgb)} * colors[i].count;
@@ -389,8 +397,8 @@ void ForEachPixel(const std::vector<uint32_t>& pixels, size_t width, const Pixel
 /// A frame's color table and the table index of each of its opaque colors.
 struct FramePalette {
   std::vector<uint32_t> colors;
-  /// Maps each opaque RGB color in the frame to its index in \ref colors.
-  std::unordered_map<uint32_t, uint32_t> indexOf;
+  /// Canonically RGB-sorted colors whose count field holds their index in \ref colors.
+  std::vector<ColorCount> indexOf;
 };
 
 /// Choose at most \p maxColors table entries for the opaque pixels of \p rect, exactly when they
@@ -398,39 +406,53 @@ struct FramePalette {
 FramePalette BuildPalette(const std::vector<uint32_t>& pixels, size_t width, const PixelRect& rect,
                           size_t maxColors) {
   FramePalette palette;
-  // The histogram counts are replaced by palette indices once the table is chosen.
-  std::unordered_map<uint32_t, uint32_t>& histogram = palette.indexOf;
+  std::vector<ColorCount>& histogram = palette.indexOf;
+  histogram.reserve(static_cast<size_t>(rect.width) * static_cast<size_t>(rect.height));
   ForEachPixel(pixels, width, rect, [&histogram](uint32_t argb) {
     if (argb != kTransparentPixel) {
-      ++histogram[argb & 0xFFFFFFu];
+      histogram.push_back({argb & 0xFFFFFFu, 1});
     }
   });
+  std::sort(histogram.begin(), histogram.end(),
+            [](const ColorCount& a, const ColorCount& b) { return a.rgb < b.rgb; });
+  size_t distinct = 0;
+  for (const ColorCount color : histogram) {
+    if (distinct > 0 && histogram[distinct - 1].rgb == color.rgb) {
+      ++histogram[distinct - 1].count;
+    } else {
+      histogram[distinct++] = color;
+    }
+  }
+  histogram.resize(distinct);
 
   if (histogram.size() <= maxColors) {
-    for (const auto& [rgb, count] : histogram) {
-      palette.colors.push_back(rgb);
+    for (const ColorCount color : histogram) {
+      palette.colors.push_back(color.rgb);
     }
-    std::sort(palette.colors.begin(), palette.colors.end());
   } else {
-    std::vector<ColorCount> colors;
-    colors.reserve(histogram.size());
-    for (const auto& [rgb, count] : histogram) {
-      colors.push_back({rgb, count});
-    }
-    palette.colors = MedianCut(std::move(colors), maxColors);
+    palette.colors = MedianCut(histogram, maxColors);
   }
 
-  for (auto& [rgb, index] : histogram) {
-    index = NearestIndex(palette.colors, rgb);
+  for (ColorCount& color : histogram) {
+    color.count = NearestIndex(palette.colors, color.rgb);
   }
+  std::sort(histogram.begin(), histogram.end(),
+            [](const ColorCount& a, const ColorCount& b) { return a.rgb < b.rgb; });
   return palette;
+}
+
+uint8_t PaletteIndex(const FramePalette& palette, uint32_t rgb) {
+  const auto found =
+      std::lower_bound(palette.indexOf.begin(), palette.indexOf.end(), rgb,
+                       [](const ColorCount& color, uint32_t key) { return color.rgb < key; });
+  return static_cast<uint8_t>(found->count);
 }
 
 /// Write the image descriptor, local color table and LZW data for \p rect of \p pixels.
 std::vector<uint8_t> EncodeImageBlock(const std::vector<uint32_t>& pixels, size_t width,
                                       const PixelRect& rect, const FramePalette& palette,
                                       bool hasTransparency) {
-  const auto transparentIndex = static_cast<uint8_t>(palette.colors.size());
+  constexpr uint8_t kTransparentIndex = 0;
   const size_t tableEntries = palette.colors.size() + (hasTransparency ? 1 : 0);
   int tableBits = 1;
   while ((size_t{1} << tableBits) < tableEntries) {
@@ -440,13 +462,14 @@ std::vector<uint8_t> EncodeImageBlock(const std::vector<uint32_t>& pixels, size_
   std::vector<uint8_t> indices;
   indices.reserve(static_cast<size_t>(rect.width) * static_cast<size_t>(rect.height));
   uint32_t lastColor = kTransparentPixel;
-  uint8_t lastIndex = transparentIndex;
+  uint8_t lastIndex = kTransparentIndex;
   ForEachPixel(pixels, width, rect, [&](uint32_t argb) {
     if (argb != lastColor) {
       lastColor = argb;
       lastIndex = argb == kTransparentPixel
-                      ? transparentIndex
-                      : static_cast<uint8_t>(palette.indexOf.find(argb & 0xFFFFFFu)->second);
+                      ? kTransparentIndex
+                      : static_cast<uint8_t>(PaletteIndex(palette, argb & 0xFFFFFFu) +
+                                             (hasTransparency ? 1 : 0));
     }
     indices.push_back(lastIndex);
   });
@@ -459,7 +482,10 @@ std::vector<uint8_t> EncodeImageBlock(const std::vector<uint32_t>& pixels, size_
   WriteU16(data, static_cast<uint32_t>(rect.height));
   data.push_back(static_cast<uint8_t>(0x80 | (tableBits - 1)));  // Local color table present.
   for (size_t i = 0; i < (size_t{1} << tableBits); ++i) {
-    const uint32_t rgb = i < palette.colors.size() ? palette.colors[i] : 0;
+    const size_t paletteIndex = hasTransparency && i > 0 ? i - 1 : i;
+    const uint32_t rgb = (!hasTransparency || i > 0) && paletteIndex < palette.colors.size()
+                             ? palette.colors[paletteIndex]
+                             : 0;
     data.push_back(Red(rgb));
     data.push_back(Green(rgb));
     data.push_back(Blue(rgb));
@@ -467,27 +493,87 @@ std::vector<uint8_t> EncodeImageBlock(const std::vector<uint32_t>& pixels, size_
   WriteLzw(data, indices, std::max(2, tableBits));
   return data;
 }
+
+bool ResourceLimitsValid(const GifEncoder::Options& options) {
+  return options.maximumOutputBytes > 0 &&
+         options.maximumOutputBytes <= GifEncoder::kMaximumOutputBytes &&
+         options.maximumWorkspaceBytes > 0 &&
+         options.maximumWorkspaceBytes <= GifEncoder::kMaximumWorkspaceBytes;
+}
+
+bool DimensionsValid(const GifEncoder::Options& options) {
+  return options.width > 0 && options.height > 0 && options.width <= 0xFFFF &&
+         options.height <= 0xFFFF &&
+         static_cast<std::uint64_t>(options.width) * static_cast<std::uint64_t>(options.height) <=
+             std::numeric_limits<size_t>::max() / sizeof(uint32_t);
+}
+
+size_t HeaderBytes(const GifEncoder::Options& options) {
+  return kBaseHeaderBytes + (options.background ? 0 : kTransparentGlobalTableBytes);
+}
 }  // namespace
 
+std::optional<size_t> GifEncoder::WorkspaceUpperBound(int width, int height) {
+  if (width <= 0 || height <= 0 || width > 0xFFFF || height > 0xFFFF) {
+    return std::nullopt;
+  }
+  const uint64_t pixels = static_cast<uint64_t>(width) * static_cast<uint64_t>(height);
+  // Current and previous resolved pixels (8), sortable ColorCount entries (8), palette indices
+  // (1), and retained plus transiently growing encoded blocks (up to 7) total 24 bytes per pixel.
+  constexpr uint64_t kBytesPerPixel = 24;
+  const uint64_t bytes = pixels * kBytesPerPixel + kWorkspaceFixedBytes;
+  if (bytes > std::numeric_limits<size_t>::max()) {
+    return std::nullopt;
+  }
+  return static_cast<size_t>(bytes);
+}
+
 GifEncoder::GifEncoder(const Options& options) : options_(options) {
+  if (!ResourceLimitsValid(options)) {
+    error_ = Error::InvalidConfiguration;
+    return;
+  }
+
   // The frame buffers hold width * height 32-bit pixels, which must be addressable.
-  valid_ = options.width > 0 && options.height > 0 && options.width <= 0xFFFF &&
-           options.height <= 0xFFFF &&
-           static_cast<std::uint64_t>(options.width) * static_cast<std::uint64_t>(options.height) <=
-               std::numeric_limits<size_t>::max() / sizeof(uint32_t);
-  if (!valid_) {
+  if (!DimensionsValid(options)) {
+    error_ = Error::InvalidConfiguration;
+    return;
+  }
+  const std::optional<size_t> workspace = WorkspaceUpperBound(options.width, options.height);
+  if (!workspace || *workspace > options.maximumWorkspaceBytes) {
+    error_ = Error::ResourceLimit;
+    valid_ = false;
+    return;
+  }
+  valid_ = true;
+  const size_t headerBytes = HeaderBytes(options);
+  if (headerBytes > options.maximumOutputBytes - kTrailerBytes) {
+    error_ = Error::ResourceLimit;
+    valid_ = false;
+    return;
+  }
+  out_.reserve(headerBytes);
+  if (out_.capacity() > options.maximumOutputBytes) {
+    error_ = Error::ResourceLimit;
+    valid_ = false;
+    std::vector<uint8_t>().swap(out_);
     return;
   }
 
   const std::string_view header = "GIF89a";
   out_.insert(out_.end(), header.begin(), header.end());
 
-  // Logical screen descriptor without a global color table; every frame has a local table.
+  // Every frame has a local table; transparent output also defines a minimal global clear table.
   WriteU16(out_, static_cast<uint32_t>(options.width));
   WriteU16(out_, static_cast<uint32_t>(options.height));
-  out_.push_back(0x00);  // Packed fields: no global color table.
-  out_.push_back(0x00);  // Background color index.
-  out_.push_back(0x00);  // Pixel aspect ratio: unspecified (square).
+  out_.push_back(options.background ? 0x00 : 0x80);  // Transparent GIFs define a 2-entry GCT.
+  out_.push_back(0x00);                              // Background color index.
+  out_.push_back(0x00);                              // Pixel aspect ratio: unspecified (square).
+  if (!options.background) {
+    // Compatibility convention: global and local index 0 are consistently reserved for clearing
+    // transparent frames. Independent stb_image coverage verifies multi-frame alpha behavior.
+    out_.insert(out_.end(), 6, 0);
+  }
 
   // NETSCAPE2.0 application extension: repeat count.
   const std::string_view netscape = "NETSCAPE2.0";
@@ -503,64 +589,104 @@ GifEncoder::GifEncoder(const Options& options) : options_(options) {
 
 bool GifEncoder::addFrame(std::span<const uint8_t> rgbaPixels, size_t strideInPixels,
                           uint16_t delayCentiseconds) {
-  if (!valid_ || finished_) {
+  size_t stride = 0;
+  if (!validateFrameInput(rgbaPixels, strideInPixels, &stride)) {
     return false;
   }
 
   const auto width = static_cast<size_t>(options_.width);
   const auto height = static_cast<size_t>(options_.height);
-  const size_t stride = strideInPixels == 0 ? width : strideInPixels;
-  if (!PixelSpanFits(rgbaPixels.size(), width, height, stride)) {
-    return false;
-  }
-
   std::vector<uint32_t> current =
       ResolveAlpha(rgbaPixels, width, height, stride, options_.background);
   if (pending_ && current == previous_) {
-    extendPendingDelay(delayCentiseconds);
-    return true;
+    return extendPendingDelay(delayCentiseconds);
   }
 
   const PixelRect rect = StoredRect(options_, pending_.has_value() ? &previous_ : nullptr, current);
-  // Disposal 2 restores the logical screen background, which has no color without a global
-  // table, so every frame of a transparent GIF defines a transparent index for it to restore.
   const bool transparent = !options_.background.has_value();
   const FramePalette palette = BuildPalette(current, width, rect, transparent ? 255 : 256);
 
   PendingFrame frame;
   frame.disposal = transparent ? 2 : 1;
   frame.transparent = transparent;
-  frame.transparentIndex = transparent ? static_cast<uint8_t>(palette.colors.size()) : 0;
+  frame.transparentIndex = 0;
   frame.delayCentiseconds = delayCentiseconds;
   frame.encoded = EncodeImageBlock(current, width, rect, palette, transparent);
+  return commitFrame(std::move(frame), std::move(current));
+}
 
-  flushPending();
-  pending_ = std::move(frame);
-  previous_ = std::move(current);
-  ++storedFrameCount_;
+bool GifEncoder::validateFrameInput(std::span<const uint8_t> rgbaPixels, size_t strideInPixels,
+                                    size_t* stride) {
+  if (!valid_ || finished_) {
+    if (finished_) {
+      error_ = Error::Finished;
+    }
+    return false;
+  }
+
+  const auto width = static_cast<size_t>(options_.width);
+  const auto height = static_cast<size_t>(options_.height);
+  *stride = strideInPixels == 0 ? width : strideInPixels;
+  if (!PixelSpanFits(rgbaPixels.size(), width, height, *stride)) {
+    error_ = Error::InvalidFrame;
+    return false;
+  }
   return true;
 }
 
-void GifEncoder::extendPendingDelay(uint16_t delayCentiseconds) {
+bool GifEncoder::commitFrame(PendingFrame frame, std::vector<uint32_t> current) {
+  const size_t pendingBytes = pending_ ? kGraphicControlBytes + pending_->encoded.size() : 0;
+  if (frame.encoded.size() > std::numeric_limits<size_t>::max() - kGraphicControlBytes ||
+      pendingBytes >
+          std::numeric_limits<size_t>::max() - kGraphicControlBytes - frame.encoded.size() ||
+      !outputFits(pendingBytes + kGraphicControlBytes + frame.encoded.size())) {
+    return fail(Error::ResourceLimit);
+  }
+  if (!flushPending()) {
+    return false;
+  }
+  pending_ = std::move(frame);
+  previous_ = std::move(current);
+  ++storedFrameCount_;
+  error_ = Error::None;
+  return true;
+}
+
+bool GifEncoder::extendPendingDelay(uint16_t delayCentiseconds) {
   const uint32_t total = pending_->delayCentiseconds + delayCentiseconds;
   if (total <= kMaxDelayCentiseconds) {
     pending_->delayCentiseconds = total;
-    return;
+    error_ = Error::None;
+    return true;
   }
 
   // Re-drawing the same frame is idempotent under both disposal methods used here, so the
   // overflow is carried by a repeat of the pending frame.
   PendingFrame repeat = *pending_;
+  if (repeat.encoded.size() > (std::numeric_limits<size_t>::max() - 2 * kGraphicControlBytes) / 2 ||
+      !outputFits(2 * kGraphicControlBytes + 2 * repeat.encoded.size())) {
+    return fail(Error::ResourceLimit);
+  }
   pending_->delayCentiseconds = kMaxDelayCentiseconds;
-  flushPending();
+  if (!flushPending()) {
+    return false;
+  }
   repeat.delayCentiseconds = total - kMaxDelayCentiseconds;
   pending_ = std::move(repeat);
   ++storedFrameCount_;
+  error_ = Error::None;
+  return true;
 }
 
-void GifEncoder::flushPending() {
+bool GifEncoder::flushPending() {
   if (!pending_) {
-    return;
+    return true;
+  }
+  if (pending_->encoded.size() > std::numeric_limits<size_t>::max() - kGraphicControlBytes) {
+    return fail(Error::ResourceLimit);
+  }
+  if (!reserveOutput(kGraphicControlBytes + pending_->encoded.size())) {
+    return false;
   }
 
   // Graphic control extension.
@@ -574,17 +700,62 @@ void GifEncoder::flushPending() {
 
   out_.insert(out_.end(), pending_->encoded.begin(), pending_->encoded.end());
   pending_.reset();
+  return true;
+}
+
+bool GifEncoder::outputFits(size_t additional) const {
+  return additional <= options_.maximumOutputBytes &&
+         out_.size() <= options_.maximumOutputBytes - additional &&
+         out_.size() + additional <= options_.maximumOutputBytes - kTrailerBytes;
+}
+
+bool GifEncoder::reserveOutput(size_t additional) {
+  if (!outputFits(additional)) {
+    return fail(Error::ResourceLimit);
+  }
+  const size_t required = out_.size() + additional;
+  if (required > out_.capacity()) {
+    out_.reserve(required);
+    if (out_.capacity() > options_.maximumOutputBytes) {
+      return fail(Error::ResourceLimit);
+    }
+  }
+  return true;
+}
+
+bool GifEncoder::fail(Error error) {
+  error_ = error;
+  valid_ = false;
+  storedFrameCount_ = 0;
+  pending_.reset();
+  previous_.clear();
+  std::vector<uint8_t>().swap(out_);
+  return false;
 }
 
 std::vector<uint8_t> GifEncoder::finish() {
   if (!valid_ || finished_ || storedFrameCount_ == 0) {
     finished_ = true;
+    pending_.reset();
+    out_.clear();
     return {};
   }
 
   finished_ = true;
-  flushPending();
+  if (!flushPending() || !outputFits(0)) {
+    pending_.reset();
+    out_.clear();
+    return {};
+  }
+  if (out_.size() + kTrailerBytes > out_.capacity()) {
+    out_.reserve(out_.size() + kTrailerBytes);
+    if (out_.capacity() > options_.maximumOutputBytes) {
+      fail(Error::ResourceLimit);
+      return {};
+    }
+  }
   out_.push_back(0x3B);
+  error_ = Error::None;
   return std::move(out_);
 }
 
@@ -609,6 +780,17 @@ std::vector<uint16_t> GifEncoder::FrameDelaysCentiseconds(double fps, int frameC
     delays.push_back(static_cast<uint16_t>(boundary(i + 1) - boundary(i)));
   }
   return delays;
+}
+
+std::ostream& operator<<(std::ostream& out, GifEncoder::Error error) {
+  switch (error) {
+    case GifEncoder::Error::None: return out << "None";
+    case GifEncoder::Error::InvalidConfiguration: return out << "InvalidConfiguration";
+    case GifEncoder::Error::InvalidFrame: return out << "InvalidFrame";
+    case GifEncoder::Error::ResourceLimit: return out << "ResourceLimit";
+    case GifEncoder::Error::Finished: return out << "Finished";
+  }
+  return out << "Unknown";
 }
 
 }  // namespace donner::svg
