@@ -142,6 +142,7 @@ public:
     os << "Specificity(";
     switch (obj.special_) {
       case SpecialType::StyleAttribute: return os << "style)";
+      case SpecialType::Animation: return os << "animation)";
       case SpecialType::ImportantStyleAttribute: return os << "style !important)";
       case SpecialType::Override: return os << "override)";
       case SpecialType::UserAgent: os << "user-agent, "; break;
