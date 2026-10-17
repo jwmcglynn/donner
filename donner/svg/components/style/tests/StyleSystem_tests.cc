@@ -875,13 +875,15 @@ TEST_F(StyleSystemTest, EmptySelectorUsesAuthoredChildrenAfterShadowInstantiatio
     const std::vector<Entity> proxies = shadow.mainBranch->shadowEntities;
     bool testedNested = false;
     for (const Entity entity : proxies) {
-      if (document.registry().get<ShadowEntityComponent>(entity).lightEntity != nested.entity()) {
+      if (document.registry().get<ShadowEntityComponent>(entity).lightEntity !=
+          nested.entityHandle().entity()) {
         continue;
       }
       EntityHandle nestedProxy(document.registry(), entity);
       auto& nestedShadow = nestedProxy.get_or_emplace<ComputedShadowTreeComponent>();
       ShadowTreeSystem().populateInstance(nestedProxy, nestedShadow, ShadowBranchType::Main,
-                                          leaf.entity(), RcString("#leaf"), warnings);
+                                          leaf.entityHandle().entity(), RcString("#leaf"),
+                                          warnings);
       ASSERT_THAT(nestedShadow.mainBranch, testing::Optional(testing::_));
       const auto& nestedProperties = styleSystem.computeStyle(nestedProxy, warnings).properties;
       ASSERT_THAT(nestedProperties, testing::Optional(testing::_));
