@@ -100,6 +100,18 @@ TEST(SVGAnimateTransformElement, ParseTranslate) {
   EXPECT_EQ(comp.type, components::TransformAnimationType::Translate);
 }
 
+TEST(SVGAnimateTransformElement, HrefPrecedesXlinkHref) {
+  auto document = parseSVGWithExperimental(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+      <rect id="primary"/><rect id="legacy"/>
+      <animateTransform href="#primary" xlink:href="#legacy" attributeName="transform"
+                        type="translate" from="0" to="100" dur="2s"/>
+    </svg>)svg");
+  EXPECT_THAT(getAnimatedTransform(document, "#primary", 1),
+              testing::Optional(testing::StrEq("translate(50, 0)")));
+  EXPECT_THAT(getAnimatedTransform(document, "#legacy", 1), testing::Eq(std::nullopt));
+}
+
 TEST(SVGAnimateTransformElement, ParseScale) {
   auto document = parseSVGWithExperimental(R"(
     <svg xmlns="http://www.w3.org/2000/svg">

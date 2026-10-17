@@ -21,9 +21,10 @@ SVGDocument ParseMotion(std::string_view source) {
   return std::move(parsed.result());
 }
 
-std::optional<std::string> MotionAt(SVGDocument& document, double time) {
+std::optional<std::string> MotionAt(SVGDocument& document, double time,
+                                    std::string_view selector = "#r") {
   components::AnimationSystem().advance(document.registry(), time);
-  const auto target = document.querySelector("#r");
+  const auto target = document.querySelector(selector);
   if (!target) {
     return std::nullopt;
   }
@@ -65,6 +66,7 @@ TEST(SVGAnimateMotionElement, MpathHrefPrecedesXlinkHrefIncludingEmptyAndMutatio
   auto document = ParseMotion(R"svg(
     <svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
       <path id="primary" d="M0 0V100"/><path id="legacy" d="M0 0H100"/>
+      <path id="replacement" d="M0 0L100 100"/>
       <rect id="r"><animateMotion dur="2s"><mpath id="reference"
         href="#primary" xlink:href="#legacy"/></animateMotion></rect>
     </svg>)svg");
@@ -76,15 +78,30 @@ TEST(SVGAnimateMotionElement, MpathHrefPrecedesXlinkHrefIncludingEmptyAndMutatio
 
   EXPECT_EQ(href(), "#primary");
   EXPECT_THAT(MotionAt(document, 1), testing::Optional(testing::StrEq("translate(0, 50)")));
+  reference->setAttribute({"xlink", "href"}, "#replacement");
+  EXPECT_THAT(MotionAt(document, 1), testing::Optional(testing::StrEq("translate(0, 50)")));
+  EXPECT_EQ(href(), "#primary");
   reference->setAttribute("href", "");
   EXPECT_THAT(MotionAt(document, 1), testing::Eq(std::nullopt));
   EXPECT_THAT(href(), testing::IsEmpty());
   reference->removeAttribute("href");
-  EXPECT_THAT(MotionAt(document, 1), testing::Optional(testing::StrEq("translate(50, 0)")));
-  EXPECT_EQ(href(), "#legacy");
+  EXPECT_THAT(MotionAt(document, 1), testing::Optional(testing::StrEq("translate(50, 50)")));
+  EXPECT_EQ(href(), "#replacement");
   reference->setAttribute("href", "#primary");
   EXPECT_THAT(MotionAt(document, 1), testing::Optional(testing::StrEq("translate(0, 50)")));
   EXPECT_EQ(href(), "#primary");
+}
+
+TEST(SVGAnimateMotionElement, AnimationHrefPrecedesXlinkHref) {
+  auto document = ParseMotion(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+      <rect id="primary"/><rect id="legacy"/>
+      <animateMotion href="#primary" xlink:href="#legacy"
+                     from="0 0" to="100 0" dur="2s"/>
+    </svg>)svg");
+  EXPECT_THAT(MotionAt(document, 1, "#primary"),
+              testing::Optional(testing::StrEq("translate(50, 0)")));
+  EXPECT_THAT(MotionAt(document, 1, "#legacy"), testing::Eq(std::nullopt));
 }
 
 TEST(SVGAnimateMotionElement, KeyPointsAndTimesControlPathProgress) {

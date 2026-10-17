@@ -104,6 +104,7 @@ TEST(SVGSetElement, HrefPrecedesXlinkHrefIncludingEmptyAndMutationFallback) {
   auto document = parseSVGWithExperimental(R"svg(
     <svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
       <rect id="primary" width="10"/><rect id="legacy" width="20"/>
+      <rect id="replacement" width="30"/>
       <set id="animation" href="#primary" xlink:href="#legacy"
            attributeName="width" to="40" dur="2s"/>
     </svg>)svg");
@@ -118,15 +119,21 @@ TEST(SVGSetElement, HrefPrecedesXlinkHrefIncludingEmptyAndMutationFallback) {
               testing::Optional(testing::StrEq("40")));
   EXPECT_THAT(AnimatedOverride(document, "#legacy", "width", 1), testing::Eq(std::nullopt));
 
+  animation->setAttribute({"xlink", "href"}, "#replacement");
+  EXPECT_THAT(AnimatedOverride(document, "#primary", "width", 1),
+              testing::Optional(testing::StrEq("40")));
+  EXPECT_THAT(AnimatedOverride(document, "#replacement", "width", 1), testing::Eq(std::nullopt));
+  EXPECT_THAT(href(), testing::Optional(testing::StrEq("#primary")));
+
   animation->setAttribute("href", "");
   EXPECT_THAT(AnimatedOverride(document, "#primary", "width", 1), testing::Eq(std::nullopt));
   EXPECT_THAT(AnimatedOverride(document, "#legacy", "width", 1), testing::Eq(std::nullopt));
   EXPECT_THAT(href(), testing::Optional(testing::IsEmpty()));
 
   animation->removeAttribute("href");
-  EXPECT_THAT(AnimatedOverride(document, "#legacy", "width", 1),
+  EXPECT_THAT(AnimatedOverride(document, "#replacement", "width", 1),
               testing::Optional(testing::StrEq("40")));
-  EXPECT_THAT(href(), testing::Optional(testing::StrEq("#legacy")));
+  EXPECT_THAT(href(), testing::Optional(testing::StrEq("#replacement")));
 
   animation->setAttribute("href", "#primary");
   EXPECT_THAT(AnimatedOverride(document, "#primary", "width", 1),
