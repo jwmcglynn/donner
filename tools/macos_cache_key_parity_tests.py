@@ -450,7 +450,7 @@ class MacosCacheKeyParityTest(unittest.TestCase):
                 "{version}", version).replace("{build}", build), encoding="utf-8")
             xcodebuild.chmod(0o755)
             locator = root / "xcode-locator"
-            locator.write_text("#!/bin/sh\nexit %d\n" % locator_status, encoding="utf-8")
+            locator.write_text("#!/bin/sh\nexit %d\n" % (locator_status or 0), encoding="utf-8")
             locator.chmod(0o755)
             env_file, output_file = root / "env", root / "output"
             env_file.write_text("")
@@ -463,7 +463,7 @@ class MacosCacheKeyParityTest(unittest.TestCase):
                      "GITHUB_OUTPUT": str(output_file), "RUNNER_ARCH": "ARM64",
                      "BAZEL_MACOS_BUILD_FLAGS": "--config=ci-macos",
                      "XCODE_APPLICATIONS_DIR": str(root), "XCODEBUILD": str(xcodebuild),
-                     "XCODE_LOCATOR": str(locator)},
+                     "XCODE_LOCATOR": str(locator) if locator_status is not None else ""},
                 capture_output=True, text=True, timeout=test_timing.STALL_GUARD_SECONDS,
                 check=False)
             return (result.returncode, env_file.read_text(), output_file.read_text(),
@@ -507,6 +507,15 @@ class MacosCacheKeyParityTest(unittest.TestCase):
                     self.assertEqual("cache_partition=\n", output)
                     self.assertIn("::error::" if mode == "--required" else "::warning::", log)
                     self.assertIn("cannot be discovered" if status == 1 else "probe failed", log)
+
+    def test_probe_sdk_failure_keeps_diagnostics_before_scratch_cleanup(self):
+        for mode in ("--required", "--optional"):
+            with self.subTest(mode=mode):
+                code, _, _, log, *_ = self._select(
+                    mode, "Xcode {version}\nBuild version {build}", locator_status=None)
+                self.assertEqual(1 if mode == "--required" else 0, code, log)
+                self.assertRegex(log, r"Xcode discovery probe diagnostics \(sdk.log\):\n[^\n]+")
+                self.assertIn("could not be built", log)
 
     def test_select_script_rejects_an_unknown_mode(self):
         result = subprocess.run(["/bin/bash", str(_path(SELECT_SCRIPT))], capture_output=True,

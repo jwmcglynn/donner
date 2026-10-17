@@ -52,12 +52,18 @@ if [[ "${installed}" == "true" ]]; then
     scratch="$(mktemp -d "${TMPDIR:-/tmp}/donner-xcode-locator.XXXXXX")"
     trap 'rm -rf "${scratch}"' EXIT
     locator="${scratch}/xcode-locator"
-    sdk_root="$(DEVELOPER_DIR="${developer_dir}" /usr/bin/perl -e 'alarm 30; exec @ARGV' /usr/bin/xcrun --sdk macosx --show-sdk-path 2>/dev/null || true)"
+    sdk_root="$(DEVELOPER_DIR="${developer_dir}" /usr/bin/perl -e 'alarm 30; exec @ARGV' /usr/bin/xcrun --sdk macosx --show-sdk-path 2>"${scratch}/sdk.log" || true)"
     if [[ -z "${sdk_root}" ]] || ! env -u SDKROOT DEVELOPER_DIR="${developer_dir}" \
         /usr/bin/perl -e 'alarm 30; exec @ARGV' /usr/bin/xcrun clang -fobjc-arc -isysroot "${sdk_root}" \
         -framework Foundation -framework CoreServices \
         "$(dirname "${BASH_SOURCE[0]}")/ci_xcode_discoverable.m" -o "${locator}" \
         >"${scratch}/compile.log" 2>&1; then
+      for diagnostic in "${scratch}/sdk.log" "${scratch}/compile.log"; do
+        if [[ -s "${diagnostic}" ]]; then
+          echo "Xcode discovery probe diagnostics (${diagnostic##*/}):" >&2
+          cat "${diagnostic}" >&2
+        fi
+      done
       installed=false
       unavailable_reason="could not be checked because the Xcode discovery probe could not be built"
     fi
