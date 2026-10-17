@@ -17,6 +17,7 @@
 #include "donner/svg/SVGMetadataElement.h"
 #include "donner/svg/SVGQuerySelector.h"
 #include "donner/svg/SVGRectElement.h"
+#include "donner/svg/SVGSVGElement.h"
 #include "donner/svg/SVGStyleElement.h"
 #include "donner/svg/SVGTextElement.h"
 #include "donner/svg/SVGTitleElement.h"
@@ -131,7 +132,7 @@ TEST_F(SVGElementTests, EmptySelectorRetainsGenericAndDescriptiveText) {
 
 TEST_F(SVGElementTests, EmptySelectorDoesNotCountTheUserAgentStylesheet) {
   auto doc = parseSVG(R"(<svg xmlns="http://www.w3.org/2000/svg"/>)");
-  EXPECT_TRUE(doc.querySelector("svg:empty").has_value());
+  EXPECT_TRUE(doc.svgElement().isEmptyForSelector(nullptr));
 }
 
 TEST_F(SVGElementTests, EmptySelectorTextChangesInvalidateNonlocalStyles) {

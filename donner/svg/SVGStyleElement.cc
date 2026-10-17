@@ -30,7 +30,7 @@ void SVGStyleElement::setContents(std::string_view style) {
     return;
   }
 
-  handle_.remove<components::ProjectedNonWhitespaceTextTag>(access);
+  components::ResetSelectorTextContent(unsafeEntityHandle());
   stylesheetComponent.parseStylesheet(style);
   components::RenderingContext(*handle_.registry()).invalidateRenderTree();
 }
