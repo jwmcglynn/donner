@@ -419,6 +419,38 @@ TEST(SVGDocument, EmptySelectorPreservesAndRefreshesProjectedGenericText) {
   EXPECT_FALSE(document.querySelector("#data:empty").has_value());
 }
 
+TEST(SVGDocument, EmptySelectorTextAuthoritySurvivesSourceAndTypedEdits) {
+  auto document = ParseSVG(R"svg(<svg xmlns="http://www.w3.org/2000/svg">
+    <text id="text">initial</text><title id="title">title</title>
+  </svg>)svg");
+  auto replacement = ReplaceInSource(document, "initial", "new<!--c--><![CDATA[word]]>");
+  ASSERT_TRUE(replacement.applied);
+  ASSERT_FALSE(replacement.diagnostic.has_value());
+  auto text = document.querySelector("#text")->cast<SVGTextElement>();
+  auto node = xml::XMLNode::TryCast(text.unsafeEntityHandle()).value();
+  for (auto child = node.firstChild(); child; child = child->nextSibling()) {
+    if (child->type() == xml::XMLNode::Type::Data || child->type() == xml::XMLNode::Type::CData) {
+      child->setValue(" ");
+    }
+  }
+  EXPECT_TRUE(text.isEmptyForSelector(nullptr));
+  text.appendText(" ");
+  EXPECT_TRUE(text.isEmptyForSelector(nullptr));
+  text.appendText("append");
+  EXPECT_FALSE(text.isEmptyForSelector(nullptr));
+  text.appendText("");
+  EXPECT_FALSE(text.isEmptyForSelector(nullptr));
+  text.setTextContent("");
+  EXPECT_TRUE(text.isEmptyForSelector(nullptr));
+  replacement = ReplaceInSource(document, "title</title>", "new<![CDATA[word]]></title>");
+  ASSERT_TRUE(replacement.applied);
+  ASSERT_FALSE(replacement.diagnostic.has_value());
+  auto title = document.querySelector("#title")->cast<SVGTitleElement>();
+  EXPECT_FALSE(title.isEmptyForSelector(nullptr));
+  title.setTextContent("");
+  EXPECT_TRUE(title.isEmptyForSelector(nullptr));
+}
+
 TEST(SVGDocument, ApplySourceEditProjectsTextMutation) {
   auto document =
       ParseSVG(R"(<svg xmlns="http://www.w3.org/2000/svg"><text id="label">hello</text></svg>)");
