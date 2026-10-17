@@ -75,16 +75,19 @@ std::optional<std::string> getAnimatedValue(SVGDocument& document, const char* s
     }
     return paint->get<PaintServer::Solid>().color.resolve(css::RGBA::RGB(0, 0, 0), 1).toHexString();
   }
-  const bool supportedRectLength = element->type() == ElementType::Rect &&
-                                   (attributeName == "width" || attributeName == "height");
+  const bool supportedRectLength =
+      element->type() == ElementType::Rect &&
+      (attributeName == "x" || attributeName == "width" || attributeName == "height");
   if (supportedRectLength && animValues->contextualLengths.contains(attributeName)) {
     const auto recipe = animValues->contextualLengths.at(attributeName);
     const auto rect = element->cast<SVGRectElement>();
     auto& budget = registry.ctx().get<components::AnimationResourceBudget>();
     auto context = components::AnimationContextFor(registry, element->entityHandle().entity(),
                                                    attributeName, budget);
-    context.extent = attributeName == "width" ? Lengthd::Extent::X : Lengthd::Extent::Y;
-    const Lengthd underlying = attributeName == "width" ? rect.width() : rect.height();
+    context.extent = attributeName == "height" ? Lengthd::Extent::Y : Lengthd::Extent::X;
+    const Lengthd underlying = attributeName == "x"       ? rect.x()
+                               : attributeName == "width" ? rect.width()
+                                                          : rect.height();
     if (!components::SampleContextualLengthRecipe(*recipe, underlying, context)) {
       return std::nullopt;
     }
@@ -93,7 +96,9 @@ std::optional<std::string> getAnimatedValue(SVGDocument& document, const char* s
     RendererUtils::prepareDocumentForRendering(document, false, warnings);
     std::ostringstream output;
     output.precision(12);
-    if (attributeName == "width") {
+    if (attributeName == "x") {
+      output << rect.computedX();
+    } else if (attributeName == "width") {
       output << rect.computedWidth();
     } else {
       output << rect.computedHeight();
@@ -1455,6 +1460,19 @@ TEST(SVGAnimateElement, ToAndByUseUnderlyingValue) {
         "<animate attributeName='width' dur='2s' " + attributes + "/></rect></svg>");
     EXPECT_THAT(getAnimatedValue(document, "#r", "width", 1.0),
                 testing::Optional(testing::StrEq("150")));
+  }
+}
+
+TEST(SVGAnimateElement, FrozenPartialToOnlyValueKeepsLowerLayerAtFreezeBoundary) {
+  auto document = parseSVGWithExperimental(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg"><rect id="r" x="0">
+      <animate attributeName="x" from="0" to="100" dur="10s"/>
+      <animate attributeName="x" to="200" dur="2s" repeatCount="0.5" fill="freeze"/>
+    </rect></svg>)svg");
+  for (double time : {5.0, 1.0, 5.0}) {
+    SCOPED_TRACE(time);
+    EXPECT_THAT(getAnimatedValue(document, "#r", "x", time),
+                testing::Optional(testing::StrEq("105")));
   }
 }
 
