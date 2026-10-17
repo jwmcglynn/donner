@@ -1406,6 +1406,62 @@ TEST(RendererPublicApiTest, ExternalUseCurrentFrameMasksShareWorkAdmission) {
   EXPECT_THAT(*content.requests, ElementsAre("external.svg", "external.svg"));
 }
 
+TEST(RendererPublicApiTest, SharedMaskReplaysForSecondUseInCurrentFrame) {
+  SVGDocument document = ParseDocument(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="4">
+      <defs>
+        <mask id="mask" mask-type="alpha" maskUnits="objectBoundingBox"
+              maskContentUnits="objectBoundingBox" x="0" y="0" width="1" height="1">
+          <rect width="1" height="1" fill="white"/>
+        </mask>
+        <rect id="tile" width="4" height="4" mask="url(#mask)"/>
+      </defs>
+      <use href="#tile"/><use href="#tile" x="8"/>
+    </svg>)svg");
+  SVGDocument content = ParseDocument(
+      "<svg xmlns='http://www.w3.org/2000/svg' width='16' height='4'>"
+      "<rect width='16' height='4'/></svg>");
+  SVGDocument expected = ParseDocument(
+      "<svg xmlns='http://www.w3.org/2000/svg' width='16' height='4'>"
+      "<rect width='4' height='4'/><rect x='8' width='4' height='4'/></svg>");
+
+  auto access = document.writeAccess();
+  auto contentAccess = content.writeAccess();
+  ParseWarningSink warnings;
+  RendererUtils::prepareDocumentForRendering(document, false, warnings);
+  const auto tile = document.querySelector("#tile");
+  ASSERT_THAT(tile, testing::Ne(std::nullopt));
+  std::vector<std::pair<int, Entity>> maskedInstances;
+  for (auto [entity, instance] :
+       document.registry().view<components::RenderingInstanceComponent>().each()) {
+    if (instance.dataEntity == tile->entityHandle().entity() && instance.mask) {
+      maskedInstances.emplace_back(instance.drawOrder, entity);
+    }
+  }
+  std::ranges::sort(maskedInstances);
+  ASSERT_THAT(maskedInstances, testing::SizeIs(2));
+
+  RenderViewport viewport;
+  viewport.size = Vector2d(16, 4);
+  Renderer renderer;
+  RendererDriver driver(renderer);
+  renderer.beginFrame(viewport);
+  for (const auto& [drawOrder, entity] : maskedInstances) {
+    SCOPED_TRACE(drawOrder);
+    EXPECT_TRUE(driver.drawUnderEntityMaskIntoCurrentFrame(
+        document.registry(), entity, viewport, Transform2d(),
+        [&] { return driver.drawDocumentIntoCurrentFrame(content, viewport, Transform2d()); }));
+  }
+  renderer.endFrame();
+
+  Renderer expectedRenderer;
+  expectedRenderer.draw(expected);
+  editor::tests::CompareBitmapToBitmap(NormalizeSnapshot(renderer.takeSnapshot()),
+                                       NormalizeSnapshot(expectedRenderer.takeSnapshot()),
+                                       "shared-mask-second-use-current-frame",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
 TEST(RendererPublicApiTest, ExternalUseFeImageSharesOwnerWorkAdmission) {
   if (!ActiveRendererSupportsFeature(RendererBackendFeature::FilterEffects)) {
     GTEST_SKIP() << "Filter rendering disabled in this variant (" << ActiveRendererBackendName()
