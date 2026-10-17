@@ -8,12 +8,18 @@
 #include "donner/base/ParseWarningSink.h"
 #include "donner/base/tests/BaseTestUtils.h"
 #include "donner/base/tests/ParseResultTestUtils.h"
+#include "donner/base/xml/XMLNode.h"
 #include "donner/base/xml/components/TreeComponent.h"
 #include "donner/css/parser/SelectorParser.h"
+#include "donner/svg/SVGDescElement.h"
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/SVGGElement.h"
+#include "donner/svg/SVGMetadataElement.h"
 #include "donner/svg/SVGQuerySelector.h"
 #include "donner/svg/SVGRectElement.h"
+#include "donner/svg/SVGStyleElement.h"
+#include "donner/svg/SVGTextElement.h"
+#include "donner/svg/SVGTitleElement.h"
 #include "donner/svg/SVGUnknownElement.h"
 #include "donner/svg/components/DirtyFlagsComponent.h"
 #include "donner/svg/components/shadow/ShadowTreeComponent.h"
@@ -98,6 +104,87 @@ TEST_F(SVGElementTests, EmptySelectorIncludesTextAndCDataContent) {
   }
   EXPECT_TRUE(doc.querySelector("#spaces:empty").has_value());
   EXPECT_TRUE(doc.querySelector("#comment:empty").has_value());
+}
+
+TEST_F(SVGElementTests, EmptySelectorRetainsGenericAndDescriptiveText) {
+  auto doc = parseSVG(R"svg(<svg xmlns="http://www.w3.org/2000/svg">
+    <g id="mixed">word<!-- comment --> </g>
+    <g id="cdata"><![CDATA[word]]></g>
+    <title id="title">word</title><desc id="desc">word</desc>
+    <metadata id="metadata">word</metadata>
+    <style id="style">g { opacity: .2 }</style>
+  </svg>)svg");
+  for (const char* id : {"mixed", "cdata", "title", "desc", "metadata", "style"}) {
+    SCOPED_TRACE(id);
+    EXPECT_FALSE(doc.querySelector(std::string("#") + id + ":empty").has_value());
+  }
+  doc.querySelector("#mixed")->setAttribute("class", "changed");
+  EXPECT_FALSE(doc.querySelector("#mixed:empty").has_value());
+  doc.querySelector("#title")->cast<SVGTitleElement>().setTextContent("");
+  doc.querySelector("#desc")->cast<SVGDescElement>().setTextContent("");
+  doc.querySelector("#metadata")->cast<SVGMetadataElement>().setTextContent("");
+  doc.querySelector("#style")->cast<SVGStyleElement>().setContents("");
+  for (const char* id : {"title", "desc", "metadata", "style"}) {
+    EXPECT_TRUE(doc.querySelector(std::string("#") + id + ":empty").has_value());
+  }
+}
+
+TEST_F(SVGElementTests, EmptySelectorDoesNotCountTheUserAgentStylesheet) {
+  auto doc = parseSVG(R"(<svg xmlns="http://www.w3.org/2000/svg"/>)");
+  EXPECT_TRUE(doc.querySelector("svg:empty").has_value());
+}
+
+TEST_F(SVGElementTests, EmptySelectorTextChangesInvalidateNonlocalStyles) {
+  auto doc = parseSVG(R"svg(<svg xmlns="http://www.w3.org/2000/svg">
+    <style>
+      text { opacity: .2 } text:empty { opacity: .8 }
+      #parent { opacity: .4 } #parent:has(> text:empty) { opacity: .6 }
+    </style>
+    <g id="parent"><text id="text">word</text></g>
+  </svg>)svg");
+  auto text = doc.querySelector("#text")->cast<SVGTextElement>();
+  auto parent = doc.querySelector("#parent").value();
+  EXPECT_THAT(text.getComputedStyle().opacity.get(), Optional(.2));
+  EXPECT_THAT(parent.getComputedStyle().opacity.get(), Optional(.4));
+  text.setTextContent("");
+  EXPECT_TRUE(doc.querySelector("#text:empty").has_value());
+  EXPECT_THAT(text.getComputedStyle().opacity.get(), Optional(.8));
+  EXPECT_THAT(parent.getComputedStyle().opacity.get(), Optional(.6));
+  text.appendText("new");
+  EXPECT_FALSE(doc.querySelector("#text:empty").has_value());
+  EXPECT_THAT(text.getComputedStyle().opacity.get(), Optional(.2));
+  EXPECT_THAT(parent.getComputedStyle().opacity.get(), Optional(.4));
+}
+
+TEST_F(SVGElementTests, EmptySelectorTracksRawTextValueChanges) {
+  auto doc = parseSVG(R"svg(<svg xmlns="http://www.w3.org/2000/svg">
+    <style>g { opacity: .2 } g:empty { opacity: .8 }</style><g id="target"/>
+  </svg>)svg");
+  auto target = doc.querySelector("#target").value();
+  EXPECT_THAT(target.getComputedStyle().opacity.get(), Optional(.8));
+  auto xmlDocument = doc.xmlDocument();
+  auto text = xml::XMLNode::CreateDataNode(xmlDocument, "word");
+  auto node = xml::XMLNode::TryCast(target.unsafeEntityHandle()).value();
+  node.appendChild(text);
+  EXPECT_FALSE(doc.querySelector("#target:empty").has_value());
+  EXPECT_THAT(target.getComputedStyle().opacity.get(), Optional(.2));
+  text.setValue(" ");
+  EXPECT_TRUE(doc.querySelector("#target:empty").has_value());
+  EXPECT_THAT(target.getComputedStyle().opacity.get(), Optional(.8));
+  text.setValue("new");
+  EXPECT_THAT(target.getComputedStyle().opacity.get(), Optional(.2));
+  node.removeChild(text);
+  EXPECT_TRUE(doc.querySelector("#target:empty").has_value());
+}
+
+TEST_F(SVGElementTests, EmptySelectorChargesTextInspectionToTheSharedBudget) {
+  auto doc = parseSVG(R"(<svg xmlns="http://www.w3.org/2000/svg"><text id="text"/></svg>)");
+  auto text = doc.querySelector("#text")->cast<SVGTextElement>();
+  text.setTextContent(std::string(130, ' '));
+  css::SelectorTraversalBudget budget(1);
+  EXPECT_FALSE(text.isEmptyForSelector(&budget));
+  EXPECT_TRUE(budget.rejected());
+  EXPECT_EQ(budget.steps(), 1u);
 }
 
 TEST_F(SVGElementTests, QuerySelectorSharesTraversalBudgetAcrossCandidates) {

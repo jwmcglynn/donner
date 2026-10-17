@@ -2,6 +2,7 @@
 
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/components/StylesheetComponent.h"
+#include "donner/svg/components/style/SelectorContent.h"
 #include "donner/svg/renderer/RenderingContext.h"
 
 namespace donner::svg {
@@ -28,6 +29,7 @@ void SVGStyleElement::setContents(std::string_view style) {
     return;
   }
 
+  handle_.remove<components::ProjectedNonWhitespaceTextTag>(access);
   stylesheetComponent.parseStylesheet(style);
   components::RenderingContext(*handle_.registry()).invalidateRenderTree();
 }
