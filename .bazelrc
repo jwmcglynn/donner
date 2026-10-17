@@ -112,12 +112,6 @@ common --//third_party/google_fonts:google_fonts_available=true
 common:latest_llvm --extra_toolchains=@llvm_toolchain_linux_aarch64//:all
 common:latest_llvm --extra_toolchains=@llvm_toolchain_linux_x86_64//:all
 common:latest_llvm --//build_defs:llvm_latest=1
-# Disable V8's JIT in the emscripten Node runtime. Some remote-execution
-# sandboxes forbid creating executable memory pages (W+X), so V8 aborts with
-# SIGTRAP in `OS::SetPermissions` the moment it tries to baseline-compile
-# anything. `--jitless` keeps Node in the interpreter-only mode, which
-# emscripten's `compiler.mjs` is happy with.
-common:latest_llvm --action_env=NODE_OPTIONS=--jitless
 # toolchains_llvm selects builtin libc++ with a clang driver argument. On
 # self-hosted Linux, compile-only actions can report that stdlib-selection
 # argument as unused even though the toolchain has already supplied the libc++
