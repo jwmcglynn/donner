@@ -1,13 +1,19 @@
 #include "donner/svg/components/TreeMutation.h"
 
 #include <optional>
+#include <string_view>
 
 #include "donner/base/Utils.h"
+#include "donner/base/xml/XMLNode.h"
 #include "donner/base/xml/components/TreeComponent.h"
+#include "donner/base/xml/components/TreeMutationContext.h"
+#include "donner/base/xml/components/XMLValueComponent.h"
 #include "donner/svg/components/DirtyFlagsComponent.h"
+#include "donner/svg/components/ElementTypeComponent.h"
 #include "donner/svg/components/NodeLifetimeCollector.h"
 #include "donner/svg/components/NodeLifetimeComponent.h"
 #include "donner/svg/components/SVGDocumentContext.h"
+#include "donner/svg/components/style/ComputedStyleComponent.h"
 
 namespace donner::svg::components {
 namespace {
@@ -154,6 +160,26 @@ void MarkOldParentDirty(EntityHandle node) {
   MarkDirty(oldParentHandle, components::DirtyFlagsComponent::All);
 }
 
+std::optional<EntityHandle> TextValueParent(EntityHandle node) {
+  const auto xmlNode = xml::XMLNode::TryCast(node);
+  if (!xmlNode || (xmlNode->type() != xml::XMLNode::Type::Data &&
+                   xmlNode->type() != xml::XMLNode::Type::CData)) {
+    return std::nullopt;
+  }
+  const Entity parent = ParentOf(node);
+  if (parent == entt::null || !node.registry()->all_of<ElementTypeComponent>(parent)) {
+    return std::nullopt;
+  }
+  return EntityHandle(*node.registry(), parent);
+}
+
+bool HasNonWhitespaceValue(EntityHandle node) {
+  const auto* value = node.try_get<donner::xml::components::XMLValueComponent>();
+  return value &&
+         std::string_view(value->value.data(), value->value.size()).find_first_not_of(" \t\r\n") !=
+             std::string_view::npos;
+}
+
 void CheckReferenceChild(EntityHandle parent, EntityHandle referenceNode) {
   if (!referenceNode) {
     return;
@@ -166,6 +192,25 @@ void CheckReferenceChild(EntityHandle parent, EntityHandle referenceNode) {
 }
 
 }  // namespace
+
+void TreeMutation::SetValue(EntityHandle node, const RcStringOrRef& value) {
+  [[maybe_unused]] std::optional<DocumentWriteAccess> access = AcquireWriteAccess(node);
+  const auto parent = TextValueParent(node);
+  const bool hadText = HasNonWhitespaceValue(node);
+  donner::components::TreeMutationContext::DefaultSetValue(node, value);
+  if (parent) {
+    BumpMutationRevision(*parent);
+    if (hadText != HasNonWhitespaceValue(node)) {
+      InvalidateTextContentStyles(*parent);
+    }
+  }
+}
+
+void TreeMutation::InvalidateTextContentStyles(EntityHandle element) {
+  element.registry()->clear<ComputedStyleComponent>();
+  MarkNeedsFullRebuild(element);
+  MarkDirty(element, components::DirtyFlagsComponent::All);
+}
 
 void TreeMutation::InsertBefore(EntityHandle parent, EntityHandle newNode,
                                 EntityHandle referenceNode) {

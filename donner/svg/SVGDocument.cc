@@ -42,6 +42,7 @@
 #include "donner/svg/components/layout/TransformComponent.h"
 #include "donner/svg/components/resources/ResourceManagerContext.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
+#include "donner/svg/components/style/SelectorContent.h"
 #include "donner/svg/components/style/StyleSystem.h"
 #include "donner/svg/components/text/ComputedTextGeometryComponent.h"
 #include "donner/svg/components/text/TextComponent.h"
@@ -686,6 +687,7 @@ SVGDocument::SVGDocument(SVGDocumentHandle documentState, Settings settings,
   treeMutations.replaceChild = components::TreeMutation::ReplaceChild;
   treeMutations.removeChild = components::TreeMutation::RemoveChild;
   treeMutations.remove = components::TreeMutation::Remove;
+  treeMutations.setValue = components::TreeMutation::SetValue;
 
   auto& ctx = registry.ctx().emplace<components::SVGDocumentContext>(
       components::SVGDocumentContext::InternalCtorTag{}, documentState_);
@@ -1776,6 +1778,7 @@ std::optional<ParseDiagnostic> SVGDocument::projectXMLSubtree(const xml::XMLNode
 
   const EntityHandle handle = node.entityHandle();
   const ProjectedElement projected = EnsureProjectedElementComponents(handle, node);
+  components::BeginSelectorContentProjection(handle, contentsReparsed);
 
   if (std::optional<ParseDiagnostic> diagnostic = ReserveProjectedAttributes(handle, node)) {
     return diagnostic;

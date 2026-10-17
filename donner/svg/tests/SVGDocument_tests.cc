@@ -402,6 +402,23 @@ TEST(SVGDocument, ApplySourceEditProjectsAttributeValueMutation) {
   EXPECT_THAT(document.source(), testing::HasSubstr(R"(fill="blue")"));
 }
 
+TEST(SVGDocument, EmptySelectorPreservesAndRefreshesProjectedGenericText) {
+  auto document = ParseSVG(R"svg(<svg xmlns="http://www.w3.org/2000/svg">
+    <g id="generic">word<!--c--> </g><g id="data"><![CDATA[word]]></g>
+  </svg>)svg");
+  EXPECT_FALSE(document.querySelector("#generic:empty").has_value());
+  auto attribute = ReplaceInSource(document, "id=\"generic\"", "id=\"generic\" class=\"new\"");
+  ASSERT_TRUE(attribute.applied);
+  ASSERT_FALSE(attribute.diagnostic.has_value());
+  EXPECT_FALSE(document.querySelector("#generic:empty").has_value());
+  auto replacement = ReplaceInSource(document, "<g id=\"generic\" class=\"new\">word<!--c--> </g>",
+                                     "<g id=\"generic\"/>");
+  ASSERT_TRUE(replacement.applied);
+  ASSERT_FALSE(replacement.diagnostic.has_value());
+  EXPECT_TRUE(document.querySelector("#generic:empty").has_value());
+  EXPECT_FALSE(document.querySelector("#data:empty").has_value());
+}
+
 TEST(SVGDocument, ApplySourceEditProjectsTextMutation) {
   auto document =
       ParseSVG(R"(<svg xmlns="http://www.w3.org/2000/svg"><text id="label">hello</text></svg>)");

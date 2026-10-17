@@ -5,7 +5,6 @@
 #include "donner/base/ParseWarningSink.h"
 #include "donner/base/StringUtils.h"
 #include "donner/base/parser/LengthParser.h"
-#include "donner/base/xml/XMLNode.h"
 #include "donner/base/xml/components/AttributesComponent.h"
 #include "donner/base/xml/components/TreeComponent.h"
 #include "donner/css/parser/SelectorParser.h"
@@ -29,6 +28,7 @@
 #include "donner/svg/components/shape/ComputedPathComponent.h"
 #include "donner/svg/components/shape/LineComponent.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
+#include "donner/svg/components/style/SelectorContent.h"
 #include "donner/svg/components/style/StyleComponent.h"
 #include "donner/svg/components/style/StyleSystem.h"
 #include "donner/svg/components/text/TextInvalidation.h"
@@ -222,25 +222,6 @@ std::optional<EntityHandle> ElementEntityHandle(Registry& registry, Entity entit
   EntityHandle handle(registry, entity);
   return handle.all_of<components::ElementTypeComponent>() ? std::make_optional(handle)
                                                            : std::nullopt;
-}
-
-bool HasSelectorContent(EntityHandle handle) {
-  if (handle.all_of<components::ElementTypeComponent>()) {
-    return true;
-  }
-  const auto node = xml::XMLNode::TryCast(handle);
-  if (!node) {
-    return false;
-  }
-  if (node->type() == xml::XMLNode::Type::Element) {
-    return true;
-  }
-  if (node->type() != xml::XMLNode::Type::Data && node->type() != xml::XMLNode::Type::CData) {
-    return false;
-  }
-  const auto value = node->value();
-  return value && std::string_view(value->data(), value->size()).find_first_not_of(" \t\r\n") !=
-                      std::string_view::npos;
 }
 
 std::optional<EntityHandle> FirstElementChild(EntityHandle handle) {
@@ -851,22 +832,10 @@ bool SVGElement::isEmptyForSelector(css::SelectorTraversalBudget* budget) const 
     return true;
   }
   [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
-  const EntityHandle handle = handle_;
-  if (handle.all_of<components::ShadowTreeComponent>()) {
-    return true;
-  }
-  const auto& tree = handle.get<donner::components::TreeComponent>();
-  Registry& registry = *handle.registry();
-  for (Entity child = tree.firstChild(); child != entt::null;
-       child = registry.get<donner::components::TreeComponent>(child).nextSibling()) {
-    if (budget != nullptr && !budget->consume()) {
-      return false;
-    }
-    if (HasSelectorContent(EntityHandle(registry, child))) {
-      return false;
-    }
-  }
-  return true;
+  const EntityHandle handle = unsafeEntityHandle();
+  const Entity tree =
+      handle.all_of<components::ShadowTreeComponent>() ? entt::null : handle.entity();
+  return components::IsSelectorEmpty(*handle.registry(), tree, handle.entity(), budget);
 }
 
 std::optional<SVGElement> SVGElement::lastChild() const {
