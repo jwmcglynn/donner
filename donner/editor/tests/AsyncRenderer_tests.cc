@@ -6315,6 +6315,31 @@ TEST(RenderCoordinatorTest, NothingToPresentKeepsThePresentedFrameUntilARenderPr
       << "once the renderer produces tiles again, the owed version presents";
 }
 
+TEST(RenderCoordinatorTest, DeferredRenderDemandWakesAfterSpeculativeWarmup) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+      <rect id="target" x="8" y="8" width="24" height="24" fill="blue"/>
+    </svg>
+  )svg"));
+  app.setSelection(*app.document().document().querySelector("#target"));
+  ViewportState viewport;
+  viewport.paneSize = Vector2d(128.0, 128.0);
+  viewport.documentViewBox = Box2d::FromXYWH(0.0, 0.0, 64.0, 64.0);
+  viewport.resetTo100Percent();
+  SelectTool selectTool;
+  std::atomic<int> wakes = 0;
+  RenderCoordinator coordinator;
+  coordinator.asyncRenderer().setWakeCallback([&] { ++wakes; });
+  coordinator.asyncRenderer().stageCompositorWarmupForTesting(/*pending=*/false, /*active=*/true);
+
+  EXPECT_FALSE(coordinator.maybeRequestRender(app, selectTool, viewport));
+  EXPECT_EQ(wakes.load(), 0);
+  coordinator.asyncRenderer().completeCompositorWarmupForTesting();
+  EXPECT_EQ(wakes.load(), 1)
+      << "A render deferred behind speculative warmup needs a retry even without a zoom deadline.";
+}
+
 TEST(RenderCoordinatorTest, StableSelectedFullDocumentPrewarmStaysIdle) {
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(R"svg(
@@ -6370,6 +6395,145 @@ TEST(RenderCoordinatorTest, StableSelectedFullDocumentPrewarmStaysIdle) {
   }
 }
 
+TEST(RenderCoordinatorTest, BufferedSelectionPressAndReleaseKeepResolvedLayout) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+      <rect id="target" x="40" y="40" width="20" height="20" fill="red"/>
+    </svg>
+  )svg"));
+  app.setSelection(*app.document().document().querySelector("#target"));
+  ViewportState viewport;
+  viewport.paneSize = Vector2d(200, 120);
+  viewport.documentViewBox = Box2d::FromXYWH(0, 0, 100, 100);
+  viewport.devicePixelRatio = 2;
+  viewport.resetTo100Percent();
+  SelectTool selectTool;
+  GlTextureCache textures;
+  RenderCoordinator coordinator;
+  if (!coordinator.renderer().requiresTextureSnapshotPresentation()) {
+    GTEST_SKIP() << "Geode-only presentation regression requires retained texture upload.";
+  }
+  RenderCoordinatorTestAccess::useFakeSchedulingClock(coordinator);
+  const auto request = [&](bool pendingPress) {
+    return coordinator.maybeRequestRender(app, selectTool, viewport, &textures, false,
+                                          SelectionChromeDetail::Full, pendingPress);
+  };
+  // Buffered input still allows preparation that does not resize the existing document canvas.
+  ASSERT_TRUE(request(true));
+  ASSERT_TRUE(DrainCoordinator(coordinator, app, viewport, textures));
+  const auto canvas = app.document().document().canvasSize();
+  ASSERT_NE(canvas, Vector2i::Zero());
+  const auto commits = coordinator.documentCanvasCommitTotal();
+  viewport.zoomAround(6, viewport.paneCenter());
+  request(true);
+  ASSERT_TRUE(DrainCoordinator(coordinator, app, viewport, textures));
+  RenderCoordinatorTestAccess::advanceFakeSchedulingClock(
+      RenderCoordinatorTestAccess::kCanvasSizeCommitDelay);
+  ASSERT_FALSE(selectTool.activeDragPreview().has_value());
+  request(true);
+  EXPECT_EQ(app.document().document().canvasSize(), canvas);
+  EXPECT_EQ(coordinator.documentCanvasCommitTotal(), commits)
+      << "A buffered selection press must protect retained tiles before a drag preview exists.";
+  ASSERT_TRUE(DrainCoordinator(coordinator, app, viewport, textures));
+  EXPECT_EQ(coordinator.nextViewportSettleWakeSeconds(), std::nullopt);
+  request(false);
+  ASSERT_TRUE(DrainCoordinator(coordinator, app, viewport, textures));
+  EXPECT_EQ(coordinator.documentCanvasCommitTotal(), commits);
+  EXPECT_EQ(app.document().document().canvasSize(), canvas);
+}
+
+TEST(RenderCoordinatorTest, CameraChangesPreserveResolvedSvgLayout) {
+  const std::array<std::string_view, 7> sources = {
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="300" height="150" viewBox="10 20 100 50"><rect id="target" x="20" y="30" width="30" height="20"/></svg>)svg",
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="300" height="150" viewBox="0 0 100 100"><rect id="target" x="10%" y="10%" width="50%" height="50%"/></svg>)svg",
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="300" height="150" viewBox="0 0 100 100" preserveAspectRatio="none"><rect id="target" x="10%" y="10%" width="50%" height="50%"/></svg>)svg",
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="300" height="150"><rect id="target" x="10%" y="10%" width="50%" height="50%"/></svg>)svg",
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="300" height="150"><svg x="10%" width="70%" height="80%" viewBox="0 0 100 100"><rect id="target" x="10%" y="10%" width="50%" height="50%"/></svg></svg>)svg",
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="300" height="150" viewBox="0 0 100 100"><path id="target" d="M20 20L70 70" stroke="red" stroke-width="8" vector-effect="non-scaling-stroke"/></svg>)svg",
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="300" height="150" viewBox="0 0 100 100"><defs><filter id="blur"><feGaussianBlur stdDeviation="3"/></filter></defs><rect id="target" x="20" y="20" width="40" height="40" filter="url(#blur)"/></svg>)svg",
+  };
+  for (const auto source : sources) {
+    SCOPED_TRACE(source);
+    EditorApp app;
+    ASSERT_TRUE(app.loadFromString(source));
+    const auto target = app.document().document().querySelector("#target");
+    ASSERT_TRUE(target.has_value());
+    app.setSelection(*target);
+    const auto resolvedCanvas = app.document().document().canvasSize();
+    const auto revision = app.document().document().handle()->revision();
+    ViewportState viewport;
+    viewport.paneSize = Vector2d(400, 240);
+    viewport.documentViewBox = app.document().document().svgElement().viewBox().value_or(
+        Box2d::FromXYWH(0, 0, resolvedCanvas.x, resolvedCanvas.y));
+    viewport.resetTo100Percent();
+    SelectTool tool;
+    GlTextureCache textures;
+    RenderCoordinator coordinator;
+    if (!coordinator.renderer().requiresTextureSnapshotPresentation()) {
+      GTEST_SKIP() << "Requires retained texture presentation";
+    }
+    RenderCoordinatorTestAccess::useFakeSchedulingClock(coordinator);
+    const auto render = [&] {
+      RenderCoordinatorTestAccess::makeRasterViewportSettled(coordinator);
+      coordinator.maybeRequestRender(app, tool, viewport, &textures);
+      const bool drained = DrainCoordinator(coordinator, app, viewport, textures);
+      RenderCoordinatorTestAccess::advanceFakeSchedulingClock(
+          RenderCoordinatorTestAccess::kCanvasSizeCommitDelay);
+      return drained;
+    };
+    ASSERT_TRUE(render());
+    ASSERT_TRUE(render());
+    ASSERT_TRUE(textures.presentationResources());
+    const auto original = textures.presentationResources()->capture();
+    ASSERT_TRUE(original);
+    const Entity entity = target->unsafeEntityHandle().entity();
+    const auto originalPose = original->pose(entity);
+    ASSERT_TRUE(originalPose);
+    const auto originalPaint = original->paintBounds(entity);
+    for (const auto camera : {Vector2d(2.17, 2), Vector2d(6, 1), Vector2d(0.75, 2)}) {
+      viewport.zoomAround(camera.x, viewport.paneCenter());
+      viewport.devicePixelRatio = camera.y;
+      ASSERT_TRUE(render());
+      ASSERT_TRUE(render());
+      EXPECT_EQ(app.document().document().canvasSize(), resolvedCanvas);
+      EXPECT_EQ(app.document().document().handle()->revision(), revision);
+      EXPECT_EQ(coordinator.documentCanvasCommitTotal(), 0u);
+      const auto capture = textures.presentationResources()->capture();
+      ASSERT_TRUE(capture);
+      EXPECT_EQ(capture->canvasSize(), resolvedCanvas);
+      EXPECT_NE(capture->identity().captureId, original->identity().captureId);
+      const auto coverage = textures.coverageDiagnostics();
+      ASSERT_GT(coverage.activeRasterDocumentRect.size().x, 0.0);
+      EXPECT_NEAR(coverage.activeOutputSizePx.x / coverage.activeRasterDocumentRect.size().x,
+                  viewport.devicePixelsPerDocUnit(), 1e-6);
+      EXPECT_TRUE(capture->identity().sameContent(original->identity()));
+      const auto pose = capture->pose(entity);
+      ASSERT_TRUE(pose);
+      EXPECT_TRUE(
+          SamePresentationTransform(pose->documentFromElement, originalPose->documentFromElement));
+      EXPECT_EQ(capture->paintBounds(entity), originalPaint);
+    }
+    app.applyMutation(
+        EditorCommand::SetAttributeCommand(app.document().document().svgElement(), "width", "450"));
+    ASSERT_TRUE(app.flushFrame());
+    const auto editedCanvas = app.document().document().canvasSize();
+    ASSERT_NE(editedCanvas, resolvedCanvas);
+    {
+      const auto access = app.document().document().readAccess();
+      viewport.documentViewBox = app.document().document().svgElement().viewBox().value_or(
+          Box2d::FromXYWH(0, 0, editedCanvas.x, editedCanvas.y));
+    }
+    ASSERT_TRUE(render());
+    ASSERT_TRUE(render());
+    const auto editedCapture = textures.presentationResources()->capture();
+    ASSERT_TRUE(editedCapture);
+    EXPECT_EQ(editedCapture->canvasSize(), editedCanvas);
+    EXPECT_EQ(editedCapture->identity().version, app.document().currentFrameVersion());
+    EXPECT_FALSE(editedCapture->identity().sameContent(original->identity()));
+  }
+}
+
 TEST(RenderCoordinatorTest, ContinuousSelectedZoomDefersViewportPrewarmUntilStable) {
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(R"svg(
@@ -6415,20 +6579,30 @@ TEST(RenderCoordinatorTest, ContinuousSelectedZoomDefersViewportPrewarmUntilStab
   EXPECT_EQ(app.document().document().canvasSize(), warmCanvasSize)
       << "Continuous zoom should debounce SVGDocument::setCanvasSize instead of invalidating the "
          "render tree immediately.";
+  EXPECT_TRUE(coordinator.hasPendingViewportSettle());
+  const auto settleWake = coordinator.nextViewportSettleWakeSeconds();
+  ASSERT_TRUE(settleWake.has_value())
+      << "An idle host needs a deadline to finish the deferred zoom without another input event.";
+  EXPECT_GT(*settleWake, 0.0f);
+  EXPECT_LE(
+      *settleWake,
+      std::chrono::duration<float>(RenderCoordinatorTestAccess::kCanvasSizeCommitDelay).count());
 
   RenderCoordinatorTestAccess::advanceFakeSchedulingClock(
       RenderCoordinatorTestAccess::kCanvasSizeCommitDelay);
+  EXPECT_TRUE(coordinator.hasPendingViewportSettle());
+  EXPECT_THAT(coordinator.nextViewportSettleWakeSeconds(), testing::Optional(testing::Eq(0.0f)));
   coordinator.maybeRequestRender(app, selectTool, viewport, &textures);
   EXPECT_TRUE(coordinator.asyncRenderer().isBusy())
       << "Once the viewport has settled, the coordinator should request one crisp selected "
          "prewarm.";
   EXPECT_TRUE(waitForCoordinator());
-  ASSERT_TRUE(RenderCoordinatorTestAccess::lastPostedAttempt(coordinator)->overviewInfillOnly)
-      << "The canvas commit changes layout provenance, so refresh its complete overview first.";
-  coordinator.maybeRequestRender(app, selectTool, viewport, &textures);
-  ASSERT_TRUE(waitForCoordinator());
+  EXPECT_FALSE(RenderCoordinatorTestAccess::lastPostedAttempt(coordinator)->overviewInfillOnly)
+      << "Camera-only settling reuses the existing scene overview.";
   ASSERT_TRUE(textures.presentationResources()->capture()->identity().sameScene(
       textures.presentationResources()->overviewCapture()->identity()));
+  EXPECT_FALSE(coordinator.nextViewportSettleWakeSeconds().has_value());
+  EXPECT_FALSE(coordinator.hasPendingViewportSettle());
   const Vector2i visibleCanvas = viewport.rasterViewport().outputSizePx;
   const Vector2i paddedCanvas = viewport.selectedPrewarmRasterViewport().outputSizePx;
   ASSERT_NE(visibleCanvas, paddedCanvas)
@@ -6547,10 +6721,8 @@ TEST(RenderCoordinatorTest, ViewportBoundedSelectionRequestsOverviewBeforeActive
   coordinator.maybeRequestRender(app, selectTool, viewport, &textures);
   ASSERT_TRUE(coordinator.asyncRenderer().isBusy());
   ASSERT_TRUE(waitForCoordinator());
-  ASSERT_TRUE(RenderCoordinatorTestAccess::lastPostedAttempt(coordinator)->overviewInfillOnly)
-      << "A new semantic canvas needs its own paired overview before bounded tiles.";
-  coordinator.maybeRequestRender(app, selectTool, viewport, &textures);
-  ASSERT_TRUE(waitForCoordinator());
+  EXPECT_FALSE(RenderCoordinatorTestAccess::lastPostedAttempt(coordinator)->overviewInfillOnly)
+      << "The resolved layout is unchanged, so the first overview stays valid.";
   ASSERT_TRUE(textures.presentationResources()->capture()->identity().sameScene(
       textures.presentationResources()->overviewCapture()->identity()));
   const auto posted = RenderCoordinatorTestAccess::lastPostedAttempt(coordinator);
@@ -6750,7 +6922,7 @@ TEST(RenderCoordinatorTest, ZoomedPaintUsesCompletedOverviewWhenDetailedRenderFa
   EXPECT_EQ(coordinator.displayedDocVersion(), app.document().currentFrameVersion());
 }
 
-TEST(RenderCoordinatorTest, LateSemanticCanvasCommitStagesCurrentSceneOverviewAndRetainsDetails) {
+TEST(RenderCoordinatorTest, CameraSettleRetainsCurrentOverviewAndDetailedPixels) {
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(
       R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><path id="target" d="M20 20 L80 20 L50 80Z" fill="white"/></svg>)svg"));
@@ -6786,19 +6958,12 @@ TEST(RenderCoordinatorTest, LateSemanticCanvasCommitStagesCurrentSceneOverviewAn
   const auto installedOverview = RenderCoordinatorTestAccess::installedOverviewCapture(coordinator);
   ASSERT_THAT(installedOverview, testing::NotNull());
   RenderCoordinatorTestAccess::makeCanvasCommitDue(coordinator);
-  ASSERT_TRUE(render());
-  ASSERT_THAT(RenderCoordinatorTestAccess::lastPostedAttempt(coordinator),
-              testing::Optional(testing::_));
-  EXPECT_TRUE(RenderCoordinatorTestAccess::lastPostedAttempt(coordinator)->overviewInfillOnly);
-  EXPECT_EQ(app.document().document().canvasSize(), viewport.rasterViewport().semanticCanvasSizePx);
+  EXPECT_FALSE(render()) << "Camera settling must not trigger a redundant layout/overview pass.";
+  EXPECT_EQ(app.document().document().canvasSize(), Vector2i(100, 100));
   EXPECT_TRUE(textures.activeTilesViewportBounded());
   ASSERT_THAT(textures.tiles(), testing::Not(testing::IsEmpty()));
   EXPECT_EQ(textures.tiles().front().generation, detailedGeneration);
-  const auto staged = RenderCoordinatorTestAccess::pendingOverviewCapture(coordinator);
-  ASSERT_THAT(staged, testing::NotNull());
-  EXPECT_EQ(staged->identity().documentGeneration, app.document().documentGeneration());
-  EXPECT_EQ(staged->identity().version, app.document().currentFrameVersion());
-  EXPECT_EQ(staged->canvasSize(), viewport.rasterViewport().semanticCanvasSizePx);
+  EXPECT_EQ(RenderCoordinatorTestAccess::pendingOverviewCapture(coordinator), nullptr);
   const auto retained = RenderCoordinatorTestAccess::installedOverviewCapture(coordinator);
   ASSERT_THAT(retained, testing::NotNull());
   EXPECT_EQ(retained->identity().captureId, installedOverview->identity().captureId);

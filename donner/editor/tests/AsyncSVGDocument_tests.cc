@@ -211,6 +211,42 @@ TEST(AsyncSVGDocumentTest, CommandAfterStructuralWritebackReparseTargetsRemapped
   EXPECT_THAT(pixel, Rgba(Gt(200), Lt(40), Lt(40), Gt(200)));
 }
 
+TEST(AsyncSVGDocumentTest, StructuralSourceResizeKeepsAutomaticCanvasSizing) {
+  constexpr std::string_view first =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="400" height="100"><rect id="r1" width="50%" height="50%" fill="red"/></svg>)";
+  constexpr std::string_view restyled =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="400" height="100"><rect id="r1" width="50%" height="50%" fill="blue"/></svg>)";
+  constexpr std::string_view resized =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="800" height="200"><rect id="r1" width="50%" height="50%" fill="blue"/></svg>)";
+  AsyncSVGDocument doc;
+  ASSERT_TRUE(doc.loadFromString(first));
+  EXPECT_EQ(doc.document().canvasSize(), Vector2i(400, 100));
+  for (const auto source : {restyled, resized}) {
+    doc.applyMutation(EditorCommand::ReplaceDocumentCommand(std::string(source)));
+    ASSERT_TRUE(doc.flushFrame());
+    EXPECT_FALSE(doc.consumePendingStructuralRemap().empty());
+  }
+  EXPECT_EQ(doc.document().canvasSize(), Vector2i(800, 200));
+  const auto rendered = RenderDocument(doc.document());
+  EXPECT_EQ(rendered.dimensions, Vector2i(800, 200));
+  EXPECT_THAT(PixelAt(rendered, 350, 50), Rgba(Lt(40), Lt(40), Gt(200), Gt(200)));
+}
+
+TEST(AsyncSVGDocumentTest, StructuralSourceResizePreservesExplicitCanvasBounds) {
+  constexpr std::string_view first =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="400" height="100"><rect id="r1" width="50%" height="50%"/></svg>)";
+  constexpr std::string_view resized =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="400"><rect id="r1" width="50%" height="50%"/></svg>)";
+  AsyncSVGDocument doc;
+  ASSERT_TRUE(doc.loadFromString(first));
+  doc.document().setCanvasSize(200, 200);
+  ASSERT_EQ(doc.document().canvasSize(), Vector2i(200, 50));
+  doc.applyMutation(EditorCommand::ReplaceDocumentCommand(std::string(resized)));
+  ASSERT_TRUE(doc.flushFrame());
+  EXPECT_FALSE(doc.consumePendingStructuralRemap().empty());
+  EXPECT_EQ(doc.document().canvasSize(), Vector2i(50, 200));
+}
+
 TEST(AsyncSVGDocumentTest, StructuralWritebackPreservesCanvasSize) {
   constexpr std::string_view kMovedSameTreeSvg =
       R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">

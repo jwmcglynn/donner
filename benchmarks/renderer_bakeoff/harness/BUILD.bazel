@@ -1,0 +1,75 @@
+load("@rules_cc//cc:defs.bzl", "cc_library", "cc_test")
+
+package(default_visibility = ["//visibility:public"])
+
+cc_library(
+    name = "harness",
+    srcs = [
+        "AdapterBase.cc",
+        "BenchBackend.cc",
+        "FeatureSupport.cc",
+        "JsonWriter.cc",
+        "NullRecordingRenderer.cc",
+        "PaintResolver.cc",
+        "ProcessMemory.cc",
+        "Stats.cc",
+        "SyntheticScenes.cc",
+    ],
+    hdrs = [
+        "AdapterBase.h",
+        "BenchBackend.h",
+        "FeatureSupport.h",
+        "JsonWriter.h",
+        "NullRecordingRenderer.h",
+        "PaintResolver.h",
+        "ProcessMemory.h",
+        "Stats.h",
+        "SyntheticScenes.h",
+    ],
+    deps = [
+        "@donner//donner/svg",
+        "@donner//donner/svg/renderer:renderer_driver",
+        "@donner//donner/svg/renderer:renderer_interface",
+    ],
+)
+
+cc_library(
+    name = "main",
+    srcs = ["BakeoffMain.cc"],
+    deps = [
+        ":harness",
+        ":image_compare",
+        "@donner//donner/svg",
+    ],
+    alwayslink = True,
+)
+
+# Donner's shared pixelmatch comparison and bounded PNG IO, compiled from its sources the same way
+# examples/bazel_consumer does.
+cc_library(
+    name = "image_compare",
+    srcs = ["@donner//tools/svg_suite:ImageCompare.cc"],
+    hdrs = ["@donner//tools/svg_suite:ImageCompare.h"],
+    deps = [
+        "@donner//donner/svg",
+        "@donner//donner/svg/renderer",
+        "@pixelmatch-cpp17",
+    ],
+)
+
+cc_test(
+    name = "harness_tests",
+    size = "small",
+    srcs = [
+        "tests/AdapterBase_tests.cc",
+        "tests/JsonWriter_tests.cc",
+        "tests/RecordingAdapter.h",
+        "tests/Stats_tests.cc",
+        "tests/SyntheticScenes_tests.cc",
+    ],
+    deps = [
+        ":harness",
+        "@com_google_gtest//:gtest_main",
+        "@donner//donner/svg",
+    ],
+)

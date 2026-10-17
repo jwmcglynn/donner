@@ -257,7 +257,7 @@ py_test(
         "//donner/editor/wasm:wasm_package_size_test_arguments",
         "//donner/editor/wasm/tests:BUILD.bazel",
         "//donner/editor/wasm/tests:browser-stall-diagnostics.mjs",
-        "//donner/gpu/shader:BUILD.bazel",
+        "//donner/gpu/shader/browser_tests:BUILD.bazel",
         "//donner/svg/renderer/wasm:BUILD.bazel",
         "//tools:ci_bazel_test.sh",
         "//tools:coverage.sh",
@@ -277,6 +277,7 @@ py_test(
     size = "large",
     srcs = ["security_workflow_policy_tests.py"],
     data = [
+        "//:.bazelrc",
         "//:github_action_definitions",
         "//build_defs:rules.bzl",
         "//third_party:bazel/non_bcr_deps.bzl",
@@ -484,6 +485,7 @@ py_test(
 py_library(
     name = "bcr_dependency_closure",
     srcs = ["bcr_dependency_closure.py"],
+    visibility = ["//donner/svg/renderer/geode/boundary_tests:__pkg__"],
 )
 
 py_test(

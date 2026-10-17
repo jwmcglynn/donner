@@ -13,7 +13,6 @@ To enable:
 
 load("@bazel_skylib//lib:selects.bzl", "selects")
 load("@bazel_skylib//rules:common_settings.bzl", "bool_flag")
-load("@rules_python//python:defs.bzl", "py_test")
 load("//build_defs:dep_audit.bzl", "configured_dependency_audit_test")
 load("//build_defs:rules.bzl", "donner_cc_fuzzer", "donner_cc_library", "donner_cc_test", "donner_multi_transitioned_test")
 load(
@@ -42,6 +41,16 @@ exports_files(
 exports_files(
     ["tests/GeodeIdleRetirement_tests.cc"],
     visibility = ["//donner/svg/renderer/tests:__pkg__"],
+)
+
+# Read by the source-boundary and fuzzer-routing checks, which live in a test-only package so
+# this package loads no development-only rule set.
+exports_files(
+    [
+        "BUILD.bazel",
+        "tests/GeodeSvgGeometryBudget_fuzzer.cc",
+    ],
+    visibility = ["//donner/svg/renderer/geode/boundary_tests:__pkg__"],
 )
 
 # Build flag controlling whether Geode's GPU targets are compiled.
@@ -104,6 +113,7 @@ donner_cc_fuzzer(
     srcs = ["tests/GeodeSvgGeometryBudget_fuzzer.cc"],
     corpus = "tests/geode_svg_geometry_budget_corpus",
     routing_manifest = "geode_geometry_fuzzer_routing_manifest",
+    routing_manifest_visibility = ["//donner/svg/renderer/geode/boundary_tests:__pkg__"],
     tags = [
         "exclusive-if-local",
         "fuzz_geode",
@@ -113,20 +123,6 @@ donner_cc_fuzzer(
         "//donner/svg",
         "//donner/svg/renderer:renderer_geode",
     ],
-)
-
-py_test(
-    name = "geode_geometry_fuzzer_routing_tests",
-    srcs = ["tests/GeodeGeometryFuzzerRouting_tests.py"],
-    args = [
-        "$(rootpath :geode_geometry_fuzzer_routing_manifest)",
-        "$(rootpath tests/GeodeSvgGeometryBudget_fuzzer.cc)",
-    ],
-    data = [
-        "tests/GeodeSvgGeometryBudget_fuzzer.cc",
-        ":geode_geometry_fuzzer_routing_manifest",
-    ],
-    main = "tests/GeodeGeometryFuzzerRouting_tests.py",
 )
 
 # The test-only wgpu reference's own sources: the only files in this package that may name it.
@@ -146,23 +142,7 @@ filegroup(
         ],
         exclude = _GEODE_WGPU_REFERENCE_SOURCES,
     ),
-    visibility = ["//visibility:private"],
-)
-
-# Production sources reach every backend through the GPU runtime alone and never name the
-# test-only wgpu reference, and the runtime device source seam stays private to this package.
-py_test(
-    name = "geode_production_source_boundary_tests",
-    srcs = ["tests/GeodeProductionSourceBoundary_tests.py"],
-    args = [
-        "--build=$(rootpath BUILD.bazel)",
-        "$(rootpaths :geode_production_sources)",
-    ],
-    data = [
-        "BUILD.bazel",
-        ":geode_production_sources",
-    ],
-    main = "tests/GeodeProductionSourceBoundary_tests.py",
+    visibility = ["//donner/svg/renderer/geode/boundary_tests:__pkg__"],
 )
 
 # CPU-side Slug band decomposition. Pure path math — no WebGPU dependency,
@@ -689,7 +669,7 @@ donner_cc_library(
 donner_cc_test(
     name = "geode_shaders_tests_impl",
     # Six native-runtime cases: the dynamic Slug endpoint WGSL cases run in pinned Chromium under
-    # //donner/gpu/shader:slug_endpoint_chromium_tests.
+    # //donner/gpu/shader/browser_tests:slug_endpoint_chromium_tests.
     srcs = ["tests/GeodeShaders_tests.cc"],
     target_compatible_with = _GEODE_ONLY,
     deps = [

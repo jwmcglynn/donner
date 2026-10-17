@@ -314,7 +314,8 @@ public:
   /// and the font picker (Design 0013 W2 consumes this).
   [[nodiscard]] svg::FontCatalog& fontCatalog() { return fontCatalog_; }
   /// Return the next idle-loop wake interval needed for throttled UI work.
-  [[nodiscard]] std::optional<float> nextIdleWakeSeconds() const;
+  /// Registers worker-completion wakes for deferred viewport work before the host parks.
+  [[nodiscard]] std::optional<float> nextIdleWakeSeconds();
 
   /// Current render-pane viewport. Exposed for replay/readback harnesses
   /// that need to crop the presented framebuffer to the canvas region.
@@ -520,6 +521,7 @@ private:
   [[gnu::noinline]] void snapshotReproFrame();
 #endif
   [[gnu::noinline]] void renderMenuBarAndDialogs(bool compactUi);
+  [[nodiscard]] std::optional<float> nextViewportRenderWakeSeconds();
   void queueIdleRenderRefreshIfNeeded();
   [[gnu::noinline]] void applyDeferredRenderRequest();
   [[gnu::noinline]] void recordFrameTelemetry(

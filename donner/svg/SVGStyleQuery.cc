@@ -29,6 +29,7 @@ SVGStylesheetRule ToPublicStylesheetRule(Entity stylesheetEntity, std::size_t ru
                                          const StylesheetComponent& stylesheet,
                                          const css::SelectorRule& rule) {
   SVGStylesheetRule result{
+      .isUserAgentStylesheet = stylesheet.isUserAgentStylesheet,
       .stylesheetEntity = stylesheetEntity,
       .ruleIndex = ruleIndex,
       .ruleSourceRange = stylesheet.sourceMap.mapToDocumentSource(rule.ruleSourceRange),
@@ -76,13 +77,14 @@ std::vector<SVGMatchedStyleRule> CollectMatchedStyleRules(const SVGElement& elem
   });
 }
 
-std::vector<SVGStylesheetRule> CollectStylesheetRules(const SVGDocument& document) {
-  return document.withReadAccess([](DocumentReadAccess& access) {
+std::vector<SVGStylesheetRule> CollectStylesheetRules(const SVGDocument& document,
+                                                      bool includeUserAgent) {
+  return document.withReadAccess([includeUserAgent](DocumentReadAccess& access) {
     std::vector<SVGStylesheetRule> result;
-    Registry& registry = access.registry();
+    const Registry& registry = access.registry();
     for (auto view = registry.view<StylesheetComponent>(); auto stylesheetEntity : view) {
       const StylesheetComponent& stylesheet = view.get<StylesheetComponent>(stylesheetEntity);
-      if (stylesheet.isUserAgentStylesheet || stylesheet.sourceMap.empty()) {
+      if (stylesheet.isUserAgentStylesheet ? !includeUserAgent : stylesheet.sourceMap.empty()) {
         continue;
       }
 

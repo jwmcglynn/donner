@@ -579,7 +579,7 @@ test-time check of the backends underneath it:
   hosted CI images do not install it.
 - **Browser.** WebGPU validation errors arrive as uncaptured errors and are logged, as above. Every
   shipped WGSL projection is compiled separately by pinned Chromium in
-  `//donner/gpu/shader:wgsl_chromium_compilation_tests`.
+  `//donner/gpu/shader/browser_tests:wgsl_chromium_compilation_tests`.
 
 The cutover gates require zero Metal API and Vulkan synchronization-validation errors on the
 exercised native workloads. No CI lane enables the Vulkan layers; for the cutover the maintainer

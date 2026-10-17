@@ -1,0 +1,14 @@
+load("@rules_cc//cc:defs.bzl", "cc_binary")
+
+package(default_visibility = ["//visibility:public"])
+
+# One measurement per process: see harness/BakeoffMain.cc and tools/run_bakeoff.sh.
+cc_binary(
+    name = "renderer_bakeoff",
+    deps = [
+        "//backends/donner:geode",
+        "//backends/donner:null",
+        "//backends/donner:tiny_skia",
+        "//harness:main",
+    ],
+)
