@@ -424,7 +424,7 @@ class MacosCacheKeyParityTest(unittest.TestCase):
         pin = [line for line in _read(PIN_FILE).splitlines()
                if line.strip() and not line.startswith("#")][0].split()
         version, build = pin[:2]
-        sdk = pin[2] if len(pin) == 3 else "26.5"
+        sdk = pin[2]
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             if installed is not None:
@@ -487,7 +487,7 @@ class MacosCacheKeyParityTest(unittest.TestCase):
         pin = [line for line in _read(PIN_FILE).splitlines()
                if line.strip() and not line.startswith("#")][0].split()
         version, build = pin[:2]
-        sdk = pin[2] if len(pin) == 3 else "26.5"
+        sdk = pin[2]
         config = _read("tools/BUILD.bazel")
         self.assertIn('name = "ci_macos_xcode_version"', config)
         expanded = version if version.count(".") == 2 else version + ".0"

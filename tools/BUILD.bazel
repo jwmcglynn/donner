@@ -8,6 +8,26 @@ exports_files([
     "run-browser-ci.sh",
 ])
 
+# The selector validates the installed version, build and SDK against the same pin.
+xcode_version(
+    name = "ci_macos_xcode_version",
+    aliases = [
+        "26.6",
+        "26.6.0",
+        "17F113",
+    ],
+    default_macos_sdk_version = "26.5",
+    target_compatible_with = ["@platforms//os:macos"],
+    version = "26.6.0.17F113",
+)
+
+xcode_config(
+    name = "ci_macos_xcode",
+    default = ":ci_macos_xcode_version",
+    target_compatible_with = ["@platforms//os:macos"],
+    versions = [":ci_macos_xcode_version"],
+)
+
 refresh_compile_commands(
     name = "refresh_compile_commands",
     targets = "//donner/...",

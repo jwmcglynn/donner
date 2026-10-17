@@ -3,8 +3,8 @@
 #
 # Usage: ci_select_macos_xcode.sh --required|--optional
 #
-# When the pinned version and build are installed, exports DEVELOPER_DIR and
-# appends --xcode_version to BAZEL_MACOS_BUILD_FLAGS through GITHUB_ENV, and
+# When the pinned version, build and macOS SDK are installed, exports DEVELOPER_DIR and
+# appends explicit Xcode configuration flags to BAZEL_MACOS_BUILD_FLAGS through GITHUB_ENV, and
 # writes cache_partition=<identity> to GITHUB_OUTPUT. The identity names only
 # the pinned, public Xcode, so every runner on it shares one remote-cache
 # partition. When it is not installed, --required fails the job and --optional
@@ -26,12 +26,13 @@ esac
 
 pin_file="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/ci_macos_xcode.txt"
 pin="$(grep -v '^[[:space:]]*\(#\|$\)' "${pin_file}")"
-if [[ ! "${pin}" =~ ^([0-9]+\.[0-9]+(\.[0-9]+)?)\ ([0-9]+[A-Z][0-9]+[a-z]?)$ ]]; then
-  echo "::error::${pin_file} must hold one '<version> <build>' line."
+if [[ ! "${pin}" =~ ^([0-9]+\.[0-9]+(\.[0-9]+)?)\ ([0-9]+[A-Z][0-9]+[a-z]?)\ ([0-9]+\.[0-9]+(\.[0-9]+)?)$ ]]; then
+  echo "::error::${pin_file} must hold one '<version> <build> <macos-sdk>' line."
   exit 1
 fi
 version="${BASH_REMATCH[1]}"
 build="${BASH_REMATCH[3]}"
+sdk="${BASH_REMATCH[4]}"
 
 developer_dir="${XCODE_APPLICATIONS_DIR:-/Applications}/Xcode_${version}.app/Contents/Developer"
 installed=false
@@ -54,9 +55,18 @@ if [[ "${installed}" != "true" ]]; then
   exit 0
 fi
 
+reported_sdk="$(DEVELOPER_DIR="${developer_dir}" "${XCODEBUILD:-xcodebuild}" -version -sdk macosx SDKVersion 2>/dev/null || true)"
+if [[ "${reported_sdk}" != "${sdk}" ]]; then
+  echo "::error::The pinned Xcode ${version} (${build}) does not report the required macOS SDK ${sdk}."
+  exit 1
+fi
+
+selected_build_flags="${BAZEL_MACOS_BUILD_FLAGS:-} --xcode_version=${version}"
+selected_build_flags+=" --xcode_version_config=//tools:ci_macos_xcode"
+selected_build_flags+=" --action_env=DEVELOPER_DIR --host_action_env=DEVELOPER_DIR"
 {
   echo "DEVELOPER_DIR=${developer_dir}"
-  echo "BAZEL_MACOS_BUILD_FLAGS=${BAZEL_MACOS_BUILD_FLAGS:-} --xcode_version=${version}"
+  echo "BAZEL_MACOS_BUILD_FLAGS=${selected_build_flags}"
 } >> "${GITHUB_ENV}"
 echo "cache_partition=macos-${RUNNER_ARCH:-unknown}-xcode-${version}-${build}" >> "${GITHUB_OUTPUT}"
 echo "Selected the pinned Xcode ${version} (${build})."
