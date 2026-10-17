@@ -419,7 +419,7 @@ class MacosCacheKeyParityTest(unittest.TestCase):
         self.assertEqual(1, len(lines))
         self.assertRegex(lines[0], r"^\d+\.\d+(?:\.\d+)? \d+[A-Z]\d+[a-z]?$")
 
-    def _select(self, mode, installed):
+    def _select(self, mode, installed, registration_exit=0):
         """Runs the selection script against a fake Applications directory."""
         version, build = [line for line in _read(PIN_FILE).splitlines()
                           if line.strip() and not line.startswith("#")][0].split()
@@ -432,6 +432,11 @@ class MacosCacheKeyParityTest(unittest.TestCase):
             xcodebuild.write_text("#!/bin/sh\nprintf '%%s' '%s'\n" % reported.replace(
                 "{version}", version).replace("{build}", build), encoding="utf-8")
             xcodebuild.chmod(0o755)
+            registrar = root / "lsregister"
+            registrar.write_text(
+                "#!/bin/sh\nprintf 'REGISTER_ARG:%%s\\n' \"$@\"\nexit %d\n" % registration_exit,
+                encoding="utf-8")
+            registrar.chmod(0o755)
             env_file, output_file = root / "env", root / "output"
             env_file.write_text("")
             output_file.write_text("")
@@ -442,7 +447,8 @@ class MacosCacheKeyParityTest(unittest.TestCase):
                 env={"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "GITHUB_ENV": str(env_file),
                      "GITHUB_OUTPUT": str(output_file), "RUNNER_ARCH": "ARM64",
                      "BAZEL_MACOS_BUILD_FLAGS": "--config=ci-macos",
-                     "XCODE_APPLICATIONS_DIR": str(root), "XCODEBUILD": str(xcodebuild)},
+                     "XCODE_APPLICATIONS_DIR": str(root), "XCODEBUILD": str(xcodebuild),
+                     "XCODE_LSREGISTER": str(registrar)},
                 capture_output=True, text=True, timeout=test_timing.STALL_GUARD_SECONDS,
                 check=False)
             return (result.returncode, env_file.read_text(), output_file.read_text(),
@@ -474,6 +480,29 @@ class MacosCacheKeyParityTest(unittest.TestCase):
                 self.assertIn("::warning::", log)
                 # The warning names only the public pin, never what the runner has.
                 self.assertNotIn("99Z999", log)
+
+    def test_select_script_registers_the_validated_bundle_for_bazel_discovery(self):
+        for mode in ("--required", "--optional"):
+            with self.subTest(mode=mode):
+                code, _, _, log, version, _, root = self._select(
+                    mode, "Xcode {version}\nBuild version {build}")
+                self.assertEqual(0, code, log)
+                self.assertIn("REGISTER_ARG:-f\nREGISTER_ARG:%s/Xcode_%s.app\n" %
+                              (root, version), log)
+        for installed in (None, "Xcode {version}\nBuild version 99Z999"):
+            with self.subTest(installed=installed):
+                _, _, _, log, *_ = self._select("--optional", installed)
+                self.assertNotIn("REGISTER_ARG:", log)
+
+    def test_registration_failure_does_not_export_a_selected_toolchain(self):
+        for mode in ("--required", "--optional"):
+            with self.subTest(mode=mode):
+                code, env, output, log, *_ = self._select(
+                    mode, "Xcode {version}\nBuild version {build}", registration_exit=17)
+                self.assertEqual(1, code, log)
+                self.assertEqual("", env)
+                self.assertEqual("", output)
+                self.assertIn("::error::", log)
 
     def test_select_script_rejects_an_unknown_mode(self):
         result = subprocess.run(["/bin/bash", str(_path(SELECT_SCRIPT))], capture_output=True,
