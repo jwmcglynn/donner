@@ -207,9 +207,17 @@ TEST(SVGSetElement, ProcessingModesControlAnimationEvaluation) {
       EXPECT_EQ(values, nullptr);
     } else {
       ASSERT_NE(values, nullptr);
-      ASSERT_TRUE(values->overrides.contains("fill"));
-      EXPECT_EQ(values->overrides.at("fill"), "blue");
+      ASSERT_TRUE(values->contextualLengths.contains("fill"));
     }
+    ParseWarningSink renderingWarnings = ParseWarningSink::Disabled();
+    RendererUtils::prepareDocumentForRendering(parsed.result(), false, renderingWarnings);
+    const auto target = parsed.result().querySelector("#r");
+    ASSERT_TRUE(target.has_value());
+    const auto paint = target->getComputedStyle().fill.get();
+    ASSERT_TRUE(paint && paint->is<PaintServer::Solid>());
+    const auto expected = mode == ProcessingMode::SecureStatic ? css::RGBA::RGB(255, 0, 0)
+                                                               : css::RGBA::RGB(0, 0, 255);
+    EXPECT_EQ(paint->get<PaintServer::Solid>().color.resolve(css::RGBA::RGB(0, 0, 0), 1), expected);
   }
 }
 
