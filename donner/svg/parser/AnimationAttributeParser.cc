@@ -33,6 +33,23 @@ struct AnimationParseContext {
   std::optional<ParseDiagnostic> diagnostic;
 };
 
+template <typename Href>
+bool ParseAnimationHref(EntityHandle handle, Href& href, const XMLQualifiedNameRef& name,
+                        std::string_view value) {
+  if (name == XMLQualifiedNameRef("href")) {
+    href = std::string(value);
+    return true;
+  }
+  if (name != XMLQualifiedNameRef("xlink", "href")) {
+    return false;
+  }
+  const auto* attributes = handle.try_get<donner::components::AttributesComponent>();
+  if (!attributes || !attributes->hasAttribute("href")) {
+    href = std::string(value);
+  }
+  return true;
+}
+
 /// Parse a semicolon-separated list of values, trimming whitespace.
 ParseResult<std::vector<std::string>> parseSemicolonList(std::string_view str) {
   std::vector<std::string> result;
@@ -244,7 +261,7 @@ bool IsAnimationTimingAttribute(const XMLQualifiedNameRef& name) {
 }
 
 template <typename Component>
-bool ParseAnimationValues(AnimationParseContext& context, Component& component,
+bool ParseAnimationValues(EntityHandle handle, AnimationParseContext& context, Component& component,
                           const XMLQualifiedNameRef& name, std::string_view value) {
   if (name == XMLQualifiedNameRef("from")) {
     component.from = std::string(value);
@@ -252,8 +269,8 @@ bool ParseAnimationValues(AnimationParseContext& context, Component& component,
     component.to = std::string(value);
   } else if (name == XMLQualifiedNameRef("by")) {
     component.by = std::string(value);
-  } else if (name == XMLQualifiedNameRef("href") || name == XMLQualifiedNameRef("xlink", "href")) {
-    component.href = std::string(value);
+  } else if (ParseAnimationHref(handle, component.href, name, value)) {
+    return true;
   } else if (name == XMLQualifiedNameRef("values")) {
     auto parsed = parseSemicolonList(value);
     if (parsed.hasResult()) {
@@ -287,7 +304,7 @@ bool ParseTransformType(components::AnimateTransformComponent& component, std::s
   return true;
 }
 
-bool ParseMotionAttribute(AnimationParseContext& context,
+bool ParseMotionAttribute(EntityHandle handle, AnimationParseContext& context,
                           components::AnimateMotionComponent& motion,
                           const XMLQualifiedNameRef& name, std::string_view value) {
   if (name == XMLQualifiedNameRef("path")) {
@@ -305,7 +322,7 @@ bool ParseMotionAttribute(AnimationParseContext& context,
       }
     }
   } else {
-    return ParseAnimationValues(context, motion, name, value);
+    return ParseAnimationValues(handle, context, motion, name, value);
   }
   return true;
 }
@@ -317,7 +334,7 @@ bool ParseSpecificAnimationAttribute(EntityHandle handle, AnimationParseContext&
       component->attributeName = std::string(value);
       return true;
     }
-    return ParseAnimationValues(context, *component, name, value);
+    return ParseAnimationValues(handle, context, *component, name, value);
   }
   if (auto* component = handle.try_get<components::AnimateTransformComponent>()) {
     if (name == XMLQualifiedNameRef("attributeName")) {
@@ -326,29 +343,27 @@ bool ParseSpecificAnimationAttribute(EntityHandle handle, AnimationParseContext&
     }
     return name == XMLQualifiedNameRef("type")
                ? ParseTransformType(*component, value)
-               : ParseAnimationValues(context, *component, name, value);
+               : ParseAnimationValues(handle, context, *component, name, value);
   }
   if (auto* component = handle.try_get<components::AnimateMotionComponent>()) {
-    return ParseMotionAttribute(context, *component, name, value);
+    return ParseMotionAttribute(handle, context, *component, name, value);
   }
   if (auto* component = handle.try_get<components::SetAnimationComponent>()) {
     if (name == XMLQualifiedNameRef("attributeName")) {
       component->attributeName = std::string(value);
     } else if (name == XMLQualifiedNameRef("to")) {
       component->to = std::string(value);
-    } else if (name == XMLQualifiedNameRef("href") ||
-               name == XMLQualifiedNameRef("xlink", "href")) {
-      component->href = std::string(value);
+    } else if (ParseAnimationHref(handle, component->href, name, value)) {
+      return true;
     } else {
       return false;
     }
     return true;
   }
   if (auto* component = handle.try_get<components::MPathComponent>()) {
-    if (name != XMLQualifiedNameRef("href") && name != XMLQualifiedNameRef("xlink", "href")) {
+    if (!ParseAnimationHref(handle, component->href, name, value)) {
       return false;
     }
-    component->href = std::string(value);
     return true;
   }
   return false;
