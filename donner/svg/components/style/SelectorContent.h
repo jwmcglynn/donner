@@ -50,14 +50,12 @@ void RecordDiscardedSelectorText(EntityHandle parent, const xml::XMLNode& node);
 void CompleteSelectorContentProjection(EntityHandle parent, bool contentsReparsed);
 
 /**
- * Inspect CSS emptiness using the adapter's tree and its authoritative data entity.
+ * Inspect CSS emptiness using authored children and text on the authoritative data entity.
  * @param registry Registry shared by the tree and data entities.
- * @param treeEntity Element-child view; shadow hosts use their authored data entity.
  * @param dataEntity Element containing authoritative text and projection metadata.
  * @param budget Shared selector-work budget, or nullptr for an unbudgeted DOM inspection.
  * @return True if no element or non-whitespace text children exist; false on budget exhaustion.
  */
-bool IsSelectorEmpty(Registry& registry, Entity treeEntity, Entity dataEntity,
-                     css::SelectorTraversalBudget* budget);
+bool IsSelectorEmpty(Registry& registry, Entity dataEntity, css::SelectorTraversalBudget* budget);
 
 }  // namespace donner::svg::components

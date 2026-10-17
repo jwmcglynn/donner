@@ -26,13 +26,13 @@ void SVGDescElement::setTextContent(std::string_view text) {
   DocumentMutationBatch mutation = handle_.mutationBatch();
   DocumentWriteAccess& access = mutation.access();
   const EntityHandle selectorHandle = unsafeEntityHandle();
-  const bool wasEmpty = components::IsSelectorEmpty(
-      *selectorHandle.registry(), selectorHandle.entity(), selectorHandle.entity(), nullptr);
+  const bool wasEmpty =
+      components::IsSelectorEmpty(*selectorHandle.registry(), selectorHandle.entity(), nullptr);
   components::ResetSelectorTextContent(unsafeEntityHandle());
   auto& component = handle_.get_or_emplace<components::DescriptiveTextComponent>(access);
   component.text = RcString(text);
-  if (wasEmpty != components::IsSelectorEmpty(*selectorHandle.registry(), selectorHandle.entity(),
-                                              selectorHandle.entity(), nullptr)) {
+  if (wasEmpty !=
+      components::IsSelectorEmpty(*selectorHandle.registry(), selectorHandle.entity(), nullptr)) {
     components::TreeMutation::InvalidateTextContentStyles(selectorHandle);
   }
 }

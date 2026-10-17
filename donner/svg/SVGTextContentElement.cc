@@ -145,8 +145,8 @@ void SVGTextContentElement::appendText(std::string_view text) {
   DocumentMutationBatch mutation = handle_.mutationBatch();
   DocumentWriteAccess& access = mutation.access();
   const EntityHandle selectorHandle = unsafeEntityHandle();
-  const bool wasEmpty = components::IsSelectorEmpty(
-      *selectorHandle.registry(), selectorHandle.entity(), selectorHandle.entity(), nullptr);
+  const bool wasEmpty =
+      components::IsSelectorEmpty(*selectorHandle.registry(), selectorHandle.entity(), nullptr);
   components::RecordAppendedSelectorText(selectorHandle, text);
   auto& textComponent = handle_.get_or_emplace<components::TextComponent>(access);
 
@@ -165,8 +165,8 @@ void SVGTextContentElement::appendText(std::string_view text) {
   }
 
   invalidateTextGeometry();
-  if (wasEmpty != components::IsSelectorEmpty(*selectorHandle.registry(), selectorHandle.entity(),
-                                              selectorHandle.entity(), nullptr)) {
+  if (wasEmpty !=
+      components::IsSelectorEmpty(*selectorHandle.registry(), selectorHandle.entity(), nullptr)) {
     components::TreeMutation::InvalidateTextContentStyles(selectorHandle);
   }
 }
@@ -186,16 +186,16 @@ void SVGTextContentElement::setTextContent(std::string_view text) {
   DocumentMutationBatch mutation = handle_.mutationBatch();
   DocumentWriteAccess& access = mutation.access();
   const EntityHandle selectorHandle = unsafeEntityHandle();
-  const bool wasEmpty = components::IsSelectorEmpty(
-      *selectorHandle.registry(), selectorHandle.entity(), selectorHandle.entity(), nullptr);
+  const bool wasEmpty =
+      components::IsSelectorEmpty(*selectorHandle.registry(), selectorHandle.entity(), nullptr);
   components::ResetSelectorTextContent(unsafeEntityHandle());
   auto& textComponent = handle_.get_or_emplace<components::TextComponent>(access);
   textComponent.text = text;
   textComponent.textChunks.clear();
   textComponent.textChunks.emplace_back(text);
   invalidateTextGeometry();
-  if (wasEmpty != components::IsSelectorEmpty(*selectorHandle.registry(), selectorHandle.entity(),
-                                              selectorHandle.entity(), nullptr)) {
+  if (wasEmpty !=
+      components::IsSelectorEmpty(*selectorHandle.registry(), selectorHandle.entity(), nullptr)) {
     components::TreeMutation::InvalidateTextContentStyles(selectorHandle);
   }
 }
