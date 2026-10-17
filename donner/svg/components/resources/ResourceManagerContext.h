@@ -87,9 +87,6 @@ public:
   /// Identity of the current resource loader and processing policy for derived caches.
   uint64_t cacheGeneration() const { return cacheGeneration_; }
 
-  /// Processing policy governing resource loading and interactive event delivery.
-  ProcessingMode processingMode() const { return processingMode_; }
-
   /// Current processing policy, shared with non-resource document systems.
   ProcessingMode processingMode() const { return processingMode_; }
 
