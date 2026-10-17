@@ -452,7 +452,7 @@ void TextSystem::instantiateComputedComponent(EntityHandle rootHandle,
 
     if (const auto* style = handle.try_get<ComputedStyleComponent>(); style && style->properties) {
       computed.textLengthOwnerFontSizes.try_emplace(handle.entity(),
-                                                    style->properties.fontSize.get().value());
+                                                    style->properties->fontSize.get().value());
     }
 
     bool isHidden = parentHidden;

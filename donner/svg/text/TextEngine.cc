@@ -311,8 +311,9 @@ void ResolvePerSpanLayoutStyles(Registry& registry, components::ComputedTextComp
   for (auto& [owner, fontSize] : text.textLengthOwnerFontSizes) {
     const Entity styleEntity = styleContext ? styleContext->styleEntityFor(owner) : owner;
     if (styleEntity != entt::null) {
-      if (const auto* style = registry.try_get<components::ComputedStyleComponent>(styleEntity)) {
-        fontSize = style->properties.fontSize.get().value();
+      if (const auto* style = registry.try_get<components::ComputedStyleComponent>(styleEntity);
+          style && style->properties) {
+        fontSize = style->properties->fontSize.get().value();
       }
     }
   }
@@ -953,8 +954,9 @@ bool ApplyTextLengthOwnerPlan(Registry& registry, std::vector<TextRun>& runs,
       ownerFontSize = occurrence->second;
     } else if (span.sourceEntity == owner && span.hasResolvedFontSize) {
       ownerFontSize = span.fontSize;
-    } else if (const auto* style = registry.try_get<components::ComputedStyleComponent>(owner)) {
-      ownerFontSize = style->properties.fontSize.get().value();
+    } else if (const auto* style = registry.try_get<components::ComputedStyleComponent>(owner);
+               style && style->properties) {
+      ownerFontSize = style->properties->fontSize.get().value();
     }
     if (ownerFontSize) {
       const double size =
