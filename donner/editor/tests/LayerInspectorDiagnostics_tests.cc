@@ -334,5 +334,31 @@ TEST(LayerInspectorDiagnosticsTest, AuthorizedDiagnosticSaveUsesOnlyHostDestinat
   EXPECT_EQ(after, "dummy user data");
 }
 
+TEST(LayerInspectorDiagnosticsTest, FixedDiagnosticDestinationCannotFollowSymlink) {
+  const std::filesystem::path root =
+      std::filesystem::path(::testing::TempDir()) / "diagnostic-save-symlink";
+  std::filesystem::create_directories(root / "output");
+  const std::filesystem::path sentinel = root / "sentinel.jsonl";
+  {
+    std::ofstream output(sentinel);
+    output << "dummy user data";
+    ASSERT_TRUE(output.good());
+  }
+  const std::filesystem::path destination = root / "output" / "telemetry.jsonl";
+  std::error_code errorCode;
+  std::filesystem::create_symlink(sentinel, destination, errorCode);
+  ASSERT_FALSE(errorCode) << errorCode.message();
+  const CompositorTelemetryFileAccess authorized{.fixedOutputPath = destination.string()};
+  std::string error;
+  EXPECT_FALSE(SaveCompositorHeuristicTelemetry("ignored", "replacement", &error, authorized));
+  std::ifstream input(sentinel);
+  const std::string contents((std::istreambuf_iterator<char>(input)),
+                             std::istreambuf_iterator<char>());
+  EXPECT_EQ(contents, "dummy user data");
+  input.close();
+  std::filesystem::remove(destination, errorCode);
+  EXPECT_FALSE(errorCode) << errorCode.message();
+}
+
 }  // namespace
 }  // namespace donner::editor

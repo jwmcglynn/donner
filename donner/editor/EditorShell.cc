@@ -1624,7 +1624,9 @@ EditorShell::EditorShell(gui::EditorWindow& window, EditorShellOptions options)
       documentSyncController_(InitialDocumentSyncSource(options_)),
       interactionController_(),
       inputBridge_(window_, kWheelZoomStep),
-      compositorDebugPanel_(UiGeodeDevice(window)),
+      compositorDebugPanel_(UiGeodeDevice(window),
+                            {.allowFileSystemActions = options_.allowFileSystemActions,
+                             .fixedOutputPath = options_.diagnosticTelemetryOutputPath}),
       dialogPresenter_(options_.editorNoticeText, options_.editorBuildInfo) {
 #ifdef DONNER_EDITOR_WGPU
   window_.clearLastFullyPresentedDocumentFrame();

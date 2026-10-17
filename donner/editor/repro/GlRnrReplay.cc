@@ -554,6 +554,8 @@ bool RunGlRnrReplay(const GlRnrReplayOptions& options, GlRnrReplayResult* result
           .initialPath = std::nullopt,
           .allowFileSystemActions =
               kUntrustedReproReplaySecurityPolicy.allowEditorFileSystemActions,
+          .diagnosticTelemetryOutputPath =
+              (options.outputDir / "compositor-heuristic-telemetry.jsonl").string(),
           .allowHostClipboardAccess = kUntrustedReproReplaySecurityPolicy.allowHostClipboardAccess,
           .showWelcome = options.showWelcome,
           .editorNoticeText = "",
