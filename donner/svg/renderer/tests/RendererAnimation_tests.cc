@@ -4,6 +4,7 @@
 #include <utility>
 
 #include "donner/base/tests/ParseResultTestUtils.h"
+#include "donner/editor/tests/BitmapGoldenCompare.h"
 #include "donner/svg/SVGFEOffsetElement.h"
 #include "donner/svg/SVGLineElement.h"
 #include "donner/svg/SVGPolygonElement.h"
@@ -34,6 +35,23 @@ SVGDocument parseAnimated(std::string_view fragment) {
 }
 
 }  // namespace
+
+TEST(RendererAnimation, MotionRetainsSmallOffsetsOnLargeCoordinates) {
+  auto document = parseAnimated(
+      "<rect width='4' height='4' transform='translate(-1000000000000)'>"
+      "<animateMotion path='M1000000000002 0H1000000000010' dur='2s' fill='freeze'/>"
+      "</rect>");
+  for (const auto& [time, x] :
+       {std::pair{0.0, 2}, std::pair{1.0, 6}, std::pair{3.0, 10}, std::pair{0.5, 4}}) {
+    SCOPED_TRACE(time);
+    document.setTime(time);
+    auto expected = parseAnimated("<rect x='" + std::to_string(x) + "' width='4' height='4'/>");
+    editor::tests::CompareBitmapToBitmap(RenderDocumentWithActiveBackend(document),
+                                         RenderDocumentWithActiveBackend(expected),
+                                         "motion-coordinate-precision-" + std::to_string(time),
+                                         editor::tests::PixelmatchIdentityParams());
+  }
+}
 
 TEST(RendererAnimation, GeometryGrowFreeze) {
   // <animate> on rect width from 4 to 12 over 2s, frozen after.
