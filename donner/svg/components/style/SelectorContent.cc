@@ -49,7 +49,7 @@ bool IsTextNode(const xml::XMLNode& node) {
   return node.type() == xml::XMLNode::Type::Data || node.type() == xml::XMLNode::Type::CData;
 }
 
-bool RawNodeHasContent(EntityHandle child, css::SelectorTraversalBudget* budget) {
+bool RawNodeHasContent(EntityHandle child, bool inspectText, css::SelectorTraversalBudget* budget) {
   const auto node = xml::XMLNode::TryCast(child);
   if (!node) {
     return false;
@@ -57,10 +57,12 @@ bool RawNodeHasContent(EntityHandle child, css::SelectorTraversalBudget* budget)
   if (node->type() == xml::XMLNode::Type::Element) {
     return true;
   }
-  return IsTextNode(*node) && !IsIgnorableText(node->value().value_or(RcString("")), budget);
+  return inspectText && IsTextNode(*node) &&
+         !IsIgnorableText(node->value().value_or(RcString("")), budget);
 }
 
-bool ChildrenAreEmpty(Registry& registry, Entity treeEntity, css::SelectorTraversalBudget* budget) {
+bool ChildrenAreEmpty(Registry& registry, Entity treeEntity, bool inspectText,
+                      css::SelectorTraversalBudget* budget) {
   if (treeEntity == entt::null) {
     return true;
   }
@@ -74,26 +76,46 @@ bool ChildrenAreEmpty(Registry& registry, Entity treeEntity, css::SelectorTraver
       continue;
     }
     if (registry.all_of<ElementTypeComponent>(child) ||
-        RawNodeHasContent(EntityHandle(registry, child), budget)) {
+        RawNodeHasContent(EntityHandle(registry, child), inspectText, budget)) {
       return false;
     }
   }
   return true;
 }
 
+bool HasRawTextChildren(EntityHandle parent) {
+  const auto node = xml::XMLNode::TryCast(parent);
+  if (node) {
+    for (auto child = node->firstChild(); child; child = child->nextSibling()) {
+      if (IsTextNode(*child)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 }  // namespace
+
+void RejectSelectorContentProjection(EntityHandle parent) {
+  if (RetainedText(parent)) {
+    parent.get_or_emplace<SelectorRejectedTextTag>();
+  }
+}
 
 void CompleteSelectorContentProjection(EntityHandle parent, bool contentsReparsed) {
   if (contentsReparsed) {
-    parent.remove<ProjectedNonWhitespaceTextTag>();
-    if (RetainedText(parent)) {
+    parent.remove<ProjectedNonWhitespaceTextTag, SelectorRawTextAuthorityTag,
+                  SelectorRejectedTextTag>();
+    if (RetainedText(parent) && HasRawTextChildren(parent)) {
       parent.get_or_emplace<SelectorRawTextAuthorityTag>();
     }
   }
 }
 
 void ResetSelectorTextContent(EntityHandle parent) {
-  parent.remove<ProjectedNonWhitespaceTextTag, SelectorRawTextAuthorityTag>();
+  parent.remove<ProjectedNonWhitespaceTextTag, SelectorRawTextAuthorityTag,
+                SelectorRejectedTextTag>();
   const auto node = xml::XMLNode::TryCast(parent);
   if (!node) {
     return;
@@ -131,12 +153,13 @@ bool IsSelectorEmpty(Registry& registry, Entity dataEntity, css::SelectorTravers
   if (data.all_of<ProjectedNonWhitespaceTextTag>()) {
     return false;
   }
-  if (!data.all_of<SelectorRawTextAuthorityTag>()) {
+  const bool rejectedText = data.all_of<SelectorRejectedTextTag>();
+  if (rejectedText || !data.all_of<SelectorRawTextAuthorityTag>()) {
     if (const auto text = RetainedText(data); text && !IsIgnorableText(*text, budget)) {
       return false;
     }
   }
-  return ChildrenAreEmpty(registry, dataEntity, budget);
+  return ChildrenAreEmpty(registry, dataEntity, !rejectedText, budget);
 }
 
 }  // namespace donner::svg::components
