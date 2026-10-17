@@ -15,7 +15,9 @@
 #include "donner/base/ParseWarningSink.h"
 #include "donner/base/tests/BaseTestUtils.h"
 #include "donner/base/tests/ParseResultTestUtils.h"
+#include "donner/base/xml/XMLNode.h"
 #include "donner/css/parser/DeclarationListParser.h"
+#include "donner/svg/SVGRectElement.h"
 #include "donner/svg/SVGStyleQuery.h"
 #include "donner/svg/components/DirtyFlagsComponent.h"
 #include "donner/svg/components/StylesheetComponent.h"
@@ -846,6 +848,36 @@ TEST_F(StyleSystemTest, UserAgentDisplayRulesResolveSvgNamespaceAliases) {
     ASSERT_THAT(element, testing::Optional(testing::_));
     EXPECT_EQ(element->getComputedStyle().display.get(), Display::Inline);
     EXPECT_THAT(UserAgentMatchFlags(*element), testing::Not(testing::Contains(true)));
+  }
+}
+
+TEST_F(StyleSystemTest, SelectorBudgetChargesRawNodesSkippedByStyleMatching) {
+  for (const std::size_t maximumSteps : {16u, 1024u}) {
+    auto document = ParseSVG(R"svg(<svg xmlns="http://www.w3.org/2000/svg">
+      <style>g:has(> rect) { opacity: .8 }</style><g id="g"/>
+    </svg>)svg");
+    std::vector<Entity> userAgentSheets;
+    for (auto entity : document.registry().view<StylesheetComponent>()) {
+      if (document.registry().get<StylesheetComponent>(entity).isUserAgentStylesheet) {
+        userAgentSheets.push_back(entity);
+      }
+    }
+    for (const Entity entity : userAgentSheets) {
+      document.registry().remove<StylesheetComponent>(entity);
+    }
+    auto g = document.querySelector("#g").value();
+    auto xmlDocument = document.xmlDocument();
+    auto node = xml::XMLNode::TryCast(g.unsafeEntityHandle()).value();
+    for (int i = 0; i < 64; ++i) {
+      node.appendChild(xml::XMLNode::CreateDataNode(xmlDocument, " "));
+    }
+    g.appendChild(SVGRectElement::Create(document));
+    StyleResourceBudget::Limits limits;
+    limits.selectorTraversalSteps = maximumSteps;
+    auto& budget = document.registry().ctx().emplace<StyleResourceBudget>(limits);
+    ParseWarningSink warnings;
+    styleSystem.computeStyle(g.entityHandle(), warnings);
+    EXPECT_EQ(budget.selectorTraversal().rejected(), maximumSteps == 16u);
   }
 }
 

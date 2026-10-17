@@ -3,6 +3,7 @@
 #include "donner/base/SmallVector.h"
 #include "donner/base/xml/components/TreeComponent.h"
 #include "donner/css/selectors/SelectorMatchOptions.h"
+#include "donner/svg/components/ElementTypeComponent.h"
 #include "donner/svg/components/shadow/ShadowTreeComponent.h"
 
 namespace donner::svg::details {
@@ -26,7 +27,9 @@ bool PushTraversalChildrenReverse(EntityHandle element, SmallVector<Entity, 16>&
     if (!traversalBudget.consume()) {
       return false;
     }
-    stack.push_back(child);
+    if (registry.all_of<components::ElementTypeComponent>(child)) {
+      stack.push_back(child);
+    }
   }
   return true;
 }
