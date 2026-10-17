@@ -61,8 +61,9 @@ struct SelectorMatchOptions {
   const T* relativeToElement =
       nullptr;  ///< Enables relative querying and uses this element as the reference point. For
                 ///< example, `> div` will match `div` that is a child of `relativeToElement`.
-  const T* scopeElement = nullptr;  ///< Element to match against `:scope` queries. Cannot be
-                                    ///< matched directly, but can be used for relative matching.
+  const T* scopeElement = nullptr;   ///< Element to match against `:scope` queries. Cannot be
+                                     ///< matched directly, but can be used for relative matching.
+  bool allowScopeOnlyMatch = false;  ///< Permit scope-only ancestor and filter matching.
   SelectorTraversalBudget* traversalBudget = nullptr;  ///< Shared selector-work budget.
 };
 
