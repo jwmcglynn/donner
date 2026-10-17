@@ -4116,12 +4116,14 @@ test(
       pulseClickStartedEpochMs = Date.now();
       await page.mouse.click(box.x + originX + 456 * scale, pad.y);
       pulseClickFinishedEpochMs = Date.now();
+      // The pulse lasts 600 ms; the default poll backoff can skip its entire active interval.
       await expect.poll(async () => {
         const bounds = await orb();
         return bounds.maxY - bounds.minY;
-      }, { timeout: scaledMs(5000), message: "Click triggers the radius pulse" }).toBeGreaterThan(
-        58 * scale,
-      );
+      }, { timeout: scaledMs(5000), intervals: [50], message: "Click triggers the radius pulse" })
+        .toBeGreaterThan(
+          58 * scale,
+        );
       await expect.poll(async () => {
         const bounds = await orb();
         return Math.abs((bounds.maxY - bounds.minY) - (start.maxY - start.minY));
@@ -4153,7 +4155,11 @@ test(
       await expect.poll(async () => {
         const bounds = await orb();
         return bounds.maxY - bounds.minY;
-      }, { timeout: scaledMs(5000), message: "Queued click pulses after stale-frame catch-up" })
+      }, {
+        timeout: scaledMs(5000),
+        intervals: [50],
+        message: "Queued click pulses after stale-frame catch-up",
+      })
         .toBeGreaterThan(58 * scale);
     } finally {
       tracePulseScreenshots = false;
