@@ -34,7 +34,7 @@ export function presentedPulseWindow(
   for (let index = 0; index + 1 < samples.length; ++index) {
     const presented = samples[index][4];
     if (
-      presented - click[4] >= 0.1 && presented - click[4] <= 0.35
+      presented - click[4] >= 0.1 && presented - click[4] <= maximumElapsed
       && samples[index + 1][4] > presented
     ) {
       return {
