@@ -451,6 +451,47 @@ TEST(SVGDocument, EmptySelectorTextAuthoritySurvivesSourceAndTypedEdits) {
   EXPECT_TRUE(title.isEmptyForSelector(nullptr));
 }
 
+TEST(SVGDocument, EmptySelectorKeepsRetainedAuthorityForRawTextDeltas) {
+  auto document = ParseSVG(R"svg(<svg xmlns="http://www.w3.org/2000/svg">
+    <style>
+      text { opacity: .2 } text:empty { opacity: .8 }
+      #parent { opacity: .4 } #parent:has(> text:empty) { opacity: .6 }
+    </style>
+    <g id="parent"><text id="text">word</text></g>
+  </svg>)svg");
+  auto text = document.querySelector("#text").value();
+  auto parent = document.querySelector("#parent").value();
+  auto xmlDocument = document.xmlDocument();
+  auto delta = xml::XMLNode::CreateDataNode(xmlDocument, " ");
+  xml::XMLNode::TryCast(text.unsafeEntityHandle())->appendChild(delta);
+  EXPECT_THAT(text.getComputedStyle().opacity.get(), Optional(.2));
+  EXPECT_THAT(parent.getComputedStyle().opacity.get(), Optional(.4));
+  auto changed = ReplaceInSource(document, "word", "new");
+  ASSERT_FALSE(changed.diagnostic.has_value());
+  EXPECT_FALSE(text.isEmptyForSelector(nullptr));
+  changed = ReplaceInSource(document, "new", " ");
+  ASSERT_FALSE(changed.diagnostic.has_value());
+  EXPECT_TRUE(text.isEmptyForSelector(nullptr));
+  EXPECT_THAT(text.getComputedStyle().opacity.get(), Optional(.8));
+  EXPECT_THAT(parent.getComputedStyle().opacity.get(), Optional(.6));
+}
+
+TEST(SVGDocument, EmptySelectorIgnoresRejectedRawTextProjection) {
+  parser::SVGParser::Options options;
+  options.maximumContentProjectionChunks = 1;
+  auto document =
+      ParseSVG(R"(<svg xmlns="http://www.w3.org/2000/svg"><text id="t"> </text></svg>)", options);
+  auto text = document.querySelector("#t").value();
+  EXPECT_TRUE(text.isEmptyForSelector(nullptr));
+  auto changed = ReplaceInSource(document, "<text id=\"t\"> </text>",
+                                 "<text id=\"t\">word<![CDATA[other]]></text>");
+  ASSERT_TRUE(changed.applied);
+  ASSERT_TRUE(changed.diagnostic.has_value());
+  EXPECT_THAT(changed.diagnostic->reason, testing::HasSubstr("too many chunks"));
+  EXPECT_EQ(text.entityHandle().get<components::TextComponent>().text, " ");
+  EXPECT_TRUE(text.isEmptyForSelector(nullptr));
+}
+
 TEST(SVGDocument, ApplySourceEditProjectsTextMutation) {
   auto document =
       ParseSVG(R"(<svg xmlns="http://www.w3.org/2000/svg"><text id="label">hello</text></svg>)");
