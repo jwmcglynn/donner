@@ -147,6 +147,24 @@ TEST_F(SelectorTests, ClassAndIncludesUseCssWhitespace) {
   EXPECT_FALSE(matches("[tokens~='']", element));
 }
 
+TEST_F(SelectorTests, ForgivingScopeFunctionsKeepAncestorContext) {
+  FakeElement root("root");
+  FakeElement mid("mid");
+  root.appendChild(mid);
+  SelectorMatchOptions<FakeElement> options;
+  options.scopeElement = &root;
+  for (const char* input : {":scope > mid", ":is(:scope) > mid", ":where(:scope) > mid"}) {
+    SCOPED_TRACE(input);
+    auto selector = SelectorParser::Parse(input);
+    ASSERT_THAT(selector, NoParseError());
+    EXPECT_TRUE(selector.result().matches(mid, options).matched);
+  }
+  auto nth = SelectorParser::Parse(":nth-child(1 of :scope)");
+  ASSERT_THAT(nth, NoParseError());
+  options.scopeElement = &mid;
+  EXPECT_TRUE(nth.result().matches(mid, options).matched);
+}
+
 TEST_F(SelectorTests, TypeMatch) {
   FakeElement root("rect");
   FakeElement child1("a");
