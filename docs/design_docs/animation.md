@@ -111,6 +111,14 @@ Inherited URL paints retain their resource owner. Invalid effective operands lea
 layers intact. The presentation and public-API regression targets cover shared A-B-A instances,
 external paint ownership, seeking, source preservation, and lighting cascade/style removal.
 
+Basic-shape length stacks retain their units until each rendered instance supplies its viewport and
+font metrics. Each basic-shape shadow owns its computed geometry throughout active and inactive
+intervals; an empty or refused path cannot fall back to another instance's geometry. Paint servers,
+clipping, masks, filters, hit tests and world bounds use that same instance geometry. Source edits
+remain the next sample's base, and shadow teardown releases its retained geometry reservations.
+Shared mask content is replayed for each occurrence without consuming the caller's draw cursor.
+The coordinate-context and public renderer API regressions cover these ownership and replay paths.
+
 Text-path offsets and marker lengths retain immutable, admitted value stacks until their instance
 context is available. Text offsets use the final path geometry, including source edits and animated
 referenced paths. Marker dimensions and reference points are resolved once per referencing render
@@ -213,7 +221,8 @@ Incompatible composition contributes no value, including after freezing; incompa
 uses discrete keyframe timing. Arc parameters are interpolated before geometry conversion, with
 nonzero interpolated flags treated as true. Empty `d` values remain valid samples. Typed and CSS path
 bases, lower animation layers, and motion references share the effective sampled geometry.
-Coordinates use round-trip precision, and parsing, copies, arithmetic and serialization are bounded.
+Coordinates and sampled motion transforms use round-trip precision, and parsing, copies, arithmetic
+and serialization are bounded.
 Path data has no defined paced distance; paced mode uses the permitted linear fallback.
 
 The final coverage gate requires rendered regressions for newly supported families. Unsupported
