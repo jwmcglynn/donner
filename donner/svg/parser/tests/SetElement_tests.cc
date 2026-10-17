@@ -46,7 +46,7 @@ std::optional<std::string> AnimatedOverride(SVGDocument& document, std::string_v
   if (!values) {
     return std::nullopt;
   }
-  const auto value = values->overrides.find(attribute);
+  const auto value = values->overrides.find(std::string(attribute));
   return value == values->overrides.end() ? std::nullopt : std::optional(value->second);
 }
 
@@ -108,7 +108,7 @@ TEST(SVGSetElement, HrefPrecedesXlinkHrefIncludingEmptyAndMutationFallback) {
       <set id="animation" href="#primary" xlink:href="#legacy"
            attributeName="width" to="40" dur="2s"/>
     </svg>)svg");
-  const auto animation = document.querySelector("#animation");
+  auto animation = document.querySelector("#animation");
   ASSERT_THAT(animation, testing::Ne(std::nullopt));
   const auto href = [&]() {
     return animation->entityHandle().get<components::SetAnimationComponent>().href;

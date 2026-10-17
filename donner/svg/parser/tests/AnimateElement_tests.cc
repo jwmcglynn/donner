@@ -489,7 +489,7 @@ TEST(SVGAnimateElement, HrefPrecedesXlinkHrefIncludingEmptyAndMutationFallback) 
       <animate id="animation" href="#primary" xlink:href="#legacy"
                attributeName="width" from="0" to="100" dur="2s"/>
     </svg>)svg");
-  const auto animation = document.querySelector("#animation");
+  auto animation = document.querySelector("#animation");
   ASSERT_THAT(animation, testing::Ne(std::nullopt));
   const auto href = [&]() {
     return animation->entityHandle().get<components::AnimateValueComponent>().href;
