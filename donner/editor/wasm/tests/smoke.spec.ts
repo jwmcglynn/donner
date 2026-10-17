@@ -25,6 +25,7 @@ import { armFailureCanvasEvidence, installFailureCanvasEvidence } from "./failur
 import { waitForAppliedPointer } from "./gesture-streams";
 import { echoGpuSessionConsole } from "./gpu-session-console";
 import { quarantineStillSkips } from "./quarantine-report.mjs";
+import { sampleThumbnailLaneQuiescent } from "./sample-thumbnail-quiescence.mjs";
 import { expectSampleThumbnailsToSettle } from "./sample-thumbnail-settle";
 import {
   expectSurfaceFrameProbeReady,
@@ -3673,6 +3674,30 @@ test(
       true,
     );
     if (!initial || !mode) throw new Error("Animation sample did not become visible");
+    // Selecting the document can reopen thumbnail work when its fonts arrive.
+    await expect.poll(async () => {
+      const stats = await page.evaluate(() => window.__donnerSampleThumbnailStats);
+      return { stats, quiescent: sampleThumbnailLaneQuiescent(stats) };
+    }, {
+      message: "sample-triggered thumbnail work finishes before the Edit baseline",
+      timeout: scaledMs(20000),
+    }).toEqual(expect.objectContaining({ quiescent: true }));
+    await expect.poll(() =>
+      page.evaluate(() => {
+        const queue = window.__donnerPresentationQueueStats;
+        return {
+          presented: window.__donnerWorkerStats?.resultFramePresented === true,
+          framesInFlight: queue?.framesInFlight ?? null,
+          completedSerial: queue?.completedSerial ?? null,
+          submittedSerial: queue?.submittedSerial ?? null,
+        };
+      }).then((state) => ({
+        ...state,
+        complete: state.completedSerial !== null && state.completedSerial === state.submittedSerial,
+      })), {
+      timeout: scaledMs(5000),
+      message: "the Edit baseline reaches completed browser presentation",
+    }).toEqual(expect.objectContaining({ presented: true, framesInFlight: 0, complete: true }));
     const initialOrb: PixelBounds = initial;
     const edit: PixelBounds = mode;
     const scale = (initialOrb.maxY - initialOrb.minY + 1) / 48;
