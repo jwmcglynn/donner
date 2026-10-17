@@ -542,6 +542,42 @@ TEST(RendererAnimationPresentation, NaturalTextLengthRecomputesAfterSourceMutati
       RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(expected),
       "natural-text-length-source-mutation", editor::tests::PixelmatchIdentityParams());
 }
+
+TEST(RendererAnimationPresentation, InvalidUpperTextLengthKeepsValidLowerLayer) {
+  auto document = ParsePresentation(
+      "<text x='1' y='12' font-size='10' lengthAdjust='spacingAndGlyphs' textLength='8'>HH"
+      "<animate attributeName='textLength' from='10' to='20' dur='2s'/>"
+      "<set attributeName='textLength' to='-1' dur='2s'/></text>");
+  document.setTime(1);
+  auto expected = ParsePresentation(
+      "<text x='1' y='12' font-size='10' lengthAdjust='spacingAndGlyphs' "
+      "textLength='15'>HH</text>");
+  editor::tests::CompareBitmapToBitmap(
+      RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(expected),
+      "invalid-upper-text-length-keeps-lower", editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(RendererAnimationPresentation, TextPositionBaseUsesAnimatedListArity) {
+  auto document = ParsePresentation(
+      "<text id='owner' y='12' font-size='10' dx='2'>AB</text>"
+      "<animate href='#owner' attributeName='dx' to='10' dur='2s'/>");
+  document.setTime(0.5);
+  auto expected = ParsePresentation("<text y='12' font-size='10' dx='4'>AB</text>");
+  editor::tests::CompareBitmapToBitmap(
+      RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(expected),
+      "text-position-list-arity", editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(RendererAnimationPresentation, AnimatedTextPositionListReplacesAuthoredTail) {
+  auto document = ParsePresentation(
+      "<text id='owner' y='12' font-size='10' dx='1 2'>AB</text>"
+      "<animate href='#owner' attributeName='dx' from='10' to='10' dur='2s'/>");
+  document.setTime(1);
+  auto expected = ParsePresentation("<text y='12' font-size='10' dx='10'>AB</text>");
+  editor::tests::CompareBitmapToBitmap(
+      RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(expected),
+      "text-position-list-replaces-tail", editor::tests::PixelmatchIdentityParams());
+}
 #endif
 
 TEST(RendererAnimationPresentation, ToOnlyPathCalibrationUsesTypedBase) {
