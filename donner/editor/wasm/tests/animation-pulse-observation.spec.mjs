@@ -29,6 +29,15 @@ test("60 Hz sampling and a delayed proof remain inside the expanded pulse", () =
   });
 });
 
+test("a later visible pulse sample can be proved before the window ends", () => {
+  assert.deepEqual(read(snapshot([click, tick(10.4), tick(10.45)])), {
+    dispatchEpochMs: 100,
+    dispatchTime: 10,
+    presentedTime: 10.4,
+    latestTime: 10.45,
+  });
+});
+
 test("one tick and repeated identical ticks do not prove presentation", () => {
   assert.equal(read(snapshot([click, tick(10.15)])), null);
   assert.equal(read(snapshot([click, tick(10.15), tick(10.15)])), null);
