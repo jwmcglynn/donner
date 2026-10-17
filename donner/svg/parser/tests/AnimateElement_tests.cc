@@ -13,8 +13,10 @@
 #include "donner/svg/SVGUseElement.h"
 #include "donner/svg/components/animation/AnimateValueComponent.h"
 #include "donner/svg/components/animation/AnimatedValuesComponent.h"
+#include "donner/svg/components/animation/AnimationBaseValue.h"
 #include "donner/svg/components/animation/AnimationPathValue.h"
 #include "donner/svg/components/animation/AnimationSystem.h"
+#include "donner/svg/components/animation/AnimationValueSampler.h"
 #include "donner/svg/parser/ListParser.h"
 #include "donner/svg/parser/PathParser.h"
 #include "donner/svg/parser/SVGParser.h"
@@ -76,10 +78,19 @@ std::optional<std::string> getAnimatedValue(SVGDocument& document, const char* s
   const bool supportedRectLength = element->type() == ElementType::Rect &&
                                    (attributeName == "width" || attributeName == "height");
   if (supportedRectLength && animValues->contextualLengths.contains(attributeName)) {
+    const auto recipe = animValues->contextualLengths.at(attributeName);
+    const auto rect = element->cast<SVGRectElement>();
+    auto& budget = registry.ctx().get<components::AnimationResourceBudget>();
+    auto context = components::AnimationContextFor(registry, element->entityHandle().entity(),
+                                                   attributeName, budget);
+    context.extent = attributeName == "width" ? Lengthd::Extent::X : Lengthd::Extent::Y;
+    const Lengthd underlying = attributeName == "width" ? rect.width() : rect.height();
+    if (!components::SampleContextualLengthRecipe(*recipe, underlying, context)) {
+      return std::nullopt;
+    }
     document.setTime(time);
     ParseWarningSink warnings = ParseWarningSink::Disabled();
     RendererUtils::prepareDocumentForRendering(document, false, warnings);
-    const auto rect = element->cast<SVGRectElement>();
     std::ostringstream output;
     output.precision(12);
     if (attributeName == "width") {

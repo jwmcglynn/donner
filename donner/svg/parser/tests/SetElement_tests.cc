@@ -7,10 +7,12 @@
 #include "donner/svg/SVGRectElement.h"
 #include "donner/svg/SVGSetElement.h"
 #include "donner/svg/components/animation/AnimatedValuesComponent.h"
+#include "donner/svg/components/animation/AnimationBaseValue.h"
 #include "donner/svg/components/animation/AnimationResourceBudget.h"
 #include "donner/svg/components/animation/AnimationStateComponent.h"
 #include "donner/svg/components/animation/AnimationSystem.h"
 #include "donner/svg/components/animation/AnimationTimingComponent.h"
+#include "donner/svg/components/animation/AnimationValueSampler.h"
 #include "donner/svg/components/animation/SetAnimationComponent.h"
 #include "donner/svg/components/resources/ResourceManagerContext.h"
 #include "donner/svg/parser/SVGParser.h"
@@ -55,12 +57,21 @@ std::optional<std::string> AnimatedOverride(SVGDocument& document, std::string_v
   }
   const bool supportedRectWidth = element->type() == ElementType::Rect && attribute == "width";
   if (supportedRectWidth && values->contextualLengths.contains(std::string(attribute))) {
+    const auto recipe = values->contextualLengths.at(std::string(attribute));
+    const auto rect = element->cast<SVGRectElement>();
+    auto& budget = document.registry().ctx().get<components::AnimationResourceBudget>();
+    auto context = components::AnimationContextFor(
+        document.registry(), element->entityHandle().entity(), attribute, budget);
+    context.extent = Lengthd::Extent::X;
+    if (!components::SampleContextualLengthRecipe(*recipe, rect.width(), context)) {
+      return std::nullopt;
+    }
     document.setTime(time);
     ParseWarningSink warnings = ParseWarningSink::Disabled();
     RendererUtils::prepareDocumentForRendering(document, false, warnings);
     std::ostringstream output;
     output.precision(12);
-    output << element->cast<SVGRectElement>().computedWidth();
+    output << rect.computedWidth();
     return output.str();
   }
   const auto value = values->overrides.find(std::string(attribute));
