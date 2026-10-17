@@ -10,6 +10,8 @@ import { boundBrowserDiagnostic, readGpuOwnerDispatchStats } from "./browser-run
 import { installBrowserStallDiagnostics } from "./browser-stall-diagnostics";
 import {
   type CanvasColorStats,
+  type CssRegion,
+  type EditorPixelTarget,
   captureEditorPage,
   findElementColoredPixel,
   type PixelBounds,
@@ -3586,7 +3588,7 @@ async function measurePageRaf(page: Page, durationMs: number) {
 
 test(
   "animation preview plays, dispatches mouse events, and returns to Edit",
-  async ({ page }, testInfo) => {
+  async ({ page, browserName }, testInfo) => {
     const rafControls = process.env.DONNER_ANIMATION_RAF_CONTROLS === "1";
     if (rafControls) testInfo.setTimeout(testInfo.timeout + 21000);
     const rafControlSamples: Record<string, Awaited<ReturnType<typeof measurePageRaf>>> = {};
@@ -3622,13 +3624,45 @@ test(
     const box = await canvas.boundingBox();
     if (!box) throw new Error("the editor canvas has no bounds");
     await page.mouse.click(box.x + box.width * 0.76, box.y + 390);
+    const captureAnimationRegion = async (region: CssRegion) => {
+      const viewport = page.viewportSize();
+      if (!viewport) throw new Error("the animation capture viewport is unavailable");
+      // Firefox can omit the transferred WebGPU canvas from clipped captures. Use the same
+      // un-clipped viewport capture as the presentation regressions, then score the original region.
+      const unclipped = browserName === "firefox";
+      const png = await page.screenshot({
+        ...(unclipped ? {} : { clip: region }),
+        timeout: scaledMs(5000),
+      });
+      const offsetX = unclipped ? region.x : 0;
+      const offsetY = unclipped ? region.y : 0;
+      const read = (
+        target: EditorPixelTarget,
+        search = { minX: 0, minY: 0, maxX: region.width, maxY: region.height },
+      ): PixelBounds | null => {
+        const bounds = readEditorPixelBoundsFromPng(png, target, unclipped ? viewport : region, {
+          minX: offsetX + search.minX,
+          minY: offsetY + search.minY,
+          maxX: offsetX + search.maxX,
+          maxY: offsetY + search.maxY,
+        });
+        return bounds === null ? null : {
+          ...bounds,
+          minX: bounds.minX - offsetX,
+          minY: bounds.minY - offsetY,
+          maxX: bounds.maxX - offsetX,
+          maxY: bounds.maxY - offsetY,
+        };
+      };
+      return { png, read };
+    };
     const documentRegion = { minX: 150, minY: 150, maxX: box.width - 430, maxY: box.height * 0.58 };
     let initial: PixelBounds | null = null;
     let mode: PixelBounds | null = null;
     await expect.poll(async () => {
-      const png = await canvas.screenshot({ timeout: scaledMs(5000) });
-      initial = readEditorPixelBoundsFromPng(png, "animation-mint", box, documentRegion);
-      mode = readEditorPixelBoundsFromPng(png, "selection-teal", box, {
+      const capture = await captureAnimationRegion(box);
+      initial = capture.read("animation-mint", documentRegion);
+      mode = capture.read("selection-teal", {
         minX: box.width - 410,
         minY: 0,
         maxX: box.width - 10,
@@ -3662,13 +3696,8 @@ test(
     }[] = [];
     const orb = async () => {
       const started = Date.now();
-      const png = await page.screenshot({ clip: track, timeout: scaledMs(5000) });
-      const result = readEditorPixelBoundsFromPng(png, "animation-mint", track, {
-        minX: 0,
-        minY: 0,
-        maxX: track.width,
-        maxY: track.height,
-      });
+      const capture = await captureAnimationRegion(track);
+      const result = capture.read("animation-mint");
       if (tracePulseScreenshots && pulseScreenshots.length < 64) {
         pulseScreenshots.push({
           startedEpochMs: started,
@@ -3676,7 +3705,13 @@ test(
           height: result ? result.maxY - result.minY : null,
         });
       }
-      if (!result) throw new Error("the presented animation orb disappeared");
+      if (!result) {
+        await testInfo.attach("animation-orb-missing", {
+          body: capture.png,
+          contentType: "image/png",
+        });
+        throw new Error("the presented animation orb disappeared");
+      }
       return result;
     };
     const start = await orb();
@@ -3923,13 +3958,7 @@ test(
         height: 65 * scale,
       };
       const padPixels = async (target: "animation-hover" | "animation-pressed") => {
-        const png = await page.screenshot({ clip: padRegion, timeout: scaledMs(5000) });
-        return readEditorPixelBoundsFromPng(png, target, padRegion, {
-          minX: 0,
-          minY: 0,
-          maxX: padRegion.width,
-          maxY: padRegion.height,
-        })?.pixels ?? 0;
+        return (await captureAnimationRegion(padRegion)).read(target)?.pixels ?? 0;
       };
       await page.mouse.move(pad.x, pad.y);
       await expect.poll(() => padPixels("animation-hover"), { timeout: scaledMs(5000) })
