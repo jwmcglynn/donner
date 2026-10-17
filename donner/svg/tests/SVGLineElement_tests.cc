@@ -147,7 +147,7 @@ TEST(SVGLineElementTests, GenericAttributeMutationUpdatesTypedCoordinateAndSourc
   fragment->setAttribute("x2", " \t12px \n");
   EXPECT_THAT(fragment->x2(), LengthIs(12.0, Lengthd::Unit::Px));
   EXPECT_THAT(fragment->getAttribute("x2"), testing::Optional(testing::StrEq(" \t12px \n")));
-  EXPECT_THAT(fragment.element,
+  EXPECT_THAT(fragment,
               ComputedSplineIs(PointsAndCommandsAre(
                   ElementsAre(Vector2d(1, 2), Vector2d(12, 4)),
                   ElementsAre(Command{CommandType::MoveTo, 0}, Command{CommandType::LineTo, 1}))));
@@ -167,7 +167,7 @@ TEST(SVGLineElementTests, GenericAttributeMutationUpdatesTypedCoordinateAndSourc
   fragment->removeAttribute("x2");
   EXPECT_THAT(fragment->x2(), LengthIs(0.0, Lengthd::Unit::None));
   EXPECT_THAT(fragment->getAttribute("x2"), Eq(std::nullopt));
-  EXPECT_THAT(fragment.element,
+  EXPECT_THAT(fragment,
               ComputedSplineIs(PointsAndCommandsAre(
                   ElementsAre(Vector2d(1, 2), Vector2d(0, 4)),
                   ElementsAre(Command{CommandType::MoveTo, 0}, Command{CommandType::LineTo, 1}))));
