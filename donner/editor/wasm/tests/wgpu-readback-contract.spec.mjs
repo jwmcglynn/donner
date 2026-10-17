@@ -118,6 +118,21 @@ function extractBrowserLibraryFunction(name, nextName, bridge) {
   );
 }
 
+const frameAttemptFixture = {
+  scheduledAttempts: 11, eventAttempts: 12, scheduledIdle: 13, eventIdle: 14,
+  scheduledRendered: 15, eventRendered: 16, blockedByFrame: 17, blockedByGpu: 18,
+  eventDeferrals: 19,
+};
+
+function makeFrameSamplePublisher(body) {
+  const publish = new Function(
+    "window", "performance", ...Array.from({ length: 14 }, (_, index) => `$${index}`), body,
+  );
+  return (window, clock, triggerBits, frameMs, callbacks, heapBytes, completedAtEpochMs) =>
+    publish(window, clock, triggerBits, frameMs, callbacks, heapBytes, completedAtEpochMs,
+      ...Object.values(frameAttemptFixture));
+}
+
 test("host timing consumes each current-frame draw snapshot once", () => {
   const underlayCallback = editorShellSource.match(
     /lastDirectPresentationCost_ = DrawDocumentPresentationToFramebuffer\([\s\S]*?PublishPendingUnderlayDrawStats\([\s\S]*?\);/,
@@ -504,7 +519,7 @@ test("worker poll timestamps retain their producer clock across delayed proxy de
 test("frame completion timestamps exclude proxy delay and retain successful admission", () => {
   const publisher = workerBridgeSource.match(/void RecordFrameSample\([\s\S]*?\n\}/)[0];
   const body = publisher.match(/MAIN_THREAD_ASYNC_EM_ASM\(\s*\{([\s\S]*?)\n\s*\},/)[1];
-  const publish = new Function("window", "performance", "$0", "$1", "$2", "$3", "$4", body);
+  const publish = makeFrameSamplePublisher(body);
   const frameClock = workerBridgeSource.match(
     /EM_JS\(double, WorkerEpochNowMs, \(\), \{([\s\S]*?)\}\);/,
   );
@@ -520,6 +535,7 @@ test("frame completion timestamps exclude proxy delay and retain successful admi
     };
     const clock = { timeOrigin: 1000, now: () => arrivalMs };
     publish(window, clock, 1, 15, 1, 4096, completedAtEpochMs);
+    assert.deepEqual(window.__donnerFrameAdmissionStats, frameAttemptFixture);
     assert.equal(
       window.__donnerWorkerStats.presentedAtMs,
       undefined,
@@ -555,7 +571,15 @@ test("the first canvas frame after a polled result must carry that result", () =
   const publisher = workerBridgeSource.match(/void PublishPresentedDocumentFrame\([\s\S]*?\n\}/);
   assert.ok(publisher, "expected the presented-document-frame publisher");
   const body = publisher[0].match(/MAIN_THREAD_ASYNC_EM_ASM\(\s*\{([\s\S]*?)\n\s*\},/)[1];
-  const presentFrame = new Function("window", "$0", "$1", body);
+  const publish = new Function("window", "performance", "$0", "$1", "$2", "$3", body);
+  const frameClock = { timeOrigin: 1000, now: () => 250 };
+  const presentFrame = (window, generation, version, epochMs = 1200, surfacePresented = true) =>
+    publish(window, frameClock, generation, version, epochMs, Number(surfacePresented));
+  const unpresented = {};
+  presentFrame(unpresented, 2, 5, 1200, false);
+  assert.equal(unpresented.__donnerPresentedDocumentStats, undefined);
+  presentFrame(unpresented, 2, 5, 900, true);
+  assert.equal(unpresented.__donnerPresentedDocumentStats, undefined);
   const window = {
     __donnerWorkerStats: { publishReason: "render-result", documentGeneration: 2, frameVersion: 5 },
   };
@@ -568,6 +592,11 @@ test("the first canvas frame after a polled result must carry that result", () =
     "frames that reach the canvas with another document frame are counted against the result",
   );
   presentFrame(window, 2, 5);
+  assert.equal(window.__donnerPresentedDocumentStats.lastPresentedAtMs, 200);
+  assert.equal(window.__donnerPresentedDocumentStats.lastPublicationDelayMs, 50);
+  const presentedCount = window.__donnerPresentedDocumentStats.count;
+  presentFrame(window, 2, 5);
+  assert.equal(window.__donnerPresentedDocumentStats.count, presentedCount);
   presentFrame(window, 2, 4);
   assert.deepEqual(
     { presented: stats.resultFramePresented, without: stats.framesPresentedWithoutResult },
@@ -720,16 +749,7 @@ test("a failed worker publication cannot inherit a prior frame's presentation ad
     "UTF8ToString",
     body(failure),
   );
-  const publishFrame = new Function(
-    "window",
-    "performance",
-    "$0",
-    "$1",
-    "$2",
-    "$3",
-    "$4",
-    body(frame),
-  );
+  const publishFrame = makeFrameSamplePublisher(body(frame));
   const window = {
     __donnerFrameLoopStats: { uiFrameMsSamples: [] },
     __donnerHostFrameTiming: { lastSurfacePresented: true },

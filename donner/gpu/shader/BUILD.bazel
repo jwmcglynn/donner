@@ -687,9 +687,9 @@ donner_cc_test(
         "tests/ReductionCoverageModule.h",
         "tests/ShaderTestUtils.h",
     ],
-    # Bazel scrubs the test environment, so the automated-lane markers have to be named here or
-    # the fail-closed rule can never see one and the gate quietly keeps skipping.
+    # Preserve the selected Xcode and automated-lane markers in the scrubbed test environment.
     env_inherit = [
+        "DEVELOPER_DIR",
         "DONNER_AUTOMATED_LANE",
         "GITHUB_ACTIONS",
     ],

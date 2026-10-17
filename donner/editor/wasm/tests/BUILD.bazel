@@ -17,12 +17,14 @@ playwright_bin.playwright_test(
     ],
     copy_data_to_bin = False,
     data = [
+        "animation-pulse-observation.mjs",
         "basic-shapes-capture-gate.ts",
         "browser-runtime-diagnostics.ts",
         "browser-stall-diagnostics.mjs",
         "browser-stall-diagnostics.ts",
         "canvas-color-stats.ts",
         "failure-canvas-evidence.ts",
+        "flat-capture-retake.mjs",
         "gesture-streams.ts",
         "gpu-session-console.ts",
         "package.json",
@@ -30,6 +32,7 @@ playwright_bin.playwright_test(
         "playwright.config.js",
         "quarantine-report.mjs",
         "remote-webserver.mjs",
+        "sample-thumbnail-quiescence.mjs",
         "sample-thumbnail-settle.ts",
         "smoke.spec.ts",
         "surface-frame-probe.ts",
@@ -97,6 +100,7 @@ playwright_bin.playwright_test(
         "browser-surface-recovery.spec.ts",
         "canvas-color-stats.ts",
         "failure-canvas-evidence.ts",
+        "flat-capture-retake.mjs",
         "gesture-streams.ts",
         "gpu-session-console.ts",
         "overlay-bitmap-compare.ts",
@@ -153,12 +157,14 @@ playwright_bin.playwright_test(
     ],
     copy_data_to_bin = False,
     data = [
+        "animation-pulse-observation.mjs",
         "basic-shapes-capture-gate.ts",
         "browser-runtime-diagnostics.ts",
         "browser-stall-diagnostics.mjs",
         "browser-stall-diagnostics.ts",
         "canvas-color-stats.ts",
         "failure-canvas-evidence.ts",
+        "flat-capture-retake.mjs",
         "gesture-streams.ts",
         "gpu-session-console.ts",
         "package.json",
@@ -166,6 +172,7 @@ playwright_bin.playwright_test(
         "playwright.config.js",
         "quarantine-report.mjs",
         "remote-webserver.mjs",
+        "sample-thumbnail-quiescence.mjs",
         "sample-thumbnail-settle.ts",
         "smoke.spec.ts",
         "surface-frame-probe.ts",
@@ -216,6 +223,7 @@ playwright_bin.playwright_test(
         "composited-probe.ts",
         "composited-probe-evidence.mjs",
         "first-click-breakdown.mjs",
+        "flat-capture-retake.mjs",
         "gpu-image-transfer-canary.ts",
         "gpu-session-console.ts",
         "latency-gates.mjs",
@@ -322,6 +330,7 @@ playwright_bin.playwright_test(
         "browser-backend-selection.spec.ts",
         "browser-gpu-residency.ts",
         "canvas-color-stats.ts",
+        "flat-capture-retake.mjs",
         "package.json",
         "playwright.bazel.config.js",
         "playwright.boot-presentation.bazel.config.js",
@@ -366,6 +375,7 @@ playwright_bin.playwright_test(
         "composited-pixel-classifier.mjs",
         "composited-probe.ts",
         "composited-probe-evidence.mjs",
+        "flat-capture-retake.mjs",
         "gesture-streams.ts",
         "package.json",
         "playwright.bazel.config.js",
@@ -416,6 +426,7 @@ playwright_bin.playwright_test(
         "composited-pixel-classifier.mjs",
         "composited-probe.ts",
         "composited-probe-evidence.mjs",
+        "flat-capture-retake.mjs",
         "gesture-streams.ts",
         "package.json",
         "playwright.bazel.config.js",
@@ -507,6 +518,7 @@ js_test(
     size = "small",
     copy_data_to_bin = False,
     data = [
+        "animation-pulse-observation.mjs",
         "browser-presentation-regression.spec.ts",
         "browser-runtime-diagnostics.ts",
         "browser-stall-diagnostics.mjs",
@@ -965,12 +977,14 @@ playwright_bin.playwright_test(
     ],
     copy_data_to_bin = False,
     data = [
+        "animation-pulse-observation.mjs",
         "basic-shapes-capture-gate.ts",
         "browser-runtime-diagnostics.ts",
         "browser-stall-diagnostics.mjs",
         "browser-stall-diagnostics.ts",
         "canvas-color-stats.ts",
         "failure-canvas-evidence.ts",
+        "flat-capture-retake.mjs",
         "gesture-streams.ts",
         "gpu-session-console.ts",
         "package.json",
@@ -980,6 +994,7 @@ playwright_bin.playwright_test(
         "prepare-browser-archives.js",
         "quarantine-report.mjs",
         "remote-webserver.mjs",
+        "sample-thumbnail-quiescence.mjs",
         "sample-thumbnail-settle.ts",
         "smoke.spec.ts",
         "surface-frame-probe.ts",
@@ -1014,12 +1029,32 @@ playwright_bin.playwright_test(
     # with ANGLE/SwiftShader GL, Vulkan, and Graphite flag configurations, so
     # this is an environment capability boundary, not a flag or timing gap.
     # macOS headless Chromium presents through the real GPU and passes.
+    # Headed Firefox requires a desktop session. Both engines remain in the hosted browser gate.
     tags = [
         "launches-browser",
         "no-sandbox",
+        "requires_desktop_session",
     ],
     target_compatible_with = [
         "@platforms//cpu:aarch64",
         "@platforms//os:macos",
     ],
+)
+
+js_test(
+    name = "flat_capture_retake_tests",
+    size = "small",
+    copy_data_to_bin = False,
+    data = ["flat-capture-retake.mjs"],
+    entry_point = "flat-capture-retake.spec.mjs",
+    node_options = ["--test"],
+)
+
+js_test(
+    name = "animation_pulse_observation_tests",
+    size = "small",
+    copy_data_to_bin = False,
+    data = ["animation-pulse-observation.mjs"],
+    entry_point = "animation-pulse-observation.spec.mjs",
+    node_options = ["--test"],
 )

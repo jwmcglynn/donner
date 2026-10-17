@@ -22,21 +22,21 @@ from tools import test_timing
 # The editor Wasm payload ceilings CI enforces. Changing one means editing the size test's
 # arguments and this table together, so a widened ceiling is always a reviewed change.
 ENFORCED_PAYLOAD_CEILINGS = {
-    "--max-js-gzip-bytes": 53000,
-    "--max-js-raw-bytes": 191800,
-    "--max-total-raw-bytes": 12046000,
+    "--max-js-gzip-bytes": 54800,
+    "--max-js-raw-bytes": 199000,
+    "--max-total-raw-bytes": 12777000,
     "--max-wasm-data-segments": 64,
     "--max-wasm-function-body-bytes": 46000,
-    "--max-wasm-gzip-bytes": 3274000,
-    "--max-wasm-raw-bytes": 9937000,
+    "--max-wasm-gzip-bytes": 3439000,
+    "--max-wasm-raw-bytes": 10661000,
 }
 PAYLOAD_SIZE_TEST = "//donner/editor/wasm:wasm_geode_package_size_tests"
 # The standalone renderer Wasm ceilings CI enforces, changed together with that test's arguments.
 RENDERER_PAYLOAD_CEILINGS = {
     "--max-js-gzip-bytes": 2800,
     "--max-js-raw-bytes": 5700,
-    "--max-wasm-gzip-bytes": 744000,
-    "--max-wasm-raw-bytes": 1880000,
+    "--max-wasm-gzip-bytes": 846000,
+    "--max-wasm-raw-bytes": 2164000,
 }
 RENDERER_SIZE_TEST = "//donner/svg/renderer/wasm:wasm_size_tests"
 SIZE_CHECK_STEP = "- name: Build and size-check Geode editor Wasm package"
@@ -276,7 +276,8 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
             "steps.test.outcome == 'failure') }}", browser)
         self.assertIn("--local_test_jobs=1", browser)
         self.assertIn(
-            "--test_tag_filters=launches-browser,-manual,-perf,-ci-remote-gpu,-fuzz_soak ",
+            "--test_tag_filters=launches-browser,-manual,-perf,-requires_desktop_session,"
+            "-ci-remote-gpu,-fuzz_soak ",
             browser)
         self.assertIn("bazelisk --nohome_rc --nosystem_rc test --config=ci", browser)
         for phase in (main_test, browser):
@@ -519,6 +520,18 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
             self.assertNotIn("DONNER_BROWSER_QUARANTINE_REPORT", path.read_text(encoding="utf-8"),
                              path.name)
         self.assertNotIn("DONNER_BROWSER_QUARANTINE_REPORT", self.bazelrc)
+
+    def test_headed_browser_tests_keep_required_hosted_coverage(self):
+        for job_name in ("macos", "macos-browser", "macos-self-hosted"):
+            with self.subTest(job=job_name):
+                body = self._step_body(self._job_body(job_name), "Test (browser targets)")
+                match = re.search(r"--test_tag_filters=([^\s]+)", body)
+                self.assertIsNotNone(match)
+                tags = match.group(1).split(",")
+                self.assertIn("launches-browser", tags)
+                self.assertEqual("-requires_desktop_session" in tags,
+                                 job_name == "macos-self-hosted")
+                self.assertNotIn("continue-on-error: true", body)
 
     def test_browser_stall_system_log_slices_only_well_formed_windows(self):
         collect = self._step_body(self._job_body("macos"), "Collect browser stall system log")

@@ -56,7 +56,11 @@ donner_cc_library(
     deps = [
         ":donner_svg_tool_utils",
         "//donner/base:diagnostic_renderer",
+        "//donner/base/parser",
+        "//donner/css:core",
+        "//donner/css/parser",
         "//donner/svg",
+        "//donner/svg/renderer:gif_encoder",
         # The CLI renders exactly one frame per invocation, so the GPU
         # backend's fixed device and shader setup cost can never amortize;
         # the CPU (tiny-skia) backend is strictly faster for one-shot
@@ -92,6 +96,7 @@ donner_cc_test(
     srcs = ["DonnerSvgTool_tests.cc"],
     deps = [
         ":donner_svg_tool_lib",
+        "//donner/svg/renderer/tests:gif_test_decoder",
         "@com_google_gtest//:gtest_main",
     ],
 )

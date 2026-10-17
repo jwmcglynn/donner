@@ -6,7 +6,7 @@ using the latest LLVM toolchain on Linux (`--config=latest_llvm`, which
 `--config=re` pulls in transitively).
 """
 
-load("@rules_cc//cc:defs.bzl", "cc_library")
+load("@rules_cc//cc:defs.bzl", "cc_library", "cc_test")
 
 cc_library(
     name = "libc_compat",
@@ -32,4 +32,15 @@ cc_library(
     # Must be linked into the final executable even when the missing libc++
     # ABI symbol is referenced only by LLVM/libFuzzer runtime objects.
     alwayslink = True,
+)
+
+cc_test(
+    name = "libc_compat_tests",
+    size = "small",
+    srcs = ["libc_compat_tests.cc"],
+    target_compatible_with = ["@platforms//os:linux"],
+    deps = [
+        ":libc_compat",
+        "@com_google_gtest//:gtest_main",
+    ],
 )

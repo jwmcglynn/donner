@@ -1920,6 +1920,9 @@ async function openBasicShapes(
   );
   await page.mouse.click(canvasBounds.x + canvasBounds.width * 0.76, canvasBounds.y + 282);
   await expect(editorCanvas).toHaveAttribute("data-active-sample-id", "basic-shapes");
+  // The picker click can remain over a layer row after it closes. Clear that hover before
+  // capturing the baseline or overlays: layer preview deliberately tints its matching shape.
+  await page.mouse.move(canvasBounds.x + 8, canvasBounds.y + 8);
   await expectWorkerResultsToReach(
     page,
     (completedResults) => completedResults > beforeSampleResults,
@@ -4672,10 +4675,14 @@ test("WebGPU toolbar eyedropper gives new SVG text the sampled Donner fill", asy
   const stem = splashDocumentToPage(viewport, kSplashLetterD.stemPress);
   const point = { x: Math.floor(stem.x) + 0.5, y: Math.floor(stem.y) + 0.5 };
   const stemRegion = { x: point.x - 4, y: point.y - 4, width: 8, height: 8 };
-  expect(
-    (await readEditorPixelBounds(page, stemRegion, "splash-yellow"))?.pixels ?? 0,
-    "the sample point must visibly lie on the Donner lettering",
-  ).toBeGreaterThan(0);
+  await expect.poll(async () => {
+    const capture = await captureSplashPresentationFrame(page, stemRegion, stemRegion);
+    await retainEyedropperPng("eyedropper-donner-stem.png", capture.png);
+    return capture.letter?.pixels ?? 0;
+  }, {
+    timeout: scaledMs(5000),
+    message: "the sample point must visibly lie on the Donner lettering",
+  }).toBeGreaterThan(0);
   const pixelRegion = { x: point.x - 0.5, y: point.y - 0.5, width: 1, height: 1 };
   const presentedPixel = await captureSplashPresentationFrame(page, pixelRegion, pixelRegion);
   await retainEyedropperPng("eyedropper-donner-reference.png", presentedPixel.png);

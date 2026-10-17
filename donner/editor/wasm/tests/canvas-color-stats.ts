@@ -1,5 +1,6 @@
 import { errors, type Locator, type Page } from "@playwright/test";
 import { inflateSync } from "node:zlib";
+import { isEditorBackgroundImage } from "./flat-capture-retake.mjs";
 
 export interface CssRegion {
   x: number;
@@ -431,6 +432,11 @@ function decodePng(buffer: Buffer): PngImage {
   }
 
   return { width, height, channels, data: output };
+}
+
+/** Exact opaque editor.css page background, with no canvas or other visible content. */
+export function isOnlyEditorPageBackground(png: Buffer): boolean {
+  return isEditorBackgroundImage(decodePng(png));
 }
 
 export function readPngPixelDifferenceStats(
