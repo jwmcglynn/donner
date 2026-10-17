@@ -92,7 +92,8 @@ TEST(MetalShaderMemoryValidationDeathTest, OutOfBoundsReadAborts) {
         RunOutOfBoundsBufferRead();
         std::_Exit(EXIT_FAILURE);
       },
-      testing::KilledBySignal(SIGABRT), "Invalid device (load|memory read)");
+      testing::KilledBySignal(SIGABRT),
+      "(Invalid device (load|memory read)|Invalid load in 'device' or 'constant' address space)");
 }
 
 }  // namespace
