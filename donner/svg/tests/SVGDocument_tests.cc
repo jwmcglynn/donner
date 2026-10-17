@@ -531,6 +531,22 @@ TEST(SVGDocument, EmptySelectorSourceSetterReplacesMaterializedRawText) {
   }
 }
 
+TEST(SVGDocument, QuerySelectorSkipsRetainedRawTextAndComments) {
+  auto document =
+      ParseSVG(R"(<svg xmlns="http://www.w3.org/2000/svg"><text id="t">seed</text></svg>)");
+  auto changed = ReplaceInSource(document, "<text id=\"t\">seed</text>",
+                                 "<text id=\"t\">word<![CDATA[other]]><!--c--></text>");
+  ASSERT_FALSE(changed.diagnostic.has_value());
+  auto text = document.querySelector("#t").value();
+  ASSERT_FALSE(text.querySelector("*").has_value());
+  EXPECT_FALSE(text.querySelector(":defined").has_value());
+  changed = ReplaceInSource(document, "word<![CDATA[other]]><!--c-->",
+                            "word<![CDATA[other]]><!--c--><tspan id=\"real\"/>");
+  ASSERT_FALSE(changed.diagnostic.has_value());
+  EXPECT_THAT(text.querySelector("*")->id(), Eq("real"));
+  EXPECT_THAT(text.querySelector(":defined")->id(), Eq("real"));
+}
+
 TEST(SVGDocument, ApplySourceEditProjectsTextMutation) {
   auto document =
       ParseSVG(R"(<svg xmlns="http://www.w3.org/2000/svg"><text id="label">hello</text></svg>)");

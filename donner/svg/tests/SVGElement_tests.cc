@@ -214,6 +214,32 @@ TEST_F(SVGElementTests, EmptySelectorChargesTextInspectionToTheSharedBudget) {
   EXPECT_EQ(budget.steps(), 1u);
 }
 
+TEST_F(SVGElementTests, SelectorTraversalChargesSkippedRawNodes) {
+  auto doc = parseSVG(R"(<svg xmlns="http://www.w3.org/2000/svg"><g id="g"/></svg>)");
+  auto g = doc.querySelector("#g").value();
+  auto xmlDocument = doc.xmlDocument();
+  auto node = xml::XMLNode::TryCast(g.unsafeEntityHandle()).value();
+  for (int i = 0; i < 64; ++i) {
+    node.appendChild(xml::XMLNode::CreateDataNode(xmlDocument, " "));
+  }
+  auto rect = SVGRectElement::Create(doc);
+  g.appendChild(rect);
+  for (const char* query : {"g:has(> rect)", "rect:nth-child(1)", "rect:first-child"}) {
+    SCOPED_TRACE(query);
+    auto parsed = css::parser::SelectorParser::Parse(query);
+    ASSERT_THAT(parsed, NoParseError());
+    css::SelectorTraversalBudget budget(3);
+    css::SelectorMatchOptions<SVGElement> options;
+    options.traversalBudget = &budget;
+    const SVGElement& target = std::string_view(query).starts_with("g") ? g : rect;
+    EXPECT_FALSE(parsed.result().matches(target, options).matched);
+    EXPECT_TRUE(budget.rejected());
+    css::SelectorTraversalBudget enough(1024);
+    options.traversalBudget = &enough;
+    EXPECT_TRUE(parsed.result().matches(target, options).matched);
+  }
+}
+
 TEST_F(SVGElementTests, QuerySelectorSharesTraversalBudgetAcrossCandidates) {
   SVGDocument document = parseSVG(R"(<svg><rect/><circle/></svg>)");
   auto maybeSelector = css::parser::SelectorParser::Parse("*");

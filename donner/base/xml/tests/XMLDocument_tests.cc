@@ -4422,7 +4422,7 @@ TEST_F(XMLDocumentTests, RemoveNodeAfterSetSourceCannotUseOldRange) {
   EXPECT_EQ(doc.source(), kReplacement);
 }
 
-TEST_F(XMLDocumentTests, SetElementTextWithReversedValueRangeClearsRangeAndAppends) {
+TEST_F(XMLDocumentTests, SetElementTextWithReversedValueRangeUsesCompleteContentRange) {
   XMLDocument doc = ParseDocument(R"(<text>hello</text>)");
   XMLNode text = doc.root().firstChild().value();
   const std::size_t textOffset = doc.source().find("hello");
@@ -4433,14 +4433,13 @@ TEST_F(XMLDocumentTests, SetElementTextWithReversedValueRangeClearsRangeAndAppen
       SourceRange{FileOffset::Offset(textOffset + 5), FileOffset::Offset(textOffset)});
   EXPECT_THAT(text.getValueLocation(), Eq(std::nullopt));
 
-  // With no tracked value range, setElementText falls back to inserting before the closing
-  // tag instead of replacing the existing text.
+  // The complete opening/closing boundaries remain valid after the value range is cleared.
   ApplySourceEditResult result = doc.setElementText(text, "world");
 
   EXPECT_TRUE(result.applied);
   EXPECT_THAT(result.diagnostic, Eq(std::nullopt));
   EXPECT_THAT(text.value(), Optional(Eq("world")));
-  EXPECT_EQ(doc.source(), R"(<text>helloworld</text>)");
+  EXPECT_EQ(doc.source(), R"(<text>world</text>)");
 }
 
 //

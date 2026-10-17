@@ -2622,6 +2622,61 @@ ApplySourceEditResult ReplaceExistingElementText(XMLDocument& document, XMLNode 
   return result;
 }
 
+ApplySourceEditResult InsertElementText(XMLDocument& document, XMLNode element,
+                                        std::string_view text, std::string_view escaped,
+                                        bool allText) {
+  ApplySourceEditResult result;
+  result.scope = ReparseScope::TextNode;
+  const SourceRange diagnosticRange = MakeNodeDiagnosticRange(element);
+  // No existing text. Clearing is a no-op; otherwise insert before the closing
+  // tag, expanding a self-closing tag when needed.
+  if (text.empty() && (!allText || !element.firstChild())) {
+    return result;
+  }
+
+  // Text content stays inline (`<text>hello</text>`) regardless of the surrounding layout;
+  // that is how a human authors a text run, so no block indentation is synthesized here.
+  std::optional<NodeInsertionPlan> plan =
+      GetNodeInsertionPlan(document, element, std::nullopt, escaped, InsertionFormatting::kInline);
+  if (!plan.has_value()) {
+    result.diagnostic = MakeEditDiagnostic(
+        "Cannot set text on a node without a source insertion point", diagnosticRange);
+    return result;
+  }
+
+  if (text.empty()) {
+    DetachReplacedTextChildren(element);
+    element.setValue(RcString(""));
+    result.applied = true;
+    EmitTextValueChanged(result, element, text);
+    return result;
+  }
+
+  const std::string sourceReplacement = plan->prefix + std::string(escaped) + plan->suffix;
+  std::optional<XMLSourceDelta> delta = document.sourceStore()->replace(
+      plan->replacementOffset, plan->replacementLength, sourceReplacement);
+  if (!delta.has_value()) {
+    result.diagnostic =
+        MakeEditDiagnostic("Invalid source replacement for text content", diagnosticRange);
+    return result;
+  }
+
+  result.applied = true;
+  result.sourceDeltas.push_back(*delta);
+  ApplyParentInsertionPlan(element, *plan);
+  if (allText) {
+    DetachReplacedTextChildren(element);
+  }
+  element.setValue(RcString(text));
+  element.setValueLocation(SourceRange{
+      FileOffset::Offset(plan->insertedNodeOffset),
+      FileOffset::Offset(plan->insertedNodeOffset + escaped.size()),
+  });
+  EmitTextValueChanged(result, element, text);
+  NoteConstructedSourceChange(document, result, element);
+  return result;
+}
+
 }  // namespace internal
 
 using namespace internal;
@@ -3347,53 +3402,7 @@ ApplySourceEditResult XMLDocument::setElementText(XMLNode element, std::string_v
                                       replacement);
   }
 
-  // No existing text. Clearing is a no-op; otherwise insert before the closing
-  // tag, expanding a self-closing tag when needed.
-  if (text.empty() && (!replacement.allText || !element.firstChild())) {
-    return result;
-  }
-
-  // Text content stays inline (`<text>hello</text>`) regardless of the surrounding layout;
-  // that is how a human authors a text run, so no block indentation is synthesized here.
-  std::optional<NodeInsertionPlan> plan = GetNodeInsertionPlan(
-      *this, element, std::nullopt, std::string_view(*escaped), InsertionFormatting::kInline);
-  if (!plan.has_value()) {
-    result.diagnostic = MakeEditDiagnostic(
-        "Cannot set text on a node without a source insertion point", diagnosticRange);
-    return result;
-  }
-
-  if (text.empty()) {
-    DetachReplacedTextChildren(element);
-    element.setValue(RcString(""));
-    result.applied = true;
-    EmitTextValueChanged(result, element, text);
-    return result;
-  }
-
-  const std::string sourceReplacement = plan->prefix + std::string(*escaped) + plan->suffix;
-  std::optional<XMLSourceDelta> delta =
-      store->replace(plan->replacementOffset, plan->replacementLength, sourceReplacement);
-  if (!delta.has_value()) {
-    result.diagnostic =
-        MakeEditDiagnostic("Invalid source replacement for text content", diagnosticRange);
-    return result;
-  }
-
-  result.applied = true;
-  result.sourceDeltas.push_back(*delta);
-  ApplyParentInsertionPlan(element, *plan);
-  if (replacement.allText) {
-    DetachReplacedTextChildren(element);
-  }
-  element.setValue(RcString(text));
-  element.setValueLocation(SourceRange{
-      FileOffset::Offset(plan->insertedNodeOffset),
-      FileOffset::Offset(plan->insertedNodeOffset + escaped->size()),
-  });
-  EmitTextValueChanged(result, element, text);
-  NoteConstructedSourceChange(*this, result, element);
-  return result;
+  return InsertElementText(*this, element, text, std::string_view(*escaped), replacement.allText);
 }
 
 void XMLDocument::setSource(std::string source, std::size_t maximumSourceSize) {
