@@ -4186,8 +4186,11 @@ test(
         width: 200 * scale,
         height: 65 * scale,
       };
-      const padPixels = async (target: "animation-hover" | "animation-pressed") => {
-        const capture = await captureAnimationRegion(padRegion);
+      const padPixels = async (
+        target: "animation-hover" | "animation-pressed",
+        deadline: number,
+      ) => {
+        const capture = await captureAnimationRegion(padRegion, deadline);
         const pixels = capture.read(target)?.pixels ?? 0;
         if (pixels <= 1000) {
           await writeFile(testInfo.outputPath(`${target}-probe.png`), capture.png);
@@ -4198,15 +4201,62 @@ test(
         }
         return pixels;
       };
-      await page.mouse.move(pad.x, pad.y);
-      await expect.poll(() => padPixels("animation-hover"), { timeout: scaledMs(5000) })
-        .toBeGreaterThan(1000);
-      await page.mouse.down();
-      await expect.poll(() => padPixels("animation-pressed"), { timeout: scaledMs(5000) })
-        .toBeGreaterThan(1000);
-      await page.mouse.up();
-      await expect.poll(() => padPixels("animation-hover"), { timeout: scaledMs(5000) })
-        .toBeGreaterThan(1000);
+      const verifyPadInput = async (
+        eventType: number,
+        target: "animation-hover" | "animation-pressed",
+        action: () => Promise<void>,
+      ) => {
+        if (interactionCaptureOwner === null) throw new Error("animation owner is unavailable");
+        const deadline = performance.now() + scaledMs(5000);
+        const notBefore = Date.now();
+        await awaitBeforeBlueDeadline(action(), deadline);
+        // Screenshot capture can stall Firefox's worker progress. Let the actual input
+        // dispatch and its following document presentation finish before asking for pixels.
+        await expect.poll(
+          () =>
+            awaitBeforeBlueDeadline(
+              interactionCaptureOwner.evaluate(({ eventType, notBefore }) => {
+                const trace =
+                  (globalThis as unknown as Record<string, unknown>).__donnerPreviewPointerTrace;
+                return Array.isArray(trace) && trace.some((row) =>
+                  Array.isArray(row)
+                  && row[0] >= notBefore && row[1] === 2 && row[2] === eventType && row[5] === true
+                );
+              }, { eventType, notBefore }),
+              deadline,
+            ),
+          {
+            timeout: Math.max(1, deadline - performance.now()),
+            intervals: [16],
+            message: "the pointer event reaches the preview document",
+          },
+        ).toBe(true);
+        const previous = await awaitBeforeBlueDeadline(
+          page.evaluate(() => window.__donnerWorkerStats?.completedResults ?? 0),
+          deadline,
+        );
+        await expect.poll(() =>
+          awaitBeforeBlueDeadline(
+            page.evaluate((before) => {
+              const stats = window.__donnerWorkerStats;
+              return (stats?.completedResults ?? 0) > before
+                && stats?.resultFramePresented === true;
+            }, previous),
+            deadline,
+          ), {
+          timeout: Math.max(1, deadline - performance.now()),
+          intervals: [16],
+          message: "a document frame after input dispatch is presented",
+        }).toBe(true);
+        await expect.poll(() => padPixels(target, deadline), {
+          timeout: Math.max(1, deadline - performance.now()),
+          intervals: [50],
+        }).toBeGreaterThan(1000);
+        if (performance.now() >= deadline) throw new Error("animation input deadline exceeded");
+      };
+      await verifyPadInput(7, "animation-hover", () => page.mouse.move(pad.x, pad.y));
+      await verifyPadInput(2, "animation-pressed", () => page.mouse.down());
+      await verifyPadInput(3, "animation-hover", () => page.mouse.up());
       tracePulseScreenshots = true;
       pulseClickStartedEpochMs = Date.now();
       await page.mouse.click(box.x + originX + 456 * scale, pad.y);
