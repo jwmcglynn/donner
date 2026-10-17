@@ -1074,7 +1074,7 @@ TEST_F(StyleSystemTest, SymbolExternalOccurrenceAppliesOnlyToExactRootAndRetires
   {
     auto access = document.writeAccess();
     access.registry().ctx().emplace<ExternalUseStyleContext>(
-        root->entityHandle().entity(), PropertyRegistry(), ResolvedPaintServer(),
+        root->entityHandle().entity(), PropertyRegistry(), std::nullopt, ResolvedPaintServer(),
         ResolvedPaintServer(), nullptr, 0, nullptr);
     styleSystem.invalidateComputed(root->entityHandle());
     EXPECT_EQ(root->getComputedStyle().display.get(), Display::Inline);
