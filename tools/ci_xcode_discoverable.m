@@ -27,6 +27,9 @@ int main(int argc, const char* argv[]) {
       if (![candidate isKindOfClass:[NSString class]]) {
         return 2;
       }
+      while ([[candidate componentsSeparatedByString:@"."] count] < 3) {
+        candidate = [candidate stringByAppendingString:@".0"];
+      }
       // A longer version can also claim Bazel's shorter alias. Reject ambiguous
       // aliases instead of allowing a different installation into the cache partition.
       if ([candidate isEqualToString:version] ||
