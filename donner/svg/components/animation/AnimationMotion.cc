@@ -200,12 +200,13 @@ std::optional<double> MotionAngle(const AnimateMotionComponent& motion, double t
 
 }  // namespace
 
-std::string SampleAnimationMotion(Registry& registry, Entity entity,
-                                  const AnimateMotionComponent& motion, double progress,
-                                  double iteration, AnimationResourceBudget& budget) {
+SampledAnimationMotion SampleAnimationMotion(Registry& registry, Entity entity,
+                                             const AnimateMotionComponent& motion, double progress,
+                                             double iteration, AnimationResourceBudget& budget) {
   if (!motion.valid) {
     return {};
   }
+  bool additive = motion.additive;
   std::optional<Path> path;
   const auto source = MotionPathSource(registry, entity, motion, budget, path);
   if (!path && source) {
@@ -219,6 +220,8 @@ std::string SampleAnimationMotion(Registry& registry, Entity entity,
     path = std::move(parsed.result());
   } else if (!path) {
     path = ImplicitMotionPath(motion);
+    additive =
+        additive || (motion.values.empty() && !motion.from && !motion.to && motion.by.has_value());
   }
   if (!path) {
     return {};
@@ -252,7 +255,7 @@ std::string SampleAnimationMotion(Registry& registry, Entity entity,
   if (*angle != 0) {
     result << " rotate(" << *angle << ")";
   }
-  return result.str();
+  return {result.str(), additive};
 }
 
 }  // namespace donner::svg::components

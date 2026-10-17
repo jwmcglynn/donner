@@ -350,10 +350,11 @@ bool ProcessAnimation(Registry& registry, Entity entity, double documentTime,
   const std::string& underlying = *underlyingValue;
   std::optional<std::pair<std::string, std::string>> sampled;
   if (motionComp) {
-    std::string motion =
+    auto motionSample =
         SampleAnimationMotion(registry, entity, *motionComp, progress, iteration, resourceBudget);
+    std::string& motion = motionSample.transform;
     const auto [base, inserted] = motionBases.try_emplace(state.targetEntity, underlying);
-    const std::string& prefix = motionComp->additive ? underlying : base->second;
+    const std::string& prefix = motionSample.additive ? underlying : base->second;
     if (!motion.empty() && !prefix.empty()) {
       motion = prefix + " " + motion;
     }
