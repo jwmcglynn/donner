@@ -2242,6 +2242,12 @@ TEST(PropertyRegistry, BaselineShiftSpacingAndDasharray) {
 
   {
     PropertyRegistry registry;
+    registry.parseStyle("stroke-dasharray: none");
+    EXPECT_THAT(registry.strokeDasharray.get(), Optional(testing::IsEmpty()));
+  }
+
+  {
+    PropertyRegistry registry;
     css::Declaration declaration = css::CSS::ParseStyleAttribute("stroke-dasharray: 1px foo").at(0);
     EXPECT_THAT(registry.parseProperty(declaration, Specificity()),
                 ParseErrorIs("Unexpected token in dasharray"));
