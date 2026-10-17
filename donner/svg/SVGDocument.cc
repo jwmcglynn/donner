@@ -1610,6 +1610,14 @@ xml::ApplySourceEditResult SVGDocument::setElementTextContent(const SVGElement& 
   }
 
   result = xmlDocument().setElementText(*elementNode, text);
+  const EntityHandle handle = elementNode->entityHandle();
+  const bool typedText =
+      handle.all_of<components::TextComponent>() || IsDescriptiveElement(handle) ||
+      handle.get<components::ElementTypeComponent>().type() == ElementType::Style;
+  // This setter replaces all text; its parent-value receipt supersedes any old raw snapshot.
+  if (result.applied && !result.diagnostic && typedText) {
+    components::ResetSelectorTextContent(handle);
+  }
   applyXMLMutations(result);
   return result;
 }
