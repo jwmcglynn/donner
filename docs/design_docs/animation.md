@@ -4,6 +4,7 @@
 implemented on the animation feature branch. Qualification and the remaining integration checklist
 below gate completion.
 **Author:** Unknown (current runtime model identifier unavailable)
+**Model:** Not recorded
 **Drafted by:** Claude Opus 4.6
 **Created:** 2026-03-12
 **Tracking:** [#1239](https://github.com/jwmcglynn/donner/issues/1239),
