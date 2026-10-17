@@ -929,13 +929,16 @@ SVGDocument::Settings PrepareDocumentSettings(const SVGParser::Options& options,
             .parsedPayloadBytes = options.maximumParsedPayloadSize,
         });
   }
-  if (settings.svgParseCallback || settings.processingMode != ProcessingMode::DynamicInteractive) {
+  if (settings.svgParseCallback) {
     return settings;
   }
 
   const std::shared_ptr<components::DocumentResourceFamilyBudget> resourceFamily =
       settings.resourceFamilyBudget;
-  settings.svgParseCallback = [resourceFamily](
+  SVGParser::Options subOptions = options;
+  // Image resources are independent documents, even when the parent was parsed inline.
+  subOptions.parseAsInlineSVG = false;
+  settings.svgParseCallback = [resourceFamily, subOptions](
                                   const std::vector<uint8_t>& svgContent,
                                   ParseWarningSink& warnings) -> std::optional<SVGDocumentHandle> {
     SVGDocument::Settings subSettings;
@@ -944,8 +947,7 @@ SVGDocument::Settings PrepareDocumentSettings(const SVGParser::Options& options,
 
     const std::string_view subSource(reinterpret_cast<const char*>(svgContent.data()),
                                      svgContent.size());
-    auto result =
-        SVGParser::ParseSVG(subSource, warnings, SVGParser::Options(), std::move(subSettings));
+    auto result = SVGParser::ParseSVG(subSource, warnings, subOptions, std::move(subSettings));
     if (result.hasError()) {
       warnings.add(ParseDiagnostic(result.error()));
       return std::nullopt;

@@ -20,6 +20,7 @@ DocumentResourceFamilyBudget::Limits MakeLimits(std::size_t perKindBytes, std::s
       .computedFilterBytes = perKindBytes,
       .computedStyleBytes = perKindBytes,
       .maximumTotalRetainedBytes = totalBytes,
+      .decodedImageBytes = perKindBytes,
   };
 }
 
@@ -36,19 +37,35 @@ TEST(DocumentResourceFamilyBudgetTest, DefaultPreservesTwoFullCategoryReservatio
 }
 
 TEST(DocumentResourceFamilyBudgetTest, EnforcesAggregateBoundaryAcrossAllKinds) {
-  DocumentResourceFamilyBudget budget(MakeLimits(64, 76));
+  DocumentResourceFamilyBudget budget(MakeLimits(64, 95));
 
   EXPECT_THAT(budget.reserve(DocumentResourceFamilyBudget::Kind::ParsedPayload, 19), IsTrue());
   EXPECT_THAT(budget.reserve(DocumentResourceFamilyBudget::Kind::Geometry, 19), IsTrue());
   EXPECT_THAT(budget.reserve(DocumentResourceFamilyBudget::Kind::ComputedFilter, 19), IsTrue());
   EXPECT_THAT(budget.reserve(DocumentResourceFamilyBudget::Kind::ComputedStyle, 19), IsTrue());
-  EXPECT_EQ(budget.totalRetainedBytes(), 76u);
+  EXPECT_THAT(budget.reserve(DocumentResourceFamilyBudget::Kind::DecodedImage, 19), IsTrue());
+  EXPECT_EQ(budget.totalRetainedBytes(), 95u);
 
   EXPECT_THAT(budget.reserve(DocumentResourceFamilyBudget::Kind::ParsedPayload, 1), IsFalse());
-  EXPECT_THAT(budget.securityStats().retainedBytes, ElementsAre(19, 19, 19, 19));
-  EXPECT_EQ(budget.totalRetainedBytes(), 76u);
+  EXPECT_THAT(budget.securityStats().retainedBytes, ElementsAre(19, 19, 19, 19, 19));
+  EXPECT_EQ(budget.totalRetainedBytes(), 95u);
   EXPECT_EQ(budget.securityStats().rejectedReservations, 1u);
   EXPECT_THAT(budget.securityStats().rejected, IsTrue());
+}
+
+TEST(DocumentResourceFamilyBudgetTest, AvailableBytesHonorsKindTotalAndRejectionLimits) {
+  using Kind = DocumentResourceFamilyBudget::Kind;
+  DocumentResourceFamilyBudget budget(MakeLimits(64, 76));
+  EXPECT_EQ(budget.availableBytes(Kind::DecodedImage), 64u);
+  ASSERT_TRUE(budget.reserve(Kind::Geometry, 20));
+  EXPECT_EQ(budget.availableBytes(Kind::DecodedImage), 56u);
+  ASSERT_TRUE(budget.reserve(Kind::DecodedImage, 19));
+  EXPECT_EQ(budget.availableBytes(Kind::DecodedImage), 37u);
+  budget.release(Kind::Geometry, 10);
+  EXPECT_EQ(budget.availableBytes(Kind::DecodedImage), 45u);
+  EXPECT_EQ(budget.availableBytes(Kind::Count), 0u);
+  EXPECT_FALSE(budget.reserve(Kind::DecodedImage, 46));
+  EXPECT_EQ(budget.availableBytes(Kind::ComputedStyle), 0u);
 }
 
 TEST(DocumentResourceFamilyBudgetTest, RejectionIsAtomicAndLatches) {
@@ -56,7 +73,7 @@ TEST(DocumentResourceFamilyBudgetTest, RejectionIsAtomicAndLatches) {
   EXPECT_THAT(budget.reserve(DocumentResourceFamilyBudget::Kind::ParsedPayload, 30), IsTrue());
 
   EXPECT_THAT(budget.reserve(DocumentResourceFamilyBudget::Kind::Geometry, 21), IsFalse());
-  EXPECT_THAT(budget.securityStats().retainedBytes, ElementsAre(30, 0, 0, 0));
+  EXPECT_THAT(budget.securityStats().retainedBytes, ElementsAre(30, 0, 0, 0, 0));
   EXPECT_EQ(budget.totalRetainedBytes(), 30u);
 
   budget.release(DocumentResourceFamilyBudget::Kind::ParsedPayload, 30);
