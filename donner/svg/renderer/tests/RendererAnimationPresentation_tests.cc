@@ -184,6 +184,24 @@ TEST(RendererAnimationPresentation, ToOnlyTextPositionUsesTypedBase) {
         "typed-text-position-base", editor::tests::PixelmatchIdentityParams());
   }
 }
+
+TEST(RendererAnimationPresentation, ToOnlyTextXUsesFirstTypedCoordinateAsScalarBase) {
+  auto document = ParsePresentation(
+      "<text id='t' x='2 14' y='12' font-size='10'>H"
+      "<animate attributeName='x' to='10' dur='2s'/></text>");
+  auto text = document.querySelector("#t");
+  ASSERT_THAT(text, testing::Ne(std::nullopt));
+  SmallVector<Lengthd, 1> coordinates;
+  coordinates.push_back(Lengthd(6));
+  coordinates.push_back(Lengthd(14));
+  text->cast<SVGTextElement>().setXList(std::move(coordinates));
+
+  document.setTime(1);
+  auto expected = ParsePresentation("<text x='8' y='12' font-size='10'>H</text>");
+  editor::tests::CompareBitmapToBitmap(
+      RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(expected),
+      "typed-text-scalar-x-base", editor::tests::PixelmatchIdentityParams());
+}
 #endif
 
 TEST(RendererAnimationPresentation, ToOnlyPathCalibrationUsesTypedBase) {
