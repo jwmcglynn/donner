@@ -10,6 +10,7 @@
 #include <unordered_set>
 #include <vector>
 
+#include "donner/base/xml/components/AttributesComponent.h"
 #include "donner/base/xml/components/TreeComponent.h"
 #include "donner/base/xml/components/XMLNamespaceContext.h"
 #include "donner/svg/components/ElementTypeComponent.h"
@@ -187,6 +188,27 @@ const std::optional<std::string>& AnimationHref(Registry& registry, Entity entit
     return motion->href;
   }
   return registry.get<AnimateTransformComponent>(entity).href;
+}
+
+/// Resolve live authored targeting without refreshing typed animation state under a read lock.
+Entity ResolveAuthoredAnimationTarget(Registry& registry, Entity entity,
+                                      AnimationResourceBudget& budget) {
+  const auto* attributes = registry.try_get<donner::components::AttributesComponent>(entity);
+  if (!attributes) {
+    return resolveTargetByHrefOrParent(registry, entity, AnimationHref(registry, entity), budget);
+  }
+  auto href = attributes->getAttribute("href");
+  if (!href) {
+    href = attributes->getAttribute(xml::XMLQualifiedNameRef("xlink", "href"));
+  }
+  if (!href) {
+    return resolveTargetByHrefOrParent(registry, entity, std::nullopt, budget);
+  }
+  if (!budget.reserveSourceBytes(href->size())) {
+    return entt::null;
+  }
+  return resolveTargetByHrefOrParent(registry, entity, std::string(std::string_view(*href)),
+                                     budget);
 }
 
 bool ValidTransformAttribute(Registry& registry, Entity target, std::string_view name) {
@@ -637,8 +659,7 @@ bool AnimationSystem::isAnimationTarget(Registry& registry, Entity targetEntity)
   }
   AnimationResourceBudget budget;
   for (const Entity entity : animations) {
-    const Entity resolved =
-        resolveTargetByHrefOrParent(registry, entity, AnimationHref(registry, entity), budget);
+    const Entity resolved = ResolveAuthoredAnimationTarget(registry, entity, budget);
     if (budget.rejected()) {
       return true;
     }
