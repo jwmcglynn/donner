@@ -100,6 +100,16 @@ TEST(SVGAnimateTransformElement, ParseTranslate) {
   EXPECT_EQ(comp.type, components::TransformAnimationType::Translate);
 }
 
+TEST(SVGAnimateTransformElement, PacedTranslateUsesUnequalValueDistances) {
+  auto document = parseSVGWithExperimental(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg"><rect id="r">
+      <animateTransform attributeName="transform" type="translate" values="0 0;10 0;110 0"
+                        calcMode="paced" dur="2s"/>
+    </rect></svg>)svg");
+  EXPECT_THAT(getAnimatedTransform(document, "#r", 1),
+              testing::Optional(testing::StrEq("translate(55)")));
+}
+
 TEST(SVGAnimateTransformElement, HrefPrecedesXlinkHref) {
   auto document = parseSVGWithExperimental(R"svg(
     <svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
