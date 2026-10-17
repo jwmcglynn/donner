@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <sstream>
 #include <type_traits>
 #include <vector>
@@ -141,7 +142,7 @@ void padToExpected(std::vector<double>& nums, TransformAnimationType type) {
 /// Format a transform string from type and interpolated values.
 std::string formatTransform(TransformAnimationType type, const std::vector<double>& values) {
   std::ostringstream oss;
-  oss.precision(6);
+  oss.precision(std::numeric_limits<double>::max_digits10);
 
   switch (type) {
     case TransformAnimationType::Translate:
@@ -284,7 +285,7 @@ std::string RoundAnimationIntegers(const std::string& input) {
     return {};
   }
   std::ostringstream output;
-  output.precision(12);
+  output.precision(std::numeric_limits<double>::max_digits10);
   for (std::size_t i = 0; i < numbers->size(); ++i) {
     if ((*numbers)[i].unit != Lengthd::Unit::None) {
       return {};

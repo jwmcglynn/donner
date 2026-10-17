@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <initializer_list>
+#include <limits>
 #include <sstream>
 #include <tuple>
 #include <type_traits>
@@ -72,7 +73,7 @@ std::optional<std::string> SerializeDasharray(const StrokeDasharray& value,
     return std::string{};
   }
   std::ostringstream out;
-  out.precision(12);
+  out.precision(std::numeric_limits<double>::max_digits10);
   out << value;
   return out.str();
 }
@@ -82,7 +83,7 @@ std::optional<std::string> SerializeValue(const T& value, const AnimationValueCo
                                           AnimationResourceBudget* budget = nullptr) {
   if constexpr (std::is_arithmetic_v<T> || std::is_same_v<T, Lengthd> || std::is_enum_v<T>) {
     std::ostringstream out;
-    out.precision(12);
+    out.precision(std::numeric_limits<double>::max_digits10);
     out << value;
     return out.str();
   } else if constexpr (std::is_same_v<T, css::Color>) {
@@ -444,7 +445,7 @@ bool ResourceUsesBoundingBoxUnits(Registry& registry, Entity target,
 
 std::string NumberPair(double first, double second) {
   std::ostringstream output;
-  output.precision(12);
+  output.precision(std::numeric_limits<double>::max_digits10);
   output << first << ' ' << second;
   return output.str();
 }
@@ -469,14 +470,14 @@ std::optional<std::string> LayoutLengthBaseValue(
 template <typename Values>
 std::string SerializeTextPositionBase(const Values& values, AnimationResourceBudget& budget) {
   if (values.empty()) {
-    return "0";
+    return {};
   }
   if (values.size() > AnimationResourceBudget::kMaximumNumbersPerValue ||
       !budget.reserveSourceBytes(values.size() * 64)) {
     return {};
   }
   std::ostringstream output;
-  output.precision(12);
+  output.precision(std::numeric_limits<double>::max_digits10);
   bool first = true;
   for (const auto& value : values) {
     if (!first) {
@@ -490,13 +491,33 @@ std::string SerializeTextPositionBase(const Values& values, AnimationResourceBud
 
 std::optional<std::string> TextPositionBaseValue(Registry& registry, Entity target,
                                                  std::string_view name,
+                                                 const AnimationValueContext& context,
                                                  AnimationResourceBudget& budget) {
   const auto* text = registry.try_get<TextPositioningComponent>(target);
   if (!text) {
     return std::nullopt;
   }
+  const auto inheritedComponent = [&](auto field) {
+    Entity current = target;
+    while (current != entt::null && registry.valid(current)) {
+      if (!budget.reserveReferenceWork(1)) {
+        break;
+      }
+      if (const auto* component = registry.try_get<TextPositioningComponent>(current);
+          component && !(component->*field).empty()) {
+        const auto& values = component->*field;
+        // A multi-value ancestor needs the descendant's addressable-character offset. Until that
+        // instance context is available, fail closed instead of using the wrong list entry.
+        return current == target || values.size() == 1 ? &values : nullptr;
+      }
+      const auto* tree = registry.try_get<donner::components::TreeComponent>(current);
+      current = tree ? tree->parent() : entt::null;
+    }
+    return static_cast<const std::remove_reference_t<decltype(text->*field)>*>(nullptr);
+  };
   if (name == "rotate") {
-    return SerializeTextPositionBase(text->rotateDegrees, budget);
+    const auto* values = inheritedComponent(&TextPositioningComponent::rotateDegrees);
+    return values ? SerializeTextPositionBase(*values, budget) : std::string{};
   }
   using Field = SmallVector<Lengthd, 1> TextPositioningComponent::*;
   const std::pair<std::string_view, Field> fields[] = {{"x", &TextPositioningComponent::x},
@@ -505,7 +526,14 @@ std::optional<std::string> TextPositionBaseValue(Registry& registry, Entity targ
                                                        {"dy", &TextPositioningComponent::dy}};
   for (const auto& [attribute, field] : fields) {
     if (name == attribute) {
-      return SerializeTextPositionBase(text->*field, budget);
+      const auto* values = inheritedComponent(field);
+      if (!values) {
+        return std::string{};
+      }
+      if (name == "x" || name == "y") {
+        return SerializeValue(values->front(), context);
+      }
+      return SerializeTextPositionBase(*values, budget);
     }
   }
   return std::nullopt;
@@ -521,7 +549,7 @@ std::optional<std::string> TypedPresentationBaseValue(Registry& registry, Entity
   if (const auto* box = registry.try_get<ViewBoxComponent>(target);
       box && box->viewBox && name == "viewBox") {
     std::ostringstream output;
-    output.precision(12);
+    output.precision(std::numeric_limits<double>::max_digits10);
     output << box->viewBox->topLeft.x << ' ' << box->viewBox->topLeft.y << ' '
            << box->viewBox->width() << ' ' << box->viewBox->height();
     return output.str();
@@ -919,7 +947,7 @@ std::optional<std::string> UnderlyingAnimationValue(Registry& registry, Entity t
       return SerializeValue(stop->properties.offset, context).value();
     }
   }
-  if (auto value = TextPositionBaseValue(registry, target, attribute, budget)) {
+  if (auto value = TextPositionBaseValue(registry, target, attribute, context, budget)) {
     return *value;
   }
   if (auto value = TypedPresentationBaseValue(registry, target, attribute, context)) {

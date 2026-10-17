@@ -219,7 +219,7 @@ std::optional<std::string> CombineLengths(const std::vector<Lengthd>& first,
     return std::nullopt;
   }
   std::ostringstream output;
-  output.precision(12);
+  output.precision(std::numeric_limits<double>::max_digits10);
   for (std::size_t i = 0; i < first.size(); ++i) {
     const bool sameUnit = first[i].unit == second[i].unit;
     const double a = sameUnit ? first[i].value : ResolveAnimationLength(first[i], context, false);
