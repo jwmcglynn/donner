@@ -35,6 +35,7 @@
 #include "donner/svg/components/text/TextRootComponent.h"
 #include "donner/svg/internal/RenderingDiagnostics.h"
 #include "donner/svg/parser/SVGParser.h"
+#include "donner/svg/properties/PropertyRegistry.h"
 #include "donner/svg/renderer/Renderer.h"
 
 using testing::Eq;
