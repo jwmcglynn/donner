@@ -88,8 +88,7 @@ TEST_F(SVGElementTests, EmptySelectorIncludesTextAndCDataContent) {
     <text id="cdata"><![CDATA[hello]]></text>
     <text id="entity">&amp;</text>
     <text id="nbsp">&#xA0;</text>
-    <text id="spaces"> 	
- </text>
+    <text id="spaces">&#x20;&#x9;&#xA;</text>
     <g id="comment"><!-- content does not affect emptiness --></g>
     <g id="child"><rect/></g>
   </svg>)svg");
