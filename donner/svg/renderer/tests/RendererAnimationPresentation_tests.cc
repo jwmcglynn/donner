@@ -202,6 +202,50 @@ TEST(RendererAnimationPresentation, ToOnlyTextXUsesFirstTypedCoordinateAsScalarB
       RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(expected),
       "typed-text-scalar-x-base", editor::tests::PixelmatchIdentityParams());
 }
+
+TEST(RendererAnimationPresentation, EmptyChildTextListsUseAncestorBaseAndRestoreAcrossSeeks) {
+  struct Case {
+    const char* attribute;
+    double base;
+    double to;
+  };
+  for (const Case item : {Case{"dx", 2, 6}, Case{"dy", 1, 5}, Case{"rotate", 10, 30}}) {
+    SCOPED_TRACE(item.attribute);
+    const std::string prefix = "<text x='2' y='12' font-size='10' " + std::string(item.attribute) +
+                               "='" + std::to_string(item.base) + "'><tspan";
+    auto document =
+        ParsePresentation(prefix + " id='s'>H<animate attributeName='" + item.attribute + "' to='" +
+                          std::to_string(item.to) + "' begin='1s' dur='2s'/></tspan></text>");
+    for (const double time : {0.0, 2.0, 4.0, 2.0}) {
+      SCOPED_TRACE(time);
+      document.setTime(time);
+      const bool active = time == 2.0;
+      const double value = active ? (item.base + item.to) / 2 : item.base;
+      const std::string child =
+          active ? " " + std::string(item.attribute) + "='" + std::to_string(value) + "'" : "";
+      auto expected = ParsePresentation(prefix + child + ">H</tspan></text>");
+      editor::tests::CompareBitmapToBitmap(
+          RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(expected),
+          "ancestor-text-position-base", editor::tests::PixelmatchIdentityParams());
+    }
+  }
+}
+
+TEST(RendererAnimationPresentation, MultiValueAncestorTextListFailsClosedForChildAnimation) {
+  const std::string source =
+      "<text x='2' y='12' font-size='10' dx='1 4'><tspan>A</tspan><tspan id='s'>B"
+      "<animate attributeName='dx' to='8' begin='1s' dur='2s'/></tspan></text>";
+  auto document = ParsePresentation(source);
+  auto expected = ParsePresentation(
+      "<text x='2' y='12' font-size='10' dx='1 4'><tspan>A</tspan><tspan>B</tspan></text>");
+  for (const double time : {0.0, 2.0, 4.0, 2.0}) {
+    SCOPED_TRACE(time);
+    document.setTime(time);
+    editor::tests::CompareBitmapToBitmap(
+        RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(expected),
+        "multi-value-ancestor-fails-closed", editor::tests::PixelmatchIdentityParams());
+  }
+}
 #endif
 
 TEST(RendererAnimationPresentation, ToOnlyPathCalibrationUsesTypedBase) {
