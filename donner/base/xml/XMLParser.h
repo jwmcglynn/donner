@@ -17,6 +17,9 @@ namespace donner::xml {
  * This byte API does not transcode other encodings. An encoding declaration, when present, must
  * name UTF-8 (case-insensitively); other declared encodings return an unsupported-input error.
  * Transcode legacy input and update or remove its encoding declaration before calling Parse.
+ * Raw UTF-8 and XML character validation precedes declaration parsing, so invalid bytes report
+ * that error before an unsupported encoding declaration. Malformed UTF-8 is rejected in every
+ * context, including names; a correctly encoded Unicode replacement character remains valid.
  *
  * The document tree will remain valid as long as the returned \ref XMLDocument is alive.
  */
@@ -137,6 +140,10 @@ public:
    * By default, the parser keeps the doctype node but ignores comments and processing
    * instructions. To change which of these nodes are parsed, configure the flags within
    * \ref Options.
+   *
+   * The input-size limit is checked first, then raw UTF-8 and XML characters are validated
+   * before allocating parser-owned source and tree state. Ignored comments and processing
+   * instructions are validated too. Invalid input returns an error without a document.
    *
    * The document tree will remain valid as long as the returned \ref XMLDocument is alive.
    *

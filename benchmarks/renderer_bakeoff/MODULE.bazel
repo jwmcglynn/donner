@@ -1,0 +1,29 @@
+"""Renderer bakeoff: benchmarks Donner's RendererInterface backends against third-party renderers.
+
+This is a separate Bazel module so its third-party dependencies never enter Donner's own module
+graph. Donner itself is consumed from the enclosing checkout.
+"""
+
+module(name = "donner_renderer_bakeoff")
+
+bazel_dep(name = "donner", version = "0.8.0-pre")
+local_path_override(
+    module_name = "donner",
+    path = "../..",
+)
+
+# Register the Apple toolchain before rules_cc selects its generic host toolchain.
+bazel_dep(name = "apple_support", version = "2.10.1")
+bazel_dep(name = "rules_cc", version = "0.2.26")
+bazel_dep(name = "pixelmatch-cpp17", version = "2.0.0")
+bazel_dep(name = "nlohmann_json", version = "3.12.0.bcr.2")
+
+bazel_dep(name = "googletest", version = "1.18.0.bcr.1", dev_dependency = True, repo_name = "com_google_gtest")
+
+# GoogleTest 1.18 requires abseil-cpp 20260526.0, which declares no compatibility_level, while
+# other modules request compatibility level 1 releases. Selecting that release keeps the graph on
+# one abseil-cpp, matching examples/bazel_consumer.
+single_version_override(
+    module_name = "abseil-cpp",
+    version = "20260526.0",
+)

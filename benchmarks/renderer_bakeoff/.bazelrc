@@ -1,0 +1,27 @@
+# Benchmarks measure optimized code; every build in this module is a release build.
+build -c opt
+build --cxxopt=-std=c++20
+build --host_cxxopt=-std=c++20
+
+# Donner's own release flags (see the root .bazelrc), so Donner code is measured as shipped.
+build --copt=-fno-exceptions
+build --copt=-fno-rtti
+build --enable_platform_specific_config
+build:macos --macos_minimum_os=13.3
+build:linux --action_env=CC=clang
+build:linux --action_env=CXX=clang++
+
+# Code-size measurement: identical flags for every code_size_* binary. Dead sections are
+# discarded at link time; LTO stays off so each library's own code is what is measured.
+build:codesize --copt=-ffunction-sections
+build:codesize --copt=-fdata-sections
+build:codesize --strip=always
+build:codesize_macos --config=codesize
+build:codesize_macos --linkopt=-Wl,-dead_strip
+build:codesize_macos --linkopt=-exported_symbols_list --linkopt=/dev/null
+build:codesize_linux --config=codesize
+build:codesize_linux --linkopt=-Wl,--gc-sections
+
+# Geode is compiled in so the GPU suite can compare against it; the tiny-skia backend is linked
+# separately by target, unaffected by this flag.
+build --@donner//donner/svg/renderer/geode:enable_geode=true

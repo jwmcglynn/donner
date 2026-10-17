@@ -1,6 +1,74 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
-import { writeHeartbeat } from "./browser-heartbeat.cjs";
+import { APPLICATION_HEARTBEAT_LIMIT_MS, writeHeartbeat } from "./browser-heartbeat.cjs";
+
+// Ownership discovery is bounded by the existing application-liveness ceiling. An unanswered
+// IPC is unknown, not a negative role response. Keep one request per worker, including requests
+// still pending when another worker identifies itself, so diagnostics cannot overlap them.
+function discoverApplicationWorker(page, requests) {
+  return new Promise((resolve, reject) => {
+    const probes = new Map();
+    const expiresAt = Date.now() + APPLICATION_HEARTBEAT_LIMIT_MS;
+    let finished = false;
+    const counts = () => {
+      const result = { true: 0, false: 0, failed: 0, unresolved: 0 };
+      for (const probe of probes.values()) result[probe.status]++;
+      return JSON.stringify(result);
+    };
+    const cleanup = () => {
+      clearTimeout(deadline);
+      page.off?.("worker", identify);
+      page.off?.("close", closed);
+      for (const [worker, probe] of probes) worker.off?.("close", probe.closed);
+    };
+    const fail = (reason) => {
+      if (finished) return;
+      finished = true;
+      cleanup();
+      reject(new Error(`${reason}: ${counts()}`));
+    };
+    const closed = () => fail("page closed during application worker discovery");
+    const identify = (worker) => {
+      if (finished || probes.has(worker)) return;
+      if (Date.now() >= expiresAt) {
+        fail("application worker discovery deadline");
+        return;
+      }
+      const probe = { status: "unresolved", closed: undefined };
+      probe.closed = () => { probe.status = "failed"; };
+      probes.set(worker, probe);
+      worker.once?.("close", probe.closed);
+      requests.add(worker);
+      Promise.resolve().then(() => worker.evaluate(() =>
+        Boolean(globalThis.__donnerApplicationWorker)
+      )).then((ownsSurface) => {
+        requests.delete(worker);
+        if (finished || probe.status !== "unresolved") return;
+        probe.status = ownsSurface === true ? "true" : "false";
+        if (Date.now() >= expiresAt) {
+          fail("application worker discovery deadline");
+          return;
+        }
+        if (ownsSurface === true) {
+          finished = true;
+          cleanup();
+          resolve(worker);
+        }
+      }, () => {
+        requests.delete(worker);
+        if (!finished && probe.status === "unresolved") probe.status = "failed";
+      });
+    };
+    const deadline = setTimeout(
+      () => fail("application worker discovery deadline"),
+      APPLICATION_HEARTBEAT_LIMIT_MS,
+    );
+    page.on?.("worker", identify);
+    page.once?.("close", closed);
+    if (page.isClosed?.()) closed();
+    else for (const worker of page.workers()) identify(worker);
+  });
+}
 
 export async function startApplicationHeartbeat(
   page,
@@ -8,23 +76,10 @@ export async function startApplicationHeartbeat(
 ) {
   const sessionId = crypto.randomUUID();
   const marker = `${heartbeat}.app-active`;
-  const application = await Promise.any(
-    page.workers().map(async (worker) => {
-      const ownsSurface = await Promise.race([
-        worker.evaluate(() =>
-          Boolean(
-            globalThis.__donnerApplicationWorker,
-          )
-        ),
-        new Promise((resolve) => setTimeout(() => resolve(false), 1000)),
-      ]);
-      if (!ownsSurface) throw new Error("worker does not run the editor application");
-      return worker;
-    }),
-  );
+  const workerRequests = new Set();
+  const application = await discoverApplicationWorker(page, workerRequests);
   fs.writeFileSync(marker, "active");
   const workerSnapshots = new Map();
-  const workerRequests = new Set();
   let busy = false;
   let stopped = false;
   let pageRequestPending = false;

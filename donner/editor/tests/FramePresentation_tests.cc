@@ -200,6 +200,48 @@ TEST(FramePresentationTest,
   EXPECT_EQ(FramePresentation::Build(cropped, deselected, nullptr, retained).frame, nullptr);
 }
 
+TEST(FramePresentationTest, FractionalRasterKeepsMovableTilesInsteadOfFlattenedOverview) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 892 512">
+      <rect id="target" x="300" y="350" width="20" height="20" fill="red"/>
+    </svg>
+  )svg"));
+  SelectTool tool;
+  tool.onMouseDown(app, Vector2d(305, 355), MouseModifiers{});
+  const auto capture = Capture(app, 1);
+  ASSERT_EQ(capture->selection().size(), 1u);
+  auto tile = RectTile(capture->selection().front(), 300, 0);
+  tile.canvasOffsetDoc.y = 350;
+  auto flattened = tile;
+  flattened.layerEntity = entt::null;
+  flattened.kind = RenderResult::CompositedTile::Kind::Segment;
+  auto input = Input(app, tool, 1);
+  input.viewport.documentViewBox = Box2d::FromXYWH(0, 0, 892, 512);
+  input.viewport.paneOrigin = Vector2d(40, 8);
+  input.viewport.paneSize = Vector2d(1025, 884);
+  input.viewport.devicePixelRatio = 2;
+  input.viewport.zoom = 1.93;
+  input.viewport.panDocPoint = Vector2d(302, 390);
+  input.viewport.panScreenPoint = Vector2d(550, 440);
+  input.paneClipRect =
+      Box2d(input.viewport.paneOrigin, input.viewport.paneOrigin + input.viewport.paneSize);
+  const auto raster = input.viewport.rasterViewport();
+  ASSERT_TRUE(raster.viewportBounded);
+  const auto resources = FramePresentationTestAccess::resources(
+      capture, {tile},
+      {.activeTilesViewportBounded = true, .activeRasterDocumentRect = raster.documentRect},
+      capture, {flattened});
+  tool.onMouseMove(app, Vector2d(310, 355), true);
+  input.desired = tool.activeDragPreview();
+  const auto frame = FramePresentation::Build(resources, input).frame;
+  ASSERT_NE(frame, nullptr);
+  EXPECT_TRUE(frame->followsPointer())
+      << "Subpixel artboard rounding must not replace the complete movable tile with an overview.";
+  ASSERT_THAT(frame->tiles(), SizeIs(1));
+  EXPECT_EQ(frame->tiles().front().layerEntity, capture->selection().front());
+}
+
 TEST(FramePresentationTest, ZoomOutRequiresCompatibleCompleteOverview) {
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(kRect));

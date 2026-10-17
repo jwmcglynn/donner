@@ -1,0 +1,89 @@
+"""Pinned-Chromium checks of the shipped WGSL shader artifacts.
+
+These tests live outside //donner/gpu/shader so that the production shader package loads no
+development-only rule set, which a module depending on Donner cannot see.
+"""
+
+load("@aspect_rules_js//js:defs.bzl", "js_test")
+load("//build_defs:dep_audit.bzl", "configured_dependency_audit_test")
+
+# The CI workflow contract checks that every browser test here carries its scheduling tag.
+exports_files(
+    ["BUILD.bazel"],
+    visibility = ["//tools:__pkg__"],
+)
+
+# The browser compiler checks the emitted bytes independently of Donner's own WGSL frontend.
+# It validates modules only; editor/browser pixel acceptance remains a separate target. The shipped
+# artifact targets are read from the production shader package's BUILD file.
+js_test(
+    name = "wgsl_chromium_compilation_tests",
+    size = "large",
+    copy_data_to_bin = False,
+    data = [
+        "//donner/editor/wasm/tests:node_modules/@playwright/test",
+        "//donner/gpu/shader:BUILD.bazel",
+        "//donner/gpu/shader:math_primitive_fixture",
+        "//donner/gpu/shader:shipped_wgsl_manifest",
+        "@playwright//:chromium",
+    ],
+    entry_point = "WgslChromiumCompilation_tests.mjs",
+    env = {
+        "DONNER_MATH_FIXTURE": "$(rootpath //donner/gpu/shader:math_primitive_fixture)",
+        "DONNER_SHADER_BUILD": "$(rootpath //donner/gpu/shader:BUILD.bazel)",
+        "DONNER_WGSL_MANIFEST": "$(rootpath //donner/gpu/shader:shipped_wgsl_manifest)",
+        "NODE_OPTIONS": "",
+        "PLAYWRIGHT_BROWSERS_PATH": "$(rootpath @playwright//:chromium)/../",
+    },
+    node_options = ["--test"],
+    tags = ["launches-browser"],
+    target_compatible_with = [
+        "@platforms//cpu:aarch64",
+        "@platforms//os:macos",
+    ],
+)
+
+# Configured, so the audit checks the suite's real dependency closure without loading the closure of
+# the wrapper it forbids.
+configured_dependency_audit_test(
+    name = "wgsl_browser_no_webgpu_wrapper_audit_test",
+    forbidden_packages = ["//third_party/webgpu-cpp"],
+    required = [
+        "//donner/gpu/shader:math_primitive_fixture",
+        "//donner/gpu/shader:shipped_wgsl_manifest",
+    ],
+    target = "//donner/gpu/shader/browser_tests:wgsl_chromium_compilation_tests",
+)
+
+# Executes the migrated Slug endpoint coverage probes on the pinned browser WebGPU device.
+js_test(
+    name = "slug_endpoint_chromium_tests",
+    size = "large",
+    copy_data_to_bin = False,
+    data = [
+        "//donner/editor/wasm/tests:node_modules/@playwright/test",
+        "//donner/gpu/shader:slug_endpoint_wgsl_fixture",
+        "@playwright//:chromium",
+    ],
+    entry_point = "SlugEndpointChromium_tests.mjs",
+    env = {
+        "DONNER_SLUG_ENDPOINT_WGSL": "$(rootpath //donner/gpu/shader:slug_endpoint_wgsl_fixture)",
+        "NODE_OPTIONS": "",
+        "PLAYWRIGHT_BROWSERS_PATH": "$(rootpath @playwright//:chromium)/../",
+    },
+    node_options = ["--test"],
+    tags = ["launches-browser"],
+    target_compatible_with = [
+        "@platforms//cpu:aarch64",
+        "@platforms//os:macos",
+    ],
+)
+
+# Configured, so the audit checks the suite's real dependency closure without loading the closure of
+# the wrapper it forbids.
+configured_dependency_audit_test(
+    name = "slug_endpoint_browser_no_webgpu_wrapper_audit_test",
+    forbidden_packages = ["//third_party/webgpu-cpp"],
+    required = ["//donner/gpu/shader:slug_endpoint_wgsl_fixture"],
+    target = "//donner/gpu/shader/browser_tests:slug_endpoint_chromium_tests",
+)

@@ -302,7 +302,7 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         # The hosted browser phase selects by tag, so an untagged browser test would
         # silently return to the oversubscribed main test step.
         launching = []
-        for package in ("donner/editor/wasm/tests", "donner/gpu/shader"):
+        for package in ("donner/editor/wasm/tests", "donner/gpu/shader/browser_tests"):
             build = _repository_text(package + "/BUILD.bazel")
             for match in re.finditer(r"^\w[\w.]*\(\n(.*?)\n\)\n", build, re.MULTILINE | re.DOTALL):
                 body = match.group(1)

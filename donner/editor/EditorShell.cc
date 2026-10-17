@@ -394,7 +394,8 @@ void PublishSampleThumbnailStats(int requested, int started, int completed, int 
 
 void PublishInteractionStats(int selectedCount, int pendingClick, int workerBusy, int dragging,
                              int dragHasVisualChange, double pointerX, double pointerY,
-                             int eyedropperArmed, int eyedropperReady, int eyedropperUnavailable) {
+                             int eyedropperArmed, int eyedropperReady, int eyedropperUnavailable,
+                             bool renderRequestPending, bool viewportSettlePending) {
   // `pointerX`/`pointerY` is the pointer position this frame's input processing
   // actually used, in page CSS pixels. A DOM mouse move reaches the app thread
   // through the proxying queue, so under load a press can be dispatched before
@@ -415,10 +416,12 @@ void PublishInteractionStats(int selectedCount, int pendingClick, int workerBusy
           'eyedropperArmed' : !!$7,
           'eyedropperReady' : !!$8,
           'eyedropperUnavailable' : !!$9,
+          'renderRequestPending' : !!$10,
+          'viewportSettlePending' : !!$11,
         });
       },
       selectedCount, pendingClick, workerBusy, dragging, dragHasVisualChange, pointerX, pointerY,
-      eyedropperArmed, eyedropperReady, eyedropperUnavailable);
+      eyedropperArmed, eyedropperReady, eyedropperUnavailable, renderRequestPending, viewportSettlePending);
   // clang-format on
 }
 
@@ -1696,7 +1699,23 @@ EditorShell::EditorShell(gui::EditorWindow& window, EditorShellOptions options)
   queueBackgroundFontPreviews();
 }
 
-std::optional<float> EditorShell::nextIdleWakeSeconds() const {
+std::optional<float> EditorShell::nextViewportRenderWakeSeconds() {
+  const auto captureWake = renderCoordinator_.nextPixelCaptureCanvasCommitWakeSeconds();
+  std::optional<float> settleWake;
+  if (app_.hasDocument() && viewportInitialized_ &&
+      (!showSamplePicker_ || samplePresentationPending_)) {
+    settleWake = renderCoordinator_.nextViewportSettleWakeSeconds();
+  }
+  if (!captureWake.has_value()) {
+    return settleWake;
+  }
+  if (!settleWake.has_value()) {
+    return captureWake;
+  }
+  return std::min(*captureWake, *settleWake);
+}
+
+std::optional<float> EditorShell::nextIdleWakeSeconds() {
   std::optional<float> result;
   const auto includeWake = [&result](std::optional<float> wakeSeconds) {
     if (!wakeSeconds.has_value()) {
@@ -1720,7 +1739,7 @@ std::optional<float> EditorShell::nextIdleWakeSeconds() const {
     includeWake(0.25f);
   }
   includeWake(documentSyncController_.nextTextSyncWakeSeconds());
-  includeWake(renderCoordinator_.nextPixelCaptureCanvasCommitWakeSeconds());
+  includeWake(nextViewportRenderWakeSeconds());
   includeWake(renderCoordinator_.nextNothingToPresentRetryWakeSeconds());
   includeWake(textEditor_.nextFlashWakeSeconds());
   includeWake(textEditor_.nextRopeAnimationWakeSeconds());
@@ -7763,7 +7782,8 @@ bool EditorShell::flushInteractiveDragMutationAndRequestRender() {
   renderCoordinator_.requestSelectionGeometryRefresh();
   const bool posted = renderCoordinator_.maybeRequestRender(
       app_, selectTool_, interactionController_.viewport(), &textures_,
-      /*supersedeInFlight=*/false);
+      /*supersedeInFlight=*/false, selectionChromeDetailForActiveTool(),
+      activeTool_ == ActiveTool::Select && interactionController_.pendingClick().has_value());
   requestRenderAtEndOfFrame_ = !posted;
   window_.wakeEventLoop();
   return true;
@@ -8353,8 +8373,7 @@ void EditorShell::renderMenuBarAndDialogs(bool compactUi) {
 }
 
 void EditorShell::queueIdleRenderRefreshIfNeeded() {
-  const std::optional<float> canvasCommitWake =
-      renderCoordinator_.nextPixelCaptureCanvasCommitWakeSeconds();
+  const std::optional<float> canvasCommitWake = nextViewportRenderWakeSeconds();
   if (canvasCommitWake.has_value() && *canvasCommitWake <= 0.0f) {
     requestRenderAtEndOfFrame_ = true;
   }
@@ -8380,8 +8399,9 @@ void EditorShell::applyDeferredRenderRequest() {
     // document guard.
     renderCoordinator_.asyncRenderer().cancelInFlight();
   }
-  switch (internal::DeferredRenderActionForState(app_.hasDocument(), penDragFlushedThisFrame_,
-                                                 renderCoordinator_.asyncRenderer().isBusy())) {
+  switch (internal::DeferredRenderActionForState(
+      app_.hasDocument(), penDragFlushedThisFrame_,
+      renderCoordinator_.asyncRenderer().isBusyWithIdleWake())) {
     case internal::DeferredRenderAction::ClearRequest: requestRenderAtEndOfFrame_ = false; break;
     case internal::DeferredRenderAction::WakeForPenDrag:
       // An actively-moving pen drag flushed new path geometry this frame. The
@@ -8394,9 +8414,10 @@ void EditorShell::applyDeferredRenderRequest() {
       window_.wakeEventLoop();
       break;
     case internal::DeferredRenderAction::SubmitRender:
-      renderCoordinator_.maybeRequestRender(app_, selectTool_, interactionController_.viewport(),
-                                            &textures_, /*supersedeInFlight=*/false,
-                                            selectionChromeDetailForActiveTool());
+      renderCoordinator_.maybeRequestRender(
+          app_, selectTool_, interactionController_.viewport(), &textures_,
+          /*supersedeInFlight=*/false, selectionChromeDetailForActiveTool(),
+          activeTool_ == ActiveTool::Select && interactionController_.pendingClick().has_value());
       requestRenderAtEndOfFrame_ = false;
       break;
     case internal::DeferredRenderAction::WaitForRendererCompletion:
@@ -8507,17 +8528,18 @@ void EditorShell::recordFrameTelemetry(
   {
     const ImVec2 imguiMousePos = ImGui::GetIO().MousePos;
     const bool pointerValid = ImGui::IsMousePosValid(&imguiMousePos);
-    PublishInteractionStats(static_cast<int>(app_.selectedElements().size()),
-                            interactionController_.pendingClick().has_value() ? 1 : 0,
-                            renderCoordinator_.asyncRenderer().isBusy() ? 1 : 0,
-                            selectTool_.isDragging() ? 1 : 0,
-                            selectTool_.dragHasVisualChange() ? 1 : 0,
-                            pointerValid ? static_cast<double>(imguiMousePos.x) : -1.0,
-                            pointerValid ? static_cast<double>(imguiMousePos.y) : -1.0,
-                            activeTool_ == ActiveTool::Eyedropper,
-                            renderCoordinator_.documentPixelCaptureFor(
-                                app_, interactionController_.viewport()) != nullptr,
-                            renderCoordinator_.documentPixelCaptureUnavailable());
+    PublishInteractionStats(
+        static_cast<int>(app_.selectedElements().size()),
+        interactionController_.pendingClick().has_value() ? 1 : 0,
+        renderCoordinator_.asyncRenderer().isBusy() ? 1 : 0, selectTool_.isDragging() ? 1 : 0,
+        selectTool_.dragHasVisualChange() ? 1 : 0,
+        pointerValid ? static_cast<double>(imguiMousePos.x) : -1.0,
+        pointerValid ? static_cast<double>(imguiMousePos.y) : -1.0,
+        activeTool_ == ActiveTool::Eyedropper,
+        renderCoordinator_.documentPixelCaptureFor(app_, interactionController_.viewport()) !=
+            nullptr,
+        renderCoordinator_.documentPixelCaptureUnavailable(), requestRenderAtEndOfFrame_,
+        renderCoordinator_.hasPendingViewportSettle());
   }
   publishEyedropperTestStateIfEnabled();
   {

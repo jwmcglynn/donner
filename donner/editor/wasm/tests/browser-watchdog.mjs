@@ -1,5 +1,6 @@
 import { execFileSync, spawn } from "node:child_process";
 import fs from "node:fs";
+import { APPLICATION_HEARTBEAT_LIMIT_MS } from "./browser-heartbeat.cjs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { kListingAttempts, listWithRetries, processRows } from "./browser-process-snapshot.cjs";
@@ -35,7 +36,7 @@ export async function supervise(executable, args, options = {}) {
   const reportFile = path.join(outputDir, "browser-watchdog.json");
   const memoryLimit = options.memoryLimit ?? 4 * 1024 * 1024 * 1024;
   const deadlineMs = options.deadlineMs ?? 900000;
-  const heartbeatLimitMs = options.heartbeatLimitMs ?? 5000;
+  const heartbeatLimitMs = options.heartbeatLimitMs ?? APPLICATION_HEARTBEAT_LIMIT_MS;
   const teardownLimitMs = options.teardownLimitMs ?? 30000;
   const sampleProcesses = options.sampleProcesses ?? processRows;
   const intervalMs = options.intervalMs ?? 1000;

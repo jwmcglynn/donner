@@ -1,6 +1,7 @@
 .git
 examples/bazel-examples
 examples/bazel_consumer
+benchmarks/renderer_bakeoff
 tools/python
 donner/editor/wasm/tests/node_modules
 

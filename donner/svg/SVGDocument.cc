@@ -842,6 +842,11 @@ Vector2i SVGDocument::canvasSize() const {
       access.registry(), components::LayoutSystem::InvalidSizeBehavior::ReturnDefault);
 }
 
+std::optional<Vector2i> SVGDocument::canvasSizeOverride() const {
+  DocumentReadAccess access = documentState_->read();
+  return access.registry().ctx().get<components::SVGDocumentContext>().canvasSize;
+}
+
 bool SVGDocument::operator==(const SVGDocument& other) const {
   return documentState_ == other.documentState_;
 }

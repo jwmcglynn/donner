@@ -2969,19 +2969,16 @@ void PropertyRegistry::clearStyleAttributeProperties() {
       inlineResourceColors_[index].reset();
     }
   }
-  const css::Specificity styleSpecificity = css::Specificity::StyleAttribute();
-
   auto properties = allPropertiesMutable();
-  forEachProperty<0, numProperties()>([&properties, styleSpecificity](auto i) {
+  forEachProperty<0, numProperties()>([&properties](auto i) {
     auto& property = std::get<i.value>(properties);
-    if (property.specificity == styleSpecificity) {
+    if (property.specificity.isStyleAttribute()) {
       property.clear();
     }
   });
 
-  std::erase_if(unparsedProperties, [styleSpecificity](const auto& entry) {
-    return entry.second.specificity == styleSpecificity;
-  });
+  std::erase_if(unparsedProperties,
+                [](const auto& entry) { return entry.second.specificity.isStyleAttribute(); });
 }
 
 ParseResult<bool> PropertyRegistry::parsePresentationAttribute(std::string_view name,

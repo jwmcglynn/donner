@@ -55,11 +55,13 @@ public:
    * greater.
    */
   enum class SpecialType {
-    UserAgent,       ///< User agent stylesheet, lowest precedence in CSS.
-    None,            ///< No special value.
-    StyleAttribute,  ///< Style attribute, second highest precedence in CSS.
-    Important,       ///< `!important` declaration, highest precedence in CSS.
-    Override         ///< Values set from C++ API, which overrides all other values.
+    UserAgent,                ///< Normal user agent stylesheet declaration.
+    None,                     ///< Normal author declaration.
+    StyleAttribute,           ///< Normal inline style, above normal author selectors.
+    Important,                ///< Important author selector declaration.
+    ImportantStyleAttribute,  ///< Important inline style, above important author selectors.
+    ImportantUserAgent,       ///< Important user agent declaration, above author CSS.
+    Override                  ///< Explicit C++ values, above every CSS declaration.
   };
 
   /// Output stream operator.
@@ -69,6 +71,8 @@ public:
       case SpecialType::None: return os << "None";
       case SpecialType::StyleAttribute: return os << "StyleAttribute";
       case SpecialType::Important: return os << "Important";
+      case SpecialType::ImportantStyleAttribute: return os << "ImportantStyleAttribute";
+      case SpecialType::ImportantUserAgent: return os << "ImportantUserAgent";
       case SpecialType::Override: return os << "Override";
     }
 
@@ -126,7 +130,7 @@ public:
    *
    * or
    * ```
-   * Specificity(!important)
+   * Specificity(!important, 0, 0, 0)
    * ```
    *
    * @param os Output stream.
@@ -134,14 +138,16 @@ public:
    */
   friend std::ostream& operator<<(std::ostream& os, const Specificity& obj) {
     os << "Specificity(";
-    if (obj.special_ == SpecialType::Important) {
-      os << "!important";
-    } else if (obj.special_ == SpecialType::StyleAttribute) {
-      os << "style (second highest)";
-    } else {
-      os << obj.abc_.a << ", " << obj.abc_.b << ", " << obj.abc_.c;
+    switch (obj.special_) {
+      case SpecialType::StyleAttribute: return os << "style)";
+      case SpecialType::ImportantStyleAttribute: return os << "style !important)";
+      case SpecialType::Override: return os << "override)";
+      case SpecialType::UserAgent: os << "user-agent, "; break;
+      case SpecialType::Important: os << "!important, "; break;
+      case SpecialType::ImportantUserAgent: os << "user-agent !important, "; break;
+      case SpecialType::None: break;
     }
-    return os << ")";
+    return os << obj.abc_.a << ", " << obj.abc_.b << ", " << obj.abc_.c << ")";
   }
 
   /**
@@ -160,6 +166,24 @@ public:
    * Creates a specificity for an `!important` declaration.
    */
   static constexpr Specificity Important() { return Specificity(SpecialType::Important); }
+
+  /**
+   * Marks a declaration important while preserving its origin and selector specificity.
+   * Already-important ranks and explicit non-CSS overrides are unchanged.
+   *
+   * @param specificity Original declaration rank.
+   */
+  static constexpr Specificity Important(Specificity specificity) {
+    switch (specificity.special_) {
+      case SpecialType::UserAgent: specificity.special_ = SpecialType::ImportantUserAgent; break;
+      case SpecialType::None: specificity.special_ = SpecialType::Important; break;
+      case SpecialType::StyleAttribute:
+        specificity.special_ = SpecialType::ImportantStyleAttribute;
+        break;
+      default: break;
+    }
+    return specificity;
+  }
 
   /**
    * Creates a specificity for a style attribute.
@@ -192,7 +216,13 @@ public:
   /// Gets the special value of the specificity, defaults to \ref SpecialType::None.
   SpecialType specialValue() const { return special_; }
 
-  /// Converts this Specificity into a UserAgent-specific Specificity (lowering the priority).
+  /// Whether this rank came from an inline style declaration, regardless of importance.
+  bool isStyleAttribute() const {
+    return special_ == SpecialType::StyleAttribute ||
+           special_ == SpecialType::ImportantStyleAttribute;
+  }
+
+  /// Converts a normal selector rank to user-agent origin; special ranks are unchanged.
   Specificity toUserAgentSpecificity() const {
     Specificity result = *this;
     if (result.special_ == SpecialType::None) {

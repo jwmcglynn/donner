@@ -274,6 +274,13 @@ BUILDBUDDY_CLEANUP = ("      - name: Remove BuildBuddy credentials\n"
 TRUST_JOBS = ("gatekeeper", "trust")
 WRITE_ENVIRONMENT = "buildbuddy-write"
 BUILDBUDDY_DOWNLOADS = {"minimal", "toplevel", "all"}
+# The probe in the action sees the cache only at setup. When a later Bazel command cannot reach
+# it, Bazel ends the build (exit code 34) unless both of these let the action run locally.
+BUILDBUDDY_FALLBACK = ("build --remote_local_fallback",
+                       "build --incompatible_remote_local_fallback_for_remote_cache")
+REMOTE_FALLBACK_FLAG = re.compile(r"--(?:no)?(?:incompatible_)?remote_local_fallback")
+# A path-filtered workflow with a BuildBuddy lane must run when the action changes.
+BUILDBUDDY_ACTION_FILES = ".github/actions/buildbuddy-cache/**"
 SECRET_NAMES_BUILDBUDDY = ("BUILDBUDDY_API_KEY", "BUILDBUDDY_API_KEY_READONLY")
 # Anything that can start Bazel: the client itself, directly or by path, and the repository's
 # wrappers that run it.
@@ -446,6 +453,8 @@ def _buildbuddy_job_violations(path, name, workflow, steps):
         violations.append("%s does not remove the BuildBuddy key in its last step" % where)
     if any(BAZEL_COMMAND.search(step) for step in steps[:max(configured)]):
         violations.append("%s runs Bazel before configuring BuildBuddy" % where)
+    if REMOTE_FALLBACK_FLAG.search(workflow.split("\njobs:\n", 1)[0] + _jobs(workflow)[name]):
+        violations.append("%s overrides the BuildBuddy local fallback" % where)
     kinds = Counter(frozenset(_secret_reads(steps[index])) for index in configured)
     pull_requests = "pull_request" in _triggers(workflow) and not self_hosted
     expected = Counter({frozenset({"BUILDBUDDY_API_KEY"}): 1})
@@ -471,7 +480,20 @@ def _buildbuddy_violations(files):
                 violations.extend(_buildbuddy_job_violations(path, name, workflow, steps))
     if seen != BUILDBUDDY_JOBS:
         violations.append("BuildBuddy lanes changed: %s" % sorted(seen))
-    return violations
+    return violations + _buildbuddy_path_filter_violations(files, seen)
+
+
+def _fallback_lines(fragment):
+    """A generated fragment's lines that name any local fallback flag, sorted."""
+    return sorted(line for line in fragment.splitlines() if "fallback" in line)
+
+
+def _buildbuddy_path_filter_violations(files, lanes):
+    """Path filters that would let the BuildBuddy action change without running its lanes."""
+    return ["%s has a BuildBuddy lane, but its %s paths skip the action" % (path, trigger)
+            for path in sorted({path for path, _ in lanes})
+            for trigger, entries in sorted(_trigger_paths(files[path]).items())
+            if BUILDBUDDY_ACTION_FILES not in entries]
 
 
 # Files a self-hosted job may upload directly. Raw Bazel event streams and execution logs record
@@ -588,6 +610,45 @@ def _triggers(workflow):
         return set(re.findall(r"[a-z_]+", block[0]))
     return {match.group(1) for match in (re.match(r"^  ([a-z_]+):", line) for line in block)
             if match}
+
+
+def _flow_mapping(text):
+    """Whether a YAML value starts a flow mapping, ignoring a trailing comment."""
+    return text.split("#", 1)[0].strip().startswith("{")
+
+
+def _paths_entries(body):
+    """The entries of a trigger body's `paths:` filter, or None when it has no such filter.
+
+    An inline value is kept as one entry, so a flow-style list never matches a single path.
+    """
+    for offset, entry in enumerate(body):
+        key, _, inline = entry.split("#", 1)[0].partition(":")
+        if key == "    paths":
+            items = [item.strip()[1:].strip() for item in _indented_block(body[offset + 1:], 4)
+                     if item.strip().startswith("- ")]
+            values = [inline.strip()] if inline.strip() else items
+            return [value.strip("\"'") for value in values]
+    return None
+
+
+def _trigger_paths(workflow):
+    """Each trigger's `paths:` entries, by trigger name; a trigger without the filter is absent.
+
+    A flow mapping for `on:` or a trigger, which could hide a filter, raises instead.
+    """
+    block = _top_level_block(workflow, "on") or []
+    if block and _flow_mapping(block[0]):
+        raise ValueError("unsupported flow mapping for on:")
+    paths = {}
+    for index, line in enumerate(block):
+        trigger = re.match(r"^  ([a-z_]+):(.*)$", line)
+        if trigger and _flow_mapping(trigger.group(2)):
+            raise ValueError("unsupported flow mapping for trigger %s" % trigger.group(1))
+        entries = _paths_entries(_indented_block(block[index + 1:], 2)) if trigger else None
+        if entries is not None:
+            paths[trigger.group(1)] = entries
+    return paths
 
 
 def _jobs(workflow):
@@ -2371,6 +2432,20 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         # A workflow that only runs for pull requests has no main writer of its own.
         sanitizers_pr = self.supply_chain_files[".github/workflows/sanitizers-pr.yml"]
         self.assertEqual({"pull_request"}, _triggers(sanitizers_pr))
+        # The path filters of the BuildBuddy lanes' workflows, as the policy reads them.
+        filtered = {path: _trigger_paths(self.supply_chain_files[path])
+                    for path in sorted({path for path, _ in BUILDBUDDY_JOBS})}
+        self.assertEqual({".github/workflows/editor_wasm.yml": {"pull_request", "push"},
+                          ".github/workflows/sanitizers-pr.yml": {"pull_request"}},
+                         {path: set(paths) for path, paths in filtered.items() if paths})
+        self.assertIn("tools/ci/**",
+                      filtered[".github/workflows/sanitizers-pr.yml"]["pull_request"])
+        self.assertEqual({"push": ['["a/**"]']},
+                         _trigger_paths('on:\n  push:\n    paths: ["a/**"]\njobs:\n'))
+        for layout in ('on: {push: {paths: ["a/**"]}}\n',
+                       'on:\n  pull_request: {paths: ["a/**"]}\n'):
+            with self.subTest(layout=layout), self.assertRaises(ValueError):
+                _trigger_paths(layout + "jobs:\n")
 
     def test_write_key_environment_resolves_only_for_main_and_trusted_pull_requests(self):
         # name: (event, ref, trusted_pr, renovate_pr, expected environment binding)
@@ -2471,6 +2546,8 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         main = ".github/workflows/main.yml"
         wasm = ".github/workflows/editor_wasm.yml"
         nightly = ".github/workflows/github_hosted_nightly.yml"
+        sanitizers_pr = ".github/workflows/sanitizers-pr.yml"
+        action_path = '      - "%s"\n' % BUILDBUDDY_ACTION_FILES
         writer_if = ("        if: (github.event_name != 'pull_request' && github.ref == "
                      "'refs/heads/main') || needs.gatekeeper.outputs.trusted_pr == 'true'\n")
         reader_if = "        if: needs.gatekeeper.outputs.renovate_pr == 'true'\n"
@@ -2522,6 +2599,28 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
             "lane dropped": (wasm, files[wasm].replace(
                 "uses: ./.github/actions/buildbuddy-cache", "uses: ./.github/actions/apt-install"),
                 "BuildBuddy lanes changed"),
+            "fallback turned off for one step": (main, files[main].replace(
+                "bazelisk build --config=ci $BAZEL_MACOS_BUILD_FLAGS $TARGETS",
+                "bazelisk build --config=ci --remote_local_fallback=false "
+                "$BAZEL_MACOS_BUILD_FLAGS $TARGETS", 1),
+                "overrides the BuildBuddy local fallback"),
+            "fallback turned off for the job": (nightly, files[nightly].replace(
+                "        linker: [default, gold]\n    steps:\n",
+                "        linker: [default, gold]\n    env:\n      FLAGS: "
+                "--noincompatible_remote_local_fallback_for_remote_cache\n    steps:\n", 1),
+                "overrides the BuildBuddy local fallback"),
+            "fallback turned off for the workflow": (nightly, files[nightly].replace(
+                '  ASPECT_TOOLS_TELEMETRY: "-all"\n', '  ASPECT_TOOLS_TELEMETRY: "-all"\n'
+                "  FLAGS: --remote_local_fallback=false\n", 1),
+                "overrides the BuildBuddy local fallback"),
+            "push paths skip the action": (wasm, files[wasm].replace(
+                action_path, "", 1), "editor_wasm.yml has a BuildBuddy lane, but its push paths"),
+            "pull request paths skip the action": (sanitizers_pr, files[sanitizers_pr].replace(
+                action_path, "", 1),
+                "sanitizers-pr.yml has a BuildBuddy lane, but its pull_request paths"),
+            "flow-style paths": (sanitizers_pr, files[sanitizers_pr].replace(
+                "    paths:\n", '    paths: ["%s"]\n    paths-moved:\n' % BUILDBUDDY_ACTION_FILES,
+                1), "its pull_request paths skip the action"),
         }
         self._assert_rejected(lambda files, path: _buildbuddy_violations(files), cases)
         cleanup = BUILDBUDDY_CLEANUP
@@ -2685,6 +2784,13 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
                 self.assertIn("build --credential_helper=remote.buildbuddy.io="
                               "%s/runner-temp/buildbuddy/helper" % directory, lines)
                 self.assertFalse(any(line.startswith("import") for line in lines))
+                self.assertEqual(sorted(BUILDBUDDY_FALLBACK), _fallback_lines(fragment))
+
+    def test_bazelrc_leaves_the_buildbuddy_fallback_to_the_fragment(self):
+        # A later rc line, a command section such as `test`, or a config such as --config=ci
+        # outranks the fragment's plain `build` lines, so a fallback flag anywhere in .bazelrc
+        # could turn the fallback off on every lane.
+        self.assertIsNone(REMOTE_FALLBACK_FLAG.search(_read(".bazelrc")))
 
     def test_buildbuddy_cache_partition_replaces_only_the_image_identity(self):
         write = "write-key-fixture"
