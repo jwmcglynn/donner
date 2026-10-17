@@ -117,7 +117,10 @@ def main():
     args = parser.parse_args()
     if args.describe:
         receipt = component_status()
-        receipt["lookup_probes"] = lookup_probe_status()
+        try:
+            receipt["lookup_probes"] = lookup_probe_status()
+        except OSError:
+            receipt["lookup_probes"] = {"status": "probe-setup-unavailable"}
         print("Metal component status: " + json.dumps(receipt, sort_keys=True))
         return 0
     try:

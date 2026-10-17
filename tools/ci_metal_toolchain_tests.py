@@ -1,4 +1,6 @@
 """Control the Metal dependency setup without downloading or installing software."""
+import contextlib
+import io
 import json
 import subprocess
 import unittest
@@ -77,6 +79,16 @@ class MetalSetupTests(unittest.TestCase):
             self.assertEqual(setup.lookup_probe_status(), {
                 "uncached": {"status": "probe-unavailable"},
                 "named_metal": {"status": "probe-unavailable"}})
+
+    def test_description_hides_temporary_storage_failure_paths(self):
+        output = io.StringIO()
+        with patch.object(setup.sys, "argv", ["setup", "--describe"]), \
+             patch.object(setup, "component_status", return_value={"status": "installed"}), \
+             patch.object(setup, "lookup_probe_status", side_effect=PermissionError("/private/path")), \
+             contextlib.redirect_stdout(output):
+            self.assertEqual(setup.main(), 0)
+        self.assertNotIn("/private/path", output.getvalue())
+        self.assertIn('"status": "probe-setup-unavailable"', output.getvalue())
 
     def test_existing_compiler_does_not_install(self):
         installed, calls = self.run_setup([(0, "", True)])
