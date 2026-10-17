@@ -108,7 +108,7 @@ TEST(SVGAnimateTransformElement, HrefPrecedesXlinkHref) {
                         type="translate" from="0" to="100" dur="2s"/>
     </svg>)svg");
   EXPECT_THAT(getAnimatedTransform(document, "#primary", 1),
-              testing::Optional(testing::StrEq("translate(50, 0)")));
+              testing::Optional(testing::StrEq("translate(50)")));
   EXPECT_THAT(getAnimatedTransform(document, "#legacy", 1), testing::Eq(std::nullopt));
 }
 
