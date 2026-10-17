@@ -1441,7 +1441,3 @@ TEST(RendererAnimationPresentation, RemovingAnimatedFilterImageHrefPreservesAspe
 
 }  // namespace
 }  // namespace donner::svg
-const std::string child = time == 2.0 ? " dx='4'" : "";
-auto expected =
-    ParsePresentation("<text x='2' y='12' font-size='10' dx='1 4'><tspan>A</tspan><tspan" + child +
-                      ">B</tspan></text>");
