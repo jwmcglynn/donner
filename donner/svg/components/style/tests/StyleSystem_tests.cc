@@ -862,7 +862,8 @@ TEST_F(StyleSystemTest, EmptySelectorUsesAuthoredChildrenAfterShadowInstantiatio
     auto host = document.querySelector(std::string("#") + id).value();
     auto& shadow = host.entityHandle().get_or_emplace<ComputedShadowTreeComponent>();
     ShadowTreeSystem().populateInstance(host.entityHandle(), shadow, ShadowBranchType::Main,
-                                        shape.entityHandle().entity(), RcString("#shape"), warnings);
+                                        shape.entityHandle().entity(), RcString("#shape"),
+                                        warnings);
     ASSERT_THAT(shadow.mainBranch, testing::Optional(testing::_));
     const bool empty = std::string_view(id) == "empty";
     EXPECT_EQ(host.isEmptyForSelector(nullptr), empty);

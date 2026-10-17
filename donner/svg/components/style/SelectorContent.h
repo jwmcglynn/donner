@@ -1,6 +1,8 @@
 #pragma once
 /// @file
 
+#include <string_view>
+
 #include "donner/base/EcsRegistry.h"
 
 namespace donner::css {
@@ -11,9 +13,26 @@ class XMLNode;
 }
 namespace donner::svg::components {
 
-/// Non-whitespace direct XML text consumed by SVG projection without a live text component.
-/// Cleared when authored contents are replaced; conversion pruning must preserve it.
+/// Non-whitespace authored text not represented by the active raw-text child view.
+/// Covers conversion pruning and typed appends after incremental source projection.
 struct ProjectedNonWhitespaceTextTag {};
+
+/// Incremental content projection retained a complete raw-text child view for selectors.
+struct SelectorRawTextAuthorityTag {};
+
+/**
+ * Replace typed text, discarding direct raw text left by incremental source projection.
+ * Call under document write access, before assigning the replacement retained string.
+ * @param parent Element whose typed text is being replaced.
+ */
+void ResetSelectorTextContent(EntityHandle parent);
+
+/**
+ * Preserve a typed append when raw children are the active selector text representation.
+ * @param parent Element receiving appended text.
+ * @param text Appended text.
+ */
+void RecordAppendedSelectorText(EntityHandle parent, std::string_view text);
 
 /**
  * Preserve direct text that is about to be consumed by SVG conversion.
@@ -24,16 +43,16 @@ struct ProjectedNonWhitespaceTextTag {};
 void RecordDiscardedSelectorText(EntityHandle parent, const xml::XMLNode& node);
 
 /**
- * Begin a content-projection pass, preserving summaries during attribute-only reprojection.
+ * Complete a successful content-projection pass, preserving attribute-only summaries.
  * @param parent Element whose content is being projected.
  * @param contentsReparsed True only when authored content was replaced from a new XML parse.
  */
-void BeginSelectorContentProjection(EntityHandle parent, bool contentsReparsed);
+void CompleteSelectorContentProjection(EntityHandle parent, bool contentsReparsed);
 
 /**
  * Inspect CSS emptiness using the adapter's tree and its authoritative data entity.
  * @param registry Registry shared by the tree and data entities.
- * @param treeEntity Element-child view, or entt::null to omit instanced shadow children.
+ * @param treeEntity Element-child view; shadow hosts use their authored data entity.
  * @param dataEntity Element containing authoritative text and projection metadata.
  * @param budget Shared selector-work budget, or nullptr for an unbudgeted DOM inspection.
  * @return True if no element or non-whitespace text children exist; false on budget exhaustion.

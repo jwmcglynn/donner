@@ -64,6 +64,7 @@ components::RenderTreeState& GetRenderTreeState(EntityHandle handle) {
 }
 
 void MarkNeedsFullRebuild(EntityHandle handle) {
+  handle.registry()->clear<ComputedStyleComponent>();
   auto& renderState = GetRenderTreeState(handle);
   renderState.needsFullRebuild = true;
   renderState.needsFullStyleRecompute = true;
@@ -207,7 +208,6 @@ void TreeMutation::SetValue(EntityHandle node, const RcStringOrRef& value) {
 }
 
 void TreeMutation::InvalidateTextContentStyles(EntityHandle element) {
-  element.registry()->clear<ComputedStyleComponent>();
   MarkNeedsFullRebuild(element);
   MarkDirty(element, components::DirtyFlagsComponent::All);
 }

@@ -147,7 +147,7 @@ void SVGTextContentElement::appendText(std::string_view text) {
   const EntityHandle selectorHandle = unsafeEntityHandle();
   const bool wasEmpty = components::IsSelectorEmpty(
       *selectorHandle.registry(), selectorHandle.entity(), selectorHandle.entity(), nullptr);
-  handle_.remove<components::ProjectedNonWhitespaceTextTag>(access);
+  components::RecordAppendedSelectorText(selectorHandle, text);
   auto& textComponent = handle_.get_or_emplace<components::TextComponent>(access);
 
   if (textComponent.text.empty()) {
@@ -188,7 +188,7 @@ void SVGTextContentElement::setTextContent(std::string_view text) {
   const EntityHandle selectorHandle = unsafeEntityHandle();
   const bool wasEmpty = components::IsSelectorEmpty(
       *selectorHandle.registry(), selectorHandle.entity(), selectorHandle.entity(), nullptr);
-  handle_.remove<components::ProjectedNonWhitespaceTextTag>(access);
+  components::ResetSelectorTextContent(unsafeEntityHandle());
   auto& textComponent = handle_.get_or_emplace<components::TextComponent>(access);
   textComponent.text = text;
   textComponent.textChunks.clear();

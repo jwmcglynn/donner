@@ -1396,10 +1396,25 @@ xml::XMLDocument SVGDocument::xmlDocument() const {
 }
 
 void SVGDocument::applyXMLMutations(xml::ApplySourceEditResult& result) {
+  std::unordered_set<Entity> projectedRoots;
   for (const xml::XMLMutation& mutation : result.mutations) {
+    // Subtree projection already consumes the final child/value state in this XML edit batch.
+    bool covered = false;
+    for (std::optional<xml::XMLNode> node = mutation.node; node; node = node->parentElement()) {
+      if (projectedRoots.contains(node->entityHandle().entity())) {
+        covered = true;
+        break;
+      }
+    }
+    if (covered && mutation.kind == xml::XMLMutation::Kind::NodeValueChanged) {
+      continue;
+    }
     std::optional<ParseDiagnostic> projectionDiagnostic = applyXMLMutation(mutation);
     if (projectionDiagnostic.has_value() && !result.diagnostic.has_value()) {
       result.diagnostic = std::move(projectionDiagnostic);
+    }
+    if (!projectionDiagnostic && mutation.kind == xml::XMLMutation::Kind::SubtreeReplaced) {
+      projectedRoots.insert(mutation.node.entityHandle().entity());
     }
   }
 }
@@ -1423,7 +1438,7 @@ std::optional<ParseDiagnostic> SVGDocument::applyXMLMutation(const xml::XMLMutat
 
   if (mutation.kind == xml::XMLMutation::Kind::NodeInserted) {
     if (std::optional<ParseDiagnostic> diagnostic =
-            projectXMLSubtree(mutation.node, /*contentsReparsed=*/false)) {
+            projectXMLSubtree(mutation.node, /*contentsReparsed=*/true)) {
       return diagnostic;
     }
     MarkSubtreeReplaced(mutation.node.entityHandle());
@@ -1543,7 +1558,6 @@ std::optional<ParseDiagnostic> SVGDocument::projectXMLSubtree(const xml::XMLNode
 
   const EntityHandle handle = node.entityHandle();
   const ProjectedElement projected = EnsureProjectedElementComponents(handle, node);
-  components::BeginSelectorContentProjection(handle, contentsReparsed);
 
   if (std::optional<ParseDiagnostic> diagnostic = ReserveProjectedAttributes(handle, node)) {
     return diagnostic;
@@ -1569,6 +1583,7 @@ std::optional<ParseDiagnostic> SVGDocument::projectXMLSubtree(const xml::XMLNode
     return diagnostic;
   }
 
+  components::CompleteSelectorContentProjection(handle, contentsReparsed);
   for (std::optional<xml::XMLNode> child = node.firstChild(); child.has_value();
        child = child->nextSibling()) {
     if (std::optional<ParseDiagnostic> diagnostic = projectXMLSubtree(*child, contentsReparsed)) {

@@ -28,7 +28,7 @@ void SVGMetadataElement::setTextContent(std::string_view text) {
   const EntityHandle selectorHandle = unsafeEntityHandle();
   const bool wasEmpty = components::IsSelectorEmpty(
       *selectorHandle.registry(), selectorHandle.entity(), selectorHandle.entity(), nullptr);
-  handle_.remove<components::ProjectedNonWhitespaceTextTag>(access);
+  components::ResetSelectorTextContent(unsafeEntityHandle());
   auto& component = handle_.get_or_emplace<components::DescriptiveTextComponent>(access);
   component.text = RcString(text);
   if (wasEmpty != components::IsSelectorEmpty(*selectorHandle.registry(), selectorHandle.entity(),

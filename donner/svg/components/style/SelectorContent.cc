@@ -10,6 +10,7 @@
 #include "donner/svg/components/ElementTypeComponent.h"
 #include "donner/svg/components/StylesheetComponent.h"
 #include "donner/svg/components/shadow/ShadowEntityComponent.h"
+#include "donner/svg/components/shadow/ShadowTreeComponent.h"
 #include "donner/svg/components/text/TextComponent.h"
 
 namespace donner::svg::components {
@@ -49,7 +50,7 @@ bool IsTextNode(const xml::XMLNode& node) {
   return node.type() == xml::XMLNode::Type::Data || node.type() == xml::XMLNode::Type::CData;
 }
 
-bool RawNodeHasContent(EntityHandle child, bool inspectText, css::SelectorTraversalBudget* budget) {
+bool RawNodeHasContent(EntityHandle child, css::SelectorTraversalBudget* budget) {
   const auto node = xml::XMLNode::TryCast(child);
   if (!node) {
     return false;
@@ -57,12 +58,10 @@ bool RawNodeHasContent(EntityHandle child, bool inspectText, css::SelectorTraver
   if (node->type() == xml::XMLNode::Type::Element) {
     return true;
   }
-  return inspectText && IsTextNode(*node) &&
-         !IsIgnorableText(node->value().value_or(RcString("")), budget);
+  return IsTextNode(*node) && !IsIgnorableText(node->value().value_or(RcString("")), budget);
 }
 
-bool ChildrenAreEmpty(Registry& registry, Entity treeEntity, bool inspectText,
-                      css::SelectorTraversalBudget* budget) {
+bool ChildrenAreEmpty(Registry& registry, Entity treeEntity, css::SelectorTraversalBudget* budget) {
   if (treeEntity == entt::null) {
     return true;
   }
@@ -72,10 +71,11 @@ bool ChildrenAreEmpty(Registry& registry, Entity treeEntity, bool inspectText,
     if (budget != nullptr && !budget->consume()) {
       return false;
     }
-    const auto* shadow = registry.try_get<ShadowEntityComponent>(child);
-    const Entity data = shadow ? shadow->lightEntity : child;
-    if (registry.all_of<ElementTypeComponent>(data) ||
-        RawNodeHasContent(EntityHandle(registry, data), inspectText, budget)) {
+    if (registry.all_of<ShadowEntityComponent>(child)) {
+      continue;
+    }
+    if (registry.all_of<ElementTypeComponent>(child) ||
+        RawNodeHasContent(EntityHandle(registry, child), budget)) {
       return false;
     }
   }
@@ -84,9 +84,33 @@ bool ChildrenAreEmpty(Registry& registry, Entity treeEntity, bool inspectText,
 
 }  // namespace
 
-void BeginSelectorContentProjection(EntityHandle parent, bool contentsReparsed) {
+void CompleteSelectorContentProjection(EntityHandle parent, bool contentsReparsed) {
   if (contentsReparsed) {
     parent.remove<ProjectedNonWhitespaceTextTag>();
+    if (RetainedText(parent)) {
+      parent.get_or_emplace<SelectorRawTextAuthorityTag>();
+    }
+  }
+}
+
+void ResetSelectorTextContent(EntityHandle parent) {
+  parent.remove<ProjectedNonWhitespaceTextTag, SelectorRawTextAuthorityTag>();
+  const auto node = xml::XMLNode::TryCast(parent);
+  if (!node) {
+    return;
+  }
+  for (auto child = node->firstChild(); child;) {
+    const auto next = child->nextSibling();
+    if (IsTextNode(*child)) {
+      child->remove();
+    }
+    child = next;
+  }
+}
+
+void RecordAppendedSelectorText(EntityHandle parent, std::string_view text) {
+  if (parent.all_of<SelectorRawTextAuthorityTag>() && !IsIgnorableText(RcString(text), nullptr)) {
+    parent.get_or_emplace<ProjectedNonWhitespaceTextTag>();
   }
 }
 
@@ -109,11 +133,13 @@ bool IsSelectorEmpty(Registry& registry, Entity treeEntity, Entity dataEntity,
   if (data.all_of<ProjectedNonWhitespaceTextTag>()) {
     return false;
   }
-  const auto text = RetainedText(data);
-  if (text && !IsIgnorableText(*text, budget)) {
-    return false;
+  if (!data.all_of<SelectorRawTextAuthorityTag>()) {
+    if (const auto text = RetainedText(data); text && !IsIgnorableText(*text, budget)) {
+      return false;
+    }
   }
-  return ChildrenAreEmpty(registry, treeEntity, !text.has_value(), budget);
+  const Entity authoredTree = data.all_of<ShadowTreeComponent>() ? dataEntity : treeEntity;
+  return ChildrenAreEmpty(registry, authoredTree, budget);
 }
 
 }  // namespace donner::svg::components
