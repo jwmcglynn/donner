@@ -101,7 +101,6 @@ struct LineAttributeMutationResult {
 };
 
 LineAttributeMutationResult SetLineCoordinateAttribute(EntityHandle handle,
-                                                       DocumentWriteAccess& access,
                                                        const xml::XMLQualifiedNameRef& name,
                                                        std::string_view value) {
   const auto* type = handle.try_get<components::ElementTypeComponent>();
@@ -114,12 +113,12 @@ LineAttributeMutationResult SetLineCoordinateAttribute(EntityHandle handle,
   options.unitOptional = true;
   const std::string_view trimmed = StringUtils::TrimWhitespace(value);
   auto parsed = donner::parser::LengthParser::Parse(trimmed, options);
-  handle.get_or_emplace<donner::components::AttributesComponent>(access).setAttribute(
+  handle.get_or_emplace<donner::components::AttributesComponent>().setAttribute(
       *handle.registry(), name, RcString(value));
   markNeedsFullStyleRecompute(handle);
-  handle.remove<components::ComputedPathComponent>(access);
+  handle.remove<components::ComputedPathComponent>();
   markDirty(handle, components::DirtyFlagsComponent::Shape);
-  auto& line = handle.get_or_emplace<components::LineComponent>(access);
+  auto& line = handle.get_or_emplace<components::LineComponent>();
   line.*field = Lengthd();
   if (parsed.hasError()) {
     return {true, std::move(parsed.error())};
@@ -134,15 +133,14 @@ LineAttributeMutationResult SetLineCoordinateAttribute(EntityHandle handle,
   return {true, std::nullopt};
 }
 
-bool RemoveLineCoordinateAttribute(EntityHandle handle, DocumentWriteAccess& access,
-                                   const xml::XMLQualifiedNameRef& name) {
+bool RemoveLineCoordinateAttribute(EntityHandle handle, const xml::XMLQualifiedNameRef& name) {
   const auto* type = handle.try_get<components::ElementTypeComponent>();
   const auto field = name.namespacePrefix.empty() ? LineCoordinateField(name.name) : nullptr;
   if (!type || type->type() != ElementType::Line || !field) {
     return false;
   }
-  handle.get_or_emplace<components::LineComponent>(access).*field = Lengthd();
-  handle.remove<components::ComputedPathComponent>(access);
+  handle.get_or_emplace<components::LineComponent>().*field = Lengthd();
+  handle.remove<components::ComputedPathComponent>();
   markDirty(handle, components::DirtyFlagsComponent::Shape);
   markNeedsFullStyleRecompute(handle);
   return true;
@@ -717,8 +715,7 @@ std::optional<ParseDiagnostic> SVGElement::setAttributeFromXMLMutation(
     return std::nullopt;
   }
 
-  if (auto lineResult = SetLineCoordinateAttribute(handle_, access, name, value);
-      lineResult.handled) {
+  if (auto lineResult = SetLineCoordinateAttribute(handle_, name, value); lineResult.handled) {
     return std::move(lineResult.diagnostic);
   }
 
@@ -782,7 +779,7 @@ void SVGElement::removeAttributeFromXMLMutation(const xml::XMLQualifiedNameRef& 
       }
     }
     markConditionalProcessingChanged(handle_);
-  } else if (RemoveLineCoordinateAttribute(handle_, access, name)) {
+  } else if (RemoveLineCoordinateAttribute(handle_, name)) {
   } else {
     // TODO(jwmcglynn): Add support for namespace when parsing presentation attributes.
     // Only parse empty namespaces for now.
