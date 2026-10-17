@@ -99,32 +99,27 @@ bool HasRawTextChildren(EntityHandle parent) {
 
 void RejectSelectorContentProjection(EntityHandle parent) {
   if (RetainedText(parent)) {
-    parent.get_or_emplace<SelectorContentComponent>().rejectedText = true;
+    parent.get_or_emplace<SelectorRejectedTextTag>();
   }
 }
 
 void AcceptSelectorTextValueProjection(EntityHandle parent) {
-  if (auto* content = parent.try_get<SelectorContentComponent>()) {
-    if (content->rawTextAuthority) {
-      content->rejectedText = false;
-      content->projectedNonWhitespace = false;
-    } else {
-      parent.remove<SelectorContentComponent>();
-    }
-  }
+  parent.remove<SelectorRejectedTextTag, ProjectedNonWhitespaceTextTag>();
 }
 
 void CompleteSelectorContentProjection(EntityHandle parent, bool contentsReparsed) {
   if (contentsReparsed) {
-    parent.remove<SelectorContentComponent>();
+    parent.remove<ProjectedNonWhitespaceTextTag, SelectorRawTextAuthorityTag,
+                  SelectorRejectedTextTag>();
     if (RetainedText(parent) && HasRawTextChildren(parent)) {
-      parent.get_or_emplace<SelectorContentComponent>().rawTextAuthority = true;
+      parent.get_or_emplace<SelectorRawTextAuthorityTag>();
     }
   }
 }
 
 void ResetSelectorTextContent(EntityHandle parent) {
-  parent.remove<SelectorContentComponent>();
+  parent.remove<ProjectedNonWhitespaceTextTag, SelectorRawTextAuthorityTag,
+                SelectorRejectedTextTag>();
   const auto node = xml::XMLNode::TryCast(parent);
   if (!node) {
     return;
@@ -139,9 +134,8 @@ void ResetSelectorTextContent(EntityHandle parent) {
 }
 
 void RecordAppendedSelectorText(EntityHandle parent, std::string_view text) {
-  if (auto* content = parent.try_get<SelectorContentComponent>();
-      content && content->rawTextAuthority && !IsIgnorableText(RcString(text), nullptr)) {
-    content->projectedNonWhitespace = true;
+  if (parent.all_of<SelectorRawTextAuthorityTag>() && !IsIgnorableText(RcString(text), nullptr)) {
+    parent.get_or_emplace<ProjectedNonWhitespaceTextTag>();
   }
 }
 
@@ -152,7 +146,7 @@ void RecordDiscardedSelectorText(EntityHandle parent, const xml::XMLNode& node) 
   }
   for (auto child = node.firstChild(); child; child = child->nextSibling()) {
     if (IsTextNode(*child) && !IsIgnorableText(child->value().value_or(RcString("")), nullptr)) {
-      parent.get_or_emplace<SelectorContentComponent>().projectedNonWhitespace = true;
+      parent.get_or_emplace<ProjectedNonWhitespaceTextTag>();
       return;
     }
   }
@@ -160,12 +154,11 @@ void RecordDiscardedSelectorText(EntityHandle parent, const xml::XMLNode& node) 
 
 bool IsSelectorEmpty(Registry& registry, Entity dataEntity, css::SelectorTraversalBudget* budget) {
   const EntityHandle data(registry, dataEntity);
-  const auto* content = data.try_get<SelectorContentComponent>();
-  if (content && content->projectedNonWhitespace) {
+  if (data.all_of<ProjectedNonWhitespaceTextTag>()) {
     return false;
   }
-  const bool rejectedText = content && content->rejectedText;
-  if (rejectedText || !content || !content->rawTextAuthority) {
+  const bool rejectedText = data.all_of<SelectorRejectedTextTag>();
+  if (rejectedText || !data.all_of<SelectorRawTextAuthorityTag>()) {
     if (const auto text = RetainedText(data); text && !IsIgnorableText(*text, budget)) {
       return false;
     }
