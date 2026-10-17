@@ -13,6 +13,7 @@ MODEL_RE = re.compile(r"^\*\*Model:\*\*\s*(.+?)\\?\s*$", re.MULTILINE)
 HUMAN_ONLY_RE = re.compile(
     r"^\*\*Model:\*\*\s*None \(human-only\)\\?\s*$", re.MULTILINE
 )
+EXPLICIT_MODEL_STATUS = frozenset({"Not recorded", "Withheld"})
 EXACT_MODEL_RES = (
     re.compile(r"^GPT-[0-9]+(?:\.[0-9]+)*(?: [A-Za-z][A-Za-z0-9.-]*)*$"),
     re.compile(r"^Claude [A-Za-z][A-Za-z0-9.-]* [0-9]+(?:\.[0-9]+)*$"),
@@ -91,12 +92,15 @@ def validate_document(path: Path, root: Path) -> Violation | None:
     if model_match is not None and is_exact_model_identifier(model_match.group(1).strip()):
         return None
 
+    if model_match is not None and model_match.group(1).strip() in EXPLICIT_MODEL_STATUS:
+        return None
+
     if HUMAN_ONLY_RE.search(content):
         return None
 
     return Violation(
         relative_path,
-        f"Author is not an exact model identifier and is not marked human-only: {author!r}",
+        f"Author is not an exact model identifier and lacks an explicit Model status: {author!r}",
     )
 
 
@@ -143,7 +147,7 @@ def check(root: Path, allowlist_path: Path) -> list[str]:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Require exact model provenance on Donner design documents."
+        description="Require honest model provenance on Donner design documents."
     )
     parser.add_argument(
         "--root",

@@ -73,6 +73,18 @@ class DesignDocProvenanceTests(unittest.TestCase):
             provenance.check(self.root, self.allowlist)[0],
         )
 
+    def test_explicit_unavailable_or_withheld_provenance_passes(self):
+        for status in ("Not recorded", "Withheld"):
+            with self.subTest(status=status):
+                self.write_design("0001-test.md", f"**Author:** Ada Lovelace\n**Model:** {status}")
+                self.assertEqual(provenance.check(self.root, self.allowlist), [])
+
+    def test_ambiguous_or_annotated_model_status_fails(self):
+        for status in ("Unknown", "", "Not recorded (probably GPT-5)", "Withheld extra"):
+            with self.subTest(status=status):
+                self.write_design("0001-test.md", f"**Author:** Ada Lovelace\n**Model:** {status}")
+                self.assertTrue(provenance.check(self.root, self.allowlist))
+
     def test_allowlist_ratchets_historical_debt(self):
         relative_path = next(iter(provenance.APPROVED_HISTORICAL_DEBT))
         path = self.root / relative_path

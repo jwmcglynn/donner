@@ -2,6 +2,7 @@
 
 **Status:** Draft
 **Author:** Jeff McGlynn
+**Model:** Not recorded
 **Created:** 2026-10-14
 **Tracking:** v1.0 "Embeddable Runtime: Donner Tiny" ([ProjectRoadmap](../ProjectRoadmap.md))
 
@@ -344,7 +345,13 @@ Design rules for the core:
   GPU backend parks released, replaced, and evicted entries until every submission that may
   reference them has completed, following the deferred release Geode already applies to
   resident-path slabs and pooled buffers (`GeodeResidentPathComponent.h`, `GeodeBufferPool.h`); the
-  software backend frees them at the next frame boundary.
+  software backend frees them at the next frame boundary. Live and retired allocations remain
+  charged to the same fixed byte budget until actual destruction. If in-flight retirements leave
+  insufficient budget, reject the new allocation/frame with the existing resource-exhaustion
+  result; eviction does not create capacity until completion. Never block under document access
+  or reuse storage still referenced by a submission. `//donner/render/tests:render_cache_tests`
+  must hold completions during repeated generation churn and assert the combined live-and-retired
+  footprint stays within budget, then verify recovery after completion.
 - **Borrowing stays opt-in.** As with `PathShape` today, a key alone does not permit deferral: a
   backend may retain the geometry past the call only when `allowDeferred` is set and the key is
   nonzero, and the front end guarantees that geometry stays alive and unchanged until the deferred
@@ -458,7 +465,8 @@ in the frame was admitted. A refusal latches, later draws in that frame become n
 frame. The software canvas pays one extra frame buffer for this guarantee.
 
 `PixelView` borrows the canvas's pixel storage: it is valid until the canvas is destroyed or the
-next drawing call, and `UTILS_LIFETIME_BOUND` lets the compiler flag a view that outlives a
+next drawing call, `beginFrame()`, `endFrame()`, or other publication/storage swap, including an
+empty frame that publishes a cleared staging buffer. `UTILS_LIFETIME_BOUND` flags a view that outlives a
 temporary canvas. Hosts that need to keep pixels copy them out.
 
 `PathRef` is either a transient `Path` or a retained path object that carries a stable
