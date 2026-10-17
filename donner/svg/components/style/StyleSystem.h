@@ -441,6 +441,10 @@ public:
   static std::optional<PaintServer> localPaintForInstantiation(const ComputedStyleComponent& style,
                                                                bool stroke);
 
+  /// Apply inherited values from an external parent while retaining local declaration precedence.
+  /// @param local Declarations in the referenced document.
+  /// @param parent Computed declarations inherited from the referencing element.
+  /// @return Local declarations with external-parent fallback values.
   static PropertyRegistry inheritExternalParent(const PropertyRegistry& local,
                                                 const PropertyRegistry& parent);
 
