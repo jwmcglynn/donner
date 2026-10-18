@@ -5,7 +5,6 @@
 #include <cstdint>
 #include <limits>
 #include <optional>
-#include <set>
 #include <span>
 #include <string>
 #include <string_view>
@@ -85,15 +84,6 @@ void ExpectFrameIdentical(const DecodedGif& gif, size_t index,
   editor::tests::CompareBitmapToBitmap(ToBitmap(gif.frames[index].rgba, gif.width, gif.height),
                                        ToBitmap(expected, gif.width, gif.height), label,
                                        editor::tests::PixelmatchIdentityParams());
-}
-
-/// Distinct RGBA colors in a tightly packed RGBA8 buffer.
-std::set<std::array<uint8_t, 4>> DistinctColors(const std::vector<uint8_t>& rgba) {
-  std::set<std::array<uint8_t, 4>> colors;
-  for (size_t i = 0; i + 3 < rgba.size(); i += 4) {
-    colors.insert({rgba[i], rgba[i + 1], rgba[i + 2], rgba[i + 3]});
-  }
-  return colors;
 }
 
 /// Encode \p rgba as a single-frame GIF and decode it again.
@@ -373,8 +363,7 @@ TEST(GifEncoder, RespectsRowStride) {
 
   const DecodedGif gif = Decode(encoder.finish());
   ASSERT_THAT(gif.frames, SizeIs(1));
-  EXPECT_THAT(gif.frames[0].rgba,
-              ElementsAre(1, 1, 1, 255, 9, 9, 9, 255, 9, 9, 9, 255, 2, 2, 2, 255));
+  ExpectFrameIdentical(gif, 0, {1, 1, 1, 255, 9, 9, 9, 255, 9, 9, 9, 255, 2, 2, 2, 255});
 }
 
 TEST(GifEncoder, MergesIdenticalConsecutiveFrames) {
@@ -433,7 +422,7 @@ TEST(GifEncoder, CompositesOverBackgroundColor) {
 
   const DecodedGif gif = Decode(encoder.finish());
   ASSERT_THAT(gif.frames, SizeIs(1));
-  EXPECT_THAT(gif.frames[0].rgba, ElementsAre(255, 127, 127, 255, 255, 255, 255, 255));
+  ExpectFrameIdentical(gif, 0, {255, 127, 127, 255, 255, 255, 255, 255});
 }
 
 TEST(GifEncoder, KeepsBinaryTransparencyWithoutBackground) {
@@ -458,7 +447,7 @@ TEST(GifEncoder, KeepsBinaryTransparencyWithoutBackground) {
   const std::vector<uint8_t> expectedFirst = {0, 0, 255, 255, 0, 0, 0, 0};
   ExpectFrameIdentical(gif, 0, expectedFirst);
   // The first pixel turned transparent, so the previous frame must not show through.
-  EXPECT_THAT(gif.frames[1].rgba, ElementsAre(0, 0, 0, 0, 255, 0, 0, 255));
+  ExpectFrameIdentical(gif, 1, {0, 0, 0, 0, 255, 0, 0, 255});
   EXPECT_THAT(gif.frames, Each(Field(&DecodedGifFrame::disposal, 2)));
   EXPECT_THAT(gif.frames, Each(Field(&DecodedGifFrame::transparentIndex, Optional(0))));
 
@@ -484,29 +473,40 @@ TEST(GifEncoder, OpaqueFramesOfATransparentGifStillDefineATransparentIndex) {
   ASSERT_THAT(gif.frames, SizeIs(2));
   EXPECT_THAT(gif.frames[0].transparentIndex, Optional(0));
   EXPECT_THAT(gif.frames[1].transparentIndex, Optional(0));
-  EXPECT_THAT(gif.frames[1].rgba, ElementsAre(0, 0, 0, 0, 0, 0, 255, 255));
+  ExpectFrameIdentical(gif, 1, {0, 0, 0, 0, 0, 0, 255, 255});
 }
 
-TEST(GifEncoder, QuantizesManyColorsIntoOneFullColorTable) {
-  constexpr int kSize = 64;
-  Image gradient(kSize, kSize, 0, 0, 0);
-  for (int y = 0; y < kSize; ++y) {
-    for (int x = 0; x < kSize; ++x) {
-      gradient.set(x, y, static_cast<uint8_t>(x * 4), static_cast<uint8_t>(y * 4),
-                   static_cast<uint8_t>((x + y) * 2));
+TEST(GifEncoder, QuantizesColorPairsIntoAFullColorTable) {
+  constexpr int kWidth = 32;
+  constexpr int kHeight = 16;
+  Image pairs(kWidth, kHeight, 0, 0, 0);
+  Image expected(kWidth, kHeight, 0, 0, 0);
+  for (int y = 0; y < kHeight; ++y) {
+    for (int x = 0; x < kWidth; ++x) {
+      const auto red = static_cast<uint8_t>((x / 2) * 16);
+      const auto green = static_cast<uint8_t>(y * 16);
+      pairs.set(x, y, red, green, static_cast<uint8_t>(x % 2));
+      expected.set(x, y, red, green, 0);
     }
   }
 
-  GifEncoder encoder({.width = kSize, .height = kSize});
-  ASSERT_TRUE(encoder.addFrame(gradient.rgba, 0, 1));
+  // The 512 colors split into 256 red/green cells before the one-unit blue differences.
+  // Equal-weight pairs retain their lower RGB color, yielding all 256 distinct reference colors.
+  GifEncoder encoder({.width = kWidth, .height = kHeight, .background = GifEncoder::Rgb{0, 0, 0}});
+  ASSERT_TRUE(encoder.addFrame(pairs.rgba, 0, 1));
   const DecodedGif gif = Decode(encoder.finish());
   ASSERT_THAT(gif.frames, SizeIs(1));
+  ASSERT_EQ(gif.width, kWidth);
+  ASSERT_EQ(gif.height, kHeight);
   EXPECT_EQ(gif.frames[0].colorTableSize, 256);
-  EXPECT_THAT(DistinctColors(gif.frames[0].rgba),
-              SizeIs(testing::AllOf(testing::Gt(128u), testing::Le(256u))));
+  editor::tests::CompareBitmapToBitmap(
+      ToBitmap(gif.frames[0].rgba, kWidth, kHeight), ToBitmap(expected.rgba, kWidth, kHeight),
+      "gif_quantized_color_pairs", editor::tests::PixelmatchIdentityParams());
 
-  // The quantized frame fits one table, so encoding it again is lossless.
-  ExpectFrameIdentical(ReencodeFrame(gif.frames[0].rgba, kSize, kSize), 0, gif.frames[0].rgba);
+  // The quantized frame fits one opaque table, so encoding it again is lossless.
+  GifEncoder repeat({.width = kWidth, .height = kHeight, .background = GifEncoder::Rgb{0, 0, 0}});
+  ASSERT_TRUE(repeat.addFrame(gif.frames[0].rgba, 0, 1));
+  ExpectFrameIdentical(Decode(repeat.finish()), 0, expected.rgba);
 }
 
 TEST(GifEncoder, QuantizedPaletteHasCanonicalFullRgbOrdering) {
