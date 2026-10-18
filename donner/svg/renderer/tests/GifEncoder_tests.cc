@@ -300,10 +300,12 @@ TEST(GifEncoder, RoundTripsTerminalCodeAtEveryLzwWidthBoundary) {
   }
 
   for (size_t boundary = 0; boundary < kBoundaryLengths.size(); ++boundary) {
-    const int width = kBoundaryLengths[boundary];
+    const int pixelCount = kBoundaryLengths[boundary];
+    const int height = pixelCount == kBoundaryLengths.back() ? 3 : 1;
+    const int width = pixelCount / height;
     SCOPED_TRACE(testing::Message() << "terminal width " << boundary + 4);
-    GifEncoder encoder({.width = width, .height = 1, .background = GifEncoder::Rgb{0, 0, 0}});
-    const std::vector<uint8_t> expected(pixels.begin(), pixels.begin() + width * 4);
+    GifEncoder encoder({.width = width, .height = height, .background = GifEncoder::Rgb{0, 0, 0}});
+    const std::vector<uint8_t> expected(pixels.begin(), pixels.begin() + pixelCount * 4);
     ASSERT_TRUE(encoder.addFrame(expected, 0, 1));
 
     const DecodedGif decoded = Decode(encoder.finish());
