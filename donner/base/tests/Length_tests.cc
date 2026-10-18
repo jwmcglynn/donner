@@ -2,10 +2,12 @@
 
 #include <gtest/gtest.h>
 
-#include <charconv>
+#include <cerrno>
 #include <cmath>
 #include <compare>
+#include <cstdlib>
 #include <limits>
+#include <string>
 
 #include "donner/base/tests/BaseTestUtils.h"
 
@@ -183,11 +185,13 @@ TEST(LengthTest, ToRcStringLargeFiniteValuesRoundTrip) {
   for (double value : values) {
     SCOPED_TRACE(value);
     const RcString formatted = Lengthd(value).toRcString();
-    double parsedValue = 0;
-    const auto parsed =
-        std::from_chars(formatted.data(), formatted.data() + formatted.size(), parsedValue);
-    EXPECT_EQ(parsed.ec, std::errc{});
-    EXPECT_EQ(parsed.ptr, formatted.data() + formatted.size());
+    const std::string text(formatted.data(), formatted.size());
+    char* end = nullptr;
+    errno = 0;
+    const double parsedValue = std::strtod(text.c_str(), &end);
+    const int parseError = errno;
+    EXPECT_EQ(parseError, 0);
+    EXPECT_EQ(end, text.c_str() + text.size());
     EXPECT_EQ(parsedValue, value);
   }
 }
