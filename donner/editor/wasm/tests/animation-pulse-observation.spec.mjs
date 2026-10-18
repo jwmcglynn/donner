@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { presentedPulseWindow } from "./animation-pulse-observation.mjs";
+import { presentedPulseCompletion, presentedPulseWindow } from "./animation-pulse-observation.mjs";
 const click = [100, 2, 0, 32, 10, true];
 const tick = (time) => [101, 3, 0, 0, time, false];
 const snapshot = (entries, generation = "current") => ({ entries, generation });
@@ -75,4 +75,29 @@ test("proof and post-hold verification remain within the expanded part of the pu
   );
   assert.equal(read(snapshot([click, tick(10.09), tick(10.2)])), null);
   assert.equal(read(snapshot([click, tick(10.15), tick(10.5001)])), null);
+});
+
+test("completion requires a presented sample after the entire pulse", () => {
+  const complete = (value) => presentedPulseCompletion(value, "current", 32, 90);
+  assert.equal(complete(snapshot([click, tick(10.2), tick(10.3)])), null);
+  assert.equal(complete(snapshot([click, tick(10.59), tick(10.7)])), null);
+  assert.equal(complete(snapshot([click, tick(10.7)])), null);
+  assert.equal(complete(snapshot([click, tick(10.7), tick(10.7)])), null);
+  assert.deepEqual(complete(snapshot([click, tick(10.7), tick(10.8)])), {
+    dispatchEpochMs: 100,
+    dispatchTime: 10,
+    presentedTime: 10.7,
+    latestTime: 10.8,
+  });
+});
+
+test("completion rejects stale generations, wrong targets and intervening input", () => {
+  const complete = (value) => presentedPulseCompletion(value, "current", 32, 90);
+  assert.equal(complete(snapshot([click, tick(10.7), tick(10.8)], "old")), null);
+  assert.equal(complete(snapshot([[100, 2, 0, 99, 10, true], tick(10.7), tick(10.8)])), null);
+  assert.equal(
+    complete(snapshot([click, tick(10.7), [102, 2, 0, 32, 10.75, true], tick(10.8)])),
+    null,
+  );
+  assert.equal(complete(snapshot([click, tick(10.8), tick(10.7)])), null);
 });
