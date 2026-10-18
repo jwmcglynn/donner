@@ -436,8 +436,7 @@ SampledAnimationMotion SampleAnimationMotion(Registry& registry, Entity entity,
     return {};
   }
   double tangentAngle = sample.angle;
-  if ((motion.rotate == "auto" || motion.rotate == "auto-reverse") &&
-      IsExactlyZeroVector(sample.tangent)) {
+  if (motion.rotate == "auto" || motion.rotate == "auto-reverse") {
     tangentAngle =
         MotionEndpointTangentAngle(*path, segmentEndDistances, *distance).value_or(tangentAngle);
   }
