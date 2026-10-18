@@ -136,6 +136,21 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         end = re.search(r"^      - name: ", rest, re.MULTILINE)
         return rest[: end.start()] if end else rest
 
+    def test_early_macos_bazel_failures_keep_their_artifacts(self):
+        for lane in ("macos", "macos-browser", "macos-self-hosted"):
+            with self.subTest(lane=lane):
+                job = self._job_body(lane)
+                archive = self._step_body(job, "Upload Bazel test failure artifacts")
+                gates = [("Qualify pinned Chromium archive", "browser_preflight")]
+                if lane == "macos-self-hosted":
+                    gates.append(("Validate offline Metal compiler", "metal_compiler"))
+                for name, step_id in gates:
+                    step = self._step_body(job, name)
+                    self.assertIn("id: " + step_id, step)
+                    self.assertNotIn("continue-on-error", step)
+                    self.assertIn("steps.%s.outcome == 'failure'" % step_id, archive)
+                self.assertIn("./.github/actions/upload-bazel-test-artifacts", archive)
+
     def test_hosted_browser_comparisons_preserve_the_failed_gate(self):
         hosted = self._job_body("macos")
         original = self._step_body(hosted, "Test")

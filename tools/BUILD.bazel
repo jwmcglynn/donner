@@ -297,6 +297,7 @@ py_test(
     data = [
         "ci_macos_xcode.txt",
         "ci_select_macos_xcode.sh",
+        "ci_xcode_discoverable.m",
         "//:.bazelrc",
         "//:github_action_definitions",
         "//build_defs:macos_app_bundle.bzl",
@@ -730,4 +731,14 @@ py_test(
         "browser_gpu_test_summary_tests.py",
     ],
     main = "browser_gpu_test_summary_tests.py",
+)
+
+py_test(
+    name = "ci_metal_toolchain_tests",
+    size = "small",
+    srcs = [
+        "ci_metal_toolchain.py",
+        "ci_metal_toolchain_tests.py",
+    ],
+    main = "ci_metal_toolchain_tests.py",
 )

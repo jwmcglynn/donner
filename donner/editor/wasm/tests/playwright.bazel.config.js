@@ -1,4 +1,4 @@
-const { mkdirSync } = require("node:fs");
+const { chromiumLaunchEnvironment } = require("./chromium-launch-env.cjs");
 const path = require("node:path");
 const baseConfig = require("./playwright.config.js");
 
@@ -15,9 +15,6 @@ function shellQuote(value) {
 }
 
 const temporaryDirectory = path.resolve(requireEnvironment("TEST_TMPDIR"));
-// Chromium's crash database ignores its per-launch user-data-dir.
-const crashDirectory = path.join(temporaryDirectory, "chromium-crashpad");
-mkdirSync(crashDirectory, { recursive: true });
 
 const server = path.resolve(requireEnvironment("DONNER_WASM_TEST_SERVER"));
 const packageDirectory = path.resolve(requireEnvironment("DONNER_WASM_PACKAGE_DIR"));
@@ -47,10 +44,10 @@ module.exports = {
           ]
           : []),
       ],
-      env: {
-        ...(baseConfig.use.launchOptions.env ?? process.env),
-        BREAKPAD_DUMP_LOCATION: crashDirectory,
-      },
+      env: chromiumLaunchEnvironment(
+        baseConfig.use.launchOptions.env ?? process.env,
+        temporaryDirectory,
+      ),
     },
   },
   webServer: {

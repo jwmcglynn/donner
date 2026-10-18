@@ -121,7 +121,8 @@ INVOCATION_ALLOWLIST = {
     # keys stay identical (//tools:macos_cache_key_parity_tests).
     **{("main.yml", "macos", "macos-self-hosted", step, kind, value):
        "Lane identity for test results only; it does not change what runs."
-       for step in ("Metal validation preflight", "Test", "Test (browser targets)",
+       for step in ("Metal validation preflight", "Qualify pinned Chromium archive",
+                    "Test", "Test (browser targets)",
                     "Test (Geode editor lane)")
        for kind, value in (("test-env-main-only", "DONNER_CI_MACOS_LANE=hosted"),
                            ("test-env-pr-only", "DONNER_CI_MACOS_LANE=self-hosted"))},
