@@ -323,14 +323,14 @@ py_test(
         "--product=svg_to_png=$(rootpath :shipped_svg_to_png)",
     ] + select({
         ":macos_arm64": [
-            "--budget=donner_svg=3258000",
-            "--budget=editor=12549000",
-            "--budget=svg_to_png=3962000",
+            "--budget=donner_svg=4014000",
+            "--budget=editor=13289000",
+            "--budget=svg_to_png=4665000",
         ],
         ":linux_x86_64": [
-            "--budget=donner_svg=3809000",
-            "--budget=editor=13920000",
-            "--budget=svg_to_png=4537000",
+            "--budget=donner_svg=4738000",
+            "--budget=editor=14824000",
+            "--budget=svg_to_png=5419000",
         ],
         "//conditions:default": [],
     }),

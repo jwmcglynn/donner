@@ -208,11 +208,8 @@ budgets and prints one `native-linked-size` line per product.
 
 Each budget is about 3% over the product's measured size, rounded up to a thousand bytes. All
 rows are read with `tools/ci/native_linked_size.py`, and read-only includes the shader artifacts.
-The Linux x86_64 rows are measured in the shipped configuration with the release toolchain
-(clang 18 and lld 18). The macOS rows are derived rather than measured directly: they start from
-the nightly Perf measurement for the editor and `svg_to_png` and from the released binary for
-`donner-svg`, and subtract the separately measured size of the stb_image decoders and FreeType
-drivers that the shipped build configuration excludes.
+The Linux x86_64 and macOS arm64 rows are measured in the shipped configuration by the
+native Perf workflow, including declarative animation and CLI GIF export.
 
 Optimized Linux links of the shipped binaries fold identical code (`--icf=safe`), as Apple's
 linker does by default, and the Linux rows are measured with it.
@@ -220,14 +217,19 @@ linker does by default, and the Linux rows are measured with it.
 
 | Product      | Platform     | Read-only  | Writable  | Total      | Budget     |
 | ------------ | ------------ | ---------- | --------- | ---------- | ---------- |
-| Editor       | macOS arm64  | 9,719,311  | 2,571,924 | 12,291,235 | 12,549,000 |
-| `svg_to_png` | macOS arm64  | 3,707,224  | 168,176   | 3,875,400  | 3,962,000  |
-| Editor       | Linux x86_64 | 11,021,123 | 2,492,496 | 13,513,619 | 13,920,000 |
-| `svg_to_png` | Linux x86_64 | 4,293,755  | 110,184   | 4,403,939  | 4,537,000  |
-| `donner-svg` | macOS arm64  | 3,061,224  | 130,576   | 3,191,800  | 3,258,000  |
-| `donner-svg` | Linux x86_64 | 3,589,755  | 107,696   | 3,697,451  | 3,809,000  |
+| Editor       | macOS arm64  | 10,315,561 | 2,586,340 | 12,901,901 | 13,289,000 |
+| `svg_to_png` | macOS arm64  | 4,342,143  | 186,696   | 4,528,839  | 4,665,000  |
+| Editor       | Linux x86_64 | 11,891,859 | 2,500,312 | 14,392,171 | 14,824,000 |
+| `svg_to_png` | Linux x86_64 | 5,143,175  | 117,120   | 5,260,295  | 5,419,000  |
+| `donner-svg` | macOS arm64  | 3,746,741  | 149,792   | 3,896,533  | 4,014,000  |
+| `donner-svg` | Linux x86_64 | 4,484,219  | 115,144   | 4,599,363  | 4,738,000  |
 | Editor       | Linux arm64  | 11,195,371 | 2,534,096 | 13,729,467 | Not gated  |
 | `svg_to_png` | Linux arm64  | 4,716,219  | 144,000   | 4,860,219  | Not gated  |
+
+The six gated rows bind to source `3b23358a21f9d5827cb472ab11be4e8f59dc196a` and the native
+Perf configuration. [Qualification run 39126317782](https://github.com/jwmcglynn/donner/actions/runs/39126317782)
+contains both platforms' measurements with compilation completed before serial uncached tests.
+The ceilings retain approximately 3% headroom; latency gates are independent.
 
 The Linux arm64 figures are a reference measurement with the hermetic LLVM toolchain
 (`--config=latest_llvm`); no lane builds the optimized products there, so the gate does not
