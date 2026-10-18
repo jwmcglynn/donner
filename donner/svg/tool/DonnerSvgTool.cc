@@ -777,9 +777,10 @@ void RunInteractiveSelection(SVGDocument document, RendererTinySkia& renderer,
 
 /**
  * Copy \p frame into a tightly packed RGBA8 buffer of \p canvasSize, anchored at the top-left
- * corner. Canvas pixels outside the frame are transparent.
+ * corner. Canvas pixels outside the frame are transparent. Consume the snapshot so its pixel
+ * storage is released before the encoder allocates its workspace.
  */
-std::vector<uint8_t> FitFrameToCanvas(const RendererBitmap& frame, const Vector2i& canvasSize) {
+std::vector<uint8_t> FitFrameToCanvas(RendererBitmap frame, const Vector2i& canvasSize) {
   const auto canvasRowBytes = static_cast<size_t>(canvasSize.x) * 4;
   std::vector<uint8_t> pixels(canvasRowBytes * static_cast<size_t>(canvasSize.y), 0);
   if (frame.empty()) {
@@ -859,7 +860,7 @@ int RenderAnimatedGif(const CliOptions& options, SVGDocument& document, Renderer
   for (int i = 0; i < frameCount; ++i) {
     document.setTime(GifFrameTime(options.startSeconds, options.fps, i));
     renderer.draw(document);
-    const RendererBitmap frame = renderer.takeSnapshot();
+    RendererBitmap frame = renderer.takeSnapshot();
     const Vector2i sampledSize = document.canvasSize();
     if (frame.empty() && sampledSize.x != 0 && sampledSize.y != 0) {
       err << "Renderer produced an empty frame at index " << i << "\n";
@@ -867,7 +868,7 @@ int RenderAnimatedGif(const CliOptions& options, SVGDocument& document, Renderer
     }
 
     // An animated root aspect ratio can fit the document into less than the pinned canvas.
-    const std::vector<uint8_t> pixels = FitFrameToCanvas(frame, gifSize);
+    const std::vector<uint8_t> pixels = FitFrameToCanvas(std::move(frame), gifSize);
     if (!encoder.addFrame(pixels, 0, delays[static_cast<size_t>(i)])) {
       if (encoder.error() == GifEncoder::Error::ResourceLimit) {
         err << "Encoded GIF exceeds the " << GifEncoder::kMaximumOutputBytes
