@@ -1548,8 +1548,8 @@ bool ApplyTextLengthOwnerPlan(Registry& registry, std::vector<TextRun>& runs,
         const size_t previousByte = GetPositioningCluster(runs[runIndex].glyphs[glyphIndex - 1]);
         const size_t previousCharacter =
             previousByte < mappings.byteToCharIdx.size() ? mappings.byteToCharIdx[previousByte] : 0;
-        if (character != previousCharacter && character < inlinePositions.size() &&
-            inlinePositions[character]) {
+        if (character != 0 && character != previousCharacter &&
+            character < inlinePositions.size() && inlinePositions[character]) {
           boundaries.push_back(glyphIndex);
         }
       }
