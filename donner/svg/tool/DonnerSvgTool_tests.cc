@@ -550,6 +550,59 @@ TEST_F(DonnerSvgToolFileTest, GifKeepsCanvasSizeWhenRootSizeAnimates) {
   EXPECT_EQ(totalDelay, 100);
 }
 
+TEST_F(DonnerSvgToolFileTest, GifPreservesCanvasWhenAnimatedExtentRoundsToZero) {
+  for (const std::string axis : {"width", "height"}) {
+    for (const bool opaqueBackground : {false, true}) {
+      const std::string label = axis + (opaqueBackground ? "_white" : "_transparent");
+      SCOPED_TRACE(label);
+      const std::string source =
+          R"(<svg xmlns="http://www.w3.org/2000/svg" width="20" height="10" viewBox="0 0 20 10">
+  <set attributeName=")" +
+          axis + R"(" to="1000" begin="0.25s" dur="0.5s"/>
+  <rect width="20" height="10" fill="blue"/>
+</svg>)";
+      const auto inputPath = WriteSvg(label + ".svg", source);
+      const auto gifPath = tmpDir_ / (label + ".gif");
+      std::vector<std::string> args = {"--gif", gifPath.string(), "--end", "1", "--fps", "4"};
+      if (opaqueBackground) {
+        args.insert(args.end(), {"--background", "white"});
+      }
+      args.push_back(inputPath.string());
+      std::ostringstream out;
+      std::ostringstream err;
+      ASSERT_EQ(RunTool(args, &out, &err), 0) << err.str();
+      EXPECT_TRUE(err.str().empty());
+      EXPECT_THAT(out.str(), testing::HasSubstr("Frames: 4 rendered, 3 stored"));
+
+      const std::string bytes = ReadFile(gifPath);
+      std::string error;
+      const auto gif = DecodeGifForTesting(
+          std::span(reinterpret_cast<const uint8_t*>(bytes.data()), bytes.size()), &error);
+      ASSERT_TRUE(gif.has_value()) << error;
+      ASSERT_EQ(gif->width, 20);
+      ASSERT_EQ(gif->height, 10);
+      ASSERT_THAT(gif->frames, testing::SizeIs(3));
+      EXPECT_THAT(gif->frames,
+                  testing::ElementsAre(testing::Field(&DecodedGifFrame::delayCentiseconds, 25),
+                                       testing::Field(&DecodedGifFrame::delayCentiseconds, 50),
+                                       testing::Field(&DecodedGifFrame::delayCentiseconds, 25)));
+      std::vector<uint8_t> blue(20 * 10 * 4, 255);
+      for (size_t offset = 0; offset < blue.size(); offset += 4) {
+        blue[offset] = 0;
+        blue[offset + 1] = 0;
+      }
+      const std::vector<uint8_t> blank(20 * 10 * 4, opaqueBackground ? 255 : 0);
+      for (size_t frameIndex = 0; frameIndex < gif->frames.size(); ++frameIndex) {
+        const auto& expected = frameIndex == 1 ? blank : blue;
+        editor::tests::CompareBitmapToBitmap(
+            ToBitmap(gif->frames[frameIndex].rgba, 20, 10), ToBitmap(expected, 20, 10),
+            "gif_zero_extent_" + label + "_" + std::to_string(frameIndex),
+            editor::tests::PixelmatchIdentityParams());
+      }
+    }
+  }
+}
+
 TEST_F(DonnerSvgToolFileTest, GifScaleUsesTheCanvasSizeAtStart) {
   const std::filesystem::path inputPath = WriteSvg("growing.svg", R"(
 <svg xmlns="http://www.w3.org/2000/svg" width="20" height="10" viewBox="0 0 20 10">
