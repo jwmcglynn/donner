@@ -6,6 +6,7 @@
 #include <optional>
 #include <string>
 #include <type_traits>
+#include <vector>
 
 #include "donner/base/xml/components/AttributesComponent.h"
 #include "donner/svg/components/ElementTypeComponent.h"
@@ -31,14 +32,20 @@
 namespace donner::svg::components {
 namespace {
 
+struct CachedAnimationImage {
+  std::optional<LoadedImageComponent> loaded;
+  uint64_t lastUse = 0;
+};
+
 struct DecodedAnimationImages {
   uint64_t generation = 0;
-  std::map<RcString, std::optional<LoadedImageComponent>> frames;
+  std::map<RcString, CachedAnimationImage> frames;
 };
 
 struct AnimationImageCacheBudget {
   std::size_t keys = 0;
   std::size_t bytes = 0;
+  uint64_t nextUse = 1;
 
   bool admit(std::size_t size) {
     constexpr std::size_t kMaximumKeys = 4096;
@@ -50,6 +57,8 @@ struct AnimationImageCacheBudget {
     bytes += size;
     return true;
   }
+
+  uint64_t touch() { return nextUse++; }
 };
 
 void RetainDecodedImage(Registry& registry, Entity entity, const std::optional<RcString>& href) {
@@ -59,17 +68,21 @@ void RetainDecodedImage(Registry& registry, Entity entity, const std::optional<R
   }
   auto& cache = registry.get_or_emplace<DecodedAnimationImages>(entity).frames;
   auto slot = cache.find(*href);
+  auto* budget = registry.ctx().find<AnimationImageCacheBudget>();
   if (slot == cache.end()) {
-    auto* budget = registry.ctx().find<AnimationImageCacheBudget>();
     if (!budget) {
       budget = &registry.ctx().emplace<AnimationImageCacheBudget>();
     }
     if (!budget->admit(href->size())) {
       return;
     }
-    slot = cache.emplace(*href, std::nullopt).first;
+    slot = cache.emplace(*href, CachedAnimationImage{}).first;
   }
-  slot->second = std::move(*loaded);
+  if (!budget) {
+    budget = &registry.ctx().emplace<AnimationImageCacheBudget>();
+  }
+  slot->second.loaded = std::move(*loaded);
+  slot->second.lastUse = budget->touch();
 }
 
 void ReuseDecodedImage(Registry& registry, Entity entity, const std::optional<RcString>& href) {
@@ -78,13 +91,60 @@ void ReuseDecodedImage(Registry& registry, Entity entity, const std::optional<Rc
     return;
   }
   auto slot = cache->frames.find(*href);
-  if (slot != cache->frames.end() && slot->second) {
-    registry.emplace<LoadedImageComponent>(entity, std::move(*slot->second));
-    slot->second.reset();
+  if (slot != cache->frames.end() && slot->second.loaded) {
+    registry.emplace<LoadedImageComponent>(entity, std::move(*slot->second.loaded));
+    slot->second.loaded.reset();
+  }
+}
+
+void EvictDecodedImagesForMiss(Registry& registry, std::size_t requiredBytes) {
+  const auto* familyContext = registry.ctx().find<DocumentResourceFamilyContext>();
+  auto* cacheBudget = registry.ctx().find<AnimationImageCacheBudget>();
+  if (requiredBytes == 0 || !familyContext || !familyContext->budget || !cacheBudget ||
+      familyContext->budget->availableBytes(DocumentResourceFamilyBudget::Kind::DecodedImage) >=
+          requiredBytes) {
+    return;
+  }
+
+  struct Candidate {
+    Entity entity;
+    RcString href;
+    uint64_t lastUse;
+  };
+  std::vector<Candidate> candidates;
+  candidates.reserve(cacheBudget->keys);
+  for (auto [candidateEntity, cache] : registry.view<DecodedAnimationImages>().each()) {
+    for (const auto& [candidateHref, frame] : cache.frames) {
+      if (frame.loaded) {
+        candidates.push_back({candidateEntity, candidateHref, frame.lastUse});
+      }
+    }
+  }
+  std::sort(candidates.begin(), candidates.end(),
+            [](const Candidate& a, const Candidate& b) { return a.lastUse < b.lastUse; });
+
+  for (const Candidate& candidate : candidates) {
+    if (familyContext->budget->availableBytes(DocumentResourceFamilyBudget::Kind::DecodedImage) >=
+        requiredBytes) {
+      break;
+    }
+    auto* cache = registry.try_get<DecodedAnimationImages>(candidate.entity);
+    if (!cache) {
+      continue;
+    }
+    auto slot = cache->frames.find(candidate.href);
+    if (slot != cache->frames.end()) {
+      slot->second.loaded.reset();
+    }
   }
 }
 
 bool SynchronizeImageCachePolicy(Registry& registry, Entity entity) {
+  auto* reclaimer = registry.ctx().find<DecodedImageCacheReclaimer>();
+  if (!reclaimer) {
+    reclaimer = &registry.ctx().emplace<DecodedImageCacheReclaimer>();
+  }
+  reclaimer->callback = &EvictDecodedImagesForMiss;
   auto& cache = registry.get_or_emplace<DecodedAnimationImages>(entity);
   const auto& resources = registry.ctx().get<ResourceManagerContext>();
   const bool secure = resources.processingMode() == ProcessingMode::SecureStatic ||
@@ -142,7 +202,8 @@ void InvalidateReference(Registry& registry, Entity entity, ElementType type) {
   EntityHandle handle(registry, entity);
   ShadowTreeSystem().teardownInstances(handle);
   registry.remove<ComputedShadowTreeComponent, ExternalUseComponent, LoadedImageComponent,
-                  LoadedSVGImageComponent, EvaluatedReferenceComponent<PaintSystem>>(entity);
+                  LoadedSVGImageComponent, DeferredDecodedImageComponent,
+                  EvaluatedReferenceComponent<PaintSystem>>(entity);
   if (type == ElementType::LinearGradient || type == ElementType::RadialGradient ||
       type == ElementType::Pattern) {
     registry.remove<ShadowTreeComponent>(entity);

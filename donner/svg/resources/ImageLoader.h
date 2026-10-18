@@ -1,6 +1,9 @@
 #pragma once
 /// @file
 
+#include <functional>
+#include <utility>
+
 #include "donner/svg/resources/ImageResource.h"
 #include "donner/svg/resources/UrlLoader.h"
 
@@ -38,6 +41,9 @@ public:
   /// or an error.
   using Result = std::variant<ImageResource, SvgImageContent, UrlLoaderError>;
 
+  /// Callback that reserves exact decoded RGBA bytes after dimensions are known but before decode.
+  using DecodedImageAdmission = std::function<bool(size_t)>;
+
   /**
    * Create a new image loader that uses the given resource loader to fetch external resources.
    *
@@ -46,14 +52,17 @@ public:
    * @param remainingResourceBytes Optional shared byte budget charged for encoded input and
    * decoded raster output.
    * @param maximumDecodedImageSize Maximum decoded RGBA bytes accepted for one image.
+   * @param decodedImageAdmission Optional exact decoded-byte admission callback.
    */
   explicit ImageLoader(ResourceLoaderInterface& resourceLoader,
                        size_t maximumResourceSize = UrlLoader::kDefaultMaximumResourceSize,
                        size_t* remainingResourceBytes = nullptr,
-                       size_t maximumDecodedImageSize = kDefaultMaximumDecodedImageSize)
+                       size_t maximumDecodedImageSize = kDefaultMaximumDecodedImageSize,
+                       DecodedImageAdmission decodedImageAdmission = {})
       : urlLoader_(resourceLoader, maximumResourceSize, remainingResourceBytes),
         remainingResourceBytes_(remainingResourceBytes),
-        maximumDecodedImageSize_(maximumDecodedImageSize) {}
+        maximumDecodedImageSize_(maximumDecodedImageSize),
+        decodedImageAdmission_(std::move(decodedImageAdmission)) {}
 
   /// Destructor.
   ~ImageLoader() = default;
@@ -76,6 +85,9 @@ public:
    */
   Result fromUri(std::string_view uri);
 
+  /// Whether the last load was refused specifically by the decoded-byte admission callback.
+  bool decodedImageAdmissionRefused() const { return decodedImageAdmissionRefused_; }
+
 private:
   /// Loader used for decoding the data URL or fetching the external resources.
   UrlLoader urlLoader_;
@@ -85,6 +97,12 @@ private:
 
   /// Maximum decoded RGBA bytes returned for one raster image.
   size_t maximumDecodedImageSize_;
+
+  /// Optional exact decoded-byte admission callback.
+  DecodedImageAdmission decodedImageAdmission_;
+
+  /// Whether the last request reached and was refused by the admission callback.
+  bool decodedImageAdmissionRefused_ = false;
 };
 
 }  // namespace donner::svg

@@ -136,9 +136,10 @@ size_t AmplificationBudget(size_t inputBytes, size_t maximumDecodedImageSize) {
                   std::max(ImageLoader::kMinimumDecodedImageAllowance, ratioBudget));
 }
 
-std::variant<ImageResource, UrlLoaderError> LoadImage(std::string_view mimeType,
-                                                      const std::vector<uint8_t>& fileContents,
-                                                      size_t maximumDecodedImageSize) {
+std::variant<ImageResource, UrlLoaderError> LoadImage(
+    std::string_view mimeType, const std::vector<uint8_t>& fileContents,
+    size_t maximumDecodedImageSize, const ImageLoader::DecodedImageAdmission& decodedImageAdmission,
+    bool& decodedImageAdmissionRefused) {
   // Allow known formats and an empty mime type (stb_image will auto-detect)
   if (mimeType != "" && mimeType != "image/png" && mimeType != "image/jpeg" &&
       mimeType != "image/jpg" && mimeType != "image/gif") {
@@ -185,6 +186,10 @@ std::variant<ImageResource, UrlLoaderError> LoadImage(std::string_view mimeType,
   if (*dataSize > decodedLimit) {
     return UrlLoaderError::ResourceTooLarge;
   }
+  if (decodedImageAdmission && !decodedImageAdmission(*dataSize)) {
+    decodedImageAdmissionRefused = true;
+    return UrlLoaderError::ResourceTooLarge;
+  }
 
   uint8_t* data =
       stbi_load_from_memory(reinterpret_cast<const unsigned char*>(
@@ -202,6 +207,10 @@ std::variant<ImageResource, UrlLoaderError> LoadImage(std::string_view mimeType,
     stbi_image_free(data);
     return UrlLoaderError::ResourceTooLarge;
   }
+  if (*loadedDataSize != *dataSize) {
+    stbi_image_free(data);
+    return UrlLoaderError::DataCorrupt;
+  }
 
   ImageResource result;
   result.data = std::vector<uint8_t>(data, data + *loadedDataSize);
@@ -216,6 +225,7 @@ std::variant<ImageResource, UrlLoaderError> LoadImage(std::string_view mimeType,
 }  // namespace
 
 ImageLoader::Result ImageLoader::fromUri(std::string_view uri) {
+  decodedImageAdmissionRefused_ = false;
   auto urlResultOrError = urlLoader_.fromUri(uri);
   if (std::holds_alternative<UrlLoaderError>(urlResultOrError)) {
     return std::get<UrlLoaderError>(urlResultOrError);
@@ -233,10 +243,12 @@ ImageLoader::Result ImageLoader::fromUri(std::string_view uri) {
   const size_t remainingDecodedBytes =
       remainingResourceBytes_ != nullptr ? *remainingResourceBytes_ : maximumDecodedImageSize_;
   const size_t decodedLimit = std::min(maximumDecodedImageSize_, remainingDecodedBytes);
-  auto rasterResult = LoadImage(urlResult.mimeType, urlResult.data, decodedLimit);
+  auto rasterResult = LoadImage(urlResult.mimeType, urlResult.data, decodedLimit,
+                                decodedImageAdmission_, decodedImageAdmissionRefused_);
   if (std::holds_alternative<UrlLoaderError>(rasterResult)) {
     const UrlLoaderError error = std::get<UrlLoaderError>(rasterResult);
-    if (error == UrlLoaderError::ResourceTooLarge && remainingResourceBytes_ != nullptr) {
+    if (error == UrlLoaderError::ResourceTooLarge && remainingResourceBytes_ != nullptr &&
+        !decodedImageAdmissionRefused_) {
       *remainingResourceBytes_ = 0;
     }
     return error;
