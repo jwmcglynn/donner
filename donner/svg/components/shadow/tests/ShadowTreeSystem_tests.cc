@@ -368,6 +368,36 @@ TEST_F(ShadowTreeSystemTest, TeardownRemovesMainAndOffscreenEntities) {
   EXPECT_TRUE(shadow.branches.empty());
 }
 
+TEST_F(ShadowTreeSystemTest, TeardownDetachesNestedComponentStorageBeforeDestroy) {
+  SVGDocument document;
+  auto& registry = document.registry();
+  const Entity outerHost = registry.create();
+  registry.emplace<donner::components::TreeComponent>(outerHost, xml::XMLQualifiedNameRef("g"));
+  const Entity nestedHost = registry.create();
+  registry.emplace<donner::components::TreeComponent>(nestedHost, xml::XMLQualifiedNameRef("use"));
+  registry.get<donner::components::TreeComponent>(outerHost).appendChild(registry, nestedHost);
+  const Entity nestedGenerated = registry.create();
+  registry.emplace<donner::components::TreeComponent>(nestedGenerated,
+                                                      xml::XMLQualifiedNameRef("rect"));
+  registry.get<donner::components::TreeComponent>(nestedHost)
+      .appendChild(registry, nestedGenerated);
+
+  auto& nested = registry.emplace<ComputedShadowTreeComponent>(nestedHost);
+  nested.mainBranch = ComputedShadowTreeComponent::BranchStorage{
+      ShadowBranchType::Main, entt::null, {nestedGenerated}};
+  auto& outer = registry.emplace<ComputedShadowTreeComponent>(outerHost);
+  outer.mainBranch =
+      ComputedShadowTreeComponent::BranchStorage{ShadowBranchType::Main, entt::null, {nestedHost}};
+
+  ShadowTreeSystem().teardownInstances(EntityHandle(registry, outerHost));
+
+  EXPECT_FALSE(registry.valid(nestedHost));
+  EXPECT_FALSE(registry.valid(nestedGenerated));
+  const auto& cleared = registry.get<ComputedShadowTreeComponent>(outerHost);
+  EXPECT_FALSE(cleared.mainBranch.has_value());
+  EXPECT_THAT(cleared.branches, IsEmpty());
+}
+
 TEST_F(ShadowTreeSystemTest, PopulateInstanceNestedShadowTreeInvokesHandlerAndCopiesTag) {
   auto document = ParseSVG(R"(
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">

@@ -10,6 +10,7 @@
 #include <memory>
 #include <span>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "donner/base/ParseWarningSink.h"
@@ -24,6 +25,7 @@
 #include "donner/svg/components/layout/LayoutSystem.h"
 #include "donner/svg/components/paint/GradientComponent.h"
 #include "donner/svg/components/resources/ResourceManagerContext.h"
+#include "donner/svg/components/shadow/ShadowEntityComponent.h"
 #include "donner/svg/components/shadow/ShadowTreeSystem.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
 #include "donner/svg/parser/SVGParser.h"
@@ -396,6 +398,71 @@ TEST_F(RenderingContextTest, InvalidateAndReinstantiate) {
   ctx.instantiateRenderTree(false, warningSink_);
   ctx.invalidateRenderTree();
   ctx.instantiateRenderTree(false, warningSink_);
+}
+
+TEST_F(RenderingContextTest, RebuildSnapshotsNestedShadowHostsBeforeTeardown) {
+  auto document = ParseSVG(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+      <defs>
+        <rect id="leaf" width="10" height="10"/>
+        <g id="nested"><use id="inner" href="#leaf"/></g>
+      </defs>
+      <use id="outer" href="#nested"/>
+      <use id="unrelated" href="#leaf" x="20"/>
+    </svg>)svg");
+  auto& registry = document.registry();
+  const Entity leaf = document.querySelector("#leaf")->unsafeEntityHandle().entity();
+  const Entity inner = document.querySelector("#inner")->unsafeEntityHandle().entity();
+  const Entity nested = document.querySelector("#nested")->unsafeEntityHandle().entity();
+  const Entity outer = document.querySelector("#outer")->unsafeEntityHandle().entity();
+  const Entity unrelated = document.querySelector("#unrelated")->unsafeEntityHandle().entity();
+  RenderingContext context(registry);
+  context.instantiateRenderTree(false, warningSink_);
+
+  const size_t expectedRebuiltCount = registry.view<ShadowEntityComponent>().size();
+  Entity nestedHost = entt::null;
+  for (const Entity entity : registry.view<ShadowEntityComponent>()) {
+    if (registry.get<ShadowEntityComponent>(entity).lightEntity == inner) {
+      nestedHost = entity;
+      break;
+    }
+  }
+  ASSERT_NE(nestedHost, entt::null);
+  ASSERT_FALSE(registry.all_of<ComputedShadowTreeComponent>(nestedHost));
+
+  auto outerComputed = std::move(registry.get<ComputedShadowTreeComponent>(outer));
+  registry.remove<ComputedShadowTreeComponent>(outer);
+  const Entity nestedGenerated = registry.create();
+  registry.emplace<donner::components::TreeComponent>(nestedGenerated,
+                                                      xml::XMLQualifiedNameRef("rect"));
+  registry.get<donner::components::TreeComponent>(nestedHost)
+      .appendChild(registry, nestedGenerated);
+  registry.emplace<ShadowEntityComponent>(nestedGenerated, ShadowEntityComponent{leaf});
+  auto& nestedComputed = registry.emplace<ComputedShadowTreeComponent>(nestedHost);
+  nestedComputed.mainBranch =
+      ComputedShadowTreeComponent::BranchStorage{ShadowBranchType::Main, leaf, {nestedGenerated}};
+  registry.emplace<ComputedShadowTreeComponent>(outer, std::move(outerComputed));
+  ASSERT_TRUE(registry.all_of<ComputedShadowTreeComponent>(nestedHost));
+  ASSERT_TRUE(registry.all_of<ComputedShadowTreeComponent>(outer));
+
+  std::vector<Entity> firstGeneration;
+  for (const Entity entity : registry.view<ShadowEntityComponent>()) {
+    firstGeneration.push_back(entity);
+  }
+  ASSERT_THAT(firstGeneration, testing::SizeIs(testing::Gt(2u)));
+
+  context.invalidateRenderTree();
+  context.instantiateRenderTree(false, warningSink_);
+
+  for (const Entity entity : firstGeneration) {
+    EXPECT_FALSE(registry.valid(entity));
+  }
+  EXPECT_TRUE(registry.valid(leaf));
+  EXPECT_TRUE(registry.valid(inner));
+  EXPECT_TRUE(registry.valid(nested));
+  EXPECT_TRUE(registry.valid(outer));
+  EXPECT_TRUE(registry.valid(unrelated));
+  EXPECT_EQ(registry.view<ShadowEntityComponent>().size(), expectedRebuiltCount);
 }
 
 TEST_F(RenderingContextTest, InstantiateRenderTreeClearsFullRebuildState) {
