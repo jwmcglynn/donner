@@ -21,6 +21,7 @@ playwright_bin.playwright_test(
         "browser-stall-diagnostics.mjs",
         "browser-stall-diagnostics.ts",
         "canvas-color-stats.ts",
+        "chromium-launch-env.cjs",
         "failure-canvas-evidence.ts",
         "gesture-streams.ts",
         "gpu-session-console.ts",
@@ -94,6 +95,7 @@ playwright_bin.playwright_test(
         "browser-stall-diagnostics.ts",
         "browser-surface-recovery.spec.ts",
         "canvas-color-stats.ts",
+        "chromium-launch-env.cjs",
         "failure-canvas-evidence.ts",
         "gesture-streams.ts",
         "gpu-session-console.ts",
@@ -155,6 +157,7 @@ playwright_bin.playwright_test(
         "browser-stall-diagnostics.mjs",
         "browser-stall-diagnostics.ts",
         "canvas-color-stats.ts",
+        "chromium-launch-env.cjs",
         "failure-canvas-evidence.ts",
         "gesture-streams.ts",
         "gpu-session-console.ts",
@@ -210,6 +213,7 @@ playwright_bin.playwright_test(
         "browser-watchdog-setup.js",
         "canvas-color-stats.ts",
         "canvas-pointer.ts",
+        "chromium-launch-env.cjs",
         "composited-pixel-classifier.mjs",
         "composited-probe.ts",
         "composited-probe-evidence.mjs",
@@ -322,6 +326,7 @@ playwright_bin.playwright_test(
         "browser-gpu-residency.ts",
         "canvas-color-stats.ts",
         "canvas-pointer.ts",
+        "chromium-launch-env.cjs",
         "package.json",
         "playwright.bazel.config.js",
         "playwright.boot-presentation.bazel.config.js",
@@ -361,6 +366,7 @@ playwright_bin.playwright_test(
     copy_data_to_bin = False,
     data = [
         "canvas-color-stats.ts",
+        "chromium-launch-env.cjs",
         "composited-drag-invariants.spec.ts",
         "composited-invariants.spec.ts",
         "composited-pixel-classifier.mjs",
@@ -411,6 +417,7 @@ playwright_bin.playwright_test(
     copy_data_to_bin = False,
     data = [
         "canvas-color-stats.ts",
+        "chromium-launch-env.cjs",
         "composited-drag-invariants.spec.ts",
         "composited-invariants.spec.ts",
         "composited-pixel-classifier.mjs",
@@ -575,6 +582,7 @@ js_test(
     size = "small",
     copy_data_to_bin = False,
     data = [
+        "chromium-launch-env.cjs",
         "playwright.bazel.config.js",
         "playwright.boot-presentation.bazel.config.js",
         "playwright.composited-chromium.bazel.config.js",
@@ -593,6 +601,7 @@ js_test(
     size = "medium",
     copy_data_to_bin = False,
     data = [
+        "chromium-launch-env.cjs",
         ":node_modules/@playwright/test",
         "@playwright//:chromium",
         "@playwright//:chromium-headless-shell",
@@ -615,6 +624,7 @@ js_test(
     size = "medium",
     copy_data_to_bin = False,
     data = [
+        "chromium-launch-env.cjs",
         ":node_modules/@playwright/test",
         "@playwright//:chromium",
         "@playwright//:chromium-headless-shell",
@@ -806,6 +816,7 @@ playwright_bin.playwright_test(
         "browser-bitmap-comparator.ts",
         "browser-stall-diagnostics.mjs",
         "browser-stall-diagnostics.ts",
+        "chromium-launch-env.cjs",
         "package.json",
         "playwright.bazel.config.js",
         "playwright.config.js",
@@ -877,4 +888,18 @@ js_test(
     copy_data_to_bin = False,
     data = ["@aspect_rules_js//npm/private:npm_package_extract.mjs"],
     entry_point = "npm-archive-permissions.spec.mjs",
+)
+
+exports_files(
+    ["chromium-launch-env.cjs"],
+    visibility = ["//donner/gpu/shader/browser_tests:__pkg__"],
+)
+
+js_test(
+    name = "chromium_launch_env_tests",
+    size = "small",
+    copy_data_to_bin = False,
+    data = ["chromium-launch-env.cjs"],
+    entry_point = "chromium-launch-env.spec.mjs",
+    node_options = ["--test"],
 )

@@ -160,7 +160,8 @@ def _record_commands(name, commands, by_step):
     """Record each build command's configs by step; problems for commands without the lane flags."""
     problems = []
     for step_name, command in commands:
-        if TOOLCHAIN_REFRESH in command:
+        if (TOOLCHAIN_REFRESH in command or
+                all(match.group(1) == "query" for match in BAZEL_INVOCATION.finditer(command))):
             continue
         if LANE_FLAGS not in command:
             problems.append("%s step %r runs Bazel without %s" % (name, step_name, LANE_FLAGS))
@@ -213,7 +214,7 @@ def _bazelrc_problems(bazelrc):
 # Test hooks of tools/ci_select_macos_xcode.sh, and the variable it sets itself. A workflow
 # that sets any of them (job or workflow env, or a GITHUB_ENV write) can silently replace the
 # pinned Xcode, so no macOS job and no workflow-level env may name them.
-XCODE_OVERRIDES = re.compile(r"\b(?:XCODEBUILD|XCODE_APPLICATIONS_DIR|DEVELOPER_DIR)\b")
+XCODE_OVERRIDES = re.compile(r"\b(?:XCODEBUILD|XCODE_APPLICATIONS_DIR|XCODE_LOCATOR|DEVELOPER_DIR)\b")
 MACOS_JOBS = (HOSTED, SELF_HOSTED, "macos-browser")
 
 
@@ -312,6 +313,19 @@ class MacosCacheKeyParityTest(unittest.TestCase):
     def test_macos_lanes_pass_identical_key_affecting_flags(self):
         self.assertEqual([], key_parity_problems(self.workflow, self.bazelrc))
 
+    def test_only_unconfigured_queries_are_exempt_from_build_flags(self):
+        recorded = {}
+        self.assertEqual([], _record_commands(HOSTED, [
+            ("Selection", "bazelisk --nohome_rc --nosystem_rc query //...")], recorded))
+        self.assertEqual({}, recorded)
+        for operation in ("build", "test", "cquery"):
+            with self.subTest(operation=operation):
+                for command in ("bazelisk %s //..." % operation,
+                                "bazelisk query //... && bazelisk %s //..." % operation):
+                    problems = _record_commands(HOSTED, [("Configured", command)], {})
+                    self.assertEqual(1, len(problems), problems)
+                    self.assertIn("runs Bazel without", problems[0])
+
     def test_key_parity_policy_rejects_divergence(self):
         hosted_flags = 'BAZEL_MACOS_BUILD_FLAGS: "--config=ci-macos --macos_minimum_os=13.3"\n'
         # Both jobs carry the same line; the self-hosted job's is the last one.
@@ -343,6 +357,9 @@ class MacosCacheKeyParityTest(unittest.TestCase):
                 self.bazelrc, "not test-only"),
             "self-hosted job env overrides xcodebuild": (
                 before + hosted_flags + "      XCODEBUILD: /usr/bin/true\n" + after,
+                self.bazelrc, "macos-self-hosted sets an Xcode selection override"),
+            "self-hosted job env overrides the locator": (
+                before + hosted_flags + "      XCODE_LOCATOR: /usr/bin/true\n" + after,
                 self.bazelrc, "macos-self-hosted sets an Xcode selection override"),
             "an earlier step redirects the Xcode lookup": (
                 before + hosted_flags + after.replace(
@@ -419,7 +436,7 @@ class MacosCacheKeyParityTest(unittest.TestCase):
         self.assertEqual(1, len(lines))
         self.assertRegex(lines[0], r"^\d+\.\d+(?:\.\d+)? \d+[A-Z]\d+[a-z]?$")
 
-    def _select(self, mode, installed):
+    def _select(self, mode, installed, locator_status=0):
         """Runs the selection script against a fake Applications directory."""
         version, build = [line for line in _read(PIN_FILE).splitlines()
                           if line.strip() and not line.startswith("#")][0].split()
@@ -432,6 +449,9 @@ class MacosCacheKeyParityTest(unittest.TestCase):
             xcodebuild.write_text("#!/bin/sh\nprintf '%%s' '%s'\n" % reported.replace(
                 "{version}", version).replace("{build}", build), encoding="utf-8")
             xcodebuild.chmod(0o755)
+            locator = root / "xcode-locator"
+            locator.write_text("#!/bin/sh\nexit %d\n" % (locator_status or 0), encoding="utf-8")
+            locator.chmod(0o755)
             env_file, output_file = root / "env", root / "output"
             env_file.write_text("")
             output_file.write_text("")
@@ -442,7 +462,8 @@ class MacosCacheKeyParityTest(unittest.TestCase):
                 env={"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "GITHUB_ENV": str(env_file),
                      "GITHUB_OUTPUT": str(output_file), "RUNNER_ARCH": "ARM64",
                      "BAZEL_MACOS_BUILD_FLAGS": "--config=ci-macos",
-                     "XCODE_APPLICATIONS_DIR": str(root), "XCODEBUILD": str(xcodebuild)},
+                     "XCODE_APPLICATIONS_DIR": str(root), "XCODEBUILD": str(xcodebuild),
+                     "XCODE_LOCATOR": str(locator) if locator_status is not None else ""},
                 capture_output=True, text=True, timeout=test_timing.STALL_GUARD_SECONDS,
                 check=False)
             return (result.returncode, env_file.read_text(), output_file.read_text(),
@@ -474,6 +495,27 @@ class MacosCacheKeyParityTest(unittest.TestCase):
                 self.assertIn("::warning::", log)
                 # The warning names only the public pin, never what the runner has.
                 self.assertNotIn("99Z999", log)
+
+    def test_undiscoverable_pin_does_not_select_toolchain_or_shared_cache(self):
+        for status in (1, 2):
+            for mode in ("--required", "--optional"):
+                with self.subTest(status=status, mode=mode):
+                    code, env, output, log, *_ = self._select(
+                        mode, "Xcode {version}\nBuild version {build}", locator_status=status)
+                    self.assertEqual(1 if mode == "--required" else 0, code, log)
+                    self.assertEqual("", env)
+                    self.assertEqual("cache_partition=\n", output)
+                    self.assertIn("::error::" if mode == "--required" else "::warning::", log)
+                    self.assertIn("cannot be discovered" if status == 1 else "probe failed", log)
+
+    def test_probe_sdk_failure_keeps_diagnostics_before_scratch_cleanup(self):
+        for mode in ("--required", "--optional"):
+            with self.subTest(mode=mode):
+                code, _, _, log, *_ = self._select(
+                    mode, "Xcode {version}\nBuild version {build}", locator_status=None)
+                self.assertEqual(1 if mode == "--required" else 0, code, log)
+                self.assertRegex(log, r"Xcode discovery probe diagnostics \(sdk.log\):\n[^\n]+")
+                self.assertIn("could not be built", log)
 
     def test_select_script_rejects_an_unknown_mode(self):
         result = subprocess.run(["/bin/bash", str(_path(SELECT_SCRIPT))], capture_output=True,
