@@ -40,6 +40,20 @@ std::optional<std::string> MotionAt(SVGDocument& document, double time,
   return it != values->overrides.end() ? std::optional(it->second) : std::nullopt;
 }
 
+void ExpectMotionTransformNear(SVGDocument& document, double time, Vector2d expectedTranslation,
+                               Vector2d expectedDirection) {
+  const auto value = MotionAt(document, time);
+  ASSERT_THAT(value, testing::Ne(std::nullopt));
+  const auto parsed = parser::TransformParser::Parse(*value);
+  ASSERT_THAT(parsed, NoParseError());
+  const Vector2d translation = parsed.result().transformPosition(Vector2d::Zero());
+  const Vector2d direction = parsed.result().transformVector({1, 0});
+  EXPECT_NEAR(translation.x, expectedTranslation.x, 1e-6);
+  EXPECT_NEAR(translation.y, expectedTranslation.y, 1e-6);
+  EXPECT_NEAR(direction.x, expectedDirection.x, 1e-6);
+  EXPECT_NEAR(direction.y, expectedDirection.y, 1e-6);
+}
+
 TEST(SVGAnimateMotionElement, PacedPathUsesArcLength) {
   auto document = ParseMotion(R"svg(
     <svg xmlns="http://www.w3.org/2000/svg"><rect id="r">
@@ -224,16 +238,37 @@ TEST(SVGAnimateMotionElement, AutoRotationUsesDegenerateCurveEndpointDirection) 
     <svg xmlns="http://www.w3.org/2000/svg"><rect id="r">
       <animateMotion path="M0 0C0 0 0 100 0 100" rotate="auto" dur="1s" fill="freeze"/>
     </rect></svg>)svg");
-  const auto value = MotionAt(document, 1);
-  ASSERT_THAT(value, testing::Ne(std::nullopt));
-  const auto parsed = parser::TransformParser::Parse(*value);
-  ASSERT_THAT(parsed, NoParseError());
-  const Vector2d translation = parsed.result().transformPosition(Vector2d::Zero());
-  const Vector2d direction = parsed.result().transformVector({1, 0});
-  EXPECT_NEAR(translation.x, 0, 1e-6);
-  EXPECT_NEAR(translation.y, 100, 1e-6);
-  EXPECT_NEAR(direction.x, 0, 1e-6);
-  EXPECT_NEAR(direction.y, 1, 1e-6);
+  ExpectMotionTransformNear(document, 1, {0, 100}, {0, 1});
+}
+
+TEST(SVGAnimateMotionElement, AutoRotationUsesExactTerminalControlDirection) {
+  auto document = ParseMotion(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg"><rect id="r">
+      <animateMotion path="M0 0C0 100 100 100 100 100" rotate="auto"
+        dur="1s" fill="freeze"/>
+    </rect></svg>)svg");
+  ExpectMotionTransformNear(document, 1, {100, 100}, {1, 0});
+}
+
+TEST(SVGAnimateMotionElement, AutoRotationUsesOutgoingDirectionAtInternalJoin) {
+  for (const auto& [rotate, direction] :
+       {std::pair{"auto", Vector2d(1, 0)}, std::pair{"auto-reverse", Vector2d(-1, 0)}}) {
+    SCOPED_TRACE(rotate);
+    auto document = ParseMotion(
+        "<svg xmlns='http://www.w3.org/2000/svg'><rect id='r'>"
+        "<animateMotion path='M0 0C0 0 0 100 0 100L100 100' rotate='" +
+        std::string(rotate) + "' dur='2s'/></rect></svg>");
+    ExpectMotionTransformNear(document, 1, {0, 100}, direction);
+  }
+}
+
+TEST(SVGAnimateMotionElement, AutoRotationPreservesTinyNonzeroInteriorDirection) {
+  auto document = ParseMotion(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg"><rect id="r">
+      <animateMotion path="M0 0Q0 1e-13 1e-13 1e-13" rotate="auto" dur="1s"/>
+    </rect></svg>)svg");
+  constexpr double kSqrtHalf = 0.7071067811865476;
+  ExpectMotionTransformNear(document, 0.5, {2.5e-14, 7.5e-14}, {kSqrtHalf, kSqrtHalf});
 }
 
 TEST(SVGAnimateMotionElement, OversizedReferencedPathIsRejectedBeforeCopying) {
