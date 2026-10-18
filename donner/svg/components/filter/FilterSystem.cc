@@ -67,6 +67,49 @@ bool AddRetainedProduct(std::size_t& total, std::size_t count, std::size_t eleme
   return AddRetainedBytes(total, count * elementSize);
 }
 
+bool AddAnimatedRegionRetainedBytes(std::size_t& bytes, const FilterNode& node) {
+  for (const auto& recipe : node.animatedRegion) {
+    if (recipe && !AddRetainedBytes(bytes, recipe->retainedBytes)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool AddFilterInputRetainedBytes(std::size_t& bytes, const FilterNode& node) {
+  if (!AddRetainedProduct(bytes, node.inputs.capacity(), sizeof(FilterInput)) ||
+      !AddRetainedBytes(bytes,
+                        static_cast<std::size_t>(FilterPrimitivePayloadBytes(node.primitive)))) {
+    return false;
+  }
+  for (const FilterInput& input : node.inputs) {
+    const auto* named = std::get_if<FilterInput::Named>(&input.value);
+    if (named && !AddRetainedBytes(bytes, named->name.size())) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool AddFilterImageRetainedBytes(std::size_t& bytes, const FilterNode& node) {
+  const auto* image = std::get_if<filter_primitive::Image>(&node.primitive);
+  if (!image) {
+    return true;
+  }
+  return AddRetainedBytes(bytes, image->href.size()) &&
+         AddRetainedBytes(bytes, image->fragmentId.size());
+}
+
+bool AddFilterNodeRetainedBytes(std::size_t& bytes, const FilterNode& node) {
+  if (!AddAnimatedRegionRetainedBytes(bytes, node) || !AddFilterInputRetainedBytes(bytes, node)) {
+    return false;
+  }
+  if (node.result && !AddRetainedBytes(bytes, node.result->size())) {
+    return false;
+  }
+  return AddFilterImageRetainedBytes(bytes, node);
+}
+
 std::optional<std::size_t> ComputedFilterRetainedBytes(
     const FilterGraph& graph, const std::vector<FilterEffect>& effectChain) {
   std::size_t bytes = sizeof(ComputedFilterComponent);
@@ -75,30 +118,8 @@ std::optional<std::size_t> ComputedFilterRetainedBytes(
     return std::nullopt;
   }
   for (const FilterNode& node : graph.nodes) {
-    for (const auto& recipe : node.animatedRegion) {
-      if (recipe && !AddRetainedBytes(bytes, recipe->retainedBytes)) {
-        return std::nullopt;
-      }
-    }
-    if (!AddRetainedProduct(bytes, node.inputs.capacity(), sizeof(FilterInput)) ||
-        !AddRetainedBytes(bytes,
-                          static_cast<std::size_t>(FilterPrimitivePayloadBytes(node.primitive)))) {
+    if (!AddFilterNodeRetainedBytes(bytes, node)) {
       return std::nullopt;
-    }
-    for (const FilterInput& input : node.inputs) {
-      if (const auto* named = std::get_if<FilterInput::Named>(&input.value);
-          named && !AddRetainedBytes(bytes, named->name.size())) {
-        return std::nullopt;
-      }
-    }
-    if (node.result.has_value() && !AddRetainedBytes(bytes, node.result->size())) {
-      return std::nullopt;
-    }
-    if (const auto* image = std::get_if<filter_primitive::Image>(&node.primitive)) {
-      if (!AddRetainedBytes(bytes, image->href.size()) ||
-          !AddRetainedBytes(bytes, image->fragmentId.size())) {
-        return std::nullopt;
-      }
     }
   }
   return bytes;

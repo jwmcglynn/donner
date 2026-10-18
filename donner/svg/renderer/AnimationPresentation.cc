@@ -307,200 +307,279 @@ void RestoreAnimationPresentation(Registry& registry) {
   registry.clear<AnimationBaseBackup>();
 }
 
-void ApplyAnimationPresentation(Registry& registry) {
-  const double documentTime = registry.ctx().get<SVGDocumentContext>().documentTime;
-  AnimationSystem().advance(registry, documentTime, nullptr);
-  if (!registry.view<AnimatedValuesComponent>().empty()) {
-    registry.ctx().get<AnimationStyleContext>().enabled = true;
-    registry.clear<ComputedStyleComponent>();
-    ParseWarningSink warnings = ParseWarningSink::Disabled();
-    StyleSystem().computeAllStyles(registry, warnings);
-  }
+namespace {
 
-  if (!ReserveAnimationGeometryBackups(registry, registry.ctx().get<AnimationResourceBudget>()) ||
-      !ApplyAnimationReferences(registry) || !ApplyAnimationAttributes(registry)) {
-    RestoreAnimationReferences(registry);
-    RestoreAnimationAttributes(registry);
-    registry.clear<AnimatedValuesComponent>();
-    registry.ctx().get<AnimationStyleContext>().enabled = false;
-    registry.clear<ComputedStyleComponent>();
-    ParseWarningSink warnings = ParseWarningSink::Disabled();
-    StyleSystem().computeAllStyles(registry, warnings);
-    FinalizeAnimationReferences(registry);
+void RecomputeAnimationStyles(Registry& registry, bool enabled) {
+  registry.ctx().get<AnimationStyleContext>().enabled = enabled;
+  registry.clear<ComputedStyleComponent>();
+  ParseWarningSink warnings = ParseWarningSink::Disabled();
+  StyleSystem().computeAllStyles(registry, warnings);
+}
+
+void RestoreRejectedAnimationPresentation(Registry& registry) {
+  RestoreAnimationReferences(registry);
+  RestoreAnimationAttributes(registry);
+  registry.clear<AnimatedValuesComponent>();
+  RecomputeAnimationStyles(registry, false);
+  FinalizeAnimationReferences(registry);
+}
+
+bool IsTransformAnimationAttribute(std::string_view name) {
+  return name == "transform" || name == "gradientTransform" || name == "patternTransform";
+}
+
+void ApplyAnimatedTransform(Registry& registry, Entity entity, std::string_view name,
+                            std::string_view value) {
+  auto parsed = parser::TransformParser::Parse(value);
+  if (!parsed.hasResult()) {
     return;
   }
-
-  FinalizeAnimationReferences(registry);
-
-  // 3. Apply the current frame's overrides. The loop body only touches storages other than
-  //    AnimatedValuesComponent, so the view can be iterated directly.
-  donner::parser::LengthParser::Options lengthOpts;
-  lengthOpts.unitOptional = true;
-
-  for (auto [entity, animValues] : registry.view<AnimatedValuesComponent>().each()) {
-    bool geometryChanged = false;
-
-    for (const auto& [attrName, attrValue] : animValues.overrides) {
-      if (attrName == "transform" || attrName == "gradientTransform" ||
-          attrName == "patternTransform") {
-        auto result = donner::svg::parser::TransformParser::Parse(attrValue);
-        if (result.hasResult()) {
-          auto& backup = AnimationBackupFor(registry, entity);
-          if (!backup.transformCaptured) {
-            backup.transformCaptured = true;
-            backup.transformAttribute = attrName;
-            backup.transformExisted = registry.all_of<TransformComponent>(entity);
-            if (backup.transformExisted) {
-              backup.transform = registry.get<TransformComponent>(entity);
-            }
-          }
-          auto& transform = registry.get_or_emplace<TransformComponent>(entity);
-          SetAnimatedProperty(transform.transform, CssTransform(result.result()));
-          // Drop any cached computed transforms (local + cascaded absolute) so the animated
-          // transform is recomputed by the layout pass.
-          LayoutSystem().invalidate(EntityHandle(registry, entity));
-        }
-      } else if (attrName == "points") {
-        if (auto* poly = registry.try_get<PolyComponent>(entity)) {
-          auto parsed = parser::PointsListParser::Parse(attrValue);
-          if (parsed.hasError()) {
-            continue;
-          }
-          auto& backup = AnimationBackupFor(registry, entity);
-          if (!backup.poly) {
-            backup.poly = *poly;
-            backup.polySource = AuthoredAnimationAttribute(registry, entity, "points");
-          }
-          poly->points = std::move(parsed.result());
-          backup.appliedPoints = poly->points;
-          geometryChanged = true;
-        }
-      } else if (attrName == "d") {
-        if (auto* pathComp = registry.try_get<PathComponent>(entity)) {
-          auto& backup = AnimationBackupFor(registry, entity);
-          if (!backup.path) {
-            backup.path = *pathComp;
-          }
-          SetAnimatedProperty(pathComp->d, RcString(attrValue));
-          pathComp->splineOverride.reset();
-          registry.remove<ComputedPathComponent>(entity);
-        }
-      } else if (isGeometryLengthAttribute(attrName)) {
-        auto lengthResult = donner::parser::LengthParser::Parse(attrValue, lengthOpts);
-        if (!lengthResult.hasResult()) {
-          continue;
-        }
-        const Lengthd len = lengthResult.result().length;
-
-        if (auto* circle = registry.try_get<CircleComponent>(entity)) {
-          auto& backup = AnimationBackupFor(registry, entity);
-          if (!backup.circle) {
-            backup.circle = *circle;
-          }
-          if (attrName == "cx") {
-            SetAnimatedProperty(circle->properties.cx, len);
-            geometryChanged = true;
-          } else if (attrName == "cy") {
-            SetAnimatedProperty(circle->properties.cy, len);
-            geometryChanged = true;
-          } else if (attrName == "r") {
-            SetAnimatedProperty(circle->properties.r, len);
-            geometryChanged = true;
-          }
-        }
-        if (auto* ellipse = registry.try_get<EllipseComponent>(entity)) {
-          auto& backup = AnimationBackupFor(registry, entity);
-          if (!backup.ellipse) {
-            backup.ellipse = *ellipse;
-          }
-          if (attrName == "cx") {
-            SetAnimatedProperty(ellipse->properties.cx, len);
-            geometryChanged = true;
-          } else if (attrName == "cy") {
-            SetAnimatedProperty(ellipse->properties.cy, len);
-            geometryChanged = true;
-          } else if (attrName == "rx") {
-            SetAnimatedProperty(ellipse->properties.rx, len);
-            geometryChanged = true;
-          } else if (attrName == "ry") {
-            SetAnimatedProperty(ellipse->properties.ry, len);
-            geometryChanged = true;
-          }
-        }
-        if (auto* rect = registry.try_get<RectComponent>(entity)) {
-          auto& backup = AnimationBackupFor(registry, entity);
-          if (!backup.rect) {
-            backup.rect = *rect;
-          }
-          if (attrName == "x") {
-            SetAnimatedProperty(rect->properties.x, len);
-            geometryChanged = true;
-          } else if (attrName == "y") {
-            SetAnimatedProperty(rect->properties.y, len);
-            geometryChanged = true;
-          } else if (attrName == "width") {
-            SetAnimatedProperty(rect->properties.width, len);
-            geometryChanged = true;
-          } else if (attrName == "height") {
-            SetAnimatedProperty(rect->properties.height, len);
-            geometryChanged = true;
-          } else if (attrName == "rx") {
-            SetAnimatedProperty(rect->properties.rx, len);
-            geometryChanged = true;
-          } else if (attrName == "ry") {
-            SetAnimatedProperty(rect->properties.ry, len);
-            geometryChanged = true;
-          }
-        }
-        if (auto* sized = registry.try_get<SizedElementComponent>(entity)) {
-          auto& backup = AnimationBackupFor(registry, entity);
-          if (!backup.sized) {
-            backup.sized = *sized;
-          }
-          std::apply(
-              [&](auto&... property) {
-                ((property.name == attrName ? (SetAnimatedProperty(property, len), void())
-                                            : void()),
-                 ...);
-              },
-              sized->properties.allProperties());
-          LayoutSystem().invalidate(EntityHandle(registry, entity));
-          geometryChanged = true;
-        }
-        if (auto* line = registry.try_get<LineComponent>(entity)) {
-          auto& backup = AnimationBackupFor(registry, entity);
-          if (!backup.line) {
-            backup.line = *line;
-            static constexpr std::array<std::string_view, 4> names = {"x1", "y1", "x2", "y2"};
-            for (std::size_t i = 0; i < names.size(); ++i) {
-              backup.lineSources[i] = AuthoredAnimationAttribute(registry, entity, names[i]);
-            }
-          }
-          if (attrName == "x1") {
-            line->x1 = len;
-            backup.appliedLine[0] = len;
-            geometryChanged = true;
-          } else if (attrName == "y1") {
-            line->y1 = len;
-            backup.appliedLine[1] = len;
-            geometryChanged = true;
-          } else if (attrName == "x2") {
-            line->x2 = len;
-            backup.appliedLine[2] = len;
-            geometryChanged = true;
-          } else if (attrName == "y2") {
-            line->y2 = len;
-            backup.appliedLine[3] = len;
-            geometryChanged = true;
-          }
-        }
-      }
+  auto& backup = AnimationBackupFor(registry, entity);
+  if (!backup.transformCaptured) {
+    backup.transformCaptured = true;
+    backup.transformAttribute = name;
+    backup.transformExisted = registry.all_of<TransformComponent>(entity);
+    if (backup.transformExisted) {
+      backup.transform = registry.get<TransformComponent>(entity);
     }
+  }
+  auto& transform = registry.get_or_emplace<TransformComponent>(entity);
+  SetAnimatedProperty(transform.transform, CssTransform(parsed.result()));
+  LayoutSystem().invalidate(EntityHandle(registry, entity));
+}
 
+bool ApplyAnimatedPoints(Registry& registry, Entity entity, std::string_view value) {
+  auto* poly = registry.try_get<PolyComponent>(entity);
+  if (!poly) {
+    return false;
+  }
+  auto parsed = parser::PointsListParser::Parse(value);
+  if (parsed.hasError()) {
+    return false;
+  }
+  auto& backup = AnimationBackupFor(registry, entity);
+  if (!backup.poly) {
+    backup.poly = *poly;
+    backup.polySource = AuthoredAnimationAttribute(registry, entity, "points");
+  }
+  poly->points = std::move(parsed.result());
+  backup.appliedPoints = poly->points;
+  return true;
+}
+
+void ApplyAnimatedPath(Registry& registry, Entity entity, std::string_view value) {
+  auto* path = registry.try_get<PathComponent>(entity);
+  if (!path) {
+    return;
+  }
+  auto& backup = AnimationBackupFor(registry, entity);
+  if (!backup.path) {
+    backup.path = *path;
+  }
+  SetAnimatedProperty(path->d, RcString(value));
+  path->splineOverride.reset();
+  registry.remove<ComputedPathComponent>(entity);
+}
+
+bool ApplyAnimatedCircleLength(Registry& registry, Entity entity, std::string_view name,
+                               Lengthd length) {
+  auto* circle = registry.try_get<CircleComponent>(entity);
+  if (!circle) {
+    return false;
+  }
+  auto& backup = AnimationBackupFor(registry, entity);
+  if (!backup.circle) {
+    backup.circle = *circle;
+  }
+  if (name == "cx") {
+    SetAnimatedProperty(circle->properties.cx, length);
+    return true;
+  }
+  if (name == "cy") {
+    SetAnimatedProperty(circle->properties.cy, length);
+    return true;
+  }
+  if (name == "r") {
+    SetAnimatedProperty(circle->properties.r, length);
+    return true;
+  }
+  return false;
+}
+
+bool ApplyAnimatedEllipseLength(Registry& registry, Entity entity, std::string_view name,
+                                Lengthd length) {
+  auto* ellipse = registry.try_get<EllipseComponent>(entity);
+  if (!ellipse) {
+    return false;
+  }
+  auto& backup = AnimationBackupFor(registry, entity);
+  if (!backup.ellipse) {
+    backup.ellipse = *ellipse;
+  }
+  if (name == "cx") {
+    SetAnimatedProperty(ellipse->properties.cx, length);
+    return true;
+  }
+  if (name == "cy") {
+    SetAnimatedProperty(ellipse->properties.cy, length);
+    return true;
+  }
+  if (name == "rx") {
+    SetAnimatedProperty(ellipse->properties.rx, length);
+    return true;
+  }
+  if (name == "ry") {
+    SetAnimatedProperty(ellipse->properties.ry, length);
+    return true;
+  }
+  return false;
+}
+
+bool ApplyAnimatedRectLength(Registry& registry, Entity entity, std::string_view name,
+                             Lengthd length) {
+  auto* rect = registry.try_get<RectComponent>(entity);
+  if (!rect) {
+    return false;
+  }
+  auto& backup = AnimationBackupFor(registry, entity);
+  if (!backup.rect) {
+    backup.rect = *rect;
+  }
+  if (name == "x") {
+    SetAnimatedProperty(rect->properties.x, length);
+    return true;
+  }
+  if (name == "y") {
+    SetAnimatedProperty(rect->properties.y, length);
+    return true;
+  }
+  if (name == "width") {
+    SetAnimatedProperty(rect->properties.width, length);
+    return true;
+  }
+  if (name == "height") {
+    SetAnimatedProperty(rect->properties.height, length);
+    return true;
+  }
+  if (name == "rx") {
+    SetAnimatedProperty(rect->properties.rx, length);
+    return true;
+  }
+  if (name == "ry") {
+    SetAnimatedProperty(rect->properties.ry, length);
+    return true;
+  }
+  return false;
+}
+
+bool ApplyAnimatedSizedLength(Registry& registry, Entity entity, std::string_view name,
+                              Lengthd length) {
+  auto* sized = registry.try_get<SizedElementComponent>(entity);
+  if (!sized) {
+    return false;
+  }
+  auto& backup = AnimationBackupFor(registry, entity);
+  if (!backup.sized) {
+    backup.sized = *sized;
+  }
+  std::apply(
+      [&](auto&... property) {
+        ((property.name == name ? (SetAnimatedProperty(property, length), void()) : void()), ...);
+      },
+      sized->properties.allProperties());
+  LayoutSystem().invalidate(EntityHandle(registry, entity));
+  return true;
+}
+
+bool ApplyAnimatedLineLength(Registry& registry, Entity entity, std::string_view name,
+                             Lengthd length) {
+  auto* line = registry.try_get<LineComponent>(entity);
+  if (!line) {
+    return false;
+  }
+  auto& backup = AnimationBackupFor(registry, entity);
+  if (!backup.line) {
+    backup.line = *line;
+    static constexpr std::array<std::string_view, 4> names = {"x1", "y1", "x2", "y2"};
+    for (std::size_t index = 0; index < names.size(); ++index) {
+      backup.lineSources[index] = AuthoredAnimationAttribute(registry, entity, names[index]);
+    }
+  }
+  static constexpr std::array<std::string_view, 4> names = {"x1", "y1", "x2", "y2"};
+  static constexpr std::array<Lengthd LineComponent::*, 4> fields = {
+      &LineComponent::x1, &LineComponent::y1, &LineComponent::x2, &LineComponent::y2};
+  for (std::size_t index = 0; index < names.size(); ++index) {
+    if (name == names[index]) {
+      line->*fields[index] = length;
+      backup.appliedLine[index] = length;
+      return true;
+    }
+  }
+  return false;
+}
+
+bool ApplyAnimatedGeometryLength(Registry& registry, Entity entity, std::string_view name,
+                                 std::string_view value,
+                                 const donner::parser::LengthParser::Options& options) {
+  const auto parsed = donner::parser::LengthParser::Parse(value, options);
+  if (!parsed.hasResult()) {
+    return false;
+  }
+  const Lengthd length = parsed.result().length;
+  bool changed = ApplyAnimatedCircleLength(registry, entity, name, length);
+  changed |= ApplyAnimatedEllipseLength(registry, entity, name, length);
+  changed |= ApplyAnimatedRectLength(registry, entity, name, length);
+  changed |= ApplyAnimatedSizedLength(registry, entity, name, length);
+  changed |= ApplyAnimatedLineLength(registry, entity, name, length);
+  return changed;
+}
+
+void ApplyAnimatedOverride(Registry& registry, Entity entity, std::string_view name,
+                           std::string_view value,
+                           const donner::parser::LengthParser::Options& lengthOptions,
+                           bool& geometryChanged) {
+  if (IsTransformAnimationAttribute(name)) {
+    ApplyAnimatedTransform(registry, entity, name, value);
+  } else if (name == "points") {
+    geometryChanged |= ApplyAnimatedPoints(registry, entity, value);
+  } else if (name == "d") {
+    ApplyAnimatedPath(registry, entity, value);
+  } else if (isGeometryLengthAttribute(name)) {
+    geometryChanged |= ApplyAnimatedGeometryLength(registry, entity, name, value, lengthOptions);
+  }
+}
+
+void ApplyAnimatedOverrides(Registry& registry) {
+  donner::parser::LengthParser::Options lengthOptions;
+  lengthOptions.unitOptional = true;
+  for (auto [entity, values] : registry.view<AnimatedValuesComponent>().each()) {
+    bool geometryChanged = false;
+    for (const auto& [name, value] : values.overrides) {
+      ApplyAnimatedOverride(registry, entity, name, value, lengthOptions, geometryChanged);
+    }
     if (geometryChanged) {
       invalidateComputedShape(registry, entity);
     }
   }
+}
+
+}  // namespace
+
+void ApplyAnimationPresentation(Registry& registry) {
+  const double documentTime = registry.ctx().get<SVGDocumentContext>().documentTime;
+  AnimationSystem().advance(registry, documentTime, nullptr);
+  if (!registry.view<AnimatedValuesComponent>().empty()) {
+    RecomputeAnimationStyles(registry, true);
+  }
+
+  if (!ReserveAnimationGeometryBackups(registry, registry.ctx().get<AnimationResourceBudget>()) ||
+      !ApplyAnimationReferences(registry) || !ApplyAnimationAttributes(registry)) {
+    RestoreRejectedAnimationPresentation(registry);
+    return;
+  }
+
+  FinalizeAnimationReferences(registry);
+  ApplyAnimatedOverrides(registry);
 }
 
 }  // namespace donner::svg::components
