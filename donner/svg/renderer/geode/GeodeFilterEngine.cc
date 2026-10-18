@@ -439,7 +439,9 @@ struct FilterResourceArena {
     if (frameSink_ != nullptr) {
       if (!frameSink_->appendFrameCommandBuffer(std::move(commands))) {
         forceRetain_ = true;
-        device_.markDeviceLost("filter command buffer could not join the frame");
+        if (!frameSink_->frameUploadRefused()) {
+          device_.markDeviceLost("filter command buffer could not join the frame");
+        }
         return false;
       }
       ++framePendingChunks_;

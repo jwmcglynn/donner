@@ -149,6 +149,23 @@ TEST_F(GeoEncoderTest, ClearWritesDirectTarget) {
   EXPECT_THAT(pixel, RgbaEq(0, 128, 255, 255));
 }
 
+TEST_F(GeoEncoderTest, RefusedArenaWriteSkipsOwnedSubmissionAndRecovers) {
+  const uint64_t serialBefore = device_->runtimeDevice().lastSubmittedSerial();
+  GeoEncoder refused(*device_, *pipeline_, *gradientPipeline_, *imagePipeline_, target_,
+                     kTargetSize);
+  refused.injectNextArenaWriteFailureForTesting();
+  refused.fillPath(PathBuilder().addRect(Box2d({8, 8}, {56, 56})).build(),
+                   css::RGBA(255, 0, 0, 255), FillRule::NonZero);
+  refused.finish();
+  EXPECT_EQ(device_->runtimeDevice().lastSubmittedSerial(), serialBefore);
+
+  GeoEncoder recovered(*device_, *pipeline_, *gradientPipeline_, *imagePipeline_, target_,
+                       kTargetSize);
+  recovered.clear(css::RGBA(0, 255, 0, 255));
+  recovered.finish();
+  EXPECT_THAT(pixelAt(readback(), 32, 32), RgbaEq(0, 255, 0, 255));
+}
+
 /// A target the backend refuses to open a render pass on must not be drawn into.
 ///
 /// `beginRenderPass` rejects a target without render-attachment capability, which leaves the

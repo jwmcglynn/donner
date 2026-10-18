@@ -180,6 +180,9 @@ public:
   /// @return False when the frame cannot take it, which fails the execution recording it.
   [[nodiscard]] virtual bool appendFrameCommandBuffer(gpu::CommandBuffer commandBuffer) = 0;
 
+  /// True when the frame refused an upload and must discard its recorded commands without loss.
+  [[nodiscard]] virtual bool frameUploadRefused() const { return false; }
+
   /// Keeps the handles a command buffer added here references alive until the frame submits.
   ///
   /// A submission re-validates every resource a recorded command names, so anything an execution

@@ -224,14 +224,23 @@ public:
    * Install a cross-frame buffer pool. When set,
    * arena buffer growth prefers recycled buffers from the pool and the
    * destructor returns the fully-grown arena buffers to it instead of
-   * destroying them, driving steady-state per-frame `bufferCreates`
-   * toward zero.
+   * destroying them, except after a refused upload. This drives steady-state
+   * per-frame `bufferCreates` toward zero without recycling uncertain bytes.
    *
    * Call before the first draw. The pool (typically owned by
    * `RendererGeode::Impl`) must outlive this encoder. Pass `nullptr`
    * to disable (default).
    */
   void setBufferPool(GeodeBufferPool* pool);
+
+  /**
+   * Share arena-write failure with the frame owner so it can discard the incomplete frame.
+   * @param failed Borrowed per-frame flag; it must outlive this encoder.
+   */
+  void setArenaWriteFailureFlag(bool* failed);
+
+  /// Refuse the next arena upload without touching the GPU buffer, for error-path tests.
+  void injectNextArenaWriteFailureForTesting();
 
   /** Install the mandatory geometry admission gate for renderer-owned encoders. */
   void setGeometryAdmission(GeometryAdmission* admission);

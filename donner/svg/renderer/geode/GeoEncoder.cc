@@ -6,6 +6,7 @@
 #include <iterator>
 #include <optional>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "donner/gpu/Device.h"
@@ -396,15 +397,18 @@ struct GeoEncoder::Impl : public GeodeTextureEncoder::UniformScratch {
   /// returns the fully-grown buffers instead of destroying them. See
   /// `GeodeBufferPool`.
   GeodeBufferPool* bufferPool = nullptr;
+  bool arenaWriteFailed = false;
+  bool* frameArenaWriteFailed = nullptr;
+  bool failNextArenaWriteForTesting = false;
   bool antialias = true;
 
   void releaseArenaResources(Arena& arena) {
-    // With a pool installed, the current (largest, fully-grown) buffer
-    // is recycled for the next frame's encoders. Otherwise release the
+    // With a pool installed, successful-frame buffers are recycled. Otherwise release the
     // handle without explicitly destroying its backing. Submitted WebGPU
     // commands retain their resources until completion; calling destroy()
     // here can invalidate those in-flight commands on some Vulkan drivers.
-    if (bufferPool != nullptr && arena.buffer.isValid()) {
+    if (bufferPool != nullptr && arena.buffer.isValid() && !arenaWriteFailed &&
+        !(frameArenaWriteFailed != nullptr && *frameArenaWriteFailed)) {
       bufferPool->release(std::move(arena.buffer), arena.usage, arena.label, arena.capacity);
     }
     arena.buffer = gpu::Buffer();
@@ -572,10 +576,19 @@ struct GeoEncoder::Impl : public GeodeTextureEncoder::UniformScratch {
       growArena(arena, size);
       alignedOffset = 0;
     }
-    const gpu::Status writeStatus = gpuContext->gpuDevice->writeBuffer(
-        arena.buffer, alignedOffset,
-        std::span<const uint8_t>(static_cast<const uint8_t*>(data), size));
-    UTILS_RELEASE_ASSERT_MSG(!writeStatus.hasError(), "Geode arena buffer write failed");
+    bool refused = std::exchange(failNextArenaWriteForTesting, false);
+    if (!refused) {
+      const gpu::Status writeStatus = gpuContext->gpuDevice->writeBuffer(
+          arena.buffer, alignedOffset,
+          std::span<const uint8_t>(static_cast<const uint8_t*>(data), size));
+      refused = writeStatus.hasError();
+    }
+    if (refused) {
+      arenaWriteFailed = true;
+      if (frameArenaWriteFailed != nullptr) {
+        *frameArenaWriteFailed = true;
+      }
+    }
     arena.offset = alignedOffset + size;
     return {arena.buffer, alignedOffset, size, arena.bufferId};
   }
@@ -1709,6 +1722,14 @@ void GeoEncoder::clearClipMask() {
 
 void GeoEncoder::setBufferPool(GeodeBufferPool* pool) {
   impl_->bufferPool = pool;
+}
+
+void GeoEncoder::setArenaWriteFailureFlag(bool* failed) {
+  impl_->frameArenaWriteFailed = failed;
+}
+
+void GeoEncoder::injectNextArenaWriteFailureForTesting() {
+  impl_->failNextArenaWriteForTesting = true;
 }
 
 void GeoEncoder::setGeometryAdmission(GeometryAdmission* admission) {
@@ -3506,6 +3527,10 @@ void GeoEncoder::finish() {
   // caller owns the CommandEncoder and is responsible for finishing +
   // submitting it. We only ended the open pass above.
   if (!impl_->ownsCommandEncoder) {
+    return;
+  }
+
+  if (impl_->arenaWriteFailed) {
     return;
   }
 

@@ -556,6 +556,12 @@ public:
   /// Inject transformed-filter suspension and following encoder-restoration failure once.
   void injectFilterFrameSuspensionAndRestoreFailureForTesting();
 
+  /// Refuse the next active encoder arena upload without touching the GPU buffer.
+  void injectActiveArenaWriteFailureForTesting();
+
+  /// Refuse the next transformed-filter resampling arena upload before filter execution.
+  void injectTransformedResampleArenaWriteFailureForTesting();
+
   /// Fail one close of the frame's recorded draws, as a backend refusal would, leaving the frame
   /// with no encoder exactly as a real handover failure does.
   /// @param successfulCloses Closes to let through first, counting every close that reaches a
