@@ -132,6 +132,28 @@ TEST(RendererAnimationTextPosition, ParentListEditsAffectFallbackAfterAnimationR
                       "text-list-after-removal");
 }
 
+TEST(RendererAnimationTextPosition, EmptyBasePaddingUsesEachLayerOperandArity) {
+  auto document = ParseTextPosition(
+      "<text id='target' y='24' font-size='12'>AB</text>"
+      "<animate href='#target' attributeName='dx' to='8' dur='2s'/>"
+      "<animate href='#target' attributeName='dx' to='10 20' dur='4s'/>");
+  for (const auto& [time, value] : {std::pair{0.5, 2}, std::pair{1.5, 6}, std::pair{0.5, 2}}) {
+    document.setTime(time);
+    CompareTextPosition(document,
+                        "<text y='24' font-size='12' dx='" + std::to_string(value) + "'>AB</text>",
+                        "text-stack-list-arity-" + std::to_string(time));
+  }
+}
+
+TEST(RendererAnimationTextPosition, ToTakesPrecedenceOverAnInvalidByOperand) {
+  auto document = ParseTextPosition(
+      "<text id='target' y='24' font-size='12' dx='2'>AB</text>"
+      "<animate href='#target' attributeName='dx' from='2' to='6' by='invalid' dur='2s'/>");
+  document.setTime(1);
+  CompareTextPosition(document, "<text y='24' font-size='12' dx='4'>AB</text>",
+                      "text-to-ignores-by");
+}
+
 TEST(RendererAnimationTextPosition, LocalRelativeListsUseEachTextInstanceFont) {
   auto document = ParseTextPosition(
       "<defs><text id='label' y='24' dx='0 7em'>A<tspan id='target' "
