@@ -391,47 +391,52 @@ std::optional<size_t> TextPositionDeclarationArity(const Declaration& declaratio
 std::optional<std::string> SampleTextPositionRecipe(
     const components::ContextualLengthRecipe& recipe, std::string underlying,
     const components::AnimationValueContext& context, bool nonAdditive, bool neutralEmpty) {
-  std::optional<std::string> result;
-  for (const auto& sample : recipe.samples) {
-    const auto sampled = std::visit(
-        [&](const auto& declaration) {
-          const auto arity = TextPositionDeclarationArity(declaration);
-          if (!arity || *arity == 0) {
-            return std::optional<std::pair<std::string, std::string>>{};
-          }
-          std::string layerUnderlying = underlying;
-          if (neutralEmpty && layerUnderlying.empty()) {
-            std::vector<Lengthd> zeros(*arity);
-            layerUnderlying = SerializeTextPositionLengths(zeros);
-          }
-          using Declaration = std::decay_t<decltype(declaration)>;
-          if constexpr (std::is_same_v<Declaration, components::SetAnimationComponent>) {
-            return components::SampleAnimationValue(sample.progress, sample.iteration, &declaration,
-                                                    nullptr, nullptr, layerUnderlying, context);
-          } else {
-            components::AnimateValueComponent effective = declaration;
-            if (nonAdditive) {
-              effective.additive = false;
-              effective.accumulate = false;
-            }
-            return components::SampleAnimationValue(sample.progress, sample.iteration, nullptr,
-                                                    &effective, nullptr, layerUnderlying, context);
-          }
-        },
-        sample.declaration);
-    if (!sampled || !components::ParseAnimationLengths(sampled->second)) {
-      continue;
-    }
-    result = sampled->second;
-    underlying = *result;
-  }
-  return result;
+  return components::SampleContextualAnimationRecipe(
+      recipe, std::move(underlying), [&](const auto& sample, const std::string& lower) {
+        const auto sampled = std::visit(
+            [&](const auto& declaration) {
+              const auto arity = TextPositionDeclarationArity(declaration);
+              if (!arity || *arity == 0) {
+                return std::optional<std::pair<std::string, std::string>>{};
+              }
+              std::string layerUnderlying = lower;
+              if (neutralEmpty && layerUnderlying.empty()) {
+                std::vector<Lengthd> zeros(*arity);
+                layerUnderlying = SerializeTextPositionLengths(zeros);
+              }
+              using Declaration = std::decay_t<decltype(declaration)>;
+              if constexpr (std::is_same_v<Declaration, components::SetAnimationComponent>) {
+                return components::SampleAnimationValue(sample.progress, sample.iteration,
+                                                        &declaration, nullptr, nullptr,
+                                                        layerUnderlying, context);
+              } else {
+                components::AnimateValueComponent effective = declaration;
+                if (nonAdditive) {
+                  effective.additive = false;
+                  effective.accumulate = false;
+                }
+                return components::SampleAnimationValue(sample.progress, sample.iteration, nullptr,
+                                                        &effective, nullptr, layerUnderlying,
+                                                        context);
+              }
+            },
+            sample.declaration);
+        return sampled && components::ParseAnimationLengths(sampled->second)
+                   ? std::optional(sampled->second)
+                   : std::nullopt;
+      });
 }
 
 std::optional<size_t> TextPositionRecipeArity(const components::ContextualLengthRecipe& recipe) {
   size_t arity = 0;
   bool hasValidLayer = false;
   for (const auto& sample : recipe.samples) {
+    if (sample.frozenUnderlying) {
+      if (const auto frozenArity = TextPositionRecipeArity(*sample.frozenUnderlying)) {
+        hasValidLayer = true;
+        arity = std::max(arity, *frozenArity);
+      }
+    }
     const auto layerArity = std::visit(
         [](const auto& declaration) { return TextPositionDeclarationArity(declaration); },
         sample.declaration);
@@ -1374,35 +1379,31 @@ bool HasNegativeAbsoluteTextLength(const Declaration& declaration) {
 std::optional<Lengthd> SampleValidTextLengthRecipe(
     const components::ContextualLengthRecipe& recipe, Lengthd underlying,
     const components::AnimationValueContext& context) {
-  std::optional<Lengthd> result;
-  for (const auto& sample : recipe.samples) {
-    const auto sampled = std::visit(
-        [&](const auto& declaration) -> std::optional<std::pair<std::string, std::string>> {
-          if (HasNegativeAbsoluteTextLength(declaration)) {
-            return std::nullopt;
-          }
-          using Declaration = std::decay_t<decltype(declaration)>;
-          if constexpr (std::is_same_v<Declaration, components::SetAnimationComponent>) {
-            return components::SampleAnimationValue(sample.progress, sample.iteration, &declaration,
-                                                    nullptr, nullptr, underlying.toRcString().str(),
-                                                    context);
-          } else {
-            return components::SampleAnimationValue(sample.progress, sample.iteration, nullptr,
-                                                    &declaration, nullptr,
-                                                    underlying.toRcString().str(), context);
-          }
-        },
-        sample.declaration);
-    if (!sampled) {
-      continue;
-    }
-    const auto parsed = components::ParseAnimationLength(sampled->first, sampled->second);
-    if (parsed && parsed->value >= 0) {
-      result = parsed;
-      underlying = *parsed;
-    }
-  }
-  return result;
+  return components::SampleContextualAnimationRecipe(
+      recipe, underlying, [&](const auto& sample, const Lengthd& lower) {
+        const auto sampled = std::visit(
+            [&](const auto& declaration) -> std::optional<std::pair<std::string, std::string>> {
+              if (HasNegativeAbsoluteTextLength(declaration)) {
+                return std::nullopt;
+              }
+              using Declaration = std::decay_t<decltype(declaration)>;
+              if constexpr (std::is_same_v<Declaration, components::SetAnimationComponent>) {
+                return components::SampleAnimationValue(sample.progress, sample.iteration,
+                                                        &declaration, nullptr, nullptr,
+                                                        lower.toRcString().str(), context);
+              } else {
+                return components::SampleAnimationValue(sample.progress, sample.iteration, nullptr,
+                                                        &declaration, nullptr,
+                                                        lower.toRcString().str(), context);
+              }
+            },
+            sample.declaration);
+        if (!sampled) {
+          return std::optional<Lengthd>{};
+        }
+        const auto parsed = components::ParseAnimationLength(sampled->first, sampled->second);
+        return parsed && parsed->value >= 0 ? parsed : std::nullopt;
+      });
 }
 
 bool ApplyTextLengthOwnerPlan(Registry& registry, std::vector<TextRun>& runs,

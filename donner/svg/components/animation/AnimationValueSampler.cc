@@ -386,6 +386,55 @@ bool RecipeStorageFits(const std::vector<ContextualLengthSample>& samples, std::
   return true;
 }
 
+struct RecipeMetrics {
+  std::size_t source = 0;
+  std::size_t retained = 0;
+  std::size_t work = 0;
+  std::size_t depth = 1;
+};
+
+bool AddFrozenUnderlyingMetrics(const ContextualLengthSample& sample, RecipeMetrics& metrics) {
+  constexpr std::size_t kMaximumFrozenUnderlyingDepth = 256;
+  if (!sample.frozenUnderlying) {
+    return true;
+  }
+  if (!AddRecipeSourceBytes(metrics.source, sample.frozenUnderlying->sourceBytes) ||
+      sample.frozenUnderlying->retainedBytes >
+          AnimationResourceBudget::kMaximumOutputBytes - metrics.retained ||
+      sample.frozenUnderlying->evaluationWork >
+          AnimationResourceBudget::kMaximumContextualWork - metrics.work ||
+      sample.frozenUnderlying->nestingDepth >= kMaximumFrozenUnderlyingDepth) {
+    return false;
+  }
+  metrics.retained += sample.frozenUnderlying->retainedBytes;
+  metrics.work += sample.frozenUnderlying->evaluationWork;
+  metrics.depth = std::max(metrics.depth, sample.frozenUnderlying->nestingDepth + 1);
+  return true;
+}
+
+bool AddRecipeSampleMetrics(const ContextualLengthSample& sample, RecipeMetrics& metrics) {
+  const auto bytes = RecipeSampleSourceBytes(sample);
+  if (!bytes || !AddRecipeSourceBytes(metrics.source, *bytes)) {
+    return false;
+  }
+  const auto* value = std::get_if<AnimateValueComponent>(&sample.declaration);
+  const std::size_t keyframes = value ? value->values.size() : 0;
+  const std::size_t storage =
+      2 * (sizeof(ContextualLengthSample) + *bytes + keyframes * sizeof(std::string)) + 256;
+  if (*bytes > AnimationResourceBudget::kMaximumContextualWork / 16 ||
+      keyframes > AnimationResourceBudget::kMaximumContextualWork / 64) {
+    return false;
+  }
+  const std::size_t sampleWork = *bytes * 16 + keyframes * 64 + 256;
+  if (storage > AnimationResourceBudget::kMaximumOutputBytes - metrics.retained ||
+      sampleWork > AnimationResourceBudget::kMaximumContextualWork - metrics.work) {
+    return false;
+  }
+  metrics.retained += storage;
+  metrics.work += sampleWork;
+  return AddFrozenUnderlyingMetrics(sample, metrics);
+}
+
 }  // namespace
 
 std::optional<std::pair<std::string, std::string>> SampleAnimationValue(
@@ -455,50 +504,35 @@ std::shared_ptr<const ContextualLengthRecipe> ContextualLengthRecipe::Create(
   if (samples.size() > AnimationResourceBudget::kMaximumAnimations) {
     return nullptr;
   }
-  std::size_t source = 0;
-  std::size_t retained = 0;
-  std::size_t work = 0;
+  RecipeMetrics metrics;
   for (const auto& sample : samples) {
-    const auto bytes = RecipeSampleSourceBytes(sample);
-    if (!bytes || !AddRecipeSourceBytes(source, *bytes)) {
+    if (!AddRecipeSampleMetrics(sample, metrics)) {
       return nullptr;
     }
-    const auto* value = std::get_if<AnimateValueComponent>(&sample.declaration);
-    const std::size_t keyframes = value ? value->values.size() : 0;
-    const std::size_t storage =
-        2 * (sizeof(ContextualLengthSample) + *bytes + keyframes * sizeof(std::string)) + 256;
-    if (storage > AnimationResourceBudget::kMaximumOutputBytes - retained) {
-      return nullptr;
-    }
-    retained += storage;
-    work += *bytes * 16 + keyframes * 64 + 256;
   }
-  if (!RecipeStorageFits(samples, retained)) {
+  if (!RecipeStorageFits(samples, metrics.retained)) {
     return nullptr;
   }
-  return std::shared_ptr<const ContextualLengthRecipe>(
-      new ContextualLengthRecipe(std::move(samples), retained, work));
+  return std::shared_ptr<const ContextualLengthRecipe>(new ContextualLengthRecipe(
+      std::move(samples), metrics.source, metrics.retained, metrics.work, metrics.depth));
 }
 
 std::optional<Lengthd> SampleContextualLengthRecipe(const ContextualLengthRecipe& recipe,
                                                     Lengthd underlying,
                                                     const AnimationValueContext& context) {
-  std::optional<Lengthd> result;
-  for (const auto& sample : recipe.samples) {
-    const auto value = SampleAnimationValue(sample.progress, sample.iteration,
-                                            std::get_if<SetAnimationComponent>(&sample.declaration),
-                                            std::get_if<AnimateValueComponent>(&sample.declaration),
-                                            nullptr, underlying.toRcString().str(), context);
-    if (!value) {
-      continue;
-    }
-    const auto parsed = ParseAnimationLength(value->first, value->second);
-    if (parsed) {
-      result = *parsed;
-      underlying = *result;
-    }
-  }
-  return result;
+  return SampleContextualAnimationRecipe(
+      recipe, underlying, [&](const ContextualLengthSample& sample, Lengthd lower) {
+        const auto value =
+            SampleAnimationValue(sample.progress, sample.iteration,
+                                 std::get_if<SetAnimationComponent>(&sample.declaration),
+                                 std::get_if<AnimateValueComponent>(&sample.declaration), nullptr,
+                                 lower.toRcString().str(), context);
+        if (!value) {
+          return std::optional<Lengthd>{};
+        }
+        const auto parsed = ParseAnimationLength(value->first, value->second);
+        return parsed ? std::optional(*parsed) : std::nullopt;
+      });
 }
 
 }  // namespace donner::svg::components

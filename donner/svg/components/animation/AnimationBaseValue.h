@@ -50,6 +50,19 @@ std::optional<std::string> UnderlyingAnimationValue(Registry& registry, Entity t
                                                     const AnimationValueContext& context,
                                                     AnimationResourceBudget& budget);
 
+/** Read the authored or styled base value without a lower animation override.
+ * @param registry Document storage.
+ * @param target Animation target.
+ * @param attribute Animated attribute name.
+ * @param context Resolved target context.
+ * @param budget Shared source budget.
+ * @return Owning serialized base value, or nullopt when unavailable/refused.
+ */
+std::optional<std::string> BaseAnimationValue(Registry& registry, Entity target,
+                                              std::string_view attribute,
+                                              const AnimationValueContext& context,
+                                              AnimationResourceBudget& budget);
+
 /// Find an owning contextual recipe, following a shadow entity to its authored source.
 /// @param registry Document storage. @param target Target instance. @param attribute Length field.
 std::shared_ptr<const ContextualLengthRecipe> ContextualLengthFor(Registry& registry, Entity target,

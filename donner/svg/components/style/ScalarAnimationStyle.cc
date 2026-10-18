@@ -113,15 +113,12 @@ std::optional<double> SampleScalarStyle(Registry& registry, Entity source, std::
           recipe->second->evaluationWork)) {
     return std::nullopt;
   }
-  std::optional<double> result;
-  for (const auto& sample : recipe->second->samples) {
-    if (const auto value = SampleScalarLayer(sample, underlying, context);
-        value && std::isfinite(*value)) {
-      underlying = *value;
-      result = *value;
-    }
-  }
-  return result;
+  return SampleContextualAnimationRecipe(
+      *recipe->second, underlying,
+      [&](const ContextualLengthSample& sample, double lower) -> std::optional<double> {
+        const auto value = SampleScalarLayer(sample, lower, context);
+        return value && std::isfinite(*value) ? value : std::nullopt;
+      });
 }
 
 template <typename PropertyType>

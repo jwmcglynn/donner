@@ -280,6 +280,47 @@ TEST(RendererAnimationPathValue, ToOnlyUsesTypedAndStylesheetPathBases) {
   }
 }
 
+TEST(RendererAnimationPathValue, FrozenPartialToOnlyUsesTypedSplineAtFreezeBoundary) {
+  auto document = instantiateSubtree(
+      "<path id='p'>"
+      "<animate attributeName='d' to='M0 0L16 0L16 16L0 16Z' "
+      "dur='2s' repeatCount='0.5' fill='freeze'/></path>",
+      parser::SVGParser::Options(), Vector2i(24, 24));
+  auto path = document.querySelector("#p")->cast<SVGPathElement>();
+  PathBuilder builder;
+  builder.moveTo({0, 0}).lineTo({4, 0}).lineTo({4, 4}).lineTo({0, 4}).closePath();
+  path.setSpline(builder.build());
+
+  auto expected = instantiateSubtree("<rect width='10' height='10'/>", parser::SVGParser::Options(),
+                                     Vector2i(24, 24));
+  for (const double time : {5.0, 1.0, 5.0}) {
+    SCOPED_TRACE(time);
+    document.setTime(time);
+    editor::tests::CompareBitmapToBitmap(
+        RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(expected),
+        "frozen-partial-typed-path", editor::tests::PixelmatchIdentityParams());
+  }
+}
+
+TEST(RendererAnimationPathValue, FrozenPartialToOnlyRebuildsInactivePathLayer) {
+  auto document = instantiateSubtree(
+      "<path d='M0 0L4 0L4 4L0 4Z'>"
+      "<animate attributeName='d' from='M0 0L4 0L4 4L0 4Z' "
+      "to='M0 0L12 0L12 12L0 12Z' dur='2s'/>"
+      "<animate attributeName='d' to='M0 0L16 0L16 16L0 16Z' "
+      "dur='2s' repeatCount='0.5' fill='freeze'/></path>",
+      parser::SVGParser::Options(), Vector2i(24, 24));
+  auto expected = instantiateSubtree("<rect width='12' height='12'/>", parser::SVGParser::Options(),
+                                     Vector2i(24, 24));
+  for (const double time : {5.0, 1.0, 5.0}) {
+    SCOPED_TRACE(time);
+    document.setTime(time);
+    editor::tests::CompareBitmapToBitmap(
+        RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(expected),
+        "frozen-partial-inactive-path", editor::tests::PixelmatchIdentityParams());
+  }
+}
+
 TEST(RendererAnimationPathValue, InvalidCssPathRemainsUnavailableToMotion) {
   for (bool animate : {false, true}) {
     SCOPED_TRACE(animate);

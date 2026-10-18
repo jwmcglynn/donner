@@ -75,6 +75,19 @@ std::optional<std::string> getAnimatedValue(SVGDocument& document, const char* s
     }
     return paint->get<PaintServer::Solid>().color.resolve(css::RGBA::RGB(0, 0, 0), 1).toHexString();
   }
+  if (attributeName == "opacity" && animValues->contextualLengths.contains("opacity")) {
+    document.setTime(time);
+    ParseWarningSink warnings = ParseWarningSink::Disabled();
+    RendererUtils::prepareDocumentForRendering(document, false, warnings);
+    const auto opacity = element->getComputedStyle().opacity.get();
+    if (!opacity) {
+      return std::nullopt;
+    }
+    std::ostringstream output;
+    output.precision(12);
+    output << *opacity;
+    return output.str();
+  }
   const bool supportedRectLength =
       element->type() == ElementType::Rect &&
       (attributeName == "x" || attributeName == "width" || attributeName == "height");
@@ -1473,6 +1486,46 @@ TEST(SVGAnimateElement, FrozenPartialToOnlyValueKeepsLowerLayerAtFreezeBoundary)
     SCOPED_TRACE(time);
     EXPECT_THAT(getAnimatedValue(document, "#r", "x", time),
                 testing::Optional(testing::StrEq("105")));
+  }
+}
+
+TEST(SVGAnimateElement, FrozenPartialToOnlyValueRebuildsInactiveLowerLayer) {
+  auto document = parseSVGWithExperimental(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg"><rect id="r" opacity="0">
+      <animate attributeName="opacity" from="0" to="1" dur="2s"/>
+      <animate attributeName="opacity" to="1" dur="2s" repeatCount="0.5" fill="freeze"/>
+    </rect></svg>)svg");
+  for (double time : {5.0, 1.0, 5.0}) {
+    SCOPED_TRACE(time);
+    EXPECT_THAT(getAnimatedValue(document, "#r", "opacity", time),
+                testing::Optional(testing::StrEq("0.75")));
+  }
+}
+
+TEST(SVGAnimateElement, MinimumExtensionKeepsPartialToOnlyValueAtRepeatBoundary) {
+  auto document = parseSVGWithExperimental(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg"><rect id="r" x="0">
+      <animate attributeName="x" from="0" to="100" dur="10s"/>
+      <animate attributeName="x" to="200" dur="2s" repeatCount="0.5" min="10s" fill="freeze"/>
+    </rect></svg>)svg");
+  for (double time : {5.0, 1.0, 5.0}) {
+    SCOPED_TRACE(time);
+    EXPECT_THAT(getAnimatedValue(document, "#r", "x", time),
+                testing::Optional(testing::StrEq("105")));
+  }
+}
+
+TEST(SVGAnimateElement, InvalidFrozenPartialToOnlyValueKeepsCurrentLowerLayer) {
+  auto document = parseSVGWithExperimental(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg"><rect id="r" x="0">
+      <animate attributeName="x" from="0" to="100" dur="10s"/>
+      <animate attributeName="x" to="invalid" dur="2s" repeatCount="0.5" fill="freeze"/>
+    </rect></svg>)svg");
+  for (double time : {5.0, 1.0, 5.0}) {
+    SCOPED_TRACE(time);
+    const char* expected = time == 1.0 ? "10" : "50";
+    EXPECT_THAT(getAnimatedValue(document, "#r", "x", time),
+                testing::Optional(testing::StrEq(expected)));
   }
 }
 
