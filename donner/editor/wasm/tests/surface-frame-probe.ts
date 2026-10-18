@@ -387,6 +387,23 @@ export function waitForSubmittedCanvasGpuWork(owner: Worker): Promise<number> {
   return owner.evaluate(waitForCanvasGpuWorkInWorker);
 }
 
+/** Diagnostic timing for the same existing canvas completion promise; submits no GPU work. */
+export async function observeSubmittedCanvasGpuWork(owner: Worker) {
+  const dispatchedEpochMs = Date.now();
+  const observed = await owner.evaluate(async () => {
+    const enteredEpochMs = Date.now();
+    const completion = (globalThis as ProbeGlobal).__donnerSurfaceFrameProbeCompletion;
+    if (completion === undefined) {
+      throw new Error("the probe has not observed a canvas completion promise");
+    }
+    const hold = (globalThis as ProbeGlobal).__donnerSurfaceFrameProbeCompletionHold;
+    if (hold !== undefined) ++hold.waits;
+    await completion.promise;
+    return { enteredEpochMs, resolvedEpochMs: Date.now(), submissions: completion.submissions };
+  });
+  return { dispatchedEpochMs, ...observed, repliedEpochMs: Date.now() };
+}
+
 // Bound each observation without treating a slow reply as proof of nonownership.
 // The registry retains installation and discovery replies until they can be observed.
 const kWorkerAnswerMs = 1_000;

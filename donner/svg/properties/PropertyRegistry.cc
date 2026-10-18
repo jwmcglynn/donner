@@ -895,52 +895,65 @@ ParseResult<StrokeLinejoin> ParseStrokeLinejoin(std::span<const css::ComponentVa
   return err;
 }
 
-ParseResult<StrokeDasharray> ParseStrokeDasharray(std::span<const css::ComponentValue> components) {
-  // https://www.w3.org/TR/css-values-4/#mult-comma
-  StrokeDasharray result;
+std::optional<ParseDiagnostic> SkipDasharraySeparator(
+    std::span<const css::ComponentValue>& components) {
+  if (TrySkipToken<css::Token::Whitespace>(components) ||
+      TrySkipToken<css::Token::Comma>(components) || components.empty()) {
+    TrySkipToken<css::Token::Whitespace>(components);
+    return std::nullopt;
+  }
+  ParseDiagnostic err;
+  err.reason = "Unexpected tokens after dasharray value";
+  err.range.start =
+      !components.empty() ? components.front().sourceOffset() : FileOffset::EndOfString();
+  return err;
+}
 
-  while (!components.empty()) {
-    if (!result.empty()) {
-      if (TrySkipToken<css::Token::Whitespace>(components) ||
-          TrySkipToken<css::Token::Comma>(components) || components.empty()) {
-        TrySkipToken<css::Token::Whitespace>(components);
-      } else {
-        ParseDiagnostic err;
-        err.reason = "Unexpected tokens after dasharray value";
-        err.range.start =
-            !components.empty() ? components.front().sourceOffset() : FileOffset::EndOfString();
-        return err;
-      }
-    }
-
-    if (components.empty()) {
-      break;
-    }
-
-    const css::ComponentValue& component = components.front();
-    if (const auto* dimension = component.tryGetToken<css::Token::Dimension>()) {
-      if (!dimension->suffixUnit) {
-        ParseDiagnostic err;
-        err.reason = "Invalid unit on length";
-        err.range.start = component.sourceOffset();
-        return err;
-      } else {
-        result.emplace_back(dimension->value, dimension->suffixUnit.value());
-      }
-    } else if (const auto* percentage = component.tryGetToken<css::Token::Percentage>()) {
-      result.emplace_back(percentage->value, Lengthd::Unit::Percent);
-    } else if (const auto* number = component.tryGetToken<css::Token::Number>()) {
-      result.emplace_back(number->value, Lengthd::Unit::None);
-    } else {
+ParseResult<Lengthd> ParseDasharrayValue(const css::ComponentValue& component) {
+  if (const auto* dimension = component.tryGetToken<css::Token::Dimension>()) {
+    if (!dimension->suffixUnit) {
       ParseDiagnostic err;
-      err.reason = "Unexpected token in dasharray";
+      err.reason = "Invalid unit on length";
       err.range.start = component.sourceOffset();
       return err;
     }
+    return Lengthd(dimension->value, dimension->suffixUnit.value());
+  }
+  if (const auto* percentage = component.tryGetToken<css::Token::Percentage>()) {
+    return Lengthd(percentage->value, Lengthd::Unit::Percent);
+  }
+  if (const auto* number = component.tryGetToken<css::Token::Number>()) {
+    return Lengthd(number->value, Lengthd::Unit::None);
+  }
+  ParseDiagnostic err;
+  err.reason = "Unexpected token in dasharray";
+  err.range.start = component.sourceOffset();
+  return err;
+}
 
+ParseResult<StrokeDasharray> ParseStrokeDasharray(std::span<const css::ComponentValue> components) {
+  // https://www.w3.org/TR/css-values-4/#mult-comma
+  StrokeDasharray result;
+  if (const auto ident = parser::TryGetSingleIdent(components);
+      ident && ident->equalsLowercase("none")) {
+    return result;
+  }
+  while (!components.empty()) {
+    if (!result.empty()) {
+      if (auto error = SkipDasharraySeparator(components)) {
+        return std::move(*error);
+      }
+    }
+    if (components.empty()) {
+      break;
+    }
+    auto value = ParseDasharrayValue(components.front());
+    if (value.hasError()) {
+      return std::move(value.error());
+    }
+    result.emplace_back(value.result());
     components = components.subspan(1);
   }
-
   return result;
 }
 
@@ -2740,12 +2753,13 @@ PropertyRegistry& PropertyRegistry::operator=(const PropertyRegistry&) = default
 PropertyRegistry& PropertyRegistry::operator=(PropertyRegistry&&) noexcept = default;
 
 std::span<const std::string_view> PropertyRegistry::propertyNames() {
-  static const std::array<std::string_view, kProperties.kSize + 2> names = [] {
-    std::array<std::string_view, kProperties.kSize + 2> result;
+  static const std::array<std::string_view, kProperties.kSize + 3> names = [] {
+    std::array<std::string_view, kProperties.kSize + 3> result;
     result[0] = kProperties.keys()[0];
     result[1] = "flood-color";
     result[2] = "stop-color";
-    std::copy(kProperties.keys().begin() + 1, kProperties.keys().end(), result.begin() + 3);
+    result[3] = "lighting-color";
+    std::copy(kProperties.keys().begin() + 1, kProperties.keys().end(), result.begin() + 4);
     return result;
   }();
   return names;
@@ -2813,7 +2827,10 @@ std::size_t PropertyRegistry::complexPropertyBytes() const {
 }
 
 Property<css::Color>& PropertyRegistry::resourceColor(std::size_t index) {
-  return index == 0 ? floodColor : stopColor;
+  UTILS_RELEASE_ASSERT(index < kResourceColorCount);
+  const std::array<Property<css::Color>*, kResourceColorCount> colors{&floodColor, &stopColor,
+                                                                      &lightingColor};
+  return *colors[index];
 }
 
 void PropertyRegistry::reconcileResourceColorMutation(std::size_t index) {
@@ -2867,9 +2884,11 @@ std::optional<ParseDiagnostic> PropertyRegistry::parseResourceColor(
 std::optional<ParseDiagnostic> PropertyRegistry::parseProperty(const css::Declaration& declaration,
                                                                css::Specificity specificity) {
   const std::string_view name(declaration.name);
-  if (name == "flood-color" || name == "stop-color") {
+  if (name == "flood-color" || name == "stop-color" || name == "lighting-color") {
     return parseResourceColor(
-        name == "flood-color" ? 0 : 1,
+        name == "flood-color"  ? 0
+        : name == "stop-color" ? 1
+                               : 2,
         parser::PropertyParseFnParams::Create(declaration, specificity,
                                               parser::PropertyParseBehavior::AllowUserUnits));
   }
@@ -2898,7 +2917,8 @@ std::optional<ParseDiagnostic> PropertyRegistry::parseProperty(const css::Declar
 }
 
 bool PropertyRegistry::parseInlineResourceColor(
-    const css::Declaration& declaration, std::array<Property<css::Color>, 2>& selectedColors) {
+    const css::Declaration& declaration,
+    std::array<Property<css::Color>, kResourceColorCount>& selectedColors) {
   auto color =
       std::find_if(selectedColors.begin(), selectedColors.end(),
                    [&](const auto& selected) { return selected.name == declaration.name; });
@@ -2944,7 +2964,8 @@ bool PropertyRegistry::parseStyle(std::string_view str) {
   if (securityStats.rejected) {
     return false;
   }
-  std::array<Property<css::Color>, 2> selectedColors{floodColor, stopColor};
+  std::array<Property<css::Color>, kResourceColorCount> selectedColors{floodColor, stopColor,
+                                                                       lightingColor};
   for (std::size_t index = 0; index < selectedColors.size(); ++index) {
     reconcileResourceColorMutation(index);
     if (inlineResourceColors_[index]) {
@@ -2983,7 +3004,8 @@ void PropertyRegistry::clearStyleAttributeProperties() {
 
 ParseResult<bool> PropertyRegistry::parsePresentationAttribute(std::string_view name,
                                                                std::string_view value,
-                                                               EntityHandle handle) {
+                                                               EntityHandle handle,
+                                                               css::Specificity specificity) {
   /* TODO(jwmcglynn): The SVG2 spec says the name may be similar to the attribute, not
    * necessarily the same. There may need to be a second mapping.
    */
@@ -3001,9 +3023,12 @@ ParseResult<bool> PropertyRegistry::parsePresentationAttribute(std::string_view 
   }
 
   parser::PropertyParseFnParams params = parser::PropertyParseFnParams::CreateForAttribute(value);
+  params.specificity = specificity;
 
-  if (name == "flood-color" || name == "stop-color") {
-    return parseResourceColorAttribute(name == "flood-color" ? 0 : 1, params);
+  for (std::size_t index = 0; index < kResourceColorCount; ++index) {
+    if (name == resourceColor(index).name) {
+      return parseResourceColorAttribute(index, params);
+    }
   }
 
   const PropertyParseFn* parseFn = kProperties.find(name);

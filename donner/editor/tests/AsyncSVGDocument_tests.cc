@@ -3,9 +3,15 @@
 #include <gmock/gmock.h>
 
 #include <array>
+#include <future>
+#include <limits>
+#include <thread>
 
+#include "donner/svg/DonnerController.h"
 #include "donner/svg/SVGGraphicsElement.h"
+#include "donner/svg/parser/SVGParser.h"
 #include "donner/svg/renderer/Renderer.h"
+#include "donner/svg/renderer/RenderingContext.h"
 #include "donner/svg/renderer/tests/RgbaTestMatchers.h"
 #include "gtest/gtest.h"
 
@@ -71,6 +77,198 @@ TEST(AsyncSVGDocumentTest, LoadFromStringSucceedsAndBumpsVersion) {
 
   auto rect = doc.document().querySelector("#r1");
   ASSERT_TRUE(rect.has_value());
+}
+
+TEST(AsyncSVGDocumentTest, AnimationClockPreservesSourceIdentityAndCommands) {
+  AsyncSVGDocument doc;
+  ASSERT_TRUE(doc.loadFromString(kTrivialSvg));
+  const std::string source(doc.document().source());
+  const auto handle = doc.document().handle();
+  const std::uint64_t generation = doc.documentGeneration();
+  const std::uint64_t version = doc.currentFrameVersion();
+
+  EXPECT_TRUE(doc.setAnimationTime(0.5));
+  EXPECT_EQ(doc.document().currentTime(), 0.5);
+  EXPECT_EQ(doc.currentFrameVersion(), version + 1);
+  EXPECT_EQ(doc.documentGeneration(), generation);
+  EXPECT_EQ(doc.document().handle(), handle);
+  EXPECT_EQ(doc.document().source(), source);
+  EXPECT_FALSE(doc.hasPendingMutations());
+  EXPECT_FALSE(doc.hasUnmirroredSourceDeltas());
+  EXPECT_FALSE(doc.setAnimationTime(0.5));
+  EXPECT_FALSE(doc.setAnimationTime(std::numeric_limits<double>::infinity()));
+  EXPECT_EQ(doc.currentFrameVersion(), version + 1);
+}
+
+TEST(AsyncSVGDocumentTest, AnimationClockRetriesContendedDocumentAccess) {
+  AsyncSVGDocument doc;
+  ASSERT_TRUE(doc.loadFromString(kTrivialSvg));
+  doc.document().setThreadingMode(svg::ThreadingMode::ConcurrentDom);
+  std::promise<void> acquired;
+  std::promise<void> release;
+  auto released = release.get_future();
+  std::jthread reader([&] {
+    const auto access = doc.document().readAccess();
+    acquired.set_value();
+    released.wait();
+  });
+  acquired.get_future().wait();
+  EXPECT_FALSE(doc.setAnimationTime(0.5));
+  EXPECT_FALSE(doc.restartAnimations());
+  release.set_value();
+  reader.join();
+  EXPECT_TRUE(doc.setAnimationTime(0.5));
+  EXPECT_EQ(doc.document().currentTime(), 0.5);
+}
+
+TEST(AsyncSVGDocumentTest, NewPlaybackSessionRestartsNeverAnimation) {
+  constexpr std::string_view kAnimation = R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16">
+      <rect width="4" height="16" fill="red">
+        <animate attributeName="width" from="4" to="12" dur="1s"
+                 restart="never" fill="freeze"/>
+      </rect>
+    </svg>)svg";
+  AsyncSVGDocument doc;
+  ASSERT_TRUE(doc.loadFromString(kAnimation));
+  const auto handle = doc.document().handle();
+  const std::string source(doc.document().source());
+  EXPECT_THAT(PixelAt(RenderDocument(doc.document()), 8, 8), Rgba(0, 0, 0, 0));
+  EXPECT_TRUE(doc.setAnimationTime(2.0));
+  EXPECT_THAT(PixelAt(RenderDocument(doc.document()), 8, 8), Rgba(255, 0, 0, 255));
+  EXPECT_TRUE(doc.restartAnimations());
+  EXPECT_EQ(doc.document().currentTime(), 0.0);
+  EXPECT_THAT(PixelAt(RenderDocument(doc.document()), 8, 8), Rgba(0, 0, 0, 0));
+  EXPECT_TRUE(doc.setAnimationTime(2.0));
+  EXPECT_THAT(PixelAt(RenderDocument(doc.document()), 8, 8), Rgba(255, 0, 0, 255));
+  EXPECT_EQ(doc.document().handle(), handle);
+  EXPECT_EQ(doc.document().source(), source);
+}
+
+TEST(AsyncSVGDocumentTest, MouseHoverAndPressEffectsPreserveAuthoredSource) {
+  constexpr std::string_view source = R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16">
+      <rect id="pad" width="16" height="16" fill="red">
+        <set attributeName="fill" to="blue" begin="mouseover" end="mouseout"/>
+        <set attributeName="fill" to="lime" begin="mousedown" end="mouseup;mouseout"/>
+      </rect>
+    </svg>)svg";
+  AsyncSVGDocument doc;
+  ASSERT_TRUE(doc.loadFromString(source));
+  const auto target = doc.document().querySelector("#pad");
+  ASSERT_TRUE(target.has_value());
+  EXPECT_THAT(PixelAt(RenderDocument(doc.document()), 8, 8), Rgba(255, 0, 0, 255));
+  EXPECT_TRUE(doc.dispatchMouseEvent(svg::EventType::MouseOver, *target));
+  EXPECT_THAT(PixelAt(RenderDocument(doc.document()), 8, 8), Rgba(0, 0, 255, 255));
+  EXPECT_TRUE(doc.dispatchMouseEvent(svg::EventType::MouseDown, *target));
+  EXPECT_THAT(PixelAt(RenderDocument(doc.document()), 8, 8), Rgba(0, 255, 0, 255));
+  EXPECT_TRUE(doc.dispatchMouseEvent(svg::EventType::MouseUp, *target));
+  EXPECT_THAT(PixelAt(RenderDocument(doc.document()), 8, 8), Rgba(0, 0, 255, 255));
+  EXPECT_TRUE(doc.dispatchMouseEvent(svg::EventType::MouseOut, *target));
+  EXPECT_THAT(PixelAt(RenderDocument(doc.document()), 8, 8), Rgba(255, 0, 0, 255));
+  EXPECT_EQ(doc.document().source(), source);
+  EXPECT_FALSE(doc.hasUnmirroredSourceDeltas());
+}
+
+TEST(AsyncSVGDocumentTest, MouseClickBubblesToNamedAnimationSourceAndRestarts) {
+  constexpr std::string_view source = R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16">
+      <g id="button"><rect id="pad" width="2" height="2"/></g>
+      <rect width="4" height="16" fill="red">
+        <animate attributeName="width" from="4" to="12" begin="button.click" dur="1s" fill="freeze"/>
+      </rect>
+    </svg>)svg";
+  AsyncSVGDocument doc;
+  ASSERT_TRUE(doc.loadFromString(source));
+  const auto target = doc.document().querySelector("#pad");
+  ASSERT_TRUE(target.has_value());
+  EXPECT_TRUE(doc.setAnimationTime(2.0));
+  EXPECT_THAT(PixelAt(RenderDocument(doc.document()), 8, 8), Rgba(0, 0, 0, 0));
+  EXPECT_TRUE(doc.dispatchMouseEvent(svg::EventType::Click, *target));
+  EXPECT_TRUE(doc.setAnimationTime(3.0));
+  EXPECT_THAT(PixelAt(RenderDocument(doc.document()), 8, 8), Rgba(255, 0, 0, 255));
+  EXPECT_TRUE(doc.dispatchMouseEvent(svg::EventType::Click, *target));
+  EXPECT_THAT(PixelAt(RenderDocument(doc.document()), 8, 8), Rgba(0, 0, 0, 0));
+  EXPECT_EQ(doc.document().source(), source);
+}
+
+TEST(AsyncSVGDocumentTest, MouseEndDoesNotRetargetAnAlreadyFrozenInterval) {
+  constexpr std::string_view source = R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16">
+      <rect id="pad" width="4" height="16" fill="red">
+        <animate attributeName="width" from="4" to="12" begin="click" end="mouseup" dur="4s" fill="freeze"/>
+      </rect>
+    </svg>)svg";
+  AsyncSVGDocument doc;
+  ASSERT_TRUE(doc.loadFromString(source));
+  const auto target = doc.document().querySelector("#pad");
+  ASSERT_TRUE(target.has_value());
+  EXPECT_TRUE(doc.dispatchMouseEvent(svg::EventType::Click, *target));
+  EXPECT_TRUE(doc.setAnimationTime(1.0));
+  EXPECT_TRUE(doc.dispatchMouseEvent(svg::EventType::MouseUp, *target));
+  EXPECT_THAT(PixelAt(RenderDocument(doc.document()), 8, 8), Rgba(0, 0, 0, 0));
+  EXPECT_TRUE(doc.setAnimationTime(3.0));
+  EXPECT_FALSE(doc.dispatchMouseEvent(svg::EventType::MouseUp, *target));
+  EXPECT_THAT(PixelAt(RenderDocument(doc.document()), 8, 8), Rgba(0, 0, 0, 0));
+}
+
+TEST(AsyncSVGDocumentTest, MouseEventsRejectForeignTargetsAndSecureDocuments) {
+  constexpr std::string_view source = R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16">
+      <rect id="pad" width="16" height="16"><set attributeName="fill" to="red" begin="click"/></rect>
+    </svg>)svg";
+  AsyncSVGDocument first;
+  AsyncSVGDocument second;
+  ASSERT_TRUE(first.loadFromString(source));
+  ASSERT_TRUE(second.loadFromString(source));
+  const auto foreignTarget = second.document().querySelector("#pad");
+  ASSERT_TRUE(foreignTarget.has_value());
+  EXPECT_FALSE(first.dispatchMouseEvent(svg::EventType::Click, *foreignTarget));
+  ParseWarningSink sink = ParseWarningSink::Disabled();
+  svg::parser::SVGParser::Options options;
+  options.enableExperimental = true;
+  auto parsed = svg::parser::SVGParser::ParseSVG(
+      source, sink, options, {.processingMode = svg::ProcessingMode::SecureAnimated});
+  ASSERT_FALSE(parsed.hasError());
+  auto secure = std::move(parsed).result();
+  const auto target = secure.querySelector("#pad");
+  ASSERT_TRUE(target.has_value());
+  EXPECT_FALSE(secure.dispatchMouseEvent(svg::EventType::Click, *target));
+}
+
+TEST(AsyncSVGDocumentTest, CapturedMouseTargetsStayWithTheirDisplayedGeometry) {
+  constexpr std::string_view source = R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16">
+      <rect id="moving" width="4" height="16" fill="red">
+        <animate attributeName="x" from="0" to="12" dur="1s" fill="freeze"/>
+      </rect>
+    </svg>)svg";
+  AsyncSVGDocument doc;
+  ASSERT_TRUE(doc.loadFromString(source));
+  svg::DonnerController controller(doc.document());
+  const auto oldFrame = controller.captureHitTest();
+  ASSERT_TRUE(oldFrame->complete());
+  const auto originalHit = oldFrame->findIntersecting(Vector2d(2, 8));
+  ASSERT_TRUE(originalHit.has_value());
+  EXPECT_TRUE(doc.setAnimationTime(1.0));
+  const auto newFrame = controller.captureHitTest();
+  EXPECT_EQ(newFrame->findIntersecting(Vector2d(2, 8)), std::nullopt);
+  EXPECT_EQ(oldFrame->findIntersecting(Vector2d(2, 8)), originalHit);
+  EXPECT_EQ(newFrame->findIntersecting(Vector2d(14, 8)), originalHit);
+}
+
+TEST(AsyncSVGDocumentTest, CapturedMouseBudgetRejectsTheWholeSnapshot) {
+  AsyncSVGDocument doc;
+  ASSERT_TRUE(doc.loadFromString(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16">
+      <rect width="16" height="16" fill="red"/>
+      <circle cx="8" cy="8" r="4" fill="blue"/>
+    </svg>)svg"));
+  const auto access = doc.document().writeAccess();
+  svg::components::RenderingContext context(access.registry());
+  ASSERT_TRUE(context.captureHitGeometry().has_value());
+  EXPECT_EQ(context.captureHitGeometry(1), std::nullopt);
+  EXPECT_EQ(context.captureHitGeometry(65536, 0), std::nullopt);
 }
 
 TEST(AsyncSVGDocumentTest, SuccessfulParsePublishesWarnings) {

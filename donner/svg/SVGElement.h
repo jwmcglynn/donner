@@ -140,10 +140,7 @@ public:
   }
 
   /// Acquire batched write access to this anchor's document.
-  DocumentMutationBatch mutationBatch(bool commitOnScopeExit = true) const {
-    UTILS_RELEASE_ASSERT_MSG(documentHandle_, "SVGElement has no document state");
-    return DocumentMutationBatch(*documentHandle_, commitOnScopeExit);
-  }
+  DocumentMutationBatch mutationBatch(bool commitOnScopeExit = true) const;
 
   /// Assert that legacy raw ECS access is scoped when required by the document mode.
   void assertScopedEntityHandleAccessAllowed() const;

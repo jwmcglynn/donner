@@ -145,6 +145,7 @@ TEST(PropertyRegistry, PropertyNamesExposeCssRegistryKeys) {
   EXPECT_THAT(PropertyRegistry::propertyNames(), Contains(std::string_view("fill")));
   EXPECT_THAT(PropertyRegistry::propertyNames(), Contains(std::string_view("flood-color")));
   EXPECT_THAT(PropertyRegistry::propertyNames(), Contains(std::string_view("stop-color")));
+  EXPECT_THAT(PropertyRegistry::propertyNames(), Contains(std::string_view("lighting-color")));
   EXPECT_THAT(PropertyRegistry::propertyNames(), Contains(std::string_view("mix-blend-mode")));
   EXPECT_THAT(PropertyRegistry::propertyNames(), Contains(std::string_view("marker")));
 
@@ -2241,6 +2242,12 @@ TEST(PropertyRegistry, BaselineShiftSpacingAndDasharray) {
 
   {
     PropertyRegistry registry;
+    registry.parseStyle("stroke-dasharray: none");
+    EXPECT_THAT(registry.strokeDasharray.get(), Optional(testing::IsEmpty()));
+  }
+
+  {
+    PropertyRegistry registry;
     css::Declaration declaration = css::CSS::ParseStyleAttribute("stroke-dasharray: 1px foo").at(0);
     EXPECT_THAT(registry.parseProperty(declaration, Specificity()),
                 ParseErrorIs("Unexpected token in dasharray"));
@@ -2289,9 +2296,27 @@ TEST(PropertyRegistry, CascadePriorityImportantResourceColorsUseSelectorRankInBo
 
 TEST(PropertyRegistry, ResourceColorStyleParsingExposesTypedValues) {
   PropertyRegistry registry;
-  registry.parseStyle("flood-color: red; stop-color: lime");
+  registry.parseStyle("flood-color: red; stop-color: lime; lighting-color: blue");
   EXPECT_THAT(registry.floodColor.get(), Optional(Color(RGBA(255, 0, 0, 255))));
   EXPECT_THAT(registry.stopColor.get(), Optional(Color(RGBA(0, 255, 0, 255))));
+  EXPECT_THAT(registry.lightingColor.get(), Optional(Color(RGBA(0, 0, 255, 255))));
+}
+
+TEST(PropertyRegistry, LightingColorPreservesOriginsAndExplicitInheritance) {
+  PropertyRegistry registry;
+  EXPECT_THAT(registry.lightingColor.get(), Optional(Color(RGBA(255, 255, 255, 255))));
+  EXPECT_THAT(registry.parsePresentationAttribute("lighting-color", "red"), ParseResultIs(true));
+  registry.parseStyle("lighting-color: blue !important");
+  EXPECT_THAT(registry.parsePresentationAttribute("lighting-color", "lime"), ParseResultIs(true));
+  EXPECT_THAT(registry.lightingColor.get(), Optional(Color(RGBA(0, 0, 255, 255))));
+  registry.clearStyleAttributeProperties();
+  EXPECT_THAT(registry.lightingColor.get(), Optional(Color(RGBA(0, 255, 0, 255))));
+  PropertyRegistry child;
+  EXPECT_THAT(child.inheritFrom(registry).lightingColor.get(),
+              Optional(Color(RGBA(255, 255, 255, 255))));
+  EXPECT_THAT(child.parsePresentationAttribute("lighting-color", "inherit"), ParseResultIs(true));
+  EXPECT_THAT(child.inheritFrom(registry).lightingColor.get(),
+              Optional(Color(RGBA(0, 255, 0, 255))));
 }
 
 TEST(PropertyRegistry, ResourceColorInlineStylesPreserveAttributeUpdatesAndClearing) {

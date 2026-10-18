@@ -184,6 +184,7 @@ donner_perf_sensitive_cc_library(
         "//donner/svg",
         "//donner/svg/components:attached_id_lookup",
         "//donner/svg/components:font_resource_graph",
+        "//donner/svg/components/animation:value_sampler",
         "//donner/svg/components/filter:computed_filter_resource_budget",
         "//donner/svg/renderer/common",
     ] + select({
@@ -240,6 +241,17 @@ donner_perf_sensitive_cc_library(
     alwayslink = True,  # link-order independence (#665)
 )
 
+donner_cc_library(
+    name = "filter_region_context",
+    hdrs = ["FilterRegionContext.h"],
+    visibility = ["//donner/svg/renderer:__subpackages__"],
+    deps = [
+        "//donner/base",
+        "//donner/svg/components/animation:value_sampler",
+        "//donner/svg/components/filter:components",
+    ],
+)
+
 donner_perf_sensitive_cc_library(
     name = "filter_graph_executor",
     srcs = ["FilterGraphExecutor.cc"],
@@ -251,6 +263,7 @@ donner_perf_sensitive_cc_library(
     # //donner/svg/renderer:geode_excludes_tiny_skia_audit.
     visibility = ["//donner/svg/renderer:__subpackages__"],
     deps = [
+        ":filter_region_context",
         ":image_sampling",
         ":pixel_format_utils",
         ":tiny_skia_deps",
@@ -318,8 +331,18 @@ donner_cc_library(
 
 donner_perf_sensitive_cc_library(
     name = "rendering_context",
-    srcs = ["RenderingContext.cc"],
-    hdrs = ["RenderingContext.h"],
+    srcs = [
+        "AnimationAttributes.cc",
+        "AnimationPresentation.cc",
+        "AnimationReferences.cc",
+        "RenderingContext.cc",
+    ],
+    hdrs = [
+        "AnimationAttributes.h",
+        "AnimationPresentation.h",
+        "AnimationReferences.h",
+        "RenderingContext.h",
+    ],
     defines = select({
         ":text_enabled": ["DONNER_TEXT_ENABLED"],
         "//conditions:default": [],
@@ -337,6 +360,7 @@ donner_perf_sensitive_cc_library(
         "//donner/svg/components/animation:animation_system",
         "//donner/svg/components/animation:components",
         "//donner/svg/components/filter:filter_system",
+        "//donner/svg/components/text:text_invalidation",
         "//donner/svg/core",
         "//donner/svg/parser:parser_core",
     ] + select({

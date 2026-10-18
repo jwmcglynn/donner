@@ -5,6 +5,7 @@
 #include "donner/svg/components/RenderingBehaviorComponent.h"
 #include "donner/svg/components/paint/PaintSystem.h"
 #include "donner/svg/components/paint/StopComponent.h"
+#include "donner/svg/components/style/StyleSystem.h"
 #include "donner/svg/renderer/RenderingContext.h"
 
 namespace donner::svg {
@@ -35,7 +36,10 @@ void SVGStopElement::setStopColor(css::Color value) {
 void SVGStopElement::setStopOpacity(double value) {
   assert(value >= 0.0 && value <= 1.0);
 
-  auto mutation = mutationScope([this]() { invalidate(); });
+  auto mutation = mutationScope([this]() {
+    components::StyleSystem().invalidateComputed(handle_);
+    invalidate();
+  });
   DocumentWriteAccess& access = mutation.access();
   handle_.get_or_emplace<components::StopComponent>(access).properties.stopOpacity.set(
       value, css::Specificity::Override());

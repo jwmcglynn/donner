@@ -14,6 +14,7 @@
 #include <emscripten.h>
 
 #include "donner/base/AsyncifySuspendProbe.h"
+#include "donner/editor/FrameCallbackAdmission.h"
 #include "donner/editor/WholeAppWorkerBridge.h"
 #include "donner/gpu/browser/BrowserGpuOwner.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
@@ -96,7 +97,9 @@ std::string ScopedImguiIniPath() {
 }
 #endif
 
-void RunEditorFrame(donner::editor::gui::EditorWindow& window, donner::editor::EditorShell& shell) {
+void RunEditorFrame(
+    donner::editor::gui::EditorWindow& window, donner::editor::EditorShell& shell,
+    donner::editor::EditorFrameKind frameKind = donner::editor::EditorFrameKind::Scheduled) {
 #ifndef __EMSCRIPTEN__
   // Desktop frames block here until input or the shell's idle timer. The
   // browser build must NOT: its scheduler is the animation-frame tick that
@@ -130,6 +133,7 @@ void RunEditorFrame(donner::editor::gui::EditorWindow& window, donner::editor::E
   }
   {
     ZoneScopedN("shell.runFrame");
+    shell.setNextFrameKind(frameKind);
     shell.runFrame();
   }
   {
@@ -142,7 +146,8 @@ void RunEditorFrame(donner::editor::gui::EditorWindow& window, donner::editor::E
 #ifdef __EMSCRIPTEN__
 struct WasmEditorLoopState {
   using RenderFrameCallback = void (*)(donner::editor::gui::EditorWindow&,
-                                       donner::editor::EditorShell&);
+                                       donner::editor::EditorShell&,
+                                       donner::editor::EditorFrameKind);
 
   std::unique_ptr<donner::editor::gui::EditorWindow> window;
   std::unique_ptr<donner::editor::EditorShell> shell;
@@ -204,7 +209,9 @@ void RunWasmEditorFrame(void* userdata, bool forceFrame) {
   // A nested frame would call ImGui::NewFrame() twice without an intervening
   // Render() and recurse until the JS stack overflows. Drop that callback; the
   // active frame will finish and the browser will schedule the next one.
-  if (!CanRunWasmEditorFrame(userdata)) {
+  if (!donner::editor::whole_app_worker::RecordFrameAdmission(
+          forceFrame, state->frameActive,
+          donner::gpu::browser::IsBrowserGpuOwnerDispatchActive())) {
     return;
   }
   if (state->window->shouldClose()) {
@@ -244,6 +251,7 @@ void RunWasmEditorFrame(void* userdata, bool forceFrame) {
   const bool timerDue = state->nextIdleWakeAtMs.has_value() && nowMs >= *state->nextIdleWakeAtMs;
   if (!editorRequested && !browserRequested && !timerDue) {
     // Idle completion confirmation can yield to the browser and deliver another scheduler callback.
+    donner::editor::whole_app_worker::RecordFrameOutcome(forceFrame, false);
     state->window->pollIdleGpu();
     return;
   }
@@ -255,13 +263,17 @@ void RunWasmEditorFrame(void* userdata, bool forceFrame) {
   // canvas in the same pass, so there is no frame whose only work lives elsewhere: skipping the
   // UI pass would also skip the document. The presentation-only frame the browser build used to
   // run existed purely because the document had its own canvas.
-  state->renderFrame(*state->window, *state->shell);
+  state->renderFrame(*state->window, *state->shell,
+                     forceFrame ? donner::editor::EditorFrameKind::Event
+                                : donner::editor::EditorFrameKind::Scheduled);
+  donner::editor::whole_app_worker::RecordFrameOutcome(forceFrame, true);
   RecordWasmFrameLoopSample(triggerBits, emscripten_get_now() - frameStartMs);
+  std::optional<double> nextDeadlineMs;
   if (const std::optional<float> wakeSeconds = state->shell->nextIdleWakeSeconds()) {
-    state->nextIdleWakeAtMs = emscripten_get_now() + std::max(0.0f, *wakeSeconds) * 1000.0;
-  } else {
-    state->nextIdleWakeAtMs.reset();
+    nextDeadlineMs = emscripten_get_now() + std::max(0.0f, *wakeSeconds) * 1000.0;
   }
+  state->nextIdleWakeAtMs = donner::editor::NextScheduledFrameDeadline(state->nextIdleWakeAtMs,
+                                                                       nextDeadlineMs, forceFrame);
 }
 #endif
 

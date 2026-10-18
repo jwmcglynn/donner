@@ -78,6 +78,7 @@ donner_cc_library(
     name = "parser_core",
     srcs = [
         "AngleParser.cc",
+        "AnimationAttributeParser.cc",
         "ClockValueParser.cc",
         "CssTransformParser.cc",
         "LengthPercentageParser.cc",
@@ -90,6 +91,7 @@ donner_cc_library(
     ],
     hdrs = [
         "AngleParser.h",
+        "AnimationAttributeParser.h",
         "ClockValueParser.h",
         "CssTransformParser.h",
         "LengthPercentageParser.h",
@@ -105,6 +107,7 @@ donner_cc_library(
     deps = [
         "//donner/base",
         "//donner/base/parser",
+        "//donner/base/xml/components",
         "//donner/css:core",
         "//donner/svg/components/animation:components",
         "//donner/svg/core",
@@ -116,6 +119,7 @@ donner_cc_test(
     srcs = [
         "tests/AngleParser_tests.cc",
         "tests/AnimateElement_tests.cc",
+        "tests/AnimateMotionElement_tests.cc",
         "tests/AnimateTransformElement_tests.cc",
         "tests/AttributeParser_tests.cc",
         "tests/ClockValueParser_tests.cc",
@@ -147,6 +151,7 @@ donner_cc_test(
         "//donner/css/parser",
         "//donner/svg/components/animation:animation_system",
         "//donner/svg/components/animation:components",
+        "//donner/svg/components/animation:value_sampler",
         "//donner/svg/core/tests:core_test_utils",
         "//donner/svg/renderer:renderer_utils",
         "@com_google_gtest//:gtest_main",
@@ -236,6 +241,7 @@ donner_cc_fuzzer(
     deps = [
         ":parser",
         "//donner/svg/components/animation:animation_system",
+        "//donner/svg/components/style:style_system",
     ],
 )
 
@@ -304,5 +310,25 @@ donner_cc_fuzzer(
     deps = [
         ":parser_core",
         "//donner/css/parser",
+    ],
+)
+
+donner_cc_fuzzer(
+    name = "animation_timing_fuzzer",
+    srcs = ["tests/AnimationTiming_fuzzer.cc"],
+    corpus = "tests/animation_timing_corpus",
+    deps = [
+        ":parser",
+        "//donner/svg/components/animation:animation_system",
+    ],
+)
+
+donner_cc_fuzzer(
+    name = "animation_motion_fuzzer",
+    srcs = ["tests/AnimationMotion_fuzzer.cc"],
+    corpus = "tests/animation_motion_corpus",
+    deps = [
+        ":parser",
+        "//donner/svg/components/animation:animation_system",
     ],
 )

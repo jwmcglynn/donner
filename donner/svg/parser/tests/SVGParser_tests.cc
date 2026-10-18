@@ -715,19 +715,19 @@ TEST(SVGParser, ForeignNamespaceSubtreeExceedingTreeNodeCapIsRejected) {
   EXPECT_THAT(result, ParseErrorIs(testing::HasSubstr("count exceeded")));
 }
 
-TEST(SVGParser, ExperimentalElementsRequireOptIn) {
+TEST(SVGParser, AnimationElementsDoNotRequireExperimentalOptIn) {
   const std::string_view source(
       R"(<svg xmlns="http://www.w3.org/2000/svg"><animate id="a" attributeName="x"/></svg>)");
 
   {
-    // Without the experimental option, <animate> parses as an unknown element.
+    // Animation elements are enabled by the default parser.
     ParseWarningSink warnings;
     auto result = SVGParser::ParseSVG(source, warnings);
     ASSERT_THAT(result, NoParseError());
 
     auto element = result.result().querySelector("#a");
     ASSERT_TRUE(element.has_value());
-    EXPECT_EQ(element->type(), ElementType::Unknown);
+    EXPECT_EQ(element->type(), ElementType::Animate);
   }
 
   {

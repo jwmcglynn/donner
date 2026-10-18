@@ -31,6 +31,8 @@
 #include "donner/svg/components/RenderingBehaviorComponent.h"
 #include "donner/svg/components/RenderingInstanceComponent.h"
 #include "donner/svg/components/SVGDocumentContext.h"
+#include "donner/svg/components/animation/AnimationResourceBudget.h"
+#include "donner/svg/components/animation/AnimationValueSampler.h"
 #include "donner/svg/components/filter/ComputedFilterResourceBudget.h"
 #include "donner/svg/components/filter/FilterComponent.h"
 #include "donner/svg/components/layout/LayoutSystem.h"
@@ -43,6 +45,7 @@
 #include "donner/svg/components/resources/ResourceManagerContext.h"
 #include "donner/svg/components/shadow/ComputedShadowTreeComponent.h"
 #include "donner/svg/components/shadow/ShadowBranch.h"
+#include "donner/svg/components/shadow/ShadowEntityComponent.h"
 #include "donner/svg/components/shadow/ShadowTreeComponent.h"
 #include "donner/svg/components/shape/ComputedPathComponent.h"
 #include "donner/svg/components/shape/ShapeSystem.h"
@@ -84,6 +87,8 @@ struct RendererDriverTextFrameCache {
 
   using Roots = std::unordered_map<Entity, Root>;
   std::unordered_map<Registry*, Roots> roots;
+  std::unordered_map<Registry*, std::unordered_map<Entity, std::optional<TextStyleContext>>>
+      shadowStyles;
 
   // A pattern or marker can revisit text in the same registry with a different paint context.
   // Keep its preparations separate without evicting the caller's text between effect runs.
@@ -176,6 +181,9 @@ private:
 
 bool HasCompleteFragmentRange(const Registry& registry, Entity target,
                               const components::RenderingInstanceComponent& instance) {
+  if (instance.subtreeLastEntity != entt::null) {
+    return registry.valid(instance.subtreeLastEntity);
+  }
   if (instance.subtreeInfo) {
     return instance.subtreeInfo->firstRenderedEntity == target &&
            registry.valid(instance.subtreeInfo->lastRenderedEntity);
@@ -492,6 +500,13 @@ SpanLayerOwnership ResolveSpanLayerOwnership(Registry& registry, Entity textRoot
   return ownership;
 }
 
+/// Resolve an instance style entity to its authored text data.
+/// @param registry Document storage. @param styleEntity Rendered instance entity.
+Entity AuthoredTextEntity(Registry& registry, Entity styleEntity) {
+  const auto* shadow = registry.try_get<components::ShadowEntityComponent>(styleEntity);
+  return shadow ? shadow->lightEntity : styleEntity;
+}
+
 /// Resolves renderer-facing per-span style properties from each span's sourceEntity.
 /// Layout-facing span state is delegated to TextEngine.
 ///
@@ -508,10 +523,11 @@ void resolvePerSpanStyles(Registry& registry, components::ComputedTextComponent&
                           EntityHandle textRootHandle,
                           const components::ResolvedPaintServer& contextFill,
                           const components::ResolvedPaintServer& contextStroke,
-                          bool spansHaveOwnEffectInstances, bool refreshLayoutAndOwnership) {
+                          bool spansHaveOwnEffectInstances, bool refreshLayoutAndOwnership,
+                          const TextStyleContext* styleContext = nullptr) {
   if (refreshLayoutAndOwnership) {
     if (auto* textEngine = registry.ctx().find<TextEngine>()) {
-      textEngine->resolvePerSpanLayoutStyles(textRootHandle, text);
+      textEngine->resolvePerSpanLayoutStyles(textRootHandle, text, styleContext);
     }
   }
 
@@ -542,12 +558,16 @@ void resolvePerSpanStyles(Registry& registry, components::ComputedTextComponent&
     }
 
     const Box2d viewBox =
-        textRootHandle.registry() ? components::LayoutSystem().getViewBox(textRootHandle) : Box2d();
+        textRootHandle.registry()
+            ? components::LayoutSystem().getViewBox(
+                  styleContext ? EntityHandle(registry, styleContext->rootEntity) : textRootHandle)
+            : Box2d();
     const FontMetrics baseFm = FontMetrics::DefaultsWithFontSize(12.0);
 
     // Walk up to the nearest ancestor with computed style so inherited paint and decoration
     // continue to work for nested tspans with no local ComputedStyleComponent.
-    entt::entity styleEntity = span.sourceEntity;
+    entt::entity styleEntity =
+        styleContext ? styleContext->styleEntityFor(span.sourceEntity) : span.sourceEntity;
     auto* style = registry.try_get<components::ComputedStyleComponent>(styleEntity);
     while ((!style || !style->properties) &&
            registry.all_of<donner::components::TreeComponent>(styleEntity)) {
@@ -591,11 +611,13 @@ void resolvePerSpanStyles(Registry& registry, components::ComputedTextComponent&
 
       Entity decorationPaintEntity = entt::null;
       Entity nearestTextStyleEntity =
-          registry.all_of<components::TextComponent>(styleEntity) ? styleEntity : entt::null;
+          registry.all_of<components::TextComponent>(AuthoredTextEntity(registry, styleEntity))
+              ? styleEntity
+              : entt::null;
 
       Entity walkEntity = styleEntity;
       while (walkEntity != entt::null) {
-        if (registry.all_of<components::TextComponent>(walkEntity)) {
+        if (registry.all_of<components::TextComponent>(AuthoredTextEntity(registry, walkEntity))) {
           nearestTextStyleEntity = walkEntity;
         }
 
@@ -608,7 +630,8 @@ void resolvePerSpanStyles(Registry& registry, components::ComputedTextComponent&
             ++span.decorationDeclarationCount;
 
             if (decorationPaintEntity == entt::null) {
-              decorationPaintEntity = registry.all_of<components::TextComponent>(walkEntity)
+              decorationPaintEntity = registry.all_of<components::TextComponent>(
+                                          AuthoredTextEntity(registry, walkEntity))
                                           ? walkEntity
                                           : nearestTextStyleEntity;
               if (decorationPaintEntity == entt::null) {
@@ -664,7 +687,7 @@ std::optional<PatternPlacement> ResolvePatternPlacement(
   const Box2d pathBounds =
       ref.contextRemap
           ? ref.contextRemap->contextBounds
-          : RenderingObjectBoundingBox(registry, instance.dataHandle(registry)).value_or(Box2d());
+          : RenderingObjectBoundingBox(registry, instance.styleHandle(registry)).value_or(Box2d());
 
   const bool objectBoundingBox = pattern.patternUnits == PatternUnits::ObjectBoundingBox;
   const bool patternContentObjectBoundingBox =
@@ -895,7 +918,7 @@ ResolvedClip toResolvedClip(const components::RenderingInstanceComponent& instan
           instance.styleHandle(registry).try_get<components::ComputedClipPathsComponent>()) {
     // Compute objectBoundingBox transform if needed.
     if (instance.clipPath && instance.clipPath->units == ClipPathUnits::ObjectBoundingBox) {
-      if (auto maybeBounds = RenderingObjectBoundingBox(registry, instance.dataHandle(registry))) {
+      if (auto maybeBounds = RenderingObjectBoundingBox(registry, instance.styleHandle(registry))) {
         const Box2d bounds = maybeBounds.value();
         clip.clipPathUnitsTransform =
             Transform2d::Scale(bounds.size()) * Transform2d::Translate(bounds.topLeft);
@@ -1002,13 +1025,46 @@ std::unordered_set<Entity> collectOffscreenFeImageShadowEntities(Registry& regis
   return result;
 }
 
+void SamplePreparedImageDimension(components::FilterNode& node, std::size_t index,
+                                  std::optional<Lengthd>& dimension,
+                                  const components::AnimationValueContext& context,
+                                  double defaultSize, components::AnimationResourceBudget& budget) {
+  const auto recipe = std::exchange(node.animatedRegion[index], nullptr);
+  if (!recipe || !budget.reserveContextualWork(recipe->evaluationWork)) {
+    return;
+  }
+  if (const auto sampled = components::SampleContextualLengthRecipe(
+          *recipe, dimension.value_or(Lengthd(defaultSize, Lengthd::Unit::Px)), context)) {
+    dimension = *sampled;
+  }
+}
+
+void SamplePreparedImageDimensions(const components::FilterGraph& graph,
+                                   components::FilterNode& node, Registry& registry) {
+  const Box2d region = graph.filterRegion.value_or(Box2d::FromXYWH(0, 0, 1, 1));
+  const bool objectBounds = graph.primitiveUnits == PrimitiveUnits::ObjectBoundingBox &&
+                            graph.elementBoundingBox.has_value();
+  components::AnimationValueContext context;
+  context.viewBox =
+      objectBounds ? *graph.elementBoundingBox : graph.primitiveViewport.value_or(region);
+  context.mappedLengths = true;
+  auto& budget = registry.ctx().emplace<components::AnimationResourceBudget>();
+  context.extent = Lengthd::Extent::X;
+  context.unitlessScale = objectBounds ? context.viewBox.width() : 1;
+  SamplePreparedImageDimension(node, 2, node.width, context, region.width(), budget);
+  context.extent = Lengthd::Extent::Y;
+  context.unitlessScale = objectBounds ? context.viewBox.height() : 1;
+  SamplePreparedImageDimension(node, 3, node.height, context, region.height(), budget);
+}
+
 std::optional<Vector2i> resolveFeImageRenderSize(const components::FilterGraph& filterGraph,
                                                  const components::FilterNode& node) {
   const Box2d defaultSubregion =
       filterGraph.filterRegion.value_or(Box2d::FromXYWH(0.0, 0.0, 1.0, 1.0));
   const bool isOBB = filterGraph.primitiveUnits == PrimitiveUnits::ObjectBoundingBox &&
                      filterGraph.elementBoundingBox.has_value();
-  const Box2d referenceBox = isOBB ? *filterGraph.elementBoundingBox : defaultSubregion;
+  const Box2d referenceBox = isOBB ? *filterGraph.elementBoundingBox
+                                   : filterGraph.primitiveViewport.value_or(defaultSubregion);
 
   auto resolveSize = [&](const std::optional<Lengthd>& len, Lengthd::Extent extent) -> double {
     if (!len.has_value()) {
@@ -1349,7 +1405,7 @@ std::optional<Box2d> computeFilterRegion(Registry& registry,
 
     // Mixed list with url() references: use the default filter region.
     const std::optional<Box2d> shapeBounds =
-        RenderingObjectBoundingBox(registry, instance.dataHandle(registry));
+        RenderingObjectBoundingBox(registry, instance.styleHandle(registry));
     if (!shapeBounds) {
       return std::nullopt;
     }
@@ -1367,7 +1423,7 @@ std::optional<Box2d> computeFilterRegion(Registry& registry,
 
   // Determine the bounds reference for resolving percentages.
   const Box2d shapeBounds =
-      RenderingObjectBoundingBox(registry, instance.dataHandle(registry)).value_or(Box2d());
+      RenderingObjectBoundingBox(registry, instance.styleHandle(registry)).value_or(Box2d());
 
   if (computed->filterUnits == FilterUnits::ObjectBoundingBox) {
     // In objectBoundingBox mode, x/y/width/height are fractions/percentages of the bbox.
@@ -1550,6 +1606,48 @@ void PrepareTextRoot(Registry& registry, EntityHandle textRootHandle,
 }
 #endif
 
+/// Build bounded style identities for one shadow text root, without retaining document references.
+/// @param registry Document storage. @param root Shadow root. @param text Authored spans to map.
+std::optional<TextStyleContext> BuildShadowTextStyles(
+    Registry& registry, Entity root, const components::ComputedTextComponent& text) {
+  TextStyleContext result;
+  result.rootEntity = root;
+  const std::size_t admitted = registry.view<components::ShadowEntityComponent>().size();
+  std::vector<Entity> pending{root};
+  std::size_t visited = 0;
+  while (!pending.empty()) {
+    const Entity entity = pending.back();
+    pending.pop_back();
+    if (++visited > admitted) {
+      return std::nullopt;
+    }
+    const auto* shadow = registry.try_get<components::ShadowEntityComponent>(entity);
+    if (!shadow) {
+      return std::nullopt;
+    }
+    if (entity != root && registry.any_of<components::TextRootComponent>(shadow->lightEntity)) {
+      continue;
+    }
+    if (!result.entities.emplace(shadow->lightEntity, entity).second) {
+      return std::nullopt;
+    }
+    const auto& tree = registry.get<donner::components::TreeComponent>(entity);
+    for (Entity child = tree.firstChild(); child != entt::null;
+         child = registry.get<donner::components::TreeComponent>(child).nextSibling()) {
+      if (pending.size() >= admitted) {
+        return std::nullopt;
+      }
+      pending.push_back(child);
+    }
+  }
+  for (const auto& span : text.spans) {
+    if (span.sourceEntity != entt::null && !result.entities.contains(span.sourceEntity)) {
+      return std::nullopt;
+    }
+  }
+  return result;
+}
+
 /**
  * @brief Draw the spans of \p textRootEntity that \p instance is responsible for.
  *
@@ -1620,10 +1718,25 @@ void DrawInstanceText(RendererInterface& renderer, Registry& registry,
 #else
   (void)textFrameCache;
 #endif
+  const TextStyleContext* styleContext = nullptr;
+  if (!spansHaveOwnEffectInstances) {
+    auto [found, inserted] = textFrameCache.shadowStyles[&registry].try_emplace(entity);
+    if (inserted) {
+      found->second = BuildShadowTextStyles(registry, entity, *text);
+    }
+    if (!found->second) {
+      return;
+    }
+    styleContext = &*found->second;
+    textParams.viewBox = components::LayoutSystem().getViewBox(EntityHandle(registry, entity));
+    // Each instance can shape differently from the original text's cached geometry.
+    textParams.textRootEntity = entt::null;
+  }
   ++textPreparationStats.fullElementStylePasses;
   textPreparationStats.spanStyleVisits += text->spans.size();
   resolvePerSpanStyles(registry, *text, textRootHandle, paint.fill, paint.stroke,
-                       spansHaveOwnEffectInstances, /*refreshLayoutAndOwnership=*/true);
+                       spansHaveOwnEffectInstances, /*refreshLayoutAndOwnership=*/true,
+                       styleContext);
   renderer.drawText(registry, *text, textParams);
 }
 
@@ -1664,28 +1777,26 @@ bool HasNeutralLeafCompositing(const components::ComputedStyleComponent& style) 
          style.properties->isolation.get().value() != Isolation::Isolate;
 }
 
-/// The paint-order slice from @p maskedEntity through the end of its mask content
-/// [@p maskFirst, @p maskLast], without offscreen feImage shadows. The mask content is traversed
-/// forward from the masked entity, as in a range draw, so the slice is empty when the mask content
-/// does not follow its entity.
+/// Collect a masked host followed by its mask content, including masks shared with an earlier host.
 std::vector<Entity> CollectMaskReplaySlice(Registry& registry, Entity maskedEntity,
                                            Entity maskFirst, Entity maskLast) {
   const std::unordered_set<Entity> feImageShadowEntities =
       collectOffscreenFeImageShadowEntities(registry);
-  std::vector<Entity> sliceEntities;
-  bool reachedMaskFirst = false;
+  std::vector<Entity> sliceEntities{maskedEntity};
   RenderingInstanceView view(registry);
-  while (!view.done() && view.currentEntity() != maskedEntity) {
+  while (!view.done() && view.currentEntity() != maskFirst) {
     view.advance();
   }
   for (; !view.done(); view.advance()) {
     const Entity entity = view.currentEntity();
+    if (entity == maskedEntity) {
+      return {};
+    }
     if (feImageShadowEntities.count(entity) == 0) {
       sliceEntities.push_back(entity);
     }
-    reachedMaskFirst = reachedMaskFirst || entity == maskFirst;
     if (entity == maskLast) {
-      return reachedMaskFirst ? sliceEntities : std::vector<Entity>();
+      return sliceEntities;
     }
   }
   return {};
@@ -1932,6 +2043,7 @@ void RendererDriver::drawPreparedDocument(SVGDocument& document, const RenderVie
   const components::StyleResourceBudget::ActiveRegistryScope activeRegistry(*externalUseStyleWork_,
                                                                             document.registry());
   textFrameCache_->roots.clear();
+  textFrameCache_->shadowStyles.clear();
   const components::StyleResourceBudget::OwnerScope styleWorkScope(*externalUseStyleWork_);
   components::ScopedFontResourceRender fontRenderScope(
       document.registry(),
@@ -1991,6 +2103,7 @@ void RendererDriver::drawEntityRange(Registry& registry, Entity firstEntity, Ent
   const components::StyleResourceBudget::ActiveRegistryScope activeRegistry(*externalUseStyleWork_,
                                                                             registry);
   textFrameCache_->roots.clear();
+  textFrameCache_->shadowStyles.clear();
   const components::StyleResourceBudget::OwnerScope styleWorkScope(*externalUseStyleWork_);
   components::ScopedFontResourceRender fontRenderScope(registry);
   resetOwnedSecurityBudgets();
@@ -2017,6 +2130,7 @@ bool RendererDriver::drawEntityRangeInterruptibly(Registry& registry, Entity fir
   const components::StyleResourceBudget::ActiveRegistryScope activeRegistry(*externalUseStyleWork_,
                                                                             registry);
   textFrameCache_->roots.clear();
+  textFrameCache_->shadowStyles.clear();
   const components::StyleResourceBudget::OwnerScope styleWorkScope(*externalUseStyleWork_);
   components::ScopedFontResourceRender fontRenderScope(registry);
   resetOwnedSecurityBudgets();
@@ -2072,6 +2186,7 @@ void RendererDriver::drawEntityRangeIntoCurrentFrame(Registry& registry, Entity 
   const components::StyleResourceBudget::ActiveRegistryScope activeRegistry(*externalUseStyleWork_,
                                                                             registry);
   textFrameCache_->roots.clear();
+  textFrameCache_->shadowStyles.clear();
   components::ScopedFontResourceRender fontRenderScope(registry);
   renderingSize_ = CheckedRenderingSize(viewport);
   surfaceFromCanvasTransform_ = surfaceFromCanvas;
@@ -2106,6 +2221,7 @@ bool RendererDriver::drawUnderEntityMaskIntoCurrentFrame(Registry& registry, Ent
   const components::StyleResourceBudget::ActiveRegistryScope activeRegistry(*externalUseStyleWork_,
                                                                             registry);
   textFrameCache_->roots.clear();
+  textFrameCache_->shadowStyles.clear();
   components::ScopedFontResourceRender fontRenderScope(registry);
   renderingSize_ = CheckedRenderingSize(viewport);
   surfaceFromCanvasTransform_ = surfaceFromCanvas;
@@ -2170,8 +2286,9 @@ bool RendererDriver::shouldCullEarlyLeaf(Registry& registry,
     return false;
   }
   const auto bounds = DeviceDrawableBoundsWithStroke(
-      instance.dataHandle(registry), style, ShapeNonScalingStrokeMode(instance, style),
-      instance.worldFromEntityTransform, surfaceFromCanvasTransform_);
+      components::ShapeSystem::geometryHandle(instance.styleHandle(registry)), style,
+      ShapeNonScalingStrokeMode(instance, style), instance.worldFromEntityTransform,
+      surfaceFromCanvasTransform_);
   return bounds.has_value() && ShouldCullDeviceBox(*bounds, renderingSize_);
 }
 
@@ -2318,8 +2435,8 @@ bool RendererDriver::drawPreparedEntityRange(Registry& registry, Entity firstEnt
     renderer_.setPaint(paint);
 
     if (instance.visible && !filterHidesElement) {
-      if (const auto* path =
-              instance.dataHandle(registry).try_get<components::ComputedPathComponent>()) {
+      if (const auto* path = components::ShapeSystem::geometryHandle(instance.styleHandle(registry))
+                                 .try_get<components::ComputedPathComponent>()) {
         drawPathWithPaintOrder(view, registry, instance, *path, style, paint,
                                instance.worldFromEntityTransform * surfaceFromCanvasTransform_);
       } else if (const Entity textRootEntity = InstanceTextRootEntity(registry, instance);
@@ -2520,7 +2637,8 @@ RangeBoundContribution BoundVisibleEntity(Registry& registry, Entity entity,
     return {.unknown = true};
   }
   const EntityHandle data = instance.dataHandle(registry);
-  if (const auto* path = data.try_get<components::ComputedPathComponent>()) {
+  if (const auto* path = components::ShapeSystem::geometryHandle(instance.styleHandle(registry))
+                             .try_get<components::ComputedPathComponent>()) {
     return BoundPathEntity(registry, entity, instance, style, finalTransform, *path);
   }
   if (data.try_get<components::ComputedTextComponent>()) {
@@ -2782,9 +2900,10 @@ void RendererDriver::prepareFilterGraphs(Registry& registry, std::span<const Ent
         continue;
       }
       filterGraph->filterRegion = filterRegion;
+      filterGraph->primitiveViewport = filterViewBox;
       if (filterGraph->primitiveUnits == PrimitiveUnits::ObjectBoundingBox) {
         filterGraph->elementBoundingBox =
-            RenderingObjectBoundingBox(registry, instance->dataHandle(registry));
+            RenderingObjectBoundingBox(registry, instance->styleHandle(registry));
       }
       if (filterViewBox.width() > 0 && filterViewBox.height() > 0) {
         filterGraph->userToPixelScale = Vector2d(renderingSize_.x / filterViewBox.width(),
@@ -2918,8 +3037,9 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
                       [](const DeferredPop& m) { return m.hasFilterLayer; });
       if (!insideFilterLayer) {
         if (const auto deviceBounds = DeviceDrawableBoundsWithStroke(
-                instance.dataHandle(registry), style, ShapeNonScalingStrokeMode(instance, style),
-                instance.worldFromEntityTransform, surfaceFromCanvasTransform_);
+                components::ShapeSystem::geometryHandle(instance.styleHandle(registry)), style,
+                ShapeNonScalingStrokeMode(instance, style), instance.worldFromEntityTransform,
+                surfaceFromCanvasTransform_);
             deviceBounds.has_value()) {
           cullDraw = ShouldCullDeviceBox(*deviceBounds, renderingSize_);
         }
@@ -2928,8 +3048,8 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
 
     components::ScopedFontResourceRender::recordDraw(registry, entity, cullDraw);
     if (instance.visible && !filterHidesElement && !cullDraw) {
-      if (const auto* path =
-              instance.dataHandle(registry).try_get<components::ComputedPathComponent>()) {
+      if (const auto* path = components::ShapeSystem::geometryHandle(instance.styleHandle(registry))
+                                 .try_get<components::ComputedPathComponent>()) {
         drawPathWithPaintOrder(view, registry, instance, *path, style, paint,
                                instance.worldFromEntityTransform * surfaceFromCanvasTransform_);
       } else if (const Entity textRootEntity = InstanceTextRootEntity(registry, instance);
@@ -3165,8 +3285,9 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
                       [](const DeferredPop& m) { return m.hasFilterLayer; });
       if (!insideFilterLayer) {
         if (const auto deviceBounds = DeviceDrawableBoundsWithStroke(
-                instance.dataHandle(registry), style, ShapeNonScalingStrokeMode(instance, style),
-                instance.worldFromEntityTransform, surfaceFromCanvasTransform_);
+                components::ShapeSystem::geometryHandle(instance.styleHandle(registry)), style,
+                ShapeNonScalingStrokeMode(instance, style), instance.worldFromEntityTransform,
+                surfaceFromCanvasTransform_);
             deviceBounds.has_value()) {
           cullDraw = ShouldCullDeviceBox(*deviceBounds, renderingSize_);
         }
@@ -3175,8 +3296,8 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
 
     components::ScopedFontResourceRender::recordDraw(registry, entity, cullDraw);
     if (instance.visible && !filterHidesElement && !cullDraw) {
-      if (const auto* path =
-              instance.dataHandle(registry).try_get<components::ComputedPathComponent>()) {
+      if (const auto* path = components::ShapeSystem::geometryHandle(instance.styleHandle(registry))
+                                 .try_get<components::ComputedPathComponent>()) {
         drawPathWithPaintOrder(view, registry, instance, *path, style, paint,
                                instance.worldFromEntityTransform * surfaceFromCanvasTransform_);
       } else if (const Entity textRootEntity = InstanceTextRootEntity(registry, instance);
@@ -3317,6 +3438,56 @@ void RendererDriver::applyDrawTimeContextRemaps(
 
 namespace {
 
+/// Resolve a mask region using the target's bounds and the authored mask units.
+std::optional<Box2d> MaskRegionBounds(EntityHandle target, const components::MaskComponent& mask,
+                                      const Box2d& shapeLocalBounds) {
+  const bool objectBoundingBox = mask.maskUnits == MaskUnits::ObjectBoundingBox;
+  const Box2d maskUnitsBounds =
+      objectBoundingBox ? shapeLocalBounds : components::LayoutSystem().getViewBox(target);
+
+  const Lengthd x = mask.x.value_or(Lengthd(-10.0, Lengthd::Unit::Percent));
+  const Lengthd y = mask.y.value_or(Lengthd(-10.0, Lengthd::Unit::Percent));
+  const Lengthd width = mask.width.value_or(Lengthd(120.0, Lengthd::Unit::Percent));
+  const Lengthd height = mask.height.value_or(Lengthd(120.0, Lengthd::Unit::Percent));
+
+  // In an objectBoundingBox coordinate system, unitless values are fractions of the target
+  // bounds and positions are relative to its origin. Percentages use the same origin, while
+  // absolute lengths retain their CSS pixel conversion. The default -10%/-10%/120%/120%
+  // region is real clipping state too, rather than an unbounded auto region.
+  const auto resolveMaskLength = [&](const Lengthd& length, Lengthd::Extent extent,
+                                     bool isPosition) {
+    const double extentPixels =
+        extent == Lengthd::Extent::X ? maskUnitsBounds.width() : maskUnitsBounds.height();
+    double pixels = objectBoundingBox && length.unit == Lengthd::Unit::None
+                        ? length.value * extentPixels
+                        : length.toPixels(maskUnitsBounds, FontMetrics(), extent);
+    if (objectBoundingBox && isPosition) {
+      pixels +=
+          extent == Lengthd::Extent::X ? maskUnitsBounds.topLeft.x : maskUnitsBounds.topLeft.y;
+    }
+    return pixels;
+  };
+
+  const double xPx = resolveMaskLength(x, Lengthd::Extent::X, true);
+  const double yPx = resolveMaskLength(y, Lengthd::Extent::Y, true);
+  const double wPx = resolveMaskLength(width, Lengthd::Extent::X, false);
+  const double hPx = resolveMaskLength(height, Lengthd::Extent::Y, false);
+  return Box2d::FromXYWH(xPx, yPx, wPx, hPx);
+}
+
+/// Read the mask's resolved type and color space without changing cascade behavior.
+std::pair<MaskType, ColorInterpolation> MaskPaintOptions(EntityHandle maskHandle) {
+  MaskType maskType = MaskType::Luminance;
+  ColorInterpolation colorInterpolation = ColorInterpolation::SRGB;
+  if (const auto* maskStyle = maskHandle.try_get<components::ComputedStyleComponent>();
+      maskStyle != nullptr && maskStyle->properties.has_value()) {
+    maskType = maskStyle->properties->maskType.get().value_or(MaskType::Luminance);
+    colorInterpolation =
+        maskStyle->properties->colorInterpolation.get().value_or(ColorInterpolation::SRGB);
+  }
+  return {maskType, colorInterpolation};
+}
+
 void PushMaskWithColorSpace(RendererInterface& renderer, const std::optional<Box2d>& bounds,
                             MaskType maskType, ColorInterpolation colorInterpolation) {
   if (colorInterpolation == ColorInterpolation::LinearRGB) {
@@ -3327,6 +3498,37 @@ void PushMaskWithColorSpace(RendererInterface& renderer, const std::optional<Box
 }
 
 }  // namespace
+
+void RendererDriver::renderMaskContents(RenderingInstanceView& view, Registry& registry,
+                                        const components::RenderingInstanceComponent& instance,
+                                        const components::ResolvedMask& mask,
+                                        const Box2d& shapeLocalBounds) {
+  const bool subtreeAhead =
+      registry.get<components::RenderingInstanceComponent>(mask.subtreeInfo->firstRenderedEntity)
+          .drawOrder > instance.drawOrder;
+  if (!shapeLocalBounds.isEmpty()) {
+    RendererDriverTextFrameCache::ScopedRegistryOccurrence textOccurrence(*textFrameCache_,
+                                                                          registry);
+    if (subtreeAhead) {
+      traverseRange(view, registry, mask.subtreeInfo->firstRenderedEntity,
+                    mask.subtreeInfo->lastRenderedEntity);
+    } else {
+      // Shared mask content has already passed the caller's forward-only draw cursor.
+      const RenderingInstanceView::SavedState savedPosition = view.save();
+      if (view.isFullSnapshot() && view.seek(mask.subtreeInfo->firstRenderedEntity)) {
+        traverseRange(view, registry, mask.subtreeInfo->firstRenderedEntity,
+                      mask.subtreeInfo->lastRenderedEntity);
+        view.restore(savedPosition);
+      } else {
+        RenderingInstanceView replay(registry);
+        traverseRange(replay, registry, mask.subtreeInfo->firstRenderedEntity,
+                      mask.subtreeInfo->lastRenderedEntity);
+      }
+    }
+  } else if (subtreeAhead) {
+    skipUntil(view, mask.subtreeInfo->lastRenderedEntity);
+  }
+}
 
 int RendererDriver::renderMask(RenderingInstanceView& view, Registry& registry,
                                const components::RenderingInstanceComponent& instance,
@@ -3352,7 +3554,7 @@ int RendererDriver::renderMask(RenderingInstanceView& view, Registry& registry,
   // Text geometry is not a computed path, so ask for the element's object bounding box rather than
   // the shape bounds, which would be empty for a text element or a text span.
   const Box2d shapeLocalBounds =
-      RenderingObjectBoundingBox(registry, instance.dataHandle(registry)).value_or(Box2d());
+      RenderingObjectBoundingBox(registry, instance.styleHandle(registry)).value_or(Box2d());
 
   for (const auto* m : chain) {
     if (!m->subtreeInfo || !m->reference.handle.valid()) {
@@ -3364,47 +3566,9 @@ int RendererDriver::renderMask(RenderingInstanceView& view, Registry& registry,
       continue;
     }
 
-    const bool objectBoundingBox = mc->maskUnits == MaskUnits::ObjectBoundingBox;
-    const Box2d maskUnitsBounds =
-        objectBoundingBox ? shapeLocalBounds
-                          : components::LayoutSystem().getViewBox(instance.dataHandle(registry));
-
-    const Lengthd x = mc->x.value_or(Lengthd(-10.0, Lengthd::Unit::Percent));
-    const Lengthd y = mc->y.value_or(Lengthd(-10.0, Lengthd::Unit::Percent));
-    const Lengthd width = mc->width.value_or(Lengthd(120.0, Lengthd::Unit::Percent));
-    const Lengthd height = mc->height.value_or(Lengthd(120.0, Lengthd::Unit::Percent));
-
-    // In an objectBoundingBox coordinate system, unitless values are fractions of the target
-    // bounds and positions are relative to its origin. Percentages use the same origin, while
-    // absolute lengths retain their CSS pixel conversion. The default -10%/-10%/120%/120%
-    // region is real clipping state too, rather than an unbounded auto region.
-    const auto resolveMaskLength = [&](const Lengthd& length, Lengthd::Extent extent,
-                                       bool isPosition) {
-      const double extentPixels =
-          extent == Lengthd::Extent::X ? maskUnitsBounds.width() : maskUnitsBounds.height();
-      double pixels = objectBoundingBox && length.unit == Lengthd::Unit::None
-                          ? length.value * extentPixels
-                          : length.toPixels(maskUnitsBounds, FontMetrics(), extent);
-      if (objectBoundingBox && isPosition) {
-        pixels +=
-            extent == Lengthd::Extent::X ? maskUnitsBounds.topLeft.x : maskUnitsBounds.topLeft.y;
-      }
-      return pixels;
-    };
-
-    const double xPx = resolveMaskLength(x, Lengthd::Extent::X, true);
-    const double yPx = resolveMaskLength(y, Lengthd::Extent::Y, true);
-    const double wPx = resolveMaskLength(width, Lengthd::Extent::X, false);
-    const double hPx = resolveMaskLength(height, Lengthd::Extent::Y, false);
-    const std::optional<Box2d> maskBounds = Box2d::FromXYWH(xPx, yPx, wPx, hPx);
-    MaskType maskType = MaskType::Luminance;
-    ColorInterpolation colorInterpolation = ColorInterpolation::SRGB;
-    if (const auto* maskStyle = m->reference.handle.try_get<components::ComputedStyleComponent>();
-        maskStyle != nullptr && maskStyle->properties.has_value()) {
-      maskType = maskStyle->properties->maskType.get().value_or(MaskType::Luminance);
-      colorInterpolation =
-          maskStyle->properties->colorInterpolation.get().value_or(ColorInterpolation::SRGB);
-    }
+    const std::optional<Box2d> maskBounds =
+        MaskRegionBounds(instance.dataHandle(registry), *mc, shapeLocalBounds);
+    const auto [maskType, colorInterpolation] = MaskPaintOptions(m->reference.handle);
 
     if (verbose_) {
       std::cout << "[renderMask] chain depth=" << chain.size()
@@ -3427,12 +3591,7 @@ int RendererDriver::renderMask(RenderingInstanceView& view, Registry& registry,
       surfaceFromCanvasTransform_ = userSpaceFromMaskContent * surfaceFromCanvasTransform_;
     }
 
-    if (!shapeLocalBounds.isEmpty()) {
-      traverseRange(view, registry, m->subtreeInfo->firstRenderedEntity,
-                    m->subtreeInfo->lastRenderedEntity);
-    } else {
-      skipUntil(view, m->subtreeInfo->lastRenderedEntity);
-    }
+    renderMaskContents(view, registry, instance, *m, shapeLocalBounds);
 
     surfaceFromCanvasTransform_ = savedSurfaceFromCanvas;
     renderer_.transitionMaskToContent();
@@ -3534,7 +3693,8 @@ void RendererDriver::drawPathWithPaintOrder(RenderingInstanceView& view, Registr
                                             const PaintParams& paint,
                                             const Transform2d& deviceFromLocalForShape) {
   const PaintOrder paintOrder = style.properties->paintOrder.get().value();
-  const PathShape pathShape = toPathShape(instance.dataHandle(registry), path, style);
+  const PathShape pathShape = toPathShape(
+      components::ShapeSystem::geometryHandle(instance.styleHandle(registry)), path, style);
 
   // `vector-effect: non-scaling-stroke` strokes the centerline in host (root canvas) space, so an
   // anisotropic CTM or shear cannot distort the width or dash geometry. The fill still uses the
@@ -3739,6 +3899,28 @@ void RendererDriver::drawMarkers(RenderingInstanceView& view, Registry& registry
   }
 }
 
+namespace {
+
+Vector2d MarkerDimensions(const components::ResolvedMarker& marker,
+                          const components::MarkerComponent& component, const Box2d& viewport) {
+  if (marker.animatedLengths) {
+    return {marker.animatedLengths->width, marker.animatedLengths->height};
+  }
+  return {component.markerWidth.toPixels(viewport, FontMetrics(), Lengthd::Extent::X),
+          component.markerHeight.toPixels(viewport, FontMetrics(), Lengthd::Extent::Y)};
+}
+
+Vector2d MarkerReferencePoint(const components::ResolvedMarker& marker,
+                              const components::MarkerComponent& component, const Box2d& viewport) {
+  if (marker.animatedLengths) {
+    return {marker.animatedLengths->refX, marker.animatedLengths->refY};
+  }
+  return {component.refX.toPixels(viewport, FontMetrics(), Lengthd::Extent::X),
+          component.refY.toPixels(viewport, FontMetrics(), Lengthd::Extent::Y)};
+}
+
+}  // namespace
+
 void RendererDriver::drawMarker(RenderingInstanceView& view, Registry& registry,
                                 const components::RenderingInstanceComponent& instance,
                                 const components::ResolvedMarker& marker,
@@ -3756,24 +3938,15 @@ void RendererDriver::drawMarker(RenderingInstanceView& view, Registry& registry,
   }
 
   components::LayoutSystem layoutSystem;
-  // markerWidth/markerHeight percentages resolve against the viewport of the *element referencing
-  // the marker* (the painted shape's nearest ancestor viewport), **not** the marker's own
-  // viewBox. Use `instance.dataHandle` (the painted entity) - `getViewBox(markerHandle)` was wrong
-  // for the common case of markers defined in a root `<defs>` and referenced from a nested `<svg>`
-  // viewport (PR #611 Codex P1). markerWidth resolves against the width (Extent::X) and
-  // markerHeight against the height (Extent::Y).
+  // Marker percentages use the referencing shape's viewport, including nested SVG instances.
   const Box2d markerPercentViewport = layoutSystem.getViewBox(instance.dataHandle(registry));
-  const FontMetrics markerFontMetrics;
-  const double markerWidthPx = markerComponent->markerWidth.toPixels(
-      markerPercentViewport, markerFontMetrics, Lengthd::Extent::X);
-  const double markerHeightPx = markerComponent->markerHeight.toPixels(
-      markerPercentViewport, markerFontMetrics, Lengthd::Extent::Y);
+  const Vector2d dimensions = MarkerDimensions(marker, *markerComponent, markerPercentViewport);
 
-  if (markerWidthPx <= 0.0 || markerHeightPx <= 0.0) {
+  if (dimensions.x <= 0.0 || dimensions.y <= 0.0) {
     return;
   }
 
-  const Box2d markerSize = Box2d::FromXYWH(0, 0, markerWidthPx, markerHeightPx);
+  const Box2d markerSize = Box2d::FromXYWH(0, 0, dimensions.x, dimensions.y);
 
   const std::optional<Box2d> markerViewBox =
       layoutSystem.overridesViewBox(markerHandle)
@@ -3786,10 +3959,8 @@ void RendererDriver::drawMarker(RenderingInstanceView& view, Registry& registry,
   // back to the referencing element's viewport - the same basis markerWidth/markerHeight use, and
   // the behavior the resvg reference expects (e.g. painting/marker/percent-values).
   const Box2d refPercentViewport = markerViewBox.value_or(markerPercentViewport);
-  const double refXPx =
-      markerComponent->refX.toPixels(refPercentViewport, markerFontMetrics, Lengthd::Extent::X);
-  const double refYPx =
-      markerComponent->refY.toPixels(refPercentViewport, markerFontMetrics, Lengthd::Extent::Y);
+  const Vector2d referencePoint =
+      MarkerReferencePoint(marker, *markerComponent, refPercentViewport);
   const PreserveAspectRatio preserveAspectRatio =
       markerHandle.get<components::PreserveAspectRatioComponent>().preserveAspectRatio;
 
@@ -3805,8 +3976,9 @@ void RendererDriver::drawMarker(RenderingInstanceView& view, Registry& registry,
   const Transform2d markerUnitsFromViewBox =
       preserveAspectRatio.elementContentFromViewBoxTransform(markerSize, markerViewBox);
 
-  const Transform2d markerOffsetFromVertex = Transform2d::Translate(
-      -refXPx * markerUnitsFromViewBox.data[0], -refYPx * markerUnitsFromViewBox.data[3]);
+  const Transform2d markerOffsetFromVertex =
+      Transform2d::Translate(-referencePoint.x * markerUnitsFromViewBox.data[0],
+                             -referencePoint.y * markerUnitsFromViewBox.data[3]);
 
   const Transform2d vertexFromEntity = Transform2d::Scale(markerScale) *
                                        Transform2d::Rotate(angleRadians) *
@@ -3872,6 +4044,7 @@ void RendererDriver::prepareSubDocument(SVGDocument& document) {
   Registry& registry = document.registry();
   // One child registry can be traversed by several external uses with different context paints.
   textFrameCache_->roots.erase(&registry);
+  textFrameCache_->shadowStyles.erase(&registry);
   const auto* state = registry.ctx().find<components::RenderTreeState>();
   if (!state || !state->hasBeenBuilt || document.hasPendingRenderInvalidation()) {
     components::InvalidateFontResourcePreparation(registry);
@@ -3973,28 +4146,29 @@ void InvalidateExternalUseDerivedState(Registry& registry) {
 class ExternalUseStyleScope {
 public:
   ExternalUseStyleScope(Registry& child, Entity root, Registry& host,
-                        const PropertyRegistry& properties,
+                        const components::ComputedStyleComponent& style,
                         const components::ResolvedPaintServer& fill,
                         const components::ResolvedPaintServer& stroke,
                         std::shared_ptr<components::StyleResourceBudget> work)
       : registry_(child),
         hostLease_(
             EntityHandle(host, host.ctx().get<components::SVGDocumentContext>().rootEntity)) {
-    if (child.ctx().contains<components::ExternalUseStyleContext>() ||
+    if (!style.properties || child.ctx().contains<components::ExternalUseStyleContext>() ||
         !work->reserveExternalInstanceWork(
             child.storage<donner::components::TreeComponent>().size())) {
       return;
     }
     const auto* context = child.ctx().find<components::DocumentResourceFamilyContext>();
     auto family = context ? context->budget : nullptr;
+    const auto& properties = *style.properties;
     const std::size_t bytes = properties.complexPropertyBytes();
     if (bytes > components::StyleResourceBudget::kMaximumComplexPropertyBytes ||
         (family &&
          !family->reserve(components::DocumentResourceFamilyBudget::Kind::ComputedStyle, bytes))) {
       return;
     }
-    child.ctx().emplace<components::ExternalUseStyleContext>(root, properties, fill, stroke, family,
-                                                             bytes, std::move(work));
+    child.ctx().emplace<components::ExternalUseStyleContext>(
+        root, properties, style.resourceOpacities, fill, stroke, family, bytes, std::move(work));
     retainPaintOwner(fill, resourceLeases_[0]);
     retainPaintOwner(stroke, resourceLeases_[1]);
     InvalidateExternalUseDerivedState(child);
@@ -4056,12 +4230,13 @@ void RendererDriver::drawExternalUse(SVGDocument& subDocument, std::string_view 
   if (root == entt::null || !style.properties) {
     return;
   }
-  ExternalUseStyleScope scope(child, root, hostRegistry, *style.properties, instance.resolvedFill,
+  ExternalUseStyleScope scope(child, root, hostRegistry, style, instance.resolvedFill,
                               instance.resolvedStroke, externalUseStyleWork_);
   if (!scope.installed()) {
     return;
   }
   textFrameCache_->roots.erase(&child);
+  textFrameCache_->shadowStyles.erase(&child);
   std::optional<components::RenderingContext::InitialPaintState> previousPaint;
   if (const auto* context = child.ctx().find<components::RenderingContext>()) {
     previousPaint = context->initialPaintState();
@@ -4086,6 +4261,7 @@ void RendererDriver::drawExternalUse(SVGDocument& subDocument, std::string_view 
     clearSubDocumentContextPaint(subDocument);
   }
   textFrameCache_->roots.erase(&child);
+  textFrameCache_->shadowStyles.erase(&child);
 }
 
 void RendererDriver::drawSubDocument(SVGDocument& subDocument, const Box2d& viewportBounds,
@@ -4224,7 +4400,9 @@ void RendererDriver::drawAdmittedSubDocumentElement(SVGDocument& subDocument,
 
   // Determine the subtree range: from the target entity to its last descendant.
   const Entity lastEntity =
-      targetInstance->subtreeInfo ? targetInstance->subtreeInfo->lastRenderedEntity : targetEntity;
+      targetInstance->subtreeLastEntity != entt::null ? targetInstance->subtreeLastEntity
+      : targetInstance->subtreeInfo ? targetInstance->subtreeInfo->lastRenderedEntity
+                                    : targetEntity;
 
   // Apply opacity as an isolated layer if needed.
   const bool needsOpacityLayer = opacity < 1.0;
@@ -4282,6 +4460,7 @@ void RendererDriver::preRenderSvgFeImages(components::FilterGraph& filterGraph, 
       continue;
     }
 
+    SamplePreparedImageDimensions(filterGraph, node, registry);
     SVGDocument subDoc = SVGDocument::CreateFromHandle(imageNode->svgSubDocument);
     const std::optional<Vector2i> renderSize = resolveFeImageRenderSize(filterGraph, node);
     const Vector2i targetSize = renderSize.value_or(subDoc.canvasSize());

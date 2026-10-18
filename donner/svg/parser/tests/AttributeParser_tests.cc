@@ -2102,9 +2102,10 @@ TEST(AttributeParserTest, AnimateValueListEdgeCases) {
   const auto& a2 = QueryComponent<components::AnimateValueComponent>(document, "#a2");
   EXPECT_THAT(a2.keyTimes, testing::ElementsAre(0.0, 0.25, 0.5, 1.0));
 
-  // Non-numeric groups contribute no values.
+  // A malformed entry rejects the entire key-time list.
   const auto& a3 = QueryComponent<components::AnimateValueComponent>(document, "#a3");
-  EXPECT_THAT(a3.keyTimes, testing::ElementsAre(0.0, 1.0));
+  EXPECT_THAT(a3.keyTimes, testing::IsEmpty());
+  EXPECT_EQ(a3.valid, false);
 }
 
 TEST(AttributeParserTest, AnimationTimingAttributeEdgeCases) {
@@ -2256,6 +2257,19 @@ TEST(AttributeParserTest, FilterIntegerAttributesRejectNonFiniteNumbers) {
   EXPECT_EQ(convolve.targetX, std::nullopt);
   EXPECT_EQ(convolve.targetY, std::nullopt);
   EXPECT_EQ(QueryComponent<components::FETurbulenceComponent>(document, "#turb").numOctaves, 1);
+}
+
+TEST(AttributeParserTest, TransferFunctionsParseCommonIdentityAttributes) {
+  for (const std::string tag : {"feFuncR", "feFuncG", "feFuncB", "feFuncA"}) {
+    SCOPED_TRACE(tag);
+    auto document = ParseSVGExperimental(
+        "<svg xmlns='http://www.w3.org/2000/svg'><filter><feComponentTransfer><" + tag +
+        " id='channel' class='transfer' type='linear'/></feComponentTransfer></filter></svg>");
+    auto element = document.querySelector(tag);
+    ASSERT_THAT(element, testing::Ne(std::nullopt));
+    EXPECT_THAT(element->id().str(), testing::Eq("channel"));
+    EXPECT_THAT(element->className().str(), testing::Eq("transfer"));
+  }
 }
 
 }  // namespace donner::svg::parser

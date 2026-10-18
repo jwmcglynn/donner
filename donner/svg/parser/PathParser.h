@@ -1,7 +1,9 @@
 #pragma once
 /// @file
 
+#include <cstdint>
 #include <string_view>
+#include <vector>
 
 #include "donner/base/ParseResult.h"
 #include "donner/base/Path.h"
@@ -242,6 +244,30 @@ public:
    * @return Parsed Path and/or an error.
    */
   static ParseResult<Path> Parse(std::string_view d);
+
+  /// One authored command, before coordinate or curve normalization.
+  struct Command {
+    std::uint32_t parameterOffset = 0;  ///< First entry in CommandList::parameters.
+    std::uint8_t parameterCount = 0;    ///< Number of parameters, at most seven.
+    char letter = 0;                    ///< SVG command letter; closepath is always uppercase Z.
+  };
+
+  /// Owning command syntax; implicit repetitions are expanded, including moveto's later lineto.
+  struct CommandList {
+    std::vector<Command> commands;   ///< Authored command kinds and parameter ranges.
+    std::vector<double> parameters;  ///< Parameters before relative-coordinate conversion.
+  };
+
+  /// Maximum scalar parameters retained by ParseCommands.
+  static constexpr std::size_t kMaximumParameters = kMaximumPoints * 2;
+
+  /** Parse authored command parameters with the same grammar as Parse, without expanding geometry.
+   * The result retains relative commands, shorthand curves and arc parameters. Like Parse, it may
+   * contain a completed prefix and an error; incomplete commands are omitted.
+   * @param d SVG path data.
+   * @return Owned commands and/or an error, bounded by kMaximumCommands and kMaximumParameters.
+   */
+  static ParseResult<CommandList> ParseCommands(std::string_view d);
 };
 
 }  // namespace donner::svg::parser

@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="40" height="16" viewBox="0 0 40 16">
+  <rect width="40" height="16" fill="white" pointer-events="none"/>
+  <defs>
+    <g id="tile">
+      <rect x="2" y="2" width="4" height="4" fill="currentColor">
+        <animate attributeName="x" from="2" to="10" dur="2s" fill="freeze"/>
+      </rect>
+    </g>
+  </defs>
+  <use href="#tile" color="red"/>
+  <use href="#tile" x="20" color="blue"/>
+</svg>

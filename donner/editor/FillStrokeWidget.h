@@ -51,19 +51,20 @@ struct FillStrokeWidgetInteractionState {
 };
 
 /**
- * Resolve editability and snapshot refresh without keying drag chrome to a renderer busy bit.
+ * Resolve safe paint mutation and snapshot refresh. Renderer availability must not drive chrome
+ * tint.
  *
  * The caller reports whether its snapshot belongs to the current document and first selected
  * element, not merely whether any snapshot exists.
  *
  * @param hasDocument Whether the editor currently owns a document.
  * @param rendererBusy Whether the async renderer currently owns document access.
- * @param canvasInteractionActive Whether a canvas gesture is in progress.
+ * @param authoringSuspended Whether a canvas gesture or Preview suspends authoring.
  * @param paintSnapshotMatchesSelection Whether the cached paint belongs to the current selection.
  * @return Editability and snapshot-refresh policy for the current toolbar frame.
  */
 [[nodiscard]] FillStrokeWidgetInteractionState ResolveFillStrokeWidgetInteractionState(
-    bool hasDocument, bool rendererBusy, bool canvasInteractionActive,
+    bool hasDocument, bool rendererBusy, bool authoringSuspended,
     bool paintSnapshotMatchesSelection);
 
 /// Compute widget sub-rectangles from the widget's outer bounds.

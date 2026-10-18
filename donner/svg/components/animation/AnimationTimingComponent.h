@@ -28,8 +28,8 @@ enum class AnimationRestart : uint8_t {
  * These correspond to the SMIL timing attributes: `begin`, `dur`, `end`,
  * `repeatCount`, `repeatDur`, `fill`, `restart`, `min`, `max`.
  *
- * `begin`/`end` support offset (clock) values only. Syncbase references
- * (`id.begin`/`id.end`) are deferred.
+ * `begin`/`end` retain clock, syncbase, repeat, and event sources with signed offsets.
+ * Runtime events are retained separately so seeking can reconstruct earlier intervals.
  */
 struct AnimationTimingComponent {
   /// Raw `begin` attribute value (semicolon-separated list of time values).

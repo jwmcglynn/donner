@@ -9,8 +9,12 @@
 #include "donner/base/EcsRegistry.h"
 #include "donner/base/ParseDiagnostic.h"
 #include "donner/base/ParseWarningSink.h"
+#include "donner/base/Path.h"
+#include "donner/base/Transform.h"
 #include "donner/base/Vector2.h"
 #include "donner/svg/components/RenderingInstanceComponent.h"
+#include "donner/svg/core/HitTestMode.h"
+#include "donner/svg/renderer/AnimationPresentation.h"
 
 namespace donner::svg::components {
 
@@ -21,6 +25,32 @@ namespace donner::svg::components {
  */
 class RenderingContext {
 public:
+  /// Evaluated pointer-event geometry shared by live queries and immutable frame captures.
+  struct HitGeometry {
+    Box2d documentBounds;
+    std::optional<Box2d> textBounds;
+    Transform2d entityFromDocumentTransform;
+    FillRule fillRule = FillRule::NonZero;
+    double strokeWidth = 0.0;
+    bool testFill = false;
+    bool testStroke = false;
+    bool boundsOnly = false;
+    /// Test a point using an optional prepared path borrowed for the duration of this call.
+    /// @param point Document-space point. @param path Prepared shape path, or null for bounds.
+    bool contains(const Vector2d& point, const Path* path) const;
+  };
+  /// Owned geometry and internal target identity in front-to-back paint order.
+  struct HitRecord {
+    Entity entity = entt::null;
+    HitGeometry geometry;
+    Path path;
+  };
+  /// Capture bounded hit geometry; nullopt rejects the whole snapshot on budget exhaustion.
+  /// @param maximumRecords Lowerable instance budget, capped at 65536.
+  /// @param maximumPathBytes Lowerable path-storage budget, capped at 32 MiB.
+  std::optional<std::vector<HitRecord>> captureHitGeometry(
+      std::size_t maximumRecords = 65536, std::size_t maximumPathBytes = 32 * 1024 * 1024);
+
   /// Constructor.
   explicit RenderingContext(Registry& registry);
 
@@ -46,15 +76,18 @@ public:
    * when the document has enough elements.
    *
    * @param point Point to find the intersecting entity for
+   * @param mode Hit eligibility policy.
    */
-  Entity findIntersecting(const Vector2d& point);
+  Entity findIntersecting(const Vector2d& point, HitTestMode mode = HitTestMode::SvgPointerEvents);
 
   /**
    * Find all entities that intersect the given point, ordered front-to-back.
    *
    * @param point Point to find intersecting entities for
+   * @param mode Hit eligibility policy.
    */
-  std::vector<Entity> findAllIntersecting(const Vector2d& point);
+  std::vector<Entity> findAllIntersecting(const Vector2d& point,
+                                          HitTestMode mode = HitTestMode::SvgPointerEvents);
 
   /**
    * Find all entities whose world-space bounds intersect the given rectangle,
@@ -123,9 +156,13 @@ private:
    *
    * @param entity Entity to test
    * @param point Point in world coordinates
+   * @param mode Hit eligibility policy.
    * @return true if the entity is hit
    */
-  bool hitTestEntity(Entity entity, const Vector2d& point);
+  bool hitTestEntity(Entity entity, const Vector2d& point, HitTestMode mode);
+  /// Prepare metadata and a path borrowed only until the next document mutation.
+  bool prepareHitGeometry(Entity entity, HitGeometry& geometry, const Path*& path,
+                          HitTestMode mode = HitTestMode::SvgPointerEvents);
 
   /**
    * Create all computed parts of the tree, evaluating styles and creating shadow trees.

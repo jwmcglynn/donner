@@ -1,5 +1,7 @@
 #include "donner/svg/renderer/RenderingContext.h"
 
+#include <algorithm>
+#include <array>
 #include <cassert>
 #include <map>
 #include <optional>
@@ -20,6 +22,7 @@
 #include "donner/svg/components/RenderingInstanceComponent.h"
 #include "donner/svg/components/SVGDocumentContext.h"
 #include "donner/svg/components/animation/AnimatedValuesComponent.h"
+#include "donner/svg/components/animation/AnimationBaseValue.h"
 #include "donner/svg/components/animation/AnimationSystem.h"
 #include "donner/svg/components/filter/FilterComponent.h"
 #include "donner/svg/components/filter/FilterSystem.h"
@@ -74,240 +77,6 @@ RenderTreeState& getRenderTreeState(Registry& registry) {
     registry.ctx().emplace<RenderTreeState>();
   }
   return registry.ctx().get<RenderTreeState>();
-}
-
-/// Set of animatable geometry length attribute names.
-bool isGeometryLengthAttribute(std::string_view attrName) {
-  return attrName == "cx" || attrName == "cy" || attrName == "r" || attrName == "rx" ||
-         attrName == "ry" || attrName == "x" || attrName == "y" || attrName == "width" ||
-         attrName == "height" || attrName == "x1" || attrName == "y1" || attrName == "x2" ||
-         attrName == "y2";
-}
-
-/**
- * Backs up base component values that the animation override applier mutates in place, so the
- * mutation can be reverted on a later frame when the animation is no longer active (or targets a
- * different value). Without this, base-component mutations would "stick" across time samples of the
- * same live document. Captured lazily the first time an entity is animated.
- */
-struct AnimationBaseBackup {
-  std::optional<CircleComponent> circle;
-  std::optional<EllipseComponent> ellipse;
-  std::optional<RectComponent> rect;
-  std::optional<LineComponent> line;
-  std::optional<PathComponent> path;
-  bool transformCaptured = false;
-  bool transformExisted = false;
-  std::optional<TransformComponent> transform;
-};
-
-/// Remove the computed shape components for an entity so they are recomputed from the (restored or
-/// overridden) base shape components on the next shape pass.
-void invalidateComputedShape(Registry& registry, Entity entity) {
-  registry.remove<ComputedPathComponent>(entity);
-  registry.remove<ComputedCircleComponent>(entity);
-  registry.remove<ComputedEllipseComponent>(entity);
-  registry.remove<ComputedRectComponent>(entity);
-}
-
-/// Restore base components previously mutated by the animation override applier back to their
-/// captured original values, so reverted/changed animations do not leak across time samples.
-void restoreAnimationBaseBackup(Registry& registry, Entity entity, AnimationBaseBackup& backup) {
-  bool shapeChanged = false;
-  if (backup.circle) {
-    registry.get<CircleComponent>(entity) = *backup.circle;
-    shapeChanged = true;
-  }
-  if (backup.ellipse) {
-    registry.get<EllipseComponent>(entity) = *backup.ellipse;
-    shapeChanged = true;
-  }
-  if (backup.rect) {
-    registry.get<RectComponent>(entity) = *backup.rect;
-    shapeChanged = true;
-  }
-  if (backup.line) {
-    registry.get<LineComponent>(entity) = *backup.line;
-    shapeChanged = true;
-  }
-  if (backup.path) {
-    registry.get<PathComponent>(entity) = *backup.path;
-    shapeChanged = true;
-  }
-  if (shapeChanged) {
-    invalidateComputedShape(registry, entity);
-  }
-  if (backup.transformCaptured) {
-    if (backup.transformExisted) {
-      registry.get_or_emplace<TransformComponent>(entity) = *backup.transform;
-    } else {
-      registry.remove<TransformComponent>(entity);
-    }
-    // Drop cached computed transforms (local + cascaded absolute) so they are recomputed from the
-    // restored base transform.
-    LayoutSystem().invalidate(EntityHandle(registry, entity));
-  }
-}
-
-/**
- * Advance the animation system to the current document time and apply the resulting animated value
- * overrides on top of the just-computed styles/geometry.
- *
- * This runs immediately after StyleSystem::computeAllStyles() and before layout/shape computation,
- * so that animated transforms participate in the transform hierarchy and animated geometry feeds
- * the shape pass. Overrides are applied post-style (the tiny-skia model).
- */
-void applyAnimationOverrides(Registry& registry) {
-  const double documentTime = registry.ctx().get<SVGDocumentContext>().documentTime;
-
-  // 1. Advance animations: populate AnimatedValuesComponent overrides on target entities.
-  AnimationSystem().advance(registry, documentTime, nullptr);
-
-  // 2. Restore base components mutated by a previous apply so reverted animations do not leak
-  //    across time samples of the same live document. Iterating the view directly is safe: the
-  //    restore only mutates other component storages, never AnimationBaseBackup itself.
-  for (auto [entity, backup] : registry.view<AnimationBaseBackup>().each()) {
-    restoreAnimationBaseBackup(registry, entity, backup);
-  }
-
-  // 3. Apply the current frame's overrides. The loop body only touches storages other than
-  //    AnimatedValuesComponent, so the view can be iterated directly.
-  donner::parser::LengthParser::Options lengthOpts;
-  lengthOpts.unitOptional = true;
-  const auto overrideSpec = css::Specificity::Override();
-
-  for (auto [entity, animValues] : registry.view<AnimatedValuesComponent>().each()) {
-    bool geometryChanged = false;
-
-    for (const auto& [attrName, attrValue] : animValues.overrides) {
-      if (attrName == "transform") {
-        auto result = donner::svg::parser::TransformParser::Parse(attrValue);
-        if (result.hasResult()) {
-          auto& backup = registry.get_or_emplace<AnimationBaseBackup>(entity);
-          if (!backup.transformCaptured) {
-            backup.transformCaptured = true;
-            backup.transformExisted = registry.all_of<TransformComponent>(entity);
-            if (backup.transformExisted) {
-              backup.transform = registry.get<TransformComponent>(entity);
-            }
-          }
-          auto& transform = registry.get_or_emplace<TransformComponent>(entity);
-          transform.transform.set(CssTransform(result.result()), overrideSpec);
-          // Drop any cached computed transforms (local + cascaded absolute) so the animated
-          // transform is recomputed by the layout pass.
-          LayoutSystem().invalidate(EntityHandle(registry, entity));
-        }
-      } else if (attrName == "d") {
-        if (auto* pathComp = registry.try_get<PathComponent>(entity)) {
-          auto& backup = registry.get_or_emplace<AnimationBaseBackup>(entity);
-          if (!backup.path) {
-            backup.path = *pathComp;
-          }
-          pathComp->d.set(RcString(attrValue), overrideSpec);
-          pathComp->splineOverride.reset();
-          registry.remove<ComputedPathComponent>(entity);
-        }
-      } else if (isGeometryLengthAttribute(attrName)) {
-        auto lengthResult = donner::parser::LengthParser::Parse(attrValue, lengthOpts);
-        if (!lengthResult.hasResult()) {
-          continue;
-        }
-        const Lengthd len = lengthResult.result().length;
-
-        if (auto* circle = registry.try_get<CircleComponent>(entity)) {
-          auto& backup = registry.get_or_emplace<AnimationBaseBackup>(entity);
-          if (!backup.circle) {
-            backup.circle = *circle;
-          }
-          if (attrName == "cx") {
-            circle->properties.cx.set(len, overrideSpec);
-            geometryChanged = true;
-          } else if (attrName == "cy") {
-            circle->properties.cy.set(len, overrideSpec);
-            geometryChanged = true;
-          } else if (attrName == "r") {
-            circle->properties.r.set(len, overrideSpec);
-            geometryChanged = true;
-          }
-        }
-        if (auto* ellipse = registry.try_get<EllipseComponent>(entity)) {
-          auto& backup = registry.get_or_emplace<AnimationBaseBackup>(entity);
-          if (!backup.ellipse) {
-            backup.ellipse = *ellipse;
-          }
-          if (attrName == "cx") {
-            ellipse->properties.cx.set(len, overrideSpec);
-            geometryChanged = true;
-          } else if (attrName == "cy") {
-            ellipse->properties.cy.set(len, overrideSpec);
-            geometryChanged = true;
-          } else if (attrName == "rx") {
-            ellipse->properties.rx.set(len, overrideSpec);
-            geometryChanged = true;
-          } else if (attrName == "ry") {
-            ellipse->properties.ry.set(len, overrideSpec);
-            geometryChanged = true;
-          }
-        }
-        if (auto* rect = registry.try_get<RectComponent>(entity)) {
-          auto& backup = registry.get_or_emplace<AnimationBaseBackup>(entity);
-          if (!backup.rect) {
-            backup.rect = *rect;
-          }
-          if (attrName == "x") {
-            rect->properties.x.set(len, overrideSpec);
-            geometryChanged = true;
-          } else if (attrName == "y") {
-            rect->properties.y.set(len, overrideSpec);
-            geometryChanged = true;
-          } else if (attrName == "width") {
-            rect->properties.width.set(len, overrideSpec);
-            geometryChanged = true;
-          } else if (attrName == "height") {
-            rect->properties.height.set(len, overrideSpec);
-            geometryChanged = true;
-          } else if (attrName == "rx") {
-            rect->properties.rx.set(len, overrideSpec);
-            geometryChanged = true;
-          } else if (attrName == "ry") {
-            rect->properties.ry.set(len, overrideSpec);
-            geometryChanged = true;
-          }
-        }
-        if (auto* line = registry.try_get<LineComponent>(entity)) {
-          auto& backup = registry.get_or_emplace<AnimationBaseBackup>(entity);
-          if (!backup.line) {
-            backup.line = *line;
-          }
-          if (attrName == "x1") {
-            line->x1 = len;
-            geometryChanged = true;
-          } else if (attrName == "y1") {
-            line->y1 = len;
-            geometryChanged = true;
-          } else if (attrName == "x2") {
-            line->x2 = len;
-            geometryChanged = true;
-          } else if (attrName == "y2") {
-            line->y2 = len;
-            geometryChanged = true;
-          }
-        }
-      } else {
-        // CSS presentation attribute (opacity, fill, stroke-width, stroke-dasharray, ...).
-        // ComputedStyleComponent is regenerated each render, so no backup is needed.
-        if (auto* style = registry.try_get<ComputedStyleComponent>(entity)) {
-          if (style->properties.has_value()) {
-            style->properties->parsePresentationAttribute(attrName, attrValue);
-          }
-        }
-      }
-    }
-
-    if (geometryChanged) {
-      invalidateComputedShape(registry, entity);
-    }
-  }
 }
 
 /**
@@ -464,7 +233,7 @@ std::optional<ClipGeometry> PrepareClipGeometry(EntityHandle entity, bool enforc
   if (!HasRenderableType(dataEntity)) {
     return std::nullopt;
   }
-  const auto* path = dataEntity.try_get<ComputedPathComponent>();
+  const auto* path = ShapeSystem::geometryHandle(entity).try_get<ComputedPathComponent>();
   const auto* style = entity.try_get<ComputedStyleComponent>();
 #ifdef DONNER_TEXT_ENABLED
   const EntityHandle textEntity =
@@ -482,7 +251,7 @@ std::optional<ClipGeometry> PrepareClipGeometry(EntityHandle entity, bool enforc
                             properties.display.get().value() == Display::None)) {
     return std::nullopt;
   }
-  return ClipGeometry{dataEntity, textEntity, path, style, isText};
+  return ClipGeometry{ShapeSystem::geometryHandle(entity), textEntity, path, style, isText};
 }
 
 class RenderingContextImpl {
@@ -620,7 +389,9 @@ public:
     std::optional<Box2d> clipRect;
     int layerDepth = 0;
     std::optional<ContextPaintServers> savedContextPaintServers;
-    const bool isShape = dataHandle.all_of<ComputedPathComponent>();
+    const EntityHandle geometryHandle =
+        ShapeSystem::geometryHandle(EntityHandle(registry_, styleEntity));
+    const bool isShape = geometryHandle.all_of<ComputedPathComponent>();
 
     if (!HasRenderableType(dataHandle)) {
       return std::nullopt;
@@ -774,7 +545,7 @@ public:
     const ShadowTreeComponent* shadowTree = dataHandle.try_get<ShadowTreeComponent>();
     const bool setsContextColors = shadowTree && shadowTree->setsContextColors;
 
-    if (setsContextColors || (instance.visible && (dataHandle.all_of<ComputedPathComponent>() ||
+    if (setsContextColors || (instance.visible && (geometryHandle.all_of<ComputedPathComponent>() ||
                                                    dataHandle.all_of<ComputedTextComponent>() ||
                                                    instance.textSpanRoot != entt::null))) {
       if (auto fill = properties.fill.get()) {
@@ -811,7 +582,8 @@ public:
       contextPaintServers_.contextFill = instance.resolvedFill;
       contextPaintServers_.contextStroke = instance.resolvedStroke;
       contextPaintServers_.worldFromContextTransform = instance.worldFromEntityTransform;
-      contextPaintServers_.contextBounds = dataHandle.get<ComputedPathComponent>().localBounds();
+      contextPaintServers_.contextBounds =
+          geometryHandle.get<ComputedPathComponent>().localBounds();
       contextPaintServers_.resolveAtDrawTime = true;
 
       const bool ownsMarkerResolutionSession = activeMarkerStack_.empty();
@@ -820,7 +592,7 @@ public:
       }
 
       if (properties.markerStart.get()) {
-        if (auto resolved = resolveMarker(EntityHandle(registry_, styleEntity),
+        if (auto resolved = resolveMarker(dataHandle, EntityHandle(registry_, styleEntity),
                                           properties.markerStart.get().value(),
                                           ShadowBranchType::OffscreenMarkerStart);
             resolved.valid()) {
@@ -829,7 +601,7 @@ public:
       }
 
       if (properties.markerMid.get()) {
-        if (auto resolved = resolveMarker(EntityHandle(registry_, styleEntity),
+        if (auto resolved = resolveMarker(dataHandle, EntityHandle(registry_, styleEntity),
                                           properties.markerMid.get().value(),
                                           ShadowBranchType::OffscreenMarkerMid);
             resolved.valid()) {
@@ -838,7 +610,7 @@ public:
       }
 
       if (properties.markerEnd.get()) {
-        if (auto resolved = resolveMarker(EntityHandle(registry_, styleEntity),
+        if (auto resolved = resolveMarker(dataHandle, EntityHandle(registry_, styleEntity),
                                           properties.markerEnd.get().value(),
                                           ShadowBranchType::OffscreenMarkerEnd);
             resolved.valid()) {
@@ -971,6 +743,9 @@ public:
         }
       }
     }
+
+    registry_.get<RenderingInstanceComponent>(prepared->styleEntity).subtreeLastEntity =
+        lastRenderedEntity_;
 
     if (prepared->layerDepth > 0) {
       registry_.get<RenderingInstanceComponent>(prepared->styleEntity).subtreeInfo =
@@ -1112,14 +887,18 @@ public:
   }
 
   void appendClipGeometry(const ComputedPathComponent* clipPathData, EntityHandle dataEntity,
-                          EntityHandle textEntity, const Transform2d& rootClipFromEntity,
-                          ClipRule clipRule, ClipPathCollection& collection) {
+                          EntityHandle textEntity, EntityHandle instanceEntity,
+                          const Transform2d& rootClipFromEntity, ClipRule clipRule,
+                          ClipPathCollection& collection) {
     if (!isFiniteClipTransform(rootClipFromEntity)) {
       collection.valid = false;
       return;
     }
     if (clipPathData) {
       recordClipFontDependencies(dataEntity);
+      if (instanceEntity.entity() != dataEntity.entity()) {
+        recordClipFontDependencies(instanceEntity);
+      }
       collection.paths.emplace_back(clipPathData->spline, rootClipFromEntity, clipRule,
                                     collection.layer);
     }
@@ -1160,7 +939,7 @@ public:
     const Transform2d referenceFromEntity =
         LayoutSystem().getAbsoluteTransformComponent(entity).worldFromEntity;
     const Transform2d rootClipFromEntity = referenceFromEntity * collection.rootClipFromReference;
-    appendClipGeometry(clipPathData, dataEntity, textEntity, rootClipFromEntity,
+    appendClipGeometry(clipPathData, dataEntity, textEntity, entity, rootClipFromEntity,
                        style.clipRule.get().value_or(ClipRule::NonZero), collection);
   }
 
@@ -1409,7 +1188,8 @@ public:
       const auto* shadowEntityComponent = registry_.try_get<ShadowEntityComponent>(entity);
       const EntityHandle dataHandle(
           registry_, shadowEntityComponent ? shadowEntityComponent->lightEntity : entity);
-      if (const auto* path = dataHandle.try_get<ComputedPathComponent>();
+      if (const auto* path = ShapeSystem::geometryHandle(EntityHandle(registry_, entity))
+                                 .try_get<ComputedPathComponent>();
           path && !path->spline.empty()) {
         addBox(path->localBounds());
       }
@@ -1495,8 +1275,37 @@ public:
     return ResolvedMask{ResolvedReference{EntityHandle()}, std::nullopt, MaskContentUnits::Default};
   }
 
-  ResolvedMarker resolveMarker(EntityHandle styleHandle, const Reference& reference,
-                               ShadowBranchType branchType) {
+  std::optional<ResolvedMarkerLengths> resolveMarkerLengths(EntityHandle dataHandle,
+                                                            EntityHandle markerHandle) {
+    Registry& registry = *dataHandle.registry();
+    const Entity target = markerHandle.entity();
+    const std::array<std::string_view, 4> names = {"markerWidth", "markerHeight", "refX", "refY"};
+    if (std::none_of(names.begin(), names.end(), [&](std::string_view name) {
+          return ContextualLengthFor(registry, target, name) != nullptr;
+        })) {
+      return std::nullopt;
+    }
+    LayoutSystem layout;
+    const Box2d viewport = layout.getViewBox(dataHandle);
+    const Box2d referenceViewport =
+        layout.overridesViewBox(markerHandle) ? layout.getViewBox(markerHandle) : viewport;
+    const auto& marker = markerHandle.get<MarkerComponent>();
+    const std::array<Lengthd, 4> bases = {marker.markerWidth, marker.markerHeight, marker.refX,
+                                          marker.refY};
+    std::array<double, 4> resolved;
+    for (std::size_t i = 0; i < names.size(); ++i) {
+      AnimationValueContext context;
+      context.viewBox = i < 2 ? viewport : referenceViewport;
+      context.extent = i % 2 == 0 ? Lengthd::Extent::X : Lengthd::Extent::Y;
+      const Lengthd length =
+          ResolveContextualLength(registry, target, names[i], bases[i], context).value_or(bases[i]);
+      resolved[i] = length.toPixels(context.viewBox, context.fontMetrics, context.extent);
+    }
+    return ResolvedMarkerLengths{resolved[0], resolved[1], resolved[2], resolved[3]};
+  }
+
+  ResolvedMarker resolveMarker(EntityHandle dataHandle, EntityHandle styleHandle,
+                               const Reference& reference, ShadowBranchType branchType) {
     if (auto resolvedRef = reference.resolve(*styleHandle.registry());
         resolvedRef && IsValidMarker(resolvedRef->handle)) {
       const Entity markerElement = resolvedRef->handle.entity();
@@ -1530,7 +1339,8 @@ public:
         activeMarkerElements_.erase(markerElement);
 
         return ResolvedMarker{resolvedRef.value(), std::move(subtree),
-                              resolvedRef->handle.get<MarkerComponent>().markerUnits};
+                              resolvedRef->handle.get<MarkerComponent>().markerUnits,
+                              resolveMarkerLengths(dataHandle, resolvedRef->handle)};
       }
     }
     return ResolvedMarker{ResolvedReference{EntityHandle()}, std::nullopt, MarkerUnits::Default};
@@ -1789,9 +1599,19 @@ void RenderingContext::ensureComputedComponents(ParseWarningSink& warningSink) {
   // TODO(jwmcglynn): Support partial invalidation, where we only recompute dirty entities
   // instead of the full tree.
   ShadowTreeSystem::beginRebuild(registry_);
-  for (auto view = registry_.view<ComputedShadowTreeComponent>(); auto entity : view) {
-    auto& shadow = view.get<ComputedShadowTreeComponent>(entity);
-    createShadowTreeSystem().teardown(registry_, shadow);
+  std::vector<Entity> shadowHosts;
+  auto shadowView = registry_.view<ComputedShadowTreeComponent>();
+  shadowHosts.reserve(shadowView.size());
+  for (const Entity entity : shadowView) {
+    shadowHosts.push_back(entity);
+  }
+  for (const Entity entity : shadowHosts) {
+    if (!registry_.valid(entity)) {
+      continue;
+    }
+    if (auto* shadow = registry_.try_get<ComputedShadowTreeComponent>(entity)) {
+      createShadowTreeSystem().teardown(registry_, *shadow);
+    }
   }
   registry_.clear<ComputedShadowTreeComponent>();
   registry_.clear<RenderingInstanceComponent>();
@@ -1817,96 +1637,124 @@ void RenderingContext::ensureComputedComponents(ParseWarningSink& warningSink) {
   renderState.hasBeenBuilt = true;
 }
 
-bool RenderingContext::hitTestEntity(Entity entity, const Vector2d& point) {
-  const auto* instance = registry_.try_get<RenderingInstanceComponent>(entity);
-  if (!instance) {
+bool RenderingContext::HitGeometry::contains(const Vector2d& point, const Path* path) const {
+  const Vector2d localPoint = entityFromDocumentTransform.transformPosition(point);
+  if (textBounds) {
+    return textBounds->contains(localPoint);
+  }
+  if (!documentBounds.contains(point)) {
     return false;
   }
-
-  ParseWarningSink disabledSink = ParseWarningSink::Disabled();
-  const ComputedStyleComponent& style =
-      StyleSystem().computeStyle(EntityHandle(registry_, entity), disabledSink);
-  const PointerEvents pointerEvents = style.properties->pointerEvents.get().value();
-
-  if (pointerEvents == PointerEvents::None) {
+  if (boundsOnly) {
+    return true;
+  }
+  if (path == nullptr) {
     return false;
   }
-
-  const HitTestConfig config = configFromPointerEvents(pointerEvents);
-
-  // Check visibility requirement.
-  if (config.requireVisible && !instance->visible) {
-    return false;
-  }
-
-  const bool hasFillPaint = style.properties->fill.get().value() != PaintServer::None();
-  const bool hasStrokePaint = style.properties->stroke.get().value() != PaintServer::None();
-  const double strokeWidth =
-      hasStrokePaint ? style.properties->strokeWidth.get().value().value : 0.0;
-
-#ifdef DONNER_TEXT_ENABLED
-  // Text roots hit-test against their laid-out glyph ink bounds: any point
-  // inside the ink box (including the gaps between letters) hits, which is
-  // the pointer contract for selecting text. Text has no ComputedPath, so
-  // the shape-based fill/stroke tests below can never match it.
-  if (registry_.any_of<TextRootComponent>(entity) && registry_.ctx().contains<TextEngine>()) {
-    const Box2d inkBounds =
-        registry_.ctx().get<TextEngine>().computedInkBounds(EntityHandle(registry_, entity));
-    if (!inkBounds.isEmpty()) {
-      const Vector2d pointInLocal =
-          LayoutSystem()
-              .getEntityFromWorldTransform(EntityHandle(registry_, entity))
-              .inverse()
-              .transformPosition(point);
-      return inkBounds.contains(pointInLocal);
-    }
-    return false;
-  }
-#endif
-
-  if (const auto bounds = ShapeSystem().getShapeWorldBounds(EntityHandle(registry_, entity));
-      bounds && bounds->inflatedBy(strokeWidth).contains(point)) {
-    if (pointerEvents == PointerEvents::BoundingBox) {
-      return true;
-    }
-
-    const Vector2d pointInLocal = LayoutSystem()
-                                      .getEntityFromWorldTransform(EntityHandle(registry_, entity))
-                                      .inverse()
-                                      .transformPosition(point);
-
-    // Test fill intersection.
-    if (config.testFill) {
-      const bool skipBecauseNotPainted = config.requirePaintedFill && !hasFillPaint;
-      if (!skipBecauseNotPainted &&
-          ShapeSystem().pathFillIntersects(EntityHandle(registry_, entity), pointInLocal,
-                                           style.properties->fillRule.get().value())) {
-        return true;
-      }
-    }
-
-    // Test stroke intersection.
-    if (config.testStroke) {
-      const bool skipBecauseNotPainted = config.requirePaintedStroke && !hasStrokePaint;
-      if (!skipBecauseNotPainted &&
-          ShapeSystem().pathStrokeIntersects(EntityHandle(registry_, entity), pointInLocal,
-                                             strokeWidth)) {
-        return true;
-      }
-    }
-  }
-
-  return false;
+  return (testFill && path->isInside(localPoint, fillRule)) ||
+         (testStroke && path->isOnPath(localPoint, strokeWidth));
 }
 
-Entity RenderingContext::findIntersecting(const Vector2d& point) {
+namespace {
+void ConfigureHitPaint(const ComputedStyleComponent& style, const HitTestConfig& config,
+                       RenderingContext::HitGeometry& geometry) {
+  const bool fillPainted = style.properties->fill.get().value() != PaintServer::None();
+  const bool strokePainted = style.properties->stroke.get().value() != PaintServer::None();
+  geometry.strokeWidth = strokePainted ? style.properties->strokeWidth.get().value().value : 0.0;
+  geometry.testFill = config.testFill && (!config.requirePaintedFill || fillPainted);
+  geometry.testStroke = config.testStroke && (!config.requirePaintedStroke || strokePainted);
+  geometry.fillRule = style.properties->fillRule.get().value();
+}
+
+std::optional<Box2d> TextHitBounds(Registry& registry, Entity entity) {
+#ifdef DONNER_TEXT_ENABLED
+  if (registry.any_of<TextRootComponent>(entity) && registry.ctx().contains<TextEngine>()) {
+    return registry.ctx().get<TextEngine>().computedInkBounds(EntityHandle(registry, entity));
+  }
+#endif
+  return std::nullopt;
+}
+}  // namespace
+
+bool RenderingContext::prepareHitGeometry(Entity entity, HitGeometry& geometry, const Path*& path,
+                                          HitTestMode mode) {
+  path = nullptr;
+  const auto* instance = registry_.try_get<RenderingInstanceComponent>(entity);
+  if (instance == nullptr) {
+    return false;
+  }
+  ParseWarningSink sink = ParseWarningSink::Disabled();
+  const auto& style = StyleSystem().computeStyle(EntityHandle(registry_, entity), sink);
+  const PointerEvents pointerEvents = mode == HitTestMode::EditorSelection
+                                          ? PointerEvents::VisiblePainted
+                                          : style.properties->pointerEvents.get().value();
+  const HitTestConfig config = configFromPointerEvents(pointerEvents);
+  if (pointerEvents == PointerEvents::None || (config.requireVisible && !instance->visible)) {
+    return false;
+  }
+  ConfigureHitPaint(style, config, geometry);
+  geometry.entityFromDocumentTransform =
+      LayoutSystem().getEntityFromWorldTransform(EntityHandle(registry_, entity)).inverse();
+  geometry.textBounds = TextHitBounds(registry_, entity);
+  if (geometry.textBounds) {
+    return !geometry.textBounds->isEmpty();
+  }
+  const auto bounds = ShapeSystem().getShapeWorldBounds(EntityHandle(registry_, entity));
+  if (!bounds) {
+    return false;
+  }
+  geometry.documentBounds = bounds->inflatedBy(geometry.strokeWidth);
+  geometry.boundsOnly = pointerEvents == PointerEvents::BoundingBox;
+  if (const auto* computed = ShapeSystem().createComputedPathIfShape(
+          EntityHandle(registry_, entity), FontMetrics(), sink)) {
+    path = &computed->spline;
+  }
+  return true;
+}
+
+bool RenderingContext::hitTestEntity(Entity entity, const Vector2d& point, HitTestMode mode) {
+  HitGeometry geometry;
+  const Path* path = nullptr;
+  return prepareHitGeometry(entity, geometry, path, mode) && geometry.contains(point, path);
+}
+
+std::optional<std::vector<RenderingContext::HitRecord>> RenderingContext::captureHitGeometry(
+    std::size_t maximumRecords, std::size_t maximumPathBytes) {
+  ParseWarningSink sink = ParseWarningSink::Disabled();
+  instantiateRenderTree(false, sink);
+  maximumRecords = std::min<std::size_t>(maximumRecords, 65536);
+  maximumPathBytes = std::min<std::size_t>(maximumPathBytes, 32 * 1024 * 1024);
+  std::size_t visited = 0;
+  std::size_t retainedBytes = 0;
+  std::vector<HitRecord> records;
+  auto view = registry_.view<RenderingInstanceComponent>();
+  for (auto it = view.rbegin(); it != view.rend(); ++it) {
+    if (++visited > maximumRecords) {
+      return std::nullopt;
+    }
+    HitGeometry geometry;
+    const Path* path = nullptr;
+    if (!prepareHitGeometry(*it, geometry, path)) {
+      continue;
+    }
+    const auto bytes = path != nullptr ? path->retainedBytes() : std::optional<std::size_t>(0);
+    if (!bytes || *bytes > maximumPathBytes - retainedBytes) {
+      return std::nullopt;
+    }
+    retainedBytes += *bytes;
+    records.push_back(HitRecord{*it, geometry, path != nullptr ? *path : Path()});
+  }
+  return records;
+}
+
+Entity RenderingContext::findIntersecting(const Vector2d& point, HitTestMode mode) {
   ParseWarningSink disabledSink = ParseWarningSink::Disabled();
   instantiateRenderTree(false, disabledSink);
 
   // Brute-force reverse scan.
   auto view = registry_.view<RenderingInstanceComponent>();
   for (auto it = view.rbegin(); it != view.rend(); ++it) {
-    if (hitTestEntity(*it, point)) {
+    if (hitTestEntity(*it, point, mode)) {
       return *it;
     }
   }
@@ -1914,7 +1762,7 @@ Entity RenderingContext::findIntersecting(const Vector2d& point) {
   return entt::null;
 }
 
-std::vector<Entity> RenderingContext::findAllIntersecting(const Vector2d& point) {
+std::vector<Entity> RenderingContext::findAllIntersecting(const Vector2d& point, HitTestMode mode) {
   ParseWarningSink disabledSink = ParseWarningSink::Disabled();
   instantiateRenderTree(false, disabledSink);
 
@@ -1922,7 +1770,7 @@ std::vector<Entity> RenderingContext::findAllIntersecting(const Vector2d& point)
 
   auto view = registry_.view<RenderingInstanceComponent>();
   for (auto it = view.rbegin(); it != view.rend(); ++it) {
-    if (hitTestEntity(*it, point)) {
+    if (hitTestEntity(*it, point, mode)) {
       results.push_back(*it);
     }
   }
@@ -1944,8 +1792,7 @@ std::vector<Entity> RenderingContext::findIntersectingRect(const Box2d& rect) {
       continue;
     }
 
-    const auto bounds =
-        ShapeSystem().getShapeWorldBounds(EntityHandle(registry_, instance.dataEntity));
+    const auto bounds = ShapeSystem().getShapeWorldBounds(instance.styleHandle(registry_));
     if (bounds && bounds->topLeft.x <= rect.bottomRight.x &&
         bounds->bottomRight.x >= rect.topLeft.x && bounds->topLeft.y <= rect.bottomRight.y &&
         bounds->bottomRight.y >= rect.topLeft.y) {
@@ -1965,7 +1812,7 @@ std::optional<Box2d> RenderingContext::getWorldBounds(Entity entity) {
     return std::nullopt;
   }
 
-  return ShapeSystem().getShapeWorldBounds(EntityHandle(registry_, instance->dataEntity));
+  return ShapeSystem().getShapeWorldBounds(instance->styleHandle(registry_));
 }
 
 void RenderingContext::invalidateRenderTree() {
@@ -1984,87 +1831,61 @@ void RenderingContext::invalidateRenderTree() {
 // 6. Decompose shapes to paths
 // 7. Resolve fill and stroke references (paints)
 // 8. Resolve filter references
-void RenderingContext::createComputedComponents(ParseWarningSink& warningSink) {
-  // Evaluate conditional components which may create shadow trees.
-  PaintSystem().createShadowTrees(registry_, warningSink);
+namespace {
 
-  InstantiateMainShadowTrees(registry_, warningSink);
-
-  StyleSystem().computeAllStyles(registry_, warningSink);
-
-  // Advance SMIL animations and apply their value overrides on top of the computed styles/geometry,
-  // before layout and shape computation.
-  applyAnimationOverrides(registry_);
-
-  // After styles are computed, we can load fonts and other embedded resources.
-  registry_.ctx().get<components::ResourceManagerContext>().loadResources(warningSink);
-
-#ifdef DONNER_TEXT_ENABLED
-  // Create shared font registry + text engine in the registry context.
-  // This must happen after loadResources() so @font-face data is available.
-  {
-    auto& resourceManager = registry_.ctx().get<components::ResourceManagerContext>();
-    auto& fontManager = registry_.ctx().emplace<FontManager>(registry_);
-    for (const auto& face : resourceManager.fontFaces()) {
-      fontManager.addFontFace(face);
-    }
-    registry_.ctx().emplace<TextEngine>(fontManager, registry_);
-  }
-#endif
-
-  // Instantiate shadow trees for 'fill' and 'stroke' referencing a <pattern>. This needs to occur
-  // after those styles are evaluated, and after which we need to compute the styles for that subset
-  // of the tree.
-  for (auto view = registry_.view<ComputedStyleComponent>(); auto entity : view) {
+void InstantiateStyledPaintTrees(Registry& registry, ParseWarningSink& warningSink) {
+  for (auto view = registry.view<ComputedStyleComponent>(); auto entity : view) {
     auto [styleComponent] = view.get(entity);
 
     const auto& properties = styleComponent.properties.value();
 
     if (auto fill = StyleSystem::localPaintForInstantiation(styleComponent, false)) {
-      InstantiatePaintShadowTree(registry_, entity, ShadowBranchType::OffscreenFill, fill.value(),
+      InstantiatePaintShadowTree(registry, entity, ShadowBranchType::OffscreenFill, fill.value(),
                                  warningSink);
     }
 
     if (auto stroke = StyleSystem::localPaintForInstantiation(styleComponent, true)) {
-      InstantiatePaintShadowTree(registry_, entity, ShadowBranchType::OffscreenStroke,
+      InstantiatePaintShadowTree(registry, entity, ShadowBranchType::OffscreenStroke,
                                  stroke.value(), warningSink);
     }
 
     if (auto mask = properties.mask.get()) {
-      InstantiateMaskShadowTree(registry_, entity, mask.value(), warningSink);
+      InstantiateMaskShadowTree(registry, entity, mask.value(), warningSink);
     }
 
     if (auto markerStart = properties.markerStart.get()) {
-      InstantiateMarkerShadowTree(registry_, entity, ShadowBranchType::OffscreenMarkerStart,
+      InstantiateMarkerShadowTree(registry, entity, ShadowBranchType::OffscreenMarkerStart,
                                   markerStart.value(), warningSink);
     }
 
     if (auto markerMid = properties.markerMid.get()) {
-      InstantiateMarkerShadowTree(registry_, entity, ShadowBranchType::OffscreenMarkerMid,
+      InstantiateMarkerShadowTree(registry, entity, ShadowBranchType::OffscreenMarkerMid,
                                   markerMid.value(), warningSink);
     }
 
     if (auto markerEnd = properties.markerEnd.get()) {
-      InstantiateMarkerShadowTree(registry_, entity, ShadowBranchType::OffscreenMarkerEnd,
+      InstantiateMarkerShadowTree(registry, entity, ShadowBranchType::OffscreenMarkerEnd,
                                   markerEnd.value(), warningSink);
     }
   }
+}
 
-  for (auto view = registry_.view<OffscreenShadowTreeComponent>(); auto entity : view) {
+void PopulateOffscreenPaintTrees(Registry& registry, ParseWarningSink& warningSink) {
+  for (auto view = registry.view<OffscreenShadowTreeComponent>(); auto entity : view) {
     auto [offscreenTree] = view.get(entity);
     for (auto [branchType, ref] : offscreenTree.branches()) {
-      if (auto targetEntity = offscreenTree.branchTargetEntity(registry_, branchType)) {
-        auto& computedShadow = registry_.get_or_emplace<ComputedShadowTreeComponent>(entity);
+      if (auto targetEntity = offscreenTree.branchTargetEntity(registry, branchType)) {
+        auto& computedShadow = registry.get_or_emplace<ComputedShadowTreeComponent>(entity);
 
         const std::optional<size_t> maybeInstanceIndex = createShadowTreeSystem().populateInstance(
-            EntityHandle(registry_, entity), computedShadow, branchType, targetEntity.value(),
+            EntityHandle(registry, entity), computedShadow, branchType, targetEntity.value(),
             ref.href, warningSink);
 
         if (maybeInstanceIndex) {
           // Apply styles to the tree.
           const std::span<const Entity> shadowEntities =
               computedShadow.offscreenShadowEntities(maybeInstanceIndex.value());
-          StyleSystem().computeStylesFor(registry_, shadowEntities, warningSink);
+          StyleSystem().computeStylesFor(registry, shadowEntities, warningSink);
         }
       } else {
         // We had a href but it failed to resolve.
@@ -2076,12 +1897,9 @@ void RenderingContext::createComputedComponents(ParseWarningSink& warningSink) {
       }
     }
   }
+}
 
-  // Instantiate nested marker shadow trees for entities inside shadow trees.
-  // The first pass (above) only checks entities with pre-existing ComputedStyleComponent.
-  // Shadow tree entities get their styles computed after populateInstance, so we need a second
-  // pass to create marker shadow trees for those newly-styled entities (e.g., paths inside
-  // markers that have their own marker-start/mid/end properties for nested markers).
+void InstantiateNestedMarkerTrees(Registry& registry, ParseWarningSink& warningSink) {
   {
     // Collect shadow entities that need marker shadow trees (can't modify registry while
     // iterating views).
@@ -2092,9 +1910,9 @@ void RenderingContext::createComputedComponents(ParseWarningSink& warningSink) {
     };
     std::vector<MarkerWork> nestedMarkerWork;
 
-    for (auto view = registry_.view<ComputedShadowTreeComponent>(); auto entity : view) {
+    for (auto view = registry.view<ComputedShadowTreeComponent>(); auto entity : view) {
       const auto& computedShadow = view.get<ComputedShadowTreeComponent>(entity);
-      const auto* offscreen = registry_.try_get<OffscreenShadowTreeComponent>(entity);
+      const auto* offscreen = registry.try_get<OffscreenShadowTreeComponent>(entity);
       if (!offscreen) {
         continue;
       }
@@ -2104,7 +1922,7 @@ void RenderingContext::createComputedComponents(ParseWarningSink& warningSink) {
           continue;
         }
         for (const Entity shadowEntity : computedShadow.offscreenShadowEntities(*instanceIndex)) {
-          const auto* shadowStyle = registry_.try_get<ComputedStyleComponent>(shadowEntity);
+          const auto* shadowStyle = registry.try_get<ComputedStyleComponent>(shadowEntity);
           if (!shadowStyle || !shadowStyle->properties) {
             continue;
           }
@@ -2126,35 +1944,75 @@ void RenderingContext::createComputedComponents(ParseWarningSink& warningSink) {
     }
 
     for (const auto& work : nestedMarkerWork) {
-      InstantiateMarkerShadowTree(registry_, work.shadowEntity, work.branchType, work.reference,
+      InstantiateMarkerShadowTree(registry, work.shadowEntity, work.branchType, work.reference,
                                   warningSink);
     }
 
     // Populate and style the newly-created nested marker shadow trees.
     for (const auto& work : nestedMarkerWork) {
-      auto* offscreen = registry_.try_get<OffscreenShadowTreeComponent>(work.shadowEntity);
+      auto* offscreen = registry.try_get<OffscreenShadowTreeComponent>(work.shadowEntity);
       if (!offscreen) {
         continue;
       }
-      auto targetEntity = offscreen->branchTargetEntity(registry_, work.branchType);
+      auto targetEntity = offscreen->branchTargetEntity(registry, work.branchType);
       if (!targetEntity) {
         continue;
       }
       auto& computedShadow =
-          registry_.get_or_emplace<ComputedShadowTreeComponent>(work.shadowEntity);
+          registry.get_or_emplace<ComputedShadowTreeComponent>(work.shadowEntity);
       if (computedShadow.findOffscreenShadow(work.branchType).has_value()) {
         continue;  // Already instantiated.
       }
       const std::optional<size_t> maybeInstanceIndex = createShadowTreeSystem().populateInstance(
-          EntityHandle(registry_, work.shadowEntity), computedShadow, work.branchType,
+          EntityHandle(registry, work.shadowEntity), computedShadow, work.branchType,
           targetEntity.value(), work.reference.href, warningSink);
       if (maybeInstanceIndex) {
         const std::span<const Entity> shadowEntities =
             computedShadow.offscreenShadowEntities(maybeInstanceIndex.value());
-        StyleSystem().computeStylesFor(registry_, shadowEntities, warningSink);
+        StyleSystem().computeStylesFor(registry, shadowEntities, warningSink);
       }
     }
   }
+}
+
+}  // namespace
+
+void RenderingContext::createComputedComponents(ParseWarningSink& warningSink) {
+  RestoreAnimationPresentation(registry_);
+
+  if (!registry_.ctx().contains<AnimationStyleContext>()) {
+    registry_.ctx().emplace<AnimationStyleContext>();
+  }
+  registry_.ctx().get<AnimationStyleContext>().enabled = false;
+  StyleSystem().computeAllStyles(registry_, warningSink);
+
+  // Advance SMIL animations and apply their value overrides on top of the computed styles/geometry,
+  // before layout and shape computation.
+  ApplyAnimationPresentation(registry_);
+  // Expand references from this sample, sharing the original rebuild's resource limits.
+  PaintSystem().createShadowTrees(registry_, warningSink);
+  InstantiateMainShadowTrees(registry_, warningSink);
+  StyleSystem().computeAllStyles(registry_, warningSink);
+
+  // After styles are computed, we can load fonts and other embedded resources.
+  registry_.ctx().get<components::ResourceManagerContext>().loadResources(warningSink);
+
+#ifdef DONNER_TEXT_ENABLED
+  // Create shared font registry + text engine in the registry context.
+  // This must happen after loadResources() so @font-face data is available.
+  {
+    auto& resourceManager = registry_.ctx().get<components::ResourceManagerContext>();
+    auto& fontManager = registry_.ctx().emplace<FontManager>(registry_);
+    for (const auto& face : resourceManager.fontFaces()) {
+      fontManager.addFontFace(face);
+    }
+    registry_.ctx().emplace<TextEngine>(fontManager, registry_);
+  }
+#endif
+
+  InstantiateStyledPaintTrees(registry_, warningSink);
+  PopulateOffscreenPaintTrees(registry_, warningSink);
+  InstantiateNestedMarkerTrees(registry_, warningSink);
 
   LayoutSystem().instantiateAllComputedComponents(registry_, warningSink);
 
@@ -2184,6 +2042,7 @@ std::optional<RenderingContext::FeImageSubtreeResult> RenderingContext::createFe
   const std::span<const Entity> shadowEntities =
       computedShadow.offscreenShadowEntities(maybeIndex.value());
   StyleSystem().computeStylesFor(registry_, shadowEntities, disabledSink);
+  ShapeSystem().instantiateShadowComputedPaths(registry_, shadowEntities, disabledSink);
 
   const Entity shadowRoot = computedShadow.offscreenShadowRoot(maybeIndex.value());
   if (shadowRoot == entt::null) {

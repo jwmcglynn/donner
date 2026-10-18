@@ -16,6 +16,7 @@
 #include "donner/base/xml/XMLDocument.h"
 #include "donner/base/xml/XMLNode.h"
 #include "donner/svg/AllSVGElements.h"
+#include "donner/svg/SVGAnimationQuery.h"
 #include "donner/svg/SVGRectElement.h"
 #include "donner/svg/SVGStyleElement.h"
 #include "donner/svg/SVGStyleQuery.h"
@@ -23,7 +24,10 @@
 #include "donner/svg/components/DocumentResourceFamilyBudget.h"
 #include "donner/svg/components/ParsedPayloadResourceBudget.h"
 #include "donner/svg/components/RenderingBehaviorComponent.h"
+#include "donner/svg/components/SVGDocumentContext.h"
 #include "donner/svg/components/StylesheetComponent.h"
+#include "donner/svg/components/animation/AnimationReference.h"
+#include "donner/svg/components/animation/AnimationStateComponent.h"
 #include "donner/svg/components/filter/FilterComponent.h"
 #include "donner/svg/components/filter/FilterPrimitiveComponent.h"
 #include "donner/svg/components/paint/ClipPathComponent.h"
@@ -1029,9 +1033,7 @@ TEST(SVGDocument, RejectedBuiltDescriptiveTextReportsAnError) {
   }
 }
 
-// Experimental element types are built only when the document's parse enabled them, as the parser
-// builds them.
-TEST(SVGDocument, SourceInsertedExperimentalElementFollowsParseOptions) {
+TEST(SVGDocument, SourceInsertedAnimationIsEnabledWithEitherParseOption) {
   for (const bool experimental : {false, true}) {
     SCOPED_TRACE(experimental ? "experimental enabled" : "experimental disabled");
     parser::SVGParser::Options options;
@@ -1047,8 +1049,7 @@ TEST(SVGDocument, SourceInsertedExperimentalElementFollowsParseOptions) {
     EXPECT_THAT(result.diagnostic, Eq(std::nullopt));
     EXPECT_EQ(result.scope, xml::ReparseScope::ElementSubtree);
     ASSERT_THAT(document.querySelector("#new"), Optional(ElementIdEq("new")));
-    EXPECT_EQ(document.querySelector("#new")->type(),
-              experimental ? ElementType::Set : ElementType::Unknown);
+    EXPECT_EQ(document.querySelector("#new")->type(), ElementType::Set);
   }
 }
 
@@ -2299,6 +2300,364 @@ TEST(SVGDocument, QuerySelectorAdvanced) {
   EXPECT_THAT(document.querySelector("[data-type='bar']"), Optional(ElementIdEq("r2")));
   // Query using descendant combinator and id selectors.
   EXPECT_THAT(document.querySelector("svg > g#group1 > rect"), Optional(ElementIdEq("r1")));
+}
+
+TEST(SVGDocument, RetiringAnUnmappedDuplicateIdKeepsTheMappedElement) {
+  auto document = ParseSVG(
+      "<svg xmlns='http://www.w3.org/2000/svg'><rect id='same'/><circle id='same'/></svg>");
+  auto first = document.querySelector("rect");
+  auto duplicate = document.querySelector("circle");
+  ASSERT_TRUE(first.has_value());
+  ASSERT_TRUE(duplicate.has_value());
+  auto& context = document.registry().ctx().get<components::SVGDocumentContext>();
+  EXPECT_EQ(context.getEntityById(RcString("same")), first->entityHandle().entity());
+  duplicate->setId("other");
+  EXPECT_EQ(context.getEntityById(RcString("same")), first->entityHandle().entity());
+  first->setId("moved");
+  EXPECT_EQ(context.getEntityById(RcString("same")), Entity(entt::null));
+  EXPECT_EQ(context.getEntityById(RcString("moved")), first->entityHandle().entity());
+}
+
+TEST(SVGDocument, AttachedReplacementIdSurvivesRetainedDetachedNodeCollection) {
+  SVGDocument document;
+  auto root = document.svgElement();
+  std::optional<SVGRectElement> original = SVGRectElement::Create(document);
+  root.appendChild(*original);
+  original->setId("same");
+  const Entity originalEntity = original->entityHandle().entity();
+  root.removeChild(*original);
+  ASSERT_TRUE(document.registry().valid(originalEntity));
+
+  auto replacement = SVGRectElement::Create(document);
+  root.appendChild(replacement);
+  replacement.setId("same");
+  auto& context = document.registry().ctx().get<components::SVGDocumentContext>();
+  EXPECT_EQ(context.getEntityById(RcString("same")), replacement.entityHandle().entity());
+  original.reset();
+  EXPECT_FALSE(document.registry().valid(originalEntity));
+  EXPECT_EQ(context.getEntityById(RcString("same")), replacement.entityHandle().entity());
+}
+
+TEST(SVGDocument, DetachedDuplicateIdCannotDisplaceAttachedMapping) {
+  SVGDocument document;
+  auto attached = SVGRectElement::Create(document);
+  document.svgElement().appendChild(attached);
+  attached.setId("same");
+  {
+    auto detached = SVGRectElement::Create(document);
+    detached.setId("same");
+    auto& context = document.registry().ctx().get<components::SVGDocumentContext>();
+    EXPECT_EQ(context.getEntityById(RcString("same")), attached.entityHandle().entity());
+  }
+  auto& context = document.registry().ctx().get<components::SVGDocumentContext>();
+  EXPECT_EQ(context.getEntityById(RcString("same")), attached.entityHandle().entity());
+}
+
+TEST(SVGDocument, AnimationReferenceBudgetIsSharedAndSticky) {
+  auto document =
+      ParseSVG("<svg xmlns='http://www.w3.org/2000/svg'><g><g><rect id='r'/></g></g></svg>");
+  components::AnimationResourceBudget budget;
+  ASSERT_EQ(
+      budget.reserveReferenceWork(components::AnimationResourceBudget::kMaximumReferenceWork - 32),
+      true);
+  EXPECT_EQ(components::FindAnimationReference(document.registry(), "missing", budget),
+            Entity(entt::null));
+  EXPECT_EQ(budget.rejected(), false);
+  EXPECT_LT(budget.remainingReferenceWork(), 32u);
+  EXPECT_EQ(components::FindAnimationReference(document.registry(), "missing", budget),
+            Entity(entt::null));
+  EXPECT_EQ(budget.rejected(), true);
+  EXPECT_EQ(components::FindAnimationReference(document.registry(), "r", budget),
+            Entity(entt::null));
+}
+
+TEST(SVGDocument, AnimationReferenceBudgetRejectsLongIdBeforeLookup) {
+  SVGDocument document;
+  components::AnimationResourceBudget budget;
+  const std::string id(components::AnimationResourceBudget::kMaximumReferenceWork + 1, 'x');
+  EXPECT_EQ(components::FindAnimationReference(document.registry(), id, budget),
+            Entity(entt::null));
+  EXPECT_EQ(budget.rejected(), true);
+  EXPECT_EQ(budget.remainingReferenceWork(),
+            components::AnimationResourceBudget::kMaximumReferenceWork);
+}
+
+TEST(SVGDocument, AnimationReferenceExhaustionDoesNotPublishPartialEvents) {
+  std::string source =
+      "<svg xmlns='http://www.w3.org/2000/svg'><rect id='button'>"
+      "<set id='first' attributeName='width' to='12' begin='button.click' dur='2s'/>";
+  for (int i = 0; i < 1500; ++i) {
+    source += "<set attributeName='width' to='8' begin='missing" + std::to_string(i) +
+              ".click' dur='2s'/>";
+  }
+  source += "</rect></svg>";
+  auto document = ParseSVG(source);
+  const auto target = document.querySelector("#button");
+  const auto first = document.querySelector("#first");
+  ASSERT_THAT(target, testing::Ne(std::nullopt));
+  ASSERT_THAT(first, testing::Ne(std::nullopt));
+  EXPECT_EQ(document.dispatchAnimationEvent("click", *target), false);
+  const auto& state = first->entityHandle().get<components::AnimationStateComponent>();
+  EXPECT_THAT(state.eventBeginTimes, testing::IsEmpty());
+  EXPECT_THAT(state.eventEndTimes, testing::IsEmpty());
+}
+
+TEST(SVGDocument, AnimationFullHistoryDoesNotPartiallyAcceptAnotherTarget) {
+  auto document = ParseSVG(
+      "<svg xmlns='http://www.w3.org/2000/svg'><rect id='button'>"
+      "<set id='first' attributeName='width' to='12' begin='button.click' dur='1s'/>"
+      "<set id='full' attributeName='width' to='8' begin='button.click' dur='1s'/></rect></svg>");
+  const auto target = document.querySelector("#button");
+  const auto first = document.querySelector("#first");
+  const auto full = document.querySelector("#full");
+  ASSERT_THAT(target, testing::Ne(std::nullopt));
+  ASSERT_THAT(first, testing::Ne(std::nullopt));
+  ASSERT_THAT(full, testing::Ne(std::nullopt));
+  auto& fullState = full->entityHandle().get_or_emplace<components::AnimationStateComponent>();
+  for (int i = 0; i < 1024; ++i) {
+    fullState.eventBeginTimes.push_back(i);
+  }
+  document.setTime(2048);
+  EXPECT_EQ(document.dispatchAnimationEvent("click", *target), false);
+  EXPECT_THAT(first->entityHandle().get<components::AnimationStateComponent>().eventBeginTimes,
+              testing::IsEmpty());
+  EXPECT_THAT(fullState.eventBeginTimes, testing::SizeIs(1024));
+  EXPECT_EQ(fullState.eventBeginTimes.back(), 1023);
+}
+
+TEST(SVGDocument, AnimationHistoryAllocationExhaustionDoesNotPublishEvents) {
+  std::string source = "<svg xmlns='http://www.w3.org/2000/svg'><rect id='button'>";
+  for (int i = 0; i < 600; ++i) {
+    source += "<set attributeName='width' to='8' begin='button.click' dur='1s'/>";
+  }
+  source += "</rect></svg>";
+  auto document = ParseSVG(source);
+  const auto target = document.querySelector("#button");
+  ASSERT_THAT(target, testing::Ne(std::nullopt));
+  EXPECT_EQ(document.dispatchAnimationEvent("click", *target), false);
+  for (const auto& [entity, state] :
+       document.registry().view<components::AnimationStateComponent>().each()) {
+    SCOPED_TRACE(static_cast<unsigned>(entity));
+    EXPECT_THAT(state.eventBeginTimes, testing::IsEmpty());
+    EXPECT_THAT(state.eventEndTimes, testing::IsEmpty());
+  }
+}
+
+TEST(SVGDocument, AnimationTargetQueryUsesAttachedIdentityAndNamespace) {
+  auto document = ParseSVG(
+      "<svg xmlns='http://www.w3.org/2000/svg'><rect id='r'/><circle id='r'/>"
+      "<set href='#r' attributeName='opacity' to='0.5'/>"
+      "<g id='foreign'><set xmlns='urn:foreign' attributeName='opacity' to='0.5'/></g></svg>");
+  auto first = document.querySelector("rect");
+  auto duplicate = document.querySelector("circle");
+  auto foreign = document.querySelector("#foreign");
+  ASSERT_THAT(first, testing::Ne(std::nullopt));
+  ASSERT_THAT(duplicate, testing::Ne(std::nullopt));
+  ASSERT_THAT(foreign, testing::Ne(std::nullopt));
+  EXPECT_EQ(IsAnimationTarget(*first), true);
+  EXPECT_EQ(IsAnimationTarget(*duplicate), false);
+  EXPECT_EQ(IsAnimationTarget(*foreign), false);
+  ASSERT_EQ(document.removeElement(*first).applied, true);
+  EXPECT_EQ(IsAnimationTarget(*first), false);
+  EXPECT_EQ(IsAnimationTarget(*duplicate), true);
+}
+
+TEST(SVGDocument, AnimationTargetQueryObservesHrefEditsBeforeSampling) {
+  const std::pair<const char*, const char*> declarations[] = {
+      {"set", "attributeName='opacity' to='0.5'"},
+      {"animate", "attributeName='opacity' to='0.5' dur='1s'"},
+      {"animateTransform", "attributeName='transform' type='translate' to='10' dur='1s'"},
+      {"animateMotion", "path='M0 0H10' dur='1s'"},
+  };
+  for (const auto& [tag, attributes] : declarations) {
+    SCOPED_TRACE(tag);
+    auto document = ParseSVG(
+        "<svg xmlns='http://www.w3.org/2000/svg' xmlns:xlink='http://www.w3.org/1999/xlink'>"
+        "<rect id='a'/><circle id='b'/><g id='parent'><" +
+        std::string(tag) + " id='animation' href='#a' " + attributes + "/></g></svg>");
+    auto animation = document.querySelector("#animation");
+    const auto first = document.querySelector("#a");
+    const auto second = document.querySelector("#b");
+    const auto parent = document.querySelector("#parent");
+    ASSERT_TRUE(animation && first && second && parent);
+    EXPECT_TRUE(IsAnimationTarget(*first));
+    animation->setAttribute("href", "#b");
+    EXPECT_FALSE(IsAnimationTarget(*first));
+    EXPECT_TRUE(IsAnimationTarget(*second));
+    animation->setAttribute(xml::XMLQualifiedNameRef("xlink", "href"), "#a");
+    animation->setAttribute("href", "");
+    EXPECT_FALSE(IsAnimationTarget(*first));
+    EXPECT_FALSE(IsAnimationTarget(*second));
+    EXPECT_FALSE(IsAnimationTarget(*parent));
+    animation->removeAttribute("href");
+    EXPECT_TRUE(IsAnimationTarget(*first));
+    animation->removeAttribute(xml::XMLQualifiedNameRef("xlink", "href"));
+    const std::string source(document.source());
+    EXPECT_FALSE(IsAnimationTarget(*first));
+    EXPECT_FALSE(IsAnimationTarget(*second));
+    EXPECT_TRUE(IsAnimationTarget(*parent));
+    EXPECT_EQ(document.source(), source);
+  }
+}
+
+TEST(SVGDocument, AnimationTargetQueryConservativelyProtectsOnReferenceExhaustion) {
+  std::string source = "<svg xmlns='http://www.w3.org/2000/svg'><rect id='target'/>";
+  for (int i = 0; i < 1500; ++i) {
+    source += "<set href='#missing' attributeName='width' to='8'/>";
+  }
+  source += "<set href='#target' attributeName='width' to='12'/></svg>";
+  auto document = ParseSVG(source);
+  const auto target = document.querySelector("#target");
+  ASSERT_THAT(target, testing::Ne(std::nullopt));
+  EXPECT_EQ(IsAnimationTarget(*target), true);
+}
+
+TEST(SVGDocument, AnimationTargetQueryConservativelyProtectsOnDeclarationOverflow) {
+  std::string source = "<svg xmlns='http://www.w3.org/2000/svg'><rect id='target'/>";
+  for (int i = 0; i < 4097; ++i) {
+    source += "<set attributeName='opacity' to='1'/>";
+  }
+  source += "</svg>";
+  auto document = ParseSVG(source);
+  const auto target = document.querySelector("#target");
+  ASSERT_THAT(target, testing::Ne(std::nullopt));
+  EXPECT_EQ(IsAnimationTarget(*target), true);
+}
+
+TEST(SVGDocument, AnimationControlsAndLifecyclePreserveSourceAndClock) {
+  constexpr std::string_view source = R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg"><rect>
+      <animate id="a" attributeName="width" from="0" to="100" begin="indefinite" dur="1s" repeatCount="3"/>
+    </rect></svg>)svg";
+  parser::SVGParser::Options options;
+  options.enableExperimental = true;
+  auto document = ParseSVG(source, options);
+  auto animation = document.querySelector("#a");
+  ASSERT_THAT(animation, testing::Ne(std::nullopt));
+  document.setTime(1);
+  EXPECT_EQ(document.beginAnimation(*animation), true);
+  auto batch = document.animationEvents(0, 5);
+  EXPECT_EQ(batch.complete, true);
+  ASSERT_THAT(batch.events, testing::SizeIs(4));
+  EXPECT_THAT(
+      batch.events,
+      testing::ElementsAre(
+          testing::AllOf(testing::Field(&SVGAnimationEvent::type, SVGAnimationEvent::Type::Begin),
+                         testing::Field(&SVGAnimationEvent::time, 1)),
+          testing::AllOf(testing::Field(&SVGAnimationEvent::type, SVGAnimationEvent::Type::Repeat),
+                         testing::Field(&SVGAnimationEvent::time, 2)),
+          testing::AllOf(testing::Field(&SVGAnimationEvent::repeatIndex, 2),
+                         testing::Field(&SVGAnimationEvent::time, 3)),
+          testing::AllOf(testing::Field(&SVGAnimationEvent::type, SVGAnimationEvent::Type::End),
+                         testing::Field(&SVGAnimationEvent::time, 4))));
+  document.setTime(2.5);
+  EXPECT_EQ(document.endAnimation(*animation), true);
+  batch = document.animationEvents(2, 5);
+  ASSERT_THAT(batch.events, testing::SizeIs(1));
+  EXPECT_EQ(batch.events.front().time, 2.5);
+  EXPECT_EQ(document.currentTime(), 2.5);
+  EXPECT_EQ(document.source(), source);
+}
+
+TEST(SVGDocument, AnimationControlsRejectForeignDetachedAndSecureTargets) {
+  parser::SVGParser::Options options;
+  options.enableExperimental = true;
+  constexpr std::string_view source = R"svg(<svg xmlns="http://www.w3.org/2000/svg">
+    <rect id="r"><set id="a" attributeName="fill" to="red" begin="focus"/></rect></svg>)svg";
+  auto first = ParseSVG(source, options);
+  auto second = ParseSVG(source, options);
+  auto local = first.querySelector("#a");
+  auto foreign = second.querySelector("#a");
+  ASSERT_THAT(local, testing::Ne(std::nullopt));
+  ASSERT_THAT(foreign, testing::Ne(std::nullopt));
+  EXPECT_EQ(first.beginAnimation(*foreign), false);
+  local->remove();
+  EXPECT_EQ(first.beginAnimation(*local), false);
+  ParseWarningSink warnings;
+  SVGDocument::Settings settings;
+  settings.processingMode = ProcessingMode::SecureAnimated;
+  auto secure = parser::SVGParser::ParseSVG(source, warnings, options, std::move(settings));
+  ASSERT_THAT(secure, NoParseError());
+  auto animation = secure.result().querySelector("#a");
+  ASSERT_THAT(animation, testing::Ne(std::nullopt));
+  EXPECT_EQ(secure.result().beginAnimation(*animation), false);
+  EXPECT_EQ(secure.result().dispatchAnimationEvent("focus", *animation), false);
+}
+
+TEST(SVGDocument, AnimationLifecycleQueryFailsClosedOnExcessiveEvents) {
+  parser::SVGParser::Options options;
+  options.enableExperimental = true;
+  auto document = ParseSVG(R"svg(<svg xmlns="http://www.w3.org/2000/svg"><rect>
+    <set attributeName="fill" to="red" dur="0.001s" repeatCount="indefinite"/>
+    </rect></svg>)svg",
+                           options);
+  const auto batch = document.animationEvents(-1, 100);
+  EXPECT_EQ(batch.complete, false);
+  EXPECT_THAT(batch.events, testing::IsEmpty());
+}
+
+TEST(SVGDocument, AnimationLifecycleQueryRejectsNonprogressingRepeatTimes) {
+  auto document = ParseSVG(R"svg(<svg xmlns="http://www.w3.org/2000/svg"><rect>
+    <animate attributeName="width" from="0" to="100" begin="1s" dur="1e-300s" repeatCount="indefinite"/>
+    </rect></svg>)svg");
+  const auto batch = document.animationEvents(1, 2);
+  EXPECT_EQ(batch.complete, false);
+  EXPECT_THAT(batch.events, testing::IsEmpty());
+}
+
+TEST(SVGDocument, SourceInsertedForeignAnimationStaysUnknown) {
+  auto document =
+      ParseSVG(R"svg(<svg xmlns="http://www.w3.org/2000/svg"><g id="group"/></svg>)svg");
+  const std::string source(document.source());
+  const auto start = source.find("<g");
+  const auto end = source.find("/>", start) + 2;
+  const auto result = document.applySourceEdit(xml::XMLEditIntent{
+      .range = {FileOffset::Offset(start), FileOffset::Offset(end)},
+      .replacement =
+          R"svg(<g xmlns:x="urn:foreign"><x:animate id="foreign" attributeName="width" from="0" to="100" dur="1s"/></g>)svg",
+      .sourceVersion = document.sourceVersion(),
+  });
+  EXPECT_EQ(result.applied, true);
+  const auto foreign = document.querySelector("#foreign");
+  ASSERT_THAT(foreign, testing::Ne(std::nullopt));
+  EXPECT_EQ(foreign->type(), ElementType::Unknown);
+  EXPECT_THAT(document.animationEvents(-1, 2).events, testing::IsEmpty());
+}
+
+TEST(SVGDocument, AnimationNamespaceRoundtripDiscardsOldEventSessionOnlyOnUpdate) {
+  auto document = ParseSVG(
+      "<svg xmlns='http://www.w3.org/2000/svg'><rect id='button'>"
+      "<set id='animation' attributeName='width' to='12' begin='button.click' dur='2s' "
+      "restart='never'/></rect></svg>");
+  const auto target = document.querySelector("#button");
+  auto animation = document.querySelector("#animation");
+  ASSERT_THAT(target, testing::Ne(std::nullopt));
+  ASSERT_THAT(animation, testing::Ne(std::nullopt));
+  EXPECT_EQ(document.dispatchAnimationEvent("click", *target), true);
+  animation->setAttribute("xmlns", "urn:foreign");
+  EXPECT_EQ(IsAnimationTarget(*target), false);
+  EXPECT_THAT(animation->entityHandle().get<components::AnimationStateComponent>().eventBeginTimes,
+              testing::ElementsAre(0.0));
+  EXPECT_THAT(document.animationEvents(-1, 3).events, testing::IsEmpty());
+  EXPECT_EQ(animation->entityHandle().try_get<components::AnimationStateComponent>(), nullptr);
+  animation->removeAttribute("xmlns");
+  EXPECT_THAT(document.animationEvents(-1, 3).events, testing::IsEmpty());
+  document.setTime(4);
+  EXPECT_EQ(document.dispatchAnimationEvent("click", *target), true);
+  EXPECT_THAT(animation->entityHandle().get<components::AnimationStateComponent>().eventBeginTimes,
+              testing::ElementsAre(4.0));
+}
+
+TEST(SVGDocument, AnimationControlsRejectRetainedForeignNamespaceHandle) {
+  auto document = ParseSVG(R"svg(<svg xmlns="http://www.w3.org/2000/svg"><rect>
+    <animate id="a" attributeName="width" from="0" to="100" dur="1s" begin="indefinite"/>
+    </rect></svg>)svg");
+  auto animation = document.querySelector("#a").value();
+  animation.setAttribute("xmlns", "urn:foreign");
+  EXPECT_EQ(document.beginAnimation(animation), false);
+  EXPECT_EQ(document.endAnimation(animation), false);
+  animation.removeAttribute("xmlns");
+  EXPECT_EQ(document.beginAnimation(animation), true);
 }
 
 }  // namespace donner::svg

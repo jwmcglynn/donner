@@ -140,6 +140,39 @@ TEST(SVGLineElementTests, SetFromDefaults) {
   EXPECT_THAT(fragment->y2(), LengthIs(100.0, Lengthd::Unit::None));
 }
 
+TEST(SVGLineElementTests, GenericAttributeMutationUpdatesTypedCoordinateAndSource) {
+  auto fragment =
+      instantiateSubtreeElementAs<SVGLineElement>(R"(<line x1="1" y1="2" x2="3" y2="4" />)");
+
+  fragment->setAttribute("x2", " \t12px \n");
+  EXPECT_THAT(fragment->x2(), LengthIs(12.0, Lengthd::Unit::Px));
+  EXPECT_THAT(fragment->getAttribute("x2"), testing::Optional(testing::StrEq(" \t12px \n")));
+  EXPECT_THAT(fragment,
+              ComputedSplineIs(PointsAndCommandsAre(
+                  ElementsAre(Vector2d(1, 2), Vector2d(12, 4)),
+                  ElementsAre(Command{CommandType::MoveTo, 0}, Command{CommandType::LineTo, 1}))));
+
+  fragment->setAttribute("x2", "bad");
+  EXPECT_THAT(fragment->x2(), LengthIs(0.0, Lengthd::Unit::None));
+  EXPECT_THAT(fragment->getAttribute("x2"), testing::Optional(testing::StrEq("bad")));
+
+  fragment->setAttribute("x2", "8px trailing");
+  EXPECT_THAT(fragment->x2(), LengthIs(0.0, Lengthd::Unit::None));
+  EXPECT_THAT(fragment->getAttribute("x2"), testing::Optional(testing::StrEq("8px trailing")));
+
+  fragment->setAttribute("x2", "8px");
+  EXPECT_THAT(fragment->x2(), LengthIs(8.0, Lengthd::Unit::Px));
+  EXPECT_THAT(fragment->getAttribute("x2"), testing::Optional(testing::StrEq("8px")));
+
+  fragment->removeAttribute("x2");
+  EXPECT_THAT(fragment->x2(), LengthIs(0.0, Lengthd::Unit::None));
+  EXPECT_THAT(fragment->getAttribute("x2"), Eq(std::nullopt));
+  EXPECT_THAT(fragment,
+              ComputedSplineIs(PointsAndCommandsAre(
+                  ElementsAre(Vector2d(1, 2), Vector2d(0, 4)),
+                  ElementsAre(Command{CommandType::MoveTo, 0}, Command{CommandType::LineTo, 1}))));
+}
+
 /**
  * Verify that computedSpline() produces a 2-point line segment (MoveTo + LineTo).
  */

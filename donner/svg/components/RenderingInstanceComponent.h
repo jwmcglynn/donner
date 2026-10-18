@@ -120,6 +120,14 @@ struct ResolvedMask {
   }
 };
 
+/// Animated marker lengths resolved once against the referencing rendering instance.
+struct ResolvedMarkerLengths {
+  double width = 0;   ///< Marker viewport width in user units.
+  double height = 0;  ///< Marker viewport height in user units.
+  double refX = 0;    ///< Reference X coordinate in the marker's chosen percentage space.
+  double refY = 0;    ///< Reference Y coordinate in the marker's chosen percentage space.
+};
+
 /// Resolved \ref xml_marker reference applied to a rendering instance.
 struct ResolvedMarker {
   /// Reference to a \ref xml_marker element.
@@ -128,6 +136,8 @@ struct ResolvedMarker {
   std::optional<SubtreeInfo> subtreeInfo;
   /// Defines the coordinate system for marker attributes and contents.
   MarkerUnits markerUnits;
+  /// Present only when this reference uses contextual animation.
+  std::optional<ResolvedMarkerLengths> animatedLengths = std::nullopt;
 
   /// Returns true if the reference is valid, or false if this the \ref xml_mask did not
   /// properly resolve.
@@ -161,6 +171,9 @@ struct RenderingInstanceComponent {
 
   /// The draw order of the element, computed from the traversal order of the tree.
   int drawOrder = 0;
+
+  /// Last rendered descendant, including this instance when it has no rendered children.
+  Entity subtreeLastEntity = entt::null;
 
   /// Whether the element is visible. Note that elements may still influence rendering behavior when
   /// they are hidden, such as \ref xml_pattern elements.

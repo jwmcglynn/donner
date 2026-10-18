@@ -389,6 +389,10 @@ private:
                   const components::ResolvedMarker& marker, const Vector2d& vertexPosition,
                   const Vector2d& direction, MarkerOrient::MarkerType markerOrientType,
                   const components::ComputedStyleComponent& style);
+  /// Render one mask occurrence while preserving the caller's cursor for shared content.
+  void renderMaskContents(RenderingInstanceView& view, Registry& registry,
+                          const components::RenderingInstanceComponent& instance,
+                          const components::ResolvedMask& mask, const Box2d& shapeLocalBounds);
   int renderMask(RenderingInstanceView& view, Registry& registry,
                  const components::RenderingInstanceComponent& instance,
                  const components::ResolvedMask& mask);

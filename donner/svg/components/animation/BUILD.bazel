@@ -3,13 +3,16 @@ load("//build_defs:rules.bzl", "donner_cc_library")
 donner_cc_library(
     name = "components",
     hdrs = [
+        "AnimateMotionComponent.h",
         "AnimateTransformComponent.h",
         "AnimateValueComponent.h",
         "AnimatedValuesComponent.h",
+        "AnimationInterpolation.h",
         "AnimationResourceBudget.h",
         "AnimationStateComponent.h",
         "AnimationTimingComponent.h",
         "ClockValue.h",
+        "ContextualLengthRecipe.h",
         "SetAnimationComponent.h",
     ],
     visibility = [
@@ -21,21 +24,68 @@ donner_cc_library(
 )
 
 donner_cc_library(
+    name = "value_sampler",
+    srcs = [
+        "AnimationInterpolation.cc",
+        "AnimationPathValue.cc",
+        "AnimationValueMath.cc",
+        "AnimationValueSampler.cc",
+    ],
+    hdrs = [
+        "AnimationPathValue.h",
+        "AnimationValueMath.h",
+        "AnimationValueSampler.h",
+    ],
+    visibility = ["//donner/svg:__subpackages__"],
+    deps = [
+        ":components",
+        "//donner/base",
+        "//donner/base/parser",
+        "//donner/css/parser",
+        "//donner/svg/parser:parser_core",
+    ],
+)
+
+donner_cc_library(
     name = "animation_system",
-    srcs = ["AnimationSystem.cc"],
-    hdrs = ["AnimationSystem.h"],
+    srcs = [
+        "AnimationBaseValue.cc",
+        "AnimationMotion.cc",
+        "AnimationReference.cc",
+        "AnimationSystem.cc",
+        "AnimationTimeline.cc",
+    ],
+    hdrs = [
+        "AnimationBaseValue.h",
+        "AnimationMotion.h",
+        "AnimationNumericAttributes.h",
+        "AnimationReference.h",
+        "AnimationSystem.h",
+        "AnimationTimeline.h",
+    ],
     visibility = [
         "//donner/svg:__subpackages__",
     ],
     deps = [
         ":components",
+        ":value_sampler",
         "//donner/base",
         "//donner/base/parser",
         "//donner/base/xml/components",
+        "//donner/css/parser",
         "//donner/svg/components:components_core",
         "//donner/svg/components:element_type_component",
+        "//donner/svg/components:node_lifetime_component",
         "//donner/svg/components:svg_document_context",
+        "//donner/svg/components/filter:components",
+        "//donner/svg/components/layout:layout_system",
+        "//donner/svg/components/paint:components",
         "//donner/svg/components/resources:resource_manager_context",
+        "//donner/svg/components/shadow:components",
+        "//donner/svg/components/shape:components",
+        "//donner/svg/components/style:components",
+        "//donner/svg/components/text:components",
+        "//donner/svg/components/text:text_invalidation",
         "//donner/svg/core",
         "//donner/svg/parser:parser_core",
     ],

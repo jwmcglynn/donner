@@ -20,11 +20,15 @@ cc_library(
 donner_perf_sensitive_cc_library(
     name = "style_system",
     srcs = [
+        "PaintAnimationStyle.cc",
+        "ScalarAnimationStyle.cc",
         "StyleSystem.cc",
     ],
     hdrs = [
-        "StyleSystem.h",
         "ExternalUseStyleContext.h",
+        "PaintAnimationStyle.h",
+        "ScalarAnimationStyle.h",
+        "StyleSystem.h",
     ],
     visibility = [
         "//donner/editor:__pkg__",
@@ -34,8 +38,13 @@ donner_perf_sensitive_cc_library(
     deps = [
         ":components",
         "//donner/base",
+        "//donner/base/parser",
         "//donner/css",
         "//donner/svg/components:components_core",
+        "//donner/svg/components/animation:components",
+        "//donner/svg/components/animation:value_sampler",
+        "//donner/svg/components/filter:components",
+        "//donner/svg/components/paint:components",
         "//donner/svg/components/resources:resource_manager_context",
         "//donner/svg/components/shadow:components",
     ],
@@ -56,6 +65,8 @@ donner_cc_test(
     deps = [
         ":style_system",
         "//donner/base:base_test_utils",
+        "//donner/svg/components/animation:animation_system",
+        "//donner/svg/components/animation:components",
         "//donner/svg/components/shadow:shadow_tree_system",
         "//donner/svg/parser",
         "@com_google_gtest//:gtest_main",

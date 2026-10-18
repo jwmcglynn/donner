@@ -83,6 +83,10 @@ MAIN_ONLY_JOBS = {}
 # step, kind, value); the reason says why the difference cannot make main red after a green PR,
 # or names the accepted risk.
 INVOCATION_ALLOWLIST = {
+    ("main.yml", "macos", "macos-self-hosted", "Test (browser targets)", "tag-filter-pr-only",
+     "-requires_desktop_session"):
+        "The required hosted macos-browser subset runs these tests with main's invocation; "
+        "the service runner cannot launch browsers that require a desktop session.",
     # The hosted image has no offline Metal compiler, so its lane drops these targets. The
     # self-hosted runner has one and runs them, so the pull request runs more than main.
     ("main.yml", "macos", "macos-self-hosted", "Test", "tag-filter-main-only",
@@ -1938,6 +1942,24 @@ class CiLaneParityTest(unittest.TestCase):
                     self.assertEqual(main_environment.get(key), value, key)
         self._assert_matches_allowlist(observed, SUBSET_ALLOWLIST,
                                        "a hosted subset runs a main step differently")
+
+    def test_desktop_browser_exclusion_keeps_required_hosted_coverage(self):
+        self.assertEqual(HOSTED_SUBSETS[("main.yml", "macos", "trusted-pr")],
+                         ("macos-browser", ("Test (browser targets)",)))
+        workflow = self.workflows["main.yml"]
+        for job_name, scenario in (("macos", "main-push"),
+                                   ("macos-browser", "trusted-pr"),
+                                   ("macos-browser", "trusted-pr-fallback")):
+            with self.subTest(job=job_name, scenario=scenario):
+                self.assertTrue(job_gates(workflow, job_name, scenario))
+                job = _jobs(workflow)[job_name]
+                self.assertFalse(job.get("continue-on-error", False))
+                profile, _ = _bazel_profile(workflow, job, scenario)
+                invocations = profile["Test (browser targets)"]
+                self.assertTrue(invocations)
+                for invocation in invocations:
+                    self.assertIn("launches-browser", invocation["tag_filters"])
+                    self.assertNotIn("-requires_desktop_session", invocation["tag_filters"])
 
     def test_subset_order_problems_are_found(self):
         main = parse_workflow(

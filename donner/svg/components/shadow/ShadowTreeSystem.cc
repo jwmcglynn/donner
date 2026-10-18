@@ -2,12 +2,14 @@
 
 #include <algorithm>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 #include "donner/base/ParseWarningSink.h"
 #include "donner/base/Utils.h"
 #include "donner/base/xml/components/TreeComponent.h"
 #include "donner/svg/components/ElementTypeComponent.h"
+#include "donner/svg/components/GeometryPreparationResourceBudget.h"
 #include "donner/svg/components/layout/SizedElementComponent.h"
 #include "donner/svg/components/shadow/OffscreenShadowTreeComponent.h"
 #include "donner/svg/components/shadow/ShadowBranch.h"
@@ -19,6 +21,12 @@
 namespace donner::svg::components {
 
 namespace {
+
+void ReleaseShadowGeometry(Registry& registry, Entity entity) {
+  if (auto* budget = registry.ctx().find<GeometryPreparationResourceBudget>()) {
+    budget->release(entity);
+  }
+}
 
 struct ShadowExpansionCost {
   std::size_t generatedEntities = 0;
@@ -168,36 +176,66 @@ void ShadowTreeSystem::beginRebuild(Registry& registry) {
 void ShadowTreeSystem::teardown(Registry& registry, ComputedShadowTreeComponent& shadow) {
   // TODO(jwmcglynn): Ideally TreeComponents should automatically cleanup when the Entity is
   // deleted.
-  if (shadow.mainBranch) {
-    for (const auto& shadow : shadow.mainBranch->shadowEntities) {
-      registry.get<donner::components::TreeComponent>(shadow).remove(registry);
+  struct TeardownFrame {
+    std::vector<ComputedShadowTreeComponent::BranchStorage> branches;
+    std::size_t branchIndex = 0;
+    std::size_t entityIndex = 0;
+  };
+  const auto detach = [](ComputedShadowTreeComponent& component) {
+    TeardownFrame frame;
+    frame.branches.reserve(component.branches.size() + (component.mainBranch ? 1 : 0));
+    if (component.mainBranch) {
+      frame.branches.push_back(std::move(*component.mainBranch));
+    }
+    for (auto& branch : component.branches) {
+      frame.branches.push_back(std::move(branch));
+    }
+    component.mainBranch.reset();
+    component.branches.clear();
+    return frame;
+  };
+
+  std::vector<TeardownFrame> pending;
+  pending.push_back(detach(shadow));
+  while (!pending.empty()) {
+    const size_t frameIndex = pending.size() - 1;
+    bool pushedNested = false;
+    while (pending[frameIndex].branchIndex < pending[frameIndex].branches.size()) {
+      Entity entity = entt::null;
+      {
+        auto& frame = pending[frameIndex];
+        auto& branch = frame.branches[frame.branchIndex];
+        if (frame.entityIndex == branch.shadowEntities.size()) {
+          ++frame.branchIndex;
+          frame.entityIndex = 0;
+          continue;
+        }
+        entity = branch.shadowEntities[frame.entityIndex++];
+      }
+      if (auto* nested = registry.try_get<ComputedShadowTreeComponent>(entity)) {
+        TeardownFrame nestedFrame = detach(*nested);
+        pending.push_back(std::move(nestedFrame));
+        pushedNested = true;
+        break;
+      }
+    }
+    if (pushedNested) {
+      continue;
     }
 
-    registry.destroy(shadow.mainBranch->shadowEntities.begin(),
-                     shadow.mainBranch->shadowEntities.end());
-  }
-
-  for (const auto& branch : shadow.branches) {
-    for (const auto& shadow : branch.shadowEntities) {
-      registry.get<donner::components::TreeComponent>(shadow).remove(registry);
+    TeardownFrame completed = std::move(pending.back());
+    pending.pop_back();
+    for (auto& branch : completed.branches) {
+      for (const Entity entity : branch.shadowEntities) {
+        ReleaseShadowGeometry(registry, entity);
+        registry.get<donner::components::TreeComponent>(entity).remove(registry);
+      }
+      registry.destroy(branch.shadowEntities.begin(), branch.shadowEntities.end());
     }
-
-    registry.destroy(branch.shadowEntities.begin(), branch.shadowEntities.end());
   }
-
-  shadow.mainBranch = std::nullopt;
-  shadow.branches.clear();
 }
 
 void ShadowTreeSystem::teardownInstances(EntityHandle handle) {
-  // TODO(jwmcglynn): This only tears down instances recorded on `handle` itself. A shadow tree
-  // whose clones are themselves shadow hosts records those nested instances on the clone
-  // entities, and destroying the clones here drops those records without destroying what they
-  // point at. The leak is bounded and unreachable in practice today because the render path
-  // clears every ComputedShadowTreeComponent through the teardown loop in
-  // `RenderingContext::ensureComputedComponents()` before rebuilding, but a caller that relies on
-  // this function alone would leak. Recursing here needs the nested entities to be reachable
-  // without a full registry scan.
   if (auto* shadow = handle.try_get<ComputedShadowTreeComponent>()) {
     teardown(*handle.registry(), *shadow);
   }

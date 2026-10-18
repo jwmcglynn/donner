@@ -20,6 +20,7 @@
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -97,6 +98,10 @@
 namespace donner::editor {
 
 namespace {
+
+double AnimationPreviewClockSeconds() {
+  return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+}
 
 thread_local std::string gIsolatedReplayClipboard;
 
@@ -540,7 +545,8 @@ void PublishPendingUnderlayDrawStats(int checkerboardDrawCount, int overviewTile
 void PublishLayerThumbnailStats(double rowCount, double renderedCount, double reusedCount,
                                 double deferredCount, double skippedForCanvasInvalidationCount,
                                 double snapshotRebuildCount, double bitmapCount, double bitmapBytes,
-                                double textureSnapshotCount, double textureCount) {
+                                double textureSnapshotCount, double textureCount,
+                                double refreshPasses, double renderAttempts, bool previewPaused) {
   // clang-format off
   MAIN_THREAD_ASYNC_EM_ASM(
       {
@@ -555,10 +561,14 @@ void PublishLayerThumbnailStats(double rowCount, double renderedCount, double re
           'bitmapBytes' : $7,
           'textureSnapshotCount' : $8,
           'textureCount' : $9,
+          'refreshPasses' : $10,
+          'renderAttempts' : $11,
+          'previewPaused' : !!$12,
         });
       },
       rowCount, renderedCount, reusedCount, deferredCount, skippedForCanvasInvalidationCount,
-      snapshotRebuildCount, bitmapCount, bitmapBytes, textureSnapshotCount, textureCount);
+      snapshotRebuildCount, bitmapCount, bitmapBytes, textureSnapshotCount, textureCount,
+      refreshPasses, renderAttempts, previewPaused);
   // clang-format on
 }
 
@@ -933,8 +943,9 @@ bool PendingDocumentReplacementCanProcess(bool hasPendingRequest, bool documentW
   return hasPendingRequest && documentWriteAvailable && !hasPendingMutations;
 }
 
-bool ShouldRefreshSidebarSnapshots(bool rendererBusy, bool interactionActive) noexcept {
-  return !rendererBusy && !interactionActive;
+bool ShouldRefreshSidebarSnapshots(bool rendererBusy, bool interactionActive,
+                                   bool previewsPaused) noexcept {
+  return !rendererBusy && !interactionActive && !previewsPaused;
 }
 
 bool SidebarSnapshotRefreshPendingAfterPass(std::size_t deferredThumbnailCount) noexcept {
@@ -1738,6 +1749,16 @@ std::optional<float> EditorShell::nextIdleWakeSeconds() {
     // without running the entire editor frame ten times a second while a save is waiting.
     includeWake(0.25f);
   }
+  if (animationPreview_ || animationResetPending_) {
+#ifdef __EMSCRIPTEN__
+    // Browser scheduled callbacks already follow rAF; a second deadline can discard ready ticks.
+    includeWake(0.0f);
+#else
+    const double elapsed =
+        std::max(0.0, AnimationPreviewClockSeconds() - animationPreviewStartSeconds_);
+    includeWake(static_cast<float>((std::floor(elapsed * 60.0) + 1.0) / 60.0 - elapsed));
+#endif
+  }
   includeWake(documentSyncController_.nextTextSyncWakeSeconds());
   includeWake(nextViewportRenderWakeSeconds());
   includeWake(renderCoordinator_.nextNothingToPresentRetryWakeSeconds());
@@ -2485,6 +2506,10 @@ bool EditorShell::tryApplyGroupOperation(bool ungroup) {
 }
 
 void EditorShell::resetPresentationForLoadedDocument(std::string_view canonicalSource) {
+  animationPreview_ = false;
+  animationResetPending_ = false;
+  renderCoordinator_.setPointerTargetCaptureEnabled(false);
+  resetPreviewPointer();
   cancelEyedropper(true);
   cancelSampleThumbnailGeneration();
   foregroundPresentationObligation_.reset();
@@ -4222,8 +4247,7 @@ void EditorShell::renderEyedropperLoupe(const Vector2d& pointerScreen, const Box
   drawList->PopClipRect();
 }
 
-ToolbarPaintState EditorShell::toolbarPaintStateForFrame(bool rendererBusy,
-                                                         bool canvasInteractionActive,
+ToolbarPaintState EditorShell::toolbarPaintStateForFrame(bool rendererBusy, bool authoringSuspended,
                                                          bool* canEditPaint) {
   svg::SVGDocumentHandle currentPaintDocument;
   std::optional<Entity> currentPaintSelection;
@@ -4235,7 +4259,7 @@ ToolbarPaintState EditorShell::toolbarPaintStateForFrame(bool rendererBusy,
       toolbarPaintSnapshot_ != nullptr && toolbarPaintSnapshotDocument_ == currentPaintDocument &&
       toolbarPaintSnapshotSelection_ == currentPaintSelection;
   const FillStrokeWidgetInteractionState interactionState = ResolveFillStrokeWidgetInteractionState(
-      app_.hasDocument(), rendererBusy, canvasInteractionActive, paintSnapshotMatchesSelection);
+      app_.hasDocument(), rendererBusy, authoringSuspended, paintSnapshotMatchesSelection);
   *canEditPaint = interactionState.canEdit;
   std::string editorSource;
   std::string documentSource;
@@ -4247,10 +4271,7 @@ ToolbarPaintState EditorShell::toolbarPaintStateForFrame(bool rendererBusy,
       sourceForRanges = std::string_view(editorSource);
     }
   }
-  // The worker owns the selected element while busy, and drag-frame handoffs
-  // alternate between busy and idle as previews land. Preserve one paint and
-  // enabled-state presentation for the entire canvas interaction instead of
-  // letting the swap arrow and selected swatches oscillate with worker state.
+  // Keep paint snapshots stable throughout gestures and Preview, without reading worker-owned DOM.
   if (interactionState.refreshPaintSnapshot) {
     ToolbarPaintState paintState = ToolbarPaintStateForApp(app_, sourceForRanges);
     toolbarPaintSnapshot_ = std::make_unique<ToolbarPaintState>(paintState);
@@ -4379,6 +4400,10 @@ void EditorShell::showPaintSwatchTooltip(PaintTarget target, bool canSelectPaint
 void EditorShell::showFillStrokeWidgetTooltip(FillStrokeWidgetRegion region,
                                               const ToolbarPaintState& paintState,
                                               bool canSelectPaint, bool canEditPaint) {
+  if (animationPreview_) {
+    ImGui::SetTooltip("Switch to Edit to change paint");
+    return;
+  }
   switch (region) {
     case FillStrokeWidgetRegion::Swap: ImGui::SetTooltip("Swap fill and stroke"); break;
     case FillStrokeWidgetRegion::SetNone:
@@ -4435,10 +4460,11 @@ void EditorShell::renderFillStrokeToolbarWidget() {
   const bool canvasInteractionActive = selectTool_.isDragging() || selectTool_.isMarqueeing() ||
                                        penTool_.isDraggingAnchor() || textTool_.isDraggingBox() ||
                                        textTool_.isAdjustingFrame();
+  const bool authoringSuspended = canvasInteractionActive || animationPreview_;
   bool canEditPaint = false;
   const ToolbarPaintState paintState =
-      toolbarPaintStateForFrame(rendererBusy, canvasInteractionActive, &canEditPaint);
-  const bool canSelectPaint = app_.hasDocument() && !canvasInteractionActive;
+      toolbarPaintStateForFrame(rendererBusy, authoringSuspended, &canEditPaint);
+  const bool canSelectPaint = app_.hasDocument() && !authoringSuspended;
   ImGui::BeginDisabled(!canSelectPaint);
   ImGui::InvisibleButton("##fill_stroke_widget",
                          ImVec2(kToolPalettePaintWidgetWidth, kToolPalettePaintWidgetHeight));
@@ -4447,7 +4473,9 @@ void EditorShell::renderFillStrokeToolbarWidget() {
   const ImVec2 mouse = ImGui::GetMousePos();
   const FillStrokeWidgetLayout layout = ComputeFillStrokeWidgetLayout(min, max);
   const bool fillIsActive = activePaintTarget_ == PaintTarget::Fill;
-  DrawFillStrokeWidget(ImGui::GetWindowDrawList(), layout, paintState, fillIsActive, canEditPaint);
+  // Worker availability gates mutation, not the brightness of persistent toolbar chrome.
+  DrawFillStrokeWidget(ImGui::GetWindowDrawList(), layout, paintState, fillIsActive,
+                       canSelectPaint);
 
   const FillStrokeWidgetRegion region = HitTestFillStrokeWidget(
       layout, mouse, paintState.fill.isCustom, paintState.stroke.isCustom, fillIsActive);
@@ -5136,9 +5164,11 @@ void EditorShell::renderRenderPane(ImGuiWindowFlags paneFlags) {
       EditingScopeBreadcrumbScreenRect(paneOriginImGui, toolPaletteRect, app_.editingScope());
   const Box2d canvasZoomControlRect = canvasZoomControlScreenRect();
   const std::optional<Box2d> compactPanelRect = compactPanelScreenRect();
-  const bool canvasChromeHovered = CanvasChromeCapturesInput(
+  bool canvasChromeHovered = CanvasChromeCapturesInput(
       ImGui::GetMousePos(), referenceChipRect, toolPaletteRect, textFormatBarRect,
       editingScopeBreadcrumbRect, canvasZoomControlRect, compactPanelRect);
+  canvasChromeHovered |= animationPreviewControlScreenRect().contains(
+      Vector2d(ImGui::GetMousePos().x, ImGui::GetMousePos().y));
 
   const Box2d paneRect = Box2d::FromXYWH(interactionController_.viewport().paneOrigin.x,
                                          interactionController_.viewport().paneOrigin.y,
@@ -5211,15 +5241,17 @@ void EditorShell::renderRenderPane(ImGuiWindowFlags paneFlags) {
       (adaptiveUiLayout_.compactTouch() ? 2.0 : 1.0);
 
   if (ImGui::IsMouseClicked(ImGuiMouseButton_Right, /*repeat=*/false)) {
-    handleRenderPaneRightClick(canvasHovered, screenToDocument(ImGui::GetMousePos()));
+    handleRenderPaneRightClick(previewAllowsEditing(canvasHovered),
+                               screenToDocument(ImGui::GetMousePos()));
   }
 
   const ImVec2 hoverMousePos = ImGui::GetMousePos();
   const bool overCanvasScrollbar = internal::CanvasScrollbarsCaptureInput(
       adaptiveUiLayout_.showCanvasScrollbars, interactionController_.viewport(),
       Vector2d(hoverMousePos.x, hoverMousePos.y));
-  const bool toolEligible =
-      canvasHovered && !interactionController_.panning() && !spaceHeld && !overCanvasScrollbar;
+  capturePreviewPointer(canvasHovered, spaceHeld, overCanvasScrollbar);
+  const bool toolEligible = previewAllowsEditing(canvasHovered) &&
+                            !interactionController_.panning() && !spaceHeld && !overCanvasScrollbar;
   const bool selectToolActive = activeTool_ == ActiveTool::Select;
   const bool penToolActive = activeTool_ == ActiveTool::Pen;
   const bool textToolActive = activeTool_ == ActiveTool::Text;
@@ -5327,7 +5359,7 @@ void EditorShell::noteSidebarPreviewDemand(bool foregroundAcknowledged, bool com
 }
 
 void EditorShell::keepOwedSidebarRefreshScheduled(bool rendererBusy, bool compactSheet) {
-  if (showSamplePicker_ || !sidebarSnapshotRefreshPending_) {
+  if (showSamplePicker_ || !sidebarSnapshotRefreshPending_ || auxiliaryPreviewWorkPaused()) {
     return;
   }
   // Preserve the refresh obligation across a renderer-busy frame or a trickled mouse transition.
@@ -5414,12 +5446,13 @@ void EditorShell::renderRenderPanePresentation(
 #else
   const FramePresentationAdmission admit;
 #endif
-  const auto frame = showSamplePicker_
-                         ? nullptr
-                         : renderCoordinator_.buildFramePresentation(
-                               app_, selectTool_, presentedDocumentViewport, paneRect,
-                               selectionChromeDetailForActiveTool(),
-                               !contentOnlyCaptureThisFrame_ && !showSamplePicker_, admit);
+  const auto frame =
+      showSamplePicker_
+          ? nullptr
+          : renderCoordinator_.buildFramePresentation(
+                app_, selectTool_, presentedDocumentViewport, paneRect,
+                selectionChromeDetailForActiveTool(),
+                previewAllowsEditing(!contentOnlyCaptureThisFrame_ && !showSamplePicker_), admit);
   const auto representedGesturePreview =
       frame != nullptr && frame->followsPointer() ? activeGesturePreview : std::nullopt;
 #ifndef DONNER_EDITOR_WGPU
@@ -5461,13 +5494,15 @@ void EditorShell::renderRenderPanePresentation(
     renderSelectionSizeChip(hoverTransformIntent, representedGesturePreview);
     renderReferenceHighlightChip();
     renderTextToolHint();
+    ImGui::BeginDisabled(animationPreview_);
     renderToolPalette(paneOriginImGui, contentRegion);
+    ImGui::EndDisabled();
     renderEditingScopeBreadcrumb();
     const FormatBarState formatBarState = computeFormatBarState();
-    const std::optional<Box2d> formatBarRect =
-        TextFormatBarScreenRect(paneOriginImGui, contentRegion, toolPaletteRect,
-                                adaptiveUiLayout_.showTextFormatBar && formatBarState.visible,
-                                TextFormatBarPresenter::BarHeight());
+    const std::optional<Box2d> formatBarRect = TextFormatBarScreenRect(
+        paneOriginImGui, contentRegion, toolPaletteRect,
+        previewAllowsEditing(adaptiveUiLayout_.showTextFormatBar && formatBarState.visible),
+        TextFormatBarPresenter::BarHeight());
     if (formatBarRect.has_value()) {
       const FormatBarActions actions =
           textFormatBarPresenter_.render(formatBarState,
@@ -5920,7 +5955,27 @@ void EditorShell::updateVisiblePreviewTasks() {
   retryPendingFontPreviews();
 }
 
+void EditorShell::suspendAuxiliaryPreviewGeneration() {
+  renderCoordinator_.asyncRenderer().cancelSampleThumbnailWork();
+  if (fontPreviewInFlight_) {
+    std::string family = std::move(*fontPreviewInFlight_);
+    fontPreviewInFlight_.reset();
+    std::erase(pendingFontPreviews_, family);
+    pendingFontPreviews_.push_front(std::move(family));
+  }
+  sampleThumbnailInFlightIndex_.reset();
+  sampleThumbnailRetryPending_ = false;
+  publishSampleThumbnailStats();
+}
+
+bool EditorShell::auxiliaryPreviewWorkPaused() const {
+  return animationPreview_ || animationResetPending_;
+}
+
 void EditorShell::advanceVisiblePreviews() {
+  if (auxiliaryPreviewWorkPaused()) {
+    return;
+  }
   if (internal::ShouldAdvanceSampleThumbnails(showSamplePicker_, samplePresentationPending_)) {
     ensureSampleThumbnails();
   } else if (!showSamplePicker_) {
@@ -6425,6 +6480,462 @@ void EditorShell::renderCanvasScrollbars() {
   }
 }
 
+namespace {
+
+/// Opt-in, bounded numeric trace: epoch milliseconds, phase, event, target, sample time, changed.
+/// Capture phase carries target presence only; dispatch phase resolves its id under write access.
+/// Phase three records later timeline samples only after a click changes animation state.
+void TracePreviewAdvance([[maybe_unused]] int outcome, [[maybe_unused]] bool eventFrame = false) {
+#ifdef __EMSCRIPTEN__
+  // clang-format off
+  EM_ASM({
+    const counts = globalThis['__donnerPreviewAdvanceCounts'];
+    if (Array.isArray(counts) && counts.length === 9) ++counts[$0 + Number($1)];
+  }, outcome, eventFrame);
+  // clang-format on
+#endif
+}
+
+void TracePreviewPointer([[maybe_unused]] int phase, [[maybe_unused]] int event,
+                         [[maybe_unused]] uint32_t targetId, [[maybe_unused]] double sampleTime,
+                         [[maybe_unused]] bool changed = false) {
+#ifdef __EMSCRIPTEN__
+  // clang-format off
+  EM_ASM({
+    const trace = globalThis['__donnerPreviewPointerTrace'];
+    if (Array.isArray(trace) && trace.length < 128) {
+      if ($0 === 2 && $1 === 0 && $4) trace['clickArmed'] = true;
+      if ($0 !== 3 || trace['clickArmed']) {
+        trace.push([Date.now(), $0, $1, $2, $3, Boolean($4)]);
+      }
+    }
+  }, phase, event, targetId, sampleTime, changed);
+  // clang-format on
+#endif
+}
+
+}  // namespace
+
+void EditorShell::resetPreviewPointer() {
+  previewPointerInput_ = {};
+  previewPointerEdges_.clear();
+  previewHoveredElement_.reset();
+  previewHoveredPath_.clear();
+  previewPressedElement_.reset();
+  previewPreviousPointerPosition_.reset();
+  previewPressedDoubleClick_ = false;
+  previewPointerOverflow_ = false;
+}
+
+void EditorShell::capturePreviewPointer(bool canvasHovered, bool spaceHeld, bool overScrollbar) {
+  if (!animationPreview_) {
+    return;
+  }
+  const bool eligible = canvasHovered && !spaceHeld && !overScrollbar &&
+                        !interactionController_.panning() && !ImGui::GetIO().AppFocusLost;
+  const ImVec2 position = ImGui::GetMousePos();
+  previewPointerInput_ = {
+      .point = eligible ? std::make_optional(Vector2d(position.x, position.y)) : std::nullopt,
+      .pressed = ImGui::IsMouseClicked(ImGuiMouseButton_Left),
+      .released = ImGui::IsMouseReleased(ImGuiMouseButton_Left),
+      .doubleClick = ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left),
+  };
+  const auto frame = renderCoordinator_.framePresentation();
+  if (frame && previewPointerInput_.point) {
+    previewPointerInput_.target = frame->pointerTargetAt(*previewPointerInput_.point);
+    previewPointerInput_.documentGeneration = frame->identity().documentGeneration;
+  } else {
+    previewPointerInput_.documentGeneration = app_.document().documentGeneration();
+  }
+  if (ImGui::GetIO().AppFocusLost) {
+    previewPointerEdges_.clear();
+    previewPointerOverflow_ = true;
+  }
+  queuePreviewPointerEdge();
+}
+
+void EditorShell::queuePreviewPointerEdge() {
+  if ((!previewPointerInput_.pressed && !previewPointerInput_.released) ||
+      previewPointerOverflow_) {
+    return;
+  }
+  constexpr std::size_t kMaximumQueuedPointerEdges = 32;
+  if (previewPointerEdges_.size() == kMaximumQueuedPointerEdges) {
+    previewPointerEdges_.clear();
+    previewPointerOverflow_ = true;
+    return;
+  }
+  previewPointerEdges_.push_back(previewPointerInput_);
+  TracePreviewPointer(
+      1, (previewPointerInput_.pressed ? 1 : 0) | (previewPointerInput_.released ? 2 : 0),
+      previewPointerInput_.target.has_value() ? 1u : 0u, animationPreviewLastTime_);
+}
+
+namespace {
+
+std::vector<svg::SVGElement> PreviewElementAncestry(std::optional<svg::SVGElement> element) {
+  std::vector<svg::SVGElement> path;
+  while (element && path.size() < 128) {
+    path.push_back(*element);
+    element = element->parentElement();
+  }
+  if (element) {
+    path.clear();
+  }
+  return path;
+}
+
+}  // namespace
+
+void EditorShell::collectPreviewHoverEvents(const std::optional<svg::SVGElement>& target,
+                                            std::vector<PreviewMouseDispatch>& events) {
+  if (target == previewHoveredElement_) {
+    return;
+  }
+  auto previous = previewHoveredPath_;
+  auto next = PreviewElementAncestry(target);
+  previewHoveredPath_ = next;
+  while (!previous.empty() && !next.empty() && previous.back() == next.back()) {
+    previous.pop_back();
+    next.pop_back();
+  }
+  if (previewHoveredElement_) {
+    events.push_back({svg::EventType::MouseOut, *previewHoveredElement_});
+  }
+  for (const auto& element : previous) {
+    events.push_back({svg::EventType::MouseLeave, element});
+  }
+  if (target) {
+    events.push_back({svg::EventType::MouseOver, *target});
+  }
+  for (auto it = next.rbegin(); it != next.rend(); ++it) {
+    events.push_back({svg::EventType::MouseEnter, *it});
+  }
+  previewHoveredElement_ = target;
+}
+
+void EditorShell::collectPreviewButtonEvents(const PreviewPointerInput& input,
+                                             const std::optional<svg::SVGElement>& target,
+                                             std::vector<PreviewMouseDispatch>& events) {
+  if (input.pressed) {
+    previewPressedElement_ = target;
+    previewPressedDoubleClick_ = input.doubleClick;
+    if (target) {
+      events.push_back({svg::EventType::MouseDown, *target});
+    }
+  }
+  if (!input.released) {
+    return;
+  }
+  const auto releasedTarget = target ? target : previewPressedElement_;
+  if (releasedTarget) {
+    events.push_back({svg::EventType::MouseUp, *releasedTarget});
+  }
+  if (target && target == previewPressedElement_) {
+    events.push_back({svg::EventType::Click, *target});
+    if (previewPressedDoubleClick_) {
+      events.push_back({svg::EventType::DblClick, *target});
+    }
+  }
+  previewPressedElement_.reset();
+  previewPressedDoubleClick_ = false;
+}
+
+void EditorShell::collectPreviewPointerEvents(const PreviewPointerInput& input,
+                                              std::vector<PreviewMouseDispatch>& events) {
+  if (input.documentGeneration != app_.document().documentGeneration()) {
+    return;
+  }
+  const auto& target = input.target;
+  collectPreviewHoverEvents(target, events);
+  if (target && input.point != previewPreviousPointerPosition_) {
+    events.push_back({svg::EventType::MouseMove, *target});
+  }
+  previewPreviousPointerPosition_ = input.point;
+  collectPreviewButtonEvents(input, target, events);
+}
+
+void EditorShell::collectPreviewCancellationEvents(std::vector<PreviewMouseDispatch>& events) {
+  if (previewPointerOverflow_) {
+    if (previewPressedElement_) {
+      events.push_back({svg::EventType::MouseUp, *previewPressedElement_});
+    }
+    previewPressedElement_.reset();
+    previewPointerOverflow_ = false;
+  }
+}
+
+std::optional<std::vector<EditorShell::PreviewMouseDispatch>>
+EditorShell::collectQueuedPreviewPointerEvents() {
+  std::vector<PreviewMouseDispatch> events;
+  collectPreviewCancellationEvents(events);
+  for (const auto& input : previewPointerEdges_) {
+    collectPreviewPointerEvents(input, events);
+    if (events.size() > 256) {
+      resetPreviewPointer();
+      return std::nullopt;
+    }
+  }
+  PreviewPointerInput hoverOnly = previewPointerInput_;
+  hoverOnly.pressed = hoverOnly.released = hoverOnly.doubleClick = false;
+  collectPreviewPointerEvents(hoverOnly, events);
+  if (events.size() > 256) {
+    resetPreviewPointer();
+    return std::nullopt;
+  }
+  return events;
+}
+
+bool EditorShell::canApplyPreviewPointerInput() const {
+  return animationPreview_ && !animationResetPending_ && animationFramePresented() &&
+         !renderCoordinator_.asyncRenderer().isBusy() &&
+         animationPreviewDocumentGeneration_ == app_.document().documentGeneration();
+}
+
+bool EditorShell::hasPreviewPointerChanges() const {
+  return !previewPointerEdges_.empty() || previewPointerOverflow_ ||
+         previewPointerInput_.target != previewHoveredElement_ ||
+         previewPointerInput_.point != previewPreviousPointerPosition_;
+}
+
+void EditorShell::applyPreviewPointerInput(double nowSeconds) {
+  if (!canApplyPreviewPointerInput() || !hasPreviewPointerChanges()) {
+    return;
+  }
+  const auto seconds = animationPreviewTimeAt(nowSeconds);
+  if (!seconds) {
+    return;
+  }
+  const auto access = app_.document().document().tryWriteAccess();
+  if (!access) {
+    return;
+  }
+  // Retain interaction state and queued edges until the dispatch clock is admitted.
+  auto previousState = std::make_tuple(previewHoveredElement_, previewHoveredPath_,
+                                       previewPressedElement_, previewPreviousPointerPosition_,
+                                       previewPressedDoubleClick_, previewPointerOverflow_);
+  const auto events = collectQueuedPreviewPointerEvents();
+  if (!events) {
+    return;
+  }
+  if (!events->empty() && !applyAnimationPreviewTime(*seconds)) {
+    std::tie(previewHoveredElement_, previewHoveredPath_, previewPressedElement_,
+             previewPreviousPointerPosition_, previewPressedDoubleClick_, previewPointerOverflow_) =
+        std::move(previousState);
+    return;
+  }
+  previewPointerEdges_.clear();
+  // Targets came from the displayed frame. Updating time must not re-hit-test their positions.
+  for (const auto& event : *events) {
+    const bool changed = app_.document().dispatchMouseEvent(event.type, event.target);
+    requestRenderAtEndOfFrame_ |= changed;
+    TracePreviewPointer(2, static_cast<int>(event.type),
+                        entt::to_integral(event.target.unsafeEntityHandle().entity()),
+                        app_.document().document().currentTime(), changed);
+  }
+}
+
+void EditorShell::setAnimationPreview(bool enabled) {
+  if (enabled == animationPreview_) {
+    return;
+  }
+  if (enabled && (!app_.hasDocument() || showSamplePicker_ || selectTool_.isDragging() ||
+                  penTool_.isDrafting() || interactionController_.pendingClick().has_value())) {
+    return;
+  }
+  commitTextToolIfNeeded();
+  cancelEyedropper(true);
+  resetPreviewPointer();
+  animationPreview_ = enabled;
+  if (enabled) {
+    suspendAuxiliaryPreviewGeneration();
+  }
+  renderCoordinator_.setPointerTargetCaptureEnabled(enabled);
+  animationResetPending_ = true;
+  animationPreviewStartSeconds_ = AnimationPreviewClockSeconds();
+  animationPreviewLastTime_ = -1.0;
+  animationPreviewDocumentGeneration_ = app_.document().documentGeneration();
+  window_.wakeEventLoop();
+}
+
+void EditorShell::advanceAnimationPreview(double nowSeconds, EditorFrameKind frameKind) {
+  if (!app_.hasDocument() ||
+      app_.document().documentGeneration() != animationPreviewDocumentGeneration_) {
+    animationPreview_ = false;
+    animationResetPending_ = false;
+    renderCoordinator_.setPointerTargetCaptureEnabled(false);
+    resetPreviewPointer();
+    return;
+  }
+  if (showSamplePicker_) {
+    setAnimationPreview(false);
+  }
+  if (!animationPreview_ && !animationResetPending_) {
+    return;
+  }
+  if (renderCoordinator_.asyncRenderer().isBusy()) {
+    TracePreviewAdvance(0);
+    return;
+  }
+  if (animationResetPending_) {
+    if (!app_.document().restartAnimations()) {
+      TracePreviewAdvance(8);
+      return;
+    }
+    TracePreviewAdvance(1);
+    animationResetPending_ = false;
+    animationPreviewStartSeconds_ = nowSeconds;
+    animationPreviewLastTime_ = 0.0;
+    requestRenderAtEndOfFrame_ = true;
+    return;
+  }
+  if (frameKind == EditorFrameKind::Event || !animationFramePresented()) {
+    TracePreviewAdvance(2, frameKind == EditorFrameKind::Event);
+    return;
+  }
+  tickAnimationPreview(nowSeconds);
+}
+
+void EditorShell::tickAnimationPreview(double nowSeconds) {
+  const auto seconds = animationPreviewTimeAt(nowSeconds);
+  if (!seconds || *seconds == animationPreviewLastTime_) {
+    TracePreviewAdvance(seconds ? 4 : 5);
+    return;
+  }
+  applyAnimationPreviewTime(*seconds);
+}
+
+std::optional<double> EditorShell::animationPreviewTimeAt(double nowSeconds) const {
+  if (!std::isfinite(nowSeconds) || !std::isfinite(animationPreviewStartSeconds_)) {
+    return std::nullopt;
+  }
+  const double ticks = std::max(0.0, nowSeconds - animationPreviewStartSeconds_) * 60.0;
+  return std::isfinite(ticks) ? std::optional(std::floor(ticks) / 60.0) : std::nullopt;
+}
+
+bool EditorShell::applyAnimationPreviewTime(double seconds) {
+  if (app_.document().setAnimationTime(seconds)) {
+    requestRenderAtEndOfFrame_ = true;
+  } else {
+    const auto access = app_.document().document().tryReadAccess();
+    if (!access.has_value() || app_.document().document().currentTime() != seconds) {
+      TracePreviewAdvance(7);
+      return false;
+    }
+  }
+  TracePreviewAdvance(6);
+  animationPreviewLastTime_ = seconds;
+  animationResetPending_ = false;
+  TracePreviewPointer(3, 0, 0, seconds);
+  return true;
+}
+
+bool EditorShell::animationFramePresented() const {
+  const auto frame = renderCoordinator_.framePresentation();
+  return frame != nullptr && !app_.document().hasPendingMutations() &&
+         frame->identity().documentGeneration == app_.document().documentGeneration() &&
+         frame->identity().version == app_.document().currentFrameVersion();
+}
+
+Box2d EditorShell::animationPreviewControlScreenRect() const {
+  return animationPreviewControlRect_;
+}
+
+void EditorShell::renderAnimationModePanel() {
+  if (contentOnlyCaptureThisFrame_ || showSamplePicker_ || !app_.hasDocument()) {
+    animationPreviewControlRect_ = {};
+    return;
+  }
+  const bool compact = adaptiveUiLayout_.compactTouch();
+  if (compact) {
+    const ViewportState& viewport = interactionController_.viewport();
+    const Box2d palette = toolPaletteScreenRect(
+        ImVec2(static_cast<float>(viewport.paneOrigin.x),
+               static_cast<float>(viewport.paneOrigin.y)),
+        ImVec2(static_cast<float>(viewport.paneSize.x), static_cast<float>(viewport.paneSize.y)));
+    ImGui::SetNextWindowPos(
+        ImVec2(static_cast<float>(viewport.paneOrigin.x + viewport.paneSize.x) - 204.0f,
+               static_cast<float>(palette.bottomRight.y) + 12.0f));
+    ImGui::SetNextWindowSize(ImVec2(200.0f, 40.0f));
+  }
+  const ImGuiWindowFlags flags =
+      ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
+      (compact ? ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoSavedSettings : 0);
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8.0f, 4.0f));
+  ImGui::Begin(compact ? "##animation_mode_panel" : kAnimationModeWindowName, nullptr, flags);
+  ImGui::PopStyleVar();
+  const ImVec2 cursor = ImGui::GetCursorScreenPos();
+  const float width = std::min(184.0f, ImGui::GetContentRegionAvail().x);
+  const float x = cursor.x + (ImGui::GetContentRegionAvail().x - width) * 0.5f;
+  const float y = ImGui::GetWindowPos().y + (ImGui::GetWindowSize().y - 32.0f) * 0.5f;
+  animationPreviewControlRect_ = Box2d::FromXYWH(x, y, width, 32.0f);
+  renderAnimationPreviewControl();
+  ImGui::End();
+}
+
+namespace {
+
+ImU32 AnimationModeSegmentBackground(const EditorTheme& theme, bool selected, bool hovered,
+                                     bool active) {
+  if (selected) {
+    return active ? theme.accentActive : hovered ? theme.accentHover : theme.accentDefault;
+  }
+  return active ? theme.surfaceCanvas : hovered ? theme.surfaceHover : theme.surfaceOverlay;
+}
+
+}  // namespace
+
+void EditorShell::renderAnimationModeSegment(bool preview, const ImVec2& position, float width) {
+  const EditorTheme& theme = EditorTheme::Active();
+  const char* label = preview ? "Preview" : "Edit";
+  ImGui::SetCursorScreenPos(position);
+  if (ImGui::InvisibleButton(label, ImVec2(width, 32.0f), ImGuiButtonFlags_EnableNav)) {
+    setAnimationPreview(preview);
+  }
+  const bool selected = animationPreview_ == preview;
+  const bool hovered = ImGui::IsItemHovered();
+  const ImVec2 min = ImGui::GetItemRectMin();
+  const ImVec2 max = ImGui::GetItemRectMax();
+  ImDrawList* drawList = ImGui::GetWindowDrawList();
+  drawList->AddRectFilled(
+      min, max, AnimationModeSegmentBackground(theme, selected, hovered, ImGui::IsItemActive()),
+      theme.radiusControl, preview ? ImDrawFlags_RoundCornersRight : ImDrawFlags_RoundCornersLeft);
+  const ImVec2 textSize = ImGui::CalcTextSize(label);
+  drawList->AddText(
+      ImVec2(min.x + (width - textSize.x) * 0.5f, min.y + (32.0f - textSize.y) * 0.5f),
+      selected ? theme.accentInk : theme.textPrimary, label);
+  ImGui::RenderNavCursor(ImRect(min, max), ImGui::GetItemID());
+  if (hovered) {
+    ImGui::SetTooltip(preview ? "Play SVG animations from the beginning" : "Stop and edit the SVG");
+  }
+}
+
+void EditorShell::renderAnimationPreviewControl() {
+  const Box2d rect = animationPreviewControlScreenRect();
+  const EditorTheme& theme = EditorTheme::Active();
+  const float segmentWidth = static_cast<float>(rect.width()) * 0.5f;
+  ImGui::PushID("animation_mode");
+  ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0, 0));
+  renderAnimationModeSegment(
+      false, ImVec2(static_cast<float>(rect.topLeft.x), static_cast<float>(rect.topLeft.y)),
+      segmentWidth);
+  renderAnimationModeSegment(
+      true,
+      ImVec2(static_cast<float>(rect.topLeft.x) + segmentWidth, static_cast<float>(rect.topLeft.y)),
+      segmentWidth);
+  ImDrawList* drawList = ImGui::GetWindowDrawList();
+  const float dividerX = static_cast<float>(rect.topLeft.x) + segmentWidth;
+  drawList->AddLine(ImVec2(dividerX, static_cast<float>(rect.topLeft.y) + 6.0f),
+                    ImVec2(dividerX, static_cast<float>(rect.bottomRight.y) - 6.0f),
+                    theme.borderStrong);
+  drawList->AddRect(
+      ImVec2(static_cast<float>(rect.topLeft.x), static_cast<float>(rect.topLeft.y)),
+      ImVec2(static_cast<float>(rect.bottomRight.x), static_cast<float>(rect.bottomRight.y)),
+      theme.borderStrong, theme.radiusControl);
+  ImGui::PopStyleVar();
+  ImGui::PopID();
+}
+
 void EditorShell::renderCompactTopBar() {
   if (!adaptiveUiLayout_.compactTouch()) {
     return;
@@ -6546,11 +7057,13 @@ void EditorShell::renderCompactTopBar() {
     window_.wakeEventLoop();
   }
   ImGui::SameLine(0.0f, kButtonGap);
-  if (button("##compact_undo", CompactIcon::Undo, "Undo", app_.canUndo(), false)) {
+  if (button("##compact_undo", CompactIcon::Undo, "Undo", previewAllowsEditing(app_.canUndo()),
+             false)) {
     requestHistoryAction(HistoryAction::Undo);
   }
   ImGui::SameLine(0.0f, kButtonGap);
-  if (button("##compact_redo", CompactIcon::Redo, "Redo", app_.canRedo(), false)) {
+  if (button("##compact_redo", CompactIcon::Redo, "Redo", previewAllowsEditing(app_.canRedo()),
+             false)) {
     requestHistoryAction(HistoryAction::Redo);
   }
   ImGui::SameLine(0.0f, kButtonGap);
@@ -6623,7 +7136,8 @@ void EditorShell::renderSidebars() {
   const bool interactionActive = selectTool_.isDragging() || penTool_.isDraggingAnchor() ||
                                  textTool_.isDraggingBox() || textTool_.isAdjustingFrame() ||
                                  textTool_.isSelectingText();
-  if (!showSamplePicker_ && ShouldRefreshSidebarSnapshots(rendererBusy, interactionActive)) {
+  if (!showSamplePicker_ && ShouldRefreshSidebarSnapshots(rendererBusy, interactionActive,
+                                                          auxiliaryPreviewWorkPaused())) {
     sidebarPresenter_.refreshSnapshot(app_);
     // Compact sheets use deterministic fill swatches. Avoiding per-row raster
     // rendering and texture uploads keeps the touch panel responsive and also
@@ -7024,6 +7538,7 @@ void EditorShell::renderDockSpaceHost(float hostX, float hostY, float hostWidth,
     }
   }
   dockSidebarsIncludedInLayout_ = sidebarsIncluded;
+  EnsureAnimationModeDock(dockspaceId, 40.0f);
 
   ImGui::DockSpace(dockspaceId, ImVec2(0.0f, 0.0f), EditorDockSpaceFlags(dockLayoutLocked_));
   // Record the central node's rect alongside the host rect the shell just laid out. Comparing the
@@ -7803,13 +8318,19 @@ void EditorShell::openRenderPaneContextMenu(const Vector2d& documentPoint) {
   window_.wakeEventLoop();
 }
 
-void EditorShell::renderRenderPaneContextMenu() {
+bool EditorShell::beginRenderPaneContextMenu() {
+  if (animationPreview_) {
+    return false;
+  }
   if (renderContextMenuOpenRequested_) {
     ImGui::OpenPopup(kRenderPaneContextMenuName.data());
     renderContextMenuOpenRequested_ = false;
   }
+  return ImGui::BeginPopup(kRenderPaneContextMenuName.data());
+}
 
-  if (!ImGui::BeginPopup(kRenderPaneContextMenuName.data())) {
+void EditorShell::renderRenderPaneContextMenu() {
+  if (!beginRenderPaneContextMenu()) {
     return;
   }
 
@@ -8307,11 +8828,33 @@ MenuHistoryAvailability MenuHistoryForFocus(const EditorApp& app, const TextEdit
 
 }  // namespace
 
+bool EditorShell::previewAllowsEditing(bool allowed) const {
+  return !animationPreview_ && allowed;
+}
+
+void EditorShell::applyPreviewMenuState(MenuBarState& state) const {
+  if (!animationPreview_) {
+    return;
+  }
+  state.sourcePaneFocused = false;
+  state.textToolEditing = false;
+  state.inspectorTextInputFocused = false;
+  state.canRevert = false;
+  state.canUndo = false;
+  state.canRedo = false;
+  state.hasShapeSelection = false;
+  state.hasShapeClipboard = false;
+  state.hasTextSelection = false;
+  state.canGroup = false;
+  state.canUngroup = false;
+  state.hasSelectableElements = false;
+}
+
 MenuBarState EditorShell::buildMenuBarState(bool compactUi) {
   const bool rendererIdle = !renderCoordinator_.asyncRenderer().isBusy();
   const bool sourcePaneFocused = !compactUi && sourcePaneVisible_ && textEditor_.isFocused();
   const MenuHistoryAvailability history = MenuHistoryForFocus(app_, textEditor_, sourcePaneFocused);
-  return MenuBarState{
+  MenuBarState state{
       .sourcePaneFocused = sourcePaneFocused,
       .textToolEditing =
           !sourcePaneFocused && activeTool_ == ActiveTool::Text && textTool_.isEditing(),
@@ -8334,6 +8877,8 @@ MenuBarState EditorShell::buildMenuBarState(bool compactUi) {
       .compositedRenderingMode = compositedRenderingMode_,
       .panelLayoutLocked = dockLayoutLocked_,
   };
+  applyPreviewMenuState(state);
+  return state;
 }
 
 void EditorShell::renderMenuBarAndDialogs(bool compactUi) {
@@ -8511,7 +9056,10 @@ void EditorShell::recordFrameTelemetry(
       static_cast<double>(layerThumbnailBitmapCount),
       static_cast<double>(layerThumbnailBitmapBytes),
       static_cast<double>(layerThumbnailTextureSnapshotCount),
-      static_cast<double>(thumbnailTextures_.thumbnailTextureCount()));
+      static_cast<double>(thumbnailTextures_.thumbnailTextureCount()),
+      static_cast<double>(layersPanel_.thumbnailRefreshCount()),
+      static_cast<double>(layersPanel_.thumbnailRenderAttemptCount()),
+      auxiliaryPreviewWorkPaused());
   PublishPresentationResourceStats(
       static_cast<double>(presentationResources.totalTrackedBytes),
       static_cast<double>(presentationResources.peakTrackedBytes),
@@ -8580,6 +9128,9 @@ float EditorShell::menuBarHeightForFrame(bool compactUi) const {
 }
 
 void EditorShell::handleFrameShortcuts([[maybe_unused]] bool compactUi) {
+  if (animationPreview_ && ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+    setAnimationPreview(false);
+  }
   bool nativeKeyEquivalentActivated = false;
 #if defined(__APPLE__) && !defined(__EMSCRIPTEN__)
   if (nativeMenu_ != nullptr) {
@@ -8589,12 +9140,13 @@ void EditorShell::handleFrameShortcuts([[maybe_unused]] bool compactUi) {
     applyMenuActions(activated.actions);
   }
 #endif
-  if (!nativeKeyEquivalentActivated) {
+  if (!nativeKeyEquivalentActivated && !animationPreview_) {
     handleGlobalShortcuts();
   }
 }
 
 void EditorShell::runFrame() {
+  const EditorFrameKind frameKind = std::exchange(nextFrameKind_, EditorFrameKind::Scheduled);
   ZoneScopedN("EditorShell::runFrame");
   const ScopedHeapDelta uiFrameHeapDelta(MemoryStage::AppUiFrame);
   ++frameTelemetryFrame_;
@@ -8613,6 +9165,7 @@ void EditorShell::runFrame() {
   contentOnlyCaptureForNextFrame_ = false;
 #endif
   textures_.advancePresentationFrame();
+  thumbnailTextures_.advancePresentationFrame();
   compositorDebugPanel_.advancePresentationFrame();
   pollAuxiliaryPreviewResult();
 #ifndef __EMSCRIPTEN__
@@ -8780,9 +9333,13 @@ void EditorShell::runFrame() {
   markPhase(mainFrameCost.menusDialogsMs);
 
   std::ignore = highlightSelectionSourceIfNeeded();
+  textEditor_.setHandleKeyboardInputs(!animationPreview_);
+  textEditor_.setHandleMouseInputs(!animationPreview_);
   if (!compactUi && mainPaneLayout.sourcePaneWidth > 0.0f) {
+    ImGui::BeginDisabled(animationPreview_);
     renderSourcePane(mainPaneLayout.sourcePaneX, paneOriginY, paneHeight,
                      mainPaneLayout.sourcePaneWidth, codeFont_);
+    ImGui::EndDisabled();
   }
   markPhase(mainFrameCost.sourcePaneMs);
   // The canvas pane must never window-scroll: an ImGui scrollbar here would
@@ -8792,7 +9349,10 @@ void EditorShell::runFrame() {
   renderRenderPane(ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoBackground |
                    ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
   markPhase(mainFrameCost.renderPaneMs);
+  renderAnimationModePanel();
+  ImGui::BeginDisabled(animationPreview_);
   renderSidebars();
+  ImGui::EndDisabled();
   if (highlightSelectionSourceIfNeeded()) {
     window_.wakeEventLoop();
   }
@@ -8811,6 +9371,9 @@ void EditorShell::runFrame() {
   markPhase(mainFrameCost.splittersMs);
   updateVisiblePreviewTasks();
   adoptCatalogFontResources();
+  const double animationNow = AnimationPreviewClockSeconds();
+  applyPreviewPointerInput(animationNow);
+  advanceAnimationPreview(animationNow, frameKind);
   applyDeferredRenderRequest();
   advanceVisiblePreviews();
   penDragFlushedThisFrame_ = false;

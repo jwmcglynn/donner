@@ -193,6 +193,21 @@ public:
   /// advances, but document generation, authored source, and undo history do not change.
   bool refreshFontResources();
 
+  /**
+   * Advance playback without changing source, document identity, or the command queue.
+   * Returns false when document access is busy or the time is unchanged.
+   * @param seconds Finite document time in seconds.
+   */
+  bool setAnimationTime(double seconds);
+
+  /// Start a fresh animation session without source edits; retry when document access is busy.
+  bool restartAnimations();
+
+  /// Deliver a preview mouse event without an authored edit. Busy access is retried by the caller.
+  /// @param type Mouse event to deliver. @param target Hit element in the current document.
+  /// @return True when an animation interval changed.
+  bool dispatchMouseEvent(svg::EventType type, const svg::SVGElement& target);
+
   /// Frame-boundary font adoption identity, distinct from the manager's individual face counter.
   [[nodiscard]] std::uint64_t fontResourceRevision() const { return fontResourceRevision_; }
 

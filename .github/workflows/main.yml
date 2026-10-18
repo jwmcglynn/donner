@@ -2115,6 +2115,8 @@ jobs:
         # `.github/workflows/fuzz.yml`, under sanitizers.
 
       # Browser tests share the GPU with native replays and need their own serial phase.
+      # Headed-browser tests need a desktop session; the required hosted browser job runs them.
+
       - name: Qualify pinned Chromium archive
         id: browser_preflight
         if: ${{ !cancelled() && (steps.test.outcome == 'success' || steps.test.outcome == 'failure') }}
@@ -2156,7 +2158,7 @@ jobs:
           fi
           tools/ci_bazel_test.sh bazelisk --nohome_rc --nosystem_rc test --config=ci --test_output=errors \
             --local_test_jobs=1 \
-            --test_tag_filters=launches-browser,-manual,-perf,-ci-remote-gpu,-fuzz_soak \
+            --test_tag_filters=launches-browser,-manual,-perf,-requires_desktop_session,-ci-remote-gpu,-fuzz_soak \
             $BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS $TARGETS
 
       - name: Test (Geode editor lane)

@@ -40,6 +40,31 @@ async function beginReady(bridge, handle) {
   );
 }
 
+test("device status reports ownership and loss together without retaining stale state", async () => {
+  const bridge = loadLibrary();
+  const { entryPoints, state } = bridge;
+  const status = entryPoints.donner_gpu_device_status;
+  assert.equal(typeof status, "function");
+  assert.equal(status(kFirst), state.kNotOwner);
+  assert.equal(entryPoints.donner_gpu_begin_device_request(kFirst), state.kSuccess);
+  assert.equal(status(kFirst), state.kNotOwner);
+  await until(() => state.requestState === state.kRequestReady, "a ready browser device");
+  assert.equal(status(kFirst), state.kSuccess);
+  assert.equal(status(kSecond), state.kNotOwner);
+  await beginReady(bridge, kSecond);
+  assert.equal(status(kSecond), state.kSuccess);
+
+  bridge.lose({ reason: "destroyed", message: "device status regression" });
+  await until(() => state.lost, "browser device loss");
+  assert.equal(status(kFirst), state.kDeviceLost);
+  assert.equal(status(kSecond), state.kDeviceLost);
+  entryPoints.donner_gpu_release_device(kSecond);
+  assert.equal(status(kSecond), state.kNotOwner);
+  assert.equal(status(kFirst), state.kDeviceLost);
+  entryPoints.donner_gpu_release_device(kFirst);
+  assert.equal(status(kFirst), state.kNotOwner);
+});
+
 test("browser acquisition failures expose fixed stages without rejected message text", async () => {
   const secret = "secret-token https://example.invalid/private/path";
   const cases = [
@@ -116,8 +141,8 @@ test("tearing down a second logical device leaves the first one's device and obj
   entryPoints.donner_gpu_release_device(kSecond);
 
   assert.equal(
-    entryPoints.donner_gpu_owns_device(kFirst),
-    1,
+    entryPoints.donner_gpu_device_status(kFirst),
+    bridge.state.kSuccess,
     "releasing the second logical device took the first one's browser device away",
   );
   const payload = bridge.reserve(4);
@@ -159,7 +184,7 @@ test("a second logical device joins the worker's browser device instead of being
   await beginReady(bridge, kFirst);
   await beginReady(bridge, kSecond);
 
-  assert.equal(entryPoints.donner_gpu_owns_device(kSecond), 1);
+  assert.equal(entryPoints.donner_gpu_device_status(kSecond), bridge.state.kSuccess);
   assert.equal(
     bridge.adapterRequests,
     1,
@@ -218,7 +243,7 @@ test("a pending request survives the logical device that began it while another 
   entryPoints.donner_gpu_release_device(kFirst);
 
   assert.equal(await settled(bridge, kSecond), state.kRequestReady);
-  assert.equal(entryPoints.donner_gpu_owns_device(kSecond), 1);
+  assert.equal(entryPoints.donner_gpu_device_status(kSecond), bridge.state.kSuccess);
   assert.equal(bridge.adapterRequests, 1);
   // The browser device keeps the identity of the request that obtained it.
   assert.equal(entryPoints.donner_gpu_device_identity(kSecond), kFirst);
@@ -463,7 +488,7 @@ test("the browser device goes with the last logical device over it", async () =>
   const bridge = await twoDevices();
   const { entryPoints } = bridge;
   entryPoints.donner_gpu_release_device(kFirst);
-  assert.equal(entryPoints.donner_gpu_owns_device(kSecond), 1);
+  assert.equal(entryPoints.donner_gpu_device_status(kSecond), bridge.state.kSuccess);
   entryPoints.donner_gpu_release_device(kSecond);
 
   const kThird = 3;
@@ -513,7 +538,7 @@ test("a handle this worker never opened owns nothing here", async () => {
   const { entryPoints, state } = bridge;
   await beginReady(bridge, kFirst);
   const kElsewhere = 99;
-  assert.equal(entryPoints.donner_gpu_owns_device(kElsewhere), 0);
+  assert.equal(entryPoints.donner_gpu_device_status(kElsewhere), bridge.state.kNotOwner);
   assert.equal(entryPoints.donner_gpu_device_identity(kElsewhere), 0);
   assert.equal(
     entryPoints.donner_gpu_create_buffer(kElsewhere, 1, 64, kBufferCopyDst),
@@ -832,4 +857,40 @@ test("a timer or adapter that faults inside the trace leaves the request alone",
   const adapterBridge = loadLibrary({ requestAdapterForTesting: async () => faultingAdapter });
   await beginReady(adapterBridge, kFirst);
   assert.notEqual(adapterBridge.state.device, null);
+});
+
+test("queue writes enforce ownership and loss without a prior status query", async () => {
+  for (const lost of [false, true]) {
+    const bridge = loadLibrary();
+    const { entryPoints, state } = bridge;
+    await beginReady(bridge, kFirst);
+    assert.equal(
+      entryPoints.donner_gpu_create_buffer(kFirst, 7, 64, kBufferCopyDst),
+      state.kSuccess,
+    );
+    assert.equal(createTexture(bridge, kFirst, 8), state.kSuccess);
+    const queue = bridge.device.queue;
+    let textureWrites = 0;
+    queue.writeTexture = () => {
+      textureWrites += 1;
+    };
+    const payload = bridge.reserve(1024);
+    const writeBuffer = () => entryPoints.donner_gpu_write_buffer(kFirst, 7, 0, payload, 4);
+    const writeTexture = () =>
+      entryPoints.donner_gpu_write_texture(kFirst, 8, payload, 1024, 0, 256, 4, 0, 0, 4, 4);
+    assert.equal(writeBuffer(), state.kSuccess);
+    assert.equal(writeTexture(), state.kSuccess);
+    assert.equal(queue.writes, 1);
+    assert.equal(textureWrites, 1);
+    if (lost) {
+      bridge.lose({ reason: "destroyed", message: "queue write guard" });
+      await until(() => state.lost, "browser device loss");
+    } else {
+      entryPoints.donner_gpu_release_device(kFirst);
+    }
+    assert.equal(writeBuffer(), lost ? state.kDeviceLost : state.kNotOwner);
+    assert.equal(writeTexture(), lost ? state.kDeviceLost : state.kNotOwner);
+    assert.equal(queue.writes, 1);
+    assert.equal(textureWrites, 1);
+  }
 });

@@ -169,6 +169,11 @@ embeddable runtime, and ecosystem integration.
 
 ### SVG Animation
 
+The animation feature branch implements the declarative timeline, interpolation, motion paths and
+interactive editor Preview. Presentation coverage and qualification remain in progress; see the
+[animation design and support matrix](design_docs/animation.md) and
+[#1239](https://github.com/jwmcglynn/donner/issues/1239).
+
 - Phases 1-9: timing model, interpolation engine, sandwich composition, attribute targeting,
   `<animate>`, `<animateTransform>`, `<animateMotion>`, `<set>`, event-based timing.
 - [ ] **Lottie playback (probable)**: Play back Lottie animations (the JSON-based After Effects

@@ -15,6 +15,7 @@
 #include "donner/base/Vector2.h"
 #include "donner/svg/SVGDocumentHandle.h"
 #include "donner/svg/components/IdComponent.h"
+#include "donner/svg/components/NodeLifetimeComponent.h"
 
 namespace donner::svg {
 
@@ -138,7 +139,8 @@ public:
   /**
    * Get the entity with the given ID, using the internal id-to-entity mapping.
    *
-   * If multiple elements have the same id, the first one that was created will be returned.
+   * A newly registered attached element replaces a detached mapping. Otherwise, duplicate IDs
+   * retain the first registered mapping; use attached lookup when a held element may detach.
    *
    * @param id ID to find the entity for.
    */
@@ -192,13 +194,20 @@ private:
   /// Called when an ID is added to an element.
   void onIdSet(Registry& registry, Entity entity) {
     auto& idComponent = registry.get<IdComponent>(entity);
-    idToEntity_.emplace(idComponent.id(), entity);
+    const auto [it, inserted] = idToEntity_.try_emplace(idComponent.id(), entity);
+    if (!inserted && !IsEntityAttachedToDocument(registry, it->second) &&
+        IsEntityAttachedToDocument(registry, entity)) {
+      it->second = entity;
+    }
   }
 
   /// Called when an ID is removed from an element.
   void onIdDestroy(Registry& registry, Entity entity) {
     auto& idComponent = registry.get<IdComponent>(entity);
-    idToEntity_.erase(idComponent.id());
+    if (const auto it = idToEntity_.find(idComponent.id());
+        it != idToEntity_.end() && it->second == entity) {
+      idToEntity_.erase(it);
+    }
   }
 
   /// Shared document state reference, owned by SVGDocument and retained public DOM handles.

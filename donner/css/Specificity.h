@@ -58,6 +58,7 @@ public:
     UserAgent,                ///< Normal user agent stylesheet declaration.
     None,                     ///< Normal author declaration.
     StyleAttribute,           ///< Normal inline style, above normal author selectors.
+    Animation,                ///< Declarative animation, below important declarations.
     Important,                ///< Important author selector declaration.
     ImportantStyleAttribute,  ///< Important inline style, above important author selectors.
     ImportantUserAgent,       ///< Important user agent declaration, above author CSS.
@@ -70,6 +71,7 @@ public:
       case SpecialType::UserAgent: return os << "UserAgent";
       case SpecialType::None: return os << "None";
       case SpecialType::StyleAttribute: return os << "StyleAttribute";
+      case SpecialType::Animation: return os << "Animation";
       case SpecialType::Important: return os << "Important";
       case SpecialType::ImportantStyleAttribute: return os << "ImportantStyleAttribute";
       case SpecialType::ImportantUserAgent: return os << "ImportantUserAgent";
@@ -140,6 +142,7 @@ public:
     os << "Specificity(";
     switch (obj.special_) {
       case SpecialType::StyleAttribute: return os << "style)";
+      case SpecialType::Animation: return os << "animation)";
       case SpecialType::ImportantStyleAttribute: return os << "style !important)";
       case SpecialType::Override: return os << "override)";
       case SpecialType::UserAgent: os << "user-agent, "; break;
@@ -161,6 +164,9 @@ public:
   static constexpr Specificity FromABC(uint32_t a, uint32_t b, uint32_t c) {
     return Specificity(ABC{a, b, c});
   }
+
+  /// Creates the declarative animation cascade level.
+  static constexpr Specificity Animation() { return Specificity(SpecialType::Animation); }
 
   /**
    * Creates a specificity for an `!important` declaration.

@@ -8,9 +8,14 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
+#include <limits>
 #include <optional>
 #include <utility>
 #include <vector>
+
+#include "donner/editor/tests/BitmapGoldenCompare.h"
+#include "donner/svg/components/animation/AnimationValueSampler.h"
+#include "donner/svg/renderer/FilterRegionContext.h"
 
 namespace donner::svg {
 namespace {
@@ -72,6 +77,209 @@ tiny_skia::Pixmap CreateBlurredDotPixmap(const Transform2d& deviceFromFilterTran
 
   ApplyFilterGraphToPixmap(pixmap, graph, deviceFromFilterTransform, std::nullopt);
   return pixmap;
+}
+
+TEST(FilterGraphExecutorTest, AnimatedDefaultRegionUsesExecutedRasterHistory) {
+  for (const bool shear : {false, true}) {
+    SCOPED_TRACE(shear);
+    components::FilterGraph graph;
+    graph.filterRegion = Box2d::FromXYWH(0, 0, 32, 32);
+    components::FilterNode flood;
+    flood.primitive = components::filter_primitive::Flood{};
+    flood.x = Lengthd(10);
+    flood.y = Lengthd(10);
+    flood.width = Lengthd(8);
+    flood.height = Lengthd(8);
+    graph.nodes.push_back(flood);
+    components::FilterNode blur;
+    blur.inputs.emplace_back();
+    blur.primitive = components::filter_primitive::GaussianBlur{1, 1};
+    graph.nodes.push_back(blur);
+    components::FilterNode offset;
+    offset.inputs.emplace_back();
+    offset.primitive = components::filter_primitive::Offset{};
+    components::AnimateValueComponent value;
+    value.attributeName = "width";
+    value.to = "6";
+    offset.animatedRegion[2] = components::ContextualLengthRecipe::Create({{value, 0.25, 0}});
+    ASSERT_THAT(offset.animatedRegion[2], testing::NotNull());
+    graph.nodes.push_back(offset);
+    components::FilterGraph expectedGraph = graph;
+    auto& expectedNode = expectedGraph.nodes.back();
+    expectedNode.animatedRegion = {};
+    expectedNode.x = Lengthd(shear ? 1.5 : 7);
+    expectedNode.y = Lengthd(7);
+    expectedNode.width = Lengthd(shear ? 20.25 : 12);
+    expectedNode.height = Lengthd(14);
+    auto actual = tiny_skia::Pixmap::fromSize(64, 64);
+    auto expected = tiny_skia::Pixmap::fromSize(64, 64);
+    ASSERT_THAT(actual, testing::Ne(std::nullopt));
+    ASSERT_THAT(expected, testing::Ne(std::nullopt));
+    Transform2d deviceFromFilter = Transform2d::Scale(shear ? 1 : 2);
+    if (shear) {
+      deviceFromFilter.data[2] = 0.5;
+    }
+    ApplyFilterGraphToPixmap(*actual, graph, deviceFromFilter, graph.filterRegion);
+    ApplyFilterGraphToPixmap(*expected, expectedGraph, deviceFromFilter, graph.filterRegion);
+    editor::tests::CompareBitmapToBitmap(
+        RendererBitmap{Vector2i(64, 64),
+                       std::vector<uint8_t>(actual->data().begin(), actual->data().end()), 64 * 4},
+        RendererBitmap{Vector2i(64, 64),
+                       std::vector<uint8_t>(expected->data().begin(), expected->data().end()),
+                       64 * 4},
+        shear ? "animated-default-shear" : "animated-default-scale",
+        editor::tests::PixelmatchIdentityParams());
+  }
+}
+
+TEST(FilterGraphExecutorTest, EmptyInputRegionDoesNotBecomePositiveDuringSampling) {
+  components::FilterGraph graph;
+  const Box2d clip = Box2d::FromXYWH(0, 0, 16, 16);
+  FilterRegionContext regions(graph, Vector2i(16, 16), clip, Transform2d(), clip, clip);
+  components::FilterNode flood;
+  flood.x = Lengthd(20);
+  flood.y = Lengthd(0);
+  flood.width = Lengthd(8);
+  flood.height = Lengthd(8);
+  flood.primitive = components::filter_primitive::Flood{};
+  regions.recordRasterSubregion(flood, Box2d::FromXYWH(20, 0, 8, 8));
+  components::FilterNode offset;
+  offset.inputs.emplace_back();
+  offset.primitive = components::filter_primitive::Offset{};
+  components::AnimateValueComponent value;
+  value.attributeName = "width";
+  value.to = "4";
+  offset.animatedRegion[2] = components::ContextualLengthRecipe::Create({{value, 0.5, 0}});
+  const auto sampled = regions.sampleNodeSubregion(offset);
+  ASSERT_THAT(sampled.animatedRegion, testing::Ne(std::nullopt));
+  EXPECT_DOUBLE_EQ(sampled.animatedRegion->width(), 2);
+}
+
+TEST(FilterGraphExecutorTest, SingularContextDoesNotPublishAnimatedGeometry) {
+  components::FilterGraph graph;
+  const Box2d clip = Box2d::FromXYWH(0, 0, 16, 16);
+  components::FilterNode node;
+  components::AnimateValueComponent value;
+  value.attributeName = "width";
+  value.from = "4";
+  value.to = "8";
+  node.animatedRegion[2] = components::ContextualLengthRecipe::Create({{value, 0.5, 0}});
+  std::array<Transform2d, 4> transforms;
+  transforms[0] = Transform2d::Scale(0);
+  transforms[1].data[4] = std::numeric_limits<double>::infinity();
+  transforms[2].data[5] = std::numeric_limits<double>::quiet_NaN();
+  transforms[3].data[0] = 1e-6;
+  transforms[3].data[3] = 1e-5;
+  transforms[3].data[4] = 1e308;
+  for (std::size_t i = 0; i < transforms.size(); ++i) {
+    SCOPED_TRACE(i);
+    FilterRegionContext regions(graph, Vector2i(16, 16), clip, transforms[i], clip, clip);
+    const auto sampled = regions.sampleNodeSubregion(node);
+    EXPECT_THAT(sampled.animatedRegion, testing::Eq(std::nullopt));
+    EXPECT_THAT(sampled.bounds, testing::Eq(Box2d::FromXYWH(0, 0, 0, 0)));
+  }
+}
+
+TEST(FilterGraphExecutorTest, AnimatedPaintInputDefaultsUsePaintCoverage) {
+  for (const int mode : {0, 1, 2}) {
+    SCOPED_TRACE(mode);
+    const bool stroke = mode == 1;
+    components::FilterGraph graph;
+    graph.filterRegion = Box2d::FromXYWH(0, 0, 16, 16);
+    components::FilterNode offset;
+    offset.primitive = components::filter_primitive::Offset{};
+    offset.inputs.emplace_back(stroke ? components::FilterStandardInput::StrokePaint
+                                      : components::FilterStandardInput::FillPaint);
+    components::AnimateValueComponent value;
+    value.attributeName = "width";
+    value.to = "4";
+    offset.animatedRegion[2] = components::ContextualLengthRecipe::Create({{value, 0.25, 0}});
+    graph.nodes.push_back(offset);
+    components::FilterGraph expectedGraph = graph;
+    auto& expectedNode = expectedGraph.nodes.back();
+    expectedNode.animatedRegion = {};
+    expectedNode.x = Lengthd(4);
+    expectedNode.y = Lengthd(4);
+    expectedNode.width = Lengthd(7);
+    expectedNode.height = Lengthd(8);
+    auto paint = tiny_skia::Pixmap::fromSize(16, 16);
+    auto actual = tiny_skia::Pixmap::fromSize(16, 16);
+    auto expected = tiny_skia::Pixmap::fromSize(16, 16);
+    ASSERT_THAT(paint, testing::Ne(std::nullopt));
+    ASSERT_THAT(actual, testing::Ne(std::nullopt));
+    ASSERT_THAT(expected, testing::Ne(std::nullopt));
+    for (int y = 4; y < 12; ++y) {
+      for (int x = 4; x < 12; ++x) {
+        SetPixel(*paint, x, y, Pixel{255, 0, 0, 255});
+      }
+    }
+    const auto* fillInput = mode == 1 ? nullptr : &*paint;
+    const auto* strokeInput = mode == 0 ? nullptr : &*paint;
+    ApplyFilterGraphToPixmap(*actual, graph, Transform2d(), graph.filterRegion, false, fillInput,
+                             strokeInput);
+    ApplyFilterGraphToPixmap(*expected, expectedGraph, Transform2d(), graph.filterRegion, false,
+                             fillInput, strokeInput);
+    editor::tests::CompareBitmapToBitmap(
+        RendererBitmap{Vector2i(16, 16),
+                       std::vector<uint8_t>(actual->data().begin(), actual->data().end()), 16 * 4},
+        RendererBitmap{Vector2i(16, 16),
+                       std::vector<uint8_t>(expected->data().begin(), expected->data().end()),
+                       16 * 4},
+        stroke ? "animated-stroke-region" : "animated-fill-region",
+        editor::tests::PixelmatchIdentityParams());
+  }
+}
+
+TEST(FilterGraphExecutorTest, ContextualPaintPreflightRejectsOversizedInputs) {
+  for (const bool stroke : {false, true}) {
+    SCOPED_TRACE(stroke);
+    components::FilterGraph graph;
+    components::FilterNode node;
+    components::AnimateValueComponent value;
+    value.attributeName = "width";
+    value.to = "8";
+    node.animatedRegion[2] = components::ContextualLengthRecipe::Create({{value, 0.5, 0}});
+    graph.nodes.push_back(node);
+    auto pixmap = tiny_skia::Pixmap::fromSize(16, 16);
+    auto paint = tiny_skia::Pixmap::fromSize(32, 16);
+    ASSERT_THAT(pixmap, testing::Ne(std::nullopt));
+    ASSERT_THAT(paint, testing::Ne(std::nullopt));
+    components::FilterExecutionBudget budget;
+    ApplyFilterGraphToPixmap(*pixmap, graph, Transform2d(), std::nullopt, false,
+                             stroke ? nullptr : &*paint, stroke ? &*paint : nullptr, &budget);
+    EXPECT_THAT(budget.rejectionReason(),
+                testing::Eq(components::FilterExecutionBudget::RejectionReason::External));
+  }
+}
+
+TEST(FilterGraphExecutorTest, ContextualWorkIncludesEveryExecutionAndPaintScan) {
+  components::FilterGraph graph;
+  components::FilterNode node;
+  node.primitive = components::filter_primitive::Flood{};
+  components::AnimateValueComponent value;
+  value.attributeName = "width";
+  value.values = {"100%", "4px", "0.5"};
+  node.animatedRegion[2] = components::ContextualLengthRecipe::Create({{value, 0.5, 0}});
+  graph.nodes.push_back(node);
+  uint64_t singleWork = 0;
+  uint64_t repeatedWork = 0;
+  uint64_t bytes = 0;
+  ASSERT_THAT(
+      components::FilterGraphExecutionCost(
+          graph, 256, components::FilterMemoryModel::CpuFloatNamedResults, singleWork, bytes),
+      testing::IsTrue());
+  ASSERT_THAT(components::FilterGraphExecutionCost(
+                  graph, 1024, components::FilterMemoryModel::CpuFloatNamedResults, repeatedWork,
+                  bytes, 256, 4),
+              testing::IsTrue());
+  EXPECT_EQ(repeatedWork, singleWork * 4);
+  const auto recipeWork = node.animatedRegion[2]->evaluationWork;
+  graph.nodes[0].animatedRegion = {};
+  uint64_t baseWork = 0;
+  ASSERT_THAT(components::FilterGraphExecutionCost(
+                  graph, 256, components::FilterMemoryModel::CpuFloatNamedResults, baseWork, bytes),
+              testing::IsTrue());
+  EXPECT_THAT(singleWork, testing::Ge(baseWork + recipeWork + 2 * 256));
 }
 
 TEST(FilterGraphExecutorTest, AppliesOffsetsUsingCapturedFilterTransform) {

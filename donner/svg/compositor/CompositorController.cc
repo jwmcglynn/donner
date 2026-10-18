@@ -1605,6 +1605,124 @@ bool CompositorController::tryPatchDirtyLayer(
   return rasterizeLayerDamage(layer, viewport, surfaceFromCanvas, *invalidation.damageBoundsCanvas);
 }
 
+void CompositorController::renderWithoutPromotedLayers(const RenderViewport& viewport,
+                                                       const Transform2d& surfaceFromCanvas,
+                                                       const ResolveOptions& resolveOptions,
+                                                       bool needsLayerPlanning) {
+  ZoneScopedN("Compositor::firstFrameEmptyLayersPath");
+  Registry& registry = document().registry();
+  const auto elapsedMsSince = [](std::chrono::steady_clock::time_point start) {
+    return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start)
+        .count();
+  };
+  RendererDriver driver(renderer(), false, nullptr, styleWork_);
+  {
+    ZoneScopedN("Compositor::driver.draw (first-frame)");
+    const auto firstFrameDrawStart = std::chrono::steady_clock::now();
+    const bool completed = driver.drawInterruptibly(document(), viewport, surfaceFromCanvas,
+                                                    [this]() { return isCancelled(); });
+    lastRenderFrameStats_.firstFrameDrawMs = elapsedMsSince(firstFrameDrawStart);
+    if (!completed) {
+      mainRendererHasCachedFrame_ = false;
+      return;
+    }
+  }
+  mainRendererHasCachedFrame_ = true;
+  // The guarded draw runs preparation for the first frame. Defensively clear
+  // the rebuild flag so the eager-warmed compositor caches survive the next
+  // `renderFrame`.
+  if (registry.ctx().contains<components::RenderTreeState>()) {
+    registry.ctx().get<components::RenderTreeState>().needsFullRebuild = false;
+  }
+  staticSegments_.clear();
+  staticSegmentStyleWorkIncomplete_.clear();
+  staticSegmentTextures_.clear();
+  staticSegmentOffsets_.clear();
+  staticSegmentLastRasterizeMs_.clear();
+  staticSpanPlans_.clear();
+  staticSegmentsCanvas_ = Vector2i::Zero();
+  hasStaticSegmentsSurfaceFromCanvas_ = false;
+  staticSegmentsLayerCount_ = 0;
+  splitStaticLayersEntity_ = entt::null;
+  splitStaticLayersViewport_ = Vector2i::Zero();
+  rootDirty_ = false;
+  documentPrepared_ = true;
+
+  // Populated RICs now exist. If the detectors haven't scanned yet, run
+  // them once against the populated view and rebuild `layers_`. A newly
+  // discovered mandatory filter/mask/isolated-layer promotes the affected
+  // subtree immediately.
+  const auto firstFramePlanningStart = std::chrono::steady_clock::now();
+  if (needsLayerPlanning) {
+    ZoneScopedN("Compositor::firstFrameDetectorsAndWarmup");
+    {
+      ZoneScopedN("Compositor::mandatoryDetector.reconcile (first)");
+      mandatoryDetector_.reconcile(registry);
+    }
+    if (config_.complexityBucketing) {
+      ZoneScopedN("Compositor::complexityBucketer.reconcile (first)");
+      complexityBucketer_.reconcile(registry);
+    }
+    hintsScanned_ = true;
+    {
+      ZoneScopedN("Compositor::resolver.resolve (first)");
+      resolveLayerAssignments(registry, resolveOptions);
+    }
+    {
+      ZoneScopedN("Compositor::reconcileLayers (first)");
+      reconcileLayers(registry);
+    }
+    refreshLayerMetadata();
+    lastRenderFrameStats_.firstFramePlanningMs = elapsedMsSince(firstFramePlanningStart);
+  }
+
+  // The flat output above is already the correct frame. Owners that allow flat first-frame
+  // presentation may defer the initial cache fill. Tile-only owners warm eagerly on every
+  // transition to an empty layer set, including a later selection demotion, so the root static
+  // segment remains publishable instead of disappearing until another promotion.
+  if (config_.deferFirstFrameWarmup && needsLayerPlanning) {
+    firstFrameWarmupPending_ = true;
+  } else if (!config_.deferFirstFrameWarmup) {
+    const auto firstFrameWarmupStart = std::chrono::steady_clock::now();
+    warmFirstFrameCaches(viewport, surfaceFromCanvas);
+    lastRenderFrameStats_.firstFrameWarmupMs = elapsedMsSince(firstFrameWarmupStart);
+  }
+}
+
+void CompositorController::renderAfterLastLayerRemoved(const RenderViewport& viewport,
+                                                       const Transform2d& surfaceFromCanvas) {
+  ZoneScopedN("Compositor::emptyLayerSetAfterPrepare");
+  RendererDriver driver(renderer(), false, nullptr, styleWork_);
+  if (!driver.drawInterruptibly(document(), viewport, surfaceFromCanvas,
+                                [this]() { return isCancelled(); })) {
+    mainRendererHasCachedFrame_ = false;
+    return;
+  }
+  staticSegments_.clear();
+  staticSegmentStyleWorkIncomplete_.clear();
+  staticSegmentTextures_.clear();
+  staticSegmentBoundaries_.clear();
+  staticSegmentDirty_.clear();
+  staticSegmentOffsets_.clear();
+  staticSegmentLastRasterizeMs_.clear();
+  staticSpanPlans_.clear();
+  staticSegmentsCanvas_ = Vector2i::Zero();
+  hasStaticSegmentsSurfaceFromCanvas_ = false;
+  staticSegmentsLayerCount_ = 0;
+  splitStaticLayersEntity_ = entt::null;
+  splitStaticLayersViewport_ = Vector2i::Zero();
+  rootDirty_ = false;
+  mainRendererHasCachedFrame_ = true;
+  if (!config_.deferFirstFrameWarmup) {
+    const auto emptyLayerWarmupStart = std::chrono::steady_clock::now();
+    warmFirstFrameCaches(viewport, surfaceFromCanvas);
+    lastRenderFrameStats_.firstFrameWarmupMs =
+        std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() -
+                                                  emptyLayerWarmupStart)
+            .count();
+  }
+}
+
 void CompositorController::renderFrameImpl(const RenderViewport& viewport,
                                            const Transform2d& surfaceFromCanvas) {
   ZoneScopedN("Compositor::renderFrame");
@@ -2020,7 +2138,7 @@ void CompositorController::renderFrameImpl(const RenderViewport& viewport,
   }
 
   // If no promoted layers yet, take the simple full-render path. This
-  // runs `prepareDocumentForRendering` implicitly via `driver.draw()`,
+  // runs `prepareDocumentForRendering` through the guarded live-document draw,
   // so by the time the detectors run afterwards they can observe RICs.
   //
   // Retained-cache warmup: after the detectors pick up mandatory / bucket layers, rasterize them
@@ -2028,75 +2146,8 @@ void CompositorController::renderFrameImpl(const RenderViewport& viewport,
   // interactive owners may publish the already-correct flat draw and run the offscreen-only work
   // from a later cancellable worker turn.
   if (layers_.empty()) {
-    ZoneScopedN("Compositor::firstFrameEmptyLayersPath");
-    RendererDriver driver(renderer(), false, nullptr, styleWork_);
-    {
-      ZoneScopedN("Compositor::driver.draw (first-frame)");
-      const auto firstFrameDrawStart = std::chrono::steady_clock::now();
-      driver.draw(document(), viewport, surfaceFromCanvas);
-      lastRenderFrameStats_.firstFrameDrawMs = elapsedMsSince(firstFrameDrawStart);
-    }
-    mainRendererHasCachedFrame_ = true;
-    // `driver.draw` runs preparation for the first frame. Defensively clear
-    // the rebuild flag so the eager-warmed compositor caches survive the next
-    // `renderFrame`.
-    if (registry.ctx().contains<components::RenderTreeState>()) {
-      registry.ctx().get<components::RenderTreeState>().needsFullRebuild = false;
-    }
-    staticSegments_.clear();
-    staticSegmentStyleWorkIncomplete_.clear();
-    staticSegmentTextures_.clear();
-    staticSegmentOffsets_.clear();
-    staticSegmentLastRasterizeMs_.clear();
-    staticSpanPlans_.clear();
-    staticSegmentsCanvas_ = Vector2i::Zero();
-    hasStaticSegmentsSurfaceFromCanvas_ = false;
-    staticSegmentsLayerCount_ = 0;
-    splitStaticLayersEntity_ = entt::null;
-    splitStaticLayersViewport_ = Vector2i::Zero();
-    rootDirty_ = false;
-    documentPrepared_ = true;
-
-    // Populated RICs now exist. If the detectors haven't scanned yet, run
-    // them once against the populated view and rebuild `layers_`. A newly
-    // discovered mandatory filter/mask/isolated-layer promotes the affected
-    // subtree immediately.
-    const auto firstFramePlanningStart = std::chrono::steady_clock::now();
-    const bool needsLayerPlanning = !hintsScanned_ || deferDetectorsToPostPrepare;
-    if (needsLayerPlanning) {
-      ZoneScopedN("Compositor::firstFrameDetectorsAndWarmup");
-      {
-        ZoneScopedN("Compositor::mandatoryDetector.reconcile (first)");
-        mandatoryDetector_.reconcile(registry);
-      }
-      if (config_.complexityBucketing) {
-        ZoneScopedN("Compositor::complexityBucketer.reconcile (first)");
-        complexityBucketer_.reconcile(registry);
-      }
-      hintsScanned_ = true;
-      {
-        ZoneScopedN("Compositor::resolver.resolve (first)");
-        resolveLayerAssignments(registry, resolveOptions);
-      }
-      {
-        ZoneScopedN("Compositor::reconcileLayers (first)");
-        reconcileLayers(registry);
-      }
-      refreshLayerMetadata();
-      lastRenderFrameStats_.firstFramePlanningMs = elapsedMsSince(firstFramePlanningStart);
-    }
-
-    // The flat output above is already the correct frame. Owners that allow flat first-frame
-    // presentation may defer the initial cache fill. Tile-only owners warm eagerly on every
-    // transition to an empty layer set, including a later selection demotion, so the root static
-    // segment remains publishable instead of disappearing until another promotion.
-    if (config_.deferFirstFrameWarmup && needsLayerPlanning) {
-      firstFrameWarmupPending_ = true;
-    } else if (!config_.deferFirstFrameWarmup) {
-      const auto firstFrameWarmupStart = std::chrono::steady_clock::now();
-      warmFirstFrameCaches(viewport, surfaceFromCanvas);
-      lastRenderFrameStats_.firstFrameWarmupMs = elapsedMsSince(firstFrameWarmupStart);
-    }
+    renderWithoutPromotedLayers(viewport, surfaceFromCanvas, resolveOptions,
+                                !hintsScanned_ || deferDetectorsToPostPrepare);
     return;
   }
 
@@ -2156,29 +2207,7 @@ void CompositorController::renderFrameImpl(const RenderViewport& viewport,
                                            transformDirtyEntities);
 
   if (layers_.empty()) {
-    ZoneScopedN("Compositor::emptyLayerSetAfterPrepare");
-    RendererDriver driver(renderer(), false, nullptr, styleWork_);
-    driver.draw(document(), viewport, surfaceFromCanvas);
-    staticSegments_.clear();
-    staticSegmentStyleWorkIncomplete_.clear();
-    staticSegmentTextures_.clear();
-    staticSegmentBoundaries_.clear();
-    staticSegmentDirty_.clear();
-    staticSegmentOffsets_.clear();
-    staticSegmentLastRasterizeMs_.clear();
-    staticSpanPlans_.clear();
-    staticSegmentsCanvas_ = Vector2i::Zero();
-    hasStaticSegmentsSurfaceFromCanvas_ = false;
-    staticSegmentsLayerCount_ = 0;
-    splitStaticLayersEntity_ = entt::null;
-    splitStaticLayersViewport_ = Vector2i::Zero();
-    rootDirty_ = false;
-    mainRendererHasCachedFrame_ = true;
-    if (!config_.deferFirstFrameWarmup) {
-      const auto emptyLayerWarmupStart = std::chrono::steady_clock::now();
-      warmFirstFrameCaches(viewport, surfaceFromCanvas);
-      lastRenderFrameStats_.firstFrameWarmupMs = elapsedMsSince(emptyLayerWarmupStart);
-    }
+    renderAfterLastLayerRemoved(viewport, surfaceFromCanvas);
     return;
   }
 

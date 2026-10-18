@@ -9,6 +9,7 @@
 #include <memory>
 #include <optional>
 #include <span>
+#include <string_view>
 #include <type_traits>
 #include <variant>
 #include <vector>
@@ -19,6 +20,7 @@
 #include "donner/base/RcString.h"
 #include "donner/css/Color.h"
 #include "donner/svg/SVGDocumentHandle.h"
+#include "donner/svg/components/animation/ContextualLengthRecipe.h"
 #include "donner/svg/components/filter/FilterUnits.h"
 #include "donner/svg/core/ColorInterpolationFilters.h"
 #include "donner/svg/core/ImageRendering.h"
@@ -130,11 +132,14 @@ enum class FilterStandardInput : std::uint8_t {
 struct FilterInput {
   /// The input is the output of the immediately preceding primitive (or SourceGraphic for the first
   /// primitive).
-  struct Previous {};
+  struct Previous {
+    bool operator==(const Previous&) const = default;
+  };
 
   /// The input is a named result from a prior primitive's `result` attribute.
   struct Named {
     RcString name;  ///< The result name to reference.
+    bool operator==(const Named&) const = default;
   };
 
   /// Variant of all input types.
@@ -153,6 +158,26 @@ struct FilterInput {
 
   /// Construct from a variant value.
   /* implicit */ FilterInput(Type value) : value(std::move(value)) {}
+
+  /// Parse a standard keyword or a named filter-result reference.
+  /// @param value SVG input attribute value; the caller admits any owning string allocation.
+  static FilterInput FromAttribute(std::string_view value) {
+    if (value == "SourceGraphic") {
+      return FilterInput(FilterStandardInput::SourceGraphic);
+    }
+    if (value == "SourceAlpha") {
+      return FilterInput(FilterStandardInput::SourceAlpha);
+    }
+    if (value == "FillPaint") {
+      return FilterInput(FilterStandardInput::FillPaint);
+    }
+    if (value == "StrokePaint") {
+      return FilterInput(FilterStandardInput::StrokePaint);
+    }
+    return FilterInput(Named{RcString(value)});
+  }
+
+  bool operator==(const FilterInput&) const = default;
 };
 
 /**
@@ -512,6 +537,18 @@ struct FilterNode {
   std::optional<Lengthd> width;    ///< Primitive subregion width.
   std::optional<Lengthd> height;   ///< Primitive subregion height.
 
+  /// Immutable deferred x/y/width/height stacks, evaluated in the executing filter's context.
+  std::array<std::shared_ptr<const ContextualLengthRecipe>, 4> animatedRegion{};
+
+  /// Whether any authored primitive-region coordinate is present.
+  bool hasExplicitRegion() const { return x || y || width || height; }
+
+  /// Whether a contextual region stack is present, including a stack with no contributing value.
+  bool hasAnimatedRegion() const {
+    return std::any_of(animatedRegion.begin(), animatedRegion.end(),
+                       [](const auto& recipe) { return recipe != nullptr; });
+  }
+
   /// Per-primitive color-interpolation-filters. When set, overrides the graph-level default.
   std::optional<ColorInterpolationFilters> colorInterpolationFilters;
 };
@@ -537,6 +574,9 @@ struct FilterGraph {
 
   /// The filter region in user-space coordinates.
   std::optional<Box2d> filterRegion;
+
+  /// Referencing SVG viewport in user coordinates, independent of filter raster allocation.
+  std::optional<Box2d> primitiveViewport;
 
   /// Scale factor from SVG user-space coordinates to pixel-space coordinates.
   /// Needed by lighting filters to transform light positions from user space to the pixel-space
@@ -681,6 +721,261 @@ enum class FilterMemoryModel : std::uint8_t {
   GpuAllNodes,           ///< Geode retains live float values and reusable node scratch.
 };
 
+/// Computes one primitive's full-surface work multiplier without changing its validation rules.
+struct FilterWorkMultiplier {
+  const FilterNode& node;
+  FilterMemoryModel memoryModel;
+
+  std::optional<std::uint64_t> operator()(const filter_primitive::ConvolveMatrix& primitive) const {
+    if (primitive.orderX <= 0 || primitive.orderY <= 0) {
+      return std::nullopt;
+    }
+    return static_cast<std::uint64_t>(primitive.orderX) *
+               static_cast<std::uint64_t>(primitive.orderY) +
+           4;
+  }
+
+  std::optional<std::uint64_t> operator()(const filter_primitive::Turbulence& primitive) const {
+    if (primitive.numOctaves > kMaximumFilterTurbulenceOctaves) {
+      return std::nullopt;
+    }
+    const std::uint64_t octaves = static_cast<std::uint64_t>(std::max(primitive.numOctaves, 1));
+    const std::uint64_t workPerOctave =
+        memoryModel == FilterMemoryModel::CpuFloatNamedResults ? 16 : 4;
+    return octaves * workPerOctave + 5;
+  }
+
+  std::optional<std::uint64_t> operator()(const filter_primitive::Merge&) const {
+    if (node.inputs.size() > kMaximumFilterMergeInputs) {
+      return std::nullopt;
+    }
+    const std::uint64_t inputs = static_cast<std::uint64_t>(node.inputs.size());
+    return std::max<std::uint64_t>(inputs * 3 + 2, 5);
+  }
+
+  std::optional<std::uint64_t> operator()(const filter_primitive::GaussianBlur& primitive) const {
+    return primitive.stdDeviationX > 0.0 || primitive.stdDeviationY > 0.0 ? 12 : 5;
+  }
+
+  std::optional<std::uint64_t> operator()(const filter_primitive::DropShadow& primitive) const {
+    return primitive.stdDeviationX > 0.0 || primitive.stdDeviationY > 0.0 ? 20 : 12;
+  }
+
+  std::optional<std::uint64_t> operator()(const filter_primitive::Morphology& primitive) const {
+    return primitive.radiusX > 0.0 || primitive.radiusY > 0.0
+               ? kMaximumFilterMorphologyWorkMultiplier
+               : 5;
+  }
+
+  std::optional<std::uint64_t> operator()(const filter_primitive::Image& primitive) const {
+    return memoryModel == FilterMemoryModel::CpuFloatNamedResults &&
+                   primitive.imageRendering != ImageRendering::Pixelated
+               ? 68
+               : 5;
+  }
+
+  template <typename Primitive>
+  std::optional<std::uint64_t> operator()(const Primitive&) const {
+    return 5;
+  }
+};
+
+/// Adds contextual-region sampling work for one node.
+inline bool AddFilterRecipeWork(const FilterNode& node, std::uint64_t executions,
+                                std::uint64_t& workUnits) {
+  for (const auto& recipe : node.animatedRegion) {
+    if (!recipe) {
+      continue;
+    }
+    if (recipe->evaluationWork > kMaximumFilterWorkUnits / executions) {
+      return false;
+    }
+    const std::uint64_t sampleWork = recipe->evaluationWork * executions;
+    if (sampleWork > kMaximumFilterWorkUnits - workUnits) {
+      return false;
+    }
+    workUnits += sampleWork;
+  }
+  return true;
+}
+
+/// Adds one node's primitive work while preserving the established overflow checks.
+inline bool AddFilterNodeWork(const FilterNode& node, std::uint64_t pixelCount,
+                              std::uint64_t executions, FilterMemoryModel memoryModel,
+                              std::uint64_t& workUnits) {
+  if (!AddFilterRecipeWork(node, executions, workUnits)) {
+    return false;
+  }
+  const auto multiplier = std::visit(FilterWorkMultiplier{node, memoryModel}, node.primitive);
+  if (!multiplier || *multiplier > kMaximumFilterWorkUnits ||
+      (*multiplier != 0 && pixelCount > kMaximumFilterWorkUnits / *multiplier)) {
+    return false;
+  }
+  const std::uint64_t nodeWork = pixelCount * *multiplier;
+  if (nodeWork > kMaximumFilterWorkUnits - workUnits) {
+    return false;
+  }
+  workUnits += nodeWork;
+  return true;
+}
+
+/// Initializes the work estimate, including CPU animated-region coverage scans.
+inline bool InitializeFilterWork(const FilterGraph& graph, std::uint64_t pixelCount,
+                                 FilterMemoryModel memoryModel, std::uint64_t& workUnits) {
+  workUnits = 0;
+  if (memoryModel != FilterMemoryModel::CpuFloatNamedResults ||
+      !std::any_of(graph.nodes.begin(), graph.nodes.end(),
+                   [](const auto& node) { return node.hasAnimatedRegion(); })) {
+    return true;
+  }
+  if (pixelCount > kMaximumFilterWorkUnits / 2) {
+    return false;
+  }
+  workUnits = pixelCount * 2;
+  return true;
+}
+
+struct FilterStandardInputUsage {
+  bool sourceAlpha = false;
+  bool fillPaint = false;
+  bool strokePaint = false;
+};
+
+/// Collects the standard inputs retained by a CPU filter execution.
+inline FilterStandardInputUsage StandardInputUsage(const FilterGraph& graph) {
+  FilterStandardInputUsage result;
+  for (const FilterNode& node : graph.nodes) {
+    for (const FilterInput& input : node.inputs) {
+      if (const auto* standard = std::get_if<FilterStandardInput>(&input.value)) {
+        result.sourceAlpha |= *standard == FilterStandardInput::SourceAlpha;
+        result.fillPaint |= *standard == FilterStandardInput::FillPaint;
+        result.strokePaint |= *standard == FilterStandardInput::StrokePaint;
+      }
+    }
+  }
+  return result;
+}
+
+/// Computes one CPU primitive's transient float-buffer demand.
+struct CpuTransientBufferCount {
+  const FilterGraph& graph;
+  const FilterNode& node;
+  bool linearRgb;
+
+  std::uint64_t operator()(const filter_primitive::GaussianBlur&) const {
+    const bool implicitSource =
+        node.inputs.empty() ||
+        std::holds_alternative<FilterInput::Previous>(node.inputs.front().value) ||
+        (std::holds_alternative<FilterStandardInput>(node.inputs.front().value) &&
+         std::get<FilterStandardInput>(node.inputs.front().value) ==
+             FilterStandardInput::SourceGraphic);
+    return graph.nodes.size() == 1 && implicitSource ? 0 : 1;
+  }
+
+  std::uint64_t operator()(const filter_primitive::Merge&) const {
+    return linearRgb ? static_cast<std::uint64_t>(node.inputs.size()) + 1 : 1;
+  }
+
+  std::uint64_t operator()(const filter_primitive::Blend&) const { return linearRgb ? 3 : 1; }
+  std::uint64_t operator()(const filter_primitive::Composite&) const { return linearRgb ? 3 : 1; }
+  std::uint64_t operator()(const filter_primitive::DisplacementMap&) const {
+    return linearRgb ? 3 : 1;
+  }
+  std::uint64_t operator()(const filter_primitive::ConvolveMatrix&) const {
+    return linearRgb ? 2 : 1;
+  }
+  std::uint64_t operator()(const filter_primitive::Morphology&) const { return linearRgb ? 2 : 1; }
+  std::uint64_t operator()(const filter_primitive::DiffuseLighting&) const {
+    return linearRgb ? 2 : 1;
+  }
+  std::uint64_t operator()(const filter_primitive::SpecularLighting&) const {
+    return linearRgb ? 2 : 1;
+  }
+  std::uint64_t operator()(const filter_primitive::DropShadow&) const { return linearRgb ? 6 : 5; }
+
+  template <typename Primitive>
+  std::uint64_t operator()(const Primitive&) const {
+    return 1;
+  }
+};
+
+/// Computes the maximum live CPU float-buffer count across the graph.
+inline std::uint64_t CpuRetainedBuffers(const FilterGraph& graph) {
+  const FilterStandardInputUsage usage = StandardInputUsage(graph);
+  const std::uint64_t fixedBuffers = 1 + static_cast<std::uint64_t>(usage.sourceAlpha) +
+                                     static_cast<std::uint64_t>(usage.fillPaint) +
+                                     static_cast<std::uint64_t>(usage.strokePaint);
+  std::uint64_t retainedBuffers = 0;
+  std::uint64_t priorNamedResults = 0;
+  for (std::size_t index = 0; index < graph.nodes.size(); ++index) {
+    const FilterNode& node = graph.nodes[index];
+    const bool linearRgb = node.colorInterpolationFilters.value_or(
+                               graph.colorInterpolationFilters) != ColorInterpolationFilters::SRGB;
+    const std::uint64_t transientBuffers =
+        std::visit(CpuTransientBufferCount{graph, node, linearRgb}, node.primitive);
+    const std::uint64_t previousOutput = index == 0 ? 0 : 1;
+    const std::uint64_t namedResultCopy = node.result.has_value() ? 1 : 0;
+    retainedBuffers = std::max(retainedBuffers, fixedBuffers + previousOutput + priorNamedResults +
+                                                    transientBuffers + namedResultCopy);
+    priorNamedResults += namedResultCopy;
+  }
+  return retainedBuffers;
+}
+
+/// Finalizes the CPU intermediate-memory estimate.
+inline bool CpuFilterExecutionBytes(const FilterGraph& graph, std::uint64_t pixelCount,
+                                    std::uint64_t workUnits, std::uint64_t& workUnitsOut,
+                                    std::uint64_t& intermediateBytesOut) {
+  constexpr std::uint64_t bytesPerPixel = 16;
+  const std::uint64_t retainedBuffers = CpuRetainedBuffers(graph);
+  if (retainedBuffers != 0 &&
+      pixelCount > kMaximumFilterIntermediateBytes / bytesPerPixel / retainedBuffers) {
+    return false;
+  }
+  workUnitsOut = workUnits;
+  intermediateBytesOut = pixelCount * bytesPerPixel * retainedBuffers;
+  return true;
+}
+
+/// Finalizes the GPU parameter, image, and texture-memory estimate.
+inline bool GpuFilterExecutionBytes(const FilterGraph& graph, std::uint64_t memoryPixels,
+                                    std::uint64_t executions, std::uint64_t workUnits,
+                                    std::uint64_t& workUnitsOut,
+                                    std::uint64_t& intermediateBytesOut) {
+  GpuFilterWorkingSet layout;
+  if (!ComputeGpuFilterWorkingSet(graph, layout)) {
+    return false;
+  }
+  const std::uint64_t bytesPerPixel = layout.floatTextures * 16 + (graph.empty() ? 0 : 4);
+  const std::uint64_t parameters =
+      GpuFilterParameterAllocationBound(layout.uniformBytes * executions) +
+      GpuFilterParameterAllocationBound(layout.runtimeUniformBytes * executions) +
+      layout.standaloneBufferBytes * executions + kGpuFilterTransferTableBytes;
+  const std::uint64_t imageBytes = layout.imageBytes * executions;
+  if (parameters > kMaximumFilterIntermediateBytes ||
+      imageBytes > kMaximumFilterIntermediateBytes - parameters ||
+      (bytesPerPixel && memoryPixels > (kMaximumFilterIntermediateBytes - parameters - imageBytes) /
+                                           bytesPerPixel)) {
+    return false;
+  }
+  workUnitsOut = workUnits;
+  intermediateBytesOut =
+      memoryPixels == 0 ? 0 : memoryPixels * bytesPerPixel + imageBytes + parameters;
+  return true;
+}
+
+/// Validates graph and logical-surface limits before estimating any node work.
+inline bool FilterGraphSizeIsValid(const FilterGraph& graph, std::uint64_t pixelCount) {
+  return pixelCount <= kMaximumFilterSurfacePixels &&
+         graph.nodes.size() <= kMaximumFilterGraphNodes;
+}
+
+/// Validates retained-surface and repeated-execution dimensions.
+inline bool FilterMemoryRequestIsValid(std::uint64_t memoryPixels, std::uint64_t executions) {
+  return memoryPixels <= kMaximumFilterSurfacePixels && executions != 0 &&
+         executions <= kMaximumFilterSurfacePixels;
+}
+
 /**
  * Estimate a filter graph's aggregate execution cost for a pixel surface.
  *
@@ -698,175 +993,31 @@ inline bool FilterGraphExecutionCost(const FilterGraph& graph, std::uint64_t pix
                                      std::uint64_t& intermediateBytesOut,
                                      std::uint64_t memoryPixels = UINT64_MAX,
                                      std::uint64_t executions = 1) {
-  if (pixelCount > kMaximumFilterSurfacePixels || graph.nodes.size() > kMaximumFilterGraphNodes) {
+  if (!FilterGraphSizeIsValid(graph, pixelCount)) {
     return false;
   }
 
   if (memoryPixels == UINT64_MAX) {
     memoryPixels = pixelCount;
   }
-  if (memoryPixels > kMaximumFilterSurfacePixels || executions == 0 ||
-      executions > kMaximumFilterSurfacePixels) {
+  if (!FilterMemoryRequestIsValid(memoryPixels, executions)) {
     return false;
   }
   std::uint64_t workUnits = 0;
-  for (const FilterNode& node : graph.nodes) {
-    // Every executed node performs its primitive pass plus a mandatory subregion clip. Default
-    // linearRGB processing can add input/output conversion passes, and binary primitives convert
-    // both inputs. Five full-surface passes is a conservative baseline for the generic case.
-    std::uint64_t workMultiplier = 5;
-    if (const auto* convolve = std::get_if<filter_primitive::ConvolveMatrix>(&node.primitive)) {
-      if (convolve->orderX <= 0 || convolve->orderY <= 0) {
-        return false;
-      }
-      workMultiplier = static_cast<std::uint64_t>(convolve->orderX) *
-                           static_cast<std::uint64_t>(convolve->orderY) +
-                       4;
-    } else if (const auto* turbulence =
-                   std::get_if<filter_primitive::Turbulence>(&node.primitive)) {
-      if (turbulence->numOctaves > kMaximumFilterTurbulenceOctaves) {
-        return false;
-      }
-      const std::uint64_t octaves = static_cast<std::uint64_t>(std::max(turbulence->numOctaves, 1));
-      // TinySkia evaluates four lattice gradients and interpolates four color channels for every
-      // octave. Geode runs the same octave loop in a compute shader. Charge the CPU scalar work
-      // conservatively and retain a lower, still octave-weighted GPU estimate.
-      const std::uint64_t workPerOctave =
-          memoryModel == FilterMemoryModel::CpuFloatNamedResults ? 16 : 4;
-      workMultiplier = octaves * workPerOctave + 5;
-    } else if (std::holds_alternative<filter_primitive::Merge>(node.primitive)) {
-      if (node.inputs.size() > kMaximumFilterMergeInputs) {
-        return false;
-      }
-      const std::uint64_t mergeInputs = static_cast<std::uint64_t>(node.inputs.size());
-      // Linear merge converts and composites each input, then clips the node output.
-      workMultiplier = std::max<std::uint64_t>(mergeInputs * 3 + 2, 5);
-    } else if (const auto* blur = std::get_if<filter_primitive::GaussianBlur>(&node.primitive)) {
-      // Two-axis large-sigma blur uses six convolution passes plus two transposes. Include the
-      // node copy and linear-RGB conversions in the conservative full-surface work estimate.
-      workMultiplier = blur->stdDeviationX > 0.0 || blur->stdDeviationY > 0.0 ? 12 : 5;
-    } else if (const auto* shadow = std::get_if<filter_primitive::DropShadow>(&node.primitive)) {
-      // Drop shadow adds alpha extraction, flood, composite, offset, and merge passes around the
-      // blur, with additional color conversions in linear RGB.
-      workMultiplier = shadow->stdDeviationX > 0.0 || shadow->stdDeviationY > 0.0 ? 20 : 12;
-    } else if (const auto* morphology =
-                   std::get_if<filter_primitive::Morphology>(&node.primitive)) {
-      workMultiplier = morphology->radiusX > 0.0 || morphology->radiusY > 0.0
-                           ? kMaximumFilterMorphologyWorkMultiplier
-                           : 5;
-    } else if (const auto* image = std::get_if<filter_primitive::Image>(&node.primitive)) {
-      // TinySkia's default Mitchell sampling visits a 4x4 source footprint for each of four
-      // channels. Pixelated sampling and Geode use a single-sample GPU path plus clipping.
-      workMultiplier = memoryModel == FilterMemoryModel::CpuFloatNamedResults &&
-                               image->imageRendering != ImageRendering::Pixelated
-                           ? 68
-                           : 5;
-    }
-
-    if (workMultiplier > kMaximumFilterWorkUnits ||
-        (workMultiplier != 0 && pixelCount > kMaximumFilterWorkUnits / workMultiplier)) {
-      return false;
-    }
-    const std::uint64_t nodeWork = pixelCount * workMultiplier;
-    if (nodeWork > kMaximumFilterWorkUnits - workUnits) {
-      return false;
-    }
-    workUnits += nodeWork;
-  }
-
-  std::uint64_t retainedBuffers = 0;
-  if (memoryModel == FilterMemoryModel::CpuFloatNamedResults) {
-    bool usesSourceAlpha = false;
-    bool usesFillPaint = false;
-    bool usesStrokePaint = false;
-    for (const FilterNode& node : graph.nodes) {
-      for (const FilterInput& input : node.inputs) {
-        if (const auto* standard = std::get_if<FilterStandardInput>(&input.value)) {
-          usesSourceAlpha |= *standard == FilterStandardInput::SourceAlpha;
-          usesFillPaint |= *standard == FilterStandardInput::FillPaint;
-          usesStrokePaint |= *standard == FilterStandardInput::StrokePaint;
-        }
-      }
-    }
-
-    // TinySkia retains SourceGraphic and any materialized standard inputs for the execution. Track
-    // the maximum live transient set per node instead of charging every possible optional buffer
-    // to every graph: a single blur at the established high-zoom envelope needs only source and
-    // output, while multi-node, named-result, merge, and color-conversion graphs retain more.
-    const std::uint64_t fixedBuffers = 1 + static_cast<std::uint64_t>(usesSourceAlpha) +
-                                       static_cast<std::uint64_t>(usesFillPaint) +
-                                       static_cast<std::uint64_t>(usesStrokePaint);
-    std::uint64_t priorNamedResults = 0;
-    for (std::size_t index = 0; index < graph.nodes.size(); ++index) {
-      const FilterNode& node = graph.nodes[index];
-      const bool linearRgb =
-          node.colorInterpolationFilters.value_or(graph.colorInterpolationFilters) !=
-          ColorInterpolationFilters::SRGB;
-      std::uint64_t transientBuffers = 1;
-      if (std::holds_alternative<filter_primitive::GaussianBlur>(node.primitive)) {
-        const bool implicitSource =
-            node.inputs.empty() ||
-            std::holds_alternative<FilterInput::Previous>(node.inputs.front().value) ||
-            (std::holds_alternative<FilterStandardInput>(node.inputs.front().value) &&
-             std::get<FilterStandardInput>(node.inputs.front().value) ==
-                 FilterStandardInput::SourceGraphic);
-        // A sole SourceGraphic blur consumes its float source in place and uses bounded line
-        // scratch. A blur inside a larger graph must retain its input and one output buffer.
-        transientBuffers = graph.nodes.size() == 1 && implicitSource ? 0 : 1;
-      } else if (std::holds_alternative<filter_primitive::Merge>(node.primitive)) {
-        transientBuffers = linearRgb ? static_cast<std::uint64_t>(node.inputs.size()) + 1 : 1;
-      } else if (std::holds_alternative<filter_primitive::Blend>(node.primitive) ||
-                 std::holds_alternative<filter_primitive::Composite>(node.primitive) ||
-                 std::holds_alternative<filter_primitive::DisplacementMap>(node.primitive)) {
-        transientBuffers = linearRgb ? 3 : 1;
-      } else if (std::holds_alternative<filter_primitive::ConvolveMatrix>(node.primitive) ||
-                 std::holds_alternative<filter_primitive::Morphology>(node.primitive) ||
-                 std::holds_alternative<filter_primitive::DiffuseLighting>(node.primitive) ||
-                 std::holds_alternative<filter_primitive::SpecularLighting>(node.primitive)) {
-        transientBuffers = linearRgb ? 2 : 1;
-      } else if (std::holds_alternative<filter_primitive::DropShadow>(node.primitive)) {
-        transientBuffers = linearRgb ? 6 : 5;
-      }
-
-      const std::uint64_t previousOutput = index == 0 ? 0 : 1;
-      const std::uint64_t namedResultCopy = node.result.has_value() ? 1 : 0;
-      retainedBuffers =
-          std::max(retainedBuffers, fixedBuffers + previousOutput + priorNamedResults +
-                                        transientBuffers + namedResultCopy);
-      priorNamedResults += namedResultCopy;
-    }
-  } else {
-    GpuFilterWorkingSet layout;
-    if (!ComputeGpuFilterWorkingSet(graph, layout)) {
-      return false;
-    }
-    const std::uint64_t bytesPerPixel = layout.floatTextures * 16 + (graph.empty() ? 0 : 4);
-    const std::uint64_t parameters =
-        GpuFilterParameterAllocationBound(layout.uniformBytes * executions) +
-        GpuFilterParameterAllocationBound(layout.runtimeUniformBytes * executions) +
-        layout.standaloneBufferBytes * executions + kGpuFilterTransferTableBytes;
-    const uint64_t imageBytes = layout.imageBytes * executions;
-    if (parameters > kMaximumFilterIntermediateBytes ||
-        imageBytes > kMaximumFilterIntermediateBytes - parameters ||
-        (bytesPerPixel &&
-         memoryPixels >
-             (kMaximumFilterIntermediateBytes - parameters - imageBytes) / bytesPerPixel)) {
-      return false;
-    }
-    workUnitsOut = workUnits;
-    intermediateBytesOut =
-        memoryPixels == 0 ? 0 : memoryPixels * bytesPerPixel + imageBytes + parameters;
-    return true;
-  }
-  constexpr std::uint64_t bytesPerPixel = 16;
-  if (retainedBuffers != 0 &&
-      (pixelCount > kMaximumFilterIntermediateBytes / bytesPerPixel / retainedBuffers)) {
+  if (!InitializeFilterWork(graph, pixelCount, memoryModel, workUnits)) {
     return false;
   }
-
-  workUnitsOut = workUnits;
-  intermediateBytesOut = pixelCount * bytesPerPixel * retainedBuffers;
-  return true;
+  for (const FilterNode& node : graph.nodes) {
+    if (!AddFilterNodeWork(node, pixelCount, executions, memoryModel, workUnits)) {
+      return false;
+    }
+  }
+  if (memoryModel == FilterMemoryModel::CpuFloatNamedResults) {
+    return CpuFilterExecutionBytes(graph, pixelCount, workUnits, workUnitsOut,
+                                   intermediateBytesOut);
+  }
+  return GpuFilterExecutionBytes(graph, memoryPixels, executions, workUnits, workUnitsOut,
+                                 intermediateBytesOut);
 }
 
 /// Return whether one filter graph fits the execution budget for a pixel surface.

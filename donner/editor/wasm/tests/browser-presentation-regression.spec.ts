@@ -8,6 +8,7 @@ import {
   hasPresentedBasicShapesHostFrame,
   type InitialBlueFrameState,
 } from "./basic-shapes-capture-gate";
+import { boundBrowserDiagnostic, readGpuOwnerDispatchStats } from "./browser-runtime-diagnostics";
 import { installBrowserStallDiagnostics } from "./browser-stall-diagnostics";
 import {
   captureEditorPage,
@@ -822,17 +823,7 @@ async function boundFailureDiagnostic<T>(
   work: Promise<T>,
   timeoutMs = scaledMs(2_000),
 ): Promise<T | null> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      work.catch(() => null),
-      new Promise<null>((resolve) => {
-        timer = setTimeout(() => resolve(null), timeoutMs);
-      }),
-    ]);
-  } finally {
-    if (timer !== undefined) clearTimeout(timer);
-  }
+  return boundBrowserDiagnostic(work, timeoutMs);
 }
 
 const kCaptureSentinelSize = 12;
@@ -1939,6 +1930,42 @@ async function openBasicShapes(
   );
   await waitForBrowserComposite(page);
 
+  // The picker click can remain over a layer row after it closes. The render pane builds before
+  // the sidebar clears that hover, so require a second presented move after the clearing frame.
+  const blueDeadlineAtMs = performance.now() + scaledMs(5_000);
+  const clearHoverAt = { x: canvasBounds.x + 8, y: canvasBounds.y + 8 };
+  const confirmClearAt = { x: clearHoverAt.x + 8, y: clearHoverAt.y };
+  const presentedPointerAfter = (target: { x: number; y: number }, afterSerial: number) =>
+    page.evaluate(
+      ({ point, previousSerial }) => {
+        const presented = window.__donnerPresentationQueueStats;
+        return (presented?.completedSerial || 0) > previousSerial
+          && presented?.inputRepresented === true
+          && Math.hypot(
+              (presented?.pointerX ?? -1) - point.x,
+              (presented?.pointerY ?? -1) - point.y,
+            ) <= 1.5;
+      },
+      { point: target, previousSerial: afterSerial },
+    );
+  let previousSerial = await page.evaluate(
+    () => window.__donnerPresentationQueueStats?.completedSerial || 0,
+  );
+  await page.mouse.move(clearHoverAt.x, clearHoverAt.y);
+  await expect.poll(() => presentedPointerAfter(clearHoverAt, previousSerial), {
+    message: "the Layers hover-clear move must reach presentation",
+    timeout: Math.max(1, blueDeadlineAtMs - performance.now()),
+  }).toBe(true);
+  previousSerial = await page.evaluate(
+    () => window.__donnerPresentationQueueStats?.completedSerial || 0,
+  );
+  await page.mouse.move(confirmClearAt.x, confirmClearAt.y);
+  await expect.poll(() => presentedPointerAfter(confirmClearAt, previousSerial), {
+    message: "a frame built after the Layers hover clear must reach presentation",
+    timeout: Math.max(1, blueDeadlineAtMs - performance.now()),
+  }).toBe(true);
+  await waitForBrowserComposite(page);
+
   // Gecko can return an empty image for any clipped screenshot of the transferred
   // WebGPU canvas, even when the clip is the whole canvas and the frame is visible.
   // Use the browser's un-clipped page capture there, then search only the current document
@@ -1963,7 +1990,6 @@ async function openBasicShapes(
   let baselinePng: Buffer | null = null;
   let blueRect: PixelBounds | null = null;
   let screenshotTimeouts = 0;
-  const blueDeadlineAtMs = performance.now() + scaledMs(5_000);
   let lastProbe: {
     shot: Buffer;
     preGateState: InitialBlueFrameState | null;
@@ -4291,31 +4317,6 @@ test("GPU dispatch progresses while owner pulses are delayed", async ({ page }) 
   expect(failures).toEqual([]);
 });
 
-async function readGpuOwnerDispatchStats(page: Page) {
-  return Promise.any(
-    page.workers().map(async (worker) => {
-      const result = await boundFailureDiagnostic(
-        worker.evaluate(() => {
-          const scope = globalThis as typeof globalThis & {
-            __donnerReadGpuOwnerWaitStats?: () => unknown;
-            __donnerReadGpuObjectStats?: () => unknown;
-          };
-          return scope.__donnerReadGpuOwnerWaitStats
-            ? {
-              sampledAtMs: performance.now(),
-              stats: scope.__donnerReadGpuOwnerWaitStats(),
-              gpu: scope.__donnerReadGpuObjectStats?.() ?? null,
-            }
-            : null;
-        }),
-        1000,
-      );
-      if (result === null) throw new Error("GPU owner probe unavailable");
-      return result;
-    }),
-  ).catch(() => null);
-}
-
 async function captureRasterDispatchFailure(page: Page): Promise<void> {
   const owners = await Promise.all(
     page.workers().map(async (worker, index) => ({
@@ -4706,10 +4707,14 @@ test("WebGPU toolbar eyedropper gives new SVG text the sampled Donner fill", asy
   const stem = splashDocumentToPage(viewport, kSplashLetterD.stemPress);
   const point = { x: Math.floor(stem.x) + 0.5, y: Math.floor(stem.y) + 0.5 };
   const stemRegion = { x: point.x - 4, y: point.y - 4, width: 8, height: 8 };
-  expect(
-    (await readEditorPixelBounds(page, stemRegion, "splash-yellow"))?.pixels ?? 0,
-    "the sample point must visibly lie on the Donner lettering",
-  ).toBeGreaterThan(0);
+  await expect.poll(async () => {
+    const capture = await captureSplashPresentationFrame(page, stemRegion, stemRegion);
+    await retainEyedropperPng("eyedropper-donner-stem.png", capture.png);
+    return capture.letter?.pixels ?? 0;
+  }, {
+    timeout: scaledMs(5000),
+    message: "the sample point must visibly lie on the Donner lettering",
+  }).toBeGreaterThan(0);
   const pixelRegion = { x: point.x - 0.5, y: point.y - 0.5, width: 1, height: 1 };
   const presentedPixel = await captureSplashPresentationFrame(page, pixelRegion, pixelRegion);
   await retainEyedropperPng("eyedropper-donner-reference.png", presentedPixel.png);

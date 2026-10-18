@@ -12,6 +12,7 @@
 
 #include "donner/svg/SVGAElement.h"                    // IWYU pragma: export
 #include "donner/svg/SVGAnimateElement.h"              // IWYU pragma: export
+#include "donner/svg/SVGAnimateMotionElement.h"        // IWYU pragma: export
 #include "donner/svg/SVGAnimateTransformElement.h"     // IWYU pragma: export
 #include "donner/svg/SVGCircleElement.h"               // IWYU pragma: export
 #include "donner/svg/SVGClipPathElement.h"             // IWYU pragma: export
@@ -48,6 +49,7 @@
 #include "donner/svg/SVGImageElement.h"                // IWYU pragma: export
 #include "donner/svg/SVGLineElement.h"                 // IWYU pragma: export
 #include "donner/svg/SVGLinearGradientElement.h"       // IWYU pragma: export
+#include "donner/svg/SVGMPathElement.h"                // IWYU pragma: export
 #include "donner/svg/SVGMarkerElement.h"               // IWYU pragma: export
 #include "donner/svg/SVGMaskElement.h"                 // IWYU pragma: export
 #include "donner/svg/SVGMetadataElement.h"             // IWYU pragma: export
@@ -82,6 +84,7 @@ namespace donner::svg {
 using AllSVGElements = entt::type_list<  //
     SVGAElement,                         //
     SVGAnimateElement,                   //
+    SVGAnimateMotionElement,             //
     SVGAnimateTransformElement,          //
     SVGCircleElement,                    //
     SVGClipPathElement,                  //
@@ -118,6 +121,7 @@ using AllSVGElements = entt::type_list<  //
     SVGImageElement,                     //
     SVGLineElement,                      //
     SVGLinearGradientElement,            //
+    SVGMPathElement,                     //
     SVGMarkerElement,                    //
     SVGMaskElement,                      //
     SVGMetadataElement,                  //

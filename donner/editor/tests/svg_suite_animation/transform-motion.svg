@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="32" height="24" viewBox="0 0 32 24">
+  <rect width="32" height="24" fill="white" pointer-events="none"/>
+  <defs>
+    <path id="track" d="M0 0 H8"/>
+  </defs>
+  <rect id="transformed" x="2" y="2" width="4" height="4" fill="red">
+    <animateTransform attributeName="transform" type="translate" from="0 0" to="8 0"
+                      dur="2s" fill="freeze"/>
+  </rect>
+  <rect id="inline-motion" x="2" y="10" width="4" height="4" fill="blue">
+    <animateMotion path="M0 0 H8" dur="2s" fill="freeze"/>
+  </rect>
+  <rect id="referenced-motion" x="2" y="18" width="4" height="4" fill="green">
+    <animateMotion dur="2s" fill="freeze"><mpath href="#track"/></animateMotion>
+  </rect>
+</svg>

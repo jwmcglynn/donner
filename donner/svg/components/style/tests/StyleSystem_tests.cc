@@ -19,6 +19,9 @@
 #include "donner/svg/SVGStyleQuery.h"
 #include "donner/svg/components/DirtyFlagsComponent.h"
 #include "donner/svg/components/StylesheetComponent.h"
+#include "donner/svg/components/animation/AnimatedValuesComponent.h"
+#include "donner/svg/components/animation/AnimationResourceBudget.h"
+#include "donner/svg/components/animation/AnimationSystem.h"
 #include "donner/svg/components/resources/ResourceManagerContext.h"
 #include "donner/svg/components/shadow/ComputedShadowTreeComponent.h"
 #include "donner/svg/components/shadow/ShadowEntityComponent.h"
@@ -134,6 +137,187 @@ protected:
 };
 
 // --- Basic style computation ---
+
+TEST_F(StyleSystemTest, ContextualAnimationWorkSharesTheOuterRenderAllowance) {
+  auto root = ParseSVG("<svg xmlns='http://www.w3.org/2000/svg'/>");
+  auto child = ParseSVG("<svg xmlns='http://www.w3.org/2000/svg'/>");
+  StyleResourceBudget work;
+  constexpr auto kLimit = AnimationResourceBudget::kMaximumContextualWork;
+  {
+    const StyleResourceBudget::OwnerScope owner(work);
+    const StyleResourceBudget::ActiveRegistryScope activeRoot(work, root.registry());
+    AnimationSystem().advance(root.registry(), 0);
+    auto& rootBudget = root.registry().ctx().get<AnimationResourceBudget>();
+    ASSERT_TRUE(rootBudget.reserveContextualWork(kLimit - 4));
+    {
+      const StyleResourceBudget::OwnerScope nestedOwner(work);
+      const StyleResourceBudget::ActiveRegistryScope activeChild(work, child.registry());
+      AnimationSystem().advance(child.registry(), 0);
+      auto& childBudget = child.registry().ctx().get<AnimationResourceBudget>();
+      EXPECT_EQ(childBudget.remainingContextualWork(), 4u);
+      ASSERT_TRUE(childBudget.reserveContextualWork(4));
+      ParseWarningSink warnings = ParseWarningSink::Disabled();
+      styleSystem.computeAllStyles(child.registry(), warnings);
+      EXPECT_EQ(childBudget.remainingContextualWork(), 0u);
+      EXPECT_FALSE(childBudget.reserveContextualWork(1));
+      EXPECT_FALSE(childBudget.rejected())
+          << "Contextual refusal must preserve base-value fallback";
+    }
+    EXPECT_EQ(rootBudget.remainingContextualWork(), 0u);
+  }
+  auto& rootBudget = root.registry().ctx().get<AnimationResourceBudget>();
+  EXPECT_EQ(rootBudget.remainingContextualWork(), 4u) << "Scope exit must detach its aggregate";
+  ASSERT_TRUE(rootBudget.reserveContextualWork(4));
+  {
+    const StyleResourceBudget::OwnerScope nextFrame(work);
+    const StyleResourceBudget::ActiveRegistryScope cachedRoot(work, root.registry());
+    EXPECT_EQ(rootBudget.remainingContextualWork(), kLimit)
+        << "A new outer frame restores allowance even when cached preparation skips advance";
+  }
+}
+
+TEST_F(StyleSystemTest, NestedContextualScopePreservesAllowanceAndBinding) {
+  auto document = ParseSVG("<svg xmlns='http://www.w3.org/2000/svg'/>");
+  auto& registry = document.registry();
+  StyleResourceBudget work;
+  const StyleResourceBudget::OwnerScope owner(work);
+  const StyleResourceBudget::ActiveRegistryScope outer(work, registry);
+  AnimationSystem().advance(registry, 0);
+  auto& budget = registry.ctx().get<AnimationResourceBudget>();
+  constexpr auto kLimit = AnimationResourceBudget::kMaximumContextualWork;
+  ASSERT_TRUE(budget.reserveContextualWork(kLimit - 1));
+  const auto binding = budget.contextualWorkBudget();
+  {
+    const StyleResourceBudget::ActiveRegistryScope nested(work, registry);
+    EXPECT_EQ(budget.remainingContextualWork(), 1u);
+    ASSERT_TRUE(budget.reserveContextualWork(1));
+  }
+  EXPECT_EQ(budget.contextualWorkBudget(), binding);
+  EXPECT_EQ(registry.ctx().get<AnimationContextualWorkContext>().budget, binding);
+  EXPECT_EQ(budget.remainingContextualWork(), 0u);
+}
+
+TEST_F(StyleSystemTest, ContextualScopeRestoresPreviousBindingsAfterAdvanceAndEarlyReturn) {
+  auto document = ParseSVG("<svg xmlns='http://www.w3.org/2000/svg'/>");
+  auto& registry = document.registry();
+  auto previousContext = std::make_shared<AnimationContextualWorkBudget>();
+  auto previousBudget = std::make_shared<AnimationContextualWorkBudget>();
+  registry.ctx().emplace<AnimationContextualWorkContext>(
+      AnimationContextualWorkContext{previousContext});
+  registry.ctx().emplace<AnimationResourceBudget>().setContextualWorkBudget(previousBudget);
+  ASSERT_TRUE(previousContext->reserve(17));
+  ASSERT_TRUE(previousBudget->reserve(23));
+  StyleResourceBudget work;
+  const auto prepare = [&]() {
+    const StyleResourceBudget::OwnerScope owner(work);
+    const StyleResourceBudget::ActiveRegistryScope active(work, registry);
+    AnimationSystem().advance(registry, 0);
+    auto& budget = registry.ctx().get<AnimationResourceBudget>();
+    EXPECT_NE(budget.contextualWorkBudget(), previousBudget);
+    EXPECT_TRUE(budget.reserveContextualWork(31));
+    return;
+  };
+  prepare();
+  EXPECT_EQ(registry.ctx().get<AnimationContextualWorkContext>().budget, previousContext);
+  EXPECT_EQ(registry.ctx().get<AnimationResourceBudget>().contextualWorkBudget(), previousBudget);
+  EXPECT_EQ(previousContext->remaining(), AnimationContextualWorkBudget::kMaximumWork - 17);
+  EXPECT_EQ(previousBudget->remaining(), AnimationContextualWorkBudget::kMaximumWork - 23);
+  prepare();
+  EXPECT_EQ(registry.ctx().get<AnimationResourceBudget>().contextualWorkBudget(), previousBudget);
+}
+
+TEST_F(StyleSystemTest, ExhaustedPaintWorkPreservesBaseAndRecoversOnTheNextSample) {
+  auto document = ParseSVG(
+      "<svg xmlns='http://www.w3.org/2000/svg' color='lime'>"
+      "<rect id='r' fill='red'><set attributeName='fill' to='blue'/>"
+      "<set attributeName='color' to='red'/></rect></svg>");
+  auto& registry = document.registry();
+  const auto target = document.querySelector("#r")->entityHandle();
+  const std::string source(document.source());
+  AnimationSystem().advance(registry, 1);
+  registry.ctx().emplace<AnimationStyleContext>().enabled = true;
+  auto& budget = registry.ctx().get<AnimationResourceBudget>();
+  ASSERT_GT(budget.remainingContextualWork(), 0u);
+  ASSERT_TRUE(budget.reserveContextualWork(budget.remainingContextualWork()));
+  styleSystem.invalidateComputed(target);
+  ParseWarningSink warnings = ParseWarningSink::Disabled();
+  {
+    const auto& properties = *styleSystem.computeStyle(target, warnings).properties;
+    EXPECT_EQ(properties.fill.get(),
+              PaintServer(PaintServer::Solid(css::Color(css::RGBA::RGB(255, 0, 0)))));
+    EXPECT_EQ(properties.color.get(), css::Color(css::RGBA::RGB(0, 255, 0)));
+    EXPECT_FALSE(budget.rejected());
+  }
+  AnimationSystem().advance(registry, 1.5);
+  registry.ctx().emplace<AnimationStyleContext>().enabled = true;
+  styleSystem.invalidateComputed(target);
+  {
+    const auto& properties = *styleSystem.computeStyle(target, warnings).properties;
+    EXPECT_EQ(properties.fill.get(),
+              PaintServer(PaintServer::Solid(css::Color(css::RGBA::RGB(0, 0, 255)))));
+    EXPECT_EQ(properties.color.get(), css::Color(css::RGBA::RGB(255, 0, 0)));
+  }
+  EXPECT_EQ(document.source(), source);
+}
+
+TEST_F(StyleSystemTest, MidStackPaintWorkRefusalDiscardsPartialLowerAnimation) {
+  auto document = ParseSVG(
+      "<svg xmlns='http://www.w3.org/2000/svg'><rect id='r' fill='red'>"
+      "<set attributeName='fill' to='#0000ff'/><animate attributeName='fill' to='lime' dur='2s'/>"
+      "</rect></svg>");
+  auto& registry = document.registry();
+  const auto target = document.querySelector("#r")->entityHandle();
+  AnimationSystem().advance(registry, 1);
+  registry.ctx().emplace<AnimationStyleContext>().enabled = true;
+  const auto& recipe =
+      registry.get<AnimatedValuesComponent>(target.entity()).contextualLengths.at("fill");
+  auto& budget = registry.ctx().get<AnimationResourceBudget>();
+  constexpr std::size_t kPaintKeywordWork = 64;
+  constexpr std::size_t kInsufficientBlueUnderlyingWork = 111;
+  const std::size_t retainedWork =
+      recipe->evaluationWork + kPaintKeywordWork + kInsufficientBlueUnderlyingWork;
+  ASSERT_GE(budget.remainingContextualWork(), retainedWork);
+  ASSERT_TRUE(budget.reserveContextualWork(budget.remainingContextualWork() - retainedWork));
+
+  styleSystem.invalidateComputed(target);
+  ParseWarningSink warnings = ParseWarningSink::Disabled();
+  const auto& properties = *styleSystem.computeStyle(target, warnings).properties;
+  EXPECT_EQ(properties.fill.get(),
+            PaintServer(PaintServer::Solid(css::Color(css::RGBA::RGB(255, 0, 0)))));
+  EXPECT_FALSE(budget.rejected());
+}
+
+TEST_F(StyleSystemTest, RepeatedAnimatedOpacityReservesWorkBeforeParsing) {
+  const std::string value = std::string(65536, '0') + ".5";
+  auto document = ParseSVG(
+      "<svg xmlns='http://www.w3.org/2000/svg'><defs><g id='src' opacity='1'>"
+      "<set attributeName='opacity' to='" +
+      value +
+      "' dur='2s'/></g></defs>"
+      "<use id='a' href='#src'/><use id='b' href='#src'/><use id='c' href='#src'/></svg>");
+  auto& registry = document.registry();
+  const auto source = document.querySelector("#src")->entityHandle();
+  ParseWarningSink warnings = ParseWarningSink::Disabled();
+  std::vector<Entity> targets{source.entity()};
+  for (const char* id : {"#a", "#b", "#c"}) {
+    auto use = document.querySelector(id)->entityHandle();
+    auto& shadow = use.get_or_emplace<ComputedShadowTreeComponent>();
+    ShadowTreeSystem().populateInstance(use, shadow, ShadowBranchType::Main, source.entity(),
+                                        RcString("#src"), warnings);
+    ASSERT_THAT(shadow.mainBranch, testing::Optional(testing::_));
+    targets.push_back(shadow.mainBranch->shadowEntities.front());
+  }
+  AnimationSystem().advance(registry, 1, nullptr);
+  registry.ctx().emplace<AnimationStyleContext>().enabled = true;
+  styleSystem.computeAllStyles(registry, warnings);
+  EXPECT_EQ(registry.ctx().get<AnimationResourceBudget>().remainingContextualWork(), 0u);
+  std::vector<double> opacities;
+  for (const Entity target : targets) {
+    opacities.push_back(
+        registry.get<ComputedStyleComponent>(target).properties->opacity.get().value());
+  }
+  EXPECT_THAT(opacities, testing::UnorderedElementsAre(0.5, 0.5, 0.5, 1.0));
+}
 
 TEST_F(StyleSystemTest, ComputeAllStylesCreatesComponents) {
   auto document = ParseAndComputeStyles(R"(
@@ -917,7 +1101,7 @@ TEST_F(StyleSystemTest, SymbolExternalOccurrenceAppliesOnlyToExactRootAndRetires
   {
     auto access = document.writeAccess();
     access.registry().ctx().emplace<ExternalUseStyleContext>(
-        root->entityHandle().entity(), PropertyRegistry(), ResolvedPaintServer(),
+        root->entityHandle().entity(), PropertyRegistry(), std::nullopt, ResolvedPaintServer(),
         ResolvedPaintServer(), nullptr, 0, nullptr);
     styleSystem.invalidateComputed(root->entityHandle());
     EXPECT_EQ(root->getComputedStyle().display.get(), Display::Inline);

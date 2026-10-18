@@ -68,6 +68,9 @@ ComputedStopComponent::ComputedStopComponent(
     properties.stopColor = color;
   }
   for (const auto& [name, unparsedProperty] : unparsedProperties) {
+    if (name == "stop-opacity" && style.resourceOpacities) {
+      continue;
+    }
     const parser::PropertyParseFnParams params = parser::PropertyParseFnParams::Create(
         unparsedProperty.declaration, unparsedProperty.specificity,
         parser::PropertyParseBehavior::AllowUserUnits);
@@ -76,6 +79,11 @@ ComputedStopComponent::ComputedStopComponent(
     if (result.hasError()) {
       warningSink.add(std::move(result.error()));
     }
+  }
+
+  if (style.resourceOpacities) {
+    properties.stopOpacity.set(style.resourceOpacities->stopOpacity,
+                               style.resourceOpacities->stopSpecificity);
   }
 
   // Evaluate stopColor if it is currentColor.

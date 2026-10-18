@@ -1,6 +1,8 @@
 #pragma once
 /// @file
 
+#include <span>
+
 #include "donner/base/EcsRegistry.h"
 #include "donner/base/ParseWarningSink.h"
 #include "donner/svg/components/shape/CircleComponent.h"
@@ -23,6 +25,16 @@ namespace donner::svg::components {
  */
 class ShapeSystem {
 public:
+  /// Select path/cache ownership without changing the instance's transform or resource owner.
+  /// @param instance Style/tree entity. @return Instance geometry or its light-tree fallback.
+  static EntityHandle geometryHandle(EntityHandle instance);
+
+  /// Prepare newly created shadow instances without resampling the rest of the document.
+  /// @param registry Document storage. @param entities Admitted shadow entity span.
+  /// @param warningSink Diagnostic sink.
+  void instantiateShadowComputedPaths(Registry& registry, std::span<const Entity> entities,
+                                      ParseWarningSink& warningSink);
+
   /**
    * Convert the given shape to a path, evaluating CSS styling information and presentation
    * attributes. Returns the \ref ComputedPathComponent if the path was successfully created, or
@@ -110,6 +122,10 @@ public:
   bool pathStrokeIntersects(EntityHandle handle, const Vector2d& point, double strokeWidth);
 
 private:
+  /// Prepare one shadow's contextual geometry at most once in the current shape pass.
+  /// @param handle Shadow entity. @param warningSink Diagnostic sink.
+  void instantiateShadowComputedPath(EntityHandle handle, ParseWarningSink& warningSink);
+
   using AllShapes = entt::type_list<CircleComponent, EllipseComponent, LineComponent, PathComponent,
                                     PolyComponent, RectComponent>;
 

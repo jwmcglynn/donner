@@ -22,6 +22,7 @@ donner_cc_library(
         "BrowserWireCodes.cc",
     ],
     hdrs = [
+        "BrowserBindGroupConstruction.h",
         "BrowserBridge.h",
         "BrowserDevice.h",
         "BrowserGpuTaskQueue.h",
@@ -163,6 +164,7 @@ donner_cc_library(
 donner_cc_test(
     name = "browser_tests",
     srcs = [
+        "tests/BrowserBindGroupConstruction_tests.cc",
         "tests/BrowserDevice_tests.cc",
         "tests/BrowserGpuTaskQueue_tests.cc",
         "tests/BrowserObjectTable_tests.cc",

@@ -265,6 +265,9 @@ public:
     /// Sample this measured path at the given arc length.
     [[nodiscard]] PointOnPath pointAtArcLength(double distance) const;
 
+    /// Return an owning list of cumulative distances at the drawable segment endpoints.
+    [[nodiscard]] std::vector<double> segmentEndDistances() const;
+
     /// Number of drawable segments retained by this index.
     [[nodiscard]] std::size_t segmentCount() const { return segments_.size(); }
 

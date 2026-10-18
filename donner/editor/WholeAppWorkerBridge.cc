@@ -602,6 +602,8 @@ struct FrameDriverState {
   double progressDeadlineMs = 0;
   std::atomic<std::uint32_t> wakeSerial{0};
   bool eventDeferred = false;
+  FrameAttemptStats frameAttempts;
+  uint64_t eventDeferrals = 0;
   std::atomic<std::uint32_t> pendingFrames{0};
   std::atomic<std::uint32_t> peakPendingFrames{0};
 
@@ -662,6 +664,7 @@ void RunEventFrame(void* token) {
     return;
   }
   if (!state.canRunFrame(state.userData)) {
+    ++state.eventDeferrals;
     state.eventDeferred = true;
     return;
   }
@@ -886,6 +889,14 @@ void StopFrameDriver() {
   state.frameFn = nullptr;
   state.userData = nullptr;
   emscripten_cancel_main_loop();
+}
+
+bool RecordFrameAdmission(bool eventFrame, bool frameActive, bool gpuActive) {
+  return Driver().frameAttempts.admit(eventFrame, frameActive, gpuActive);
+}
+
+void RecordFrameOutcome(bool eventFrame, bool didRender) {
+  Driver().frameAttempts.finish(eventFrame, didRender);
 }
 
 FrameTickStats TickStats() {
@@ -1283,6 +1294,7 @@ void PublishMemoryAttribution() {
 
 void RecordFrameSample(int triggerBits, double frameMs, int callbacks) {
   const double completedAtEpochMs = WorkerEpochNowMs();
+  const FrameAttemptStats& attempts = Driver().frameAttempts;
   // clang-format off
   MAIN_THREAD_ASYNC_EM_ASM(
       {
@@ -1290,6 +1302,12 @@ void RecordFrameSample(int triggerBits, double frameMs, int callbacks) {
         if (!stats) {
           return;
         }
+        window['__donnerFrameAdmissionStats'] = ({
+          'scheduledAttempts': $5, 'eventAttempts': $6,
+          'scheduledIdle': $7, 'eventIdle': $8,
+          'scheduledRendered': $9, 'eventRendered': $10,
+          'blockedByFrame': $11, 'blockedByGpu': $12, 'eventDeferrals': $13,
+        });
         stats['callbacks'] = (stats['callbacks'] | 0) + $2;
         stats['renderedFrames'] = (stats['renderedFrames'] | 0) + 1;
         if ($0 & 1) {
@@ -1327,7 +1345,12 @@ void RecordFrameSample(int triggerBits, double frameMs, int callbacks) {
             Math.max(Number(window['__donnerHeapBytesHighWater'] || 0), $3);
       },
       triggerBits, frameMs, callbacks, static_cast<double>(emscripten_get_heap_size()),
-      completedAtEpochMs);
+      completedAtEpochMs,
+      static_cast<double>(attempts.attempts[0]), static_cast<double>(attempts.attempts[1]),
+      static_cast<double>(attempts.idle[0]), static_cast<double>(attempts.idle[1]),
+      static_cast<double>(attempts.rendered[0]), static_cast<double>(attempts.rendered[1]),
+      static_cast<double>(attempts.blockedByFrame), static_cast<double>(attempts.blockedByGpu),
+      static_cast<double>(Driver().eventDeferrals));
   // clang-format on
 
   PublishSuspendAndTickStats();
@@ -1422,10 +1445,38 @@ void NotifyFirstFramePresented(int headlessDeviceCreations) {
   // clang-format on
 }
 
-void PublishPresentedDocumentFrame(std::uint64_t documentGeneration, std::uint64_t frameVersion) {
+// clang-format off
+EM_JS(void, RecordPresentedDocumentFrameStats,
+      (double documentGeneration, double frameVersion, double presentedAtEpochMs,
+       int surfacePresented), {
+        if (surfacePresented && Number.isSafeInteger(documentGeneration) &&
+            documentGeneration > 0 && Number.isSafeInteger(frameVersion) && frameVersion >= 0 &&
+            Number.isFinite(presentedAtEpochMs) && presentedAtEpochMs >= performance.timeOrigin) {
+          const presented = window['__donnerPresentedDocumentStats'] || ({
+            'count': 0, 'documentGeneration': 0, 'frameVersion': 0, 'samples': [],
+          });
+          if (presented['documentGeneration'] !== documentGeneration ||
+              presented['frameVersion'] !== frameVersion) {
+            const at = presentedAtEpochMs - performance.timeOrigin;
+            presented['count'] += 1;
+            presented['documentGeneration'] = documentGeneration;
+            presented['frameVersion'] = frameVersion;
+            presented['lastPresentedAtMs'] = at;
+            presented['lastPublicationDelayMs'] = Math.max(0, performance.now() - at);
+            presented['samples'][(presented['count'] - 1) % 4096] =
+                ([presented['count'], documentGeneration, frameVersion, at]);
+            window['__donnerPresentedDocumentStats'] = presented;
+          }
+        }
+      });
+// clang-format on
+
+void PublishPresentedDocumentFrame(std::uint64_t documentGeneration, std::uint64_t frameVersion,
+                                   bool surfacePresented) {
   // clang-format off
   MAIN_THREAD_ASYNC_EM_ASM(
       {
+        RecordPresentedDocumentFrameStats($0, $1, $2, $3);
         const stats = window['__donnerWorkerStats'];
         if (!stats || stats['publishReason'] !== 'render-result' || stats['resultFramePresented']) {
           return;
@@ -1437,7 +1488,8 @@ void PublishPresentedDocumentFrame(std::uint64_t documentGeneration, std::uint64
           stats['framesPresentedWithoutResult'] = (stats['framesPresentedWithoutResult'] | 0) + 1;
         }
       },
-      static_cast<double>(documentGeneration), static_cast<double>(frameVersion));
+      static_cast<double>(documentGeneration), static_cast<double>(frameVersion), WorkerEpochNowMs(),
+      static_cast<int>(surfacePresented));
   // clang-format on
 }
 

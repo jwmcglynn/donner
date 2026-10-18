@@ -47,7 +47,8 @@ protected:
   // its node. Returns the node ids from the build (only meaningful when
   // `build` is true).
   EditorDockNodes RenderDockFrame(ImGuiID dockspaceId, bool locked, bool showCompositorDebug,
-                                  bool build, const EditorDockLayoutParams& params = {}) {
+                                  bool build, const EditorDockLayoutParams& params = {},
+                                  bool includeModeHeader = false) {
     EditorDockNodes nodes;
     ImGui::NewFrame();
     ImGui::SetNextWindowPos(ImVec2(0.0f, 0.0f));
@@ -60,11 +61,18 @@ protected:
     if (build) {
       nodes = BuildDefaultDockLayout(dockspaceId, params);
     }
+    if (includeModeHeader) {
+      EnsureAnimationModeDock(dockspaceId, 40.0f);
+    }
     ImGui::DockSpace(dockspaceId, ImVec2(0.0f, 0.0f), EditorDockSpaceFlags(locked));
     ImGui::End();
 
     ImGui::Begin(kRenderPaneWindowName);
     ImGui::End();
+    if (includeModeHeader) {
+      ImGui::Begin(kAnimationModeWindowName);
+      ImGui::End();
+    }
     ImGui::Begin(kLayersWindowName);
     ImGui::End();
     ImGui::Begin(kInspectorWindowName);
@@ -120,6 +128,42 @@ TEST_F(EditorDockLayoutTest, BuildsCanvasCentralNodeWithStackedRightColumn) {
 
   // Canvas occupies the majority of the width.
   EXPECT_GT(central->Size.x, kWidth * 0.5f);
+}
+
+TEST_F(EditorDockLayoutTest, AddsFixedModeHeaderWithoutReplacingExistingPanels) {
+  const ImGuiID dockspaceId = EditorDockSpaceId();
+  const auto nodes = RenderDockFrame(dockspaceId, true, false, true, DefaultParams(false));
+  RenderDockFrame(dockspaceId, true, false, false, {}, true);
+  // Let ImGui apply the migrated node rectangles before inspecting their positions.
+  RenderDockFrame(dockspaceId, true, false, false, {}, true);
+  const ImGuiID headerId = DockNodeIdForWindow(kAnimationModeWindowName);
+  const ImGuiID layersId = DockNodeIdForWindow(kLayersWindowName);
+  const ImGuiDockNode* header = ImGui::DockBuilderGetNode(headerId);
+  const ImGuiDockNode* layers = ImGui::DockBuilderGetNode(layersId);
+  ASSERT_NE(header, nullptr);
+  ASSERT_NE(layers, nullptr);
+  EXPECT_NE(headerId, layersId);
+  EXPECT_LE(header->Pos.y + header->Size.y, layers->Pos.y);
+  EXPECT_TRUE(header->IsNoTabBar());
+  EXPECT_FLOAT_EQ(header->Size.y, 40.0f);
+  EXPECT_EQ(DockNodeIdForWindow(kRenderPaneWindowName), nodes.central);
+  EXPECT_EQ(DockNodeIdForWindow(kInspectorWindowName), nodes.rightMid);
+  RenderDockFrame(dockspaceId, true, false, false, {}, true);
+  EXPECT_EQ(DockNodeIdForWindow(kAnimationModeWindowName), headerId);
+  EXPECT_EQ(DockNodeIdForWindow(kLayersWindowName), layersId);
+}
+
+TEST_F(EditorDockLayoutTest, RestoredHeaderWaitsForResolvedWidth) {
+  const ImGuiID dockspaceId = EditorDockSpaceId();
+  RenderDockFrame(dockspaceId, true, false, true, DefaultParams(false), true);
+  RenderDockFrame(dockspaceId, true, false, false, {}, true);
+  const ImGuiID headerId = DockNodeIdForWindow(kAnimationModeWindowName);
+  ImGuiDockNode* header = ImGui::DockBuilderGetNode(headerId);
+  ASSERT_NE(header, nullptr);
+  header->Size.x = 0.0f;
+  RenderDockFrame(dockspaceId, true, false, false, {}, true);
+  EXPECT_GT(ImGui::DockBuilderGetNode(headerId)->Size.x, 0.0f);
+  EXPECT_EQ(DockNodeIdForWindow(kAnimationModeWindowName), headerId);
 }
 
 TEST_F(EditorDockLayoutTest, DocksEachPanelIntoItsDefaultNode) {

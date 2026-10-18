@@ -7,10 +7,13 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <cmath>
+
 #include "donner/base/ParseWarningSink.h"
 #include "donner/base/tests/BaseTestUtils.h"
 #include "donner/base/tests/ParseResultTestUtils.h"
 #include "donner/svg/SVGPathElement.h"
+#include "donner/svg/components/shadow/ShadowEntityComponent.h"
 #include "donner/svg/components/shape/ComputedPathComponent.h"
 #include "donner/svg/components/style/StyleSystem.h"
 #include "donner/svg/parser/SVGParser.h"
@@ -41,6 +44,32 @@ protected:
 
   ShapeSystem shapeSystem;
 };
+
+TEST_F(ShapeSystemTest, InstanceSharesOnlyIdenticalAvailableGeometry) {
+  auto document = ParseAndComputeShapes(R"(
+    <svg xmlns="http://www.w3.org/2000/svg"><rect id="r" width="4" height="4"/></svg>)");
+  auto sourceElement = document.querySelector("#r");
+  ASSERT_THAT(sourceElement, testing::Ne(std::nullopt));
+  const EntityHandle source = sourceElement->entityHandle();
+  auto& registry = document.registry();
+  const EntityHandle instance(registry, registry.create());
+  instance.emplace<ShadowEntityComponent>(source.entity());
+  instance.emplace<ComputedInstanceGeometryComponent>();
+  const Path sourcePath = source.get<ComputedPathComponent>().spline;
+  instance.emplace<ComputedPathComponent>(sourcePath);
+  EXPECT_EQ(shapeSystem.geometryHandle(instance).entity(), source.entity());
+
+  const Path adjacentPath =
+      PathBuilder().addRect(Box2d::FromXYWH(std::nextafter(0.0, 1.0), 0, 4, 4)).build();
+  instance.emplace_or_replace<ComputedPathComponent>(adjacentPath);
+  EXPECT_EQ(shapeSystem.geometryHandle(instance).entity(), instance.entity());
+
+  instance.remove<ComputedPathComponent>();
+  EXPECT_EQ(shapeSystem.geometryHandle(instance).entity(), instance.entity());
+  instance.emplace<ComputedPathComponent>(sourcePath);
+  source.remove<ComputedPathComponent>();
+  EXPECT_EQ(shapeSystem.geometryHandle(instance).entity(), instance.entity());
+}
 
 // --- Circle ---
 

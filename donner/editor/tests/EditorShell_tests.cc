@@ -25,6 +25,7 @@
 #include <limits>
 #include <memory>
 #include <mutex>
+#include <set>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -33,6 +34,7 @@
 
 #include "donner/css/Color.h"
 #include "donner/editor/EditorCommand.h"
+#include "donner/editor/EditorDockLayout.h"
 #include "donner/editor/EditorSampleCatalog.h"
 #include "donner/editor/EditorShellInternal.h"
 #include "donner/editor/EditorShellPresentation.h"
@@ -586,13 +588,13 @@ TEST(EditorShellInternalTest, StructuralDocumentActionsWaitForExclusiveDomOwners
 
 TEST(EditorShellInternalTest, SidebarSnapshotRefreshYieldsToInteractionAndRenderRequests) {
   EXPECT_TRUE(internal::ShouldRefreshSidebarSnapshots(
-      /*rendererBusy=*/false, /*interactionActive=*/false));
+      /*rendererBusy=*/false, /*interactionActive=*/false, /*previewsPaused=*/false));
   EXPECT_FALSE(internal::ShouldRefreshSidebarSnapshots(
-      /*rendererBusy=*/true, /*interactionActive=*/false));
+      /*rendererBusy=*/true, /*interactionActive=*/false, /*previewsPaused=*/false));
   EXPECT_FALSE(internal::ShouldRefreshSidebarSnapshots(
-      /*rendererBusy=*/false, /*interactionActive=*/true));
+      /*rendererBusy=*/false, /*interactionActive=*/true, /*previewsPaused=*/false));
   EXPECT_FALSE(internal::ShouldRefreshSidebarSnapshots(
-      /*rendererBusy=*/true, /*interactionActive=*/true));
+      /*rendererBusy=*/true, /*interactionActive=*/true, /*previewsPaused=*/false));
 }
 
 TEST(EditorShellInternalTest, DeferredLayerThumbnailsRetainSidebarRefreshObligation) {
@@ -1018,6 +1020,66 @@ class EditorShellTestAccess {
 public:
   using NativeSaveOutcome = EditorShell::NativeSaveOutcome;
 
+  static void SetAnimationPreview(EditorShell& shell, bool enabled) {
+    shell.setAnimationPreview(enabled);
+  }
+  static void AdvanceAnimationPreview(EditorShell& shell, double nowSeconds,
+                                      EditorFrameKind frameKind = EditorFrameKind::Scheduled) {
+    shell.advanceAnimationPreview(nowSeconds, frameKind);
+  }
+  static bool PreviewInputReady(const EditorShell& shell) {
+    return shell.animationFramePresented() && !shell.animationResetPending_ &&
+           !shell.renderCoordinator_.asyncRenderer().isBusy();
+  }
+  static void SetPreviewStart(EditorShell& shell, double seconds) {
+    shell.animationPreviewStartSeconds_ = seconds;
+  }
+  static void ClearPreviewPointer(EditorShell& shell) { shell.resetPreviewPointer(); }
+  static void SetPreviewResetPending(EditorShell& shell, bool pending) {
+    shell.animationResetPending_ = pending;
+  }
+  static std::size_t QueuedPreviewEdges(const EditorShell& shell) {
+    return shell.previewPointerEdges_.size();
+  }
+  static void QueuePreviewClick(EditorShell& shell, const svg::SVGElement& target, Vector2d point) {
+    for (bool pressed : {true, false}) {
+      shell.previewPointerInput_ = {
+          .point = point,
+          .target = target,
+          .documentGeneration = shell.app_.document().documentGeneration(),
+          .pressed = pressed,
+          .released = !pressed,
+      };
+      shell.queuePreviewPointerEdge();
+    }
+  }
+  static void ApplyPreviewInputAt(EditorShell& shell, double nowSeconds) {
+    shell.applyPreviewPointerInput(nowSeconds);
+  }
+  static bool IsAnimationPreview(const EditorShell& shell) { return shell.animationPreview_; }
+  static bool AnimationResetPending(const EditorShell& shell) {
+    return shell.animationResetPending_;
+  }
+  static void HoldAnimationAtStart(EditorShell& shell) {
+    shell.animationPreviewStartSeconds_ = std::numeric_limits<double>::max();
+  }
+  static std::optional<svg::SVGElement> PreviewHoveredElement(const EditorShell& shell) {
+    return shell.previewHoveredElement_;
+  }
+  static std::vector<std::pair<svg::EventType, RcString>> HoverTransition(
+      EditorShell& shell, const std::optional<svg::SVGElement>& target) {
+    std::vector<EditorShell::PreviewMouseDispatch> events;
+    shell.collectPreviewHoverEvents(target, events);
+    std::vector<std::pair<svg::EventType, RcString>> result;
+    for (const auto& event : events) {
+      result.emplace_back(event.type, event.target.id());
+    }
+    return result;
+  }
+  static Box2d AnimationControlRect(const EditorShell& shell) {
+    return shell.animationPreviewControlScreenRect();
+  }
+
   static EditorApp& App(EditorShell& shell) { return shell.app_; }
   static const EditorApp& App(const EditorShell& shell) { return shell.app_; }
   static std::size_t PendingHistoryActionCount(const EditorShell& shell) {
@@ -1057,12 +1119,26 @@ public:
     return shell.pendingFontPreviews_.size();
   }
 
+  static void AdvanceVisiblePreviews(EditorShell& shell) { shell.advanceVisiblePreviews(); }
+
   static void AdvanceFontPreviewGeneration(EditorShell& shell) {
     shell.advanceFontPreviewGeneration();
   }
 
   static std::size_t RequestedAuxiliaryPreviewCount(const EditorShell& shell) {
     return shell.renderCoordinator_.asyncRenderer().sampleThumbnailRenderStats().requested;
+  }
+
+  static std::size_t LayerThumbnailRefreshCount(const EditorShell& shell) {
+    return shell.layersPanel_.thumbnailRefreshCount();
+  }
+
+  static std::size_t LayerThumbnailRenderAttempts(const EditorShell& shell) {
+    return shell.layersPanel_.thumbnailRenderAttemptCount();
+  }
+
+  static std::size_t LayerThumbnailCacheInspections(const EditorShell& shell) {
+    return shell.layersPanel_.thumbnailCacheInspectionCountForTesting();
   }
 
   static std::size_t RenderedLayerThumbnailCount(const EditorShell& shell) {
@@ -1902,6 +1978,16 @@ public:
     return snapshot->deviceId();
   }
 
+  static GlTextureCache& ThumbnailTextures(EditorShell& shell) { return shell.thumbnailTextures_; }
+
+  static std::shared_ptr<const svg::RendererTextureSnapshot> RenderProbeThumbnail(
+      EditorShell& shell) {
+    const auto element = shell.app_.document().document().querySelector("#background");
+    return element ? shell.layerThumbnailRenderer_.renderElement(*element, Vector2i(8, 8))
+                         .textureSnapshot()
+                   : nullptr;
+  }
+
   static std::uint64_t RenderLayerThumbnailDeviceId(EditorShell& shell) {
     const std::optional<svg::SVGElement> element =
         shell.app_.document().document().querySelector("#background");
@@ -2311,11 +2397,311 @@ void RunHiddenWindowShellConstructsAndRunsFrames(double contentScale) {
   EXPECT_TRUE(shell.valid());
 }
 
+TEST(EditorShellTest, AnimationPreviewWaitsForPresentationAndRestartsWithoutEdits) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  ASSERT_TRUE(window.valid());
+  EditorShell shell(window, OptionsWithSource(kInitialSvg));
+  EditorApp& app = EditorShellTestAccess::App(shell);
+  const std::string source(app.document().document().source());
+  const bool dirty = app.isDirty();
+  const bool canUndo = app.canUndo();
+
+  EditorShellTestAccess::SetAnimationPreview(shell, true);
+  EXPECT_TRUE(EditorShellTestAccess::IsAnimationPreview(shell));
+  EditorShellTestAccess::AdvanceAnimationPreview(shell, 10.0);
+  const std::uint64_t initialVersion = app.document().currentFrameVersion();
+  EditorShellTestAccess::AdvanceAnimationPreview(shell, 10.008);
+  EXPECT_EQ(app.document().currentFrameVersion(), initialVersion);
+  EditorShellTestAccess::AdvanceAnimationPreview(shell, 10.017);
+  EXPECT_DOUBLE_EQ(app.document().document().currentTime(), 0.0);
+  EditorShellTestAccess::AdvanceAnimationPreview(shell, 10.5);
+  EXPECT_DOUBLE_EQ(app.document().document().currentTime(), 0.0);
+
+  EditorShellTestAccess::SetAnimationPreview(shell, false);
+  EditorShellTestAccess::AdvanceAnimationPreview(shell, 11.0);
+  EXPECT_DOUBLE_EQ(app.document().document().currentTime(), 0.0);
+  const std::uint64_t stoppedVersion = app.document().currentFrameVersion();
+  EditorShellTestAccess::AdvanceAnimationPreview(shell, 20.0);
+  EXPECT_EQ(app.document().currentFrameVersion(), stoppedVersion);
+  EditorShellTestAccess::SetAnimationPreview(shell, true);
+  EditorShellTestAccess::AdvanceAnimationPreview(shell, 20.0);
+  EXPECT_DOUBLE_EQ(app.document().document().currentTime(), 0.0);
+  EXPECT_EQ(app.document().document().source(), source);
+  EXPECT_EQ(app.isDirty(), dirty);
+  EXPECT_EQ(app.canUndo(), canUndo);
+}
+
+TEST(EditorShellTest, AnimationPreviewEventFrameDoesNotStartAnotherOrdinaryTick) {
+  constexpr std::string_view source = R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="32" height="16">
+      <rect width="8" height="8"><animate attributeName="x" from="0" to="16" dur="2s"/></rect>
+    </svg>)svg";
+  gui::EditorWindow window = MakeHiddenWindow();
+  ASSERT_TRUE(window.valid());
+  EditorShell shell(window, OptionsWithSource(source));
+  auto& document = EditorShellTestAccess::App(shell).document();
+  EditorShellTestAccess::SetAnimationPreview(shell, true);
+  const tests::HangGuard guard;
+  while (!EditorShellTestAccess::PreviewInputReady(shell) && guard.active()) {
+    if (!EditorShellTestAccess::AnimationResetPending(shell)) {
+      EditorShellTestAccess::HoldAnimationAtStart(shell);
+    }
+    RunShellFrame(window, shell);
+  }
+  ASSERT_TRUE(EditorShellTestAccess::PreviewInputReady(shell));
+  ASSERT_DOUBLE_EQ(document.document().currentTime(), 0.0);
+  EditorShellTestAccess::SetPreviewStart(shell, 10.0);
+  const auto version = document.currentFrameVersion();
+  EditorShellTestAccess::AdvanceAnimationPreview(shell, 10.25, EditorFrameKind::Event);
+  EXPECT_DOUBLE_EQ(document.document().currentTime(), 0.0);
+  EXPECT_EQ(document.currentFrameVersion(), version);
+  EditorShellTestAccess::AdvanceAnimationPreview(shell, 10.25, EditorFrameKind::Scheduled);
+  EXPECT_DOUBLE_EQ(document.document().currentTime(), 0.25);
+  EXPECT_GT(document.currentFrameVersion(), version);
+
+  EditorShellTestAccess::SetAnimationPreview(shell, false);
+  EditorShellTestAccess::AdvanceAnimationPreview(shell, 11.0, EditorFrameKind::Event);
+  EXPECT_DOUBLE_EQ(document.document().currentTime(), 0.0);
+  EXPECT_FALSE(EditorShellTestAccess::AnimationResetPending(shell));
+  EXPECT_EQ(document.document().source(), source);
+}
+
+TEST(EditorShellTest, AnimationPreviewHeaderRespondsToMouse) {
+  gui::EditorWindow window(TestWindowOptions(
+      {.title = "Animation header", .initialWidth = 1600, .initialHeight = 900}, 1.0));
+  ASSERT_TRUE(window.valid());
+  EditorShell shell(window, OptionsWithSource(kInitialSvg));
+  RunShellFrame(window, shell);
+  RunShellFrame(window, shell);
+  const Box2d rect = EditorShellTestAccess::AnimationControlRect(shell);
+  ASSERT_GT(rect.width(), 0.0);
+  const ImGuiWindow* layers = ImGui::FindWindowByName(kLayersWindowName);
+  ASSERT_NE(layers, nullptr);
+  EXPECT_LE(rect.bottomRight.y, layers->Pos.y);
+  const ImVec2 previewPoint(static_cast<float>(rect.topLeft.x + rect.width() * 0.75),
+                            static_cast<float>(rect.topLeft.y + rect.height() * 0.5));
+  for (const bool down : {false, true, false}) {
+    ImGui::GetIO().AddMousePosEvent(previewPoint.x, previewPoint.y);
+    ImGui::GetIO().AddMouseButtonEvent(0, down);
+    RunShellFrame(window, shell);
+  }
+  EXPECT_TRUE(EditorShellTestAccess::IsAnimationPreview(shell));
+}
+
+TEST(EditorShellTest, AnimationPreviewPresentsSuccessiveFrames) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  ASSERT_TRUE(window.valid());
+  const EditorSample* sample = FindEditorSample("animation");
+  ASSERT_NE(sample, nullptr);
+  EditorShell shell(window, OptionsWithSource(sample->source));
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(8);
+  while (EditorShellTestAccess::Coordinator(shell).framePresentation() == nullptr &&
+         std::chrono::steady_clock::now() < deadline) {
+    RunShellFrame(window, shell);
+  }
+  ASSERT_NE(EditorShellTestAccess::Coordinator(shell).framePresentation(), nullptr);
+  const auto initialVersion =
+      EditorShellTestAccess::Coordinator(shell).framePresentation()->identity().version;
+  EditorShellTestAccess::SetAnimationPreview(shell, true);
+  std::set<std::uint64_t> presentedVersions;
+  while (presentedVersions.size() < 3 && std::chrono::steady_clock::now() < deadline) {
+    RunShellFrame(window, shell);
+    const auto frame = EditorShellTestAccess::Coordinator(shell).framePresentation();
+    if (frame != nullptr && frame->identity().version > initialVersion) {
+      presentedVersions.insert(frame->identity().version);
+    }
+  }
+  EXPECT_THAT(presentedVersions, testing::SizeIs(3));
+}
+
+TEST(EditorShellTest, PreviewHoverUsesCapturedTargetsWithoutSelectingOrEditing) {
+  constexpr std::string_view source = R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+      <rect id="pad" x="10" y="10" width="80" height="80" fill="red">
+        <set attributeName="fill" to="blue" begin="mouseover" end="mouseout"/>
+      </rect>
+    </svg>)svg";
+  gui::EditorWindow window = MakeHiddenWindow();
+  ASSERT_TRUE(window.valid());
+  EditorShell shell(window, OptionsWithSource(source));
+  auto& app = EditorShellTestAccess::App(shell);
+  const auto target = app.document().document().querySelector("#pad");
+  ASSERT_TRUE(target.has_value());
+  EditorShellTestAccess::SetAnimationPreview(shell, true);
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(8);
+  std::optional<Vector2d> screenPoint;
+  while (std::chrono::steady_clock::now() < deadline) {
+    RunShellFrame(window, shell);
+    if (!EditorShellTestAccess::AnimationResetPending(shell)) {
+      EditorShellTestAccess::HoldAnimationAtStart(shell);
+    }
+    const auto frame = EditorShellTestAccess::Coordinator(shell).framePresentation();
+    if (frame) {
+      const Vector2d point = frame->viewport().documentToScreen(Vector2d(50, 50));
+      if (frame->pointerTargetAt(point).has_value()) {
+        screenPoint = point;
+        break;
+      }
+    }
+  }
+  ASSERT_TRUE(screenPoint.has_value());
+  const auto versionBefore = app.document().currentFrameVersion();
+  while (EditorShellTestAccess::PreviewHoveredElement(shell) != target &&
+         std::chrono::steady_clock::now() < deadline) {
+    ImGui::GetIO().AddMousePosEvent(static_cast<float>(screenPoint->x),
+                                    static_cast<float>(screenPoint->y));
+    RunShellFrame(window, shell);
+  }
+  EXPECT_EQ(EditorShellTestAccess::PreviewHoveredElement(shell), target);
+  EXPECT_GT(app.document().currentFrameVersion(), versionBefore);
+  EXPECT_FALSE(app.hasSelection());
+  EXPECT_FALSE(app.isDirty());
+  EXPECT_FALSE(app.canUndo());
+}
+
+TEST(EditorShellTest, QueuedPreviewClickStartsAtCurrentTimeUsingItsCapturedTarget) {
+  constexpr std::string_view source = R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="120" height="120">
+      <circle id="orb" cx="60" cy="45" r="10" pointer-events="none">
+        <animate attributeName="r" values="10;30;10" begin="pad.click" dur="0.6s"/>
+      </circle>
+      <rect id="pad" x="10" y="90" width="40" height="20">
+        <animate attributeName="x" from="10" to="70" dur="1s" fill="freeze"/>
+      </rect>
+    </svg>)svg";
+  gui::EditorWindow window = MakeHiddenWindow();
+  ASSERT_TRUE(window.valid());
+  EditorShell shell(window, OptionsWithSource(source));
+  auto& app = EditorShellTestAccess::App(shell);
+  auto& document = app.document().document();
+  EditorShellTestAccess::SetAnimationPreview(shell, true);
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(8);
+  while (!EditorShellTestAccess::PreviewInputReady(shell) &&
+         std::chrono::steady_clock::now() < deadline) {
+    if (!EditorShellTestAccess::AnimationResetPending(shell)) {
+      EditorShellTestAccess::HoldAnimationAtStart(shell);
+    }
+    RunShellFrame(window, shell);
+  }
+  ASSERT_TRUE(EditorShellTestAccess::PreviewInputReady(shell));
+  ASSERT_DOUBLE_EQ(document.currentTime(), 0);
+  const auto frame = EditorShellTestAccess::Coordinator(shell).framePresentation();
+  const Vector2d point = frame->viewport().documentToScreen(Vector2d(30, 100));
+  const auto target = frame->pointerTargetAt(point);
+  ASSERT_TRUE(target.has_value());
+  ASSERT_EQ(target, document.querySelector("#pad"));
+  const std::string sourceBefore(document.source());
+
+  EditorShellTestAccess::ClearPreviewPointer(shell);
+  EditorShellTestAccess::SetPreviewStart(shell, 10);
+  EditorShellTestAccess::ApplyPreviewInputAt(shell, 20);
+  EXPECT_DOUBLE_EQ(document.currentTime(), 0) << "Empty input leaves normal ticking in charge";
+  EditorShellTestAccess::QueuePreviewClick(shell, *target, point);
+  EditorShellTestAccess::ApplyPreviewInputAt(shell, std::numeric_limits<double>::quiet_NaN());
+  EXPECT_EQ(EditorShellTestAccess::QueuedPreviewEdges(shell), 2u);
+  EXPECT_DOUBLE_EQ(document.currentTime(), 0);
+  EditorShellTestAccess::SetPreviewResetPending(shell, true);
+  EditorShellTestAccess::ApplyPreviewInputAt(shell, 20);
+  EXPECT_EQ(EditorShellTestAccess::QueuedPreviewEdges(shell), 2u);
+  EXPECT_DOUBLE_EQ(document.currentTime(), 0);
+  EditorShellTestAccess::SetPreviewResetPending(shell, false);
+  EditorShellTestAccess::ApplyPreviewInputAt(shell, 20);
+  EXPECT_DOUBLE_EQ(document.currentTime(), 10);
+  EXPECT_EQ(EditorShellTestAccess::QueuedPreviewEdges(shell), 0u);
+
+  svg::Renderer renderer;
+  const auto access = document.tryWriteAccess();
+  ASSERT_TRUE(access.has_value());
+  for (const auto [time, diameter] : {std::pair(10.3, 60.0), std::pair(10.7, 20.0)}) {
+    SCOPED_TRACE(time);
+    document.setTime(time);
+    renderer.draw(document);
+    const auto bounds =
+        document.querySelector("#orb")->cast<svg::SVGGeometryElement>().worldBounds();
+    ASSERT_TRUE(bounds.has_value());
+    EXPECT_NEAR(bounds->width(), diameter, 1e-6);
+    const auto padBounds = target->cast<svg::SVGGeometryElement>().worldBounds();
+    ASSERT_TRUE(padBounds.has_value());
+    EXPECT_NEAR(padBounds->topLeft.x, 70, 1e-6) << "The captured target moved before dispatch";
+  }
+  EXPECT_EQ(document.source(), sourceBefore);
+  EXPECT_FALSE(app.hasSelection());
+  EXPECT_FALSE(app.isDirty());
+  EXPECT_FALSE(app.canUndo());
+}
+
+TEST(EditorShellTest, PreviewHoverDoesNotLeaveTheSharedAncestor) {
+  constexpr std::string_view source = R"svg(
+    <svg id="root" xmlns="http://www.w3.org/2000/svg"><g id="group">
+      <rect id="a" width="10" height="10"/><rect id="b" x="20" width="10" height="10"/>
+    </g></svg>)svg";
+  gui::EditorWindow window = MakeHiddenWindow();
+  ASSERT_TRUE(window.valid());
+  EditorShell shell(window, OptionsWithSource(source));
+  auto& document = EditorShellTestAccess::App(shell).document().document();
+  const auto first = document.querySelector("#a");
+  const auto second = document.querySelector("#b");
+  ASSERT_THAT(first, testing::Ne(std::nullopt));
+  ASSERT_THAT(second, testing::Ne(std::nullopt));
+  const auto pair = [](svg::EventType type, const char* id) {
+    return std::pair(type, RcString(id));
+  };
+  EXPECT_THAT(EditorShellTestAccess::HoverTransition(shell, first),
+              testing::ElementsAre(pair(svg::EventType::MouseOver, "a"),
+                                   pair(svg::EventType::MouseEnter, "root"),
+                                   pair(svg::EventType::MouseEnter, "group"),
+                                   pair(svg::EventType::MouseEnter, "a")));
+  EXPECT_THAT(EditorShellTestAccess::HoverTransition(shell, second),
+              testing::ElementsAre(
+                  pair(svg::EventType::MouseOut, "a"), pair(svg::EventType::MouseLeave, "a"),
+                  pair(svg::EventType::MouseOver, "b"), pair(svg::EventType::MouseEnter, "b")));
+}
+
+TEST(EditorShellTest, ReplacingDocumentStopsAnimationPreview) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  ASSERT_TRUE(window.valid());
+  EditorShell shell(window, OptionsWithSource(kInitialSvg));
+  EditorShellTestAccess::SetAnimationPreview(shell, true);
+  EditorShellTestAccess::AdvanceAnimationPreview(shell, 10.0);
+  ASSERT_TRUE(EditorShellTestAccess::App(shell).loadFromString(kInitialSvg));
+  EditorShellTestAccess::AdvanceAnimationPreview(shell, 11.0);
+  EXPECT_FALSE(EditorShellTestAccess::IsAnimationPreview(shell));
+  EXPECT_DOUBLE_EQ(EditorShellTestAccess::App(shell).document().document().currentTime(), 0.0);
+}
+
 TEST(EditorShellTest, HiddenWindowShellConstructsAndRunsFrames) {
   RunHiddenWindowShellConstructsAndRunsFrames(kTestContentScale);
 }
 
 #ifdef DONNER_EDITOR_WGPU
+TEST(EditorShellTest, FramesRetireReplacedLayerThumbnailSnapshots) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  ASSERT_TRUE(window.valid());
+  EditorShell shell(window, OptionsWithSource(kInitialSvg));
+  ASSERT_TRUE(shell.valid());
+  auto& cache = EditorShellTestAccess::ThumbnailTextures(shell);
+  constexpr std::uint64_t kProbeKey = std::numeric_limits<std::uint64_t>::max();
+  std::weak_ptr<const svg::RendererTextureSnapshot> retired;
+  {
+    const auto first = EditorShellTestAccess::RenderProbeThumbnail(shell);
+    const auto second = EditorShellTestAccess::RenderProbeThumbnail(shell);
+    ASSERT_NE(first, nullptr);
+    ASSERT_NE(second, nullptr);
+    ASSERT_NE(first, second);
+    ASSERT_NE(cache.retainThumbnailTextureSnapshot(kProbeKey, first).texture, 0u);
+    ASSERT_NE(cache.retainThumbnailTextureSnapshot(kProbeKey, second).texture, 0u);
+    retired = first;
+  }
+  ASSERT_FALSE(retired.expired());
+  ASSERT_EQ(cache.presentationResourceStats().pendingRetiredTextures, 1);
+  for (int frame = 0; frame < 3; ++frame) {
+    RunShellFrame(window, shell);
+    EXPECT_FALSE(retired.expired()) << "Keep replaced thumbnails through the safety window";
+  }
+  RunShellFrame(window, shell);
+  EXPECT_TRUE(retired.expired()) << "Normal editor frames must retire old layer thumbnails";
+}
+
 TEST(EditorShellTest, UiRuntimeProducersUseFramebufferDevice) {
   gui::EditorWindow window = MakeHiddenWindow();
   if (!window.valid()) {
@@ -5832,6 +6218,130 @@ TEST(EditorShellTest, FormatBarSnapshotDoesNotWaitForDocumentWriter) {
   EXPECT_EQ(state.bold, before.bold);
 }
 
+TEST(EditorShellTest, AnimationPreviewDefersSidebarWorkUntilEditIsRestored) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  ASSERT_TRUE(window.valid());
+  EditorShell shell(window, OptionsWithSource(
+                                R"(<svg xmlns="http://www.w3.org/2000/svg" width="32" height="16">
+        <rect width="8" height="8" fill="red">
+          <animate attributeName="x" from="0" to="16" dur="2s"/>
+        </rect>
+      </svg>)"));
+  ASSERT_TRUE(shell.valid());
+  ASSERT_FALSE(EditorShellTestAccess::RendererBusy(shell));
+  auto& document = EditorShellTestAccess::App(shell).document();
+  const std::string source(document.document().source());
+  window.beginFrame();
+  EditorShellTestAccess::RenderSidebars(shell);
+  window.endFrame();
+  const auto inspections = EditorShellTestAccess::LayerThumbnailCacheInspections(shell);
+  ASSERT_GT(inspections, 0u);
+  const auto refreshCount = EditorShellTestAccess::LayerThumbnailRefreshCount(shell);
+  const auto renderAttempts = EditorShellTestAccess::LayerThumbnailRenderAttempts(shell);
+
+  EditorShellTestAccess::SetAnimationPreview(shell, true);
+  EditorShellTestAccess::AdvanceAnimationPreview(shell, 10.0);
+  ASSERT_TRUE(EditorShellTestAccess::IsAnimationPreview(shell));
+  ASSERT_FALSE(EditorShellTestAccess::AnimationResetPending(shell));
+  EditorShellTestAccess::SetSidebarSnapshotRefreshPending(shell, true);
+  for (const double time : {0.5, 1.0, 1.5}) {
+    SCOPED_TRACE(time);
+    ASSERT_TRUE(document.setAnimationTime(time));
+    window.beginFrame();
+    const auto wakeSerial = window.wakeEventLoopRequestSerialForTesting();
+    EditorShellTestAccess::RenderSidebars(shell);
+    EXPECT_EQ(window.wakeEventLoopRequestSerialForTesting(), wakeSerial);
+    EXPECT_EQ(EditorShellTestAccess::LayerThumbnailCacheInspections(shell), inspections);
+    EXPECT_EQ(EditorShellTestAccess::LayerThumbnailRefreshCount(shell), refreshCount);
+    EXPECT_EQ(EditorShellTestAccess::LayerThumbnailRenderAttempts(shell), renderAttempts);
+    EXPECT_TRUE(EditorShellTestAccess::SidebarSnapshotRefreshPending(shell));
+    window.endFrame();
+  }
+
+  EditorShellTestAccess::SetAnimationPreview(shell, false);
+  ASSERT_TRUE(EditorShellTestAccess::AnimationResetPending(shell));
+  window.beginFrame();
+  const auto resetWakeSerial = window.wakeEventLoopRequestSerialForTesting();
+  EditorShellTestAccess::RenderSidebars(shell);
+  EXPECT_EQ(window.wakeEventLoopRequestSerialForTesting(), resetWakeSerial);
+  EXPECT_EQ(EditorShellTestAccess::LayerThumbnailCacheInspections(shell), inspections);
+  EXPECT_EQ(EditorShellTestAccess::LayerThumbnailRefreshCount(shell), refreshCount);
+  EXPECT_EQ(EditorShellTestAccess::LayerThumbnailRenderAttempts(shell), renderAttempts);
+  window.endFrame();
+  EditorShellTestAccess::AdvanceAnimationPreview(shell, 11.0);
+  ASSERT_FALSE(EditorShellTestAccess::AnimationResetPending(shell));
+  EXPECT_DOUBLE_EQ(document.document().currentTime(), 0.0);
+  window.beginFrame();
+  EditorShellTestAccess::RenderSidebars(shell);
+  EXPECT_GT(EditorShellTestAccess::LayerThumbnailCacheInspections(shell), inspections);
+  EXPECT_GT(EditorShellTestAccess::LayerThumbnailRefreshCount(shell), refreshCount);
+  window.endFrame();
+  EXPECT_EQ(document.document().source(), source);
+}
+
+TEST(EditorShellTest, AnimationPreviewDefersFontPreviewWorkUntilEditIsRestored) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  ASSERT_TRUE(window.valid());
+  EditorShell shell(
+      window,
+      OptionsWithSource(R"(<svg xmlns="http://www.w3.org/2000/svg" width="0" height="0"/>)"));
+  ASSERT_TRUE(shell.valid());
+  EditorShellTestAccess::PrepareSingleFontPreviewRequest(shell, "Bebas Neue");
+  const auto requested = EditorShellTestAccess::RequestedAuxiliaryPreviewCount(shell);
+  EditorShellTestAccess::SetAnimationPreview(shell, true);
+  EditorShellTestAccess::AdvanceAnimationPreview(shell, 10.0);
+  ASSERT_TRUE(EditorShellTestAccess::IsAnimationPreview(shell));
+  ASSERT_FALSE(EditorShellTestAccess::AnimationResetPending(shell));
+  EditorShellTestAccess::AdvanceVisiblePreviews(shell);
+  EXPECT_EQ(EditorShellTestAccess::RequestedAuxiliaryPreviewCount(shell), requested);
+  EXPECT_EQ(EditorShellTestAccess::PendingFontPreviewCount(shell), 1u);
+  EditorShellTestAccess::SetAnimationPreview(shell, false);
+  EditorShellTestAccess::AdvanceVisiblePreviews(shell);
+  EXPECT_EQ(EditorShellTestAccess::RequestedAuxiliaryPreviewCount(shell), requested);
+  EditorShellTestAccess::AdvanceAnimationPreview(shell, 11.0);
+  EditorShellTestAccess::AdvanceVisiblePreviews(shell);
+  EXPECT_GT(EditorShellTestAccess::RequestedAuxiliaryPreviewCount(shell), requested);
+}
+
+TEST(EditorShellTest, AnimationPreviewCancelsAndPreservesActiveFontPreview) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  ASSERT_TRUE(window.valid());
+  EditorShell shell(
+      window,
+      OptionsWithSource(R"(<svg xmlns="http://www.w3.org/2000/svg" width="0" height="0"/>)"));
+  ASSERT_TRUE(shell.valid());
+  auto& worker = EditorShellTestAccess::Coordinator(shell).asyncRenderer();
+  worker.setSampleThumbnailRenderDelayForTesting(std::chrono::seconds(5));
+  EditorShellTestAccess::PrepareSingleFontPreviewRequest(shell, "Bebas Neue");
+  EditorShellTestAccess::AdvanceVisiblePreviews(shell);
+  for (const tests::HangGuard guard;
+       guard.active() && !worker.sampleThumbnailRenderStats().active;) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(2));
+  }
+  ASSERT_TRUE(worker.sampleThumbnailRenderStats().active);
+  EditorShellTestAccess::SetAnimationPreview(shell, true);
+  EXPECT_EQ(EditorShellTestAccess::PendingFontPreviewCount(shell), 1u);
+  for (const tests::HangGuard guard;
+       guard.active() && worker.sampleThumbnailRenderStats().active;) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(2));
+  }
+  EXPECT_FALSE(worker.sampleThumbnailRenderStats().active);
+  EXPECT_EQ(worker.sampleThumbnailRenderStats().cancelled, 1u);
+  EXPECT_EQ(EditorShellTestAccess::CachedFontPreviewCount(shell), 0u);
+  worker.setSampleThumbnailRenderDelayForTesting(std::chrono::milliseconds(0));
+  EditorShellTestAccess::SetAnimationPreview(shell, false);
+  EditorShellTestAccess::AdvanceAnimationPreview(shell, 11.0);
+  FormatBarFontPreview preview;
+  for (const tests::HangGuard guard; guard.active() && !preview.available();) {
+    EditorShellTestAccess::AdvanceVisiblePreviews(shell);
+    preview = EditorShellTestAccess::FontPreviewForFamily(shell, "Bebas Neue");
+    if (!preview.available()) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+  }
+  EXPECT_TRUE(preview.available()) << "Returning to Edit must resume the cancelled font preview";
+}
+
 TEST(EditorShellTest, TextFormatBarPrewarmsCatalogFamilyInItsOwnFace) {
   gui::EditorWindow window = MakeHiddenWindow();
   if (!window.valid()) {
@@ -6205,6 +6715,41 @@ INSTANTIATE_TEST_SUITE_P(UnresolvedPaint, PaintSwapFallbackTest,
                          [](const testing::TestParamInfo<PaintSwapFallbackCase>& info) {
                            return info.param.name;
                          });
+
+TEST(EditorShellTest, FillStrokeSwapAppearanceDoesNotTrackWorkerBusyState) {
+  for (const bool preview : {false, true}) {
+    SCOPED_TRACE(preview);
+    gui::EditorWindow window = MakeHiddenWindow();
+    ASSERT_THAT(window.valid(), testing::IsTrue());
+    EditorShell shell(window, OptionsWithSource(kInitialSvg, "animation_toolbar.svg"));
+    ASSERT_THAT(shell.valid(), testing::IsTrue());
+    EditorShellTestAccess::ConfigureViewport(shell, Box2d::FromXYWH(0, 0, 120, 80));
+    EditorShellTestAccess::SetAnimationPreview(shell, preview);
+    constexpr ImVec2 kCursor(20.0f, 40.0f);
+    constexpr ImU32 kEnabledSwap = IM_COL32(215, 222, 232, 255);
+    constexpr ImU32 kDisabledSwap = IM_COL32(120, 126, 134, 255);
+    const auto checkAppearance = [&] {
+      EXPECT_THAT(DrawDataContainsColor(kEnabledSwap), testing::Eq(!preview));
+      EXPECT_THAT(DrawDataContainsColor(kDisabledSwap), testing::Eq(preview));
+    };
+    RenderToolbarFrame(window, shell, kCursor, ImVec2(-100, -100), false);
+    checkAppearance();
+    AsyncRenderer& renderer = shell.asyncRendererForReplay();
+    renderer.setReplayDocumentAccessBlockedForTesting(true);
+    EditorShellTestAccess::BeginDelayedRender(shell, std::chrono::milliseconds(0));
+    ASSERT_THAT(renderer.isBusy(), testing::IsTrue());
+    RenderToolbarFrame(window, shell, kCursor, ImVec2(-100, -100), false);
+    checkAppearance();
+    renderer.setReplayDocumentAccessBlockedForTesting(false);
+    renderer.cancelInFlight();
+    ASSERT_THAT(renderer.waitUntilNoRenderInFlightForTesting(std::chrono::steady_clock::now() +
+                                                             std::chrono::seconds(2)),
+                testing::IsTrue());
+    std::ignore = renderer.pollResult();
+    RenderToolbarFrame(window, shell, kCursor, ImVec2(-100, -100), false);
+    checkAppearance();
+  }
+}
 
 TEST(EditorShellTest, FillStrokeToolbarKeepsChosenPaintVisibleWhileRendererIsBusy) {
   gui::EditorWindow window = MakeHiddenWindow();

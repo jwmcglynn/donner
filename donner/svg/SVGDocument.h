@@ -20,6 +20,7 @@
 #include "donner/base/xml/XMLQualifiedName.h"
 #include "donner/svg/SVGDocumentHandle.h"
 #include "donner/svg/SVGSVGElement.h"
+#include "donner/svg/core/Event.h"
 #include "donner/svg/core/ProcessingMode.h"
 #include "donner/svg/resources/FontCatalogTypes.h"
 #include "donner/svg/resources/ResourceLoaderInterface.h"
@@ -33,6 +34,21 @@ class DocumentResourceFamilyBudget;
 class SVGElement;     // Forward declaration, #include "donner/svg/SVGElement.h"
 class SVGSVGElement;  // Forward declaration, #include "donner/svg/SVGSVGElement.h"
 class SVGDocumentMutation;
+
+/// A declarative animation boundary observed over a time interval.
+struct SVGAnimationEvent {
+  enum class Type { Begin, Repeat, End };  ///< Boundary kind.
+  SVGElement animation;                    ///< Animation element producing the boundary.
+  Type type;                               ///< Boundary kind.
+  double time;                             ///< Document time in seconds.
+  uint64_t repeatIndex = 0;                ///< One-based repeat index, zero for begin/end.
+};
+
+/// Bounded lifecycle query result. An incomplete query returns no partial events.
+struct SVGAnimationEventBatch {
+  std::vector<SVGAnimationEvent> events;  ///< Boundaries sorted by document time.
+  bool complete = true;                   ///< False for invalid bounds or budget exhaustion.
+};
 
 /// Readiness of catalog-dependent geometry or pixels for an explicit element target.
 struct FontResourcePreflight {
@@ -410,6 +426,54 @@ public:
   double currentTime() const;
 
   /**
+   * Start a fresh animation session at time zero, including animations with restart="never".
+   * Preserves the authored document and element identity. The next render evaluates time zero.
+   */
+  void restartAnimations();
+
+  /**
+   * Deliver a mouse event to declarative SVG animation begin/end triggers.
+   * Supports event names such as `click` and `mouseover`, optionally prefixed by an element ID
+   * (`button.click`). Bubbling events also reach ancestors. Does not execute scripts or edit
+   * source. Secure documents ignore interactive events.
+   * @param type Event being delivered.
+   * @param target Element under the pointer, belonging to this document.
+   * @return True if an animation interval changed; false for ignored events or invalid targets.
+   */
+  bool dispatchMouseEvent(EventType type, const SVGElement& target);
+
+  /** Deliver a named host event to declarative timing, without executing scripts.
+   * @param name Event name, at most 128 bytes.
+   * @param target Attached target belonging to this document.
+   * @param bubbles Whether the event also reaches ancestors.
+   * @return Whether a runtime timing instance was retained; secure documents reject events.
+   */
+  bool dispatchAnimationEvent(std::string_view name, const SVGElement& target, bool bubbles = true);
+
+  /** Schedule a begin instance for an attached animation element.
+   * @param animation Animation element in this document.
+   * @param offset Seconds relative to the current document time, including negative offsets.
+   * @return Whether a runtime instance was retained. Secure documents reject host control.
+   */
+  bool beginAnimation(const SVGElement& animation, double offset = 0);
+
+  /** Schedule an end instance for an active animation.
+   * @param animation Animation element in this document.
+   * @param offset Seconds relative to the current document time.
+   * @return Whether a runtime instance was retained. Secure documents reject host control.
+   */
+  bool endAnimation(const SVGElement& animation, double offset = 0);
+
+  /** Query animation lifecycle boundaries in the half-open interval (from, to].
+   * Events are returned as values; no callback runs under document access. The query does not
+   * change the document clock. Queries exceeding 4096 boundaries return an incomplete empty batch.
+   * @param from Exclusive start time, finite.
+   * @param to Inclusive end time, finite and not less than from.
+   * @return Chronological lifecycle boundaries, or an incomplete batch when bounded out.
+   */
+  SVGAnimationEventBatch animationEvents(double from, double to);
+
+  /**
    * Automatically determine the canvas size from the root `<svg>` element's `width`, `height`,
    * and `viewBox`. If those do not define a size, falls back to the default size (512x512).
    */
@@ -510,6 +574,7 @@ public:
   std::optional<SVGElement> querySelector(std::string_view selector);
 
 private:
+  bool scheduleAnimationBoundary(const SVGElement& animation, double offset, bool begin);
   /**
    * Apply every XML mutation in \p result to this SVG document's semantic projection, keeping the
    * first diagnostic.

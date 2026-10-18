@@ -119,4 +119,20 @@ ParseResult<double> ParseAlphaValue(std::span<const css::ComponentValue> compone
   return err;
 }
 
+ParseResult<RcString> ParsePathDataProperty(std::span<const css::ComponentValue> components) {
+  if (auto maybeIdent = TryGetSingleIdent(components);
+      maybeIdent && maybeIdent->equalsLowercase("none")) {
+    return RcString();
+  } else if (components.size() == 1) {
+    if (const auto* str = components[0].tryGetToken<css::Token::String>()) {
+      return str->value;
+    }
+  }
+
+  ParseDiagnostic err;
+  err.reason = "Expected string or 'none'";
+  err.range.start = !components.empty() ? components.front().sourceOffset() : FileOffset::Offset(0);
+  return err;
+}
+
 }  // namespace donner::svg::parser

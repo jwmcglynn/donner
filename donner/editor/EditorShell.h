@@ -291,6 +291,9 @@ struct LayerInspectorStatusReadback {
   ThumbnailRefreshStats thumbnailRefreshStats;
 };
 
+/// Whether the host scheduled this frame for animation or to service an asynchronous event.
+enum class EditorFrameKind { Scheduled, Event };
+
 /// Stateful advanced editor frontend shell. Owns all long-lived GUI/editor orchestration state.
 class EditorShell {
   friend class EditorShellTestAccess;
@@ -306,6 +309,10 @@ public:
   [[nodiscard]] bool valid() const { return valid_; }
   /// Perform bounded work that may yield and must run before ImGui::NewFrame().
   void prepareFrame();
+
+  /// Set the cause consumed by the next runFrame call; subsequent frames default to Scheduled.
+  /// @param frameKind Event frames service input/reset and presentation without ordinary ticks.
+  void setNextFrameKind(EditorFrameKind frameKind) { nextFrameKind_ = frameKind; }
 
   /// Process one editor UI frame using the host's active ImGui frame.
   void runFrame();
@@ -564,7 +571,7 @@ private:
       bool rendererBusy, const svg::SVGDocumentHandle& currentPaintDocument);
   void renderFillStrokeToolbarWidget();
   [[nodiscard]] internal::ToolbarPaintState toolbarPaintStateForFrame(bool rendererBusy,
-                                                                      bool canvasInteractionActive,
+                                                                      bool authoringSuspended,
                                                                       bool* canEditPaint);
   void swapToolbarPaint(const internal::ToolbarPaintState& paintState, bool canEditPaint);
   void setActivePaintNone();
@@ -600,6 +607,65 @@ private:
   void publishEyedropperTestStateIfEnabled();
 #endif
   void renderCompactTopBar();
+  void setAnimationPreview(bool enabled);
+  void advanceAnimationPreview(double nowSeconds,
+                               EditorFrameKind frameKind = EditorFrameKind::Scheduled);
+  void tickAnimationPreview(double nowSeconds);
+  [[nodiscard]] std::optional<double> animationPreviewTimeAt(double nowSeconds) const;
+  bool applyAnimationPreviewTime(double seconds);
+  [[nodiscard]] bool previewAllowsEditing(bool allowed) const;
+  void applyPreviewMenuState(MenuBarState& state) const;
+  void renderAnimationPreviewControl();
+  void renderAnimationModeSegment(bool preview, const ImVec2& position, float width);
+  void renderAnimationModePanel();
+  [[nodiscard]] bool animationFramePresented() const;
+  [[nodiscard]] Box2d animationPreviewControlScreenRect() const;
+
+  struct PreviewPointerInput {
+    std::optional<Vector2d> point;
+    std::optional<svg::SVGElement> target;
+    std::uint64_t documentGeneration = 0;
+    bool pressed = false;
+    bool released = false;
+    bool doubleClick = false;
+  };
+  struct PreviewMouseDispatch {
+    svg::EventType type;
+    svg::SVGElement target;
+  };
+  void capturePreviewPointer(bool canvasHovered, bool spaceHeld, bool overScrollbar);
+  void queuePreviewPointerEdge();
+  void collectPreviewCancellationEvents(std::vector<PreviewMouseDispatch>& events);
+  [[nodiscard]] bool canApplyPreviewPointerInput() const;
+  [[nodiscard]] bool hasPreviewPointerChanges() const;
+  void applyPreviewPointerInput(double nowSeconds);
+  std::optional<std::vector<PreviewMouseDispatch>> collectQueuedPreviewPointerEvents();
+  void collectPreviewPointerEvents(const PreviewPointerInput& input,
+                                   std::vector<PreviewMouseDispatch>& events);
+  void collectPreviewHoverEvents(const std::optional<svg::SVGElement>& target,
+                                 std::vector<PreviewMouseDispatch>& events);
+  void collectPreviewButtonEvents(const PreviewPointerInput& input,
+                                  const std::optional<svg::SVGElement>& target,
+                                  std::vector<PreviewMouseDispatch>& events);
+  void resetPreviewPointer();
+  PreviewPointerInput previewPointerInput_;
+  std::vector<PreviewPointerInput> previewPointerEdges_;
+  std::optional<svg::SVGElement> previewHoveredElement_;
+  std::vector<svg::SVGElement> previewHoveredPath_;
+  std::optional<svg::SVGElement> previewPressedElement_;
+  std::optional<Vector2d> previewPreviousPointerPosition_;
+  bool previewPressedDoubleClick_ = false;
+  bool previewPointerOverflow_ = false;
+
+  Box2d animationPreviewControlRect_;
+  /// One-shot host context; every frame consumes it before any early return.
+  EditorFrameKind nextFrameKind_ = EditorFrameKind::Scheduled;
+  bool animationPreview_ = false;
+  bool animationResetPending_ = false;
+  double animationPreviewStartSeconds_ = 0.0;
+  double animationPreviewLastTime_ = -1.0;
+  std::uint64_t animationPreviewDocumentGeneration_ = 0;
+
   void renderSidebars();
   /// Poll every auxiliary result through one lifetime/generation-aware handler.
   void pollAuxiliaryPreviewResult();
@@ -608,7 +674,11 @@ private:
   void persistFontPreview(const std::string& family, std::string_view outlinedSvg) const;
   void handleSamplePreviewResult(SampleThumbnailRenderResult result, bool pending, bool rendered);
   void invalidateChangedFontPreviews();
+  /// Whether playback or time-zero restoration suspends auxiliary preview work.
+  [[nodiscard]] bool auxiliaryPreviewWorkPaused() const;
   void advanceVisiblePreviews();
+  /// Cancel auxiliary raster work while preserving its obligation for return to Edit.
+  void suspendAuxiliaryPreviewGeneration();
   void installCatalogFonts();
   void initializeFontPreviewCache();
   void queueBackgroundFontPreviews();
@@ -729,6 +799,7 @@ private:
   void updatePenLivePreviewTarget();
   void openRenderPaneContextMenu(const Vector2d& documentPoint);
   void renderRenderPaneContextMenu();
+  [[nodiscard]] bool beginRenderPaneContextMenu();
   [[nodiscard]] std::optional<StyleFocus> styleFocusAtSourceOffset(std::size_t sourceOffset) const;
   [[nodiscard]] std::optional<StyleFocus> styleFocusAtSourceCursor();
   void applyStyleFocus(StyleFocus styleFocus);

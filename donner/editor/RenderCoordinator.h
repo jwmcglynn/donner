@@ -346,6 +346,9 @@ public:
   }
   /// Arm or disarm the worker-owned document pixel capture.
   void setDocumentPixelCaptureEnabled(bool enabled);
+  /// Include immutable mouse targets in subsequent Preview renders.
+  /// @param enabled Whether to capture hit geometry alongside document pixels.
+  void setPointerTargetCaptureEnabled(bool enabled) { pointerTargetCaptureEnabled_ = enabled; }
   /// Whether an editor session currently retains or requests document pixels.
   [[nodiscard]] bool documentPixelCaptureEnabled() const { return documentPixelCaptureEnabled_; }
   /// Current capture, or null when the worker result has not matched the live presentation.
@@ -762,6 +765,7 @@ private:
   /// Test-only replacement for the steady clock behind \ref schedulingNow.
   std::function<std::chrono::steady_clock::time_point()> schedulingClockForTesting_;
   bool documentPixelCaptureEnabled_ = false;
+  bool pointerTargetCaptureEnabled_ = false;
   bool captureUnavailable_ = false;
   std::uint64_t documentPixelCaptureSessionId_ = 0;
   std::optional<DocumentPixelCaptureIdentity> requestedPixelCapture_;

@@ -294,6 +294,13 @@ Use this sequence for new bugs:
 
 ## Known Root Causes
 
+- **Toolbar brightness follows worker availability:** custom draw-list colors can bypass an outer
+  ImGui disabled scope. Feeding a transient mutation-safety flag into an icon tint makes the icon
+  flash as async jobs start and finish. Derive persistent chrome appearance from document, mode and
+  gesture state; retain the worker guard separately for mutation and snapshot access.
+  `EditorShellTest.FillStrokeSwapAppearanceDoesNotTrackWorkerBusyState` checks Edit and Preview
+  across idle/busy/idle transitions before GPU submission. The editor-control replay test
+  `AnimationPreviewToolbarCaptureAcrossWorkerHandoff` captures the full toolbar across the handoff.
 - **Stale split preview:** a late split-tile result from an old canvas epoch was
   accepted after zoom. Fix at `RenderCoordinator`: reject split previews whose
   tile raster canvas does not match the current desired canvas.

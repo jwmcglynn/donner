@@ -2,12 +2,34 @@
 /// @file
 /// Dispatches browser GPU primitives to the editor's canvas-owning application thread.
 
+#include <cstddef>
 #include <type_traits>
 
 namespace donner::gpu::browser {
 
-/// Bounded dispatch categories used to distinguish state queries from other browser primitives.
-enum class BrowserGpuOperationKind { Other, OwnershipQuery, DeviceLossQuery, CompletionQuery };
+/// Cross-thread dispatch categories, not object/command counts; owner-local calls are excluded.
+/// BindGroupConstruction counts whole descriptors; PipelineConstruction counts begin/entry/finish
+/// calls. CommandBatch counts batches.
+/// OwnershipQuery includes the combined ownership/loss query.
+enum class BrowserGpuOperationKind {
+  Other,
+  OwnershipQuery,
+  DeviceLossQuery,
+  CompletionQuery,
+  ResourceCreation,
+  ResourceDestruction,
+  BufferWrite,
+  TextureWrite,
+  ResourceSharing,
+  CommandBatch,
+  QueueSubmit,
+  BindGroupConstruction,
+  PipelineConstruction,
+};
+
+/// Record an attempted cross-owner buffer-write size without reading payloads or resource ids.
+/// Owner-local calls are excluded. @param bytes Borrowed payload size before dispatch.
+void RecordBrowserBufferWriteSize(std::size_t bytes);
 
 /// Register the calling application thread before creating any browser GPU devices or workers.
 void RegisterBrowserGpuOwner();

@@ -244,7 +244,8 @@ std::shared_ptr<const CapturedPresentation> CapturedPresentation::Capture(
     std::span<const svg::SVGElement> selection, std::span<const Entity> tracked,
     std::span<const Entity> independentlyMovable, std::span<const svg::SVGElement> sourceHover,
     const std::optional<LockedRejectionFlashInput>& lockedFlash,
-    const std::optional<svg::SVGElement>& livePath, const std::optional<TextEditing>& textEditing) {
+    const std::optional<svg::SVGElement>& livePath, const std::optional<TextEditing>& textEditing,
+    bool capturePointerTargets) {
   const auto access = document.writeAccess();
   auto snapshot = std::shared_ptr<CapturedPresentation>(new CapturedPresentation());
   snapshot->independentlyMovable_.insert(independentlyMovable.begin(), independentlyMovable.end());
@@ -252,6 +253,9 @@ std::shared_ptr<const CapturedPresentation> CapturedPresentation::Capture(
   snapshot->documentOrigin_ = document.svgElement().viewBox().value_or(Box2d()).topLeft;
   if (!snapshot->captureSelected(document, selection, livePath)) {
     return nullptr;
+  }
+  if (capturePointerTargets) {
+    snapshot->pointerTargets_ = svg::DonnerController(document).captureHitTest();
   }
   snapshot->captureTracked(document, tracked);
   snapshot->captureValidatedAdornments(document, sourceHover, lockedFlash);

@@ -17,6 +17,7 @@
 #include "donner/svg/components/ScopedRenderInvalidationRestore.h"
 #include "donner/svg/components/layout/LayoutSystem.h"
 #include "donner/svg/components/shape/ComputedPathComponent.h"
+#include "donner/svg/components/shape/ShapeSystem.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
 #include "donner/svg/components/text/ComputedTextComponent.h"
 #include "donner/svg/properties/PaintServer.h"
@@ -294,8 +295,8 @@ SubtreeRenderSpan ResolveSubtreeRenderSpan(Registry& registry,
     if (!instance.visible) {
       continue;
     }
-    const auto* path =
-        instance.dataHandle(registry).template try_get<components::ComputedPathComponent>();
+    const auto* path = components::ShapeSystem::geometryHandle(instance.styleHandle(registry))
+                           .template try_get<components::ComputedPathComponent>();
     if (path == nullptr) {
       // Text roots draw through the text engine rather than
       // `ComputedPathComponent`; contribute their ink bounds here or a

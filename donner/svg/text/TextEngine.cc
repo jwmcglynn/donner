@@ -1,11 +1,15 @@
 #include "donner/svg/text/TextEngine.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <limits>
 #include <span>
+#include <sstream>
 #include <string>
+#include <type_traits>
 #include <unordered_map>
+#include <variant>
 
 #include "donner/base/MathUtils.h"
 #include "donner/base/Utf8.h"
@@ -15,6 +19,10 @@
 #include "donner/svg/components/FontMetricDependenciesComponent.h"
 #include "donner/svg/components/FontPaintDependenciesComponent.h"
 #include "donner/svg/components/StylesheetComponent.h"
+#include "donner/svg/components/animation/AnimatedValuesComponent.h"
+#include "donner/svg/components/animation/AnimationBaseValue.h"
+#include "donner/svg/components/animation/AnimationResourceBudget.h"
+#include "donner/svg/components/animation/AnimationValueSampler.h"
 #include "donner/svg/components/layout/LayoutSystem.h"
 #include "donner/svg/components/resources/ResourceManagerContext.h"
 #include "donner/svg/components/shape/ComputedPathComponent.h"
@@ -22,6 +30,7 @@
 #include "donner/svg/components/style/StyleSystem.h"
 #include "donner/svg/components/text/TextComponent.h"
 #include "donner/svg/components/text/TextInvalidation.h"
+#include "donner/svg/components/text/TextPositioningComponent.h"
 #include "donner/svg/components/text/TextRootComponent.h"
 #include "donner/svg/components/text/TextSystem.h"
 #include "donner/svg/core/DominantBaseline.h"
@@ -300,21 +309,457 @@ TextLayoutParams buildTextLayoutParams(Registry& registry, EntityHandle handle,
   return params;
 }
 
+constexpr std::array<std::string_view, 4> kTextLengthListNames = {"x", "y", "dx", "dy"};
+
+struct SampledTextPositions {
+  std::array<std::optional<std::vector<Lengthd>>, kTextLengthListNames.size()> lengths;
+  std::optional<std::vector<double>> rotations;
+};
+
+size_t TextSpanCodepointCount(const components::ComputedTextComponent::TextSpan& span) {
+  if (span.hidden) {
+    return 0;
+  }
+  const std::string_view text(span.text.data() + span.start, span.end - span.start);
+  size_t count = 0;
+  size_t offset = 0;
+  while (offset < text.size()) {
+    const auto [codepoint, bytes] = Utf8::NextCodepoint(text.substr(offset));
+    (void)codepoint;
+    offset += static_cast<size_t>(bytes);
+    ++count;
+  }
+  return count;
+}
+
+std::string SerializeTextPositionLengths(std::span<const Lengthd> values) {
+  std::ostringstream output;
+  output.precision(std::numeric_limits<double>::max_digits10);
+  for (size_t index = 0; index < values.size(); ++index) {
+    if (index != 0) {
+      output << ' ';
+    }
+    output << values[index];
+  }
+  return output.str();
+}
+
+std::string SerializeTextPositionRotations(std::span<const double> values) {
+  std::ostringstream output;
+  output.precision(std::numeric_limits<double>::max_digits10);
+  for (size_t index = 0; index < values.size(); ++index) {
+    if (index != 0) {
+      output << ' ';
+    }
+    output << values[index];
+  }
+  return output.str();
+}
+
+template <typename Declaration>
+std::optional<size_t> TextPositionDeclarationArity(const Declaration& declaration) {
+  const auto parse = [](const std::optional<std::string>& value) -> std::optional<size_t> {
+    if (!value) {
+      return 0;
+    }
+    const auto parsed = components::ParseAnimationLengths(*value);
+    return parsed ? std::optional(parsed->size()) : std::nullopt;
+  };
+  if constexpr (std::is_same_v<Declaration, components::SetAnimationComponent>) {
+    return parse(declaration.to);
+  } else {
+    if (!declaration.values.empty()) {
+      size_t result = 0;
+      for (const std::string& value : declaration.values) {
+        const auto parsed = parse(std::optional<std::string>(value));
+        if (!parsed) {
+          return std::nullopt;
+        }
+        result = std::max(result, *parsed);
+      }
+      return result;
+    }
+    const auto first = parse(declaration.from);
+    if (!first) {
+      return std::nullopt;
+    }
+    const auto second = declaration.to ? parse(declaration.to) : parse(declaration.by);
+    return second ? std::optional(std::max(*first, *second)) : std::nullopt;
+  }
+}
+
+std::optional<std::string> SampleTextPositionRecipe(
+    const components::ContextualLengthRecipe& recipe, std::string underlying,
+    const components::AnimationValueContext& context, bool nonAdditive, bool neutralEmpty) {
+  return components::SampleContextualAnimationRecipe(
+      recipe, std::move(underlying), [&](const auto& sample, const std::string& lower) {
+        const auto sampled = std::visit(
+            [&](const auto& declaration) {
+              const auto arity = TextPositionDeclarationArity(declaration);
+              if (!arity || *arity == 0) {
+                return std::optional<std::pair<std::string, std::string>>{};
+              }
+              std::string layerUnderlying = lower;
+              if (neutralEmpty && layerUnderlying.empty()) {
+                std::vector<Lengthd> zeros(*arity);
+                layerUnderlying = SerializeTextPositionLengths(zeros);
+              }
+              using Declaration = std::decay_t<decltype(declaration)>;
+              if constexpr (std::is_same_v<Declaration, components::SetAnimationComponent>) {
+                return components::SampleAnimationValue(sample.progress, sample.iteration,
+                                                        &declaration, nullptr, nullptr,
+                                                        layerUnderlying, context);
+              } else {
+                components::AnimateValueComponent effective = declaration;
+                if (nonAdditive) {
+                  effective.additive = false;
+                  effective.accumulate = false;
+                }
+                return components::SampleAnimationValue(sample.progress, sample.iteration, nullptr,
+                                                        &effective, nullptr, layerUnderlying,
+                                                        context);
+              }
+            },
+            sample.declaration);
+        return sampled && components::ParseAnimationLengths(sampled->second)
+                   ? std::optional(sampled->second)
+                   : std::nullopt;
+      });
+}
+
+std::optional<size_t> TextPositionRecipeArity(const components::ContextualLengthRecipe& recipe) {
+  size_t arity = 0;
+  bool hasValidLayer = false;
+  for (const auto& sample : recipe.samples) {
+    if (sample.frozenUnderlying) {
+      if (const auto frozenArity = TextPositionRecipeArity(*sample.frozenUnderlying)) {
+        hasValidLayer = true;
+        arity = std::max(arity, *frozenArity);
+      }
+    }
+    const auto layerArity = std::visit(
+        [](const auto& declaration) { return TextPositionDeclarationArity(declaration); },
+        sample.declaration);
+    if (!layerArity || *layerArity == 0) {
+      continue;
+    }
+    hasValidLayer = true;
+    arity = std::max(arity, *layerArity);
+  }
+  return hasValidLayer ? std::optional(arity) : std::nullopt;
+}
+
+template <typename Values>
+const Values* TextPositionValues(Registry& registry, Entity owner, size_t attributeIndex);
+
+template <>
+const SmallVector<Lengthd, 1>* TextPositionValues(Registry& registry, Entity owner,
+                                                  size_t attributeIndex) {
+  const auto* positioning = registry.try_get<components::TextPositioningComponent>(owner);
+  if (!positioning || registry.any_of<components::TextPathComponent>(owner)) {
+    return nullptr;
+  }
+  switch (attributeIndex) {
+    case 0: return &positioning->x;
+    case 1: return &positioning->y;
+    case 2: return &positioning->dx;
+    case 3: return &positioning->dy;
+    default: return nullptr;
+  }
+}
+
+template <>
+const SmallVector<double, 1>* TextPositionValues(Registry& registry, Entity owner, size_t) {
+  const auto* positioning = registry.try_get<components::TextPositioningComponent>(owner);
+  return positioning && !registry.any_of<components::TextPathComponent>(owner)
+             ? &positioning->rotateDegrees
+             : nullptr;
+}
+
+template <typename Value>
+std::optional<Value> ResolveSpanTextPosition(
+    Registry& registry, const components::ComputedTextComponent& text,
+    std::span<const size_t> spanPrefix,
+    const std::unordered_map<Entity, SampledTextPositions>& sampled, size_t spanIndex,
+    size_t characterIndex, size_t attributeIndex, bool repeatLast) {
+  Entity current = text.spans[spanIndex].sourceEntity;
+  while (current != entt::null && registry.valid(current)) {
+    const auto range = text.ownerSpanRanges.find(current);
+    if (range == text.ownerSpanRanges.end() || range->second.begin >= spanPrefix.size()) {
+      break;
+    }
+    const size_t index = spanPrefix[spanIndex] - spanPrefix[range->second.begin] + characterIndex;
+    if (const auto replacement = sampled.find(current); replacement != sampled.end()) {
+      if constexpr (std::is_same_v<Value, double>) {
+        if (replacement->second.rotations) {
+          const auto& values = *replacement->second.rotations;
+          if (index < values.size()) {
+            return values[index];
+          }
+          if (repeatLast && !values.empty()) {
+            return values.back();
+          }
+          current = registry.any_of<components::TextRootComponent>(current)
+                        ? entt::null
+                        : registry.get<donner::components::TreeComponent>(current).parent();
+          continue;
+        }
+      } else {
+        const auto& values = replacement->second.lengths[attributeIndex];
+        if (values) {
+          if (index < values->size()) {
+            return (*values)[index];
+          }
+          current = registry.any_of<components::TextRootComponent>(current)
+                        ? entt::null
+                        : registry.get<donner::components::TreeComponent>(current).parent();
+          continue;
+        }
+      }
+    }
+    if (const auto* values =
+            TextPositionValues<SmallVector<Value, 1>>(registry, current, attributeIndex);
+        values && !values->empty()) {
+      if (index < values->size()) {
+        return (*values)[index];
+      }
+      if (repeatLast) {
+        return values->back();
+      }
+    }
+    if (registry.any_of<components::TextRootComponent>(current)) {
+      break;
+    }
+    const auto* tree = registry.try_get<donner::components::TreeComponent>(current);
+    current = tree ? tree->parent() : entt::null;
+  }
+  return std::nullopt;
+}
+
+void ResolveAnimatedTextPositions(Registry& registry, components::ComputedTextComponent& text,
+                                  const Box2d& viewBox, const FontMetrics& fontMetrics) {
+  std::vector<size_t> spanPrefix(text.spans.size() + 1);
+  for (size_t index = 0; index < text.spans.size(); ++index) {
+    spanPrefix[index + 1] = spanPrefix[index] + TextSpanCodepointCount(text.spans[index]);
+  }
+
+  struct Recipe {
+    Entity owner = entt::null;
+    size_t attributeIndex = 0;
+    bool rotate = false;
+    std::shared_ptr<const components::ContextualLengthRecipe> value;
+  };
+  std::vector<Recipe> recipes;
+  size_t evaluationWork = 0;
+  for (const auto& [owner, range] : text.ownerSpanRanges) {
+    const auto* animated = registry.try_get<components::AnimatedValuesComponent>(owner);
+    if (!animated) {
+      continue;
+    }
+    if (range.end >= spanPrefix.size()) {
+      return;
+    }
+    for (size_t attributeIndex = 0; attributeIndex < kTextLengthListNames.size();
+         ++attributeIndex) {
+      const auto found =
+          animated->contextualLengths.find(std::string(kTextLengthListNames[attributeIndex]));
+      if (found == animated->contextualLengths.end()) {
+        continue;
+      }
+      if (found->second->evaluationWork > std::numeric_limits<size_t>::max() - evaluationWork) {
+        return;
+      }
+      const auto arity = TextPositionRecipeArity(*found->second);
+      if (!arity || *arity > components::AnimationResourceBudget::kMaximumNumbersPerValue ||
+          *arity > std::numeric_limits<size_t>::max() / 16) {
+        continue;
+      }
+      const size_t serializationWork = *arity * 16;
+      evaluationWork += found->second->evaluationWork;
+      if (serializationWork > std::numeric_limits<size_t>::max() - evaluationWork) {
+        return;
+      }
+      evaluationWork += serializationWork;
+      recipes.push_back({owner, attributeIndex, false, found->second});
+    }
+    if (const auto found = animated->contextualLengths.find("rotate");
+        found != animated->contextualLengths.end()) {
+      if (found->second->evaluationWork > std::numeric_limits<size_t>::max() - evaluationWork) {
+        return;
+      }
+      const auto arity = TextPositionRecipeArity(*found->second);
+      if (!arity || *arity > components::AnimationResourceBudget::kMaximumNumbersPerValue ||
+          *arity > std::numeric_limits<size_t>::max() / 16) {
+        continue;
+      }
+      const size_t serializationWork = *arity * 16;
+      evaluationWork += found->second->evaluationWork;
+      if (serializationWork > std::numeric_limits<size_t>::max() - evaluationWork) {
+        return;
+      }
+      evaluationWork += serializationWork;
+      recipes.push_back({owner, 0, true, found->second});
+    }
+  }
+  if (recipes.empty()) {
+    return;
+  }
+
+  for (size_t spanIndex = 0; spanIndex < text.spans.size(); ++spanIndex) {
+    const size_t characterCount = spanPrefix[spanIndex + 1] - spanPrefix[spanIndex];
+    if (characterCount == 0 || text.spans[spanIndex].sourceEntity == entt::null) {
+      continue;
+    }
+    size_t depth = 0;
+    Entity current = text.spans[spanIndex].sourceEntity;
+    while (current != entt::null && registry.valid(current)) {
+      ++depth;
+      if (registry.any_of<components::TextRootComponent>(current)) {
+        break;
+      }
+      const auto* tree = registry.try_get<donner::components::TreeComponent>(current);
+      current = tree ? tree->parent() : entt::null;
+    }
+    if (depth > (std::numeric_limits<size_t>::max() - 4) / 5 ||
+        characterCount > std::numeric_limits<size_t>::max() / (depth * 5 + 4)) {
+      return;
+    }
+    const size_t projectionWork = characterCount * (depth * 5 + 4);
+    if (projectionWork > std::numeric_limits<size_t>::max() - evaluationWork) {
+      return;
+    }
+    evaluationWork += projectionWork;
+  }
+
+  auto* budget = registry.ctx().find<components::AnimationResourceBudget>();
+  if (!budget || !budget->reserveContextualWork(evaluationWork)) {
+    return;
+  }
+
+  std::unordered_map<Entity, SampledTextPositions> sampled;
+  for (const Recipe& recipe : recipes) {
+    const auto range = text.ownerSpanRanges.find(recipe.owner);
+    if (range == text.ownerSpanRanges.end() || range->second.end >= spanPrefix.size()) {
+      return;
+    }
+    components::AnimationValueContext context;
+    context.viewBox = viewBox;
+    context.fontMetrics = fontMetrics;
+    if (const auto fontSize = text.textLengthOwnerFontSizes.find(recipe.owner);
+        fontSize != text.textLengthOwnerFontSizes.end()) {
+      context.fontMetrics.fontSize =
+          fontSize->second.toPixels(viewBox, fontMetrics, Lengthd::Extent::Y);
+    }
+
+    if (recipe.rotate) {
+      std::vector<double> underlying;
+      if (const auto* local =
+              TextPositionValues<SmallVector<double, 1>>(registry, recipe.owner, 0)) {
+        if (local->size() > components::AnimationResourceBudget::kMaximumNumbersPerValue) {
+          continue;
+        }
+        underlying.assign(local->begin(), local->end());
+      }
+      const auto result = SampleTextPositionRecipe(
+          *recipe.value, SerializeTextPositionRotations(underlying), context, true, false);
+      const auto parsed = result ? components::ParseAnimationLengths(*result) : std::nullopt;
+      if (!parsed) {
+        continue;
+      }
+      std::vector<double> rotations;
+      rotations.reserve(parsed->size());
+      bool valid = true;
+      for (const Lengthd value : *parsed) {
+        if (value.unit != Lengthd::Unit::None) {
+          valid = false;
+          break;
+        }
+        rotations.push_back(value.value);
+      }
+      if (valid) {
+        sampled[recipe.owner].rotations = std::move(rotations);
+      }
+      continue;
+    }
+
+    context.extent = recipe.attributeIndex % 2 == 0 ? Lengthd::Extent::X : Lengthd::Extent::Y;
+    std::vector<Lengthd> underlying;
+    if (const auto* local = TextPositionValues<SmallVector<Lengthd, 1>>(registry, recipe.owner,
+                                                                        recipe.attributeIndex)) {
+      if (local->size() > components::AnimationResourceBudget::kMaximumNumbersPerValue) {
+        continue;
+      }
+      underlying.assign(local->begin(), local->end());
+    }
+    const auto result =
+        SampleTextPositionRecipe(*recipe.value, SerializeTextPositionLengths(underlying), context,
+                                 false, recipe.attributeIndex >= 2);
+    auto parsed = result ? components::ParseAnimationLengths(*result) : std::nullopt;
+    if (parsed) {
+      sampled[recipe.owner].lengths[recipe.attributeIndex] = std::move(*parsed);
+    }
+  }
+
+  for (size_t spanIndex = 0; spanIndex < text.spans.size(); ++spanIndex) {
+    auto& span = text.spans[spanIndex];
+    const size_t count = spanPrefix[spanIndex + 1] - spanPrefix[spanIndex];
+    if (span.hidden || span.sourceEntity == entt::null) {
+      continue;
+    }
+    span.xList.resize(count);
+    span.yList.resize(count);
+    span.dxList.resize(count);
+    span.dyList.resize(count);
+    for (size_t index = 0; index < count; ++index) {
+      span.xList[index] = ResolveSpanTextPosition<Lengthd>(registry, text, spanPrefix, sampled,
+                                                           spanIndex, index, 0, false);
+      span.yList[index] = ResolveSpanTextPosition<Lengthd>(registry, text, spanPrefix, sampled,
+                                                           spanIndex, index, 1, false);
+      span.dxList[index] = ResolveSpanTextPosition<Lengthd>(registry, text, spanPrefix, sampled,
+                                                            spanIndex, index, 2, false);
+      span.dyList[index] = ResolveSpanTextPosition<Lengthd>(registry, text, spanPrefix, sampled,
+                                                            spanIndex, index, 3, false);
+    }
+    span.rotateList.clear();
+    for (size_t index = 0; index < count; ++index) {
+      const auto rotation = ResolveSpanTextPosition<double>(registry, text, spanPrefix, sampled,
+                                                            spanIndex, index, 0, true);
+      if (rotation) {
+        span.rotateList.push_back(*rotation);
+      }
+    }
+    const bool textPath = span.pathSpline.has_value();
+    span.startsNewChunk = !textPath && !span.xList.empty() &&
+                          (span.xList.front().has_value() || span.yList.front().has_value());
+  }
+}
+
 void ResolvePerSpanLayoutStyles(Registry& registry, components::ComputedTextComponent& text,
-                                const Box2d& viewBox, const FontMetrics& fontMetrics) {
+                                const Box2d& viewBox, const FontMetrics& fontMetrics,
+                                const TextStyleContext* styleContext = nullptr) {
   using BSK = components::ComputedTextComponent::TextSpan::BaselineShiftKeyword;
+
+  for (auto& [owner, fontSize] : text.textLengthOwnerFontSizes) {
+    const Entity styleEntity = styleContext ? styleContext->styleEntityFor(owner) : owner;
+    if (styleEntity != entt::null) {
+      if (const auto* style = registry.try_get<components::ComputedStyleComponent>(styleEntity);
+          style && style->properties) {
+        fontSize = style->properties->fontSize.get().value();
+      }
+    }
+  }
 
   for (auto& span : text.spans) {
     if (span.sourceEntity == entt::null) {
       continue;
     }
 
-    auto* style = registry.try_get<components::ComputedStyleComponent>(span.sourceEntity);
-    Entity styleEntity = span.sourceEntity;
+    Entity styleEntity =
+        styleContext ? styleContext->styleEntityFor(span.sourceEntity) : span.sourceEntity;
+    auto* style = registry.try_get<components::ComputedStyleComponent>(styleEntity);
     if ((!style || !style->properties) &&
-        registry.all_of<donner::components::TreeComponent>(span.sourceEntity)) {
-      const Entity parent =
-          registry.get<donner::components::TreeComponent>(span.sourceEntity).parent();
+        registry.all_of<donner::components::TreeComponent>(styleEntity)) {
+      const Entity parent = registry.get<donner::components::TreeComponent>(styleEntity).parent();
       if (parent != entt::null) {
         style = registry.try_get<components::ComputedStyleComponent>(parent);
         styleEntity = parent;
@@ -370,7 +815,11 @@ void ResolvePerSpanLayoutStyles(Registry& registry, components::ComputedTextComp
     span.wordSpacingPx = style->properties->wordSpacing.get().value().toPixels(viewBox, fontMetrics,
                                                                                Lengthd::Extent::X);
 
-    const bool isTextRoot = registry.any_of<components::TextRootComponent>(styleEntity);
+    span.baselineShiftKeyword = BSK::Length;
+    span.ancestorBaselineShifts.clear();
+    const bool isTextRoot = styleContext
+                                ? styleEntity == styleContext->rootEntity
+                                : registry.any_of<components::TextRootComponent>(styleEntity);
     if (isTextRoot) {
       span.baselineShift = Lengthd(0, Lengthd::Unit::None);
     } else {
@@ -380,16 +829,11 @@ void ResolvePerSpanLayoutStyles(Registry& registry, components::ComputedTextComp
         span.baselineShiftKeyword = BSK::Super;
       }
 
-      // Resolve fresh each call: this runs per `draw()` and accumulates ancestor
-      // shifts via push_back, so re-resolving the same span (e.g. two backends
-      // drawing the same document, or any re-draw) would otherwise double the
-      // nested baseline-shift. Clear so the layout is idempotent.
-      span.ancestorBaselineShifts.clear();
-
       Entity ancestor = styleEntity;
       while (registry.all_of<donner::components::TreeComponent>(ancestor)) {
         ancestor = registry.get<donner::components::TreeComponent>(ancestor).parent();
-        if (ancestor == entt::null || registry.any_of<components::TextRootComponent>(ancestor)) {
+        if (ancestor == entt::null || (styleContext && ancestor == styleContext->rootEntity) ||
+            registry.any_of<components::TextRootComponent>(ancestor)) {
           break;
         }
 
@@ -420,6 +864,8 @@ void ResolvePerSpanLayoutStyles(Registry& registry, components::ComputedTextComp
       }
     }
   }
+
+  ResolveAnimatedTextPositions(registry, text, viewBox, fontMetrics);
 }
 
 }  // namespace
@@ -517,6 +963,15 @@ struct TextPathStagingState {
   std::vector<TextPathCluster> clusters;
 };
 
+struct DeferredTextPath {
+  size_t firstRun = 0;
+  Path::MeasuredPath measuredPath;
+  bool closed = false;
+  std::vector<TextPathCluster> clusters;
+};
+
+constexpr size_t kMaximumDeferredTextPathBytes = Path::kMaximumMeasuredPathRetainedBytes;
+
 /// Resolves a per-character displacement, returning zero when it is absent.
 double TextPathDisplacement(const SmallVector<std::optional<Lengthd>, 1>& positions,
                             unsigned int charIndex, const TextLayoutParams& params,
@@ -576,172 +1031,6 @@ void StageTextPathRun(TextRun& run, size_t runIndex,
       }
       if (codepoint == 0x20) {
         state.advance += span.wordSpacingPx;
-      }
-    }
-  }
-}
-
-/// A textLength owner contains typographic clusters and nested owners in document order.
-struct PathLengthScope {
-  struct Item {
-    size_t index;
-    bool scope;
-    double start = 0.0;
-    double end = 0.0;
-    double position = 0.0;
-  };
-  std::optional<double> target;
-  LengthAdjust adjust = LengthAdjust::Default;
-  std::vector<Item> items;
-  double start = 0.0;
-  double end = 0.0;
-  double length = 0.0;
-  double scale = 1.0;
-  double position = 0.0;
-};
-
-/// Adjusts path-local glyph positions before any path sampling, visiting each scope once.
-void applyTextPathLengths(Registry& registry, const components::ComputedTextComponent& text,
-                          const TextLayoutParams& params, size_t firstRun,
-                          std::vector<TextRun>& runs, std::vector<TextPathCluster>& clusters) {
-  std::vector<PathLengthScope> scopes(1);
-  std::unordered_map<Entity, size_t> ownerScopes;
-  const Entity pathEntity = text.spans[firstRun].textPathSourceEntity;
-  auto setLength = [&](PathLengthScope& scope, const std::optional<Lengthd>& length,
-                       LengthAdjust adjust) {
-    if (length) {
-      const double value = length->toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::X);
-      if (std::isfinite(value) && value >= 0.0) {
-        scope.target = value;
-        scope.adjust = adjust;
-      }
-    }
-  };
-  if (pathEntity != entt::null && registry.valid(pathEntity)) {
-    ownerScopes.emplace(pathEntity, 0);
-    if (const auto* component = registry.try_get<components::TextComponent>(pathEntity)) {
-      setLength(scopes[0], component->textLength, component->lengthAdjust);
-    }
-  }
-
-  size_t clusterIndex = 0;
-  for (size_t ri = firstRun; ri < runs.size(); ++ri) {
-    const auto& span = text.spans[ri];
-    size_t owner = 0;
-    Entity current = span.sourceEntity;
-    std::vector<Entity> ancestors;
-    while (current != entt::null && registry.valid(current) && !ownerScopes.contains(current)) {
-      ancestors.push_back(current);
-      const auto* tree = registry.try_get<donner::components::TreeComponent>(current);
-      current = tree ? tree->parent() : entt::null;
-    }
-    if (const auto found = ownerScopes.find(current); found != ownerScopes.end()) {
-      owner = found->second;
-    }
-    for (auto it = ancestors.rbegin(); it != ancestors.rend(); ++it) {
-      PathLengthScope scope;
-      if (const auto* component = registry.try_get<components::TextComponent>(*it)) {
-        setLength(scope, component->textLength, component->lengthAdjust);
-      }
-      if (scope.target) {
-        const size_t child = scopes.size();
-        scopes[owner].items.push_back({child, true});
-        scopes.push_back(std::move(scope));
-        owner = child;
-      }
-      ownerScopes.emplace(*it, owner);
-    }
-    // Direct layout callers may supply spans without a source tree.
-    if (span.sourceEntity == entt::null && span.textLength) {
-      PathLengthScope scope;
-      setLength(scope, span.textLength, span.lengthAdjust);
-      const size_t child = scopes.size();
-      scopes[0].items.push_back({child, true});
-      scopes.push_back(std::move(scope));
-      owner = child;
-    }
-    while (clusterIndex < clusters.size() && clusters[clusterIndex].runIndex == ri) {
-      const TextPathCluster& cluster = clusters[clusterIndex];
-      scopes[owner].items.push_back(
-          {clusterIndex, false, cluster.pathOffset, cluster.pathOffset + cluster.advance});
-      ++clusterIndex;
-    }
-    runs[ri].textLengthAppliedOnPath = true;
-  }
-
-  // Children have larger indices, so both traversals are iterative and linear in the tree size.
-  for (size_t si = scopes.size(); si-- > 0;) {
-    PathLengthScope& scope = scopes[si];
-    std::erase_if(scope.items, [&](const PathLengthScope::Item& item) {
-      return item.scope && scopes[item.index].items.empty();
-    });
-    if (scope.items.empty()) {
-      continue;
-    }
-    double fixedLength = 0.0;
-    double cursor = 0.0;
-    double previousEnd = 0.0;
-    for (size_t ii = 0; ii < scope.items.size(); ++ii) {
-      auto& item = scope.items[ii];
-      if (item.scope) {
-        item.start = scopes[item.index].start;
-        item.end = scopes[item.index].end;
-      }
-      if (ii == 0) {
-        scope.start = item.start;
-      } else {
-        cursor += item.start - previousEnd;
-      }
-      item.position = cursor;
-      const double length = item.scope ? scopes[item.index].length : item.end - item.start;
-      cursor += length;
-      if (item.scope) {
-        fixedLength += length;
-      }
-      previousEnd = item.end;
-    }
-    scope.end = previousEnd;
-    scope.length = cursor;
-    double extraSpacing = 0.0;
-    const double adjustableLength = cursor - fixedLength;
-    if (scope.target && cursor > 0.0) {
-      if (scope.adjust == LengthAdjust::Spacing && scope.items.size() > 1) {
-        extraSpacing = (*scope.target - cursor) / static_cast<double>(scope.items.size() - 1);
-      } else if (scope.adjust == LengthAdjust::SpacingAndGlyphs && adjustableLength > 0.0) {
-        const double scale = std::max(0.0, *scope.target - fixedLength) / adjustableLength;
-        if (std::isfinite(scale) && scale <= std::numeric_limits<float>::max()) {
-          scope.scale = scale;
-        }
-      }
-    }
-    cursor = 0.0;
-    previousEnd = scope.start;
-    for (auto& item : scope.items) {
-      cursor += (item.start - previousEnd) * scope.scale;
-      item.position = cursor;
-      cursor += item.scope ? scopes[item.index].length : (item.end - item.start) * scope.scale;
-      cursor += extraSpacing;
-      previousEnd = item.end;
-    }
-    scope.length = cursor - extraSpacing;
-  }
-  scopes[0].position = scopes[0].start;
-  for (PathLengthScope& scope : scopes) {
-    for (const auto& item : scope.items) {
-      const double position = scope.position + item.position;
-      if (item.scope) {
-        scopes[item.index].position = position;
-      } else {
-        TextPathCluster& cluster = clusters[item.index];
-        cluster.pathOffset = position;
-        cluster.advance *= scope.scale;
-        auto& run = runs[cluster.runIndex];
-        for (size_t gi = cluster.glyphStart; gi < cluster.glyphEnd; ++gi) {
-          TextGlyph& glyph = run.glyphs[gi];
-          glyph.xPosition *= scope.scale;
-          glyph.xAdvance *= scope.scale;
-          glyph.stretchScaleX *= NarrowToFloat(scope.scale);
-        }
       }
     }
   }
@@ -882,27 +1171,24 @@ void PlaceTextPathClusters(const Path::MeasuredPath& path, double startOffset, b
 }
 
 /// Places shaped clusters and returns geometry-based continuation independent of glyph visibility.
-std::optional<Vector2d> placeTextPath(Registry& registry,
-                                      const components::ComputedTextComponent& text,
-                                      const TextLayoutParams& params, size_t firstRun,
-                                      std::vector<TextRun>& runs,
-                                      std::vector<TextPathCluster>& clusters) {
-  applyTextPathLengths(registry, text, params, firstRun, runs, clusters);
-  ResetTextPathCoordinates(text, params, clusters);
-  AnchorTextPathClusters(text, clusters);
-  const auto& firstSpan = text.spans[firstRun];
-  const Path::MeasuredPath path = firstSpan.pathSpline->measure();
+std::optional<Vector2d> TextPathContinuation(const Path::MeasuredPath& path, bool closed,
+                                             double startOffset) {
   const double length = path.pathLength();
-  const bool closed = path.valid() && std::isfinite(length) && length > 0.0 &&
-                      IsSingleClosedTextPath(*firstSpan.pathSpline);
-  PlaceTextPathClusters(path, firstSpan.pathStartOffset, closed, runs, clusters);
-  if (closed && !std::isfinite(firstSpan.pathStartOffset)) {
+  if (closed && !std::isfinite(startOffset)) {
     return std::nullopt;
   }
-  const double distance =
-      closed ? NormalizeTextPathDistance(firstSpan.pathStartOffset, length) : length;
+  const double distance = closed ? NormalizeTextPathDistance(startOffset, length) : length;
   const auto end = path.pointAtArcLength(distance);
   return end.valid ? std::optional(end.point) : std::nullopt;
+}
+
+void placeTextPath(const components::ComputedTextComponent& text, const TextLayoutParams& params,
+                   DeferredTextPath& path, std::vector<TextRun>& runs) {
+  ResetTextPathCoordinates(text, params, path.clusters);
+  AnchorTextPathClusters(text, path.clusters);
+  const auto& firstSpan = text.spans[path.firstRun];
+  PlaceTextPathClusters(path.measuredPath, firstSpan.pathStartOffset, path.closed, runs,
+                        path.clusters);
 }
 
 /// A retired owning path establishes an endpoint for the next unanchored flat character.
@@ -1032,6 +1318,459 @@ void ApplyPostTextPathTranslations(std::vector<TextRun>& runs,
       TranslateAfterTextPathRun(runs[run], text.spans[run], state);
     }
   }
+}
+
+struct OrdinaryLengthScope {
+  struct Item {
+    size_t index = 0;
+    bool scope = false;
+    bool path = false;
+    bool absoluteReset = false;
+    size_t group = 0;
+    size_t glyphBegin = 0;
+    size_t glyphEnd = 0;
+    double start = 0;
+    double end = 0;
+    double glyphOrigin = 0;
+    double position = 0;
+    size_t spacingIndex = 0;
+  };
+  Entity owner = entt::null;
+  std::optional<Lengthd> authoredTarget;
+  std::shared_ptr<const components::ContextualLengthRecipe> recipe;
+  LengthAdjust adjust = LengthAdjust::Default;
+  FontMetrics metrics;
+  std::vector<Item> items;
+  double start = 0;
+  double end = 0;
+  double length = 0;
+  double scale = 1;
+  double spacing = 0;
+  double position = 0;
+  bool absoluteReset = false;
+};
+
+template <typename Declaration>
+bool HasNegativeAbsoluteTextLength(const Declaration& declaration) {
+  const auto negative = [](const std::optional<std::string>& value) {
+    if (!value) {
+      return false;
+    }
+    const auto parsed = components::ParseAnimationLength("textLength", *value);
+    return parsed && parsed->value < 0;
+  };
+  if constexpr (std::is_same_v<Declaration, components::SetAnimationComponent>) {
+    return negative(declaration.to);
+  } else {
+    if (!declaration.values.empty()) {
+      return !declaration.additive &&
+             std::any_of(declaration.values.begin(), declaration.values.end(),
+                         [&](const std::string& value) {
+                           return negative(std::optional<std::string>(value));
+                         });
+    }
+    const bool toOnly = declaration.values.empty() && !declaration.from && declaration.to;
+    if (!declaration.additive && (negative(declaration.from) || negative(declaration.to))) {
+      return true;
+    }
+    return toOnly && negative(declaration.to);
+  }
+}
+
+std::optional<Lengthd> SampleValidTextLengthRecipe(
+    const components::ContextualLengthRecipe& recipe, Lengthd underlying,
+    const components::AnimationValueContext& context) {
+  return components::SampleContextualAnimationRecipe(
+      recipe, underlying, [&](const auto& sample, const Lengthd& lower) {
+        const auto sampled = std::visit(
+            [&](const auto& declaration) -> std::optional<std::pair<std::string, std::string>> {
+              if (HasNegativeAbsoluteTextLength(declaration)) {
+                return std::nullopt;
+              }
+              using Declaration = std::decay_t<decltype(declaration)>;
+              if constexpr (std::is_same_v<Declaration, components::SetAnimationComponent>) {
+                return components::SampleAnimationValue(sample.progress, sample.iteration,
+                                                        &declaration, nullptr, nullptr,
+                                                        lower.toRcString().str(), context);
+              } else {
+                return components::SampleAnimationValue(sample.progress, sample.iteration, nullptr,
+                                                        &declaration, nullptr,
+                                                        lower.toRcString().str(), context);
+              }
+            },
+            sample.declaration);
+        if (!sampled) {
+          return std::optional<Lengthd>{};
+        }
+        const auto parsed = components::ParseAnimationLength(sampled->first, sampled->second);
+        return parsed && parsed->value >= 0 ? parsed : std::nullopt;
+      });
+}
+
+bool ApplyTextLengthOwnerPlan(Registry& registry, std::vector<TextRun>& runs,
+                              const components::ComputedTextComponent& text,
+                              const std::vector<RunPenExtent>& runExtents,
+                              const TextLayoutParams& params, bool vertical,
+                              std::vector<DeferredTextPath>& paths) {
+  struct PathClusterRange {
+    size_t group = 0;
+    size_t begin = 0;
+    size_t end = 0;
+  };
+
+  std::vector<std::optional<PathClusterRange>> pathClustersByRun(runs.size());
+  for (size_t group = 0; group < paths.size(); ++group) {
+    const auto& clusters = paths[group].clusters;
+    for (size_t begin = 0; begin < clusters.size();) {
+      const size_t runIndex = clusters[begin].runIndex;
+      size_t end = begin + 1;
+      while (end < clusters.size() && clusters[end].runIndex == runIndex) {
+        ++end;
+      }
+      if (runIndex < pathClustersByRun.size()) {
+        pathClustersByRun[runIndex] = PathClusterRange{group, begin, end};
+      }
+      begin = end;
+    }
+  }
+
+  std::vector<OrdinaryLengthScope> scopes(1);
+  std::unordered_map<Entity, size_t> ownerScopes;
+  bool hasManagedScope = false;
+  size_t structuralWork = 0;
+  bool hasLogicalEnd = false;
+  double logicalEnd = 0;
+  std::optional<size_t> previousPathGroup;
+  double previousPathLocalEnd = 0;
+
+  const auto initializeScope = [&](OrdinaryLengthScope& scope, Entity owner,
+                                   const components::ComputedTextComponent::TextSpan& span) {
+    scope.owner = owner;
+    scope.metrics = params.fontMetrics;
+    std::optional<Lengthd> ownerFontSize;
+    if (const auto occurrence = text.textLengthOwnerFontSizes.find(owner);
+        occurrence != text.textLengthOwnerFontSizes.end()) {
+      ownerFontSize = occurrence->second;
+    } else if (span.sourceEntity == owner && span.hasResolvedFontSize) {
+      ownerFontSize = span.fontSize;
+    } else if (const auto* style = registry.try_get<components::ComputedStyleComponent>(owner);
+               style && style->properties) {
+      ownerFontSize = style->properties->fontSize.get().value();
+    }
+    if (ownerFontSize) {
+      const double size =
+          ownerFontSize->toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::Y);
+      if (std::isfinite(size) && size >= 0) {
+        scope.metrics.fontSize = size;
+      }
+    }
+    if (const auto* component = registry.try_get<components::TextComponent>(owner)) {
+      scope.authoredTarget = component->textLength;
+      scope.adjust = component->lengthAdjust;
+    }
+    scope.recipe = components::ContextualLengthFor(registry, owner, "textLength");
+    hasManagedScope |= scope.authoredTarget.has_value() || scope.recipe != nullptr;
+  };
+
+  for (size_t runIndex = 0; runIndex < runs.size() && runIndex < text.spans.size(); ++runIndex) {
+    const auto& span = text.spans[runIndex];
+    size_t owner = 0;
+    if (span.sourceEntity == entt::null) {
+      if (span.textLength) {
+        OrdinaryLengthScope candidate;
+        candidate.authoredTarget = span.textLength;
+        candidate.adjust = span.lengthAdjust;
+        candidate.metrics = params.fontMetrics;
+        const size_t child = scopes.size();
+        scopes[owner].items.push_back({.index = child, .scope = true});
+        scopes.push_back(std::move(candidate));
+        owner = child;
+        hasManagedScope = true;
+      }
+    } else {
+      Entity current = span.sourceEntity;
+      std::vector<Entity> ancestors;
+      while (current != entt::null && registry.valid(current) && !ownerScopes.contains(current)) {
+        ancestors.push_back(current);
+        if (structuralWork == std::numeric_limits<size_t>::max()) {
+          return false;
+        }
+        ++structuralWork;
+        const auto* tree = registry.try_get<donner::components::TreeComponent>(current);
+        current = tree ? tree->parent() : entt::null;
+      }
+
+      owner = current != entt::null && ownerScopes.contains(current) ? ownerScopes[current] : 0;
+      for (auto it = ancestors.rbegin(); it != ancestors.rend(); ++it) {
+        OrdinaryLengthScope candidate;
+        initializeScope(candidate, *it, span);
+        if (candidate.authoredTarget || candidate.recipe) {
+          const size_t child = scopes.size();
+          scopes[owner].items.push_back({.index = child, .scope = true});
+          scopes.push_back(std::move(candidate));
+          owner = child;
+        }
+        ownerScopes.emplace(*it, owner);
+      }
+    }
+
+    if (runs[runIndex].glyphs.empty()) {
+      continue;
+    }
+    if (const auto& range = pathClustersByRun[runIndex]) {
+      for (size_t clusterIndex = range->begin; clusterIndex < range->end; ++clusterIndex) {
+        const auto& cluster = paths[range->group].clusters[clusterIndex];
+        double start = hasLogicalEnd ? logicalEnd : cluster.pathOffset;
+        if (previousPathGroup && *previousPathGroup == range->group) {
+          start += cluster.pathOffset - previousPathLocalEnd;
+        }
+        const double end = start + cluster.advance;
+        scopes[owner].items.push_back({.index = clusterIndex,
+                                       .path = true,
+                                       .group = range->group,
+                                       .start = start,
+                                       .end = end});
+        logicalEnd = end;
+        hasLogicalEnd = true;
+        previousPathGroup = range->group;
+        previousPathLocalEnd = cluster.pathOffset + cluster.advance;
+      }
+    } else {
+      const auto& extent = runExtents[runIndex];
+      const auto& inlinePositions = vertical ? span.yList : span.xList;
+      const std::string_view spanText(span.text.data() + span.start, span.end - span.start);
+      const auto mappings = buildByteIndexMappings(spanText);
+      std::vector<size_t> boundaries{0};
+      for (size_t glyphIndex = 1; glyphIndex < runs[runIndex].glyphs.size(); ++glyphIndex) {
+        const size_t byte = GetPositioningCluster(runs[runIndex].glyphs[glyphIndex]);
+        const size_t character =
+            byte < mappings.byteToCharIdx.size() ? mappings.byteToCharIdx[byte] : 0;
+        const size_t previousByte = GetPositioningCluster(runs[runIndex].glyphs[glyphIndex - 1]);
+        const size_t previousCharacter =
+            previousByte < mappings.byteToCharIdx.size() ? mappings.byteToCharIdx[previousByte] : 0;
+        if (character != 0 && character != previousCharacter &&
+            character < inlinePositions.size() && inlinePositions[character]) {
+          boundaries.push_back(glyphIndex);
+        }
+      }
+      boundaries.push_back(runs[runIndex].glyphs.size());
+      for (size_t segment = 0; segment + 1 < boundaries.size(); ++segment) {
+        const size_t glyphBegin = boundaries[segment];
+        const size_t glyphEnd = boundaries[segment + 1];
+        const auto& firstGlyph = runs[runIndex].glyphs[glyphBegin];
+        const auto& lastGlyph = runs[runIndex].glyphs[glyphEnd - 1];
+        const double start = glyphBegin == 0
+                                 ? (vertical ? extent.startY : extent.startX)
+                                 : (vertical ? firstGlyph.yPosition : firstGlyph.xPosition);
+        const double end = glyphEnd == runs[runIndex].glyphs.size()
+                               ? (vertical ? extent.endY : extent.endX)
+                               : (vertical ? lastGlyph.yPosition + lastGlyph.yAdvance
+                                           : lastGlyph.xPosition + lastGlyph.xAdvance);
+        const bool absoluteReset =
+            segment > 0 || (!inlinePositions.empty() && inlinePositions.front());
+        scopes[owner].items.push_back(
+            {.index = runIndex,
+             .absoluteReset = absoluteReset,
+             .glyphBegin = glyphBegin,
+             .glyphEnd = glyphEnd,
+             .start = start,
+             .end = end,
+             .glyphOrigin = vertical ? firstGlyph.yPosition : firstGlyph.xPosition});
+        logicalEnd = end;
+      }
+      hasLogicalEnd = true;
+      previousPathGroup.reset();
+    }
+  }
+
+  if (!hasManagedScope) {
+    return false;
+  }
+
+  auto* budget = registry.ctx().find<components::AnimationResourceBudget>();
+  size_t evaluationWork = structuralWork;
+  bool admitted = budget != nullptr;
+  for (const auto& scope : scopes) {
+    if (scope.recipe &&
+        scope.recipe->evaluationWork > std::numeric_limits<size_t>::max() - evaluationWork) {
+      admitted = false;
+      break;
+    }
+    if (scope.recipe) {
+      evaluationWork += scope.recipe->evaluationWork;
+    }
+  }
+  admitted = admitted && budget->reserveContextualWork(evaluationWork);
+
+  const auto plan = [&](bool sampleRecipes) {
+    for (size_t scopeIndex = scopes.size(); scopeIndex-- > 0;) {
+      auto& scope = scopes[scopeIndex];
+      std::erase_if(scope.items, [&](const OrdinaryLengthScope::Item& item) {
+        return item.scope && scopes[item.index].items.empty();
+      });
+      scope.start = 0;
+      scope.end = 0;
+      scope.length = 0;
+      scope.scale = 1;
+      scope.spacing = 0;
+      scope.absoluteReset = false;
+      if (scope.items.empty()) {
+        continue;
+      }
+
+      double fixedLength = 0;
+      double cursor = 0;
+      double previousEnd = 0;
+      size_t spacingUnits = 0;
+      for (size_t itemIndex = 0; itemIndex < scope.items.size(); ++itemIndex) {
+        auto& item = scope.items[itemIndex];
+        if (item.scope) {
+          item.start = scopes[item.index].start;
+          item.end = scopes[item.index].end;
+          item.absoluteReset = scopes[item.index].absoluteReset;
+        }
+        if (itemIndex == 0) {
+          scope.start = item.start;
+          scope.absoluteReset = item.absoluteReset;
+        } else if (item.absoluteReset) {
+          cursor = item.start - scope.start;
+        } else {
+          cursor += item.start - previousEnd;
+        }
+        item.position = cursor;
+        item.spacingIndex = spacingUnits;
+        const double length = item.scope ? scopes[item.index].length : item.end - item.start;
+        cursor += length;
+        fixedLength += item.scope ? length : 0;
+        spacingUnits += item.scope || item.path ? 1 : item.glyphEnd - item.glyphBegin;
+        previousEnd = item.end;
+      }
+      scope.end = previousEnd;
+      scope.length = cursor;
+
+      std::optional<Lengthd> target = scope.authoredTarget;
+      if (sampleRecipes && scope.recipe) {
+        components::AnimationValueContext context;
+        context.viewBox = params.viewBox;
+        context.fontMetrics = scope.metrics;
+        context.extent = vertical ? Lengthd::Extent::Y : Lengthd::Extent::X;
+        const Lengthd underlying = target.value_or(Lengthd(scope.length));
+        const auto sampled = SampleValidTextLengthRecipe(*scope.recipe, underlying, context);
+        if (sampled) {
+          const double pixels = sampled->toPixels(params.viewBox, scope.metrics, context.extent);
+          if (std::isfinite(pixels) && pixels >= 0) {
+            target = sampled;
+          }
+        }
+      }
+
+      if (target && cursor > 0) {
+        const double pixels = target->toPixels(params.viewBox, scope.metrics,
+                                               vertical ? Lengthd::Extent::Y : Lengthd::Extent::X);
+        const double adjustableLength = cursor - fixedLength;
+        if (std::isfinite(pixels) && pixels >= 0 && scope.adjust == LengthAdjust::Spacing &&
+            spacingUnits > 1) {
+          scope.spacing = (pixels - cursor) / static_cast<double>(spacingUnits - 1);
+        } else if (std::isfinite(pixels) && pixels >= 0 &&
+                   scope.adjust == LengthAdjust::SpacingAndGlyphs && adjustableLength > 0) {
+          const double scale = std::max(0.0, pixels - fixedLength) / adjustableLength;
+          if (std::isfinite(scale) && scale <= std::numeric_limits<float>::max()) {
+            scope.scale = scale;
+          }
+        }
+      }
+
+      cursor = 0;
+      previousEnd = scope.start;
+      for (auto& item : scope.items) {
+        if (item.absoluteReset) {
+          cursor = item.start - scope.start;
+        } else {
+          cursor += (item.start - previousEnd) * scope.scale;
+        }
+        item.position = cursor;
+        const double length = item.scope ? scopes[item.index].length : item.end - item.start;
+        cursor += item.scope ? length : length * scope.scale;
+        if (!item.scope && !item.path && item.glyphEnd - item.glyphBegin > 1) {
+          cursor += scope.spacing * static_cast<double>(item.glyphEnd - item.glyphBegin - 1);
+        }
+        cursor += scope.spacing;
+        previousEnd = item.end;
+      }
+      scope.length = cursor - scope.spacing;
+    }
+  };
+
+  plan(admitted);
+
+  scopes[0].position = scopes[0].start;
+  struct PathOutputOrigin {
+    double output = 0;
+    double localOffset = 0;
+  };
+  std::vector<std::vector<std::optional<double>>> pathOutputPositions;
+  pathOutputPositions.reserve(paths.size());
+  for (const auto& path : paths) {
+    pathOutputPositions.emplace_back(path.clusters.size());
+  }
+  for (auto& scope : scopes) {
+    for (const auto& item : scope.items) {
+      const double position = scope.position + item.position;
+      if (item.scope) {
+        scopes[item.index].position = position;
+        continue;
+      }
+      if (item.path) {
+        pathOutputPositions[item.group][item.index] = position;
+        continue;
+      }
+
+      auto& run = runs[item.index];
+      const double glyphBase = position + item.glyphOrigin - item.start;
+      for (size_t glyphIndex = item.glyphBegin; glyphIndex < item.glyphEnd; ++glyphIndex) {
+        auto& glyph = run.glyphs[glyphIndex];
+        if (vertical) {
+          glyph.yPosition = glyphBase + (glyph.yPosition - item.glyphOrigin) * scope.scale +
+                            scope.spacing * static_cast<double>(glyphIndex - item.glyphBegin);
+          glyph.yAdvance *= scope.scale;
+          glyph.stretchScaleY *= NarrowToFloat(scope.scale);
+        } else {
+          glyph.xPosition = glyphBase + (glyph.xPosition - item.glyphOrigin) * scope.scale +
+                            scope.spacing * static_cast<double>(glyphIndex - item.glyphBegin);
+          glyph.xAdvance *= scope.scale;
+          glyph.stretchScaleX *= NarrowToFloat(scope.scale);
+        }
+      }
+    }
+  }
+
+  std::vector<std::optional<PathOutputOrigin>> pathOrigins(paths.size());
+  for (size_t group = 0; group < paths.size(); ++group) {
+    if (!paths[group].clusters.empty() && pathOutputPositions[group][0]) {
+      pathOrigins[group] =
+          PathOutputOrigin{*pathOutputPositions[group][0], paths[group].clusters[0].pathOffset};
+    }
+  }
+  for (const auto& scope : scopes) {
+    for (const auto& item : scope.items) {
+      if (!item.path || !pathOrigins[item.group] || !pathOutputPositions[item.group][item.index]) {
+        continue;
+      }
+      auto& cluster = paths[item.group].clusters[item.index];
+      const auto& origin = *pathOrigins[item.group];
+      cluster.pathOffset =
+          origin.localOffset + *pathOutputPositions[item.group][item.index] - origin.output;
+      cluster.advance *= scope.scale;
+      auto& run = runs[cluster.runIndex];
+      for (size_t glyphIndex = cluster.glyphStart; glyphIndex < cluster.glyphEnd; ++glyphIndex) {
+        auto& glyph = run.glyphs[glyphIndex];
+        glyph.xPosition *= scope.scale;
+        glyph.xAdvance *= scope.scale;
+        glyph.stretchScaleX *= NarrowToFloat(scope.scale);
+      }
+    }
+  }
+  return true;
 }
 
 void applyTextLength(std::vector<TextRun>& runs, const components::ComputedTextComponent& text,
@@ -1797,17 +2536,18 @@ void TextEngine::prepareForElement(EntityHandle handle, ParseWarningSink& outWar
 }
 
 void TextEngine::resolvePerSpanLayoutStyles(EntityHandle textRootHandle,
-                                            components::ComputedTextComponent& text) const {
+                                            components::ComputedTextComponent& text,
+                                            const TextStyleContext* styleContext) const {
   const auto* textComp = registry_.try_get<components::TextComponent>(textRootHandle.entity());
-  const auto* style =
-      registry_.try_get<components::ComputedStyleComponent>(textRootHandle.entity());
+  const EntityHandle styleRoot(registry_,
+                               styleContext ? styleContext->rootEntity : textRootHandle.entity());
+  const auto* style = styleRoot.try_get<components::ComputedStyleComponent>();
   if (!textComp || !style || !style->properties) {
     return;
   }
 
-  const TextLayoutParams params =
-      buildTextLayoutParams(registry_, textRootHandle, *style, *textComp);
-  ResolvePerSpanLayoutStyles(registry_, text, params.viewBox, params.fontMetrics);
+  const TextLayoutParams params = buildTextLayoutParams(registry_, styleRoot, *style, *textComp);
+  ResolvePerSpanLayoutStyles(registry_, text, params.viewBox, params.fontMetrics, styleContext);
 }
 
 void TextEngine::addFontFace(const css::FontFace& face) {
@@ -2091,551 +2831,709 @@ ResolvedTextFont TextEngine::resolveUsedFont(EntityHandle styleOwner, const Box2
   return {font, AdjustFontSize(*backend_, font, size, properties.fontSizeAdjust.get().value())};
 }
 
+namespace {
+
+class TextLayoutInvocation {
+public:
+  TextLayoutInvocation(Registry& registry, FontManager& fontManager, TextBackend& backend,
+                       const components::ComputedTextComponent& text,
+                       const TextLayoutParams& params)
+      : registry_(registry),
+        fontManager_(fontManager),
+        backend_(backend),
+        text_(text),
+        params_(params) {}
+
+  std::vector<TextRun> run() {
+    resolveBaseFont();
+    for (const auto& span : text_.spans) {
+      layoutSpan(span);
+    }
+    finishTextPath();
+    applyInlineWrap();
+    applyFinalAdjustments();
+    ApplyPostTextPathTranslations(runs_, text_, postPathBoundaries_);
+    return std::move(runs_);
+  }
+
+private:
+  using TextSpan = components::ComputedTextComponent::TextSpan;
+
+  struct SpanState {
+    const TextSpan* span = nullptr;
+    TextRun run;
+    std::string_view text;
+    FontHandle font;
+    double specifiedFontSizePx = 0.0;
+    float fontSizePx = 0.0f;
+    float scale = 0.0f;
+    std::optional<double> fontSizeAdjust;
+    bool vertical = false;
+    bool fontKerning = true;
+    double defaultY = 0.0;
+    double penX = 0.0;
+    double penY = 0.0;
+    double runPenStartX = 0.0;
+    double runPenStartY = 0.0;
+    SmallVector<std::optional<Lengthd>, 1> xList;
+    SmallVector<std::optional<Lengthd>, 1> yList;
+    SmallVector<std::optional<Lengthd>, 1> dxList;
+    SmallVector<std::optional<Lengthd>, 1> dyList;
+    std::vector<ChunkRange> chunkRanges;
+    ByteIndexMappings indexMappings;
+    PreparedSpanShaping shaping;
+    uint32_t lastCodepoint = 0;
+    double pathBoundaryKern = 0.0;
+    uint32_t previousChunkCodepoint = 0;
+    FontHandle previousChunkFont;
+    float previousChunkFontSizePx = 0.0f;
+    bool previousChunkKerning = true;
+  };
+
+  struct KernAdjustment {
+    double value = 0.0;
+    bool applied = false;
+  };
+
+  void resolveBaseFont() {
+    baseFont_ = FindFirstAvailableFont(fontManager_, params_.fontFamilies);
+    if (!baseFont_) {
+      baseFont_ = fontManager_.fallbackFont();
+    }
+    baseFontSizePx_ = CheckedFontSizePx(
+        params_.fontSize.toPixels(params_.viewBox, params_.fontMetrics, Lengthd::Extent::Mixed));
+  }
+
+  bool startsDifferentTextPath(const TextSpan& span) const {
+    return firstPathRun_ && !span.hidden &&
+           (!span.pathSpline || span.textPathSourceEntity == entt::null ||
+            span.textPathSourceEntity != previousTextPathSource_);
+  }
+
+  void layoutSpan(const TextSpan& span) {
+    if (startsDifferentTextPath(span)) {
+      finishTextPath();
+    }
+    if (span.hidden || span.textPathFailed) {
+      commitHiddenSpan();
+      return;
+    }
+
+    SpanState state;
+    prepareSpan(span, state);
+    if (!HasAddressableSpanText(state.text, state.fontSizePx, state.specifiedFontSizePx,
+                                state.fontSizeAdjust)) {
+      commitUnshapedSpan(state);
+      return;
+    }
+
+    prepareShaping(state);
+    layoutChunks(state);
+    commitShapedSpan(state);
+  }
+
+  void commitHiddenSpan() {
+    runExtents_.push_back({0.0, 0.0, 0.0, 0.0});
+    runs_.emplace_back();
+  }
+
+  void prepareSpan(const TextSpan& span, SpanState& state) {
+    previousSpanCodepoint_ =
+        KerningPredecessorForScope(previousSpanPathSource_, span, previousSpanCodepoint_);
+    state.span = &span;
+    state.text = std::string_view(span.text.data() + span.start, span.end - span.start);
+    prepareSpanFont(state);
+    prepareSpanPen(state);
+    state.fontKerning = span.fontKerning.value_or(params_.fontKerning) != FontKerning::None;
+  }
+
+  void prepareSpanFont(SpanState& state) {
+    const TextSpan& span = *state.span;
+    state.font = ResolveSpanFace(fontManager_, span, params_.fontFamilies, baseFont_);
+    state.specifiedFontSizePx = ResolvedSpanFontSizePx(span, params_);
+    state.fontSizePx = CheckedFontSizePx(state.specifiedFontSizePx);
+    state.font = selectBackendSafeFont(backend_, fontManager_, state.font);
+    state.font = findCoverageFallbackFont(backend_, fontManager_, state.font, state.fontSizePx,
+                                          firstNonAsciiCodepoint(state.text));
+    state.fontSizeAdjust = span.fontSizeAdjust.value_or(params_.fontSizeAdjust);
+    state.fontSizePx = AdjustFontSize(backend_, state.font, state.fontSizePx, state.fontSizeAdjust);
+    state.run.font = state.font;
+    state.run.usedFontSizePx = state.fontSizePx;
+    state.scale = UsedSpanEmScale(backend_, state.font, state.fontSizePx);
+  }
+
+  double effectiveBaselineShift(const SpanState& state) const {
+    if (!isVertical(params_.writingMode) &&
+        state.span->alignmentBaseline != DominantBaseline::Auto) {
+      return computeBaselineShift(state.span->alignmentBaseline, backend_.fontVMetrics(state.font),
+                                  state.scale);
+    }
+    return 0.0;
+  }
+
+  void prepareSpanPen(SpanState& state) {
+    const TextSpan& span = *state.span;
+    state.vertical = isVertical(params_.writingMode);
+    state.penX = haveCurrentPosition_ ? currentPenX_ : 0.0;
+    state.defaultY = effectiveBaselineShift(state) -
+                     computeSpanBaselineShiftPx(backend_, span, state.font, state.scale, params_);
+    state.penY =
+        haveCurrentPosition_ ? currentPenY_ - previousDefaultY_ + state.defaultY : state.defaultY;
+    state.xList = span.xList;
+    state.yList = span.yList;
+    if (span.pathSpline && !state.vertical) {
+      state.yList.clear();
+    }
+    state.dxList = span.dxList;
+    state.dyList = span.dyList;
+    if (span.startsNewChunk || !haveCurrentPosition_) {
+      consumeSpanStartPositions(state);
+      chunkBoundaries_.push_back({runs_.size(), 0, span.textAnchor});
+    }
+  }
+
+  void consumeSpanStartPositions(SpanState& state) const {
+    if (!state.xList.empty() && state.xList[0]) {
+      state.penX =
+          state.xList[0]->toPixels(params_.viewBox, params_.fontMetrics, Lengthd::Extent::X);
+      state.xList[0].reset();
+    }
+    if (!state.dxList.empty() && state.dxList[0]) {
+      state.penX +=
+          state.dxList[0]->toPixels(params_.viewBox, params_.fontMetrics, Lengthd::Extent::X);
+      state.dxList[0].reset();
+    }
+    if (!state.yList.empty() && state.yList[0]) {
+      state.penY =
+          state.yList[0]->toPixels(params_.viewBox, params_.fontMetrics, Lengthd::Extent::Y) +
+          state.defaultY;
+      state.yList[0].reset();
+    }
+    if (!state.dyList.empty() && state.dyList[0]) {
+      state.penY +=
+          state.dyList[0]->toPixels(params_.viewBox, params_.fontMetrics, Lengthd::Extent::Y);
+      state.dyList[0].reset();
+    }
+  }
+
+  void commitUnshapedSpan(SpanState& state) {
+    currentPenX_ = state.penX;
+    currentPenY_ = state.penY;
+    previousDefaultY_ = state.defaultY;
+    haveCurrentPosition_ = true;
+    UpdateUnshapedSpanPredecessor(state.text, state.run, state.fontKerning, previousSpanCodepoint_,
+                                  previousSpanFont_, previousSpanFontSizePx_, previousSpanKerning_);
+    runExtents_.push_back({state.penX, state.penY, state.penX, state.penY});
+    runs_.push_back(std::move(state.run));
+  }
+
+  void prepareShaping(SpanState& state) {
+    state.runPenStartX = state.penX;
+    state.runPenStartY = state.penY;
+    state.chunkRanges = findChunkRanges(state.text, state.xList, state.yList);
+    state.indexMappings = buildByteIndexMappings(state.text);
+    state.shaping =
+        PrepareSpanShaping(backend_, state.run, state.text, state.chunkRanges, state.vertical,
+                           state.span->fontVariant, state.fontKerning, state.indexMappings);
+    state.dxList = ResolveGroupDisplacements(
+        state.span->pathSpline ? state.span->dxList : state.dxList, state.shaping.groupStarts,
+        Lengthd::Extent::X, params_, pendingDx_);
+    state.dyList = ResolveGroupDisplacements(
+        state.span->pathSpline ? state.span->dyList : state.dyList, state.shaping.groupStarts,
+        Lengthd::Extent::Y, params_, pendingDy_);
+    state.previousChunkCodepoint = previousSpanCodepoint_;
+    state.previousChunkFont = previousSpanFont_;
+    state.previousChunkFontSizePx = previousSpanFontSizePx_;
+    state.previousChunkKerning = previousSpanKerning_;
+  }
+
+  void layoutChunks(SpanState& state) {
+    for (size_t chunkIndex = 0; chunkIndex < state.chunkRanges.size(); ++chunkIndex) {
+      layoutChunk(state, chunkIndex);
+    }
+  }
+
+  void layoutChunk(SpanState& state, size_t chunkIndex) {
+    const PreparedSpanChunk& prepared = state.shaping.chunks[chunkIndex];
+    const auto yOverride = chunkYOverride(state, chunkIndex);
+    const KernAdjustment crossKern = resolveCrossKern(state, chunkIndex);
+    std::optional<unsigned int> previousPositionedGroup;
+    for (size_t glyphIndex = 0; glyphIndex < prepared.shaped.glyphs.size(); ++glyphIndex) {
+      layoutGlyph(state, chunkIndex, glyphIndex, yOverride, crossKern, previousPositionedGroup);
+    }
+    updateChunkPredecessor(state, prepared);
+  }
+
+  std::optional<double> chunkYOverride(const SpanState& state, size_t chunkIndex) const {
+    const auto& prepared = state.shaping.chunks[chunkIndex];
+    const auto& shaped = prepared.shaped;
+    const bool isRtl = shaped.glyphs.size() > 1 &&
+                       prepared.positioningClusters.front() > prepared.positioningClusters.back();
+    if (!isRtl || chunkIndex == 0) {
+      return std::nullopt;
+    }
+    const size_t byteStart = state.chunkRanges[chunkIndex].byteStart;
+    const unsigned int firstChar = byteStart < state.indexMappings.byteToCharIdx.size()
+                                       ? state.indexMappings.byteToCharIdx[byteStart]
+                                       : 0;
+    if (firstChar >= state.yList.size() || !state.yList[firstChar]) {
+      return std::nullopt;
+    }
+    return state.yList[firstChar]->toPixels(params_.viewBox, params_.fontMetrics,
+                                            Lengthd::Extent::Y) +
+           state.defaultY;
+  }
+
+  KernAdjustment resolveCrossKern(const SpanState& state, size_t chunkIndex) const {
+    if (chunkIndex > 0) {
+      return resolveCrossChunkKern(state, chunkIndex);
+    }
+    return resolveCrossSpanKern(state);
+  }
+
+  KernAdjustment resolveCrossChunkKern(const SpanState& state, size_t chunkIndex) const {
+    const auto& glyphs = state.shaping.chunks[chunkIndex].shaped.glyphs;
+    if (state.previousChunkCodepoint == 0 || glyphs.empty()) {
+      return {};
+    }
+    size_t firstByte = state.chunkRanges[chunkIndex].byteStart;
+    const uint32_t firstCodepoint = decodeUtf8(state.text, firstByte);
+    const double value =
+        state.fontKerning && state.previousChunkKerning
+            ? backend_.crossSpanKern(state.previousChunkFont, state.previousChunkFontSizePx,
+                                     state.font, state.fontSizePx, state.previousChunkCodepoint,
+                                     firstCodepoint, state.vertical)
+            : 0.0;
+    return {value, true};
+  }
+
+  KernAdjustment resolveCrossSpanKern(const SpanState& state) const {
+    if (StartsNewKerningChunk(*state.span, state.vertical) || previousSpanCodepoint_ == 0 ||
+        state.shaping.chunks.front().shaped.glyphs.empty()) {
+      return {};
+    }
+    size_t firstByte = state.chunkRanges.front().byteStart;
+    const uint32_t firstCodepoint = decodeUtf8(state.text, firstByte);
+    const bool compatible = CompatibleKerningRuns(
+        fontManager_, state.run, state.span->fontVariant, previousSpanFont_,
+        previousSpanFontSizePx_, previousSpanFontVariant_, state.fontKerning, previousSpanKerning_);
+    const double value =
+        compatible ? backend_.crossSpanKern(previousSpanFont_, previousSpanFontSizePx_, state.font,
+                                            state.fontSizePx, previousSpanCodepoint_,
+                                            firstCodepoint, state.vertical)
+                   : 0.0;
+    return {value, true};
+  }
+
+  void layoutGlyph(SpanState& state, size_t chunkIndex, size_t glyphIndex,
+                   const std::optional<double>& yOverride, const KernAdjustment& crossKern,
+                   std::optional<unsigned int>& previousPositionedGroup) {
+    const PreparedSpanChunk& prepared = state.shaping.chunks[chunkIndex];
+    const uint32_t positioningCluster = prepared.positioningClusters[glyphIndex];
+    size_t clusterPosition = positioningCluster;
+    const uint32_t codepoint = decodeUtf8(state.text, clusterPosition);
+    const unsigned int charIndex = positioningCluster < state.indexMappings.byteToCharIdx.size()
+                                       ? state.indexMappings.byteToCharIdx[positioningCluster]
+                                       : 0;
+    const bool applyPosition = previousPositionedGroup != charIndex;
+    previousPositionedGroup = charIndex;
+    const auto groupX = PositionForGroup(state.xList, charIndex, applyPosition);
+    const auto groupY = PositionForGroup(state.yList, charIndex, applyPosition);
+    const auto groupDx = PositionForGroup(state.dxList, charIndex, applyPosition);
+    const auto groupDy = PositionForGroup(state.dyList, charIndex, applyPosition);
+    if (state.vertical) {
+      layoutVerticalGlyph(state, chunkIndex, glyphIndex, codepoint, charIndex, positioningCluster,
+                          groupX, groupY, groupDx, groupDy, crossKern);
+    } else {
+      layoutHorizontalGlyph(state, chunkIndex, glyphIndex, codepoint, charIndex, positioningCluster,
+                            groupX, groupY, groupDx, groupDy, yOverride, crossKern);
+    }
+    state.lastCodepoint = codepoint;
+  }
+
+  void recordChunkBoundary(const SpanState& state, size_t chunkIndex, size_t glyphIndex,
+                           bool hasAbsoluteX, bool hasAbsoluteY) {
+    if ((hasAbsoluteX || hasAbsoluteY) && !(chunkIndex == 0 && glyphIndex == 0)) {
+      chunkBoundaries_.push_back({runs_.size(), state.run.glyphs.size(), state.span->textAnchor});
+    }
+  }
+
+  void applyVerticalPosition(SpanState& state, size_t glyphIndex,
+                             const TextBackend::ShapedGlyph& shapedGlyph,
+                             const std::optional<Lengthd>& groupX,
+                             const std::optional<Lengthd>& groupY,
+                             const std::optional<Lengthd>& groupDx,
+                             const std::optional<Lengthd>& groupDy,
+                             const KernAdjustment& crossKern) const {
+    if (groupY) {
+      state.penY = groupY->toPixels(params_.viewBox, params_.fontMetrics, Lengthd::Extent::Y);
+    }
+    if (groupDy) {
+      state.penY += groupDy->toPixels(params_.viewBox, params_.fontMetrics, Lengthd::Extent::Y);
+    }
+    if (groupX) {
+      state.penX = groupX->toPixels(params_.viewBox, params_.fontMetrics, Lengthd::Extent::X);
+    }
+    if (groupDx) {
+      state.penX += groupDx->toPixels(params_.viewBox, params_.fontMetrics, Lengthd::Extent::X);
+    }
+    if (!groupX && !groupY) {
+      if (glyphIndex == 0 && crossKern.applied) {
+        state.penY += crossKern.value;
+      } else if (glyphIndex != 0) {
+        state.penY += shapedGlyph.yKern;
+      }
+    }
+  }
+
+  double rotationFor(const TextSpan& span, unsigned int charIndex, double baseRotation) const {
+    if (charIndex < span.rotateList.size()) {
+      return span.rotateList[charIndex] + baseRotation;
+    }
+    if (!span.rotateList.empty()) {
+      return span.rotateList.back() + baseRotation;
+    }
+    return baseRotation;
+  }
+
+  void orientVerticalGlyph(const SpanState& state, const TextBackend::ShapedGlyph& shapedGlyph,
+                           uint32_t codepoint, unsigned int charIndex, TextGlyph& glyph) const {
+    if (codepoint < 0x2E80) {
+      glyph.yAdvance = shapedGlyph.xAdvance > 0 ? shapedGlyph.xAdvance : shapedGlyph.yAdvance;
+      const FontVMetrics metrics = backend_.fontVMetrics(state.font);
+      const double pixelHeightScale =
+          metrics.ascent != metrics.descent
+              ? static_cast<double>(state.fontSizePx) / (metrics.ascent - metrics.descent)
+              : 0.0;
+      const double centralBaselineOffset =
+          (static_cast<double>(metrics.ascent) + static_cast<double>(metrics.descent)) *
+          pixelHeightScale / 2.0;
+      glyph.xPosition -= centralBaselineOffset;
+      glyph.rotateDegrees = rotationFor(*state.span, charIndex, 90.0);
+      return;
+    }
+
+    glyph.yAdvance = shapedGlyph.yAdvance > 0 ? shapedGlyph.yAdvance : state.fontSizePx;
+    glyph.xPosition = state.penX + shapedGlyph.xOffset;
+    glyph.yPosition = state.penY + shapedGlyph.yOffset;
+    glyph.rotateDegrees = rotationFor(*state.span, charIndex, 0.0);
+  }
+
+  void advanceVerticalPen(SpanState& state, const PreparedSpanChunk& prepared, size_t glyphIndex,
+                          uint32_t codepoint, const TextGlyph& glyph) const {
+    state.penY += glyph.yAdvance;
+    if (!backend_.isCursive(codepoint)) {
+      state.penY += state.span->letterSpacingPx;
+    }
+    if (IsWordSpacingGroupEnd(prepared, glyphIndex, codepoint)) {
+      state.penY += state.span->wordSpacingPx;
+    }
+  }
+
+  void layoutVerticalGlyph(SpanState& state, size_t chunkIndex, size_t glyphIndex,
+                           uint32_t codepoint, unsigned int charIndex, uint32_t positioningCluster,
+                           const std::optional<Lengthd>& groupX,
+                           const std::optional<Lengthd>& groupY,
+                           const std::optional<Lengthd>& groupDx,
+                           const std::optional<Lengthd>& groupDy, const KernAdjustment& crossKern) {
+    const PreparedSpanChunk& prepared = state.shaping.chunks[chunkIndex];
+    const auto& shapedGlyph = prepared.shaped.glyphs[glyphIndex];
+    recordChunkBoundary(state, chunkIndex, glyphIndex, groupX.has_value(), groupY.has_value());
+    applyVerticalPosition(state, glyphIndex, shapedGlyph, groupX, groupY, groupDx, groupDy,
+                          crossKern);
+    TextGlyph glyph;
+    glyph.glyphIndex = shapedGlyph.glyphIndex;
+    glyph.xPosition = state.penX;
+    glyph.yPosition = state.penY;
+    glyph.xAdvance = 0;
+    glyph.fontSizeScale = shapedGlyph.fontSizeScale;
+    glyph.cluster = shapedGlyph.cluster;
+    glyph.positioningCluster = positioningCluster;
+    orientVerticalGlyph(state, shapedGlyph, codepoint, charIndex, glyph);
+    state.run.glyphs.push_back(glyph);
+    advanceVerticalPen(state, prepared, glyphIndex, codepoint, glyph);
+  }
+
+  void applyHorizontalKerning(SpanState& state, size_t glyphIndex,
+                              const TextBackend::ShapedGlyph& shapedGlyph, bool hasAbsoluteX,
+                              bool hasAbsoluteY, const KernAdjustment& crossKern) const {
+    if (hasAbsoluteX || hasAbsoluteY) {
+      return;
+    }
+    if (glyphIndex == 0 && crossKern.applied) {
+      state.penX += crossKern.value;
+      state.pathBoundaryKern = crossKern.value;
+    } else if (glyphIndex != 0) {
+      state.penX += shapedGlyph.xKern;
+    }
+  }
+
+  void applyHorizontalPosition(SpanState& state, const std::optional<Lengthd>& groupX,
+                               const std::optional<Lengthd>& groupY,
+                               const std::optional<Lengthd>& groupDx,
+                               const std::optional<Lengthd>& groupDy,
+                               const std::optional<double>& yOverride) const {
+    if (groupX) {
+      state.penX = groupX->toPixels(params_.viewBox, params_.fontMetrics, Lengthd::Extent::X);
+    }
+    if (groupDx) {
+      state.penX += groupDx->toPixels(params_.viewBox, params_.fontMetrics, Lengthd::Extent::X);
+    }
+    if (yOverride) {
+      state.penY = *yOverride;
+    } else if (groupY) {
+      state.penY = groupY->toPixels(params_.viewBox, params_.fontMetrics, Lengthd::Extent::Y) +
+                   state.defaultY;
+    }
+    if (groupDy) {
+      state.penY += groupDy->toPixels(params_.viewBox, params_.fontMetrics, Lengthd::Extent::Y);
+    }
+  }
+
+  TextGlyph makeHorizontalGlyph(const SpanState& state, const TextBackend::ShapedGlyph& shapedGlyph,
+                                uint32_t positioningCluster, unsigned int charIndex) const {
+    TextGlyph glyph;
+    glyph.glyphIndex = shapedGlyph.glyphIndex;
+    glyph.xPosition =
+        state.span->pathSpline ? shapedGlyph.xOffset : state.penX + shapedGlyph.xOffset;
+    glyph.yPosition =
+        state.span->pathSpline ? shapedGlyph.yOffset : state.penY + shapedGlyph.yOffset;
+    glyph.xAdvance = shapedGlyph.xAdvance;
+    glyph.yAdvance = shapedGlyph.yAdvance;
+    glyph.xKern = shapedGlyph.xKern;
+    glyph.fontSizeScale = shapedGlyph.fontSizeScale;
+    glyph.cluster = shapedGlyph.cluster;
+    glyph.positioningCluster = positioningCluster;
+    glyph.rotateDegrees = rotationFor(*state.span, charIndex, 0.0);
+    return glyph;
+  }
+
+  void rotateDetachedMark(const SpanState& state, bool hasAbsoluteX, bool hasAbsoluteY,
+                          TextGlyph& glyph) const {
+    if (state.span->pathSpline || hasAbsoluteX || hasAbsoluteY || glyph.rotateDegrees == 0.0 ||
+        state.run.glyphs.empty() || glyph.xAdvance != 0.0) {
+      return;
+    }
+    const auto& base = state.run.glyphs.back();
+    if (base.xAdvance == 0.0) {
+      return;
+    }
+    const double angle = glyph.rotateDegrees * MathConstants<double>::kDegToRad;
+    const double dx = glyph.xPosition - base.xPosition;
+    const double dy = glyph.yPosition - base.yPosition;
+    const double cosine = std::cos(angle);
+    const double sine = std::sin(angle);
+    glyph.xPosition = base.xPosition + dx * cosine - dy * sine;
+    glyph.yPosition = base.yPosition + dx * sine + dy * cosine;
+  }
+
+  void advanceHorizontalPen(SpanState& state, const PreparedSpanChunk& prepared, size_t glyphIndex,
+                            uint32_t codepoint, const TextBackend::ShapedGlyph& shapedGlyph) const {
+    state.penX += shapedGlyph.xAdvance;
+    if (!backend_.isCursive(codepoint)) {
+      state.penX += state.span->letterSpacingPx;
+    }
+    if (IsWordSpacingGroupEnd(prepared, glyphIndex, codepoint)) {
+      state.penX += state.span->wordSpacingPx;
+    }
+  }
+
+  void layoutHorizontalGlyph(SpanState& state, size_t chunkIndex, size_t glyphIndex,
+                             uint32_t codepoint, unsigned int charIndex,
+                             uint32_t positioningCluster, const std::optional<Lengthd>& groupX,
+                             const std::optional<Lengthd>& groupY,
+                             const std::optional<Lengthd>& groupDx,
+                             const std::optional<Lengthd>& groupDy,
+                             const std::optional<double>& yOverride,
+                             const KernAdjustment& crossKern) {
+    const PreparedSpanChunk& prepared = state.shaping.chunks[chunkIndex];
+    const auto& shapedGlyph = prepared.shaped.glyphs[glyphIndex];
+    const bool hasAbsoluteX = groupX.has_value();
+    const bool hasAbsoluteY = groupY.has_value();
+    recordChunkBoundary(state, chunkIndex, glyphIndex, hasAbsoluteX, hasAbsoluteY);
+    applyHorizontalKerning(state, glyphIndex, shapedGlyph, hasAbsoluteX, hasAbsoluteY, crossKern);
+    applyHorizontalPosition(state, groupX, groupY, groupDx, groupDy, yOverride);
+    TextGlyph glyph = makeHorizontalGlyph(state, shapedGlyph, positioningCluster, charIndex);
+    rotateDetachedMark(state, hasAbsoluteX, hasAbsoluteY, glyph);
+    state.run.glyphs.push_back(glyph);
+    advanceHorizontalPen(state, prepared, glyphIndex, codepoint, shapedGlyph);
+  }
+
+  void updateChunkPredecessor(SpanState& state, const PreparedSpanChunk& prepared) const {
+    if (prepared.shaped.glyphs.empty()) {
+      return;
+    }
+    size_t lastCluster = prepared.positioningClusters.back();
+    state.previousChunkCodepoint = decodeUtf8(state.text, lastCluster);
+    state.previousChunkFont = state.font;
+    state.previousChunkFontSizePx = state.fontSizePx;
+    state.previousChunkKerning = state.fontKerning;
+  }
+
+  void updateSpanPredecessor(const SpanState& state) {
+    previousSpanCodepoint_ = state.lastCodepoint;
+    previousSpanFont_ = state.font;
+    previousSpanFontSizePx_ = state.fontSizePx;
+    previousSpanKerning_ = state.fontKerning;
+    previousSpanFontVariant_ = state.span->fontVariant;
+    previousSpanPathSource_ = SpanKerningPathSource(*state.span);
+  }
+
+  void updateCurrentPen(const SpanState& state) {
+    currentPenX_ = state.penX;
+    currentPenY_ = state.penY;
+    previousDefaultY_ = state.defaultY;
+    haveCurrentPosition_ = true;
+  }
+
+  void stageTextPathSpan(SpanState& state) {
+    if (!firstPathRun_) {
+      firstPathRun_ = runs_.size();
+      previousTextPathSource_ = state.span->textPathSourceEntity;
+    }
+    StageTextPathRun(state.run, runs_.size(), *state.span, state.indexMappings, params_, backend_,
+                     state.defaultY, state.dxList, state.dyList, state.pathBoundaryKern,
+                     pathStaging_);
+    state.run.onPath = true;
+  }
+
+  void commitShapedSpan(SpanState& state) {
+    updateSpanPredecessor(state);
+    updateCurrentPen(state);
+    if (state.span->pathSpline) {
+      stageTextPathSpan(state);
+    }
+    runExtents_.push_back({state.runPenStartX, state.runPenStartY, state.penX, state.penY});
+    runs_.push_back(std::move(state.run));
+  }
+
+  bool isClosedTextPath(const Path::MeasuredPath& measuredPath, const TextSpan& span) const {
+    const double length = measuredPath.pathLength();
+    return measuredPath.valid() && std::isfinite(length) && length > 0.0 &&
+           IsSingleClosedTextPath(*span.pathSpline);
+  }
+
+  bool canRetainTextPath(const std::optional<size_t>& measuredBytes, bool clustersFit,
+                         size_t clusterBytes) const {
+    return measuredBytes && clustersFit && *measuredBytes <= kMaximumDeferredTextPathBytes &&
+           clusterBytes <= kMaximumDeferredTextPathBytes - *measuredBytes &&
+           deferredTextPathBytes_ <= kMaximumDeferredTextPathBytes - *measuredBytes - clusterBytes;
+  }
+
+  void retainTextPath(Path::MeasuredPath measuredPath, bool closed, size_t retainedBytes) {
+    deferredTextPathBytes_ += retainedBytes;
+    deferredTextPaths_.push_back(
+        {*firstPathRun_, std::move(measuredPath), closed, std::move(pathStaging_.clusters)});
+  }
+
+  void discardTextPathRuns() {
+    for (size_t runIndex = *firstPathRun_; runIndex < runs_.size(); ++runIndex) {
+      runs_[runIndex].glyphs.clear();
+    }
+  }
+
+  void resetTextPathState() {
+    pathStaging_.clusters.clear();
+    firstPathRun_.reset();
+    previousTextPathSource_ = entt::null;
+    pathStaging_.advance = 0.0;
+    pathStaging_.dy = 0.0;
+    previousSpanCodepoint_ = 0;
+  }
+
+  void finishTextPath() {
+    if (!firstPathRun_) {
+      return;
+    }
+    const TextSpan& firstSpan = text_.spans[*firstPathRun_];
+    Path::MeasuredPath measuredPath = firstSpan.pathSpline->measure();
+    const bool closed = isClosedTextPath(measuredPath, firstSpan);
+    postPathBoundaries_.push_back(
+        {runs_.size(), TextPathContinuation(measuredPath, closed, firstSpan.pathStartOffset)});
+    const auto measuredBytes = measuredPath.retainedBytes();
+    const bool clustersFit =
+        pathStaging_.clusters.capacity() <= kMaximumDeferredTextPathBytes / sizeof(TextPathCluster);
+    const size_t clusterBytes =
+        clustersFit ? pathStaging_.clusters.capacity() * sizeof(TextPathCluster) : 0;
+    if (canRetainTextPath(measuredBytes, clustersFit, clusterBytes)) {
+      retainTextPath(std::move(measuredPath), closed, *measuredBytes + clusterBytes);
+    } else {
+      discardTextPathRuns();
+    }
+    resetTextPathState();
+  }
+
+  void applyInlineWrap() {
+    if (runs_.empty() || !(params_.inlineSizePx > 0.0) || isVertical(params_.writingMode)) {
+      return;
+    }
+    const FontVMetrics metrics = backend_.fontVMetrics(baseFont_);
+    const float pixelHeightScale = backend_.scaleForPixelHeight(baseFont_, baseFontSizePx_);
+    double lineHeight = static_cast<double>(metrics.ascent - metrics.descent + metrics.lineGap) *
+                        static_cast<double>(pixelHeightScale);
+    if (!(lineHeight > 0.0)) {
+      lineHeight = static_cast<double>(baseFontSizePx_) * 1.2;
+    }
+    wrapped_ = applyInlineSizeWrap(runs_, text_, params_, params_.inlineSizePx, lineHeight);
+  }
+
+  void placeDeferredTextPaths() {
+    for (auto& path : deferredTextPaths_) {
+      placeTextPath(text_, params_, path, runs_);
+    }
+  }
+
+  void applyFinalAdjustments() {
+    if (runs_.empty() || wrapped_) {
+      return;
+    }
+    const bool vertical = isVertical(params_.writingMode);
+    const bool ownerHandled = ApplyTextLengthOwnerPlan(registry_, runs_, text_, runExtents_,
+                                                       params_, vertical, deferredTextPaths_);
+    if (!ownerHandled) {
+      applyTextLength(runs_, text_, runExtents_, params_, vertical, currentPenX_, currentPenY_);
+    }
+    placeDeferredTextPaths();
+    applyTextAnchor(runs_, chunkBoundaries_, text_, vertical);
+  }
+
+  Registry& registry_;
+  FontManager& fontManager_;
+  TextBackend& backend_;
+  const components::ComputedTextComponent& text_;
+  const TextLayoutParams& params_;
+  FontHandle baseFont_;
+  float baseFontSizePx_ = 0.0f;
+  std::vector<TextRun> runs_;
+  bool haveCurrentPosition_ = false;
+  double pendingDx_ = 0.0;
+  double pendingDy_ = 0.0;
+  double currentPenX_ = 0.0;
+  double currentPenY_ = 0.0;
+  double previousDefaultY_ = 0.0;
+  uint32_t previousSpanCodepoint_ = 0;
+  FontHandle previousSpanFont_;
+  float previousSpanFontSizePx_ = 0.0f;
+  bool previousSpanKerning_ = true;
+  FontVariant previousSpanFontVariant_ = FontVariant::Normal;
+  std::optional<Entity> previousSpanPathSource_;
+  Entity previousTextPathSource_ = entt::null;
+  std::optional<size_t> firstPathRun_;
+  TextPathStagingState pathStaging_;
+  std::vector<DeferredTextPath> deferredTextPaths_;
+  size_t deferredTextPathBytes_ = 0;
+  std::vector<PostTextPathBoundary> postPathBoundaries_;
+  std::vector<ChunkBoundary> chunkBoundaries_;
+  std::vector<RunPenExtent> runExtents_;
+  bool wrapped_ = false;
+};
+
+}  // namespace
+
 std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent& text,
                                         const TextLayoutParams& params) {
   ++layoutCallCount_;
-  // ── Resolve base font ─────────────────────────────────────────────────────────
-  FontHandle font = FindFirstAvailableFont(fontManager_, params.fontFamilies);
-  if (!font) {
-    font = fontManager_.fallbackFont();
-  }
-
-  const float fontSizePx = CheckedFontSizePx(
-      params.fontSize.toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::Mixed));
-
-  // ── Layout state ──────────────────────────────────────────────────────────────
-  std::vector<TextRun> runs;
-  bool haveCurrentPosition = false;
-  double pendingDx = 0.0;
-  double pendingDy = 0.0;
-  double currentPenX = 0.0;
-  double currentPenY = 0.0;
-  double prevDefaultY = 0.0;  // Previous span's baseline-shift offset, for undo/redo between spans.
-  uint32_t prevSpanLastCodepoint = 0;  // Last codepoint of previous span, for cross-span kerning.
-  FontHandle prevSpanFont;
-  float prevSpanFontSizePx = 0.0f;
-  bool prevSpanFontKerning = true;
-  FontVariant prevSpanFontVariant = FontVariant::Normal;
-  std::optional<Entity> prevSpanPathSource;
-  Entity prevTextPathSource = entt::null;
-  std::optional<size_t> firstPathRun;
-  TextPathStagingState pathStaging;
-  std::vector<PostTextPathBoundary> postPathBoundaries;
-
-  std::vector<ChunkBoundary> chunkBoundaries;
-  std::vector<RunPenExtent> runExtents;
-
-  auto finishTextPath = [&]() {
-    if (firstPathRun) {
-      const auto endpoint =
-          placeTextPath(registry_, text, params, *firstPathRun, runs, pathStaging.clusters);
-      postPathBoundaries.push_back({runs.size(), endpoint});
-      pathStaging.clusters.clear();
-      firstPathRun.reset();
-      prevTextPathSource = entt::null;
-      pathStaging.advance = 0.0;
-      pathStaging.dy = 0.0;
-      prevSpanLastCodepoint = 0;
-    }
-  };
-
-  // ── Per-span layout loop ──────────────────────────────────────────────────────
-  for (const auto& span : text.spans) {
-    if (firstPathRun && !span.hidden &&
-        (!span.pathSpline || span.textPathSourceEntity == entt::null ||
-         span.textPathSourceEntity != prevTextPathSource)) {
-      finishTextPath();
-    }
-    TextRun run;
-
-    // Hidden spans (display:none) are not rendered. Push empty run.
-    // Also hide textPath spans whose href could not be resolved (SVG spec §10.12.1).
-    if (span.hidden || span.textPathFailed) {
-      runExtents.push_back({0.0, 0.0, 0.0, 0.0});
-      runs.push_back(std::move(run));
-      continue;
-    }
-
-    prevSpanLastCodepoint =
-        KerningPredecessorForScope(prevSpanPathSource, span, prevSpanLastCodepoint);
-    const std::string_view spanText(span.text.data() + span.start, span.end - span.start);
-
-    // ── Per-span font resolution ────────────────────────────────────────────────
-    FontHandle spanFont = ResolveSpanFace(fontManager_, span, params.fontFamilies, font);
-
-    // Per-span font size: use the span's fontSize if set, otherwise the text element's.
-    const double specifiedSpanFontSizePx = ResolvedSpanFontSizePx(span, params);
-    float spanFontSizePx = CheckedFontSizePx(specifiedSpanFontSizePx);
-
-    const uint32_t spanTestCodepoint = firstNonAsciiCodepoint(spanText);
-    spanFont = selectBackendSafeFont(*backend_, fontManager_, spanFont);
-    spanFont = findCoverageFallbackFont(*backend_, fontManager_, spanFont, spanFontSizePx,
-                                        spanTestCodepoint);
-    const std::optional<double> fontSizeAdjust =
-        span.fontSizeAdjust.value_or(params.fontSizeAdjust);
-    spanFontSizePx = AdjustFontSize(*backend_, spanFont, spanFontSizePx, fontSizeAdjust);
-    run.font = spanFont;
-    run.usedFontSizePx = spanFontSizePx;
-
-    // Note: bitmap-only fonts (e.g., color emoji) are valid for the full backend.
-    // The simple backend can't handle them but produces empty shapeRun results,
-    // which the renderer gracefully skips.
-
-    const float spanScale = UsedSpanEmScale(*backend_, spanFont, spanFontSizePx);
-
-    // ── Per-span baseline-shift ─────────────────────────────────────────────────
-    const double spanBaselineShiftPx =
-        computeSpanBaselineShiftPx(*backend_, span, spanFont, spanScale, params);
-
-    // ── Baseline alignment (dominant-baseline / alignment-baseline) ────────────
-    // span.alignmentBaseline is the effective baseline resolved per span: a non-auto
-    // alignment-baseline override, otherwise the span's (inherited) dominant-baseline.
-    // Matching resvg, baseline alignment applies only to horizontal text.
-    double effectiveBaselineShift = 0.0;
-    if (!isVertical(params.writingMode) && span.alignmentBaseline != DominantBaseline::Auto) {
-      effectiveBaselineShift =
-          computeBaselineShift(span.alignmentBaseline, backend_->fontVMetrics(spanFont), spanScale);
-    }
-
-    // ── Initial pen position ────────────────────────────────────────────────────
-    const bool vertical = isVertical(params.writingMode);
-    double penX = haveCurrentPosition ? currentPenX : 0.0;
-    const double defaultY = effectiveBaselineShift - spanBaselineShiftPx;
-    // Always apply this span's baseline-shift. When transitioning from a previous span, undo
-    // the previous span's shift and apply the current span's shift so that baseline-shift is
-    // correctly scoped to each span (sub/super/length shifts don't leak to siblings).
-    double penY = haveCurrentPosition ? (currentPenY - prevDefaultY + defaultY) : defaultY;
-
-    // Apply span-start positioning from xList[0]/yList[0], then clear index 0
-    // so the glyph loop doesn't double-apply.
-    // Copy positioning lists so span-start can consume index 0 without
-    // double-applying in the glyph loop.
-    SmallVector<std::optional<Lengthd>, 1> xListLocal = span.xList;
-    SmallVector<std::optional<Lengthd>, 1> yListLocal = span.yList;
-    if (span.pathSpline && !vertical) {
-      yListLocal.clear();
-    }
-    SmallVector<std::optional<Lengthd>, 1> dxListLocal = span.dxList;
-    SmallVector<std::optional<Lengthd>, 1> dyListLocal = span.dyList;
-    if (span.startsNewChunk || !haveCurrentPosition) {
-      if (!xListLocal.empty() && xListLocal[0].has_value()) {
-        penX = xListLocal[0]->toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::X);
-        xListLocal[0].reset();
-      }
-      if (!dxListLocal.empty() && dxListLocal[0].has_value()) {
-        penX += dxListLocal[0]->toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::X);
-        dxListLocal[0].reset();
-      }
-      if (!yListLocal.empty() && yListLocal[0].has_value()) {
-        penY = yListLocal[0]->toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::Y) +
-               defaultY;
-        yListLocal[0].reset();
-      }
-      if (!dyListLocal.empty() && dyListLocal[0].has_value()) {
-        penY += dyListLocal[0]->toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::Y);
-        dyListLocal[0].reset();
-      }
-    }
-
-    // Record chunk boundary at span start if this span starts a new chunk.
-    // The text-anchor may be updated later if this span is empty (the first
-    // non-empty span's text-anchor is used for the chunk).
-    if (span.startsNewChunk || !haveCurrentPosition) {
-      chunkBoundaries.push_back({runs.size(), 0, span.textAnchor});
-    }
-
-    const bool spanFontKerning = span.fontKerning.value_or(params.fontKerning) != FontKerning::None;
-    // Propagate the span-start position even when the span produces no glyphs.
-    if (!HasAddressableSpanText(spanText, spanFontSizePx, specifiedSpanFontSizePx,
-                                fontSizeAdjust)) {
-      currentPenX = penX;
-      currentPenY = penY;
-      prevDefaultY = defaultY;
-      haveCurrentPosition = true;
-      UpdateUnshapedSpanPredecessor(spanText, run, spanFontKerning, prevSpanLastCodepoint,
-                                    prevSpanFont, prevSpanFontSizePx, prevSpanFontKerning);
-      runExtents.push_back({penX, penY, penX, penY});
-      runs.push_back(std::move(run));
-      continue;
-    }
-
-    // Capture pen position at the start of glyph layout for per-span textLength.
-    const double runPenStartX = penX;
-    const double runPenStartY = penY;
-
-    // ── Pre-scan span text to find chunk byte ranges ─────────────────────────────
-    const std::vector<ChunkRange> chunkRanges = findChunkRanges(spanText, xListLocal, yListLocal);
-
-    // ── Build byte→index mappings for the span text ──────────────────────────────
-    const ByteIndexMappings indexMappings = buildByteIndexMappings(spanText);
-    const auto& byteToCharIdx = indexMappings.byteToCharIdx;
-
-    const PreparedSpanShaping shaping =
-        PrepareSpanShaping(*backend_, run, spanText, chunkRanges, vertical, span.fontVariant,
-                           spanFontKerning, indexMappings);
-    dxListLocal =
-        ResolveGroupDisplacements(span.pathSpline ? span.dxList : dxListLocal, shaping.groupStarts,
-                                  Lengthd::Extent::X, params, pendingDx);
-    dyListLocal =
-        ResolveGroupDisplacements(span.pathSpline ? span.dyList : dyListLocal, shaping.groupStarts,
-                                  Lengthd::Extent::Y, params, pendingDy);
-
-    // ── Iterate the shaped chunks ───────────────────────────────────────────────
-    uint32_t lastCodepoint = 0;
-    double pathBoundaryKern = 0.0;
-
-    // Track last codepoint per chunk for cross-chunk kerning.
-    uint32_t prevChunkLastCodepoint = prevSpanLastCodepoint;
-    FontHandle prevChunkFont = prevSpanFont;
-    float prevChunkFontSizePx = prevSpanFontSizePx;
-    bool prevChunkFontKerning = prevSpanFontKerning;
-
-    for (size_t ci = 0; ci < chunkRanges.size(); ++ci) {
-      const auto& chunk = chunkRanges[ci];
-      const auto& prepared = shaping.chunks[ci];
-      const auto& shaped = prepared.shaped;
-      std::optional<unsigned int> previousPositionedGroup;
-
-      // ── RTL Y-override for multi-glyph chunks ─────────────────────────────────
-      // When a multi-glyph RTL chunk starts because of an absolute y position on the
-      // first DOM character, all glyphs in the chunk should share that y. HarfBuzz
-      // returns RTL glyphs in visual order (last DOM char first), so the engine would
-      // otherwise apply the explicit y to the wrong glyph. Pre-compute the override.
-      std::optional<double> chunkYOverride;
-      const bool isRTLChunk = shaped.glyphs.size() > 1 && prepared.positioningClusters.front() >
-                                                              prepared.positioningClusters.back();
-      if (isRTLChunk && ci > 0) {
-        // The chunk started at chunk.byteStart - check if that byte's charIdx has absolute y.
-        const unsigned int firstCharIdx =
-            chunk.byteStart < byteToCharIdx.size() ? byteToCharIdx[chunk.byteStart] : 0;
-        if (firstCharIdx < yListLocal.size() && yListLocal[firstCharIdx].has_value()) {
-          chunkYOverride = yListLocal[firstCharIdx]->toPixels(params.viewBox, params.fontMetrics,
-                                                              Lengthd::Extent::Y) +
-                           defaultY;
-        }
-      }
-
-      // ── Cross-chunk / cross-span kerning ──────────────────────────────────────
-      double crossKern = 0.0;
-      bool appliedCrossKern = false;
-      if (ci > 0 && prevChunkLastCodepoint != 0 && !shaped.glyphs.empty()) {
-        // Cross-chunk kerning (between chunks within the same span).
-        size_t firstByteIdx = chunk.byteStart;
-        const uint32_t firstCp = decodeUtf8(spanText, firstByteIdx);
-        crossKern =
-            spanFontKerning && prevChunkFontKerning
-                ? backend_->crossSpanKern(prevChunkFont, prevChunkFontSizePx, spanFont,
-                                          spanFontSizePx, prevChunkLastCodepoint, firstCp, vertical)
-                : 0.0;
-        appliedCrossKern = true;
-      } else if (ci == 0 && !StartsNewKerningChunk(span, vertical) && prevSpanLastCodepoint != 0 &&
-                 !shaped.glyphs.empty()) {
-        // Cross-span kerning for the first chunk.
-        size_t firstByteIdx = chunk.byteStart;
-        const uint32_t firstCp = decodeUtf8(spanText, firstByteIdx);
-        crossKern =
-            CompatibleKerningRuns(fontManager_, run, span.fontVariant, prevSpanFont,
-                                  prevSpanFontSizePx, prevSpanFontVariant, spanFontKerning,
-                                  prevSpanFontKerning)
-                ? backend_->crossSpanKern(prevSpanFont, prevSpanFontSizePx, spanFont,
-                                          spanFontSizePx, prevSpanLastCodepoint, firstCp, vertical)
-                : 0.0;
-        appliedCrossKern = true;
-      }
-
-      // ── Iterate shaped glyphs within this chunk ───────────────────────────────
-      // When per-char positioning exists, the backend returns glyphs in logical (DOM)
-      // order via forceLogicalOrder. Otherwise, glyphs are in visual order.
-      for (size_t gi = 0; gi < shaped.glyphs.size(); ++gi) {
-        const auto& sg = shaped.glyphs[gi];
-
-        // Classification and authored lists use the typographic positioning group.
-        const uint32_t positioningCluster = prepared.positioningClusters[gi];
-        size_t clusterPos = positioningCluster;
-        const uint32_t codepoint = decodeUtf8(spanText, clusterPos);
-
-        // Look up per-character indices from the byte→index mappings.
-        const unsigned int charIdx =
-            positioningCluster < byteToCharIdx.size() ? byteToCharIdx[positioningCluster] : 0;
-
-        const bool applyPosition = previousPositionedGroup != charIdx;
-        previousPositionedGroup = charIdx;
-        const auto groupX = PositionForGroup(xListLocal, charIdx, applyPosition);
-        const auto groupY = PositionForGroup(yListLocal, charIdx, applyPosition);
-        const auto groupDx = PositionForGroup(dxListLocal, charIdx, applyPosition);
-        const auto groupDy = PositionForGroup(dyListLocal, charIdx, applyPosition);
-
-        if (vertical) {
-          // ── Vertical mode ─────────────────────────────────────────────────────
-          // Primary advance is along Y, cross-axis is X.
-          const bool hasAbsoluteY = groupY.has_value();
-          const bool hasAbsoluteX_v = groupX.has_value();
-          if ((hasAbsoluteX_v || hasAbsoluteY) && !(ci == 0 && gi == 0)) {
-            chunkBoundaries.push_back({runs.size(), run.glyphs.size(), span.textAnchor});
-          }
-
-          // Per-character absolute Y (primary axis).
-          if (hasAbsoluteY) {
-            penY = groupY->toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::Y);
-          }
-
-          // Per-character dy (primary axis).
-          if (groupDy.has_value()) {
-            penY += groupDy->toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::Y);
-          }
-
-          // Per-character absolute X (cross-axis).
-          if (groupX.has_value()) {
-            penX = groupX->toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::X);
-          }
-
-          // Per-character dx (cross-axis).
-          if (groupDx.has_value()) {
-            penX += groupDx->toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::X);
-          }
-
-          // Apply kerning: cross-chunk/cross-span for first glyph, within-chunk for subsequent.
-          // Suppress when the glyph has absolute positioning.
-          if (!hasAbsoluteX_v && !hasAbsoluteY) {
-            if (gi == 0 && appliedCrossKern) {
-              penY += crossKern;
-            } else if (gi != 0) {
-              penY += sg.yKern;
-            }
-          }
-
-          TextGlyph glyph;
-          glyph.glyphIndex = sg.glyphIndex;
-          glyph.xPosition = penX;
-          glyph.yPosition = penY;
-          glyph.xAdvance = 0;
-          glyph.fontSizeScale = sg.fontSizeScale;
-          glyph.cluster = sg.cluster;
-          glyph.positioningCluster = positioningCluster;
-
-          // Vertical mode glyph handling: non-CJK glyphs get 90 degrees CW rotation.
-          if (codepoint < 0x2E80) {
-            // Sideways Latin glyph: rotated 90 degrees CW per SVG spec.
-            // The shapeRun always returns horizontal advances (LTR shaping).
-            // For sideways glyphs, use xAdvance as the vertical advance.
-            glyph.yAdvance = sg.xAdvance > 0 ? sg.xAdvance : sg.yAdvance;
-
-            // Apply kerning to vertical pen (sideways glyphs use horizontal metrics).
-            // The shapeRun already includes within-span kerning in xAdvance/yAdvance,
-            // but we need to handle the case where the absolute Y resets the pen.
-            // Note: within-span kerning is already baked into the shaped advances.
-
-            // Center on the central baseline: shift X so the midpoint between the scaled
-            // ascender and descender aligns with the text position. Use pixel-height scaling
-            // (ascent-to-descent = fontSize) so the center is proportionally correct.
-            const FontVMetrics vm = backend_->fontVMetrics(spanFont);
-            // Compute ascent-descent-based scale: pixelHeight / (ascent - descent).
-            // This differs from em-based scaling used elsewhere.
-            const double phScale = (vm.ascent != vm.descent) ? static_cast<double>(spanFontSizePx) /
-                                                                   (vm.ascent - vm.descent)
-                                                             : 0.0;
-            const double centralBaselineOffset =
-                (static_cast<double>(vm.ascent) + static_cast<double>(vm.descent)) * phScale / 2.0;
-            glyph.xPosition -= centralBaselineOffset;
-
-            double baseRotation = 90.0;
-            if (charIdx < span.rotateList.size()) {
-              glyph.rotateDegrees = span.rotateList[charIdx] + baseRotation;
-            } else if (!span.rotateList.empty()) {
-              glyph.rotateDegrees = span.rotateList.back() + baseRotation;
-            } else {
-              glyph.rotateDegrees = baseRotation;
-            }
-          } else {
-            // Upright CJK: use backend-provided vertical offsets and advance.
-            glyph.yAdvance = sg.yAdvance > 0 ? sg.yAdvance : spanFontSizePx;
-            glyph.xPosition = penX + sg.xOffset;
-            glyph.yPosition = penY + sg.yOffset;
-
-            if (charIdx < span.rotateList.size()) {
-              glyph.rotateDegrees = span.rotateList[charIdx];
-            } else if (!span.rotateList.empty()) {
-              glyph.rotateDegrees = span.rotateList.back();
-            }
-          }
-
-          run.glyphs.push_back(glyph);
-
-          penY += glyph.yAdvance;
-          // Letter-spacing: suppress for cursive scripts.
-          if (!backend_->isCursive(codepoint)) {
-            penY += span.letterSpacingPx;
-          }
-          // Word-spacing after U+0020 (space).
-          if (IsWordSpacingGroupEnd(prepared, gi, codepoint)) {
-            penY += span.wordSpacingPx;
-          }
-        } else {
-          // ── Horizontal mode ───────────────────────────────────────────────────
-          const bool hasAbsoluteX = groupX.has_value();
-          const bool hasAbsoluteY = groupY.has_value();
-
-          // A within-span absolute x or y starts a new text chunk (unless it's the
-          // first glyph of the span that already started a chunk via startsNewChunk).
-          if ((hasAbsoluteX || hasAbsoluteY) && !(ci == 0 && gi == 0)) {
-            chunkBoundaries.push_back({runs.size(), run.glyphs.size(), span.textAnchor});
-          }
-
-          // Apply kerning: cross-chunk/cross-span for first glyph, within-chunk for subsequent.
-          // Suppress when the glyph has absolute positioning (per SVG spec).
-          if (!hasAbsoluteX && !hasAbsoluteY) {
-            if (gi == 0 && appliedCrossKern) {
-              penX += crossKern;
-              pathBoundaryKern = crossKern;
-            } else if (gi != 0) {
-              penX += sg.xKern;
-            }
-          }
-
-          if (hasAbsoluteX) {
-            penX = groupX->toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::X);
-          }
-
-          // Per-character dx.
-          if (groupDx.has_value()) {
-            penX += groupDx->toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::X);
-          }
-
-          // Per-character absolute Y positioning.
-          // For multi-glyph RTL chunks, use the chunk Y override so all glyphs share
-          // the same baseline (matching old TextShaper's chunkYOverrides behavior).
-          if (chunkYOverride.has_value()) {
-            penY = *chunkYOverride;
-          } else if (hasAbsoluteY) {
-            penY =
-                groupY->toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::Y) + defaultY;
-          }
-
-          // Per-character dy.
-          if (groupDy.has_value()) {
-            penY += groupDy->toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::Y);
-          }
-
-          TextGlyph glyph;
-          glyph.glyphIndex = sg.glyphIndex;
-          // Path glyphs retain local shaping offsets until their cluster is placed.
-          glyph.xPosition = span.pathSpline ? sg.xOffset : penX + sg.xOffset;
-          glyph.yPosition = span.pathSpline ? sg.yOffset : penY + sg.yOffset;
-          glyph.xAdvance = sg.xAdvance;
-          glyph.yAdvance = sg.yAdvance;
-          glyph.xKern = sg.xKern;
-          glyph.fontSizeScale = sg.fontSizeScale;
-          glyph.cluster = sg.cluster;
-          glyph.positioningCluster = positioningCluster;
-
-          // Per-character rotation (last value repeats per SVG spec).
-          if (charIdx < span.rotateList.size()) {
-            glyph.rotateDegrees = span.rotateList[charIdx];
-          } else if (!span.rotateList.empty()) {
-            glyph.rotateDegrees = span.rotateList.back();
-          }
-
-          // An absolute position gives a mark its own origin instead of the preceding base.
-          if (!span.pathSpline && !hasAbsoluteX && !hasAbsoluteY && glyph.rotateDegrees != 0.0 &&
-              !run.glyphs.empty() && glyph.xAdvance == 0.0) {
-            const auto& base = run.glyphs.back();
-            if (base.xAdvance != 0.0) {
-              const double angle = glyph.rotateDegrees * MathConstants<double>::kDegToRad;
-              const double dx = glyph.xPosition - base.xPosition;
-              const double dy = glyph.yPosition - base.yPosition;
-              const double cosA = std::cos(angle);
-              const double sinA = std::sin(angle);
-              glyph.xPosition = base.xPosition + dx * cosA - dy * sinA;
-              glyph.yPosition = base.yPosition + dx * sinA + dy * cosA;
-            }
-          }
-
-          run.glyphs.push_back(glyph);
-
-          penX += sg.xAdvance;
-
-          // CSS letter-spacing: extra space after every character, suppressed for cursive scripts.
-          if (!backend_->isCursive(codepoint)) {
-            penX += span.letterSpacingPx;
-          }
-          // CSS word-spacing: extra space after U+0020 (space) characters.
-          if (IsWordSpacingGroupEnd(prepared, gi, codepoint)) {
-            penX += span.wordSpacingPx;
-          }
-        }
-
-        lastCodepoint = codepoint;
-      }
-
-      // Track last codepoint of this chunk for cross-chunk kerning in the next chunk.
-      if (!shaped.glyphs.empty()) {
-        size_t lastCluster = prepared.positioningClusters.back();
-        prevChunkLastCodepoint = decodeUtf8(spanText, lastCluster);
-        prevChunkFont = spanFont;
-        prevChunkFontSizePx = spanFontSizePx;
-        prevChunkFontKerning = spanFontKerning;
-      }
-    }
-
-    prevSpanLastCodepoint = lastCodepoint;
-    prevSpanFont = spanFont;
-    prevSpanFontSizePx = spanFontSizePx;
-    prevSpanFontKerning = spanFontKerning;
-    prevSpanFontVariant = span.fontVariant;
-    prevSpanPathSource = SpanKerningPathSource(span);
-
-    // Keep the ordinary pen independent of later path projection and continuation offsets.
-    currentPenX = penX;
-    currentPenY = penY;
-    prevDefaultY = defaultY;
-    haveCurrentPosition = true;
-
-    // Stage glyph clusters before placement of the complete textPath.
-    if (span.pathSpline) {
-      if (!firstPathRun) {
-        firstPathRun = runs.size();
-        prevTextPathSource = span.textPathSourceEntity;
-      }
-      StageTextPathRun(run, runs.size(), span, indexMappings, params, *backend_, defaultY,
-                       dxListLocal, dyListLocal, pathBoundaryKern, pathStaging);
-      run.onPath = true;
-      runExtents.push_back({runPenStartX, runPenStartY, penX, penY});
-      runs.push_back(std::move(run));
-      continue;
-    }
-
-    runExtents.push_back({runPenStartX, runPenStartY, penX, penY});
-    runs.push_back(std::move(run));
-  }
-
-  finishTextPath();
-
-  // ── inline-size auto-flow (SVG2) ──────────────────────────────────────────────
-  // Wrapping is supported only for horizontal writing modes (documented limitation). When it
-  // applies it rewrites glyph positions into stacked lines and performs per-line text-anchor,
-  // so the global text-anchor / textLength passes are skipped.
-  bool wrapped = false;
-  if (!runs.empty() && params.inlineSizePx > 0.0 && !isVertical(params.writingMode)) {
-    // "normal" line-height derived from the base font's vertical metrics.
-    const FontVMetrics vm = backend_->fontVMetrics(font);
-    const float phScale = backend_->scaleForPixelHeight(font, fontSizePx);
-    double lineHeightPx =
-        static_cast<double>(vm.ascent - vm.descent + vm.lineGap) * static_cast<double>(phScale);
-    if (!(lineHeightPx > 0.0)) {
-      lineHeightPx = static_cast<double>(fontSizePx) * 1.2;
-    }
-    wrapped = applyInlineSizeWrap(runs, text, params, params.inlineSizePx, lineHeightPx);
-  }
-
-  // ── textLength and text-anchor adjustments ────────────────────────────────────
-  if (!runs.empty() && !wrapped) {
-    const bool vertical = isVertical(params.writingMode);
-    applyTextLength(runs, text, runExtents, params, vertical, currentPenX, currentPenY);
-    applyTextAnchor(runs, chunkBoundaries, text, vertical);
-  }
-  ApplyPostTextPathTranslations(runs, text, postPathBoundaries);
-
-  return runs;
+  return TextLayoutInvocation(registry_, fontManager_, *backend_, text, params).run();
 }
 
 FontVMetrics TextEngine::fontVMetrics(FontHandle font) const {

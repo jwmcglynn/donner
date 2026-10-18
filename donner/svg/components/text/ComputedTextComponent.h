@@ -3,6 +3,7 @@
 
 #include <entt/entity/entity.hpp>  // entt::entity, entt::null
 #include <optional>
+#include <unordered_map>
 
 #include "donner/base/Length.h"
 #include "donner/base/Path.h"
@@ -39,6 +40,11 @@ namespace donner::svg::components {
  *       public DOM API.
  */
 struct ComputedTextComponent {
+  struct OwnerSpanRange {
+    size_t begin = 0;
+    size_t end = 0;
+  };
+
   /**
    * A contiguous slice of text with fully resolved layout attributes.
    *
@@ -253,6 +259,10 @@ struct ComputedTextComponent {
 
   // Computed spans with positioning data for rendering.
   SmallVector<TextSpan, 1> spans;
+  /// One occurrence-resolved font size per authored text owner.
+  std::unordered_map<entt::entity, Lengthd> textLengthOwnerFontSizes;
+  /// Contiguous computed-span range covered by each authored text owner.
+  std::unordered_map<entt::entity, OwnerSpanRange> ownerSpanRanges;
 };
 
 }  // namespace donner::svg::components

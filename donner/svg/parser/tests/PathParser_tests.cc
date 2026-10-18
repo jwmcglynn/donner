@@ -841,4 +841,52 @@ TEST(PathToSVGPathDataRoundTrip, ArcDecomposedToCubic) {
   ExpectRoundTrip("M 80 150 A 60 40 0 0 0 220 150");
 }
 
+TEST(PathParser, CommandListPreservesAuthoredParametersAndImplicitCommands) {
+  auto result = PathParser::ParseCommands(
+      "m1 2 3 4h5v6c1 2 3 4 5 6s7 8 9 10q11 12 13 14t15 16a7 8 9 01 10 11z");
+  ASSERT_THAT(result, NoParseError());
+  std::vector<std::tuple<char, std::uint32_t, int>> commands;
+  for (const auto& command : result.result().commands) {
+    commands.emplace_back(command.letter, command.parameterOffset, command.parameterCount);
+  }
+  EXPECT_THAT(commands,
+              ElementsAre(std::tuple{'m', 0U, 2}, std::tuple{'l', 2U, 2}, std::tuple{'h', 4U, 1},
+                          std::tuple{'v', 5U, 1}, std::tuple{'c', 6U, 6}, std::tuple{'s', 12U, 4},
+                          std::tuple{'q', 16U, 4}, std::tuple{'t', 20U, 2}, std::tuple{'a', 22U, 7},
+                          std::tuple{'Z', 29U, 0}));
+  EXPECT_THAT(result.result().parameters,
+              ElementsAre(1, 2, 3, 4, 5, 6, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16,
+                          7, 8, 9, 0, 1, 10, 11));
+}
+
+TEST(PathParser, CommandListDiscardsAnIncompleteCommand) {
+  auto result = PathParser::ParseCommands("M1 2L3 4C5 6 7");
+  ASSERT_THAT(result, testing::Not(NoParseError()));
+  ASSERT_THAT(result.hasResult(), testing::IsTrue());
+  EXPECT_THAT(result.result().parameters, ElementsAre(1, 2, 3, 4));
+  ASSERT_EQ(result.result().commands.size(), 2U);
+  EXPECT_EQ(result.result().commands.back().letter, 'L');
+}
+
+TEST(PathParser, CommandListCapsCommandsBeforeAppending) {
+  auto result = PathParser::ParseCommands("M0 0" + std::string(PathParser::kMaximumCommands, 'Z'));
+  ASSERT_THAT(result, ParseErrorIs("Path command limit exceeded"));
+  ASSERT_THAT(result.hasResult(), testing::IsTrue());
+  EXPECT_EQ(result.result().commands.size(), PathParser::kMaximumCommands);
+  EXPECT_THAT(result.result().parameters, ElementsAre(0, 0));
+}
+
+TEST(PathParser, CommandListCapsScalarStorageBeforeAppending) {
+  std::string source = "M0 0";
+  const std::size_t curves = (PathParser::kMaximumParameters - 2) / 6;
+  for (std::size_t i = 0; i <= curves; ++i) {
+    source += "c0 0 0 0 0 0";
+  }
+  auto result = PathParser::ParseCommands(source);
+  ASSERT_THAT(result, ParseErrorIs("Path parameter limit exceeded"));
+  ASSERT_THAT(result.hasResult(), testing::IsTrue());
+  EXPECT_EQ(result.result().commands.size(), curves + 1);
+  EXPECT_EQ(result.result().parameters.size(), curves * 6 + 2);
+}
+
 }  // namespace donner::svg::parser

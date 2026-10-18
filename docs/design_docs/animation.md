@@ -1,608 +1,330 @@
 # Design: SVG Animation
 
-**Status:** Design
-**Author:** Claude Opus 4.6
+**Status:** Implementing. Declarative timing, interpolation, motion paths and editor Preview are
+implemented on the animation feature branch. Qualification and the remaining integration checklist
+below gate completion.
+**Author:** Unknown
+**Model:** Not recorded
+**Drafted by:** Claude Opus 4.6
 **Created:** 2026-03-12
-**Tracking:** v0.4 milestone ([ProjectRoadmap](../ProjectRoadmap.md))
-
-## Summary
-
-Implement SVG animation support aligned with the
-[SVG Animations Level 2](https://svgwg.org/specs/animations/) specification (separated from
-SVG2 core into its own module). This covers the four animation elements (`<animate>`, `<set>`,
-`<animateTransform>`, `<animateMotion>`), the SMIL-derived timing model, value interpolation
-with multiple calcModes, and the animation sandwich composition model.
-
-Donner is primarily a static/offline SVG renderer, so the implementation focuses on
-**time-based evaluation**: given a document time `t`, compute the presentation value of every
-animated attribute. Interactive event-based triggers (click, mouseover) are deferred to a
-future interactive milestone.
+**Tracking:** [#1239](https://github.com/jwmcglynn/donner/issues/1239),
+[#1215](https://github.com/jwmcglynn/donner/issues/1215)
 
 ## Goals
 
-- Parse and evaluate all four SVG animation elements.
-- Implement the SMIL timing model: `begin`/`dur`/`end`/`repeatCount`/`repeatDur`/`fill`/`restart`.
-- Support all calcModes: `discrete`, `linear`, `paced`, `spline`.
-- Support `keyTimes`, `keySplines`, `values`, `from`/`to`/`by` value specification.
-- Implement the animation sandwich model for multi-animation composition.
-- Support `additive` and `accumulate` semantics.
-- Support syncbase timing (`id.begin`, `id.end` references).
-- Provide a public API: `document.setTime(t)` to advance the document clock.
-- Integrate with existing ECS invalidation so animated properties trigger re-render.
-- Pass targeted animation tests from the SVG test suite.
+Support declarative SVG animation with a host-controlled document clock and an interactive editor
+preview. Animation must leave authored SVG, element identity, and undo history intact. The editor
+should play at 60 fps when rendering capacity permits, with input targeted to the displayed frame.
 
-## Non-Goals
+The specification baseline is the [SVG Animations Level 2 Editor's Draft, 14 September
+2025](https://svgwg.org/specs/animations/), together with its normative SMIL timing definitions.
+The intended profile includes `<animate>`, `<set>`, `<animateTransform>`, `<animateMotion>`, and
+`<mpath>`, clock/event/syncbase/repeat timing, keyframe interpolation, and additive composition.
 
-- Interactive event-based triggers (`click`, `mouseover`, `accessKey`, `wallclock`).
-  These require an event dispatch system not yet in Donner.
-- CSS Animations / CSS Transitions / Web Animations API integration.
-  These are separate specs with different semantics; they can layer on top later.
-- `<animateColor>` (removed in SVG2, redundant with `<animate>` targeting color properties).
-- Real-time playback loop or frame scheduling. The caller controls time advancement.
-- GPU-accelerated animation (compositing-layer promotion for transform/opacity).
-- Animation Elements 1.0 (future W3C spec with `<par>`/`<seq>` containers — still early-stage).
+## Non-goals and explicit profile boundaries
 
-## Background
+CSS Animations, CSS Transitions, the Web Animations API, JavaScript execution, and a visual timeline
+or keyframe-authoring interface are separate features. Host events do not execute script handlers.
 
-### Specification Landscape
+`<discard>` is outside this draft's four-element animation model. The older issue wording includes
+it, but this implementation does not silently add irreversible document removal to presentation
+sampling. It requires a separately specified document-lifetime extension.
 
-SVG2 moved animation out of the core spec into **SVG Animations Level 2** (Editor's Draft).
-The animation model is SMIL-derived but self-contained — SVG Animations fully defines its
-features without normative reference back to SMIL Animation. All major browsers support SVG
-SMIL animation (97%+ global coverage), and Chrome reversed its 2015 deprecation decision.
-
-Four animation elements are defined:
-
-| Element              | Purpose                                                 | Default calcMode  |
-| -------------------- | ------------------------------------------------------- | ----------------- |
-| `<animate>`          | Animate scalar attributes/properties with interpolation | `linear`          |
-| `<set>`              | Set attribute to discrete value for a duration          | `discrete` (only) |
-| `<animateTransform>` | Animate `transform` attribute by type                   | `linear`          |
-| `<animateMotion>`    | Move element along a path                               | `paced`           |
-
-`<mpath>` is a child of `<animateMotion>` referencing a `<path>` element as the motion source.
-
-### Timing Model
-
-The timing model determines **when** an animation is active and **where** within its duration
-the current time falls.
-
-```
-Document time (t)
-    │
-    ▼
-┌─────────────────────────────────────────────────────────┐
-│  begin          active duration                    end  │
-│   ├──────────────────────────────────────────────────┤  │
-│   │  simple dur  │  simple dur  │  simple dur (rep) │  │
-│   ├──────────────┼──────────────┼───────────────────┤  │
-│   │              │              │         ▲ freeze   │  │
-│   └──────────────┴──────────────┴─────────┘─────────┘  │
-└─────────────────────────────────────────────────────────┘
-```
-
-**Clock values**: `HH:MM:SS.frac`, `MM:SS.frac`, or `<number><metric>` (h/min/s/ms).
-Default metric is seconds.
-
-**Active duration** computation:
-
-1. Simple duration from `dur` (or `indefinite`)
-2. Repeat duration = `min(dur × repeatCount, repeatDur)`
-3. Constrain with `end` attribute
-4. Clamp to `[min, max]` bounds
-
-**`begin` value types** (semicolon-separated list):
-
-- Offset: `2s`, `-1s` (relative to document start)
-- Syncbase: `other.begin+0.5s`, `other.end` (synchronized to another animation)
-- Repeat: `other.repeat(3)` (triggered on Nth repeat of another animation)
-- `indefinite` (begin only via `beginElement()` API)
-- Event/accessKey/wallclock (deferred — requires interactive event system)
-
-**`fill`**: `remove` (revert to base value when done) or `freeze` (persist final value).
-
-**`restart`**: `always` | `whenNotActive` | `never`.
-
-### Value Interpolation
-
-Values are specified via `from`/`to`/`by` pairs or a `values` list (which takes precedence):
-
-| Specification | Meaning                                                     |
-| ------------- | ----------------------------------------------------------- |
-| `from`/`to`   | Interpolate from start to end                               |
-| `from`/`by`   | Interpolate from start to start+offset                      |
-| `to` only     | "To-animation": interpolate from underlying value to target |
-| `by` only     | "By-animation": add offset to underlying value              |
-| `values`      | Keyframe list (semicolon-separated)                         |
-
-**calcMode** controls interpolation between keyframes:
-
-- **`discrete`**: Jump between values at keyTime boundaries. Auto-selected for
-  non-interpolable types (strings, enums).
-- **`linear`**: Linear interpolation. Default for `<animate>`, `<animateTransform>`.
-- **`paced`**: Constant velocity. Requires a distance function. Default for `<animateMotion>`.
-  `keyTimes` is ignored.
-- **`spline`**: Cubic Bezier easing per interval, controlled by `keySplines` (x1 y1 x2 y2
-  control points in [0,1]).
-
-**`keyTimes`**: Maps `values` entries to positions in [0,1]. First must be 0, last must be 1
-(for linear/spline). Count must match `values` count.
-
-**`keySplines`**: One set of Bezier control points per interval (count = keyTimes count - 1).
-Only used when `calcMode="spline"`.
-
-### Distance Functions (for paced mode)
-
-| Type          | Distance                |
-| ------------- | ----------------------- |
-| Number/length | `\|a - b\|`             |
-| Color (RGB)   | `sqrt(dR² + dG² + dB²)` |
-| translate     | `sqrt(dx² + dy²)`       |
-| scale         | `sqrt(dsx² + dsy²)`     |
-| rotate/skew   | `\|dAngle\|`            |
-
-Types without a defined distance function fall back to `discrete`.
-
-### Animation Sandwich Model
-
-When multiple animations target the same attribute, they compose via a layered sandwich:
-
-```
-┌─────────────────────────┐
-│  Animation C (newest)   │  ← highest priority
-├─────────────────────────┤
-│  Animation B            │
-├─────────────────────────┤
-│  Animation A (oldest)   │
-├─────────────────────────┤
-│  Base value (DOM/CSS)   │  ← lowest priority
-└─────────────────────────┘
-```
-
-- `additive="replace"`: Animation overrides all lower layers.
-- `additive="sum"`: Animation adds to the result of all layers below.
-- Frozen animations remain in the sandwich at their final value.
-- Restarting an animation moves it to the top of the priority stack.
-- The presentation value = result at the top after all layers compose.
-
-### `<animateTransform>` Type Dispatch
-
-The `type` attribute selects the transform function:
-
-| type        | values format   | result                  |
-| ----------- | --------------- | ----------------------- |
-| `translate` | `tx [ty]`       | `translate(tx, ty)`     |
-| `scale`     | `sx [sy]`       | `scale(sx, sy)`         |
-| `rotate`    | `angle [cx cy]` | `rotate(angle, cx, cy)` |
-| `skewX`     | `angle`         | `skewX(angle)`          |
-| `skewY`     | `angle`         | `skewY(angle)`          |
-
-By default, `<animateTransform>` replaces the entire `transform` attribute. With
-`additive="sum"`, it post-multiplies with the underlying transform.
-
-### `<animateMotion>` Supplemental Transform
-
-`<animateMotion>` creates a **supplemental transform matrix** applied on top of the element's
-existing `transform`. The motion path is specified via:
-
-- `path` attribute (SVG path data)
-- `<mpath>` child element (reference to a `<path>`)
-- `from`/`to`/`by` as point pairs (implicit linear path)
-- `values` as point list
-
-The `rotate` attribute controls orientation along the path:
-
-- `auto`: tangent direction
-- `auto-reverse`: tangent + 180°
-- `<number>`: fixed angle in degrees
-
-`keyPoints` (semicolon-separated [0,1] values) maps keyTimes to progress along the path.
-
-### Animatable Attributes
-
-Key categories:
-
-**Geometry**: `cx`, `cy`, `r`, `rx`, `ry`, `x`, `y`, `x1`, `y1`, `x2`, `y2`, `width`,
-`height`, `d`, `points`, `pathLength`
-
-**Transform**: `transform`, `gradientTransform`, `patternTransform`
-
-**Presentation**: `opacity`, `fill`, `fill-opacity`, `stroke`, `stroke-width`,
-`stroke-opacity`, `stroke-dasharray`, `stroke-dashoffset`, `color`, `visibility`, `display`,
-`clip-path`, `filter`, `font-size`
-
-**Paint server**: `offset`, `fx`, `fy`, `spreadMethod`, `stop-color`, `stop-opacity`
-
-**Filter**: `flood-color`, `flood-opacity`, `lighting-color`, `stdDeviation`
-
-**Path `d` animation**: Start and end paths must have identical command structure (same number
-and types of commands). Interpolation is per-coordinate. Mismatched structures fall back to
-discrete.
+Access-key and wall-clock expressions remain unresolved: this host-controlled profile has no ambient
+keyboard binding or wall-clock source. A host can deliver explicit named events and programmatic
+begin/end instances. Resource limits are implementation limits, not claims of unrestricted SMIL
+conformance. Undefined to-only transform behavior follows the existing constant-value policy;
+authors should use from/to, from/by, by, or values for portable transform animation.
 
 ## Architecture
 
-### ECS Integration
-
-Animation integrates into the existing ECS via new components and a new `AnimationSystem`:
-
-```
-┌──────────────────────────────────────────────────────────────────┐
-│                         Registry                                 │
-│                                                                  │
-│  Target entity                  Animation entity                 │
-│  ┌─────────────────┐           ┌──────────────────────────────┐ │
-│  │ ShapeComponent   │◄─────────│ AnimationTimingComponent     │ │
-│  │ StyleComponent   │  targets  │   begin, dur, end, repeat   │ │
-│  │ LayoutComponent  │          │   fill, restart, min, max    │ │
-│  │                  │          ├──────────────────────────────┤ │
-│  │ AnimatedValues   │          │ AnimationValueComponent      │ │
-│  │   sandwichStack  │          │   from, to, by, values      │ │
-│  │   overrideMap    │          │   calcMode, keyTimes         │ │
-│  └─────────────────┘          │   keySplines, additive       │ │
-│                                │   accumulate, attributeName  │ │
-│                                ├──────────────────────────────┤ │
-│                                │ AnimationStateComponent      │ │
-│                                │   activeInterval, phase      │ │
-│                                │   currentIteration           │ │
-│                                │   simpleDuration             │ │
-│                                │   activeDuration             │ │
-│                                └──────────────────────────────┘ │
-│                                                                  │
-│  AnimateTransform-specific:                                      │
-│  ┌────────────────────────────┐                                  │
-│  │ AnimateTransformComponent  │                                  │
-│  │   type (translate/scale/…) │                                  │
-│  └────────────────────────────┘                                  │
-│                                                                  │
-│  AnimateMotion-specific:                                         │
-│  ┌────────────────────────────┐                                  │
-│  │ AnimateMotionComponent     │                                  │
-│  │   path, rotate, keyPoints  │                                  │
-│  │   mpathRef                 │                                  │
-│  └────────────────────────────┘                                  │
-└──────────────────────────────────────────────────────────────────┘
-```
-
-Animation elements are parsed as child entities of their target element (following SVG DOM
-structure). Each animation element becomes an entity with timing, value, and state components.
-
-### AnimationSystem
-
-`AnimationSystem` is a new ECS system that runs before `LayoutSystem` and `StyleSystem` during
-rendering. Given a document time `t`:
-
-1. **Resolve timing**: For each animation entity, compute whether it is in the `before`,
-   `active`, or `after` phase. Resolve syncbase dependencies (topological sort of
-   begin/end references).
-2. **Compute values**: For active animations, interpolate the current value based on
-   `calcMode`, `keyTimes`, `keySplines`, and the current position within the active duration.
-3. **Compose sandwich**: For each animated attribute on each target, layer all contributing
-   animations in activation order, applying `additive`/`accumulate` semantics.
-4. **Apply overrides**: Write the final presentation values into an `AnimatedValuesComponent`
-   on the target entity. The style/layout systems read from this override map instead of the
-   base attribute when present.
-5. **Invalidate**: Mark affected entities dirty so the renderer reprocesses them.
-
-### Animated Property Storage
-
-Each target entity that has active animations gets an `AnimatedValuesComponent` containing:
-
-```cpp
-struct AnimatedValuesComponent {
-  /// Overridden presentation values keyed by property name.
-  /// The style system checks this map before falling back to base values.
-  std::unordered_map<std::string, AnimatedValue> overrides;
-
-  /// The animation sandwich stacks, one per animated attribute.
-  /// Used to compose multiple animations on the same property.
-  std::unordered_map<std::string, SandwichStack> sandwiches;
-
-  /// Supplemental transform from <animateMotion> (post-multiplied).
-  std::optional<Transformd> motionTransform;
-};
-```
-
-`AnimatedValue` is a variant over the supported value types:
-
-```cpp
-using AnimatedValue = std::variant<
-    double,                    // numbers, lengths, angles
-    Lengthd,                   // length with unit
-    Color,                     // colors (interpolated in sRGB)
-    Transformd,                // transform matrices
-    PathSpline,                // path d attribute
-    std::string,               // discrete string values (enums, URLs)
-    std::vector<double>        // number lists (dasharray, points, viewBox)
->;
-```
-
-### Value Type Interpolation
-
-Each `AnimatedValue` type needs an interpolation function:
-
-```cpp
-AnimatedValue interpolate(const AnimatedValue& a, const AnimatedValue& b, double t);
-AnimatedValue add(const AnimatedValue& a, const AnimatedValue& b);  // for additive
-double distance(const AnimatedValue& a, const AnimatedValue& b);     // for paced
-```
-
-- **Numbers/lengths**: Linear `a + (b - a) * t`.
-- **Colors**: Component-wise linear in sRGB. `Color(lerp(r), lerp(g), lerp(b), lerp(a))`.
-- **Transforms**: Decompose to translate/scale/rotate/skew, interpolate components, recompose.
-  For `<animateTransform>`, interpolation is per the declared `type` (no decomposition needed).
-- **Path `d`**: Validate structural compatibility (same command sequence), interpolate
-  per-coordinate. Fall back to discrete on mismatch.
-- **Strings/enums**: Discrete only (no interpolation).
-- **Number lists**: Element-wise linear interpolation. Lists must have same length.
-
-### Timing Resolution with Syncbase Dependencies
-
-Syncbase values create dependencies between animations:
-
-```xml
-<animate id="a" begin="0s" dur="2s" .../>
-<animate id="b" begin="a.end" dur="1s" .../>
-<animate id="c" begin="b.begin+0.5s" dur="1s" .../>
-```
-
-These form a DAG (directed acyclic graph). Resolution:
-
-1. Build dependency graph from `begin`/`end` syncbase references.
-2. Topological sort (detect cycles — cyclic dependencies are an error per spec).
-3. Resolve in dependency order: compute each animation's active interval, then propagate
-   to dependents.
-
-For the MVP, a simple iterative fixed-point approach works: resolve all non-dependent
-animations first, then iterate until all syncbase references stabilize.
-
-### Integration Points
-
-**Parser** (`SVGParser`): Add element handlers for `<animate>`, `<set>`, `<animateTransform>`,
-`<animateMotion>`, `<mpath>`. Parse timing attributes, value attributes, and element-specific
-attributes. Create animation entities as children of target elements.
-
-**ElementType**: Add `Animate`, `Set`, `AnimateTransform`, `AnimateMotion`, `MPath`.
-
-**Style resolution**: `ComputedStyleComponent` checks `AnimatedValuesComponent::overrides`
-before base attribute values. Animated values take precedence over attribute values but NOT
-over inline `style` with `!important`.
-
-**Transform computation**: `LayoutSystem` applies `AnimatedValuesComponent::motionTransform`
-as a post-multiply on the element's computed transform.
-
-**RendererDriver**: Add `setDocumentTime(double seconds)` to the public API. This triggers
-`AnimationSystem::advance(t)` before the render traversal.
-
-## Implementation Plan
-
-### Phase 1: Timing Model and `<set>` Element ✅
-
-Core timing infrastructure with the simplest animation element.
-
-- [x] Add `ElementType::Animate`, `Set`, `AnimateTransform`, `AnimateMotion`
-- [x] Parse `<set>` element: `attributeName`, `to`, timing attributes
-- [x] Implement `AnimationTimingComponent` with clock value parsing
-- [x] Implement timing resolution: compute active interval from `begin`/`dur`/`end`
-- [x] Implement `AnimationStateComponent` phase tracking (`before`/`active`/`after`)
-- [x] Implement `AnimatedValuesComponent` with single-animation override
-- [x] Integrate with style resolution: check overrides before base values
-- [x] Add `Document::setTime(double)` public API
-- [x] Tests: `<set>` targeting `fill`, `visibility`, `opacity` at various times
-
-### Phase 2: `<animate>` with Linear Interpolation ✅
-
-- [x] Parse `<animate>` element: `from`/`to`/`by`/`values`, `calcMode`, `keyTimes`
-- [x] Implement `AnimateValueComponent` with value list parsing
-- [x] Implement interpolation for numbers
-- [x] Implement `calcMode="linear"` with `keyTimes`
-- [x] Implement `calcMode="discrete"`
-- [x] Implement `repeatCount`/`repeatDur` with correct active duration computation
-- [x] Implement `fill="freeze"` vs `fill="remove"`
-- [x] Tests: 16 tests covering parsing, linear, discrete, from/by, freeze, repeat, keyTimes, href
-
-### Phase 3: Spline and Paced Interpolation ✅
-
-- [x] Implement `calcMode="spline"` with `keySplines` cubic Bezier evaluation (Newton-Raphson)
-- [x] Implement `calcMode="paced"` with cumulative distance functions
-- [x] Implement `min`/`max` active duration constraints
-- [x] Tests: 6 tests — spline ease-in-out, multi-interval spline, paced even/uneven
-
-### Phase 4: Animation Sandwich Model ✅
-
-- [x] Implement document-order composition (entities sorted by ID)
-- [x] Implement `additive="sum"` composition (numeric addition)
-- [x] Implement `accumulate="sum"` across repeat iterations
-- [x] Implement activation-order priority (last-wins for replace mode)
-- [x] Implement frozen animation persistence in sandwich
-- [x] Tests: 5 tests — last-wins, additive sum, accumulate sum, set interaction, frozen
-
-### Phase 5: `<animateTransform>` ✅
-
-- [x] Parse `<animateTransform>`: `type` attribute (translate/scale/rotate/skewX/skewY)
-- [x] Implement per-type value parsing (1-3 numbers depending on type)
-- [x] Implement per-type interpolation
-- [x] Implement additive transform composition (string concatenation)
-- [x] Tests: 10 tests — parsing, interpolation for rotate/translate/scale/skewX, freeze, additive
-
-### Phase 6: `<animateMotion>` ✅
-
-- [x] Parse `<animateMotion>`: `path`, `from`/`to`/`by`/`values`, `rotate`
-- [x] Implement path evaluation with arc-length parameterization
-- [x] Implement `rotate="auto"` / `auto-reverse` / fixed angle
-- [x] Build implicit linear paths from `from`/`to` and `values` point lists
-- [x] Tests: 8 tests — parsing, straight line, L-shaped path, rotate, freeze, values
-
-### Phase 7: Syncbase Timing and Path `d` Animation ✅
-
-- [x] Implement syncbase begin/end resolution (`id.begin`, `id.end`)
-- [x] Iterative resolution for chains (up to 8 deep)
-- [x] Implement path `d` attribute animation (structural compatibility check, per-coordinate interpolation)
-- [x] Tests: 8 tests — syncbase basic/offset/begin-ref/chain/set-trigger, path-d compatible/incompatible/values
-
-### Phase 8: Conformance and Polish ✅
-
-- [x] Handle edge cases: zero duration, indefinite duration, negative offsets
-- [x] Handle `begin` with multiple values (semicolon-separated, earliest qualifying time)
-- [x] Handle `href` targeting with `#` prefix stripping
-- [x] Renderer integration: animated transforms applied via `TransformComponent`
-- [x] Renderer integration: animated path `d` applied via `PathComponent`
-- [x] Tests: 7 edge case tests — negative begin, frozen pre-started, multiple begin, zero dur, min/max
-- [x] `restart` attribute enforcement (`never` suppresses after completion, `whenNotActive` blocks restart while active)
-- [x] `<mpath>` child element support (parsing, href resolution, path precedence)
-- [x] `keyPoints` for non-uniform `<animateMotion>` path progress (evenly-spaced keyTimes interpolation)
-- [x] Number-list interpolation (dasharray, points, viewBox — element-wise linear with Euclidean paced distance)
-- [x] Geometry attribute animation rendering (cx, cy, r, rx, ry, x, y, width, height, x1, y1, x2, y2)
-
-### Phase 9: Fuzz Testing
-
-Add fuzzers for new parsers introduced by animation support. Follow existing pattern
-(e.g., `PathParser_fuzzer.cc`, `ListParser_fuzzer.cc`).
-
-- [x] `ClockValueParser_fuzzer` — fuzz `ClockValueParser::Parse()` with arbitrary strings
-- [x] `AnimateValue_fuzzer` — fuzz value list parsing (`from`/`to`/`by`/`values` attributes)
-- [x] `AnimateTransformValue_fuzzer` — fuzz per-type transform value parsing (translate/scale/rotate/skewX/skewY number lists)
-- [x] `AnimateMotionPath_fuzzer` — fuzz motion path building from `path`, `from`/`to`/`by`, `values` point-pair inputs
-- [x] `SyncbaseRef_fuzzer` — fuzz syncbase reference parsing (`id.begin+offset`, `id.end-offset` strings)
-
-## Verification
-
-Each phase:
-
-1. Unit tests for timing computation, interpolation, sandwich composition
-2. Integration tests with golden image comparison at specific time points
-3. `bazel test //donner/svg/renderer/tests:renderer_tests` (static rendering unaffected)
-4. Targeted SVG test suite animation cases
-
-## Performance: Composited Rendering
-
-For performant animation of complex SVGs, a **composited rendering** system caches
-static portions of the render tree as pixmaps and only re-renders layers containing
-animated elements. See [composited_rendering](0025-composited_rendering.md) for the
-full design.
-
-Key idea: the flat render tree is sliced into contiguous layers. Animated elements
-(and their subtrees) get dynamic layers that re-render each frame; everything else
-gets static layers that are cached. The final image is assembled by compositing
-content-sized layer quads in paint order.
-
-This is a general-purpose system that also supports interactive editing (selected
-elements on their own layers for efficient drag rendering).
-
-## Open Questions
-
-1. **Event triggers**: Should we stub the event-based begin/end parsing now (silently ignore)
-   or reject with a warning? Recommendation: parse and store, but don't resolve — log a
-   warning when an animation depends on unsupported event triggers.
-
-2. **CSS property animation**: `<animate>` can target CSS properties via `attributeName`.
-   Should we support the full CSS property set or just SVG presentation attributes?
-   Recommendation: start with SVG presentation attributes that map to CSS properties
-   (fill, stroke, opacity, etc.) since those are already in the style system.
-
-3. **Incremental invalidation granularity**: Should animated properties dirty the entire
-   subtree or just the affected entity? Recommendation: per-entity invalidation for
-   geometry/paint changes, subtree invalidation only for inherited properties (color, font).
-
-4. **Frame interpolation API**: Should we provide a helper that returns "time of next
-   interesting event" (begin/end/keyframe boundary) for efficient frame scheduling by the
-   caller? This would help callers avoid rendering frames where nothing changed.
-
-## References
-
-- [SVG Animations Level 2 (Editor's Draft)](https://svgwg.org/specs/animations/)
-- [SVG 2 Specification](https://www.w3.org/TR/SVG2/)
-- [SMIL 3.0 Animation Module](https://www.w3.org/TR/REC-smil/smil-animation.html)
-- [Animation Elements 1.0 (Editor's Draft)](https://svgwg.org/specs/animation-elements/)
-- [Web Animations API](https://www.w3.org/TR/web-animations-1/)
-
-## Addendum: Slice 1 port (2026-07-05)
-
-This document was originally authored against an earlier (tiny-skia) branch. Slice 1 ports a
-deliberately reduced subset of the animation system onto Donner's current architecture. This
-addendum records exactly what slice 1 includes, what it defers, the new attach point, and the
-resolved computed-style-vs-attribute question.
-
-### Included in slice 1
-
-- Public API: `SVGDocument::setTime(double)` / `SVGDocument::currentTime()`. `setTime()` stores
-  the time on `SVGDocumentContext::documentTime` and calls `invalidateRenderTree()`.
-- Timing model: `ClockValue`, `AnimationTimingComponent`, and `AnimationSystem`. Supported
-  timing attributes: `begin` (offset values only, semicolon list picks the earliest non-negative
-  qualifying offset), `dur`, `end` (offset only), `repeatCount`, `repeatDur`, `fill`
-  (`freeze` | `remove`), `restart` (`always` | `whenNotActive` | `never`), `min`, `max`.
-- Elements: `<animate>`, `<animateTransform>` (`type` in translate | scale | rotate | skewX |
-  skewY), and `<set>`. All are experimental (`IsExperimental = true`) and require
-  `SVGParser::Options::enableExperimental`.
-- Value specification: `from` / `to` / `by` / `values`, `keyTimes`, `calcMode` `discrete` |
-  `linear`.
-- Value interpolation retained from the source engine because it falls out of the generic
-  value-string interpolator without adding element/attribute surface: numeric (opacity, geometry
-  lengths, transform components), path `d` (structural-compatibility check, per-coordinate
-  interpolation, discrete fallback on mismatch), and number-list (dasharray/points, element-wise
-  linear).
-- Composition: document-order sandwich with replace semantics (last animation in document order
-  wins for a given attribute). Frozen animations persist at their final value.
-- Deterministic render at any `t`.
-
-### Deferred (out of slice 1)
-
-- `<animateMotion>` and `<mpath>` (element, component, parser, and system pass all omitted).
-- `calcMode` `paced` and `spline` (and therefore `keySplines`).
-- Syncbase timing (`id.begin` / `id.end` references) and any begin/end value that is not a plain
-  offset. `begin` is offset-only.
-- `additive` and `accumulate`.
-- Compositor layer caching for animated elements. `HintSource::Animation` is intentionally left
-  unused; animation re-evaluates the full render tree each `setTime()`.
-- CSS Animations / Transitions / Web Animations, and editor UI.
-
-### Permanently out of scope (non-scripting target)
-
-Donner is an offline, non-scripting renderer with no event-dispatch system. Event, `accessKey`,
-and `wallclock` begin/end triggers (`click`, `mouseover`, `repeat(n)`, `beginElement()`, etc.)
-have no meaning without a scripting/interaction host and are permanently out of scope for the
-time-sampled evaluation model, independent of slice boundaries.
-
-### Attach point
-
-`AnimationSystem().advance(registry, documentTime, nullptr)` is invoked from
-`RenderingContext::createComputedComponents()` immediately after
-`StyleSystem().computeAllStyles(...)` and before `ResourceManagerContext::loadResources(...)`.
-`advance()` writes string-valued overrides into an `AnimatedValuesComponent` on each target
-entity. A following loop applies those overrides to the already-computed components.
-
-### Resolved question: overrides patch computed style/geometry post-style
-
-The scoping study flagged a choice between (a) injecting animated values as attribute values that
-re-run through the normal attribute/style pipeline, versus (b) patching the computed style and
-geometry after `computeAllStyles()` (the tiny-skia model). Slice 1 adopts (b):
-
-- `AnimationSystem` produces, per target, a map of `attributeName -> valueString`.
-- The applier in `createComputedComponents()` then, per override:
-  - `transform`: parses via `TransformParser` and sets `TransformComponent` at
-    `Specificity::Override()`.
-  - `d`: sets `PathComponent::d` at override specificity, clears the spline override, and
-    invalidates `ComputedPathComponent`.
-  - geometry lengths (`cx cy r rx ry x y width height x1 y1 x2 y2`): parses as a length and sets
-    the corresponding shape component property at override specificity, then invalidates the
-    computed shape components.
-  - everything else: `ComputedStyleComponent::properties->parsePresentationAttribute(name, value)`.
-
-Rationale: (b) keeps animation a thin, deterministic post-pass that is trivially re-runnable at
-any `t` with no re-parse of the whole document, matches the already-validated source
-implementation (reducing port risk), and slots cleanly between style and layout. Its cost is
-that the applier must enumerate the geometry/transform/path special cases, which is acceptable
-for the slice-1 attribute set and is where future animatable attributes will be registered.
-
-Two port-specific corrections were required relative to the tiny-skia implementation, because the
-current architecture does not rebuild base components on `invalidateRenderTree()`:
-
-1. **Base-component backup/restore.** `ComputedStyleComponent` is regenerated each render, so CSS
-   overrides revert for free. Base geometry (`CircleComponent` etc.), `PathComponent::d`, and
-   `TransformComponent` are not regenerated; mutating them would leak across time samples once an
-   animation ends with `fill="remove"`. The applier lazily captures an `AnimationBaseBackup` per
-   mutated entity and restores it at the start of every apply pass. The
-   `RendererAnimation.GeometryRemoveReverts` golden test locks this behavior in.
-2. **Computed-transform cache invalidation.** `ComputedLocalTransformComponent` and the cascaded
-   `ComputedAbsoluteTransformComponent` are cached across renders; applying or restoring a
-   transform override calls `LayoutSystem::invalidate()` so the animated transform actually
-   reaches the render.
+### Timeline
+
+`AnimationTimeline` reconstructs intervals from authored sources and retained runtime instance times.
+Sampling direction does not change restart eligibility: seeking visits an existing interval rather
+than creating a new one. `restart` filters begin instances; the last interval at or before the sample
+time supplies active or frozen output.
+
+Syncbase begin/end and repeat references use a bounded work queue. Unseeded cycles remain unresolved;
+expanding cycles fail the timing budget instead of looping. An evaluation that exceeds that budget
+publishes no partial timeline. `min` and `max` constrain the duration after the end constraint is
+resolved. Extending an interval with `min` does not itself repeat the animation: once repeating content
+ends, `fill` controls whether a value remains visible.
+
+Runtime mouse and host events retain their instance times, including signed offsets. The host can
+schedule a begin or end with `SVGDocument::beginAnimation()` and `endAnimation()`. Lifecycle events
+are queried through `animationEvents(from, to)` as a bounded value batch; no user callback executes
+under document access.
+
+### Values and composition
+
+`AnimationInterpolation` validates key times and spline controls and selects a discrete, linear,
+paced, or spline interval. Spline evaluation inverts Bezier time with bounded bisection. Paced motion
+uses type-specific distances and ignores key times.
+
+SVG's discrete to-only rule keeps the underlying value until the midpoint, or the second key time,
+then uses the target value. This intentionally differs from SMIL's single-value rule; see
+[SVG animation values](https://svgwg.org/specs/animations/#ValueAttributes).
+
+XML text-position animation uses the target's local authored or typed list and lower animations on
+that same attribute. Ancestor positions are a subsequent layout fallback, not animation base operands.
+List arity is preserved; rotation repeats its last sampled entry only during layout. Empty `dx`/`dy`
+bases use neutral zeros. Other empty or unequal lists use discrete fallback. Tests use explicit,
+equal-length local bases for portable `x`, `y` and `rotate` interpolation because browser behavior for
+empty local lists differs. Position projection uses the whitespace-normalized Unicode character map,
+with each rendered instance supplying its own font and viewport context.
+
+`AnimationValueMath` handles numeric lists, unit-bearing lengths, and colors. Relative units use the
+target's viewport and font context. Font-size stacks resolve against the sampled parent font before
+child inheritance, including separate contexts for shared text instances. Shadow text resolves span
+styles per rendered instance without retaining borrowed style maps in prepared draws. These cases,
+including baseline reset and contextual work exhaustion, are covered by
+`//donner/svg/renderer/tests:renderer_animation_presentation_tests`.
+Path interpolation requires compatible command structures.
+Underlying values include lower animation layers, resolved style values, and typed resource references.
+URI and filter-input/result names are discrete and non-additive, even when their text resembles a number.
+Opacity and gradient-stop percentages represent fractions of one. Numeric-only filter operands
+reject length units before interpolation, including paced and additive sampling. Stop and flood
+opacity read typed/style bases and apply sampled values below important and typed overrides.
+The opacity and miter-limit stacks resolve `inherit`, `initial` and `unset` in each instance's final
+parent cascade. Intermediate numeric layers remain unclamped; the final property parser applies
+its range and priority. Resource opacity values and winning priorities are cached with the computed
+style, and typed/source edits invalidate their dependent computed queries.
+These cases are covered by `//donner/svg/renderer/tests:renderer_animation_presentation_tests`.
+Number-optional-number filter values repeat a single coordinate; integer fields round the final
+interpolated value to the nearest integer. Underlying filter values come from typed components,
+including nonzero defaults and implicit previous-primitive inputs. Explicit empty resource references
+and filter result names are distinct from invalid or missing animation values and restore after
+the interval ends.
+References and coordinate-unit selectors are sampled before dependent coordinates; motion is last.
+Within each attribute, animations are ordered by begin time, with document order breaking ties. Additive values combine
+with the underlying result; accumulation adds completed iterations' final values.
+
+Motion runs after ordinary transform/value sampling. It adds a supplemental transform while
+preserving the element's ordinary transform. A local `<mpath>` reference takes precedence over the
+inline path; unresolved references do not fall back silently. Motion reuses `Path::MeasuredPath` for
+arc-length sampling, tangent rotation, and segment boundaries. Key points map time to distance.
+
+### Presentation and source editing
+
+A first style pass supplies base values. After sampling, a final style pass applies animated values
+at the animation cascade level so descendants inherit them and important author declarations retain
+precedence. Geometry and transforms use reversible presentation overrides; restoration must preserve
+edits authored while an animation is active. Typed DOM setters restore the target's base values before
+writing, so an intentional edit equal to the displayed animated value is retained. Failed
+presentation-attribute probes preserve the current presentation. Direct internal storage mutations
+bypass this setter lifecycle and are not part of the supported editing contract.
+
+Paint and color stacks are sampled in the final style pass for each instance. The sampled parent
+and local color supply currentColor, inherited and unset operands; the color property itself uses
+its parent's color for currentColor. Fill, stroke, stop-color, flood-color and lighting-color share
+this path, including sampled color-interpolation, typed overrides and important declarations.
+Inherited URL paints retain their resource owner. Invalid effective operands leave lower valid
+layers intact. The presentation and public-API regression targets cover shared A-B-A instances,
+external paint ownership, seeking, source preservation, and lighting cascade/style removal.
+
+Basic-shape length stacks retain their units until each rendered instance supplies its viewport and
+font metrics. Each basic-shape shadow owns its computed geometry throughout active and inactive
+intervals; an empty or refused path cannot fall back to another instance's geometry. Paint servers,
+clipping, masks, filters, hit tests and world bounds use that same instance geometry. Source edits
+remain the next sample's base, and shadow teardown releases its retained geometry reservations.
+Shared mask content is replayed for each occurrence without consuming the caller's draw cursor.
+The coordinate-context and public renderer API regressions cover these ownership and replay paths.
+
+Text-path offsets and marker lengths retain immutable, admitted value stacks until their instance
+context is available. Text offsets use the final path geometry, including source edits and animated
+referenced paths. Marker dimensions and reference points are resolved once per referencing render
+instance; rasterization consumes the prepared scalars. Both use the same interpolation sampler as
+ordinary values and retain authored components as their bases. The presentation regression target
+covers mixed units, shared markers, stack ordering, seeking, keyword values and source removal.
+
+Filter-primitive region stacks remain deferred until the referencing filter supplies its units,
+viewport, object bounds and default input regions. Positions and additive displacements use distinct
+origins. SVG image dimensions are sampled before rasterization. CPU default-region history follows
+executed raster bounds, including rounded effect support and paint coverage; animation then resolves
+its underlying value in user coordinates. Invalid transforms and excessive retained recipes are
+rejected before sampling. Viewport edits and animation restoration invalidate dependent layout caches.
+
+Resource references are sampled before shadow-tree expansion. Derived resources are invalidated only
+when the final reference changes, after the previous shadow instances have been removed. Repeated
+raster-image references move decoded frames into bounded per-element caches and retain their resource
+revisions; they do not repeatedly charge the resource loader for the same decoded frame. Existing
+resource-loader policies and document byte/fetch limits still apply.
+
+The static use-element loader rejects data URLs as external document references. It still has no
+document-origin policy, an existing conformance limitation relative to
+[SVG2 section 5.5](https://www.w3.org/TR/SVG2/struct.html#UseElement). Animated references use the same
+admission path. Secure-mode blocking, loader denial and restoration are covered by the animated-use
+regression in //donner/svg/renderer/tests:renderer_animation_presentation_tests.
+
+The default parser recognizes the animation elements. `AnimationAttributeParser` is shared by the
+initial parser and runtime attribute refresh. A bounded source fingerprint avoids reparsing unchanged
+attributes while ensuring source edits update typed values and timing. Runtime event history is kept
+separate from those authored components.
+
+### Editor Preview
+
+Edit/Preview sits in a compact fixed header above Layers. Preview starts a fresh session and advances
+a monotonic clock in 60 Hz samples. Edit restores time zero. Authoring controls are disabled during
+Preview while navigation and file menus remain available. Edit-mode canvas selection ignores SVG
+`pointer-events` and targets visible painted artwork; Preview event targeting honors the authored
+SVG rules.
+
+Pointer targets are retained with the raster that is actually displayed, its viewport, and its
+document generation. Input edges are queued until safe document access; passive hover is coalesced.
+Before dispatching queued events, Preview samples the current clock while keeping the captured
+pointer targets. A raster stall therefore does not start a short animation at an obsolete rendered
+time and skip it during catch-up. Invalid clock samples retain the queued input for a later frame.
+Hover transitions exclude the shared ancestor path, and the previous path is retained across DOM
+changes. Focus loss cancels the pending press. Document replacement resets Preview.
+
+Preview suspends auxiliary font-preview raster work, cancels an outstanding preview through the
+worker's existing discard contract, and preserves the request for return to Edit. Admission resumes
+after the time-zero reset. The native `editor_shell_tests` cases
+`AnimationPreviewDefersFontPreviewWorkUntilEditIsRestored` and
+`AnimationPreviewCancelsAndPreservesActiveFontPreview` cover this boundary; document animation and
+font-resource adoption continue normally.
+
+Distinct document-presentation diagnostics count identity changes only after a successfully acquired
+surface is presented. They retain a bounded 4096-entry ring of producer timestamps, independently of
+worker-result telemetry. Repeated UI frames and offscreen completions do not increase that count.
+`//donner/editor/wasm/tests:presented_document_cadence_tests` covers those rules and delayed diagnostic
+delivery. The browser animation gate reports producer-time gaps separately from delivery-window
+throughput. These diagnostics measure the application's surface handoff, not physical scanout, and
+do not by themselves qualify sustained 60 fps.
+
+The browser raster worker yields a real task between iterations through one reusable MessageChannel.
+This keeps callback opportunities outside document and renderer locks without a timer delay before
+every frame. One pending continuation belongs to the worker lifetime; cleanup runs on that worker
+after the suspended yield resumes. The task yield does not guarantee browser task-source fairness.
+`//donner/editor/wasm/tests:raster_task_yield_tests` covers reentry, stale callbacks and port cleanup.
+`//donner/editor/wasm/tests:animation_preview_browser_test` holds timers to verify continued playback,
+then suspends a task yield across Edit/restart and acknowledged shutdown. Timing diagnostics report
+the preceding idle pass separately; those intervals can overlap the request's queue latency.
+
+## Presentation support matrix
+
+Timing and interpolation support do not imply that every SVG attribute is rendered as an animated
+value. The current presentation surface is:
+
+| Attribute family                                   | Presentation support                                                                                        |
+| -------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| Common CSS presentation properties                 | Animation cascade, inheritance, important author precedence                                                 |
+| Circle, ellipse and rectangle lengths              | Animated geometry with reversible base values                                                               |
+| Line endpoints, polygon/polyline points, path data | Animated geometry; authored path parameter interpolation and composition                                    |
+| Ordinary, gradient and pattern transforms          | Transform sampling and composition; qualification in progress                                               |
+| Gradient coordinates and stop offsets              | Reversible animated values                                                                                  |
+| Viewports and path calibration                     | Reversible `viewBox`, `preserveAspectRatio` and `pathLength`, including initially absent components         |
+| Marker, symbol, mask and clip geometry             | Marker dimensions/orientation, marker/symbol reference points, mask regions and mask/clip units             |
+| Text paths                                         | Start offset, side, method/spacing selections and inline geometry; static renderer limitations still apply  |
+| Filter numeric/list parameters                     | Offset, blur, transfer functions, convolution, displacement, turbulence and lighting fields                 |
+| Filter and gradient enumerations                   | Discrete operation/type/unit fields, convolution edge/alpha controls, displacement channels and stitching   |
+| Filter graph references                            | Discrete `in`, `in2` and `result`; to-only sampling preserves implicit and typed input bindings             |
+| Text positioning and text length                   | Reversible positioning lists, rotation, text length and length adjustment                                   |
+| Pattern tile geometry and units                    | Reversible tile lengths and unit selections                                                                 |
+| Filter regions and primitive regions               | Reversible region lengths and unit selections                                                               |
+| Resource references, including animated `href`     | Discrete use, image, gradient, pattern, filter, textPath and mpath references; normal loader policy applies |
+
+Path-data qualification uses independently constructed references in
+`RendererAnimationPathValue_tests.cc` and the parameter/compatibility rules in
+[SVG2 path animation](https://w3c.github.io/svgwg/svg2-draft/paths.html#TheDProperty).
+Compatible authored command sequences support by/from-by, additive and accumulated composition.
+Incompatible composition contributes no value, including after freezing; incompatible interpolation
+uses discrete keyframe timing. Arc parameters are interpolated before geometry conversion, with
+nonzero interpolated flags treated as true. Empty `d` values remain valid samples. Typed and CSS path
+bases, lower animation layers, and motion references share the effective sampled geometry.
+Coordinates and sampled motion transforms use round-trip precision, and parsing, copies, arithmetic
+and serialization are bounded.
+Path data has no defined paced distance; paced mode uses the permitted linear fallback.
+
+The final coverage gate requires rendered regressions for newly supported families. Unsupported
+attribute families remain gaps in #1239; this table does not redefine them as completed work.
+
+## Security and resource limits
+
+SVG values and timing expressions are untrusted. The implementation bounds animation declarations,
+source bytes, generated values, numeric lists, paths, timing instances, dependency expansion,
+geometry measurement, lifecycle queries, hit geometry, and queued preview input.
+
+- At most 4096 animation declarations and 1 MiB of admitted animation source per evaluation.
+- At most 1024 instance times per animation list, 16384 expanded intervals, 65536 dependency updates,
+  and 262144 dependency steps.
+- At most 4 MiB of generated values, 64 numeric values per sampled list, and 64 KiB per motion or animated path source value.
+- A shared 262144-unit motion path parsing/measurement budget per evaluation.
+- A shared 4 Mi-unit ID lookup allowance across timing dependencies, animation targets, motion paths
+  and event sources, including event-history comparisons and insertion work. Lookups ignore
+  detached nodes, charge ID bytes and iterative tree traversal,
+  and fail closed on exhaustion. Event instances are staged within the output allowance and
+  published only after all lookups and per-history admission succeed. Staging reserves capacity
+  before allocation and copies only changed histories; reaching a history or staging limit rejects
+  the entire event without changing any runtime instance list. The structural-edit target query
+  conservatively reports a possible target on exhausted analysis, preventing unsafe promotion.
+- A shared 4 Mi-unit contextual preparation allowance across authored path values, scalar/font stacks, text spans, marker references and prepared SVG filter images.
+  Raster filter recipes are charged to the existing filter execution budget, including repeat
+  executions and CPU paint-coverage scans.
+  Recipe parsing/interpolation and bounded path measurement are admitted before work; a refused
+  consumer retains its base value. Owned recipe data is charged to the source/output envelopes.
+- Paint stacks share the contextual allowance and retain base values when admission fails.
+  The animation value fuzzer exercises deferred color and paint consumers with bounded operands;
+  style-system regressions verify recovery on the next sample.
+- Scalar stacks reserve their full contextual work before copying or normalization. Authored
+  resource-opacity declarations charge the shared style budget before parsing; repeated-instance
+  exhaustion and base-value retention are covered by
+  `//donner/svg/components/style:style_system_tests`.
+- Lifecycle queries exceeding 4096 events return an incomplete empty result.
+- Decoded animation-image caches admit at most 4096 lifetime URI keys and 1 MiB of URI metadata
+  per document; decoded bytes remain charged to the existing document resource budget.
+- Referenced and underlying values are admitted before potentially large copies.
+- Public interaction validates document ownership before resolving target storage and rejects detached
+  targets and secure processing modes. No script execution is added; animated references use the
+  existing resource loader and its URI validation, processing-mode restrictions and budgets.
+- Animation sampling transfers metadata and adds no GPU readback or upload fallback. Paint-coverage
+  scans apply only to existing CPU pixmaps in the software backend. Referenced SVG filter images use
+  the renderer's existing image-staging path; removing its readback remains renderer work.
+
+These limits are exercised by `//donner/svg/parser:parser_tests`,
+`//donner/svg/tests:svg_tests`, `//donner/svg/renderer/tests:renderer_animation_presentation_tests`,
+and `//donner/editor/tests:async_svg_document_tests`. Negative cases and
+fuzzer coverage must be expanded whenever a new input form or resource-owning path is added.
+
+## Implementation and qualification checklist
+
+- [x] Multiple intervals, syncbase/repeat dependencies, event offsets, restart and seeking.
+- [x] Shared discrete/linear/paced/spline sampling and transform key times.
+- [x] Numeric, color and length interpolation; underlying values; additive and accumulated values.
+- [x] Motion paths, `<mpath>`, key points, rotation, and supplemental transforms.
+- [x] Host begin/end controls, named events and bounded lifecycle queries.
+- [x] Rendered inheritance/precedence regressions and three real SVG fixture tests.
+- [x] Default-parser and source-edit regressions, including element insertion/removal.
+- [x] Qualify inherited pattern/filter regions, typed text-path offsets and filter-primitive regions,
+      and inherited/same-sample primitive-unit selectors with rendered regressions.
+- [x] Resolve mixed-unit text-path offsets against final path geometry, including shadow instances.
+- [x] Resolve marker dimensions and reference points separately for each referencing viewport.
+- [x] Resolve inherited filter-primitive children in each referencing filter's coordinate context.
+- [x] Supply default filter-primitive subregions as underlying animation values, including defaults
+      derived from primitive inputs and the enclosing filter region.
+- [x] Resolve per-instance paint/color stacks, sampled currentColor and interpolation mode,
+      resource color priority, inherited URL ownership, and diffuse/specular lighting-color.
+- [x] Complete compatible path-data by/from-by, additive and accumulated composition; preserve
+      base values for incompatible composition, including freezing.
+- [x] Preserve authored path command compatibility and interpolate arc parameters/flags before
+      geometric conversion.
+- [x] Preserve empty path samples and coordinate precision with bounded parsing and arithmetic.
+- [ ] Finish presentation-attribute coverage and publish the verified support matrix.
+- [ ] Finish independent code/security review and all new hostile-input regressions.
+- [ ] Run affected source lint, formatting, CMake generation checks, and sanitizer/fuzzer gates.
+- [ ] Run native editor interaction tests and live UI verification on the final candidate.
+- [ ] Run Chromium, Firefox and Safari animation/interaction checks and measure frame pacing.
+- [ ] Run full repository and applicable renderer/editor qualification, then publish the reviewed PR.
+
+The renderer fixture target is `//donner/svg/renderer/tests:renderer_animation_tests`; it reads the
+three SVGs through declared runfiles and checks independently specified positions, interval
+boundaries, and pixels. Time-varying fixtures remain outside the steady-state performance corpus.
+Editor input and source invariants use `//donner/editor/tests:editor_shell_tests` and
+`//donner/editor/tests:async_svg_document_tests`.
+
+## Rollback
+
+The feature is isolated on its branch. Before integration, retain the previous editor build for
+comparison. A qualification failure leaves the feature unmerged; it does not authorize weakening
+pixel assertions, dropping failing cases, or claiming the 60 fps target from a configured clock rate.

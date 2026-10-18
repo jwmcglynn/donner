@@ -2,7 +2,7 @@
 /// @file
 
 #include <cstdint>
-#include <optional>
+#include <vector>
 
 #include "donner/base/EcsRegistry.h"
 
@@ -13,6 +13,14 @@ enum class AnimationPhase : uint8_t {
   Before,  ///< Document time is before the animation's begin time.
   Active,  ///< Animation is currently active.
   After,   ///< Animation has finished its active duration.
+};
+
+/// One resolved active interval, with the unconstrained repeating duration.
+struct AnimationInterval {
+  double begin = 0;           ///< Inclusive start time.
+  double end = 0;             ///< Exclusive active end time.
+  double repeatDuration = 0;  ///< End of repeating content relative to begin.
+  bool operator==(const AnimationInterval&) const = default;
 };
 
 /**
@@ -31,19 +39,23 @@ struct AnimationStateComponent {
   /// Resolved begin time in seconds (from timing attributes).
   double beginTime = 0.0;
 
+  /// Retained runtime begin instance times, sorted in document seconds.
+  std::vector<double> eventBeginTimes;
+
+  /// Retained runtime end instance times, sorted in document seconds.
+  std::vector<double> eventEndTimes;
+
+  /// Resolved intervals for syncbase dependencies and lifecycle observation.
+  std::vector<AnimationInterval> intervals;
+
+  /// Duration of repeating content before min/max/end constraints.
+  double repeatDuration = 0;
+
   /// Computed simple duration in seconds. 0 means unresolved, infinity means indefinite.
   double simpleDuration = 0.0;
 
   /// Computed active duration in seconds.
   double activeDuration = 0.0;
-
-  /// Whether this animation has completed at least one full cycle.
-  /// Used to enforce restart="never": once ended, never restarts.
-  bool hasCompleted = false;
-
-  /// Whether this animation was active in the previous frame.
-  /// Used to enforce restart="whenNotActive".
-  bool wasActive = false;
 };
 
 }  // namespace donner::svg::components

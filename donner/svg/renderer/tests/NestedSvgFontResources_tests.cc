@@ -520,14 +520,13 @@ TEST(NestedSvgFontResourcesTest, IncompleteRenderedMissDoesNotPoisonLaterComplet
           .needsRender);
 }
 
-TEST(NestedSvgFontResourcesTest, FragmentRangeProofRejectsUnrenderedGroupDescendants) {
+TEST(NestedSvgFontResourcesTest, FragmentRangeProofIncludesGroupDescendantsAndExcludesSiblings) {
   auto child = ParseDocument(
-      R"(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><g id="group"><rect id="leaf" width="2" height="2"/></g><g id="layer" opacity="0.5"><rect width="2" height="2"/></g></svg>)");
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><g id="group"><rect id="leaf" width="2" height="2"/></g><g id="layer" opacity="0.5"><rect x="10" width="3" height="4"/></g><rect x="20" width="5" height="6"/></svg>)");
   ASSERT_TRUE(child.has_value());
-  for (const auto& [fragment, expected] :
-       {std::pair{"group", FontResourcePreflight::Status::NeedsRender},
-        std::pair{"leaf", FontResourcePreflight::Status::Ready},
-        std::pair{"layer", FontResourcePreflight::Status::Ready}}) {
+  for (const auto& [fragment, expectedRect] : {std::pair{"group", Box2d::FromXYWH(0, 0, 2, 2)},
+                                               std::pair{"leaf", Box2d::FromXYWH(0, 0, 2, 2)},
+                                               std::pair{"layer", Box2d::FromXYWH(10, 0, 3, 4)}}) {
     SCOPED_TRACE(fragment);
     auto parent = ParseDocument(
         R"(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><g id="host"/></svg>)");
@@ -537,13 +536,17 @@ TEST(NestedSvgFontResourcesTest, FragmentRangeProofRejectsUnrenderedGroupDescend
     parent->registry().emplace<components::ExternalUseComponent>(host, child->handle(),
                                                                  RcString(fragment));
     testing::NiceMock<tests::MockRendererInterface> backend;
+    EXPECT_CALL(backend, drawPath(testing::_, testing::_))
+        .WillOnce([&](const PathShape& shape, const StrokeParams&) {
+          ASSERT_THAT(shape.path, testing::NotNull());
+          EXPECT_THAT(shape.path->bounds(), testing::Eq(expectedRect));
+        });
     RendererDriver driver(backend);
     driver.draw(*parent);
-    EXPECT_EQ(parent->renderedFontResources().status, expected);
+    EXPECT_EQ(parent->renderedFontResources().status, FontResourcePreflight::Status::Ready);
     const auto& captured = parent->registry().get<components::FontPaintDependenciesComponent>(host);
     ASSERT_THAT(captured.children, SizeIs(1));
-    EXPECT_EQ(captured.children[0].renderedNeedsRender,
-              expected == FontResourcePreflight::Status::NeedsRender);
+    EXPECT_THAT(captured.children[0].renderedNeedsRender, testing::IsFalse());
   }
 }
 

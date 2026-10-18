@@ -12,6 +12,7 @@
 #include "donner/base/tests/RunfileGate.h"
 #include "donner/base/xml/XMLQualifiedName.h"
 #include "donner/editor/SourceSync.h"
+#include "donner/svg/DonnerController.h"
 #include "donner/svg/SVGElement.h"
 #include "donner/svg/SVGGeometryElement.h"
 #include "donner/svg/SVGGraphicsElement.h"
@@ -256,6 +257,47 @@ TEST(EditorAppTest, HitTestReturnsTopElementAtPoint) {
 // Clicking on rendered text selects it: the pointer contract for text is a
 // hit anywhere inside the laid-out glyph ink bounds (including the gaps
 // between letters), like any design tool's selection pointer.
+TEST(EditorAppTest, EditingHitTestIgnoresPointerEventsWithoutChangingSvgInteraction) {
+  constexpr std::string_view source = R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="200" height="200">
+      <rect id="background" width="200" height="200" fill="#ccc"/>
+      <g id="labels" pointer-events="none">
+        <text id="label" x="20" y="120" font-size="64">SVG</text>
+        <rect id="shape" x="140" y="150" width="30" height="30"/>
+      </g>
+      <rect id="hidden" x="140" y="10" width="30" height="30"
+            visibility="hidden" pointer-events="all"/>
+    </svg>)svg";
+  EditorApp app;
+  ASSERT_THAT(app.loadFromString(source), testing::IsTrue());
+  const auto label = app.hitTest(Vector2d(40, 100));
+  ASSERT_THAT(label, testing::Ne(std::nullopt));
+  EXPECT_THAT(label->id(), testing::Eq("label"));
+  const auto shape = app.hitTest(Vector2d(150, 160));
+  ASSERT_THAT(shape, testing::Ne(std::nullopt));
+  EXPECT_THAT(shape->id(), testing::Eq("shape"));
+  const auto hidden = app.hitTest(Vector2d(150, 20));
+  ASSERT_THAT(hidden, testing::Ne(std::nullopt));
+  EXPECT_THAT(hidden->id(), testing::Eq("background"));
+
+  svg::DonnerController controller(app.document().document());
+  const auto interaction = controller.findIntersecting(Vector2d(40, 100));
+  ASSERT_THAT(interaction, testing::Ne(std::nullopt));
+  EXPECT_THAT(interaction->id(), testing::Eq("background"));
+  const auto snapshot = controller.captureHitTest();
+  const auto captured = snapshot->findIntersecting(Vector2d(40, 100));
+  ASSERT_THAT(captured, testing::Ne(std::nullopt));
+  EXPECT_THAT(captured->id(), testing::Eq("background"));
+
+  const auto group = app.document().document().querySelector("#labels");
+  ASSERT_THAT(group, testing::Ne(std::nullopt));
+  ASSERT_THAT(app.enterGroupEdit(*group), testing::IsTrue());
+  const auto scoped = app.hitTest(Vector2d(40, 100));
+  ASSERT_THAT(scoped, testing::Ne(std::nullopt));
+  EXPECT_THAT(scoped->id(), testing::Eq("label"));
+  EXPECT_THAT(std::string(app.document().document().source()), testing::Eq(source));
+}
+
 TEST(EditorAppTest, HitTestPicksTextByGlyphInkBounds) {
   constexpr std::string_view kTextSvg =
       R"(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200">
@@ -2457,6 +2499,23 @@ TEST(EditorAppReorderTest, BringToFrontLiftsNestedLeafToDocumentFront) {
   ASSERT_TRUE(app.flushFrame());
   EXPECT_THAT(FlatIds(app), ::testing::ElementsAre("gA", "a1", "gB", "b1", "b2", "a2"));
   EXPECT_EQ(ParentIdOf(app, "a2"), std::optional<std::string>("<svg>"));
+}
+
+TEST(EditorAppReorderTest, BringToFrontKeepsGroupWhenAnimationLookupIsExhausted) {
+  std::string source = "<svg xmlns='http://www.w3.org/2000/svg' width='100' height='100'>";
+  for (int i = 0; i < 1500; ++i) {
+    source += "<set href='#missing' attributeName='opacity' to='1'/>";
+  }
+  source +=
+      "<g id='group'><set attributeName='opacity' to='0.5'/>"
+      "<rect id='child' width='10' height='10'/></g>"
+      "<rect id='front' x='20' width='10' height='10'/></svg>";
+  EditorApp app;
+  ASSERT_EQ(app.loadFromString(source), true);
+  SelectById(app, "child");
+  app.reorderSelectedElement(EditorApp::ZOrder::BringToFront);
+  app.flushFrame();
+  EXPECT_THAT(ParentIdOf(app, "child"), ::testing::Optional(std::string("group")));
 }
 
 TEST(EditorAppReorderTest, SendToBackLiftsNestedLeafToDocumentBack) {

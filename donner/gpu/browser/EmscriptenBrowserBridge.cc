@@ -1,6 +1,7 @@
 #include "donner/gpu/browser/EmscriptenBrowserBridge.h"
 
 #include <emscripten/emscripten.h>
+
 #ifdef __EMSCRIPTEN_PTHREADS__
 #include <emscripten/proxying.h>
 #include <pthread.h>
@@ -23,6 +24,7 @@
 #include <utility>
 #include <vector>
 
+#include "donner/gpu/browser/BrowserBindGroupConstruction.h"
 #include "donner/gpu/browser/BrowserGpuOwner.h"
 #include "donner/gpu/browser/BrowserShareReleaseQueue.h"
 #include "donner/gpu/browser/BrowserWireCodes.h"
@@ -43,7 +45,7 @@ void donner_gpu_release_device(unsigned int device);
 int donner_gpu_begin_device_request(unsigned int device);
 int donner_gpu_device_request_state(unsigned int device);
 int donner_gpu_read_request_error(unsigned int device, char* destination, int capacity);
-int donner_gpu_owns_device(unsigned int device);
+int donner_gpu_device_status(unsigned int device);
 int donner_gpu_is_device_lost(unsigned int device);
 int donner_gpu_read_lost_reason(unsigned int device, char* destination, int capacity);
 double donner_gpu_completed_serial(unsigned int device);
@@ -178,13 +180,12 @@ void donner_gpu_release_texture_share(unsigned int device, unsigned int share);
 
 namespace {
 
-/// Dispatch only the imported JavaScript primitive; callbacks cannot allocate or lock C++ state.
-template <auto Function, typename... Args>
-auto CallBrowserGpu(Args... args) -> decltype(Function(args...)) {
-  using Result = decltype(Function(args...));
-  constexpr BrowserGpuOperationKind kind = [] {
-    if constexpr (std::is_same_v<decltype(Function), decltype(&donner_gpu_owns_device)>) {
-      if constexpr (Function == &donner_gpu_owns_device) {
+/// Classify queries without changing their dispatch behavior.
+template <auto Function>
+constexpr BrowserGpuOperationKind BrowserQueryKind() {
+  return [] {
+    if constexpr (std::is_same_v<decltype(Function), decltype(&donner_gpu_device_status)>) {
+      if constexpr (Function == &donner_gpu_device_status) {
         return BrowserGpuOperationKind::OwnershipQuery;
       } else if constexpr (Function == &donner_gpu_is_device_lost) {
         return BrowserGpuOperationKind::DeviceLossQuery;
@@ -197,11 +198,18 @@ auto CallBrowserGpu(Args... args) -> decltype(Function(args...)) {
     }
     return BrowserGpuOperationKind::Other;
   }();
+}
+
+/// Dispatch only the imported JavaScript primitive; callbacks cannot allocate or lock C++ state.
+template <auto Function, BrowserGpuOperationKind Kind = BrowserQueryKind<Function>(),
+          typename... Args>
+auto CallBrowserGpu(Args... args) -> decltype(Function(args...)) {
+  using Result = decltype(Function(args...));
   if constexpr (std::is_void_v<Result>) {
-    RunOnBrowserGpuOwner([&] { Function(args...); }, kind);
+    RunOnBrowserGpuOwner([&] { Function(args...); }, Kind);
   } else {
     Result result{};
-    RunOnBrowserGpuOwner([&] { result = Function(args...); }, kind);
+    RunOnBrowserGpuOwner([&] { result = Function(args...); }, Kind);
     return result;
   }
 }
@@ -240,7 +248,8 @@ std::shared_ptr<const void> WorkerDeviceIdentity(uint32_t device) {
 /// thread's queue has gone with it.
 void DrainThreadShareReleases() {
   BrowserShareReleaseQueue::DrainThisThread([](const BrowserShareReleaseQueue::Release& release) {
-    CallBrowserGpu<donner_gpu_release_texture_share>(release.producer, release.share);
+    CallBrowserGpu<donner_gpu_release_texture_share, BrowserGpuOperationKind::ResourceSharing>(
+        release.producer, release.share);
   });
 }
 
@@ -295,7 +304,8 @@ public:
   /// Destructor; releases the share on the thread that made it, or posts the release there.
   ~EmscriptenSharedTexture() override {
     if (UsesBrowserGpuOwner() || std::this_thread::get_id() == ownerThread_) {
-      CallBrowserGpu<donner_gpu_release_texture_share>(producer_, share_);
+      CallBrowserGpu<donner_gpu_release_texture_share, BrowserGpuOperationKind::ResourceSharing>(
+          producer_, share_);
       return;
     }
     if (ownerReleases_ == nullptr) {
@@ -453,8 +463,8 @@ RcString EmscriptenBrowserBridge::deviceRequestError() const {
   return ReadMessage(logicalDevice_, &CallBrowserGpu<donner_gpu_read_request_error>);
 }
 
-bool EmscriptenBrowserBridge::ownsDevice() const {
-  return CallBrowserGpu<donner_gpu_owns_device>(logicalDevice_) != 0;
+BridgeStatus EmscriptenBrowserBridge::deviceStatus() const {
+  return StatusFromBrowser(CallBrowserGpu<donner_gpu_device_status>(logicalDevice_));
 }
 
 bool EmscriptenBrowserBridge::isDeviceLost() const {
@@ -493,7 +503,8 @@ BridgeStatus EmscriptenBrowserBridge::shareTexture(
   DrainThreadShareReleases();
   unsigned int share = 0;
   const BridgeStatus status = StatusFromBrowser(
-      CallBrowserGpu<donner_gpu_share_texture>(logicalDevice_, textureId, &share));
+      CallBrowserGpu<donner_gpu_share_texture, BrowserGpuOperationKind::ResourceSharing>(
+          logicalDevice_, textureId, &share));
   if (status != BridgeStatus::Success) {
     return status;
   }
@@ -506,94 +517,100 @@ BridgeStatus EmscriptenBrowserBridge::registerSharedTexture(BrowserObjectId id,
                                                             const BrowserSharedTexture& shared) {
   DrainThreadShareReleases();
   return StatusFromBrowser(
-      CallBrowserGpu<donner_gpu_register_shared_texture>(logicalDevice_, id, shared.shareId()));
+      CallBrowserGpu<donner_gpu_register_shared_texture, BrowserGpuOperationKind::ResourceSharing>(
+          logicalDevice_, id, shared.shareId()));
 }
 
 BridgeStatus EmscriptenBrowserBridge::createBuffer(BrowserObjectId id, uint64_t byteSize,
                                                    uint32_t usageBits) {
-  return StatusFromBrowser(CallBrowserGpu<donner_gpu_create_buffer>(
-      logicalDevice_, id, static_cast<double>(byteSize), usageBits));
+  return StatusFromBrowser(
+      CallBrowserGpu<donner_gpu_create_buffer, BrowserGpuOperationKind::ResourceCreation>(
+          logicalDevice_, id, static_cast<double>(byteSize), usageBits));
 }
 
 BridgeStatus EmscriptenBrowserBridge::createTexture(BrowserObjectId id, uint32_t width,
                                                     uint32_t height, uint32_t formatCode,
                                                     uint32_t usageBits) {
-  return StatusFromBrowser(CallBrowserGpu<donner_gpu_create_texture>(
-      logicalDevice_, id, width, height, formatCode, usageBits));
+  return StatusFromBrowser(
+      CallBrowserGpu<donner_gpu_create_texture, BrowserGpuOperationKind::ResourceCreation>(
+          logicalDevice_, id, width, height, formatCode, usageBits));
 }
 
 BridgeStatus EmscriptenBrowserBridge::createTextureView(BrowserObjectId id,
                                                         BrowserObjectId textureId) {
   return StatusFromBrowser(
-      CallBrowserGpu<donner_gpu_create_texture_view>(logicalDevice_, id, textureId));
+      CallBrowserGpu<donner_gpu_create_texture_view, BrowserGpuOperationKind::ResourceCreation>(
+          logicalDevice_, id, textureId));
 }
 
 BridgeStatus EmscriptenBrowserBridge::createSampler(BrowserObjectId id, uint32_t magFilterCode,
                                                     uint32_t minFilterCode, uint32_t addressUCode,
                                                     uint32_t addressVCode) {
-  return StatusFromBrowser(CallBrowserGpu<donner_gpu_create_sampler>(
-      logicalDevice_, id, magFilterCode, minFilterCode, addressUCode, addressVCode));
+  return StatusFromBrowser(
+      CallBrowserGpu<donner_gpu_create_sampler, BrowserGpuOperationKind::ResourceCreation>(
+          logicalDevice_, id, magFilterCode, minFilterCode, addressUCode, addressVCode));
 }
 
 BridgeStatus EmscriptenBrowserBridge::createBindGroupLayout(
     BrowserObjectId id, std::span<const BrowserBindGroupLayoutEntry> entries) {
-  if (const BridgeStatus status =
-          StatusFromBrowser(CallBrowserGpu<donner_gpu_bind_group_layout_begin>(logicalDevice_));
-      status != BridgeStatus::Success) {
-    return status;
-  }
-  for (const BrowserBindGroupLayoutEntry& entry : entries) {
-    if (const BridgeStatus status =
-            StatusFromBrowser(CallBrowserGpu<donner_gpu_bind_group_layout_entry>(
-                logicalDevice_, entry.binding, entry.visibilityBits, entry.bindingTypeCode,
-                entry.storageTextureFormat));
-        status != BridgeStatus::Success) {
-      return status;
-    }
-  }
-  return StatusFromBrowser(CallBrowserGpu<donner_gpu_bind_group_layout_finish>(logicalDevice_, id));
+  return ConstructBrowserBindGroup(
+      entries,
+      [&] { return StatusFromBrowser(donner_gpu_bind_group_layout_begin(logicalDevice_)); },
+      [&](const BrowserBindGroupLayoutEntry& entry) {
+        return StatusFromBrowser(
+            donner_gpu_bind_group_layout_entry(logicalDevice_, entry.binding, entry.visibilityBits,
+                                               entry.bindingTypeCode, entry.storageTextureFormat));
+      },
+      [&] { return StatusFromBrowser(donner_gpu_bind_group_layout_finish(logicalDevice_, id)); },
+      [](auto&& operation) {
+        RunOnBrowserGpuOwner(operation, BrowserGpuOperationKind::BindGroupConstruction);
+      });
 }
 
 BridgeStatus EmscriptenBrowserBridge::createBindGroup(
     BrowserObjectId id, BrowserObjectId layoutId, std::span<const BrowserBindGroupEntry> entries) {
-  if (const BridgeStatus status =
-          StatusFromBrowser(CallBrowserGpu<donner_gpu_bind_group_begin>(logicalDevice_, layoutId));
-      status != BridgeStatus::Success) {
-    return status;
-  }
-  for (const BrowserBindGroupEntry& entry : entries) {
-    if (const BridgeStatus status = StatusFromBrowser(CallBrowserGpu<donner_gpu_bind_group_entry>(
+  return ConstructBrowserBindGroup(
+      entries,
+      [&] { return StatusFromBrowser(donner_gpu_bind_group_begin(logicalDevice_, layoutId)); },
+      [&](const BrowserBindGroupEntry& entry) {
+        return StatusFromBrowser(donner_gpu_bind_group_entry(
             logicalDevice_, entry.binding, static_cast<unsigned int>(entry.resource),
             entry.resourceId, static_cast<double>(entry.offsetBytes),
             static_cast<double>(entry.sizeBytes)));
-        status != BridgeStatus::Success) {
-      return status;
-    }
-  }
-  return StatusFromBrowser(CallBrowserGpu<donner_gpu_bind_group_finish>(logicalDevice_, id));
+      },
+      [&] { return StatusFromBrowser(donner_gpu_bind_group_finish(logicalDevice_, id)); },
+      [](auto&& operation) {
+        RunOnBrowserGpuOwner(operation, BrowserGpuOperationKind::BindGroupConstruction);
+      });
 }
 
 BridgeStatus EmscriptenBrowserBridge::createPipelineLayout(
     BrowserObjectId id, std::span<const BrowserObjectId> groupLayoutIds) {
-  if (const BridgeStatus status =
-          StatusFromBrowser(CallBrowserGpu<donner_gpu_pipeline_layout_begin>(logicalDevice_));
+  if (const BridgeStatus status = StatusFromBrowser(
+          CallBrowserGpu<donner_gpu_pipeline_layout_begin,
+                         BrowserGpuOperationKind::PipelineConstruction>(logicalDevice_));
       status != BridgeStatus::Success) {
     return status;
   }
   for (const BrowserObjectId layoutId : groupLayoutIds) {
-    if (const BridgeStatus status = StatusFromBrowser(
-            CallBrowserGpu<donner_gpu_pipeline_layout_group>(logicalDevice_, layoutId));
+    if (const BridgeStatus status =
+            StatusFromBrowser(CallBrowserGpu<donner_gpu_pipeline_layout_group,
+                                             BrowserGpuOperationKind::PipelineConstruction>(
+                logicalDevice_, layoutId));
         status != BridgeStatus::Success) {
       return status;
     }
   }
-  return StatusFromBrowser(CallBrowserGpu<donner_gpu_pipeline_layout_finish>(logicalDevice_, id));
+  return StatusFromBrowser(
+      CallBrowserGpu<donner_gpu_pipeline_layout_finish,
+                     BrowserGpuOperationKind::PipelineConstruction>(logicalDevice_, id));
 }
 
 BridgeStatus EmscriptenBrowserBridge::createShaderModule(BrowserObjectId id,
                                                          std::string_view wgsl) {
-  return StatusFromBrowser(CallBrowserGpu<donner_gpu_create_shader_module>(
-      logicalDevice_, id, wgsl.data(), static_cast<int>(wgsl.size())));
+  return StatusFromBrowser(
+      CallBrowserGpu<donner_gpu_create_shader_module, BrowserGpuOperationKind::ResourceCreation>(
+          logicalDevice_, id, wgsl.data(), static_cast<int>(wgsl.size())));
 }
 
 BridgeStatus EmscriptenBrowserBridge::createRenderPipeline(
@@ -601,7 +618,8 @@ BridgeStatus EmscriptenBrowserBridge::createRenderPipeline(
   const std::string vertexEntryPoint = request.vertexEntryPoint.str();
   const std::string fragmentEntryPoint = request.fragmentEntryPoint.str();
   if (const BridgeStatus status =
-          StatusFromBrowser(CallBrowserGpu<donner_gpu_render_pipeline_begin>(
+          StatusFromBrowser(CallBrowserGpu<donner_gpu_render_pipeline_begin,
+                                           BrowserGpuOperationKind::PipelineConstruction>(
               logicalDevice_, request.layoutId, request.vertexModuleId, vertexEntryPoint.data(),
               static_cast<int>(vertexEntryPoint.size()), request.fragmentModuleId,
               fragmentEntryPoint.data(), static_cast<int>(fragmentEntryPoint.size()),
@@ -612,14 +630,16 @@ BridgeStatus EmscriptenBrowserBridge::createRenderPipeline(
 
   for (const BrowserVertexBufferLayout& layout : request.vertexBuffers) {
     if (const BridgeStatus status =
-            StatusFromBrowser(CallBrowserGpu<donner_gpu_render_pipeline_vertex_buffer>(
+            StatusFromBrowser(CallBrowserGpu<donner_gpu_render_pipeline_vertex_buffer,
+                                             BrowserGpuOperationKind::PipelineConstruction>(
                 logicalDevice_, layout.strideBytes, layout.stepModeCode));
         status != BridgeStatus::Success) {
       return status;
     }
     for (const BrowserVertexAttribute& attribute : layout.attributes) {
       if (const BridgeStatus status =
-              StatusFromBrowser(CallBrowserGpu<donner_gpu_render_pipeline_vertex_attribute>(
+              StatusFromBrowser(CallBrowserGpu<donner_gpu_render_pipeline_vertex_attribute,
+                                               BrowserGpuOperationKind::PipelineConstruction>(
                   logicalDevice_, attribute.formatCode, attribute.offsetBytes,
                   attribute.shaderLocation));
           status != BridgeStatus::Success) {
@@ -630,7 +650,8 @@ BridgeStatus EmscriptenBrowserBridge::createRenderPipeline(
 
   for (const BrowserColorTarget& target : request.colorTargets) {
     if (const BridgeStatus status =
-            StatusFromBrowser(CallBrowserGpu<donner_gpu_render_pipeline_color_target>(
+            StatusFromBrowser(CallBrowserGpu<donner_gpu_render_pipeline_color_target,
+                                             BrowserGpuOperationKind::PipelineConstruction>(
                 logicalDevice_, target.formatCode, target.blendEnabled ? 1u : 0u,
                 target.colorBlend.srcFactorCode, target.colorBlend.dstFactorCode,
                 target.colorBlend.operationCode, target.alphaBlend.srcFactorCode,
@@ -641,13 +662,16 @@ BridgeStatus EmscriptenBrowserBridge::createRenderPipeline(
     }
   }
 
-  return StatusFromBrowser(CallBrowserGpu<donner_gpu_render_pipeline_finish>(logicalDevice_, id));
+  return StatusFromBrowser(
+      CallBrowserGpu<donner_gpu_render_pipeline_finish,
+                     BrowserGpuOperationKind::PipelineConstruction>(logicalDevice_, id));
 }
 
 BridgeStatus EmscriptenBrowserBridge::createComputePipeline(
     BrowserObjectId id, const BrowserComputePipelineRequest& request) {
   const std::string entryPoint = request.entryPoint.str();
-  return StatusFromBrowser(CallBrowserGpu<donner_gpu_create_compute_pipeline>(
+  return StatusFromBrowser(CallBrowserGpu<donner_gpu_create_compute_pipeline,
+                                          BrowserGpuOperationKind::PipelineConstruction>(
       logicalDevice_, id, request.layoutId, request.moduleId, entryPoint.data(),
       static_cast<int>(entryPoint.size())));
 }
@@ -659,24 +683,28 @@ BridgeStatus EmscriptenBrowserBridge::destroyObject(BrowserObjectKind kind, Brow
     return BridgeStatus::WrongObjectKind;
   }
   return StatusFromBrowser(
-      CallBrowserGpu<donner_gpu_destroy_object>(logicalDevice_, *kindCode, id));
+      CallBrowserGpu<donner_gpu_destroy_object, BrowserGpuOperationKind::ResourceDestruction>(
+          logicalDevice_, *kindCode, id));
 }
 
 BridgeStatus EmscriptenBrowserBridge::writeBuffer(BrowserObjectId bufferId, uint64_t offsetBytes,
                                                   std::span<const uint8_t> data) {
-  return StatusFromBrowser(CallBrowserGpu<donner_gpu_write_buffer>(
-      logicalDevice_, bufferId, static_cast<double>(offsetBytes), data.data(),
-      static_cast<double>(data.size())));
+  RecordBrowserBufferWriteSize(data.size());
+  return StatusFromBrowser(
+      CallBrowserGpu<donner_gpu_write_buffer, BrowserGpuOperationKind::BufferWrite>(
+          logicalDevice_, bufferId, static_cast<double>(offsetBytes), data.data(),
+          static_cast<double>(data.size())));
 }
 
 BridgeStatus EmscriptenBrowserBridge::writeTexture(BrowserObjectId textureId,
                                                    std::span<const uint8_t> data,
                                                    const BrowserTexelLayout& layout,
                                                    const BrowserCopyRegion& region) {
-  return StatusFromBrowser(CallBrowserGpu<donner_gpu_write_texture>(
-      logicalDevice_, textureId, data.data(), static_cast<double>(data.size()),
-      static_cast<double>(layout.offsetBytes), layout.bytesPerRow, layout.rowsPerImage,
-      region.destinationX, region.destinationY, region.width, region.height));
+  return StatusFromBrowser(
+      CallBrowserGpu<donner_gpu_write_texture, BrowserGpuOperationKind::TextureWrite>(
+          logicalDevice_, textureId, data.data(), static_cast<double>(data.size()),
+          static_cast<double>(layout.offsetBytes), layout.bytesPerRow, layout.rowsPerImage,
+          region.destinationX, region.destinationY, region.width, region.height));
 }
 
 BridgeStatus EmscriptenBrowserBridge::queueCommand(const char* operation,
@@ -693,15 +721,17 @@ BridgeStatus EmscriptenBrowserBridge::flushCommands() {
   std::vector<PendingCommand> commands = std::move(pendingCommands_);
   BridgeStatus result = BridgeStatus::Success;
   const char* failedOperation = nullptr;
-  RunOnBrowserGpuOwner([&] {
-    for (const PendingCommand& command : commands) {
-      result = command.execute();
-      if (result != BridgeStatus::Success) {
-        failedOperation = command.operation;
-        break;
-      }
-    }
-  });
+  RunOnBrowserGpuOwner(
+      [&] {
+        for (const PendingCommand& command : commands) {
+          result = command.execute();
+          if (result != BridgeStatus::Success) {
+            failedOperation = command.operation;
+            break;
+          }
+        }
+      },
+      BrowserGpuOperationKind::CommandBatch);
   if (failedOperation != nullptr) {
     std::fprintf(stderr, "[Geode/browser/record] operation=%s status=%u\n", failedOperation,
                  static_cast<unsigned int>(result));
@@ -870,8 +900,9 @@ BridgeStatus EmscriptenBrowserBridge::endCommandBuffer(uint64_t submissionSerial
 }
 
 BridgeStatus EmscriptenBrowserBridge::submitCommandBuffers(uint64_t submissionSerial) {
-  return StatusFromBrowser(CallBrowserGpu<donner_gpu_submit_command_buffers>(
-      logicalDevice_, static_cast<double>(submissionSerial)));
+  return StatusFromBrowser(
+      CallBrowserGpu<donner_gpu_submit_command_buffers, BrowserGpuOperationKind::QueueSubmit>(
+          logicalDevice_, static_cast<double>(submissionSerial)));
 }
 
 BridgeStatus EmscriptenBrowserBridge::mapBufferAsync(BrowserObjectId mappingId,

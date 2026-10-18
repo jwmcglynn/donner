@@ -63,6 +63,137 @@ void ExpectOffArtboardPixels(const RendererBitmap& fullTile, int rows, const cha
   EXPECT_GT(changedPixels, 100) << label << " must retain source pixels above the artboard";
 }
 
+#ifdef DONNER_TEXT_ENABLED
+TEST(CompositorGeodeSplashTest, ConcurrentAnimationRetainsUnchangedTextInstances) {
+  constexpr std::string_view kText =
+      "<text x='8' y='30' font-size='20'>Retained animation text</text>";
+  const std::string prefix = "<svg xmlns='http://www.w3.org/2000/svg' width='256' height='64'>";
+  const std::string source = prefix + std::string(kText) +
+                             "<rect x='8' y='40' width='16' height='16' fill='red'>"
+                             "<animate attributeName='x' from='8' to='24' dur='1s' "
+                             "repeatCount='indefinite'/></rect></svg>";
+  const std::string reference =
+      prefix + std::string(kText) + "<rect x='16' y='40' width='16' height='16' fill='red'/></svg>";
+  ParseWarningSink warnings;
+  auto expectedParsed = parser::SVGParser::ParseSVG(reference, warnings);
+  ASSERT_FALSE(expectedParsed.hasError());
+  SVGDocument expectedDocument = std::move(expectedParsed.result());
+  RenderViewport viewport;
+  viewport.size = Vector2d(256, 64);
+  viewport.devicePixelRatio = 1.0;
+  RendererGeode referenceRenderer;
+  RendererDriver(referenceRenderer).draw(expectedDocument, viewport, Transform2d());
+  ASSERT_GT(referenceRenderer.lastFrameTimings().counters.glyphResidencyUploads, 0u);
+  const RendererBitmap expected = referenceRenderer.takeSnapshot();
+  ASSERT_FALSE(expected.empty());
+
+  uint64_t singleThreadedWrites = 0;
+  uint64_t singleThreadedBytes = 0;
+  for (const ThreadingMode mode : {ThreadingMode::SingleThreaded, ThreadingMode::ConcurrentDom}) {
+    SCOPED_TRACE(static_cast<int>(mode));
+    auto parsed = parser::SVGParser::ParseSVG(source, warnings);
+    ASSERT_FALSE(parsed.hasError());
+    SVGDocument document = std::move(parsed.result());
+    document.setThreadingMode(mode);
+    RendererGeode renderer;
+    CompositorConfig config;
+    config.autoPromoteAnimations = false;
+    config.complexityBucketing = false;
+    config.mandatoryHintScope = MandatoryHintScope::FilterOnly;
+    config.deferFirstFrameWarmup = true;
+    {
+      DocumentWriteAccess access = document.writeAccess();
+      CompositorController compositor(document, renderer, config);
+      for (double time : {0.0, 0.25, 0.5}) {
+        document.setTime(time);
+        compositor.renderFrame(viewport);
+      }
+    }
+    const auto counters = renderer.lastFrameTimings().counters;
+    EXPECT_GT(counters.glyphResidencyHits, 0u);
+    EXPECT_EQ(counters.glyphResidencyUploads, 0u);
+    if (mode == ThreadingMode::SingleThreaded) {
+      singleThreadedWrites = counters.bufferWrites;
+      singleThreadedBytes = counters.bufferWriteBytes;
+    } else {
+      EXPECT_EQ(counters.bufferWrites, singleThreadedWrites);
+      EXPECT_EQ(counters.bufferWriteBytes, singleThreadedBytes);
+    }
+    const RendererBitmap actual = renderer.takeSnapshot();
+    ASSERT_FALSE(actual.empty());
+    editor::tests::CompareBitmapToBitmap(actual, expected, "concurrent_animation_text",
+                                         editor::tests::PixelmatchIdentityParams());
+  }
+  EXPECT_FALSE(warnings.hasWarnings());
+}
+
+TEST(CompositorGeodeSplashTest, ConcurrentAnimationPreservesRepeatedAndOffscreenText) {
+  constexpr std::string_view kScene = R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="128" height="96">
+    <defs><text id="word" font-size="16">Twin</text></defs>
+    <use href="#word" x="4" y="20" fill="red"/>
+    <use href="#word" x="64" y="20" fill="blue"/>
+    <g opacity="0.5">
+      <use href="#word" x="4" y="44" fill="green"/>
+      <use href="#word" x="64" y="44" fill="purple"/>
+    </g>
+  )svg";
+  constexpr std::string_view kExpandedScene = R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="128" height="96">
+    <text font-size="16" x="4" y="20" fill="red">Twin</text>
+    <text font-size="16" x="64" y="20" fill="blue">Twin</text>
+    <g opacity="0.5">
+      <text font-size="16" x="4" y="44" fill="green">Twin</text>
+      <text font-size="16" x="64" y="44" fill="purple">Twin</text>
+    </g>
+  )svg";
+  const std::string source =
+      std::string(kScene) +
+      "<rect x='8' y='64' width='16' height='16' fill='red'>"
+      "<animate attributeName='x' from='8' to='24' dur='1s' repeatCount='indefinite'/>"
+      "</rect></svg>";
+  ParseWarningSink warnings;
+  auto parsed = parser::SVGParser::ParseSVG(source, warnings);
+  ASSERT_FALSE(parsed.hasError());
+  SVGDocument document = std::move(parsed.result());
+  document.setThreadingMode(ThreadingMode::ConcurrentDom);
+  RendererGeode renderer;
+  RenderViewport viewport;
+  viewport.size = Vector2d(128, 96);
+  viewport.devicePixelRatio = 1.0;
+  CompositorConfig config;
+  config.autoPromoteAnimations = false;
+  config.complexityBucketing = false;
+  config.mandatoryHintScope = MandatoryHintScope::FilterOnly;
+  config.deferFirstFrameWarmup = true;
+  CompositorController compositor(document, renderer, config);
+  for (const double time : {0.25, 0.5, 0.75, 0.25}) {
+    SCOPED_TRACE(time);
+    {
+      DocumentWriteAccess access = document.writeAccess();
+      document.setTime(time);
+      compositor.renderFrame(viewport);
+    }
+    EXPECT_GT(renderer.lastFrameTimings().counters.glyphResidencyHits, 0u);
+    const RendererBitmap actual = renderer.takeSnapshot();
+    ASSERT_FALSE(actual.empty());
+    const std::string reference = std::string(kExpandedScene) + "<rect x='" +
+                                  std::to_string(static_cast<int>(8 + time * 16)) +
+                                  "' y='64' width='16' height='16' fill='red'/></svg>";
+    auto expectedParsed = parser::SVGParser::ParseSVG(reference, warnings);
+    ASSERT_FALSE(expectedParsed.hasError());
+    SVGDocument expectedDocument = std::move(expectedParsed.result());
+    RendererGeode referenceRenderer;
+    RendererDriver(referenceRenderer).draw(expectedDocument, viewport, Transform2d());
+    const RendererBitmap expected = referenceRenderer.takeSnapshot();
+    ASSERT_FALSE(expected.empty());
+    editor::tests::CompareBitmapToBitmap(actual, expected, "concurrent_repeated_offscreen_text",
+                                         editor::tests::PixelmatchIdentityParams());
+  }
+  EXPECT_FALSE(warnings.hasWarnings());
+}
+#endif  // DONNER_TEXT_ENABLED
+
 TEST(CompositorGeodeSplashTest, OffArtboardShineRetainsSourcePixelsInSelectedTile) {
   const donner::tests::RequiredRunfile source =
       donner::tests::ReadRequiredRunfile("donner_splash.svg");

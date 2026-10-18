@@ -1,15 +1,22 @@
 import { errors, expect, type Page, test, type TestInfo, type Worker } from "@playwright/test";
 import { writeFile } from "node:fs/promises";
+import { arch, cpus, loadavg, platform, release, totalmem } from "node:os";
+import { presentedPulseWindow } from "./animation-pulse-observation.mjs";
 import {
+  awaitBeforeBlueDeadline,
   captureAfterCanvasGpuCompletion,
   captureReadyBasicShapesFrame,
   hasPresentedBasicShapesHostFrame,
 } from "./basic-shapes-capture-gate";
+import { boundBrowserDiagnostic, readGpuOwnerDispatchStats } from "./browser-runtime-diagnostics";
 import { installBrowserStallDiagnostics } from "./browser-stall-diagnostics";
 import {
   type CanvasColorStats,
   captureEditorPage,
+  type CssRegion,
+  type EditorPixelTarget,
   findElementColoredPixel,
+  isOnlyEditorPageBackground,
   type PixelBounds,
   readCanvasColorStats,
   readEditorPixelBoundsFromPng,
@@ -18,14 +25,18 @@ import {
   type ScreenshotTimeoutStage,
 } from "./canvas-color-stats";
 import { armFailureCanvasEvidence, installFailureCanvasEvidence } from "./failure-canvas-evidence";
+import { retakeFlatCapture } from "./flat-capture-retake.mjs";
 import { waitForAppliedPointer } from "./gesture-streams";
 import { echoGpuSessionConsole } from "./gpu-session-console";
 import { quarantineStillSkips } from "./quarantine-report.mjs";
+import { sampleThumbnailLaneQuiescent } from "./sample-thumbnail-quiescence.mjs";
 import { expectSampleThumbnailsToSettle } from "./sample-thumbnail-settle";
 import {
   expectSurfaceFrameProbeReady,
+  findCanvasOwnerWorker,
   findProbedCanvasApplicationWorker,
   holdCanvasCompletionForTest,
+  observeSubmittedCanvasGpuWork,
 } from "./surface-frame-probe";
 import { scaledMs } from "./test-timing";
 
@@ -47,6 +58,12 @@ declare global {
     __donnerWholeAppWorker?: boolean;
     __donnerCanStartWasm?: boolean;
     __donnerFirstFramePresented?: boolean;
+    __donnerRasterShutdownRequests?: number;
+    __donnerLayerThumbnailStats?: {
+      refreshPasses: number;
+      renderAttempts: number;
+      previewPaused: boolean;
+    };
     __donnerLastScrollEvent?: {
       zoomModifierHeld?: boolean;
       yoffset?: number;
@@ -72,6 +89,10 @@ declare global {
       framesPresentedWithoutResult?: number;
       workerMs: number;
       queueWaitMs: number;
+      idleYieldMs: number;
+      idleCallbackMs: number;
+      idleLockMs: number;
+      idleWaitMs: number;
       dequeueToStartMs: number;
       setupMs: number;
       renderFrameMs: number;
@@ -119,6 +140,14 @@ declare global {
     __donnerWgpuReadbackCaptureCompletions?: number;
     __donnerWgpuReadbackCaptureFailures?: number;
     __donnerMainLoopRenderedFrames?: number;
+    __donnerPresentedDocumentStats?: {
+      count: number;
+      documentGeneration: number;
+      frameVersion: number;
+      lastPresentedAtMs: number;
+      lastPublicationDelayMs: number;
+      samples: [number, number, number, number][];
+    };
     __donnerHostFrameTiming?: {
       frames: number;
       lastSurfacePresented: boolean;
@@ -229,6 +258,7 @@ interface WgpuCarouselThumbnailStats extends WgpuReadbackColorStats {
 }
 
 interface OpenEditorOptions {
+  frameDriver?: "proxied-main-raf";
   wgpuReadbackStats?: boolean;
   postInitializationDwellMs?: number;
   sampleThumbnailRendererCreationRequest?: number;
@@ -363,6 +393,9 @@ async function openEditor(page: Page, options: OpenEditorOptions = {}): Promise<
   armFailureCanvasEvidence(page, test.info());
   const baseUrl = process.env.DONNER_WASM_BASE_URL || "http://127.0.0.1:8000";
   const url = new URL(baseUrl);
+  if (options.frameDriver) {
+    url.searchParams.set("frameDriver", options.frameDriver);
+  }
   // Readback diagnostics are intentionally opt-in: even asynchronous readback
   // copies and scans the framebuffer, so production interaction tests should
   // not include that debug-only work unless they are explicitly guarding it.
@@ -773,11 +806,11 @@ test("welcome picker paints before asynchronously rendering real SVG thumbnails"
 
   await expect
     .poll(async () => page.evaluate(() => window.__donnerSampleThumbnailStats?.ready || 0), {
-      message: "expected all five catalog SVGs to publish real Donner-rendered thumbnails",
+      message: "expected all six catalog SVGs to publish real Donner-rendered thumbnails",
       timeout: 15000,
       intervals: [0, 25, 50, 100],
     })
-    .toBe(5);
+    .toBe(6);
 
   // The lane reports drained only once every visible thumbnail is on screen and nothing is in
   // flight. Presentation tests rely on that before they click a sample.
@@ -788,7 +821,7 @@ test("welcome picker paints before asynchronously rendering real SVG thumbnails"
     );
   await expect
     .poll(async () => (await readPublications()).some((publication) => publication.drained), {
-      message: "expected the thumbnail lane to report drained once all five thumbnails were ready",
+      message: "expected the thumbnail lane to report drained once all six thumbnails were ready",
       timeout: scaledMs(5000),
       intervals: [16, 25, 50, 100],
     })
@@ -796,12 +829,12 @@ test("welcome picker paints before asynchronously rendering real SVG thumbnails"
   const publications = await readPublications();
   const firstDrained = publications.findIndex((publication) => publication.drained);
   expect(
-    publications.slice(0, firstDrained).some((publication) => publication.ready < 5),
+    publications.slice(0, firstDrained).some((publication) => publication.ready < 6),
     "the lane must report not drained while thumbnails are still outstanding",
   ).toBe(true);
   expect(
     publications.filter((publication) =>
-      publication.drained && (publication.ready < 5 || publication.active || publication.pending)
+      publication.drained && (publication.ready < 6 || publication.active || publication.pending)
     ),
     `no publication may report drained ahead of the thumbnails: ${JSON.stringify(publications)}`,
   ).toEqual([]);
@@ -833,18 +866,18 @@ test("welcome picker paints before asynchronously rendering real SVG thumbnails"
     settled.thumbnails?.carouselFrame || 0,
   );
   expect(settled.thumbnails).toMatchObject({
-    rendered: 5,
-    ready: 5,
+    rendered: 6,
+    ready: 6,
     pending: false,
     active: false,
     resultReady: false,
     drained: true,
   });
-  expect(settled.thumbnails?.requested).toBeGreaterThanOrEqual(5);
+  expect(settled.thumbnails?.requested).toBeGreaterThanOrEqual(6);
   expect(settled.thumbnails?.started).toBe(settled.thumbnails?.requested);
   expect(settled.thumbnails?.completed).toBe(settled.thumbnails?.started);
   expect(await page.evaluate(() => window.__catalogFetchErrors)).toEqual([]);
-  expect(settled.thumbnails?.publicationFrames).toHaveLength(5);
+  expect(settled.thumbnails?.publicationFrames).toHaveLength(6);
   const publicationFrames = settled.thumbnails?.publicationFrames || [];
   for (let index = 1; index < publicationFrames.length; ++index) {
     expect(publicationFrames[index]).toBeGreaterThan(publicationFrames[index - 1]);
@@ -857,6 +890,7 @@ test("welcome picker paints before asynchronously rendering real SVG thumbnails"
     { id: "basic-shapes", column: 2, row: 0 },
     { id: "text-style", column: 0, row: 1 },
     { id: "gradients-clip", column: 1, row: 1 },
+    { id: "animation", column: 2, row: 1 },
   ] as const;
   if (kBackend === "geode") {
     // The diagnostic readback samples at most four thumbnail textures even when the carousel
@@ -1018,7 +1052,7 @@ test("WGPU diagnostics do not block the first carousel interaction", async ({ pa
     .toEqual({
       active: false,
       pending: false,
-      ready: 5,
+      ready: 6,
       resultReady: false,
     });
   await expect
@@ -1219,6 +1253,321 @@ test("Firefox hands a blocked thumbnail renderer to a foreground sample load", a
   expect(fatalMessages).toEqual([]);
 });
 
+async function holdRasterTaskYield(page: Page) {
+  const raster = await Promise.any(
+    page.workers().map(async (worker) => {
+      await worker.evaluate(() => {
+        const scope = globalThis as typeof globalThis & {
+          __donnerRasterTaskYield?: {
+            channel: MessageChannel;
+            resume: (() => void) | null;
+            closed: boolean;
+          };
+          __donnerHeldTaskYield?: () => boolean;
+          __donnerReleaseTaskYield?: () => void;
+        };
+        const state = scope.__donnerRasterTaskYield;
+        if (!state || state.closed) throw new Error("not the active raster worker");
+        const original = state.channel.port1.onmessage;
+        if (!original) throw new Error("raster yield handler missing");
+        let held: MessageEvent | undefined;
+        state.channel.port1.onmessage = (event) => {
+          if (held) throw new Error("multiple raster yield messages held");
+          held = event;
+        };
+        scope.__donnerHeldTaskYield = () => held !== undefined && state.resume !== null;
+        scope.__donnerReleaseTaskYield = () => {
+          state.channel.port1.onmessage = original;
+          const event = held;
+          held = undefined;
+          delete scope.__donnerHeldTaskYield;
+          delete scope.__donnerReleaseTaskYield;
+          if (event) original.call(state.channel.port1, event);
+        };
+      });
+      return worker;
+    }),
+  );
+  const release = () =>
+    raster.evaluate(() => {
+      const scope = globalThis as typeof globalThis & { __donnerReleaseTaskYield?: () => void };
+      scope.__donnerReleaseTaskYield?.();
+    });
+  try {
+    await expect.poll(() =>
+      raster.evaluate(() => {
+        const scope = globalThis as typeof globalThis & { __donnerHeldTaskYield?: () => boolean };
+        return scope.__donnerHeldTaskYield?.() ?? false;
+      }), { timeout: scaledMs(3000), message: "one raster task yield is suspended" }).toBe(true);
+  } catch (error) {
+    await release();
+    throw error;
+  }
+  return { raster, release };
+}
+
+async function findRasterTaskWorker(page: Page) {
+  return Promise.any(
+    page.workers().map(async (worker) => {
+      const active = await worker.evaluate(() => {
+        const scope = globalThis as typeof globalThis & {
+          __donnerRasterWorker?: boolean;
+          __donnerRasterTaskYield?: { closed: boolean };
+        };
+        return scope.__donnerRasterWorker === true
+          && scope.__donnerRasterTaskYield?.closed === false;
+      });
+      if (!active) throw new Error("not the active raster worker");
+      return worker;
+    }),
+  );
+}
+
+// A finite worker-side lease cleans up even if an installation reply arrives after the caller deadline.
+async function holdKnownRasterUntil(raster: Worker, deadlineAtMs: number) {
+  const remaining = deadlineAtMs - performance.now();
+  if (remaining < 1) throw new Error("raster hold deadline exceeded");
+  const lease = { id: `${Date.now()}-${deadlineAtMs}`, expiresEpochMs: Date.now() + remaining };
+  const installed = raster.evaluate(({ id, expiresEpochMs }) => {
+    const scope = globalThis as typeof globalThis & {
+      __donnerRasterTaskYield?: {
+        channel: MessageChannel;
+        resume: (() => void) | null;
+        closed: boolean;
+      };
+      __donnerPulseHold?: { id: string; held: () => boolean; release: () => void };
+    };
+    if (Date.now() >= expiresEpochMs) throw new Error("late raster hold installation");
+    if (scope.__donnerPulseHold) throw new Error("raster hold already installed");
+    const state = scope.__donnerRasterTaskYield;
+    const original = state?.channel.port1.onmessage;
+    if (!state || state.closed || !original) throw new Error("raster yield unavailable");
+    let held: MessageEvent | undefined;
+    let released = false;
+    const release = () => {
+      if (released) return;
+      released = true;
+      clearTimeout(timer);
+      state.channel.port1.onmessage = original;
+      if (scope.__donnerPulseHold?.id === id) delete scope.__donnerPulseHold;
+      const event = held;
+      held = undefined;
+      if (event) original.call(state.channel.port1, event);
+    };
+    scope.__donnerPulseHold = {
+      id,
+      held: () => held !== undefined && state.resume !== null,
+      release,
+    };
+    state.channel.port1.onmessage = (event) => {
+      if (Date.now() >= expiresEpochMs) {
+        release();
+        original.call(state.channel.port1, event);
+        return;
+      }
+      if (held) {
+        release();
+        throw new Error("multiple raster yield messages held");
+      }
+      held = event;
+    };
+    const timer = setTimeout(release, Math.max(1, expiresEpochMs - Date.now()));
+  }, lease);
+  const release = async () => {
+    await awaitBeforeBlueDeadline(
+      raster.evaluate((id) => {
+        const scope = globalThis as unknown as {
+          __donnerPulseHold?: { id: string; release: () => void };
+        };
+        if (scope.__donnerPulseHold?.id === id) scope.__donnerPulseHold.release();
+      }, lease.id),
+      performance.now() + 1000,
+    );
+  };
+  try {
+    await awaitBeforeBlueDeadline(installed, deadlineAtMs);
+    await expect.poll(() =>
+      awaitBeforeBlueDeadline(
+        raster.evaluate((id) => {
+          const scope = globalThis as unknown as {
+            __donnerPulseHold?: { id: string; held: () => boolean };
+          };
+          return scope.__donnerPulseHold?.id === id && scope.__donnerPulseHold.held();
+        }, lease.id),
+        deadlineAtMs,
+      ), {
+      timeout: Math.max(1, deadlineAtMs - performance.now()),
+      intervals: [16],
+      message: "the known raster worker retains a pulse frame",
+    }).toBe(true);
+    return { release };
+  } catch (error) {
+    try {
+      await release();
+    } catch (cleanupError) {
+      throw new AggregateError(
+        [error, cleanupError],
+        "raster hold and cleanup failed; finite lease remains",
+      );
+    }
+    throw error;
+  }
+}
+
+async function verifyRasterProgressWithTimersHeld(page: Page) {
+  const raster = await Promise.any(
+    page.workers().map(async (worker) => {
+      await worker.evaluate(() => {
+        const scope = globalThis as typeof globalThis & {
+          __donnerRasterWorker?: boolean;
+          __donnerReleaseHeldTimers?: () => void;
+          __donnerHeldTimerState?: () => { pending: number; probeRan: boolean };
+        };
+        if (!scope.__donnerRasterWorker) throw new Error("not the raster worker");
+        const originalSet = globalThis.setTimeout.bind(globalThis);
+        const originalClear = globalThis.clearTimeout.bind(globalThis);
+        const held = new Map<number, () => void>();
+        let nextId = -1;
+        let probeRan = false;
+        globalThis.setTimeout = (handler, delay, ...args) => {
+          if (Number(delay ?? 0) !== 0) return originalSet(handler, delay, ...args);
+          if (held.size >= 64) throw new Error("held raster timer probe exceeded its bound");
+          const id = nextId--;
+          held.set(id, () => originalSet(handler, 0, ...args));
+          return id;
+        };
+        globalThis.clearTimeout = (id) => {
+          if (!held.delete(Number(id))) originalClear(id);
+        };
+        scope.__donnerHeldTimerState = () => ({ pending: held.size, probeRan });
+        scope.__donnerReleaseHeldTimers = () => {
+          globalThis.setTimeout = originalSet;
+          globalThis.clearTimeout = originalClear;
+          const callbacks = [...held.values()];
+          held.clear();
+          delete scope.__donnerHeldTimerState;
+          delete scope.__donnerReleaseHeldTimers;
+          for (const callback of callbacks) callback();
+        };
+        setTimeout(() => {
+          probeRan = true;
+        }, 0);
+      });
+      return worker;
+    }),
+  );
+  try {
+    const before = await page.evaluate(() => window.__donnerWorkerStats?.completedResults ?? 0);
+    await expect.poll(
+      () => page.evaluate(() => window.__donnerWorkerStats?.completedResults ?? 0),
+      { timeout: scaledMs(3000), message: "raster progresses while zero-delay timers are held" },
+    ).toBeGreaterThanOrEqual(before + 3);
+    const state = await raster.evaluate(() => {
+      const scope = globalThis as typeof globalThis & {
+        __donnerHeldTimerState?: () => { pending: number; probeRan: boolean };
+      };
+      return scope.__donnerHeldTimerState?.();
+    });
+    expect(state?.pending).toBeGreaterThanOrEqual(1);
+    expect(state?.probeRan).toBe(false);
+  } finally {
+    await raster.evaluate(() => {
+      const scope = globalThis as typeof globalThis & { __donnerReleaseHeldTimers?: () => void };
+      scope.__donnerReleaseHeldTimers?.();
+    });
+  }
+  expect(
+    await raster.evaluate(() =>
+      new Promise<boolean>((resolve) => {
+        setTimeout(() => resolve(true), 0);
+      })
+    ),
+  ).toBe(true);
+}
+
+async function startOwnerFrameProbe(page: Page, sampleRaf: boolean): Promise<Worker> {
+  const startup = Promise.any(
+    page.workers().map(async (worker) => {
+      await worker.evaluate((sampleRaf) => {
+        const state = globalThis as unknown as Record<string, unknown>;
+        if (!state.__donnerGpuOwner) throw new Error("not the GPU owner");
+        const counts = Array(9).fill(0);
+        state.__donnerPreviewAdvanceCounts = counts;
+        const samples: number[][] = [];
+        const registrations: number[][] = [];
+        const deadline = performance.now() + 25000;
+        const callbackIds = new Map<FrameRequestCallback, number>();
+        const originalRaf = globalThis.requestAnimationFrame.bind(globalThis);
+        const previousRaf = globalThis.requestAnimationFrame;
+        let recording = true;
+        const tracedRaf: typeof requestAnimationFrame = (callback) => {
+          if (!recording || registrations.length >= 4096 || performance.now() >= deadline) {
+            return originalRaf(callback);
+          }
+          if (!callbackIds.has(callback) && callbackIds.size < 16) {
+            callbackIds.set(callback, callbackIds.size + 1);
+          }
+          const record = [callbackIds.get(callback) ?? 0, performance.now(), -1, -1, -1];
+          if (recording && registrations.length < 4096) registrations.push(record);
+          return originalRaf(function(this: unknown, timestamp) {
+            record[2] = timestamp;
+            record[3] = performance.now();
+            try {
+              return callback.call(this, timestamp);
+            } finally {
+              record[4] = performance.now();
+            }
+          });
+        };
+        globalThis.requestAnimationFrame = tracedRaf;
+        let request = 0;
+        const tick = (timestamp: number) => {
+          samples.push([timestamp, performance.now()]);
+          if (samples.length < 4096 && performance.now() < deadline) {
+            request = requestAnimationFrame(tick);
+          }
+        };
+        if (sampleRaf) request = requestAnimationFrame(tick);
+        state.__donnerStopOwnerRafProbe = () => {
+          cancelAnimationFrame(request);
+          recording = false;
+          if (globalThis.requestAnimationFrame === tracedRaf) {
+            globalThis.requestAnimationFrame = previousRaf;
+          }
+          delete state.__donnerStopOwnerRafProbe;
+          delete state.__donnerPreviewAdvanceCounts;
+          return { timeOrigin: performance.timeOrigin, samples, counts, registrations };
+        };
+      }, sampleRaf);
+      return worker;
+    }),
+  );
+  const owner = await boundBrowserDiagnostic(startup, 2000);
+  if (!owner) {
+    void startup.then(stopOwnerFrameProbe).catch(() => null);
+    throw new Error("GPU owner rAF probe did not start");
+  }
+  return owner;
+}
+
+async function stopOwnerFrameProbe(worker: Worker) {
+  return boundBrowserDiagnostic(
+    worker.evaluate(() => {
+      const state = globalThis as unknown as Record<string, unknown>;
+      const stop = state.__donnerStopOwnerRafProbe as
+        | (() => {
+          timeOrigin: number;
+          samples: number[][];
+          counts: number[];
+          registrations: number[][];
+        })
+        | undefined;
+      return stop?.() ?? null;
+    }),
+    2000,
+  );
+}
+
 async function delayWorkerAnimationFrames(page: Page, delayMs: number) {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
@@ -1279,6 +1628,7 @@ async function readCarouselFrameDiagnostics(page: Page) {
           "__donnerFrameLoopStats",
           "__donnerHostFrameTiming",
           "__donnerFrameTickStats",
+          "__donnerFrameAdmissionStats",
           "__donnerAsyncifySuspendStats",
           "__donnerSampleThumbnailStats",
           "__donnerPresentationQueueStats",
@@ -1298,19 +1648,9 @@ async function readCarouselFrameDiagnostics(page: Page) {
 // raster worker phases, and each UI frame's presentation admission, all on the page clock. It is
 // what separates a presentation held behind earlier GPU work from a late wake.
 async function readCarouselGpuTimeline(page: Page) {
-  const withDeadline = async <T>(work: Promise<T>): Promise<T | null> => {
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    try {
-      return await Promise.race([
-        work.catch(() => null),
-        new Promise<null>((resolve) => {
-          timer = setTimeout(() => resolve(null), 2000);
-        }),
-      ]);
-    } finally {
-      if (timer !== undefined) clearTimeout(timer);
-    }
-  };
+  const withDeadline = <T>(work: Promise<T>): Promise<T | null> =>
+    boundBrowserDiagnostic(work, 2000);
+
   const pageState = await withDeadline(page.evaluate(() => {
     const state = window as unknown as Record<string, unknown>;
     return {
@@ -1362,6 +1702,7 @@ for (
     { id: "basic-shapes", name: "Basic Shapes", xFraction: 0.76, y: 282 },
     { id: "text-style", name: "Text and Style", xFraction: 0.24, y: 390 },
     { id: "gradients-clip", name: "Gradients and Clip", xFraction: 0.5, y: 390 },
+    { id: "animation", name: "Animation", xFraction: 0.76, y: 390 },
     {
       id: "basic-shapes",
       name: "Basic Shapes with delayed animation frames",
@@ -1387,6 +1728,9 @@ for (
         ),
       ).toBe("worker-raf");
       await delayWorkerAnimationFrames(page, sample.delayWorkerRafMs);
+      await expect.poll(async () => (await readDelayedAnimationFrameCallbacks(page)).length, {
+        message: "the delayed callback chain is active before the click",
+      }).toBeGreaterThan(0);
     }
     const deviceCreationsBeforeClick = await page.evaluate(
       () => window.__donnerHeadlessDeviceCreations ?? -1,
@@ -1512,12 +1856,13 @@ for (
           JSON.stringify(phaseTimings)
         }`,
       ).toEqual([]);
-      await expect.poll(() =>
-        page.evaluate(() =>
-          (window as Window & { __donnerFrameTickStats?: { maxMs: number } })
-            .__donnerFrameTickStats?.maxMs ?? 0
-        )
-      ).toBeGreaterThanOrEqual(sample.delayWorkerRafMs);
+      // Idle scheduled callbacks do not publish the full-frame tick diagnostics.
+      await expect.poll(async () => {
+        const callbacks = await readDelayedAnimationFrameCallbacks(page);
+        return callbacks.some(([startedAt], index) =>
+          index > 0 && startedAt - callbacks[index - 1][0] >= sample.delayWorkerRafMs
+        );
+      }, { message: "the injected delay separates actual scheduled callbacks" }).toBe(true);
     }
     expect(phaseTimings.presentedMs).toBeDefined();
     expect(phaseTimings.completedMs).toBeDefined();
@@ -1903,12 +2248,15 @@ test(
         async () => hasPresentedBasicShapesHostFrame(await readState(), before.results),
         { timeout: scaledMs(5_000) },
       ).toBe(true);
+      let readyState: Awaited<ReturnType<typeof readState>> | undefined;
       await expect.poll(async () => {
         const state = await readState();
-        return hasPresentedBasicShapesHostFrame(state, before.results) && state.framesInFlight === 0
-          && state.completedSerial === state.submittedSerial;
+        const ready = hasPresentedBasicShapesHostFrame(state, before.results)
+          && state.framesInFlight === 0 && state.completedSerial === state.submittedSerial;
+        if (ready) readyState = state;
+        return ready;
       }, { timeout: scaledMs(5_000) }).toBe(true);
-      const readyState = await readState();
+      if (!readyState) throw new Error("the completed Basic Shapes frame was not observed");
       expect(readyState.renderedFrames).toBeGreaterThan(before.frames);
       // Hold a fresh document frame, not welcome frames that can occupy all presentation slots.
       const completionHold = await holdCanvasCompletionForTest(page, [applicationOwner!]);
@@ -2915,18 +3263,21 @@ test("Firefox renders every visible Splash layer thumbnail", async ({ browserNam
     settledStats?.textureSnapshotCount || 0,
   );
 
+  // The 40 px Edit/Preview dock sits above the Layers panel. Keep the probes inside
+  // the same named thumbnail rows after that dock shifts the panel down.
+  const animationModeDockHeight = 40;
   const thumbnailRegions = [
     {
       name: "Sunburst",
       x: bounds.width - kRightPaneWidth + 60,
-      y: 112,
+      y: 112 + animationModeDockHeight,
       width: 30,
       height: 26,
     },
     {
       name: "Blue_center_burst",
       x: bounds.width - kRightPaneWidth + 60,
-      y: 172,
+      y: 172 + animationModeDockHeight,
       width: 30,
       height: 26,
     },
@@ -3253,3 +3604,1291 @@ test("Geode WASM presents selection path overlay pixels", async ({ page }) => {
 
   expect(fatalMessages).toEqual([]);
 });
+
+async function readChromiumGpuInfo(page: Page) {
+  const browser = page.context().browser();
+  if (!browser || browser.browserType().name() !== "chromium") return null;
+  const creation = browser.newBrowserCDPSession();
+  const session = await boundBrowserDiagnostic(creation, 2000);
+  if (!session) {
+    void creation.then((late) => boundBrowserDiagnostic(late.detach(), 2000), () => null);
+    return null;
+  }
+  try {
+    const info = await boundBrowserDiagnostic(session.send("SystemInfo.getInfo"), 2000);
+    if (!info?.gpu) return null;
+    const gpu = info.gpu;
+    const bounded = (value: unknown) =>
+      typeof value === "string"
+        ? value.slice(0, 256)
+        : typeof value === "number" && Number.isFinite(value)
+        ? value
+        : typeof value === "boolean"
+        ? value
+        : null;
+    return {
+      devices: (gpu.devices ?? []).slice(0, 8).map((device: Record<string, unknown>) =>
+        Object.fromEntries(
+          ["vendorId", "deviceId", "vendorString", "deviceString", "driverVendor", "driverVersion"]
+            .map((key) => [key, bounded(device[key])]),
+        )
+      ),
+      gl: Object.fromEntries(
+        ["glVendor", "glRenderer", "glVersion", "displayType"]
+          .map((key) => [key, bounded(gpu.auxAttributes?.[key])]),
+      ),
+      features: Object.fromEntries(
+        ["gpu_compositing", "rasterization", "webgl", "webgl2", "webgpu"]
+          .map((key) => [key, bounded(gpu.featureStatus?.[key])]),
+      ),
+    };
+  } finally {
+    await boundBrowserDiagnostic(session.detach(), 2000);
+  }
+}
+
+async function measurePageRaf(page: Page, durationMs: number) {
+  const loadBefore = loadavg();
+  const sample = await boundBrowserDiagnostic(
+    page.evaluate(async (durationMs) => {
+      const startedAtMs = performance.now();
+      const readState = () =>
+        structuredClone({
+          visibilityState: document.visibilityState,
+          hasFocus: document.hasFocus(),
+          frames: window.__donnerMainLoopRenderedFrames ?? 0,
+          worker: window.__donnerWorkerStats ?? null,
+          layerThumbnails: window.__donnerLayerThumbnailStats ?? null,
+          thumbnails: window.__donnerSampleThumbnailStats ?? null,
+        });
+      const before = readState();
+      return await new Promise<{
+        startedAtMs: number;
+        finishedAtMs: number;
+        before: ReturnType<typeof readState>;
+        after: ReturnType<typeof readState>;
+        samples: number[][];
+      }>((resolve) => {
+        const samples: number[][] = [];
+        let frame = 0;
+        let timer = 0;
+        let finished = false;
+        const finish = () => {
+          if (finished) return;
+          finished = true;
+          cancelAnimationFrame(frame);
+          clearTimeout(timer);
+          resolve({
+            startedAtMs,
+            finishedAtMs: performance.now(),
+            before,
+            after: readState(),
+            samples,
+          });
+        };
+        const tick = (timestamp: number) => {
+          if (finished) return;
+          samples.push([timestamp, performance.now()]);
+          if (performance.now() - startedAtMs >= durationMs || samples.length >= 4096) {
+            finish();
+          } else {
+            frame = requestAnimationFrame(tick);
+          }
+        };
+        timer = window.setTimeout(finish, durationMs + 1000);
+        frame = requestAnimationFrame(tick);
+      });
+    }, durationMs),
+    durationMs + 2000,
+  );
+  return { sample, loadBefore, loadAfter: loadavg() };
+}
+
+type AnimationRegionCapture = {
+  png: Buffer;
+  read: (
+    target: EditorPixelTarget,
+    search?: { minX: number; minY: number; maxX: number; maxY: number },
+  ) => PixelBounds | null;
+  viewport: { width: number; height: number };
+};
+
+type AnimationRegionCaptureFn = (
+  region: CssRegion,
+  deadlineAtMs?: number,
+) => Promise<AnimationRegionCapture>;
+
+function createAnimationRegionCapture(page: Page, browserName: string, testInfo: TestInfo) {
+  let owner: Worker | null = null;
+  let flatCaptureSequence = 0;
+  const setOwner = (next: Worker) => {
+    owner = next;
+  };
+  const capture = async (
+    region: CssRegion,
+    deadlineAtMs?: number,
+  ): Promise<AnimationRegionCapture> => {
+    const viewport = page.viewportSize();
+    if (!viewport) throw new Error("the animation capture viewport is unavailable");
+    // Firefox can omit the transferred WebGPU canvas from clipped captures. Use the same
+    // un-clipped viewport capture as the presentation regressions, then score the original region.
+    const unclipped = browserName === "firefox";
+    const screenshot = (timeout: number) =>
+      page.screenshot({
+        ...(unclipped ? {} : { clip: region }),
+        timeout,
+      });
+    const deadline = deadlineAtMs ?? (performance.now() + scaledMs(5000));
+    let captureTiming: { startedEpochMs: number; finishedEpochMs: number };
+    let completionObserved = false;
+    let completion: Awaited<ReturnType<typeof observeSubmittedCanvasGpuWork>> | null = null;
+    const captureAttempts: Record<string, unknown>[] = [];
+    const sequence = flatCaptureSequence++;
+    const captureCompleted = async () => {
+      const startedEpochMs = Date.now();
+      const attempt: Record<string, unknown> = { startedEpochMs };
+      captureAttempts.push(attempt);
+      try {
+        // Both captures belong to one observation. Do not wait for newer animation
+        // submissions again when retaking an exact-background screenshot.
+        if (owner !== null && !completionObserved) {
+          attempt.completionDispatchEpochMs = Date.now();
+          completion = await awaitBeforeBlueDeadline(
+            observeSubmittedCanvasGpuWork(owner),
+            deadline,
+          );
+          completionObserved = true;
+        }
+        attempt.completion = completion;
+        const remaining = deadline - performance.now();
+        if (remaining < 1) throw new Error("animation capture deadline exceeded");
+        attempt.screenshotStartedEpochMs = Date.now();
+        const image = await screenshot(remaining);
+        attempt.screenshotFinishedEpochMs = Date.now();
+        captureTiming = { startedEpochMs, finishedEpochMs: Date.now() };
+        if (performance.now() >= deadline) throw new Error("animation capture deadline exceeded");
+        return image;
+      } catch (error) {
+        attempt.error = String(error);
+        throw error;
+      } finally {
+        attempt.finishedEpochMs = Date.now();
+        await writeFile(
+          testInfo.outputPath(`animation-capture-${sequence}-timing.json`),
+          JSON.stringify({ region, viewport, captureAttempts }, null, 2),
+        );
+      }
+    };
+    // Retain a single exact-background retake as evidence. This does not establish that
+    // the application never flickered; every nonuniform image still reaches the pixel oracle.
+    const png: Buffer = unclipped
+      ? await retakeFlatCapture({
+        capture: captureCompleted,
+        isFlat: isOnlyEditorPageBackground,
+        deadline,
+        retain: async (image: Buffer, attempt: number) => {
+          const stem = `animation-flat-capture-${sequence}-${attempt}`;
+          const pngPath = testInfo.outputPath(`${stem}.png`);
+          await writeFile(pngPath, image);
+          let presentation: unknown;
+          try {
+            presentation = await awaitBeforeBlueDeadline(
+              page.evaluate(() => ({
+                queue: window.__donnerPresentationQueueStats,
+                worker: window.__donnerWorkerStats,
+              })),
+              deadline,
+            );
+          } catch (error) {
+            presentation = { diagnosticError: String(error) };
+          }
+          await writeFile(
+            testInfo.outputPath(`${stem}.json`),
+            JSON.stringify(
+              {
+                ...captureTiming,
+                presentationObservedAfterCapture: presentation,
+                region,
+                viewport,
+                exactPageBackground: isOnlyEditorPageBackground(image),
+                pageBackgroundRgba: [16, 19, 23, 255],
+              },
+              null,
+              2,
+            ),
+          );
+          await testInfo.attach(stem, { path: pngPath, contentType: "image/png" });
+        },
+      })
+      : await captureCompleted();
+    if (performance.now() >= deadline) throw new Error("animation capture deadline exceeded");
+    const offsetX = unclipped ? region.x : 0;
+    const offsetY = unclipped ? region.y : 0;
+    const read = (
+      target: EditorPixelTarget,
+      search = { minX: 0, minY: 0, maxX: region.width, maxY: region.height },
+    ): PixelBounds | null => {
+      const bounds = readEditorPixelBoundsFromPng(png, target, unclipped ? viewport : region, {
+        minX: offsetX + search.minX,
+        minY: offsetY + search.minY,
+        maxX: offsetX + search.maxX,
+        maxY: offsetY + search.maxY,
+      });
+      return bounds === null ? null : {
+        ...bounds,
+        minX: bounds.minX - offsetX,
+        minY: bounds.minY - offsetY,
+        maxX: bounds.maxX - offsetX,
+        maxY: bounds.maxY - offsetY,
+      };
+    };
+    return { png, read, viewport };
+  };
+  return { capture, setOwner };
+}
+
+function createAnimationOrbProbe(
+  captureAnimationRegion: AnimationRegionCaptureFn,
+  track: CssRegion,
+  testInfo: TestInfo,
+  evidenceContext: Record<string, unknown>,
+) {
+  let traceScreenshots = false;
+  const screenshots: { startedEpochMs: number; finishedEpochMs: number; height: number | null }[] =
+    [];
+  const capture = async (deadlineAtMs?: number) => {
+    const started = Date.now();
+    const frame = await captureAnimationRegion(track, deadlineAtMs);
+    const result = frame.read("animation-mint");
+    if (traceScreenshots && screenshots.length < 64) {
+      screenshots.push({
+        startedEpochMs: started,
+        finishedEpochMs: Date.now(),
+        height: result ? result.maxY - result.minY : null,
+      });
+    }
+    if (!result) {
+      const missingPath = testInfo.outputPath("animation-orb-missing.png");
+      await writeFile(missingPath, frame.png);
+      await writeFile(
+        testInfo.outputPath("animation-orb-missing-region.json"),
+        JSON.stringify({ track, viewport: frame.viewport, ...evidenceContext }, null, 2),
+      );
+      await testInfo.attach("animation-orb-missing", {
+        path: missingPath,
+        contentType: "image/png",
+      });
+      throw new Error("the presented animation orb disappeared");
+    }
+    return result;
+  };
+  return {
+    capture,
+    screenshots,
+    setTraceScreenshots: (enabled: boolean) => {
+      traceScreenshots = enabled;
+    },
+  };
+}
+
+function createAnimationCadenceReader(page: Page, samples: unknown[]) {
+  return async () => {
+    const sample = await page.evaluate(() => {
+      const orZero = (value: number | null | undefined) => value ?? 0;
+      return {
+        time: performance.now(),
+        timeOrigin: performance.timeOrigin,
+        frames: orZero(window.__donnerMainLoopRenderedFrames),
+        documents: orZero(window.__donnerWorkerStats?.completedResults),
+        presentedDocuments: orZero(window.__donnerPresentedDocumentStats?.count),
+        presentedAtMs: window.__donnerPresentedDocumentStats?.lastPresentedAtMs,
+        presentationPublicationDelayMs: window.__donnerPresentedDocumentStats
+          ?.lastPublicationDelayMs,
+        worker: window.__donnerWorkerStats,
+        resources: window.__donnerPresentationResourceStats,
+        thumbnails: window.__donnerSampleThumbnailStats,
+        layerThumbnails: window.__donnerLayerThumbnailStats,
+        explicitCaptureStarts: orZero(window.__donnerWgpuReadbackCaptureStarts),
+        explicitCaptureCompletions: orZero(window.__donnerWgpuReadbackCaptureCompletions),
+        pageState: { visibilityState: document.visibilityState, hasFocus: document.hasFocus() },
+      };
+    });
+    if (samples.length < 256) samples.push(sample);
+    return sample;
+  };
+}
+
+async function finishAnimationPreview({
+  page,
+  editCenter,
+  editWidth,
+  orb,
+  start,
+  scale,
+  rafControls,
+  captureRafControl,
+}: {
+  page: Page;
+  editCenter: { x: number; y: number };
+  editWidth: number;
+  orb: () => Promise<PixelBounds>;
+  start: PixelBounds;
+  scale: number;
+  rafControls: boolean;
+  captureRafControl: (name: string) => Promise<void>;
+}) {
+  const heldForEdit = await holdRasterTaskYield(page);
+  try {
+    const frames = await page.evaluate(() => window.__donnerMainLoopRenderedFrames ?? 0);
+    await page.mouse.click(editCenter.x, editCenter.y);
+    await expect.poll(() => page.evaluate(() => window.__donnerMainLoopRenderedFrames ?? 0), {
+      timeout: scaledMs(3000),
+      message: "Edit remains responsive while a raster yield is held",
+    }).toBeGreaterThan(frames + 1);
+  } finally {
+    await heldForEdit.release();
+  }
+  await expect.poll(async () => (await orb()).minX, { timeout: scaledMs(5000) }).toBeCloseTo(
+    start.minX,
+    0,
+  );
+  await page.mouse.click(editCenter.x + editWidth + 1, editCenter.y);
+  await expect.poll(async () => Math.abs((await orb()).minX - start.minX), {
+    timeout: scaledMs(5000),
+    message: "Preview restarts after the suspended-yield cancellation",
+  }).toBeGreaterThan(8 * scale);
+  const owner = await Promise.any(
+    page.workers().map(async (worker) => {
+      const owned = await worker.evaluate(() =>
+        Boolean((globalThis as typeof globalThis & { __donnerGpuOwner?: boolean }).__donnerGpuOwner)
+      );
+      if (!owned) throw new Error("not the GPU owner");
+      return worker;
+    }),
+  );
+  const shutdowns = await page.evaluate(() => window.__donnerRasterShutdownRequests ?? 0);
+  const heldForQuit = await holdRasterTaskYield(page);
+  try {
+    const frames = await page.evaluate(() => window.__donnerMainLoopRenderedFrames ?? 0);
+    await page.mouse.click(editCenter.x, editCenter.y);
+    await expect.poll(() => page.evaluate(() => window.__donnerMainLoopRenderedFrames ?? 0), {
+      timeout: scaledMs(3000),
+      message: "Edit action is applied before quitting",
+    }).toBeGreaterThan(frames + 1);
+    await page.keyboard.down("Control");
+    try {
+      try {
+        await page.keyboard.down("q");
+        await expect.poll(() => page.evaluate(() => window.__donnerRasterShutdownRequests ?? 0), {
+          timeout: scaledMs(5000),
+          message: "shutdown begins while the raster yield remains held",
+        }).toBeGreaterThan(shutdowns);
+      } finally {
+        await page.keyboard.up("q");
+      }
+    } finally {
+      await page.keyboard.up("Control");
+    }
+    expect(
+      await heldForQuit.raster.evaluate(() => {
+        const scope = globalThis as typeof globalThis & { __donnerHeldTaskYield?: () => boolean };
+        return scope.__donnerHeldTaskYield?.() ?? false;
+      }),
+    ).toBe(true);
+  } finally {
+    await heldForQuit.release();
+  }
+  await expect.poll(() =>
+    heldForQuit.raster.evaluate(() => {
+      const scope = globalThis as typeof globalThis & {
+        __donnerRasterWorker?: boolean;
+        __donnerRasterTaskYield?: unknown;
+      };
+      return {
+        marker: Boolean(scope.__donnerRasterWorker),
+        channel: Boolean(scope.__donnerRasterTaskYield),
+      };
+    }), { timeout: scaledMs(5000), message: "raster teardown closes its task channel" })
+    .toEqual({ marker: false, channel: false });
+  await expect.poll(
+    () =>
+      owner.evaluate(() =>
+        Boolean((globalThis as typeof globalThis & { __donnerGpuOwner?: boolean }).__donnerGpuOwner)
+      ),
+    { timeout: scaledMs(5000), message: "GPU owner shuts down after joining the raster worker" },
+  ).toBe(false);
+  if (rafControls) {
+    await page.goto("about:blank");
+    await captureRafControl("blankAfter");
+  }
+}
+
+async function exerciseAnimationPointerPulse({
+  page,
+  testInfo,
+  box,
+  originX,
+  originY,
+  scale,
+  captureAnimationRegion,
+  interactionCaptureOwner,
+  orbProbe,
+  orb,
+  start,
+}: {
+  page: Page;
+  testInfo: TestInfo;
+  box: CssRegion;
+  originX: number;
+  originY: number;
+  scale: number;
+  captureAnimationRegion: AnimationRegionCaptureFn;
+  interactionCaptureOwner: Worker | null;
+  orbProbe: ReturnType<typeof createAnimationOrbProbe>;
+  orb: (deadlineAtMs?: number) => Promise<PixelBounds>;
+  start: PixelBounds;
+}) {
+  let preQueuedPointerTrace: unknown;
+  let initialPulseObservation: unknown = null;
+  let queuedPulseObservation: unknown = null;
+  let pulseClickStartedEpochMs: number | null = null;
+  let pulseClickFinishedEpochMs: number | null = null;
+  let delayedPulseClickStartedEpochMs: number | null = null;
+  let delayedPulseClickFinishedEpochMs: number | null = null;
+  let delayedPulseReleaseEpochMs: number | null = null;
+  let heldPulseHeight: number | null = null;
+  try {
+    await Promise.all(
+      page.workers().map((worker) =>
+        boundBrowserDiagnostic(
+          worker.evaluate(() => {
+            (globalThis as unknown as Record<string, unknown>).__donnerPreviewPointerTrace = [];
+          }),
+          1000,
+        )
+      ),
+    );
+    const pad = { x: box.x + originX + 184 * scale, y: box.y + originY + 314 * scale };
+    const padRegion = {
+      x: box.x + originX + 80 * scale,
+      y: box.y + originY + 280 * scale,
+      width: 200 * scale,
+      height: 65 * scale,
+    };
+    const padPixels = async (
+      target: "animation-hover" | "animation-pressed",
+      deadline: number,
+    ) => {
+      const capture = await captureAnimationRegion(padRegion, deadline);
+      const pixels = capture.read(target)?.pixels ?? 0;
+      if (pixels <= 1000) {
+        await writeFile(testInfo.outputPath(`${target}-probe.png`), capture.png);
+        await writeFile(
+          testInfo.outputPath(`${target}-probe.json`),
+          JSON.stringify({ padRegion, viewport: capture.viewport, pixels }, null, 2),
+        );
+      }
+      return pixels;
+    };
+    const verifyPadInput = async (
+      eventType: number,
+      target: "animation-hover" | "animation-pressed",
+      action: () => Promise<void>,
+    ) => {
+      if (interactionCaptureOwner === null) throw new Error("animation owner is unavailable");
+      const deadline = performance.now() + scaledMs(5000);
+      const notBefore = Date.now();
+      await awaitBeforeBlueDeadline(action(), deadline);
+      // Screenshot capture can stall Firefox's worker progress. Let the actual input
+      // dispatch and its following document presentation finish before asking for pixels.
+      await expect.poll(
+        () =>
+          awaitBeforeBlueDeadline(
+            interactionCaptureOwner.evaluate(({ eventType, notBefore }) => {
+              const trace =
+                (globalThis as unknown as Record<string, unknown>).__donnerPreviewPointerTrace;
+              return Array.isArray(trace) && trace.some((row) =>
+                Array.isArray(row)
+                && row[0] >= notBefore && row[1] === 2 && row[2] === eventType && row[5] === true
+              );
+            }, { eventType, notBefore }),
+            deadline,
+          ),
+        {
+          timeout: Math.max(1, deadline - performance.now()),
+          intervals: [16],
+          message: "the pointer event reaches the preview document",
+        },
+      ).toBe(true);
+      const previous = await awaitBeforeBlueDeadline(
+        page.evaluate(() => window.__donnerWorkerStats?.completedResults ?? 0),
+        deadline,
+      );
+      await expect.poll(() =>
+        awaitBeforeBlueDeadline(
+          page.evaluate((before) => {
+            const stats = window.__donnerWorkerStats;
+            return (stats?.completedResults ?? 0) > before
+              && stats?.resultFramePresented === true;
+          }, previous),
+          deadline,
+        ), {
+        timeout: Math.max(1, deadline - performance.now()),
+        intervals: [16],
+        message: "a document frame after input dispatch is presented",
+      }).toBe(true);
+      await expect.poll(() => padPixels(target, deadline), {
+        timeout: Math.max(1, deadline - performance.now()),
+        intervals: [50],
+      }).toBeGreaterThan(1000);
+      if (performance.now() >= deadline) throw new Error("animation input deadline exceeded");
+    };
+    await verifyPadInput(7, "animation-hover", () => page.mouse.move(pad.x, pad.y));
+    await verifyPadInput(2, "animation-pressed", () => page.mouse.down());
+    await verifyPadInput(3, "animation-hover", () => page.mouse.up());
+    orbProbe.setTraceScreenshots(true);
+    if (interactionCaptureOwner === null) throw new Error("animation owner is unavailable");
+    const raster = await findRasterTaskWorker(page);
+    const initialPulseTraceGeneration = Date.now();
+    await interactionCaptureOwner.evaluate((generation) => {
+      const trace = (globalThis as unknown as Record<string, unknown>).__donnerPreviewPointerTrace;
+      if (!Array.isArray(trace)) throw new Error("the pointer trace is unavailable");
+      Object.assign(trace, { generation });
+    }, initialPulseTraceGeneration);
+    const initialPulseDeadline = performance.now() + scaledMs(5000);
+    const pulseClickNotBefore = Date.now();
+    pulseClickStartedEpochMs = pulseClickNotBefore;
+    await awaitBeforeBlueDeadline(
+      page.mouse.click(box.x + originX + 456 * scale, pad.y),
+      initialPulseDeadline,
+    );
+    pulseClickFinishedEpochMs = Date.now();
+    let initialPulseTarget: number | null = null;
+    await expect.poll(async () => {
+      const snapshot = await awaitBeforeBlueDeadline(
+        interactionCaptureOwner.evaluate(() => {
+          const trace = (globalThis as unknown as Record<string, unknown>)
+            .__donnerPreviewPointerTrace as (unknown[] & { generation?: number }) | undefined;
+          return {
+            generation: trace?.generation,
+            entries: Array.isArray(trace) ? [...trace] : [],
+          };
+        }),
+        initialPulseDeadline,
+      );
+      const click = snapshot.entries.find((row) =>
+        Array.isArray(row) && row.length === 6
+        && Number.isFinite(row[0]) && row[0] >= pulseClickNotBefore
+        && row[1] === 2 && row[2] === 0 && row[5] === true
+      );
+      if (!click || !Number.isFinite(click[3])) return false;
+      initialPulseTarget = click[3];
+      initialPulseObservation = presentedPulseWindow(
+        snapshot,
+        initialPulseTraceGeneration,
+        initialPulseTarget,
+        pulseClickNotBefore,
+      );
+      return initialPulseObservation !== null;
+    }, {
+      timeout: Math.max(1, initialPulseDeadline - performance.now()),
+      intervals: [16],
+      message: "the first-click pulse reaches presentation",
+    }).toBe(true);
+    const heldInitialPulseFrame = await holdKnownRasterUntil(raster, initialPulseDeadline);
+    try {
+      const heldTrace = await awaitBeforeBlueDeadline(
+        interactionCaptureOwner.evaluate(() => {
+          const trace = (globalThis as unknown as Record<string, unknown>)
+            .__donnerPreviewPointerTrace as (unknown[] & { generation?: number }) | undefined;
+          return {
+            generation: trace?.generation,
+            entries: Array.isArray(trace) ? [...trace] : [],
+          };
+        }),
+        initialPulseDeadline,
+      );
+      const retainedObservation = presentedPulseWindow(
+        heldTrace,
+        initialPulseTraceGeneration,
+        initialPulseTarget,
+        pulseClickNotBefore,
+        0.5,
+      );
+      expect(retainedObservation, "the retained first-click frame is still inside the pulse").not
+        .toBeNull();
+      initialPulseObservation = {
+        beforeHold: initialPulseObservation,
+        afterHold: retainedObservation,
+      };
+      // The trace admits only a 100-500 ms sample where the 600 ms fixture is expanded. Hold that
+      // presented frame before asking Firefox for pixels, because capture itself may take seconds.
+      await expect.poll(async () => {
+        const bounds = await orb(initialPulseDeadline);
+        return bounds.maxY - bounds.minY;
+      }, {
+        timeout: Math.max(1, initialPulseDeadline - performance.now()),
+        intervals: [50],
+        message: "Click triggers the radius pulse",
+      }).toBeGreaterThan(58 * scale);
+      if (performance.now() >= initialPulseDeadline) {
+        throw new Error("initial pulse deadline exceeded");
+      }
+    } finally {
+      await heldInitialPulseFrame.release();
+    }
+    await expect.poll(async () => {
+      const bounds = await orb();
+      return Math.abs((bounds.maxY - bounds.minY) - (start.maxY - start.minY));
+    }, { timeout: scaledMs(5000), message: "First pulse returns to its base diameter" })
+      .toBeLessThanOrEqual(2 * scale);
+    // Hold raster progress longer than the pulse before delivering another click. Its target
+    // remains the displayed pad, but its begin time must use the dispatch-time preview clock.
+    const pulseTraceGeneration = Date.now();
+    if (interactionCaptureOwner === null) throw new Error("animation owner is unavailable");
+    preQueuedPointerTrace = await interactionCaptureOwner.evaluate((generation) => {
+      const scope = globalThis as unknown as Record<string, unknown>;
+      const previous = scope.__donnerPreviewPointerTrace;
+      scope.__donnerPreviewPointerTrace = Object.assign([], { generation });
+      return previous;
+    }, pulseTraceGeneration);
+    const firstClick = Array.isArray(preQueuedPointerTrace)
+      ? preQueuedPointerTrace.find((row) => row[1] === 2 && row[2] === 0 && row[5] === true)
+      : undefined;
+    if (!firstClick) throw new Error("the normal pulse dispatch trace is unavailable");
+    const heldForPulse = await holdRasterTaskYield(page);
+    try {
+      const heldBounds = await orb();
+      heldPulseHeight = heldBounds.maxY - heldBounds.minY;
+      expect(
+        Math.abs(heldPulseHeight - (start.maxY - start.minY)),
+        "held frame contains the base orb, not the previous pulse",
+      ).toBeLessThanOrEqual(2 * scale);
+      const heldAt = Date.now();
+      await expect.poll(() => Date.now() - heldAt, {
+        timeout: scaledMs(3000),
+        intervals: [50],
+        message: "raster stall exceeds the short pulse duration",
+      }).toBeGreaterThanOrEqual(1000);
+      delayedPulseClickStartedEpochMs = Date.now();
+      await page.mouse.click(box.x + originX + 456 * scale, pad.y);
+      delayedPulseClickFinishedEpochMs = Date.now();
+    } finally {
+      await heldForPulse.release();
+      delayedPulseReleaseEpochMs = Date.now();
+    }
+    const queuedPulseDeadline = performance.now() + scaledMs(5000);
+    // Avoid screenshot-induced stalls while queued input is delivered. A later admitted
+    // timeline sample proves an earlier in-window sample was presented; retain that frame
+    // with the existing raster hold before reading pixels. Playback cadence was measured
+    // above without holds or screenshots, independently of this queued-event correctness probe.
+    await expect.poll(async () => {
+      const snapshot = await awaitBeforeBlueDeadline(
+        interactionCaptureOwner.evaluate(() => {
+          const trace = (globalThis as unknown as Record<string, unknown>)
+            .__donnerPreviewPointerTrace as (unknown[] & { generation?: number }) | undefined;
+          return {
+            generation: trace?.generation,
+            entries: Array.isArray(trace) ? [...trace] : [],
+          };
+        }),
+        queuedPulseDeadline,
+      );
+      queuedPulseObservation = presentedPulseWindow(
+        snapshot,
+        pulseTraceGeneration,
+        firstClick[3],
+        delayedPulseClickStartedEpochMs,
+      );
+      return queuedPulseObservation !== null;
+    }, {
+      timeout: Math.max(1, queuedPulseDeadline - performance.now()),
+      intervals: [16],
+      message: "a queued-click pulse sample reaches presentation",
+    }).toBe(true);
+    const heldPulseFrame = await holdKnownRasterUntil(heldForPulse.raster, queuedPulseDeadline);
+    const pulseErrors: unknown[] = [];
+    try {
+      const heldTrace = await awaitBeforeBlueDeadline(
+        interactionCaptureOwner.evaluate(() => {
+          const trace = (globalThis as unknown as Record<string, unknown>)
+            .__donnerPreviewPointerTrace as (unknown[] & { generation?: number }) | undefined;
+          return {
+            generation: trace?.generation,
+            entries: Array.isArray(trace) ? [...trace] : [],
+          };
+        }),
+        queuedPulseDeadline,
+      );
+      const retainedObservation = presentedPulseWindow(
+        heldTrace,
+        pulseTraceGeneration,
+        firstClick[3],
+        delayedPulseClickStartedEpochMs,
+        0.5,
+      );
+      expect(retainedObservation, "the acknowledged hold is still inside the same pulse").not
+        .toBeNull();
+      queuedPulseObservation = {
+        beforeHold: queuedPulseObservation,
+        afterHold: retainedObservation,
+      };
+      await expect.poll(async () => {
+        const bounds = await orb(queuedPulseDeadline);
+        return bounds.maxY - bounds.minY;
+      }, {
+        timeout: Math.max(1, queuedPulseDeadline - performance.now()),
+        intervals: [50],
+        message: "Queued click pulses after stale-frame catch-up",
+      }).toBeGreaterThan(58 * scale);
+      if (performance.now() >= queuedPulseDeadline) {
+        throw new Error("queued pulse deadline exceeded");
+      }
+    } catch (error) {
+      pulseErrors.push(error);
+    } finally {
+      try {
+        await heldPulseFrame.release();
+      } catch (error) {
+        pulseErrors.push(error);
+      }
+    }
+    if (pulseErrors.length > 0) {
+      throw new AggregateError(pulseErrors, "queued pulse observation failed");
+    }
+  } finally {
+    orbProbe.setTraceScreenshots(false);
+    const pointerTraces = await Promise.all(
+      page.workers().map((worker) =>
+        boundBrowserDiagnostic(
+          worker.evaluate(() => {
+            const scope = globalThis as unknown as Record<string, unknown>;
+            const trace = scope.__donnerPreviewPointerTrace;
+            delete scope.__donnerPreviewPointerTrace;
+            return trace;
+          }),
+          1000,
+        )
+      ),
+    );
+    const pulsePath = testInfo.outputPath("animation-pulse-input.json");
+    await writeFile(
+      pulsePath,
+      JSON.stringify(
+        {
+          pulseClickStartedEpochMs,
+          pulseClickFinishedEpochMs,
+          delayedPulseClickStartedEpochMs,
+          delayedPulseClickFinishedEpochMs,
+          delayedPulseReleaseEpochMs,
+          heldPulseHeight,
+          initialPulseObservation,
+          preQueuedPointerTrace,
+          queuedPulseObservation,
+          pulseScreenshots: orbProbe.screenshots,
+          pointerTraces,
+        },
+        null,
+        2,
+      ),
+    );
+    await testInfo.attach("animation-pulse-input", {
+      contentType: "application/json",
+      path: pulsePath,
+    });
+  }
+}
+
+async function measureAnimationCadence(page: Page, testInfo: TestInfo) {
+  // Measure ordinary playback with screenshot/readback probes stopped.
+  testInfo.setTimeout(testInfo.timeout + 18000);
+  const loopBefore = await page.evaluate(() => window.__donnerFrameLoopStats);
+  const schedulerBefore = await readCarouselFrameDiagnostics(page);
+  const loadBefore = loadavg();
+  const workerSamples: unknown[] = [];
+  const readCadence = createAnimationCadenceReader(page, workerSamples);
+  const ownerBefore = await readGpuOwnerDispatchStats(page);
+  const before = await readCadence();
+  const probeMainRaf = process.env.DONNER_ANIMATION_RAF_PROBE === "1";
+  const probeOwnerRaf = probeMainRaf && process.env.DONNER_ANIMATION_OWNER_RAF_PROBE !== "0";
+  if (probeMainRaf) {
+    await page.evaluate(() => {
+      const state = window as unknown as Record<string, unknown>;
+      const samples: number[][] = [];
+      const deadline = performance.now() + 25000;
+      let request = 0;
+      const tick = (timestamp: number) => {
+        samples.push([timestamp, performance.now()]);
+        if (samples.length < 4096 && performance.now() < deadline) {
+          request = requestAnimationFrame(tick);
+        }
+      };
+      request = requestAnimationFrame(tick);
+      state.__donnerStopAnimationRafProbe = () => {
+        cancelAnimationFrame(request);
+        delete state.__donnerStopAnimationRafProbe;
+        return samples;
+      };
+    });
+  }
+  let after: Awaited<ReturnType<typeof readCadence>>;
+  let mainRafSamples: number[][] | null = null;
+  let ownerProbe: Worker | undefined;
+  let ownerRaf: {
+    timeOrigin: number;
+    samples: number[][];
+    counts: number[];
+    registrations: number[][];
+  } | null = null;
+  try {
+    if (probeMainRaf) ownerProbe = await startOwnerFrameProbe(page, probeOwnerRaf);
+    await expect.poll(async () => (await readCadence()).time - before.time, {
+      timeout: 25000,
+      intervals: [100],
+    }).toBeGreaterThanOrEqual(20000);
+    after = await readCadence();
+  } finally {
+    if (ownerProbe) {
+      ownerRaf = await stopOwnerFrameProbe(ownerProbe);
+    }
+    if (probeMainRaf) {
+      mainRafSamples = await boundBrowserDiagnostic(
+        page.evaluate(() => {
+          const state = window as unknown as Record<string, unknown>;
+          const stop = state.__donnerStopAnimationRafProbe as () => number[][];
+          return stop();
+        }),
+        2000,
+      );
+    }
+  }
+  return {
+    loopBefore,
+    schedulerBefore,
+    loadBefore,
+    workerSamples,
+    ownerBefore,
+    before,
+    probeMainRaf,
+    probeOwnerRaf,
+    after,
+    mainRafSamples,
+    ownerRaf,
+  };
+}
+
+type AnimationCadenceMeasurement = Awaited<ReturnType<typeof measureAnimationCadence>>;
+
+function assertAnimationWorkerTimings(after: AnimationCadenceMeasurement["after"]) {
+  for (const field of ["idleYieldMs", "idleCallbackMs", "idleLockMs", "idleWaitMs"] as const) {
+    expect(after.worker?.[field], `worker timing ${field}`).toBeGreaterThanOrEqual(0);
+    expect(Number.isFinite(after.worker?.[field]), `finite worker timing ${field}`).toBe(true);
+  }
+}
+
+async function writeAnimationCadenceEvidence({
+  page,
+  testInfo,
+  browserGpuInfo,
+  box,
+  measurement,
+}: {
+  page: Page;
+  testInfo: TestInfo;
+  browserGpuInfo: unknown;
+  box: CssRegion;
+  measurement: AnimationCadenceMeasurement;
+}) {
+  const {
+    loopBefore,
+    schedulerBefore,
+    loadBefore,
+    workerSamples,
+    ownerBefore,
+    before,
+    probeMainRaf,
+    probeOwnerRaf,
+    after,
+    mainRafSamples,
+    ownerRaf,
+  } = measurement;
+  const ownerAfter = await readGpuOwnerDispatchStats(page);
+  const loopAfter = await page.evaluate(() => window.__donnerFrameLoopStats);
+  const schedulerAfter = await readCarouselFrameDiagnostics(page);
+  const presentation = await page.evaluate(() => window.__donnerPresentedDocumentStats);
+  const presentedSamples = (presentation?.samples ?? [])
+    .filter((sample) =>
+      sample[0] > before.presentedDocuments && sample[0] <= after.presentedDocuments
+    )
+    .sort((a, b) => a[0] - b[0]);
+  const seconds = (after.time - before.time) / 1000;
+  const producerSpanMs = presentedSamples.length > 1
+    ? presentedSamples.at(-1)![3] - presentedSamples[0][3]
+    : 0;
+  const presentationGapsMs = presentedSamples.slice(1)
+    .map((sample, index) => sample[3] - presentedSamples[index][3]);
+  const ownerTimeOrigin = ownerRaf?.timeOrigin ?? 0;
+  const cadencePath = testInfo.outputPath("animation-cadence.json");
+  const cadence = {
+    browser: testInfo.project.name,
+    launch: {
+      headless: testInfo.project.use.headless ?? null,
+      launchHeadless: testInfo.project.use.launchOptions?.headless ?? null,
+    },
+    browserGpuInfo,
+    seconds,
+    uiFps: (after.frames - before.frames) / seconds,
+    documentFps: (after.documents - before.documents) / seconds,
+    deliveredPresentationFps: (after.presentedDocuments - before.presentedDocuments) / seconds,
+    presentedDocumentFps: producerSpanMs > 0
+      ? (presentedSamples.length - 1) * 1000 / producerSpanMs
+      : null,
+    presentation: {
+      before: before.presentedDocuments,
+      after: after.presentedDocuments,
+      samples: presentedSamples,
+      producerSpanMs,
+      gapsMs: presentationGapsMs,
+    },
+    host: {
+      platform: platform(),
+      release: release(),
+      architecture: arch(),
+      cpuModel: cpus()[0]?.model,
+      logicalCpus: cpus().length,
+      memoryBytes: totalmem(),
+      loadBefore,
+      loadAfter: loadavg(),
+    },
+    viewport: box,
+    gpuOwner: { before: ownerBefore, after: ownerAfter },
+    workerSamples,
+    pageState: { before: before.pageState, after: after.pageState },
+    frameLoop: { before: loopBefore, after: loopAfter },
+    scheduler: {
+      before: schedulerBefore,
+      after: schedulerAfter,
+      mainRafProbeEnabled: probeMainRaf,
+      ownerRafProbeEnabled: probeOwnerRaf,
+      ownerRaf: ownerRaf
+        ? {
+          timeOrigin: ownerTimeOrigin,
+          previewAdvanceCounts: ownerRaf.counts,
+          registrations: ownerRaf.registrations.filter((record) => {
+            const observedMs = ownerTimeOrigin + record[3] - before.timeOrigin;
+            return record[4] >= 0 && observedMs >= before.time && observedMs <= after.time;
+          }),
+          samples: ownerRaf.samples.filter((sample) => {
+            const observedMs = ownerTimeOrigin + sample[1] - before.timeOrigin;
+            return observedMs >= before.time && observedMs <= after.time;
+          }),
+        }
+        : null,
+      intervalStartMs: before.time,
+      intervalEndMs: after.time,
+      mainRafSamples:
+        mainRafSamples?.filter((sample) => sample[1] >= before.time && sample[1] <= after.time)
+          ?? null,
+    },
+    timeline: await readCarouselGpuTimeline(page),
+    environment: await page.evaluate(() => ({
+      userAgent: navigator.userAgent,
+      devicePixelRatio,
+      worker: window.__donnerWorkerStats,
+      resources: window.__donnerPresentationResourceStats,
+    })),
+  };
+  await writeFile(cadencePath, JSON.stringify(cadence, null, 2));
+  await testInfo.attach("animation-cadence", {
+    contentType: "application/json",
+    path: cadencePath,
+  });
+  return { ownerAfter, presentedSamples };
+}
+
+function assertAnimationCadence(
+  measurement: AnimationCadenceMeasurement,
+  evidence: Awaited<ReturnType<typeof writeAnimationCadenceEvidence>>,
+) {
+  const { before, after, ownerBefore } = measurement;
+  const { ownerAfter, presentedSamples } = evidence;
+  expect(presentedSamples.length, "complete distinct-presentation sample interval").toBe(
+    after.presentedDocuments - before.presentedDocuments,
+  );
+  expect(presentedSamples.length).toBeGreaterThan(10);
+  for (let index = 1; index < presentedSamples.length; ++index) {
+    expect(presentedSamples[index][0]).toBe(presentedSamples[index - 1][0] + 1);
+    expect(presentedSamples[index][3]).toBeGreaterThanOrEqual(presentedSamples[index - 1][3]);
+  }
+  expect(before.layerThumbnails?.previewPaused, "sidebar work is paused in Preview").toBe(true);
+  expect(after.layerThumbnails?.previewPaused, "sidebar work remains paused").toBe(true);
+  for (const field of ["refreshPasses", "renderAttempts"] as const) {
+    expect(Number.isSafeInteger(before.layerThumbnails?.[field]), `initial sidebar ${field}`)
+      .toBe(true);
+    expect(after.layerThumbnails?.[field], `no sidebar ${field} during playback`)
+      .toBe(before.layerThumbnails?.[field]);
+  }
+  const gpuBefore = ownerBefore?.gpu as
+    | { readbackCopies: number; cpuTextureWrites: number }
+    | undefined;
+  expect(gpuBefore, "GPU residency counters are available").toBeTruthy();
+  for (const field of ["readbackCopies", "cpuTextureWrites"] as const) {
+    expect(Number.isFinite(gpuBefore?.[field]), `finite initial ${field}`).toBe(true);
+    const gpuAfter = ownerAfter?.gpu as typeof gpuBefore;
+    expect(Number.isFinite(gpuAfter?.[field]), `finite final ${field}`).toBe(true);
+  }
+  expect(ownerAfter?.gpu, "ordinary animation stays GPU resident").toMatchObject({
+    readbackCopies: gpuBefore?.readbackCopies,
+    cpuTextureWrites: gpuBefore?.cpuTextureWrites,
+  });
+}
+
+async function reportAnimationCadence({
+  page,
+  testInfo,
+  browserGpuInfo,
+  box,
+  measurement,
+}: {
+  page: Page;
+  testInfo: TestInfo;
+  browserGpuInfo: unknown;
+  box: CssRegion;
+  measurement: AnimationCadenceMeasurement;
+}) {
+  assertAnimationWorkerTimings(measurement.after);
+  const evidence = await writeAnimationCadenceEvidence({
+    page,
+    testInfo,
+    browserGpuInfo,
+    box,
+    measurement,
+  });
+  assertAnimationCadence(measurement, evidence);
+}
+
+async function openAnimatedPreview(page: Page, browserName: string, testInfo: TestInfo) {
+  const rafControls = process.env.DONNER_ANIMATION_RAF_CONTROLS === "1";
+  if (rafControls) testInfo.setTimeout(testInfo.timeout + 21000);
+  const rafControlSamples: Record<string, Awaited<ReturnType<typeof measurePageRaf>>> = {};
+  const captureRafControl = async (name: string) => {
+    rafControlSamples[name] = await measurePageRaf(page, 5000);
+    const controlsPath = testInfo.outputPath("animation-raf-controls.json");
+    await writeFile(controlsPath, JSON.stringify(rafControlSamples, null, 2));
+    await testInfo.attach("animation-raf-controls-" + name, {
+      contentType: "application/json",
+      path: controlsPath,
+    });
+  };
+  if (rafControls) await captureRafControl("blankBefore");
+  const frameDriver = process.env.DONNER_ANIMATION_FRAME_DRIVER;
+  if (frameDriver !== undefined && frameDriver !== "proxied-main-raf") {
+    throw new Error("DONNER_ANIMATION_FRAME_DRIVER must be proxied-main-raf when set");
+  }
+  const fatalMessages = await openEditor(page, { postInitializationDwellMs: 0, frameDriver });
+  const browserGpuInfo = rafControls ? await readChromiumGpuInfo(page) : null;
+  if (frameDriver) {
+    expect(
+      await page.evaluate(() =>
+        (window as unknown as { __donnerFrameDriver?: string }).__donnerFrameDriver
+      ),
+      "the requested frame driver is active",
+    ).toBe(frameDriver);
+  }
+  await expectSampleThumbnailsToSettle(page, {
+    message: "thumbnail capture work is drained before animation measurement",
+    timeout: scaledMs(20000),
+  });
+  const canvas = page.locator("canvas#canvas");
+  const box = await canvas.boundingBox();
+  if (!box) throw new Error("the editor canvas has no bounds");
+  await page.mouse.click(box.x + box.width * 0.76, box.y + 390);
+  const animationCapture = createAnimationRegionCapture(page, browserName, testInfo);
+  const captureAnimationRegion = animationCapture.capture;
+  const documentRegion = { minX: 150, minY: 150, maxX: box.width - 430, maxY: box.height * 0.58 };
+  let initial: PixelBounds | null = null;
+  let mode: PixelBounds | null = null;
+  await expect.poll(async () => {
+    const capture = await captureAnimationRegion(box);
+    initial = capture.read("animation-mint", documentRegion);
+    mode = capture.read("selection-teal", {
+      minX: box.width - 410,
+      minY: 0,
+      maxX: box.width - 10,
+      maxY: 120,
+    });
+    return initial !== null && initial.maxY - initial.minY > 30 && mode !== null;
+  }, { timeout: scaledMs(12000), message: "Animation sample and Edit control are visible" }).toBe(
+    true,
+  );
+  if (!initial || !mode) throw new Error("Animation sample did not become visible");
+  // Selecting the document can reopen thumbnail work when its fonts arrive.
+  await expect.poll(async () => {
+    const stats = await page.evaluate(() => window.__donnerSampleThumbnailStats);
+    return { stats, quiescent: sampleThumbnailLaneQuiescent(stats) };
+  }, {
+    message: "sample-triggered thumbnail work finishes before the Edit baseline",
+    timeout: scaledMs(20000),
+  }).toEqual(expect.objectContaining({ quiescent: true }));
+  await expect.poll(() =>
+    page.evaluate(() => {
+      const queue = window.__donnerPresentationQueueStats;
+      return {
+        presented: window.__donnerWorkerStats?.resultFramePresented === true,
+        framesInFlight: queue?.framesInFlight ?? null,
+        completedSerial: queue?.completedSerial ?? null,
+        submittedSerial: queue?.submittedSerial ?? null,
+      };
+    }).then((state) => ({
+      ...state,
+      complete: state.completedSerial !== null && state.completedSerial === state.submittedSerial,
+    })), {
+    timeout: scaledMs(5000),
+    message: "the Edit baseline reaches completed browser presentation",
+  }).toEqual(expect.objectContaining({ presented: true, framesInFlight: 0, complete: true }));
+  const initialOrb: PixelBounds = initial;
+  const edit: PixelBounds = mode;
+  const scale = (initialOrb.maxY - initialOrb.minY + 1) / 48;
+  const originX = (initialOrb.minX + initialOrb.maxX) / 2 - 96 * scale;
+  const originY = (initialOrb.minY + initialOrb.maxY) / 2 - 175 * scale;
+  const editCenter = {
+    x: box.x + (edit.minX + edit.maxX) / 2,
+    y: box.y + (edit.minY + edit.maxY) / 2,
+  };
+  const track = {
+    x: box.x + originX + 48 * scale,
+    y: box.y + originY + 120 * scale,
+    width: 560 * scale,
+    height: 110 * scale,
+  };
+  const orbProbe = createAnimationOrbProbe(captureAnimationRegion, track, testInfo, {
+    box,
+    browserName,
+    initialOrb,
+  });
+  const orb = orbProbe.capture;
+  const start = await orb();
+  if (rafControls) await captureRafControl("editState");
+  await page.mouse.click(editCenter.x + edit.maxX - edit.minX + 1, editCenter.y);
+  await expect.poll(async () => Math.abs((await orb()).minX - start.minX), {
+    timeout: scaledMs(10000),
+    message: "Preview moves the rendered orb",
+  }).toBeGreaterThan(8 * scale);
+
+  return {
+    animationCapture,
+    box,
+    browserGpuInfo,
+    captureAnimationRegion,
+    captureRafControl,
+    editCenter,
+    editWidth: edit.maxX - edit.minX,
+    fatalMessages,
+    orb,
+    orbProbe,
+    originX,
+    originY,
+    rafControls,
+    scale,
+    start,
+  };
+}
+
+test(
+  "animation preview plays and dispatches mouse events",
+  async ({ page, browserName }, testInfo) => {
+    const {
+      animationCapture,
+      box,
+      browserGpuInfo,
+      captureAnimationRegion,
+      editCenter,
+      fatalMessages,
+      orb,
+      orbProbe,
+      originX,
+      originY,
+      scale,
+      start,
+    } = await openAnimatedPreview(page, browserName, testInfo);
+    const cadenceMeasurement = await measureAnimationCadence(page, testInfo);
+    await reportAnimationCadence({
+      page,
+      testInfo,
+      browserGpuInfo,
+      box,
+      measurement: cadenceMeasurement,
+    });
+    const { before, after } = cadenceMeasurement;
+    await verifyRasterProgressWithTimersHeld(page);
+    // Observe completion only after the uninstrumented playback interval has finished.
+    await expectSurfaceFrameProbeReady(page);
+    let interactionCaptureOwner: Worker | null = null;
+    await expect.poll(async () => {
+      interactionCaptureOwner = await findCanvasOwnerWorker(page);
+      if (interactionCaptureOwner) animationCapture.setOwner(interactionCaptureOwner);
+      return interactionCaptureOwner !== null;
+    }, { message: "interaction captures observe the canvas GPU owner" }).toBe(true);
+    const previewCapture = await captureAnimationRegion(box);
+    await writeFile(testInfo.outputPath("animation-preview.png"), previewCapture.png);
+    expect(after.documents - before.documents).toBeGreaterThan(10);
+
+    await exerciseAnimationPointerPulse({
+      page,
+      testInfo,
+      box,
+      originX,
+      originY,
+      scale,
+      captureAnimationRegion,
+      interactionCaptureOwner,
+      orbProbe,
+      orb,
+      start,
+    });
+
+    await page.mouse.click(editCenter.x, editCenter.y);
+    await expect.poll(async () => (await orb()).minX, { timeout: scaledMs(5000) }).toBeCloseTo(
+      start.minX,
+      0,
+    );
+    expect(fatalMessages).toEqual([]);
+  },
+);
+
+test(
+  "animation preview plays through cancellation and shutdown while raster task yields are held",
+  async ({ page, browserName }, testInfo) => {
+    const {
+      animationCapture,
+      captureRafControl,
+      editCenter,
+      editWidth,
+      fatalMessages,
+      orb,
+      rafControls,
+      scale,
+      start,
+    } = await openAnimatedPreview(page, browserName, testInfo);
+
+    // Exercise the fault-injected lifecycle in a fresh Preview instead of inheriting the cadence
+    // and pointer/pulse case's nearly exhausted test deadline.
+    await expectSurfaceFrameProbeReady(page);
+    await expect.poll(async () => {
+      const owner = await findCanvasOwnerWorker(page);
+      if (owner) animationCapture.setOwner(owner);
+      return owner !== null;
+    }, { message: "interaction captures observe the canvas GPU owner" }).toBe(true);
+    await finishAnimationPreview({
+      page,
+      editCenter,
+      editWidth,
+      orb,
+      start,
+      scale,
+      rafControls,
+      captureRafControl,
+    });
+    expect(fatalMessages).toEqual([]);
+  },
+);

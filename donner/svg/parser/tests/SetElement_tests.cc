@@ -1,16 +1,22 @@
 #include <gtest/gtest.h>
 
+#include <sstream>
+
 #include "donner/base/tests/ParseResultTestUtils.h"
 #include "donner/svg/SVGDocument.h"
+#include "donner/svg/SVGRectElement.h"
 #include "donner/svg/SVGSetElement.h"
 #include "donner/svg/components/animation/AnimatedValuesComponent.h"
+#include "donner/svg/components/animation/AnimationBaseValue.h"
 #include "donner/svg/components/animation/AnimationResourceBudget.h"
 #include "donner/svg/components/animation/AnimationStateComponent.h"
 #include "donner/svg/components/animation/AnimationSystem.h"
 #include "donner/svg/components/animation/AnimationTimingComponent.h"
+#include "donner/svg/components/animation/AnimationValueSampler.h"
 #include "donner/svg/components/animation/SetAnimationComponent.h"
 #include "donner/svg/components/resources/ResourceManagerContext.h"
 #include "donner/svg/parser/SVGParser.h"
+#include "donner/svg/properties/PropertyRegistry.h"
 #include "donner/svg/renderer/RendererUtils.h"
 
 namespace donner::svg {
@@ -35,6 +41,41 @@ Entity EntityById(SVGDocument& document, std::string_view id) {
   const std::optional<SVGElement> element = document.querySelector(std::string(id));
   EXPECT_TRUE(element.has_value()) << "missing " << id;
   return element.has_value() ? element->entityHandle().entity() : entt::null;
+}
+
+std::optional<std::string> AnimatedOverride(SVGDocument& document, std::string_view id,
+                                            std::string_view attribute, double time) {
+  components::AnimationSystem().advance(document.registry(), time);
+  const auto element = document.querySelector(id);
+  if (!element) {
+    return std::nullopt;
+  }
+  const auto* values = document.registry().try_get<components::AnimatedValuesComponent>(
+      element->entityHandle().entity());
+  if (!values) {
+    return std::nullopt;
+  }
+  const bool supportedRectWidth = element->type() == ElementType::Rect && attribute == "width";
+  if (supportedRectWidth && values->contextualLengths.contains(std::string(attribute))) {
+    const auto recipe = values->contextualLengths.at(std::string(attribute));
+    const auto rect = element->cast<SVGRectElement>();
+    auto& budget = document.registry().ctx().get<components::AnimationResourceBudget>();
+    auto context = components::AnimationContextFor(
+        document.registry(), element->entityHandle().entity(), attribute, budget);
+    context.extent = Lengthd::Extent::X;
+    if (!components::SampleContextualLengthRecipe(*recipe, rect.width(), context)) {
+      return std::nullopt;
+    }
+    document.setTime(time);
+    ParseWarningSink warnings = ParseWarningSink::Disabled();
+    RendererUtils::prepareDocumentForRendering(document, false, warnings);
+    std::ostringstream output;
+    output.precision(12);
+    output << rect.computedWidth();
+    return output.str();
+  }
+  const auto value = values->overrides.find(std::string(attribute));
+  return value == values->overrides.end() ? std::nullopt : std::optional(value->second);
 }
 
 }  // namespace
@@ -85,6 +126,47 @@ TEST(SVGSetElement, IsAnimationTargetMatchesBeforeAndAfterAdvance) {
 
   components::AnimationSystem().advance(registry, 0.0);
   EXPECT_TRUE(system.isAnimationTarget(registry, layer)) << "after the state was resolved";
+}
+
+TEST(SVGSetElement, HrefPrecedesXlinkHrefIncludingEmptyAndMutationFallback) {
+  auto document = parseSVGWithExperimental(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+      <rect id="primary" width="10"/><rect id="legacy" width="20"/>
+      <rect id="replacement" width="30"/>
+      <set id="animation" href="#primary" xlink:href="#legacy"
+           attributeName="width" to="40" dur="2s"/>
+    </svg>)svg");
+  auto animation = document.querySelector("#animation");
+  ASSERT_THAT(animation, testing::Ne(std::nullopt));
+  const auto href = [&]() {
+    return animation->entityHandle().get<components::SetAnimationComponent>().href;
+  };
+
+  EXPECT_THAT(href(), testing::Optional(testing::StrEq("#primary")));
+  EXPECT_THAT(AnimatedOverride(document, "#primary", "width", 1),
+              testing::Optional(testing::StrEq("40")));
+  EXPECT_THAT(AnimatedOverride(document, "#legacy", "width", 1), testing::Eq(std::nullopt));
+
+  animation->setAttribute({"xlink", "href"}, "#replacement");
+  EXPECT_THAT(AnimatedOverride(document, "#primary", "width", 1),
+              testing::Optional(testing::StrEq("40")));
+  EXPECT_THAT(AnimatedOverride(document, "#replacement", "width", 1), testing::Eq(std::nullopt));
+  EXPECT_THAT(href(), testing::Optional(testing::StrEq("#primary")));
+
+  animation->setAttribute("href", "");
+  EXPECT_THAT(AnimatedOverride(document, "#primary", "width", 1), testing::Eq(std::nullopt));
+  EXPECT_THAT(AnimatedOverride(document, "#legacy", "width", 1), testing::Eq(std::nullopt));
+  EXPECT_THAT(href(), testing::Optional(testing::IsEmpty()));
+
+  animation->removeAttribute("href");
+  EXPECT_THAT(AnimatedOverride(document, "#replacement", "width", 1),
+              testing::Optional(testing::StrEq("40")));
+  EXPECT_THAT(href(), testing::Optional(testing::StrEq("#replacement")));
+
+  animation->setAttribute("href", "#primary");
+  EXPECT_THAT(AnimatedOverride(document, "#primary", "width", 1),
+              testing::Optional(testing::StrEq("40")));
+  EXPECT_THAT(href(), testing::Optional(testing::StrEq("#primary")));
 }
 
 TEST(SVGSetElement, ParseBasic) {
@@ -153,9 +235,17 @@ TEST(SVGSetElement, ProcessingModesControlAnimationEvaluation) {
       EXPECT_EQ(values, nullptr);
     } else {
       ASSERT_NE(values, nullptr);
-      ASSERT_TRUE(values->overrides.contains("fill"));
-      EXPECT_EQ(values->overrides.at("fill"), "blue");
+      ASSERT_TRUE(values->contextualLengths.contains("fill"));
     }
+    ParseWarningSink renderingWarnings = ParseWarningSink::Disabled();
+    RendererUtils::prepareDocumentForRendering(parsed.result(), false, renderingWarnings);
+    const auto target = parsed.result().querySelector("#r");
+    ASSERT_TRUE(target.has_value());
+    const auto paint = target->getComputedStyle().fill.get();
+    ASSERT_TRUE(paint && paint->is<PaintServer::Solid>());
+    const auto expected = mode == ProcessingMode::SecureStatic ? css::RGBA::RGB(255, 0, 0)
+                                                               : css::RGBA::RGB(0, 0, 255);
+    EXPECT_EQ(paint->get<PaintServer::Solid>().color.resolve(css::RGBA::RGB(0, 0, 0), 1), expected);
   }
 }
 
@@ -206,7 +296,9 @@ TEST(SVGSetElement, AnimationDuringActiveInterval) {
   auto& registry = document.registry();
 
   // Advance to t=3s (during active interval: 2s <= 3s < 5s)
-  components::AnimationSystem().advance(registry, 3.0, nullptr);
+  document.setTime(3.0);
+  ParseWarningSink warnings = ParseWarningSink::Disabled();
+  RendererUtils::prepareDocumentForRendering(document, false, warnings);
 
   // The rect should have animated override for fill
   auto rect = document.querySelector("#r");
@@ -214,8 +306,9 @@ TEST(SVGSetElement, AnimationDuringActiveInterval) {
   auto* animValues =
       registry.try_get<components::AnimatedValuesComponent>(rect->entityHandle().entity());
   ASSERT_NE(animValues, nullptr);
-  ASSERT_TRUE(animValues->overrides.count("fill"));
-  EXPECT_EQ(animValues->overrides.at("fill"), "blue");
+  ASSERT_TRUE(animValues->contextualLengths.contains("fill"));
+  EXPECT_EQ(rect->getComputedStyle().fill.get(),
+            PaintServer(PaintServer::Solid(css::Color(css::RGBA::RGB(0, 0, 255)))));
 }
 
 TEST(SVGSetElement, AnimationAfterEndRemove) {
@@ -251,7 +344,9 @@ TEST(SVGSetElement, AnimationAfterEndFreeze) {
   auto& registry = document.registry();
 
   // Advance to t=6s (after end, but fill="freeze")
-  components::AnimationSystem().advance(registry, 6.0, nullptr);
+  document.setTime(6.0);
+  ParseWarningSink warnings = ParseWarningSink::Disabled();
+  RendererUtils::prepareDocumentForRendering(document, false, warnings);
 
   // fill="freeze" persists the value
   auto rect = document.querySelector("#r");
@@ -259,8 +354,9 @@ TEST(SVGSetElement, AnimationAfterEndFreeze) {
   auto* animValues =
       registry.try_get<components::AnimatedValuesComponent>(rect->entityHandle().entity());
   ASSERT_NE(animValues, nullptr);
-  ASSERT_TRUE(animValues->overrides.count("fill"));
-  EXPECT_EQ(animValues->overrides.at("fill"), "blue");
+  ASSERT_TRUE(animValues->contextualLengths.contains("fill"));
+  EXPECT_EQ(rect->getComputedStyle().fill.get(),
+            PaintServer(PaintServer::Solid(css::Color(css::RGBA::RGB(0, 0, 255)))));
 }
 
 TEST(SVGSetElement, IndefiniteDuration) {
@@ -275,14 +371,18 @@ TEST(SVGSetElement, IndefiniteDuration) {
   auto& registry = document.registry();
 
   // With no dur, <set> has indefinite duration, so it's always active after begin
-  components::AnimationSystem().advance(registry, 100.0, nullptr);
+  document.setTime(100.0);
+  ParseWarningSink warnings = ParseWarningSink::Disabled();
+  RendererUtils::prepareDocumentForRendering(document, false, warnings);
 
   auto rect = document.querySelector("#r");
   ASSERT_TRUE(rect.has_value());
   auto* animValues =
       registry.try_get<components::AnimatedValuesComponent>(rect->entityHandle().entity());
   ASSERT_NE(animValues, nullptr);
-  EXPECT_EQ(animValues->overrides.at("fill"), "blue");
+  ASSERT_TRUE(animValues->contextualLengths.contains("fill"));
+  EXPECT_EQ(rect->getComputedStyle().fill.get(),
+            PaintServer(PaintServer::Solid(css::Color(css::RGBA::RGB(0, 0, 255)))));
 }
 
 TEST(SVGSetElement, DocumentSetTime) {
@@ -330,8 +430,9 @@ TEST(SVGSetElement, OversizedSetValueConsumesSourceBudgetBeforeCopyingOutput) {
   auto& registry = document.registry();
   auto view = registry.view<components::SetAnimationComponent>();
   ASSERT_NE(view.begin(), view.end());
+  components::AnimationSystem().advance(registry, 0.0, nullptr);
   registry.get<components::SetAnimationComponent>(*view.begin())
-      .to.assign(components::AnimationResourceBudget::kMaximumSourceBytes + 1, 'x');
+      .to.emplace(components::AnimationResourceBudget::kMaximumSourceBytes + 1, 'x');
 
   components::AnimationSystem().advance(registry, 1.0, nullptr);
 

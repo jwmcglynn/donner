@@ -311,6 +311,76 @@ TEST(BrowserDevice, DeclaresALossTheBrowserReportsIntoTheConditionItShares) {
   EXPECT_THAT(secondDevice.result()->isLost(), testing::IsTrue());
 }
 
+TEST(BrowserDevice, QueueWritesUseTheOperationGuardWithoutASeparateStatusQuery) {
+  BrowserFixture fixture = MakeDevice();
+  auto buffer = fixture.device->createBuffer(SimpleBuffer(BufferUsage::CopyDst));
+  auto texture = fixture.device->createTexture(SimpleTexture(TextureUsage::CopyDst));
+  ASSERT_THAT(buffer, HasResult());
+  ASSERT_THAT(texture, HasResult());
+  fixture.bridge->deviceStatusQueries = 0;
+  const std::array<uint8_t, 4> bytes{1, 2, 3, 4};
+  const std::vector<uint8_t> pixels(1024);
+  EXPECT_THAT(fixture.device->writeBuffer(buffer.result(), 0, bytes), IsOk());
+  EXPECT_THAT(fixture.device->writeTexture(texture.result(), pixels,
+                                           TexelCopyBufferLayout{0, 256, 4}, Extent2d{4, 4}),
+              IsOk());
+  EXPECT_EQ(fixture.bridge->deviceStatusQueries, 0u);
+}
+
+TEST(BrowserDevice, QueueWritesRejectAnotherThreadBeforeCallingTheBridge) {
+  BrowserFixture fixture = MakeDevice();
+  auto buffer = fixture.device->createBuffer(SimpleBuffer(BufferUsage::CopyDst));
+  auto texture = fixture.device->createTexture(SimpleTexture(TextureUsage::CopyDst));
+  ASSERT_THAT(buffer, HasResult());
+  ASSERT_THAT(texture, HasResult());
+  fixture.bridge->deviceStatusQueries = 0;
+  const auto calls = *fixture.bridge->calls;
+  const std::array<uint8_t, 4> bytes{1, 2, 3, 4};
+  const std::vector<uint8_t> pixels(1024);
+  std::thread other([&] {
+    const auto refused =
+        IsGpuErrorWithMessage(GpuErrorType::InvalidState, HasSubstr("another thread"));
+    EXPECT_THAT(fixture.device->writeBuffer(buffer.result(), 0, bytes), refused);
+    EXPECT_THAT(fixture.device->writeTexture(texture.result(), pixels,
+                                             TexelCopyBufferLayout{0, 256, 4}, Extent2d{4, 4}),
+                refused);
+  });
+  other.join();
+  EXPECT_EQ(fixture.bridge->deviceStatusQueries, 0u);
+  EXPECT_THAT(*fixture.bridge->calls, testing::ContainerEq(calls));
+}
+
+TEST(BrowserDevice, QueueWriteReportedLossReachesSiblingDevices) {
+  for (const bool textureWrite : {false, true}) {
+    SCOPED_TRACE(textureWrite);
+    const auto lostState = std::make_shared<DeviceLostState>();
+    auto bridge = std::make_unique<FakeBrowserBridge>();
+    auto* raw = bridge.get();
+    auto first = BrowserDeviceRequest::Begin(std::move(bridge)).take(lostState);
+    ASSERT_THAT(first, HasResult());
+    auto second = BrowserDeviceRequest::Begin(std::make_unique<FakeBrowserBridge>(raw->gpuDevice))
+                      .take(lostState);
+    ASSERT_THAT(second, HasResult());
+    auto buffer = first.result()->createBuffer(SimpleBuffer(BufferUsage::CopyDst));
+    auto texture = first.result()->createTexture(SimpleTexture(TextureUsage::CopyDst));
+    ASSERT_THAT(buffer, HasResult());
+    ASSERT_THAT(texture, HasResult());
+    raw->failOperation = textureWrite ? "writeTexture" : "writeBuffer";
+    raw->failStatus = BridgeStatus::DeviceLost;
+    const auto before = *raw->calls;
+    const std::array<uint8_t, 4> bytes{1, 2, 3, 4};
+    const std::vector<uint8_t> pixels(1024);
+    const auto status = textureWrite ? first.result()->writeTexture(
+                                           texture.result(), pixels,
+                                           TexelCopyBufferLayout{0, 256, 4}, Extent2d{4, 4})
+                                     : first.result()->writeBuffer(buffer.result(), 0, bytes);
+    EXPECT_THAT(status, IsGpuErrorWithMessage(GpuErrorType::InvalidState, HasSubstr("was lost")));
+    EXPECT_THAT(*raw->calls, testing::ContainerEq(before));
+    EXPECT_THAT(lostState->lost.load(), testing::IsTrue());
+    EXPECT_THAT(second.result()->isLost(), testing::IsTrue());
+  }
+}
+
 TEST(BrowserDevice, ReportsTheTextureLimitTheBrowserReports) {
   BrowserFixture fixture = MakeDevice();
   ASSERT_THAT(fixture.device, testing::NotNull());
@@ -393,6 +463,28 @@ TEST(BrowserDevice, ReleasesEveryBrowserObjectWhenTheDeviceIsDestroyed) {
   EXPECT_THAT(objects->size(), 0u);
 }
 
+TEST(BrowserDevice, CreationUsesOneCurrentDeviceStatusQuery) {
+  BrowserFixture fixture = MakeDevice();
+  ASSERT_THAT(fixture.device, testing::NotNull());
+  const size_t before = fixture.bridge->deviceStatusQueries;
+  EXPECT_THAT(fixture.device->createBuffer(SimpleBuffer(BufferUsage::Vertex)), HasResult());
+  EXPECT_THAT(fixture.bridge->deviceStatusQueries, before + 1);
+}
+
+TEST(BrowserDevice, UnexpectedDeviceStatusFailsClosedBeforeCreatingObjects) {
+  for (const BridgeStatus status :
+       {BridgeStatus::Failed, BridgeStatus::UnknownObject, BridgeStatus::WrongObjectKind}) {
+    SCOPED_TRACE(status);
+    BrowserFixture fixture = MakeDevice();
+    ASSERT_THAT(fixture.device, testing::NotNull());
+    fixture.bridge->deviceStatusOverride = status;
+    EXPECT_THAT(
+        fixture.device->createBuffer(SimpleBuffer(BufferUsage::Vertex)),
+        IsGpuErrorWithMessage(GpuErrorType::InvalidState, HasSubstr("status query failed")));
+    EXPECT_THAT(*fixture.bridge->objects, testing::IsEmpty());
+  }
+}
+
 TEST(BrowserDevice, RefusesCreationFromAContextThatDoesNotOwnTheDevice) {
   BrowserFixture fixture = MakeDevice();
   ASSERT_THAT(fixture.device, testing::NotNull());
@@ -414,6 +506,7 @@ TEST(BrowserDevice, RefusesCreationFromAnotherThread) {
   EXPECT_THAT(fromOtherThread, IsGpuErrorWithMessage(GpuErrorType::InvalidState,
                                                      HasSubstr("cannot be used from another "
                                                                "thread")));
+  EXPECT_THAT(fixture.bridge->deviceStatusQueries, 0u);
 }
 
 TEST(BrowserDevice, NonOwningContextCannotReadWriteSubmitOrAcquireExistingResources) {

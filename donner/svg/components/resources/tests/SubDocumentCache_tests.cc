@@ -1091,6 +1091,13 @@ TEST(ResourceManagerContextFamilyBudgetTest, SecureDataImagesShareDecodedLimitAc
   EXPECT_EQ(family->totalRetainedBytes(), 16u);
   first.remove<LoadedImageComponent>(firstImage);
   EXPECT_EQ(family->totalRetainedBytes(), 0u);
+  ParseWarningSink retryWarnings = ParseWarningSink::Disabled();
+  second.ctx().get<ResourceManagerContext>().loadResources(retryWarnings);
+  ASSERT_TRUE(second.get<LoadedImageComponent>(secondImage).image.has_value());
+  EXPECT_EQ(second.get<LoadedImageComponent>(secondImage).image->data.size(), 16u);
+  EXPECT_EQ(family->totalRetainedBytes(), 16u);
+  second.remove<LoadedImageComponent>(secondImage);
+  EXPECT_EQ(family->totalRetainedBytes(), 0u);
   Registry replacement;
   const Entity replacementImage = LoadDataImageInFamily(replacement, family);
   EXPECT_TRUE(replacement.get<LoadedImageComponent>(replacementImage).image.has_value());

@@ -1,6 +1,7 @@
 #include "donner/svg/components/resources/ResourceManagerContext.h"
 
 #include <algorithm>
+#include <atomic>
 #include <memory>
 #include <string>
 #include <utility>
@@ -251,29 +252,80 @@ void LoadSvgImage(Registry& registry, Entity entity, const ImageComponent& image
   registry.emplace<LoadedImageComponent>(entity);
 }
 
-ImageLoader::Result LoadBudgetedImage(Registry& registry, ResourceLoaderInterface& loader,
-                                      std::string_view href, size_t& remainingResourceBytes,
-                                      std::shared_ptr<DecodedImageReservation>& reservation) {
-  size_t decodedLimit = ImageLoader::kDefaultMaximumDecodedImageSize;
+struct BudgetedImageLoadResult {
+  ImageLoader::Result result;
+  std::optional<size_t> deferredBytes;
+};
+
+BudgetedImageLoadResult LoadBudgetedImage(Registry& registry, ResourceLoaderInterface& loader,
+                                          std::string_view href, size_t& remainingResourceBytes,
+                                          std::shared_ptr<DecodedImageReservation>& reservation) {
+  size_t maximumDecodedBytes = ImageLoader::kDefaultMaximumDecodedImageSize;
+  ImageLoader::DecodedImageAdmission admission;
+  size_t requiredBytes = 0;
   if (const auto* context = registry.ctx().find<DocumentResourceFamilyContext>();
       context != nullptr && context->budget) {
-    decodedLimit =
-        std::min(decodedLimit,
-                 context->budget->availableBytes(DocumentResourceFamilyBudget::Kind::DecodedImage));
-    reservation = DecodedImageReservation::Create(context->budget, decodedLimit);
-    if (!reservation) {
-      return UrlLoaderError::ResourceTooLarge;
-    }
+    const auto family = context->budget;
+    maximumDecodedBytes = std::min(maximumDecodedBytes, family->limits().decodedImageBytes);
+    admission = [&registry, &reservation, &requiredBytes, family](size_t bytes) {
+      requiredBytes = bytes;
+      if (const auto* reclaimer = registry.ctx().find<DecodedImageCacheReclaimer>();
+          reclaimer && reclaimer->callback) {
+        reclaimer->callback(registry, bytes);
+      }
+      if (!family->canReserve(DocumentResourceFamilyBudget::Kind::DecodedImage, bytes)) {
+        return false;
+      }
+      reservation = DecodedImageReservation::Create(family, bytes);
+      return reservation != nullptr;
+    };
   }
   ImageLoader imageLoader(loader, UrlLoader::kDefaultMaximumResourceSize, &remainingResourceBytes,
-                          decodedLimit);
+                          maximumDecodedBytes, std::move(admission));
   auto result = imageLoader.fromUri(href);
   if (const auto* pixels = std::get_if<ImageResource>(&result); pixels != nullptr && reservation) {
     reservation->shrinkTo(pixels->data.size());
   } else {
     reservation.reset();
   }
-  return result;
+  return {std::move(result),
+          imageLoader.decodedImageAdmissionRefused() ? std::optional(requiredBytes) : std::nullopt};
+}
+
+bool DeferredImageStillBlocked(Registry& registry, Entity entity, const RcString& href) {
+  auto* deferred = registry.try_get<DeferredDecodedImageComponent>(entity);
+  if (!deferred) {
+    return false;
+  }
+  if (deferred->href != href) {
+    registry.remove<DeferredDecodedImageComponent>(entity);
+    return false;
+  }
+  if (const auto* reclaimer = registry.ctx().find<DecodedImageCacheReclaimer>();
+      reclaimer && reclaimer->callback) {
+    reclaimer->callback(registry, deferred->requiredBytes);
+  }
+  const auto* familyContext = registry.ctx().find<DocumentResourceFamilyContext>();
+  if (familyContext && familyContext->budget &&
+      !familyContext->budget->canReserve(DocumentResourceFamilyBudget::Kind::DecodedImage,
+                                         deferred->requiredBytes)) {
+    return true;
+  }
+  registry.remove<DeferredDecodedImageComponent>(entity);
+  return false;
+}
+
+bool PrepareDeferredImageRetry(Registry& registry, Entity entity, const RcString& href) {
+  const auto* loaded = registry.try_get<LoadedImageComponent>(entity);
+  if (!loaded) {
+    return true;
+  }
+  if (loaded->image || !registry.all_of<DeferredDecodedImageComponent>(entity) ||
+      DeferredImageStillBlocked(registry, entity, href)) {
+    return false;
+  }
+  registry.remove<LoadedImageComponent>(entity);
+  return true;
 }
 
 void LoadImageEntity(Registry& registry, Entity entity, ResourceLoaderInterface& loader,
@@ -281,11 +333,13 @@ void LoadImageEntity(Registry& registry, Entity entity, ResourceLoaderInterface&
                      size_t& remainingResourceBytes, std::unordered_set<RcString>& failedUrls,
                      ResourceManagerContext::FetchSecurityStats& securityStats,
                      ParseWarningSink& warningSink) {
-  if (registry.all_of<LoadedImageComponent>(entity) ||
-      registry.all_of<LoadedSVGImageComponent>(entity)) {
+  if (registry.all_of<LoadedSVGImageComponent>(entity)) {
     return;
   }
   const auto& image = registry.get<ImageComponent>(entity);
+  if (!PrepareDeferredImageRetry(registry, entity, image.href)) {
+    return;
+  }
   if (image.href.empty() || std::string_view(image.href).starts_with("#")) {
     return;
   }
@@ -294,16 +348,26 @@ void LoadImageEntity(Registry& registry, Entity entity, ResourceLoaderInterface&
     registry.emplace<LoadedImageComponent>(entity);
     return;
   }
+  if (DeferredImageStillBlocked(registry, entity, image.href)) {
+    return;
+  }
   if (AttachCachedSubDocument(registry, entity, image.href)) {
     return;
   }
 
   std::shared_ptr<DecodedImageReservation> reservation;
-  auto imageResult =
+  auto loadedResult =
       LoadBudgetedImage(registry, loader, image.href, remainingResourceBytes, reservation);
+  auto& imageResult = loadedResult.result;
   if (const auto* error = std::get_if<UrlLoaderError>(&imageResult)) {
     warningSink.add(
         ParseDiagnostic::Error(RcString(std::string(ToString(*error))), FileOffset::Offset(0)));
+    if (loadedResult.deferredBytes) {
+      registry.emplace_or_replace<DeferredDecodedImageComponent>(
+          entity, DeferredDecodedImageComponent{image.href, *loadedResult.deferredBytes});
+      registry.emplace<LoadedImageComponent>(entity);
+      return;
+    }
     RememberImageFailure(failedUrls, image.href);
     registry.emplace<LoadedImageComponent>(entity);
     return;
@@ -313,6 +377,7 @@ void LoadImageEntity(Registry& registry, Entity entity, ResourceLoaderInterface&
                  failedUrls, warningSink);
     return;
   }
+  registry.remove<DeferredDecodedImageComponent>(entity);
   registry.emplace<LoadedImageComponent>(entity, std::get<ImageResource>(std::move(imageResult)),
                                          std::move(reservation));
 }
@@ -378,8 +443,18 @@ void ResourceManagerContext::onStylesheetDestroy(Registry&, Entity entity) {
   stylesheetFontFaceRegistrations_.erase(entity);
 }
 
+uint64_t ResourceManagerContext::NextCacheGeneration() {
+  static std::atomic<uint64_t> next{1};
+  return next.fetch_add(1, std::memory_order_relaxed);
+}
+
 void ResourceManagerContext::setResourceLoader(std::unique_ptr<ResourceLoaderInterface>&& loader) {
+  cacheGeneration_ = NextCacheGeneration();
   failedImageUrls_.clear();
+  for (const Entity entity : registry_.view<DeferredDecodedImageComponent>()) {
+    registry_.remove<LoadedImageComponent>(entity);
+  }
+  registry_.clear<DeferredDecodedImageComponent>();
   externalFetchCache_.clear();
   if (auto* cache = registry_.ctx().find<SubDocumentCache>()) {
     cache->clearFailures();
@@ -542,14 +617,17 @@ const LoadedImageComponent* ResourceManagerContext::getLoadedImageComponent(Enti
   if (IsBlockedImageReference(image, allowExternalResources)) {
     return nullptr;
   }
-  if (const auto* loadedImage = registry_.try_get<LoadedImageComponent>(entity)) {
-    return loadedImage;
-  }
   if (!image) {
     return nullptr;
   }
+  if (!PrepareDeferredImageRetry(registry_, entity, image->href)) {
+    return registry_.try_get<LoadedImageComponent>(entity);
+  }
   if (failedImageUrls_.contains(image->href)) {
     ++fetchSecurityStats_.cacheHits;
+    return nullptr;
+  }
+  if (DeferredImageStillBlocked(registry_, entity, image->href)) {
     return nullptr;
   }
 
@@ -566,16 +644,22 @@ const LoadedImageComponent* ResourceManagerContext::getLoadedImageComponent(Enti
                                              ? static_cast<ResourceLoaderInterface&>(cachedLoader)
                                              : static_cast<ResourceLoaderInterface&>(nullLoader);
   std::shared_ptr<DecodedImageReservation> reservation;
-  auto imageResult =
+  auto loadedResult =
       LoadBudgetedImage(registry_, imageLoader, image->href, remainingResourceBytes_, reservation);
+  auto& imageResult = loadedResult.result;
   if (std::holds_alternative<ImageResource>(imageResult)) {
+    registry_.remove<DeferredDecodedImageComponent>(entity);
     return &registry_.emplace<LoadedImageComponent>(
         entity, std::get<ImageResource>(std::move(imageResult)), std::move(reservation));
   }
 
-  if (failedImageUrls_.size() < kMaximumResourceFetchAttempts) {
-    failedImageUrls_.insert(image->href);
+  if (loadedResult.deferredBytes) {
+    registry_.emplace_or_replace<DeferredDecodedImageComponent>(
+        entity, DeferredDecodedImageComponent{image->href, *loadedResult.deferredBytes});
+    return nullptr;
   }
+
+  RememberImageFailure(failedImageUrls_, image->href);
 
   // TODO(jwm): Plumb loading error out, and handle SvgImageContent once sub-document
   // rendering is implemented.

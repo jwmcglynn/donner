@@ -6,6 +6,8 @@
 #include <string>
 #include <vector>
 
+#include "donner/svg/components/animation/AnimationInterpolation.h"
+
 namespace donner::svg::components {
 
 /// Transform type for `<animateTransform>`.
@@ -23,7 +25,10 @@ enum class TransformAnimationType : uint8_t {
  * Values are stored as strings containing space-separated numbers.
  * The number of values per entry depends on the transform type.
  */
-struct AnimateTransformComponent {
+struct AnimateTransformComponent : AnimationInterpolation {
+  /// Required transform attribute on the target element.
+  std::string attributeName;
+
   /// The transform type (translate, scale, rotate, skewX, skewY).
   TransformAnimationType type = TransformAnimationType::Translate;
 

@@ -2,9 +2,13 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
+#include <type_traits>
 
 #include "donner/base/EcsRegistry.h"
 #include "donner/base/ParseWarningSink.h"
+#include "donner/base/StringUtils.h"
+#include "donner/base/parser/LengthParser.h"
 #include "donner/base/xml/XMLQualifiedName.h"
 #include "donner/base/xml/components/AttributesComponent.h"
 #include "donner/base/xml/components/TreeComponent.h"
@@ -16,11 +20,16 @@
 #include "donner/svg/components/ElementTypeComponent.h"
 #include "donner/svg/components/IdComponent.h"
 #include "donner/svg/components/StylesheetComponent.h"
+#include "donner/svg/components/animation/AnimatedValuesComponent.h"
+#include "donner/svg/components/animation/AnimationResourceBudget.h"
+#include "donner/svg/components/animation/AnimationValueSampler.h"
 #include "donner/svg/components/resources/ResourceManagerContext.h"
 #include "donner/svg/components/shadow/ShadowEntityComponent.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
 #include "donner/svg/components/style/DoNotInheritFillOrStrokeTag.h"
 #include "donner/svg/components/style/ExternalUseStyleContext.h"
+#include "donner/svg/components/style/PaintAnimationStyle.h"
+#include "donner/svg/components/style/ScalarAnimationStyle.h"
 #include "donner/svg/components/style/StyleComponent.h"
 
 namespace donner::svg::components {
@@ -167,6 +176,161 @@ bool ExternalPaintOrigin(PropertyState local, bool root, const ComputedStyleComp
     return false;
   }
   return root || (parent && (stroke ? parent->externalStroke : parent->externalFill));
+}
+
+void ApplyAnimatedStyle(Registry& registry, Entity dataEntity, PropertyRegistry& properties) {
+  if (const auto* animationStyle = registry.ctx().find<AnimationStyleContext>();
+      animationStyle && animationStyle->enabled) {
+    if (const auto* animated = registry.try_get<AnimatedValuesComponent>(dataEntity)) {
+      for (const auto& [name, value] : animated->overrides) {
+        std::ignore = properties.parsePresentationAttribute(name, value, EntityHandle(),
+                                                            css::Specificity::Animation());
+      }
+    }
+  }
+}
+
+std::optional<Lengthd> ResolveFontOperand(std::string_view value, double parentSize) {
+  PropertyRegistry parsed;
+  const auto result = parsed.parsePresentationAttribute("font-size", value, EntityHandle(),
+                                                        css::Specificity::Animation());
+  if (result.hasError() || !result.result()) {
+    return std::nullopt;
+  }
+  if (parsed.fontSize.state == PropertyState::Inherit ||
+      parsed.fontSize.state == PropertyState::ExplicitUnset) {
+    parsed.fontSize.set(Lengthd(parentSize, Lengthd::Unit::Px), css::Specificity::Animation());
+  }
+  parsed.resolveFontSize(parentSize);
+  const Lengthd resolved = parsed.fontSize.get().value();
+  return std::isfinite(resolved.value) && resolved.value >= 0 ? std::optional(resolved)
+                                                              : std::nullopt;
+}
+
+std::optional<Lengthd> ResolveFontDelta(std::string_view value, double parentSize) {
+  const std::string_view trimmed = StringUtils::TrimWhitespace(value);
+  donner::parser::LengthParser::Options options;
+  options.unitOptional = true;
+  const auto parsed = donner::parser::LengthParser::Parse(trimmed, options);
+  if (parsed.hasResult() && parsed.result().consumedChars == trimmed.size() &&
+      parsed.result().length.value < 0) {
+    Lengthd magnitude = parsed.result().length;
+    magnitude.value = -magnitude.value;
+    auto resolved = ResolveFontOperand(magnitude.toRcString().str(), parentSize);
+    if (resolved) {
+      resolved->value = -resolved->value;
+    }
+    return resolved;
+  }
+  return ResolveFontOperand(value, parentSize);
+}
+
+bool NormalizeFontOperand(std::optional<std::string>& value, double parentSize,
+                          bool delta = false) {
+  if (!value) {
+    return true;
+  }
+  const auto resolved =
+      delta ? ResolveFontDelta(*value, parentSize) : ResolveFontOperand(*value, parentSize);
+  if (!resolved) {
+    return false;
+  }
+  value = resolved->toRcString().str();
+  return true;
+}
+
+bool NormalizeFontDeclaration(AnimateValueComponent& declaration, double parentSize) {
+  const bool toOnly = declaration.values.empty() && !declaration.from && declaration.to;
+  const bool delta = declaration.additive && !toOnly;
+  if (declaration.values.empty()) {
+    if (declaration.to) {
+      return NormalizeFontOperand(declaration.from, parentSize, delta) &&
+             NormalizeFontOperand(declaration.to, parentSize, delta);
+    }
+    return NormalizeFontOperand(declaration.from, parentSize, delta) &&
+           NormalizeFontOperand(declaration.by, parentSize, true);
+  }
+  for (auto& value : declaration.values) {
+    const auto resolved =
+        delta ? ResolveFontDelta(value, parentSize) : ResolveFontOperand(value, parentSize);
+    if (!resolved) {
+      return false;
+    }
+    value = resolved->toRcString().str();
+  }
+  return true;
+}
+
+std::optional<Lengthd> SampleFontLength(const ContextualLengthSample& sample, Lengthd underlying,
+                                        double parentSize) {
+  ContextualLengthSample normalized = sample;
+  const bool valid = std::visit(
+      [&](auto& declaration) {
+        if constexpr (std::is_same_v<std::decay_t<decltype(declaration)>, AnimateValueComponent>) {
+          return NormalizeFontDeclaration(declaration, parentSize);
+        } else {
+          return NormalizeFontOperand(declaration.to, parentSize);
+        }
+      },
+      normalized.declaration);
+  if (!valid) {
+    return std::nullopt;
+  }
+  const auto sampled =
+      SampleAnimationValue(sample.progress, sample.iteration,
+                           std::get_if<SetAnimationComponent>(&normalized.declaration),
+                           std::get_if<AnimateValueComponent>(&normalized.declaration), nullptr,
+                           underlying.toRcString().str(), AnimationValueContext());
+  return sampled ? ResolveFontOperand(sampled->second, parentSize) : std::nullopt;
+}
+
+Lengthd BaseFontLength(const PropertyRegistry& properties, double parentSize) {
+  switch (properties.fontSize.state) {
+    case PropertyState::NotSet:
+    case PropertyState::Inherit:
+    case PropertyState::ExplicitUnset: return Lengthd(parentSize, Lengthd::Unit::Px);
+    default:
+      return ResolveFontOperand(properties.fontSize.get().value().toRcString().str(), parentSize)
+          .value_or(Lengthd(12, Lengthd::Unit::Px));
+  }
+}
+
+void ApplyContextualFontSize(Registry& registry, Entity dataEntity,
+                             const ComputedStyleComponent* parentStyle,
+                             PropertyRegistry& properties) {
+  const auto* animationStyle = registry.ctx().find<AnimationStyleContext>();
+  const auto* animated = registry.try_get<AnimatedValuesComponent>(dataEntity);
+  if (!animationStyle || !animationStyle->enabled || !animated) {
+    return;
+  }
+  const auto recipe = animated->contextualLengths.find("font-size");
+  if (recipe == animated->contextualLengths.end()) {
+    return;
+  }
+  auto& budget = registry.ctx().get<AnimationResourceBudget>();
+  if (!budget.reserveContextualWork(recipe->second->evaluationWork)) {
+    return;
+  }
+  double parentSize = 12;
+  if (parentStyle && parentStyle->properties) {
+    parentSize = parentStyle->properties->fontSize.get().value().value;
+  }
+  Lengthd underlying = BaseFontLength(properties, parentSize);
+  const auto result = SampleContextualAnimationRecipe(
+      *recipe->second, underlying, [&](const ContextualLengthSample& sample, Lengthd lower) {
+        return SampleFontLength(sample, lower, parentSize);
+      });
+  if (result) {
+    std::ignore = properties.parsePresentationAttribute(
+        "font-size", result->toRcString().str(), EntityHandle(), css::Specificity::Animation());
+  }
+}
+
+template <typename PropertyType>
+void PreserveLocalValue(const PropertyType& local, PropertyType& inherited) {
+  if (local.state == PropertyState::Set || local.state == PropertyState::ExplicitInitial) {
+    inherited = local;
+  }
 }
 
 struct ShadowedElementAdapter {
@@ -348,6 +512,63 @@ void ApplyRuleDeclarations(const css::SelectorRule& rule, css::Specificity speci
 
 }  // namespace
 
+std::shared_ptr<AnimationContextualWorkBudget>
+StyleResourceBudget::contextualAnimationWorkBudget() {
+  if (!contextualAnimationWork_) {
+    contextualAnimationWork_ = std::make_shared<AnimationContextualWorkBudget>();
+  }
+  return contextualAnimationWork_;
+}
+
+void StyleResourceBudget::resetContextualAnimationWork() {
+  if (contextualAnimationWork_) {
+    contextualAnimationWork_->reset();
+  }
+}
+
+StyleResourceBudget::ActiveRegistryScope::ActiveRegistryScope(StyleResourceBudget& budget,
+                                                              Registry& registry)
+    : budget_(budget),
+      registry_(&registry),
+      inserted_(budget.activeRegistries_.insert(&registry).second) {
+  if (!inserted_) {
+    return;
+  }
+  boundContextualWork_ = budget_.contextualAnimationWorkBudget();
+  auto* context = registry.ctx().find<AnimationContextualWorkContext>();
+  hadContext_ = context != nullptr;
+  if (context) {
+    previousContext_ = std::exchange(context->budget, boundContextualWork_);
+  } else {
+    registry.ctx().emplace<AnimationContextualWorkContext>(
+        AnimationContextualWorkContext{boundContextualWork_});
+  }
+  if (auto* animationBudget = registry.ctx().find<AnimationResourceBudget>()) {
+    previousBudget_ = animationBudget->contextualWorkBudget();
+    animationBudget->resetContextualWork();
+    animationBudget->setContextualWorkBudget(boundContextualWork_);
+  }
+}
+
+StyleResourceBudget::ActiveRegistryScope::~ActiveRegistryScope() {
+  if (!inserted_) {
+    return;
+  }
+  if (auto* context = registry_->ctx().find<AnimationContextualWorkContext>();
+      context && context->budget == boundContextualWork_) {
+    if (hadContext_) {
+      context->budget = previousContext_;
+    } else {
+      registry_->ctx().erase<AnimationContextualWorkContext>();
+    }
+  }
+  if (auto* animationBudget = registry_->ctx().find<AnimationResourceBudget>();
+      animationBudget && animationBudget->contextualWorkBudget() == boundContextualWork_) {
+    animationBudget->setContextualWorkBudget(previousBudget_);
+  }
+  budget_.activeRegistries_.erase(registry_);
+}
+
 const ComputedStyleComponent& StyleSystem::computeStyle(EntityHandle handle,
                                                         ParseWarningSink& warningSink) {
   auto& computedStyle = handle.get_or_emplace<ComputedStyleComponent>();
@@ -447,7 +668,7 @@ PropertyRegistry StyleSystem::inheritComputedParent(EntityHandle handle, Entity 
   const PropertyState strokeState = properties.stroke.state;
   PropertyRegistry result;
   if (occurrence) {
-    result = inheritExternalParent(properties, *occurrence->parent);
+    result = inheritExternalParent(properties, *occurrence->parent.properties);
     if (BlockExternalResources(result, properties)) {
       rejectExternalHostResource(registry);
       warningSink.add(ParseDiagnostic::Error("External-use inherited URL resources are unsupported",
@@ -469,7 +690,7 @@ PropertyRegistry StyleSystem::inheritComputedParent(EntityHandle handle, Entity 
 void StyleSystem::resolveComputedParentFonts(EntityHandle handle, Entity parent,
                                              PropertyRegistry& properties) {
   if (const auto* occurrence = ExternalRootContext(*handle.registry(), handle.entity())) {
-    const PropertyRegistry& host = *occurrence->parent;
+    const PropertyRegistry& host = *occurrence->parent.properties;
     properties.resolveFontSize(host.fontSize.get().value().value);
     properties.resolveFontWeight(host.fontWeight.get().value());
     properties.resolveFontStretch(host.fontStretch.get().value());
@@ -503,7 +724,18 @@ PropertyRegistry StyleSystem::inheritProperties(Registry& registry, Entity paren
   const PropertyInheritOptions inheritOptions = registry.all_of<DoNotInheritFillOrStrokeTag>(parent)
                                                     ? PropertyInheritOptions::NoPaint
                                                     : PropertyInheritOptions::All;
-  return properties.inheritFrom(parentStyleComponent.properties.value(), inheritOptions);
+  PropertyRegistry inherited =
+      properties.inheritFrom(parentStyleComponent.properties.value(), inheritOptions);
+  PreserveLocalValue(properties.fontSize, inherited.fontSize);
+  PreserveLocalValue(properties.color, inherited.color);
+  PreserveLocalValue(properties.fill, inherited.fill);
+  PreserveLocalValue(properties.stroke, inherited.stroke);
+  PreserveLocalValue(properties.colorInterpolation, inherited.colorInterpolation);
+  PreserveLocalValue(properties.opacity, inherited.opacity);
+  PreserveLocalValue(properties.fillOpacity, inherited.fillOpacity);
+  PreserveLocalValue(properties.strokeOpacity, inherited.strokeOpacity);
+  PreserveLocalValue(properties.strokeMiterlimit, inherited.strokeMiterlimit);
+  return inherited;
 }
 
 void StyleSystem::resolveRelativeFontProperties(Registry& registry, Entity parent,
@@ -545,19 +777,32 @@ void StyleSystem::computePropertiesInto(EntityHandle handle, ComputedStyleCompon
   }
 
   applyStylesheetRules(registry, handle.entity(), dataEntity, properties, styleBudget, warningSink);
+  ApplyAnimatedStyle(registry, dataEntity, properties);
+  const Entity parent = handle.get<donner::components::TreeComponent>().parent();
+  const auto* occurrence = ExternalRootContext(registry, handle.entity());
+  const ComputedStyleComponent* parentStyle =
+      occurrence             ? &occurrence->parent
+      : parent == entt::null ? nullptr
+                             : &computeStyle(EntityHandle(registry, parent), warningSink);
+  ApplyContextualFontSize(registry, dataEntity, parentStyle, properties);
+  const auto resourceOpacities = ApplyScalarAnimationStyles(registry, dataEntity, parentStyle,
+                                                            properties, styleBudget, warningSink);
   ApplySymbolInstanceDisplay(handle, dataEntity, properties);
   properties.resolveElementColors(warningSink);
+  const bool inheritPaint =
+      occurrence || parent == entt::null || !registry.all_of<DoNotInheritFillOrStrokeTag>(parent);
+  ApplyPaintAnimationStyles(registry, dataEntity, parentStyle, inheritPaint, properties);
 
   // Inherit from parent, then charge the dynamic bytes retained by the final computed style.
   // Charging the parent's source value alone misses large locally parsed vectors and can also
   // differ from the actual value selected by the cascade.
-  const Entity parent = handle.get<donner::components::TreeComponent>().parent();
   PropertyRegistry finalProperties =
       inheritComputedParent(handle, parent, std::move(properties), computedStyle, warningSink);
 
   if (styleBudget.reserveComplexPropertyBytes(handle.entity(),
                                               finalProperties.complexPropertyBytes())) {
     computedStyle.properties = std::move(finalProperties);
+    computedStyle.resourceOpacities = resourceOpacities;
   } else {
     // Once the aggregate retained-byte budget is exhausted, use bounded initial styles for the
     // remainder of the pass instead of retaining attacker-sized local or inherited vectors.
@@ -565,6 +810,7 @@ void StyleSystem::computePropertiesInto(EntityHandle handle, ComputedStyleCompon
     computedStyle.externalFill = false;
     computedStyle.externalStroke = false;
     computedStyle.properties = PropertyRegistry();
+    computedStyle.resourceOpacities = ComputedResourceOpacities();
   }
 
   // Resolve font-size to absolute pixels. CSS spec requires the computed value of font-size to

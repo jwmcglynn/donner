@@ -431,11 +431,27 @@ struct ExternalUseRenderResult {
 
 /// Renders an external-use fixture through the public API and captures its resource requests.
 ExternalUseRenderResult RenderExternalUse(std::string_view hostSource,
-                                          std::string_view externalSource) {
+                                          std::string_view externalSource,
+                                          ProcessingMode childMode = ProcessingMode::SecureStatic) {
   auto loader = std::make_unique<ExternalUseResourceLoader>(externalSource);
   const ExternalUseResourceLoader* observedLoader = loader.get();
   SVGDocument::Settings settings;
   settings.resourceLoader = std::move(loader);
+  if (childMode != ProcessingMode::SecureStatic) {
+    auto family = std::make_shared<components::DocumentResourceFamilyBudget>();
+    settings.resourceFamilyBudget = family;
+    settings.svgParseCallback =
+        [childMode, family](const std::vector<uint8_t>& bytes,
+                            ParseWarningSink& warnings) -> std::optional<SVGDocumentHandle> {
+      SVGDocument::Settings childSettings;
+      childSettings.processingMode = childMode;
+      childSettings.resourceFamilyBudget = family;
+      auto child = parser::SVGParser::ParseSVG(
+          std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()), warnings,
+          parser::SVGParser::Options(), std::move(childSettings));
+      return child.hasError() ? std::nullopt : std::optional(child.result().handle());
+    };
+  }
   ParseWarningSink warnings;
   auto parsed = parser::SVGParser::ParseSVG(hostSource, warnings, parser::SVGParser::Options(),
                                             std::move(settings));
@@ -769,17 +785,18 @@ struct ExternalUseFixture {
 ExternalUseFixture MakeExternalUseFixture(
     std::string_view host, std::string_view resource,
     std::shared_ptr<components::DocumentResourceFamilyBudget> family =
-        std::make_shared<components::DocumentResourceFamilyBudget>()) {
+        std::make_shared<components::DocumentResourceFamilyBudget>(),
+    ProcessingMode childMode = ProcessingMode::SecureStatic) {
   auto child = std::make_shared<SVGDocumentHandle>();
   auto requests = std::make_shared<std::vector<std::string>>();
   SVGDocument::Settings settings;
   settings.resourceFamilyBudget = family;
   settings.resourceLoader = std::make_unique<ExternalUseResourceLoader>(resource, requests);
-  settings.svgParseCallback = [child, family](
+  settings.svgParseCallback = [child, family, childMode](
                                   const std::vector<uint8_t>& bytes,
                                   ParseWarningSink& warnings) -> std::optional<SVGDocumentHandle> {
     SVGDocument::Settings childSettings;
-    childSettings.processingMode = ProcessingMode::SecureStatic;
+    childSettings.processingMode = childMode;
     childSettings.resourceFamilyBudget = family;
     auto parsed = parser::SVGParser::ParseSVG(
         std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()), warnings,
@@ -899,6 +916,208 @@ TEST(RendererPublicApiTest, ExternalUseRelativeFontSizeUsesHostComputedBaseline)
   editor::tests::CompareBitmapToBitmap(
       actual.bitmap, expected, ::testing::UnitTest::GetInstance()->current_test_info()->name(),
       editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(RendererPublicApiTest, ExternalUseAnimatedFontInheritUsesEachHostParent) {
+  const auto actual = RenderExternalUse(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="92" height="8">
+        <use href="external.svg#tile" font-size="20"/>
+        <use href="external.svg#tile" x="24" font-size="40"/>
+        <use href="external.svg#tile" x="68" font-size="20"/>
+      </svg>)svg",
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" font-size="6">
+        <rect id="tile" width="1em" height="8" fill="blue" style="font-size:8px">
+          <set attributeName="font-size" to="inherit"/>
+        </rect>
+      </svg>)svg",
+      ProcessingMode::SecureAnimated);
+  const auto expected = RenderInlineDocument(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="92" height="8">
+        <rect width="20" height="8" fill="blue"/>
+        <rect x="24" width="40" height="8" fill="blue"/>
+        <rect x="68" width="20" height="8" fill="blue"/>
+      </svg>)svg");
+  EXPECT_THAT(actual.requests, ElementsAre("external.svg"));
+  editor::tests::CompareBitmapToBitmap(actual.bitmap, expected, "external-animated-font-parent",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(RendererPublicApiTest, ExternalUseAnimatedScalarInheritUsesEachHostParent) {
+  const auto actual = RenderExternalUse(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="24" height="8">
+        <use href="external.svg#tile" fill-opacity="0.25"/>
+        <use href="external.svg#tile" x="8" fill-opacity="0.75"/>
+        <use href="external.svg#tile" x="16" fill-opacity="0.25"/>
+      </svg>)svg",
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" fill-opacity="0.1">
+        <rect id="tile" width="8" height="8" fill="red" style="fill-opacity:0.1">
+          <set attributeName="fill-opacity" to="inherit"/>
+        </rect>
+      </svg>)svg",
+      ProcessingMode::SecureAnimated);
+  const auto expected = RenderInlineDocument(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="24" height="8">
+        <rect width="8" height="8" fill="red" fill-opacity="0.25"/>
+        <rect x="8" width="8" height="8" fill="red" fill-opacity="0.75"/>
+        <rect x="16" width="8" height="8" fill="red" fill-opacity="0.25"/>
+      </svg>)svg");
+  EXPECT_THAT(actual.requests, ElementsAre("external.svg"));
+  editor::tests::CompareBitmapToBitmap(actual.bitmap, expected, "external-animated-scalar-parent",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(RendererPublicApiTest, ExternalUseNestedGradientStaticControl) {
+  const auto actual = RenderExternalUse(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8">
+        <use href="external.svg#tile"/>
+      </svg>)svg",
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg">
+        <g id="tile">
+          <defs><linearGradient id="paint"><stop stop-color="red"/>
+            <stop offset="1" stop-color="red"/></linearGradient></defs>
+          <rect width="8" height="8" fill="url(#paint)"/>
+        </g>
+      </svg>)svg",
+      ProcessingMode::SecureAnimated);
+  const auto expected = RenderInlineDocument(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8">
+        <rect width="8" height="8" fill="red"/>
+      </svg>)svg");
+  editor::tests::CompareBitmapToBitmap(actual.bitmap, expected, "external-nested-gradient-control",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(RendererPublicApiTest, ExternalUseGroupRangeIncludesNestedChildrenAndExcludesSiblings) {
+  for (const std::string opacity : {"1", "0.5"}) {
+    for (const auto mode : {ProcessingMode::SecureStatic, ProcessingMode::SecureAnimated}) {
+      SCOPED_TRACE(opacity);
+      SCOPED_TRACE(static_cast<int>(mode));
+      const auto actual = RenderExternalUse(
+          R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="16" height="8">
+            <use href="external.svg#tile"/>
+          </svg>)svg",
+          "<svg xmlns='http://www.w3.org/2000/svg' width='16' height='8'>"
+          "<g id='tile' opacity='" +
+              opacity +
+              "'>"
+              "<rect width='8' height='8' fill='red'/>"
+              "<g><rect x='8' width='8' height='8' fill='blue'/></g>"
+              "<rect width='16' height='8' fill='lime' display='none'/></g>"
+              "<rect width='16' height='8' fill='lime'/></svg>",
+          mode);
+      const auto expected = RenderInlineDocument(
+          "<svg xmlns='http://www.w3.org/2000/svg' width='16' height='8'>"
+          "<g opacity='" +
+          opacity +
+          "'>"
+          "<rect width='8' height='8' fill='red'/>"
+          "<rect x='8' width='8' height='8' fill='blue'/></g></svg>");
+      editor::tests::CompareBitmapToBitmap(
+          actual.bitmap, expected,
+          "external-group-range-" + opacity + "-" + std::to_string(static_cast<int>(mode)),
+          editor::tests::PixelmatchIdentityParams());
+    }
+  }
+}
+
+TEST(RendererPublicApiTest, ExternalUseDefaultSecureStaticPreservesAnimationBase) {
+  const auto actual = RenderExternalUse(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8">
+        <use href="external.svg#tile" fill-opacity="0.75"/>
+      </svg>)svg",
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg">
+        <rect id="tile" width="8" height="8" fill="red" fill-opacity="0.25">
+          <set attributeName="fill-opacity" to="inherit"/>
+        </rect>
+      </svg>)svg");
+  const auto expected = RenderInlineDocument(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8">
+        <rect width="8" height="8" fill="red" fill-opacity="0.25"/>
+      </svg>)svg");
+  editor::tests::CompareBitmapToBitmap(actual.bitmap, expected, "external-secure-static-base",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(RendererPublicApiTest, ExternalUseAnimatedResourceOpacityUsesCanonicalHostParent) {
+  const auto actual = RenderExternalUse(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="24" height="8">
+        <use href="external.svg#tile" style="stop-opacity:0.25"/>
+        <use href="external.svg#tile" x="8" style="stop-opacity:0.75"/>
+        <use href="external.svg#tile" x="16" style="stop-opacity:0.25"/>
+      </svg>)svg",
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg">
+        <style>* { stop-opacity:inherit; }</style>
+        <g id="tile">
+          <set attributeName="stop-opacity" to="inherit"/>
+          <defs><linearGradient id="paint"><stop stop-color="red"/>
+            <stop offset="1" stop-color="red"/></linearGradient></defs>
+          <rect width="8" height="8" fill="url(#paint)"/>
+        </g>
+      </svg>)svg",
+      ProcessingMode::SecureAnimated);
+  const auto expected = RenderInlineDocument(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="24" height="8">
+        <rect width="8" height="8" fill="red" fill-opacity="0.25"/>
+        <rect x="8" width="8" height="8" fill="red" fill-opacity="0.75"/>
+        <rect x="16" width="8" height="8" fill="red" fill-opacity="0.25"/>
+      </svg>)svg");
+  EXPECT_THAT(actual.requests, ElementsAre("external.svg"));
+  editor::tests::CompareBitmapToBitmap(actual.bitmap, expected, "external-animated-resource-parent",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(RendererPublicApiTest, ExternalUseAnimatedInheritedPaintRetainsHostUrlOwner) {
+  auto fixture = MakeExternalUseFixture(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="24" height="8">
+        <defs>
+          <linearGradient id="a"><stop stop-color="red"/><stop offset="1" stop-color="red"/></linearGradient>
+          <linearGradient id="b"><stop stop-color="blue"/><stop offset="1" stop-color="blue"/></linearGradient>
+        </defs>
+        <use href="external.svg#tile" fill="url(#a)"/>
+        <use href="external.svg#tile" x="8" fill="url(#b)"/>
+        <use href="external.svg#tile" x="16" fill="url(#a)"/>
+      </svg>)svg",
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8">
+        <defs>
+          <linearGradient id="a"><stop stop-color="lime"/><stop offset="1" stop-color="lime"/></linearGradient>
+          <linearGradient id="b"><stop stop-color="lime"/><stop offset="1" stop-color="lime"/></linearGradient>
+        </defs>
+        <rect id="tile" width="8" height="8">
+          <animate attributeName="fill" from="inherit" to="black" calcMode="discrete"
+                   dur="2s" fill="freeze"/>
+        </rect>
+      </svg>)svg",
+      std::make_shared<components::DocumentResourceFamilyBudget>(), ProcessingMode::SecureAnimated);
+  std::ignore = RenderPublicDocument(fixture.document);
+  ASSERT_TRUE(*fixture.child);
+  SVGDocument child = SVGDocument::CreateFromHandle(*fixture.child);
+  const std::string hostSource(fixture.document.source());
+  const std::string childSource(child.source());
+  const auto inherited = RenderInlineDocument(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="24" height="8">
+        <rect width="8" height="8" fill="red"/><rect x="8" width="8" height="8" fill="blue"/>
+        <rect x="16" width="8" height="8" fill="red"/>
+      </svg>)svg");
+  const auto frozen = RenderInlineDocument(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="24" height="8">
+        <rect width="24" height="8" fill="black"/>
+      </svg>)svg");
+  for (const double time : {0.25, 2.5, 0.25}) {
+    SCOPED_TRACE(time);
+    child.setTime(time);
+    fixture.document.setTime(time);
+    editor::tests::CompareBitmapToBitmap(
+        RenderPublicDocument(fixture.document), time < 2 ? inherited : frozen,
+        "external-animated-paint-owner", editor::tests::PixelmatchIdentityParams());
+  }
+  child.restartAnimations();
+  fixture.document.restartAnimations();
+  editor::tests::CompareBitmapToBitmap(RenderPublicDocument(fixture.document), inherited,
+                                       "external-paint-owner-restart",
+                                       editor::tests::PixelmatchIdentityParams());
+  EXPECT_EQ(fixture.document.source(), hostSource);
+  EXPECT_EQ(child.source(), childSource);
+  EXPECT_THAT(*fixture.requests, ElementsAre("external.svg"));
 }
 
 TEST(RendererPublicApiTest, ExternalUseRepeatedFramesRestoreCachedChildAndSource) {
@@ -1185,6 +1404,64 @@ TEST(RendererPublicApiTest, ExternalUseCurrentFrameMasksShareWorkAdmission) {
   EXPECT_THAT(PixelAt(bitmap, 3, 1), test::Rgba(0, 0, 255, 255));
   EXPECT_TRUE(work->rejected());
   EXPECT_THAT(*content.requests, ElementsAre("external.svg", "external.svg"));
+}
+
+TEST(RendererPublicApiTest, SharedMaskReplaysForSecondUseInCurrentFrame) {
+  SVGDocument document = ParseDocument(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="4">
+      <defs>
+        <mask id="mask" mask-type="alpha" maskUnits="objectBoundingBox"
+              maskContentUnits="objectBoundingBox" x="0" y="0" width="1" height="1">
+          <rect width="1" height="1" fill="white"/>
+        </mask>
+        <rect id="tile" width="4" height="4" mask="url(#mask)"/>
+      </defs>
+      <use href="#tile"/><use href="#tile" x="8"/>
+    </svg>)svg");
+  SVGDocument content = ParseDocument(
+      "<svg xmlns='http://www.w3.org/2000/svg' width='16' height='4'>"
+      "<rect width='16' height='4'/></svg>");
+  SVGDocument expected = ParseDocument(
+      "<svg xmlns='http://www.w3.org/2000/svg' width='16' height='4'>"
+      "<rect width='4' height='4'/><rect x='8' width='4' height='4'/></svg>");
+
+  auto access = document.writeAccess();
+  auto contentAccess = content.writeAccess();
+  ParseWarningSink warnings;
+  RendererUtils::prepareDocumentForRendering(document, false, warnings);
+  const auto tile = document.querySelector("#tile");
+  ASSERT_THAT(tile, testing::Ne(std::nullopt));
+  std::vector<std::pair<int, Entity>> maskedInstances;
+  for (auto [entity, instance] :
+       document.registry().view<components::RenderingInstanceComponent>().each()) {
+    if (instance.dataEntity == tile->entityHandle().entity() && instance.mask) {
+      maskedInstances.emplace_back(instance.drawOrder, entity);
+    }
+  }
+  std::ranges::sort(maskedInstances);
+  ASSERT_THAT(maskedInstances, testing::SizeIs(2));
+
+  RenderViewport viewport;
+  viewport.size = Vector2d(16, 4);
+  Renderer renderer;
+  RendererDriver driver(renderer);
+  renderer.beginFrame(viewport);
+  for (const auto& [drawOrder, entity] : maskedInstances) {
+    SCOPED_TRACE(drawOrder);
+    EXPECT_TRUE(driver.drawUnderEntityMaskIntoCurrentFrame(
+        document.registry(), entity, viewport, Transform2d(), [&] {
+          driver.drawDocumentIntoCurrentFrame(content, viewport, Transform2d());
+          return true;
+        }));
+  }
+  renderer.endFrame();
+
+  Renderer expectedRenderer;
+  expectedRenderer.draw(expected);
+  editor::tests::CompareBitmapToBitmap(NormalizeSnapshot(renderer.takeSnapshot()),
+                                       NormalizeSnapshot(expectedRenderer.takeSnapshot()),
+                                       "shared-mask-second-use-current-frame",
+                                       editor::tests::PixelmatchIdentityParams());
 }
 
 TEST(RendererPublicApiTest, ExternalUseFeImageSharesOwnerWorkAdmission) {

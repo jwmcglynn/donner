@@ -266,6 +266,9 @@ private:
   /// @return Whether the browser reports the device lost.
   bool observeBrowserLoss() const;
 
+  /// Publishes an observed browser loss to all devices sharing its loss condition.
+  void recordBrowserLoss() const;
+
   /**
    * Fails closed unless this device can still be used from here: not lost, and called from the
    * context that owns the browser device.
@@ -273,6 +276,14 @@ private:
    * @param operation Operation name for the error message.
    */
   Status checkUsable(std::string_view operation) const;
+
+  /// Reject a foreign C++ caller before reading the local object table.
+  /// @param operation Operation name for diagnostics.
+  Status checkCallingThread(std::string_view operation) const;
+
+  /// Translate the guarded queue operation result and publish any observed device loss.
+  /// @param status Operation status. @param operation Operation name for diagnostics.
+  Status queueWriteStatus(BridgeStatus status, std::string_view operation) const;
 
   /**
    * Returns the identifier of the browser object backing (\p kind, \p slotIndex), failing closed

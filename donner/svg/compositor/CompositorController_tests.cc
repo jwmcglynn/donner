@@ -108,16 +108,16 @@ class StyleAdmissionResourceLoader : public ResourceLoaderInterface {
 public:
   std::variant<std::vector<uint8_t>, ResourceLoaderError> fetchExternalResource(
       std::string_view url) override {
-    const std::string_view source =
-        url == "external.svg" ? R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="2" height="2">
-                <use href="tile.svg#tile" fill="blue"/>
-              </svg>)svg"
-                              : R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="2" height="2">
-                <rect id="tile" width="2" height="2"/>
-              </svg>)svg";
     if (url != "external.svg" && url != "tile.svg") {
       return ResourceLoaderError::NotFound;
     }
+    static constexpr std::string_view kExternalDocument =
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"2\" height=\"2\">"
+        "<use href=\"tile.svg#tile\" fill=\"blue\"/></svg>";
+    static constexpr std::string_view kTileDocument =
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"2\" height=\"2\">"
+        "<rect id=\"tile\" width=\"2\" height=\"2\"/></svg>";
+    const std::string_view source = url == "external.svg" ? kExternalDocument : kTileDocument;
     return std::vector<uint8_t>(source.begin(), source.end());
   }
 };
@@ -351,6 +351,65 @@ TEST_F(CompositorControllerTest, GeometryDebugFlatRenderStopsBeforeTraversalWhen
   EXPECT_FALSE(compositor.renderFrame(RenderViewport{kTestSvgDefaultSize}, token));
   EXPECT_FALSE(compositor.hasPendingFirstFrameWarmup());
 }
+
+TEST_F(CompositorControllerTest, ConcurrentFlatDrawCancelsBetweenEntitiesAndRedraws) {
+  SVGDocument document = makeDocument(R"svg(
+    <rect width="10" height="10" fill="red"/>
+    <rect x="12" width="10" height="10" fill="blue"/>
+    <rect x="24" width="10" height="10" fill="green"/>
+  )svg");
+  document.setThreadingMode(ThreadingMode::ConcurrentDom);
+  DocumentWriteAccess access = document.writeAccess();
+  CompositorConfig config;
+  config.complexityBucketing = false;
+  config.deferFirstFrameWarmup = true;
+  CompositorController compositor(document, renderer_, config);
+  CancellationToken token;
+  EXPECT_CALL(renderer_, drawPath(_, _)).Times(1).WillOnce([&](const auto&, const auto&) {
+    token.cancel();
+  });
+  EXPECT_FALSE(compositor.renderFrame(RenderViewport{kTestSvgDefaultSize}, token));
+  EXPECT_FALSE(compositor.hasPendingFirstFrameWarmup());
+  testing::Mock::VerifyAndClearExpectations(&renderer_);
+
+  token.reset();
+  EXPECT_CALL(renderer_, drawPath(_, _)).Times(3);
+  EXPECT_TRUE(compositor.renderFrame(RenderViewport{kTestSvgDefaultSize}, token));
+  EXPECT_TRUE(compositor.hasPendingFirstFrameWarmup());
+}
+
+#ifdef DONNER_TEXT_ENABLED
+TEST_F(CompositorControllerTest, ConcurrentLastLayerRemovalPreservesLiveTextIdentity) {
+  SVGDocument document = makeDocument(R"svg(
+    <defs><filter id="blur"><feGaussianBlur stdDeviation="1"/></filter></defs>
+    <g id="group" filter="url(#blur)"><rect width="10" height="10"/></g>
+    <text id="label" x="0" y="20">Retained</text>
+  )svg");
+  document.setThreadingMode(ThreadingMode::ConcurrentDom);
+  DocumentWriteAccess access = document.writeAccess();
+  auto group = document.querySelector("#group");
+  const auto label = document.querySelector("#label");
+  ASSERT_TRUE(group.has_value());
+  ASSERT_TRUE(label.has_value());
+  CompositorConfig config;
+  config.complexityBucketing = false;
+  config.deferFirstFrameWarmup = true;
+  CompositorController compositor(document, renderer_, config);
+  compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
+  ASSERT_EQ(compositor.layerCount(), 1u);
+  group->setAttribute("filter", "none");
+  document.setTime(0.5);
+  EXPECT_CALL(
+      renderer_,
+      drawText(_, _, Field(&TextParams::textRootEntity, label->unsafeEntityHandle().entity())))
+      .Times(1);
+  compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
+  EXPECT_EQ(compositor.layerCount(), 0u);
+  EXPECT_FALSE(compositor.hasPendingFirstFrameWarmup())
+      << "The post-prepare empty-layer branch does not rediscover layers";
+}
+
+#endif  // DONNER_TEXT_ENABLED
 
 TEST_F(CompositorControllerTest, PromoteEntitySucceeds) {
   SVGDocument document = makeDocument(R"svg(

@@ -250,9 +250,10 @@ public:
 
   // Device state.
 
-  /// Whether the calling context owns the browser device. A browser device belongs to the worker
-  /// that obtained it, and the objects made from it are only usable there.
-  virtual bool ownsDevice() const = 0;
+  /// Checks current ownership and loss together. Returns Success for an owned, live device,
+  /// NotOwner for a missing device or foreign context, or DeviceLost for an owned, lost device.
+  /// Other statuses indicate a failed query. Implementations must not cache this state.
+  virtual BridgeStatus deviceStatus() const = 0;
 
   /// Whether the browser has reported the device lost. Once true it never becomes false again.
   virtual bool isDeviceLost() const = 0;

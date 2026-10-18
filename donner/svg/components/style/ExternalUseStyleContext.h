@@ -9,7 +9,7 @@
 
 #include "donner/svg/components/DocumentResourceFamilyBudget.h"
 #include "donner/svg/components/RenderingInstanceComponent.h"
-#include "donner/svg/properties/PropertyRegistry.h"
+#include "donner/svg/components/style/ComputedStyleComponent.h"
 
 namespace donner::svg::components {
 
@@ -19,11 +19,12 @@ class StyleResourceBudget;
 struct ExternalUseStyleContext {
   /// Create an owned parent snapshot after its caller has reserved its dynamic bytes.
   ExternalUseStyleContext(Entity root, const PropertyRegistry& properties,
+                          const std::optional<ComputedResourceOpacities>& resourceOpacities,
                           const ResolvedPaintServer& fill, const ResolvedPaintServer& stroke,
                           std::shared_ptr<DocumentResourceFamilyBudget> budget,
                           std::size_t chargedBytes, std::shared_ptr<StyleResourceBudget> work)
       : root(root),
-        parent(properties),
+        parent{.properties = properties, .resourceOpacities = resourceOpacities},
         fill(fill),
         stroke(stroke),
         family(std::move(budget)),
@@ -31,7 +32,7 @@ struct ExternalUseStyleContext {
         work(std::move(work)) {}
 
   ~ExternalUseStyleContext() {
-    parent.reset();
+    parent.properties.reset();
     if (family) {
       family->release(DocumentResourceFamilyBudget::Kind::ComputedStyle, chargedBytes);
     }
@@ -42,9 +43,9 @@ struct ExternalUseStyleContext {
 
   bool unsupportedResource = false;  ///< An inherited resource was refused in this occurrence.
   Entity root;                       ///< Referenced instance root.
-  std::optional<PropertyRegistry> parent;  ///< Host's owned computed parent properties.
-  ResolvedPaintServer fill;                ///< Host-registry-qualified fill.
-  ResolvedPaintServer stroke;              ///< Host-registry-qualified stroke.
+  ComputedStyleComponent parent;     ///< Host's owned properties and canonical resource values.
+  ResolvedPaintServer fill;          ///< Host-registry-qualified fill.
+  ResolvedPaintServer stroke;        ///< Host-registry-qualified stroke.
   std::shared_ptr<DocumentResourceFamilyBudget> family;  ///< Shared retained-byte envelope.
   std::size_t chargedBytes;                              ///< Live charge for the parent snapshot.
   std::shared_ptr<StyleResourceBudget>

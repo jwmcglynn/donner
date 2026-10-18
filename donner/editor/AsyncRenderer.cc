@@ -27,6 +27,52 @@
 
 namespace donner::editor {
 
+#ifdef __EMSCRIPTEN__
+// clang-format off
+EM_JS(void, InitializeRasterTaskYield, (), {
+  if (globalThis['__donnerRasterTaskYield']) abort('raster task yield already initialized');
+  const channel = new MessageChannel();
+  const state = { channel, resume: null, closed: false };
+  channel.port1.onmessage = () => {
+    if (state.closed) return;
+    const resume = state.resume;
+    state.resume = null;
+    if (resume) resume();
+  };
+  globalThis['__donnerRasterTaskYield'] = state;
+  globalThis['__donnerRasterWorker'] = true;
+});
+
+EM_ASYNC_JS(void, YieldRasterTask, (), {
+  const state = globalThis['__donnerRasterTaskYield'];
+  if (!state || state.closed || state.resume) abort('invalid overlapping raster task yield');
+  await new Promise((resolve) => {
+    state.resume = resolve;
+    state.channel.port2.postMessage(0);
+  });
+});
+
+EM_JS(void, CloseRasterTaskYield, (), {
+  const state = globalThis['__donnerRasterTaskYield'];
+  if (!state || state.resume) abort('raster task yield closed while pending');
+  state.closed = true;
+  state.channel.port1.onmessage = null;
+  state.channel.port1.close();
+  state.channel.port2.close();
+  delete globalThis['__donnerRasterTaskYield'];
+  delete globalThis['__donnerRasterWorker'];
+});
+// clang-format on
+
+namespace {
+/// Own one browser task channel for this raster worker's lifetime.
+struct RasterTaskYieldScope {
+  RasterTaskYieldScope() { InitializeRasterTaskYield(); }
+  ~RasterTaskYieldScope() { CloseRasterTaskYield(); }
+};
+}  // namespace
+#endif
+
 SampleThumbnailRenderOutcome ClassifyTemporaryFontResources(
     std::span<const svg::FontFaceDependency> dependencies,
     svg::FontResourcePreflight::Status status) {
@@ -162,7 +208,7 @@ RenderedPresentationCapture CapturePresentationForRequest(const RenderRequest& r
                            .fontResourceRevision = request.fontResourceRevision,
                            .presentationEpoch = request.presentationEpoch},
       request.selectedElements, trackedObjects, independentlyMovable, request.sourceHoverElements,
-      request.lockedFlash, std::nullopt, request.textEditing);
+      request.lockedFlash, std::nullopt, request.textEditing, request.capturePointerTargets);
   captured.fonts = UnresolvedFontDependencies(requestDocument);
   return captured;
 }
@@ -480,6 +526,11 @@ void AsyncRenderer::shutdown() {
   }
   if (thread_.joinable()) {
 #ifdef __EMSCRIPTEN__
+    // clang-format off
+    MAIN_THREAD_ASYNC_EM_ASM({
+      window['__donnerRasterShutdownRequests'] = (window['__donnerRasterShutdownRequests'] || 0) + 1;
+    });
+    // clang-format on
     // The app owns GPU promises used by explicit worker captures and device initialization.
     const double deadlineMs = emscripten_get_now() + 30000.0;
     while (!workerExited_.load(std::memory_order_acquire)) {
@@ -980,7 +1031,12 @@ bool NeedsTimedIdleWake(bool hasOwnerPoll) {
 }
 }  // namespace
 
-bool AsyncRenderer::waitForRenderOrIdleMaintenance(std::unique_lock<std::mutex>& lock) {
+bool AsyncRenderer::waitForRenderOrIdleMaintenance(std::unique_lock<std::mutex>& lock,
+                                                   RenderResult::WorkerTimingBreakdown& timing) {
+  const auto elapsedMs = [](std::chrono::steady_clock::time_point start) {
+    return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start)
+        .count();
+  };
   std::function<void()> idlePoll;
   std::function<bool()> idleHasWork;
   {
@@ -990,15 +1046,20 @@ bool AsyncRenderer::waitForRenderOrIdleMaintenance(std::unique_lock<std::mutex>&
     idleWakeRequested_.store(false, std::memory_order_release);
   }
 #ifdef __EMSCRIPTEN__
-  // A blocking pthread wait cannot run the browser's GPU completion or share-release callbacks.
-  // Yield without either document or renderer locks, including when no render is requested.
-  emscripten_sleep(0);
+  // Yield a real browser task outside locks without the timer clamp on repeated setTimeout calls.
+  const auto yieldStart = std::chrono::steady_clock::now();
+  YieldRasterTask();
+  timing.idleYieldMs = elapsedMs(yieldStart);
 #endif
   if (idlePoll) {
+    const auto callbackStart = std::chrono::steady_clock::now();
     idlePoll();
+    timing.idleCallbackMs = elapsedMs(callbackStart);
   }
   const bool pollWhileIdle = idleHasWork && idleHasWork();
+  const auto lockStart = std::chrono::steady_clock::now();
   lock.lock();
+  timing.idleLockMs = elapsedMs(lockStart);
   const auto ready = [this] {
     return std::holds_alternative<RenderingState>(workerState_) ||
            std::holds_alternative<CancellingState>(workerState_) ||
@@ -1009,6 +1070,7 @@ bool AsyncRenderer::waitForRenderOrIdleMaintenance(std::unique_lock<std::mutex>&
   const auto wakeRequested = [this, &ready] {
     return ready() || idleWakeRequested_.load(std::memory_order_acquire);
   };
+  const auto waitStart = std::chrono::steady_clock::now();
   if (pollWhileIdle) {
     cv_.wait_for(lock, std::chrono::milliseconds(100), wakeRequested);
   } else if (NeedsTimedIdleWake(static_cast<bool>(idlePoll))) {
@@ -1018,6 +1080,7 @@ bool AsyncRenderer::waitForRenderOrIdleMaintenance(std::unique_lock<std::mutex>&
   } else {
     cv_.wait(lock, wakeRequested);
   }
+  timing.idleWaitMs = elapsedMs(waitStart);
   return ready();
 }
 
@@ -1077,19 +1140,21 @@ void AsyncRenderer::workerLoop() {
 #if defined(__EMSCRIPTEN__)
   // C++ renderer state belongs to this worker; browser GPU primitives run on the app owner.
   svg::Renderer workerRenderer;
+  const RasterTaskYieldScope rasterTaskYield;
 #endif
   std::unique_ptr<svg::RendererInterface> sampleThumbnailRenderer;
   svg::RendererInterface* sampleThumbnailRendererRoot = nullptr;
 
   while (true) {
     PublishRasterWorkPhase(RasterWorkPhase::IdleMaintenance);
+    RenderResult::WorkerTimingBreakdown workerTiming;
     std::optional<RenderRequest> requestStorage;
     std::optional<SampleThumbnailRenderRequest> sampleThumbnailStorage;
     bool runCompositorWarmup = false;
     [[maybe_unused]] bool delaySampleThumbnailRendererCreation = false;
     {
       std::unique_lock<std::mutex> lock(mutex_, std::defer_lock);
-      if (!waitForRenderOrIdleMaintenance(lock)) {
+      if (!waitForRenderOrIdleMaintenance(lock, workerTiming)) {
         continue;  // A mailbox wake or completion timer needs maintenance, not a render.
       }
       waitForReplayDocumentAccess(lock);
@@ -1306,7 +1371,6 @@ void AsyncRenderer::workerLoop() {
       return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start)
           .count();
     };
-    RenderResult::WorkerTimingBreakdown workerTiming;
     workerTiming.queueWaitMs = queueWaitMs;
     workerTiming.dequeueToStartMs =
         std::chrono::duration<double, std::milli>(workerStart - workerDequeuedAt).count();

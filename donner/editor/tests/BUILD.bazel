@@ -1730,3 +1730,22 @@ donner_cc_test(
         "@com_google_gtest//:gtest_main",
     ],
 )
+
+donner_cc_test(
+    name = "svg_suite_animation_tests",
+    srcs = ["SvgSuiteAnimation_tests.cc"],
+    data = glob(["svg_suite_animation/*"]),
+    opens_gpu_device = True,
+    variants = ["geode"],
+    deps = [
+        ":bitmap_golden_compare",
+        ":frame_presentation_test_access",
+        "//donner/base:base_test_utils",
+        "//donner/editor:captured_presentation",
+        "//donner/editor:frame_presentation",
+        "//donner/svg",
+        "//donner/svg/parser",
+        "//donner/svg/renderer",
+        "@com_google_gtest//:gtest_main",
+    ],
+)

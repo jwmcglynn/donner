@@ -5,6 +5,7 @@
 #include <memory>
 #include <optional>
 #include <span>
+#include <unordered_map>
 #include <vector>
 
 #include "donner/base/ParseDiagnostic.h"
@@ -18,6 +19,20 @@
 #include "donner/svg/text/TextTypes.h"
 
 namespace donner::svg {
+
+/// Internal, frame-owned mapping from authored text entities to one rendered instance's styles.
+/// Callers pass it synchronously; layout and draw results retain no reference to this map.
+struct TextStyleContext {
+  Entity rootEntity = entt::null;  ///< Instance root supplying viewport and root style.
+  std::unordered_map<Entity, Entity> entities;  ///< Authored entity to instance style entity.
+
+  /// Find an instance style without falling back to another instance.
+  /// @param source Authored span entity. @return Matching style entity, or null when absent.
+  Entity styleEntityFor(Entity source) const {
+    const auto found = entities.find(source);
+    return found == entities.end() ? entt::null : found->second;
+  }
+};
 
 /**
  * Shared SVG text engine.
@@ -119,7 +134,8 @@ public:
 
   /// Resolve per-span layout-affecting style state on a computed text tree.
   void resolvePerSpanLayoutStyles(EntityHandle textRootHandle,
-                                  components::ComputedTextComponent& text) const;
+                                  components::ComputedTextComponent& text,
+                                  const TextStyleContext* styleContext = nullptr) const;
 
   /// Ensure cached text geometry exists for the text root containing \p handle.
   const components::ComputedTextGeometryComponent& ensureComputedTextGeometryComponent(

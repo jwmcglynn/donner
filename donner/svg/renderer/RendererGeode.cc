@@ -390,8 +390,7 @@ bool isEligibleForTransformedBlurPath(const components::FilterGraph& filterGraph
     if (node.result.has_value()) {
       return false;  // No named result reuse.
     }
-    if (node.x.has_value() || node.y.has_value() || node.width.has_value() ||
-        node.height.has_value()) {
+    if (node.hasExplicitRegion() || node.hasAnimatedRegion()) {
       return false;  // No primitive subregions.
     }
     if (node.inputs.size() > 1) {
@@ -5452,6 +5451,9 @@ void RendererGeode::Impl::ensureCacheInvalidationWired(Registry& registry) {
     return;
   }
   registry.ctx().emplace<ListenerInstalled>();
+  // Destruction callbacks must not create pools while registry.destroy() iterates them.
+  static_cast<void>(registry.storage<geode::GeodePathCacheComponent>());
+  static_cast<void>(registry.storage<geode::GeodeResidentPathComponent>());
   registry.on_update<components::ComputedPathComponent>().connect<&Impl::onComputedPathChanged>();
   registry.on_destroy<components::ComputedPathComponent>().connect<&Impl::onComputedPathChanged>();
   // Leaving the connection attached across renderer destruction is

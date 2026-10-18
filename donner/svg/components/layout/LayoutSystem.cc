@@ -570,7 +570,7 @@ Transform2d LayoutSystem::getEntityFromWorldTransform(EntityHandle entity) {
   return getAbsoluteTransformComponent(entity).worldFromEntity;
 }
 
-void LayoutSystem::invalidate(EntityHandle entity) {
+void LayoutSystem::invalidate(EntityHandle entity, bool viewportChanged) {
   entity.remove<components::ComputedLocalTransformComponent>();
   entity.remove<components::ComputedAbsoluteTransformComponent>();
   entity.remove<components::ComputedSizedElementComponent>();
@@ -603,11 +603,12 @@ void LayoutSystem::invalidate(EntityHandle entity) {
     descendantStack.pop_back();
     EntityHandle handle(registry, e);
     handle.remove<components::ComputedAbsoluteTransformComponent>();
-    // Sized-element / viewBox caches can also cascade through a viewport-
-    // bearing ancestor, but those rarely change mid-drag and the RIC
-    // rebuild path already recomputes them via `ensureComputedComponents`.
-    // Keep this cascade narrow to the transform cache - the known
-    // drag-frame offender - to avoid inflating the invalidation surface.
+    if (viewportChanged) {
+      handle.remove<components::ComputedViewBoxComponent>();
+      handle.remove<components::ComputedSizedElementComponent>();
+      handle.remove<components::ComputedShadowSizedElementComponent>();
+      handle.remove<components::ComputedLocalTransformComponent>();
+    }
     if (const auto* childTree = handle.try_get<donner::components::TreeComponent>()) {
       for (Entity grandchild = childTree->firstChild(); grandchild != entt::null;
            grandchild = registry.get<donner::components::TreeComponent>(grandchild).nextSibling()) {
@@ -689,15 +690,22 @@ void LayoutSystem::instantiateAllComputedComponents(Registry& registry,
   }
 }
 
+SizedElementProperties LayoutSystem::resolveSizeProperties(
+    const SizedElementProperties& sizeProperties,
+    const std::map<RcString, parser::UnparsedProperty>& unparsedProperties,
+    ParseWarningSink& warningSink) {
+  SizedElementProperties result = sizeProperties;
+  ApplyUnparsedProperties(result, unparsedProperties, warningSink);
+  return result;
+}
+
 // Evaluates SizedElementProperties and returns the resulting bounds.
 Box2d LayoutSystem::computeSizeProperties(
     EntityHandle entity, const SizedElementProperties& sizeProperties,
     const std::map<RcString, parser::UnparsedProperty>& unparsedProperties, const Box2d& viewBox,
     FontMetrics fontMetrics, ParseWarningSink& warningSink) {
-  SizedElementProperties mutableSizeProperties = sizeProperties;
-
-  ApplyUnparsedProperties(mutableSizeProperties, unparsedProperties, warningSink);
-  return calculateSizedElementBounds(entity, mutableSizeProperties, viewBox, fontMetrics);
+  const auto properties = resolveSizeProperties(sizeProperties, unparsedProperties, warningSink);
+  return calculateSizedElementBounds(entity, properties, viewBox, fontMetrics);
 }
 
 // Creates a ComputedSizedElementComponent for the linked entity, using precomputed style

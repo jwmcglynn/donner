@@ -332,6 +332,8 @@ donner_cc_test(
     target_compatible_with = renderer_backend_compatible_with(["tiny_skia"]),
     visibility = ["//tools/ci:__pkg__"],
     deps = [
+        "//donner/editor/tests:bitmap_golden_compare",
+        "//donner/svg/components/animation:value_sampler",
         "//donner/svg/renderer:filter_graph_executor",
         "@com_google_gtest//:gtest_main",
     ],
@@ -584,8 +586,10 @@ donner_cc_test(
 donner_cc_test(
     name = "renderer_animation_tests",
     srcs = [
+        "RendererAnimationFixture_tests.cc",
         "RendererAnimation_tests.cc",
     ],
+    data = ["//donner/svg/renderer/testdata:animation_fixtures"],
     opens_gpu_device = True,
     # Variant lanes (doc 0031 M2.3): tiny / text_full / geode
     # wrappers run automatically under `bazel test //...`.
@@ -596,6 +600,43 @@ donner_cc_test(
     ],
     deps = [
         ":renderer_test_utils",
+        ":rgba_test_matchers",
+        "//donner/base:base_test_utils",
+        "//donner/editor/tests:bitmap_golden_compare",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
+    name = "renderer_animation_presentation_tests",
+    srcs = [
+        "RendererAnimationCoordinateContext_tests.cc",
+        "RendererAnimationFilterViewport_tests.cc",
+        "RendererAnimationFilter_tests.cc",
+        "RendererAnimationLayoutBase_tests.cc",
+        "RendererAnimationPathValue_tests.cc",
+        "RendererAnimationPresentation_tests.cc",
+        "RendererAnimationReferenceValue_tests.cc",
+        "RendererAnimationStyleBase_tests.cc",
+        "RendererAnimationTextPosition_tests.cc",
+    ],
+    data = ["//third_party/resvg-test-suite:fonts"],
+    opens_gpu_device = True,
+    variants = [
+        "tiny",
+        "text_full",
+        "geode",
+    ],
+    deps = [
+        ":renderer_test_utils",
+        ":rgba_test_matchers",
+        "//donner/base:base_test_utils",
+        "//donner/base/encoding:base64",
+        "//donner/editor/tests:bitmap_golden_compare",
+        "//donner/svg/components/style:style_system",
+        "//donner/svg/renderer:renderer_driver",
+        "//donner/svg/renderer:renderer_tiny_skia",
+        "//donner/svg/resources:font_manager",
         "@com_google_gtest//:gtest_main",
     ],
 )

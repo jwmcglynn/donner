@@ -1,13 +1,20 @@
 #include "donner/svg/components/shape/ShapeSystem.h"
 
+#include <algorithm>
+#include <array>
 #include <concepts>
+#include <tuple>
+#include <utility>
 
 #include "donner/base/ParseWarningSink.h"
 #include "donner/base/xml/components/TreeComponent.h"
 #include "donner/svg/components/DocumentResourceFamilyBudget.h"
 #include "donner/svg/components/GeometryPreparationResourceBudget.h"
 #include "donner/svg/components/SVGDocumentContext.h"
+#include "donner/svg/components/animation/AnimationBaseValue.h"
+#include "donner/svg/components/animation/AnimationValueSampler.h"
 #include "donner/svg/components/layout/LayoutSystem.h"
+#include "donner/svg/components/shadow/ShadowEntityComponent.h"
 #ifdef DONNER_TEXT_ENABLED
 #include "donner/svg/components/text/TextRootComponent.h"
 #include "donner/svg/text/TextEngine.h"
@@ -69,28 +76,149 @@ FontMetrics fontMetricsForElement(Registry& registry, const ComputedStyleCompone
   return metrics;
 }
 
-/**
- * Parse the string of the 'd' presentation attribute out of CSS, which can be parsed with \ref
- * PathParser.
- *
- * @param components CSS ComponentValue list to parse, the right side of the declaration (e.g.
- * `d: <component-values>`).
- * @return parsed string, or an error if the string could not be parsed
- */
-ParseResult<RcString> ParseD(std::span<const css::ComponentValue> components) {
-  if (auto maybeIdent = parser::TryGetSingleIdent(components);
-      maybeIdent && maybeIdent->equalsLowercase("none")) {
-    return RcString();
-  } else if (components.size() == 1) {
-    if (const auto* str = components[0].tryGetToken<css::Token::String>()) {
-      return str->value;
+constexpr std::array<std::string_view, 13> kShapeLengthAttributes = {
+    "x", "y", "width", "height", "cx", "cy", "r", "rx", "ry", "x1", "y1", "x2", "y2"};
+
+bool HasContextualShapeLengths(EntityHandle handle) {
+  return std::any_of(
+      kShapeLengthAttributes.begin(), kShapeLengthAttributes.end(), [&](std::string_view name) {
+        return ContextualLengthFor(*handle.registry(), handle.entity(), name) != nullptr;
+      });
+}
+
+Lengthd::Extent ShapeLengthExtent(std::string_view name) {
+  if (name == "x" || name == "width" || name == "cx" || name == "rx" || name == "x1" ||
+      name == "x2") {
+    return Lengthd::Extent::X;
+  }
+  if (name == "y" || name == "height" || name == "cy" || name == "ry" || name == "y1" ||
+      name == "y2") {
+    return Lengthd::Extent::Y;
+  }
+  return Lengthd::Extent::Mixed;
+}
+
+bool ReserveShapeStyleWork(EntityHandle handle, const ComputedStyleComponent& style) {
+  auto* budget = handle.registry()->ctx().find<AnimationResourceBudget>();
+  const auto bytes = style.properties->complexPropertyBytes();
+  return budget && bytes <= AnimationResourceBudget::kMaximumContextualWork / 6 &&
+         budget->reserveContextualWork(bytes * 6);
+}
+
+bool ReserveShapeRecipeWork(EntityHandle handle, const ComputedStyleComponent& style) {
+  auto* budget = handle.registry()->ctx().find<AnimationResourceBudget>();
+  if (!budget) {
+    return false;
+  }
+  const auto bytes = style.properties->complexPropertyBytes();
+  if (bytes > AnimationResourceBudget::kMaximumContextualWork / 6) {
+    return false;
+  }
+  std::size_t work = bytes * 6;
+  for (std::string_view name : kShapeLengthAttributes) {
+    const auto recipe = ContextualLengthFor(*handle.registry(), handle.entity(), name);
+    if (recipe) {
+      if (recipe->evaluationWork > AnimationResourceBudget::kMaximumContextualWork - work) {
+        return false;
+      }
+      work += recipe->evaluationWork;
     }
   }
+  return budget->reserveContextualWork(work);
+}
 
-  ParseDiagnostic err;
-  err.reason = "Expected string or 'none'";
-  err.range.start = !components.empty() ? components.front().sourceOffset() : FileOffset::Offset(0);
-  return err;
+template <typename Properties>
+Lengthd ShapeUnderlyingLength(const Properties& properties, const Property<Lengthd>& property,
+                              const AnimationValueContext& context) {
+  if (const auto value = property.get()) {
+    return *value;
+  }
+  if constexpr (requires { properties.calculateRx(context.viewBox, context.fontMetrics); }) {
+    if (property.name == "rx") {
+      return std::get<0>(properties.calculateRx(context.viewBox, context.fontMetrics));
+    }
+    if (property.name == "ry") {
+      return std::get<0>(properties.calculateRy(context.viewBox, context.fontMetrics));
+    }
+  }
+  return Lengthd();
+}
+
+template <typename Properties>
+bool SampleShapeProperty(EntityHandle handle, const Properties& bases,
+                         const Property<Lengthd>& base, Property<Lengthd>& destination,
+                         AnimationValueContext context) {
+  const auto recipe = ContextualLengthFor(*handle.registry(), handle.entity(), destination.name);
+  if (!recipe) {
+    return false;
+  }
+  context.extent = ShapeLengthExtent(destination.name);
+  const auto value =
+      SampleContextualLengthRecipe(*recipe, ShapeUnderlyingLength(bases, base, context), context);
+  if (!value) {
+    return false;
+  }
+  destination.substitute(*value);
+  destination.specificity = css::Specificity::Animation();
+  return true;
+}
+
+template <typename Component, typename Computed>
+auto EffectiveShapeProperties(EntityHandle handle, const Component& shape,
+                              const ComputedStyleComponent& style, const FontMetrics& metrics,
+                              ParseWarningSink& warningSink)
+    -> std::optional<decltype(shape.properties)> {
+  if (handle.all_of<ShadowEntityComponent>() && !handle.all_of<Computed>() &&
+      !ReserveShapeStyleWork(handle, style)) {
+    return std::nullopt;
+  }
+  Computed computed(shape.properties, style.properties->unparsedProperties, warningSink);
+  auto bases = computed.properties;
+  if (HasContextualShapeLengths(handle) && ReserveShapeRecipeWork(handle, style)) {
+    auto properties = shape.properties;
+    auto source = bases.allProperties();
+    auto destination = properties.allProperties();
+    AnimationValueContext context;
+    context.viewBox = LayoutSystem().getViewBox(handle);
+    context.fontMetrics = metrics;
+    bool changed = false;
+    [&]<std::size_t... I>(std::index_sequence<I...>) {
+      ((changed |=
+        SampleShapeProperty(handle, bases, std::get<I>(source), std::get<I>(destination), context)),
+       ...);
+    }(std::make_index_sequence<std::tuple_size_v<decltype(source)>>{});
+    if (changed) {
+      computed = Computed(properties, style.properties->unparsedProperties, warningSink);
+    }
+  }
+  auto result = computed.properties;
+  handle.emplace_or_replace<Computed>(std::move(computed));
+  return result;
+}
+
+LineComponent EffectiveLine(EntityHandle handle, const LineComponent& line,
+                            const ComputedStyleComponent& style, const FontMetrics& metrics) {
+  LineComponent result = line;
+  if (!HasContextualShapeLengths(handle) || !ReserveShapeRecipeWork(handle, style)) {
+    return result;
+  }
+  using Field = Lengthd LineComponent::*;
+  const std::pair<std::string_view, Field> fields[] = {{"x1", &LineComponent::x1},
+                                                       {"y1", &LineComponent::y1},
+                                                       {"x2", &LineComponent::x2},
+                                                       {"y2", &LineComponent::y2}};
+  AnimationValueContext context;
+  context.viewBox = LayoutSystem().getViewBox(handle);
+  context.fontMetrics = metrics;
+  for (const auto& [name, field] : fields) {
+    if (const auto recipe = ContextualLengthFor(*handle.registry(), handle.entity(), name)) {
+      context.extent = ShapeLengthExtent(name);
+      if (const auto value = SampleContextualLengthRecipe(*recipe, line.*field, context)) {
+        result.*field = *value;
+      }
+    }
+  }
+  return result;
 }
 
 bool ReserveComputedPathPayload(EntityHandle handle, const Path& path) {
@@ -128,7 +256,9 @@ std::optional<ParseDiagnostic> ParseDFromAttributes(PathComponent& properties,
   } else {
     auto maybeError = Parse(
         params,
-        [](const parser::PropertyParseFnParams& params) { return ParseD(params.components()); },
+        [](const parser::PropertyParseFnParams& params) {
+          return parser::ParsePathDataProperty(params.components());
+        },
         &properties.d);
     if (maybeError) {
       return std::move(maybeError.value());
@@ -226,6 +356,19 @@ constexpr bool ForEachShape(const F& f) {
   return ForEachShapeImpl<TypeList>(f, std::make_index_sequence<TypeList::size>{});
 }
 
+bool HasIdenticalPathData(const Path& first, const Path& second) {
+  const auto sameCommand = [](const Path::Command& a, const Path::Command& b) {
+    return a.verb == b.verb && a.pointIndex == b.pointIndex && a.isInternal == b.isInternal;
+  };
+  const auto samePoint = [](const Vector2d& a, const Vector2d& b) {
+    return a.x == b.x && a.y == b.y;
+  };
+  return std::equal(first.commands().begin(), first.commands().end(), second.commands().begin(),
+                    second.commands().end(), sameCommand) &&
+         std::equal(first.points().begin(), first.points().end(), second.points().begin(),
+                    second.points().end(), samePoint);
+}
+
 bool IsDisplayNone(EntityHandle handle, ParseWarningSink& warningSink) {
   const ComputedStyleComponent& style = StyleSystem().computeStyle(handle, warningSink);
   return style.properties && style.properties->display.get().value() == Display::None;
@@ -233,9 +376,71 @@ bool IsDisplayNone(EntityHandle handle, ParseWarningSink& warningSink) {
 
 }  // namespace
 
+EntityHandle ShapeSystem::geometryHandle(EntityHandle instance) {
+  const auto* shadow = instance.try_get<ShadowEntityComponent>();
+  if (!shadow) {
+    return instance;
+  }
+  const EntityHandle light(*instance.registry(), shadow->lightEntity);
+  if (!instance.all_of<ComputedInstanceGeometryComponent>()) {
+    return light;
+  }
+  const auto* instancePath = instance.try_get<ComputedPathComponent>();
+  const auto* lightPath = light.try_get<ComputedPathComponent>();
+  // Identical instance geometry retains the source's renderer cache and batching identity.
+  return instancePath && lightPath && HasIdenticalPathData(instancePath->spline, lightPath->spline)
+             ? light
+             : instance;
+}
+
+void ShapeSystem::instantiateShadowComputedPath(EntityHandle handle,
+                                                ParseWarningSink& warningSink) {
+  const auto* shadow = handle.try_get<ShadowEntityComponent>();
+  const auto* style = handle.try_get<ComputedStyleComponent>();
+  if (!shadow || !style || !style->properties) {
+    return;
+  }
+  const EntityHandle light(*handle.registry(), shadow->lightEntity);
+  if (!light.any_of<CircleComponent, EllipseComponent, LineComponent, RectComponent>()) {
+    if (handle.all_of<ComputedInstanceGeometryComponent>()) {
+      RemoveComputedPath(handle);
+      handle.remove<ComputedInstanceGeometryComponent, ComputedCircleComponent,
+                    ComputedEllipseComponent, ComputedRectComponent>();
+    }
+    return;
+  }
+  auto& prepared = handle.get_or_emplace<ComputedInstanceGeometryComponent>();
+  if (prepared.prepared) {
+    return;
+  }
+  prepared.prepared = true;
+  handle.remove<ComputedCircleComponent, ComputedEllipseComponent, ComputedRectComponent>();
+  const FontMetrics metrics = fontMetricsForElement(*handle.registry(), *style, handle.entity());
+  ForEachShape<entt::type_list<CircleComponent, EllipseComponent, LineComponent, RectComponent>>(
+      [&]<typename Shape>() {
+        if (const auto* component = light.try_get<Shape>()) {
+          createComputedShapeWithStyle(handle, *component, *style, metrics, warningSink);
+          return true;
+        }
+        return false;
+      });
+}
+
+void ShapeSystem::instantiateShadowComputedPaths(Registry& registry,
+                                                 std::span<const Entity> entities,
+                                                 ParseWarningSink& warningSink) {
+  for (Entity entity : entities) {
+    instantiateShadowComputedPath(EntityHandle(registry, entity), warningSink);
+  }
+}
+
 ComputedPathComponent* ShapeSystem::createComputedPathIfShape(EntityHandle handle,
                                                               const FontMetrics& fontMetrics,
                                                               ParseWarningSink& warningSink) {
+  const EntityHandle geometry = geometryHandle(handle);
+  if (geometry.entity() != handle.entity()) {
+    return geometry.try_get<ComputedPathComponent>();
+  }
   ComputedPathComponent* computedPath = handle.try_get<ComputedPathComponent>();
   if (computedPath) {
     return computedPath;
@@ -261,6 +466,9 @@ ComputedPathComponent* ShapeSystem::createComputedPathIfShape(EntityHandle handl
 }
 
 void ShapeSystem::instantiateAllComputedPaths(Registry& registry, ParseWarningSink& warningSink) {
+  for (auto [entity, state] : registry.view<ComputedInstanceGeometryComponent>().each()) {
+    state.prepared = false;
+  }
   ForEachShape<AllShapes>([&]<typename ShapeType>() {
     for (auto view = registry.view<ShapeType, ComputedStyleComponent>(); auto entity : view) {
       auto [shape, style] = view.get(entity);
@@ -272,6 +480,9 @@ void ShapeSystem::instantiateAllComputedPaths(Registry& registry, ParseWarningSi
     const bool shouldExit = false;
     return shouldExit;
   });
+  for (Entity entity : registry.view<ShadowEntityComponent, ComputedStyleComponent>()) {
+    instantiateShadowComputedPath(EntityHandle(registry, entity), warningSink);
+  }
 }
 
 std::optional<Box2d> ShapeSystem::getShapeBounds(EntityHandle handle) {
@@ -372,16 +583,19 @@ std::optional<Box2d> ShapeSystem::getTransformedShapeBounds(EntityHandle handle,
 ComputedPathComponent* ShapeSystem::createComputedShapeWithStyle(
     EntityHandle handle, const CircleComponent& circle, const ComputedStyleComponent& style,
     const FontMetrics& fontMetrics, ParseWarningSink& warningSink) {
-  const ComputedCircleComponent& computedCircle = handle.get_or_emplace<ComputedCircleComponent>(
-      circle.properties, style.properties->unparsedProperties, warningSink);
+  const auto effective = EffectiveShapeProperties<CircleComponent, ComputedCircleComponent>(
+      handle, circle, style, fontMetrics, warningSink);
+  if (!effective) {
+    RemoveComputedPath(handle);
+    return nullptr;
+  }
 
   const Box2d viewport = LayoutSystem().getViewBox(handle);
 
-  const Vector2d center(computedCircle.properties.cx.get().value().toPixels(viewport, fontMetrics,
-                                                                            Lengthd::Extent::X),
-                        computedCircle.properties.cy.get().value().toPixels(viewport, fontMetrics,
-                                                                            Lengthd::Extent::Y));
-  const double radius = computedCircle.properties.r.get().value().toPixels(viewport, fontMetrics);
+  const Vector2d center(
+      effective->cx.get().value().toPixels(viewport, fontMetrics, Lengthd::Extent::X),
+      effective->cy.get().value().toPixels(viewport, fontMetrics, Lengthd::Extent::Y));
+  const double radius = effective->r.get().value().toPixels(viewport, fontMetrics);
 
   if (radius > 0.0) {
     Path path = PathBuilder().addCircle(center, radius).build();
@@ -396,17 +610,20 @@ ComputedPathComponent* ShapeSystem::createComputedShapeWithStyle(
 ComputedPathComponent* ShapeSystem::createComputedShapeWithStyle(
     EntityHandle handle, const EllipseComponent& ellipse, const ComputedStyleComponent& style,
     const FontMetrics& fontMetrics, ParseWarningSink& warningSink) {
-  const ComputedEllipseComponent& computedEllipse = handle.get_or_emplace<ComputedEllipseComponent>(
-      ellipse.properties, style.properties->unparsedProperties, warningSink);
+  const auto effective = EffectiveShapeProperties<EllipseComponent, ComputedEllipseComponent>(
+      handle, ellipse, style, fontMetrics, warningSink);
+  if (!effective) {
+    RemoveComputedPath(handle);
+    return nullptr;
+  }
 
   const Box2d viewport = LayoutSystem().getViewBox(handle);
 
-  const Vector2d center(computedEllipse.properties.cx.get().value().toPixels(viewport, fontMetrics,
-                                                                             Lengthd::Extent::X),
-                        computedEllipse.properties.cy.get().value().toPixels(viewport, fontMetrics,
-                                                                             Lengthd::Extent::Y));
-  const Vector2d radius(std::get<1>(computedEllipse.properties.calculateRx(viewport, fontMetrics)),
-                        std::get<1>(computedEllipse.properties.calculateRy(viewport, fontMetrics)));
+  const Vector2d center(
+      effective->cx.get().value().toPixels(viewport, fontMetrics, Lengthd::Extent::X),
+      effective->cy.get().value().toPixels(viewport, fontMetrics, Lengthd::Extent::Y));
+  const Vector2d radius(std::get<1>(effective->calculateRx(viewport, fontMetrics)),
+                        std::get<1>(effective->calculateRy(viewport, fontMetrics)));
 
   if (radius.x > 0.0 && radius.y > 0.0) {
     Path path = PathBuilder().addEllipse(Box2d(center - radius, center + radius)).build();
@@ -421,12 +638,13 @@ ComputedPathComponent* ShapeSystem::createComputedShapeWithStyle(
 ComputedPathComponent* ShapeSystem::createComputedShapeWithStyle(
     EntityHandle handle, const LineComponent& line, const ComputedStyleComponent& style,
     const FontMetrics& fontMetrics, ParseWarningSink& warningSink) {
+  const LineComponent effective = EffectiveLine(handle, line, style, fontMetrics);
   const Box2d viewport = LayoutSystem().getViewBox(handle);
 
-  const Vector2d start(line.x1.toPixels(viewport, fontMetrics, Lengthd::Extent::X),
-                       line.y1.toPixels(viewport, fontMetrics, Lengthd::Extent::Y));
-  const Vector2d end(line.x2.toPixels(viewport, fontMetrics, Lengthd::Extent::X),
-                     line.y2.toPixels(viewport, fontMetrics, Lengthd::Extent::Y));
+  const Vector2d start(effective.x1.toPixels(viewport, fontMetrics, Lengthd::Extent::X),
+                       effective.y1.toPixels(viewport, fontMetrics, Lengthd::Extent::Y));
+  const Vector2d end(effective.x2.toPixels(viewport, fontMetrics, Lengthd::Extent::X),
+                     effective.y2.toPixels(viewport, fontMetrics, Lengthd::Extent::Y));
 
   Path path = PathBuilder().moveTo(start).lineTo(end).build();
   return emplaceComputedPathIfChanged(handle, std::move(path));
@@ -441,7 +659,9 @@ ComputedPathComponent* ShapeSystem::createComputedShapeWithStyle(
     auto maybeError = Parse(
         parser::PropertyParseFnParams::Create(it->second.declaration, it->second.specificity,
                                               parser::PropertyParseBehavior::AllowUserUnits),
-        [](const parser::PropertyParseFnParams& params) { return ParseD(params.components()); },
+        [](const parser::PropertyParseFnParams& params) {
+          return parser::ParsePathDataProperty(params.components());
+        },
         &actualD);
     if (maybeError) {
       warningSink.add(std::move(maybeError.value()));
@@ -515,26 +735,27 @@ ComputedPathComponent* ShapeSystem::createComputedShapeWithStyle(
 ComputedPathComponent* ShapeSystem::createComputedShapeWithStyle(
     EntityHandle handle, const RectComponent& rect, const ComputedStyleComponent& style,
     const FontMetrics& fontMetrics, ParseWarningSink& warningSink) {
-  const ComputedRectComponent& computedRect = handle.get_or_emplace<ComputedRectComponent>(
-      rect.properties, style.properties->unparsedProperties, warningSink);
+  const auto effective = EffectiveShapeProperties<RectComponent, ComputedRectComponent>(
+      handle, rect, style, fontMetrics, warningSink);
+  if (!effective) {
+    RemoveComputedPath(handle);
+    return nullptr;
+  }
 
   const Box2d viewport = LayoutSystem().getViewBox(handle);
 
   const Vector2d pos(
-      computedRect.properties.x.get().value().toPixels(viewport, fontMetrics, Lengthd::Extent::X),
-      computedRect.properties.y.get().value().toPixels(viewport, fontMetrics, Lengthd::Extent::Y));
-  const Vector2d size(computedRect.properties.width.get().value().toPixels(viewport, fontMetrics,
-                                                                           Lengthd::Extent::X),
-                      computedRect.properties.height.get().value().toPixels(viewport, fontMetrics,
-                                                                            Lengthd::Extent::Y));
+      effective->x.get().value().toPixels(viewport, fontMetrics, Lengthd::Extent::X),
+      effective->y.get().value().toPixels(viewport, fontMetrics, Lengthd::Extent::Y));
+  const Vector2d size(
+      effective->width.get().value().toPixels(viewport, fontMetrics, Lengthd::Extent::X),
+      effective->height.get().value().toPixels(viewport, fontMetrics, Lengthd::Extent::Y));
 
   if (size.x > 0.0 && size.y > 0.0) {
-    if (computedRect.properties.rx.isSpecified() || computedRect.properties.ry.isSpecified()) {
+    if (effective->rx.isSpecified() || effective->ry.isSpecified()) {
       const Vector2d radius(
-          Clamp(std::get<1>(computedRect.properties.calculateRx(viewport, fontMetrics)), 0.0,
-                size.x * 0.5),
-          Clamp(std::get<1>(computedRect.properties.calculateRy(viewport, fontMetrics)), 0.0,
-                size.y * 0.5));
+          Clamp(std::get<1>(effective->calculateRx(viewport, fontMetrics)), 0.0, size.x * 0.5),
+          Clamp(std::get<1>(effective->calculateRy(viewport, fontMetrics)), 0.0, size.y * 0.5));
 
       // Success: Draw a rect with rounded corners.
       Path path = PathBuilder().addRoundedRect(Box2d(pos, pos + size), radius.x, radius.y).build();

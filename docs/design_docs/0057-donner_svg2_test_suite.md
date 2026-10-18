@@ -1,8 +1,9 @@
 # Design: Donner SVG Suite and SVG2 Audit
 
 **Status:** Implementing. The native suite and failure-triage workflow are being integrated.
-Static standalone reuse is exercised with a second renderer. The complete normative audit, mainline
-animation integration, and standalone publication remain open; the checklist below is the delivery record.
+Static standalone reuse is exercised with a second renderer. Native animation timing, interpolation,
+motion, event and contextual-use scenarios are integrated. The complete normative audit, broader
+interaction coverage and standalone publication remain open; the checklist below is the delivery record.
 **Author:** GPT-6 Astra
 **Drafted by:** GPT-5.6 Sol
 **Prior review:** Claude Fable 5
@@ -76,10 +77,11 @@ clock/event APIs, expand the audit by requirement, and qualify a second renderer
   - [ ] Pin the external specifications actually used to decide each disputed requirement.
   - [ ] Close applicable implementation and coverage gaps, retaining genuine spec ambiguities.
 - [ ] Native scenarios
-  - [ ] Integrate the animation branch's production clock, sampling, and input/event APIs.
-  - [ ] Test exact timing boundaries, repeats, fill/restart, seek/pause, and interpolation.
+  - [x] Integrate the animation branch's production clock, sampling, and input/event APIs.
+  - [x] Test exact timing boundaries, repeats, fill/restart, backward seeks, and interpolation.
+  - [x] Test additive accumulation, transforms, inline motion, `<mpath>`, and contextual `<use>`.
   - [ ] Test input routing, pointer-events, focus/keyboard, links, and state-dependent style.
-  - [ ] Prove actual renderer behavior with semantic assertions and pixel samples.
+  - [x] Prove covered renderer behavior with semantic assertions and strict bitmap comparisons.
 - [ ] Reuse and distribution
   - [ ] Run another renderer through the same C++ harness against both corpora.
   - [ ] Document build integration without requiring Donner's implementation internals.
@@ -185,9 +187,10 @@ checks are claimed. Required coverage includes corpus completeness, deterministi
 missing/malformed PNGs, dimension mismatch, exact and tolerant comparison, per-engine policy,
 artifact identity, and pass/fail/skip accounting. Use real failing images to test triage.
 
-Run focused native scenarios with actual animation and input APIs after integration. Compare one
-second renderer's results through the same harness. A backend or font tier not executed remains
-unverified. Preserve the existing resvg lane until its replacement has demonstrated parity.
+Run `//donner/editor/tests:svg_suite_animation_tests` and its Geode variant for focused native
+scenarios using the actual clock, host-control, event and renderer APIs. Compare one second renderer's
+results through the same harness. A backend or font tier not executed remains unverified. Preserve
+the existing resvg lane until its replacement has demonstrated parity.
 
 ## Alternatives and Open Questions
 

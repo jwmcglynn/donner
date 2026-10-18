@@ -418,11 +418,8 @@ def _enclosing_scopes(stripped: str, match: re.Match) -> list[tuple[int, str, st
         class_name = scope_match.group("class")
         name = class_name or scope_match.group("namespace")
         kind = "class" if class_name else "namespace"
-        # Anonymous scopes cannot safely share baseline debt with another scope. Their source
-        # offset is intentionally part of the identity, so ambiguity fails closed.
-        enclosing.append(
-            (scope_match.start(), kind, name or f"<anonymous@{scope_match.start()}>")
-        )
+        # An unnamed namespace has one identity per enclosing namespace in a translation unit.
+        enclosing.append((scope_match.start(), kind, name or "<anonymous>"))
     return sorted(enclosing)
 
 

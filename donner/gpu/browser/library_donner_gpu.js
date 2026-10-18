@@ -1262,9 +1262,12 @@ var LibraryDonnerGpu = {
     return DonnerGpu.writeMessage(reason, destination, capacity);
   },
 
-  donner_gpu_owns_device__deps: ["$DonnerGpu"],
-  donner_gpu_owns_device: function(handle) {
-    return DonnerGpu.logicalFor(handle) !== null && DonnerGpu.device !== null ? 1 : 0;
+  donner_gpu_device_status__deps: ["$DonnerGpu"],
+  donner_gpu_device_status: function(handle) {
+    if (DonnerGpu.logicalFor(handle) === null || DonnerGpu.device === null) {
+      return DonnerGpu.kNotOwner;
+    }
+    return DonnerGpu.lost ? DonnerGpu.kDeviceLost : DonnerGpu.kSuccess;
   },
 
   donner_gpu_is_device_lost__deps: ["$DonnerGpu"],

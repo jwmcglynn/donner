@@ -8,12 +8,26 @@
 #include <optional>
 #include <utility>
 
+#include "donner/base/EcsRegistry_fwd.h"
 #include "donner/base/RcString.h"
 #include "donner/svg/SVGDocumentHandle.h"
 #include "donner/svg/components/DocumentResourceFamilyBudget.h"
 #include "donner/svg/resources/ImageResource.h"
 
 namespace donner::svg::components {
+
+/// Optional decoded-animation cache hook invoked before a family-budget reservation.
+struct DecodedImageCacheReclaimer {
+  /// Reclaim inactive decoded images until requiredBytes can be admitted, when possible.
+  using Callback = void (*)(Registry& registry, std::size_t requiredBytes);
+  Callback callback = nullptr;  ///< Registered inactive-image reclamation callback.
+};
+
+/// A decoded image waiting for enough recoverable document-family capacity.
+struct DeferredDecodedImageComponent {
+  RcString href;                  ///< Image reference whose decode was deferred.
+  std::size_t requiredBytes = 0;  ///< Exact decoded RGBA bytes required for admission.
+};
 
 /**
  * Parameters for the \ref xml_image element.

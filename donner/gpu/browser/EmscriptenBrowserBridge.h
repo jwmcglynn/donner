@@ -56,7 +56,7 @@ public:
   BrowserDeviceRequestState deviceRequestState() const override;
   RcString deviceRequestError() const override;
 
-  bool ownsDevice() const override;
+  BridgeStatus deviceStatus() const override;
   bool isDeviceLost() const override;
   RcString deviceLostReason() const override;
   uint64_t completedSerial() const override;

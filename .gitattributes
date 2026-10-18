@@ -11,4 +11,3 @@ third_party/patches/emsdk_declared_java_runtime.patch -text -whitespace
 
 # Preserve the official harness patch context; git apply checks its payload whitespace.
 tools/svg_suite/vdiff/donner-registration.patch -text -whitespace
-tools/svg_suite/animation/donner-animation-tests.patch -text -whitespace

@@ -21,6 +21,13 @@ TEST(Specificity, CascadePriorityOverrideAndNormalOriginsRemainOrdered) {
   EXPECT_LT(Specificity::Important(), Specificity::Override());
 }
 
+TEST(Specificity, AnimationRankStaysBelowAllImportantOrigins) {
+  EXPECT_LT(Specificity::StyleAttribute(), Specificity::Animation());
+  EXPECT_LT(Specificity::Animation(), Specificity::Important());
+  EXPECT_THAT(Specificity::Animation(), ToStringIs("Specificity(animation)"));
+  EXPECT_THAT(Specificity::SpecialType::Animation, ToStringIs("Animation"));
+}
+
 TEST(Specificity, ToString) {
   EXPECT_THAT(Specificity(), ToStringIs("Specificity(0, 0, 0)"));
   EXPECT_THAT(Specificity::FromABC(1, 2, 3), ToStringIs("Specificity(1, 2, 3)"));

@@ -19,6 +19,8 @@
 
 namespace donner::svg::components {
 
+class AnimationContextualWorkBudget;
+
 /** Aggregate stylesheet cascade and selector traversal budget for one style-computation pass. */
 class StyleResourceBudget {
 public:
@@ -79,7 +81,8 @@ public:
    * @param other Budget whose family charge moves to this instance.
    */
   StyleResourceBudget(StyleResourceBudget&& other) noexcept
-      : externalInstanceWork_(other.externalInstanceWork_),
+      : contextualAnimationWork_(std::move(other.contextualAnimationWork_)),
+        externalInstanceWork_(other.externalInstanceWork_),
         externalResourceWarning_(other.externalResourceWarning_),
         aggregateWork_(other.aggregateWork_),
         limits_(other.limits_),
@@ -109,6 +112,7 @@ public:
         : budget_(budget), previous_(std::exchange(budget.ownerActive_, true)) {
       if (!previous_) {
         budget_.reset();
+        budget_.resetContextualAnimationWork();
       }
     }
     ~OwnerScope() { budget_.ownerActive_ = previous_; }
@@ -128,22 +132,19 @@ public:
      * @param budget Shared traversal identity context.
      * @param registry Mutable storage protected by the caller's document access.
      */
-    ActiveRegistryScope(StyleResourceBudget& budget, const Registry& registry)
-        : budget_(budget),
-          registry_(&registry),
-          inserted_(budget.activeRegistries_.insert(&registry).second) {}
-    ~ActiveRegistryScope() {
-      if (inserted_) {
-        budget_.activeRegistries_.erase(registry_);
-      }
-    }
+    ActiveRegistryScope(StyleResourceBudget& budget, Registry& registry);
+    ~ActiveRegistryScope();
     ActiveRegistryScope(const ActiveRegistryScope&) = delete;
     ActiveRegistryScope& operator=(const ActiveRegistryScope&) = delete;
 
   private:
     StyleResourceBudget& budget_;
-    const Registry* registry_;
+    Registry* registry_;
     bool inserted_;
+    bool hadContext_ = false;
+    std::shared_ptr<AnimationContextualWorkBudget> boundContextualWork_;
+    std::shared_ptr<AnimationContextualWorkBudget> previousContext_;
+    std::shared_ptr<AnimationContextualWorkBudget> previousBudget_;
   };
 
   /**
@@ -309,8 +310,12 @@ public:
   [[nodiscard]] const Limits& limits() const { return limits_; }
 
 private:
+  std::shared_ptr<AnimationContextualWorkBudget> contextualAnimationWorkBudget();
+  void resetContextualAnimationWork();
+
   bool ownerActive_ = false;
   std::unordered_set<const Registry*> activeRegistries_;
+  std::shared_ptr<AnimationContextualWorkBudget> contextualAnimationWork_;
   std::size_t externalInstanceWork_ = 0;
   bool externalResourceWarning_ = false;
   StyleResourceBudget* aggregateWork_ = nullptr;

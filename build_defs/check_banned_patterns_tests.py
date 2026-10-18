@@ -261,6 +261,56 @@ class CheckBannedPatternsTests(unittest.TestCase):
 
         self.assertEqual(1, descriptions.count("complex method (11 decision points; limit 10)"))
 
+    def test_unnamed_namespace_baseline_survives_include_changes(self):
+        branches = "\n".join(
+            f"    if (value == {index}) {{ value += {index}; }}" for index in range(11)
+        )
+        baseline = "namespace {\nstruct Example {\n  void run(int value) {\n" + branches + "\n} }; }\n"
+        for prefix in ("#include <array>\n", "int unrelated = 0;\n"):
+            with self.subTest(prefix=prefix):
+                source_path = self._write_source(prefix + baseline)
+                errors = check_banned_patterns.check_file(
+                    source_path,
+                    check_method_complexity=True,
+                    method_complexity_baseline=check_banned_patterns._strip_comments_and_strings(
+                        baseline
+                    ),
+                )
+                self.assertEqual([], errors)
+
+    def test_unnamed_namespace_identity_keeps_enclosing_namespaces_distinct(self):
+        branches = "\n".join(
+            f"    if (value == {index}) {{ value += {index}; }}" for index in range(11)
+        )
+        body = "namespace {\nstruct Example {\n  void run(int value) {\n" + branches + "\n} }; }\n"
+        baseline = "namespace first { " + body + "}\n"
+        current = "#include <array>\n" + baseline + "namespace second { " + body + "}\n"
+        source_path = self._write_source(current)
+        errors = check_banned_patterns.check_file(
+            source_path,
+            check_method_complexity=True,
+            method_complexity_baseline=check_banned_patterns._strip_comments_and_strings(baseline),
+        )
+        self.assertEqual(1, len(errors))
+        self.assertIn("complex method (11 decision points; limit 10)", errors[0][1])
+
+    def test_unnamed_namespace_still_rejects_increased_complexity(self):
+        branches = "\n".join(
+            f"    if (value == {index}) {{ value += {index}; }}" for index in range(11)
+        )
+        prefix = "namespace {\nstruct Example {\n  void run(int value) {\n"
+        suffix = "\n} }; }\n"
+        baseline = prefix + branches + suffix
+        current = "#include <array>\n" + prefix + branches + "\nif (value < 0) { return; }" + suffix
+        source_path = self._write_source(current)
+        errors = check_banned_patterns.check_file(
+            source_path,
+            check_method_complexity=True,
+            method_complexity_baseline=check_banned_patterns._strip_comments_and_strings(baseline),
+        )
+        self.assertEqual(1, len(errors))
+        self.assertIn("complex method (12 decision points; limit 10)", errors[0][1])
+
     def test_allows_methods_at_the_local_complexity_limit(self):
         branches = "\n".join(
             f"  if (value == {index}) {{ value += {index}; }}" for index in range(10)

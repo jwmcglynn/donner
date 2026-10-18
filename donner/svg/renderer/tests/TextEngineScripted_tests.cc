@@ -1475,6 +1475,34 @@ TEST(TextEngineScriptedTest, TextPathLengthKeepsSpacingOnlyChildWidth) {
   EXPECT_THAT(glyphs[3].xPosition + glyphs[3].xAdvance, DoubleNear(100.0, 1e-6));
 }
 
+TEST(TextEngineScriptedTest, FirstNestedLengthOwnerKeepsThePathOrigin) {
+  const auto glyphs = LayoutParsedTextPath(
+      R"(<textPath href="#p"><tspan textLength="40" lengthAdjust="spacingAndGlyphs">AB</tspan>C</textPath>)");
+  ASSERT_THAT(glyphs, SizeIs(3));
+  EXPECT_THAT(glyphs[0].xPosition, DoubleNear(0.0, 1e-6));
+  EXPECT_THAT(glyphs[1].xPosition + glyphs[1].xAdvance, DoubleNear(40.0, 1e-6));
+  EXPECT_THAT(glyphs[2].xPosition, DoubleNear(43.0, 1e-6));
+  EXPECT_THAT(glyphs[2].xAdvance, DoubleEq(10.0));
+}
+
+TEST(TextEngineScriptedTest, AbsoluteResetOnLengthOwnerStopsPreviousLengthCarry) {
+  const auto glyphs = LayoutParsedTextPath(
+      R"(<tspan textLength="40" lengthAdjust="spacingAndGlyphs">AB</tspan><tspan x="100" textLength="20" lengthAdjust="spacingAndGlyphs">C</tspan>)");
+  ASSERT_THAT(glyphs, SizeIs(3));
+  EXPECT_THAT(glyphs[1].xPosition + glyphs[1].xAdvance - glyphs[0].xPosition,
+              DoubleNear(40.0, 1e-6));
+  EXPECT_THAT(glyphs[2].xPosition, DoubleNear(100.0, 1e-6));
+  EXPECT_THAT(glyphs[2].xAdvance, DoubleNear(20.0, 1e-6));
+}
+
+TEST(TextEngineScriptedTest, AbsoluteResetWithinLengthOwnerIsNotAppliedTwice) {
+  const auto glyphs = LayoutParsedTextPath(
+      R"(<textPath href="#p"><tspan textLength="40" lengthAdjust="spacingAndGlyphs" x="0 100">AB</tspan></textPath>)");
+  ASSERT_THAT(glyphs, SizeIs(2));
+  EXPECT_THAT(glyphs[0].xPosition, DoubleNear(0.0, 1e-6));
+  EXPECT_THAT(glyphs[1].xPosition, DoubleNear(100.0, 1e-6));
+}
+
 TEST(TextEngineScriptedTest, TextPathLengthKeepsThreeLevelsOfOverrides) {
   const auto glyphs = LayoutParsedTextPath(
       R"(<textPath href="#p" textLength="120" lengthAdjust="spacingAndGlyphs">A<tspan textLength="60" lengthAdjust="spacingAndGlyphs">B<tspan textLength="20" lengthAdjust="spacingAndGlyphs">CD</tspan>E</tspan>F</textPath>)");
@@ -1682,6 +1710,28 @@ TEST(TextEngineScriptedTest, PerSpanTextLengthSpacingAndGlyphsScalesHorizontalAd
                               GlyphStretchScaleXIs(FloatEq(2.0f))),
                         AllOf(GlyphXPositionIs(DoubleEq(22.0)), GlyphXAdvanceIs(DoubleEq(20.0))),
                         GlyphXPositionIs(DoubleEq(44.0))))));
+}
+
+TEST(TextEngineScriptedTest, RtlTextLengthDoesNotRepeatConsumedSpanStartPosition) {
+  Registry registry;
+  FontManager fontManager(registry);
+  TextEngine engine = MakeScriptedEngine(registry, fontManager, /*reverseClusters=*/true);
+
+  components::ComputedTextComponent text;
+  auto span = MakeSpan("ABC");
+  span.xList = {Lengthd(20.0, Lengthd::Unit::None)};
+  span.startsNewChunk = true;
+  span.fontKerning = FontKerning::None;
+  span.textLength = Lengthd(60.0, Lengthd::Unit::None);
+  span.lengthAdjust = LengthAdjust::SpacingAndGlyphs;
+  text.spans.push_back(std::move(span));
+
+  const auto runs = engine.layout(text, MakeTextParams(20.0));
+
+  EXPECT_THAT(runs, ElementsAre(RunGlyphsAre(ElementsAre(
+                        AllOf(GlyphXPositionIs(DoubleEq(20.0)), GlyphXAdvanceIs(DoubleEq(20.0))),
+                        AllOf(GlyphXPositionIs(DoubleEq(40.0)), GlyphXAdvanceIs(DoubleEq(20.0))),
+                        GlyphXPositionIs(DoubleEq(60.0))))));
 }
 
 TEST(TextEngineScriptedTest, GlobalTextLengthSpacingAdjustsVerticalGlyphGaps) {

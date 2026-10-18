@@ -17,3 +17,13 @@ filegroup(
         "//donner:__subpackages__",
     ],
 )
+
+filegroup(
+    name = "animation_fixtures",
+    srcs = [
+        "animation/de_casteljau.svg",
+        "animation/world_lock_jitter.svg",
+        "animation/world_lock_swim.svg",
+    ],
+    visibility = ["//donner/svg/renderer/tests:__pkg__"],
+)

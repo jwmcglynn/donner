@@ -10,6 +10,7 @@
 #include "donner/svg/SVGGeometryElement.h"
 #include "donner/svg/SVGGraphicsElement.h"
 #include "donner/svg/core/Cursor.h"
+#include "donner/svg/core/HitTestMode.h"
 
 namespace donner::svg {
 
@@ -29,6 +30,26 @@ namespace donner::svg {
  */
 class DonnerController {
 public:
+  /// Immutable hit geometry for one rendered document state. No live layout access during queries.
+  class HitTestSnapshot {
+  public:
+    /// Find the frontmost hit in the captured document geometry.
+    /// @param point Point in document coordinates.
+    std::optional<SVGGraphicsElement> findIntersecting(const Vector2d& point) const;
+    /// False when capture exceeded its resource budget; queries then fail closed.
+    bool complete() const;
+
+  private:
+    friend class DonnerController;
+    struct Impl;
+    explicit HitTestSnapshot(std::shared_ptr<const Impl> impl) : impl_(std::move(impl)) {}
+    std::shared_ptr<const Impl> impl_;
+  };
+
+  /// Capture current hit geometry and targets for interaction with the corresponding rendered
+  /// frame.
+  std::shared_ptr<const HitTestSnapshot> captureHitTest();
+
   /**
    * Result of a successful \ref hitTestLink query: the enclosing \ref xml_a element that was hit,
    * its retained link target, and the concrete element under the point.
@@ -66,9 +87,12 @@ public:
    * matching element.
    *
    * @param point Position in document coordinates.
+   * @param mode SVG event targeting by default; EditorSelection ignores pointer-events while
+   * retaining visible painted geometry. Neither mode changes the document's properties.
    * @return The topmost intersecting element, or \c std::nullopt if no element is hit.
    */
-  std::optional<SVGGraphicsElement> findIntersecting(const Vector2d& point);
+  std::optional<SVGGraphicsElement> findIntersecting(
+      const Vector2d& point, HitTestMode mode = HitTestMode::SvgPointerEvents);
 
   /**
    * Return every painted element intersecting \p point, front to back.
@@ -77,9 +101,11 @@ public:
    * outside the active scope to occlude an eligible descendant.
    *
    * @param point Position in document coordinates, as for \ref findIntersecting.
+   * @param mode Hit eligibility policy, with the same semantics as findIntersecting.
    * @return Intersecting elements, topmost first, or an empty vector if no element is hit.
    */
-  std::vector<SVGGraphicsElement> findAllIntersecting(const Vector2d& point);
+  std::vector<SVGGraphicsElement> findAllIntersecting(
+      const Vector2d& point, HitTestMode mode = HitTestMode::SvgPointerEvents);
 
   /**
    * Returns the inherited CSS cursor value for the topmost interactive element at a point. Cursor
