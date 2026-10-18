@@ -104,6 +104,19 @@ TEST_F(LayoutSystemTest, ViewportNestedSvgWithComputedComponents) {
               BoxEq(Vector2i(0, 0), Vector2i(100, 100)));
 }
 
+TEST_F(LayoutSystemTest, NestedSvgCssWideDimensionsUseParentViewport) {
+  auto document = ParseSVG(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">
+      <svg id="nested" width="initial" height="unset" viewBox="0 0 40 20"/>
+    </svg>
+  )svg");
+
+  ParseWarningSink disabledSink = ParseWarningSink::Disabled();
+  layoutSystem.instantiateAllComputedComponents(document.registry(), disabledSink);
+  EXPECT_THAT(layoutSystem.clipRect(document.querySelector("#nested")->entityHandle()),
+              testing::Optional(BoxEq(Vector2d(0, 0), Vector2d(200, 100))));
+}
+
 TEST_F(LayoutSystemTest, NestedSvgOmittedDimensionsUseParentViewportWithViewBox) {
   auto document = ParseSVG(R"svg(
     <svg xmlns="http://www.w3.org/2000/svg" width="200" height="200">
@@ -864,6 +877,27 @@ TEST_F(LayoutSystemTest, ImageIntrinsicSizingBranches) {
             Box2d(Vector2d(5, 6), Vector2d(17, 18)));
   EXPECT_EQ(explicitHandle.get<ComputedSizedElementComponent>().bounds,
             Box2d(Vector2d(7, 8), Vector2d(16, 19)));
+}
+
+TEST_F(LayoutSystemTest, ImageCssWideDimensionKeepsIntrinsicAspectRatio) {
+  const std::string svg = std::string(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+      <image id="image" href=")svg") +
+                          std::string(kTinyPngDataUrl) +
+                          R"svg(" x="5" y="6" width="initial" height="12"/>
+    </svg>
+  )svg";
+  auto document = ParseSVG(svg);
+
+  auto& registry = document.registry();
+  ParseWarningSink warningSink;
+  registry.ctx().get<ResourceManagerContext>().loadResources(warningSink);
+  StyleSystem().computeAllStyles(registry, warningSink);
+  layoutSystem.instantiateAllComputedComponents(registry, warningSink);
+
+  const auto image = document.querySelector("#image")->entityHandle();
+  EXPECT_EQ(image.get<ComputedSizedElementComponent>().bounds,
+            Box2d(Vector2d(5, 6), Vector2d(17, 18)));
 }
 
 TEST_F(LayoutSystemTest, CreateShadowSizedElementComponent) {
