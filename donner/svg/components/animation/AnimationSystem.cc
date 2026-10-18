@@ -1,6 +1,7 @@
 #include "donner/svg/components/animation/AnimationSystem.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <limits>
 #include <memory>
@@ -317,6 +318,36 @@ struct FrozenLowerLayer {
   const AnimateTransformComponent* transform = nullptr;
 };
 
+bool ContainsContextAttribute(std::span<const std::string_view> attributes,
+                              std::string_view attribute) {
+  return std::find(attributes.begin(), attributes.end(), attribute) != attributes.end();
+}
+
+bool ElementNeedsInstanceValueContext(ElementType type, std::string_view attribute) {
+  static constexpr std::array<std::string_view, 6> kRect = {"x",      "y",  "width",
+                                                            "height", "rx", "ry"};
+  static constexpr std::array<std::string_view, 3> kCircle = {"cx", "cy", "r"};
+  static constexpr std::array<std::string_view, 4> kEllipse = {"cx", "cy", "rx", "ry"};
+  static constexpr std::array<std::string_view, 4> kLine = {"x1", "y1", "x2", "y2"};
+  static constexpr std::array<std::string_view, 6> kText = {"textLength", "x",  "y",
+                                                            "dx",         "dy", "rotate"};
+  static constexpr std::array<std::string_view, 2> kTextPath = {"textLength", "startOffset"};
+  static constexpr std::array<std::string_view, 4> kMarker = {"markerWidth", "markerHeight", "refX",
+                                                              "refY"};
+  switch (type) {
+    case ElementType::Rect: return ContainsContextAttribute(kRect, attribute);
+    case ElementType::Circle: return ContainsContextAttribute(kCircle, attribute);
+    case ElementType::Ellipse: return ContainsContextAttribute(kEllipse, attribute);
+    case ElementType::Line: return ContainsContextAttribute(kLine, attribute);
+    case ElementType::Text:
+    case ElementType::TSpan:
+    case ElementType::A: return ContainsContextAttribute(kText, attribute);
+    case ElementType::TextPath: return ContainsContextAttribute(kTextPath, attribute);
+    case ElementType::Marker: return ContainsContextAttribute(kMarker, attribute);
+    default: return false;
+  }
+}
+
 bool NeedsInstanceValueContext(Registry& registry, Entity target, std::string_view attribute) {
   if (attribute == "font-size" || IsContextualScalarAttribute(attribute) ||
       IsContextualPaintAttribute(attribute)) {
@@ -330,29 +361,7 @@ bool NeedsInstanceValueContext(Registry& registry, Entity target, std::string_vi
       (attribute == "x" || attribute == "y" || attribute == "width" || attribute == "height")) {
     return true;
   }
-  const bool shapeLength =
-      (type->type() == ElementType::Rect &&
-       (attribute == "x" || attribute == "y" || attribute == "width" || attribute == "height" ||
-        attribute == "rx" || attribute == "ry")) ||
-      (type->type() == ElementType::Circle &&
-       (attribute == "cx" || attribute == "cy" || attribute == "r")) ||
-      (type->type() == ElementType::Ellipse &&
-       (attribute == "cx" || attribute == "cy" || attribute == "rx" || attribute == "ry")) ||
-      (type->type() == ElementType::Line &&
-       (attribute == "x1" || attribute == "y1" || attribute == "x2" || attribute == "y2"));
-  const bool textLength =
-      attribute == "textLength" &&
-      (type->type() == ElementType::Text || type->type() == ElementType::TSpan ||
-       type->type() == ElementType::TextPath || type->type() == ElementType::A);
-  const bool textPosition = (attribute == "x" || attribute == "y" || attribute == "dx" ||
-                             attribute == "dy" || attribute == "rotate") &&
-                            (type->type() == ElementType::Text ||
-                             type->type() == ElementType::TSpan || type->type() == ElementType::A);
-  return shapeLength || textLength || textPosition ||
-         (type->type() == ElementType::TextPath && attribute == "startOffset") ||
-         (type->type() == ElementType::Marker &&
-          (attribute == "markerWidth" || attribute == "markerHeight" || attribute == "refX" ||
-           attribute == "refY"));
+  return ElementNeedsInstanceValueContext(type->type(), attribute);
 }
 
 bool AppendContextualLengthSample(std::vector<ContextualLengthSample>& samples,
