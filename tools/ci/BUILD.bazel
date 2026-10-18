@@ -429,3 +429,9 @@ platform(
     },
     visibility = ["//visibility:public"],
 )
+
+alias(
+    name = "buildbuddy_compile_probe",
+    actual = "//donner/base:base",
+    visibility = ["//visibility:public"],
+)

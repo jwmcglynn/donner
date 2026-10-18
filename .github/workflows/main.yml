@@ -714,7 +714,7 @@ jobs:
           set -euo pipefail
           bazelisk build --config=ci ${BUILDBUDDY_FLAGS} --remote_accept_cached=false --disk_cache= \
             "--copt=-DBUILDBUDDY_RE_PROBE_${GITHUB_RUN_ID}_${GITHUB_RUN_ATTEMPT}" \
-            --execution_log_json_file=buildbuddy-execution.json //donner/base:base
+            --execution_log_json_file=buildbuddy-execution.json //tools/ci:buildbuddy_compile_probe
           jq -s -e 'any(.[]; .mnemonic == "CppCompile" and .runner == "remote" and .cacheHit != true)' \
             buildbuddy-execution.json
           bazelisk build --config=ci ${BUILDBUDDY_FLAGS} //...
