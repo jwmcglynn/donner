@@ -264,6 +264,26 @@ TEST(GifEncoder, WritesSpecConformingLzwData) {
                           0x3B));
 }
 
+TEST(GifEncoder, RoundTripsWhenFinalPixelCreatesCodeWidthBoundary) {
+  constexpr std::string_view kPixels = "101100011111011001";
+  Image frame(static_cast<int>(kPixels.size()), 1, 0, 0, 0);
+  for (size_t index = 0; index < kPixels.size(); ++index) {
+    if (kPixels[index] == '1') {
+      frame.set(static_cast<int>(index), 0, 1, 1, 1);
+    }
+  }
+
+  GifEncoder encoder(
+      {.width = frame.width, .height = frame.height, .background = GifEncoder::Rgb{0, 0, 0}});
+  ASSERT_TRUE(encoder.addFrame(frame.rgba, 0, 1));
+
+  std::string error;
+  const std::optional<DecodedGif> decoded = DecodeGifForTesting(encoder.finish(), &error);
+  ASSERT_TRUE(decoded.has_value()) << "GIF decode failed: " << error;
+  ASSERT_THAT(decoded->frames, SizeIs(1));
+  ExpectFrameIdentical(*decoded, 0, frame.rgba);
+}
+
 TEST(GifEncoder, RespectsRowStride) {
   GifEncoder encoder({.width = 2, .height = 2});
   // Stride of 3 pixels; the padding pixel is never encoded.
