@@ -624,16 +624,15 @@ TEST(GifEncoder, QuantizesWithTransparencyReservingTheClearIndex) {
   ASSERT_THAT(gif.frames, SizeIs(1));
   EXPECT_EQ(gif.frames[0].colorTableSize, 256);
   EXPECT_THAT(gif.frames[0].transparentIndex, Optional(0));
-  EXPECT_THAT(std::vector<uint8_t>(gif.frames[0].rgba.begin(), gif.frames[0].rgba.begin() + 4),
-              ElementsAre(0, 0, 0, 0));
 
-  // Every other pixel stays opaque: 255 opaque colors plus the transparent one.
-  EXPECT_THAT(DistinctColors(gif.frames[0].rgba), SizeIs(testing::Le(256u)));
-  std::set<uint8_t> alphas;
-  for (size_t i = 3; i < gif.frames[0].rgba.size(); i += 4) {
-    alphas.insert(gif.frames[0].rgba[i]);
+  // The transparent pixel's hidden RGB is unspecified. Preserve the decoded RGB while building the
+  // independently expected opacity mask: only the known transparent source pixel may be clear.
+  std::vector<uint8_t> expected = gif.frames[0].rgba;
+  for (size_t i = 3; i < expected.size(); i += 4) {
+    expected[i] = 255;
   }
-  EXPECT_THAT(alphas, ElementsAre(0, 255));
+  expected[3] = 0;
+  ExpectFrameIdentical(gif, 0, expected);
 
   // The quantized frame fits one table, so encoding it again is lossless.
   ExpectFrameIdentical(ReencodeFrame(gif.frames[0].rgba, kSize, kSize), 0, gif.frames[0].rgba);
