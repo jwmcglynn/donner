@@ -1331,6 +1331,7 @@ struct OrdinaryLengthScope {
     size_t glyphEnd = 0;
     double start = 0;
     double end = 0;
+    double glyphOrigin = 0;
     double position = 0;
     size_t spacingIndex = 0;
   };
@@ -1567,12 +1568,14 @@ bool ApplyTextLengthOwnerPlan(Registry& registry, std::vector<TextRun>& runs,
                                            : lastGlyph.xPosition + lastGlyph.xAdvance);
         const bool absoluteReset =
             segment > 0 || (!inlinePositions.empty() && inlinePositions.front());
-        scopes[owner].items.push_back({.index = runIndex,
-                                       .absoluteReset = absoluteReset,
-                                       .glyphBegin = glyphBegin,
-                                       .glyphEnd = glyphEnd,
-                                       .start = start,
-                                       .end = end});
+        scopes[owner].items.push_back(
+            {.index = runIndex,
+             .absoluteReset = absoluteReset,
+             .glyphBegin = glyphBegin,
+             .glyphEnd = glyphEnd,
+             .start = start,
+             .end = end,
+             .glyphOrigin = vertical ? firstGlyph.yPosition : firstGlyph.xPosition});
         logicalEnd = end;
       }
       hasLogicalEnd = true;
@@ -1723,15 +1726,16 @@ bool ApplyTextLengthOwnerPlan(Registry& registry, std::vector<TextRun>& runs,
       }
 
       auto& run = runs[item.index];
+      const double glyphBase = position + item.glyphOrigin - item.start;
       for (size_t glyphIndex = item.glyphBegin; glyphIndex < item.glyphEnd; ++glyphIndex) {
         auto& glyph = run.glyphs[glyphIndex];
         if (vertical) {
-          glyph.yPosition = position + (glyph.yPosition - item.start) * scope.scale +
+          glyph.yPosition = glyphBase + (glyph.yPosition - item.glyphOrigin) * scope.scale +
                             scope.spacing * static_cast<double>(glyphIndex - item.glyphBegin);
           glyph.yAdvance *= scope.scale;
           glyph.stretchScaleY *= NarrowToFloat(scope.scale);
         } else {
-          glyph.xPosition = position + (glyph.xPosition - item.start) * scope.scale +
+          glyph.xPosition = glyphBase + (glyph.xPosition - item.glyphOrigin) * scope.scale +
                             scope.spacing * static_cast<double>(glyphIndex - item.glyphBegin);
           glyph.xAdvance *= scope.scale;
           glyph.stretchScaleX *= NarrowToFloat(scope.scale);
