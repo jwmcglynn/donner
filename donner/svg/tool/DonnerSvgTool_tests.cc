@@ -16,12 +16,33 @@
 #include <thread>
 #include <vector>
 
+#include "donner/editor/tests/BitmapGoldenCompare.h"
 #include "donner/svg/renderer/tests/GifTestDecoder.h"
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
 
 namespace donner::svg {
 namespace {
+
+RendererBitmap ToBitmap(const std::vector<uint8_t>& rgba, int width, int height) {
+  RendererBitmap bitmap;
+  bitmap.dimensions = Vector2i(width, height);
+  bitmap.pixels = rgba;
+  bitmap.rowBytes = static_cast<size_t>(width) * 4;
+  bitmap.alphaType = AlphaType::Unpremultiplied;
+  return bitmap;
+}
+
+void ExpectFrameIdentical(const DecodedGif& gif, size_t frameIndex,
+                          const std::vector<uint8_t>& expected) {
+  ASSERT_LT(frameIndex, gif.frames.size());
+  const std::string label =
+      std::string(testing::UnitTest::GetInstance()->current_test_info()->name()) + "_frame" +
+      std::to_string(frameIndex);
+  editor::tests::CompareBitmapToBitmap(ToBitmap(gif.frames[frameIndex].rgba, gif.width, gif.height),
+                                       ToBitmap(expected, gif.width, gif.height), label,
+                                       editor::tests::PixelmatchIdentityParams());
+}
 
 int RunTool(const std::vector<std::string>& args, std::ostringstream* out,
             std::ostringstream* err) {
@@ -396,14 +417,23 @@ TEST_F(DonnerSvgToolFileTest, RendersAnimationToLoopingGif) {
       std::span(reinterpret_cast<const uint8_t*>(bytes.data()), bytes.size()), &error);
   ASSERT_TRUE(gif.has_value()) << error;
 
-  EXPECT_EQ(gif->width, 40);
-  EXPECT_EQ(gif->height, 20);
+  ASSERT_EQ(gif->width, 40);
+  ASSERT_EQ(gif->height, 20);
   EXPECT_THAT(gif->loopCount, testing::Optional(0));
   ASSERT_THAT(gif->frames, testing::SizeIs(4));
   EXPECT_THAT(gif->frames, testing::Each(testing::Field(&DecodedGifFrame::delayCentiseconds, 25)));
-  for (size_t i = 1; i < gif->frames.size(); ++i) {
-    EXPECT_NE(gif->frames[i].rgba, gif->frames[i - 1].rgba)
-        << "frame " << i << " matches frame " << i - 1;
+  for (size_t frameIndex = 0; frameIndex < gif->frames.size(); ++frameIndex) {
+    std::vector<uint8_t> expected(static_cast<size_t>(gif->width * gif->height * 4), 255);
+    const int rectLeft = static_cast<int>(frameIndex) * 8;
+    for (int y = 4; y < 16; ++y) {
+      for (int x = rectLeft; x < rectLeft + 8; ++x) {
+        const size_t offset = static_cast<size_t>((y * gif->width + x) * 4);
+        expected[offset] = 0;
+        expected[offset + 1] = 0;
+        expected[offset + 2] = 255;
+      }
+    }
+    ExpectFrameIdentical(*gif, frameIndex, expected);
   }
 }
 
