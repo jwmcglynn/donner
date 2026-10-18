@@ -664,6 +664,52 @@ TEST(RendererAnimationPresentation, EmptyDeltaBaseIsPaddedPerAnimationLayer) {
       RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(expected),
       "empty-delta-base-layer-padding", editor::tests::PixelmatchIdentityParams());
 }
+
+TEST(RendererAnimationPresentation, FrozenPartialTextLengthKeepsBoundaryLowerLayer) {
+  auto document = ParsePresentation(
+      "<text x='1' y='12' font-size='10' lengthAdjust='spacingAndGlyphs' textLength='8'>HH"
+      "<animate attributeName='textLength' from='10' to='20' dur='10s'/>"
+      "<animate attributeName='textLength' to='30' dur='2s' repeatCount='0.5' "
+      "fill='freeze'/></text>");
+  struct Checkpoint {
+    double time;
+    double target;
+  };
+  for (const Checkpoint item :
+       {Checkpoint{5, 20.5}, Checkpoint{0.5, 15.375}, Checkpoint{5, 20.5}}) {
+    SCOPED_TRACE(item.time);
+    document.setTime(item.time);
+    auto expected = ParsePresentation(
+        "<text x='1' y='12' font-size='10' lengthAdjust='spacingAndGlyphs' textLength='" +
+        std::to_string(item.target) + "'>HH</text>");
+    editor::tests::CompareBitmapToBitmap(RenderDocumentWithActiveBackend(document),
+                                         RenderDocumentWithActiveBackend(expected),
+                                         "frozen-partial-text-length-" + std::to_string(item.time),
+                                         editor::tests::PixelmatchIdentityParams());
+  }
+}
+
+TEST(RendererAnimationPresentation, FrozenPartialTextPositionKeepsBoundaryLowerLayer) {
+  auto document = ParsePresentation(
+      "<text id='owner' y='12' font-size='10' dx='2'>HH</text>"
+      "<animate href='#owner' attributeName='dx' from='2' to='12' dur='10s'/>"
+      "<animate href='#owner' attributeName='dx' to='20' dur='2s' repeatCount='0.5' "
+      "fill='freeze'/>");
+  struct Checkpoint {
+    double time;
+    double target;
+  };
+  for (const Checkpoint item : {Checkpoint{5, 11.5}, Checkpoint{0.5, 6.875}, Checkpoint{5, 11.5}}) {
+    SCOPED_TRACE(item.time);
+    document.setTime(item.time);
+    auto expected = ParsePresentation("<text y='12' font-size='10' dx='" +
+                                      std::to_string(item.target) + "'>HH</text>");
+    editor::tests::CompareBitmapToBitmap(
+        RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(expected),
+        "frozen-partial-text-position-" + std::to_string(item.time),
+        editor::tests::PixelmatchIdentityParams());
+  }
+}
 #endif
 
 TEST(RendererAnimationPresentation, ToOnlyPathCalibrationUsesTypedBase) {
