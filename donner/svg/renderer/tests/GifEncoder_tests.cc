@@ -8,6 +8,7 @@
 #include <set>
 #include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "donner/editor/tests/BitmapGoldenCompare.h"
@@ -282,6 +283,33 @@ TEST(GifEncoder, RoundTripsWhenFinalPixelCreatesCodeWidthBoundary) {
   ASSERT_TRUE(decoded.has_value()) << "GIF decode failed: " << error;
   ASSERT_THAT(decoded->frames, SizeIs(1));
   ExpectFrameIdentical(*decoded, 0, frame.rgba);
+}
+
+TEST(GifEncoder, RoundTripsTerminalCodeAtEveryLzwWidthBoundary) {
+  // Prefix lengths of a fixed LCG bitstream for which decoding the final pixel grows the
+  // dictionary from 3 to 4 bits, then successively through the 11-to-12-bit boundary.
+  static constexpr std::array<int, 9> kBoundaryLengths = {4,    19,   66,   202,  533,
+                                                          1341, 3201, 7444, 17013};
+  std::vector<uint8_t> pixels;
+  pixels.reserve(static_cast<size_t>(kBoundaryLengths.back()) * 4);
+  uint32_t state = 777;
+  for (int index = 0; index < kBoundaryLengths.back(); ++index) {
+    state = state * 1664525u + 1013904223u;
+    const uint8_t value = static_cast<uint8_t>(state >> 31);
+    pixels.insert(pixels.end(), {value, value, value, 255});
+  }
+
+  for (size_t boundary = 0; boundary < kBoundaryLengths.size(); ++boundary) {
+    const int width = kBoundaryLengths[boundary];
+    SCOPED_TRACE(testing::Message() << "terminal width " << boundary + 4);
+    GifEncoder encoder({.width = width, .height = 1, .background = GifEncoder::Rgb{0, 0, 0}});
+    const std::vector<uint8_t> expected(pixels.begin(), pixels.begin() + width * 4);
+    ASSERT_TRUE(encoder.addFrame(expected, 0, 1));
+
+    const DecodedGif decoded = Decode(encoder.finish());
+    ASSERT_THAT(decoded.frames, SizeIs(1));
+    ExpectFrameIdentical(decoded, 0, expected);
+  }
 }
 
 TEST(GifEncoder, RespectsRowStride) {

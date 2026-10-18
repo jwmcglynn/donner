@@ -300,6 +300,12 @@ void WriteLzw(std::vector<uint8_t>& out, const std::vector<uint8_t>& indices, in
   }
 
   writer.write(prefix, codeSize);
+  // Reading the final prefix adds the decoder's one lagging dictionary entry. If that entry fills
+  // the current width, the following end code must already use the wider code size even though the
+  // encoder has no next pair to add to its own dictionary.
+  if (codeSize < 12 && maxCode + 1 >= (1u << codeSize)) {
+    ++codeSize;
+  }
   writer.write(endCode, codeSize);
   writer.finish();
 }
