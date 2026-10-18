@@ -4,6 +4,9 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <string>
+#include <vector>
+
 #include "donner/editor/EditorApp.h"
 #include "donner/editor/TextToOutlines.h"
 #include "donner/editor/tests/BitmapGoldenCompare.h"
@@ -23,6 +26,7 @@ using testing::Gt;
 using testing::IsEmpty;
 using testing::Not;
 using testing::SizeIs;
+using testing::UnorderedElementsAre;
 
 constexpr std::string_view kTwoRoots = R"svg(
 <svg xmlns="http://www.w3.org/2000/svg" width="360" height="100">
@@ -229,6 +233,52 @@ TEST(CatalogFontResourcesTest, ReferencedTextClipExcludesUnusedDefinitions) {
     <rect id="target" width="100" height="80" clip-path="url(#clip)" fill="red"/>
   </svg>)svg",
                               "catalog_text_clip");
+}
+
+TEST(CatalogFontResourcesTest, SharedClipGeometryRetainsInstanceAndLightFontDependencies) {
+  constexpr std::string_view source = R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="180" height="80" font-family="Lora">
+      <defs>
+        <rect id="clipShape" x="4" y="4" width="10ch" height="64"/>
+        <clipPath id="clip"><use href="#clipShape" font-family="Inter"/></clipPath>
+      </defs>
+      <rect id="target" width="180" height="80" clip-path="url(#clip)" fill="red"/>
+    </svg>)svg";
+  auto store = std::make_shared<svg::CatalogEncodedFontStore>();
+  svg::FontCatalog catalog(store);
+  EditorApp app;
+  ASSERT_EQ(app.loadFromString(source), true);
+  auto& document = app.document().document();
+  AttachProvider(document, catalog);
+  const auto target = *document.querySelector("#target");
+  const auto preflight = document.preflightFontResourcesForElement(target);
+  EXPECT_EQ(preflight.status, svg::FontResourcePreflight::Status::PendingFonts);
+  std::vector<std::string> families;
+  for (const auto& dependency : preflight.dependencies) {
+    families.push_back(dependency.family);
+  }
+  EXPECT_THAT(families, UnorderedElementsAre("inter", "lora"));
+
+  svg::Renderer renderer;
+  renderer.draw(document);
+  const std::string sourceBefore(document.source());
+  ASSERT_EQ(StageInter(*store, catalog), true);
+  ASSERT_EQ(store->adoptReadyAssets(), true);
+  ASSERT_EQ(app.document().refreshFontResources(), true);
+  EXPECT_EQ(document.hasPendingRenderInvalidation(), true);
+  renderer.draw(document);
+  const auto actual = renderer.takeSnapshot();
+  EXPECT_EQ(document.source(), sourceBefore);
+  EXPECT_EQ(app.canUndo(), false);
+
+  EditorApp control;
+  ASSERT_EQ(control.loadFromString(source), true);
+  AttachProvider(control.document().document(), catalog);
+  svg::Renderer controlRenderer;
+  controlRenderer.draw(control.document().document());
+  tests::CompareBitmapToBitmap(actual, controlRenderer.takeSnapshot(),
+                               "catalog_shared_clip_instance_font",
+                               tests::PixelmatchIdentityParams());
 }
 
 TEST(CatalogFontResourcesTest, SharedNestedPatternPropagatesFontReadinessToItsConsumer) {

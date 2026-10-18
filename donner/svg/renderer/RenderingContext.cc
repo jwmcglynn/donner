@@ -887,14 +887,18 @@ public:
   }
 
   void appendClipGeometry(const ComputedPathComponent* clipPathData, EntityHandle dataEntity,
-                          EntityHandle textEntity, const Transform2d& rootClipFromEntity,
-                          ClipRule clipRule, ClipPathCollection& collection) {
+                          EntityHandle textEntity, EntityHandle instanceEntity,
+                          const Transform2d& rootClipFromEntity, ClipRule clipRule,
+                          ClipPathCollection& collection) {
     if (!isFiniteClipTransform(rootClipFromEntity)) {
       collection.valid = false;
       return;
     }
     if (clipPathData) {
       recordClipFontDependencies(dataEntity);
+      if (instanceEntity.entity() != dataEntity.entity()) {
+        recordClipFontDependencies(instanceEntity);
+      }
       collection.paths.emplace_back(clipPathData->spline, rootClipFromEntity, clipRule,
                                     collection.layer);
     }
@@ -935,7 +939,7 @@ public:
     const Transform2d referenceFromEntity =
         LayoutSystem().getAbsoluteTransformComponent(entity).worldFromEntity;
     const Transform2d rootClipFromEntity = referenceFromEntity * collection.rootClipFromReference;
-    appendClipGeometry(clipPathData, dataEntity, textEntity, rootClipFromEntity,
+    appendClipGeometry(clipPathData, dataEntity, textEntity, entity, rootClipFromEntity,
                        style.clipRule.get().value_or(ClipRule::NonZero), collection);
   }
 
@@ -1778,8 +1782,7 @@ std::vector<Entity> RenderingContext::findIntersectingRect(const Box2d& rect) {
       continue;
     }
 
-    const auto bounds = ShapeSystem().getShapeWorldBounds(
-        ShapeSystem::geometryHandle(instance.styleHandle(registry_)));
+    const auto bounds = ShapeSystem().getShapeWorldBounds(instance.styleHandle(registry_));
     if (bounds && bounds->topLeft.x <= rect.bottomRight.x &&
         bounds->bottomRight.x >= rect.topLeft.x && bounds->topLeft.y <= rect.bottomRight.y &&
         bounds->bottomRight.y >= rect.topLeft.y) {
@@ -1799,8 +1802,7 @@ std::optional<Box2d> RenderingContext::getWorldBounds(Entity entity) {
     return std::nullopt;
   }
 
-  return ShapeSystem().getShapeWorldBounds(
-      ShapeSystem::geometryHandle(instance->styleHandle(registry_)));
+  return ShapeSystem().getShapeWorldBounds(instance->styleHandle(registry_));
 }
 
 void RenderingContext::invalidateRenderTree() {
