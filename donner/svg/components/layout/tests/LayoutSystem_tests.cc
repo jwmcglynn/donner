@@ -6,6 +6,7 @@
 #include "donner/base/ParseWarningSink.h"
 #include "donner/base/tests/BaseTestUtils.h"
 #include "donner/base/tests/ParseResultTestUtils.h"
+#include "donner/svg/SVGUseElement.h"
 #include "donner/svg/components/resources/ResourceManagerContext.h"
 #include "donner/svg/components/style/StyleSystem.h"
 #include "donner/svg/parser/SVGParser.h"
@@ -102,6 +103,20 @@ TEST_F(LayoutSystemTest, ViewportNestedSvgWithComputedComponents) {
   layoutSystem.instantiateAllComputedComponents(document.registry(), disabledSink);
   EXPECT_THAT(layoutSystem.getViewBox(document.querySelector("#nested")->entityHandle()),
               BoxEq(Vector2i(0, 0), Vector2i(100, 100)));
+}
+
+TEST_F(LayoutSystemTest, NestedSvgCssWideDimensionsUseParentViewport) {
+  auto document = ParseSVG(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">
+      <svg id="nested" width="initial" height="unset" viewBox="0 0 40 20"/>
+    </svg>
+  )svg");
+
+  ParseWarningSink disabledSink = ParseWarningSink::Disabled();
+  StyleSystem().computeAllStyles(document.registry(), disabledSink);
+  layoutSystem.instantiateAllComputedComponents(document.registry(), disabledSink);
+  EXPECT_THAT(layoutSystem.clipRect(document.querySelector("#nested")->entityHandle()),
+              testing::Optional(BoxEq(Vector2d(0, 0), Vector2d(200, 100))));
 }
 
 TEST_F(LayoutSystemTest, NestedSvgOmittedDimensionsUseParentViewportWithViewBox) {
@@ -866,6 +881,27 @@ TEST_F(LayoutSystemTest, ImageIntrinsicSizingBranches) {
             Box2d(Vector2d(7, 8), Vector2d(16, 19)));
 }
 
+TEST_F(LayoutSystemTest, ImageCssWideDimensionKeepsIntrinsicAspectRatio) {
+  const std::string svg = std::string(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+      <image id="image" href=")svg") +
+                          std::string(kTinyPngDataUrl) +
+                          R"svg(" x="5" y="6" width="initial" height="12"/>
+    </svg>
+  )svg";
+  auto document = ParseSVG(svg);
+
+  auto& registry = document.registry();
+  ParseWarningSink warningSink;
+  registry.ctx().get<ResourceManagerContext>().loadResources(warningSink);
+  StyleSystem().computeAllStyles(registry, warningSink);
+  layoutSystem.instantiateAllComputedComponents(registry, warningSink);
+
+  const auto image = document.querySelector("#image")->entityHandle();
+  EXPECT_THAT(image.get<ComputedSizedElementComponent>().bounds,
+              BoxEq(Vector2d(5, 6), Vector2d(17, 18)));
+}
+
 TEST_F(LayoutSystemTest, CreateShadowSizedElementComponent) {
   auto document = ParseSVG(R"(
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 100">
@@ -888,6 +924,93 @@ TEST_F(LayoutSystemTest, CreateShadowSizedElementComponent) {
 
   const auto& shadowSized = registry.get<ComputedShadowSizedElementComponent>(shadowEntity);
   EXPECT_EQ(shadowSized.bounds, Box2d(Vector2d(1, 2), Vector2d(51, 27)));
+}
+
+// The initial XML parser rejects CSS-wide dimensions on <use>/<symbol>. These
+// cover that parser boundary; the mutation tests below exercise resolved-empty
+// properties reaching the shadow-sizing helper.
+TEST_F(LayoutSystemTest, ParsedShadowCssWideUseDimensionsKeepTargetSize) {
+  auto document = ParseSVG(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">
+      <defs><symbol id="sym" x="1" y="2" width="40" height="20"/></defs>
+      <use id="u" href="#sym" width="initial" height="unset"/>
+    </svg>
+  )svg");
+
+  auto& registry = document.registry();
+  const Entity shadowEntity = registry.create();
+  ParseWarningSink warningSink;
+  EXPECT_TRUE(layoutSystem.createShadowSizedElementComponent(
+      registry, shadowEntity, document.querySelector("#u")->entityHandle(),
+      document.querySelector("#sym")->unsafeEntityHandle().entity(), ShadowBranchType::Main,
+      warningSink));
+  EXPECT_THAT(registry.get<ComputedShadowSizedElementComponent>(shadowEntity).bounds,
+              BoxEq(Vector2d(1, 2), Vector2d(41, 22)));
+}
+
+TEST_F(LayoutSystemTest, ParsedShadowCssWideTargetDimensionsUseParentViewport) {
+  auto document = ParseSVG(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">
+      <defs><symbol id="sym" x="1" y="2" width="initial" height="unset"/></defs>
+      <use id="u" href="#sym"/>
+    </svg>
+  )svg");
+
+  auto& registry = document.registry();
+  const Entity shadowEntity = registry.create();
+  ParseWarningSink warningSink;
+  EXPECT_TRUE(layoutSystem.createShadowSizedElementComponent(
+      registry, shadowEntity, document.querySelector("#u")->entityHandle(),
+      document.querySelector("#sym")->unsafeEntityHandle().entity(), ShadowBranchType::Main,
+      warningSink));
+  EXPECT_THAT(registry.get<ComputedShadowSizedElementComponent>(shadowEntity).bounds,
+              BoxEq(Vector2d(1, 2), Vector2d(201, 102)));
+}
+
+TEST_F(LayoutSystemTest, ShadowSizeExplicitCssWidePropertyStateDoesNotAbort) {
+  auto document = ParseSVG(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">
+      <defs><symbol id="sym" x="1" y="2" width="40" height="20"/></defs>
+      <use id="u" href="#sym" width="50" height="25"/>
+    </svg>
+  )svg");
+
+  auto& registry = document.registry();
+  const Entity shadowEntity = registry.create();
+  auto use = document.querySelector("#u")->entityHandle();
+  auto& useSize = use.get<SizedElementComponent>().properties;
+  useSize.width.set(PropertyState::ExplicitInitial, css::Specificity::Override());
+  useSize.height.set(PropertyState::ExplicitUnset, css::Specificity::Override());
+
+  ParseWarningSink warningSink;
+  EXPECT_TRUE(layoutSystem.createShadowSizedElementComponent(
+      registry, shadowEntity, use, document.querySelector("#sym")->unsafeEntityHandle().entity(),
+      ShadowBranchType::Main, warningSink));
+  EXPECT_THAT(registry.get<ComputedShadowSizedElementComponent>(shadowEntity).bounds,
+              BoxEq(Vector2d(1, 2), Vector2d(41, 22)));
+}
+
+TEST_F(LayoutSystemTest, ShadowSizeUseSetterNulloptDoesNotAbort) {
+  auto document = ParseSVG(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">
+      <defs><symbol id="sym" x="1" y="2" width="40" height="20"/></defs>
+      <use id="u" href="#sym" width="50" height="25"/>
+    </svg>
+  )svg");
+
+  auto use = document.querySelector("#u")->cast<SVGUseElement>();
+  use.setWidth(std::nullopt);
+  use.setHeight(std::nullopt);
+
+  auto& registry = document.registry();
+  const Entity shadowEntity = registry.create();
+  ParseWarningSink warningSink;
+  EXPECT_TRUE(layoutSystem.createShadowSizedElementComponent(
+      registry, shadowEntity, use.entityHandle(),
+      document.querySelector("#sym")->unsafeEntityHandle().entity(), ShadowBranchType::Main,
+      warningSink));
+  EXPECT_THAT(registry.get<ComputedShadowSizedElementComponent>(shadowEntity).bounds,
+              BoxEq(Vector2d(1, 2), Vector2d(41, 22)));
 }
 
 /**

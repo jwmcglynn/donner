@@ -187,8 +187,7 @@ Vector2d DefaultSizedElementExtent(EntityHandle entity, const SizedElementProper
   if (const auto* viewBox = entity.try_get<ViewBoxComponent>()) {
     const auto* elementType = entity.try_get<ElementTypeComponent>();
     const bool isSvg = elementType && elementType->type() == ElementType::SVG;
-    if (!isSvg && !properties.width.isSpecified() && !properties.height.isSpecified() &&
-        viewBox->viewBox) {
+    if (!isSvg && !properties.width.get() && !properties.height.get() && viewBox->viewBox) {
       size = viewBox->viewBox->size();
     }
   }
@@ -202,13 +201,11 @@ Vector2d ApplySpecifiedDimensions(EntityHandle entity, const SizedElementPropert
   const ComputedShadowTreeComponent* shadowTree = entity.try_get<ComputedShadowTreeComponent>();
   if (!shadowTree || (shadowTree && shadowTree->mainLightRoot() != entt::null &&
                       entity.registry()->all_of<ViewBoxComponent>(shadowTree->mainLightRoot()))) {
-    if (properties.width.isSpecified()) {
-      size.x = properties.width.get().value().toPixels(inheritedViewBox, fontMetrics,
-                                                       Lengthd::Extent::X);
+    if (const std::optional<Lengthd> width = properties.width.get()) {
+      size.x = width->toPixels(inheritedViewBox, fontMetrics, Lengthd::Extent::X);
     }
-    if (properties.height.isSpecified()) {
-      size.y = properties.height.get().value().toPixels(inheritedViewBox, fontMetrics,
-                                                        Lengthd::Extent::Y);
+    if (const std::optional<Lengthd> height = properties.height.get()) {
+      size.y = height->toPixels(inheritedViewBox, fontMetrics, Lengthd::Extent::Y);
     }
   }
   return size;
@@ -221,20 +218,18 @@ Vector2d ResolveIntrinsicImageExtent(EntityHandle entity, const SizedElementProp
   if (auto maybeImageSize =
           entity.registry()->ctx().get<ResourceManagerContext>().getImageSize(entity)) {
     const Vector2i imageSize = *maybeImageSize;
-    if (properties.width.isSpecified() && properties.height.isSpecified()) {
+    const std::optional<Lengthd> width = properties.width.get();
+    const std::optional<Lengthd> height = properties.height.get();
+    if (width && height) {
       return size;
-    } else if (!properties.width.isSpecified() && !properties.height.isSpecified()) {
+    } else if (!width && !height) {
       size = Vector2d(imageSize);
     } else {
       const float aspectRatio = static_cast<float>(imageSize.x) / static_cast<float>(imageSize.y);
-      if (!properties.width.isSpecified()) {
-        size.x = properties.height.get().value().toPixels(inheritedViewBox, fontMetrics,
-                                                          Lengthd::Extent::X) *
-                 aspectRatio;
-      } else if (!properties.height.isSpecified()) {
-        size.y = properties.width.get().value().toPixels(inheritedViewBox, fontMetrics,
-                                                         Lengthd::Extent::Y) /
-                 aspectRatio;
+      if (!width) {
+        size.x = height->toPixels(inheritedViewBox, fontMetrics, Lengthd::Extent::X) * aspectRatio;
+      } else if (!height) {
+        size.y = width->toPixels(inheritedViewBox, fontMetrics, Lengthd::Extent::Y) / aspectRatio;
       }
     }
   }
@@ -962,25 +957,23 @@ bool LayoutSystem::createShadowSizedElementComponent(Registry& registry, Entity 
 
   const Box2d parentViewBox = getViewBox(useEntity);
 
-  // Override the width/height if the parent element specifies them
+  // Override the width/height only when the use element resolves a concrete size.
   SizedElementProperties properties = targetSizedElement->properties;
 
-  if (parentSizedElement->properties.width.isSpecified()) {
+  if (parentSizedElement->properties.width.get()) {
     properties.width = parentSizedElement->properties.width;
   }
-  if (parentSizedElement->properties.height.isSpecified()) {
+  if (parentSizedElement->properties.height.get()) {
     properties.height = parentSizedElement->properties.height;
   }
 
   Vector2d size = parentViewBox.size();
 
-  if (properties.width.isSpecified()) {
-    size.x =
-        properties.width.get().value().toPixels(parentViewBox, fontMetrics, Lengthd::Extent::X);
+  if (const std::optional<Lengthd> width = properties.width.get()) {
+    size.x = width->toPixels(parentViewBox, fontMetrics, Lengthd::Extent::X);
   }
-  if (properties.height.isSpecified()) {
-    size.y =
-        properties.height.get().value().toPixels(parentViewBox, fontMetrics, Lengthd::Extent::Y);
+  if (const std::optional<Lengthd> height = properties.height.get()) {
+    size.y = height->toPixels(parentViewBox, fontMetrics, Lengthd::Extent::Y);
   }
 
   const Vector2d origin(
