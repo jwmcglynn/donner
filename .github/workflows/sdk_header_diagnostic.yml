@@ -1,0 +1,61 @@
+name: macOS SDK header diagnostic
+
+on:
+  push:
+    branches: [diagnose/macos-sdk-headers]
+
+env:
+  DO_NOT_TRACK: "1"
+  ASPECT_TOOLS_TELEMETRY: "-all"
+  BAZEL_MACOS_BUILD_FLAGS: "--config=ci-macos --macos_minimum_os=13.3"
+
+permissions:
+  contents: read
+
+jobs:
+  sdk:
+    runs-on: macos-26
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Select the pinned Xcode
+        id: xcode
+        run: tools/ci_select_macos_xcode.sh --required
+      - name: Inspect SDK and compile outside Bazel
+        shell: bash
+        run: |
+          set -euo pipefail
+          sdk=$(xcrun --sdk macosx --show-sdk-path)
+          xcodebuild -version
+          xcrun clang --version
+          SDK_PROBE_ROOT="$sdk" python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          sdk = Path(os.environ["SDK_PROBE_ROOT"])
+          for relative in ("usr/include/spawn.h", "usr/include/mach/exception_types.h"):
+              path = sdk / relative
+              print(json.dumps({"header": relative, "exists": path.exists(),
+                                "symlink": path.is_symlink(), "resolved": str(path.resolve())}))
+          PY
+          status=0
+          for arch in arm64 x86_64; do
+            echo "Direct header check: $arch"
+            env -i DEVELOPER_DIR="$DEVELOPER_DIR" /usr/bin/xcrun --sdk macosx clang \
+              -arch "$arch" -std=c++17 -fsyntax-only -x c++ -include spawn.h /dev/null || status=1
+          done
+          exit "$status"
+      - uses: bazel-contrib/setup-bazel@0.19.0
+        id: bazel
+        if: ${{ !cancelled() && steps.xcode.outcome == 'success' }}
+        with:
+          bazelisk-cache: false
+          repository-cache: false
+          cache-save: false
+      - name: Build the native compiler wrapper inside Bazel
+        if: ${{ !cancelled() && steps.xcode.outcome == 'success' && steps.bazel.outcome == 'success' }}
+        run: |
+          tools/llm-bazel-wrap.sh build --config=ci $BAZEL_MACOS_BUILD_FLAGS \
+            @build_bazel_apple_support//crosstool:exec_wrapped_clang
