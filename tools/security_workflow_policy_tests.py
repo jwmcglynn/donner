@@ -2976,6 +2976,7 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         self.assertIn("--remote_accept_cached=false --disk_cache=", probe)
         self.assertIn("--copt=-DBUILDBUDDY_RE_PROBE_${GITHUB_RUN_ID}_${GITHUB_RUN_ATTEMPT}", probe)
         self.assertIn('.runner == "remote" and .cacheHit != true', probe)
+        self.assertIn("bazelisk build --config=ci ${BUILDBUDDY_FLAGS} //...", probe)
 
     def test_buildbuddy_remote_execution_requires_linux_writer(self):
         cases = {

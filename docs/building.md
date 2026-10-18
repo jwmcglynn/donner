@@ -249,7 +249,8 @@ this output is empty and those commands retain their ordinary local toolchain. T
 selects the declared LLVM 21 toolchain and Linux sysroot, a digest-pinned BuildBuddy Ubuntu 22.04
 x86_64 execution image, and 50 concurrent actions. Execution failures after setup fail the build
 with local fallback disabled. A cold base-library compile checks the execution log for an actual
-remote compile rather than a cache hit. Linker canaries keep their normal runner toolchain, and
+remote compile rather than a cache hit, then builds `//...` with the same cloud configuration
+on trusted pull requests as well as main. Linker canaries keep their normal runner toolchain, and
 Renovate, macOS, and self-hosted lanes do not opt in. macOS cloud execution requires a separately
 configured compatible executor pool; the cache does not provide one.
 

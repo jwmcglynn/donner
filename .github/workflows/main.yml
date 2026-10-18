@@ -717,6 +717,7 @@ jobs:
             --execution_log_json_file=buildbuddy-execution.json //donner/base:base
           jq -s -e 'any(.[]; .mnemonic == "CppCompile" and .runner == "remote" and .cacheHit != true)' \
             buildbuddy-execution.json
+          bazelisk build --config=ci ${BUILDBUDDY_FLAGS} //...
 
       - name: Build
         id: build
