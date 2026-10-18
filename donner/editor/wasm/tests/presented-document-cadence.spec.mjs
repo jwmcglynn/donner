@@ -6,16 +6,29 @@ import vm from "node:vm";
 const source = readFileSync(new URL("../../WholeAppWorkerBridge.cc", import.meta.url), "utf8");
 
 function recorder() {
+  const statsStart = source.indexOf("EM_JS(void, RecordPresentedDocumentFrameStats,");
+  assert.notEqual(statsStart, -1);
+  const statsSource = source.slice(statsStart, source.indexOf("\n\nvoid ", statsStart));
+  const statsBody = statsSource.match(/int surfacePresented\), \{([\s\S]*?)\n {6}\}\);/);
+  assert.ok(statsBody, "presentation stats helper body");
   const start = source.indexOf("void PublishPresentedDocumentFrame(");
   assert.notEqual(start, -1);
   const functionSource = source.slice(start, source.indexOf("\nvoid ", start + 5));
-  const body = functionSource.match(/MAIN_THREAD_ASYNC_EM_ASM\(\s*\{([\s\S]*?)\n      \},/);
+  const body = functionSource.match(/MAIN_THREAD_ASYNC_EM_ASM\(\s*\{([\s\S]*?)\n {6}\},/);
   assert.ok(body, "production presentation callback body");
   const window = {};
-  const publish = vm.runInNewContext(`(function($0, $1, $2, $3 = true) {${body[1]}\n})`, {
+  const context = {
     window,
     performance: { timeOrigin: 1000, now: () => 1000000 },
-  });
+  };
+  context.RecordPresentedDocumentFrameStats = vm.runInNewContext(
+    `(function(documentGeneration, frameVersion, presentedAtEpochMs, surfacePresented) {${statsBody[1]}\n})`,
+    context,
+  );
+  const publish = vm.runInNewContext(
+    `(function($0, $1, $2, $3 = true) {${body[1]}\n})`,
+    context,
+  );
   return { window, publish, stats: () => window.__donnerPresentedDocumentStats };
 }
 

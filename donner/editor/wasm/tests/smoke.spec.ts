@@ -1327,7 +1327,6 @@ async function holdKnownRasterUntil(raster: Worker, deadlineAtMs: number) {
     if (!state || state.closed || !original) throw new Error("raster yield unavailable");
     let held: MessageEvent | undefined;
     let released = false;
-    let timer: ReturnType<typeof setTimeout>;
     const release = () => {
       if (released) return;
       released = true;
@@ -1355,7 +1354,7 @@ async function holdKnownRasterUntil(raster: Worker, deadlineAtMs: number) {
       }
       held = event;
     };
-    timer = setTimeout(release, Math.max(1, expiresEpochMs - Date.now()));
+    const timer = setTimeout(release, Math.max(1, expiresEpochMs - Date.now()));
   }, lease);
   const release = async () => {
     await awaitBeforeBlueDeadline(
@@ -3688,6 +3687,310 @@ async function measurePageRaf(page: Page, durationMs: number) {
   return { sample, loadBefore, loadAfter: loadavg() };
 }
 
+type AnimationRegionCapture = {
+  png: Buffer;
+  read: (
+    target: EditorPixelTarget,
+    search?: { minX: number; minY: number; maxX: number; maxY: number },
+  ) => PixelBounds | null;
+  viewport: { width: number; height: number };
+};
+
+type AnimationRegionCaptureFn = (
+  region: CssRegion,
+  deadlineAtMs?: number,
+) => Promise<AnimationRegionCapture>;
+
+function createAnimationRegionCapture(page: Page, browserName: string, testInfo: TestInfo) {
+  let owner: Worker | null = null;
+  let flatCaptureSequence = 0;
+  const setOwner = (next: Worker) => {
+    owner = next;
+  };
+  const capture = async (region: CssRegion, deadlineAtMs?: number): Promise<AnimationRegionCapture> => {
+    const viewport = page.viewportSize();
+    if (!viewport) throw new Error("the animation capture viewport is unavailable");
+    // Firefox can omit the transferred WebGPU canvas from clipped captures. Use the same
+    // un-clipped viewport capture as the presentation regressions, then score the original region.
+    const unclipped = browserName === "firefox";
+    const screenshot = (timeout: number) =>
+      page.screenshot({
+        ...(unclipped ? {} : { clip: region }),
+        timeout,
+      });
+    const deadline = deadlineAtMs ?? (performance.now() + scaledMs(5000));
+    let captureTiming: { startedEpochMs: number; finishedEpochMs: number };
+    let completionObserved = false;
+    let completion: Awaited<ReturnType<typeof observeSubmittedCanvasGpuWork>> | null = null;
+    const captureAttempts: Record<string, unknown>[] = [];
+    const sequence = flatCaptureSequence++;
+    const captureCompleted = async () => {
+      const startedEpochMs = Date.now();
+      const attempt: Record<string, unknown> = { startedEpochMs };
+      captureAttempts.push(attempt);
+      try {
+        // Both captures belong to one observation. Do not wait for newer animation
+        // submissions again when retaking an exact-background screenshot.
+        if (owner !== null && !completionObserved) {
+          attempt.completionDispatchEpochMs = Date.now();
+          completion = await awaitBeforeBlueDeadline(observeSubmittedCanvasGpuWork(owner), deadline);
+          completionObserved = true;
+        }
+        attempt.completion = completion;
+        const remaining = deadline - performance.now();
+        if (remaining < 1) throw new Error("animation capture deadline exceeded");
+        attempt.screenshotStartedEpochMs = Date.now();
+        const image = await screenshot(remaining);
+        attempt.screenshotFinishedEpochMs = Date.now();
+        captureTiming = { startedEpochMs, finishedEpochMs: Date.now() };
+        if (performance.now() >= deadline) throw new Error("animation capture deadline exceeded");
+        return image;
+      } catch (error) {
+        attempt.error = String(error);
+        throw error;
+      } finally {
+        attempt.finishedEpochMs = Date.now();
+        await writeFile(
+          testInfo.outputPath(`animation-capture-${sequence}-timing.json`),
+          JSON.stringify({ region, viewport, captureAttempts }, null, 2),
+        );
+      }
+    };
+    // Retain a single exact-background retake as evidence. This does not establish that
+    // the application never flickered; every nonuniform image still reaches the pixel oracle.
+    const png: Buffer = unclipped
+      ? await retakeFlatCapture({
+        capture: captureCompleted,
+        isFlat: isOnlyEditorPageBackground,
+        deadline,
+        retain: async (image: Buffer, attempt: number) => {
+          const stem = `animation-flat-capture-${sequence}-${attempt}`;
+          const pngPath = testInfo.outputPath(`${stem}.png`);
+          await writeFile(pngPath, image);
+          let presentation: unknown;
+          try {
+            presentation = await awaitBeforeBlueDeadline(
+              page.evaluate(() => ({
+                queue: window.__donnerPresentationQueueStats,
+                worker: window.__donnerWorkerStats,
+              })),
+              deadline,
+            );
+          } catch (error) {
+            presentation = { diagnosticError: String(error) };
+          }
+          await writeFile(
+            testInfo.outputPath(`${stem}.json`),
+            JSON.stringify(
+              {
+                ...captureTiming,
+                presentationObservedAfterCapture: presentation,
+                region,
+                viewport,
+                exactPageBackground: isOnlyEditorPageBackground(image),
+                pageBackgroundRgba: [16, 19, 23, 255],
+              },
+              null,
+              2,
+            ),
+          );
+          await testInfo.attach(stem, { path: pngPath, contentType: "image/png" });
+        },
+      })
+      : await captureCompleted();
+    if (performance.now() >= deadline) throw new Error("animation capture deadline exceeded");
+    const offsetX = unclipped ? region.x : 0;
+    const offsetY = unclipped ? region.y : 0;
+    const read = (
+      target: EditorPixelTarget,
+      search = { minX: 0, minY: 0, maxX: region.width, maxY: region.height },
+    ): PixelBounds | null => {
+      const bounds = readEditorPixelBoundsFromPng(png, target, unclipped ? viewport : region, {
+        minX: offsetX + search.minX,
+        minY: offsetY + search.minY,
+        maxX: offsetX + search.maxX,
+        maxY: offsetY + search.maxY,
+      });
+      return bounds === null ? null : {
+        ...bounds,
+        minX: bounds.minX - offsetX,
+        minY: bounds.minY - offsetY,
+        maxX: bounds.maxX - offsetX,
+        maxY: bounds.maxY - offsetY,
+      };
+    };
+    return { png, read, viewport };
+  };
+  return { capture, setOwner };
+}
+
+function createAnimationOrbProbe(
+  captureAnimationRegion: AnimationRegionCaptureFn,
+  track: CssRegion,
+  testInfo: TestInfo,
+  evidenceContext: Record<string, unknown>,
+) {
+  let traceScreenshots = false;
+  const screenshots: { startedEpochMs: number; finishedEpochMs: number; height: number | null }[] =
+    [];
+  const capture = async (deadlineAtMs?: number) => {
+    const started = Date.now();
+    const frame = await captureAnimationRegion(track, deadlineAtMs);
+    const result = frame.read("animation-mint");
+    if (traceScreenshots && screenshots.length < 64) {
+      screenshots.push({
+        startedEpochMs: started,
+        finishedEpochMs: Date.now(),
+        height: result ? result.maxY - result.minY : null,
+      });
+    }
+    if (!result) {
+      const missingPath = testInfo.outputPath("animation-orb-missing.png");
+      await writeFile(missingPath, frame.png);
+      await writeFile(
+        testInfo.outputPath("animation-orb-missing-region.json"),
+        JSON.stringify({ track, viewport: frame.viewport, ...evidenceContext }, null, 2),
+      );
+      await testInfo.attach("animation-orb-missing", {
+        path: missingPath,
+        contentType: "image/png",
+      });
+      throw new Error("the presented animation orb disappeared");
+    }
+    return result;
+  };
+  return {
+    capture,
+    screenshots,
+    setTraceScreenshots: (enabled: boolean) => {
+      traceScreenshots = enabled;
+    },
+  };
+}
+
+function createAnimationCadenceReader(page: Page, samples: unknown[]) {
+  return async () => {
+    const sample = await page.evaluate(() => {
+      const orZero = (value: number | null | undefined) => value ?? 0;
+      return {
+        time: performance.now(),
+        timeOrigin: performance.timeOrigin,
+        frames: orZero(window.__donnerMainLoopRenderedFrames),
+        documents: orZero(window.__donnerWorkerStats?.completedResults),
+        presentedDocuments: orZero(window.__donnerPresentedDocumentStats?.count),
+        presentedAtMs: window.__donnerPresentedDocumentStats?.lastPresentedAtMs,
+        presentationPublicationDelayMs: window.__donnerPresentedDocumentStats
+          ?.lastPublicationDelayMs,
+        worker: window.__donnerWorkerStats,
+        resources: window.__donnerPresentationResourceStats,
+        thumbnails: window.__donnerSampleThumbnailStats,
+        layerThumbnails: window.__donnerLayerThumbnailStats,
+        explicitCaptureStarts: orZero(window.__donnerWgpuReadbackCaptureStarts),
+        explicitCaptureCompletions: orZero(window.__donnerWgpuReadbackCaptureCompletions),
+        pageState: { visibilityState: document.visibilityState, hasFocus: document.hasFocus() },
+      };
+    });
+    if (samples.length < 256) samples.push(sample);
+    return sample;
+  };
+}
+
+async function finishAnimationPreview({
+  page,
+  editCenter,
+  editWidth,
+  orb,
+  start,
+  scale,
+  rafControls,
+  captureRafControl,
+}: {
+  page: Page;
+  editCenter: { x: number; y: number };
+  editWidth: number;
+  orb: () => Promise<PixelBounds>;
+  start: PixelBounds;
+  scale: number;
+  rafControls: boolean;
+  captureRafControl: (name: string) => Promise<void>;
+}) {
+  const heldForEdit = await holdRasterTaskYield(page);
+  try {
+    const frames = await page.evaluate(() => window.__donnerMainLoopRenderedFrames ?? 0);
+    await page.mouse.click(editCenter.x, editCenter.y);
+    await expect.poll(() => page.evaluate(() => window.__donnerMainLoopRenderedFrames ?? 0), {
+      timeout: scaledMs(3000),
+      message: "Edit remains responsive while a raster yield is held",
+    }).toBeGreaterThan(frames + 1);
+  } finally {
+    await heldForEdit.release();
+  }
+  await expect.poll(async () => (await orb()).minX, { timeout: scaledMs(5000) }).toBeCloseTo(
+    start.minX,
+    0,
+  );
+  await page.mouse.click(editCenter.x + editWidth + 1, editCenter.y);
+  await expect.poll(async () => Math.abs((await orb()).minX - start.minX), {
+    timeout: scaledMs(5000),
+    message: "Preview restarts after the suspended-yield cancellation",
+  }).toBeGreaterThan(8 * scale);
+  const owner = await Promise.any(
+    page.workers().map(async (worker) => {
+      const owned = await worker.evaluate(() =>
+        Boolean((globalThis as typeof globalThis & { __donnerGpuOwner?: boolean }).__donnerGpuOwner)
+      );
+      if (!owned) throw new Error("not the GPU owner");
+      return worker;
+    }),
+  );
+  const shutdowns = await page.evaluate(() => window.__donnerRasterShutdownRequests ?? 0);
+  const heldForQuit = await holdRasterTaskYield(page);
+  try {
+    const frames = await page.evaluate(() => window.__donnerMainLoopRenderedFrames ?? 0);
+    await page.mouse.click(editCenter.x, editCenter.y);
+    await expect.poll(() => page.evaluate(() => window.__donnerMainLoopRenderedFrames ?? 0), {
+      timeout: scaledMs(3000),
+      message: "Edit action is applied before quitting",
+    }).toBeGreaterThan(frames + 1);
+    await page.keyboard.press("Control+q");
+    await expect.poll(() => page.evaluate(() => window.__donnerRasterShutdownRequests ?? 0), {
+      timeout: scaledMs(5000),
+      message: "shutdown begins while the raster yield remains held",
+    }).toBeGreaterThan(shutdowns);
+    expect(
+      await heldForQuit.raster.evaluate(() => {
+        const scope = globalThis as typeof globalThis & { __donnerHeldTaskYield?: () => boolean };
+        return scope.__donnerHeldTaskYield?.() ?? false;
+      }),
+    ).toBe(true);
+  } finally {
+    await heldForQuit.release();
+  }
+  await expect.poll(() =>
+    heldForQuit.raster.evaluate(() => {
+      const scope = globalThis as typeof globalThis & {
+        __donnerRasterWorker?: boolean;
+        __donnerRasterTaskYield?: unknown;
+      };
+      return {
+        marker: Boolean(scope.__donnerRasterWorker),
+        channel: Boolean(scope.__donnerRasterTaskYield),
+      };
+    }), { timeout: scaledMs(5000), message: "raster teardown closes its task channel" })
+    .toEqual({ marker: false, channel: false });
+  await expect.poll(
+    () =>
+      owner.evaluate(() =>
+        Boolean((globalThis as typeof globalThis & { __donnerGpuOwner?: boolean }).__donnerGpuOwner)
+      ),
+    { timeout: scaledMs(5000), message: "GPU owner shuts down after joining the raster worker" },
+  ).toBe(false);
+  if (rafControls) {
+    await page.goto("about:blank");
+    await captureRafControl("blankAfter");
+  }
+}
+
 test(
   "animation preview plays, dispatches mouse events, and returns to Edit",
   async ({ page, browserName }, testInfo) => {
@@ -3727,124 +4030,8 @@ test(
     if (!box) throw new Error("the editor canvas has no bounds");
     await page.mouse.click(box.x + box.width * 0.76, box.y + 390);
     let interactionCaptureOwner: Worker | null = null;
-    let flatCaptureSequence = 0;
-    const captureAnimationRegion = async (region: CssRegion, deadlineAtMs?: number) => {
-      const viewport = page.viewportSize();
-      if (!viewport) throw new Error("the animation capture viewport is unavailable");
-      // Firefox can omit the transferred WebGPU canvas from clipped captures. Use the same
-      // un-clipped viewport capture as the presentation regressions, then score the original region.
-      const unclipped = browserName === "firefox";
-      const capture = (timeout: number) =>
-        page.screenshot({
-          ...(unclipped ? {} : { clip: region }),
-          timeout,
-        });
-      const deadline = deadlineAtMs ?? (performance.now() + scaledMs(5000));
-      let captureTiming: { startedEpochMs: number; finishedEpochMs: number };
-      let completionObserved = false;
-      let completion: Awaited<ReturnType<typeof observeSubmittedCanvasGpuWork>> | null = null;
-      const captureAttempts: Record<string, unknown>[] = [];
-      const sequence = flatCaptureSequence++;
-      const captureCompleted = async (_remaining: number) => {
-        const startedEpochMs = Date.now();
-        const attempt: Record<string, unknown> = { startedEpochMs };
-        captureAttempts.push(attempt);
-        try {
-          // Both captures belong to one observation. Do not wait for newer animation
-          // submissions again when retaking an exact-background screenshot.
-          if (interactionCaptureOwner !== null && !completionObserved) {
-            attempt.completionDispatchEpochMs = Date.now();
-            completion = await awaitBeforeBlueDeadline(
-              observeSubmittedCanvasGpuWork(interactionCaptureOwner),
-              deadline,
-            );
-            completionObserved = true;
-          }
-          attempt.completion = completion;
-          const remaining = deadline - performance.now();
-          if (remaining < 1) throw new Error("animation capture deadline exceeded");
-          attempt.screenshotStartedEpochMs = Date.now();
-          const image = await capture(remaining);
-          attempt.screenshotFinishedEpochMs = Date.now();
-          captureTiming = { startedEpochMs, finishedEpochMs: Date.now() };
-          if (performance.now() >= deadline) throw new Error("animation capture deadline exceeded");
-          return image;
-        } catch (error) {
-          attempt.error = String(error);
-          throw error;
-        } finally {
-          attempt.finishedEpochMs = Date.now();
-          await writeFile(
-            testInfo.outputPath(`animation-capture-${sequence}-timing.json`),
-            JSON.stringify({ region, viewport, captureAttempts }, null, 2),
-          );
-        }
-      };
-      // Retain a single exact-background retake as evidence. This does not establish that
-      // the application never flickered; every nonuniform image still reaches the pixel oracle.
-      const png: Buffer = unclipped
-        ? await retakeFlatCapture({
-          capture: captureCompleted,
-          isFlat: isOnlyEditorPageBackground,
-          deadline,
-          retain: async (image: Buffer, attempt: number) => {
-            const stem = `animation-flat-capture-${sequence}-${attempt}`;
-            const pngPath = testInfo.outputPath(`${stem}.png`);
-            await writeFile(pngPath, image);
-            let presentation: unknown;
-            try {
-              presentation = await awaitBeforeBlueDeadline(
-                page.evaluate(() => ({
-                  queue: window.__donnerPresentationQueueStats,
-                  worker: window.__donnerWorkerStats,
-                })),
-                deadline,
-              );
-            } catch (error) {
-              presentation = { diagnosticError: String(error) };
-            }
-            await writeFile(
-              testInfo.outputPath(`${stem}.json`),
-              JSON.stringify(
-                {
-                  ...captureTiming,
-                  presentationObservedAfterCapture: presentation,
-                  region,
-                  viewport,
-                  exactPageBackground: isOnlyEditorPageBackground(image),
-                  pageBackgroundRgba: [16, 19, 23, 255],
-                },
-                null,
-                2,
-              ),
-            );
-            await testInfo.attach(stem, { path: pngPath, contentType: "image/png" });
-          },
-        })
-        : await captureCompleted(deadline - performance.now());
-      if (performance.now() >= deadline) throw new Error("animation capture deadline exceeded");
-      const offsetX = unclipped ? region.x : 0;
-      const offsetY = unclipped ? region.y : 0;
-      const read = (
-        target: EditorPixelTarget,
-        search = { minX: 0, minY: 0, maxX: region.width, maxY: region.height },
-      ): PixelBounds | null => {
-        const bounds = readEditorPixelBoundsFromPng(png, target, unclipped ? viewport : region, {
-          minX: offsetX + search.minX,
-          minY: offsetY + search.minY,
-          maxX: offsetX + search.maxX,
-          maxY: offsetY + search.maxY,
-        });
-        return bounds === null ? null : {
-          ...bounds,
-          minX: bounds.minX - offsetX,
-          minY: bounds.minY - offsetY,
-          maxX: bounds.maxX - offsetX,
-          maxY: bounds.maxY - offsetY,
-        };
-      };
-      return { png, read, viewport };
-    };
+    const animationCapture = createAnimationRegionCapture(page, browserName, testInfo);
+    const captureAnimationRegion = animationCapture.capture;
     const documentRegion = { minX: 150, minY: 150, maxX: box.width - 430, maxY: box.height * 0.58 };
     let initial: PixelBounds | null = null;
     let mode: PixelBounds | null = null;
@@ -3903,42 +4090,12 @@ test(
     };
     let preQueuedPointerTrace: unknown;
     let queuedPulseObservation: unknown = null;
-    let tracePulseScreenshots = false;
-    const pulseScreenshots: {
-      startedEpochMs: number;
-      finishedEpochMs: number;
-      height: number | null;
-    }[] = [];
-    const orb = async (deadlineAtMs?: number) => {
-      const started = Date.now();
-      const capture = await captureAnimationRegion(track, deadlineAtMs);
-      const result = capture.read("animation-mint");
-      if (tracePulseScreenshots && pulseScreenshots.length < 64) {
-        pulseScreenshots.push({
-          startedEpochMs: started,
-          finishedEpochMs: Date.now(),
-          height: result ? result.maxY - result.minY : null,
-        });
-      }
-      if (!result) {
-        const missingPath = testInfo.outputPath("animation-orb-missing.png");
-        await writeFile(missingPath, capture.png);
-        await writeFile(
-          testInfo.outputPath("animation-orb-missing-region.json"),
-          JSON.stringify(
-            { track, box, viewport: capture.viewport, browserName, initialOrb },
-            null,
-            2,
-          ),
-        );
-        await testInfo.attach("animation-orb-missing", {
-          path: missingPath,
-          contentType: "image/png",
-        });
-        throw new Error("the presented animation orb disappeared");
-      }
-      return result;
-    };
+    const orbProbe = createAnimationOrbProbe(captureAnimationRegion, track, testInfo, {
+      box,
+      browserName,
+      initialOrb,
+    });
+    const orb = orbProbe.capture;
     const start = await orb();
     if (rafControls) await captureRafControl("editState");
     await page.mouse.click(editCenter.x + edit.maxX - edit.minX + 1, editCenter.y);
@@ -3953,27 +4110,7 @@ test(
     const schedulerBefore = await readCarouselFrameDiagnostics(page);
     const loadBefore = loadavg();
     const workerSamples: unknown[] = [];
-    const readCadence = async () => {
-      const sample = await page.evaluate(() => ({
-        time: performance.now(),
-        timeOrigin: performance.timeOrigin,
-        frames: window.__donnerMainLoopRenderedFrames ?? 0,
-        documents: window.__donnerWorkerStats?.completedResults ?? 0,
-        presentedDocuments: window.__donnerPresentedDocumentStats?.count ?? 0,
-        presentedAtMs: window.__donnerPresentedDocumentStats?.lastPresentedAtMs,
-        presentationPublicationDelayMs: window.__donnerPresentedDocumentStats
-          ?.lastPublicationDelayMs,
-        worker: window.__donnerWorkerStats,
-        resources: window.__donnerPresentationResourceStats,
-        thumbnails: window.__donnerSampleThumbnailStats,
-        layerThumbnails: window.__donnerLayerThumbnailStats,
-        explicitCaptureStarts: window.__donnerWgpuReadbackCaptureStarts ?? 0,
-        explicitCaptureCompletions: window.__donnerWgpuReadbackCaptureCompletions ?? 0,
-        pageState: { visibilityState: document.visibilityState, hasFocus: document.hasFocus() },
-      }));
-      if (workerSamples.length < 256) workerSamples.push(sample);
-      return sample;
-    };
+    const readCadence = createAnimationCadenceReader(page, workerSamples);
     const ownerBefore = await readGpuOwnerDispatchStats(page);
     const before = await readCadence();
     const probeMainRaf = process.env.DONNER_ANIMATION_RAF_PROBE === "1";
@@ -4159,6 +4296,7 @@ test(
     await expectSurfaceFrameProbeReady(page);
     await expect.poll(async () => {
       interactionCaptureOwner = await findCanvasOwnerWorker(page);
+      if (interactionCaptureOwner) animationCapture.setOwner(interactionCaptureOwner);
       return interactionCaptureOwner !== null;
     }, { message: "interaction captures observe the canvas GPU owner" }).toBe(true);
     const previewCapture = await captureAnimationRegion(box);
@@ -4260,7 +4398,7 @@ test(
       await verifyPadInput(7, "animation-hover", () => page.mouse.move(pad.x, pad.y));
       await verifyPadInput(2, "animation-pressed", () => page.mouse.down());
       await verifyPadInput(3, "animation-hover", () => page.mouse.up());
-      tracePulseScreenshots = true;
+      orbProbe.setTraceScreenshots(true);
       pulseClickStartedEpochMs = Date.now();
       await page.mouse.click(box.x + originX + 456 * scale, pad.y);
       pulseClickFinishedEpochMs = Date.now();
@@ -4392,7 +4530,7 @@ test(
         throw new AggregateError(pulseErrors, "queued pulse observation failed");
       }
     } finally {
-      tracePulseScreenshots = false;
+      orbProbe.setTraceScreenshots(false);
       const pointerTraces = await Promise.all(
         page.workers().map((worker) =>
           boundBrowserDiagnostic(
@@ -4419,7 +4557,7 @@ test(
             heldPulseHeight,
             preQueuedPointerTrace,
             queuedPulseObservation,
-            pulseScreenshots,
+            pulseScreenshots: orbProbe.screenshots,
             pointerTraces,
           },
           null,
@@ -4432,85 +4570,16 @@ test(
       });
     }
 
-    const heldForEdit = await holdRasterTaskYield(page);
-    try {
-      const frames = await page.evaluate(() => window.__donnerMainLoopRenderedFrames ?? 0);
-      await page.mouse.click(editCenter.x, editCenter.y);
-      await expect.poll(() => page.evaluate(() => window.__donnerMainLoopRenderedFrames ?? 0), {
-        timeout: scaledMs(3000),
-        message: "Edit remains responsive while a raster yield is held",
-      }).toBeGreaterThan(frames + 1);
-    } finally {
-      await heldForEdit.release();
-    }
-    await expect.poll(async () => (await orb()).minX, { timeout: scaledMs(5000) }).toBeCloseTo(
-      start.minX,
-      0,
-    );
-    await page.mouse.click(editCenter.x + edit.maxX - edit.minX + 1, editCenter.y);
-    await expect.poll(async () => Math.abs((await orb()).minX - start.minX), {
-      timeout: scaledMs(5000),
-      message: "Preview restarts after the suspended-yield cancellation",
-    }).toBeGreaterThan(8 * scale);
-    const owner = await Promise.any(
-      page.workers().map(async (worker) => {
-        const owned = await worker.evaluate(() =>
-          Boolean(
-            (globalThis as typeof globalThis & { __donnerGpuOwner?: boolean }).__donnerGpuOwner,
-          )
-        );
-        if (!owned) throw new Error("not the GPU owner");
-        return worker;
-      }),
-    );
-    const shutdowns = await page.evaluate(() => window.__donnerRasterShutdownRequests ?? 0);
-    const heldForQuit = await holdRasterTaskYield(page);
-    try {
-      const frames = await page.evaluate(() => window.__donnerMainLoopRenderedFrames ?? 0);
-      await page.mouse.click(editCenter.x, editCenter.y);
-      await expect.poll(() => page.evaluate(() => window.__donnerMainLoopRenderedFrames ?? 0), {
-        timeout: scaledMs(3000),
-        message: "Edit action is applied before quitting",
-      }).toBeGreaterThan(frames + 1);
-      await page.keyboard.press("Control+q");
-      await expect.poll(() => page.evaluate(() => window.__donnerRasterShutdownRequests ?? 0), {
-        timeout: scaledMs(5000),
-        message: "shutdown begins while the raster yield remains held",
-      }).toBeGreaterThan(shutdowns);
-      expect(
-        await heldForQuit.raster.evaluate(() => {
-          const scope = globalThis as typeof globalThis & { __donnerHeldTaskYield?: () => boolean };
-          return scope.__donnerHeldTaskYield?.() ?? false;
-        }),
-      ).toBe(true);
-    } finally {
-      await heldForQuit.release();
-    }
-    await expect.poll(() =>
-      heldForQuit.raster.evaluate(() => {
-        const scope = globalThis as typeof globalThis & {
-          __donnerRasterWorker?: boolean;
-          __donnerRasterTaskYield?: unknown;
-        };
-        return {
-          marker: Boolean(scope.__donnerRasterWorker),
-          channel: Boolean(scope.__donnerRasterTaskYield),
-        };
-      }), { timeout: scaledMs(5000), message: "raster teardown closes its task channel" })
-      .toEqual({ marker: false, channel: false });
-    await expect.poll(
-      () =>
-        owner.evaluate(() =>
-          Boolean(
-            (globalThis as typeof globalThis & { __donnerGpuOwner?: boolean }).__donnerGpuOwner,
-          )
-        ),
-      { timeout: scaledMs(5000), message: "GPU owner shuts down after joining the raster worker" },
-    ).toBe(false);
-    if (rafControls) {
-      await page.goto("about:blank");
-      await captureRafControl("blankAfter");
-    }
+    await finishAnimationPreview({
+      page,
+      editCenter,
+      editWidth: edit.maxX - edit.minX,
+      orb,
+      start,
+      scale,
+      rafControls,
+      captureRafControl,
+    });
     expect(fatalMessages).toEqual([]);
   },
 );
