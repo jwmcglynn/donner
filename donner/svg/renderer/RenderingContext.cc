@@ -1599,9 +1599,19 @@ void RenderingContext::ensureComputedComponents(ParseWarningSink& warningSink) {
   // TODO(jwmcglynn): Support partial invalidation, where we only recompute dirty entities
   // instead of the full tree.
   ShadowTreeSystem::beginRebuild(registry_);
-  for (auto view = registry_.view<ComputedShadowTreeComponent>(); auto entity : view) {
-    auto& shadow = view.get<ComputedShadowTreeComponent>(entity);
-    createShadowTreeSystem().teardown(registry_, shadow);
+  std::vector<Entity> shadowHosts;
+  auto shadowView = registry_.view<ComputedShadowTreeComponent>();
+  shadowHosts.reserve(shadowView.size());
+  for (const Entity entity : shadowView) {
+    shadowHosts.push_back(entity);
+  }
+  for (const Entity entity : shadowHosts) {
+    if (!registry_.valid(entity)) {
+      continue;
+    }
+    if (auto* shadow = registry_.try_get<ComputedShadowTreeComponent>(entity)) {
+      createShadowTreeSystem().teardown(registry_, *shadow);
+    }
   }
   registry_.clear<ComputedShadowTreeComponent>();
   registry_.clear<RenderingInstanceComponent>();

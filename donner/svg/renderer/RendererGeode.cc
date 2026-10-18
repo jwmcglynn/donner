@@ -5451,6 +5451,9 @@ void RendererGeode::Impl::ensureCacheInvalidationWired(Registry& registry) {
     return;
   }
   registry.ctx().emplace<ListenerInstalled>();
+  // Destruction callbacks must not create pools while registry.destroy() iterates them.
+  static_cast<void>(registry.storage<geode::GeodePathCacheComponent>());
+  static_cast<void>(registry.storage<geode::GeodeResidentPathComponent>());
   registry.on_update<components::ComputedPathComponent>().connect<&Impl::onComputedPathChanged>();
   registry.on_destroy<components::ComputedPathComponent>().connect<&Impl::onComputedPathChanged>();
   // Leaving the connection attached across renderer destruction is
