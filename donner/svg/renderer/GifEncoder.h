@@ -174,8 +174,11 @@ private:
   /// Whether the complete file can retain \p additional bytes plus its trailer.
   bool outputFits(size_t additional) const;
 
-  /// Reserve exact logical output growth without retaining a capacity above the hard limit.
+  /// Admit logical output growth and reserve bounded amortized capacity within the hard limit.
   bool reserveOutput(size_t additional);
+
+  /// Grow retained output capacity geometrically up to the configured hard limit.
+  bool reserveOutputCapacity(size_t required);
 
   /// Mark a terminal encoder failure.
   bool fail(Error error);

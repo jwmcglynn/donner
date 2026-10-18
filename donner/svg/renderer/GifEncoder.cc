@@ -719,12 +719,33 @@ bool GifEncoder::reserveOutput(size_t additional) {
   if (!outputFits(additional)) {
     return fail(Error::ResourceLimit);
   }
-  const size_t required = out_.size() + additional;
-  if (required > out_.capacity()) {
-    out_.reserve(required);
-    if (out_.capacity() > options_.maximumOutputBytes) {
-      return fail(Error::ResourceLimit);
+  return reserveOutputCapacity(out_.size() + additional);
+}
+
+bool GifEncoder::reserveOutputCapacity(size_t required) {
+  if (required > options_.maximumOutputBytes || out_.capacity() > options_.maximumOutputBytes) {
+    return fail(Error::ResourceLimit);
+  }
+  if (required <= out_.capacity()) {
+    return true;
+  }
+
+  size_t target = std::max<size_t>(out_.capacity(), 1);
+  while (target < required) {
+    const size_t remaining = options_.maximumOutputBytes - target;
+    if (remaining <= target) {
+      target = options_.maximumOutputBytes;
+      break;
     }
+    target += target;
+  }
+  if (target < required) {
+    return fail(Error::ResourceLimit);
+  }
+
+  out_.reserve(target);
+  if (out_.capacity() > options_.maximumOutputBytes) {
+    return fail(Error::ResourceLimit);
   }
   return true;
 }
@@ -753,12 +774,8 @@ std::vector<uint8_t> GifEncoder::finish() {
     out_.clear();
     return {};
   }
-  if (out_.size() + kTrailerBytes > out_.capacity()) {
-    out_.reserve(out_.size() + kTrailerBytes);
-    if (out_.capacity() > options_.maximumOutputBytes) {
-      fail(Error::ResourceLimit);
-      return {};
-    }
+  if (!reserveOutputCapacity(out_.size() + kTrailerBytes)) {
+    return {};
   }
   out_.push_back(0x3B);
   error_ = Error::None;
