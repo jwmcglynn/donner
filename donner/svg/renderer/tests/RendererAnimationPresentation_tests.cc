@@ -641,6 +641,29 @@ TEST(RendererAnimationPresentation, TextPositionValuesIgnoreInvalidFromOperand) 
       RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(expected),
       "text-position-values-precedence", editor::tests::PixelmatchIdentityParams());
 }
+
+TEST(RendererAnimationPresentation, TextPositionToIgnoresInactiveInvalidByOperand) {
+  auto document = ParsePresentation(
+      "<text id='owner' y='12' font-size='10' dx='2'>AB</text>"
+      "<animate href='#owner' attributeName='dx' from='2' to='6' by='invalid' dur='2s'/>");
+  document.setTime(1);
+  auto expected = ParsePresentation("<text y='12' font-size='10' dx='4'>AB</text>");
+  editor::tests::CompareBitmapToBitmap(
+      RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(expected),
+      "text-position-to-precedence", editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(RendererAnimationPresentation, EmptyDeltaBaseIsPaddedPerAnimationLayer) {
+  auto document = ParsePresentation(
+      "<text id='owner' y='12' font-size='10'>AB</text>"
+      "<animate href='#owner' attributeName='dx' to='8' dur='2s'/>"
+      "<animate href='#owner' attributeName='dx' to='10 20' dur='4s'/>");
+  document.setTime(0.5);
+  auto expected = ParsePresentation("<text y='12' font-size='10' dx='2'>AB</text>");
+  editor::tests::CompareBitmapToBitmap(
+      RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(expected),
+      "empty-delta-base-layer-padding", editor::tests::PixelmatchIdentityParams());
+}
 #endif
 
 TEST(RendererAnimationPresentation, ToOnlyPathCalibrationUsesTypedBase) {

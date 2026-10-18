@@ -356,17 +356,58 @@ std::string SerializeTextPositionRotations(std::span<const double> values) {
   return output.str();
 }
 
+template <typename Declaration>
+std::optional<size_t> TextPositionDeclarationArity(const Declaration& declaration) {
+  const auto parse = [](const std::optional<std::string>& value) -> std::optional<size_t> {
+    if (!value) {
+      return 0;
+    }
+    const auto parsed = components::ParseAnimationLengths(*value);
+    return parsed ? std::optional(parsed->size()) : std::nullopt;
+  };
+  if constexpr (std::is_same_v<Declaration, components::SetAnimationComponent>) {
+    return parse(declaration.to);
+  } else {
+    if (!declaration.values.empty()) {
+      size_t result = 0;
+      for (const std::string& value : declaration.values) {
+        const auto parsed = parse(std::optional<std::string>(value));
+        if (!parsed) {
+          return std::nullopt;
+        }
+        result = std::max(result, *parsed);
+      }
+      return result;
+    }
+    const auto first = parse(declaration.from);
+    if (!first) {
+      return std::nullopt;
+    }
+    const auto second = declaration.to ? parse(declaration.to) : parse(declaration.by);
+    return second ? std::optional(std::max(*first, *second)) : std::nullopt;
+  }
+}
+
 std::optional<std::string> SampleTextPositionRecipe(
     const components::ContextualLengthRecipe& recipe, std::string underlying,
-    const components::AnimationValueContext& context, bool nonAdditive) {
+    const components::AnimationValueContext& context, bool nonAdditive, bool neutralEmpty) {
   std::optional<std::string> result;
   for (const auto& sample : recipe.samples) {
     const auto sampled = std::visit(
         [&](const auto& declaration) {
+          const auto arity = TextPositionDeclarationArity(declaration);
+          if (!arity || *arity == 0) {
+            return std::optional<std::pair<std::string, std::string>>{};
+          }
+          std::string layerUnderlying = underlying;
+          if (neutralEmpty && layerUnderlying.empty()) {
+            std::vector<Lengthd> zeros(*arity);
+            layerUnderlying = SerializeTextPositionLengths(zeros);
+          }
           using Declaration = std::decay_t<decltype(declaration)>;
           if constexpr (std::is_same_v<Declaration, components::SetAnimationComponent>) {
             return components::SampleAnimationValue(sample.progress, sample.iteration, &declaration,
-                                                    nullptr, nullptr, underlying, context);
+                                                    nullptr, nullptr, layerUnderlying, context);
           } else {
             components::AnimateValueComponent effective = declaration;
             if (nonAdditive) {
@@ -374,14 +415,11 @@ std::optional<std::string> SampleTextPositionRecipe(
               effective.accumulate = false;
             }
             return components::SampleAnimationValue(sample.progress, sample.iteration, nullptr,
-                                                    &effective, nullptr, underlying, context);
+                                                    &effective, nullptr, layerUnderlying, context);
           }
         },
         sample.declaration);
-    if (!sampled) {
-      continue;
-    }
-    if (!components::ParseAnimationLengths(sampled->second)) {
+    if (!sampled || !components::ParseAnimationLengths(sampled->second)) {
       continue;
     }
     result = sampled->second;
@@ -395,39 +433,7 @@ std::optional<size_t> TextPositionRecipeArity(const components::ContextualLength
   bool hasValidLayer = false;
   for (const auto& sample : recipe.samples) {
     const auto layerArity = std::visit(
-        [&](const auto& declaration) -> std::optional<size_t> {
-          const auto parse = [](const std::optional<std::string>& value) -> std::optional<size_t> {
-            if (!value) {
-              return 0;
-            }
-            const auto parsed = components::ParseAnimationLengths(*value);
-            return parsed ? std::optional(parsed->size()) : std::nullopt;
-          };
-          using Declaration = std::decay_t<decltype(declaration)>;
-          if constexpr (std::is_same_v<Declaration, components::SetAnimationComponent>) {
-            return parse(declaration.to);
-          } else {
-            size_t result = 0;
-            if (!declaration.values.empty()) {
-              for (const std::string& value : declaration.values) {
-                const auto parsed = parse(std::optional<std::string>(value));
-                if (!parsed) {
-                  return std::nullopt;
-                }
-                result = std::max(result, *parsed);
-              }
-              return result;
-            }
-            for (const auto* value : {&declaration.from, &declaration.to, &declaration.by}) {
-              const auto parsed = parse(*value);
-              if (!parsed) {
-                return std::nullopt;
-              }
-              result = std::max(result, *parsed);
-            }
-            return result;
-          }
-        },
+        [](const auto& declaration) { return TextPositionDeclarationArity(declaration); },
         sample.declaration);
     if (!layerArity || *layerArity == 0) {
       continue;
@@ -535,7 +541,6 @@ void ResolveAnimatedTextPositions(Registry& registry, components::ComputedTextCo
   struct Recipe {
     Entity owner = entt::null;
     size_t attributeIndex = 0;
-    size_t underlyingCount = 0;
     bool rotate = false;
     std::shared_ptr<const components::ContextualLengthRecipe> value;
   };
@@ -570,7 +575,7 @@ void ResolveAnimatedTextPositions(Registry& registry, components::ComputedTextCo
         return;
       }
       evaluationWork += serializationWork;
-      recipes.push_back({owner, attributeIndex, *arity, false, found->second});
+      recipes.push_back({owner, attributeIndex, false, found->second});
     }
     if (const auto found = animated->contextualLengths.find("rotate");
         found != animated->contextualLengths.end()) {
@@ -588,7 +593,7 @@ void ResolveAnimatedTextPositions(Registry& registry, components::ComputedTextCo
         return;
       }
       evaluationWork += serializationWork;
-      recipes.push_back({owner, 0, *arity, true, found->second});
+      recipes.push_back({owner, 0, true, found->second});
     }
   }
   if (recipes.empty()) {
@@ -632,7 +637,6 @@ void ResolveAnimatedTextPositions(Registry& registry, components::ComputedTextCo
     if (range == text.ownerSpanRanges.end() || range->second.end >= spanPrefix.size()) {
       return;
     }
-    const size_t characterCount = recipe.underlyingCount;
     components::AnimationValueContext context;
     context.viewBox = viewBox;
     context.fontMetrics = fontMetrics;
@@ -652,7 +656,7 @@ void ResolveAnimatedTextPositions(Registry& registry, components::ComputedTextCo
         underlying.assign(local->begin(), local->end());
       }
       const auto result = SampleTextPositionRecipe(
-          *recipe.value, SerializeTextPositionRotations(underlying), context, true);
+          *recipe.value, SerializeTextPositionRotations(underlying), context, true, false);
       const auto parsed = result ? components::ParseAnimationLengths(*result) : std::nullopt;
       if (!parsed) {
         continue;
@@ -682,11 +686,9 @@ void ResolveAnimatedTextPositions(Registry& registry, components::ComputedTextCo
       }
       underlying.assign(local->begin(), local->end());
     }
-    if (recipe.attributeIndex >= 2 && underlying.empty()) {
-      underlying.resize(characterCount, Lengthd());
-    }
-    const auto result = SampleTextPositionRecipe(
-        *recipe.value, SerializeTextPositionLengths(underlying), context, false);
+    const auto result =
+        SampleTextPositionRecipe(*recipe.value, SerializeTextPositionLengths(underlying), context,
+                                 false, recipe.attributeIndex >= 2);
     auto parsed = result ? components::ParseAnimationLengths(*result) : std::nullopt;
     if (parsed) {
       sampled[recipe.owner].lengths[recipe.attributeIndex] = std::move(*parsed);
