@@ -1306,6 +1306,23 @@ async function holdRasterTaskYield(page: Page) {
   return { raster, release };
 }
 
+async function findRasterTaskWorker(page: Page) {
+  return Promise.any(
+    page.workers().map(async (worker) => {
+      const active = await worker.evaluate(() => {
+        const scope = globalThis as typeof globalThis & {
+          __donnerRasterWorker?: boolean;
+          __donnerRasterTaskYield?: { closed: boolean };
+        };
+        return scope.__donnerRasterWorker === true
+          && scope.__donnerRasterTaskYield?.closed === false;
+      });
+      if (!active) throw new Error("not the active raster worker");
+      return worker;
+    }),
+  );
+}
+
 // A finite worker-side lease cleans up even if an installation reply arrives after the caller deadline.
 async function holdKnownRasterUntil(raster: Worker, deadlineAtMs: number) {
   const remaining = deadlineAtMs - performance.now();
@@ -4023,6 +4040,7 @@ async function exerciseAnimationPointerPulse({
   start: PixelBounds;
 }) {
   let preQueuedPointerTrace: unknown;
+  let initialPulseObservation: unknown = null;
   let queuedPulseObservation: unknown = null;
   let pulseClickStartedEpochMs: number | null = null;
   let pulseClickFinishedEpochMs: number | null = null;
@@ -4120,17 +4138,96 @@ async function exerciseAnimationPointerPulse({
     await verifyPadInput(2, "animation-pressed", () => page.mouse.down());
     await verifyPadInput(3, "animation-hover", () => page.mouse.up());
     orbProbe.setTraceScreenshots(true);
-    pulseClickStartedEpochMs = Date.now();
-    await page.mouse.click(box.x + originX + 456 * scale, pad.y);
+    if (interactionCaptureOwner === null) throw new Error("animation owner is unavailable");
+    const raster = await findRasterTaskWorker(page);
+    const initialPulseTraceGeneration = Date.now();
+    await interactionCaptureOwner.evaluate((generation) => {
+      const trace = (globalThis as unknown as Record<string, unknown>).__donnerPreviewPointerTrace;
+      if (!Array.isArray(trace)) throw new Error("the pointer trace is unavailable");
+      Object.assign(trace, { generation });
+    }, initialPulseTraceGeneration);
+    const initialPulseDeadline = performance.now() + scaledMs(5000);
+    const pulseClickNotBefore = Date.now();
+    pulseClickStartedEpochMs = pulseClickNotBefore;
+    await awaitBeforeBlueDeadline(
+      page.mouse.click(box.x + originX + 456 * scale, pad.y),
+      initialPulseDeadline,
+    );
     pulseClickFinishedEpochMs = Date.now();
-    // The pulse lasts 600 ms; the default poll backoff can skip its entire active interval.
+    let initialPulseTarget: number | null = null;
     await expect.poll(async () => {
-      const bounds = await orb();
-      return bounds.maxY - bounds.minY;
-    }, { timeout: scaledMs(5000), intervals: [50], message: "Click triggers the radius pulse" })
-      .toBeGreaterThan(
-        58 * scale,
+      const snapshot = await awaitBeforeBlueDeadline(
+        interactionCaptureOwner.evaluate(() => {
+          const trace = (globalThis as unknown as Record<string, unknown>)
+            .__donnerPreviewPointerTrace as (unknown[] & { generation?: number }) | undefined;
+          return {
+            generation: trace?.generation,
+            entries: Array.isArray(trace) ? [...trace] : [],
+          };
+        }),
+        initialPulseDeadline,
       );
+      const click = snapshot.entries.find((row) =>
+        Array.isArray(row) && row.length === 6
+        && Number.isFinite(row[0]) && row[0] >= pulseClickNotBefore
+        && row[1] === 2 && row[2] === 0 && row[5] === true
+      );
+      if (!click || !Number.isFinite(click[3])) return false;
+      initialPulseTarget = click[3];
+      initialPulseObservation = presentedPulseWindow(
+        snapshot,
+        initialPulseTraceGeneration,
+        initialPulseTarget,
+        pulseClickNotBefore,
+      );
+      return initialPulseObservation !== null;
+    }, {
+      timeout: Math.max(1, initialPulseDeadline - performance.now()),
+      intervals: [16],
+      message: "the first-click pulse reaches presentation",
+    }).toBe(true);
+    const heldInitialPulseFrame = await holdKnownRasterUntil(raster, initialPulseDeadline);
+    try {
+      const heldTrace = await awaitBeforeBlueDeadline(
+        interactionCaptureOwner.evaluate(() => {
+          const trace = (globalThis as unknown as Record<string, unknown>)
+            .__donnerPreviewPointerTrace as (unknown[] & { generation?: number }) | undefined;
+          return {
+            generation: trace?.generation,
+            entries: Array.isArray(trace) ? [...trace] : [],
+          };
+        }),
+        initialPulseDeadline,
+      );
+      const retainedObservation = presentedPulseWindow(
+        heldTrace,
+        initialPulseTraceGeneration,
+        initialPulseTarget,
+        pulseClickNotBefore,
+        0.5,
+      );
+      expect(retainedObservation, "the retained first-click frame is still inside the pulse").not
+        .toBeNull();
+      initialPulseObservation = {
+        beforeHold: initialPulseObservation,
+        afterHold: retainedObservation,
+      };
+      // The trace admits only a 100-500 ms sample where the 600 ms fixture is expanded. Hold that
+      // presented frame before asking Firefox for pixels, because capture itself may take seconds.
+      await expect.poll(async () => {
+        const bounds = await orb(initialPulseDeadline);
+        return bounds.maxY - bounds.minY;
+      }, {
+        timeout: Math.max(1, initialPulseDeadline - performance.now()),
+        intervals: [50],
+        message: "Click triggers the radius pulse",
+      }).toBeGreaterThan(58 * scale);
+      if (performance.now() >= initialPulseDeadline) {
+        throw new Error("initial pulse deadline exceeded");
+      }
+    } finally {
+      await heldInitialPulseFrame.release();
+    }
     await expect.poll(async () => {
       const bounds = await orb();
       return Math.abs((bounds.maxY - bounds.minY) - (start.maxY - start.minY));
@@ -4276,6 +4373,7 @@ async function exerciseAnimationPointerPulse({
           delayedPulseClickFinishedEpochMs,
           delayedPulseReleaseEpochMs,
           heldPulseHeight,
+          initialPulseObservation,
           preQueuedPointerTrace,
           queuedPulseObservation,
           pulseScreenshots: orbProbe.screenshots,
