@@ -26,12 +26,43 @@
  *
  * - `--output <png>`: Output filename (default `output.png`).
  * - `--width <px>` / `--height <px>`: Override render size.
+ * - `--scale <factor>`: Scale the document's intrinsic size, for example `--scale 2` for a 2x
+ *   render. Cannot be combined with `--width` or `--height`, and each scaled side must be at most
+ *   65535 pixels.
  * - `--preview`: Show a terminal preview.
  * - `--interactive`: Enable mouse-driven terminal selection mode (implies `--preview`).
  * - `--quiet`: Suppress parser warnings.
  * - `--verbose`: Enable verbose renderer logs.
  * - `--experimental`: Enable experimental parser features.
  * - `--help`: Print usage.
+ *
+ * @section DonnerSvgToolGif Animated GIF export
+ *
+ * `--gif <file.gif>` renders a declarative (SMIL) animation to a looping animated GIF instead of
+ * a PNG. Frames sample document time `start + i / fps` for every frame index `i` that falls before
+ * `--end`. When `(end - start) * fps` is a whole number, the animation loops seamlessly from `end`
+ * back to `start`; otherwise the last frame is shown for a full frame period. The canvas keeps its
+ * size at `--start` for every frame, and each side is limited to 65535 pixels. An export is limited
+ * to 10000 frames and 2^28 rendered pixels in total. The encoded file, encoder workspace, and
+ * renderer surfaces each have separate 256 MiB limits; the command also admits its snapshot and
+ * fitted-frame buffers within the workspace limit before entering the frame loop.
+ *
+ * - `--end <s>`: Animation end time in seconds (required).
+ * - `--start <s>`: First frame's document time in seconds (default 0).
+ * - `--fps <n>`: Frames per second (default 20, at least about 0.0016, the slowest rate a GIF frame
+ *   delay can represent). GIF delays are whole centiseconds, so the delays alternate as needed to
+ *   keep the total duration exact.
+ * - `--scale`, `--width` and `--height` set the GIF size as they do for PNG output.
+ * - `--background <color>`: Composite onto an opaque CSS color and produce an opaque GIF. Without
+ *   it, the GIF keeps binary transparency: pixels below 50% opacity become transparent. Transparent
+ *   exports reserve color-table index 0 consistently so common decoders clear disposed frames and
+ *   loop restarts to transparency.
+ *
+ * Each frame gets its own color table. Frames with at most 256 colors (255 without
+ * `--background`, which reserves one entry for transparency) are stored exactly; busier
+ * frames are reduced with median cut, which keeps large flat colors exact. Identical consecutive
+ * frames are merged into one longer frame, and opaque GIFs store only the changed region of each
+ * frame.
  *
  * @section DonnerSvgToolExamples Examples
  *
@@ -44,6 +75,9 @@
  *
  * # Interactive mode
  * tools/donner-svg input.svg --interactive
+ *
+ * # Animated GIF of the first 4 seconds at 20 fps and twice the intrinsic size
+ * tools/donner-svg input.svg --gif output.gif --end 4 --fps 20 --scale 2 --background white
  * ```
  *
  * @note `tools/donner-svg` is a thin shell wrapper that invokes

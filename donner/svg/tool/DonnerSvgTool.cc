@@ -10,7 +10,10 @@
 #include <algorithm>
 #include <charconv>
 #include <chrono>
+#include <cmath>
+#include <cstdint>
 #include <filesystem>
+#include <fstream>
 #include <limits>
 #include <optional>
 #include <ostream>
@@ -27,11 +30,15 @@
 #include "donner/base/ParseDiagnostic.h"
 #include "donner/base/ParseWarningSink.h"
 #include "donner/base/Utils.h"
+#include "donner/base/parser/NumberParser.h"
+#include "donner/css/Color.h"
+#include "donner/css/parser/ColorParser.h"
 #include "donner/svg/DonnerController.h"
 #include "donner/svg/SVG.h"
 #include "donner/svg/SVGGeometryElement.h"
 #include "donner/svg/SVGPathElement.h"
 #include "donner/svg/SVGTextElement.h"
+#include "donner/svg/renderer/GifEncoder.h"
 #include "donner/svg/renderer/RendererInterface.h"
 #include "donner/svg/renderer/RendererTinySkia.h"
 #include "donner/svg/renderer/TerminalImageViewer.h"
@@ -53,7 +60,30 @@ struct CliOptions {
   bool experimental = false;
   bool preview = false;
   bool interactive = false;
+  /// Animated GIF output path; when set, the tool renders an animation instead of a PNG.
+  std::string gifFile;
+  /// Whether any of --start, --end, --fps or --background was given.
+  bool animationOptionSet = false;
+  double startSeconds = 0.0;
+  std::optional<double> endSeconds;
+  double fps = 20.0;
+  /// Number of GIF frames: one for each index `i` with `start + i / fps < end`.
+  int gifFrameCount = 0;
+  std::optional<double> scale;
+  std::optional<GifEncoder::Rgb> background;
 };
+
+/// Upper bound on rendered GIF frames, so a typo in --end or --fps cannot run for hours.
+constexpr int kMaxGifFrames = 10000;
+
+/// Upper bound on frames times canvas pixels for a GIF, bounding render and encode work.
+constexpr std::uint64_t kMaxGifTotalPixels = std::uint64_t{1} << 28;
+
+/// Longest GIF frame delay, in centiseconds; slower frame rates cannot be represented.
+constexpr double kMaxGifDelayCentiseconds = 65535.0;
+
+/// Largest canvas side that --scale may produce, and the largest GIF side.
+constexpr int kMaxScaledDimension = 0xFFFF;
 
 /** Raw terminal mode guard for interactive mouse input. */
 class ScopedTerminalRawMode {
@@ -101,7 +131,9 @@ void PrintUsage(std::ostream& out) {
   out << "donner-svg: Render SVG files to PNG and terminal previews\n\n"
       << "USAGE:\n"
       << "  donner-svg <input.svg> [--output <file.png>] [--width <px>] [--height <px>]\n"
-      << "             [--preview] [--interactive] [--quiet] [--verbose] [--experimental]\n\n"
+      << "             [--preview] [--interactive] [--quiet] [--verbose] [--experimental]\n"
+      << "  donner-svg <input.svg> --gif <file.gif> --end <s> [--start <s>] [--fps <n>]\n"
+      << "             [--scale <factor> | --width <px> --height <px>] [--background <color>]\n\n"
       << "FLAGS:\n"
       << "  --output <png>    Output PNG filename (default: output.png)\n"
       << "  --width <px>      Override canvas width in pixels\n"
@@ -111,7 +143,33 @@ void PrintUsage(std::ostream& out) {
       << "  --quiet           Suppress parse warnings\n"
       << "  --verbose         Enable verbose renderer logging\n"
       << "  --experimental    Enable experimental parser features\n"
+      << "  --gif <gif>       Render the animation to a looping animated GIF\n"
+      << "  --start <s>       GIF: first frame's document time in seconds (default: 0)\n"
+      << "  --end <s>         GIF: animation end time in seconds; frames cover [start, end)\n"
+      << "  --fps <n>         GIF: frames per second (default: 20)\n"
+      << "  --scale <factor>  Scale the document's intrinsic size by this factor\n"
+      << "  --background <c>  GIF: composite onto this CSS color instead of keeping\n"
+      << "                    binary transparency\n"
       << "  --help            Show this help text\n";
+}
+
+/**
+ * Parse a finite floating-point value.
+ *
+ * @param value String to parse.
+ * @return The parsed value, or std::nullopt if \p value is not entirely a finite number.
+ */
+std::optional<double> TryParseFiniteDouble(std::string_view value) {
+  if (value.empty()) {
+    return std::nullopt;
+  }
+
+  const auto result = ::donner::parser::NumberParser::Parse(value);
+  if (result.hasError() || result.result().consumedChars != value.size() ||
+      !std::isfinite(result.result().number)) {
+    return std::nullopt;
+  }
+  return result.result().number;
 }
 
 /**
@@ -143,6 +201,38 @@ std::string TerminalDiagnostic(const ParseDiagnostic& diagnostic) {
   std::ostringstream formatted;
   formatted << diagnostic;
   return EscapeTerminalText(formatted.str(), /*preserveNewlines=*/true);
+}
+
+/// Document time of GIF frame \p index; the renderer samples exactly these times.
+double GifFrameTime(double startSeconds, double fps, int index) {
+  return startSeconds + static_cast<double>(index) / fps;
+}
+
+/**
+ * Count the GIF frames: one for each index `i` whose sample time `start + i / fps` is before
+ * \p endSeconds, and at least one.
+ *
+ * @return The frame count, or std::nullopt if it would exceed \ref kMaxGifFrames.
+ */
+std::optional<int> GifFrameCount(double startSeconds, double endSeconds, double fps) {
+  const double estimate = std::ceil((endSeconds - startSeconds) * fps);
+  if (!(estimate <= kMaxGifFrames + 1.0)) {
+    return std::nullopt;
+  }
+
+  // The estimate can be off by one in either direction through rounding; settle it against the
+  // exact sample times.
+  int count = std::max(1, static_cast<int>(estimate));
+  while (count > 1 && GifFrameTime(startSeconds, fps, count - 1) >= endSeconds) {
+    --count;
+  }
+  while (GifFrameTime(startSeconds, fps, count) < endSeconds) {
+    ++count;
+  }
+  if (count > kMaxGifFrames) {
+    return std::nullopt;
+  }
+  return count;
 }
 
 /**
@@ -192,6 +282,54 @@ bool ParseArgs(int argc, char* argv[], CliOptions* options, std::ostream& out, s
       continue;
     }
 
+    if (arg == "--gif" || arg == "--start" || arg == "--end" || arg == "--fps" ||
+        arg == "--scale" || arg == "--background") {
+      if (i + 1 >= argc) {
+        err << "Missing value for " << arg << "\n";
+        return false;
+      }
+
+      const std::string_view value = argv[++i];
+      options->animationOptionSet |= arg != "--gif" && arg != "--scale";
+      if (arg == "--gif") {
+        if (value.empty()) {
+          err << "Invalid --gif value: empty path\n";
+          return false;
+        }
+        options->gifFile = std::string(value);
+        continue;
+      }
+
+      if (arg == "--background") {
+        const auto color = css::parser::ColorParser::ParseString(value);
+        if (color.hasError() || !color.result().hasRGBA() || color.result().rgba().a != 0xFF) {
+          err << "Invalid --background color (must be an opaque CSS color): "
+              << EscapeTerminalText(value) << "\n";
+          return false;
+        }
+        const css::RGBA rgba = color.result().rgba();
+        options->background = GifEncoder::Rgb{rgba.r, rgba.g, rgba.b};
+        continue;
+      }
+
+      const std::optional<double> number = TryParseFiniteDouble(value);
+      const bool positiveRequired = arg != "--start";
+      if (!number || *number < 0.0 || (positiveRequired && *number == 0.0)) {
+        err << "Invalid " << arg << " value: " << EscapeTerminalText(value) << "\n";
+        return false;
+      }
+      if (arg == "--start") {
+        options->startSeconds = *number;
+      } else if (arg == "--end") {
+        options->endSeconds = *number;
+      } else if (arg == "--fps") {
+        options->fps = *number;
+      } else {
+        options->scale = *number;
+      }
+      continue;
+    }
+
     if (arg == "--output" || arg == "--width" || arg == "--height") {
       if (i + 1 >= argc) {
         err << "Missing value for " << arg << "\n";
@@ -232,6 +370,44 @@ bool ParseArgs(int argc, char* argv[], CliOptions* options, std::ostream& out, s
     err << "Missing input SVG file\n";
     return false;
   }
+
+  if (options->scale && (options->width > 0 || options->height > 0)) {
+    err << "--scale cannot be combined with --width or --height\n";
+    return false;
+  }
+
+  if (options->gifFile.empty()) {
+    if (options->animationOptionSet) {
+      err << "--start, --end, --fps and --background require --gif\n";
+      return false;
+    }
+    return true;
+  }
+
+  if (options->outputFileSet || options->preview) {
+    err << "--gif cannot be combined with --output, --preview or --interactive\n";
+    return false;
+  }
+  if (!options->endSeconds) {
+    err << "--gif requires --end\n";
+    return false;
+  }
+  if (*options->endSeconds <= options->startSeconds) {
+    err << "--end must be greater than --start\n";
+    return false;
+  }
+  if (100.0 / options->fps > kMaxGifDelayCentiseconds) {
+    err << "--fps must be at least " << 100.0 / kMaxGifDelayCentiseconds
+        << " for GIF export, the slowest rate a GIF frame delay can represent\n";
+    return false;
+  }
+  const std::optional<int> frames =
+      GifFrameCount(options->startSeconds, *options->endSeconds, options->fps);
+  if (!frames) {
+    err << "Animation would have more than " << kMaxGifFrames << " frames\n";
+    return false;
+  }
+  options->gifFrameCount = *frames;
 
   return true;
 }
@@ -283,14 +459,31 @@ std::optional<SVGDocument> ParseDocument(const CliOptions& options, const std::s
   return std::move(result.result());
 }
 
-/** Apply optional width/height overrides. */
-void ApplyCanvasSize(const CliOptions& options, SVGDocument* document) {
+/**
+ * Apply optional width/height or scale overrides.
+ *
+ * @return False, after printing an error to \p err, if --scale makes a canvas side larger than
+ *   \ref kMaxScaledDimension.
+ */
+bool ApplyCanvasSize(const CliOptions& options, SVGDocument* document, std::ostream& err) {
   UTILS_RELEASE_ASSERT(document);
-  if (options.width > 0 || options.height > 0) {
+  if (options.scale) {
+    const Vector2i intrinsic = document->canvasSize();
+    const double scaledWidth = std::round(intrinsic.x * *options.scale);
+    const double scaledHeight = std::round(intrinsic.y * *options.scale);
+    if (!(scaledWidth <= kMaxScaledDimension && scaledHeight <= kMaxScaledDimension)) {
+      err << "--scale " << *options.scale << " makes the canvas larger than " << kMaxScaledDimension
+          << " pixels on a side\n";
+      return false;
+    }
+    document->setCanvasSize(std::max(1, static_cast<int>(scaledWidth)),
+                            std::max(1, static_cast<int>(scaledHeight)));
+  } else if (options.width > 0 || options.height > 0) {
     const Vector2i current = document->canvasSize();
     document->setCanvasSize(options.width > 0 ? options.width : current.x,
                             options.height > 0 ? options.height : current.y);
   }
+  return true;
 }
 
 /** Build a TerminalImageView from a RendererBitmap. */
@@ -582,6 +775,141 @@ void RunInteractiveSelection(SVGDocument document, RendererTinySkia& renderer,
   out << "\x1b[?1000l\x1b[?1006l\n";
 }
 
+/**
+ * Copy \p frame into a tightly packed RGBA8 buffer of \p canvasSize, anchored at the top-left
+ * corner. Canvas pixels outside the frame are transparent. Consume the snapshot so its pixel
+ * storage is released before the encoder allocates its workspace.
+ */
+std::vector<uint8_t> FitFrameToCanvas(RendererBitmap frame, const Vector2i& canvasSize) {
+  const auto canvasRowBytes = static_cast<size_t>(canvasSize.x) * 4;
+  std::vector<uint8_t> pixels(canvasRowBytes * static_cast<size_t>(canvasSize.y), 0);
+  if (frame.empty()) {
+    return pixels;
+  }
+  const size_t copyBytes = static_cast<size_t>(std::min(frame.dimensions.x, canvasSize.x)) * 4;
+  const int copyRows = std::min(frame.dimensions.y, canvasSize.y);
+  for (int y = 0; y < copyRows; ++y) {
+    const auto row = static_cast<size_t>(y);
+    std::copy_n(frame.pixels.begin() + static_cast<std::ptrdiff_t>(row * frame.rowBytes), copyBytes,
+                pixels.begin() + static_cast<std::ptrdiff_t>(row * canvasRowBytes));
+  }
+  return pixels;
+}
+
+/**
+ * Render frames at evenly spaced document times over [start, end) and write a looping GIF.
+ *
+ * Frame `i` samples document time `start + i / fps`, so the frame after the last one would be
+ * `end`, which loops back to `start`.
+ *
+ * @return Process-style exit code.
+ */
+int RenderAnimatedGif(const CliOptions& options, SVGDocument& document, RendererTinySkia& renderer,
+                      std::ostream& out, std::ostream& err) {
+  const int frameCount = options.gifFrameCount;
+  const std::vector<uint16_t> delays = GifEncoder::FrameDelaysCentiseconds(options.fps, frameCount);
+  if (options.fps > 50.0) {
+    err << "Warning: many viewers slow down GIF frames shorter than 2 centiseconds (above 50 "
+           "fps)\n";
+  }
+
+  // The caller has drawn --start to apply animated root dimensions, then applied size overrides.
+  // Admit that pinned size before the frame loop performs another render or snapshot allocation.
+  const Vector2i gifSize = document.canvasSize();
+  // Explicit dimensions remain resource claims even if an animated root currently reports less.
+  const Vector2i admissionSize(std::max(gifSize.x, options.width),
+                               std::max(gifSize.y, options.height));
+  if (admissionSize.x > kMaxScaledDimension || admissionSize.y > kMaxScaledDimension) {
+    err << "GIF canvas " << admissionSize.x << "x" << admissionSize.y
+        << " exceeds the GIF limit of " << kMaxScaledDimension << " pixels on a side\n";
+    return 4;
+  }
+  const std::uint64_t frameBytes =
+      static_cast<std::uint64_t>(admissionSize.x) * static_cast<std::uint64_t>(admissionSize.y) * 4;
+  if (frameBytes > RendererSurfaceBudget::kMaximumBytes) {
+    err << "GIF canvas " << admissionSize.x << "x" << admissionSize.y << " needs " << frameBytes
+        << " bytes per frame, above the renderer's surface budget of "
+        << RendererSurfaceBudget::kMaximumBytes << " bytes\n";
+    return 4;
+  }
+  const std::optional<size_t> encoderWorkspace =
+      GifEncoder::WorkspaceUpperBound(admissionSize.x, admissionSize.y);
+  const std::uint64_t callerBuffers = frameBytes * 2;
+  if (!encoderWorkspace || *encoderWorkspace > GifEncoder::kMaximumWorkspaceBytes ||
+      callerBuffers > GifEncoder::kMaximumWorkspaceBytes - *encoderWorkspace) {
+    const std::uint64_t required =
+        encoderWorkspace ? static_cast<std::uint64_t>(*encoderWorkspace) + callerBuffers
+                         : std::numeric_limits<std::uint64_t>::max();
+    err << "GIF working set needs " << required << " bytes for renderer, fitted-frame and encoder "
+        << "buffers; the limit is " << GifEncoder::kMaximumWorkspaceBytes << " bytes\n";
+    return 4;
+  }
+  const std::uint64_t totalPixels = static_cast<std::uint64_t>(frameCount) *
+                                    static_cast<std::uint64_t>(admissionSize.x) *
+                                    static_cast<std::uint64_t>(admissionSize.y);
+  if (totalPixels > kMaxGifTotalPixels) {
+    err << "GIF of " << frameCount << " frames at " << admissionSize.x << "x" << admissionSize.y
+        << " would render " << totalPixels << " pixels; the limit is " << kMaxGifTotalPixels
+        << "\n";
+    return 4;
+  }
+  document.setCanvasSize(gifSize.x, gifSize.y);
+
+  GifEncoder encoder(GifEncoder::Options{
+      .width = gifSize.x, .height = gifSize.y, .background = options.background});
+  for (int i = 0; i < frameCount; ++i) {
+    document.setTime(GifFrameTime(options.startSeconds, options.fps, i));
+    renderer.draw(document);
+    RendererBitmap frame = renderer.takeSnapshot();
+    const Vector2i sampledSize = document.canvasSize();
+    if (frame.empty() && sampledSize.x != 0 && sampledSize.y != 0) {
+      err << "Renderer produced an empty frame at index " << i << "\n";
+      return 4;
+    }
+
+    // An animated root aspect ratio can fit the document into less than the pinned canvas.
+    const std::vector<uint8_t> pixels = FitFrameToCanvas(std::move(frame), gifSize);
+    if (!encoder.addFrame(pixels, 0, delays[static_cast<size_t>(i)])) {
+      if (encoder.error() == GifEncoder::Error::ResourceLimit) {
+        err << "Encoded GIF exceeds the " << GifEncoder::kMaximumOutputBytes
+            << "-byte output limit at frame " << i << "\n";
+      } else {
+        err << "Failed to encode GIF frame " << i << "\n";
+      }
+      return 4;
+    }
+  }
+
+  const int storedFrames = encoder.storedFrameCount();
+  const std::vector<uint8_t> gif = encoder.finish();
+  std::error_code absoluteError;
+  const std::filesystem::path absolute = std::filesystem::absolute(options.gifFile, absoluteError);
+  const std::string displayPath =
+      EscapeTerminalText(absoluteError ? options.gifFile : absolute.string());
+  if (gif.empty()) {
+    if (encoder.error() == GifEncoder::Error::ResourceLimit) {
+      err << "Encoded GIF exceeds the " << GifEncoder::kMaximumOutputBytes
+          << "-byte output limit: " << displayPath << "\n";
+    } else {
+      err << "Failed to encode GIF: " << displayPath << "\n";
+    }
+    return 4;
+  }
+
+  std::ofstream file(options.gifFile, std::ios::binary | std::ios::trunc);
+  file.write(reinterpret_cast<const char*>(gif.data()), static_cast<std::streamsize>(gif.size()));
+  file.close();
+  if (!file) {
+    err << "Failed to save GIF: " << displayPath << "\n";
+    return 4;
+  }
+
+  out << "Saved GIF: " << displayPath << "\n";
+  out << "Rendered size: " << gifSize.x << "x" << gifSize.y << "\n";
+  out << "Frames: " << frameCount << " rendered, " << storedFrames << " stored\n";
+  return 0;
+}
+
 }  // namespace
 
 int RunDonnerSvgTool(int argc, char* argv[], std::ostream& out, std::ostream& err) {
@@ -608,7 +936,6 @@ int RunDonnerSvgTool(int argc, char* argv[], std::ostream& out, std::ostream& er
   }
 
   SVGDocument document = std::move(*maybeDocument);
-  ApplyCanvasSize(options, &document);
 
   // donner-svg always renders on the CPU (tiny-skia) backend. A one-shot
   // command-line render cannot amortize the GPU backend's fixed device and
@@ -616,6 +943,23 @@ int RunDonnerSvgTool(int argc, char* argv[], std::ostream& out, std::ostream& er
   // single-frame output. The GPU backend serves interactive, multi-frame
   // rendering such as the editor.
   RendererTinySkia renderer(options.verbose);
+  // Animated root width and height are applied when drawing, so size the canvas from the
+  // document as drawn at the time being rendered: --start for a GIF, the initial time for PNG.
+  if (!options.gifFile.empty()) {
+    document.setTime(options.startSeconds);
+  }
+  if (!options.gifFile.empty() || options.scale || options.width > 0 || options.height > 0) {
+    renderer.draw(document);
+  }
+
+  if (!ApplyCanvasSize(options, &document, err)) {
+    return 1;
+  }
+
+  if (!options.gifFile.empty()) {
+    return RenderAnimatedGif(options, document, renderer, out, err);
+  }
+
   renderer.draw(document);
 
   const bool shouldSavePng = options.outputFileSet || !options.preview;

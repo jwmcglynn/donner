@@ -55,6 +55,7 @@ donner_cc_library(
         "//donner/svg/compositor:__pkg__",
         "//donner/svg/renderer/geode:__pkg__",
         "//donner/svg/renderer/tests:__pkg__",
+        "//donner/svg/tool:__pkg__",
         "//tools/mcp-servers/editor-control:__pkg__",
     ],
     deps = [

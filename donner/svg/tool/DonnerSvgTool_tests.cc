@@ -8,17 +8,41 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <optional>
+#include <span>
 #include <sstream>
 #include <string>
 #include <string_view>
 #include <thread>
 #include <vector>
 
+#include "donner/editor/tests/BitmapGoldenCompare.h"
+#include "donner/svg/renderer/tests/GifTestDecoder.h"
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
 
 namespace donner::svg {
 namespace {
+
+RendererBitmap ToBitmap(const std::vector<uint8_t>& rgba, int width, int height) {
+  RendererBitmap bitmap;
+  bitmap.dimensions = Vector2i(width, height);
+  bitmap.pixels = rgba;
+  bitmap.rowBytes = static_cast<size_t>(width) * 4;
+  bitmap.alphaType = AlphaType::Unpremultiplied;
+  return bitmap;
+}
+
+void ExpectFrameIdentical(const DecodedGif& gif, size_t frameIndex,
+                          const std::vector<uint8_t>& expected) {
+  ASSERT_LT(frameIndex, gif.frames.size());
+  const std::string label =
+      std::string(testing::UnitTest::GetInstance()->current_test_info()->name()) + "_frame" +
+      std::to_string(frameIndex);
+  editor::tests::CompareBitmapToBitmap(ToBitmap(gif.frames[frameIndex].rgba, gif.width, gif.height),
+                                       ToBitmap(expected, gif.width, gif.height), label,
+                                       editor::tests::PixelmatchIdentityParams());
+}
 
 int RunTool(const std::vector<std::string>& args, std::ostringstream* out,
             std::ostringstream* err) {
@@ -267,6 +291,373 @@ TEST_F(DonnerSvgToolFileTest, RendersSvgToPngWithCanvasOverrides) {
   ASSERT_TRUE(std::filesystem::exists(outputPath));
   EXPECT_THAT(ReadPngMagic(outputPath),
               testing::ElementsAre(0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n'));
+}
+
+TEST(DonnerSvgTool, GifRequiresEnd) {
+  std::ostringstream out;
+  std::ostringstream err;
+
+  EXPECT_EQ(RunTool({"--gif", "out.gif", "input.svg"}, &out, &err), 1);
+  EXPECT_THAT(err.str(), testing::HasSubstr("--gif requires --end"));
+}
+
+TEST(DonnerSvgTool, GifRejectsEndBeforeStart) {
+  std::ostringstream out;
+  std::ostringstream err;
+
+  EXPECT_EQ(RunTool({"--gif", "out.gif", "--start", "2", "--end", "1", "input.svg"}, &out, &err),
+            1);
+  EXPECT_THAT(err.str(), testing::HasSubstr("--end must be greater than --start"));
+}
+
+TEST(DonnerSvgTool, GifRejectsPngOutputAndPreview) {
+  std::ostringstream out;
+  std::ostringstream err;
+
+  EXPECT_EQ(
+      RunTool({"--gif", "out.gif", "--end", "1", "--output", "out.png", "input.svg"}, &out, &err),
+      1);
+  EXPECT_THAT(err.str(), testing::HasSubstr("--gif cannot be combined with --output"));
+}
+
+TEST(DonnerSvgTool, AnimationOptionsRequireGif) {
+  std::ostringstream out;
+  std::ostringstream err;
+
+  EXPECT_EQ(RunTool({"--fps", "10", "input.svg"}, &out, &err), 1);
+  EXPECT_THAT(err.str(), testing::HasSubstr("require --gif"));
+
+  // Values equal to the defaults are still rejected without --gif.
+  err.str("");
+  EXPECT_EQ(RunTool({"--start", "0", "input.svg"}, &out, &err), 1);
+  EXPECT_THAT(err.str(), testing::HasSubstr("require --gif"));
+}
+
+TEST(DonnerSvgTool, GifRejectsInteractive) {
+  std::ostringstream out;
+  std::ostringstream err;
+
+  EXPECT_EQ(RunTool({"--gif", "out.gif", "--end", "1", "--interactive", "input.svg"}, &out, &err),
+            1);
+  EXPECT_THAT(err.str(), testing::HasSubstr("--gif cannot be combined"));
+}
+
+TEST(DonnerSvgTool, RejectsInvalidAnimationValues) {
+  std::ostringstream out;
+  std::ostringstream err;
+
+  EXPECT_EQ(RunTool({"--gif", "out.gif", "--end", "1", "--fps", "0", "input.svg"}, &out, &err), 1);
+  EXPECT_THAT(err.str(), testing::HasSubstr("Invalid --fps value: 0"));
+
+  err.str("");
+  EXPECT_EQ(RunTool({"--gif", "out.gif", "--end", "nan", "input.svg"}, &out, &err), 1);
+  EXPECT_THAT(err.str(), testing::HasSubstr("Invalid --end value: nan"));
+
+  err.str("");
+  EXPECT_EQ(RunTool({"--gif", "out.gif", "--end", "1", "--background", "notacolor", "input.svg"},
+                    &out, &err),
+            1);
+  EXPECT_THAT(err.str(), testing::HasSubstr("Invalid --background color (must be an opaque CSS "
+                                            "color): notacolor"));
+
+  err.str("");
+  EXPECT_EQ(RunTool({"--gif", "out.gif", "--end", "1", "--background", "rgba(255, 0, 0, 0.5)",
+                     "input.svg"},
+                    &out, &err),
+            1);
+  EXPECT_THAT(err.str(), testing::HasSubstr("must be an opaque CSS color"));
+
+  err.str("");
+  EXPECT_EQ(RunTool({"--gif", "out.gif", "--end", "100000", "input.svg"}, &out, &err), 1);
+  EXPECT_THAT(err.str(), testing::HasSubstr("more than 10000 frames"));
+
+  err.str("");
+  EXPECT_EQ(
+      RunTool({"--gif", "out.gif", "--end", "1000", "--fps", "0.001", "input.svg"}, &out, &err), 1);
+  EXPECT_THAT(err.str(), testing::HasSubstr("--fps must be at least"));
+}
+
+TEST(DonnerSvgTool, ScaleCannotCombineWithWidth) {
+  std::ostringstream out;
+  std::ostringstream err;
+
+  EXPECT_EQ(RunTool({"--scale", "2", "--width", "10", "input.svg"}, &out, &err), 1);
+  EXPECT_THAT(err.str(), testing::HasSubstr("--scale cannot be combined"));
+}
+
+constexpr std::string_view kAnimatedSvg = R"(
+<svg xmlns="http://www.w3.org/2000/svg" width="20" height="10" viewBox="0 0 20 10">
+  <rect width="20" height="10" fill="white"/>
+  <rect x="0" y="2" width="4" height="6" fill="blue">
+    <animate attributeName="x" from="0" to="16" dur="1s" fill="freeze"/>
+  </rect>
+</svg>
+)";
+
+TEST_F(DonnerSvgToolFileTest, RendersAnimationToLoopingGif) {
+  const std::filesystem::path inputPath = WriteSvg("animated.svg", kAnimatedSvg);
+  const std::filesystem::path gifPath = tmpDir_ / "animated.gif";
+
+  std::ostringstream out;
+  std::ostringstream err;
+  ASSERT_EQ(RunTool({"--gif", gifPath.string(), "--end", "1", "--fps", "4", "--scale", "2",
+                     "--background", "white", inputPath.string()},
+                    &out, &err),
+            0)
+      << err.str();
+
+  EXPECT_TRUE(err.str().empty());
+  EXPECT_THAT(out.str(), testing::HasSubstr("Saved GIF:"));
+  EXPECT_THAT(out.str(), testing::HasSubstr("Rendered size: 40x20"));
+  EXPECT_THAT(out.str(), testing::HasSubstr("Frames: 4 rendered, 4 stored"));
+
+  const std::string bytes = ReadFile(gifPath);
+  std::string error;
+  const std::optional<DecodedGif> gif = DecodeGifForTesting(
+      std::span(reinterpret_cast<const uint8_t*>(bytes.data()), bytes.size()), &error);
+  ASSERT_TRUE(gif.has_value()) << error;
+
+  ASSERT_EQ(gif->width, 40);
+  ASSERT_EQ(gif->height, 20);
+  EXPECT_THAT(gif->loopCount, testing::Optional(0));
+  ASSERT_THAT(gif->frames, testing::SizeIs(4));
+  EXPECT_THAT(gif->frames, testing::Each(testing::Field(&DecodedGifFrame::delayCentiseconds, 25)));
+  for (size_t frameIndex = 0; frameIndex < gif->frames.size(); ++frameIndex) {
+    std::vector<uint8_t> expected(static_cast<size_t>(gif->width * gif->height * 4), 255);
+    const int rectLeft = static_cast<int>(frameIndex) * 8;
+    for (int y = 4; y < 16; ++y) {
+      for (int x = rectLeft; x < rectLeft + 8; ++x) {
+        const size_t offset = static_cast<size_t>((y * gif->width + x) * 4);
+        expected[offset] = 0;
+        expected[offset + 1] = 0;
+        expected[offset + 2] = 255;
+      }
+    }
+    ExpectFrameIdentical(*gif, frameIndex, expected);
+  }
+}
+
+TEST_F(DonnerSvgToolFileTest, GifFrameCountCoversEveryFrameBeforeEnd) {
+  const std::filesystem::path inputPath = WriteSvg("animated.svg", kAnimatedSvg);
+  const std::filesystem::path gifPath = tmpDir_ / "animated.gif";
+
+  std::ostringstream out;
+  std::ostringstream err;
+  // Frames at 0, 0.4 and 0.8 s fall before the 1 s end.
+  ASSERT_EQ(RunTool({"--gif", gifPath.string(), "--end", "1", "--fps", "2.5", "--background",
+                     "white", inputPath.string()},
+                    &out, &err),
+            0)
+      << err.str();
+  EXPECT_THAT(out.str(), testing::HasSubstr("Frames: 3 rendered"));
+
+  // The sample at t = 1 s is still before an end of 1.0000005 s.
+  out.str("");
+  ASSERT_EQ(RunTool({"--gif", gifPath.string(), "--end", "1.0000005", "--fps", "1", "--background",
+                     "white", inputPath.string()},
+                    &out, &err),
+            0)
+      << err.str();
+  EXPECT_THAT(out.str(), testing::HasSubstr("Frames: 2 rendered"));
+
+  // An exact multiple of the frame period does not gain a frame at the end time.
+  out.str("");
+  ASSERT_EQ(RunTool({"--gif", gifPath.string(), "--end", "1", "--fps", "30", "--background",
+                     "white", inputPath.string()},
+                    &out, &err),
+            0)
+      << err.str();
+  EXPECT_THAT(out.str(), testing::HasSubstr("Frames: 30 rendered"));
+}
+
+TEST_F(DonnerSvgToolFileTest, GifRejectsExcessiveTotalRenderWork) {
+  const std::filesystem::path inputPath = WriteSvg("animated.svg", kAnimatedSvg);
+  const std::filesystem::path gifPath = tmpDir_ / "huge.gif";
+
+  std::ostringstream out;
+  std::ostringstream err;
+  // 66 frames of a 2048x2048 canvas exceed the 2^28 sampled-pixel limit.
+  EXPECT_EQ(RunTool({"--gif", gifPath.string(), "--end", "66", "--fps", "1", "--width", "2048",
+                     "--height", "2048", inputPath.string()},
+                    &out, &err),
+            4);
+  EXPECT_THAT(err.str(), testing::HasSubstr("the limit is 268435456"));
+  EXPECT_FALSE(std::filesystem::exists(gifPath));
+}
+
+TEST_F(DonnerSvgToolFileTest, GifRejectsEncoderWorkingSetAboveLimit) {
+  const std::filesystem::path inputPath = WriteSvg("animated.svg", kAnimatedSvg);
+  const std::filesystem::path gifPath = tmpDir_ / "large-working-set.gif";
+
+  std::ostringstream out;
+  std::ostringstream err;
+  // One 4096x4096 RGBA frame fits the renderer surface limit, but the renderer snapshot,
+  // fitted frame and encoder scratch cannot coexist inside the 256 MiB GIF workspace limit.
+  EXPECT_EQ(RunTool({"--gif", gifPath.string(), "--end", "1", "--fps", "1", "--width", "4096",
+                     "--height", "4096", inputPath.string()},
+                    &out, &err),
+            4);
+  EXPECT_THAT(err.str(), testing::HasSubstr("GIF working set"));
+  EXPECT_THAT(err.str(), testing::HasSubstr("268435456 bytes"));
+  EXPECT_FALSE(std::filesystem::exists(gifPath));
+}
+
+TEST_F(DonnerSvgToolFileTest, GifRejectsCanvasAboveTheRendererSurfaceBudget) {
+  const std::filesystem::path inputPath = WriteSvg("animated.svg", kAnimatedSvg);
+  const std::filesystem::path gifPath = tmpDir_ / "huge.gif";
+
+  std::ostringstream out;
+  std::ostringstream err;
+  // One 20000x10000 frame needs 800 MB, within the GIF side and total pixel limits.
+  EXPECT_EQ(RunTool({"--gif", gifPath.string(), "--end", "1", "--fps", "1", "--width", "20000",
+                     "--height", "10000", inputPath.string()},
+                    &out, &err),
+            4);
+  EXPECT_THAT(err.str(), testing::HasSubstr("above the renderer's surface budget"));
+  EXPECT_FALSE(std::filesystem::exists(gifPath));
+}
+
+TEST_F(DonnerSvgToolFileTest, GifKeepsCanvasSizeWhenRootSizeAnimates) {
+  const std::filesystem::path inputPath = WriteSvg("growing.svg", R"(
+<svg xmlns="http://www.w3.org/2000/svg" width="20" height="10" viewBox="0 0 20 10">
+  <animate attributeName="width" from="30" to="40" dur="1s" fill="freeze"/>
+  <rect width="20" height="10" fill="blue"/>
+</svg>
+)");
+  const std::filesystem::path gifPath = tmpDir_ / "growing.gif";
+
+  std::ostringstream out;
+  std::ostringstream err;
+  ASSERT_EQ(RunTool({"--gif", gifPath.string(), "--end", "1", "--fps", "4", inputPath.string()},
+                    &out, &err),
+            0)
+      << err.str();
+
+  const std::string bytes = ReadFile(gifPath);
+  std::string error;
+  const std::optional<DecodedGif> gif = DecodeGifForTesting(
+      std::span(reinterpret_cast<const uint8_t*>(bytes.data()), bytes.size()), &error);
+  ASSERT_TRUE(gif.has_value()) << error;
+  // The size at --start, where the animated width is 30.
+  EXPECT_EQ(gif->width, 30);
+  EXPECT_EQ(gif->height, 10);
+  EXPECT_THAT(out.str(), testing::HasSubstr("Frames: 4 rendered"));
+  // Frames whose fitted pixels match their predecessor are merged; the loop still lasts 1 s.
+  int totalDelay = 0;
+  for (const DecodedGifFrame& frame : gif->frames) {
+    totalDelay += frame.delayCentiseconds;
+  }
+  EXPECT_EQ(totalDelay, 100);
+}
+
+TEST_F(DonnerSvgToolFileTest, GifPreservesCanvasWhenAnimatedExtentRoundsToZero) {
+  for (const std::string axis : {"width", "height"}) {
+    for (const bool opaqueBackground : {false, true}) {
+      const std::string label = axis + (opaqueBackground ? "_white" : "_transparent");
+      SCOPED_TRACE(label);
+      const std::string source =
+          R"(<svg xmlns="http://www.w3.org/2000/svg" width="20" height="10" viewBox="0 0 20 10">
+  <set attributeName=")" +
+          axis + R"(" to="1000" begin="0.25s" dur="0.5s"/>
+  <rect width="20" height="10" fill="blue"/>
+</svg>)";
+      const auto inputPath = WriteSvg(label + ".svg", source);
+      const auto gifPath = tmpDir_ / (label + ".gif");
+      std::vector<std::string> args = {"--gif", gifPath.string(), "--end", "1", "--fps", "4"};
+      if (opaqueBackground) {
+        args.insert(args.end(), {"--background", "white"});
+      }
+      args.push_back(inputPath.string());
+      std::ostringstream out;
+      std::ostringstream err;
+      ASSERT_EQ(RunTool(args, &out, &err), 0) << err.str();
+      EXPECT_TRUE(err.str().empty());
+      EXPECT_THAT(out.str(), testing::HasSubstr("Frames: 4 rendered, 3 stored"));
+
+      const std::string bytes = ReadFile(gifPath);
+      std::string error;
+      const auto gif = DecodeGifForTesting(
+          std::span(reinterpret_cast<const uint8_t*>(bytes.data()), bytes.size()), &error);
+      ASSERT_TRUE(gif.has_value()) << error;
+      ASSERT_EQ(gif->width, 20);
+      ASSERT_EQ(gif->height, 10);
+      ASSERT_THAT(gif->frames, testing::SizeIs(3));
+      EXPECT_THAT(gif->frames,
+                  testing::ElementsAre(testing::Field(&DecodedGifFrame::delayCentiseconds, 25),
+                                       testing::Field(&DecodedGifFrame::delayCentiseconds, 50),
+                                       testing::Field(&DecodedGifFrame::delayCentiseconds, 25)));
+      std::vector<uint8_t> blue(20 * 10 * 4, 255);
+      for (size_t offset = 0; offset < blue.size(); offset += 4) {
+        blue[offset] = 0;
+        blue[offset + 1] = 0;
+      }
+      const std::vector<uint8_t> blank(20 * 10 * 4, opaqueBackground ? 255 : 0);
+      for (size_t frameIndex = 0; frameIndex < gif->frames.size(); ++frameIndex) {
+        const auto& expected = frameIndex == 1 ? blank : blue;
+        editor::tests::CompareBitmapToBitmap(
+            ToBitmap(gif->frames[frameIndex].rgba, 20, 10), ToBitmap(expected, 20, 10),
+            "gif_zero_extent_" + label + "_" + std::to_string(frameIndex),
+            editor::tests::PixelmatchIdentityParams());
+      }
+    }
+  }
+}
+
+TEST_F(DonnerSvgToolFileTest, GifScaleUsesTheCanvasSizeAtStart) {
+  const std::filesystem::path inputPath = WriteSvg("growing.svg", R"(
+<svg xmlns="http://www.w3.org/2000/svg" width="20" height="10" viewBox="0 0 20 10">
+  <animate attributeName="width" from="30" to="40" dur="1s" fill="freeze"/>
+  <rect width="20" height="10" fill="blue"/>
+</svg>
+)");
+  const std::filesystem::path gifPath = tmpDir_ / "scaled.gif";
+
+  std::ostringstream out;
+  std::ostringstream err;
+  ASSERT_EQ(RunTool({"--gif", gifPath.string(), "--end", "1", "--fps", "4", "--scale", "2",
+                     inputPath.string()},
+                    &out, &err),
+            0)
+      << err.str();
+  // Twice the 30x10 size at --start, not twice the authored 20x10.
+  EXPECT_THAT(out.str(), testing::HasSubstr("Rendered size: 60x20"));
+}
+
+TEST_F(DonnerSvgToolFileTest, PngScaleUsesTheAnimatedCanvasSize) {
+  const std::filesystem::path inputPath = WriteSvg("growing.svg", R"(
+<svg xmlns="http://www.w3.org/2000/svg" width="20" height="10" viewBox="0 0 20 10">
+  <animate attributeName="width" from="30" to="40" dur="1s" fill="freeze"/>
+  <rect width="20" height="10" fill="blue"/>
+</svg>
+)");
+  const std::filesystem::path outputPath = tmpDir_ / "scaled.png";
+
+  std::ostringstream out;
+  std::ostringstream err;
+  ASSERT_EQ(
+      RunTool({"--scale", "2", "--output", outputPath.string(), inputPath.string()}, &out, &err), 0)
+      << err.str();
+  // Twice the animated 30x10 size at time zero, not twice the authored 20x10.
+  EXPECT_THAT(out.str(), testing::HasSubstr("Rendered size: 60x20"));
+}
+
+TEST_F(DonnerSvgToolFileTest, ScaleAppliesToPngAndRejectsOversizedCanvas) {
+  const std::filesystem::path inputPath = WriteSvg("input.svg", kSimpleSvg);
+  const std::filesystem::path outputPath = tmpDir_ / "scaled.png";
+
+  std::ostringstream out;
+  std::ostringstream err;
+  EXPECT_EQ(
+      RunTool({"--scale", "0.5", "--output", outputPath.string(), inputPath.string()}, &out, &err),
+      0)
+      << err.str();
+  EXPECT_THAT(out.str(), testing::HasSubstr("Saved PNG:"));
+
+  err.str("");
+  EXPECT_EQ(RunTool({"--scale", "1e300", "--output", outputPath.string(), inputPath.string()}, &out,
+                    &err),
+            1);
+  EXPECT_THAT(err.str(), testing::HasSubstr("makes the canvas larger than 65535 pixels"));
 }
 
 TEST_F(DonnerSvgToolFileTest, ResourcesAreSandboxedToTheInputDocumentsDirectory) {
