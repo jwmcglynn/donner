@@ -7,8 +7,8 @@ namespace donner::detail {
 
 /// Format a single `double` into the minimum-length round-trippable decimal form.
 ///
-/// - Integer-valued finite doubles (e.g. `10.0`, `-3.0`) are cast to `int64_t` and
-///   formatted without a decimal point or scientific notation.
+/// - Integer-valued finite doubles within the `int64_t` range (e.g. `10.0`, `-3.0`)
+///   are cast to `int64_t` and formatted without a decimal point or scientific notation.
 /// - All other doubles use `std::format`'s `{}` default specifier, which per C++20
 ///   `[format.string.std]` emits the shortest decimal representation that round-trips
 ///   through `std::from_chars`.  The `{:g}` specifier was tried and rejected - it
