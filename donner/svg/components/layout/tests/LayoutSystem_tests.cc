@@ -925,6 +925,44 @@ TEST_F(LayoutSystemTest, CreateShadowSizedElementComponent) {
   EXPECT_EQ(shadowSized.bounds, Box2d(Vector2d(1, 2), Vector2d(51, 27)));
 }
 
+TEST_F(LayoutSystemTest, ShadowSizeCssWideUseDimensionsKeepTargetSize) {
+  auto document = ParseSVG(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">
+      <defs><symbol id="sym" x="1" y="2" width="40" height="20"/></defs>
+      <use id="u" href="#sym" width="initial" height="unset"/>
+    </svg>
+  )svg");
+
+  auto& registry = document.registry();
+  const Entity shadowEntity = registry.create();
+  ParseWarningSink warningSink;
+  EXPECT_TRUE(layoutSystem.createShadowSizedElementComponent(
+      registry, shadowEntity, document.querySelector("#u")->entityHandle(),
+      document.querySelector("#sym")->unsafeEntityHandle().entity(), ShadowBranchType::Main,
+      warningSink));
+  EXPECT_EQ(registry.get<ComputedShadowSizedElementComponent>(shadowEntity).bounds,
+            Box2d(Vector2d(1, 2), Vector2d(41, 22)));
+}
+
+TEST_F(LayoutSystemTest, ShadowSizeCssWideTargetDimensionsUseParentViewport) {
+  auto document = ParseSVG(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">
+      <defs><symbol id="sym" x="1" y="2" width="initial" height="unset"/></defs>
+      <use id="u" href="#sym"/>
+    </svg>
+  )svg");
+
+  auto& registry = document.registry();
+  const Entity shadowEntity = registry.create();
+  ParseWarningSink warningSink;
+  EXPECT_TRUE(layoutSystem.createShadowSizedElementComponent(
+      registry, shadowEntity, document.querySelector("#u")->entityHandle(),
+      document.querySelector("#sym")->unsafeEntityHandle().entity(), ShadowBranchType::Main,
+      warningSink));
+  EXPECT_EQ(registry.get<ComputedShadowSizedElementComponent>(shadowEntity).bounds,
+            Box2d(Vector2d(1, 2), Vector2d(201, 102)));
+}
+
 /**
  * `<use>` referencing an inline `<svg>`: the svg's own `x`/`y` are kept, its `width`/`height`
  * are overridden by the use element's. Mirrors resvg
