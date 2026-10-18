@@ -436,7 +436,7 @@ class MacosCacheKeyParityTest(unittest.TestCase):
         self.assertEqual(1, len(lines))
         self.assertRegex(lines[0], r"^\d+\.\d+(?:\.\d+)? \d+[A-Z]\d+[a-z]?$")
 
-    def _select(self, mode, installed, locator_status=0):
+    def _select(self, mode, installed, locator_status=0, missing_xcrun=False):
         """Runs the selection script against a fake Applications directory."""
         version, build = [line for line in _read(PIN_FILE).splitlines()
                           if line.strip() and not line.startswith("#")][0].split()
@@ -452,6 +452,11 @@ class MacosCacheKeyParityTest(unittest.TestCase):
             locator = root / "xcode-locator"
             locator.write_text("#!/bin/sh\nexit %d\n" % (locator_status or 0), encoding="utf-8")
             locator.chmod(0o755)
+            xcrun = root / "xcrun"
+            if not missing_xcrun:
+                xcrun.write_text("#!/bin/sh\necho simulated-sdk-failure >&2\nexit 1\n",
+                                 encoding="utf-8")
+                xcrun.chmod(0o755)
             env_file, output_file = root / "env", root / "output"
             env_file.write_text("")
             output_file.write_text("")
@@ -463,7 +468,8 @@ class MacosCacheKeyParityTest(unittest.TestCase):
                      "GITHUB_OUTPUT": str(output_file), "RUNNER_ARCH": "ARM64",
                      "BAZEL_MACOS_BUILD_FLAGS": "--config=ci-macos",
                      "XCODE_APPLICATIONS_DIR": str(root), "XCODEBUILD": str(xcodebuild),
-                     "XCODE_LOCATOR": str(locator) if locator_status is not None else ""},
+                     "XCODE_LOCATOR": str(locator) if locator_status is not None else "",
+                     "XCRUN": str(xcrun)},
                 capture_output=True, text=True, timeout=test_timing.STALL_GUARD_SECONDS,
                 check=False)
             return (result.returncode, env_file.read_text(), output_file.read_text(),
@@ -515,7 +521,18 @@ class MacosCacheKeyParityTest(unittest.TestCase):
                     mode, "Xcode {version}\nBuild version {build}", locator_status=None)
                 self.assertEqual(1 if mode == "--required" else 0, code, log)
                 self.assertRegex(log, r"Xcode discovery probe diagnostics \(sdk.log\):\n[^\n]+")
+                self.assertIn("simulated-sdk-failure", log)
                 self.assertIn("could not be built", log)
+
+    def test_probe_exec_failure_is_diagnosed(self):
+        code, env, output, log, *_ = self._select(
+            "--required", "Xcode {version}\nBuild version {build}",
+            locator_status=None, missing_xcrun=True)
+        self.assertEqual(1, code, log)
+        self.assertEqual("", env)
+        self.assertEqual("cache_partition=\n", output)
+        self.assertIn("Cannot execute", log)
+        self.assertIn("Xcode discovery probe diagnostics (sdk.log):", log)
 
     def test_select_script_rejects_an_unknown_mode(self):
         result = subprocess.run(["/bin/bash", str(_path(SELECT_SCRIPT))], capture_output=True,
