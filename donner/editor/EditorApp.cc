@@ -1047,6 +1047,7 @@ bool EditorApp::loadFromString(std::string_view svgBytes) {
   pendingElementRemoveWritebacks_.clear();
   pendingDocumentSourceUndo_.reset();
   pendingSelectionAfterFlush_.reset();
+  pendingReplacementSelectionAfterFlush_.reset();
   pendingSelectionRestoreTargets_.reset();
   const bool result = document_.loadFromString(svgBytes);
   // A successful load resets the dirty state - the in-memory document
@@ -1093,7 +1094,9 @@ bool EditorApp::flushFrame() {
   }
 
   const bool appliedCommands = document_.flushFrame();
-  isDirty_ |= appliedCommands;
+  const auto& documentFlush = document_.lastFlushResult();
+  isDirty_ |= appliedCommands && (!documentFlush.rolledBackReplacementBatch ||
+                                  documentFlush.hadPriorAppliedCommandsOnRollback);
   pruneHiddenElementDisplayCache();
 
   if (!appliedCommands) {
@@ -1101,10 +1104,10 @@ bool EditorApp::flushFrame() {
     // flushes per keystroke (a text session) reaches its commit with nothing
     // queued, and the entry itself compares before/after source.
     consumePendingDocumentSourceUndo();
+    pendingReplacementSelectionAfterFlush_.reset();
     return false;
   }
 
-  const auto& documentFlush = document_.lastFlushResult();
   const bool documentReplaced = documentBeforeFlush.has_value() && document_.hasDocument() &&
                                 !(*documentBeforeFlush == document_.document());
   if (documentReplaced) {
@@ -1147,6 +1150,22 @@ bool EditorApp::flushFrame() {
   if (pendingSelectionAfterFlush_.has_value()) {
     setSelection(std::move(*pendingSelectionAfterFlush_));
     pendingSelectionAfterFlush_.reset();
+  }
+
+  if (pendingReplacementSelectionAfterFlush_.has_value()) {
+    if (!documentReplaced) {
+      std::vector<svg::SVGElement> resolved;
+      resolved.reserve(pendingReplacementSelectionAfterFlush_->size());
+      for (const auto& [original, replacement] : *pendingReplacementSelectionAfterFlush_) {
+        if (original.parentElement().has_value()) {
+          resolved.push_back(original);
+        } else if (replacement.parentElement().has_value()) {
+          resolved.push_back(replacement);
+        }
+      }
+      setSelection(std::move(resolved));
+    }
+    pendingReplacementSelectionAfterFlush_.reset();
   }
 
   consumePendingDocumentSourceUndo();
@@ -1683,6 +1702,11 @@ bool IsLockGatedCommand(const EditorCommand& command) {
     case EditorCommand::Kind::SetTransform:
     case EditorCommand::Kind::DeleteElement:
       return command.element.has_value() && IsLocked(*command.element);
+    case EditorCommand::Kind::ReplaceElements:
+      return std::any_of(command.replacements.begin(), command.replacements.end(),
+                         [](const EditorCommand::ElementReplacement& replacement) {
+                           return IsLocked(replacement.original);
+                         });
     default: return false;
   }
 }

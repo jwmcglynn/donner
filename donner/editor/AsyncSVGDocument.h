@@ -43,6 +43,10 @@ public:
     bool onlyTransformCommands = false;
     bool replacedDocument = false;
     bool preserveUndoOnReparse = false;
+    /// A failed replacement batch restored its exact pre-command source.
+    bool rolledBackReplacementBatch = false;
+    /// A prior command in this flush still changed source before that rollback.
+    bool hadPriorAppliedCommandsOnRollback = false;
     /// True when at least one flushed command removed an element from the live document.
     bool removedElements = false;
     /// Entities whose existing rendered pixels may have changed because of an incremental command.

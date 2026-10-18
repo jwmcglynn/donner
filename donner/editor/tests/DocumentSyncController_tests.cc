@@ -3,6 +3,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <cstdint>
 #include <span>
 #include <string>
 #include <utility>
@@ -18,6 +19,7 @@
 #include "donner/editor/SelectionAabb.h"
 #include "donner/editor/TextEditor.h"
 #include "donner/svg/SVGDocument.h"
+#include "donner/svg/SVGGElement.h"
 #include "donner/svg/SVGRectElement.h"
 #include "donner/svg/SVGTextElement.h"
 #include "donner/svg/core/Display.h"
@@ -663,6 +665,56 @@ TEST_F(DocumentSyncControllerTest, PathOperationMirrorsInsertAndDeletesWithoutTe
   EXPECT_TRUE(app.document().document().querySelector("path").has_value());
   EXPECT_FALSE(app.document().document().querySelector("#r1").has_value());
   EXPECT_FALSE(app.document().document().querySelector("#r2").has_value());
+}
+
+TEST_F(DocumentSyncControllerTest, FailedOutlineBatchAfterEarlierEditMirrorsLiveSource) {
+  constexpr std::string_view source = R"svg(<svg xmlns="http://www.w3.org/2000/svg">
+  <rect id="r" fill="red"/>
+  <text id="first">ABC</text>
+  <text id="second">ABC</text>
+</svg>)svg";
+  EditorApp app;
+  TextEditor textEditor;
+  SelectTool tool;
+  DocumentSyncController controller{std::string(source)};
+  ASSERT_TRUE(app.loadFromString(source));
+  app.setCurrentFilePath("test.svg");
+  app.setCleanSourceText(source);
+  textEditor.setText(source);
+  textEditor.resetTextChanged();
+
+  svg::SVGDocument& document = app.document().document();
+  const auto rect = document.querySelector("#r");
+  const auto first = document.querySelector("#first");
+  const auto second = document.querySelector("#second");
+  ASSERT_TRUE(rect.has_value());
+  ASSERT_TRUE(first.has_value());
+  ASSERT_TRUE(second.has_value());
+  svg::SVGGElement firstGroup = svg::SVGGElement::Create(document);
+  firstGroup.setAttribute("id", "first_outlines");
+  svg::SVGGElement secondGroup = svg::SVGGElement::Create(document);
+  secondGroup.setAttribute("id", "second_outlines");
+  const std::uint64_t generationBefore = app.document().documentGeneration();
+
+  app.applyMutation(EditorCommand::SetAttributeCommand(*rect, "fill", "blue"));
+  // The second command has an invalid parent, forcing the batch's fail-safe
+  // after the first group has been staged in an indented source document.
+  app.applyMutation(EditorCommand::ReplaceElementsCommand({
+      {.parent = document.svgElement(), .original = *first, .replacement = firstGroup},
+      {.parent = *second, .original = *second, .replacement = secondGroup},
+  }));
+  ASSERT_TRUE(app.flushFrame());
+  EXPECT_TRUE(app.document().lastFlushResult().replacedDocument);
+  EXPECT_GT(app.document().documentGeneration(), generationBefore);
+  EXPECT_FALSE(app.document().lastParseError().has_value());
+  controller.applyPendingWritebacks(app, tool, textEditor);
+
+  EXPECT_EQ(textEditor.getText(), app.document().document().source());
+  EXPECT_NE(textEditor.getText().find("fill=\"blue\""), std::string::npos);
+  EXPECT_TRUE(app.document().document().querySelector("#first").has_value());
+  EXPECT_TRUE(app.document().document().querySelector("#second").has_value());
+  EXPECT_FALSE(app.document().document().querySelector("#first_outlines").has_value());
+  EXPECT_TRUE(app.isDirty());
 }
 
 TEST_F(DocumentSyncControllerTest, UiDeleteUndoRestoresDeletedElementAndSourceText) {

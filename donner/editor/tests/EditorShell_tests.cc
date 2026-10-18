@@ -7245,6 +7245,34 @@ TEST(EditorShellTest, ConvertSelectedTextToOutlinesReplacesTextWithPathGroup) {
   EXPECT_TRUE(EditorShellTestAccess::LastConvertTextError(shell).empty());
 }
 
+TEST(EditorShellTest, ConvertSelectedTextToOutlinesCapacityRefusalPreservesText) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
+
+  EditorShell shell(window, OptionsWithSource(kInitialSvg, "initial.svg"));
+  ASSERT_TRUE(shell.valid());
+  auto& app = EditorShellTestAccess::App(shell);
+  svg::SVGDocument& document = app.document().document();
+  const auto label = document.querySelector("#label");
+  ASSERT_THAT(label, testing::Ne(std::nullopt));
+  app.setSelection(*label);
+  const std::string sourceBefore(document.source());
+  document.xmlDocument().setSourceEditTreeLimits(0, 128);
+
+  EditorShellTestAccess::ConvertSelectedTextToOutlines(shell);
+  (void)EditorShellTestAccess::FlushQueuedMutationAndRefreshOverlay(shell);
+
+  EXPECT_THAT(document.source(), testing::Eq(sourceBefore));
+  EXPECT_THAT(document.querySelector("#label"), testing::Optional(testing::Eq(*label)));
+  EXPECT_THAT(document.querySelector("#label_outlines"), testing::Eq(std::nullopt));
+  EXPECT_THAT(app.selectedElements(), testing::ElementsAre(*label));
+  EXPECT_THAT(app.canUndo(), testing::Eq(false));
+  EXPECT_THAT(app.isDirty(), testing::Eq(false));
+  EXPECT_THAT(app.document().lastParseError(), testing::Eq(std::nullopt));
+}
+
 TEST(EditorShellTest, ConvertMultipleTextElementsToOutlinesUsesOneUndoEntry) {
   constexpr std::string_view source = R"svg(
 <svg xmlns="http://www.w3.org/2000/svg" width="180" height="90">
@@ -7277,6 +7305,40 @@ TEST(EditorShellTest, ConvertMultipleTextElementsToOutlinesUsesOneUndoEntry) {
   ASSERT_EQ(EditorShellTestAccess::FlushQueuedMutationAndRefreshOverlay(shell), true);
   EXPECT_EQ(app.document().document().source(), sourceBefore);
   EXPECT_EQ(app.canUndo(), false);
+}
+
+TEST(EditorShellTest, ConvertMultipleTextOutlinesCapacityRefusalRollsBackSelection) {
+  constexpr std::string_view source =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg"><text id="first">ABC</text><text id="second">ABC</text></svg>)svg";
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
+  EditorShell shell(window, OptionsWithSource(source, "multiple-text.svg"));
+  ASSERT_TRUE(shell.valid());
+  auto& app = EditorShellTestAccess::App(shell);
+  svg::SVGDocument& document = app.document().document();
+  svg::Renderer renderer;
+  renderer.draw(document);
+  const auto first = document.querySelector("#first");
+  const auto second = document.querySelector("#second");
+  ASSERT_THAT(first, testing::Ne(std::nullopt));
+  ASSERT_THAT(second, testing::Ne(std::nullopt));
+  app.setSelection({*first, *second});
+  const std::string sourceBefore(document.source());
+  document.xmlDocument().setSourceEditTreeLimits(10, 128);
+
+  EditorShellTestAccess::ConvertSelectedTextToOutlines(shell);
+  (void)EditorShellTestAccess::FlushQueuedMutationAndRefreshOverlay(shell);
+
+  EXPECT_THAT(document.source(), testing::Eq(sourceBefore));
+  EXPECT_THAT(document.querySelector("#first"), testing::Optional(testing::Eq(*first)));
+  EXPECT_THAT(document.querySelector("#second"), testing::Optional(testing::Eq(*second)));
+  EXPECT_THAT(document.querySelector("#first_outlines"), testing::Eq(std::nullopt));
+  EXPECT_THAT(document.querySelector("#second_outlines"), testing::Eq(std::nullopt));
+  EXPECT_THAT(app.selectedElements(), testing::ElementsAre(*first, *second));
+  EXPECT_THAT(app.canUndo(), testing::Eq(false));
+  EXPECT_THAT(app.isDirty(), testing::Eq(false));
 }
 
 TEST(EditorShellTest, RenderPaneDeferredEmptyClickStartsMarqueeAfterHold) {

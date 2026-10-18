@@ -1645,6 +1645,7 @@ donner_cc_test(
         "//donner/base",
         "//donner/editor:async_svg_document",
         "//donner/editor:command_queue",
+        "//donner/editor:editor_app",
         "//donner/editor:text_to_outlines",
         "//donner/svg",
         "//donner/svg/parser",

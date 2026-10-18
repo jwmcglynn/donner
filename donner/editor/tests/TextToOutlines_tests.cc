@@ -11,15 +11,18 @@
 #include <gtest/gtest.h>
 
 #include <chrono>
+#include <future>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "donner/base/Box.h"
 #include "donner/base/ParseWarningSink.h"
 #include "donner/base/RcString.h"
 #include "donner/editor/AsyncSVGDocument.h"
+#include "donner/editor/EditorApp.h"
 #include "donner/editor/EditorCommand.h"
 #include "donner/editor/tests/BitmapGoldenCompare.h"
 #include "donner/svg/SVGDocument.h"
@@ -115,9 +118,8 @@ constexpr std::string_view kTextSvg =
 <text id="logo" x="10" y="120" font-size="64" fill="#0033aa">SVG</text>
 </svg>)";
 
-/// Apply a prepared conversion through the structured DOM-editing APIs, the
-/// same insert-group/insert-paths/delete-text sequence the editor shell queues
-/// as `EditorCommand`s. Returns the post-conversion document source.
+/// Apply a prepared conversion through the structured DOM-editing APIs for
+/// paint checks. Returns the post-conversion document source.
 std::string ApplyConversion(svg::SVGDocument& document, svg::SVGElement text,
                             ConvertTextToOutlinesResult& result) {
   std::optional<svg::SVGElement> parent = text.parentElement();
@@ -136,6 +138,15 @@ std::string ApplyConversion(svg::SVGDocument& document, svg::SVGElement text,
   EXPECT_FALSE(removed.diagnostic.has_value())
       << removed.diagnostic.value_or(ParseDiagnostic()).reason;
   return std::string(document.source());
+}
+
+EditorCommand SingleReplacementBatch(svg::SVGElement parent, svg::SVGElement original,
+                                     svg::SVGElement replacement) {
+  return EditorCommand::ReplaceElementsCommand({EditorCommand::ElementReplacement{
+      .parent = std::move(parent),
+      .original = std::move(original),
+      .replacement = std::move(replacement),
+  }});
 }
 
 /// Comparison parameters for "the same content, before and after conversion to
@@ -456,9 +467,9 @@ TEST(TextToOutlines, StrokedTranslucentRunSerializesOpacityAndStroke) {
   EXPECT_THAT(Attribute(reparsed, "#t_outlines_1", "stroke"), Eq(std::nullopt));
 }
 
-// Apply path through AsyncSVGDocument: a ConvertTextToOutlines command swaps the
-// document to the outlined source, and a subsequent ReplaceDocument with the
-// original bytes (what undo replays) restores the live `<text>` element.
+// Apply path through AsyncSVGDocument: one replacement command inserts the
+// complete detached group and removes the text. A subsequent ReplaceDocument
+// with the original bytes (what undo replays) restores the live `<text>`.
 TEST(TextToOutlines, AppliesThroughAsyncDocumentAndUndoRestoresText) {
   const std::string originalSource(kTextSvg);
 
@@ -470,15 +481,14 @@ TEST(TextToOutlines, AppliesThroughAsyncDocumentAndUndoRestoresText) {
   ConvertTextToOutlinesResult result = convertTextToOutlines(async.document(), text);
   ASSERT_TRUE(result.ok) << result.error;
 
-  // Apply the conversion the way the editor shell does: structural DOM edit
-  // commands through the mutation queue (insert group + paths, delete text).
+  // Apply the conversion the way the editor shell does: attach all paths to a
+  // detached group, then queue one checked replacement.
   std::optional<svg::SVGElement> parent = text.parentElement();
   ASSERT_TRUE(parent.has_value());
-  async.queue().push(EditorCommand::InsertElementCommand(*parent, *result.outlineGroup, text));
   for (svg::SVGElement& path : result.outlinePaths) {
-    async.queue().push(EditorCommand::InsertElementCommand(*result.outlineGroup, path));
+    result.outlineGroup->appendChild(path);
   }
-  async.queue().push(EditorCommand::DeleteElementCommand(text));
+  async.queue().push(SingleReplacementBatch(*parent, text, *result.outlineGroup));
   ASSERT_TRUE(async.flushFrame());
   EXPECT_FALSE(async.document().querySelector("text").has_value());
   EXPECT_TRUE(async.document().querySelector("#logo_outlines").has_value());
@@ -506,15 +516,273 @@ TEST(TextToOutlines, CapacityRefusalMustNotDeleteSourceText) {
   async.document().xmlDocument().setSourceEditTreeLimits(0, 128);
   const auto parent = text.parentElement();
   ASSERT_THAT(parent, testing::Ne(std::nullopt));
-  async.queue().push(EditorCommand::InsertElementCommand(*parent, *result.outlineGroup, text));
   for (svg::SVGElement& path : result.outlinePaths) {
-    async.queue().push(EditorCommand::InsertElementCommand(*result.outlineGroup, path));
+    result.outlineGroup->appendChild(path);
   }
-  async.queue().push(EditorCommand::DeleteElementCommand(text));
-  ASSERT_TRUE(async.flushFrame());
+  async.queue().push(SingleReplacementBatch(*parent, text, *result.outlineGroup));
+  EXPECT_THAT(async.flushFrame(), Eq(false));
 
   EXPECT_THAT(async.document().source(), Eq(sourceBefore));
   EXPECT_THAT(async.document().querySelector("#logo").has_value(), Eq(true));
+  EXPECT_THAT(async.lastParseError(), Eq(std::nullopt));
+}
+
+TEST(TextToOutlines, CapacityRefusalKeepsEditorSelectionAndUndoUnchanged) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kTextSvg));
+  svg::SVGDocument& document = app.document().document();
+  svg::SVGElement text = TextElement(document);
+  ConvertTextToOutlinesResult result = convertTextToOutlines(document, text);
+  ASSERT_TRUE(result.ok) << result.error;
+
+  const auto parent = text.parentElement();
+  ASSERT_THAT(parent, testing::Ne(std::nullopt));
+  for (svg::SVGElement& path : result.outlinePaths) {
+    result.outlineGroup->appendChild(path);
+  }
+  const std::string sourceBefore(document.source());
+  document.xmlDocument().setSourceEditTreeLimits(0, 128);
+  app.setSelection(text);
+  app.recordDocumentSourceUndoOnNextFlush("Convert text to outlines", document.svgElement(),
+                                          sourceBefore);
+  app.applyMutation(SingleReplacementBatch(*parent, text, *result.outlineGroup));
+  app.selectReplacementsAfterNextFlush({{text, *result.outlineGroup}});
+  EXPECT_THAT(app.flushFrame(), Eq(false));
+
+  EXPECT_THAT(document.source(), Eq(sourceBefore));
+  EXPECT_THAT(app.selectedElements(), testing::ElementsAre(text));
+  EXPECT_THAT(app.canUndo(), Eq(false));
+  EXPECT_THAT(app.isDirty(), Eq(false));
+  EXPECT_THAT(app.document().lastParseError(), Eq(std::nullopt));
+}
+
+TEST(TextToOutlines, MultipleSelectionCapacityRefusalRollsBackAllText) {
+  constexpr std::string_view source =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg"><text id="first">ABC</text><text id="second">ABC</text></svg>)svg";
+
+  // Control: this budget admits the first outlined subtree by itself.
+  {
+    EditorApp control;
+    ASSERT_TRUE(control.loadFromString(source));
+    svg::SVGDocument& document = control.document().document();
+    const auto first = document.querySelector("#first");
+    ASSERT_THAT(first, testing::Ne(std::nullopt));
+    ConvertTextToOutlinesResult outline = convertTextToOutlines(document, *first);
+    ASSERT_TRUE(outline.ok) << outline.error;
+    for (svg::SVGElement& path : outline.outlinePaths) {
+      outline.outlineGroup->appendChild(path);
+    }
+    document.xmlDocument().setSourceEditTreeLimits(10, 128);
+    control.applyMutation(
+        SingleReplacementBatch(document.svgElement(), *first, *outline.outlineGroup));
+    ASSERT_TRUE(control.flushFrame());
+    EXPECT_THAT(document.querySelector("#first_outlines"), testing::Optional(testing::_));
+  }
+
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(source));
+  svg::SVGDocument& document = app.document().document();
+  const auto first = document.querySelector("#first");
+  const auto second = document.querySelector("#second");
+  ASSERT_THAT(first, testing::Ne(std::nullopt));
+  ASSERT_THAT(second, testing::Ne(std::nullopt));
+  std::vector<svg::SVGElement> selected{*first, *second};
+  ConvertTextsToOutlinesResult batch = convertTextsToOutlines(document, selected);
+  ASSERT_TRUE(batch.ok) << batch.error;
+  const std::string sourceBefore(document.source());
+  document.xmlDocument().setSourceEditTreeLimits(10, 128);
+  app.setSelection(selected);
+  app.recordDocumentSourceUndoOnNextFlush("Convert text to outlines", document.svgElement(),
+                                          sourceBefore);
+  std::vector<EditorCommand::ElementReplacement> commandReplacements;
+  std::vector<std::pair<svg::SVGElement, svg::SVGElement>> replacements;
+  for (std::size_t i = 0; i < selected.size(); ++i) {
+    auto& conversion = batch.conversions[i];
+    for (svg::SVGElement& path : conversion.outlinePaths) {
+      conversion.outlineGroup->appendChild(path);
+    }
+    commandReplacements.push_back(
+        EditorCommand::ElementReplacement{.parent = document.svgElement(),
+                                          .original = selected[i],
+                                          .replacement = *conversion.outlineGroup});
+    replacements.emplace_back(selected[i], *conversion.outlineGroup);
+  }
+  app.applyMutation(EditorCommand::ReplaceElementsCommand(std::move(commandReplacements)));
+  app.selectReplacementsAfterNextFlush(std::move(replacements));
+  (void)app.flushFrame();
+
+  EXPECT_THAT(document.source(), Eq(sourceBefore));
+  EXPECT_THAT(document.querySelector("#first"), testing::Optional(Eq(*first)));
+  EXPECT_THAT(document.querySelector("#second"), testing::Optional(Eq(*second)));
+  EXPECT_THAT(document.querySelector("#first_outlines"), Eq(std::nullopt));
+  EXPECT_THAT(document.querySelector("#second_outlines"), Eq(std::nullopt));
+  EXPECT_THAT(app.selectedElements(), testing::ElementsAre(*first, *second));
+  EXPECT_THAT(app.canUndo(), Eq(false));
+  EXPECT_THAT(app.isDirty(), Eq(false));
+}
+
+TEST(TextToOutlines, FormattedMultipleSelectionRefusalDoesNotReparse) {
+  constexpr std::string_view source = R"svg(<svg xmlns="http://www.w3.org/2000/svg">
+  <text id="first">ABC</text>
+  <text id="second">ABC</text>
+</svg>)svg";
+
+  // The first insert alone must fit, so this exercises rollback of a staged
+  // group before a later capacity refusal in a formatted source document.
+  {
+    EditorApp control;
+    ASSERT_TRUE(control.loadFromString(source));
+    svg::SVGDocument& document = control.document().document();
+    const auto first = document.querySelector("#first");
+    ASSERT_THAT(first, testing::Ne(std::nullopt));
+    ConvertTextToOutlinesResult outline = convertTextToOutlines(document, *first);
+    ASSERT_TRUE(outline.ok) << outline.error;
+    for (svg::SVGElement& path : outline.outlinePaths) {
+      outline.outlineGroup->appendChild(path);
+    }
+    document.xmlDocument().setSourceEditTreeLimits(10, 128);
+    control.applyMutation(
+        SingleReplacementBatch(document.svgElement(), *first, *outline.outlineGroup));
+    ASSERT_TRUE(control.flushFrame());
+    EXPECT_THAT(document.querySelector("#first_outlines"), testing::Optional(testing::_));
+  }
+
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(source));
+  svg::SVGDocument& document = app.document().document();
+  const auto first = document.querySelector("#first");
+  const auto second = document.querySelector("#second");
+  ASSERT_THAT(first, testing::Ne(std::nullopt));
+  ASSERT_THAT(second, testing::Ne(std::nullopt));
+  std::vector<svg::SVGElement> selected{*first, *second};
+  ConvertTextsToOutlinesResult batch = convertTextsToOutlines(document, selected);
+  ASSERT_TRUE(batch.ok) << batch.error;
+  const std::string sourceBefore(document.source());
+  const std::uint64_t generationBefore = app.document().documentGeneration();
+  document.xmlDocument().setSourceEditTreeLimits(10, 128);
+  app.setSelection(selected);
+  app.recordDocumentSourceUndoOnNextFlush("Convert text to outlines", document.svgElement(),
+                                          sourceBefore);
+  std::vector<EditorCommand::ElementReplacement> commandReplacements;
+  std::vector<std::pair<svg::SVGElement, svg::SVGElement>> selectionReplacements;
+  for (std::size_t i = 0; i < selected.size(); ++i) {
+    auto& conversion = batch.conversions[i];
+    for (svg::SVGElement& path : conversion.outlinePaths) {
+      conversion.outlineGroup->appendChild(path);
+    }
+    commandReplacements.push_back(
+        EditorCommand::ElementReplacement{.parent = document.svgElement(),
+                                          .original = selected[i],
+                                          .replacement = *conversion.outlineGroup});
+    selectionReplacements.emplace_back(selected[i], *conversion.outlineGroup);
+  }
+  app.applyMutation(EditorCommand::ReplaceElementsCommand(std::move(commandReplacements)));
+  app.selectReplacementsAfterNextFlush(std::move(selectionReplacements));
+  (void)app.flushFrame();
+
+  EXPECT_THAT(document.source(), Eq(sourceBefore));
+  EXPECT_THAT(app.document().documentGeneration(), Eq(generationBefore));
+  EXPECT_THAT(document.querySelector("#first"), testing::Optional(Eq(*first)));
+  EXPECT_THAT(document.querySelector("#second"), testing::Optional(Eq(*second)));
+  EXPECT_THAT(app.selectedElements(), testing::ElementsAre(*first, *second));
+  EXPECT_THAT(app.canUndo(), Eq(false));
+  EXPECT_THAT(app.isDirty(), Eq(false));
+}
+
+TEST(TextToOutlines, DepthRefusalRestoresEntireSelection) {
+  constexpr std::string_view source = R"svg(<svg xmlns="http://www.w3.org/2000/svg">
+  <text id="first">ABC</text>
+  <g><text id="second">ABC</text></g>
+</svg>)svg";
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(source));
+  svg::SVGDocument& document = app.document().document();
+  const auto first = document.querySelector("#first");
+  const auto second = document.querySelector("#second");
+  ASSERT_THAT(first, testing::Ne(std::nullopt));
+  ASSERT_THAT(second, testing::Ne(std::nullopt));
+  std::vector<svg::SVGElement> selected{*first, *second};
+  ConvertTextsToOutlinesResult batch = convertTextsToOutlines(document, selected);
+  ASSERT_TRUE(batch.ok) << batch.error;
+  const std::string sourceBefore(document.source());
+  const std::uint64_t generationBefore = app.document().documentGeneration();
+  document.xmlDocument().setSourceEditTreeLimits(8'192, 3);
+  app.setSelection(selected);
+  app.recordDocumentSourceUndoOnNextFlush("Convert text to outlines", document.svgElement(),
+                                          sourceBefore);
+
+  std::vector<EditorCommand::ElementReplacement> commands;
+  std::vector<std::pair<svg::SVGElement, svg::SVGElement>> selectionReplacements;
+  for (std::size_t i = 0; i < selected.size(); ++i) {
+    auto& conversion = batch.conversions[i];
+    for (svg::SVGElement& path : conversion.outlinePaths) {
+      conversion.outlineGroup->appendChild(path);
+    }
+    const auto parent = selected[i].parentElement();
+    ASSERT_THAT(parent, testing::Ne(std::nullopt));
+    commands.push_back(EditorCommand::ElementReplacement{
+        .parent = *parent, .original = selected[i], .replacement = *conversion.outlineGroup});
+    selectionReplacements.emplace_back(selected[i], *conversion.outlineGroup);
+  }
+  app.applyMutation(EditorCommand::ReplaceElementsCommand(std::move(commands)));
+  app.selectReplacementsAfterNextFlush(std::move(selectionReplacements));
+  (void)app.flushFrame();
+
+  EXPECT_THAT(app.document().document().source(), Eq(sourceBefore));
+  EXPECT_GT(app.document().documentGeneration(), generationBefore);
+  EXPECT_THAT(app.document().document().querySelector("#first").has_value(), Eq(true));
+  EXPECT_THAT(app.document().document().querySelector("#second").has_value(), Eq(true));
+  EXPECT_THAT(app.document().document().querySelector("#first_outlines"), Eq(std::nullopt));
+  EXPECT_THAT(app.document().document().querySelector("#second_outlines"), Eq(std::nullopt));
+  ASSERT_THAT(app.selectedElements(), testing::SizeIs(2));
+  EXPECT_THAT(app.selectedElements()[0].id(), Eq("first"));
+  EXPECT_THAT(app.selectedElements()[1].id(), Eq("second"));
+  EXPECT_THAT(app.canUndo(), Eq(false));
+  EXPECT_THAT(app.isDirty(), Eq(false));
+  EXPECT_THAT(app.document().lastParseError(), Eq(std::nullopt));
+}
+
+TEST(TextToOutlines, BusyDocumentDefersOutlineReplacementLockCheck) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kTextSvg));
+  svg::SVGDocument& document = app.document().document();
+  svg::SVGElement text = TextElement(document);
+  ConvertTextToOutlinesResult result = convertTextToOutlines(document, text);
+  ASSERT_TRUE(result.ok) << result.error;
+  const auto parent = text.parentElement();
+  ASSERT_THAT(parent, testing::Ne(std::nullopt));
+
+  app.setElementLocked(text, true);
+  ASSERT_TRUE(app.flushFrame());
+  const std::string sourceBefore(document.source());
+
+  document.setThreadingMode(svg::ThreadingMode::ConcurrentDom);
+  std::promise<void> writerReady;
+  std::promise<void> releaseWriter;
+  auto releaseFuture = releaseWriter.get_future();
+  auto writer = std::async(std::launch::async, [&] {
+    auto access = document.writeAccess();
+    writerReady.set_value();
+    releaseFuture.wait();
+  });
+  if (writerReady.get_future().wait_for(std::chrono::seconds(5)) != std::future_status::ready) {
+    releaseWriter.set_value();
+    writer.wait();
+    FAIL() << "worker did not acquire document write access";
+    return;
+  }
+
+  app.applyMutation(SingleReplacementBatch(*parent, text, *result.outlineGroup));
+  releaseWriter.set_value();
+  writer.wait();
+
+  auto queued = app.document().queue().flush();
+  ASSERT_THAT(queued.effectiveCommands, testing::SizeIs(1));
+  EXPECT_THAT(queued.effectiveCommands.front().deferLayerLockCheck, Eq(true));
+  app.document().queue().push(std::move(queued.effectiveCommands.front()));
+  EXPECT_THAT(app.flushFrame(), Eq(false));
+  EXPECT_THAT(document.source(), Eq(sourceBefore));
+  EXPECT_THAT(document.querySelector("#logo"), testing::Optional(Eq(text)));
 }
 
 // Error handling: a `<text>` that produces no glyph outlines (empty content)
