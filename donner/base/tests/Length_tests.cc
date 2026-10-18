@@ -2,7 +2,10 @@
 
 #include <gtest/gtest.h>
 
+#include <charconv>
+#include <cmath>
 #include <compare>
+#include <limits>
 
 #include "donner/base/tests/BaseTestUtils.h"
 
@@ -165,6 +168,28 @@ TEST(LengthTest, ToRcStringIntegerValuesOmitDecimal) {
   EXPECT_EQ(Lengthd(50.0, Lengthd::Unit::Percent).toRcString(), "50%");
   EXPECT_EQ(Lengthd(-25.0, Lengthd::Unit::Px).toRcString(), "-25px");
   EXPECT_EQ(Lengthd(1.0, Lengthd::Unit::Em).toRcString(), "1em");
+}
+
+TEST(LengthTest, ToRcStringLargeFiniteValuesRoundTrip) {
+  const double values[] = {
+      1e308,
+      -1e308,
+      std::numeric_limits<double>::max(),
+      0x1p63,
+      -0x1p63,
+      std::nextafter(0x1p63, 0.0),
+      std::nextafter(-0x1p63, -std::numeric_limits<double>::infinity()),
+  };
+  for (double value : values) {
+    SCOPED_TRACE(value);
+    const RcString formatted = Lengthd(value).toRcString();
+    double parsedValue = 0;
+    const auto parsed =
+        std::from_chars(formatted.data(), formatted.data() + formatted.size(), parsedValue);
+    EXPECT_EQ(parsed.ec, std::errc{});
+    EXPECT_EQ(parsed.ptr, formatted.data() + formatted.size());
+    EXPECT_EQ(parsedValue, value);
+  }
 }
 
 TEST(LengthTest, ToRcStringFractionalValues) {
