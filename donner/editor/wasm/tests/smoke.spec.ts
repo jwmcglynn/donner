@@ -4560,117 +4560,150 @@ async function reportAnimationCadence({
   assertAnimationCadence(measurement, evidence);
 }
 
-test(
-  "animation preview plays, dispatches mouse events, and returns to Edit",
-  async ({ page, browserName }, testInfo) => {
-    const rafControls = process.env.DONNER_ANIMATION_RAF_CONTROLS === "1";
-    if (rafControls) testInfo.setTimeout(testInfo.timeout + 21000);
-    const rafControlSamples: Record<string, Awaited<ReturnType<typeof measurePageRaf>>> = {};
-    const captureRafControl = async (name: string) => {
-      rafControlSamples[name] = await measurePageRaf(page, 5000);
-      const controlsPath = testInfo.outputPath("animation-raf-controls.json");
-      await writeFile(controlsPath, JSON.stringify(rafControlSamples, null, 2));
-      await testInfo.attach("animation-raf-controls-" + name, {
-        contentType: "application/json",
-        path: controlsPath,
-      });
-    };
-    if (rafControls) await captureRafControl("blankBefore");
-    const frameDriver = process.env.DONNER_ANIMATION_FRAME_DRIVER;
-    if (frameDriver !== undefined && frameDriver !== "proxied-main-raf") {
-      throw new Error("DONNER_ANIMATION_FRAME_DRIVER must be proxied-main-raf when set");
-    }
-    const fatalMessages = await openEditor(page, { postInitializationDwellMs: 0, frameDriver });
-    const browserGpuInfo = rafControls ? await readChromiumGpuInfo(page) : null;
-    if (frameDriver) {
-      expect(
-        await page.evaluate(() =>
-          (window as unknown as { __donnerFrameDriver?: string }).__donnerFrameDriver
-        ),
-        "the requested frame driver is active",
-      ).toBe(frameDriver);
-    }
-    await expectSampleThumbnailsToSettle(page, {
-      message: "thumbnail capture work is drained before animation measurement",
-      timeout: scaledMs(20000),
+async function openAnimatedPreview(page: Page, browserName: string, testInfo: TestInfo) {
+  const rafControls = process.env.DONNER_ANIMATION_RAF_CONTROLS === "1";
+  if (rafControls) testInfo.setTimeout(testInfo.timeout + 21000);
+  const rafControlSamples: Record<string, Awaited<ReturnType<typeof measurePageRaf>>> = {};
+  const captureRafControl = async (name: string) => {
+    rafControlSamples[name] = await measurePageRaf(page, 5000);
+    const controlsPath = testInfo.outputPath("animation-raf-controls.json");
+    await writeFile(controlsPath, JSON.stringify(rafControlSamples, null, 2));
+    await testInfo.attach("animation-raf-controls-" + name, {
+      contentType: "application/json",
+      path: controlsPath,
     });
-    const canvas = page.locator("canvas#canvas");
-    const box = await canvas.boundingBox();
-    if (!box) throw new Error("the editor canvas has no bounds");
-    await page.mouse.click(box.x + box.width * 0.76, box.y + 390);
-    let interactionCaptureOwner: Worker | null = null;
-    const animationCapture = createAnimationRegionCapture(page, browserName, testInfo);
-    const captureAnimationRegion = animationCapture.capture;
-    const documentRegion = { minX: 150, minY: 150, maxX: box.width - 430, maxY: box.height * 0.58 };
-    let initial: PixelBounds | null = null;
-    let mode: PixelBounds | null = null;
-    await expect.poll(async () => {
-      const capture = await captureAnimationRegion(box);
-      initial = capture.read("animation-mint", documentRegion);
-      mode = capture.read("selection-teal", {
-        minX: box.width - 410,
-        minY: 0,
-        maxX: box.width - 10,
-        maxY: 120,
-      });
-      return initial !== null && initial.maxY - initial.minY > 30 && mode !== null;
-    }, { timeout: scaledMs(12000), message: "Animation sample and Edit control are visible" }).toBe(
-      true,
-    );
-    if (!initial || !mode) throw new Error("Animation sample did not become visible");
-    // Selecting the document can reopen thumbnail work when its fonts arrive.
-    await expect.poll(async () => {
-      const stats = await page.evaluate(() => window.__donnerSampleThumbnailStats);
-      return { stats, quiescent: sampleThumbnailLaneQuiescent(stats) };
-    }, {
-      message: "sample-triggered thumbnail work finishes before the Edit baseline",
-      timeout: scaledMs(20000),
-    }).toEqual(expect.objectContaining({ quiescent: true }));
-    await expect.poll(() =>
-      page.evaluate(() => {
-        const queue = window.__donnerPresentationQueueStats;
-        return {
-          presented: window.__donnerWorkerStats?.resultFramePresented === true,
-          framesInFlight: queue?.framesInFlight ?? null,
-          completedSerial: queue?.completedSerial ?? null,
-          submittedSerial: queue?.submittedSerial ?? null,
-        };
-      }).then((state) => ({
-        ...state,
-        complete: state.completedSerial !== null && state.completedSerial === state.submittedSerial,
-      })), {
-      timeout: scaledMs(5000),
-      message: "the Edit baseline reaches completed browser presentation",
-    }).toEqual(expect.objectContaining({ presented: true, framesInFlight: 0, complete: true }));
-    const initialOrb: PixelBounds = initial;
-    const edit: PixelBounds = mode;
-    const scale = (initialOrb.maxY - initialOrb.minY + 1) / 48;
-    const originX = (initialOrb.minX + initialOrb.maxX) / 2 - 96 * scale;
-    const originY = (initialOrb.minY + initialOrb.maxY) / 2 - 175 * scale;
-    const editCenter = {
-      x: box.x + (edit.minX + edit.maxX) / 2,
-      y: box.y + (edit.minY + edit.maxY) / 2,
-    };
-    const track = {
-      x: box.x + originX + 48 * scale,
-      y: box.y + originY + 120 * scale,
-      width: 560 * scale,
-      height: 110 * scale,
-    };
-    const orbProbe = createAnimationOrbProbe(captureAnimationRegion, track, testInfo, {
-      box,
-      browserName,
-      initialOrb,
+  };
+  if (rafControls) await captureRafControl("blankBefore");
+  const frameDriver = process.env.DONNER_ANIMATION_FRAME_DRIVER;
+  if (frameDriver !== undefined && frameDriver !== "proxied-main-raf") {
+    throw new Error("DONNER_ANIMATION_FRAME_DRIVER must be proxied-main-raf when set");
+  }
+  const fatalMessages = await openEditor(page, { postInitializationDwellMs: 0, frameDriver });
+  const browserGpuInfo = rafControls ? await readChromiumGpuInfo(page) : null;
+  if (frameDriver) {
+    expect(
+      await page.evaluate(() =>
+        (window as unknown as { __donnerFrameDriver?: string }).__donnerFrameDriver
+      ),
+      "the requested frame driver is active",
+    ).toBe(frameDriver);
+  }
+  await expectSampleThumbnailsToSettle(page, {
+    message: "thumbnail capture work is drained before animation measurement",
+    timeout: scaledMs(20000),
+  });
+  const canvas = page.locator("canvas#canvas");
+  const box = await canvas.boundingBox();
+  if (!box) throw new Error("the editor canvas has no bounds");
+  await page.mouse.click(box.x + box.width * 0.76, box.y + 390);
+  const animationCapture = createAnimationRegionCapture(page, browserName, testInfo);
+  const captureAnimationRegion = animationCapture.capture;
+  const documentRegion = { minX: 150, minY: 150, maxX: box.width - 430, maxY: box.height * 0.58 };
+  let initial: PixelBounds | null = null;
+  let mode: PixelBounds | null = null;
+  await expect.poll(async () => {
+    const capture = await captureAnimationRegion(box);
+    initial = capture.read("animation-mint", documentRegion);
+    mode = capture.read("selection-teal", {
+      minX: box.width - 410,
+      minY: 0,
+      maxX: box.width - 10,
+      maxY: 120,
     });
-    const orb = orbProbe.capture;
-    const start = await orb();
-    if (rafControls) await captureRafControl("editState");
-    await page.mouse.click(editCenter.x + edit.maxX - edit.minX + 1, editCenter.y);
-    await expect.poll(async () => Math.abs((await orb()).minX - start.minX), {
-      timeout: scaledMs(10000),
-      message: "Preview moves the rendered orb",
-    }).toBeGreaterThan(8 * scale);
+    return initial !== null && initial.maxY - initial.minY > 30 && mode !== null;
+  }, { timeout: scaledMs(12000), message: "Animation sample and Edit control are visible" }).toBe(
+    true,
+  );
+  if (!initial || !mode) throw new Error("Animation sample did not become visible");
+  // Selecting the document can reopen thumbnail work when its fonts arrive.
+  await expect.poll(async () => {
+    const stats = await page.evaluate(() => window.__donnerSampleThumbnailStats);
+    return { stats, quiescent: sampleThumbnailLaneQuiescent(stats) };
+  }, {
+    message: "sample-triggered thumbnail work finishes before the Edit baseline",
+    timeout: scaledMs(20000),
+  }).toEqual(expect.objectContaining({ quiescent: true }));
+  await expect.poll(() =>
+    page.evaluate(() => {
+      const queue = window.__donnerPresentationQueueStats;
+      return {
+        presented: window.__donnerWorkerStats?.resultFramePresented === true,
+        framesInFlight: queue?.framesInFlight ?? null,
+        completedSerial: queue?.completedSerial ?? null,
+        submittedSerial: queue?.submittedSerial ?? null,
+      };
+    }).then((state) => ({
+      ...state,
+      complete: state.completedSerial !== null && state.completedSerial === state.submittedSerial,
+    })), {
+    timeout: scaledMs(5000),
+    message: "the Edit baseline reaches completed browser presentation",
+  }).toEqual(expect.objectContaining({ presented: true, framesInFlight: 0, complete: true }));
+  const initialOrb: PixelBounds = initial;
+  const edit: PixelBounds = mode;
+  const scale = (initialOrb.maxY - initialOrb.minY + 1) / 48;
+  const originX = (initialOrb.minX + initialOrb.maxX) / 2 - 96 * scale;
+  const originY = (initialOrb.minY + initialOrb.maxY) / 2 - 175 * scale;
+  const editCenter = {
+    x: box.x + (edit.minX + edit.maxX) / 2,
+    y: box.y + (edit.minY + edit.maxY) / 2,
+  };
+  const track = {
+    x: box.x + originX + 48 * scale,
+    y: box.y + originY + 120 * scale,
+    width: 560 * scale,
+    height: 110 * scale,
+  };
+  const orbProbe = createAnimationOrbProbe(captureAnimationRegion, track, testInfo, {
+    box,
+    browserName,
+    initialOrb,
+  });
+  const orb = orbProbe.capture;
+  const start = await orb();
+  if (rafControls) await captureRafControl("editState");
+  await page.mouse.click(editCenter.x + edit.maxX - edit.minX + 1, editCenter.y);
+  await expect.poll(async () => Math.abs((await orb()).minX - start.minX), {
+    timeout: scaledMs(10000),
+    message: "Preview moves the rendered orb",
+  }).toBeGreaterThan(8 * scale);
 
+  return {
+    animationCapture,
+    box,
+    browserGpuInfo,
+    captureAnimationRegion,
+    captureRafControl,
+    editCenter,
+    editWidth: edit.maxX - edit.minX,
+    fatalMessages,
+    orb,
+    orbProbe,
+    originX,
+    originY,
+    rafControls,
+    scale,
+    start,
+  };
+}
+
+test(
+  "animation preview plays and dispatches mouse events",
+  async ({ page, browserName }, testInfo) => {
+    const {
+      animationCapture,
+      box,
+      browserGpuInfo,
+      captureAnimationRegion,
+      editCenter,
+      fatalMessages,
+      orb,
+      orbProbe,
+      originX,
+      originY,
+      scale,
+      start,
+    } = await openAnimatedPreview(page, browserName, testInfo);
     const cadenceMeasurement = await measureAnimationCadence(page, testInfo);
     await reportAnimationCadence({
       page,
@@ -4683,6 +4716,7 @@ test(
     await verifyRasterProgressWithTimersHeld(page);
     // Observe completion only after the uninstrumented playback interval has finished.
     await expectSurfaceFrameProbeReady(page);
+    let interactionCaptureOwner: Worker | null = null;
     await expect.poll(async () => {
       interactionCaptureOwner = await findCanvasOwnerWorker(page);
       if (interactionCaptureOwner) animationCapture.setOwner(interactionCaptureOwner);
@@ -4706,10 +4740,42 @@ test(
       start,
     });
 
+    await page.mouse.click(editCenter.x, editCenter.y);
+    await expect.poll(async () => (await orb()).minX, { timeout: scaledMs(5000) }).toBeCloseTo(
+      start.minX,
+      0,
+    );
+    expect(fatalMessages).toEqual([]);
+  },
+);
+
+test(
+  "animation preview plays through cancellation and shutdown while raster task yields are held",
+  async ({ page, browserName }, testInfo) => {
+    const {
+      animationCapture,
+      captureRafControl,
+      editCenter,
+      editWidth,
+      fatalMessages,
+      orb,
+      rafControls,
+      scale,
+      start,
+    } = await openAnimatedPreview(page, browserName, testInfo);
+
+    // Exercise the fault-injected lifecycle in a fresh Preview instead of inheriting the cadence
+    // and pointer/pulse case's nearly exhausted test deadline.
+    await expectSurfaceFrameProbeReady(page);
+    await expect.poll(async () => {
+      const owner = await findCanvasOwnerWorker(page);
+      if (owner) animationCapture.setOwner(owner);
+      return owner !== null;
+    }, { message: "interaction captures observe the canvas GPU owner" }).toBe(true);
     await finishAnimationPreview({
       page,
       editCenter,
-      editWidth: edit.maxX - edit.minX,
+      editWidth,
       orb,
       start,
       scale,
