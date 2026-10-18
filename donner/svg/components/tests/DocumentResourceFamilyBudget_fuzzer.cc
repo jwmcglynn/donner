@@ -27,7 +27,6 @@ DocumentResourceFamilyBudget::Limits MakeLimits(std::size_t perKindBytes, std::s
       .computedFilterBytes = perKindBytes,
       .computedStyleBytes = perKindBytes,
       .maximumTotalRetainedBytes = totalBytes,
-      .decodedImageBytes = perKindBytes,
   };
 }
 
