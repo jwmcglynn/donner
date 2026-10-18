@@ -19,6 +19,7 @@
 #include "donner/svg/SVGTextElement.h"
 #include "donner/svg/SVGTextPathElement.h"
 #include "donner/svg/SVGUseElement.h"
+#include "donner/svg/components/DocumentResourceFamilyBudget.h"
 #include "donner/svg/components/SVGDocumentContext.h"
 #include "donner/svg/components/animation/AnimateMotionComponent.h"
 #include "donner/svg/components/animation/AnimationResourceBudget.h"
@@ -1262,6 +1263,59 @@ public:
 private:
   bool blue_;
 };
+
+class CyclingAnimationImageLoader final : public ResourceLoaderInterface {
+public:
+  std::variant<std::vector<uint8_t>, ResourceLoaderError> fetchExternalResource(
+      std::string_view url) override {
+    requests.emplace_back(url);
+    return DecodeBase64Data(url == "b.png"
+                                ? "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAD0lEQVR4nGNgYP"
+                                  "gPRmAKABf2A/1+6zfzAAAAAElFTkSuQmCC"
+                                : "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAEElEQVR4nGP4z8"
+                                  "AARAwQCgAf7gP9i18U1AAAAABJRU5ErkJggg==")
+        .result();
+  }
+
+  std::vector<std::string> requests;
+};
+
+TEST(RendererAnimationPresentation, AnimatedImageCacheEvictsBeforeFamilyBudgetRefusal) {
+  auto document = ParsePresentation(R"svg(
+    <image id="i" width="16" height="16"><animate attributeName="href"
+      values="a.png;b.png;c.png" calcMode="discrete" dur="3s"
+      repeatCount="indefinite"/></image>)svg");
+  auto& registry = document.registry();
+  components::DocumentResourceFamilyBudget::Limits limits;
+  limits.decodedImageBytes = 32;
+  auto family = std::make_shared<components::DocumentResourceFamilyBudget>(limits);
+  registry.ctx().get<components::DocumentResourceFamilyContext>().budget = family;
+  registry.ctx().erase<components::ResourceManagerContext>();
+  auto& resources = registry.ctx().emplace<components::ResourceManagerContext>(registry, 1024);
+  auto loader = std::make_unique<CyclingAnimationImageLoader>();
+  const auto& requests = loader->requests;
+  resources.setResourceLoader(std::move(loader));
+  resources.setProcessingMode(ProcessingMode::DynamicInteractive);
+  const Entity target = document.querySelector("#i")->entityHandle().entity();
+
+  for (const double time : {0.25, 1.25, 2.25, 3.25, 4.25, 5.25}) {
+    SCOPED_TRACE(time);
+    document.setTime(time);
+    const bool blue = static_cast<int>(time) % 3 == 1;
+    auto expected = ParsePresentation(blue ? R"(<rect width="16" height="16" fill="blue"/>)"
+                                           : R"(<rect width="16" height="16" fill="red"/>)");
+    editor::tests::CompareBitmapToBitmap(
+        RenderDocumentWithActiveBackend(document), RenderDocumentWithActiveBackend(expected),
+        "animated-image-cache-family-budget", editor::tests::PixelmatchIdentityParams());
+    const auto* loaded = registry.try_get<components::LoadedImageComponent>(target);
+    ASSERT_THAT(loaded, testing::Ne(nullptr));
+    ASSERT_TRUE(loaded->image.has_value());
+    EXPECT_EQ(loaded->image->data.size(), 16u);
+    EXPECT_LE(family->retainedBytes(components::DocumentResourceFamilyBudget::Kind::DecodedImage),
+              32u);
+  }
+  EXPECT_THAT(requests, testing::Contains("c.png"));
+}
 
 TEST(RendererAnimationPresentation, DecodedAnimationCacheRespectsSecureModeChanges) {
   auto document = ParsePresentation(R"svg(
