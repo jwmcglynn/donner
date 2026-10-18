@@ -262,6 +262,18 @@ TEST(SVGAnimateMotionElement, AutoRotationUsesOutgoingDirectionAtInternalJoin) {
   }
 }
 
+TEST(SVGAnimateMotionElement, AutoRotationUsesOutgoingDirectionAtNondegenerateCorner) {
+  for (const auto& [rotate, direction] :
+       {std::pair{"auto", Vector2d(1, 0)}, std::pair{"auto-reverse", Vector2d(-1, 0)}}) {
+    SCOPED_TRACE(rotate);
+    auto document = ParseMotion(
+        "<svg xmlns='http://www.w3.org/2000/svg'><rect id='r'>"
+        "<animateMotion path='M0 0L0 100L100 100' rotate='" +
+        std::string(rotate) + "' dur='2s'/></rect></svg>");
+    ExpectMotionTransformNear(document, 1, {0, 100}, direction);
+  }
+}
+
 TEST(SVGAnimateMotionElement, AutoRotationPreservesTinyNonzeroInteriorDirection) {
   auto document = ParseMotion(R"svg(
     <svg xmlns="http://www.w3.org/2000/svg"><rect id="r">
