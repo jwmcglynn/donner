@@ -1712,6 +1712,28 @@ TEST(TextEngineScriptedTest, PerSpanTextLengthSpacingAndGlyphsScalesHorizontalAd
                         GlyphXPositionIs(DoubleEq(44.0))))));
 }
 
+TEST(TextEngineScriptedTest, RtlTextLengthDoesNotRepeatConsumedSpanStartPosition) {
+  Registry registry;
+  FontManager fontManager(registry);
+  TextEngine engine = MakeScriptedEngine(registry, fontManager, /*reverseClusters=*/true);
+
+  components::ComputedTextComponent text;
+  auto span = MakeSpan("ABC");
+  span.xList = {Lengthd(20.0, Lengthd::Unit::None)};
+  span.startsNewChunk = true;
+  span.fontKerning = FontKerning::None;
+  span.textLength = Lengthd(60.0, Lengthd::Unit::None);
+  span.lengthAdjust = LengthAdjust::SpacingAndGlyphs;
+  text.spans.push_back(std::move(span));
+
+  const auto runs = engine.layout(text, MakeTextParams(20.0));
+
+  EXPECT_THAT(runs, ElementsAre(RunGlyphsAre(ElementsAre(
+                        AllOf(GlyphXPositionIs(DoubleEq(20.0)), GlyphXAdvanceIs(DoubleEq(20.0))),
+                        AllOf(GlyphXPositionIs(DoubleEq(40.0)), GlyphXAdvanceIs(DoubleEq(20.0))),
+                        GlyphXPositionIs(DoubleEq(60.0))))));
+}
+
 TEST(TextEngineScriptedTest, GlobalTextLengthSpacingAdjustsVerticalGlyphGaps) {
   Registry registry;
   FontManager fontManager(registry);
