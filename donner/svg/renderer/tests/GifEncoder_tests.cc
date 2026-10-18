@@ -26,6 +26,13 @@ using testing::Optional;
 using testing::SizeIs;
 
 namespace donner::svg {
+
+class GifEncoderTestPeer {
+public:
+  static size_t outputSize(const GifEncoder& encoder) { return encoder.out_.size(); }
+  static size_t outputCapacity(const GifEncoder& encoder) { return encoder.out_.capacity(); }
+};
+
 namespace {
 
 /// Straight-alpha RGBA8 test image.
@@ -263,6 +270,48 @@ TEST(GifEncoder, WritesSpecConformingLzwData) {
                           0, 0, 0, 255, 255, 255,              // Color table: black, white.
                           0x02, 0x02, 0x84, 0x53, 0x00,        // LZW data.
                           0x3B));
+}
+
+TEST(GifEncoder, OutputCapacityGrowthHasBoundedAmortizedCopyVolume) {
+  constexpr int kSize = 64;
+  constexpr int kFrames = 512;
+  constexpr size_t kOutputLimit = 16 * 1024 * 1024;
+  GifEncoder encoder({.width = kSize,
+                      .height = kSize,
+                      .background = GifEncoder::Rgb{0, 0, 0},
+                      .maximumOutputBytes = kOutputLimit});
+  std::vector<std::vector<uint8_t>> expectedFrames;
+  expectedFrames.reserve(kFrames);
+
+  size_t previousCapacity = GifEncoderTestPeer::outputCapacity(encoder);
+  size_t cumulativeCopyBytes = 0;
+  for (int frameIndex = 0; frameIndex < kFrames; ++frameIndex) {
+    Image frame(kSize, kSize, 0, 0, 0);
+    for (int y = 0; y < kSize; ++y) {
+      for (int x = 0; x < kSize; ++x) {
+        const auto value = static_cast<uint8_t>(x * 37 + y * 71 + frameIndex * 17);
+        frame.set(x, y, value, value, value);
+      }
+    }
+    expectedFrames.push_back(frame.rgba);
+    ASSERT_TRUE(encoder.addFrame(frame.rgba, 0, 1));
+
+    const size_t capacity = GifEncoderTestPeer::outputCapacity(encoder);
+    EXPECT_LE(capacity, kOutputLimit);
+    if (capacity != previousCapacity) {
+      cumulativeCopyBytes += GifEncoderTestPeer::outputSize(encoder);
+      previousCapacity = capacity;
+    }
+  }
+
+  const std::vector<uint8_t> encoded = encoder.finish();
+  ASSERT_FALSE(encoded.empty());
+  EXPECT_LE(cumulativeCopyBytes, encoded.size() * 4);
+  const DecodedGif decoded = Decode(encoded);
+  ASSERT_THAT(decoded.frames, SizeIs(kFrames));
+  for (int frameIndex = 0; frameIndex < kFrames; ++frameIndex) {
+    ExpectFrameIdentical(decoded, static_cast<size_t>(frameIndex), expectedFrames[frameIndex]);
+  }
 }
 
 TEST(GifEncoder, RoundTripsWhenFinalPixelCreatesCodeWidthBoundary) {

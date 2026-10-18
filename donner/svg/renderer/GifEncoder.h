@@ -153,6 +153,8 @@ public:
   static std::vector<uint16_t> FrameDelaysCentiseconds(double fps, int frameCount);
 
 private:
+  friend class GifEncoderTestPeer;
+
   /// A frame waiting to be written, kept so an identical successor can extend its delay.
   struct PendingFrame {
     std::vector<uint8_t> encoded;    //!< Image descriptor, color table and LZW data.
