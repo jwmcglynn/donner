@@ -3991,6 +3991,560 @@ async function finishAnimationPreview({
   }
 }
 
+async function exerciseAnimationPointerPulse({
+  page,
+  testInfo,
+  box,
+  originX,
+  originY,
+  scale,
+  captureAnimationRegion,
+  interactionCaptureOwner,
+  orbProbe,
+  orb,
+  start,
+}: {
+  page: Page;
+  testInfo: TestInfo;
+  box: CssRegion;
+  originX: number;
+  originY: number;
+  scale: number;
+  captureAnimationRegion: AnimationRegionCaptureFn;
+  interactionCaptureOwner: Worker | null;
+  orbProbe: ReturnType<typeof createAnimationOrbProbe>;
+  orb: (deadlineAtMs?: number) => Promise<PixelBounds>;
+  start: PixelBounds;
+}) {
+  let preQueuedPointerTrace: unknown;
+  let queuedPulseObservation: unknown = null;
+  let pulseClickStartedEpochMs: number | null = null;
+  let pulseClickFinishedEpochMs: number | null = null;
+  let delayedPulseClickStartedEpochMs: number | null = null;
+  let delayedPulseClickFinishedEpochMs: number | null = null;
+  let delayedPulseReleaseEpochMs: number | null = null;
+  let heldPulseHeight: number | null = null;
+  try {
+    await Promise.all(
+      page.workers().map((worker) =>
+        boundBrowserDiagnostic(
+          worker.evaluate(() => {
+            (globalThis as unknown as Record<string, unknown>).__donnerPreviewPointerTrace = [];
+          }),
+          1000,
+        )
+      ),
+    );
+    const pad = { x: box.x + originX + 184 * scale, y: box.y + originY + 314 * scale };
+    const padRegion = {
+      x: box.x + originX + 80 * scale,
+      y: box.y + originY + 280 * scale,
+      width: 200 * scale,
+      height: 65 * scale,
+    };
+    const padPixels = async (
+      target: "animation-hover" | "animation-pressed",
+      deadline: number,
+    ) => {
+      const capture = await captureAnimationRegion(padRegion, deadline);
+      const pixels = capture.read(target)?.pixels ?? 0;
+      if (pixels <= 1000) {
+        await writeFile(testInfo.outputPath(`${target}-probe.png`), capture.png);
+        await writeFile(
+          testInfo.outputPath(`${target}-probe.json`),
+          JSON.stringify({ padRegion, viewport: capture.viewport, pixels }, null, 2),
+        );
+      }
+      return pixels;
+    };
+    const verifyPadInput = async (
+      eventType: number,
+      target: "animation-hover" | "animation-pressed",
+      action: () => Promise<void>,
+    ) => {
+      if (interactionCaptureOwner === null) throw new Error("animation owner is unavailable");
+      const deadline = performance.now() + scaledMs(5000);
+      const notBefore = Date.now();
+      await awaitBeforeBlueDeadline(action(), deadline);
+      // Screenshot capture can stall Firefox's worker progress. Let the actual input
+      // dispatch and its following document presentation finish before asking for pixels.
+      await expect.poll(
+        () =>
+          awaitBeforeBlueDeadline(
+            interactionCaptureOwner.evaluate(({ eventType, notBefore }) => {
+              const trace =
+                (globalThis as unknown as Record<string, unknown>).__donnerPreviewPointerTrace;
+              return Array.isArray(trace) && trace.some((row) =>
+                Array.isArray(row)
+                && row[0] >= notBefore && row[1] === 2 && row[2] === eventType && row[5] === true
+              );
+            }, { eventType, notBefore }),
+            deadline,
+          ),
+        {
+          timeout: Math.max(1, deadline - performance.now()),
+          intervals: [16],
+          message: "the pointer event reaches the preview document",
+        },
+      ).toBe(true);
+      const previous = await awaitBeforeBlueDeadline(
+        page.evaluate(() => window.__donnerWorkerStats?.completedResults ?? 0),
+        deadline,
+      );
+      await expect.poll(() =>
+        awaitBeforeBlueDeadline(
+          page.evaluate((before) => {
+            const stats = window.__donnerWorkerStats;
+            return (stats?.completedResults ?? 0) > before
+              && stats?.resultFramePresented === true;
+          }, previous),
+          deadline,
+        ), {
+        timeout: Math.max(1, deadline - performance.now()),
+        intervals: [16],
+        message: "a document frame after input dispatch is presented",
+      }).toBe(true);
+      await expect.poll(() => padPixels(target, deadline), {
+        timeout: Math.max(1, deadline - performance.now()),
+        intervals: [50],
+      }).toBeGreaterThan(1000);
+      if (performance.now() >= deadline) throw new Error("animation input deadline exceeded");
+    };
+    await verifyPadInput(7, "animation-hover", () => page.mouse.move(pad.x, pad.y));
+    await verifyPadInput(2, "animation-pressed", () => page.mouse.down());
+    await verifyPadInput(3, "animation-hover", () => page.mouse.up());
+    orbProbe.setTraceScreenshots(true);
+    pulseClickStartedEpochMs = Date.now();
+    await page.mouse.click(box.x + originX + 456 * scale, pad.y);
+    pulseClickFinishedEpochMs = Date.now();
+    // The pulse lasts 600 ms; the default poll backoff can skip its entire active interval.
+    await expect.poll(async () => {
+      const bounds = await orb();
+      return bounds.maxY - bounds.minY;
+    }, { timeout: scaledMs(5000), intervals: [50], message: "Click triggers the radius pulse" })
+      .toBeGreaterThan(
+        58 * scale,
+      );
+    await expect.poll(async () => {
+      const bounds = await orb();
+      return Math.abs((bounds.maxY - bounds.minY) - (start.maxY - start.minY));
+    }, { timeout: scaledMs(5000), message: "First pulse returns to its base diameter" })
+      .toBeLessThanOrEqual(2 * scale);
+    // Hold raster progress longer than the pulse before delivering another click. Its target
+    // remains the displayed pad, but its begin time must use the dispatch-time preview clock.
+    const pulseTraceGeneration = Date.now();
+    if (interactionCaptureOwner === null) throw new Error("animation owner is unavailable");
+    preQueuedPointerTrace = await interactionCaptureOwner.evaluate((generation) => {
+      const scope = globalThis as unknown as Record<string, unknown>;
+      const previous = scope.__donnerPreviewPointerTrace;
+      scope.__donnerPreviewPointerTrace = Object.assign([], { generation });
+      return previous;
+    }, pulseTraceGeneration);
+    const firstClick = Array.isArray(preQueuedPointerTrace)
+      ? preQueuedPointerTrace.find((row) => row[1] === 2 && row[2] === 0 && row[5] === true)
+      : undefined;
+    if (!firstClick) throw new Error("the normal pulse dispatch trace is unavailable");
+    const heldForPulse = await holdRasterTaskYield(page);
+    try {
+      const heldBounds = await orb();
+      heldPulseHeight = heldBounds.maxY - heldBounds.minY;
+      expect(
+        Math.abs(heldPulseHeight - (start.maxY - start.minY)),
+        "held frame contains the base orb, not the previous pulse",
+      ).toBeLessThanOrEqual(2 * scale);
+      const heldAt = Date.now();
+      await expect.poll(() => Date.now() - heldAt, {
+        timeout: scaledMs(3000),
+        intervals: [50],
+        message: "raster stall exceeds the short pulse duration",
+      }).toBeGreaterThanOrEqual(1000);
+      delayedPulseClickStartedEpochMs = Date.now();
+      await page.mouse.click(box.x + originX + 456 * scale, pad.y);
+      delayedPulseClickFinishedEpochMs = Date.now();
+    } finally {
+      await heldForPulse.release();
+      delayedPulseReleaseEpochMs = Date.now();
+    }
+    const queuedPulseDeadline = performance.now() + scaledMs(5000);
+    // Avoid screenshot-induced stalls while queued input is delivered. A later admitted
+    // timeline sample proves an earlier in-window sample was presented; retain that frame
+    // with the existing raster hold before reading pixels. Playback cadence was measured
+    // above without holds or screenshots, independently of this queued-event correctness probe.
+    await expect.poll(async () => {
+      const snapshot = await awaitBeforeBlueDeadline(
+        interactionCaptureOwner.evaluate(() => {
+          const trace = (globalThis as unknown as Record<string, unknown>)
+            .__donnerPreviewPointerTrace as (unknown[] & { generation?: number }) | undefined;
+          return {
+            generation: trace?.generation,
+            entries: Array.isArray(trace) ? [...trace] : [],
+          };
+        }),
+        queuedPulseDeadline,
+      );
+      queuedPulseObservation = presentedPulseWindow(
+        snapshot,
+        pulseTraceGeneration,
+        firstClick[3],
+        delayedPulseClickStartedEpochMs,
+      );
+      return queuedPulseObservation !== null;
+    }, {
+      timeout: Math.max(1, queuedPulseDeadline - performance.now()),
+      intervals: [16],
+      message: "a queued-click pulse sample reaches presentation",
+    }).toBe(true);
+    const heldPulseFrame = await holdKnownRasterUntil(heldForPulse.raster, queuedPulseDeadline);
+    const pulseErrors: unknown[] = [];
+    try {
+      const heldTrace = await awaitBeforeBlueDeadline(
+        interactionCaptureOwner.evaluate(() => {
+          const trace = (globalThis as unknown as Record<string, unknown>)
+            .__donnerPreviewPointerTrace as (unknown[] & { generation?: number }) | undefined;
+          return {
+            generation: trace?.generation,
+            entries: Array.isArray(trace) ? [...trace] : [],
+          };
+        }),
+        queuedPulseDeadline,
+      );
+      const retainedObservation = presentedPulseWindow(
+        heldTrace,
+        pulseTraceGeneration,
+        firstClick[3],
+        delayedPulseClickStartedEpochMs,
+        0.5,
+      );
+      expect(retainedObservation, "the acknowledged hold is still inside the same pulse").not
+        .toBeNull();
+      queuedPulseObservation = {
+        beforeHold: queuedPulseObservation,
+        afterHold: retainedObservation,
+      };
+      await expect.poll(async () => {
+        const bounds = await orb(queuedPulseDeadline);
+        return bounds.maxY - bounds.minY;
+      }, {
+        timeout: Math.max(1, queuedPulseDeadline - performance.now()),
+        intervals: [50],
+        message: "Queued click pulses after stale-frame catch-up",
+      }).toBeGreaterThan(58 * scale);
+      if (performance.now() >= queuedPulseDeadline) {
+        throw new Error("queued pulse deadline exceeded");
+      }
+    } catch (error) {
+      pulseErrors.push(error);
+    } finally {
+      try {
+        await heldPulseFrame.release();
+      } catch (error) {
+        pulseErrors.push(error);
+      }
+    }
+    if (pulseErrors.length > 0) {
+      throw new AggregateError(pulseErrors, "queued pulse observation failed");
+    }
+  } finally {
+    orbProbe.setTraceScreenshots(false);
+    const pointerTraces = await Promise.all(
+      page.workers().map((worker) =>
+        boundBrowserDiagnostic(
+          worker.evaluate(() => {
+            const scope = globalThis as unknown as Record<string, unknown>;
+            const trace = scope.__donnerPreviewPointerTrace;
+            delete scope.__donnerPreviewPointerTrace;
+            return trace;
+          }),
+          1000,
+        )
+      ),
+    );
+    const pulsePath = testInfo.outputPath("animation-pulse-input.json");
+    await writeFile(
+      pulsePath,
+      JSON.stringify(
+        {
+          pulseClickStartedEpochMs,
+          pulseClickFinishedEpochMs,
+          delayedPulseClickStartedEpochMs,
+          delayedPulseClickFinishedEpochMs,
+          delayedPulseReleaseEpochMs,
+          heldPulseHeight,
+          preQueuedPointerTrace,
+          queuedPulseObservation,
+          pulseScreenshots: orbProbe.screenshots,
+          pointerTraces,
+        },
+        null,
+        2,
+      ),
+    );
+    await testInfo.attach("animation-pulse-input", {
+      contentType: "application/json",
+      path: pulsePath,
+    });
+  }
+}
+
+async function measureAnimationCadence(page: Page, testInfo: TestInfo) {
+  // Measure ordinary playback with screenshot/readback probes stopped.
+  testInfo.setTimeout(testInfo.timeout + 18000);
+  const loopBefore = await page.evaluate(() => window.__donnerFrameLoopStats);
+  const schedulerBefore = await readCarouselFrameDiagnostics(page);
+  const loadBefore = loadavg();
+  const workerSamples: unknown[] = [];
+  const readCadence = createAnimationCadenceReader(page, workerSamples);
+  const ownerBefore = await readGpuOwnerDispatchStats(page);
+  const before = await readCadence();
+  const probeMainRaf = process.env.DONNER_ANIMATION_RAF_PROBE === "1";
+  const probeOwnerRaf = probeMainRaf && process.env.DONNER_ANIMATION_OWNER_RAF_PROBE !== "0";
+  if (probeMainRaf) {
+    await page.evaluate(() => {
+      const state = window as unknown as Record<string, unknown>;
+      const samples: number[][] = [];
+      const deadline = performance.now() + 25000;
+      let request = 0;
+      const tick = (timestamp: number) => {
+        samples.push([timestamp, performance.now()]);
+        if (samples.length < 4096 && performance.now() < deadline) {
+          request = requestAnimationFrame(tick);
+        }
+      };
+      request = requestAnimationFrame(tick);
+      state.__donnerStopAnimationRafProbe = () => {
+        cancelAnimationFrame(request);
+        delete state.__donnerStopAnimationRafProbe;
+        return samples;
+      };
+    });
+  }
+  let after: Awaited<ReturnType<typeof readCadence>>;
+  let mainRafSamples: number[][] | null = null;
+  let ownerProbe: Worker | undefined;
+  let ownerRaf: {
+    timeOrigin: number;
+    samples: number[][];
+    counts: number[];
+    registrations: number[][];
+  } | null = null;
+  try {
+    if (probeMainRaf) ownerProbe = await startOwnerFrameProbe(page, probeOwnerRaf);
+    await expect.poll(async () => (await readCadence()).time - before.time, {
+      timeout: 25000,
+      intervals: [100],
+    }).toBeGreaterThanOrEqual(20000);
+    after = await readCadence();
+  } finally {
+    if (ownerProbe) {
+      ownerRaf = await stopOwnerFrameProbe(ownerProbe);
+    }
+    if (probeMainRaf) {
+      mainRafSamples = await boundBrowserDiagnostic(
+        page.evaluate(() => {
+          const state = window as unknown as Record<string, unknown>;
+          const stop = state.__donnerStopAnimationRafProbe as () => number[][];
+          return stop();
+        }),
+        2000,
+      );
+    }
+  }
+  return {
+    loopBefore,
+    schedulerBefore,
+    loadBefore,
+    workerSamples,
+    ownerBefore,
+    before,
+    probeMainRaf,
+    probeOwnerRaf,
+    after,
+    mainRafSamples,
+    ownerRaf,
+  };
+}
+
+type AnimationCadenceMeasurement = Awaited<ReturnType<typeof measureAnimationCadence>>;
+
+function assertAnimationWorkerTimings(after: AnimationCadenceMeasurement["after"]) {
+  for (const field of ["idleYieldMs", "idleCallbackMs", "idleLockMs", "idleWaitMs"] as const) {
+    expect(after.worker?.[field], `worker timing ${field}`).toBeGreaterThanOrEqual(0);
+    expect(Number.isFinite(after.worker?.[field]), `finite worker timing ${field}`).toBe(true);
+  }
+}
+
+async function writeAnimationCadenceEvidence({
+  page,
+  testInfo,
+  browserGpuInfo,
+  box,
+  measurement,
+}: {
+  page: Page;
+  testInfo: TestInfo;
+  browserGpuInfo: unknown;
+  box: CssRegion;
+  measurement: AnimationCadenceMeasurement;
+}) {
+  const {
+    loopBefore, schedulerBefore, loadBefore, workerSamples, ownerBefore, before, probeMainRaf,
+    probeOwnerRaf, after, mainRafSamples, ownerRaf,
+  } = measurement;
+  const ownerAfter = await readGpuOwnerDispatchStats(page);
+  const loopAfter = await page.evaluate(() => window.__donnerFrameLoopStats);
+  const schedulerAfter = await readCarouselFrameDiagnostics(page);
+  const presentation = await page.evaluate(() => window.__donnerPresentedDocumentStats);
+  const presentedSamples = (presentation?.samples ?? [])
+    .filter((sample) =>
+      sample[0] > before.presentedDocuments && sample[0] <= after.presentedDocuments
+    )
+    .sort((a, b) => a[0] - b[0]);
+  const seconds = (after.time - before.time) / 1000;
+  const producerSpanMs = presentedSamples.length > 1
+    ? presentedSamples.at(-1)![3] - presentedSamples[0][3]
+    : 0;
+  const presentationGapsMs = presentedSamples.slice(1)
+    .map((sample, index) => sample[3] - presentedSamples[index][3]);
+  const ownerTimeOrigin = ownerRaf?.timeOrigin ?? 0;
+  const cadencePath = testInfo.outputPath("animation-cadence.json");
+  const cadence = {
+    browser: testInfo.project.name,
+    launch: {
+      headless: testInfo.project.use.headless ?? null,
+      launchHeadless: testInfo.project.use.launchOptions?.headless ?? null,
+    },
+    browserGpuInfo,
+    seconds,
+    uiFps: (after.frames - before.frames) / seconds,
+    documentFps: (after.documents - before.documents) / seconds,
+    deliveredPresentationFps: (after.presentedDocuments - before.presentedDocuments) / seconds,
+    presentedDocumentFps: producerSpanMs > 0
+      ? (presentedSamples.length - 1) * 1000 / producerSpanMs
+      : null,
+    presentation: {
+      before: before.presentedDocuments,
+      after: after.presentedDocuments,
+      samples: presentedSamples,
+      producerSpanMs,
+      gapsMs: presentationGapsMs,
+    },
+    host: {
+      platform: platform(),
+      release: release(),
+      architecture: arch(),
+      cpuModel: cpus()[0]?.model,
+      logicalCpus: cpus().length,
+      memoryBytes: totalmem(),
+      loadBefore,
+      loadAfter: loadavg(),
+    },
+    viewport: box,
+    gpuOwner: { before: ownerBefore, after: ownerAfter },
+    workerSamples,
+    pageState: { before: before.pageState, after: after.pageState },
+    frameLoop: { before: loopBefore, after: loopAfter },
+    scheduler: {
+      before: schedulerBefore,
+      after: schedulerAfter,
+      mainRafProbeEnabled: probeMainRaf,
+      ownerRafProbeEnabled: probeOwnerRaf,
+      ownerRaf: ownerRaf
+        ? {
+          timeOrigin: ownerTimeOrigin,
+          previewAdvanceCounts: ownerRaf.counts,
+          registrations: ownerRaf.registrations.filter((record) => {
+            const observedMs = ownerTimeOrigin + record[3] - before.timeOrigin;
+            return record[4] >= 0 && observedMs >= before.time && observedMs <= after.time;
+          }),
+          samples: ownerRaf.samples.filter((sample) => {
+            const observedMs = ownerTimeOrigin + sample[1] - before.timeOrigin;
+            return observedMs >= before.time && observedMs <= after.time;
+          }),
+        }
+        : null,
+      intervalStartMs: before.time,
+      intervalEndMs: after.time,
+      mainRafSamples:
+        mainRafSamples?.filter((sample) => sample[1] >= before.time && sample[1] <= after.time)
+          ?? null,
+    },
+    timeline: await readCarouselGpuTimeline(page),
+    environment: await page.evaluate(() => ({
+      userAgent: navigator.userAgent,
+      devicePixelRatio,
+      worker: window.__donnerWorkerStats,
+      resources: window.__donnerPresentationResourceStats,
+    })),
+  };
+  await writeFile(cadencePath, JSON.stringify(cadence, null, 2));
+  await testInfo.attach("animation-cadence", {
+    contentType: "application/json",
+    path: cadencePath,
+  });
+  return { ownerAfter, presentedSamples };
+}
+
+function assertAnimationCadence(
+  measurement: AnimationCadenceMeasurement,
+  evidence: Awaited<ReturnType<typeof writeAnimationCadenceEvidence>>,
+) {
+  const { before, after, ownerBefore } = measurement;
+  const { ownerAfter, presentedSamples } = evidence;
+  expect(presentedSamples.length, "complete distinct-presentation sample interval").toBe(
+    after.presentedDocuments - before.presentedDocuments,
+  );
+  expect(presentedSamples.length).toBeGreaterThan(10);
+  for (let index = 1; index < presentedSamples.length; ++index) {
+    expect(presentedSamples[index][0]).toBe(presentedSamples[index - 1][0] + 1);
+    expect(presentedSamples[index][3]).toBeGreaterThanOrEqual(presentedSamples[index - 1][3]);
+  }
+  expect(before.layerThumbnails?.previewPaused, "sidebar work is paused in Preview").toBe(true);
+  expect(after.layerThumbnails?.previewPaused, "sidebar work remains paused").toBe(true);
+  for (const field of ["refreshPasses", "renderAttempts"] as const) {
+    expect(Number.isSafeInteger(before.layerThumbnails?.[field]), `initial sidebar ${field}`)
+      .toBe(true);
+    expect(after.layerThumbnails?.[field], `no sidebar ${field} during playback`)
+      .toBe(before.layerThumbnails?.[field]);
+  }
+  const gpuBefore = ownerBefore?.gpu as
+    | { readbackCopies: number; cpuTextureWrites: number }
+    | undefined;
+  expect(gpuBefore, "GPU residency counters are available").toBeTruthy();
+  for (const field of ["readbackCopies", "cpuTextureWrites"] as const) {
+    expect(Number.isFinite(gpuBefore?.[field]), `finite initial ${field}`).toBe(true);
+    const gpuAfter = ownerAfter?.gpu as typeof gpuBefore;
+    expect(Number.isFinite(gpuAfter?.[field]), `finite final ${field}`).toBe(true);
+  }
+  expect(ownerAfter?.gpu, "ordinary animation stays GPU resident").toMatchObject({
+    readbackCopies: gpuBefore?.readbackCopies,
+    cpuTextureWrites: gpuBefore?.cpuTextureWrites,
+  });
+}
+
+async function reportAnimationCadence({
+  page,
+  testInfo,
+  browserGpuInfo,
+  box,
+  measurement,
+}: {
+  page: Page;
+  testInfo: TestInfo;
+  browserGpuInfo: unknown;
+  box: CssRegion;
+  measurement: AnimationCadenceMeasurement;
+}) {
+  assertAnimationWorkerTimings(measurement.after);
+  const evidence = await writeAnimationCadenceEvidence({
+    page,
+    testInfo,
+    browserGpuInfo,
+    box,
+    measurement,
+  });
+  assertAnimationCadence(measurement, evidence);
+}
+
 test(
   "animation preview plays, dispatches mouse events, and returns to Edit",
   async ({ page, browserName }, testInfo) => {
@@ -4088,8 +4642,6 @@ test(
       width: 560 * scale,
       height: 110 * scale,
     };
-    let preQueuedPointerTrace: unknown;
-    let queuedPulseObservation: unknown = null;
     const orbProbe = createAnimationOrbProbe(captureAnimationRegion, track, testInfo, {
       box,
       browserName,
@@ -4104,193 +4656,15 @@ test(
       message: "Preview moves the rendered orb",
     }).toBeGreaterThan(8 * scale);
 
-    // Measure ordinary playback with screenshot/readback probes stopped.
-    testInfo.setTimeout(testInfo.timeout + 18000);
-    const loopBefore = await page.evaluate(() => window.__donnerFrameLoopStats);
-    const schedulerBefore = await readCarouselFrameDiagnostics(page);
-    const loadBefore = loadavg();
-    const workerSamples: unknown[] = [];
-    const readCadence = createAnimationCadenceReader(page, workerSamples);
-    const ownerBefore = await readGpuOwnerDispatchStats(page);
-    const before = await readCadence();
-    const probeMainRaf = process.env.DONNER_ANIMATION_RAF_PROBE === "1";
-    const probeOwnerRaf = probeMainRaf && process.env.DONNER_ANIMATION_OWNER_RAF_PROBE !== "0";
-    if (probeMainRaf) {
-      await page.evaluate(() => {
-        const state = window as unknown as Record<string, unknown>;
-        const samples: number[][] = [];
-        const deadline = performance.now() + 25000;
-        let request = 0;
-        const tick = (timestamp: number) => {
-          samples.push([timestamp, performance.now()]);
-          if (samples.length < 4096 && performance.now() < deadline) {
-            request = requestAnimationFrame(tick);
-          }
-        };
-        request = requestAnimationFrame(tick);
-        state.__donnerStopAnimationRafProbe = () => {
-          cancelAnimationFrame(request);
-          delete state.__donnerStopAnimationRafProbe;
-          return samples;
-        };
-      });
-    }
-    let after: Awaited<ReturnType<typeof readCadence>>;
-    let mainRafSamples: number[][] | null = null;
-    let ownerProbe: Worker | undefined;
-    let ownerRaf: {
-      timeOrigin: number;
-      samples: number[][];
-      counts: number[];
-      registrations: number[][];
-    } | null = null;
-    try {
-      if (probeMainRaf) ownerProbe = await startOwnerFrameProbe(page, probeOwnerRaf);
-      await expect.poll(async () => (await readCadence()).time - before.time, {
-        timeout: 25000,
-        intervals: [100],
-      }).toBeGreaterThanOrEqual(20000);
-      after = await readCadence();
-    } finally {
-      if (ownerProbe) {
-        ownerRaf = await stopOwnerFrameProbe(ownerProbe);
-      }
-      if (probeMainRaf) {
-        mainRafSamples = await boundBrowserDiagnostic(
-          page.evaluate(() => {
-            const state = window as unknown as Record<string, unknown>;
-            const stop = state.__donnerStopAnimationRafProbe as () => number[][];
-            return stop();
-          }),
-          2000,
-        );
-      }
-    }
-
-    for (const field of ["idleYieldMs", "idleCallbackMs", "idleLockMs", "idleWaitMs"] as const) {
-      expect(after.worker?.[field], `worker timing ${field}`).toBeGreaterThanOrEqual(0);
-      expect(Number.isFinite(after.worker?.[field]), `finite worker timing ${field}`).toBe(true);
-    }
-    const ownerAfter = await readGpuOwnerDispatchStats(page);
-    const loopAfter = await page.evaluate(() => window.__donnerFrameLoopStats);
-    const schedulerAfter = await readCarouselFrameDiagnostics(page);
-    const presentation = await page.evaluate(() => window.__donnerPresentedDocumentStats);
-    const presentedSamples = (presentation?.samples ?? [])
-      .filter((sample) =>
-        sample[0] > before.presentedDocuments && sample[0] <= after.presentedDocuments
-      )
-      .sort((a, b) => a[0] - b[0]);
-    const seconds = (after.time - before.time) / 1000;
-    const producerSpanMs = presentedSamples.length > 1
-      ? presentedSamples.at(-1)![3] - presentedSamples[0][3]
-      : 0;
-    const presentationGapsMs = presentedSamples.slice(1)
-      .map((sample, index) => sample[3] - presentedSamples[index][3]);
-    const ownerTimeOrigin = ownerRaf?.timeOrigin ?? 0;
-    const cadencePath = testInfo.outputPath("animation-cadence.json");
-    const cadence = {
-      browser: testInfo.project.name,
-      launch: {
-        headless: testInfo.project.use.headless ?? null,
-        launchHeadless: testInfo.project.use.launchOptions?.headless ?? null,
-      },
+    const cadenceMeasurement = await measureAnimationCadence(page, testInfo);
+    await reportAnimationCadence({
+      page,
+      testInfo,
       browserGpuInfo,
-      seconds,
-      uiFps: (after.frames - before.frames) / seconds,
-      documentFps: (after.documents - before.documents) / seconds,
-      deliveredPresentationFps: (after.presentedDocuments - before.presentedDocuments) / seconds,
-      presentedDocumentFps: producerSpanMs > 0
-        ? (presentedSamples.length - 1) * 1000 / producerSpanMs
-        : null,
-      presentation: {
-        before: before.presentedDocuments,
-        after: after.presentedDocuments,
-        samples: presentedSamples,
-        producerSpanMs,
-        gapsMs: presentationGapsMs,
-      },
-      host: {
-        platform: platform(),
-        release: release(),
-        architecture: arch(),
-        cpuModel: cpus()[0]?.model,
-        logicalCpus: cpus().length,
-        memoryBytes: totalmem(),
-        loadBefore,
-        loadAfter: loadavg(),
-      },
-      viewport: box,
-      gpuOwner: { before: ownerBefore, after: ownerAfter },
-      workerSamples,
-      pageState: { before: before.pageState, after: after.pageState },
-      frameLoop: { before: loopBefore, after: loopAfter },
-      scheduler: {
-        before: schedulerBefore,
-        after: schedulerAfter,
-        mainRafProbeEnabled: probeMainRaf,
-        ownerRafProbeEnabled: probeOwnerRaf,
-        ownerRaf: ownerRaf
-          ? {
-            timeOrigin: ownerTimeOrigin,
-            previewAdvanceCounts: ownerRaf.counts,
-            registrations: ownerRaf.registrations.filter((record) => {
-              const observedMs = ownerTimeOrigin + record[3] - before.timeOrigin;
-              return record[4] >= 0 && observedMs >= before.time && observedMs <= after.time;
-            }),
-            samples: ownerRaf.samples.filter((sample) => {
-              const observedMs = ownerTimeOrigin + sample[1] - before.timeOrigin;
-              return observedMs >= before.time && observedMs <= after.time;
-            }),
-          }
-          : null,
-        intervalStartMs: before.time,
-        intervalEndMs: after.time,
-        mainRafSamples:
-          mainRafSamples?.filter((sample) => sample[1] >= before.time && sample[1] <= after.time)
-            ?? null,
-      },
-      timeline: await readCarouselGpuTimeline(page),
-      environment: await page.evaluate(() => ({
-        userAgent: navigator.userAgent,
-        devicePixelRatio,
-        worker: window.__donnerWorkerStats,
-        resources: window.__donnerPresentationResourceStats,
-      })),
-    };
-    await writeFile(cadencePath, JSON.stringify(cadence, null, 2));
-    await testInfo.attach("animation-cadence", {
-      contentType: "application/json",
-      path: cadencePath,
+      box,
+      measurement: cadenceMeasurement,
     });
-    expect(presentedSamples.length, "complete distinct-presentation sample interval").toBe(
-      after.presentedDocuments - before.presentedDocuments,
-    );
-    expect(presentedSamples.length).toBeGreaterThan(10);
-    for (let index = 1; index < presentedSamples.length; ++index) {
-      expect(presentedSamples[index][0]).toBe(presentedSamples[index - 1][0] + 1);
-      expect(presentedSamples[index][3]).toBeGreaterThanOrEqual(presentedSamples[index - 1][3]);
-    }
-    expect(before.layerThumbnails?.previewPaused, "sidebar work is paused in Preview").toBe(true);
-    expect(after.layerThumbnails?.previewPaused, "sidebar work remains paused").toBe(true);
-    for (const field of ["refreshPasses", "renderAttempts"] as const) {
-      expect(Number.isSafeInteger(before.layerThumbnails?.[field]), `initial sidebar ${field}`)
-        .toBe(true);
-      expect(after.layerThumbnails?.[field], `no sidebar ${field} during playback`)
-        .toBe(before.layerThumbnails?.[field]);
-    }
-    const gpuBefore = ownerBefore?.gpu as
-      | { readbackCopies: number; cpuTextureWrites: number }
-      | undefined;
-    expect(gpuBefore, "GPU residency counters are available").toBeTruthy();
-    for (const field of ["readbackCopies", "cpuTextureWrites"] as const) {
-      expect(Number.isFinite(gpuBefore?.[field]), `finite initial ${field}`).toBe(true);
-      const gpuAfter = ownerAfter?.gpu as typeof gpuBefore;
-      expect(Number.isFinite(gpuAfter?.[field]), `finite final ${field}`).toBe(true);
-    }
-    expect(ownerAfter?.gpu, "ordinary animation stays GPU resident").toMatchObject({
-      readbackCopies: gpuBefore?.readbackCopies,
-      cpuTextureWrites: gpuBefore?.cpuTextureWrites,
-    });
+    const { before, after } = cadenceMeasurement;
     await verifyRasterProgressWithTimersHeld(page);
     // Observe completion only after the uninstrumented playback interval has finished.
     await expectSurfaceFrameProbeReady(page);
@@ -4303,272 +4677,19 @@ test(
     await writeFile(testInfo.outputPath("animation-preview.png"), previewCapture.png);
     expect(after.documents - before.documents).toBeGreaterThan(10);
 
-    let pulseClickStartedEpochMs: number | null = null;
-    let pulseClickFinishedEpochMs: number | null = null;
-    let delayedPulseClickStartedEpochMs: number | null = null;
-    let delayedPulseClickFinishedEpochMs: number | null = null;
-    let delayedPulseReleaseEpochMs: number | null = null;
-    let heldPulseHeight: number | null = null;
-    try {
-      await Promise.all(
-        page.workers().map((worker) =>
-          boundBrowserDiagnostic(
-            worker.evaluate(() => {
-              (globalThis as unknown as Record<string, unknown>).__donnerPreviewPointerTrace = [];
-            }),
-            1000,
-          )
-        ),
-      );
-      const pad = { x: box.x + originX + 184 * scale, y: box.y + originY + 314 * scale };
-      const padRegion = {
-        x: box.x + originX + 80 * scale,
-        y: box.y + originY + 280 * scale,
-        width: 200 * scale,
-        height: 65 * scale,
-      };
-      const padPixels = async (
-        target: "animation-hover" | "animation-pressed",
-        deadline: number,
-      ) => {
-        const capture = await captureAnimationRegion(padRegion, deadline);
-        const pixels = capture.read(target)?.pixels ?? 0;
-        if (pixels <= 1000) {
-          await writeFile(testInfo.outputPath(`${target}-probe.png`), capture.png);
-          await writeFile(
-            testInfo.outputPath(`${target}-probe.json`),
-            JSON.stringify({ padRegion, viewport: capture.viewport, pixels }, null, 2),
-          );
-        }
-        return pixels;
-      };
-      const verifyPadInput = async (
-        eventType: number,
-        target: "animation-hover" | "animation-pressed",
-        action: () => Promise<void>,
-      ) => {
-        if (interactionCaptureOwner === null) throw new Error("animation owner is unavailable");
-        const deadline = performance.now() + scaledMs(5000);
-        const notBefore = Date.now();
-        await awaitBeforeBlueDeadline(action(), deadline);
-        // Screenshot capture can stall Firefox's worker progress. Let the actual input
-        // dispatch and its following document presentation finish before asking for pixels.
-        await expect.poll(
-          () =>
-            awaitBeforeBlueDeadline(
-              interactionCaptureOwner.evaluate(({ eventType, notBefore }) => {
-                const trace =
-                  (globalThis as unknown as Record<string, unknown>).__donnerPreviewPointerTrace;
-                return Array.isArray(trace) && trace.some((row) =>
-                  Array.isArray(row)
-                  && row[0] >= notBefore && row[1] === 2 && row[2] === eventType && row[5] === true
-                );
-              }, { eventType, notBefore }),
-              deadline,
-            ),
-          {
-            timeout: Math.max(1, deadline - performance.now()),
-            intervals: [16],
-            message: "the pointer event reaches the preview document",
-          },
-        ).toBe(true);
-        const previous = await awaitBeforeBlueDeadline(
-          page.evaluate(() => window.__donnerWorkerStats?.completedResults ?? 0),
-          deadline,
-        );
-        await expect.poll(() =>
-          awaitBeforeBlueDeadline(
-            page.evaluate((before) => {
-              const stats = window.__donnerWorkerStats;
-              return (stats?.completedResults ?? 0) > before
-                && stats?.resultFramePresented === true;
-            }, previous),
-            deadline,
-          ), {
-          timeout: Math.max(1, deadline - performance.now()),
-          intervals: [16],
-          message: "a document frame after input dispatch is presented",
-        }).toBe(true);
-        await expect.poll(() => padPixels(target, deadline), {
-          timeout: Math.max(1, deadline - performance.now()),
-          intervals: [50],
-        }).toBeGreaterThan(1000);
-        if (performance.now() >= deadline) throw new Error("animation input deadline exceeded");
-      };
-      await verifyPadInput(7, "animation-hover", () => page.mouse.move(pad.x, pad.y));
-      await verifyPadInput(2, "animation-pressed", () => page.mouse.down());
-      await verifyPadInput(3, "animation-hover", () => page.mouse.up());
-      orbProbe.setTraceScreenshots(true);
-      pulseClickStartedEpochMs = Date.now();
-      await page.mouse.click(box.x + originX + 456 * scale, pad.y);
-      pulseClickFinishedEpochMs = Date.now();
-      // The pulse lasts 600 ms; the default poll backoff can skip its entire active interval.
-      await expect.poll(async () => {
-        const bounds = await orb();
-        return bounds.maxY - bounds.minY;
-      }, { timeout: scaledMs(5000), intervals: [50], message: "Click triggers the radius pulse" })
-        .toBeGreaterThan(
-          58 * scale,
-        );
-      await expect.poll(async () => {
-        const bounds = await orb();
-        return Math.abs((bounds.maxY - bounds.minY) - (start.maxY - start.minY));
-      }, { timeout: scaledMs(5000), message: "First pulse returns to its base diameter" })
-        .toBeLessThanOrEqual(2 * scale);
-      // Hold raster progress longer than the pulse before delivering another click. Its target
-      // remains the displayed pad, but its begin time must use the dispatch-time preview clock.
-      const pulseTraceGeneration = Date.now();
-      if (interactionCaptureOwner === null) throw new Error("animation owner is unavailable");
-      preQueuedPointerTrace = await interactionCaptureOwner.evaluate((generation) => {
-        const scope = globalThis as unknown as Record<string, unknown>;
-        const previous = scope.__donnerPreviewPointerTrace;
-        scope.__donnerPreviewPointerTrace = Object.assign([], { generation });
-        return previous;
-      }, pulseTraceGeneration);
-      const firstClick = Array.isArray(preQueuedPointerTrace)
-        ? preQueuedPointerTrace.find((row) => row[1] === 2 && row[2] === 0 && row[5] === true)
-        : undefined;
-      if (!firstClick) throw new Error("the normal pulse dispatch trace is unavailable");
-      const heldForPulse = await holdRasterTaskYield(page);
-      try {
-        const heldBounds = await orb();
-        heldPulseHeight = heldBounds.maxY - heldBounds.minY;
-        expect(
-          Math.abs(heldPulseHeight - (start.maxY - start.minY)),
-          "held frame contains the base orb, not the previous pulse",
-        ).toBeLessThanOrEqual(2 * scale);
-        const heldAt = Date.now();
-        await expect.poll(() => Date.now() - heldAt, {
-          timeout: scaledMs(3000),
-          intervals: [50],
-          message: "raster stall exceeds the short pulse duration",
-        }).toBeGreaterThanOrEqual(1000);
-        delayedPulseClickStartedEpochMs = Date.now();
-        await page.mouse.click(box.x + originX + 456 * scale, pad.y);
-        delayedPulseClickFinishedEpochMs = Date.now();
-      } finally {
-        await heldForPulse.release();
-        delayedPulseReleaseEpochMs = Date.now();
-      }
-      const queuedPulseDeadline = performance.now() + scaledMs(5000);
-      // Avoid screenshot-induced stalls while queued input is delivered. A later admitted
-      // timeline sample proves an earlier in-window sample was presented; retain that frame
-      // with the existing raster hold before reading pixels. Playback cadence was measured
-      // above without holds or screenshots, independently of this queued-event correctness probe.
-      await expect.poll(async () => {
-        const snapshot = await awaitBeforeBlueDeadline(
-          interactionCaptureOwner.evaluate(() => {
-            const trace = (globalThis as unknown as Record<string, unknown>)
-              .__donnerPreviewPointerTrace as (unknown[] & { generation?: number }) | undefined;
-            return {
-              generation: trace?.generation,
-              entries: Array.isArray(trace) ? [...trace] : [],
-            };
-          }),
-          queuedPulseDeadline,
-        );
-        queuedPulseObservation = presentedPulseWindow(
-          snapshot,
-          pulseTraceGeneration,
-          firstClick[3],
-          delayedPulseClickStartedEpochMs,
-        );
-        return queuedPulseObservation !== null;
-      }, {
-        timeout: Math.max(1, queuedPulseDeadline - performance.now()),
-        intervals: [16],
-        message: "a queued-click pulse sample reaches presentation",
-      }).toBe(true);
-      const heldPulseFrame = await holdKnownRasterUntil(heldForPulse.raster, queuedPulseDeadline);
-      const pulseErrors: unknown[] = [];
-      try {
-        const heldTrace = await awaitBeforeBlueDeadline(
-          interactionCaptureOwner.evaluate(() => {
-            const trace = (globalThis as unknown as Record<string, unknown>)
-              .__donnerPreviewPointerTrace as (unknown[] & { generation?: number }) | undefined;
-            return {
-              generation: trace?.generation,
-              entries: Array.isArray(trace) ? [...trace] : [],
-            };
-          }),
-          queuedPulseDeadline,
-        );
-        const retainedObservation = presentedPulseWindow(
-          heldTrace,
-          pulseTraceGeneration,
-          firstClick[3],
-          delayedPulseClickStartedEpochMs,
-          0.5,
-        );
-        expect(retainedObservation, "the acknowledged hold is still inside the same pulse").not
-          .toBeNull();
-        queuedPulseObservation = {
-          beforeHold: queuedPulseObservation,
-          afterHold: retainedObservation,
-        };
-        await expect.poll(async () => {
-          const bounds = await orb(queuedPulseDeadline);
-          return bounds.maxY - bounds.minY;
-        }, {
-          timeout: Math.max(1, queuedPulseDeadline - performance.now()),
-          intervals: [50],
-          message: "Queued click pulses after stale-frame catch-up",
-        }).toBeGreaterThan(58 * scale);
-        if (performance.now() >= queuedPulseDeadline) {
-          throw new Error("queued pulse deadline exceeded");
-        }
-      } catch (error) {
-        pulseErrors.push(error);
-      } finally {
-        try {
-          await heldPulseFrame.release();
-        } catch (error) {
-          pulseErrors.push(error);
-        }
-      }
-      if (pulseErrors.length > 0) {
-        throw new AggregateError(pulseErrors, "queued pulse observation failed");
-      }
-    } finally {
-      orbProbe.setTraceScreenshots(false);
-      const pointerTraces = await Promise.all(
-        page.workers().map((worker) =>
-          boundBrowserDiagnostic(
-            worker.evaluate(() => {
-              const scope = globalThis as unknown as Record<string, unknown>;
-              const trace = scope.__donnerPreviewPointerTrace;
-              delete scope.__donnerPreviewPointerTrace;
-              return trace;
-            }),
-            1000,
-          )
-        ),
-      );
-      const pulsePath = testInfo.outputPath("animation-pulse-input.json");
-      await writeFile(
-        pulsePath,
-        JSON.stringify(
-          {
-            pulseClickStartedEpochMs,
-            pulseClickFinishedEpochMs,
-            delayedPulseClickStartedEpochMs,
-            delayedPulseClickFinishedEpochMs,
-            delayedPulseReleaseEpochMs,
-            heldPulseHeight,
-            preQueuedPointerTrace,
-            queuedPulseObservation,
-            pulseScreenshots: orbProbe.screenshots,
-            pointerTraces,
-          },
-          null,
-          2,
-        ),
-      );
-      await testInfo.attach("animation-pulse-input", {
-        contentType: "application/json",
-        path: pulsePath,
-      });
-    }
+    await exerciseAnimationPointerPulse({
+      page,
+      testInfo,
+      box,
+      originX,
+      originY,
+      scale,
+      captureAnimationRegion,
+      interactionCaptureOwner,
+      orbProbe,
+      orb,
+      start,
+    });
 
     await finishAnimationPreview({
       page,
