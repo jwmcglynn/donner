@@ -143,6 +143,7 @@ public:
   /// Owned paint state saved and restored under a sub-document's write guard.
   using InitialPaintState =
       std::pair<std::optional<ResolvedPaintServer>, std::optional<ResolvedPaintServer>>;
+  /// Return the owned context paints for restoration after a scoped external-use render.
   InitialPaintState initialPaintState() const {
     return {initialContextFill_, initialContextStroke_};
   }
