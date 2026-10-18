@@ -2634,6 +2634,14 @@ void XMLDocument::setSourceEditTreeLimits(std::size_t maximumTreeNodes,
       std::min(maximumTreeDepth, static_cast<std::size_t>(std::numeric_limits<int>::max())));
 }
 
+std::uint64_t XMLDocument::remainingSourceEditTreeNodeBudget() const {
+  XMLDocument view = *this;
+  const std::uint64_t liveNodes = CountLiveXmlNodes(view);
+  const std::uint64_t maximum =
+      registry_->ctx().get<XMLDocumentContext>().maximumSourceEditTreeNodes;
+  return liveNodes >= maximum ? 0 : maximum - liveNodes;
+}
+
 std::optional<XMLNode> XMLDocument::nodeAtSourceOffset(std::size_t offset) const {
   if (!hasSourceStore() || offset >= source().size()) {
     return std::nullopt;

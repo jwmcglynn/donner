@@ -246,6 +246,16 @@ private:
   // re-parses the bytes into a fresh SVGDocument and replaces `document_`.
   void applyOne(const EditorCommand& command);
 
+  /// Apply a text-outline selection as one all-or-nothing source/DOM edit.
+  void applyReplacementBatch(const EditorCommand& command);
+
+  /// Insert newly authored text and mirror its initial content into source.
+  void applyInsertText(const EditorCommand& command);
+
+  /// Apply an admitted queued command; return true if rollback invalidated later handles.
+  bool applyQueuedCommand(EditorCommand& command,
+                          std::unordered_map<Entity, Entity>& activeStructuralRemap);
+
   /// Accumulate flush metadata only after deferred admission accepts the command.
   void recordAppliedCommand(const EditorCommand& command);
 

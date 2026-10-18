@@ -1108,69 +1108,86 @@ bool EditorApp::flushFrame() {
     return false;
   }
 
-  const bool documentReplaced = documentBeforeFlush.has_value() && document_.hasDocument() &&
-                                !(*documentBeforeFlush == document_.document());
-  if (documentReplaced) {
-    editingScope_.reset();
-    std::vector<svg::SVGElement> remappedSelection;
-    remappedSelection.reserve(selectionTargets.size());
-    for (const auto& target : selectionTargets) {
-      if (auto element = resolveAttributeWritebackTarget(document_.document(), target);
-          element.has_value()) {
-        remappedSelection.push_back(*element);
-      }
-    }
-
-    selection_ = std::move(remappedSelection);
-    refreshFirstSelectionCache();
-    controller_.reset();
-    controllerVersion_ = 0;
-    if (!(documentFlush.replacedDocument && documentFlush.preserveUndoOnReparse)) {
-      undoTimeline_.clear();
-    }
-  }
-
-  if (pendingSelectionRestoreTargets_.has_value() && document_.hasDocument()) {
-    std::vector<svg::SVGElement> restoredSelection;
-    restoredSelection.reserve(pendingSelectionRestoreTargets_->size());
-    for (const AttributeWritebackTarget& target : *pendingSelectionRestoreTargets_) {
-      if (auto element = resolveAttributeWritebackTarget(document_.document(), target);
-          element.has_value()) {
-        restoredSelection.push_back(*element);
-      }
-    }
-
-    selection_ = std::move(restoredSelection);
-    refreshFirstSelectionCache();
-    controller_.reset();
-    controllerVersion_ = 0;
-    pendingSelectionRestoreTargets_.reset();
-  }
+  const bool documentReplaced =
+      reconcileDocumentReplacement(documentBeforeFlush, selectionTargets, documentFlush);
+  restorePendingSelectionTargets();
 
   if (pendingSelectionAfterFlush_.has_value()) {
     setSelection(std::move(*pendingSelectionAfterFlush_));
     pendingSelectionAfterFlush_.reset();
   }
 
-  if (pendingReplacementSelectionAfterFlush_.has_value()) {
-    if (!documentReplaced) {
-      std::vector<svg::SVGElement> resolved;
-      resolved.reserve(pendingReplacementSelectionAfterFlush_->size());
-      for (const auto& [original, replacement] : *pendingReplacementSelectionAfterFlush_) {
-        if (original.parentElement().has_value()) {
-          resolved.push_back(original);
-        } else if (replacement.parentElement().has_value()) {
-          resolved.push_back(replacement);
-        }
-      }
-      setSelection(std::move(resolved));
-    }
-    pendingReplacementSelectionAfterFlush_.reset();
-  }
+  resolvePendingReplacementSelection(documentReplaced);
 
   consumePendingDocumentSourceUndo();
 
   return true;
+}
+
+bool EditorApp::reconcileDocumentReplacement(
+    const std::optional<svg::SVGDocument>& documentBeforeFlush,
+    const std::vector<AttributeWritebackTarget>& selectionTargets,
+    const AsyncSVGDocument::FlushResult& documentFlush) {
+  const bool documentReplaced = documentBeforeFlush.has_value() && document_.hasDocument() &&
+                                !(*documentBeforeFlush == document_.document());
+  if (!documentReplaced) {
+    return false;
+  }
+  editingScope_.reset();
+  std::vector<svg::SVGElement> remappedSelection;
+  remappedSelection.reserve(selectionTargets.size());
+  for (const auto& target : selectionTargets) {
+    if (auto element = resolveAttributeWritebackTarget(document_.document(), target);
+        element.has_value()) {
+      remappedSelection.push_back(*element);
+    }
+  }
+  selection_ = std::move(remappedSelection);
+  refreshFirstSelectionCache();
+  controller_.reset();
+  controllerVersion_ = 0;
+  if (!(documentFlush.replacedDocument && documentFlush.preserveUndoOnReparse)) {
+    undoTimeline_.clear();
+  }
+  return true;
+}
+
+void EditorApp::restorePendingSelectionTargets() {
+  if (!pendingSelectionRestoreTargets_.has_value() || !document_.hasDocument()) {
+    return;
+  }
+  std::vector<svg::SVGElement> restoredSelection;
+  restoredSelection.reserve(pendingSelectionRestoreTargets_->size());
+  for (const AttributeWritebackTarget& target : *pendingSelectionRestoreTargets_) {
+    if (auto element = resolveAttributeWritebackTarget(document_.document(), target);
+        element.has_value()) {
+      restoredSelection.push_back(*element);
+    }
+  }
+  selection_ = std::move(restoredSelection);
+  refreshFirstSelectionCache();
+  controller_.reset();
+  controllerVersion_ = 0;
+  pendingSelectionRestoreTargets_.reset();
+}
+
+void EditorApp::resolvePendingReplacementSelection(bool documentReplaced) {
+  if (!pendingReplacementSelectionAfterFlush_.has_value()) {
+    return;
+  }
+  if (!documentReplaced) {
+    std::vector<svg::SVGElement> resolved;
+    resolved.reserve(pendingReplacementSelectionAfterFlush_->size());
+    for (const auto& [original, replacement] : *pendingReplacementSelectionAfterFlush_) {
+      if (original.parentElement().has_value()) {
+        resolved.push_back(original);
+      } else if (replacement.parentElement().has_value()) {
+        resolved.push_back(replacement);
+      }
+    }
+    setSelection(std::move(resolved));
+  }
+  pendingReplacementSelectionAfterFlush_.reset();
 }
 
 void EditorApp::consumePendingDocumentSourceUndo() {

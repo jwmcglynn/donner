@@ -242,6 +242,10 @@ public:
    */
   void setSourceEditTreeLimits(std::size_t maximumTreeNodes, std::size_t maximumTreeDepth);
 
+  /// Number of additional non-document XML nodes the structural-edit budget allows.
+  /// Detached XML nodes already owned by this document count against the budget.
+  [[nodiscard]] std::uint64_t remainingSourceEditTreeNodeBudget() const;
+
   /**
    * Set an XML attribute through this document and update owned source text.
    *

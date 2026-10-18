@@ -676,6 +676,17 @@ public:
   }
 
 private:
+  /// Remap selection and undo state when a flush replaces the document.
+  bool reconcileDocumentReplacement(const std::optional<svg::SVGDocument>& documentBeforeFlush,
+                                    const std::vector<AttributeWritebackTarget>& selectionTargets,
+                                    const AsyncSVGDocument::FlushResult& documentFlush);
+
+  /// Restore an explicitly deferred selection after a document reparse.
+  void restorePendingSelectionTargets();
+
+  /// Complete a queued text-outline selection after the document flush.
+  void resolvePendingReplacementSelection(bool documentReplaced);
+
   /// Refreshes `cachedFirstSelection_` after `selection_` changes so
   /// the `selectedElement()` accessor can return a stable
   /// `const optional&`. Centralized so we can't forget it on a new

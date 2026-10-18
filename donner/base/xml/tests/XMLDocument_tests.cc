@@ -4249,6 +4249,15 @@ TEST_F(XMLDocumentTests, InsertNodeRejectsDocumentNodeBudgetOverflow) {
   ExpectRejectedInsert(doc, *doc.root().firstChild()->firstChild(), group, "tree-node limit");
 }
 
+TEST_F(XMLDocumentTests, RemainingSourceEditTreeNodeBudgetIncludesDetachedNodes) {
+  XMLDocument doc = ParseDocument("<svg><rect/></svg>");
+  doc.setSourceEditTreeLimits(3, 10);
+  EXPECT_EQ(doc.remainingSourceEditTreeNodeBudget(), 1u);
+
+  [[maybe_unused]] XMLNode detached = XMLNode::CreateElementNode(doc, "g");
+  EXPECT_EQ(doc.remainingSourceEditTreeNodeBudget(), 0u);
+}
+
 TEST_F(XMLDocumentTests, InsertNodeRejectsDocumentAttributeBudgetOverflow) {
   XMLParser::Options options;
   options.maxTotalAttributes = 2;

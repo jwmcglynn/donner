@@ -7,8 +7,6 @@
 #include "donner/base/ParseWarningSink.h"
 #include "donner/base/xml/XMLNode.h"
 #include "donner/base/xml/XMLQualifiedName.h"
-#include "donner/base/xml/components/TreeComponent.h"
-#include "donner/base/xml/components/XMLDocumentContext.h"
 #include "donner/editor/EditorParseOptions.h"
 #include "donner/editor/LockState.h"
 #include "donner/svg/SVGGraphicsElement.h"
@@ -30,30 +28,18 @@ std::vector<ParseDiagnostic> CopyWarnings(const ParseWarningSink& sink) {
 }
 
 bool ExceedsReplacementBatchNodeLimit(svg::SVGDocument& document, const EditorCommand& command) {
-  Registry& registry = document.unsafeRegistry();
-  const std::uint64_t maximum =
-      registry.ctx().get<xml::components::XMLDocumentContext>().maximumSourceEditTreeNodes;
-  std::uint64_t prospective = 0;
-  for (Entity entity : registry.view<donner::components::TreeComponent>()) {
-    const std::optional<xml::XMLNode> node = xml::XMLNode::TryCast(EntityHandle(registry, entity));
-    if (node.has_value() && node->type() != xml::XMLNode::Type::Document) {
-      if (prospective == maximum) {
-        return true;
-      }
-      ++prospective;
-    }
-  }
-
+  const std::uint64_t remaining = document.xmlDocument().remainingSourceEditTreeNodeBudget();
+  std::uint64_t needed = 0;
   for (const EditorCommand::ElementReplacement& replacement : command.replacements) {
     std::vector<svg::SVGElement> pending{replacement.replacement};
     while (!pending.empty()) {
       svg::SVGElement element = pending.back();
       pending.pop_back();
       if (!xml::XMLNode::TryCast(element.entityHandle()).has_value()) {
-        if (prospective == maximum) {
+        if (needed == remaining) {
           return true;
         }
-        ++prospective;
+        ++needed;
       }
       for (std::optional<svg::SVGElement> child = element.firstChild(); child.has_value();
            child = child->nextSibling()) {
@@ -62,6 +48,95 @@ bool ExceedsReplacementBatchNodeLimit(svg::SVGDocument& document, const EditorCo
     }
   }
   return false;
+}
+
+struct ReplacementBatchEdits {
+  bool failed = false;
+  bool sourceRestored = false;
+  std::optional<ParseDiagnostic> failure;
+  std::vector<xml::XMLSourceDelta> sourceDeltas;
+};
+
+void AppendReplacementDeltas(ReplacementBatchEdits& edits,
+                             const xml::ApplySourceEditResult& result) {
+  edits.sourceDeltas.insert(edits.sourceDeltas.end(), result.sourceDeltas.begin(),
+                            result.sourceDeltas.end());
+}
+
+void StageReplacementSubtrees(svg::SVGDocument& document, const EditorCommand& command,
+                              ReplacementBatchEdits& edits, std::vector<svg::SVGElement>& staged) {
+  for (const EditorCommand::ElementReplacement& replacement : command.replacements) {
+    xml::ApplySourceEditResult inserted =
+        document.insertElement(replacement.parent, replacement.replacement, replacement.original);
+    AppendReplacementDeltas(edits, inserted);
+    if (inserted.applied) {
+      staged.push_back(replacement.replacement);
+    }
+    if (!inserted.applied || inserted.diagnostic.has_value()) {
+      edits.failure = std::move(inserted.diagnostic);
+      edits.failed = true;
+      return;
+    }
+  }
+}
+
+void RemoveReplacementOriginals(svg::SVGDocument& document, const EditorCommand& command,
+                                ReplacementBatchEdits& edits) {
+  for (const EditorCommand::ElementReplacement& replacement : command.replacements) {
+    xml::ApplySourceEditResult removed = document.removeElement(replacement.original);
+    AppendReplacementDeltas(edits, removed);
+    if (!removed.applied || removed.diagnostic.has_value()) {
+      edits.failure = std::move(removed.diagnostic);
+      edits.failed = true;
+      return;
+    }
+  }
+}
+
+void RollbackStagedReplacements(svg::SVGDocument& document, std::vector<svg::SVGElement>& staged,
+                                ReplacementBatchEdits& edits) {
+  for (auto it = staged.rbegin(); it != staged.rend(); ++it) {
+    xml::ApplySourceEditResult removed = document.removeElement(*it);
+    AppendReplacementDeltas(edits, removed);
+    if ((!removed.applied || removed.diagnostic.has_value()) && removed.diagnostic.has_value()) {
+      edits.failure = std::move(removed.diagnostic);
+    }
+  }
+}
+
+ReplacementBatchEdits ApplyReplacementBatchEdits(svg::SVGDocument& document,
+                                                 const EditorCommand& command,
+                                                 std::string_view sourceBefore) {
+  ReplacementBatchEdits edits;
+  std::vector<svg::SVGElement> staged;
+  staged.reserve(command.replacements.size());
+  // Nested DOM setters reuse this scope; no reader can observe a partial batch.
+  [[maybe_unused]] svg::DocumentWriteAccess access = document.writeAccess();
+  if (document.source() != sourceBefore) {
+    edits.failed = true;
+    edits.sourceRestored = true;
+    return edits;
+  }
+  if (ExceedsReplacementBatchNodeLimit(document, command)) {
+    edits.failure = ParseDiagnostic::Warning(
+        "Text-to-outline selection exceeds the tree-node limit", FileOffset::Offset(0));
+    edits.failed = true;
+  }
+  if (!edits.failed) {
+    StageReplacementSubtrees(document, command, edits, staged);
+  }
+  if (!edits.failed) {
+    RemoveReplacementOriginals(document, command, edits);
+  }
+  if (edits.failed) {
+    RollbackStagedReplacements(document, staged, edits);
+    edits.sourceRestored = document.source() == sourceBefore &&
+                           std::all_of(command.replacements.begin(), command.replacements.end(),
+                                       [](const EditorCommand::ElementReplacement& replacement) {
+                                         return replacement.original.parentElement().has_value();
+                                       });
+  }
+  return edits;
 }
 
 bool DeferredCommandIsLocked(const EditorCommand& command) {
@@ -206,29 +281,8 @@ bool AsyncSVGDocument::flushFrame() {
   };
   std::unordered_map<Entity, Entity> activeStructuralRemap;
   for (EditorCommand& cmd : queueFlush.effectiveCommands) {
-    if (!activeStructuralRemap.empty()) {
-      remapCommandTargets(&cmd, activeStructuralRemap);
-    }
-
-    if (DeferredCommandIsLocked(cmd)) {
-      continue;
-    }
-    // A replacement batch can be refused without changing the document.
-    // Record it only after the whole selection has been admitted.
-    if (cmd.kind != EditorCommand::Kind::ReplaceElements) {
-      recordAppliedCommand(cmd);
-    }
-
-    applyOne(cmd);
-    if (lastFlushResult_.rolledBackReplacementBatch) {
-      // The rollback replaced the document. Later queued handles belong to
-      // the old entity space and must not be applied in this flush.
+    if (applyQueuedCommand(cmd, activeStructuralRemap)) {
       break;
-    }
-    if (cmd.kind == EditorCommand::Kind::ReplaceDocument ||
-        cmd.kind == EditorCommand::Kind::CutShapes ||
-        cmd.kind == EditorCommand::Kind::PasteShapes) {
-      activeStructuralRemap = pendingStructuralRemap_;
     }
   }
 
@@ -242,6 +296,31 @@ bool AsyncSVGDocument::flushFrame() {
   appendUnmirroredSourceDeltas(lastFlushResult_.sourceDeltas);
   frameVersion_.fetch_add(1, std::memory_order_release);
   return true;
+}
+
+bool AsyncSVGDocument::applyQueuedCommand(
+    EditorCommand& command, std::unordered_map<Entity, Entity>& activeStructuralRemap) {
+  if (!activeStructuralRemap.empty()) {
+    remapCommandTargets(&command, activeStructuralRemap);
+  }
+  if (DeferredCommandIsLocked(command)) {
+    return false;
+  }
+  // A replacement batch can be refused without changing the document.
+  if (command.kind != EditorCommand::Kind::ReplaceElements) {
+    recordAppliedCommand(command);
+  }
+  applyOne(command);
+  if (lastFlushResult_.rolledBackReplacementBatch) {
+    // The rollback replaced the document. Later handles belong to the old entity space.
+    return true;
+  }
+  if (command.kind == EditorCommand::Kind::ReplaceDocument ||
+      command.kind == EditorCommand::Kind::CutShapes ||
+      command.kind == EditorCommand::Kind::PasteShapes) {
+    activeStructuralRemap = pendingStructuralRemap_;
+  }
+  return false;
 }
 
 void AsyncSVGDocument::recordAppliedCommand(const EditorCommand& cmd) {
@@ -378,6 +457,75 @@ bool AsyncSVGDocument::loadFromString(std::string_view svgBytes) {
   return true;
 }
 
+void AsyncSVGDocument::applyReplacementBatch(const EditorCommand& command) {
+  if (command.replacements.empty()) {
+    return;
+  }
+
+  // A source-exact fallback is required if a later-stage edit cannot be rolled back.
+  const std::string sourceBefore = document_->withReadAccess(
+      [this](svg::DocumentReadAccess&) { return std::string(document_->source()); });
+  ParseWarningSink rollbackSink;
+  auto rollbackParsed =
+      svg::parser::SVGParser::ParseSVG(sourceBefore, rollbackSink, EditorParseOptions());
+  if (rollbackParsed.hasError()) {
+    publishParseDiagnostics(CopyWarnings(rollbackSink), std::move(rollbackParsed.error()));
+    return;
+  }
+  svg::SVGDocument rollbackDocument = std::move(rollbackParsed).result();
+  const bool priorApplied = lastFlushResult_.appliedCommands;
+  ReplacementBatchEdits edits = ApplyReplacementBatchEdits(*document_, command, sourceBefore);
+  if (!edits.failed) {
+    lastFlushResult_.sourceDeltas.insert(lastFlushResult_.sourceDeltas.end(),
+                                         edits.sourceDeltas.begin(), edits.sourceDeltas.end());
+    recordAppliedCommand(command);
+    lastFlushResult_.removedElements = true;
+    return;
+  }
+
+  if (!edits.sourceRestored) {
+    // Earlier edits in this flush are already incorporated in sourceBefore.
+    (void)setDocumentMaybeStructural(std::move(rollbackDocument));
+    lastFlushResult_.sourceDeltas.clear();
+    recordAppliedCommand(command);
+    lastFlushResult_.replacedDocument = true;
+    lastFlushResult_.preserveUndoOnReparse = true;
+    lastFlushResult_.rolledBackReplacementBatch = true;
+    lastFlushResult_.hadPriorAppliedCommandsOnRollback = priorApplied;
+  }
+  const ParseDiagnostic refusal = edits.failure.value_or(
+      ParseDiagnostic::Error("Text-to-outline batch was refused", FileOffset::Offset(0)));
+  publishParseDiagnostics({ParseDiagnostic::Warning(refusal.reason, refusal.range)}, std::nullopt);
+}
+
+void AsyncSVGDocument::applyInsertText(const EditorCommand& command) {
+  if (!command.parentElement.has_value() || !command.element.has_value()) {
+    return;
+  }
+  // Insert before setting text: projection initially serializes an empty element.
+  svg::SVGElement textElement = *command.element;
+  xml::ApplySourceEditResult result =
+      document_->insertElement(*command.parentElement, textElement, command.referenceElement);
+  lastFlushResult_.sourceDeltas.insert(lastFlushResult_.sourceDeltas.end(),
+                                       result.sourceDeltas.begin(), result.sourceDeltas.end());
+  if (result.diagnostic.has_value()) {
+    publishParseDiagnostics({}, std::move(result.diagnostic));
+  }
+  if (textElement.isa<svg::SVGTextContentElement>()) {
+    if (!command.textContent.empty()) {
+      xml::ApplySourceEditResult textResult =
+          document_->setElementTextContent(textElement, command.textContent);
+      lastFlushResult_.sourceDeltas.insert(lastFlushResult_.sourceDeltas.end(),
+                                           textResult.sourceDeltas.begin(),
+                                           textResult.sourceDeltas.end());
+      if (textResult.diagnostic.has_value() && !lastParseError_.has_value()) {
+        publishParseDiagnostics({}, std::move(textResult.diagnostic));
+      }
+    }
+    textElement.cast<svg::SVGTextContentElement>().setTextContent(command.textContent);
+  }
+}
+
 void AsyncSVGDocument::applyOne(const EditorCommand& command) {
   switch (command.kind) {
     case EditorCommand::Kind::SetTransform: {
@@ -463,126 +611,7 @@ void AsyncSVGDocument::applyOne(const EditorCommand& command) {
     }
 
     case EditorCommand::Kind::ReplaceElements: {
-      if (command.replacements.empty()) {
-        return;
-      }
-
-      // Keep a source-exact fallback for the unusual case where removing a
-      // staged group or source text fails. A temporarily invalid source pane
-      // cannot be reparsed, so reject the batch before touching its document.
-      const std::string sourceBefore = document_->withReadAccess(
-          [this](svg::DocumentReadAccess&) { return std::string(document_->source()); });
-      ParseWarningSink rollbackSink;
-      auto rollbackParsed =
-          svg::parser::SVGParser::ParseSVG(sourceBefore, rollbackSink, EditorParseOptions());
-      if (rollbackParsed.hasError()) {
-        publishParseDiagnostics(CopyWarnings(rollbackSink), std::move(rollbackParsed.error()));
-        return;
-      }
-      svg::SVGDocument rollbackDocument = std::move(rollbackParsed).result();
-
-      std::optional<ParseDiagnostic> failure;
-      bool failed = false;
-      bool sourceRestored = false;
-      const bool priorApplied = lastFlushResult_.appliedCommands;
-      const std::size_t deltasBefore = lastFlushResult_.sourceDeltas.size();
-      std::vector<svg::SVGElement> staged;
-      staged.reserve(command.replacements.size());
-      const auto appendDeltas = [this](const xml::ApplySourceEditResult& result) {
-        lastFlushResult_.sourceDeltas.insert(lastFlushResult_.sourceDeltas.end(),
-                                             result.sourceDeltas.begin(),
-                                             result.sourceDeltas.end());
-      };
-
-      {
-        // No reader may observe a half-converted selection. DOM setters reuse
-        // this write scope while the batch stages and commits its subtrees.
-        [[maybe_unused]] svg::DocumentWriteAccess access = document_->writeAccess();
-        if (document_->source() != sourceBefore) {
-          return;
-        }
-
-        // The XML tree-node cap counts detached XML nodes too. Preflight the
-        // whole selection before creating any of their XML projections, so a
-        // routine capacity refusal does not stage-and-remove formatted source
-        // (which can change indentation and force a full document reparse).
-        if (ExceedsReplacementBatchNodeLimit(*document_, command)) {
-          failure = ParseDiagnostic::Warning(
-              "Text-to-outline selection exceeds the tree-node limit", FileOffset::Offset(0));
-          failed = true;
-        }
-
-        // Stage every complete outline subtree before deleting any text. A
-        // capacity refusal therefore leaves every original attached.
-        for (const EditorCommand::ElementReplacement& replacement : command.replacements) {
-          if (failed) {
-            break;
-          }
-          xml::ApplySourceEditResult inserted = document_->insertElement(
-              replacement.parent, replacement.replacement, replacement.original);
-          appendDeltas(inserted);
-          if (inserted.applied) {
-            staged.push_back(replacement.replacement);
-          }
-          if (!inserted.applied || inserted.diagnostic.has_value()) {
-            failure = std::move(inserted.diagnostic);
-            failed = true;
-            break;
-          }
-        }
-
-        if (!failed) {
-          for (const EditorCommand::ElementReplacement& replacement : command.replacements) {
-            xml::ApplySourceEditResult removed = document_->removeElement(replacement.original);
-            appendDeltas(removed);
-            if (!removed.applied || removed.diagnostic.has_value()) {
-              failure = std::move(removed.diagnostic);
-              failed = true;
-              break;
-            }
-          }
-        }
-
-        if (failed) {
-          for (auto it = staged.rbegin(); it != staged.rend(); ++it) {
-            xml::ApplySourceEditResult removed = document_->removeElement(*it);
-            appendDeltas(removed);
-            if ((!removed.applied || removed.diagnostic.has_value()) &&
-                removed.diagnostic.has_value()) {
-              failure = std::move(removed.diagnostic);
-            }
-          }
-          sourceRestored = document_->source() == sourceBefore &&
-                           std::all_of(command.replacements.begin(), command.replacements.end(),
-                                       [](const EditorCommand::ElementReplacement& replacement) {
-                                         return replacement.original.parentElement().has_value();
-                                       });
-        }
-      }
-
-      if (failed) {
-        if (sourceRestored) {
-          lastFlushResult_.sourceDeltas.resize(deltasBefore);
-        } else {
-          // A source-exact reparse is the fail-safe if staging rollback or
-          // source removal could not restore the original DOM and bytes.
-          (void)setDocumentMaybeStructural(std::move(rollbackDocument));
-          lastFlushResult_.sourceDeltas.clear();
-          recordAppliedCommand(command);
-          lastFlushResult_.replacedDocument = true;
-          lastFlushResult_.preserveUndoOnReparse = true;
-          lastFlushResult_.rolledBackReplacementBatch = true;
-          lastFlushResult_.hadPriorAppliedCommandsOnRollback = priorApplied;
-        }
-        const ParseDiagnostic refusal = failure.value_or(
-            ParseDiagnostic::Error("Text-to-outline batch was refused", FileOffset::Offset(0)));
-        publishParseDiagnostics({ParseDiagnostic::Warning(refusal.reason, refusal.range)},
-                                std::nullopt);
-        return;
-      }
-
-      recordAppliedCommand(command);
-      lastFlushResult_.removedElements = true;
+      applyReplacementBatch(command);
       break;
     }
 
@@ -623,37 +652,7 @@ void AsyncSVGDocument::applyOne(const EditorCommand& command) {
     }
 
     case EditorCommand::Kind::InsertText: {
-      if (!command.parentElement.has_value() || !command.element.has_value()) {
-        return;
-      }
-      // Insert the element first, then set its text content. `insertElement`
-      // re-projects the element's XML subtree (which has no data child yet),
-      // so setting the text before insertion would be overwritten by the
-      // projection. Setting it afterward leaves the live DOM with the text.
-      svg::SVGElement textElement = *command.element;
-      xml::ApplySourceEditResult result =
-          document_->insertElement(*command.parentElement, textElement, command.referenceElement);
-      lastFlushResult_.sourceDeltas.insert(lastFlushResult_.sourceDeltas.end(),
-                                           result.sourceDeltas.begin(), result.sourceDeltas.end());
-      if (result.diagnostic.has_value()) {
-        publishParseDiagnostics({}, std::move(result.diagnostic));
-      }
-      if (textElement.isa<svg::SVGTextContentElement>()) {
-        // Mirror the initial content into the XML tree/source as well: the
-        // insertion above serialized the element without its text (the
-        // component-level setTextContent below touches only TextComponent).
-        if (!command.textContent.empty()) {
-          xml::ApplySourceEditResult textResult =
-              document_->setElementTextContent(textElement, command.textContent);
-          lastFlushResult_.sourceDeltas.insert(lastFlushResult_.sourceDeltas.end(),
-                                               textResult.sourceDeltas.begin(),
-                                               textResult.sourceDeltas.end());
-          if (textResult.diagnostic.has_value() && !lastParseError_.has_value()) {
-            publishParseDiagnostics({}, std::move(textResult.diagnostic));
-          }
-        }
-        textElement.cast<svg::SVGTextContentElement>().setTextContent(command.textContent);
-      }
+      applyInsertText(command);
       break;
     }
 
