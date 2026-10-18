@@ -112,6 +112,7 @@ TEST_F(LayoutSystemTest, NestedSvgCssWideDimensionsUseParentViewport) {
   )svg");
 
   ParseWarningSink disabledSink = ParseWarningSink::Disabled();
+  StyleSystem().computeAllStyles(document.registry(), disabledSink);
   layoutSystem.instantiateAllComputedComponents(document.registry(), disabledSink);
   EXPECT_THAT(layoutSystem.clipRect(document.querySelector("#nested")->entityHandle()),
               testing::Optional(BoxEq(Vector2d(0, 0), Vector2d(200, 100))));
