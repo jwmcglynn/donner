@@ -3,7 +3,7 @@
 **Status:** Implementing. Declarative timing, interpolation, motion paths and editor Preview are
 implemented on the animation feature branch. Qualification and the remaining integration checklist
 below gate completion.
-**Author:** Unknown (current runtime model identifier unavailable)
+**Author:** Unknown
 **Model:** Not recorded
 **Drafted by:** Claude Opus 4.6
 **Created:** 2026-03-12
@@ -61,6 +61,18 @@ under document access.
 `AnimationInterpolation` validates key times and spline controls and selects a discrete, linear,
 paced, or spline interval. Spline evaluation inverts Bezier time with bounded bisection. Paced motion
 uses type-specific distances and ignores key times.
+
+SVG's discrete to-only rule keeps the underlying value until the midpoint, or the second key time,
+then uses the target value. This intentionally differs from SMIL's single-value rule; see
+[SVG animation values](https://svgwg.org/specs/animations/#ValueAttributes).
+
+XML text-position animation uses the target's local authored or typed list and lower animations on
+that same attribute. Ancestor positions are a subsequent layout fallback, not animation base operands.
+List arity is preserved; rotation repeats its last sampled entry only during layout. Empty `dx`/`dy`
+bases use neutral zeros. Other empty or unequal lists use discrete fallback. Tests use explicit,
+equal-length local bases for portable `x`, `y` and `rotate` interpolation because browser behavior for
+empty local lists differs. Position projection uses the whitespace-normalized Unicode character map,
+with each rendered instance supplying its own font and viewport context.
 
 `AnimationValueMath` handles numeric lists, unit-bearing lengths, and colors. Relative units use the
 target's viewport and font context. Font-size stacks resolve against the sampled parent font before
