@@ -911,6 +911,9 @@ public:
    */
   void poll();
 
+  /// Drive one nonblocking backend completion iteration even when no resource destroy is pending.
+  void pollCompletionOnce();
+
   /// Whether a completed submission can still release a backend object. Owner-thread only.
   [[nodiscard]] bool hasPendingDestroys() const { return !pendingDestroys_.empty(); }
 

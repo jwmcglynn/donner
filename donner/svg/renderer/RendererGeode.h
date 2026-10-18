@@ -556,6 +556,12 @@ public:
   /// Inject transformed-filter suspension and following encoder-restoration failure once.
   void injectFilterFrameSuspensionAndRestoreFailureForTesting();
 
+  /// Refuse the next active encoder arena upload without touching the GPU buffer.
+  void injectActiveArenaWriteFailureForTesting();
+
+  /// Refuse the next transformed-filter resampling arena upload before filter execution.
+  void injectTransformedResampleArenaWriteFailureForTesting();
+
   /// Fail one close of the frame's recorded draws, as a backend refusal would, leaving the frame
   /// with no encoder exactly as a real handover failure does.
   /// @param successfulCloses Closes to let through first, counting every close that reaches a
@@ -571,6 +577,9 @@ public:
 
   /// Number of filter textures retained outside reusable pools after an uncertain failure.
   [[nodiscard]] size_t failedFilterTextureCountForTesting() const;
+
+  /// Textures held after a recoverable refused upload until earlier GPU submissions complete.
+  [[nodiscard]] size_t recoverableArenaTextureCountForTesting() const;
 
   /// Whether a drawing encoder remains active for the current frame.
   [[nodiscard]] bool hasActiveDrawingEncoderForTesting() const;

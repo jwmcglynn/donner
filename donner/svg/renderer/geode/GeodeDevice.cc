@@ -122,6 +122,11 @@ struct GeodeDevice::Impl {
   uint64_t runtimeDeviceId = 0;
   std::mutex textureBackingRetirementMutex;
   std::vector<gpu::Texture> textureBackingsAwaitingRetirement;
+  struct FencedTextureBacking {
+    gpu::Texture texture;
+    uint64_t serial;
+  };
+  std::vector<FencedTextureBacking> fencedTextureBackings;
   std::function<void()> textureBackingWake;
 
   // Shared bind-slot resources used by every encoder's bind groups: 1x1 identity fills for the
@@ -1033,6 +1038,50 @@ bool GeodeDevice::deferDestroyTextureBacking(gpu::Texture&& texture) {
   return true;
 }
 
+bool GeodeDevice::deferDestroyTextureBackingAfterSerial(gpu::Texture&& texture, uint64_t serial) {
+  if (!texture.isValid() || !impl_ || texture.deviceId() != impl_->runtimeDeviceId) {
+    return false;
+  }
+  std::lock_guard lock(impl_->textureBackingRetirementMutex);
+  impl_->fencedTextureBackings.push_back({std::move(texture), serial});
+  if (impl_->textureBackingWake) {
+    impl_->textureBackingWake();
+  }
+  return true;
+}
+
+void GeodeDevice::drainFencedTextureBackings() {
+  if (!impl_) {
+    return;
+  }
+  gpu::Device& runtime = runtimeDevice();
+  if (runtime.isLost()) {
+    return;
+  }
+  runtime.pollCompletionOnce();
+  const uint64_t completed = runtime.completedSerial();
+  std::vector<gpu::Texture> ready;
+  {
+    std::lock_guard lock(impl_->textureBackingRetirementMutex);
+    ready.reserve(impl_->fencedTextureBackings.size());
+    std::erase_if(impl_->fencedTextureBackings, [&](Impl::FencedTextureBacking& item) {
+      if (item.serial > completed) {
+        return false;
+      }
+      ready.push_back(std::move(item.texture));
+      return true;
+    });
+  }
+  for (gpu::Texture& texture : ready) {
+    (void)runtime.destroyTextureBacking(std::move(texture));
+  }
+}
+
+std::size_t GeodeDevice::pendingFencedTextureBackings() const {
+  std::lock_guard lock(impl_->textureBackingRetirementMutex);
+  return impl_->fencedTextureBackings.size();
+}
+
 void GeodeDevice::setIdleWakeCallback(std::function<void()> callback) {
   handleRetirement_->setWakeCallback(callback);
   std::lock_guard lock(impl_->textureBackingRetirementMutex);
@@ -1049,7 +1098,8 @@ bool GeodeDevice::hasIdleWork() const {
   }
   {
     std::lock_guard lock(impl_->textureBackingRetirementMutex);
-    if (!impl_->textureBackingsAwaitingRetirement.empty()) {
+    if (!impl_->textureBackingsAwaitingRetirement.empty() ||
+        !impl_->fencedTextureBackings.empty()) {
       return true;
     }
   }
@@ -1118,6 +1168,7 @@ GpuWaitResult GeodeDevice::waitForSnapshotCaptureIdleForTesting(std::chrono::mil
 }
 
 void GeodeDevice::drainDeferredDestroys() {
+  drainFencedTextureBackings();
   drainDeferredTextureBackings();
   releaseRetiredHandles();
   pendingBindGroups_.clear();

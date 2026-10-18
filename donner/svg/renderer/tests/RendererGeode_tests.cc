@@ -445,6 +445,78 @@ TEST_F(RendererGeodeTest, TransformedFilterRestoreFailureAbandonsTheFrame) {
   EXPECT_THAT(device->counters()->submits, testing::Eq(0u));
 }
 
+TEST_F(RendererGeodeTest, TransformedResampleArenaRefusalSkipsFilterAndRecovers) {
+  using namespace components;
+  std::shared_ptr<geode::GeodeDevice> device = geode::GeodeDevice::CreateHeadless();
+  ASSERT_THAT(device, testing::NotNull());
+  RendererGeode renderer(device);
+  beginFrame(renderer);
+  FilterGraph graph;
+  FilterNode blur;
+  blur.primitive = filter_primitive::GaussianBlur{.stdDeviationX = 4, .stdDeviationY = 2};
+  graph.nodes.push_back(blur);
+  renderer.setTransform(Transform2d::SkewX(0.2));
+  renderer.pushFilterLayer(graph, Box2d({0, 0}, {kViewportSize, kViewportSize}));
+  renderer.setTransform(Transform2d());
+  renderer.setPaint(solidFill(css::RGBA(255, 255, 255, 255)));
+  renderer.drawRect(Box2d({0, 0}, {kViewportSize, kViewportSize}), StrokeParams{});
+  renderer.injectTransformedResampleArenaWriteFailureForTesting();
+  ASSERT_THAT(device->counters(), testing::NotNull());
+  const uint64_t submitsBefore = device->counters()->submits;
+
+  renderer.popFilterLayer();
+  EXPECT_THAT(renderer.deviceLost(), testing::IsFalse());
+  EXPECT_THAT(renderer.hasActiveDrawingEncoderForTesting(), testing::IsFalse());
+  EXPECT_THAT(device->counters()->submits, testing::Eq(submitsBefore));
+  EXPECT_THAT(renderer.failedFilterTextureCountForTesting(), testing::Eq(0u));
+  EXPECT_THAT(renderer.recoverableArenaTextureCountForTesting(), testing::Gt(0u));
+  EXPECT_THAT(renderer.takeSnapshot().empty(), testing::IsTrue());
+  renderer.endFrame();
+  EXPECT_THAT(device->counters()->submits, testing::Eq(submitsBefore));
+  EXPECT_THAT(renderer.recoverableArenaTextureCountForTesting(), testing::Eq(0u));
+
+  beginFrame(renderer);
+  renderer.setPaint(solidFill(css::RGBA(0, 255, 0, 255)));
+  renderer.drawRect(Box2d({0, 0}, {kViewportSize, kViewportSize}), StrokeParams{});
+  renderer.endFrame();
+  const RendererBitmap recovered = renderer.takeSnapshot();
+  ASSERT_THAT(recovered.empty(), testing::IsFalse());
+  EXPECT_THAT(PixelAt(recovered, 32, 32), RgbaEq(0, 255, 0, 255));
+}
+
+TEST_F(RendererGeodeTest, DiscardedFailedRendererRetiresRecoverableTextures) {
+  std::shared_ptr<geode::GeodeDevice> device = geode::GeodeDevice::CreateHeadless();
+  ASSERT_THAT(device, testing::NotNull());
+  {
+    RendererGeode offscreen(device);
+    beginFrame(offscreen);
+    components::FilterGraph graph;
+    components::FilterNode blur;
+    blur.primitive =
+        components::filter_primitive::GaussianBlur{.stdDeviationX = 4, .stdDeviationY = 2};
+    graph.nodes.push_back(blur);
+    offscreen.setTransform(Transform2d::SkewX(0.2));
+    offscreen.pushFilterLayer(graph, Box2d({0, 0}, {kViewportSize, kViewportSize}));
+    offscreen.setTransform(Transform2d());
+    offscreen.setPaint(solidFill(css::RGBA(255, 255, 255, 255)));
+    offscreen.drawRect(Box2d({0, 0}, {kViewportSize, kViewportSize}), StrokeParams{});
+    offscreen.injectTransformedResampleArenaWriteFailureForTesting();
+    offscreen.popFilterLayer();
+    EXPECT_THAT(offscreen.failedFilterTextureCountForTesting(), testing::Eq(0u));
+    EXPECT_THAT(device->pendingFencedTextureBackings(), testing::Gt(0u));
+  }
+  EXPECT_THAT(device->pendingFencedTextureBackings(), testing::Eq(0u));
+
+  RendererGeode sibling(device);
+  beginFrame(sibling);
+  sibling.setPaint(solidFill(css::RGBA(0, 255, 0, 255)));
+  sibling.drawRect(Box2d({0, 0}, {kViewportSize, kViewportSize}), StrokeParams{});
+  sibling.endFrame();
+  const RendererBitmap recovered = sibling.takeSnapshot();
+  ASSERT_THAT(recovered.empty(), testing::IsFalse());
+  EXPECT_THAT(PixelAt(recovered, 32, 32), RgbaEq(0, 255, 0, 255));
+}
+
 TEST_F(RendererGeodeTest, TransformedFilterFailureUnwindsAnOpenPatternTile) {
   using namespace components;
   std::shared_ptr<geode::GeodeDevice> device = geode::GeodeDevice::CreateHeadless();
@@ -6167,6 +6239,132 @@ TEST_F(RendererGeodeTest, ClippedVerticalOnlyFillWithEmptyVerticalBandsRenders) 
   ASSERT_FALSE(snapshot.empty());
   EXPECT_THAT(PixelAt(snapshot, 32, 32), RgbaEq(0, 255, 0, 255))
       << "A clipped fill with no vertical bands must not invalidate the frame it is drawn in.";
+}
+
+#if defined(__APPLE__)
+TEST_F(RendererGeodeTest, ArenaWriteRefusalAtNormalMetalLimitKeepsRendererUsable) {
+  std::string source =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64">
+             <defs><clipPath id="clip"><rect width="64" height="64"/></clipPath></defs>
+             <g clip-path="url(#clip)">)svg";
+  source.reserve(300000);
+  for (int i = 0; i < 4000; ++i) {
+    source += "<rect x=\"" + std::to_string(i % 64) + "\" y=\"" + std::to_string((i / 64) % 64) +
+              "\" width=\"1\" height=\"1\" fill=\"red\"/>";
+  }
+  source += "</g></svg>";
+
+  ParseWarningSink warnings = ParseWarningSink::Disabled();
+  auto parsed = parser::SVGParser::ParseSVG(source, warnings);
+  ASSERT_FALSE(parsed.hasError()) << parsed.error();
+  SVGDocument busyDocument = std::move(parsed).result();
+  auto simpleParsed = parser::SVGParser::ParseSVG(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64">
+             <rect width="64" height="64" fill="lime"/>
+             </svg>)svg",
+      warnings);
+  ASSERT_FALSE(simpleParsed.hasError()) << simpleParsed.error();
+  SVGDocument simpleDocument = std::move(simpleParsed).result();
+
+  std::shared_ptr<geode::GeodeDevice> device(geode::GeodeDevice::CreateHeadless());
+  ASSERT_NE(device, nullptr);
+  RendererGeode renderer(device);
+  auto& metal = static_cast<gpu::metal::MetalDevice&>(device->runtimeDevice());
+  ASSERT_THAT(metal.pauseSubmissionsForTest(), gpu::IsOk());
+  renderer.draw(busyDocument);
+  renderer.draw(busyDocument);
+  EXPECT_EQ(metal.writeStatsForTest().pendingWrites, 0u);
+  EXPECT_THAT(renderer.deviceLost(), testing::Eq(false));
+  EXPECT_THAT(renderer.takeTextureSnapshot(), testing::IsNull());
+  metal.resumeSubmissionsForTest();
+  ASSERT_EQ(device->waitForQueueIdle(), geode::GpuWaitResult::Complete);
+
+  renderer.draw(busyDocument);
+  const RendererBitmap retried = renderer.takeSnapshot();
+  ASSERT_FALSE(retried.empty());
+  EXPECT_THAT(PixelAt(retried, 32, 32), RgbaEq(255, 0, 0, 255));
+
+  renderer.draw(simpleDocument);
+  const RendererBitmap snapshot = renderer.takeSnapshot();
+  ASSERT_FALSE(snapshot.empty());
+  EXPECT_THAT(PixelAt(snapshot, 32, 32), RgbaEq(0, 255, 0, 255));
+}
+
+TEST_F(RendererGeodeTest, RecoverableArenaTexturesWaitForSharedDeviceSubmission) {
+  std::shared_ptr<geode::GeodeDevice> device(geode::GeodeDevice::CreateHeadless());
+  ASSERT_THAT(device, testing::NotNull());
+  auto& metal = static_cast<gpu::metal::MetalDevice&>(device->runtimeDevice());
+  ASSERT_THAT(metal.pauseSubmissionsForTest(), gpu::IsOk());
+
+  RendererGeode producer(device);
+  beginFrame(producer);
+  producer.setPaint(solidFill(css::RGBA(255, 0, 0, 255)));
+  producer.drawRect(Box2d({0, 0}, {kViewportSize, kViewportSize}), StrokeParams{});
+  producer.endFrame();
+  const uint64_t pendingSerial = device->runtimeDevice().lastSubmittedSerial();
+  ASSERT_THAT(pendingSerial, testing::Gt(device->runtimeDevice().completedSerial()));
+
+  RendererGeode refused(device);
+  beginFrame(refused);
+  components::FilterGraph graph;
+  components::FilterNode blur;
+  blur.primitive =
+      components::filter_primitive::GaussianBlur{.stdDeviationX = 4, .stdDeviationY = 2};
+  graph.nodes.push_back(blur);
+  refused.setTransform(Transform2d::SkewX(0.2));
+  refused.pushFilterLayer(graph, Box2d({0, 0}, {kViewportSize, kViewportSize}));
+  refused.setTransform(Transform2d());
+  refused.setPaint(solidFill(css::RGBA(255, 255, 255, 255)));
+  refused.drawRect(Box2d({0, 0}, {kViewportSize, kViewportSize}), StrokeParams{});
+  refused.injectTransformedResampleArenaWriteFailureForTesting();
+  refused.popFilterLayer();
+  refused.endFrame();
+  EXPECT_THAT(refused.deviceLost(), testing::IsFalse());
+  EXPECT_THAT(device->pendingFencedTextureBackings(), testing::Gt(0u));
+
+  RendererGeode sibling(device);
+  beginFrame(sibling);
+  EXPECT_THAT(sibling.hasActiveDrawingEncoderForTesting(), testing::IsFalse());
+  EXPECT_THAT(sibling.takeSnapshot().empty(), testing::IsTrue());
+  sibling.endFrame();
+
+  metal.resumeSubmissionsForTest();
+  ASSERT_THAT(device->waitForQueueIdle(), testing::Eq(geode::GpuWaitResult::Complete));
+  beginFrame(sibling);
+  EXPECT_THAT(device->pendingFencedTextureBackings(), testing::Eq(0u));
+  sibling.setPaint(solidFill(css::RGBA(0, 255, 0, 255)));
+  sibling.drawRect(Box2d({0, 0}, {kViewportSize, kViewportSize}), StrokeParams{});
+  sibling.endFrame();
+  const RendererBitmap recovered = sibling.takeSnapshot();
+  ASSERT_THAT(recovered.empty(), testing::IsFalse());
+  EXPECT_THAT(PixelAt(recovered, 32, 32), RgbaEq(0, 255, 0, 255));
+}
+#endif
+
+TEST_F(RendererGeodeTest, ArenaWriteRefusalBlocksManualFrameSnapshotsBeforeEnd) {
+  std::shared_ptr<geode::GeodeDevice> device(geode::GeodeDevice::CreateHeadless());
+  ASSERT_THAT(device, testing::NotNull());
+  RendererGeode renderer(device);
+  beginFrame(renderer);
+  renderer.injectActiveArenaWriteFailureForTesting();
+  renderer.setPaint(solidFill(css::RGBA(255, 0, 0, 255)));
+  renderer.drawRect(Box2d({0, 0}, {kViewportSize, kViewportSize}), StrokeParams{});
+  EXPECT_THAT(renderer.deviceLost(), testing::IsFalse());
+  EXPECT_THAT(renderer.borrowTextureSnapshot(), testing::IsNull());
+  EXPECT_THAT(renderer.takeTextureSnapshot(), testing::IsNull());
+  EXPECT_THAT(renderer.takeSnapshot().empty(), testing::IsTrue());
+  ASSERT_THAT(device->counters(), testing::NotNull());
+  const uint64_t submitsBefore = device->counters()->submits;
+  renderer.endFrame();
+  EXPECT_THAT(device->counters()->submits, testing::Eq(submitsBefore));
+
+  beginFrame(renderer);
+  renderer.setPaint(solidFill(css::RGBA(0, 255, 0, 255)));
+  renderer.drawRect(Box2d({0, 0}, {kViewportSize, kViewportSize}), StrokeParams{});
+  renderer.endFrame();
+  const RendererBitmap recovered = renderer.takeSnapshot();
+  ASSERT_THAT(recovered.empty(), testing::IsFalse());
+  EXPECT_THAT(PixelAt(recovered, 32, 32), RgbaEq(0, 255, 0, 255));
 }
 
 TEST_F(RendererGeodeTest, RuntimeSnapshotRejectsWrongFormatWithoutConsumingTheTexture) {
